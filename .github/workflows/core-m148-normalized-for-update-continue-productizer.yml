@@ -51,6 +51,7 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
+          python3 tools/ci/fix-m151-staging-marker.py
           python3 tools/ci/apply-m150-indirect-variadic-call-signature.py
           python3 tools/ci/apply-m151-indirect-call-batch.py
           python3 tools/ci/apply-m151b-indirect-verifier-cleanup.py
@@ -81,7 +82,7 @@ jobs:
             MINIC_CORE_IR=strict "$compiler" -S "$work/${name}.i" -o "$work/${name}.s"
             grep -F 'jalr' "$work/${name}.s" >/dev/null
           done
-          printf '%s\n' 'CORE_M151_STRICT_REGRESSION variadic+record-indirect=PASS'
+          echo 'CORE_M151_STRICT_REGRESSION variadic+record-indirect=PASS'
 
       - name: Replay all current strict500 blockers
         if: steps.state.outputs.needs_patch == 'true'
@@ -90,39 +91,33 @@ jobs:
           set -Eeuo pipefail
           compiler="$GITHUB_WORKSPACE/build/m151-product-compiler/bin/minic"
           work="$GITHUB_WORKSPACE/build/m151-product-focused"
-          indices='60,193,195,217,252,258,265,292,352,414,454'
           set +e
           MINIC_CORE_IR=strict CORE_FAST_TRACE=1 python3 tests/external/linux/corpus_replay.py \
-            --minic "$compiler" \
-            --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
-            --work "$work" \
-            --jobs 4 \
-            --indices "$indices"
-          replay_status=$?
+            --minic "$compiler" --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
+            --work "$work" --jobs 4 \
+            --indices '60,193,195,217,252,258,265,292,352,414,454'
+          status=$?
           set -e
-          printf 'CORE_M151_FOCUSED_REPLAY_STATUS=%d\n' "$replay_status"
+          echo "CORE_M151_FOCUSED_REPLAY_STATUS=$status"
           python3 tools/ci/classify-core-strict-frontier.py \
-            "$work/batch-results.json" \
-            --stderr-root "$work/minic-stderr" \
-            --ast-header "$GITHUB_WORKSPACE/src/frontend/ast.h" \
-            --examples 30 \
-            --json-out "$work/frontier-summary.json" \
-            --reason-text-out "$work/reason-summary.txt" \
+            "$work/batch-results.json" --stderr-root "$work/minic-stderr" \
+            --ast-header "$GITHUB_WORKSPACE/src/frontend/ast.h" --examples 30 \
+            --json-out "$work/frontier-summary.json" --reason-text-out "$work/reason-summary.txt" \
             --require-no-errors
           python3 - <<'PY'
           import json
           from pathlib import Path
-          work=Path('build/m151-product-focused')
-          rows=json.loads((work/'batch-results.json').read_text())
-          summary=json.loads((work/'frontier-summary.json').read_text())
-          for row in rows:
-              print(f"CORE_M151_INDEX_{row['index']} status={row['status']} line={row.get('first_error_line')} message={row.get('message')}")
-          if summary['selected'] != 11 or summary['error'] != 0 or summary['preprocess_missing'] != 0:
-              raise SystemExit(f'M151 focused batch ERROR/missing: {summary}')
-          if summary['pass'] < 1:
-              raise SystemExit(f'M151 batch produced no focused advancement: {summary}')
-          print(f"CORE_M151_FOCUSED selected=11 pass={summary['pass']} unsupported={summary['unsupported']} error=0")
-          print((work/'reason-summary.txt').read_text())
+          w=Path('build/m151-product-focused')
+          rows=json.loads((w/'batch-results.json').read_text())
+          s=json.loads((w/'frontier-summary.json').read_text())
+          for r in rows:
+              print(f"CORE_M151_INDEX_{r['index']} status={r['status']} line={r.get('first_error_line')} message={r.get('message')}")
+          if s['selected'] != 11 or s['error'] != 0 or s['preprocess_missing'] != 0:
+              raise SystemExit(f'M151 focused ERROR/missing: {s}')
+          if s['pass'] < 1:
+              raise SystemExit(f'M151 produced no focused advancement: {s}')
+          print(f"CORE_M151_FOCUSED selected=11 pass={s['pass']} unsupported={s['unsupported']} error=0")
+          print((w/'reason-summary.txt').read_text())
           PY
 
       - name: Replay strict full500
@@ -134,41 +129,31 @@ jobs:
           work="$GITHUB_WORKSPACE/build/m151-product-full500"
           set +e
           MINIC_CORE_IR=strict CORE_FAST_TRACE=1 python3 tests/external/linux/corpus_replay.py \
-            --minic "$compiler" \
-            --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
-            --work "$work" \
-            --jobs 4 \
-            --offset 0 \
-            --limit 500 \
-            --sample-count 0
-          replay_status=$?
+            --minic "$compiler" --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
+            --work "$work" --jobs 4 --offset 0 --limit 500 --sample-count 0
+          status=$?
           set -e
-          printf 'CORE_M151_FULL500_REPLAY_STATUS=%d\n' "$replay_status"
+          echo "CORE_M151_FULL500_REPLAY_STATUS=$status"
           python3 tools/ci/classify-core-strict-frontier.py \
-            "$work/batch-results.json" \
-            --stderr-root "$work/minic-stderr" \
-            --ast-header "$GITHUB_WORKSPACE/src/frontend/ast.h" \
-            --examples 30 \
-            --json-out "$work/frontier-summary.json" \
-            --reason-text-out "$work/reason-summary.txt" \
+            "$work/batch-results.json" --stderr-root "$work/minic-stderr" \
+            --ast-header "$GITHUB_WORKSPACE/src/frontend/ast.h" --examples 30 \
+            --json-out "$work/frontier-summary.json" --reason-text-out "$work/reason-summary.txt" \
             --require-no-errors
           python3 tools/ci/summarize-core-frontier-progress.py \
-            "$work/batch-results.json" \
-            --expect-selected 500 \
-            --json-out "$work/progress-summary.json" \
-            --text-out "$work/progress-summary.txt"
+            "$work/batch-results.json" --expect-selected 500 \
+            --json-out "$work/progress-summary.json" --text-out "$work/progress-summary.txt"
           python3 - <<'PY'
           import json
           from pathlib import Path
-          work=Path('build/m151-product-full500')
-          summary=json.loads((work/'frontier-summary.json').read_text())
-          if summary['selected'] != 500 or summary['error'] != 0 or summary['preprocess_missing'] != 0:
-              raise SystemExit(f'M151 full500 ERROR/missing: {summary}')
-          if summary['pass'] <= 489:
-              raise SystemExit(f"M151 produced no strict500 gain: pass={summary['pass']} baseline=489")
-          print(f"CORE_M151_FULL500 selected=500 pass={summary['pass']} unsupported={summary['unsupported']} error=0")
-          print((work/'progress-summary.txt').read_text())
-          print((work/'reason-summary.txt').read_text())
+          w=Path('build/m151-product-full500')
+          s=json.loads((w/'frontier-summary.json').read_text())
+          if s['selected'] != 500 or s['error'] != 0 or s['preprocess_missing'] != 0:
+              raise SystemExit(f'M151 full500 ERROR/missing: {s}')
+          if s['pass'] <= 489:
+              raise SystemExit(f"M151 produced no strict500 gain: pass={s['pass']} baseline=489")
+          print(f"CORE_M151_FULL500 selected=500 pass={s['pass']} unsupported={s['unsupported']} error=0")
+          print((w/'progress-summary.txt').read_text())
+          print((w/'reason-summary.txt').read_text())
           PY
 
       - name: Commit M151 semantic batch
@@ -181,8 +166,7 @@ jobs:
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add src/core/core_ir.h src/core/core_ir.c src/core/core_lower.c \
             src/target/riscv64/core_codegen.c \
-            tests/compiler/c0/m150_indirect_variadic_call.c \
-            tests/compiler/c0/m151_indirect_call_batch.c
+            tests/compiler/c0/m150_indirect_variadic_call.c tests/compiler/c0/m151_indirect_call_batch.c
           git diff --cached --quiet && { echo 'no M151 semantic changes'; exit 1; }
           git commit -m 'core: share indirect call argument ABI'
           git push origin HEAD:refactor/declaration-sema-v1
