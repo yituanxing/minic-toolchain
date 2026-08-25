@@ -22,4 +22,12 @@ if command -v riscv64-linux-gnu-gcc >/dev/null 2>&1; then
     riscv64-linux-gnu-gcc -c "$work/output.s" -o "$work/output.o"
 fi
 
-printf '%s\n' 'PASS compiler/c0/record_conditional_materialization record-rvalue=conditional producers=address,call sink=assignment,call-argument'
+"$host_cc" -E -P -std=gnu11 -x c \
+    "$root/tests/compiler/c0/record_call_argument_materialization.c" \
+    -o "$work/call-argument.i"
+MINIC_CORE_IR=strict "$minic" -S "$work/call-argument.i" \
+    -o "$work/call-argument.strict.s"
+grep -F '.Lminic_record_cond_false_' "$work/call-argument.strict.s" >/dev/null
+grep -F '  call consume_word' "$work/call-argument.strict.s" >/dev/null
+
+printf '%s\n' 'PASS compiler/c0/record_conditional_materialization record-rvalue=conditional producers=address,call sink=assignment,call-argument strict-call-argument=1'

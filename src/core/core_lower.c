@@ -1755,6 +1755,13 @@ static MinicCoreLowerStatus lower_record_call_argument_object(
     MinicExpressionId expression_id,
     MinicType parameter_type,
     MinicCoreObjectId *object_id) {
+    /* M128_RECORD_CALL_ARGUMENT_MATERIALIZATION: a by-value record argument
+       consumes a record rvalue, not merely an already-address-backed lvalue.
+       Make lower_record_materialized_address() the single aggregate producer
+       owner here: it handles conditionals, compound literals, direct record
+       returns, and falls back fail-closed for ordinary address-backed values.
+       The private argument object below remains the evaluation-order snapshot
+       consumed by the existing Core/ABI OBJECT call-argument path. */
     const MinicExpression *expression;
     MinicCoreInstruction instruction;
     MinicCoreValueId destination_address;
@@ -1878,11 +1885,7 @@ static MinicCoreLowerStatus lower_record_call_argument_object(
         expression->value.call.function_id != MINIC_FUNCTION_INVALID) {
         return lower_direct_record_call_object(context, expression, object_id);
     }
-    if (!minic_c0_record_value_is_copy_source(context->body->program, expression_id) ||
-        !minic_c0_record_value_is_address_backed(context->body->program, expression_id)) {
-        return MINIC_CORE_LOWER_UNSUPPORTED;
-    }
-    status = lower_record_value_address(context, expression_id, &source_address);
+    status = lower_record_materialized_address(context, expression_id, &source_address);
     if (status != MINIC_CORE_LOWER_OK) {
         return status;
     }
@@ -3638,6 +3641,86 @@ static MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
         }
         return MINIC_CORE_LOWER_ERROR;
     }
+    /* M129_LEAF_EXPRESSION_OWNERS: __builtin_isdigit is a pure integer leaf.
+       Preserve the existing direct-backend contract without target-specific
+       instructions: convert once to unsigned int, subtract '0' modulo the
+       unsigned width, then compare against 10.  The unsigned range test is
+       true exactly for the ten decimal digit codes, including for negative
+       int inputs where the subtraction wraps above the range. */
+    if (expression->kind == MINIC_EXPRESSION_BUILTIN_UNARY &&
+        expression->value.builtin_unary.operator_kind == MINIC_BUILTIN_UNARY_ISDIGIT) {
+        const MinicExpression *operand;
+        MinicCoreInstruction builtin_instruction;
+        MinicCoreLowerStatus status;
+        MinicCoreValueId operand_value;
+        MinicCoreValueId normalized_value;
+        MinicCoreValueId zero_code;
+        MinicCoreValueId offset_value;
+        MinicCoreValueId digit_count;
+
+        operand = minic_c0_program_expression(
+            context->body->program, expression->value.builtin_unary.operand);
+        if (operand == NULL || !minic_type_equal(operand->type, minic_type_int()) ||
+            !minic_type_equal(expression->type, minic_type_int())) {
+            return MINIC_CORE_LOWER_UNSUPPORTED;
+        }
+        status = lower_expression(
+            context, expression->value.builtin_unary.operand, &operand_value);
+        if (status != MINIC_CORE_LOWER_OK) {
+            return status;
+        }
+        status = append_integer_conversion(context,
+                                           operand->span,
+                                           minic_type_unsigned_int(),
+                                           operand_value,
+                                           &normalized_value);
+        if (status != MINIC_CORE_LOWER_OK) {
+            return status;
+        }
+        (void)memset(&builtin_instruction, 0, sizeof(builtin_instruction));
+        builtin_instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
+        builtin_instruction.span = expression->span;
+        builtin_instruction.type = minic_type_unsigned_int();
+        builtin_instruction.result = MINIC_CORE_VALUE_INVALID;
+        builtin_instruction.value.integer_value = 48;
+        if (!minic_core_function_append_value_instruction(
+                context->function, context->block_id, &builtin_instruction, &zero_code)) {
+            return MINIC_CORE_LOWER_ERROR;
+        }
+        (void)memset(&builtin_instruction, 0, sizeof(builtin_instruction));
+        builtin_instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_SUBTRACT;
+        builtin_instruction.span = expression->span;
+        builtin_instruction.type = minic_type_unsigned_int();
+        builtin_instruction.result = MINIC_CORE_VALUE_INVALID;
+        builtin_instruction.value.binary.left = normalized_value;
+        builtin_instruction.value.binary.right = zero_code;
+        if (!minic_core_function_append_value_instruction(
+                context->function, context->block_id, &builtin_instruction, &offset_value)) {
+            return MINIC_CORE_LOWER_ERROR;
+        }
+        (void)memset(&builtin_instruction, 0, sizeof(builtin_instruction));
+        builtin_instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
+        builtin_instruction.span = expression->span;
+        builtin_instruction.type = minic_type_unsigned_int();
+        builtin_instruction.result = MINIC_CORE_VALUE_INVALID;
+        builtin_instruction.value.integer_value = 10;
+        if (!minic_core_function_append_value_instruction(
+                context->function, context->block_id, &builtin_instruction, &digit_count)) {
+            return MINIC_CORE_LOWER_ERROR;
+        }
+        (void)memset(&builtin_instruction, 0, sizeof(builtin_instruction));
+        builtin_instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_LESS;
+        builtin_instruction.span = expression->span;
+        builtin_instruction.type = minic_type_int();
+        builtin_instruction.result = MINIC_CORE_VALUE_INVALID;
+        builtin_instruction.value.binary.left = offset_value;
+        builtin_instruction.value.binary.right = digit_count;
+        return minic_core_function_append_value_instruction(
+                   context->function, context->block_id, &builtin_instruction, value_id)
+                   ? MINIC_CORE_LOWER_OK
+                   : MINIC_CORE_LOWER_ERROR;
+    }
+
     if (expression->kind == MINIC_EXPRESSION_CALL) {
         if (expression->value.call.function_id == MINIC_FUNCTION_INVALID) {
             return lower_indirect_call(context, expression, value_id);
@@ -6309,6 +6392,42 @@ static MinicCoreLowerStatus lower_expression_statement(MinicCoreLowerContext *co
         discarded.span = right_expression->span;
         return lower_expression_statement(context, &discarded);
     }
+    /* M129_LEAF_EXPRESSION_OWNERS: keep M86B as the default discarded-record
+       assignment owner. Only conditional aggregate RHS values need the newer
+       unified materialization owner here; direct record-return calls need the
+       same owner when their result is discarded after all call side effects. */
+    if (expression->kind == MINIC_EXPRESSION_ASSIGNMENT &&
+        minic_type_is_record(expression->type)) {
+        const MinicExpression *record_source;
+
+        record_source = minic_c0_program_expression(
+            context->body->program, expression->value.binary.right);
+        if (record_source != NULL &&
+            record_source->kind == MINIC_EXPRESSION_CONDITIONAL) {
+            MinicCoreValueId discarded_record_address;
+            MinicCoreLowerStatus status;
+
+            status = lower_record_materialized_address(
+                context, statement->expression, &discarded_record_address);
+            return core_trace_expression_statement_status(
+                context,
+                expression,
+                "discarded-record-conditional-assignment",
+                status);
+        }
+    }
+    if (expression->kind == MINIC_EXPRESSION_CALL &&
+        minic_type_is_record(expression->type) &&
+        expression->value.call.function_id != MINIC_FUNCTION_INVALID) {
+        MinicCoreValueId discarded_record_address;
+        MinicCoreLowerStatus status;
+
+        status = lower_record_materialized_address(
+            context, statement->expression, &discarded_record_address);
+        return core_trace_expression_statement_status(
+            context, expression, "discarded-record-call", status);
+    }
+
     /* M86B_RECORD_ASSIGNMENT_EXPRESSION_STATEMENT: a record assignment used as
        an expression statement has the same storage effect as RECORD_COPY; its
        aggregate expression result is discarded, so Core does not need an
