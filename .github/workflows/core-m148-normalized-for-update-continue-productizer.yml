@@ -1,4 +1,4 @@
-name: Core M154 Signed Bit Field Update Productizer
+name: Core M155 Extern Void Symbol Productizer
 
 on:
   pull_request:
@@ -16,12 +16,12 @@ jobs:
           ref: refactor/declaration-sema-v1
           fetch-depth: 0
 
-      - name: Detect M154
+      - name: Detect M155
         id: state
         shell: bash
         run: |
           set -Eeuo pipefail
-          if grep -Fq 'M154_SIGNED_BIT_FIELD_UPDATE_OWNER' src/core/core_lower.c; then
+          if grep -Fq 'M155_EXTERN_VOID_SYMBOL_ADDRESS_OWNER' src/core/core_lower.c; then
             echo 'needs_patch=false' >> "$GITHUB_OUTPUT"
           else
             echo 'needs_patch=true' >> "$GITHUB_OUTPUT"
@@ -35,53 +35,56 @@ jobs:
           path: build/linux-focus-corpus
           key: linux-focus-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-${{ hashFiles('tests/external/linux/replay-indices.txt') }}
 
-      - name: Require M153 baseline
+      - name: Require M154 baseline
         if: steps.state.outputs.needs_patch == 'true'
         shell: bash
         run: |
           set -Eeuo pipefail
           test "${{ steps.corpus.outputs.cache-hit }}" = true
-          grep -Fq 'M153_SIGNED_BIT_FIELD_WRITE_OWNER' src/core/core_lower.c
+          grep -Fq 'M154_SIGNED_BIT_FIELD_UPDATE_OWNER' src/core/core_lower.c
 
-      - name: Apply M154 candidate
+      - name: Apply M155 candidate
         if: steps.state.outputs.needs_patch == 'true'
         run: |
           python3 tools/ci/apply-m152-nested-member-address.py
           git diff --check
-          grep -Fq 'M154_SIGNED_BIT_FIELD_UPDATE_OWNER' src/core/core_lower.c
+          grep -Fq 'M155_EXTERN_VOID_SYMBOL_ADDRESS_OWNER' src/core/core_lower.c
+          grep -Fq 'M155_EXTERN_VOID_SYMBOL_ADDRESS_OWNER' src/core/core_ir.c
+          grep -Fq 'M155_EXTERN_VOID_SYMBOL_ADDRESS_OWNER' src/target/riscv64/core_codegen.c
 
       - name: Build patched compiler
         if: steps.state.outputs.needs_patch == 'true'
-        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/m154-compiler
+        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/m155-compiler
 
       - name: Fast gate
         if: steps.state.outputs.needs_patch == 'true'
-        run: make -j4 check-fast MODE=release CFLAGS=-Werror BUILD_DIR=build/m154-check
+        run: make -j4 check-fast MODE=release CFLAGS=-Werror BUILD_DIR=build/m155-check
 
       - name: Isolated strict regression
         if: steps.state.outputs.needs_patch == 'true'
         shell: bash
         run: |
           set -Eeuo pipefail
-          mkdir -p build/m154-regression
-          cc -E -P -std=gnu11 -x c tests/compiler/c0/m154_signed_bit_field_update.c -o build/m154-regression/test.i
-          MINIC_CORE_IR=strict build/m154-compiler/bin/minic -S build/m154-regression/test.i -o build/m154-regression/test.s
-          test -s build/m154-regression/test.s
+          mkdir -p build/m155-regression
+          cc -E -P -std=gnu11 -x c tests/compiler/c0/m155_extern_void_symbol_address.c -o build/m155-regression/test.i
+          MINIC_CORE_IR=strict build/m155-compiler/bin/minic -S build/m155-regression/test.i -o build/m155-regression/test.s
+          test -s build/m155-regression/test.s
+          grep -Fq '__start_notes' build/m155-regression/test.s
 
       - name: Replay remaining strict tail
         if: steps.state.outputs.needs_patch == 'true'
         shell: bash
         run: |
           set -Eeuo pipefail
-          work=build/m154-focused
+          work=build/m155-focused
           set +e
           MINIC_CORE_IR=strict CORE_FAST_TRACE=1 python3 tests/external/linux/corpus_replay.py \
-            --minic "$GITHUB_WORKSPACE/build/m154-compiler/bin/minic" \
+            --minic "$GITHUB_WORKSPACE/build/m155-compiler/bin/minic" \
             --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" --work "$work" --jobs 4 \
             --indices '60,193,195,252,258,292,414'
           status=$?
           set -e
-          echo "CORE_M154_FOCUSED_STATUS=$status"
+          echo "CORE_M155_FOCUSED_STATUS=$status"
           python3 tools/ci/classify-core-strict-frontier.py \
             "$work/batch-results.json" --stderr-root "$work/minic-stderr" \
             --ast-header "$GITHUB_WORKSPACE/src/frontend/ast.h" --examples 30 \
@@ -90,39 +93,40 @@ jobs:
           python3 - <<'PY'
           import json
           from pathlib import Path
-          w=Path('build/m154-focused')
+          w=Path('build/m155-focused')
           rows=json.loads((w/'batch-results.json').read_text())
           s=json.loads((w/'frontier-summary.json').read_text())
           by={int(r['index']):r for r in rows}
           if s['selected'] != 7 or s['error'] != 0 or s['preprocess_missing'] != 0:
-              raise SystemExit(f'M154 focused invalid: {s}')
-          r=by[195]
+              raise SystemExit(f'M155 focused invalid: {s}')
+          r=by[258]
           line=int(r.get('first_error_line') or 0)
-          if not (r['status']=='PASS' or line > 102130):
-              raise SystemExit(f'M154 did not advance #195: {r}')
+          if not (r['status']=='PASS' or line > 45496):
+              raise SystemExit(f'M155 did not advance #258: {r}')
           for r in rows:
-              print(f"M154 index={r['index']} status={r['status']} line={r.get('first_error_line')} message={r.get('message')}")
+              print(f"M155 index={r['index']} status={r['status']} line={r.get('first_error_line')} message={r.get('message')}")
           print((w/'reason-summary.txt').read_text())
           PY
 
-      - name: Commit M154 semantic cut
+      - name: Commit M155 semantic cut
         if: steps.state.outputs.needs_patch == 'true'
         shell: bash
         run: |
           set -Eeuo pipefail
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add src/core/core_lower.c tests/compiler/c0/m154_signed_bit_field_update.c
-          git diff --cached --quiet && { echo 'no M154 semantic changes'; exit 1; }
-          git commit -m 'core: lower signed bit-field scalar updates'
+          git add src/core/core_lower.c src/core/core_ir.c src/target/riscv64/core_codegen.c \
+                  tests/compiler/c0/m155_extern_void_symbol_address.c
+          git diff --cached --quiet && { echo 'no M155 semantic changes'; exit 1; }
+          git commit -m 'core: lower extern void symbol addresses'
           git push origin HEAD:refactor/declaration-sema-v1
 
-      - name: Persist M154 results
+      - name: Persist M155 results
         if: always() && steps.state.outputs.needs_patch == 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: core-m154-signed-bit-field-update-${{ github.sha }}
+          name: core-m155-extern-void-symbol-${{ github.sha }}
           path: |
-            build/m154-regression/**
-            build/m154-focused/**
+            build/m155-regression/**
+            build/m155-focused/**
           if-no-files-found: warn
