@@ -1,4 +1,4 @@
-name: Core M148 Normalized For Update Continue Productizer
+name: Core M149 Parser Tail Continue Provenance Productizer
 
 on:
   pull_request:
@@ -16,12 +16,12 @@ jobs:
           ref: refactor/declaration-sema-v1
           fetch-depth: 0
 
-      - name: Detect already-productized M148
+      - name: Detect already-productized M149
         id: state
         shell: bash
         run: |
           set -Eeuo pipefail
-          if grep -Fq 'M148_NORMALIZED_FOR_UPDATE_CONTINUE_CFG_OWNER' src/core/core_lower.c; then
+          if grep -Fq 'M149_PARSER_TAIL_CONTINUE_PROVENANCE_OWNER' src/core/core_lower.c; then
             echo 'needs_patch=false' >> "$GITHUB_OUTPUT"
           else
             echo 'needs_patch=true' >> "$GITHUB_OUTPUT"
@@ -44,9 +44,9 @@ jobs:
           test -s build/linux-focus-corpus/selected-tus.txt
           grep -Fq 'M134_UNREACHABLE_TAIL_OWNER' src/core/core_lower.c
           ! grep -Fq 'M137_DETACHED_LOOP_CONTINUE_OWNER' src/core/core_lower.c
-          ! grep -Fq 'M148_NORMALIZED_FOR_UPDATE_CONTINUE_CFG_OWNER' src/core/core_lower.c
+          ! grep -Fq 'M149_PARSER_TAIL_CONTINUE_PROVENANCE_OWNER' src/core/core_lower.c
 
-      - name: Apply M148 candidate bundle
+      - name: Apply M149 candidate bundle
         if: steps.state.outputs.needs_patch == 'true'
         shell: bash
         run: |
@@ -58,42 +58,44 @@ jobs:
           python3 tools/ci/apply-m144-unreferenced-loop-label-metadata.py
           python3 tools/ci/apply-m147-normalized-for-continue-binding.py
           python3 tools/ci/apply-m148-normalized-for-update-continue-cfg.py
+          python3 tools/ci/apply-m149-parser-tail-continue-provenance.py
           git diff --check
-          grep -Fq 'M148_NORMALIZED_FOR_UPDATE_CONTINUE_CFG_OWNER' src/core/core_lower.c
+          grep -Fq 'M149_PARSER_TAIL_CONTINUE_PROVENANCE_OWNER' src/core/core_lower.c
+          ! grep -Fq 'M137_DETACHED_LOOP_CONTINUE_OWNER' src/core/core_lower.c
+          ! grep -Fq 'core_resolve_detached_while_continue_label' src/core/core_lower.c
 
       - name: Build exact patched compiler
         if: steps.state.outputs.needs_patch == 'true'
-        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/m148-product-compiler
+        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/m149-product-compiler
 
       - name: Run fast regression gate
         if: steps.state.outputs.needs_patch == 'true'
-        run: make -j4 check-fast MODE=release CFLAGS=-Werror BUILD_DIR=build/m148-product-check
+        run: make -j4 check-fast MODE=release CFLAGS=-Werror BUILD_DIR=build/m149-product-check
 
       - name: Run isolated strict regressions
         if: steps.state.outputs.needs_patch == 'true'
         shell: bash
         run: |
           set -Eeuo pipefail
-          compiler="$GITHUB_WORKSPACE/build/m148-product-compiler/bin/minic"
-          work="$GITHUB_WORKSPACE/build/m148-product-regression"
+          compiler="$GITHUB_WORKSPACE/build/m149-product-compiler/bin/minic"
+          work="$GITHUB_WORKSPACE/build/m149-product-regression"
           mkdir -p "$work"
-          for name in m141_scoped_loop_continue_tail m142_nonedge_cleanup_metadata m144_unreferenced_loop_label_metadata m147_normalized_for_continue_binding m148_for_update_continue_cfg; do
+          for name in m141_scoped_loop_continue_tail m142_nonedge_cleanup_metadata m144_unreferenced_loop_label_metadata m147_normalized_for_continue_binding m148_for_update_continue_cfg m149_parser_tail_continue_provenance; do
             cc -E -P -std=gnu11 -x c "tests/compiler/c0/${name}.c" -o "$work/${name}.i"
             MINIC_CORE_IR=strict "$compiler" -S "$work/${name}.i" -o "$work/${name}.s"
           done
-          grep -F 'for_update_continue:' "$work/m141_scoped_loop_continue_tail.s" >/dev/null
-          grep -F 'normalized_for_continue:' "$work/m147_normalized_for_continue_binding.s" >/dev/null
-          grep -F 'update_continue:' "$work/m148_for_update_continue_cfg.s" >/dev/null
-          grep -F 'no_update_continue:' "$work/m148_for_update_continue_cfg.s" >/dev/null
-          printf '%s\n' 'CORE_M148_STRICT_REGRESSION PASS'
+          grep -F 'plain_while_continue:' "$work/m149_parser_tail_continue_provenance.s" >/dev/null
+          grep -F 'for_update_continue:' "$work/m149_parser_tail_continue_provenance.s" >/dev/null
+          grep -F 'for_unbounded_continue:' "$work/m149_parser_tail_continue_provenance.s" >/dev/null
+          printf '%s\n' 'CORE_M149_STRICT_REGRESSION PASS'
 
       - name: Replay M145 regression controls
         if: steps.state.outputs.needs_patch == 'true'
         shell: bash
         run: |
           set -Eeuo pipefail
-          compiler="$GITHUB_WORKSPACE/build/m148-product-compiler/bin/minic"
-          work="$GITHUB_WORKSPACE/build/m148-product-controls"
+          compiler="$GITHUB_WORKSPACE/build/m149-product-compiler/bin/minic"
+          work="$GITHUB_WORKSPACE/build/m149-product-controls"
           indices='9,54,66,96,229,296,306,325,330,333,334,337,345,353,357,367,382,387,444,449,451,465,468,484'
           set +e
           MINIC_CORE_IR=strict CORE_FAST_TRACE=1 python3 tests/external/linux/corpus_replay.py \
@@ -104,7 +106,7 @@ jobs:
             --indices "$indices"
           replay_status=$?
           set -e
-          printf 'CORE_M148_CONTROL_REPLAY_STATUS=%d\n' "$replay_status"
+          printf 'CORE_M149_CONTROL_REPLAY_STATUS=%d\n' "$replay_status"
           python3 tools/ci/classify-core-strict-frontier.py \
             "$work/batch-results.json" \
             --stderr-root "$work/minic-stderr" \
@@ -116,13 +118,13 @@ jobs:
           python3 - <<'PY'
           import json
           from pathlib import Path
-          work=Path('build/m148-product-controls')
+          work=Path('build/m149-product-controls')
           rows=json.loads((work/'batch-results.json').read_text())
           summary=json.loads((work/'frontier-summary.json').read_text())
           bad=[r for r in rows if r['status'] != 'PASS']
           if summary['selected'] != 24 or summary['error'] != 0 or summary['preprocess_missing'] != 0 or bad:
-              raise SystemExit(f'M148 failed controls: summary={summary} bad={bad}')
-          print('CORE_M148_CONTROLS selected=24 pass=24 unsupported=0 error=0')
+              raise SystemExit(f'M149 failed controls: summary={summary} bad={bad}')
+          print('CORE_M149_CONTROLS selected=24 pass=24 unsupported=0 error=0')
           PY
 
       - name: Replay focused pair
@@ -130,8 +132,8 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
-          compiler="$GITHUB_WORKSPACE/build/m148-product-compiler/bin/minic"
-          work="$GITHUB_WORKSPACE/build/m148-product-focused"
+          compiler="$GITHUB_WORKSPACE/build/m149-product-compiler/bin/minic"
+          work="$GITHUB_WORKSPACE/build/m149-product-focused"
           set +e
           MINIC_CORE_IR=strict CORE_FAST_TRACE=1 python3 tests/external/linux/corpus_replay.py \
             --minic "$compiler" \
@@ -141,7 +143,7 @@ jobs:
             --indices '95,98'
           replay_status=$?
           set -e
-          printf 'CORE_M148_FOCUSED_REPLAY_STATUS=%d\n' "$replay_status"
+          printf 'CORE_M149_FOCUSED_REPLAY_STATUS=%d\n' "$replay_status"
           python3 tools/ci/classify-core-strict-frontier.py \
             "$work/batch-results.json" \
             --stderr-root "$work/minic-stderr" \
@@ -153,15 +155,15 @@ jobs:
           python3 - <<'PY'
           import json
           from pathlib import Path
-          work=Path('build/m148-product-focused')
+          work=Path('build/m149-product-focused')
           rows=json.loads((work/'batch-results.json').read_text())
           summary=json.loads((work/'frontier-summary.json').read_text())
           bad=[r for r in rows if r['status'] != 'PASS']
           for row in rows:
-              print(f"CORE_M148_INDEX_{row['index']} status={row['status']} line={row.get('first_error_line')} message={row.get('message')}")
+              print(f"CORE_M149_INDEX_{row['index']} status={row['status']} line={row.get('first_error_line')} message={row.get('message')}")
           if summary['selected'] != 2 or summary['error'] != 0 or summary['preprocess_missing'] != 0 or bad:
-              raise SystemExit(f'M148 focused pair did not graduate: summary={summary} bad={bad}')
-          print('CORE_M148_FOCUSED selected=2 pass=2 unsupported=0 error=0')
+              raise SystemExit(f'M149 focused pair did not graduate: summary={summary} bad={bad}')
+          print('CORE_M149_FOCUSED selected=2 pass=2 unsupported=0 error=0')
           PY
 
       - name: Replay strict full500
@@ -169,8 +171,8 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
-          compiler="$GITHUB_WORKSPACE/build/m148-product-compiler/bin/minic"
-          work="$GITHUB_WORKSPACE/build/m148-product-full500"
+          compiler="$GITHUB_WORKSPACE/build/m149-product-compiler/bin/minic"
+          work="$GITHUB_WORKSPACE/build/m149-product-full500"
           set +e
           MINIC_CORE_IR=strict CORE_FAST_TRACE=1 python3 tests/external/linux/corpus_replay.py \
             --minic "$compiler" \
@@ -182,7 +184,7 @@ jobs:
             --sample-count 0
           replay_status=$?
           set -e
-          printf 'CORE_M148_FULL500_REPLAY_STATUS=%d\n' "$replay_status"
+          printf 'CORE_M149_FULL500_REPLAY_STATUS=%d\n' "$replay_status"
           python3 tools/ci/classify-core-strict-frontier.py \
             "$work/batch-results.json" \
             --stderr-root "$work/minic-stderr" \
@@ -199,18 +201,18 @@ jobs:
           python3 - <<'PY'
           import json
           from pathlib import Path
-          work=Path('build/m148-product-full500')
+          work=Path('build/m149-product-full500')
           summary=json.loads((work/'frontier-summary.json').read_text())
           if summary['selected'] != 500 or summary['error'] != 0 or summary['preprocess_missing'] != 0:
-              raise SystemExit(f'M148 full500 ERROR/missing: {summary}')
+              raise SystemExit(f'M149 full500 ERROR/missing: {summary}')
           if summary['pass'] <= 487:
-              raise SystemExit(f"M148 produced no strict500 gain: pass={summary['pass']} baseline=487")
-          print(f"CORE_M148_FULL500 selected=500 pass={summary['pass']} unsupported={summary['unsupported']} error=0")
+              raise SystemExit(f"M149 produced no strict500 gain: pass={summary['pass']} baseline=487")
+          print(f"CORE_M149_FULL500 selected=500 pass={summary['pass']} unsupported={summary['unsupported']} error=0")
           print((work/'progress-summary.txt').read_text())
           print((work/'reason-summary.txt').read_text())
           PY
 
-      - name: Commit M148 semantic batch
+      - name: Commit M149 semantic batch
         if: steps.state.outputs.needs_patch == 'true'
         shell: bash
         run: |
@@ -223,19 +225,20 @@ jobs:
             tests/compiler/c0/m142_nonedge_cleanup_metadata.c \
             tests/compiler/c0/m144_unreferenced_loop_label_metadata.c \
             tests/compiler/c0/m147_normalized_for_continue_binding.c \
-            tests/compiler/c0/m148_for_update_continue_cfg.c
-          git diff --cached --quiet && { echo 'no M148 semantic changes'; exit 1; }
-          git commit -m 'core: route normalized-for continue through update block'
+            tests/compiler/c0/m148_for_update_continue_cfg.c \
+            tests/compiler/c0/m149_parser_tail_continue_provenance.c
+          git diff --cached --quiet && { echo 'no M149 semantic changes'; exit 1; }
+          git commit -m 'core: derive normalized-for continue from parser tail'
           git push origin HEAD:refactor/declaration-sema-v1
 
-      - name: Persist M148 results
+      - name: Persist M149 results
         if: always() && steps.state.outputs.needs_patch == 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: core-m148-normalized-for-update-continue-${{ github.sha }}
+          name: core-m149-parser-tail-continue-${{ github.sha }}
           path: |
-            build/m148-product-regression/**
-            build/m148-product-controls/**
-            build/m148-product-focused/**
-            build/m148-product-full500/**
+            build/m149-product-regression/**
+            build/m149-product-controls/**
+            build/m149-product-focused/**
+            build/m149-product-full500/**
           if-no-files-found: warn
