@@ -2248,11 +2248,13 @@ static MinicCoreLowerStatus lower_indirect_call(MinicCoreLowerContext *context,
     MinicCoreValueId callee_value;
     MinicCoreCallArgument *arguments;
     MinicCoreObjectId argument_objects[MINIC_MAX_FUNCTION_PARAMETERS];
+    MinicType argument_types[MINIC_MAX_FUNCTION_PARAMETERS];
     MinicCoreLowerStatus status;
     MinicExpressionId callee_value_expression_id;
     MinicType callee_value_type;
     MinicType function_type;
     size_t argument_begin;
+    size_t argument_count;
     size_t argument_index;
     bool returns_void;
 
@@ -2265,12 +2267,6 @@ static MinicCoreLowerStatus lower_indirect_call(MinicCoreLowerContext *context,
     callee_value_expression_id = expression->value.call.callee;
     callee_expression =
         minic_c0_program_expression(context->body->program, callee_value_expression_id);
-    /* M124_INDIRECT_FUNCTION_DESIGNATOR: frontend/Sema already accepts both
-       pointer-to-function callees and function designators such as `(*fp)`.
-       The latter carries function type and its dereference does not perform a
-       memory load; its operand is the first-class function-pointer value. Keep
-       Core's indirect-call ABI/signature path pointer-valued by normalizing
-       only that semantic designator form back to the operand expression. */
     if (callee_expression != NULL &&
         callee_expression->kind == MINIC_EXPRESSION_DEREFERENCE &&
         minic_type_is_function(callee_expression->type)) {
@@ -2285,10 +2281,6 @@ static MinicCoreLowerStatus lower_indirect_call(MinicCoreLowerContext *context,
             !minic_type_pointee(callee_value_type, &function_type) ||
             !minic_type_is_function(function_type) ||
             !minic_type_equal(function_type, callee_expression->type)) {
-            (void)fprintf(stderr,
-                          "CORE_LOWER_DETAIL marker=M124_INDIRECT_FUNCTION_DESIGNATOR "
-                          "function=%s stage=indirect-call reason=dereference-operand-shape\n",
-                          context->source_function != NULL ? context->source_function->name : "?");
             return MINIC_CORE_LOWER_UNSUPPORTED;
         }
     } else if (callee_expression == NULL ||
@@ -2296,57 +2288,78 @@ static MinicCoreLowerStatus lower_indirect_call(MinicCoreLowerContext *context,
                    context->body, callee_expression, &callee_value_type) ||
                !minic_type_pointee(callee_value_type, &function_type) ||
                !minic_type_is_function(function_type)) {
-        (void)fprintf(stderr,
-                      "CORE_LOWER_DETAIL marker=M92_INDIRECT_CALL_HOT_DETAIL function=%s "
-                      "stage=indirect-call reason=callee-shape callee_kind=%d\n",
-                      context->source_function != NULL ? context->source_function->name : "?",
-                      callee_expression != NULL ? (int)callee_expression->kind : -1);
         return MINIC_CORE_LOWER_UNSUPPORTED;
     }
     signature = minic_c0_program_function_type(
         context->body->program, function_type.function_type_id);
-    if (signature == NULL || signature->is_variadic ||
-        expression->value.call.argument_count != signature->parameter_count ||
+    argument_count = expression->value.call.argument_count;
+    if (signature == NULL || argument_count > MINIC_MAX_FUNCTION_PARAMETERS ||
+        (!signature->is_variadic && argument_count != signature->parameter_count) ||
+        (signature->is_variadic && argument_count < signature->parameter_count) ||
         !minic_type_equal(expression->type, signature->return_type)) {
-        (void)fprintf(stderr,
-                      "CORE_LOWER_DETAIL marker=M92_INDIRECT_CALL_HOT_DETAIL function=%s "
-                      "stage=indirect-call reason=signature signature=%d variadic=%d argc=%zu expected=%zu return_match=%d\n",
-                      context->source_function != NULL ? context->source_function->name : "?",
-                      signature != NULL ? 1 : 0,
-                      signature != NULL && signature->is_variadic ? 1 : 0,
-                      expression->value.call.argument_count,
-                      signature != NULL ? signature->parameter_count : 0U,
-                      signature != NULL && minic_type_equal(expression->type, signature->return_type) ? 1 : 0);
         return MINIC_CORE_LOWER_UNSUPPORTED;
     }
     returns_void = minic_type_is_void(signature->return_type);
     if (!returns_void && !core_memory_scalar_type(signature->return_type)) {
         return MINIC_CORE_LOWER_UNSUPPORTED;
     }
-    for (argument_index = 0U; argument_index < signature->parameter_count; ++argument_index) {
-        if (!core_memory_scalar_type(signature->parameter_types[argument_index])) {
-            return MINIC_CORE_LOWER_UNSUPPORTED;
-        }
-    }
 
-    /* C leaves the relative evaluation order of the function designator and
-       call arguments unspecified.  Lower and stabilize arguments first, then
-       evaluate the callee exactly once in the final call block.  This keeps the
-       callee SSA value block-local even when an argument creates control flow. */
-    arguments = signature->parameter_count == 0U
+    arguments = argument_count == 0U
                     ? NULL
-                    : (MinicCoreCallArgument *)calloc(
-                          signature->parameter_count, sizeof(*arguments));
-    if (signature->parameter_count != 0U && arguments == NULL) {
+                    : (MinicCoreCallArgument *)calloc(argument_count, sizeof(*arguments));
+    if (argument_count != 0U && arguments == NULL) {
         return MINIC_CORE_LOWER_ERROR;
     }
-    for (argument_index = 0U; argument_index < signature->parameter_count; ++argument_index) {
-        arguments[argument_index].kind = MINIC_CORE_CALL_ARGUMENT_VALUE;
-        status = lower_scalar_assignment_value(
-            context,
-            signature->parameter_types[argument_index],
-            expression->value.call.arguments[argument_index],
-            &arguments[argument_index].value.value_id);
+
+    /* M151_INDIRECT_CALL_BATCH_OWNER: fixed arguments use the same scalar or
+       address-backed record transport as direct calls. A variadic tail keeps
+       the actual scalar type. Every VALUE is spilled until the callee has been
+       evaluated so the final indirect call block owns all SSA inputs. */
+    for (argument_index = 0U; argument_index < argument_count; ++argument_index) {
+        if (argument_index < signature->parameter_count) {
+            argument_types[argument_index] = signature->parameter_types[argument_index];
+            if (minic_type_is_record(argument_types[argument_index])) {
+                MinicCoreObjectId object_id;
+
+                status = lower_record_call_argument_object(
+                    context,
+                    expression->value.call.arguments[argument_index],
+                    argument_types[argument_index],
+                    &object_id);
+                if (status != MINIC_CORE_LOWER_OK) {
+                    free(arguments);
+                    return status;
+                }
+                arguments[argument_index].kind = MINIC_CORE_CALL_ARGUMENT_OBJECT;
+                arguments[argument_index].value.object_id = object_id;
+                continue;
+            }
+            if (!core_memory_scalar_type(argument_types[argument_index])) {
+                free(arguments);
+                return MINIC_CORE_LOWER_UNSUPPORTED;
+            }
+            arguments[argument_index].kind = MINIC_CORE_CALL_ARGUMENT_VALUE;
+            status = lower_scalar_assignment_value(
+                context,
+                argument_types[argument_index],
+                expression->value.call.arguments[argument_index],
+                &arguments[argument_index].value.value_id);
+        } else {
+            const MinicExpression *argument_expression = minic_c0_program_expression(
+                context->body->program, expression->value.call.arguments[argument_index]);
+
+            if (argument_expression == NULL ||
+                !core_scalar_expression_value_type(
+                    context->body, argument_expression, &argument_types[argument_index]) ||
+                !core_memory_scalar_type(argument_types[argument_index])) {
+                free(arguments);
+                return MINIC_CORE_LOWER_UNSUPPORTED;
+            }
+            arguments[argument_index].kind = MINIC_CORE_CALL_ARGUMENT_VALUE;
+            status = lower_expression(context,
+                                      expression->value.call.arguments[argument_index],
+                                      &arguments[argument_index].value.value_id);
+        }
         if (status != MINIC_CORE_LOWER_OK) {
             free(arguments);
             return status;
@@ -2354,13 +2367,13 @@ static MinicCoreLowerStatus lower_indirect_call(MinicCoreLowerContext *context,
         if (arguments[argument_index].value.value_id >= context->function->value_count ||
             !minic_type_equal(
                 context->function->values[arguments[argument_index].value.value_id].type,
-                signature->parameter_types[argument_index])) {
+                argument_types[argument_index])) {
             free(arguments);
             return MINIC_CORE_LOWER_ERROR;
         }
         status = spill_scalar_value(context,
                                     expression->span,
-                                    signature->parameter_types[argument_index],
+                                    argument_types[argument_index],
                                     arguments[argument_index].value.value_id,
                                     &argument_objects[argument_index]);
         if (status != MINIC_CORE_LOWER_OK) {
@@ -2368,27 +2381,19 @@ static MinicCoreLowerStatus lower_indirect_call(MinicCoreLowerContext *context,
             return status;
         }
     }
-    /* M112_INDIRECT_CALL_FINAL_BLOCK_ARGUMENTS: argument expressions may
-       create control flow, and so may the indirect callee expression (for
-       example an address-backed/statement-expression function-pointer load).
-       Keep argument values in Core objects until the callee has been evaluated;
-       then reload them in the final call block so the verifier sees both the
-       callee SSA value and every call argument as block-local available values. */
+
     status = lower_expression(context, callee_value_expression_id, &callee_value);
     if (status != MINIC_CORE_LOWER_OK) {
-        (void)fprintf(stderr,
-                      "CORE_LOWER_DETAIL marker=M92_INDIRECT_CALL_HOT_DETAIL function=%s "
-                      "stage=indirect-call reason=callee-lower status=%d callee_kind=%d\n",
-                      context->source_function != NULL ? context->source_function->name : "?",
-                      (int)status,
-                      callee_expression != NULL ? (int)callee_expression->kind : -1);
         free(arguments);
         return status;
     }
-    for (argument_index = 0U; argument_index < signature->parameter_count; ++argument_index) {
+    for (argument_index = 0U; argument_index < argument_count; ++argument_index) {
+        if (arguments[argument_index].kind == MINIC_CORE_CALL_ARGUMENT_OBJECT) {
+            continue;
+        }
         status = reload_scalar_value(context,
                                      expression->span,
-                                     signature->parameter_types[argument_index],
+                                     argument_types[argument_index],
                                      argument_objects[argument_index],
                                      &arguments[argument_index].value.value_id);
         if (status != MINIC_CORE_LOWER_OK) {
@@ -2398,11 +2403,6 @@ static MinicCoreLowerStatus lower_indirect_call(MinicCoreLowerContext *context,
     }
     if (callee_value >= context->function->value_count ||
         !minic_type_equal(context->function->values[callee_value].type, callee_value_type)) {
-        (void)fprintf(stderr,
-                      "CORE_LOWER_DETAIL marker=M92_INDIRECT_CALL_HOT_DETAIL function=%s "
-                      "stage=indirect-call reason=callee-value-type value=%u count=%zu\n",
-                      context->source_function != NULL ? context->source_function->name : "?",
-                      (unsigned int)callee_value, context->function->value_count);
         free(arguments);
         return MINIC_CORE_LOWER_ERROR;
     }
@@ -2411,9 +2411,10 @@ static MinicCoreLowerStatus lower_indirect_call(MinicCoreLowerContext *context,
                                                 signature->return_type,
                                                 signature->parameter_types,
                                                 signature->parameter_count,
+                                                signature->is_variadic,
                                                 &signature_id) ||
         !minic_core_function_append_call_arguments(
-            context->function, arguments, signature->parameter_count, &argument_begin)) {
+            context->function, arguments, argument_count, &argument_begin)) {
         free(arguments);
         return MINIC_CORE_LOWER_ERROR;
     }
@@ -2427,7 +2428,7 @@ static MinicCoreLowerStatus lower_indirect_call(MinicCoreLowerContext *context,
     instruction.value.indirect_call.callee = callee_value;
     instruction.value.indirect_call.signature_id = signature_id;
     instruction.value.indirect_call.argument_begin = argument_begin;
-    instruction.value.indirect_call.argument_count = signature->parameter_count;
+    instruction.value.indirect_call.argument_count = argument_count;
     if (returns_void) {
         *value_id = MINIC_CORE_VALUE_INVALID;
         return minic_core_function_append_effect_instruction(

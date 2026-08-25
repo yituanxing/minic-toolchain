@@ -416,12 +416,14 @@ static bool call_signature_equal(const MinicCoreCallSignature *signature,
                                  MinicFunctionTypeId function_type_id,
                                  MinicType return_type,
                                  const MinicType *parameter_types,
-                                 size_t parameter_count) {
+                                 size_t parameter_count,
+                                 bool is_variadic) {
     size_t index;
 
     if (signature == NULL || signature->function_type_id != function_type_id ||
         !minic_type_equal(signature->return_type, return_type) ||
-        signature->parameter_count != parameter_count) {
+        signature->parameter_count != parameter_count ||
+        signature->is_variadic != is_variadic) {
         return false;
     }
     for (index = 0U; index < parameter_count; ++index) {
@@ -432,11 +434,13 @@ static bool call_signature_equal(const MinicCoreCallSignature *signature,
     return true;
 }
 
+/* M151_INDIRECT_CALL_BATCH_OWNER: indirect fixed parameters share the direct scalar/record domain. */
 bool minic_core_function_add_call_signature(MinicCoreFunction *function,
                                             MinicFunctionTypeId function_type_id,
                                             MinicType return_type,
                                             const MinicType *parameter_types,
                                             size_t parameter_count,
+                                            bool is_variadic,
                                             MinicCoreCallSignatureId *signature_id) {
     MinicCoreCallSignature stored;
     size_t index;
@@ -450,7 +454,7 @@ bool minic_core_function_add_call_signature(MinicCoreFunction *function,
         return false;
     }
     for (index = 0U; index < parameter_count; ++index) {
-        if (!core_call_scalar_type(parameter_types[index])) {
+        if (!core_call_parameter_type(parameter_types[index])) {
             return false;
         }
     }
@@ -459,7 +463,8 @@ bool minic_core_function_add_call_signature(MinicCoreFunction *function,
                                  function_type_id,
                                  return_type,
                                  parameter_types,
-                                 parameter_count)) {
+                                 parameter_count,
+                                 is_variadic)) {
             *signature_id = (MinicCoreCallSignatureId)index;
             return true;
         }
@@ -468,6 +473,7 @@ bool minic_core_function_add_call_signature(MinicCoreFunction *function,
     stored.function_type_id = function_type_id;
     stored.return_type = return_type;
     stored.parameter_count = parameter_count;
+    stored.is_variadic = is_variadic;
     if (parameter_count != 0U) {
         stored.parameter_types =
             (MinicType *)malloc(parameter_count * sizeof(*stored.parameter_types));
@@ -1340,7 +1346,10 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
         signature =
             &function->call_signatures[instruction->value.indirect_call.signature_id];
         if (function_type.function_type_id != signature->function_type_id ||
-            instruction->value.indirect_call.argument_count != signature->parameter_count ||
+            (!signature->is_variadic &&
+             instruction->value.indirect_call.argument_count != signature->parameter_count) ||
+            (signature->is_variadic &&
+             instruction->value.indirect_call.argument_count < signature->parameter_count) ||
             !minic_type_equal(instruction->type, signature->return_type)) {
             return false;
         }
@@ -1355,20 +1364,53 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
              argument_index < argument_end;
              ++argument_index) {
             const MinicCoreCallArgument *argument;
-            MinicCoreValueId value_id;
             size_t parameter_index;
 
             argument = &function->call_arguments[argument_index];
             parameter_index =
                 argument_index - instruction->value.indirect_call.argument_begin;
-            if (argument->kind != MINIC_CORE_CALL_ARGUMENT_VALUE) {
-                return false;
+            if (parameter_index >= signature->parameter_count) {
+                MinicCoreValueId value_id;
+
+                if (!signature->is_variadic ||
+                    argument->kind != MINIC_CORE_CALL_ARGUMENT_VALUE) {
+                    return false;
+                }
+                value_id = argument->value.value_id;
+                if (value_id >= function->value_count || !available_values[value_id] ||
+                    !core_call_scalar_type(function->values[value_id].type)) {
+                    return false;
+                }
+                continue;
             }
-            value_id = argument->value.value_id;
-            if (value_id >= function->value_count || !available_values[value_id] ||
-                !minic_type_equal(function->values[value_id].type,
-                                  signature->parameter_types[parameter_index])) {
-                return false;
+            {
+                MinicType parameter_type = signature->parameter_types[parameter_index];
+
+                if (core_call_scalar_type(parameter_type)) {
+                    MinicCoreValueId value_id;
+
+                    if (argument->kind != MINIC_CORE_CALL_ARGUMENT_VALUE) {
+                        return false;
+                    }
+                    value_id = argument->value.value_id;
+                    if (value_id >= function->value_count || !available_values[value_id] ||
+                        !minic_type_equal(function->values[value_id].type, parameter_type)) {
+                        return false;
+                    }
+                } else if (minic_type_is_record(parameter_type)) {
+                    MinicCoreObjectId object_id;
+
+                    if (argument->kind != MINIC_CORE_CALL_ARGUMENT_OBJECT) {
+                        return false;
+                    }
+                    object_id = argument->value.object_id;
+                    if (object_id >= function->object_count ||
+                        !minic_type_equal(function->objects[object_id].type, parameter_type)) {
+                        return false;
+                    }
+                } else {
+                    return false;
+                }
             }
         }
         return true;
@@ -1540,7 +1582,7 @@ bool minic_core_function_verify(const MinicCoreFunction *function) {
         }
         for (parameter_index = 0U; parameter_index < signature->parameter_count;
              ++parameter_index) {
-            if (!core_call_scalar_type(signature->parameter_types[parameter_index])) {
+            if (!core_call_parameter_type(signature->parameter_types[parameter_index])) {
                 return false;
             }
         }
@@ -1991,9 +2033,18 @@ static bool dump_instruction(FILE *output,
             const MinicCoreCallArgument *argument = &function->call_arguments[
                 instruction->value.indirect_call.argument_begin + argument_index];
 
-            if (argument->kind != MINIC_CORE_CALL_ARGUMENT_VALUE ||
-                (argument_index != 0U && fprintf(output, ", ") < 0) ||
-                fprintf(output, "%%%" PRIu32, argument->value.value_id) < 0) {
+            if (argument_index != 0U && fprintf(output, ", ") < 0) {
+                return false;
+            }
+            if (argument->kind == MINIC_CORE_CALL_ARGUMENT_VALUE) {
+                if (fprintf(output, "%%%" PRIu32, argument->value.value_id) < 0) {
+                    return false;
+                }
+            } else if (argument->kind == MINIC_CORE_CALL_ARGUMENT_OBJECT) {
+                if (fprintf(output, "%%o%" PRIu32, argument->value.object_id) < 0) {
+                    return false;
+                }
+            } else {
                 return false;
             }
         }

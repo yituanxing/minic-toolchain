@@ -153,6 +153,9 @@ typedef struct MinicCoreCallSignature {
     MinicType return_type;
     MinicType *parameter_types;
     size_t parameter_count;
+    /* M150_INDIRECT_VARIADIC_CALL_SIGNATURE_OWNER: parameter_types is the
+       fixed prefix; variadic tail VALUE arguments carry their own scalar type. */
+    bool is_variadic;
 } MinicCoreCallSignature;
 
 /* M85_RECORD_CALL_ARGUMENT: Core call arguments carry semantic storage form,
@@ -432,6 +435,7 @@ bool minic_core_function_add_call_signature(MinicCoreFunction *function,
                                             MinicType return_type,
                                             const MinicType *parameter_types,
                                             size_t parameter_count,
+                                            bool is_variadic,
                                             MinicCoreCallSignatureId *signature_id);
 bool minic_core_function_add_opaque_inline_asm(MinicCoreFunction *function,
                                                const char *template_text,

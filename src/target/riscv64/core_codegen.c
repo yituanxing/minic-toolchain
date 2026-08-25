@@ -1127,6 +1127,125 @@ static bool core_direct_call_supported(const MinicC0Program *program,
     return true;
 }
 
+/* M151_INDIRECT_CALL_BATCH_OWNER: validate indirect arguments through the
+   same register-only RV64 ABI classifier used by direct calls. */
+static bool core_indirect_call_supported(const MinicC0Program *program,
+                                         const MinicCoreFunction *function,
+                                         const MinicCoreInstruction *instruction) {
+    const MinicCoreCallSignature *signature;
+    MinicRiscv64AbiCursor cursor;
+    MinicRiscv64AbiValue return_value;
+    MinicType function_type;
+    size_t argument_index;
+
+    if (function == NULL || instruction == NULL ||
+        instruction->kind != MINIC_CORE_INSTRUCTION_INDIRECT_CALL ||
+        instruction->value.indirect_call.signature_id >= function->call_signature_count ||
+        instruction->value.indirect_call.callee >= function->value_count ||
+        instruction->value.indirect_call.argument_begin > function->call_argument_count ||
+        instruction->value.indirect_call.argument_count >
+            function->call_argument_count - instruction->value.indirect_call.argument_begin ||
+        !minic_type_pointee(
+            function->values[instruction->value.indirect_call.callee].type, &function_type) ||
+        !minic_type_is_function(function_type)) {
+        return false;
+    }
+    signature = &function->call_signatures[instruction->value.indirect_call.signature_id];
+    if (function_type.function_type_id != signature->function_type_id ||
+        (!signature->is_variadic &&
+         instruction->value.indirect_call.argument_count != signature->parameter_count) ||
+        (signature->is_variadic &&
+         instruction->value.indirect_call.argument_count < signature->parameter_count)) {
+        return false;
+    }
+    if (program == NULL) {
+        if ((!minic_type_is_void(signature->return_type) &&
+             !core_scalar_type(signature->return_type)) ||
+            instruction->value.indirect_call.argument_count > 8U) {
+            return false;
+        }
+        for (argument_index = 0U;
+             argument_index < instruction->value.indirect_call.argument_count;
+             ++argument_index) {
+            const MinicCoreCallArgument *argument = &function->call_arguments[
+                instruction->value.indirect_call.argument_begin + argument_index];
+            if (argument->kind != MINIC_CORE_CALL_ARGUMENT_VALUE ||
+                argument->value.value_id >= function->value_count) {
+                return false;
+            }
+            if (argument_index < signature->parameter_count) {
+                if (!core_scalar_type(signature->parameter_types[argument_index])) {
+                    return false;
+                }
+            } else if (!signature->is_variadic ||
+                       !core_scalar_type(function->values[argument->value.value_id].type)) {
+                return false;
+            }
+        }
+        return true;
+    }
+    if (!minic_riscv64_abi_cursor_initialize_for_return(
+            program, signature->return_type, &cursor, &return_value) ||
+        (return_value.kind != MINIC_RISCV64_ABI_VALUE_VOID &&
+         return_value.kind != MINIC_RISCV64_ABI_VALUE_INTEGER)) {
+        return false;
+    }
+    for (argument_index = 0U;
+         argument_index < instruction->value.indirect_call.argument_count;
+         ++argument_index) {
+        const MinicCoreCallArgument *argument = &function->call_arguments[
+            instruction->value.indirect_call.argument_begin + argument_index];
+        MinicRiscv64AbiArgumentLocation location;
+        MinicType argument_type;
+        bool is_fixed_parameter = argument_index < signature->parameter_count;
+
+        if (is_fixed_parameter) {
+            argument_type = signature->parameter_types[argument_index];
+        } else {
+            if (!signature->is_variadic ||
+                argument->kind != MINIC_CORE_CALL_ARGUMENT_VALUE ||
+                argument->value.value_id >= function->value_count) {
+                return false;
+            }
+            argument_type = function->values[argument->value.value_id].type;
+            if (!core_scalar_type(argument_type)) {
+                return false;
+            }
+        }
+        if (!minic_riscv64_abi_place_argument(
+                program, argument_type, is_fixed_parameter, &cursor, &location) ||
+            location.floating_register_count != 0U || location.stack_slot_count != 0U) {
+            return false;
+        }
+        if (core_scalar_type(argument_type)) {
+            if (argument->kind != MINIC_CORE_CALL_ARGUMENT_VALUE ||
+                argument->value.value_id >= function->value_count ||
+                location.value.kind != MINIC_RISCV64_ABI_VALUE_INTEGER ||
+                location.integer_register_count != 1U ||
+                location.integer_register_begin >= 8U) {
+                return false;
+            }
+        } else if (is_fixed_parameter && minic_type_is_record(argument_type)) {
+            MinicCoreObjectId object_id;
+            if (argument->kind != MINIC_CORE_CALL_ARGUMENT_OBJECT ||
+                location.value.kind != MINIC_RISCV64_ABI_VALUE_AGGREGATE ||
+                location.value.slot_count == 0U || location.value.slot_count > 2U ||
+                location.integer_register_count != location.value.slot_count ||
+                location.integer_register_begin + location.integer_register_count > 8U) {
+                return false;
+            }
+            object_id = argument->value.object_id;
+            if (object_id >= function->object_count ||
+                !minic_type_equal(function->objects[object_id].type, argument_type)) {
+                return false;
+            }
+        } else {
+            return false;
+        }
+    }
+    return true;
+}
+
 static bool core_instruction_supported(const MinicC0Program *program,
                                        const MinicCoreFunction *function,
                                        const MinicCoreInstruction *instruction) {
@@ -1226,25 +1345,8 @@ static bool core_instruction_supported(const MinicC0Program *program,
         return true;
     case MINIC_CORE_INSTRUCTION_CALL:
         return core_direct_call_supported(program, function, instruction);
-    case MINIC_CORE_INSTRUCTION_INDIRECT_CALL: {
-        const MinicCoreCallSignature *signature;
-        MinicType function_type;
-
-        if (instruction->value.indirect_call.signature_id >= function->call_signature_count ||
-            instruction->value.indirect_call.callee >= function->value_count ||
-            instruction->value.indirect_call.argument_count > 8U) {
-            return false;
-        }
-        signature =
-            &function->call_signatures[instruction->value.indirect_call.signature_id];
-        return signature->parameter_count <= 8U &&
-               instruction->value.indirect_call.argument_count == signature->parameter_count &&
-               minic_type_pointee(
-                   function->values[instruction->value.indirect_call.callee].type,
-                   &function_type) &&
-               minic_type_is_function(function_type) &&
-               function_type.function_type_id == signature->function_type_id;
-    }
+    case MINIC_CORE_INSTRUCTION_INDIRECT_CALL:
+        return core_indirect_call_supported(program, function, instruction);
     case MINIC_CORE_INSTRUCTION_FIELD_ADDRESS:
         return core_field_address_supported(program, instruction, NULL);
     case MINIC_CORE_INSTRUCTION_SCALAR_BITCAST:
@@ -1730,35 +1832,83 @@ static bool emit_indirect_call(FILE *file,
                                const MinicCoreFunction *function,
                                const MinicRiscv64CoreFrame *frame,
                                const MinicCoreInstruction *instruction) {
+    const MinicCoreCallSignature *signature;
+    MinicRiscv64AbiCursor cursor;
+    MinicRiscv64AbiValue return_value;
     size_t argument_index;
-    size_t argument_offset;
 
-    if (file == NULL || function == NULL || frame == NULL || instruction == NULL ||
-        instruction->kind != MINIC_CORE_INSTRUCTION_INDIRECT_CALL ||
-        !core_instruction_supported(NULL, function, instruction)) {
+    if (file == NULL || program == NULL || function == NULL || frame == NULL ||
+        instruction == NULL || instruction->kind != MINIC_CORE_INSTRUCTION_INDIRECT_CALL ||
+        !core_indirect_call_supported(program, function, instruction)) {
         return false;
     }
+    signature = &function->call_signatures[instruction->value.indirect_call.signature_id];
+    if (!minic_riscv64_abi_cursor_initialize_for_return(
+            program, signature->return_type, &cursor, &return_value)) {
+        return false;
+    }
+    (void)return_value;
     for (argument_index = 0U;
          argument_index < instruction->value.indirect_call.argument_count;
          ++argument_index) {
-        const MinicCoreCallArgument *argument;
+        const MinicCoreCallArgument *argument = &function->call_arguments[
+            instruction->value.indirect_call.argument_begin + argument_index];
+        MinicRiscv64AbiArgumentLocation location;
+        MinicType argument_type;
+        bool is_fixed_parameter = argument_index < signature->parameter_count;
 
-        argument_offset =
-            instruction->value.indirect_call.argument_begin + argument_index;
-        if (argument_offset >= function->call_argument_count) {
+        if (is_fixed_parameter) {
+            argument_type = signature->parameter_types[argument_index];
+        } else {
+            argument_type = function->values[argument->value.value_id].type;
+        }
+        if (!minic_riscv64_abi_place_argument(
+                program, argument_type, is_fixed_parameter, &cursor, &location)) {
             return false;
         }
-        argument = &function->call_arguments[argument_offset];
-        if (argument->kind != MINIC_CORE_CALL_ARGUMENT_VALUE ||
-            !load_core_value(file,
-                             frame,
-                             argument->value.value_id,
-                             minic_core_rv64_argument_registers[argument_index])) {
-            return false;
+        if (argument->kind == MINIC_CORE_CALL_ARGUMENT_VALUE) {
+            if (location.integer_register_count != 1U || location.integer_register_begin >= 8U ||
+                !load_core_value(file,
+                                 frame,
+                                 argument->value.value_id,
+                                 minic_core_rv64_argument_registers[location.integer_register_begin])) {
+                return false;
+            }
+            continue;
         }
+        if (argument->kind == MINIC_CORE_CALL_ARGUMENT_OBJECT) {
+            size_t chunk_index;
+            size_t object_offset;
+
+            if (!is_fixed_parameter ||
+                !core_object_offset(program, function, argument->value.object_id, &object_offset)) {
+                return false;
+            }
+            for (chunk_index = 0U; chunk_index < location.value.slot_count; ++chunk_index) {
+                size_t chunk_offset = chunk_index * 8U;
+                size_t chunk_size;
+                size_t register_index = location.integer_register_begin + chunk_index;
+
+                if (chunk_offset >= location.value.storage_size || register_index >= 8U ||
+                    object_offset > SIZE_MAX - chunk_offset) {
+                    return false;
+                }
+                chunk_size = location.value.storage_size - chunk_offset;
+                if (chunk_size > 8U) {
+                    chunk_size = 8U;
+                }
+                if (!emit_sp_load_chunk(file,
+                                        minic_core_rv64_argument_registers[register_index],
+                                        object_offset + chunk_offset,
+                                        chunk_size)) {
+                    return false;
+                }
+            }
+            continue;
+        }
+        return false;
     }
-    if (!load_core_value(
-            file, frame, instruction->value.indirect_call.callee, "t0") ||
+    if (!load_core_value(file, frame, instruction->value.indirect_call.callee, "t0") ||
         fprintf(file, "  jalr ra, t0, 0\n") < 0) {
         return false;
     }
