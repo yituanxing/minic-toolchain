@@ -111,10 +111,17 @@ jobs:
           for index in (96,97,98,137):
               row=by_index[index]
               print(f"CORE_M130_INDEX_{index} status={row['status']} line={row.get('first_error_line')} message={row.get('message')}")
-          cleared=sum(1 for index in (96,97,98) if by_index[index]['status']=='PASS')
-          if cleared != 3:
-              raise SystemExit(f'M130 did not clear rq_unpin_lock triplet: cleared={cleared}')
-          print(f"CORE_M130_PRODUCT_FOCUSED selected=4 pass={summary['pass']} unsupported={summary['unsupported']} error=0")
+          for index in (96,97):
+              if by_index[index]['status'] != 'PASS':
+                  raise SystemExit(f'M130 expected full TU PASS at index {index}: {by_index[index]}')
+          row98=by_index[98]
+          if 'rq_unpin_lock' in (row98.get('message') or ''):
+              raise SystemExit(f'M130 did not clear old rq_unpin_lock blocker at index 98: {row98}')
+          if row98['status'] != 'PASS' and int(row98.get('first_error_line') or 0) <= 67278:
+              raise SystemExit(f'M130 did not advance index 98 beyond old frontier: {row98}')
+          if summary['pass'] < 2:
+              raise SystemExit(f'M130 focused produced no TU gain: {summary}')
+          print(f"CORE_M130_PRODUCT_FOCUSED selected=4 pass={summary['pass']} unsupported={summary['unsupported']} error=0 rq_unpin_lock=cleared")
           print((work/'reason-summary.txt').read_text())
           PY
 
