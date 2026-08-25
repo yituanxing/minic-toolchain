@@ -15,122 +15,176 @@ lower_block(MinicCoreLowerContext *context, const MinicBlock *source_block, bool
 helper = '''/* M134_UNREACHABLE_TAIL_OWNER: once a structured path has a Core
    terminator, ordinary following statements have no runtime semantics and must
    not make strict lowering fail merely because their expression/control-flow
-   owner is unsupported. The exception is a subtree containing a label that is
-   an actual function-scope jump target: a direct goto or asm-goto may re-enter
-   that otherwise unreachable subtree. Parser-internal loop labels are not jump
-   targets and therefore do not block pruning. Normalized blocks may form a
-   graph, so discovery is cycle-safe rather than assuming an AST tree. */
-static bool core_label_is_jump_target(const MinicCoreLowerContext *context,
-                                      MinicStatementId label_id) {
-    const MinicC0Program *program;
-    size_t statement_index;
+   owner is unsupported. A structured subtree may be pruned only when no jump
+   originates outside that subtree and targets a label inside it. This matters
+   because parser-normalized loops contain their own internal goto/label edges;
+   those edges disappear together with the unreachable subtree and are not
+   function-scope re-entry. Direct goto and asm-goto from outside remain
+   fail-closed. Normalized blocks may form a graph, so membership discovery is
+   cycle-safe. */
+static bool core_mark_block_statement_membership(
+    const MinicCoreLowerContext *context,
+    MinicBlockId block_id,
+    bool *visited_blocks,
+    size_t block_count,
+    bool *statement_membership,
+    size_t statement_count) {
+    const MinicBlock *block;
+    size_t block_statement_index;
 
-    if (context == NULL || context->body == NULL || context->body->program == NULL) {
+    if (block_id == MINIC_BLOCK_INVALID) {
+        return true;
+    }
+    if (context == NULL || context->body == NULL || context->body->program == NULL ||
+        visited_blocks == NULL || statement_membership == NULL || block_id >= block_count) {
+        return false;
+    }
+    if (visited_blocks[block_id]) {
+        return true;
+    }
+    visited_blocks[block_id] = true;
+    block = minic_c0_program_block(context->body->program, block_id);
+    if (block == NULL) {
+        return false;
+    }
+    for (block_statement_index = 0U;
+         block_statement_index < block->statement_count;
+         ++block_statement_index) {
+        MinicStatementId statement_id;
+        const MinicStatement *statement;
+
+        statement_id = block->statements[block_statement_index];
+        if (statement_id >= statement_count) {
+            return false;
+        }
+        statement_membership[statement_id] = true;
+        statement = minic_c0_program_statement(context->body->program, statement_id);
+        if (statement == NULL ||
+            !core_mark_block_statement_membership(context,
+                                                  statement->then_block,
+                                                  visited_blocks,
+                                                  block_count,
+                                                  statement_membership,
+                                                  statement_count) ||
+            !core_mark_block_statement_membership(context,
+                                                  statement->else_block,
+                                                  visited_blocks,
+                                                  block_count,
+                                                  statement_membership,
+                                                  statement_count)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool core_unreachable_statement_has_external_reentry(
+    const MinicCoreLowerContext *context, const MinicStatement *root_statement) {
+    const MinicC0Program *program;
+    bool *visited_blocks;
+    bool *statement_membership;
+    bool root_found;
+    bool unsafe;
+    size_t source_index;
+
+    if (context == NULL || context->body == NULL || context->body->program == NULL ||
+        root_statement == NULL) {
         return true;
     }
     program = context->body->program;
-    for (statement_index = 0U; statement_index < program->statement_count; ++statement_index) {
-        const MinicStatement *statement;
+    if (program->statement_count == 0U ||
+        program->block_count > SIZE_MAX / sizeof(*visited_blocks) ||
+        program->statement_count > SIZE_MAX / sizeof(*statement_membership)) {
+        return true;
+    }
+    visited_blocks = program->block_count == 0U
+                         ? NULL
+                         : (bool *)calloc(program->block_count, sizeof(*visited_blocks));
+    statement_membership =
+        (bool *)calloc(program->statement_count, sizeof(*statement_membership));
+    if ((program->block_count != 0U && visited_blocks == NULL) ||
+        statement_membership == NULL) {
+        free(visited_blocks);
+        free(statement_membership);
+        return true;
+    }
 
-        statement = minic_c0_program_statement(program, statement_index);
-        if (statement == NULL) {
+    root_found = false;
+    for (source_index = 0U; source_index < program->statement_count; ++source_index) {
+        const MinicStatement *candidate;
+
+        candidate = minic_c0_program_statement(program, source_index);
+        if (candidate == NULL) {
+            free(visited_blocks);
+            free(statement_membership);
             return true;
         }
-        if (statement->kind == MINIC_STATEMENT_GOTO &&
-            statement->target_statement == label_id) {
-            return true;
+        if (candidate == root_statement) {
+            statement_membership[source_index] = true;
+            root_found = true;
         }
-        if (statement->kind == MINIC_STATEMENT_INLINE_ASM &&
-            statement->inline_asm_id < program->inline_asm_count) {
+    }
+    if (!root_found ||
+        !core_mark_block_statement_membership(context,
+                                              root_statement->then_block,
+                                              visited_blocks,
+                                              program->block_count,
+                                              statement_membership,
+                                              program->statement_count) ||
+        !core_mark_block_statement_membership(context,
+                                              root_statement->else_block,
+                                              visited_blocks,
+                                              program->block_count,
+                                              statement_membership,
+                                              program->statement_count)) {
+        free(visited_blocks);
+        free(statement_membership);
+        return true;
+    }
+
+    unsafe = false;
+    for (source_index = 0U; source_index < program->statement_count && !unsafe;
+         ++source_index) {
+        const MinicStatement *source;
+
+        if (statement_membership[source_index]) {
+            continue;
+        }
+        source = minic_c0_program_statement(program, source_index);
+        if (source == NULL) {
+            unsafe = true;
+            break;
+        }
+        if (source->kind == MINIC_STATEMENT_GOTO &&
+            source->target_statement < program->statement_count &&
+            statement_membership[source->target_statement]) {
+            unsafe = true;
+            break;
+        }
+        if (source->kind == MINIC_STATEMENT_INLINE_ASM &&
+            source->inline_asm_id < program->inline_asm_count) {
             const MinicInlineAsm *inline_asm;
             size_t label_index;
 
-            inline_asm = &program->inline_asms[statement->inline_asm_id];
+            inline_asm = &program->inline_asms[source->inline_asm_id];
             if (!inline_asm->is_goto) {
                 continue;
             }
             for (label_index = 0U; label_index < inline_asm->label_count; ++label_index) {
-                if (inline_asm->labels[label_index].target_statement == label_id) {
-                    return true;
+                MinicStatementId target;
+
+                target = inline_asm->labels[label_index].target_statement;
+                if (target < program->statement_count && statement_membership[target]) {
+                    unsafe = true;
+                    break;
                 }
             }
         }
     }
-    return false;
-}
 
-static bool core_block_contains_jump_target_label_visit(
-    const MinicCoreLowerContext *context,
-    MinicBlockId block_id,
-    bool *visited,
-    size_t visited_count) {
-    const MinicBlock *block;
-    size_t statement_index;
-
-    if (block_id == MINIC_BLOCK_INVALID) {
-        return false;
-    }
-    if (context == NULL || context->body == NULL || context->body->program == NULL ||
-        visited == NULL || block_id >= visited_count) {
-        return true;
-    }
-    if (visited[block_id]) {
-        return false;
-    }
-    visited[block_id] = true;
-    block = minic_c0_program_block(context->body->program, block_id);
-    if (block == NULL) {
-        return true;
-    }
-    for (statement_index = 0U; statement_index < block->statement_count; ++statement_index) {
-        MinicStatementId statement_id;
-        const MinicStatement *statement;
-
-        statement_id = block->statements[statement_index];
-        statement = minic_c0_program_statement(context->body->program, statement_id);
-        if (statement == NULL) {
-            return true;
-        }
-        if ((statement->kind == MINIC_STATEMENT_LABEL &&
-             core_label_is_jump_target(context, statement_id)) ||
-            core_block_contains_jump_target_label_visit(
-                context, statement->then_block, visited, visited_count) ||
-            core_block_contains_jump_target_label_visit(
-                context, statement->else_block, visited, visited_count)) {
-            return true;
-        }
-    }
-    return false;
-}
-
-static bool core_unreachable_statement_contains_jump_target_label(
-    const MinicCoreLowerContext *context, const MinicStatement *statement) {
-    const MinicC0Program *program;
-    bool *visited;
-    bool contains_label;
-
-    if (context == NULL || context->body == NULL || context->body->program == NULL ||
-        statement == NULL) {
-        return true;
-    }
-    program = context->body->program;
-    if (program->block_count == 0U) {
-        return false;
-    }
-    if (program->block_count > SIZE_MAX / sizeof(*visited)) {
-        return true;
-    }
-    visited = (bool *)calloc(program->block_count, sizeof(*visited));
-    if (visited == NULL) {
-        return true;
-    }
-    contains_label =
-        core_block_contains_jump_target_label_visit(
-            context, statement->then_block, visited, program->block_count) ||
-        core_block_contains_jump_target_label_visit(
-            context, statement->else_block, visited, program->block_count);
-    free(visited);
-    return contains_label;
+    free(visited_blocks);
+    free(statement_membership);
+    return unsafe;
 }
 
 static MinicCoreLowerStatus
@@ -159,14 +213,14 @@ new_guard = '''        if (block_terminated) {
             /* Parser scope exit may materialize cleanup/return tails after an
                already-terminating edge. More generally, non-label statements
                on this path are unreachable and need no Core instructions.
-               Preserve fail-closed behavior only when a real goto/asm-goto can
-               re-enter a nested label in that structured subtree. */
+               Preserve fail-closed behavior only for an external goto/asm-goto
+               re-entry into that otherwise unreachable structured subtree. */
             if (statement->kind == MINIC_STATEMENT_RETURN ||
                 core_is_materialized_cleanup_statement(context, statement)) {
                 continue;
             }
             if (statement->kind != MINIC_STATEMENT_LABEL) {
-                if (core_unreachable_statement_contains_jump_target_label(
+                if (core_unreachable_statement_has_external_reentry(
                         context, statement)) {
                     return MINIC_CORE_LOWER_UNSUPPORTED;
                 }
