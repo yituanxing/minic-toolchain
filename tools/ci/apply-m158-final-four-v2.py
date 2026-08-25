@@ -27,6 +27,13 @@ if source.count(old) != 1:
     raise SystemExit("M158 v2 could not patch replace_once helper")
 source = source.replace(old, new, 1)
 
+# Frontend parse_goto stores GNU `goto *expr` in statement.expression.  The
+# target_expression field is unrelated and remains INVALID for this statement.
+source = source.replace(
+    '''                if (statement->target_expression != MINIC_EXPRESSION_INVALID) {\n                    MinicCoreTerminator terminator;\n                    MinicCoreValueId target_value;\n\n                    if (statement->expression != MINIC_EXPRESSION_INVALID ||\n                        statement->target_statement != MINIC_STATEMENT_INVALID) {\n                        status = MINIC_CORE_LOWER_UNSUPPORTED;\n                        break;\n                    }\n                    status = lower_expression(\n                        context, statement->target_expression, &target_value);''',
+    '''                if (statement->expression != MINIC_EXPRESSION_INVALID &&\n                    statement->target_statement == MINIC_STATEMENT_INVALID) {\n                    MinicCoreTerminator terminator;\n                    MinicCoreValueId target_value;\n\n                    if (statement->target_expression != MINIC_EXPRESSION_INVALID) {\n                        status = MINIC_CORE_LOWER_UNSUPPORTED;\n                        break;\n                    }\n                    status = lower_expression(\n                        context, statement->expression, &target_value);''',
+)
+
 # Diagnostics must not depend on MinicType's private representation.  We only
 # need enough information to distinguish qualifier/array/register rejection,
 # local-object rejection, and post-object non-scalar rejection.
