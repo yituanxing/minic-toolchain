@@ -23,41 +23,57 @@ if marker not in text:
     comment = '''
     /* M128_RECORD_CALL_ARGUMENT_MATERIALIZATION: a by-value record argument
        consumes a record rvalue, not merely an already-address-backed lvalue.
-       Use the same aggregate materialization seam as record assignment so
-       conditionals, compound literals and direct record-return calls compose
-       uniformly before the private argument copy is made. */'''
+       Use the aggregate materialization seam so conditionals, compound
+       literals and direct record-return calls compose before the private
+       argument copy is made. */'''
     segment = segment[:brace + 1] + comment + segment[brace + 1:]
     segment = segment.replace(old_name, 'lower_record_materialized_address(', 1)
     text = text[:start] + segment + text[end:]
     core_path.write_text(text)
 
-# Permanent strict regression already contains the exact generic shape:
-# record conditional (compound literal / record-returning call) consumed as a
-# by-value record argument. Promote that existing test to the strict Core IR
-# route instead of adding a Linux-shaped special case.
+# Keep the existing broad record-conditional regression unchanged in legacy
+# mode. Add one isolated strict-Core contract for the M128 consumer so unrelated
+# record-assignment shapes cannot mask this feature.
+source_path = Path('tests/compiler/c0/record_call_argument_materialization.c')
+source_text = '''typedef struct {
+    unsigned long bits;
+} record_word_t;
+
+static record_word_t make_word(unsigned long value) {
+    return (record_word_t){value + 1UL};
+}
+
+static unsigned long consume_word(record_word_t value) {
+    return value.bits;
+}
+
+int main(void) {
+    if (consume_word(1 ? (record_word_t){3UL} : make_word(10UL)) != 3UL)
+        return 1;
+    if (consume_word(0 ? (record_word_t){3UL} : make_word(10UL)) != 11UL)
+        return 2;
+    return 0;
+}
+'''
+source_path.write_text(source_text)
+
 script_path = Path('tests/compiler/c0/run-record-conditional-materialization.sh')
 script = script_path.read_text()
-if 'record-conditional-materialization.strict.s' not in script:
-    anchor = '''"$minic" -S "$work/input.i" -o "$work/output.s"
+strict_marker = 'record_call_argument_materialization.c'
+if strict_marker not in script:
+    anchor = "printf '%s\\n' 'PASS compiler/c0/record_conditional_materialization record-rvalue=conditional producers=address,call sink=assignment,call-argument'"
+    block = '''"$host_cc" -E -P -std=gnu11 -x c \\
+    "$root/tests/compiler/c0/record_call_argument_materialization.c" \\
+    -o "$work/call-argument.i"
+MINIC_CORE_IR=strict "$minic" -S "$work/call-argument.i" \\
+    -o "$work/call-argument.strict.s"
+grep -F '.Lminic_record_cond_false_' "$work/call-argument.strict.s" >/dev/null
+grep -F '  call consume_word' "$work/call-argument.strict.s" >/dev/null
 
-grep -F '.Lminic_record_cond_false_' "$work/output.s" >/dev/null
-'''
-    replacement = '''"$minic" -S "$work/input.i" -o "$work/output.s"
-MINIC_CORE_IR=strict "$minic" -S "$work/input.i" \\
-    -o "$work/record-conditional-materialization.strict.s"
-
-grep -F '.Lminic_record_cond_false_' "$work/output.s" >/dev/null
-grep -F '.Lminic_record_cond_false_' "$work/record-conditional-materialization.strict.s" >/dev/null
-grep -F '  call consume' "$work/record-conditional-materialization.strict.s" >/dev/null
-'''
+printf '%s\\n' 'PASS compiler/c0/record_conditional_materialization record-rvalue=conditional producers=address,call sink=assignment,call-argument strict-call-argument=1' '''.rstrip()
     if anchor not in script:
-        raise SystemExit('record conditional regression anchor changed')
-    script = script.replace(anchor, replacement, 1)
-    script = script.replace(
-        "printf '%s\\n' 'PASS compiler/c0/record_conditional_materialization record-rvalue=conditional producers=address,call sink=assignment,call-argument'",
-        "printf '%s\\n' 'PASS compiler/c0/record_conditional_materialization record-rvalue=conditional producers=address,call sink=assignment,call-argument strict-core=1'",
-        1,
-    )
+        raise SystemExit('record conditional PASS anchor changed')
+    script = script.replace(anchor, block, 1)
     script_path.write_text(script)
 
-print('M128 by-value record call argument materialization and strict regression staged')
+print('M128 by-value record call argument materialization and isolated strict regression staged')
