@@ -27,17 +27,19 @@ jobs:
           test "${{ steps.corpus.outputs.cache-hit }}" = true
           test -s build/linux-focus-corpus/selected-tus.txt
 
-      - name: Stage M135 M137 plus M138 diagnostics
+      - name: Stage M135 M137 plus M138 M139 diagnostics
         shell: bash
         run: |
           set -Eeuo pipefail
           python3 tools/ci/apply-m135-cleanup-edge-classification.py
           python3 tools/ci/apply-m137-detached-loop-continue-owner.py
           python3 tools/ci/apply-m138-error-owner-trace.py
+          python3 tools/ci/apply-m139-local-loop-passthrough-trace.py
           git diff --check
           grep -Fq 'M135_CLEANUP_EDGE_CLASSIFICATION' src/core/core_lower.c
           grep -Fq 'M137_DETACHED_LOOP_CONTINUE_OWNER' src/core/core_lower.c
           grep -Fq 'M138_ERROR_OWNER_TRACE' src/core/core_lower.c
+          grep -Fq 'M139_LOCAL_LOOP_PASSTHROUGH_TRACE' src/core/core_lower.c
 
       - name: Build exact diagnostic compiler
         run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/m138-census-compiler
@@ -49,7 +51,7 @@ jobs:
           compiler="$GITHUB_WORKSPACE/build/m138-census-compiler/bin/minic"
           work="$GITHUB_WORKSPACE/build/m138-census-focused"
           set +e
-          CORE_M138_ERROR_TRACE=1 CORE_FAST_TRACE=1 MINIC_CORE_IR=strict \
+          CORE_M138_ERROR_TRACE=1 CORE_M139_TRACE=1 CORE_FAST_TRACE=1 MINIC_CORE_IR=strict \
             python3 tests/external/linux/corpus_replay.py \
               --minic "$compiler" \
               --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
@@ -61,7 +63,7 @@ jobs:
           printf 'CORE_M138_REPLAY_STATUS=%d\n' "$replay_status"
           for f in "$work"/minic-stderr/kernel/sched/*.stderr; do
             echo "===== $f ====="
-            grep -E 'CORE_M138_|BATCH_D_VARIADIC_DIRECT_CALL|CORE_ASSIGN_STAGE|CORE_FAST_TRACE|error:' "$f" | tail -n 240 || true
+            grep -E 'CORE_M138_|CORE_M139_|BATCH_D_VARIADIC_DIRECT_CALL|CORE_ASSIGN_STAGE|CORE_FAST_TRACE|error:' "$f" | tail -n 320 || true
           done
 
       - name: Persist M138 census
