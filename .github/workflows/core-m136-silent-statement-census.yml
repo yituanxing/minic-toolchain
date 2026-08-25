@@ -27,15 +27,17 @@ jobs:
           test "${{ steps.corpus.outputs.cache-hit }}" = true
           test -s build/linux-focus-corpus/selected-tus.txt
 
-      - name: Stage M135 candidate plus M136 diagnostic
+      - name: Stage M135 candidate plus M136/M137 diagnostics
         shell: bash
         run: |
           set -Eeuo pipefail
           python3 tools/ci/apply-m135-cleanup-edge-classification.py
           python3 tools/ci/apply-m136-silent-statement-census.py
+          python3 tools/ci/apply-m137-cfg-block-census.py
           git diff --check
           grep -Fq 'M135_CLEANUP_EDGE_CLASSIFICATION' src/core/core_lower.c
           grep -Fq 'M136_SILENT_STATEMENT_CENSUS' src/core/core_lower.c
+          grep -Fq 'M137_CFG_BLOCK_CENSUS' src/core/core_lower.c
 
       - name: Build exact diagnostic compiler
         run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/m136-census-compiler
@@ -59,7 +61,7 @@ jobs:
           printf 'CORE_M136_REPLAY_STATUS=%d\n' "$replay_status"
           for f in "$work"/minic-stderr/kernel/sched/*.stderr; do
             echo "===== $f ====="
-            grep -E 'CORE_M136_STMT_ENTRY|CORE_FAST_TRACE|CORE_EXPR_STMT_DETAIL|error:' "$f" | tail -n 160 || true
+            grep -E 'CORE_M136_|CORE_M137_|CORE_FAST_TRACE|CORE_EXPR_STMT_DETAIL|error:' "$f" | tail -n 220 || true
           done
 
       - name: Persist M136 census
