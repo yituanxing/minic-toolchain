@@ -1,4 +1,4 @@
-name: Core M152 Nested Member Address Productizer
+name: Core M152 Enum Bit Field Productizer
 
 on:
   pull_request:
@@ -21,7 +21,7 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
-          if grep -Fq 'M152_NESTED_RECORD_MEMBER_ADDRESS_OWNER' src/core/core_lower.c; then
+          if grep -Fq 'M152_UNSIGNED_ENUM_BIT_FIELD_OWNER' src/core/core_lower.c; then
             echo 'needs_patch=false' >> "$GITHUB_OUTPUT"
           else
             echo 'needs_patch=true' >> "$GITHUB_OUTPUT"
@@ -43,6 +43,7 @@ jobs:
           test "${{ steps.corpus.outputs.cache-hit }}" = true
           test -s build/linux-focus-corpus/selected-tus.txt
           grep -Fq 'M151_INDIRECT_CALL_BATCH_OWNER' src/core/core_lower.c
+          ! grep -Fq 'M152_UNSIGNED_ENUM_BIT_FIELD_OWNER' src/core/core_lower.c
           ! grep -Fq 'M152_NESTED_RECORD_MEMBER_ADDRESS_OWNER' src/core/core_lower.c
 
       - name: Apply M152 candidate
@@ -52,8 +53,8 @@ jobs:
           set -Eeuo pipefail
           python3 tools/ci/apply-m152-nested-member-address.py
           git diff --check
-          grep -Fq 'M152_NESTED_RECORD_MEMBER_ADDRESS_OWNER' src/core/core_lower.c
-          test -s tests/compiler/c0/m152_nested_member_address.c
+          grep -Fq 'M152_UNSIGNED_ENUM_BIT_FIELD_OWNER' src/core/core_lower.c
+          test -s tests/compiler/c0/m152_enum_bit_field_write.c
 
       - name: Build exact patched compiler
         if: steps.state.outputs.needs_patch == 'true'
@@ -71,12 +72,12 @@ jobs:
           compiler="$GITHUB_WORKSPACE/build/m152-product-compiler/bin/minic"
           work="$GITHUB_WORKSPACE/build/m152-product-regression"
           mkdir -p "$work"
-          cc -E -P -std=gnu11 -x c tests/compiler/c0/m152_nested_member_address.c \
-            -o "$work/m152_nested_member_address.i"
-          MINIC_CORE_IR=strict "$compiler" -S "$work/m152_nested_member_address.i" \
-            -o "$work/m152_nested_member_address.s"
-          test -s "$work/m152_nested_member_address.s"
-          echo 'CORE_M152_STRICT_REGRESSION nested-record-member-address=PASS'
+          cc -E -P -std=gnu11 -x c tests/compiler/c0/m152_enum_bit_field_write.c \
+            -o "$work/m152_enum_bit_field_write.i"
+          MINIC_CORE_IR=strict "$compiler" -S "$work/m152_enum_bit_field_write.i" \
+            -o "$work/m152_enum_bit_field_write.s"
+          test -s "$work/m152_enum_bit_field_write.s"
+          echo 'CORE_M152_STRICT_REGRESSION unsigned-enum-bit-field-write=PASS'
 
       - name: Replay current strict500 tail
         if: steps.state.outputs.needs_patch == 'true'
@@ -165,16 +166,16 @@ jobs:
           git diff --check
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add src/core/core_lower.c tests/compiler/c0/m152_nested_member_address.c
+          git add src/core/core_lower.c tests/compiler/c0/m152_enum_bit_field_write.c
           git diff --cached --quiet && { echo 'no M152 semantic changes'; exit 1; }
-          git commit -m 'core: lower nested record member addresses'
+          git commit -m 'core: lower unsigned enum bit-field writes'
           git push origin HEAD:refactor/declaration-sema-v1
 
       - name: Persist M152 results
         if: always() && steps.state.outputs.needs_patch == 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: core-m152-nested-member-address-${{ github.sha }}
+          name: core-m152-enum-bit-field-${{ github.sha }}
           path: |
             build/m152-product-regression/**
             build/m152-product-focused/**
