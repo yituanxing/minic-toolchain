@@ -26,4 +26,16 @@ new = '''def replace_once(text: str, old: str, new: str, label: str) -> str:
 if source.count(old) != 1:
     raise SystemExit("M158 v2 could not patch replace_once helper")
 source = source.replace(old, new, 1)
+
+# Diagnostics must not depend on MinicType's private representation.  We only
+# need enough information to distinguish qualifier/array/register rejection,
+# local-object rejection, and post-object non-scalar rejection.
+source = source.replace(
+    '''                          "volatile=%d array=%d register=%d raw_kind=%d signature_kind=%d\\\\n",\n                          context->source_function->name,\n                          parameter_index,\n                          minic_type_is_volatile(parameter->type) ? 1 : 0,\n                          parameter->is_array ? 1 : 0,\n                          parameter->is_register_storage ? 1 : 0,\n                          (int)parameter->type.kind,\n                          (int)context->source_function->parameter_types[parameter_index].kind);''',
+    '''                          "volatile=%d array=%d register=%d\\\\n",\n                          context->source_function->name,\n                          parameter_index,\n                          minic_type_is_volatile(parameter->type) ? 1 : 0,\n                          parameter->is_array ? 1 : 0,\n                          parameter->is_register_storage ? 1 : 0);''',
+)
+source = source.replace(
+    '''                          "CORE_M158_INGRESS_DETAIL function=%s parameter=%zu nonscalar_kind=%d\\\\n",\n                          context->source_function->name,\n                          parameter_index,\n                          (int)parameter_value_type.kind);''',
+    '''                          "CORE_M158_INGRESS_DETAIL function=%s parameter=%zu nonscalar=1\\\\n",\n                          context->source_function->name,\n                          parameter_index);''',
+)
 exec(compile(source, "tools/ci/apply-m158-final-four.py", "exec"), {"__name__": "__main__"})
