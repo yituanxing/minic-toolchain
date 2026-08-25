@@ -48,7 +48,7 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
-          python3 tools/ci/apply-m158-final-four.py
+          python3 tools/ci/apply-m158-final-four-v2.py
           # Correct the materializer's literal-percent escaping before compiling;
           # only the generated semantic source is productized.
           sed -i \
@@ -156,15 +156,6 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
-          # Diagnostic-only ingress prints are not part of the final semantic cut.
-          python3 - <<'PY'
-          from pathlib import Path
-          p=Path('src/core/core_lower.c')
-          t=p.read_text()
-          # Leave diagnostics for this first run only. A fully-green run will be
-          # cleaned by the next finalizer revision before productization.
-          p.write_text(t)
-          PY
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add src/core/core_ir.h src/core/core_ir.c src/core/core_lower.c \
