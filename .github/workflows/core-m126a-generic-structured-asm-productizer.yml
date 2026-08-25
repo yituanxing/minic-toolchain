@@ -50,9 +50,12 @@ jobs:
           set -Eeuo pipefail
           python3 tools/ci/apply-m126a-generic-structured-asm.py
           python3 tools/ci/apply-m126a-transactional-lowering.py
+          python3 tools/ci/apply-m126a-pointer-compound-transport.py
           git diff --check
           grep -Fq 'M126A_GENERIC_STRUCTURED_ASM' src/core/core_ir.h
           grep -Fq 'Preflight is deliberately side-effect free' src/core/core_lower.c
+          grep -Fq 'M126A_POINTER_COMPOUND_BLOCK_LOCAL' src/core/core_lower.c
+          grep -Fq 'block-local-rhs=1' tests/compiler/c0/run-pointer-compound-subtraction.sh
           grep -Fq 'core_structured_inline_asm_allocate' src/target/riscv64/core_codegen.c
 
       - name: Build exact patched compiler
@@ -156,9 +159,12 @@ jobs:
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add src/core/core_ir.h src/core/core_ir.c src/core/core_lower.c \
-                  src/target/riscv64/core_codegen.c tests/compiler/c0/run-gnu-inline-asm-operands.sh
+                  src/target/riscv64/core_codegen.c \
+                  tests/compiler/c0/run-gnu-inline-asm-operands.sh \
+                  tests/compiler/c0/pointer_compound_subtraction.c \
+                  tests/compiler/c0/run-pointer-compound-subtraction.sh
           git diff --cached --quiet && { echo 'no M126A semantic changes'; exit 1; }
-          git commit -m 'core: generalize structured asm register allocation'
+          git commit -m 'core: generalize structured asm and preserve pointer compound values'
           git push origin HEAD:refactor/declaration-sema-v1
 
       - name: Persist M126A results
