@@ -76,7 +76,7 @@ if marker not in text:
 
         operand = minic_c0_program_expression(
             context->body->program, expression->value.builtin_unary.operand);
-        if (operand == NULL || !minic_type_is_integer(operand->type) ||
+        if (operand == NULL || !minic_type_equal(operand->type, minic_type_int()) ||
             !minic_type_equal(expression->type, minic_type_int())) {
             return MINIC_CORE_LOWER_UNSUPPORTED;
         }
