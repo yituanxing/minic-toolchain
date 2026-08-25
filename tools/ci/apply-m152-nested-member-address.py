@@ -46,13 +46,14 @@ if ir.count(old_ir) != 1:
     raise SystemExit("M155 could not locate Core IR global type owner")
 ir = ir.replace(old_ir, new_ir, 1)
 
-old_codegen = """static bool core_global_addressable_type(MinicType type) {\n    return minic_type_is_integer(type) || minic_type_is_pointer(type) ||\n           minic_type_is_array(type) || minic_type_is_record(type);\n}\n"""
-new_codegen = r'''/* M155_EXTERN_VOID_SYMBOL_ADDRESS_OWNER: backend global entries are symbolic
-   addresses.  Void symbols need only `la`; no void load/store ABI is introduced. */
+old_codegen = """/* M74_GLOBAL_RECORD_ADDRESS: RV64 global.addr lowers to `la symbol`;\n   the pointee's aggregate shape is irrelevant until field/element addressing. */\nstatic bool core_global_addressable_type(MinicType type) {\n    return core_scalar_type(type) || minic_type_is_array(type) ||\n           minic_type_is_record(type);\n}\n"""
+new_codegen = r'''/* M74_GLOBAL_RECORD_ADDRESS / M155_EXTERN_VOID_SYMBOL_ADDRESS_OWNER:
+   RV64 global.addr lowers to `la symbol`; the pointee's storage shape is
+   irrelevant until a later memory operation.  A declaration-only void symbol
+   therefore needs no new load/store ABI support. */
 static bool core_global_addressable_type(MinicType type) {
-    return minic_type_is_integer(type) || minic_type_is_pointer(type) ||
-           minic_type_is_array(type) || minic_type_is_record(type) ||
-           minic_type_is_void(type);
+    return core_scalar_type(type) || minic_type_is_array(type) ||
+           minic_type_is_record(type) || minic_type_is_void(type);
 }
 '''
 if codegen.count(old_codegen) != 1:
