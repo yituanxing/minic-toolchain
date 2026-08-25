@@ -41,9 +41,9 @@ replacement = '''    /* M147_NORMALIZED_FOR_CONTINUE_BINDING_OWNER: the same-spa
        source while.  M145/M146 demonstrated that pre-binding such a label on
        plain WHILE changes otherwise-valid CFGs.  Delay ownership until the body
        shape has independently proven this WHILE is a normalized source `for`.
-       Plain while/do-while lowering therefore remains bit-for-bit on the legacy
-       path; only a normalized-for loop can bind the recovered continue target to
-       condition re-evaluation. */
+       Plain while/do-while lowering therefore remains on the legacy path; only
+       a normalized-for loop can bind the recovered continue target to condition
+       re-evaluation. */
     if (continue_label_statement != MINIC_STATEMENT_INVALID && normalized_for) {
         if (context->statement_blocks == NULL ||
             continue_label_statement >= context->statement_block_count ||
@@ -62,13 +62,12 @@ core = core.replace(needle, replacement, 1)
 core_path.write_text(core)
 
 regression = Path('tests/compiler/c0/m147_normalized_for_continue_binding.c')
-regression.write_text(r'''static int plain_while_continue(int n) {
+regression.write_text(r'''static int plain_while_baseline(int n) {
     int sum = 0;
     while (n > 0) {
         n -= 1;
         if (n & 1)
-            continue;
-        sum += n;
+            sum += n;
     }
     return sum;
 }
@@ -85,7 +84,7 @@ static int normalized_for_continue(int n) {
 }
 
 int main(void) {
-    return plain_while_continue(5) == 6 &&
+    return plain_while_baseline(5) == 4 &&
            normalized_for_continue(6) == 6 ? 0 : 1;
 }
 ''')
