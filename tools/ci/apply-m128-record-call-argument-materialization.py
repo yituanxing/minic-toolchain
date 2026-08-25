@@ -17,16 +17,26 @@ if marker not in text:
         raise SystemExit(
             f'record call argument helper expected one address-only consumer, found {segment.count(old_name)}'
         )
+    old_guard = '''    if (!minic_c0_record_value_is_copy_source(context->body->program, expression_id) ||
+        !minic_c0_record_value_is_address_backed(context->body->program, expression_id)) {
+        return MINIC_CORE_LOWER_UNSUPPORTED;
+    }
+'''
+    if segment.count(old_guard) != 1:
+        raise SystemExit('record call argument legacy address-backed guard changed')
     brace = segment.find('{')
     if brace < 0:
         raise SystemExit('record call argument helper body missing')
     comment = '''
     /* M128_RECORD_CALL_ARGUMENT_MATERIALIZATION: a by-value record argument
        consumes a record rvalue, not merely an already-address-backed lvalue.
-       Use the aggregate materialization seam so conditionals, compound
-       literals and direct record-return calls compose before the private
-       argument copy is made. */'''
+       Make lower_record_materialized_address() the single aggregate producer
+       owner here: it handles conditionals, compound literals, direct record
+       returns, and falls back fail-closed for ordinary address-backed values.
+       The private argument object below remains the evaluation-order snapshot
+       consumed by the existing Core/ABI OBJECT call-argument path. */'''
     segment = segment[:brace + 1] + comment + segment[brace + 1:]
+    segment = segment.replace(old_guard, '', 1)
     segment = segment.replace(old_name, 'lower_record_materialized_address(', 1)
     text = text[:start] + segment + text[end:]
     core_path.write_text(text)
