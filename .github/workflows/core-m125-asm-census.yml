@@ -1,0 +1,131 @@
+name: Core M125 ASM Census
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  asm-census:
+    if: github.event_name == 'workflow_dispatch' || github.head_ref == 'refactor/declaration-sema-v1'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refactor/declaration-sema-v1
+          fetch-depth: 0
+
+      - name: Restore frozen Linux corpus
+        id: linux-corpus-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-focus-corpus
+          key: linux-focus-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-${{ hashFiles('tests/external/linux/replay-indices.txt') }}
+
+      - name: Require frozen corpus
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "${{ steps.linux-corpus-cache.outputs.cache-hit }}" = true
+          test -s build/linux-focus-corpus/selected-tus.txt
+
+      - name: Stage M125 diagnostic census
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 tools/ci/apply-m125-asm-census-trace.py
+          git diff --check
+          grep -Fq 'M125_UNCLAIMED_ASM_CENSUS' src/core/core_lower.c
+
+      - name: Build traced compiler
+        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/m125-census-compiler
+
+      - name: Run fast regression gate
+        run: make -j4 check-fast MODE=release CFLAGS=-Werror BUILD_DIR=build/m125-census-check
+
+      - name: Replay frozen strict500
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          compiler="$GITHUB_WORKSPACE/build/m125-census-compiler/bin/minic"
+          work="$GITHUB_WORKSPACE/build/m125-census"
+          set +e
+          MINIC_CORE_IR=strict python3 tests/external/linux/corpus_replay.py \
+            --minic "$compiler" \
+            --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
+            --work "$work" \
+            --jobs 4 \
+            --offset 0 \
+            --limit 500 \
+            --sample-count 0
+          replay_status=$?
+          set -e
+          printf 'CORE_M125_REPLAY_STATUS=%d\n' "$replay_status"
+          python3 tools/ci/classify-core-strict-frontier.py \
+            "$work/batch-results.json" \
+            --stderr-root "$work/minic-stderr" \
+            --ast-header "$GITHUB_WORKSPACE/src/frontend/ast.h" \
+            --examples 20 \
+            --json-out "$work/frontier-summary.json" \
+            --reason-text-out "$work/reason-summary.txt"
+          python3 - <<'PY'
+          import collections
+          import json
+          import re
+          from pathlib import Path
+
+          work = Path('build/m125-census')
+          frontier = json.loads((work / 'frontier-summary.json').read_text())
+          print(
+              f"CORE_M125_EXACT selected={frontier['selected']} pass={frontier['pass']} "
+              f"unsupported={frontier['unsupported']} error={frontier['error']}"
+          )
+
+          shape_counts = collections.Counter()
+          detail_lines = []
+          pattern = re.compile(
+              r'^M125_ASM_CENSUS function=(\S+) volatile=(\d+) goto=(\d+) '
+              r'outputs=(\d+) inputs=(\d+) labels=(\d+) reg_clobbers=(\d+) '
+              r'clobbers=(\d+) memory=(\d+) template_length=(\d+)$'
+          )
+          for path in sorted((work / 'minic-stderr').glob('*')):
+              if not path.is_file():
+                  continue
+              lines = path.read_text(errors='replace').splitlines()
+              for line in lines:
+                  match = pattern.match(line)
+                  if match:
+                      fn, vol, go, outs, ins, labels, regs, clobs, mem, length = match.groups()
+                      key = (
+                          f"v={vol} goto={go} out={outs} in={ins} labels={labels} "
+                          f"regclob={regs} clob={clobs} mem={mem}"
+                      )
+                      shape_counts[key] += 1
+                      detail_lines.append(f"{path.name}: {line}")
+                  elif line.startswith('M125_ASM_OPERAND ') or line.startswith('M125_ASM_CLOBBER '):
+                      detail_lines.append(f"{path.name}: {line}")
+
+          summary = [
+              f"M125_UNCLAIMED_ASM_TOTAL={sum(shape_counts.values())}",
+              'M125_UNCLAIMED_ASM_SHAPES:',
+          ]
+          summary.extend(f"{count:4d}  {shape}" for shape, count in shape_counts.most_common())
+          summary.append('')
+          summary.append('M125_UNCLAIMED_ASM_DETAILS:')
+          summary.extend(detail_lines)
+          text = '\n'.join(summary) + '\n'
+          (work / 'm125-asm-census.txt').write_text(text)
+          print('\n'.join(summary[:80]))
+          PY
+
+      - name: Persist M125 census
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: core-m125-asm-census-${{ github.sha }}
+          path: |
+            build/m125-census/batch-results.json
+            build/m125-census/frontier-summary.json
+            build/m125-census/reason-summary.txt
+            build/m125-census/m125-asm-census.txt
+            build/m125-census/minic-stderr
+          if-no-files-found: warn
