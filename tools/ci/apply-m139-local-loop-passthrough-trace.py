@@ -2,7 +2,7 @@
 from pathlib import Path
 import re
 
-# M139_TRIGGER_V1: synchronize after extending the M138 census workflow.
+# M139_TRIGGER_V2: use public MinicType predicates and print passthrough-site maps.
 path = Path('src/core/core_lower.c')
 text = path.read_text()
 marker = 'M139_LOCAL_LOOP_PASSTHROUGH_TRACE'
@@ -31,20 +31,23 @@ entry = r'''
                 ? minic_c0_program_local(context->body->program, local_id)
                 : NULL;
         (void)fprintf(stderr,
-                      "CORE_M139_LOCAL_ENTER function=%s local=%llu begin=%llu count=%zu local_objects=%d found=%d type_base=%d array=%d elem_count=%zu register=%d\n",
+                      "CORE_M139_LOCAL_ENTER function=%s local=%llu begin=%llu count=%zu local_objects=%d found=%d record=%d pointer=%d array_type=%d integer=%d legacy_array=%d elem_count=%zu register=%d\n",
                       context->source_function->name,
                       (unsigned long long)local_id,
                       (unsigned long long)context->source_function->local_begin,
                       context->source_function->local_count,
                       context->local_objects != NULL ? 1 : 0,
                       m139_local != NULL ? 1 : 0,
-                      m139_local != NULL ? (int)m139_local->type.base : -1,
+                      m139_local != NULL && minic_type_is_record(m139_local->type) ? 1 : 0,
+                      m139_local != NULL && minic_type_is_pointer(m139_local->type) ? 1 : 0,
+                      m139_local != NULL && minic_type_is_array(m139_local->type) ? 1 : 0,
+                      m139_local != NULL && minic_type_is_integer(m139_local->type) ? 1 : 0,
                       m139_local != NULL && m139_local->is_array ? 1 : 0,
                       m139_local != NULL ? m139_local->element_count : 0U,
                       m139_local != NULL && m139_local->is_register_storage ? 1 : 0);
     }
 '''
-region = region[:brace+1] + entry + region[brace+1:]
+region = region[:brace + 1] + entry + region[brace + 1:]
 site = 0
 pat = re.compile(r'(?P<indent>^[ \t]*)return (?P<expr>MINIC_CORE_LOWER_(?:OK|ERROR|UNSUPPORTED)|status);', re.M)
 
@@ -79,6 +82,10 @@ def trace_status_return(m):
     global pass_site
     pass_site += 1
     indent = m.group('indent')
+    prior = region[max(0, m.start() - 320):m.start()]
+    context_lines = [line.strip() for line in prior.splitlines() if line.strip()][-4:]
+    site_context = ' | '.join(context_lines).replace('\t', ' ')
+    print(f'M139_WHILE_PASSTHROUGH_SITE site={pass_site} context={site_context}')
     return (f'{indent}if (getenv("CORE_M139_TRACE") != NULL && context != NULL &&\n'
             f'{indent}    context->source_function != NULL && context->source_function->name != NULL &&\n'
             f'{indent}    strcmp(context->source_function->name, "wait_task_inactive") == 0) {{\n'
