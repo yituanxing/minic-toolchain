@@ -749,6 +749,13 @@ static bool core_structured_inline_asm_supported(const MinicCoreFunction *functi
            instruction->value.structured_inline_asm.operand_count == 4U &&
            inline_asm->has_memory_clobber && inline_asm->register_clobber_count == 0U &&
            fixed_bindings == 0U) ||
+          /* M118_SIX_OPERAND_ATOMIC_STRUCTURED_ASM: one read/write register,
+             two register outputs, one read/write memory address, two inputs. */
+          (register_outputs == 2U && register_readwrites == 1U &&
+           memory_outputs == 0U && memory_readwrites == 1U && scalar_inputs == 2U &&
+           instruction->value.structured_inline_asm.operand_count == 6U &&
+           inline_asm->has_memory_clobber && inline_asm->register_clobber_count == 0U &&
+           fixed_bindings == 0U) ||
           (register_outputs == 2U && register_readwrites == 0U &&
            memory_readwrites == 1U && scalar_inputs <= 2U &&
            scalar_inputs + 3U == instruction->value.structured_inline_asm.operand_count &&
@@ -1922,6 +1929,7 @@ static bool emit_structured_inline_asm(FILE *file,
     size_t output_index = 0U;
     size_t memory_index = 0U;
     size_t input_index = 0U;
+    size_t generic_register_bindings = 0U;
     size_t binding_index;
     size_t index;
 
@@ -1930,6 +1938,21 @@ static bool emit_structured_inline_asm(FILE *file,
         return false;
     }
     inline_asm = &function->inline_asms[instruction->value.structured_inline_asm.inline_asm_id];
+    /* M118_SIX_OPERAND_ATOMIC_STRUCTURED_ASM: count generic register
+       outputs/readwrites before assigning the single memory-address temporary.
+       Three register destinations consume t0..t2, so a memory operand for that
+       shape must not reuse t2. */
+    for (binding_index = 0U;
+         binding_index < instruction->value.structured_inline_asm.operand_count;
+         ++binding_index) {
+        const MinicCoreStructuredInlineAsmOperand *binding =
+            &instruction->value.structured_inline_asm.operands[binding_index];
+        if (!binding->has_fixed_register_binding &&
+            (binding->kind == MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT ||
+             binding->kind == MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE)) {
+            generic_register_bindings += 1U;
+        }
+    }
     for (binding_index = 0U;
          binding_index < instruction->value.structured_inline_asm.operand_count;
          ++binding_index) {
@@ -1981,7 +2004,15 @@ static bool emit_structured_inline_asm(FILE *file,
         }
         case MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_OUTPUT:
         case MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE:
-            register_name = memory_registers[memory_index++];
+            if (memory_index >= 1U) {
+                return false;
+            }
+            /* M118_SIX_OPERAND_ATOMIC_STRUCTURED_ASM: t2 is the normal
+               memory-address temporary, but a three-register-output shape owns
+               t0..t2. Its supported two-input form uses t3/t4, leaving t6 free
+               for the memory address without changing older register layouts. */
+            register_name = generic_register_bindings >= 3U ? "t6" : memory_registers[memory_index];
+            memory_index += 1U;
             memory_operand[binding->operand_index] = true;
             if (!load_core_value(file, frame, binding->value, register_name)) {
                 return false;
