@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from pathlib import Path
 
+# M135_TRIGGER_V1: keep a post-workflow-registration change so pull_request CI runs it.
 core_path = Path('src/core/core_lower.c')
 core = core_path.read_text()
 marker = 'M135_CLEANUP_EDGE_CLASSIFICATION'
