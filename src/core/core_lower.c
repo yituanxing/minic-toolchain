@@ -2241,6 +2241,7 @@ static MinicCoreLowerStatus lower_indirect_call(MinicCoreLowerContext *context,
     MinicCoreCallArgument *arguments;
     MinicCoreObjectId argument_objects[MINIC_MAX_FUNCTION_PARAMETERS];
     MinicCoreLowerStatus status;
+    MinicExpressionId callee_value_expression_id;
     MinicType callee_value_type;
     MinicType function_type;
     size_t argument_begin;
@@ -2253,12 +2254,40 @@ static MinicCoreLowerStatus lower_indirect_call(MinicCoreLowerContext *context,
         expression->value.call.function_id != MINIC_FUNCTION_INVALID) {
         return MINIC_CORE_LOWER_ERROR;
     }
+    callee_value_expression_id = expression->value.call.callee;
     callee_expression =
-        minic_c0_program_expression(context->body->program, expression->value.call.callee);
-    if (callee_expression == NULL ||
-        !core_scalar_expression_value_type(context->body, callee_expression, &callee_value_type) ||
-        !minic_type_pointee(callee_value_type, &function_type) ||
-        !minic_type_is_function(function_type)) {
+        minic_c0_program_expression(context->body->program, callee_value_expression_id);
+    /* M124_INDIRECT_FUNCTION_DESIGNATOR: frontend/Sema already accepts both
+       pointer-to-function callees and function designators such as `(*fp)`.
+       The latter carries function type and its dereference does not perform a
+       memory load; its operand is the first-class function-pointer value. Keep
+       Core's indirect-call ABI/signature path pointer-valued by normalizing
+       only that semantic designator form back to the operand expression. */
+    if (callee_expression != NULL &&
+        callee_expression->kind == MINIC_EXPRESSION_DEREFERENCE &&
+        minic_type_is_function(callee_expression->type)) {
+        const MinicExpression *pointer_operand;
+
+        callee_value_expression_id = callee_expression->value.unary.operand;
+        pointer_operand = minic_c0_program_expression(
+            context->body->program, callee_value_expression_id);
+        if (pointer_operand == NULL ||
+            !core_scalar_expression_value_type(
+                context->body, pointer_operand, &callee_value_type) ||
+            !minic_type_pointee(callee_value_type, &function_type) ||
+            !minic_type_is_function(function_type) ||
+            !minic_type_equal(function_type, callee_expression->type)) {
+            (void)fprintf(stderr,
+                          "CORE_LOWER_DETAIL marker=M124_INDIRECT_FUNCTION_DESIGNATOR "
+                          "function=%s stage=indirect-call reason=dereference-operand-shape\n",
+                          context->source_function != NULL ? context->source_function->name : "?");
+            return MINIC_CORE_LOWER_UNSUPPORTED;
+        }
+    } else if (callee_expression == NULL ||
+               !core_scalar_expression_value_type(
+                   context->body, callee_expression, &callee_value_type) ||
+               !minic_type_pointee(callee_value_type, &function_type) ||
+               !minic_type_is_function(function_type)) {
         (void)fprintf(stderr,
                       "CORE_LOWER_DETAIL marker=M92_INDIRECT_CALL_HOT_DETAIL function=%s "
                       "stage=indirect-call reason=callee-shape callee_kind=%d\n",
@@ -2337,7 +2366,7 @@ static MinicCoreLowerStatus lower_indirect_call(MinicCoreLowerContext *context,
        Keep argument values in Core objects until the callee has been evaluated;
        then reload them in the final call block so the verifier sees both the
        callee SSA value and every call argument as block-local available values. */
-    status = lower_expression(context, expression->value.call.callee, &callee_value);
+    status = lower_expression(context, callee_value_expression_id, &callee_value);
     if (status != MINIC_CORE_LOWER_OK) {
         (void)fprintf(stderr,
                       "CORE_LOWER_DETAIL marker=M92_INDIRECT_CALL_HOT_DETAIL function=%s "
