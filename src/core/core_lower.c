@@ -6137,6 +6137,66 @@ static MinicCoreLowerStatus lower_expression_statement(MinicCoreLowerContext *co
     if (expression == NULL) {
         return MINIC_CORE_LOWER_ERROR;
     }
+    /* M123_VARIADIC_ARGUMENT_ADDRESS: GNU va builtins are parsed and
+       type-checked by frontend/Sema. Core owns their target-neutral execution
+       semantics while the selected ABI/backend owns the register save area.
+       The current frontend va_list model is a modifiable pointer lvalue. */
+    if (expression->kind == MINIC_EXPRESSION_BUILTIN_VA_START) {
+        const MinicExpression *target;
+        MinicCoreInstruction instruction;
+        MinicCoreLowerStatus status;
+        MinicCoreValueId cursor_value;
+        MinicCoreValueId target_address;
+        MinicType value_type;
+
+        target_id = expression->value.unary.operand;
+        target = minic_c0_program_expression(context->body->program, target_id);
+        if (context->source_function == NULL || !context->source_function->is_variadic ||
+            target == NULL || target->value_category != MINIC_VALUE_LVALUE ||
+            !minic_type_is_pointer(target->type) || minic_type_is_const(target->type) ||
+            !minic_type_unqualified(target->type, &value_type) ||
+            !minic_type_is_pointer(value_type)) {
+            return MINIC_CORE_LOWER_UNSUPPORTED;
+        }
+        status = lower_address(context, target_id, &target_address);
+        if (status != MINIC_CORE_LOWER_OK) {
+            return status;
+        }
+        (void)memset(&instruction, 0, sizeof(instruction));
+        instruction.kind = MINIC_CORE_INSTRUCTION_VARIADIC_ARGUMENT_ADDRESS;
+        instruction.span = expression->span;
+        instruction.type = value_type;
+        instruction.result = MINIC_CORE_VALUE_INVALID;
+        if (!minic_core_function_append_value_instruction(
+                context->function, context->block_id, &instruction, &cursor_value)) {
+            return MINIC_CORE_LOWER_ERROR;
+        }
+        (void)memset(&instruction, 0, sizeof(instruction));
+        instruction.kind = MINIC_CORE_INSTRUCTION_STORE;
+        instruction.span = expression->span;
+        instruction.type = minic_type_void();
+        instruction.result = MINIC_CORE_VALUE_INVALID;
+        instruction.value.store.address = target_address;
+        instruction.value.store.stored_value = cursor_value;
+        instruction.value.store.is_volatile = minic_type_is_volatile(target->type);
+        return minic_core_function_append_effect_instruction(
+                   context->function, context->block_id, &instruction)
+                   ? MINIC_CORE_LOWER_OK
+                   : MINIC_CORE_LOWER_ERROR;
+    }
+    if (expression->kind == MINIC_EXPRESSION_BUILTIN_VA_COPY) {
+        return lower_assignment_pair(context,
+                                     expression->value.binary.left,
+                                     expression->value.binary.right,
+                                     expression->span,
+                                     NULL);
+    }
+    if (expression->kind == MINIC_EXPRESSION_BUILTIN_VA_END) {
+        MinicCoreValueId discarded_address;
+
+        return lower_address(context, expression->value.unary.operand, &discarded_address);
+    }
+
     /* M122_DISCARDED_COMMA_EFFECT_SEQUENCE: the C comma operator is an
        explicit sequencing boundary. In expression-statement context its final
        value is discarded, so Core must preserve only the ordered effects:

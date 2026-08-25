@@ -93,6 +93,9 @@ typedef enum MinicCoreInstructionKind {
     MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM,
     MINIC_CORE_INSTRUCTION_COMPILER_BARRIER,
     MINIC_CORE_INSTRUCTION_CALL_FRAME_ADDRESS,
+    /* M123_VARIADIC_ARGUMENT_ADDRESS: semantic origin of a va_list cursor.
+       Backend ABI owns register-save-area placement and the concrete address. */
+    MINIC_CORE_INSTRUCTION_VARIADIC_ARGUMENT_ADDRESS,
     MINIC_CORE_INSTRUCTION_CALL,
     /* M83_FIRST_CLASS_INDIRECT_CALL: callee is an SSA function-pointer value. */
     MINIC_CORE_INSTRUCTION_INDIRECT_CALL

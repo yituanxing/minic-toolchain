@@ -27,7 +27,11 @@ typedef struct MinicRiscv64CoreFrame {
     size_t value_count;
     size_t value_base_offset;
     size_t return_address_offset;
+    size_t varargs_offset;
+    size_t varargs_size;
+    size_t integer_parameter_count;
     bool saves_return_address;
+    bool has_variadic_argument_address;
 } MinicRiscv64CoreFrame;
 
 static bool core_scalar_type(MinicType type) {
@@ -84,11 +88,60 @@ static bool core_function_needs_saved_return_address(const MinicCoreFunction *fu
     return false;
 }
 
+static bool core_function_uses_variadic_argument_address(
+    const MinicCoreFunction *function) {
+    size_t instruction_index;
+
+    if (function == NULL) {
+        return false;
+    }
+    for (instruction_index = 0U; instruction_index < function->instruction_count;
+         ++instruction_index) {
+        if (function->instructions[instruction_index].kind ==
+            MINIC_CORE_INSTRUCTION_VARIADIC_ARGUMENT_ADDRESS) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool core_variadic_fixed_prefix(const MinicC0Program *program,
+                                       const MinicCoreFunction *function,
+                                       size_t *integer_parameter_count) {
+    MinicRiscv64AbiCursor cursor;
+    MinicRiscv64AbiValue return_value;
+    size_t parameter_index;
+
+    if (program == NULL || function == NULL || integer_parameter_count == NULL ||
+        !minic_riscv64_abi_cursor_initialize_for_return(
+            program, function->return_type, &cursor, &return_value)) {
+        return false;
+    }
+    (void)return_value;
+    for (parameter_index = 0U; parameter_index < function->parameter_count; ++parameter_index) {
+        MinicRiscv64AbiArgumentLocation location;
+
+        if (!minic_riscv64_abi_place_argument(
+                program, function->parameter_types[parameter_index], true, &cursor, &location)) {
+            return false;
+        }
+    }
+    /* Match the established RV64 frontend/backend contract: va_start is
+       currently supported only while all named parameters fit before the
+       incoming stack-argument area. */
+    if (cursor.stack_slot_count != 0U || cursor.integer_register_count > 8U) {
+        return false;
+    }
+    *integer_parameter_count = cursor.integer_register_count;
+    return true;
+}
+
 static bool core_frame_initialize(const MinicC0Program *program,
                                   const MinicCoreFunction *function,
                                   MinicRiscv64CoreFrame *frame) {
     size_t object_index;
     size_t storage_size;
+    size_t required_size;
 
     if (function == NULL || frame == NULL) {
         return false;
@@ -120,8 +173,7 @@ static bool core_frame_initialize(const MinicC0Program *program,
         return false;
     }
     storage_size = frame->value_base_offset + function->value_count * 8U;
-    frame->saves_return_address =
-        core_function_needs_saved_return_address(function);
+    frame->saves_return_address = core_function_needs_saved_return_address(function);
     frame->return_address_offset = 0U;
     if (frame->saves_return_address) {
         if (!align_up(storage_size, 8U, &frame->return_address_offset) ||
@@ -130,7 +182,28 @@ static bool core_frame_initialize(const MinicC0Program *program,
         }
         storage_size = frame->return_address_offset + 8U;
     }
-    if (!align_up(storage_size, 16U, &frame->frame_size)) {
+
+    frame->has_variadic_argument_address =
+        core_function_uses_variadic_argument_address(function);
+    frame->integer_parameter_count = 0U;
+    frame->varargs_size = 0U;
+    if (frame->has_variadic_argument_address) {
+        if (!core_variadic_fixed_prefix(
+                program, function, &frame->integer_parameter_count)) {
+            return false;
+        }
+        frame->varargs_size = (8U - frame->integer_parameter_count) * 8U;
+    }
+    if (storage_size > SIZE_MAX - frame->varargs_size) {
+        return false;
+    }
+    required_size = storage_size + frame->varargs_size;
+    if (!align_up(required_size, 16U, &frame->frame_size) ||
+        frame->frame_size < frame->varargs_size) {
+        return false;
+    }
+    frame->varargs_offset = frame->frame_size - frame->varargs_size;
+    if (frame->varargs_offset < storage_size) {
         return false;
     }
     frame->object_count = function->object_count;
@@ -962,6 +1035,14 @@ static bool core_instruction_supported(const MinicC0Program *program,
         return true;
     case MINIC_CORE_INSTRUCTION_CALL_FRAME_ADDRESS:
         return core_call_frame_address_supported(instruction);
+    case MINIC_CORE_INSTRUCTION_VARIADIC_ARGUMENT_ADDRESS: {
+        size_t integer_parameter_count;
+
+        return program != NULL && instruction->result < function->value_count &&
+               minic_type_equal(function->values[instruction->result].type, instruction->type) &&
+               minic_type_is_pointer(instruction->type) &&
+               core_variadic_fixed_prefix(program, function, &integer_parameter_count);
+    }
     case MINIC_CORE_INSTRUCTION_PARAMETER:
     case MINIC_CORE_INSTRUCTION_PARAMETER_OBJECT:
     case MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS:
@@ -2465,6 +2546,12 @@ static bool emit_instruction(FILE *file,
             return false;
         }
         return store_core_value(file, frame, instruction->result, "t0");
+    case MINIC_CORE_INSTRUCTION_VARIADIC_ARGUMENT_ADDRESS:
+        if (!frame->has_variadic_argument_address ||
+            !emit_sp_address(file, "t0", frame->varargs_offset)) {
+            return false;
+        }
+        return store_core_value(file, frame, instruction->result, "t0");
     case MINIC_CORE_INSTRUCTION_PARAMETER:
         return emit_parameter(file, program, function, frame, instruction);
     case MINIC_CORE_INSTRUCTION_PARAMETER_OBJECT:
@@ -2692,6 +2779,19 @@ static bool emit_core_function_basic_v0_with_symbol(FILE *file,
     if (frame.saves_return_address &&
         !minic_riscv64_emit_sp_store64(file, "ra", frame.return_address_offset)) {
         return false;
+    }
+    if (frame.has_variadic_argument_address) {
+        size_t register_index;
+
+        for (register_index = frame.integer_parameter_count; register_index < 8U;
+             ++register_index) {
+            size_t offset = frame.varargs_offset +
+                            (register_index - frame.integer_parameter_count) * 8U;
+            if (!minic_riscv64_emit_sp_store64(
+                    file, minic_core_rv64_argument_registers[register_index], offset)) {
+                return false;
+            }
+        }
     }
     if (fprintf(file, "  j .L%s_core_bb%" PRIu32 "\n", symbol_name, function->entry_block) < 0) {
         return false;
