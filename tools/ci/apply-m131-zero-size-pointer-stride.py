@@ -24,7 +24,6 @@ if marker not in text:
 
 Path('tests/compiler/c0/m131_zero_size_record_subscript.c').write_text(r'''struct empty_record { };
 
-static struct empty_record objects[4];
 static int index_calls;
 
 static int next_index(void) {
@@ -33,7 +32,9 @@ static int next_index(void) {
 }
 
 int main(void) {
-    (void)&objects[next_index()];
+    struct empty_record object;
+    struct empty_record *pointer = &object;
+    (void)&pointer[next_index()];
     return index_calls == 1 ? 0 : 1;
 }
 ''')
