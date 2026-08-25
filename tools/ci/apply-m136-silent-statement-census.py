@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 from pathlib import Path
 
-# M136_TRIGGER_V2: attribute the post-termination fail-close to the exact
-# re-entry source before changing semantic reachability ownership.
+# M136_TRIGGER_V3: attribute silent post-termination rejection to its caller.
 path = Path('src/core/core_lower.c')
 text = path.read_text()
 marker = 'M136_SILENT_STATEMENT_CENSUS'
@@ -22,9 +21,7 @@ replacement = '''        statement = minic_c0_program_statement(context->body->p
         if (statement == NULL) {
             return MINIC_CORE_LOWER_ERROR;
         }
-        /* M136_SILENT_STATEMENT_CENSUS: CI-only entry trace for the two
-           post-M135 silent body failures. Hard-coded function selection is
-           diagnostic only; semantic ownership remains function-agnostic. */
+        /* M136_SILENT_STATEMENT_CENSUS: CI-only trace for post-M135 failures. */
         if (getenv("CORE_M136_STATEMENT_TRACE") != NULL &&
             context->source_function != NULL && context->source_function->name != NULL &&
             (strcmp(context->source_function->name, "get_nohz_timer_target") == 0 ||
@@ -127,5 +124,29 @@ if text.count(needle) != 1:
     raise SystemExit(f'expected one unreachable asm-goto re-entry seam, found {text.count(needle)}')
 text = text.replace(needle, replacement, 1)
 
+# Several older aggregate/statement-expression owners accept lower_block() only
+# when the nested block falls through. Attribute those silent rejections by the
+# exact source line before deciding which ownership rule is obsolete.
+needle = '''            if (terminated) {
+                return MINIC_CORE_LOWER_UNSUPPORTED;
+            }
+'''
+count = text.count(needle)
+if count == 0:
+    raise SystemExit('expected at least one nested terminated rejection seam')
+replacement = '''            if (terminated) {
+                if (getenv("CORE_M136_STATEMENT_TRACE") != NULL &&
+                    context->source_function != NULL && context->source_function->name != NULL &&
+                    (strcmp(context->source_function->name, "get_nohz_timer_target") == 0 ||
+                     strcmp(context->source_function->name, "membarrier_global_expedited") == 0)) {
+                    (void)fprintf(stderr,
+                                  "CORE_M136_TERMINATED_REJECT function=%s owner_line=%d\\n",
+                                  context->source_function->name, __LINE__);
+                }
+                return MINIC_CORE_LOWER_UNSUPPORTED;
+            }
+'''
+text = text.replace(needle, replacement)
+
 path.write_text(text)
-print('M136 silent statement census staged')
+print(f'M136 silent statement census staged; terminated_reject_seams={count}')
