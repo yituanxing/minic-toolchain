@@ -7352,6 +7352,26 @@ static bool core_block_has_predecessor(const MinicCoreFunction *function,
     return false;
 }
 
+/* M133_CONSTANT_TRUE_LOOP_REACHABILITY: a loop condition that Sema/const-eval
+   proves to be a nonzero integer constant has no natural false edge. Keep this
+   a target-neutral CFG fact: explicit break edges still make the synthetic exit
+   reachable, while an otherwise unreachable exit terminates the enclosing path. */
+static bool core_loop_condition_is_constant_true(const MinicCoreLowerContext *context,
+                                                 MinicExpressionId expression_id) {
+    MinicConstValue value;
+    bool is_zero;
+
+    if (context == NULL || context->body == NULL || context->body->program == NULL ||
+        context->target == NULL || expression_id == MINIC_EXPRESSION_INVALID ||
+        !minic_const_eval_integer(
+            context->body->program, context->target, expression_id, &value) ||
+        !minic_const_value_is_zero(
+            context->body->program, context->target, &value, &is_zero)) {
+        return false;
+    }
+    return !is_zero;
+}
+
 static MinicCoreLowerStatus
 lower_while(MinicCoreLowerContext *context,
             const MinicStatement *statement,
@@ -7492,10 +7512,11 @@ lower_while(MinicCoreLowerContext *context,
     }
 
     context->block_id = condition_block;
-    if (statement->expression == MINIC_EXPRESSION_INVALID) {
-        /* C defines an omitted for-condition as true. Keep an explicit Core
-           condition block so break/backedge ownership remains identical to
-           the conditional-loop path. */
+    if (statement->expression == MINIC_EXPRESSION_INVALID ||
+        core_loop_condition_is_constant_true(context, statement->expression)) {
+        /* C defines an omitted for-condition as true, and a proven nonzero
+           integer constant has the same CFG reachability. Keep an explicit
+           Core condition block so break/backedge ownership remains identical. */
         status = set_branch(context, condition_block, statement->span, body_block);
         if (status != MINIC_CORE_LOWER_OK) {
             return status;
@@ -7548,8 +7569,10 @@ lower_while(MinicCoreLowerContext *context,
         }
     }
     context->block_id = exit_block;
-    if (statement->expression == MINIC_EXPRESSION_INVALID && normalized_for &&
-        !core_block_has_predecessor(context->function, exit_block)) {
+    /* M133_CONSTANT_TRUE_LOOP_REACHABILITY: reachability, not syntax spelling,
+       owns loop fallthrough. Normal variable/false-capable conditions already
+       contribute a false edge; omitted and constant-true conditions do not. */
+    if (!core_block_has_predecessor(context->function, exit_block)) {
         MinicCoreTerminator exit_terminator;
 
         (void)memset(&exit_terminator, 0, sizeof(exit_terminator));
