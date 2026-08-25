@@ -514,7 +514,15 @@ static MinicCoreLowerStatus lower_address(MinicCoreLowerContext *context,
         if (!minic_type_equal(global->type, expression->type)) {
             return MINIC_CORE_LOWER_ERROR;
         }
-        if (!core_global_addressable_type(global->type)) {
+        /* M155_EXTERN_VOID_SYMBOL_ADDRESS_OWNER: GNU C permits linker-defined
+           declaration-only `extern void` symbols such as __start_notes.  They
+           have an address but no C object value to load/store.  Keep ordinary
+           object addressability unchanged and admit only an extern, non-
+           tentative, initializer-free void declaration at this source boundary. */
+        if (!core_global_addressable_type(global->type) &&
+            !(minic_type_is_void(global->type) && global->is_extern &&
+              !global->is_tentative && global->initializer_count == 0U &&
+              global->relocation_count == 0U && global->union_selection_count == 0U)) {
             return MINIC_CORE_LOWER_UNSUPPORTED;
         }
         if (!minic_core_function_add_global(

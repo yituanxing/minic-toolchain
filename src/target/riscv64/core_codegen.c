@@ -38,11 +38,13 @@ static bool core_scalar_type(MinicType type) {
     return minic_type_is_integer(type) || minic_type_is_pointer(type);
 }
 
-/* M74_GLOBAL_RECORD_ADDRESS: RV64 global.addr lowers to `la symbol`;
-   the pointee's aggregate shape is irrelevant until field/element addressing. */
+/* M74_GLOBAL_RECORD_ADDRESS / M155_EXTERN_VOID_SYMBOL_ADDRESS_OWNER:
+   RV64 global.addr lowers to `la symbol`; the pointee's storage shape is
+   irrelevant until a later memory operation.  A declaration-only void symbol
+   therefore needs no new load/store ABI support. */
 static bool core_global_addressable_type(MinicType type) {
     return core_scalar_type(type) || minic_type_is_array(type) ||
-           minic_type_is_record(type);
+           minic_type_is_record(type) || minic_type_is_void(type);
 }
 
 static bool align_up(size_t value, size_t alignment, size_t *result) {

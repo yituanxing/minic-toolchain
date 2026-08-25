@@ -202,9 +202,13 @@ bool minic_core_function_add_object(MinicCoreFunction *function,
 /* M74_GLOBAL_RECORD_ADDRESS: global.addr is an address-forming Core
    primitive. Record globals are addressable even though record values are not
    scalar SSA values. */
+/* M155_EXTERN_VOID_SYMBOL_ADDRESS_OWNER: a Core global entry names a symbol,
+   not allocated private storage.  A void-typed linker symbol may therefore
+   participate in GLOBAL_ADDRESS while LOAD/STORE still reject void pointees. */
 static bool core_global_addressable_type(MinicType type) {
     return minic_type_is_integer(type) || minic_type_is_pointer(type) ||
-           minic_type_is_array(type) || minic_type_is_record(type);
+           minic_type_is_array(type) || minic_type_is_record(type) ||
+           minic_type_is_void(type);
 }
 
 bool minic_core_function_add_global(MinicCoreFunction *function,
