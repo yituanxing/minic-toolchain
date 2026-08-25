@@ -60,6 +60,9 @@ jobs:
           cat "$work/minic-stderr/arch/riscv/kernel/traps.i.stderr" || true
           echo '--- batch result ---'
           cat "$work/batch-results.json"
+          echo '--- preprocessed context 59855-59880 ---'
+          sed -n '59855,59880p' "$GITHUB_WORKSPACE/build/linux-focus-corpus/kbuild/arch/riscv/kernel/traps.i" \
+            | tee "$work/m126a-source-context.txt"
 
       - name: Persist diagnostic
         if: always()
@@ -68,5 +71,6 @@ jobs:
           name: core-m126a-error-diagnostic-${{ github.sha }}
           path: |
             build/m126a-error-traps/batch-results.json
+            build/m126a-error-traps/m126a-source-context.txt
             build/m126a-error-traps/minic-stderr/**
           if-no-files-found: warn
