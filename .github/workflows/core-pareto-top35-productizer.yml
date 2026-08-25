@@ -28,6 +28,7 @@ jobs:
           python3 tools/ci/apply-m116-pointer-arith-rvalue.py
           python3 - <<'PY'
           from pathlib import Path
+
           p = Path('src/core/core_lower.c')
           s = p.read_text()
           old = '''    if (!minic_core_function_verify(&lowered)) {
@@ -45,7 +46,31 @@ jobs:
     }
 '''
           if s.count(old) != 1:
-              raise SystemExit(f'verify anchor mismatch: {s.count(old)}')
+              raise SystemExit(f'lower verify anchor mismatch: {s.count(old)}')
+          p.write_text(s.replace(old, new, 1))
+
+          p = Path('src/core/core_ir.c')
+          s = p.read_text()
+          old = '''        instruction = &function->instructions[instruction_id];
+        if (!instruction_is_valid(function, instruction, available_values)) {
+            return false;
+        }
+'''
+          new = '''        instruction = &function->instructions[instruction_id];
+        if (!instruction_is_valid(function, instruction, available_values)) {
+            (void)fprintf(stderr,
+                          "CORE_VERIFY_INSTRUCTION_FAIL function=%s block=%u position=%zu instruction=%u kind=%d result=%u\\n",
+                          function->name != NULL ? function->name : "<unnamed>",
+                          (unsigned int)block_id,
+                          index,
+                          (unsigned int)instruction_id,
+                          (int)instruction->kind,
+                          (unsigned int)instruction->result);
+            return false;
+        }
+'''
+          if s.count(old) != 1:
+              raise SystemExit(f'IR instruction verify anchor mismatch: {s.count(old)}')
           p.write_text(s.replace(old, new, 1))
           PY
           git diff --check
