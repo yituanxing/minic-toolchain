@@ -4204,10 +4204,21 @@ static MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
             core_scalar_expression_value_type(context->body, left_expression, &left_type) &&
             core_scalar_expression_value_type(context->body, right_expression, &right_type) &&
             minic_type_is_pointer(left_type) && minic_type_is_pointer(right_type)) {
+            /* M156_STRUCTURAL_POINTER_RELATIONAL_OWNER: relational
+               legality is already decided by frontend/Sema, including GNU void
+               pointers and structurally compatible pointer-to-array shapes.
+               Core only needs one bit representation for POINTER_LESS.  The
+               ordinary conditional-pointer common type remains preferred; if
+               side-table identity prevents one despite accepted relational
+               compatibility, use the left representation and bitcast both
+               operands, matching the established equality owner. */
             if (!minic_c0_pointer_relational_compatible(
-                    context->body->program, left_type, right_type) ||
-                !minic_type_conditional_pointer_common(left_type, right_type, &common_type)) {
+                    context->body->program, left_type, right_type)) {
                 return MINIC_CORE_LOWER_UNSUPPORTED;
+            }
+            if (!minic_type_conditional_pointer_common(
+                    left_type, right_type, &common_type)) {
+                common_type = left_type;
             }
             status = lower_expression(context, expression->value.binary.left, &left);
             if (status != MINIC_CORE_LOWER_OK) {
