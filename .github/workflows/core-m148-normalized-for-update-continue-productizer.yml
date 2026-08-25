@@ -1,4 +1,4 @@
-name: Core M156 Structural Pointer Relational Productizer
+name: Core M157 Scalar Compound Literal Productizer
 
 on:
   pull_request:
@@ -16,12 +16,12 @@ jobs:
           ref: refactor/declaration-sema-v1
           fetch-depth: 0
 
-      - name: Detect M156
+      - name: Detect M157
         id: state
         shell: bash
         run: |
           set -Eeuo pipefail
-          if grep -Fq 'M156_STRUCTURAL_POINTER_RELATIONAL_OWNER' src/core/core_lower.c; then
+          if grep -Fq 'M157_SCALAR_COMPOUND_LITERAL_ADDRESS_OWNER' src/core/core_lower.c; then
             echo 'needs_patch=false' >> "$GITHUB_OUTPUT"
           else
             echo 'needs_patch=true' >> "$GITHUB_OUTPUT"
@@ -35,53 +35,53 @@ jobs:
           path: build/linux-focus-corpus
           key: linux-focus-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-${{ hashFiles('tests/external/linux/replay-indices.txt') }}
 
-      - name: Require M155 baseline
+      - name: Require M156 baseline
         if: steps.state.outputs.needs_patch == 'true'
         shell: bash
         run: |
           set -Eeuo pipefail
           test "${{ steps.corpus.outputs.cache-hit }}" = true
-          grep -Fq 'M155_EXTERN_VOID_SYMBOL_ADDRESS_OWNER' src/core/core_lower.c
+          grep -Fq 'M156_STRUCTURAL_POINTER_RELATIONAL_OWNER' src/core/core_lower.c
 
-      - name: Apply M156 candidate
+      - name: Apply M157 candidate
         if: steps.state.outputs.needs_patch == 'true'
         run: |
           python3 tools/ci/apply-m152-nested-member-address.py
           git diff --check
-          grep -Fq 'M156_STRUCTURAL_POINTER_RELATIONAL_OWNER' src/core/core_lower.c
+          grep -Fq 'M157_SCALAR_COMPOUND_LITERAL_ADDRESS_OWNER' src/core/core_lower.c
 
       - name: Build patched compiler
         if: steps.state.outputs.needs_patch == 'true'
-        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/m156-compiler
+        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/m157-compiler
 
       - name: Fast gate
         if: steps.state.outputs.needs_patch == 'true'
-        run: make -j4 check-fast MODE=release CFLAGS=-Werror BUILD_DIR=build/m156-check
+        run: make -j4 check-fast MODE=release CFLAGS=-Werror BUILD_DIR=build/m157-check
 
       - name: Isolated strict regression
         if: steps.state.outputs.needs_patch == 'true'
         shell: bash
         run: |
           set -Eeuo pipefail
-          mkdir -p build/m156-regression
-          cc -E -P -std=gnu11 -x c tests/compiler/c0/m156_structural_pointer_relational.c -o build/m156-regression/test.i
-          MINIC_CORE_IR=strict build/m156-compiler/bin/minic -S build/m156-regression/test.i -o build/m156-regression/test.s
-          test -s build/m156-regression/test.s
+          mkdir -p build/m157-regression
+          cc -E -P -std=gnu11 -x c tests/compiler/c0/m157_scalar_compound_literal_address.c -o build/m157-regression/test.i
+          MINIC_CORE_IR=strict build/m157-compiler/bin/minic -S build/m157-regression/test.i -o build/m157-regression/test.s
+          test -s build/m157-regression/test.s
 
       - name: Replay remaining strict tail
         if: steps.state.outputs.needs_patch == 'true'
         shell: bash
         run: |
           set -Eeuo pipefail
-          work=build/m156-focused
+          work=build/m157-focused
           set +e
           MINIC_CORE_IR=strict CORE_FAST_TRACE=1 python3 tests/external/linux/corpus_replay.py \
-            --minic "$GITHUB_WORKSPACE/build/m156-compiler/bin/minic" \
+            --minic "$GITHUB_WORKSPACE/build/m157-compiler/bin/minic" \
             --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" --work "$work" --jobs 4 \
-            --indices '60,193,195,252,292,414'
+            --indices '60,193,195,292,414'
           status=$?
           set -e
-          echo "CORE_M156_FOCUSED_STATUS=$status"
+          echo "CORE_M157_FOCUSED_STATUS=$status"
           python3 tools/ci/classify-core-strict-frontier.py \
             "$work/batch-results.json" --stderr-root "$work/minic-stderr" \
             --ast-header "$GITHUB_WORKSPACE/src/frontend/ast.h" --examples 30 \
@@ -90,39 +90,39 @@ jobs:
           python3 - <<'PY'
           import json
           from pathlib import Path
-          w=Path('build/m156-focused')
+          w=Path('build/m157-focused')
           rows=json.loads((w/'batch-results.json').read_text())
           s=json.loads((w/'frontier-summary.json').read_text())
           by={int(r['index']):r for r in rows}
-          if s['selected'] != 6 or s['error'] != 0 or s['preprocess_missing'] != 0:
-              raise SystemExit(f'M156 focused invalid: {s}')
-          r=by[252]
+          if s['selected'] != 5 or s['error'] != 0 or s['preprocess_missing'] != 0:
+              raise SystemExit(f'M157 focused invalid: {s}')
+          r=by[292]
           line=int(r.get('first_error_line') or 0)
-          if not (r['status']=='PASS' or line > 86430):
-              raise SystemExit(f'M156 did not advance #252: {r}')
+          if not (r['status']=='PASS' or line > 48152):
+              raise SystemExit(f'M157 did not advance #292: {r}')
           for r in rows:
-              print(f"M156 index={r['index']} status={r['status']} line={r.get('first_error_line')} message={r.get('message')}")
+              print(f"M157 index={r['index']} status={r['status']} line={r.get('first_error_line')} message={r.get('message')}")
           print((w/'reason-summary.txt').read_text())
           PY
 
-      - name: Commit M156 semantic cut
+      - name: Commit M157 semantic cut
         if: steps.state.outputs.needs_patch == 'true'
         shell: bash
         run: |
           set -Eeuo pipefail
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add src/core/core_lower.c tests/compiler/c0/m156_structural_pointer_relational.c
-          git diff --cached --quiet && { echo 'no M156 semantic changes'; exit 1; }
-          git commit -m 'core: lower structural pointer relationals'
+          git add src/core/core_lower.c tests/compiler/c0/m157_scalar_compound_literal_address.c
+          git diff --cached --quiet && { echo 'no M157 semantic changes'; exit 1; }
+          git commit -m 'core: lower scalar compound literal addresses'
           git push origin HEAD:refactor/declaration-sema-v1
 
-      - name: Persist M156 results
+      - name: Persist M157 results
         if: always() && steps.state.outputs.needs_patch == 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: core-m156-structural-pointer-relational-${{ github.sha }}
+          name: core-m157-scalar-compound-literal-${{ github.sha }}
           path: |
-            build/m156-regression/**
-            build/m156-focused/**
+            build/m157-regression/**
+            build/m157-focused/**
           if-no-files-found: warn
