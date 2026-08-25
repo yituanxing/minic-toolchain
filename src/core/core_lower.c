@@ -7322,6 +7322,36 @@ static bool normalized_for_update_tail(const MinicCoreLowerContext *context,
     return true;
 }
 
+/* M132_UNBOUNDED_FOR_TERMINATION: structured control-flow reachability is
+   the owner of whether a synthetic loop exit can fall through. In particular,
+   an omitted-condition GNU/C `for (;;)` has no natural edge to its exit block;
+   only an explicit break may make that exit reachable. */
+static bool core_block_has_predecessor(const MinicCoreFunction *function,
+                                       MinicCoreBlockId target) {
+    size_t block_index;
+
+    if (function == NULL || target == MINIC_CORE_BLOCK_INVALID ||
+        target >= function->block_count) {
+        return false;
+    }
+    for (block_index = 0U; block_index < function->block_count; ++block_index) {
+        const MinicCoreBlock *block = &function->blocks[block_index];
+        if (!block->has_terminator) {
+            continue;
+        }
+        if (block->terminator.kind == MINIC_CORE_TERMINATOR_BRANCH &&
+            block->terminator.branch_target == target) {
+            return true;
+        }
+        if (block->terminator.kind == MINIC_CORE_TERMINATOR_CONDITIONAL_BRANCH &&
+            (block->terminator.conditional.when_true == target ||
+             block->terminator.conditional.when_false == target)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 static MinicCoreLowerStatus
 lower_while(MinicCoreLowerContext *context,
             const MinicStatement *statement,
@@ -7518,6 +7548,22 @@ lower_while(MinicCoreLowerContext *context,
         }
     }
     context->block_id = exit_block;
+    if (statement->expression == MINIC_EXPRESSION_INVALID && normalized_for &&
+        !core_block_has_predecessor(context->function, exit_block)) {
+        MinicCoreTerminator exit_terminator;
+
+        (void)memset(&exit_terminator, 0, sizeof(exit_terminator));
+        exit_terminator.kind = MINIC_CORE_TERMINATOR_UNREACHABLE;
+        exit_terminator.span = statement->span;
+        exit_terminator.return_value = MINIC_CORE_VALUE_INVALID;
+        exit_terminator.return_object = MINIC_CORE_OBJECT_INVALID;
+        if (!minic_core_function_set_terminator(
+                context->function, exit_block, &exit_terminator)) {
+            return MINIC_CORE_LOWER_ERROR;
+        }
+        *terminated = true;
+        return MINIC_CORE_LOWER_OK;
+    }
     *terminated = false;
     return MINIC_CORE_LOWER_OK;
 }
