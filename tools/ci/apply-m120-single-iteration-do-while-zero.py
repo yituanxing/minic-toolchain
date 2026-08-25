@@ -1,22 +1,21 @@
 #!/usr/bin/env python3
-"""Restore do-while(0) single-iteration lowering with real break/continue ownership."""
+"""Use a real do-while(0) exit only when source control flow needs it."""
 
 from pathlib import Path
 
 p = Path("src/core/core_lower.c")
 s = p.read_text()
 
-if "M120_DO_WHILE_ZERO_SINGLE_ITERATION_CFG" in s:
-    raise SystemExit("M120 already applied")
+if "M121_SELECTIVE_DO_WHILE_ZERO_EXIT_CFG" in s:
+    raise SystemExit("M121 already applied")
 
 helper_anchor = "/* M78_OMITTED_FOR_CONDITION: parse_for represents a missing source\n"
 if s.count(helper_anchor) != 1:
-    raise SystemExit(f"M120 helper anchor count={s.count(helper_anchor)}")
-helper = r'''/* M120_DO_WHILE_ZERO_SINGLE_ITERATION_CFG: parse_do_while lowers source
-   `do BODY while (0)` into `while (1) { BODY; continue_label: if (!0) break; }`.
-   Recognize that parser-owned tail so Core can lower the construct as one real
-   iteration without treating the synthetic label/condition as source control
-   flow. The caller binds both source continue and source break to one exit. */
+    raise SystemExit(f"M121 helper anchor count={s.count(helper_anchor)}")
+helper = r'''/* M121_SELECTIVE_DO_WHILE_ZERO_EXIT_CFG: parse_do_while lowers source
+   `do BODY while (0)` into a synthetic while(1) tail. Preserve the historical
+   flattening path when BODY has no control transfer to this loop; only build a
+   real exit block when a source break/continue actually needs loop ownership. */
 static bool normalized_do_while_zero_body(const MinicCoreLowerContext *context,
                                           const MinicStatement *loop,
                                           const MinicBlock *body,
@@ -84,13 +83,73 @@ static bool normalized_do_while_zero_body(const MinicCoreLowerContext *context,
     return true;
 }
 
+static bool normalized_do_while_block_needs_exit(
+    const MinicCoreLowerContext *context,
+    const MinicBlock *block,
+    MinicStatementId continue_label_statement,
+    bool break_targets_outer_loop) {
+    size_t index;
+
+    if (context == NULL || context->body == NULL || context->body->program == NULL ||
+        block == NULL) {
+        return true;
+    }
+    for (index = 0U; index < block->statement_count; ++index) {
+        const MinicStatement *statement = minic_c0_program_statement(
+            context->body->program, block->statements[index]);
+        if (statement == NULL) {
+            return true;
+        }
+        if (break_targets_outer_loop && statement->kind == MINIC_STATEMENT_BREAK) {
+            return true;
+        }
+        if (statement->kind == MINIC_STATEMENT_GOTO &&
+            statement->target_statement == continue_label_statement) {
+            return true;
+        }
+        if (statement->kind == MINIC_STATEMENT_IF ||
+            statement->kind == MINIC_STATEMENT_WHILE ||
+            statement->kind == MINIC_STATEMENT_SWITCH) {
+            const MinicBlock *then_block = statement->then_block == MINIC_BLOCK_INVALID
+                                                ? NULL
+                                                : minic_c0_program_block(
+                                                      context->body->program,
+                                                      statement->then_block);
+            const MinicBlock *else_block = statement->else_block == MINIC_BLOCK_INVALID
+                                                ? NULL
+                                                : minic_c0_program_block(
+                                                      context->body->program,
+                                                      statement->else_block);
+            bool nested_break_targets_outer =
+                statement->kind == MINIC_STATEMENT_IF ? break_targets_outer_loop : false;
+            if (statement->then_block != MINIC_BLOCK_INVALID &&
+                (then_block == NULL || normalized_do_while_block_needs_exit(
+                                           context,
+                                           then_block,
+                                           continue_label_statement,
+                                           nested_break_targets_outer))) {
+                return true;
+            }
+            if (statement->else_block != MINIC_BLOCK_INVALID &&
+                (else_block == NULL || normalized_do_while_block_needs_exit(
+                                           context,
+                                           else_block,
+                                           continue_label_statement,
+                                           nested_break_targets_outer))) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 '''
 s = s.replace(helper_anchor, helper + helper_anchor, 1)
 
 decl_old = "    MinicBlock normalized_for_body;\n    MinicCoreBlockId body_block;\n"
 decl_new = "    MinicBlock normalized_for_body;\n    MinicBlock normalized_do_while_body;\n    MinicStatementId normalized_do_while_continue;\n    MinicCoreBlockId body_block;\n"
 if s.count(decl_old) != 1:
-    raise SystemExit(f"M120 declaration anchor count={s.count(decl_old)}")
+    raise SystemExit(f"M121 declaration anchor count={s.count(decl_old)}")
 s = s.replace(decl_old, decl_new, 1)
 
 old = '''    /* M119_GENERAL_DO_WHILE_ZERO_CFG: do not flatten normalized do-while(0)
@@ -107,50 +166,63 @@ new = r'''    normalized_do_while_continue = MINIC_STATEMENT_INVALID;
                                       body_source,
                                       &normalized_do_while_body,
                                       &normalized_do_while_continue)) {
-        MinicCoreBlockId single_iteration_exit;
-
-        if (normalized_do_while_continue >= context->statement_block_count ||
-            context->statement_blocks == NULL ||
-            context->statement_blocks[normalized_do_while_continue] !=
-                MINIC_CORE_BLOCK_INVALID ||
-            !minic_core_function_add_block(context->function, &single_iteration_exit)) {
-            return MINIC_CORE_LOWER_ERROR;
-        }
-        /* Source `continue` in do-while(0) means evaluate constant-zero and
-           leave the loop. Bind the parser's synthetic continue label directly
-           to the real exit before lowering any body goto. */
-        context->statement_blocks[normalized_do_while_continue] = single_iteration_exit;
-        saved_break_target = context->break_target;
-        context->break_target = single_iteration_exit;
-        status = lower_block(context, &normalized_do_while_body, &body_terminated);
-        context->break_target = saved_break_target;
-        if (status != MINIC_CORE_LOWER_OK) {
-            (void)fprintf(stderr,
-                          "CORE_FAST_TRACE stage=do-while-zero reason=body function=%s "
-                          "status=%d span=%zu:%zu\n",
-                          context->source_function->name,
-                          (int)status,
-                          statement->span.begin.line,
-                          statement->span.begin.column);
-            return status;
-        }
-        if (!body_terminated) {
-            status = set_branch(
-                context, context->block_id, statement->span, single_iteration_exit);
+        if (!normalized_do_while_block_needs_exit(context,
+                                                  &normalized_do_while_body,
+                                                  normalized_do_while_continue,
+                                                  true)) {
+            /* Keep the previously proven flattening semantics when BODY has no
+               transfer owned by this loop. This avoids manufacturing CFG state
+               for the many effect-only do-while(0) macros already accepted. */
+            status = lower_block(context, &normalized_do_while_body, &body_terminated);
             if (status != MINIC_CORE_LOWER_OK) {
                 return status;
             }
+            *terminated = body_terminated;
+            return MINIC_CORE_LOWER_OK;
         }
-        context->block_id = single_iteration_exit;
-        *terminated = false;
-        return MINIC_CORE_LOWER_OK;
+        {
+            MinicCoreBlockId single_iteration_exit;
+
+            if (normalized_do_while_continue >= context->statement_block_count ||
+                context->statement_blocks == NULL ||
+                context->statement_blocks[normalized_do_while_continue] !=
+                    MINIC_CORE_BLOCK_INVALID ||
+                !minic_core_function_add_block(context->function, &single_iteration_exit)) {
+                return MINIC_CORE_LOWER_ERROR;
+            }
+            context->statement_blocks[normalized_do_while_continue] = single_iteration_exit;
+            saved_break_target = context->break_target;
+            context->break_target = single_iteration_exit;
+            status = lower_block(context, &normalized_do_while_body, &body_terminated);
+            context->break_target = saved_break_target;
+            if (status != MINIC_CORE_LOWER_OK) {
+                (void)fprintf(stderr,
+                              "CORE_FAST_TRACE stage=do-while-zero reason=body function=%s "
+                              "status=%d span=%zu:%zu\n",
+                              context->source_function->name,
+                              (int)status,
+                              statement->span.begin.line,
+                              statement->span.begin.column);
+                return status;
+            }
+            if (!body_terminated) {
+                status = set_branch(
+                    context, context->block_id, statement->span, single_iteration_exit);
+                if (status != MINIC_CORE_LOWER_OK) {
+                    return status;
+                }
+            }
+            context->block_id = single_iteration_exit;
+            *terminated = false;
+            return MINIC_CORE_LOWER_OK;
+        }
     }
 
     iteration_source = body_source;
 '''
 if s.count(old) != 1:
-    raise SystemExit(f"M120 M119 replacement anchor count={s.count(old)}")
+    raise SystemExit(f"M121 M119 replacement anchor count={s.count(old)}")
 s = s.replace(old, new, 1)
 
 p.write_text(s)
-print("M120 single-iteration do-while-zero CFG staged")
+print("M121 selective do-while-zero exit CFG staged")
