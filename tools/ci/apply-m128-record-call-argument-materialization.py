@@ -32,8 +32,9 @@ if marker not in text:
     core_path.write_text(text)
 
 # Keep the existing broad record-conditional regression unchanged in legacy
-# mode. Add one isolated strict-Core contract for the M128 consumer so unrelated
-# record-assignment shapes cannot mask this feature.
+# mode. Add one isolated strict-Core contract for exactly the M128 consumer:
+# a record conditional, including a direct record-return producer, passed by
+# value to a declared callee. Avoid unrelated if/compare/result-use lowering.
 source_path = Path('tests/compiler/c0/record_call_argument_materialization.c')
 source_text = '''typedef struct {
     unsigned long bits;
@@ -43,15 +44,10 @@ static record_word_t make_word(unsigned long value) {
     return (record_word_t){value + 1UL};
 }
 
-static unsigned long consume_word(record_word_t value) {
-    return value.bits;
-}
+void consume_word(record_word_t value);
 
 int main(void) {
-    if (consume_word(1 ? (record_word_t){3UL} : make_word(10UL)) != 3UL)
-        return 1;
-    if (consume_word(0 ? (record_word_t){3UL} : make_word(10UL)) != 11UL)
-        return 2;
+    consume_word(0 ? (record_word_t){3UL} : make_word(10UL));
     return 0;
 }
 '''
