@@ -17,12 +17,23 @@ for required in ('M137_DETACHED_LOOP_CONTINUE_OWNER',
 
 # M137's detached resolver inferred continue-label identity by scanning every
 # GOTO in a loop subtree. M145-M148 proved that inference can alias unrelated
-# same-span synthetic labels. Remove the heuristic completely: parser-tail
-# recognizers below already prove normalized-for provenance structurally.
+# same-span synthetic labels. Remove only that heuristic function. M142/M144
+# insert later helper owners immediately before lower_block, so the deletion
+# boundary must stop at the first later helper marker rather than lower_block.
 start = core.find('/* M137_DETACHED_LOOP_CONTINUE_OWNER:')
-end = core.find('static MinicCoreLowerStatus\nlower_block(', start)
-if start < 0 or end < 0 or end <= start:
-    raise SystemExit('M149 could not locate M137 resolver block')
+if start < 0:
+    raise SystemExit('M149 could not locate M137 resolver start')
+end_candidates = [
+    core.find('/* M142_NONEDGE_CLEANUP_METADATA_OWNER:', start),
+    core.find('/* M144_UNREFERENCED_LOOP_LABEL_METADATA_OWNER:', start),
+    core.find('static MinicCoreLowerStatus\nlower_block(', start),
+]
+end_candidates = [value for value in end_candidates if value >= 0]
+if not end_candidates:
+    raise SystemExit('M149 could not locate M137 resolver end')
+end = min(end_candidates)
+if end <= start:
+    raise SystemExit('M149 invalid M137 resolver deletion range')
 core = core[:start] + core[end:]
 
 old_while = '''            case MINIC_STATEMENT_WHILE: {
