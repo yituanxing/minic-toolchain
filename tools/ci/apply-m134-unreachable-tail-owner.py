@@ -79,7 +79,9 @@ static bool core_mark_block_statement_membership(
 }
 
 static bool core_unreachable_statement_has_external_reentry(
-    const MinicCoreLowerContext *context, const MinicStatement *root_statement) {
+    const MinicCoreLowerContext *context,
+    const MinicStatement *root_statement,
+    MinicStatementId extra_statement_id) {
     const MinicC0Program *program;
     bool *visited_blocks;
     bool *statement_membership;
@@ -125,6 +127,8 @@ static bool core_unreachable_statement_has_external_reentry(
         }
     }
     if (!root_found ||
+        (extra_statement_id != MINIC_STATEMENT_INVALID &&
+         extra_statement_id >= program->statement_count) ||
         !core_mark_block_statement_membership(context,
                                               root_statement->then_block,
                                               visited_blocks,
@@ -140,6 +144,9 @@ static bool core_unreachable_statement_has_external_reentry(
         free(visited_blocks);
         free(statement_membership);
         return true;
+    }
+    if (extra_statement_id != MINIC_STATEMENT_INVALID) {
+        statement_membership[extra_statement_id] = true;
     }
 
     unsafe = false;
@@ -211,17 +218,38 @@ old_guard = '''        if (block_terminated) {
 '''
 new_guard = '''        if (block_terminated) {
             /* Parser scope exit may materialize cleanup/return tails after an
-               already-terminating edge. More generally, non-label statements
-               on this path are unreachable and need no Core instructions.
-               Preserve fail-closed behavior only for an external goto/asm-goto
-               re-entry into that otherwise unreachable structured subtree. */
+               already-terminating edge. More generally, statements on this
+               path are unreachable and need no Core instructions. A parser
+               internal while label is paired with the following loop; prune
+               the pair as one subtree so the loop's own backedge does not look
+               like external re-entry. Preserve fail-closed behavior only for
+               a goto/asm-goto originating outside the pruned subtree. */
             if (statement->kind == MINIC_STATEMENT_RETURN ||
                 core_is_materialized_cleanup_statement(context, statement)) {
                 continue;
             }
+            if (statement->kind == MINIC_STATEMENT_LABEL &&
+                statement_index + 1U < source_block->statement_count) {
+                const MinicStatement *unreachable_loop;
+                MinicStatementId unreachable_loop_id;
+
+                unreachable_loop_id = source_block->statements[statement_index + 1U];
+                unreachable_loop =
+                    minic_c0_program_statement(context->body->program, unreachable_loop_id);
+                if (internal_while_label_pair(statement, unreachable_loop)) {
+                    if (core_unreachable_statement_has_external_reentry(
+                            context,
+                            unreachable_loop,
+                            source_block->statements[statement_index])) {
+                        return MINIC_CORE_LOWER_UNSUPPORTED;
+                    }
+                    statement_index += 1U;
+                    continue;
+                }
+            }
             if (statement->kind != MINIC_STATEMENT_LABEL) {
                 if (core_unreachable_statement_has_external_reentry(
-                        context, statement)) {
+                        context, statement, MINIC_STATEMENT_INVALID)) {
                     return MINIC_CORE_LOWER_UNSUPPORTED;
                 }
                 continue;
