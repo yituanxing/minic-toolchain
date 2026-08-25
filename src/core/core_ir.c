@@ -1191,10 +1191,12 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
             case MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT:
             case MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE:
             case MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_OUTPUT:
+            case MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT:
             case MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE:
                 if (!available_pointer_pointee(
                         function, available_values, binding->value, &pointee) ||
-                    minic_type_is_const(pointee) ||
+                    (binding->kind != MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT &&
+                     minic_type_is_const(pointee)) ||
                     !minic_type_unqualified(pointee, &value_type) ||
                     (!minic_type_is_integer(value_type) && !minic_type_is_pointer(value_type))) {
                     return false;

@@ -718,6 +718,7 @@ static bool core_structured_inline_asm_supported(const MinicCoreFunction *functi
     size_t register_outputs = 0U;
     size_t register_readwrites = 0U;
     size_t memory_outputs = 0U;
+    size_t memory_inputs = 0U;
     size_t memory_readwrites = 0U;
     size_t scalar_inputs = 0U;
     size_t fixed_bindings = 0U;
@@ -774,6 +775,13 @@ static bool core_structured_inline_asm_supported(const MinicCoreFunction *functi
             }
             memory_outputs += 1U;
             break;
+        case MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT:
+            if (!minic_type_pointee(function->values[binding->value].type, &pointee) ||
+                !minic_type_unqualified(pointee, &value_type) || !core_scalar_type(value_type)) {
+                return false;
+            }
+            memory_inputs += 1U;
+            break;
         case MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE:
             if (!minic_type_pointee(function->values[binding->value].type, &pointee) ||
                 !minic_type_unqualified(pointee, &value_type) || !core_scalar_type(value_type)) {
@@ -813,6 +821,13 @@ static bool core_structured_inline_asm_supported(const MinicCoreFunction *functi
            fixed_bindings == 0U) ||
           (register_outputs == 0U && register_readwrites == 1U && memory_outputs == 1U &&
            memory_readwrites == 0U && scalar_inputs == 1U &&
+           instruction->value.structured_inline_asm.operand_count == 3U &&
+           !inline_asm->has_memory_clobber && inline_asm->register_clobber_count == 0U &&
+           fixed_bindings == 0U) ||
+          /* M125_STRUCTURED_MEMORY_INPUT_ASM: Linux trap/uaccess family.
+             The read-only memory input owns an address register but no writeback. */
+          (register_outputs == 1U && register_readwrites == 1U && memory_outputs == 0U &&
+           memory_inputs == 1U && memory_readwrites == 0U && scalar_inputs == 0U &&
            instruction->value.structured_inline_asm.operand_count == 3U &&
            !inline_asm->has_memory_clobber && inline_asm->register_clobber_count == 0U &&
            fixed_bindings == 0U) ||
@@ -2084,6 +2099,7 @@ static bool emit_structured_inline_asm(FILE *file,
             break;
         }
         case MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_OUTPUT:
+        case MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT:
         case MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE:
             if (memory_index >= 1U) {
                 return false;

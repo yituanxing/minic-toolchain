@@ -8902,6 +8902,116 @@ static MinicCoreLowerStatus lower_opaque_inline_asm(MinicCoreLowerContext *conte
         free(numeric_template);
     }
 
+    /* M125_STRUCTURED_MEMORY_INPUT_ASM: one register read/write output,
+       one write-only register output, and one read-only memory input. `m` is
+       address-backed in Core; the backend materializes only its address and
+       never writes the referenced object after the asm. */
+    if (source->is_volatile && !source->is_goto && source->template_text != NULL &&
+        source->template_length != 0U && source->outputs != NULL && source->inputs != NULL &&
+        source->output_count == 2U && source->input_count == 1U &&
+        source->label_count == 0U && source->register_clobber_count == 0U &&
+        !source->has_memory_clobber && source->clobber_count == 0U) {
+        const MinicInlineAsmOperand *input = &source->inputs[0];
+        const MinicExpression *input_expression =
+            minic_c0_program_expression(context->body->program, input->expression);
+        MinicCoreInstruction structured;
+        MinicType input_type;
+        char *numeric_template = NULL;
+        size_t numeric_template_length = 0U;
+        size_t output_index;
+        size_t register_output_count = 0U;
+        size_t register_readwrite_count = 0U;
+        bool supported_shape = true;
+
+        if (input->access != MINIC_INLINE_ASM_OPERAND_READ_ONLY ||
+            !core_inline_asm_constraint_is(input, "m") || input_expression == NULL ||
+            input_expression->value_category != MINIC_VALUE_LVALUE ||
+            !minic_type_unqualified(input_expression->type, &input_type) ||
+            !core_memory_scalar_type(input_type)) {
+            supported_shape = false;
+        }
+        for (output_index = 0U; supported_shape && output_index < source->output_count;
+             ++output_index) {
+            const MinicInlineAsmOperand *operand = &source->outputs[output_index];
+            const MinicExpression *expression =
+                minic_c0_program_expression(context->body->program, operand->expression);
+            MinicType value_type;
+
+            if (expression == NULL || expression->value_category != MINIC_VALUE_LVALUE ||
+                minic_type_is_const(expression->type) ||
+                !minic_type_unqualified(expression->type, &value_type) ||
+                !core_memory_scalar_type(value_type) ||
+                (expression->kind == MINIC_EXPRESSION_LOCAL &&
+                 minic_c0_program_local_fixed_register_binding(
+                     context->body->program, expression->value.local_id) != NULL)) {
+                supported_shape = false;
+                break;
+            }
+            if (operand->access == MINIC_INLINE_ASM_OPERAND_READ_WRITE &&
+                core_inline_asm_constraint_is(operand, "+r")) {
+                register_readwrite_count += 1U;
+            } else if (operand->access == MINIC_INLINE_ASM_OPERAND_WRITE_ONLY &&
+                       core_inline_asm_register_output_constraint(operand)) {
+                register_output_count += 1U;
+            } else {
+                supported_shape = false;
+            }
+        }
+        if (supported_shape && register_readwrite_count == 1U && register_output_count == 1U &&
+            core_inline_asm_numeric_template(
+                source, &numeric_template, &numeric_template_length)) {
+            MinicCoreLowerStatus status;
+            bool added;
+
+            added = minic_core_function_add_opaque_inline_asm(context->function,
+                                                               numeric_template,
+                                                               numeric_template_length,
+                                                               source->is_volatile,
+                                                               source->has_memory_clobber,
+                                                               &inline_asm_id);
+            free(numeric_template);
+            numeric_template = NULL;
+            if (!added) {
+                return MINIC_CORE_LOWER_ERROR;
+            }
+            (void)memset(&structured, 0, sizeof(structured));
+            structured.kind = MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM;
+            structured.span = statement->span;
+            structured.type = minic_type_void();
+            structured.result = MINIC_CORE_VALUE_INVALID;
+            structured.value.structured_inline_asm.inline_asm_id = inline_asm_id;
+            structured.value.structured_inline_asm.operand_count = 3U;
+
+            for (output_index = 0U; output_index < source->output_count; ++output_index) {
+                const MinicInlineAsmOperand *operand = &source->outputs[output_index];
+                MinicCoreStructuredInlineAsmOperand *binding =
+                    &structured.value.structured_inline_asm.operands[output_index];
+
+                binding->operand_index = output_index;
+                binding->kind = operand->access == MINIC_INLINE_ASM_OPERAND_READ_WRITE
+                                    ? MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE
+                                    : MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
+                status = lower_address(context, operand->expression, &binding->value);
+                if (status != MINIC_CORE_LOWER_OK) {
+                    return status;
+                }
+            }
+            structured.value.structured_inline_asm.operands[2].kind =
+                MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT;
+            structured.value.structured_inline_asm.operands[2].operand_index = 2U;
+            status = lower_address(
+                context, input->expression, &structured.value.structured_inline_asm.operands[2].value);
+            if (status != MINIC_CORE_LOWER_OK) {
+                return status;
+            }
+            return minic_core_function_append_effect_instruction(
+                       context->function, context->block_id, &structured)
+                       ? MINIC_CORE_LOWER_OK
+                       : MINIC_CORE_LOWER_ERROR;
+        }
+        free(numeric_template);
+    }
+
     /* M107_STRUCTURED_MEMORY_OUTPUT_ASM: GCC-style asm may pair one
        register read/write output with one write-only memory output and a
        scalar register/immediate input. Preserve those access roles in Core;

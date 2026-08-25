@@ -206,6 +206,10 @@ typedef enum MinicCoreStructuredInlineAsmOperandKind {
     /* M107_STRUCTURED_MEMORY_OUTPUT_ASM: address-backed write-only memory
        operand (`=m`). Keep this distinct from read/write memory (`+m`/`+A`). */
     MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_OUTPUT,
+    /* M125_STRUCTURED_MEMORY_INPUT_ASM: read-only `m` operands carry an
+       address into Core, but unlike output/read-write memory they permit const
+       pointees and never require post-asm writeback. */
+    MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT,
     MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE,
     MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT
 } MinicCoreStructuredInlineAsmOperandKind;

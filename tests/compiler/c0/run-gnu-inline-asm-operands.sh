@@ -27,6 +27,23 @@ grep -F 'li t5, 5' "$assembly" >/dev/null
 grep -F 'sd t5, 0(a0)' "$assembly" >/dev/null
 grep -F '.type memory_input_linux_shape, @function' "$assembly" >/dev/null
 grep -F 'lw t1, 0(t3)' "$assembly" >/dev/null
+
+cat >"$work/core-memory-input.c" <<'EOF'
+static int core_memory_input_linux_shape(const int *value) {
+    long error = 0;
+    int loaded;
+
+    __asm__ __volatile__("lw %1, %2" : "+r"(error), "=&r"(loaded) : "m"(*value));
+    return loaded + (int)error;
+}
+EOF
+"$host_cc" -E -P -std=gnu11 -x c "$work/core-memory-input.c" \
+    -o "$work/core-memory-input.i"
+MINIC_CORE_IR=strict "$minic" -S "$work/core-memory-input.i" \
+    -o "$work/core-memory-input.s"
+grep -F '.type core_memory_input_linux_shape, @function' "$work/core-memory-input.s" >/dev/null
+grep -F 'lw t1, (t2)' "$work/core-memory-input.s" >/dev/null
+
 grep -F 'addi t3, zero, 7' "$assembly" >/dev/null
 grep -F 'add t0, t0, t3' "$assembly" >/dev/null
 grep -F 'add t0, t1, t4' "$assembly" >/dev/null
