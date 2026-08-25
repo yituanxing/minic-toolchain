@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 from pathlib import Path
 
+# M137_PRODUCTIZER_TRIGGER_V1: keep this apply script as the synchronize trigger
+# after registering the productizer; semantic source is still staged only in CI.
 core_path = Path('src/core/core_lower.c')
 core = core_path.read_text()
 marker = 'M137_DETACHED_LOOP_CONTINUE_OWNER'
