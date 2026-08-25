@@ -40,12 +40,11 @@ jobs:
           test "${{ steps.linux-corpus-cache.outputs.cache-hit }}" = true
           test -s build/linux-focus-corpus/selected-tus.txt
 
-      - name: Apply diagnostics only
+      - name: Apply read-only diagnostics only
         shell: bash
         run: |
           set -Eeuo pipefail
           python3 tools/ci/apply-m126a-error-diagnostic.py
-          python3 tools/ci/apply-m126a-verifier-diagnostic.py
           git diff --check
 
       - name: Build M125 diagnostic compiler
