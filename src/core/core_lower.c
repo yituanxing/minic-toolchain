@@ -1196,7 +1196,12 @@ static MinicCoreLowerStatus lower_record_value_address(MinicCoreLowerContext *co
             !minic_type_is_record(expression_type)) {
             return MINIC_CORE_LOWER_UNSUPPORTED;
         }
-        status = lower_record_value_address(
+        /* M127_CHAINED_RECORD_MATERIALIZED_RHS: the value of a record
+           assignment is the fully evaluated RHS snapshot.  Route the RHS
+           through the materializing aggregate seam so direct record-returning
+           calls, record conditionals and compound literals compose with
+           chained assignment exactly like ordinary address-backed records. */
+        status = lower_record_materialized_address(
             context, expression->value.binary.right, &source_address);
         if (status != MINIC_CORE_LOWER_OK) {
             return status;
