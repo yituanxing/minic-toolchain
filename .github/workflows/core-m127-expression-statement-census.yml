@@ -60,9 +60,10 @@ jobs:
           grep -Rh 'CORE_M127_VOID_STMT_EXPR_RESULT' "$work/minic-stderr" \
             | sort | tee "$work/m127-result-census.txt" || true
           python3 - <<'PY'
-          import collections, re
+          import collections, json, re
           from pathlib import Path
-          p = Path('build/m127-census/m127-result-census.txt')
+          work = Path('build/m127-census')
+          p = work / 'm127-result-census.txt'
           rows = p.read_text().splitlines() if p.exists() else []
           kinds = collections.Counter()
           statuses = collections.Counter()
@@ -76,6 +77,20 @@ jobs:
           print('CORE_M127_RESULT_ROWS', len(rows))
           if len(rows) != 13:
               raise SystemExit(f'expected 13 M127 rows, got {len(rows)}')
+
+          contexts = []
+          corpus = Path('build/linux-focus-corpus/kbuild')
+          for item in json.loads((work / 'batch-results.json').read_text()):
+              line = int(item['first_error_line'])
+              src = corpus / item['input']
+              lines = src.read_text(errors='replace').splitlines()
+              lo = max(1, line - 2)
+              hi = min(len(lines), line + 2)
+              contexts.append(f"=== index={item['index']} input={item['input']} function={item.get('message','')} line={line} ===")
+              for n in range(lo, hi + 1):
+                  contexts.append(f'{n}: {lines[n-1]}')
+          (work / 'm127-source-context.txt').write_text('\n'.join(contexts) + '\n')
+          print((work / 'm127-source-context.txt').read_text())
           PY
 
       - name: Persist census
@@ -86,5 +101,6 @@ jobs:
           path: |
             build/m127-census/batch-results.json
             build/m127-census/m127-result-census.txt
+            build/m127-census/m127-source-context.txt
             build/m127-census/minic-stderr/**
           if-no-files-found: warn
