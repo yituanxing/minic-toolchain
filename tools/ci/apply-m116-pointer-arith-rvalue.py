@@ -108,3 +108,51 @@ text = text.replace(old_tail, new_tail, 1)
 if text.count(marker) != 3:
     raise SystemExit(f"expected three M116 markers, got {text.count(marker)}")
 path.write_text(text)
+
+# Temporary CI-only verifier observability. The historical M116 productizer
+# stages only core_lower.c, so this file can never enter the semantic product
+# commit. It exists solely to identify the exact block-local SSA/type invariant
+# that rejects the ext4 cohort after M116 clears the old blocker.
+verify_path = Path("src/core/core_ir.c")
+verify_text = verify_path.read_text()
+verify_anchor = """        instruction = &function->instructions[instruction_id];
+        if (!instruction_is_valid(function, instruction, available_values)) {
+            return false;
+        }
+"""
+verify_insert = """        instruction = &function->instructions[instruction_id];
+        if (!instruction_is_valid(function, instruction, available_values)) {
+            (void)fprintf(stderr,
+                          "CORE_M116_VERIFY_INSTRUCTION function=%s block=%u position=%zu instruction=%u kind=%d result=%u\\n",
+                          function->name != NULL ? function->name : "<unnamed>",
+                          (unsigned int)block_id,
+                          index,
+                          (unsigned int)instruction_id,
+                          (int)instruction->kind,
+                          (unsigned int)instruction->result);
+            (void)minic_core_function_dump(stderr, function);
+            return false;
+        }
+"""
+if verify_text.count(verify_anchor) != 1:
+    raise SystemExit(f"verifier instruction anchor mismatch: {verify_text.count(verify_anchor)}")
+verify_text = verify_text.replace(verify_anchor, verify_insert, 1)
+terminator_anchor = """    return terminator_is_valid(function, &block->terminator, available_values);
+}
+"""
+terminator_insert = """    if (!terminator_is_valid(function, &block->terminator, available_values)) {
+        (void)fprintf(stderr,
+                      "CORE_M116_VERIFY_TERMINATOR function=%s block=%u kind=%d\\n",
+                      function->name != NULL ? function->name : "<unnamed>",
+                      (unsigned int)block_id,
+                      (int)block->terminator.kind);
+        (void)minic_core_function_dump(stderr, function);
+        return false;
+    }
+    return true;
+}
+"""
+if verify_text.count(terminator_anchor) != 1:
+    raise SystemExit(f"verifier terminator anchor mismatch: {verify_text.count(terminator_anchor)}")
+verify_text = verify_text.replace(terminator_anchor, terminator_insert, 1)
+verify_path.write_text(verify_text)
