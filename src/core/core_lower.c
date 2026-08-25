@@ -2945,6 +2945,26 @@ static MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
         if (operand == NULL) {
             return MINIC_CORE_LOWER_ERROR;
         }
+        /* M130_DISCARDED_LVALUE_EFFECT_OWNER: a non-volatile lvalue whose value
+           is explicitly discarded does not need an rvalue load, but evaluating
+           the lvalue can still have effects through its base/index expression.
+           Ask the established address owner to perform exactly that evaluation.
+           Only claim shapes that are genuinely addressable; unsupported
+           bit-fields or other special lvalues continue through the old value
+           path. Volatile lvalues also stay on the value path so their observable
+           read is preserved. */
+        if (operand->value_category == MINIC_VALUE_LVALUE &&
+            !minic_type_is_volatile(operand->type)) {
+            status = lower_address(
+                context, expression->value.unary.operand, &discarded_value);
+            if (status == MINIC_CORE_LOWER_OK) {
+                *value_id = MINIC_CORE_VALUE_INVALID;
+                return MINIC_CORE_LOWER_OK;
+            }
+            if (status == MINIC_CORE_LOWER_ERROR) {
+                return status;
+            }
+        }
         status = lower_expression(context, expression->value.unary.operand, &discarded_value);
         if (status != MINIC_CORE_LOWER_OK) {
             return status;
