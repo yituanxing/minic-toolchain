@@ -1,2 +1,3 @@
 M125 unclaimed inline-asm census trigger.
 This file intentionally carries no compiler semantics.
+rerun=recursive-stderr-scan-v2
