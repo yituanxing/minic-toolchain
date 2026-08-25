@@ -30,6 +30,9 @@ jobs:
           test "${{ steps.linux-corpus-cache.outputs.cache-hit }}" = true
           test -s build/linux-focus-corpus/selected-tus.txt
 
+      - name: Validate census tooling
+        run: python3 -m py_compile tools/ci/classify-core-strict-frontier.py
+
       - name: Enable compact progress telemetry
         run: python3 tools/dev/patch-linux-replay-live-progress.py
 
@@ -56,8 +59,11 @@ jobs:
           printf 'CORE_STRICT500_REPLAY_STATUS=%d\n' "$replay_status"
           python3 tools/ci/classify-core-strict-frontier.py \
             "$work/batch-results.json" \
+            --stderr-root "$work/minic-stderr" \
+            --ast-header "$GITHUB_WORKSPACE/src/frontend/ast.h" \
             --examples 20 \
-            --json-out "$work/frontier-summary.json"
+            --json-out "$work/frontier-summary.json" \
+            --reason-text-out "$work/reason-summary.txt"
           python3 tools/ci/summarize-core-frontier-progress.py \
             "$work/batch-results.json" \
             --expect-selected 500 \
@@ -66,16 +72,24 @@ jobs:
           python3 - <<'PY'
           import json
           from pathlib import Path
+          import os
+
           work = Path('build/strict500')
           frontier = json.loads((work / 'frontier-summary.json').read_text())
           headline = f"CORE_STRICT500_EXACT selected={frontier['selected']} pass={frontier['pass']} unsupported={frontier['unsupported']} error={frontier['error']}"
           print(headline)
-          with Path('build/strict500/headline.txt').open('w') as f:
+          with (work / 'headline.txt').open('w') as f:
               f.write(headline + '\n')
-          with Path(__import__('os').environ['GITHUB_STEP_SUMMARY']).open('a') as f:
+          with Path(os.environ['GITHUB_STEP_SUMMARY']).open('a') as f:
               f.write('## Core Strict500\n\n')
               f.write(f'`{headline}`\n\n')
               f.write((work / 'progress-summary.txt').read_text())
+              f.write('\n### Unsupported feature census\n\n```text\n')
+              reason_lines = (work / 'reason-summary.txt').read_text().splitlines()
+              f.write('\n'.join(reason_lines[:80]))
+              if len(reason_lines) > 80:
+                  f.write(f'\n... {len(reason_lines) - 80} more lines in artifact')
+              f.write('\n```\n')
           if frontier['error'] != 0:
               print(f"CORE_STRICT500_ERRORS {frontier.get('errors', [])}")
           PY
@@ -90,5 +104,7 @@ jobs:
             build/strict500/frontier-summary.json
             build/strict500/progress-summary.json
             build/strict500/progress-summary.txt
+            build/strict500/reason-summary.txt
             build/strict500/headline.txt
+            build/strict500/minic-stderr
           if-no-files-found: warn
