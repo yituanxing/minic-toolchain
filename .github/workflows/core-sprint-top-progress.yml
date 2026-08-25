@@ -33,12 +33,12 @@ jobs:
           test "${{ steps.linux-corpus-cache.outputs.cache-hit }}" = true
           test -s build/linux-focus-corpus/selected-tus.txt
 
-      - name: Stage M120 single-iteration do-while-zero CFG
-        id: m120
+      - name: Stage M121 selective do-while-zero exit CFG
+        id: m121
         shell: bash
         run: |
           set -Eeuo pipefail
-          if grep -Fq 'M120_DO_WHILE_ZERO_SINGLE_ITERATION_CFG' src/core/core_lower.c; then
+          if grep -Fq 'M121_SELECTIVE_DO_WHILE_ZERO_EXIT_CFG' src/core/core_lower.c; then
             echo 'staged=false' >> "$GITHUB_OUTPUT"
           else
             python3 tools/ci/apply-m120-single-iteration-do-while-zero.py
@@ -110,8 +110,8 @@ jobs:
               print(f"CORE_STRICT500_ERRORS {frontier.get('errors', [])}")
           PY
 
-      - name: Validate staged M120 globally
-        if: steps.m120.outputs.staged == 'true'
+      - name: Validate staged M121 globally
+        if: steps.m121.outputs.staged == 'true'
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -130,31 +130,31 @@ jobs:
                          if family.get('family') == 'statement:MINIC_STATEMENT_BREAK']
           if frontier['error'] != 0 or frontier['preprocess_missing'] != 0:
               raise SystemExit(
-                  f"M120 global ERROR/missing: error={frontier['error']} "
+                  f"M121 global ERROR/missing: error={frontier['error']} "
                   f"missing={frontier['preprocess_missing']}"
               )
-          if frontier['pass'] < 373:
-              raise SystemExit(f"M120 global pass regression: {frontier['pass']} < 373")
+          if frontier['pass'] < 374:
+              raise SystemExit(f"M121 global pass regression: {frontier['pass']} < 374")
           if bad:
-              raise SystemExit(f"M120 required PASS regressions: {bad}")
+              raise SystemExit(f"M121 required PASS regressions: {bad}")
           if stale_break:
-              raise SystemExit(f"M120 stale BREAK frontier remains: {stale_break}")
+              raise SystemExit(f"M121 stale BREAK frontier remains: {stale_break}")
           print(
-              f"CORE_M120_GLOBAL_ACCEPT pass={frontier['pass']} "
+              f"CORE_M121_GLOBAL_ACCEPT pass={frontier['pass']} "
               f"unsupported={frontier['unsupported']} error=0"
           )
           PY
 
-      - name: Commit globally validated M120 semantic fix
-        if: steps.m120.outputs.staged == 'true'
+      - name: Commit globally validated M121 semantic fix
+        if: steps.m121.outputs.staged == 'true'
         shell: bash
         run: |
           set -Eeuo pipefail
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add src/core/core_lower.c
-          git diff --cached --quiet && { echo 'no M120 semantic changes'; exit 1; }
-          git commit -m 'core: lower do-while-zero as single-iteration CFG'
+          git diff --cached --quiet && { echo 'no M121 semantic changes'; exit 1; }
+          git commit -m 'core: selectively own do-while-zero exit CFG'
           git push origin HEAD:refactor/declaration-sema-v1
 
       - name: Persist strict500 result
