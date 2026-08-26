@@ -14,6 +14,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: refactor/declaration-sema-v1
           fetch-depth: 0
 
       - name: Restore frozen Linux corpus
@@ -35,11 +36,17 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
+          before_test_hash=$(git hash-object tests/compiler/c0/run.sh)
           python3 tools/ci/apply-m175b-qualification.py
+          python3 tools/ci/apply-m175-core-only-cut.py
           git diff --check
+          test "$before_test_hash" = "$(git hash-object tests/compiler/c0/run.sh)"
           grep -Fq 'M175B_SCALAR_DOUBLE_BRIDGE' src/core/core_lower.c
           grep -Fq 'M175B_SCALAR_RETURN_OWNER' src/core/core_lower.c
           grep -Fq 'M175C_LOCAL_COMPLETE_OBJECT_OWNER' src/frontend/parser_statement.c
+          ! git grep -n 'minic_riscv64_write_c0_program(' -- src
+          ! git grep -n 'minic_riscv64_emit_function(' -- src
+          echo 'M175B_FAST_CORE_ONLY_CUT=PASS tests=UNCHANGED'
 
       - name: Build candidate
         run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/m175b-fast500-compiler
