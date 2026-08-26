@@ -1,5 +1,5 @@
 #!/bin/sh
-set -eux
+set -eu
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
 minic=${MINIC:-"$root/build/debug/bin/minic"}
@@ -43,11 +43,10 @@ compile_success \
 grep -F ".type preserve_value, @function" "$work/const_local.s" >/dev/null
 grep -F ".Lpreserve_value_core_bb" "$work/const_local.s" >/dev/null
 grep -F ".Lpreserve_value_core_return:" "$work/const_local.s" >/dev/null
-# The positive contract is semantic: the const local is initialized and then
-# participates in the add/multiply value flow.  Core may choose different
-# temporary registers or eventually keep the value in SSA without a local spill.
-grep -E '^[[:space:]]+addw[[:space:]]+' "$work/const_local.s" >/dev/null
-grep -E '^[[:space:]]+mulw[[:space:]]+' "$work/const_local.s" >/dev/null
+# Core emits XLEN arithmetic and then applies the semantic integer conversion;
+# keep this gate on operations rather than the legacy emitter's W-form choice.
+grep -E '^[[:space:]]+add[[:space:]]+' "$work/const_local.s" >/dev/null
+grep -E '^[[:space:]]+mul[[:space:]]+' "$work/const_local.s" >/dev/null
 grep -F "  call preserve_value" "$work/const_local.s" >/dev/null
 printf '%s\n' "PASS compiler/c0/const_local normalized=core-const-local"
 
