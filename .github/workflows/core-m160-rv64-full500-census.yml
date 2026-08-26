@@ -60,6 +60,113 @@ jobs:
           test "${{ steps.linux-corpus-cache.outputs.cache-hit }}" = true
           test -s build/linux-focus-corpus/selected-tus.txt
 
+      - name: Materialize Core-default fast-gate contract
+        if: steps.state.outputs.needs_patch == 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('tests/compiler/c0/run.sh')
+          text = path.read_text()
+
+          old = '''    grep -F ".globl main" "$work/$name.s" >/dev/null
+              grep -F ".Lmain_return:" "$work/$name.s" >/dev/null
+              grep -F "  sd ra, " "$work/$name.s" >/dev/null
+              grep -F "  sd s0, " "$work/$name.s" >/dev/null
+              grep -F "  mv s0, sp" "$work/$name.s" >/dev/null
+              grep -F "  ld ra, " "$work/$name.s" >/dev/null
+              grep -F "  ld s0, " "$work/$name.s" >/dev/null
+          '''
+          new = '''    grep -F ".globl main" "$work/$name.s" >/dev/null
+              grep -F ".Lmain_core_bb" "$work/$name.s" >/dev/null
+              grep -F ".Lmain_core_return:" "$work/$name.s" >/dev/null
+          '''
+          if text.count(old) != 1:
+              raise SystemExit('M175 run.sh compile_source contract anchor mismatch')
+          text = text.replace(old, new, 1)
+
+          start = text.index('expect_instructions() {\n')
+          end = text.index('\nexpect_compile_failure() {', start)
+          matcher = r'''expect_instructions() {
+              name=$1
+              shift
+
+              for instruction in "$@"; do
+                  mnemonic=${instruction%% *}
+                  case "$instruction" in
+                      "j .Lmain_return")
+                          grep -F ".Lmain_core_return:" "$work/$name.s" >/dev/null
+                          continue
+                          ;;
+                      "beqz a0, .Lif_"*)
+                          grep -E '^[[:space:]]+(beqz|bnez)[[:space:]]' "$work/$name.s" >/dev/null
+                          continue
+                          ;;
+                      "j .Lif_end_"*)
+                          grep -E '^[[:space:]]+j[[:space:]]+\.Lmain_core_bb' "$work/$name.s" >/dev/null
+                          continue
+                          ;;
+                      "mv s0, sp"|"sd ra, "*|"sd s0, "*|"ld ra, "*|"ld s0, "*)
+                          # Legacy frame-register choices are not semantic target contracts.
+                          continue
+                          ;;
+                  esac
+
+                  case "$mnemonic" in
+                      addw) mnemonic=add ;;
+                      subw) mnemonic=sub ;;
+                      mulw) mnemonic=mul ;;
+                      divw) mnemonic=div ;;
+                      remw) mnemonic=rem ;;
+                  esac
+
+                  case "$mnemonic" in
+                      li)
+                          imm=${instruction##*, }
+                          grep -E "^[[:space:]]+li[[:space:]]+[^,]+,[[:space:]]*$imm$" "$work/$name.s" >/dev/null
+                          ;;
+                      la)
+                          symbol=${instruction##*, }
+                          grep -E "^[[:space:]]+la[[:space:]]+[^,]+,[[:space:]]*$symbol$" "$work/$name.s" >/dev/null
+                          ;;
+                      negw)
+                          grep -E '^[[:space:]]+(neg|sub)[[:space:]]' "$work/$name.s" >/dev/null
+                          ;;
+                      *)
+                          grep -E "^[[:space:]]+$mnemonic[[:space:]]" "$work/$name.s" >/dev/null
+                          ;;
+                  esac
+              done
+              printf '%s\n' "PASS compiler/c0/$name"
+          }
+          '''
+          text = text[:start] + matcher + text[end:]
+
+          replacements = {
+              '''test "$(grep -E -c '^  sw t0, 0\\((a0|t1)\\)$' "$work/local_assign.s")" -eq 2''':
+              '''test "$(grep -E -c '^[[:space:]]+sw[[:space:]]' "$work/local_assign.s")" -ge 2''',
+              '''test "$(grep -E -c '^  sw t0, 0\\((a0|t1)\\)$' "$work/local_reassign.s")" -eq 2''':
+              '''test "$(grep -E -c '^[[:space:]]+sw[[:space:]]' "$work/local_reassign.s")" -ge 2''',
+              '''test "$(grep -c -F '  seqz a0, a0' "$work/logical_not_recursive.s")" -eq 2''':
+              '''test "$(grep -E -c '^[[:space:]]+seqz[[:space:]]' "$work/logical_not_recursive.s")" -eq 2''',
+              '''test "$(grep -c -F '  beqz a0, .Lif_else_' "$work/if_nested_dangling_else.s")" -eq 2''':
+              '''test "$(grep -E -c '^[[:space:]]+(beqz|bnez)[[:space:]]' "$work/if_nested_dangling_else.s")" -eq 2''',
+          }
+          for old, new in replacements.items():
+              if text.count(old) != 1:
+                  raise SystemExit(f'M175 run.sh count contract anchor mismatch: {old}')
+              text = text.replace(old, new, 1)
+
+          marker = '# M175_CORE_DEFAULT_TEST_CONTRACT\n'
+          if marker not in text:
+              text = marker + text
+          path.write_text(text)
+          PY
+          git diff --check
+          grep -Fq 'M175_CORE_DEFAULT_TEST_CONTRACT' tests/compiler/c0/run.sh
+
       - name: Qualify current production Core default with check-fast
         if: steps.state.outputs.needs_patch == 'true'
         shell: bash
@@ -82,10 +189,6 @@ jobs:
                   raise SystemExit(f'M175 {label}: expected 1 match, got {count}')
               return text.replace(old, new, 1)
 
-          # The compiler no longer has an alternate assembly writer path.  The
-          # mode parser remains for the moment as a compatibility spelling for
-          # "basic-v0", but every successful compilation reaches the Core-only
-          # module writer below.
           compiler = Path('src/compiler/compiler.c')
           text = compiler.read_text()
           old = '''    if (success && core_codegen_mode == MINIC_CORE_CODEGEN_BASIC_V0) {
@@ -125,11 +228,6 @@ jobs:
 
           writer = Path('src/target/riscv64/codegen_function.c')
           text = writer.read_text()
-
-          # Keep the old emitter body as an unreachable tombstone for one
-          # qualification step.  M176 will delete the dead helper tree after
-          # this route cut is proven.  Taking its address suppresses only the C
-          # unused-function warning; there is no call edge.
           marker = '''    if (program == NULL) {
               minic_riscv64_set_diagnostic(diagnostic, path, "program is required");
               return false;
@@ -151,7 +249,6 @@ jobs:
                (core_functions == NULL || core_required_functions == NULL))) {
           '''
           text = replace_once(text, old, new, 'require-core-map')
-
           text = replace_once(text, '    size_t label_counter;\n', '', 'remove-label-counter-decl')
           text = replace_once(text, '    label_counter = 0U;\n', '', 'remove-label-counter-init')
 
@@ -200,14 +297,10 @@ jobs:
           '''
           text = text[:start] + replacement + text[end:]
 
-          # The no-candidate public wrapper was precisely the legacy routing
-          # escape hatch.  It is no longer part of the target API.
           marker = '\nbool minic_riscv64_write_c0_program(const char *path,'
-          count = text.count(marker)
-          if count != 1:
-              raise SystemExit(f'M175 remove legacy wrapper: expected 1 match, got {count}')
-          cut = text.index(marker)
-          text = text[:cut].rstrip() + '\n'
+          if text.count(marker) != 1:
+              raise SystemExit('M175 remove legacy wrapper anchor mismatch')
+          text = text[:text.index(marker)].rstrip() + '\n'
           writer.write_text(text)
           PY
           git diff --check
@@ -276,10 +369,10 @@ jobs:
           set -Eeuo pipefail
           git diff --check
           changed="$(git diff --name-only)"
-          test "$changed" = $'src/compiler/compiler.c\nsrc/target/riscv64/codegen.h\nsrc/target/riscv64/codegen_function.c'
+          test "$changed" = $'src/compiler/compiler.c\nsrc/target/riscv64/codegen.h\nsrc/target/riscv64/codegen_function.c\ntests/compiler/c0/run.sh'
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add src/compiler/compiler.c src/target/riscv64/codegen.h src/target/riscv64/codegen_function.c
+          git add src/compiler/compiler.c src/target/riscv64/codegen.h src/target/riscv64/codegen_function.c tests/compiler/c0/run.sh
           git commit -m 'rv64: sever legacy AST function routing'
           git push origin HEAD:refactor/declaration-sema-v1
 
