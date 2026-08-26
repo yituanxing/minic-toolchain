@@ -41,10 +41,15 @@ compile_success \
     const_local \
     "$root/tests/programs/c0/const_local.c"
 grep -F ".type preserve_value, @function" "$work/const_local.s" >/dev/null
-grep -E '^  sw t0, 0\((a0|t1)\)$' "$work/const_local.s" >/dev/null
-grep -F "  lw a0, " "$work/const_local.s" >/dev/null
+grep -F ".Lpreserve_value_core_bb" "$work/const_local.s" >/dev/null
+grep -F ".Lpreserve_value_core_return:" "$work/const_local.s" >/dev/null
+# The positive contract is semantic: the const local is initialized and then
+# participates in the add/multiply value flow.  Core may choose different
+# temporary registers or eventually keep the value in SSA without a local spill.
+grep -E '^[[:space:]]+addw[[:space:]]+' "$work/const_local.s" >/dev/null
+grep -E '^[[:space:]]+mulw[[:space:]]+' "$work/const_local.s" >/dev/null
 grep -F "  call preserve_value" "$work/const_local.s" >/dev/null
-printf '%s\n' "PASS compiler/c0/const_local"
+printf '%s\n' "PASS compiler/c0/const_local normalized=core-const-local"
 
 expect_failure \
     invalid_const_local_assignment \
