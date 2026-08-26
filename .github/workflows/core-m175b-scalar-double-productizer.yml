@@ -76,8 +76,73 @@ jobs:
           p.write_text(s.replace(old, new, 1))
           PY
           python3 tools/ci/apply-m175b-scalar-double.py
+
+          # The first M175B run proved that the IR/RV64 conversion vocabulary
+          # builds, but exposed two missing shared scalar-owner seams before
+          # codegen: double assignment identity and scalar return ownership.
+          # Keep this correction deliberately narrow: no floating arithmetic or
+          # floating call ABI is admitted by this milestone.
+          python3 - <<'PY'
+          from pathlib import Path
+
+          p = Path('src/core/core_lower.c')
+          s = p.read_text()
+
+          assignment_anchor = '''    if (source_value >= context->function->value_count) {
+              return MINIC_CORE_LOWER_ERROR;
+          }
+          if (minic_type_is_pointer(target_type)) {
+          '''
+          assignment_replacement = '''    if (source_value >= context->function->value_count) {
+              return MINIC_CORE_LOWER_ERROR;
+          }
+          if (minic_type_is_double(target_type)) {
+              MinicType source_type;
+
+              if (!core_scalar_expression_value_type(context->body, expression, &source_type) ||
+                  !minic_type_is_double(source_type) ||
+                  !minic_type_equal(source_type, target_type)) {
+                  return MINIC_CORE_LOWER_UNSUPPORTED;
+              }
+              if (!minic_type_equal(context->function->values[source_value].type, source_type)) {
+                  return MINIC_CORE_LOWER_ERROR;
+              }
+              *value_id = source_value;
+              return MINIC_CORE_LOWER_OK;
+          }
+          if (minic_type_is_pointer(target_type)) {
+          '''
+          count = s.count(assignment_anchor)
+          if count != 1:
+              raise SystemExit(f'M175B scalar assignment anchor count={count}')
+          s = s.replace(assignment_anchor, assignment_replacement, 1)
+
+          return_function = s.find('static MinicCoreLowerStatus lower_return(')
+          return_start = s.find(
+              '        if (minic_type_is_integer(context->source_function->return_type)) {\n',
+              return_function,
+          )
+          record_start = s.find(
+              '        } else if (minic_type_is_record(context->source_function->return_type)) {\n',
+              return_start,
+          )
+          if return_function < 0 or return_start < 0 or record_start < 0:
+              raise SystemExit('M175B scalar return owner anchor missing')
+          new_return = '''        if (core_memory_scalar_type(context->source_function->return_type)) {
+              /* M175B_SCALAR_RETURN_OWNER: all Core memory scalars use the same
+                 C assignment/value transport at the return boundary. */
+              status = lower_scalar_assignment_value(context,
+                                                     context->source_function->return_type,
+                                                     statement->expression,
+                                                     &terminator.return_value);
+          '''
+          s = s[:return_start] + new_return + s[record_start:]
+          p.write_text(s)
+          PY
+
           git diff --check
           grep -Fq 'M175B_SCALAR_DOUBLE_BRIDGE' src/core/core_lower.c
+          grep -Fq 'M175B_SCALAR_RETURN_OWNER' src/core/core_lower.c
           grep -Fq 'MINIC_CORE_INSTRUCTION_FLOATING_CONSTANT' src/core/core_ir.h
           grep -Fq 'MINIC_CORE_INSTRUCTION_INTEGER_TO_DOUBLE' src/core/core_ir.h
           grep -Fq 'MINIC_CORE_INSTRUCTION_DOUBLE_TO_INTEGER' src/core/core_ir.h
