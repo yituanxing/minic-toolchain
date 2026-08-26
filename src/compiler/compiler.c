@@ -182,7 +182,8 @@ static bool minic_core_codegen_mode(const char *input_path,
     }
     value = getenv("MINIC_CORE_CODEGEN");
     if (value == NULL || value[0] == '\0') {
-        *mode = MINIC_CORE_CODEGEN_DISABLED;
+        /* M174_CORE_ONLY_DEFAULT: ordinary RV64 compilation uses Core. */
+        *mode = MINIC_CORE_CODEGEN_BASIC_V0;
         return true;
     }
     if (strcmp(value, "basic-v0") == 0) {
@@ -337,9 +338,10 @@ int minic_compile_preprocessed_file(const char *input_path,
         return 1;
     }
     core_validation_mode = core_shadow_mode;
-    if (core_codegen_mode != MINIC_CORE_CODEGEN_DISABLED &&
-        core_validation_mode == MINIC_CORE_SHADOW_DISABLED) {
-        core_validation_mode = MINIC_CORE_SHADOW_OPTIONAL;
+    if (core_codegen_mode != MINIC_CORE_CODEGEN_DISABLED) {
+        /* Core code generation is fail-closed: no defined function may
+           fall back to the legacy AST body emitter. */
+        core_validation_mode = MINIC_CORE_SHADOW_STRICT;
     }
 
     buffer.data = NULL;
