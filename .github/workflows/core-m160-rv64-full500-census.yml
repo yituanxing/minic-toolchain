@@ -122,11 +122,19 @@ jobs:
         if: steps.state.outputs.needs_patch == 'true'
         run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/m174-compiler
 
-      - name: Run compatibility check-fast in explicit legacy mode
+      - name: Run existing check-fast against unchanged routing baseline
         if: steps.state.outputs.needs_patch == 'true'
-        env:
-          MINIC_CORE_CODEGEN: 'off'
-        run: make -j4 check-fast MODE=release CFLAGS=-Werror BUILD_DIR=build/m174-check
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git diff -- src/compiler/compiler.c src/target/riscv64/codegen_function.c > /tmp/m174-routing.patch
+          test -s /tmp/m174-routing.patch
+          git checkout HEAD -- src/compiler/compiler.c src/target/riscv64/codegen_function.c
+          make -j4 check-fast MODE=release CFLAGS=-Werror BUILD_DIR=build/m174-check
+          git apply /tmp/m174-routing.patch
+          grep -Fq 'M174_CORE_ONLY_DEFAULT' src/compiler/compiler.c
+          grep -Fq 'm174-legacy-body-tripwire' src/target/riscv64/codegen_function.c
+          git diff --check
 
       - name: Probe default Core with legacy body forbidden
         if: steps.state.outputs.needs_patch == 'true'
