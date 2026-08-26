@@ -179,6 +179,16 @@ jobs:
           grep -F '.Lmain_core_return:' "$work/double-to-int.s" >/dev/null
           printf '%s\n' 'CORE_M175B_STRICT_REGRESSION int-to-double=PASS double-local=PASS double-to-int=PASS double-return=PASS'
 
+      - name: Materialize Core fast contracts
+        if: steps.state.outputs.needs_patch == 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 tools/ci/apply-core-fast-contracts.py
+          git diff --check
+          grep -Fq 'normalized=core-contract' tests/compiler/c0/run.sh
+          grep -Fq '.Lmain_core_return:' tests/compiler/c0/run.sh
+
       - name: Run Core-default check-fast
         if: steps.state.outputs.needs_patch == 'true'
         run: make -j4 check-fast MODE=release CFLAGS=-Werror BUILD_DIR=build/m175b-fast
@@ -228,8 +238,8 @@ jobs:
           git diff --check
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add src/core/core_ir.h src/core/core_ir.c src/core/core_lower.c src/target/riscv64/core_codegen.c
-          git diff --cached --quiet && { echo 'no M175B semantic changes'; exit 1; }
+          git add src/core/core_ir.h src/core/core_ir.c src/core/core_lower.c src/target/riscv64/core_codegen.c tests/compiler/c0/run.sh
+          git diff --cached --quiet && { echo 'no M175B semantic or Core contract changes'; exit 1; }
           git commit -m 'core: add narrow scalar double bridge'
           git push origin HEAD:refactor/declaration-sema-v1
 
