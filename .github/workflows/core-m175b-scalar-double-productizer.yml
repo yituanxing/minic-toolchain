@@ -1,4 +1,4 @@
-name: Core M175B Scalar Double Productizer
+name: Core M175B Scalar Double + M175 Core-Only Cut
 
 on:
   pull_request:
@@ -23,21 +23,26 @@ jobs:
           ref: refactor/declaration-sema-v1
           fetch-depth: 0
 
-      - name: Detect M175B state
+      - name: Detect M175B and Core-only state
         id: state
         shell: bash
         run: |
           set -Eeuo pipefail
-          if grep -Fq 'M175B_SCALAR_DOUBLE_BRIDGE' src/core/core_lower.c; then
-            echo 'needs_patch=false' >> "$GITHUB_OUTPUT"
-            echo "M175B_ALREADY_PRODUCTIZED head=$(git rev-parse HEAD)"
+          needs_m175b=true
+          needs_cut=true
+          grep -Fq 'M175B_SCALAR_DOUBLE_BRIDGE' src/core/core_lower.c && needs_m175b=false
+          grep -Fq 'M175_LEGACY_FUNCTION_ROUTE_REMOVED' src/compiler/compiler.c && needs_cut=false
+          echo "needs_m175b=$needs_m175b" >> "$GITHUB_OUTPUT"
+          echo "needs_cut=$needs_cut" >> "$GITHUB_OUTPUT"
+          if [ "$needs_m175b" = true ] || [ "$needs_cut" = true ]; then
+            echo 'needs_work=true' >> "$GITHUB_OUTPUT"
           else
-            echo 'needs_patch=true' >> "$GITHUB_OUTPUT"
-            echo "M175B_SOURCE_HEAD=$(git rev-parse HEAD)"
+            echo 'needs_work=false' >> "$GITHUB_OUTPUT"
           fi
+          printf 'M175_STATE head=%s needs_m175b=%s needs_cut=%s\n' "$(git rev-parse HEAD)" "$needs_m175b" "$needs_cut"
 
       - name: Restore frozen Linux corpus
-        if: steps.state.outputs.needs_patch == 'true'
+        if: steps.state.outputs.needs_work == 'true'
         id: corpus
         uses: actions/cache/restore@v4
         with:
@@ -45,15 +50,15 @@ jobs:
           key: linux-focus-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-${{ hashFiles('tests/external/linux/replay-indices.txt') }}
 
       - name: Require frozen corpus
-        if: steps.state.outputs.needs_patch == 'true'
+        if: steps.state.outputs.needs_work == 'true'
         shell: bash
         run: |
           set -Eeuo pipefail
           test "${{ steps.corpus.outputs.cache-hit }}" = true
           test -s build/linux-focus-corpus/selected-tus.txt
 
-      - name: Materialize M175B qualification candidate
-        if: steps.state.outputs.needs_patch == 'true'
+      - name: Materialize M175B semantic candidate
+        if: steps.state.outputs.needs_m175b == 'true'
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -66,20 +71,42 @@ jobs:
           grep -Fq 'MINIC_CORE_INSTRUCTION_INTEGER_TO_DOUBLE' src/core/core_ir.h
           grep -Fq 'MINIC_CORE_INSTRUCTION_DOUBLE_TO_INTEGER' src/core/core_ir.h
 
-      - name: Build patched compiler
-        if: steps.state.outputs.needs_patch == 'true'
-        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/m175b-compiler
-
-      - name: Run cast fast target
-        if: steps.state.outputs.needs_patch == 'true'
-        run: make -j4 check-cast-expressions MODE=release CFLAGS=-Werror BUILD_DIR=build/m175b-cast
-
-      - name: Run isolated scalar double strict regressions
-        if: steps.state.outputs.needs_patch == 'true'
+      - name: Sever legacy AST to RV64 function route
+        if: steps.state.outputs.needs_cut == 'true'
         shell: bash
         run: |
           set -Eeuo pipefail
-          compiler="$GITHUB_WORKSPACE/build/m175b-compiler/bin/minic"
+          before_test_hash=$(git hash-object tests/compiler/c0/run.sh)
+          python3 tools/ci/apply-m175-core-only-cut.py
+          git diff --check
+          test "$before_test_hash" = "$(git hash-object tests/compiler/c0/run.sh)"
+          grep -Fq 'M175_LEGACY_FUNCTION_ROUTE_REMOVED' src/compiler/compiler.c
+          ! git grep -n 'minic_riscv64_write_c0_program(' -- src
+          ! git grep -n 'minic_riscv64_emit_function(' -- src
+          printf '%s\n' 'M175_ROUTE_CUT legacy-ast-rv64=ABSENT test-contracts=UNCHANGED'
+
+      - name: Assert test contracts are unchanged
+        if: steps.state.outputs.needs_work == 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git diff --exit-code -- tests/compiler/c0/run.sh
+          echo 'M175_TEST_CONTRACT_POLICY unchanged=PASS'
+
+      - name: Build Core-only candidate
+        if: steps.state.outputs.needs_work == 'true'
+        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/m175-core-only
+
+      - name: Run cast fast target
+        if: steps.state.outputs.needs_work == 'true'
+        run: make -j4 check-cast-expressions MODE=release CFLAGS=-Werror BUILD_DIR=build/m175-cast
+
+      - name: Run isolated scalar double strict regressions
+        if: steps.state.outputs.needs_work == 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          compiler="$GITHUB_WORKSPACE/build/m175-core-only/bin/minic"
           work="$GITHUB_WORKSPACE/build/m175b-regression"
           mkdir -p "$work"
 
@@ -93,29 +120,23 @@ jobs:
           MINIC_CORE_IR=strict CORE_FAST_TRACE=1 "$compiler" -S "$work/double-to-int.i" -o "$work/double-to-int.s"
           grep -E '^[[:space:]]+fcvt\.w\.d[[:space:]]+[^,]+,[[:space:]]*[^,]+,[[:space:]]*rtz$' "$work/double-to-int.s" >/dev/null
           grep -F '.Lmain_core_return:' "$work/double-to-int.s" >/dev/null
-          printf '%s\n' 'CORE_M175B_STRICT_REGRESSION int-to-double=PASS double-local=PASS double-to-int=PASS double-return=PASS'
+          printf '%s\n' 'CORE_M175B_STRICT_REGRESSION int-to-double=PASS double-to-int=PASS'
 
       - name: Qualify local complete object diagnostics
-        if: steps.state.outputs.needs_patch == 'true'
-        run: make -j4 check-pointer-members MODE=release CFLAGS=-Werror BUILD_DIR=build/m175b-pointer
+        if: steps.state.outputs.needs_work == 'true'
+        run: make -j4 check-pointer-members MODE=release CFLAGS=-Werror BUILD_DIR=build/m175-pointer
 
-      - name: Materialize Core fast contracts
-        if: steps.state.outputs.needs_patch == 'true'
+      - name: Run unchanged Core-default check-fast
+        if: steps.state.outputs.needs_work == 'true'
+        run: make -j4 check-fast MODE=release CFLAGS=-Werror BUILD_DIR=build/m175-fast
+
+      - name: Replay strict full500 on Core-only source
+        if: steps.state.outputs.needs_work == 'true'
         shell: bash
         run: |
           set -Eeuo pipefail
-          python3 tools/ci/apply-core-fast-contracts.py
-          git diff --check
-          grep -Fq 'normalized=core-contract' tests/compiler/c0/run.sh
-          grep -Fq '.Lmain_core_return:' tests/compiler/c0/run.sh
-
-      - name: Replay strict full500
-        if: steps.state.outputs.needs_patch == 'true'
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          compiler="$GITHUB_WORKSPACE/build/m175b-compiler/bin/minic"
-          work="$GITHUB_WORKSPACE/build/m175b-full500"
+          compiler="$GITHUB_WORKSPACE/build/m175-core-only/bin/minic"
+          work="$GITHUB_WORKSPACE/build/m175-full500"
           set +e
           MINIC_CORE_IR=strict CORE_FAST_TRACE=1 python3 tests/external/linux/corpus_replay.py \
             --minic "$compiler" \
@@ -127,7 +148,7 @@ jobs:
             --sample-count 0
           replay_status=$?
           set -e
-          printf 'CORE_M175B_FULL500_REPLAY_STATUS=%d\n' "$replay_status"
+          printf 'M175_CORE_ONLY_FULL500_REPLAY_STATUS=%d\n' "$replay_status"
           python3 tools/ci/classify-core-strict-frontier.py \
             "$work/batch-results.json" \
             --stderr-root "$work/minic-stderr" \
@@ -139,36 +160,41 @@ jobs:
           python3 - <<'PY'
           import json
           from pathlib import Path
-          work = Path('build/m175b-full500')
+          work = Path('build/m175-full500')
           summary = json.loads((work / 'frontier-summary.json').read_text())
           if summary['selected'] != 500 or summary['pass'] != 500 or summary['unsupported'] != 0 or summary['error'] != 0 or summary['preprocess_missing'] != 0:
-              raise SystemExit(f'M175B requires exact strict500 500/500: {summary}')
-          print('CORE_M175B_FULL500 selected=500 pass=500 unsupported=0 error=0')
+              raise SystemExit(f'M175 Core-only requires exact strict500 500/500: {summary}')
+          print('M175_CORE_ONLY_FULL500 selected=500 pass=500 unsupported=0 error=0')
           PY
 
-      - name: Run Core-default check-fast
-        if: steps.state.outputs.needs_patch == 'true'
-        run: make -j4 check-fast MODE=release CFLAGS=-Werror BUILD_DIR=build/m175b-fast
-
-      - name: Productize M175B
-        if: steps.state.outputs.needs_patch == 'true'
+      - name: Productize semantic candidate and Core-only cut
+        if: steps.state.outputs.needs_work == 'true'
         shell: bash
         run: |
           set -Eeuo pipefail
           git diff --check
+          git diff --exit-code -- tests/compiler/c0/run.sh
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add src/core/core_ir.h src/core/core_ir.c src/core/core_lower.c src/target/riscv64/core_codegen.c src/frontend/parser_statement.c tests/compiler/c0/run.sh
-          git diff --cached --quiet && { echo 'no M175B semantic or Core contract changes'; exit 1; }
-          git commit -m 'core: add narrow scalar double bridge'
+          git add \
+            src/compiler/compiler.c \
+            src/core/core_ir.h \
+            src/core/core_ir.c \
+            src/core/core_lower.c \
+            src/target/riscv64/core_codegen.c \
+            src/target/riscv64/codegen.h \
+            src/target/riscv64/codegen_function.c \
+            src/frontend/parser_statement.c
+          git diff --cached --quiet && { echo 'no M175 semantic/Core-only source changes'; exit 1; }
+          git commit -m 'core: sever legacy RV64 function route'
           git push origin HEAD:refactor/declaration-sema-v1
 
-      - name: Persist M175B evidence
-        if: always() && steps.state.outputs.needs_patch == 'true'
+      - name: Persist M175 evidence
+        if: always() && steps.state.outputs.needs_work == 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: core-m175b-scalar-double-${{ github.sha }}
+          name: core-m175-core-only-${{ github.sha }}
           path: |
             build/m175b-regression/**
-            build/m175b-full500/**
+            build/m175-full500/**
           if-no-files-found: warn
