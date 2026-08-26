@@ -45,6 +45,7 @@ typedef enum MinicCoreCallFrameAddressKind {
     MINIC_CORE_CALL_FRAME_ADDRESS_FRAME
 } MinicCoreCallFrameAddressKind;
 
+/* M158_FINAL_STRICT_TAIL */
 typedef enum MinicCoreInstructionKind {
     MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT = 0,
     MINIC_CORE_INSTRUCTION_INTEGER_ADD,
@@ -65,6 +66,8 @@ typedef enum MinicCoreInstructionKind {
     MINIC_CORE_INSTRUCTION_SCALAR_BITCAST,
     MINIC_CORE_INSTRUCTION_INTEGER_NEGATE,
     MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_NOT,
+    /* M158_FINAL_STRICT_TAIL: semantic count-trailing-zero primitive. */
+    MINIC_CORE_INSTRUCTION_INTEGER_CTZ,
     MINIC_CORE_INSTRUCTION_SCALAR_IS_ZERO,
     MINIC_CORE_INSTRUCTION_PARAMETER,
     MINIC_CORE_INSTRUCTION_FIXED_REGISTER_READ,
@@ -106,6 +109,8 @@ typedef enum MinicCoreInstructionKind {
 typedef enum MinicCoreTerminatorKind {
     MINIC_CORE_TERMINATOR_RETURN = 0,
     MINIC_CORE_TERMINATOR_BRANCH,
+    /* M158_FINAL_STRICT_TAIL: GNU computed goto consumes a pointer value. */
+    MINIC_CORE_TERMINATOR_INDIRECT_BRANCH,
     MINIC_CORE_TERMINATOR_CONDITIONAL_BRANCH,
     MINIC_CORE_TERMINATOR_UNREACHABLE
 } MinicCoreTerminatorKind;
@@ -339,6 +344,7 @@ typedef struct MinicCoreTerminator {
     MinicCoreValueId return_value;
     MinicCoreObjectId return_object;
     MinicCoreBlockId branch_target;
+    MinicCoreValueId indirect_target;
     struct {
         MinicCoreValueId condition;
         MinicCoreBlockId when_true;

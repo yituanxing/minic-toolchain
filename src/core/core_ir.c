@@ -852,6 +852,15 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
                available_values[instruction->value.operand] &&
                minic_type_equal(function->values[instruction->value.operand].type,
                                 instruction->type);
+    /* M158_FINAL_STRICT_TAIL_CTZ_VERIFY: __builtin_ctzl has an
+       unsigned-long operand and int result in the normalized AST. */
+    case MINIC_CORE_INSTRUCTION_INTEGER_CTZ:
+        return instruction_result_is_valid(function, instruction) &&
+               minic_type_equal(instruction->type, minic_type_int()) &&
+               instruction->value.operand < function->value_count &&
+               available_values[instruction->value.operand] &&
+               minic_type_equal(function->values[instruction->value.operand].type,
+                                minic_type_unsigned_long());
     case MINIC_CORE_INSTRUCTION_SCALAR_IS_ZERO:
         return instruction_result_is_valid(function, instruction) &&
                minic_type_equal(instruction->type, minic_type_int()) &&
@@ -1449,6 +1458,13 @@ static bool terminator_is_valid(const MinicCoreFunction *function,
                terminator->return_object == MINIC_CORE_OBJECT_INVALID;
     case MINIC_CORE_TERMINATOR_BRANCH:
         return terminator->branch_target < function->block_count;
+    /* M158_FINAL_STRICT_TAIL_INDIRECT_BRANCH_VERIFY: the source
+       expression was accepted by GNU goto semantics; Core owns only
+       the pointer-valued dynamic control-flow edge. */
+    case MINIC_CORE_TERMINATOR_INDIRECT_BRANCH:
+        return terminator->indirect_target < function->value_count &&
+               available_values[terminator->indirect_target] &&
+               minic_type_is_pointer(function->values[terminator->indirect_target].type);
     case MINIC_CORE_TERMINATOR_CONDITIONAL_BRANCH:
         return terminator->conditional.condition < function->value_count &&
                available_values[terminator->conditional.condition] &&
@@ -1749,6 +1765,11 @@ static bool dump_instruction(FILE *output,
     case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_NOT:
         return fprintf(output,
                        "  %%%" PRIu32 " = inot %%%" PRIu32 "\n",
+                       instruction->result,
+                       instruction->value.operand) >= 0;
+    case MINIC_CORE_INSTRUCTION_INTEGER_CTZ:
+        return fprintf(output,
+                       "  %%%" PRIu32 " = ctz.int %%%" PRIu32 "\n",
                        instruction->result,
                        instruction->value.operand) >= 0;
     case MINIC_CORE_INSTRUCTION_SCALAR_IS_ZERO:
@@ -2077,6 +2098,9 @@ static bool dump_terminator(FILE *output,
         return fprintf(output, "  unreachable\n") >= 0;
     case MINIC_CORE_TERMINATOR_BRANCH:
         return fprintf(output, "  br bb%" PRIu32 "\n", terminator->branch_target) >= 0;
+    case MINIC_CORE_TERMINATOR_INDIRECT_BRANCH:
+        return fprintf(output, "  indirect_br %%%" PRIu32 "\n",
+                       terminator->indirect_target) >= 0;
     case MINIC_CORE_TERMINATOR_CONDITIONAL_BRANCH:
         return fprintf(output,
                        "  cond_br %%%" PRIu32 ", bb%" PRIu32 ", bb%" PRIu32 "\n",

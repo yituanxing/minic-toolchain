@@ -1272,6 +1272,7 @@ static bool core_instruction_supported(const MinicC0Program *program,
     case MINIC_CORE_INSTRUCTION_INTEGER_CONVERSION:
     case MINIC_CORE_INSTRUCTION_INTEGER_NEGATE:
     case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_NOT:
+    case MINIC_CORE_INSTRUCTION_INTEGER_CTZ:
     case MINIC_CORE_INSTRUCTION_SCALAR_IS_ZERO:
         return true;
     case MINIC_CORE_INSTRUCTION_CALL_FRAME_ADDRESS:
@@ -2688,6 +2689,31 @@ static bool emit_instruction(FILE *file,
             return false;
         }
         return store_core_value(file, frame, instruction->result, "t0");
+    /* M158_FINAL_STRICT_TAIL_CTZ_RV64: RV64I baseline, intentionally
+       no Zbb dependency. Keep the legacy compiler's zero-input result (64). */
+    case MINIC_CORE_INSTRUCTION_INTEGER_CTZ:
+        if (!load_core_value(file, frame, instruction->value.operand, "t0") ||
+            fprintf(file,
+                    "  beqz t0, .L%s_core_ctz_zero_%" PRIu32 "\n"
+                    "  li t1, 0\n"
+                    ".L%s_core_ctz_loop_%" PRIu32 ":\n"
+                    "  andi t2, t0, 1\n"
+                    "  bnez t2, .L%s_core_ctz_done_%" PRIu32 "\n"
+                    "  addi t1, t1, 1\n"
+                    "  srli t0, t0, 1\n"
+                    "  j .L%s_core_ctz_loop_%" PRIu32 "\n"
+                    ".L%s_core_ctz_zero_%" PRIu32 ":\n"
+                    "  li t1, 64\n"
+                    ".L%s_core_ctz_done_%" PRIu32 ":\n",
+                    symbol_name, instruction->result,
+                    symbol_name, instruction->result,
+                    symbol_name, instruction->result,
+                    symbol_name, instruction->result,
+                    symbol_name, instruction->result,
+                    symbol_name, instruction->result) < 0) {
+            return false;
+        }
+        return store_core_value(file, frame, instruction->result, "t1");
     case MINIC_CORE_INSTRUCTION_SCALAR_IS_ZERO:
         if (!load_core_value(file, frame, instruction->value.operand, "t0") ||
             fprintf(file, "  seqz t0, t0\n") < 0) {
@@ -2949,6 +2975,10 @@ static bool emit_terminator(FILE *file,
         return fprintf(
                    file, "  j .L%s_core_bb%" PRIu32 "\n", symbol_name, terminator->branch_target) >=
                0;
+    /* M158_FINAL_STRICT_TAIL_INDIRECT_BRANCH_RV64 */
+    case MINIC_CORE_TERMINATOR_INDIRECT_BRANCH:
+        return load_core_value(file, frame, terminator->indirect_target, "t0") &&
+               fprintf(file, "  jalr zero, t0, 0\n") >= 0;
     case MINIC_CORE_TERMINATOR_CONDITIONAL_BRANCH:
         if (!load_core_value(file, frame, terminator->conditional.condition, "t0") ||
             fprintf(file,

@@ -338,10 +338,23 @@ static MinicCoreLowerStatus lower_parameter_ingress(MinicCoreLowerContext *conte
             !minic_type_unqualified(parameter->type, &parameter_value_type) ||
             !minic_type_equal(parameter_value_type,
                               context->source_function->parameter_types[parameter_index])) {
+            (void)fprintf(stderr,
+                          "CORE_M158_INGRESS_DETAIL function=%s parameter=%zu "
+                          "volatile=%d array=%d register=%d\n",
+                          context->source_function->name,
+                          parameter_index,
+                          minic_type_is_volatile(parameter->type) ? 1 : 0,
+                          parameter->is_array ? 1 : 0,
+                          parameter->is_register_storage ? 1 : 0);
             return MINIC_CORE_LOWER_UNSUPPORTED;
         }
         status = lower_local_object(context, local_id, &object_id);
         if (status != MINIC_CORE_LOWER_OK) {
+            (void)fprintf(stderr,
+                          "CORE_M158_INGRESS_DETAIL function=%s parameter=%zu local_object_status=%d\n",
+                          context->source_function->name,
+                          parameter_index,
+                          (int)status);
             return status;
         }
 
@@ -360,6 +373,10 @@ static MinicCoreLowerStatus lower_parameter_ingress(MinicCoreLowerContext *conte
             continue;
         }
         if (!core_memory_scalar_type(parameter_value_type)) {
+            (void)fprintf(stderr,
+                          "CORE_M158_INGRESS_DETAIL function=%s parameter=%zu nonscalar=1\n",
+                          context->source_function->name,
+                          parameter_index);
             return MINIC_CORE_LOWER_UNSUPPORTED;
         }
         {
@@ -3089,6 +3106,40 @@ static MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
         if (statement_block == NULL) {
             return MINIC_CORE_LOWER_ERROR;
         }
+        /* M158_FINAL_STRICT_TAIL_VOID_STMT_EXPR: GNU macros commonly wrap an
+           effect expression as `(void)({ call(); })`.  Such a statement
+           expression has a real result expression id even though both that
+           result and the whole expression are void.  Execute the owned block,
+           then the result expression, and require that neither manufactures an
+           SSA value.  Scalar statement expressions keep the existing path. */
+        if (minic_type_is_void(expression->type) &&
+            expression->value.statement_expression.result != MINIC_EXPRESSION_INVALID) {
+            statement_result = minic_c0_program_expression(
+                context->body->program, expression->value.statement_expression.result);
+            if (statement_result == NULL) {
+                return MINIC_CORE_LOWER_ERROR;
+            }
+            if (!minic_type_is_void(statement_result->type)) {
+                return MINIC_CORE_LOWER_UNSUPPORTED;
+            }
+            status = lower_block(context, statement_block, &terminated);
+            if (status != MINIC_CORE_LOWER_OK) {
+                return status;
+            }
+            if (terminated) {
+                return MINIC_CORE_LOWER_UNSUPPORTED;
+            }
+            status = lower_expression(
+                context, expression->value.statement_expression.result, &result_value);
+            if (status != MINIC_CORE_LOWER_OK) {
+                return status;
+            }
+            if (result_value != MINIC_CORE_VALUE_INVALID) {
+                return MINIC_CORE_LOWER_ERROR;
+            }
+            *value_id = MINIC_CORE_VALUE_INVALID;
+            return MINIC_CORE_LOWER_OK;
+        }
         if (expression->value.statement_expression.result == MINIC_EXPRESSION_INVALID) {
             if (!minic_type_is_void(expression->type)) {
                 return MINIC_CORE_LOWER_ERROR;
@@ -3820,6 +3871,43 @@ static MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
         builtin_instruction.value.binary.right = digit_count;
         return minic_core_function_append_value_instruction(
                    context->function, context->block_id, &builtin_instruction, value_id)
+                   ? MINIC_CORE_LOWER_OK
+                   : MINIC_CORE_LOWER_ERROR;
+    }
+
+    /* M158_FINAL_STRICT_TAIL_CTZ_LOWER: keep the builtin semantic in
+       Core instead of expanding a target loop in the frontend.  The RV64
+       backend preserves the established ctzl(0) == 64 baseline behavior. */
+    if (expression->kind == MINIC_EXPRESSION_BUILTIN_UNARY &&
+        expression->value.builtin_unary.operator_kind == MINIC_BUILTIN_UNARY_CTZL) {
+        const MinicExpression *operand;
+        MinicCoreValueId operand_value;
+        MinicCoreLowerStatus status;
+
+        operand = minic_c0_program_expression(
+            context->body->program, expression->value.builtin_unary.operand);
+        if (operand == NULL || !minic_type_equal(operand->type, minic_type_unsigned_long()) ||
+            !minic_type_equal(expression->type, minic_type_int())) {
+            return MINIC_CORE_LOWER_UNSUPPORTED;
+        }
+        status = lower_expression(
+            context, expression->value.builtin_unary.operand, &operand_value);
+        if (status != MINIC_CORE_LOWER_OK) {
+            return status;
+        }
+        if (operand_value >= context->function->value_count ||
+            !minic_type_equal(context->function->values[operand_value].type,
+                              minic_type_unsigned_long())) {
+            return MINIC_CORE_LOWER_ERROR;
+        }
+        (void)memset(&instruction, 0, sizeof(instruction));
+        instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_CTZ;
+        instruction.span = expression->span;
+        instruction.type = minic_type_int();
+        instruction.result = MINIC_CORE_VALUE_INVALID;
+        instruction.value.operand = operand_value;
+        return minic_core_function_append_value_instruction(
+                   context->function, context->block_id, &instruction, value_id)
                    ? MINIC_CORE_LOWER_OK
                    : MINIC_CORE_LOWER_ERROR;
     }
@@ -7486,6 +7574,89 @@ static bool normalized_do_while_block_needs_exit(
    condition as MINIC_EXPRESSION_INVALID and appends its synthetic continue
    label to the loop body. Recognize the no-update variant explicitly so Core
    can distinguish `for (;;)` from an invalid source while statement. */
+/* M159_CONSTANT_TRUE_DO_WHILE_REACHABILITY_OWNER: parse_do_while lowers
+   every source do/while into an outer synthetic while(1), followed inside its
+   body by a synthetic continue label and `if (!source_condition) break`.
+   When source_condition is a compile-time nonzero integer and the original
+   body contains no break/continue edge that needs those synthetic nodes, that
+   tail is unreachable control metadata.  Strip it from the executable view so
+   the ordinary constant-true while CFG has no false exit predecessor. */
+static bool normalized_do_while_true_body(const MinicCoreLowerContext *context,
+                                          const MinicStatement *loop,
+                                          const MinicBlock *body,
+                                          MinicBlock *iteration_body) {
+    const MinicExpression *loop_condition;
+    const MinicExpression *negated_condition;
+    const MinicExpression *source_condition;
+    const MinicStatement *continue_label;
+    const MinicStatement *condition_check;
+    const MinicStatement *break_statement;
+    const MinicBlock *break_block;
+    MinicConstValue condition_value;
+    MinicStatementId continue_id;
+    bool is_zero;
+
+    if (context == NULL || context->body == NULL || context->body->program == NULL ||
+        context->target == NULL || loop == NULL || body == NULL || iteration_body == NULL ||
+        body->statement_count < 2U) {
+        return false;
+    }
+    loop_condition = minic_c0_program_expression(context->body->program, loop->expression);
+    continue_id = body->statements[body->statement_count - 2U];
+    continue_label = minic_c0_program_statement(context->body->program, continue_id);
+    condition_check = minic_c0_program_statement(
+        context->body->program, body->statements[body->statement_count - 1U]);
+    if (loop_condition == NULL || loop_condition->kind != MINIC_EXPRESSION_INTEGER ||
+        !minic_type_is_integer(loop_condition->type) || loop_condition->value.integer_value != 1 ||
+        continue_label == NULL || continue_label->kind != MINIC_STATEMENT_LABEL ||
+        continue_label->target_expression != MINIC_EXPRESSION_INVALID ||
+        continue_label->expression != MINIC_EXPRESSION_INVALID ||
+        continue_label->target_statement != MINIC_STATEMENT_INVALID ||
+        !source_position_equal(continue_label->span.begin, loop->span.begin) ||
+        condition_check == NULL || condition_check->kind != MINIC_STATEMENT_IF ||
+        condition_check->expression == MINIC_EXPRESSION_INVALID ||
+        condition_check->then_block == MINIC_BLOCK_INVALID ||
+        condition_check->else_block != MINIC_BLOCK_INVALID ||
+        !source_position_equal(condition_check->span.begin, loop->span.begin)) {
+        return false;
+    }
+    negated_condition =
+        minic_c0_program_expression(context->body->program, condition_check->expression);
+    if (negated_condition == NULL || negated_condition->kind != MINIC_EXPRESSION_UNARY ||
+        negated_condition->value.unary.operator_kind != MINIC_UNARY_LOGICAL_NOT) {
+        return false;
+    }
+    source_condition = minic_c0_program_expression(
+        context->body->program, negated_condition->value.unary.operand);
+    if (source_condition == NULL || !minic_type_is_integer(source_condition->type) ||
+        !minic_const_eval_integer(context->body->program,
+                                 context->target,
+                                 negated_condition->value.unary.operand,
+                                 &condition_value) ||
+        !minic_const_value_is_zero(context->body->program,
+                                   context->target,
+                                   &condition_value,
+                                   &is_zero) ||
+        is_zero) {
+        return false;
+    }
+    break_block = minic_c0_program_block(context->body->program, condition_check->then_block);
+    if (break_block == NULL || break_block->statement_count != 1U) {
+        return false;
+    }
+    break_statement = minic_c0_program_statement(context->body->program, break_block->statements[0]);
+    if (break_statement == NULL || break_statement->kind != MINIC_STATEMENT_BREAK ||
+        !core_cleanup_edge_is_empty(break_statement) ||
+        !source_position_equal(break_statement->span.begin, loop->span.begin)) {
+        return false;
+    }
+
+    *iteration_body = *body;
+    iteration_body->statement_count -= 2U;
+    return !normalized_do_while_block_needs_exit(
+        context, iteration_body, continue_id, true);
+}
+
 static bool normalized_for_continue_tail(const MinicCoreLowerContext *context,
                                          const MinicStatement *loop,
                                          const MinicBlock *body,
@@ -7718,6 +7889,11 @@ lower_while(MinicCoreLowerContext *context,
                    context, statement, body_source, &normalized_for_body)) {
         iteration_source = &normalized_for_body;
         normalized_for = true;
+    }
+    if (!normalized_for &&
+        normalized_do_while_true_body(
+            context, statement, body_source, &normalized_do_while_body)) {
+        iteration_source = &normalized_do_while_body;
     }
     /* M149_PARSER_TAIL_CONTINUE_PROVENANCE_OWNER: normalized_for_update_tail
        and normalized_for_continue_tail have already proven the exact parser
@@ -11698,8 +11874,42 @@ lower_block(MinicCoreLowerContext *context, const MinicBlock *source_block, bool
                 const MinicStatement *target_statement;
                 MinicCoreBlockId target_block;
 
-                if (statement->target_expression != MINIC_EXPRESSION_INVALID ||
-                    statement->expression != MINIC_EXPRESSION_INVALID ||
+                /* M158_FINAL_STRICT_TAIL_COMPUTED_GOTO: &&label already lowers
+                   to BLOCK_ADDRESS.  Preserve GNU `goto *expr` as a first-class
+                   Core CFG edge instead of pretending it is an ordinary branch. */
+                if (statement->expression != MINIC_EXPRESSION_INVALID &&
+                    statement->target_statement == MINIC_STATEMENT_INVALID) {
+                    MinicCoreTerminator terminator;
+                    MinicCoreValueId target_value;
+
+                    if (statement->target_expression != MINIC_EXPRESSION_INVALID) {
+                        status = MINIC_CORE_LOWER_UNSUPPORTED;
+                        break;
+                    }
+                    status = lower_expression(
+                        context, statement->expression, &target_value);
+                    if (status != MINIC_CORE_LOWER_OK) {
+                        break;
+                    }
+                    if (target_value >= context->function->value_count ||
+                        !minic_type_is_pointer(context->function->values[target_value].type)) {
+                        status = MINIC_CORE_LOWER_UNSUPPORTED;
+                        break;
+                    }
+                    (void)memset(&terminator, 0, sizeof(terminator));
+                    terminator.kind = MINIC_CORE_TERMINATOR_INDIRECT_BRANCH;
+                    terminator.span = statement->span;
+                    terminator.return_value = MINIC_CORE_VALUE_INVALID;
+                    terminator.return_object = MINIC_CORE_OBJECT_INVALID;
+                    terminator.indirect_target = target_value;
+                    status = minic_core_function_set_terminator(
+                                 context->function, context->block_id, &terminator)
+                                 ? MINIC_CORE_LOWER_OK
+                                 : MINIC_CORE_LOWER_ERROR;
+                    statement_terminated = status == MINIC_CORE_LOWER_OK;
+                    break;
+                }
+                if (statement->expression != MINIC_EXPRESSION_INVALID ||
                     statement->target_statement == MINIC_STATEMENT_INVALID) {
                     status = MINIC_CORE_LOWER_UNSUPPORTED;
                     break;
