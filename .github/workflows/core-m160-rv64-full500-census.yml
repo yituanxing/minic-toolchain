@@ -1,4 +1,4 @@
-name: Core M160 RV64 Full500 Census
+name: Core M161 RV64 Int128 Full500 Census
 
 on:
   pull_request:
@@ -9,6 +9,7 @@ on:
       - 'tests/core/**'
       - 'tests/target/riscv64/**'
       - 'tests/external/linux/corpus_replay.py'
+      - 'tools/ci/apply-m161-rv64-int128-pair.py'
       - '.github/workflows/core-m160-rv64-full500-census.yml'
   workflow_dispatch:
 
@@ -25,12 +26,21 @@ jobs:
           ref: refactor/declaration-sema-v1
           fetch-depth: 0
 
-      - name: Record M160 convergence head
+      - name: Record M161 staging head
         shell: bash
         run: |
           set -Eeuo pipefail
           echo "M160_CONVERGENCE_START=76a4a4d86fb320f6bb567cc1c1bda2f50289ee5c"
-          echo "M160_EXACT_HEAD=$(git rev-parse HEAD)"
+          echo "M161_STAGING_HEAD=$(git rev-parse HEAD)"
+          test "$(git hash-object src/target/riscv64/core_codegen.c)" = a5414575a573abd9ce9ced00fb6c234d785e4e03
+
+      - name: Materialize M161 int128 pair
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 tools/ci/apply-m161-rv64-int128-pair.py
+          git diff --check
+          git diff --stat
 
       - name: Restore frozen Linux corpus
         id: linux-corpus-cache
@@ -46,13 +56,35 @@ jobs:
           test "${{ steps.linux-corpus-cache.outputs.cache-hit }}" = true
           test -s build/linux-focus-corpus/selected-tus.txt
 
-      - name: Build exact compiler
+      - name: Build staged compiler
         run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/m160-compiler
 
       - name: Run fast regression gate
         run: make -j4 check-fast MODE=release CFLAGS=-Werror BUILD_DIR=build/m160-check
 
-      - name: Replay frozen full500 through Core RV64
+      - name: Focused int128 Core RV64 probe
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mkdir -p build/m160-focused
+          cat > build/m160-focused/mul_u64_u32_shr.i <<'EOF'
+          typedef unsigned long u64;
+          typedef unsigned int u32;
+          static u64 mul_u64_u32_shr(u64 a, u32 mul, unsigned int shift)
+          {
+              return (u64)(((unsigned __int128)a * mul) >> shift);
+          }
+          u64 probe(u64 a, u32 mul, unsigned int shift)
+          {
+              return mul_u64_u32_shr(a, mul, shift);
+          }
+          EOF
+          MINIC_CORE_IR=strict MINIC_CORE_CODEGEN=basic-v0 \
+            build/m160-compiler/bin/minic -S build/m160-focused/mul_u64_u32_shr.i \
+            -o build/m160-focused/mul_u64_u32_shr.s
+          test -s build/m160-focused/mul_u64_u32_shr.s
+
+      - name: Replay frozen full500 through staged Core RV64
         id: replay
         shell: bash
         run: |
@@ -72,42 +104,38 @@ jobs:
           replay_status=$?
           set -e
           echo "status=$replay_status" >> "$GITHUB_OUTPUT"
-          printf 'M160_REPLAY_STATUS=%d\n' "$replay_status"
+          printf 'M161_REPLAY_STATUS=%d\n' "$replay_status"
 
-      - name: Capture common first-blocker partial assembly
+      - name: Capture current first-blocker partial assembly
         shell: bash
         run: |
           set -Eeuo pipefail
           python3 - <<'PY'
           from pathlib import Path
-
           work = Path('build/m160-core-rv64')
           assembly = work / 'minic-out/init/main.i.s'
-          output = work / 'm160-first-blocker-assembly.txt'
+          output = work / 'm161-first-blocker-assembly.txt'
           if not assembly.exists():
               output.write_text('init/main.i partial assembly is missing\n')
               raise SystemExit(0)
-
           lines = assembly.read_text(errors='replace').splitlines()
-          start = max(0, len(lines) - 240)
+          start = max(0, len(lines) - 260)
           for index, line in enumerate(lines):
-              if line.strip() == 'mul_u64_u32_shr:':
+              if line.strip().endswith(':') and not line.startswith('.L'):
                   start = index
-          selected = lines[start:]
           output.write_text(
               f'assembly_lines={len(lines)} capture_start={start + 1}\n' +
-              '\n'.join(selected) + '\n'
+              '\n'.join(lines[start:]) + '\n'
           )
           print(output.read_text())
           PY
 
-      - name: Classify Core RV64 backend frontier
+      - name: Classify staged Core RV64 frontier
         shell: bash
         run: |
           set -Eeuo pipefail
           python3 - <<'PY'
           from __future__ import annotations
-
           from collections import Counter
           from pathlib import Path
           import json
@@ -121,128 +149,94 @@ jobs:
           failed = sum(row.get('status') == 'FAIL' for row in rows)
           missing = sum(row.get('status') == 'PREPROCESS_MISSING' for row in rows)
 
-          preflight_re = re.compile(
-              r"Core-owned function '([^']+)' cannot be emitted by RV64 basic-v0"
-          )
-          emit_runtime_re = re.compile(
-              r"cannot emit RISC-V function '([^']+)' \(index=\d+\)"
-          )
+          preflight_re = re.compile(r"Core-owned function '([^']+)' cannot be emitted by RV64 basic-v0")
+          emit_runtime_re = re.compile(r"cannot emit RISC-V function '([^']+)' \(index=\d+\)")
           groups: Counter[str] = Counter()
           functions: Counter[str] = Counter()
-          examples: dict[str, list[dict[str, object]]] = {}
           unexpected: list[dict[str, object]] = []
-
-          def classify(message: str) -> tuple[str, str | None]:
-              match = preflight_re.search(message)
-              if match:
-                  return 'preflight-reject', match.group(1)
-              match = emit_runtime_re.search(message)
-              if match:
-                  return 'emit-runtime', match.group(1)
-              if 'Core IR shadow does not yet support function' in message:
-                  return 'unexpected-core-lowering-unsupported', None
-              if 'Core IR shadow lowering failed for function' in message or 'Core verifier' in message:
-                  return 'unexpected-core-error', None
-              return 'unexpected-other', None
 
           for row in rows:
               if row.get('status') != 'FAIL':
                   continue
               message = str(row.get('message', ''))
-              group, function = classify(message)
+              m = preflight_re.search(message)
+              if m:
+                  group, function = 'preflight-reject', m.group(1)
+              else:
+                  m = emit_runtime_re.search(message)
+                  if m:
+                      group, function = 'emit-runtime', m.group(1)
+                  elif 'Core IR shadow does not yet support function' in message:
+                      group, function = 'unexpected-core-lowering-unsupported', None
+                  elif 'Core IR shadow lowering failed for function' in message or 'Core verifier' in message:
+                      group, function = 'unexpected-core-error', None
+                  else:
+                      group, function = 'unexpected-other', None
               groups[group] += 1
               if function:
                   functions[f'{group}:{function}'] += 1
-              item = {
-                  'index': row.get('index'),
-                  'input': row.get('input'),
-                  'source': row.get('source'),
-                  'function': function,
-                  'message': message,
-              }
-              examples.setdefault(group, [])
-              if len(examples[group]) < 40:
-                  examples[group].append(item)
               if group.startswith('unexpected-'):
-                  unexpected.append(item)
+                  unexpected.append({
+                      'index': row.get('index'),
+                      'input': row.get('input'),
+                      'message': message,
+                  })
 
-          preflight = groups['preflight-reject']
-          emit_runtime = groups['emit-runtime']
           headline = (
-              f'M160_CORE_RV64_EXACT selected={selected} pass={passed} fail={failed} '
-              f'preprocess_missing={missing} preflight_reject={preflight} '
-              f'emit_runtime={emit_runtime} unexpected={len(unexpected)}'
+              f'M161_CORE_RV64_STAGED selected={selected} pass={passed} fail={failed} '
+              f'preprocess_missing={missing} preflight_reject={groups["preflight-reject"]} '
+              f'emit_runtime={groups["emit-runtime"]} unexpected={len(unexpected)}'
           )
           print(headline)
+          print('first-blocker functions:')
+          for key, count in functions.most_common(30):
+              print(f'  {count:4d}  {key}')
 
           summary = {
-              'convergence_start': '76a4a4d86fb320f6bb567cc1c1bda2f50289ee5c',
-              'exact_head': os.environ.get('GITHUB_SHA', ''),
+              'production_semantic_base': '76a4a4d86fb320f6bb567cc1c1bda2f50289ee5c',
+              'staging_head': os.environ.get('GITHUB_SHA', ''),
+              'm160_baseline_pass': 9,
               'selected': selected,
               'pass': passed,
               'fail': failed,
               'preprocess_missing': missing,
               'groups': dict(groups),
               'functions': dict(functions),
-              'examples': examples,
               'unexpected': unexpected,
               'headline': headline,
           }
-          (work / 'm160-summary.json').write_text(json.dumps(summary, indent=2, sort_keys=True))
-
+          (work / 'm161-summary.json').write_text(json.dumps(summary, indent=2, sort_keys=True))
           text = [headline, '', 'groups:']
           for group, count in groups.most_common():
               text.append(f'  {count:4d}  {group}')
-          if not groups:
-              text.append('  none')
           text.extend(['', 'first-blocker functions:'])
-          for key, count in functions.most_common(30):
+          for key, count in functions.most_common(50):
               text.append(f'  {count:4d}  {key}')
-          if not functions:
-              text.append('  none')
-          text.extend(['', 'examples:'])
-          for group, items in examples.items():
-              text.append(f'  [{group}]')
-              for item in items:
-                  function = item['function'] or '-'
-                  text.append(
-                      f"    index={item['index']} input={item['input']} function={function} "
-                      f"message={item['message']}"
-                  )
-          (work / 'm160-summary.txt').write_text('\n'.join(text) + '\n')
-          (work / 'headline.txt').write_text(headline + '\n')
-
-          step_summary = Path(os.environ['GITHUB_STEP_SUMMARY'])
-          with step_summary.open('a') as out:
-              out.write('## M160 Core -> RV64 full500 census\n\n')
-              out.write(f'`{headline}`\n\n')
-              out.write('```text\n')
-              out.write((work / 'm160-summary.txt').read_text())
-              out.write('```\n')
+          (work / 'm161-summary.txt').write_text('\n'.join(text) + '\n')
 
           if selected != 500:
-              raise SystemExit(f'M160 expected 500 selected TUs, got {selected}')
+              raise SystemExit(f'M161 expected 500 selected TUs, got {selected}')
           if missing != 0:
-              raise SystemExit(f'M160 corpus missing {missing} selected TUs')
+              raise SystemExit(f'M161 corpus missing {missing} selected TUs')
           if unexpected:
-              raise SystemExit(
-                  f'M160 found {len(unexpected)} failures outside the Core RV64 backend boundary'
-              )
+              raise SystemExit(f'M161 found {len(unexpected)} failures outside Core RV64 backend')
+          if passed <= 9:
+              raise SystemExit(f'M161 did not improve M160 9/500 baseline: pass={passed}')
           PY
 
-      - name: Persist M160 census
+      - name: Persist M161 staged census
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: core-m160-rv64-full500-${{ github.sha }}
+          name: core-m161-rv64-full500-${{ github.sha }}
           path: |
+            build/m160-focused/mul_u64_u32_shr.s
             build/m160-core-rv64/batch-results.json
             build/m160-core-rv64/batch-results.tsv
             build/m160-core-rv64/batch-summary.txt
             build/m160-core-rv64/failure-contexts.txt
-            build/m160-core-rv64/m160-summary.json
-            build/m160-core-rv64/m160-summary.txt
-            build/m160-core-rv64/headline.txt
-            build/m160-core-rv64/m160-first-blocker-assembly.txt
+            build/m160-core-rv64/m161-summary.json
+            build/m160-core-rv64/m161-summary.txt
+            build/m160-core-rv64/m161-first-blocker-assembly.txt
             build/m160-core-rv64/minic-stderr
           if-no-files-found: warn
