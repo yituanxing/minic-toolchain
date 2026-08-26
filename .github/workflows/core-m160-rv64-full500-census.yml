@@ -122,11 +122,26 @@ jobs:
         if: steps.state.outputs.needs_patch == 'true'
         run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/m174-compiler
 
-      - name: Run check-fast with legacy body forbidden
+      - name: Run compatibility check-fast in explicit legacy mode
         if: steps.state.outputs.needs_patch == 'true'
         env:
-          MINIC_M174_FORBID_LEGACY_BODY: '1'
+          MINIC_CORE_CODEGEN: 'off'
         run: make -j4 check-fast MODE=release CFLAGS=-Werror BUILD_DIR=build/m174-check
+
+      - name: Probe default Core with legacy body forbidden
+        if: steps.state.outputs.needs_patch == 'true'
+        shell: bash
+        env:
+          MINIC_M174_FORBID_LEGACY_BODY: '1'
+        run: |
+          set -Eeuo pipefail
+          test -z "${MINIC_CORE_IR:-}"
+          test -z "${MINIC_CORE_CODEGEN:-}"
+          cc -E -P -x c tests/programs/c0/return_42.c -o build/m174-default-smoke.i
+          build/m174-compiler/bin/minic -S build/m174-default-smoke.i -o build/m174-default-smoke.s
+          grep -Fq '.Lmain_core_return:' build/m174-default-smoke.s
+          ! grep -Fq '.Lmain_return:' build/m174-default-smoke.s
+          echo 'M174_DEFAULT_CORE_TRIPWIRE_SMOKE=PASS'
 
       - name: Replay frozen full500 with no Core mode environment
         if: steps.state.outputs.needs_patch == 'true'
@@ -186,4 +201,5 @@ jobs:
             build/m174-default-core/batch-results.json
             build/m174-default-core/batch-summary.txt
             build/m174-default-core/minic-stderr
+            build/m174-default-smoke.s
           if-no-files-found: warn
