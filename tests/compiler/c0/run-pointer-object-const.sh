@@ -1,5 +1,5 @@
 #!/bin/sh
-set -eu
+set -eux
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
 minic=${MINIC:-"$root/build/debug/bin/minic"}
