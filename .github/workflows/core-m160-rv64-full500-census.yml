@@ -1,10 +1,14 @@
 name: Core M160 RV64 Full500 Census
 
 on:
-  push:
-    branches:
-      - refactor/declaration-sema-v1
+  pull_request:
     paths:
+      - 'src/**'
+      - 'include/**'
+      - 'Makefile'
+      - 'tests/core/**'
+      - 'tests/target/riscv64/**'
+      - 'tests/external/linux/corpus_replay.py'
       - '.github/workflows/core-m160-rv64-full500-census.yml'
   workflow_dispatch:
 
@@ -13,27 +17,20 @@ permissions:
 
 jobs:
   core-rv64-full500:
+    if: github.event_name == 'workflow_dispatch' || github.head_ref == 'refactor/declaration-sema-v1'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.sha }}
+          ref: refactor/declaration-sema-v1
           fetch-depth: 0
 
-      - name: Require M159 semantic baseline plus CI-only delta
+      - name: Record M160 convergence head
         shell: bash
         run: |
           set -Eeuo pipefail
-          baseline=76a4a4d86fb320f6bb567cc1c1bda2f50289ee5c
-          git cat-file -e "$baseline^{commit}"
-          unexpected="$(git diff --name-only "$baseline"..HEAD -- \
-            ':!.github/workflows/core-m160-rv64-full500-census.yml')"
-          if [[ -n "$unexpected" ]]; then
-            echo "M160 refuses semantic/source drift from $baseline:" >&2
-            printf '%s\n' "$unexpected" >&2
-            exit 1
-          fi
-          echo "M160_BASELINE semantic=$baseline ci_head=$(git rev-parse HEAD)"
+          echo "M160_CONVERGENCE_START=76a4a4d86fb320f6bb567cc1c1bda2f50289ee5c"
+          echo "M160_EXACT_HEAD=$(git rev-parse HEAD)"
 
       - name: Restore frozen Linux corpus
         id: linux-corpus-cache
@@ -142,8 +139,8 @@ jobs:
           print(headline)
 
           summary = {
-              'semantic_baseline': '76a4a4d86fb320f6bb567cc1c1bda2f50289ee5c',
-              'ci_head': os.environ.get('GITHUB_SHA', ''),
+              'convergence_start': '76a4a4d86fb320f6bb567cc1c1bda2f50289ee5c',
+              'exact_head': os.environ.get('GITHUB_SHA', ''),
               'selected': selected,
               'pass': passed,
               'fail': failed,
