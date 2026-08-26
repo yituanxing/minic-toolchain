@@ -55,8 +55,7 @@ jobs:
           cat > build/m161-focused/mul_u64_u32_shr.i <<'EOF'
           typedef unsigned long u64;
           typedef unsigned int u32;
-          static inline __attribute__((always_inline)) u64
-          mul_u64_u32_shr(u64 a, u32 mul, unsigned int shift)
+          static u64 mul_u64_u32_shr(u64 a, u32 mul, unsigned int shift)
           {
               return (u64)(((unsigned __int128)a * mul) >> shift);
           }
