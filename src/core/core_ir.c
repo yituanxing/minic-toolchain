@@ -733,6 +733,9 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
     case MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT:
         return instruction_result_is_valid(function, instruction) &&
                minic_type_is_integer(instruction->type);
+    case MINIC_CORE_INSTRUCTION_FLOATING_CONSTANT:
+        return instruction_result_is_valid(function, instruction) &&
+               minic_type_is_double(instruction->type);
     case MINIC_CORE_INSTRUCTION_INTEGER_ADD:
     case MINIC_CORE_INSTRUCTION_INTEGER_SUBTRACT:
     case MINIC_CORE_INSTRUCTION_INTEGER_MULTIPLY:
@@ -838,6 +841,18 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
                instruction->value.operand < function->value_count &&
                available_values[instruction->value.operand] &&
                minic_type_is_integer(function->values[instruction->value.operand].type);
+    case MINIC_CORE_INSTRUCTION_INTEGER_TO_DOUBLE:
+        return instruction_result_is_valid(function, instruction) &&
+               minic_type_is_double(instruction->type) &&
+               instruction->value.operand < function->value_count &&
+               available_values[instruction->value.operand] &&
+               minic_type_is_integer(function->values[instruction->value.operand].type);
+    case MINIC_CORE_INSTRUCTION_DOUBLE_TO_INTEGER:
+        return instruction_result_is_valid(function, instruction) &&
+               minic_type_is_integer(instruction->type) &&
+               instruction->value.operand < function->value_count &&
+               available_values[instruction->value.operand] &&
+               minic_type_is_double(function->values[instruction->value.operand].type);
     case MINIC_CORE_INSTRUCTION_SCALAR_BITCAST:
         return instruction_result_is_valid(function, instruction) &&
                instruction->value.operand < function->value_count &&
@@ -1652,6 +1667,11 @@ static bool dump_instruction(FILE *output,
                        "  %%%" PRIu32 " = const.int %" PRId64 "\n",
                        instruction->result,
                        instruction->value.integer_value) >= 0;
+    case MINIC_CORE_INSTRUCTION_FLOATING_CONSTANT:
+        return fprintf(output,
+                       "  %%%" PRIu32 " = const.double.bits 0x%016" PRIx64 "\n",
+                       instruction->result,
+                       instruction->value.floating_bits) >= 0;
     case MINIC_CORE_INSTRUCTION_INTEGER_ADD:
         return fprintf(output,
                        "  %%%" PRIu32 " = add.int %%%" PRIu32 ", %%%" PRIu32 "\n",
@@ -1750,6 +1770,16 @@ static bool dump_instruction(FILE *output,
     case MINIC_CORE_INSTRUCTION_INTEGER_CONVERSION:
         return fprintf(output,
                        "  %%%" PRIu32 " = convert.int %%%" PRIu32 "\n",
+                       instruction->result,
+                       instruction->value.operand) >= 0;
+    case MINIC_CORE_INSTRUCTION_INTEGER_TO_DOUBLE:
+        return fprintf(output,
+                       "  %%%" PRIu32 " = convert.int-to-double %%%" PRIu32 "\n",
+                       instruction->result,
+                       instruction->value.operand) >= 0;
+    case MINIC_CORE_INSTRUCTION_DOUBLE_TO_INTEGER:
+        return fprintf(output,
+                       "  %%%" PRIu32 " = convert.double-to-int %%%" PRIu32 "\n",
                        instruction->result,
                        instruction->value.operand) >= 0;
     case MINIC_CORE_INSTRUCTION_SCALAR_BITCAST:

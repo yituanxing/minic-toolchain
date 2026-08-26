@@ -48,6 +48,8 @@ typedef enum MinicCoreCallFrameAddressKind {
 /* M158_FINAL_STRICT_TAIL */
 typedef enum MinicCoreInstructionKind {
     MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT = 0,
+    /* M175B_SCALAR_DOUBLE_BRIDGE: raw IEEE-754 double payload. */
+    MINIC_CORE_INSTRUCTION_FLOATING_CONSTANT,
     MINIC_CORE_INSTRUCTION_INTEGER_ADD,
     MINIC_CORE_INSTRUCTION_INTEGER_SUBTRACT,
     MINIC_CORE_INSTRUCTION_INTEGER_MULTIPLY,
@@ -63,6 +65,8 @@ typedef enum MinicCoreInstructionKind {
     MINIC_CORE_INSTRUCTION_SCALAR_EQUAL,
     MINIC_CORE_INSTRUCTION_INTEGER_OVERFLOW,
     MINIC_CORE_INSTRUCTION_INTEGER_CONVERSION,
+    MINIC_CORE_INSTRUCTION_INTEGER_TO_DOUBLE,
+    MINIC_CORE_INSTRUCTION_DOUBLE_TO_INTEGER,
     MINIC_CORE_INSTRUCTION_SCALAR_BITCAST,
     MINIC_CORE_INSTRUCTION_INTEGER_NEGATE,
     MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_NOT,
@@ -243,6 +247,7 @@ typedef struct MinicCoreInstruction {
     MinicCoreValueId result;
     union {
         int64_t integer_value;
+        uint64_t floating_bits;
         struct {
             MinicCoreValueId left;
             MinicCoreValueId right;

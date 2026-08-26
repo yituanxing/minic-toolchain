@@ -80,7 +80,10 @@ static MinicCoreLowerStatus lower_record_materialized_address(
     MinicCoreValueId *address_id);
 
 static bool core_memory_scalar_type(MinicType type) {
-    return minic_type_is_integer(type) || minic_type_is_pointer(type);
+    /* M175B_SCALAR_DOUBLE_BRIDGE: double participates in Core scalar
+       storage/value transport, without implying floating arithmetic. */
+    return minic_type_is_integer(type) || minic_type_is_pointer(type) ||
+           minic_type_is_double(type);
 }
 
 
@@ -1830,6 +1833,20 @@ static MinicCoreLowerStatus lower_scalar_assignment_value(MinicCoreLowerContext 
     }
     if (source_value >= context->function->value_count) {
         return MINIC_CORE_LOWER_ERROR;
+    }
+    if (minic_type_is_double(target_type)) {
+        MinicType source_type;
+
+        if (!core_scalar_expression_value_type(context->body, expression, &source_type) ||
+            !minic_type_is_double(source_type) ||
+            !minic_type_equal(source_type, target_type)) {
+            return MINIC_CORE_LOWER_UNSUPPORTED;
+        }
+        if (!minic_type_equal(context->function->values[source_value].type, source_type)) {
+            return MINIC_CORE_LOWER_ERROR;
+        }
+        *value_id = source_value;
+        return MINIC_CORE_LOWER_OK;
     }
     if (minic_type_is_pointer(target_type)) {
         if (!minic_type_is_pointer(expression->type) &&
@@ -4081,28 +4098,60 @@ static MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
                    ? MINIC_CORE_LOWER_OK
                    : MINIC_CORE_LOWER_ERROR;
     }
+    if (expression->kind == MINIC_EXPRESSION_FLOATING) {
+        if (!minic_type_is_double(expression->type)) {
+            return MINIC_CORE_LOWER_UNSUPPORTED;
+        }
+        instruction.kind = MINIC_CORE_INSTRUCTION_FLOATING_CONSTANT;
+        instruction.value.floating_bits = expression->value.floating_bits;
+        return minic_core_function_append_value_instruction(
+                   context->function, context->block_id, &instruction, value_id)
+                   ? MINIC_CORE_LOWER_OK
+                   : MINIC_CORE_LOWER_ERROR;
+    }
     if (expression->kind == MINIC_EXPRESSION_CONVERSION) {
         const MinicExpression *operand;
         MinicExpressionId operand_id;
         MinicCoreValueId operand_value;
         MinicCoreLowerStatus status;
+        MinicType source_type;
         MinicType target_type;
 
         operand_id = expression->value.unary.operand;
         operand = minic_c0_program_expression(context->body->program, operand_id);
-        if (operand == NULL) {
-            return MINIC_CORE_LOWER_ERROR;
-        }
-        if (!minic_type_is_integer(expression->type) || !minic_type_is_integer(operand->type) ||
-            !minic_type_unqualified(expression->type, &target_type)) {
+        if (operand == NULL ||
+            !minic_type_unqualified(expression->type, &target_type) ||
+            !core_scalar_expression_value_type(context->body, operand, &source_type)) {
             return MINIC_CORE_LOWER_UNSUPPORTED;
         }
         status = lower_expression(context, operand_id, &operand_value);
         if (status != MINIC_CORE_LOWER_OK) {
             return status;
         }
-        return append_integer_conversion(
-            context, expression->span, target_type, operand_value, value_id);
+        if (operand_value >= context->function->value_count ||
+            !minic_type_equal(context->function->values[operand_value].type, source_type)) {
+            return MINIC_CORE_LOWER_ERROR;
+        }
+        if (minic_type_is_integer(target_type) && minic_type_is_integer(source_type)) {
+            return append_integer_conversion(
+                context, expression->span, target_type, operand_value, value_id);
+        }
+        (void)memset(&instruction, 0, sizeof(instruction));
+        instruction.span = expression->span;
+        instruction.type = target_type;
+        instruction.result = MINIC_CORE_VALUE_INVALID;
+        instruction.value.operand = operand_value;
+        if (minic_type_is_double(target_type) && minic_type_is_integer(source_type)) {
+            instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_TO_DOUBLE;
+        } else if (minic_type_is_integer(target_type) && minic_type_is_double(source_type)) {
+            instruction.kind = MINIC_CORE_INSTRUCTION_DOUBLE_TO_INTEGER;
+        } else {
+            return MINIC_CORE_LOWER_UNSUPPORTED;
+        }
+        return minic_core_function_append_value_instruction(
+                   context->function, context->block_id, &instruction, value_id)
+                   ? MINIC_CORE_LOWER_OK
+                   : MINIC_CORE_LOWER_ERROR;
     }
     /* M79_CALL_FRAME_RETURN_ADDRESS: keep the semantic builtin in Core rather
        than lowering it to a target register in the frontend. The first seam
@@ -7054,21 +7103,9 @@ static MinicCoreLowerStatus lower_return(MinicCoreLowerContext *context,
         if (statement->expression == MINIC_EXPRESSION_INVALID) {
             return MINIC_CORE_LOWER_ERROR;
         }
-        if (minic_type_is_integer(context->source_function->return_type)) {
-            /* BATCH_O_SCALAR_RETURN_ASSIGNMENT_CONVERSION: integer return
-               contexts use ordinary C assignment conversion too.  Reuse the
-               scalar seam so pointer truth values can return as _Bool while
-               ordinary integer returns keep the established integer path. */
-            status = lower_scalar_assignment_value(context,
-                                                   context->source_function->return_type,
-                                                   statement->expression,
-                                                   &terminator.return_value);
-        } else if (minic_type_is_pointer(context->source_function->return_type)) {
-            /* M62_POINTER_RETURN_CONVERSION: return uses assignment conversion.
-               In particular, T * may return as volatile T * / const T * without
-               requiring the source expression to already carry the exact pointer
-               qualifiers. Reuse the scalar assignment seam rather than imposing
-               an exact-type Core artifact at the return boundary. */
+        if (core_memory_scalar_type(context->source_function->return_type)) {
+            /* M175B_SCALAR_RETURN_OWNER: all Core memory scalars use the same
+               C assignment/value transport at the return boundary. */
             status = lower_scalar_assignment_value(context,
                                                    context->source_function->return_type,
                                                    statement->expression,

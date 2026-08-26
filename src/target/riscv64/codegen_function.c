@@ -11,9 +11,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-static const char *const minic_riscv64_argument_registers[8] = {
-    "a0", "a1", "a2", "a3", "a4", "a5", "a6", "a7"};
-
 static bool minic_riscv64_alignment_power(size_t alignment, unsigned int *power) {
     unsigned int result;
     size_t value;
@@ -1023,288 +1020,6 @@ static bool minic_riscv64_emit_global_object(FILE *file,
     return fprintf(file, ".size %s, %zu\n", object->name, storage_size) >= 0;
 }
 
-static bool minic_riscv64_emit_function(FILE *file,
-                                        const MinicC0Program *program,
-                                        const MinicFunction *function,
-                                        size_t *label_counter,
-                                        const char **failure_stage) {
-    MinicRiscv64FunctionLayout function_layout;
-    MinicRiscv64FrameLayout frame_layout;
-    MinicRiscv64FunctionSymbol symbol;
-    size_t frame_size;
-    bool success;
-
-    if (failure_stage != NULL) {
-        *failure_stage = "validation";
-    }
-    if (function == NULL || !function->is_defined || function->name_length == 0U ||
-        function->body_block >= program->block_count) {
-        return false;
-    }
-    minic_riscv64_function_layout_initialize(&function_layout);
-    if (failure_stage != NULL) {
-        *failure_stage = "layout";
-    }
-    if (!minic_riscv64_layout_function(NULL, program, function, &function_layout, NULL)) {
-        return false;
-    }
-    if (failure_stage != NULL) {
-        *failure_stage = "frame-layout";
-    }
-    if (!minic_riscv64_frame_layout_from_function_layout(
-            program, function, &function_layout, &frame_layout)) {
-        minic_riscv64_function_layout_destroy(&function_layout);
-        return false;
-    }
-    frame_size = frame_layout.frame_size;
-    if (failure_stage != NULL) {
-        *failure_stage = "symbol";
-    }
-    if (!minic_riscv64_function_symbol_from_function(function, &symbol)) {
-        minic_riscv64_function_layout_destroy(&function_layout);
-        return false;
-    }
-    if (failure_stage != NULL) {
-        *failure_stage = "prologue";
-    }
-    success = minic_riscv64_emit_function_symbol_begin(file, &symbol);
-    if (success) {
-        success = minic_riscv64_emit_stack_allocate(file, frame_size);
-    }
-    if (success) {
-        success = minic_riscv64_emit_sp_store64(file, "ra", frame_layout.saved_ra_offset) &&
-                  minic_riscv64_emit_sp_store64(file, "s0", frame_layout.saved_s0_offset) &&
-                  fprintf(file, "  mv s0, sp\n") >= 0;
-    }
-    if (success && frame_layout.has_indirect_return) {
-        success = minic_riscv64_emit_sp_store64(file, "a0", frame_layout.indirect_return_offset);
-    }
-    if (success && function->is_variadic) {
-        size_t register_index;
-
-        for (register_index = frame_layout.integer_parameter_count; success && register_index < 8U;
-             ++register_index) {
-            size_t offset;
-
-            offset = frame_layout.varargs_offset +
-                     (register_index - frame_layout.integer_parameter_count) * 8U;
-            success = minic_riscv64_emit_sp_store64(
-                file, minic_riscv64_argument_registers[register_index], offset);
-        }
-    }
-    if (success) {
-        MinicRiscv64AbiCursor abi_cursor;
-        MinicRiscv64AbiValue return_value;
-        size_t parameter_index;
-
-        if (failure_stage != NULL) {
-            *failure_stage = "abi-parameters";
-        }
-        if (!minic_riscv64_abi_cursor_initialize_for_return(
-                program, function->return_type, &abi_cursor, &return_value) ||
-            (return_value.kind == MINIC_RISCV64_ABI_VALUE_INDIRECT) !=
-                frame_layout.has_indirect_return) {
-            success = false;
-        }
-        for (parameter_index = 0U; success && parameter_index < function->parameter_count;
-             ++parameter_index) {
-            const MinicLocal *parameter;
-            MinicLocalId local_id;
-            MinicRiscv64AbiArgumentLocation location;
-
-            local_id = function->local_begin + parameter_index;
-            parameter = minic_c0_program_local(program, local_id);
-            if (parameter == NULL || !minic_riscv64_abi_place_argument(
-                                         program, parameter->type, true, &abi_cursor, &location)) {
-                success = false;
-                break;
-            }
-
-            if (location.value.kind == MINIC_RISCV64_ABI_VALUE_IGNORE) {
-                if (location.integer_register_count != 0U ||
-                    location.floating_register_count != 0U || location.stack_slot_count != 0U) {
-                    success = false;
-                }
-                continue;
-            }
-
-            if (location.value.kind == MINIC_RISCV64_ABI_VALUE_FLOAT) {
-                if (location.floating_register_count != 1U ||
-                    location.floating_register_begin >= 8U ||
-                    location.integer_register_count != 0U || location.stack_slot_count != 0U) {
-                    success = false;
-                    break;
-                }
-                success = fprintf(file,
-                                  minic_type_is_double(parameter->type) ? "  fmv.x.d t0, fa%zu\n"
-                                                                        : "  fmv.x.w t0, fa%zu\n",
-                                  location.floating_register_begin) >= 0 &&
-                          minic_riscv64_emit_object_store_register(
-                              file, program, function, &function_layout, local_id, "t0");
-                continue;
-            }
-
-            if (location.value.kind == MINIC_RISCV64_ABI_VALUE_INDIRECT) {
-                size_t byte_index;
-
-                if (location.integer_register_count == 1U && location.stack_slot_count == 0U &&
-                    location.integer_register_begin < 8U) {
-                    success =
-                        fprintf(
-                            file,
-                            "  mv t0, %s\n",
-                            minic_riscv64_argument_registers[location.integer_register_begin]) >= 0;
-                } else if (location.integer_register_count == 0U &&
-                           location.stack_slot_count == 1U) {
-                    size_t incoming_offset;
-
-                    if (location.stack_slot_begin > (SIZE_MAX - frame_size) / 8U) {
-                        success = false;
-                        break;
-                    }
-                    incoming_offset = frame_size + location.stack_slot_begin * 8U;
-                    success = minic_riscv64_emit_sp_load64(file, "t0", incoming_offset);
-                } else {
-                    success = false;
-                }
-                if (!success || !minic_riscv64_emit_object_address(
-                                    file, program, function, &function_layout, local_id)) {
-                    success = false;
-                    break;
-                }
-                for (byte_index = 0U; success && byte_index < location.value.storage_size;
-                     ++byte_index) {
-                    if (byte_index <= 2047U) {
-                        success = fprintf(file,
-                                          "  lbu t1, %zu(t0)\n  sb t1, %zu(a0)\n",
-                                          byte_index,
-                                          byte_index) >= 0;
-                    } else {
-                        success = fprintf(file,
-                                          "  li t2, %zu\n"
-                                          "  add t3, t0, t2\n"
-                                          "  lbu t1, 0(t3)\n"
-                                          "  add t3, a0, t2\n"
-                                          "  sb t1, 0(t3)\n",
-                                          byte_index) >= 0;
-                    }
-                }
-                continue;
-            }
-
-            if (location.value.kind == MINIC_RISCV64_ABI_VALUE_AGGREGATE) {
-                size_t chunk_index;
-
-                if (location.value.slot_count == 0U ||
-                    location.value.slot_count != location.value.register_chunks ||
-                    location.value.slot_count !=
-                        location.integer_register_count + location.stack_slot_count ||
-                    location.integer_register_begin > 8U ||
-                    location.integer_register_count > 8U - location.integer_register_begin) {
-                    success = false;
-                    break;
-                }
-                for (chunk_index = 0U; success && chunk_index < location.value.slot_count;
-                     ++chunk_index) {
-                    const char *source_register;
-
-                    source_register = "t0";
-                    if (chunk_index < location.integer_register_count) {
-                        source_register =
-                            minic_riscv64_argument_registers[location.integer_register_begin +
-                                                             chunk_index];
-                    } else {
-                        size_t incoming_offset;
-                        size_t stack_slot;
-
-                        stack_slot = location.stack_slot_begin +
-                                     (chunk_index - location.integer_register_count);
-                        if (stack_slot > (SIZE_MAX - frame_size) / 8U) {
-                            success = false;
-                            break;
-                        }
-                        incoming_offset = frame_size + stack_slot * 8U;
-                        success = minic_riscv64_emit_sp_load64(file, "t0", incoming_offset);
-                    }
-                    if (success) {
-                        success = minic_riscv64_emit_integer_aggregate_local_chunk(file,
-                                                                                   program,
-                                                                                   function,
-                                                                                   &function_layout,
-                                                                                   local_id,
-                                                                                   chunk_index,
-                                                                                   source_register);
-                    }
-                }
-                continue;
-            }
-
-            if (location.value.kind != MINIC_RISCV64_ABI_VALUE_INTEGER ||
-                location.floating_register_count != 0U) {
-                success = false;
-                break;
-            }
-            if (location.integer_register_count == 1U && location.stack_slot_count == 0U &&
-                location.integer_register_begin < 8U) {
-                success = minic_riscv64_emit_object_store_register(
-                    file,
-                    program,
-                    function,
-                    &function_layout,
-                    local_id,
-                    minic_riscv64_argument_registers[location.integer_register_begin]);
-                continue;
-            }
-            if (location.integer_register_count == 0U && location.stack_slot_count == 1U) {
-                size_t incoming_offset;
-
-                if (location.stack_slot_begin > (SIZE_MAX - frame_size) / 8U) {
-                    success = false;
-                    break;
-                }
-                incoming_offset = frame_size + location.stack_slot_begin * 8U;
-                success = minic_riscv64_emit_sp_load64(file, "t0", incoming_offset) &&
-                          minic_riscv64_emit_object_store_register(
-                              file, program, function, &function_layout, local_id, "t0");
-                continue;
-            }
-            success = false;
-        }
-    }
-    if (success) {
-        if (failure_stage != NULL) {
-            *failure_stage = "body";
-        }
-        success = minic_riscv64_emit_block(
-            file, program, function, &function_layout, function->body_block, label_counter);
-    }
-    if (success) {
-        if (failure_stage != NULL) {
-            *failure_stage = "epilogue";
-        }
-        success = fprintf(file,
-                          "  li a0, 0\n"
-                          ".L%s_return:\n",
-                          function->name) >= 0;
-    }
-    if (success) {
-        success = minic_riscv64_emit_sp_load64(file, "ra", frame_layout.saved_ra_offset) &&
-                  minic_riscv64_emit_sp_load64(file, "s0", frame_layout.saved_s0_offset);
-    }
-    if (success) {
-        success = minic_riscv64_emit_stack_release(file, frame_size);
-    }
-    if (success) {
-        success =
-            fprintf(file, "  ret\n") >= 0 && minic_riscv64_emit_function_symbol_end(file, &symbol);
-    }
-    minic_riscv64_function_layout_destroy(&function_layout);
-    if (success && failure_stage != NULL) {
-        *failure_stage = NULL;
-    }
-    return success;
-}
-
 bool minic_riscv64_write_c0_program_with_core_candidates(const char *path,
                                                          const MinicC0Program *program,
                                                          const MinicCoreFunction *core_functions,
@@ -1314,7 +1029,6 @@ bool minic_riscv64_write_c0_program_with_core_candidates(const char *path,
     FILE *file;
     size_t global_index;
     size_t function_index;
-    size_t label_counter;
     bool success;
 
     if (program == NULL) {
@@ -1391,7 +1105,6 @@ bool minic_riscv64_write_c0_program_with_core_candidates(const char *path,
         success = fprintf(file, ".text\n") >= 0;
     }
 
-    label_counter = 0U;
     for (function_index = 0U; success && function_index < program->function_count;
          ++function_index) {
         const MinicFunction *function;
@@ -1463,24 +1176,9 @@ bool minic_riscv64_write_c0_program_with_core_candidates(const char *path,
                       minic_riscv64_emit_core_function_basic_v0_for_program_with_symbol(
                           file, program, core_function, &symbol);
         } else {
-            const char *failure_stage;
-
-            failure_stage = NULL;
-            success = minic_riscv64_emit_function(
-                file, program, function, &label_counter, &failure_stage);
-            if (!success && diagnostic != NULL && diagnostic->message[0] == '\0') {
-                char message[256];
-                const char *symbol_name;
-
-                symbol_name = minic_c0_function_symbol_name(function);
-                (void)snprintf(message,
-                               sizeof(message),
-                               "cannot emit RISC-V function '%s' (index=%zu stage=%s)",
-                               symbol_name != NULL ? symbol_name : "<unnamed>",
-                               function_index,
-                               failure_stage != NULL ? failure_stage : "unknown");
-                minic_riscv64_set_diagnostic(diagnostic, path, message);
-            }
+            /* M175: no AST -> RV64 fallback remains. The generic writer
+               diagnostic below reports the non-Core-owned function. */
+            success = false;
         }
         if (!success && diagnostic != NULL && diagnostic->message[0] == '\0') {
             char message[256];
@@ -1504,11 +1202,4 @@ bool minic_riscv64_write_c0_program_with_core_candidates(const char *path,
         success = false;
     }
     return success;
-}
-
-bool minic_riscv64_write_c0_program(const char *path,
-                                    const MinicC0Program *program,
-                                    MinicDiagnostic *diagnostic) {
-    return minic_riscv64_write_c0_program_with_core_candidates(
-        path, program, NULL, NULL, 0U, diagnostic);
 }

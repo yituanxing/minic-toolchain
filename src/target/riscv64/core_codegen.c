@@ -54,7 +54,22 @@ typedef struct MinicRiscv64CoreFrame {
 } MinicRiscv64CoreFrame;
 
 static bool core_scalar_type(MinicType type) {
-    return minic_type_is_integer(type) || minic_type_is_pointer(type);
+    return minic_type_is_integer(type) || minic_type_is_pointer(type) ||
+           minic_type_is_double(type);
+}
+
+static bool core_effective_integer_type(const MinicC0Program *program,
+                                        MinicType type,
+                                        MinicType *effective_type) {
+    if (effective_type == NULL || !minic_type_is_integer(type)) {
+        return false;
+    }
+    if (minic_type_is_enum(type)) {
+        return program != NULL &&
+               minic_c0_type_effective_integer_type(program, type, effective_type);
+    }
+    *effective_type = type;
+    return true;
 }
 
 /* M74_GLOBAL_RECORD_ADDRESS / M155_EXTERN_VOID_SYMBOL_ADDRESS_OWNER:
@@ -1613,6 +1628,7 @@ static bool core_instruction_supported(const MinicC0Program *program,
     }
     switch (instruction->kind) {
     case MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT:
+    case MINIC_CORE_INSTRUCTION_FLOATING_CONSTANT:
     case MINIC_CORE_INSTRUCTION_INTEGER_ADD:
     case MINIC_CORE_INSTRUCTION_INTEGER_SUBTRACT:
     case MINIC_CORE_INSTRUCTION_INTEGER_MULTIPLY:
@@ -1627,6 +1643,8 @@ static bool core_instruction_supported(const MinicC0Program *program,
     case MINIC_CORE_INSTRUCTION_POINTER_LESS:
     case MINIC_CORE_INSTRUCTION_SCALAR_EQUAL:
     case MINIC_CORE_INSTRUCTION_INTEGER_CONVERSION:
+    case MINIC_CORE_INSTRUCTION_INTEGER_TO_DOUBLE:
+    case MINIC_CORE_INSTRUCTION_DOUBLE_TO_INTEGER:
     case MINIC_CORE_INSTRUCTION_INTEGER_NEGATE:
     case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_NOT:
     case MINIC_CORE_INSTRUCTION_INTEGER_CTZ:
@@ -1750,7 +1768,9 @@ static bool core_function_can_emit_basic_v0(const MinicC0Program *program,
                 return false;
             }
         } else if (return_value.kind != MINIC_RISCV64_ABI_VALUE_VOID &&
-                   return_value.kind != MINIC_RISCV64_ABI_VALUE_INTEGER) {
+                   return_value.kind != MINIC_RISCV64_ABI_VALUE_INTEGER &&
+                   !(return_value.kind == MINIC_RISCV64_ABI_VALUE_FLOAT &&
+                     minic_type_is_double(function->return_type))) {
             return false;
         }
         for (index = 0U; index < function->parameter_count; ++index) {
@@ -2993,6 +3013,12 @@ static bool emit_instruction(FILE *file,
             return false;
         }
         return store_core_value(file, frame, instruction->result, "t0");
+    case MINIC_CORE_INSTRUCTION_FLOATING_CONSTANT:
+        if (!minic_type_is_double(instruction->type) ||
+            fprintf(file, "  li t0, 0x%016" PRIx64 "\n", instruction->value.floating_bits) < 0) {
+            return false;
+        }
+        return store_core_value(file, frame, instruction->result, "t0");
     case MINIC_CORE_INSTRUCTION_INTEGER_ADD:
         if (!load_core_value(file, frame, instruction->value.binary.left, "t0") ||
             !load_core_value(file, frame, instruction->value.binary.right, "t1") ||
@@ -3328,6 +3354,58 @@ static bool emit_instruction(FILE *file,
             return false;
         }
         return store_core_value(file, frame, instruction->result, "t0");
+    }
+    case MINIC_CORE_INSTRUCTION_INTEGER_TO_DOUBLE: {
+        MinicCoreValueId operand = instruction->value.operand;
+        MinicType source_type;
+        const char *opcode;
+
+        if (operand >= function->value_count ||
+            !core_effective_integer_type(program, function->values[operand].type, &source_type) ||
+            minic_type_is_int128_integer(source_type) ||
+            !minic_type_is_double(instruction->type)) {
+            return false;
+        }
+        if (minic_type_is_long_integer(source_type)) {
+            opcode = minic_type_is_unsigned_integer(source_type) ? "fcvt.d.lu" : "fcvt.d.l";
+        } else {
+            opcode = minic_type_is_unsigned_integer(source_type) ? "fcvt.d.wu" : "fcvt.d.w";
+        }
+        if (!load_core_value(file, frame, operand, "t0") ||
+            fprintf(file,
+                    "  %s ft0, t0\n"
+                    "  fmv.x.d t1, ft0\n",
+                    opcode) < 0) {
+            return false;
+        }
+        return store_core_value(file, frame, instruction->result, "t1");
+    }
+    case MINIC_CORE_INSTRUCTION_DOUBLE_TO_INTEGER: {
+        MinicCoreValueId operand = instruction->value.operand;
+        MinicType target_type;
+        const char *opcode;
+
+        if (operand >= function->value_count ||
+            !minic_type_is_double(function->values[operand].type) ||
+            !core_effective_integer_type(program, instruction->type, &target_type) ||
+            minic_type_is_int128_integer(target_type)) {
+            return false;
+        }
+        if (minic_type_is_long_integer(target_type)) {
+            opcode = minic_type_is_unsigned_integer(target_type) ? "fcvt.lu.d" : "fcvt.l.d";
+        } else {
+            opcode = minic_type_is_unsigned_integer(target_type) ? "fcvt.wu.d" : "fcvt.w.d";
+        }
+        if (!load_core_value(file, frame, operand, "t0") ||
+            fprintf(file,
+                    "  fmv.d.x ft0, t0\n"
+                    "  %s t1, ft0, rtz\n",
+                    opcode) < 0 ||
+            !minic_riscv64_emit_integer_conversion_for_program(
+                file, program, instruction->type, "t1")) {
+            return false;
+        }
+        return store_core_value(file, frame, instruction->result, "t1");
     }
     case MINIC_CORE_INSTRUCTION_SCALAR_BITCAST:
         if (!load_core_value(file, frame, instruction->value.operand, "t0")) {
@@ -3716,6 +3794,12 @@ static bool emit_terminator(FILE *file,
                     }
                 }
             } else {
+                return false;
+            }
+        } else if (minic_type_is_double(function->return_type)) {
+            if (terminator->return_value == MINIC_CORE_VALUE_INVALID ||
+                !load_core_value(file, frame, terminator->return_value, "t0") ||
+                fprintf(file, "  fmv.d.x fa0, t0\n") < 0) {
                 return false;
             }
         } else if (terminator->return_value != MINIC_CORE_VALUE_INVALID &&
