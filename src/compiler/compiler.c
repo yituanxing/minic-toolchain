@@ -30,11 +30,6 @@ typedef enum MinicCoreShadowMode {
     MINIC_CORE_SHADOW_STRICT
 } MinicCoreShadowMode;
 
-typedef enum MinicCoreCodegenMode {
-    MINIC_CORE_CODEGEN_DISABLED = 0,
-    MINIC_CORE_CODEGEN_BASIC_V0
-} MinicCoreCodegenMode;
-
 typedef struct MinicCoreCandidates {
     MinicCoreFunction *functions;
     MinicCoreLowerStatus *statuses;
@@ -172,29 +167,6 @@ static bool minic_core_shadow_mode(const char *input_path,
     return false;
 }
 
-static bool minic_core_codegen_mode(const char *input_path,
-                                    MinicDiagnostic *diagnostic,
-                                    MinicCoreCodegenMode *mode) {
-    const char *value;
-
-    if (mode == NULL) {
-        return false;
-    }
-    value = getenv("MINIC_CORE_CODEGEN");
-    if (value == NULL || value[0] == '\0') {
-        /* M174_CORE_ONLY_DEFAULT: ordinary RV64 compilation uses Core. */
-        *mode = MINIC_CORE_CODEGEN_BASIC_V0;
-        return true;
-    }
-    if (strcmp(value, "basic-v0") == 0) {
-        *mode = MINIC_CORE_CODEGEN_BASIC_V0;
-        return true;
-    }
-    minic_set_diagnostic(
-        diagnostic, input_path, 1U, 1U, "MINIC_CORE_CODEGEN must be unset or 'basic-v0'");
-    return false;
-}
-
 static bool minic_validate_core_shadow(const char *input_path,
                                        const MinicC0Program *program,
                                        const MinicCoreCandidates *candidates,
@@ -316,7 +288,6 @@ int minic_compile_preprocessed_file(const char *input_path,
     MinicC0Program program;
     MinicCoreCandidates core_candidates;
     const MinicTargetInfo *target_info;
-    MinicCoreCodegenMode core_codegen_mode;
     MinicCoreShadowMode core_shadow_mode;
     MinicCoreShadowMode core_validation_mode;
     bool success;
@@ -334,15 +305,8 @@ int minic_compile_preprocessed_file(const char *input_path,
     if (!minic_core_shadow_mode(input_path, diagnostic, &core_shadow_mode)) {
         return 1;
     }
-    if (!minic_core_codegen_mode(input_path, diagnostic, &core_codegen_mode)) {
-        return 1;
-    }
-    core_validation_mode = core_shadow_mode;
-    if (core_codegen_mode != MINIC_CORE_CODEGEN_DISABLED) {
-        /* Core code generation is fail-closed: no defined function may
-           fall back to the legacy AST body emitter. */
-        core_validation_mode = MINIC_CORE_SHADOW_STRICT;
-    }
+    /* M175_LEGACY_FUNCTION_ROUTE_REMOVED: production RV64 function bodies are Core-only. */
+    core_validation_mode = MINIC_CORE_SHADOW_STRICT;
 
     buffer.data = NULL;
     buffer.size = 0U;
@@ -392,7 +356,7 @@ int minic_compile_preprocessed_file(const char *input_path,
     if (success) {
         success = minic_riscv64_layout_program(input_path, &program, diagnostic);
     }
-    if (success && core_codegen_mode == MINIC_CORE_CODEGEN_BASIC_V0) {
+    if (success) {
         success =
             minic_riscv64_write_c0_program_with_core_candidates(output_path,
                                                                 &program,
@@ -400,8 +364,6 @@ int minic_compile_preprocessed_file(const char *input_path,
                                                                 core_candidates.core_required,
                                                                 core_candidates.function_count,
                                                                 diagnostic);
-    } else if (success) {
-        success = minic_riscv64_write_c0_program(output_path, &program, diagnostic);
     }
 
     minic_core_candidates_destroy(&core_candidates);
