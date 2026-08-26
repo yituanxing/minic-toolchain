@@ -1,5 +1,5 @@
 #!/bin/sh
-set -eux
+set -eu
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
 minic=${MINIC:-"$root/build/debug/bin/minic"}
@@ -15,9 +15,15 @@ mkdir -p "$work"
     "$work/pointer_object_const.i" \
     -o "$work/pointer_object_const.s"
 grep -F ".globl main" "$work/pointer_object_const.s" >/dev/null
+grep -F ".Lmain_core_bb" "$work/pointer_object_const.s" >/dev/null
+grep -F ".Lmain_core_return:" "$work/pointer_object_const.s" >/dev/null
 grep -F "  call read_value" "$work/pointer_object_const.s" >/dev/null
-grep -E '^  sw t0, 0\((a0|t1)\)$' "$work/pointer_object_const.s" >/dev/null
-printf '%s\n' "PASS compiler/c0/pointer_object_const"
+# The semantic contract is that *fixed = 9 reaches a 32-bit store through the
+# Core pointer/object path.  Do not pin the temporary register allocation used
+# by either the legacy AST emitter or the Core RV64 emitter.
+grep -E '^[[:space:]]+sw[[:space:]]+[^,]+,[[:space:]]*0\([^)]*\)$' \
+    "$work/pointer_object_const.s" >/dev/null
+printf '%s\n' "PASS compiler/c0/pointer_object_const normalized=core-pointer-object"
 
 expect_failure() {
     name=$1
