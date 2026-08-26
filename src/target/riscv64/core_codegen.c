@@ -21,16 +21,35 @@ static const char *const minic_core_rv64_argument_registers[8] = {
     "a7",
 };
 
+/* M172_STRUCTURED_ASM_CALLEE_SAVED: basic-v0 conservatively preserves the
+   complete RV64 callee-saved bank for functions containing structured asm.
+   This lets asm operands fall back to s-registers when every caller-saved
+   candidate is clobbered without making Core itself a register allocator. */
+static const char *const core_asm_callee_saved_registers[] = {
+    "s0", "s1", "s2", "s3", "s4", "s5",
+    "s6", "s7", "s8", "s9", "s10", "s11",
+};
+#define CORE_ASM_CALLEE_SAVED_COUNT     (sizeof(core_asm_callee_saved_registers) / sizeof(core_asm_callee_saved_registers[0]))
+
 typedef struct MinicRiscv64CoreFrame {
     size_t frame_size;
     size_t object_count;
     size_t value_count;
     size_t value_base_offset;
     size_t return_address_offset;
+    /* M167D_INDIRECT_RECORD_RETURN: psABI hidden result pointer is incoming
+       state and must survive arbitrary calls before a Core RETURN. */
+    size_t hidden_result_pointer_offset;
+    size_t entry_sp_offset;
+    size_t stack_alignment;
+    size_t structured_asm_callee_saved_offset;
     size_t varargs_offset;
     size_t varargs_size;
     size_t integer_parameter_count;
     bool saves_return_address;
+    bool has_hidden_result_pointer;
+    bool has_dynamic_stack_alignment;
+    bool preserves_structured_asm_callee_saved;
     bool has_variadic_argument_address;
 } MinicRiscv64CoreFrame;
 
@@ -90,6 +109,23 @@ static bool core_function_needs_saved_return_address(const MinicCoreFunction *fu
     return false;
 }
 
+static bool core_function_uses_structured_inline_asm(
+    const MinicCoreFunction *function) {
+    size_t instruction_index;
+
+    if (function == NULL) {
+        return false;
+    }
+    for (instruction_index = 0U; instruction_index < function->instruction_count;
+         ++instruction_index) {
+        if (function->instructions[instruction_index].kind ==
+            MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM) {
+            return true;
+        }
+    }
+    return false;
+}
+
 static bool core_function_uses_variadic_argument_address(
     const MinicCoreFunction *function) {
     size_t instruction_index;
@@ -138,17 +174,118 @@ static bool core_variadic_fixed_prefix(const MinicC0Program *program,
     return true;
 }
 
+/* M168_RV64_INDIRECT_CALL_STACK: reserve one fixed outgoing stack area
+   shared by direct and indirect calls.  The ABI cursor remains the single owner
+   of register/stack placement; Core keeps only VALUE/OBJECT arguments. */
+static bool core_call_outgoing_stack_size(const MinicC0Program *program,
+                                          const MinicCoreFunction *function,
+                                          size_t *result) {
+    size_t instruction_index;
+    size_t maximum_stack_slots;
+
+    if (program == NULL || function == NULL || result == NULL) {
+        return false;
+    }
+    maximum_stack_slots = 0U;
+    for (instruction_index = 0U; instruction_index < function->instruction_count;
+         ++instruction_index) {
+        const MinicCoreInstruction *instruction = &function->instructions[instruction_index];
+        const MinicType *parameter_types;
+        size_t parameter_count;
+        bool is_variadic;
+        size_t argument_begin;
+        size_t argument_count;
+        MinicType return_type;
+        MinicRiscv64AbiCursor cursor;
+        MinicRiscv64AbiValue return_value;
+        size_t argument_index;
+
+        if (instruction->kind == MINIC_CORE_INSTRUCTION_CALL) {
+            const MinicCoreCallee *callee;
+            if (instruction->value.call.callee_id >= function->callee_count ||
+                instruction->value.call.argument_begin > function->call_argument_count ||
+                instruction->value.call.argument_count >
+                    function->call_argument_count - instruction->value.call.argument_begin) {
+                return false;
+            }
+            callee = &function->callees[instruction->value.call.callee_id];
+            parameter_types = callee->parameter_types;
+            parameter_count = callee->parameter_count;
+            is_variadic = callee->is_variadic;
+            argument_begin = instruction->value.call.argument_begin;
+            argument_count = instruction->value.call.argument_count;
+            return_type = callee->return_type;
+        } else if (instruction->kind == MINIC_CORE_INSTRUCTION_INDIRECT_CALL) {
+            const MinicCoreCallSignature *signature;
+            if (instruction->value.indirect_call.signature_id >= function->call_signature_count ||
+                instruction->value.indirect_call.argument_begin > function->call_argument_count ||
+                instruction->value.indirect_call.argument_count >
+                    function->call_argument_count - instruction->value.indirect_call.argument_begin) {
+                return false;
+            }
+            signature = &function->call_signatures[instruction->value.indirect_call.signature_id];
+            parameter_types = signature->parameter_types;
+            parameter_count = signature->parameter_count;
+            is_variadic = signature->is_variadic;
+            argument_begin = instruction->value.indirect_call.argument_begin;
+            argument_count = instruction->value.indirect_call.argument_count;
+            return_type = signature->return_type;
+        } else {
+            continue;
+        }
+
+        if (!minic_riscv64_abi_cursor_initialize_for_return(
+                program, return_type, &cursor, &return_value)) {
+            return false;
+        }
+        (void)return_value;
+        for (argument_index = 0U; argument_index < argument_count; ++argument_index) {
+            const MinicCoreCallArgument *argument =
+                &function->call_arguments[argument_begin + argument_index];
+            MinicRiscv64AbiArgumentLocation location;
+            MinicType argument_type;
+            bool is_fixed_parameter = argument_index < parameter_count;
+
+            if (is_fixed_parameter) {
+                argument_type = parameter_types[argument_index];
+            } else {
+                if (!is_variadic || argument->kind != MINIC_CORE_CALL_ARGUMENT_VALUE ||
+                    argument->value.value_id >= function->value_count) {
+                    return false;
+                }
+                argument_type = function->values[argument->value.value_id].type;
+            }
+            if (!minic_riscv64_abi_place_argument(
+                    program, argument_type, is_fixed_parameter, &cursor, &location)) {
+                return false;
+            }
+        }
+        if (cursor.stack_slot_count > maximum_stack_slots) {
+            maximum_stack_slots = cursor.stack_slot_count;
+        }
+    }
+    if (maximum_stack_slots > SIZE_MAX / 8U) {
+        return false;
+    }
+    *result = maximum_stack_slots * 8U;
+    return true;
+}
+
 static bool core_frame_initialize(const MinicC0Program *program,
                                   const MinicCoreFunction *function,
                                   MinicRiscv64CoreFrame *frame) {
     size_t object_index;
     size_t storage_size;
     size_t required_size;
+    size_t outgoing_argument_size;
+    size_t maximum_object_alignment;
 
-    if (function == NULL || frame == NULL) {
+    if (function == NULL || frame == NULL ||
+        !core_call_outgoing_stack_size(program, function, &outgoing_argument_size)) {
         return false;
     }
-    storage_size = 0U;
+    storage_size = outgoing_argument_size;
+    maximum_object_alignment = 16U;
     for (object_index = 0U; object_index < function->object_count; ++object_index) {
         size_t object_size;
         size_t object_alignment;
@@ -158,10 +295,16 @@ static bool core_frame_initialize(const MinicC0Program *program,
                                     function->objects[object_index].type,
                                     &object_size,
                                     &object_alignment) ||
-            object_size == 0U || object_alignment == 0U || object_alignment > 16U ||
+            (object_size == 0U &&
+             !minic_type_is_record(function->objects[object_index].type)) ||
+            object_alignment == 0U ||
+            (object_alignment & (object_alignment - 1U)) != 0U ||
             function->objects[object_index].element_count == 0U ||
             object_size > SIZE_MAX / function->objects[object_index].element_count) {
             return false;
+        }
+        if (object_alignment > maximum_object_alignment) {
+            maximum_object_alignment = object_alignment;
         }
         object_size *= function->objects[object_index].element_count;
         if (!align_up(storage_size, object_alignment, &storage_size) ||
@@ -171,10 +314,12 @@ static bool core_frame_initialize(const MinicC0Program *program,
         storage_size += object_size;
     }
     if (!align_up(storage_size, 8U, &frame->value_base_offset) ||
-        function->value_count > (SIZE_MAX - frame->value_base_offset) / 8U) {
+        function->value_count > (SIZE_MAX - frame->value_base_offset) / 16U) {
         return false;
     }
-    storage_size = frame->value_base_offset + function->value_count * 8U;
+    /* M161_CORE_RV64_INT128_PAIR: one O0 spill slot can hold the largest
+       current Core scalar. i128 uses low64 at +0/high64 at +8. */
+    storage_size = frame->value_base_offset + function->value_count * 16U;
     frame->saves_return_address = core_function_needs_saved_return_address(function);
     frame->return_address_offset = 0U;
     if (frame->saves_return_address) {
@@ -183,6 +328,52 @@ static bool core_frame_initialize(const MinicC0Program *program,
             return false;
         }
         storage_size = frame->return_address_offset + 8U;
+    }
+
+    frame->has_hidden_result_pointer = false;
+    frame->hidden_result_pointer_offset = 0U;
+    if (program != NULL) {
+        MinicRiscv64AbiCursor return_cursor;
+        MinicRiscv64AbiValue return_value;
+
+        if (!minic_riscv64_abi_cursor_initialize_for_return(
+                program, function->return_type, &return_cursor, &return_value)) {
+            return false;
+        }
+        (void)return_cursor;
+        if (return_value.kind == MINIC_RISCV64_ABI_VALUE_INDIRECT) {
+            if (!minic_type_is_record(function->return_type) ||
+                return_value.storage_size <= 16U || return_value.slot_count != 1U ||
+                !align_up(storage_size, 8U, &frame->hidden_result_pointer_offset) ||
+                frame->hidden_result_pointer_offset > SIZE_MAX - 8U) {
+                return false;
+            }
+            storage_size = frame->hidden_result_pointer_offset + 8U;
+            frame->has_hidden_result_pointer = true;
+        }
+    }
+
+    frame->preserves_structured_asm_callee_saved =
+        core_function_uses_structured_inline_asm(function);
+    frame->structured_asm_callee_saved_offset = 0U;
+    if (frame->preserves_structured_asm_callee_saved) {
+        size_t saved_bytes = CORE_ASM_CALLEE_SAVED_COUNT * 8U;
+        if (!align_up(storage_size, 8U, &frame->structured_asm_callee_saved_offset) ||
+            frame->structured_asm_callee_saved_offset > SIZE_MAX - saved_bytes) {
+            return false;
+        }
+        storage_size = frame->structured_asm_callee_saved_offset + saved_bytes;
+    }
+
+    frame->stack_alignment = maximum_object_alignment;
+    frame->has_dynamic_stack_alignment = maximum_object_alignment > 16U;
+    frame->entry_sp_offset = 0U;
+    if (frame->has_dynamic_stack_alignment) {
+        if (!align_up(storage_size, 8U, &frame->entry_sp_offset) ||
+            frame->entry_sp_offset > SIZE_MAX - 8U) {
+            return false;
+        }
+        storage_size = frame->entry_sp_offset + 8U;
     }
 
     frame->has_variadic_argument_address =
@@ -220,10 +411,10 @@ static bool core_object_offset(const MinicC0Program *program,
     size_t current_offset;
     size_t object_index;
 
-    if (function == NULL || offset == NULL || object_id >= function->object_count) {
+    if (function == NULL || offset == NULL || object_id >= function->object_count ||
+        !core_call_outgoing_stack_size(program, function, &current_offset)) {
         return false;
     }
-    current_offset = 0U;
     for (object_index = 0U; object_index <= (size_t)object_id; ++object_index) {
         size_t object_size;
         size_t object_alignment;
@@ -233,7 +424,10 @@ static bool core_object_offset(const MinicC0Program *program,
                                     function->objects[object_index].type,
                                     &object_size,
                                     &object_alignment) ||
-            object_size == 0U || object_alignment == 0U || object_alignment > 16U ||
+            (object_size == 0U &&
+             !minic_type_is_record(function->objects[object_index].type)) ||
+            object_alignment == 0U ||
+            (object_alignment & (object_alignment - 1U)) != 0U ||
             function->objects[object_index].element_count == 0U ||
             object_size > SIZE_MAX / function->objects[object_index].element_count ||
             !align_up(current_offset, object_alignment, &current_offset)) {
@@ -255,10 +449,10 @@ static bool core_object_offset(const MinicC0Program *program,
 static bool
 core_value_offset(const MinicRiscv64CoreFrame *frame, MinicCoreValueId value_id, size_t *offset) {
     if (frame == NULL || offset == NULL || value_id >= frame->value_count ||
-        (size_t)value_id > (SIZE_MAX - frame->value_base_offset) / 8U) {
+        (size_t)value_id > (SIZE_MAX - frame->value_base_offset) / 16U) {
         return false;
     }
-    *offset = frame->value_base_offset + (size_t)value_id * 8U;
+    *offset = frame->value_base_offset + (size_t)value_id * 16U;
     return true;
 }
 
@@ -294,6 +488,47 @@ static bool store_core_value(FILE *file,
 
     return core_value_offset(frame, value_id, &offset) &&
            minic_riscv64_emit_sp_store64(file, register_name, offset);
+}
+
+/* M161_CORE_RV64_INT128_PAIR: Core remains target-neutral; RV64 lowers wide
+   integer values to a low/high XLEN pair only inside the target backend. */
+static bool load_core_int128_value(FILE *file,
+                                   const MinicRiscv64CoreFrame *frame,
+                                   MinicCoreValueId value_id,
+                                   const char *low_register,
+                                   const char *high_register) {
+    size_t offset;
+
+    return low_register != NULL && high_register != NULL &&
+           core_value_offset(frame, value_id, &offset) && offset <= SIZE_MAX - 8U &&
+           minic_riscv64_emit_sp_load64(file, low_register, offset) &&
+           minic_riscv64_emit_sp_load64(file, high_register, offset + 8U);
+}
+
+static bool store_core_int128_value(FILE *file,
+                                    const MinicRiscv64CoreFrame *frame,
+                                    MinicCoreValueId value_id,
+                                    const char *low_register,
+                                    const char *high_register) {
+    size_t offset;
+
+    return low_register != NULL && high_register != NULL &&
+           core_value_offset(frame, value_id, &offset) && offset <= SIZE_MAX - 8U &&
+           minic_riscv64_emit_sp_store64(file, low_register, offset) &&
+           minic_riscv64_emit_sp_store64(file, high_register, offset + 8U);
+}
+
+static bool core_integer_type_is_signed(const MinicC0Program *program,
+                                        MinicType type,
+                                        bool *is_signed) {
+    MinicType effective_type;
+
+    if (program == NULL || is_signed == NULL || !minic_type_is_integer(type) ||
+        !minic_c0_type_effective_integer_type(program, type, &effective_type)) {
+        return false;
+    }
+    *is_signed = minic_type_is_signed_integer(effective_type);
+    return true;
 }
 
 static bool core_field_address_supported(const MinicC0Program *program,
@@ -356,7 +591,7 @@ static bool core_record_load_supported(const MinicC0Program *program,
         instruction->value.record_load.is_volatile != minic_type_is_volatile(source_pointee) ||
         !minic_data_layout_type(
             minic_default_data_layout(), program, instruction->type, &size, &alignment) ||
-        (size != 1U && size != 2U && size != 4U && size != 8U)) {
+        size == 0U) {
         return false;
     }
     (void)alignment;
@@ -394,7 +629,10 @@ static bool core_record_copy_supported(const MinicC0Program *program,
             minic_default_data_layout(), program, instruction->type, &size, &alignment)) {
         return false;
     }
-    return size != 0U && alignment != 0U;
+    /* M167_ZERO_RECORD_COPY: GNU empty records are addressable semantic
+       objects. RECORD_COPY has already evaluated both address operands; with
+       zero storage bytes the target action is an intentional no-op. */
+    return alignment != 0U;
 }
 
 static bool core_call_frame_address_supported(
@@ -737,6 +975,17 @@ static bool core_asm_register_is_caller_saved(const char *name) {
     return false;
 }
 
+
+static bool core_asm_register_is_callee_saved(const char *name) {
+    size_t index;
+    for (index = 0U; index < CORE_ASM_CALLEE_SAVED_COUNT; ++index) {
+        if (core_asm_register_name_equal(name, core_asm_callee_saved_registers[index])) {
+            return true;
+        }
+    }
+    return false;
+}
+
 static bool core_asm_register_in_use(const char *const *operand_registers,
                                      size_t operand_count,
                                      const char *name) {
@@ -768,6 +1017,65 @@ static const char *core_asm_choose_register(const MinicCoreInlineAsm *inline_asm
     return NULL;
 }
 
+/* M166_RV64_FIXED_ASM_PHASE_ALIAS: two distinct fixed-register operands may
+   intentionally share one architectural register when one is a write-only
+   output and the other is a scalar input. Their lifetimes are disjoint:
+   input before asm, output after asm. Early-clobber outputs cannot alias. */
+static bool core_structured_fixed_phase_alias_safe(
+    const MinicCoreInstruction *instruction,
+    size_t current_binding_index,
+    const char *const *operand_registers,
+    const char *register_name) {
+    const MinicCoreStructuredInlineAsmOperand *current;
+    size_t alias_count;
+    size_t prior_index;
+
+    if (instruction == NULL || operand_registers == NULL || register_name == NULL ||
+        instruction->kind != MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM ||
+        current_binding_index >= instruction->value.structured_inline_asm.operand_count) {
+        return false;
+    }
+    current = &instruction->value.structured_inline_asm.operands[current_binding_index];
+    if (!current->has_fixed_register_binding) {
+        return false;
+    }
+    alias_count = 0U;
+    for (prior_index = 0U; prior_index < current_binding_index; ++prior_index) {
+        const MinicCoreStructuredInlineAsmOperand *prior =
+            &instruction->value.structured_inline_asm.operands[prior_index];
+        bool current_is_input;
+        bool current_is_output;
+        bool prior_is_input;
+        bool prior_is_output;
+        const MinicCoreStructuredInlineAsmOperand *output;
+
+        if (!prior->has_fixed_register_binding || prior->operand_index > 9U ||
+            !core_asm_register_name_equal(
+                operand_registers[prior->operand_index], register_name)) {
+            continue;
+        }
+        alias_count += 1U;
+        if (alias_count != 1U) {
+            return false;
+        }
+        current_is_input =
+            current->kind == MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+        current_is_output =
+            current->kind == MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
+        prior_is_input = prior->kind == MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+        prior_is_output = prior->kind == MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
+        if (!((current_is_input && prior_is_output) ||
+              (current_is_output && prior_is_input))) {
+            return false;
+        }
+        output = current_is_output ? current : prior;
+        if (output->early_clobber) {
+            return false;
+        }
+    }
+    return alias_count == 1U;
+}
+
 static bool core_structured_inline_asm_allocate(
     const MinicC0Program *program,
     const MinicCoreFunction *function,
@@ -778,14 +1086,17 @@ static bool core_structured_inline_asm_allocate(
     static const char *const output_preferences[] = {
         "t0", "t1", "t2", "t3", "t4", "t5", "t6",
         "a0", "a1", "a2", "a3", "a4", "a5", "a6", "a7",
+        "s1", "s2", "s3", "s4", "s5", "s6", "s7", "s8", "s9", "s10", "s11", "s0",
     };
     static const char *const memory_preferences[] = {
         "t2", "t6", "t5", "t4", "t3", "t1", "t0",
         "a0", "a1", "a2", "a3", "a4", "a5", "a6", "a7",
+        "s1", "s2", "s3", "s4", "s5", "s6", "s7", "s8", "s9", "s10", "s11", "s0",
     };
     static const char *const input_preferences[] = {
         "t3", "t4", "t5", "t6", "t2", "t1", "t0",
         "a0", "a1", "a2", "a3", "a4", "a5", "a6", "a7",
+        "s1", "s2", "s3", "s4", "s5", "s6", "s7", "s8", "s9", "s10", "s11", "s0",
     };
     const MinicCoreInlineAsm *inline_asm;
     size_t operand_count;
@@ -808,13 +1119,16 @@ static bool core_structured_inline_asm_allocate(
         memory_operand[binding_index] = false;
     }
 
-    /* M126A remains caller-saved-only. Explicit callee-saved clobbers need
-       function-frame preservation and are deliberately deferred to M126B. */
+    /* M172: explicit callee-saved clobbers are valid because the function
+       frame now preserves the complete callee-saved bank. Unknown architectural
+       register names still fail closed. */
     for (clobber_index = 0U; clobber_index < inline_asm->register_clobber_count;
          ++clobber_index) {
         const MinicCoreInlineAsmRegisterClobber *clobber =
             &inline_asm->register_clobbers[clobber_index];
-        if (clobber->name == NULL || !core_asm_register_is_caller_saved(clobber->name)) {
+        if (clobber->name == NULL ||
+            (!core_asm_register_is_caller_saved(clobber->name) &&
+             !core_asm_register_is_callee_saved(clobber->name))) {
             return false;
         }
     }
@@ -837,8 +1151,12 @@ static bool core_structured_inline_asm_allocate(
             program, binding->fixed_register_binding_id);
         if (fixed_binding == NULL || !fixed_binding->is_local ||
             fixed_binding->register_name == NULL || fixed_binding->register_name_length == 0U ||
-            core_inline_asm_clobbers_register(inline_asm, fixed_binding->register_name) ||
-            core_asm_register_in_use(operand_registers, 10U, fixed_binding->register_name)) {
+            core_inline_asm_clobbers_register(inline_asm, fixed_binding->register_name)) {
+            return false;
+        }
+        if (core_asm_register_in_use(operand_registers, 10U, fixed_binding->register_name) &&
+            !core_structured_fixed_phase_alias_safe(
+                instruction, binding_index, operand_registers, fixed_binding->register_name)) {
             return false;
         }
         operand_registers[binding->operand_index] = fixed_binding->register_name;
@@ -1062,17 +1380,29 @@ static bool core_direct_call_supported(const MinicC0Program *program,
     /* M86_DIRECT_RECORD_CALL_RESULT: mirror the existing callee-side
        one/two-slot aggregate return ABI on direct call sites. */
     if (!minic_riscv64_abi_cursor_initialize_for_return(
-            program, callee->return_type, &cursor, &return_value) ||
-        (return_value.kind != MINIC_RISCV64_ABI_VALUE_VOID &&
-         return_value.kind != MINIC_RISCV64_ABI_VALUE_INTEGER &&
-         (return_value.kind != MINIC_RISCV64_ABI_VALUE_AGGREGATE ||
-          return_value.slot_count == 0U || return_value.slot_count > 2U)) ||
-        (return_value.kind == MINIC_RISCV64_ABI_VALUE_AGGREGATE &&
-         (!minic_type_is_record(callee->return_type) ||
-          instruction->value.call.result_object >= function->object_count ||
-          !minic_type_equal(
-              function->objects[instruction->value.call.result_object].type,
-              callee->return_type)))) {
+            program, callee->return_type, &cursor, &return_value)) {
+        return false;
+    }
+    if (return_value.kind == MINIC_RISCV64_ABI_VALUE_AGGREGATE) {
+        if (return_value.slot_count == 0U || return_value.slot_count > 2U ||
+            !minic_type_is_record(callee->return_type) ||
+            instruction->value.call.result_object >= function->object_count ||
+            !minic_type_equal(
+                function->objects[instruction->value.call.result_object].type,
+                callee->return_type)) {
+            return false;
+        }
+    } else if (return_value.kind == MINIC_RISCV64_ABI_VALUE_INDIRECT) {
+        if (!minic_type_is_record(callee->return_type) || return_value.storage_size <= 16U ||
+            return_value.slot_count != 1U ||
+            instruction->value.call.result_object >= function->object_count ||
+            !minic_type_equal(
+                function->objects[instruction->value.call.result_object].type,
+                callee->return_type)) {
+            return false;
+        }
+    } else if (return_value.kind != MINIC_RISCV64_ABI_VALUE_VOID &&
+               return_value.kind != MINIC_RISCV64_ABI_VALUE_INTEGER) {
         return false;
     }
     for (argument_index = 0U; argument_index < instruction->value.call.argument_count;
@@ -1098,28 +1428,52 @@ static bool core_direct_call_supported(const MinicC0Program *program,
         }
         if (!minic_riscv64_abi_place_argument(
                 program, argument_type, is_fixed_parameter, &cursor, &location) ||
-            location.floating_register_count != 0U || location.stack_slot_count != 0U) {
+            location.floating_register_count != 0U) {
             return false;
         }
         if (core_scalar_type(argument_type)) {
             if (argument->kind != MINIC_CORE_CALL_ARGUMENT_VALUE ||
                 location.value.kind != MINIC_RISCV64_ABI_VALUE_INTEGER ||
-                location.integer_register_count != 1U || location.integer_register_begin >= 8U) {
+                !((location.integer_register_count == 1U &&
+                   location.integer_register_begin < 8U &&
+                   location.stack_slot_count == 0U) ||
+                  (location.integer_register_count == 0U &&
+                   location.stack_slot_count == 1U))) {
                 return false;
             }
         } else if (is_fixed_parameter && minic_type_is_record(argument_type)) {
             MinicCoreObjectId object_id;
 
-            if (argument->kind != MINIC_CORE_CALL_ARGUMENT_OBJECT ||
-                location.value.kind != MINIC_RISCV64_ABI_VALUE_AGGREGATE ||
-                location.value.slot_count == 0U || location.value.slot_count > 2U ||
-                location.integer_register_count != location.value.slot_count ||
-                location.integer_register_begin + location.integer_register_count > 8U) {
+            if (argument->kind != MINIC_CORE_CALL_ARGUMENT_OBJECT) {
                 return false;
             }
             object_id = argument->value.object_id;
             if (object_id >= function->object_count ||
                 !minic_type_equal(function->objects[object_id].type, argument_type)) {
+                return false;
+            }
+            if (location.value.kind == MINIC_RISCV64_ABI_VALUE_IGNORE) {
+                if (location.value.slot_count != 0U || location.integer_register_count != 0U ||
+                    location.stack_slot_count != 0U) {
+                    return false;
+                }
+            } else if (location.value.kind == MINIC_RISCV64_ABI_VALUE_AGGREGATE) {
+                if (location.value.slot_count == 0U || location.value.slot_count > 2U ||
+                    location.value.slot_count !=
+                        location.integer_register_count + location.stack_slot_count ||
+                    location.integer_register_begin + location.integer_register_count > 8U) {
+                    return false;
+                }
+            } else if (location.value.kind == MINIC_RISCV64_ABI_VALUE_INDIRECT) {
+                if (location.value.slot_count != 1U ||
+                    !((location.integer_register_count == 1U &&
+                       location.integer_register_begin < 8U &&
+                       location.stack_slot_count == 0U) ||
+                      (location.integer_register_count == 0U &&
+                       location.stack_slot_count == 1U))) {
+                    return false;
+                }
+            } else {
                 return false;
             }
         } else {
@@ -1216,15 +1570,18 @@ static bool core_indirect_call_supported(const MinicC0Program *program,
         }
         if (!minic_riscv64_abi_place_argument(
                 program, argument_type, is_fixed_parameter, &cursor, &location) ||
-            location.floating_register_count != 0U || location.stack_slot_count != 0U) {
+            location.floating_register_count != 0U) {
             return false;
         }
         if (core_scalar_type(argument_type)) {
             if (argument->kind != MINIC_CORE_CALL_ARGUMENT_VALUE ||
                 argument->value.value_id >= function->value_count ||
                 location.value.kind != MINIC_RISCV64_ABI_VALUE_INTEGER ||
-                location.integer_register_count != 1U ||
-                location.integer_register_begin >= 8U) {
+                !((location.integer_register_count == 1U &&
+                   location.integer_register_begin < 8U &&
+                   location.stack_slot_count == 0U) ||
+                  (location.integer_register_count == 0U &&
+                   location.stack_slot_count == 1U))) {
                 return false;
             }
         } else if (is_fixed_parameter && minic_type_is_record(argument_type)) {
@@ -1380,21 +1737,44 @@ static bool core_function_can_emit_basic_v0(const MinicC0Program *program,
         MinicRiscv64AbiValue return_value;
 
         if (!minic_riscv64_abi_cursor_initialize_for_return(
-                program, function->return_type, &cursor, &return_value) ||
-            (return_value.kind != MINIC_RISCV64_ABI_VALUE_VOID &&
-             return_value.kind != MINIC_RISCV64_ABI_VALUE_INTEGER &&
-             (return_value.kind != MINIC_RISCV64_ABI_VALUE_AGGREGATE ||
-              return_value.slot_count == 0U || return_value.slot_count > 2U))) {
+                program, function->return_type, &cursor, &return_value)) {
+            return false;
+        }
+        if (return_value.kind == MINIC_RISCV64_ABI_VALUE_AGGREGATE) {
+            if (return_value.slot_count == 0U || return_value.slot_count > 2U) {
+                return false;
+            }
+        } else if (return_value.kind == MINIC_RISCV64_ABI_VALUE_INDIRECT) {
+            if (!minic_type_is_record(function->return_type) ||
+                return_value.storage_size <= 16U || return_value.slot_count != 1U) {
+                return false;
+            }
+        } else if (return_value.kind != MINIC_RISCV64_ABI_VALUE_VOID &&
+                   return_value.kind != MINIC_RISCV64_ABI_VALUE_INTEGER) {
             return false;
         }
         for (index = 0U; index < function->parameter_count; ++index) {
             MinicRiscv64AbiArgumentLocation location;
 
             if (!minic_riscv64_abi_place_argument(
-                    program, function->parameter_types[index], true, &cursor, &location) ||
-                (location.value.kind != MINIC_RISCV64_ABI_VALUE_INTEGER &&
-                 (location.value.kind != MINIC_RISCV64_ABI_VALUE_AGGREGATE ||
-                  location.value.slot_count == 0U || location.value.slot_count > 2U))) {
+                    program, function->parameter_types[index], true, &cursor, &location)) {
+                return false;
+            }
+            if (location.value.kind == MINIC_RISCV64_ABI_VALUE_INDIRECT) {
+                if (!minic_type_is_record(function->parameter_types[index]) ||
+                    location.value.storage_size == 0U || location.value.slot_count != 1U ||
+                    location.floating_register_count != 0U ||
+                    !((location.integer_register_count == 1U &&
+                       location.integer_register_begin < 8U &&
+                       location.stack_slot_count == 0U) ||
+                      (location.integer_register_count == 0U &&
+                       location.stack_slot_count == 1U))) {
+                    return false;
+                }
+            } else if (location.value.kind != MINIC_RISCV64_ABI_VALUE_IGNORE &&
+                       location.value.kind != MINIC_RISCV64_ABI_VALUE_INTEGER &&
+                       (location.value.kind != MINIC_RISCV64_ABI_VALUE_AGGREGATE ||
+                        location.value.slot_count == 0U || location.value.slot_count > 2U)) {
                 return false;
             }
         }
@@ -1405,13 +1785,16 @@ static bool core_function_can_emit_basic_v0(const MinicC0Program *program,
         MinicType object_type;
 
         object_type = function->objects[index].type;
-        if ((!core_scalar_type(object_type) && !minic_type_is_record(object_type)) ||
+        if ((!core_scalar_type(object_type) && !minic_type_is_record(object_type) &&
+             !minic_type_is_array(object_type)) ||
             !minic_data_layout_type(minic_default_data_layout(),
                                     program,
                                     object_type,
                                     &object_size,
                                     &object_alignment) ||
-            object_size == 0U || object_alignment == 0U || object_alignment > 16U) {
+            (object_size == 0U && !minic_type_is_record(object_type)) ||
+            object_alignment == 0U ||
+            (object_alignment & (object_alignment - 1U)) != 0U) {
             return false;
         }
     }
@@ -1472,13 +1855,44 @@ static bool core_parameter_location(const MinicC0Program *program,
     return true;
 }
 
+static bool emit_incoming_stack_load64(FILE *file,
+                                               const MinicRiscv64CoreFrame *frame,
+                                               const char *destination_register,
+                                               size_t stack_slot) {
+    size_t byte_offset;
+
+    if (file == NULL || frame == NULL || destination_register == NULL ||
+        stack_slot > SIZE_MAX / 8U) {
+        return false;
+    }
+    byte_offset = stack_slot * 8U;
+    if (!frame->has_dynamic_stack_alignment) {
+        if (byte_offset > SIZE_MAX - frame->frame_size) {
+            return false;
+        }
+        return minic_riscv64_emit_sp_load64(
+            file, destination_register, frame->frame_size + byte_offset);
+    }
+    if (!minic_riscv64_emit_sp_load64(file, "t3", frame->entry_sp_offset)) {
+        return false;
+    }
+    if (byte_offset <= 2047U) {
+        return fprintf(file, "  ld %s, %zu(t3)\n", destination_register, byte_offset) >= 0;
+    }
+    return fprintf(file,
+                   "  li t2, %zu\n"
+                   "  add t3, t3, t2\n"
+                   "  ld %s, 0(t3)\n",
+                   byte_offset,
+                   destination_register) >= 0;
+}
+
 static bool emit_parameter(FILE *file,
                            const MinicC0Program *program,
                            const MinicCoreFunction *function,
                            const MinicRiscv64CoreFrame *frame,
                            const MinicCoreInstruction *instruction) {
     size_t parameter_index;
-    size_t incoming_offset;
 
     parameter_index = instruction->value.parameter_index;
     if (parameter_index >= function->parameter_count) {
@@ -1500,11 +1914,8 @@ static bool emit_parameter(FILE *file,
                 return false;
             }
         } else if (location.integer_register_count == 0U && location.stack_slot_count == 1U) {
-            if (location.stack_slot_begin > (SIZE_MAX - frame->frame_size) / 8U) {
-                return false;
-            }
-            incoming_offset = frame->frame_size + location.stack_slot_begin * 8U;
-            if (!minic_riscv64_emit_sp_load64(file, "t0", incoming_offset)) {
+            if (!emit_incoming_stack_load64(
+                    file, frame, "t0", location.stack_slot_begin)) {
                 return false;
             }
         } else {
@@ -1519,11 +1930,7 @@ static bool emit_parameter(FILE *file,
         size_t stack_slot;
 
         stack_slot = parameter_index - 8U;
-        if (stack_slot > (SIZE_MAX - frame->frame_size) / 8U) {
-            return false;
-        }
-        incoming_offset = frame->frame_size + stack_slot * 8U;
-        if (!minic_riscv64_emit_sp_load64(file, "t0", incoming_offset)) {
+        if (!emit_incoming_stack_load64(file, frame, "t0", stack_slot)) {
             return false;
         }
     }
@@ -1644,15 +2051,78 @@ static bool emit_parameter_object(FILE *file,
     object_id = instruction->value.parameter_object.object_id;
     if (!core_parameter_location(
             program, function, instruction->value.parameter_object.parameter_index, &location) ||
-        location.value.kind != MINIC_RISCV64_ABI_VALUE_AGGREGATE ||
-        location.value.slot_count == 0U || location.value.slot_count > 2U ||
-        location.value.slot_count != location.integer_register_count + location.stack_slot_count ||
         object_id >= function->object_count ||
         !minic_type_unqualified(function->objects[object_id].type, &object_value_type) ||
         !minic_type_equal(
             object_value_type,
             function->parameter_types[instruction->value.parameter_object.parameter_index]) ||
         !core_object_offset(program, function, object_id, &object_offset)) {
+        return false;
+    }
+    if (location.value.kind == MINIC_RISCV64_ABI_VALUE_IGNORE) {
+        return location.value.slot_count == 0U && location.integer_register_count == 0U &&
+               location.stack_slot_count == 0U;
+    }
+    if (location.value.kind == MINIC_RISCV64_ABI_VALUE_INDIRECT) {
+        size_t copied;
+
+        if (location.value.storage_size == 0U || location.value.slot_count != 1U ||
+            location.floating_register_count != 0U) {
+            return false;
+        }
+        if (location.integer_register_count == 1U && location.stack_slot_count == 0U) {
+            size_t register_index = location.integer_register_begin;
+
+            if (register_index >= 8U ||
+                fprintf(file,
+                        "  mv t1, %s\n",
+                        minic_core_rv64_argument_registers[register_index]) < 0) {
+                return false;
+            }
+        } else if (location.integer_register_count == 0U &&
+                   location.stack_slot_count == 1U) {
+            if (!emit_incoming_stack_load64(
+                    file, frame, "t1", location.stack_slot_begin)) {
+                return false;
+            }
+        } else {
+            return false;
+        }
+        if (!emit_sp_address(file, "t0", object_offset)) {
+            return false;
+        }
+        copied = 0U;
+        while (copied < location.value.storage_size) {
+            size_t chunk = location.value.storage_size - copied;
+            size_t offset;
+
+            if (chunk > 2048U) {
+                chunk = 2048U;
+            }
+            for (offset = 0U; offset < chunk; ++offset) {
+                if (fprintf(file,
+                            "  lbu t2, %zu(t1)\n"
+                            "  sb t2, %zu(t0)\n",
+                            offset,
+                            offset) < 0) {
+                    return false;
+                }
+            }
+            copied += chunk;
+            if (copied < location.value.storage_size &&
+                fprintf(file,
+                        "  addi t0, t0, 2047\n"
+                        "  addi t0, t0, 1\n"
+                        "  addi t1, t1, 2047\n"
+                        "  addi t1, t1, 1\n") < 0) {
+                return false;
+            }
+        }
+        return true;
+    }
+    if (location.value.kind != MINIC_RISCV64_ABI_VALUE_AGGREGATE ||
+        location.value.slot_count == 0U || location.value.slot_count > 2U ||
+        location.value.slot_count != location.integer_register_count + location.stack_slot_count) {
         return false;
     }
     for (chunk_index = 0U; chunk_index < location.value.slot_count; ++chunk_index) {
@@ -1671,15 +2141,10 @@ static bool emit_parameter_object(FILE *file,
             source_register = minic_core_rv64_argument_registers[register_index];
         } else {
             size_t stack_slot;
-            size_t incoming_offset;
 
             stack_slot =
                 location.stack_slot_begin + (chunk_index - location.integer_register_count);
-            if (stack_slot > (SIZE_MAX - frame->frame_size) / 8U) {
-                return false;
-            }
-            incoming_offset = frame->frame_size + stack_slot * 8U;
-            if (!minic_riscv64_emit_sp_load64(file, "t0", incoming_offset)) {
+            if (!emit_incoming_stack_load64(file, frame, "t0", stack_slot)) {
                 return false;
             }
         }
@@ -1719,7 +2184,16 @@ static bool emit_call(FILE *file,
             program, callee->return_type, &cursor, &return_value)) {
         return false;
     }
-    (void)return_value;
+    if (return_value.kind == MINIC_RISCV64_ABI_VALUE_INDIRECT) {
+        size_t result_offset;
+
+        if (instruction->value.call.result_object >= function->object_count ||
+            !core_object_offset(
+                program, function, instruction->value.call.result_object, &result_offset) ||
+            !emit_sp_address(file, "a0", result_offset)) {
+            return false;
+        }
+    }
     for (argument_index = 0U; argument_index < instruction->value.call.argument_count;
          ++argument_index) {
         const MinicCoreCallArgument *argument = &function->call_arguments[
@@ -1743,11 +2217,28 @@ static bool emit_call(FILE *file,
             return false;
         }
         if (argument->kind == MINIC_CORE_CALL_ARGUMENT_VALUE) {
-            if (location.integer_register_count != 1U || location.integer_register_begin >= 8U ||
-                !load_core_value(file,
-                                 frame,
-                                 argument->value.value_id,
-                                 minic_core_rv64_argument_registers[location.integer_register_begin])) {
+            if (location.integer_register_count == 1U && location.stack_slot_count == 0U) {
+                if (location.integer_register_begin >= 8U ||
+                    !load_core_value(
+                        file,
+                        frame,
+                        argument->value.value_id,
+                        minic_core_rv64_argument_registers[location.integer_register_begin])) {
+                    return false;
+                }
+            } else if (location.integer_register_count == 0U &&
+                       location.stack_slot_count == 1U) {
+                size_t outgoing_offset;
+
+                if (location.stack_slot_begin > SIZE_MAX / 8U ||
+                    !load_core_value(file, frame, argument->value.value_id, "t0")) {
+                    return false;
+                }
+                outgoing_offset = location.stack_slot_begin * 8U;
+                if (!minic_riscv64_emit_sp_store64(file, "t0", outgoing_offset)) {
+                    return false;
+                }
+            } else {
                 return false;
             }
             continue;
@@ -1760,12 +2251,46 @@ static bool emit_call(FILE *file,
                 !core_object_offset(program, function, argument->value.object_id, &object_offset)) {
                 return false;
             }
+            if (location.value.kind == MINIC_RISCV64_ABI_VALUE_IGNORE) {
+                if (location.value.slot_count != 0U || location.integer_register_count != 0U ||
+                    location.stack_slot_count != 0U) {
+                    return false;
+                }
+                continue;
+            }
+            if (location.value.kind == MINIC_RISCV64_ABI_VALUE_INDIRECT) {
+                if (location.integer_register_count == 1U && location.stack_slot_count == 0U) {
+                    if (location.integer_register_begin >= 8U ||
+                        !emit_sp_address(file,
+                                         minic_core_rv64_argument_registers[
+                                             location.integer_register_begin],
+                                         object_offset)) {
+                        return false;
+                    }
+                } else if (location.integer_register_count == 0U &&
+                           location.stack_slot_count == 1U) {
+                    size_t outgoing_offset;
+                    if (location.stack_slot_begin > SIZE_MAX / 8U ||
+                        !emit_sp_address(file, "t0", object_offset)) {
+                        return false;
+                    }
+                    outgoing_offset = location.stack_slot_begin * 8U;
+                    if (!minic_riscv64_emit_sp_store64(file, "t0", outgoing_offset)) {
+                        return false;
+                    }
+                } else {
+                    return false;
+                }
+                continue;
+            }
+            if (location.value.kind != MINIC_RISCV64_ABI_VALUE_AGGREGATE) {
+                return false;
+            }
             for (chunk_index = 0U; chunk_index < location.value.slot_count; ++chunk_index) {
                 size_t chunk_offset = chunk_index * 8U;
                 size_t chunk_size;
-                size_t register_index = location.integer_register_begin + chunk_index;
 
-                if (chunk_offset >= location.value.storage_size || register_index >= 8U ||
+                if (chunk_offset >= location.value.storage_size ||
                     object_offset > SIZE_MAX - chunk_offset) {
                     return false;
                 }
@@ -1773,11 +2298,33 @@ static bool emit_call(FILE *file,
                 if (chunk_size > 8U) {
                     chunk_size = 8U;
                 }
-                if (!emit_sp_load_chunk(file,
-                                        minic_core_rv64_argument_registers[register_index],
-                                        object_offset + chunk_offset,
-                                        chunk_size)) {
-                    return false;
+                if (chunk_index < location.integer_register_count) {
+                    size_t register_index = location.integer_register_begin + chunk_index;
+                    if (register_index >= 8U ||
+                        !emit_sp_load_chunk(file,
+                                            minic_core_rv64_argument_registers[register_index],
+                                            object_offset + chunk_offset,
+                                            chunk_size)) {
+                        return false;
+                    }
+                } else {
+                    size_t stack_chunk = chunk_index - location.integer_register_count;
+                    size_t stack_slot;
+                    size_t outgoing_offset;
+                    if (stack_chunk >= location.stack_slot_count ||
+                        location.stack_slot_begin > SIZE_MAX - stack_chunk) {
+                        return false;
+                    }
+                    stack_slot = location.stack_slot_begin + stack_chunk;
+                    if (stack_slot > SIZE_MAX / 8U ||
+                        !emit_sp_load_chunk(
+                            file, "t0", object_offset + chunk_offset, chunk_size)) {
+                        return false;
+                    }
+                    outgoing_offset = stack_slot * 8U;
+                    if (!minic_riscv64_emit_sp_store64(file, "t0", outgoing_offset)) {
+                        return false;
+                    }
                 }
             }
             continue;
@@ -1794,6 +2341,10 @@ static bool emit_call(FILE *file,
         size_t chunk_index;
         size_t object_offset;
 
+        if (return_value.kind == MINIC_RISCV64_ABI_VALUE_INDIRECT) {
+            return return_value.storage_size > 16U && return_value.slot_count == 1U &&
+                   instruction->value.call.result_object < function->object_count;
+        }
         if (return_value.kind != MINIC_RISCV64_ABI_VALUE_AGGREGATE ||
             return_value.slot_count == 0U || return_value.slot_count > 2U ||
             instruction->value.call.result_object >= function->object_count ||
@@ -1870,11 +2421,28 @@ static bool emit_indirect_call(FILE *file,
             return false;
         }
         if (argument->kind == MINIC_CORE_CALL_ARGUMENT_VALUE) {
-            if (location.integer_register_count != 1U || location.integer_register_begin >= 8U ||
-                !load_core_value(file,
-                                 frame,
-                                 argument->value.value_id,
-                                 minic_core_rv64_argument_registers[location.integer_register_begin])) {
+            if (location.integer_register_count == 1U && location.stack_slot_count == 0U) {
+                if (location.integer_register_begin >= 8U ||
+                    !load_core_value(
+                        file,
+                        frame,
+                        argument->value.value_id,
+                        minic_core_rv64_argument_registers[location.integer_register_begin])) {
+                    return false;
+                }
+            } else if (location.integer_register_count == 0U &&
+                       location.stack_slot_count == 1U) {
+                size_t outgoing_offset;
+
+                if (location.stack_slot_begin > SIZE_MAX / 8U ||
+                    !load_core_value(file, frame, argument->value.value_id, "t0")) {
+                    return false;
+                }
+                outgoing_offset = location.stack_slot_begin * 8U;
+                if (!minic_riscv64_emit_sp_store64(file, "t0", outgoing_offset)) {
+                    return false;
+                }
+            } else {
                 return false;
             }
             continue;
@@ -2444,6 +3012,26 @@ static bool emit_instruction(FILE *file,
         }
         return store_core_value(file, frame, instruction->result, "t0");
     case MINIC_CORE_INSTRUCTION_INTEGER_MULTIPLY:
+        if (minic_type_is_int128_integer(instruction->type)) {
+            MinicCoreValueId left = instruction->value.binary.left;
+            MinicCoreValueId right = instruction->value.binary.right;
+
+            if (left >= function->value_count || right >= function->value_count ||
+                !minic_type_is_int128_integer(function->values[left].type) ||
+                !minic_type_is_int128_integer(function->values[right].type) ||
+                !load_core_int128_value(file, frame, left, "t0", "t1") ||
+                !load_core_int128_value(file, frame, right, "t2", "t3") ||
+                fprintf(file,
+                        "  mulhu t4, t0, t2\n"
+                        "  mul t5, t1, t2\n"
+                        "  add t4, t4, t5\n"
+                        "  mul t5, t0, t3\n"
+                        "  add t4, t4, t5\n"
+                        "  mul t0, t0, t2\n") < 0) {
+                return false;
+            }
+            return store_core_int128_value(file, frame, instruction->result, "t0", "t4");
+        }
         if (!load_core_value(file, frame, instruction->value.binary.left, "t0") ||
             !load_core_value(file, frame, instruction->value.binary.right, "t1") ||
             fprintf(file, "  mul t0, t0, t1\n") < 0 ||
@@ -2516,6 +3104,50 @@ static bool emit_instruction(FILE *file,
 
         if (!minic_c0_type_effective_integer_type(program, instruction->type, &effective_type)) {
             return false;
+        }
+        if (minic_type_is_int128_integer(instruction->type)) {
+            bool is_signed;
+            MinicCoreValueId left = instruction->value.binary.left;
+            MinicCoreValueId right = instruction->value.binary.right;
+
+            if (left >= function->value_count || right >= function->value_count ||
+                !minic_type_is_int128_integer(function->values[left].type) ||
+                !minic_type_is_integer(function->values[right].type) ||
+                minic_type_is_int128_integer(function->values[right].type) ||
+                !core_integer_type_is_signed(program, instruction->type, &is_signed) ||
+                !load_core_int128_value(file, frame, left, "t0", "t1") ||
+                !load_core_value(file, frame, right, "t2") ||
+                fprintf(file,
+                        "  beqz t2, .L%s_core_i128_shr_done_%" PRIu32 "\n"
+                        "  li t3, 64\n"
+                        "  bgeu t2, t3, .L%s_core_i128_shr_ge64_%" PRIu32 "\n"
+                        "  neg t3, t2\n"
+                        "  sll t4, t1, t3\n"
+                        "  srl t0, t0, t2\n"
+                        "  or t0, t0, t4\n"
+                        "  %s t1, t1, t2\n"
+                        "  j .L%s_core_i128_shr_done_%" PRIu32 "\n"
+                        ".L%s_core_i128_shr_ge64_%" PRIu32 ":\n"
+                        "  addi t2, t2, -64\n"
+                        "  %s t0, t1, t2\n"
+                        "  %s\n"
+                        ".L%s_core_i128_shr_done_%" PRIu32 ":\n",
+                        symbol_name,
+                        instruction->result,
+                        symbol_name,
+                        instruction->result,
+                        is_signed ? "sra" : "srl",
+                        symbol_name,
+                        instruction->result,
+                        symbol_name,
+                        instruction->result,
+                        is_signed ? "sra" : "srl",
+                        is_signed ? "  srai t1, t1, 63" : "  li t1, 0",
+                        symbol_name,
+                        instruction->result) < 0) {
+                return false;
+            }
+            return store_core_int128_value(file, frame, instruction->result, "t0", "t1");
         }
         opcode = minic_type_is_unsigned_integer(effective_type) ? "srl" : "sra";
         if (!load_core_value(file, frame, instruction->value.binary.left, "t0") ||
@@ -2656,13 +3288,47 @@ static bool emit_instruction(FILE *file,
         }
         return store_core_value(file, frame, instruction->result, "t4");
     }
-    case MINIC_CORE_INSTRUCTION_INTEGER_CONVERSION:
-        if (!load_core_value(file, frame, instruction->value.operand, "t0") ||
+    case MINIC_CORE_INSTRUCTION_INTEGER_CONVERSION: {
+        MinicCoreValueId operand = instruction->value.operand;
+        MinicType source_type;
+
+        if (operand >= function->value_count) {
+            return false;
+        }
+        source_type = function->values[operand].type;
+        if (minic_type_is_int128_integer(instruction->type)) {
+            if (minic_type_is_int128_integer(source_type)) {
+                if (!load_core_int128_value(file, frame, operand, "t0", "t1")) {
+                    return false;
+                }
+            } else {
+                bool source_signed;
+
+                if (!minic_type_is_integer(source_type) ||
+                    !load_core_value(file, frame, operand, "t0") ||
+                    !core_integer_type_is_signed(program, source_type, &source_signed) ||
+                    fprintf(file,
+                            source_signed ? "  srai t1, t0, 63\n" : "  li t1, 0\n") < 0) {
+                    return false;
+                }
+            }
+            return store_core_int128_value(file, frame, instruction->result, "t0", "t1");
+        }
+        if (minic_type_is_int128_integer(source_type)) {
+            if (!load_core_int128_value(file, frame, operand, "t0", "t1") ||
+                !minic_riscv64_emit_integer_conversion_for_program(
+                    file, program, instruction->type, "t0")) {
+                return false;
+            }
+            return store_core_value(file, frame, instruction->result, "t0");
+        }
+        if (!load_core_value(file, frame, operand, "t0") ||
             !minic_riscv64_emit_integer_conversion_for_program(
                 file, program, instruction->type, "t0")) {
             return false;
         }
         return store_core_value(file, frame, instruction->result, "t0");
+    }
     case MINIC_CORE_INSTRUCTION_SCALAR_BITCAST:
         if (!load_core_value(file, frame, instruction->value.operand, "t0")) {
             return false;
@@ -2815,6 +3481,13 @@ static bool emit_instruction(FILE *file,
         }
         return store_core_value(file, frame, instruction->result, "t0");
     case MINIC_CORE_INSTRUCTION_LOAD:
+        if (minic_type_is_int128_integer(instruction->type)) {
+            if (!load_core_value(file, frame, instruction->value.load.address, "t0") ||
+                fprintf(file, "  ld t1, 0(t0)\n  ld t2, 8(t0)\n") < 0) {
+                return false;
+            }
+            return store_core_int128_value(file, frame, instruction->result, "t1", "t2");
+        }
         if (!load_core_value(file, frame, instruction->value.load.address, "t0") ||
             !minic_riscv64_emit_scalar_load_for_program(
                 file, program, instruction->type, "t1", "t0")) {
@@ -2830,6 +3503,11 @@ static bool emit_instruction(FILE *file,
             return false;
         }
         stored_type = function->values[stored_value].type;
+        if (minic_type_is_int128_integer(stored_type)) {
+            return load_core_value(file, frame, instruction->value.store.address, "t0") &&
+                   load_core_int128_value(file, frame, stored_value, "t1", "t2") &&
+                   fprintf(file, "  sd t1, 0(t0)\n  sd t2, 8(t0)\n") >= 0;
+        }
         return load_core_value(file, frame, instruction->value.store.address, "t0") &&
                load_core_value(file, frame, stored_value, "t1") &&
                minic_riscv64_emit_scalar_store_for_program(file, program, stored_type, "t1", "t0");
@@ -2848,11 +3526,49 @@ static bool emit_instruction(FILE *file,
                 file, frame, instruction->value.record_load.source_address, "t0")) {
             return false;
         }
-        opcode = record_size == 8U ? "ld" : record_size == 4U ? "lwu" :
-                 record_size == 2U ? "lhu" : "lbu";
-        if (fprintf(file, "  %s t1, 0(t0)\n", opcode) < 0 ||
-            !emit_sp_store_chunk(file, "t1", destination_offset, record_size)) {
+        if (record_size <= 8U) {
+            opcode = record_size == 8U ? "ld" : record_size == 4U ? "lwu" :
+                     record_size == 2U ? "lhu" : "lbu";
+            if (fprintf(file, "  %s t1, 0(t0)\n", opcode) < 0 ||
+                !emit_sp_store_chunk(file, "t1", destination_offset, record_size)) {
+                return false;
+            }
+            return true;
+        }
+
+        /* M162_CORE_RV64_RECORD_LOAD: materialize arbitrary non-empty records
+           into the destination CoreObject without assuming source alignment.
+           This mirrors RECORD_COPY's byte-safe O0 fallback. */
+        if (!emit_sp_address(file, "t1", destination_offset)) {
             return false;
+        }
+        {
+            size_t copied = 0U;
+            while (copied < record_size) {
+                size_t chunk = record_size - copied;
+                size_t offset;
+                if (chunk > 2048U) {
+                    chunk = 2048U;
+                }
+                for (offset = 0U; offset < chunk; ++offset) {
+                    if (fprintf(file,
+                                "  lbu t2, %zu(t0)\n"
+                                "  sb t2, %zu(t1)\n",
+                                offset,
+                                offset) < 0) {
+                        return false;
+                    }
+                }
+                copied += chunk;
+                if (copied < record_size &&
+                    fprintf(file,
+                            "  li t3, %zu\n"
+                            "  add t0, t0, t3\n"
+                            "  add t1, t1, t3\n",
+                            chunk) < 0) {
+                    return false;
+                }
+            }
         }
         return true;
     }
@@ -2950,15 +3666,56 @@ static bool emit_terminator(FILE *file,
                 !minic_type_equal(function->objects[terminator->return_object].type,
                                   function->return_type) ||
                 !minic_riscv64_abi_classify_value(program, function->return_type, &return_value) ||
-                return_value.kind != MINIC_RISCV64_ABI_VALUE_AGGREGATE ||
-                return_value.slot_count == 0U || return_value.slot_count > 2U ||
                 !core_object_offset(program, function, terminator->return_object, &object_offset) ||
-                !emit_sp_address(file, "t0", object_offset) ||
-                !minic_riscv64_emit_integer_aggregate_load_chunk(
-                    file, program, function->return_type, 0U, "a0", "t0") ||
-                (return_value.slot_count == 2U &&
-                 !minic_riscv64_emit_integer_aggregate_load_chunk(
-                     file, program, function->return_type, 1U, "a1", "t0"))) {
+                !emit_sp_address(file, "t0", object_offset)) {
+                return false;
+            }
+            if (return_value.kind == MINIC_RISCV64_ABI_VALUE_AGGREGATE) {
+                if (return_value.slot_count == 0U || return_value.slot_count > 2U ||
+                    !minic_riscv64_emit_integer_aggregate_load_chunk(
+                        file, program, function->return_type, 0U, "a0", "t0") ||
+                    (return_value.slot_count == 2U &&
+                     !minic_riscv64_emit_integer_aggregate_load_chunk(
+                         file, program, function->return_type, 1U, "a1", "t0"))) {
+                    return false;
+                }
+            } else if (return_value.kind == MINIC_RISCV64_ABI_VALUE_INDIRECT) {
+                size_t copied;
+
+                if (!frame->has_hidden_result_pointer || return_value.storage_size <= 16U ||
+                    return_value.slot_count != 1U ||
+                    !minic_riscv64_emit_sp_load64(
+                        file, "t1", frame->hidden_result_pointer_offset)) {
+                    return false;
+                }
+                copied = 0U;
+                while (copied < return_value.storage_size) {
+                    size_t chunk = return_value.storage_size - copied;
+                    size_t offset;
+
+                    if (chunk > 2048U) {
+                        chunk = 2048U;
+                    }
+                    for (offset = 0U; offset < chunk; ++offset) {
+                        if (fprintf(file,
+                                    "  lbu t2, %zu(t0)\n"
+                                    "  sb t2, %zu(t1)\n",
+                                    offset,
+                                    offset) < 0) {
+                            return false;
+                        }
+                    }
+                    copied += chunk;
+                    if (copied < return_value.storage_size &&
+                        fprintf(file,
+                                "  addi t0, t0, 2047\n"
+                                "  addi t0, t0, 1\n"
+                                "  addi t1, t1, 2047\n"
+                                "  addi t1, t1, 1\n") < 0) {
+                        return false;
+                    }
+                }
+            } else {
                 return false;
             }
         } else if (terminator->return_value != MINIC_CORE_VALUE_INVALID &&
@@ -3009,13 +3766,39 @@ static bool emit_core_function_basic_v0_with_symbol(FILE *file,
         return false;
     }
     symbol_name = symbol->symbol_name;
-    if (!minic_riscv64_emit_function_symbol_begin(file, symbol) ||
-        !minic_riscv64_emit_stack_allocate(file, frame.frame_size)) {
+    if (!minic_riscv64_emit_function_symbol_begin(file, symbol)) {
+        return false;
+    }
+    if (frame.has_dynamic_stack_alignment) {
+        if (fprintf(file, "  mv t0, sp\n") < 0 ||
+            !minic_riscv64_emit_stack_allocate(file, frame.frame_size) ||
+            fprintf(file,
+                    "  li t1, -%zu\n"
+                    "  and sp, sp, t1\n",
+                    frame.stack_alignment) < 0 ||
+            !minic_riscv64_emit_sp_store64(file, "t0", frame.entry_sp_offset)) {
+            return false;
+        }
+    } else if (!minic_riscv64_emit_stack_allocate(file, frame.frame_size)) {
         return false;
     }
     if (frame.saves_return_address &&
         !minic_riscv64_emit_sp_store64(file, "ra", frame.return_address_offset)) {
         return false;
+    }
+    if (frame.has_hidden_result_pointer &&
+        !minic_riscv64_emit_sp_store64(file, "a0", frame.hidden_result_pointer_offset)) {
+        return false;
+    }
+    if (frame.preserves_structured_asm_callee_saved) {
+        size_t saved_index;
+        for (saved_index = 0U; saved_index < CORE_ASM_CALLEE_SAVED_COUNT; ++saved_index) {
+            size_t saved_offset = frame.structured_asm_callee_saved_offset + saved_index * 8U;
+            if (!minic_riscv64_emit_sp_store64(
+                    file, core_asm_callee_saved_registers[saved_index], saved_offset)) {
+                return false;
+            }
+        }
     }
     if (frame.has_variadic_argument_address) {
         size_t register_index;
@@ -3063,7 +3846,25 @@ static bool emit_core_function_basic_v0_with_symbol(FILE *file,
         !minic_riscv64_emit_sp_load64(file, "ra", frame.return_address_offset)) {
         return false;
     }
-    if (!minic_riscv64_emit_stack_release(file, frame.frame_size) || fprintf(file, "  ret\n") < 0 ||
+    if (frame.preserves_structured_asm_callee_saved) {
+        size_t saved_index;
+        for (saved_index = 0U; saved_index < CORE_ASM_CALLEE_SAVED_COUNT; ++saved_index) {
+            size_t saved_offset = frame.structured_asm_callee_saved_offset + saved_index * 8U;
+            if (!minic_riscv64_emit_sp_load64(
+                    file, core_asm_callee_saved_registers[saved_index], saved_offset)) {
+                return false;
+            }
+        }
+    }
+    if (frame.has_dynamic_stack_alignment) {
+        if (!minic_riscv64_emit_sp_load64(file, "t0", frame.entry_sp_offset) ||
+            fprintf(file, "  mv sp, t0\n") < 0) {
+            return false;
+        }
+    } else if (!minic_riscv64_emit_stack_release(file, frame.frame_size)) {
+        return false;
+    }
+    if (fprintf(file, "  ret\n") < 0 ||
         !minic_riscv64_emit_function_symbol_end(file, symbol)) {
         return false;
     }
