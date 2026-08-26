@@ -88,34 +88,36 @@ jobs:
           p = Path('src/core/core_lower.c')
           s = p.read_text()
 
-          assignment_anchor = '''    if (source_value >= context->function->value_count) {
-              return MINIC_CORE_LOWER_ERROR;
-          }
-          if (minic_type_is_pointer(target_type)) {
-          '''
-          assignment_replacement = '''    if (source_value >= context->function->value_count) {
-              return MINIC_CORE_LOWER_ERROR;
-          }
-          if (minic_type_is_double(target_type)) {
-              MinicType source_type;
-
-              if (!core_scalar_expression_value_type(context->body, expression, &source_type) ||
-                  !minic_type_is_double(source_type) ||
-                  !minic_type_equal(source_type, target_type)) {
-                  return MINIC_CORE_LOWER_UNSUPPORTED;
-              }
-              if (!minic_type_equal(context->function->values[source_value].type, source_type)) {
-                  return MINIC_CORE_LOWER_ERROR;
-              }
-              *value_id = source_value;
-              return MINIC_CORE_LOWER_OK;
-          }
-          if (minic_type_is_pointer(target_type)) {
-          '''
-          count = s.count(assignment_anchor)
-          if count != 1:
-              raise SystemExit(f'M175B scalar assignment anchor count={count}')
-          s = s.replace(assignment_anchor, assignment_replacement, 1)
+          assignment_function = s.find(
+              'static MinicCoreLowerStatus lower_scalar_assignment_value('
+          )
+          assignment_bound = s.find(
+              '    if (source_value >= context->function->value_count) {\n',
+              assignment_function,
+          )
+          pointer_start = s.find(
+              '    if (minic_type_is_pointer(target_type)) {\n',
+              assignment_bound,
+          )
+          if assignment_function < 0 or assignment_bound < 0 or pointer_start < 0:
+              raise SystemExit('M175B scalar assignment owner anchor missing')
+          double_identity = (
+              '    if (minic_type_is_double(target_type)) {\n'
+              '        MinicType source_type;\n'
+              '\n'
+              '        if (!core_scalar_expression_value_type(context->body, expression, &source_type) ||\n'
+              '            !minic_type_is_double(source_type) ||\n'
+              '            !minic_type_equal(source_type, target_type)) {\n'
+              '            return MINIC_CORE_LOWER_UNSUPPORTED;\n'
+              '        }\n'
+              '        if (!minic_type_equal(context->function->values[source_value].type, source_type)) {\n'
+              '            return MINIC_CORE_LOWER_ERROR;\n'
+              '        }\n'
+              '        *value_id = source_value;\n'
+              '        return MINIC_CORE_LOWER_OK;\n'
+              '    }\n'
+          )
+          s = s[:pointer_start] + double_identity + s[pointer_start:]
 
           return_function = s.find('static MinicCoreLowerStatus lower_return(')
           return_start = s.find(
@@ -128,14 +130,15 @@ jobs:
           )
           if return_function < 0 or return_start < 0 or record_start < 0:
               raise SystemExit('M175B scalar return owner anchor missing')
-          new_return = '''        if (core_memory_scalar_type(context->source_function->return_type)) {
-              /* M175B_SCALAR_RETURN_OWNER: all Core memory scalars use the same
-                 C assignment/value transport at the return boundary. */
-              status = lower_scalar_assignment_value(context,
-                                                     context->source_function->return_type,
-                                                     statement->expression,
-                                                     &terminator.return_value);
-          '''
+          new_return = (
+              '        if (core_memory_scalar_type(context->source_function->return_type)) {\n'
+              '            /* M175B_SCALAR_RETURN_OWNER: all Core memory scalars use the same\n'
+              '               C assignment/value transport at the return boundary. */\n'
+              '            status = lower_scalar_assignment_value(context,\n'
+              '                                                   context->source_function->return_type,\n'
+              '                                                   statement->expression,\n'
+              '                                                   &terminator.return_value);\n'
+          )
           s = s[:return_start] + new_return + s[record_start:]
           p.write_text(s)
           PY
