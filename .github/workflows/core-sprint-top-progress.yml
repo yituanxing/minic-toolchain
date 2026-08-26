@@ -10,7 +10,10 @@ permissions:
 jobs:
   strict500:
     if: github.event_name == 'workflow_dispatch' || github.head_ref == 'refactor/declaration-sema-v1'
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      DEBIAN_FRONTEND: noninteractive
     steps:
       - uses: actions/checkout@v4
         with:
@@ -24,13 +27,82 @@ jobs:
           path: build/linux-focus-corpus
           key: linux-focus-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-${{ hashFiles('tests/external/linux/replay-indices.txt') }}
 
-      - name: Require frozen corpus
+      - name: Restore pinned Linux source archive
+        if: steps.linux-corpus-cache.outputs.cache-hit != 'true'
+        id: linux-source-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-cache/linux-6.6.143.tar.xz
+          key: linux-source-6.6.143-dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932
+
+      - name: Restore RISC-V package archives
+        if: steps.linux-corpus-cache.outputs.cache-hit != 'true'
+        id: rv64-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/minic-apt/archives
+          key: rv64-apt-${{ runner.os }}-${{ runner.arch }}-noble-${{ hashFiles('tools/ci/ubuntu-24.04-packages.txt') }}
+
+      - name: Restore native Kbuild package archives
+        if: steps.linux-corpus-cache.outputs.cache-hit != 'true'
+        id: kbuild-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.cache/minic-kbuild-apt/archives
+          key: kbuild-apt-${{ runner.os }}-${{ runner.arch }}-noble-flex-bison-bc-libelf-dev-libssl-dev-v1
+
+      - name: Install Linux corpus rebuild dependencies
+        if: steps.linux-corpus-cache.outputs.cache-hit != 'true'
         shell: bash
+        env:
+          RV64_CACHE_HIT: ${{ steps.rv64-cache.outputs.cache-hit }}
+          KBUILD_CACHE_HIT: ${{ steps.kbuild-cache.outputs.cache-hit }}
         run: |
           set -Eeuo pipefail
-          test "${{ steps.linux-corpus-cache.outputs.cache-hit }}" = true
-          test -s build/linux-focus-corpus/selected-tus.txt
-          echo "M175_STRICT500_SOURCE_HEAD=$(git rev-parse HEAD)"
+          apt_cache="$HOME/.cache/minic-apt/archives"
+          native_cache="$HOME/.cache/minic-kbuild-apt/archives"
+          mkdir -p "$apt_cache/partial" "$native_cache/partial"
+
+          install_cached_debs() {
+            cache_dir=$1
+            label=$2
+            mapfile -d '' cached_packages < <(find "$cache_dir" -maxdepth 1 -type f -name '*.deb' -print0 | sort -z)
+            if (( ${#cached_packages[@]} == 0 )); then
+              return 1
+            fi
+            printf 'Restoring %d cached %s packages\n' "${#cached_packages[@]}" "$label"
+            sudo dpkg --unpack "${cached_packages[@]}" || true
+            sudo dpkg --configure -a
+          }
+
+          if [[ "$KBUILD_CACHE_HIT" == true ]]; then
+            install_cached_debs "$native_cache" 'native Kbuild' || true
+          fi
+          if [[ "$RV64_CACHE_HIT" == true ]]; then
+            install_cached_debs "$apt_cache" 'RISC-V' || true
+          fi
+
+          missing=()
+          command -v flex >/dev/null 2>&1 || missing+=(flex)
+          command -v bison >/dev/null 2>&1 || missing+=(bison)
+          command -v bc >/dev/null 2>&1 || missing+=(bc)
+          command -v riscv64-linux-gnu-gcc >/dev/null 2>&1 || missing+=(gcc-riscv64-linux-gnu libc6-dev-riscv64-cross)
+          dpkg-query -W -f='${Status}' libelf-dev 2>/dev/null | grep -q 'ok installed' || missing+=(libelf-dev)
+          dpkg-query -W -f='${Status}' libssl-dev 2>/dev/null | grep -q 'ok installed' || missing+=(libssl-dev)
+
+          if (( ${#missing[@]} != 0 )); then
+            sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 update
+            sudo apt-get \
+              -o Acquire::Retries=3 \
+              -o Acquire::http::Timeout=30 \
+              -o Dir::Cache::archives="$native_cache" \
+              -o APT::Keep-Downloaded-Packages=true \
+              install -y --no-install-recommends "${missing[@]}"
+          fi
+          command -v riscv64-linux-gnu-gcc
+          command -v flex
+          command -v bison
+          command -v bc
 
       - name: Stage M175B and physically sever legacy function route
         shell: bash
@@ -50,6 +122,83 @@ jobs:
 
       - name: Build Core-only candidate
         run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/m175-strict500-compiler
+
+      - name: Rebuild frozen first500 corpus on cache miss
+        if: steps.linux-corpus-cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          compiler="$GITHUB_WORKSPACE/build/m175-strict500-compiler/bin/minic"
+          bootstrap="$GITHUB_WORKSPACE/build/m175-corpus-bootstrap"
+          selection=$(grep -Ev '^[[:space:]]*(#|$)' tests/external/linux/replay-indices.txt | paste -sd, -)
+          test -n "$selection"
+
+          set +e
+          MINIC="$compiler" \
+          BUILD_DIR="$bootstrap" \
+          LINUX_ARCHIVE_CACHE="$GITHUB_WORKSPACE/build/linux-cache/linux-6.6.143.tar.xz" \
+          CROSS_COMPILE=riscv64-linux-gnu- \
+          LINUX_BATCH_OFFSET=0 \
+          LINUX_BATCH_LIMIT=500 \
+          LINUX_BATCH_JOBS=4 \
+          LINUX_BATCH_SELECTION="$selection" \
+            sh tests/external/linux/batch_probe.sh
+          bootstrap_status=$?
+          set -e
+          printf 'M175_CORPUS_BOOTSTRAP_COMPILER_STATUS=%d\n' "$bootstrap_status"
+
+          python3 - <<'PY'
+          from pathlib import Path
+          import shutil
+
+          work = Path('build/m175-corpus-bootstrap')
+          corpus = Path('build/linux-focus-corpus')
+          selected = work / 'selected-tus.txt'
+          if not selected.is_file():
+              raise SystemExit('M175 corpus bootstrap did not produce selected-tus.txt')
+          rows = [line for line in selected.read_text().splitlines() if line.strip()]
+          if len(rows) != 500:
+              raise SystemExit(f'M175 corpus bootstrap selected {len(rows)}, expected 500')
+          shutil.rmtree(corpus, ignore_errors=True)
+          inputs = corpus / 'kbuild'
+          inputs.mkdir(parents=True)
+          shutil.copy2(selected, corpus / 'selected-tus.txt')
+          manifest = work / 'tu-manifest.txt'
+          if manifest.is_file():
+              shutil.copy2(manifest, corpus / 'tu-manifest.txt')
+          for row in rows:
+              _, _, rel_i, _ = row.split('\t', 3)
+              source = work / 'kbuild' / rel_i
+              if not source.is_file() or source.stat().st_size == 0:
+                  raise SystemExit(f'M175 corpus bootstrap missing {source}')
+              target = inputs / rel_i
+              target.parent.mkdir(parents=True, exist_ok=True)
+              shutil.copy2(source, target)
+          print('M175_CORPUS_BOOTSTRAP selected=500 preprocess_missing=0')
+          PY
+
+      - name: Require frozen corpus
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -s build/linux-focus-corpus/selected-tus.txt
+          test "$(grep -cve '^[[:space:]]*$' build/linux-focus-corpus/selected-tus.txt)" -eq 500
+          echo "M175_STRICT500_SOURCE_HEAD=$(git rev-parse HEAD)"
+          echo "M175_CORPUS_CACHE_HIT=${{ steps.linux-corpus-cache.outputs.cache-hit }}"
+
+      - name: Save rebuilt frozen first500 corpus
+        if: steps.linux-corpus-cache.outputs.cache-hit != 'true' && hashFiles('build/linux-focus-corpus/selected-tus.txt') != ''
+        uses: actions/cache/save@v4
+        with:
+          path: build/linux-focus-corpus
+          key: linux-focus-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-${{ hashFiles('tests/external/linux/replay-indices.txt') }}
+
+      - name: Save pinned Linux source archive
+        if: steps.linux-corpus-cache.outputs.cache-hit != 'true' && steps.linux-source-cache.outputs.cache-hit != 'true' && hashFiles('build/linux-cache/linux-6.6.143.tar.xz') != ''
+        uses: actions/cache/save@v4
+        with:
+          path: build/linux-cache/linux-6.6.143.tar.xz
+          key: linux-source-6.6.143-dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932
 
       - name: Qualify scalar double focused
         shell: bash
@@ -134,4 +283,6 @@ jobs:
             build/m175-strict500/headline.txt
             build/m175-strict500/minic-stderr
             build/m175-strict500-focused/**
+            build/m175-corpus-bootstrap/batch-summary.txt
+            build/m175-corpus-bootstrap/preprocess.log
           if-no-files-found: warn
