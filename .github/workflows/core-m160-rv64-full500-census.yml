@@ -74,6 +74,33 @@ jobs:
           echo "status=$replay_status" >> "$GITHUB_OUTPUT"
           printf 'M160_REPLAY_STATUS=%d\n' "$replay_status"
 
+      - name: Capture common first-blocker partial assembly
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          work = Path('build/m160-core-rv64')
+          assembly = work / 'minic-out/init/main.i.s'
+          output = work / 'm160-first-blocker-assembly.txt'
+          if not assembly.exists():
+              output.write_text('init/main.i partial assembly is missing\n')
+              raise SystemExit(0)
+
+          lines = assembly.read_text(errors='replace').splitlines()
+          start = max(0, len(lines) - 240)
+          for index, line in enumerate(lines):
+              if line.strip() == 'mul_u64_u32_shr:':
+                  start = index
+          selected = lines[start:]
+          output.write_text(
+              f'assembly_lines={len(lines)} capture_start={start + 1}\n' +
+              '\n'.join(selected) + '\n'
+          )
+          print(output.read_text())
+          PY
+
       - name: Classify Core RV64 backend frontier
         shell: bash
         run: |
@@ -94,20 +121,27 @@ jobs:
           failed = sum(row.get('status') == 'FAIL' for row in rows)
           missing = sum(row.get('status') == 'PREPROCESS_MISSING' for row in rows)
 
-          basic_v0_re = re.compile(
+          preflight_re = re.compile(
               r"Core-owned function '([^']+)' cannot be emitted by RV64 basic-v0"
           )
+          emit_runtime_re = re.compile(
+              r"cannot emit RISC-V function '([^']+)' \(index=\d+\)"
+          )
           groups: Counter[str] = Counter()
+          functions: Counter[str] = Counter()
           examples: dict[str, list[dict[str, object]]] = {}
           unexpected: list[dict[str, object]] = []
 
           def classify(message: str) -> tuple[str, str | None]:
-              match = basic_v0_re.search(message)
+              match = preflight_re.search(message)
               if match:
-                  return 'basic-v0-capability', match.group(1)
-              if 'Core lowering unsupported in strict mode' in message:
+                  return 'preflight-reject', match.group(1)
+              match = emit_runtime_re.search(message)
+              if match:
+                  return 'emit-runtime', match.group(1)
+              if 'Core IR shadow does not yet support function' in message:
                   return 'unexpected-core-lowering-unsupported', None
-              if 'Core lowering failed' in message or 'Core verifier' in message:
+              if 'Core IR shadow lowering failed for function' in message or 'Core verifier' in message:
                   return 'unexpected-core-error', None
               return 'unexpected-other', None
 
@@ -117,6 +151,8 @@ jobs:
               message = str(row.get('message', ''))
               group, function = classify(message)
               groups[group] += 1
+              if function:
+                  functions[f'{group}:{function}'] += 1
               item = {
                   'index': row.get('index'),
                   'input': row.get('input'),
@@ -127,14 +163,15 @@ jobs:
               examples.setdefault(group, [])
               if len(examples[group]) < 40:
                   examples[group].append(item)
-              if group != 'basic-v0-capability':
+              if group.startswith('unexpected-'):
                   unexpected.append(item)
 
-          capability = groups['basic-v0-capability']
+          preflight = groups['preflight-reject']
+          emit_runtime = groups['emit-runtime']
           headline = (
               f'M160_CORE_RV64_EXACT selected={selected} pass={passed} fail={failed} '
-              f'preprocess_missing={missing} basic_v0_reject={capability} '
-              f'unexpected={len(unexpected)}'
+              f'preprocess_missing={missing} preflight_reject={preflight} '
+              f'emit_runtime={emit_runtime} unexpected={len(unexpected)}'
           )
           print(headline)
 
@@ -146,6 +183,7 @@ jobs:
               'fail': failed,
               'preprocess_missing': missing,
               'groups': dict(groups),
+              'functions': dict(functions),
               'examples': examples,
               'unexpected': unexpected,
               'headline': headline,
@@ -156,6 +194,11 @@ jobs:
           for group, count in groups.most_common():
               text.append(f'  {count:4d}  {group}')
           if not groups:
+              text.append('  none')
+          text.extend(['', 'first-blocker functions:'])
+          for key, count in functions.most_common(30):
+              text.append(f'  {count:4d}  {key}')
+          if not functions:
               text.append('  none')
           text.extend(['', 'examples:'])
           for group, items in examples.items():
@@ -183,7 +226,7 @@ jobs:
               raise SystemExit(f'M160 corpus missing {missing} selected TUs')
           if unexpected:
               raise SystemExit(
-                  f'M160 found {len(unexpected)} failures outside the expected RV64 basic-v0 capability boundary'
+                  f'M160 found {len(unexpected)} failures outside the Core RV64 backend boundary'
               )
           PY
 
@@ -200,5 +243,6 @@ jobs:
             build/m160-core-rv64/m160-summary.json
             build/m160-core-rv64/m160-summary.txt
             build/m160-core-rv64/headline.txt
+            build/m160-core-rv64/m160-first-blocker-assembly.txt
             build/m160-core-rv64/minic-stderr
           if-no-files-found: warn
