@@ -12,15 +12,15 @@ if "M158_FINAL_STRICT_TAIL" not in Path("src/core/core_ir.h").read_text():
     raise SystemExit("M159 requires staged M158 final-tail semantics")
 
 # Temporary M158 ingress diagnostics were useful only to prove #414 was not a
-# parameter-ingress failure.  Remove them before the qualified semantic cut.
+# parameter-ingress failure. They may already have been removed by a later M158
+# materializer revision, so this cleanup must be idempotent.
 text, removed = re.subn(
     r'\n\s*\(void\)fprintf\(stderr,\n\s*"CORE_M158_INGRESS_DETAIL.*?\n\s*\);',
     '',
     text,
     flags=re.S,
 )
-if removed < 2:
-    raise SystemExit(f"M159 expected M158 ingress diagnostics, removed {removed}")
+print(f"M159 removed {removed} stale M158 ingress diagnostics")
 
 anchor = '''static bool normalized_for_continue_tail(const MinicCoreLowerContext *context,
                                          const MinicStatement *loop,
