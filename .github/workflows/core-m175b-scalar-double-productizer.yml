@@ -2,13 +2,20 @@ name: Core M175B Scalar Double Productizer
 
 on:
   pull_request:
+  push:
+    branches:
+      - refactor/declaration-sema-v1
+
+concurrency:
+  group: core-m175b-refactor-declaration-sema-v1
+  cancel-in-progress: true
 
 permissions:
   contents: write
 
 jobs:
   productize:
-    if: github.head_ref == 'refactor/declaration-sema-v1'
+    if: github.event_name == 'push' || github.head_ref == 'refactor/declaration-sema-v1'
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
