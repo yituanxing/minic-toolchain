@@ -127,6 +127,7 @@ def patch_codegen_function() -> None:
 
     require("minic_riscv64_emit_function(" not in text, "legacy AST function dispatcher remains")
     require("minic_riscv64_write_c0_program(" not in text, "legacy program writer remains")
+    require("minic_riscv64_argument_registers" not in text, "legacy argument register table remains")
     require("failure_stage" not in text, "legacy failure-stage plumbing remains")
     require("label_counter" not in text, "legacy label counter remains")
     CODEGEN_FUNCTION.write_text(text)
