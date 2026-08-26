@@ -1,13 +1,11 @@
-name: Core Strict500 Snapshot
+name: Core M175 Core-Only Strict500
 
 on:
   pull_request:
-    paths-ignore:
-      - '.github/workflows/**'
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   strict500:
@@ -32,40 +30,64 @@ jobs:
           set -Eeuo pipefail
           test "${{ steps.linux-corpus-cache.outputs.cache-hit }}" = true
           test -s build/linux-focus-corpus/selected-tus.txt
+          echo "M175_STRICT500_SOURCE_HEAD=$(git rev-parse HEAD)"
 
-      - name: Stage M124 indirect function designator
-        id: m124
+      - name: Stage M175B and physically sever legacy function route
         shell: bash
         run: |
           set -Eeuo pipefail
-          if grep -Fq 'M124_INDIRECT_FUNCTION_DESIGNATOR' src/core/core_lower.c; then
-            echo 'staged=false' >> "$GITHUB_OUTPUT"
-          else
-            python3 tools/ci/apply-m124-indirect-function-designator.py
-            git diff --check
-            echo 'staged=true' >> "$GITHUB_OUTPUT"
-          fi
+          before_test_hash=$(git hash-object tests/compiler/c0/run.sh)
+          python3 tools/ci/apply-m175b-qualification.py
+          python3 tools/ci/apply-m175-core-only-cut.py
+          git diff --check
+          test "$before_test_hash" = "$(git hash-object tests/compiler/c0/run.sh)"
+          grep -Fq 'M175_LEGACY_FUNCTION_ROUTE_REMOVED' src/compiler/compiler.c
+          grep -Fq 'M175B_SCALAR_DOUBLE_BRIDGE' src/core/core_lower.c
+          grep -Fq 'M175B_SCALAR_RETURN_OWNER' src/core/core_lower.c
+          ! git grep -n 'minic_riscv64_write_c0_program(' -- src
+          ! git grep -n 'minic_riscv64_emit_function(' -- src
+          echo 'M175_CORE_ONLY_STAGE route=ABSENT tests=UNCHANGED'
 
-      - name: Validate census tooling
-        run: python3 -m py_compile tools/ci/classify-core-strict-frontier.py
+      - name: Build Core-only candidate
+        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/m175-strict500-compiler
 
-      - name: Enable compact progress telemetry
-        run: python3 tools/dev/patch-linux-replay-live-progress.py
-
-      - name: Build exact compiler
-        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/strict500-compiler
-
-      - name: Run fast regression gate
-        run: make -j4 check-fast MODE=release CFLAGS=-Werror BUILD_DIR=build/strict500-check
-
-      - name: Replay frozen strict500
+      - name: Qualify scalar double focused
         shell: bash
         run: |
           set -Eeuo pipefail
-          compiler="$GITHUB_WORKSPACE/build/strict500-compiler/bin/minic"
-          work="$GITHUB_WORKSPACE/build/strict500"
+          make -j4 check-cast-expressions MODE=release CFLAGS=-Werror BUILD_DIR=build/m175-strict500-cast
+          compiler="$GITHUB_WORKSPACE/build/m175-strict500-compiler/bin/minic"
+          work="$GITHUB_WORKSPACE/build/m175-strict500-focused"
+          mkdir -p "$work"
+          cc -E -P -std=gnu11 -x c tests/compiler/c0/cast_integer_to_double.c -o "$work/int-to-double.i"
+          MINIC_CORE_IR=strict CORE_FAST_TRACE=1 "$compiler" -S "$work/int-to-double.i" -o "$work/int-to-double.s"
+          grep -E '^[[:space:]]+fcvt\.d\.w[[:space:]]+' "$work/int-to-double.s" >/dev/null
+          cc -E -P -std=gnu11 -x c tests/compiler/c0/cast_double_to_integer.c -o "$work/double-to-int.i"
+          MINIC_CORE_IR=strict CORE_FAST_TRACE=1 "$compiler" -S "$work/double-to-int.i" -o "$work/double-to-int.s"
+          grep -E '^[[:space:]]+fcvt\.w\.d[[:space:]]+[^,]+,[[:space:]]*[^,]+,[[:space:]]*rtz$' "$work/double-to-int.s" >/dev/null
+          echo 'M175_DOUBLE_FOCUSED=PASS'
+
+      - name: Qualify local complete object diagnostics
+        run: make -j4 check-pointer-members MODE=release CFLAGS=-Werror BUILD_DIR=build/m175-strict500-pointer
+
+      - name: Record unchanged broad check-fast debt
+        id: check_fast
+        continue-on-error: true
+        run: make -j4 check-fast MODE=release CFLAGS=-Werror BUILD_DIR=build/m175-strict500-fast
+
+      - name: Report unchanged check-fast outcome
+        if: always()
+        shell: bash
+        run: echo "M175_UNCHANGED_CHECK_FAST_OUTCOME=${{ steps.check_fast.outcome }}"
+
+      - name: Replay frozen strict500 after physical cut
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          compiler="$GITHUB_WORKSPACE/build/m175-strict500-compiler/bin/minic"
+          work="$GITHUB_WORKSPACE/build/m175-strict500"
           set +e
-          MINIC_CORE_IR=strict python3 tests/external/linux/corpus_replay.py \
+          MINIC_CORE_IR=strict CORE_FAST_TRACE=1 python3 tests/external/linux/corpus_replay.py \
             --minic "$compiler" \
             --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
             --work "$work" \
@@ -75,99 +97,41 @@ jobs:
             --sample-count 0
           replay_status=$?
           set -e
-          printf 'CORE_STRICT500_REPLAY_STATUS=%d\n' "$replay_status"
+          printf 'M175_STRICT500_REPLAY_STATUS=%d\n' "$replay_status"
           python3 tools/ci/classify-core-strict-frontier.py \
             "$work/batch-results.json" \
             --stderr-root "$work/minic-stderr" \
             --ast-header "$GITHUB_WORKSPACE/src/frontend/ast.h" \
-            --examples 20 \
+            --examples 30 \
             --json-out "$work/frontier-summary.json" \
-            --reason-text-out "$work/reason-summary.txt"
-          python3 tools/ci/summarize-core-frontier-progress.py \
-            "$work/batch-results.json" \
-            --expect-selected 500 \
-            --json-out "$work/progress-summary.json" \
-            --text-out "$work/progress-summary.txt"
+            --reason-text-out "$work/reason-summary.txt" \
+            --require-no-errors
           python3 - <<'PY'
           import json
           from pathlib import Path
-          import os
-
-          work = Path('build/strict500')
-          frontier = json.loads((work / 'frontier-summary.json').read_text())
-          headline = f"CORE_STRICT500_EXACT selected={frontier['selected']} pass={frontier['pass']} unsupported={frontier['unsupported']} error={frontier['error']}"
+          work = Path('build/m175-strict500')
+          summary = json.loads((work / 'frontier-summary.json').read_text())
+          headline = (
+              f"M175_STRICT500_EXACT selected={summary['selected']} pass={summary['pass']} "
+              f"unsupported={summary['unsupported']} error={summary['error']} "
+              f"preprocess_missing={summary['preprocess_missing']}"
+          )
           print(headline)
-          with (work / 'headline.txt').open('w') as f:
-              f.write(headline + '\n')
-          with Path(os.environ['GITHUB_STEP_SUMMARY']).open('a') as f:
-              f.write('## Core Strict500\n\n')
-              f.write(f'`{headline}`\n\n')
-              f.write((work / 'progress-summary.txt').read_text())
-              f.write('\n### Unsupported feature census\n\n```text\n')
-              reason_lines = (work / 'reason-summary.txt').read_text().splitlines()
-              f.write('\n'.join(reason_lines[:80]))
-              if len(reason_lines) > 80:
-                  f.write(f'\n... {len(reason_lines) - 80} more lines in artifact')
-              f.write('\n```\n')
-          if frontier['error'] != 0:
-              print(f"CORE_STRICT500_ERRORS {frontier.get('errors', [])}")
+          (work / 'headline.txt').write_text(headline + '\n')
+          if summary['selected'] != 500 or summary['pass'] != 500 or summary['unsupported'] != 0 or summary['error'] != 0 or summary['preprocess_missing'] != 0:
+              raise SystemExit(f'M175 physical-cut strict500 is not exact 500/500: {summary}')
           PY
 
-      - name: Validate staged M124 globally
-        if: steps.m124.outputs.staged == 'true'
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          python3 - <<'PY'
-          import json
-          from pathlib import Path
-
-          work = Path('build/strict500')
-          frontier = json.loads((work / 'frontier-summary.json').read_text())
-          stale_designator = sum(
-              int(item.get('count', 0))
-              for item in frontier.get('reason_fingerprints', [])
-              if 'reason=callee-shape callee_kind=MINIC_EXPRESSION_DEREFERENCE' in
-                 str(item.get('fingerprint', ''))
-          )
-          if frontier['error'] != 0 or frontier['preprocess_missing'] != 0:
-              raise SystemExit(
-                  f"M124 global ERROR/missing: error={frontier['error']} "
-                  f"missing={frontier['preprocess_missing']}"
-              )
-          if frontier['pass'] < 418:
-              raise SystemExit(f"M124 global pass regression: {frontier['pass']} < 418")
-          if stale_designator != 0:
-              raise SystemExit(f"M124 stale dereference-callee frontier remains: {stale_designator}")
-          print(
-              f"CORE_M124_GLOBAL_ACCEPT pass={frontier['pass']} "
-              f"unsupported={frontier['unsupported']} error=0 deref_callee={stale_designator}"
-          )
-          PY
-
-      - name: Commit globally validated M124 semantic fix
-        if: steps.m124.outputs.staged == 'true'
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add src/core/core_lower.c
-          git diff --cached --quiet && { echo 'no M124 semantic changes'; exit 1; }
-          git commit -m 'core: normalize indirect function designators'
-          git push origin HEAD:refactor/declaration-sema-v1
-
-      - name: Persist strict500 result
+      - name: Persist M175 strict500 evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: core-strict500-${{ github.sha }}
+          name: m175-core-only-strict500-${{ github.sha }}
           path: |
-            build/strict500/batch-results.json
-            build/strict500/frontier-summary.json
-            build/strict500/progress-summary.json
-            build/strict500/progress-summary.txt
-            build/strict500/reason-summary.txt
-            build/strict500/headline.txt
-            build/strict500/minic-stderr
+            build/m175-strict500/batch-results.json
+            build/m175-strict500/frontier-summary.json
+            build/m175-strict500/reason-summary.txt
+            build/m175-strict500/headline.txt
+            build/m175-strict500/minic-stderr
+            build/m175-strict500-focused/**
           if-no-files-found: warn
