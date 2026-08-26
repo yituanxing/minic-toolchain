@@ -12,10 +12,15 @@ mkdir -p "$work"
     "$root/tests/programs/c0/bitwise_xor.c" \
     -o "$work/bitwise_xor.i"
 "$minic" -S "$work/bitwise_xor.i" -o "$work/bitwise_xor.s"
-grep -F "  xor a0, t0, a0" "$work/bitwise_xor.s" >/dev/null
-grep -F "  seqz a0, a0" "$work/bitwise_xor.s" >/dev/null
-grep -F "  remuw a0, t0, a0" "$work/bitwise_xor.s" >/dev/null
-printf '%s\n' "PASS compiler/c0/bitwise_xor"
+grep -F ".Lmain_core_bb" "$work/bitwise_xor.s" >/dev/null
+grep -F ".Lmain_core_return:" "$work/bitwise_xor.s" >/dev/null
+# Preserve the operation-level contract without pinning Core's temporary
+# register allocation.  The source exercises XOR, equality normalization and
+# unsigned remainder in one value flow.
+grep -E '^[[:space:]]+xor[[:space:]]+' "$work/bitwise_xor.s" >/dev/null
+grep -E '^[[:space:]]+seqz[[:space:]]+' "$work/bitwise_xor.s" >/dev/null
+grep -E '^[[:space:]]+remuw[[:space:]]+' "$work/bitwise_xor.s" >/dev/null
+printf '%s\n' "PASS compiler/c0/bitwise_xor normalized=core-integer-ops"
 
 "$host_cc" -E -P -x c \
     "$root/tests/compiler/c0/invalid_bitwise_xor_pointer.c" \
