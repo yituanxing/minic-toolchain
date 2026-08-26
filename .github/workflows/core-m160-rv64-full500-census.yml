@@ -1,4 +1,4 @@
-name: Core M161 RV64 Int128 Full500 Census
+name: Core M162 RV64 Record Load Full500 Census
 
 on:
   pull_request:
@@ -10,6 +10,7 @@ on:
       - 'tests/target/riscv64/**'
       - 'tests/external/linux/corpus_replay.py'
       - 'tools/ci/apply-m161-rv64-int128-pair.py'
+      - 'tools/ci/apply-m162-rv64-record-load.py'
       - '.github/workflows/core-m160-rv64-full500-census.yml'
   workflow_dispatch:
 
@@ -26,12 +27,12 @@ jobs:
           ref: refactor/declaration-sema-v1
           fetch-depth: 0
 
-      - name: Record M161 staging head
+      - name: Record M162 staging head
         shell: bash
         run: |
           set -Eeuo pipefail
-          echo "M160_CONVERGENCE_START=76a4a4d86fb320f6bb567cc1c1bda2f50289ee5c"
-          echo "M161_STAGING_HEAD=$(git rev-parse HEAD)"
+          echo "CORE_RV64_CONVERGENCE_START=76a4a4d86fb320f6bb567cc1c1bda2f50289ee5c"
+          echo "M162_STAGING_HEAD=$(git rev-parse HEAD)"
           test "$(git hash-object src/target/riscv64/core_codegen.c)" = a5414575a573abd9ce9ced00fb6c234d785e4e03
 
       - name: Materialize M161 int128 pair
@@ -39,6 +40,13 @@ jobs:
         run: |
           set -Eeuo pipefail
           python3 tools/ci/apply-m161-rv64-int128-pair.py
+          git diff --check
+
+      - name: Materialize M162 generic record load
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 tools/ci/apply-m162-rv64-record-load.py
           git diff --check
           git diff --stat
 
@@ -57,40 +65,60 @@ jobs:
           test -s build/linux-focus-corpus/selected-tus.txt
 
       - name: Build staged compiler
-        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/m160-compiler
+        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/m162-compiler
 
       - name: Run fast regression gate
-        run: make -j4 check-fast MODE=release CFLAGS=-Werror BUILD_DIR=build/m160-check
+        run: make -j4 check-fast MODE=release CFLAGS=-Werror BUILD_DIR=build/m162-check
 
       - name: Focused int128 Core RV64 probe
         shell: bash
         run: |
           set -Eeuo pipefail
-          mkdir -p build/m160-focused
-          cat > build/m160-focused/mul_u64_u32_shr.i <<'EOF'
+          mkdir -p build/m162-focused
+          cat > build/m162-focused/int128.i <<'EOF'
           typedef unsigned long u64;
           typedef unsigned int u32;
           static u64 mul_u64_u32_shr(u64 a, u32 mul, unsigned int shift)
           {
               return (u64)(((unsigned __int128)a * mul) >> shift);
           }
-          u64 probe(u64 a, u32 mul, unsigned int shift)
+          u64 probe_i128(u64 a, u32 mul, unsigned int shift)
           {
               return mul_u64_u32_shr(a, mul, shift);
           }
           EOF
           MINIC_CORE_IR=strict MINIC_CORE_CODEGEN=basic-v0 \
-            build/m160-compiler/bin/minic -S build/m160-focused/mul_u64_u32_shr.i \
-            -o build/m160-focused/mul_u64_u32_shr.s
-          test -s build/m160-focused/mul_u64_u32_shr.s
+            build/m162-compiler/bin/minic -S build/m162-focused/int128.i \
+            -o build/m162-focused/int128.s
+          test -s build/m162-focused/int128.s
 
-      - name: Replay frozen full500 through staged Core RV64
-        id: replay
+      - name: Focused 16-byte record load and return probe
         shell: bash
         run: |
           set -Eeuo pipefail
-          compiler="$GITHUB_WORKSPACE/build/m160-compiler/bin/minic"
-          work="$GITHUB_WORKSPACE/build/m160-core-rv64"
+          cat > build/m162-focused/record16.i <<'EOF'
+          struct pair64 { long first; long second; };
+          struct holder { long prefix; struct pair64 value; };
+          static struct pair64 get_pair(const struct holder *p)
+          {
+              return p->value;
+          }
+          struct pair64 probe_record(const struct holder *p)
+          {
+              return get_pair(p);
+          }
+          EOF
+          MINIC_CORE_IR=strict MINIC_CORE_CODEGEN=basic-v0 \
+            build/m162-compiler/bin/minic -S build/m162-focused/record16.i \
+            -o build/m162-focused/record16.s
+          test -s build/m162-focused/record16.s
+
+      - name: Replay frozen full500 through staged Core RV64
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          compiler="$GITHUB_WORKSPACE/build/m162-compiler/bin/minic"
+          work="$GITHUB_WORKSPACE/build/m162-core-rv64"
           set +e
           MINIC_CORE_IR=strict MINIC_CORE_CODEGEN=basic-v0 \
             python3 tests/external/linux/corpus_replay.py \
@@ -103,8 +131,7 @@ jobs:
               --sample-count 0
           replay_status=$?
           set -e
-          echo "status=$replay_status" >> "$GITHUB_OUTPUT"
-          printf 'M161_REPLAY_STATUS=%d\n' "$replay_status"
+          printf 'M162_REPLAY_STATUS=%d\n' "$replay_status"
 
       - name: Capture current first-blocker partial assembly
         shell: bash
@@ -112,14 +139,14 @@ jobs:
           set -Eeuo pipefail
           python3 - <<'PY'
           from pathlib import Path
-          work = Path('build/m160-core-rv64')
+          work = Path('build/m162-core-rv64')
           assembly = work / 'minic-out/init/main.i.s'
-          output = work / 'm161-first-blocker-assembly.txt'
+          output = work / 'm162-first-blocker-assembly.txt'
           if not assembly.exists():
               output.write_text('init/main.i partial assembly is missing\n')
               raise SystemExit(0)
           lines = assembly.read_text(errors='replace').splitlines()
-          start = max(0, len(lines) - 260)
+          start = max(0, len(lines) - 300)
           for index, line in enumerate(lines):
               if line.strip().endswith(':') and not line.startswith('.L'):
                   start = index
@@ -142,30 +169,28 @@ jobs:
           import os
           import re
 
-          work = Path('build/m160-core-rv64')
+          work = Path('build/m162-core-rv64')
           rows = json.loads((work / 'batch-results.json').read_text())
           selected = len(rows)
           passed = sum(row.get('status') == 'PASS' for row in rows)
           failed = sum(row.get('status') == 'FAIL' for row in rows)
           missing = sum(row.get('status') == 'PREPROCESS_MISSING' for row in rows)
-
           preflight_re = re.compile(r"Core-owned function '([^']+)' cannot be emitted by RV64 basic-v0")
           emit_runtime_re = re.compile(r"cannot emit RISC-V function '([^']+)' \(index=\d+\)")
           groups: Counter[str] = Counter()
           functions: Counter[str] = Counter()
-          unexpected: list[dict[str, object]] = []
-
+          unexpected = []
           for row in rows:
               if row.get('status') != 'FAIL':
                   continue
               message = str(row.get('message', ''))
-              m = preflight_re.search(message)
-              if m:
-                  group, function = 'preflight-reject', m.group(1)
+              match = preflight_re.search(message)
+              if match:
+                  group, function = 'preflight-reject', match.group(1)
               else:
-                  m = emit_runtime_re.search(message)
-                  if m:
-                      group, function = 'emit-runtime', m.group(1)
+                  match = emit_runtime_re.search(message)
+                  if match:
+                      group, function = 'emit-runtime', match.group(1)
                   elif 'Core IR shadow does not yet support function' in message:
                       group, function = 'unexpected-core-lowering-unsupported', None
                   elif 'Core IR shadow lowering failed for function' in message or 'Core verifier' in message:
@@ -176,14 +201,10 @@ jobs:
               if function:
                   functions[f'{group}:{function}'] += 1
               if group.startswith('unexpected-'):
-                  unexpected.append({
-                      'index': row.get('index'),
-                      'input': row.get('input'),
-                      'message': message,
-                  })
+                  unexpected.append({'index': row.get('index'), 'input': row.get('input'), 'message': message})
 
           headline = (
-              f'M161_CORE_RV64_STAGED selected={selected} pass={passed} fail={failed} '
+              f'M162_CORE_RV64_STAGED selected={selected} pass={passed} fail={failed} '
               f'preprocess_missing={missing} preflight_reject={groups["preflight-reject"]} '
               f'emit_runtime={groups["emit-runtime"]} unexpected={len(unexpected)}'
           )
@@ -191,11 +212,10 @@ jobs:
           print('first-blocker functions:')
           for key, count in functions.most_common(30):
               print(f'  {count:4d}  {key}')
-
           summary = {
               'production_semantic_base': '76a4a4d86fb320f6bb567cc1c1bda2f50289ee5c',
               'staging_head': os.environ.get('GITHUB_SHA', ''),
-              'm160_baseline_pass': 9,
+              'm161_staged_baseline_pass': 33,
               'selected': selected,
               'pass': passed,
               'fail': failed,
@@ -205,38 +225,36 @@ jobs:
               'unexpected': unexpected,
               'headline': headline,
           }
-          (work / 'm161-summary.json').write_text(json.dumps(summary, indent=2, sort_keys=True))
+          (work / 'm162-summary.json').write_text(json.dumps(summary, indent=2, sort_keys=True))
           text = [headline, '', 'groups:']
           for group, count in groups.most_common():
               text.append(f'  {count:4d}  {group}')
           text.extend(['', 'first-blocker functions:'])
           for key, count in functions.most_common(50):
               text.append(f'  {count:4d}  {key}')
-          (work / 'm161-summary.txt').write_text('\n'.join(text) + '\n')
-
-          if selected != 500:
-              raise SystemExit(f'M161 expected 500 selected TUs, got {selected}')
-          if missing != 0:
-              raise SystemExit(f'M161 corpus missing {missing} selected TUs')
+          (work / 'm162-summary.txt').write_text('\n'.join(text) + '\n')
+          if selected != 500 or missing != 0:
+              raise SystemExit('M162 corpus invariant failed')
           if unexpected:
-              raise SystemExit(f'M161 found {len(unexpected)} failures outside Core RV64 backend')
-          if passed <= 9:
-              raise SystemExit(f'M161 did not improve M160 9/500 baseline: pass={passed}')
+              raise SystemExit(f'M162 found {len(unexpected)} failures outside Core RV64 backend')
+          if passed <= 33:
+              raise SystemExit(f'M162 did not improve M161 33/500 staged baseline: pass={passed}')
           PY
 
-      - name: Persist M161 staged census
+      - name: Persist M162 staged census
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: core-m161-rv64-full500-${{ github.sha }}
+          name: core-m162-rv64-full500-${{ github.sha }}
           path: |
-            build/m160-focused/mul_u64_u32_shr.s
-            build/m160-core-rv64/batch-results.json
-            build/m160-core-rv64/batch-results.tsv
-            build/m160-core-rv64/batch-summary.txt
-            build/m160-core-rv64/failure-contexts.txt
-            build/m160-core-rv64/m161-summary.json
-            build/m160-core-rv64/m161-summary.txt
-            build/m160-core-rv64/m161-first-blocker-assembly.txt
-            build/m160-core-rv64/minic-stderr
+            build/m162-focused/int128.s
+            build/m162-focused/record16.s
+            build/m162-core-rv64/batch-results.json
+            build/m162-core-rv64/batch-results.tsv
+            build/m162-core-rv64/batch-summary.txt
+            build/m162-core-rv64/failure-contexts.txt
+            build/m162-core-rv64/m162-summary.json
+            build/m162-core-rv64/m162-summary.txt
+            build/m162-core-rv64/m162-first-blocker-assembly.txt
+            build/m162-core-rv64/minic-stderr
           if-no-files-found: warn
