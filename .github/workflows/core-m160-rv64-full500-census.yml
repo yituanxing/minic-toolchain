@@ -1,4 +1,4 @@
-name: Core M165 RV64 Zero Record Copy Full500 Census
+name: Core M165 RV64 Indirect Parameter Full500 Census
 
 on:
   pull_request:
@@ -11,7 +11,7 @@ on:
       - 'tools/ci/apply-m162-rv64-record-load.py'
       - 'tools/ci/apply-m163-rv64-caller-abi.py'
       - 'tools/ci/apply-m163b-rv64-zero-record-abi.py'
-      - 'tools/ci/apply-m165-rv64-zero-record-copy.py'
+      - 'tools/ci/apply-m165-rv64-indirect-parameter-object.py'
       - '.github/workflows/core-m160-rv64-full500-census.yml'
   workflow_dispatch:
 
@@ -44,7 +44,7 @@ jobs:
           python3 tools/ci/apply-m162-rv64-record-load.py
           python3 tools/ci/apply-m163-rv64-caller-abi.py
           python3 tools/ci/apply-m163b-rv64-zero-record-abi.py
-          python3 tools/ci/apply-m165-rv64-zero-record-copy.py
+          python3 tools/ci/apply-m165-rv64-indirect-parameter-object.py
           git diff --check
           git diff --stat
 
@@ -68,7 +68,7 @@ jobs:
       - name: Run fast regression gate
         run: make -j4 check-fast MODE=release CFLAGS=-Werror BUILD_DIR=build/m165-check
 
-      - name: Focused zero-record copy owner
+      - name: Focused indirect record parameter owner
         shell: bash
         run: |
           set -Eeuo pipefail
