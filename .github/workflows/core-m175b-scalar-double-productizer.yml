@@ -129,6 +129,39 @@ jobs:
               raise SystemExit(f'M175 Core-only requires exact strict500 500/500: {summary}')
           PY
 
+      - name: Productize validated M175 source only
+        if: steps.state.outputs.needs_work == 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git diff --check
+          git diff --exit-code -- tests/compiler/c0/run.sh
+
+          git add \
+            src/compiler/compiler.c \
+            src/core/core_ir.h \
+            src/core/core_ir.c \
+            src/core/core_lower.c \
+            src/frontend/parser_statement.c \
+            src/target/riscv64/core_codegen.c \
+            src/target/riscv64/codegen.h \
+            src/target/riscv64/codegen_function.c
+
+          staged=$(git diff --cached --name-only)
+          test -n "$staged"
+          unexpected=$(printf '%s\n' "$staged" | grep -Ev '^(src/compiler/compiler\.c|src/core/core_ir\.h|src/core/core_ir\.c|src/core/core_lower\.c|src/frontend/parser_statement\.c|src/target/riscv64/core_codegen\.c|src/target/riscv64/codegen\.h|src/target/riscv64/codegen_function\.c)$' || true)
+          if test -n "$unexpected"; then
+            printf 'unexpected staged M175 files:\n%s\n' "$unexpected" >&2
+            exit 1
+          fi
+          ! printf '%s\n' "$staged" | grep -E '(^|/)tests?/' >/dev/null
+          printf 'M175_PRODUCTIZE_FILES\n%s\n' "$staged"
+
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'core: physically remove legacy RV64 function route'
+          git push origin HEAD:refactor/declaration-sema-v1
+
       - name: Persist M175 evidence
         if: always() && steps.state.outputs.needs_work == 'true'
         uses: actions/upload-artifact@v4
