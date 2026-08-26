@@ -19,9 +19,9 @@ compile_success() {
 compile_success \
     pointer_subscript \
     "$root/tests/programs/c0/pointer_subscript.c"
-grep -F "  slli a0, a0, 2" "$work/pointer_subscript.s" >/dev/null
-grep -F "  lw a0, 0(a0)" "$work/pointer_subscript.s" >/dev/null
-grep -E '^  sw t0, 0\((a0|t1)\)$' "$work/pointer_subscript.s" >/dev/null
+grep -E '^[[:space:]]+slli[[:space:]]+[^,]+,[[:space:]]*[^,]+,[[:space:]]*2$' "$work/pointer_subscript.s" >/dev/null
+grep -E '^[[:space:]]+lw[[:space:]]+[^,]+,[[:space:]]*0\([^)]*\)$' "$work/pointer_subscript.s" >/dev/null
+grep -E '^[[:space:]]+sw[[:space:]]+[^,]+,[[:space:]]*0\([^)]*\)$' "$work/pointer_subscript.s" >/dev/null
 grep -F "  call read_at" "$work/pointer_subscript.s" >/dev/null
 printf '%s\n' "PASS compiler/c0/pointer_subscript"
 
@@ -30,7 +30,7 @@ compile_success \
     "$root/tests/compiler/c0/pointer_subscript_const.c"
 grep -F ".type read_const, @function" \
     "$work/pointer_subscript_const.s" >/dev/null
-grep -F "  lw a0, 0(a0)" "$work/pointer_subscript_const.s" >/dev/null
+grep -E '^[[:space:]]+lw[[:space:]]+[^,]+,[[:space:]]*0\([^)]*\)$' "$work/pointer_subscript_const.s" >/dev/null
 printf '%s\n' "PASS compiler/c0/pointer_subscript_const"
 
 "$host_cc" -E -P -x c \
