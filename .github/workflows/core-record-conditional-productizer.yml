@@ -1,6 +1,9 @@
 name: Core M175B Strict500 Fast Lane
 
 on:
+  pull_request:
+    branches:
+      - ci/m175b-strict500-fast-20260826
   push:
     branches:
       - ci/m175b-strict500-fast-20260826
