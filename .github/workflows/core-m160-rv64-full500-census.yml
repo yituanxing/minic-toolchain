@@ -1,9 +1,10 @@
-name: Core M174 Default Core-Only Productizer
+name: Core M175 Legacy Route Severance
 
 on:
   pull_request:
     paths:
       - 'src/compiler/compiler.c'
+      - 'src/target/riscv64/codegen.h'
       - 'src/target/riscv64/codegen_function.c'
       - 'src/target/riscv64/core_codegen.c'
       - 'include/**'
@@ -16,7 +17,7 @@ permissions:
   contents: write
 
 jobs:
-  core-only-default:
+  sever-legacy-route:
     if: github.event_name == 'workflow_dispatch' || github.head_ref == 'refactor/declaration-sema-v1'
     runs-on: ubuntu-24.04
     steps:
@@ -25,19 +26,21 @@ jobs:
           ref: refactor/declaration-sema-v1
           fetch-depth: 0
 
-      - name: Detect M174 state
+      - name: Detect M175 state
         id: state
         shell: bash
         run: |
           set -Eeuo pipefail
+          grep -Fq 'M174_CORE_ONLY_DEFAULT' src/compiler/compiler.c
           grep -Fq 'M172_STRUCTURED_ASM_CALLEE_SAVED' src/target/riscv64/core_codegen.c
-          if grep -Fq 'M174_CORE_ONLY_DEFAULT' src/compiler/compiler.c; then
+          if grep -Fq 'M175_CORE_FUNCTION_ONLY' src/target/riscv64/codegen_function.c; then
             echo 'needs_patch=false' >> "$GITHUB_OUTPUT"
-            echo "M174_ALREADY_PRODUCTIZED head=$(git rev-parse HEAD)"
+            echo "M175_ALREADY_PRODUCTIZED head=$(git rev-parse HEAD)"
           else
             echo 'needs_patch=true' >> "$GITHUB_OUTPUT"
-            echo "M174_SOURCE_HEAD=$(git rev-parse HEAD)"
-            test "$(git hash-object src/compiler/compiler.c)" = a18f201f4e97467cbc232c9ffdfffbfc8355243f
+            echo "M175_SOURCE_HEAD=$(git rev-parse HEAD)"
+            test "$(git hash-object src/compiler/compiler.c)" = 44f01a9a2ebdceb97732dc39aca70fcd6098bbb8
+            test "$(git hash-object src/target/riscv64/codegen.h)" = 8a28d1e24ba837be4e39f1bb308ab79f6000f892
             test "$(git hash-object src/target/riscv64/codegen_function.c)" = d51b7dfdb4e6e8365f574a23a7c3e5e07f2c7b2d
           fi
 
@@ -57,116 +60,197 @@ jobs:
           test "${{ steps.linux-corpus-cache.outputs.cache-hit }}" = true
           test -s build/linux-focus-corpus/selected-tus.txt
 
-      - name: Materialize Core-only default and legacy tripwire
+      - name: Qualify current production Core default with check-fast
+        if: steps.state.outputs.needs_patch == 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/m175-baseline
+          make -j4 check-fast MODE=release CFLAGS=-Werror BUILD_DIR=build/m175-baseline-check
+
+      - name: Materialize fail-closed Core-only function writer
         if: steps.state.outputs.needs_patch == 'true'
         shell: bash
         run: |
           set -Eeuo pipefail
           python3 - <<'PY'
           from pathlib import Path
-          import re
 
+          def replace_once(text, old, new, label):
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'M175 {label}: expected 1 match, got {count}')
+              return text.replace(old, new, 1)
+
+          # The compiler no longer has an alternate assembly writer path.  The
+          # mode parser remains for the moment as a compatibility spelling for
+          # "basic-v0", but every successful compilation reaches the Core-only
+          # module writer below.
           compiler = Path('src/compiler/compiler.c')
           text = compiler.read_text()
+          old = '''    if (success && core_codegen_mode == MINIC_CORE_CODEGEN_BASIC_V0) {
+              success =
+                  minic_riscv64_write_c0_program_with_core_candidates(output_path,
+                                                                      &program,
+                                                                      core_candidates.functions,
+                                                                      core_candidates.core_required,
+                                                                      core_candidates.function_count,
+                                                                      diagnostic);
+          } else if (success) {
+              success = minic_riscv64_write_c0_program(output_path, &program, diagnostic);
+          }
+          '''
+          new = '''    if (success) {
+              success =
+                  minic_riscv64_write_c0_program_with_core_candidates(output_path,
+                                                                      &program,
+                                                                      core_candidates.functions,
+                                                                      core_candidates.core_required,
+                                                                      core_candidates.function_count,
+                                                                      diagnostic);
+          }
+          '''
+          text = replace_once(text, old, new, 'compiler-single-writer')
+          compiler.write_text(text)
 
-          old = '*mode = MINIC_CORE_CODEGEN_DISABLED;'
-          new = ('/* M174_CORE_ONLY_DEFAULT: ordinary RV64 compilation uses Core. */\n'
-                 '        *mode = MINIC_CORE_CODEGEN_BASIC_V0;')
-          count = text.count(old)
-          if count != 1:
-              raise SystemExit(f'M174 codegen-default token count={count}')
-          text = text.replace(old, new, 1)
+          header = Path('src/target/riscv64/codegen.h')
+          text = header.read_text()
+          old = '''bool minic_riscv64_write_c0_program(const char *path,
+                                              const MinicC0Program *program,
+                                              MinicDiagnostic *diagnostic);
 
-          pattern = (r'if \(core_codegen_mode != MINIC_CORE_CODEGEN_DISABLED &&\s*'
-                     r'core_validation_mode == MINIC_CORE_SHADOW_DISABLED\) \{')
-          replacement = 'if (core_codegen_mode != MINIC_CORE_CODEGEN_DISABLED) {'
-          text, count = re.subn(pattern, replacement, text, count=1)
-          if count != 1:
-              raise SystemExit(f'M174 validation-condition count={count}')
-
-          old = 'core_validation_mode = MINIC_CORE_SHADOW_OPTIONAL;'
-          new = ('/* Core code generation is fail-closed: no defined function may\n'
-                 '           fall back to the legacy AST body emitter. */\n'
-                 '        core_validation_mode = MINIC_CORE_SHADOW_STRICT;')
-          count = text.count(old)
-          if count != 1:
-              raise SystemExit(f'M174 validation-mode token count={count}')
-          compiler.write_text(text.replace(old, new, 1))
+          '''
+          text = replace_once(text, old, '', 'remove-legacy-public-writer')
+          header.write_text(text)
 
           writer = Path('src/target/riscv64/codegen_function.c')
           text = writer.read_text()
-          marker = 'static bool minic_riscv64_emit_function(FILE *file,'
-          count = text.count(marker)
-          if count != 1:
-              raise SystemExit(f'M174 legacy function marker count={count}')
-          start = text.index(marker)
-          brace = text.index('{', start)
-          tripwire = '''
-              /* M174 staging tripwire: default compilation must never reach the
-                 legacy AST function-body emitter. */
-              if (getenv("MINIC_M174_FORBID_LEGACY_BODY") != NULL) {
-                  if (failure_stage != NULL) {
-                      *failure_stage = "m174-legacy-body-tripwire";
+
+          # Keep the old emitter body as an unreachable tombstone for one
+          # qualification step.  M176 will delete the dead helper tree after
+          # this route cut is proven.  Taking its address suppresses only the C
+          # unused-function warning; there is no call edge.
+          marker = '''    if (program == NULL) {
+              minic_riscv64_set_diagnostic(diagnostic, path, "program is required");
+              return false;
+          }
+          '''
+          replacement = marker + '''    /* M175_CORE_FUNCTION_ONLY: every defined function is emitted from Core.
+             The legacy AST body emitter is retained only as a dead-code tombstone
+             until M176 physically removes its helper tree. */
+          (void)minic_riscv64_emit_function;
+          '''
+          text = replace_once(text, marker, replacement, 'route-marker')
+
+          old = '''    if ((core_functions == NULL) != (core_required_functions == NULL) ||
+              (core_functions == NULL && core_function_count != 0U) ||
+              (core_functions != NULL && core_function_count != program->function_count)) {
+          '''
+          new = '''    if (core_function_count != program->function_count ||
+              (core_function_count != 0U &&
+               (core_functions == NULL || core_required_functions == NULL))) {
+          '''
+          text = replace_once(text, old, new, 'require-core-map')
+
+          text = replace_once(text, '    size_t label_counter;\n', '', 'remove-label-counter-decl')
+          text = replace_once(text, '    label_counter = 0U;\n', '', 'remove-label-counter-init')
+
+          start_marker = '''        core_required = core_required_functions != NULL && core_required_functions[function_index];
+          '''
+          end_marker = '''        if (!success && diagnostic != NULL && diagnostic->message[0] == '\\0') {
+          '''
+          start = text.index(start_marker)
+          end = text.index(end_marker, start)
+          replacement = '''        core_required = core_required_functions[function_index];
+              core_function = &core_functions[function_index];
+              if (!core_required) {
+                  char message[256];
+                  const char *symbol_name;
+
+                  symbol_name = minic_c0_function_symbol_name(function);
+                  (void)snprintf(message,
+                                 sizeof(message),
+                                 "defined function '%s' has no Core ownership",
+                                 symbol_name != NULL ? symbol_name : "<unnamed>");
+                  minic_riscv64_set_diagnostic(diagnostic, path, message);
+                  success = false;
+                  continue;
+              }
+              {
+                  MinicRiscv64FunctionSymbol symbol;
+
+                  if (!minic_riscv64_core_function_can_emit_basic_v0_for_program(program,
+                                                                                   core_function)) {
+                      char message[256];
+                      const char *symbol_name;
+
+                      symbol_name = minic_c0_function_symbol_name(function);
+                      (void)snprintf(message,
+                                     sizeof(message),
+                                     "Core-owned function '%s' cannot be emitted by RV64 basic-v0",
+                                     symbol_name != NULL ? symbol_name : "<unnamed>");
+                      minic_riscv64_set_diagnostic(diagnostic, path, message);
+                      success = false;
+                      continue;
                   }
-                  return false;
+                  success = minic_riscv64_function_symbol_from_function(function, &symbol) &&
+                            minic_riscv64_emit_core_function_basic_v0_for_program_with_symbol(
+                                file, program, core_function, &symbol);
               }
           '''
-          text = text[:brace + 1] + tripwire + text[brace + 1:]
+          text = text[:start] + replacement + text[end:]
+
+          # The no-candidate public wrapper was precisely the legacy routing
+          # escape hatch.  It is no longer part of the target API.
+          marker = '\nbool minic_riscv64_write_c0_program(const char *path,'
+          count = text.count(marker)
+          if count != 1:
+              raise SystemExit(f'M175 remove legacy wrapper: expected 1 match, got {count}')
+          cut = text.index(marker)
+          text = text[:cut].rstrip() + '\n'
           writer.write_text(text)
           PY
           git diff --check
-          grep -Fq 'M174_CORE_ONLY_DEFAULT' src/compiler/compiler.c
-          grep -Fq 'm174-legacy-body-tripwire' src/target/riscv64/codegen_function.c
+          grep -Fq 'M175_CORE_FUNCTION_ONLY' src/target/riscv64/codegen_function.c
+          ! grep -Fq 'success = minic_riscv64_emit_function(' src/target/riscv64/codegen_function.c
+          ! grep -Fq 'minic_riscv64_write_c0_program(' src/compiler/compiler.c
+          ! grep -Fq 'minic_riscv64_write_c0_program(' src/target/riscv64/codegen.h
 
-      - name: Build Core-only default candidate
+      - name: Build severed-route candidate
         if: steps.state.outputs.needs_patch == 'true'
-        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/m174-compiler
+        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/m175-compiler
 
-      - name: Run existing check-fast against unchanged routing baseline
+      - name: Run check-fast with legacy route severed
         if: steps.state.outputs.needs_patch == 'true'
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          git diff -- src/compiler/compiler.c src/target/riscv64/codegen_function.c > /tmp/m174-routing.patch
-          test -s /tmp/m174-routing.patch
-          git checkout HEAD -- src/compiler/compiler.c src/target/riscv64/codegen_function.c
-          make -j4 check-fast MODE=release CFLAGS=-Werror BUILD_DIR=build/m174-check
-          git apply /tmp/m174-routing.patch
-          grep -Fq 'M174_CORE_ONLY_DEFAULT' src/compiler/compiler.c
-          grep -Fq 'm174-legacy-body-tripwire' src/target/riscv64/codegen_function.c
-          git diff --check
+        run: make -j4 check-fast MODE=release CFLAGS=-Werror BUILD_DIR=build/m175-check
 
-      - name: Probe default Core with legacy body forbidden
+      - name: Probe fail-closed Core-only default
         if: steps.state.outputs.needs_patch == 'true'
         shell: bash
-        env:
-          MINIC_M174_FORBID_LEGACY_BODY: '1'
         run: |
           set -Eeuo pipefail
           test -z "${MINIC_CORE_IR:-}"
           test -z "${MINIC_CORE_CODEGEN:-}"
-          printf '%s\n' 'int main(void) { return 42; }' > build/m174-default-smoke.i
-          build/m174-compiler/bin/minic -S build/m174-default-smoke.i -o build/m174-default-smoke.s
-          grep -Fq '.Lmain_core_return:' build/m174-default-smoke.s
-          ! grep -Fq '.Lmain_return:' build/m174-default-smoke.s
-          echo 'M174_DEFAULT_CORE_TRIPWIRE_SMOKE=PASS'
+          printf '%s\n' 'int main(void) { return 42; }' > build/m175-smoke.i
+          build/m175-compiler/bin/minic -S build/m175-smoke.i -o build/m175-smoke.s
+          grep -Fq '.Lmain_core_return:' build/m175-smoke.s
+          ! grep -Fq '.Lmain_return:' build/m175-smoke.s
+          echo 'M175_CORE_ONLY_ROUTE_SMOKE=PASS'
 
-      - name: Replay frozen full500 with no Core mode environment
+      - name: Replay frozen full500 through severed route
         if: steps.state.outputs.needs_patch == 'true'
         shell: bash
-        env:
-          MINIC_M174_FORBID_LEGACY_BODY: '1'
         run: |
           set -Eeuo pipefail
           test -z "${MINIC_CORE_IR:-}"
           test -z "${MINIC_CORE_CODEGEN:-}"
-          compiler="$GITHUB_WORKSPACE/build/m174-compiler/bin/minic"
-          work="$GITHUB_WORKSPACE/build/m174-default-core"
+          compiler="$GITHUB_WORKSPACE/build/m175-compiler/bin/minic"
+          work="$GITHUB_WORKSPACE/build/m175-core-only"
           python3 tests/external/linux/corpus_replay.py \
             --minic "$compiler" --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
             --work "$work" --jobs 4 --offset 0 --limit 500 --sample-count 0
 
-      - name: Require exact no-env Core-only 500 of 500
+      - name: Require exact severed-route 500 of 500
         if: steps.state.outputs.needs_patch == 'true'
         shell: bash
         run: |
@@ -174,40 +258,39 @@ jobs:
           python3 - <<'PY'
           from pathlib import Path
           import json
-          rows=json.loads(Path('build/m174-default-core/batch-results.json').read_text())
+          rows=json.loads(Path('build/m175-core-only/batch-results.json').read_text())
           selected=len(rows)
           passed=sum(r.get('status')=='PASS' for r in rows)
           failed=sum(r.get('status')=='FAIL' for r in rows)
           missing=sum(r.get('status')=='PREPROCESS_MISSING' for r in rows)
-          headline=f'M174_DEFAULT_CORE_ONLY selected={selected} pass={passed} fail={failed} missing={missing}'
+          headline=f'M175_CORE_ONLY_ROUTE selected={selected} pass={passed} fail={failed} missing={missing}'
           print(headline)
           if (selected, passed, failed, missing) != (500, 500, 0, 0):
               raise SystemExit(headline)
           PY
 
-      - name: Remove staging tripwire and commit default Core routing
+      - name: Productize legacy route severance
         if: steps.state.outputs.needs_patch == 'true'
         shell: bash
         run: |
           set -Eeuo pipefail
-          git checkout HEAD -- src/target/riscv64/codegen_function.c
           git diff --check
           changed="$(git diff --name-only)"
-          test "$changed" = 'src/compiler/compiler.c'
+          test "$changed" = $'src/compiler/compiler.c\nsrc/target/riscv64/codegen.h\nsrc/target/riscv64/codegen_function.c'
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add src/compiler/compiler.c
-          git commit -m 'compiler: make Core RV64 the fail-closed default'
+          git add src/compiler/compiler.c src/target/riscv64/codegen.h src/target/riscv64/codegen_function.c
+          git commit -m 'rv64: sever legacy AST function routing'
           git push origin HEAD:refactor/declaration-sema-v1
 
-      - name: Persist M174 evidence
+      - name: Persist M175 evidence
         if: always() && steps.state.outputs.needs_patch == 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: core-m174-default-core-${{ github.sha }}
+          name: core-m175-legacy-route-${{ github.sha }}
           path: |
-            build/m174-default-core/batch-results.json
-            build/m174-default-core/batch-summary.txt
-            build/m174-default-core/minic-stderr
-            build/m174-default-smoke.s
+            build/m175-core-only/batch-results.json
+            build/m175-core-only/batch-summary.txt
+            build/m175-core-only/minic-stderr
+            build/m175-smoke.s
           if-no-files-found: warn
