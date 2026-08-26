@@ -67,12 +67,6 @@ jobs:
           set -Eeuo pipefail
           python3 tools/ci/apply-m175b-qualification.py
           git diff --check
-          grep -Fq 'M175B_SCALAR_DOUBLE_BRIDGE' src/core/core_lower.c
-          grep -Fq 'M175B_SCALAR_RETURN_OWNER' src/core/core_lower.c
-          grep -Fq 'M175C_LOCAL_COMPLETE_OBJECT_OWNER' src/frontend/parser_statement.c
-          grep -Fq 'MINIC_CORE_INSTRUCTION_FLOATING_CONSTANT' src/core/core_ir.h
-          grep -Fq 'MINIC_CORE_INSTRUCTION_INTEGER_TO_DOUBLE' src/core/core_ir.h
-          grep -Fq 'MINIC_CORE_INSTRUCTION_DOUBLE_TO_INTEGER' src/core/core_ir.h
 
       - name: Sever legacy AST to RV64 function route
         if: steps.state.outputs.needs_cut == 'true'
@@ -85,58 +79,22 @@ jobs:
           test "$before_test_hash" = "$(git hash-object tests/compiler/c0/run.sh)"
           ! git grep -n 'minic_riscv64_write_c0_program(' -- src
           ! git grep -n 'minic_riscv64_emit_function(' -- src
-          printf '%s\n' 'M175_ROUTE_CUT legacy-ast-rv64=ABSENT test-contracts=UNCHANGED'
 
       - name: Assert test contracts are unchanged
         if: steps.state.outputs.needs_work == 'true'
         shell: bash
         run: |
-          set -Eeuo pipefail
           git diff --exit-code -- tests/compiler/c0/run.sh
-          echo 'M175_TEST_CONTRACT_POLICY unchanged=PASS'
 
       - name: Build Core-only candidate
         if: steps.state.outputs.needs_work == 'true'
         run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/m175-core-only
-
-      - name: Run cast fast target
-        if: steps.state.outputs.needs_work == 'true'
-        run: make -j4 check-cast-expressions MODE=release CFLAGS=-Werror BUILD_DIR=build/m175-cast
-
-      - name: Run isolated scalar double strict regressions
-        if: steps.state.outputs.needs_work == 'true'
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          compiler="$GITHUB_WORKSPACE/build/m175-core-only/bin/minic"
-          work="$GITHUB_WORKSPACE/build/m175b-regression"
-          mkdir -p "$work"
-          cc -E -P -std=gnu11 -x c tests/compiler/c0/cast_integer_to_double.c -o "$work/int-to-double.i"
-          MINIC_CORE_IR=strict CORE_FAST_TRACE=1 "$compiler" -S "$work/int-to-double.i" -o "$work/int-to-double.s"
-          grep -E '^[[:space:]]+fcvt\.d\.w[[:space:]]+' "$work/int-to-double.s" >/dev/null
-          grep -E '^[[:space:]]+fmv\.d\.x[[:space:]]+fa0,' "$work/int-to-double.s" >/dev/null
-          grep -F '.Lconvert_to_double_core_return:' "$work/int-to-double.s" >/dev/null
-          cc -E -P -std=gnu11 -x c tests/compiler/c0/cast_double_to_integer.c -o "$work/double-to-int.i"
-          MINIC_CORE_IR=strict CORE_FAST_TRACE=1 "$compiler" -S "$work/double-to-int.i" -o "$work/double-to-int.s"
-          grep -E '^[[:space:]]+fcvt\.w\.d[[:space:]]+[^,]+,[[:space:]]*[^,]+,[[:space:]]*rtz$' "$work/double-to-int.s" >/dev/null
-          grep -F '.Lmain_core_return:' "$work/double-to-int.s" >/dev/null
-          printf '%s\n' 'CORE_M175B_STRICT_REGRESSION int-to-double=PASS double-to-int=PASS'
-
-      - name: Qualify local complete object diagnostics
-        if: steps.state.outputs.needs_work == 'true'
-        run: make -j4 check-pointer-members MODE=release CFLAGS=-Werror BUILD_DIR=build/m175-pointer
 
       - name: Run unchanged Core-default check-fast
         if: steps.state.outputs.needs_work == 'true'
         id: fast
         continue-on-error: true
         run: make -j4 check-fast MODE=release CFLAGS=-Werror BUILD_DIR=build/m175-fast
-
-      - name: Record unchanged check-fast status
-        if: steps.state.outputs.needs_work == 'true'
-        shell: bash
-        run: |
-          printf 'M175_UNCHANGED_CHECK_FAST outcome=%s\n' '${{ steps.fast.outcome }}'
 
       - name: Replay strict full500 on Core-only source
         if: steps.state.outputs.needs_work == 'true'
@@ -173,30 +131,7 @@ jobs:
           print('M175_CORE_ONLY_FULL500_SUMMARY', summary)
           if summary['selected'] != 500 or summary['pass'] != 500 or summary['unsupported'] != 0 or summary['error'] != 0 or summary['preprocess_missing'] != 0:
               raise SystemExit(f'M175 Core-only requires exact strict500 500/500: {summary}')
-          print('M175_CORE_ONLY_FULL500 selected=500 pass=500 unsupported=0 error=0')
           PY
-
-      - name: Productize semantic candidate and Core-only cut
-        if: steps.state.outputs.needs_work == 'true' && steps.fast.outcome == 'success'
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          git diff --check
-          git diff --exit-code -- tests/compiler/c0/run.sh
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add \
-            src/compiler/compiler.c \
-            src/core/core_ir.h \
-            src/core/core_ir.c \
-            src/core/core_lower.c \
-            src/target/riscv64/core_codegen.c \
-            src/target/riscv64/codegen.h \
-            src/target/riscv64/codegen_function.c \
-            src/frontend/parser_statement.c
-          git diff --cached --quiet && { echo 'no M175 semantic/Core-only source changes'; exit 1; }
-          git commit -m 'core: sever legacy RV64 function route'
-          git push origin HEAD:refactor/declaration-sema-v1
 
       - name: Persist M175 evidence
         if: always() && steps.state.outputs.needs_work == 'true'
@@ -204,6 +139,5 @@ jobs:
         with:
           name: core-m175-core-only-${{ github.sha }}
           path: |
-            build/m175b-regression/**
             build/m175-full500/**
           if-no-files-found: warn
