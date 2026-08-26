@@ -6,10 +6,6 @@ on:
     branches:
       - refactor/declaration-sema-v1
 
-concurrency:
-  group: core-m175b-refactor-declaration-sema-v1
-  cancel-in-progress: true
-
 permissions:
   contents: write
 
