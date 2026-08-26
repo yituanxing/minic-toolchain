@@ -64,52 +64,46 @@ jobs:
           set -Eeuo pipefail
           python3 - <<'PY'
           from pathlib import Path
+          import re
 
           compiler = Path('src/compiler/compiler.c')
           text = compiler.read_text()
 
-          old = '''    if (value == NULL || value[0] == '\\0') {
-              *mode = MINIC_CORE_CODEGEN_DISABLED;
-              return true;
-          }
-          '''
-          new = '''    if (value == NULL || value[0] == '\\0') {
-              /* M174_CORE_ONLY_DEFAULT: ordinary RV64 compilation uses Core. */
-              *mode = MINIC_CORE_CODEGEN_BASIC_V0;
-              return true;
-          }
-          '''
-          if text.count(old) != 1:
-              raise SystemExit(f'M174 codegen-default anchor count={text.count(old)}')
+          old = '*mode = MINIC_CORE_CODEGEN_DISABLED;'
+          new = ('/* M174_CORE_ONLY_DEFAULT: ordinary RV64 compilation uses Core. */\n'
+                 '        *mode = MINIC_CORE_CODEGEN_BASIC_V0;')
+          count = text.count(old)
+          if count != 1:
+              raise SystemExit(f'M174 codegen-default token count={count}')
           text = text.replace(old, new, 1)
 
-          old = '''    core_validation_mode = core_shadow_mode;
-          if (core_codegen_mode != MINIC_CORE_CODEGEN_DISABLED &&
-              core_validation_mode == MINIC_CORE_SHADOW_DISABLED) {
-              core_validation_mode = MINIC_CORE_SHADOW_OPTIONAL;
-          }
-          '''
-          new = '''    core_validation_mode = core_shadow_mode;
-          if (core_codegen_mode != MINIC_CORE_CODEGEN_DISABLED) {
-              /* Core code generation is fail-closed: no defined function may
-                 fall back to the legacy AST body emitter. */
-              core_validation_mode = MINIC_CORE_SHADOW_STRICT;
-          }
-          '''
-          if text.count(old) != 1:
-              raise SystemExit(f'M174 validation anchor count={text.count(old)}')
+          pattern = (r'if \(core_codegen_mode != MINIC_CORE_CODEGEN_DISABLED &&\s*'
+                     r'core_validation_mode == MINIC_CORE_SHADOW_DISABLED\) \{')
+          replacement = 'if (core_codegen_mode != MINIC_CORE_CODEGEN_DISABLED) {'
+          text, count = re.subn(pattern, replacement, text, count=1)
+          if count != 1:
+              raise SystemExit(f'M174 validation-condition count={count}')
+
+          old = 'core_validation_mode = MINIC_CORE_SHADOW_OPTIONAL;'
+          new = ('/* Core code generation is fail-closed: no defined function may\n'
+                 '           fall back to the legacy AST body emitter. */\n'
+                 '        core_validation_mode = MINIC_CORE_SHADOW_STRICT;')
+          count = text.count(old)
+          if count != 1:
+              raise SystemExit(f'M174 validation-mode token count={count}')
           compiler.write_text(text.replace(old, new, 1))
 
           writer = Path('src/target/riscv64/codegen_function.c')
           text = writer.read_text()
-          marker = '''static bool minic_riscv64_emit_function(FILE *file,
-                                                  const MinicC0Program *program,
-                                                  const MinicFunction *function,
-                                                  size_t *label_counter,
-                                                  const char **failure_stage) {
-          '''
-          replacement = marker + '''    /* M174 staging tripwire: the default compiler must never reach
-                 the legacy AST function-body emitter. */
+          marker = 'static bool minic_riscv64_emit_function(FILE *file,'
+          count = text.count(marker)
+          if count != 1:
+              raise SystemExit(f'M174 legacy function marker count={count}')
+          start = text.index(marker)
+          brace = text.index('{', start)
+          tripwire = '''
+              /* M174 staging tripwire: default compilation must never reach the
+                 legacy AST function-body emitter. */
               if (getenv("MINIC_M174_FORBID_LEGACY_BODY") != NULL) {
                   if (failure_stage != NULL) {
                       *failure_stage = "m174-legacy-body-tripwire";
@@ -117,9 +111,8 @@ jobs:
                   return false;
               }
           '''
-          if text.count(marker) != 1:
-              raise SystemExit(f'M174 legacy tripwire anchor count={text.count(marker)}')
-          writer.write_text(text.replace(marker, replacement, 1))
+          text = text[:brace + 1] + tripwire + text[brace + 1:]
+          writer.write_text(text)
           PY
           git diff --check
           grep -Fq 'M174_CORE_ONLY_DEFAULT' src/compiler/compiler.c
