@@ -94,7 +94,17 @@ new_expect = '''expect_instructions() {
                 opcode=${opcode%w}
                 grep -E "^[[:space:]]+$opcode[[:space:]]+" "$work/$name.s" >/dev/null
                 ;;
-            xor\ *|seqz\ *|snez\ *|slt\ *|lw\ *|sw\ *)
+            snez\ *)
+                # Core has SCALAR_EQUAL + SCALAR_IS_ZERO rather than a target-
+                # shaped not-equal instruction.  Canonical `a != b` is therefore
+                # xor + seqz + seqz.  Accept direct snez too, but require two
+                # zero-tests for the Core-normalized shape so equality cannot
+                # accidentally satisfy the not-equal contract.
+                if ! grep -E '^[[:space:]]+snez[[:space:]]+' "$work/$name.s" >/dev/null; then
+                    test "$(grep -E -c '^[[:space:]]+seqz[[:space:]]+' "$work/$name.s")" -ge 2
+                fi
+                ;;
+            xor\ *|seqz\ *|slt\ *|lw\ *|sw\ *)
                 opcode=${instruction%% *}
                 grep -E "^[[:space:]]+$opcode[[:space:]]+" "$work/$name.s" >/dev/null
                 ;;
