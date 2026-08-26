@@ -12,6 +12,7 @@ on:
       - 'tools/ci/apply-m161-rv64-int128-pair.py'
       - 'tools/ci/apply-m162-rv64-record-load.py'
       - 'tools/ci/apply-m163-rv64-caller-abi.py'
+      - 'tools/ci/apply-m163b-rv64-zero-record-abi.py'
       - '.github/workflows/core-m160-rv64-full500-census.yml'
   workflow_dispatch:
 
@@ -43,6 +44,7 @@ jobs:
           python3 tools/ci/apply-m161-rv64-int128-pair.py
           python3 tools/ci/apply-m162-rv64-record-load.py
           python3 tools/ci/apply-m163-rv64-caller-abi.py
+          python3 tools/ci/apply-m163b-rv64-zero-record-abi.py
           git diff --check
           git diff --stat
 
@@ -72,7 +74,8 @@ jobs:
           set -Eeuo pipefail
           compiler="$GITHUB_WORKSPACE/build/m163-compiler/bin/minic"
           mkdir -p build/m163-focused
-          for spec in "0 merge is_mergeable_vm_userfaultfd_ctx" "3 zero zero_fill_bio" "6 skb skb_flow_dissect"; do
+          failed=0
+          for spec in "3 zero zero_fill_bio" "6 skb skb_flow_dissect" "0 merge is_mergeable_vm_userfaultfd_ctx"; do
             set -- $spec
             index="$1"
             name="$2"
@@ -93,9 +96,10 @@ jobs:
             echo "M163_FOCUSED name=$name index=$index rc=$rc"
             if grep -R -F "Core-owned function '$old_owner' cannot be emitted by RV64 basic-v0" "$work/minic-stderr"; then
               echo "M163 old owner did not advance: $old_owner" >&2
-              exit 1
+              failed=1
             fi
           done
+          test "$failed" = 0
 
       - name: Replay frozen full500 through staged Core RV64
         shell: bash
