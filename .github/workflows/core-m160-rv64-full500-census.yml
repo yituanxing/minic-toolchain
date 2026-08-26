@@ -145,7 +145,7 @@ jobs:
           set -Eeuo pipefail
           test -z "${MINIC_CORE_IR:-}"
           test -z "${MINIC_CORE_CODEGEN:-}"
-          cc -E -P -x c tests/programs/c0/return_42.c -o build/m174-default-smoke.i
+          printf '%s\n' 'int main(void) { return 42; }' > build/m174-default-smoke.i
           build/m174-compiler/bin/minic -S build/m174-default-smoke.i -o build/m174-default-smoke.s
           grep -Fq '.Lmain_core_return:' build/m174-default-smoke.s
           ! grep -Fq '.Lmain_return:' build/m174-default-smoke.s
