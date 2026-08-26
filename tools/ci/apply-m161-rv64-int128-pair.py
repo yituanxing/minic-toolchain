@@ -267,5 +267,65 @@ new_conversion = '''    case MINIC_CORE_INSTRUCTION_INTEGER_CONVERSION: {
 '''
 replace_once(old_conversion, new_conversion, "int128-conversion")
 
+old_load = '''    case MINIC_CORE_INSTRUCTION_LOAD:
+        if (!load_core_value(file, frame, instruction->value.load.address, "t0") ||
+            !minic_riscv64_emit_scalar_load_for_program(
+                file, program, instruction->type, "t1", "t0")) {
+            return false;
+        }
+        return store_core_value(file, frame, instruction->result, "t1");
+'''
+new_load = '''    case MINIC_CORE_INSTRUCTION_LOAD:
+        if (minic_type_is_int128_integer(instruction->type)) {
+            if (!load_core_value(file, frame, instruction->value.load.address, "t0") ||
+                fprintf(file, "  ld t1, 0(t0)\\n  ld t2, 8(t0)\\n") < 0) {
+                return false;
+            }
+            return store_core_int128_value(file, frame, instruction->result, "t1", "t2");
+        }
+        if (!load_core_value(file, frame, instruction->value.load.address, "t0") ||
+            !minic_riscv64_emit_scalar_load_for_program(
+                file, program, instruction->type, "t1", "t0")) {
+            return false;
+        }
+        return store_core_value(file, frame, instruction->result, "t1");
+'''
+replace_once(old_load, new_load, "int128-load-object")
+
+old_store = '''    case MINIC_CORE_INSTRUCTION_STORE: {
+        MinicCoreValueId stored_value;
+        MinicType stored_type;
+
+        stored_value = instruction->value.store.stored_value;
+        if (stored_value >= function->value_count) {
+            return false;
+        }
+        stored_type = function->values[stored_value].type;
+        return load_core_value(file, frame, instruction->value.store.address, "t0") &&
+               load_core_value(file, frame, stored_value, "t1") &&
+               minic_riscv64_emit_scalar_store_for_program(file, program, stored_type, "t1", "t0");
+    }
+'''
+new_store = '''    case MINIC_CORE_INSTRUCTION_STORE: {
+        MinicCoreValueId stored_value;
+        MinicType stored_type;
+
+        stored_value = instruction->value.store.stored_value;
+        if (stored_value >= function->value_count) {
+            return false;
+        }
+        stored_type = function->values[stored_value].type;
+        if (minic_type_is_int128_integer(stored_type)) {
+            return load_core_value(file, frame, instruction->value.store.address, "t0") &&
+                   load_core_int128_value(file, frame, stored_value, "t1", "t2") &&
+                   fprintf(file, "  sd t1, 0(t0)\\n  sd t2, 8(t0)\\n") >= 0;
+        }
+        return load_core_value(file, frame, instruction->value.store.address, "t0") &&
+               load_core_value(file, frame, stored_value, "t1") &&
+               minic_riscv64_emit_scalar_store_for_program(file, program, stored_type, "t1", "t0");
+    }
+'''
+replace_once(old_store, new_store, "int128-store-object")
+
 PATH.write_text(text)
 print("M161_INT128_PAIR_APPLIED")
