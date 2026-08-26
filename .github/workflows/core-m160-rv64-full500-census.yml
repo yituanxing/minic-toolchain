@@ -1,4 +1,4 @@
-name: Core M172 RV64 Final-Four Closure
+name: Core M173 RV64 Production Cut
 
 on:
   pull_request:
@@ -23,10 +23,10 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  core-rv64-final-four:
+  productize-core-rv64:
     if: github.event_name == 'workflow_dispatch' || github.head_ref == 'refactor/declaration-sema-v1'
     runs-on: ubuntu-24.04
     steps:
@@ -35,15 +35,38 @@ jobs:
           ref: refactor/declaration-sema-v1
           fetch-depth: 0
 
-      - name: Record M172 staging head
+      - name: Detect production backend cut
+        id: state
         shell: bash
         run: |
           set -Eeuo pipefail
-          echo "M171_CONFIRMED_PASS=496"
-          echo "M172_STAGING_HEAD=$(git rev-parse HEAD)"
-          test "$(git hash-object src/target/riscv64/core_codegen.c)" = a5414575a573abd9ce9ced00fb6c234d785e4e03
+          if grep -Fq 'M172_STRUCTURED_ASM_CALLEE_SAVED' src/target/riscv64/core_codegen.c; then
+            echo 'needs_patch=false' >> "$GITHUB_OUTPUT"
+            echo "M173_ALREADY_PRODUCTIZED head=$(git rev-parse HEAD)"
+          else
+            echo 'needs_patch=true' >> "$GITHUB_OUTPUT"
+            echo "M173_SOURCE_HEAD=$(git rev-parse HEAD)"
+            test "$(git hash-object src/target/riscv64/core_codegen.c)" = a5414575a573abd9ce9ced00fb6c234d785e4e03
+          fi
 
-      - name: Materialize M161-M172 backend
+      - name: Restore frozen Linux corpus
+        if: steps.state.outputs.needs_patch == 'true'
+        id: linux-corpus-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-focus-corpus
+          key: linux-focus-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-${{ hashFiles('tests/external/linux/replay-indices.txt') }}
+
+      - name: Require frozen corpus
+        if: steps.state.outputs.needs_patch == 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "${{ steps.linux-corpus-cache.outputs.cache-hit }}" = true
+          test -s build/linux-focus-corpus/selected-tus.txt
+
+      - name: Materialize qualified M161-M172 backend
+        if: steps.state.outputs.needs_patch == 'true'
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -60,113 +83,70 @@ jobs:
           python3 tools/ci/apply-m171-rv64-overaligned-frame.py
           python3 tools/ci/apply-m172-rv64-final-four.py
           git diff --check
+          grep -Fq 'M172_STRUCTURED_ASM_CALLEE_SAVED' src/target/riscv64/core_codegen.c
+          changed="$(git diff --name-only)"
+          test "$changed" = 'src/target/riscv64/core_codegen.c'
+          echo 'M173_MATERIALIZED_SOURCE_ONLY=1'
 
-      - name: Restore frozen Linux corpus
-        id: linux-corpus-cache
-        uses: actions/cache/restore@v4
-        with:
-          path: build/linux-focus-corpus
-          key: linux-focus-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-${{ hashFiles('tests/external/linux/replay-indices.txt') }}
-
-      - name: Require frozen corpus
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          test "${{ steps.linux-corpus-cache.outputs.cache-hit }}" = true
-          test -s build/linux-focus-corpus/selected-tus.txt
-
-      - name: Build staged compiler
-        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/m172-compiler
+      - name: Build production candidate
+        if: steps.state.outputs.needs_patch == 'true'
+        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/m173-compiler
 
       - name: Run fast regression gate
-        run: make -j4 check-fast MODE=release CFLAGS=-Werror BUILD_DIR=build/m172-check
+        if: steps.state.outputs.needs_patch == 'true'
+        run: make -j4 check-fast MODE=release CFLAGS=-Werror BUILD_DIR=build/m173-check
 
-      - name: Focus final four Linux owners
+      - name: Replay frozen full500 through production candidate
+        if: steps.state.outputs.needs_patch == 'true'
         shell: bash
         run: |
           set -Eeuo pipefail
-          compiler="$GITHUB_WORKSPACE/build/m172-compiler/bin/minic"
-          : > build/m172-focused.txt
-          for spec in \
-            '17:do_softirq_own_stack' \
-            '27:do_irq' \
-            '219:ip_route_output_ports' \
-            '357:ip_route_output_ports'; do
-            index="${spec%%:*}"
-            function="${spec#*:}"
-            work="$GITHUB_WORKSPACE/build/m172-focused/$index"
-            mkdir -p "$work"
-            set +e
-            MINIC_CORE_IR=strict MINIC_CORE_CODEGEN=basic-v0 \
-              python3 tests/external/linux/corpus_replay.py \
-                --minic "$compiler" --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
-                --work "$work" --jobs 1 --offset "$index" --limit 1 --sample-count 0 \
-                >"$work.stdout" 2>"$work.stderr"
-            rc=$?
-            set -e
-            echo "M172_FOCUSED index=$index function=$function rc=$rc" | tee -a build/m172-focused.txt
-            test "$rc" -eq 0
-            ! grep -R -F "Core-owned function '$function' cannot be emitted by RV64 basic-v0" \
-                "$work/minic-stderr" 2>/dev/null
-            ! grep -R -F "cannot emit RISC-V function '$function'" \
-                "$work/minic-stderr" 2>/dev/null
-          done
-
-      - name: Replay frozen full500 through staged Core RV64
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          compiler="$GITHUB_WORKSPACE/build/m172-compiler/bin/minic"
-          work="$GITHUB_WORKSPACE/build/m172-core-rv64"
+          compiler="$GITHUB_WORKSPACE/build/m173-compiler/bin/minic"
+          work="$GITHUB_WORKSPACE/build/m173-core-rv64"
           MINIC_CORE_IR=strict MINIC_CORE_CODEGEN=basic-v0 \
             python3 tests/external/linux/corpus_replay.py \
               --minic "$compiler" --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
               --work "$work" --jobs 4 --offset 0 --limit 500 --sample-count 0
 
-      - name: Require exact Core RV64 500 of 500
+      - name: Require exact production Core RV64 500 of 500
+        if: steps.state.outputs.needs_patch == 'true'
         shell: bash
         run: |
           set -Eeuo pipefail
           python3 - <<'PY'
-          from collections import Counter
           from pathlib import Path
-          import json,re
-          work=Path('build/m172-core-rv64')
+          import json
+          work=Path('build/m173-core-rv64')
           rows=json.loads((work/'batch-results.json').read_text())
-          selected=len(rows); passed=sum(r.get('status')=='PASS' for r in rows)
-          failed=sum(r.get('status')=='FAIL' for r in rows); missing=sum(r.get('status')=='PREPROCESS_MISSING' for r in rows)
-          preflight=re.compile(r"Core-owned function '([^']+)' cannot be emitted by RV64 basic-v0")
-          runtime=re.compile(r"cannot emit RISC-V function '([^']+)' \(index=\d+\)")
-          groups=Counter(); funcs=Counter(); unexpected=[]
-          for row in rows:
-              if row.get('status')!='FAIL': continue
-              msg=str(row.get('message','')); m=preflight.search(msg)
-              if m: group,fn='preflight-reject',m.group(1)
-              else:
-                  m=runtime.search(msg)
-                  if m: group,fn='emit-runtime',m.group(1)
-                  else: group,fn='unexpected',None
-              groups[group]+=1
-              if fn: funcs[fn]+=1
-              if group=='unexpected': unexpected.append(row)
-          headline=f'M172_CORE_RV64_FINAL selected={selected} pass={passed} fail={failed} missing={missing} preflight={groups["preflight-reject"]} emit_runtime={groups["emit-runtime"]} unexpected={len(unexpected)}'
+          selected=len(rows)
+          passed=sum(r.get('status')=='PASS' for r in rows)
+          failed=sum(r.get('status')=='FAIL' for r in rows)
+          missing=sum(r.get('status')=='PREPROCESS_MISSING' for r in rows)
+          headline=f'M173_PRODUCTION_CORE_RV64 selected={selected} pass={passed} fail={failed} missing={missing}'
           print(headline)
-          for fn,count in funcs.most_common(30): print(f'  {count:3d} {fn}')
-          (work/'m172-summary.json').write_text(json.dumps({'selected':selected,'pass':passed,'fail':failed,'missing':missing,'groups':dict(groups),'functions':dict(funcs),'headline':headline},indent=2,sort_keys=True))
-          if selected!=500 or passed!=500 or failed!=0 or missing!=0 or groups or unexpected:
+          if selected != 500 or passed != 500 or failed != 0 or missing != 0:
               raise SystemExit(headline)
           PY
 
-      - name: Persist M172 closure evidence
-        if: always()
+      - name: Commit qualified Core RV64 production backend
+        if: steps.state.outputs.needs_patch == 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/target/riscv64/core_codegen.c
+          git diff --cached --quiet && { echo 'no production backend changes'; exit 1; }
+          git commit -m 'rv64: productize Core backend first500 closure'
+          git push origin HEAD:refactor/declaration-sema-v1
+
+      - name: Persist M173 production evidence
+        if: always() && steps.state.outputs.needs_patch == 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: core-m172-rv64-full500-${{ github.sha }}
+          name: core-m173-rv64-production-${{ github.sha }}
           path: |
-            build/m172-focused.txt
-            build/m172-focused
-            build/m172-core-rv64/batch-results.json
-            build/m172-core-rv64/batch-summary.txt
-            build/m172-core-rv64/m172-summary.json
-            build/m172-core-rv64/minic-stderr
+            build/m173-core-rv64/batch-results.json
+            build/m173-core-rv64/batch-summary.txt
+            build/m173-core-rv64/minic-stderr
           if-no-files-found: warn
