@@ -1680,6 +1680,13 @@ parse_local_declarator(MinicParser *parser, MinicType base_type, bool is_registe
         minic_parser_error(parser, "local object cannot have void type");
         return false;
     }
+    /* M175C_LOCAL_COMPLETE_OBJECT_OWNER: a local declaration owns storage, so
+       record/enum object types must be complete here. Pointer declarators remain
+       valid because the shared complete-object query accepts pointer types. */
+    if (!minic_parser_require_complete_object_type(
+            parser, declared_type, "local object type is incomplete")) {
+        return false;
+    }
     if (!parse_local_fixed_register_name(parser,
                                          fixed_register_name,
                                          sizeof(fixed_register_name),
