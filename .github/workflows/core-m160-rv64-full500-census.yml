@@ -83,6 +83,7 @@ jobs:
           : > build/m169-tail-trace.txt
           for index in $indices; do
             work="$GITHUB_WORKSPACE/build/m169-tail/$index"
+            mkdir -p "$work"
             set +e
             MINIC_CORE_IR=strict MINIC_CORE_CODEGEN=basic-v0 \
               python3 tests/external/linux/corpus_replay.py \
