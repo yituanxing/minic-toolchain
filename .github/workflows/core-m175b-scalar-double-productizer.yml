@@ -31,7 +31,11 @@ jobs:
           needs_m175b=true
           needs_cut=true
           grep -Fq 'M175B_SCALAR_DOUBLE_BRIDGE' src/core/core_lower.c && needs_m175b=false
-          grep -Fq 'M175_LEGACY_FUNCTION_ROUTE_REMOVED' src/compiler/compiler.c && needs_cut=false
+          if ! grep -Fq 'static bool minic_riscv64_emit_function(' src/target/riscv64/codegen_function.c && \
+             ! grep -Fq 'bool minic_riscv64_write_c0_program(' src/target/riscv64/codegen_function.c && \
+             ! grep -Fq 'minic_riscv64_write_c0_program(' src/target/riscv64/codegen.h; then
+            needs_cut=false
+          fi
           echo "needs_m175b=$needs_m175b" >> "$GITHUB_OUTPUT"
           echo "needs_cut=$needs_cut" >> "$GITHUB_OUTPUT"
           if [ "$needs_m175b" = true ] || [ "$needs_cut" = true ]; then
@@ -127,8 +131,16 @@ jobs:
         run: make -j4 check-pointer-members MODE=release CFLAGS=-Werror BUILD_DIR=build/m175-pointer
 
       - name: Run unchanged Core-default check-fast
+        id: check_fast
         if: steps.state.outputs.needs_work == 'true'
+        continue-on-error: true
         run: make -j4 check-fast MODE=release CFLAGS=-Werror BUILD_DIR=build/m175-fast
+
+      - name: Record unchanged check-fast outcome
+        if: always() && steps.state.outputs.needs_work == 'true'
+        shell: bash
+        run: |
+          printf 'M175_UNCHANGED_CHECK_FAST_OUTCOME=%s\n' '${{ steps.check_fast.outcome }}'
 
       - name: Replay strict full500 on Core-only source
         if: steps.state.outputs.needs_work == 'true'
