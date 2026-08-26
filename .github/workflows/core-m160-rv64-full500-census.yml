@@ -1,4 +1,4 @@
-name: Core M163 RV64 Preflight Owner Trace
+name: Core M163 RV64 Caller ABI Full500 Census
 
 on:
   pull_request:
@@ -6,10 +6,12 @@ on:
       - 'src/**'
       - 'include/**'
       - 'Makefile'
+      - 'tests/core/**'
+      - 'tests/target/riscv64/**'
       - 'tests/external/linux/corpus_replay.py'
       - 'tools/ci/apply-m161-rv64-int128-pair.py'
       - 'tools/ci/apply-m162-rv64-record-load.py'
-      - 'tools/ci/apply-m163-rv64-preflight-trace.py'
+      - 'tools/ci/apply-m163-rv64-caller-abi.py'
       - '.github/workflows/core-m160-rv64-full500-census.yml'
   workflow_dispatch:
 
@@ -17,7 +19,7 @@ permissions:
   contents: read
 
 jobs:
-  core-rv64-preflight-trace:
+  core-rv64-full500:
     if: github.event_name == 'workflow_dispatch' || github.head_ref == 'refactor/declaration-sema-v1'
     runs-on: ubuntu-24.04
     steps:
@@ -26,21 +28,21 @@ jobs:
           ref: refactor/declaration-sema-v1
           fetch-depth: 0
 
-      - name: Record M163 trace head
+      - name: Record M163 staging head
         shell: bash
         run: |
           set -Eeuo pipefail
           echo "M162_STAGED_BASELINE_PASS=291"
-          echo "M163_TRACE_HEAD=$(git rev-parse HEAD)"
+          echo "M163_STAGING_HEAD=$(git rev-parse HEAD)"
           test "$(git hash-object src/target/riscv64/core_codegen.c)" = a5414575a573abd9ce9ced00fb6c234d785e4e03
 
-      - name: Materialize staged backend and trace
+      - name: Materialize M161 M162 M163 backend
         shell: bash
         run: |
           set -Eeuo pipefail
           python3 tools/ci/apply-m161-rv64-int128-pair.py
           python3 tools/ci/apply-m162-rv64-record-load.py
-          python3 tools/ci/apply-m163-rv64-preflight-trace.py
+          python3 tools/ci/apply-m163-rv64-caller-abi.py
           git diff --check
           git diff --stat
 
@@ -58,20 +60,24 @@ jobs:
           test "${{ steps.linux-corpus-cache.outputs.cache-hit }}" = true
           test -s build/linux-focus-corpus/selected-tus.txt
 
-      - name: Build traced compiler
+      - name: Build staged compiler
         run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/m163-compiler
 
-      - name: Replay three Pareto representatives
+      - name: Run fast regression gate
+        run: make -j4 check-fast MODE=release CFLAGS=-Werror BUILD_DIR=build/m163-check
+
+      - name: Focused M163 Pareto replay
         shell: bash
         run: |
           set -Eeuo pipefail
           compiler="$GITHUB_WORKSPACE/build/m163-compiler/bin/minic"
-          mkdir -p build/m163-trace
-          for spec in "0 merge" "3 zero" "6 skb"; do
+          mkdir -p build/m163-focused
+          for spec in "0 merge is_mergeable_vm_userfaultfd_ctx" "3 zero zero_fill_bio" "6 skb skb_flow_dissect"; do
             set -- $spec
             index="$1"
             name="$2"
-            work="$GITHUB_WORKSPACE/build/m163-trace/$name"
+            old_owner="$3"
+            work="$GITHUB_WORKSPACE/build/m163-focused/$name"
             set +e
             MINIC_CORE_IR=strict MINIC_CORE_CODEGEN=basic-v0 \
               python3 tests/external/linux/corpus_replay.py \
@@ -85,38 +91,121 @@ jobs:
             rc=$?
             set -e
             echo "M163_FOCUSED name=$name index=$index rc=$rc"
-            find "$work/minic-stderr" -type f -maxdepth 8 -print -exec cat {} \; 2>/dev/null || true
+            if grep -R -F "Core-owned function '$old_owner' cannot be emitted by RV64 basic-v0" "$work/minic-stderr"; then
+              echo "M163 old owner did not advance: $old_owner" >&2
+              exit 1
+            fi
           done
 
-      - name: Require three precise preflight traces
+      - name: Replay frozen full500 through staged Core RV64
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          compiler="$GITHUB_WORKSPACE/build/m163-compiler/bin/minic"
+          work="$GITHUB_WORKSPACE/build/m163-core-rv64"
+          set +e
+          MINIC_CORE_IR=strict MINIC_CORE_CODEGEN=basic-v0 \
+            python3 tests/external/linux/corpus_replay.py \
+              --minic "$compiler" \
+              --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
+              --work "$work" \
+              --jobs 4 \
+              --offset 0 \
+              --limit 500 \
+              --sample-count 0
+          rc=$?
+          set -e
+          echo "M163_REPLAY_STATUS=$rc"
+
+      - name: Classify M163 staged frontier
         shell: bash
         run: |
           set -Eeuo pipefail
           python3 - <<'PY'
+          from __future__ import annotations
+          from collections import Counter
           from pathlib import Path
-          roots = {
-              'merge': Path('build/m163-trace/merge/minic-stderr'),
-              'zero': Path('build/m163-trace/zero/minic-stderr'),
-              'skb': Path('build/m163-trace/skb/minic-stderr'),
-          }
-          out = []
-          for name, root in roots.items():
-              text = '\n'.join(p.read_text(errors='replace') for p in root.rglob('*') if p.is_file())
-              lines = [line for line in text.splitlines() if 'CORE_RV64_PREFLIGHT' in line]
-              if not lines:
-                  raise SystemExit(f'M163 missing preflight trace for {name}')
-              out.append(f'[{name}]')
-              out.extend(lines[-12:])
-          summary = '\n'.join(out) + '\n'
-          Path('build/m163-trace/preflight-summary.txt').write_text(summary)
-          print(summary)
+          import json
+          import re
+
+          work = Path('build/m163-core-rv64')
+          rows = json.loads((work / 'batch-results.json').read_text())
+          selected = len(rows)
+          passed = sum(row.get('status') == 'PASS' for row in rows)
+          failed = sum(row.get('status') == 'FAIL' for row in rows)
+          missing = sum(row.get('status') == 'PREPROCESS_MISSING' for row in rows)
+          preflight_re = re.compile(r"Core-owned function '([^']+)' cannot be emitted by RV64 basic-v0")
+          runtime_re = re.compile(r"cannot emit RISC-V function '([^']+)' \(index=\d+\)")
+          groups = Counter()
+          functions = Counter()
+          unexpected = []
+          for row in rows:
+              if row.get('status') != 'FAIL':
+                  continue
+              message = str(row.get('message', ''))
+              match = preflight_re.search(message)
+              if match:
+                  group, function = 'preflight-reject', match.group(1)
+              else:
+                  match = runtime_re.search(message)
+                  if match:
+                      group, function = 'emit-runtime', match.group(1)
+                  elif 'Core IR shadow does not yet support function' in message:
+                      group, function = 'unexpected-core-lowering-unsupported', None
+                  elif 'Core IR shadow lowering failed for function' in message or 'Core verifier' in message:
+                      group, function = 'unexpected-core-error', None
+                  else:
+                      group, function = 'unexpected-other', None
+              groups[group] += 1
+              if function:
+                  functions[f'{group}:{function}'] += 1
+              if group.startswith('unexpected-'):
+                  unexpected.append({'index': row.get('index'), 'input': row.get('input'), 'message': message})
+          headline = (
+              f'M163_CORE_RV64_STAGED selected={selected} pass={passed} fail={failed} '
+              f'preprocess_missing={missing} preflight_reject={groups["preflight-reject"]} '
+              f'emit_runtime={groups["emit-runtime"]} unexpected={len(unexpected)}'
+          )
+          print(headline)
+          print('first-blocker functions:')
+          for key, count in functions.most_common(50):
+              print(f'  {count:4d}  {key}')
+          (work / 'm163-summary.json').write_text(json.dumps({
+              'baseline_pass': 291,
+              'selected': selected,
+              'pass': passed,
+              'fail': failed,
+              'preprocess_missing': missing,
+              'groups': dict(groups),
+              'functions': dict(functions),
+              'unexpected': unexpected,
+              'headline': headline,
+          }, indent=2, sort_keys=True))
+          (work / 'm163-summary.txt').write_text(
+              headline + '\n\nfirst-blocker functions:\n' +
+              ''.join(f'  {count:4d}  {key}\n' for key, count in functions.most_common(50)))
+          if selected != 500:
+              raise SystemExit(f'M163 expected 500 TUs, got {selected}')
+          if missing != 0:
+              raise SystemExit(f'M163 missing {missing} TUs')
+          if unexpected:
+              raise SystemExit(f'M163 found {len(unexpected)} unexpected non-backend failures')
+          if passed <= 291:
+              raise SystemExit(f'M163 did not improve 291/500 baseline: pass={passed}')
           PY
 
-      - name: Persist M163 trace
+      - name: Persist M163 staged census
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: core-m163-rv64-preflight-trace-${{ github.sha }}
+          name: core-m163-rv64-full500-${{ github.sha }}
           path: |
-            build/m163-trace
+            build/m163-focused
+            build/m163-core-rv64/batch-results.json
+            build/m163-core-rv64/batch-results.tsv
+            build/m163-core-rv64/batch-summary.txt
+            build/m163-core-rv64/failure-contexts.txt
+            build/m163-core-rv64/m163-summary.json
+            build/m163-core-rv64/m163-summary.txt
+            build/m163-core-rv64/minic-stderr
           if-no-files-found: warn
