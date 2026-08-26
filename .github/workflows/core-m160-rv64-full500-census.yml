@@ -1,4 +1,4 @@
-name: Core M171 RV64 Overaligned Frame Full500
+name: Core M172 RV64 Final-Four Closure
 
 on:
   pull_request:
@@ -18,6 +18,7 @@ on:
       - 'tools/ci/apply-m168-rv64-indirect-call-stack.py'
       - 'tools/ci/apply-m170-rv64-array-object.py'
       - 'tools/ci/apply-m171-rv64-overaligned-frame.py'
+      - 'tools/ci/apply-m172-rv64-final-four.py'
       - '.github/workflows/core-m160-rv64-full500-census.yml'
   workflow_dispatch:
 
@@ -25,7 +26,7 @@ permissions:
   contents: read
 
 jobs:
-  core-rv64-overaligned-frame:
+  core-rv64-final-four:
     if: github.event_name == 'workflow_dispatch' || github.head_ref == 'refactor/declaration-sema-v1'
     runs-on: ubuntu-24.04
     steps:
@@ -34,15 +35,15 @@ jobs:
           ref: refactor/declaration-sema-v1
           fetch-depth: 0
 
-      - name: Record M171 staging head
+      - name: Record M172 staging head
         shell: bash
         run: |
           set -Eeuo pipefail
-          echo "M170_CONFIRMED_PASS=491"
-          echo "M171_STAGING_HEAD=$(git rev-parse HEAD)"
+          echo "M171_CONFIRMED_PASS=496"
+          echo "M172_STAGING_HEAD=$(git rev-parse HEAD)"
           test "$(git hash-object src/target/riscv64/core_codegen.c)" = a5414575a573abd9ce9ced00fb6c234d785e4e03
 
-      - name: Materialize M161-M171 backend
+      - name: Materialize M161-M172 backend
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -57,6 +58,7 @@ jobs:
           python3 tools/ci/apply-m168-rv64-indirect-call-stack.py
           python3 tools/ci/apply-m170-rv64-array-object.py
           python3 tools/ci/apply-m171-rv64-overaligned-frame.py
+          python3 tools/ci/apply-m172-rv64-final-four.py
           git diff --check
 
       - name: Restore frozen Linux corpus
@@ -74,26 +76,25 @@ jobs:
           test -s build/linux-focus-corpus/selected-tus.txt
 
       - name: Build staged compiler
-        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/m171-compiler
+        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/m172-compiler
 
       - name: Run fast regression gate
-        run: make -j4 check-fast MODE=release CFLAGS=-Werror BUILD_DIR=build/m171-check
+        run: make -j4 check-fast MODE=release CFLAGS=-Werror BUILD_DIR=build/m172-check
 
-      - name: Focus five overaligned Linux owners
+      - name: Focus final four Linux owners
         shell: bash
         run: |
           set -Eeuo pipefail
-          compiler="$GITHUB_WORKSPACE/build/m171-compiler/bin/minic"
-          : > build/m171-focused.txt
+          compiler="$GITHUB_WORKSPACE/build/m172-compiler/bin/minic"
+          : > build/m172-focused.txt
           for spec in \
-            '221:dev_map_bpf_prog_run' \
-            '222:cpu_map_bpf_prog_run_xdp' \
-            '232:perf_log_lost_samples' \
-            '272:smp_call_function_single' \
-            '295:rseq_ip_fixup'; do
+            '17:do_softirq_own_stack' \
+            '27:do_irq' \
+            '219:ip_route_output_ports' \
+            '357:ip_route_output_ports'; do
             index="${spec%%:*}"
             function="${spec#*:}"
-            work="$GITHUB_WORKSPACE/build/m171-focused/$index"
+            work="$GITHUB_WORKSPACE/build/m172-focused/$index"
             mkdir -p "$work"
             set +e
             MINIC_CORE_IR=strict MINIC_CORE_CODEGEN=basic-v0 \
@@ -103,7 +104,8 @@ jobs:
                 >"$work.stdout" 2>"$work.stderr"
             rc=$?
             set -e
-            echo "M171_FOCUSED index=$index function=$function rc=$rc" | tee -a build/m171-focused.txt
+            echo "M172_FOCUSED index=$index function=$function rc=$rc" | tee -a build/m172-focused.txt
+            test "$rc" -eq 0
             ! grep -R -F "Core-owned function '$function' cannot be emitted by RV64 basic-v0" \
                 "$work/minic-stderr" 2>/dev/null
             ! grep -R -F "cannot emit RISC-V function '$function'" \
@@ -114,18 +116,14 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
-          compiler="$GITHUB_WORKSPACE/build/m171-compiler/bin/minic"
-          work="$GITHUB_WORKSPACE/build/m171-core-rv64"
-          set +e
+          compiler="$GITHUB_WORKSPACE/build/m172-compiler/bin/minic"
+          work="$GITHUB_WORKSPACE/build/m172-core-rv64"
           MINIC_CORE_IR=strict MINIC_CORE_CODEGEN=basic-v0 \
             python3 tests/external/linux/corpus_replay.py \
               --minic "$compiler" --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
               --work "$work" --jobs 4 --offset 0 --limit 500 --sample-count 0
-          rc=$?
-          set -e
-          echo "M171_REPLAY_STATUS=$rc"
 
-      - name: Classify M171 staged frontier
+      - name: Require exact Core RV64 500 of 500
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -133,7 +131,7 @@ jobs:
           from collections import Counter
           from pathlib import Path
           import json,re
-          work=Path('build/m171-core-rv64')
+          work=Path('build/m172-core-rv64')
           rows=json.loads((work/'batch-results.json').read_text())
           selected=len(rows); passed=sum(r.get('status')=='PASS' for r in rows)
           failed=sum(r.get('status')=='FAIL' for r in rows); missing=sum(r.get('status')=='PREPROCESS_MISSING' for r in rows)
@@ -151,24 +149,24 @@ jobs:
               groups[group]+=1
               if fn: funcs[fn]+=1
               if group=='unexpected': unexpected.append(row)
-          headline=f'M171_CORE_RV64_STAGED selected={selected} pass={passed} fail={failed} missing={missing} preflight={groups["preflight-reject"]} emit_runtime={groups["emit-runtime"]} unexpected={len(unexpected)}'
+          headline=f'M172_CORE_RV64_FINAL selected={selected} pass={passed} fail={failed} missing={missing} preflight={groups["preflight-reject"]} emit_runtime={groups["emit-runtime"]} unexpected={len(unexpected)}'
           print(headline)
           for fn,count in funcs.most_common(30): print(f'  {count:3d} {fn}')
-          (work/'m171-summary.json').write_text(json.dumps({'selected':selected,'pass':passed,'fail':failed,'missing':missing,'groups':dict(groups),'functions':dict(funcs),'headline':headline},indent=2,sort_keys=True))
-          if selected!=500 or missing!=0 or unexpected or groups['emit-runtime']!=0 or passed<=491:
+          (work/'m172-summary.json').write_text(json.dumps({'selected':selected,'pass':passed,'fail':failed,'missing':missing,'groups':dict(groups),'functions':dict(funcs),'headline':headline},indent=2,sort_keys=True))
+          if selected!=500 or passed!=500 or failed!=0 or missing!=0 or groups or unexpected:
               raise SystemExit(headline)
           PY
 
-      - name: Persist M171 staged census
+      - name: Persist M172 closure evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: core-m171-rv64-full500-${{ github.sha }}
+          name: core-m172-rv64-full500-${{ github.sha }}
           path: |
-            build/m171-focused.txt
-            build/m171-focused
-            build/m171-core-rv64/batch-results.json
-            build/m171-core-rv64/batch-summary.txt
-            build/m171-core-rv64/m171-summary.json
-            build/m171-core-rv64/minic-stderr
+            build/m172-focused.txt
+            build/m172-focused
+            build/m172-core-rv64/batch-results.json
+            build/m172-core-rv64/batch-summary.txt
+            build/m172-core-rv64/m172-summary.json
+            build/m172-core-rv64/minic-stderr
           if-no-files-found: warn
