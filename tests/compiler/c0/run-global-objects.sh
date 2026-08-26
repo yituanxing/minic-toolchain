@@ -1,5 +1,5 @@
 #!/bin/sh
-set -eux
+set -eu
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
 minic=${MINIC:-"$root/build/debug/bin/minic"}
@@ -44,13 +44,11 @@ grep -F ".section .rodata" "$work/global_array_read.s" >/dev/null
 grep -F "table:" "$work/global_array_read.s" >/dev/null
 grep -F ".Lread_table_core_bb" "$work/global_array_read.s" >/dev/null
 grep -F ".Lread_table_core_return:" "$work/global_array_read.s" >/dev/null
-# read_table(index) must form the global table address, scale an int index by
-# four bytes, and perform a 32-bit load.  Register allocation is not part of
-# the frontend/Core semantic contract.
+# Core owns pointer stride semantically; the RV64 emitter need not preserve the
+# legacy emitter's strength-reduced slli-by-two peephole for int indexing.
 grep -E '^[[:space:]]+la[[:space:]]+[^,]+,[[:space:]]*table$' \
     "$work/global_array_read.s" >/dev/null
-grep -E '^[[:space:]]+slli[[:space:]]+[^,]+,[[:space:]]*[^,]+,[[:space:]]*2$' \
-    "$work/global_array_read.s" >/dev/null
+grep -E '^[[:space:]]+mul[[:space:]]+' "$work/global_array_read.s" >/dev/null
 grep -E '^[[:space:]]+lw[[:space:]]+[^,]+,[[:space:]]*0\([^)]*\)$' \
     "$work/global_array_read.s" >/dev/null
 grep -F "  call read_table" "$work/global_array_read.s" >/dev/null
