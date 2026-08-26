@@ -8,6 +8,17 @@ text = PATH.read_text()
 def replace_once(old: str, new: str, label: str) -> None:
     global text
     count = text.count(old)
+    if label == "frame-zero-record" and count == 2:
+        start = text.index("static bool core_frame_initialize(")
+        end = text.index("static bool core_object_offset(", start)
+        region = text[start:end]
+        region_count = region.count(old)
+        if region_count != 1:
+            raise SystemExit(
+                f"M163b zero-record ABI {label}: expected 1 frame match, got {region_count}"
+            )
+        text = text[:start] + region.replace(old, new, 1) + text[end:]
+        return
     if count != 1:
         raise SystemExit(f"M163b zero-record ABI {label}: expected 1 match, got {count}")
     text = text.replace(old, new, 1)
