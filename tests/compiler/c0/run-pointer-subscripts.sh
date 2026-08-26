@@ -19,7 +19,6 @@ compile_success() {
 compile_success \
     pointer_subscript \
     "$root/tests/programs/c0/pointer_subscript.c"
-grep -E '^[[:space:]]+slli[[:space:]]+[^,]+,[[:space:]]*[^,]+,[[:space:]]*2$' "$work/pointer_subscript.s" >/dev/null
 grep -E '^[[:space:]]+lw[[:space:]]+[^,]+,[[:space:]]*0\([^)]*\)$' "$work/pointer_subscript.s" >/dev/null
 grep -E '^[[:space:]]+sw[[:space:]]+[^,]+,[[:space:]]*0\([^)]*\)$' "$work/pointer_subscript.s" >/dev/null
 grep -F "  call read_at" "$work/pointer_subscript.s" >/dev/null

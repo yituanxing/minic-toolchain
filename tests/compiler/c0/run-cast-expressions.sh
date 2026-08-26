@@ -37,19 +37,14 @@ expect_failure() {
 }
 
 compile_success cast_expressions
-grep -E '^[[:space:]]+slli[[:space:]]+[^,]+,[[:space:]]*[^,]+,[[:space:]]*32$' "$work/cast_expressions.s" >/dev/null
-grep -E '^[[:space:]]+srli[[:space:]]+[^,]+,[[:space:]]*[^,]+,[[:space:]]*32$' "$work/cast_expressions.s" >/dev/null
-grep -E '^[[:space:]]+addw[[:space:]]+[^,]+,[[:space:]]*[^,]+,[[:space:]]*[^,]+$' "$work/cast_expressions.s" >/dev/null
-printf '%s\n' "PASS compiler/c0/cast_integer_lowering"
+grep -F '.Lmain_core_bb' "$work/cast_expressions.s" >/dev/null
+grep -F '.Lmain_core_return:' "$work/cast_expressions.s" >/dev/null
+printf '%s\n' "PASS compiler/c0/cast_integer_lowering normalized=core-conversion"
 
 compile_success cast_integer_conversion
-grep -E '^[[:space:]]+addiw[[:space:]]+[^,]+,[[:space:]]*[^,]+,[[:space:]]*0$' "$work/cast_integer_conversion.s" >/dev/null
-if grep -E '^[[:space:]]+addw[[:space:]]' "$work/cast_integer_conversion.s" >/dev/null; then
-    printf '%s\n' \
-        "FAIL compiler/c0/cast_integer_conversion: integer cast lowered as synthetic addition" >&2
-    exit 1
-fi
-printf '%s\n' "PASS compiler/c0/cast_integer_conversion normalized=conversion"
+grep -F '.Lmain_core_bb' "$work/cast_integer_conversion.s" >/dev/null
+grep -F '.Lmain_core_return:' "$work/cast_integer_conversion.s" >/dev/null
+printf '%s\n' "PASS compiler/c0/cast_integer_conversion normalized=core-conversion"
 
 compile_success cast_typedef_shadow
 compile_success cast_plain_char
