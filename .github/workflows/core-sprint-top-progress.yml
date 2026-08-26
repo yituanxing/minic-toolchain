@@ -10,7 +10,7 @@ permissions:
 jobs:
   strict500:
     if: github.event_name == 'workflow_dispatch' || github.head_ref == 'refactor/declaration-sema-v1'
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
         with:
