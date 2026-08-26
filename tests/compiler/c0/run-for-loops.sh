@@ -13,10 +13,13 @@ mkdir -p "$work"
     -o "$work/for_loop.i"
 "$minic" -S "$work/for_loop.i" -o "$work/for_loop.s"
 
-grep -F ".Lwhile_condition_" "$work/for_loop.s" >/dev/null
-grep -F "  sltu a0" "$work/for_loop.s" >/dev/null
-grep -F "  addw a0" "$work/for_loop.s" >/dev/null
-grep -F "  lwu a0" "$work/for_loop.s" >/dev/null
+# Core owns the CFG now.  Keep this as a target-codegen contract without
+# pinning the old AST emitter's labels or its choice of a0 as a scratch value.
+grep -F ".Lmain_core_bb" "$work/for_loop.s" >/dev/null
+grep -F ".Lmain_core_return:" "$work/for_loop.s" >/dev/null
+grep -E '^[[:space:]]+sltu[[:space:]]' "$work/for_loop.s" >/dev/null
+grep -E '^[[:space:]]+addw[[:space:]]' "$work/for_loop.s" >/dev/null
+grep -E '^[[:space:]]+lwu[[:space:]]' "$work/for_loop.s" >/dev/null
 printf '%s\n' "PASS compiler/c0/for_loop_lowering"
 
 "$host_cc" -E -P -x c \
@@ -40,8 +43,7 @@ expect_failure() {
         -o "$work/$name.i"
     if "$minic" -S "$work/$name.i" -o "$work/$name.s" \
         >"$work/$name.stdout" 2>"$work/$name.stderr"; then
-        printf '%s\n' \
-            "FAIL compiler/c0/$name: compilation unexpectedly succeeded" >&2
+        printf '%s\n' "FAIL compiler/c0/$name: compilation unexpectedly succeeded" >&2
         exit 1
     fi
     if ! grep -F "$message" "$work/$name.stderr" >/dev/null; then
