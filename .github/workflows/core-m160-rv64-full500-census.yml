@@ -1,4 +1,4 @@
-name: Core M170 RV64 Object Shape Trace
+name: Core M170 RV64 Array Object Full500
 
 on:
   pull_request:
@@ -16,8 +16,7 @@ on:
       - 'tools/ci/apply-m167-rv64-zero-record-copy.py'
       - 'tools/ci/apply-m167d-rv64-indirect-record-return.py'
       - 'tools/ci/apply-m168-rv64-indirect-call-stack.py'
-      - 'tools/ci/apply-m169-rv64-tail-preflight-trace.py'
-      - 'tools/ci/apply-m170-rv64-object-detail-trace.py'
+      - 'tools/ci/apply-m170-rv64-array-object.py'
       - '.github/workflows/core-m160-rv64-full500-census.yml'
   workflow_dispatch:
 
@@ -25,7 +24,7 @@ permissions:
   contents: read
 
 jobs:
-  core-rv64-object-shape-trace:
+  core-rv64-array-object:
     if: github.event_name == 'workflow_dispatch' || github.head_ref == 'refactor/declaration-sema-v1'
     runs-on: ubuntu-24.04
     steps:
@@ -34,15 +33,15 @@ jobs:
           ref: refactor/declaration-sema-v1
           fetch-depth: 0
 
-      - name: Record M170 trace head
+      - name: Record M170 staging head
         shell: bash
         run: |
           set -Eeuo pipefail
           echo "M168_CONFIRMED_PASS=483"
-          echo "M170_TRACE_HEAD=$(git rev-parse HEAD)"
+          echo "M170_STAGING_HEAD=$(git rev-parse HEAD)"
           test "$(git hash-object src/target/riscv64/core_codegen.c)" = a5414575a573abd9ce9ced00fb6c234d785e4e03
 
-      - name: Materialize M161-M170 traced backend
+      - name: Materialize M161-M170 backend
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -55,8 +54,7 @@ jobs:
           python3 tools/ci/apply-m167-rv64-zero-record-copy.py
           python3 tools/ci/apply-m167d-rv64-indirect-record-return.py
           python3 tools/ci/apply-m168-rv64-indirect-call-stack.py
-          python3 tools/ci/apply-m169-rv64-tail-preflight-trace.py
-          python3 tools/ci/apply-m170-rv64-object-detail-trace.py
+          python3 tools/ci/apply-m170-rv64-array-object.py
           git diff --check
 
       - name: Restore frozen Linux corpus
@@ -73,46 +71,86 @@ jobs:
           test "${{ steps.linux-corpus-cache.outputs.cache-hit }}" = true
           test -s build/linux-focus-corpus/selected-tus.txt
 
-      - name: Build traced compiler
+      - name: Build staged compiler
         run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/m170-compiler
 
-      - name: Trace 13 object failures
+      - name: Run fast regression gate
+        run: make -j4 check-fast MODE=release CFLAGS=-Werror BUILD_DIR=build/m170-check
+
+      - name: Focus canonical array object owner
         shell: bash
         run: |
           set -Eeuo pipefail
           compiler="$GITHUB_WORKSPACE/build/m170-compiler/bin/minic"
-          indices="95 98 120 127 157 221 222 232 249 270 272 274 295"
-          : > build/m170-object-trace.txt
-          for index in $indices; do
-            work="$GITHUB_WORKSPACE/build/m170-object/$index"
-            mkdir -p "$work"
-            set +e
-            MINIC_CORE_IR=strict MINIC_CORE_CODEGEN=basic-v0 \
-              python3 tests/external/linux/corpus_replay.py \
-                --minic "$compiler" --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
-                --work "$work" --jobs 1 --offset "$index" --limit 1 --sample-count 0 \
-                >"$work.stdout" 2>"$work.stderr"
-            rc=$?
-            set -e
-            line="$(grep -R -m1 -F 'M170_OBJECT' "$work/minic-stderr" 2>/dev/null || true)"
-            echo "M170_TAIL index=$index rc=$rc trace=$line" | tee -a build/m170-object-trace.txt
-            test "$rc" != 0
-            test -n "$line"
-          done
+          work="$GITHUB_WORKSPACE/build/m170-focused/array"
+          set +e
+          MINIC_CORE_IR=strict MINIC_CORE_CODEGEN=basic-v0 \
+            python3 tests/external/linux/corpus_replay.py \
+              --minic "$compiler" --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
+              --work "$work" --jobs 1 --offset 95 --limit 1 --sample-count 0
+          rc=$?
+          set -e
+          echo "M170_ARRAY_FOCUSED index=95 rc=$rc"
+          ! grep -R -F "Core-owned function 'force_compatible_cpus_allowed_ptr' cannot be emitted by RV64 basic-v0" "$work/minic-stderr" 2>/dev/null
 
-      - name: Summarize M170 object shapes
+      - name: Replay frozen full500 through staged Core RV64
         shell: bash
         run: |
           set -Eeuo pipefail
-          cat build/m170-object-trace.txt
-          test "$(grep -c 'M170_OBJECT' build/m170-object-trace.txt)" = 13
+          compiler="$GITHUB_WORKSPACE/build/m170-compiler/bin/minic"
+          work="$GITHUB_WORKSPACE/build/m170-core-rv64"
+          set +e
+          MINIC_CORE_IR=strict MINIC_CORE_CODEGEN=basic-v0 \
+            python3 tests/external/linux/corpus_replay.py \
+              --minic "$compiler" --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
+              --work "$work" --jobs 4 --offset 0 --limit 500 --sample-count 0
+          rc=$?
+          set -e
+          echo "M170_REPLAY_STATUS=$rc"
 
-      - name: Persist M170 object trace
+      - name: Classify M170 staged frontier
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          from collections import Counter
+          from pathlib import Path
+          import json,re
+          work=Path('build/m170-core-rv64')
+          rows=json.loads((work/'batch-results.json').read_text())
+          selected=len(rows); passed=sum(r.get('status')=='PASS' for r in rows)
+          failed=sum(r.get('status')=='FAIL' for r in rows); missing=sum(r.get('status')=='PREPROCESS_MISSING' for r in rows)
+          preflight=re.compile(r"Core-owned function '([^']+)' cannot be emitted by RV64 basic-v0")
+          runtime=re.compile(r"cannot emit RISC-V function '([^']+)' \(index=\d+\)")
+          groups=Counter(); funcs=Counter(); unexpected=[]
+          for row in rows:
+              if row.get('status')!='FAIL': continue
+              msg=str(row.get('message','')); m=preflight.search(msg)
+              if m: group,fn='preflight-reject',m.group(1)
+              else:
+                  m=runtime.search(msg)
+                  if m: group,fn='emit-runtime',m.group(1)
+                  else: group,fn='unexpected',None
+              groups[group]+=1
+              if fn: funcs[fn]+=1
+              if group=='unexpected': unexpected.append(row)
+          headline=f'M170_CORE_RV64_STAGED selected={selected} pass={passed} fail={failed} missing={missing} preflight={groups["preflight-reject"]} emit_runtime={groups["emit-runtime"]} unexpected={len(unexpected)}'
+          print(headline)
+          for fn,count in funcs.most_common(30): print(f'  {count:3d} {fn}')
+          (work/'m170-summary.json').write_text(json.dumps({'selected':selected,'pass':passed,'fail':failed,'missing':missing,'groups':dict(groups),'functions':dict(funcs),'headline':headline},indent=2,sort_keys=True))
+          if selected!=500 or missing!=0 or unexpected or groups['emit-runtime']!=0 or passed<=483:
+              raise SystemExit(headline)
+          PY
+
+      - name: Persist M170 staged census
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: core-m170-rv64-object-trace-${{ github.sha }}
+          name: core-m170-rv64-full500-${{ github.sha }}
           path: |
-            build/m170-object-trace.txt
-            build/m170-object
+            build/m170-focused
+            build/m170-core-rv64/batch-results.json
+            build/m170-core-rv64/batch-summary.txt
+            build/m170-core-rv64/m170-summary.json
+            build/m170-core-rv64/minic-stderr
           if-no-files-found: warn
