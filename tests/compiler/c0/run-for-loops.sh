@@ -13,13 +13,32 @@ mkdir -p "$work"
     -o "$work/for_loop.i"
 "$minic" -S "$work/for_loop.i" -o "$work/for_loop.s"
 
-# Core owns the CFG now.  Keep this as a target-codegen contract without
+require_fixed() {
+    pattern=$1
+    if ! grep -F "$pattern" "$work/for_loop.s" >/dev/null; then
+        printf '%s\n' "FAIL compiler/c0/for_loop_lowering: missing fixed pattern: $pattern" >&2
+        cat "$work/for_loop.s" >&2
+        exit 1
+    fi
+}
+
+require_regex() {
+    pattern=$1
+    label=$2
+    if ! grep -E "$pattern" "$work/for_loop.s" >/dev/null; then
+        printf '%s\n' "FAIL compiler/c0/for_loop_lowering: missing opcode: $label" >&2
+        cat "$work/for_loop.s" >&2
+        exit 1
+    fi
+}
+
+# Core owns the CFG now. Keep this as a target-codegen contract without
 # pinning the old AST emitter's labels or its choice of a0 as a scratch value.
-grep -F ".Lmain_core_bb" "$work/for_loop.s" >/dev/null
-grep -F ".Lmain_core_return:" "$work/for_loop.s" >/dev/null
-grep -E '^[[:space:]]+sltu[[:space:]]' "$work/for_loop.s" >/dev/null
-grep -E '^[[:space:]]+addw[[:space:]]' "$work/for_loop.s" >/dev/null
-grep -E '^[[:space:]]+lwu[[:space:]]' "$work/for_loop.s" >/dev/null
+require_fixed ".Lmain_core_bb"
+require_fixed ".Lmain_core_return:"
+require_regex '^[[:space:]]+sltu[[:space:]]' sltu
+require_regex '^[[:space:]]+addw[[:space:]]' addw
+require_regex '^[[:space:]]+lwu[[:space:]]' lwu
 printf '%s\n' "PASS compiler/c0/for_loop_lowering"
 
 "$host_cc" -E -P -x c \
