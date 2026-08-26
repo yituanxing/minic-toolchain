@@ -65,7 +65,7 @@ jobs:
           }
           EOF
           MINIC_CORE_IR=strict MINIC_CORE_CODEGEN=basic-v0 \
-            build/m161-compiler/minic -S build/m161-focused/mul_u64_u32_shr.i \
+            build/m161-compiler/bin/minic -S build/m161-focused/mul_u64_u32_shr.i \
             -o build/m161-focused/mul_u64_u32_shr.s
           test -s build/m161-focused/mul_u64_u32_shr.s
 
@@ -83,7 +83,7 @@ jobs:
           rm -rf build/m161-core-rv64
           MINIC_CORE_IR=strict MINIC_CORE_CODEGEN=basic-v0 \
             bash tools/ci/run-linux-first500-strict.sh \
-              --compiler build/m161-compiler/minic \
+              --compiler build/m161-compiler/bin/minic \
               --corpus build/linux-first500-real-final/inputs \
               --work-dir build/m161-core-rv64 \
               --keep-going
