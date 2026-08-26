@@ -1,4 +1,4 @@
-name: Core M167b RV64 Sched Tail Trace
+name: Core M167c RV64 Function Preflight Trace
 
 on:
   pull_request:
@@ -14,7 +14,7 @@ on:
       - 'tools/ci/apply-m165-rv64-indirect-parameter-object.py'
       - 'tools/ci/apply-m166-rv64-fixed-asm-phase-alias.py'
       - 'tools/ci/apply-m167-rv64-zero-record-copy.py'
-      - 'tools/ci/apply-m167b-rv64-instruction-trace.py'
+      - 'tools/ci/apply-m167c-rv64-function-preflight-trace.py'
       - '.github/workflows/core-m160-rv64-full500-census.yml'
   workflow_dispatch:
 
@@ -22,7 +22,7 @@ permissions:
   contents: read
 
 jobs:
-  core-rv64-sched-tail-trace:
+  core-rv64-function-preflight-trace:
     if: github.event_name == 'workflow_dispatch' || github.head_ref == 'refactor/declaration-sema-v1'
     runs-on: ubuntu-24.04
     steps:
@@ -31,15 +31,15 @@ jobs:
           ref: refactor/declaration-sema-v1
           fetch-depth: 0
 
-      - name: Record M167b trace head
+      - name: Record M167c trace head
         shell: bash
         run: |
           set -Eeuo pipefail
           echo "M166_STAGED_BASELINE_PASS=473"
-          echo "M167B_TRACE_HEAD=$(git rev-parse HEAD)"
+          echo "M167C_TRACE_HEAD=$(git rev-parse HEAD)"
           test "$(git hash-object src/target/riscv64/core_codegen.c)" = a5414575a573abd9ce9ced00fb6c234d785e4e03
 
-      - name: Materialize M161-M167 plus trace
+      - name: Materialize M161-M167 plus function trace
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -50,7 +50,7 @@ jobs:
           python3 tools/ci/apply-m165-rv64-indirect-parameter-object.py
           python3 tools/ci/apply-m166-rv64-fixed-asm-phase-alias.py
           python3 tools/ci/apply-m167-rv64-zero-record-copy.py
-          python3 tools/ci/apply-m167b-rv64-instruction-trace.py
+          python3 tools/ci/apply-m167c-rv64-function-preflight-trace.py
           git diff --check
 
       - name: Restore frozen Linux corpus
@@ -68,14 +68,14 @@ jobs:
           test -s build/linux-focus-corpus/selected-tus.txt
 
       - name: Build traced compiler
-        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/m167b-compiler
+        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/m167c-compiler
 
       - name: Replay sched representative
         shell: bash
         run: |
           set -Eeuo pipefail
-          compiler="$GITHUB_WORKSPACE/build/m167b-compiler/bin/minic"
-          work="$GITHUB_WORKSPACE/build/m167b-trace/rq"
+          compiler="$GITHUB_WORKSPACE/build/m167c-compiler/bin/minic"
+          work="$GITHUB_WORKSPACE/build/m167c-trace/rq"
           set +e
           MINIC_CORE_IR=strict MINIC_CORE_CODEGEN=basic-v0 \
             python3 tests/external/linux/corpus_replay.py \
@@ -84,15 +84,15 @@ jobs:
               --work "$work" --jobs 1 --offset 96 --limit 1 --sample-count 0
           rc=$?
           set -e
-          echo "M167B_FOCUSED index=96 rc=$rc"
+          echo "M167C_FOCUSED index=96 rc=$rc"
           ! grep -R -F "Core-owned function 'rq_pin_lock' cannot be emitted by RV64 basic-v0" "$work/minic-stderr" 2>/dev/null
           grep -R -F "Core-owned function 'class_rq_lock_constructor' cannot be emitted by RV64 basic-v0" "$work/minic-stderr"
-          grep -R -F "M167B_PREFLIGHT" "$work/minic-stderr"
+          grep -R -F "M167C_PREFLIGHT" "$work/minic-stderr"
 
-      - name: Persist M167b trace
+      - name: Persist M167c trace
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: core-m167b-rv64-sched-tail-${{ github.sha }}
-          path: build/m167b-trace
+          name: core-m167c-rv64-function-preflight-${{ github.sha }}
+          path: build/m167c-trace
           if-no-files-found: warn
