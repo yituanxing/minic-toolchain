@@ -1,5 +1,5 @@
 #!/bin/sh
-set -eux
+set -eu
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
 minic=${MINIC:-"$root/build/debug/bin/minic"}
@@ -14,12 +14,11 @@ mkdir -p "$work"
 "$minic" -S "$work/bitwise_xor.i" -o "$work/bitwise_xor.s"
 grep -F ".Lmain_core_bb" "$work/bitwise_xor.s" >/dev/null
 grep -F ".Lmain_core_return:" "$work/bitwise_xor.s" >/dev/null
-# Preserve the operation-level contract without pinning Core's temporary
-# register allocation.  The source exercises XOR, equality normalization and
-# unsigned remainder in one value flow.
+# Core emits XLEN integer operations and then applies the result conversion;
+# verify signedness-sensitive semantics without pinning the legacy W-form.
 grep -E '^[[:space:]]+xor[[:space:]]+' "$work/bitwise_xor.s" >/dev/null
 grep -E '^[[:space:]]+seqz[[:space:]]+' "$work/bitwise_xor.s" >/dev/null
-grep -E '^[[:space:]]+remuw[[:space:]]+' "$work/bitwise_xor.s" >/dev/null
+grep -E '^[[:space:]]+remu[[:space:]]+' "$work/bitwise_xor.s" >/dev/null
 printf '%s\n' "PASS compiler/c0/bitwise_xor normalized=core-integer-ops"
 
 "$host_cc" -E -P -x c \
