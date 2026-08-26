@@ -34,10 +34,14 @@ require_regex() {
 
 # Core owns the CFG now. Keep this as a target-codegen contract without
 # pinning the old AST emitter's labels or its choice of a0 as a scratch value.
+# Unsigned 32-bit arithmetic is represented in the O0 Core backend as an RV64
+# add followed by an explicit 32-bit zero-extension, rather than legacy addw.
 require_fixed ".Lmain_core_bb"
 require_fixed ".Lmain_core_return:"
 require_regex '^[[:space:]]+sltu[[:space:]]' sltu
-require_regex '^[[:space:]]+addw[[:space:]]' addw
+require_regex '^[[:space:]]+add[[:space:]]' add
+require_regex '^[[:space:]]+slli[[:space:]]+[^,]+,[[:space:]]*[^,]+,[[:space:]]*32' slli-32
+require_regex '^[[:space:]]+srli[[:space:]]+[^,]+,[[:space:]]*[^,]+,[[:space:]]*32' srli-32
 require_regex '^[[:space:]]+lwu[[:space:]]' lwu
 printf '%s\n' "PASS compiler/c0/for_loop_lowering"
 
