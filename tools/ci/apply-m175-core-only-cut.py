@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Sever the legacy AST -> RV64 function-body route for M175.
 
-This patch deliberately does not touch tests.  It converts production RV64
+This patch deliberately does not touch tests. It converts production RV64
 function-body emission to Core-only, removes the public legacy writer entry,
-and removes the legacy function dispatcher.  Qualification must then run on
+and removes the legacy function dispatcher. Qualification must then run on
 the unchanged regression contracts so any real semantic/ABI/CFG gap is
 exposed instead of normalized away in tests.
 """
@@ -93,14 +93,33 @@ def patch_codegen_function() -> None:
         require(text.count(argument_regs) == 1, "legacy argument register table duplicated")
         text = text.replace(argument_regs, "", 1)
 
+    # label_counter only feeds the removed legacy AST block emitter.
+    label_decl = "    size_t label_counter;\n"
+    label_init = "    label_counter = 0U;\n"
+    if label_decl in text:
+        require(text.count(label_decl) == 1, "legacy label counter declaration duplicated")
+        text = text.replace(label_decl, "", 1)
+    if label_init in text:
+        require(text.count(label_init) == 1, "legacy label counter initialization duplicated")
+        text = text.replace(label_init, "", 1)
+
     fallback_start_marker = '''        } else {\n            const char *failure_stage;\n'''
     fallback_start = text.find(fallback_start_marker)
     if fallback_start >= 0:
-        fallback_end_marker = "        if (!success && diagnostic != NULL && diagnostic->message[0] == '\\0') {\n"
-        fallback_end = text.find(fallback_end_marker, fallback_start)
-        require(fallback_end >= 0, "legacy fallback end marker not found")
-        replacement = '''        } else {\n            char message[256];\n            const char *symbol_name;\n\n            symbol_name = minic_c0_function_symbol_name(function);\n            (void)snprintf(message,\n                           sizeof(message),\n                           "defined RISC-V function '%s' is not Core-owned after legacy route removal",\n                           symbol_name != NULL ? symbol_name : "<unnamed>");\n            minic_riscv64_set_diagnostic(diagnostic, path, message);\n            success = false;\n        }\n'''
-        text = text[:fallback_start] + replacement + text[fallback_end:]
+        diagnostic_marker = (
+            "        if (!success && diagnostic != NULL && diagnostic->message[0] == '\\0') {\n"
+        )
+        # The legacy branch contains its own diagnostic block, followed by the
+        # writer's generic diagnostic block. The old script stopped at the first
+        # match and left half of the legacy branch behind. Cut through the second.
+        inner_diagnostic = text.find(diagnostic_marker, fallback_start)
+        require(inner_diagnostic >= 0, "legacy fallback inner diagnostic not found")
+        generic_diagnostic = text.find(
+            diagnostic_marker, inner_diagnostic + len(diagnostic_marker)
+        )
+        require(generic_diagnostic >= 0, "legacy fallback outer diagnostic not found")
+        replacement = '''        } else {\n            /* M175: no AST -> RV64 fallback remains. The generic writer\n               diagnostic below reports the non-Core-owned function. */\n            success = false;\n        }\n'''
+        text = text[:fallback_start] + replacement + text[generic_diagnostic:]
 
     legacy_writer = text.find("\nbool minic_riscv64_write_c0_program(")
     if legacy_writer >= 0:
@@ -108,7 +127,8 @@ def patch_codegen_function() -> None:
 
     require("minic_riscv64_emit_function(" not in text, "legacy AST function dispatcher remains")
     require("minic_riscv64_write_c0_program(" not in text, "legacy program writer remains")
-    require("const char *failure_stage;" not in text, "legacy function fallback remains")
+    require("failure_stage" not in text, "legacy failure-stage plumbing remains")
+    require("label_counter" not in text, "legacy label counter remains")
     CODEGEN_FUNCTION.write_text(text)
 
 
@@ -119,7 +139,10 @@ def main() -> None:
 
     # The migration tool must never rewrite test expectations.
     require(MARKER in COMPILER.read_text(), "Core-only marker missing after patch")
-    print("M175_CORE_ONLY_CUT production-selector=removed legacy-writer=removed legacy-function-dispatch=removed tests=untouched")
+    print(
+        "M175_CORE_ONLY_CUT production-selector=removed legacy-writer=removed "
+        "legacy-function-dispatch=removed tests=untouched"
+    )
 
 
 if __name__ == "__main__":
