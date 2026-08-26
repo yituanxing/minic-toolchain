@@ -8,6 +8,17 @@ text = PATH.read_text()
 def replace_once(old: str, new: str, label: str) -> None:
     global text
     count = text.count(old)
+    if label == "direct-call-emitter" and count == 2:
+        start = text.index("static bool emit_call(FILE *file,")
+        end = text.index("static bool emit_indirect_call(FILE *file,", start)
+        region = text[start:end]
+        region_count = region.count(old)
+        if region_count != 1:
+            raise SystemExit(
+                f"M163 caller ABI {label}: expected 1 emit_call match, got {region_count}"
+            )
+        text = text[:start] + region.replace(old, new, 1) + text[end:]
+        return
     if count != 1:
         raise SystemExit(f"M163 caller ABI {label}: expected 1 match, got {count}")
     text = text.replace(old, new, 1)
