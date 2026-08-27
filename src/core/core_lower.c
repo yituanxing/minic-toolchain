@@ -344,8 +344,10 @@ MinicCoreLowerStatus ensure_statement_block(MinicCoreLowerContext *context, Mini
 static MinicCoreLowerStatus lower_local_object(MinicCoreLowerContext *context,
                                                MinicLocalId local_id,
                                                MinicCoreObjectId *object_id) {
+    MinicArrayObjectInfo array_info;
     const MinicLocal *local;
     size_t local_index;
+    bool is_array_object;
 
     if (context == NULL || context->body == NULL || context->body->program == NULL ||
         context->source_function == NULL || context->function == NULL || object_id == NULL ||
@@ -364,62 +366,32 @@ static MinicCoreLowerStatus lower_local_object(MinicCoreLowerContext *context,
     if (local == NULL) {
         return MINIC_CORE_LOWER_ERROR;
     }
-    /* M105_FIXED_REGISTER_STRUCTURED_ASM: a GNU local register binding does
-       not change the C object's scalar value semantics. Keep ordinary Core
-       storage for reads/writes; only inline-asm operand materialization consumes
-       the target register binding. */
-    /* M106_MATERIALIZED_LOCAL_ARRAY_OBJECT: frontend array convergence has
-       two local-object forms. Legacy locals keep element type + is_array/count;
-       typedef/materialized locals carry one complete array MinicType directly.
-       A materialized array is one Core object whose DataLayout already owns the
-       full extent, so its address is naturally pointer-to-array. */
-    /* M175A_REPEATED_ARRAY_OBJECT: an outer legacy array may itself have a
-       materialized array element type (for example `typedef int Row[3];
-       Row rows[2];`).  In that mixed representation local->type describes one
-       complete element object and local->element_count describes the outer
-       repetition.  Preserve both dimensions by using Core's repeated-object
-       form instead of rejecting local->is_array. */
-    if (minic_type_is_array(local->type)) {
-        const MinicArrayType *array_type;
-
-        array_type = minic_c0_program_array_type(
-            context->body->program, local->type.array_type_id);
-        if (array_type == NULL || array_type->element_count == 0U ||
-            array_type->is_zero_length) {
+    is_array_object =
+        minic_c0_local_array_object_info(context->body->program, local, &array_info);
+    if (is_array_object) {
+        if (array_info.element_count == 0U || array_info.is_incomplete || array_info.is_zero_length) {
             return MINIC_CORE_LOWER_UNSUPPORTED;
         }
-        if (local->is_array) {
-            if (local->element_count == 0U ||
-                !minic_core_function_add_repeated_object(context->function,
-                                                         local->name_span,
-                                                         local->type,
-                                                         local->element_count,
-                                                         object_id)) {
+        if (array_info.has_materialized_type) {
+            if (!minic_core_function_add_object(
+                    context->function, local->name_span, local->type, object_id)) {
                 return MINIC_CORE_LOWER_ERROR;
             }
-        } else if (!minic_core_function_add_object(
-                       context->function, local->name_span, local->type, object_id)) {
+        } else if (!minic_core_function_add_repeated_object(context->function,
+                                                            local->name_span,
+                                                            local->type,
+                                                            array_info.element_count,
+                                                            object_id)) {
             return MINIC_CORE_LOWER_ERROR;
         }
-        context->function->objects[*object_id].explicit_alignment = local->explicit_alignment;
-        context->local_objects[local_index] = *object_id;
-        return MINIC_CORE_LOWER_OK;
-    }
-    if (!core_memory_scalar_type(local->type) && !minic_type_is_record(local->type)) {
-        return MINIC_CORE_LOWER_UNSUPPORTED;
-    }
-    if (local->is_array) {
-        if (local->element_count == 0U ||
-            !minic_core_function_add_repeated_object(context->function,
-                                                     local->name_span,
-                                                     local->type,
-                                                     local->element_count,
-                                                     object_id)) {
+    } else {
+        if (!core_memory_scalar_type(local->type) && !minic_type_is_record(local->type)) {
+            return MINIC_CORE_LOWER_UNSUPPORTED;
+        }
+        if (!minic_core_function_add_object(
+                context->function, local->name_span, local->type, object_id)) {
             return MINIC_CORE_LOWER_ERROR;
         }
-    } else if (!minic_core_function_add_object(
-                   context->function, local->name_span, local->type, object_id)) {
-        return MINIC_CORE_LOWER_ERROR;
     }
     context->function->objects[*object_id].explicit_alignment = local->explicit_alignment;
     context->local_objects[local_index] = *object_id;
@@ -448,7 +420,8 @@ static MinicCoreLowerStatus lower_parameter_ingress(MinicCoreLowerContext *conte
         if (parameter == NULL) {
             return MINIC_CORE_LOWER_ERROR;
         }
-        if (minic_type_is_volatile(parameter->type) || parameter->is_array ||
+        if (minic_type_is_volatile(parameter->type) ||
+            minic_c0_local_array_object_info(context->body->program, parameter, NULL) ||
             parameter->is_register_storage ||
             !minic_type_unqualified(parameter->type, &parameter_value_type) ||
             !minic_type_equal(parameter_value_type,
@@ -459,7 +432,10 @@ static MinicCoreLowerStatus lower_parameter_ingress(MinicCoreLowerContext *conte
                           context->source_function->name,
                           parameter_index,
                           minic_type_is_volatile(parameter->type) ? 1 : 0,
-                          parameter->is_array ? 1 : 0,
+                          minic_c0_local_array_object_info(
+                              context->body->program, parameter, NULL)
+                              ? 1
+                              : 0,
                           parameter->is_register_storage ? 1 : 0);
             return MINIC_CORE_LOWER_UNSUPPORTED;
         }
@@ -624,7 +600,8 @@ MinicCoreLowerStatus lower_address(MinicCoreLowerContext *context,
             context->body->program, expression->value.compound_literal.local_id);
         initializer_block = minic_c0_program_block(
             context->body->program, expression->value.compound_literal.initializer_block);
-        if (local == NULL || initializer_block == NULL || local->is_array ||
+        if (local == NULL || initializer_block == NULL ||
+            minic_c0_local_array_object_info(context->body->program, local, NULL) ||
             local->is_register_storage || !minic_type_equal(local->type, expression->type)) {
             return MINIC_CORE_LOWER_UNSUPPORTED;
         }

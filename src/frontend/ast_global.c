@@ -158,7 +158,7 @@ bool minic_c0_program_add_local_fixed_register_binding(MinicC0Program *program,
     const MinicLocal *local;
 
     local = minic_c0_program_local(program, local_id);
-    if (local == NULL || local->is_array ||
+    if (local == NULL || minic_c0_local_array_object_info(program, local, NULL) ||
         minic_c0_program_local_fixed_register_binding(program, local_id) != NULL) {
         return false;
     }
@@ -876,7 +876,8 @@ static bool global_object_member_path_type(const MinicC0Program *program,
         record = minic_c0_program_record(program, type.record_id);
         field = record == NULL ? NULL : minic_c0_record_field(record, member_indices[depth]);
         if (field == NULL || field->element_count == 0U || field->is_bit_field ||
-            (!field->is_array && !field->is_flexible_array && field->element_count != 1U)) {
+            (!minic_c0_record_field_array_object_info(program, field, NULL) &&
+             field->element_count != 1U)) {
             return false;
         }
         type = field->type;

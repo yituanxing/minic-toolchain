@@ -926,6 +926,12 @@ bool minic_c0_global_object_set_explicit_alignment(MinicC0Program *program,
  * Keep an ID or copy required value fields across any operation that may grow that pool. */
 const MinicExpression *minic_c0_program_expression(const MinicC0Program *program,
                                                    MinicExpressionId expression_id);
+bool minic_c0_local_array_object_info(const MinicC0Program *program,
+                                      const MinicLocal *local,
+                                      MinicArrayObjectInfo *info);
+bool minic_c0_record_field_array_object_info(const MinicC0Program *program,
+                                             const MinicRecordField *field,
+                                             MinicArrayObjectInfo *info);
 bool minic_c0_expression_array_object_info(const MinicC0Program *program,
                                            const MinicExpression *expression,
                                            MinicArrayObjectInfo *info);

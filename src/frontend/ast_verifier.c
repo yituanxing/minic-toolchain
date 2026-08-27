@@ -541,7 +541,8 @@ static bool verify_expression(const MinicC0Program *program,
         if (record_rvalue_base) {
             record_type = operand->type;
             if (!minic_c0_record_value_is_copy_source(program, expression->value.member.base) ||
-                field->is_array || minic_type_is_record(field->type) ||
+                minic_c0_record_field_array_object_info(program, field, NULL) ||
+                minic_type_is_record(field->type) ||
                 expression->value_category != MINIC_VALUE_RVALUE) {
                 return false;
             }
@@ -774,7 +775,8 @@ static bool verify_expression(const MinicC0Program *program,
         return local != NULL && initializer_block != NULL && complete_object &&
                !minic_type_is_array(expression->type) &&
                !minic_type_is_function(expression->type) && !minic_type_is_void(expression->type) &&
-               expression->value_category == MINIC_VALUE_LVALUE && !local->is_array &&
+               expression->value_category == MINIC_VALUE_LVALUE &&
+               !minic_c0_local_array_object_info(program, local, NULL) &&
                !local->is_register_storage && local->element_count == 1U &&
                minic_type_equal(local->type, expression->type);
     }
@@ -1344,7 +1346,8 @@ bool minic_c0_program_verify_target_detailed(const MinicC0Program *program,
             const MinicLocal *local;
 
             local = minic_c0_program_local(program, binding->local_id);
-            if (local == NULL || local->is_array || !local->is_register_storage ||
+            if (local == NULL || minic_c0_local_array_object_info(program, local, NULL) ||
+                !local->is_register_storage ||
                 !minic_type_equal(local->type, binding->type) ||
                 !minic_target_info_local_fixed_register_supported(
                     target, binding->register_name, binding->register_name_length)) {
