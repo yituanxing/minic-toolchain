@@ -203,3 +203,134 @@ jobs:
             build/next500b-full/failure-contexts.txt
             build/next500b-full/minic-stderr/**
           if-no-files-found: warn
+
+
+  sample16:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[next500b]')
+    needs: prepare-next500b-corpus
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: Restore frozen next500b corpus
+        id: next500b-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-next500b-corpus
+          key: linux-next500b-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-indices-1500-1999
+
+      - name: Require frozen next500b corpus
+        run: |
+          test "${{ steps.next500b-cache.outputs.cache-hit }}" = true
+          test "$(grep -cve '^[[:space:]]*$' build/linux-next500b-corpus/selected-tus.txt)" -eq 500
+
+      - name: Build exact compiler
+        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/next500b-sample-compiler
+
+      - name: Build active blocker sample16
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import shutil
+
+          wanted = {
+              1502, 1582, 1583, 1593, 1599, 1601, 1605, 1614,
+              1597, 1598, 1600, 1602,
+              1656, 1662,
+              1699, 1701,
+          }
+          source = Path("build/linux-next500b-corpus")
+          sample = Path("build/linux-next500b-sample16")
+          rows = [line for line in (source / "selected-tus.txt").read_text().splitlines()
+                  if line.strip()]
+          selected = [row for row in rows if int(row.split("\t", 1)[0]) in wanted]
+          if len(selected) != 16:
+              raise SystemExit(f"active sample16 selection mismatch: {len(selected)}")
+          shutil.rmtree(sample, ignore_errors=True)
+          (sample / "kbuild").mkdir(parents=True)
+          (sample / "selected-tus.txt").write_text("\n".join(selected) + "\n")
+          for row in selected:
+              _, _, rel_i, _ = row.split("\t", 3)
+              src = source / "kbuild" / rel_i
+              dst = sample / "kbuild" / rel_i
+              dst.parent.mkdir(parents=True, exist_ok=True)
+              shutil.copy2(src, dst)
+          print("LINUX_NEXT500B_SAMPLE16_CORPUS selected=16")
+          PY
+
+      - name: Replay active sample16
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          compiler="$GITHUB_WORKSPACE/build/next500b-sample-compiler/bin/minic"
+          work="$GITHUB_WORKSPACE/build/next500b-sample16"
+          set +e
+          CORE_FAST_TRACE=1 python3 tests/external/linux/corpus_replay.py \
+            --minic "$compiler" \
+            --corpus "$GITHUB_WORKSPACE/build/linux-next500b-sample16" \
+            --work "$work" \
+            --jobs 4 \
+            --offset 0 \
+            --limit 16 \
+            --sample-count 0
+          replay_status=$?
+          set -e
+          echo "LINUX_NEXT500B_SAMPLE16_REPLAY_STATUS=$replay_status"
+
+          python3 tools/ci/classify-core-strict-frontier.py \
+            "$work/batch-results.json" \
+            --stderr-root "$work/minic-stderr" \
+            --ast-header "$GITHUB_WORKSPACE/src/frontend/ast.h" \
+            --examples 50 \
+            --json-out "$work/frontier-summary.json" \
+            --reason-text-out "$work/reason-summary.txt"
+
+          python3 tools/ci/summarize-core-frontier-progress.py \
+            "$work/batch-results.json" \
+            --expect-selected 16 \
+            --json-out "$work/progress-summary.json" \
+            --text-out "$work/progress-summary.txt"
+
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          work = Path("build/next500b-sample16")
+          summary = json.loads((work / "frontier-summary.json").read_text())
+          if summary["selected"] != 16 or summary["preprocess_missing"] != 0:
+              raise SystemExit(f"sample16 infrastructure failure: {summary}")
+          headline = (
+              f"LINUX_NEXT500B_SAMPLE16_EXACT selected={summary['selected']} "
+              f"pass={summary['pass']} unsupported={summary['unsupported']} "
+              f"error={summary['error']} preprocess_missing={summary['preprocess_missing']}"
+          )
+          print(headline)
+          (work / "headline.txt").write_text(headline + "\n")
+          with Path(os.environ["GITHUB_STEP_SUMMARY"]).open("a") as output:
+              output.write("## Linux next500b active sample16\n\n")
+              output.write(f"`{headline}`\n\n")
+              output.write((work / "reason-summary.txt").read_text())
+          PY
+
+      - name: Persist sample16 evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-next500b-sample16-${{ github.sha }}
+          path: |
+            build/next500b-sample16/headline.txt
+            build/next500b-sample16/batch-results.json
+            build/next500b-sample16/batch-results.tsv
+            build/next500b-sample16/frontier-summary.json
+            build/next500b-sample16/reason-summary.txt
+            build/next500b-sample16/progress-summary.json
+            build/next500b-sample16/progress-summary.txt
+            build/next500b-sample16/failure-contexts.txt
+            build/next500b-sample16/minic-stderr/**
+          if-no-files-found: warn

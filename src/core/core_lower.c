@@ -7826,7 +7826,8 @@ static bool normalized_do_while_block_needs_exit(
 static bool normalized_do_while_true_body(const MinicCoreLowerContext *context,
                                           const MinicStatement *loop,
                                           const MinicBlock *body,
-                                          MinicBlock *iteration_body) {
+                                          MinicBlock *iteration_body,
+                                          MinicStatementId *continue_label_statement) {
     const MinicExpression *loop_condition;
     const MinicExpression *negated_condition;
     const MinicExpression *source_condition;
@@ -7840,7 +7841,7 @@ static bool normalized_do_while_true_body(const MinicCoreLowerContext *context,
 
     if (context == NULL || context->body == NULL || context->body->program == NULL ||
         context->target == NULL || loop == NULL || body == NULL || iteration_body == NULL ||
-        body->statement_count < 2U) {
+        continue_label_statement == NULL || body->statement_count < 2U) {
         return false;
     }
     loop_condition = minic_c0_program_expression(context->body->program, loop->expression);
@@ -7893,10 +7894,15 @@ static bool normalized_do_while_true_body(const MinicCoreLowerContext *context,
         return false;
     }
 
+    /* The source condition is proven nonzero, so the parser's trailing
+       `if (!condition) break` is unreachable. Preserve source continue
+       semantics by binding the synthetic continue label to the real loop
+       condition block instead of retaining the synthetic tail. Source break
+       statements remain ordinary loop-owned edges to exit_block. */
     *iteration_body = *body;
     iteration_body->statement_count -= 2U;
-    return !normalized_do_while_block_needs_exit(
-        context, iteration_body, continue_id, true);
+    *continue_label_statement = continue_id;
+    return true;
 }
 
 static bool normalized_for_continue_tail(const MinicCoreLowerContext *context,
@@ -8133,8 +8139,16 @@ lower_while(MinicCoreLowerContext *context,
         normalized_for = true;
     }
     if (!normalized_for &&
-        normalized_do_while_true_body(
-            context, statement, body_source, &normalized_do_while_body)) {
+        normalized_do_while_true_body(context,
+                                      statement,
+                                      body_source,
+                                      &normalized_do_while_body,
+                                      &normalized_do_while_continue)) {
+        if (continue_label_statement != MINIC_STATEMENT_INVALID &&
+            continue_label_statement != normalized_do_while_continue) {
+            return MINIC_CORE_LOWER_UNSUPPORTED;
+        }
+        continue_label_statement = normalized_do_while_continue;
         iteration_source = &normalized_do_while_body;
     }
     /* M149_PARSER_TAIL_CONTINUE_PROVENANCE_OWNER: normalized_for_update_tail
