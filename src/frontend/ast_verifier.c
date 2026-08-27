@@ -3,6 +3,7 @@
 
 #include <limits.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 static bool storage_is_valid(const void *data, size_t count, size_t capacity) {
@@ -1049,15 +1050,24 @@ static bool incomplete_array_has_semantic_owner(const MinicC0Program *program,
     if (program == NULL) {
         return false;
     }
+    if (trace) {
+        fprintf(stderr, "VERIFY_STAGE expressions\n");
+    }
     for (index = 0U; index < program->expression_count; ++index) {
         if (type_owns_array_descriptor(program->expressions[index].type, array_type_id, false)) {
             return true;
         }
     }
+    if (trace) {
+        fprintf(stderr, "VERIFY_STAGE type_aliases\n");
+    }
     for (index = 0U; index < program->type_alias_count; ++index) {
         if (type_owns_array_descriptor(program->type_aliases[index].type, array_type_id, false)) {
             return true;
         }
+    }
+    if (trace) {
+        fprintf(stderr, "VERIFY_STAGE globals\n");
     }
     for (index = 0U; index < program->global_object_count; ++index) {
         const MinicGlobalObject *object;
@@ -1069,10 +1079,16 @@ static bool incomplete_array_has_semantic_owner(const MinicC0Program *program,
             return true;
         }
     }
+    if (trace) {
+        fprintf(stderr, "VERIFY_STAGE locals\n");
+    }
     for (index = 0U; index < program->local_count; ++index) {
         if (type_owns_array_descriptor(program->locals[index].type, array_type_id, true)) {
             return true;
         }
+    }
+    if (trace) {
+        fprintf(stderr, "VERIFY_STAGE records\n");
     }
     for (index = 0U; index < program->record_count; ++index) {
         const MinicRecord *record;
@@ -1084,6 +1100,9 @@ static bool incomplete_array_has_semantic_owner(const MinicC0Program *program,
                 return true;
             }
         }
+    }
+    if (trace) {
+        fprintf(stderr, "VERIFY_STAGE functions\n");
     }
     for (index = 0U; index < program->function_count; ++index) {
         const MinicFunction *function;
@@ -1099,6 +1118,9 @@ static bool incomplete_array_has_semantic_owner(const MinicC0Program *program,
                 return true;
             }
         }
+    }
+    if (trace) {
+        fprintf(stderr, "VERIFY_STAGE function_types\n");
     }
     for (index = 0U; index < program->function_type_count; ++index) {
         const MinicFunctionType *function_type;
@@ -1158,11 +1180,35 @@ bool minic_c0_program_verify_target(const MinicC0Program *program,
                                     const MinicTargetInfo *target) {
     size_t index;
 
+    const bool trace = getenv("CORE_FAST_TRACE") != NULL;
+
+    if (trace && program != NULL) {
+        fprintf(stderr,
+                "VERIFY_STAGE begin enums=%zu enumerators=%zu arrays=%zu function_types=%zu "
+                "records=%zu locals=%zu functions=%zu aliases=%zu globals=%zu expressions=%zu "
+                "statements=%zu blocks=%zu\n",
+                program->enum_count,
+                program->enumerator_count,
+                program->array_type_count,
+                program->function_type_count,
+                program->record_count,
+                program->local_count,
+                program->function_count,
+                program->type_alias_count,
+                program->global_object_count,
+                program->expression_count,
+                program->statement_count,
+                program->block_count);
+    }
+
     if (target == NULL || (form != MINIC_C0_AST_PARSED && form != MINIC_C0_AST_NORMALIZED) ||
         !verify_program_storage(program)) {
         return false;
     }
 
+    if (trace) {
+        fprintf(stderr, "VERIFY_STAGE enums\n");
+    }
     for (index = 0U; index < program->enum_count; ++index) {
         const MinicEnum *entity;
 
@@ -1174,6 +1220,9 @@ bool minic_c0_program_verify_target(const MinicC0Program *program,
             return false;
         }
     }
+    if (trace) {
+        fprintf(stderr, "VERIFY_STAGE enumerators\n");
+    }
     for (index = 0U; index < program->enumerator_count; ++index) {
         const MinicEnumerator *enumerator;
 
@@ -1183,6 +1232,9 @@ bool minic_c0_program_verify_target(const MinicC0Program *program,
             !minic_type_is_integer(enumerator->type) || minic_type_is_enum(enumerator->type)) {
             return false;
         }
+    }
+    if (trace) {
+        fprintf(stderr, "VERIFY_STAGE arrays\n");
     }
     for (index = 0U; index < program->array_type_count; ++index) {
         const MinicArrayType *array_type;
@@ -1253,6 +1305,9 @@ bool minic_c0_program_verify_target(const MinicC0Program *program,
              (explicit_alignment & (explicit_alignment - 1U)) != 0U)) {
             return false;
         }
+    }
+    if (trace) {
+        fprintf(stderr, "VERIFY_STAGE fixed_registers\n");
     }
     for (index = 0U; index < program->fixed_register_binding_count; ++index) {
         const MinicFixedRegisterBinding *binding;
@@ -1503,6 +1558,9 @@ bool minic_c0_program_verify_target(const MinicC0Program *program,
             }
         }
     }
+    if (trace) {
+        fprintf(stderr, "VERIFY_STAGE file_asms\n");
+    }
     if (!storage_is_valid(
             program->file_asms, program->file_asm_count, program->file_asm_capacity)) {
         return false;
@@ -1525,6 +1583,9 @@ bool minic_c0_program_verify_target(const MinicC0Program *program,
             return false;
         }
     }
+    if (trace) {
+        fprintf(stderr, "VERIFY_STAGE statements\n");
+    }
     for (index = 0U; index < program->statement_count; ++index) {
         if (!verify_statement(program, target, &program->statements[index])) {
             fprintf(stderr,
@@ -1533,6 +1594,9 @@ bool minic_c0_program_verify_target(const MinicC0Program *program,
                     (int)program->statements[index].kind);
             return false;
         }
+    }
+    if (trace) {
+        fprintf(stderr, "VERIFY_STAGE blocks\n");
     }
     for (index = 0U; index < program->block_count; ++index) {
         const MinicBlock *block;
