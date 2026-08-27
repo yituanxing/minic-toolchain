@@ -2296,7 +2296,8 @@ static bool parse_primary(MinicParser *parser, MinicExpressionId *expression_id,
             return false;
         }
 
-        if (parser->current.kind == MINIC_TOKEN_LPAREN && function_id != MINIC_FUNCTION_INVALID) {
+        if (parser->current.kind == MINIC_TOKEN_LPAREN && local_id == MINIC_LOCAL_INVALID &&
+            function_id != MINIC_FUNCTION_INVALID) {
             MinicSourcePosition call_end;
             const MinicFunction *callee;
 

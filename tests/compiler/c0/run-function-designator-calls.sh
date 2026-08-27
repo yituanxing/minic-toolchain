@@ -15,4 +15,22 @@ mkdir -p "$work"
     -o "$work/function_designator_call.s"
 
 test "$(grep -c -F '  jalr ra, t0, 0' "$work/function_designator_call.s")" -eq 2
-printf '%s\n' 'PASS compiler/c0/function_designator_call pointer-call=1 dereferenced-function-designator=1 RV64=jalr'
+
+cat >"$work/local-shadows-function.c" <<'EOF'
+struct Request;
+void complete(int value);
+
+static void invoke(struct Request *rq, void (*complete)(struct Request *rq))
+{
+    complete(rq);
+}
+
+struct Request { int value; };
+EOF
+"$host_cc" -E -P -std=gnu11 -x c "$work/local-shadows-function.c" \
+    -o "$work/local-shadows-function.i"
+"$minic" -S "$work/local-shadows-function.i" -o "$work/local-shadows-function.s"
+grep -F 'invoke:' "$work/local-shadows-function.s" >/dev/null
+grep -F '  jalr ' "$work/local-shadows-function.s" >/dev/null
+
+printf '%s\n' 'PASS compiler/c0/function_designator_call pointer-call=1 dereferenced-function-designator=1 local-shadows-global-function=1 RV64=jalr'
