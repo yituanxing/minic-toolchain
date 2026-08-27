@@ -515,6 +515,12 @@ static bool consume_record_type_attribute(MinicParser *parser,
         }
         return true;
     }
+    if (descriptor->kind == MINIC_ATTRIBUTE_MAY_ALIAS) {
+        /* MiniC currently performs no strict-alias/TBAA optimization. Keeping
+           may_alias as explicit type metadata recognition therefore preserves
+           GCC's permissive aliasing contract without changing layout/codegen. */
+        return true;
+    }
     minic_parser_error(parser, "unsupported GNU record type attribute");
     return false;
 }

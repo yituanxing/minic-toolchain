@@ -55,6 +55,98 @@ typedef struct MinicTypedefAttributeContext {
     MinicType *aliased_type;
 } MinicTypedefAttributeContext;
 
+static bool typedef_attribute_mode_name(const MinicParser *parser,
+                                        const MinicParsedAttribute *attribute,
+                                        const char **name,
+                                        size_t *name_length) {
+    size_t begin;
+    size_t end;
+
+    if (parser == NULL || attribute == NULL || name == NULL || name_length == NULL ||
+        !attribute->has_arguments ||
+        attribute->arguments_span.end.offset <= attribute->arguments_span.begin.offset + 1U) {
+        return false;
+    }
+    begin = attribute->arguments_span.begin.offset + 1U;
+    end = attribute->arguments_span.end.offset - 1U;
+    while (begin < end &&
+           (parser->source[begin] == ' ' || parser->source[begin] == '\t' ||
+            parser->source[begin] == '\n' || parser->source[begin] == '\r' ||
+            parser->source[begin] == '\f' || parser->source[begin] == '\v')) {
+        begin += 1U;
+    }
+    while (end > begin &&
+           (parser->source[end - 1U] == ' ' || parser->source[end - 1U] == '\t' ||
+            parser->source[end - 1U] == '\n' || parser->source[end - 1U] == '\r' ||
+            parser->source[end - 1U] == '\f' || parser->source[end - 1U] == '\v')) {
+        end -= 1U;
+    }
+    if (end <= begin) {
+        return false;
+    }
+    if (end - begin > 4U && parser->source[begin] == '_' &&
+        parser->source[begin + 1U] == '_' && parser->source[end - 2U] == '_' &&
+        parser->source[end - 1U] == '_') {
+        begin += 2U;
+        end -= 2U;
+    }
+    *name = parser->source + begin;
+    *name_length = end - begin;
+    return true;
+}
+
+static bool typedef_mode_name_is(const char *name, size_t name_length, const char *expected) {
+    size_t expected_length;
+
+    if (name == NULL || expected == NULL) {
+        return false;
+    }
+    expected_length = strlen(expected);
+    return name_length == expected_length && memcmp(name, expected, expected_length) == 0;
+}
+
+static bool apply_integer_typedef_mode(MinicParser *parser,
+                                       const MinicParsedAttribute *attribute,
+                                       MinicType *type) {
+    const char *mode_name;
+    size_t mode_name_length;
+    unsigned int qualifiers;
+    size_t explicit_alignment;
+    bool is_unsigned;
+    MinicType mapped;
+
+    if (parser == NULL || attribute == NULL || type == NULL ||
+        type->base_kind != MINIC_TYPE_BASE_INT || type->pointer_depth != 0U ||
+        !typedef_attribute_mode_name(parser, attribute, &mode_name, &mode_name_length)) {
+        if (parser != NULL) {
+            minic_parser_error(parser, "GNU mode attribute requires a scalar integer typedef");
+        }
+        return false;
+    }
+    qualifiers = type->base_qualifiers;
+    explicit_alignment = type->explicit_alignment;
+    is_unsigned = minic_type_is_unsigned_integer(*type);
+
+    if (typedef_mode_name_is(mode_name, mode_name_length, "QI")) {
+        mapped = is_unsigned ? minic_type_unsigned_char() : minic_type_signed_char();
+    } else if (typedef_mode_name_is(mode_name, mode_name_length, "HI")) {
+        mapped = is_unsigned ? minic_type_unsigned_short() : minic_type_short();
+    } else if (typedef_mode_name_is(mode_name, mode_name_length, "SI")) {
+        mapped = is_unsigned ? minic_type_unsigned_int() : minic_type_int();
+    } else if (typedef_mode_name_is(mode_name, mode_name_length, "DI")) {
+        mapped = is_unsigned ? minic_type_unsigned_long_long() : minic_type_long_long();
+    } else if (typedef_mode_name_is(mode_name, mode_name_length, "TI")) {
+        mapped = is_unsigned ? minic_type_unsigned_int128() : minic_type_int128();
+    } else {
+        minic_parser_error(parser, "unsupported GNU integer mode");
+        return false;
+    }
+    mapped.base_qualifiers = qualifiers;
+    mapped.explicit_alignment = explicit_alignment;
+    *type = mapped;
+    return true;
+}
+
 static bool consume_typedef_attribute(MinicParser *parser,
                                       const MinicParsedAttribute *attribute,
                                       void *opaque_context) {
@@ -70,6 +162,12 @@ static bool consume_typedef_attribute(MinicParser *parser,
         !minic_attribute_allowed_on(descriptor, MINIC_ATTRIBUTE_TARGET_TYPE)) {
         minic_parser_error(parser, "unsupported GNU typedef attribute");
         return false;
+    }
+    if (descriptor->kind == MINIC_ATTRIBUTE_MODE) {
+        return apply_integer_typedef_mode(parser, attribute, context->aliased_type);
+    }
+    if (descriptor->kind == MINIC_ATTRIBUTE_MAY_ALIAS) {
+        return true;
     }
     if (descriptor->kind == MINIC_ATTRIBUTE_ALIGNED) {
         size_t natural_size;
