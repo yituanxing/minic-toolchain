@@ -3356,17 +3356,15 @@ static bool parse_static_record_array(MinicParser *parser,
         const MinicGlobalObject *existing;
         const MinicArrayType *existing_array;
 
-        if (multidimensional) {
-            minic_parser_error(
-                parser, "multi-dimensional static record tentative definitions are not supported yet");
-            return false;
-        }
         if (existing_id == MINIC_GLOBAL_OBJECT_INVALID) {
+            MinicType tentative_element_type;
+
+            tentative_element_type = multidimensional ? nested_element_type : element_type;
             if ((inferred_bound && !minic_c0_program_add_incomplete_array_type(
-                                       parser->program, element_type, &object_type)) ||
+                                       parser->program, tentative_element_type, &object_type)) ||
                 (!inferred_bound &&
                  !minic_c0_program_add_array_type(
-                     parser->program, element_type, declared_count, &object_type)) ||
+                     parser->program, tentative_element_type, declared_count, &object_type)) ||
                 !minic_c0_program_add_tentative_global_object(parser->program,
                                                               parser->source +
                                                                   name_span.begin.offset,
