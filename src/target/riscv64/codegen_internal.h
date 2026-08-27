@@ -3,9 +3,7 @@
 
 #include "frontend/ast.h"
 #include "minic/compiler.h"
-#include "target/riscv64/layout.h"
 
-#include <stdbool.h>
 #include <stddef.h>
 #include <stdio.h>
 
@@ -16,89 +14,25 @@ bool minic_riscv64_emit_stack_allocate(FILE *file, size_t size);
 bool minic_riscv64_emit_stack_release(FILE *file, size_t size);
 bool minic_riscv64_emit_sp_store64(FILE *file, const char *register_name, size_t offset);
 bool minic_riscv64_emit_sp_load64(FILE *file, const char *register_name, size_t offset);
-bool minic_riscv64_emit_s0_load64(FILE *file, const char *register_name, size_t offset);
-bool minic_riscv64_emit_integer_conversion(FILE *file, MinicType type, const char *register_name);
 bool minic_riscv64_emit_integer_conversion_for_program(FILE *file,
                                                        const MinicC0Program *program,
                                                        MinicType type,
                                                        const char *register_name);
-bool minic_riscv64_emit_scalar_load(FILE *file,
-                                    MinicType type,
-                                    const char *destination_register,
-                                    const char *address_register);
 bool minic_riscv64_emit_scalar_load_for_program(FILE *file,
                                                 const MinicC0Program *program,
                                                 MinicType type,
                                                 const char *destination_register,
                                                 const char *address_register);
-bool minic_riscv64_emit_scalar_store(FILE *file,
-                                     MinicType type,
-                                     const char *source_register,
-                                     const char *address_register);
 bool minic_riscv64_emit_scalar_store_for_program(FILE *file,
                                                  const MinicC0Program *program,
                                                  MinicType type,
                                                  const char *source_register,
                                                  const char *address_register);
-/* RV64_INT128_PAIR_V1: int128 rvalues use a0=low64 and a1=high64. */
-bool minic_riscv64_emit_int128_load_from_address(FILE *file, const char *address_register);
-bool minic_riscv64_emit_int128_store_to_address(FILE *file, const char *address_register);
-
-bool minic_riscv64_emit_object_address(FILE *file,
-                                       const MinicC0Program *program,
-                                       const MinicFunction *function,
-                                       const MinicRiscv64FunctionLayout *function_layout,
-                                       MinicLocalId local_id);
-bool minic_riscv64_emit_object_load(FILE *file,
-                                    const MinicC0Program *program,
-                                    const MinicFunction *function,
-                                    const MinicRiscv64FunctionLayout *function_layout,
-                                    MinicLocalId local_id);
-bool minic_riscv64_emit_object_store(FILE *file,
-                                     const MinicC0Program *program,
-                                     const MinicFunction *function,
-                                     const MinicRiscv64FunctionLayout *function_layout,
-                                     MinicLocalId local_id);
-bool minic_riscv64_emit_object_store_register(FILE *file,
-                                              const MinicC0Program *program,
-                                              const MinicFunction *function,
-                                              const MinicRiscv64FunctionLayout *function_layout,
-                                              MinicLocalId local_id,
-                                              const char *register_name);
-bool minic_riscv64_integer_aggregate_abi(const MinicC0Program *program,
-                                         MinicType type,
-                                         size_t *storage_size,
-                                         size_t *register_chunks);
-bool minic_riscv64_emit_integer_aggregate_local_chunk(
-    FILE *file,
-    const MinicC0Program *program,
-    const MinicFunction *function,
-    const MinicRiscv64FunctionLayout *function_layout,
-    MinicLocalId local_id,
-    size_t chunk_index,
-    const char *register_name);
 bool minic_riscv64_emit_integer_aggregate_load_chunk(FILE *file,
                                                      const MinicC0Program *program,
                                                      MinicType type,
                                                      size_t chunk_index,
                                                      const char *destination_register,
                                                      const char *address_register);
-typedef struct MinicRiscv64FrameLayout {
-    size_t frame_size;
-    size_t saved_ra_offset;
-    size_t saved_s0_offset;
-    size_t varargs_offset;
-    size_t varargs_size;
-    size_t integer_parameter_count;
-    bool has_indirect_return;
-    size_t indirect_return_offset;
-} MinicRiscv64FrameLayout;
-
-bool minic_riscv64_frame_layout_from_function_layout(
-    const MinicC0Program *program,
-    const MinicFunction *function,
-    const MinicRiscv64FunctionLayout *function_layout,
-    MinicRiscv64FrameLayout *layout);
-
 
 #endif
