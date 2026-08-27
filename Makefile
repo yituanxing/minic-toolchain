@@ -56,6 +56,7 @@ MINIC_SOURCES := \
 	src/frontend/ast_verifier.c \
 	src/frontend/cast_normalization.c \
 	src/frontend/const_eval.c \
+	src/frontend/declaration_sema.c \
 	src/frontend/ast_function.c \
 	src/frontend/ast_global.c \
 	src/frontend/lexer.c \
