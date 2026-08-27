@@ -41,8 +41,8 @@ bool minic_parser_materialize_array_object_type(MinicParser *parser,
         return true;
     }
     if (info.is_zero_length) {
-        minic_parser_error(parser, "zero-length legacy array type materialization is unsupported");
-        return false;
+        return minic_c0_program_add_zero_length_array_type(
+            parser->program, info.element_type, array_type);
     }
     if (info.is_incomplete) {
         return minic_c0_program_add_query_incomplete_array_type(
