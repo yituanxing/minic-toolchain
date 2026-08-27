@@ -10,7 +10,12 @@ minic=${MINIC:-"$root/build/linux-compiler/bin/minic"}
 cross_compile=${CROSS_COMPILE:-riscv64-linux-gnu-}
 version=6.6.143
 archive=${LINUX_ARCHIVE_CACHE:-"$work/linux-$version.tar.xz"}
-src="$work/linux-$version"
+source_tree=${LINUX_SOURCE_TREE:-}
+if test -n "$source_tree"; then
+    src=$(CDPATH= cd -- "$source_tree" && pwd)
+else
+    src="$work/linux-$version"
+fi
 out="$work/kbuild"
 limit=${LINUX_BATCH_LIMIT:-100}
 offset=${LINUX_BATCH_OFFSET:-0}
@@ -39,19 +44,24 @@ fi
 rm -rf "$work"
 mkdir -p "$work" "$(dirname -- "$archive")"
 
-archive_valid=false
-if test -s "$archive" && printf '%s  %s\n' "$sha256" "$archive" | sha256sum -c - >/dev/null 2>&1; then
-    archive_valid=true
-    printf '%s\n' "LINUX_ARCHIVE_CACHE hit path=$archive"
+if test -n "$source_tree"; then
+    test -f "$src/Makefile"
+    printf '%s\n' "LINUX_SOURCE_TREE external path=$src version=$version"
+else
+    archive_valid=false
+    if test -s "$archive" && printf '%s  %s\n' "$sha256" "$archive" | sha256sum -c - >/dev/null 2>&1; then
+        archive_valid=true
+        printf '%s\n' "LINUX_ARCHIVE_CACHE hit path=$archive"
+    fi
+    if test "$archive_valid" != true; then
+        rm -f "$archive" "$archive.tmp"
+        curl --http1.1 --retry 5 --retry-all-errors --retry-delay 2 -fsSL "$url" -o "$archive.tmp"
+        mv "$archive.tmp" "$archive"
+        printf '%s\n' "LINUX_ARCHIVE_CACHE fill path=$archive"
+    fi
+    printf '%s  %s\n' "$sha256" "$archive" | sha256sum -c -
+    tar -xJf "$archive" -C "$work"
 fi
-if test "$archive_valid" != true; then
-    rm -f "$archive" "$archive.tmp"
-    curl --http1.1 --retry 5 --retry-all-errors --retry-delay 2 -fsSL "$url" -o "$archive.tmp"
-    mv "$archive.tmp" "$archive"
-    printf '%s\n' "LINUX_ARCHIVE_CACHE fill path=$archive"
-fi
-printf '%s  %s\n' "$sha256" "$archive" | sha256sum -c -
-tar -xJf "$archive" -C "$work"
 
 make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE="$cross_compile" defconfig \
     >"$work/defconfig.log" 2>&1

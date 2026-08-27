@@ -38,13 +38,15 @@ jobs:
           test "$(grep -cve '^[[:space:]]*$' "$manifest")" -eq 16
           echo 'LINUX_NEW500_SAMPLE16_CORPUS cache=hit selected=16'
 
-      - name: Restore pinned Linux source archive
+      - name: Checkout exact Linux 6.6.143 stable source
         if: steps.sample-cache.outputs.cache-hit != 'true'
-        id: linux-source-cache
-        uses: actions/cache/restore@v4
+        uses: actions/checkout@v4
         with:
-          path: build/linux-cache/linux-6.6.143.tar.xz
-          key: linux-source-6.6.143-dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932
+          repository: gregkh/linux
+          ref: d1cfde2d5d15be14123bdd1689162bd27f995a90
+          path: build/linux-source
+          fetch-depth: 1
+          persist-credentials: false
 
       - name: Install sample materialization dependencies
         if: steps.sample-cache.outputs.cache-hit != 'true'
@@ -62,7 +64,7 @@ jobs:
           set -Eeuo pipefail
           builder="$GITHUB_WORKSPACE/build/linux-new500-sample16-builder"
           corpus="$GITHUB_WORKSPACE/build/linux-new500-sample16-corpus"
-          LINUX_BATCH_MATERIALIZE_ONLY=1           BUILD_DIR="$builder"           LINUX_ARCHIVE_CACHE="$GITHUB_WORKSPACE/build/linux-cache/linux-6.6.143.tar.xz"           CROSS_COMPILE=riscv64-linux-gnu-           LINUX_BATCH_SELECTION="500,533,566,599,633,666,699,732,766,799,832,865,899,932,965,999"           LINUX_BATCH_JOBS=4             sh tests/external/linux/batch_probe.sh
+          LINUX_BATCH_MATERIALIZE_ONLY=1           BUILD_DIR="$builder"           LINUX_SOURCE_TREE="$GITHUB_WORKSPACE/build/linux-source"           CROSS_COMPILE=riscv64-linux-gnu-           LINUX_BATCH_SELECTION="500,533,566,599,633,666,699,732,766,799,832,865,899,932,965,999"           LINUX_BATCH_JOBS=4             sh tests/external/linux/batch_probe.sh
 
           python3 - <<'PY'
           from pathlib import Path
@@ -103,12 +105,6 @@ jobs:
           path: build/linux-new500-sample16-corpus
           key: linux-new500-sample16-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-even16
 
-      - name: Save pinned Linux source archive
-        if: steps.sample-cache.outputs.cache-hit != 'true' && steps.linux-source-cache.outputs.cache-hit != 'true' && hashFiles('build/linux-cache/linux-6.6.143.tar.xz') != ''
-        uses: actions/cache/save@v4
-        with:
-          path: build/linux-cache/linux-6.6.143.tar.xz
-          key: linux-source-6.6.143-dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932
 
   sample16:
     needs: prepare-sample16-corpus
@@ -225,13 +221,15 @@ jobs:
           test "$(tail -1 "$manifest" | cut -f1)" -eq 999
           echo 'LINUX_NEW500_CORPUS cache=hit selected=500 indices=500-999'
 
-      - name: Restore pinned Linux source archive
+      - name: Checkout exact Linux 6.6.143 stable source
         if: steps.new500-cache.outputs.cache-hit != 'true'
-        id: linux-source-cache
-        uses: actions/cache/restore@v4
+        uses: actions/checkout@v4
         with:
-          path: build/linux-cache/linux-6.6.143.tar.xz
-          key: linux-source-6.6.143-dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932
+          repository: gregkh/linux
+          ref: d1cfde2d5d15be14123bdd1689162bd27f995a90
+          path: build/linux-source
+          fetch-depth: 1
+          persist-credentials: false
 
       - name: Install corpus materialization dependencies
         if: steps.new500-cache.outputs.cache-hit != 'true'
@@ -249,7 +247,7 @@ jobs:
           set -Eeuo pipefail
           builder="$GITHUB_WORKSPACE/build/linux-new500-builder"
           corpus="$GITHUB_WORKSPACE/build/linux-new500-corpus"
-          LINUX_BATCH_MATERIALIZE_ONLY=1           BUILD_DIR="$builder"           LINUX_ARCHIVE_CACHE="$GITHUB_WORKSPACE/build/linux-cache/linux-6.6.143.tar.xz"           CROSS_COMPILE=riscv64-linux-gnu-           LINUX_BATCH_OFFSET=500           LINUX_BATCH_LIMIT=500           LINUX_BATCH_JOBS=4             sh tests/external/linux/batch_probe.sh
+          LINUX_BATCH_MATERIALIZE_ONLY=1           BUILD_DIR="$builder"           LINUX_SOURCE_TREE="$GITHUB_WORKSPACE/build/linux-source"           CROSS_COMPILE=riscv64-linux-gnu-           LINUX_BATCH_OFFSET=500           LINUX_BATCH_LIMIT=500           LINUX_BATCH_JOBS=4             sh tests/external/linux/batch_probe.sh
 
           python3 - <<'PY'
           from pathlib import Path
@@ -296,12 +294,6 @@ jobs:
           path: build/linux-new500-corpus
           key: linux-new500-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-indices-500-999
 
-      - name: Save pinned Linux source archive
-        if: steps.new500-cache.outputs.cache-hit != 'true' && steps.linux-source-cache.outputs.cache-hit != 'true' && hashFiles('build/linux-cache/linux-6.6.143.tar.xz') != ''
-        uses: actions/cache/save@v4
-        with:
-          path: build/linux-cache/linux-6.6.143.tar.xz
-          key: linux-source-6.6.143-dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932
 
   full500:
     needs: prepare-new500-corpus
