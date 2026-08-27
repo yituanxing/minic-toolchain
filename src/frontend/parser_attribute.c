@@ -257,6 +257,7 @@ typedef struct MinicObjectAttributeContext {
     MinicSymbolVisibility *visibility;
     bool *has_visibility;
     bool *is_weak;
+    MinicGlobalObjectId *alias_target;
 } MinicObjectAttributeContext;
 
 static bool parse_object_visibility_argument(MinicParser *parser,
@@ -351,6 +352,69 @@ static bool object_attribute_class_is_parse_only(MinicAttributeClass semantic_cl
            semantic_class == MINIC_ATTRIBUTE_CLASS_CONTROL_FLOW;
 }
 
+static bool resolve_object_alias_attribute(MinicParser *parser,
+                                           const MinicParsedAttribute *attribute,
+                                           MinicGlobalObjectId *target_id) {
+    size_t cursor;
+    size_t end;
+    size_t name_begin;
+    size_t name_length;
+    size_t index;
+
+    if (parser == NULL || attribute == NULL || target_id == NULL ||
+        !attribute->has_arguments ||
+        attribute->arguments_span.end.offset <= attribute->arguments_span.begin.offset + 1U) {
+        return false;
+    }
+    cursor = attribute->arguments_span.begin.offset + 1U;
+    end = attribute->arguments_span.end.offset - 1U;
+    while (cursor < end && (parser->source[cursor] == ' ' || parser->source[cursor] == '\t' ||
+                            parser->source[cursor] == '\n' || parser->source[cursor] == '\r' ||
+                            parser->source[cursor] == '\f' || parser->source[cursor] == '\v')) {
+        cursor += 1U;
+    }
+    if (cursor >= end || parser->source[cursor] != '"') {
+        minic_parser_error(parser, "GNU object alias requires one string literal target");
+        return false;
+    }
+    cursor += 1U;
+    name_begin = cursor;
+    while (cursor < end && parser->source[cursor] != '"') {
+        if (parser->source[cursor] == '\\') {
+            minic_parser_error(parser, "escaped GNU object alias targets are not supported");
+            return false;
+        }
+        cursor += 1U;
+    }
+    if (cursor >= end || parser->source[cursor] != '"') {
+        minic_parser_error(parser, "unterminated GNU object alias target");
+        return false;
+    }
+    name_length = cursor - name_begin;
+    cursor += 1U;
+    while (cursor < end && (parser->source[cursor] == ' ' || parser->source[cursor] == '\t' ||
+                            parser->source[cursor] == '\n' || parser->source[cursor] == '\r' ||
+                            parser->source[cursor] == '\f' || parser->source[cursor] == '\v')) {
+        cursor += 1U;
+    }
+    if (cursor != end || name_length == 0U) {
+        minic_parser_error(parser, "GNU object alias requires exactly one string literal target");
+        return false;
+    }
+    for (index = 0U; index < parser->program->global_object_count; ++index) {
+        const MinicGlobalObject *candidate;
+
+        candidate = minic_c0_program_global_object(parser->program, index);
+        if (candidate != NULL && candidate->name_length == name_length &&
+            memcmp(candidate->name, parser->source + name_begin, name_length) == 0) {
+            *target_id = index;
+            return true;
+        }
+    }
+    minic_parser_error(parser, "GNU object alias target must be defined in this translation unit");
+    return false;
+}
+
 static bool consume_object_attribute(MinicParser *parser,
                                      const MinicParsedAttribute *attribute,
                                      void *opaque_context) {
@@ -366,6 +430,24 @@ static bool consume_object_attribute(MinicParser *parser,
         !minic_attribute_allowed_on(descriptor, MINIC_ATTRIBUTE_TARGET_OBJECT)) {
         minic_parser_error(parser, "unsupported GNU object attribute");
         return false;
+    }
+    if (descriptor->kind == MINIC_ATTRIBUTE_ALIAS) {
+        MinicGlobalObjectId target_id;
+
+        if (context->alias_target == NULL ||
+            !resolve_object_alias_attribute(parser, attribute, &target_id)) {
+            if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
+                minic_parser_error(parser, "GNU object alias requires explicit object semantics");
+            }
+            return false;
+        }
+        if (*context->alias_target != MINIC_GLOBAL_OBJECT_INVALID &&
+            *context->alias_target != target_id) {
+            minic_parser_error(parser, "conflicting GNU object alias attributes");
+            return false;
+        }
+        *context->alias_target = target_id;
+        return true;
     }
     if (object_attribute_class_is_parse_only(descriptor->semantic_class)) {
         return true;
@@ -415,6 +497,7 @@ static bool initialize_object_attribute_context(MinicObjectAttributeContext *con
     context->visibility = NULL;
     context->has_visibility = NULL;
     context->is_weak = NULL;
+    context->alias_target = NULL;
     return true;
 }
 
@@ -548,6 +631,36 @@ bool minic_parser_parse_gnu_object_attribute_lists_with_symbol_metadata(
     context.visibility = visibility;
     context.has_visibility = has_visibility;
     context.is_weak = is_weak;
+    return minic_parser_parse_gnu_attribute_lists(parser, consume_object_attribute, &context);
+}
+
+bool minic_parser_parse_gnu_object_attribute_lists_with_symbol_metadata_and_alias(
+    MinicParser *parser,
+    char *section_name,
+    size_t section_capacity,
+    size_t *section_name_length,
+    bool *has_section,
+    size_t *explicit_alignment,
+    MinicSymbolVisibility *visibility,
+    bool *has_visibility,
+    bool *is_weak,
+    MinicGlobalObjectId *alias_target) {
+    MinicObjectAttributeContext context;
+
+    if (parser == NULL || visibility == NULL || has_visibility == NULL || is_weak == NULL ||
+        alias_target == NULL ||
+        !initialize_object_attribute_context(&context,
+                                             section_name,
+                                             section_capacity,
+                                             section_name_length,
+                                             has_section,
+                                             explicit_alignment)) {
+        return false;
+    }
+    context.visibility = visibility;
+    context.has_visibility = has_visibility;
+    context.is_weak = is_weak;
+    context.alias_target = alias_target;
     return minic_parser_parse_gnu_attribute_lists(parser, consume_object_attribute, &context);
 }
 

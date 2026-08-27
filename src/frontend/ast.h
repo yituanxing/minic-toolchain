@@ -451,6 +451,7 @@ typedef struct MinicGlobalObject {
     char *section_name;
     size_t section_name_length;
     MinicType type;
+    MinicGlobalObjectId alias_target;
     uint64_t *initializer_values;
     size_t initializer_count;
     size_t initializer_capacity;
@@ -901,6 +902,9 @@ bool minic_c0_global_object_set_zero_initialized(MinicC0Program *program,
                                                  MinicGlobalObjectId global_object_id);
 bool minic_c0_global_object_set_extern(MinicC0Program *program,
                                        MinicGlobalObjectId global_object_id);
+bool minic_c0_global_object_set_alias(MinicC0Program *program,
+                                      MinicGlobalObjectId global_object_id,
+                                      MinicGlobalObjectId target_object_id);
 bool minic_c0_global_object_set_weak(MinicC0Program *program,
                                      MinicGlobalObjectId global_object_id,
                                      bool is_weak);

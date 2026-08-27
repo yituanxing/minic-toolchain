@@ -3711,6 +3711,7 @@ bool minic_parser_parse_extern_global_after_head(MinicParser *parser,
         MinicSymbolVisibility declarator_visibility;
         bool declarator_has_visibility;
         bool declarator_is_weak;
+        MinicGlobalObjectId declarator_alias_target;
         bool object_was_existing;
         bool is_array;
         MinicType declarator_element_type;
@@ -3722,6 +3723,7 @@ bool minic_parser_parse_extern_global_after_head(MinicParser *parser,
         declarator_visibility = visibility;
         declarator_has_visibility = has_visibility;
         declarator_is_weak = false;
+        declarator_alias_target = MINIC_GLOBAL_OBJECT_INVALID;
         (void)memset(declarator_section_name, 0, sizeof(declarator_section_name));
         if (has_section) {
             if (section_name == NULL ||
@@ -3740,7 +3742,7 @@ bool minic_parser_parse_extern_global_after_head(MinicParser *parser,
             return false;
         }
         declarator_element_type = object_type;
-        if (!minic_parser_parse_gnu_object_attribute_lists_with_symbol_metadata(
+        if (!minic_parser_parse_gnu_object_attribute_lists_with_symbol_metadata_and_alias(
                 parser,
                 declarator_section_name,
                 sizeof(declarator_section_name),
@@ -3749,7 +3751,8 @@ bool minic_parser_parse_extern_global_after_head(MinicParser *parser,
                 &declarator_explicit_alignment,
                 &declarator_visibility,
                 &declarator_has_visibility,
-                &declarator_is_weak)) {
+                &declarator_is_weak,
+                &declarator_alias_target)) {
             return false;
         }
         if (minic_type_is_function(object_type)) {
@@ -3759,7 +3762,7 @@ bool minic_parser_parse_extern_global_after_head(MinicParser *parser,
         array_type_begin = parser->program->array_type_count;
         if (!minic_parser_parse_array_declarator_suffix(
                 parser, object_type, true, &object_type, &is_array) ||
-            !minic_parser_parse_gnu_object_attribute_lists_with_symbol_metadata(
+            !minic_parser_parse_gnu_object_attribute_lists_with_symbol_metadata_and_alias(
                 parser,
                 declarator_section_name,
                 sizeof(declarator_section_name),
@@ -3768,7 +3771,8 @@ bool minic_parser_parse_extern_global_after_head(MinicParser *parser,
                 &declarator_explicit_alignment,
                 &declarator_visibility,
                 &declarator_has_visibility,
-                &declarator_is_weak)) {
+                &declarator_is_weak,
+                &declarator_alias_target)) {
             return false;
         }
 
@@ -3815,6 +3819,12 @@ bool minic_parser_parse_extern_global_after_head(MinicParser *parser,
             }
         }
         parser->program->global_objects[object_id].is_block_scope_extern_only = false;
+        if (declarator_alias_target != MINIC_GLOBAL_OBJECT_INVALID &&
+            !minic_c0_global_object_set_alias(
+                parser->program, object_id, declarator_alias_target)) {
+            minic_parser_error(parser, "invalid GNU object alias declaration");
+            return false;
+        }
         if (object_was_existing && declarator_is_weak &&
             !minic_c0_global_object_set_weak(parser->program, object_id, true)) {
             minic_parser_error(parser, "GNU weak requires external object linkage");

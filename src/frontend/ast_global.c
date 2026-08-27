@@ -215,6 +215,7 @@ static bool add_global_object_entity_with_state(MinicC0Program *program,
     }
 
     (void)memset(&object, 0, sizeof(object));
+    object.alias_target = MINIC_GLOBAL_OBJECT_INVALID;
     object.name = copy_name(name, name_length);
     if (object.name == NULL) {
         return false;
@@ -1390,6 +1391,31 @@ minic_c0_program_fixed_register_binding(const MinicC0Program *program,
         return NULL;
     }
     return &program->fixed_register_bindings[binding_id];
+}
+
+bool minic_c0_global_object_set_alias(MinicC0Program *program,
+                                      MinicGlobalObjectId global_object_id,
+                                      MinicGlobalObjectId target_object_id) {
+    MinicGlobalObject *object;
+    const MinicGlobalObject *target;
+
+    if (program == NULL || global_object_id >= program->global_object_count ||
+        target_object_id >= program->global_object_count || global_object_id == target_object_id) {
+        return false;
+    }
+    object = &program->global_objects[global_object_id];
+    target = &program->global_objects[target_object_id];
+    if (!object->is_extern || object->is_internal || object->is_tentative ||
+        object->is_zero_initialized || object->is_block_scope_extern_only ||
+        object->initializer_count != 0U || object->relocation_count != 0U ||
+        target->is_extern || target->is_tentative ||
+        !minic_c0_types_compatible(program, object->type, target->type) ||
+        (object->alias_target != MINIC_GLOBAL_OBJECT_INVALID &&
+         object->alias_target != target_object_id)) {
+        return false;
+    }
+    object->alias_target = target_object_id;
+    return true;
 }
 
 bool minic_c0_global_object_set_weak(MinicC0Program *program,

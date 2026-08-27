@@ -1318,6 +1318,17 @@ bool minic_c0_program_verify_target(const MinicC0Program *program,
         const MinicGlobalObject *object;
 
         object = &program->global_objects[index];
+        if (object->alias_target != MINIC_GLOBAL_OBJECT_INVALID) {
+            const MinicGlobalObject *alias_target_object;
+
+            alias_target_object = minic_c0_program_global_object(program, object->alias_target);
+            if (alias_target_object == NULL || alias_target_object == object ||
+                !object->is_extern || object->is_internal || object->is_block_scope_extern_only ||
+                alias_target_object->is_extern || alias_target_object->is_tentative ||
+                !minic_c0_types_compatible(program, object->type, alias_target_object->type)) {
+                return false;
+            }
+        }
         if (object->name == NULL || !type_is_valid(program, target, object->type) ||
             minic_type_is_function(object->type) || (object->is_internal && object->is_weak) ||
             (minic_type_is_void(object->type) && !object->is_extern) ||

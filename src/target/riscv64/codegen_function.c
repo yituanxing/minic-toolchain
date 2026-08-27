@@ -1057,6 +1057,38 @@ bool minic_riscv64_write_c0_program_with_core_functions(const char *path,
             const MinicGlobalObject *object;
 
             object = &program->global_objects[global_index];
+            if (object->alias_target != MINIC_GLOBAL_OBJECT_INVALID) {
+                const MinicGlobalObject *target_object;
+                const char *visibility_directive;
+
+                target_object = minic_c0_program_global_object(program, object->alias_target);
+                success = target_object != NULL && target_object != object &&
+                          !target_object->is_extern && !target_object->is_tentative &&
+                          minic_c0_types_compatible(program, object->type, target_object->type);
+                if (success && !object->is_internal) {
+                    success = fprintf(file,
+                                      object->is_weak ? ".weak %s\n" : ".globl %s\n",
+                                      object->name) >= 0;
+                    if (success && object->visibility != MINIC_SYMBOL_VISIBILITY_DEFAULT) {
+                        visibility_directive =
+                            object->visibility == MINIC_SYMBOL_VISIBILITY_HIDDEN      ? ".hidden"
+                            : object->visibility == MINIC_SYMBOL_VISIBILITY_INTERNAL  ? ".internal"
+                            : object->visibility == MINIC_SYMBOL_VISIBILITY_PROTECTED ? ".protected"
+                                                                                      : NULL;
+                        success = visibility_directive != NULL &&
+                                  fprintf(file, "%s %s\n", visibility_directive, object->name) >= 0;
+                    }
+                }
+                if (success) {
+                    success = fprintf(file,
+                                      ".type %s, @object\n"
+                                      ".set %s, %s\n",
+                                      object->name,
+                                      object->name,
+                                      target_object->name) >= 0;
+                }
+                continue;
+            }
             if (object->is_weak && !object->is_internal &&
                 fprintf(file, ".weak %s\n", object->name) < 0) {
                 success = false;
