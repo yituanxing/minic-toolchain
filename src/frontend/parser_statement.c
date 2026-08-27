@@ -829,16 +829,38 @@ static bool parse_local_character_array_string_initializer(MinicParser *parser,
     return success;
 }
 
+static bool grow_runtime_array_action_values(MinicParser *parser,
+                                             MinicExpressionId **values,
+                                             size_t *capacity,
+                                             size_t required);
+static bool lower_runtime_scalar_array_plan(MinicParser *parser,
+                                            MinicExpressionId base_id,
+                                            MinicType element_type,
+                                            size_t element_count,
+                                            MinicSourceSpan initializer_span,
+                                            const MinicArrayInitializerPlan *plan,
+                                            const MinicExpressionId *action_values);
+
 static bool parse_inferred_runtime_array_initializer(MinicParser *parser,
                                                      MinicLocalId local_id,
                                                      MinicType element_type,
                                                      MinicSourceSpan name_span) {
     MinicArrayInitializerPlan plan;
+    MinicExpressionId *action_values;
+    MinicSourceSpan initializer_span;
+    size_t action_capacity;
+    size_t extent;
+    bool scalar_elements;
     bool success;
 
     if (parser == NULL || parser->current.kind != MINIC_TOKEN_LBRACE) {
         return false;
     }
+    action_values = NULL;
+    action_capacity = 0U;
+    scalar_elements = !minic_type_is_record(element_type);
+    initializer_span.begin = parser->current.span.begin;
+    initializer_span.end = parser->current.span.end;
     minic_array_initializer_plan_initialize(&plan, 0U, true);
     success = false;
     if (!minic_parser_advance(parser)) {
@@ -846,7 +868,6 @@ static bool parse_inferred_runtime_array_initializer(MinicParser *parser,
     }
 
     while (parser->current.kind != MINIC_TOKEN_RBRACE) {
-        MinicExpressionId value_id;
         size_t action_id;
         size_t index;
 
@@ -854,29 +875,62 @@ static bool parse_inferred_runtime_array_initializer(MinicParser *parser,
             minic_parser_error(parser, "too many local array initializers");
             goto done;
         }
-        if (!minic_array_initializer_plan_add_positional(&plan, &action_id)) {
+
+        if (parser->current.kind == MINIC_TOKEN_LBRACKET) {
+            size_t first;
+            size_t last;
+
+            if (!scalar_elements) {
+                minic_parser_error(
+                    parser,
+                    "designated inferred record-array initializers are not supported yet");
+                goto done;
+            }
+            if (!minic_parser_parse_array_designator(
+                    parser, 0U, true, &first, &last) ||
+                !minic_array_initializer_plan_add_designated(
+                    &plan, first, last, &action_id)) {
+                if (parser->diagnostic != NULL &&
+                    parser->diagnostic->message[0] == '\0') {
+                    minic_parser_error(
+                        parser, "cannot plan inferred local array designator");
+                }
+                goto done;
+            }
+        } else if (!minic_array_initializer_plan_add_positional(&plan, &action_id)) {
             minic_parser_error(parser, "out of memory while planning local array initializer");
             goto done;
         }
+
         index = plan.actions[action_id].first_index;
-        if (minic_type_is_record(element_type)) {
+        if (!scalar_elements) {
             MinicExpressionId base_id;
             MinicExpressionId element_id;
 
             if (!add_local_lvalue_expression(parser, local_id, name_span, &base_id) ||
                 !add_array_object_element_lvalue(
                     parser, base_id, index, parser->current.span, &element_id) ||
-                !parse_runtime_record_array_element_initializer(parser, element_id, element_type)) {
+                !parse_runtime_record_array_element_initializer(
+                    parser, element_id, element_type)) {
                 goto done;
             }
-        } else if (!minic_parser_parse_expression(parser, &value_id, 0U) ||
-                   !add_local_array_element_assignment(parser, local_id, index, value_id)) {
-            goto done;
+        } else {
+            MinicExpressionId value_id;
+
+            if (!grow_runtime_array_action_values(
+                    parser, &action_values, &action_capacity, action_id + 1U) ||
+                !minic_parser_parse_expression(parser, &value_id, 0U)) {
+                goto done;
+            }
+            action_values[action_id] = value_id;
         }
 
         if (parser->current.kind == MINIC_TOKEN_COMMA) {
             if (!minic_parser_advance(parser)) {
                 goto done;
+            }
+            if (parser->current.kind == MINIC_TOKEN_RBRACE) {
+                break;
             }
             continue;
         }
@@ -885,6 +939,39 @@ static bool parse_inferred_runtime_array_initializer(MinicParser *parser,
             goto done;
         }
     }
+
+    extent = minic_array_initializer_plan_element_count(&plan);
+    if (extent == 0U) {
+        minic_parser_error(parser, "inferred local array initializer must not be empty");
+        goto done;
+    }
+    parser->program->locals[local_id].element_count = extent;
+    initializer_span.end = parser->current.span.end;
+    if (!minic_parser_advance(parser)) {
+        goto done;
+    }
+
+    if (scalar_elements) {
+        MinicExpressionId base_id;
+
+        if (!add_local_lvalue_expression(parser, local_id, name_span, &base_id) ||
+            !lower_runtime_scalar_array_plan(parser,
+                                             base_id,
+                                             element_type,
+                                             extent,
+                                             initializer_span,
+                                             &plan,
+                                             action_values)) {
+            goto done;
+        }
+    }
+    success = true;
+
+done:
+    free(action_values);
+    minic_array_initializer_plan_destroy(&plan);
+    return success;
+}
 
     if (minic_array_initializer_plan_element_count(&plan) == 0U) {
         minic_parser_error(parser, "inferred local array initializer must not be empty");
