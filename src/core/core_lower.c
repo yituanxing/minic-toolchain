@@ -3922,6 +3922,121 @@ static MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
                    : MINIC_CORE_LOWER_ERROR;
     }
 
+    /* M175F_RUNTIME_FFSLL_OWNER: __builtin_ffsll returns a one-based
+       least-significant-set-bit index and zero for a zero operand.  Reuse the
+       existing unsigned-long CTZ semantic owner instead of introducing a
+       target-specific FFS instruction.  RV64's long and long long are both
+       64-bit, so converting signed long long to unsigned long preserves the
+       operand bit pattern modulo 2^64.  The double zero-test yields a canonical
+       int nonzero mask; multiplying by it maps the CTZ zero sentinel (64) back
+       to the required ffsll zero result. */
+    if (expression->kind == MINIC_EXPRESSION_BUILTIN_UNARY &&
+        expression->value.builtin_unary.operator_kind == MINIC_BUILTIN_UNARY_FFSLL) {
+        const MinicExpression *operand;
+        MinicCoreInstruction builtin_instruction;
+        MinicCoreLowerStatus status;
+        MinicCoreValueId operand_value;
+        MinicCoreValueId unsigned_value;
+        MinicCoreValueId trailing_zero_count;
+        MinicCoreValueId one;
+        MinicCoreValueId one_based_index;
+        MinicCoreValueId is_zero;
+        MinicCoreValueId is_nonzero;
+
+        operand = minic_c0_program_expression(
+            context->body->program, expression->value.builtin_unary.operand);
+        if (operand == NULL || !minic_type_equal(operand->type, minic_type_long_long()) ||
+            !minic_type_equal(expression->type, minic_type_int())) {
+            return MINIC_CORE_LOWER_UNSUPPORTED;
+        }
+        status = lower_expression(
+            context, expression->value.builtin_unary.operand, &operand_value);
+        if (status != MINIC_CORE_LOWER_OK) {
+            return status;
+        }
+        if (operand_value >= context->function->value_count ||
+            !minic_type_equal(context->function->values[operand_value].type,
+                              minic_type_long_long())) {
+            return MINIC_CORE_LOWER_ERROR;
+        }
+        status = append_integer_conversion(
+            context, operand->span, minic_type_unsigned_long(), operand_value, &unsigned_value);
+        if (status != MINIC_CORE_LOWER_OK) {
+            return status;
+        }
+
+        (void)memset(&builtin_instruction, 0, sizeof(builtin_instruction));
+        builtin_instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_CTZ;
+        builtin_instruction.span = expression->span;
+        builtin_instruction.type = minic_type_int();
+        builtin_instruction.result = MINIC_CORE_VALUE_INVALID;
+        builtin_instruction.value.operand = unsigned_value;
+        if (!minic_core_function_append_value_instruction(
+                context->function,
+                context->block_id,
+                &builtin_instruction,
+                &trailing_zero_count)) {
+            return MINIC_CORE_LOWER_ERROR;
+        }
+
+        (void)memset(&builtin_instruction, 0, sizeof(builtin_instruction));
+        builtin_instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
+        builtin_instruction.span = expression->span;
+        builtin_instruction.type = minic_type_int();
+        builtin_instruction.result = MINIC_CORE_VALUE_INVALID;
+        builtin_instruction.value.integer_value = 1;
+        if (!minic_core_function_append_value_instruction(
+                context->function, context->block_id, &builtin_instruction, &one)) {
+            return MINIC_CORE_LOWER_ERROR;
+        }
+
+        (void)memset(&builtin_instruction, 0, sizeof(builtin_instruction));
+        builtin_instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_ADD;
+        builtin_instruction.span = expression->span;
+        builtin_instruction.type = minic_type_int();
+        builtin_instruction.result = MINIC_CORE_VALUE_INVALID;
+        builtin_instruction.value.binary.left = trailing_zero_count;
+        builtin_instruction.value.binary.right = one;
+        if (!minic_core_function_append_value_instruction(
+                context->function, context->block_id, &builtin_instruction, &one_based_index)) {
+            return MINIC_CORE_LOWER_ERROR;
+        }
+
+        (void)memset(&builtin_instruction, 0, sizeof(builtin_instruction));
+        builtin_instruction.kind = MINIC_CORE_INSTRUCTION_SCALAR_IS_ZERO;
+        builtin_instruction.span = expression->span;
+        builtin_instruction.type = minic_type_int();
+        builtin_instruction.result = MINIC_CORE_VALUE_INVALID;
+        builtin_instruction.value.operand = unsigned_value;
+        if (!minic_core_function_append_value_instruction(
+                context->function, context->block_id, &builtin_instruction, &is_zero)) {
+            return MINIC_CORE_LOWER_ERROR;
+        }
+
+        (void)memset(&builtin_instruction, 0, sizeof(builtin_instruction));
+        builtin_instruction.kind = MINIC_CORE_INSTRUCTION_SCALAR_IS_ZERO;
+        builtin_instruction.span = expression->span;
+        builtin_instruction.type = minic_type_int();
+        builtin_instruction.result = MINIC_CORE_VALUE_INVALID;
+        builtin_instruction.value.operand = is_zero;
+        if (!minic_core_function_append_value_instruction(
+                context->function, context->block_id, &builtin_instruction, &is_nonzero)) {
+            return MINIC_CORE_LOWER_ERROR;
+        }
+
+        (void)memset(&builtin_instruction, 0, sizeof(builtin_instruction));
+        builtin_instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_MULTIPLY;
+        builtin_instruction.span = expression->span;
+        builtin_instruction.type = minic_type_int();
+        builtin_instruction.result = MINIC_CORE_VALUE_INVALID;
+        builtin_instruction.value.binary.left = one_based_index;
+        builtin_instruction.value.binary.right = is_nonzero;
+        return minic_core_function_append_value_instruction(
+                   context->function, context->block_id, &builtin_instruction, value_id)
+                   ? MINIC_CORE_LOWER_OK
+                   : MINIC_CORE_LOWER_ERROR;
+    }
+
     /* M158_FINAL_STRICT_TAIL_CTZ_LOWER: keep the builtin semantic in
        Core instead of expanding a target loop in the frontend.  The RV64
        backend preserves the established ctzl(0) == 64 baseline behavior. */
