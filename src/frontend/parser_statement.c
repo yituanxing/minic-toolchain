@@ -2164,22 +2164,6 @@ static bool consume_static_local_interleaved_attribute(MinicParser *parser,
                                                        const MinicParsedAttribute *attribute,
                                                        void *opaque_context);
 
-static bool
-parse_static_local_integer_constant(MinicParser *parser, const char *range_message, int *value) {
-    int64_t parsed;
-
-    if (parser == NULL || range_message == NULL || value == NULL ||
-        !minic_parser_parse_integer_constant_expression(parser, &parsed)) {
-        return false;
-    }
-    if (parsed < INT_MIN || parsed > INT_MAX) {
-        minic_parser_error(parser, "%s", range_message);
-        return false;
-    }
-    *value = (int)parsed;
-    return true;
-}
-
 static bool parse_inferred_static_local_array(MinicParser *parser,
                                               MinicType element_type,
                                               MinicSourceSpan name_span,
@@ -2451,7 +2435,7 @@ static bool parse_static_local_array_declarator(MinicParser *parser,
     if (bound_count == 0U) {
         char scalar_symbol_name[96];
         MinicGlobalObjectId scalar_object_id;
-        int scalar_value;
+        uint64_t scalar_bits;
         int scalar_symbol_length;
 
         if (parser->current.kind != MINIC_TOKEN_EQUAL) {
@@ -2505,18 +2489,17 @@ static bool parse_static_local_array_declarator(MinicParser *parser,
             return true;
         }
 
-        if (!parse_static_local_integer_constant(
-                parser, "static local integer constant is out of supported range", &scalar_value)) {
+        if (!minic_parser_parse_integer_initializer_bits(parser, declared_type, &scalar_bits)) {
             if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
                 minic_parser_error(parser,
                                    "static local integer requires an integer constant expression");
             }
             return false;
         }
-        if ((scalar_value == 0 &&
+        if ((scalar_bits == 0U &&
              !minic_c0_global_object_set_zero_initialized(parser->program, scalar_object_id)) ||
-            (scalar_value != 0 && !minic_c0_global_object_add_initializer(
-                                      parser->program, scalar_object_id, scalar_value)) ||
+            (scalar_bits != 0U && !minic_c0_global_object_add_initializer_bits(
+                                    parser->program, scalar_object_id, scalar_bits)) ||
             !minic_parser_bind_scoped_global_object(parser, name_span, scalar_object_id)) {
             minic_parser_error(parser, "cannot finalize static local integer storage");
             return false;
