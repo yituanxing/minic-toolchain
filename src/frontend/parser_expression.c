@@ -1041,6 +1041,53 @@ static bool parse_builtin_memset(MinicParser *parser, MinicExpressionId *express
     return minic_parser_add_expression(parser, &call_expression, expression_id);
 }
 
+static bool parse_builtin_extract_return_addr(MinicParser *parser,
+                                              MinicExpressionId *expression_id) {
+    const MinicExpression *operand;
+    MinicExpression cast;
+    MinicExpressionId operand_id;
+    MinicSourcePosition begin;
+    MinicSourcePosition end;
+    MinicType void_pointer_type;
+
+    if (parser == NULL || expression_id == NULL ||
+        !current_identifier_is(parser, "__builtin_extract_return_addr")) {
+        return false;
+    }
+    begin = parser->current.span.begin;
+    if (!minic_parser_advance(parser) ||
+        !minic_parser_expect(
+            parser, MINIC_TOKEN_LPAREN, "expected '(' after __builtin_extract_return_addr") ||
+        !parse_expression_internal(parser, &operand_id, 0U, true)) {
+        return false;
+    }
+    operand = minic_c0_program_expression(parser->program, operand_id);
+    if (operand == NULL || !minic_type_is_pointer(operand->type) ||
+        !minic_type_pointer_to(minic_type_void(), &void_pointer_type)) {
+        minic_parser_error(parser, "__builtin_extract_return_addr requires a pointer operand");
+        return false;
+    }
+    if (parser->current.kind != MINIC_TOKEN_RPAREN) {
+        minic_parser_error(parser, "expected ')' after __builtin_extract_return_addr operand");
+        return false;
+    }
+    end = parser->current.span.end;
+    if (!minic_parser_advance(parser)) {
+        return false;
+    }
+
+    /* RISC-V return addresses use the architectural code pointer value directly;
+       model GCC's extraction hook as the canonical pointer cast. */
+    (void)memset(&cast, 0, sizeof(cast));
+    cast.kind = MINIC_EXPRESSION_CAST;
+    cast.span.begin = begin;
+    cast.span.end = end;
+    cast.type = void_pointer_type;
+    cast.value_category = MINIC_VALUE_RVALUE;
+    cast.value.unary.operand = operand_id;
+    return minic_parser_add_expression(parser, &cast, expression_id);
+}
+
 static bool parse_builtin_expect(MinicParser *parser, MinicExpressionId *expression_id) {
     MinicSourcePosition begin;
     MinicSourcePosition end;
@@ -2459,6 +2506,13 @@ static bool parse_primary(MinicParser *parser, MinicExpressionId *expression_id,
     }
     if (current_identifier_is(parser, "__builtin_memset")) {
         if (!parse_builtin_memset(parser, &primary_id) ||
+            !minic_parser_parse_postfix(parser, primary_id, &primary_id)) {
+            return false;
+        }
+        return finish_value_expression(parser, primary_id, decay_array, expression_id);
+    }
+    if (current_identifier_is(parser, "__builtin_extract_return_addr")) {
+        if (!parse_builtin_extract_return_addr(parser, &primary_id) ||
             !minic_parser_parse_postfix(parser, primary_id, &primary_id)) {
             return false;
         }
