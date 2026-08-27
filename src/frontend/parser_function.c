@@ -2925,6 +2925,78 @@ bool minic_parser_parse_preprocessor_directive(MinicParser *parser) {
     }
     cursor += 1U;
     pragma_skip_horizontal_space(text, length, &cursor);
+
+    if (pragma_consume_word(text, length, &cursor, "push")) {
+        size_t saved_alignment;
+
+        saved_alignment = parser->record_pack_alignment;
+        pragma_skip_horizontal_space(text, length, &cursor);
+        alignment = saved_alignment;
+        if (cursor < length && text[cursor] == ',') {
+            size_t digit_count;
+
+            cursor += 1U;
+            pragma_skip_horizontal_space(text, length, &cursor);
+            alignment = 0U;
+            digit_count = 0U;
+            while (cursor < length && text[cursor] >= '0' && text[cursor] <= '9') {
+                size_t digit;
+
+                digit = (size_t)(text[cursor] - '0');
+                if (alignment > (SIZE_MAX - digit) / 10U) {
+                    minic_parser_error(parser, "unsupported pragma pack alignment");
+                    return false;
+                }
+                alignment = alignment * 10U + digit;
+                cursor += 1U;
+                digit_count += 1U;
+            }
+            if (digit_count == 0U || alignment == 0U || alignment > 16U ||
+                (alignment & (alignment - 1U)) != 0U) {
+                minic_parser_error(parser, "unsupported pragma pack alignment");
+                return false;
+            }
+            pragma_skip_horizontal_space(text, length, &cursor);
+        }
+        if (cursor >= length || text[cursor] != ')') {
+            minic_parser_error(parser, "expected ')' after pragma pack push");
+            return false;
+        }
+        cursor += 1U;
+        if (!pragma_only_trailing_space(text, length, cursor)) {
+            minic_parser_error(parser, "unsupported pragma pack push syntax");
+            return false;
+        }
+        if (parser->record_pack_depth >= MINIC_PARSER_MAX_PACK_DEPTH) {
+            minic_parser_error(parser, "pragma pack stack depth exceeds implementation limit");
+            return false;
+        }
+        parser->record_pack_stack[parser->record_pack_depth++] = saved_alignment;
+        parser->record_pack_alignment = alignment;
+        return minic_parser_advance(parser);
+    }
+
+    if (pragma_consume_word(text, length, &cursor, "pop")) {
+        pragma_skip_horizontal_space(text, length, &cursor);
+        if (cursor >= length || text[cursor] != ')') {
+            minic_parser_error(parser, "unsupported pragma pack pop syntax");
+            return false;
+        }
+        cursor += 1U;
+        if (!pragma_only_trailing_space(text, length, cursor)) {
+            minic_parser_error(parser, "unsupported pragma pack pop syntax");
+            return false;
+        }
+        if (parser->record_pack_depth == 0U) {
+            minic_parser_error(parser, "pragma pack pop has no matching push");
+            return false;
+        }
+        parser->record_pack_depth -= 1U;
+        parser->record_pack_alignment =
+            parser->record_pack_stack[parser->record_pack_depth];
+        return minic_parser_advance(parser);
+    }
+
     alignment = 0U;
     if (cursor < length && text[cursor] != ')') {
         size_t digit_count;
