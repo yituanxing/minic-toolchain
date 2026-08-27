@@ -24,7 +24,7 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: build/linux-new500-sample16-corpus
-          key: linux-new500-sample16-corpus-v2-active-582-591-602-613-700-742-748-749-769-829-887-899-960-963-965-990
+          key: linux-new500-sample16-corpus-v3-active-555-591-602-613-662-700-742-749-769-829-887-899-949-960-963-990
 
       - name: Validate cached active sample16
         if: steps.sample-cache.outputs.cache-hit == 'true'
@@ -34,7 +34,7 @@ jobs:
           manifest=build/linux-new500-sample16-corpus/selected-tus.txt
           test -s "$manifest"
           test "$(grep -cve '^[[:space:]]*$' "$manifest")" -eq 16
-          echo 'LINUX_NEW500_SAMPLE16_CORPUS cache=hit selected=16 policy=active-blockers-v2'
+          echo 'LINUX_NEW500_SAMPLE16_CORPUS cache=hit selected=16 policy=active-blockers-v3-current-failures'
 
       - name: Restore frozen new500 corpus for sample refresh
         if: steps.sample-cache.outputs.cache-hit != 'true'
@@ -54,8 +54,8 @@ jobs:
           from pathlib import Path
           import shutil
 
-          expected = [582, 591, 602, 613, 700, 742, 748, 749,
-                      769, 829, 887, 899, 960, 963, 965, 990]
+          expected = [555, 591, 602, 613, 662, 700, 742, 749,
+                      769, 829, 887, 899, 949, 960, 963, 990]
           full = Path("build/linux-new500-corpus")
           sample = Path("build/linux-new500-sample16-corpus")
           rows = [line for line in (full / "selected-tus.txt").read_text().splitlines()
@@ -81,7 +81,7 @@ jobs:
               total_bytes += target.stat().st_size
 
           (sample / "sample-info.txt").write_text(
-              "policy=active-blockers-v2\n"
+              "policy=active-blockers-v3-current-failures\n"
               f"indices={','.join(map(str, expected))}\n"
               f"selected={len(expected)}\nbytes={total_bytes}\n"
           )
@@ -97,7 +97,7 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: build/linux-new500-sample16-corpus
-          key: linux-new500-sample16-corpus-v2-active-582-591-602-613-700-742-748-749-769-829-887-899-960-963-965-990
+          key: linux-new500-sample16-corpus-v3-active-555-591-602-613-662-700-742-749-769-829-887-899-949-960-963-990
 
 
   sample16:
@@ -118,7 +118,7 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: build/linux-new500-sample16-corpus
-          key: linux-new500-sample16-corpus-v2-active-582-591-602-613-700-742-748-749-769-829-887-899-960-963-965-990
+          key: linux-new500-sample16-corpus-v3-active-555-591-602-613-662-700-742-749-769-829-887-899-949-960-963-990
 
       - name: Require frozen sample16 corpus
         run: |
