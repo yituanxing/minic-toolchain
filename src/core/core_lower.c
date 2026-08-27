@@ -69,27 +69,6 @@ bool core_memory_scalar_type(MinicType type) {
            minic_type_is_double(type);
 }
 
-bool core_import_fixed_register_binding(MinicCoreLowerContext *context,
-                                               size_t source_binding_id,
-                                               size_t *core_binding_id) {
-    const MinicFixedRegisterBinding *binding;
-
-    if (context == NULL || context->body == NULL || context->body->program == NULL ||
-        context->function == NULL || core_binding_id == NULL) {
-        return false;
-    }
-    binding =
-        minic_c0_program_fixed_register_binding(context->body->program, source_binding_id);
-    return binding != NULL && binding->register_name != NULL &&
-           binding->register_name_length != 0U && core_memory_scalar_type(binding->type) &&
-           minic_core_function_add_fixed_register_binding(context->function,
-                                                          binding->register_name,
-                                                          binding->register_name_length,
-                                                          binding->type,
-                                                          binding->is_local,
-                                                          core_binding_id);
-}
-
 /* M152_UNSIGNED_ENUM_BIT_FIELD_OWNER: enum bit-fields keep their semantic enum
    type in AST/Core values, while C gives every complete enum a compatible
    integer type.  The existing bit-field RMW is intentionally restricted to
