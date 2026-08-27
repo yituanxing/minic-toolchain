@@ -116,7 +116,7 @@ static int test_pointer_bitcast_identity(void) {
         return 3;
     }
 
-    (void)memset(&local, 0, sizeof(local));
+    minic_c0_local_initialize(&local);
     local.name_span = test_span(0U);
     local.type = int_pointer;
     local.element_count = 1U;
@@ -210,7 +210,7 @@ static int test_malformed_contracts(void) {
     minic_c0_program_destroy(&program);
 
     minic_c0_program_initialize(&program);
-    (void)memset(&local, 0, sizeof(local));
+    minic_c0_local_initialize(&local);
     local.name_span = test_span(0U);
     local.type = minic_type_int();
     local.type.is_plain_char = true;
@@ -223,7 +223,7 @@ static int test_malformed_contracts(void) {
     minic_c0_program_destroy(&program);
 
     minic_c0_program_initialize(&program);
-    (void)memset(&local, 0, sizeof(local));
+    minic_c0_local_initialize(&local);
     local.name_span = test_span(0U);
     local.type = minic_type_int();
     local.type.function_type_id = 0U;
@@ -236,7 +236,7 @@ static int test_malformed_contracts(void) {
     minic_c0_program_destroy(&program);
 
     minic_c0_program_initialize(&program);
-    (void)memset(&local, 0, sizeof(local));
+    minic_c0_local_initialize(&local);
     local.name_span = test_span(0U);
     local.type = minic_type_int();
     local.type.pointer_qualifiers = 1U;
@@ -268,6 +268,60 @@ static int test_verify_failure_provenance(void) {
         failure.subindex != MINIC_C0_AST_VERIFY_INDEX_NONE || failure.reason == NULL) {
         minic_c0_program_destroy(&program);
         return 30;
+    }
+    minic_c0_program_destroy(&program);
+    return 0;
+}
+
+static int test_semantic_entity_defaults(void) {
+    MinicC0Program program;
+    MinicFunctionId function_id;
+    MinicGlobalObjectId object_id;
+    MinicRecordId record_id;
+    const MinicFunction *function;
+    const MinicGlobalObject *object;
+    const MinicRecord *record;
+    const MinicRecordField *field;
+
+    minic_c0_program_initialize(&program);
+    if (!minic_c0_program_add_function(&program,
+                                       "f",
+                                       1U,
+                                       0U,
+                                       0U,
+                                       MINIC_BLOCK_INVALID,
+                                       &function_id) ||
+        !minic_c0_program_add_record(&program, "R", 1U, &record_id) ||
+        !minic_c0_record_add_field(
+            &program, record_id, "x", 1U, minic_type_int(), 1U) ||
+        !minic_c0_program_add_global_object(
+            &program, "g", 1U, minic_type_int(), false, false, &object_id)) {
+        minic_c0_program_destroy(&program);
+        return 31;
+    }
+
+    function = minic_c0_program_function(&program, function_id);
+    record = minic_c0_program_record(&program, record_id);
+    field = minic_c0_record_field(record, 0U);
+    object = minic_c0_program_global_object(&program, object_id);
+    if (function == NULL || record == NULL || field == NULL || object == NULL ||
+        function->alias_target != MINIC_FUNCTION_INVALID ||
+        function->assembler_name != NULL || function->assembler_name_length != 0U ||
+        function->section_name != NULL || function->section_name_length != 0U ||
+        function->visibility != MINIC_SYMBOL_VISIBILITY_DEFAULT ||
+        !minic_type_equal(function->return_type, minic_type_int()) ||
+        function->parameter_count != 0U || function->is_defined ||
+        field->explicit_alignment != 0U || field->is_array || field->is_packed ||
+        field->is_bit_field || field->is_flexible_array || field->is_zero_length_array ||
+        field->is_anonymous_member ||
+        object->alias_target != MINIC_GLOBAL_OBJECT_INVALID ||
+        object->section_name != NULL || object->section_name_length != 0U ||
+        object->visibility != MINIC_SYMBOL_VISIBILITY_DEFAULT ||
+        object->explicit_alignment != 0U || object->is_internal || object->is_weak ||
+        object->is_zero_initialized || object->is_extern || object->is_tentative ||
+        object->is_block_scope_extern_only) {
+        minic_c0_program_destroy(&program);
+        return 32;
     }
     minic_c0_program_destroy(&program);
     return 0;
@@ -321,6 +375,10 @@ int main(void) {
         return status;
     }
     status = test_verify_failure_provenance();
+    if (status != 0) {
+        return status;
+    }
+    status = test_semantic_entity_defaults();
     if (status != 0) {
         return status;
     }
