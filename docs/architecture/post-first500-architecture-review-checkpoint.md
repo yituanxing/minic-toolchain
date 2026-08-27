@@ -521,6 +521,14 @@ Batching is allowed only for general semantic/capability fixes. Never batch
 filename-, index-, or Linux-specific special cases merely to increase the PASS
 counter.
 
+This is deliberately flexible rather than quota-driven. A development iteration
+does **not** have to fix every failure currently visible in sample16, and it does
+not have to fix exactly one. Fix every blocker that is sufficiently understood
+and low-risk to repair now; leave genuinely hard or uncertain blockers for a
+later iteration instead of making them hold back easy independent fixes. The
+unit of work is the smallest practical batch of understood semantic root
+causes, not "one TU", "all 16 TUs", or any other fixed count.
+
 ### Refill the sample; do not keep solved entries forever
 
 sample16 is an active-blocker window. When several entries become PASS, the
