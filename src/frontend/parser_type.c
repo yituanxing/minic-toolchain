@@ -434,6 +434,7 @@ bool minic_parser_parse_type_specifiers(MinicParser *parser, MinicType *type) {
     } else if (parser->current.kind == MINIC_TOKEN_KW_STRUCT ||
                parser->current.kind == MINIC_TOKEN_KW_UNION) {
         MinicParser probe;
+        MinicParsedAttributeList probe_attributes;
         MinicRecordId record_id;
         MinicTokenKind record_keyword;
         bool is_definition;
@@ -442,7 +443,9 @@ bool minic_parser_parse_type_specifiers(MinicParser *parser, MinicType *type) {
         record_keyword = parser->current.kind;
         is_union = record_keyword == MINIC_TOKEN_KW_UNION;
         probe = *parser;
-        if (!minic_parser_advance(&probe)) {
+        (void)memset(&probe_attributes, 0, sizeof(probe_attributes));
+        if (!minic_parser_advance(&probe) ||
+            !minic_parser_collect_gnu_attribute_lists(&probe, &probe_attributes)) {
             return false;
         }
         is_definition = probe.current.kind == MINIC_TOKEN_LBRACE;
