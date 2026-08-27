@@ -8338,7 +8338,7 @@ lower_while(MinicCoreLowerContext *context,
     return MINIC_CORE_LOWER_OK;
 }
 
-#define MINIC_CORE_SWITCH_LABEL_LIMIT 128U
+#define MINIC_CORE_SWITCH_LABEL_LIMIT 256U
 
 typedef struct MinicCoreSwitchLabel {
     size_t source_index;
