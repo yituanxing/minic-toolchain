@@ -755,6 +755,9 @@ static bool core_integer_overflow_supported(const MinicC0Program *program,
             minic_default_data_layout(), program, pointee, result_size, &alignment) ||
         *result_size == 0U || *result_size > 8U ||
         !minic_core_function_effective_integer_type(function, pointee, &effective_result_type)) {
+        (void)fprintf(stderr, "RV64_OVERFLOW_FAIL function=%s phase=shape op=%d\n",
+                      function != NULL && function->name != NULL ? function->name : "<unknown>",
+                      instruction != NULL ? (int)instruction->value.integer_overflow.operator_kind : -1);
         return false;
     }
     (void)alignment;
@@ -768,6 +771,9 @@ static bool core_integer_overflow_supported(const MinicC0Program *program,
         !minic_data_layout_type(
             minic_default_data_layout(), program, right_type, &right_size, &right_alignment) ||
         left_size == 0U || left_size > 8U || right_size == 0U || right_size > 8U) {
+        (void)fprintf(stderr, "RV64_OVERFLOW_FAIL function=%s phase=operands op=%d\n",
+                      function->name != NULL ? function->name : "<unknown>",
+                      (int)instruction->value.integer_overflow.operator_kind);
         return false;
     }
     (void)left_alignment;
@@ -785,11 +791,29 @@ static bool core_integer_overflow_supported(const MinicC0Program *program,
                 MINIC_CORE_INTEGER_OVERFLOW_ADD ||
             result_is_unsigned || *result_size >= 8U || left_is_result == right_is_result ||
             !minic_type_is_signed_integer(effective_result_type)) {
+            (void)fprintf(stderr,
+                          "RV64_OVERFLOW_FAIL function=%s phase=mixed-policy op=%d "
+                          "result_size=%zu result_unsigned=%d result_signed=%d "
+                          "left_eq_result=%d right_eq_result=%d "
+                          "left_unsigned=%d right_unsigned=%d\n",
+                          function->name != NULL ? function->name : "<unknown>",
+                          (int)instruction->value.integer_overflow.operator_kind,
+                          *result_size,
+                          result_is_unsigned ? 1 : 0,
+                          minic_type_is_signed_integer(effective_result_type) ? 1 : 0,
+                          left_is_result ? 1 : 0,
+                          right_is_result ? 1 : 0,
+                          minic_type_is_unsigned_integer(effective_left_type) ? 1 : 0,
+                          minic_type_is_unsigned_integer(effective_right_type) ? 1 : 0);
             return false;
         }
         other_effective_type =
             left_is_result ? &effective_right_type : &effective_left_type;
         if (!minic_type_is_unsigned_integer(*other_effective_type)) {
+            (void)fprintf(stderr,
+                          "RV64_OVERFLOW_FAIL function=%s phase=mixed-other-sign op=%d\n",
+                          function->name != NULL ? function->name : "<unknown>",
+                          (int)instruction->value.integer_overflow.operator_kind);
             return false;
         }
     }
