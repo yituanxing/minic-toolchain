@@ -19,7 +19,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: refactor/declaration-sema-v1
+          ref: ${{ github.sha }}
           fetch-depth: 0
 
       - name: Restore frozen Linux corpus
