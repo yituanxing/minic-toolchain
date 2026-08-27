@@ -30,4 +30,4 @@ expect_failure invalid_pragma_pack_alignment 'unsupported pragma pack alignment'
 expect_failure invalid_unknown_pragma 'unsupported pragma directive'
 expect_failure invalid_preprocessor_directive 'unsupported preprocessor directive'
 
-printf '%s\n' 'PASS compiler/c0/pragma_pack_record_layout state=TU pack=1 reset=1 record-layout=DataLayout forward=definition-time unknown=reject'
+printf '%s\n' 'PASS compiler/c0/pragma_pack_record_layout state=TU pack=1/2/4/8 reset=1 record-layout=DataLayout forward=definition-time unknown=reject'
