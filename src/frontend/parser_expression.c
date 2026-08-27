@@ -626,6 +626,33 @@ static bool variadic_argument_type_supported(MinicType type) {
     return minic_type_is_integer(type) || minic_type_is_pointer(type) || minic_type_is_double(type);
 }
 
+static bool gnu_enum_integer_pointer_call_conversion_compatible(
+    const MinicC0Program *program, MinicType target, MinicType source) {
+    MinicType target_pointee;
+    MinicType source_pointee;
+    MinicType target_unqualified;
+    MinicType source_unqualified;
+    MinicType enum_integer_type;
+
+    if (program == NULL || !minic_type_pointee(target, &target_pointee) ||
+        !minic_type_pointee(source, &source_pointee) ||
+        !minic_type_unqualified(target_pointee, &target_unqualified) ||
+        !minic_type_unqualified(source_pointee, &source_unqualified)) {
+        return false;
+    }
+    if (minic_type_is_enum(target_unqualified) && minic_type_is_integer(source_unqualified)) {
+        return minic_c0_type_effective_integer_type(
+                   program, target_unqualified, &enum_integer_type) &&
+               minic_type_equal(enum_integer_type, source_unqualified);
+    }
+    if (minic_type_is_integer(target_unqualified) && minic_type_is_enum(source_unqualified)) {
+        return minic_c0_type_effective_integer_type(
+                   program, source_unqualified, &enum_integer_type) &&
+               minic_type_equal(enum_integer_type, target_unqualified);
+    }
+    return false;
+}
+
 static bool gnu_function_pointer_to_void_call_conversion_compatible(MinicType target,
                                                                     MinicType source) {
     MinicType source_pointee;
@@ -679,6 +706,8 @@ bool minic_parser_apply_fixed_call_argument_conversion(MinicParser *parser,
     needs_explicit_conversion =
         (minic_type_is_double(target_type) && minic_type_is_integer(source->type)) ||
         minic_type_gnu_pointer_sign_compatible(target_type, source->type) ||
+        gnu_enum_integer_pointer_call_conversion_compatible(
+            parser->program, target_type, source->type) ||
         gnu_function_pointer_to_void_call_conversion_compatible(target_type, source->type) ||
         gnu_function_pointer_bridge_call_conversion_compatible(
             parser->program, target_type, source);
