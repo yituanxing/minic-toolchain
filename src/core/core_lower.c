@@ -8384,6 +8384,15 @@ lower_while(MinicCoreLowerContext *context,
     return MINIC_CORE_LOWER_OK;
 }
 
+#define MINIC_CORE_SWITCH_LABEL_LIMIT 128U
+
+typedef struct MinicCoreSwitchLabel {
+    size_t source_index;
+    const MinicStatement *statement;
+    MinicCoreBlockId body_block;
+    MinicCoreBlockId test_block;
+} MinicCoreSwitchLabel;
+
 static MinicCoreLowerStatus append_switch_integer_constant(MinicCoreLowerContext *context,
                                                            MinicSourceSpan span,
                                                            MinicType type,

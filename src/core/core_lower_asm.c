@@ -2972,12 +2972,3 @@ MinicCoreLowerStatus minic_core_lower_inline_asm(MinicCoreLowerContext *context,
                : MINIC_CORE_LOWER_ERROR;
 }
 
-#define MINIC_CORE_SWITCH_LABEL_LIMIT 128U
-
-typedef struct MinicCoreSwitchLabel {
-    size_t source_index;
-    const MinicStatement *statement;
-    MinicCoreBlockId body_block;
-    MinicCoreBlockId test_block;
-} MinicCoreSwitchLabel;
-
