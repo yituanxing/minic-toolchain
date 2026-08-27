@@ -810,7 +810,6 @@ bool minic_data_layout_global_relocation_target_addend(const MinicDataLayout *la
                     : minic_c0_record_field(record, relocation->target_member_indices[depth]);
         if (field == NULL || field->element_count == 0U || field->is_bit_field ||
             field->is_flexible_array ||
-            (field->is_array && depth + 1U != relocation->target_member_depth) ||
             (!field->is_array && field->element_count != 1U) ||
             !minic_data_layout_record_field_offset(
                 layout, program, record, relocation->target_member_indices[depth], &field_offset) ||

@@ -64,3 +64,17 @@ int read_static_object_addresses(void) {
            aggregate_pointer_sign_element_address.address != (void *)0 &&
            object_plus_one_address != (void *)0 && aggregate_array_nine.address != (void *)0;
 }
+
+struct ArrayMemberRelocationInner {
+    int next_id;
+    int payload;
+};
+
+struct ArrayMemberRelocationOuter {
+    int prefix;
+    struct ArrayMemberRelocationInner ids[2];
+};
+
+static struct ArrayMemberRelocationOuter array_member_relocation_target;
+static int *array_member_nested_relocation =
+    &array_member_relocation_target.ids[1].next_id;
