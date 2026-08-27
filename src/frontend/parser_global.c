@@ -3289,11 +3289,13 @@ static bool parse_static_record_array(MinicParser *parser,
                                       bool *has_section,
                                       size_t *explicit_alignment) {
     const MinicRecord *record;
+    MinicType nested_element_type;
     MinicType object_type;
     MinicGlobalObjectId object_id;
     MinicGlobalObjectId existing_id;
     size_t declared_count;
     bool inferred_bound;
+    bool multidimensional;
 
     if (parser == NULL || section_name == NULL || section_capacity == 0U ||
         section_name_length == NULL || has_section == NULL || explicit_alignment == NULL) {
@@ -3307,6 +3309,8 @@ static bool parse_static_record_array(MinicParser *parser,
 
     declared_count = 0U;
     inferred_bound = false;
+    multidimensional = false;
+    nested_element_type = element_type;
     if (!minic_parser_expect(parser, MINIC_TOKEN_LBRACKET, "expected '['")) {
         return false;
     }
@@ -3319,8 +3323,24 @@ static bool parse_static_record_array(MinicParser *parser,
         return false;
     }
     if (parser->current.kind == MINIC_TOKEN_LBRACKET) {
-        minic_parser_error(parser, "multi-dimensional static record arrays are not supported yet");
-        return false;
+        bool nested_is_array;
+
+        if (inferred_bound) {
+            minic_parser_error(
+                parser, "inferred multi-dimensional static record arrays are not supported yet");
+            return false;
+        }
+        nested_is_array = false;
+        if (!minic_parser_parse_array_declarator_suffix(
+                parser, element_type, false, &nested_element_type, &nested_is_array) ||
+            !nested_is_array) {
+            if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
+                minic_parser_error(parser,
+                                   "cannot build nested static record array declarator type");
+            }
+            return false;
+        }
+        multidimensional = true;
     }
     if (!minic_parser_parse_gnu_object_attribute_lists(parser,
                                                        section_name,
@@ -3336,6 +3356,11 @@ static bool parse_static_record_array(MinicParser *parser,
         const MinicGlobalObject *existing;
         const MinicArrayType *existing_array;
 
+        if (multidimensional) {
+            minic_parser_error(
+                parser, "multi-dimensional static record tentative definitions are not supported yet");
+            return false;
+        }
         if (existing_id == MINIC_GLOBAL_OBJECT_INVALID) {
             if ((inferred_bound && !minic_c0_program_add_incomplete_array_type(
                                        parser->program, element_type, &object_type)) ||
@@ -3411,6 +3436,11 @@ static bool parse_static_record_array(MinicParser *parser,
         MinicGlobalObject *existing;
         const MinicArrayType *existing_array;
 
+        if (multidimensional) {
+            minic_parser_error(
+                parser, "multi-dimensional static record redeclarations are not supported yet");
+            return false;
+        }
         existing = &parser->program->global_objects[existing_id];
         existing_array =
             minic_type_is_array(existing->type)
@@ -3429,8 +3459,10 @@ static bool parse_static_record_array(MinicParser *parser,
         object_id = existing_id;
         object_type = parser->program->global_objects[object_id].type;
     } else {
-        if (!minic_c0_program_add_array_type(
-                parser->program, element_type, declared_count, &object_type) ||
+        if (!minic_c0_program_add_array_type(parser->program,
+                                             multidimensional ? nested_element_type : element_type,
+                                             declared_count,
+                                             &object_type) ||
             !minic_c0_program_add_global_object(parser->program,
                                                 parser->source + name_span.begin.offset,
                                                 minic_parser_span_length(name_span),
@@ -3455,7 +3487,6 @@ static bool parse_static_record_array(MinicParser *parser,
     return minic_parser_expect(
         parser, MINIC_TOKEN_SEMICOLON, "expected ';' after static record array");
 }
-
 static bool parse_static_record(MinicParser *parser,
                                 MinicType type,
                                 MinicSourceSpan name_span,
