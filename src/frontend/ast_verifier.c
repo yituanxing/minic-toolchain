@@ -1050,24 +1050,15 @@ static bool incomplete_array_has_semantic_owner(const MinicC0Program *program,
     if (program == NULL) {
         return false;
     }
-    if (trace) {
-        fprintf(stderr, "VERIFY_STAGE expressions\n");
-    }
     for (index = 0U; index < program->expression_count; ++index) {
         if (type_owns_array_descriptor(program->expressions[index].type, array_type_id, false)) {
             return true;
         }
     }
-    if (trace) {
-        fprintf(stderr, "VERIFY_STAGE type_aliases\n");
-    }
     for (index = 0U; index < program->type_alias_count; ++index) {
         if (type_owns_array_descriptor(program->type_aliases[index].type, array_type_id, false)) {
             return true;
         }
-    }
-    if (trace) {
-        fprintf(stderr, "VERIFY_STAGE globals\n");
     }
     for (index = 0U; index < program->global_object_count; ++index) {
         const MinicGlobalObject *object;
@@ -1079,16 +1070,10 @@ static bool incomplete_array_has_semantic_owner(const MinicC0Program *program,
             return true;
         }
     }
-    if (trace) {
-        fprintf(stderr, "VERIFY_STAGE locals\n");
-    }
     for (index = 0U; index < program->local_count; ++index) {
         if (type_owns_array_descriptor(program->locals[index].type, array_type_id, true)) {
             return true;
         }
-    }
-    if (trace) {
-        fprintf(stderr, "VERIFY_STAGE records\n");
     }
     for (index = 0U; index < program->record_count; ++index) {
         const MinicRecord *record;
@@ -1100,9 +1085,6 @@ static bool incomplete_array_has_semantic_owner(const MinicC0Program *program,
                 return true;
             }
         }
-    }
-    if (trace) {
-        fprintf(stderr, "VERIFY_STAGE functions\n");
     }
     for (index = 0U; index < program->function_count; ++index) {
         const MinicFunction *function;
@@ -1118,9 +1100,6 @@ static bool incomplete_array_has_semantic_owner(const MinicC0Program *program,
                 return true;
             }
         }
-    }
-    if (trace) {
-        fprintf(stderr, "VERIFY_STAGE function_types\n");
     }
     for (index = 0U; index < program->function_type_count; ++index) {
         const MinicFunctionType *function_type;
@@ -1254,6 +1233,9 @@ bool minic_c0_program_verify_target(const MinicC0Program *program,
             return false;
         }
     }
+    if (trace) {
+        fprintf(stderr, "VERIFY_STAGE function_types\n");
+    }
     for (index = 0U; index < program->function_type_count; ++index) {
         const MinicFunctionType *function_type;
         size_t parameter_index;
@@ -1275,6 +1257,9 @@ bool minic_c0_program_verify_target(const MinicC0Program *program,
             }
         }
     }
+    if (trace) {
+        fprintf(stderr, "VERIFY_STAGE records\n");
+    }
     for (index = 0U; index < program->record_count; ++index) {
         const MinicRecord *record;
         size_t field_index;
@@ -1294,6 +1279,9 @@ bool minic_c0_program_verify_target(const MinicC0Program *program,
                 return false;
             }
         }
+    }
+    if (trace) {
+        fprintf(stderr, "VERIFY_STAGE locals\n");
     }
     for (index = 0U; index < program->local_count; ++index) {
         size_t explicit_alignment = program->locals[index].explicit_alignment;
@@ -1324,6 +1312,9 @@ bool minic_c0_program_verify_target(const MinicC0Program *program,
                 return false;
             }
         }
+    }
+    if (trace) {
+        fprintf(stderr, "VERIFY_STAGE functions\n");
     }
     for (index = 0U; index < program->function_count; ++index) {
         const MinicFunction *function;
@@ -1361,11 +1352,17 @@ bool minic_c0_program_verify_target(const MinicC0Program *program,
             }
         }
     }
+    if (trace) {
+        fprintf(stderr, "VERIFY_STAGE type_aliases\n");
+    }
     for (index = 0U; index < program->type_alias_count; ++index) {
         if (program->type_aliases[index].name == NULL ||
             !type_is_valid(program, target, program->type_aliases[index].type)) {
             return false;
         }
+    }
+    if (trace) {
+        fprintf(stderr, "VERIFY_STAGE globals\n");
     }
     for (index = 0U; index < program->global_object_count; ++index) {
         const MinicGlobalObject *object;
@@ -1572,6 +1569,9 @@ bool minic_c0_program_verify_target(const MinicC0Program *program,
         if (file_asm->text == NULL || strlen(file_asm->text) != file_asm->length) {
             return false;
         }
+    }
+    if (trace) {
+        fprintf(stderr, "VERIFY_STAGE expressions\n");
     }
     for (index = 0U; index < program->expression_count; ++index) {
         if (!verify_expression(program, index, form, target)) {
