@@ -1749,6 +1749,18 @@ parse_local_declarator(MinicParser *parser, MinicType base_type, bool is_registe
         } else if (!minic_parser_parse_fixed_array_bound(parser, &local.element_count)) {
             return false;
         }
+        if (parser->current.kind == MINIC_TOKEN_LBRACKET) {
+            MinicType nested_element_type;
+            bool has_nested_array;
+
+            if (!minic_parser_parse_array_declarator_suffix(
+                    parser, declared_type, false, &nested_element_type, &has_nested_array) ||
+                !has_nested_array) {
+                return false;
+            }
+            declared_type = nested_element_type;
+            local.type = declared_type;
+        }
         local.is_array = true;
         if (!parse_local_object_attributes(parser, &attributes)) {
             return false;
