@@ -1566,13 +1566,13 @@ static bool parse_static_scalar_array_transaction(MinicParser *parser,
     }
     extent = minic_array_initializer_plan_element_count(&plan);
     if (infer_bound) {
-        if (extent == 0U) {
-            minic_parser_error(parser, "cannot infer static array bound from an empty initializer");
-            goto done;
-        }
         object = minic_c0_program_global_object(parser->program, object_id);
         if (object == NULL || !minic_type_is_array(object->type) ||
-            !minic_c0_program_complete_array_type(parser->program, object->type, extent)) {
+            (extent == 0U
+                 ? !minic_c0_program_complete_zero_length_array_type(
+                       parser->program, object->type)
+                 : !minic_c0_program_complete_array_type(
+                       parser->program, object->type, extent))) {
             minic_parser_error(parser, "cannot complete inferred static array type");
             goto done;
         }
@@ -2039,10 +2039,6 @@ static bool parse_static_forward_array_initializer(MinicParser *parser,
         goto done;
     }
     extent = minic_array_initializer_plan_element_count(&plan);
-    if (infer_bound && extent == 0U) {
-        minic_parser_error(parser, "cannot infer static array bound from an empty initializer");
-        goto done;
-    }
     for (index = 0U; index < extent; ++index) {
         size_t owner;
 
@@ -2107,7 +2103,11 @@ static bool parse_static_array_constant(MinicParser *parser,
 
         object = minic_c0_program_global_object(parser->program, object_id);
         if (object == NULL || !minic_type_is_array(object->type) ||
-            !minic_c0_program_complete_array_type(parser->program, object->type, parsed_extent)) {
+            (parsed_extent == 0U
+                 ? !minic_c0_program_complete_zero_length_array_type(
+                       parser->program, object->type)
+                 : !minic_c0_program_complete_array_type(
+                       parser->program, object->type, parsed_extent))) {
             minic_parser_error(parser, "cannot complete inferred static aggregate array type");
             return false;
         }
