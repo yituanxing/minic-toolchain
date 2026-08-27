@@ -23,6 +23,13 @@ typedef struct MinicCoreLowerContext {
     size_t statement_block_count;
 } MinicCoreLowerContext;
 
+/* Core lowering consumes the selected target's read-only DataLayout.
+ * Never bypass TargetInfo through the process-wide default target: that would
+ * make the AST -> Core seam implicitly RV64-specific. */
+static const MinicDataLayout *core_data_layout(const MinicCoreLowerContext *context) {
+    return context == NULL ? NULL : minic_target_info_data_layout(context->target);
+}
+
 static MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
                                              MinicExpressionId expression_id,
                                              MinicCoreValueId *value_id);
@@ -134,7 +141,7 @@ static bool core_bit_field_storage_type(
     if (context == NULL || context->body == NULL || context->body->program == NULL ||
         context->target == NULL || storage_type == NULL || storage_width == NULL ||
         !minic_type_is_integer(value_type) ||
-        !minic_data_layout_type(minic_default_data_layout(),
+        !minic_data_layout_type(core_data_layout(context),
                                 context->body->program,
                                 value_type,
                                 &storage_size,
@@ -159,7 +166,7 @@ static bool core_bit_field_storage_type(
     candidates[3] = minic_type_unsigned_long();
     candidates[4] = minic_type_unsigned_long_long();
     for (candidate_index = 0U; candidate_index < 5U; ++candidate_index) {
-        if (minic_data_layout_type(minic_default_data_layout(),
+        if (minic_data_layout_type(core_data_layout(context),
                                    context->body->program,
                                    candidates[candidate_index],
                                    &candidate_size,
@@ -688,7 +695,7 @@ static MinicCoreLowerStatus lower_address(MinicCoreLowerContext *context,
             if (!minic_type_equal(array_info.element_type, expression->type) ||
                 !minic_type_pointer_to(array_info.element_type, &pointer_type) ||
                 !minic_c0_pointer_arithmetic_element_size(context->body->program,
-                                                          minic_default_data_layout(),
+                                                          core_data_layout(context),
                                                           pointer_type,
                                                           &element_size)) {
                 return MINIC_CORE_LOWER_UNSUPPORTED;
@@ -729,7 +736,7 @@ static MinicCoreLowerStatus lower_address(MinicCoreLowerContext *context,
                 !minic_type_pointee(base_value_type, &element_type) ||
                 !minic_type_equal(element_type, expression->type) ||
                 !minic_c0_pointer_arithmetic_element_size(context->body->program,
-                                                          minic_default_data_layout(),
+                                                          core_data_layout(context),
                                                           base_value_type,
                                                           &element_size)) {
                 return MINIC_CORE_LOWER_UNSUPPORTED;
@@ -2657,7 +2664,7 @@ static MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
                     context, value_type, &storage_type, &storage_width) ||
                 storage_width == 0U || storage_width > 64U ||
                 field->bit_width > storage_width ||
-                !minic_data_layout_record_field_layout(minic_default_data_layout(),
+                !minic_data_layout_record_field_layout(core_data_layout(context),
                                                        context->body->program,
                                                        record,
                                                        expression->value.member.field_index,
@@ -2961,7 +2968,7 @@ static MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
                 !core_scalar_expression_value_type(context->body, source, &index_type) ||
                 !minic_type_is_integer(index_type) ||
                 !minic_c0_pointer_arithmetic_element_size(context->body->program,
-                                                          minic_default_data_layout(),
+                                                          core_data_layout(context),
                                                           stored_type,
                                                           &element_size)) {
                 return MINIC_CORE_LOWER_UNSUPPORTED;
@@ -4786,7 +4793,7 @@ static MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
             minic_c0_pointer_difference_compatible(
                 context->body->program, left_type, right_type) &&
             minic_c0_pointer_arithmetic_element_size(context->body->program,
-                                                      minic_default_data_layout(),
+                                                      core_data_layout(context),
                                                       left_type,
                                                       &element_size) &&
             /* M131_ZERO_STRIDE_POINTER_DIFFERENCE_FAIL_CLOSED: unlike pointer
@@ -4932,7 +4939,7 @@ static MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
             !minic_type_unqualified(expression->type, &expression_value_type) ||
             !minic_type_equal(pointer_value_type, expression_value_type) ||
             !minic_c0_pointer_arithmetic_element_size(context->body->program,
-                                                      minic_default_data_layout(),
+                                                      core_data_layout(context),
                                                       pointer_value_type,
                                                       &element_size)) {
             return MINIC_CORE_LOWER_UNSUPPORTED;
@@ -5250,7 +5257,7 @@ static MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
                     context, bit_value_type, &bit_storage_type, &bit_storage_width) ||
                 bit_storage_width == 0U || bit_storage_width > 64U ||
                 bit_field->bit_width > bit_storage_width ||
-                !minic_data_layout_record_field_layout(minic_default_data_layout(),
+                !minic_data_layout_record_field_layout(core_data_layout(context),
                                                        context->body->program,
                                                        bit_record,
                                                        bit_target->value.member.field_index,
@@ -5919,7 +5926,7 @@ static MinicCoreLowerStatus lower_assignment_pair(MinicCoreLowerContext *context
                     context, value_type, &storage_type, &storage_width) ||
                 storage_width == 0U || storage_width > 64U ||
                 field->bit_width > storage_width ||
-                !minic_data_layout_record_field_layout(minic_default_data_layout(),
+                !minic_data_layout_record_field_layout(core_data_layout(context),
                                                        context->body->program,
                                                        record,
                                                        target->value.member.field_index,
@@ -6288,7 +6295,7 @@ static MinicCoreLowerStatus lower_integer_bit_field_update(
         !core_bit_field_storage_type(
             context, value_type, &storage_type, &storage_width) ||
         storage_width == 0U || storage_width > 64U || field->bit_width > storage_width ||
-        !minic_data_layout_record_field_layout(minic_default_data_layout(),
+        !minic_data_layout_record_field_layout(core_data_layout(context),
                                                context->body->program,
                                                record,
                                                operand->value.member.field_index,
@@ -6744,7 +6751,7 @@ static MinicCoreLowerStatus lower_scalar_update(MinicCoreLowerContext *context,
         size_t element_size;
 
         if (!minic_c0_pointer_arithmetic_element_size(
-                context->body->program, minic_default_data_layout(), stored_type, &element_size)) {
+                context->body->program, core_data_layout(context), stored_type, &element_size)) {
             return MINIC_CORE_LOWER_UNSUPPORTED;
         }
         (void)memset(&instruction, 0, sizeof(instruction));
