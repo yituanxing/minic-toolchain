@@ -1378,6 +1378,40 @@ static bool parse_runtime_record_designator_target(MinicParser *parser,
             return false;
         }
         current_id = member_id;
+        while (parser->current.kind == MINIC_TOKEN_LBRACKET) {
+            const MinicExpression *array_expression;
+            MinicArrayObjectInfo array_info;
+            MinicSourceSpan designator_span;
+            size_t first;
+            size_t last;
+
+            array_expression = minic_c0_program_expression(parser->program, current_id);
+            if (array_expression == NULL ||
+                !minic_c0_expression_array_object_info(
+                    parser->program, array_expression, &array_info) ||
+                array_info.is_incomplete || array_info.is_zero_length) {
+                minic_parser_error(parser,
+                                   "record designator subscript requires a fixed array member");
+                return false;
+            }
+            designator_span = parser->current.span;
+            if (!minic_parser_parse_array_designator_component(parser,
+                                                               array_info.element_count,
+                                                               false,
+                                                               &first,
+                                                               &last) ||
+                first != last) {
+                if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
+                    minic_parser_error(parser,
+                                       "record designator requires one array element");
+                }
+                return false;
+            }
+            if (!add_array_object_element_lvalue(
+                    parser, current_id, first, designator_span, &current_id)) {
+                return false;
+            }
+        }
     } while (parser->current.kind == MINIC_TOKEN_DOT);
     *target_id = current_id;
     return true;
