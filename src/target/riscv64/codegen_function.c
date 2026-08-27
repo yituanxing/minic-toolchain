@@ -818,6 +818,19 @@ static bool minic_riscv64_record_array_info(const MinicC0Program *program,
     return true;
 }
 
+static bool minic_riscv64_array_uses_recursive_initializer(
+    const MinicC0Program *program, MinicType type) {
+    const MinicArrayType *array_type;
+
+    if (program == NULL || !minic_type_is_array(type)) {
+        return false;
+    }
+    array_type = minic_c0_program_array_type(program, type.array_type_id);
+    return array_type != NULL &&
+           (minic_type_is_record(array_type->element_type) ||
+            minic_type_is_array(array_type->element_type));
+}
+
 static bool minic_riscv64_emit_recursive_array_values(FILE *file,
                                                       const MinicC0Program *program,
                                                       const MinicGlobalObject *object) {
@@ -931,7 +944,7 @@ static bool minic_riscv64_emit_global_object(FILE *file,
             (object->initializer_count == 0U && !zero_size_object_definition)) {
             return false;
         }
-    } else if (minic_riscv64_record_array_info(program, object->type, NULL, NULL) ||
+    } else if (minic_riscv64_array_uses_recursive_initializer(program, object->type) ||
                (minic_type_is_array(object->type) && object->relocation_count != 0U)) {
         if (object->initializer_count == 0U) {
             return false;
@@ -986,7 +999,7 @@ static bool minic_riscv64_emit_global_object(FILE *file,
         if (!minic_riscv64_emit_record_values(file, program, object)) {
             return false;
         }
-    } else if ((minic_riscv64_record_array_info(program, object->type, NULL, NULL) ||
+    } else if ((minic_riscv64_array_uses_recursive_initializer(program, object->type) ||
                 (minic_type_is_array(object->type) && object->relocation_count != 0U)) &&
                object->initializer_count != 0U) {
         if (!minic_riscv64_emit_recursive_array_values(file, program, object)) {
