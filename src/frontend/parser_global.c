@@ -882,6 +882,10 @@ bool minic_parser_parse_static_pointer_object_initializer(MinicParser *parser,
     return true;
 }
 
+static bool parse_static_zero_definition(MinicParser *parser,
+                                         MinicType object_type,
+                                         MinicSourceSpan name_span);
+
 static bool parse_static_scalar(MinicParser *parser, MinicType type, MinicSourceSpan name_span) {
     MinicGlobalObjectId object_id;
     bool braced;
@@ -936,7 +940,25 @@ static bool parse_static_scalar(MinicParser *parser, MinicType type, MinicSource
         if (!minic_parser_advance(parser)) {
             return false;
         }
-        return parse_static_scalar(parser, type, next_name_span);
+        if (parser->current.kind == MINIC_TOKEN_EQUAL) {
+            return parse_static_scalar(parser, type, next_name_span);
+        }
+        if (parser->current.kind == MINIC_TOKEN_SEMICOLON) {
+            return parse_static_zero_definition(parser, type, next_name_span);
+        }
+        if (parser->current.kind == MINIC_TOKEN_COMMA) {
+            return minic_parser_parse_static_zero_declaration_list_after_head(parser,
+                                                                               type,
+                                                                               type,
+                                                                               next_name_span,
+                                                                               NULL,
+                                                                               0U,
+                                                                               false,
+                                                                               0U);
+        }
+        minic_parser_error(parser,
+                           "expected '=', ',' or ';' after static scalar declarator");
+        return false;
     }
     return minic_parser_expect(parser, MINIC_TOKEN_SEMICOLON, "expected ';' after global object");
 }
