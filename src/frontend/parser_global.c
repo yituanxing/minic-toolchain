@@ -2629,26 +2629,45 @@ static bool overwrite_static_zero_record_constant(MinicParser *parser,
         size_t field_base_slot;
 
         if (parser->current.kind == MINIC_TOKEN_DOT) {
-            MinicRecordFieldPath field_path;
-            MinicSourceSpan designator_span;
+            MinicStaticRecordDesignator designator;
+            bool handled_union_zero;
 
-            if (!minic_parser_advance(parser) || parser->current.kind != MINIC_TOKEN_IDENTIFIER) {
-                minic_parser_error(parser, "expected member name after '.' in initializer");
+            (void)memset(&designator, 0, sizeof(designator));
+            if (!parse_static_record_designator_path(parser, record, &designator) ||
+                designator.depth != 1U || designator.has_array_index) {
+                if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
+                    minic_parser_error(
+                        parser,
+                        "backward aggregate initializer requires a direct unambiguous member");
+                }
                 return false;
             }
-            designator_span = parser->current.span;
-            if (!minic_parser_find_record_field_path(
-                    parser, record, designator_span, &field_path) ||
-                !field_path.found || field_path.ambiguous || field_path.depth != 1U) {
-                minic_parser_error(
-                    parser, "backward aggregate initializer requires a direct unambiguous member");
-                return false;
-            }
-            field_index = field_path.field_indices[0];
-            if (!minic_parser_advance(parser) ||
-                !minic_parser_expect(
-                    parser, MINIC_TOKEN_EQUAL, "expected '=' after static record designator")) {
-                return false;
+            field_index = designator.field_indices[0];
+            if (record->is_union && field_index != 0U) {
+                handled_union_zero = false;
+                if (!try_overwrite_static_zero_noncanonical_union_designator(parser,
+                                                                             object_id,
+                                                                             record,
+                                                                             &designator,
+                                                                             record_base_slot,
+                                                                             &handled_union_zero) ||
+                    !handled_union_zero) {
+                    if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
+                        minic_parser_error(
+                            parser, "cannot replace backward static union active member");
+                    }
+                    return false;
+                }
+                if (parser->current.kind == MINIC_TOKEN_COMMA &&
+                    !minic_parser_advance(parser)) {
+                    return false;
+                }
+                if (parser->current.kind != MINIC_TOKEN_RBRACE) {
+                    minic_parser_error(
+                        parser, "backward union initializer may initialize only one active member");
+                    return false;
+                }
+                return minic_parser_advance(parser);
             }
         }
         if (field_index >= field_limit) {
