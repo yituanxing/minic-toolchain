@@ -4531,7 +4531,7 @@ static bool parse_return(MinicParser *parser) {
             minic_parser_error(parser, "non-void function requires a return value");
             return false;
         }
-        if (!minic_parser_parse_expression(parser, &statement.expression, 0U)) {
+        if (!minic_parser_parse_full_expression(parser, &statement.expression)) {
             return false;
         }
         if (parser->current.kind == MINIC_TOKEN_EQUAL) {
