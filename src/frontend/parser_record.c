@@ -118,10 +118,6 @@ static bool parse_function_pointer_field_declarator(MinicParser *parser,
         !minic_parser_parse_parenthesized_function_declarator(parser, true, true, &declarator)) {
         return false;
     }
-    if (declarator.is_variadic) {
-        minic_parser_error(parser, "variadic function pointer fields are not supported yet");
-        return false;
-    }
     if (!minic_parser_build_function_declarator_type(
             parser, return_type, &declarator, field_type)) {
         minic_parser_error(parser, "cannot build function pointer field type");
