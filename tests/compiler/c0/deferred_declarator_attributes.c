@@ -42,3 +42,7 @@ void used_function_shape(void) {
 }
 
 void (*__attribute__((__section__(".init.fp-object"))) late_time_init_shape)(void);
+
+int parameter_attribute_before_pointer(void __attribute__((__unused__)) *data) {
+    return data != (void *)0;
+}

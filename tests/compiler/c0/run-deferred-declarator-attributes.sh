@@ -23,6 +23,7 @@ grep -F 'used_object_shape:' "$work/deferred_declarator_attributes.s" >/dev/null
 grep -F 'used_function_shape:' "$work/deferred_declarator_attributes.s" >/dev/null
 grep -F '.section .init.fp-object' "$work/deferred_declarator_attributes.s" >/dev/null
 grep -F 'late_time_init_shape:' "$work/deferred_declarator_attributes.s" >/dev/null
+grep -F 'parameter_attribute_before_pointer:' "$work/deferred_declarator_attributes.s" >/dev/null
 
 if "$minic" -S "$root/tests/compiler/c0/invalid_function_attribute_on_pointer_object.c" \
     -o "$work/invalid-object.s" >"$work/invalid-object.stdout" 2>"$work/invalid-object.stderr"; then
@@ -84,4 +85,4 @@ fi
 grep -F 'GNU attributes inside function pointer typedef declarators are not implemented yet' \
     "$work/invalid-fp-typedef-attr.stderr" >/dev/null
 
-printf '%s\n' 'PASS compiler/c0/deferred_declarator_attributes pre-pointer=generic post-pointer=generic interleaved-return-pointer=generic function-target=late object-target=late section=preserved noinline=parse-only noclone=parse-only+function-only+zero-arg used=parse-only+function-object+zero-arg fp-object-interleaved=collected+object-routed typedef-interleaved=fail-closed'
+printf '%s\n' 'PASS compiler/c0/deferred_declarator_attributes pre-pointer=generic post-pointer=generic interleaved-return-pointer=generic parameter-type-attr-before-pointer=generic function-target=late object-target=late section=preserved noinline=parse-only noclone=parse-only+function-only+zero-arg used=parse-only+function-object+zero-arg fp-object-interleaved=collected+object-routed typedef-interleaved=fail-closed'

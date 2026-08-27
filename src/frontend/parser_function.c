@@ -739,7 +739,8 @@ bool minic_parser_parse_parameter_list(MinicParser *parser,
         }
         if (!minic_parser_collect_gnu_attribute_lists(parser, &leading_attributes) ||
             !minic_parser_parse_type_name_preserving_incomplete(parser, &parameter_type) ||
-            !minic_parser_collect_gnu_attribute_lists(parser, &post_type_attributes)) {
+            !minic_parser_collect_gnu_attribute_lists(parser, &post_type_attributes) ||
+            !minic_parser_parse_pointer_declarator(parser, parameter_type, &parameter_type)) {
             return false;
         }
         (void)memset(&declarator_name_span, 0, sizeof(declarator_name_span));
