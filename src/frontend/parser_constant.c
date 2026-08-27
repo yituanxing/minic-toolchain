@@ -104,6 +104,9 @@ static bool parse_character_value(MinicParser *parser, int *value) {
     case 'f':
         *value = '\f';
         break;
+    case 'e':
+        *value = 27;
+        break;
     case 'n':
         *value = '\n';
         break;

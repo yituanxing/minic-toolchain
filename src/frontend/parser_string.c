@@ -30,6 +30,9 @@ static bool decode_simple_escape(char character, int *value) {
     case 'f':
         *value = '\f';
         return true;
+    case 'e':
+        *value = 27;
+        return true;
     case 'n':
         *value = '\n';
         return true;

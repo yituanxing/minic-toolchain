@@ -167,7 +167,9 @@ static MinicTokenKind minic_classify_identifier(const char *text, size_t length)
     if (length == 5U && memcmp(text, "const", 5U) == 0) {
         return MINIC_TOKEN_KW_CONST;
     }
-    if (length == 8U && memcmp(text, "volatile", 8U) == 0) {
+    if ((length == 8U && memcmp(text, "volatile", 8U) == 0) ||
+        (length == 12U && memcmp(text, "__volatile__", 12U) == 0) ||
+        (length == 10U && memcmp(text, "__volatile", 10U) == 0)) {
         return MINIC_TOKEN_KW_VOLATILE;
     }
     if (length == 7U && memcmp(text, "typedef", 7U) == 0) {
