@@ -2483,6 +2483,50 @@ static bool parse_builtin_va_end(MinicParser *parser, MinicExpressionId *express
     return minic_parser_add_expression(parser, &expression, expression_id);
 }
 
+static bool parse_builtin_va_arg(MinicParser *parser, MinicExpressionId *expression_id) {
+    MinicExpression expression;
+    MinicExpressionId target_id;
+    MinicSourcePosition begin;
+    MinicSourcePosition end;
+    MinicSourceSpan target_span;
+    MinicType value_type;
+
+    if (parser == NULL || expression_id == NULL) {
+        return false;
+    }
+    begin = parser->current.span.begin;
+    if (!minic_parser_advance(parser) ||
+        !minic_parser_expect(parser, MINIC_TOKEN_LPAREN, "expected '(' after __builtin_va_arg") ||
+        !parse_builtin_va_list_target(parser, &target_id, &target_span) ||
+        !minic_parser_expect(parser, MINIC_TOKEN_COMMA, "expected ',' in __builtin_va_arg") ||
+        !minic_parser_parse_type_name(parser, &value_type)) {
+        return false;
+    }
+    (void)target_span;
+    if ((!minic_type_is_integer(value_type) && !minic_type_is_pointer(value_type) &&
+         !minic_type_is_double(value_type)) || minic_type_is_bool_integer(value_type)) {
+        minic_parser_error(parser, "__builtin_va_arg currently requires an integer, pointer, or double type");
+        return false;
+    }
+    if (parser->current.kind != MINIC_TOKEN_RPAREN) {
+        minic_parser_error(parser, "expected ')' after __builtin_va_arg");
+        return false;
+    }
+    end = parser->current.span.end;
+    if (!minic_parser_advance(parser)) {
+        return false;
+    }
+
+    (void)memset(&expression, 0, sizeof(expression));
+    expression.kind = MINIC_EXPRESSION_BUILTIN_VA_ARG;
+    expression.span.begin = begin;
+    expression.span.end = end;
+    expression.type = value_type;
+    expression.value_category = MINIC_VALUE_RVALUE;
+    expression.value.unary.operand = target_id;
+    return minic_parser_add_expression(parser, &expression, expression_id);
+}
+
 static bool parse_primary(MinicParser *parser, MinicExpressionId *expression_id, bool decay_array) {
     MinicExpression expression;
     MinicExpressionId primary_id;
@@ -2507,6 +2551,13 @@ static bool parse_primary(MinicParser *parser, MinicExpressionId *expression_id,
     }
     if (generic_token_text_equals(parser, "__builtin_va_end")) {
         if (!parse_builtin_va_end(parser, &primary_id)) {
+            return false;
+        }
+        return finish_value_expression(parser, primary_id, decay_array, expression_id);
+    }
+    if (generic_token_text_equals(parser, "__builtin_va_arg")) {
+        if (!parse_builtin_va_arg(parser, &primary_id) ||
+            !minic_parser_parse_postfix(parser, primary_id, &primary_id)) {
             return false;
         }
         return finish_value_expression(parser, primary_id, decay_array, expression_id);

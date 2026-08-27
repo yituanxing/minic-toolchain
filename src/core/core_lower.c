@@ -4194,6 +4194,113 @@ MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
                    ? MINIC_CORE_LOWER_OK
                    : MINIC_CORE_LOWER_ERROR;
     }
+    /* GNU va_arg is a stateful cursor read.  The frontend keeps va_list as a
+       modifiable pointer lvalue; Core performs the target-neutral load, typed
+       dereference, one ABI-slot cursor advance, and writeback.  RV64 owns the
+       concrete 8-byte variadic slot width. */
+    if (expression->kind == MINIC_EXPRESSION_BUILTIN_VA_ARG) {
+        const MinicExpression *target;
+        MinicCoreInstruction operation;
+        MinicCoreLowerStatus status;
+        MinicCoreValueId list_address;
+        MinicCoreValueId cursor_value;
+        MinicCoreValueId value_address;
+        MinicCoreValueId argument_value;
+        MinicCoreValueId one;
+        MinicCoreValueId next_cursor;
+        MinicType cursor_type;
+        MinicType value_pointer_type;
+        size_t value_size;
+        size_t value_alignment;
+
+        target = minic_c0_program_expression(
+            context->body->program, expression->value.unary.operand);
+        if (target == NULL || target->value_category != MINIC_VALUE_LVALUE ||
+            !minic_type_is_pointer(target->type) || minic_type_is_const(target->type) ||
+            !minic_type_unqualified(target->type, &cursor_type) ||
+            !minic_type_is_pointer(cursor_type) ||
+            (!minic_type_is_integer(expression->type) &&
+             !minic_type_is_pointer(expression->type) &&
+             !minic_type_is_double(expression->type)) ||
+            !minic_data_layout_type(core_data_layout(context),
+                                    context->body->program,
+                                    expression->type,
+                                    &value_size,
+                                    &value_alignment) ||
+            value_size == 0U || value_size > 8U || value_alignment > 8U ||
+            !minic_type_pointer_to(expression->type, &value_pointer_type)) {
+            return MINIC_CORE_LOWER_UNSUPPORTED;
+        }
+        status = lower_address(context, expression->value.unary.operand, &list_address);
+        if (status != MINIC_CORE_LOWER_OK) {
+            return status;
+        }
+        (void)memset(&operation, 0, sizeof(operation));
+        operation.kind = MINIC_CORE_INSTRUCTION_LOAD;
+        operation.span = expression->span;
+        operation.type = cursor_type;
+        operation.result = MINIC_CORE_VALUE_INVALID;
+        operation.value.load.address = list_address;
+        operation.value.load.is_volatile = minic_type_is_volatile(target->type);
+        if (!minic_core_function_append_value_instruction(
+                context->function, context->block_id, &operation, &cursor_value)) {
+            return MINIC_CORE_LOWER_ERROR;
+        }
+        status = append_scalar_bitcast(
+            context, expression->span, value_pointer_type, cursor_value, &value_address);
+        if (status != MINIC_CORE_LOWER_OK) {
+            return status;
+        }
+        (void)memset(&operation, 0, sizeof(operation));
+        operation.kind = MINIC_CORE_INSTRUCTION_LOAD;
+        operation.span = expression->span;
+        operation.type = expression->type;
+        operation.result = MINIC_CORE_VALUE_INVALID;
+        operation.value.load.address = value_address;
+        operation.value.load.is_volatile = false;
+        if (!minic_core_function_append_value_instruction(
+                context->function, context->block_id, &operation, &argument_value)) {
+            return MINIC_CORE_LOWER_ERROR;
+        }
+        (void)memset(&operation, 0, sizeof(operation));
+        operation.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
+        operation.span = expression->span;
+        operation.type = minic_type_int();
+        operation.result = MINIC_CORE_VALUE_INVALID;
+        operation.value.integer_value = 1;
+        if (!minic_core_function_append_value_instruction(
+                context->function, context->block_id, &operation, &one)) {
+            return MINIC_CORE_LOWER_ERROR;
+        }
+        (void)memset(&operation, 0, sizeof(operation));
+        operation.kind = MINIC_CORE_INSTRUCTION_POINTER_OFFSET;
+        operation.span = expression->span;
+        operation.type = cursor_type;
+        operation.result = MINIC_CORE_VALUE_INVALID;
+        operation.value.pointer_offset.base = cursor_value;
+        operation.value.pointer_offset.index = one;
+        operation.value.pointer_offset.element_size = 8U;
+        operation.value.pointer_offset.subtract = false;
+        if (!minic_core_function_append_value_instruction(
+                context->function, context->block_id, &operation, &next_cursor)) {
+            return MINIC_CORE_LOWER_ERROR;
+        }
+        (void)memset(&operation, 0, sizeof(operation));
+        operation.kind = MINIC_CORE_INSTRUCTION_STORE;
+        operation.span = expression->span;
+        operation.type = minic_type_void();
+        operation.result = MINIC_CORE_VALUE_INVALID;
+        operation.value.store.address = list_address;
+        operation.value.store.stored_value = next_cursor;
+        operation.value.store.is_volatile = minic_type_is_volatile(target->type);
+        if (!minic_core_function_append_effect_instruction(
+                context->function, context->block_id, &operation)) {
+            return MINIC_CORE_LOWER_ERROR;
+        }
+        *value_id = argument_value;
+        return MINIC_CORE_LOWER_OK;
+    }
+
     /* M79_CALL_FRAME_RETURN_ADDRESS: keep the semantic builtin in Core rather
        than lowering it to a target register in the frontend. The first seam
        is GNU __builtin_return_address(0); deeper levels and frame-address

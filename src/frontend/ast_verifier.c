@@ -698,6 +698,14 @@ static bool verify_expression(const MinicC0Program *program,
                minic_type_is_pointer(operand->type) && !minic_type_is_const(operand->type) &&
                expression->value_category == MINIC_VALUE_RVALUE &&
                minic_type_is_void(expression->type);
+    case MINIC_EXPRESSION_BUILTIN_VA_ARG:
+        operand = expression_before(program, expression->value.unary.operand, expression_index);
+        return operand != NULL && operand->value_category == MINIC_VALUE_LVALUE &&
+               minic_type_is_pointer(operand->type) && !minic_type_is_const(operand->type) &&
+               expression->value_category == MINIC_VALUE_RVALUE &&
+               (minic_type_is_integer(expression->type) ||
+                minic_type_is_pointer(expression->type) ||
+                minic_type_is_double(expression->type));
     case MINIC_EXPRESSION_BUILTIN_VA_COPY:
         left = expression_before(program, expression->value.binary.left, expression_index);
         right = expression_before(program, expression->value.binary.right, expression_index);
