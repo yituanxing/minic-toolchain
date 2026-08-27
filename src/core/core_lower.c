@@ -1697,6 +1697,7 @@ static MinicCoreLowerStatus lower_record_copy_statement(MinicCoreLowerContext *c
     MinicType target_type;
     bool direct_record_call;
     bool record_assignment_value;
+    bool record_conditional_value;
 
     if (context == NULL || context->body == NULL || context->body->program == NULL ||
         context->function == NULL || statement == NULL ||
@@ -1711,6 +1712,8 @@ static MinicCoreLowerStatus lower_record_copy_statement(MinicCoreLowerContext *c
         source->value.call.function_id != MINIC_FUNCTION_INVALID;
     record_assignment_value =
         source != NULL && source->kind == MINIC_EXPRESSION_ASSIGNMENT;
+    record_conditional_value =
+        source != NULL && source->kind == MINIC_EXPRESSION_CONDITIONAL;
     if (target == NULL || source == NULL || target->value_category != MINIC_VALUE_LVALUE ||
         !minic_type_is_record(target->type) || !minic_type_is_record(source->type) ||
         target->type.record_id != source->type.record_id ||
@@ -1718,7 +1721,7 @@ static MinicCoreLowerStatus lower_record_copy_statement(MinicCoreLowerContext *c
         !minic_type_unqualified(source->type, &source_type) ||
         !minic_type_equal(target_type, source_type) || !minic_type_is_record(target_type) ||
         (statement->kind == MINIC_STATEMENT_RECORD_COPY && minic_type_is_const(target->type)) ||
-        (!direct_record_call && !record_assignment_value &&
+        (!direct_record_call && !record_assignment_value && !record_conditional_value &&
          (!minic_c0_record_value_is_copy_source(context->body->program, statement->expression) ||
           !minic_c0_record_value_is_address_backed(
               context->body->program, statement->expression)))) {
@@ -1750,6 +1753,18 @@ static MinicCoreLowerStatus lower_record_copy_statement(MinicCoreLowerContext *c
         if (!minic_core_function_append_value_instruction(
                 context->function, context->block_id, &instruction, &source_address)) {
             return MINIC_CORE_LOWER_ERROR;
+        }
+    } else if (record_conditional_value) {
+        /* M175E_RECORD_COPY_CONDITIONAL_SOURCE: conditional record rvalues are
+           materialized aggregate producers, not pre-existing address-backed
+           objects. Route them through the same owner already used by by-value
+           record arguments so branch qualifiers are normalized before the
+           destination copy. Other legacy record-copy sources keep their
+           existing fail-closed copy_source/address_backed gate. */
+        status = lower_record_materialized_address(
+            context, statement->expression, &source_address);
+        if (status != MINIC_CORE_LOWER_OK) {
+            return status;
         }
     } else {
         status = lower_record_value_address(context, statement->expression, &source_address);
