@@ -599,6 +599,41 @@ static bool parse_function_pointer_parameter_declarator(MinicParser *parser,
     return true;
 }
 
+static bool parameter_starts_parenthesized_pointer_to_array(const MinicParser *parser) {
+    MinicParser probe;
+    size_t pointer_depth;
+
+    if (parser == NULL || parser->current.kind != MINIC_TOKEN_LPAREN) {
+        return false;
+    }
+    probe = *parser;
+    if (!minic_parser_advance(&probe)) {
+        return false;
+    }
+    pointer_depth = 0U;
+    while (probe.current.kind == MINIC_TOKEN_STAR) {
+        pointer_depth += 1U;
+        if (!minic_parser_advance(&probe)) {
+            return false;
+        }
+        while (probe.current.kind == MINIC_TOKEN_KW_CONST ||
+               probe.current.kind == MINIC_TOKEN_KW_VOLATILE ||
+               function_identifier_is(&probe, "restrict") ||
+               function_identifier_is(&probe, "__restrict") ||
+               function_identifier_is(&probe, "__restrict__")) {
+            if (!minic_parser_advance(&probe)) {
+                return false;
+            }
+        }
+    }
+    if (pointer_depth == 0U || probe.current.kind != MINIC_TOKEN_IDENTIFIER ||
+        !minic_parser_advance(&probe) || probe.current.kind != MINIC_TOKEN_RPAREN ||
+        !minic_parser_advance(&probe)) {
+        return false;
+    }
+    return probe.current.kind == MINIC_TOKEN_LBRACKET;
+}
+
 static bool adjust_array_parameter_type(MinicParser *parser, MinicType *parameter_type) {
     const MinicArrayType *outer_array;
     MinicType adjusted_type;
@@ -730,6 +765,7 @@ bool minic_parser_parse_parameter_list(MinicParser *parser,
         MinicParsedAttributeList post_type_attributes;
         bool declarator_has_name;
         bool is_function_pointer_parameter;
+        bool is_pointer_to_array_parameter;
 
         leading_attributes.count = 0U;
         post_type_attributes.count = 0U;
@@ -752,17 +788,27 @@ bool minic_parser_parse_parameter_list(MinicParser *parser,
         }
         (void)memset(&declarator_name_span, 0, sizeof(declarator_name_span));
         declarator_has_name = false;
-        is_function_pointer_parameter = parser->current.kind == MINIC_TOKEN_LPAREN;
-        if (is_function_pointer_parameter &&
-            !parse_function_pointer_parameter_declarator(parser,
-                                                         parameter_type,
-                                                         &declarator_name_span,
-                                                         &declarator_has_name,
-                                                         &parameter_type,
-                                                         require_names)) {
+        is_pointer_to_array_parameter =
+            parameter_starts_parenthesized_pointer_to_array(parser);
+        is_function_pointer_parameter =
+            parser->current.kind == MINIC_TOKEN_LPAREN && !is_pointer_to_array_parameter;
+        if (is_pointer_to_array_parameter) {
+            if (!minic_parser_parse_parenthesized_pointer_to_array_declarator(
+                    parser, parameter_type, &declarator_name_span, &parameter_type)) {
+                return false;
+            }
+            declarator_has_name = true;
+        } else if (is_function_pointer_parameter &&
+                   !parse_function_pointer_parameter_declarator(parser,
+                                                                parameter_type,
+                                                                &declarator_name_span,
+                                                                &declarator_has_name,
+                                                                &parameter_type,
+                                                                require_names)) {
             return false;
         }
-        if (!is_function_pointer_parameter && minic_type_is_void(parameter_type)) {
+        if (!is_function_pointer_parameter && !is_pointer_to_array_parameter &&
+            minic_type_is_void(parameter_type)) {
             if (*parameter_count == 0U && parser->current.kind == MINIC_TOKEN_RPAREN) {
                 return true;
             }
@@ -770,7 +816,7 @@ bool minic_parser_parse_parameter_list(MinicParser *parser,
             return false;
         }
 
-        if (is_function_pointer_parameter) {
+        if (is_function_pointer_parameter || is_pointer_to_array_parameter) {
             if (declarator_has_name && parameter_name_spans != NULL) {
                 parameter_name_spans[*parameter_count] = declarator_name_span;
             }
@@ -812,7 +858,7 @@ bool minic_parser_parse_parameter_list(MinicParser *parser,
             return false;
         }
 
-        if (!is_function_pointer_parameter &&
+        if (!is_function_pointer_parameter && !is_pointer_to_array_parameter &&
             !adjust_array_parameter_type(parser, &parameter_type)) {
             return false;
         }

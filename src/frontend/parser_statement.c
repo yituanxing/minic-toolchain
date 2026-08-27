@@ -638,6 +638,10 @@ done:
     return success;
 }
 
+static bool parse_fixed_runtime_array_initializer(MinicParser *parser,
+                                                  MinicExpressionId base_id,
+                                                  size_t element_count);
+
 static bool parse_fixed_runtime_nested_array_initializer(
     MinicParser *parser, MinicExpressionId base_id, size_t element_count) {
     const MinicExpression *base;
