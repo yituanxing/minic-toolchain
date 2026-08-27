@@ -2612,13 +2612,12 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
         size_t parameter_index;
 
         for (parameter_index = 0U; parameter_index < parameter_count; ++parameter_index) {
+            (void)memset(&parameter_local, 0, sizeof(parameter_local));
             parameter_local.name_span = parameter_name_spans[parameter_index];
             parameter_local.type = parameter_types[parameter_index];
             parameter_local.element_count = 1U;
+            parameter_local.explicit_alignment = 0U;
             parameter_local.is_array = false;
-            /* Function parameters are ordinary automatic objects unless their
-               declaration explicitly carries storage metadata. Do not persist
-               an indeterminate stack byte into the semantic local. */
             parameter_local.is_register_storage = false;
             if (minic_parser_find_local_in_current_scope(parser, parameter_local.name_span) !=
                 MINIC_LOCAL_INVALID) {
