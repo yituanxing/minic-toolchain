@@ -1398,7 +1398,50 @@ materialize_static_pointer_array_slot(MinicParser *parser,
                              initializer->relocation_target.member_depth,
                              initializer->relocation_target.byte_addend);
     }
-    return recorded;
+    if (!recorded) {
+        MinicType slot_type;
+
+        if (!minic_c0_global_relocation_slot_type(parser->program,
+                                                  &parser->program->global_objects[object_id],
+                                                  MINIC_GLOBAL_RELOCATION_LOCATION_AGGREGATE_SCALAR,
+                                                  slot_index,
+                                                  &slot_type)) {
+            minic_parser_error(parser, "static pointer array relocation slot type is unavailable");
+            return false;
+        }
+        if (initializer->relocation_is_function &&
+            !minic_c0_global_relocation_function_target_compatible(
+                parser->program,
+                slot_type,
+                initializer->function_id,
+                initializer->has_explicit_pointer_cast)) {
+            minic_parser_error(parser, "static pointer array function target type mismatch");
+            return false;
+        }
+        if (!initializer->relocation_is_label && !initializer->relocation_is_function) {
+            MinicGlobalRelocation probe;
+            size_t depth;
+
+            (void)memset(&probe, 0, sizeof(probe));
+            probe.target_kind = MINIC_GLOBAL_RELOCATION_OBJECT;
+            probe.target_id = initializer->relocation_target.object_id;
+            probe.target_member_depth = initializer->relocation_target.member_depth;
+            probe.target_byte_addend = initializer->relocation_target.byte_addend;
+            probe.has_explicit_pointer_cast = initializer->has_explicit_pointer_cast;
+            for (depth = 0U; depth < probe.target_member_depth; ++depth) {
+                probe.target_member_indices[depth] =
+                    initializer->relocation_target.member_indices[depth];
+            }
+            if (!minic_c0_global_relocation_object_target_compatible(
+                    parser->program, &probe, slot_type)) {
+                minic_parser_error(parser, "static pointer array object target type mismatch");
+                return false;
+            }
+        }
+        minic_parser_error(parser, "static pointer array relocation commit rejected");
+        return false;
+    }
+    return true;
 }
 
 static bool materialize_static_array_slots(MinicParser *parser,
@@ -1421,7 +1464,9 @@ static bool materialize_static_array_slots(MinicParser *parser,
             }
         } else if (!materialize_static_pointer_array_slot(
                        parser, object_id, index, &slots[index].pointer_initializer)) {
-            minic_parser_error(parser, "cannot materialize static pointer array slot");
+            if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
+                minic_parser_error(parser, "cannot materialize static pointer array slot");
+            }
             return false;
         }
     }
