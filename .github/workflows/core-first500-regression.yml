@@ -112,8 +112,8 @@ jobs:
         run: |
           set -Eeuo pipefail
           git diff --exit-code
-          grep -Fq 'M175B_SCALAR_DOUBLE_BRIDGE' src/core/core_lower.c
-          grep -Fq 'M175B_SCALAR_RETURN_OWNER' src/core/core_lower.c
+          git grep -Fq 'M175B_SCALAR_DOUBLE_BRIDGE' -- src/core
+          git grep -Fq 'M175B_SCALAR_RETURN_OWNER' -- src/core
           grep -Fq 'minic_riscv64_write_c0_program_with_core_functions' src/target/riscv64/codegen_function.c
           ! git grep -n 'minic_riscv64_write_c0_program(' -- src
           ! git grep -n 'minic_riscv64_emit_function(' -- src
