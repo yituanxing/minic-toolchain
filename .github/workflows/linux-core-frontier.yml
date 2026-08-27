@@ -13,22 +13,20 @@ jobs:
   prepare-sample16-corpus:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
-    env:
-      DEBIAN_FRONTEND: noninteractive
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.sha }}
           fetch-depth: 0
 
-      - name: Restore frozen sample16 corpus
+      - name: Restore active blocker sample16
         id: sample-cache
         uses: actions/cache/restore@v4
         with:
           path: build/linux-new500-sample16-corpus
-          key: linux-new500-sample16-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-even16
+          key: linux-new500-sample16-corpus-v2-active-582-591-602-613-700-742-748-749-769-829-887-899-960-963-965-990
 
-      - name: Validate cached sample16 corpus
+      - name: Validate cached active sample16
         if: steps.sample-cache.outputs.cache-hit == 'true'
         shell: bash
         run: |
@@ -36,78 +34,70 @@ jobs:
           manifest=build/linux-new500-sample16-corpus/selected-tus.txt
           test -s "$manifest"
           test "$(grep -cve '^[[:space:]]*$' "$manifest")" -eq 16
-          echo 'LINUX_NEW500_SAMPLE16_CORPUS cache=hit selected=16'
+          echo 'LINUX_NEW500_SAMPLE16_CORPUS cache=hit selected=16 policy=active-blockers-v2'
 
-      - name: Fetch exact Linux 6.6.143 stable source
+      - name: Restore frozen new500 corpus for sample refresh
+        if: steps.sample-cache.outputs.cache-hit != 'true'
+        id: new500-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-new500-corpus
+          key: linux-new500-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-indices-500-999
+
+      - name: Extract active blocker sample16 from frozen corpus
         if: steps.sample-cache.outputs.cache-hit != 'true'
         shell: bash
         run: |
           set -Eeuo pipefail
-          echo 'PIPELINE_PROGRESS phase=linux-source [....................] 0%'
-          rm -rf build/linux-source
-          git init -q build/linux-source
-          git -C build/linux-source remote add origin https://github.com/gregkh/linux.git
-          git -C build/linux-source fetch --depth=1 --no-tags --progress origin d1cfde2d5d15be14123bdd1689162bd27f995a90
-          git -C build/linux-source checkout -q --detach FETCH_HEAD
-          test "$(git -C build/linux-source rev-parse HEAD)" = d1cfde2d5d15be14123bdd1689162bd27f995a90
-          echo 'PIPELINE_PROGRESS phase=linux-source [####################] 100%'
-
-      - name: Install sample materialization dependencies
-        if: steps.sample-cache.outputs.cache-hit != 'true'
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 update
-          sudo apt-get             -o Acquire::Retries=3             -o Acquire::http::Timeout=30             install -y --no-install-recommends               gcc-riscv64-linux-gnu libc6-dev-riscv64-cross               flex bison bc libelf-dev libssl-dev
-          command -v riscv64-linux-gnu-gcc
-
-      - name: Materialize sample16 independently
-        if: steps.sample-cache.outputs.cache-hit != 'true'
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          builder="$GITHUB_WORKSPACE/build/linux-new500-sample16-builder"
-          corpus="$GITHUB_WORKSPACE/build/linux-new500-sample16-corpus"
-          LINUX_BATCH_MATERIALIZE_ONLY=1           BUILD_DIR="$builder"           LINUX_SOURCE_TREE="$GITHUB_WORKSPACE/build/linux-source"           CROSS_COMPILE=riscv64-linux-gnu-           LINUX_BATCH_SELECTION="500,533,566,599,633,666,699,732,766,799,832,865,899,932,965,999"           LINUX_BATCH_JOBS=4             sh tests/external/linux/batch_probe.sh
-
+          test "${{ steps.new500-cache.outputs.cache-hit }}" = true
           python3 - <<'PY'
           from pathlib import Path
           import shutil
 
-          expected = [500, 533, 566, 599, 633, 666, 699, 732,
-                      766, 799, 832, 865, 899, 932, 965, 999]
-          builder = Path("build/linux-new500-sample16-builder")
-          corpus = Path("build/linux-new500-sample16-corpus")
-          selected = builder / "selected-tus.txt"
-          rows = [line for line in selected.read_text().splitlines() if line.strip()]
-          indices = [int(line.split("\t", 1)[0]) for line in rows]
-          if indices != expected:
-              raise SystemExit(f"unexpected sample16 indices: {indices}")
+          expected = [582, 591, 602, 613, 700, 742, 748, 749,
+                      769, 829, 887, 899, 960, 963, 965, 990]
+          full = Path("build/linux-new500-corpus")
+          sample = Path("build/linux-new500-sample16-corpus")
+          rows = [line for line in (full / "selected-tus.txt").read_text().splitlines()
+                  if line.strip()]
+          by_index = {int(line.split("\t", 1)[0]): line for line in rows}
+          missing = [index for index in expected if index not in by_index]
+          if missing:
+              raise SystemExit(f"active sample indices absent from frozen corpus: {missing}")
 
-          shutil.rmtree(corpus, ignore_errors=True)
-          inputs = corpus / "kbuild"
-          inputs.mkdir(parents=True)
-          shutil.copy2(selected, corpus / "selected-tus.txt")
-          manifest = builder / "tu-manifest.txt"
-          if manifest.is_file():
-              shutil.copy2(manifest, corpus / "tu-manifest.txt")
-          for row in rows:
+          shutil.rmtree(sample, ignore_errors=True)
+          (sample / "kbuild").mkdir(parents=True)
+          selected_rows = [by_index[index] for index in expected]
+          (sample / "selected-tus.txt").write_text("\n".join(selected_rows) + "\n")
+          total_bytes = 0
+          for row in selected_rows:
               _, _, rel_i, _ = row.split("\t", 3)
-              source = builder / "kbuild" / rel_i
+              source = full / "kbuild" / rel_i
               if not source.is_file() or source.stat().st_size == 0:
-                  raise SystemExit(f"missing sample input: {source}")
-              target = inputs / rel_i
+                  raise SystemExit(f"missing frozen input: {source}")
+              target = sample / "kbuild" / rel_i
               target.parent.mkdir(parents=True, exist_ok=True)
               shutil.copy2(source, target)
-          print("LINUX_NEW500_SAMPLE16_CORPUS cache=fill selected=16")
+              total_bytes += target.stat().st_size
+
+          (sample / "sample-info.txt").write_text(
+              "policy=active-blockers-v2\n"
+              f"indices={','.join(map(str, expected))}\n"
+              f"selected={len(expected)}\nbytes={total_bytes}\n"
+          )
+          print(
+              "LINUX_NEW500_SAMPLE16_CORPUS "
+              f"cache=fill selected={len(expected)} bytes={total_bytes} "
+              f"indices={','.join(map(str, expected))}"
+          )
           PY
 
-      - name: Save frozen sample16 corpus
+      - name: Save active blocker sample16
         if: steps.sample-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           path: build/linux-new500-sample16-corpus
-          key: linux-new500-sample16-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-even16
+          key: linux-new500-sample16-corpus-v2-active-582-591-602-613-700-742-748-749-769-829-887-899-960-963-965-990
 
 
   sample16:
@@ -128,7 +118,7 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: build/linux-new500-sample16-corpus
-          key: linux-new500-sample16-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-even16
+          key: linux-new500-sample16-corpus-v2-active-582-591-602-613-700-742-748-749-769-829-887-899-960-963-965-990
 
       - name: Require frozen sample16 corpus
         run: |
