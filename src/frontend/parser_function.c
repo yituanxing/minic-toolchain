@@ -2338,11 +2338,14 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
         }
         object_id = minic_parser_find_global_object_entity(parser, name_span);
         if (object_id == MINIC_GLOBAL_OBJECT_INVALID ||
-            (has_section && !minic_c0_global_object_set_section(
-                                parser->program, object_id, section_name, section_name_length)) ||
-            (object_explicit_alignment != 0U &&
-             !minic_c0_global_object_set_explicit_alignment(
-                 parser->program, object_id, object_explicit_alignment))) {
+            !apply_external_object_metadata(parser,
+                                            object_id,
+                                            section_name,
+                                            section_name_length,
+                                            has_section,
+                                            object_explicit_alignment,
+                                            MINIC_SYMBOL_VISIBILITY_DEFAULT,
+                                            false)) {
             minic_parser_error(parser, "cannot persist static object metadata");
             return false;
         }
