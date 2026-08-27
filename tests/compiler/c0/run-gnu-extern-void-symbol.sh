@@ -29,8 +29,11 @@ expect_failure() {
 
 preprocess gnu_extern_void_symbol
 "$minic" -S "$work/gnu_extern_void_symbol.i" -o "$work/gnu_extern_void_symbol.s"
-grep -F "  la a0, __nosave_begin" "$work/gnu_extern_void_symbol.s" >/dev/null
-grep -F "  la a0, __nosave_end" "$work/gnu_extern_void_symbol.s" >/dev/null
+# Core GLOBAL_ADDRESS materializes symbol addresses in a backend-owned
+# temporary before value transport to the ABI boundary. The symbol identity is
+# semantic; the temporary register is not.
+grep -E '^[[:space:]]+la[[:space:]]+[^,]+,[[:space:]]*__nosave_begin$'     "$work/gnu_extern_void_symbol.s" >/dev/null
+grep -E '^[[:space:]]+la[[:space:]]+[^,]+,[[:space:]]*__nosave_end$'     "$work/gnu_extern_void_symbol.s" >/dev/null
 if grep -F ".type __nosave_begin, @object" "$work/gnu_extern_void_symbol.s" >/dev/null || \
    grep -F ".type __nosave_end, @object" "$work/gnu_extern_void_symbol.s" >/dev/null || \
    grep -F "__nosave_begin:" "$work/gnu_extern_void_symbol.s" >/dev/null || \
@@ -40,7 +43,7 @@ if grep -F ".type __nosave_begin, @object" "$work/gnu_extern_void_symbol.s" >/de
 fi
 preprocess gnu_extern_void_sizeof
 "$minic" -S "$work/gnu_extern_void_sizeof.i" -o "$work/gnu_extern_void_sizeof.s"
-grep -F "  li a0, 1" "$work/gnu_extern_void_sizeof.s" >/dev/null
+grep -E '^[[:space:]]+li[[:space:]]+[^,]+,[[:space:]]*1$'     "$work/gnu_extern_void_sizeof.s" >/dev/null
 expect_failure invalid_void_object_definition
 expect_failure invalid_extern_void_redeclaration "conflicting extern object redeclaration"
 printf '%s\n' "PASS compiler/c0/gnu_extern_void_symbol extern-only=1 opaque-void=1 multi-declarator=2 address=rv64-la storage=none sizeof=gnu-byte definition=reject redeclaration=reject"
