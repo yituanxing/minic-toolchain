@@ -16,6 +16,13 @@ typedef struct MinicCoreLowerContext {
 } MinicCoreLowerContext;
 
 bool core_capture_enum_metadata(MinicCoreLowerContext *context);
+const MinicDataLayout *core_data_layout(const MinicCoreLowerContext *context);
+bool core_unsigned_bit_field_semantic_type(const MinicCoreLowerContext *context, MinicType type);
+bool core_bit_field_storage_type(const MinicCoreLowerContext *context,
+                                 MinicType value_type,
+                                 MinicType *storage_type,
+                                 unsigned int *storage_width);
+bool core_global_addressable_type(MinicType type);
 bool core_memory_scalar_type(MinicType type);
 bool core_import_fixed_register_binding(MinicCoreLowerContext *context,
                                         size_t source_binding_id,

@@ -45,6 +45,7 @@ MINIC_SOURCES := \
 	src/compiler/compiler.c \
 	src/core/core_ir.c \
 	src/core/core_lower.c \
+	src/core/core_lower_types.c \
 	src/core/core_lower_metadata.c \
 	src/core/core_lower_asm.c \
 	src/frontend/attribute.c \
