@@ -8524,8 +8524,7 @@ lower_switch(MinicCoreLowerContext *context, const MinicStatement *statement, bo
     if (context == NULL || context->body == NULL || context->body->program == NULL ||
         context->function == NULL || statement == NULL || terminated == NULL ||
         statement->kind != MINIC_STATEMENT_SWITCH ||
-        statement->cleanup_context != MINIC_CLEANUP_CONTEXT_ROOT ||
-        statement->cleanup_stop_context != MINIC_CLEANUP_CONTEXT_ROOT ||
+        !core_cleanup_edge_is_empty(statement) ||
         statement->expression == MINIC_EXPRESSION_INVALID ||
         statement->then_block == MINIC_BLOCK_INVALID ||
         statement->else_block != MINIC_BLOCK_INVALID || context->target == NULL) {
@@ -8560,8 +8559,7 @@ lower_switch(MinicCoreLowerContext *context, const MinicStatement *statement, bo
             }
             continue;
         }
-        if (source_statement->cleanup_context != MINIC_CLEANUP_CONTEXT_ROOT ||
-            source_statement->cleanup_stop_context != MINIC_CLEANUP_CONTEXT_ROOT ||
+        if (!core_cleanup_edge_is_empty(source_statement) ||
             source_statement->then_block != MINIC_BLOCK_INVALID ||
             source_statement->else_block != MINIC_BLOCK_INVALID ||
             label_count >= MINIC_CORE_SWITCH_LABEL_LIMIT) {
@@ -8686,8 +8684,7 @@ lower_switch(MinicCoreLowerContext *context, const MinicStatement *statement, bo
             }
             if (segment_statement->kind == MINIC_STATEMENT_BREAK) {
                 if (break_index != SIZE_MAX || scan + 1U != segment_end ||
-                    segment_statement->cleanup_context != MINIC_CLEANUP_CONTEXT_ROOT ||
-                    segment_statement->cleanup_stop_context != MINIC_CLEANUP_CONTEXT_ROOT) {
+                    !core_cleanup_edge_is_empty(segment_statement)) {
                     return MINIC_CORE_LOWER_UNSUPPORTED;
                 }
                 break_index = scan;
