@@ -853,6 +853,102 @@ static bool parse_builtin_memcpy(MinicParser *parser, MinicExpressionId *express
     return minic_parser_add_expression(parser, &call_expression, expression_id);
 }
 
+static bool ensure_builtin_memmove_callee(MinicParser *parser, MinicFunctionId *function_id) {
+    static const char memmove_name[] = "memmove";
+    MinicType void_type;
+    MinicType const_void_type;
+    MinicType void_pointer_type;
+    MinicType const_void_pointer_type;
+    MinicType parameter_types[3];
+    size_t index;
+
+    if (parser == NULL || parser->program == NULL || function_id == NULL) {
+        return false;
+    }
+    void_type = minic_type_void();
+    if (!minic_type_add_const(void_type, &const_void_type) ||
+        !minic_type_pointer_to(void_type, &void_pointer_type) ||
+        !minic_type_pointer_to(const_void_type, &const_void_pointer_type)) {
+        minic_parser_error(parser, "cannot form __builtin_memmove signature");
+        return false;
+    }
+    parameter_types[0] = void_pointer_type;
+    parameter_types[1] = const_void_pointer_type;
+    parameter_types[2] = minic_type_unsigned_long();
+
+    for (index = 0U; index < parser->program->function_count; ++index) {
+        const MinicFunction *function;
+
+        function = minic_c0_program_function(parser->program, index);
+        if (!function_name_equals_literal(function, memmove_name)) {
+            continue;
+        }
+        if (function->is_variadic || function->parameter_count != 3U ||
+            !minic_type_equal(function->return_type, void_pointer_type) ||
+            !minic_type_equal(function->parameter_types[0], parameter_types[0]) ||
+            !minic_type_equal(function->parameter_types[1], parameter_types[1]) ||
+            !minic_type_equal(function->parameter_types[2], parameter_types[2])) {
+            minic_parser_error(parser, "__builtin_memmove conflicts with memmove declaration");
+            return false;
+        }
+        *function_id = index;
+        return true;
+    }
+
+    if (!minic_c0_program_add_function(parser->program,
+                                       memmove_name,
+                                       sizeof(memmove_name) - 1U,
+                                       parser->program->local_count,
+                                       0U,
+                                       MINIC_BLOCK_INVALID,
+                                       function_id) ||
+        !minic_c0_program_set_function_signature(
+            parser->program, *function_id, void_pointer_type, parameter_types, 3U)) {
+        minic_parser_error(parser, "cannot create canonical memmove builtin callee");
+        return false;
+    }
+    return true;
+}
+
+static bool parse_builtin_memmove(MinicParser *parser, MinicExpressionId *expression_id) {
+    MinicExpression call_expression;
+    MinicFunctionId function_id;
+    const MinicFunction *callee;
+    MinicSourcePosition begin;
+    MinicSourcePosition end;
+
+    if (parser == NULL || expression_id == NULL ||
+        !current_identifier_is(parser, "__builtin_memmove")) {
+        return false;
+    }
+    begin = parser->current.span.begin;
+    if (!ensure_builtin_memmove_callee(parser, &function_id) || !minic_parser_advance(parser) ||
+        !minic_parser_expect(parser, MINIC_TOKEN_LPAREN, "expected '(' after __builtin_memmove")) {
+        return false;
+    }
+    callee = minic_c0_program_function(parser->program, function_id);
+    if (callee == NULL) {
+        minic_parser_error(parser, "invalid canonical memmove builtin callee");
+        return false;
+    }
+
+    (void)memset(&call_expression, 0, sizeof(call_expression));
+    call_expression.kind = MINIC_EXPRESSION_CALL;
+    call_expression.span.begin = begin;
+    call_expression.type = callee->return_type;
+    call_expression.value_category = MINIC_VALUE_RVALUE;
+    call_expression.value.call.function_id = function_id;
+    if (!parse_call_arguments(parser, &call_expression, callee)) {
+        return false;
+    }
+    end = parser->current.span.end;
+    if (!minic_parser_advance(parser)) {
+        return false;
+    }
+    call_expression.span.end = end;
+    return minic_parser_add_expression(parser, &call_expression, expression_id);
+}
+
 static bool ensure_builtin_memset_callee(MinicParser *parser, MinicFunctionId *function_id) {
     static const char memset_name[] = "memset";
     MinicType void_pointer_type;
@@ -2346,6 +2442,13 @@ static bool parse_primary(MinicParser *parser, MinicExpressionId *expression_id,
     }
     if (current_identifier_is(parser, "__builtin_memcpy")) {
         if (!parse_builtin_memcpy(parser, &primary_id) ||
+            !minic_parser_parse_postfix(parser, primary_id, &primary_id)) {
+            return false;
+        }
+        return finish_value_expression(parser, primary_id, decay_array, expression_id);
+    }
+    if (current_identifier_is(parser, "__builtin_memmove")) {
+        if (!parse_builtin_memmove(parser, &primary_id) ||
             !minic_parser_parse_postfix(parser, primary_id, &primary_id)) {
             return false;
         }
