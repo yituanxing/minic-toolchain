@@ -1020,12 +1020,11 @@ static bool minic_riscv64_emit_global_object(FILE *file,
     return fprintf(file, ".size %s, %zu\n", object->name, storage_size) >= 0;
 }
 
-bool minic_riscv64_write_c0_program_with_core_candidates(const char *path,
-                                                         const MinicC0Program *program,
-                                                         const MinicCoreFunction *core_functions,
-                                                         const bool *core_required_functions,
-                                                         size_t core_function_count,
-                                                         MinicDiagnostic *diagnostic) {
+bool minic_riscv64_write_c0_program_with_core_functions(const char *path,
+                                                        const MinicC0Program *program,
+                                                        const MinicCoreFunction *core_functions,
+                                                        size_t core_function_count,
+                                                        MinicDiagnostic *diagnostic) {
     FILE *file;
     size_t global_index;
     size_t function_index;
@@ -1035,11 +1034,10 @@ bool minic_riscv64_write_c0_program_with_core_candidates(const char *path,
         minic_riscv64_set_diagnostic(diagnostic, path, "program is required");
         return false;
     }
-    if ((core_functions == NULL) != (core_required_functions == NULL) ||
-        (core_functions == NULL && core_function_count != 0U) ||
-        (core_functions != NULL && core_function_count != program->function_count)) {
+    if (core_function_count != program->function_count ||
+        (core_function_count != 0U && core_functions == NULL)) {
         minic_riscv64_set_diagnostic(
-            diagnostic, path, "Core candidate map does not match program functions");
+            diagnostic, path, "Core function map does not match program functions");
         return false;
     }
 
@@ -1109,7 +1107,6 @@ bool minic_riscv64_write_c0_program_with_core_candidates(const char *path,
          ++function_index) {
         const MinicFunction *function;
         const MinicCoreFunction *core_function;
-        bool core_required;
 
         function = &program->functions[function_index];
         if (!function->is_defined) {
@@ -1153,20 +1150,19 @@ bool minic_riscv64_write_c0_program_with_core_candidates(const char *path,
             }
             continue;
         }
-        core_required = core_required_functions != NULL && core_required_functions[function_index];
-        core_function = core_functions != NULL ? &core_functions[function_index] : NULL;
-        if (core_required) {
+        core_function = &core_functions[function_index];
+        {
             MinicRiscv64FunctionSymbol symbol;
 
-            if (core_function == NULL || !minic_riscv64_core_function_can_emit_basic_v0_for_program(
-                                             program, core_function)) {
+            if (!minic_riscv64_core_function_can_emit_basic_v0_for_program(program,
+                                                                           core_function)) {
                 char message[256];
                 const char *symbol_name;
 
                 symbol_name = minic_c0_function_symbol_name(function);
                 (void)snprintf(message,
                                sizeof(message),
-                               "Core-owned function '%s' cannot be emitted by RV64 basic-v0",
+                               "Core function '%s' cannot be emitted by RV64 basic-v0",
                                symbol_name != NULL ? symbol_name : "<unnamed>");
                 minic_riscv64_set_diagnostic(diagnostic, path, message);
                 success = false;
@@ -1175,10 +1171,6 @@ bool minic_riscv64_write_c0_program_with_core_candidates(const char *path,
             success = minic_riscv64_function_symbol_from_function(function, &symbol) &&
                       minic_riscv64_emit_core_function_basic_v0_for_program_with_symbol(
                           file, program, core_function, &symbol);
-        } else {
-            /* M175: no AST -> RV64 fallback remains. The generic writer
-               diagnostic below reports the non-Core-owned function. */
-            success = false;
         }
         if (!success && diagnostic != NULL && diagnostic->message[0] == '\0') {
             char message[256];

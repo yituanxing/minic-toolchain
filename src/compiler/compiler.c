@@ -24,16 +24,9 @@ typedef struct MinicSourceBuffer {
     size_t size;
 } MinicSourceBuffer;
 
-typedef enum MinicCoreShadowMode {
-    MINIC_CORE_SHADOW_DISABLED = 0,
-    MINIC_CORE_SHADOW_OPTIONAL,
-    MINIC_CORE_SHADOW_STRICT
-} MinicCoreShadowMode;
-
 typedef struct MinicCoreCandidates {
     MinicCoreFunction *functions;
     MinicCoreLowerStatus *statuses;
-    bool *core_required;
     size_t function_count;
 } MinicCoreCandidates;
 
@@ -62,7 +55,6 @@ static void minic_core_candidates_initialize(MinicCoreCandidates *candidates) {
     }
     candidates->functions = NULL;
     candidates->statuses = NULL;
-    candidates->core_required = NULL;
     candidates->function_count = 0U;
 }
 
@@ -79,7 +71,6 @@ static void minic_core_candidates_destroy(MinicCoreCandidates *candidates) {
     }
     free(candidates->functions);
     free(candidates->statuses);
-    free(candidates->core_required);
     minic_core_candidates_initialize(candidates);
 }
 
@@ -101,13 +92,9 @@ static bool minic_prepare_core_candidates(const MinicC0Program *program,
             (MinicCoreFunction *)calloc(candidates.function_count, sizeof(*candidates.functions));
         candidates.statuses = (MinicCoreLowerStatus *)malloc(candidates.function_count *
                                                              sizeof(*candidates.statuses));
-        candidates.core_required =
-            (bool *)calloc(candidates.function_count, sizeof(*candidates.core_required));
-        if (candidates.functions == NULL || candidates.statuses == NULL ||
-            candidates.core_required == NULL) {
+        if (candidates.functions == NULL || candidates.statuses == NULL) {
             free(candidates.functions);
             free(candidates.statuses);
-            free(candidates.core_required);
             return false;
         }
     }
@@ -133,57 +120,24 @@ static bool minic_prepare_core_candidates(const MinicC0Program *program,
         }
         candidates.statuses[function_index] =
             minic_core_lower_function(&body, target, &candidates.functions[function_index]);
-        candidates.core_required[function_index] =
-            candidates.statuses[function_index] == MINIC_CORE_LOWER_OK;
     }
     minic_core_candidates_destroy(output);
     *output = candidates;
     return true;
 }
 
-static bool minic_core_shadow_mode(const char *input_path,
-                                   MinicDiagnostic *diagnostic,
-                                   MinicCoreShadowMode *mode) {
-    const char *value;
-
-    if (mode == NULL) {
-        return false;
-    }
-    value = getenv("MINIC_CORE_IR");
-    if (value == NULL || value[0] == '\0') {
-        *mode = MINIC_CORE_SHADOW_DISABLED;
-        return true;
-    }
-    if (strcmp(value, "shadow") == 0) {
-        *mode = MINIC_CORE_SHADOW_OPTIONAL;
-        return true;
-    }
-    if (strcmp(value, "strict") == 0) {
-        *mode = MINIC_CORE_SHADOW_STRICT;
-        return true;
-    }
-    minic_set_diagnostic(
-        diagnostic, input_path, 1U, 1U, "MINIC_CORE_IR must be unset, 'shadow', or 'strict'");
-    return false;
-}
-
-static bool minic_validate_core_shadow(const char *input_path,
-                                       const MinicC0Program *program,
-                                       const MinicCoreCandidates *candidates,
-                                       MinicCoreShadowMode mode,
-                                       MinicDiagnostic *diagnostic) {
+static bool minic_validate_core_functions(const char *input_path,
+                                          const MinicC0Program *program,
+                                          const MinicCoreCandidates *candidates,
+                                          MinicDiagnostic *diagnostic) {
     size_t function_index;
 
     if (program == NULL || candidates == NULL) {
         return false;
     }
-    if (mode == MINIC_CORE_SHADOW_DISABLED) {
-        return true;
-    }
     if (candidates->function_count != program->function_count ||
         (candidates->function_count != 0U &&
-         (candidates->functions == NULL || candidates->statuses == NULL ||
-          candidates->core_required == NULL))) {
+         (candidates->functions == NULL || candidates->statuses == NULL))) {
         minic_set_diagnostic(
             diagnostic, input_path, 1U, 1U, "Core IR candidates do not match source program");
         return false;
@@ -195,7 +149,7 @@ static bool minic_validate_core_shadow(const char *input_path,
         function = minic_c0_program_function(program, function_index);
         if (function == NULL) {
             minic_set_diagnostic(
-                diagnostic, input_path, 1U, 1U, "Core IR shadow cannot access function");
+                diagnostic, input_path, 1U, 1U, "Core lowering cannot access function");
             return false;
         }
         if (!function->is_defined) {
@@ -209,15 +163,12 @@ static bool minic_validate_core_shadow(const char *input_path,
         if (status == MINIC_CORE_LOWER_OK) {
             continue;
         }
-        if (status == MINIC_CORE_LOWER_UNSUPPORTED && mode == MINIC_CORE_SHADOW_OPTIONAL) {
-            continue;
-        }
         if (status == MINIC_CORE_LOWER_UNSUPPORTED) {
             minic_set_diagnostic(diagnostic,
                                  input_path,
                                  1U,
                                  1U,
-                                 "Core IR shadow does not yet support function '%s'",
+                                 "Core IR does not yet support function '%s'",
                                  function->name);
             return false;
         }
@@ -225,7 +176,7 @@ static bool minic_validate_core_shadow(const char *input_path,
                              input_path,
                              1U,
                              1U,
-                             "Core IR shadow lowering failed for function '%s'",
+                             "Core IR lowering failed for function '%s'",
                              function->name);
         return false;
     }
@@ -288,8 +239,6 @@ int minic_compile_preprocessed_file(const char *input_path,
     MinicC0Program program;
     MinicCoreCandidates core_candidates;
     const MinicTargetInfo *target_info;
-    MinicCoreShadowMode core_shadow_mode;
-    MinicCoreShadowMode core_validation_mode;
     bool success;
 
     if (input_path == NULL || output_path == NULL) {
@@ -302,12 +251,6 @@ int minic_compile_preprocessed_file(const char *input_path,
         diagnostic->column = 1U;
         diagnostic->message[0] = '\0';
     }
-    if (!minic_core_shadow_mode(input_path, diagnostic, &core_shadow_mode)) {
-        return 1;
-    }
-    /* M175_LEGACY_FUNCTION_ROUTE_REMOVED: production RV64 function bodies are Core-only. */
-    core_validation_mode = MINIC_CORE_SHADOW_STRICT;
-
     buffer.data = NULL;
     buffer.size = 0U;
     if (!minic_read_file(input_path, &buffer, diagnostic)) {
@@ -343,27 +286,25 @@ int minic_compile_preprocessed_file(const char *input_path,
             diagnostic, input_path, 1U, 1U, "normalized FunctionBody ownership is invalid");
         success = false;
     }
-    if (success && core_validation_mode != MINIC_CORE_SHADOW_DISABLED &&
-        !minic_prepare_core_candidates(&program, target_info, &core_candidates)) {
+    if (success && !minic_prepare_core_candidates(&program, target_info, &core_candidates)) {
         minic_set_diagnostic(
             diagnostic, input_path, 1U, 1U, "cannot retain Core IR lowering results");
         success = false;
     }
     if (success) {
-        success = minic_validate_core_shadow(
-            input_path, &program, &core_candidates, core_validation_mode, diagnostic);
+        success =
+            minic_validate_core_functions(input_path, &program, &core_candidates, diagnostic);
     }
     if (success) {
         success = minic_riscv64_layout_program(input_path, &program, diagnostic);
     }
     if (success) {
         success =
-            minic_riscv64_write_c0_program_with_core_candidates(output_path,
-                                                                &program,
-                                                                core_candidates.functions,
-                                                                core_candidates.core_required,
-                                                                core_candidates.function_count,
-                                                                diagnostic);
+            minic_riscv64_write_c0_program_with_core_functions(output_path,
+                                                               &program,
+                                                               core_candidates.functions,
+                                                               core_candidates.function_count,
+                                                               diagnostic);
     }
 
     minic_core_candidates_destroy(&core_candidates);
