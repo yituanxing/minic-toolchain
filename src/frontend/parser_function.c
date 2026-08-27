@@ -634,42 +634,90 @@ static bool parameter_starts_parenthesized_pointer_to_array(const MinicParser *p
     return probe.current.kind == MINIC_TOKEN_LBRACKET;
 }
 
+static bool parameter_array_modifier_is_restrict(const MinicParser *parser) {
+    return function_identifier_is(parser, "restrict") ||
+           function_identifier_is(parser, "__restrict") ||
+           function_identifier_is(parser, "__restrict__");
+}
+
 static bool adjust_array_parameter_type(MinicParser *parser, MinicType *parameter_type) {
     const MinicArrayType *outer_array;
     MinicType adjusted_type;
     MinicType declared_array_type;
     MinicType pointee_type;
-    bool discard_declared_array;
     bool is_array;
 
     if (parser == NULL || parameter_type == NULL) {
         return false;
     }
-    discard_declared_array = false;
     if (parser->current.kind == MINIC_TOKEN_LBRACKET) {
-        if (!minic_parser_parse_array_declarator_suffix(
-                parser, *parameter_type, true, &declared_array_type, &is_array) ||
-            !is_array || !minic_type_is_array(declared_array_type)) {
-            if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
-                minic_parser_error(parser, "cannot parse array parameter declarator");
-            }
+        bool saw_static;
+        bool has_outer_bound;
+        size_t ignored_outer_bound;
+
+        saw_static = false;
+        has_outer_bound = false;
+        if (!minic_parser_advance(parser)) {
             return false;
         }
-        discard_declared_array = true;
-    } else if (minic_type_is_array(*parameter_type)) {
-        declared_array_type = *parameter_type;
-    } else {
+        while (parser->current.kind == MINIC_TOKEN_KW_STATIC ||
+               parser->current.kind == MINIC_TOKEN_KW_CONST ||
+               parser->current.kind == MINIC_TOKEN_KW_VOLATILE ||
+               parameter_array_modifier_is_restrict(parser)) {
+            if (parser->current.kind == MINIC_TOKEN_KW_STATIC) {
+                saw_static = true;
+            }
+            if (!minic_parser_advance(parser)) {
+                return false;
+            }
+        }
+        if (parser->current.kind == MINIC_TOKEN_RBRACKET) {
+            if (saw_static) {
+                minic_parser_error(parser, "static array parameter requires a bound");
+                return false;
+            }
+            if (!minic_parser_advance(parser)) {
+                return false;
+            }
+        } else {
+            if (!minic_parser_parse_fixed_array_bound(parser, &ignored_outer_bound)) {
+                return false;
+            }
+            has_outer_bound = true;
+        }
+        (void)has_outer_bound;
+        (void)ignored_outer_bound;
+
+        pointee_type = *parameter_type;
+        if (parser->current.kind == MINIC_TOKEN_LBRACKET) {
+            if (!minic_parser_parse_array_declarator_suffix(
+                    parser, *parameter_type, false, &declared_array_type, &is_array) ||
+                !is_array || !minic_type_is_array(declared_array_type)) {
+                if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
+                    minic_parser_error(parser, "cannot parse nested array parameter declarator");
+                }
+                return false;
+            }
+            pointee_type = declared_array_type;
+        }
+        if (!minic_type_pointer_to(pointee_type, &adjusted_type)) {
+            minic_parser_error(parser, "cannot adjust array parameter to pointer type");
+            return false;
+        }
+        *parameter_type = adjusted_type;
         return true;
     }
+    if (!minic_type_is_array(*parameter_type)) {
+        return true;
+    }
+    declared_array_type = *parameter_type;
     outer_array = minic_c0_program_array_type(parser->program, declared_array_type.array_type_id);
     if (outer_array == NULL) {
         minic_parser_error(parser, "cannot resolve array parameter declarator");
         return false;
     }
     pointee_type = outer_array->element_type;
-    if (!minic_type_pointer_to(pointee_type, &adjusted_type) ||
-        (discard_declared_array &&
-         !minic_c0_program_discard_last_array_type(parser->program, declared_array_type))) {
+    if (!minic_type_pointer_to(pointee_type, &adjusted_type)) {
         minic_parser_error(parser, "cannot adjust array parameter to pointer type");
         return false;
     }
