@@ -144,6 +144,9 @@ jobs:
 
           python3 tools/ci/summarize-core-frontier-progress.py             "$work/batch-results.json"             --expect-selected 16             --json-out "$work/progress-summary.json"             --text-out "$work/progress-summary.txt"
 
+          echo "LINUX_NEW500_SAMPLE16_FAILURE_CONTEXTS"
+          cat "$work/failure-contexts.txt" || true
+
           python3 - <<'PY'
           import json
           import os
