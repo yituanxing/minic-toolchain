@@ -25,12 +25,12 @@ grep -F '.Lruntime_ffsll_core_ctz_loop_' "$work/builtin_unary_family.s" >/dev/nu
 # semantic range contract without pinning legacy register allocation or the
 # addi/sltiu peephole.
 awk '
-  /runtime_isdigit:/ { in_fn=1; c48=0; c10=0; sub=0; less=0 }
+  /runtime_isdigit:/ { in_fn=1; c48=0; c10=0; sub_seen=0; less_seen=0 }
   in_fn && /^[[:space:]]+li[[:space:]]+[^,]+,[[:space:]]*48$/ { c48=1 }
   in_fn && /^[[:space:]]+li[[:space:]]+[^,]+,[[:space:]]*10$/ { c10=1 }
-  in_fn && /^[[:space:]]+sub[[:space:]]+/ { sub=1 }
-  in_fn && /^[[:space:]]+sltu[[:space:]]+/ { less=1 }
-  in_fn && /^\.size[[:space:]]+runtime_isdigit/ { exit (c48 && c10 && sub && less) ? 0 : 1 }
+  in_fn && /^[[:space:]]+sub[[:space:]]+/ { sub_seen=1 }
+  in_fn && /^[[:space:]]+sltu[[:space:]]+/ { less_seen=1 }
+  in_fn && /^\.size[[:space:]]+runtime_isdigit/ { exit (c48 && c10 && sub_seen && less_seen) ? 0 : 1 }
   END { if (!in_fn) exit 1 }
 ' "$work/builtin_unary_family.s"
 
