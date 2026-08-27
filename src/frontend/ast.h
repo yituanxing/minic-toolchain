@@ -200,6 +200,8 @@ typedef struct MinicExpression {
     } value;
 } MinicExpression;
 
+/* Transitional read model: callers must preserve legacy object semantics until
+ * producers are migrated to one materialized ArrayType representation. */
 typedef struct MinicArrayObjectInfo {
     MinicType element_type;
     size_t element_count;
