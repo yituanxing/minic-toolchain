@@ -1,5 +1,20 @@
 # Post-first500 Architecture Review Checkpoint / first500 后架构审查检查点
 
+> **Historical checkpoint / 历史检查点 — updated 2026-08-27**
+>
+> This file records the state immediately after the original first500 convergence.
+> It is no longer the current production-architecture description. Production
+> function bodies are now Core-only; the legacy AST -> RV64 function route and
+> migration-era shadow/hybrid control plane have been removed. Exact head
+> `770c91881854db92cbe569acc1f3871b0ec13514` passed frozen strict first500
+> **500/500** with unsupported=0, error=0, preprocess_missing=0 after the Core
+> backend ownership cuts and the first `core_lower.c` ownership split.
+>
+> Current continuation policy: preserve first500 as the behavior baseline and
+> resume Linux pressure with a larger parameterized frontier rather than
+> reintroducing fallback or source-mutating productizers.
+
+
 ## Status / 状态
 
 This document freezes the conclusions at the end of the Linux first500 convergence phase. It is an **architecture review entry point**, not a declaration that the current implementation is the final architecture.
