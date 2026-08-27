@@ -61,6 +61,7 @@ void minic_core_function_destroy(MinicCoreFunction *function) {
     size_t global_index;
     size_t function_symbol_index;
     size_t inline_asm_index;
+    size_t fixed_register_index;
 
     if (function == NULL) {
         return;
@@ -85,6 +86,11 @@ void minic_core_function_destroy(MinicCoreFunction *function) {
          ++function_symbol_index) {
         free(function->function_symbols[function_symbol_index].name);
     }
+    for (fixed_register_index = 0U;
+         fixed_register_index < function->fixed_register_binding_count;
+         ++fixed_register_index) {
+        free(function->fixed_register_bindings[fixed_register_index].register_name);
+    }
     for (inline_asm_index = 0U; inline_asm_index < function->inline_asm_count; ++inline_asm_index) {
         MinicCoreInlineAsm *inline_asm = &function->inline_asms[inline_asm_index];
         size_t clobber_index;
@@ -99,6 +105,7 @@ void minic_core_function_destroy(MinicCoreFunction *function) {
     free(function->name);
     free(function->parameter_types);
     free(function->enum_types);
+    free(function->fixed_register_bindings);
     free(function->globals);
     free(function->function_symbols);
     free(function->callees);
@@ -201,6 +208,52 @@ bool minic_core_function_effective_integer_type(const MinicCoreFunction *functio
         }
     }
     return false;
+}
+
+bool minic_core_function_add_fixed_register_binding(MinicCoreFunction *function,
+                                                    const char *register_name,
+                                                    size_t register_name_length,
+                                                    MinicType type,
+                                                    bool is_local,
+                                                    size_t *binding_id) {
+    char *name_copy;
+    size_t index;
+
+    if (function == NULL || register_name == NULL || register_name_length == 0U ||
+        binding_id == NULL ||
+        (!minic_type_is_integer(type) && !minic_type_is_pointer(type) &&
+         !minic_type_is_double(type))) {
+        return false;
+    }
+    for (index = 0U; index < function->fixed_register_binding_count; ++index) {
+        const MinicCoreFixedRegisterBinding *existing =
+            &function->fixed_register_bindings[index];
+
+        if (existing->is_local == is_local && minic_type_equal(existing->type, type) &&
+            existing->register_name_length == register_name_length &&
+            memcmp(existing->register_name, register_name, register_name_length) == 0) {
+            *binding_id = index;
+            return true;
+        }
+    }
+    if (!grow_array((void **)&function->fixed_register_bindings,
+                    &function->fixed_register_binding_capacity,
+                    function->fixed_register_binding_count,
+                    sizeof(*function->fixed_register_bindings))) {
+        return false;
+    }
+    name_copy = copy_name(register_name, register_name_length);
+    if (name_copy == NULL) {
+        return false;
+    }
+    index = function->fixed_register_binding_count;
+    function->fixed_register_bindings[index].register_name = name_copy;
+    function->fixed_register_bindings[index].register_name_length = register_name_length;
+    function->fixed_register_bindings[index].type = type;
+    function->fixed_register_bindings[index].is_local = is_local;
+    function->fixed_register_binding_count += 1U;
+    *binding_id = index;
+    return true;
 }
 
 bool minic_core_function_add_block(MinicCoreFunction *function, MinicCoreBlockId *block_id) {
@@ -962,11 +1015,16 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
                instruction->value.parameter_index < function->parameter_count &&
                minic_type_equal(function->parameter_types[instruction->value.parameter_index],
                                 instruction->type);
-    case MINIC_CORE_INSTRUCTION_FIXED_REGISTER_READ:
+    case MINIC_CORE_INSTRUCTION_FIXED_REGISTER_READ: {
+        size_t binding_id = instruction->value.fixed_register_binding_id;
+
         return instruction_result_is_valid(function, instruction) &&
-               instruction->value.fixed_register_binding_id != SIZE_MAX &&
-               (minic_type_is_integer(instruction->type) ||
-                minic_type_is_pointer(instruction->type));
+               binding_id < function->fixed_register_binding_count &&
+               function->fixed_register_bindings[binding_id].register_name != NULL &&
+               function->fixed_register_bindings[binding_id].register_name_length != 0U &&
+               minic_type_equal(function->fixed_register_bindings[binding_id].type,
+                                instruction->type);
+    }
     case MINIC_CORE_INSTRUCTION_PARAMETER_OBJECT: {
         MinicCoreObjectId object_id;
         MinicType object_value_type;
@@ -1277,6 +1335,9 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
             binding = &instruction->value.structured_inline_asm.operands[operand_index];
             if (binding->operand_index > 9U || used_indices[binding->operand_index] ||
                 binding->value >= function->value_count || !available_values[binding->value] ||
+                (binding->has_fixed_register_binding &&
+                 binding->fixed_register_binding_id >=
+                     function->fixed_register_binding_count) ||
                 (binding->early_clobber &&
                  binding->kind != MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT &&
                  binding->kind != MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE)) {

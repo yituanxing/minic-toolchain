@@ -131,6 +131,16 @@ typedef struct MinicCoreEnumType {
     MinicType effective_integer_type;
 } MinicCoreEnumType;
 
+/* Fixed-register spelling is target metadata, but ownership belongs to Core
+   once lowering commits the function. Backends consume this opaque binding
+   instead of reopening the frontend Program side table. */
+typedef struct MinicCoreFixedRegisterBinding {
+    char *register_name;
+    size_t register_name_length;
+    MinicType type;
+    bool is_local;
+} MinicCoreFixedRegisterBinding;
+
 typedef struct MinicCoreObject {
     MinicSourceSpan span;
     MinicType type;
@@ -385,6 +395,9 @@ typedef struct MinicCoreFunction {
     MinicCoreEnumType *enum_types;
     size_t enum_type_count;
     size_t enum_type_capacity;
+    MinicCoreFixedRegisterBinding *fixed_register_bindings;
+    size_t fixed_register_binding_count;
+    size_t fixed_register_binding_capacity;
     MinicCoreGlobal *globals;
     size_t global_count;
     size_t global_capacity;
@@ -433,6 +446,12 @@ bool minic_core_function_add_enum_type(MinicCoreFunction *function,
 bool minic_core_function_effective_integer_type(const MinicCoreFunction *function,
                                                 MinicType type,
                                                 MinicType *effective_type);
+bool minic_core_function_add_fixed_register_binding(MinicCoreFunction *function,
+                                                    const char *register_name,
+                                                    size_t register_name_length,
+                                                    MinicType type,
+                                                    bool is_local,
+                                                    size_t *binding_id);
 bool minic_core_function_add_block(MinicCoreFunction *function, MinicCoreBlockId *block_id);
 bool minic_core_function_add_function_symbol(MinicCoreFunction *function,
                                              const char *name,

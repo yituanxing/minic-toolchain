@@ -185,6 +185,26 @@ static bool core_memory_scalar_type(MinicType type) {
            minic_type_is_double(type);
 }
 
+static bool core_import_fixed_register_binding(MinicCoreLowerContext *context,
+                                               size_t source_binding_id,
+                                               size_t *core_binding_id) {
+    const MinicFixedRegisterBinding *binding;
+
+    if (context == NULL || context->body == NULL || context->body->program == NULL ||
+        context->function == NULL || core_binding_id == NULL) {
+        return false;
+    }
+    binding =
+        minic_c0_program_fixed_register_binding(context->body->program, source_binding_id);
+    return binding != NULL && binding->register_name != NULL &&
+           binding->register_name_length != 0U && core_memory_scalar_type(binding->type) &&
+           minic_core_function_add_fixed_register_binding(context->function,
+                                                          binding->register_name,
+                                                          binding->register_name_length,
+                                                          binding->type,
+                                                          binding->is_local,
+                                                          core_binding_id);
+}
 
 /* M152_UNSIGNED_ENUM_BIT_FIELD_OWNER: enum bit-fields keep their semantic enum
    type in AST/Core values, while C gives every complete enum a compatible
@@ -4196,6 +4216,7 @@ static MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
     }
     if (expression->kind == MINIC_EXPRESSION_FIXED_REGISTER) {
         const MinicFixedRegisterBinding *binding;
+        size_t core_binding_id;
 
         binding = minic_c0_program_fixed_register_binding(
             context->body->program, expression->value.fixed_register_binding_id);
@@ -4207,13 +4228,17 @@ static MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
             !minic_type_equal(binding->type, expression->type)) {
             return MINIC_CORE_LOWER_UNSUPPORTED;
         }
+        if (!core_import_fixed_register_binding(context,
+                                                expression->value.fixed_register_binding_id,
+                                                &core_binding_id)) {
+            return MINIC_CORE_LOWER_ERROR;
+        }
         (void)memset(&instruction, 0, sizeof(instruction));
         instruction.kind = MINIC_CORE_INSTRUCTION_FIXED_REGISTER_READ;
         instruction.span = expression->span;
         instruction.type = expression->type;
         instruction.result = MINIC_CORE_VALUE_INVALID;
-        instruction.value.fixed_register_binding_id =
-            expression->value.fixed_register_binding_id;
+        instruction.value.fixed_register_binding_id = core_binding_id;
         return minic_core_function_append_value_instruction(
                    context->function, context->block_id, &instruction, value_id)
                    ? MINIC_CORE_LOWER_OK
@@ -8400,9 +8425,9 @@ static bool core_inline_asm_register_output_constraint(const MinicInlineAsmOpera
            core_inline_asm_constraint_is(operand, "=&r");
 }
 
-/* M105_FIXED_REGISTER_STRUCTURED_ASM: translate the frontend side-table
-   reference into a stable Program-owned id without copying target register
-   strings into Core. */
+/* M105_FIXED_REGISTER_STRUCTURED_ASM: preflight locates a frontend binding
+   without mutating Core. The commit phase imports register spelling/type into
+   Core-owned opaque metadata before the instruction is appended. */
 static bool core_inline_asm_local_fixed_binding_id(const MinicC0Program *program,
                                                    const MinicExpression *expression,
                                                    size_t *binding_id) {
@@ -9297,11 +9322,29 @@ static MinicCoreLowerStatus lower_opaque_inline_asm(MinicCoreLowerContext *conte
         if (supported_shape && core_inline_asm_numeric_template(
                 source, &numeric_template, &numeric_template_length)) {
             MinicCoreLowerStatus status;
+            size_t binding_index;
             size_t clobber_index;
 
             /* Phase 2: commit operand materialization. Any failure from here
                aborts this function lowering, so partial state is destroyed by
                minic_core_lower_function rather than leaking into another path. */
+            for (binding_index = 0U;
+                 binding_index < structured.value.structured_inline_asm.operand_count;
+                 ++binding_index) {
+                MinicCoreStructuredInlineAsmOperand *binding =
+                    &structured.value.structured_inline_asm.operands[binding_index];
+
+                if (binding->has_fixed_register_binding) {
+                    size_t core_binding_id;
+
+                    if (!core_import_fixed_register_binding(
+                            context, binding->fixed_register_binding_id, &core_binding_id)) {
+                        free(numeric_template);
+                        return MINIC_CORE_LOWER_ERROR;
+                    }
+                    binding->fixed_register_binding_id = core_binding_id;
+                }
+            }
             for (output_index = 0U; output_index < source->output_count; ++output_index) {
                 MinicCoreStructuredInlineAsmOperand *binding =
                     &structured.value.structured_inline_asm.operands[output_index];
@@ -9408,7 +9451,7 @@ static MinicCoreLowerStatus lower_opaque_inline_asm(MinicCoreLowerContext *conte
 
     /* M105_FIXED_REGISTER_STRUCTURED_ASM: Linux SBI-style extended asm uses
        two +r outputs and six r inputs, all backed by GNU local fixed-register
-       variables. Preserve the Program-owned binding id on each Core operand;
+       variables. Import each frontend binding into Core-owned opaque metadata;
        the RV64 backend alone interprets names such as a0..a7. */
     if (source->is_volatile && !source->is_goto && source->template_text != NULL &&
         source->template_length != 0U && source->outputs != NULL && source->inputs != NULL &&
@@ -9501,7 +9544,12 @@ static MinicCoreLowerStatus lower_opaque_inline_asm(MinicCoreLowerContext *conte
 
                 binding->kind = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE;
                 binding->operand_index = output_index;
-                binding->fixed_register_binding_id = fixed_binding_ids[output_index];
+                if (!core_import_fixed_register_binding(
+                        context,
+                        fixed_binding_ids[output_index],
+                        &binding->fixed_register_binding_id)) {
+                    return MINIC_CORE_LOWER_ERROR;
+                }
                 binding->has_fixed_register_binding = true;
                 status = lower_address(context, operand->expression, &binding->value);
                 if (status != MINIC_CORE_LOWER_OK) {
@@ -9517,7 +9565,12 @@ static MinicCoreLowerStatus lower_opaque_inline_asm(MinicCoreLowerContext *conte
 
                 binding->kind = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
                 binding->operand_index = operand_index;
-                binding->fixed_register_binding_id = fixed_binding_ids[operand_index];
+                if (!core_import_fixed_register_binding(
+                        context,
+                        fixed_binding_ids[operand_index],
+                        &binding->fixed_register_binding_id)) {
+                    return MINIC_CORE_LOWER_ERROR;
+                }
                 binding->has_fixed_register_binding = true;
                 status = lower_expression(context, operand->expression, &binding->value);
                 if (status != MINIC_CORE_LOWER_OK) {

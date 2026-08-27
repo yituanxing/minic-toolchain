@@ -58,6 +58,13 @@ static bool core_scalar_type(MinicType type) {
            minic_type_is_double(type);
 }
 
+static const MinicCoreFixedRegisterBinding *core_fixed_register_binding(
+    const MinicCoreFunction *function, size_t binding_id) {
+    return function != NULL && binding_id < function->fixed_register_binding_count
+               ? &function->fixed_register_bindings[binding_id]
+               : NULL;
+}
+
 static bool core_effective_integer_type(const MinicCoreFunction *function,
                                         MinicType type,
                                         MinicType *effective_type) {
@@ -1065,7 +1072,6 @@ static bool core_structured_fixed_phase_alias_safe(
 }
 
 static bool core_structured_inline_asm_allocate(
-    const MinicC0Program *program,
     const MinicCoreFunction *function,
     const MinicCoreInstruction *instruction,
     const char **operand_registers,
@@ -1091,7 +1097,7 @@ static bool core_structured_inline_asm_allocate(
     size_t binding_index;
     size_t clobber_index;
 
-    if (program == NULL || function == NULL || instruction == NULL ||
+    if (function == NULL || instruction == NULL ||
         operand_registers == NULL || memory_operand == NULL || scratch_register == NULL ||
         instruction->kind != MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM ||
         instruction->value.structured_inline_asm.inline_asm_id >= function->inline_asm_count) {
@@ -1126,7 +1132,7 @@ static bool core_structured_inline_asm_allocate(
     for (binding_index = 0U; binding_index < operand_count; ++binding_index) {
         const MinicCoreStructuredInlineAsmOperand *binding =
             &instruction->value.structured_inline_asm.operands[binding_index];
-        const MinicFixedRegisterBinding *fixed_binding;
+        const MinicCoreFixedRegisterBinding *fixed_binding;
         if (!binding->has_fixed_register_binding) {
             continue;
         }
@@ -1135,8 +1141,8 @@ static bool core_structured_inline_asm_allocate(
             binding->kind == MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE) {
             return false;
         }
-        fixed_binding = minic_c0_program_fixed_register_binding(
-            program, binding->fixed_register_binding_id);
+        fixed_binding =
+            core_fixed_register_binding(function, binding->fixed_register_binding_id);
         if (fixed_binding == NULL || !fixed_binding->is_local ||
             fixed_binding->register_name == NULL || fixed_binding->register_name_length == 0U ||
             core_inline_asm_clobbers_register(inline_asm, fixed_binding->register_name)) {
@@ -1205,8 +1211,7 @@ static bool core_structured_inline_asm_allocate(
 }
 
 /* M126A_GENERIC_STRUCTURED_ASM: capability is now role/resource based. */
-static bool core_structured_inline_asm_supported(const MinicC0Program *program,
-                                                 const MinicCoreFunction *function,
+static bool core_structured_inline_asm_supported(const MinicCoreFunction *function,
                                                  const MinicCoreInstruction *instruction) {
     const MinicCoreInlineAsm *inline_asm;
     const char *operand_registers[10] = {NULL};
@@ -1216,7 +1221,7 @@ static bool core_structured_inline_asm_supported(const MinicC0Program *program,
     size_t binding_index;
     size_t template_index;
 
-    if (program == NULL || function == NULL || instruction == NULL ||
+    if (function == NULL || instruction == NULL ||
         instruction->kind != MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM ||
         instruction->result != MINIC_CORE_VALUE_INVALID || !minic_type_is_void(instruction->type) ||
         instruction->value.structured_inline_asm.inline_asm_id >= function->inline_asm_count ||
@@ -1235,7 +1240,7 @@ static bool core_structured_inline_asm_supported(const MinicC0Program *program,
          ++binding_index) {
         const MinicCoreStructuredInlineAsmOperand *binding =
             &instruction->value.structured_inline_asm.operands[binding_index];
-        const MinicFixedRegisterBinding *fixed_binding = NULL;
+        const MinicCoreFixedRegisterBinding *fixed_binding = NULL;
         MinicType pointee;
         MinicType value_type;
 
@@ -1248,8 +1253,8 @@ static bool core_structured_inline_asm_supported(const MinicC0Program *program,
         }
         bound[binding->operand_index] = true;
         if (binding->has_fixed_register_binding) {
-            fixed_binding = minic_c0_program_fixed_register_binding(
-                program, binding->fixed_register_binding_id);
+            fixed_binding =
+                core_fixed_register_binding(function, binding->fixed_register_binding_id);
             if (fixed_binding == NULL || !fixed_binding->is_local) {
                 return false;
             }
@@ -1305,8 +1310,7 @@ static bool core_structured_inline_asm_supported(const MinicC0Program *program,
             return false;
         }
     }
-    return core_structured_inline_asm_allocate(program,
-                                                function,
+    return core_structured_inline_asm_allocate(function,
                                                 instruction,
                                                 operand_registers,
                                                 memory_operand,
@@ -1645,13 +1649,10 @@ static bool core_instruction_supported(const MinicC0Program *program,
     case MINIC_CORE_INSTRUCTION_RECORD_COPY:
         return core_record_copy_supported(program, function, instruction);
     case MINIC_CORE_INSTRUCTION_FIXED_REGISTER_READ: {
-        const MinicFixedRegisterBinding *binding;
+        const MinicCoreFixedRegisterBinding *binding;
 
-        if (program == NULL) {
-            return false;
-        }
-        binding = minic_c0_program_fixed_register_binding(
-            program, instruction->value.fixed_register_binding_id);
+        binding = core_fixed_register_binding(
+            function, instruction->value.fixed_register_binding_id);
         return binding != NULL && binding->register_name != NULL &&
                binding->register_name_length != 0U && core_scalar_type(binding->type) &&
                minic_type_equal(binding->type, instruction->type);
@@ -1691,7 +1692,7 @@ static bool core_instruction_supported(const MinicC0Program *program,
     case MINIC_CORE_INSTRUCTION_SCALAR_INPUT_INLINE_ASM:
         return core_scalar_input_inline_asm_supported(function, instruction);
     case MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM:
-        return core_structured_inline_asm_supported(program, function, instruction);
+        return core_structured_inline_asm_supported(function, instruction);
     case MINIC_CORE_INSTRUCTION_COMPILER_BARRIER:
         return true;
     case MINIC_CORE_INSTRUCTION_CALL:
@@ -2842,9 +2843,8 @@ static bool emit_structured_inline_asm(FILE *file,
     size_t index;
 
     if (file == NULL || program == NULL || frame == NULL ||
-        !core_structured_inline_asm_supported(program, function, instruction) ||
-        !core_structured_inline_asm_allocate(program,
-                                              function,
+        !core_structured_inline_asm_supported(function, instruction) ||
+        !core_structured_inline_asm_allocate(function,
                                               instruction,
                                               operand_registers,
                                               memory_operand,
@@ -3457,13 +3457,10 @@ static bool emit_instruction(FILE *file,
         }
         return store_core_value(file, frame, instruction->result, "t0");
     case MINIC_CORE_INSTRUCTION_FIXED_REGISTER_READ: {
-        const MinicFixedRegisterBinding *binding;
+        const MinicCoreFixedRegisterBinding *binding;
 
-        if (program == NULL) {
-            return false;
-        }
-        binding = minic_c0_program_fixed_register_binding(
-            program, instruction->value.fixed_register_binding_id);
+        binding = core_fixed_register_binding(
+            function, instruction->value.fixed_register_binding_id);
         if (binding == NULL || binding->register_name == NULL ||
             binding->register_name_length == 0U || !core_scalar_type(binding->type) ||
             !minic_type_equal(binding->type, instruction->type) ||
