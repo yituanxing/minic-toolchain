@@ -2,13 +2,9 @@
 #define MINIC_FRONTEND_DECLARATION_SEMA_H
 
 #include "frontend/ast.h"
-#include "frontend/semantic_snapshot.h"
 
-#include <limits.h>
 #include <stdbool.h>
 #include <stddef.h>
-#include <stdint.h>
-#include <string.h>
 
 #define MINIC_DECLARATION_MAX_ARRAY_DIMENSIONS 8U
 
