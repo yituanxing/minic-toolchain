@@ -16,6 +16,7 @@ limit=${LINUX_BATCH_LIMIT:-100}
 offset=${LINUX_BATCH_OFFSET:-0}
 minic_jobs=${LINUX_BATCH_JOBS:-2}
 selection=${LINUX_BATCH_SELECTION:-}
+materialize_only=${LINUX_BATCH_MATERIALIZE_ONLY:-0}
 sha256=dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932
 url="https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-$version.tar.xz"
 
@@ -26,7 +27,11 @@ if test "$minic_jobs" -eq 0; then
     printf '%s\n' 'LINUX_BATCH_ERROR LINUX_BATCH_JOBS must be greater than zero' >&2
     exit 2
 fi
-if test ! -x "$minic"; then
+case "$materialize_only" in
+    0|1) ;;
+    *) printf '%s\n' 'LINUX_BATCH_ERROR LINUX_BATCH_MATERIALIZE_ONLY must be 0 or 1' >&2; exit 2 ;;
+esac
+if test "$materialize_only" -ne 1 && test ! -x "$minic"; then
     printf '%s\n' "LINUX_BATCH_ERROR MiniC not executable: $minic" >&2
     exit 2
 fi
@@ -165,6 +170,33 @@ make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE="$cross_compile" \
 materialize_status=$?
 set -e
 printf '%s\n' "LINUX_BATCH_MATERIALIZE status=$materialize_status selected=$(wc -l < "$work/selected-tus.txt" | tr -d ' ')"
+
+if test "$materialize_only" -eq 1; then
+    python3 - "$out" "$work/selected-tus.txt" <<'PY'
+from pathlib import Path
+import sys
+
+out_root = Path(sys.argv[1])
+selected = Path(sys.argv[2])
+rows = [line for line in selected.read_text().splitlines() if line.strip()]
+missing = []
+for row in rows:
+    _, _, rel_i, _ = row.split("\t", 3)
+    path = out_root / rel_i
+    if not path.is_file() or path.stat().st_size == 0:
+        missing.append(rel_i)
+
+print(
+    f"LINUX_BATCH_MATERIALIZE_ONLY selected={len(rows)} "
+    f"preprocess_missing={len(missing)}"
+)
+if missing:
+    for rel_i in missing[:50]:
+        print(f"LINUX_BATCH_MATERIALIZE_MISSING input={rel_i}")
+    raise SystemExit(1)
+PY
+    exit 0
+fi
 
 python3 - "$minic" "$out" "$work/selected-tus.txt" "$work" "$minic_jobs" <<'PY'
 from concurrent.futures import ThreadPoolExecutor, as_completed

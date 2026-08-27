@@ -1,35 +1,20 @@
-name: Linux Core Frontier
+name: Linux Core New500 Frontier
 
 on:
   push:
     branches:
       - refactor/declaration-sema-v1
   workflow_dispatch:
-    inputs:
-      offset:
-        description: Optional TU offset override
-        required: false
-        type: string
-      limit:
-        description: Optional TU limit override
-        required: false
-        type: string
-      jobs:
-        description: Optional MiniC replay parallelism override
-        required: false
-        type: string
 
 permissions:
   contents: read
 
-concurrency:
-  group: linux-core-frontier-${{ github.ref }}
-  cancel-in-progress: true
-
 jobs:
-  frontier:
+  prepare-new500-corpus:
     runs-on: ubuntu-24.04
     timeout-minutes: 120
+    outputs:
+      cache_hit: ${{ steps.new500-cache.outputs.cache-hit }}
     env:
       DEBIAN_FRONTEND: noninteractive
     steps:
@@ -38,172 +23,265 @@ jobs:
           ref: refactor/declaration-sema-v1
           fetch-depth: 0
 
-      - name: Resolve frontier window
+      - name: Restore frozen new500 corpus
+        id: new500-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-new500-corpus
+          key: linux-new500-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-indices-500-999
+
+      - name: Validate cached new500 corpus
+        if: steps.new500-cache.outputs.cache-hit == 'true'
         shell: bash
         run: |
           set -Eeuo pipefail
-          source tests/external/linux/qualification-frontier.env
-          offset='${{ inputs.offset }}'
-          limit='${{ inputs.limit }}'
-          jobs='${{ inputs.jobs }}'
-          [[ -n "$offset" ]] || offset="$LINUX_FRONTIER_OFFSET"
-          [[ -n "$limit" ]] || limit="$LINUX_FRONTIER_LIMIT"
-          [[ -n "$jobs" ]] || jobs="$LINUX_FRONTIER_JOBS"
-          for value in "$offset" "$limit" "$jobs"; do
-            [[ "$value" =~ ^[0-9]+$ ]]
-          done
-          (( limit > 0 ))
-          (( jobs > 0 ))
-          echo "LINUX_FRONTIER_OFFSET=$offset" >> "$GITHUB_ENV"
-          echo "LINUX_FRONTIER_LIMIT=$limit" >> "$GITHUB_ENV"
-          echo "LINUX_FRONTIER_JOBS=$jobs" >> "$GITHUB_ENV"
-          echo "LINUX_FRONTIER_WINDOW offset=$offset limit=$limit jobs=$jobs"
+          manifest=build/linux-new500-corpus/selected-tus.txt
+          test -s "$manifest"
+          test "$(grep -cve '^[[:space:]]*$' "$manifest")" -eq 500
+          test "$(head -1 "$manifest" | cut -f1)" -eq 500
+          test "$(tail -1 "$manifest" | cut -f1)" -eq 999
+          echo 'LINUX_NEW500_CORPUS cache=hit selected=500 indices=500-999'
 
       - name: Restore pinned Linux source archive
+        if: steps.new500-cache.outputs.cache-hit != 'true'
         id: linux-source-cache
         uses: actions/cache/restore@v4
         with:
           path: build/linux-cache/linux-6.6.143.tar.xz
           key: linux-source-6.6.143-dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932
 
-      - name: Restore Linux qualification package archives
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/minic-linux-frontier-apt/archives
-          key: linux-frontier-apt-${{ runner.os }}-${{ runner.arch }}-noble-v1
-
-      - name: Install Linux qualification dependencies
+      - name: Install corpus materialization dependencies
+        if: steps.new500-cache.outputs.cache-hit != 'true'
         shell: bash
         run: |
           set -Eeuo pipefail
-          apt_cache="$HOME/.cache/minic-linux-frontier-apt/archives"
-          mkdir -p "$apt_cache/partial"
           sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 update
-          sudo apt-get \
-            -o Acquire::Retries=3 \
-            -o Acquire::http::Timeout=30 \
-            -o Dir::Cache::archives="$apt_cache" \
-            -o APT::Keep-Downloaded-Packages=true \
-            install -y --no-install-recommends \
-              gcc-riscv64-linux-gnu libc6-dev-riscv64-cross \
-              flex bison bc libelf-dev libssl-dev
+          sudo apt-get             -o Acquire::Retries=3             -o Acquire::http::Timeout=30             install -y --no-install-recommends               gcc-riscv64-linux-gnu libc6-dev-riscv64-cross               flex bison bc libelf-dev libssl-dev
           command -v riscv64-linux-gnu-gcc
-          command -v flex
-          command -v bison
-          command -v bc
 
-      - name: Build exact Core-only compiler
+      - name: Materialize indices 500 through 999 once
+        if: steps.new500-cache.outputs.cache-hit != 'true'
         shell: bash
         run: |
           set -Eeuo pipefail
-          git diff --exit-code
-          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/linux-frontier-compiler
-          echo "LINUX_FRONTIER_SOURCE_HEAD=$(git rev-parse HEAD)"
+          builder="$GITHUB_WORKSPACE/build/linux-new500-builder"
+          corpus="$GITHUB_WORKSPACE/build/linux-new500-corpus"
+          LINUX_BATCH_MATERIALIZE_ONLY=1           BUILD_DIR="$builder"           LINUX_ARCHIVE_CACHE="$GITHUB_WORKSPACE/build/linux-cache/linux-6.6.143.tar.xz"           CROSS_COMPILE=riscv64-linux-gnu-           LINUX_BATCH_OFFSET=500           LINUX_BATCH_LIMIT=500           LINUX_BATCH_JOBS=4             sh tests/external/linux/batch_probe.sh
 
-      - name: Check replay selection contract
-        run: python3 tests/external/linux/corpus_replay_selection_test.py
+          python3 - <<'PY'
+          from pathlib import Path
+          import shutil
 
-      - name: Materialize and replay Linux frontier
-        id: frontier_replay
+          builder = Path("build/linux-new500-builder")
+          corpus = Path("build/linux-new500-corpus")
+          selected = builder / "selected-tus.txt"
+          rows = [line for line in selected.read_text().splitlines() if line.strip()]
+          indices = [int(line.split("\t", 1)[0]) for line in rows]
+          if len(rows) != 500 or indices[0] != 500 or indices[-1] != 999:
+              raise SystemExit(
+                  f"unexpected new500 selection: count={len(rows)} "
+                  f"first={indices[0] if indices else None} "
+                  f"last={indices[-1] if indices else None}"
+              )
+          shutil.rmtree(corpus, ignore_errors=True)
+          inputs = corpus / "kbuild"
+          inputs.mkdir(parents=True)
+          shutil.copy2(selected, corpus / "selected-tus.txt")
+          manifest = builder / "tu-manifest.txt"
+          if manifest.is_file():
+              shutil.copy2(manifest, corpus / "tu-manifest.txt")
+          total_bytes = 0
+          for row in rows:
+              _, _, rel_i, _ = row.split("\t", 3)
+              source = builder / "kbuild" / rel_i
+              if not source.is_file() or source.stat().st_size == 0:
+                  raise SystemExit(f"missing materialized input: {source}")
+              target = inputs / rel_i
+              target.parent.mkdir(parents=True, exist_ok=True)
+              shutil.copy2(source, target)
+              total_bytes += target.stat().st_size
+          (corpus / "corpus-info.txt").write_text(
+              f"linux=6.6.143\nindices=500-999\nselected=500\nbytes={total_bytes}\n"
+          )
+          print(f"LINUX_NEW500_CORPUS cache=fill selected=500 bytes={total_bytes}")
+          PY
+
+      - name: Save frozen new500 corpus
+        if: steps.new500-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: build/linux-new500-corpus
+          key: linux-new500-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-indices-500-999
+
+      - name: Save pinned Linux source archive
+        if: steps.new500-cache.outputs.cache-hit != 'true' && steps.linux-source-cache.outputs.cache-hit != 'true' && hashFiles('build/linux-cache/linux-6.6.143.tar.xz') != ''
+        uses: actions/cache/save@v4
+        with:
+          path: build/linux-cache/linux-6.6.143.tar.xz
+          key: linux-source-6.6.143-dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932
+
+  sample16:
+    needs: prepare-new500-corpus
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    concurrency:
+      group: linux-new500-sample16-${{ github.ref }}
+      cancel-in-progress: true
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refactor/declaration-sema-v1
+          fetch-depth: 0
+
+      - name: Restore frozen new500 corpus
+        id: new500-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-new500-corpus
+          key: linux-new500-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-indices-500-999
+
+      - name: Require frozen new500 corpus
+        run: |
+          test "${{ steps.new500-cache.outputs.cache-hit }}" = true
+          test "$(grep -cve '^[[:space:]]*$' build/linux-new500-corpus/selected-tus.txt)" -eq 500
+
+      - name: Build exact compiler
+        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/new500-sample-compiler
+
+      - name: Replay deterministic sample16 from new500
         shell: bash
         run: |
           set -Eeuo pipefail
-          compiler="$GITHUB_WORKSPACE/build/linux-frontier-compiler/bin/minic"
-          work="$GITHUB_WORKSPACE/build/linux-frontier"
-          driver_log="$GITHUB_WORKSPACE/build/linux-frontier-driver.log"
-          rm -f "$driver_log"
+          compiler="$GITHUB_WORKSPACE/build/new500-sample-compiler/bin/minic"
+          work="$GITHUB_WORKSPACE/build/new500-sample"
           set +e
-          CORE_FAST_TRACE=1 \
-          MINIC="$compiler" \
-          BUILD_DIR="$work" \
-          LINUX_ARCHIVE_CACHE="$GITHUB_WORKSPACE/build/linux-cache/linux-6.6.143.tar.xz" \
-          CROSS_COMPILE=riscv64-linux-gnu- \
-          LINUX_BATCH_OFFSET="$LINUX_FRONTIER_OFFSET" \
-          LINUX_BATCH_LIMIT="$LINUX_FRONTIER_LIMIT" \
-          LINUX_BATCH_JOBS="$LINUX_FRONTIER_JOBS" \
-            sh tests/external/linux/batch_probe.sh 2>&1 | tee "$driver_log"
-          probe_status=${PIPESTATUS[0]}
+          CORE_FAST_TRACE=1 python3 tests/external/linux/corpus_replay.py             --minic "$compiler"             --corpus "$GITHUB_WORKSPACE/build/linux-new500-corpus"             --work "$work"             --jobs 4             --offset 0             --limit 500             --sample-count 16
+          replay_status=$?
           set -e
-          printf 'LINUX_FRONTIER_PROBE_STATUS=%d\n' "$probe_status"
-          test -s "$work/batch-results.json"
-          printf '%d\n' "$probe_status" > "$work/probe-status.txt"
+          echo "LINUX_NEW500_SAMPLE16_REPLAY_STATUS=$replay_status"
 
-          python3 tools/ci/classify-core-strict-frontier.py \
-            "$work/batch-results.json" \
-            --stderr-root "$work/minic-stderr" \
-            --ast-header "$GITHUB_WORKSPACE/src/frontend/ast.h" \
-            --examples 50 \
-            --json-out "$work/frontier-summary.json" \
-            --reason-text-out "$work/reason-summary.txt"
+          python3 tools/ci/classify-core-strict-frontier.py             "$work/batch-results.json"             --stderr-root "$work/minic-stderr"             --ast-header "$GITHUB_WORKSPACE/src/frontend/ast.h"             --examples 16             --json-out "$work/frontier-summary.json"             --reason-text-out "$work/reason-summary.txt"
 
-          python3 tools/ci/summarize-core-frontier-progress.py \
-            "$work/batch-results.json" \
-            --expect-selected "$LINUX_FRONTIER_LIMIT" \
-            --json-out "$work/progress-summary.json" \
-            --text-out "$work/progress-summary.txt"
+          python3 tools/ci/summarize-core-frontier-progress.py             "$work/batch-results.json"             --expect-selected 16             --json-out "$work/progress-summary.json"             --text-out "$work/progress-summary.txt"
 
           python3 - <<'PY'
           import json
           import os
           from pathlib import Path
 
-          work = Path("build/linux-frontier")
+          work = Path("build/new500-sample")
           summary = json.loads((work / "frontier-summary.json").read_text())
-          expected = int(os.environ["LINUX_FRONTIER_LIMIT"])
-          if summary["selected"] != expected:
-              raise SystemExit(
-                  f"Linux frontier selected {summary['selected']}, expected {expected}"
-              )
-          if summary["preprocess_missing"] != 0:
-              raise SystemExit(
-                  f"Linux frontier has preprocess_missing={summary['preprocess_missing']}"
-              )
+          if summary["selected"] != 16 or summary["preprocess_missing"] != 0:
+              raise SystemExit(f"sample16 infrastructure failure: {summary}")
           headline = (
-              f"LINUX_CORE_FRONTIER_EXACT offset={os.environ['LINUX_FRONTIER_OFFSET']} "
-              f"selected={summary['selected']} pass={summary['pass']} "
-              f"unsupported={summary['unsupported']} error={summary['error']} "
-              f"preprocess_missing={summary['preprocess_missing']}"
+              f"LINUX_NEW500_SAMPLE16_EXACT selected={summary['selected']} "
+              f"pass={summary['pass']} unsupported={summary['unsupported']} "
+              f"error={summary['error']} preprocess_missing={summary['preprocess_missing']}"
           )
           print(headline)
           (work / "headline.txt").write_text(headline + "\n")
-
-          driver = Path("build/linux-frontier-driver.log")
-          plan = ""
-          if driver.is_file():
-              for line in driver.read_text(errors="replace").splitlines():
-                  if "LINUX_BATCH_PLAN " in line:
-                      plan = line
           with Path(os.environ["GITHUB_STEP_SUMMARY"]).open("a") as output:
-              output.write("## Linux Core Frontier\n\n")
+              output.write("## Linux new500 sample16\n\n")
               output.write(f"`{headline}`\n\n")
-              if plan:
-                  output.write(f"`{plan}`\n\n")
-              output.write((work / "progress-summary.txt").read_text())
+              output.write((work / "reason-summary.txt").read_text())
           PY
 
-      - name: Save pinned Linux source archive
-        if: always() && steps.linux-source-cache.outputs.cache-hit != 'true' && hashFiles('build/linux-cache/linux-6.6.143.tar.xz') != ''
-        uses: actions/cache/save@v4
-        with:
-          path: build/linux-cache/linux-6.6.143.tar.xz
-          key: linux-source-6.6.143-dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932
-
-      - name: Persist Linux frontier evidence
+      - name: Persist sample16 evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: linux-core-frontier-${{ github.sha }}
+          name: linux-new500-sample16-${{ github.sha }}
           path: |
-            build/linux-frontier/headline.txt
-            build/linux-frontier/batch-summary.txt
-            build/linux-frontier/batch-results.json
-            build/linux-frontier/batch-results.tsv
-            build/linux-frontier/frontier-summary.json
-            build/linux-frontier/reason-summary.txt
-            build/linux-frontier/progress-summary.json
-            build/linux-frontier/progress-summary.txt
-            build/linux-frontier/failure-contexts.txt
-            build/linux-frontier/probe-status.txt
-            build/linux-frontier/minic-stderr/**
-            build/linux-frontier-driver.log
+            build/new500-sample/headline.txt
+            build/new500-sample/batch-results.json
+            build/new500-sample/frontier-summary.json
+            build/new500-sample/reason-summary.txt
+            build/new500-sample/progress-summary.json
+            build/new500-sample/progress-summary.txt
+            build/new500-sample/failure-contexts.txt
+            build/new500-sample/minic-stderr/**
+          if-no-files-found: warn
+
+  full500:
+    needs: prepare-new500-corpus
+    if: github.event_name == 'workflow_dispatch' || needs.prepare-new500-corpus.outputs.cache_hit != 'true' || contains(github.event.head_commit.message, '[full500]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    concurrency:
+      group: linux-new500-full500-${{ github.ref }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refactor/declaration-sema-v1
+          fetch-depth: 0
+
+      - name: Restore frozen new500 corpus
+        id: new500-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-new500-corpus
+          key: linux-new500-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-indices-500-999
+
+      - name: Require frozen new500 corpus
+        run: |
+          test "${{ steps.new500-cache.outputs.cache-hit }}" = true
+          test "$(grep -cve '^[[:space:]]*$' build/linux-new500-corpus/selected-tus.txt)" -eq 500
+
+      - name: Build exact compiler
+        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/new500-full-compiler
+
+      - name: Replay all new500
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          compiler="$GITHUB_WORKSPACE/build/new500-full-compiler/bin/minic"
+          work="$GITHUB_WORKSPACE/build/new500-full"
+          set +e
+          CORE_FAST_TRACE=1 python3 tests/external/linux/corpus_replay.py             --minic "$compiler"             --corpus "$GITHUB_WORKSPACE/build/linux-new500-corpus"             --work "$work"             --jobs 4             --offset 0             --limit 500             --sample-count 0
+          replay_status=$?
+          set -e
+          echo "LINUX_NEW500_FULL_REPLAY_STATUS=$replay_status"
+
+          python3 tools/ci/classify-core-strict-frontier.py             "$work/batch-results.json"             --stderr-root "$work/minic-stderr"             --ast-header "$GITHUB_WORKSPACE/src/frontend/ast.h"             --examples 50             --json-out "$work/frontier-summary.json"             --reason-text-out "$work/reason-summary.txt"
+
+          python3 tools/ci/summarize-core-frontier-progress.py             "$work/batch-results.json"             --expect-selected 500             --json-out "$work/progress-summary.json"             --text-out "$work/progress-summary.txt"
+
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          work = Path("build/new500-full")
+          summary = json.loads((work / "frontier-summary.json").read_text())
+          if summary["selected"] != 500 or summary["preprocess_missing"] != 0:
+              raise SystemExit(f"full500 infrastructure failure: {summary}")
+          headline = (
+              f"LINUX_NEW500_FULL_EXACT selected={summary['selected']} "
+              f"pass={summary['pass']} unsupported={summary['unsupported']} "
+              f"error={summary['error']} preprocess_missing={summary['preprocess_missing']}"
+          )
+          print(headline)
+          (work / "headline.txt").write_text(headline + "\n")
+          with Path(os.environ["GITHUB_STEP_SUMMARY"]).open("a") as output:
+              output.write("## Linux new500 full census\n\n")
+              output.write(f"`{headline}`\n\n")
+              output.write((work / "reason-summary.txt").read_text())
+          PY
+
+      - name: Persist full500 evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-new500-full500-${{ github.sha }}
+          path: |
+            build/new500-full/headline.txt
+            build/new500-full/batch-results.json
+            build/new500-full/batch-results.tsv
+            build/new500-full/frontier-summary.json
+            build/new500-full/reason-summary.txt
+            build/new500-full/progress-summary.json
+            build/new500-full/progress-summary.txt
+            build/new500-full/failure-contexts.txt
+            build/new500-full/minic-stderr/**
           if-no-files-found: warn

@@ -1,7 +1,6 @@
-name: Core M175 Core-Only Strict500
+name: Core First500 Regression
 
 on:
-  pull_request:
   push:
     branches:
       - refactor/declaration-sema-v1
@@ -12,7 +11,7 @@ permissions:
 
 jobs:
   strict500:
-    if: github.event_name == 'workflow_dispatch' || github.head_ref == 'refactor/declaration-sema-v1'
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[regress500]')
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     env:
