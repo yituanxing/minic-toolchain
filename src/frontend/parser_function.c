@@ -842,10 +842,12 @@ static bool parse_external_integer_array_definition(MinicParser *parser,
     MinicGlobalObject *object;
     const MinicArrayType *array_type;
     MinicType declared_array_type;
+    MinicType declared_element_type;
     size_t element_count;
     size_t initializer_count;
     bool inferred_bound;
     bool definition_omits_bound;
+    bool multidimensional;
     bool reused_existing;
 
     if (parser == NULL ||
@@ -859,7 +861,9 @@ static bool parse_external_integer_array_definition(MinicParser *parser,
     element_count = 0U;
     inferred_bound = false;
     definition_omits_bound = false;
+    multidimensional = false;
     reused_existing = false;
+    declared_element_type = element_type;
     if (!minic_parser_advance(parser)) {
         return false;
     }
@@ -873,18 +877,29 @@ static bool parse_external_integer_array_definition(MinicParser *parser,
         return false;
     }
     if (parser->current.kind == MINIC_TOKEN_LBRACKET) {
-        minic_parser_error(parser,
-                           "multi-dimensional external integer arrays are not supported yet");
-        return false;
+        MinicType nested_element_type;
+        bool nested_is_array;
+
+        nested_is_array = false;
+        if (!minic_parser_parse_array_declarator_suffix(
+                parser, element_type, false, &nested_element_type, &nested_is_array) ||
+            !nested_is_array) {
+            if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
+                minic_parser_error(parser, "cannot build multidimensional external array type");
+            }
+            return false;
+        }
+        declared_element_type = nested_element_type;
+        multidimensional = true;
     }
 
     object_id = minic_parser_find_global_object(parser, name_span);
     if (object_id == MINIC_GLOBAL_OBJECT_INVALID) {
         if ((inferred_bound && !minic_c0_program_add_incomplete_array_type(
-                                   parser->program, element_type, &declared_array_type)) ||
+                                   parser->program, declared_element_type, &declared_array_type)) ||
             (!inferred_bound &&
              !minic_c0_program_add_array_type(
-                 parser->program, element_type, element_count, &declared_array_type)) ||
+                 parser->program, declared_element_type, element_count, &declared_array_type)) ||
             !minic_c0_program_add_global_object(parser->program,
                                                 parser->source + name_span.begin.offset,
                                                 minic_parser_span_length(name_span),
@@ -903,7 +918,9 @@ static bool parse_external_integer_array_definition(MinicParser *parser,
             return false;
         }
         array_type = minic_c0_program_array_type(parser->program, object->type.array_type_id);
-        if (array_type == NULL || !minic_type_equal(array_type->element_type, element_type)) {
+        if (array_type == NULL ||
+            !minic_c0_types_compatible(
+                parser->program, array_type->element_type, declared_element_type)) {
             minic_parser_error(parser, "external integer array definition type mismatch");
             return false;
         }
@@ -927,13 +944,13 @@ static bool parse_external_integer_array_definition(MinicParser *parser,
         return false;
     }
 
-    if (inferred_bound && parser->current.kind == MINIC_TOKEN_LBRACE) {
+    if ((inferred_bound || multidimensional) && parser->current.kind == MINIC_TOKEN_LBRACE) {
         MinicType object_type;
 
         object_type = object->type;
         if (!minic_parser_parse_static_storage_initializer_value(parser, object_id, object_type)) {
             if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
-                minic_parser_error(parser, "cannot initialize inferred external scalar array");
+                minic_parser_error(parser, "cannot initialize external aggregate array");
             }
             return false;
         }
