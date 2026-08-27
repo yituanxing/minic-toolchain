@@ -1212,15 +1212,19 @@ static bool apply_external_object_metadata(MinicParser *parser,
                                            size_t explicit_alignment,
                                            MinicSymbolVisibility visibility,
                                            bool has_visibility) {
+    MinicDeclarationExternalObjectAttributes attributes;
+
     if (parser == NULL || object_id == MINIC_GLOBAL_OBJECT_INVALID) {
         return false;
     }
-    if ((has_section && !minic_c0_global_object_set_section(
-                            parser->program, object_id, section_name, section_name_length)) ||
-        (explicit_alignment != 0U && !minic_c0_global_object_set_explicit_alignment(
-                                         parser->program, object_id, explicit_alignment)) ||
-        (has_visibility &&
-         !minic_c0_global_object_set_visibility(parser->program, object_id, visibility))) {
+    (void)memset(&attributes, 0, sizeof(attributes));
+    attributes.section_name = section_name;
+    attributes.section_name_length = section_name_length;
+    attributes.explicit_alignment = explicit_alignment;
+    attributes.visibility = visibility;
+    attributes.has_section = has_section;
+    attributes.has_visibility = has_visibility;
+    if (!minic_declaration_apply_object_attributes(parser->program, object_id, &attributes)) {
         minic_parser_error(parser, "conflicting external object definition attributes");
         return false;
     }

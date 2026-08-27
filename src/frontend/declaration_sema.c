@@ -169,6 +169,26 @@ bool minic_declaration_external_object_attributes_valid(
             attributes->visibility <= MINIC_SYMBOL_VISIBILITY_PROTECTED);
 }
 
+bool minic_declaration_apply_object_attributes(
+    MinicC0Program *program,
+    MinicGlobalObjectId object_id,
+    const MinicDeclarationExternalObjectAttributes *attributes) {
+    if (program == NULL || object_id >= program->global_object_count ||
+        !minic_declaration_external_object_attributes_valid(attributes)) {
+        return false;
+    }
+    return (!attributes->has_section ||
+            minic_c0_global_object_set_section(program,
+                                               object_id,
+                                               attributes->section_name,
+                                               attributes->section_name_length)) &&
+           (attributes->explicit_alignment == 0U ||
+            minic_c0_global_object_set_explicit_alignment(
+                program, object_id, attributes->explicit_alignment)) &&
+           (!attributes->has_visibility ||
+            minic_c0_global_object_set_visibility(program, object_id, attributes->visibility));
+}
+
 MinicDeclarationExternalObjectCreateStatus
 minic_declaration_create_external_object(MinicC0Program *program,
                                          const char *name,
@@ -240,17 +260,10 @@ MinicDeclarationExternalObjectMergeStatus minic_declaration_merge_external_objec
      * commit step that may allocate, so perform it before composite-type mutation.
      * Array completion and the remaining metadata setters are allocation-free after
      * this preflight and therefore cannot introduce a semantic half-commit. */
-    if ((attributes->has_section &&
-         !minic_c0_global_object_set_section(
-             program, object_id, attributes->section_name, attributes->section_name_length)) ||
-        (minic_type_is_array(object->type) &&
+    if ((minic_type_is_array(object->type) &&
          !minic_declaration_merge_external_array_composite_type(
              program, object->type, declared_type)) ||
-        (attributes->explicit_alignment != 0U &&
-         !minic_c0_global_object_set_explicit_alignment(
-             program, object_id, attributes->explicit_alignment)) ||
-        (attributes->has_visibility &&
-         !minic_c0_global_object_set_visibility(program, object_id, attributes->visibility))) {
+        !minic_declaration_apply_object_attributes(program, object_id, attributes)) {
         return MINIC_DECLARATION_EXTERNAL_OBJECT_MERGE_COMMIT_FAILED;
     }
     return MINIC_DECLARATION_EXTERNAL_OBJECT_MERGE_OK;

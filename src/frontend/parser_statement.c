@@ -2739,13 +2739,18 @@ static bool parse_static_local_declaration(MinicParser *parser) {
         if (!parse_static_local_array_declarator(parser, base_type, &attributes, &object_id)) {
             return false;
         }
-        if (attributes.has_section &&
-            !minic_c0_global_object_set_section(parser->program,
-                                                object_id,
-                                                attributes.section_name,
-                                                attributes.section_name_length)) {
-            minic_parser_error(parser, "cannot apply GNU section to static local object");
-            return false;
+        if (attributes.has_section) {
+            MinicDeclarationExternalObjectAttributes semantic_attributes;
+
+            (void)memset(&semantic_attributes, 0, sizeof(semantic_attributes));
+            semantic_attributes.section_name = attributes.section_name;
+            semantic_attributes.section_name_length = attributes.section_name_length;
+            semantic_attributes.has_section = true;
+            if (!minic_declaration_apply_object_attributes(
+                    parser->program, object_id, &semantic_attributes)) {
+                minic_parser_error(parser, "cannot apply GNU section to static local object");
+                return false;
+            }
         }
         if (parser->current.kind != MINIC_TOKEN_COMMA) {
             break;

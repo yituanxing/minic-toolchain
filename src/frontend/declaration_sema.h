@@ -66,6 +66,11 @@ bool minic_declaration_merge_external_array_composite_type(MinicC0Program *progr
 bool minic_declaration_external_object_attributes_valid(
     const MinicDeclarationExternalObjectAttributes *attributes);
 
+bool minic_declaration_apply_object_attributes(
+    MinicC0Program *program,
+    MinicGlobalObjectId object_id,
+    const MinicDeclarationExternalObjectAttributes *attributes);
+
 MinicDeclarationExternalObjectCreateStatus
 minic_declaration_create_external_object(
     MinicC0Program *program,
