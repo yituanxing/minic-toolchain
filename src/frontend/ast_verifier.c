@@ -765,18 +765,30 @@ static bool verify_expression(const MinicC0Program *program,
     case MINIC_EXPRESSION_COMPOUND_LITERAL: {
         const MinicLocal *local;
         const MinicBlock *initializer_block;
+        MinicArrayObjectInfo array_info;
         bool complete_object;
 
         local = minic_c0_program_local(program, expression->value.compound_literal.local_id);
         initializer_block =
             minic_c0_program_block(program, expression->value.compound_literal.initializer_block);
+        if (local == NULL || initializer_block == NULL ||
+            expression->value_category != MINIC_VALUE_LVALUE ||
+            local->is_register_storage || !minic_type_equal(local->type, expression->type)) {
+            return false;
+        }
+        (void)memset(&array_info, 0, sizeof(array_info));
+        if (local->is_array) {
+            return local->element_count != 0U &&
+                   minic_c0_expression_array_object_info(program, expression, &array_info) &&
+                   !array_info.has_materialized_type &&
+                   array_info.element_count == local->element_count &&
+                   minic_type_equal(array_info.element_type, local->type) &&
+                   minic_c0_type_is_complete_object(program, local->type);
+        }
         complete_object = minic_c0_type_is_complete_object(program, expression->type);
-        return local != NULL && initializer_block != NULL && complete_object &&
-               !minic_type_is_array(expression->type) &&
+        return complete_object && !minic_type_is_array(expression->type) &&
                !minic_type_is_function(expression->type) && !minic_type_is_void(expression->type) &&
-               expression->value_category == MINIC_VALUE_LVALUE && !local->is_array &&
-               !local->is_register_storage && local->element_count == 1U &&
-               minic_type_equal(local->type, expression->type);
+               local->element_count == 1U;
     }
     case MINIC_EXPRESSION_STATEMENT: {
         const MinicBlock *block;
