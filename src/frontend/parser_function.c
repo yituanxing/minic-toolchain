@@ -737,8 +737,15 @@ bool minic_parser_parse_parameter_list(MinicParser *parser,
             minic_parser_error(parser, "parameter count exceeds compiler limit");
             return false;
         }
-        if (!minic_parser_collect_gnu_attribute_lists(parser, &leading_attributes) ||
-            !minic_parser_parse_type_name_preserving_incomplete(parser, &parameter_type) ||
+        if (!minic_parser_collect_gnu_attribute_lists(parser, &leading_attributes)) {
+            return false;
+        }
+        /* C permits register on function parameters.  It affects storage-class
+           semantics only; the ABI parameter type is unchanged. */
+        if (function_identifier_is(parser, "register") && !minic_parser_advance(parser)) {
+            return false;
+        }
+        if (!minic_parser_parse_type_name_preserving_incomplete(parser, &parameter_type) ||
             !minic_parser_collect_gnu_attribute_lists(parser, &post_type_attributes) ||
             !minic_parser_parse_pointer_declarator(parser, parameter_type, &parameter_type)) {
             return false;
