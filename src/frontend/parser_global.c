@@ -1450,7 +1450,8 @@ static bool materialize_static_array_slots(MinicParser *parser,
                                            MinicGlobalObjectId object_id,
                                            MinicType element_type,
                                            const MinicStaticArraySlot *slots,
-                                           size_t slot_count) {
+                                           size_t slot_count,
+                                           size_t aggregate_slot_base) {
     size_t index;
 
     if (parser == NULL || slots == NULL ||
@@ -1464,12 +1465,21 @@ static bool materialize_static_array_slots(MinicParser *parser,
                 minic_parser_error(parser, "cannot materialize static integer array slot");
                 return false;
             }
-        } else if (!materialize_static_pointer_array_slot(
-                       parser, object_id, index, &slots[index].pointer_initializer)) {
-            if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
-                minic_parser_error(parser, "cannot materialize static pointer array slot");
+        } else {
+            size_t aggregate_slot;
+
+            if (aggregate_slot_base > SIZE_MAX - index) {
+                minic_parser_error(parser, "static pointer array aggregate slot overflows");
+                return false;
             }
-            return false;
+            aggregate_slot = aggregate_slot_base + index;
+            if (!materialize_static_pointer_array_slot(
+                    parser, object_id, aggregate_slot, &slots[index].pointer_initializer)) {
+                if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
+                    minic_parser_error(parser, "cannot materialize static pointer array slot");
+                }
+                return false;
+            }
         }
     }
     return true;
@@ -1581,7 +1591,14 @@ static bool parse_static_scalar_array_transaction(MinicParser *parser,
             final_slots[index] = action_values[owner];
         }
     }
-    if (!materialize_static_array_slots(parser, object_id, element_type, final_slots, extent)) {
+    object = minic_c0_program_global_object(parser->program, object_id);
+    if (object == NULL ||
+        !materialize_static_array_slots(parser,
+                                        object_id,
+                                        element_type,
+                                        final_slots,
+                                        extent,
+                                        object->initializer_count)) {
         goto done;
     }
     success = true;
