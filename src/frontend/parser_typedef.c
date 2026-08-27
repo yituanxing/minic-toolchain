@@ -1,4 +1,5 @@
 #include "frontend/parser_internal.h"
+#include "frontend/declaration_sema.h"
 
 #include <limits.h>
 #include <stdlib.h>
@@ -189,36 +190,22 @@ static bool consume_typedef_attribute(MinicParser *parser,
         return true;
     }
     if (descriptor->kind == MINIC_ATTRIBUTE_TRANSPARENT_UNION) {
-        MinicRecord *record;
-        size_t field_index;
+        MinicDeclarationTransparentUnionStatus status;
 
-        if (!minic_type_is_record(*context->aliased_type)) {
-            minic_parser_error(parser, "GNU transparent_union requires a union type");
-            return false;
+        status = minic_declaration_apply_transparent_union(parser->program, *context->aliased_type);
+        if (status == MINIC_DECLARATION_TRANSPARENT_UNION_OK) {
+            return true;
         }
-        record = &parser->program->records[context->aliased_type->record_id];
-        if (!record->is_union) {
-            minic_parser_error(parser, "GNU transparent_union requires a union type");
-            return false;
-        }
-        if (!record->is_complete || record->field_count == 0U) {
+        if (status == MINIC_DECLARATION_TRANSPARENT_UNION_INCOMPLETE) {
             minic_parser_error(parser, "GNU transparent_union requires a complete non-empty union");
-            return false;
+        } else if (status == MINIC_DECLARATION_TRANSPARENT_UNION_UNSUPPORTED_MEMBER) {
+            minic_parser_error(parser,
+                               "GNU transparent_union v0 requires pointer members with one "
+                               "machine representation");
+        } else {
+            minic_parser_error(parser, "GNU transparent_union requires a union type");
         }
-        for (field_index = 0U; field_index < record->field_count; ++field_index) {
-            const MinicRecordField *field;
-
-            field = minic_c0_record_field(record, field_index);
-            if (field == NULL || field->is_array || field->is_bit_field ||
-                !minic_type_is_pointer(field->type)) {
-                minic_parser_error(parser,
-                                   "GNU transparent_union v0 requires pointer members with one "
-                                   "machine representation");
-                return false;
-            }
-        }
-        record->is_transparent_union = true;
-        return true;
+        return false;
     }
     minic_parser_error(parser, "unsupported GNU typedef attribute");
     return false;

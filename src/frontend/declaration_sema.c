@@ -201,6 +201,34 @@ bool minic_declaration_mark_file_scope_object(MinicC0Program *program,
     return true;
 }
 
+MinicDeclarationTransparentUnionStatus
+minic_declaration_apply_transparent_union(MinicC0Program *program, MinicType type) {
+    MinicRecord *record;
+    size_t field_index;
+
+    if (program == NULL || !minic_type_is_record(type) || type.record_id >= program->record_count) {
+        return MINIC_DECLARATION_TRANSPARENT_UNION_INVALID;
+    }
+    record = &program->records[type.record_id];
+    if (!record->is_union) {
+        return MINIC_DECLARATION_TRANSPARENT_UNION_NOT_UNION;
+    }
+    if (!record->is_complete || record->field_count == 0U) {
+        return MINIC_DECLARATION_TRANSPARENT_UNION_INCOMPLETE;
+    }
+    for (field_index = 0U; field_index < record->field_count; ++field_index) {
+        const MinicRecordField *field;
+
+        field = minic_c0_record_field(record, field_index);
+        if (field == NULL || field->is_array || field->is_bit_field ||
+            !minic_type_is_pointer(field->type)) {
+            return MINIC_DECLARATION_TRANSPARENT_UNION_UNSUPPORTED_MEMBER;
+        }
+    }
+    record->is_transparent_union = true;
+    return MINIC_DECLARATION_TRANSPARENT_UNION_OK;
+}
+
 MinicDeclarationExternalObjectCreateStatus
 minic_declaration_create_external_object(MinicC0Program *program,
                                          const char *name,

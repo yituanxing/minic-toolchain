@@ -41,6 +41,14 @@ typedef enum MinicDeclarationExternalObjectMergeStatus {
     MINIC_DECLARATION_EXTERNAL_OBJECT_MERGE_COMMIT_FAILED
 } MinicDeclarationExternalObjectMergeStatus;
 
+typedef enum MinicDeclarationTransparentUnionStatus {
+    MINIC_DECLARATION_TRANSPARENT_UNION_OK = 0,
+    MINIC_DECLARATION_TRANSPARENT_UNION_INVALID,
+    MINIC_DECLARATION_TRANSPARENT_UNION_NOT_UNION,
+    MINIC_DECLARATION_TRANSPARENT_UNION_INCOMPLETE,
+    MINIC_DECLARATION_TRANSPARENT_UNION_UNSUPPORTED_MEMBER
+} MinicDeclarationTransparentUnionStatus;
+
 typedef enum MinicDeclarationExternalObjectCreateStatus {
     MINIC_DECLARATION_EXTERNAL_OBJECT_CREATE_OK = 0,
     MINIC_DECLARATION_EXTERNAL_OBJECT_CREATE_INVALID,
@@ -73,6 +81,9 @@ bool minic_declaration_apply_object_attributes(
 
 bool minic_declaration_mark_file_scope_object(MinicC0Program *program,
                                               MinicGlobalObjectId object_id);
+
+MinicDeclarationTransparentUnionStatus
+minic_declaration_apply_transparent_union(MinicC0Program *program, MinicType type);
 
 MinicDeclarationExternalObjectCreateStatus
 minic_declaration_create_external_object(
