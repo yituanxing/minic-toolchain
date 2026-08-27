@@ -1284,13 +1284,31 @@ bool minic_c0_program_verify_target(const MinicC0Program *program,
         fprintf(stderr, "VERIFY_STAGE locals\n");
     }
     for (index = 0U; index < program->local_count; ++index) {
-        size_t explicit_alignment = program->locals[index].explicit_alignment;
+        const MinicLocal *local;
+        size_t explicit_alignment;
 
-        if (program->locals[index].element_count == 0U ||
-            !type_is_valid(program, target, program->locals[index].type) ||
-            minic_type_is_function(program->locals[index].type) ||
+        local = &program->locals[index];
+        explicit_alignment = local->explicit_alignment;
+        if (local->element_count == 0U ||
+            !type_is_valid(program, target, local->type) ||
+            minic_type_is_function(local->type) ||
             (explicit_alignment != 0U &&
              (explicit_alignment & (explicit_alignment - 1U)) != 0U)) {
+            if (trace) {
+                fprintf(stderr,
+                        "VERIFY_FAIL local=%zu element_count=%zu is_array=%d "
+                        "base_kind=%d pointer_depth=%u array_type_id=%zu "
+                        "explicit_alignment=%zu name_span=%zu:%zu\n",
+                        index,
+                        local->element_count,
+                        local->is_array ? 1 : 0,
+                        (int)local->type.base_kind,
+                        (unsigned int)local->type.pointer_depth,
+                        (size_t)local->type.array_type_id,
+                        explicit_alignment,
+                        local->name_span.begin.offset,
+                        local->name_span.end.offset);
+            }
             return false;
         }
     }
