@@ -284,6 +284,9 @@ typedef struct MinicCoreInstruction {
             MinicCoreValueId base;
             MinicRecordId record_id;
             size_t field_index;
+            /* Target-neutral DataLayout result captured at AST -> Core lowering.
+               Backends consume the byte displacement without reopening record AST. */
+            size_t byte_offset;
         } field_address;
         struct {
             MinicCoreValueId base;

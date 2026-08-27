@@ -538,32 +538,13 @@ static bool core_integer_type_is_signed(const MinicCoreFunction *function,
     return true;
 }
 
-static bool core_field_address_supported(const MinicC0Program *program,
-                                         const MinicCoreInstruction *instruction,
+static bool core_field_address_supported(const MinicCoreInstruction *instruction,
                                          size_t *field_offset) {
-    const MinicRecord *record;
-    const MinicRecordField *field;
-    size_t offset;
-
-    if (program == NULL || instruction == NULL ||
-        instruction->kind != MINIC_CORE_INSTRUCTION_FIELD_ADDRESS) {
-        return false;
-    }
-    record = minic_c0_program_record(program, instruction->value.field_address.record_id);
-    field = minic_c0_record_field(record, instruction->value.field_address.field_index);
-    /* M103_INTEGER_BIT_FIELD_READ: FIELD_ADDRESS may be used internally
-       for a bit-field storage-unit read. The frontend/Core lowerer still
-       rejects taking a C address of a bit-field. */
-    if (record == NULL || field == NULL ||
-        !minic_data_layout_record_field_offset(minic_default_data_layout(),
-                                               program,
-                                               record,
-                                               instruction->value.field_address.field_index,
-                                               &offset)) {
+    if (instruction == NULL || instruction->kind != MINIC_CORE_INSTRUCTION_FIELD_ADDRESS) {
         return false;
     }
     if (field_offset != NULL) {
-        *field_offset = offset;
+        *field_offset = instruction->value.field_address.byte_offset;
     }
     return true;
 }
@@ -1718,7 +1699,7 @@ static bool core_instruction_supported(const MinicC0Program *program,
     case MINIC_CORE_INSTRUCTION_INDIRECT_CALL:
         return core_indirect_call_supported(program, function, instruction);
     case MINIC_CORE_INSTRUCTION_FIELD_ADDRESS:
-        return core_field_address_supported(program, instruction, NULL);
+        return core_field_address_supported(instruction, NULL);
     case MINIC_CORE_INSTRUCTION_SCALAR_BITCAST:
         return core_scalar_bitcast_supported(program, function, instruction);
     }
@@ -2507,12 +2488,11 @@ static bool emit_indirect_call(FILE *file,
 }
 
 static bool emit_field_address(FILE *file,
-                               const MinicC0Program *program,
                                const MinicRiscv64CoreFrame *frame,
                                const MinicCoreInstruction *instruction) {
     size_t field_offset;
 
-    if (!core_field_address_supported(program, instruction, &field_offset) ||
+    if (!core_field_address_supported(instruction, &field_offset) ||
         !load_core_value(file, frame, instruction->value.field_address.base, "t0")) {
         return false;
     }
@@ -3707,7 +3687,7 @@ static bool emit_instruction(FILE *file,
     case MINIC_CORE_INSTRUCTION_INDIRECT_CALL:
         return emit_indirect_call(file, program, function, frame, instruction);
     case MINIC_CORE_INSTRUCTION_FIELD_ADDRESS:
-        return emit_field_address(file, program, frame, instruction);
+        return emit_field_address(file, frame, instruction);
     }
     return false;
 }

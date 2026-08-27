@@ -552,13 +552,27 @@ static MinicCoreLowerStatus append_field_address(MinicCoreLowerContext *context,
                                                  MinicCoreValueId *address_id) {
     MinicCoreInstruction instruction;
     MinicType base_pointee;
+    const MinicRecord *record;
+    const MinicRecordField *field;
+    size_t byte_offset;
 
-    if (context == NULL || context->function == NULL || address_id == NULL ||
+    if (context == NULL || context->body == NULL || context->body->program == NULL ||
+        context->function == NULL || address_id == NULL ||
         base_id >= context->function->value_count ||
         !minic_type_pointee(context->function->values[base_id].type, &base_pointee) ||
         !minic_type_is_record(base_pointee) || base_pointee.record_id != record_id ||
         record_id == MINIC_RECORD_INVALID) {
         return MINIC_CORE_LOWER_ERROR;
+    }
+    record = minic_c0_program_record(context->body->program, record_id);
+    field = minic_c0_record_field(record, field_index);
+    if (record == NULL || field == NULL ||
+        !minic_data_layout_record_field_offset(core_data_layout(context),
+                                               context->body->program,
+                                               record,
+                                               field_index,
+                                               &byte_offset)) {
+        return MINIC_CORE_LOWER_UNSUPPORTED;
     }
     (void)memset(&instruction, 0, sizeof(instruction));
     instruction.kind = MINIC_CORE_INSTRUCTION_FIELD_ADDRESS;
@@ -567,6 +581,7 @@ static MinicCoreLowerStatus append_field_address(MinicCoreLowerContext *context,
     instruction.value.field_address.base = base_id;
     instruction.value.field_address.record_id = record_id;
     instruction.value.field_address.field_index = field_index;
+    instruction.value.field_address.byte_offset = byte_offset;
     if (!minic_type_pointer_to(field_type, &instruction.type)) {
         return MINIC_CORE_LOWER_ERROR;
     }
