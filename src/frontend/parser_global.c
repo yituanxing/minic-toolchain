@@ -1454,7 +1454,7 @@ static bool materialize_static_array_slots(MinicParser *parser,
                                            size_t aggregate_slot_base) {
     size_t index;
 
-    if (parser == NULL || slots == NULL ||
+    if (parser == NULL || (slot_count != 0U && slots == NULL) ||
         (!minic_type_is_integer(element_type) && !minic_type_is_pointer(element_type))) {
         return false;
     }
@@ -2086,8 +2086,10 @@ static bool parse_static_array_constant(MinicParser *parser,
     element_count = array_type->element_count;
     infer_bound = element_count == 0U && !array_type->is_zero_length;
     if (element_count == 0U && array_type->is_zero_length) {
-        minic_parser_error(parser, "invalid zero-length static array initializer type");
-        return false;
+        return minic_parser_expect(
+                   parser, MINIC_TOKEN_LBRACE, "expected '{' for zero-length array initializer") &&
+               minic_parser_expect(
+                   parser, MINIC_TOKEN_RBRACE, "zero-length array initializer must be empty");
     }
     if (minic_type_is_integer(element_type) || minic_type_is_pointer(element_type)) {
         return parse_static_scalar_array_transaction(
@@ -3563,11 +3565,7 @@ static bool parse_static_record_array(MinicParser *parser,
             }
             return false;
         }
-        if (declared_count == 0U) {
-            minic_parser_error(parser,
-                               "cannot infer static record array bound from an empty initializer");
-            return false;
-        }
+
     }
 
     if (existing_id != MINIC_GLOBAL_OBJECT_INVALID) {
@@ -3588,8 +3586,11 @@ static bool parse_static_record_array(MinicParser *parser,
             !static_record_array_declaration_compatible(
                 parser->program, existing->type, element_type, declared_count, false) ||
             (existing_array->element_count == 0U && !existing_array->is_zero_length &&
-             !minic_c0_program_complete_array_type(
-                 parser->program, existing->type, declared_count)) ||
+             (declared_count == 0U
+                  ? !minic_c0_program_complete_zero_length_array_type(
+                        parser->program, existing->type)
+                  : !minic_c0_program_complete_array_type(
+                        parser->program, existing->type, declared_count))) ||
             !minic_c0_global_object_begin_definition(parser->program, existing_id)) {
             minic_parser_error(parser, "conflicting static record array definition");
             return false;
@@ -3597,10 +3598,16 @@ static bool parse_static_record_array(MinicParser *parser,
         object_id = existing_id;
         object_type = parser->program->global_objects[object_id].type;
     } else {
-        if (!minic_c0_program_add_array_type(parser->program,
-                                             multidimensional ? nested_element_type : element_type,
-                                             declared_count,
-                                             &object_type) ||
+        if ((declared_count == 0U
+                 ? !minic_c0_program_add_zero_length_array_type(
+                       parser->program,
+                       multidimensional ? nested_element_type : element_type,
+                       &object_type)
+                 : !minic_c0_program_add_array_type(
+                       parser->program,
+                       multidimensional ? nested_element_type : element_type,
+                       declared_count,
+                       &object_type)) ||
             !minic_c0_program_add_global_object(parser->program,
                                                 parser->source + name_span.begin.offset,
                                                 minic_parser_span_length(name_span),
