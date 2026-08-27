@@ -71,6 +71,9 @@ bool minic_declaration_apply_object_attributes(
     MinicGlobalObjectId object_id,
     const MinicDeclarationExternalObjectAttributes *attributes);
 
+bool minic_declaration_mark_file_scope_object(MinicC0Program *program,
+                                              MinicGlobalObjectId object_id);
+
 MinicDeclarationExternalObjectCreateStatus
 minic_declaration_create_external_object(
     MinicC0Program *program,

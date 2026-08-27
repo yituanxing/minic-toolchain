@@ -189,6 +189,18 @@ bool minic_declaration_apply_object_attributes(
             minic_c0_global_object_set_visibility(program, object_id, attributes->visibility));
 }
 
+bool minic_declaration_mark_file_scope_object(MinicC0Program *program,
+                                              MinicGlobalObjectId object_id) {
+    MinicGlobalObject *object;
+
+    if (program == NULL || object_id >= program->global_object_count) {
+        return false;
+    }
+    object = &program->global_objects[object_id];
+    object->is_block_scope_extern_only = false;
+    return true;
+}
+
 MinicDeclarationExternalObjectCreateStatus
 minic_declaration_create_external_object(MinicC0Program *program,
                                          const char *name,

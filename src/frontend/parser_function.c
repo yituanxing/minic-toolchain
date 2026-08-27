@@ -1295,7 +1295,10 @@ static bool record_external_tentative_object(MinicParser *parser,
             return false;
         }
     }
-    parser->program->global_objects[object_id].is_block_scope_extern_only = false;
+    if (!minic_declaration_mark_file_scope_object(parser->program, object_id)) {
+        minic_parser_error(parser, "cannot promote external object to file scope");
+        return false;
+    }
     if (!apply_external_object_metadata(parser,
                                         object_id,
                                         section_name,

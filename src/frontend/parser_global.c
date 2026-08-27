@@ -3841,7 +3841,10 @@ bool minic_parser_parse_extern_global_after_head(MinicParser *parser,
                 return false;
             }
         }
-        parser->program->global_objects[object_id].is_block_scope_extern_only = false;
+        if (!minic_declaration_mark_file_scope_object(parser->program, object_id)) {
+            minic_parser_error(parser, "cannot promote extern object to file scope");
+            return false;
+        }
         if (declarator_alias_target != MINIC_GLOBAL_OBJECT_INVALID &&
             !minic_c0_global_object_set_alias(
                 parser->program, object_id, declarator_alias_target)) {
