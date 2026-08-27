@@ -4147,18 +4147,21 @@ MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
                    : MINIC_CORE_LOWER_ERROR;
     }
 
-    /* M158_FINAL_STRICT_TAIL_CTZ_LOWER: keep the builtin semantic in
-       Core instead of expanding a target loop in the frontend.  The RV64
-       backend preserves the established ctzl(0) == 64 baseline behavior. */
     if (expression->kind == MINIC_EXPRESSION_BUILTIN_UNARY &&
-        expression->value.builtin_unary.operator_kind == MINIC_BUILTIN_UNARY_CTZL) {
+        (expression->value.builtin_unary.operator_kind == MINIC_BUILTIN_UNARY_CLZ ||
+         expression->value.builtin_unary.operator_kind == MINIC_BUILTIN_UNARY_CLZL ||
+         expression->value.builtin_unary.operator_kind == MINIC_BUILTIN_UNARY_CLZLL ||
+         expression->value.builtin_unary.operator_kind == MINIC_BUILTIN_UNARY_CTZ ||
+         expression->value.builtin_unary.operator_kind == MINIC_BUILTIN_UNARY_CTZL ||
+         expression->value.builtin_unary.operator_kind == MINIC_BUILTIN_UNARY_CTZLL)) {
         const MinicExpression *operand;
         MinicCoreValueId operand_value;
         MinicCoreLowerStatus status;
+        bool is_clz;
 
         operand = minic_c0_program_expression(
             context->body->program, expression->value.builtin_unary.operand);
-        if (operand == NULL || !minic_type_equal(operand->type, minic_type_unsigned_long()) ||
+        if (operand == NULL || !minic_type_is_unsigned_integer(operand->type) ||
             !minic_type_equal(expression->type, minic_type_int())) {
             return MINIC_CORE_LOWER_UNSUPPORTED;
         }
@@ -4168,12 +4171,15 @@ MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
             return status;
         }
         if (operand_value >= context->function->value_count ||
-            !minic_type_equal(context->function->values[operand_value].type,
-                              minic_type_unsigned_long())) {
+            !minic_type_equal(context->function->values[operand_value].type, operand->type)) {
             return MINIC_CORE_LOWER_ERROR;
         }
+        is_clz = expression->value.builtin_unary.operator_kind == MINIC_BUILTIN_UNARY_CLZ ||
+                 expression->value.builtin_unary.operator_kind == MINIC_BUILTIN_UNARY_CLZL ||
+                 expression->value.builtin_unary.operator_kind == MINIC_BUILTIN_UNARY_CLZLL;
         (void)memset(&instruction, 0, sizeof(instruction));
-        instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_CTZ;
+        instruction.kind = is_clz ? MINIC_CORE_INSTRUCTION_INTEGER_CLZ
+                                  : MINIC_CORE_INSTRUCTION_INTEGER_CTZ;
         instruction.span = expression->span;
         instruction.type = minic_type_int();
         instruction.result = MINIC_CORE_VALUE_INVALID;

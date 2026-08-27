@@ -106,8 +106,12 @@ typedef enum MinicBinaryOperator {
 } MinicBinaryOperator;
 
 typedef enum MinicBuiltinUnaryOperator {
-    MINIC_BUILTIN_UNARY_CLZLL = 0,
+    MINIC_BUILTIN_UNARY_CLZ = 0,
+    MINIC_BUILTIN_UNARY_CLZL,
+    MINIC_BUILTIN_UNARY_CLZLL,
+    MINIC_BUILTIN_UNARY_CTZ,
     MINIC_BUILTIN_UNARY_CTZL,
+    MINIC_BUILTIN_UNARY_CTZLL,
     MINIC_BUILTIN_UNARY_FFSLL,
     MINIC_BUILTIN_UNARY_ISDIGIT
 } MinicBuiltinUnaryOperator;

@@ -975,15 +975,14 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
                available_values[instruction->value.operand] &&
                minic_type_equal(function->values[instruction->value.operand].type,
                                 instruction->type);
-    /* M158_FINAL_STRICT_TAIL_CTZ_VERIFY: __builtin_ctzl has an
-       unsigned-long operand and int result in the normalized AST. */
+    case MINIC_CORE_INSTRUCTION_INTEGER_CLZ:
     case MINIC_CORE_INSTRUCTION_INTEGER_CTZ:
         return instruction_result_is_valid(function, instruction) &&
                minic_type_equal(instruction->type, minic_type_int()) &&
                instruction->value.operand < function->value_count &&
                available_values[instruction->value.operand] &&
-               minic_type_equal(function->values[instruction->value.operand].type,
-                                minic_type_unsigned_long());
+               minic_type_is_unsigned_integer(
+                   function->values[instruction->value.operand].type);
     case MINIC_CORE_INSTRUCTION_SCALAR_IS_ZERO:
         return instruction_result_is_valid(function, instruction) &&
                minic_type_equal(instruction->type, minic_type_int()) &&
@@ -1910,6 +1909,11 @@ static bool dump_instruction(FILE *output,
     case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_NOT:
         return fprintf(output,
                        "  %%%" PRIu32 " = inot %%%" PRIu32 "\n",
+                       instruction->result,
+                       instruction->value.operand) >= 0;
+    case MINIC_CORE_INSTRUCTION_INTEGER_CLZ:
+        return fprintf(output,
+                       "  %%%" PRIu32 " = clz.int %%%" PRIu32 "\n",
                        instruction->result,
                        instruction->value.operand) >= 0;
     case MINIC_CORE_INSTRUCTION_INTEGER_CTZ:

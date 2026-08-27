@@ -545,6 +545,30 @@ static bool core_integer_type_is_signed(const MinicCoreFunction *function,
     return true;
 }
 
+static bool core_unsigned_integer_width(const MinicC0Program *program,
+                                        const MinicCoreFunction *function,
+                                        MinicCoreValueId value_id,
+                                        unsigned int *width) {
+    size_t size;
+    size_t alignment;
+    MinicType type;
+
+    if (program == NULL || function == NULL || width == NULL ||
+        value_id >= function->value_count) {
+        return false;
+    }
+    type = function->values[value_id].type;
+    if (!minic_type_is_unsigned_integer(type) ||
+        !minic_data_layout_type(
+            minic_default_data_layout(), program, type, &size, &alignment) ||
+        size == 0U || size > 8U) {
+        return false;
+    }
+    (void)alignment;
+    *width = (unsigned int)(size * 8U);
+    return true;
+}
+
 static bool core_field_address_supported(const MinicCoreInstruction *instruction,
                                          size_t *field_offset) {
     if (instruction == NULL || instruction->kind != MINIC_CORE_INSTRUCTION_FIELD_ADDRESS) {
@@ -1624,6 +1648,7 @@ static bool core_instruction_supported(const MinicC0Program *program,
     case MINIC_CORE_INSTRUCTION_DOUBLE_TO_INTEGER:
     case MINIC_CORE_INSTRUCTION_INTEGER_NEGATE:
     case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_NOT:
+    case MINIC_CORE_INSTRUCTION_INTEGER_CLZ:
     case MINIC_CORE_INSTRUCTION_INTEGER_CTZ:
     case MINIC_CORE_INSTRUCTION_SCALAR_IS_ZERO:
         return true;
@@ -3405,10 +3430,38 @@ static bool emit_instruction(FILE *file,
             return false;
         }
         return store_core_value(file, frame, instruction->result, "t0");
-    /* M158_FINAL_STRICT_TAIL_CTZ_RV64: RV64I baseline, intentionally
-       no Zbb dependency. Keep the legacy compiler's zero-input result (64). */
-    case MINIC_CORE_INSTRUCTION_INTEGER_CTZ:
-        if (!load_core_value(file, frame, instruction->value.operand, "t0") ||
+    case MINIC_CORE_INSTRUCTION_INTEGER_CLZ: {
+        unsigned int width;
+
+        if (!core_unsigned_integer_width(
+                program, function, instruction->value.operand, &width) ||
+            !load_core_value(file, frame, instruction->value.operand, "t0") ||
+            fprintf(file,
+                    "  li t1, 0\n"
+                    "  li t2, 1\n"
+                    "  slli t2, t2, %u\n"
+                    ".L%s_core_clz_loop_%" PRIu32 ":\n"
+                    "  and t3, t0, t2\n"
+                    "  bnez t3, .L%s_core_clz_done_%" PRIu32 "\n"
+                    "  addi t1, t1, 1\n"
+                    "  srli t2, t2, 1\n"
+                    "  bnez t2, .L%s_core_clz_loop_%" PRIu32 "\n"
+                    ".L%s_core_clz_done_%" PRIu32 ":\n",
+                    width - 1U,
+                    symbol_name, instruction->result,
+                    symbol_name, instruction->result,
+                    symbol_name, instruction->result,
+                    symbol_name, instruction->result) < 0) {
+            return false;
+        }
+        return store_core_value(file, frame, instruction->result, "t1");
+    }
+    case MINIC_CORE_INSTRUCTION_INTEGER_CTZ: {
+        unsigned int width;
+
+        if (!core_unsigned_integer_width(
+                program, function, instruction->value.operand, &width) ||
+            !load_core_value(file, frame, instruction->value.operand, "t0") ||
             fprintf(file,
                     "  beqz t0, .L%s_core_ctz_zero_%" PRIu32 "\n"
                     "  li t1, 0\n"
@@ -3419,17 +3472,19 @@ static bool emit_instruction(FILE *file,
                     "  srli t0, t0, 1\n"
                     "  j .L%s_core_ctz_loop_%" PRIu32 "\n"
                     ".L%s_core_ctz_zero_%" PRIu32 ":\n"
-                    "  li t1, 64\n"
+                    "  li t1, %u\n"
                     ".L%s_core_ctz_done_%" PRIu32 ":\n",
                     symbol_name, instruction->result,
                     symbol_name, instruction->result,
                     symbol_name, instruction->result,
                     symbol_name, instruction->result,
                     symbol_name, instruction->result,
+                    width,
                     symbol_name, instruction->result) < 0) {
             return false;
         }
         return store_core_value(file, frame, instruction->result, "t1");
+    }
     case MINIC_CORE_INSTRUCTION_SCALAR_IS_ZERO:
         if (!load_core_value(file, frame, instruction->value.operand, "t0") ||
             fprintf(file, "  seqz t0, t0\n") < 0) {

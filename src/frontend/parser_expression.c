@@ -1731,11 +1731,17 @@ static bool parse_builtin_unary(MinicParser *parser,
         return false;
     }
     switch (operator_kind) {
-    case MINIC_BUILTIN_UNARY_CLZLL:
-        argument_type = minic_type_unsigned_long_long();
+    case MINIC_BUILTIN_UNARY_CLZ:
+    case MINIC_BUILTIN_UNARY_CTZ:
+        argument_type = minic_type_unsigned_int();
         break;
+    case MINIC_BUILTIN_UNARY_CLZL:
     case MINIC_BUILTIN_UNARY_CTZL:
         argument_type = minic_type_unsigned_long();
+        break;
+    case MINIC_BUILTIN_UNARY_CLZLL:
+    case MINIC_BUILTIN_UNARY_CTZLL:
+        argument_type = minic_type_unsigned_long_long();
         break;
     case MINIC_BUILTIN_UNARY_FFSLL:
         argument_type = minic_type_long_long();
@@ -2107,6 +2113,20 @@ static bool parse_primary(MinicParser *parser, MinicExpressionId *expression_id,
         }
         return finish_value_expression(parser, primary_id, decay_array, expression_id);
     }
+    if (generic_token_text_equals(parser, "__builtin_clz")) {
+        if (!parse_builtin_unary(parser, MINIC_BUILTIN_UNARY_CLZ, "__builtin_clz", &primary_id) ||
+            !minic_parser_parse_postfix(parser, primary_id, &primary_id)) {
+            return false;
+        }
+        return finish_value_expression(parser, primary_id, decay_array, expression_id);
+    }
+    if (generic_token_text_equals(parser, "__builtin_clzl")) {
+        if (!parse_builtin_unary(parser, MINIC_BUILTIN_UNARY_CLZL, "__builtin_clzl", &primary_id) ||
+            !minic_parser_parse_postfix(parser, primary_id, &primary_id)) {
+            return false;
+        }
+        return finish_value_expression(parser, primary_id, decay_array, expression_id);
+    }
     if (generic_token_text_equals(parser, "__builtin_clzll")) {
         if (!parse_builtin_unary(
                 parser, MINIC_BUILTIN_UNARY_CLZLL, "__builtin_clzll", &primary_id) ||
@@ -2115,8 +2135,23 @@ static bool parse_primary(MinicParser *parser, MinicExpressionId *expression_id,
         }
         return finish_value_expression(parser, primary_id, decay_array, expression_id);
     }
+    if (generic_token_text_equals(parser, "__builtin_ctz")) {
+        if (!parse_builtin_unary(parser, MINIC_BUILTIN_UNARY_CTZ, "__builtin_ctz", &primary_id) ||
+            !minic_parser_parse_postfix(parser, primary_id, &primary_id)) {
+            return false;
+        }
+        return finish_value_expression(parser, primary_id, decay_array, expression_id);
+    }
     if (generic_token_text_equals(parser, "__builtin_ctzl")) {
         if (!parse_builtin_unary(parser, MINIC_BUILTIN_UNARY_CTZL, "__builtin_ctzl", &primary_id) ||
+            !minic_parser_parse_postfix(parser, primary_id, &primary_id)) {
+            return false;
+        }
+        return finish_value_expression(parser, primary_id, decay_array, expression_id);
+    }
+    if (generic_token_text_equals(parser, "__builtin_ctzll")) {
+        if (!parse_builtin_unary(
+                parser, MINIC_BUILTIN_UNARY_CTZLL, "__builtin_ctzll", &primary_id) ||
             !minic_parser_parse_postfix(parser, primary_id, &primary_id)) {
             return false;
         }

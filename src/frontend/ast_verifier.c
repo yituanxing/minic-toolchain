@@ -713,11 +713,17 @@ static bool verify_expression(const MinicC0Program *program,
         builtin_operand =
             expression_before(program, expression->value.builtin_unary.operand, expression_index);
         switch (expression->value.builtin_unary.operator_kind) {
-        case MINIC_BUILTIN_UNARY_CLZLL:
-            expected_operand_type = minic_type_unsigned_long_long();
+        case MINIC_BUILTIN_UNARY_CLZ:
+        case MINIC_BUILTIN_UNARY_CTZ:
+            expected_operand_type = minic_type_unsigned_int();
             break;
+        case MINIC_BUILTIN_UNARY_CLZL:
         case MINIC_BUILTIN_UNARY_CTZL:
             expected_operand_type = minic_type_unsigned_long();
+            break;
+        case MINIC_BUILTIN_UNARY_CLZLL:
+        case MINIC_BUILTIN_UNARY_CTZLL:
+            expected_operand_type = minic_type_unsigned_long_long();
             break;
         case MINIC_BUILTIN_UNARY_FFSLL:
             expected_operand_type = minic_type_long_long();

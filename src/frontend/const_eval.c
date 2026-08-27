@@ -310,6 +310,8 @@ static bool eval_builtin_unary(const MinicC0Program *program,
     operator_kind = expression->value.builtin_unary.operator_kind;
     count = 0U;
     switch (operator_kind) {
+    case MINIC_BUILTIN_UNARY_CLZ:
+    case MINIC_BUILTIN_UNARY_CLZL:
     case MINIC_BUILTIN_UNARY_CLZLL:
         if (bits == 0U) {
             return false;
@@ -319,7 +321,9 @@ static bool eval_builtin_unary(const MinicC0Program *program,
             bits <<= 1U;
         }
         break;
+    case MINIC_BUILTIN_UNARY_CTZ:
     case MINIC_BUILTIN_UNARY_CTZL:
+    case MINIC_BUILTIN_UNARY_CTZLL:
         if (bits == 0U) {
             return false;
         }
