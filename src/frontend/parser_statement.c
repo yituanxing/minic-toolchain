@@ -1502,8 +1502,8 @@ static bool finalize_local_cleanup(MinicParser *parser,
     function = *function_borrow;
     if (function.parameter_count != 1U || function.is_variadic ||
         !minic_type_pointer_to(local->type, &pointer_type) ||
-        !minic_c0_types_compatible(parser->program, function.parameter_types[0], pointer_type)) {
-        minic_parser_error(parser, "GNU cleanup function must accept a pointer to the local type");
+        !minic_type_assignment_compatible(function.parameter_types[0], pointer_type)) {
+        minic_parser_error(parser, "GNU cleanup function must accept the local object's address");
         return false;
     }
     if (!add_local_lvalue_expression(parser, local_id, local->name_span, &local_expression_id)) {
