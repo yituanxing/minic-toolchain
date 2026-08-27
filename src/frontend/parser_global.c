@@ -906,6 +906,19 @@ static bool parse_static_scalar(MinicParser *parser, MinicType type, MinicSource
             return false;
         }
     }
+    if (parser->current.kind == MINIC_TOKEN_COMMA) {
+        MinicSourceSpan next_name_span;
+
+        if (!minic_parser_advance(parser) || parser->current.kind != MINIC_TOKEN_IDENTIFIER) {
+            minic_parser_error(parser, "expected static scalar declarator after ','");
+            return false;
+        }
+        next_name_span = parser->current.span;
+        if (!minic_parser_advance(parser)) {
+            return false;
+        }
+        return parse_static_scalar(parser, type, next_name_span);
+    }
     return minic_parser_expect(parser, MINIC_TOKEN_SEMICOLON, "expected ';' after global object");
 }
 
