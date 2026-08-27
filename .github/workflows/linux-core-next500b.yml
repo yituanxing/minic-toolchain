@@ -28,7 +28,7 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: build/linux-next500b-corpus
-          key: linux-next500b-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-indices-1000-1499
+          key: linux-next500b-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-indices-1500-1999
 
       - name: Validate cached next500 corpus
         if: steps.next500-cache.outputs.cache-hit == 'true'
@@ -117,16 +117,16 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: build/linux-next500b-corpus
-          key: linux-next500b-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-indices-1000-1499
+          key: linux-next500b-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-indices-1500-1999
 
 
   full500:
     if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[next500b]')
-    needs: prepare-next500bb-corpus
+    needs: prepare-next500b-corpus
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     concurrency:
-      group: linux-next500bb-full500-${{ github.ref }}
+      group: linux-next500b-full500-${{ github.ref }}
       cancel-in-progress: false
     steps:
       - uses: actions/checkout@v4
@@ -138,25 +138,25 @@ jobs:
         id: next500b-cache
         uses: actions/cache/restore@v4
         with:
-          path: build/linux-next500bb-corpus
-          key: linux-next500bb-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-indices-1000-1499
+          path: build/linux-next500b-corpus
+          key: linux-next500b-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-indices-1500-1999
 
       - name: Require frozen next500b corpus
         run: |
           test "${{ steps.next500b-cache.outputs.cache-hit }}" = true
-          test "$(grep -cve '^[[:space:]]*$' build/linux-next500bb-corpus/selected-tus.txt)" -eq 500
+          test "$(grep -cve '^[[:space:]]*$' build/linux-next500b-corpus/selected-tus.txt)" -eq 500
 
       - name: Build exact compiler
-        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/next500bb-full-compiler
+        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/next500b-full-compiler
 
       - name: Replay all next500b
         shell: bash
         run: |
           set -Eeuo pipefail
-          compiler="$GITHUB_WORKSPACE/build/next500bb-full-compiler/bin/minic"
-          work="$GITHUB_WORKSPACE/build/next500bb-full"
+          compiler="$GITHUB_WORKSPACE/build/next500b-full-compiler/bin/minic"
+          work="$GITHUB_WORKSPACE/build/next500b-full"
           set +e
-          CORE_FAST_TRACE=1 python3 tests/external/linux/corpus_replay.py             --minic "$compiler"             --corpus "$GITHUB_WORKSPACE/build/linux-next500bb-corpus"             --work "$work"             --jobs 4             --offset 0             --limit 500             --sample-count 0
+          CORE_FAST_TRACE=1 python3 tests/external/linux/corpus_replay.py             --minic "$compiler"             --corpus "$GITHUB_WORKSPACE/build/linux-next500b-corpus"             --work "$work"             --jobs 4             --offset 0             --limit 500             --sample-count 0
           replay_status=$?
           set -e
           echo "LINUX_NEXT500B_FULL_REPLAY_STATUS=$replay_status"
@@ -170,7 +170,7 @@ jobs:
           import os
           from pathlib import Path
 
-          work = Path("build/next500bb-full")
+          work = Path("build/next500b-full")
           summary = json.loads((work / "frontier-summary.json").read_text())
           if summary["selected"] != 500 or summary["preprocess_missing"] != 0:
               raise SystemExit(f"full500 infrastructure failure: {summary}")
@@ -182,7 +182,7 @@ jobs:
           print(headline)
           (work / "headline.txt").write_text(headline + "\n")
           with Path(os.environ["GITHUB_STEP_SUMMARY"]).open("a") as output:
-              output.write("## Linux next500bb first census\n\n")
+              output.write("## Linux next500b first census\n\n")
               output.write(f"`{headline}`\n\n")
               output.write((work / "reason-summary.txt").read_text())
           PY
@@ -191,15 +191,15 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: linux-next500bb-full500-${{ github.sha }}
+          name: linux-next500b-full500-${{ github.sha }}
           path: |
-            build/next500bb-full/headline.txt
-            build/next500bb-full/batch-results.json
-            build/next500bb-full/batch-results.tsv
-            build/next500bb-full/frontier-summary.json
-            build/next500bb-full/reason-summary.txt
-            build/next500bb-full/progress-summary.json
-            build/next500bb-full/progress-summary.txt
-            build/next500bb-full/failure-contexts.txt
-            build/next500bb-full/minic-stderr/**
+            build/next500b-full/headline.txt
+            build/next500b-full/batch-results.json
+            build/next500b-full/batch-results.tsv
+            build/next500b-full/frontier-summary.json
+            build/next500b-full/reason-summary.txt
+            build/next500b-full/progress-summary.json
+            build/next500b-full/progress-summary.txt
+            build/next500b-full/failure-contexts.txt
+            build/next500b-full/minic-stderr/**
           if-no-files-found: warn
