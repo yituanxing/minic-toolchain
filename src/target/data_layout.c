@@ -811,6 +811,18 @@ bool minic_data_layout_global_relocation_target_addend(const MinicDataLayout *la
         const MinicRecordField *field;
         size_t field_offset;
 
+        /* Subscript offsets are already accumulated in target_byte_addend.
+         * Peel only the semantic array layers so member offsets can continue
+         * from the selected element without double-counting its byte offset. */
+        while (minic_type_is_array(type)) {
+            const MinicArrayType *array_type;
+
+            array_type = minic_c0_program_array_type(program, type.array_type_id);
+            if (array_type == NULL) {
+                return false;
+            }
+            type = array_type->element_type;
+        }
         if (!minic_type_is_record(type)) {
             return false;
         }

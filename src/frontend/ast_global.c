@@ -884,6 +884,18 @@ static bool global_object_member_path_type(const MinicC0Program *program,
         const MinicRecord *record;
         const MinicRecordField *field;
 
+        /* Static subobject addresses persist array subscripts as byte addends.
+         * When a later member access follows such a subscript, recover the
+         * semantic record base by peeling the intervening array layers here. */
+        while (minic_type_is_array(type)) {
+            const MinicArrayType *array_type;
+
+            array_type = minic_c0_program_array_type(program, type.array_type_id);
+            if (array_type == NULL) {
+                return false;
+            }
+            type = array_type->element_type;
+        }
         if (!minic_type_is_record(type)) {
             return false;
         }
