@@ -469,3 +469,98 @@ The low-risk post-1000 cleanup tranche is now closed before Linux coverage expan
 - array representation canonicalization and generalized InitPlan remain explicitly deferred because they change deeper representation contracts and require producer-first migration.
 
 Acceptance for this checkpoint is unchanged frozen first500 500/500 plus new500 500/500. After both gates pass on the exact checkpoint, Linux corpus expansion resumes before the deferred high-risk migrations.
+
+
+## Linux convergence operating protocol
+
+This is the permanent operating rule for Linux corpus expansion after the frozen
+1000/1000 checkpoint. It is a throughput protocol, not a stage-gated release
+process.
+
+### Two lanes run continuously
+
+```text
+time -------------------------------------------------------------->
+
+FULL:    [full500 #N =================] [full500 #N+1 ============] ...
+SAMPLE:  [inspect/fix/replay] [inspect/fix/replay] [inspect/fix] ...
+```
+
+- The sample lane is the fast development loop. It must keep running and
+  repairing while a full census is in progress.
+- The full lane is the global census. Each completed run belongs strictly to
+  the exact commit it started from; its PASS/error counts must never be
+  attributed to a newer head.
+- A full run ending is not a reason to pause. Consume its failure census and
+  immediately feed the newest sample-validated head into the next full run.
+- A full run must never block repairs that can be validated by the sample lane.
+
+### Repair blocker classes in batches, not one file at a time
+
+A sample replay is a window onto currently active semantic blockers, not a
+single-bug queue.
+
+If sample16 reports, for example, 13 PASS and 3 failures and all three failures
+have understood, independent semantic owners, repair all three blocker classes
+in the same development iteration when doing so is safe. Do not artificially
+serialize three obvious fixes into three sample cycles.
+
+The preferred loop is therefore:
+
+```text
+sample16
+  -> inspect every active failure
+  -> cluster by semantic root cause
+  -> repair as many well-understood independent classes as practical
+  -> sample16 again
+  -> expose/refill with the next blockers
+  -> repeat
+```
+
+Batching is allowed only for general semantic/capability fixes. Never batch
+filename-, index-, or Linux-specific special cases merely to increase the PASS
+counter.
+
+### Refill the sample; do not keep solved entries forever
+
+sample16 is an active-blocker window. When several entries become PASS, the
+next useful sample should refill those slots from the latest full-corpus
+failure census so that the window continues to expose up to 16 unresolved
+translation units.
+
+Example:
+
+```text
+sample16: 13 PASS / 3 FAIL
+  -> fix all 3 understood blocker classes
+  -> replay verifies those fixes
+  -> refill solved slots from latest full500 failures
+  -> next sample16 exposes the next active blockers
+```
+
+A fixed sample containing mostly solved files is useful only as a short
+regression check; it is not the desired steady-state development window.
+
+### Progress accounting
+
+Always keep these two numbers distinct:
+
+- sample progress: fast evidence for the newest development head;
+- full progress: complete corpus evidence for one exact historical head.
+
+Report full progress as a sequence (for example 294 -> ... -> 500), and include
+the exact commit/run association. A TU may move its first blocker deeper
+without becoming PASS; that is real progress and should be inspected rather
+than treated as no change.
+
+### Frozen corpus inventory
+
+For Linux 6.6.143 RISC-V defconfig, the recovered Kbuild C-TU manifest contains
+3352 translation units. Current frozen ranges are:
+
+- indices 0-499: first500;
+- indices 500-999: new500;
+- indices 1000-1499: next500.
+
+Thus 1500/3352 TUs are currently materialized in the three frozen 500-TU
+windows, leaving 1852 later TUs available for subsequent expansion.
