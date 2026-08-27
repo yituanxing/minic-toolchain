@@ -26,6 +26,8 @@ typedef enum MinicC0AstVerifyStage {
     MINIC_C0_AST_VERIFY_BLOCK
 } MinicC0AstVerifyStage;
 
+/* Stable failure provenance for compiler diagnostics; indices refer to the
+ * owning Program arena and optional nested member/parameter position. */
 typedef struct MinicC0AstVerifyFailure {
     MinicC0AstVerifyStage stage;
     size_t index;
