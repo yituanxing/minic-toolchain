@@ -305,6 +305,62 @@ static bool same_floating_type(MinicType left, MinicType right) {
             (minic_type_is_float(left) && minic_type_is_float(right)));
 }
 
+static bool parse_static_duration_compound_literal(MinicParser *parser,
+                                                   MinicSourcePosition begin,
+                                                   MinicType type,
+                                                   MinicExpressionId *expression_id) {
+    char symbol_name[80];
+    MinicExpression expression;
+    MinicGlobalObjectId object_id;
+    MinicExpressionId base_id;
+    const MinicGlobalObject *object;
+    int symbol_length;
+
+    if (parser == NULL || expression_id == NULL || parser->current.kind != MINIC_TOKEN_LBRACE ||
+        parser->current_function != MINIC_FUNCTION_INVALID ||
+        (!minic_type_is_record(type) && !minic_type_is_array(type))) {
+        return false;
+    }
+    if (minic_type_is_record(type) &&
+        !minic_parser_require_complete_object_type(
+            parser, type, "file-scope compound literal requires a complete record type")) {
+        return false;
+    }
+    symbol_length = snprintf(symbol_name,
+                             sizeof(symbol_name),
+                             ".Lminic_compound_%zu",
+                             parser->program->global_object_count);
+    if (symbol_length <= 0 || (size_t)symbol_length >= sizeof(symbol_name) ||
+        !minic_c0_program_add_global_object(parser->program,
+                                            symbol_name,
+                                            (size_t)symbol_length,
+                                            type,
+                                            true,
+                                            minic_type_is_const(type),
+                                            &object_id) ||
+        !minic_parser_parse_static_storage_initializer_value(parser, object_id, type)) {
+        if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
+            minic_parser_error(parser, "cannot materialize file-scope compound literal");
+        }
+        return false;
+    }
+    object = minic_c0_program_global_object(parser->program, object_id);
+    if (object == NULL) {
+        return false;
+    }
+    (void)memset(&expression, 0, sizeof(expression));
+    expression.kind = MINIC_EXPRESSION_GLOBAL_OBJECT;
+    expression.span.begin = begin;
+    expression.span.end = parser->current.span.begin;
+    expression.type = object->type;
+    expression.value_category = MINIC_VALUE_LVALUE;
+    expression.value.global_object_id = object_id;
+    if (!minic_parser_add_expression(parser, &expression, &base_id)) {
+        return false;
+    }
+    return minic_parser_parse_postfix(parser, base_id, expression_id);
+}
+
 static bool parse_record_compound_literal(MinicParser *parser,
                                           MinicSourcePosition begin,
                                           MinicType type,
@@ -527,6 +583,10 @@ static bool parse_cast(MinicParser *parser, MinicExpressionId *expression_id) {
         return false;
     }
     if (parser->current.kind == MINIC_TOKEN_LBRACE) {
+        if (parser->current_function == MINIC_FUNCTION_INVALID &&
+            (minic_type_is_record(target_type) || minic_type_is_array(target_type))) {
+            return parse_static_duration_compound_literal(parser, begin, target_type, expression_id);
+        }
         if (minic_type_is_record(target_type)) {
             return parse_record_compound_literal(parser, begin, target_type, expression_id);
         }
