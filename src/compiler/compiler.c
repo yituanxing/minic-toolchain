@@ -232,6 +232,50 @@ minic_read_file(const char *path, MinicSourceBuffer *buffer, MinicDiagnostic *di
     return true;
 }
 
+static void minic_set_ast_verify_diagnostic(const char *input_path,
+                                            const char *form_name,
+                                            const MinicC0AstVerifyFailure *failure,
+                                            MinicDiagnostic *diagnostic) {
+    const char *stage_name;
+    const char *reason;
+
+    stage_name = failure == NULL ? "unknown" : minic_c0_ast_verify_stage_name(failure->stage);
+    reason = failure == NULL || failure->reason == NULL ? "contract violation" : failure->reason;
+    if (failure != NULL && failure->index != MINIC_C0_AST_VERIFY_INDEX_NONE) {
+        if (failure->subindex != MINIC_C0_AST_VERIFY_INDEX_NONE) {
+            minic_set_diagnostic(diagnostic,
+                                 input_path,
+                                 1U,
+                                 1U,
+                                 "%s AST contract failed at %s[%zu:%zu]: %s",
+                                 form_name,
+                                 stage_name,
+                                 failure->index,
+                                 failure->subindex,
+                                 reason);
+        } else {
+            minic_set_diagnostic(diagnostic,
+                                 input_path,
+                                 1U,
+                                 1U,
+                                 "%s AST contract failed at %s[%zu]: %s",
+                                 form_name,
+                                 stage_name,
+                                 failure->index,
+                                 reason);
+        }
+    } else {
+        minic_set_diagnostic(diagnostic,
+                             input_path,
+                             1U,
+                             1U,
+                             "%s AST contract failed at %s: %s",
+                             form_name,
+                             stage_name,
+                             reason);
+    }
+}
+
 int minic_compile_preprocessed_file(const char *input_path,
                                     const char *output_path,
                                     MinicDiagnostic *diagnostic) {
@@ -239,6 +283,7 @@ int minic_compile_preprocessed_file(const char *input_path,
     MinicC0Program program;
     MinicCoreFunctionSet core_set;
     const MinicTargetInfo *target_info;
+    MinicC0AstVerifyFailure verify_failure;
     bool success;
 
     if (input_path == NULL || output_path == NULL) {
@@ -261,9 +306,9 @@ int minic_compile_preprocessed_file(const char *input_path,
     minic_core_function_set_initialize(&core_set);
     target_info = minic_default_target_info();
     success = minic_parse_c0_program(input_path, buffer.data, buffer.size, &program, diagnostic);
-    if (success && !minic_c0_program_verify_target(&program, MINIC_C0_AST_PARSED, target_info)) {
-        minic_set_diagnostic(
-            diagnostic, input_path, 1U, 1U, "parsed AST violates compiler contracts");
+    if (success && !minic_c0_program_verify_target_detailed(
+                       &program, MINIC_C0_AST_PARSED, target_info, &verify_failure)) {
+        minic_set_ast_verify_diagnostic(input_path, "parsed", &verify_failure, diagnostic);
         success = false;
     }
     if (success && !minic_c0_program_validate_function_body_ownership(&program)) {
@@ -275,10 +320,9 @@ int minic_compile_preprocessed_file(const char *input_path,
         minic_set_diagnostic(diagnostic, input_path, 1U, 1U, "cannot normalize cast expressions");
         success = false;
     }
-    if (success &&
-        !minic_c0_program_verify_target(&program, MINIC_C0_AST_NORMALIZED, target_info)) {
-        minic_set_diagnostic(
-            diagnostic, input_path, 1U, 1U, "normalized AST violates backend contracts");
+    if (success && !minic_c0_program_verify_target_detailed(
+                       &program, MINIC_C0_AST_NORMALIZED, target_info, &verify_failure)) {
+        minic_set_ast_verify_diagnostic(input_path, "normalized", &verify_failure, diagnostic);
         success = false;
     }
     if (success && !minic_c0_program_validate_function_body_ownership(&program)) {

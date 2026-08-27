@@ -250,6 +250,29 @@ static int test_malformed_contracts(void) {
     return 0;
 }
 
+static int test_verify_failure_provenance(void) {
+    MinicC0AstVerifyFailure failure;
+    MinicC0Program program;
+    MinicLocal local;
+    MinicLocalId local_id;
+
+    minic_c0_program_initialize(&program);
+    minic_c0_local_initialize(&local);
+    local.name_span = test_span(0U);
+    local.type = minic_type_int();
+    local.element_count = 1U;
+    local.explicit_alignment = 3U;
+    if (!minic_c0_program_add_local(&program, &local, &local_id) ||
+        minic_c0_program_verify_detailed(&program, MINIC_C0_AST_PARSED, &failure) ||
+        failure.stage != MINIC_C0_AST_VERIFY_LOCAL || failure.index != local_id ||
+        failure.subindex != MINIC_C0_AST_VERIFY_INDEX_NONE || failure.reason == NULL) {
+        minic_c0_program_destroy(&program);
+        return 30;
+    }
+    minic_c0_program_destroy(&program);
+    return 0;
+}
+
 static int test_normalization_transaction(void) {
     MinicC0Program program;
     MinicExpressionId integer_id;
@@ -294,6 +317,10 @@ int main(void) {
         return status;
     }
     status = test_malformed_contracts();
+    if (status != 0) {
+        return status;
+    }
+    status = test_verify_failure_provenance();
     if (status != 0) {
         return status;
     }
