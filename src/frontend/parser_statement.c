@@ -3247,7 +3247,9 @@ static bool parse_loop_branch(MinicParser *parser, MinicBlockId *block_id) {
     return success;
 }
 
-static bool parse_switch_branch(MinicParser *parser, MinicBlockId *block_id) {
+static bool parse_switch_branch(MinicParser *parser,
+                                MinicBlockId *block_id,
+                                MinicType selector_type) {
     MinicParserSwitchContext *context;
     MinicCleanupContextId previous_break_cleanup_context;
     bool success;
@@ -3258,6 +3260,7 @@ static bool parse_switch_branch(MinicParser *parser, MinicBlockId *block_id) {
     }
     context = &parser->switch_contexts[parser->switch_depth];
     (void)memset(context, 0, sizeof(*context));
+    context->selector_type = selector_type;
     previous_break_cleanup_context = parser->break_cleanup_context;
     parser->break_cleanup_context = parser->cleanup_context;
     parser->switch_depth += 1U;
@@ -3519,7 +3522,9 @@ static bool parse_do_while(MinicParser *parser) {
 }
 
 static bool parse_switch(MinicParser *parser) {
+    const MinicExpression *selector_expression;
     MinicStatement statement;
+    MinicType selector_type;
 
     (void)memset(&statement, 0, sizeof(statement));
     statement.kind = MINIC_STATEMENT_SWITCH;
@@ -3532,9 +3537,18 @@ static bool parse_switch(MinicParser *parser) {
     if (!minic_parser_advance(parser) ||
         !minic_parser_expect(parser, MINIC_TOKEN_LPAREN, "expected '('") ||
         !minic_parser_parse_full_expression(parser, &statement.expression) ||
-        !expression_is_switch_selector(parser, statement.expression) ||
-        !minic_parser_expect(parser, MINIC_TOKEN_RPAREN, "expected ')'") ||
-        !parse_switch_branch(parser, &statement.then_block)) {
+        !expression_is_switch_selector(parser, statement.expression)) {
+        return false;
+    }
+    selector_expression = minic_c0_program_expression(parser->program, statement.expression);
+    if (selector_expression == NULL ||
+        !minic_target_info_integer_promotion_for_program(
+            parser->target_info, parser->program, selector_expression->type, &selector_type)) {
+        minic_parser_error(parser, "cannot determine promoted switch selector type");
+        return false;
+    }
+    if (!minic_parser_expect(parser, MINIC_TOKEN_RPAREN, "expected ')'") ||
+        !parse_switch_branch(parser, &statement.then_block, selector_type)) {
         return false;
     }
     statement.span.end = parser->current.span.begin;
@@ -3542,15 +3556,55 @@ static bool parse_switch(MinicParser *parser) {
 }
 
 static bool case_integer_constant_value(const MinicParser *parser,
+                                        const MinicParserSwitchContext *context,
                                         MinicExpressionId expression_id,
-                                        int64_t *value) {
+                                        uint64_t *value) {
     MinicConstValue constant;
+    MinicConstValue converted;
 
-    if (parser == NULL || parser->program == NULL || parser->target_info == NULL || value == NULL ||
-        !minic_const_eval_integer(parser->program, parser->target_info, expression_id, &constant)) {
+    if (parser == NULL || context == NULL || parser->program == NULL ||
+        parser->target_info == NULL || value == NULL ||
+        !minic_const_eval_integer(parser->program, parser->target_info, expression_id, &constant) ||
+        !minic_const_value_convert_integer(parser->program,
+                                           parser->target_info,
+                                           &constant,
+                                           context->selector_type,
+                                           &converted)) {
         return false;
     }
-    return minic_const_value_as_int64(parser->program, parser->target_info, &constant, value);
+    if (minic_type_is_signed_integer(context->selector_type)) {
+        int64_t signed_value;
+
+        if (!minic_const_value_as_int64(
+                parser->program, parser->target_info, &converted, &signed_value)) {
+            return false;
+        }
+        (void)memcpy(value, &signed_value, sizeof(*value));
+        return true;
+    }
+    *value = converted.bits;
+    return true;
+}
+
+static bool switch_case_value_less(const MinicParserSwitchContext *context,
+                                   uint64_t left,
+                                   uint64_t right) {
+    if (context != NULL && minic_type_is_signed_integer(context->selector_type)) {
+        int64_t signed_left;
+        int64_t signed_right;
+
+        (void)memcpy(&signed_left, &left, sizeof(signed_left));
+        (void)memcpy(&signed_right, &right, sizeof(signed_right));
+        return signed_left < signed_right;
+    }
+    return left < right;
+}
+
+static int64_t switch_case_expression_bits(uint64_t value) {
+    int64_t result;
+
+    (void)memcpy(&result, &value, sizeof(result));
+    return result;
 }
 
 static bool parse_case(MinicParser *parser) {
@@ -3562,8 +3616,8 @@ static bool parse_case(MinicParser *parser) {
     MinicExpressionId lower_expression_id;
     MinicExpressionId upper_expression_id;
     MinicType constant_type;
-    int64_t lower_value;
-    int64_t upper_value;
+    uint64_t lower_value;
+    uint64_t upper_value;
     size_t index;
     bool is_range;
 
@@ -3587,11 +3641,11 @@ static bool parse_case(MinicParser *parser) {
     }
     lower_constant = minic_c0_program_expression(parser->program, lower_expression_id);
     if (lower_constant == NULL ||
-        !case_integer_constant_value(parser, lower_expression_id, &lower_value)) {
+        !case_integer_constant_value(parser, context, lower_expression_id, &lower_value)) {
         minic_parser_error(parser, "case label currently requires an integer constant expression");
         return false;
     }
-    constant_type = lower_constant->type;
+    constant_type = context->selector_type;
     upper_constant = NULL;
     upper_value = lower_value;
     upper_expression_id = MINIC_EXPRESSION_INVALID;
@@ -3603,12 +3657,12 @@ static bool parse_case(MinicParser *parser) {
         }
         upper_constant = minic_c0_program_expression(parser->program, upper_expression_id);
         if (upper_constant == NULL ||
-            !case_integer_constant_value(parser, upper_expression_id, &upper_value)) {
+            !case_integer_constant_value(parser, context, upper_expression_id, &upper_value)) {
             minic_parser_error(parser,
                                "GNU case range upper bound must be an integer constant expression");
             return false;
         }
-        if (upper_value < lower_value) {
+        if (switch_case_value_less(context, upper_value, lower_value)) {
             minic_parser_error(parser, "GNU case range upper bound is below lower bound");
             return false;
         }
@@ -3619,8 +3673,8 @@ static bool parse_case(MinicParser *parser) {
         return false;
     }
     for (index = 0U; index < context->case_count; ++index) {
-        if (lower_value <= context->case_upper_values[index] &&
-            context->case_lower_values[index] <= upper_value) {
+        if (!switch_case_value_less(context, context->case_upper_values[index], lower_value) &&
+            !switch_case_value_less(context, upper_value, context->case_lower_values[index])) {
             minic_parser_error(parser, "duplicate or overlapping case value range");
             return false;
         }
@@ -3636,7 +3690,7 @@ static bool parse_case(MinicParser *parser) {
     folded_constant.span = lower_constant->span;
     folded_constant.type = constant_type;
     folded_constant.value_category = MINIC_VALUE_RVALUE;
-    folded_constant.value.integer_value = lower_value;
+    folded_constant.value.integer_value = switch_case_expression_bits(lower_value);
     if (!minic_parser_add_expression(parser, &folded_constant, &statement.expression)) {
         return false;
     }
@@ -3650,7 +3704,7 @@ static bool parse_case(MinicParser *parser) {
         folded_constant.span = upper_constant->span;
         folded_constant.type = constant_type;
         folded_constant.value_category = MINIC_VALUE_RVALUE;
-        folded_constant.value.integer_value = upper_value;
+        folded_constant.value.integer_value = switch_case_expression_bits(upper_value);
         if (!minic_parser_add_expression(parser, &folded_constant, &statement.target_expression)) {
             return false;
         }

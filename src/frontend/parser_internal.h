@@ -62,8 +62,9 @@ typedef struct MinicParserEnumTag {
 } MinicParserEnumTag;
 
 typedef struct MinicParserSwitchContext {
-    int64_t case_lower_values[MINIC_PARSER_MAX_SWITCH_CASES];
-    int64_t case_upper_values[MINIC_PARSER_MAX_SWITCH_CASES];
+    uint64_t case_lower_values[MINIC_PARSER_MAX_SWITCH_CASES];
+    uint64_t case_upper_values[MINIC_PARSER_MAX_SWITCH_CASES];
+    MinicType selector_type;
     size_t case_count;
     bool has_default;
 } MinicParserSwitchContext;
