@@ -2567,6 +2567,7 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
         size_t parameter_index;
 
         for (parameter_index = 0U; parameter_index < parameter_count; ++parameter_index) {
+            minic_c0_local_initialize(&parameter_local);
             if ((minic_type_is_record(parameter_types[parameter_index]) ||
                  minic_type_is_enum(parameter_types[parameter_index])) &&
                 !minic_parser_require_complete_object_type(

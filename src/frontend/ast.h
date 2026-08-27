@@ -546,6 +546,7 @@ typedef struct MinicC0Program {
 
 void minic_c0_program_initialize(MinicC0Program *program);
 void minic_c0_program_destroy(MinicC0Program *program);
+void minic_c0_local_initialize(MinicLocal *local);
 
 bool minic_c0_program_add_expression(MinicC0Program *program,
                                      const MinicExpression *expression,

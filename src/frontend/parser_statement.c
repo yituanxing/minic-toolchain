@@ -481,7 +481,7 @@ static bool add_runtime_initializer_once_read(MinicParser *parser,
     if (value == NULL) {
         return false;
     }
-    (void)memset(&local, 0, sizeof(local));
+    minic_c0_local_initialize(&local);
     local.name_span = value->span;
     local.type = temporary_type;
     local.element_count = 1U;
@@ -1748,6 +1748,7 @@ static bool local_declarator_starts_pointer_to_array(const MinicParser *parser) 
 static bool
 parse_local_declarator(MinicParser *parser, MinicType base_type, bool is_register_storage) {
     MinicLocal local;
+    minic_c0_local_initialize(&local);
     MinicLocalId local_id;
     MinicLocalObjectAttributes attributes;
     MinicType declared_type;
@@ -2033,7 +2034,7 @@ static bool parse_auto_type_local_declaration(MinicParser *parser) {
         return false;
     }
 
-    (void)memset(&local, 0, sizeof(local));
+    minic_c0_local_initialize(&local);
     local.name_span = parser->current.span;
     local.element_count = 1U;
     local.is_array = false;

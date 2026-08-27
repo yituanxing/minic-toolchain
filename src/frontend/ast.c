@@ -41,6 +41,13 @@ static char *minic_copy_name(const char *name, size_t name_length) {
     return copy;
 }
 
+void minic_c0_local_initialize(MinicLocal *local) {
+    if (local == NULL) {
+        return;
+    }
+    (void)memset(local, 0, sizeof(*local));
+}
+
 void minic_c0_program_initialize(MinicC0Program *program) {
     (void)memset(program, 0, sizeof(*program));
     program->body_block = MINIC_BLOCK_INVALID;

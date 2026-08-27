@@ -334,7 +334,7 @@ static bool parse_record_compound_literal(MinicParser *parser,
         return false;
     }
 
-    (void)memset(&local, 0, sizeof(local));
+    minic_c0_local_initialize(&local);
     local.name_span.begin = begin;
     local.name_span.end = begin;
     local.type = type;
@@ -412,7 +412,7 @@ static bool parse_scalar_compound_literal(MinicParser *parser,
         return false;
     }
 
-    (void)memset(&local, 0, sizeof(local));
+    minic_c0_local_initialize(&local);
     local.name_span.begin = begin;
     local.name_span.end = begin;
     local.type = type;
