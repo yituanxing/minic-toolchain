@@ -170,8 +170,6 @@ static bool consume_typedef_attribute(MinicParser *parser,
         return true;
     }
     if (descriptor->kind == MINIC_ATTRIBUTE_ALIGNED) {
-        size_t natural_size;
-        size_t natural_alignment;
         size_t alignment;
 
         if (minic_type_is_pointer(*context->aliased_type)) {
@@ -180,22 +178,13 @@ static bool consume_typedef_attribute(MinicParser *parser,
             return false;
         }
         alignment = context->aliased_type->explicit_alignment;
-        if (!minic_parser_apply_alignment_attribute(parser, attribute, "typedef", &alignment) ||
-            !minic_data_layout_type(minic_target_info_data_layout(parser->target_info),
-                                    parser->program,
-                                    *context->aliased_type,
-                                    &natural_size,
-                                    &natural_alignment)) {
-            if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
-                minic_parser_error(parser, "cannot determine GNU typedef alignment");
-            }
+        if (!minic_parser_apply_alignment_attribute(parser, attribute, "typedef", &alignment)) {
             return false;
         }
-        (void)natural_size;
-        if (alignment < natural_alignment) {
-            minic_parser_error(parser, "reducing GNU typedef alignment is not supported yet");
-            return false;
-        }
+        /* GCC permits an aligned attribute on a typedef to decrease as well as
+           increase the natural alignment. MinicType::explicit_alignment is the
+           typedef-carried type alignment; record/object attributes retain their
+           separate minimum-alignment owners. */
         context->aliased_type->explicit_alignment = alignment;
         return true;
     }
@@ -253,26 +242,42 @@ static bool typedef_type_targets_function(MinicType type) {
 
 static bool apply_typedef_declaration_head_attributes(MinicParser *parser,
                                                       const MinicParsedAttributeList *attributes,
-                                                      MinicType aliased_type) {
+                                                      MinicType *aliased_type) {
+    MinicTypedefAttributeContext context;
     size_t index;
     bool function_target;
 
-    if (parser == NULL || attributes == NULL) {
+    if (parser == NULL || attributes == NULL || aliased_type == NULL) {
         return false;
     }
-    function_target = typedef_type_targets_function(aliased_type);
+    context.aliased_type = aliased_type;
+    function_target = typedef_type_targets_function(*aliased_type);
     for (index = 0U; index < attributes->count; ++index) {
+        const MinicParsedAttribute *attribute;
         const MinicAttributeDescriptor *descriptor;
 
-        descriptor = attributes->values[index].descriptor;
-        if (descriptor == NULL ||
-            !typedef_declaration_attribute_class_is_parse_only(descriptor->semantic_class) ||
-            ((!minic_attribute_allowed_on(descriptor, MINIC_ATTRIBUTE_TARGET_TYPE)) &&
-             (!function_target ||
-              !minic_attribute_allowed_on(descriptor, MINIC_ATTRIBUTE_TARGET_FUNCTION)))) {
+        attribute = &attributes->values[index];
+        descriptor = attribute->descriptor;
+        if (descriptor == NULL) {
             minic_parser_error(parser, "unsupported GNU declaration-head typedef attribute");
             return false;
         }
+        if (minic_attribute_allowed_on(descriptor, MINIC_ATTRIBUTE_TARGET_TYPE)) {
+            if (typedef_declaration_attribute_class_is_parse_only(descriptor->semantic_class)) {
+                continue;
+            }
+            if (!consume_typedef_attribute(parser, attribute, &context)) {
+                return false;
+            }
+            continue;
+        }
+        if (function_target &&
+            minic_attribute_allowed_on(descriptor, MINIC_ATTRIBUTE_TARGET_FUNCTION) &&
+            typedef_declaration_attribute_class_is_parse_only(descriptor->semantic_class)) {
+            continue;
+        }
+        minic_parser_error(parser, "unsupported GNU declaration-head typedef attribute");
+        return false;
     }
     return true;
 }
@@ -368,8 +373,8 @@ bool minic_parser_parse_typedef(MinicParser *parser) {
             return false;
         }
     }
-    if (!apply_typedef_declaration_head_attributes(parser, &leading_attributes, aliased_type) ||
-        !apply_typedef_declaration_head_attributes(parser, &post_type_attributes, aliased_type) ||
+    if (!apply_typedef_declaration_head_attributes(parser, &leading_attributes, &aliased_type) ||
+        !apply_typedef_declaration_head_attributes(parser, &post_type_attributes, &aliased_type) ||
         !parse_typedef_attributes(parser, &aliased_type)) {
         return false;
     }

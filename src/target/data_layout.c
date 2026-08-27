@@ -45,9 +45,10 @@ static bool minic_data_layout_apply_explicit_alignment(MinicType type, size_t *a
     if ((type.explicit_alignment & (type.explicit_alignment - 1U)) != 0U) {
         return false;
     }
-    if (type.explicit_alignment > *alignment) {
-        *alignment = type.explicit_alignment;
-    }
+    /* A type-carried explicit alignment comes from typedef semantics, where
+       GNU aligned(N) may either raise or lower natural alignment. Record,
+       field, and object declarations keep separate minimum-alignment owners. */
+    *alignment = type.explicit_alignment;
     return true;
 }
 
