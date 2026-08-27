@@ -58,18 +58,10 @@ static bool core_scalar_type(MinicType type) {
            minic_type_is_double(type);
 }
 
-static bool core_effective_integer_type(const MinicC0Program *program,
+static bool core_effective_integer_type(const MinicCoreFunction *function,
                                         MinicType type,
                                         MinicType *effective_type) {
-    if (effective_type == NULL || !minic_type_is_integer(type)) {
-        return false;
-    }
-    if (minic_type_is_enum(type)) {
-        return program != NULL &&
-               minic_c0_type_effective_integer_type(program, type, effective_type);
-    }
-    *effective_type = type;
-    return true;
+    return minic_core_function_effective_integer_type(function, type, effective_type);
 }
 
 /* M74_GLOBAL_RECORD_ADDRESS / M155_EXTERN_VOID_SYMBOL_ADDRESS_OWNER:
@@ -533,13 +525,13 @@ static bool store_core_int128_value(FILE *file,
            minic_riscv64_emit_sp_store64(file, high_register, offset + 8U);
 }
 
-static bool core_integer_type_is_signed(const MinicC0Program *program,
+static bool core_integer_type_is_signed(const MinicCoreFunction *function,
                                         MinicType type,
                                         bool *is_signed) {
     MinicType effective_type;
 
-    if (program == NULL || is_signed == NULL || !minic_type_is_integer(type) ||
-        !minic_c0_type_effective_integer_type(program, type, &effective_type)) {
+    if (is_signed == NULL ||
+        !minic_core_function_effective_integer_type(function, type, &effective_type)) {
         return false;
     }
     *is_signed = minic_type_is_signed_integer(effective_type);
@@ -723,7 +715,7 @@ static bool core_integer_overflow_supported(const MinicC0Program *program,
         !minic_data_layout_type(
             minic_default_data_layout(), program, pointee, result_size, &alignment) ||
         *result_size == 0U || *result_size > 8U ||
-        !minic_c0_type_effective_integer_type(program, pointee, &effective_result_type)) {
+        !minic_core_function_effective_integer_type(function, pointee, &effective_result_type)) {
         return false;
     }
     (void)alignment;
@@ -3071,7 +3063,7 @@ static bool emit_instruction(FILE *file,
         MinicType effective_type;
         const char *opcode;
 
-        if (!minic_c0_type_effective_integer_type(program, instruction->type, &effective_type)) {
+        if (!minic_core_function_effective_integer_type(function, instruction->type, &effective_type)) {
             return false;
         }
         if (instruction->kind == MINIC_CORE_INSTRUCTION_INTEGER_DIVIDE) {
@@ -3128,7 +3120,7 @@ static bool emit_instruction(FILE *file,
         MinicType effective_type;
         const char *opcode;
 
-        if (!minic_c0_type_effective_integer_type(program, instruction->type, &effective_type)) {
+        if (!minic_core_function_effective_integer_type(function, instruction->type, &effective_type)) {
             return false;
         }
         if (minic_type_is_int128_integer(instruction->type)) {
@@ -3140,7 +3132,7 @@ static bool emit_instruction(FILE *file,
                 !minic_type_is_int128_integer(function->values[left].type) ||
                 !minic_type_is_integer(function->values[right].type) ||
                 minic_type_is_int128_integer(function->values[right].type) ||
-                !core_integer_type_is_signed(program, instruction->type, &is_signed) ||
+                !core_integer_type_is_signed(function, instruction->type, &is_signed) ||
                 !load_core_int128_value(file, frame, left, "t0", "t1") ||
                 !load_core_value(file, frame, right, "t2") ||
                 fprintf(file,
@@ -3198,7 +3190,7 @@ static bool emit_instruction(FILE *file,
         if (!minic_type_is_integer(operand_type) ||
             !minic_type_equal(operand_type,
                               function->values[instruction->value.binary.right].type) ||
-            !minic_c0_type_effective_integer_type(program, operand_type, &effective_type)) {
+            !minic_core_function_effective_integer_type(function, operand_type, &effective_type)) {
             return false;
         }
         opcode = minic_type_is_unsigned_integer(effective_type) ? "sltu" : "slt";
@@ -3332,7 +3324,7 @@ static bool emit_instruction(FILE *file,
 
                 if (!minic_type_is_integer(source_type) ||
                     !load_core_value(file, frame, operand, "t0") ||
-                    !core_integer_type_is_signed(program, source_type, &source_signed) ||
+                    !core_integer_type_is_signed(function, source_type, &source_signed) ||
                     fprintf(file,
                             source_signed ? "  srai t1, t0, 63\n" : "  li t1, 0\n") < 0) {
                     return false;
@@ -3361,7 +3353,7 @@ static bool emit_instruction(FILE *file,
         const char *opcode;
 
         if (operand >= function->value_count ||
-            !core_effective_integer_type(program, function->values[operand].type, &source_type) ||
+            !core_effective_integer_type(function, function->values[operand].type, &source_type) ||
             minic_type_is_int128_integer(source_type) ||
             !minic_type_is_double(instruction->type)) {
             return false;
@@ -3387,7 +3379,7 @@ static bool emit_instruction(FILE *file,
 
         if (operand >= function->value_count ||
             !minic_type_is_double(function->values[operand].type) ||
-            !core_effective_integer_type(program, instruction->type, &target_type) ||
+            !core_effective_integer_type(function, instruction->type, &target_type) ||
             minic_type_is_int128_integer(target_type)) {
             return false;
         }

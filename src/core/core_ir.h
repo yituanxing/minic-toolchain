@@ -124,6 +124,13 @@ typedef struct MinicCoreValue {
     MinicCoreInstructionId definition;
 } MinicCoreValue;
 
+/* Core owns the semantic integer representation of enums referenced by a
+   function. Backends must not recover enum compatibility from Semantic AST. */
+typedef struct MinicCoreEnumType {
+    MinicEnumId enum_id;
+    MinicType effective_integer_type;
+} MinicCoreEnumType;
+
 typedef struct MinicCoreObject {
     MinicSourceSpan span;
     MinicType type;
@@ -372,6 +379,9 @@ typedef struct MinicCoreFunction {
     MinicType return_type;
     MinicType *parameter_types;
     size_t parameter_count;
+    MinicCoreEnumType *enum_types;
+    size_t enum_type_count;
+    size_t enum_type_capacity;
     MinicCoreGlobal *globals;
     size_t global_count;
     size_t global_capacity;
@@ -414,6 +424,12 @@ bool minic_core_function_set_signature(MinicCoreFunction *function,
                                        MinicType return_type,
                                        const MinicType *parameter_types,
                                        size_t parameter_count);
+bool minic_core_function_add_enum_type(MinicCoreFunction *function,
+                                       MinicEnumId enum_id,
+                                       MinicType effective_integer_type);
+bool minic_core_function_effective_integer_type(const MinicCoreFunction *function,
+                                                MinicType type,
+                                                MinicType *effective_type);
 bool minic_core_function_add_block(MinicCoreFunction *function, MinicCoreBlockId *block_id);
 bool minic_core_function_add_function_symbol(MinicCoreFunction *function,
                                              const char *name,

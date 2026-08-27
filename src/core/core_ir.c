@@ -98,6 +98,7 @@ void minic_core_function_destroy(MinicCoreFunction *function) {
     }
     free(function->name);
     free(function->parameter_types);
+    free(function->enum_types);
     free(function->globals);
     free(function->function_symbols);
     free(function->callees);
@@ -145,6 +146,61 @@ bool minic_core_function_set_signature(MinicCoreFunction *function,
     function->parameter_types = parameters_copy;
     function->parameter_count = parameter_count;
     return true;
+}
+
+bool minic_core_function_add_enum_type(MinicCoreFunction *function,
+                                       MinicEnumId enum_id,
+                                       MinicType effective_integer_type) {
+    size_t index;
+
+    if (function == NULL || enum_id == MINIC_ENUM_INVALID ||
+        !minic_type_is_integer(effective_integer_type) ||
+        minic_type_is_enum(effective_integer_type) ||
+        minic_type_is_pointer(effective_integer_type)) {
+        return false;
+    }
+    for (index = 0U; index < function->enum_type_count; ++index) {
+        const MinicCoreEnumType *existing = &function->enum_types[index];
+
+        if (existing->enum_id == enum_id) {
+            return minic_type_equal(existing->effective_integer_type, effective_integer_type);
+        }
+    }
+    if (!grow_array((void **)&function->enum_types,
+                    &function->enum_type_capacity,
+                    function->enum_type_count,
+                    sizeof(*function->enum_types))) {
+        return false;
+    }
+    function->enum_types[function->enum_type_count].enum_id = enum_id;
+    function->enum_types[function->enum_type_count].effective_integer_type =
+        effective_integer_type;
+    function->enum_type_count += 1U;
+    return true;
+}
+
+bool minic_core_function_effective_integer_type(const MinicCoreFunction *function,
+                                                MinicType type,
+                                                MinicType *effective_type) {
+    size_t index;
+
+    if (function == NULL || effective_type == NULL || !minic_type_is_integer(type) ||
+        minic_type_is_pointer(type)) {
+        return false;
+    }
+    if (!minic_type_is_enum(type)) {
+        *effective_type = type;
+        return true;
+    }
+    for (index = 0U; index < function->enum_type_count; ++index) {
+        if (function->enum_types[index].enum_id == type.enum_id) {
+            *effective_type = function->enum_types[index].effective_integer_type;
+            effective_type->base_qualifiers = type.base_qualifiers;
+            effective_type->explicit_alignment = type.explicit_alignment;
+            return true;
+        }
+    }
+    return false;
 }
 
 bool minic_core_function_add_block(MinicCoreFunction *function, MinicCoreBlockId *block_id) {
