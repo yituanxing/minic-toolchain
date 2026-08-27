@@ -1360,7 +1360,7 @@ materialize_static_pointer_array_slot(MinicParser *parser,
         recorded = minic_c0_global_object_add_label_relocation(
             parser->program,
             object_id,
-            MINIC_GLOBAL_RELOCATION_LOCATION_ARRAY_ELEMENT,
+            MINIC_GLOBAL_RELOCATION_LOCATION_AGGREGATE_SCALAR,
             slot_index,
             initializer->label_statement_id);
     } else if (initializer->relocation_is_function) {
@@ -1368,13 +1368,13 @@ materialize_static_pointer_array_slot(MinicParser *parser,
                        ? minic_c0_global_object_add_function_relocation_cast(
                              parser->program,
                              object_id,
-                             MINIC_GLOBAL_RELOCATION_LOCATION_ARRAY_ELEMENT,
+                             MINIC_GLOBAL_RELOCATION_LOCATION_AGGREGATE_SCALAR,
                              slot_index,
                              initializer->function_id)
                        : minic_c0_global_object_add_function_relocation(
                              parser->program,
                              object_id,
-                             MINIC_GLOBAL_RELOCATION_LOCATION_ARRAY_ELEMENT,
+                             MINIC_GLOBAL_RELOCATION_LOCATION_AGGREGATE_SCALAR,
                              slot_index,
                              initializer->function_id);
     } else {
@@ -1382,7 +1382,7 @@ materialize_static_pointer_array_slot(MinicParser *parser,
                        ? minic_c0_global_object_add_object_relocation_path_addend_cast(
                              parser->program,
                              object_id,
-                             MINIC_GLOBAL_RELOCATION_LOCATION_ARRAY_ELEMENT,
+                             MINIC_GLOBAL_RELOCATION_LOCATION_AGGREGATE_SCALAR,
                              slot_index,
                              initializer->relocation_target.object_id,
                              initializer->relocation_target.member_indices,
@@ -1391,7 +1391,7 @@ materialize_static_pointer_array_slot(MinicParser *parser,
                        : minic_c0_global_object_add_object_relocation_path_addend(
                              parser->program,
                              object_id,
-                             MINIC_GLOBAL_RELOCATION_LOCATION_ARRAY_ELEMENT,
+                             MINIC_GLOBAL_RELOCATION_LOCATION_AGGREGATE_SCALAR,
                              slot_index,
                              initializer->relocation_target.object_id,
                              initializer->relocation_target.member_indices,
