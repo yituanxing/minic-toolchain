@@ -3045,7 +3045,10 @@ static bool parse_unary(MinicParser *parser, MinicExpressionId *expression_id, b
         return parse_label_address(parser, expression_id);
     }
     if (parenthesis_starts_cast(parser)) {
-        return parse_cast(parser, expression_id);
+        if (!parse_cast(parser, &result_id)) {
+            return false;
+        }
+        return finish_value_expression(parser, result_id, decay_array, expression_id);
     }
     if (parser->current.kind != MINIC_TOKEN_PLUS && parser->current.kind != MINIC_TOKEN_MINUS &&
         parser->current.kind != MINIC_TOKEN_BANG && parser->current.kind != MINIC_TOKEN_TILDE &&
