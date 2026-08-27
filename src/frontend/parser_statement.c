@@ -1,4 +1,5 @@
 #include "frontend/parser_internal.h"
+#include "frontend/declaration_sema.h"
 #include "frontend/initializer.h"
 
 #include <limits.h>
