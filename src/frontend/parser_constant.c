@@ -194,6 +194,11 @@ bool minic_parser_current_integer_literal_syntax(const MinicParser *parser,
         (parser->source[span.begin.offset + 1U] == 'x' ||
          parser->source[span.begin.offset + 1U] == 'X')) {
         *base = MINIC_INTEGER_LITERAL_BASE_HEXADECIMAL;
+    } else if (digit_end - span.begin.offset >= 2U &&
+               parser->source[span.begin.offset] == '0' &&
+               (parser->source[span.begin.offset + 1U] == 'b' ||
+                parser->source[span.begin.offset + 1U] == 'B')) {
+        *base = MINIC_INTEGER_LITERAL_BASE_BINARY;
     } else if (parser->source[span.begin.offset] == '0') {
         *base = MINIC_INTEGER_LITERAL_BASE_OCTAL;
     } else {
@@ -222,6 +227,10 @@ bool minic_parser_parse_unsigned_integer_value64(MinicParser *parser, uint64_t *
     if (digit_end - span.begin.offset >= 2U && parser->source[offset] == '0' &&
         (parser->source[offset + 1U] == 'x' || parser->source[offset + 1U] == 'X')) {
         base = 16U;
+        offset += 2U;
+    } else if (digit_end - span.begin.offset >= 2U && parser->source[offset] == '0' &&
+               (parser->source[offset + 1U] == 'b' || parser->source[offset + 1U] == 'B')) {
+        base = 2U;
         offset += 2U;
     } else if (digit_end - span.begin.offset > 1U && parser->source[offset] == '0') {
         base = 8U; /* C integer constants with a leading zero are octal. */
@@ -266,6 +275,10 @@ bool minic_parser_parse_integer_value64(MinicParser *parser, int64_t *value) {
     if (digit_end - span.begin.offset >= 2U && parser->source[offset] == '0' &&
         (parser->source[offset + 1U] == 'x' || parser->source[offset + 1U] == 'X')) {
         base = 16U;
+        offset += 2U;
+    } else if (digit_end - span.begin.offset >= 2U && parser->source[offset] == '0' &&
+               (parser->source[offset + 1U] == 'b' || parser->source[offset + 1U] == 'B')) {
+        base = 2U;
         offset += 2U;
     } else if (digit_end - span.begin.offset > 1U && parser->source[offset] == '0') {
         base = 8U; /* C integer constants with a leading zero are octal. */
@@ -318,6 +331,12 @@ bool minic_parser_parse_integer_value(MinicParser *parser, int *value) {
         (parser->source[offset + 1U] == 'x' || parser->source[offset + 1U] == 'X')) {
         base = 16UL;
         offset += 2U;
+    } else if (digit_end - span.begin.offset >= 2U && parser->source[offset] == '0' &&
+               (parser->source[offset + 1U] == 'b' || parser->source[offset + 1U] == 'B')) {
+        base = 2UL;
+        offset += 2U;
+    } else if (digit_end - span.begin.offset > 1U && parser->source[offset] == '0') {
+        base = 8UL;
     }
 
     parsed = 0UL;
