@@ -689,14 +689,29 @@ static bool parse_fixed_runtime_nested_array_initializer(
             minic_parser_error(parser, "too many nested runtime array initializer elements");
             return false;
         }
-        if (parser->current.kind != MINIC_TOKEN_LBRACE ||
-            !add_array_object_element_lvalue(
-                parser, base_id, index, parser->current.span, &element_id) ||
-            !parse_fixed_runtime_array_initializer(
-                parser, element_id, nested_array->element_count)) {
-            if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
-                minic_parser_error(parser, "invalid nested runtime array initializer element");
+        if (!add_array_object_element_lvalue(
+                parser, base_id, index, parser->current.span, &element_id)) {
+            return false;
+        }
+        if (parser->current.kind == MINIC_TOKEN_STRING_LITERAL &&
+            minic_type_is_char_integer(nested_array->element_type)) {
+            if (!parse_runtime_character_array_string_initializer(parser,
+                                                                  element_id,
+                                                                  nested_array->element_type,
+                                                                  nested_array->element_count)) {
+                return false;
             }
+        } else if (parser->current.kind == MINIC_TOKEN_LBRACE) {
+            if (!parse_fixed_runtime_array_initializer(
+                    parser, element_id, nested_array->element_count)) {
+                if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
+                    minic_parser_error(parser,
+                                       "invalid nested runtime array initializer element");
+                }
+                return false;
+            }
+        } else {
+            minic_parser_error(parser, "invalid nested runtime array initializer element");
             return false;
         }
         index += 1U;
