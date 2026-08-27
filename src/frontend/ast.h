@@ -451,6 +451,7 @@ typedef struct MinicGlobalObject {
     char *section_name;
     size_t section_name_length;
     MinicType type;
+    /* GNU object aliases remain declarations; the target owns storage and emission payload. */
     MinicGlobalObjectId alias_target;
     uint64_t *initializer_values;
     size_t initializer_count;
