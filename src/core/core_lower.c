@@ -8682,12 +8682,24 @@ lower_switch(MinicCoreLowerContext *context, const MinicStatement *statement, bo
             if (segment_statement == NULL) {
                 return MINIC_CORE_LOWER_ERROR;
             }
+            /* A direct break terminates this switch segment. Parser flattening
+               can leave another source break immediately after it, for example
+               one inside a braced case body plus one after the brace. Such
+               trailing breaks are unreachable and have no re-entry label
+               inside this segment. Accept only that narrow redundant-tail
+               shape; any other statement after the first direct break remains
+               fail-closed. */
+            if (break_index != SIZE_MAX &&
+                segment_statement->kind != MINIC_STATEMENT_BREAK) {
+                return MINIC_CORE_LOWER_UNSUPPORTED;
+            }
             if (segment_statement->kind == MINIC_STATEMENT_BREAK) {
-                if (break_index != SIZE_MAX || scan + 1U != segment_end ||
-                    !core_cleanup_edge_is_empty(segment_statement)) {
+                if (!core_cleanup_edge_is_empty(segment_statement)) {
                     return MINIC_CORE_LOWER_UNSUPPORTED;
                 }
-                break_index = scan;
+                if (break_index == SIZE_MAX) {
+                    break_index = scan;
+                }
             }
         }
 

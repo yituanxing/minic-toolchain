@@ -1300,18 +1300,20 @@ bool minic_c0_program_verify_target_detailed(const MinicC0Program *program,
         const MinicArrayType *array_type;
 
         array_type = &program->array_types[index];
-        if ((array_type->element_count == 0U && !array_type->is_zero_length &&
-             !array_type->is_query_materialized &&
-             !incomplete_array_has_semantic_owner(program, index)) ||
-
-            (array_type->is_query_materialized &&
-
-             (array_type->element_count != 0U || array_type->is_zero_length)) ||
-
-            !type_is_valid(program, target, array_type->element_type) ||
-
-            minic_type_is_function(array_type->element_type)) {
-            MINIC_AST_VERIFY_FAIL(minic_c0_ast_verify_stage_default_reason(stage));
+        if (array_type->element_count == 0U && !array_type->is_zero_length &&
+            !array_type->is_query_materialized &&
+            !incomplete_array_has_semantic_owner(program, index)) {
+            MINIC_AST_VERIFY_FAIL("incomplete array type has no semantic owner");
+        }
+        if (array_type->is_query_materialized &&
+            (array_type->element_count != 0U || array_type->is_zero_length)) {
+            MINIC_AST_VERIFY_FAIL("query-materialized array has an invalid extent state");
+        }
+        if (!type_is_valid(program, target, array_type->element_type)) {
+            MINIC_AST_VERIFY_FAIL("array element type is invalid");
+        }
+        if (minic_type_is_function(array_type->element_type)) {
+            MINIC_AST_VERIFY_FAIL("array element type cannot be a function");
         }
     }
     stage = MINIC_C0_AST_VERIFY_FUNCTION_TYPE;

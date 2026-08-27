@@ -1794,6 +1794,19 @@ static bool core_instruction_supported(const MinicC0Program *program,
     return false;
 }
 
+static bool core_can_emit_fail(const MinicCoreFunction *function,
+                               const char *stage,
+                               size_t index,
+                               int kind) {
+    (void)fprintf(stderr,
+                  "RV64_CORE_CAN_EMIT_FAIL function=%s stage=%s index=%zu kind=%d\n",
+                  function != NULL && function->name != NULL ? function->name : "<unknown>",
+                  stage != NULL ? stage : "unknown",
+                  index,
+                  kind);
+    return false;
+}
+
 static bool core_function_can_emit(const MinicC0Program *program,
                                             const MinicCoreFunction *function) {
     size_t index;
@@ -1879,23 +1892,26 @@ static bool core_function_can_emit(const MinicC0Program *program,
             (function->objects[index].explicit_alignment != 0U &&
              (function->objects[index].explicit_alignment &
               (function->objects[index].explicit_alignment - 1U)) != 0U)) {
-            return false;
+            return core_can_emit_fail(function, "object", index, -1);
         }
     }
     for (index = 0U; index < function->global_count; ++index) {
         if (function->globals[index].name == NULL || function->globals[index].name_length == 0U ||
             !core_global_addressable_type(function->globals[index].type)) {
-            return false;
+            return core_can_emit_fail(function, "global", index, -1);
         }
     }
     for (index = 0U; index < function->value_count; ++index) {
         if (!core_scalar_type(function->values[index].type)) {
-            return false;
+            return core_can_emit_fail(function, "value", index, -1);
         }
     }
     for (index = 0U; index < function->instruction_count; ++index) {
         if (!core_instruction_supported(program, function, &function->instructions[index])) {
-            return false;
+            return core_can_emit_fail(function,
+                                      "instruction",
+                                      index,
+                                      (int)function->instructions[index].kind);
         }
     }
     return true;
