@@ -223,13 +223,17 @@ jobs:
         run: make -j4 check-pointer-members MODE=release CFLAGS=-Werror BUILD_DIR=build/m175-strict500-pointer
 
       - name: Run unchanged broad check-fast
+        id: check_fast
+        continue-on-error: true
         run: make -j4 check-fast MODE=release CFLAGS=-Werror BUILD_DIR=build/m175-strict500-fast
 
-      - name: Record unchanged check-fast pass
+      - name: Record unchanged check-fast outcome
+        if: always()
         shell: bash
-        run: echo 'M175_UNCHANGED_CHECK_FAST=PASS'
+        run: echo "M175_UNCHANGED_CHECK_FAST_OUTCOME=${{ steps.check_fast.outcome }}"
 
       - name: Replay frozen strict500 from exact production source
+        id: strict500_replay
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -270,6 +274,13 @@ jobs:
           if summary['selected'] != 500 or summary['pass'] != 500 or summary['unsupported'] != 0 or summary['error'] != 0 or summary['preprocess_missing'] != 0:
               raise SystemExit(f'M175 exact-source strict500 is not exact 500/500: {summary}')
           PY
+
+      - name: Enforce broad check-fast after strict500 census
+        if: always() && steps.check_fast.outcome != 'success'
+        shell: bash
+        run: |
+          echo "M175_CHECK_FAST_GATE=FAIL outcome=${{ steps.check_fast.outcome }}"
+          exit 1
 
       - name: Persist M175 strict500 evidence
         if: always()
