@@ -185,6 +185,22 @@ typedef struct MinicGlobalObjectInitialState {
     bool is_block_scope_extern_only;
 } MinicGlobalObjectInitialState;
 
+static void global_object_initial_state_initialize(MinicGlobalObjectInitialState *state) {
+    if (state == NULL) {
+        return;
+    }
+    (void)memset(state, 0, sizeof(*state));
+    state->visibility = MINIC_SYMBOL_VISIBILITY_DEFAULT;
+}
+
+static void global_object_initialize_defaults(MinicGlobalObject *object) {
+    if (object == NULL) {
+        return;
+    }
+    (void)memset(object, 0, sizeof(*object));
+    object->alias_target = MINIC_GLOBAL_OBJECT_INVALID;
+}
+
 static bool global_object_initial_state_valid(const MinicGlobalObjectInitialState *state) {
     size_t alignment;
 
@@ -214,8 +230,7 @@ static bool add_global_object_entity_with_state(MinicC0Program *program,
         return false;
     }
 
-    (void)memset(&object, 0, sizeof(object));
-    object.alias_target = MINIC_GLOBAL_OBJECT_INVALID;
+    global_object_initialize_defaults(&object);
     object.name = copy_name(name, name_length);
     if (object.name == NULL) {
         return false;
@@ -262,8 +277,7 @@ static bool add_global_object_entity(MinicC0Program *program,
                                      MinicGlobalObjectId *global_object_id) {
     MinicGlobalObjectInitialState state;
 
-    (void)memset(&state, 0, sizeof(state));
-    state.visibility = MINIC_SYMBOL_VISIBILITY_DEFAULT;
+    global_object_initial_state_initialize(&state);
     state.is_internal = is_internal;
     state.is_read_only = is_read_only;
     state.is_extern = is_extern;
@@ -307,7 +321,7 @@ bool minic_c0_program_add_extern_global_object_with_metadata(
     MinicGlobalObjectId *global_object_id) {
     MinicGlobalObjectInitialState state;
 
-    (void)memset(&state, 0, sizeof(state));
+    global_object_initial_state_initialize(&state);
     state.section_name = section_name;
     state.section_name_length = section_name_length;
     state.explicit_alignment = explicit_alignment;
