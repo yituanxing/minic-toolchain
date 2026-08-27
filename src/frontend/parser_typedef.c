@@ -279,71 +279,127 @@ static bool parse_typedef_attributes(MinicParser *parser, MinicType *aliased_typ
     return minic_parser_parse_gnu_attribute_lists(parser, consume_typedef_attribute, &context);
 }
 
-bool minic_parser_parse_typedef(MinicParser *parser) {
+typedef struct MinicParsedTypedefAlias {
     MinicSourceSpan name_span;
-    MinicType aliased_type;
-    MinicTypeAliasId alias_id;
-    MinicParsedAttributeList leading_attributes;
-    MinicParsedAttributeList post_type_attributes;
-    bool is_function_declarator;
+    MinicType type;
+} MinicParsedTypedefAlias;
 
-    leading_attributes.count = 0U;
-    post_type_attributes.count = 0U;
-    is_function_declarator = false;
-    if (!minic_parser_expect(parser, MINIC_TOKEN_KW_TYPEDEF, "expected keyword 'typedef'") ||
-        !minic_parser_collect_gnu_attribute_lists(parser, &leading_attributes)) {
+static bool pending_typedef_name_exists(const MinicParser *parser,
+                                        const MinicParsedTypedefAlias *aliases,
+                                        size_t alias_count,
+                                        MinicSourceSpan name_span) {
+    size_t name_length;
+    size_t index;
+
+    if (parser == NULL) {
         return false;
     }
-    {
-        MinicType base_type;
+    name_length = minic_parser_span_length(name_span);
+    for (index = 0U; index < alias_count; ++index) {
+        size_t existing_length = minic_parser_span_length(aliases[index].name_span);
+        if (existing_length == name_length &&
+            memcmp(parser->source + aliases[index].name_span.begin.offset,
+                   parser->source + name_span.begin.offset,
+                   name_length) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
 
-        if (!minic_parser_parse_type_specifiers(parser, &base_type) ||
-            !minic_parser_collect_gnu_attribute_lists(parser, &post_type_attributes) ||
-            !minic_parser_parse_pointer_declarator(parser, base_type, &aliased_type)) {
+static bool append_pending_typedef_alias(MinicParsedTypedefAlias **aliases,
+                                         size_t *alias_count,
+                                         size_t *alias_capacity,
+                                         MinicSourceSpan name_span,
+                                         MinicType type) {
+    MinicParsedTypedefAlias *grown;
+    size_t new_capacity;
+
+    if (aliases == NULL || alias_count == NULL || alias_capacity == NULL) {
+        return false;
+    }
+    if (*alias_count == *alias_capacity) {
+        new_capacity = *alias_capacity == 0U ? 4U : *alias_capacity * 2U;
+        if (new_capacity < *alias_capacity ||
+            new_capacity > SIZE_MAX / sizeof(**aliases)) {
+            return false;
+        }
+        grown = (MinicParsedTypedefAlias *)realloc(
+            *aliases, new_capacity * sizeof(**aliases));
+        if (grown == NULL) {
+            return false;
+        }
+        *aliases = grown;
+        *alias_capacity = new_capacity;
+    }
+    (*aliases)[*alias_count].name_span = name_span;
+    (*aliases)[*alias_count].type = type;
+    *alias_count += 1U;
+    return true;
+}
+
+static bool parse_one_typedef_declarator(
+    MinicParser *parser,
+    MinicType base_type,
+    const MinicParsedAttributeList *leading_attributes,
+    const MinicParsedAttributeList *post_type_attributes,
+    MinicParsedTypedefAlias **aliases,
+    size_t *alias_count,
+    size_t *alias_capacity) {
+    MinicSourceSpan name_span;
+    MinicType aliased_type;
+    bool is_function_declarator;
+
+    if (parser == NULL || leading_attributes == NULL || post_type_attributes == NULL ||
+        aliases == NULL || alias_count == NULL || alias_capacity == NULL) {
+        return false;
+    }
+    aliased_type = base_type;
+    is_function_declarator = false;
+    if (!minic_parser_parse_pointer_declarator(parser, base_type, &aliased_type)) {
+        return false;
+    }
+    if (parser->current.kind == MINIC_TOKEN_LPAREN) {
+        if (!parse_parenthesized_function_typedef(
+                parser, aliased_type, &name_span, &aliased_type)) {
+            return false;
+        }
+        is_function_declarator = true;
+    } else {
+        MinicParsedFunctionDeclarator declarator;
+
+        if (parser->current.kind != MINIC_TOKEN_IDENTIFIER) {
+            minic_parser_error(parser, "expected typedef name");
+            return false;
+        }
+        name_span = parser->current.span;
+        if (!minic_parser_advance(parser)) {
             return false;
         }
         if (parser->current.kind == MINIC_TOKEN_LPAREN) {
-            if (!parse_parenthesized_function_typedef(
-                    parser, aliased_type, &name_span, &aliased_type)) {
+            (void)memset(&declarator, 0, sizeof(declarator));
+            declarator.name_span = name_span;
+            declarator.has_name = true;
+            if (!minic_parser_parse_function_parameter_suffix(parser, &declarator)) {
+                return false;
+            }
+            if (!minic_parser_build_function_declarator_type(
+                    parser, aliased_type, &declarator, &aliased_type)) {
+                minic_parser_error(parser, "cannot build function typedef type");
                 return false;
             }
             is_function_declarator = true;
-        } else {
-            MinicParsedFunctionDeclarator declarator;
-
-            if (parser->current.kind != MINIC_TOKEN_IDENTIFIER) {
-                minic_parser_error(parser, "expected typedef name");
-                return false;
-            }
-            name_span = parser->current.span;
-            if (!minic_parser_advance(parser)) {
-                return false;
-            }
-            if (parser->current.kind == MINIC_TOKEN_LPAREN) {
-                (void)memset(&declarator, 0, sizeof(declarator));
-                declarator.name_span = name_span;
-                declarator.has_name = true;
-                if (!minic_parser_parse_function_parameter_suffix(parser, &declarator)) {
-                    return false;
-                }
-                if (!minic_parser_build_function_declarator_type(
-                        parser, aliased_type, &declarator, &aliased_type)) {
-                    minic_parser_error(parser, "cannot build function typedef type");
-                    return false;
-                }
-                is_function_declarator = true;
-            }
         }
     }
     if (minic_type_is_void(aliased_type)) {
         minic_parser_error(parser, "typedef cannot name bare void");
         return false;
     }
-    if (minic_parser_find_type_alias(parser, name_span) != MINIC_TYPE_ALIAS_INVALID) {
+    if (minic_parser_find_type_alias(parser, name_span) != MINIC_TYPE_ALIAS_INVALID ||
+        pending_typedef_name_exists(parser, *aliases, *alias_count, name_span)) {
         minic_parser_error(parser, "duplicate typedef name");
         return false;
     }
-
     if (parser->current.kind == MINIC_TOKEN_LBRACKET) {
         bool is_array;
 
@@ -360,22 +416,79 @@ bool minic_parser_parse_typedef(MinicParser *parser) {
             return false;
         }
     }
-    if (!apply_typedef_declaration_head_attributes(parser, &leading_attributes, &aliased_type) ||
-        !apply_typedef_declaration_head_attributes(parser, &post_type_attributes, &aliased_type) ||
+    if (!apply_typedef_declaration_head_attributes(parser, leading_attributes, &aliased_type) ||
+        !apply_typedef_declaration_head_attributes(parser, post_type_attributes, &aliased_type) ||
         !parse_typedef_attributes(parser, &aliased_type)) {
         return false;
     }
+    if (!append_pending_typedef_alias(
+            aliases, alias_count, alias_capacity, name_span, aliased_type)) {
+        minic_parser_error(parser, "out of memory while collecting typedef declarators");
+        return false;
+    }
+    return true;
+}
+
+bool minic_parser_parse_typedef(MinicParser *parser) {
+    MinicParsedTypedefAlias *aliases;
+    MinicParsedAttributeList leading_attributes;
+    MinicParsedAttributeList post_type_attributes;
+    MinicType base_type;
+    size_t alias_capacity;
+    size_t alias_count;
+    size_t index;
+
+    aliases = NULL;
+    alias_capacity = 0U;
+    alias_count = 0U;
+    leading_attributes.count = 0U;
+    post_type_attributes.count = 0U;
+    if (!minic_parser_expect(parser, MINIC_TOKEN_KW_TYPEDEF, "expected keyword 'typedef'") ||
+        !minic_parser_collect_gnu_attribute_lists(parser, &leading_attributes) ||
+        !minic_parser_parse_type_specifiers(parser, &base_type) ||
+        !minic_parser_collect_gnu_attribute_lists(parser, &post_type_attributes)) {
+        free(aliases);
+        return false;
+    }
+
+    for (;;) {
+        if (!parse_one_typedef_declarator(parser,
+                                          base_type,
+                                          &leading_attributes,
+                                          &post_type_attributes,
+                                          &aliases,
+                                          &alias_count,
+                                          &alias_capacity)) {
+            free(aliases);
+            return false;
+        }
+        if (parser->current.kind != MINIC_TOKEN_COMMA) {
+            break;
+        }
+        if (!minic_parser_advance(parser)) {
+            free(aliases);
+            return false;
+        }
+    }
     if (parser->current.kind != MINIC_TOKEN_SEMICOLON) {
-        minic_parser_error(parser, "expected ';' after typedef");
+        minic_parser_error(parser, "expected ',' or ';' after typedef declarator");
+        free(aliases);
         return false;
     }
-    if (!minic_c0_program_add_type_alias(parser->program,
-                                         parser->source + name_span.begin.offset,
-                                         minic_parser_span_length(name_span),
-                                         aliased_type,
-                                         &alias_id)) {
-        minic_parser_error(parser, "out of memory while adding typedef");
-        return false;
+    for (index = 0U; index < alias_count; ++index) {
+        MinicTypeAliasId alias_id;
+
+        if (!minic_c0_program_add_type_alias(
+                parser->program,
+                parser->source + aliases[index].name_span.begin.offset,
+                minic_parser_span_length(aliases[index].name_span),
+                aliases[index].type,
+                &alias_id)) {
+            minic_parser_error(parser, "out of memory while adding typedef");
+            free(aliases);
+            return false;
+        }
     }
+    free(aliases);
     return minic_parser_advance(parser);
 }
