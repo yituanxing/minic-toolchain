@@ -104,23 +104,23 @@ jobs:
           command -v bison
           command -v bc
 
-      - name: Stage M175B and physically sever legacy function route
+      - name: Assert productized Core-only source
+        id: source_state
         shell: bash
         run: |
           set -Eeuo pipefail
-          before_test_hash=$(git hash-object tests/compiler/c0/run.sh)
-          python3 tools/ci/apply-m175b-qualification.py
-          python3 tools/ci/apply-m175-core-only-cut.py
-          git diff --check
-          test "$before_test_hash" = "$(git hash-object tests/compiler/c0/run.sh)"
+          git diff --exit-code
           grep -Fq 'M175_LEGACY_FUNCTION_ROUTE_REMOVED' src/compiler/compiler.c
           grep -Fq 'M175B_SCALAR_DOUBLE_BRIDGE' src/core/core_lower.c
           grep -Fq 'M175B_SCALAR_RETURN_OWNER' src/core/core_lower.c
           ! git grep -n 'minic_riscv64_write_c0_program(' -- src
           ! git grep -n 'minic_riscv64_emit_function(' -- src
-          echo 'M175_CORE_ONLY_STAGE route=ABSENT tests=UNCHANGED'
+          source_head=$(git rev-parse HEAD)
+          echo "source_head=$source_head" >> "$GITHUB_OUTPUT"
+          echo "M175_EXACT_SOURCE_HEAD=$source_head"
+          echo 'M175_CORE_ONLY_SOURCE route=ABSENT staging=NONE tree=CLEAN'
 
-      - name: Build Core-only candidate
+      - name: Build exact Core-only source
         run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/m175-strict500-compiler
 
       - name: Rebuild frozen first500 corpus on cache miss
@@ -219,17 +219,14 @@ jobs:
       - name: Qualify local complete object diagnostics
         run: make -j4 check-pointer-members MODE=release CFLAGS=-Werror BUILD_DIR=build/m175-strict500-pointer
 
-      - name: Record unchanged broad check-fast debt
-        id: check_fast
-        continue-on-error: true
+      - name: Run unchanged broad check-fast
         run: make -j4 check-fast MODE=release CFLAGS=-Werror BUILD_DIR=build/m175-strict500-fast
 
-      - name: Report unchanged check-fast outcome
-        if: always()
+      - name: Record unchanged check-fast pass
         shell: bash
-        run: echo "M175_UNCHANGED_CHECK_FAST_OUTCOME=${{ steps.check_fast.outcome }}"
+        run: echo 'M175_UNCHANGED_CHECK_FAST=PASS'
 
-      - name: Replay frozen strict500 after physical cut
+      - name: Replay frozen strict500 from exact production source
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -268,14 +265,14 @@ jobs:
           print(headline)
           (work / 'headline.txt').write_text(headline + '\n')
           if summary['selected'] != 500 or summary['pass'] != 500 or summary['unsupported'] != 0 or summary['error'] != 0 or summary['preprocess_missing'] != 0:
-              raise SystemExit(f'M175 physical-cut strict500 is not exact 500/500: {summary}')
+              raise SystemExit(f'M175 exact-source strict500 is not exact 500/500: {summary}')
           PY
 
       - name: Persist M175 strict500 evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: m175-core-only-strict500-${{ github.sha }}
+          name: m175-core-only-strict500-${{ steps.source_state.outputs.source_head }}
           path: |
             build/m175-strict500/batch-results.json
             build/m175-strict500/frontier-summary.json
