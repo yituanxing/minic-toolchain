@@ -1372,6 +1372,7 @@ bool minic_parser_parse_runtime_record_initializer(MinicParser *parser,
 typedef struct MinicLocalObjectAttributes {
     MinicFunctionId cleanup_function;
     MinicSourceSpan cleanup_attribute_span;
+    size_t explicit_alignment;
 } MinicLocalObjectAttributes;
 
 static bool parse_cleanup_attribute_function(MinicParser *parser,
@@ -1425,6 +1426,14 @@ static bool consume_local_object_attribute(MinicParser *parser,
     if (!minic_attribute_allowed_on(descriptor, MINIC_ATTRIBUTE_TARGET_OBJECT)) {
         minic_parser_error(parser, "GNU attribute is not valid on a local object");
         return false;
+    }
+    if (descriptor->kind == MINIC_ATTRIBUTE_ALIGNED) {
+        if (attributes == NULL) {
+            minic_parser_error(parser, "invalid GNU aligned local object context");
+            return false;
+        }
+        return minic_parser_apply_alignment_attribute(
+            parser, attribute, "local object", &attributes->explicit_alignment);
     }
     if (descriptor->kind == MINIC_ATTRIBUTE_CLEANUP) {
         if (attributes == NULL || parser->statement_expression_depth != 0U) {
@@ -1717,6 +1726,7 @@ parse_local_declarator(MinicParser *parser, MinicType base_type, bool is_registe
 
     local.type = declared_type;
     local.element_count = 1U;
+    local.explicit_alignment = attributes.explicit_alignment;
     local.is_array = false;
     local.is_register_storage = is_register_storage;
     if (minic_parser_name_bound_in_current_scope(parser, local.name_span)) {
@@ -1743,6 +1753,7 @@ parse_local_declarator(MinicParser *parser, MinicType base_type, bool is_registe
         if (!parse_local_object_attributes(parser, &attributes)) {
             return false;
         }
+        local.explicit_alignment = attributes.explicit_alignment;
         if (!minic_c0_program_add_local(parser->program, &local, &local_id)) {
             minic_parser_error(parser, "out of memory while adding local");
             return false;
@@ -1782,6 +1793,7 @@ parse_local_declarator(MinicParser *parser, MinicType base_type, bool is_registe
         if (!parse_local_object_attributes(parser, &attributes)) {
             return false;
         }
+        local.explicit_alignment = attributes.explicit_alignment;
         if (!minic_c0_program_add_local(parser->program, &local, &local_id)) {
             minic_parser_error(parser, "out of memory while adding local");
             return false;

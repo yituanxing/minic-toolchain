@@ -1246,9 +1246,13 @@ bool minic_c0_program_verify_target(const MinicC0Program *program,
         }
     }
     for (index = 0U; index < program->local_count; ++index) {
+        size_t explicit_alignment = program->locals[index].explicit_alignment;
+
         if (program->locals[index].element_count == 0U ||
             !type_is_valid(program, target, program->locals[index].type) ||
-            minic_type_is_function(program->locals[index].type)) {
+            minic_type_is_function(program->locals[index].type) ||
+            (explicit_alignment != 0U &&
+             (explicit_alignment & (explicit_alignment - 1U)) != 0U)) {
             return false;
         }
     }

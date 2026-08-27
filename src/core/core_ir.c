@@ -295,6 +295,7 @@ bool minic_core_function_add_repeated_object(MinicCoreFunction *function,
     function->objects[function->object_count].span = span;
     function->objects[function->object_count].type = element_type;
     function->objects[function->object_count].element_count = element_count;
+    function->objects[function->object_count].explicit_alignment = 0U;
     function->object_count += 1U;
     *object_id = new_id;
     return true;

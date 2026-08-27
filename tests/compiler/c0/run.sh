@@ -615,3 +615,6 @@ MINIC="$minic" \
 HOST_CC="$host_cc" \
 BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
 sh "$root/tests/compiler/c0/run-linux-tail-batch8.sh"
+
+MINIC="$minic" HOST_CC="$host_cc" BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
+  sh "$root/tests/compiler/c0/run-gnu-local-object-alignment.sh"

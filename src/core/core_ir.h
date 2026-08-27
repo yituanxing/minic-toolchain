@@ -147,6 +147,9 @@ typedef struct MinicCoreObject {
        plus an explicit count. Keep Core object addressing element-typed while
        owning the complete repeated storage extent. Ordinary objects use 1. */
     size_t element_count;
+    /* Zero means natural DataLayout alignment. Nonzero alignment is captured
+       from source object semantics during AST -> Core lowering. */
+    size_t explicit_alignment;
 } MinicCoreObject;
 
 typedef struct MinicCoreGlobal {

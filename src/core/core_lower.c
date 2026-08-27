@@ -401,6 +401,7 @@ static MinicCoreLowerStatus lower_local_object(MinicCoreLowerContext *context,
                        context->function, local->name_span, local->type, object_id)) {
             return MINIC_CORE_LOWER_ERROR;
         }
+        context->function->objects[*object_id].explicit_alignment = local->explicit_alignment;
         context->local_objects[local_index] = *object_id;
         return MINIC_CORE_LOWER_OK;
     }
@@ -420,6 +421,7 @@ static MinicCoreLowerStatus lower_local_object(MinicCoreLowerContext *context,
                    context->function, local->name_span, local->type, object_id)) {
         return MINIC_CORE_LOWER_ERROR;
     }
+    context->function->objects[*object_id].explicit_alignment = local->explicit_alignment;
     context->local_objects[local_index] = *object_id;
     return MINIC_CORE_LOWER_OK;
 }

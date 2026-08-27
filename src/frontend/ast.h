@@ -212,6 +212,7 @@ typedef struct MinicLocal {
     MinicSourceSpan name_span;
     MinicType type;
     size_t element_count;
+    size_t explicit_alignment;
     bool is_array;
     bool is_register_storage;
 } MinicLocal;

@@ -317,6 +317,16 @@ static bool core_frame_initialize(const MinicC0Program *program,
             object_size > SIZE_MAX / function->objects[object_index].element_count) {
             return false;
         }
+        if (function->objects[object_index].explicit_alignment != 0U) {
+            size_t explicit_alignment = function->objects[object_index].explicit_alignment;
+
+            if ((explicit_alignment & (explicit_alignment - 1U)) != 0U) {
+                return false;
+            }
+            if (explicit_alignment > object_alignment) {
+                object_alignment = explicit_alignment;
+            }
+        }
         if (object_alignment > maximum_object_alignment) {
             maximum_object_alignment = object_alignment;
         }
@@ -443,8 +453,20 @@ static bool core_object_offset(const MinicC0Program *program,
             object_alignment == 0U ||
             (object_alignment & (object_alignment - 1U)) != 0U ||
             function->objects[object_index].element_count == 0U ||
-            object_size > SIZE_MAX / function->objects[object_index].element_count ||
-            !align_up(current_offset, object_alignment, &current_offset)) {
+            object_size > SIZE_MAX / function->objects[object_index].element_count) {
+            return false;
+        }
+        if (function->objects[object_index].explicit_alignment != 0U) {
+            size_t explicit_alignment = function->objects[object_index].explicit_alignment;
+
+            if ((explicit_alignment & (explicit_alignment - 1U)) != 0U) {
+                return false;
+            }
+            if (explicit_alignment > object_alignment) {
+                object_alignment = explicit_alignment;
+            }
+        }
+        if (!align_up(current_offset, object_alignment, &current_offset)) {
             return false;
         }
         if (object_index == (size_t)object_id) {
@@ -1813,7 +1835,10 @@ static bool core_function_can_emit(const MinicC0Program *program,
                                     &object_alignment) ||
             (object_size == 0U && !minic_type_is_record(object_type)) ||
             object_alignment == 0U ||
-            (object_alignment & (object_alignment - 1U)) != 0U) {
+            (object_alignment & (object_alignment - 1U)) != 0U ||
+            (function->objects[index].explicit_alignment != 0U &&
+             (function->objects[index].explicit_alignment &
+              (function->objects[index].explicit_alignment - 1U)) != 0U)) {
             return false;
         }
     }
