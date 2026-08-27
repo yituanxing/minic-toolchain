@@ -41,7 +41,7 @@ if test -s "$archive" && printf '%s  %s\n' "$sha256" "$archive" | sha256sum -c -
 fi
 if test "$archive_valid" != true; then
     rm -f "$archive" "$archive.tmp"
-    curl -fsSL "$url" -o "$archive.tmp"
+    curl --http1.1 --retry 5 --retry-all-errors --retry-delay 2 -fsSL "$url" -o "$archive.tmp"
     mv "$archive.tmp" "$archive"
     printf '%s\n' "LINUX_ARCHIVE_CACHE fill path=$archive"
 fi
