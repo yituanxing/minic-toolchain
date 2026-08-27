@@ -15,6 +15,7 @@
 
 #define MINIC_PARSER_MAX_SWITCH_DEPTH 16U
 #define MINIC_PARSER_MAX_SWITCH_CASES 128U
+#define MINIC_PARSER_MAX_PACK_DEPTH 32U
 #define MINIC_MAX_PARSED_ATTRIBUTES 32U
 #define MINIC_RECORD_MEMBER_MAX_DEPTH 8U
 
@@ -89,6 +90,8 @@ typedef struct MinicParser {
     size_t statement_expression_depth;
     size_t switch_depth;
     size_t record_pack_alignment;
+    size_t record_pack_stack[MINIC_PARSER_MAX_PACK_DEPTH];
+    size_t record_pack_depth;
     MinicParserSwitchContext switch_contexts[MINIC_PARSER_MAX_SWITCH_DEPTH];
 
     bool label_context_initialized;
