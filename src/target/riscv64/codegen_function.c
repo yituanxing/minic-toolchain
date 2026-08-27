@@ -791,33 +791,6 @@ static bool minic_riscv64_emit_record_values(FILE *file,
            relocation_index == object->relocation_count && emitted_size == storage_size;
 }
 
-static bool minic_riscv64_record_array_info(const MinicC0Program *program,
-                                            MinicType type,
-                                            const MinicArrayType **array_type_out,
-                                            const MinicRecord **record_out) {
-    const MinicArrayType *array_type;
-    const MinicRecord *record;
-
-    if (program == NULL || !minic_type_is_array(type)) {
-        return false;
-    }
-    array_type = minic_c0_program_array_type(program, type.array_type_id);
-    if (array_type == NULL || !minic_type_is_record(array_type->element_type)) {
-        return false;
-    }
-    record = minic_c0_program_record(program, array_type->element_type.record_id);
-    if (record == NULL || !record->is_complete || record->is_union) {
-        return false;
-    }
-    if (array_type_out != NULL) {
-        *array_type_out = array_type;
-    }
-    if (record_out != NULL) {
-        *record_out = record;
-    }
-    return true;
-}
-
 static bool minic_riscv64_array_uses_recursive_initializer(
     const MinicC0Program *program, MinicType type) {
     const MinicArrayType *array_type;
