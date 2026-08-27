@@ -1,5 +1,6 @@
 #include "core/core_lower_internal.h"
 
+/* Core-owned semantic metadata capture stays separate from expression/control lowering. */
 static bool core_capture_enum_type_metadata(MinicCoreLowerContext *context, MinicType type) {
     const MinicEnum *entity;
 
