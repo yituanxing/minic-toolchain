@@ -1152,11 +1152,9 @@ static bool parse_static_scalar_constant_at(MinicParser *parser,
             return false;
         }
         if (overwrite) {
-            if (!minic_c0_global_object_replace_zero_initializer_bits(
+            if (!minic_c0_global_object_replace_aggregate_initializer_bits(
                     parser->program, object_id, overwrite_slot, parsed_bits)) {
-                minic_parser_error(
-                    parser,
-                    "backward static record designator can only replace an implicit scalar zero");
+                minic_parser_error(parser, "cannot replace backward static scalar initializer");
                 return false;
             }
         } else if (!minic_c0_global_object_add_initializer_bits(
@@ -1190,6 +1188,12 @@ static bool parse_static_scalar_constant_at(MinicParser *parser,
         if (initializer.has_relocation) {
             bool recorded;
 
+            if (overwrite &&
+                !minic_c0_global_object_replace_aggregate_initializer_bits(
+                    parser->program, object_id, overwrite_slot, 0U)) {
+                minic_parser_error(parser, "cannot replace backward static relocation slot");
+                return false;
+            }
             if (!overwrite &&
                 !minic_c0_global_object_add_initializer_bits(parser->program, object_id, 0U)) {
                 minic_parser_error(parser, "cannot reserve nested static relocation slot");
@@ -1242,11 +1246,9 @@ static bool parse_static_scalar_constant_at(MinicParser *parser,
                 return false;
             }
         } else if (overwrite) {
-            if (!minic_c0_global_object_replace_zero_initializer_bits(
+            if (!minic_c0_global_object_replace_aggregate_initializer_bits(
                     parser->program, object_id, overwrite_slot, initializer.bits)) {
-                minic_parser_error(
-                    parser,
-                    "backward static record designator can only replace an implicit scalar zero");
+                minic_parser_error(parser, "cannot replace backward static pointer initializer");
                 return false;
             }
         } else if (!minic_c0_global_object_add_initializer_bits(

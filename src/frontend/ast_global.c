@@ -434,6 +434,48 @@ bool minic_c0_global_object_add_initializer_bits(MinicC0Program *program,
     return true;
 }
 
+bool minic_c0_global_object_replace_aggregate_initializer_bits(
+    MinicC0Program *program,
+    MinicGlobalObjectId global_object_id,
+    size_t initializer_index,
+    uint64_t bits) {
+    MinicGlobalObject *object;
+    size_t relocation_index;
+
+    if (program == NULL || global_object_id >= program->global_object_count) {
+        return false;
+    }
+    object = &program->global_objects[global_object_id];
+    if (object->is_tentative || object->is_zero_initialized ||
+        initializer_index >= object->initializer_count) {
+        return false;
+    }
+
+    /* C designated initializers are last-writer-wins.  A backward designator
+     * may replace either scalar bits or a previously-recorded symbolic value
+     * at the same flattened aggregate slot. */
+    relocation_index = 0U;
+    while (relocation_index < object->relocation_count) {
+        MinicGlobalRelocation *relocation;
+
+        relocation = &object->relocations[relocation_index];
+        if (relocation->location_kind == MINIC_GLOBAL_RELOCATION_LOCATION_AGGREGATE_SCALAR &&
+            relocation->location_index == initializer_index) {
+            if (relocation_index + 1U < object->relocation_count) {
+                (void)memmove(&object->relocations[relocation_index],
+                              &object->relocations[relocation_index + 1U],
+                              (object->relocation_count - relocation_index - 1U) *
+                                  sizeof(*object->relocations));
+            }
+            object->relocation_count -= 1U;
+            continue;
+        }
+        relocation_index += 1U;
+    }
+    object->initializer_values[initializer_index] = bits;
+    return true;
+}
+
 bool minic_c0_global_object_replace_zero_initializer_bits(MinicC0Program *program,
                                                           MinicGlobalObjectId global_object_id,
                                                           size_t initializer_index,
