@@ -206,7 +206,7 @@ jobs:
 
 
   sample16:
-    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[next500b]')
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[next500b]') || contains(github.event.head_commit.message, '[next500b-sample]')
     needs: prepare-next500b-corpus
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -240,10 +240,10 @@ jobs:
           import shutil
 
           wanted = {
-              1502, 1582, 1583, 1593, 1599, 1601, 1605, 1614,
-              1597, 1598, 1600, 1602,
-              1656, 1662,
-              1699, 1701,
+              1501, 1527, 1533, 1544,
+              1565, 1573, 1579, 1581,
+              1596, 1636, 1642, 1687,
+              1773, 1810, 1836, 1910,
           }
           source = Path("build/linux-next500b-corpus")
           sample = Path("build/linux-next500b-sample16")
