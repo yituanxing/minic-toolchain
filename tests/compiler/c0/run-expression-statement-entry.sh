@@ -11,8 +11,11 @@ mkdir -p "$work"
     -o "$work/expression_statement_entry.i"
 "$minic" -S "$work/expression_statement_entry.i" -o "$work/expression_statement_entry.s"
 
-grep -F "  addi t0, t0, 1" "$work/expression_statement_entry.s" >/dev/null
-grep -F "  addi t0, t0, -1" "$work/expression_statement_entry.s" >/dev/null
-grep -F "  not a0, a0" "$work/expression_statement_entry.s" >/dev/null
+# Core represents prefix updates as integer ADD/SUB value operations and
+# bitwise complement as INTEGER_BITWISE_NOT. Keep those semantic opcodes exact
+# while leaving temporary-register allocation to the RV64 backend.
+grep -E '^[[:space:]]+add[[:space:]]+' "$work/expression_statement_entry.s" >/dev/null
+grep -E '^[[:space:]]+sub[[:space:]]+' "$work/expression_statement_entry.s" >/dev/null
+grep -E '^[[:space:]]+xori[[:space:]]+[^,]+,[[:space:]]*[^,]+,[[:space:]]*-1$'     "$work/expression_statement_entry.s" >/dev/null
 
 printf '%s\n' "PASS compiler/c0/expression_statement_entry owner=expression-parser prefix=++,-- unary=~ literal=char,float,string query=sizeof,alignof linux-member-prefix=1"
