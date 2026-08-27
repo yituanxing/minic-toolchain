@@ -10,7 +10,190 @@ permissions:
   contents: read
 
 jobs:
+  prepare-sample16-corpus:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      DEBIAN_FRONTEND: noninteractive
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: Restore frozen sample16 corpus
+        id: sample-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-new500-sample16-corpus
+          key: linux-new500-sample16-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-even16
+
+      - name: Validate cached sample16 corpus
+        if: steps.sample-cache.outputs.cache-hit == 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          manifest=build/linux-new500-sample16-corpus/selected-tus.txt
+          test -s "$manifest"
+          test "$(grep -cve '^[[:space:]]*$' "$manifest")" -eq 16
+          echo 'LINUX_NEW500_SAMPLE16_CORPUS cache=hit selected=16'
+
+      - name: Restore pinned Linux source archive
+        if: steps.sample-cache.outputs.cache-hit != 'true'
+        id: linux-source-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-cache/linux-6.6.143.tar.xz
+          key: linux-source-6.6.143-dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932
+
+      - name: Install sample materialization dependencies
+        if: steps.sample-cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 update
+          sudo apt-get             -o Acquire::Retries=3             -o Acquire::http::Timeout=30             install -y --no-install-recommends               gcc-riscv64-linux-gnu libc6-dev-riscv64-cross               flex bison bc libelf-dev libssl-dev
+          command -v riscv64-linux-gnu-gcc
+
+      - name: Materialize sample16 independently
+        if: steps.sample-cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          builder="$GITHUB_WORKSPACE/build/linux-new500-sample16-builder"
+          corpus="$GITHUB_WORKSPACE/build/linux-new500-sample16-corpus"
+          LINUX_BATCH_MATERIALIZE_ONLY=1           BUILD_DIR="$builder"           LINUX_ARCHIVE_CACHE="$GITHUB_WORKSPACE/build/linux-cache/linux-6.6.143.tar.xz"           CROSS_COMPILE=riscv64-linux-gnu-           LINUX_BATCH_SELECTION="500,533,566,599,633,666,699,732,766,799,832,865,899,932,965,999"           LINUX_BATCH_JOBS=4             sh tests/external/linux/batch_probe.sh
+
+          python3 - <<'PY'
+          from pathlib import Path
+          import shutil
+
+          expected = [500, 533, 566, 599, 633, 666, 699, 732,
+                      766, 799, 832, 865, 899, 932, 965, 999]
+          builder = Path("build/linux-new500-sample16-builder")
+          corpus = Path("build/linux-new500-sample16-corpus")
+          selected = builder / "selected-tus.txt"
+          rows = [line for line in selected.read_text().splitlines() if line.strip()]
+          indices = [int(line.split("\t", 1)[0]) for line in rows]
+          if indices != expected:
+              raise SystemExit(f"unexpected sample16 indices: {indices}")
+
+          shutil.rmtree(corpus, ignore_errors=True)
+          inputs = corpus / "kbuild"
+          inputs.mkdir(parents=True)
+          shutil.copy2(selected, corpus / "selected-tus.txt")
+          manifest = builder / "tu-manifest.txt"
+          if manifest.is_file():
+              shutil.copy2(manifest, corpus / "tu-manifest.txt")
+          for row in rows:
+              _, _, rel_i, _ = row.split("\t", 3)
+              source = builder / "kbuild" / rel_i
+              if not source.is_file() or source.stat().st_size == 0:
+                  raise SystemExit(f"missing sample input: {source}")
+              target = inputs / rel_i
+              target.parent.mkdir(parents=True, exist_ok=True)
+              shutil.copy2(source, target)
+          print("LINUX_NEW500_SAMPLE16_CORPUS cache=fill selected=16")
+          PY
+
+      - name: Save frozen sample16 corpus
+        if: steps.sample-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: build/linux-new500-sample16-corpus
+          key: linux-new500-sample16-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-even16
+
+      - name: Save pinned Linux source archive
+        if: steps.sample-cache.outputs.cache-hit != 'true' && steps.linux-source-cache.outputs.cache-hit != 'true' && hashFiles('build/linux-cache/linux-6.6.143.tar.xz') != ''
+        uses: actions/cache/save@v4
+        with:
+          path: build/linux-cache/linux-6.6.143.tar.xz
+          key: linux-source-6.6.143-dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932
+
+  sample16:
+    needs: prepare-sample16-corpus
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    concurrency:
+      group: linux-new500-sample16-${{ github.ref }}
+      cancel-in-progress: true
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: Restore frozen sample16 corpus
+        id: sample-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-new500-sample16-corpus
+          key: linux-new500-sample16-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-even16
+
+      - name: Require frozen sample16 corpus
+        run: |
+          test "${{ steps.sample-cache.outputs.cache-hit }}" = true
+          test "$(grep -cve '^[[:space:]]*$' build/linux-new500-sample16-corpus/selected-tus.txt)" -eq 16
+
+      - name: Build exact compiler
+        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/new500-sample-compiler
+
+      - name: Replay sample16
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          compiler="$GITHUB_WORKSPACE/build/new500-sample-compiler/bin/minic"
+          work="$GITHUB_WORKSPACE/build/new500-sample"
+          set +e
+          CORE_FAST_TRACE=1 python3 tests/external/linux/corpus_replay.py             --minic "$compiler"             --corpus "$GITHUB_WORKSPACE/build/linux-new500-sample16-corpus"             --work "$work"             --jobs 4             --offset 0             --limit 16             --sample-count 0
+          replay_status=$?
+          set -e
+          echo "LINUX_NEW500_SAMPLE16_REPLAY_STATUS=$replay_status"
+
+          python3 tools/ci/classify-core-strict-frontier.py             "$work/batch-results.json"             --stderr-root "$work/minic-stderr"             --ast-header "$GITHUB_WORKSPACE/src/frontend/ast.h"             --examples 16             --json-out "$work/frontier-summary.json"             --reason-text-out "$work/reason-summary.txt"
+
+          python3 tools/ci/summarize-core-frontier-progress.py             "$work/batch-results.json"             --expect-selected 16             --json-out "$work/progress-summary.json"             --text-out "$work/progress-summary.txt"
+
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          work = Path("build/new500-sample")
+          summary = json.loads((work / "frontier-summary.json").read_text())
+          if summary["selected"] != 16 or summary["preprocess_missing"] != 0:
+              raise SystemExit(f"sample16 infrastructure failure: {summary}")
+          headline = (
+              f"LINUX_NEW500_SAMPLE16_EXACT selected={summary['selected']} "
+              f"pass={summary['pass']} unsupported={summary['unsupported']} "
+              f"error={summary['error']} preprocess_missing={summary['preprocess_missing']}"
+          )
+          print(headline)
+          (work / "headline.txt").write_text(headline + "\n")
+          with Path(os.environ["GITHUB_STEP_SUMMARY"]).open("a") as output:
+              output.write("## Linux new500 sample16\n\n")
+              output.write(f"`{headline}`\n\n")
+              output.write((work / "reason-summary.txt").read_text())
+          PY
+
+      - name: Persist sample16 evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-new500-sample16-${{ github.sha }}
+          path: |
+            build/new500-sample/headline.txt
+            build/new500-sample/batch-results.json
+            build/new500-sample/frontier-summary.json
+            build/new500-sample/reason-summary.txt
+            build/new500-sample/progress-summary.json
+            build/new500-sample/progress-summary.txt
+            build/new500-sample/failure-contexts.txt
+            build/new500-sample/minic-stderr/**
+          if-no-files-found: warn
+
   prepare-new500-corpus:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[full500]')
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     outputs:
@@ -20,7 +203,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: refactor/declaration-sema-v1
+          ref: ${{ github.sha }}
           fetch-depth: 0
 
       - name: Restore frozen new500 corpus
@@ -120,91 +303,8 @@ jobs:
           path: build/linux-cache/linux-6.6.143.tar.xz
           key: linux-source-6.6.143-dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932
 
-  sample16:
-    needs: prepare-new500-corpus
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    concurrency:
-      group: linux-new500-sample16-${{ github.ref }}
-      cancel-in-progress: true
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: refactor/declaration-sema-v1
-          fetch-depth: 0
-
-      - name: Restore frozen new500 corpus
-        id: new500-cache
-        uses: actions/cache/restore@v4
-        with:
-          path: build/linux-new500-corpus
-          key: linux-new500-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-indices-500-999
-
-      - name: Require frozen new500 corpus
-        run: |
-          test "${{ steps.new500-cache.outputs.cache-hit }}" = true
-          test "$(grep -cve '^[[:space:]]*$' build/linux-new500-corpus/selected-tus.txt)" -eq 500
-
-      - name: Build exact compiler
-        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/new500-sample-compiler
-
-      - name: Replay deterministic sample16 from new500
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          compiler="$GITHUB_WORKSPACE/build/new500-sample-compiler/bin/minic"
-          work="$GITHUB_WORKSPACE/build/new500-sample"
-          set +e
-          CORE_FAST_TRACE=1 python3 tests/external/linux/corpus_replay.py             --minic "$compiler"             --corpus "$GITHUB_WORKSPACE/build/linux-new500-corpus"             --work "$work"             --jobs 4             --offset 0             --limit 500             --sample-count 16
-          replay_status=$?
-          set -e
-          echo "LINUX_NEW500_SAMPLE16_REPLAY_STATUS=$replay_status"
-
-          python3 tools/ci/classify-core-strict-frontier.py             "$work/batch-results.json"             --stderr-root "$work/minic-stderr"             --ast-header "$GITHUB_WORKSPACE/src/frontend/ast.h"             --examples 16             --json-out "$work/frontier-summary.json"             --reason-text-out "$work/reason-summary.txt"
-
-          python3 tools/ci/summarize-core-frontier-progress.py             "$work/batch-results.json"             --expect-selected 16             --json-out "$work/progress-summary.json"             --text-out "$work/progress-summary.txt"
-
-          python3 - <<'PY'
-          import json
-          import os
-          from pathlib import Path
-
-          work = Path("build/new500-sample")
-          summary = json.loads((work / "frontier-summary.json").read_text())
-          if summary["selected"] != 16 or summary["preprocess_missing"] != 0:
-              raise SystemExit(f"sample16 infrastructure failure: {summary}")
-          headline = (
-              f"LINUX_NEW500_SAMPLE16_EXACT selected={summary['selected']} "
-              f"pass={summary['pass']} unsupported={summary['unsupported']} "
-              f"error={summary['error']} preprocess_missing={summary['preprocess_missing']}"
-          )
-          print(headline)
-          (work / "headline.txt").write_text(headline + "\n")
-          with Path(os.environ["GITHUB_STEP_SUMMARY"]).open("a") as output:
-              output.write("## Linux new500 sample16\n\n")
-              output.write(f"`{headline}`\n\n")
-              output.write((work / "reason-summary.txt").read_text())
-          PY
-
-      - name: Persist sample16 evidence
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: linux-new500-sample16-${{ github.sha }}
-          path: |
-            build/new500-sample/headline.txt
-            build/new500-sample/batch-results.json
-            build/new500-sample/frontier-summary.json
-            build/new500-sample/reason-summary.txt
-            build/new500-sample/progress-summary.json
-            build/new500-sample/progress-summary.txt
-            build/new500-sample/failure-contexts.txt
-            build/new500-sample/minic-stderr/**
-          if-no-files-found: warn
-
   full500:
     needs: prepare-new500-corpus
-    if: github.event_name == 'workflow_dispatch' || needs.prepare-new500-corpus.outputs.cache_hit != 'true' || contains(github.event.head_commit.message, '[full500]')
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     concurrency:
@@ -213,7 +313,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: refactor/declaration-sema-v1
+          ref: ${{ github.sha }}
           fetch-depth: 0
 
       - name: Restore frozen new500 corpus
