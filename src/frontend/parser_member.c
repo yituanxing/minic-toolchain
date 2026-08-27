@@ -255,8 +255,7 @@ static bool parse_record_rvalue_member(MinicParser *parser,
         return false;
     }
     field = minic_c0_record_field(record, path.field_indices[0]);
-    if (field == NULL || minic_c0_record_field_array_object_info(parser->program, field, NULL) ||
-        minic_type_is_record(field->type)) {
+    if (field == NULL || field->is_array || minic_type_is_record(field->type)) {
         minic_parser_error(parser, "record rvalue member currently requires a scalar field");
         return false;
     }
