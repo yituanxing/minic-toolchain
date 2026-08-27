@@ -439,3 +439,7 @@ Before proposing the next large architectural change:
 6. prefer local convergence over a whole rewrite unless the audit proves local replacement is more expensive.
 
 This checkpoint should be updated or superseded when the full post-first500 architecture audit is complete.
+
+## Post-1000 cleanup checkpoint
+
+The 1000-TU frozen baseline is now the semantic safety net for architecture cleanup. Local semantic defaults and structured AST-verifier failure provenance are converged first; array representation migration remains producer-first and must not change consumer semantics until legacy producers are eliminated.
