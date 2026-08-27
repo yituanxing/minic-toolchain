@@ -45,6 +45,7 @@ bool minic_c0_expression_visit_child_id_refs(MinicExpression *expression,
     case MINIC_EXPRESSION_UNARY:
     case MINIC_EXPRESSION_BUILTIN_VA_START:
     case MINIC_EXPRESSION_BUILTIN_VA_END:
+    case MINIC_EXPRESSION_BUILTIN_VA_ARG:
         return visit_expression_id(&expression->value.unary.operand, visitor, context);
 
     case MINIC_EXPRESSION_SUBSCRIPT:
