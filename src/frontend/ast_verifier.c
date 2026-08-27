@@ -1175,6 +1175,43 @@ const char *minic_c0_ast_verify_stage_name(MinicC0AstVerifyStage stage) {
     }
 }
 
+static const char *minic_c0_ast_verify_stage_default_reason(MinicC0AstVerifyStage stage) {
+    switch (stage) {
+    case MINIC_C0_AST_VERIFY_PROGRAM:
+        return "invalid program storage or root reference";
+    case MINIC_C0_AST_VERIFY_ENUM:
+        return "invalid enum metadata";
+    case MINIC_C0_AST_VERIFY_ENUMERATOR:
+        return "invalid enumerator metadata";
+    case MINIC_C0_AST_VERIFY_ARRAY_TYPE:
+        return "invalid array type ownership or element type";
+    case MINIC_C0_AST_VERIFY_FUNCTION_TYPE:
+        return "invalid function type signature";
+    case MINIC_C0_AST_VERIFY_RECORD:
+        return "invalid record or field metadata";
+    case MINIC_C0_AST_VERIFY_LOCAL:
+        return "invalid local metadata or type";
+    case MINIC_C0_AST_VERIFY_FIXED_REGISTER:
+        return "invalid fixed-register binding";
+    case MINIC_C0_AST_VERIFY_FUNCTION:
+        return "invalid function metadata or signature";
+    case MINIC_C0_AST_VERIFY_TYPE_ALIAS:
+        return "invalid type alias";
+    case MINIC_C0_AST_VERIFY_GLOBAL_OBJECT:
+        return "invalid global object state or relocation";
+    case MINIC_C0_AST_VERIFY_FILE_ASM:
+        return "invalid file-scope asm storage";
+    case MINIC_C0_AST_VERIFY_EXPRESSION:
+        return "invalid expression contract";
+    case MINIC_C0_AST_VERIFY_STATEMENT:
+        return "invalid statement contract";
+    case MINIC_C0_AST_VERIFY_BLOCK:
+        return "invalid block contract";
+    default:
+        return "AST contract violation";
+    }
+}
+
 bool minic_c0_program_verify_target_detailed(const MinicC0Program *program,
                                              MinicC0AstForm form,
                                              const MinicTargetInfo *target,
@@ -1206,7 +1243,7 @@ bool minic_c0_program_verify_target_detailed(const MinicC0Program *program,
 
     if (target == NULL || (form != MINIC_C0_AST_PARSED && form != MINIC_C0_AST_NORMALIZED) ||
         !verify_program_storage(program)) {
-        MINIC_AST_VERIFY_FAIL("contract violation");
+        MINIC_AST_VERIFY_FAIL(minic_c0_ast_verify_stage_default_reason(stage));
     }
 
     stage = MINIC_C0_AST_VERIFY_ENUM;
@@ -1220,7 +1257,7 @@ bool minic_c0_program_verify_target_detailed(const MinicC0Program *program,
             !minic_type_is_integer(entity->compatible_type) ||
             minic_type_is_enum(entity->compatible_type) ||
             entity->compatible_type.pointer_depth != 0U) {
-            MINIC_AST_VERIFY_FAIL("contract violation");
+            MINIC_AST_VERIFY_FAIL(minic_c0_ast_verify_stage_default_reason(stage));
         }
     }
     stage = MINIC_C0_AST_VERIFY_ENUMERATOR;
@@ -1233,7 +1270,7 @@ bool minic_c0_program_verify_target_detailed(const MinicC0Program *program,
         if (enumerator->name == NULL || enumerator->name_length == 0U ||
             enumerator->enum_id >= program->enum_count ||
             !minic_type_is_integer(enumerator->type) || minic_type_is_enum(enumerator->type)) {
-            MINIC_AST_VERIFY_FAIL("contract violation");
+            MINIC_AST_VERIFY_FAIL(minic_c0_ast_verify_stage_default_reason(stage));
         }
     }
     stage = MINIC_C0_AST_VERIFY_ARRAY_TYPE;
@@ -1254,7 +1291,7 @@ bool minic_c0_program_verify_target_detailed(const MinicC0Program *program,
             !type_is_valid(program, target, array_type->element_type) ||
 
             minic_type_is_function(array_type->element_type)) {
-            MINIC_AST_VERIFY_FAIL("contract violation");
+            MINIC_AST_VERIFY_FAIL(minic_c0_ast_verify_stage_default_reason(stage));
         }
     }
     stage = MINIC_C0_AST_VERIFY_FUNCTION_TYPE;
@@ -1269,7 +1306,7 @@ bool minic_c0_program_verify_target_detailed(const MinicC0Program *program,
             !type_is_valid(program, target, function_type->return_type) ||
             minic_type_is_array(function_type->return_type) ||
             minic_type_is_function(function_type->return_type)) {
-            MINIC_AST_VERIFY_FAIL("contract violation");
+            MINIC_AST_VERIFY_FAIL(minic_c0_ast_verify_stage_default_reason(stage));
         }
         for (parameter_index = 0U; parameter_index < function_type->parameter_count;
              ++parameter_index) {
@@ -1278,7 +1315,7 @@ bool minic_c0_program_verify_target_detailed(const MinicC0Program *program,
                 !type_is_top_level_unqualified(function_type->parameter_types[parameter_index]) ||
                 minic_type_is_void(function_type->parameter_types[parameter_index]) ||
                 minic_type_is_function(function_type->parameter_types[parameter_index])) {
-                MINIC_AST_VERIFY_FAIL("contract violation");
+                MINIC_AST_VERIFY_FAIL(minic_c0_ast_verify_stage_default_reason(stage));
             }
         }
     }
@@ -1292,7 +1329,7 @@ bool minic_c0_program_verify_target_detailed(const MinicC0Program *program,
         record = &program->records[index];
         if (record->name == NULL ||
             !storage_is_valid(record->fields, record->field_count, record->field_capacity)) {
-            MINIC_AST_VERIFY_FAIL("contract violation");
+            MINIC_AST_VERIFY_FAIL(minic_c0_ast_verify_stage_default_reason(stage));
         }
         for (field_index = 0U; field_index < record->field_count; ++field_index) {
             const MinicRecordField *field;
@@ -1303,7 +1340,7 @@ bool minic_c0_program_verify_target_detailed(const MinicC0Program *program,
             if (field->name == NULL || field->element_count == 0U ||
                 !type_is_valid(program, target, field->type) ||
                 minic_type_is_function(field->type)) {
-                MINIC_AST_VERIFY_FAIL("contract violation");
+                MINIC_AST_VERIFY_FAIL(minic_c0_ast_verify_stage_default_reason(stage));
             }
         }
     }
@@ -1348,7 +1385,7 @@ bool minic_c0_program_verify_target_detailed(const MinicC0Program *program,
                 !minic_type_equal(local->type, binding->type) ||
                 !minic_target_info_local_fixed_register_supported(
                     target, binding->register_name, binding->register_name_length)) {
-                MINIC_AST_VERIFY_FAIL("contract violation");
+                MINIC_AST_VERIFY_FAIL(minic_c0_ast_verify_stage_default_reason(stage));
             }
         }
     }
@@ -1368,7 +1405,7 @@ bool minic_c0_program_verify_target_detailed(const MinicC0Program *program,
                 function->is_defined ||
                 !function_alias_section_matches(function, alias_target_function) ||
                 !function_alias_signature_matches(program, function, alias_target_function)) {
-                MINIC_AST_VERIFY_FAIL("contract violation");
+                MINIC_AST_VERIFY_FAIL(minic_c0_ast_verify_stage_default_reason(stage));
             }
         }
         if (function->name == NULL || function->parameter_count > MINIC_MAX_FUNCTION_PARAMETERS ||
@@ -1380,7 +1417,7 @@ bool minic_c0_program_verify_target_detailed(const MinicC0Program *program,
             (function->is_internal && function->is_weak) ||
             (function->is_defined && function->body_block >= program->block_count) ||
             (!function->is_defined && function->body_block != MINIC_BLOCK_INVALID)) {
-            MINIC_AST_VERIFY_FAIL("contract violation");
+            MINIC_AST_VERIFY_FAIL(minic_c0_ast_verify_stage_default_reason(stage));
         }
         for (parameter_index = 0U; parameter_index < function->parameter_count; ++parameter_index) {
             subindex = parameter_index;
@@ -1388,7 +1425,7 @@ bool minic_c0_program_verify_target_detailed(const MinicC0Program *program,
                 !type_is_top_level_unqualified(function->parameter_types[parameter_index]) ||
                 minic_type_is_void(function->parameter_types[parameter_index]) ||
                 minic_type_is_function(function->parameter_types[parameter_index])) {
-                MINIC_AST_VERIFY_FAIL("contract violation");
+                MINIC_AST_VERIFY_FAIL(minic_c0_ast_verify_stage_default_reason(stage));
             }
         }
     }
@@ -1398,7 +1435,7 @@ bool minic_c0_program_verify_target_detailed(const MinicC0Program *program,
     for (index = 0U; index < program->type_alias_count; ++index) {
         if (program->type_aliases[index].name == NULL ||
             !type_is_valid(program, target, program->type_aliases[index].type)) {
-            MINIC_AST_VERIFY_FAIL("contract violation");
+            MINIC_AST_VERIFY_FAIL(minic_c0_ast_verify_stage_default_reason(stage));
         }
     }
     stage = MINIC_C0_AST_VERIFY_GLOBAL_OBJECT;
@@ -1416,7 +1453,7 @@ bool minic_c0_program_verify_target_detailed(const MinicC0Program *program,
                 !object->is_extern || object->is_internal || object->is_block_scope_extern_only ||
                 alias_target_object->is_extern || alias_target_object->is_tentative ||
                 !minic_c0_types_compatible(program, object->type, alias_target_object->type)) {
-                MINIC_AST_VERIFY_FAIL("contract violation");
+                MINIC_AST_VERIFY_FAIL(minic_c0_ast_verify_stage_default_reason(stage));
             }
         }
         if (object->name == NULL || !type_is_valid(program, target, object->type) ||
@@ -1442,7 +1479,7 @@ bool minic_c0_program_verify_target_detailed(const MinicC0Program *program,
                               object->union_selection_capacity) ||
             ((object->is_extern || object->is_tentative || object->is_zero_initialized) &&
              object->union_selection_count != 0U)) {
-            MINIC_AST_VERIFY_FAIL("contract violation");
+            MINIC_AST_VERIFY_FAIL(minic_c0_ast_verify_stage_default_reason(stage));
         }
         {
             size_t selection_index;
@@ -1458,7 +1495,7 @@ bool minic_c0_program_verify_target_detailed(const MinicC0Program *program,
                 if (record == NULL || !record->is_complete || !record->is_union ||
                     selection->field_index >= record->field_count ||
                     selection->initializer_slot > object->initializer_count) {
-                    MINIC_AST_VERIFY_FAIL("contract violation");
+                    MINIC_AST_VERIFY_FAIL(minic_c0_ast_verify_stage_default_reason(stage));
                 }
                 if (selection->initializer_span != 0U) {
                     const MinicRecordField *field;
@@ -1470,20 +1507,20 @@ bool minic_c0_program_verify_target_detailed(const MinicC0Program *program,
                         !minic_c0_global_initializer_slot_count(
                             program, field->type, &element_slots) ||
                         (element_slots != 0U && field->element_count > SIZE_MAX / element_slots)) {
-                        MINIC_AST_VERIFY_FAIL("contract violation");
+                        MINIC_AST_VERIFY_FAIL(minic_c0_ast_verify_stage_default_reason(stage));
                     }
                     selected_slots = field->element_count * element_slots;
                     if (selected_slots > selection->initializer_span ||
                         selection->initializer_span >
                             object->initializer_count - selection->initializer_slot) {
-                        MINIC_AST_VERIFY_FAIL("contract violation");
+                        MINIC_AST_VERIFY_FAIL(minic_c0_ast_verify_stage_default_reason(stage));
                     }
                 }
                 for (prior_index = 0U; prior_index < selection_index; ++prior_index) {
                     if (object->union_selections[prior_index].initializer_slot ==
                             selection->initializer_slot &&
                         object->union_selections[prior_index].record_id == selection->record_id) {
-                        MINIC_AST_VERIFY_FAIL("contract violation");
+                        MINIC_AST_VERIFY_FAIL(minic_c0_ast_verify_stage_default_reason(stage));
                     }
                 }
             }
@@ -1501,7 +1538,7 @@ bool minic_c0_program_verify_target_detailed(const MinicC0Program *program,
                          MINIC_GLOBAL_RELOCATION_LOCATION_AGGREGATE_SCALAR) ||
                     relocation->location_index >= object->initializer_count ||
                     object->initializer_values[relocation->location_index] != 0U) {
-                    MINIC_AST_VERIFY_FAIL("contract violation");
+                    MINIC_AST_VERIFY_FAIL(minic_c0_ast_verify_stage_default_reason(stage));
                 }
                 if (relocation->location_kind == MINIC_GLOBAL_RELOCATION_LOCATION_RECORD_FIELD) {
                     const MinicRecord *record;
@@ -1511,7 +1548,7 @@ bool minic_c0_program_verify_target_detailed(const MinicC0Program *program,
                                  : NULL;
                     if (record == NULL || !record->is_complete || record->is_union ||
                         object->initializer_count != record->field_count) {
-                        MINIC_AST_VERIFY_FAIL("contract violation");
+                        MINIC_AST_VERIFY_FAIL(minic_c0_ast_verify_stage_default_reason(stage));
                     }
                 }
             }
@@ -1538,7 +1575,7 @@ bool minic_c0_program_verify_target_detailed(const MinicC0Program *program,
                                                           relocation->location_kind,
                                                           relocation->location_index,
                                                           &slot_type)) {
-                    MINIC_AST_VERIFY_FAIL("contract violation");
+                    MINIC_AST_VERIFY_FAIL(minic_c0_ast_verify_stage_default_reason(stage));
                 }
                 slot_is_pointer = minic_type_is_pointer(slot_type);
                 slot_is_integer = minic_type_is_integer(slot_type);
@@ -1573,12 +1610,12 @@ bool minic_c0_program_verify_target_detailed(const MinicC0Program *program,
                     (relocation->target_kind != MINIC_GLOBAL_RELOCATION_OBJECT &&
                      relocation->target_kind != MINIC_GLOBAL_RELOCATION_FUNCTION &&
                      relocation->target_kind != MINIC_GLOBAL_RELOCATION_LABEL)) {
-                    MINIC_AST_VERIFY_FAIL("contract violation");
+                    MINIC_AST_VERIFY_FAIL(minic_c0_ast_verify_stage_default_reason(stage));
                 }
                 if (slot_is_pointer && relocation->target_kind == MINIC_GLOBAL_RELOCATION_OBJECT &&
                     !minic_c0_global_relocation_object_target_compatible(
                         program, relocation, slot_type)) {
-                    MINIC_AST_VERIFY_FAIL("contract violation");
+                    MINIC_AST_VERIFY_FAIL(minic_c0_ast_verify_stage_default_reason(stage));
                 }
                 {
                     int64_t target_addend;
@@ -1588,7 +1625,7 @@ bool minic_c0_program_verify_target_detailed(const MinicC0Program *program,
                             program,
                             relocation,
                             &target_addend)) {
-                        MINIC_AST_VERIFY_FAIL("contract violation");
+                        MINIC_AST_VERIFY_FAIL(minic_c0_ast_verify_stage_default_reason(stage));
                     }
                     (void)target_addend;
                 }
@@ -1600,14 +1637,14 @@ bool minic_c0_program_verify_target_detailed(const MinicC0Program *program,
     subindex = MINIC_C0_AST_VERIFY_INDEX_NONE;
     if (!storage_is_valid(
             program->file_asms, program->file_asm_count, program->file_asm_capacity)) {
-        MINIC_AST_VERIFY_FAIL("contract violation");
+        MINIC_AST_VERIFY_FAIL(minic_c0_ast_verify_stage_default_reason(stage));
     }
     for (index = 0U; index < program->file_asm_count; ++index) {
         const MinicFileAsm *file_asm;
 
         file_asm = &program->file_asms[index];
         if (file_asm->text == NULL || strlen(file_asm->text) != file_asm->length) {
-            MINIC_AST_VERIFY_FAIL("contract violation");
+            MINIC_AST_VERIFY_FAIL(minic_c0_ast_verify_stage_default_reason(stage));
         }
     }
     stage = MINIC_C0_AST_VERIFY_EXPRESSION;
@@ -1636,12 +1673,12 @@ bool minic_c0_program_verify_target_detailed(const MinicC0Program *program,
         block = &program->blocks[index];
         if (!storage_is_valid(
                 block->statements, block->statement_count, block->statement_capacity)) {
-            MINIC_AST_VERIFY_FAIL("contract violation");
+            MINIC_AST_VERIFY_FAIL(minic_c0_ast_verify_stage_default_reason(stage));
         }
         for (statement_index = 0U; statement_index < block->statement_count; ++statement_index) {
             subindex = statement_index;
             if (block->statements[statement_index] >= program->statement_count) {
-                MINIC_AST_VERIFY_FAIL("contract violation");
+                MINIC_AST_VERIFY_FAIL(minic_c0_ast_verify_stage_default_reason(stage));
             }
         }
     }
