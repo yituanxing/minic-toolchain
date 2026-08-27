@@ -128,8 +128,10 @@ static bool parse_function_pointer_field_declarator(MinicParser *parser,
 }
 
 typedef struct MinicRecordFieldAttributeContext {
+    MinicType field_type;
     size_t explicit_alignment;
     bool is_packed;
+    bool has_field_type;
 } MinicRecordFieldAttributeContext;
 
 static bool consume_record_field_attribute(MinicParser *parser,
@@ -143,8 +145,25 @@ static bool consume_record_field_attribute(MinicParser *parser,
     }
     context = (MinicRecordFieldAttributeContext *)opaque_context;
     descriptor = attribute->descriptor;
-    if (descriptor == NULL ||
-        !minic_attribute_allowed_on(descriptor, MINIC_ATTRIBUTE_TARGET_FIELD)) {
+    if (descriptor == NULL) {
+        minic_parser_error(parser, "unsupported GNU record field attribute");
+        return false;
+    }
+    if (!minic_attribute_allowed_on(descriptor, MINIC_ATTRIBUTE_TARGET_FIELD)) {
+        bool function_parse_only;
+
+        function_parse_only =
+            context->has_field_type &&
+            minic_type_is_pointer(context->field_type) &&
+            context->field_type.base_kind == MINIC_TYPE_BASE_FUNCTION &&
+            minic_attribute_allowed_on(descriptor, MINIC_ATTRIBUTE_TARGET_FUNCTION) &&
+            (descriptor->semantic_class == MINIC_ATTRIBUTE_CLASS_INFORMATIONAL ||
+             descriptor->semantic_class == MINIC_ATTRIBUTE_CLASS_DIAGNOSTIC ||
+             descriptor->semantic_class == MINIC_ATTRIBUTE_CLASS_OPTIMIZATION ||
+             descriptor->semantic_class == MINIC_ATTRIBUTE_CLASS_CONTROL_FLOW);
+        if (function_parse_only) {
+            return true;
+        }
         minic_parser_error(parser, "unsupported GNU record field attribute");
         return false;
     }
@@ -178,8 +197,31 @@ parse_record_field_attributes(MinicParser *parser, size_t *explicit_alignment, b
     if (parser == NULL || explicit_alignment == NULL || is_packed == NULL) {
         return false;
     }
+    (void)memset(&context, 0, sizeof(context));
     context.explicit_alignment = *explicit_alignment;
     context.is_packed = *is_packed;
+    if (!minic_parser_parse_gnu_attribute_lists(parser, consume_record_field_attribute, &context)) {
+        return false;
+    }
+    *explicit_alignment = context.explicit_alignment;
+    *is_packed = context.is_packed;
+    return true;
+}
+
+static bool parse_typed_record_field_attributes(MinicParser *parser,
+                                                MinicType field_type,
+                                                size_t *explicit_alignment,
+                                                bool *is_packed) {
+    MinicRecordFieldAttributeContext context;
+
+    if (parser == NULL || explicit_alignment == NULL || is_packed == NULL) {
+        return false;
+    }
+    (void)memset(&context, 0, sizeof(context));
+    context.field_type = field_type;
+    context.explicit_alignment = *explicit_alignment;
+    context.is_packed = *is_packed;
+    context.has_field_type = true;
     if (!minic_parser_parse_gnu_attribute_lists(parser, consume_record_field_attribute, &context)) {
         return false;
     }
@@ -447,7 +489,8 @@ static bool parse_record_field_declarator(MinicParser *parser,
         }
     }
 
-    if (!parse_record_field_attributes(parser, &explicit_alignment, &is_packed) ||
+    if (!parse_typed_record_field_attributes(
+            parser, field_type, &explicit_alignment, &is_packed) ||
         !apply_record_field_declaration_attributes(
             parser, declaration_attributes, field_type, &explicit_alignment, &is_packed)) {
         return false;
