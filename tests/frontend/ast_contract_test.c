@@ -273,6 +273,7 @@ static int test_verify_failure_provenance(void) {
     return 0;
 }
 
+/* New semantic fields must acquire safe defaults in the owning constructor, not parser call sites. */
 static int test_semantic_entity_defaults(void) {
     MinicC0Program program;
     MinicFunctionId function_id;
