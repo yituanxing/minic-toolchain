@@ -1328,6 +1328,9 @@ bool minic_c0_program_verify_target_detailed(const MinicC0Program *program,
 
         record = &program->records[index];
         if (record->name == NULL ||
+            (record->pack_alignment != 0U &&
+             (record->pack_alignment > 16U ||
+              (record->pack_alignment & (record->pack_alignment - 1U)) != 0U)) ||
             !storage_is_valid(record->fields, record->field_count, record->field_capacity)) {
             MINIC_AST_VERIFY_FAIL(minic_c0_ast_verify_stage_default_reason(stage));
         }

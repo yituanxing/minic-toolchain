@@ -363,6 +363,7 @@ typedef struct MinicRecord {
     size_t field_count;
     size_t field_capacity;
     size_t explicit_alignment;
+    size_t pack_alignment;
     bool is_union;
     bool is_packed;
     bool is_transparent_union;

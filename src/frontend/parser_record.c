@@ -701,6 +701,7 @@ bool minic_parser_parse_record_definition_specifier(MinicParser *parser, MinicTy
                 return false;
             }
         }
+        parser->program->records[record_id].pack_alignment = parser->record_pack_alignment;
         parser->program->records[record_id].is_packed =
             parser->program->records[record_id].is_packed || is_packed;
         if (explicit_alignment > parser->program->records[record_id].explicit_alignment) {
@@ -716,6 +717,7 @@ bool minic_parser_parse_record_definition_specifier(MinicParser *parser, MinicTy
         }
         parser->program->records[record_id].is_union = is_union;
         parser->program->records[record_id].is_packed = is_packed;
+        parser->program->records[record_id].pack_alignment = parser->record_pack_alignment;
         parser->program->records[record_id].explicit_alignment = explicit_alignment;
     } else {
         minic_parser_error(parser, "expected record tag or '{' after 'struct'");

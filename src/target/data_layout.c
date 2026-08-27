@@ -70,6 +70,7 @@ static bool minic_data_layout_record_depth(const MinicDataLayout *layout,
                                            size_t *alignment) {
     size_t storage_bits;
     size_t record_alignment;
+    size_t pack_alignment;
     size_t index;
 
     if (layout == NULL || program == NULL || record == NULL || size == NULL || alignment == NULL ||
@@ -78,6 +79,11 @@ static bool minic_data_layout_record_depth(const MinicDataLayout *layout,
     }
     storage_bits = 0U;
     record_alignment = 1U;
+    pack_alignment = record->is_packed ? 1U : record->pack_alignment;
+    if (pack_alignment != 0U &&
+        (pack_alignment > 16U || (pack_alignment & (pack_alignment - 1U)) != 0U)) {
+        return false;
+    }
     for (index = 0U; index < record->field_count; ++index) {
         const MinicRecordField *field;
         size_t element_size;
@@ -92,6 +98,9 @@ static bool minic_data_layout_record_depth(const MinicDataLayout *layout,
                 layout, program, field->type, depth + 1U, &element_size, &field_alignment) ||
             element_size > SIZE_MAX / field->element_count) {
             return false;
+        }
+        if (pack_alignment != 0U && field_alignment > pack_alignment) {
+            field_alignment = pack_alignment;
         }
         field_bit_offset = 0U;
         if (field->is_bit_field) {
@@ -123,7 +132,7 @@ static bool minic_data_layout_record_depth(const MinicDataLayout *layout,
                 storage_bits = field_start_bits;
             } else {
                 field_start_bits = storage_bits;
-                if (!record->is_packed) {
+                if (pack_alignment != 1U) {
                     size_t within_boundary;
 
                     within_boundary = field_start_bits % alignment_bits;
@@ -142,8 +151,8 @@ static bool minic_data_layout_record_depth(const MinicDataLayout *layout,
             }
             field_offset = field_start_bits / 8U;
             field_bit_offset = field_start_bits % 8U;
-            if (!record->is_packed && field->name_length != 0U && field->bit_width != 0U &&
-                field_alignment > record_alignment) {
+            if (pack_alignment != 1U && field->name_length != 0U &&
+                field->bit_width != 0U && field_alignment > record_alignment) {
                 record_alignment = field_alignment;
             }
         } else {
@@ -172,7 +181,7 @@ static bool minic_data_layout_record_depth(const MinicDataLayout *layout,
                 if (field_size > storage_size) {
                     storage_size = field_size;
                 }
-            } else if (record->is_packed && field->explicit_alignment == 0U) {
+            } else if (pack_alignment == 1U && field->explicit_alignment == 0U) {
                 field_offset = storage_size;
                 if (field_offset > SIZE_MAX - field_size) {
                     return false;
@@ -198,7 +207,7 @@ static bool minic_data_layout_record_depth(const MinicDataLayout *layout,
             } else {
                 storage_bits = storage_size * 8U;
             }
-            if ((!record->is_packed || field->explicit_alignment != 0U) &&
+            if ((pack_alignment != 1U || field->explicit_alignment != 0U) &&
                 field_alignment > record_alignment) {
                 record_alignment = field_alignment;
             }

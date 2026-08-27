@@ -2860,12 +2860,27 @@ bool minic_parser_parse_preprocessor_directive(MinicParser *parser) {
     cursor += 1U;
     pragma_skip_horizontal_space(text, length, &cursor);
     alignment = 0U;
-    if (cursor < length && text[cursor] == '1') {
-        alignment = 1U;
-        cursor += 1U;
-    } else if (cursor < length && text[cursor] != ')') {
-        minic_parser_error(parser, "unsupported pragma pack alignment");
-        return false;
+    if (cursor < length && text[cursor] != ')') {
+        size_t digit_count;
+
+        digit_count = 0U;
+        while (cursor < length && text[cursor] >= '0' && text[cursor] <= '9') {
+            size_t digit;
+
+            digit = (size_t)(text[cursor] - '0');
+            if (alignment > (SIZE_MAX - digit) / 10U) {
+                minic_parser_error(parser, "unsupported pragma pack alignment");
+                return false;
+            }
+            alignment = alignment * 10U + digit;
+            cursor += 1U;
+            digit_count += 1U;
+        }
+        if (digit_count == 0U || alignment == 0U || alignment > 16U ||
+            (alignment & (alignment - 1U)) != 0U) {
+            minic_parser_error(parser, "unsupported pragma pack alignment");
+            return false;
+        }
     }
     pragma_skip_horizontal_space(text, length, &cursor);
     if (cursor >= length || text[cursor] != ')') {
