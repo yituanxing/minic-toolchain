@@ -120,6 +120,17 @@ def progress_ratio(
     return min(1.0, max(0.0, first_error_line / total_lines))
 
 
+def emit_progress(done: int, total: int) -> None:
+    width = 20
+    filled = width if total == 0 else int(done * width / total)
+    pct = 100 if total == 0 else int(done * 100 / total)
+    bar = "#" * filled + "." * (width - filled)
+    print(
+        f"LINUX_PROGRESS phase=minic-replay [{bar}] {pct}% "
+        f"done={done} total={total}",
+        flush=True,
+    )
+
 def main() -> int:
     args = parse_args()
     started = time.monotonic()
@@ -280,10 +291,17 @@ def main() -> int:
         }
 
     results: list[dict[str, object]] = []
+    total = len(entries)
+    report_every = 1 if total <= 32 else max(1, total // 20)
+    completed = 0
+    emit_progress(0, total)
     with ThreadPoolExecutor(max_workers=args.jobs) as pool:
         futures = [pool.submit(compile_one, entry) for entry in entries]
         for future in as_completed(futures):
             results.append(future.result())
+            completed += 1
+            if completed == total or completed % report_every == 0:
+                emit_progress(completed, total)
     results.sort(key=lambda row: int(row["index"]))
 
     counts = Counter(str(row["status"]) for row in results)

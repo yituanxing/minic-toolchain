@@ -4,6 +4,22 @@ set -eu
 export LC_ALL=C
 export LANG=C
 
+progress_bar() {
+    phase=$1
+    done=$2
+    total=$3
+    if test "$total" -le 0; then
+        pct=100
+        filled=20
+    else
+        pct=$((done * 100 / total))
+        filled=$((done * 20 / total))
+    fi
+    empty=$((20 - filled))
+    bar=$(printf '%*s' "$filled" '' | tr ' ' '#')
+    rest=$(printf '%*s' "$empty" '' | tr ' ' '.')
+    printf '%s\n' "LINUX_PROGRESS phase=$phase [$bar$rest] ${pct}% done=$done total=$total"
+}
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
 work=${BUILD_DIR:-"$root/build/linux-batch"}
 minic=${MINIC:-"$root/build/linux-compiler/bin/minic"}
@@ -165,21 +181,49 @@ if test "$plan_status" -ne 0; then
     printf '%s\n' "LINUX_BATCH_PLAN_NOTE dry-run status=$plan_status; continuing because a C TU manifest was recovered"
 fi
 
-# Build the exact selected objects through Kbuild instead of asking its generic
-# %.i helper to recreate each command. This preserves generated-header and
-# object-specific dependencies. GCC -save-temps=obj leaves the preprocessed .i
-# beside each selected object using the same full Kbuild command line.
-set --
-for object in $(cut -f2 "$work/selected-tus.txt"); do
-    set -- "$@" "$object"
+# Build selected objects through Kbuild in bounded chunks. This preserves exact
+# object-specific dependencies while exposing deterministic GCC -> .i progress.
+selected_total=$(wc -l < "$work/selected-tus.txt" | tr -d ' ')
+chunk_size=${LINUX_BATCH_MATERIALIZE_CHUNK:-25}
+case "$chunk_size" in
+    ''|*[!0-9]*) printf '%s\n' 'LINUX_BATCH_ERROR materialize chunk must be a positive integer' >&2; exit 2 ;;
+esac
+if test "$chunk_size" -eq 0; then
+    printf '%s\n' 'LINUX_BATCH_ERROR materialize chunk must be greater than zero' >&2
+    exit 2
+fi
+
+: >"$work/preprocess.log"
+materialize_status=0
+materialized=0
+progress_bar gcc-to-i 0 "$selected_total"
+
+while test "$materialized" -lt "$selected_total"; do
+    set --
+    chunk_end=$((materialized + chunk_size))
+    if test "$chunk_end" -gt "$selected_total"; then
+        chunk_end=$selected_total
+    fi
+    line=$((materialized + 1))
+    while test "$line" -le "$chunk_end"; do
+        object=$(sed -n "${line}p" "$work/selected-tus.txt" | cut -f2)
+        set -- "$@" "$object"
+        line=$((line + 1))
+    done
+
+    set +e
+make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE="$cross_compile" \
+        KCFLAGS=-save-temps=obj -k -j4 "$@" >>"$work/preprocess.log" 2>&1
+    chunk_status=$?
+    set -e
+    if test "$chunk_status" -ne 0; then
+        materialize_status=$chunk_status
+    fi
+    materialized=$chunk_end
+    progress_bar gcc-to-i "$materialized" "$selected_total"
 done
 
-set +e
-make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE="$cross_compile" \
-    KCFLAGS=-save-temps=obj -k -j4 "$@" >"$work/preprocess.log" 2>&1
-materialize_status=$?
-set -e
-printf '%s\n' "LINUX_BATCH_MATERIALIZE status=$materialize_status selected=$(wc -l < "$work/selected-tus.txt" | tr -d ' ')"
+printf '%s\n' "LINUX_BATCH_MATERIALIZE status=$materialize_status selected=$selected_total"
 
 if test "$materialize_only" -eq 1; then
     python3 - "$out" "$work/selected-tus.txt" <<'PY'
