@@ -56,6 +56,12 @@ expect_instructions() {
                 grep -E "^[[:space:]]+la[[:space:]]+[^,]+,[[:space:]]*$symbol$" \
                     "$work/$name.s" >/dev/null
                 ;;
+            "xori a0, a0, 1")
+                # Legacy <=/>= inverted the less-than bit with xori 1.
+                # Core models that inversion explicitly as SCALAR_IS_ZERO,
+                # whose RV64 lowering is seqz.
+                grep -E '^[[:space:]]+seqz[[:space:]]+' "$work/$name.s" >/dev/null
+                ;;
             "xori a0, a0, "*)
                 immediate=${instruction#"xori a0, a0, "}
                 grep -E "^[[:space:]]+xori[[:space:]]+[^,]+,[[:space:]]*[^,]+,[[:space:]]*$immediate$" \
