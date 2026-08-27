@@ -337,6 +337,65 @@ MinicCoreLowerStatus lower_address(MinicCoreLowerContext *context,
     if (expression->value_category != MINIC_VALUE_LVALUE) {
         return MINIC_CORE_LOWER_UNSUPPORTED;
     }
+    /* Array compound literals reuse the legacy repeated-local storage model
+       until frontend array representation convergence. Execute their hidden
+       initializer block at the expression point, then expose element-zero
+       storage exactly like an ordinary local array object. */
+    if (expression->kind == MINIC_EXPRESSION_COMPOUND_LITERAL) {
+        MinicArrayObjectInfo array_info;
+
+        (void)memset(&array_info, 0, sizeof(array_info));
+        if (minic_c0_expression_array_object_info(
+                context->body->program, expression, &array_info) &&
+            !array_info.has_materialized_type) {
+            const MinicBlock *initializer_block;
+            const MinicLocal *local;
+            bool terminated;
+
+            local = minic_c0_program_local(
+                context->body->program, expression->value.compound_literal.local_id);
+            initializer_block = minic_c0_program_block(
+                context->body->program, expression->value.compound_literal.initializer_block);
+            if (local == NULL || initializer_block == NULL || !local->is_array ||
+                local->is_register_storage || local->element_count == 0U ||
+                !minic_type_equal(local->type, expression->type) ||
+                !minic_type_equal(array_info.element_type, expression->type) ||
+                array_info.element_count != local->element_count) {
+                return MINIC_CORE_LOWER_UNSUPPORTED;
+            }
+            terminated = false;
+            status = lower_block(context, initializer_block, &terminated);
+            if (status != MINIC_CORE_LOWER_OK) {
+                return status;
+            }
+            if (terminated) {
+                return MINIC_CORE_LOWER_UNSUPPORTED;
+            }
+            status = lower_local_object(
+                context, expression->value.compound_literal.local_id, &object_id);
+            if (status != MINIC_CORE_LOWER_OK) {
+                return status;
+            }
+            if (object_id >= context->function->object_count ||
+                !minic_type_equal(context->function->objects[object_id].type, local->type) ||
+                context->function->objects[object_id].element_count != local->element_count) {
+                return MINIC_CORE_LOWER_ERROR;
+            }
+            (void)memset(&instruction, 0, sizeof(instruction));
+            instruction.kind = MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS;
+            instruction.span = expression->span;
+            instruction.result = MINIC_CORE_VALUE_INVALID;
+            instruction.value.object_id = object_id;
+            if (!minic_type_pointer_to(expression->type, &instruction.type)) {
+                return MINIC_CORE_LOWER_ERROR;
+            }
+            return minic_core_function_append_value_instruction(
+                       context->function, context->block_id, &instruction, address_id)
+                       ? MINIC_CORE_LOWER_OK
+                       : MINIC_CORE_LOWER_ERROR;
+        }
+    }
+
     /* M157_SCALAR_COMPOUND_LITERAL_ADDRESS_OWNER: scalar compound literals
        use the same frontend-owned hidden local + initializer block model as
        record compound literals.  Execute that initializer at the expression

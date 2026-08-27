@@ -1395,6 +1395,20 @@ bool minic_c0_expression_array_object_info(const MinicC0Program *program,
         return false;
     }
     (void)memset(&resolved, 0, sizeof(resolved));
+    if (expression->kind == MINIC_EXPRESSION_COMPOUND_LITERAL) {
+        const MinicLocal *local;
+
+        local = minic_c0_program_local(program, expression->value.compound_literal.local_id);
+        if (local != NULL && local->is_array) {
+            resolved.element_type = expression->type;
+            resolved.element_count = local->element_count;
+            resolved.is_incomplete = local->element_count == 0U;
+            if (info != NULL) {
+                *info = resolved;
+            }
+            return true;
+        }
+    }
     if (expression->kind == MINIC_EXPRESSION_LOCAL) {
         const MinicLocal *local;
 

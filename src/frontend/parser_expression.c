@@ -438,6 +438,96 @@ static bool parse_record_compound_literal(MinicParser *parser,
     return minic_parser_parse_postfix(parser, compound_literal_id, expression_id);
 }
 
+static bool parse_array_compound_literal(MinicParser *parser,
+                                         MinicSourcePosition begin,
+                                         MinicType type,
+                                         MinicExpressionId *expression_id) {
+    const MinicArrayType *array_type;
+    MinicLocal local;
+    MinicLocalId local_id;
+    MinicExpression hidden_lvalue;
+    MinicExpression compound_literal;
+    MinicExpressionId hidden_lvalue_id;
+    MinicExpressionId compound_literal_id;
+    MinicBlockId initializer_block;
+    MinicBlockId parent_block;
+    size_t element_count;
+    bool success;
+
+    if (parser == NULL || expression_id == NULL || parser->current.kind != MINIC_TOKEN_LBRACE ||
+        parser->current_function == MINIC_FUNCTION_INVALID || !minic_type_is_array(type)) {
+        return false;
+    }
+    array_type = minic_c0_program_array_type(parser->program, type.array_type_id);
+    if (array_type == NULL || array_type->is_zero_length) {
+        minic_parser_error(parser, "array compound literal requires a valid array type");
+        return false;
+    }
+    element_count = array_type->element_count;
+    if (element_count == 0U) {
+        if (!minic_parser_inspect_array_initializer_extent(parser, &element_count) ||
+            element_count == 0U ||
+            !minic_c0_program_complete_array_type(parser->program, type, element_count)) {
+            if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
+                minic_parser_error(parser, "cannot infer array compound literal extent");
+            }
+            return false;
+        }
+        array_type = minic_c0_program_array_type(parser->program, type.array_type_id);
+        if (array_type == NULL) {
+            return false;
+        }
+    }
+
+    minic_c0_local_initialize(&local);
+    local.name_span.begin = begin;
+    local.name_span.end = begin;
+    local.type = array_type->element_type;
+    local.element_count = element_count;
+    local.is_array = true;
+    local.is_register_storage = false;
+    if (!minic_c0_program_add_local(parser->program, &local, &local_id)) {
+        minic_parser_error(parser, "cannot allocate array compound literal backing object");
+        return false;
+    }
+
+    (void)memset(&hidden_lvalue, 0, sizeof(hidden_lvalue));
+    hidden_lvalue.kind = MINIC_EXPRESSION_LOCAL;
+    hidden_lvalue.span.begin = begin;
+    hidden_lvalue.span.end = parser->current.span.begin;
+    hidden_lvalue.type = local.type;
+    hidden_lvalue.value_category = MINIC_VALUE_LVALUE;
+    hidden_lvalue.value.local_id = local_id;
+    if (!minic_parser_add_expression(parser, &hidden_lvalue, &hidden_lvalue_id) ||
+        !minic_c0_program_add_block(parser->program, &initializer_block)) {
+        return false;
+    }
+    parent_block = parser->current_block;
+    parser->current_block = initializer_block;
+    success = minic_parser_parse_fixed_runtime_array_initializer(
+        parser, hidden_lvalue_id, element_count);
+    parser->current_block = parent_block;
+    if (!success) {
+        return false;
+    }
+
+    (void)memset(&compound_literal, 0, sizeof(compound_literal));
+    compound_literal.kind = MINIC_EXPRESSION_COMPOUND_LITERAL;
+    compound_literal.span.begin = begin;
+    compound_literal.span.end = parser->current.span.begin;
+    /* Array convergence is still transitional: local arrays expose their
+       element type plus array-object metadata. Keep the same representation
+       here so Core can reuse the existing repeated-local object owner. */
+    compound_literal.type = local.type;
+    compound_literal.value_category = MINIC_VALUE_LVALUE;
+    compound_literal.value.compound_literal.local_id = local_id;
+    compound_literal.value.compound_literal.initializer_block = initializer_block;
+    if (!minic_parser_add_expression(parser, &compound_literal, &compound_literal_id)) {
+        return false;
+    }
+    return minic_parser_parse_postfix(parser, compound_literal_id, expression_id);
+}
+
 static bool parse_scalar_compound_literal(MinicParser *parser,
                                           MinicSourcePosition begin,
                                           MinicType type,
@@ -590,6 +680,9 @@ static bool parse_cast(MinicParser *parser, MinicExpressionId *expression_id) {
         }
         if (minic_type_is_record(target_type)) {
             return parse_record_compound_literal(parser, begin, target_type, expression_id);
+        }
+        if (minic_type_is_array(target_type)) {
+            return parse_array_compound_literal(parser, begin, target_type, expression_id);
         }
         return parse_scalar_compound_literal(parser, begin, target_type, expression_id);
     }

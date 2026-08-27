@@ -746,6 +746,12 @@ static bool parse_fixed_runtime_array_initializer(MinicParser *parser,
         parser, base_id, array_info.element_type, element_count);
 }
 
+bool minic_parser_parse_fixed_runtime_array_initializer(MinicParser *parser,
+                                                        MinicExpressionId base_id,
+                                                        size_t element_count) {
+    return parse_fixed_runtime_array_initializer(parser, base_id, element_count);
+}
+
 static bool parse_local_character_array_string_initializer(MinicParser *parser,
                                                            MinicLocalId local_id,
                                                            bool infer_count,

@@ -477,6 +477,9 @@ bool minic_parser_add_default_return(MinicParser *parser);
 bool minic_parser_parse_statement(MinicParser *parser, bool allow_declaration);
 bool minic_parser_parse_runtime_record_initializer(MinicParser *parser,
                                                    MinicExpressionId target_id);
+bool minic_parser_parse_fixed_runtime_array_initializer(MinicParser *parser,
+                                                        MinicExpressionId base_id,
+                                                        size_t element_count);
 bool minic_parser_parse_statement_expression(MinicParser *parser,
                                              MinicSourcePosition begin,
                                              MinicExpressionId *expression_id);
