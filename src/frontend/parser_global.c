@@ -8,6 +8,25 @@
 #include <stdlib.h>
 #include <string.h>
 
+static bool apply_static_object_metadata(MinicParser *parser,
+                                         MinicGlobalObjectId object_id,
+                                         const char *section_name,
+                                         size_t section_name_length,
+                                         bool has_section,
+                                         size_t explicit_alignment) {
+    MinicDeclarationExternalObjectAttributes attributes;
+
+    if (parser == NULL || object_id == MINIC_GLOBAL_OBJECT_INVALID) {
+        return false;
+    }
+    (void)memset(&attributes, 0, sizeof(attributes));
+    attributes.section_name = section_name;
+    attributes.section_name_length = section_name_length;
+    attributes.explicit_alignment = explicit_alignment;
+    attributes.has_section = has_section;
+    return minic_declaration_apply_object_attributes(parser->program, object_id, &attributes);
+}
+
 MinicGlobalObjectId minic_parser_find_global_object_entity(const MinicParser *parser,
                                                            MinicSourceSpan name_span) {
     size_t name_length;
@@ -3431,10 +3450,12 @@ static bool parse_static_record_array(MinicParser *parser,
             }
             object_id = existing_id;
         }
-        if ((*has_section && !minic_c0_global_object_set_section(
-                                 parser->program, object_id, section_name, *section_name_length)) ||
-            (*explicit_alignment != 0U && !minic_c0_global_object_set_explicit_alignment(
-                                              parser->program, object_id, *explicit_alignment))) {
+        if (!apply_static_object_metadata(parser,
+                                      object_id,
+                                      section_name,
+                                      *section_name_length,
+                                      *has_section,
+                                      *explicit_alignment)) {
             minic_parser_error(parser, "cannot persist static record array declaration metadata");
             return false;
         }
@@ -3504,10 +3525,12 @@ static bool parse_static_record_array(MinicParser *parser,
             return false;
         }
     }
-    if ((*has_section && !minic_c0_global_object_set_section(
-                             parser->program, object_id, section_name, *section_name_length)) ||
-        (*explicit_alignment != 0U && !minic_c0_global_object_set_explicit_alignment(
-                                          parser->program, object_id, *explicit_alignment)) ||
+    if (!apply_static_object_metadata(parser,
+                                      object_id,
+                                      section_name,
+                                      *section_name_length,
+                                      *has_section,
+                                      *explicit_alignment) ||
         !minic_parser_parse_static_storage_initializer_value(parser, object_id, object_type)) {
         if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
             minic_parser_error(parser, "cannot parse static record array initializer");
@@ -3989,10 +4012,12 @@ static bool parse_static_pointer_array(MinicParser *parser,
                 return false;
             }
         }
-        if ((*has_section && !minic_c0_global_object_set_section(
-                                 parser->program, object_id, section_name, *section_name_length)) ||
-            (*explicit_alignment != 0U && !minic_c0_global_object_set_explicit_alignment(
-                                              parser->program, object_id, *explicit_alignment))) {
+        if (!apply_static_object_metadata(parser,
+                                      object_id,
+                                      section_name,
+                                      *section_name_length,
+                                      *has_section,
+                                      *explicit_alignment)) {
             minic_parser_error(parser, "cannot persist static pointer array metadata");
             return false;
         }
@@ -4054,10 +4079,12 @@ static bool parse_static_pointer_array(MinicParser *parser,
         }
     }
 
-    if ((*has_section && !minic_c0_global_object_set_section(
-                             parser->program, object_id, section_name, *section_name_length)) ||
-        (*explicit_alignment != 0U && !minic_c0_global_object_set_explicit_alignment(
-                                          parser->program, object_id, *explicit_alignment))) {
+    if (!apply_static_object_metadata(parser,
+                                      object_id,
+                                      section_name,
+                                      *section_name_length,
+                                      *has_section,
+                                      *explicit_alignment)) {
         minic_parser_error(parser, "cannot persist static pointer array metadata");
         return false;
     }
@@ -4170,10 +4197,12 @@ static bool parse_static_inferred_integer_array(MinicParser *parser,
                                             true,
                                             minic_type_is_const(element_type),
                                             &object_id) ||
-        (*has_section && !minic_c0_global_object_set_section(
-                             parser->program, object_id, section_name, *section_name_length)) ||
-        (*explicit_alignment != 0U && !minic_c0_global_object_set_explicit_alignment(
-                                          parser->program, object_id, *explicit_alignment)) ||
+        !apply_static_object_metadata(parser,
+                                      object_id,
+                                      section_name,
+                                      *section_name_length,
+                                      *has_section,
+                                      *explicit_alignment) ||
         !minic_parser_expect(parser, MINIC_TOKEN_EQUAL, "expected '=' after static array") ||
         !parse_static_scalar_array_transaction(parser, object_id, element_type, 0U, true)) {
         if (parser != NULL && parser->diagnostic != NULL &&
@@ -4352,10 +4381,12 @@ bool minic_parser_parse_static_zero_declaration_list_after_head(MinicParser *par
                 return false;
             }
         }
-        if ((has_section && !minic_c0_global_object_set_section(
-                                parser->program, object_id, section_name, section_name_length)) ||
-            (explicit_alignment != 0U && !minic_c0_global_object_set_explicit_alignment(
-                                             parser->program, object_id, explicit_alignment))) {
+        if (!apply_static_object_metadata(parser,
+                                      object_id,
+                                      section_name,
+                                      section_name_length,
+                                      has_section,
+                                      explicit_alignment)) {
             minic_parser_error(parser, "cannot persist static tentative declarator metadata");
             return false;
         }
@@ -4399,10 +4430,12 @@ static bool parse_preformed_static_array_definition(MinicParser *parser,
             true,
             static_object_type_is_read_only(parser->program, object_type),
             &object_id) ||
-        (has_section && !minic_c0_global_object_set_section(
-                            parser->program, object_id, section_name, section_name_length)) ||
-        (explicit_alignment != 0U && !minic_c0_global_object_set_explicit_alignment(
-                                         parser->program, object_id, explicit_alignment)) ||
+        !apply_static_object_metadata(parser,
+                                      object_id,
+                                      section_name,
+                                      section_name_length,
+                                      has_section,
+                                      explicit_alignment) ||
         !minic_parser_advance(parser)) {
         if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
             minic_parser_error(parser, "cannot begin pre-formed static array definition");
@@ -4621,10 +4654,12 @@ bool minic_parser_parse_static_global_after_head(MinicParser *parser,
         minic_parser_error(parser, "cannot add fixed static array object");
         return false;
     }
-    if ((*has_section && !minic_c0_global_object_set_section(
-                             parser->program, object_id, section_name, *section_name_length)) ||
-        (*explicit_alignment != 0U && !minic_c0_global_object_set_explicit_alignment(
-                                          parser->program, object_id, *explicit_alignment))) {
+    if (!apply_static_object_metadata(parser,
+                                      object_id,
+                                      section_name,
+                                      *section_name_length,
+                                      *has_section,
+                                      *explicit_alignment)) {
         minic_parser_error(parser, "cannot persist fixed static array metadata");
         return false;
     }
@@ -4684,10 +4719,12 @@ bool minic_parser_parse_static_global(MinicParser *parser) {
     }
     object_id = minic_parser_find_global_object_entity(parser, name_span);
     if (object_id == MINIC_GLOBAL_OBJECT_INVALID ||
-        (has_section && !minic_c0_global_object_set_section(
-                            parser->program, object_id, section_name, section_name_length)) ||
-        (explicit_alignment != 0U && !minic_c0_global_object_set_explicit_alignment(
-                                         parser->program, object_id, explicit_alignment))) {
+        !apply_static_object_metadata(parser,
+                                      object_id,
+                                      section_name,
+                                      section_name_length,
+                                      has_section,
+                                      explicit_alignment)) {
         minic_parser_error(parser, "cannot persist static object metadata");
         return false;
     }
