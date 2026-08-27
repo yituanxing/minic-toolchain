@@ -414,12 +414,21 @@ static bool parse_record_field_declarator(MinicParser *parser,
         const MinicArrayType *typedef_array;
 
         typedef_array = minic_c0_program_array_type(parser->program, field_type.array_type_id);
-        if (typedef_array == NULL || typedef_array->element_count == 0U) {
+        if (typedef_array == NULL ||
+            (typedef_array->element_count == 0U && !typedef_array->is_zero_length)) {
             minic_parser_error(parser, "record field requires a complete typedef array type");
             return false;
         }
         field_type = typedef_array->element_type;
-        element_count = typedef_array->element_count;
+        if (typedef_array->is_zero_length) {
+            /* Direct GNU T field[0] uses one semantic element plus an explicit
+               zero-length layout bit. Preserve the same representation when
+               the zero-length array arrives through a typedef. */
+            element_count = 1U;
+            is_zero_length_array = true;
+        } else {
+            element_count = typedef_array->element_count;
+        }
         is_array = true;
     }
     if (parser->current.kind == MINIC_TOKEN_LBRACKET) {
