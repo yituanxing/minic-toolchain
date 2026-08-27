@@ -755,9 +755,6 @@ static bool core_integer_overflow_supported(const MinicC0Program *program,
             minic_default_data_layout(), program, pointee, result_size, &alignment) ||
         *result_size == 0U || *result_size > 8U ||
         !minic_core_function_effective_integer_type(function, pointee, &effective_result_type)) {
-        (void)fprintf(stderr, "RV64_OVERFLOW_FAIL function=%s phase=shape op=%d\n",
-                      function != NULL && function->name != NULL ? function->name : "<unknown>",
-                      instruction != NULL ? (int)instruction->value.integer_overflow.operator_kind : -1);
         return false;
     }
     (void)alignment;
@@ -771,9 +768,6 @@ static bool core_integer_overflow_supported(const MinicC0Program *program,
         !minic_data_layout_type(
             minic_default_data_layout(), program, right_type, &right_size, &right_alignment) ||
         left_size == 0U || left_size > 8U || right_size == 0U || right_size > 8U) {
-        (void)fprintf(stderr, "RV64_OVERFLOW_FAIL function=%s phase=operands op=%d\n",
-                      function->name != NULL ? function->name : "<unknown>",
-                      (int)instruction->value.integer_overflow.operator_kind);
         return false;
     }
     (void)left_alignment;
@@ -787,33 +781,22 @@ static bool core_integer_overflow_supported(const MinicC0Program *program,
 
         left_is_result = minic_type_equal(left_type, pointee);
         right_is_result = minic_type_equal(right_type, pointee);
-        if (instruction->value.integer_overflow.operator_kind !=
-                MINIC_CORE_INTEGER_OVERFLOW_ADD ||
+        if ((instruction->value.integer_overflow.operator_kind !=
+                 MINIC_CORE_INTEGER_OVERFLOW_ADD &&
+             instruction->value.integer_overflow.operator_kind !=
+                 MINIC_CORE_INTEGER_OVERFLOW_MULTIPLY) ||
             result_is_unsigned || *result_size >= 8U || left_is_result == right_is_result ||
             !minic_type_is_signed_integer(effective_result_type)) {
-            (void)fprintf(stderr,
-                          "RV64_OVERFLOW_FAIL function=%s phase=mixed-policy op=%d "
-                          "result_size=%zu result_unsigned=%d result_signed=%d "
-                          "left_eq_result=%d right_eq_result=%d "
-                          "left_unsigned=%d right_unsigned=%d\n",
-                          function->name != NULL ? function->name : "<unknown>",
-                          (int)instruction->value.integer_overflow.operator_kind,
-                          *result_size,
-                          result_is_unsigned ? 1 : 0,
-                          minic_type_is_signed_integer(effective_result_type) ? 1 : 0,
-                          left_is_result ? 1 : 0,
-                          right_is_result ? 1 : 0,
-                          minic_type_is_unsigned_integer(effective_left_type) ? 1 : 0,
-                          minic_type_is_unsigned_integer(effective_right_type) ? 1 : 0);
             return false;
         }
         other_effective_type =
             left_is_result ? &effective_right_type : &effective_left_type;
         if (!minic_type_is_unsigned_integer(*other_effective_type)) {
-            (void)fprintf(stderr,
-                          "RV64_OVERFLOW_FAIL function=%s phase=mixed-other-sign op=%d\n",
-                          function->name != NULL ? function->name : "<unknown>",
-                          (int)instruction->value.integer_overflow.operator_kind);
+            return false;
+        }
+        if (instruction->value.integer_overflow.operator_kind ==
+                MINIC_CORE_INTEGER_OVERFLOW_MULTIPLY &&
+            left_size > 8U - right_size) {
             return false;
         }
     }
@@ -1815,19 +1798,6 @@ static bool core_instruction_supported(const MinicC0Program *program,
     case MINIC_CORE_INSTRUCTION_SCALAR_BITCAST:
         return core_scalar_bitcast_supported(program, function, instruction);
     }
-    return false;
-}
-
-static bool core_can_emit_fail(const MinicCoreFunction *function,
-                               const char *stage,
-                               size_t index,
-                               int kind) {
-    (void)fprintf(stderr,
-                  "RV64_CORE_CAN_EMIT_FAIL function=%s stage=%s index=%zu kind=%d\n",
-                  function != NULL && function->name != NULL ? function->name : "<unknown>",
-                  stage != NULL ? stage : "unknown",
-                  index,
-                  kind);
     return false;
 }
 
@@ -3353,9 +3323,23 @@ static bool emit_instruction(FILE *file,
             const char *unsigned_register;
             uint64_t maximum;
 
+            if (is_unsigned || result_size >= 8U) {
+                return false;
+            }
+            if (instruction->value.integer_overflow.operator_kind ==
+                MINIC_CORE_INTEGER_OVERFLOW_MULTIPLY) {
+                if (fprintf(file, "  mul t2, t0, t1\n  mv t4, t2\n") < 0 ||
+                    !minic_riscv64_emit_integer_conversion_for_program(
+                        file, program, result_type, "t2") ||
+                    fprintf(file, "  xor t4, t4, t2\n  snez t4, t4\n") < 0 ||
+                    !minic_riscv64_emit_scalar_store_for_program(
+                        file, program, result_type, "t2", "t3")) {
+                    return false;
+                }
+                return store_core_value(file, frame, instruction->result, "t4");
+            }
             if (instruction->value.integer_overflow.operator_kind !=
-                    MINIC_CORE_INTEGER_OVERFLOW_ADD ||
-                is_unsigned || result_size >= 8U) {
+                MINIC_CORE_INTEGER_OVERFLOW_ADD) {
                 return false;
             }
             signed_register = minic_type_equal(left_type, result_type) ? "t0" : "t1";

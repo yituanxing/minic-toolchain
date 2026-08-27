@@ -12,6 +12,12 @@ void unnamed_array_parameter(u8 *bytes)
     bytes[1] = 9;
 }
 
+void unnamed_incomplete_array_parameter(u8 []);
+void unnamed_incomplete_array_parameter(u8 *bytes)
+{
+    bytes[2] = 11;
+}
+
 typedef void (*generator_fn)(u8 bytes[16]);
 
 static int adjusted_size(u8 bytes[16])
@@ -26,5 +32,6 @@ int main(void)
     generator_fn fn = generate_random_uuid;
     fn(bytes);
     unnamed_array_parameter(bytes);
-    return adjusted_size(bytes) == 7 && bytes[1] == 9 ? 0 : 1;
+    unnamed_incomplete_array_parameter(bytes);
+    return adjusted_size(bytes) == 7 && bytes[1] == 9 && bytes[2] == 11 ? 0 : 1;
 }

@@ -640,7 +640,9 @@ static bool parameter_array_modifier_is_restrict(const MinicParser *parser) {
            function_identifier_is(parser, "__restrict__");
 }
 
-static bool adjust_array_parameter_type(MinicParser *parser, MinicType *parameter_type) {
+static bool adjust_array_parameter_type(MinicParser *parser,
+                                        MinicType *parameter_type,
+                                        size_t array_type_begin) {
     const MinicArrayType *outer_array;
     MinicType adjusted_type;
     MinicType declared_array_type;
@@ -722,6 +724,19 @@ static bool adjust_array_parameter_type(MinicParser *parser, MinicType *paramete
         return false;
     }
     *parameter_type = adjusted_type;
+
+    /* C array parameters adjust to pointers. If the outer array descriptor was
+       materialized only while parsing this parameter, the adjusted pointer no
+       longer owns it. Retire exactly that transient outer descriptor; descriptors
+       that predate the parameter (for example typedef-owned arrays) remain owned,
+       and nested element-array descriptors remain referenced by pointee_type. */
+    if ((size_t)declared_array_type.array_type_id >= array_type_begin) {
+        if ((size_t)declared_array_type.array_type_id + 1U != parser->program->array_type_count ||
+            !minic_c0_program_discard_last_array_type(parser->program, declared_array_type)) {
+            minic_parser_error(parser, "cannot retire adjusted array parameter descriptor");
+            return false;
+        }
+    }
     return true;
 }
 
@@ -814,6 +829,7 @@ bool minic_parser_parse_parameter_list(MinicParser *parser,
         bool declarator_has_name;
         bool is_function_pointer_parameter;
         bool is_pointer_to_array_parameter;
+        size_t parameter_array_type_begin;
 
         leading_attributes.count = 0U;
         post_type_attributes.count = 0U;
@@ -829,6 +845,7 @@ bool minic_parser_parse_parameter_list(MinicParser *parser,
         if (function_identifier_is(parser, "register") && !minic_parser_advance(parser)) {
             return false;
         }
+        parameter_array_type_begin = parser->program->array_type_count;
         if (!minic_parser_parse_type_name_preserving_incomplete(parser, &parameter_type) ||
             !minic_parser_collect_gnu_attribute_lists(parser, &post_type_attributes) ||
             !minic_parser_parse_pointer_declarator(parser, parameter_type, &parameter_type)) {
@@ -907,7 +924,8 @@ bool minic_parser_parse_parameter_list(MinicParser *parser,
         }
 
         if (!is_function_pointer_parameter && !is_pointer_to_array_parameter &&
-            !adjust_array_parameter_type(parser, &parameter_type)) {
+            !adjust_array_parameter_type(
+                parser, &parameter_type, parameter_array_type_begin)) {
             return false;
         }
         if (!adjust_function_parameter_type(parser, &parameter_type)) {

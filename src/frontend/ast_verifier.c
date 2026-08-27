@@ -1303,17 +1303,6 @@ bool minic_c0_program_verify_target_detailed(const MinicC0Program *program,
         if (array_type->element_count == 0U && !array_type->is_zero_length &&
             !array_type->is_query_materialized &&
             !incomplete_array_has_semantic_owner(program, index)) {
-            (void)fprintf(stderr,
-                          "ARRAY_OWNERLESS_TRACE id=%zu count=%zu last=%d "
-                          "element_base=%d element_ptr_depth=%u element_array_id=%zu "
-                          "element_record_id=%zu\n",
-                          index,
-                          program->array_type_count,
-                          index + 1U == program->array_type_count ? 1 : 0,
-                          (int)array_type->element_type.base_kind,
-                          array_type->element_type.pointer_depth,
-                          (size_t)array_type->element_type.array_type_id,
-                          (size_t)array_type->element_type.record_id);
             MINIC_AST_VERIFY_FAIL("incomplete array type has no semantic owner");
         }
         if (array_type->is_query_materialized &&
