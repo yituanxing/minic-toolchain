@@ -7080,19 +7080,24 @@ static MinicCoreLowerStatus lower_return(MinicCoreLowerContext *context,
             if (return_expression == NULL) {
                 return MINIC_CORE_LOWER_ERROR;
             }
-            /* BATCH_K_GNU_VOID_RETURN_EXPRESSION: Linux uses GNU's
-               `return void_call(...);` extension in thin void wrappers.
-               The call still has to be evaluated for effects, after which the
-               enclosing function returns normally. Keep this narrow to call
-               expressions whose semantic type is already void; all other
-               value-bearing return forms remain fail-closed. */
+            /* M175D_GNU_VOID_RETURN_EFFECT_OWNER: GNU permits a void
+               function to return an expression whose semantic type is void.
+               Core already owns both effect-producing void calls and explicit
+               cast-to-void through MINIC_EXPRESSION_DISCARD. Reuse those
+               expression owners here instead of making RETURN depend on one
+               source spelling. Keep every other void-expression shape
+               fail-closed until its discarded-effect owner is explicit. */
             if (!minic_type_is_void(return_expression->type) ||
-                return_expression->kind != MINIC_EXPRESSION_CALL) {
+                (return_expression->kind != MINIC_EXPRESSION_CALL &&
+                 return_expression->kind != MINIC_EXPRESSION_DISCARD)) {
                 return MINIC_CORE_LOWER_UNSUPPORTED;
             }
             status = lower_expression(context, statement->expression, &discarded_value);
             if (status != MINIC_CORE_LOWER_OK) {
                 return status;
+            }
+            if (discarded_value != MINIC_CORE_VALUE_INVALID) {
+                return MINIC_CORE_LOWER_ERROR;
             }
             if (context->block_id >= context->function->block_count ||
                 context->function->blocks[context->block_id].has_terminator) {
