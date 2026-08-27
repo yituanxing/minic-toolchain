@@ -765,7 +765,8 @@ static bool parse_static_pointer_initializer(MinicParser *parser,
     MinicExpressionId expression_id;
 
     if (parser == NULL || initializer == NULL || !minic_type_is_pointer(target_type) ||
-        !minic_parser_parse_expression(parser, &expression_id, 0U)) {
+        !minic_parser_parse_expression(parser, &expression_id, 0U) ||
+        !minic_parser_apply_array_decay(parser, expression_id, &expression_id)) {
         return false;
     }
     static_pointer_initializer_reset(initializer);
