@@ -222,16 +222,6 @@ jobs:
       - name: Qualify local complete object diagnostics
         run: make -j4 check-pointer-members MODE=release CFLAGS=-Werror BUILD_DIR=build/m175-strict500-pointer
 
-      - name: Run unchanged broad check-fast
-        id: check_fast
-        continue-on-error: true
-        run: make -j4 check-fast MODE=release CFLAGS=-Werror BUILD_DIR=build/m175-strict500-fast
-
-      - name: Record unchanged check-fast outcome
-        if: always()
-        shell: bash
-        run: echo "M175_UNCHANGED_CHECK_FAST_OUTCOME=${{ steps.check_fast.outcome }}"
-
       - name: Replay frozen strict500 from exact production source
         id: strict500_replay
         shell: bash
@@ -274,6 +264,17 @@ jobs:
           if summary['selected'] != 500 or summary['pass'] != 500 or summary['unsupported'] != 0 or summary['error'] != 0 or summary['preprocess_missing'] != 0:
               raise SystemExit(f'M175 exact-source strict500 is not exact 500/500: {summary}')
           PY
+
+      - name: Run broad check-fast after strict500 census
+        id: check_fast
+        if: always()
+        continue-on-error: true
+        run: make -j4 check-fast MODE=release CFLAGS=-Werror BUILD_DIR=build/m175-strict500-fast
+
+      - name: Record broad check-fast outcome
+        if: always()
+        shell: bash
+        run: echo "M175_CHECK_FAST_AFTER_STRICT500=${{ steps.check_fast.outcome }}"
 
       - name: Enforce broad check-fast after strict500 census
         if: always() && steps.check_fast.outcome != 'success'
