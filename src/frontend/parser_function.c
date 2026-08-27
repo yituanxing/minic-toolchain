@@ -2686,7 +2686,7 @@ static bool pragma_only_trailing_space(const char *text, size_t length, size_t c
     return true;
 }
 
-static bool parse_top_level_preprocessor_directive(MinicParser *parser) {
+bool minic_parser_parse_preprocessor_directive(MinicParser *parser) {
     const char *text;
     size_t length;
     size_t cursor;
@@ -2989,7 +2989,7 @@ bool minic_parse_c0_program(const char *path,
             break;
         }
         if (parser.current.kind == MINIC_TOKEN_PREPROCESSOR_DIRECTIVE) {
-            success = parse_top_level_preprocessor_directive(&parser);
+            success = minic_parser_parse_preprocessor_directive(&parser);
         } else if (top_level_is_gnu_asm(&parser)) {
             success = parse_top_level_gnu_basic_asm(&parser);
         } else if (parser.current.kind == MINIC_TOKEN_SEMICOLON) {

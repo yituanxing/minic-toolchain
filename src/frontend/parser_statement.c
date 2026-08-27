@@ -4884,6 +4884,9 @@ bool minic_parser_parse_statement(MinicParser *parser, bool allow_declaration) {
     if (parser->current.kind == MINIC_TOKEN_SEMICOLON) {
         return minic_parser_advance(parser);
     }
+    if (parser->current.kind == MINIC_TOKEN_PREPROCESSOR_DIRECTIVE) {
+        return minic_parser_parse_preprocessor_directive(parser);
+    }
     if (parser->current.kind == MINIC_TOKEN_LBRACE) {
         return parse_compound_statement(parser);
     }
