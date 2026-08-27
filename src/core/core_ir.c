@@ -941,8 +941,7 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
         }
         left = &function->values[instruction->value.integer_overflow.left];
         right = &function->values[instruction->value.integer_overflow.right];
-        return minic_type_equal(left->type, result_type) &&
-               minic_type_equal(right->type, result_type);
+        return minic_type_is_integer(left->type) && minic_type_is_integer(right->type);
     }
     case MINIC_CORE_INSTRUCTION_INTEGER_CONVERSION:
         return instruction_result_is_valid(function, instruction) &&

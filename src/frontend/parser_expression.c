@@ -2005,7 +2005,10 @@ static bool normalize_overflow_integer_operand(MinicParser *parser,
     if (!minic_const_eval_integer(parser->program, parser->target_info, source_id, &constant) ||
         !minic_const_value_integer_representable_in_type(
             parser->program, parser->target_info, &constant, result_type)) {
-        return false;
+        /* GNU overflow builtins operate in infinite precision and only then
+           compare/store through the result pointer type.  A dynamic wider
+           operand therefore must retain its original type through Core. */
+        return true;
     }
 
     span = operand->span;

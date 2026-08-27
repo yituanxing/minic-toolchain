@@ -4481,7 +4481,11 @@ MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
         MinicCoreValueId right;
         MinicCoreValueId right_source;
         MinicCoreLowerStatus status;
+        MinicType left_type;
+        MinicType left_value_type;
         MinicType result_type;
+        MinicType right_type;
+        MinicType right_value_type;
 
         if (!minic_type_equal(expression->type, minic_type_bool())) {
             return MINIC_CORE_LOWER_ERROR;
@@ -4493,59 +4497,91 @@ MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
         result_pointer_expression = minic_c0_program_expression(
             context->body->program, expression->value.overflow.result_pointer);
         if (left_expression == NULL || right_expression == NULL ||
-            result_pointer_expression == NULL ||
+            result_pointer_expression == NULL || context->target == NULL ||
             !minic_type_pointee(result_pointer_expression->type, &result_type) ||
             !minic_type_is_integer(result_type) || minic_type_is_bool_integer(result_type) ||
-            minic_type_is_const(result_type) || minic_type_is_volatile(result_type)) {
+            minic_type_is_const(result_type) || minic_type_is_volatile(result_type) ||
+            !core_scalar_expression_value_type(context->body, left_expression, &left_type) ||
+            !core_scalar_expression_value_type(context->body, right_expression, &right_type) ||
+            !minic_type_is_integer(left_type) || !minic_type_is_integer(right_type)) {
             return MINIC_CORE_LOWER_UNSUPPORTED;
         }
+        left_value_type =
+            minic_c0_integer_range_representable_in_type(
+                context->body->program, context->target, left_type, result_type)
+                ? result_type
+                : left_type;
+        right_value_type =
+            minic_c0_integer_range_representable_in_type(
+                context->body->program, context->target, right_type, result_type)
+                ? result_type
+                : right_type;
+
         status = lower_expression(context, expression->value.overflow.left, &left_source);
         if (status != MINIC_CORE_LOWER_OK) {
             return status;
         }
-        status = append_integer_conversion(
-            context, left_expression->span, result_type, left_source, &left);
-        if (status != MINIC_CORE_LOWER_OK) {
-            return status;
+        if (left_source >= context->function->value_count ||
+            !minic_type_equal(context->function->values[left_source].type, left_type)) {
+            return MINIC_CORE_LOWER_ERROR;
+        }
+        if (minic_type_equal(left_value_type, left_type)) {
+            left = left_source;
+        } else {
+            status = append_integer_conversion(
+                context, left_expression->span, left_value_type, left_source, &left);
+            if (status != MINIC_CORE_LOWER_OK) {
+                return status;
+            }
         }
         status =
-            spill_scalar_value(context, left_expression->span, result_type, left, &left_object);
+            spill_scalar_value(context, left_expression->span, left_value_type, left, &left_object);
         if (status != MINIC_CORE_LOWER_OK) {
             return status;
         }
+
         status = lower_expression(context, expression->value.overflow.right, &right_source);
         if (status != MINIC_CORE_LOWER_OK) {
             return status;
         }
-        status = append_integer_conversion(
-            context, right_expression->span, result_type, right_source, &right);
-        if (status != MINIC_CORE_LOWER_OK) {
-            return status;
+        if (right_source >= context->function->value_count ||
+            !minic_type_equal(context->function->values[right_source].type, right_type)) {
+            return MINIC_CORE_LOWER_ERROR;
+        }
+        if (minic_type_equal(right_value_type, right_type)) {
+            right = right_source;
+        } else {
+            status = append_integer_conversion(
+                context, right_expression->span, right_value_type, right_source, &right);
+            if (status != MINIC_CORE_LOWER_OK) {
+                return status;
+            }
         }
         status =
-            spill_scalar_value(context, right_expression->span, result_type, right, &right_object);
+            spill_scalar_value(context, right_expression->span, right_value_type, right, &right_object);
         if (status != MINIC_CORE_LOWER_OK) {
             return status;
         }
+
         status =
             lower_expression(context, expression->value.overflow.result_pointer, &result_address);
         if (status != MINIC_CORE_LOWER_OK) {
             return status;
         }
         status =
-            reload_scalar_value(context, left_expression->span, result_type, left_object, &left);
+            reload_scalar_value(context, left_expression->span, left_value_type, left_object, &left);
         if (status != MINIC_CORE_LOWER_OK) {
             return status;
         }
         status =
-            reload_scalar_value(context, right_expression->span, result_type, right_object, &right);
+            reload_scalar_value(context, right_expression->span, right_value_type, right_object, &right);
         if (status != MINIC_CORE_LOWER_OK) {
             return status;
         }
         if (left >= context->function->value_count || right >= context->function->value_count ||
             result_address >= context->function->value_count ||
-            !minic_type_equal(context->function->values[left].type, result_type) ||
-            !minic_type_equal(context->function->values[right].type, result_type) ||
+            !minic_type_equal(context->function->values[left].type, left_value_type) ||
+            !minic_type_equal(context->function->values[right].type, right_value_type) ||
             !minic_type_equal(context->function->values[result_address].type,
                               result_pointer_expression->type)) {
             return MINIC_CORE_LOWER_ERROR;
@@ -4566,6 +4602,7 @@ MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
                    ? MINIC_CORE_LOWER_OK
                    : MINIC_CORE_LOWER_ERROR;
     }
+
     if (expression->kind == MINIC_EXPRESSION_BINARY &&
         expression->value.binary.operator_kind == MINIC_BINARY_EQUAL) {
         MinicCoreValueId left;

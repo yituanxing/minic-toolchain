@@ -723,9 +723,18 @@ static bool core_integer_overflow_supported(const MinicC0Program *program,
                                             MinicType *result_type,
                                             size_t *result_size,
                                             bool *is_unsigned) {
+    MinicType effective_left_type;
     MinicType effective_result_type;
+    MinicType effective_right_type;
+    MinicType left_type;
     MinicType pointee;
+    MinicType right_type;
     size_t alignment;
+    size_t left_alignment;
+    size_t left_size;
+    size_t right_alignment;
+    size_t right_size;
+    bool result_is_unsigned;
 
     if (program == NULL || function == NULL || instruction == NULL ||
         instruction->kind != MINIC_CORE_INSTRUCTION_INTEGER_OVERFLOW ||
@@ -742,10 +751,6 @@ static bool core_integer_overflow_supported(const MinicC0Program *program,
             function->values[instruction->value.integer_overflow.result_address].type, &pointee) ||
         !minic_type_is_integer(pointee) || minic_type_is_bool_integer(pointee) ||
         minic_type_is_const(pointee) || minic_type_is_volatile(pointee) ||
-        !minic_type_equal(function->values[instruction->value.integer_overflow.left].type,
-                          pointee) ||
-        !minic_type_equal(function->values[instruction->value.integer_overflow.right].type,
-                          pointee) ||
         !minic_data_layout_type(
             minic_default_data_layout(), program, pointee, result_size, &alignment) ||
         *result_size == 0U || *result_size > 8U ||
@@ -753,11 +758,46 @@ static bool core_integer_overflow_supported(const MinicC0Program *program,
         return false;
     }
     (void)alignment;
+    left_type = function->values[instruction->value.integer_overflow.left].type;
+    right_type = function->values[instruction->value.integer_overflow.right].type;
+    if (!minic_type_is_integer(left_type) || !minic_type_is_integer(right_type) ||
+        !minic_core_function_effective_integer_type(function, left_type, &effective_left_type) ||
+        !minic_core_function_effective_integer_type(function, right_type, &effective_right_type) ||
+        !minic_data_layout_type(
+            minic_default_data_layout(), program, left_type, &left_size, &left_alignment) ||
+        !minic_data_layout_type(
+            minic_default_data_layout(), program, right_type, &right_size, &right_alignment) ||
+        left_size == 0U || left_size > 8U || right_size == 0U || right_size > 8U) {
+        return false;
+    }
+    (void)left_alignment;
+    (void)right_alignment;
+    result_is_unsigned = minic_type_is_unsigned_integer(effective_result_type);
+
+    if (!minic_type_equal(left_type, pointee) || !minic_type_equal(right_type, pointee)) {
+        bool left_is_result;
+        bool right_is_result;
+        const MinicType *other_effective_type;
+
+        left_is_result = minic_type_equal(left_type, pointee);
+        right_is_result = minic_type_equal(right_type, pointee);
+        if (instruction->value.integer_overflow.operator_kind !=
+                MINIC_CORE_INTEGER_OVERFLOW_ADD ||
+            result_is_unsigned || *result_size >= 8U || left_is_result == right_is_result ||
+            !minic_type_is_signed_integer(effective_result_type)) {
+            return false;
+        }
+        other_effective_type =
+            left_is_result ? &effective_right_type : &effective_left_type;
+        if (!minic_type_is_unsigned_integer(*other_effective_type)) {
+            return false;
+        }
+    }
     if (result_type != NULL) {
         *result_type = pointee;
     }
     if (is_unsigned != NULL) {
-        *is_unsigned = minic_type_is_unsigned_integer(effective_result_type);
+        *is_unsigned = result_is_unsigned;
     }
     return true;
 }
@@ -3251,7 +3291,9 @@ static bool emit_instruction(FILE *file,
         }
         return store_core_value(file, frame, instruction->result, "t0");
     case MINIC_CORE_INSTRUCTION_INTEGER_OVERFLOW: {
+        MinicType left_type;
         MinicType result_type;
+        MinicType right_type;
         size_t result_size;
         bool is_unsigned;
 
@@ -3263,6 +3305,39 @@ static bool emit_instruction(FILE *file,
                 file, frame, instruction->value.integer_overflow.result_address, "t3")) {
             return false;
         }
+        left_type = function->values[instruction->value.integer_overflow.left].type;
+        right_type = function->values[instruction->value.integer_overflow.right].type;
+        if (!minic_type_equal(left_type, result_type) ||
+            !minic_type_equal(right_type, result_type)) {
+            const char *signed_register;
+            const char *unsigned_register;
+            uint64_t maximum;
+
+            if (instruction->value.integer_overflow.operator_kind !=
+                    MINIC_CORE_INTEGER_OVERFLOW_ADD ||
+                is_unsigned || result_size >= 8U) {
+                return false;
+            }
+            signed_register = minic_type_equal(left_type, result_type) ? "t0" : "t1";
+            unsigned_register = minic_type_equal(left_type, result_type) ? "t1" : "t0";
+            maximum = (UINT64_C(1) << (result_size * 8U - 1U)) - UINT64_C(1);
+            if (fprintf(file,
+                        "  li t5, %" PRIu64 "\n"
+                        "  sub t5, t5, %s\n"
+                        "  sltu t4, t5, %s\n"
+                        "  add t2, t0, t1\n",
+                        maximum,
+                        signed_register,
+                        unsigned_register) < 0 ||
+                !minic_riscv64_emit_integer_conversion_for_program(
+                    file, program, result_type, "t2") ||
+                !minic_riscv64_emit_scalar_store_for_program(
+                    file, program, result_type, "t2", "t3")) {
+                return false;
+            }
+            return store_core_value(file, frame, instruction->result, "t4");
+        }
+
         if (instruction->value.integer_overflow.operator_kind == MINIC_CORE_INTEGER_OVERFLOW_ADD) {
             if (result_size < 8U) {
                 if (fprintf(file, "  add t2, t0, t1\n  mv t4, t2\n") < 0 ||
