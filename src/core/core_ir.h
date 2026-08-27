@@ -29,8 +29,6 @@ typedef uint32_t MinicCoreInlineAsmId;
 #define MINIC_CORE_CALL_SIGNATURE_INVALID UINT32_MAX
 #define MINIC_CORE_INLINE_ASM_INVALID UINT32_MAX
 
-typedef enum MinicCorePhase { MINIC_CORE_PHASE_EXECUTION_SHADOW = 0 } MinicCorePhase;
-
 typedef enum MinicCoreIntegerOverflowOperator {
     MINIC_CORE_INTEGER_OVERFLOW_ADD = 0,
     MINIC_CORE_INTEGER_OVERFLOW_SUBTRACT,
@@ -386,7 +384,6 @@ typedef struct MinicCoreBlock {
 } MinicCoreBlock;
 
 typedef struct MinicCoreFunction {
-    MinicCorePhase phase;
     char *name;
     size_t name_length;
     MinicType return_type;

@@ -1154,7 +1154,7 @@ bool minic_riscv64_write_c0_program_with_core_functions(const char *path,
         {
             MinicRiscv64FunctionSymbol symbol;
 
-            if (!minic_riscv64_core_function_can_emit_basic_v0_for_program(program,
+            if (!minic_riscv64_core_function_can_emit_for_program(program,
                                                                            core_function)) {
                 char message[256];
                 const char *symbol_name;
@@ -1169,7 +1169,7 @@ bool minic_riscv64_write_c0_program_with_core_functions(const char *path,
                 continue;
             }
             success = minic_riscv64_function_symbol_from_function(function, &symbol) &&
-                      minic_riscv64_emit_core_function_basic_v0_for_program_with_symbol(
+                      minic_riscv64_emit_core_function_for_program_with_symbol(
                           file, program, core_function, &symbol);
         }
         if (!success && diagnostic != NULL && diagnostic->message[0] == '\0') {

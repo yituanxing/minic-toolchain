@@ -50,7 +50,6 @@ void minic_core_function_initialize(MinicCoreFunction *function) {
         return;
     }
     (void)memset(function, 0, sizeof(*function));
-    function->phase = MINIC_CORE_PHASE_EXECUTION_SHADOW;
     function->entry_block = MINIC_CORE_BLOCK_INVALID;
 }
 
@@ -1659,8 +1658,7 @@ bool minic_core_function_verify(const MinicCoreFunction *function) {
     size_t index;
     bool valid;
 
-    if (function == NULL || function->phase != MINIC_CORE_PHASE_EXECUTION_SHADOW ||
-        function->name == NULL || function->name_length == 0U ||
+    if (function == NULL || function->name == NULL || function->name_length == 0U ||
         (function->parameter_count != 0U && function->parameter_types == NULL) ||
         !storage_shape_is_valid(
             function->globals, function->global_count, function->global_capacity) ||

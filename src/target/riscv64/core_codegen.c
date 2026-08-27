@@ -1707,7 +1707,7 @@ static bool core_instruction_supported(const MinicC0Program *program,
     return false;
 }
 
-static bool core_function_can_emit_basic_v0(const MinicC0Program *program,
+static bool core_function_can_emit(const MinicC0Program *program,
                                             const MinicCoreFunction *function) {
     size_t index;
 
@@ -1811,13 +1811,13 @@ static bool core_function_can_emit_basic_v0(const MinicC0Program *program,
     return true;
 }
 
-bool minic_riscv64_core_function_can_emit_basic_v0(const MinicCoreFunction *function) {
-    return core_function_can_emit_basic_v0(NULL, function);
+bool minic_riscv64_core_function_can_emit(const MinicCoreFunction *function) {
+    return core_function_can_emit(NULL, function);
 }
 
-bool minic_riscv64_core_function_can_emit_basic_v0_for_program(const MinicC0Program *program,
+bool minic_riscv64_core_function_can_emit_for_program(const MinicC0Program *program,
                                                                const MinicCoreFunction *function) {
-    return program != NULL && core_function_can_emit_basic_v0(program, function);
+    return program != NULL && core_function_can_emit(program, function);
 }
 
 static bool core_parameter_location(const MinicC0Program *program,
@@ -3805,7 +3805,7 @@ static bool emit_terminator(FILE *file,
     return false;
 }
 
-static bool emit_core_function_basic_v0_with_symbol(FILE *file,
+static bool emit_core_function_with_symbol(FILE *file,
                                                     const MinicC0Program *program,
                                                     const MinicCoreFunction *function,
                                                     const MinicRiscv64FunctionSymbol *symbol) {
@@ -3814,7 +3814,7 @@ static bool emit_core_function_basic_v0_with_symbol(FILE *file,
     size_t block_index;
 
     if (file == NULL || symbol == NULL || symbol->symbol_name == NULL ||
-        symbol->symbol_name[0] == '\0' || !core_function_can_emit_basic_v0(program, function) ||
+        symbol->symbol_name[0] == '\0' || !core_function_can_emit(program, function) ||
         !core_frame_initialize(program, function, &frame)) {
         return false;
     }
@@ -3924,16 +3924,16 @@ static bool emit_core_function_basic_v0_with_symbol(FILE *file,
     return true;
 }
 
-bool minic_riscv64_emit_core_function_basic_v0_with_symbol(
+bool minic_riscv64_emit_core_function_with_symbol(
     FILE *file, const MinicCoreFunction *function, const MinicRiscv64FunctionSymbol *symbol) {
-    return emit_core_function_basic_v0_with_symbol(file, NULL, function, symbol);
+    return emit_core_function_with_symbol(file, NULL, function, symbol);
 }
 
-bool minic_riscv64_emit_core_function_basic_v0_for_program_with_symbol(
+bool minic_riscv64_emit_core_function_for_program_with_symbol(
     FILE *file,
     const MinicC0Program *program,
     const MinicCoreFunction *function,
     const MinicRiscv64FunctionSymbol *symbol) {
     return program != NULL &&
-           emit_core_function_basic_v0_with_symbol(file, program, function, symbol);
+           emit_core_function_with_symbol(file, program, function, symbol);
 }
