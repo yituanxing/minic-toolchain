@@ -25,7 +25,7 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: build/linux-next500-sample16-corpus
-          key: linux-next500-sample16-corpus-v1-spread-1000-1033-1066-1099-1132-1165-1198-1231-1264-1297-1330-1363-1396-1429-1462-1499
+          key: linux-next500-sample16-corpus-v2-blockers-1021-1050-1060-1082-1115-1118-1137-1147-1149-1193-1208-1219-1402-1430-1438-1439
 
       - name: Validate cached active sample16
         if: steps.sample-cache.outputs.cache-hit == 'true'
@@ -35,7 +35,7 @@ jobs:
           manifest=build/linux-next500-sample16-corpus/selected-tus.txt
           test -s "$manifest"
           test "$(grep -cve '^[[:space:]]*$' "$manifest")" -eq 16
-          echo 'LINUX_NEXT500_SAMPLE16_CORPUS cache=hit selected=16 policy=spread-v1-before-first-census'
+          echo 'LINUX_NEXT500_SAMPLE16_CORPUS cache=hit selected=16 policy=active-blockers-v2-after-479'
 
       - name: Restore frozen next500 corpus for sample refresh
         if: steps.sample-cache.outputs.cache-hit != 'true'
@@ -55,8 +55,8 @@ jobs:
           from pathlib import Path
           import shutil
 
-          expected = [1000, 1033, 1066, 1099, 1132, 1165, 1198, 1231,
-                      1264, 1297, 1330, 1363, 1396, 1429, 1462, 1499]
+          expected = [1021, 1050, 1060, 1082, 1115, 1118, 1137, 1147,
+                      1149, 1193, 1208, 1219, 1402, 1430, 1438, 1439]
           full = Path("build/linux-next500-corpus")
           sample = Path("build/linux-next500-sample16-corpus")
           rows = [line for line in (full / "selected-tus.txt").read_text().splitlines()
@@ -82,7 +82,7 @@ jobs:
               total_bytes += target.stat().st_size
 
           (sample / "sample-info.txt").write_text(
-              "policy=spread-v1-before-first-census\n"
+              "policy=active-blockers-v2-after-479\n"
               f"indices={','.join(map(str, expected))}\n"
               f"selected={len(expected)}\nbytes={total_bytes}\n"
           )
@@ -98,7 +98,7 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: build/linux-next500-sample16-corpus
-          key: linux-next500-sample16-corpus-v1-spread-1000-1033-1066-1099-1132-1165-1198-1231-1264-1297-1330-1363-1396-1429-1462-1499
+          key: linux-next500-sample16-corpus-v2-blockers-1021-1050-1060-1082-1115-1118-1137-1147-1149-1193-1208-1219-1402-1430-1438-1439
 
 
   sample16:
@@ -119,7 +119,7 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: build/linux-next500-sample16-corpus
-          key: linux-next500-sample16-corpus-v1-spread-1000-1033-1066-1099-1132-1165-1198-1231-1264-1297-1330-1363-1396-1429-1462-1499
+          key: linux-next500-sample16-corpus-v2-blockers-1021-1050-1060-1082-1115-1118-1137-1147-1149-1193-1208-1219-1402-1430-1438-1439
 
       - name: Require frozen sample16 corpus
         run: |
