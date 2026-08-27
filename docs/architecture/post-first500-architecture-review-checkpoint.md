@@ -456,3 +456,16 @@ The first cleanup tranche is now intentionally semantic-neutral:
 - legacy array object semantics remain frozen until producer-first canonicalization can remove the duplicate representation without changing consumers.
 
 The frozen first500 and new500 corpora remain the acceptance contract for this cleanup tranche.
+
+## Low-risk architecture tranche closed
+
+The low-risk post-1000 cleanup tranche is now closed before Linux coverage expands again:
+
+- semantic entity defaults have canonical constructors/default ownership;
+- AST verifier failures carry stage/index/subindex/reason provenance;
+- Core lowering metadata and type policy are split from orchestration without changing Core IR;
+- declaration Sema is a compiled ownership unit and now owns object metadata commits, file-scope promotion, and transparent-union semantic validation;
+- parser code no longer directly commits section/alignment/visibility metadata for global/static objects;
+- array representation canonicalization and generalized InitPlan remain explicitly deferred because they change deeper representation contracts and require producer-first migration.
+
+Acceptance for this checkpoint is unchanged frozen first500 500/500 plus new500 500/500. After both gates pass on the exact checkpoint, Linux corpus expansion resumes before the deferred high-risk migrations.
