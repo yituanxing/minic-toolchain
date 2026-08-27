@@ -2,6 +2,9 @@ name: Core M175 Core-Only Strict500
 
 on:
   pull_request:
+  push:
+    branches:
+      - refactor/declaration-sema-v1
   workflow_dispatch:
 
 permissions:
