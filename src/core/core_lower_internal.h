@@ -15,6 +15,7 @@ typedef struct MinicCoreLowerContext {
     size_t statement_block_count;
 } MinicCoreLowerContext;
 
+bool core_capture_enum_metadata(MinicCoreLowerContext *context);
 bool core_memory_scalar_type(MinicType type);
 bool core_import_fixed_register_binding(MinicCoreLowerContext *context,
                                         size_t source_binding_id,
