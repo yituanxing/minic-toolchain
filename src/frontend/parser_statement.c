@@ -67,6 +67,10 @@ static bool apply_assignment_conversion(MinicParser *parser,
 static bool add_zero_initialized_record_lvalue(MinicParser *parser,
                                                MinicExpressionId base_id,
                                                MinicSourceSpan initializer_span);
+static bool add_array_object_zero_elements(MinicParser *parser,
+                                           MinicExpressionId base_id,
+                                           size_t element_count,
+                                           MinicSourceSpan initializer_span);
 static bool add_record_initializer_copy(MinicParser *parser,
                                         MinicExpressionId target_id,
                                         MinicExpressionId source_id,
@@ -240,6 +244,21 @@ static bool add_array_object_zero_element(MinicParser *parser,
         return add_array_object_element_lvalue(
                    parser, base_id, index, initializer_span, &element_id) &&
                add_zero_initialized_record_lvalue(parser, element_id, initializer_span);
+    }
+    if (minic_type_is_array(array_info.element_type)) {
+        const MinicArrayType *nested_array;
+
+        nested_array =
+            minic_c0_program_array_type(parser->program, array_info.element_type.array_type_id);
+        if (nested_array == NULL || nested_array->element_count == 0U ||
+            nested_array->is_zero_length) {
+            minic_parser_error(parser, "nested runtime array zero initializer requires fixed extent");
+            return false;
+        }
+        return add_array_object_element_lvalue(
+                   parser, base_id, index, initializer_span, &element_id) &&
+               add_array_object_zero_elements(
+                   parser, element_id, nested_array->element_count, initializer_span);
     }
 
     (void)memset(&zero, 0, sizeof(zero));
@@ -619,6 +638,88 @@ done:
     return success;
 }
 
+static bool parse_fixed_runtime_nested_array_initializer(
+    MinicParser *parser, MinicExpressionId base_id, size_t element_count) {
+    const MinicExpression *base;
+    MinicArrayObjectInfo array_info;
+    const MinicArrayType *nested_array;
+    MinicSourceSpan initializer_span;
+    size_t index;
+
+    if (parser == NULL || element_count == 0U || parser->current.kind != MINIC_TOKEN_LBRACE) {
+        if (parser != NULL) {
+            minic_parser_error(parser, "nested runtime array initializer requires braces");
+        }
+        return false;
+    }
+    base = minic_c0_program_expression(parser->program, base_id);
+    if (base == NULL ||
+        !minic_c0_expression_array_object_info(parser->program, base, &array_info) ||
+        !minic_type_is_array(array_info.element_type)) {
+        minic_parser_error(parser, "invalid nested runtime array initializer target");
+        return false;
+    }
+    nested_array =
+        minic_c0_program_array_type(parser->program, array_info.element_type.array_type_id);
+    if (nested_array == NULL || nested_array->element_count == 0U ||
+        nested_array->is_zero_length) {
+        minic_parser_error(parser, "nested runtime array initializer requires fixed inner extent");
+        return false;
+    }
+
+    initializer_span.begin = parser->current.span.begin;
+    if (!minic_parser_advance(parser)) {
+        return false;
+    }
+    index = 0U;
+    while (parser->current.kind != MINIC_TOKEN_RBRACE) {
+        MinicExpressionId element_id;
+
+        if (parser->current.kind == MINIC_TOKEN_LBRACKET) {
+            minic_parser_error(
+                parser, "designated nested runtime array initializers are not supported yet");
+            return false;
+        }
+        if (index >= element_count) {
+            minic_parser_error(parser, "too many nested runtime array initializer elements");
+            return false;
+        }
+        if (parser->current.kind != MINIC_TOKEN_LBRACE ||
+            !add_array_object_element_lvalue(
+                parser, base_id, index, parser->current.span, &element_id) ||
+            !parse_fixed_runtime_array_initializer(
+                parser, element_id, nested_array->element_count)) {
+            if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
+                minic_parser_error(parser, "invalid nested runtime array initializer element");
+            }
+            return false;
+        }
+        index += 1U;
+        if (parser->current.kind == MINIC_TOKEN_COMMA) {
+            if (!minic_parser_advance(parser)) {
+                return false;
+            }
+            if (parser->current.kind == MINIC_TOKEN_RBRACE) {
+                break;
+            }
+        } else if (parser->current.kind != MINIC_TOKEN_RBRACE) {
+            minic_parser_error(parser, "expected ',' or '}' in nested runtime array initializer");
+            return false;
+        }
+    }
+    initializer_span.end = parser->current.span.end;
+    if (!minic_parser_advance(parser)) {
+        return false;
+    }
+    while (index < element_count) {
+        if (!add_array_object_zero_element(parser, base_id, index, initializer_span)) {
+            return false;
+        }
+        index += 1U;
+    }
+    return true;
+}
+
 static bool parse_fixed_runtime_array_initializer(MinicParser *parser,
                                                   MinicExpressionId base_id,
                                                   size_t element_count) {
@@ -632,6 +733,9 @@ static bool parse_fixed_runtime_array_initializer(MinicParser *parser,
     }
     if (minic_type_is_record(array_info.element_type)) {
         return parse_fixed_runtime_record_array_initializer(parser, base_id, element_count);
+    }
+    if (minic_type_is_array(array_info.element_type)) {
+        return parse_fixed_runtime_nested_array_initializer(parser, base_id, element_count);
     }
     return parse_fixed_runtime_scalar_array_initializer(
         parser, base_id, array_info.element_type, element_count);
