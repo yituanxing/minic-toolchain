@@ -16,37 +16,30 @@ int classify(unsigned int v) {
 int main(void) { return classify(0x40) == 8 && classify(0xbf) == 16 && classify(0xff) == 32 && classify(3) == 4 ? 0 : 1; }
 SRC
 "$minic" -S "$work/positive.c" -o "$work/positive.s"
-# Core owns switch/range dispatch now. Preserve the semantic lowering
-# contract (two unsigned bounds per GNU case range + Core CFG edges) without
-# pinning the removed AST->RV64 backend's private label spelling.
+
+# Core owns GNU switch-range dispatch. Each unsigned range lowers to two
+# unsigned bound comparisons and Core CFG conditional edges. Test that
+# semantic shape without pinning the removed AST->RV64 label namespace.
 grep -Fq 'classify:' "$work/positive.s"
 sltu_count=$(grep -E -c '^[[:space:]]+sltu[[:space:]]+' "$work/positive.s" || true)
-core_branch_count=$(grep -E -c '^[[:space:]]+bnez[[:space:]]+[^,]+,[[:space:]]*\.L[^[:space:]]+_core_bb[0-9]+cat > "$work/overlap.c" <<'SRC'
-int f(int v) { switch (v) { case 1 ... 5: return 1; case 5 ... 9: return 2; default: return 0; } }
-SRC
-if "$minic" -S "$work/overlap.c" -o "$work/overlap.s" 2>"$work/overlap.err"; then exit 1; fi
-grep -Fq 'duplicate or overlapping case value range' "$work/overlap.err"
-cat > "$work/descending.c" <<'SRC'
-int f(int v) { switch (v) { case 9 ... 1: return 1; default: return 0; } }
-SRC
-if "$minic" -S "$work/descending.c" -o "$work/descending.s" 2>"$work/descending.err"; then exit 1; fi
-grep -Fq 'GNU case range upper bound is below lower bound' "$work/descending.err"
-printf '%s\n' 'PASS compiler/c0/gnu-switch-case-range normalized=core-range-contract'
- "$work/positive.s" || true)
+core_branch_count=$(grep -E -c '^[[:space:]]+bnez[[:space:]]+[^,]+,[[:space:]]*\.L[^[:space:]]+_core_bb[0-9]+$' "$work/positive.s" || true)
 test "$sltu_count" -ge 6
 test "$core_branch_count" -ge 6
 if grep -Fq '.Lswitch_range_next_' "$work/positive.s"; then
-    echo "legacy switch-range label unexpectedly present" >&2
+    echo 'legacy switch-range label unexpectedly present' >&2
     exit 1
 fi
+
 cat > "$work/overlap.c" <<'SRC'
 int f(int v) { switch (v) { case 1 ... 5: return 1; case 5 ... 9: return 2; default: return 0; } }
 SRC
 if "$minic" -S "$work/overlap.c" -o "$work/overlap.s" 2>"$work/overlap.err"; then exit 1; fi
 grep -Fq 'duplicate or overlapping case value range' "$work/overlap.err"
+
 cat > "$work/descending.c" <<'SRC'
 int f(int v) { switch (v) { case 9 ... 1: return 1; default: return 0; } }
 SRC
 if "$minic" -S "$work/descending.c" -o "$work/descending.s" 2>"$work/descending.err"; then exit 1; fi
 grep -Fq 'GNU case range upper bound is below lower bound' "$work/descending.err"
-printf '%s\n' 'PASS compiler/c0/gnu-switch-case-range'
+
+printf '%s\n' 'PASS compiler/c0/gnu-switch-case-range normalized=core-range-contract'

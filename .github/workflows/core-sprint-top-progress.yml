@@ -113,11 +113,16 @@ jobs:
         run: |
           set -Eeuo pipefail
           git diff --exit-code
-          grep -Fq 'M175_LEGACY_FUNCTION_ROUTE_REMOVED' src/compiler/compiler.c
           grep -Fq 'M175B_SCALAR_DOUBLE_BRIDGE' src/core/core_lower.c
           grep -Fq 'M175B_SCALAR_RETURN_OWNER' src/core/core_lower.c
+          grep -Fq 'minic_riscv64_write_c0_program_with_core_functions' src/target/riscv64/codegen_function.c
           ! git grep -n 'minic_riscv64_write_c0_program(' -- src
           ! git grep -n 'minic_riscv64_emit_function(' -- src
+          ! git grep -n 'MINIC_CORE_IR' -- src
+          ! git grep -n 'core_required' -- src
+          test ! -e src/target/riscv64/codegen_expression.c
+          test ! -e src/target/riscv64/codegen_statement.c
+          test ! -e src/target/riscv64/codegen_inline_asm.c
           source_head=$(git rev-parse HEAD)
           echo "source_head=$source_head" >> "$GITHUB_OUTPUT"
           echo "M175_EXACT_SOURCE_HEAD=$source_head"
@@ -212,10 +217,10 @@ jobs:
           work="$GITHUB_WORKSPACE/build/m175-strict500-focused"
           mkdir -p "$work"
           cc -E -P -std=gnu11 -x c tests/compiler/c0/cast_integer_to_double.c -o "$work/int-to-double.i"
-          MINIC_CORE_IR=strict CORE_FAST_TRACE=1 "$compiler" -S "$work/int-to-double.i" -o "$work/int-to-double.s"
+          CORE_FAST_TRACE=1 "$compiler" -S "$work/int-to-double.i" -o "$work/int-to-double.s"
           grep -E '^[[:space:]]+fcvt\.d\.w[[:space:]]+' "$work/int-to-double.s" >/dev/null
           cc -E -P -std=gnu11 -x c tests/compiler/c0/cast_double_to_integer.c -o "$work/double-to-int.i"
-          MINIC_CORE_IR=strict CORE_FAST_TRACE=1 "$compiler" -S "$work/double-to-int.i" -o "$work/double-to-int.s"
+          CORE_FAST_TRACE=1 "$compiler" -S "$work/double-to-int.i" -o "$work/double-to-int.s"
           grep -E '^[[:space:]]+fcvt\.w\.d[[:space:]]+[^,]+,[[:space:]]*[^,]+,[[:space:]]*rtz$' "$work/double-to-int.s" >/dev/null
           echo 'M175_DOUBLE_FOCUSED=PASS'
 
@@ -230,7 +235,7 @@ jobs:
           compiler="$GITHUB_WORKSPACE/build/m175-strict500-compiler/bin/minic"
           work="$GITHUB_WORKSPACE/build/m175-strict500"
           set +e
-          MINIC_CORE_IR=strict CORE_FAST_TRACE=1 python3 tests/external/linux/corpus_replay.py \
+          CORE_FAST_TRACE=1 python3 tests/external/linux/corpus_replay.py \
             --minic "$compiler" \
             --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
             --work "$work" \
