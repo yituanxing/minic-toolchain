@@ -875,8 +875,7 @@ static bool global_object_member_path_type(const MinicC0Program *program,
         record = minic_c0_program_record(program, type.record_id);
         field = record == NULL ? NULL : minic_c0_record_field(record, member_indices[depth]);
         if (field == NULL || field->element_count == 0U || field->is_bit_field ||
-            field->is_flexible_array ||
-            (!field->is_array && field->element_count != 1U)) {
+            (!field->is_array && !field->is_flexible_array && field->element_count != 1U)) {
             return false;
         }
         type = field->type;
