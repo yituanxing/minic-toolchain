@@ -100,51 +100,5 @@ bool minic_riscv64_frame_layout_from_function_layout(
     const MinicRiscv64FunctionLayout *function_layout,
     MinicRiscv64FrameLayout *layout);
 
-bool minic_riscv64_emit_lvalue_address(FILE *file,
-                                       const MinicC0Program *program,
-                                       const MinicFunction *function,
-                                       const MinicRiscv64FunctionLayout *function_layout,
-                                       MinicExpressionId expression_id);
-bool minic_riscv64_emit_address_backed_record_value(
-    FILE *file,
-    const MinicC0Program *program,
-    const MinicFunction *function,
-    const MinicRiscv64FunctionLayout *function_layout,
-    MinicExpressionId expression_id);
-bool minic_riscv64_emit_record_return_value(FILE *file,
-                                            const MinicC0Program *program,
-                                            const MinicFunction *function,
-                                            const MinicRiscv64FunctionLayout *function_layout,
-                                            MinicExpressionId source_id,
-                                            size_t result_pointer_offset);
-bool minic_riscv64_emit_small_record_return_value(FILE *file,
-                                                  const MinicC0Program *program,
-                                                  const MinicFunction *function,
-                                                  const MinicRiscv64FunctionLayout *function_layout,
-                                                  MinicExpressionId source_id,
-                                                  size_t slot_count);
-bool minic_riscv64_emit_record_copy_value(FILE *file,
-                                          const MinicC0Program *program,
-                                          const MinicFunction *function,
-                                          const MinicRiscv64FunctionLayout *function_layout,
-                                          MinicExpressionId target_id,
-                                          MinicExpressionId source_id,
-                                          bool preserve_target_address);
-bool minic_riscv64_emit_expression(FILE *file,
-                                   const MinicC0Program *program,
-                                   const MinicFunction *function,
-                                   const MinicRiscv64FunctionLayout *function_layout,
-                                   MinicExpressionId expression_id);
-bool minic_riscv64_emit_inline_asm(FILE *file,
-                                   const MinicC0Program *program,
-                                   const MinicFunction *function,
-                                   const MinicRiscv64FunctionLayout *function_layout,
-                                   const MinicStatement *statement);
-bool minic_riscv64_emit_block(FILE *file,
-                              const MinicC0Program *program,
-                              const MinicFunction *function,
-                              const MinicRiscv64FunctionLayout *function_layout,
-                              MinicBlockId block_id,
-                              size_t *label_counter);
 
 #endif
