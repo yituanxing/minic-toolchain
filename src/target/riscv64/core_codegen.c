@@ -4501,13 +4501,50 @@ static bool emit_core_function_with_symbol(FILE *file,
     MinicRiscv64CoreFrame frame;
     const char *symbol_name;
     size_t block_index;
+    bool bootstrap_trace;
 
     if (file == NULL || symbol == NULL || symbol->symbol_name == NULL ||
-        symbol->symbol_name[0] == '\0' || !core_function_can_emit(program, function) ||
-        !core_frame_initialize(program, function, &frame)) {
+        symbol->symbol_name[0] == '\0') {
         return false;
     }
     symbol_name = symbol->symbol_name;
+    bootstrap_trace = getenv("MINIC_BOOTSTRAP_TRACE") != NULL;
+    if (bootstrap_trace) {
+        (void)fprintf(stderr,
+                      "MINIC_BOOTSTRAP_TRACE stage=core-codegen-capability state=begin "
+                      "function=%s blocks=%zu instructions=%zu values=%zu\n",
+                      symbol_name,
+                      function != NULL ? function->block_count : 0U,
+                      function != NULL ? function->instruction_count : 0U,
+                      function != NULL ? function->value_count : 0U);
+        (void)fflush(stderr);
+    }
+    if (!core_function_can_emit(program, function)) {
+        return false;
+    }
+    if (bootstrap_trace) {
+        (void)fprintf(stderr,
+                      "MINIC_BOOTSTRAP_TRACE stage=core-codegen-capability state=end "
+                      "function=%s\n",
+                      symbol_name);
+        (void)fflush(stderr);
+        (void)fprintf(stderr,
+                      "MINIC_BOOTSTRAP_TRACE stage=core-codegen-frame state=begin "
+                      "function=%s\n",
+                      symbol_name);
+        (void)fflush(stderr);
+    }
+    if (!core_frame_initialize(program, function, &frame)) {
+        return false;
+    }
+    if (bootstrap_trace) {
+        (void)fprintf(stderr,
+                      "MINIC_BOOTSTRAP_TRACE stage=core-codegen-frame state=end "
+                      "function=%s frame_size=%zu\n",
+                      symbol_name,
+                      frame.frame_size);
+        (void)fflush(stderr);
+    }
     if (!minic_riscv64_emit_function_symbol_begin(file, symbol)) {
         return false;
     }
@@ -4562,6 +4599,17 @@ static bool emit_core_function_with_symbol(FILE *file,
         const MinicCoreBlock *block;
         size_t instruction_index;
 
+        if (bootstrap_trace &&
+            (block_index == 0U || block_index % 128U == 0U ||
+             block_index + 1U == function->block_count)) {
+            (void)fprintf(stderr,
+                          "MINIC_BOOTSTRAP_TRACE stage=core-codegen-block "
+                          "function=%s block=%zu total=%zu\n",
+                          symbol_name,
+                          block_index,
+                          function->block_count);
+            (void)fflush(stderr);
+        }
         block = &function->blocks[block_index];
         if (!emit_block_label(file, symbol_name, (MinicCoreBlockId)block_index)) {
             return false;
