@@ -51,7 +51,7 @@ foo:
 EOF
 "$MINIAS" -o "$work/data.o" "$work/data.s"
 readelf -h "$work/data.o" | grep -q 'RISC-V'
-readelf -s "$work/data.o" | grep -Eq '[[:space:]]15[[:space:]]+OBJECT[[:space:]]+GLOBAL.* foo
+readelf -s "$work/data.o" | grep -Eq '[[:space:]]15[[:space:]]+OBJECT[[:space:]]+GLOBAL.* foo'
 data_hex="$(
     readelf -x .rodata "$work/data.o" |
     awk '/0x[0-9a-f]+/ {for (i=2; i<=NF; ++i) if ($i ~ /^[0-9a-f]{8}$/) printf "%s", $i}'
