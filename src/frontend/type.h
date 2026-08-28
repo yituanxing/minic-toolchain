@@ -20,6 +20,7 @@ typedef enum MinicTypeBaseKind {
     MINIC_TYPE_BASE_ENUM,
     MINIC_TYPE_BASE_FLOAT,
     MINIC_TYPE_BASE_DOUBLE,
+    MINIC_TYPE_BASE_LONG_DOUBLE,
     MINIC_TYPE_BASE_FUNCTION,
     MINIC_TYPE_BASE_RECORD,
     MINIC_TYPE_BASE_ARRAY
@@ -82,6 +83,7 @@ MinicType minic_type_int128(void);
 MinicType minic_type_unsigned_int128(void);
 MinicType minic_type_float(void);
 MinicType minic_type_double(void);
+MinicType minic_type_long_double(void);
 MinicType minic_type_function(MinicFunctionTypeId function_type_id);
 MinicType minic_type_record(MinicRecordId record_id);
 MinicType minic_type_array(MinicArrayTypeId array_type_id);
@@ -111,6 +113,7 @@ bool minic_type_is_signed_integer(MinicType type);
 bool minic_type_is_unsigned_integer(MinicType type);
 bool minic_type_is_float(MinicType type);
 bool minic_type_is_double(MinicType type);
+bool minic_type_is_long_double(MinicType type);
 bool minic_type_is_function(MinicType type);
 bool minic_type_is_record(MinicType type);
 bool minic_type_is_array(MinicType type);
