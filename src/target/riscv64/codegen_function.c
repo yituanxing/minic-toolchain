@@ -1188,20 +1188,10 @@ bool minic_riscv64_write_c0_program_with_core_functions(const char *path,
         {
             MinicRiscv64FunctionSymbol symbol;
 
-            if (!minic_riscv64_core_function_can_emit_for_program(program,
-                                                                           core_function)) {
-                char message[256];
-                const char *symbol_name;
-
-                symbol_name = minic_c0_function_symbol_name(function);
-                (void)snprintf(message,
-                               sizeof(message),
-                               "Core function '%s' cannot be emitted by RV64 basic-v0",
-                               symbol_name != NULL ? symbol_name : "<unnamed>");
-                minic_riscv64_set_diagnostic(diagnostic, path, message);
-                success = false;
-                continue;
-            }
+            /* emit_core_function_for_program_with_symbol() owns the complete
+               capability check.  Do not preflight the same Core function here:
+               on self-hosted giant functions that duplicated verification was
+               a material part of codegen time and provided no extra safety. */
             success = minic_riscv64_function_symbol_from_function(function, &symbol) &&
                       minic_riscv64_emit_core_function_for_program_with_symbol(
                           file, program, core_function, &symbol);
