@@ -21,19 +21,19 @@ p1	futex	RUNTIME_V2_SYSCALL_PASS futex-wake	futex
 p1	io-uring	RUNTIME_V2_SYSCALL_PASS io-uring-setup	io-uring
 p1	mmap	RUNTIME_V2_SYSCALL_PASS mmap-mprotect	mm
 p1	probe-exec	INIT_RUNTIME_PROBE=PASS	fork-exec-wait
-p1	rootfs-rw	RUNTIME_V2_ROOTFS_RW=PASS	block-fs-io
-p1	overlay-copy-up	FUNCTION_PASS overlay-copy-up	filesystem
-p1	iptables4	FUNCTION_PASS iptables-get-info	netfilter
-p1	iptables6	FUNCTION_PASS ip6tables-get-info	netfilter-ipv6
-p1	conntrack	FUNCTION_PASS conntrack-entry-created	conntrack
-p1	bridge	FUNCTION_PASS bridge-links-up	bridge
-p1	br-netfilter	FUNCTION_PASS br-netfilter-ipv6-sysctl-toggle	netfilter-bridge
-p1	veth	FUNCTION_PASS veth-pair-created	net-device
-p1	ipv6-tcp	RUNTIME_V2_IPV6_TCP=PASS	ipv6-tcp
-p1	sha256	FUNCTION_PASS afalg-sha256-abc	crypto-width
-p1	sha512	FUNCTION_PASS afalg-sha512-abc	crypto-width
-p1	sha3	FUNCTION_PASS afalg-sha3-256-abc	crypto
-p1	blake2b	FUNCTION_PASS afalg-blake2b-512-abc	wide-enum-integer
+p2	rootfs-rw	RUNTIME_V2_ROOTFS_RW=PASS	block-fs-io
+p2	overlay-copy-up	FUNCTION_PASS overlay-copy-up	filesystem
+p2	iptables4	FUNCTION_PASS iptables-get-info	netfilter
+p2	iptables6	FUNCTION_PASS ip6tables-get-info	netfilter-ipv6
+p2	conntrack	FUNCTION_PASS conntrack-entry-created	conntrack
+p2	bridge	FUNCTION_PASS bridge-links-up	bridge
+p2	br-netfilter	FUNCTION_PASS br-netfilter-ipv6-sysctl-toggle	netfilter-bridge
+p2	veth	FUNCTION_PASS veth-pair-created	net-device
+p2	ipv6-tcp	RUNTIME_V2_IPV6_TCP=PASS	ipv6-tcp
+p2	sha256	FUNCTION_PASS afalg-sha256-abc	crypto-width
+p2	sha512	FUNCTION_PASS afalg-sha512-abc	crypto-width
+p2	sha3	FUNCTION_PASS afalg-sha3-256-abc	crypto
+p2	blake2b	FUNCTION_PASS afalg-blake2b-512-abc	wide-enum-integer
 p2	btrfs	FUNCTION_PASS btrfs-filesystem-registered	heavy-filesystem
 p2	kvm	FUNCTION_PASS kvm-device-created	virtualization
 p2	dm	FUNCTION_PASS dm-control-device	device-mapper
