@@ -2716,11 +2716,6 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
                                               &alias_target)) {
         return false;
     }
-    if (is_main && (parameter_count != 0U || is_variadic)) {
-        minic_parser_error(parser, "main parameters are not supported yet");
-        return false;
-    }
-
     if (function_id != MINIC_FUNCTION_INVALID) {
         existing_function = minic_c0_program_function(parser->program, function_id);
         if (!minic_parser_function_signature_matches(
