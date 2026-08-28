@@ -14,8 +14,10 @@ mkdir -p "$tree/bin" "$tree/proc" "$tree/dev" "$tree/sys" "$tree/tmp"
   "$root/tests/external/linux/runtime_initramfs/init.c" -o "$tree/init"
 "$cc" -static -O2 -Wall -Wextra -Werror \
   "$root/tests/external/linux/runtime_initramfs/minish.c" -o "$tree/bin/sh"
+"$cc" -static -O2 -Wall -Wextra -Werror \
+  "$root/tests/external/linux/runtime_initramfs/probe.c" -o "$tree/bin/runtime-probe"
 
-file "$tree/init" "$tree/bin/sh"
+file "$tree/init" "$tree/bin/sh" "$tree/bin/runtime-probe"
 mkdir -p "$(dirname "$out")"
 (
   cd "$tree"
