@@ -1509,6 +1509,30 @@ bool minic_c0_program_verify_target_detailed(const MinicC0Program *program,
                               object->union_selection_capacity) ||
             ((object->is_extern || object->is_tentative || object->is_zero_initialized) &&
              object->union_selection_count != 0U)) {
+            {
+                const char *trace = getenv("CORE_FAST_TRACE");
+                if (trace != NULL && trace[0] != '\0' && strcmp(trace, "0") != 0) {
+                    (void)fprintf(stderr,
+                                  "AST_GLOBAL_DETAIL index=%zu name=%.*s base=%d ptr=%u "
+                                  "extern=%d tentative=%d internal=%d zero=%d weak=%d "
+                                  "block_extern=%d init=%zu reloc=%zu unions=%zu align=%zu\n",
+                                  index,
+                                  object->name != NULL ? (int)object->name_length : 0,
+                                  object->name != NULL ? object->name : "",
+                                  (int)object->type.base_kind,
+                                  object->type.pointer_depth,
+                                  object->is_extern ? 1 : 0,
+                                  object->is_tentative ? 1 : 0,
+                                  object->is_internal ? 1 : 0,
+                                  object->is_zero_initialized ? 1 : 0,
+                                  object->is_weak ? 1 : 0,
+                                  object->is_block_scope_extern_only ? 1 : 0,
+                                  object->initializer_count,
+                                  object->relocation_count,
+                                  object->union_selection_count,
+                                  object->explicit_alignment);
+                }
+            }
             MINIC_AST_VERIFY_FAIL(minic_c0_ast_verify_stage_default_reason(stage));
         }
         {
