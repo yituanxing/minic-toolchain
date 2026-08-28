@@ -22,6 +22,17 @@ static const char *const minic_core_rv64_argument_registers[8] = {
     "a7",
 };
 
+static const char *const minic_core_rv64_floating_argument_registers[8] = {
+    "fa0",
+    "fa1",
+    "fa2",
+    "fa3",
+    "fa4",
+    "fa5",
+    "fa6",
+    "fa7",
+};
+
 /* M172_STRUCTURED_ASM_CALLEE_SAVED: basic-v0 conservatively preserves the
    complete RV64 callee-saved bank for functions containing structured asm.
    This lets asm operands fall back to s-registers when every caller-saved
@@ -1620,18 +1631,29 @@ static bool core_direct_call_supported(const MinicC0Program *program,
             }
         }
         if (!minic_riscv64_abi_place_argument(
-                program, argument_type, is_fixed_parameter, &cursor, &location) ||
-            location.floating_register_count != 0U) {
+                program, argument_type, is_fixed_parameter, &cursor, &location)) {
             return false;
         }
         if (core_scalar_type(argument_type)) {
             if (argument->kind != MINIC_CORE_CALL_ARGUMENT_VALUE ||
-                location.value.kind != MINIC_RISCV64_ABI_VALUE_INTEGER ||
-                !((location.integer_register_count == 1U &&
-                   location.integer_register_begin < 8U &&
-                   location.stack_slot_count == 0U) ||
-                  (location.integer_register_count == 0U &&
-                   location.stack_slot_count == 1U))) {
+                argument->value.value_id >= function->value_count) {
+                return false;
+            }
+            if (location.value.kind == MINIC_RISCV64_ABI_VALUE_FLOAT) {
+                if (!is_fixed_parameter || !minic_type_is_double(argument_type) ||
+                    location.floating_register_count != 1U ||
+                    location.floating_register_begin >= 8U ||
+                    location.integer_register_count != 0U ||
+                    location.stack_slot_count != 0U) {
+                    return false;
+                }
+            } else if (location.value.kind != MINIC_RISCV64_ABI_VALUE_INTEGER ||
+                       location.floating_register_count != 0U ||
+                       !((location.integer_register_count == 1U &&
+                          location.integer_register_begin < 8U &&
+                          location.stack_slot_count == 0U) ||
+                         (location.integer_register_count == 0U &&
+                          location.stack_slot_count == 1U))) {
                 return false;
             }
         } else if (minic_type_is_record(argument_type)) {
@@ -2017,6 +2039,14 @@ static bool core_function_can_emit(const MinicC0Program *program,
                        location.stack_slot_count == 1U))) {
                     return core_rv64_capability_reject(function, "parameter-indirect", index, -1);
                 }
+            } else if (location.value.kind == MINIC_RISCV64_ABI_VALUE_FLOAT) {
+                if (!minic_type_is_double(function->parameter_types[index]) ||
+                    location.floating_register_count != 1U ||
+                    location.floating_register_begin >= 8U ||
+                    location.integer_register_count != 0U ||
+                    location.stack_slot_count != 0U) {
+                    return core_rv64_capability_reject(function, "parameter-float", index, -1);
+                }
             } else if (location.value.kind != MINIC_RISCV64_ABI_VALUE_IGNORE &&
                        location.value.kind != MINIC_RISCV64_ABI_VALUE_INTEGER &&
                        (location.value.kind != MINIC_RISCV64_ABI_VALUE_AGGREGATE ||
@@ -2151,21 +2181,38 @@ static bool emit_parameter(FILE *file,
     if (program != NULL) {
         MinicRiscv64AbiArgumentLocation location;
 
-        if (!core_parameter_location(program, function, parameter_index, &location) ||
-            location.value.kind != MINIC_RISCV64_ABI_VALUE_INTEGER ||
-            location.floating_register_count != 0U) {
+        if (!core_parameter_location(program, function, parameter_index, &location)) {
             return false;
         }
-        if (location.integer_register_count == 1U && location.stack_slot_count == 0U &&
-            location.integer_register_begin < 8U) {
-            if (fprintf(file,
-                        "  mv t0, %s\n",
-                        minic_core_rv64_argument_registers[location.integer_register_begin]) < 0) {
+        if (location.value.kind == MINIC_RISCV64_ABI_VALUE_FLOAT &&
+            minic_type_is_double(instruction->type)) {
+            if (location.floating_register_count != 1U ||
+                location.floating_register_begin >= 8U ||
+                location.integer_register_count != 0U ||
+                location.stack_slot_count != 0U ||
+                fprintf(file,
+                        "  fmv.x.d t0, %s\n",
+                        minic_core_rv64_floating_argument_registers[
+                            location.floating_register_begin]) < 0) {
                 return false;
             }
-        } else if (location.integer_register_count == 0U && location.stack_slot_count == 1U) {
-            if (!emit_incoming_stack_load64(
-                    file, frame, "t0", location.stack_slot_begin)) {
+        } else if (location.value.kind == MINIC_RISCV64_ABI_VALUE_INTEGER &&
+                   location.floating_register_count == 0U) {
+            if (location.integer_register_count == 1U && location.stack_slot_count == 0U &&
+                location.integer_register_begin < 8U) {
+                if (fprintf(file,
+                            "  mv t0, %s\n",
+                            minic_core_rv64_argument_registers[
+                                location.integer_register_begin]) < 0) {
+                    return false;
+                }
+            } else if (location.integer_register_count == 0U &&
+                       location.stack_slot_count == 1U) {
+                if (!emit_incoming_stack_load64(
+                        file, frame, "t0", location.stack_slot_begin)) {
+                    return false;
+                }
+            } else {
                 return false;
             }
         } else {
@@ -2478,7 +2525,21 @@ static bool emit_call(FILE *file,
             return false;
         }
         if (argument->kind == MINIC_CORE_CALL_ARGUMENT_VALUE) {
-            if (location.integer_register_count == 1U && location.stack_slot_count == 0U) {
+            if (location.value.kind == MINIC_RISCV64_ABI_VALUE_FLOAT) {
+                if (!is_fixed_parameter || !minic_type_is_double(argument_type) ||
+                    location.floating_register_count != 1U ||
+                    location.floating_register_begin >= 8U ||
+                    location.integer_register_count != 0U ||
+                    location.stack_slot_count != 0U ||
+                    !load_core_value(file, frame, argument->value.value_id, "t0") ||
+                    fprintf(file,
+                            "  fmv.d.x %s, t0\n",
+                            minic_core_rv64_floating_argument_registers[
+                                location.floating_register_begin]) < 0) {
+                    return false;
+                }
+            } else if (location.integer_register_count == 1U &&
+                       location.stack_slot_count == 0U) {
                 if (location.integer_register_begin >= 8U ||
                     !load_core_value(
                         file,
