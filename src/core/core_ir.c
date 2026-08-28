@@ -267,6 +267,7 @@ bool minic_core_function_add_block(MinicCoreFunction *function, MinicCoreBlockId
     }
     new_id = (MinicCoreBlockId)function->block_count;
     (void)memset(&function->blocks[function->block_count], 0, sizeof(*function->blocks));
+    function->blocks[function->block_count].source_label_statement = MINIC_STATEMENT_INVALID;
     function->block_count += 1U;
     if (function->entry_block == MINIC_CORE_BLOCK_INVALID) {
         function->entry_block = new_id;
