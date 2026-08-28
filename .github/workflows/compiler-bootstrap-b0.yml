@@ -13,7 +13,7 @@ jobs:
   bootstrap-b0:
     if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[bootstrap-b0]')
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
         with:
@@ -213,6 +213,24 @@ jobs:
           set -e
           test "$status" -eq 42
           echo "BOOTSTRAP_B0_STAGE2_EXEC=PASS return_42=$status head=$GITHUB_SHA"
+
+      - name: Run runtime gates through bootstrapped stage2
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/bootstrap-b0"
+          wrapper="$work/minic-stage2"
+          cat >"$wrapper" <<EOF
+          #!/bin/sh
+          exec qemu-riscv64 "$work/minic-stage2-rv64" "\$@"
+          EOF
+          chmod +x "$wrapper"
+
+          MINIC="$wrapper"           BUILD_DIR="$GITHUB_WORKSPACE/build/bootstrap-b0-runtime-c0"           RISCV_CC=riscv64-linux-gnu-gcc           QEMU_RISCV64=qemu-riscv64           REQUIRE_RISCV_RUNTIME=1             sh tests/compiler/c0/run-runtime.sh
+
+          MINIC="$wrapper"           BUILD_DIR="$GITHUB_WORKSPACE/build/bootstrap-b0-runtime-programs"           RISCV_CC=riscv64-linux-gnu-gcc           RISCV_OBJDUMP=riscv64-linux-gnu-objdump           QEMU_RISCV64=qemu-riscv64           REQUIRE_RISCV_RUNTIME=1             sh tests/programs/c0/run.sh
+
+          echo "BOOTSTRAP_B0_STAGE2_RUNTIME=PASS micro=PASS programs=PASS head=$GITHUB_SHA"
 
       - name: Preserve bootstrap blocker
         if: failure()
