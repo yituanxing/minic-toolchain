@@ -64,6 +64,7 @@ cat >"$work/reloc.s" <<'EOF'
 .type reloc_user, @function
 reloc_user:
   lla a0, external_object
+  call external_func
   ret
 .size reloc_user, .-reloc_user
 .section .data,"aw"
@@ -79,6 +80,11 @@ readelf -Wr "$work/reloc.o" >"$work/reloc.txt"
 grep -q 'R_RISCV_PCREL_HI20.*external_object' "$work/reloc.txt"
 grep -q 'R_RISCV_PCREL_LO12_I.*Lminias_pcrel' "$work/reloc.txt"
 grep -q 'R_RISCV_64.*external_object.*+ 8' "$work/reloc.txt"
+grep -q 'R_RISCV_CALL_PLT.*external_func' "$work/reloc.txt"
+if grep -q 'R_RISCV_RELAX' "$work/reloc.txt"; then
+    echo "unexpected relax relocation in A0 compiler-style object" >&2
+    exit 1
+fi
 
 cat >"$work/string-pseudo.s" <<'EOF'
 .text
@@ -91,6 +97,8 @@ boolize:
 .section .rodata,"a"
 msg:
   .asciz "A\n\x42\101"
+raw:
+  .ascii "B" "C"
 EOF
 "$MINIAS" -o "$work/string-pseudo.o" "$work/string-pseudo.s"
 text_hex="$(
@@ -102,6 +110,6 @@ rodata_hex="$(
     awk '/0x[0-9a-f]+/ {for (i=2; i<=NF; ++i) if ($i ~ /^[0-9a-f]+$/ && length($i) <= 8 && length($i) % 2 == 0) printf "%s", $i}'
 )"
 test "$text_hex" = "3335b00067800000"
-test "$rodata_hex" = "410a424100"
+test "$rodata_hex" = "410a4241004243"
 
-echo "MINIAS_A0=PASS objects=5 format=ELF64-RISCV-ET_REL relocations=3 strings=1 pseudos=1"
+echo "MINIAS_A0=PASS objects=5 format=ELF64-RISCV-ET_REL relocations=4 strings=2 pseudos=1"
