@@ -519,6 +519,14 @@ bool minic_lexer_next(MinicLexer *lexer, MinicToken *token, MinicDiagnostic *dia
         return minic_lexer_scan_string_literal(
             lexer, token, diagnostic, begin, MINIC_TOKEN_WIDE_STRING_LITERAL);
     }
+    if (character == 'L' && minic_lexer_peek_next(lexer) == '\'') {
+        /* Wide character constants remain integer constants in the frontend.
+           On the current RV64 GNU target wchar_t has int representation; keep
+           the prefix in the source span but reuse the character token/value
+           machinery instead of tokenizing the L as an identifier. */
+        minic_lexer_advance(lexer);
+        return minic_lexer_scan_character_constant(lexer, token, diagnostic, begin);
+    }
 
     if (minic_is_identifier_start(character)) {
         size_t start;
