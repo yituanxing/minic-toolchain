@@ -114,7 +114,7 @@ grep -F -- '-MT' "$FAKE_REAL_LOG" >/dev/null
 grep -F -- "$work/out/probe.o" "$FAKE_REAL_LOG" >/dev/null
 grep -F -- '-march=rv64imac_zicsr_zifencei' "$FAKE_REAL_LOG" >/dev/null
 grep -F -- '-mabi=lp64' "$FAKE_REAL_LOG" >/dev/null
-grep -F -- '-Wa,-mno-arch-attr' "$FAKE_REAL_LOG" >/dev/null
+grep -F -- '-Wa\,-mno-arch-attr' "$FAKE_REAL_LOG" >/dev/null
 grep -F -- "$work/out/probe.minic-stage2.i" "$FAKE_MINIC_LOG" >/dev/null
 grep -F -- "$work/out/probe.minic-stage2.s" "$FAKE_MINIC_LOG" >/dev/null
 grep -F 'pass source=' "$trace" >/dev/null
