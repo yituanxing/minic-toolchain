@@ -2630,6 +2630,49 @@ static bool try_overwrite_static_zero_noncanonical_union_designator(
                 }
             }
             slot_end = slot_begin + canonical_slots;
+            {
+                const char *trace = getenv("CORE_FAST_TRACE");
+                if (trace != NULL && trace[0] != '\0' && strcmp(trace, "0") != 0) {
+                    size_t debug_active;
+                    size_t debug_span;
+                    bool debug_has_active;
+                    bool debug_has_span;
+
+                    debug_active = SIZE_MAX;
+                    debug_span = 0U;
+                    debug_has_active = minic_c0_global_object_union_member_selection(
+                        parser->program,
+                        object,
+                        slot_begin,
+                        (MinicRecordId)(current_record - parser->program->records),
+                        &debug_active);
+                    debug_has_span = minic_c0_global_object_union_member_initializer_span(
+                        parser->program,
+                        object,
+                        slot_begin,
+                        (MinicRecordId)(current_record - parser->program->records),
+                        &debug_span);
+                    (void)fprintf(stderr,
+                                  "STATIC_UNION_REWRITE_DETAIL object=%llu slot=%zu "
+                                  "canonical=%zu selected=%zu init_count=%zu field=%zu "
+                                  "depth=%zu active_ok=%d active=%zu span_ok=%d span=%zu "
+                                  "first_bits=%llu\n",
+                                  (unsigned long long)object_id,
+                                  slot_begin,
+                                  canonical_slots,
+                                  selected_slots,
+                                  object->initializer_count,
+                                  field_index,
+                                  designator->depth,
+                                  debug_has_active ? 1 : 0,
+                                  debug_active,
+                                  debug_has_span ? 1 : 0,
+                                  debug_span,
+                                  slot_begin < object->initializer_count
+                                      ? (unsigned long long)object->initializer_values[slot_begin]
+                                      : 0ULL);
+                }
+            }
             for (slot = slot_begin; slot < slot_end; ++slot) {
                 if (object->initializer_values[slot] != 0U) {
                     minic_parser_error(
