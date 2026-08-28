@@ -2055,6 +2055,18 @@ static MinicCoreLowerStatus lower_scalar_assignment_value(MinicCoreLowerContext 
         }
         return MINIC_CORE_LOWER_UNSUPPORTED;
     }
+    if (minic_type_is_float(target_type)) {
+        MinicType source_type;
+
+        if (!core_scalar_expression_value_type(context->body, expression, &source_type) ||
+            !minic_type_is_float(source_type) ||
+            !minic_type_equal(source_type, target_type) ||
+            !minic_type_equal(context->function->values[source_value].type, source_type)) {
+            return MINIC_CORE_LOWER_UNSUPPORTED;
+        }
+        *value_id = source_value;
+        return MINIC_CORE_LOWER_OK;
+    }
     if (minic_type_is_pointer(target_type)) {
         if (!minic_type_is_pointer(expression->type) &&
             !minic_c0_expression_is_null_pointer_constant_v0(context->body->program,
@@ -4557,6 +4569,8 @@ MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
             instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_TO_DOUBLE;
         } else if (minic_type_is_double(target_type) && minic_type_is_float(source_type)) {
             instruction.kind = MINIC_CORE_INSTRUCTION_FLOAT_TO_DOUBLE;
+        } else if (minic_type_is_float(target_type) && minic_type_is_double(source_type)) {
+            instruction.kind = MINIC_CORE_INSTRUCTION_DOUBLE_TO_FLOAT;
         } else if (minic_type_is_integer(target_type) && minic_type_is_double(source_type)) {
             instruction.kind = MINIC_CORE_INSTRUCTION_DOUBLE_TO_INTEGER;
         } else {
