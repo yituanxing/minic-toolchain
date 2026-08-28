@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import time
 from collections import Counter
 from pathlib import Path
 from typing import Iterable
@@ -41,7 +42,9 @@ DOT_EXPR_RE = re.compile(r"(?:^|[,\s])\.\s*[+-]")
 
 
 def strip_comment(line: str) -> str:
-    """Remove a GAS '#' comment without treating '#' inside strings as comment."""
+    """Remove a GAS '#' comment without touching quoted strings."""
+    if "#" not in line:
+        return line
     quote = None
     escaped = False
     out: list[str] = []
@@ -100,6 +103,18 @@ def normalize_section_name(raw: str) -> str:
         raw = raw[1:-1]
     return raw or "<empty>"
 
+def section_family(section: str) -> str:
+    """Collapse symbol-specific section names for syntax coverage only."""
+    for prefix in (
+        ".text", ".rodata", ".data", ".bss", ".sdata", ".sbss",
+        ".init", ".exit", ".discard", ".debug", ".note",
+    ):
+        if section == prefix:
+            return prefix
+        if section.startswith(prefix + "."):
+            return prefix + ".*"
+    return "<custom-section>"
+
 
 def add_example(examples: dict[str, list[dict[str, object]]], feature: str,
                 file_key: str, line_no: int, text: str) -> None:
@@ -110,16 +125,17 @@ def add_example(examples: dict[str, list[dict[str, object]]], feature: str,
 
 
 def expression_features(text: str) -> set[str]:
+    """Classify expression shapes with cheap character guards before regex."""
     features: set[str] = set()
-    if RELOC_RE.search(text):
+    if "%" in text and RELOC_RE.search(text):
         features.add("expr:reloc-function")
-    if NUMERIC_LOCAL_RE.search(text):
+    if ("f" in text or "b" in text) and NUMERIC_LOCAL_RE.search(text):
         features.add("expr:numeric-local-ref")
-    if SYMBOL_DIFF_RE.search(text):
+    if "-" in text and SYMBOL_DIFF_RE.search(text):
         features.add("expr:symbol-difference")
-    if SYMBOL_ADDEND_RE.search(text):
+    if ("+" in text or "-" in text) and SYMBOL_ADDEND_RE.search(text):
         features.add("expr:symbol-addend")
-    if DOT_EXPR_RE.search(text):
+    if "." in text and ("+" in text or "-" in text) and DOT_EXPR_RE.search(text):
         features.add("expr:dot-relative")
     if "(" in text and ")" in text:
         features.add("expr:parenthesized")
@@ -177,7 +193,15 @@ def census_directory(root: Path, label: str) -> dict[str, object]:
     files: dict[str, dict[str, int]] = {}
     examples: dict[str, list[dict[str, object]]] = {}
 
-    for path in assembly_files:
+    started = time.monotonic()
+    for file_index, path in enumerate(assembly_files, 1):
+        if file_index == 1 or file_index % 50 == 0:
+            elapsed = time.monotonic() - started
+            print(
+                f"MINIAS_CENSUS_PROGRESS label={label or 'unnamed'} "
+                f"files={file_index - 1}/{len(assembly_files)} elapsed={elapsed:.3f}s",
+                flush=True,
+            )
         rel = path.relative_to(root).as_posix()
         file_key = f"{label}:{rel}" if label else rel
         features: set[str] = set()
@@ -204,14 +228,16 @@ def census_directory(root: Path, label: str) -> dict[str, object]:
                 if not text:
                     continue
 
-            for reloc in RELOC_RE.findall(text):
+            relocs = RELOC_RE.findall(text) if "%" in text else ()
+            for reloc in relocs:
                 feature = f"reloc:{reloc}"
                 counters["relocations"][reloc] += 1
                 counters["feature_occurrences"][feature] += 1
                 features.add(feature)
                 add_example(examples, feature, file_key, line_no, raw_line)
 
-            for suffix in AT_SUFFIX_RE.findall(text):
+            suffixes = AT_SUFFIX_RE.findall(text) if "@" in text else ()
+            for suffix in suffixes:
                 feature = f"at:{suffix}"
                 counters["at_suffixes"][suffix] += 1
                 counters["feature_occurrences"][feature] += 1
@@ -239,14 +265,14 @@ def census_directory(root: Path, label: str) -> dict[str, object]:
                 if directive in DIRECT_SECTION_DIRECTIVES:
                     section = directive
                     counters["sections"][section] += 1
-                    section_feature = f"section:{section}"
+                    section_feature = f"section-family:{section_family(section)}"
                     counters["feature_occurrences"][section_feature] += 1
                     features.add(section_feature)
                     add_example(examples, section_feature, file_key, line_no, raw_line)
                 elif directive in SECTION_DIRECTIVES:
                     section = normalize_section_name(first_operand(args))
                     counters["sections"][section] += 1
-                    section_feature = f"section:{section}"
+                    section_feature = f"section-family:{section_family(section)}"
                     counters["feature_occurrences"][section_feature] += 1
                     features.add(section_feature)
                     add_example(examples, section_feature, file_key, line_no, raw_line)
@@ -293,6 +319,13 @@ def census_directory(root: Path, label: str) -> dict[str, object]:
         file_features[file_key] = sorted(features)
         files[file_key] = dict(sorted(stats.items()))
         totals_scalar.update(stats)
+
+    elapsed = time.monotonic() - started
+    print(
+        f"MINIAS_CENSUS_SCAN_DONE label={label or 'unnamed'} "
+        f"files={len(assembly_files)} elapsed={elapsed:.3f}s",
+        flush=True,
+    )
 
     totals = empty_totals()
     totals["files"] = len(assembly_files)
