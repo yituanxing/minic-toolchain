@@ -2430,15 +2430,21 @@ static bool append_static_record_designator_value(MinicParser *parser,
                                                   const MinicRecord *record,
                                                   const size_t *field_indices,
                                                   size_t depth) {
+    MinicRecord record_snapshot;
+    MinicRecordId record_id;
     const MinicRecordField *field;
     size_t field_index;
     size_t field_limit;
     size_t selected_index;
 
     if (parser == NULL || record == NULL || !record->is_complete || field_indices == NULL ||
-        depth == 0U) {
+        depth == 0U || record < parser->program->records ||
+        record >= parser->program->records + parser->program->record_count) {
         return false;
     }
+    record_id = (MinicRecordId)(record - parser->program->records);
+    record_snapshot = *record;
+    record = &record_snapshot;
     field_limit = record->field_count;
     selected_index = field_indices[0];
     if (selected_index >= field_limit) {
@@ -2448,11 +2454,7 @@ static bool append_static_record_designator_value(MinicParser *parser,
         MinicRecordId union_record_id;
         size_t union_base_slot;
 
-        if (record < parser->program->records ||
-            record >= parser->program->records + parser->program->record_count) {
-            return false;
-        }
-        union_record_id = (MinicRecordId)(record - parser->program->records);
+        union_record_id = record_id;
         union_base_slot = parser->program->global_objects[object_id].initializer_count;
         if (!minic_c0_global_object_select_union_member(
                 parser->program, object_id, union_base_slot, union_record_id, selected_index)) {
@@ -2932,14 +2934,28 @@ static bool parse_static_union_constant(MinicParser *parser,
 static bool parse_static_record_constant(MinicParser *parser,
                                          MinicGlobalObjectId object_id,
                                          const MinicRecord *record) {
+    MinicRecord record_snapshot;
+    MinicRecordId record_id;
     size_t field_index;
     size_t field_limit;
     size_t materialized_field_limit;
     size_t record_base_slot;
 
-    if (record == NULL || !record->is_complete ||
-        object_id >= parser->program->global_object_count ||
-        !minic_parser_expect(parser, MINIC_TOKEN_LBRACE, "expected '{' in record initializer")) {
+    if (parser == NULL || record == NULL || !record->is_complete ||
+        record < parser->program->records ||
+        record >= parser->program->records + parser->program->record_count ||
+        object_id >= parser->program->global_object_count) {
+        return false;
+    }
+    record_id = (MinicRecordId)(record - parser->program->records);
+    /* program->records is a growable arena. Initializer expressions such as
+       sizeof(struct { ... }) may append anonymous records and realloc that arena.
+       Snapshot the complete descriptor before recursive expression parsing.
+       Its fields storage is independently allocated and immutable after the
+       record is completed, so the snapshot remains valid across arena growth. */
+    record_snapshot = *record;
+    record = &record_snapshot;
+    if (!minic_parser_expect(parser, MINIC_TOKEN_LBRACE, "expected '{' in record initializer")) {
         return false;
     }
     field_limit = record->is_union ? 1U : record->field_count;
@@ -2986,7 +3002,7 @@ static bool parse_static_record_constant(MinicParser *parser,
             object = minic_c0_program_global_object(parser->program, object_id);
             flexible_element_count = 0U;
             if (object == NULL || !minic_type_is_record(object->type) ||
-                minic_c0_program_record(parser->program, object->type.record_id) != record ||
+                object->type.record_id != record_id ||
                 record->is_union || field_index + 1U != record->field_count ||
                 field_index != materialized_field_limit || field->is_bit_field ||
                 (has_designator && (designator.depth != 1U || designator.has_array_index)) ||
@@ -3098,13 +3114,20 @@ static bool parse_static_record_constant(MinicParser *parser,
                 const MinicRecordField *leaf_field;
                 bool handled_union_zero;
 
-                if (!try_overwrite_static_zero_noncanonical_union_designator(parser,
-                                                                             object_id,
-                                                                             record,
-                                                                             &designator,
-                                                                             record_base_slot,
-                                                                             &handled_union_zero)) {
-                    return false;
+                {
+                    const MinicRecord *identity_record;
+
+                    identity_record = minic_c0_program_record(parser->program, record_id);
+                    if (identity_record == NULL ||
+                        !try_overwrite_static_zero_noncanonical_union_designator(
+                            parser,
+                            object_id,
+                            identity_record,
+                            &designator,
+                            record_base_slot,
+                            &handled_union_zero)) {
+                        return false;
+                    }
                 }
                 if (handled_union_zero) {
                     /* The selected noncanonical union member denotes the same
