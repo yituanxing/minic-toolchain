@@ -52,6 +52,37 @@ static bool parse_parenthesized_function_typedef(MinicParser *parser,
     return true;
 }
 
+static bool typedef_starts_parenthesized_pointer_array(const MinicParser *parser) {
+    MinicParser probe;
+    size_t depth;
+
+    if (parser == NULL || parser->current.kind != MINIC_TOKEN_LPAREN) {
+        return false;
+    }
+    probe = *parser;
+    if (!minic_parser_advance(&probe) || probe.current.kind != MINIC_TOKEN_STAR) {
+        return false;
+    }
+    depth = 1U;
+    for (;;) {
+        if (probe.current.kind == MINIC_TOKEN_LPAREN) {
+            depth += 1U;
+        } else if (probe.current.kind == MINIC_TOKEN_RPAREN) {
+            if (depth == 0U) {
+                return false;
+            }
+            depth -= 1U;
+            if (depth == 0U) {
+                return minic_parser_advance(&probe) &&
+                       probe.current.kind == MINIC_TOKEN_LBRACKET;
+            }
+        }
+        if (!minic_parser_advance(&probe)) {
+            return false;
+        }
+    }
+}
+
 typedef struct MinicTypedefAttributeContext {
     MinicType *aliased_type;
 } MinicTypedefAttributeContext;
@@ -360,11 +391,36 @@ static bool parse_one_typedef_declarator(
         return false;
     }
     if (parser->current.kind == MINIC_TOKEN_LPAREN) {
-        if (!parse_parenthesized_function_typedef(
-                parser, aliased_type, &name_span, &aliased_type)) {
-            return false;
+        if (typedef_starts_parenthesized_pointer_array(parser)) {
+            bool name_array_inferred;
+            bool name_is_array;
+            size_t name_array_count;
+
+            if (!minic_parser_parse_parenthesized_pointer_to_array_declarator(
+                    parser,
+                    aliased_type,
+                    &name_span,
+                    &aliased_type,
+                    &name_is_array,
+                    &name_array_inferred,
+                    &name_array_count)) {
+                return false;
+            }
+            if (name_is_array) {
+                (void)name_array_inferred;
+                (void)name_array_count;
+                minic_parser_error(
+                    parser,
+                    "array of parenthesized pointer-to-array typedefs is not supported yet");
+                return false;
+            }
+        } else {
+            if (!parse_parenthesized_function_typedef(
+                    parser, aliased_type, &name_span, &aliased_type)) {
+                return false;
+            }
+            is_function_declarator = true;
         }
-        is_function_declarator = true;
     } else {
         MinicParsedFunctionDeclarator declarator;
 
