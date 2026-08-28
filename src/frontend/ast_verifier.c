@@ -516,6 +516,7 @@ static bool verify_expression(const MinicC0Program *program,
                expression->value_category == MINIC_VALUE_RVALUE &&
                ((minic_type_is_double(expression->type) &&
                  (minic_type_is_integer(operand->type) || minic_type_is_float(operand->type))) ||
+                (minic_type_is_float(expression->type) && minic_type_is_double(operand->type)) ||
                 (minic_type_is_integer(expression->type) && minic_type_is_double(operand->type)) ||
                 (minic_type_is_integer(expression->type) && minic_type_is_integer(operand->type) &&
                  minic_type_cast_compatible(expression->type, operand->type)));
