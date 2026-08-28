@@ -8649,6 +8649,17 @@ lower_switch(MinicCoreLowerContext *context, const MinicStatement *statement, bo
         statement->expression == MINIC_EXPRESSION_INVALID ||
         statement->then_block == MINIC_BLOCK_INVALID ||
         statement->else_block != MINIC_BLOCK_INVALID || context->target == NULL) {
+        if (context != NULL && context->source_function != NULL && statement != NULL) {
+            (void)fprintf(stderr,
+                          "CORE_SWITCH_DETAIL function=%s gate=entry cleanup=%llu stop=%llu "
+                          "expr=%u then=%u else=%u\n",
+                          context->source_function->name,
+                          (unsigned long long)statement->cleanup_context,
+                          (unsigned long long)statement->cleanup_stop_context,
+                          (unsigned)statement->expression,
+                          (unsigned)statement->then_block,
+                          (unsigned)statement->else_block);
+        }
         return MINIC_CORE_LOWER_UNSUPPORTED;
     }
     selector_expression =
@@ -8676,6 +8687,12 @@ lower_switch(MinicCoreLowerContext *context, const MinicStatement *statement, bo
         if (source_statement->kind != MINIC_STATEMENT_CASE &&
             source_statement->kind != MINIC_STATEMENT_DEFAULT) {
             if (label_count == 0U) {
+                (void)fprintf(stderr,
+                              "CORE_SWITCH_DETAIL function=%s gate=prelabel source_index=%zu "
+                              "kind=%d\n",
+                              context->source_function->name,
+                              source_index,
+                              (int)source_statement->kind);
                 return MINIC_CORE_LOWER_UNSUPPORTED;
             }
             continue;
@@ -8684,6 +8701,17 @@ lower_switch(MinicCoreLowerContext *context, const MinicStatement *statement, bo
             source_statement->then_block != MINIC_BLOCK_INVALID ||
             source_statement->else_block != MINIC_BLOCK_INVALID ||
             label_count >= MINIC_CORE_SWITCH_LABEL_LIMIT) {
+            (void)fprintf(stderr,
+                          "CORE_SWITCH_DETAIL function=%s gate=label source_index=%zu kind=%d "
+                          "cleanup=%llu stop=%llu then=%u else=%u labels=%zu\n",
+                          context->source_function->name,
+                          source_index,
+                          (int)source_statement->kind,
+                          (unsigned long long)source_statement->cleanup_context,
+                          (unsigned long long)source_statement->cleanup_stop_context,
+                          (unsigned)source_statement->then_block,
+                          (unsigned)source_statement->else_block,
+                          label_count);
             return MINIC_CORE_LOWER_UNSUPPORTED;
         }
         labels[label_count].source_index = source_index;
@@ -8812,10 +8840,25 @@ lower_switch(MinicCoreLowerContext *context, const MinicStatement *statement, bo
                fail-closed. */
             if (break_index != SIZE_MAX &&
                 segment_statement->kind != MINIC_STATEMENT_BREAK) {
+                (void)fprintf(stderr,
+                              "CORE_SWITCH_DETAIL function=%s gate=post-break "
+                              "source_index=%zu scan=%zu kind=%d\n",
+                              context->source_function->name,
+                              source_index,
+                              scan,
+                              (int)segment_statement->kind);
                 return MINIC_CORE_LOWER_UNSUPPORTED;
             }
             if (segment_statement->kind == MINIC_STATEMENT_BREAK) {
                 if (!core_cleanup_edge_is_empty(segment_statement)) {
+                    (void)fprintf(stderr,
+                                  "CORE_SWITCH_DETAIL function=%s gate=break-cleanup "
+                                  "source_index=%zu scan=%zu cleanup=%llu stop=%llu\n",
+                                  context->source_function->name,
+                                  source_index,
+                                  scan,
+                                  (unsigned long long)segment_statement->cleanup_context,
+                                  (unsigned long long)segment_statement->cleanup_stop_context);
                     return MINIC_CORE_LOWER_UNSUPPORTED;
                 }
                 if (break_index == SIZE_MAX) {
