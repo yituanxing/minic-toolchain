@@ -57,6 +57,11 @@ static MinicCoreLowerStatus lower_record_materialized_address(
     MinicCoreLowerContext *context,
     MinicExpressionId expression_id,
     MinicCoreValueId *address_id);
+static MinicCoreLowerStatus append_integer_conversion(MinicCoreLowerContext *context,
+                                                      MinicSourceSpan span,
+                                                      MinicType target_type,
+                                                      MinicCoreValueId source_value,
+                                                      MinicCoreValueId *value_id);
 
 MinicCoreLowerStatus ensure_statement_block(MinicCoreLowerContext *context, MinicStatementId statement_id, MinicCoreBlockId *block_id) {
     MinicCoreBlockId mapped;
