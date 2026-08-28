@@ -2122,6 +2122,7 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
     size_t local_count;
     bool is_extern_declaration;
     bool is_function_pointer_object;
+    bool has_preparsed_function_parameters;
     bool is_inline;
     bool is_register_declaration;
     bool is_static_declaration;
@@ -2144,6 +2145,7 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
     parameter_count = 0U;
     is_extern_declaration = false;
     is_function_pointer_object = false;
+    has_preparsed_function_parameters = false;
     is_inline = false;
     is_register_declaration = false;
     is_static_declaration = false;
@@ -2218,19 +2220,38 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
                     parser, true, true, &declarator)) {
                 return false;
             }
-            if (declarator.is_variadic) {
-                minic_parser_error(parser,
-                                   "variadic function pointer objects are not supported yet");
-                return false;
-            }
             if (!minic_parser_build_function_declarator_type(
                     parser, return_type, &declarator, &return_type)) {
-                minic_parser_error(parser, "cannot build function pointer object type");
+                minic_parser_error(parser, "cannot build parenthesized function declarator type");
                 return false;
             }
             name_span = declarator.name_span;
             declarator_attributes = declarator.attributes;
-            is_function_pointer_object = true;
+            if (declarator.has_inner_function_suffix) {
+                size_t inner_parameter_index;
+
+                if (declarator.inner_parameter_count > MINIC_MAX_FUNCTION_PARAMETERS) {
+                    minic_parser_error(parser, "inner function parameter count exceeds compiler limit");
+                    return false;
+                }
+                parameter_count = declarator.inner_parameter_count;
+                is_variadic = declarator.inner_is_variadic;
+                for (inner_parameter_index = 0U;
+                     inner_parameter_index < parameter_count;
+                     ++inner_parameter_index) {
+                    parameter_types[inner_parameter_index] =
+                        declarator.inner_parameter_types[inner_parameter_index];
+                }
+                has_preparsed_function_parameters = true;
+                is_function_pointer_object = false;
+            } else {
+                if (declarator.is_variadic) {
+                    minic_parser_error(parser,
+                                       "variadic function pointer objects are not supported yet");
+                    return false;
+                }
+                is_function_pointer_object = true;
+            }
         } else {
             if (!minic_parser_advance(parser)) {
                 return false;
@@ -2255,7 +2276,8 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
         MinicFixedRegisterBindingId binding_id;
 
         if (is_inline || deferred_attributes.count != 0U || has_section || has_visibility ||
-            is_function_pointer_object || parser->current.kind == MINIC_TOKEN_LPAREN ||
+            is_function_pointer_object || has_preparsed_function_parameters ||
+            parser->current.kind == MINIC_TOKEN_LPAREN ||
             (!minic_type_is_integer(return_type) && !minic_type_is_pointer(return_type))) {
             minic_parser_error(parser, "unsupported file-scope register declaration shape");
             return false;
@@ -2394,7 +2416,8 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
             }
         }
     }
-    if (is_static_declaration && parser->current.kind != MINIC_TOKEN_LPAREN) {
+    if (is_static_declaration && !has_preparsed_function_parameters &&
+        parser->current.kind != MINIC_TOKEN_LPAREN) {
         MinicGlobalObjectId object_id;
 
         if (is_inline) {
@@ -2458,7 +2481,7 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
         }
         return true;
     }
-    if (!is_internal &&
+    if (!is_internal && !has_preparsed_function_parameters &&
         (is_function_pointer_object || parser->current.kind != MINIC_TOKEN_LPAREN)) {
         if (is_inline) {
             minic_parser_error(parser, "inline specifier requires a function declarator");
@@ -2600,10 +2623,11 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
         return false;
     }
 
-    if (!minic_parser_expect(parser, MINIC_TOKEN_LPAREN, "expected '('") ||
-        !minic_parser_parse_parameter_list(
-            parser, parameter_name_spans, parameter_types, &parameter_count, false, &is_variadic) ||
-        !minic_parser_expect(parser, MINIC_TOKEN_RPAREN, "expected ')'")) {
+    if (!has_preparsed_function_parameters &&
+        (!minic_parser_expect(parser, MINIC_TOKEN_LPAREN, "expected '('") ||
+         !minic_parser_parse_parameter_list(
+             parser, parameter_name_spans, parameter_types, &parameter_count, false, &is_variadic) ||
+         !minic_parser_expect(parser, MINIC_TOKEN_RPAREN, "expected ')'"))) {
         return false;
     }
     if (!parse_gnu_function_asm_label(parser,
