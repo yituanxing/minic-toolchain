@@ -136,7 +136,13 @@ bool core_scalar_expression_value_type(const MinicFunctionBodyView *body,
        qualified lvalues. Once the conditional is consumed as a scalar value,
        those top-level qualifiers do not belong to the Core SSA/storage type. */
     if (expression->kind == MINIC_EXPRESSION_CONDITIONAL ||
-        expression->kind == MINIC_EXPRESSION_CONVERSION) {
+        expression->kind == MINIC_EXPRESSION_CONVERSION ||
+        (expression->kind == MINIC_EXPRESSION_BINARY &&
+         expression->value.binary.operator_kind == MINIC_BINARY_COMMA)) {
+        /* A scalar value produced by conditional/conversion/comma evaluation
+           does not carry a top-level object qualifier into Core SSA.  In
+           particular, (side_effect, const_lvalue) is an rvalue whose transported
+           value must match the unqualified load emitted for the right operand. */
         return minic_type_unqualified(expression->type, value_type);
     }
     /* M116_POINTER_ARITH_RVALUE_TYPE: pointer-valued +/- is a transported
