@@ -2213,10 +2213,18 @@ static MinicCoreLowerStatus lower_direct_call(MinicCoreLowerContext *context,
         } else {
             const MinicExpression *argument_expression = minic_c0_program_expression(
                 context->body->program, expression->value.call.arguments[argument_index]);
-            if (argument_expression == NULL ||
-                !core_scalar_expression_value_type(
-                    context->body, argument_expression, &argument_types[argument_index]) ||
-                !core_memory_scalar_type(argument_types[argument_index])) {
+            if (argument_expression == NULL) {
+                return MINIC_CORE_LOWER_UNSUPPORTED;
+            }
+            if (minic_type_is_record(argument_expression->type)) {
+                if (!minic_type_unqualified(
+                        argument_expression->type, &argument_types[argument_index]) ||
+                    !minic_type_is_record(argument_types[argument_index])) {
+                    return MINIC_CORE_LOWER_UNSUPPORTED;
+                }
+            } else if (!core_scalar_expression_value_type(
+                           context->body, argument_expression, &argument_types[argument_index]) ||
+                       !core_memory_scalar_type(argument_types[argument_index])) {
                 return MINIC_CORE_LOWER_UNSUPPORTED;
             }
         }
@@ -2228,8 +2236,7 @@ static MinicCoreLowerStatus lower_direct_call(MinicCoreLowerContext *context,
         return MINIC_CORE_LOWER_ERROR;
     }
     for (argument_index = 0U; argument_index < argument_count; ++argument_index) {
-        if (argument_index < callee->parameter_count &&
-            minic_type_is_record(argument_types[argument_index])) {
+        if (minic_type_is_record(argument_types[argument_index])) {
             MinicCoreObjectId object_id;
 
             status = lower_record_call_argument_object(
