@@ -30,6 +30,29 @@ typedef struct MinicCoreFunctionSet {
     size_t function_count;
 } MinicCoreFunctionSet;
 
+/* Bootstrap diagnostics are deliberately opt-in.  They let a target-built
+   compiler expose the exact phase/function where self-host replay stops
+   making progress without changing normal compiler output or semantics. */
+static bool minic_bootstrap_trace_enabled(void) {
+    return getenv("MINIC_BOOTSTRAP_TRACE") != NULL;
+}
+
+static void minic_bootstrap_trace_stage(const char *input_path,
+                                        const char *stage,
+                                        const char *state,
+                                        size_t function_count) {
+    if (!minic_bootstrap_trace_enabled()) {
+        return;
+    }
+    (void)fprintf(stderr,
+                  "MINIC_BOOTSTRAP_TRACE stage=%s state=%s functions=%zu input=%s\n",
+                  stage != NULL ? stage : "?",
+                  state != NULL ? state : "?",
+                  function_count,
+                  input_path != NULL ? input_path : "?");
+    (void)fflush(stderr);
+}
+
 static void minic_set_diagnostic(MinicDiagnostic *diagnostic,
                                  const char *path,
                                  size_t line,
@@ -118,8 +141,27 @@ static bool minic_prepare_core_function_set(const MinicC0Program *program,
             set.statuses[function_index] = MINIC_CORE_LOWER_ERROR;
             continue;
         }
+        if (minic_bootstrap_trace_enabled()) {
+            (void)fprintf(stderr,
+                          "MINIC_BOOTSTRAP_TRACE stage=core-lower state=begin "
+                          "index=%zu function=%s\n",
+                          function_index,
+                          function->name != NULL ? function->name : "?");
+            (void)fflush(stderr);
+        }
         set.statuses[function_index] =
             minic_core_lower_function(&body, target, &set.functions[function_index]);
+        if (minic_bootstrap_trace_enabled()) {
+            (void)fprintf(stderr,
+                          "MINIC_BOOTSTRAP_TRACE stage=core-lower state=end "
+                          "index=%zu function=%s status=%d blocks=%zu instructions=%zu\n",
+                          function_index,
+                          function->name != NULL ? function->name : "?",
+                          (int)set.statuses[function_index],
+                          set.functions[function_index].block_count,
+                          set.functions[function_index].instruction_count);
+            (void)fflush(stderr);
+        }
     }
     minic_core_function_set_destroy(output);
     *output = set;
@@ -305,7 +347,10 @@ int minic_compile_preprocessed_file(const char *input_path,
     minic_c0_program_initialize(&program);
     minic_core_function_set_initialize(&core_set);
     target_info = minic_default_target_info();
+    minic_bootstrap_trace_stage(input_path, "parse", "begin", 0U);
     success = minic_parse_c0_program(input_path, buffer.data, buffer.size, &program, diagnostic);
+    minic_bootstrap_trace_stage(input_path, "parse", success ? "end-ok" : "end-fail",
+                                program.function_count);
     if (success && !minic_c0_program_verify_target_detailed(
                        &program, MINIC_C0_AST_PARSED, target_info, &verify_failure)) {
         minic_set_ast_verify_diagnostic(input_path, "parsed", &verify_failure, diagnostic);
@@ -316,9 +361,18 @@ int minic_compile_preprocessed_file(const char *input_path,
             diagnostic, input_path, 1U, 1U, "parsed FunctionBody ownership is invalid");
         success = false;
     }
+    if (success) {
+        minic_bootstrap_trace_stage(input_path, "normalize", "begin", program.function_count);
+    }
     if (success && !minic_c0_program_normalize_casts(&program)) {
         minic_set_diagnostic(diagnostic, input_path, 1U, 1U, "cannot normalize cast expressions");
         success = false;
+    }
+    if (minic_bootstrap_trace_enabled()) {
+        minic_bootstrap_trace_stage(input_path,
+                                    "normalize",
+                                    success ? "end-ok" : "end-fail",
+                                    program.function_count);
     }
     if (success && !minic_c0_program_verify_target_detailed(
                        &program, MINIC_C0_AST_NORMALIZED, target_info, &verify_failure)) {
@@ -330,25 +384,49 @@ int minic_compile_preprocessed_file(const char *input_path,
             diagnostic, input_path, 1U, 1U, "normalized FunctionBody ownership is invalid");
         success = false;
     }
+    if (success) {
+        minic_bootstrap_trace_stage(input_path, "core-set", "begin", program.function_count);
+    }
     if (success && !minic_prepare_core_function_set(&program, target_info, &core_set)) {
         minic_set_diagnostic(
             diagnostic, input_path, 1U, 1U, "cannot retain Core IR lowering results");
         success = false;
     }
+    if (minic_bootstrap_trace_enabled()) {
+        minic_bootstrap_trace_stage(input_path,
+                                    "core-set",
+                                    success ? "end-ok" : "end-fail",
+                                    program.function_count);
+    }
     if (success) {
+        minic_bootstrap_trace_stage(input_path, "core-validate", "begin", program.function_count);
         success =
             minic_validate_core_functions(input_path, &program, &core_set, diagnostic);
+        minic_bootstrap_trace_stage(input_path,
+                                    "core-validate",
+                                    success ? "end-ok" : "end-fail",
+                                    program.function_count);
     }
     if (success) {
+        minic_bootstrap_trace_stage(input_path, "layout", "begin", program.function_count);
         success = minic_riscv64_layout_program(input_path, &program, diagnostic);
+        minic_bootstrap_trace_stage(input_path,
+                                    "layout",
+                                    success ? "end-ok" : "end-fail",
+                                    program.function_count);
     }
     if (success) {
+        minic_bootstrap_trace_stage(input_path, "codegen", "begin", program.function_count);
         success =
             minic_riscv64_write_c0_program_with_core_functions(output_path,
                                                                &program,
                                                                core_set.functions,
                                                                core_set.function_count,
                                                                diagnostic);
+        minic_bootstrap_trace_stage(input_path,
+                                    "codegen",
+                                    success ? "end-ok" : "end-fail",
+                                    program.function_count);
     }
 
     minic_core_function_set_destroy(&core_set);
