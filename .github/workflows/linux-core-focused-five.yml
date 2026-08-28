@@ -1,0 +1,90 @@
+name: Linux Core Focused Five
+
+on:
+  push:
+    branches:
+      - refactor/declaration-sema-v1
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  focused-five:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[linux-five]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: Restore frozen first500 corpus
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-focus-corpus
+          key: linux-focus-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-${{ hashFiles('tests/external/linux/replay-indices.txt') }}
+          fail-on-cache-miss: true
+
+      - name: Restore frozen new500 corpus
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-new500-corpus
+          key: linux-new500-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-indices-500-999
+          fail-on-cache-miss: true
+
+      - name: Build exact compiler
+        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/linux-five-compiler
+
+      - name: Replay five cross-shard regressions
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          compiler="$GITHUB_WORKSPACE/build/linux-five-compiler/bin/minic"
+          CORE_FAST_TRACE=1 python3 tests/external/linux/corpus_replay.py             --minic "$compiler"             --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus"             --work "$GITHUB_WORKSPACE/build/linux-five-first"             --jobs 1             --indices 254
+          CORE_FAST_TRACE=1 python3 tests/external/linux/corpus_replay.py             --minic "$compiler"             --corpus "$GITHUB_WORKSPACE/build/linux-new500-corpus"             --work "$GITHUB_WORKSPACE/build/linux-five-new"             --jobs 4             --indices 775,779,879,881
+
+      - name: Print exact failing source context
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          sets = [
+              (Path("build/linux-five-first"), Path("build/linux-focus-corpus/kbuild")),
+              (Path("build/linux-five-new"), Path("build/linux-new500-corpus/kbuild")),
+          ]
+          failed = 0
+          for work, corpus in sets:
+              rows = json.loads((work / "batch-results.json").read_text())
+              if isinstance(rows, dict):
+                  rows = rows.get("results", [])
+              for row in rows:
+                  status = row["status"]
+                  print(f"LINUX_FIVE index={row['index']} status={status} input={row['input']} "
+                        f"line={row.get('first_error_line')} message={row.get('message','')}")
+                  if status == "PASS":
+                      continue
+                  failed += 1
+                  line = row.get("first_error_line")
+                  path = corpus / row["input"]
+                  if not path.is_file() or not isinstance(line, int):
+                      continue
+                  source = path.read_text(errors="replace").splitlines()
+                  lo = max(1, line - 18)
+                  hi = min(len(source), line + 18)
+                  print(f"--- CONTEXT index={row['index']} {row['input']} lines={lo}-{hi} ---")
+                  for n in range(lo, hi + 1):
+                      marker = ">>" if n == line else "  "
+                      print(f"{marker} {n:7d}: {source[n-1]}")
+                  stderr = work / "minic-stderr" / f"{row['input']}.stderr"
+                  if stderr.is_file():
+                      print(f"--- STDERR index={row['index']} ---")
+                      print(stderr.read_text(errors="replace")[:12000])
+          if failed:
+              raise SystemExit(f"focused-five still has {failed} failures")
+          print("LINUX_FIVE_EXACT pass=5 fail=0")
+          PY
