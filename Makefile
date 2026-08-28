@@ -100,6 +100,7 @@ MINIAS_SOURCES := \
 	assembler/src/assembler.c \
 	assembler/src/expression.c \
 	assembler/src/riscv_encode.c \
+	assembler/src/string_literal.c \
 	assembler/src/elf_writer.c \
 	tools/minic-as/main.c
 MINIAS_OBJECTS := $(patsubst %.c,$(BUILD_DIR)/obj/%.o,$(MINIAS_SOURCES))
