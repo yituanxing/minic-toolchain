@@ -31,6 +31,7 @@
 
 #define MINIAS_SECTION_UNDEF (-1)
 #define MINIAS_MAX_ERROR 256U
+#define MINIAS_NUMERIC_LABEL_LIMIT 100U
 
 typedef struct MiniAsSection {
     char *name;
@@ -97,6 +98,7 @@ typedef struct MiniAs {
     size_t reloc_count;
     size_t reloc_capacity;
     size_t pcrel_anchor_counter;
+    size_t numeric_label_counts[MINIAS_NUMERIC_LABEL_LIMIT];
     int current_section;
     int previous_section;
     char error[MINIAS_MAX_ERROR];
