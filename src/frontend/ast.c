@@ -1547,7 +1547,8 @@ static bool minic_c0_record_value_is_copy_source_bounded(const MinicC0Program *p
         !minic_type_is_record(expression->type)) {
         return false;
     }
-    if (expression->kind == MINIC_EXPRESSION_CALL) {
+    if (expression->kind == MINIC_EXPRESSION_CALL ||
+        expression->kind == MINIC_EXPRESSION_BUILTIN_VA_ARG) {
         return true;
     }
     if (expression->kind == MINIC_EXPRESSION_ASSIGNMENT) {
