@@ -14,5 +14,15 @@ jobs:
       - uses: actions/checkout@v4
       - name: Build frozen compiler
         run: make clean && make -j2
-      - name: Run fast compiler gate
-        run: make check-fast
+      - name: Run focused fast prerequisites
+        run: |
+          make check-token-model check-lexer check-type check-record check-type-alias
+          make check-ast-contract check-layout check-rv64-abi
+      - name: Trace broad compiler gate
+        shell: bash
+        run: |
+          set +e
+          MINIC="$PWD/build/debug/bin/minic" HOST_CC=cc BUILD_DIR="$PWD/build/debug"             sh -x tests/compiler/c0/run.sh >"$RUNNER_TEMP/compiler-c0-trace.log" 2>&1
+          rc=$?
+          tail -n 160 "$RUNNER_TEMP/compiler-c0-trace.log"
+          exit "$rc"
