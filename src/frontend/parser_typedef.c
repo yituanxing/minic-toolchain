@@ -169,6 +169,14 @@ static bool apply_integer_typedef_mode(MinicParser *parser,
         mapped = is_unsigned ? minic_type_unsigned_long_long() : minic_type_long_long();
     } else if (typedef_mode_name_is(mode_name, mode_name_length, "TI")) {
         mapped = is_unsigned ? minic_type_unsigned_int128() : minic_type_int128();
+    } else if (typedef_mode_name_is(mode_name, mode_name_length, "word")) {
+        if (!minic_target_info_word_integer_type(
+                parser->target_info,
+                is_unsigned ? MINIC_INTEGER_SIGN_UNSIGNED : MINIC_INTEGER_SIGN_SIGNED,
+                &mapped)) {
+            minic_parser_error(parser, "cannot resolve target GNU word integer mode");
+            return false;
+        }
     } else {
         minic_parser_error(parser, "unsupported GNU integer mode");
         return false;
