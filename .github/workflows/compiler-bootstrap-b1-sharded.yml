@@ -9,6 +9,8 @@ on:
 permissions:
   contents: read
 
+# B1 acceptance: sharded exact Stage1 -> Stage2 fixed point.
+
 jobs:
   seed:
     if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[bootstrap-b1]')
