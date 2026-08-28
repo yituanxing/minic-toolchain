@@ -157,14 +157,55 @@ jobs:
             key=$(basename "$stage0_asm" .s)
             pre="$work/i/$key.i"
             stage1_asm="$work/s2/$key.s"
-            qemu-riscv64 "$stage1" -S "$pre" -o "$stage1_asm"
+            stdout="$work/s2/$key.stdout"
+            stderr="$work/s2/$key.stderr"
+
+            if test -s "$stage1_asm"; then
+              echo "BOOTSTRAP_B0_STAGE1_REUSE key=$key"
+              return 0
+            fi
+
+            begin=$(date +%s)
+            echo "BOOTSTRAP_B0_STAGE1_BEGIN key=$key"
+            set +e
+            timeout 600 qemu-riscv64 "$stage1" -S "$pre" -o "$stage1_asm" >"$stdout" 2>"$stderr"
+            status=$?
+            set -e
+            end=$(date +%s)
+            elapsed=$((end - begin))
+
+            if test "$status" -ne 0; then
+              echo "BOOTSTRAP_B0_STAGE1_BLOCKER key=$key status=$status elapsed_s=$elapsed" >&2
+              sed -n '1,200p' "$stderr" >&2 || true
+              return "$status"
+            fi
+            if ! cmp -s "$stage0_asm" "$stage1_asm"; then
+              echo "BOOTSTRAP_B0_FIXED_POINT_MISMATCH key=$key elapsed_s=$elapsed" >&2
+              diff -u "$stage0_asm" "$stage1_asm" | sed -n '1,200p' >&2 || true
+              return 1
+            fi
+            echo "BOOTSTRAP_B0_STAGE1_DONE key=$key elapsed_s=$elapsed fixed_point=PASS"
           }
           export -f compile_one
           export work stage1
 
+          # Focused-first: force the largest/highest-value TUs through Stage1
+          # before the broad replay. This gives a bounded blocker quickly while
+          # the all-46 line remains the acceptance gate.
+          for sample in \
+            "$work/s/src_compiler_compiler_c.s" \
+            "$work/s/src_core_core_lower_c.s" \
+            "$work/s/src_frontend_parser_expression_c.s" \
+            "$work/s/src_target_riscv64_core_codegen_c.s"
+          do
+            compile_one "$sample"
+          done
+          echo "BOOTSTRAP_B0_STAGE1_FOCUSED=PASS selected=4"
+
           # Stage1 runs under QEMU and is much slower than the native stage0.
           # Compile independent translation units concurrently, then compare
-          # deterministically in the original stage0 list order.
+          # deterministically in the original stage0 list order. Focused files
+          # are reused rather than compiled twice.
           tr ' ' '\n' <"$work/stage1-asm-list.txt" | sed '/^$/d' |
             xargs -n1 -P4 bash -c 'compile_one "$1"' _
 
