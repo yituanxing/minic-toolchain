@@ -447,9 +447,25 @@ static bool parse_record_field_declarator(MinicParser *parser,
                     return false;
                 }
                 if (parser->current.kind == MINIC_TOKEN_LBRACKET) {
-                    minic_parser_error(parser,
-                                       "multidimensional flexible record arrays are unsupported");
-                    return false;
+                    MinicType nested_element_type;
+                    bool nested_is_array;
+
+                    nested_is_array = false;
+                    if (!minic_parser_parse_array_declarator_suffix(
+                            parser, field_type, false, &nested_element_type, &nested_is_array) ||
+                        !nested_is_array || !minic_type_is_array(nested_element_type)) {
+                        if (parser->diagnostic != NULL &&
+                            parser->diagnostic->message[0] == '\0') {
+                            minic_parser_error(
+                                parser,
+                                "cannot build fixed inner dimensions of flexible record array");
+                        }
+                        return false;
+                    }
+                    /* For T member[][N], the flexible outer dimension has
+                       semantic element type T[N]. DataLayout already makes
+                       the outer flexible dimension contribute zero sizeof. */
+                    field_type = nested_element_type;
                 }
                 break;
             }
