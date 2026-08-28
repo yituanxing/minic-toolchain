@@ -92,6 +92,9 @@ cat >"$work/string-pseudo.s" <<'EOF'
 .type boolize, @function
 boolize:
   snez a0, a1
+  seqz a1, a2
+  neg a2, a3
+  srl a3, a4, a5
   ret
 .size boolize, .-boolize
 .section .rodata,"a"
@@ -99,6 +102,8 @@ msg:
   .asciz "A\n\x42\101"
 raw:
   .ascii "B" "C"
+.previous
+  nop
 EOF
 "$MINIAS" -o "$work/string-pseudo.o" "$work/string-pseudo.s"
 text_hex="$(
@@ -109,7 +114,7 @@ rodata_hex="$(
     readelf -x .rodata "$work/string-pseudo.o" |
     awk '/0x[0-9a-f]+/ {for (i=2; i<=NF; ++i) if ($i ~ /^[0-9a-f]+$/ && length($i) <= 8 && length($i) % 2 == 0) printf "%s", $i}'
 )"
-test "$text_hex" = "3335b00067800000"
+test "$text_hex" = "3335b000933516003306d040b356f7006780000013000000"
 test "$rodata_hex" = "410a4241004243"
 
-echo "MINIAS_A0=PASS objects=5 format=ELF64-RISCV-ET_REL relocations=4 strings=2 pseudos=1"
+echo "MINIAS_A0=PASS objects=5 format=ELF64-RISCV-ET_REL relocations=4 strings=2 pseudos=4 previous=1"
