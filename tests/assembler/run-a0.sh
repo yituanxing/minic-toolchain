@@ -58,4 +58,26 @@ data_hex="$(
 )"
 test "$data_hex" = "01000000feffffff78563412000000"
 
-echo "MINIAS_A0=PASS objects=3 format=ELF64-RISCV-ET_REL"
+cat >"$work/reloc.s" <<'EOF'
+.text
+.globl reloc_user
+.type reloc_user, @function
+reloc_user:
+  lla a0, external_object
+  ret
+.size reloc_user, .-reloc_user
+.section .data,"aw"
+.globl ptr
+.type ptr, @object
+ptr:
+  .dword external_object + 8
+.size ptr, 8
+EOF
+"$MINIAS" -o "$work/reloc.o" "$work/reloc.s"
+readelf -h "$work/reloc.o" | grep -q 'RISC-V'
+readelf -Wr "$work/reloc.o" >"$work/reloc.txt"
+grep -q 'R_RISCV_PCREL_HI20.*external_object' "$work/reloc.txt"
+grep -q 'R_RISCV_PCREL_LO12_I.*Lminias_pcrel' "$work/reloc.txt"
+grep -q 'R_RISCV_64.*external_object.*+ 8' "$work/reloc.txt"
+
+echo "MINIAS_A0=PASS objects=4 format=ELF64-RISCV-ET_REL relocations=3"
