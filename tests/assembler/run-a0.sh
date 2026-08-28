@@ -95,6 +95,7 @@ boolize:
   seqz a1, a2
   neg a2, a3
   srl a3, a4, a5
+  sll a4, a5, a6
   ret
 .size boolize, .-boolize
 .section .rodata,"a"
@@ -114,7 +115,26 @@ rodata_hex="$(
     readelf -x .rodata "$work/string-pseudo.o" |
     awk '/0x[0-9a-f]+/ {for (i=2; i<=NF; ++i) if ($i ~ /^[0-9a-f]+$/ && length($i) <= 8 && length($i) % 2 == 0) printf "%s", $i}'
 )"
-test "$text_hex" = "3335b000933516003306d040b356f7006780000013000000"
+test "$text_hex" = "3335b000933516003306d040b356f700339707016780000013000000"
 test "$rodata_hex" = "410a4241004243"
 
-echo "MINIAS_A0=PASS objects=5 format=ELF64-RISCV-ET_REL relocations=4 strings=2 pseudos=4 previous=1"
+cat >"$work/numeric-labels.s" <<'EOF'
+.text
+.globl numeric_labels
+.type numeric_labels, @function
+numeric_labels:
+  li a0, 0
+  beqz a0, 1f
+1:
+  addi a0, a0, 1
+  bnez a0, 1b
+1:
+  ret
+.size numeric_labels, .-numeric_labels
+EOF
+"$MINIAS" -o "$work/numeric-labels.o" "$work/numeric-labels.s"
+readelf -s "$work/numeric-labels.o" >"$work/numeric-labels.txt"
+grep -q '.Lminias_num_1_1' "$work/numeric-labels.txt"
+grep -q '.Lminias_num_1_2' "$work/numeric-labels.txt"
+
+echo "MINIAS_A0=PASS objects=6 format=ELF64-RISCV-ET_REL relocations=4 strings=2 pseudos=5 previous=1 numeric_labels=2"
