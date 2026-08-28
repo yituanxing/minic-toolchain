@@ -330,7 +330,9 @@ static bool verify_call_arguments(const MinicC0Program *program,
             }
         } else if (!minic_type_is_integer(argument->type) &&
                    !minic_type_is_pointer(argument->type) &&
-                   !minic_type_is_double(argument->type)) {
+                   !minic_type_is_double(argument->type) &&
+                   !(minic_type_is_record(argument->type) &&
+                     minic_c0_type_is_complete_object(program, argument->type))) {
             return false;
         }
     }
@@ -710,7 +712,9 @@ static bool verify_expression(const MinicC0Program *program,
                expression->value_category == MINIC_VALUE_RVALUE &&
                (minic_type_is_integer(expression->type) ||
                 minic_type_is_pointer(expression->type) ||
-                minic_type_is_double(expression->type));
+                minic_type_is_double(expression->type) ||
+                (minic_type_is_record(expression->type) &&
+                 minic_c0_type_is_complete_object(program, expression->type)));
     case MINIC_EXPRESSION_BUILTIN_VA_COPY:
         left = expression_before(program, expression->value.binary.left, expression_index);
         right = expression_before(program, expression->value.binary.right, expression_index);
