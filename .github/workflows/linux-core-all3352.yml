@@ -1,0 +1,156 @@
+name: Linux Core All3352 Exact
+
+on:
+  push:
+    branches:
+      - refactor/declaration-sema-v1
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  first500:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[all3352]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: Restore frozen first500 corpus
+        id: corpus
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-focus-corpus
+          key: linux-focus-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-${{ hashFiles('tests/external/linux/replay-indices.txt') }}
+          fail-on-cache-miss: true
+
+      - name: Validate frozen first500 corpus
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          manifest=build/linux-focus-corpus/selected-tus.txt
+          test -s "$manifest"
+          test "$(grep -cve '^[[:space:]]*$' "$manifest")" -eq 500
+
+      - name: Build exact compiler
+        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/all3352-first500-compiler
+
+      - name: Replay first500 exactly
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          compiler="$GITHUB_WORKSPACE/build/all3352-first500-compiler/bin/minic"
+          work="$GITHUB_WORKSPACE/build/all3352-first500"
+          CORE_FAST_TRACE=1 python3 tests/external/linux/corpus_replay.py             --minic "$compiler"             --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus"             --work "$work"             --jobs 4             --offset 0             --limit 500             --sample-count 0
+          python3 tools/ci/classify-core-strict-frontier.py             "$work/batch-results.json"             --stderr-root "$work/minic-stderr"             --ast-header "$GITHUB_WORKSPACE/src/frontend/ast.h"             --examples 50             --json-out "$work/frontier-summary.json"             --reason-text-out "$work/reason-summary.txt"             --require-no-errors
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          p = Path("build/all3352-first500/frontier-summary.json")
+          s = json.loads(p.read_text())
+          expected = dict(selected=500, pass_=500, unsupported=0, error=0, preprocess_missing=0)
+          actual = dict(selected=s["selected"], pass_=s["pass"], unsupported=s["unsupported"],
+                        error=s["error"], preprocess_missing=s["preprocess_missing"])
+          print(f"ALL3352_SHARD label=first500 selected={actual['selected']} pass={actual['pass_']} unsupported={actual['unsupported']} error={actual['error']} preprocess_missing={actual['preprocess_missing']}")
+          if actual != expected:
+              raise SystemExit(f"first500 not exact: {actual}")
+          PY
+
+  shards:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[all3352]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: new500
+            corpus_dir: linux-new500-corpus
+            cache_key: linux-new500-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-indices-500-999
+            limit: 500
+          - label: next500
+            corpus_dir: linux-next500-corpus
+            cache_key: linux-next500-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-indices-1000-1499
+            limit: 500
+          - label: next500b
+            corpus_dir: linux-next500b-corpus
+            cache_key: linux-next500b-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-indices-1500-1999
+            limit: 500
+          - label: next500c
+            corpus_dir: linux-next500c-corpus
+            cache_key: linux-next500c-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-indices-2000-2499
+            limit: 500
+          - label: next500d
+            corpus_dir: linux-next500d-corpus
+            cache_key: linux-next500d-corpus-v4-6.6.143-rv64-defconfig-gcc13.3.0-indices-2500-2999
+            limit: 500
+          - label: final352
+            corpus_dir: linux-final352-corpus
+            cache_key: linux-final352-corpus-v2-6.6.143-rv64-defconfig-gcc13.3.0-indices-3000-3351
+            limit: 352
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: Restore frozen shard corpus
+        uses: actions/cache/restore@v4
+        with:
+          path: build/${{ matrix.corpus_dir }}
+          key: ${{ matrix.cache_key }}
+          fail-on-cache-miss: true
+
+      - name: Validate frozen shard corpus
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          manifest="build/${{ matrix.corpus_dir }}/selected-tus.txt"
+          test -s "$manifest"
+          test "$(grep -cve '^[[:space:]]*$' "$manifest")" -eq ${{ matrix.limit }}
+
+      - name: Build exact compiler
+        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/all3352-${{ matrix.label }}-compiler
+
+      - name: Replay shard exactly
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          label="${{ matrix.label }}"
+          limit=${{ matrix.limit }}
+          compiler="$GITHUB_WORKSPACE/build/all3352-$label-compiler/bin/minic"
+          corpus="$GITHUB_WORKSPACE/build/${{ matrix.corpus_dir }}"
+          work="$GITHUB_WORKSPACE/build/all3352-$label"
+          CORE_FAST_TRACE=1 python3 tests/external/linux/corpus_replay.py             --minic "$compiler"             --corpus "$corpus"             --work "$work"             --jobs 4             --offset 0             --limit "$limit"             --sample-count 0
+          python3 tools/ci/classify-core-strict-frontier.py             "$work/batch-results.json"             --stderr-root "$work/minic-stderr"             --ast-header "$GITHUB_WORKSPACE/src/frontend/ast.h"             --examples 50             --json-out "$work/frontier-summary.json"             --reason-text-out "$work/reason-summary.txt"             --require-no-errors
+          LABEL="$label" LIMIT="$limit" WORK="$work" python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          s = json.loads((Path(os.environ["WORK"]) / "frontier-summary.json").read_text())
+          limit = int(os.environ["LIMIT"])
+          actual = dict(selected=s["selected"], pass_=s["pass"], unsupported=s["unsupported"],
+                        error=s["error"], preprocess_missing=s["preprocess_missing"])
+          expected = dict(selected=limit, pass_=limit, unsupported=0, error=0, preprocess_missing=0)
+          print(f"ALL3352_SHARD label={os.environ['LABEL']} selected={actual['selected']} pass={actual['pass_']} unsupported={actual['unsupported']} error={actual['error']} preprocess_missing={actual['preprocess_missing']}")
+          if actual != expected:
+              raise SystemExit(f"{os.environ['LABEL']} not exact: {actual}")
+          PY
+
+  all3352:
+    if: always() && (github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[all3352]'))
+    needs:
+      - first500
+      - shards
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Require every frozen shard exact
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "${{ needs.first500.result }}" = success
+          test "${{ needs.shards.result }}" = success
+          echo "ALL3352_EXACT head=$GITHUB_SHA selected=3352 pass=3352 unsupported=0 error=0 preprocess_missing=0"
