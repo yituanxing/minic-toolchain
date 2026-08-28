@@ -334,3 +334,92 @@ jobs:
             build/next500b-sample16/failure-contexts.txt
             build/next500b-sample16/minic-stderr/**
           if-no-files-found: warn
+
+
+  crash1573:
+    if: contains(github.event.head_commit.message, '[next500b-crash]')
+    needs: prepare-next500b-corpus
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: Restore frozen next500b corpus
+        id: next500b-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-next500b-corpus
+          key: linux-next500b-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-indices-1500-1999
+
+      - name: Require frozen corpus
+        run: |
+          test "${{ steps.next500b-cache.outputs.cache-hit }}" = true
+          test "$(grep -cve '^[[:space:]]*$' build/linux-next500b-corpus/selected-tus.txt)" -eq 500
+
+      - name: Build sanitizer compiler
+        run: make -j4 MODE=sanitize CFLAGS=-Werror BUILD_DIR=build/next500b-crash-compiler
+
+      - name: Materialize crash TU 1573
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import shutil
+
+          source = Path("build/linux-next500b-corpus")
+          crash = Path("build/linux-next500b-crash1573")
+          rows = [line for line in (source / "selected-tus.txt").read_text().splitlines()
+                  if line.strip()]
+          selected = [row for row in rows if int(row.split("\t", 1)[0]) == 1573]
+          if len(selected) != 1:
+              raise SystemExit(f"index 1573 selection mismatch: {len(selected)}")
+          shutil.rmtree(crash, ignore_errors=True)
+          (crash / "kbuild").mkdir(parents=True)
+          (crash / "selected-tus.txt").write_text(selected[0] + "\n")
+          _, _, rel_i, _ = selected[0].split("\t", 3)
+          src = source / "kbuild" / rel_i
+          dst = crash / "kbuild" / rel_i
+          dst.parent.mkdir(parents=True, exist_ok=True)
+          shutil.copy2(src, dst)
+          print(f"CRASH1573_INPUT {rel_i} bytes={dst.stat().st_size}")
+          PY
+
+      - name: Replay crash TU under ASan UBSan
+        shell: bash
+        env:
+          ASAN_OPTIONS: detect_leaks=0:abort_on_error=1:symbolize=1
+          UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
+        run: |
+          set -Eeuo pipefail
+          compiler="$GITHUB_WORKSPACE/build/next500b-crash-compiler/bin/minic"
+          corpus="$GITHUB_WORKSPACE/build/linux-next500b-crash1573"
+          work="$GITHUB_WORKSPACE/build/next500b-crash1573-work"
+          set +e
+          CORE_FAST_TRACE=1 python3 tests/external/linux/corpus_replay.py \
+            --minic "$compiler" \
+            --corpus "$corpus" \
+            --work "$work" \
+            --jobs 1 \
+            --offset 0 \
+            --limit 1 \
+            --sample-count 0
+          status=$?
+          set -e
+          echo "CRASH1573_REPLAY_STATUS=$status"
+          find "$work/minic-stderr" -type f -maxdepth 20 -print -exec sh -c 'echo "===== $1"; cat "$1"' _ {} \;
+          exit 0
+
+      - name: Persist crash evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-next500b-crash1573-${{ github.sha }}
+          path: |
+            build/next500b-crash1573-work/batch-results.json
+            build/next500b-crash1573-work/batch-results.tsv
+            build/next500b-crash1573-work/minic-stderr/**
+          if-no-files-found: warn
