@@ -737,7 +737,8 @@ static bool add_data_stmt(MiniAs *as, const char *op, char *args, size_t line) {
                 const char *trimmed = minias_trim(cursor);
                 bool supported =
                     (width == 8U && minias_parse_symbol_addend(trimmed, &expr)) ||
-                    (width == 4U && parse_symbol_minus_dot(trimmed, &expr));
+                    ((width == 2U || width == 4U || width == 8U) &&
+                     parse_symbol_minus_dot(trimmed, &expr));
 
                 if (!supported) {
                     minias_set_error(as,
@@ -765,6 +766,88 @@ static bool add_data_stmt(MiniAs *as, const char *op, char *args, size_t line) {
     }
     as->sections[(size_t)as->current_section].size += (size_t)bytes;
     return true;
+}
+
+static uint32_t add_relocation_type_for_width(unsigned int width) {
+    return width == 2U ? MINIAS_R_RISCV_ADD16
+           : width == 4U ? MINIAS_R_RISCV_ADD32
+           : width == 8U ? MINIAS_R_RISCV_ADD64
+                         : 0U;
+}
+
+static uint32_t sub_relocation_type_for_width(unsigned int width) {
+    return width == 2U ? MINIAS_R_RISCV_SUB16
+           : width == 4U ? MINIAS_R_RISCV_SUB32
+           : width == 8U ? MINIAS_R_RISCV_SUB64
+                         : 0U;
+}
+
+static bool emit_symbol_minus_dot(MiniAs *as,
+                                  const MiniAsStmt *stmt,
+                                  unsigned int width,
+                                  uint64_t relocation_offset,
+                                  const MiniAsSymbolExpr *expr) {
+    MiniAsSymbol *target = minias_get_symbol(as, expr->name, false);
+    uint32_t add_type = add_relocation_type_for_width(width);
+    uint32_t sub_type = sub_relocation_type_for_width(width);
+
+    if (target != NULL && target->defined && target->section == stmt->section) {
+        int64_t difference =
+            (int64_t)target->value + expr->addend - (int64_t)relocation_offset;
+        uint64_t value = (uint64_t)difference;
+        unsigned char bytes[8];
+        unsigned int i;
+
+        for (i = 0U; i < width; ++i) {
+            bytes[i] = (unsigned char)((value >> (i * 8U)) & 0xffU);
+        }
+        return minias_section_append(as, stmt->section, bytes, width);
+    }
+
+    if (add_type == 0U || sub_type == 0U) {
+        minias_set_error(as,
+                         "unsupported-symbol-difference-width:%u:line=%zu",
+                         width,
+                         stmt->line);
+        return false;
+    }
+
+    {
+        char anchor_name[96];
+        int written;
+        MiniAsSymbol *anchor;
+
+        written = snprintf(anchor_name,
+                           sizeof(anchor_name),
+                           ".Lminias_expr_%zu",
+                           ++as->expr_anchor_counter);
+        if (written < 0 || (size_t)written >= sizeof(anchor_name)) {
+            minias_set_error(as, "expr-anchor-too-long:line=%zu", stmt->line);
+            return false;
+        }
+        anchor = minias_get_symbol(as, anchor_name, true);
+        if (anchor == NULL) {
+            return false;
+        }
+        anchor->defined = true;
+        anchor->section = stmt->section;
+        anchor->value = relocation_offset;
+        anchor->bind = MINIAS_STB_LOCAL;
+
+        return minias_section_append_zero(as, stmt->section, width) &&
+               minias_add_relocation(as,
+                                     stmt->section,
+                                     relocation_offset,
+                                     add_type,
+                                     expr->name,
+                                     expr->addend) &&
+               minias_add_relocation(as,
+                                     stmt->section,
+                                     relocation_offset,
+                                     sub_type,
+                                     anchor_name,
+                                     0);
+    }
 }
 
 static bool emit_data_stmt(MiniAs *as, const MiniAsStmt *stmt) {
@@ -813,27 +896,13 @@ static bool emit_data_stmt(MiniAs *as, const MiniAsStmt *stmt) {
             uint64_t relocation_offset =
                 (uint64_t)as->sections[(size_t)stmt->section].size;
 
-            if (width == 4U && parse_symbol_minus_dot(trimmed, &expr)) {
-                MiniAsSymbol *target = minias_get_symbol(as, expr.name, false);
-                int64_t difference;
-
-                if (target == NULL || !target->defined ||
-                    target->section != stmt->section) {
-                    minias_set_error(as,
-                                     "unresolved-symbol-difference:%s:line=%zu",
-                                     trimmed,
-                                     stmt->line);
-                    free(copy);
-                    return false;
-                }
-                difference = (int64_t)target->value + expr.addend -
-                             (int64_t)relocation_offset;
-                value = (uint64_t)difference;
-                for (i = 0U; i < width; ++i) {
-                    bytes[i] =
-                        (unsigned char)((value >> (i * 8U)) & 0xffU);
-                }
-                if (!minias_section_append(as, stmt->section, bytes, width)) {
+            if ((width == 2U || width == 4U || width == 8U) &&
+                parse_symbol_minus_dot(trimmed, &expr)) {
+                if (!emit_symbol_minus_dot(as,
+                                           stmt,
+                                           width,
+                                           relocation_offset,
+                                           &expr)) {
                     free(copy);
                     return false;
                 }
