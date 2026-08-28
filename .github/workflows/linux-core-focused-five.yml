@@ -40,10 +40,15 @@ jobs:
       - name: Replay five cross-shard regressions
         shell: bash
         run: |
-          set -Eeuo pipefail
+          set -Euo pipefail
           compiler="$GITHUB_WORKSPACE/build/linux-five-compiler/bin/minic"
-          CORE_FAST_TRACE=1 python3 tests/external/linux/corpus_replay.py             --minic "$compiler"             --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus"             --work "$GITHUB_WORKSPACE/build/linux-five-first"             --jobs 1             --indices 254
-          CORE_FAST_TRACE=1 python3 tests/external/linux/corpus_replay.py             --minic "$compiler"             --corpus "$GITHUB_WORKSPACE/build/linux-new500-corpus"             --work "$GITHUB_WORKSPACE/build/linux-five-new"             --jobs 4             --indices 775,779,879,881
+          set +e
+          CORE_FAST_TRACE=1 python3 tests/external/linux/corpus_replay.py --minic "$compiler" --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" --work "$GITHUB_WORKSPACE/build/linux-five-first" --jobs 1 --indices 254
+          first_status=$?
+          CORE_FAST_TRACE=1 python3 tests/external/linux/corpus_replay.py --minic "$compiler" --corpus "$GITHUB_WORKSPACE/build/linux-new500-corpus" --work "$GITHUB_WORKSPACE/build/linux-five-new" --jobs 4 --indices 775,779,879,881
+          new_status=$?
+          set -e
+          echo "FOCUSED_REPLAY_STATUS first=$first_status new=$new_status"
 
       - name: Print exact failing source context
         shell: bash
