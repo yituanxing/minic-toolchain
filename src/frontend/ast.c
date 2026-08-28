@@ -1346,7 +1346,7 @@ bool minic_c0_program_add_type_alias(MinicC0Program *program,
     MinicTypeAlias alias;
     size_t index;
 
-    if (program == NULL || name == NULL || alias_id == NULL || minic_type_is_void(type)) {
+    if (program == NULL || name == NULL || alias_id == NULL) {
         return false;
     }
     for (index = 0U; index < program->type_alias_count; ++index) {
