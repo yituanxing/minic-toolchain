@@ -939,7 +939,8 @@ static bool add_data_stmt(MiniAs *as, const char *op, char *args, size_t line) {
                 const char *trimmed = minias_trim(cursor);
                 MiniAsSymbolExpr rhs_expr;
                 bool supported =
-                    (width == 8U && minias_parse_symbol_addend(trimmed, &expr)) ||
+                    ((width == 4U || width == 8U) &&
+                     minias_parse_symbol_addend(trimmed, &expr)) ||
                     ((width == 2U || width == 4U || width == 8U) &&
                      (parse_symbol_minus_dot(trimmed, &expr) ||
                       parse_symbol_difference(trimmed, &expr, &rhs_expr)));
@@ -1174,7 +1175,8 @@ static bool emit_data_stmt(MiniAs *as, const MiniAsStmt *stmt) {
                         return false;
                     }
                 } else {
-                    if (width != 8U ||
+                    uint32_t relocation_type;
+                    if ((width != 4U && width != 8U) ||
                         !minias_parse_symbol_addend(trimmed, &expr)) {
                         minias_set_error(as,
                                          "unsupported-expression:%s:%s:line=%zu",
@@ -1184,11 +1186,13 @@ static bool emit_data_stmt(MiniAs *as, const MiniAsStmt *stmt) {
                         free(copy);
                         return false;
                     }
-                    if (!minias_section_append_zero(as, stmt->section, 8U) ||
+                    relocation_type =
+                        width == 4U ? MINIAS_R_RISCV_32 : MINIAS_R_RISCV_64;
+                    if (!minias_section_append_zero(as, stmt->section, width) ||
                         !minias_add_relocation(as,
                                               stmt->section,
                                               relocation_offset,
-                                              MINIAS_R_RISCV_64,
+                                              relocation_type,
                                               expr.name,
                                               expr.addend)) {
                         free(copy);
