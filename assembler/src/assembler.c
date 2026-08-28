@@ -1196,16 +1196,6 @@ static bool emit_data_stmt(MiniAs *as, const MiniAsStmt *stmt) {
                     }
                 }
             }
-            /*
-             * The symbolic branches above either emitted this item directly
-             * or failed.  Numeric literals are handled by the outer else.
-             */
-            if (false) {
-                if (width != 8U ||
-                    !minias_parse_symbol_addend(trimmed, &expr)) {
-                    return false;
-                }
-            }
         } else {
             value = (uint64_t)signed_value;
             for (i = 0U; i < width; ++i) {
