@@ -54,7 +54,7 @@ readelf -h "$work/data.o" | grep -q 'RISC-V'
 readelf -s "$work/data.o" | grep -Eq '[[:space:]]15[[:space:]]+OBJECT[[:space:]]+GLOBAL.* foo'
 data_hex="$(
     readelf -x .rodata "$work/data.o" |
-    awk '/0x[0-9a-f]+/ {for (i=2; i<=NF; ++i) if ($i ~ /^[0-9a-f]{8}$/) printf "%s", $i}'
+    awk '/0x[0-9a-f]+/ {for (i=2; i<=NF; ++i) if ($i ~ /^[0-9a-f]+$/ && length($i) <= 8 && length($i) % 2 == 0) printf "%s", $i}'
 )"
 test "$data_hex" = "01000000feffffff78563412000000"
 
