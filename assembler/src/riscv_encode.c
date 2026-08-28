@@ -265,6 +265,61 @@ static bool decode_amo_mnemonic(const char *op,
     return true;
 }
 
+static bool decode_lr_sc_mnemonic(const char *op,
+                                  bool *is_lr,
+                                  uint32_t *width_funct3,
+                                  uint32_t *ordering_bits) {
+    char core[32];
+    size_t n;
+    const char *suffix;
+
+    if (op == NULL || is_lr == NULL || width_funct3 == NULL ||
+        ordering_bits == NULL) {
+        return false;
+    }
+    n = strlen(op);
+    if (n == 0U || n >= sizeof(core)) {
+        return false;
+    }
+    memcpy(core, op, n + 1U);
+
+    *ordering_bits = 0U;
+    if (n > 5U && strcmp(core + n - 5U, ".aqrl") == 0) {
+        core[n - 5U] = '\0';
+        *ordering_bits = (1U << 26U) | (1U << 25U);
+    } else if (n > 3U && strcmp(core + n - 3U, ".aq") == 0) {
+        core[n - 3U] = '\0';
+        *ordering_bits = 1U << 26U;
+    } else if (n > 3U && strcmp(core + n - 3U, ".rl") == 0) {
+        core[n - 3U] = '\0';
+        *ordering_bits = 1U << 25U;
+    }
+
+    n = strlen(core);
+    if (n < 3U || core[n - 2U] != '.') {
+        return false;
+    }
+    suffix = core + n - 2U;
+    if (strcmp(suffix, ".w") == 0) {
+        *width_funct3 = 2U;
+    } else if (strcmp(suffix, ".d") == 0) {
+        *width_funct3 = 3U;
+    } else {
+        return false;
+    }
+    core[n - 2U] = '\0';
+
+    if (strcmp(core, "lr") == 0) {
+        *is_lr = true;
+        return true;
+    }
+    if (strcmp(core, "sc") == 0) {
+        *is_lr = false;
+        return true;
+    }
+    return false;
+}
+
 static size_t split_operands(const char *args, char out[][128], size_t max_out) {
     size_t count = 0U;
     size_t pos = 0U;
@@ -462,6 +517,19 @@ bool minias_riscv_measure(const char *op,
     if (strcmp(op, "tail") == 0) {
         (void)snprintf(reason, reason_size, "unsupported-reloc-instruction:%s", op);
         return false;
+    }
+
+    {
+        bool is_lr;
+        uint32_t atomic_width;
+        uint32_t atomic_ordering;
+        if (decode_lr_sc_mnemonic(op, &is_lr, &atomic_width, &atomic_ordering)) {
+            (void)is_lr;
+            (void)atomic_width;
+            (void)atomic_ordering;
+            *size = 4U;
+            return true;
+        }
     }
 
     {
@@ -734,6 +802,45 @@ bool minias_riscv_encode(MiniAs *as, const MiniAsStmt *stmt) {
         }
         return append_u32(as, stmt->section, 0x10500073U);
     }
+    {
+        bool is_lr;
+        uint32_t atomic_width;
+        uint32_t atomic_ordering;
+        if (decode_lr_sc_mnemonic(stmt->op,
+                                  &is_lr,
+                                  &atomic_width,
+                                  &atomic_ordering)) {
+            char base[128];
+            int64_t offset;
+            uint32_t funct5 = is_lr ? 0x02U : 0x03U;
+
+            if (is_lr) {
+                if (count != 2U || !require_reg(as, stmt, operands[0], &rd) ||
+                    !parse_mem(operands[1], &offset, base) || offset != 0 ||
+                    !require_reg(as, stmt, base, &rs1)) {
+                    minias_set_error(as, "bad-%s:line=%zu", stmt->op, stmt->line);
+                    return false;
+                }
+                rs2 = 0;
+            } else {
+                if (count != 3U || !require_reg(as, stmt, operands[0], &rd) ||
+                    !require_reg(as, stmt, operands[1], &rs2) ||
+                    !parse_mem(operands[2], &offset, base) || offset != 0 ||
+                    !require_reg(as, stmt, base, &rs1)) {
+                    minias_set_error(as, "bad-%s:line=%zu", stmt->op, stmt->line);
+                    return false;
+                }
+            }
+            return append_u32(as,
+                              stmt->section,
+                              0x2fU | ((uint32_t)rd << 7U) |
+                                  (atomic_width << 12U) |
+                                  ((uint32_t)rs1 << 15U) |
+                                  ((uint32_t)rs2 << 20U) |
+                                  atomic_ordering | (funct5 << 27U));
+        }
+    }
+
     {
         uint32_t amo_funct5;
         uint32_t amo_width;
