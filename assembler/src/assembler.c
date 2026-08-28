@@ -283,6 +283,7 @@ void minias_destroy(MiniAs *as) {
     free(as->stmts);
     free(as->relocs);
     free(as->section_stack);
+    free(as->numeric_label_counts);
     memset(as, 0, sizeof(*as));
 }
 
@@ -948,20 +949,52 @@ static bool parse_numeric_label_id(const char *text, size_t *id) {
     size_t value = 0U;
     const char *p = text;
 
-    if (text == NULL || *text == '\0') {
+    if (text == NULL || id == NULL || *text == '\0') {
         return false;
     }
     while (*p != '\0') {
+        size_t digit;
         if (!isdigit((unsigned char)*p)) {
             return false;
         }
-        value = value * 10U + (size_t)(*p - '0');
-        if (value >= MINIAS_NUMERIC_LABEL_LIMIT) {
+        digit = (size_t)(*p - '0');
+        if (value > (SIZE_MAX - digit) / 10U) {
             return false;
         }
+        value = value * 10U + digit;
         ++p;
     }
     *id = value;
+    return true;
+}
+
+static bool ensure_numeric_label_slot(MiniAs *as, size_t id) {
+    size_t next_capacity;
+    size_t *next;
+
+    if (id < as->numeric_label_capacity) {
+        return true;
+    }
+    next_capacity = as->numeric_label_capacity == 0U ? 16U
+                                                    : as->numeric_label_capacity;
+    while (next_capacity <= id) {
+        if (next_capacity > SIZE_MAX / 2U) {
+            minias_set_error(as, "numeric-label-too-large:%zu", id);
+            return false;
+        }
+        next_capacity *= 2U;
+    }
+    next = realloc(as->numeric_label_counts,
+                   next_capacity * sizeof(*as->numeric_label_counts));
+    if (next == NULL) {
+        minias_set_error(as, "out-of-memory:numeric-labels");
+        return false;
+    }
+    memset(next + as->numeric_label_capacity,
+           0,
+           (next_capacity - as->numeric_label_capacity) * sizeof(*next));
+    as->numeric_label_counts = next;
+    as->numeric_label_capacity = next_capacity;
     return true;
 }
 
@@ -1049,15 +1082,20 @@ static bool rewrite_numeric_local_refs(MiniAs *as,
             int written;
 
             while (isdigit((unsigned char)*p)) {
-                label_id = label_id * 10U + (size_t)(*p - '0');
-                if (label_id >= MINIAS_NUMERIC_LABEL_LIMIT) {
+                size_t digit = (size_t)(*p - '0');
+                if (label_id > (SIZE_MAX - digit) / 10U) {
+                    p = digits;
                     break;
                 }
+                label_id = label_id * 10U + digit;
                 ++p;
             }
-            if (label_id < MINIAS_NUMERIC_LABEL_LIMIT &&
-                (*p == 'f' || *p == 'b') &&
+            if (p != digits && (*p == 'f' || *p == 'b') &&
                 numeric_ref_boundary(p[1])) {
+                if (!ensure_numeric_label_slot(as, label_id)) {
+                    free(buffer);
+                    return false;
+                }
                 if (*p == 'b') {
                     if (as->numeric_label_counts[label_id] == 0U) {
                         minias_set_error(as,
@@ -1151,8 +1189,12 @@ static bool define_label(MiniAs *as, char *label, size_t line) {
     }
     if (parse_numeric_label_id(label, &numeric_id)) {
         int written;
-        size_t generation = ++as->numeric_label_counts[numeric_id];
+        size_t generation;
 
+        if (!ensure_numeric_label_slot(as, numeric_id)) {
+            return false;
+        }
+        generation = ++as->numeric_label_counts[numeric_id];
         written = snprintf(canonical,
                            sizeof(canonical),
                            ".Lminias_num_%zu_%zu",
@@ -1191,20 +1233,25 @@ static bool process_statement(MiniAs *as, char *text, size_t line) {
     }
 
     for (;;) {
-        char *prefix_end = text;
+        char *token_end = text;
+        char *colon;
 
-        while (*prefix_end != '\0' && *prefix_end != ':' &&
-               !isspace((unsigned char)*prefix_end)) {
-            ++prefix_end;
+        while (*token_end != '\0' && *token_end != ':' &&
+               !isspace((unsigned char)*token_end)) {
+            ++token_end;
         }
-        if (*prefix_end != ':') {
+        colon = token_end;
+        while (*colon == ' ' || *colon == '\t') {
+            ++colon;
+        }
+        if (*colon != ':') {
             break;
         }
-        *prefix_end = '\0';
+        *token_end = '\0';
         if (!define_label(as, text, line)) {
             return false;
         }
-        text = minias_trim(prefix_end + 1);
+        text = minias_trim(colon + 1);
         if (*text == '\0') {
             return true;
         }
