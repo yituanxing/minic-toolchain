@@ -149,6 +149,8 @@ isa_next:
   ebreak
   pause
   amoadd.w a0, a1, (a2)
+  wfi
+  amoadd.d a0, a1, (a2)
   ret
 .size isa_next, .-isa_next
 EOF
@@ -157,7 +159,7 @@ isa_hex="$(
     readelf -x .text "$work/isa-next.o" |
     awk '/0x[0-9a-f]+/ {for (i=2; i<=NF; ++i) if ($i ~ /^[0-9a-f]+$/ && length($i) <= 8 && length($i) % 2 == 0) printf "%s", $i}'
 )"
-test "$isa_hex" = "13052001131585001305450313158500130565051315850013058507131585001305a509131585001305c50b131585001305e50d131585001305050f33d5c5400f003003f3250010730010000f0000012f25b60067800000"
+test "$isa_hex" = "13052001131585001305450313158500130565051315850013058507131585001305a509131585001305c50b131585001305e50d131585001305050f33d5c5400f003003f3250010730010000f0000012f25b600730050102f35b60067800000"
 
 cat >"$work/section-stack.s" <<'EOF'
 .text
@@ -183,4 +185,17 @@ stack_data="$(
 test "$stack_text" = "1300000067800000"
 test "$stack_data" = "aa"
 
-echo "MINIAS_A0=PASS objects=8 format=ELF64-RISCV-ET_REL relocations=4 strings=2 pseudos=6 previous=1 numeric_labels=2 isa_next=7 section_stack=1"
+cat >"$work/local-difference.s" <<'EOF'
+.data
+1:
+  .byte 0
+  .word 1b - .
+EOF
+"$MINIAS" -o "$work/local-difference.o" "$work/local-difference.s"
+difference_hex="$(
+    readelf -x .data "$work/local-difference.o" |
+    awk '/0x[0-9a-f]+/ {for (i=2; i<=NF; ++i) if ($i ~ /^[0-9a-f]+$/ && length($i) <= 8 && length($i) % 2 == 0) printf "%s", $i}'
+)"
+test "$difference_hex" = "00ffffffff"
+
+echo "MINIAS_A0=PASS objects=9 format=ELF64-RISCV-ET_REL relocations=4 strings=2 pseudos=6 previous=1 numeric_labels=3 isa_next=9 section_stack=1 local_difference=1"
