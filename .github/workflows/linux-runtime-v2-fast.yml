@@ -156,17 +156,17 @@ jobs:
           INITRAMFS="$GITHUB_WORKSPACE/build/linux-runtime-v2-fast-runtime/runtime-initramfs.cpio.gz" \
           BUILD_DIR="$GITHUB_WORKSPACE/build/linux-runtime-v2-fast-runtime/qemu" \
           LINUX_RELEASE=6.6.143 \
-          LINUX_RUNTIME_PROFILE=fast \
+          LINUX_RUNTIME_PROFILE=p1 \
           QEMU_SYSTEM_RISCV64=qemu-system-riscv64 \
           QEMU_TIMEOUT_SECONDS=90 \
           QEMU_SHELL_INPUT_DELAY_SECONDS=8 \
             bash tests/external/linux/runtime_boot.sh
 
           python3 tests/external/linux/runtime_v2_log_check.py \
-            --profile p0 \
+            --profile p1 \
             --log "$GITHUB_WORKSPACE/build/linux-runtime-v2-fast-runtime/qemu/rdinit-init.log"
 
-          echo "LINUX_RUNTIME_V2_FAST=PASS image=minic-kbuild profile=fast lanes=1/1 head=$GITHUB_SHA"
+          echo "LINUX_RUNTIME_V2_FAST=PASS image=minic-kbuild profile=p1 lanes=1/1 head=$GITHUB_SHA"
 
       - name: Preserve runtime blocker
         if: failure()
