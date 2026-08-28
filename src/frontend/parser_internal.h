@@ -148,6 +148,8 @@ typedef struct MinicParsedFunctionDeclarator {
     MinicParsedAttributeList attributes;
     MinicType parameter_types[MINIC_MAX_FUNCTION_PARAMETERS];
     size_t parameter_count;
+    MinicType inner_parameter_types[MINIC_MAX_FUNCTION_PARAMETERS];
+    size_t inner_parameter_count;
     size_t pointer_depth;
     unsigned int pointer_const_qualifiers;
     unsigned int pointer_volatile_qualifiers;
@@ -157,6 +159,8 @@ typedef struct MinicParsedFunctionDeclarator {
     bool array_outermost_incomplete;
     bool has_name;
     bool is_variadic;
+    bool has_inner_function_suffix;
+    bool inner_is_variadic;
 } MinicParsedFunctionDeclarator;
 
 void minic_parser_error(MinicParser *parser, const char *format, ...);
