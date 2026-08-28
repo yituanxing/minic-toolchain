@@ -611,6 +611,35 @@ static unsigned int data_width(const char *op) {
     return 0U;
 }
 
+static bool parse_symbol_minus_dot(const char *text, MiniAsSymbolExpr *expr) {
+    char *copy;
+    char *minus;
+    char *suffix;
+    bool ok;
+
+    if (text == NULL || expr == NULL) {
+        return false;
+    }
+    copy = minias_strdup(text);
+    if (copy == NULL) {
+        return false;
+    }
+    minus = strrchr(copy, '-');
+    if (minus == NULL) {
+        free(copy);
+        return false;
+    }
+    *minus = '\0';
+    suffix = minias_trim(minus + 1);
+    if (strcmp(suffix, ".") != 0) {
+        free(copy);
+        return false;
+    }
+    ok = minias_parse_symbol_addend(minias_trim(copy), expr);
+    free(copy);
+    return ok;
+}
+
 static bool add_data_stmt(MiniAs *as, const char *op, char *args, size_t line) {
     uint64_t count = 0U;
     uint64_t bytes;
@@ -652,11 +681,16 @@ static bool add_data_stmt(MiniAs *as, const char *op, char *args, size_t line) {
             }
             if (!parse_i64_data(minias_trim(cursor), &value)) {
                 MiniAsSymbolExpr expr;
-                if (width != 8U || !minias_parse_symbol_addend(minias_trim(cursor), &expr)) {
+                const char *trimmed = minias_trim(cursor);
+                bool supported =
+                    (width == 8U && minias_parse_symbol_addend(trimmed, &expr)) ||
+                    (width == 4U && parse_symbol_minus_dot(trimmed, &expr));
+
+                if (!supported) {
                     minias_set_error(as,
                                      "unsupported-expression:%s:%s:line=%zu",
                                      op,
-                                     minias_trim(cursor),
+                                     trimmed,
                                      line);
                     free(copy);
                     return false;
@@ -722,27 +756,55 @@ static bool emit_data_stmt(MiniAs *as, const MiniAsStmt *stmt) {
         }
         if (!parse_i64_data(minias_trim(cursor), &signed_value)) {
             MiniAsSymbolExpr expr;
+            const char *trimmed = minias_trim(cursor);
             uint64_t relocation_offset =
                 (uint64_t)as->sections[(size_t)stmt->section].size;
 
-            if (width != 8U || !minias_parse_symbol_addend(minias_trim(cursor), &expr)) {
-                minias_set_error(as,
-                                 "unsupported-expression:%s:%s:line=%zu",
-                                 stmt->op,
-                                 minias_trim(cursor),
-                                 stmt->line);
-                free(copy);
-                return false;
-            }
-            if (!minias_section_append_zero(as, stmt->section, 8U) ||
-                !minias_add_relocation(as,
-                                      stmt->section,
-                                      relocation_offset,
-                                      MINIAS_R_RISCV_64,
-                                      expr.name,
-                                      expr.addend)) {
-                free(copy);
-                return false;
+            if (width == 4U && parse_symbol_minus_dot(trimmed, &expr)) {
+                MiniAsSymbol *target = minias_get_symbol(as, expr.name, false);
+                int64_t difference;
+
+                if (target == NULL || !target->defined ||
+                    target->section != stmt->section) {
+                    minias_set_error(as,
+                                     "unresolved-symbol-difference:%s:line=%zu",
+                                     trimmed,
+                                     stmt->line);
+                    free(copy);
+                    return false;
+                }
+                difference = (int64_t)target->value + expr.addend -
+                             (int64_t)relocation_offset;
+                value = (uint64_t)difference;
+                for (i = 0U; i < width; ++i) {
+                    bytes[i] =
+                        (unsigned char)((value >> (i * 8U)) & 0xffU);
+                }
+                if (!minias_section_append(as, stmt->section, bytes, width)) {
+                    free(copy);
+                    return false;
+                }
+            } else {
+                if (width != 8U ||
+                    !minias_parse_symbol_addend(trimmed, &expr)) {
+                    minias_set_error(as,
+                                     "unsupported-expression:%s:%s:line=%zu",
+                                     stmt->op,
+                                     trimmed,
+                                     stmt->line);
+                    free(copy);
+                    return false;
+                }
+                if (!minias_section_append_zero(as, stmt->section, 8U) ||
+                    !minias_add_relocation(as,
+                                          stmt->section,
+                                          relocation_offset,
+                                          MINIAS_R_RISCV_64,
+                                          expr.name,
+                                          expr.addend)) {
+                    free(copy);
+                    return false;
+                }
             }
         } else {
             value = (uint64_t)signed_value;
@@ -1091,7 +1153,18 @@ static bool process_statement(MiniAs *as, char *text, size_t line) {
         if (data_width(op) != 0U || strcmp(op, ".zero") == 0 ||
             strcmp(op, ".space") == 0 || strcmp(op, ".asciz") == 0 ||
             strcmp(op, ".string") == 0 || strcmp(op, ".ascii") == 0) {
-            return add_data_stmt(as, op, args, line);
+            char *rewritten_args = NULL;
+            bool ok;
+
+            if (!rewrite_numeric_local_refs(as,
+                                            args,
+                                            &rewritten_args,
+                                            line)) {
+                return false;
+            }
+            ok = add_data_stmt(as, op, rewritten_args, line);
+            free(rewritten_args);
+            return ok;
         }
         minias_set_error(as, "unsupported-directive:%s:line=%zu", op, line);
         return false;
