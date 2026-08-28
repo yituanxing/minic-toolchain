@@ -9178,6 +9178,9 @@ lower_block(MinicCoreLowerContext *context, const MinicBlock *source_block, bool
         if (statement->cleanup_context != statement->cleanup_stop_context &&
             statement->kind != MINIC_STATEMENT_RETURN &&
             statement->kind != MINIC_STATEMENT_ASSIGN &&
+            !(statement->kind == MINIC_STATEMENT_GOTO &&
+              statement->expression == MINIC_EXPRESSION_INVALID &&
+              statement->target_statement != MINIC_STATEMENT_INVALID) &&
             !(statement->kind == MINIC_STATEMENT_LABEL &&
               statement_index + 1U < source_block->statement_count &&
               internal_while_label_pair(
@@ -9307,6 +9310,13 @@ lower_block(MinicCoreLowerContext *context, const MinicBlock *source_block, bool
                     target_statement->kind != MINIC_STATEMENT_LABEL) {
                     status = MINIC_CORE_LOWER_ERROR;
                     break;
+                }
+                if (statement->cleanup_context != statement->cleanup_stop_context) {
+                    status = lower_cleanup_contexts(
+                        context, statement->cleanup_context, statement->cleanup_stop_context);
+                    if (status != MINIC_CORE_LOWER_OK) {
+                        break;
+                    }
                 }
                 status = ensure_statement_block(
                     context, statement->target_statement, &target_block);
