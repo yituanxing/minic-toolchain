@@ -296,6 +296,13 @@ bool minias_riscv_encode(MiniAs *as, const MiniAsStmt *stmt) {
         }
         return append_u32(as, stmt->section, enc_i(0x67U, 0, 0U, rs1, 0));
     }
+    if (strcmp(stmt->op, "snez") == 0) {
+        if (count != 2U || !require_reg(as, stmt, operands[0], &rd) ||
+            !require_reg(as, stmt, operands[1], &rs1)) {
+            return false;
+        }
+        return append_u32(as, stmt->section, enc_r(0x33U, rd, 3U, 0, rs1, 0U));
+    }
     if (strcmp(stmt->op, "li") == 0) {
         int64_t hi;
         int64_t lo;
