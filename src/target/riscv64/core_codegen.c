@@ -47,6 +47,7 @@ typedef struct MinicRiscv64CoreFrame {
     size_t varargs_offset;
     size_t varargs_size;
     size_t integer_parameter_count;
+    size_t variadic_fixed_stack_slots;
     bool saves_return_address;
     bool has_hidden_result_pointer;
     bool has_dynamic_stack_alignment;
@@ -160,12 +161,14 @@ static bool core_function_uses_variadic_argument_address(
 
 static bool core_variadic_fixed_prefix(const MinicC0Program *program,
                                        const MinicCoreFunction *function,
-                                       size_t *integer_parameter_count) {
+                                       size_t *integer_parameter_count,
+                                       size_t *fixed_stack_slots) {
     MinicRiscv64AbiCursor cursor;
     MinicRiscv64AbiValue return_value;
     size_t parameter_index;
 
     if (program == NULL || function == NULL || integer_parameter_count == NULL ||
+        fixed_stack_slots == NULL ||
         !minic_riscv64_abi_cursor_initialize_for_return(
             program, function->return_type, &cursor, &return_value)) {
         return false;
@@ -179,13 +182,17 @@ static bool core_variadic_fixed_prefix(const MinicC0Program *program,
             return false;
         }
     }
-    /* Match the established RV64 frontend/backend contract: va_start is
-       currently supported only while all named parameters fit before the
-       incoming stack-argument area. */
-    if (cursor.stack_slot_count != 0U || cursor.integer_register_count > 8U) {
+    /* RV64 varargs are contiguous after the named prefix. If integer argument
+       registers remain, preserve them in the callee frame as before. Once the
+       named prefix has exhausted a0-a7, the first unnamed argument starts
+       directly after the named incoming stack slots. Keep mixed register/stack
+       prefixes fail-closed unless all integer argument registers are consumed. */
+    if (cursor.integer_register_count > 8U ||
+        (cursor.stack_slot_count != 0U && cursor.integer_register_count != 8U)) {
         return false;
     }
     *integer_parameter_count = cursor.integer_register_count;
+    *fixed_stack_slots = cursor.stack_slot_count;
     return true;
 }
 
@@ -404,10 +411,13 @@ static bool core_frame_initialize(const MinicC0Program *program,
     frame->has_variadic_argument_address =
         core_function_uses_variadic_argument_address(function);
     frame->integer_parameter_count = 0U;
+    frame->variadic_fixed_stack_slots = 0U;
     frame->varargs_size = 0U;
     if (frame->has_variadic_argument_address) {
-        if (!core_variadic_fixed_prefix(
-                program, function, &frame->integer_parameter_count)) {
+        if (!core_variadic_fixed_prefix(program,
+                                        function,
+                                        &frame->integer_parameter_count,
+                                        &frame->variadic_fixed_stack_slots)) {
             return false;
         }
         frame->varargs_size = (8U - frame->integer_parameter_count) * 8U;
@@ -718,6 +728,46 @@ static bool core_scalar_bitcast_supported(const MinicC0Program *program,
     return source_size != 0U && source_size <= 8U && target_size != 0U && target_size <= 8U;
 }
 
+static bool core_integer_type_range_fits(const MinicC0Program *program,
+                                         const MinicCoreFunction *function,
+                                         MinicType source_type,
+                                         MinicType result_type) {
+    MinicType effective_source;
+    MinicType effective_result;
+    size_t source_alignment;
+    size_t source_size;
+    size_t result_alignment;
+    size_t result_size;
+    bool source_signed;
+    bool result_signed;
+
+    if (program == NULL || function == NULL ||
+        !minic_type_is_integer(source_type) || !minic_type_is_integer(result_type) ||
+        !minic_core_function_effective_integer_type(function, source_type, &effective_source) ||
+        !minic_core_function_effective_integer_type(function, result_type, &effective_result) ||
+        !minic_data_layout_type(
+            minic_default_data_layout(), program, source_type, &source_size, &source_alignment) ||
+        !minic_data_layout_type(
+            minic_default_data_layout(), program, result_type, &result_size, &result_alignment) ||
+        source_size == 0U || source_size > 8U || result_size == 0U || result_size > 8U) {
+        return false;
+    }
+    (void)source_alignment;
+    (void)result_alignment;
+    source_signed = minic_type_is_signed_integer(effective_source);
+    result_signed = minic_type_is_signed_integer(effective_result);
+    if ((!source_signed && !minic_type_is_unsigned_integer(effective_source)) ||
+        (!result_signed && !minic_type_is_unsigned_integer(effective_result))) {
+        return false;
+    }
+    if (source_signed == result_signed) {
+        return source_size <= result_size;
+    }
+    /* Every unsigned N-bit value fits a signed result only when the result has
+       strictly more value bits. A signed range never wholly fits unsigned. */
+    return !source_signed && result_signed && source_size < result_size;
+}
+
 static bool core_integer_overflow_supported(const MinicC0Program *program,
                                             const MinicCoreFunction *function,
                                             const MinicCoreInstruction *instruction,
@@ -775,11 +825,15 @@ static bool core_integer_overflow_supported(const MinicC0Program *program,
     (void)right_alignment;
     result_is_unsigned = minic_type_is_unsigned_integer(effective_result_type);
 
-    if (!minic_type_equal(left_type, pointee) || !minic_type_equal(right_type, pointee)) {
+    if ((!minic_type_equal(left_type, pointee) || !minic_type_equal(right_type, pointee)) &&
+        !(core_integer_type_range_fits(program, function, left_type, pointee) &&
+          core_integer_type_range_fits(program, function, right_type, pointee))) {
         bool left_is_result;
         bool right_is_result;
         const MinicType *other_effective_type;
 
+        /* Preserve the established narrow signed-result extension for the
+           one mixed case whose full unsigned operand range does not fit. */
         left_is_result = minic_type_equal(left_type, pointee);
         right_is_result = minic_type_equal(right_type, pointee);
         if ((instruction->value.integer_overflow.operator_kind !=
@@ -1725,12 +1779,14 @@ static bool core_instruction_supported(const MinicC0Program *program,
     case MINIC_CORE_INSTRUCTION_CALL_FRAME_ADDRESS:
         return core_call_frame_address_supported(instruction);
     case MINIC_CORE_INSTRUCTION_VARIADIC_ARGUMENT_ADDRESS: {
+        size_t fixed_stack_slots;
         size_t integer_parameter_count;
 
         return program != NULL && instruction->result < function->value_count &&
                minic_type_equal(function->values[instruction->result].type, instruction->type) &&
                minic_type_is_pointer(instruction->type) &&
-               core_variadic_fixed_prefix(program, function, &integer_parameter_count);
+               core_variadic_fixed_prefix(
+                   program, function, &integer_parameter_count, &fixed_stack_slots);
     }
     case MINIC_CORE_INSTRUCTION_PARAMETER:
     case MINIC_CORE_INSTRUCTION_PARAMETER_OBJECT:
@@ -3335,8 +3391,10 @@ static bool emit_instruction(FILE *file,
         }
         left_type = function->values[instruction->value.integer_overflow.left].type;
         right_type = function->values[instruction->value.integer_overflow.right].type;
-        if (!minic_type_equal(left_type, result_type) ||
-            !minic_type_equal(right_type, result_type)) {
+        if ((!minic_type_equal(left_type, result_type) ||
+             !minic_type_equal(right_type, result_type)) &&
+            !(core_integer_type_range_fits(program, function, left_type, result_type) &&
+              core_integer_type_range_fits(program, function, right_type, result_type))) {
             const char *signed_register;
             const char *unsigned_register;
             uint64_t maximum;
@@ -3690,9 +3748,48 @@ static bool emit_instruction(FILE *file,
         }
         return store_core_value(file, frame, instruction->result, "t0");
     case MINIC_CORE_INSTRUCTION_VARIADIC_ARGUMENT_ADDRESS:
-        if (!frame->has_variadic_argument_address ||
-            !emit_sp_address(file, "t0", frame->varargs_offset)) {
+        if (!frame->has_variadic_argument_address) {
             return false;
+        }
+        if (frame->varargs_size != 0U) {
+            if (!emit_sp_address(file, "t0", frame->varargs_offset)) {
+                return false;
+            }
+        } else {
+            size_t stack_byte_offset;
+
+            if (frame->variadic_fixed_stack_slots > SIZE_MAX / 8U) {
+                return false;
+            }
+            stack_byte_offset = frame->variadic_fixed_stack_slots * 8U;
+            if (frame->has_dynamic_stack_alignment) {
+                if (!minic_riscv64_emit_sp_load64(file, "t0", frame->entry_sp_offset)) {
+                    return false;
+                }
+            } else {
+                if (frame->frame_size <= 2047U) {
+                    if (fprintf(file, "  addi t0, sp, %zu\n", frame->frame_size) < 0) {
+                        return false;
+                    }
+                } else if (fprintf(file,
+                                   "  li t0, %zu\n"
+                                   "  add t0, sp, t0\n",
+                                   frame->frame_size) < 0) {
+                    return false;
+                }
+            }
+            if (stack_byte_offset != 0U) {
+                if (stack_byte_offset <= 2047U) {
+                    if (fprintf(file, "  addi t0, t0, %zu\n", stack_byte_offset) < 0) {
+                        return false;
+                    }
+                } else if (fprintf(file,
+                                   "  li t1, %zu\n"
+                                   "  add t0, t0, t1\n",
+                                   stack_byte_offset) < 0) {
+                    return false;
+                }
+            }
         }
         return store_core_value(file, frame, instruction->result, "t0");
     case MINIC_CORE_INSTRUCTION_PARAMETER:
