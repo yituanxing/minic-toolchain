@@ -548,7 +548,7 @@ bool minias_riscv_measure(const char *op,
 #define SIMPLE(OP) strcmp(op, OP) == 0
     if (SIMPLE("ret") || SIMPLE("nop") || SIMPLE("mv") || SIMPLE("jr") ||
         SIMPLE("snez") || SIMPLE("seqz") || SIMPLE("neg") || SIMPLE("jalr") ||
-        SIMPLE("j") || SIMPLE("beq") || SIMPLE("bne") ||
+        SIMPLE("j") || SIMPLE("jal") || SIMPLE("beq") || SIMPLE("bne") ||
         SIMPLE("blt") || SIMPLE("bge") || SIMPLE("bltu") || SIMPLE("bgeu") ||
         SIMPLE("beqz") || SIMPLE("bnez") || SIMPLE("bltz") || SIMPLE("bgez") ||
         SIMPLE("bgtz") || SIMPLE("blez") || SIMPLE("bgt") || SIMPLE("ble") ||
@@ -1078,23 +1078,58 @@ bool minias_riscv_encode(MiniAs *as, const MiniAsStmt *stmt) {
         }
         return append_u32(as, stmt->section, enc_i(0x67U, rd, 0U, rs1, immediate));
     }
-    if (strcmp(stmt->op, "j") == 0) {
-        if (count != 1U) {
-            minias_set_error(as, "operand-count:j:line=%zu", stmt->line);
+    if (strcmp(stmt->op, "j") == 0 || strcmp(stmt->op, "jal") == 0) {
+        MiniAsSymbolExpr expr;
+        const char *target_text;
+
+        if (strcmp(stmt->op, "j") == 0) {
+            if (count != 1U) {
+                minias_set_error(as, "operand-count:j:line=%zu", stmt->line);
+                return false;
+            }
+            rd = 0;
+            target_text = operands[0];
+        } else if (count == 1U) {
+            rd = 1;
+            target_text = operands[0];
+        } else if (count == 2U) {
+            if (!require_reg(as, stmt, operands[0], &rd)) {
+                return false;
+            }
+            target_text = operands[1];
+        } else {
+            minias_set_error(as, "operand-count:jal:line=%zu", stmt->line);
             return false;
         }
-        symbol = minias_get_symbol(as, operands[0], false);
-        if (symbol == NULL || !symbol->defined || symbol->section != stmt->section) {
-            minias_set_error(as, "unsupported-relocation:j:line=%zu", stmt->line);
+
+        if (!minias_parse_symbol_addend(target_text, &expr)) {
+            minias_set_error(as,
+                             "unsupported-expression:%s:%s:line=%zu",
+                             stmt->op,
+                             target_text,
+                             stmt->line);
             return false;
         }
-        immediate = (int64_t)symbol->value - (int64_t)stmt->offset;
-        if ((immediate & 1) != 0 || immediate < -(1LL << 20) ||
-            immediate > (1LL << 20) - 2) {
-            minias_set_error(as, "jal-range:line=%zu", stmt->line);
-            return false;
+
+        symbol = minias_get_symbol(as, expr.name, false);
+        if (symbol != NULL && symbol->defined && symbol->section == stmt->section) {
+            immediate = (int64_t)symbol->value + expr.addend -
+                        (int64_t)stmt->offset;
+            if ((immediate & 1) != 0 || immediate < -(1LL << 20) ||
+                immediate > (1LL << 20) - 2) {
+                minias_set_error(as, "jal-range:line=%zu", stmt->line);
+                return false;
+            }
+            return append_u32(as, stmt->section, enc_j(rd, immediate));
         }
-        return append_u32(as, stmt->section, enc_j(0, immediate));
+
+        return append_u32(as, stmt->section, enc_j(rd, 0)) &&
+               minias_add_relocation(as,
+                                     stmt->section,
+                                     stmt->offset,
+                                     MINIAS_R_RISCV_JAL,
+                                     expr.name,
+                                     expr.addend);
     }
     if (strcmp(stmt->op, "beq") == 0 || strcmp(stmt->op, "bne") == 0 ||
         strcmp(stmt->op, "blt") == 0 || strcmp(stmt->op, "bge") == 0 ||
