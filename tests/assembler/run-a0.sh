@@ -299,6 +299,11 @@ delta64:
 delta32:
   .word external_delta_target - .
 .size delta32, 4
+.globl abs32
+.type abs32, @object
+abs32:
+  .4byte external_delta_target + 4
+.size abs32, 4
 EOF
 "$MINIAS" -o "$work/extern-diff.o" "$work/extern-diff.s"
 readelf -Wr "$work/extern-diff.o" >"$work/extern-diff.txt"
@@ -306,6 +311,7 @@ grep -q 'R_RISCV_ADD64.*external_delta_target' "$work/extern-diff.txt"
 grep -q 'R_RISCV_SUB64.*Lminias_expr' "$work/extern-diff.txt"
 grep -q 'R_RISCV_ADD32.*external_delta_target' "$work/extern-diff.txt"
 grep -q 'R_RISCV_SUB32.*Lminias_expr' "$work/extern-diff.txt"
+grep -q 'R_RISCV_32.*external_delta_target.*+ 4' "$work/extern-diff.txt"
 
 cat >"$work/jal.s" <<'EOF'
 .extern external_jump_target
@@ -366,4 +372,4 @@ grep -q 'R_RISCV_SUB32.*Lminias_expr' "$work/conditional-alt.txt"
 grep -q 'R_RISCV_ADD16.*Lminias_num_889_1' "$work/conditional-alt.txt"
 grep -q 'R_RISCV_SUB16.*Lminias_num_888_1' "$work/conditional-alt.txt"
 
-echo "MINIAS_A0=PASS objects=17 format=ELF64-RISCV-ET_REL relocations=14 strings=2 pseudos=14 previous=1 numeric_labels=14 isa_next=13 csr_amo=4 section_stack=1 org=1 local_difference=1 lr_sc=2 inline_labels=2 branch_pseudos=8 extern=1 symbol_minus_dot=4 symbol_difference=1 jal=2 high_numeric_labels=2 conditional=1"
+echo "MINIAS_A0=PASS objects=17 format=ELF64-RISCV-ET_REL relocations=15 strings=2 pseudos=14 previous=1 numeric_labels=14 isa_next=13 csr_amo=4 section_stack=1 org=1 local_difference=1 lr_sc=2 inline_labels=2 branch_pseudos=8 extern=1 symbol_minus_dot=4 symbol_difference=1 absolute32=1 jal=2 high_numeric_labels=2 conditional=1"
