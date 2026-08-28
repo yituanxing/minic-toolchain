@@ -4934,11 +4934,43 @@ bool minic_parser_parse_static_zero_declaration_list_after_head(MinicParser *par
                                                            &explicit_alignment)) {
             return false;
         }
+        if (parser->current.kind == MINIC_TOKEN_EQUAL) {
+            if ((!minic_type_is_integer(object_type) && !minic_type_is_pointer(object_type) &&
+                 !minic_type_is_record(object_type)) ||
+                (minic_type_is_record(object_type) &&
+                 !minic_parser_require_complete_object_type(
+                     parser, object_type, "static object requires a complete record type")) ||
+                !begin_static_object_definition(parser, object_type, name_span, &object_id) ||
+                !apply_static_object_metadata(parser,
+                                              object_id,
+                                              section_name,
+                                              section_name_length,
+                                              has_section,
+                                              explicit_alignment) ||
+                !minic_parser_advance(parser) ||
+                !minic_parser_parse_static_storage_initializer_value(
+                    parser, object_id, object_type)) {
+                if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
+                    minic_parser_error(
+                        parser, "cannot initialize static declaration-list declarator");
+                }
+                return false;
+            }
+            if (parser->current.kind == MINIC_TOKEN_SEMICOLON) {
+                return minic_parser_advance(parser);
+            }
+            if (parser->current.kind != MINIC_TOKEN_COMMA ||
+                !minic_parser_advance(parser)) {
+                minic_parser_error(
+                    parser, "expected ',' or ';' after static declaration-list initializer");
+                return false;
+            }
+            continue;
+        }
         if (parser->current.kind != MINIC_TOKEN_COMMA &&
             parser->current.kind != MINIC_TOKEN_SEMICOLON) {
             minic_parser_error(
-                parser,
-                "static zero-definition declaration list currently supports declarations only");
+                parser, "expected ',', '=' or ';' after static declaration-list declarator");
             return false;
         }
         if ((!minic_type_is_integer(object_type) && !minic_type_is_pointer(object_type) &&
