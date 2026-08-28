@@ -48,6 +48,7 @@ typedef struct MinicRiscv64CoreFrame {
     size_t object_count;
     size_t value_count;
     size_t value_base_offset;
+    size_t outgoing_argument_size;
     size_t return_address_offset;
     /* M167D_INDIRECT_RECORD_RETURN: psABI hidden result pointer is incoming
        state and must survive arbitrary calls before a Core RETURN. */
@@ -330,6 +331,7 @@ static bool core_frame_initialize(const MinicC0Program *program,
         !core_call_outgoing_stack_size(program, function, &outgoing_argument_size)) {
         return false;
     }
+    frame->outgoing_argument_size = outgoing_argument_size;
     storage_size = outgoing_argument_size;
     maximum_object_alignment = 16U;
     for (object_index = 0U; object_index < function->object_count; ++object_index) {
@@ -465,15 +467,17 @@ static bool core_frame_initialize(const MinicC0Program *program,
 
 static bool core_object_offset(const MinicC0Program *program,
                                const MinicCoreFunction *function,
+                               const MinicRiscv64CoreFrame *frame,
                                MinicCoreObjectId object_id,
                                size_t *offset) {
     size_t current_offset;
     size_t object_index;
 
-    if (function == NULL || offset == NULL || object_id >= function->object_count ||
-        !core_call_outgoing_stack_size(program, function, &current_offset)) {
+    if (function == NULL || frame == NULL || offset == NULL ||
+        object_id >= function->object_count) {
         return false;
     }
+    current_offset = frame->outgoing_argument_size;
     for (object_index = 0U; object_index <= (size_t)object_id; ++object_index) {
         size_t object_size;
         size_t object_alignment;
@@ -2375,7 +2379,7 @@ static bool emit_parameter_object(FILE *file,
         !minic_type_equal(
             object_value_type,
             function->parameter_types[instruction->value.parameter_object.parameter_index]) ||
-        !core_object_offset(program, function, object_id, &object_offset)) {
+        !core_object_offset(program, function, frame, object_id, &object_offset)) {
         return false;
     }
     if (location.value.kind == MINIC_RISCV64_ABI_VALUE_IGNORE) {
@@ -2508,7 +2512,7 @@ static bool emit_call(FILE *file,
 
         if (instruction->value.call.result_object >= function->object_count ||
             !core_object_offset(
-                program, function, instruction->value.call.result_object, &result_offset) ||
+                program, function, frame, instruction->value.call.result_object, &result_offset) ||
             !emit_sp_address(file, "a0", result_offset)) {
             return false;
         }
@@ -2594,7 +2598,7 @@ static bool emit_call(FILE *file,
             size_t object_offset;
 
             if (!core_object_offset(
-                    program, function, argument->value.object_id, &object_offset)) {
+                    program, function, frame, argument->value.object_id, &object_offset)) {
                 return false;
             }
             if (location.value.kind == MINIC_RISCV64_ABI_VALUE_IGNORE) {
@@ -2695,7 +2699,7 @@ static bool emit_call(FILE *file,
             return_value.slot_count == 0U || return_value.slot_count > 2U ||
             instruction->value.call.result_object >= function->object_count ||
             !core_object_offset(
-                program, function, instruction->value.call.result_object, &object_offset)) {
+                program, function, frame, instruction->value.call.result_object, &object_offset)) {
             return false;
         }
         for (chunk_index = 0U; chunk_index < return_value.slot_count; ++chunk_index) {
@@ -2821,7 +2825,7 @@ static bool emit_indirect_call(FILE *file,
             size_t object_offset;
 
             if (!is_fixed_parameter ||
-                !core_object_offset(program, function, argument->value.object_id, &object_offset)) {
+                !core_object_offset(program, function, frame, argument->value.object_id, &object_offset)) {
                 return false;
             }
             if (location.value.kind == MINIC_RISCV64_ABI_VALUE_IGNORE) {
@@ -4164,7 +4168,7 @@ static bool emit_instruction(FILE *file,
     case MINIC_CORE_INSTRUCTION_PARAMETER_OBJECT:
         return emit_parameter_object(file, program, function, frame, instruction);
     case MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS:
-        if (!core_object_offset(program, function, instruction->value.object_id, &object_offset) ||
+        if (!core_object_offset(program, function, frame, instruction->value.object_id, &object_offset) ||
             !emit_sp_address(file, "t0", object_offset)) {
             return false;
         }
@@ -4228,6 +4232,7 @@ static bool emit_instruction(FILE *file,
         if (!core_record_load_supported(program, function, instruction, &record_size) ||
             !core_object_offset(program,
                                 function,
+                                frame,
                                 instruction->value.record_load.destination_object,
                                 &destination_offset) ||
             !load_core_value(
@@ -4399,7 +4404,7 @@ static bool emit_terminator(FILE *file,
                 !minic_type_equal(function->objects[terminator->return_object].type,
                                   function->return_type) ||
                 !minic_riscv64_abi_classify_value(program, function->return_type, &return_value) ||
-                !core_object_offset(program, function, terminator->return_object, &object_offset) ||
+                !core_object_offset(program, function, frame, terminator->return_object, &object_offset) ||
                 !emit_sp_address(file, "t0", object_offset)) {
                 return false;
             }
