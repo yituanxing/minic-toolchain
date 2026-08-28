@@ -68,12 +68,36 @@ static MinicCoreLowerStatus lower_scalar_assignment_value(MinicCoreLowerContext 
                                                           MinicCoreValueId *value_id);
 
 MinicCoreLowerStatus ensure_statement_block(MinicCoreLowerContext *context, MinicStatementId statement_id, MinicCoreBlockId *block_id) {
+    const MinicStatement *source_statement;
     MinicCoreBlockId mapped;
-    if (context == NULL || context->function == NULL || block_id == NULL || context->statement_blocks == NULL || statement_id >= context->statement_block_count) return MINIC_CORE_LOWER_ERROR;
+
+    if (context == NULL || context->body == NULL || context->body->program == NULL ||
+        context->function == NULL || block_id == NULL || context->statement_blocks == NULL ||
+        statement_id >= context->statement_block_count) {
+        return MINIC_CORE_LOWER_ERROR;
+    }
     mapped = context->statement_blocks[statement_id];
     if (mapped == MINIC_CORE_BLOCK_INVALID) {
-        if (!minic_core_function_add_block(context->function, &mapped)) return MINIC_CORE_LOWER_ERROR;
+        if (!minic_core_function_add_block(context->function, &mapped)) {
+            return MINIC_CORE_LOWER_ERROR;
+        }
         context->statement_blocks[statement_id] = mapped;
+    }
+    if (mapped >= context->function->block_count) {
+        return MINIC_CORE_LOWER_ERROR;
+    }
+    source_statement = minic_c0_program_statement(context->body->program, statement_id);
+    if (source_statement == NULL) {
+        return MINIC_CORE_LOWER_ERROR;
+    }
+    if (source_statement->kind == MINIC_STATEMENT_LABEL) {
+        MinicCoreBlock *block = &context->function->blocks[mapped];
+
+        if (block->source_label_statement != MINIC_STATEMENT_INVALID &&
+            block->source_label_statement != statement_id) {
+            return MINIC_CORE_LOWER_ERROR;
+        }
+        block->source_label_statement = statement_id;
     }
     *block_id = mapped;
     return MINIC_CORE_LOWER_OK;
