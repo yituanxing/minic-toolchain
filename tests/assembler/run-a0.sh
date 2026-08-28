@@ -339,4 +339,27 @@ readelf -Ws "$work/high-numeric-labels.o" >"$work/high-numeric-labels.txt"
 grep -q '.Lminias_num_886_1' "$work/high-numeric-labels.txt"
 grep -q '.Lminias_num_887_1' "$work/high-numeric-labels.txt"
 
-echo "MINIAS_A0=PASS objects=16 format=ELF64-RISCV-ET_REL relocations=10 strings=2 pseudos=14 previous=1 numeric_labels=10 isa_next=13 csr_amo=4 section_stack=1 org=1 local_difference=1 lr_sc=2 inline_labels=2 branch_pseudos=8 extern=1 symbol_minus_dot=2 jal=2 high_numeric_labels=2"
+cat >"$work/conditional-alt.s" <<'EOF'
+.text
+.globl conditional_alt
+.type conditional_alt, @function
+conditional_alt:
+  886 : nop
+  887 :
+.if 1 == 1
+  .pushsection .alternative,"a"
+  .4byte ((886b) - .)
+  .4byte ((888f) - .)
+  .popsection
+.else
+  definitely_not_an_instruction
+.endif
+  888 : ret
+.size conditional_alt, .-conditional_alt
+EOF
+"$MINIAS" -o "$work/conditional-alt.o" "$work/conditional-alt.s"
+readelf -Wr "$work/conditional-alt.o" >"$work/conditional-alt.txt"
+grep -q 'R_RISCV_ADD32.*Lminias_num_888_1' "$work/conditional-alt.txt"
+grep -q 'R_RISCV_SUB32.*Lminias_expr' "$work/conditional-alt.txt"
+
+echo "MINIAS_A0=PASS objects=17 format=ELF64-RISCV-ET_REL relocations=12 strings=2 pseudos=14 previous=1 numeric_labels=13 isa_next=13 csr_amo=4 section_stack=1 org=1 local_difference=1 lr_sc=2 inline_labels=2 branch_pseudos=8 extern=1 symbol_minus_dot=4 jal=2 high_numeric_labels=2 conditional=1"
