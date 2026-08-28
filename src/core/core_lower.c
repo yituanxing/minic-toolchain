@@ -638,6 +638,10 @@ MinicCoreLowerStatus lower_address(MinicCoreLowerContext *context,
             subscript_status =
                 lower_expression(context, expression->value.subscript.base, &base_value);
             if (subscript_status != MINIC_CORE_LOWER_OK) {
+                (void)fprintf(stderr,
+                              "CORE_SUBSCRIPT_STAGE function=%s stage=pointer-base status=%d\n",
+                              context->source_function != NULL ? context->source_function->name : "?",
+                              (int)subscript_status);
                 return subscript_status;
             }
             if (base_value >= context->function->value_count ||
@@ -653,6 +657,14 @@ MinicCoreLowerStatus lower_address(MinicCoreLowerContext *context,
         subscript_status =
             lower_expression(context, expression->value.subscript.index, &index_value);
         if (subscript_status != MINIC_CORE_LOWER_OK) {
+            const MinicExpression *index_expression =
+                minic_c0_program_expression(context->body->program,
+                                            expression->value.subscript.index);
+            (void)fprintf(stderr,
+                          "CORE_SUBSCRIPT_STAGE function=%s stage=index status=%d index_kind=%d\n",
+                          context->source_function != NULL ? context->source_function->name : "?",
+                          (int)subscript_status,
+                          index_expression != NULL ? (int)index_expression->kind : -1);
             return subscript_status;
         }
         if (index_value >= context->function->value_count ||
@@ -662,6 +674,10 @@ MinicCoreLowerStatus lower_address(MinicCoreLowerContext *context,
         subscript_status =
             reload_scalar_value(context, base->span, pointer_type, base_object, &base_value);
         if (subscript_status != MINIC_CORE_LOWER_OK) {
+            (void)fprintf(stderr,
+                          "CORE_SUBSCRIPT_STAGE function=%s stage=reload-base status=%d\n",
+                          context->source_function != NULL ? context->source_function->name : "?",
+                          (int)subscript_status);
             return subscript_status;
         }
 
