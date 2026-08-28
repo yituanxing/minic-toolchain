@@ -1,0 +1,139 @@
+name: Linux Core Assemble All3352
+
+on:
+  push:
+    branches:
+      - refactor/declaration-sema-v1
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  first500:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[linux-assemble-all3352]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Restore frozen first500 corpus
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-focus-corpus
+          key: linux-focus-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-${{ hashFiles('tests/external/linux/replay-indices.txt') }}
+          fail-on-cache-miss: true
+
+      - name: Install RV64 assembler
+        run: |
+          sudo apt-get -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends gcc-riscv64-linux-gnu
+
+      - name: Build exact compiler
+        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/linux-assemble-all-first500-compiler
+
+      - name: Compile and assemble full first500
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          compiler="$GITHUB_WORKSPACE/build/linux-assemble-all-first500-compiler/bin/minic"
+          work="$GITHUB_WORKSPACE/build/linux-assemble-all-first500"
+          CORE_FAST_TRACE=1 python3 tests/external/linux/corpus_replay.py \
+            --minic "$compiler" --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
+            --work "$work" --jobs 4 --offset 0 --limit 500
+          python3 - "$work/batch-results.json" <<'PY'
+          import json, sys
+          rows=json.load(open(sys.argv[1]))
+          bad=[r for r in rows if r["status"]!="PASS"]
+          assert len(rows)==500 and not bad, (len(rows), bad[:5])
+          PY
+          python3 tests/external/linux/assemble_replay.py --work "$work" --jobs 4
+          echo "LINUX_ASSEMBLE_SHARD=PASS shard=first500 selected=500 pass=500"
+
+  shards:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[linux-assemble-all3352]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: new500
+            corpus_dir: linux-new500-corpus
+            cache_key: linux-new500-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-indices-500-999
+            expected: 500
+          - label: next500
+            corpus_dir: linux-next500-corpus
+            cache_key: linux-next500-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-indices-1000-1499
+            expected: 500
+          - label: next500b
+            corpus_dir: linux-next500b-corpus
+            cache_key: linux-next500b-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-indices-1500-1999
+            expected: 500
+          - label: next500c
+            corpus_dir: linux-next500c-corpus
+            cache_key: linux-next500c-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-indices-2000-2499
+            expected: 500
+          - label: next500d
+            corpus_dir: linux-next500d-corpus
+            cache_key: linux-next500d-corpus-v4-6.6.143-rv64-defconfig-gcc13.3.0-indices-2500-2999
+            expected: 500
+          - label: final352
+            corpus_dir: linux-final352-corpus
+            cache_key: linux-final352-corpus-v2-6.6.143-rv64-defconfig-gcc13.3.0-indices-3000-3351
+            expected: 352
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Restore frozen shard corpus
+        uses: actions/cache/restore@v4
+        with:
+          path: build/${{ matrix.corpus_dir }}
+          key: ${{ matrix.cache_key }}
+          fail-on-cache-miss: true
+
+      - name: Install RV64 assembler
+        run: |
+          sudo apt-get -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends gcc-riscv64-linux-gnu
+
+      - name: Build exact compiler
+        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/linux-assemble-all-${{ matrix.label }}-compiler
+
+      - name: Compile and assemble full shard
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          label="${{ matrix.label }}"
+          expected=${{ matrix.expected }}
+          compiler="$GITHUB_WORKSPACE/build/linux-assemble-all-$label-compiler/bin/minic"
+          corpus="$GITHUB_WORKSPACE/build/${{ matrix.corpus_dir }}"
+          work="$GITHUB_WORKSPACE/build/linux-assemble-all-$label"
+          CORE_FAST_TRACE=1 python3 tests/external/linux/corpus_replay.py \
+            --minic "$compiler" --corpus "$corpus" --work "$work" --jobs 4
+          python3 - "$work/batch-results.json" "$expected" <<'PY'
+          import json, sys
+          rows=json.load(open(sys.argv[1]))
+          expected=int(sys.argv[2])
+          bad=[r for r in rows if r["status"]!="PASS"]
+          assert len(rows)==expected and not bad, (len(rows), expected, bad[:5])
+          PY
+          python3 tests/external/linux/assemble_replay.py --work "$work" --jobs 4
+          echo "LINUX_ASSEMBLE_SHARD=PASS shard=$label selected=$expected pass=$expected"
+
+  all3352:
+    if: always() && (github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[linux-assemble-all3352]'))
+    needs: [first500, shards]
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Require every object shard
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "${{ needs.first500.result }}" = success
+          test "${{ needs.shards.result }}" = success
+          echo "LINUX_ASSEMBLE_ALL3352=PASS selected=3352 pass=3352 fail=0 head=$GITHUB_SHA"
