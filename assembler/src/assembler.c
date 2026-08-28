@@ -262,6 +262,7 @@ void minias_init(MiniAs *as) {
                                 1U);
     as->current_section = minias_find_section(as, ".text");
     as->previous_section = as->current_section;
+    as->conditional_active = true;
 }
 
 void minias_destroy(MiniAs *as) {
@@ -284,6 +285,7 @@ void minias_destroy(MiniAs *as) {
     free(as->relocs);
     free(as->section_stack);
     free(as->numeric_label_counts);
+    free(as->conditionals);
     memset(as, 0, sizeof(*as));
 }
 
@@ -665,10 +667,171 @@ static unsigned int data_width(const char *op) {
     return 0U;
 }
 
+static char *strip_outer_parens(char *text) {
+    text = minias_trim(text);
+    for (;;) {
+        size_t len = strlen(text);
+        size_t i;
+        int depth = 0;
+        bool encloses_all = true;
+
+        if (len < 2U || text[0] != '(' || text[len - 1U] != ')') {
+            return text;
+        }
+        for (i = 0U; i < len; ++i) {
+            if (text[i] == '(') {
+                ++depth;
+            } else if (text[i] == ')') {
+                --depth;
+                if (depth < 0) {
+                    return text;
+                }
+                if (depth == 0 && i + 1U != len) {
+                    encloses_all = false;
+                    break;
+                }
+            }
+        }
+        if (!encloses_all || depth != 0) {
+            return text;
+        }
+        text[len - 1U] = '\0';
+        text = minias_trim(text + 1);
+    }
+}
+
+static bool parse_if_operand(const char *text, const char **end_out, int64_t *value_out) {
+    char *end = NULL;
+    long long value;
+
+    while (*text == ' ' || *text == '\t') {
+        ++text;
+    }
+    errno = 0;
+    value = strtoll(text, &end, 0);
+    if (errno != 0 || end == text) {
+        return false;
+    }
+    *end_out = end;
+    *value_out = (int64_t)value;
+    return true;
+}
+
+static bool evaluate_if_expression(const char *text, bool *result) {
+    const char *p;
+    int64_t lhs;
+    int64_t rhs;
+    char op[3] = {0};
+    size_t op_len = 0U;
+
+    if (text == NULL || result == NULL ||
+        !parse_if_operand(text, &p, &lhs)) {
+        return false;
+    }
+    while (*p == ' ' || *p == '\t') {
+        ++p;
+    }
+    if (*p == '\0') {
+        *result = lhs != 0;
+        return true;
+    }
+    if ((p[0] == '=' && p[1] == '=') || (p[0] == '!' && p[1] == '=') ||
+        (p[0] == '<' && p[1] == '=') || (p[0] == '>' && p[1] == '=')) {
+        op[0] = p[0];
+        op[1] = p[1];
+        op_len = 2U;
+    } else if (*p == '<' || *p == '>') {
+        op[0] = *p;
+        op_len = 1U;
+    } else {
+        return false;
+    }
+    p += op_len;
+    if (!parse_if_operand(p, &p, &rhs)) {
+        return false;
+    }
+    while (*p == ' ' || *p == '\t') {
+        ++p;
+    }
+    if (*p != '\0') {
+        return false;
+    }
+
+    if (strcmp(op, "==") == 0) {
+        *result = lhs == rhs;
+    } else if (strcmp(op, "!=") == 0) {
+        *result = lhs != rhs;
+    } else if (strcmp(op, "<=") == 0) {
+        *result = lhs <= rhs;
+    } else if (strcmp(op, ">=") == 0) {
+        *result = lhs >= rhs;
+    } else if (strcmp(op, "<") == 0) {
+        *result = lhs < rhs;
+    } else {
+        *result = lhs > rhs;
+    }
+    return true;
+}
+
+static bool push_conditional(MiniAs *as, const char *args, size_t line) {
+    MiniAsConditional *conditional;
+    bool condition_true;
+
+    if (!evaluate_if_expression(args, &condition_true)) {
+        minias_set_error(as, "unsupported-expression:.if:%s:line=%zu", args, line);
+        return false;
+    }
+    if (!grow_array((void **)&as->conditionals,
+                    &as->conditional_capacity,
+                    sizeof(*as->conditionals),
+                    as->conditional_count + 1U)) {
+        minias_set_error(as, "out-of-memory:conditional");
+        return false;
+    }
+    conditional = &as->conditionals[as->conditional_count++];
+    conditional->parent_active = as->conditional_active;
+    conditional->condition_true = condition_true;
+    conditional->else_seen = false;
+    as->conditional_active = conditional->parent_active && condition_true;
+    return true;
+}
+
+static bool else_conditional(MiniAs *as, size_t line) {
+    MiniAsConditional *conditional;
+
+    if (as->conditional_count == 0U) {
+        minias_set_error(as, "unmatched-directive:.else:line=%zu", line);
+        return false;
+    }
+    conditional = &as->conditionals[as->conditional_count - 1U];
+    if (conditional->else_seen) {
+        minias_set_error(as, "duplicate-directive:.else:line=%zu", line);
+        return false;
+    }
+    conditional->else_seen = true;
+    as->conditional_active =
+        conditional->parent_active && !conditional->condition_true;
+    return true;
+}
+
+static bool pop_conditional(MiniAs *as, size_t line) {
+    MiniAsConditional conditional;
+
+    if (as->conditional_count == 0U) {
+        minias_set_error(as, "unmatched-directive:.endif:line=%zu", line);
+        return false;
+    }
+    conditional = as->conditionals[--as->conditional_count];
+    as->conditional_active = conditional.parent_active;
+    return true;
+}
+
 static bool parse_symbol_minus_dot(const char *text, MiniAsSymbolExpr *expr) {
     char *copy;
+    char *normalized;
     char *minus;
     char *suffix;
+    char *lhs;
     bool ok;
 
     if (text == NULL || expr == NULL) {
@@ -678,18 +841,20 @@ static bool parse_symbol_minus_dot(const char *text, MiniAsSymbolExpr *expr) {
     if (copy == NULL) {
         return false;
     }
-    minus = strrchr(copy, '-');
+    normalized = strip_outer_parens(copy);
+    minus = strrchr(normalized, '-');
     if (minus == NULL) {
         free(copy);
         return false;
     }
     *minus = '\0';
-    suffix = minias_trim(minus + 1);
+    suffix = strip_outer_parens(minias_trim(minus + 1));
     if (strcmp(suffix, ".") != 0) {
         free(copy);
         return false;
     }
-    ok = minias_parse_symbol_addend(minias_trim(copy), expr);
+    lhs = strip_outer_parens(minias_trim(normalized));
+    ok = minias_parse_symbol_addend(lhs, expr);
     free(copy);
     return ok;
 }
@@ -1232,6 +1397,20 @@ static bool process_statement(MiniAs *as, char *text, size_t line) {
         return true;
     }
 
+    if (strncmp(text, ".if", 3U) == 0 &&
+        (text[3] == '\0' || isspace((unsigned char)text[3]))) {
+        return push_conditional(as, minias_trim(text + 3), line);
+    }
+    if (strcmp(text, ".else") == 0) {
+        return else_conditional(as, line);
+    }
+    if (strcmp(text, ".endif") == 0) {
+        return pop_conditional(as, line);
+    }
+    if (!as->conditional_active) {
+        return true;
+    }
+
     for (;;) {
         char *token_end = text;
         char *colon;
@@ -1446,6 +1625,13 @@ bool minias_parse_file(MiniAs *as, const char *path) {
     }
     if (ferror(file)) {
         minias_set_error(as, "input-read:%s", path);
+        fclose(file);
+        return false;
+    }
+    if (as->conditional_count != 0U) {
+        minias_set_error(as,
+                         "unterminated-directive:.if:depth=%zu",
+                         as->conditional_count);
         fclose(file);
         return false;
     }
