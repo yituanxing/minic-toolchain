@@ -4354,6 +4354,31 @@ static bool emit_block_label(FILE *file, const char *symbol_name, MinicCoreBlock
     return fprintf(file, ".L%s_core_bb%" PRIu32 ":\n", symbol_name, block_id) >= 0;
 }
 
+/* Bootstrap B0 reaches functions large enough that a direct JAL relocation can
+   overflow its signed 21-bit displacement. Core values are stack-backed at
+   terminators, so t6 is a dead scratch register here. Materialize local CFG
+   destinations PC-relatively and jump through t6; this keeps block transfers
+   valid across the whole practical function-size range instead of relying on
+   assembler/linker JAL relaxation. */
+static bool emit_far_jump_to_block(FILE *file,
+                                   const char *symbol_name,
+                                   MinicCoreBlockId block_id) {
+    return file != NULL && symbol_name != NULL &&
+           fprintf(file,
+                   "  lla t6, .L%s_core_bb%" PRIu32 "\n"
+                   "  jalr zero, t6, 0\n",
+                   symbol_name,
+                   block_id) >= 0;
+}
+
+static bool emit_far_jump_to_return(FILE *file, const char *symbol_name) {
+    return file != NULL && symbol_name != NULL &&
+           fprintf(file,
+                   "  lla t6, .L%s_core_return\n"
+                   "  jalr zero, t6, 0\n",
+                   symbol_name) >= 0;
+}
+
 static bool emit_terminator(FILE *file,
                             const MinicC0Program *program,
                             const MinicCoreFunction *function,
@@ -4436,32 +4461,35 @@ static bool emit_terminator(FILE *file,
                    !load_core_value(file, frame, terminator->return_value, "a0")) {
             return false;
         }
-        return fprintf(file, "  j .L%s_core_return\n", symbol_name) >= 0;
+        return emit_far_jump_to_return(file, symbol_name);
     /* M91_BUILTIN_UNREACHABLE_TERMINATOR: reaching this block is UB; no
        target instruction is required. The Core terminator still prevents
        normal CFG fallthrough from being modeled as a supported continuation. */
     case MINIC_CORE_TERMINATOR_UNREACHABLE:
         return true;
     case MINIC_CORE_TERMINATOR_BRANCH:
-        return fprintf(
-                   file, "  j .L%s_core_bb%" PRIu32 "\n", symbol_name, terminator->branch_target) >=
-               0;
+        return emit_far_jump_to_block(file, symbol_name, terminator->branch_target);
     /* M158_FINAL_STRICT_TAIL_INDIRECT_BRANCH_RV64 */
     case MINIC_CORE_TERMINATOR_INDIRECT_BRANCH:
         return load_core_value(file, frame, terminator->indirect_target, "t0") &&
                fprintf(file, "  jalr zero, t0, 0\n") >= 0;
     case MINIC_CORE_TERMINATOR_CONDITIONAL_BRANCH:
-        if (!load_core_value(file, frame, terminator->conditional.condition, "t0") ||
-            fprintf(file,
-                    "  bnez t0, .L%s_core_bb%" PRIu32 "\n"
-                    "  j .L%s_core_bb%" PRIu32 "\n",
-                    symbol_name,
-                    terminator->conditional.when_true,
-                    symbol_name,
-                    terminator->conditional.when_false) < 0) {
-            return false;
-        }
-        return true;
+        /* Keep the architectural conditional branch local, then use the same
+           far-transfer sequence for both CFG successors. The numeric local
+           label is intentionally reusable; 1f always resolves to the next
+           instance emitted by this terminator. */
+        return load_core_value(file, frame, terminator->conditional.condition, "t0") &&
+               fprintf(file,
+                       "  beqz t0, 1f\n"
+                       "  lla t6, .L%s_core_bb%" PRIu32 "\n"
+                       "  jalr zero, t6, 0\n"
+                       "1:\n"
+                       "  lla t6, .L%s_core_bb%" PRIu32 "\n"
+                       "  jalr zero, t6, 0\n",
+                       symbol_name,
+                       terminator->conditional.when_true,
+                       symbol_name,
+                       terminator->conditional.when_false) >= 0;
     }
     return false;
 }
@@ -4527,7 +4555,7 @@ static bool emit_core_function_with_symbol(FILE *file,
             }
         }
     }
-    if (fprintf(file, "  j .L%s_core_bb%" PRIu32 "\n", symbol_name, function->entry_block) < 0) {
+    if (!emit_far_jump_to_block(file, symbol_name, function->entry_block)) {
         return false;
     }
     for (block_index = 0U; block_index < function->block_count; ++block_index) {
