@@ -2849,6 +2849,23 @@ MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
     if (expression->value_category != MINIC_VALUE_RVALUE) {
         return MINIC_CORE_LOWER_UNSUPPORTED;
     }
+    if (expression->kind == MINIC_EXPRESSION_LVALUE_READ &&
+        core_memory_scalar_type(expression->type)) {
+        const MinicExpression *operand;
+        MinicType operand_value_type;
+        MinicType result_type;
+
+        operand = minic_c0_program_expression(
+            context->body->program, expression->value.unary.operand);
+        if (operand == NULL || operand->value_category != MINIC_VALUE_LVALUE ||
+            !core_memory_scalar_type(operand->type) ||
+            !minic_type_unqualified(operand->type, &operand_value_type) ||
+            !minic_type_unqualified(expression->type, &result_type) ||
+            !minic_type_equal(operand_value_type, result_type)) {
+            return MINIC_CORE_LOWER_UNSUPPORTED;
+        }
+        return lower_expression(context, expression->value.unary.operand, value_id);
+    }
     /* M75_POINTER_COMPOUND_ASSIGNMENT_VALUE: pointer += / -= evaluates
        the destination lvalue once, loads its current pointer value, applies a
        scaled integer offset, stores the updated pointer, and yields that value.
