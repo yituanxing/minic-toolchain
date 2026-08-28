@@ -1070,12 +1070,49 @@ static bool pop_section(MiniAs *as, size_t line) {
     return true;
 }
 
+static bool define_label(MiniAs *as, char *label, size_t line) {
+    char canonical[96];
+    size_t numeric_id;
+    MiniAsSymbol *symbol;
+
+    label = minias_trim(label);
+    if (*label == '\0') {
+        minias_set_error(as, "empty-label:line=%zu", line);
+        return false;
+    }
+    if (parse_numeric_label_id(label, &numeric_id)) {
+        int written;
+        size_t generation = ++as->numeric_label_counts[numeric_id];
+
+        written = snprintf(canonical,
+                           sizeof(canonical),
+                           ".Lminias_num_%zu_%zu",
+                           numeric_id,
+                           generation);
+        if (written < 0 || (size_t)written >= sizeof(canonical)) {
+            minias_set_error(as, "numeric-label-too-long:line=%zu", line);
+            return false;
+        }
+        label = canonical;
+    }
+    symbol = minias_get_symbol(as, label, true);
+    if (symbol == NULL) {
+        return false;
+    }
+    if (symbol->defined) {
+        minias_set_error(as, "duplicate-symbol:%s:line=%zu", symbol->name, line);
+        return false;
+    }
+    symbol->defined = true;
+    symbol->section = as->current_section;
+    symbol->value = (uint64_t)as->sections[(size_t)as->current_section].size;
+    return true;
+}
+
 static bool process_statement(MiniAs *as, char *text, size_t line) {
     char *space;
     char *op;
     char *args;
-    size_t len;
-    MiniAsSymbol *symbol;
     uint32_t size;
     char reason[160];
 
@@ -1083,41 +1120,25 @@ static bool process_statement(MiniAs *as, char *text, size_t line) {
     if (*text == '\0') {
         return true;
     }
-    len = strlen(text);
-    if (text[len - 1U] == ':') {
-        char canonical[96];
-        char *label;
-        size_t numeric_id;
 
-        text[len - 1U] = '\0';
-        label = minias_trim(text);
-        if (parse_numeric_label_id(label, &numeric_id)) {
-            int written;
-            size_t generation = ++as->numeric_label_counts[numeric_id];
+    for (;;) {
+        char *prefix_end = text;
 
-            written = snprintf(canonical,
-                               sizeof(canonical),
-                               ".Lminias_num_%zu_%zu",
-                               numeric_id,
-                               generation);
-            if (written < 0 || (size_t)written >= sizeof(canonical)) {
-                minias_set_error(as, "numeric-label-too-long:line=%zu", line);
-                return false;
-            }
-            label = canonical;
+        while (*prefix_end != '\0' && *prefix_end != ':' &&
+               !isspace((unsigned char)*prefix_end)) {
+            ++prefix_end;
         }
-        symbol = minias_get_symbol(as, label, true);
-        if (symbol == NULL) {
+        if (*prefix_end != ':') {
+            break;
+        }
+        *prefix_end = '\0';
+        if (!define_label(as, text, line)) {
             return false;
         }
-        if (symbol->defined) {
-            minias_set_error(as, "duplicate-symbol:%s:line=%zu", symbol->name, line);
-            return false;
+        text = minias_trim(prefix_end + 1);
+        if (*text == '\0') {
+            return true;
         }
-        symbol->defined = true;
-        symbol->section = as->current_section;
-        symbol->value = (uint64_t)as->sections[(size_t)as->current_section].size;
-        return true;
     }
 
     space = text;
