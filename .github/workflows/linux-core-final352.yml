@@ -232,6 +232,10 @@ jobs:
             --json-out "$work/progress-summary.json" \
             --text-out "$work/progress-summary.txt"
 
+          echo "===== FINAL352 FAILURE CONTEXTS ====="
+          cat "$work/failure-contexts.txt" || true
+          echo "===== END FINAL352 FAILURE CONTEXTS ====="
+
           python3 - <<'PY'
           import json
           from pathlib import Path
