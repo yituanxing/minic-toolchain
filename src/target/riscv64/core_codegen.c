@@ -4538,6 +4538,10 @@ static bool emit_core_function_with_symbol(FILE *file,
         if (!emit_block_label(file, symbol_name, (MinicCoreBlockId)block_index)) {
             return false;
         }
+        if (block->source_label_statement != MINIC_STATEMENT_INVALID &&
+            fprintf(file, ".Luser_%zu:\n", block->source_label_statement) < 0) {
+            return false;
+        }
         for (instruction_index = 0U; instruction_index < block->instruction_count;
              ++instruction_index) {
             MinicCoreInstructionId instruction_id;
