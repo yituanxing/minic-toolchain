@@ -99,10 +99,20 @@ bool minic_parser_parse_integer_initializer_bits(MinicParser *parser,
         minic_parser_error(parser, "integer initializer type mismatch");
         return false;
     }
-    if (!minic_const_eval_integer(parser->program, parser->target_info, expression_id, &constant) ||
-        !minic_const_value_convert_integer(
-            parser->program, parser->target_info, &constant, target_type, &converted)) {
-        minic_parser_error(parser, "integer initializer requires an integer constant expression");
+    if (minic_const_eval_integer(
+            parser->program, parser->target_info, expression_id, &constant)) {
+        if (!minic_const_value_convert_integer(
+                parser->program, parser->target_info, &constant, target_type, &converted)) {
+            minic_parser_error(parser,
+                               "integer initializer constant cannot be converted to target type");
+            return false;
+        }
+    } else if (!minic_const_eval_arithmetic_to_integer(parser->program,
+                                                       parser->target_info,
+                                                       expression_id,
+                                                       target_type,
+                                                       &converted)) {
+        minic_parser_error(parser, "integer initializer requires an arithmetic constant expression");
         return false;
     }
     *bits = converted.bits;
