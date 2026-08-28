@@ -247,4 +247,28 @@ readelf -s "$work/inline-atomic-loop.o" >"$work/inline-atomic-loop.txt"
 grep -q '.Lminias_num_0_1' "$work/inline-atomic-loop.txt"
 grep -q '.Lminias_num_1_1' "$work/inline-atomic-loop.txt"
 
-echo "MINIAS_A0=PASS objects=11 format=ELF64-RISCV-ET_REL relocations=4 strings=2 pseudos=6 previous=1 numeric_labels=6 isa_next=13 csr_amo=4 section_stack=1 org=1 local_difference=1 lr_sc=2 inline_labels=2"
+cat >"$work/branch-pseudos.s" <<'EOF'
+.text
+.globl branch_pseudos
+.type branch_pseudos, @function
+branch_pseudos:
+  bltz a0, 1f
+  bgez a1, 1f
+  bgtz a2, 1f
+  blez a3, 1f
+  bgt a4, a5, 1f
+  ble a6, a7, 1f
+  bgtu t0, t1, 1f
+  bleu t2, t3, 1f
+1:
+  ret
+.size branch_pseudos, .-branch_pseudos
+EOF
+"$MINIAS" -o "$work/branch-pseudos.o" "$work/branch-pseudos.s"
+branch_pseudo_hex="$(
+    readelf -x .text "$work/branch-pseudos.o" |
+    awk '/0x[0-9a-f]+/ {for (i=2; i<=NF; ++i) if ($i ~ /^[0-9a-f]+$/ && length($i) <= 8 && length($i) % 2 == 0) printf "%s", $i}'
+)"
+test "$branch_pseudo_hex" = "6340050263de0500634cc000635ad00063c8e70063d608016364530063727e0067800000"
+
+echo "MINIAS_A0=PASS objects=12 format=ELF64-RISCV-ET_REL relocations=4 strings=2 pseudos=14 previous=1 numeric_labels=7 isa_next=13 csr_amo=4 section_stack=1 org=1 local_difference=1 lr_sc=2 inline_labels=2 branch_pseudos=8"
