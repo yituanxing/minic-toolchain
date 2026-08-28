@@ -1347,7 +1347,12 @@ static MinicCoreLowerStatus lower_record_value_address(MinicCoreLowerContext *co
         if (terminated) {
             return MINIC_CORE_LOWER_UNSUPPORTED;
         }
-        return lower_record_value_address(
+        /* A record-valued GNU statement expression may end in a
+           materialized aggregate producer such as a conditional or compound
+           literal. The statement-expression owner has already sequenced the
+           block; hand its result to the aggregate materialization owner rather
+           than requiring the result itself to be pre-address-backed. */
+        return lower_record_materialized_address(
             context, expression->value.statement_expression.result, address_id);
     }
     return MINIC_CORE_LOWER_UNSUPPORTED;
