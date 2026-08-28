@@ -98,6 +98,7 @@ typedef struct MiniAs {
     size_t reloc_capacity;
     size_t pcrel_anchor_counter;
     int current_section;
+    int previous_section;
     char error[MINIAS_MAX_ERROR];
 } MiniAs;
 
