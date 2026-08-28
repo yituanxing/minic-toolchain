@@ -63,7 +63,7 @@ bool minias_write_elf64(MiniAs *as, const char *path) {
     size_t symtab_index;
     size_t strtab_index;
     size_t shstrtab_index;
-    size_t local_count;
+    size_t local_count = 0U;
     size_t symbol_index;
     size_t relocation_ordinal = 0U;
     size_t *relocation_counts = NULL;
