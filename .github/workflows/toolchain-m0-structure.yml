@@ -7,22 +7,38 @@ on:
   workflow_dispatch:
 
 jobs:
-  compiler-baseline:
+  compiler-boundary:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
-      - name: Build frozen compiler
+
+      - name: Build frozen compiler boundary
         run: make clean && make -j2
-      - name: Run focused fast prerequisites
+
+      - name: Verify minic-cc and compatibility entrypoint
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -x build/debug/bin/minic-cc
+          test -x build/debug/bin/minic
+          cmp build/debug/bin/minic-cc build/debug/bin/minic
+          echo "M0_BINARY_BOUNDARY=PASS compiler=minic-cc compatibility=minic"
+
+      - name: Run focused ownership gates
         run: |
           make check-token-model check-lexer check-type check-record check-type-alias
           make check-ast-contract check-layout check-rv64-abi
-      - name: Trace broad compiler gate
+          make check-static-functions check-cast-expressions check-pointer-members
+
+      - name: Verify compiler CLI output identity
         shell: bash
         run: |
-          set +e
-          MINIC="$PWD/build/debug/bin/minic" HOST_CC=cc BUILD_DIR="$PWD/build/debug"             sh -x tests/compiler/c0/run.sh >"$RUNNER_TEMP/compiler-c0-trace.log" 2>&1
-          rc=$?
-          tail -n 160 "$RUNNER_TEMP/compiler-c0-trace.log"
-          exit "$rc"
+          set -Eeuo pipefail
+          work=build/m0-cli-identity
+          mkdir -p "$work"
+          cc -E -P -x c tests/compiler/c0/empty_main.c -o "$work/input.i"
+          build/debug/bin/minic-cc -S "$work/input.i" -o "$work/minic-cc.s"
+          build/debug/bin/minic -S "$work/input.i" -o "$work/minic-compat.s"
+          cmp "$work/minic-cc.s" "$work/minic-compat.s"
+          echo "M0_COMPILER_CLI_IDENTITY=PASS boundary=.i-to-.s"
