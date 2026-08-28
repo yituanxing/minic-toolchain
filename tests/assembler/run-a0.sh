@@ -307,4 +307,20 @@ grep -q 'R_RISCV_SUB64.*Lminias_expr' "$work/extern-diff.txt"
 grep -q 'R_RISCV_ADD32.*external_delta_target' "$work/extern-diff.txt"
 grep -q 'R_RISCV_SUB32.*Lminias_expr' "$work/extern-diff.txt"
 
-echo "MINIAS_A0=PASS objects=14 format=ELF64-RISCV-ET_REL relocations=9 strings=2 pseudos=14 previous=1 numeric_labels=7 isa_next=13 csr_amo=4 section_stack=1 org=1 local_difference=1 lr_sc=2 inline_labels=2 branch_pseudos=8 extern=1 symbol_minus_dot=2"
+cat >"$work/jal.s" <<'EOF'
+.extern external_jump_target
+.text
+.globl jal_user
+.type jal_user, @function
+jal_user:
+  jal zero, 1f
+  jal ra, external_jump_target
+1:
+  ret
+.size jal_user, .-jal_user
+EOF
+"$MINIAS" -o "$work/jal.o" "$work/jal.s"
+readelf -Wr "$work/jal.o" >"$work/jal.txt"
+grep -q 'R_RISCV_JAL.*external_jump_target' "$work/jal.txt"
+
+echo "MINIAS_A0=PASS objects=15 format=ELF64-RISCV-ET_REL relocations=10 strings=2 pseudos=14 previous=1 numeric_labels=8 isa_next=13 csr_amo=4 section_stack=1 org=1 local_difference=1 lr_sc=2 inline_labels=2 branch_pseudos=8 extern=1 symbol_minus_dot=2 jal=2"
