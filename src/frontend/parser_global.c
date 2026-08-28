@@ -2580,8 +2580,35 @@ static bool try_overwrite_static_zero_noncanonical_union_designator(
                         object,
                         slot_begin,
                         (MinicRecordId)(current_record - parser->program->records),
-                        &active_span) &&
-                    active_span >= selected_slots) {
+                        &active_span)) {
+                    if (active_span == 0U) {
+                        MinicRecordId active_record_id;
+
+                        active_record_id =
+                            (MinicRecordId)(current_record - parser->program->records);
+                        if (slot_begin > object->initializer_count ||
+                            selected_slots > object->initializer_count - slot_begin ||
+                            !minic_c0_global_object_select_union_member_with_span(
+                                parser->program,
+                                object_id,
+                                slot_begin,
+                                active_record_id,
+                                field_index,
+                                selected_slots)) {
+                            minic_parser_error(
+                                parser,
+                                "cannot upgrade legacy static union initializer span");
+                            return false;
+                        }
+                        active_span = selected_slots;
+                        object = &parser->program->global_objects[object_id];
+                    }
+                    if (active_span < selected_slots) {
+                        minic_parser_error(
+                            parser,
+                            "active static union member span is smaller than selected member");
+                        return false;
+                    }
                     if (depth + 1U == designator->depth) {
                         return overwrite_static_zero_field_value(
                             parser, object_id, field, slot_begin);
