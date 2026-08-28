@@ -350,16 +350,20 @@ conditional_alt:
   .pushsection .alternative,"a"
   .4byte ((886b) - .)
   .4byte ((888f) - .)
+  .2byte ((889f) - (888f))
   .popsection
 .else
   definitely_not_an_instruction
 .endif
-  888 : ret
+  888 : nop
+  889 : ret
 .size conditional_alt, .-conditional_alt
 EOF
 "$MINIAS" -o "$work/conditional-alt.o" "$work/conditional-alt.s"
 readelf -Wr "$work/conditional-alt.o" >"$work/conditional-alt.txt"
 grep -q 'R_RISCV_ADD32.*Lminias_num_888_1' "$work/conditional-alt.txt"
 grep -q 'R_RISCV_SUB32.*Lminias_expr' "$work/conditional-alt.txt"
+grep -q 'R_RISCV_ADD16.*Lminias_num_889_1' "$work/conditional-alt.txt"
+grep -q 'R_RISCV_SUB16.*Lminias_num_888_1' "$work/conditional-alt.txt"
 
-echo "MINIAS_A0=PASS objects=17 format=ELF64-RISCV-ET_REL relocations=12 strings=2 pseudos=14 previous=1 numeric_labels=13 isa_next=13 csr_amo=4 section_stack=1 org=1 local_difference=1 lr_sc=2 inline_labels=2 branch_pseudos=8 extern=1 symbol_minus_dot=4 jal=2 high_numeric_labels=2 conditional=1"
+echo "MINIAS_A0=PASS objects=17 format=ELF64-RISCV-ET_REL relocations=14 strings=2 pseudos=14 previous=1 numeric_labels=14 isa_next=13 csr_amo=4 section_stack=1 org=1 local_difference=1 lr_sc=2 inline_labels=2 branch_pseudos=8 extern=1 symbol_minus_dot=4 symbol_difference=1 jal=2 high_numeric_labels=2 conditional=1"
