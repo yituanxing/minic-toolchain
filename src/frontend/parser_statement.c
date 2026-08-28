@@ -2785,6 +2785,7 @@ static bool parse_static_local_array_declarator(MinicParser *parser,
     size_t bound_count;
     size_t index;
     int symbol_length;
+    bool parenthesized_function_declarator;
 
     if (attributes == NULL || out_object_id == NULL) {
         return false;
@@ -2797,19 +2798,82 @@ static bool parse_static_local_array_declarator(MinicParser *parser,
         minic_parser_error(parser, "static local object cannot have void type");
         return false;
     }
-    if (parser->current.kind != MINIC_TOKEN_IDENTIFIER) {
-        minic_parser_error(parser, "expected static local name");
-        return false;
+    parenthesized_function_declarator = false;
+    if (local_declarator_starts_function_pointer(parser)) {
+        MinicParsedFunctionDeclarator declarator;
+
+        if (!minic_parser_parse_parenthesized_function_declarator(
+                parser, true, true, &declarator) ||
+            !minic_parser_build_function_declarator_type(
+                parser, declared_type, &declarator, &declared_type)) {
+            if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
+                minic_parser_error(parser, "cannot build static local function declarator type");
+            }
+            return false;
+        }
+        name_span = declarator.name_span;
+        parenthesized_function_declarator = true;
+    } else {
+        if (parser->current.kind != MINIC_TOKEN_IDENTIFIER) {
+            minic_parser_error(parser, "expected static local name");
+            return false;
+        }
+        name_span = parser->current.span;
+        if (!minic_parser_advance(parser)) {
+            return false;
+        }
     }
-    name_span = parser->current.span;
     if (minic_parser_name_bound_in_current_scope(parser, name_span)) {
         minic_parser_error(parser, "duplicate local declaration");
         return false;
     }
-    if (!minic_parser_advance(parser) ||
-        !minic_parser_parse_gnu_attribute_lists(
+    if (!minic_parser_parse_gnu_attribute_lists(
             parser, consume_static_local_interleaved_attribute, attributes)) {
         return false;
+    }
+
+    if (parenthesized_function_declarator && minic_type_is_array(declared_type)) {
+        char array_symbol_name[96];
+        MinicGlobalObjectId array_object_id;
+        int array_symbol_length;
+
+        array_symbol_length = snprintf(array_symbol_name,
+                                       sizeof(array_symbol_name),
+                                       "__minic_static_local_%zu_%zu",
+                                       (size_t)parser->current_function,
+                                       parser->program->global_object_count);
+        if (array_symbol_length <= 0 ||
+            (size_t)array_symbol_length >= sizeof(array_symbol_name) ||
+            !minic_c0_program_add_global_object(parser->program,
+                                                array_symbol_name,
+                                                (size_t)array_symbol_length,
+                                                declared_type,
+                                                true,
+                                                minic_type_is_const(declared_type),
+                                                &array_object_id)) {
+            minic_parser_error(parser, "cannot create static local function-pointer array");
+            return false;
+        }
+        if (parser->current.kind == MINIC_TOKEN_EQUAL) {
+            if (!minic_parser_advance(parser) ||
+                !minic_parser_parse_static_storage_initializer_value(
+                    parser, array_object_id, declared_type)) {
+                if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
+                    minic_parser_error(
+                        parser, "cannot initialize static local function-pointer array");
+                }
+                return false;
+            }
+        } else if (!minic_c0_global_object_set_zero_initialized(
+                       parser->program, array_object_id)) {
+            minic_parser_error(parser, "cannot zero static local function-pointer array");
+            return false;
+        }
+        if (!minic_parser_bind_scoped_global_object(parser, name_span, array_object_id)) {
+            return false;
+        }
+        *out_object_id = array_object_id;
+        return true;
     }
 
     bound_count = 0U;
