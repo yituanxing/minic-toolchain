@@ -582,6 +582,151 @@ static bool static_pointer_absolute_offset_bits(const MinicParser *parser,
     return static_pointer_mask_bits(parser, product, byte_offset_bits);
 }
 
+static bool static_absolute_pointer_expression_bits(const MinicParser *parser,
+                                                    MinicExpressionId expression_id,
+                                                    uint64_t *bits);
+
+static bool static_absolute_lvalue_address_bits(const MinicParser *parser,
+                                                MinicExpressionId expression_id,
+                                                uint64_t *bits) {
+    const MinicExpression *expression;
+
+    if (parser == NULL || bits == NULL) {
+        return false;
+    }
+    expression = minic_c0_program_expression(parser->program, expression_id);
+    if (expression == NULL || expression->value_category != MINIC_VALUE_LVALUE) {
+        return false;
+    }
+    if (expression->kind == MINIC_EXPRESSION_DEREFERENCE) {
+        return static_absolute_pointer_expression_bits(
+            parser, expression->value.unary.operand, bits);
+    }
+    if (expression->kind == MINIC_EXPRESSION_MEMBER) {
+        const MinicExpression *base;
+        const MinicRecord *record;
+        size_t field_offset;
+        uint64_t base_bits;
+
+        base = minic_c0_program_expression(parser->program, expression->value.member.base);
+        record = minic_c0_program_record(parser->program, expression->value.member.record_id);
+        if (base == NULL || record == NULL ||
+            !minic_data_layout_record_field_offset(
+                minic_target_info_data_layout(parser->target_info),
+                parser->program,
+                record,
+                expression->value.member.field_index,
+                &field_offset)) {
+            return false;
+        }
+        if (minic_type_is_pointer(base->type)) {
+            if (!static_absolute_pointer_expression_bits(
+                    parser, expression->value.member.base, &base_bits)) {
+                return false;
+            }
+        } else if (!static_absolute_lvalue_address_bits(
+                       parser, expression->value.member.base, &base_bits)) {
+            return false;
+        }
+        return static_pointer_mask_bits(parser, base_bits + (uint64_t)field_offset, bits);
+    }
+    if (expression->kind == MINIC_EXPRESSION_SUBSCRIPT) {
+        const MinicExpression *base;
+        uint64_t base_bits;
+        uint64_t delta_bits;
+
+        base = minic_c0_program_expression(parser->program, expression->value.subscript.base);
+        if (base == NULL) {
+            return false;
+        }
+        if (minic_type_is_pointer(base->type)) {
+            if (!static_absolute_pointer_expression_bits(
+                    parser, expression->value.subscript.base, &base_bits)) {
+                return false;
+            }
+        } else if (!static_absolute_lvalue_address_bits(
+                       parser, expression->value.subscript.base, &base_bits)) {
+            return false;
+        }
+        if (!static_pointer_absolute_offset_bits(parser,
+                                                 expression->type,
+                                                 expression->value.subscript.index,
+                                                 false,
+                                                 &delta_bits)) {
+            return false;
+        }
+        return static_pointer_mask_bits(parser, base_bits + delta_bits, bits);
+    }
+    return false;
+}
+
+static bool static_absolute_pointer_expression_bits(const MinicParser *parser,
+                                                    MinicExpressionId expression_id,
+                                                    uint64_t *bits) {
+    const MinicExpression *expression;
+
+    if (parser == NULL || bits == NULL) {
+        return false;
+    }
+    expression = minic_c0_program_expression(parser->program, expression_id);
+    if (expression == NULL || !minic_type_is_pointer(expression->type)) {
+        return false;
+    }
+    if (static_pointer_integer_constant_bits(parser, expression_id, bits)) {
+        return true;
+    }
+    if ((expression->kind == MINIC_EXPRESSION_CAST ||
+         expression->kind == MINIC_EXPRESSION_BITCAST ||
+         expression->kind == MINIC_EXPRESSION_CONVERSION)) {
+        const MinicExpression *operand;
+
+        operand = minic_c0_program_expression(parser->program, expression->value.unary.operand);
+        if (operand != NULL && minic_type_is_pointer(operand->type)) {
+            return static_absolute_pointer_expression_bits(
+                parser, expression->value.unary.operand, bits);
+        }
+    }
+    if (expression->kind == MINIC_EXPRESSION_ADDRESS_OF) {
+        return static_absolute_lvalue_address_bits(
+            parser, expression->value.unary.operand, bits);
+    }
+    if (expression->kind == MINIC_EXPRESSION_BINARY &&
+        (expression->value.binary.operator_kind == MINIC_BINARY_ADD ||
+         expression->value.binary.operator_kind == MINIC_BINARY_SUBTRACT)) {
+        const MinicExpression *left;
+        const MinicExpression *right;
+        MinicExpressionId pointer_id;
+        MinicExpressionId offset_id;
+        MinicType pointee_type;
+        uint64_t base_bits;
+        uint64_t delta_bits;
+        bool subtract;
+
+        left = minic_c0_program_expression(parser->program, expression->value.binary.left);
+        right = minic_c0_program_expression(parser->program, expression->value.binary.right);
+        pointer_id = MINIC_EXPRESSION_INVALID;
+        offset_id = MINIC_EXPRESSION_INVALID;
+        subtract = expression->value.binary.operator_kind == MINIC_BINARY_SUBTRACT;
+        if (left != NULL && minic_type_is_pointer(left->type)) {
+            pointer_id = expression->value.binary.left;
+            offset_id = expression->value.binary.right;
+        } else if (!subtract && right != NULL && minic_type_is_pointer(right->type)) {
+            pointer_id = expression->value.binary.right;
+            offset_id = expression->value.binary.left;
+        }
+        if (pointer_id == MINIC_EXPRESSION_INVALID ||
+            !minic_type_pointee(
+                minic_c0_program_expression(parser->program, pointer_id)->type, &pointee_type) ||
+            !static_absolute_pointer_expression_bits(parser, pointer_id, &base_bits) ||
+            !static_pointer_absolute_offset_bits(
+                parser, pointee_type, offset_id, subtract, &delta_bits)) {
+            return false;
+        }
+        return static_pointer_mask_bits(parser, base_bits + delta_bits, bits);
+    }
+    return false;
+}
+
 static void static_pointer_initializer_reset(MinicStaticPointerInitializer *initializer) {
     if (initializer == NULL) {
         return;
@@ -662,6 +807,9 @@ static bool static_pointer_initializer_from_expression(MinicParser *parser,
         return true;
     }
     if (static_pointer_integer_constant_bits(parser, expression_id, &initializer->bits)) {
+        return true;
+    }
+    if (static_absolute_pointer_expression_bits(parser, expression_id, &initializer->bits)) {
         return true;
     }
     if (expression->kind == MINIC_EXPRESSION_BINARY &&
