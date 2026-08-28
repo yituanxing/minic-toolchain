@@ -1,0 +1,21 @@
+name: Linux Runtime Prep
+
+on:
+  push:
+    branches:
+      - ci/linux-runtime-prep-v1
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  contract-selftest:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate Python runtime-log gate
+        run: python3 tests/external/linux/runtime_log_gate_test.py
+      - name: Validate QEMU gate shell syntax
+        run: bash -n tests/external/linux/run-qemu-initramfs-gate.sh
