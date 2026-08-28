@@ -12,6 +12,7 @@ work=${BUILD_DIR:-"$root/build/linux-runtime"}
 timeout_seconds=${QEMU_TIMEOUT_SECONDS:-90}
 shell_input_delay=${QEMU_SHELL_INPUT_DELAY_SECONDS:-8}
 expected_release=${LINUX_RELEASE:-6.6.143}
+profile=${LINUX_RUNTIME_PROFILE:-full}
 
 if test -z "$image" || test ! -s "$image"; then
     printf '%s\n' "LINUX_RUNTIME_ERROR missing LINUX_IMAGE=$image" >&2
@@ -112,9 +113,25 @@ require_log rdinit-init "Kernel command line:.*rdinit=/init"
 require_log rdinit-init "devtmpfs: initialized"
 require_log rdinit-init "(Trying to unpack rootfs image as initramfs|Unpacking initramfs)"
 require_log rdinit-init "(Run /init as init process|Starting init: /init)"
+require_log rdinit-init "INIT_PROC_MOUNT=PASS"
+require_log rdinit-init "INIT_SYSFS_MOUNT=PASS"
+require_log rdinit-init "INIT_DEVTMPFS_MOUNT=PASS"
+require_log rdinit-init "INIT_CMDLINE_READ=PASS"
+require_log rdinit-init "INIT_TMPFS_MOUNT=PASS"
+require_log rdinit-init "INIT_TMPFS_RW=PASS"
+require_log rdinit-init "MINIC_LINUX_RUNTIME_INIT_END fail=0"
 require_log rdinit-init "USER_SHELL_OK"
 require_log rdinit-init "DONE_COMMANDS"
-printf '%s\n' "LINUX_RUNTIME_RDINIT_INIT=PASS release=$expected_release"
+printf '%s\n' "LINUX_RUNTIME_RDINIT_INIT=PASS release=$expected_release profile=$profile"
+
+if test "$profile" = fast; then
+    printf '%s\n' "LINUX_RUNTIME_EXACT=PASS release=$expected_release profile=fast lanes=1/1"
+    exit 0
+fi
+if test "$profile" != full; then
+    printf '%s\n' "LINUX_RUNTIME_ERROR unsupported profile=$profile" >&2
+    exit 2
+fi
 
 run_boot rdinit-sh "$common rdinit=/bin/sh" shell
 require_log rdinit-sh "Linux version $expected_release"
@@ -127,4 +144,4 @@ require_log rdinit-sh "RDINIT_SH_OK"
 require_log rdinit-sh "DONE_RDINIT"
 printf '%s\n' "LINUX_RUNTIME_RDINIT_SH=PASS release=$expected_release"
 
-printf '%s\n' "LINUX_RUNTIME_EXACT=PASS release=$expected_release lanes=2/2"
+printf '%s\n' "LINUX_RUNTIME_EXACT=PASS release=$expected_release profile=full lanes=2/2"
