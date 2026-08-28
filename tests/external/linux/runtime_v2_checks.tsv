@@ -8,6 +8,19 @@ p0	cmdline	INIT_CMDLINE_READ=PASS	procfs
 p0	tmpfs	INIT_TMPFS_RW=PASS	vfs-io
 p0	init-clean	MINIC_LINUX_RUNTIME_INIT_END fail=0	userspace
 p0	powerdown	reboot: Power down	shutdown
+p1	eventfd	RUNTIME_V2_SYSCALL_PASS eventfd-rw	eventfd
+p1	epoll	RUNTIME_V2_SYSCALL_PASS epoll-eventfd	epoll
+p1	timerfd	RUNTIME_V2_SYSCALL_PASS timerfd-read	timer
+p1	signalfd	RUNTIME_V2_SYSCALL_PASS signalfd-read	signal
+p1	inotify	RUNTIME_V2_SYSCALL_PASS inotify-create	fs-notify
+p1	socketpair	RUNTIME_V2_SYSCALL_PASS socketpair-rw	unix-socket
+p1	ipv6-loopback	RUNTIME_V2_SYSCALL_PASS ipv6-tcp-loopback	ipv6-tcp
+p1	memfd	RUNTIME_V2_SYSCALL_PASS memfd-rw	memfd
+p1	pidfd	RUNTIME_V2_SYSCALL_PASS pidfd-open	pidfd
+p1	futex	RUNTIME_V2_SYSCALL_PASS futex-wake	futex
+p1	io-uring	RUNTIME_V2_SYSCALL_PASS io-uring-setup	io-uring
+p1	mmap	RUNTIME_V2_SYSCALL_PASS mmap-mprotect	mm
+p1	probe-exec	INIT_RUNTIME_PROBE=PASS	fork-exec-wait
 p1	rootfs-rw	RUNTIME_V2_ROOTFS_RW=PASS	block-fs-io
 p1	overlay-copy-up	FUNCTION_PASS overlay-copy-up	filesystem
 p1	iptables4	FUNCTION_PASS iptables-get-info	netfilter
