@@ -68,7 +68,7 @@ typedef struct MinicRiscv64CoreFrame {
 
 static bool core_scalar_type(MinicType type) {
     return minic_type_is_integer(type) || minic_type_is_pointer(type) ||
-           minic_type_is_double(type);
+           minic_type_is_float(type) || minic_type_is_double(type);
 }
 
 static const MinicCoreFixedRegisterBinding *core_fixed_register_binding(
@@ -1883,6 +1883,7 @@ static bool core_instruction_supported(const MinicC0Program *program,
     case MINIC_CORE_INSTRUCTION_SCALAR_EQUAL:
     case MINIC_CORE_INSTRUCTION_INTEGER_CONVERSION:
     case MINIC_CORE_INSTRUCTION_INTEGER_TO_DOUBLE:
+    case MINIC_CORE_INSTRUCTION_FLOAT_TO_DOUBLE:
     case MINIC_CORE_INSTRUCTION_DOUBLE_TO_INTEGER:
     case MINIC_CORE_INSTRUCTION_INTEGER_NEGATE:
     case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_NOT:
@@ -3883,6 +3884,21 @@ static bool emit_instruction(FILE *file,
                     "  %s ft0, t0\n"
                     "  fmv.x.d t1, ft0\n",
                     opcode) < 0) {
+            return false;
+        }
+        return store_core_value(file, frame, instruction->result, "t1");
+    }
+    case MINIC_CORE_INSTRUCTION_FLOAT_TO_DOUBLE: {
+        MinicCoreValueId operand = instruction->value.operand;
+
+        if (operand >= function->value_count ||
+            !minic_type_is_float(function->values[operand].type) ||
+            !minic_type_is_double(instruction->type) ||
+            !load_core_value(file, frame, operand, "t0") ||
+            fprintf(file,
+                    "  fmv.w.x ft0, t0\n"
+                    "  fcvt.d.s ft1, ft0\n"
+                    "  fmv.x.d t1, ft1\n") < 0) {
             return false;
         }
         return store_core_value(file, frame, instruction->result, "t1");
