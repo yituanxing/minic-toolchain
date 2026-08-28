@@ -8461,6 +8461,10 @@ static MinicCoreLowerStatus lower_switch_case_dispatch(MinicCoreLowerContext *co
                                                        MinicCoreBlockId next_target) {
     const MinicExpression *lower_expression;
     const MinicExpression *upper_expression;
+    MinicConstValue lower_constant;
+    MinicConstValue lower_converted;
+    MinicConstValue upper_constant;
+    MinicConstValue upper_converted;
     MinicCoreInstruction instruction;
     MinicCoreValueId bound;
     MinicCoreValueId comparison;
@@ -8477,8 +8481,16 @@ static MinicCoreLowerStatus lower_switch_case_dispatch(MinicCoreLowerContext *co
     }
     lower_expression =
         minic_c0_program_expression(context->body->program, case_statement->expression);
-    if (lower_expression == NULL || lower_expression->kind != MINIC_EXPRESSION_INTEGER ||
-        !minic_type_is_integer(lower_expression->type)) {
+    if (lower_expression == NULL || !minic_type_is_integer(lower_expression->type) ||
+        !minic_const_eval_integer(context->body->program,
+                                  context->target,
+                                  case_statement->expression,
+                                  &lower_constant) ||
+        !minic_const_value_convert_integer(context->body->program,
+                                           context->target,
+                                           &lower_constant,
+                                           selector_type,
+                                           &lower_converted)) {
         return MINIC_CORE_LOWER_UNSUPPORTED;
     }
 
@@ -8487,11 +8499,17 @@ static MinicCoreLowerStatus lower_switch_case_dispatch(MinicCoreLowerContext *co
     if (status != MINIC_CORE_LOWER_OK) {
         return status;
     }
-    status = append_switch_integer_constant(context,
-                                            lower_expression->span,
-                                            selector_type,
-                                            lower_expression->value.integer_value,
-                                            &bound);
+    {
+        int64_t lower_value;
+
+        lower_value = 0;
+        (void)memcpy(&lower_value, &lower_converted.bits, sizeof(lower_value));
+        status = append_switch_integer_constant(context,
+                                                lower_expression->span,
+                                                selector_type,
+                                                lower_value,
+                                                &bound);
+    }
     if (status != MINIC_CORE_LOWER_OK) {
         return status;
     }
@@ -8514,8 +8532,16 @@ static MinicCoreLowerStatus lower_switch_case_dispatch(MinicCoreLowerContext *co
 
     upper_expression =
         minic_c0_program_expression(context->body->program, case_statement->target_expression);
-    if (upper_expression == NULL || upper_expression->kind != MINIC_EXPRESSION_INTEGER ||
-        !minic_type_is_integer(upper_expression->type)) {
+    if (upper_expression == NULL || !minic_type_is_integer(upper_expression->type) ||
+        !minic_const_eval_integer(context->body->program,
+                                  context->target,
+                                  case_statement->target_expression,
+                                  &upper_constant) ||
+        !minic_const_value_convert_integer(context->body->program,
+                                           context->target,
+                                           &upper_constant,
+                                           selector_type,
+                                           &upper_converted)) {
         return MINIC_CORE_LOWER_UNSUPPORTED;
     }
     {
@@ -8542,11 +8568,17 @@ static MinicCoreLowerStatus lower_switch_case_dispatch(MinicCoreLowerContext *co
         }
 
         context->block_id = upper_test_block;
-        status = append_switch_integer_constant(context,
-                                                upper_expression->span,
-                                                selector_type,
-                                                upper_expression->value.integer_value,
-                                                &bound);
+        {
+            int64_t upper_value;
+
+            upper_value = 0;
+            (void)memcpy(&upper_value, &upper_converted.bits, sizeof(upper_value));
+            status = append_switch_integer_constant(context,
+                                                    upper_expression->span,
+                                                    selector_type,
+                                                    upper_value,
+                                                    &bound);
+        }
         if (status != MINIC_CORE_LOWER_OK) {
             return status;
         }
