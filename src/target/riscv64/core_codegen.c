@@ -827,7 +827,8 @@ static bool core_integer_overflow_supported(const MinicC0Program *program,
 
     if ((!minic_type_equal(left_type, pointee) || !minic_type_equal(right_type, pointee)) &&
         !(core_integer_type_range_fits(program, function, left_type, pointee) &&
-          core_integer_type_range_fits(program, function, right_type, pointee))) {
+          core_integer_type_range_fits(program, function, right_type, pointee)) &&
+        !(*result_size < 8U && left_size <= *result_size && right_size <= *result_size)) {
         bool left_is_result;
         bool right_is_result;
         const MinicType *other_effective_type;
@@ -3394,7 +3395,9 @@ static bool emit_instruction(FILE *file,
         if ((!minic_type_equal(left_type, result_type) ||
              !minic_type_equal(right_type, result_type)) &&
             !(core_integer_type_range_fits(program, function, left_type, result_type) &&
-              core_integer_type_range_fits(program, function, right_type, result_type))) {
+              core_integer_type_range_fits(program, function, right_type, result_type)) &&
+            !(result_size < 8U && left_type.kind != MINIC_TYPE_INVALID &&
+              right_type.kind != MINIC_TYPE_INVALID)) {
             const char *signed_register;
             const char *unsigned_register;
             uint64_t maximum;
