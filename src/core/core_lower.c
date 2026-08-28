@@ -8848,24 +8848,10 @@ lower_switch(MinicCoreLowerContext *context, const MinicStatement *statement, bo
             if (segment_statement == NULL) {
                 return MINIC_CORE_LOWER_ERROR;
             }
-            /* A direct break terminates this switch segment. Parser flattening
-               can leave another source break immediately after it, for example
-               one inside a braced case body plus one after the brace. Such
-               trailing breaks are unreachable and have no re-entry label
-               inside this segment. Accept only that narrow redundant-tail
-               shape; any other statement after the first direct break remains
-               fail-closed. */
-            if (break_index != SIZE_MAX &&
-                segment_statement->kind != MINIC_STATEMENT_BREAK) {
-                (void)fprintf(stderr,
-                              "CORE_SWITCH_DETAIL function=%s gate=post-break "
-                              "source_index=%zu scan=%zu kind=%d\n",
-                              context->source_function->name,
-                              source_index,
-                              scan,
-                              (int)segment_statement->kind);
-                return MINIC_CORE_LOWER_UNSUPPORTED;
-            }
+            /* Keep the whole source segment. lower_block() owns CFG re-entry
+               through labels after a terminating break/goto. Record whether any
+               direct break exists only for conservative switch-termination
+               analysis; do not truncate executable label targets here. */
             if (segment_statement->kind == MINIC_STATEMENT_BREAK) {
                 if (!core_cleanup_edge_is_empty(segment_statement)) {
                     (void)fprintf(stderr,
@@ -8888,8 +8874,7 @@ lower_switch(MinicCoreLowerContext *context, const MinicStatement *statement, bo
         segment_terminated = false;
         segment = *body;
         segment.statements = body->statements + segment_begin;
-        segment.statement_count =
-            (break_index == SIZE_MAX ? segment_end : break_index) - segment_begin;
+        segment.statement_count = segment_end - segment_begin;
         segment.statement_capacity = segment.statement_count;
         if (segment.statement_count != 0U) {
             saved_break_target = context->break_target;
@@ -8905,9 +8890,7 @@ lower_switch(MinicCoreLowerContext *context, const MinicStatement *statement, bo
         if (segment_terminated) {
             continue;
         }
-        if (break_index != SIZE_MAX) {
-            fallthrough_target = exit_block;
-        } else if (source_index + 1U < label_count) {
+        if (source_index + 1U < label_count) {
             fallthrough_target = labels[source_index + 1U].body_block;
         } else {
             fallthrough_target = exit_block;
