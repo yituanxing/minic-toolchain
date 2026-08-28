@@ -3291,6 +3291,16 @@ static bool parse_unary(MinicParser *parser, MinicExpressionId *expression_id, b
     MinicExpressionId result_id;
     const MinicExpression *operand_expression;
 
+    /* GNU __extension__ is a diagnostic-suppression prefix only.  It does
+       not change the type, value category, or runtime behavior of its operand,
+       so keep it out of AST/Core and continue through the ordinary unary/cast
+       grammar. */
+    if (generic_token_text_equals(parser, "__extension__")) {
+        if (!minic_parser_advance(parser)) {
+            return false;
+        }
+        return parse_unary(parser, expression_id, decay_array);
+    }
     if (current_is_sizeof(parser)) {
         return parse_sizeof(parser, expression_id);
     }
