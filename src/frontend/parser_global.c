@@ -1066,6 +1066,25 @@ static bool static_integer_address_relocation_target(const MinicParser *parser,
         return static_integer_address_relocation_target(
             parser, expression->value.unary.operand, target);
     }
+    if (expression->kind == MINIC_EXPRESSION_CONDITIONAL) {
+        MinicConstValue condition;
+        bool is_zero;
+        MinicExpressionId selected_id;
+
+        if (!minic_const_eval_integer(parser->program,
+                                      parser->target_info,
+                                      expression->value.conditional.condition,
+                                      &condition) ||
+            !minic_const_value_is_zero(
+                parser->program, parser->target_info, &condition, &is_zero)) {
+            return false;
+        }
+        selected_id = !is_zero && expression->value.conditional.uses_condition_value
+                          ? expression->value.conditional.condition
+                          : (is_zero ? expression->value.conditional.when_false
+                                     : expression->value.conditional.when_true);
+        return static_integer_address_relocation_target(parser, selected_id, target);
+    }
     if (expression->kind == MINIC_EXPRESSION_BINARY &&
         (expression->value.binary.operator_kind == MINIC_BINARY_ADD ||
          expression->value.binary.operator_kind == MINIC_BINARY_SUBTRACT)) {
