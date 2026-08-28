@@ -23,11 +23,17 @@ static bool parse_character_value(MinicParser *parser, int *value) {
 
     span = parser->current.span;
     length = span.end.offset - span.begin.offset;
-    if (length < 3U) {
+    offset = span.begin.offset;
+    if (length >= 2U && parser->source[offset] == 'L' &&
+        parser->source[offset + 1U] == '\'') {
+        offset += 1U;
+        length -= 1U;
+    }
+    if (length < 3U || parser->source[offset] != '\'') {
         minic_parser_error(parser, "invalid character constant");
         return false;
     }
-    offset = span.begin.offset + 1U;
+    offset += 1U;
     character = parser->source[offset];
     if (character != '\\') {
         if (length != 3U) {
