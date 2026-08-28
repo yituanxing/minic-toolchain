@@ -1,0 +1,225 @@
+name: MiniAS M0 Linux Assembly Census
+
+on:
+  push:
+    branches:
+      - "toolchain/minias-m0-boundary-freeze"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  first500:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[minias-census]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Restore frozen first500 corpus
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-focus-corpus
+          key: linux-focus-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-${{ hashFiles('tests/external/linux/replay-indices.txt') }}
+          fail-on-cache-miss: true
+
+      - name: Validate frozen first500 corpus
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          manifest=build/linux-focus-corpus/selected-tus.txt
+          test -s "$manifest"
+          test "$(grep -cve '^[[:space:]]*$' "$manifest")" -eq 500
+
+      - name: Build frozen compiler
+        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/minias-census-first500-compiler
+
+      - name: Regenerate frozen compiler assembly
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          compiler="$GITHUB_WORKSPACE/build/minias-census-first500-compiler/bin/minic-cc"
+          work="$GITHUB_WORKSPACE/build/minias-census-first500"
+          CORE_FAST_TRACE=1 python3 tests/external/linux/corpus_replay.py \
+            --minic "$compiler" \
+            --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
+            --work "$work" --jobs 4 --offset 0 --limit 500 --sample-count 0
+          python3 - "$work/batch-results.json" <<'PY'
+          import json, sys
+          rows=json.load(open(sys.argv[1]))
+          bad=[r for r in rows if r["status"]!="PASS"]
+          assert len(rows)==500 and not bad, (len(rows), bad[:5])
+          PY
+
+      - name: Census first500 assembly surface
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/minias-census-first500"
+          python3 assembler/tools/census.py \
+            --input "$work/minic-out" --label first500 \
+            --output "$work/census-first500.json" \
+            --summary "$work/census-first500.md" \
+            --cover-out "$work/cover-first500.txt"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: minias-census-first500
+          path: |
+            build/minias-census-first500/census-first500.json
+            build/minias-census-first500/census-first500.md
+            build/minias-census-first500/cover-first500.txt
+          retention-days: 14
+
+  shards:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[minias-census]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: new500
+            corpus_dir: linux-new500-corpus
+            cache_key: linux-new500-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-indices-500-999
+            expected: 500
+          - label: next500
+            corpus_dir: linux-next500-corpus
+            cache_key: linux-next500-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-indices-1000-1499
+            expected: 500
+          - label: next500b
+            corpus_dir: linux-next500b-corpus
+            cache_key: linux-next500b-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-indices-1500-1999
+            expected: 500
+          - label: next500c
+            corpus_dir: linux-next500c-corpus
+            cache_key: linux-next500c-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-indices-2000-2499
+            expected: 500
+          - label: next500d
+            corpus_dir: linux-next500d-corpus
+            cache_key: linux-next500d-corpus-v4-6.6.143-rv64-defconfig-gcc13.3.0-indices-2500-2999
+            expected: 500
+          - label: final352
+            corpus_dir: linux-final352-corpus
+            cache_key: linux-final352-corpus-v2-6.6.143-rv64-defconfig-gcc13.3.0-indices-3000-3351
+            expected: 352
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Restore frozen Linux shard
+        uses: actions/cache/restore@v4
+        with:
+          path: build/${{ matrix.corpus_dir }}
+          key: ${{ matrix.cache_key }}
+          fail-on-cache-miss: true
+
+      - name: Validate frozen shard
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          manifest="build/${{ matrix.corpus_dir }}/selected-tus.txt"
+          test -s "$manifest"
+          test "$(grep -cve '^[[:space:]]*$' "$manifest")" -eq ${{ matrix.expected }}
+
+      - name: Build frozen compiler
+        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/minias-census-${{ matrix.label }}-compiler
+
+      - name: Regenerate frozen compiler assembly
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          label="${{ matrix.label }}"
+          expected=${{ matrix.expected }}
+          corpus="$GITHUB_WORKSPACE/build/${{ matrix.corpus_dir }}"
+          compiler="$GITHUB_WORKSPACE/build/minias-census-$label-compiler/bin/minic-cc"
+          work="$GITHUB_WORKSPACE/build/minias-census-$label"
+          CORE_FAST_TRACE=1 python3 tests/external/linux/corpus_replay.py \
+            --minic "$compiler" --corpus "$corpus" --work "$work" \
+            --jobs 4 --offset 0 --limit "$expected" --sample-count 0
+          python3 - "$work/batch-results.json" "$expected" <<'PY'
+          import json, sys
+          rows=json.load(open(sys.argv[1]))
+          expected=int(sys.argv[2])
+          bad=[r for r in rows if r["status"]!="PASS"]
+          assert len(rows)==expected and not bad, (len(rows), expected, bad[:5])
+          PY
+
+      - name: Census shard assembly surface
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          label="${{ matrix.label }}"
+          work="$GITHUB_WORKSPACE/build/minias-census-$label"
+          python3 assembler/tools/census.py \
+            --input "$work/minic-out" --label "$label" \
+            --output "$work/census-$label.json" \
+            --summary "$work/census-$label.md" \
+            --cover-out "$work/cover-$label.txt"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: minias-census-${{ matrix.label }}
+          path: |
+            build/minias-census-${{ matrix.label }}/census-${{ matrix.label }}.json
+            build/minias-census-${{ matrix.label }}/census-${{ matrix.label }}.md
+            build/minias-census-${{ matrix.label }}/cover-${{ matrix.label }}.txt
+          retention-days: 14
+
+  all3352:
+    if: always() && (github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[minias-census]'))
+    needs: [first500, shards]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Require all frozen shards
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "${{ needs.first500.result }}" = success
+          test "${{ needs.shards.result }}" = success
+
+      - name: Download shard census reports
+        uses: actions/download-artifact@v4
+        with:
+          pattern: minias-census-*
+          path: build/minias-census-artifacts
+          merge-multiple: true
+
+      - name: Merge all3352 census
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mapfile -t reports < <(find build/minias-census-artifacts -maxdepth 1 -type f -name 'census-*.json' | sort)
+          test "${#reports[@]}" -eq 7
+          python3 assembler/tools/census.py \
+            --merge "${reports[@]}" --label all3352 \
+            --output build/minias-census-all3352.json \
+            --summary build/minias-census-all3352.md \
+            --cover-out build/minias-census-cover-all3352.txt
+          python3 - <<'PY'
+          import json
+          p="build/minias-census-all3352.json"
+          r=json.load(open(p))
+          t=r["totals"]
+          assert t["files"] == 3352, t["files"]
+          print(
+              "MINIAS_CENSUS_ALL3352=PASS"
+              f" files={t['files']}"
+              f" mnemonics={len(t['mnemonics'])}"
+              f" directives={len(t['directives'])}"
+              f" relocations={len(t['relocations'])}"
+              f" features={len(t['feature_occurrences'])}"
+              f" unclassified={t['unclassified_lines']}"
+          )
+          PY
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: minias-census-all3352
+          path: |
+            build/minias-census-all3352.json
+            build/minias-census-all3352.md
+            build/minias-census-cover-all3352.txt
+          retention-days: 30
