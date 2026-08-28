@@ -29,7 +29,7 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: build/linux-next500d-corpus
-          key: linux-next500d-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-indices-2500-2999
+          key: linux-next500d-corpus-v2-6.6.143-rv64-defconfig-gcc13.3.0-indices-2500-2999
 
       - name: Validate cached next500 corpus
         if: steps.next500-cache.outputs.cache-hit == 'true'
@@ -113,12 +113,61 @@ jobs:
           print(f"LINUX_NEXT500D_CORPUS cache=fill selected=500 bytes={total_bytes}")
           PY
 
+      - name: Validate materialized preprocessed corpus
+        if: steps.next500-cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          from concurrent.futures import ThreadPoolExecutor, as_completed
+          from pathlib import Path
+          import subprocess
+
+          corpus = Path("build/linux-next500d-corpus")
+          rows = [line for line in (corpus / "selected-tus.txt").read_text().splitlines()
+                  if line.strip()]
+
+          def check(row):
+              index, _, rel_i, _ = row.split("\t", 3)
+              path = corpus / "kbuild" / rel_i
+              proc = subprocess.run(
+                  ["riscv64-linux-gnu-gcc", "-std=gnu11", "-fsyntax-only", "-w", str(path)],
+                  stdout=subprocess.DEVNULL,
+                  stderr=subprocess.PIPE,
+                  text=True,
+                  errors="replace",
+              )
+              return int(index), rel_i, proc.returncode, proc.stderr
+
+          failures = []
+          with ThreadPoolExecutor(max_workers=4) as pool:
+              futures = [pool.submit(check, row) for row in rows]
+              for future in as_completed(futures):
+                  index, rel_i, rc, stderr = future.result()
+                  if rc != 0:
+                      failures.append((index, rel_i, stderr))
+
+          failures.sort()
+          print(
+              f"LINUX_NEXT500D_CORPUS_SYNTAX selected={len(rows)} "
+              f"gcc_fail={len(failures)}"
+          )
+          if failures:
+              for index, rel_i, stderr in failures[:20]:
+                  first = next((line for line in stderr.splitlines() if line.strip()), "")
+                  print(
+                      f"LINUX_NEXT500D_CORPUS_SYNTAX_ERROR "
+                      f"index={index} input={rel_i} diagnostic={first}"
+                  )
+              raise SystemExit(1)
+          PY
+
       - name: Save frozen next500 corpus
         if: steps.next500-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           path: build/linux-next500d-corpus
-          key: linux-next500d-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-indices-2500-2999
+          key: linux-next500d-corpus-v2-6.6.143-rv64-defconfig-gcc13.3.0-indices-2500-2999
 
 
 
@@ -138,7 +187,7 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: build/linux-next500d-corpus
-          key: linux-next500d-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-indices-2500-2999
+          key: linux-next500d-corpus-v2-6.6.143-rv64-defconfig-gcc13.3.0-indices-2500-2999
 
       - name: Require frozen next500d corpus
         run: |
@@ -269,7 +318,7 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: build/linux-next500d-corpus
-          key: linux-next500d-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-indices-2500-2999
+          key: linux-next500d-corpus-v2-6.6.143-rv64-defconfig-gcc13.3.0-indices-2500-2999
 
       - name: Require frozen next500d corpus
         run: |
