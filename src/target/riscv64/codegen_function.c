@@ -905,7 +905,11 @@ static bool minic_riscv64_emit_global_object(FILE *file,
 
     directive = NULL;
     scalar_width = 0U;
-    if (object->is_zero_initialized || object->is_tentative) {
+    if (zero_size_object_definition) {
+        if (object->initializer_count != 0U || object->relocation_count != 0U) {
+            return false;
+        }
+    } else if (object->is_zero_initialized || object->is_tentative) {
         if (object->initializer_count != 0U) {
             return false;
         }
@@ -968,7 +972,10 @@ static bool minic_riscv64_emit_global_object(FILE *file,
                 object->name) < 0) {
         return false;
     }
-    if (minic_type_is_record(object->type) && object->initializer_count != 0U) {
+    if (zero_size_object_definition) {
+        /* GNU zero-length objects still own a symbol and type, but have no
+           payload bytes. The label plus .size 0 is the complete definition. */
+    } else if (minic_type_is_record(object->type) && object->initializer_count != 0U) {
         if (!minic_riscv64_emit_record_values(file, program, object)) {
             return false;
         }
