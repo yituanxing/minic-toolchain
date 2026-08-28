@@ -190,24 +190,6 @@ static bool consume_record_field_attribute(MinicParser *parser,
     return false;
 }
 
-static bool
-parse_record_field_attributes(MinicParser *parser, size_t *explicit_alignment, bool *is_packed) {
-    MinicRecordFieldAttributeContext context;
-
-    if (parser == NULL || explicit_alignment == NULL || is_packed == NULL) {
-        return false;
-    }
-    (void)memset(&context, 0, sizeof(context));
-    context.explicit_alignment = *explicit_alignment;
-    context.is_packed = *is_packed;
-    if (!minic_parser_parse_gnu_attribute_lists(parser, consume_record_field_attribute, &context)) {
-        return false;
-    }
-    *explicit_alignment = context.explicit_alignment;
-    *is_packed = context.is_packed;
-    return true;
-}
-
 static bool parse_typed_record_field_attributes(MinicParser *parser,
                                                 MinicType field_type,
                                                 size_t *explicit_alignment,
