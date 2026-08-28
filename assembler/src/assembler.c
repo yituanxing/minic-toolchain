@@ -759,6 +759,429 @@ static bool emit_data_stmt(MiniAs *as, const MiniAsStmt *stmt) {
     return true;
 }
 
+static bool parse_numeric_label_id(const char *text, size_t *id) {
+    size_t value = 0U;
+    const char *p = text;
+
+    if (text == NULL || *text == '\0') {
+        return false;
+    }
+    while (*p != '\0') {
+        if (!isdigit((unsigned char)*p)) {
+            return false;
+        }
+        value = value * 10U + (size_t)(*p - '0');
+        if (value >= MINIAS_NUMERIC_LABEL_LIMIT) {
+            return false;
+        }
+        ++p;
+    }
+    *id = value;
+    return true;
+}
+
+static bool numeric_ref_boundary(char ch) {
+    return ch == '\0' || !(isalnum((unsigned char)ch) || ch == '_' || ch == '.' || ch == '
+    char *space;
+    char *op;
+    char *args;
+    size_t len;
+    MiniAsSymbol *symbol;
+    uint32_t size;
+    char reason[160];
+
+    text = minias_trim(text);
+    if (*text == '\0') {
+        return true;
+    }
+    len = strlen(text);
+    if (text[len - 1U] == ':') {
+        char canonical[96];
+        char *label;
+        size_t numeric_id;
+
+        text[len - 1U] = '\0';
+        label = minias_trim(text);
+        if (parse_numeric_label_id(label, &numeric_id)) {
+            int written;
+            size_t generation = ++as->numeric_label_counts[numeric_id];
+
+            written = snprintf(canonical,
+                               sizeof(canonical),
+                               ".Lminias_num_%zu_%zu",
+                               numeric_id,
+                               generation);
+            if (written < 0 || (size_t)written >= sizeof(canonical)) {
+                minias_set_error(as, "numeric-label-too-long:line=%zu", line);
+                return false;
+            }
+            label = canonical;
+        }
+        symbol = minias_get_symbol(as, label, true);
+        if (symbol == NULL) {
+            return false;
+        }
+        if (symbol->defined) {
+            minias_set_error(as, "duplicate-symbol:%s:line=%zu", symbol->name, line);
+            return false;
+        }
+        symbol->defined = true;
+        symbol->section = as->current_section;
+        symbol->value = (uint64_t)as->sections[(size_t)as->current_section].size;
+        return true;
+    }
+
+    space = text;
+    while (*space != '\0' && !isspace((unsigned char)*space)) {
+        ++space;
+    }
+    if (*space != '\0') {
+        *space = '\0';
+        args = minias_trim(space + 1);
+    } else {
+        args = space;
+    }
+    op = text;
+
+    if (op[0] == '.') {
+        if (strcmp(op, ".text") == 0) {
+            return switch_section(as,
+                                  ".text",
+                                  MINIAS_SHT_PROGBITS,
+                                  MINIAS_SHF_ALLOC | MINIAS_SHF_EXECINSTR,
+                                  4U);
+        }
+        if (strcmp(op, ".data") == 0) {
+            return switch_section(as,
+                                  ".data",
+                                  MINIAS_SHT_PROGBITS,
+                                  MINIAS_SHF_ALLOC | MINIAS_SHF_WRITE,
+                                  1U);
+        }
+        if (strcmp(op, ".bss") == 0) {
+            return switch_section(as,
+                                  ".bss",
+                                  MINIAS_SHT_NOBITS,
+                                  MINIAS_SHF_ALLOC | MINIAS_SHF_WRITE,
+                                  1U);
+        }
+        if (strcmp(op, ".section") == 0) {
+            return parse_section_directive(as, args, line);
+        }
+        if (strcmp(op, ".globl") == 0 || strcmp(op, ".global") == 0) {
+            return handle_symbol_list(as, args, MINIAS_STB_GLOBAL, true, 0U, false);
+        }
+        if (strcmp(op, ".weak") == 0) {
+            return handle_symbol_list(as, args, MINIAS_STB_WEAK, true, 0U, false);
+        }
+        if (strcmp(op, ".hidden") == 0) {
+            return handle_symbol_list(as, args, 0U, false, MINIAS_STV_HIDDEN, true);
+        }
+        if (strcmp(op, ".internal") == 0) {
+            return handle_symbol_list(as, args, 0U, false, MINIAS_STV_INTERNAL, true);
+        }
+        if (strcmp(op, ".protected") == 0) {
+            return handle_symbol_list(as, args, 0U, false, MINIAS_STV_PROTECTED, true);
+        }
+        if (strcmp(op, ".type") == 0) {
+            return parse_type(as, args, line);
+        }
+        if (strcmp(op, ".size") == 0) {
+            return parse_size(as, args, line);
+        }
+        if (strcmp(op, ".previous") == 0) {
+            int swap = as->current_section;
+            if (as->previous_section < 0 ||
+                (size_t)as->previous_section >= as->section_count) {
+                minias_set_error(as, "bad-directive:.previous:line=%zu", line);
+                return false;
+            }
+            as->current_section = as->previous_section;
+            as->previous_section = swap;
+            return true;
+        }
+        if (strcmp(op, ".option") == 0 || strcmp(op, ".file") == 0 ||
+            strcmp(op, ".ident") == 0) {
+            return true;
+        }
+        if (strcmp(op, ".align") == 0 || strcmp(op, ".balign") == 0 ||
+            strcmp(op, ".p2align") == 0) {
+            return handle_align(as, op, args, line);
+        }
+        if (data_width(op) != 0U || strcmp(op, ".zero") == 0 ||
+            strcmp(op, ".space") == 0 || strcmp(op, ".asciz") == 0 ||
+            strcmp(op, ".string") == 0 || strcmp(op, ".ascii") == 0) {
+            return add_data_stmt(as, op, args, line);
+        }
+        minias_set_error(as, "unsupported-directive:%s:line=%zu", op, line);
+        return false;
+    }
+
+    {
+        char *rewritten_args = NULL;
+        bool ok;
+
+        if (!rewrite_numeric_local_refs(as, args, &rewritten_args, line)) {
+            return false;
+        }
+        if (!minias_riscv_measure(op,
+                                  rewritten_args,
+                                  &size,
+                                  reason,
+                                  sizeof(reason))) {
+            minias_set_error(as, "%s:line=%zu", reason, line);
+            free(rewritten_args);
+            return false;
+        }
+        ok = add_stmt(as,
+                      MINIAS_STMT_INSN,
+                      op,
+                      rewritten_args,
+                      line,
+                      size,
+                      1U);
+        free(rewritten_args);
+        if (!ok) {
+            return false;
+        }
+    }
+    as->sections[(size_t)as->current_section].size += (size_t)size;
+    return true;
+}
+
+bool minias_parse_file(MiniAs *as, const char *path) {
+    FILE *file = fopen(path, "r");
+    char linebuf[65536];
+    size_t line_no = 0U;
+
+    if (file == NULL) {
+        minias_set_error(as, "input-open:%s", path);
+        return false;
+    }
+    while (fgets(linebuf, sizeof(linebuf), file) != NULL) {
+        char *cursor;
+        char *semicolon;
+        size_t len;
+
+        ++line_no;
+        len = strlen(linebuf);
+        if (len == sizeof(linebuf) - 1U && linebuf[len - 1U] != '\n') {
+            minias_set_error(as, "line-too-long:line=%zu", line_no);
+            fclose(file);
+            return false;
+        }
+        strip_comment(linebuf);
+        cursor = linebuf;
+        while (cursor != NULL) {
+            semicolon = strchr(cursor, ';');
+            if (semicolon != NULL) {
+                *semicolon = '\0';
+            }
+            if (!process_statement(as, cursor, line_no)) {
+                fclose(file);
+                return false;
+            }
+            cursor = semicolon == NULL ? NULL : semicolon + 1;
+        }
+    }
+    if (ferror(file)) {
+        minias_set_error(as, "input-read:%s", path);
+        fclose(file);
+        return false;
+    }
+    fclose(file);
+    return true;
+}
+
+bool minias_emit_sections(MiniAs *as) {
+    size_t i;
+
+    for (i = 0U; i < as->section_count; ++i) {
+        as->sections[i].size = 0U;
+    }
+    for (i = 0U; i < as->stmt_count; ++i) {
+        MiniAsStmt *stmt = &as->stmts[i];
+        MiniAsSection *section = &as->sections[(size_t)stmt->section];
+
+        if (section->size != (size_t)stmt->offset) {
+            minias_set_error(as, "internal-offset:%s:line=%zu", stmt->op, stmt->line);
+            return false;
+        }
+        if (stmt->kind == MINIAS_STMT_ALIGN) {
+            if (!minias_section_append_zero(as, stmt->section, stmt->size)) {
+                return false;
+            }
+        } else if (stmt->kind == MINIAS_STMT_DATA) {
+            if (!emit_data_stmt(as, stmt)) {
+                return false;
+            }
+        } else if (!minias_riscv_encode(as, stmt)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+int minias_assemble_file(const char *input_path, const char *output_path, FILE *diagnostic) {
+    MiniAs as;
+    int rc = 1;
+
+    minias_init(&as);
+    if (as.error[0] == '\0' && minias_parse_file(&as, input_path) &&
+        minias_emit_sections(&as) && minias_write_elf64(&as, output_path)) {
+        rc = 0;
+    }
+    if (rc != 0 && diagnostic != NULL) {
+        fprintf(diagnostic,
+                "minic-as: %s\n",
+                as.error[0] == '\0' ? "unknown-error" : as.error);
+    }
+    minias_destroy(&as);
+    return rc;
+}
+);
+}
+
+static bool append_rewritten_text(char **buffer,
+                                  size_t *size,
+                                  size_t *capacity,
+                                  const char *text,
+                                  size_t count) {
+    size_t need = *size + count + 1U;
+    char *next;
+    size_t next_capacity;
+
+    if (need > *capacity) {
+        next_capacity = *capacity == 0U ? 64U : *capacity;
+        while (next_capacity < need) {
+            if (next_capacity > SIZE_MAX / 2U) {
+                return false;
+            }
+            next_capacity *= 2U;
+        }
+        next = realloc(*buffer, next_capacity);
+        if (next == NULL) {
+            return false;
+        }
+        *buffer = next;
+        *capacity = next_capacity;
+    }
+    memcpy(*buffer + *size, text, count);
+    *size += count;
+    (*buffer)[*size] = '\0';
+    return true;
+}
+
+static bool rewrite_numeric_local_refs(MiniAs *as,
+                                       const char *text,
+                                       char **out,
+                                       size_t line) {
+    size_t size = 0U;
+    size_t capacity = 0U;
+    char *buffer = NULL;
+    const char *p = text;
+    char quote = '\0';
+    bool escaped = false;
+
+    while (*p != '\0') {
+        if (escaped) {
+            if (!append_rewritten_text(&buffer, &size, &capacity, p, 1U)) {
+                goto oom;
+            }
+            escaped = false;
+            ++p;
+            continue;
+        }
+        if (quote != '\0') {
+            if (*p == '\\') {
+                escaped = true;
+            } else if (*p == quote) {
+                quote = '\0';
+            }
+            if (!append_rewritten_text(&buffer, &size, &capacity, p, 1U)) {
+                goto oom;
+            }
+            ++p;
+            continue;
+        }
+        if (*p == '\'' || *p == '"') {
+            quote = *p;
+            if (!append_rewritten_text(&buffer, &size, &capacity, p, 1U)) {
+                goto oom;
+            }
+            ++p;
+            continue;
+        }
+        if (isdigit((unsigned char)*p) &&
+            (p == text || numeric_ref_boundary(p[-1]))) {
+            const char *digits = p;
+            size_t label_id = 0U;
+            size_t generation;
+            char replacement[96];
+            int written;
+
+            while (isdigit((unsigned char)*p)) {
+                label_id = label_id * 10U + (size_t)(*p - '0');
+                if (label_id >= MINIAS_NUMERIC_LABEL_LIMIT) {
+                    break;
+                }
+                ++p;
+            }
+            if (label_id < MINIAS_NUMERIC_LABEL_LIMIT &&
+                (*p == 'f' || *p == 'b') &&
+                numeric_ref_boundary(p[1])) {
+                if (*p == 'b') {
+                    if (as->numeric_label_counts[label_id] == 0U) {
+                        minias_set_error(as,
+                                         "undefined-numeric-label:%zub:line=%zu",
+                                         label_id,
+                                         line);
+                        free(buffer);
+                        return false;
+                    }
+                    generation = as->numeric_label_counts[label_id];
+                } else {
+                    generation = as->numeric_label_counts[label_id] + 1U;
+                }
+                written = snprintf(replacement,
+                                   sizeof(replacement),
+                                   ".Lminias_num_%zu_%zu",
+                                   label_id,
+                                   generation);
+                if (written < 0 || (size_t)written >= sizeof(replacement) ||
+                    !append_rewritten_text(&buffer,
+                                           &size,
+                                           &capacity,
+                                           replacement,
+                                           (size_t)written)) {
+                    goto oom;
+                }
+                ++p;
+                continue;
+            }
+            p = digits;
+        }
+        if (!append_rewritten_text(&buffer, &size, &capacity, p, 1U)) {
+            goto oom;
+        }
+        ++p;
+    }
+
+    if (buffer == NULL) {
+        buffer = minias_strdup("");
+        if (buffer == NULL) {
+            goto oom;
+        }
+    }
+    *out = buffer;
+    return true;
+
+oom:
+    free(buffer);
+    minias_set_error(as, "out-of-memory:numeric-label-rewrite");
+    return false;
+}
+
 static bool process_statement(MiniAs *as, char *text, size_t line) {
     char *space;
     char *op;
