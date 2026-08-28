@@ -1415,8 +1415,32 @@ static bool parse_positional_runtime_record_initializer(MinicParser *parser,
                                    "runtime record array field initializer requires braces");
                 return false;
             }
-            if (!minic_parser_parse_expression(parser, &value_id, 0U) ||
-                !add_runtime_record_member_assignment(parser, member_id, value_id)) {
+            if (!minic_parser_parse_expression(parser, &value_id, 0U)) {
+                return false;
+            }
+            if (minic_type_is_record(field->type)) {
+                const MinicExpression *value;
+                MinicConstValue constant;
+                MinicSourceSpan value_span;
+                bool is_zero;
+
+                value = minic_c0_program_expression(parser->program, value_id);
+                if (value == NULL ||
+                    !minic_const_eval_integer(
+                        parser->program, parser->target_info, value_id, &constant) ||
+                    !minic_const_value_is_zero(
+                        parser->program, parser->target_info, &constant, &is_zero) ||
+                    !is_zero) {
+                    minic_parser_error(
+                        parser,
+                        "brace-elided aggregate initializer requires integer constant zero");
+                    return false;
+                }
+                value_span = value->span;
+                if (!add_zero_initialized_record_lvalue(parser, member_id, value_span)) {
+                    return false;
+                }
+            } else if (!add_runtime_record_member_assignment(parser, member_id, value_id)) {
                 return false;
             }
         }
