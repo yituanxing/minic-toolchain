@@ -1576,6 +1576,9 @@ static bool parse_external_object_definition(MinicParser *parser,
         }
     } else {
         bool discard_declared_array;
+        bool types_compatible;
+        bool composite_merged;
+        bool definition_begun;
 
         existing = minic_c0_program_global_object(parser->program, object_id);
         discard_declared_array =
@@ -1583,13 +1586,52 @@ static bool parse_external_object_definition(MinicParser *parser,
             minic_type_is_array(object_type) &&
             existing->type.array_type_id != object_type.array_type_id &&
             object_type.array_type_id + 1U == parser->program->array_type_count;
-        if (existing == NULL ||
-            !minic_declaration_external_object_types_compatible(
-                parser->program, existing->type, object_type) ||
-            (minic_type_is_array(existing->type) &&
-             !minic_declaration_merge_external_array_composite_type(
-                 parser->program, existing->type, object_type)) ||
-            !minic_c0_global_object_begin_definition(parser->program, object_id)) {
+        types_compatible =
+            existing != NULL &&
+            minic_declaration_external_object_types_compatible(
+                parser->program, existing->type, object_type);
+        composite_merged =
+            types_compatible &&
+            (!minic_type_is_array(existing->type) ||
+             minic_declaration_merge_external_array_composite_type(
+                 parser->program, existing->type, object_type));
+        definition_begun =
+            composite_merged &&
+            minic_c0_global_object_begin_definition(parser->program, object_id);
+        if (!definition_begun) {
+            const char *trace = getenv("CORE_FAST_TRACE");
+            if (trace != NULL && trace[0] != '\0' && strcmp(trace, "0") != 0) {
+                const MinicArrayType *existing_array =
+                    existing != NULL && minic_type_is_array(existing->type)
+                        ? minic_c0_program_array_type(
+                              parser->program, existing->type.array_type_id)
+                        : NULL;
+                const MinicArrayType *declared_array =
+                    minic_type_is_array(object_type)
+                        ? minic_c0_program_array_type(
+                              parser->program, object_type.array_type_id)
+                        : NULL;
+                (void)fprintf(stderr,
+                              "EXTERN_DEF_DETAIL name=%.*s compat=%d merge=%d begin=%d "
+                              "existing_extern=%d tentative=%d internal=%d zero=%d "
+                              "existing_init=%zu existing_reloc=%zu existing_array=%d "
+                              "existing_count=%zu declared_array=%d declared_count=%zu\n",
+                              existing != NULL ? (int)existing->name_length : 0,
+                              existing != NULL ? existing->name : "",
+                              types_compatible ? 1 : 0,
+                              composite_merged ? 1 : 0,
+                              definition_begun ? 1 : 0,
+                              existing != NULL && existing->is_extern ? 1 : 0,
+                              existing != NULL && existing->is_tentative ? 1 : 0,
+                              existing != NULL && existing->is_internal ? 1 : 0,
+                              existing != NULL && existing->is_zero_initialized ? 1 : 0,
+                              existing != NULL ? existing->initializer_count : 0U,
+                              existing != NULL ? existing->relocation_count : 0U,
+                              existing_array != NULL ? 1 : 0,
+                              existing_array != NULL ? existing_array->element_count : 0U,
+                              declared_array != NULL ? 1 : 0,
+                              declared_array != NULL ? declared_array->element_count : 0U);
+            }
             minic_parser_error(parser, "conflicting external object definition");
             return false;
         }
