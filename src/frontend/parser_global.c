@@ -2548,12 +2548,6 @@ static bool try_overwrite_static_zero_noncanonical_union_designator(
             }
             canonical_slots = canonical_field->element_count * canonical_element_slots;
             selected_slots = field->element_count * selected_element_slots;
-            if (selected_slots > canonical_slots) {
-                minic_parser_error(
-                    parser,
-                    "selected union member needs more initializer slots than materialized storage");
-                return false;
-            }
             if (record_base_slot > SIZE_MAX - total) {
                 return false;
             }
@@ -2586,6 +2580,35 @@ static bool try_overwrite_static_zero_noncanonical_union_designator(
                                        "storage");
                     return false;
                 }
+            }
+            /* A designated active member may require more logical initializer
+               slots than the union's canonical first member (for example an
+               anonymous { min, max } pair over a scalar first member). Growing
+               an already-materialized union is safe without shifting any later
+               aggregate slot only when this union is the current logical tail.
+               Extend that implicit-zero tail and preserve the expanded span in
+               union-selection metadata; non-tail growth remains fail-closed. */
+            if (selected_slots > canonical_slots) {
+                size_t extra_slots;
+
+                if (slot_end != object->initializer_count) {
+                    minic_parser_error(
+                        parser,
+                        "larger backward static union member requires trailing zero storage");
+                    return false;
+                }
+                extra_slots = selected_slots - canonical_slots;
+                while (extra_slots-- > 0U) {
+                    if (!minic_c0_global_object_add_initializer(
+                            parser->program, object_id, 0)) {
+                        minic_parser_error(
+                            parser, "cannot extend backward static union zero storage");
+                        return false;
+                    }
+                }
+                canonical_slots = selected_slots;
+                slot_end = slot_begin + canonical_slots;
+                object = &parser->program->global_objects[object_id];
             }
             union_record_id = (MinicRecordId)(current_record - parser->program->records);
             if (!minic_c0_global_object_select_union_member_with_span(parser->program,
