@@ -98,10 +98,22 @@ jobs:
               readelf -h "$obj" | grep -q 'REL (Relocatable file)'
             else
               fail=$((fail + 1))
-              first=$(head -n 1 "$err" | sed -E 's/^minic-as: //; s/:line=[0-9]+$//')
+              raw=$(head -n 1 "$err")
+              first=$(printf '%s\n' "$raw" | sed -E 's/^minic-as: //; s/:line=[0-9]+$//')
+              line=$(printf '%s\n' "$raw" | sed -nE 's/.*:line=([0-9]+)$/\1/p')
               test -n "$first"
               printf '%s\n' "$first" >> "$out/blockers.txt"
               printf 'FAIL\t%s\t%s\n' "$rel" "$first" >> "$out/results.tsv"
+              if [[ "$line" =~ ^[0-9]+$ ]]; then
+                context="$out/${rel%.s}.context.txt"
+                start=$(( line > 3 ? line - 3 : 1 ))
+                end=$(( line + 3 ))
+                {
+                  printf 'MINIAS_BLOCKER_CONTEXT file=%s line=%s blocker=%s\n' "$rel" "$line" "$first"
+                  nl -ba "$asm" | sed -n "${start},${end}p"
+                } > "$context"
+                cat "$context"
+              fi
             fi
           done
 
@@ -126,5 +138,6 @@ jobs:
             build/minias-real16/minias-out/results.tsv
             build/minias-real16/minias-out/summary.txt
             build/minias-real16/minias-out/**/*.err
+            build/minias-real16/minias-out/**/*.context.txt
           retention-days: 14
           if-no-files-found: error
