@@ -245,7 +245,7 @@ bool minias_riscv_measure(const char *op,
 
 #define SIMPLE(OP) strcmp(op, OP) == 0
     if (SIMPLE("ret") || SIMPLE("nop") || SIMPLE("mv") || SIMPLE("jr") ||
-        SIMPLE("jalr") || SIMPLE("j") || SIMPLE("beq") || SIMPLE("bne") ||
+        SIMPLE("snez") || SIMPLE("jalr") || SIMPLE("j") || SIMPLE("beq") || SIMPLE("bne") ||
         SIMPLE("blt") || SIMPLE("bge") || SIMPLE("bltu") || SIMPLE("bgeu") ||
         SIMPLE("beqz") || SIMPLE("bnez") || SIMPLE("addi") || SIMPLE("addiw") ||
         SIMPLE("andi") || SIMPLE("ori") || SIMPLE("xori") || SIMPLE("slti") ||
