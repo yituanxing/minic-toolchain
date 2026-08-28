@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   prepare-next500c-corpus:
-    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[next500c]')
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[next500c]') || contains(github.event.head_commit.message, '[next500c-sample]')
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     outputs:
@@ -39,8 +39,8 @@ jobs:
           manifest=build/linux-next500c-corpus/selected-tus.txt
           test -s "$manifest"
           test "$(grep -cve '^[[:space:]]*$' "$manifest")" -eq 500
-          test "$(head -1 "$manifest" | cut -f1)" -eq 1500
-          test "$(tail -1 "$manifest" | cut -f1)" -eq 1999
+          test "$(head -1 "$manifest" | cut -f1)" -eq 2000
+          test "$(tail -1 "$manifest" | cut -f1)" -eq 2499
           echo 'LINUX_NEXT500C_CORPUS cache=hit selected=500 indices=2000-2499'
 
       - name: Fetch exact Linux 6.6.143 stable source
@@ -205,3 +205,129 @@ jobs:
             build/next500c-full/minic-stderr/**
           if-no-files-found: warn
 
+
+
+  sample7:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[next500c]') || contains(github.event.head_commit.message, '[next500c-sample]')
+    needs: prepare-next500c-corpus
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: Restore frozen next500c corpus
+        id: next500c-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-next500c-corpus
+          key: linux-next500c-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-indices-2000-2499
+
+      - name: Require frozen next500c corpus
+        run: |
+          test "${{ steps.next500c-cache.outputs.cache-hit }}" = true
+          test "$(grep -cve '^[[:space:]]*$' build/linux-next500c-corpus/selected-tus.txt)" -eq 500
+
+      - name: Build exact compiler
+        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/next500c-sample-compiler
+
+      - name: Build active blocker sample7
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import shutil
+
+          wanted = {2089, 2334, 2337, 2434, 2443, 2457, 2459}
+          source = Path("build/linux-next500c-corpus")
+          sample = Path("build/linux-next500c-sample7")
+          rows = [line for line in (source / "selected-tus.txt").read_text().splitlines()
+                  if line.strip()]
+          selected = [row for row in rows if int(row.split("\t", 1)[0]) in wanted]
+          if len(selected) != 7:
+              raise SystemExit(f"active sample7 selection mismatch: {len(selected)}")
+          shutil.rmtree(sample, ignore_errors=True)
+          (sample / "kbuild").mkdir(parents=True)
+          (sample / "selected-tus.txt").write_text("\n".join(selected) + "\n")
+          for row in selected:
+              _, _, rel_i, _ = row.split("\t", 3)
+              src = source / "kbuild" / rel_i
+              dst = sample / "kbuild" / rel_i
+              dst.parent.mkdir(parents=True, exist_ok=True)
+              shutil.copy2(src, dst)
+          print("LINUX_NEXT500C_SAMPLE7_CORPUS selected=7")
+          PY
+
+      - name: Replay active sample7
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          compiler="$GITHUB_WORKSPACE/build/next500c-sample-compiler/bin/minic"
+          work="$GITHUB_WORKSPACE/build/next500c-sample7"
+          set +e
+          CORE_FAST_TRACE=1 python3 tests/external/linux/corpus_replay.py \
+            --minic "$compiler" \
+            --corpus "$GITHUB_WORKSPACE/build/linux-next500c-sample7" \
+            --work "$work" \
+            --jobs 4 \
+            --offset 0 \
+            --limit 7 \
+            --sample-count 0
+          replay_status=$?
+          set -e
+          echo "LINUX_NEXT500C_SAMPLE7_REPLAY_STATUS=$replay_status"
+
+          python3 tools/ci/classify-core-strict-frontier.py \
+            "$work/batch-results.json" \
+            --stderr-root "$work/minic-stderr" \
+            --ast-header "$GITHUB_WORKSPACE/src/frontend/ast.h" \
+            --examples 50 \
+            --json-out "$work/frontier-summary.json" \
+            --reason-text-out "$work/reason-summary.txt"
+
+          python3 tools/ci/summarize-core-frontier-progress.py \
+            "$work/batch-results.json" \
+            --expect-selected 7 \
+            --json-out "$work/progress-summary.json" \
+            --text-out "$work/progress-summary.txt"
+
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          work = Path("build/next500c-sample7")
+          summary = json.loads((work / "frontier-summary.json").read_text())
+          if summary["selected"] != 7 or summary["preprocess_missing"] != 0:
+              raise SystemExit(f"sample7 infrastructure failure: {summary}")
+          headline = (
+              f"LINUX_NEXT500C_SAMPLE7_EXACT selected={summary['selected']} "
+              f"pass={summary['pass']} unsupported={summary['unsupported']} "
+              f"error={summary['error']} preprocess_missing={summary['preprocess_missing']}"
+          )
+          print(headline)
+          (work / "headline.txt").write_text(headline + "\n")
+          with Path(os.environ["GITHUB_STEP_SUMMARY"]).open("a") as output:
+              output.write("## Linux next500c active sample7\n\n")
+              output.write(f"`{headline}`\n\n")
+              output.write((work / "reason-summary.txt").read_text())
+          PY
+
+      - name: Persist sample7 evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-next500c-sample7-${{ github.sha }}
+          path: |
+            build/next500c-sample7/headline.txt
+            build/next500c-sample7/batch-results.json
+            build/next500c-sample7/batch-results.tsv
+            build/next500c-sample7/frontier-summary.json
+            build/next500c-sample7/reason-summary.txt
+            build/next500c-sample7/progress-summary.json
+            build/next500c-sample7/progress-summary.txt
+            build/next500c-sample7/failure-contexts.txt
+            build/next500c-sample7/minic-stderr/**
+          if-no-files-found: warn
