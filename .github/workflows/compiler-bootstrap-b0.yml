@@ -151,22 +151,34 @@ jobs:
           work="$GITHUB_WORKSPACE/build/bootstrap-b0"
           stage1="$work/minic-stage1-rv64"
           mkdir -p "$work/s2"
-          passed=0
-          total=46
-          stage2_inputs=""
 
-          for stage0_asm in $(cat "$work/stage1-asm-list.txt"); do
+          compile_one() {
+            stage0_asm="$1"
             key=$(basename "$stage0_asm" .s)
             pre="$work/i/$key.i"
             stage1_asm="$work/s2/$key.s"
-
             qemu-riscv64 "$stage1" -S "$pre" -o "$stage1_asm"
+          }
+          export -f compile_one
+          export work stage1
+
+          # Stage1 runs under QEMU and is much slower than the native stage0.
+          # Compile independent translation units concurrently, then compare
+          # deterministically in the original stage0 list order.
+          tr ' ' '\n' <"$work/stage1-asm-list.txt" | sed '/^$/d' |
+            xargs -n1 -P4 bash -c 'compile_one "$1"' _
+
+          passed=0
+          total=46
+          stage2_inputs=""
+          for stage0_asm in $(cat "$work/stage1-asm-list.txt"); do
+            key=$(basename "$stage0_asm" .s)
+            stage1_asm="$work/s2/$key.s"
             if ! cmp -s "$stage0_asm" "$stage1_asm"; then
               echo "BOOTSTRAP_B0_FIXED_POINT_MISMATCH key=$key completed=$passed total=$total" >&2
               diff -u "$stage0_asm" "$stage1_asm" | sed -n '1,200p' >&2 || true
               exit 1
             fi
-
             passed=$((passed + 1))
             stage2_inputs="$stage2_inputs $stage1_asm"
             echo "PASS bootstrap-b0-fixed-point key=$key completed=$passed/$total"
