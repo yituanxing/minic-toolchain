@@ -406,7 +406,7 @@ typedef struct MinicCoreBlock {
        Static data relocations use the TU-local .Luser_<statement-id> symbol;
        Core owns the CFG block and carries only the identity needed for the
        backend to emit a colocated alias without reopening Semantic AST. */
-    MinicStatementId source_label_statement;
+    size_t source_label_id;
 } MinicCoreBlock;
 
 typedef struct MinicCoreFunction {
