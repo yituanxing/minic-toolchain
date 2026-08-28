@@ -117,6 +117,10 @@ jobs:
         run: |
           set -Eeuo pipefail
           seed="$GITHUB_WORKSPACE/build/bootstrap-b1-seed"
+          test -s "$seed/minic-stage1-rv64"
+          test -s "$seed/stage0-manifest.tsv"
+          chmod +x "$seed/minic-stage1-rv64"
+          file "$seed/minic-stage1-rv64"
           work="$GITHUB_WORKSPACE/build/bootstrap-b1-shard"
           shard=${{ matrix.shard }}
           shards=16
@@ -133,6 +137,7 @@ jobs:
             fi
 
             pre="$seed/i/$key.i"
+            test -s "$pre"
             out="$work/s2/$key.s"
             err="$work/logs/$key.stderr"
             begin=$(date +%s)
@@ -217,6 +222,8 @@ jobs:
         run: |
           set -Eeuo pipefail
           seed="$GITHUB_WORKSPACE/build/bootstrap-b1-seed"
+          test -s "$seed/minic-stage1-rv64"
+          chmod +x "$seed/minic-stage1-rv64"
           s2="$GITHUB_WORKSPACE/build/bootstrap-b1-s2"
           work="$GITHUB_WORKSPACE/build/bootstrap-b1-stage2"
           mkdir -p "$work"
