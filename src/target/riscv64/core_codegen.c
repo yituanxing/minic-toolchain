@@ -47,6 +47,7 @@ typedef struct MinicRiscv64CoreFrame {
     size_t frame_size;
     size_t object_count;
     size_t value_count;
+    size_t *object_offsets;
     size_t value_base_offset;
     size_t outgoing_argument_size;
     size_t return_address_offset;
@@ -327,8 +328,11 @@ static bool core_frame_initialize(const MinicC0Program *program,
     size_t outgoing_argument_size;
     size_t maximum_object_alignment;
 
-    if (function == NULL || frame == NULL ||
-        !core_call_outgoing_stack_size(program, function, &outgoing_argument_size)) {
+    if (function == NULL || frame == NULL) {
+        return false;
+    }
+    frame->object_offsets = NULL;
+    if (!core_call_outgoing_stack_size(program, function, &outgoing_argument_size)) {
         return false;
     }
     frame->outgoing_argument_size = outgoing_argument_size;
@@ -462,7 +466,69 @@ static bool core_frame_initialize(const MinicC0Program *program,
     }
     frame->object_count = function->object_count;
     frame->value_count = function->value_count;
+    if (function->object_count != 0U) {
+        size_t cached_offset;
+        size_t cached_index;
+
+        if (function->object_count > SIZE_MAX / sizeof(*frame->object_offsets)) {
+            return false;
+        }
+        frame->object_offsets =
+            (size_t *)malloc(function->object_count * sizeof(*frame->object_offsets));
+        if (frame->object_offsets == NULL) {
+            return false;
+        }
+        cached_offset = frame->outgoing_argument_size;
+        for (cached_index = 0U; cached_index < function->object_count; ++cached_index) {
+            size_t object_size;
+            size_t object_alignment;
+
+            if (!minic_data_layout_type(minic_default_data_layout(),
+                                        program,
+                                        function->objects[cached_index].type,
+                                        &object_size,
+                                        &object_alignment) ||
+                object_alignment == 0U ||
+                (object_alignment & (object_alignment - 1U)) != 0U ||
+                function->objects[cached_index].element_count == 0U ||
+                object_size > SIZE_MAX / function->objects[cached_index].element_count) {
+                free(frame->object_offsets);
+                frame->object_offsets = NULL;
+                return false;
+            }
+            if (function->objects[cached_index].explicit_alignment != 0U &&
+                function->objects[cached_index].explicit_alignment > object_alignment) {
+                object_alignment = function->objects[cached_index].explicit_alignment;
+            }
+            if (!align_up(cached_offset, object_alignment, &cached_offset)) {
+                free(frame->object_offsets);
+                frame->object_offsets = NULL;
+                return false;
+            }
+            frame->object_offsets[cached_index] = cached_offset;
+            object_size *= function->objects[cached_index].element_count;
+            if (cached_offset > SIZE_MAX - object_size) {
+                free(frame->object_offsets);
+                frame->object_offsets = NULL;
+                return false;
+            }
+            cached_offset += object_size;
+        }
+    }
     return true;
+}
+
+static void core_frame_destroy(MinicRiscv64CoreFrame *frame) {
+    if (frame == NULL) {
+        return;
+    }
+    free(frame->object_offsets);
+    frame->object_offsets = NULL;
+}
+
+static bool core_frame_fail(MinicRiscv64CoreFrame *frame) {
+    core_frame_destroy(frame);
+    return false;
 }
 
 static bool core_object_offset(const MinicC0Program *program,
@@ -470,55 +536,15 @@ static bool core_object_offset(const MinicC0Program *program,
                                const MinicRiscv64CoreFrame *frame,
                                MinicCoreObjectId object_id,
                                size_t *offset) {
-    size_t current_offset;
-    size_t object_index;
-
+    (void)program;
     if (function == NULL || frame == NULL || offset == NULL ||
-        object_id >= function->object_count) {
+        frame->object_count != function->object_count ||
+        object_id >= frame->object_count ||
+        (frame->object_count != 0U && frame->object_offsets == NULL)) {
         return false;
     }
-    current_offset = frame->outgoing_argument_size;
-    for (object_index = 0U; object_index <= (size_t)object_id; ++object_index) {
-        size_t object_size;
-        size_t object_alignment;
-
-        if (!minic_data_layout_type(minic_default_data_layout(),
-                                    program,
-                                    function->objects[object_index].type,
-                                    &object_size,
-                                    &object_alignment) ||
-            (object_size == 0U &&
-             !minic_type_is_record(function->objects[object_index].type)) ||
-            object_alignment == 0U ||
-            (object_alignment & (object_alignment - 1U)) != 0U ||
-            function->objects[object_index].element_count == 0U ||
-            object_size > SIZE_MAX / function->objects[object_index].element_count) {
-            return false;
-        }
-        if (function->objects[object_index].explicit_alignment != 0U) {
-            size_t explicit_alignment = function->objects[object_index].explicit_alignment;
-
-            if ((explicit_alignment & (explicit_alignment - 1U)) != 0U) {
-                return false;
-            }
-            if (explicit_alignment > object_alignment) {
-                object_alignment = explicit_alignment;
-            }
-        }
-        if (!align_up(current_offset, object_alignment, &current_offset)) {
-            return false;
-        }
-        if (object_index == (size_t)object_id) {
-            *offset = current_offset;
-            return true;
-        }
-        object_size *= function->objects[object_index].element_count;
-        if (current_offset > SIZE_MAX - object_size) {
-            return false;
-        }
-        current_offset += object_size;
-    }
-    return false;
+    *offset = frame->object_offsets[object_id];
+    return true;
 }
 
 static bool
@@ -4551,7 +4577,7 @@ static bool emit_core_function_with_symbol(FILE *file,
         (void)fflush(stderr);
     }
     if (!minic_riscv64_emit_function_symbol_begin(file, symbol)) {
-        return false;
+        return core_frame_fail(&frame);
     }
     if (frame.has_dynamic_stack_alignment) {
         if (fprintf(file, "  mv t0, sp\n") < 0 ||
@@ -4561,18 +4587,18 @@ static bool emit_core_function_with_symbol(FILE *file,
                     "  and sp, sp, t1\n",
                     frame.stack_alignment) < 0 ||
             !minic_riscv64_emit_sp_store64(file, "t0", frame.entry_sp_offset)) {
-            return false;
+            return core_frame_fail(&frame);
         }
     } else if (!minic_riscv64_emit_stack_allocate(file, frame.frame_size)) {
-        return false;
+        return core_frame_fail(&frame);
     }
     if (frame.saves_return_address &&
         !minic_riscv64_emit_sp_store64(file, "ra", frame.return_address_offset)) {
-        return false;
+        return core_frame_fail(&frame);
     }
     if (frame.has_hidden_result_pointer &&
         !minic_riscv64_emit_sp_store64(file, "a0", frame.hidden_result_pointer_offset)) {
-        return false;
+        return core_frame_fail(&frame);
     }
     if (frame.preserves_structured_asm_callee_saved) {
         size_t saved_index;
@@ -4580,7 +4606,7 @@ static bool emit_core_function_with_symbol(FILE *file,
             size_t saved_offset = frame.structured_asm_callee_saved_offset + saved_index * 8U;
             if (!minic_riscv64_emit_sp_store64(
                     file, core_asm_callee_saved_registers[saved_index], saved_offset)) {
-                return false;
+                return core_frame_fail(&frame);
             }
         }
     }
@@ -4593,12 +4619,12 @@ static bool emit_core_function_with_symbol(FILE *file,
                             (register_index - frame.integer_parameter_count) * 8U;
             if (!minic_riscv64_emit_sp_store64(
                     file, minic_core_rv64_argument_registers[register_index], offset)) {
-                return false;
+                return core_frame_fail(&frame);
             }
         }
     }
     if (!emit_far_jump_to_block(file, symbol_name, function->entry_block)) {
-        return false;
+        return core_frame_fail(&frame);
     }
     for (block_index = 0U; block_index < function->block_count; ++block_index) {
         const MinicCoreBlock *block;
@@ -4617,11 +4643,11 @@ static bool emit_core_function_with_symbol(FILE *file,
         }
         block = &function->blocks[block_index];
         if (!emit_block_label(file, symbol_name, (MinicCoreBlockId)block_index)) {
-            return false;
+            return core_frame_fail(&frame);
         }
         if (block->source_label_id != SIZE_MAX &&
             fprintf(file, ".Luser_%zu:\n", block->source_label_id) < 0) {
-            return false;
+            return core_frame_fail(&frame);
         }
         for (instruction_index = 0U; instruction_index < block->instruction_count;
              ++instruction_index) {
@@ -4630,20 +4656,20 @@ static bool emit_core_function_with_symbol(FILE *file,
             instruction_id = block->instructions[instruction_index];
             if (instruction_id >= function->instruction_count ||
                 !emit_instruction(file, program, function, &frame, symbol_name, &function->instructions[instruction_id])) {
-                return false;
+                return core_frame_fail(&frame);
             }
         }
         if (!block->has_terminator ||
             !emit_terminator(file, program, function, &frame, symbol_name, &block->terminator)) {
-            return false;
+            return core_frame_fail(&frame);
         }
     }
     if (fprintf(file, ".L%s_core_return:\n", symbol_name) < 0) {
-        return false;
+        return core_frame_fail(&frame);
     }
     if (frame.saves_return_address &&
         !minic_riscv64_emit_sp_load64(file, "ra", frame.return_address_offset)) {
-        return false;
+        return core_frame_fail(&frame);
     }
     if (frame.preserves_structured_asm_callee_saved) {
         size_t saved_index;
@@ -4651,22 +4677,23 @@ static bool emit_core_function_with_symbol(FILE *file,
             size_t saved_offset = frame.structured_asm_callee_saved_offset + saved_index * 8U;
             if (!minic_riscv64_emit_sp_load64(
                     file, core_asm_callee_saved_registers[saved_index], saved_offset)) {
-                return false;
+                return core_frame_fail(&frame);
             }
         }
     }
     if (frame.has_dynamic_stack_alignment) {
         if (!minic_riscv64_emit_sp_load64(file, "t0", frame.entry_sp_offset) ||
             fprintf(file, "  mv sp, t0\n") < 0) {
-            return false;
+            return core_frame_fail(&frame);
         }
     } else if (!minic_riscv64_emit_stack_release(file, frame.frame_size)) {
-        return false;
+        return core_frame_fail(&frame);
     }
     if (fprintf(file, "  ret\n") < 0 ||
         !minic_riscv64_emit_function_symbol_end(file, symbol)) {
-        return false;
+        return core_frame_fail(&frame);
     }
+    core_frame_destroy(&frame);
     return true;
 }
 
