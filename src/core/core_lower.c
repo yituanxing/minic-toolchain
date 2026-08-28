@@ -1986,8 +1986,16 @@ static MinicCoreLowerStatus lower_scalar_assignment_value(MinicCoreLowerContext 
         return MINIC_CORE_LOWER_ERROR;
     }
     expression = minic_c0_program_expression(context->body->program, expression_id);
-    if (expression == NULL ||
-        !minic_c0_assignment_compatible(context->body->program, target_type, expression_id)) {
+    if (expression == NULL) {
+        return MINIC_CORE_LOWER_UNSUPPORTED;
+    }
+    /* Parser assignment compatibility intentionally stays strict so it can
+       materialize explicit conversion nodes.  Core also uses this helper for
+       usual-arithmetic and fixed-argument normalization, where an integer
+       operand is semantically converted to binary64 without changing the
+       frontend AST contract. */
+    if (!minic_c0_assignment_compatible(context->body->program, target_type, expression_id) &&
+        !(minic_type_is_double(target_type) && minic_type_is_integer(expression->type))) {
         return MINIC_CORE_LOWER_UNSUPPORTED;
     }
     if (minic_type_is_integer(target_type) && minic_type_is_integer(expression->type)) {
