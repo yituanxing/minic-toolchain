@@ -2557,6 +2557,78 @@ static bool try_overwrite_static_zero_noncanonical_union_designator(
                 minic_parser_error(parser, "backward static union storage is not materialized");
                 return false;
             }
+            /* Repeated promoted designators may initialize multiple leaves of
+               the same already-selected anonymous union member, for example
+               .min followed by .max. Preserve prior leaf writes when the
+               active member already matches this selected field. */
+            {
+                size_t active_field;
+                size_t active_span;
+
+                active_field = SIZE_MAX;
+                active_span = 0U;
+                if (minic_c0_global_object_union_member_selection(
+                        parser->program,
+                        object,
+                        slot_begin,
+                        (MinicRecordId)(current_record - parser->program->records),
+                        &active_field) &&
+                    active_field == field_index &&
+                    minic_c0_global_object_union_member_initializer_span(
+                        parser->program,
+                        object,
+                        slot_begin,
+                        (MinicRecordId)(current_record - parser->program->records),
+                        &active_span) &&
+                    active_span >= selected_slots) {
+                    if (depth + 1U == designator->depth) {
+                        return overwrite_static_zero_field_value(
+                            parser, object_id, field, slot_begin);
+                    }
+                    {
+                        MinicStaticRecordDesignator suffix;
+                        const MinicRecord *selected_record;
+                        const MinicRecordField *leaf_field;
+                        size_t relative_slot;
+                        size_t suffix_index;
+
+                        if (!minic_type_is_record(field->type)) {
+                            minic_parser_error(
+                                parser,
+                                "repeated promoted union designator requires a record active member");
+                            return false;
+                        }
+                        selected_record =
+                            minic_c0_program_record(parser->program, field->type.record_id);
+                        if (selected_record == NULL || !selected_record->is_complete) {
+                            return false;
+                        }
+                        (void)memset(&suffix, 0, sizeof(suffix));
+                        suffix.depth = designator->depth - (depth + 1U);
+                        for (suffix_index = 0U; suffix_index < suffix.depth; ++suffix_index) {
+                            suffix.field_indices[suffix_index] =
+                                designator->field_indices[depth + 1U + suffix_index];
+                        }
+                        if (!static_record_designator_leaf_slot(parser->program,
+                                                                selected_record,
+                                                                &suffix,
+                                                                &relative_slot,
+                                                                &leaf_field) ||
+                            relative_slot >= active_span ||
+                            slot_begin > SIZE_MAX - relative_slot ||
+                            !overwrite_static_zero_field_value(
+                                parser, object_id, leaf_field, slot_begin + relative_slot)) {
+                            if (parser->diagnostic != NULL &&
+                                parser->diagnostic->message[0] == '\0') {
+                                minic_parser_error(
+                                    parser, "cannot update repeated promoted union designator leaf");
+                            }
+                            return false;
+                        }
+                    }
+                    return true;
+                }
+            }
             slot_end = slot_begin + canonical_slots;
             for (slot = slot_begin; slot < slot_end; ++slot) {
                 if (object->initializer_values[slot] != 0U) {
