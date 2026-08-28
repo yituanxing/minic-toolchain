@@ -495,6 +495,13 @@ static bool parse_size(MiniAs *as, char *args, size_t line) {
         return false;
     }
     expr = minias_trim(comma + 1);
+    {
+        uint64_t explicit_size;
+        if (parse_u64(expr, &explicit_size)) {
+            symbol->size = explicit_size;
+            return true;
+        }
+    }
     (void)snprintf(expected, sizeof(expected), ".-%s", symbol->name);
     if (strcmp(expr, expected) != 0) {
         minias_set_error(as, "unsupported-expression:.size:%s:line=%zu", expr, line);
@@ -504,7 +511,8 @@ static bool parse_size(MiniAs *as, char *args, size_t line) {
         minias_set_error(as, "size-section-mismatch:%s:line=%zu", symbol->name, line);
         return false;
     }
-    symbol->size = (uint64_t)as->sections[(size_t)as->current_section].size - symbol->value;
+    symbol->size =
+        (uint64_t)as->sections[(size_t)as->current_section].size - symbol->value;
     return true;
 }
 
