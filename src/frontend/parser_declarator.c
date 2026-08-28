@@ -310,6 +310,29 @@ bool minic_parser_parse_parenthesized_function_declarator(
         return false;
     }
 
+    /* A direct declarator nested inside the parenthesized pointer may itself
+       carry a function suffix: R (*fn(P))(Q). Keep that inner suffix
+       distinct from the outer (Q) suffix: fn takes P and returns a pointer
+       to a function taking Q. */
+    if (declarator->has_name && declarator->pointer_depth != 0U &&
+        parser->current.kind == MINIC_TOKEN_LPAREN) {
+        declarator->has_inner_function_suffix = true;
+        declarator->inner_parameter_count = 0U;
+        declarator->inner_is_variadic = false;
+        if (!minic_parser_expect(
+                parser, MINIC_TOKEN_LPAREN, "expected '(' before inner function parameter list") ||
+            !minic_parser_parse_parameter_list(parser,
+                                               NULL,
+                                               declarator->inner_parameter_types,
+                                               &declarator->inner_parameter_count,
+                                               false,
+                                               &declarator->inner_is_variadic) ||
+            !minic_parser_expect(
+                parser, MINIC_TOKEN_RPAREN, "expected ')' after inner function parameter list")) {
+            return false;
+        }
+    }
+
     return parse_parenthesized_function_array_suffix(parser, declarator) &&
            minic_parser_expect(
                parser, MINIC_TOKEN_RPAREN, "expected ')' after function declarator") &&
