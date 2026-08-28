@@ -557,6 +557,59 @@ static bool parse_size(MiniAs *as, char *args, size_t line) {
     return true;
 }
 
+static bool handle_org(MiniAs *as, const char *args, size_t line) {
+    MiniAsSymbolExpr expr;
+    MiniAsSymbol *target;
+    uint64_t desired;
+    uint64_t current;
+    uint64_t pad;
+
+    if (!minias_parse_symbol_addend(args, &expr)) {
+        minias_set_error(as, "unsupported-expression:.org:%s:line=%zu", args, line);
+        return false;
+    }
+    target = minias_get_symbol(as, expr.name, false);
+    if (target == NULL || !target->defined ||
+        target->section != as->current_section) {
+        minias_set_error(as, "unresolved-org:%s:line=%zu", args, line);
+        return false;
+    }
+    if (expr.addend < 0 &&
+        target->value < (uint64_t)(-(expr.addend + 1)) + 1U) {
+        minias_set_error(as, "org-before-zero:%s:line=%zu", args, line);
+        return false;
+    }
+    desired = expr.addend >= 0
+                  ? target->value + (uint64_t)expr.addend
+                  : target->value - ((uint64_t)(-(expr.addend + 1)) + 1U);
+    current = (uint64_t)as->sections[(size_t)as->current_section].size;
+    if (desired < current) {
+        minias_set_error(as,
+                         "org-backwards:%s:current=%llu:target=%llu:line=%zu",
+                         args,
+                         (unsigned long long)current,
+                         (unsigned long long)desired,
+                         line);
+        return false;
+    }
+    pad = desired - current;
+    if (pad > UINT32_MAX) {
+        minias_set_error(as, "org-gap-too-large:%s:line=%zu", args, line);
+        return false;
+    }
+    if (!add_stmt(as,
+                  MINIAS_STMT_ALIGN,
+                  ".org",
+                  args,
+                  line,
+                  (uint32_t)pad,
+                  1U)) {
+        return false;
+    }
+    as->sections[(size_t)as->current_section].size += (size_t)pad;
+    return true;
+}
+
 static bool handle_align(MiniAs *as, const char *op, char *args, size_t line) {
     uint64_t value;
     uint64_t pad;
@@ -1149,6 +1202,20 @@ static bool process_statement(MiniAs *as, char *text, size_t line) {
         if (strcmp(op, ".align") == 0 || strcmp(op, ".balign") == 0 ||
             strcmp(op, ".p2align") == 0) {
             return handle_align(as, op, args, line);
+        }
+        if (strcmp(op, ".org") == 0) {
+            char *rewritten_args = NULL;
+            bool ok;
+
+            if (!rewrite_numeric_local_refs(as,
+                                            args,
+                                            &rewritten_args,
+                                            line)) {
+                return false;
+            }
+            ok = handle_org(as, rewritten_args, line);
+            free(rewritten_args);
+            return ok;
         }
         if (data_width(op) != 0U || strcmp(op, ".zero") == 0 ||
             strcmp(op, ".space") == 0 || strcmp(op, ".asciz") == 0 ||
