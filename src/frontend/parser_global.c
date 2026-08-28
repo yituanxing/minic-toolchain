@@ -2377,12 +2377,12 @@ static bool try_overwrite_static_zero_noncanonical_union_designator(
             size_t relocation_index;
 
             *handled = true;
-            if (depth + 1U != designator->depth || current_record->field_count == 0U ||
+            if (current_record->field_count == 0U ||
                 current_record < parser->program->records ||
                 current_record >= parser->program->records + parser->program->record_count) {
                 minic_parser_error(parser,
-                                   "backward noncanonical static union designator requires a "
-                                   "direct active member");
+                                   "backward noncanonical static union designator requires "
+                                   "materialized union storage");
                 return false;
             }
             canonical_field = &current_record->fields[0];
@@ -2445,12 +2445,60 @@ static bool try_overwrite_static_zero_noncanonical_union_designator(
                                                                       slot_begin,
                                                                       union_record_id,
                                                                       field_index,
-                                                                      canonical_slots) ||
-                !overwrite_static_zero_field_value(parser, object_id, field, slot_begin)) {
-                if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
-                    minic_parser_error(parser, "cannot replace static union active member");
-                }
+                                                                      canonical_slots)) {
+                minic_parser_error(parser, "cannot replace static union active member");
                 return false;
+            }
+            if (depth + 1U == designator->depth) {
+                if (!overwrite_static_zero_field_value(parser, object_id, field, slot_begin)) {
+                    if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
+                        minic_parser_error(parser, "cannot replace static union active member");
+                    }
+                    return false;
+                }
+                return true;
+            }
+            {
+                MinicStaticRecordDesignator suffix;
+                const MinicRecord *selected_record;
+                const MinicRecordField *leaf_field;
+                size_t relative_slot;
+                size_t suffix_index;
+
+                if (!minic_type_is_record(field->type)) {
+                    minic_parser_error(
+                        parser,
+                        "promoted noncanonical union designator requires a record active member");
+                    return false;
+                }
+                selected_record =
+                    minic_c0_program_record(parser->program, field->type.record_id);
+                if (selected_record == NULL || !selected_record->is_complete) {
+                    minic_parser_error(
+                        parser,
+                        "promoted noncanonical union designator requires a complete record member");
+                    return false;
+                }
+                (void)memset(&suffix, 0, sizeof(suffix));
+                suffix.depth = designator->depth - (depth + 1U);
+                for (suffix_index = 0U; suffix_index < suffix.depth; ++suffix_index) {
+                    suffix.field_indices[suffix_index] =
+                        designator->field_indices[depth + 1U + suffix_index];
+                }
+                if (!static_record_designator_leaf_slot(parser->program,
+                                                        selected_record,
+                                                        &suffix,
+                                                        &relative_slot,
+                                                        &leaf_field) ||
+                    slot_begin > SIZE_MAX - relative_slot ||
+                    !overwrite_static_zero_field_value(
+                        parser, object_id, leaf_field, slot_begin + relative_slot)) {
+                    if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
+                        minic_parser_error(
+                            parser, "cannot replace promoted static union designator leaf");
+                    }
+                    return false;
+                }
             }
             return true;
         }
