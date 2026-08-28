@@ -332,6 +332,25 @@ static bool parse_u64(const char *text, uint64_t *out) {
     return true;
 }
 
+static bool parse_i64_data(const char *text, int64_t *out) {
+    char *end = NULL;
+    long long value;
+
+    errno = 0;
+    value = strtoll(text, &end, 0);
+    if (errno != 0 || end == text) {
+        return false;
+    }
+    while (*end == ' ' || *end == '\t') {
+        ++end;
+    }
+    if (*end != '\0') {
+        return false;
+    }
+    *out = (int64_t)value;
+    return true;
+}
+
 static bool switch_section(MiniAs *as,
                            const char *name,
                            uint32_t type,
@@ -499,7 +518,7 @@ static bool handle_align(MiniAs *as, const char *op, char *args, size_t line) {
         minias_set_error(as, "unsupported-expression:%s:line=%zu", op, line);
         return false;
     }
-    if (strcmp(op, ".p2align") == 0) {
+    if (strcmp(op, ".p2align") == 0 || strcmp(op, ".align") == 0) {
         if (value >= 63U) {
             minias_set_error(as, "unsupported-alignment:%s:line=%zu", args, line);
             return false;
@@ -521,6 +540,128 @@ static bool handle_align(MiniAs *as, const char *op, char *args, size_t line) {
     if (alignment > as->sections[(size_t)as->current_section].align) {
         as->sections[(size_t)as->current_section].align = alignment;
     }
+    return true;
+}
+
+static unsigned int data_width(const char *op) {
+    if (strcmp(op, ".byte") == 0) {
+        return 1U;
+    }
+    if (strcmp(op, ".half") == 0 || strcmp(op, ".short") == 0 ||
+        strcmp(op, ".2byte") == 0) {
+        return 2U;
+    }
+    if (strcmp(op, ".word") == 0 || strcmp(op, ".long") == 0 ||
+        strcmp(op, ".4byte") == 0) {
+        return 4U;
+    }
+    if (strcmp(op, ".dword") == 0 || strcmp(op, ".quad") == 0 ||
+        strcmp(op, ".8byte") == 0) {
+        return 8U;
+    }
+    return 0U;
+}
+
+static bool add_data_stmt(MiniAs *as, const char *op, char *args, size_t line) {
+    uint64_t count = 0U;
+    uint64_t bytes;
+    unsigned int width = data_width(op);
+    char *copy = NULL;
+    char *cursor;
+
+    if (strcmp(op, ".zero") == 0 || strcmp(op, ".space") == 0) {
+        if (!parse_u64(minias_trim(args), &count)) {
+            minias_set_error(as, "unsupported-expression:%s:line=%zu", op, line);
+            return false;
+        }
+        bytes = count;
+    } else {
+        copy = minias_strdup(args);
+        if (copy == NULL) {
+            minias_set_error(as, "out-of-memory:data-measure");
+            return false;
+        }
+        cursor = copy;
+        while (cursor != NULL) {
+            char *comma = strchr(cursor, ',');
+            int64_t value;
+
+            if (comma != NULL) {
+                *comma = '\0';
+            }
+            if (!parse_i64_data(minias_trim(cursor), &value)) {
+                minias_set_error(as,
+                                 "unsupported-expression:%s:%s:line=%zu",
+                                 op,
+                                 minias_trim(cursor),
+                                 line);
+                free(copy);
+                return false;
+            }
+            (void)value;
+            ++count;
+            cursor = comma == NULL ? NULL : comma + 1;
+        }
+        free(copy);
+        bytes = count * width;
+    }
+
+    if (bytes > UINT32_MAX) {
+        minias_set_error(as, "data-too-large:%s:line=%zu", op, line);
+        return false;
+    }
+    if (!add_stmt(as, MINIAS_STMT_DATA, op, args, line, (uint32_t)bytes, 1U)) {
+        return false;
+    }
+    as->sections[(size_t)as->current_section].size += (size_t)bytes;
+    return true;
+}
+
+static bool emit_data_stmt(MiniAs *as, const MiniAsStmt *stmt) {
+    unsigned int width = data_width(stmt->op);
+    char *copy;
+    char *cursor;
+
+    if (strcmp(stmt->op, ".zero") == 0 || strcmp(stmt->op, ".space") == 0) {
+        return minias_section_append_zero(as, stmt->section, stmt->size);
+    }
+
+    copy = minias_strdup(stmt->args);
+    if (copy == NULL) {
+        minias_set_error(as, "out-of-memory:data");
+        return false;
+    }
+    cursor = copy;
+    while (cursor != NULL) {
+        char *comma = strchr(cursor, ',');
+        int64_t signed_value;
+        uint64_t value;
+        unsigned char bytes[8];
+        unsigned int i;
+
+        if (comma != NULL) {
+            *comma = '\0';
+        }
+        if (!parse_i64_data(minias_trim(cursor), &signed_value)) {
+            minias_set_error(as,
+                             "unsupported-expression:%s:%s:line=%zu",
+                             stmt->op,
+                             minias_trim(cursor),
+                             stmt->line);
+            free(copy);
+            return false;
+        }
+        value = (uint64_t)signed_value;
+        for (i = 0U; i < width; ++i) {
+            bytes[i] = (unsigned char)((value >> (i * 8U)) & 0xffU);
+        }
+        if (!minias_section_append(as, stmt->section, bytes, width)) {
+            free(copy);
+            return false;
+        }
+        cursor = comma == NULL ? NULL : comma + 1;
+    }
+    free(copy);
     return true;
 }
 
@@ -620,6 +761,10 @@ static bool process_statement(MiniAs *as, char *text, size_t line) {
             strcmp(op, ".p2align") == 0) {
             return handle_align(as, op, args, line);
         }
+        if (data_width(op) != 0U || strcmp(op, ".zero") == 0 ||
+            strcmp(op, ".space") == 0) {
+            return add_data_stmt(as, op, args, line);
+        }
         minias_set_error(as, "unsupported-directive:%s:line=%zu", op, line);
         return false;
     }
@@ -695,6 +840,10 @@ bool minias_emit_sections(MiniAs *as) {
         }
         if (stmt->kind == MINIAS_STMT_ALIGN) {
             if (!minias_section_append_zero(as, stmt->section, stmt->size)) {
+                return false;
+            }
+        } else if (stmt->kind == MINIAS_STMT_DATA) {
+            if (!emit_data_stmt(as, stmt)) {
                 return false;
             }
         } else if (!minias_riscv_encode(as, stmt)) {
