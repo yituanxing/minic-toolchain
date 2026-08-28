@@ -8,6 +8,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 static const char *const minic_core_rv64_argument_registers[8] = {
@@ -1801,21 +1802,40 @@ static bool core_instruction_supported(const MinicC0Program *program,
     return false;
 }
 
+static bool core_rv64_capability_reject(const MinicCoreFunction *function,
+                                        const char *stage,
+                                        size_t index,
+                                        int instruction_kind) {
+    const char *trace;
+
+    trace = getenv("CORE_FAST_TRACE");
+    if (trace != NULL && trace[0] != '\0' && strcmp(trace, "0") != 0) {
+        fprintf(stderr,
+                "CORE_RV64_CAP function=%.*s stage=%s index=%zu instruction_kind=%d\n",
+                function == NULL ? 0 : (int)function->name_length,
+                function == NULL || function->name == NULL ? "" : function->name,
+                stage == NULL ? "unknown" : stage,
+                index,
+                instruction_kind);
+    }
+    return false;
+}
+
 static bool core_function_can_emit(const MinicC0Program *program,
-                                            const MinicCoreFunction *function) {
+                                   const MinicCoreFunction *function) {
     size_t index;
 
     if (function == NULL || !minic_core_function_verify(function)) {
-        return false;
+        return core_rv64_capability_reject(function, "verify", 0U, -1);
     }
     if (program == NULL) {
         if (!minic_type_is_void(function->return_type) &&
             !core_scalar_type(function->return_type)) {
-            return false;
+            return core_rv64_capability_reject(function, "legacy-return", 0U, -1);
         }
         for (index = 0U; index < function->parameter_count; ++index) {
             if (!core_scalar_type(function->parameter_types[index])) {
-                return false;
+                return core_rv64_capability_reject(function, "legacy-parameter", index, -1);
             }
         }
     } else {
@@ -1824,29 +1844,29 @@ static bool core_function_can_emit(const MinicC0Program *program,
 
         if (!minic_riscv64_abi_cursor_initialize_for_return(
                 program, function->return_type, &cursor, &return_value)) {
-            return false;
+            return core_rv64_capability_reject(function, "return-abi", 0U, -1);
         }
         if (return_value.kind == MINIC_RISCV64_ABI_VALUE_AGGREGATE) {
             if (return_value.slot_count == 0U || return_value.slot_count > 2U) {
-                return false;
+                return core_rv64_capability_reject(function, "return-aggregate", 0U, -1);
             }
         } else if (return_value.kind == MINIC_RISCV64_ABI_VALUE_INDIRECT) {
             if (!minic_type_is_record(function->return_type) ||
                 return_value.storage_size <= 16U || return_value.slot_count != 1U) {
-                return false;
+                return core_rv64_capability_reject(function, "return-indirect", 0U, -1);
             }
         } else if (return_value.kind != MINIC_RISCV64_ABI_VALUE_VOID &&
                    return_value.kind != MINIC_RISCV64_ABI_VALUE_INTEGER &&
                    !(return_value.kind == MINIC_RISCV64_ABI_VALUE_FLOAT &&
                      minic_type_is_double(function->return_type))) {
-            return false;
+            return core_rv64_capability_reject(function, "return-kind", 0U, -1);
         }
         for (index = 0U; index < function->parameter_count; ++index) {
             MinicRiscv64AbiArgumentLocation location;
 
             if (!minic_riscv64_abi_place_argument(
                     program, function->parameter_types[index], true, &cursor, &location)) {
-                return false;
+                return core_rv64_capability_reject(function, "parameter-abi", index, -1);
             }
             if (location.value.kind == MINIC_RISCV64_ABI_VALUE_INDIRECT) {
                 if (!minic_type_is_record(function->parameter_types[index]) ||
@@ -1857,13 +1877,13 @@ static bool core_function_can_emit(const MinicC0Program *program,
                        location.stack_slot_count == 0U) ||
                       (location.integer_register_count == 0U &&
                        location.stack_slot_count == 1U))) {
-                    return false;
+                    return core_rv64_capability_reject(function, "parameter-indirect", index, -1);
                 }
             } else if (location.value.kind != MINIC_RISCV64_ABI_VALUE_IGNORE &&
                        location.value.kind != MINIC_RISCV64_ABI_VALUE_INTEGER &&
                        (location.value.kind != MINIC_RISCV64_ABI_VALUE_AGGREGATE ||
                         location.value.slot_count == 0U || location.value.slot_count > 2U)) {
-                return false;
+                return core_rv64_capability_reject(function, "parameter-kind", index, -1);
             }
         }
     }
@@ -1886,23 +1906,24 @@ static bool core_function_can_emit(const MinicC0Program *program,
             (function->objects[index].explicit_alignment != 0U &&
              (function->objects[index].explicit_alignment &
               (function->objects[index].explicit_alignment - 1U)) != 0U)) {
-            return false;
+            return core_rv64_capability_reject(function, "object", index, -1);
         }
     }
     for (index = 0U; index < function->global_count; ++index) {
         if (function->globals[index].name == NULL || function->globals[index].name_length == 0U ||
             !core_global_addressable_type(function->globals[index].type)) {
-            return false;
+            return core_rv64_capability_reject(function, "global", index, -1);
         }
     }
     for (index = 0U; index < function->value_count; ++index) {
         if (!core_scalar_type(function->values[index].type)) {
-            return false;
+            return core_rv64_capability_reject(function, "value", index, -1);
         }
     }
     for (index = 0U; index < function->instruction_count; ++index) {
         if (!core_instruction_supported(program, function, &function->instructions[index])) {
-            return false;
+            return core_rv64_capability_reject(
+                function, "instruction", index, (int)function->instructions[index].kind);
         }
     }
     return true;
