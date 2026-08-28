@@ -7298,16 +7298,13 @@ static MinicCoreLowerStatus lower_return(MinicCoreLowerContext *context,
             if (return_expression == NULL) {
                 return MINIC_CORE_LOWER_ERROR;
             }
-            /* M175D_GNU_VOID_RETURN_EFFECT_OWNER: GNU permits a void
-               function to return an expression whose semantic type is void.
-               Core already owns both effect-producing void calls and explicit
-               cast-to-void through MINIC_EXPRESSION_DISCARD. Reuse those
-               expression owners here instead of making RETURN depend on one
-               source spelling. Keep every other void-expression shape
-               fail-closed until its discarded-effect owner is explicit. */
-            if (!minic_type_is_void(return_expression->type) ||
-                (return_expression->kind != MINIC_EXPRESSION_CALL &&
-                 return_expression->kind != MINIC_EXPRESSION_DISCARD)) {
+            /* GNU permits a void function to return any expression whose
+               semantic type is void. The expression layer already owns the
+               individual effect forms (calls, discard casts, statement
+               expressions, conditionals, inline-asm wrappers). RETURN should
+               sequence that semantic owner rather than re-whitelist source
+               spellings. */
+            if (!minic_type_is_void(return_expression->type)) {
                 return MINIC_CORE_LOWER_UNSUPPORTED;
             }
             status = lower_expression(context, statement->expression, &discarded_value);
