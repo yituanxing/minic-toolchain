@@ -282,6 +282,7 @@ void minias_destroy(MiniAs *as) {
     }
     free(as->stmts);
     free(as->relocs);
+    free(as->section_stack);
     memset(as, 0, sizeof(*as));
 }
 
@@ -925,6 +926,35 @@ oom:
     return false;
 }
 
+static bool push_section(MiniAs *as, char *args, size_t line) {
+    if (!grow_array((void **)&as->section_stack,
+                    &as->section_stack_capacity,
+                    sizeof(*as->section_stack),
+                    as->section_stack_count + 1U)) {
+        minias_set_error(as, "out-of-memory:section-stack");
+        return false;
+    }
+    as->section_stack[as->section_stack_count++] = as->current_section;
+    if (!parse_section_directive(as, args, line)) {
+        --as->section_stack_count;
+        return false;
+    }
+    return true;
+}
+
+static bool pop_section(MiniAs *as, size_t line) {
+    int old_current;
+
+    if (as->section_stack_count == 0U) {
+        minias_set_error(as, "bad-directive:.popsection:line=%zu", line);
+        return false;
+    }
+    old_current = as->current_section;
+    as->current_section = as->section_stack[--as->section_stack_count];
+    as->previous_section = old_current;
+    return true;
+}
+
 static bool process_statement(MiniAs *as, char *text, size_t line) {
     char *space;
     char *op;
@@ -1043,6 +1073,12 @@ static bool process_statement(MiniAs *as, char *text, size_t line) {
             as->current_section = as->previous_section;
             as->previous_section = swap;
             return true;
+        }
+        if (strcmp(op, ".pushsection") == 0) {
+            return push_section(as, args, line);
+        }
+        if (strcmp(op, ".popsection") == 0) {
+            return pop_section(as, line);
         }
         if (strcmp(op, ".option") == 0 || strcmp(op, ".file") == 0 ||
             strcmp(op, ".ident") == 0) {
