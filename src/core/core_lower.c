@@ -3832,9 +3832,37 @@ MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
         discarded_statement.expression = expression->value.binary.left;
         status = lower_expression_statement(context, &discarded_statement);
         if (status != MINIC_CORE_LOWER_OK) {
+            if (getenv("CORE_FAST_TRACE") != NULL) {
+                (void)fprintf(stderr,
+                              "CORE_COMMA_TRACE function=%s stage=left status=%d left_kind=%d right_kind=%d\n",
+                              context->source_function != NULL ? context->source_function->name : "?",
+                              (int)status,
+                              discarded_expression != NULL ? (int)discarded_expression->kind : -1,
+                              (int)(minic_c0_program_expression(
+                                  context->body->program,
+                                  expression->value.binary.right) != NULL
+                                  ? minic_c0_program_expression(
+                                        context->body->program,
+                                        expression->value.binary.right)->kind
+                                  : -1));
+            }
             return status;
         }
-        return lower_expression(context, expression->value.binary.right, value_id);
+        status = lower_expression(context, expression->value.binary.right, value_id);
+        if (status != MINIC_CORE_LOWER_OK && getenv("CORE_FAST_TRACE") != NULL) {
+            const MinicExpression *right_expression =
+                minic_c0_program_expression(context->body->program,
+                                            expression->value.binary.right);
+            (void)fprintf(stderr,
+                          "CORE_COMMA_TRACE function=%s stage=right status=%d left_kind=%d right_kind=%d right_base=%d right_ptr=%u\n",
+                          context->source_function != NULL ? context->source_function->name : "?",
+                          (int)status,
+                          discarded_expression != NULL ? (int)discarded_expression->kind : -1,
+                          right_expression != NULL ? (int)right_expression->kind : -1,
+                          right_expression != NULL ? (int)right_expression->type.base_kind : -1,
+                          right_expression != NULL ? right_expression->type.pointer_depth : 0U);
+        }
+        return status;
     }
 
     /* M58_LOGICAL_OR_VALUE: lower_condition_branch already owns the
