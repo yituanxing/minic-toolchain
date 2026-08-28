@@ -38,6 +38,7 @@ offset=${LINUX_BATCH_OFFSET:-0}
 minic_jobs=${LINUX_BATCH_JOBS:-2}
 selection=${LINUX_BATCH_SELECTION:-}
 materialize_only=${LINUX_BATCH_MATERIALIZE_ONLY:-0}
+materialize_make_jobs=${LINUX_BATCH_MATERIALIZE_MAKE_JOBS:-4}
 sha256=dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932
 url="https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-$version.tar.xz"
 
@@ -52,6 +53,13 @@ case "$materialize_only" in
     0|1) ;;
     *) printf '%s\n' 'LINUX_BATCH_ERROR LINUX_BATCH_MATERIALIZE_ONLY must be 0 or 1' >&2; exit 2 ;;
 esac
+case "$materialize_make_jobs" in
+    ''|*[!0-9]*) printf '%s\n' 'LINUX_BATCH_ERROR materialize make jobs must be a positive integer' >&2; exit 2 ;;
+esac
+if test "$materialize_make_jobs" -eq 0; then
+    printf '%s\n' 'LINUX_BATCH_ERROR materialize make jobs must be greater than zero' >&2
+    exit 2
+fi
 if test "$materialize_only" -ne 1 && test ! -x "$minic"; then
     printf '%s\n' "LINUX_BATCH_ERROR MiniC not executable: $minic" >&2
     exit 2
@@ -213,7 +221,7 @@ while test "$materialized" -lt "$selected_total"; do
 
     set +e
 make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE="$cross_compile" \
-        KCFLAGS=-save-temps=obj -k -j4 "$@" >>"$work/preprocess.log" 2>&1
+        KCFLAGS=-save-temps=obj -k -j"$materialize_make_jobs" "$@" >>"$work/preprocess.log" 2>&1
     chunk_status=$?
     set -e
     if test "$chunk_status" -ne 0; then
