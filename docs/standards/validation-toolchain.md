@@ -162,10 +162,14 @@ This profile may produce different ELF/runtime details from the Ubuntu GNU-libc 
 
 ```sh
 "$RISCV_CC" -E -P -x c input.c -o input.i
-minic -S input.i -o input.s
+minic-cc -S input.i -o input.s
 "$RISCV_CC" -static input.s -o input.elf
 "$QEMU_RISCV64" input.elf
 ```
+
+During the M0 migration, `build/.../bin/minic` remains a byte-identical compatibility compiler entrypoint. New toolchain work must use the canonical compiler identity `minic-cc`; the unqualified `minic` name is reserved for the future orchestration driver.
+
+在 M0 迁移期间，`build/.../bin/minic` 继续作为与 `minic-cc` 逐字节一致的兼容编译器入口。新的工具链工作必须使用正式编译器名称 `minic-cc`；未加后缀的 `minic` 名称保留给未来的统一驱动。
 
 Using the target compiler for preprocessing preserves target predefined macros and headers. Target-independent host microtests may use the host preprocessor, but formal executable acceptance uses `RISCV_CC` for every external target stage.
 
