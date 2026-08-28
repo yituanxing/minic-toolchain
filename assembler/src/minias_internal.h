@@ -49,7 +49,8 @@ typedef struct MiniAsSymbol {
 
 typedef enum MiniAsStmtKind {
     MINIAS_STMT_INSN,
-    MINIAS_STMT_ALIGN
+    MINIAS_STMT_ALIGN,
+    MINIAS_STMT_DATA
 } MiniAsStmtKind;
 
 typedef struct MiniAsStmt {
