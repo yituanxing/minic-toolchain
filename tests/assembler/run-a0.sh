@@ -271,4 +271,19 @@ branch_pseudo_hex="$(
 )"
 test "$branch_pseudo_hex" = "6340050263de0500634cc000635ad00063c8e70063d608016364530063727e0067800000"
 
-echo "MINIAS_A0=PASS objects=12 format=ELF64-RISCV-ET_REL relocations=4 strings=2 pseudos=14 previous=1 numeric_labels=7 isa_next=13 csr_amo=4 section_stack=1 org=1 local_difference=1 lr_sc=2 inline_labels=2 branch_pseudos=8"
+cat >"$work/extern.s" <<'EOF'
+.extern __minic_deferred_asm_immediate_140_0
+.text
+.globl extern_user
+.type extern_user, @function
+extern_user:
+  call __minic_deferred_asm_immediate_140_0
+  ret
+.size extern_user, .-extern_user
+EOF
+"$MINIAS" -o "$work/extern.o" "$work/extern.s"
+readelf -Ws "$work/extern.o" >"$work/extern.txt"
+grep -Eq 'GLOBAL[[:space:]]+DEFAULT[[:space:]]+UND[[:space:]]+__minic_deferred_asm_immediate_140_0 "$work/extern.txt"
+readelf -Wr "$work/extern.o" | grep -q 'R_RISCV_CALL_PLT.*__minic_deferred_asm_immediate_140_0'
+
+echo "MINIAS_A0=PASS objects=13 format=ELF64-RISCV-ET_REL relocations=5 strings=2 pseudos=14 previous=1 numeric_labels=7 isa_next=13 csr_amo=4 section_stack=1 org=1 local_difference=1 lr_sc=2 inline_labels=2 branch_pseudos=8 extern=1"
