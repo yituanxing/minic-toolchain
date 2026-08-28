@@ -1479,22 +1479,39 @@ static bool parse_positional_runtime_record_initializer_from(MinicParser *parser
                 MinicConstValue constant;
                 MinicSourceSpan value_span;
                 bool is_zero;
+                bool matching_record_value;
 
                 value = minic_c0_program_expression(parser->program, value_id);
-                if (value == NULL ||
-                    !minic_const_eval_integer(
-                        parser->program, parser->target_info, value_id, &constant) ||
-                    !minic_const_value_is_zero(
-                        parser->program, parser->target_info, &constant, &is_zero) ||
-                    !is_zero) {
-                    minic_parser_error(
-                        parser,
-                        "brace-elided aggregate initializer requires integer constant zero");
-                    return false;
-                }
-                value_span = value->span;
-                if (!add_zero_initialized_record_lvalue(parser, member_id, value_span)) {
-                    return false;
+                matching_record_value =
+                    value != NULL && minic_type_is_record(value->type) &&
+                    value->type.record_id == field->type.record_id &&
+                    minic_c0_record_value_is_copy_source(parser->program, value_id);
+                if (matching_record_value) {
+                    /* BRACE_ELISION_RECORD_VALUE: a positional aggregate field
+                       may be initialized by a matching record-valued expression
+                       (including compound literals and GNU statement-expression
+                       wrappers).  Preserve the established record-copy owner;
+                       the integer-zero shorthand below is an additional route,
+                       not a replacement for ordinary record initialization. */
+                    if (!add_runtime_record_member_assignment(parser, member_id, value_id)) {
+                        return false;
+                    }
+                } else {
+                    if (value == NULL ||
+                        !minic_const_eval_integer(
+                            parser->program, parser->target_info, value_id, &constant) ||
+                        !minic_const_value_is_zero(
+                            parser->program, parser->target_info, &constant, &is_zero) ||
+                        !is_zero) {
+                        minic_parser_error(
+                            parser,
+                            "brace-elided aggregate initializer requires a matching record value or integer constant zero");
+                        return false;
+                    }
+                    value_span = value->span;
+                    if (!add_zero_initialized_record_lvalue(parser, member_id, value_span)) {
+                        return false;
+                    }
                 }
             } else if (!add_runtime_record_member_assignment(parser, member_id, value_id)) {
                 return false;
