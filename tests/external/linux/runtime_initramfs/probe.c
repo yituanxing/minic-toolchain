@@ -6,6 +6,7 @@
 #include <linux/futex.h>
 #include <linux/io_uring.h>
 #include <netinet/in.h>
+#include <net/if.h>
 #include <signal.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -14,6 +15,7 @@
 #include <sys/epoll.h>
 #include <sys/eventfd.h>
 #include <sys/inotify.h>
+#include <sys/ioctl.h>
 #include <sys/mman.h>
 #include <sys/signalfd.h>
 #include <sys/socket.h>
@@ -175,6 +177,30 @@ static void test_socketpair(void) {
     }
 }
 
+static int bring_loopback_up(void) {
+    int fd;
+    struct ifreq request;
+
+    fd = socket(AF_INET, SOCK_DGRAM | SOCK_CLOEXEC, 0);
+    if (fd < 0) {
+        return -1;
+    }
+    memset(&request, 0, sizeof(request));
+    (void)snprintf(request.ifr_name, sizeof(request.ifr_name), "%s", "lo");
+    if (ioctl(fd, SIOCGIFFLAGS, &request) != 0) {
+        (void)close(fd);
+        return -1;
+    }
+    request.ifr_flags = (short)(request.ifr_flags | IFF_UP | IFF_RUNNING);
+    if (ioctl(fd, SIOCSIFFLAGS, &request) != 0) {
+        (void)close(fd);
+        return -1;
+    }
+    (void)close(fd);
+    pass("loopback-up");
+    return 0;
+}
+
 static void test_ipv6_tcp(void) {
     int listener;
     int client;
@@ -185,6 +211,11 @@ static void test_ipv6_tcp(void) {
     socklen_t address_length;
     char value;
 
+    if (bring_loopback_up() != 0) {
+        fail("loopback-up");
+        fail("ipv6-tcp-loopback");
+        return;
+    }
     listener = socket(AF_INET6, SOCK_STREAM | SOCK_CLOEXEC, 0);
     memset(&address, 0, sizeof(address));
     address.sin6_family = AF_INET6;
