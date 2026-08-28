@@ -306,10 +306,14 @@ bool minic_parser_parse_parenthesized_function_declarator(
     bool require_name,
     bool require_pointer,
     MinicParsedFunctionDeclarator *declarator);
-bool minic_parser_parse_parenthesized_pointer_to_array_declarator(MinicParser *parser,
-                                                                  MinicType element_type,
-                                                                  MinicSourceSpan *name_span,
-                                                                  MinicType *declarator_type);
+bool minic_parser_parse_parenthesized_pointer_to_array_declarator(
+    MinicParser *parser,
+    MinicType element_type,
+    MinicSourceSpan *name_span,
+    MinicType *declarator_type,
+    bool *name_is_array,
+    bool *name_array_inferred,
+    size_t *name_array_count);
 bool minic_parser_parse_array_declarator_suffix(MinicParser *parser,
                                                 MinicType element_type,
                                                 bool allow_incomplete_outermost,
