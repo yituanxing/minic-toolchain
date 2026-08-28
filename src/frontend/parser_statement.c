@@ -2888,9 +2888,10 @@ static bool consume_static_local_interleaved_attribute(MinicParser *parser,
         minic_parser_error(parser, "GNU attribute is not valid on a static local object");
         return false;
     }
-    if ((descriptor->kind == MINIC_ATTRIBUTE_UNUSED ||
-         descriptor->kind == MINIC_ATTRIBUTE_USED) &&
-        descriptor->semantic_class == MINIC_ATTRIBUTE_CLASS_INFORMATIONAL) {
+    if ((descriptor->kind == MINIC_ATTRIBUTE_UNUSED &&
+         descriptor->semantic_class == MINIC_ATTRIBUTE_CLASS_INFORMATIONAL) ||
+        (descriptor->kind == MINIC_ATTRIBUTE_USED &&
+         descriptor->semantic_class == MINIC_ATTRIBUTE_CLASS_OPTIMIZATION)) {
         return true;
     }
     if (descriptor->kind == MINIC_ATTRIBUTE_ALIGNED) {
