@@ -968,10 +968,24 @@ bool minic_c0_global_relocation_object_target_type(const MinicC0Program *program
                                           target_type);
 }
 
-static bool global_relocation_pointer_target_type_compatible(MinicType slot_type,
-                                                             MinicType source_pointer_type) {
-    return minic_type_assignment_compatible(slot_type, source_pointer_type) ||
-           minic_type_gnu_pointer_sign_compatible(slot_type, source_pointer_type);
+static bool global_relocation_pointer_target_type_compatible(
+    const MinicC0Program *program,
+    MinicType slot_type,
+    MinicType source_pointer_type) {
+    MinicType slot_pointee;
+    MinicType source_pointee;
+
+    if (minic_type_assignment_compatible(slot_type, source_pointer_type) ||
+        minic_type_gnu_pointer_sign_compatible(slot_type, source_pointer_type)) {
+        return true;
+    }
+    /* Pointer-to-array types can be structurally compatible even when the
+       frontend materialized equivalent array descriptors at different IDs.
+       Static symbolic relocation must use Program-aware composite type
+       compatibility rather than raw descriptor identity. */
+    return program != NULL && minic_type_pointee(slot_type, &slot_pointee) &&
+           minic_type_pointee(source_pointer_type, &source_pointee) &&
+           minic_c0_types_compatible(program, slot_pointee, source_pointee);
 }
 
 static bool global_relocation_object_target_type_compatible(const MinicC0Program *program,
@@ -1004,7 +1018,7 @@ static bool global_relocation_object_target_type_compatible(const MinicC0Program
     }
     /* A symbolic object address can denote the object itself (`&object`). */
     if (minic_type_pointer_to(target_type, &source_pointer_type) &&
-        global_relocation_pointer_target_type_compatible(slot_type, source_pointer_type)) {
+        global_relocation_pointer_target_type_compatible(program, slot_type, source_pointer_type)) {
         return true;
     }
     /* Array-to-pointer decay and `&array[0]` have the same symbol/addend as
