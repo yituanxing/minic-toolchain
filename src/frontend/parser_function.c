@@ -901,15 +901,6 @@ bool minic_parser_parse_parameter_list(MinicParser *parser,
                                                                 require_names)) {
             return false;
         }
-        if (!is_function_pointer_parameter && !is_pointer_to_array_parameter &&
-            minic_type_is_void(parameter_type)) {
-            if (*parameter_count == 0U && parser->current.kind == MINIC_TOKEN_RPAREN) {
-                return true;
-            }
-            minic_parser_error(parser, "parameter type cannot be bare void");
-            return false;
-        }
-
         if (is_function_pointer_parameter || is_pointer_to_array_parameter) {
             if (declarator_has_name && parameter_name_spans != NULL) {
                 parameter_name_spans[*parameter_count] = declarator_name_span;
@@ -918,6 +909,7 @@ bool minic_parser_parse_parameter_list(MinicParser *parser,
             MinicSourceSpan parameter_name_span;
 
             parameter_name_span = parser->current.span;
+            declarator_has_name = true;
             if (parameter_name_spans != NULL) {
                 parameter_name_spans[*parameter_count] = parameter_name_span;
             }
@@ -942,6 +934,16 @@ bool minic_parser_parse_parameter_list(MinicParser *parser,
             }
         } else if (require_names) {
             minic_parser_error(parser, "expected parameter name");
+            return false;
+        }
+
+        if (!is_function_pointer_parameter && !is_pointer_to_array_parameter &&
+            minic_type_is_void(parameter_type)) {
+            if (!declarator_has_name && *parameter_count == 0U &&
+                parser->current.kind == MINIC_TOKEN_RPAREN) {
+                return true;
+            }
+            minic_parser_error(parser, "parameter type cannot be bare void");
             return false;
         }
 
