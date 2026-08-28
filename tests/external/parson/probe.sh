@@ -30,9 +30,8 @@ cat >"$include/stdarg.h" <<'EOF'
 #ifndef MINIC_PARSON_STDARG_H
 #define MINIC_PARSON_STDARG_H
 typedef void *va_list;
-void *__minic_va_start(void);
-#define va_start(ap, last) ((ap) = __minic_va_start())
-#define va_end(ap) 0
+#define va_start(ap,last) __builtin_va_start(ap,last)
+#define va_end(ap) __builtin_va_end(ap)
 #endif
 EOF
 
