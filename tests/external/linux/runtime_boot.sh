@@ -103,7 +103,11 @@ require_log() {
 }
 
 common="console=ttyS0 earlycon=sbi loglevel=8 panic=-1"
-run_boot rdinit-init "$common rdinit=/init" none
+init_append="$common rdinit=/init"
+if test "$profile" = p1; then
+    init_append="$init_append minic_runtime=p1"
+fi
+run_boot rdinit-init "$init_append" none
 
 # Preserve the Python-era runtime contract: this is not just a banner test.
 # We require kernel identity, initramfs/devtmpfs setup, PID1 handoff, and the
@@ -126,6 +130,26 @@ printf '%s\n' "LINUX_RUNTIME_RDINIT_INIT=PASS release=$expected_release profile=
 
 if test "$profile" = fast; then
     printf '%s\n' "LINUX_RUNTIME_EXACT=PASS release=$expected_release profile=fast lanes=1/1"
+    exit 0
+fi
+if test "$profile" = p1; then
+    require_log rdinit-init "Kernel command line:.*minic_runtime=p1"
+    require_log rdinit-init "RUNTIME_V2_SYSCALL_BEGIN"
+    require_log rdinit-init "RUNTIME_V2_SYSCALL_PASS eventfd-rw"
+    require_log rdinit-init "RUNTIME_V2_SYSCALL_PASS epoll-eventfd"
+    require_log rdinit-init "RUNTIME_V2_SYSCALL_PASS timerfd-read"
+    require_log rdinit-init "RUNTIME_V2_SYSCALL_PASS signalfd-read"
+    require_log rdinit-init "RUNTIME_V2_SYSCALL_PASS inotify-create"
+    require_log rdinit-init "RUNTIME_V2_SYSCALL_PASS socketpair-rw"
+    require_log rdinit-init "RUNTIME_V2_SYSCALL_PASS ipv6-tcp-loopback"
+    require_log rdinit-init "RUNTIME_V2_SYSCALL_PASS memfd-rw"
+    require_log rdinit-init "RUNTIME_V2_SYSCALL_PASS pidfd-open"
+    require_log rdinit-init "RUNTIME_V2_SYSCALL_PASS futex-wake"
+    require_log rdinit-init "RUNTIME_V2_SYSCALL_PASS io-uring-setup"
+    require_log rdinit-init "RUNTIME_V2_SYSCALL_PASS mmap-mprotect"
+    require_log rdinit-init "RUNTIME_V2_SYSCALL_END pass=12 fail=0"
+    require_log rdinit-init "INIT_RUNTIME_PROBE=PASS"
+    printf '%s\n' "LINUX_RUNTIME_EXACT=PASS release=$expected_release profile=p1 lanes=1/1"
     exit 0
 fi
 if test "$profile" != full; then
