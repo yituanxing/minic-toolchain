@@ -80,4 +80,28 @@ grep -q 'R_RISCV_PCREL_HI20.*external_object' "$work/reloc.txt"
 grep -q 'R_RISCV_PCREL_LO12_I.*Lminias_pcrel' "$work/reloc.txt"
 grep -q 'R_RISCV_64.*external_object.*+ 8' "$work/reloc.txt"
 
-echo "MINIAS_A0=PASS objects=4 format=ELF64-RISCV-ET_REL relocations=3"
+cat >"$work/string-pseudo.s" <<'EOF'
+.text
+.globl boolize
+.type boolize, @function
+boolize:
+  snez a0, a1
+  ret
+.size boolize, .-boolize
+.section .rodata,"a"
+msg:
+  .asciz "A\n\x42\101"
+EOF
+"$MINIAS" -o "$work/string-pseudo.o" "$work/string-pseudo.s"
+text_hex="$(
+    readelf -x .text "$work/string-pseudo.o" |
+    awk '/0x[0-9a-f]+/ {for (i=2; i<=NF; ++i) if ($i ~ /^[0-9a-f]+$/ && length($i) <= 8 && length($i) % 2 == 0) printf "%s", $i}'
+)"
+rodata_hex="$(
+    readelf -x .rodata "$work/string-pseudo.o" |
+    awk '/0x[0-9a-f]+/ {for (i=2; i<=NF; ++i) if ($i ~ /^[0-9a-f]+$/ && length($i) <= 8 && length($i) % 2 == 0) printf "%s", $i}'
+)"
+test "$text_hex" = "3335b00067800000"
+test "$rodata_hex" = "410a424100"
+
+echo "MINIAS_A0=PASS objects=5 format=ELF64-RISCV-ET_REL relocations=3 strings=1 pseudos=1"
