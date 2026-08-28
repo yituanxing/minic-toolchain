@@ -116,6 +116,10 @@ bool minias_add_relocation(MiniAs *as,
                            const char *symbol_name,
                            int64_t addend);
 bool minias_parse_symbol_addend(const char *text, MiniAsSymbolExpr *expr);
+bool minias_decode_string_literals(const char *text,
+                                   bool terminate_each,
+                                   unsigned char **data,
+                                   size_t *size);
 bool minias_section_append(MiniAs *as, int section_index, const void *data, size_t size);
 bool minias_section_append_zero(MiniAs *as, int section_index, size_t size);
 void minias_set_error(MiniAs *as, const char *format, ...);
