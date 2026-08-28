@@ -73,19 +73,15 @@ jobs:
         run: |
           set -Eeuo pipefail
           work="$GITHUB_WORKSPACE/build/minias-census-first500"
-          python3 assembler/tools/census.py \
+          timeout 180s python3 assembler/tools/census.py \
             --input "$work/minic-out" --label first500 \
-            --output "$work/census-first500.json" \
-            --summary "$work/census-first500.md" \
-            --cover-out "$work/cover-first500.txt"
+            --output "$work/census-first500.json"
 
       - uses: actions/upload-artifact@v4
         with:
           name: minias-census-first500
           path: |
             build/minias-census-first500/census-first500.json
-            build/minias-census-first500/census-first500.md
-            build/minias-census-first500/cover-first500.txt
           retention-days: 14
           if-no-files-found: error
 
@@ -175,19 +171,15 @@ jobs:
           set -Eeuo pipefail
           label="${{ matrix.label }}"
           work="$GITHUB_WORKSPACE/build/minias-census-$label"
-          python3 assembler/tools/census.py \
+          timeout 180s python3 assembler/tools/census.py \
             --input "$work/minic-out" --label "$label" \
-            --output "$work/census-$label.json" \
-            --summary "$work/census-$label.md" \
-            --cover-out "$work/cover-$label.txt"
+            --output "$work/census-$label.json"
 
       - uses: actions/upload-artifact@v4
         with:
           name: minias-census-${{ matrix.label }}
           path: |
             build/minias-census-${{ matrix.label }}/census-${{ matrix.label }}.json
-            build/minias-census-${{ matrix.label }}/census-${{ matrix.label }}.md
-            build/minias-census-${{ matrix.label }}/cover-${{ matrix.label }}.txt
           retention-days: 14
           if-no-files-found: error
 
@@ -218,7 +210,7 @@ jobs:
           set -Eeuo pipefail
           mapfile -t reports < <(find build/minias-census-artifacts -maxdepth 1 -type f -name 'census-*.json' | sort)
           test "${#reports[@]}" -eq 7
-          python3 assembler/tools/census.py \
+          timeout 180s python3 assembler/tools/census.py \
             --merge "${reports[@]}" --label all3352 \
             --output build/minias-census-all3352.json \
             --summary build/minias-census-all3352.md \
