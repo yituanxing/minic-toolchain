@@ -3330,6 +3330,37 @@ parse_static_nested_record_object(MinicParser *parser, MinicType type, MinicSour
         }
         return false;
     }
+    if (parser->current.kind == MINIC_TOKEN_COMMA) {
+        MinicSourceSpan next_name_span;
+
+        if (!minic_parser_advance(parser) || parser->current.kind != MINIC_TOKEN_IDENTIFIER) {
+            minic_parser_error(parser, "expected static aggregate declarator after ','");
+            return false;
+        }
+        next_name_span = parser->current.span;
+        if (!minic_parser_advance(parser)) {
+            return false;
+        }
+        if (parser->current.kind == MINIC_TOKEN_EQUAL) {
+            return parse_static_nested_record_object(parser, type, next_name_span);
+        }
+        if (parser->current.kind == MINIC_TOKEN_SEMICOLON) {
+            return parse_static_zero_definition(parser, type, next_name_span);
+        }
+        if (parser->current.kind == MINIC_TOKEN_COMMA) {
+            return minic_parser_parse_static_zero_declaration_list_after_head(parser,
+                                                                               type,
+                                                                               type,
+                                                                               next_name_span,
+                                                                               NULL,
+                                                                               0U,
+                                                                               false,
+                                                                               0U);
+        }
+        minic_parser_error(parser,
+                           "expected '=', ',' or ';' after static aggregate declarator");
+        return false;
+    }
     return minic_parser_expect(parser, MINIC_TOKEN_SEMICOLON, "expected ';' after global object");
 }
 
