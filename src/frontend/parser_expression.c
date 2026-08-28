@@ -3756,7 +3756,7 @@ static bool parse_expression_internal(MinicParser *parser,
                 !parse_expression_internal(parser, &when_false, 0U, true)) {
                 return false;
             }
-        } else if (!parse_expression_internal(parser, &when_true, 0U, true) ||
+        } else if (!minic_parser_parse_full_expression(parser, &when_true) ||
                    !minic_parser_expect(
                        parser, MINIC_TOKEN_COLON, "expected ':' in conditional expression") ||
                    !parse_expression_internal(parser, &when_false, 0U, true)) {
