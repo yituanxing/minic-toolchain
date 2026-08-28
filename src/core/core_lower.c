@@ -1154,6 +1154,56 @@ static MinicCoreLowerStatus lower_integer_binary_operands(MinicCoreLowerContext 
     return MINIC_CORE_LOWER_OK;
 }
 
+static MinicCoreLowerStatus lower_double_binary_operands(MinicCoreLowerContext *context,
+                                                         MinicExpressionId left_id,
+                                                         MinicExpressionId right_id,
+                                                         MinicType result_type,
+                                                         MinicCoreValueId *left_value,
+                                                         MinicCoreValueId *right_value) {
+    const MinicExpression *left_expression;
+    const MinicExpression *right_expression;
+    MinicCoreObjectId left_object;
+    MinicCoreValueId left_source;
+    MinicCoreValueId right_source;
+    MinicCoreLowerStatus status;
+
+    if (context == NULL || context->body == NULL || context->body->program == NULL ||
+        context->function == NULL || left_value == NULL || right_value == NULL ||
+        !minic_type_is_double(result_type)) {
+        return MINIC_CORE_LOWER_ERROR;
+    }
+    left_expression = minic_c0_program_expression(context->body->program, left_id);
+    right_expression = minic_c0_program_expression(context->body->program, right_id);
+    if (left_expression == NULL || right_expression == NULL) {
+        return MINIC_CORE_LOWER_ERROR;
+    }
+
+    status = lower_scalar_assignment_value(context, result_type, left_id, &left_source);
+    if (status != MINIC_CORE_LOWER_OK) {
+        return status;
+    }
+    status = spill_scalar_value(
+        context, left_expression->span, result_type, left_source, &left_object);
+    if (status != MINIC_CORE_LOWER_OK) {
+        return status;
+    }
+    status = lower_scalar_assignment_value(context, result_type, right_id, &right_source);
+    if (status != MINIC_CORE_LOWER_OK) {
+        return status;
+    }
+    status = reload_scalar_value(
+        context, left_expression->span, result_type, left_object, left_value);
+    if (status != MINIC_CORE_LOWER_OK) {
+        return status;
+    }
+    if (right_source >= context->function->value_count ||
+        !minic_type_equal(context->function->values[right_source].type, result_type)) {
+        return MINIC_CORE_LOWER_ERROR;
+    }
+    *right_value = right_source;
+    return MINIC_CORE_LOWER_OK;
+}
+
 /* BATCH_B_RECORD_COMPOUND_LITERAL_OBJECT: a block-scope record compound
    literal already owns one frontend local backing object and one initializer
    block. Materialize that exact semantic object so all aggregate consumers
@@ -5313,6 +5363,55 @@ MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
                    ? MINIC_CORE_LOWER_OK
                    : MINIC_CORE_LOWER_ERROR;
     }
+    /* RUNTIME_R0_SCALAR_DOUBLE: preserve left-to-right evaluation by spilling
+       the left binary64 value across RHS lowering. */
+    if (expression->kind == MINIC_EXPRESSION_BINARY &&
+        (expression->value.binary.operator_kind == MINIC_BINARY_ADD ||
+         expression->value.binary.operator_kind == MINIC_BINARY_SUBTRACT ||
+         expression->value.binary.operator_kind == MINIC_BINARY_MULTIPLY ||
+         expression->value.binary.operator_kind == MINIC_BINARY_DIVIDE) &&
+        minic_type_is_double(expression->type)) {
+        MinicCoreValueId left;
+        MinicCoreValueId right;
+        MinicCoreLowerStatus status;
+
+        status = lower_double_binary_operands(context,
+                                              expression->value.binary.left,
+                                              expression->value.binary.right,
+                                              expression->type,
+                                              &left,
+                                              &right);
+        if (status != MINIC_CORE_LOWER_OK) {
+            return status;
+        }
+        (void)memset(&instruction, 0, sizeof(instruction));
+        switch (expression->value.binary.operator_kind) {
+        case MINIC_BINARY_ADD:
+            instruction.kind = MINIC_CORE_INSTRUCTION_DOUBLE_ADD;
+            break;
+        case MINIC_BINARY_SUBTRACT:
+            instruction.kind = MINIC_CORE_INSTRUCTION_DOUBLE_SUBTRACT;
+            break;
+        case MINIC_BINARY_MULTIPLY:
+            instruction.kind = MINIC_CORE_INSTRUCTION_DOUBLE_MULTIPLY;
+            break;
+        case MINIC_BINARY_DIVIDE:
+            instruction.kind = MINIC_CORE_INSTRUCTION_DOUBLE_DIVIDE;
+            break;
+        default:
+            return MINIC_CORE_LOWER_ERROR;
+        }
+        instruction.span = expression->span;
+        instruction.type = expression->type;
+        instruction.result = MINIC_CORE_VALUE_INVALID;
+        instruction.value.binary.left = left;
+        instruction.value.binary.right = right;
+        return minic_core_function_append_value_instruction(
+                   context->function, context->block_id, &instruction, value_id)
+                   ? MINIC_CORE_LOWER_OK
+                   : MINIC_CORE_LOWER_ERROR;
+    }
+
     if (expression->kind == MINIC_EXPRESSION_BINARY &&
         expression->value.binary.operator_kind == MINIC_BINARY_ADD) {
         MinicCoreValueId left;

@@ -104,7 +104,13 @@ typedef enum MinicCoreInstructionKind {
     MINIC_CORE_INSTRUCTION_VARIADIC_ARGUMENT_ADDRESS,
     MINIC_CORE_INSTRUCTION_CALL,
     /* M83_FIRST_CLASS_INDIRECT_CALL: callee is an SSA function-pointer value. */
-    MINIC_CORE_INSTRUCTION_INDIRECT_CALL
+    MINIC_CORE_INSTRUCTION_INDIRECT_CALL,
+    /* RUNTIME_R0_SCALAR_DOUBLE: target-neutral binary64 arithmetic. Append
+       after the established opcode range so existing kind numbers stay stable. */
+    MINIC_CORE_INSTRUCTION_DOUBLE_ADD,
+    MINIC_CORE_INSTRUCTION_DOUBLE_SUBTRACT,
+    MINIC_CORE_INSTRUCTION_DOUBLE_MULTIPLY,
+    MINIC_CORE_INSTRUCTION_DOUBLE_DIVIDE
 } MinicCoreInstructionKind;
 
 /* M91_BUILTIN_UNREACHABLE_TERMINATOR: unreachable is a CFG fact, not a

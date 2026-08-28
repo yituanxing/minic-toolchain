@@ -1579,7 +1579,9 @@ static bool core_direct_call_supported(const MinicC0Program *program,
             return false;
         }
     } else if (return_value.kind != MINIC_RISCV64_ABI_VALUE_VOID &&
-               return_value.kind != MINIC_RISCV64_ABI_VALUE_INTEGER) {
+               return_value.kind != MINIC_RISCV64_ABI_VALUE_INTEGER &&
+               !(return_value.kind == MINIC_RISCV64_ABI_VALUE_FLOAT &&
+                 minic_type_is_double(callee->return_type))) {
         return false;
     }
     for (argument_index = 0U; argument_index < instruction->value.call.argument_count;
@@ -1826,6 +1828,10 @@ static bool core_instruction_supported(const MinicC0Program *program,
     switch (instruction->kind) {
     case MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT:
     case MINIC_CORE_INSTRUCTION_FLOATING_CONSTANT:
+    case MINIC_CORE_INSTRUCTION_DOUBLE_ADD:
+    case MINIC_CORE_INSTRUCTION_DOUBLE_SUBTRACT:
+    case MINIC_CORE_INSTRUCTION_DOUBLE_MULTIPLY:
+    case MINIC_CORE_INSTRUCTION_DOUBLE_DIVIDE:
     case MINIC_CORE_INSTRUCTION_INTEGER_ADD:
     case MINIC_CORE_INSTRUCTION_INTEGER_SUBTRACT:
     case MINIC_CORE_INSTRUCTION_INTEGER_MULTIPLY:
@@ -2624,6 +2630,13 @@ static bool emit_call(FILE *file,
         }
         return true;
     }
+    if (minic_type_is_double(instruction->type)) {
+        if (return_value.kind != MINIC_RISCV64_ABI_VALUE_FLOAT ||
+            fprintf(file, "  fmv.x.d a0, fa0\n") < 0) {
+            return false;
+        }
+        return store_core_value(file, frame, instruction->result, "a0");
+    }
     if (minic_type_is_integer(instruction->type) &&
         !minic_riscv64_emit_integer_conversion_for_program(
             file, program, instruction->type, "a0")) {
@@ -3306,6 +3319,43 @@ static bool emit_instruction(FILE *file,
             return false;
         }
         return store_core_value(file, frame, instruction->result, "t0");
+    case MINIC_CORE_INSTRUCTION_DOUBLE_ADD:
+    case MINIC_CORE_INSTRUCTION_DOUBLE_SUBTRACT:
+    case MINIC_CORE_INSTRUCTION_DOUBLE_MULTIPLY:
+    case MINIC_CORE_INSTRUCTION_DOUBLE_DIVIDE: {
+        const char *opcode;
+
+        if (!minic_type_is_double(instruction->type)) {
+            return false;
+        }
+        switch (instruction->kind) {
+        case MINIC_CORE_INSTRUCTION_DOUBLE_ADD:
+            opcode = "fadd.d";
+            break;
+        case MINIC_CORE_INSTRUCTION_DOUBLE_SUBTRACT:
+            opcode = "fsub.d";
+            break;
+        case MINIC_CORE_INSTRUCTION_DOUBLE_MULTIPLY:
+            opcode = "fmul.d";
+            break;
+        case MINIC_CORE_INSTRUCTION_DOUBLE_DIVIDE:
+            opcode = "fdiv.d";
+            break;
+        default:
+            return false;
+        }
+        if (!load_core_value(file, frame, instruction->value.binary.left, "t0") ||
+            !load_core_value(file, frame, instruction->value.binary.right, "t1") ||
+            fprintf(file,
+                    "  fmv.d.x ft0, t0\n"
+                    "  fmv.d.x ft1, t1\n"
+                    "  %s ft0, ft0, ft1\n"
+                    "  fmv.x.d t0, ft0\n",
+                    opcode) < 0) {
+            return false;
+        }
+        return store_core_value(file, frame, instruction->result, "t0");
+    }
     case MINIC_CORE_INSTRUCTION_INTEGER_ADD:
         if (!load_core_value(file, frame, instruction->value.binary.left, "t0") ||
             !load_core_value(file, frame, instruction->value.binary.right, "t1") ||
@@ -4204,8 +4254,8 @@ static bool emit_terminator(FILE *file,
             }
         } else if (minic_type_is_double(function->return_type)) {
             if (terminator->return_value == MINIC_CORE_VALUE_INVALID ||
-                !load_core_value(file, frame, terminator->return_value, "t0") ||
-                fprintf(file, "  fmv.d.x fa0, t0\n") < 0) {
+                !load_core_value(file, frame, terminator->return_value, "a0") ||
+                fprintf(file, "  fmv.d.x fa0, a0\n") < 0) {
                 return false;
             }
         } else if (terminator->return_value != MINIC_CORE_VALUE_INVALID &&
