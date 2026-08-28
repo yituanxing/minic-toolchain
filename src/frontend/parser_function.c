@@ -519,8 +519,13 @@ static bool parse_gnu_prefix_function_visibility(MinicParser *parser,
     if (parser == NULL || visibility == NULL || has_visibility == NULL) {
         return false;
     }
-    *visibility = parser->default_visibility;
-    *has_visibility = parser->default_visibility != MINIC_SYMBOL_VISIBILITY_DEFAULT;
+    /* Explicit prefix attributes and pragma default visibility have
+       different ownership. This routine only parses explicit attributes;
+       parse_function() folds the current pragma default in after storage
+       class/linkage is known, so internal/static/register entities are not
+       accidentally assigned symbol visibility. */
+    *visibility = MINIC_SYMBOL_VISIBILITY_DEFAULT;
+    *has_visibility = false;
     while (function_identifier_is(parser, "__attribute__")) {
         MinicParser probe = *parser;
 
