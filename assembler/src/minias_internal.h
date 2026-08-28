@@ -97,6 +97,9 @@ typedef struct MiniAs {
     MiniAsReloc *relocs;
     size_t reloc_count;
     size_t reloc_capacity;
+    int *section_stack;
+    size_t section_stack_count;
+    size_t section_stack_capacity;
     size_t pcrel_anchor_counter;
     size_t numeric_label_counts[MINIAS_NUMERIC_LABEL_LIMIT];
     int current_section;
