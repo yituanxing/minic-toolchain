@@ -519,8 +519,8 @@ static bool parse_gnu_prefix_function_visibility(MinicParser *parser,
     if (parser == NULL || visibility == NULL || has_visibility == NULL) {
         return false;
     }
-    *visibility = MINIC_SYMBOL_VISIBILITY_DEFAULT;
-    *has_visibility = false;
+    *visibility = parser->default_visibility;
+    *has_visibility = parser->default_visibility != MINIC_SYMBOL_VISIBILITY_DEFAULT;
     while (function_identifier_is(parser, "__attribute__")) {
         MinicParser probe = *parser;
 
@@ -2856,6 +2856,39 @@ static bool pragma_only_trailing_space(const char *text, size_t length, size_t c
     return true;
 }
 
+static bool pragma_consume_visibility_name(const char *text,
+                                           size_t length,
+                                           size_t *cursor,
+                                           MinicSymbolVisibility *visibility) {
+    size_t probe;
+
+    if (text == NULL || cursor == NULL || visibility == NULL) {
+        return false;
+    }
+    probe = *cursor;
+    if (pragma_consume_word(text, length, &probe, "default")) {
+        *visibility = MINIC_SYMBOL_VISIBILITY_DEFAULT;
+    } else {
+        probe = *cursor;
+        if (pragma_consume_word(text, length, &probe, "hidden")) {
+            *visibility = MINIC_SYMBOL_VISIBILITY_HIDDEN;
+        } else {
+            probe = *cursor;
+            if (pragma_consume_word(text, length, &probe, "internal")) {
+                *visibility = MINIC_SYMBOL_VISIBILITY_INTERNAL;
+            } else {
+                probe = *cursor;
+                if (!pragma_consume_word(text, length, &probe, "protected")) {
+                    return false;
+                }
+                *visibility = MINIC_SYMBOL_VISIBILITY_PROTECTED;
+            }
+        }
+    }
+    *cursor = probe;
+    return true;
+}
+
 bool minic_parser_parse_preprocessor_directive(MinicParser *parser) {
     const char *text;
     size_t length;
@@ -2886,6 +2919,66 @@ bool minic_parser_parse_preprocessor_directive(MinicParser *parser) {
         size_t matched_action;
 
         pragma_skip_horizontal_space(text, length, &cursor);
+        {
+            size_t visibility_probe = cursor;
+
+            if (pragma_consume_word(text, length, &visibility_probe, "visibility")) {
+                MinicSymbolVisibility visibility;
+
+                cursor = visibility_probe;
+                pragma_skip_horizontal_space(text, length, &cursor);
+                if (pragma_consume_word(text, length, &cursor, "push")) {
+                    pragma_skip_horizontal_space(text, length, &cursor);
+                    if (cursor >= length || text[cursor] != '(') {
+                        minic_parser_error(parser, "expected '(' after GCC visibility push");
+                        return false;
+                    }
+                    cursor += 1U;
+                    pragma_skip_horizontal_space(text, length, &cursor);
+                    if (!pragma_consume_visibility_name(text, length, &cursor, &visibility)) {
+                        minic_parser_error(parser, "unsupported GCC visibility value");
+                        return false;
+                    }
+                    pragma_skip_horizontal_space(text, length, &cursor);
+                    if (cursor >= length || text[cursor] != ')') {
+                        minic_parser_error(parser, "expected ')' after GCC visibility value");
+                        return false;
+                    }
+                    cursor += 1U;
+                    if (!pragma_only_trailing_space(text, length, cursor)) {
+                        minic_parser_error(parser, "unexpected tokens after GCC visibility push");
+                        return false;
+                    }
+                    if (parser->visibility_depth >= MINIC_PARSER_MAX_VISIBILITY_DEPTH) {
+                        minic_parser_error(parser,
+                                           "GCC visibility stack depth exceeds implementation limit");
+                        return false;
+                    }
+                    parser->visibility_stack[parser->visibility_depth++] =
+                        parser->default_visibility;
+                    parser->default_visibility = visibility;
+                    return minic_parser_advance(parser);
+                }
+                if (pragma_consume_word(text, length, &cursor, "pop")) {
+                    pragma_skip_horizontal_space(text, length, &cursor);
+                    if (!pragma_only_trailing_space(text, length, cursor)) {
+                        minic_parser_error(parser, "unexpected tokens after GCC visibility pop");
+                        return false;
+                    }
+                    if (parser->visibility_depth == 0U) {
+                        minic_parser_error(parser,
+                                           "GCC visibility pop has no matching push");
+                        return false;
+                    }
+                    parser->visibility_depth -= 1U;
+                    parser->default_visibility =
+                        parser->visibility_stack[parser->visibility_depth];
+                    return minic_parser_advance(parser);
+                }
+                minic_parser_error(parser, "unsupported GCC visibility pragma action");
+                return false;
+            }
+        }
         if (!pragma_consume_word(text, length, &cursor, "diagnostic")) {
             minic_parser_error(parser, "unsupported GCC pragma directive");
             return false;
@@ -3233,6 +3326,8 @@ bool minic_parse_c0_program(const char *path,
     parser.diagnostic = diagnostic;
     parser.program = program;
     parser.target_info = minic_default_target_info();
+    parser.default_visibility = MINIC_SYMBOL_VISIBILITY_DEFAULT;
+    parser.visibility_depth = 0U;
     parser.current_block = MINIC_BLOCK_INVALID;
     parser.current_function = MINIC_FUNCTION_INVALID;
     parser.current_function_name_object = MINIC_GLOBAL_OBJECT_INVALID;
