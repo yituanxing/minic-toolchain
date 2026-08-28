@@ -455,10 +455,6 @@ static bool parse_one_typedef_declarator(
             is_function_declarator = true;
         }
     }
-    if (minic_type_is_void(aliased_type)) {
-        minic_parser_error(parser, "typedef cannot name bare void");
-        return false;
-    }
     if (minic_parser_find_type_alias(parser, name_span) != MINIC_TYPE_ALIAS_INVALID ||
         pending_typedef_name_exists(parser, *aliases, *alias_count, name_span)) {
         minic_parser_error(parser, "duplicate typedef name");
