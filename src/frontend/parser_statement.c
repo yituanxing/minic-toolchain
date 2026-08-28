@@ -973,18 +973,6 @@ done:
     return success;
 }
 
-    if (minic_array_initializer_plan_element_count(&plan) == 0U) {
-        minic_parser_error(parser, "inferred local array initializer must not be empty");
-        goto done;
-    }
-    parser->program->locals[local_id].element_count =
-        minic_array_initializer_plan_element_count(&plan);
-    success = minic_parser_advance(parser);
-
-done:
-    minic_array_initializer_plan_destroy(&plan);
-    return success;
-}
 
 static bool
 parse_local_array_initializer(MinicParser *parser, MinicLocalId local_id, bool infer_count) {
