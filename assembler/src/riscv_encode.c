@@ -196,6 +196,75 @@ static bool parse_fence_set(const char *text, uint32_t *mask) {
     return true;
 }
 
+
+static bool decode_amo_mnemonic(const char *op,
+                                uint32_t *funct5,
+                                uint32_t *width_funct3,
+                                uint32_t *ordering_bits) {
+    char core[64];
+    size_t n;
+    const char *suffix = NULL;
+
+    if (op == NULL || funct5 == NULL || width_funct3 == NULL ||
+        ordering_bits == NULL) {
+        return false;
+    }
+    n = strlen(op);
+    if (n == 0U || n >= sizeof(core)) {
+        return false;
+    }
+    memcpy(core, op, n + 1U);
+
+    *ordering_bits = 0U;
+    if (n > 5U && strcmp(core + n - 5U, ".aqrl") == 0) {
+        core[n - 5U] = '\0';
+        *ordering_bits = (1U << 26U) | (1U << 25U);
+    } else if (n > 3U && strcmp(core + n - 3U, ".aq") == 0) {
+        core[n - 3U] = '\0';
+        *ordering_bits = 1U << 26U;
+    } else if (n > 3U && strcmp(core + n - 3U, ".rl") == 0) {
+        core[n - 3U] = '\0';
+        *ordering_bits = 1U << 25U;
+    }
+
+    n = strlen(core);
+    if (n < 3U || core[n - 2U] != '.') {
+        return false;
+    }
+    suffix = core + n - 2U;
+    if (strcmp(suffix, ".w") == 0) {
+        *width_funct3 = 2U;
+    } else if (strcmp(suffix, ".d") == 0) {
+        *width_funct3 = 3U;
+    } else {
+        return false;
+    }
+    core[n - 2U] = '\0';
+
+    if (strcmp(core, "amoadd") == 0) {
+        *funct5 = 0x00U;
+    } else if (strcmp(core, "amoswap") == 0) {
+        *funct5 = 0x01U;
+    } else if (strcmp(core, "amoxor") == 0) {
+        *funct5 = 0x04U;
+    } else if (strcmp(core, "amoor") == 0) {
+        *funct5 = 0x08U;
+    } else if (strcmp(core, "amoand") == 0) {
+        *funct5 = 0x0cU;
+    } else if (strcmp(core, "amomin") == 0) {
+        *funct5 = 0x10U;
+    } else if (strcmp(core, "amomax") == 0) {
+        *funct5 = 0x14U;
+    } else if (strcmp(core, "amominu") == 0) {
+        *funct5 = 0x18U;
+    } else if (strcmp(core, "amomaxu") == 0) {
+        *funct5 = 0x1cU;
+    } else {
+        return false;
+    }
+    return true;
+}
+
 static size_t split_operands(const char *args, char out[][128], size_t max_out) {
     size_t count = 0U;
     size_t pos = 0U;
@@ -395,6 +464,19 @@ bool minias_riscv_measure(const char *op,
         return false;
     }
 
+    {
+        uint32_t amo_funct5;
+        uint32_t amo_width;
+        uint32_t amo_ordering;
+        if (decode_amo_mnemonic(op, &amo_funct5, &amo_width, &amo_ordering)) {
+            (void)amo_funct5;
+            (void)amo_width;
+            (void)amo_ordering;
+            *size = 4U;
+            return true;
+        }
+    }
+
 #define SIMPLE(OP) strcmp(op, OP) == 0
     if (SIMPLE("ret") || SIMPLE("nop") || SIMPLE("mv") || SIMPLE("jr") ||
         SIMPLE("snez") || SIMPLE("seqz") || SIMPLE("neg") || SIMPLE("jalr") ||
@@ -405,9 +487,7 @@ bool minias_riscv_measure(const char *op,
         SIMPLE("sltiu") || SIMPLE("slli") || SIMPLE("srli") || SIMPLE("srai") ||
         SIMPLE("sra") || SIMPLE("fence") || SIMPLE("csrr") || SIMPLE("csrrc") ||
         SIMPLE("csrs") || SIMPLE("csrc") || SIMPLE("ebreak") || SIMPLE("pause") ||
-        SIMPLE("wfi") || SIMPLE("amoadd.w") || SIMPLE("amoadd.d") ||
-        SIMPLE("amoand.w") || SIMPLE("amoand.d") || SIMPLE("amoor.w") ||
-        SIMPLE("amoor.d") || SIMPLE("add") || SIMPLE("sub") || SIMPLE("sll") ||
+        SIMPLE("wfi") || SIMPLE("add") || SIMPLE("sub") || SIMPLE("sll") ||
         SIMPLE("srl") || SIMPLE("and") || SIMPLE("or") ||
         SIMPLE("xor") || SIMPLE("slt") || SIMPLE("sltu") || SIMPLE("mul") ||
         SIMPLE("mulh") || SIMPLE("mulhu") || SIMPLE("div") || SIMPLE("divu") ||
@@ -654,43 +734,32 @@ bool minias_riscv_encode(MiniAs *as, const MiniAsStmt *stmt) {
         }
         return append_u32(as, stmt->section, 0x10500073U);
     }
-    if (strcmp(stmt->op, "amoadd.w") == 0 ||
-        strcmp(stmt->op, "amoadd.d") == 0 ||
-        strcmp(stmt->op, "amoand.w") == 0 ||
-        strcmp(stmt->op, "amoand.d") == 0 ||
-        strcmp(stmt->op, "amoor.w") == 0 ||
-        strcmp(stmt->op, "amoor.d") == 0) {
-        char base[128];
-        int64_t offset;
-        uint32_t width_funct3 =
-            (strcmp(stmt->op, "amoadd.d") == 0 ||
-             strcmp(stmt->op, "amoand.d") == 0 ||
-             strcmp(stmt->op, "amoor.d") == 0)
-                ? 3U
-                : 2U;
-        uint32_t funct5 =
-            (strcmp(stmt->op, "amoand.w") == 0 ||
-             strcmp(stmt->op, "amoand.d") == 0)
-                ? 0x0cU
-                : (strcmp(stmt->op, "amoor.w") == 0 ||
-                   strcmp(stmt->op, "amoor.d") == 0)
-                      ? 0x08U
-                      : 0U;
+    {
+        uint32_t amo_funct5;
+        uint32_t amo_width;
+        uint32_t amo_ordering;
+        if (decode_amo_mnemonic(stmt->op,
+                                &amo_funct5,
+                                &amo_width,
+                                &amo_ordering)) {
+            char base[128];
+            int64_t offset;
 
-        if (count != 3U || !require_reg(as, stmt, operands[0], &rd) ||
-            !require_reg(as, stmt, operands[1], &rs2) ||
-            !parse_mem(operands[2], &offset, base) || offset != 0 ||
-            !require_reg(as, stmt, base, &rs1)) {
-            minias_set_error(as, "bad-%s:line=%zu", stmt->op, stmt->line);
-            return false;
+            if (count != 3U || !require_reg(as, stmt, operands[0], &rd) ||
+                !require_reg(as, stmt, operands[1], &rs2) ||
+                !parse_mem(operands[2], &offset, base) || offset != 0 ||
+                !require_reg(as, stmt, base, &rs1)) {
+                minias_set_error(as, "bad-%s:line=%zu", stmt->op, stmt->line);
+                return false;
+            }
+            return append_u32(as,
+                              stmt->section,
+                              0x2fU | ((uint32_t)rd << 7U) |
+                                  (amo_width << 12U) |
+                                  ((uint32_t)rs1 << 15U) |
+                                  ((uint32_t)rs2 << 20U) |
+                                  amo_ordering | (amo_funct5 << 27U));
         }
-        return append_u32(as,
-                          stmt->section,
-                          0x2fU | ((uint32_t)rd << 7U) |
-                              (width_funct3 << 12U) |
-                              ((uint32_t)rs1 << 15U) |
-                              ((uint32_t)rs2 << 20U) |
-                              (funct5 << 27U));
     }
     if (strcmp(stmt->op, "ebreak") == 0) {
         if (count != 0U) {
