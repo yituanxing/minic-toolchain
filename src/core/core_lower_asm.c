@@ -529,7 +529,7 @@ static bool core_inline_asm_numeric_template(const MinicInlineAsm *source,
     char *normalized;
 
     if (source == NULL || template_out == NULL || template_length_out == NULL ||
-        source->template_text == NULL || source->template_length == 0U ||
+        source->template_text == NULL ||
         source->output_count + source->input_count > 10U) {
         return false;
     }
