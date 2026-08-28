@@ -115,7 +115,7 @@ EOF
     "$vendor/parson.c" -o "$work/parson.i"
 
 set +e
-"$minic" -S "$work/parson.i" -o "$work/parson.s" \
+CORE_FAST_TRACE=${CORE_FAST_TRACE:-1} "$minic" -S "$work/parson.i" -o "$work/parson.s" \
     >"$work/minic.stdout" 2>"$work/minic.stderr"
 status=$?
 set -e
