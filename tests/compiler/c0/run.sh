@@ -46,12 +46,20 @@ expect_instructions() {
                 fi
                 ;;
             "j .Lif_"*)
-                if ! grep -E '^[[:space:]]+j[[:space:]]+\.Lmain_core_bb[0-9]+
+                if ! grep -E '^[[:space:]]+j[[:space:]]+\.Lmain_core_bb[0-9]+$' "$work/$name.s" >/dev/null; then
+                    grep -E '^[[:space:]]+lla[[:space:]]+t6,[[:space:]]*\.Lmain_core_bb[0-9]+$' "$work/$name.s" >/dev/null
+                    grep -F "  jalr zero, t6, 0" "$work/$name.s" >/dev/null
+                fi
+                ;;
             "beqz a0, .Lif_"*)
                 # Conditional Core terminators keep only the local branch in
                 # range and transfer both successors with the same far-jump
                 # sequence.
-                if ! grep -E '^[[:space:]]+bnez[[:space:]]+[^,]+,[[:space:]]*\.Lmain_core_bb[0-9]+
+                if ! grep -E '^[[:space:]]+bnez[[:space:]]+[^,]+,[[:space:]]*\.Lmain_core_bb[0-9]+$' "$work/$name.s" >/dev/null; then
+                    grep -E '^[[:space:]]+beqz[[:space:]]+t0,[[:space:]]*1f$' "$work/$name.s" >/dev/null
+                    test "$(grep -E -c '^[[:space:]]+lla[[:space:]]+t6,[[:space:]]*\.Lmain_core_bb[0-9]+$' "$work/$name.s")" -ge 2
+                fi
+                ;;
             "li a0, "*)
                 immediate=${instruction#"li a0, "}
                 grep -E "^[[:space:]]+li[[:space:]]+[^,]+,[[:space:]]*$immediate$" \
