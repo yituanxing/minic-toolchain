@@ -1751,16 +1751,37 @@ static bool core_indirect_call_supported(const MinicC0Program *program,
             }
         } else if (is_fixed_parameter && minic_type_is_record(argument_type)) {
             MinicCoreObjectId object_id;
-            if (argument->kind != MINIC_CORE_CALL_ARGUMENT_OBJECT ||
-                location.value.kind != MINIC_RISCV64_ABI_VALUE_AGGREGATE ||
-                location.value.slot_count == 0U || location.value.slot_count > 2U ||
-                location.integer_register_count != location.value.slot_count ||
-                location.integer_register_begin + location.integer_register_count > 8U) {
+
+            if (argument->kind != MINIC_CORE_CALL_ARGUMENT_OBJECT) {
                 return false;
             }
             object_id = argument->value.object_id;
             if (object_id >= function->object_count ||
                 !minic_type_equal(function->objects[object_id].type, argument_type)) {
+                return false;
+            }
+            if (location.value.kind == MINIC_RISCV64_ABI_VALUE_IGNORE) {
+                if (location.value.slot_count != 0U || location.integer_register_count != 0U ||
+                    location.stack_slot_count != 0U) {
+                    return false;
+                }
+            } else if (location.value.kind == MINIC_RISCV64_ABI_VALUE_AGGREGATE) {
+                if (location.value.slot_count == 0U || location.value.slot_count > 2U ||
+                    location.value.slot_count !=
+                        location.integer_register_count + location.stack_slot_count ||
+                    location.integer_register_begin + location.integer_register_count > 8U) {
+                    return false;
+                }
+            } else if (location.value.kind == MINIC_RISCV64_ABI_VALUE_INDIRECT) {
+                if (location.value.slot_count != 1U ||
+                    !((location.integer_register_count == 1U &&
+                       location.integer_register_begin < 8U &&
+                       location.stack_slot_count == 0U) ||
+                      (location.integer_register_count == 0U &&
+                       location.stack_slot_count == 1U))) {
+                    return false;
+                }
+            } else {
                 return false;
             }
         } else {
@@ -2648,12 +2669,47 @@ static bool emit_indirect_call(FILE *file,
                 !core_object_offset(program, function, argument->value.object_id, &object_offset)) {
                 return false;
             }
+            if (location.value.kind == MINIC_RISCV64_ABI_VALUE_IGNORE) {
+                if (location.value.slot_count != 0U || location.integer_register_count != 0U ||
+                    location.stack_slot_count != 0U) {
+                    return false;
+                }
+                continue;
+            }
+            if (location.value.kind == MINIC_RISCV64_ABI_VALUE_INDIRECT) {
+                if (location.integer_register_count == 1U && location.stack_slot_count == 0U) {
+                    if (location.integer_register_begin >= 8U ||
+                        !emit_sp_address(file,
+                                         minic_core_rv64_argument_registers[
+                                             location.integer_register_begin],
+                                         object_offset)) {
+                        return false;
+                    }
+                } else if (location.integer_register_count == 0U &&
+                           location.stack_slot_count == 1U) {
+                    size_t outgoing_offset;
+
+                    if (location.stack_slot_begin > SIZE_MAX / 8U ||
+                        !emit_sp_address(file, "t0", object_offset)) {
+                        return false;
+                    }
+                    outgoing_offset = location.stack_slot_begin * 8U;
+                    if (!minic_riscv64_emit_sp_store64(file, "t0", outgoing_offset)) {
+                        return false;
+                    }
+                } else {
+                    return false;
+                }
+                continue;
+            }
+            if (location.value.kind != MINIC_RISCV64_ABI_VALUE_AGGREGATE) {
+                return false;
+            }
             for (chunk_index = 0U; chunk_index < location.value.slot_count; ++chunk_index) {
                 size_t chunk_offset = chunk_index * 8U;
                 size_t chunk_size;
-                size_t register_index = location.integer_register_begin + chunk_index;
 
-                if (chunk_offset >= location.value.storage_size || register_index >= 8U ||
+                if (chunk_offset >= location.value.storage_size ||
                     object_offset > SIZE_MAX - chunk_offset) {
                     return false;
                 }
@@ -2661,11 +2717,34 @@ static bool emit_indirect_call(FILE *file,
                 if (chunk_size > 8U) {
                     chunk_size = 8U;
                 }
-                if (!emit_sp_load_chunk(file,
-                                        minic_core_rv64_argument_registers[register_index],
-                                        object_offset + chunk_offset,
-                                        chunk_size)) {
-                    return false;
+                if (chunk_index < location.integer_register_count) {
+                    size_t register_index = location.integer_register_begin + chunk_index;
+                    if (register_index >= 8U ||
+                        !emit_sp_load_chunk(file,
+                                            minic_core_rv64_argument_registers[register_index],
+                                            object_offset + chunk_offset,
+                                            chunk_size)) {
+                        return false;
+                    }
+                } else {
+                    size_t stack_chunk = chunk_index - location.integer_register_count;
+                    size_t stack_slot;
+                    size_t outgoing_offset;
+
+                    if (stack_chunk >= location.stack_slot_count ||
+                        location.stack_slot_begin > SIZE_MAX - stack_chunk) {
+                        return false;
+                    }
+                    stack_slot = location.stack_slot_begin + stack_chunk;
+                    if (stack_slot > SIZE_MAX / 8U ||
+                        !emit_sp_load_chunk(
+                            file, "t0", object_offset + chunk_offset, chunk_size)) {
+                        return false;
+                    }
+                    outgoing_offset = stack_slot * 8U;
+                    if (!minic_riscv64_emit_sp_store64(file, "t0", outgoing_offset)) {
+                        return false;
+                    }
                 }
             }
             continue;
