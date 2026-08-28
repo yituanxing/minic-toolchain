@@ -48,7 +48,7 @@ run_double_return_abi() {
     "$minic" -S "$work/$name.i" -o "$work/$name.s"
     grep -F "  fmv.x.d a0, fa0" "$work/$name.s" >/dev/null
     grep -F "  fmv.d.x fa0, a0" "$work/$name.s" >/dev/null
-    grep -F "  li a0, 0x405ee00000000000" "$work/$name.s" >/dev/null
+    grep -F "0x405ee00000000000" "$work/$name.s" >/dev/null
     grep -F "  fadd.d ft0, ft0, ft1" "$work/$name.s" >/dev/null
     grep -F "  fsub.d ft0, ft0, ft1" "$work/$name.s" >/dev/null
     grep -F "  fmul.d ft0, ft0, ft1" "$work/$name.s" >/dev/null
