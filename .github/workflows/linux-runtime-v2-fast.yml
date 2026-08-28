@@ -10,6 +10,8 @@ permissions:
   contents: read
   actions: read
 
+# Fast lane launch marker.
+
 jobs:
   build-image:
     if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[linux-runtime-v2-fast]')
