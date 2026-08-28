@@ -323,4 +323,20 @@ EOF
 readelf -Wr "$work/jal.o" >"$work/jal.txt"
 grep -q 'R_RISCV_JAL.*external_jump_target' "$work/jal.txt"
 
-echo "MINIAS_A0=PASS objects=15 format=ELF64-RISCV-ET_REL relocations=10 strings=2 pseudos=14 previous=1 numeric_labels=8 isa_next=13 csr_amo=4 section_stack=1 org=1 local_difference=1 lr_sc=2 inline_labels=2 branch_pseudos=8 extern=1 symbol_minus_dot=2 jal=2"
+cat >"$work/high-numeric-labels.s" <<'EOF'
+.text
+.globl high_numeric_labels
+.type high_numeric_labels, @function
+high_numeric_labels:
+  886 : addi a0, a0, 1
+  beqz a0, 887f
+  bnez a0, 886b
+  887 : ret
+.size high_numeric_labels, .-high_numeric_labels
+EOF
+"$MINIAS" -o "$work/high-numeric-labels.o" "$work/high-numeric-labels.s"
+readelf -Ws "$work/high-numeric-labels.o" >"$work/high-numeric-labels.txt"
+grep -q '.Lminias_num_886_1' "$work/high-numeric-labels.txt"
+grep -q '.Lminias_num_887_1' "$work/high-numeric-labels.txt"
+
+echo "MINIAS_A0=PASS objects=16 format=ELF64-RISCV-ET_REL relocations=10 strings=2 pseudos=14 previous=1 numeric_labels=10 isa_next=13 csr_amo=4 section_stack=1 org=1 local_difference=1 lr_sc=2 inline_labels=2 branch_pseudos=8 extern=1 symbol_minus_dot=2 jal=2 high_numeric_labels=2"
