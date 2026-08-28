@@ -93,11 +93,11 @@ MinicCoreLowerStatus ensure_statement_block(MinicCoreLowerContext *context, Mini
     if (source_statement->kind == MINIC_STATEMENT_LABEL) {
         MinicCoreBlock *block = &context->function->blocks[mapped];
 
-        if (block->source_label_statement != MINIC_STATEMENT_INVALID &&
-            block->source_label_statement != statement_id) {
+        if (block->source_label_id != SIZE_MAX &&
+            block->source_label_id != (size_t)statement_id) {
             return MINIC_CORE_LOWER_ERROR;
         }
-        block->source_label_statement = statement_id;
+        block->source_label_id = (size_t)statement_id;
     }
     *block_id = mapped;
     return MINIC_CORE_LOWER_OK;
