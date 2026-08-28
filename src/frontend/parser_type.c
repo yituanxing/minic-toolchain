@@ -382,35 +382,44 @@ bool minic_parser_parse_type_specifiers(MinicParser *parser, MinicType *type) {
             }
         }
 
-        if (saw_signed && saw_unsigned) {
-            minic_parser_error(parser, "conflicting signed and unsigned type specifiers");
-            return false;
-        }
-        if (saw_short && long_count != 0U) {
-            minic_parser_error(parser, "short cannot be combined with long");
-            return false;
-        }
-        if (saw_char) {
-            if (saw_short || long_count != 0U || saw_int) {
-                minic_parser_error(parser, "char cannot be combined with short, int, or long");
+        if (parser->current.kind == MINIC_TOKEN_KW_DOUBLE &&
+            long_count == 1U && !saw_char && !saw_int && !saw_short &&
+            !saw_signed && !saw_unsigned) {
+            parsed_type = minic_type_long_double();
+            if (!minic_parser_advance(parser)) {
                 return false;
             }
-            if (saw_signed) {
-                parsed_type = minic_type_signed_char();
-            } else if (saw_unsigned) {
-                parsed_type = minic_type_unsigned_char();
-            } else if (!minic_target_info_plain_char_type(parser->target_info, &parsed_type)) {
-                minic_parser_error(parser, "cannot resolve target plain char type");
-                return false;
-            }
-        } else if (saw_short) {
-            parsed_type = saw_unsigned ? minic_type_unsigned_short() : minic_type_short();
-        } else if (long_count == 2U) {
-            parsed_type = saw_unsigned ? minic_type_unsigned_long_long() : minic_type_long_long();
-        } else if (long_count == 1U) {
-            parsed_type = saw_unsigned ? minic_type_unsigned_long() : minic_type_long();
         } else {
-            parsed_type = saw_unsigned ? minic_type_unsigned_int() : minic_type_int();
+            if (saw_signed && saw_unsigned) {
+                minic_parser_error(parser, "conflicting signed and unsigned type specifiers");
+                return false;
+            }
+            if (saw_short && long_count != 0U) {
+                minic_parser_error(parser, "short cannot be combined with long");
+                return false;
+            }
+            if (saw_char) {
+                if (saw_short || long_count != 0U || saw_int) {
+                    minic_parser_error(parser, "char cannot be combined with short, int, or long");
+                    return false;
+                }
+                if (saw_signed) {
+                    parsed_type = minic_type_signed_char();
+                } else if (saw_unsigned) {
+                    parsed_type = minic_type_unsigned_char();
+                } else if (!minic_target_info_plain_char_type(parser->target_info, &parsed_type)) {
+                    minic_parser_error(parser, "cannot resolve target plain char type");
+                    return false;
+                }
+            } else if (saw_short) {
+                parsed_type = saw_unsigned ? minic_type_unsigned_short() : minic_type_short();
+            } else if (long_count == 2U) {
+                parsed_type = saw_unsigned ? minic_type_unsigned_long_long() : minic_type_long_long();
+            } else if (long_count == 1U) {
+                parsed_type = saw_unsigned ? minic_type_unsigned_long() : minic_type_long();
+            } else {
+                parsed_type = saw_unsigned ? minic_type_unsigned_int() : minic_type_int();
+            }
         }
     } else if (parser->current.kind == MINIC_TOKEN_KW_FLOAT) {
         parsed_type = minic_type_float();
@@ -418,9 +427,16 @@ bool minic_parser_parse_type_specifiers(MinicParser *parser, MinicType *type) {
             return false;
         }
     } else if (parser->current.kind == MINIC_TOKEN_KW_DOUBLE) {
-        parsed_type = minic_type_double();
         if (!minic_parser_advance(parser)) {
             return false;
+        }
+        if (parser->current.kind == MINIC_TOKEN_KW_LONG) {
+            parsed_type = minic_type_long_double();
+            if (!minic_parser_advance(parser)) {
+                return false;
+            }
+        } else {
+            parsed_type = minic_type_double();
         }
     } else if (parser->current.kind == MINIC_TOKEN_KW_VOID) {
         parsed_type = minic_type_void();
