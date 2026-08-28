@@ -116,6 +116,26 @@ static bool typedef_attribute_mode_name(const MinicParser *parser,
     if (end <= begin) {
         return false;
     }
+    /* GNU system headers may spell mode arguments with an extra parenthesis
+       layer, e.g. __mode__ ((__word__)) after attribute collection. Normalize
+       redundant wrappers before matching the target-owned mode identifier. */
+    while (end > begin + 1U && parser->source[begin] == '(' &&
+           parser->source[end - 1U] == ')') {
+        begin += 1U;
+        end -= 1U;
+        while (begin < end &&
+               (parser->source[begin] == ' ' || parser->source[begin] == '\t' ||
+                parser->source[begin] == '\n' || parser->source[begin] == '\r' ||
+                parser->source[begin] == '\f' || parser->source[begin] == '\v')) {
+            begin += 1U;
+        }
+        while (end > begin &&
+               (parser->source[end - 1U] == ' ' || parser->source[end - 1U] == '\t' ||
+                parser->source[end - 1U] == '\n' || parser->source[end - 1U] == '\r' ||
+                parser->source[end - 1U] == '\f' || parser->source[end - 1U] == '\v')) {
+            end -= 1U;
+        }
+    }
     if (end - begin > 4U && parser->source[begin] == '_' &&
         parser->source[begin + 1U] == '_' && parser->source[end - 2U] == '_' &&
         parser->source[end - 1U] == '_') {
