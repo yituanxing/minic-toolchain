@@ -261,6 +261,7 @@ void minias_init(MiniAs *as) {
                                 MINIAS_SHF_ALLOC | MINIAS_SHF_WRITE,
                                 1U);
     as->current_section = minias_find_section(as, ".text");
+    as->previous_section = as->current_section;
 }
 
 void minias_destroy(MiniAs *as) {
@@ -397,7 +398,10 @@ static bool switch_section(MiniAs *as,
     if (index < 0) {
         return false;
     }
-    as->current_section = index;
+    if (index != as->current_section) {
+        as->previous_section = as->current_section;
+        as->current_section = index;
+    }
     return true;
 }
 
@@ -842,6 +846,17 @@ static bool process_statement(MiniAs *as, char *text, size_t line) {
         }
         if (strcmp(op, ".size") == 0) {
             return parse_size(as, args, line);
+        }
+        if (strcmp(op, ".previous") == 0) {
+            int swap = as->current_section;
+            if (as->previous_section < 0 ||
+                (size_t)as->previous_section >= as->section_count) {
+                minias_set_error(as, "bad-directive:.previous:line=%zu", line);
+                return false;
+            }
+            as->current_section = as->previous_section;
+            as->previous_section = swap;
+            return true;
         }
         if (strcmp(op, ".option") == 0 || strcmp(op, ".file") == 0 ||
             strcmp(op, ".ident") == 0) {
