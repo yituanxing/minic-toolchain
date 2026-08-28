@@ -328,9 +328,12 @@ expect_compile_failure \
 expect_compile_failure \
     invalid_duplicate_typedef \
     "duplicate typedef name"
+compile_source void_typedef void_typedef
+printf '%s\n' "PASS compiler/c0/void_typedef"
+
 expect_compile_failure \
     invalid_void_typedef \
-    "typedef cannot name bare void"
+    "local object cannot have void type"
 expect_compile_failure \
     invalid_too_many_global_initializers \
     "too many nested static array initializers"
