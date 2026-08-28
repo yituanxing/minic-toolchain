@@ -57,6 +57,145 @@ static bool parse_i64(const char *text, int64_t *value) {
     return true;
 }
 
+static bool parse_li_bits(const char *text,
+                          uint64_t *bits,
+                          bool *fits_signed32,
+                          int64_t *signed_value) {
+    char *end = NULL;
+
+    if (text == NULL || bits == NULL || fits_signed32 == NULL ||
+        signed_value == NULL) {
+        return false;
+    }
+    while (*text == ' ' || *text == '\t') {
+        ++text;
+    }
+    if (*text == '-') {
+        long long parsed;
+        errno = 0;
+        parsed = strtoll(text, &end, 0);
+        if (errno != 0 || end == text) {
+            return false;
+        }
+        while (*end == ' ' || *end == '\t') {
+            ++end;
+        }
+        if (*end != '\0') {
+            return false;
+        }
+        *signed_value = (int64_t)parsed;
+        *bits = (uint64_t)*signed_value;
+        *fits_signed32 =
+            *signed_value >= INT32_MIN && *signed_value <= INT32_MAX;
+        return true;
+    }
+    {
+        unsigned long long parsed;
+        errno = 0;
+        parsed = strtoull(text, &end, 0);
+        if (errno != 0 || end == text) {
+            return false;
+        }
+        while (*end == ' ' || *end == '\t') {
+            ++end;
+        }
+        if (*end != '\0') {
+            return false;
+        }
+        *bits = (uint64_t)parsed;
+        if (*bits <= (uint64_t)INT64_MAX) {
+            *signed_value = (int64_t)*bits;
+            *fits_signed32 = *signed_value <= INT32_MAX;
+        } else {
+            *signed_value = 0;
+            *fits_signed32 = false;
+        }
+        return true;
+    }
+}
+
+static uint32_t li64_materialized_size(uint64_t bits) {
+    int byte_index = 7;
+    uint32_t instructions = 1U;
+    int i;
+
+    while (byte_index > 0 &&
+           ((bits >> ((unsigned int)byte_index * 8U)) & UINT64_C(0xff)) == 0U) {
+        --byte_index;
+    }
+    for (i = byte_index - 1; i >= 0; --i) {
+        uint64_t byte = (bits >> ((unsigned int)i * 8U)) & UINT64_C(0xff);
+        ++instructions;
+        if (byte != 0U) {
+            ++instructions;
+        }
+    }
+    return instructions * 4U;
+}
+
+static bool parse_csr(const char *text, uint32_t *csr) {
+    static const struct {
+        const char *name;
+        uint32_t value;
+    } names[] = {
+        {"fflags", 0x001U}, {"frm", 0x002U}, {"fcsr", 0x003U},
+        {"sstatus", 0x100U}, {"sie", 0x104U}, {"stvec", 0x105U},
+        {"sscratch", 0x140U}, {"sepc", 0x141U}, {"scause", 0x142U},
+        {"stval", 0x143U}, {"sip", 0x144U}, {"satp", 0x180U},
+        {"mstatus", 0x300U}, {"mtvec", 0x305U}, {"mscratch", 0x340U},
+        {"mepc", 0x341U}, {"mcause", 0x342U}, {"mtval", 0x343U},
+        {"mip", 0x344U}, {"cycle", 0xc00U}, {"time", 0xc01U},
+        {"instret", 0xc02U}, {"mhartid", 0xf14U},
+    };
+    size_t i;
+    char *end = NULL;
+    unsigned long value;
+
+    for (i = 0U; i < sizeof(names) / sizeof(names[0]); ++i) {
+        if (strcmp(text, names[i].name) == 0) {
+            *csr = names[i].value;
+            return true;
+        }
+    }
+    errno = 0;
+    value = strtoul(text, &end, 0);
+    if (errno != 0 || end == text || value > 0xfffUL) {
+        return false;
+    }
+    while (*end == ' ' || *end == '\t') {
+        ++end;
+    }
+    if (*end != '\0') {
+        return false;
+    }
+    *csr = (uint32_t)value;
+    return true;
+}
+
+static bool parse_fence_set(const char *text, uint32_t *mask) {
+    uint32_t value = 0U;
+    const char *p;
+
+    if (text == NULL || *text == '\0') {
+        return false;
+    }
+    for (p = text; *p != '\0'; ++p) {
+        if (*p == 'i') {
+            value |= 8U;
+        } else if (*p == 'o') {
+            value |= 4U;
+        } else if (*p == 'r') {
+            value |= 2U;
+        } else if (*p == 'w') {
+            value |= 1U;
+        } else if (*p != ' ' && *p != '\t') {
+            return false;
+        }
+    }
+    *mask = value;
+    return true;
+}
+
 static size_t split_operands(const char *args, char out[][128], size_t max_out) {
     size_t count = 0U;
     size_t pos = 0U;
@@ -214,18 +353,23 @@ bool minias_riscv_measure(const char *op,
     int64_t value;
 
     if (strcmp(op, "li") == 0) {
-        if (count != 2U || !parse_i64(operands[1], &value)) {
+        uint64_t bits;
+        bool fits_signed32;
+        int64_t signed_value;
+
+        if (count != 2U ||
+            !parse_li_bits(operands[1], &bits, &fits_signed32, &signed_value)) {
             (void)snprintf(reason,
                            reason_size,
                            "unsupported-expression:%s",
                            count >= 2U ? operands[1] : args);
             return false;
         }
-        if (value < INT32_MIN || value > INT32_MAX) {
-            (void)snprintf(reason, reason_size, "unsupported-li64");
-            return false;
+        if (fits_signed32) {
+            *size = signed_value >= -2048 && signed_value <= 2047 ? 4U : 8U;
+        } else {
+            *size = li64_materialized_size(bits);
         }
-        *size = value >= -2048 && value <= 2047 ? 4U : 8U;
         return true;
     }
     if (strcmp(op, "lla") == 0 || strcmp(op, "la") == 0) {
@@ -260,6 +404,7 @@ bool minias_riscv_measure(const char *op,
         SIMPLE("beqz") || SIMPLE("bnez") || SIMPLE("addi") || SIMPLE("addiw") ||
         SIMPLE("andi") || SIMPLE("ori") || SIMPLE("xori") || SIMPLE("slti") ||
         SIMPLE("sltiu") || SIMPLE("slli") || SIMPLE("srli") || SIMPLE("srai") ||
+        SIMPLE("sra") || SIMPLE("fence") || SIMPLE("csrr") || SIMPLE("ebreak") ||
         SIMPLE("add") || SIMPLE("sub") || SIMPLE("sll") || SIMPLE("srl") || SIMPLE("and") || SIMPLE("or") ||
         SIMPLE("xor") || SIMPLE("slt") || SIMPLE("sltu") || SIMPLE("mul") ||
         SIMPLE("mulh") || SIMPLE("mulhu") || SIMPLE("div") || SIMPLE("divu") ||
@@ -328,25 +473,69 @@ bool minias_riscv_encode(MiniAs *as, const MiniAsStmt *stmt) {
         return append_u32(as, stmt->section, enc_r(0x33U, rd, 0U, 0, rs1, 0x20U));
     }
     if (strcmp(stmt->op, "li") == 0) {
-        int64_t hi;
-        int64_t lo;
+        uint64_t bits;
+        bool fits_signed32;
+        int64_t signed_value;
 
         if (count != 2U || !require_reg(as, stmt, operands[0], &rd) ||
-            !require_imm(as, stmt, operands[1], &immediate)) {
+            !parse_li_bits(operands[1], &bits, &fits_signed32, &signed_value)) {
             return false;
         }
-        if (immediate >= -2048 && immediate <= 2047) {
-            return append_u32(as, stmt->section, enc_i(0x13U, rd, 0U, 0, immediate));
+        if (fits_signed32) {
+            int64_t hi;
+            int64_t lo;
+
+            if (signed_value >= -2048 && signed_value <= 2047) {
+                return append_u32(as,
+                                  stmt->section,
+                                  enc_i(0x13U, rd, 0U, 0, signed_value));
+            }
+            hi = (signed_value + 0x800) >> 12;
+            lo = signed_value - (hi << 12);
+            if (!append_u32(as,
+                            stmt->section,
+                            0x37U | ((uint32_t)rd << 7U) |
+                                (((uint32_t)hi & 0xfffffU) << 12U))) {
+                return false;
+            }
+            return append_u32(as,
+                              stmt->section,
+                              enc_i(0x1bU, rd, 0U, rd, lo));
         }
-        hi = (immediate + 0x800) >> 12;
-        lo = immediate - (hi << 12);
-        if (!append_u32(as,
-                        stmt->section,
-                        0x37U | ((uint32_t)rd << 7U) |
-                            (((uint32_t)hi & 0xfffffU) << 12U))) {
-            return false;
+        {
+            int byte_index = 7;
+            int i;
+            uint64_t top;
+
+            while (byte_index > 0 &&
+                   ((bits >> ((unsigned int)byte_index * 8U)) &
+                    UINT64_C(0xff)) == 0U) {
+                --byte_index;
+            }
+            top = (bits >> ((unsigned int)byte_index * 8U)) & UINT64_C(0xff);
+            if (!append_u32(as,
+                            stmt->section,
+                            enc_i(0x13U, rd, 0U, 0, (int64_t)top))) {
+                return false;
+            }
+            for (i = byte_index - 1; i >= 0; --i) {
+                uint64_t byte =
+                    (bits >> ((unsigned int)i * 8U)) & UINT64_C(0xff);
+
+                if (!append_u32(as,
+                                stmt->section,
+                                enc_i(0x13U, rd, 1U, rd, 8))) {
+                    return false;
+                }
+                if (byte != 0U &&
+                    !append_u32(as,
+                                stmt->section,
+                                enc_i(0x13U, rd, 0U, rd, (int64_t)byte))) {
+                    return false;
+                }
+            }
+            return true;
         }
-        return append_u32(as, stmt->section, enc_i(0x1bU, rd, 0U, rd, lo));
     }
     if (strcmp(stmt->op, "call") == 0) {
         MiniAsSymbolExpr expr;
@@ -448,6 +637,48 @@ bool minias_riscv_encode(MiniAs *as, const MiniAsStmt *stmt) {
                                 rs1,
                                 immediate));
     }
+    if (strcmp(stmt->op, "ebreak") == 0) {
+        if (count != 0U) {
+            minias_set_error(as, "operand-count:ebreak:line=%zu", stmt->line);
+            return false;
+        }
+        return append_u32(as, stmt->section, 0x00100073U);
+    }
+    if (strcmp(stmt->op, "csrr") == 0) {
+        uint32_t csr;
+
+        if (count != 2U || !require_reg(as, stmt, operands[0], &rd) ||
+            !parse_csr(operands[1], &csr)) {
+            minias_set_error(as, "bad-csrr:line=%zu", stmt->line);
+            return false;
+        }
+        return append_u32(as,
+                          stmt->section,
+                          0x73U | ((uint32_t)rd << 7U) | (2U << 12U) |
+                              (csr << 20U));
+    }
+    if (strcmp(stmt->op, "fence") == 0) {
+        uint32_t pred = 0xfU;
+        uint32_t succ = 0xfU;
+
+        if (count == 2U) {
+            if (!parse_fence_set(operands[0], &pred) ||
+                !parse_fence_set(operands[1], &succ)) {
+                minias_set_error(as, "bad-fence:line=%zu", stmt->line);
+                return false;
+            }
+        } else if (count != 0U) {
+            minias_set_error(as, "operand-count:fence:line=%zu", stmt->line);
+            return false;
+        }
+        return append_u32(as,
+                          stmt->section,
+                          enc_i(0x0fU,
+                                0,
+                                0U,
+                                0,
+                                (int64_t)((pred << 4U) | succ)));
+    }
     if (strcmp(stmt->op, "slli") == 0 || strcmp(stmt->op, "srli") == 0 ||
         strcmp(stmt->op, "srai") == 0) {
         if (count != 3U || !require_reg(as, stmt, operands[0], &rd) ||
@@ -471,7 +702,8 @@ bool minias_riscv_encode(MiniAs *as, const MiniAsStmt *stmt) {
     }
     if (strcmp(stmt->op, "add") == 0 || strcmp(stmt->op, "sub") == 0 ||
         strcmp(stmt->op, "sll") == 0 || strcmp(stmt->op, "srl") == 0 ||
-        strcmp(stmt->op, "and") == 0 || strcmp(stmt->op, "or") == 0 ||
+        strcmp(stmt->op, "sra") == 0 || strcmp(stmt->op, "and") == 0 ||
+        strcmp(stmt->op, "or") == 0 ||
         strcmp(stmt->op, "xor") == 0 || strcmp(stmt->op, "slt") == 0 ||
         strcmp(stmt->op, "sltu") == 0 || strcmp(stmt->op, "mul") == 0 ||
         strcmp(stmt->op, "mulh") == 0 || strcmp(stmt->op, "mulhu") == 0 ||
@@ -491,6 +723,9 @@ bool minias_riscv_encode(MiniAs *as, const MiniAsStmt *stmt) {
             funct3 = 1U;
         } else if (strcmp(stmt->op, "srl") == 0) {
             funct3 = 5U;
+        } else if (strcmp(stmt->op, "sra") == 0) {
+            funct3 = 5U;
+            funct7 = 0x20U;
         } else if (strcmp(stmt->op, "and") == 0) {
             funct3 = 7U;
         } else if (strcmp(stmt->op, "or") == 0) {
