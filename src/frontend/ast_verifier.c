@@ -1682,17 +1682,39 @@ bool minic_c0_program_verify_target_detailed(const MinicC0Program *program,
             trace = getenv("CORE_FAST_TRACE");
             if (trace != NULL && trace[0] != '\0' && strcmp(trace, "0") != 0) {
                 const MinicExpression *bad = &program->expressions[index];
+                const MinicExpression *bad_operand;
+                MinicArrayObjectInfo array_info;
+                bool has_array_info;
+
+                bad_operand = program_expression(program, bad->value.unary.operand);
+                (void)memset(&array_info, 0, sizeof(array_info));
+                has_array_info =
+                    bad_operand != NULL &&
+                    minic_c0_expression_array_object_info(program, bad_operand, &array_info);
                 (void)fprintf(stderr,
                               "AST_EXPR_DETAIL index=%zu kind=%d value_category=%d "
-                              "base_kind=%d pointer_depth=%u left=%u right=%u operand=%u\n",
+                              "base_kind=%d pointer_depth=%u operand=%u span=%zu:%zu "
+                              "operand_kind=%d operand_vc=%d operand_base=%d operand_ptr=%u "
+                              "operand_array_id=%zu array_info=%d array_count=%zu "
+                              "array_incomplete=%d array_zero=%d array_materialized=%d\n",
                               index,
                               (int)bad->kind,
                               (int)bad->value_category,
                               (int)bad->type.base_kind,
                               bad->type.pointer_depth,
-                              (unsigned)bad->value.binary.left,
-                              (unsigned)bad->value.binary.right,
-                              (unsigned)bad->value.unary.operand);
+                              (unsigned)bad->value.unary.operand,
+                              bad->span.begin.line,
+                              bad->span.begin.column,
+                              bad_operand != NULL ? (int)bad_operand->kind : -1,
+                              bad_operand != NULL ? (int)bad_operand->value_category : -1,
+                              bad_operand != NULL ? (int)bad_operand->type.base_kind : -1,
+                              bad_operand != NULL ? bad_operand->type.pointer_depth : 0U,
+                              bad_operand != NULL ? (size_t)bad_operand->type.array_type_id : SIZE_MAX,
+                              has_array_info ? 1 : 0,
+                              has_array_info ? array_info.element_count : 0U,
+                              has_array_info && array_info.is_incomplete ? 1 : 0,
+                              has_array_info && array_info.is_zero_length ? 1 : 0,
+                              has_array_info && array_info.has_materialized_type ? 1 : 0);
             }
             MINIC_AST_VERIFY_FAIL("invalid expression contract");
         }
