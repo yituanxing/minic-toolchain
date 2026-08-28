@@ -6350,6 +6350,126 @@ MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
             return MINIC_CORE_LOWER_OK;
         }
     }
+    /* RUNTIME_R1_DOUBLE_COMPOUND_ASSIGNMENT: binary64 compound arithmetic
+       reuses the same evaluate-address/load/spill/RHS/reload/store ownership
+       as integer compound assignment.  Keep remainder/bitwise/shift excluded:
+       C does not define those operators for floating operands. */
+    if (expression->kind == MINIC_EXPRESSION_COMPOUND_ASSIGNMENT &&
+        (expression->value.binary.operator_kind == MINIC_BINARY_ADD ||
+         expression->value.binary.operator_kind == MINIC_BINARY_SUBTRACT ||
+         expression->value.binary.operator_kind == MINIC_BINARY_MULTIPLY ||
+         expression->value.binary.operator_kind == MINIC_BINARY_DIVIDE)) {
+        const MinicExpression *source;
+        const MinicExpression *target;
+        MinicCoreObjectId address_object;
+        MinicCoreObjectId current_object;
+        MinicCoreValueId address;
+        MinicCoreValueId current;
+        MinicCoreValueId right;
+        MinicCoreValueId result;
+        MinicCoreLowerStatus status;
+        MinicType address_type;
+        MinicType expression_value_type;
+        MinicType stored_type;
+
+        target = minic_c0_program_expression(
+            context->body->program, expression->value.binary.left);
+        source = minic_c0_program_expression(
+            context->body->program, expression->value.binary.right);
+        if (target != NULL && source != NULL &&
+            target->value_category == MINIC_VALUE_LVALUE &&
+            !minic_type_is_const(target->type) &&
+            minic_type_unqualified(target->type, &stored_type) &&
+            minic_type_is_double(stored_type)) {
+            if (!minic_type_unqualified(expression->type, &expression_value_type) ||
+                !minic_type_equal(expression_value_type, stored_type)) {
+                return MINIC_CORE_LOWER_UNSUPPORTED;
+            }
+            status = lower_address(context, expression->value.binary.left, &address);
+            if (status != MINIC_CORE_LOWER_OK) {
+                return status;
+            }
+            (void)memset(&instruction, 0, sizeof(instruction));
+            instruction.kind = MINIC_CORE_INSTRUCTION_LOAD;
+            instruction.span = target->span;
+            instruction.type = stored_type;
+            instruction.result = MINIC_CORE_VALUE_INVALID;
+            instruction.value.load.address = address;
+            instruction.value.load.is_volatile = minic_type_is_volatile(target->type);
+            if (!minic_core_function_append_value_instruction(
+                    context->function, context->block_id, &instruction, &current) ||
+                address >= context->function->value_count) {
+                return MINIC_CORE_LOWER_ERROR;
+            }
+            address_type = context->function->values[address].type;
+            status = spill_scalar_value(
+                context, target->span, address_type, address, &address_object);
+            if (status != MINIC_CORE_LOWER_OK) {
+                return status;
+            }
+            status = spill_scalar_value(
+                context, target->span, stored_type, current, &current_object);
+            if (status != MINIC_CORE_LOWER_OK) {
+                return status;
+            }
+            status = lower_scalar_assignment_value(
+                context, stored_type, expression->value.binary.right, &right);
+            if (status != MINIC_CORE_LOWER_OK) {
+                return status;
+            }
+            status = reload_scalar_value(
+                context, target->span, stored_type, current_object, &current);
+            if (status != MINIC_CORE_LOWER_OK) {
+                return status;
+            }
+            status = reload_scalar_value(
+                context, target->span, address_type, address_object, &address);
+            if (status != MINIC_CORE_LOWER_OK) {
+                return status;
+            }
+            (void)memset(&instruction, 0, sizeof(instruction));
+            switch (expression->value.binary.operator_kind) {
+            case MINIC_BINARY_ADD:
+                instruction.kind = MINIC_CORE_INSTRUCTION_DOUBLE_ADD;
+                break;
+            case MINIC_BINARY_SUBTRACT:
+                instruction.kind = MINIC_CORE_INSTRUCTION_DOUBLE_SUBTRACT;
+                break;
+            case MINIC_BINARY_MULTIPLY:
+                instruction.kind = MINIC_CORE_INSTRUCTION_DOUBLE_MULTIPLY;
+                break;
+            case MINIC_BINARY_DIVIDE:
+                instruction.kind = MINIC_CORE_INSTRUCTION_DOUBLE_DIVIDE;
+                break;
+            default:
+                return MINIC_CORE_LOWER_ERROR;
+            }
+            instruction.span = expression->span;
+            instruction.type = stored_type;
+            instruction.result = MINIC_CORE_VALUE_INVALID;
+            instruction.value.binary.left = current;
+            instruction.value.binary.right = right;
+            if (!minic_core_function_append_value_instruction(
+                    context->function, context->block_id, &instruction, &result)) {
+                return MINIC_CORE_LOWER_ERROR;
+            }
+            (void)memset(&instruction, 0, sizeof(instruction));
+            instruction.kind = MINIC_CORE_INSTRUCTION_STORE;
+            instruction.span = expression->span;
+            instruction.type = minic_type_void();
+            instruction.result = MINIC_CORE_VALUE_INVALID;
+            instruction.value.store.address = address;
+            instruction.value.store.stored_value = result;
+            instruction.value.store.is_volatile = minic_type_is_volatile(target->type);
+            if (!minic_core_function_append_effect_instruction(
+                    context->function, context->block_id, &instruction)) {
+                return MINIC_CORE_LOWER_ERROR;
+            }
+            *value_id = result;
+            return MINIC_CORE_LOWER_OK;
+        }
+    }
+
     /* M51_SHIFT_COMPOUND_ASSIGNMENT: shifts use integer promotions on each operand
        independently; unlike arithmetic compound assignments they do not use the
        usual arithmetic conversions to a shared operand type. */
