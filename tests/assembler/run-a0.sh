@@ -283,7 +283,7 @@ extern_user:
 EOF
 "$MINIAS" -o "$work/extern.o" "$work/extern.s"
 readelf -Ws "$work/extern.o" >"$work/extern.txt"
-grep -Eq 'GLOBAL[[:space:]]+DEFAULT[[:space:]]+UND[[:space:]]+__minic_deferred_asm_immediate_140_0 "$work/extern.txt"
+grep -Eq 'GLOBAL[[:space:]]+DEFAULT[[:space:]]+UND[[:space:]]+__minic_deferred_asm_immediate_140_0$' "$work/extern.txt"
 readelf -Wr "$work/extern.o" | grep -q 'R_RISCV_CALL_PLT.*__minic_deferred_asm_immediate_140_0'
 
 echo "MINIAS_A0=PASS objects=13 format=ELF64-RISCV-ET_REL relocations=5 strings=2 pseudos=14 previous=1 numeric_labels=7 isa_next=13 csr_amo=4 section_stack=1 org=1 local_difference=1 lr_sc=2 inline_labels=2 branch_pseudos=8 extern=1"
