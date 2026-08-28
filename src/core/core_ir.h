@@ -120,7 +120,8 @@ typedef enum MinicCoreInstructionKind {
     /* RUNTIME_R0_FLOAT_TRANSPORT: float participates only as a transported
        32-bit scalar here; arithmetic remains binary64-owned until separately
        admitted. */
-    MINIC_CORE_INSTRUCTION_FLOAT_TO_DOUBLE
+    MINIC_CORE_INSTRUCTION_FLOAT_TO_DOUBLE,
+    MINIC_CORE_INSTRUCTION_DOUBLE_TO_FLOAT
 } MinicCoreInstructionKind;
 
 /* M91_BUILTIN_UNREACHABLE_TERMINATOR: unreachable is a CFG fact, not a
