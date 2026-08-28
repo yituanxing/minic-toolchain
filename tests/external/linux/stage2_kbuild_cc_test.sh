@@ -98,6 +98,16 @@ MINIC="$work/bin/fake-minic" REAL_CC="$work/bin/fake-real-cc" MINIC_KBUILD_TRACE
 test -s "$work/out/probe.o"
 test -s "$work/out/probe.minic-stage2.i"
 test -s "$work/out/probe.minic-stage2.s"
+
+echo "STAGE2_KBUILD_WRAPPER_REAL_LOG_BEGIN"
+cat "$FAKE_REAL_LOG"
+echo "STAGE2_KBUILD_WRAPPER_REAL_LOG_END"
+echo "STAGE2_KBUILD_WRAPPER_MINIC_LOG_BEGIN"
+cat "$FAKE_MINIC_LOG"
+echo "STAGE2_KBUILD_WRAPPER_MINIC_LOG_END"
+echo "STAGE2_KBUILD_WRAPPER_TRACE_BEGIN"
+cat "$trace"
+echo "STAGE2_KBUILD_WRAPPER_TRACE_END"
 grep -F -- '-E' "$FAKE_REAL_LOG" >/dev/null
 grep -F -- '-P' "$FAKE_REAL_LOG" >/dev/null
 grep -F -- '-MT' "$FAKE_REAL_LOG" >/dev/null
