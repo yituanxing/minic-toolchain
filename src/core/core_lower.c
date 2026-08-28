@@ -4514,6 +4514,8 @@ MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
         instruction.value.operand = operand_value;
         if (minic_type_is_double(target_type) && minic_type_is_integer(source_type)) {
             instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_TO_DOUBLE;
+        } else if (minic_type_is_double(target_type) && minic_type_is_float(source_type)) {
+            instruction.kind = MINIC_CORE_INSTRUCTION_FLOAT_TO_DOUBLE;
         } else if (minic_type_is_integer(target_type) && minic_type_is_double(source_type)) {
             instruction.kind = MINIC_CORE_INSTRUCTION_DOUBLE_TO_INTEGER;
         } else {
