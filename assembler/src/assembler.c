@@ -152,6 +152,41 @@ MiniAsSymbol *minias_get_symbol(MiniAs *as, const char *name, bool create) {
     return sym;
 }
 
+bool minias_add_relocation(MiniAs *as,
+                           int section,
+                           uint64_t offset,
+                           uint32_t type,
+                           const char *symbol_name,
+                           int64_t addend) {
+    MiniAsSymbol *symbol;
+    MiniAsReloc *reloc;
+    size_t symbol_index;
+
+    symbol = minias_get_symbol(as, symbol_name, true);
+    if (symbol == NULL) {
+        return false;
+    }
+    symbol_index = (size_t)(symbol - as->symbols);
+    if (!symbol->defined && symbol->bind == MINIAS_STB_LOCAL &&
+        strncmp(symbol->name, ".L", 2U) != 0) {
+        symbol->bind = MINIAS_STB_GLOBAL;
+    }
+    if (!grow_array((void **)&as->relocs,
+                    &as->reloc_capacity,
+                    sizeof(*as->relocs),
+                    as->reloc_count + 1U)) {
+        minias_set_error(as, "out-of-memory:relocation");
+        return false;
+    }
+    reloc = &as->relocs[as->reloc_count++];
+    reloc->section = section;
+    reloc->offset = offset;
+    reloc->type = type;
+    reloc->symbol_index = symbol_index;
+    reloc->addend = addend;
+    return true;
+}
+
 bool minias_section_append(MiniAs *as, int section_index, const void *data, size_t size) {
     MiniAsSection *sec;
     size_t need;
@@ -245,6 +280,7 @@ void minias_destroy(MiniAs *as) {
         free(as->stmts[i].args);
     }
     free(as->stmts);
+    free(as->relocs);
     memset(as, 0, sizeof(*as));
 }
 
@@ -598,15 +634,17 @@ static bool add_data_stmt(MiniAs *as, const char *op, char *args, size_t line) {
                 *comma = '\0';
             }
             if (!parse_i64_data(minias_trim(cursor), &value)) {
-                minias_set_error(as,
-                                 "unsupported-expression:%s:%s:line=%zu",
-                                 op,
-                                 minias_trim(cursor),
-                                 line);
-                free(copy);
-                return false;
+                MiniAsSymbolExpr expr;
+                if (width != 8U || !minias_parse_symbol_addend(minias_trim(cursor), &expr)) {
+                    minias_set_error(as,
+                                     "unsupported-expression:%s:%s:line=%zu",
+                                     op,
+                                     minias_trim(cursor),
+                                     line);
+                    free(copy);
+                    return false;
+                }
             }
-            (void)value;
             ++count;
             cursor = comma == NULL ? NULL : comma + 1;
         }
@@ -651,21 +689,38 @@ static bool emit_data_stmt(MiniAs *as, const MiniAsStmt *stmt) {
             *comma = '\0';
         }
         if (!parse_i64_data(minias_trim(cursor), &signed_value)) {
-            minias_set_error(as,
-                             "unsupported-expression:%s:%s:line=%zu",
-                             stmt->op,
-                             minias_trim(cursor),
-                             stmt->line);
-            free(copy);
-            return false;
-        }
-        value = (uint64_t)signed_value;
-        for (i = 0U; i < width; ++i) {
-            bytes[i] = (unsigned char)((value >> (i * 8U)) & 0xffU);
-        }
-        if (!minias_section_append(as, stmt->section, bytes, width)) {
-            free(copy);
-            return false;
+            MiniAsSymbolExpr expr;
+            uint64_t relocation_offset =
+                (uint64_t)as->sections[(size_t)stmt->section].size;
+
+            if (width != 8U || !minias_parse_symbol_addend(minias_trim(cursor), &expr)) {
+                minias_set_error(as,
+                                 "unsupported-expression:%s:%s:line=%zu",
+                                 stmt->op,
+                                 minias_trim(cursor),
+                                 stmt->line);
+                free(copy);
+                return false;
+            }
+            if (!minias_section_append_zero(as, stmt->section, 8U) ||
+                !minias_add_relocation(as,
+                                      stmt->section,
+                                      relocation_offset,
+                                      2U,
+                                      expr.name,
+                                      expr.addend)) {
+                free(copy);
+                return false;
+            }
+        } else {
+            value = (uint64_t)signed_value;
+            for (i = 0U; i < width; ++i) {
+                bytes[i] = (unsigned char)((value >> (i * 8U)) & 0xffU);
+            }
+            if (!minias_section_append(as, stmt->section, bytes, width)) {
+                free(copy);
+                return false;
+            }
         }
         cursor = comma == NULL ? NULL : comma + 1;
     }
