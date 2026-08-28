@@ -350,7 +350,6 @@ bool minias_riscv_measure(const char *op,
                           size_t reason_size) {
     char operands[4][128];
     size_t count = split_operands(args, operands, 4U);
-    int64_t value;
 
     if (strcmp(op, "li") == 0) {
         uint64_t bits;
