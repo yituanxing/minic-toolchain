@@ -254,12 +254,13 @@ bool minias_riscv_measure(const char *op,
 
 #define SIMPLE(OP) strcmp(op, OP) == 0
     if (SIMPLE("ret") || SIMPLE("nop") || SIMPLE("mv") || SIMPLE("jr") ||
-        SIMPLE("snez") || SIMPLE("jalr") || SIMPLE("j") || SIMPLE("beq") || SIMPLE("bne") ||
+        SIMPLE("snez") || SIMPLE("seqz") || SIMPLE("neg") || SIMPLE("jalr") ||
+        SIMPLE("j") || SIMPLE("beq") || SIMPLE("bne") ||
         SIMPLE("blt") || SIMPLE("bge") || SIMPLE("bltu") || SIMPLE("bgeu") ||
         SIMPLE("beqz") || SIMPLE("bnez") || SIMPLE("addi") || SIMPLE("addiw") ||
         SIMPLE("andi") || SIMPLE("ori") || SIMPLE("xori") || SIMPLE("slti") ||
         SIMPLE("sltiu") || SIMPLE("slli") || SIMPLE("srli") || SIMPLE("srai") ||
-        SIMPLE("add") || SIMPLE("sub") || SIMPLE("and") || SIMPLE("or") ||
+        SIMPLE("add") || SIMPLE("sub") || SIMPLE("srl") || SIMPLE("and") || SIMPLE("or") ||
         SIMPLE("xor") || SIMPLE("slt") || SIMPLE("sltu") || SIMPLE("mul") ||
         SIMPLE("mulh") || SIMPLE("mulhu") || SIMPLE("div") || SIMPLE("divu") ||
         SIMPLE("rem") || SIMPLE("remu") || SIMPLE("lb") || SIMPLE("lbu") ||
@@ -311,6 +312,20 @@ bool minias_riscv_encode(MiniAs *as, const MiniAsStmt *stmt) {
             return false;
         }
         return append_u32(as, stmt->section, enc_r(0x33U, rd, 3U, 0, rs1, 0U));
+    }
+    if (strcmp(stmt->op, "seqz") == 0) {
+        if (count != 2U || !require_reg(as, stmt, operands[0], &rd) ||
+            !require_reg(as, stmt, operands[1], &rs1)) {
+            return false;
+        }
+        return append_u32(as, stmt->section, enc_i(0x13U, rd, 3U, rs1, 1));
+    }
+    if (strcmp(stmt->op, "neg") == 0) {
+        if (count != 2U || !require_reg(as, stmt, operands[0], &rd) ||
+            !require_reg(as, stmt, operands[1], &rs1)) {
+            return false;
+        }
+        return append_u32(as, stmt->section, enc_r(0x33U, rd, 0U, 0, rs1, 0x20U));
     }
     if (strcmp(stmt->op, "li") == 0) {
         int64_t hi;
@@ -455,7 +470,7 @@ bool minias_riscv_encode(MiniAs *as, const MiniAsStmt *stmt) {
         return append_u32(as, stmt->section, value);
     }
     if (strcmp(stmt->op, "add") == 0 || strcmp(stmt->op, "sub") == 0 ||
-        strcmp(stmt->op, "and") == 0 || strcmp(stmt->op, "or") == 0 ||
+        strcmp(stmt->op, "srl") == 0 || strcmp(stmt->op, "and") == 0 || strcmp(stmt->op, "or") == 0 ||
         strcmp(stmt->op, "xor") == 0 || strcmp(stmt->op, "slt") == 0 ||
         strcmp(stmt->op, "sltu") == 0 || strcmp(stmt->op, "mul") == 0 ||
         strcmp(stmt->op, "mulh") == 0 || strcmp(stmt->op, "mulhu") == 0 ||
@@ -471,6 +486,8 @@ bool minias_riscv_encode(MiniAs *as, const MiniAsStmt *stmt) {
         if (strcmp(stmt->op, "sub") == 0) {
             funct3 = 0U;
             funct7 = 0x20U;
+        } else if (strcmp(stmt->op, "srl") == 0) {
+            funct3 = 5U;
         } else if (strcmp(stmt->op, "and") == 0) {
             funct3 = 7U;
         } else if (strcmp(stmt->op, "or") == 0) {
