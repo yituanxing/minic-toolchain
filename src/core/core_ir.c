@@ -1423,17 +1423,28 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
             argument = &function->call_arguments[argument_index];
             parameter_index = argument_index - instruction->value.call.argument_begin;
             if (parameter_index >= callee->parameter_count) {
-                MinicCoreValueId value_id;
+                if (!callee->is_variadic) {
+                    return false;
+                }
+                if (argument->kind == MINIC_CORE_CALL_ARGUMENT_VALUE) {
+                    MinicCoreValueId value_id = argument->value.value_id;
 
-                if (!callee->is_variadic || argument->kind != MINIC_CORE_CALL_ARGUMENT_VALUE) {
-                    return false;
+                    if (value_id >= function->value_count || !available_values[value_id] ||
+                        !core_call_scalar_type(function->values[value_id].type)) {
+                        return false;
+                    }
+                    continue;
                 }
-                value_id = argument->value.value_id;
-                if (value_id >= function->value_count || !available_values[value_id] ||
-                    !core_call_scalar_type(function->values[value_id].type)) {
-                    return false;
+                if (argument->kind == MINIC_CORE_CALL_ARGUMENT_OBJECT) {
+                    MinicCoreObjectId object_id = argument->value.object_id;
+
+                    if (object_id >= function->object_count ||
+                        !minic_type_is_record(function->objects[object_id].type)) {
+                        return false;
+                    }
+                    continue;
                 }
-                continue;
+                return false;
             }
             {
                 MinicType parameter_type = callee->parameter_types[parameter_index];
