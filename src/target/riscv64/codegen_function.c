@@ -1134,6 +1134,15 @@ bool minic_riscv64_write_c0_program_with_core_functions(const char *path,
         const MinicCoreFunction *core_function;
 
         function = &program->functions[function_index];
+        if (getenv("MINIC_BOOTSTRAP_TRACE") != NULL && function->is_defined) {
+            const char *trace_symbol = minic_c0_function_symbol_name(function);
+            (void)fprintf(stderr,
+                          "MINIC_BOOTSTRAP_TRACE stage=codegen-function state=begin "
+                          "index=%zu function=%s\n",
+                          function_index,
+                          trace_symbol != NULL ? trace_symbol : "?");
+            (void)fflush(stderr);
+        }
         if (!function->is_defined) {
             const char *symbol_name;
 
@@ -1196,6 +1205,18 @@ bool minic_riscv64_write_c0_program_with_core_functions(const char *path,
             success = minic_riscv64_function_symbol_from_function(function, &symbol) &&
                       minic_riscv64_emit_core_function_for_program_with_symbol(
                           file, program, core_function, &symbol);
+        }
+        if (getenv("MINIC_BOOTSTRAP_TRACE") != NULL && function->is_defined) {
+            const char *trace_symbol = minic_c0_function_symbol_name(function);
+            (void)fprintf(stderr,
+                          "MINIC_BOOTSTRAP_TRACE stage=codegen-function state=end "
+                          "index=%zu function=%s success=%d blocks=%zu instructions=%zu\n",
+                          function_index,
+                          trace_symbol != NULL ? trace_symbol : "?",
+                          success ? 1 : 0,
+                          core_function != NULL ? core_function->block_count : 0U,
+                          core_function != NULL ? core_function->instruction_count : 0U);
+            (void)fflush(stderr);
         }
         if (!success && diagnostic != NULL && diagnostic->message[0] == '\0') {
             char message[256];
