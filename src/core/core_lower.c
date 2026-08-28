@@ -5324,14 +5324,11 @@ MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
          expression->value.binary.operator_kind == MINIC_BINARY_MULTIPLY ||
          expression->value.binary.operator_kind == MINIC_BINARY_DIVIDE ||
          expression->value.binary.operator_kind == MINIC_BINARY_REMAINDER ||
-         expression->value.binary.operator_kind == MINIC_BINARY_BITWISE_XOR)) {
+         expression->value.binary.operator_kind == MINIC_BINARY_BITWISE_XOR) &&
+        minic_type_is_integer(expression->type)) {
         MinicCoreValueId left;
         MinicCoreValueId right;
         MinicCoreLowerStatus status;
-
-        if (!minic_type_is_integer(expression->type)) {
-            return MINIC_CORE_LOWER_UNSUPPORTED;
-        }
         status = lower_integer_binary_operands(context,
                                                expression->value.binary.left,
                                                expression->value.binary.right,
