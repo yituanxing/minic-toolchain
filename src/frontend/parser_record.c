@@ -670,58 +670,59 @@ static bool parse_record_field(MinicParser *parser, MinicRecordId record_id) {
         return minic_parser_advance(parser);
     }
 
-    if (parser->current.kind == MINIC_TOKEN_COLON) {
-        size_t bit_width;
-
-        if (declaration_attributes.count != 0U) {
-            minic_parser_error(
-                parser, "GNU declaration-head attributes on unnamed bit-fields are unsupported");
-            return false;
-        }
-        if (declaration_alignment != 0U || declaration_packed) {
-            minic_parser_error(parser,
-                               "GNU layout attributes on unnamed bit-fields are unsupported");
-            return false;
-        }
-        if (!parse_record_bit_field_width(parser, base_type, true, &bit_width) ||
-            !minic_parser_expect(parser, MINIC_TOKEN_SEMICOLON, "expected ';' after bit-field") ||
-            !minic_c0_record_add_unnamed_bit_field(
-                parser->program, record_id, base_type, bit_width)) {
-            if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
-                minic_parser_error(parser, "cannot add unnamed bit-field");
-            }
-            return false;
-        }
-        return true;
-    }
-
     for (;;) {
-        if (!parse_record_field_declarator(parser,
-                                           record_id,
-                                           base_type,
-                                           &declaration_attributes,
-                                           declaration_alignment,
-                                           declaration_packed)) {
-            return false;
+        if (parser->current.kind == MINIC_TOKEN_COLON) {
+            size_t bit_width;
+
+            if (declaration_attributes.count != 0U) {
+                minic_parser_error(
+                    parser,
+                    "GNU declaration-head attributes on unnamed bit-fields are unsupported");
+                return false;
+            }
+            if (declaration_alignment != 0U || declaration_packed) {
+                minic_parser_error(
+                    parser, "GNU layout attributes on unnamed bit-fields are unsupported");
+                return false;
+            }
+            if (!parse_record_bit_field_width(parser, base_type, true, &bit_width) ||
+                !minic_c0_record_add_unnamed_bit_field(
+                    parser->program, record_id, base_type, bit_width)) {
+                if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
+                    minic_parser_error(parser, "cannot add unnamed bit-field");
+                }
+                return false;
+            }
+        } else {
+            if (!parse_record_field_declarator(parser,
+                                               record_id,
+                                               base_type,
+                                               &declaration_attributes,
+                                               declaration_alignment,
+                                               declaration_packed)) {
+                return false;
+            }
+            record = minic_c0_program_record(parser->program, record_id);
+            if (record == NULL || record->field_count == 0U) {
+                minic_parser_error(parser, "invalid record after adding field");
+                return false;
+            }
+            if (record->fields[record->field_count - 1U].is_flexible_array &&
+                parser->current.kind == MINIC_TOKEN_COMMA) {
+                minic_parser_error(parser, "flexible array member must be the last record field");
+                return false;
+            }
         }
-        record = minic_c0_program_record(parser->program, record_id);
-        if (record == NULL || record->field_count == 0U) {
-            minic_parser_error(parser, "invalid record after adding field");
-            return false;
-        }
+
         if (parser->current.kind != MINIC_TOKEN_COMMA) {
             return minic_parser_expect(
                 parser, MINIC_TOKEN_SEMICOLON, "expected ';' after record field");
-        }
-        if (record->fields[record->field_count - 1U].is_flexible_array) {
-            minic_parser_error(parser, "flexible array member must be the last record field");
-            return false;
         }
         if (!minic_parser_advance(parser)) {
             return false;
         }
     }
-}
+}}
 
 bool minic_parser_parse_record_definition_specifier(MinicParser *parser, MinicType *record_type) {
     MinicRecordId record_id;
