@@ -1398,6 +1398,133 @@ static MinicCoreLowerStatus lower_record_value_address(MinicCoreLowerContext *co
    Materialize one private result object and copy exactly the selected arm into
    it. Arms may be ordinary address-backed records, compound literals, direct
    record-returning calls, or nested record conditionals. */
+static MinicCoreLowerStatus lower_record_va_arg_object(
+    MinicCoreLowerContext *context,
+    const MinicExpression *expression,
+    MinicCoreObjectId *object_id) {
+    const MinicExpression *target;
+    MinicCoreInstruction operation;
+    MinicCoreLowerStatus status;
+    MinicCoreValueId list_address;
+    MinicCoreValueId cursor_value;
+    MinicCoreValueId source_address;
+    MinicCoreValueId destination_address;
+    MinicCoreValueId one;
+    MinicCoreValueId next_cursor;
+    MinicType cursor_type;
+    MinicType record_type;
+    MinicType record_pointer_type;
+    size_t value_size;
+    size_t value_alignment;
+
+    if (context == NULL || context->body == NULL || context->body->program == NULL ||
+        context->function == NULL || expression == NULL || object_id == NULL ||
+        expression->kind != MINIC_EXPRESSION_BUILTIN_VA_ARG ||
+        !minic_type_unqualified(expression->type, &record_type) ||
+        !minic_type_is_record(record_type)) {
+        return MINIC_CORE_LOWER_UNSUPPORTED;
+    }
+    target = minic_c0_program_expression(
+        context->body->program, expression->value.unary.operand);
+    if (target == NULL || target->value_category != MINIC_VALUE_LVALUE ||
+        !minic_type_is_pointer(target->type) || minic_type_is_const(target->type) ||
+        !minic_type_unqualified(target->type, &cursor_type) ||
+        !minic_type_is_pointer(cursor_type) ||
+        !minic_data_layout_type(core_data_layout(context),
+                                context->body->program,
+                                record_type,
+                                &value_size,
+                                &value_alignment) ||
+        value_size == 0U || value_size > 8U || value_alignment == 0U ||
+        value_alignment > 8U ||
+        !minic_type_pointer_to(record_type, &record_pointer_type)) {
+        return MINIC_CORE_LOWER_UNSUPPORTED;
+    }
+
+    status = lower_address(context, expression->value.unary.operand, &list_address);
+    if (status != MINIC_CORE_LOWER_OK) {
+        return status;
+    }
+    (void)memset(&operation, 0, sizeof(operation));
+    operation.kind = MINIC_CORE_INSTRUCTION_LOAD;
+    operation.span = expression->span;
+    operation.type = cursor_type;
+    operation.result = MINIC_CORE_VALUE_INVALID;
+    operation.value.load.address = list_address;
+    operation.value.load.is_volatile = minic_type_is_volatile(target->type);
+    if (!minic_core_function_append_value_instruction(
+            context->function, context->block_id, &operation, &cursor_value)) {
+        return MINIC_CORE_LOWER_ERROR;
+    }
+
+    status = append_scalar_bitcast(
+        context, expression->span, record_pointer_type, cursor_value, &source_address);
+    if (status != MINIC_CORE_LOWER_OK) {
+        return status;
+    }
+    if (!minic_core_function_add_object(
+            context->function, expression->span, record_type, object_id)) {
+        return MINIC_CORE_LOWER_ERROR;
+    }
+    (void)memset(&operation, 0, sizeof(operation));
+    operation.kind = MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS;
+    operation.span = expression->span;
+    operation.type = record_pointer_type;
+    operation.result = MINIC_CORE_VALUE_INVALID;
+    operation.value.object_id = *object_id;
+    if (!minic_core_function_append_value_instruction(
+            context->function, context->block_id, &operation, &destination_address)) {
+        return MINIC_CORE_LOWER_ERROR;
+    }
+    (void)memset(&operation, 0, sizeof(operation));
+    operation.kind = MINIC_CORE_INSTRUCTION_RECORD_COPY;
+    operation.span = expression->span;
+    operation.type = record_type;
+    operation.result = MINIC_CORE_VALUE_INVALID;
+    operation.value.record_copy.destination_address = destination_address;
+    operation.value.record_copy.source_address = source_address;
+    if (!minic_core_function_append_effect_instruction(
+            context->function, context->block_id, &operation)) {
+        return MINIC_CORE_LOWER_ERROR;
+    }
+
+    (void)memset(&operation, 0, sizeof(operation));
+    operation.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
+    operation.span = expression->span;
+    operation.type = minic_type_int();
+    operation.result = MINIC_CORE_VALUE_INVALID;
+    operation.value.integer_value = 1;
+    if (!minic_core_function_append_value_instruction(
+            context->function, context->block_id, &operation, &one)) {
+        return MINIC_CORE_LOWER_ERROR;
+    }
+    (void)memset(&operation, 0, sizeof(operation));
+    operation.kind = MINIC_CORE_INSTRUCTION_POINTER_OFFSET;
+    operation.span = expression->span;
+    operation.type = cursor_type;
+    operation.result = MINIC_CORE_VALUE_INVALID;
+    operation.value.pointer_offset.base = cursor_value;
+    operation.value.pointer_offset.index = one;
+    operation.value.pointer_offset.element_size = 8U;
+    operation.value.pointer_offset.subtract = false;
+    if (!minic_core_function_append_value_instruction(
+            context->function, context->block_id, &operation, &next_cursor)) {
+        return MINIC_CORE_LOWER_ERROR;
+    }
+    (void)memset(&operation, 0, sizeof(operation));
+    operation.kind = MINIC_CORE_INSTRUCTION_STORE;
+    operation.span = expression->span;
+    operation.type = minic_type_void();
+    operation.result = MINIC_CORE_VALUE_INVALID;
+    operation.value.store.address = list_address;
+    operation.value.store.stored_value = next_cursor;
+    operation.value.store.is_volatile = minic_type_is_volatile(target->type);
+    return minic_core_function_append_effect_instruction(
+               context->function, context->block_id, &operation)
+               ? MINIC_CORE_LOWER_OK
+               : MINIC_CORE_LOWER_ERROR;
+}
+
 static MinicCoreLowerStatus lower_record_materialized_address(
     MinicCoreLowerContext *context,
     MinicExpressionId expression_id,
@@ -1444,7 +1571,9 @@ static MinicCoreLowerStatus lower_record_materialized_address(
         return lower_record_materialized_address(
             context, expression->value.statement_expression.result, address_id);
     }
-    if (expression->kind == MINIC_EXPRESSION_CONDITIONAL) {
+    if (expression->kind == MINIC_EXPRESSION_BUILTIN_VA_ARG) {
+        status = lower_record_va_arg_object(context, expression, &object_id);
+    } else if (expression->kind == MINIC_EXPRESSION_CONDITIONAL) {
         status = lower_record_conditional_object(context, expression, &object_id);
     } else if (expression->kind == MINIC_EXPRESSION_CALL &&
                expression->value.call.function_id != MINIC_FUNCTION_INVALID) {
@@ -1667,6 +1796,7 @@ static MinicCoreLowerStatus lower_record_copy_statement(MinicCoreLowerContext *c
     bool direct_record_call;
     bool record_assignment_value;
     bool record_conditional_value;
+    bool record_va_arg_value;
 
     if (context == NULL || context->body == NULL || context->body->program == NULL ||
         context->function == NULL || statement == NULL ||
@@ -1683,6 +1813,8 @@ static MinicCoreLowerStatus lower_record_copy_statement(MinicCoreLowerContext *c
         source != NULL && source->kind == MINIC_EXPRESSION_ASSIGNMENT;
     record_conditional_value =
         source != NULL && source->kind == MINIC_EXPRESSION_CONDITIONAL;
+    record_va_arg_value =
+        source != NULL && source->kind == MINIC_EXPRESSION_BUILTIN_VA_ARG;
     if (target == NULL || source == NULL || target->value_category != MINIC_VALUE_LVALUE ||
         !minic_type_is_record(target->type) || !minic_type_is_record(source->type) ||
         target->type.record_id != source->type.record_id ||
@@ -1691,6 +1823,7 @@ static MinicCoreLowerStatus lower_record_copy_statement(MinicCoreLowerContext *c
         !minic_type_equal(target_type, source_type) || !minic_type_is_record(target_type) ||
         (statement->kind == MINIC_STATEMENT_RECORD_COPY && minic_type_is_const(target->type)) ||
         (!direct_record_call && !record_assignment_value && !record_conditional_value &&
+         !record_va_arg_value &&
          (!minic_c0_record_value_is_copy_source(context->body->program, statement->expression) ||
           !minic_c0_record_value_is_address_backed(
               context->body->program, statement->expression)))) {
@@ -1723,13 +1856,9 @@ static MinicCoreLowerStatus lower_record_copy_statement(MinicCoreLowerContext *c
                 context->function, context->block_id, &instruction, &source_address)) {
             return MINIC_CORE_LOWER_ERROR;
         }
-    } else if (record_conditional_value) {
-        /* M175E_RECORD_COPY_CONDITIONAL_SOURCE: conditional record rvalues are
-           materialized aggregate producers, not pre-existing address-backed
-           objects. Route them through the same owner already used by by-value
-           record arguments so branch qualifiers are normalized before the
-           destination copy. Other legacy record-copy sources keep their
-           existing fail-closed copy_source/address_backed gate. */
+    } else if (record_conditional_value || record_va_arg_value) {
+        /* Conditional records and record-valued va_arg are materialized
+           aggregate producers, not pre-existing address-backed objects. */
         status = lower_record_materialized_address(
             context, statement->expression, &source_address);
         if (status != MINIC_CORE_LOWER_OK) {
