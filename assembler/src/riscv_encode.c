@@ -550,7 +550,9 @@ bool minias_riscv_measure(const char *op,
         SIMPLE("snez") || SIMPLE("seqz") || SIMPLE("neg") || SIMPLE("jalr") ||
         SIMPLE("j") || SIMPLE("beq") || SIMPLE("bne") ||
         SIMPLE("blt") || SIMPLE("bge") || SIMPLE("bltu") || SIMPLE("bgeu") ||
-        SIMPLE("beqz") || SIMPLE("bnez") || SIMPLE("addi") || SIMPLE("addiw") ||
+        SIMPLE("beqz") || SIMPLE("bnez") || SIMPLE("bltz") || SIMPLE("bgez") ||
+        SIMPLE("bgtz") || SIMPLE("blez") || SIMPLE("bgt") || SIMPLE("ble") ||
+        SIMPLE("bgtu") || SIMPLE("bleu") || SIMPLE("addi") || SIMPLE("addiw") ||
         SIMPLE("andi") || SIMPLE("ori") || SIMPLE("xori") || SIMPLE("slti") ||
         SIMPLE("sltiu") || SIMPLE("slli") || SIMPLE("srli") || SIMPLE("srai") ||
         SIMPLE("sra") || SIMPLE("fence") || SIMPLE("csrr") || SIMPLE("csrrc") ||
@@ -1097,28 +1099,74 @@ bool minias_riscv_encode(MiniAs *as, const MiniAsStmt *stmt) {
     if (strcmp(stmt->op, "beq") == 0 || strcmp(stmt->op, "bne") == 0 ||
         strcmp(stmt->op, "blt") == 0 || strcmp(stmt->op, "bge") == 0 ||
         strcmp(stmt->op, "bltu") == 0 || strcmp(stmt->op, "bgeu") == 0 ||
-        strcmp(stmt->op, "beqz") == 0 || strcmp(stmt->op, "bnez") == 0) {
+        strcmp(stmt->op, "beqz") == 0 || strcmp(stmt->op, "bnez") == 0 ||
+        strcmp(stmt->op, "bltz") == 0 || strcmp(stmt->op, "bgez") == 0 ||
+        strcmp(stmt->op, "bgtz") == 0 || strcmp(stmt->op, "blez") == 0 ||
+        strcmp(stmt->op, "bgt") == 0 || strcmp(stmt->op, "ble") == 0 ||
+        strcmp(stmt->op, "bgtu") == 0 || strcmp(stmt->op, "bleu") == 0) {
         const char *target;
 
-        if (strcmp(stmt->op, "beqz") == 0 || strcmp(stmt->op, "bnez") == 0) {
-            if (count != 2U || !require_reg(as, stmt, operands[0], &rs1)) {
+        if (strcmp(stmt->op, "beqz") == 0 || strcmp(stmt->op, "bnez") == 0 ||
+            strcmp(stmt->op, "bltz") == 0 || strcmp(stmt->op, "bgez") == 0 ||
+            strcmp(stmt->op, "bgtz") == 0 || strcmp(stmt->op, "blez") == 0) {
+            int operand_reg;
+
+            if (count != 2U || !require_reg(as, stmt, operands[0], &operand_reg)) {
                 return false;
             }
-            rs2 = 0;
             target = operands[1];
-            funct3 = strcmp(stmt->op, "bnez") == 0 ? 1U : 0U;
+            if (strcmp(stmt->op, "beqz") == 0) {
+                rs1 = operand_reg;
+                rs2 = 0;
+                funct3 = 0U;
+            } else if (strcmp(stmt->op, "bnez") == 0) {
+                rs1 = operand_reg;
+                rs2 = 0;
+                funct3 = 1U;
+            } else if (strcmp(stmt->op, "bltz") == 0) {
+                rs1 = operand_reg;
+                rs2 = 0;
+                funct3 = 4U;
+            } else if (strcmp(stmt->op, "bgez") == 0) {
+                rs1 = operand_reg;
+                rs2 = 0;
+                funct3 = 5U;
+            } else if (strcmp(stmt->op, "bgtz") == 0) {
+                rs1 = 0;
+                rs2 = operand_reg;
+                funct3 = 4U;
+            } else {
+                rs1 = 0;
+                rs2 = operand_reg;
+                funct3 = 5U;
+            }
         } else {
-            if (count != 3U || !require_reg(as, stmt, operands[0], &rs1) ||
-                !require_reg(as, stmt, operands[1], &rs2)) {
+            int first;
+            int second;
+
+            if (count != 3U || !require_reg(as, stmt, operands[0], &first) ||
+                !require_reg(as, stmt, operands[1], &second)) {
                 return false;
             }
             target = operands[2];
-            funct3 = strcmp(stmt->op, "bne") == 0    ? 1U
-                     : strcmp(stmt->op, "blt") == 0  ? 4U
-                     : strcmp(stmt->op, "bge") == 0  ? 5U
-                     : strcmp(stmt->op, "bltu") == 0 ? 6U
-                     : strcmp(stmt->op, "bgeu") == 0 ? 7U
-                                                      : 0U;
+            if (strcmp(stmt->op, "bgt") == 0 || strcmp(stmt->op, "ble") == 0 ||
+                strcmp(stmt->op, "bgtu") == 0 || strcmp(stmt->op, "bleu") == 0) {
+                rs1 = second;
+                rs2 = first;
+                funct3 = strcmp(stmt->op, "bgt") == 0    ? 4U
+                         : strcmp(stmt->op, "ble") == 0   ? 5U
+                         : strcmp(stmt->op, "bgtu") == 0  ? 6U
+                                                          : 7U;
+            } else {
+                rs1 = first;
+                rs2 = second;
+                funct3 = strcmp(stmt->op, "bne") == 0    ? 1U
+                         : strcmp(stmt->op, "blt") == 0  ? 4U
+                         : strcmp(stmt->op, "bge") == 0  ? 5U
+                         : strcmp(stmt->op, "bltu") == 0 ? 6U
+                         : strcmp(stmt->op, "bgeu") == 0 ? 7U
+                                                          : 0U;
+            }
         }
         symbol = minias_get_symbol(as, target, false);
         if (symbol == NULL || !symbol->defined || symbol->section != stmt->section) {
