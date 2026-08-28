@@ -27,6 +27,12 @@
 #define MINIAS_R_RISCV_CALL_PLT 19U
 #define MINIAS_R_RISCV_PCREL_HI20 23U
 #define MINIAS_R_RISCV_PCREL_LO12_I 24U
+#define MINIAS_R_RISCV_ADD16 34U
+#define MINIAS_R_RISCV_ADD32 35U
+#define MINIAS_R_RISCV_ADD64 36U
+#define MINIAS_R_RISCV_SUB16 38U
+#define MINIAS_R_RISCV_SUB32 39U
+#define MINIAS_R_RISCV_SUB64 40U
 #define MINIAS_R_RISCV_RELAX 51U
 
 #define MINIAS_SECTION_UNDEF (-1)
@@ -101,6 +107,7 @@ typedef struct MiniAs {
     size_t section_stack_count;
     size_t section_stack_capacity;
     size_t pcrel_anchor_counter;
+    size_t expr_anchor_counter;
     size_t numeric_label_counts[MINIAS_NUMERIC_LABEL_LIMIT];
     int current_section;
     int previous_section;
