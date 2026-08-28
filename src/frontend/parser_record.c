@@ -617,11 +617,34 @@ static bool parse_record_field(MinicParser *parser, MinicRecordId record_id) {
         !minic_parser_parse_type_specifiers(parser, &base_type)) {
         return false;
     }
+    /* Attributes between the declaration specifiers and the declarator cannot
+       be routed until the declarator shape is known. In particular GCC writes
+       function-pointer fields as
+           T __attribute__((noreturn)) (*fn)(...);
+       where noreturn belongs to the function declarator, not record layout.
+       Defer these attributes and let the completed field type route them through
+       apply_record_field_declaration_attributes(). */
+    {
+        MinicParsedAttributeList post_type_attributes;
+        size_t attribute_index;
+
+        (void)memset(&post_type_attributes, 0, sizeof(post_type_attributes));
+        if (!minic_parser_collect_gnu_attribute_lists(parser, &post_type_attributes)) {
+            return false;
+        }
+        if (post_type_attributes.count >
+            MINIC_MAX_PARSED_ATTRIBUTES - declaration_attributes.count) {
+            minic_parser_error(parser, "too many GNU record field declaration attributes");
+            return false;
+        }
+        for (attribute_index = 0U; attribute_index < post_type_attributes.count;
+             ++attribute_index) {
+            declaration_attributes.values[declaration_attributes.count++] =
+                post_type_attributes.values[attribute_index];
+        }
+    }
     declaration_alignment = 0U;
     declaration_packed = false;
-    if (!parse_record_field_attributes(parser, &declaration_alignment, &declaration_packed)) {
-        return false;
-    }
     if (minic_type_is_record(base_type) && parser->current.kind == MINIC_TOKEN_SEMICOLON) {
         if (declaration_attributes.count != 0U) {
             minic_parser_error(
