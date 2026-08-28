@@ -172,6 +172,8 @@ cat >"$work/csr-amo.s" <<'EOF'
 csr_amo:
   csrrc a0, sstatus, a1
   amoor.w a0, a1, (a2)
+  amoxor.w a0, a1, (a2)
+  amoor.d.aqrl a0, a1, (a2)
   ret
 .size csr_amo, .-csr_amo
 EOF
@@ -180,7 +182,7 @@ csr_amo_hex="$(
     readelf -x .text "$work/csr-amo.o" |
     awk '/0x[0-9a-f]+/ {for (i=2; i<=NF; ++i) if ($i ~ /^[0-9a-f]+$/ && length($i) <= 8 && length($i) % 2 == 0) printf "%s", $i}'
 )"
-test "$csr_amo_hex" = "73b505102f25b64067800000"
+test "$csr_amo_hex" = "73b505102f25b6402f25b6202f35b64667800000"
 
 cat >"$work/section-stack.s" <<'EOF'
 .text
@@ -222,4 +224,4 @@ difference_hex="$(
 )"
 test "$difference_hex" = "00ffffffff"
 
-echo "MINIAS_A0=PASS objects=10 format=ELF64-RISCV-ET_REL relocations=4 strings=2 pseudos=6 previous=1 numeric_labels=4 isa_next=13 csr_amo=2 section_stack=1 org=1 local_difference=1"
+echo "MINIAS_A0=PASS objects=10 format=ELF64-RISCV-ET_REL relocations=4 strings=2 pseudos=6 previous=1 numeric_labels=4 isa_next=13 csr_amo=4 section_stack=1 org=1 local_difference=1"
