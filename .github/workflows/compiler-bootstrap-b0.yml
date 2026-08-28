@@ -144,6 +144,64 @@ jobs:
           test "$status" -eq 42
           echo "BOOTSTRAP_B0_STAGE1_EXEC=PASS return_42=$status head=$GITHUB_SHA"
 
+      - name: Recompile MiniC with stage1 and compare fixed point
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/bootstrap-b0"
+          stage1="$work/minic-stage1-rv64"
+          mkdir -p "$work/s2"
+          passed=0
+          total=46
+          stage2_inputs=""
+
+          for stage0_asm in $(cat "$work/stage1-asm-list.txt"); do
+            key=$(basename "$stage0_asm" .s)
+            pre="$work/i/$key.i"
+            stage1_asm="$work/s2/$key.s"
+
+            qemu-riscv64 "$stage1" -S "$pre" -o "$stage1_asm"
+            if ! cmp -s "$stage0_asm" "$stage1_asm"; then
+              echo "BOOTSTRAP_B0_FIXED_POINT_MISMATCH key=$key completed=$passed total=$total" >&2
+              diff -u "$stage0_asm" "$stage1_asm" | sed -n '1,200p' >&2 || true
+              exit 1
+            fi
+
+            passed=$((passed + 1))
+            stage2_inputs="$stage2_inputs $stage1_asm"
+            echo "PASS bootstrap-b0-fixed-point key=$key completed=$passed/$total"
+          done
+
+          echo "$stage2_inputs" >"$work/stage2-asm-list.txt"
+          echo "BOOTSTRAP_B0_STAGE1_RECOMPILE=PASS selected=$total pass=$passed head=$GITHUB_SHA"
+          echo "BOOTSTRAP_B0_FIXED_POINT_ASM=PASS selected=$total pass=$passed head=$GITHUB_SHA"
+
+      - name: Link RV64 stage2 MiniC
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/bootstrap-b0"
+          asm_inputs=$(cat "$work/stage2-asm-list.txt")
+          riscv64-linux-gnu-gcc -static $asm_inputs -o "$work/minic-stage2-rv64"
+          file "$work/minic-stage2-rv64"
+          sha256sum "$work/minic-stage1-rv64" "$work/minic-stage2-rv64"
+          echo "BOOTSTRAP_B0_STAGE2_LINK=PASS head=$GITHUB_SHA"
+
+      - name: Execute stage2 compiler smoke
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/bootstrap-b0"
+          qemu-riscv64 "$work/minic-stage2-rv64" -S "$work/return_42.i" -o "$work/return_42.stage2.s"
+          cmp "$work/return_42.stage1.s" "$work/return_42.stage2.s"
+          riscv64-linux-gnu-gcc -static "$work/return_42.stage2.s" -o "$work/return_42.stage2.elf"
+          set +e
+          qemu-riscv64 "$work/return_42.stage2.elf"
+          status=$?
+          set -e
+          test "$status" -eq 42
+          echo "BOOTSTRAP_B0_STAGE2_EXEC=PASS return_42=$status head=$GITHUB_SHA"
+
       - name: Preserve bootstrap blocker
         if: failure()
         uses: actions/upload-artifact@v4
@@ -154,6 +212,10 @@ jobs:
             build/bootstrap-b0/*.stderr
             build/bootstrap-b0/i/*.i
             build/bootstrap-b0/s/*.s
+            build/bootstrap-b0/s2/*.s
             build/bootstrap-b0/stage1-asm-list.txt
+            build/bootstrap-b0/stage2-asm-list.txt
+            build/bootstrap-b0/minic-stage1-rv64
+            build/bootstrap-b0/minic-stage2-rv64
           if-no-files-found: ignore
           retention-days: 1
