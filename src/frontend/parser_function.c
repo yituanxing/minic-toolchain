@@ -2161,10 +2161,6 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
     if (!parse_gnu_prefix_function_visibility(parser, &visibility, &has_visibility)) {
         return false;
     }
-    if (!has_visibility && parser->default_visibility != MINIC_SYMBOL_VISIBILITY_DEFAULT) {
-        visibility = parser->default_visibility;
-        has_visibility = true;
-    }
     if (!parse_declaration_prefix(parser, is_internal, &declaration_prefix)) {
         return false;
     }
@@ -2173,6 +2169,11 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
     is_register_declaration = declaration_prefix.is_register;
     is_internal = declaration_prefix.is_static;
     is_inline = declaration_prefix.is_inline;
+    if (!has_visibility && !is_internal && !is_register_declaration &&
+        parser->default_visibility != MINIC_SYMBOL_VISIBILITY_DEFAULT) {
+        visibility = parser->default_visibility;
+        has_visibility = true;
+    }
     deferred_attributes = declaration_prefix.attributes;
     if (!minic_parser_parse_type_specifiers(parser, &base_type) ||
         !minic_parser_collect_gnu_attribute_lists(parser, &deferred_attributes)) {
