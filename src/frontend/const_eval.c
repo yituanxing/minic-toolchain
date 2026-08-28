@@ -771,6 +771,310 @@ static bool eval_expression(const MinicC0Program *program,
     }
 }
 
+typedef struct MinicArithmeticConstValue {
+    MinicType type;
+    MinicConstValue integer;
+    double floating;
+    bool is_floating;
+} MinicArithmeticConstValue;
+
+static bool arithmetic_integer_to_double(const MinicC0Program *program,
+                                         const MinicTargetInfo *target,
+                                         const MinicConstValue *value,
+                                         double *result) {
+    uint64_t bits;
+
+    if (program == NULL || target == NULL || value == NULL || result == NULL ||
+        !minic_type_is_integer(value->type)) {
+        return false;
+    }
+    if (integer_type_is_signed(program, value->type)) {
+        int64_t signed_value;
+
+        if (!value_signed(program, target, value, &signed_value)) {
+            return false;
+        }
+        *result = (double)signed_value;
+        return true;
+    }
+    if (!normalize_bits(program, target, value->type, value->bits, &bits)) {
+        return false;
+    }
+    *result = (double)bits;
+    return true;
+}
+
+static bool arithmetic_value_as_double(const MinicC0Program *program,
+                                       const MinicTargetInfo *target,
+                                       const MinicArithmeticConstValue *value,
+                                       double *result) {
+    if (value == NULL || result == NULL) {
+        return false;
+    }
+    if (value->is_floating) {
+        *result = value->floating;
+        return true;
+    }
+    return arithmetic_integer_to_double(program, target, &value->integer, result);
+}
+
+static bool arithmetic_double_to_integer(const MinicC0Program *program,
+                                         const MinicTargetInfo *target,
+                                         double input,
+                                         MinicType type,
+                                         MinicConstValue *result) {
+    unsigned int width;
+    uint64_t bits;
+
+    if (program == NULL || target == NULL || result == NULL || !minic_type_is_integer(type) ||
+        !integer_width(program, target, type, &width) || width == 0U) {
+        return false;
+    }
+    result->type = type;
+    if (minic_type_is_bool_integer(type)) {
+        result->bits = input == 0.0 ? 0U : 1U;
+        return true;
+    }
+    if (integer_type_is_signed(program, type)) {
+        int64_t signed_value;
+
+        if (width == 64U) {
+            /* 2^63 is exactly representable as binary64, INT64_MAX is not. */
+            if (!(input >= -9223372036854775808.0 && input < 9223372036854775808.0)) {
+                return false;
+            }
+        } else {
+            int64_t minimum;
+            int64_t maximum;
+
+            if (!signed_range(program, target, type, &minimum, &maximum) ||
+                !(input >= (double)minimum && input <= (double)maximum)) {
+                return false;
+            }
+        }
+        signed_value = (int64_t)input;
+        bits = (uint64_t)signed_value;
+    } else {
+        if (width == 64U) {
+            if (!(input >= 0.0 && input < 18446744073709551616.0)) {
+                return false;
+            }
+        } else {
+            uint64_t maximum;
+
+            maximum = (UINT64_C(1) << width) - UINT64_C(1);
+            if (!(input >= 0.0 && input <= (double)maximum)) {
+                return false;
+            }
+        }
+        bits = (uint64_t)input;
+    }
+    return normalize_bits(program, target, type, bits, &result->bits);
+}
+
+static bool eval_arithmetic_expression(const MinicC0Program *program,
+                                       const MinicTargetInfo *target,
+                                       MinicExpressionId expression_id,
+                                       unsigned int depth,
+                                       MinicArithmeticConstValue *value) {
+    const MinicExpression *expression;
+
+    if (program == NULL || target == NULL || value == NULL ||
+        depth > MINIC_CONST_EVAL_MAX_DEPTH) {
+        return false;
+    }
+    expression = minic_c0_program_expression(program, expression_id);
+    if (expression == NULL) {
+        return false;
+    }
+
+    (void)memset(value, 0, sizeof(*value));
+    value->type = expression->type;
+    if (minic_type_is_integer(expression->type)) {
+        if (eval_expression(program, target, expression_id, depth, &value->integer)) {
+            value->is_floating = false;
+            return true;
+        }
+        if (expression->kind == MINIC_EXPRESSION_CAST ||
+            expression->kind == MINIC_EXPRESSION_CONVERSION) {
+            MinicArithmeticConstValue operand;
+            double floating_operand;
+
+            if (!eval_arithmetic_expression(program,
+                                            target,
+                                            expression->value.unary.operand,
+                                            depth + 1U,
+                                            &operand) ||
+                !operand.is_floating ||
+                !arithmetic_value_as_double(program, target, &operand, &floating_operand) ||
+                !arithmetic_double_to_integer(
+                    program, target, floating_operand, expression->type, &value->integer)) {
+                return false;
+            }
+            value->is_floating = false;
+            return true;
+        }
+        return false;
+    }
+
+    if (!minic_type_is_float(expression->type) && !minic_type_is_double(expression->type)) {
+        return false;
+    }
+    value->is_floating = true;
+
+    switch (expression->kind) {
+    case MINIC_EXPRESSION_FLOATING: {
+        double floating;
+
+        (void)memcpy(&floating, &expression->value.floating_bits, sizeof(floating));
+        if (minic_type_is_float(expression->type)) {
+            floating = (double)(float)floating;
+        }
+        value->floating = floating;
+        return true;
+    }
+    case MINIC_EXPRESSION_CAST:
+    case MINIC_EXPRESSION_CONVERSION: {
+        MinicArithmeticConstValue operand;
+        double converted;
+
+        if (!eval_arithmetic_expression(program,
+                                        target,
+                                        expression->value.unary.operand,
+                                        depth + 1U,
+                                        &operand) ||
+            !arithmetic_value_as_double(program, target, &operand, &converted)) {
+            return false;
+        }
+        value->floating =
+            minic_type_is_float(expression->type) ? (double)(float)converted : converted;
+        return true;
+    }
+    case MINIC_EXPRESSION_UNARY: {
+        MinicArithmeticConstValue operand;
+        double converted;
+
+        if (!eval_arithmetic_expression(program,
+                                        target,
+                                        expression->value.unary.operand,
+                                        depth + 1U,
+                                        &operand) ||
+            !arithmetic_value_as_double(program, target, &operand, &converted)) {
+            return false;
+        }
+        switch (expression->value.unary.operator_kind) {
+        case MINIC_UNARY_PLUS:
+            break;
+        case MINIC_UNARY_NEGATE:
+            converted = -converted;
+            break;
+        default:
+            return false;
+        }
+        value->floating =
+            minic_type_is_float(expression->type) ? (double)(float)converted : converted;
+        return true;
+    }
+    case MINIC_EXPRESSION_BINARY: {
+        MinicArithmeticConstValue left;
+        MinicArithmeticConstValue right;
+        double left_value;
+        double right_value;
+        double result_value;
+
+        if (!eval_arithmetic_expression(program,
+                                        target,
+                                        expression->value.binary.left,
+                                        depth + 1U,
+                                        &left) ||
+            !eval_arithmetic_expression(program,
+                                        target,
+                                        expression->value.binary.right,
+                                        depth + 1U,
+                                        &right) ||
+            !arithmetic_value_as_double(program, target, &left, &left_value) ||
+            !arithmetic_value_as_double(program, target, &right, &right_value)) {
+            return false;
+        }
+        switch (expression->value.binary.operator_kind) {
+        case MINIC_BINARY_ADD:
+            result_value = left_value + right_value;
+            break;
+        case MINIC_BINARY_SUBTRACT:
+            result_value = left_value - right_value;
+            break;
+        case MINIC_BINARY_MULTIPLY:
+            result_value = left_value * right_value;
+            break;
+        case MINIC_BINARY_DIVIDE:
+            if (right_value == 0.0) {
+                return false;
+            }
+            result_value = left_value / right_value;
+            break;
+        default:
+            return false;
+        }
+        value->floating = minic_type_is_float(expression->type)
+                              ? (double)(float)result_value
+                              : result_value;
+        return true;
+    }
+    case MINIC_EXPRESSION_CONDITIONAL: {
+        MinicArithmeticConstValue condition;
+        MinicArithmeticConstValue selected;
+        double condition_value;
+        MinicExpressionId selected_id;
+
+        if (!eval_arithmetic_expression(program,
+                                        target,
+                                        expression->value.conditional.condition,
+                                        depth + 1U,
+                                        &condition) ||
+            !arithmetic_value_as_double(program, target, &condition, &condition_value)) {
+            return false;
+        }
+        if (condition_value != 0.0 && expression->value.conditional.uses_condition_value) {
+            value->floating = minic_type_is_float(expression->type)
+                                  ? (double)(float)condition_value
+                                  : condition_value;
+            return true;
+        }
+        selected_id = condition_value != 0.0 ? expression->value.conditional.when_true
+                                             : expression->value.conditional.when_false;
+        if (!eval_arithmetic_expression(program, target, selected_id, depth + 1U, &selected) ||
+            !arithmetic_value_as_double(program, target, &selected, &value->floating)) {
+            return false;
+        }
+        if (minic_type_is_float(expression->type)) {
+            value->floating = (double)(float)value->floating;
+        }
+        return true;
+    }
+    default:
+        return false;
+    }
+}
+
+bool minic_const_eval_arithmetic_to_integer(const MinicC0Program *program,
+                                            const MinicTargetInfo *target,
+                                            MinicExpressionId expression_id,
+                                            MinicType destination_type,
+                                            MinicConstValue *value) {
+    MinicArithmeticConstValue arithmetic;
+    double floating;
+
+    if (value == NULL || !minic_type_is_integer(destination_type) ||
+        !eval_arithmetic_expression(program, target, expression_id, 0U, &arithmetic)) {
+        return false;
+    }
+    if (!arithmetic.is_floating) {
+        return convert_value(program, target, &arithmetic.integer, destination_type, value);
+    }
+    return arithmetic_value_as_double(program, target, &arithmetic, &floating) &&
+           arithmetic_double_to_integer(program, target, floating, destination_type, value);
+}
+
 bool minic_const_eval_integer(const MinicC0Program *program,
                               const MinicTargetInfo *target,
                               MinicExpressionId expression_id,
