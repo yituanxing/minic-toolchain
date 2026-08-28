@@ -5,6 +5,7 @@ real_cc=${REAL_CC:-riscv64-linux-gnu-gcc}
 minic=${MINIC:-}
 keep=${MINIC_KEEP_INTERMEDIATES:-0}
 trace=${MINIC_KBUILD_TRACE:-}
+gcc_vdso=${MINIC_KBUILD_GCC_VDSO:-0}
 
 if [[ -z "$minic" ]]; then
   echo "MINIC_KBUILD_ERROR MINIC is not set" >&2
@@ -58,6 +59,19 @@ if [[ "$source_file" != *.c && "$source_file" != *.i ]]; then
   [[ -z "$trace" ]] || printf 'delegate unknown-source real_cc\n' >>"$trace"
   exec "$real_cc" "$@"
 fi
+
+# Runtime bring-up may opt into a deliberately tiny vDSO exception.  MiniC V1
+# currently emits a much larger native RISC-V vDSO than the upstream linker
+# script's 0x800 metadata reservation accepts.  Keep this exception explicit,
+# traceable, and restricted to the two C translation units in native vDSO.
+# Strict all-MiniC validation does not set MINIC_KBUILD_GCC_VDSO.
+if [[ "$gcc_vdso" == 1 && "$source_file" == */arch/riscv/kernel/vdso/vgettimeofday.c ||
+      "$gcc_vdso" == 1 && "$source_file" == */arch/riscv/kernel/vdso/hwprobe.c ]]; then
+  [[ -z "$trace" ]] ||
+    printf 'delegate-vdso source=%q output=%q real_cc=%q\n' "$source_file" "$output_file" "$real_cc" >>"$trace"
+  exec "$real_cc" "$@"
+fi
+
 if [[ -z "$output_file" ]]; then
   echo "MINIC_KBUILD_ERROR missing -o for source=$source_file" >&2
   exit 2
