@@ -863,6 +863,21 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
         return minic_type_is_double(left->type) &&
                minic_type_equal(left->type, instruction->type) &&
                minic_type_equal(right->type, instruction->type);
+    case MINIC_CORE_INSTRUCTION_DOUBLE_EQUAL:
+    case MINIC_CORE_INSTRUCTION_DOUBLE_LESS:
+    case MINIC_CORE_INSTRUCTION_DOUBLE_LESS_EQUAL:
+        if (!instruction_result_is_valid(function, instruction) ||
+            !minic_type_equal(instruction->type, minic_type_int()) ||
+            instruction->value.binary.left >= function->value_count ||
+            instruction->value.binary.right >= function->value_count ||
+            !available_values[instruction->value.binary.left] ||
+            !available_values[instruction->value.binary.right]) {
+            return false;
+        }
+        left = &function->values[instruction->value.binary.left];
+        right = &function->values[instruction->value.binary.right];
+        return minic_type_is_double(left->type) &&
+               minic_type_equal(left->type, right->type);
     case MINIC_CORE_INSTRUCTION_INTEGER_ADD:
     case MINIC_CORE_INSTRUCTION_INTEGER_SUBTRACT:
     case MINIC_CORE_INSTRUCTION_INTEGER_MULTIPLY:
@@ -1835,6 +1850,24 @@ static bool dump_instruction(FILE *output,
     case MINIC_CORE_INSTRUCTION_DOUBLE_DIVIDE:
         return fprintf(output,
                        "  %%%" PRIu32 " = div.double %%%" PRIu32 ", %%%" PRIu32 "\n",
+                       instruction->result,
+                       instruction->value.binary.left,
+                       instruction->value.binary.right) >= 0;
+    case MINIC_CORE_INSTRUCTION_DOUBLE_EQUAL:
+        return fprintf(output,
+                       "  %%%" PRIu32 " = eq.double %%%" PRIu32 ", %%%" PRIu32 "\n",
+                       instruction->result,
+                       instruction->value.binary.left,
+                       instruction->value.binary.right) >= 0;
+    case MINIC_CORE_INSTRUCTION_DOUBLE_LESS:
+        return fprintf(output,
+                       "  %%%" PRIu32 " = lt.double %%%" PRIu32 ", %%%" PRIu32 "\n",
+                       instruction->result,
+                       instruction->value.binary.left,
+                       instruction->value.binary.right) >= 0;
+    case MINIC_CORE_INSTRUCTION_DOUBLE_LESS_EQUAL:
+        return fprintf(output,
+                       "  %%%" PRIu32 " = le.double %%%" PRIu32 ", %%%" PRIu32 "\n",
                        instruction->result,
                        instruction->value.binary.left,
                        instruction->value.binary.right) >= 0;

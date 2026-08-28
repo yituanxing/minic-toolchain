@@ -1832,6 +1832,9 @@ static bool core_instruction_supported(const MinicC0Program *program,
     case MINIC_CORE_INSTRUCTION_DOUBLE_SUBTRACT:
     case MINIC_CORE_INSTRUCTION_DOUBLE_MULTIPLY:
     case MINIC_CORE_INSTRUCTION_DOUBLE_DIVIDE:
+    case MINIC_CORE_INSTRUCTION_DOUBLE_EQUAL:
+    case MINIC_CORE_INSTRUCTION_DOUBLE_LESS:
+    case MINIC_CORE_INSTRUCTION_DOUBLE_LESS_EQUAL:
     case MINIC_CORE_INSTRUCTION_INTEGER_ADD:
     case MINIC_CORE_INSTRUCTION_INTEGER_SUBTRACT:
     case MINIC_CORE_INSTRUCTION_INTEGER_MULTIPLY:
@@ -3351,6 +3354,34 @@ static bool emit_instruction(FILE *file,
                     "  fmv.d.x ft1, t1\n"
                     "  %s ft0, ft0, ft1\n"
                     "  fmv.x.d t0, ft0\n",
+                    opcode) < 0) {
+            return false;
+        }
+        return store_core_value(file, frame, instruction->result, "t0");
+    }
+    case MINIC_CORE_INSTRUCTION_DOUBLE_EQUAL:
+    case MINIC_CORE_INSTRUCTION_DOUBLE_LESS:
+    case MINIC_CORE_INSTRUCTION_DOUBLE_LESS_EQUAL: {
+        const char *opcode;
+
+        if (instruction->value.binary.left >= function->value_count ||
+            instruction->value.binary.right >= function->value_count ||
+            !minic_type_is_double(function->values[instruction->value.binary.left].type) ||
+            !minic_type_equal(function->values[instruction->value.binary.left].type,
+                              function->values[instruction->value.binary.right].type)) {
+            return false;
+        }
+        opcode = instruction->kind == MINIC_CORE_INSTRUCTION_DOUBLE_EQUAL
+                     ? "feq.d"
+                 : instruction->kind == MINIC_CORE_INSTRUCTION_DOUBLE_LESS
+                     ? "flt.d"
+                     : "fle.d";
+        if (!load_core_value(file, frame, instruction->value.binary.left, "t0") ||
+            !load_core_value(file, frame, instruction->value.binary.right, "t1") ||
+            fprintf(file,
+                    "  fmv.d.x ft0, t0\n"
+                    "  fmv.d.x ft1, t1\n"
+                    "  %s t0, ft0, ft1\n",
                     opcode) < 0) {
             return false;
         }
