@@ -7139,6 +7139,34 @@ static MinicCoreLowerStatus lower_expression_statement(MinicCoreLowerContext *co
         return discarded_value == MINIC_CORE_VALUE_INVALID ? MINIC_CORE_LOWER_OK
                                                             : MINIC_CORE_LOWER_ERROR;
     }
+    if (expression->kind == MINIC_EXPRESSION_STATEMENT &&
+        minic_type_is_record(expression->type)) {
+        const MinicBlock *statement_block;
+        const MinicExpression *statement_result;
+        MinicCoreValueId discarded_address;
+        MinicCoreLowerStatus status;
+        bool statement_expression_terminated;
+
+        statement_block = minic_c0_program_block(
+            context->body->program, expression->value.statement_expression.block);
+        statement_result = minic_c0_program_expression(
+            context->body->program, expression->value.statement_expression.result);
+        if (statement_block == NULL || statement_result == NULL ||
+            !minic_type_is_record(statement_result->type) ||
+            statement_result->type.record_id != expression->type.record_id) {
+            return MINIC_CORE_LOWER_ERROR;
+        }
+        statement_expression_terminated = false;
+        status = lower_block(context, statement_block, &statement_expression_terminated);
+        if (status != MINIC_CORE_LOWER_OK) {
+            return status;
+        }
+        if (statement_expression_terminated) {
+            return MINIC_CORE_LOWER_UNSUPPORTED;
+        }
+        return lower_record_materialized_address(
+            context, expression->value.statement_expression.result, &discarded_address);
+    }
     if (expression->kind == MINIC_EXPRESSION_COMPOUND_ASSIGNMENT) {
         MinicCoreValueId discarded_value;
         MinicCoreLowerStatus status;
