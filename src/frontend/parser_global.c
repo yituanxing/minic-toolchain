@@ -3,6 +3,7 @@
 #include "frontend/initializer.h"
 #include "frontend/semantic_snapshot.h"
 
+#include <inttypes.h>
 #include <limits.h>
 #include <stdint.h>
 #include <stdio.h>
