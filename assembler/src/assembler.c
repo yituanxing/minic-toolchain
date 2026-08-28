@@ -706,7 +706,7 @@ static bool emit_data_stmt(MiniAs *as, const MiniAsStmt *stmt) {
                 !minias_add_relocation(as,
                                       stmt->section,
                                       relocation_offset,
-                                      2U,
+                                      MINIAS_R_RISCV_64,
                                       expr.name,
                                       expr.addend)) {
                 free(copy);
