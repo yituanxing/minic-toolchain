@@ -59,6 +59,7 @@ jobs:
           export REAL_CC=riscv64-linux-gnu-gcc
           export MINIC_KBUILD_TRACE="$work/minic-kbuild.trace"
           export MINIC_KBUILD_GCC_VDSO=1
+          export MINIC_KBUILD_GCC_PURGATORY=1
 
           started=$(date +%s)
           make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
@@ -73,9 +74,11 @@ jobs:
           minic_inputs=$(grep -c '^minic input=' "$work/minic-kbuild.trace" || true)
           minic_passes=$(grep -c '^pass source=' "$work/minic-kbuild.trace" || true)
           vdso_delegates=$(grep -c '^delegate-vdso ' "$work/minic-kbuild.trace" || true)
+          purgatory_delegates=$(grep -c '^delegate-purgatory ' "$work/minic-kbuild.trace" || true)
           test "$minic_inputs" -ge 1000
           test "$minic_inputs" -eq "$minic_passes"
           test "$vdso_delegates" -eq 2
+          test "$purgatory_delegates" -eq 4
 
           if grep -E 'MINIC_KBUILD_BLOCKER|error:|undefined reference' "$work/kbuild.log"; then
             echo "LINUX_RUNTIME_V2_FAST_BUILD=FAIL unexpected blocker marker" >&2
@@ -83,8 +86,8 @@ jobs:
           fi
 
           sha256sum "$image" >"$work/Image.sha256"
-          printf 'LINUX_RUNTIME_V2_FAST_IMAGE=PASS minic_inputs=%s minic_passes=%s vdso_gcc=%s elapsed_s=%s head=%s\n' \
-            "$minic_inputs" "$minic_passes" "$vdso_delegates" "$elapsed" "$GITHUB_SHA"
+          printf 'LINUX_RUNTIME_V2_FAST_IMAGE=PASS minic_inputs=%s minic_passes=%s vdso_gcc=%s purgatory_gcc=%s elapsed_s=%s head=%s\n' \
+            "$minic_inputs" "$minic_passes" "$vdso_delegates" "$purgatory_delegates" "$elapsed" "$GITHUB_SHA"
 
       - name: Upload MiniC Linux Image
         uses: actions/upload-artifact@v4
