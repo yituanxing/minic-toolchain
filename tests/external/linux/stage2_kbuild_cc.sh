@@ -6,6 +6,7 @@ minic=${MINIC:-}
 keep=${MINIC_KEEP_INTERMEDIATES:-0}
 trace=${MINIC_KBUILD_TRACE:-}
 gcc_vdso=${MINIC_KBUILD_GCC_VDSO:-0}
+gcc_purgatory=${MINIC_KBUILD_GCC_PURGATORY:-0}
 
 if [[ -z "$minic" ]]; then
   echo "MINIC_KBUILD_ERROR MINIC is not set" >&2
@@ -69,6 +70,19 @@ if [[ "$gcc_vdso" == 1 && "$source_file" == */arch/riscv/kernel/vdso/vgettimeofd
       "$gcc_vdso" == 1 && "$source_file" == */arch/riscv/kernel/vdso/hwprobe.c ]]; then
   [[ -z "$trace" ]] ||
     printf 'delegate-vdso source=%q output=%q real_cc=%q\n' "$source_file" "$output_file" "$real_cc" >>"$trace"
+  exec "$real_cc" "$@"
+fi
+
+# The RISC-V kexec purgatory is another deliberately restricted freestanding
+# build domain.  Its four C objects are linked into an isolated relocatable
+# payload with a tiny symbol closure, not into the normal kernel object graph.
+# Runtime bring-up may delegate exactly those output objects to GCC while the
+# compiler-side purgatory defect is tracked separately.  Strict/final all-MiniC
+# validation does not set MINIC_KBUILD_GCC_PURGATORY.
+if [[ "$gcc_purgatory" == 1 && "$output_file" == arch/riscv/purgatory/*.o &&
+      ( "$source_file" == *.c || "$source_file" == *.i ) ]]; then
+  [[ -z "$trace" ]] ||
+    printf 'delegate-purgatory source=%q output=%q real_cc=%q\n' "$source_file" "$output_file" "$real_cc" >>"$trace"
   exec "$real_cc" "$@"
 fi
 
