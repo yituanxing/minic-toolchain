@@ -37,7 +37,7 @@ static int hex_value(char ch) {
 }
 
 bool minias_decode_string_literals(const char *text,
-                                   bool terminate_each,
+                                   bool nul_terminate,
                                    unsigned char **data,
                                    size_t *size) {
     const char *p = text;
@@ -137,24 +137,28 @@ bool minias_decode_string_literals(const char *text,
             return false;
         }
         ++p;
-        if (terminate_each && !append_byte(data, size, &capacity, 0U)) {
-            free(*data);
-            *data = NULL;
-            *size = 0U;
-            return false;
-        }
         while (*p == ' ' || *p == '\t') {
             ++p;
         }
+        if (*p == ',') {
+            ++p;
+            continue;
+        }
+        if (*p == '"') {
+            continue;
+        }
         if (*p == '\0') {
+            if (nul_terminate && !append_byte(data, size, &capacity, 0U)) {
+                free(*data);
+                *data = NULL;
+                *size = 0U;
+                return false;
+            }
             return true;
         }
-        if (*p != ',') {
-            free(*data);
-            *data = NULL;
-            *size = 0U;
-            return false;
-        }
-        ++p;
+        free(*data);
+        *data = NULL;
+        *size = 0U;
+        return false;
     }
 }
