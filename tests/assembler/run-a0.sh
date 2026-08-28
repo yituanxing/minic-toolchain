@@ -153,6 +153,8 @@ isa_next:
   amoadd.d a0, a1, (a2)
   csrs sstatus, a0
   amoand.w a0, a1, (a2)
+  csrc 0x100, t3
+  amoand.d a0, a1, (a2)
   ret
 .size isa_next, .-isa_next
 EOF
@@ -161,7 +163,7 @@ isa_hex="$(
     readelf -x .text "$work/isa-next.o" |
     awk '/0x[0-9a-f]+/ {for (i=2; i<=NF; ++i) if ($i ~ /^[0-9a-f]+$/ && length($i) <= 8 && length($i) % 2 == 0) printf "%s", $i}'
 )"
-test "$isa_hex" = "13052001131585001305450313158500130565051315850013058507131585001305a509131585001305c50b131585001305e50d131585001305050f33d5c5400f003003f3250010730010000f0000012f25b600730050102f35b600732005102f25b66067800000"
+test "$isa_hex" = "13052001131585001305450313158500130565051315850013058507131585001305a509131585001305c50b131585001305e50d131585001305050f33d5c5400f003003f3250010730010000f0000012f25b600730050102f35b600732005102f25b66073300e102f35b66067800000"
 
 cat >"$work/section-stack.s" <<'EOF'
 .text
@@ -170,7 +172,10 @@ cat >"$work/section-stack.s" <<'EOF'
 section_stack:
   nop
 .pushsection .rodata.minias,"a"
+2:
   .byte 170
+  .org 2b + 4
+  .byte 187
 .popsection
   ret
 .size section_stack, .-section_stack
@@ -185,7 +190,7 @@ stack_data="$(
     awk '/0x[0-9a-f]+/ {for (i=2; i<=NF; ++i) if ($i ~ /^[0-9a-f]+$/ && length($i) <= 8 && length($i) % 2 == 0) printf "%s", $i}'
 )"
 test "$stack_text" = "1300000067800000"
-test "$stack_data" = "aa"
+test "$stack_data" = "aa000000bb"
 
 cat >"$work/local-difference.s" <<'EOF'
 .data
@@ -200,4 +205,4 @@ difference_hex="$(
 )"
 test "$difference_hex" = "00ffffffff"
 
-echo "MINIAS_A0=PASS objects=9 format=ELF64-RISCV-ET_REL relocations=4 strings=2 pseudos=6 previous=1 numeric_labels=3 isa_next=11 section_stack=1 local_difference=1"
+echo "MINIAS_A0=PASS objects=9 format=ELF64-RISCV-ET_REL relocations=4 strings=2 pseudos=6 previous=1 numeric_labels=4 isa_next=13 section_stack=1 org=1 local_difference=1"
