@@ -6249,10 +6249,27 @@ static MinicCoreLowerStatus lower_assignment_pair(MinicCoreLowerContext *context
     }
     status = lower_scalar_assignment_value(context, stored_type, source_id, &stored_value);
     if (status != MINIC_CORE_LOWER_OK) {
-        (void)fprintf(stderr,
-                      "CORE_ASSIGN_STAGE function=%s stage=value status=%d source_kind=%d operand_kind=%d\n",
-                      context->source_function != NULL ? context->source_function->name : "?",
-                      (int)status, source_kind, source_operand_kind);
+        {
+            const MinicExpression *target_expression;
+            const MinicExpression *source_expression;
+
+            target_expression =
+                minic_c0_program_expression(context->body->program, target_id);
+            source_expression =
+                minic_c0_program_expression(context->body->program, source_id);
+            (void)fprintf(stderr,
+                          "CORE_ASSIGN_STAGE function=%s stage=value status=%d "
+                          "source_kind=%d operand_kind=%d target_base=%d target_ptr=%u "
+                          "source_base=%d source_ptr=%u\n",
+                          context->source_function != NULL ? context->source_function->name : "?",
+                          (int)status,
+                          source_kind,
+                          source_operand_kind,
+                          target_expression != NULL ? (int)target_expression->type.base_kind : -1,
+                          target_expression != NULL ? target_expression->type.pointer_depth : 0U,
+                          source_expression != NULL ? (int)source_expression->type.base_kind : -1,
+                          source_expression != NULL ? source_expression->type.pointer_depth : 0U);
+        }
         return status;
     }
     status = spill_scalar_value(context, span, stored_type, stored_value, &stored_object);
