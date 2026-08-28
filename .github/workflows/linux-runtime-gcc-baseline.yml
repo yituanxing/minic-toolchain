@@ -9,6 +9,8 @@ on:
 permissions:
   contents: read
 
+# P1 calibration rerun after loopback bring-up.
+
 jobs:
   gcc-runtime:
     if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[linux-runtime-gcc]')
