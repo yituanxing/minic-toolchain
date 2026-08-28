@@ -2894,12 +2894,31 @@ static bool parse_primary(MinicParser *parser, MinicExpressionId *expression_id,
                 entity = entity_id == MINIC_GLOBAL_OBJECT_INVALID
                              ? NULL
                              : minic_c0_program_global_object(parser->program, entity_id);
-                (void)fprintf(stderr,
-                              "FRONTEND_LOOKUP_DETAIL name=%.*s local=%llu function=%llu "
+                {
+                    size_t context_begin;
+                    size_t context_end;
+                    size_t context_length;
+
+                    context_begin =
+                        name_span.begin.offset > 32U ? name_span.begin.offset - 32U : 0U;
+                    context_end = name_span.end.offset + 32U < parser->lexer.length
+                                      ? name_span.end.offset + 32U
+                                      : parser->lexer.length;
+                    context_length = context_end - context_begin;
+                    (void)fprintf(stderr,
+                              "FRONTEND_LOOKUP_DETAIL name=%.*s span=%zu..%zu "
+                              "current=%zu..%zu lexer_cursor=%zu raw=%.*s local=%llu function=%llu "
                               "global=%llu entity=%llu fixed=%llu enum=%llu globals=%zu "
                               "entity_block_scope_only=%d entity_extern=%d entity_tentative=%d\n",
                               (int)minic_parser_span_length(name_span),
                               parser->source + name_span.begin.offset,
+                              name_span.begin.offset,
+                              name_span.end.offset,
+                              parser->current.span.begin.offset,
+                              parser->current.span.end.offset,
+                              parser->lexer.cursor,
+                              (int)context_length,
+                              parser->source + context_begin,
                               (unsigned long long)local_id,
                               (unsigned long long)function_id,
                               (unsigned long long)global_object_id,
@@ -2910,6 +2929,7 @@ static bool parse_primary(MinicParser *parser, MinicExpressionId *expression_id,
                               entity != NULL && entity->is_block_scope_extern_only ? 1 : 0,
                               entity != NULL && entity->is_extern ? 1 : 0,
                               entity != NULL && entity->is_tentative ? 1 : 0);
+                }
             }
         }
         minic_parser_error(parser, "use of undeclared local");
