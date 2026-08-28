@@ -1894,6 +1894,7 @@ static bool core_instruction_supported(const MinicC0Program *program,
     case MINIC_CORE_INSTRUCTION_INTEGER_CONVERSION:
     case MINIC_CORE_INSTRUCTION_INTEGER_TO_DOUBLE:
     case MINIC_CORE_INSTRUCTION_FLOAT_TO_DOUBLE:
+    case MINIC_CORE_INSTRUCTION_DOUBLE_TO_FLOAT:
     case MINIC_CORE_INSTRUCTION_DOUBLE_TO_INTEGER:
     case MINIC_CORE_INSTRUCTION_INTEGER_NEGATE:
     case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_NOT:
@@ -3913,6 +3914,23 @@ static bool emit_instruction(FILE *file,
                     "  fmv.w.x ft0, t0\n"
                     "  fcvt.d.s ft1, ft0\n"
                     "  fmv.x.d t1, ft1\n") < 0) {
+            return false;
+        }
+        return store_core_value(file, frame, instruction->result, "t1");
+    }
+    case MINIC_CORE_INSTRUCTION_DOUBLE_TO_FLOAT: {
+        MinicCoreValueId operand = instruction->value.operand;
+
+        if (operand >= function->value_count ||
+            !minic_type_is_double(function->values[operand].type) ||
+            !minic_type_is_float(instruction->type) ||
+            !load_core_value(file, frame, operand, "t0") ||
+            fprintf(file,
+                    "  fmv.d.x ft0, t0\n"
+                    "  fcvt.s.d ft1, ft0\n"
+                    "  fmv.x.w t1, ft1\n"
+                    "  slli t1, t1, 32\n"
+                    "  srli t1, t1, 32\n") < 0) {
             return false;
         }
         return store_core_value(file, frame, instruction->result, "t1");
