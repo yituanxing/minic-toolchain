@@ -38,4 +38,24 @@ EOF
 assemble_and_check return_0 0 1305000067800000
 assemble_and_check return_42 42 1305a00267800000
 
-echo "MINIAS_A0=PASS objects=2 format=ELF64-RISCV-ET_REL"
+cat >"$work/data.s" <<'EOF'
+.section .rodata,"a"
+.align 0
+.globl foo
+.type foo, @object
+foo:
+  .word 1
+  .word -2, 0x12345678
+  .zero 3
+.size foo, .-foo
+EOF
+"$MINIAS" -o "$work/data.o" "$work/data.s"
+readelf -h "$work/data.o" | grep -q 'RISC-V'
+readelf -s "$work/data.o" | grep -Eq '[[:space:]]15[[:space:]]+OBJECT[[:space:]]+GLOBAL.* foo
+data_hex="$(
+    readelf -x .rodata "$work/data.o" |
+    awk '/0x[0-9a-f]+/ {for (i=2; i<=NF; ++i) if ($i ~ /^[0-9a-f]{8}$/) printf "%s", $i}'
+)"
+test "$data_hex" = "01000000feffffff78563412000000"
+
+echo "MINIAS_A0=PASS objects=3 format=ELF64-RISCV-ET_REL"
