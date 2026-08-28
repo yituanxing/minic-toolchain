@@ -11,9 +11,11 @@ mkdir -p "$work/bin" "$work/out"
 cat >"$work/bin/fake-real-cc" <<'SH'
 #!/usr/bin/env bash
 set -Eeuo pipefail
-printf 'real'
-printf ' %q' "$@"
-printf '\n' >>"$FAKE_REAL_LOG"
+{
+  printf 'real'
+  printf ' %q' "$@"
+  printf '\n'
+} >>"$FAKE_REAL_LOG"
 
 mode=delegate
 out=
@@ -51,9 +53,11 @@ chmod +x "$work/bin/fake-real-cc"
 cat >"$work/bin/fake-minic" <<'SH'
 #!/usr/bin/env bash
 set -Eeuo pipefail
-printf 'minic'
-printf ' %q' "$@"
-printf '\n' >>"$FAKE_MINIC_LOG"
+{
+  printf 'minic'
+  printf ' %q' "$@"
+  printf '\n'
+} >>"$FAKE_MINIC_LOG"
 
 in=
 out=
