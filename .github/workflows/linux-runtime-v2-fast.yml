@@ -156,6 +156,10 @@ jobs:
           QEMU_SHELL_INPUT_DELAY_SECONDS=8 \
             bash tests/external/linux/runtime_boot.sh
 
+          python3 tests/external/linux/runtime_v2_log_check.py \
+            --profile p0 \
+            --log "$GITHUB_WORKSPACE/build/linux-runtime-v2-fast-runtime/qemu/rdinit-init.log"
+
           echo "LINUX_RUNTIME_V2_FAST=PASS image=minic-kbuild profile=fast lanes=1/1 head=$GITHUB_SHA"
 
       - name: Preserve runtime blocker
