@@ -798,7 +798,7 @@ MinicCoreLowerStatus minic_core_lower_inline_asm(MinicCoreLowerContext *context,
        Core values, objects, or instructions behind. Only after every operand
        role and the numeric template are proven do we materialize operands. */
     if (source->is_volatile && !source->is_goto && source->template_text != NULL &&
-        source->template_length != 0U && source->label_count == 0U &&
+        source->label_count == 0U &&
         source->output_count <= MINIC_CORE_STRUCTURED_INLINE_ASM_OPERAND_LIMIT &&
         source->input_count <= MINIC_CORE_STRUCTURED_INLINE_ASM_OPERAND_LIMIT - source->output_count &&
         source->output_count + source->input_count != 0U &&
