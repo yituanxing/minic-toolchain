@@ -1,0 +1,81 @@
+name: MiniAS Census Smoke16
+
+on:
+  push:
+    branches:
+      - "toolchain/minias-m0-boundary-freeze"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  smoke16:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[minias-census-smoke]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download frozen first500 corpus
+        uses: actions/download-artifact@v4
+        with:
+          name: frozen-linux-corpus-first500
+          path: build/import-first500
+          repository: ${{ github.repository }}
+          run-id: 33186855250
+          github-token: ${{ github.token }}
+
+      - name: Verify and restore corpus
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          import=build/import-first500
+          expected=$(cut -d' ' -f1 "$import/corpus.tar.gz.sha256")
+          actual=$(sha256sum "$import/corpus.tar.gz" | cut -d' ' -f1)
+          test "$actual" = "$expected"
+          tar -C build -xzf "$import/corpus.tar.gz"
+          (cd build && sha256sum -c import-first500/files.sha256 >/dev/null)
+
+      - name: Build minic-cc
+        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/census-smoke-compiler
+
+      - name: Generate 16 real Linux assembly files
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          CORE_FAST_TRACE=1 python3 tests/external/linux/corpus_replay.py \
+            --minic "$GITHUB_WORKSPACE/build/census-smoke-compiler/bin/minic-cc" \
+            --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
+            --work "$GITHUB_WORKSPACE/build/census-smoke16" \
+            --jobs 4 --offset 0 --limit 500 --sample-count 16
+          python3 - <<'PY'
+          import json
+          rows=json.load(open("build/census-smoke16/batch-results.json"))
+          assert len(rows)==16 and all(r["status"]=="PASS" for r in rows), rows
+          PY
+
+      - name: Time census
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          /usr/bin/time -f 'CENSUS_SMOKE elapsed=%e user=%U sys=%S maxrss_kb=%M' \
+            timeout 30s python3 assembler/tools/census.py \
+              --input build/census-smoke16/minic-out \
+              --label smoke16 \
+              --output build/census-smoke16/census.json
+          python3 - <<'PY'
+          import json
+          r=json.load(open("build/census-smoke16/census.json"))
+          t=r["totals"]
+          assert t["files"] == 16, t["files"]
+          print(
+              "MINIAS_CENSUS_SMOKE16=PASS"
+              f" files={t['files']}"
+              f" mnemonics={len(t['mnemonics'])}"
+              f" directives={len(t['directives'])}"
+              f" relocations={len(t['relocations'])}"
+              f" features={len(t['feature_occurrences'])}"
+          )
+          PY
