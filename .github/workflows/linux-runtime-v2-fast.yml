@@ -1,0 +1,168 @@
+name: Linux Runtime V2 Fast
+
+on:
+  push:
+    branches:
+      - refactor/declaration-sema-v1
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  build-image:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[linux-runtime-v2-fast]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Install Linux build prerequisites
+        run: |
+          sudo apt-get -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            gcc-riscv64-linux-gnu libc6-dev-riscv64-cross \
+            bc bison flex libssl-dev libelf-dev make curl xz-utils file \
+            binutils-riscv64-linux-gnu
+
+      - name: Build exact host MiniC
+        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/linux-runtime-v2-fast-compiler
+
+      - name: Build Linux 6.6.143 Image through MiniC Kbuild boundary
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-runtime-v2-fast"
+          archive="$work/linux-6.6.143.tar.xz"
+          src="$work/linux-6.6.143"
+          out="$work/out"
+          mkdir -p "$work"
+
+          curl -fsSL https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.6.143.tar.xz -o "$archive"
+          printf '%s  %s\n' \
+            dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932 \
+            "$archive" | sha256sum -c -
+          tar -xJf "$archive" -C "$work"
+
+          make -C "$src" O="$out" ARCH=risc CROSS_COMPILE=riscv64-linux-gnu- defconfig
+          "$src/scripts/config" --file "$out/.config" \
+            -e BLK_DEV_INITRD -e DEVTMPFS -e DEVTMPFS_MOUNT \
+            -e SERIAL_8250 -e SERIAL_8250_CONSOLE
+          make -C "$src" O="$out" ARCH=risc CROSS_COMPILE=riscv64-linux-gnu- olddefconfig
+
+          export MINIC="$GITHUB_WORKSPACE/build/linux-runtime-v2-fast-compiler/bin/minic"
+          export REAL_CC=riscv64-linux-gnu-gcc
+          export MINIC_KBUILD_TRACE="$work/minic-kbuild.trace"
+
+          started=$(date +%s)
+          make -C "$src" O="$out" ARCH=risc CROSS_COMPILE=riscv64-linux-gnu- \
+            CC="$GITHUB_WORKSPACE/tests/external/linux/stage2_kbuild_cc.sh" \
+            -j4 Image >"$work/kbuild.log" 2>&1
+          elapsed=$(( $(date +%s) - started ))
+
+          image="$out/arch/riscv/boot/Image"
+          test -s "$image"
+          file "$image"
+
+          minic_inputs=$(grep -c '^minic input=' "$work/minic-kbuild.trace" || true)
+          minic_passes=$(grep -c '^pass source=' "$work/minic-kbuild.trace" || true)
+          test "$minic_inputs" -ge 1000
+          test "$minic_inputs" -eq "$minic_passes"
+
+          if grep -E 'MINIC_KBUILD_BLOCKER|error:|undefined reference' "$work/kbuild.log"; then
+            echo "LINUX_RUNTIME_V2_FAST_BUILD=FAIL unexpected blocker marker" >&2
+            exit 1
+          fi
+
+          sha256sum "$image" >"$work/Image.sha256"
+          printf 'LINUX_RUNTIME_V2_FAST_IMAGE=PASS minic_inputs=%s minic_passes=%s elapsed_s=%s head=%s\n' \
+            "$minic_inputs" "$minic_passes" "$elapsed" "$GITHUB_SHA"
+
+      - name: Upload MiniC Linux Image
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-runtime-v2-fast-image
+          path: |
+            build/linux-runtime-v2-fast/out/arch/riscv/boot/Image
+            build/linux-runtime-v2-fast/out/.config
+            build/linux-runtime-v2-fast/out/System.map
+            build/linux-runtime-v2-fast/Image.sha256
+            build/linux-runtime-v2-fast/minic-kbuild.trace
+          if-no-files-found: error
+          retention-days: 3
+
+      - name: Preserve build blocker
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-runtime-v2-fast-build-blocker
+          path: |
+            build/linux-runtime-v2-fast/kbuild.log
+            build/linux-runtime-v2-fast/minic-kbuild.trace
+            build/linux-runtime-v2-fast/out/.config
+          if-no-files-found: ignore
+          retention-days: 2
+
+  runtime:
+    needs: build-image
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Install runtime prerequisites
+        run: |
+          sudo apt-get -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            gcc-riscv64-linux-gnu libc6-dev-riscv64-cross \
+            cpio gzip qemu-system-misc opensbi
+
+      - name: Download exact MiniC Linux Image
+        uses: actions/download-artifact@v4
+        with:
+          name: linux-runtime-v2-fast-image
+          path: build/linux-runtime-v2-fast-image
+
+      - name: Build deterministic initramfs
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          BUILD_DIR="$GITHUB_WORKSPACE/build/linux-runtime-v2-fast-runtime/initramfs" \
+          OUTPUT_INITRAMFS="$GITHUB_WORKSPACE/build/linux-runtime-v2-fast-runtime/runtime-initramfs.cpio.gz" \
+          RISCV_CC=riscv64-linux-gnu-gcc \
+            bash tests/external/linux/build_runtime_initramfs.sh
+
+      - name: Run boot and userspace runtime contract
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          image="$GITHUB_WORKSPACE/build/linux-runtime-v2-fast-image/Image"
+          test -s "$image"
+
+          LINUX_IMAGE="$image" \
+          INITRAMFS="$GITHUB_WORKSPACE/build/linux-runtime-v2-fast-runtime/runtime-initramfs.cpio.gz" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/linux-runtime-v2-fast-runtime/qemu" \
+          LINUX_RELEASE=6.6.143 \
+          QEMU_SYSTEM_RISCV64=qemu-system-riscv64 \
+          QEMU_TIMEOUT_SECONDS=90 \
+          QEMU_SHELL_INPUT_DELAY_SECONDS=8 \
+            bash tests/external/linux/runtime_boot.sh
+
+          echo "LINUX_RUNTIME_V2_FAST=PASS image=minic-kbuild lanes=2/2 head=$GITHUB_SHA"
+
+      - name: Preserve runtime blocker
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-runtime-v2-fast-runtime-blocker
+          path: |
+            build/linux-runtime-v2-fast-runtime/qemu/*.log
+            build/linux-runtime-v2-fast-image/.config
+            build/linux-runtime-v2-fast-image/Image.sha256
+          if-no-files-found: ignore
+          retention-days: 2
