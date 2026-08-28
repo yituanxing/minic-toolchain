@@ -827,8 +827,11 @@ bool minic_parser_parse_parameter_list(MinicParser *parser,
         MinicParsedAttributeList leading_attributes;
         MinicParsedAttributeList post_type_attributes;
         bool declarator_has_name;
+        bool declarator_name_is_array;
+        bool declarator_name_array_inferred;
         bool is_function_pointer_parameter;
         bool is_pointer_to_array_parameter;
+        size_t declarator_name_array_count;
         size_t parameter_array_type_begin;
 
         leading_attributes.count = 0U;
@@ -853,15 +856,36 @@ bool minic_parser_parse_parameter_list(MinicParser *parser,
         }
         (void)memset(&declarator_name_span, 0, sizeof(declarator_name_span));
         declarator_has_name = false;
+        declarator_name_is_array = false;
+        declarator_name_array_inferred = false;
+        declarator_name_array_count = 0U;
         is_pointer_to_array_parameter =
             parameter_starts_parenthesized_pointer_to_array(parser);
         is_function_pointer_parameter =
             parser->current.kind == MINIC_TOKEN_LPAREN && !is_pointer_to_array_parameter;
         if (is_pointer_to_array_parameter) {
             if (!minic_parser_parse_parenthesized_pointer_to_array_declarator(
-                    parser, parameter_type, &declarator_name_span, &parameter_type)) {
+                    parser,
+                    parameter_type,
+                    &declarator_name_span,
+                    &parameter_type,
+                    &declarator_name_is_array,
+                    &declarator_name_array_inferred,
+                    &declarator_name_array_count)) {
                 return false;
             }
+            if (declarator_name_is_array) {
+                MinicType adjusted_parameter_type;
+
+                if (!minic_type_pointer_to(parameter_type, &adjusted_parameter_type)) {
+                    minic_parser_error(
+                        parser, "cannot adjust parenthesized array parameter to pointer type");
+                    return false;
+                }
+                parameter_type = adjusted_parameter_type;
+            }
+            (void)declarator_name_array_inferred;
+            (void)declarator_name_array_count;
             declarator_has_name = true;
         } else if (is_function_pointer_parameter &&
                    !parse_function_pointer_parameter_declarator(parser,
