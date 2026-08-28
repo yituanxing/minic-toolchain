@@ -1404,8 +1404,7 @@ static bool core_structured_inline_asm_supported(const MinicCoreFunction *functi
         return false;
     }
     inline_asm = &function->inline_asms[instruction->value.structured_inline_asm.inline_asm_id];
-    if (inline_asm->template_text == NULL || inline_asm->template_length == 0U ||
-        !inline_asm->is_volatile || inline_asm->is_goto) {
+    if (inline_asm->template_text == NULL || !inline_asm->is_volatile || inline_asm->is_goto) {
         return false;
     }
     for (binding_index = 0U;
