@@ -24,6 +24,7 @@
 #define MINIAS_STV_PROTECTED 3U
 
 #define MINIAS_R_RISCV_64 2U
+#define MINIAS_R_RISCV_CALL_PLT 19U
 #define MINIAS_R_RISCV_PCREL_HI20 23U
 #define MINIAS_R_RISCV_PCREL_LO12_I 24U
 #define MINIAS_R_RISCV_RELAX 51U
@@ -117,7 +118,7 @@ bool minias_add_relocation(MiniAs *as,
                            int64_t addend);
 bool minias_parse_symbol_addend(const char *text, MiniAsSymbolExpr *expr);
 bool minias_decode_string_literals(const char *text,
-                                   bool terminate_each,
+                                   bool nul_terminate,
                                    unsigned char **data,
                                    size_t *size);
 bool minias_section_append(MiniAs *as, int section_index, const void *data, size_t size);
