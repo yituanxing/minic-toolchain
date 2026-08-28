@@ -1184,6 +1184,9 @@ static bool process_statement(MiniAs *as, char *text, size_t line) {
         if (strcmp(op, ".weak") == 0) {
             return handle_symbol_list(as, args, MINIAS_STB_WEAK, true, 0U, false);
         }
+        if (strcmp(op, ".extern") == 0) {
+            return handle_symbol_list(as, args, MINIAS_STB_GLOBAL, true, 0U, false);
+        }
         if (strcmp(op, ".hidden") == 0) {
             return handle_symbol_list(as, args, 0U, false, MINIAS_STV_HIDDEN, true);
         }
