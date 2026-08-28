@@ -1148,12 +1148,16 @@ static bool parse_static_scalar_constant_at(MinicParser *parser,
         MinicConstValue converted;
         MinicExpressionId expression_id;
         MinicStaticObjectRelocationTarget relocation_target;
+        MinicFunctionId relocation_function_id;
         uint64_t parsed_bits;
         bool has_symbolic_address;
+        bool symbolic_address_is_function;
 
         if (!minic_parser_parse_expression(parser, &expression_id, 0U)) {
             return false;
         }
+        relocation_function_id = MINIC_FUNCTION_INVALID;
+        symbolic_address_is_function = false;
         if (minic_const_eval_integer(
                 parser->program, parser->target_info, expression_id, &constant) &&
             minic_const_value_convert_integer(
@@ -1167,6 +1171,12 @@ static bool parse_static_scalar_constant_at(MinicParser *parser,
                                                          &converted)) {
             parsed_bits = converted.bits;
             has_symbolic_address = false;
+        } else if (static_integer_address_slot_supported(parser, type) &&
+                   static_function_address_relocation_target(
+                       parser->program, expression_id, &relocation_function_id)) {
+            parsed_bits = 0U;
+            has_symbolic_address = true;
+            symbolic_address_is_function = true;
         } else if (static_integer_address_slot_supported(parser, type) &&
                    static_integer_address_relocation_target(
                        parser, expression_id, &relocation_target)) {
@@ -1189,19 +1199,35 @@ static bool parse_static_scalar_constant_at(MinicParser *parser,
             minic_parser_error(parser, "cannot record static aggregate integer initializer");
             return false;
         }
-        if (has_symbolic_address &&
-            !minic_c0_global_object_add_integer_object_relocation_path_addend(
-                parser->program,
-                object_id,
-                MINIC_GLOBAL_RELOCATION_LOCATION_AGGREGATE_SCALAR,
+        if (has_symbolic_address) {
+            size_t relocation_slot;
+            bool recorded;
+
+            relocation_slot =
                 overwrite ? overwrite_slot
-                          : parser->program->global_objects[object_id].initializer_count - 1U,
-                relocation_target.object_id,
-                relocation_target.member_indices,
-                relocation_target.member_depth,
-                relocation_target.byte_addend)) {
-            minic_parser_error(parser, "cannot record static symbolic integer relocation");
-            return false;
+                          : parser->program->global_objects[object_id].initializer_count - 1U;
+            if (symbolic_address_is_function) {
+                recorded = minic_c0_global_object_add_function_relocation(
+                    parser->program,
+                    object_id,
+                    MINIC_GLOBAL_RELOCATION_LOCATION_AGGREGATE_SCALAR,
+                    relocation_slot,
+                    relocation_function_id);
+            } else {
+                recorded = minic_c0_global_object_add_integer_object_relocation_path_addend(
+                    parser->program,
+                    object_id,
+                    MINIC_GLOBAL_RELOCATION_LOCATION_AGGREGATE_SCALAR,
+                    relocation_slot,
+                    relocation_target.object_id,
+                    relocation_target.member_indices,
+                    relocation_target.member_depth,
+                    relocation_target.byte_addend);
+            }
+            if (!recorded) {
+                minic_parser_error(parser, "cannot record static symbolic integer relocation");
+                return false;
+            }
         }
     } else if (minic_type_is_pointer(type)) {
         MinicStaticPointerInitializer initializer;
