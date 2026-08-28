@@ -768,6 +768,29 @@ static bool core_integer_type_range_fits(const MinicC0Program *program,
     return !source_signed && result_signed && source_size < result_size;
 }
 
+static bool core_integer_overflow_xlen_scratch_exact(
+    const MinicC0Program *program,
+    MinicType left_type,
+    MinicType right_type,
+    size_t result_size) {
+    size_t left_alignment;
+    size_t left_size;
+    size_t right_alignment;
+    size_t right_size;
+
+    if (program == NULL || result_size == 0U || result_size >= 8U ||
+        !minic_data_layout_type(
+            minic_default_data_layout(), program, left_type, &left_size, &left_alignment) ||
+        !minic_data_layout_type(
+            minic_default_data_layout(), program, right_type, &right_size, &right_alignment)) {
+        return false;
+    }
+    (void)left_alignment;
+    (void)right_alignment;
+    return left_size != 0U && right_size != 0U &&
+           left_size <= result_size && right_size <= result_size;
+}
+
 static bool core_integer_overflow_supported(const MinicC0Program *program,
                                             const MinicCoreFunction *function,
                                             const MinicCoreInstruction *instruction,
@@ -828,7 +851,8 @@ static bool core_integer_overflow_supported(const MinicC0Program *program,
     if ((!minic_type_equal(left_type, pointee) || !minic_type_equal(right_type, pointee)) &&
         !(core_integer_type_range_fits(program, function, left_type, pointee) &&
           core_integer_type_range_fits(program, function, right_type, pointee)) &&
-        !(*result_size < 8U && left_size <= *result_size && right_size <= *result_size)) {
+        !core_integer_overflow_xlen_scratch_exact(
+            program, left_type, right_type, *result_size)) {
         bool left_is_result;
         bool right_is_result;
         const MinicType *other_effective_type;
@@ -3396,8 +3420,8 @@ static bool emit_instruction(FILE *file,
              !minic_type_equal(right_type, result_type)) &&
             !(core_integer_type_range_fits(program, function, left_type, result_type) &&
               core_integer_type_range_fits(program, function, right_type, result_type)) &&
-            !(result_size < 8U && left_type.kind != MINIC_TYPE_INVALID &&
-              right_type.kind != MINIC_TYPE_INVALID)) {
+            !core_integer_overflow_xlen_scratch_exact(
+                program, left_type, right_type, result_size)) {
             const char *signed_register;
             const char *unsigned_register;
             uint64_t maximum;
