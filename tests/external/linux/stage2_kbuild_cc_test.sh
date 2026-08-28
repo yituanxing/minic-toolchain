@@ -28,8 +28,11 @@ for ((i=1; i<=$#; ++i)); do
     -o)
       j=$((i+1))
       out=${!j}
+      ((++i))
       ;;
-    *.c|*.i|*.s|*.S) src=$arg ;;
+    *.c|*.i|*.s|*.S)
+      [[ -n "$src" ]] || src=$arg
+      ;;
   esac
 done
 
