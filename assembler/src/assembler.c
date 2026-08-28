@@ -859,6 +859,42 @@ static bool parse_symbol_minus_dot(const char *text, MiniAsSymbolExpr *expr) {
     return ok;
 }
 
+static bool parse_symbol_difference(const char *text,
+                                    MiniAsSymbolExpr *lhs_expr,
+                                    MiniAsSymbolExpr *rhs_expr) {
+    char *copy;
+    char *normalized;
+    char *minus;
+    char *lhs;
+    char *rhs;
+    bool ok;
+
+    if (text == NULL || lhs_expr == NULL || rhs_expr == NULL) {
+        return false;
+    }
+    copy = minias_strdup(text);
+    if (copy == NULL) {
+        return false;
+    }
+    normalized = strip_outer_parens(copy);
+    minus = strrchr(normalized, '-');
+    if (minus == NULL) {
+        free(copy);
+        return false;
+    }
+    *minus = '\0';
+    lhs = strip_outer_parens(minias_trim(normalized));
+    rhs = strip_outer_parens(minias_trim(minus + 1));
+    if (strcmp(rhs, ".") == 0) {
+        free(copy);
+        return false;
+    }
+    ok = minias_parse_symbol_addend(lhs, lhs_expr) &&
+         minias_parse_symbol_addend(rhs, rhs_expr);
+    free(copy);
+    return ok;
+}
+
 static bool add_data_stmt(MiniAs *as, const char *op, char *args, size_t line) {
     uint64_t count = 0U;
     uint64_t bytes;
@@ -901,10 +937,12 @@ static bool add_data_stmt(MiniAs *as, const char *op, char *args, size_t line) {
             if (!parse_i64_data(minias_trim(cursor), &value)) {
                 MiniAsSymbolExpr expr;
                 const char *trimmed = minias_trim(cursor);
+                MiniAsSymbolExpr rhs_expr;
                 bool supported =
                     (width == 8U && minias_parse_symbol_addend(trimmed, &expr)) ||
                     ((width == 2U || width == 4U || width == 8U) &&
-                     parse_symbol_minus_dot(trimmed, &expr));
+                     (parse_symbol_minus_dot(trimmed, &expr) ||
+                      parse_symbol_difference(trimmed, &expr, &rhs_expr)));
 
                 if (!supported) {
                     minias_set_error(as,
@@ -1016,6 +1054,56 @@ static bool emit_symbol_minus_dot(MiniAs *as,
     }
 }
 
+static bool emit_symbol_difference(MiniAs *as,
+                                   const MiniAsStmt *stmt,
+                                   unsigned int width,
+                                   uint64_t relocation_offset,
+                                   const MiniAsSymbolExpr *lhs_expr,
+                                   const MiniAsSymbolExpr *rhs_expr) {
+    MiniAsSymbol *lhs = minias_get_symbol(as, lhs_expr->name, false);
+    MiniAsSymbol *rhs = minias_get_symbol(as, rhs_expr->name, false);
+    uint32_t add_type = add_relocation_type_for_width(width);
+    uint32_t sub_type = sub_relocation_type_for_width(width);
+
+    if (lhs != NULL && rhs != NULL && lhs->defined && rhs->defined &&
+        lhs->section == rhs->section && lhs->section == stmt->section &&
+        lhs->bind == MINIAS_STB_LOCAL && rhs->bind == MINIAS_STB_LOCAL &&
+        strncmp(lhs->name, ".L", 2U) == 0 && strncmp(rhs->name, ".L", 2U) == 0) {
+        int64_t difference =
+            (int64_t)lhs->value + lhs_expr->addend -
+            ((int64_t)rhs->value + rhs_expr->addend);
+        uint64_t value = (uint64_t)difference;
+        unsigned char bytes[8];
+        unsigned int i;
+
+        for (i = 0U; i < width; ++i) {
+            bytes[i] = (unsigned char)((value >> (i * 8U)) & 0xffU);
+        }
+        return minias_section_append(as, stmt->section, bytes, width);
+    }
+
+    if (add_type == 0U || sub_type == 0U) {
+        minias_set_error(as,
+                         "unsupported-symbol-difference-width:%u:line=%zu",
+                         width,
+                         stmt->line);
+        return false;
+    }
+    return minias_section_append_zero(as, stmt->section, width) &&
+           minias_add_relocation(as,
+                                 stmt->section,
+                                 relocation_offset,
+                                 add_type,
+                                 lhs_expr->name,
+                                 lhs_expr->addend) &&
+           minias_add_relocation(as,
+                                 stmt->section,
+                                 relocation_offset,
+                                 sub_type,
+                                 rhs_expr->name,
+                                 rhs_expr->addend);
+}
+
 static bool emit_data_stmt(MiniAs *as, const MiniAsStmt *stmt) {
     unsigned int width = data_width(stmt->op);
     char *copy;
@@ -1062,35 +1150,59 @@ static bool emit_data_stmt(MiniAs *as, const MiniAsStmt *stmt) {
             uint64_t relocation_offset =
                 (uint64_t)as->sections[(size_t)stmt->section].size;
 
-            if ((width == 2U || width == 4U || width == 8U) &&
-                parse_symbol_minus_dot(trimmed, &expr)) {
-                if (!emit_symbol_minus_dot(as,
-                                           stmt,
-                                           width,
-                                           relocation_offset,
-                                           &expr)) {
-                    free(copy);
-                    return false;
+            {
+                MiniAsSymbolExpr rhs_expr;
+                if ((width == 2U || width == 4U || width == 8U) &&
+                    parse_symbol_minus_dot(trimmed, &expr)) {
+                    if (!emit_symbol_minus_dot(as,
+                                               stmt,
+                                               width,
+                                               relocation_offset,
+                                               &expr)) {
+                        free(copy);
+                        return false;
+                    }
+                } else if ((width == 2U || width == 4U || width == 8U) &&
+                           parse_symbol_difference(trimmed, &expr, &rhs_expr)) {
+                    if (!emit_symbol_difference(as,
+                                                stmt,
+                                                width,
+                                                relocation_offset,
+                                                &expr,
+                                                &rhs_expr)) {
+                        free(copy);
+                        return false;
+                    }
+                } else {
+                    if (width != 8U ||
+                        !minias_parse_symbol_addend(trimmed, &expr)) {
+                        minias_set_error(as,
+                                         "unsupported-expression:%s:%s:line=%zu",
+                                         stmt->op,
+                                         trimmed,
+                                         stmt->line);
+                        free(copy);
+                        return false;
+                    }
+                    if (!minias_section_append_zero(as, stmt->section, 8U) ||
+                        !minias_add_relocation(as,
+                                              stmt->section,
+                                              relocation_offset,
+                                              MINIAS_R_RISCV_64,
+                                              expr.name,
+                                              expr.addend)) {
+                        free(copy);
+                        return false;
+                    }
                 }
-            } else {
+            }
+            /*
+             * The symbolic branches above either emitted this item directly
+             * or failed.  Numeric literals are handled by the outer else.
+             */
+            if (false) {
                 if (width != 8U ||
                     !minias_parse_symbol_addend(trimmed, &expr)) {
-                    minias_set_error(as,
-                                     "unsupported-expression:%s:%s:line=%zu",
-                                     stmt->op,
-                                     trimmed,
-                                     stmt->line);
-                    free(copy);
-                    return false;
-                }
-                if (!minias_section_append_zero(as, stmt->section, 8U) ||
-                    !minias_add_relocation(as,
-                                          stmt->section,
-                                          relocation_offset,
-                                          MINIAS_R_RISCV_64,
-                                          expr.name,
-                                          expr.addend)) {
-                    free(copy);
                     return false;
                 }
             }
