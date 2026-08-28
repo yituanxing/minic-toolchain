@@ -228,8 +228,17 @@ bool minias_riscv_measure(const char *op,
         *size = value >= -2048 && value <= 2047 ? 4U : 8U;
         return true;
     }
-    if (strcmp(op, "lla") == 0 || strcmp(op, "la") == 0 ||
-        strcmp(op, "call") == 0 || strcmp(op, "tail") == 0) {
+    if (strcmp(op, "lla") == 0 || strcmp(op, "la") == 0) {
+        MiniAsSymbolExpr expr;
+        if (count != 2U || reg_number(operands[0]) < 0 ||
+            !minias_parse_symbol_addend(operands[1], &expr)) {
+            (void)snprintf(reason, reason_size, "unsupported-expression:%s", args);
+            return false;
+        }
+        *size = 8U;
+        return true;
+    }
+    if (strcmp(op, "call") == 0 || strcmp(op, "tail") == 0) {
         (void)snprintf(reason, reason_size, "unsupported-reloc-instruction:%s", op);
         return false;
     }
@@ -308,6 +317,47 @@ bool minias_riscv_encode(MiniAs *as, const MiniAsStmt *stmt) {
         }
         return append_u32(as, stmt->section, enc_i(0x1bU, rd, 0U, rd, lo));
     }
+    if (strcmp(stmt->op, "lla") == 0 || strcmp(stmt->op, "la") == 0) {
+        MiniAsSymbolExpr expr;
+        MiniAsSymbol *anchor;
+        char anchor_name[96];
+
+        if (count != 2U || !require_reg(as, stmt, operands[0], &rd) ||
+            !minias_parse_symbol_addend(operands[1], &expr)) {
+            minias_set_error(as, "unsupported-expression:%s:line=%zu", stmt->args, stmt->line);
+            return false;
+        }
+        (void)snprintf(anchor_name,
+                       sizeof(anchor_name),
+                       ".Lminias_pcrel_%zu",
+                       ++as->pcrel_anchor_counter);
+        anchor = minias_get_symbol(as, anchor_name, true);
+        if (anchor == NULL) {
+            return false;
+        }
+        anchor->defined = true;
+        anchor->section = stmt->section;
+        anchor->value = stmt->offset;
+        anchor->bind = MINIAS_STB_LOCAL;
+
+        if (!append_u32(as, stmt->section, 0x17U | ((uint32_t)rd << 7U)) ||
+            !append_u32(as, stmt->section, enc_i(0x13U, rd, 0U, rd, 0))) {
+            return false;
+        }
+        return minias_add_relocation(as,
+                                     stmt->section,
+                                     stmt->offset,
+                                     MINIAS_R_RISCV_PCREL_HI20,
+                                     expr.name,
+                                     expr.addend) &&
+               minias_add_relocation(as,
+                                     stmt->section,
+                                     stmt->offset + 4U,
+                                     MINIAS_R_RISCV_PCREL_LO12_I,
+                                     anchor_name,
+                                     0);
+    }
+
     if (strcmp(stmt->op, "lui") == 0 || strcmp(stmt->op, "auipc") == 0) {
         if (count != 2U || !require_reg(as, stmt, operands[0], &rd) ||
             !require_imm(as, stmt, operands[1], &immediate)) {
