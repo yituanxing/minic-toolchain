@@ -1030,7 +1030,7 @@ static bool global_relocation_object_target_type_compatible(const MinicC0Program
         array_type = minic_c0_program_array_type(program, target_type.array_type_id);
         if (array_type != NULL &&
             minic_type_pointer_to(array_type->element_type, &source_pointer_type) &&
-            global_relocation_pointer_target_type_compatible(slot_type, source_pointer_type)) {
+            global_relocation_pointer_target_type_compatible(program, slot_type, source_pointer_type)) {
             return true;
         }
     }
