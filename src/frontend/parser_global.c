@@ -3189,41 +3189,67 @@ static bool overwrite_static_zero_record_constant(MinicParser *parser,
 
             (void)memset(&designator, 0, sizeof(designator));
             if (!parse_static_record_designator_path(parser, record, &designator) ||
-                designator.depth != 1U || designator.has_array_index) {
+                designator.depth == 0U || designator.has_array_index) {
                 if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
                     minic_parser_error(
                         parser,
-                        "backward aggregate initializer requires a direct unambiguous member");
+                        "backward aggregate initializer requires an unambiguous member path");
                 }
                 return false;
             }
-            field_index = designator.field_indices[0];
-            if (record->is_union && field_index != 0U) {
-                handled_union_zero = false;
-                if (!try_overwrite_static_zero_noncanonical_union_designator(parser,
-                                                                             object_id,
-                                                                             record,
-                                                                             &designator,
-                                                                             record_base_slot,
-                                                                             &handled_union_zero) ||
-                    !handled_union_zero) {
+
+            handled_union_zero = false;
+            if (!try_overwrite_static_zero_noncanonical_union_designator(parser,
+                                                                         object_id,
+                                                                         record,
+                                                                         &designator,
+                                                                         record_base_slot,
+                                                                         &handled_union_zero)) {
+                return false;
+            }
+            if (handled_union_zero) {
+                field_index = designator.field_indices[0] + 1U;
+                if (record->is_union) {
+                    if (parser->current.kind == MINIC_TOKEN_COMMA &&
+                        !minic_parser_advance(parser)) {
+                        return false;
+                    }
+                    if (parser->current.kind != MINIC_TOKEN_RBRACE) {
+                        minic_parser_error(
+                            parser,
+                            "backward union initializer may initialize only one active member");
+                        return false;
+                    }
+                    return minic_parser_advance(parser);
+                }
+                goto backward_record_value_done;
+            }
+
+            if (designator.depth > 1U) {
+                const MinicRecordField *leaf_field;
+                size_t leaf_relative_slot;
+
+                if (!static_record_designator_leaf_slot(parser->program,
+                                                        record,
+                                                        &designator,
+                                                        &leaf_relative_slot,
+                                                        &leaf_field) ||
+                    record_base_slot > SIZE_MAX - leaf_relative_slot ||
+                    !overwrite_static_zero_field_value(parser,
+                                                       object_id,
+                                                       leaf_field,
+                                                       record_base_slot + leaf_relative_slot)) {
                     if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
                         minic_parser_error(
-                            parser, "cannot replace backward static union active member");
+                            parser, "cannot overwrite promoted backward record designator");
                     }
                     return false;
                 }
-                if (parser->current.kind == MINIC_TOKEN_COMMA &&
-                    !minic_parser_advance(parser)) {
-                    return false;
-                }
-                if (parser->current.kind != MINIC_TOKEN_RBRACE) {
-                    minic_parser_error(
-                        parser, "backward union initializer may initialize only one active member");
-                    return false;
-                }
-                return minic_parser_advance(parser);
+                field_index = designator.field_indices[0] + 1U;
+                goto backward_record_value_done;
             }
+
+            field_index = designator.field_indices[0];
         }
         if (field_index >= field_limit) {
             minic_parser_error(parser, "too many backward aggregate initializer fields");
@@ -3241,6 +3267,8 @@ static bool overwrite_static_zero_record_constant(MinicParser *parser,
             return false;
         }
         field_index += 1U;
+
+backward_record_value_done:
         if (parser->current.kind == MINIC_TOKEN_COMMA) {
             if (!minic_parser_advance(parser)) {
                 return false;
