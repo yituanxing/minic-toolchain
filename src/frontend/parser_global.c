@@ -1444,6 +1444,47 @@ static bool parse_static_scalar_constant_at(MinicParser *parser,
                                      initializer.relocation_target.byte_addend);
             }
             if (!recorded) {
+                const char *trace = getenv("CORE_FAST_TRACE");
+                if (trace != NULL && trace[0] != '\0' && strcmp(trace, "0") != 0) {
+                    const MinicGlobalObject *owner =
+                        minic_c0_program_global_object(parser->program, object_id);
+                    const MinicGlobalObject *target_object =
+                        !initializer.relocation_is_label && !initializer.relocation_is_function
+                            ? minic_c0_program_global_object(
+                                  parser->program, initializer.relocation_target.object_id)
+                            : NULL;
+                    MinicType slot_type;
+                    bool has_slot_type =
+                        owner != NULL &&
+                        minic_c0_global_relocation_slot_type(
+                            parser->program,
+                            owner,
+                            MINIC_GLOBAL_RELOCATION_LOCATION_AGGREGATE_SCALAR,
+                            slot_index,
+                            &slot_type);
+                    (void)fprintf(stderr,
+                                  "STATIC_RELOC_DETAIL owner=%.*s slot=%zu owner_init=%zu "
+                                  "owner_reloc=%zu slot_type_ok=%d slot_base=%d slot_ptr=%u "
+                                  "target=%.*s target_base=%d target_ptr=%u target_depth=%zu "
+                                  "addend=%" PRId64 " cast=%d function=%d label=%d\n",
+                                  owner != NULL ? (int)owner->name_length : 0,
+                                  owner != NULL ? owner->name : "",
+                                  slot_index,
+                                  owner != NULL ? owner->initializer_count : 0U,
+                                  owner != NULL ? owner->relocation_count : 0U,
+                                  has_slot_type ? 1 : 0,
+                                  has_slot_type ? (int)slot_type.base_kind : -1,
+                                  has_slot_type ? slot_type.pointer_depth : 0U,
+                                  target_object != NULL ? (int)target_object->name_length : 0,
+                                  target_object != NULL ? target_object->name : "",
+                                  target_object != NULL ? (int)target_object->type.base_kind : -1,
+                                  target_object != NULL ? target_object->type.pointer_depth : 0U,
+                                  initializer.relocation_target.member_depth,
+                                  initializer.relocation_target.byte_addend,
+                                  initializer.has_explicit_pointer_cast ? 1 : 0,
+                                  initializer.relocation_is_function ? 1 : 0,
+                                  initializer.relocation_is_label ? 1 : 0);
+                }
                 minic_parser_error(parser, "cannot record nested static symbolic relocation");
                 return false;
             }
