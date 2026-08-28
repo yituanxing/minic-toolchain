@@ -9178,6 +9178,7 @@ lower_block(MinicCoreLowerContext *context, const MinicBlock *source_block, bool
         if (statement->cleanup_context != statement->cleanup_stop_context &&
             statement->kind != MINIC_STATEMENT_RETURN &&
             statement->kind != MINIC_STATEMENT_ASSIGN &&
+            statement->kind != MINIC_STATEMENT_BREAK &&
             !(statement->kind == MINIC_STATEMENT_GOTO &&
               statement->expression == MINIC_EXPRESSION_INVALID &&
               statement->target_statement != MINIC_STATEMENT_INVALID) &&
@@ -9255,6 +9256,13 @@ lower_block(MinicCoreLowerContext *context, const MinicBlock *source_block, bool
                 if (context->break_target == MINIC_CORE_BLOCK_INVALID) {
                     status = MINIC_CORE_LOWER_UNSUPPORTED;
                     break;
+                }
+                if (statement->cleanup_context != statement->cleanup_stop_context) {
+                    status = lower_cleanup_contexts(
+                        context, statement->cleanup_context, statement->cleanup_stop_context);
+                    if (status != MINIC_CORE_LOWER_OK) {
+                        break;
+                    }
                 }
                 status = set_branch(
                     context, context->block_id, statement->span, context->break_target);
