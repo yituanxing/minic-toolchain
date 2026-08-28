@@ -1727,15 +1727,43 @@ static bool parse_inferred_external_record_array_definition(MinicParser *parser,
         minic_parser_error(parser, "incomplete external tentative array is not implemented yet");
         return false;
     }
-    initializer_probe = *parser;
-    if (!minic_parser_advance(&initializer_probe) ||
-        !minic_parser_inspect_array_initializer_extent(&initializer_probe, &element_count) ||
-        !minic_c0_program_add_array_type(
-            parser->program, element_type, element_count, &array_type)) {
-        if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
-            minic_parser_error(parser, "cannot complete inferred external record array type");
+    {
+        MinicGlobalObjectId existing_id;
+        const MinicGlobalObject *existing;
+        const MinicArrayType *existing_array;
+
+        existing_id = minic_parser_find_global_object_entity(parser, name_span);
+        existing = existing_id == MINIC_GLOBAL_OBJECT_INVALID
+                       ? NULL
+                       : minic_c0_program_global_object(parser->program, existing_id);
+        existing_array =
+            existing != NULL && minic_type_is_array(existing->type)
+                ? minic_c0_program_array_type(parser->program, existing->type.array_type_id)
+                : NULL;
+
+        /* A definition with an omitted bound composes with an earlier visible
+           complete array declaration.  Preserve the established bound and use
+           the initializer only to populate it; infer a new bound only when no
+           complete composite type exists yet. */
+        if (existing_array != NULL && !existing_array->is_zero_length &&
+            existing_array->element_count != 0U &&
+            minic_declaration_external_object_types_compatible(
+                parser->program, existing_array->element_type, element_type)) {
+            array_type = existing->type;
+        } else {
+            initializer_probe = *parser;
+            if (!minic_parser_advance(&initializer_probe) ||
+                !minic_parser_inspect_array_initializer_extent(
+                    &initializer_probe, &element_count) ||
+                !minic_c0_program_add_array_type(
+                    parser->program, element_type, element_count, &array_type)) {
+                if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
+                    minic_parser_error(
+                        parser, "cannot complete inferred external record array type");
+                }
+                return false;
+            }
         }
-        return false;
     }
     return parse_external_object_definition(parser,
                                             array_type,
