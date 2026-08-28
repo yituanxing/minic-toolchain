@@ -49,18 +49,18 @@ jobs:
             "$archive" | sha256sum -c -
           tar -xJf "$archive" -C "$work"
 
-          make -C "$src" O="$out" ARCH=risc CROSS_COMPILE=riscv64-linux-gnu- defconfig
+          make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- defconfig
           "$src/scripts/config" --file "$out/.config" \
             -e BLK_DEV_INITRD -e DEVTMPFS -e DEVTMPFS_MOUNT \
             -e SERIAL_8250 -e SERIAL_8250_CONSOLE
-          make -C "$src" O="$out" ARCH=risc CROSS_COMPILE=riscv64-linux-gnu- olddefconfig
+          make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- olddefconfig
 
           export MINIC="$GITHUB_WORKSPACE/build/linux-runtime-v2-fast-compiler/bin/minic"
           export REAL_CC=riscv64-linux-gnu-gcc
           export MINIC_KBUILD_TRACE="$work/minic-kbuild.trace"
 
           started=$(date +%s)
-          make -C "$src" O="$out" ARCH=risc CROSS_COMPILE=riscv64-linux-gnu- \
+          make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
             CC="$GITHUB_WORKSPACE/tests/external/linux/stage2_kbuild_cc.sh" \
             -j4 Image >"$work/kbuild.log" 2>&1
           elapsed=$(( $(date +%s) - started ))
