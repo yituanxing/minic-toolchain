@@ -53,6 +53,19 @@ typedef enum MiniAsStmtKind {
     MINIAS_STMT_DATA
 } MiniAsStmtKind;
 
+typedef struct MiniAsReloc {
+    int section;
+    uint64_t offset;
+    uint32_t type;
+    size_t symbol_index;
+    int64_t addend;
+} MiniAsReloc;
+
+typedef struct MiniAsSymbolExpr {
+    char name[256];
+    int64_t addend;
+} MiniAsSymbolExpr;
+
 typedef struct MiniAsStmt {
     MiniAsStmtKind kind;
     char *op;
@@ -74,6 +87,10 @@ typedef struct MiniAs {
     MiniAsStmt *stmts;
     size_t stmt_count;
     size_t stmt_capacity;
+    MiniAsReloc *relocs;
+    size_t reloc_count;
+    size_t reloc_capacity;
+    size_t pcrel_anchor_counter;
     int current_section;
     char error[MINIAS_MAX_ERROR];
 } MiniAs;
@@ -87,6 +104,13 @@ bool minias_write_elf64(MiniAs *as, const char *path);
 int minias_find_section(const MiniAs *as, const char *name);
 int minias_ensure_section(MiniAs *as, const char *name, uint32_t type, uint64_t flags, uint64_t align);
 MiniAsSymbol *minias_get_symbol(MiniAs *as, const char *name, bool create);
+bool minias_add_relocation(MiniAs *as,
+                           int section,
+                           uint64_t offset,
+                           uint32_t type,
+                           const char *symbol_name,
+                           int64_t addend);
+bool minias_parse_symbol_addend(const char *text, MiniAsSymbolExpr *expr);
 bool minias_section_append(MiniAs *as, int section_index, const void *data, size_t size);
 bool minias_section_append_zero(MiniAs *as, int section_index, size_t size);
 void minias_set_error(MiniAs *as, const char *format, ...);
