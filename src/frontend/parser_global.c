@@ -3523,10 +3523,13 @@ static bool parse_static_record_array(MinicParser *parser,
         return false;
     }
     record = minic_c0_program_record(parser->program, element_type.record_id);
-    if (record == NULL || !record->is_complete || record->is_union || record->field_count == 0U) {
-        minic_parser_error(parser, "static record array requires a complete non-empty struct type");
+    if (record == NULL || !record->is_complete || record->is_union) {
+        minic_parser_error(parser, "static record array requires a complete struct type");
         return false;
     }
+    /* GNU empty structs are complete zero-size object types. Arrays of them
+       likewise occupy zero bytes but remain valid semantic objects; the target
+       DataLayout already carries zero-size record behavior. */
 
     declared_count = 0U;
     inferred_bound = false;
