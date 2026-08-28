@@ -1967,11 +1967,17 @@ parse_local_declarator(MinicParser *parser, MinicType base_type, bool is_registe
     char fixed_register_name[32];
     size_t fixed_register_name_length;
     bool has_fixed_register_binding;
+    bool parenthesized_name_is_array;
+    bool parenthesized_name_array_inferred;
+    size_t parenthesized_name_array_count;
 
     (void)memset(&attributes, 0, sizeof(attributes));
     (void)memset(fixed_register_name, 0, sizeof(fixed_register_name));
     fixed_register_name_length = 0U;
     has_fixed_register_binding = false;
+    parenthesized_name_is_array = false;
+    parenthesized_name_array_inferred = false;
+    parenthesized_name_array_count = 0U;
     attributes.cleanup_function = MINIC_FUNCTION_INVALID;
     if (!minic_parser_parse_pointer_declarator(parser, base_type, &declared_type) ||
         !parse_local_object_attributes(parser, &attributes)) {
@@ -1979,7 +1985,13 @@ parse_local_declarator(MinicParser *parser, MinicType base_type, bool is_registe
     }
     if (local_declarator_starts_pointer_to_array(parser)) {
         if (!minic_parser_parse_parenthesized_pointer_to_array_declarator(
-                parser, declared_type, &local.name_span, &declared_type)) {
+                parser,
+                declared_type,
+                &local.name_span,
+                &declared_type,
+                &parenthesized_name_is_array,
+                &parenthesized_name_array_inferred,
+                &parenthesized_name_array_count)) {
             return false;
         }
     } else if (local_declarator_starts_function_pointer(parser)) {
@@ -2040,37 +2052,41 @@ parse_local_declarator(MinicParser *parser, MinicType base_type, bool is_registe
         minic_parser_error(parser, "local fixed register binding is not supported by this target");
         return false;
     }
-    if (has_fixed_register_binding && parser->current.kind == MINIC_TOKEN_LBRACKET) {
+    if (has_fixed_register_binding &&
+        (parenthesized_name_is_array || parser->current.kind == MINIC_TOKEN_LBRACKET)) {
         minic_parser_error(parser, "local fixed register arrays are not supported");
         return false;
     }
 
     local.type = declared_type;
-    local.element_count = 1U;
+    local.element_count =
+        parenthesized_name_is_array ? parenthesized_name_array_count : 1U;
     local.explicit_alignment = attributes.explicit_alignment;
-    local.is_array = false;
+    local.is_array = parenthesized_name_is_array;
     local.is_register_storage = is_register_storage;
     if (minic_parser_name_bound_in_current_scope(parser, local.name_span)) {
         minic_parser_error(parser, "duplicate local declaration");
         return false;
     }
-    if (parser->current.kind == MINIC_TOKEN_LBRACKET) {
+    if (parenthesized_name_is_array || parser->current.kind == MINIC_TOKEN_LBRACKET) {
         bool inferred_array;
 
-        inferred_array = false;
-        if (!minic_parser_advance(parser)) {
-            return false;
-        }
-        if (parser->current.kind == MINIC_TOKEN_RBRACKET) {
-            inferred_array = true;
-            local.element_count = 0U;
+        inferred_array = parenthesized_name_is_array && parenthesized_name_array_inferred;
+        if (!parenthesized_name_is_array) {
             if (!minic_parser_advance(parser)) {
                 return false;
             }
-        } else if (!minic_parser_parse_fixed_array_bound(parser, &local.element_count)) {
-            return false;
+            if (parser->current.kind == MINIC_TOKEN_RBRACKET) {
+                inferred_array = true;
+                local.element_count = 0U;
+                if (!minic_parser_advance(parser)) {
+                    return false;
+                }
+            } else if (!minic_parser_parse_fixed_array_bound(parser, &local.element_count)) {
+                return false;
+            }
         }
-        if (parser->current.kind == MINIC_TOKEN_LBRACKET) {
+        if (!parenthesized_name_is_array && parser->current.kind == MINIC_TOKEN_LBRACKET) {
             MinicType nested_element_type;
             bool has_nested_array;
 
