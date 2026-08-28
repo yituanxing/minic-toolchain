@@ -137,4 +137,24 @@ readelf -s "$work/numeric-labels.o" >"$work/numeric-labels.txt"
 grep -q '.Lminias_num_1_1' "$work/numeric-labels.txt"
 grep -q '.Lminias_num_1_2' "$work/numeric-labels.txt"
 
-echo "MINIAS_A0=PASS objects=6 format=ELF64-RISCV-ET_REL relocations=4 strings=2 pseudos=5 previous=1 numeric_labels=2"
+cat >"$work/isa-next.s" <<'EOF'
+.text
+.globl isa_next
+.type isa_next, @function
+isa_next:
+  li a0, 0x123456789abcdef0
+  sra a0, a1, a2
+  fence rw, rw
+  csrr a1, sstatus
+  ebreak
+  ret
+.size isa_next, .-isa_next
+EOF
+"$MINIAS" -o "$work/isa-next.o" "$work/isa-next.s"
+isa_hex="$(
+    readelf -x .text "$work/isa-next.o" |
+    awk '/0x[0-9a-f]+/ {for (i=2; i<=NF; ++i) if ($i ~ /^[0-9a-f]+$/ && length($i) <= 8 && length($i) % 2 == 0) printf "%s", $i}'
+)"
+test "$isa_hex" = "13052001131585001305450313158500130565051315850013058507131585001305a509131585001305c50b131585001305e50d131585001305050f33d5c5400f003003f32500107300100067800000"
+
+echo "MINIAS_A0=PASS objects=7 format=ELF64-RISCV-ET_REL relocations=4 strings=2 pseudos=5 previous=1 numeric_labels=2 isa_next=5"
