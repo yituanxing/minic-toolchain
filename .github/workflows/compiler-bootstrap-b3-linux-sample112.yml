@@ -10,6 +10,8 @@ permissions:
   contents: read
   actions: read
 
+# B3 validates self-hosted Stage2 against spread Linux translation units.
+
 jobs:
   resolve-stage2:
     if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[bootstrap-b3-linux-sample]')
