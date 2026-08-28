@@ -235,6 +235,9 @@ jobs:
           echo "===== FINAL352 FAILURE CONTEXTS ====="
           cat "$work/failure-contexts.txt" || true
           echo "===== END FINAL352 FAILURE CONTEXTS ====="
+          echo "===== FINAL352 INTERNAL TRACE ====="
+          grep -R -h -E 'CORE_|AST_|set_tcp_state|ip_vs_est_calc_phase' "$work/minic-stderr" || true
+          echo "===== END FINAL352 INTERNAL TRACE ====="
 
           python3 - <<'PY'
           import json
