@@ -404,8 +404,8 @@ bool minias_riscv_measure(const char *op,
         SIMPLE("andi") || SIMPLE("ori") || SIMPLE("xori") || SIMPLE("slti") ||
         SIMPLE("sltiu") || SIMPLE("slli") || SIMPLE("srli") || SIMPLE("srai") ||
         SIMPLE("sra") || SIMPLE("fence") || SIMPLE("csrr") || SIMPLE("ebreak") ||
-        SIMPLE("pause") || SIMPLE("amoadd.w") ||
-        SIMPLE("add") || SIMPLE("sub") || SIMPLE("sll") || SIMPLE("srl") || SIMPLE("and") || SIMPLE("or") ||
+        SIMPLE("pause") || SIMPLE("wfi") || SIMPLE("amoadd.w") ||
+        SIMPLE("amoadd.d") || SIMPLE("add") || SIMPLE("sub") || SIMPLE("sll") || SIMPLE("srl") || SIMPLE("and") || SIMPLE("or") ||
         SIMPLE("xor") || SIMPLE("slt") || SIMPLE("sltu") || SIMPLE("mul") ||
         SIMPLE("mulh") || SIMPLE("mulhu") || SIMPLE("div") || SIMPLE("divu") ||
         SIMPLE("rem") || SIMPLE("remu") || SIMPLE("lb") || SIMPLE("lbu") ||
@@ -644,20 +644,31 @@ bool minias_riscv_encode(MiniAs *as, const MiniAsStmt *stmt) {
         }
         return append_u32(as, stmt->section, 0x0100000fU);
     }
-    if (strcmp(stmt->op, "amoadd.w") == 0) {
+    if (strcmp(stmt->op, "wfi") == 0) {
+        if (count != 0U) {
+            minias_set_error(as, "operand-count:wfi:line=%zu", stmt->line);
+            return false;
+        }
+        return append_u32(as, stmt->section, 0x10500073U);
+    }
+    if (strcmp(stmt->op, "amoadd.w") == 0 ||
+        strcmp(stmt->op, "amoadd.d") == 0) {
         char base[128];
         int64_t offset;
+        uint32_t width_funct3 =
+            strcmp(stmt->op, "amoadd.d") == 0 ? 3U : 2U;
 
         if (count != 3U || !require_reg(as, stmt, operands[0], &rd) ||
             !require_reg(as, stmt, operands[1], &rs2) ||
             !parse_mem(operands[2], &offset, base) || offset != 0 ||
             !require_reg(as, stmt, base, &rs1)) {
-            minias_set_error(as, "bad-amoadd.w:line=%zu", stmt->line);
+            minias_set_error(as, "bad-%s:line=%zu", stmt->op, stmt->line);
             return false;
         }
         return append_u32(as,
                           stmt->section,
-                          0x2fU | ((uint32_t)rd << 7U) | (2U << 12U) |
+                          0x2fU | ((uint32_t)rd << 7U) |
+                              (width_funct3 << 12U) |
                               ((uint32_t)rs1 << 15U) |
                               ((uint32_t)rs2 << 20U));
     }
