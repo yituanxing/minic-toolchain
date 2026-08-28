@@ -224,4 +224,27 @@ difference_hex="$(
 )"
 test "$difference_hex" = "00ffffffff"
 
-echo "MINIAS_A0=PASS objects=10 format=ELF64-RISCV-ET_REL relocations=4 strings=2 pseudos=6 previous=1 numeric_labels=4 isa_next=13 csr_amo=4 section_stack=1 org=1 local_difference=1"
+cat >"$work/inline-atomic-loop.s" <<'EOF'
+.text
+.globl inline_atomic_loop
+.type inline_atomic_loop, @function
+inline_atomic_loop:
+  0: lr.w t0, (t2)
+  beq t0, t4, 1f
+  add t1, t0, t3
+  sc.w.rl t1, t1, (t2)
+  bnez t1, 0b
+  1: ret
+.size inline_atomic_loop, .-inline_atomic_loop
+EOF
+"$MINIAS" -o "$work/inline-atomic-loop.o" "$work/inline-atomic-loop.s"
+inline_atomic_hex="$(
+    readelf -x .text "$work/inline-atomic-loop.o" |
+    awk '/0x[0-9a-f]+/ {for (i=2; i<=NF; ++i) if ($i ~ /^[0-9a-f]+$/ && length($i) <= 8 && length($i) % 2 == 0) printf "%s", $i}'
+)"
+test "$inline_atomic_hex" = "afa203106388d2013383c2012fa3631ae31803fe67800000"
+readelf -s "$work/inline-atomic-loop.o" >"$work/inline-atomic-loop.txt"
+grep -q '.Lminias_num_0_1' "$work/inline-atomic-loop.txt"
+grep -q '.Lminias_num_1_1' "$work/inline-atomic-loop.txt"
+
+echo "MINIAS_A0=PASS objects=11 format=ELF64-RISCV-ET_REL relocations=4 strings=2 pseudos=6 previous=1 numeric_labels=6 isa_next=13 csr_amo=4 section_stack=1 org=1 local_difference=1 lr_sc=2 inline_labels=2"
