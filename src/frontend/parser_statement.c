@@ -2474,6 +2474,7 @@ static bool parse_block_scope_extern_declaration(MinicParser *parser) {
 typedef struct MinicStaticLocalAttributeContext {
     char section_name[256];
     size_t section_name_length;
+    size_t explicit_alignment;
     bool has_section;
 } MinicStaticLocalAttributeContext;
 
@@ -2895,9 +2896,14 @@ static bool consume_static_local_interleaved_attribute(MinicParser *parser,
         minic_parser_error(parser, "GNU attribute is not valid on a static local object");
         return false;
     }
-    if (descriptor->kind == MINIC_ATTRIBUTE_UNUSED &&
+    if ((descriptor->kind == MINIC_ATTRIBUTE_UNUSED ||
+         descriptor->kind == MINIC_ATTRIBUTE_USED) &&
         descriptor->semantic_class == MINIC_ATTRIBUTE_CLASS_INFORMATIONAL) {
         return true;
+    }
+    if (descriptor->kind == MINIC_ATTRIBUTE_ALIGNED) {
+        return minic_parser_apply_alignment_attribute(
+            parser, attribute, "static local object", &context->explicit_alignment);
     }
     if (descriptor->kind == MINIC_ATTRIBUTE_SECTION) {
         return minic_parser_apply_section_attribute(parser,
@@ -2935,16 +2941,18 @@ static bool parse_static_local_declaration(MinicParser *parser) {
         if (!parse_static_local_array_declarator(parser, base_type, &attributes, &object_id)) {
             return false;
         }
-        if (attributes.has_section) {
+        if (attributes.has_section || attributes.explicit_alignment != 0U) {
             MinicDeclarationExternalObjectAttributes semantic_attributes;
 
             (void)memset(&semantic_attributes, 0, sizeof(semantic_attributes));
             semantic_attributes.section_name = attributes.section_name;
             semantic_attributes.section_name_length = attributes.section_name_length;
-            semantic_attributes.has_section = true;
+            semantic_attributes.explicit_alignment = attributes.explicit_alignment;
+            semantic_attributes.has_section = attributes.has_section;
             if (!minic_declaration_apply_object_attributes(
                     parser->program, object_id, &semantic_attributes)) {
-                minic_parser_error(parser, "cannot apply GNU section to static local object");
+                minic_parser_error(parser,
+                                   "cannot apply GNU attributes to static local object");
                 return false;
             }
         }
