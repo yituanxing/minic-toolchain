@@ -1,0 +1,142 @@
+name: Core M42 Pointer Return Conversion
+
+on:
+  pull_request:
+
+jobs:
+  qualify:
+    if: github.head_ref == 'refactor/declaration-sema-v1'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refactor/declaration-sema-v1
+      - name: Install validation tools
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mapfile -t packages < <(grep -Ev '^[[:space:]]*(#|$)' tools/ci/ubuntu-24.04-packages.txt)
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends "${packages[@]}"
+      - name: Restore frozen Linux corpus
+        id: corpus
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-focus-corpus
+          key: linux-focus-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-${{ hashFiles('tests/external/linux/replay-indices.txt') }}
+      - name: Apply M31b through M42 and build
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "${{ steps.corpus.outputs.cache-hit }}" = true
+          python3 tools/dev/run-core-frontier-batch-m31b.py
+          python3 tools/dev/patch-core-frontier-batch-m32.py
+          python3 tools/dev/patch-core-frontier-batch-m33.py
+          python3 tools/dev/patch-core-frontier-batch-m34.py
+          python3 tools/dev/patch-core-frontier-batch-m35.py
+          python3 tools/dev/patch-core-frontier-batch-m36.py
+          python3 tools/dev/patch-core-frontier-batch-m38.py
+          python3 tools/dev/patch-core-frontier-batch-m41.py
+          python3 tools/dev/patch-core-frontier-batch-m42.py
+          clang-format-18 -i src/core/core_ir.c src/core/core_lower.c
+          git diff --check
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/m42
+      - name: Exact preempt pointer-return shapes
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          c="$GITHUB_WORKSPACE/build/m42/bin/minic"; w=build/m42-shapes; mkdir -p "$w"
+          cat > "$w/qualify.c" <<'EOF'
+          struct T { unsigned long flags; int preempt_count; };
+          volatile int *f(struct T *p) { return &p->preempt_count; }
+          EOF
+          cat > "$w/current_like.c" <<'EOF'
+          struct task_struct;
+          struct thread_info { unsigned long flags; int preempt_count; };
+          register struct task_struct *riscv_current_is_tp __asm__("tp");
+          static struct task_struct *get_current(void) { return riscv_current_is_tp; }
+          static volatile int *preempt_count_ptr(void) { return &((struct thread_info *)get_current())->preempt_count; }
+          volatile int *f(void) { return preempt_count_ptr(); }
+          EOF
+          for src in "$w"/*.c; do
+            n=$(basename "$src" .c)
+            MINIC_CORE_IR=strict "$c" -S "$src" -o "$w/$n.s"
+            printf 'M42_SHAPE_PASS name=%s\n' "$n"
+          done
+      - name: RISC-V pointer conversion differential
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          c="$GITHUB_WORKSPACE/build/m42/bin/minic"; w=build/m42-qemu; mkdir -p "$w"
+          cat > "$w/f.c" <<'EOF'
+          volatile int *f(int *p) { return p; }
+          EOF
+          cat > "$w/main.c" <<'EOF'
+          #include <stdio.h>
+          volatile int *f(int *);
+          int main(void) { int x=37; volatile int *p=f(&x); *p += 5; printf("%d\n", x); return 0; }
+          EOF
+          MINIC_CORE_IR=strict "$c" -S "$w/f.c" -o "$w/minic.s"
+          riscv64-linux-gnu-gcc -O0 -static "$w/main.c" "$w/minic.s" -o "$w/minic.elf"
+          qemu-riscv64 "$w/minic.elf" > "$w/minic.out"
+          riscv64-linux-gnu-gcc -O0 -static "$w/main.c" "$w/f.c" -o "$w/gcc.elf"
+          qemu-riscv64 "$w/gcc.elf" > "$w/gcc.out"
+          diff -u "$w/gcc.out" "$w/minic.out"
+          grep -Fx '42' "$w/minic.out"
+          echo M42_QEMU_DIFF_PASS
+      - name: Frozen preempt representative moves
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          c="$GITHUB_WORKSPACE/build/m42/bin/minic"; w=build/m42-rep; mkdir -p "$w"
+          set +e
+          MINIC_CORE_IR=strict "$c" -S build/linux-focus-corpus/kbuild/init/version.i -o "$w/version.s" 2>"$w/version.err"
+          rc=$?
+          set -e
+          head -5 "$w/version.err" || true
+          ! grep -Fq "Core IR shadow does not yet support function 'preempt_count_ptr'" "$w/version.err"
+          ! grep -Fq "Core IR shadow lowering failed for function 'preempt_count_ptr'" "$w/version.err"
+          printf 'M42_PREEMPT_MOVED rc=%d\n' "$rc"
+      - name: Cpumask shape matrix
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          c="$GITHUB_WORKSPACE/build/m42/bin/minic"; w=build/m42-cpumask; mkdir -p "$w"
+          cat > "$w/plain_for_break.c" <<'EOF'
+          unsigned int f(unsigned int cpu, unsigned int n) { unsigned int i; for (i=0; i<n; ++i) if (i != cpu) break; return i; }
+          EOF
+          cat > "$w/call_for_break.c" <<'EOF'
+          unsigned int first(const unsigned long*, unsigned int); unsigned int next(unsigned int,const unsigned long*,unsigned int); unsigned int f(const unsigned long *m,unsigned int cpu,unsigned int n) { unsigned int i; for (i=first(m,n); i<n; i=next(i,m,n)) if (i != cpu) break; return i; }
+          EOF
+          cat > "$w/array_member.c" <<'EOF'
+          struct M { unsigned long bits[4]; }; unsigned int first(const unsigned long*, unsigned int); unsigned int next(unsigned int,const unsigned long*,unsigned int); unsigned int f(const struct M *m,unsigned int cpu,unsigned int n) { unsigned int i; for (i=first(m->bits,n); i<n; i=next(i,m->bits,n)) if (i != cpu) break; return i; }
+          EOF
+          for src in "$w"/*.c; do
+            n=$(basename "$src" .c)
+            set +e
+            MINIC_CORE_IR=strict "$c" -S "$src" -o "$w/$n.s" 2>"$w/$n.err"
+            rc=$?
+            set -e
+            printf 'M42_CPUMASK_SHAPE name=%s rc=%d\n' "$n" "$rc"
+            cat "$w/$n.err"
+          done
+      - name: Frozen strict first500
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          c="$GITHUB_WORKSPACE/build/m42/bin/minic"; w="$GITHUB_WORKSPACE/build/m42-strict500"
+          set +e
+          MINIC_CORE_IR=strict python3 tests/external/linux/corpus_replay.py --minic "$c" --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" --work "$w" --jobs 5 --offset 0 --limit 500 --sample-count 0 --indices ''
+          rc=$?
+          set -e
+          printf 'M42_REPLAY_RC=%d\n' "$rc"
+          python3 tools/ci/classify-core-strict-frontier.py "$w/batch-results.json" --examples 5 --json-out "$w/frontier-summary.json" --require-no-errors
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          s=json.loads(Path('build/m42-strict500/frontier-summary.json').read_text())
+          assert s['selected']==500 and s['error']==0 and s['preprocess_missing']==0, s
+          print(f"M42_SUMMARY selected=500 pass={s['pass']} unsupported={s['unsupported']} error=0 distinct={len(s['blockers'])}")
+          for r in s['blockers'][:25]: print(f"M42_BLOCKER count={r['count']} function={r['function']}")
+          PY

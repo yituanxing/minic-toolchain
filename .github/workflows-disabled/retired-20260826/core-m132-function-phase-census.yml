@@ -1,0 +1,102 @@
+name: Core M132 Function Phase Census
+
+on:
+  pull_request:
+
+jobs:
+  census:
+    if: github.head_ref == 'refactor/declaration-sema-v1'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refactor/declaration-sema-v1
+
+      - name: Restore frozen Linux corpus
+        id: corpus
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-focus-corpus
+          key: linux-focus-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-${{ hashFiles('tests/external/linux/replay-indices.txt') }}
+
+      - name: Require frozen corpus
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "${{ steps.corpus.outputs.cache-hit }}" = true
+          test -s build/linux-focus-corpus/selected-tus.txt
+
+      - name: Stage M132 phase trace
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 tools/ci/apply-m132-function-phase-census.py
+          grep -Fq 'M132_FUNCTION_PHASE_CENSUS' src/core/core_lower.c
+          git diff --check
+
+      - name: Build diagnostic compiler
+        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/m132-phase-compiler
+
+      - name: Replay ten no-trace tail TUs
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          compiler="$GITHUB_WORKSPACE/build/m132-phase-compiler/bin/minic"
+          work="$GITHUB_WORKSPACE/build/m132-phase-census"
+          set +e
+          MINIC_CORE_IR=strict CORE_FAST_TRACE=1 CORE_PHASE_TRACE=1 \
+            python3 tests/external/linux/corpus_replay.py \
+              --minic "$compiler" \
+              --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
+              --work "$work" \
+              --jobs 4 \
+              --indices '95,130,156,157,239,241,288,318,348,414'
+          replay_status=$?
+          set -e
+          printf 'CORE_M132_PHASE_REPLAY_STATUS=%d\n' "$replay_status"
+          python3 tools/ci/classify-core-strict-frontier.py \
+            "$work/batch-results.json" \
+            --stderr-root "$work/minic-stderr" \
+            --ast-header "$GITHUB_WORKSPACE/src/frontend/ast.h" \
+            --examples 20 \
+            --json-out "$work/frontier-summary.json" \
+            --reason-text-out "$work/reason-summary.txt" \
+            --require-no-errors
+          python3 - <<'PY'
+          import json
+          from collections import Counter, defaultdict
+          from pathlib import Path
+          work=Path('build/m132-phase-census')
+          rows=json.loads((work/'batch-results.json').read_text())
+          phases=Counter()
+          owners=defaultdict(list)
+          for row in rows:
+              idx=int(row['index'])
+              stderr=(work/'minic-stderr'/f'{idx}.stderr').read_text(errors='replace') if (work/'minic-stderr'/f'{idx}.stderr').exists() else ''
+              hit='NO_PHASE_TRACE'
+              for line in stderr.splitlines():
+                  if line.startswith('CORE_FUNCTION_PHASE '):
+                      hit=line.strip()
+                      break
+              phase='NO_PHASE_TRACE'
+              if ' phase=' in hit:
+                  phase=hit.split(' phase=',1)[1].split(' ',1)[0]
+              phases[phase]+=1
+              owners[phase].append((idx,row.get('input'),row.get('message'),hit))
+          print('CORE_M132_PHASE_CENSUS')
+          for phase,count in phases.most_common():
+              print(f'phase={phase} count={count}')
+              for idx,input_path,message,hit in owners[phase]:
+                  print(f'  index={idx} input={input_path} message={message} trace={hit}')
+          summary=json.loads((work/'frontier-summary.json').read_text())
+          if summary['selected'] != 10 or summary['error'] != 0 or summary['preprocess_missing'] != 0:
+              raise SystemExit(f'M132 phase census integrity failure: {summary}')
+          PY
+
+      - name: Persist M132 census
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: core-m132-function-phase-${{ github.sha }}
+          path: build/m132-phase-census/**
+          if-no-files-found: warn

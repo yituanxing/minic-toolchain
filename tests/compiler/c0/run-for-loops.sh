@@ -13,10 +13,36 @@ mkdir -p "$work"
     -o "$work/for_loop.i"
 "$minic" -S "$work/for_loop.i" -o "$work/for_loop.s"
 
-grep -F ".Lwhile_condition_" "$work/for_loop.s" >/dev/null
-grep -F "  sltu a0" "$work/for_loop.s" >/dev/null
-grep -F "  addw a0" "$work/for_loop.s" >/dev/null
-grep -F "  lwu a0" "$work/for_loop.s" >/dev/null
+require_fixed() {
+    pattern=$1
+    if ! grep -F "$pattern" "$work/for_loop.s" >/dev/null; then
+        printf '%s\n' "FAIL compiler/c0/for_loop_lowering: missing fixed pattern: $pattern" >&2
+        cat "$work/for_loop.s" >&2
+        exit 1
+    fi
+}
+
+require_regex() {
+    pattern=$1
+    label=$2
+    if ! grep -E "$pattern" "$work/for_loop.s" >/dev/null; then
+        printf '%s\n' "FAIL compiler/c0/for_loop_lowering: missing opcode: $label" >&2
+        cat "$work/for_loop.s" >&2
+        exit 1
+    fi
+}
+
+# Core owns the CFG now. Keep this as a target-codegen contract without
+# pinning the old AST emitter's labels or its choice of a0 as a scratch value.
+# Unsigned 32-bit arithmetic is represented in the O0 Core backend as an RV64
+# add followed by an explicit 32-bit zero-extension, rather than legacy addw.
+require_fixed ".Lmain_core_bb"
+require_fixed ".Lmain_core_return:"
+require_regex '^[[:space:]]+sltu[[:space:]]' sltu
+require_regex '^[[:space:]]+add[[:space:]]' add
+require_regex '^[[:space:]]+slli[[:space:]]+[^,]+,[[:space:]]*[^,]+,[[:space:]]*32' slli-32
+require_regex '^[[:space:]]+srli[[:space:]]+[^,]+,[[:space:]]*[^,]+,[[:space:]]*32' srli-32
+require_regex '^[[:space:]]+lwu[[:space:]]' lwu
 printf '%s\n' "PASS compiler/c0/for_loop_lowering"
 
 "$host_cc" -E -P -x c \
@@ -40,8 +66,7 @@ expect_failure() {
         -o "$work/$name.i"
     if "$minic" -S "$work/$name.i" -o "$work/$name.s" \
         >"$work/$name.stdout" 2>"$work/$name.stderr"; then
-        printf '%s\n' \
-            "FAIL compiler/c0/$name: compilation unexpectedly succeeded" >&2
+        printf '%s\n' "FAIL compiler/c0/$name: compilation unexpectedly succeeded" >&2
         exit 1
     fi
     if ! grep -F "$message" "$work/$name.stderr" >/dev/null; then

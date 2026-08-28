@@ -1,0 +1,251 @@
+name: Core Fast64 Batch
+
+on:
+  pull_request:
+
+jobs:
+  fast64:
+    if: github.head_ref == 'refactor/declaration-sema-v1'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refactor/declaration-sema-v1
+          fetch-depth: 0
+
+      - name: Restore frozen Linux corpus
+        id: linux-corpus-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-focus-corpus
+          key: linux-focus-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-${{ hashFiles('tests/external/linux/replay-indices.txt') }}
+
+      - name: Require frozen corpus
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "${{ steps.linux-corpus-cache.outputs.cache-hit }}" = true
+          test -s build/linux-focus-corpus/selected-tus.txt
+
+      - name: Enable compact progress telemetry
+        run: python3 tools/dev/patch-linux-replay-live-progress.py
+
+      - name: Build exact compiler
+        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/fast64-compiler
+
+      - name: Replay deterministic fast64
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          compiler="$GITHUB_WORKSPACE/build/fast64-compiler/bin/minic"
+          work="$GITHUB_WORKSPACE/build/fast64"
+          set +e
+          MINIC_CORE_IR=strict python3 tests/external/linux/corpus_replay.py \
+            --minic "$compiler" \
+            --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
+            --work "$work" \
+            --jobs 4 \
+            --offset 0 \
+            --limit 500 \
+            --sample-count 64
+          replay_status=$?
+          set -e
+          printf 'CORE_FAST64_REPLAY_STATUS=%d\n' "$replay_status"
+          python3 tools/ci/classify-core-strict-frontier.py \
+            "$work/batch-results.json" \
+            --examples 8 \
+            --json-out "$work/frontier-summary.json"
+          python3 tools/ci/summarize-core-frontier-progress.py \
+            "$work/batch-results.json" \
+            --expect-selected 64 \
+            --json-out "$work/progress-summary.json" \
+            --text-out "$work/progress-summary.txt"
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          work = Path('build/fast64')
+          frontier = json.loads((work / 'frontier-summary.json').read_text())
+          headline = f"CORE_FAST64_EXACT selected={frontier['selected']} pass={frontier['pass']} unsupported={frontier['unsupported']} error={frontier['error']}"
+          print(headline)
+          (work / 'headline.txt').write_text(headline + '\n')
+          with Path(__import__('os').environ['GITHUB_STEP_SUMMARY']).open('a') as f:
+              f.write('## Core Fast64\n\n')
+              f.write(f'`{headline}`\n\n')
+              f.write((work / 'progress-summary.txt').read_text())
+          PY
+
+      - name: Persist fast64 result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: core-fast64-${{ github.sha }}
+          path: |
+            build/fast64/batch-results.json
+            build/fast64/frontier-summary.json
+            build/fast64/progress-summary.json
+            build/fast64/progress-summary.txt
+            build/fast64/headline.txt
+          if-no-files-found: warn
+
+  neigh-output-error-cohort:
+    if: github.head_ref == 'refactor/declaration-sema-v1'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refactor/declaration-sema-v1
+          fetch-depth: 0
+
+      - name: Restore frozen Linux corpus
+        id: linux-corpus-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-focus-corpus
+          key: linux-focus-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-${{ hashFiles('tests/external/linux/replay-indices.txt') }}
+
+      - name: Require frozen corpus
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "${{ steps.linux-corpus-cache.outputs.cache-hit }}" = true
+          test -s build/linux-focus-corpus/selected-tus.txt
+
+      - name: Build exact compiler
+        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/neigh-error-compiler
+
+      - name: Replay all neigh_output ERROR TUs with Core detail
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          compiler="$GITHUB_WORKSPACE/build/neigh-error-compiler/bin/minic"
+          work="$GITHUB_WORKSPACE/build/neigh-error-cohort"
+          set +e
+          MINIC_CORE_IR=strict CORE_FAST_TRACE=1 python3 tests/external/linux/corpus_replay.py \
+            --minic "$compiler" \
+            --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
+            --work "$work" \
+            --jobs 4 \
+            --indices '194,195,197,212,215,219,229,230,250,281,357,410'
+          replay_status=$?
+          set -e
+          printf 'CORE_NEIGH_ERROR_COHORT_STATUS=%d\n' "$replay_status"
+          python3 tools/ci/classify-core-strict-frontier.py \
+            "$work/batch-results.json" \
+            --examples 12 \
+            --json-out "$work/frontier-summary.json"
+          echo CORE_NEIGH_ERROR_DETAIL_BEGIN
+          grep -R -h -E 'CORE_LOWER_DETAIL|CORE_FAST_TRACE|Core IR shadow' "$work/minic-stderr" | tail -800 || true
+          echo CORE_NEIGH_ERROR_DETAIL_END
+
+      - name: Persist neigh_output cohort
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: core-neigh-output-errors-${{ github.sha }}
+          path: |
+            build/neigh-error-cohort/batch-results.json
+            build/neigh-error-cohort/frontier-summary.json
+            build/neigh-error-cohort/minic-stderr/**
+          if-no-files-found: warn
+
+  m116-verifier-probe:
+    if: github.head_ref == 'refactor/declaration-sema-v1'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refactor/declaration-sema-v1
+          fetch-depth: 0
+
+      - name: Restore frozen Linux corpus
+        id: linux-corpus-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-focus-corpus
+          key: linux-focus-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-${{ hashFiles('tests/external/linux/replay-indices.txt') }}
+
+      - name: Apply M116 and verifier diagnostics
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "${{ steps.linux-corpus-cache.outputs.cache-hit }}" = true
+          python3 tools/ci/apply-m116-pointer-arith-rvalue.py
+          python3 - <<'PY'
+          from pathlib import Path
+
+          p = Path('src/core/core_lower.c')
+          s = p.read_text()
+          old = '''    if (!minic_core_function_verify(&lowered)) {
+        minic_core_function_destroy(&lowered);
+        return MINIC_CORE_LOWER_ERROR;
+    }
+'''
+          new = '''    if (!minic_core_function_verify(&lowered)) {
+        (void)fprintf(stderr, "CORE_M116_VERIFY_FAIL function=%s blocks=%zu instructions=%zu values=%zu\\n",
+                      source_function->name, lowered.block_count,
+                      lowered.instruction_count, lowered.value_count);
+        (void)minic_core_function_dump(stderr, &lowered);
+        minic_core_function_destroy(&lowered);
+        return MINIC_CORE_LOWER_ERROR;
+    }
+'''
+          if s.count(old) != 1:
+              raise SystemExit(f'lower verify anchor mismatch: {s.count(old)}')
+          p.write_text(s.replace(old, new, 1))
+
+          p = Path('src/core/core_ir.c')
+          s = p.read_text()
+          old = '''        instruction = &function->instructions[instruction_id];
+        if (!instruction_is_valid(function, instruction, available_values)) {
+            return false;
+        }
+'''
+          new = '''        instruction = &function->instructions[instruction_id];
+        if (!instruction_is_valid(function, instruction, available_values)) {
+            (void)fprintf(stderr,
+                          "CORE_VERIFY_INSTRUCTION_FAIL function=%s block=%u position=%zu instruction=%u kind=%d result=%u\\n",
+                          function->name != NULL ? function->name : "<unnamed>",
+                          (unsigned int)block_id,
+                          index,
+                          (unsigned int)instruction_id,
+                          (int)instruction->kind,
+                          (unsigned int)instruction->result);
+            return false;
+        }
+'''
+          if s.count(old) != 1:
+              raise SystemExit(f'IR instruction verify anchor mismatch: {s.count(old)}')
+          p.write_text(s.replace(old, new, 1))
+          PY
+          git diff --check
+
+      - name: Build M116 probe compiler
+        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/m116-fast-probe-compiler
+
+      - name: Replay ext4 index 435
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          set +e
+          MINIC_CORE_IR=strict CORE_FAST_TRACE=1 python3 tests/external/linux/corpus_replay.py \
+            --minic "$GITHUB_WORKSPACE/build/m116-fast-probe-compiler/bin/minic" \
+            --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
+            --work "$GITHUB_WORKSPACE/build/m116-fast-probe" \
+            --jobs 1 --indices '435'
+          rc=$?
+          set -e
+          echo "M116_FAST_PROBE_RC=$rc"
+          echo M116_FAST_STDERR_BEGIN
+          find build/m116-fast-probe/minic-stderr -type f -print -exec cat {} \; 2>/dev/null || true
+          echo M116_FAST_STDERR_END
+          exit 0
+
+      - name: Persist M116 fast probe
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: core-m116-fast-probe-${{ github.sha }}
+          path: |
+            build/m116-fast-probe/batch-results.json
+            build/m116-fast-probe/minic-stderr/**
+          if-no-files-found: warn

@@ -1,5 +1,20 @@
 # Post-first500 Architecture Review Checkpoint / first500 后架构审查检查点
 
+> **Historical checkpoint / 历史检查点 — updated 2026-08-27**
+>
+> This file records the state immediately after the original first500 convergence.
+> It is no longer the current production-architecture description. Production
+> function bodies are now Core-only; the legacy AST -> RV64 function route and
+> migration-era shadow/hybrid control plane have been removed. Exact head
+> `770c91881854db92cbe569acc1f3871b0ec13514` passed frozen strict first500
+> **500/500** with unsupported=0, error=0, preprocess_missing=0 after the Core
+> backend ownership cuts and the first `core_lower.c` ownership split.
+>
+> Current continuation policy: preserve first500 as the behavior baseline and
+> resume Linux pressure with a larger parameterized frontier rather than
+> reintroducing fallback or source-mutating productizers.
+
+
 ## Status / 状态
 
 This document freezes the conclusions at the end of the Linux first500 convergence phase. It is an **architecture review entry point**, not a declaration that the current implementation is the final architecture.
@@ -424,3 +439,136 @@ Before proposing the next large architectural change:
 6. prefer local convergence over a whole rewrite unless the audit proves local replacement is more expensive.
 
 This checkpoint should be updated or superseded when the full post-first500 architecture audit is complete.
+
+## Post-1000 cleanup checkpoint
+
+The 1000-TU frozen baseline is now the semantic safety net for architecture cleanup. Local semantic defaults and structured AST-verifier failure provenance are converged first; array representation migration remains producer-first and must not change consumer semantics until legacy producers are eliminated.
+
+
+## Low-risk post-1000 cleanup completed
+
+The first cleanup tranche is now intentionally semantic-neutral:
+
+- semantic entity defaults are centralized for locals, functions, records/fields, and global objects;
+- AST verification reports stable stage/index/subindex/reason provenance;
+- Core enum/fixed-register metadata capture lives in `core_lower_metadata.c`, separate from expression/control lowering;
+- declaration Sema now has a compiled implementation unit instead of carrying semantic mutation logic as header-only inline code;
+- legacy array object semantics remain frozen until producer-first canonicalization can remove the duplicate representation without changing consumers.
+
+The frozen first500 and new500 corpora remain the acceptance contract for this cleanup tranche.
+
+## Low-risk architecture tranche closed
+
+The low-risk post-1000 cleanup tranche is now closed before Linux coverage expands again:
+
+- semantic entity defaults have canonical constructors/default ownership;
+- AST verifier failures carry stage/index/subindex/reason provenance;
+- Core lowering metadata and type policy are split from orchestration without changing Core IR;
+- declaration Sema is a compiled ownership unit and now owns object metadata commits, file-scope promotion, and transparent-union semantic validation;
+- parser code no longer directly commits section/alignment/visibility metadata for global/static objects;
+- array representation canonicalization and generalized InitPlan remain explicitly deferred because they change deeper representation contracts and require producer-first migration.
+
+Acceptance for this checkpoint is unchanged frozen first500 500/500 plus new500 500/500. After both gates pass on the exact checkpoint, Linux corpus expansion resumes before the deferred high-risk migrations.
+
+
+## Linux convergence operating protocol
+
+This is the permanent operating rule for Linux corpus expansion after the frozen
+1000/1000 checkpoint. It is a throughput protocol, not a stage-gated release
+process.
+
+### Two lanes run continuously
+
+```text
+time -------------------------------------------------------------->
+
+FULL:    [full500 #N =================] [full500 #N+1 ============] ...
+SAMPLE:  [inspect/fix/replay] [inspect/fix/replay] [inspect/fix] ...
+```
+
+- The sample lane is the fast development loop. It must keep running and
+  repairing while a full census is in progress.
+- The full lane is the global census. Each completed run belongs strictly to
+  the exact commit it started from; its PASS/error counts must never be
+  attributed to a newer head.
+- A full run ending is not a reason to pause. Consume its failure census and
+  immediately feed the newest sample-validated head into the next full run.
+- A full run must never block repairs that can be validated by the sample lane.
+
+### Repair blocker classes in batches, not one file at a time
+
+A sample replay is a window onto currently active semantic blockers, not a
+single-bug queue.
+
+If sample16 reports, for example, 13 PASS and 3 failures and all three failures
+have understood, independent semantic owners, repair all three blocker classes
+in the same development iteration when doing so is safe. Do not artificially
+serialize three obvious fixes into three sample cycles.
+
+The preferred loop is therefore:
+
+```text
+sample16
+  -> inspect every active failure
+  -> cluster by semantic root cause
+  -> repair as many well-understood independent classes as practical
+  -> sample16 again
+  -> expose/refill with the next blockers
+  -> repeat
+```
+
+Batching is allowed only for general semantic/capability fixes. Never batch
+filename-, index-, or Linux-specific special cases merely to increase the PASS
+counter.
+
+This is deliberately flexible rather than quota-driven. A development iteration
+does **not** have to fix every failure currently visible in sample16, and it does
+not have to fix exactly one. Fix every blocker that is sufficiently understood
+and low-risk to repair now; leave genuinely hard or uncertain blockers for a
+later iteration instead of making them hold back easy independent fixes. The
+unit of work is the smallest practical batch of understood semantic root
+causes, not "one TU", "all 16 TUs", or any other fixed count.
+
+### Refill the sample; do not keep solved entries forever
+
+sample16 is an active-blocker window. When several entries become PASS, the
+next useful sample should refill those slots from the latest full-corpus
+failure census so that the window continues to expose up to 16 unresolved
+translation units.
+
+Example:
+
+```text
+sample16: 13 PASS / 3 FAIL
+  -> fix all 3 understood blocker classes
+  -> replay verifies those fixes
+  -> refill solved slots from latest full500 failures
+  -> next sample16 exposes the next active blockers
+```
+
+A fixed sample containing mostly solved files is useful only as a short
+regression check; it is not the desired steady-state development window.
+
+### Progress accounting
+
+Always keep these two numbers distinct:
+
+- sample progress: fast evidence for the newest development head;
+- full progress: complete corpus evidence for one exact historical head.
+
+Report full progress as a sequence (for example 294 -> ... -> 500), and include
+the exact commit/run association. A TU may move its first blocker deeper
+without becoming PASS; that is real progress and should be inspected rather
+than treated as no change.
+
+### Frozen corpus inventory
+
+For Linux 6.6.143 RISC-V defconfig, the recovered Kbuild C-TU manifest contains
+3352 translation units. Current frozen ranges are:
+
+- indices 0-499: first500;
+- indices 500-999: new500;
+- indices 1000-1499: next500.
+
+Thus 1500/3352 TUs are currently materialized in the three frozen 500-TU
+windows, leaving 1852 later TUs available for subsequent expansion.

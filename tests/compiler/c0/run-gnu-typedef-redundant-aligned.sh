@@ -30,17 +30,24 @@ grep -F '  li a0, 32' "$nonredundant_assembly" >/dev/null
 grep -F '  li a0, 16' "$nonredundant_assembly" >/dev/null
 
 cat >"$work/reduced_alignment.c" <<'EOF'
-typedef long reduced_long __attribute__((aligned(4)));
-reduced_long value;
+typedef unsigned long __attribute__((aligned(4))) reduced_ulong;
+struct reduced_holder {
+    char prefix;
+    reduced_ulong value;
+};
+_Static_assert(__alignof__(reduced_ulong) == 4, "typedef reduced alignment");
+_Static_assert(__builtin_offsetof(struct reduced_holder, value) == 4,
+               "record field consumes reduced typedef alignment");
+_Static_assert(sizeof(struct reduced_holder) == 12,
+               "record size consumes reduced typedef alignment");
+unsigned long reduced_holder_size(void) {
+    return sizeof(struct reduced_holder);
+}
 EOF
 "$host_cc" -E -P -std=gnu11 -x c "$work/reduced_alignment.c" -o "$work/reduced_alignment.i"
-if "$minic" -S "$work/reduced_alignment.i" -o "$work/reduced_alignment.s" \
-    >"$work/reduced_alignment.stdout" 2>"$work/reduced_alignment.stderr"; then
-    printf '%s\n' 'reducing GNU typedef alignment unexpectedly compiled' >&2
-    exit 1
-fi
-grep -F 'reducing GNU typedef alignment is not supported yet' \
-    "$work/reduced_alignment.stderr" >/dev/null
+"$minic" -S "$work/reduced_alignment.i" -o "$work/reduced_alignment.s"
+grep -F 'reduced_holder_size:' "$work/reduced_alignment.s" >/dev/null
+grep -F '  li a0, 12' "$work/reduced_alignment.s" >/dev/null
 
 printf '%s\n' \
-    'PASS compiler/c0/gnu_typedef_redundant_aligned natural-int128=16 overalign-int=16 sizeof-expression=1 record-offset=16 reduction=reject'
+    'PASS compiler/c0/gnu_typedef_redundant_aligned natural-int128=16 overalign-int=16 sizeof-expression=1 record-offset=16 reduction=4'

@@ -64,15 +64,34 @@ unsigned long qualified_parameter(const unsigned long value) {
     return value;
 }
 EOF
+check_strict_case qualified-parameter
 
-"$MINIC" -S "$work_dir/qualified-parameter.i" -o "$work_dir/qualified-parameter-normal.s"
-MINIC_CORE_IR=shadow "$MINIC" -S "$work_dir/qualified-parameter.i"     -o "$work_dir/qualified-parameter-shadow.s"
-cmp "$work_dir/qualified-parameter-normal.s" "$work_dir/qualified-parameter-shadow.s"
-if MINIC_CORE_IR=strict "$MINIC" -S "$work_dir/qualified-parameter.i"     -o "$work_dir/qualified-parameter-strict.s" 2>"$work_dir/qualified-parameter-strict.err"; then
-    echo "strict Core IR shadow unexpectedly accepted a qualified parameter" >&2
+cat >"$work_dir/pointee-const-parameter.i" <<'EOF'
+int pointee_const_parameter(const int *value) {
+    return *value;
+}
+EOF
+check_strict_case pointee-const-parameter
+
+cat >"$work_dir/volatile-parameter-unsupported.i" <<'EOF'
+unsigned long volatile_parameter(volatile unsigned long value) {
+    return value;
+}
+EOF
+"$MINIC" -S "$work_dir/volatile-parameter-unsupported.i" \
+    -o "$work_dir/volatile-parameter-unsupported-normal.s"
+MINIC_CORE_IR=shadow "$MINIC" -S "$work_dir/volatile-parameter-unsupported.i" \
+    -o "$work_dir/volatile-parameter-unsupported-shadow.s"
+cmp "$work_dir/volatile-parameter-unsupported-normal.s" \
+    "$work_dir/volatile-parameter-unsupported-shadow.s"
+if MINIC_CORE_IR=strict "$MINIC" -S "$work_dir/volatile-parameter-unsupported.i" \
+    -o "$work_dir/volatile-parameter-unsupported-strict.s" \
+    2>"$work_dir/volatile-parameter-unsupported-strict.err"; then
+    echo "strict Core IR shadow unexpectedly accepted a volatile parameter" >&2
     exit 1
 fi
-grep -F "Core IR shadow does not yet support function 'qualified_parameter'"     "$work_dir/qualified-parameter-strict.err" >/dev/null
+grep -F "Core IR shadow does not yet support function 'volatile_parameter'" \
+    "$work_dir/volatile-parameter-unsupported-strict.err" >/dev/null
 
 cat >"$work_dir/mixed-add.i" <<'EOF'
 int add_mixed(signed char value) {
@@ -156,6 +175,20 @@ int clear_then_add(int value) {
 EOF
 check_strict_case while-backedge
 
+cat >"$work_dir/while-continue.i" <<'EOF'
+int while_continue(int value) {
+    while (value) {
+        if (value == 1) {
+            value = 0;
+            continue;
+        }
+        value = 1;
+    }
+    return value;
+}
+EOF
+check_strict_case while-continue
+
 cat >"$work_dir/for-shape.i" <<'EOF'
 int for_shape(int value) {
     for (; value;) {
@@ -165,17 +198,28 @@ int for_shape(int value) {
 }
 EOF
 
-"$MINIC" -S "$work_dir/for-shape.i" -o "$work_dir/for-shape-normal.s"
-MINIC_CORE_IR=shadow "$MINIC" -S "$work_dir/for-shape.i" -o "$work_dir/for-shape-shadow.s"
-cmp "$work_dir/for-shape-normal.s" "$work_dir/for-shape-shadow.s"
-if MINIC_CORE_IR=strict "$MINIC" -S "$work_dir/for-shape.i" \
-    -o "$work_dir/for-shape-strict.s" 2>"$work_dir/for-shape-strict.err"; then
-    echo "strict Core IR shadow unexpectedly accepted canonical for-loop lowering" >&2
-    exit 1
-fi
-grep -F "Core IR shadow does not yet support function 'for_shape'" \
-    "$work_dir/for-shape-strict.err" >/dev/null
+check_strict_case for-shape
 
+cat >"$work_dir/for-continue.i" <<'EOF'
+int for_continue(int value) {
+    for (; value; value = value - 1) {
+        if (value == 2)
+            continue;
+    }
+    return value;
+}
+EOF
+check_strict_case for-continue
+
+cat >"$work_dir/void-statement-expression.i" <<'EOF'
+void sink(void);
+
+void void_statement_expression(void) {
+    ({ sink(); });
+    return;
+}
+EOF
+check_strict_case void-statement-expression
 
 cat >"$work_dir/direct-call-v0.i" <<'EOF'
 int direct_callee(int value) {
@@ -266,16 +310,319 @@ int indirect_caller(int (*callee)(int), int value) {
     return callee(value);
 }
 EOF
-"$MINIC" -S "$work_dir/indirect-call-unsupported.i" \
-    -o "$work_dir/indirect-call-unsupported-normal.s"
-if MINIC_CORE_IR=strict "$MINIC" -S "$work_dir/indirect-call-unsupported.i" \
-    -o "$work_dir/indirect-call-unsupported-strict.s" \
-    2>"$work_dir/indirect-call-unsupported-strict.err"; then
-    echo "strict Core IR shadow unexpectedly accepted an indirect call" >&2
-    exit 1
-fi
-grep -F "Core IR shadow does not yet support function 'indirect_caller'" \
-    "$work_dir/indirect-call-unsupported-strict.err" >/dev/null
+check_strict_case indirect-call-unsupported
+
+cat >"$work_dir/const-record-member-subscript.i" <<'EOF'
+struct pointer_view {
+    int *items;
+};
+
+int *const_record_member_subscript(const struct pointer_view *view,
+                                   unsigned long index) {
+    return &view->items[index];
+}
+EOF
+check_strict_case const-record-member-subscript
+
+cat >"$work_dir/const-record-member-pointer-offset.i" <<'EOF'
+struct offset_item {
+    long value;
+};
+
+struct offset_view {
+    struct offset_item *items;
+};
+
+struct offset_item *const_record_member_pointer_offset(const struct offset_view *view,
+                                                       unsigned long index) {
+    return view->items + index;
+}
+EOF
+check_strict_case const-record-member-pointer-offset
+
+cat >"$work_dir/scalar-return-cleanup.i" <<'EOF'
+void cleanup_scalar(int *value) {
+    *value = *value + 1;
+}
+
+int scalar_return_cleanup(int input) {
+    int guard __attribute__((cleanup(cleanup_scalar))) = input;
+    return guard + 7;
+}
+EOF
+check_strict_case scalar-return-cleanup
+
+cat >"$work_dir/signed-bitfield-storage-read.i" <<'EOF'
+struct signed_bitfield_storage {
+    unsigned int prefix : 2;
+    signed int value : 8;
+    unsigned int suffix : 1;
+};
+
+int signed_bitfield_storage_read(const struct signed_bitfield_storage *state) {
+    return state->value;
+}
+
+int signed_bitfield_storage_switch(const struct signed_bitfield_storage *state) {
+    switch (state->value) {
+    case -1: return 11;
+    case 7: return 22;
+    default: return 33;
+    }
+}
+EOF
+check_strict_case signed-bitfield-storage-read
+
+cat >"$work_dir/bool-bitfield-storage-read.i" <<'EOF'
+struct bool_bitfield_storage {
+    unsigned int prefix : 1;
+    _Bool ready : 1;
+};
+
+int bool_bitfield_storage_read(struct bool_bitfield_storage *state) {
+    return !state->ready;
+}
+EOF
+check_strict_case bool-bitfield-storage-read
+
+cat >"$work_dir/bool-bitfield-storage-write.i" <<'EOF'
+struct bool_bitfield_storage_write {
+    unsigned int prefix : 1;
+    _Bool ready : 1;
+};
+
+void bool_bitfield_storage_write(struct bool_bitfield_storage_write *state) {
+    state->ready = 1;
+    state->ready = 0;
+}
+EOF
+check_strict_case bool-bitfield-storage-write
+
+cat >"$work_dir/local-char-array-object.i" <<'EOF'
+int local_char_array_object(int index) {
+    char bytes[4];
+    bytes[0] = 1;
+    bytes[3] = 7;
+    return bytes[index];
+}
+EOF
+check_strict_case local-char-array-object
+
+cat >"$work_dir/local-pointer-array-decay.i" <<'EOF'
+struct local_pointer_array_item;
+extern int consume_local_pointer_array(struct local_pointer_array_item **items);
+int local_pointer_array_decay(struct local_pointer_array_item *item) {
+    struct local_pointer_array_item *items[] = { item, (void *)0 };
+    return consume_local_pointer_array(items);
+}
+EOF
+check_strict_case local-pointer-array-decay
+
+cat >"$work_dir/indirect-cfg-argument.i" <<'EOF'
+int indirect_cfg_argument(int (*callee)(int), int value) {
+    return callee(value ? value : 1);
+}
+EOF
+check_strict_case indirect-cfg-argument
+
+cat >"$work_dir/call-frame-address-level-zero.i" <<'EOF'
+unsigned long core_return_address_level_zero(void) {
+    return (unsigned long)__builtin_return_address(0);
+}
+
+unsigned long core_frame_address_level_zero(void) {
+    return (unsigned long)__builtin_frame_address(0);
+}
+EOF
+check_strict_case call-frame-address-level-zero
+
+cat >"$work_dir/comma-discard-record-assignment.i" <<'EOF'
+struct core_comma_pair { int a; int b; };
+int comma_discard_record_assignment(void) {
+    struct core_comma_pair value;
+    return ((value = (struct core_comma_pair){ .a = 1, .b = 2 }), 1);
+}
+EOF
+check_strict_case comma-discard-record-assignment
+
+cat >"$work_dir/qualified-statement-conditional.i" <<'EOF'
+struct core_cond_limits { unsigned int first; unsigned int second; };
+unsigned int qualified_statement_conditional(const struct core_cond_limits *limits) {
+    return ({
+        __auto_type x = (limits->first);
+        __auto_type y = (limits->second);
+        x < y ? x : y;
+    });
+}
+EOF
+check_strict_case qualified-statement-conditional
+
+cat >"$work_dir/terminating-switch-return.i" <<'EOF'
+const char *terminating_switch_return(unsigned short tag) {
+    switch (tag) {
+    case 1: return "one";
+    case 2: return "two";
+    default: return "other";
+    }
+}
+EOF
+check_strict_case terminating-switch-return
+
+cat >"$work_dir/materialized-local-array-address.i" <<'EOF'
+struct core_local_mask { unsigned long bits[1]; };
+typedef struct core_local_mask core_local_mask_var_t[1];
+int core_consume_local_mask(core_local_mask_var_t *mask);
+
+int materialized_local_array_address(void) {
+    core_local_mask_var_t mask;
+    return core_consume_local_mask(&mask);
+}
+EOF
+check_strict_case materialized-local-array-address
+
+cat >"$work_dir/register-readwrite-memory-output-asm.i" <<'EOF'
+long core_put_user_shape(int *p, int x) {
+    long err = 0;
+    __asm__ __volatile__(
+        "1:\n\t"
+        "sw %z2, %1\n"
+        "2:\n"
+        : "+r" (err), "=m" (*p)
+        : "rJ" (x));
+    return err;
+}
+EOF
+check_strict_case register-readwrite-memory-output-asm
+
+cat >"$work_dir/fixed-register-sbi-ecall.i" <<'EOF'
+struct core_sbi_ret { long error; long value; };
+
+struct core_sbi_ret fixed_register_sbi_ecall(long x0, long x1, long x2, long x3,
+                                              long x4, long x5, long fid, long ext) {
+    struct core_sbi_ret ret;
+    register unsigned long a0 asm("a0") = (unsigned long)x0;
+    register unsigned long a1 asm("a1") = (unsigned long)x1;
+    register unsigned long a2 asm("a2") = (unsigned long)x2;
+    register unsigned long a3 asm("a3") = (unsigned long)x3;
+    register unsigned long a4 asm("a4") = (unsigned long)x4;
+    register unsigned long a5 asm("a5") = (unsigned long)x5;
+    register unsigned long a6 asm("a6") = (unsigned long)fid;
+    register unsigned long a7 asm("a7") = (unsigned long)ext;
+    asm volatile("ecall" : "+r"(a0), "+r"(a1)
+                         : "r"(a2), "r"(a3), "r"(a4), "r"(a5), "r"(a6), "r"(a7)
+                         : "memory");
+    ret.error = (long)a0;
+    ret.value = (long)a1;
+    return ret;
+}
+EOF
+check_strict_case fixed-register-sbi-ecall
+
+cat >"$work_dir/function-designator-address.i" <<'EOF'
+int function_address_target(int value);
+int function_address_consume(int (*callback)(int));
+
+int function_designator_address(void) {
+    return function_address_consume(&function_address_target);
+}
+EOF
+check_strict_case function-designator-address
+
+cat >"$work_dir/function-pointer-parameter-ingress.i" <<'EOF'
+typedef void (*core_callback_t)(void *);
+struct core_param_mask { unsigned long bits[1]; };
+extern struct core_param_mask core_param_online;
+extern void core_call_mask(void *, core_callback_t, void *, _Bool, const struct core_param_mask *);
+void function_pointer_parameter_ingress(core_callback_t func, void *info, int wait) {
+    core_call_mask((void *)0, func, info, wait, &core_param_online);
+}
+EOF
+check_strict_case function-pointer-parameter-ingress
+
+cat >"$work_dir/omitted-conditional-pointee-const.i" <<'EOF'
+struct core_xattr_handler {
+    const char *prefix;
+    const char *name;
+};
+
+const char *omitted_conditional_pointee_const(const struct core_xattr_handler *handler) {
+    return handler->prefix ?: handler->name;
+}
+EOF
+check_strict_case omitted-conditional-pointee-const
+
+cat >"$work_dir/terminating-switch-fallthrough.i" <<'EOF'
+int terminating_switch_fallthrough(int value) {
+    switch (value) {
+    case 0:
+    case 1:
+        return 11;
+    case 2:
+        return 22;
+    default:
+        return 33;
+    }
+}
+EOF
+check_strict_case terminating-switch-fallthrough
+
+cat >"$work_dir/promoted-unary-call-argument.i" <<'EOF'
+typedef unsigned short core_u16;
+extern core_u16 core_u16_add(core_u16 left, core_u16 right);
+core_u16 promoted_unary_call_argument(core_u16 left, core_u16 right) {
+    return core_u16_add(left, ~right);
+}
+int promoted_unary_negate(core_u16 value) {
+    return -value;
+}
+EOF
+check_strict_case promoted-unary-call-argument
+
+cat >"$work_dir/unsigned-bitfield-compound.i" <<'EOF'
+struct core_bitfield_compound {
+    unsigned char before : 2;
+    unsigned char flag : 1;
+    unsigned char after : 1;
+};
+int unsigned_bitfield_or_pointer(struct core_bitfield_compound *item, void *pointer) {
+    return item->flag |= !!pointer;
+}
+int unsigned_bitfield_xor(struct core_bitfield_compound *item, unsigned char value) {
+    return item->flag ^= value;
+}
+EOF
+check_strict_case unsigned-bitfield-compound
+
+cat >"$work_dir/unsigned-bitfield-update.i" <<'EOF'
+struct core_bitfield_update {
+    unsigned int low : 3;
+    unsigned int value : 3;
+    unsigned int high : 2;
+};
+unsigned int unsigned_bitfield_post_dec(struct core_bitfield_update *item) {
+    return item->value--;
+}
+unsigned int unsigned_bitfield_post_inc(struct core_bitfield_update *item) {
+    return item->value++;
+}
+unsigned int unsigned_bitfield_pre_dec(struct core_bitfield_update *item) {
+    return --item->value;
+}
+unsigned int unsigned_bitfield_pre_inc(struct core_bitfield_update *item) {
+    return ++item->value;
+}
+EOF
+check_strict_case unsigned-bitfield-update
+
+cat >"$work_dir/qualified-scalar-conversion.i" <<'EOF'
+struct core_qualified_scalar_member {
+    unsigned short transport_header;
+};
+int qualified_scalar_typeof_cast(const struct core_qualified_scalar_member *item) {
+    return item->transport_header != (typeof(item->transport_header))~0U;
+}
+EOF
+check_strict_case qualified-scalar-conversion
 
 cat >"$work_dir/variadic-call-unsupported.i" <<'EOF'
 int variadic_external(int first, ...);
@@ -284,34 +631,7 @@ int variadic_caller(int value) {
     return variadic_external(value, value);
 }
 EOF
-"$MINIC" -S "$work_dir/variadic-call-unsupported.i" \
-    -o "$work_dir/variadic-call-unsupported-normal.s"
-if MINIC_CORE_IR=strict "$MINIC" -S "$work_dir/variadic-call-unsupported.i" \
-    -o "$work_dir/variadic-call-unsupported-strict.s" \
-    2>"$work_dir/variadic-call-unsupported-strict.err"; then
-    echo "strict Core IR shadow unexpectedly accepted a variadic call" >&2
-    exit 1
-fi
-grep -F "Core IR shadow does not yet support function 'variadic_caller'" \
-    "$work_dir/variadic-call-unsupported-strict.err" >/dev/null
-
-cat >"$work_dir/unsupported.i" <<'EOF'
-int main(void) {
-    return 1 - 2;
-}
-EOF
-
-"$MINIC" -S "$work_dir/unsupported.i" -o "$work_dir/unsupported-normal.s"
-MINIC_CORE_IR=shadow "$MINIC" -S "$work_dir/unsupported.i" -o "$work_dir/unsupported-shadow.s"
-cmp "$work_dir/unsupported-normal.s" "$work_dir/unsupported-shadow.s"
-
-if MINIC_CORE_IR=strict "$MINIC" -S "$work_dir/unsupported.i" \
-    -o "$work_dir/unsupported-strict.s" 2>"$work_dir/unsupported-strict.err"; then
-    echo "strict Core IR shadow unexpectedly accepted an unsupported function" >&2
-    exit 1
-fi
-grep -F "Core IR shadow does not yet support function 'main'" \
-    "$work_dir/unsupported-strict.err" >/dev/null
+check_strict_case variadic-call-unsupported
 
 if MINIC_CORE_IR=invalid "$MINIC" -S "$work_dir/supported.i" \
     -o "$work_dir/invalid-mode.s" 2>"$work_dir/invalid-mode.err"; then

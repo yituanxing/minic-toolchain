@@ -43,3 +43,9 @@ __attribute__((no_sanitize_address)) __attribute__((no_stack_protector))
 void instrumentation_policy_aliases(void)
 {
 }
+
+static inline __attribute__((gnu_inline)) __attribute__((always_inline))
+size_t prefix_plain_spelling_identity(size_t value)
+{
+    return value;
+}

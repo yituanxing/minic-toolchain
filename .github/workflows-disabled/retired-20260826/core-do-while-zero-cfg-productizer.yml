@@ -1,0 +1,284 @@
+name: Core Do While Zero CFG Productizer
+
+on:
+  pull_request:
+
+permissions:
+  contents: write
+
+jobs:
+  do-while-zero:
+    if: github.head_ref == 'refactor/declaration-sema-v1'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refactor/declaration-sema-v1
+          fetch-depth: 0
+
+      - name: Detect semantic state
+        id: state
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          if grep -Fq 'M120_DO_WHILE_ZERO_SINGLE_ITERATION_CFG' src/core/core_lower.c; then
+            echo 'needs_patch=false' >> "$GITHUB_OUTPUT"
+          else
+            echo 'needs_patch=true' >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Restore frozen Linux corpus
+        if: steps.state.outputs.needs_patch == 'true'
+        id: linux-corpus-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-focus-corpus
+          key: linux-focus-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-${{ hashFiles('tests/external/linux/replay-indices.txt') }}
+
+      - name: Require frozen corpus
+        if: steps.state.outputs.needs_patch == 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "${{ steps.linux-corpus-cache.outputs.cache-hit }}" = true
+          test -s build/linux-focus-corpus/selected-tus.txt
+
+      - name: Apply single-iteration do-while-zero CFG
+        if: steps.state.outputs.needs_patch == 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          p = Path('src/core/core_lower.c')
+          s = p.read_text()
+
+          helper_anchor = '''/* M78_OMITTED_FOR_CONDITION: parse_for represents a missing source\n'''
+          if s.count(helper_anchor) != 1:
+              raise SystemExit(f'M120 helper anchor count={s.count(helper_anchor)}')
+          helper = r'''/* M120_DO_WHILE_ZERO_SINGLE_ITERATION_CFG: parse_do_while lowers source
+   `do BODY while (0)` into `while (1) { BODY; continue_label: if (!0) break; }`.
+   Recognize that parser-owned tail so Core can lower the construct as one real
+   iteration without treating the synthetic label/condition as source control
+   flow.  The caller binds both source continue and source break to one exit. */
+static bool normalized_do_while_zero_body(const MinicCoreLowerContext *context,
+                                          const MinicStatement *loop,
+                                          const MinicBlock *body,
+                                          MinicBlock *single_iteration_body,
+                                          MinicStatementId *continue_label_statement) {
+    const MinicExpression *loop_condition;
+    const MinicExpression *negated_condition;
+    const MinicExpression *source_condition;
+    const MinicStatement *continue_label;
+    const MinicStatement *condition_check;
+    const MinicStatement *break_statement;
+    const MinicBlock *break_block;
+    MinicStatementId continue_id;
+
+    if (context == NULL || context->body == NULL || context->body->program == NULL ||
+        loop == NULL || body == NULL || single_iteration_body == NULL ||
+        continue_label_statement == NULL || body->statement_count < 2U) {
+        return false;
+    }
+    loop_condition = minic_c0_program_expression(context->body->program, loop->expression);
+    continue_id = body->statements[body->statement_count - 2U];
+    continue_label = minic_c0_program_statement(context->body->program, continue_id);
+    condition_check = minic_c0_program_statement(
+        context->body->program, body->statements[body->statement_count - 1U]);
+    if (loop_condition == NULL || loop_condition->kind != MINIC_EXPRESSION_INTEGER ||
+        !minic_type_is_integer(loop_condition->type) || loop_condition->value.integer_value != 1 ||
+        continue_label == NULL || continue_label->kind != MINIC_STATEMENT_LABEL ||
+        continue_label->target_expression != MINIC_EXPRESSION_INVALID ||
+        continue_label->expression != MINIC_EXPRESSION_INVALID ||
+        continue_label->target_statement != MINIC_STATEMENT_INVALID ||
+        !source_position_equal(continue_label->span.begin, loop->span.begin) ||
+        condition_check == NULL || condition_check->kind != MINIC_STATEMENT_IF ||
+        condition_check->expression == MINIC_EXPRESSION_INVALID ||
+        condition_check->then_block == MINIC_BLOCK_INVALID ||
+        condition_check->else_block != MINIC_BLOCK_INVALID ||
+        !source_position_equal(condition_check->span.begin, loop->span.begin)) {
+        return false;
+    }
+    negated_condition =
+        minic_c0_program_expression(context->body->program, condition_check->expression);
+    if (negated_condition == NULL || negated_condition->kind != MINIC_EXPRESSION_UNARY ||
+        negated_condition->value.unary.operator_kind != MINIC_UNARY_LOGICAL_NOT) {
+        return false;
+    }
+    source_condition = minic_c0_program_expression(
+        context->body->program, negated_condition->value.unary.operand);
+    if (source_condition == NULL || source_condition->kind != MINIC_EXPRESSION_INTEGER ||
+        !minic_type_is_integer(source_condition->type) || source_condition->value.integer_value != 0) {
+        return false;
+    }
+    break_block = minic_c0_program_block(context->body->program, condition_check->then_block);
+    if (break_block == NULL || break_block->statement_count != 1U) {
+        return false;
+    }
+    break_statement = minic_c0_program_statement(context->body->program, break_block->statements[0]);
+    if (break_statement == NULL || break_statement->kind != MINIC_STATEMENT_BREAK ||
+        !core_cleanup_edge_is_empty(break_statement) ||
+        !source_position_equal(break_statement->span.begin, loop->span.begin)) {
+        return false;
+    }
+
+    *single_iteration_body = *body;
+    single_iteration_body->statement_count -= 2U;
+    *continue_label_statement = continue_id;
+    return true;
+}
+
+'''
+          s = s.replace(helper_anchor, helper + helper_anchor, 1)
+
+          decl_old = '''    MinicBlock normalized_for_body;\n    MinicCoreBlockId body_block;\n'''
+          decl_new = '''    MinicBlock normalized_for_body;\n    MinicBlock normalized_do_while_body;\n    MinicStatementId normalized_do_while_continue;\n    MinicCoreBlockId body_block;\n'''
+          if s.count(decl_old) != 1:
+              raise SystemExit(f'M120 declaration anchor count={s.count(decl_old)}')
+          s = s.replace(decl_old, decl_new, 1)
+
+          old = '''    /* M119_GENERAL_DO_WHILE_ZERO_CFG: do not flatten normalized do-while(0)\n       bodies ahead of the ordinary loop CFG. The old shortcut lowered the body\n       before creating the loop exit block and therefore left legitimate break\n       statements with MINIC_CORE_BLOCK_INVALID as their target. The standard\n       lower_while path already owns condition/body/exit blocks, break routing,\n       continue binding and normalized-for tails, so keep one control-flow owner. */\n    iteration_source = body_source;\n'''
+          new = r'''    normalized_do_while_continue = MINIC_STATEMENT_INVALID;
+    if (normalized_do_while_zero_body(context,
+                                      statement,
+                                      body_source,
+                                      &normalized_do_while_body,
+                                      &normalized_do_while_continue)) {
+        MinicCoreBlockId single_iteration_exit;
+
+        if (normalized_do_while_continue >= context->statement_block_count ||
+            context->statement_blocks == NULL ||
+            context->statement_blocks[normalized_do_while_continue] !=
+                MINIC_CORE_BLOCK_INVALID ||
+            !minic_core_function_add_block(context->function, &single_iteration_exit)) {
+            return MINIC_CORE_LOWER_ERROR;
+        }
+        /* Source `continue` in do-while(0) means evaluate constant-zero and
+           leave the loop.  Bind the parser's synthetic continue label directly
+           to the real exit before lowering any body goto. */
+        context->statement_blocks[normalized_do_while_continue] = single_iteration_exit;
+        saved_break_target = context->break_target;
+        context->break_target = single_iteration_exit;
+        status = lower_block(context, &normalized_do_while_body, &body_terminated);
+        context->break_target = saved_break_target;
+        if (status != MINIC_CORE_LOWER_OK) {
+            (void)fprintf(stderr,
+                          "CORE_FAST_TRACE stage=do-while-zero reason=body function=%s "
+                          "status=%d span=%zu:%zu\n",
+                          context->source_function->name,
+                          (int)status,
+                          statement->span.begin.line,
+                          statement->span.begin.column);
+            return status;
+        }
+        if (!body_terminated) {
+            status = set_branch(
+                context, context->block_id, statement->span, single_iteration_exit);
+            if (status != MINIC_CORE_LOWER_OK) {
+                return status;
+            }
+        }
+        context->block_id = single_iteration_exit;
+        *terminated = false;
+        return MINIC_CORE_LOWER_OK;
+    }
+
+    iteration_source = body_source;
+'''
+          if s.count(old) != 1:
+              raise SystemExit(f'M120 M119 replacement anchor count={s.count(old)}')
+          s = s.replace(old, new, 1)
+
+          p.write_text(s)
+          PY
+          git diff --check
+          git diff -- src/core/core_lower.c
+
+      - name: Build exact patched compiler
+        if: steps.state.outputs.needs_patch == 'true'
+        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/do-while-zero-compiler
+
+      - name: Run fast host regression gate
+        if: steps.state.outputs.needs_patch == 'true'
+        run: make -j4 check-fast MODE=release CFLAGS=-Werror BUILD_DIR=build/do-while-zero-check
+
+      - name: Replay break and regression cohort
+        if: steps.state.outputs.needs_patch == 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          compiler="$GITHUB_WORKSPACE/build/do-while-zero-compiler/bin/minic"
+          work="$GITHUB_WORKSPACE/build/do-while-zero"
+          set +e
+          MINIC_CORE_IR=strict python3 tests/external/linux/corpus_replay.py \
+            --minic "$compiler" \
+            --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
+            --work "$work" \
+            --jobs 4 \
+            --indices '113,120,135,137,185,192,232,240,261,290,348,352,357,372,374,416,465,470,494'
+          replay_status=$?
+          set -e
+          printf 'CORE_DO_WHILE_ZERO_REPLAY_STATUS=%d\n' "$replay_status"
+          python3 tools/ci/classify-core-strict-frontier.py \
+            "$work/batch-results.json" \
+            --stderr-root "$work/minic-stderr" \
+            --ast-header "$GITHUB_WORKSPACE/src/frontend/ast.h" \
+            --examples 20 \
+            --json-out "$work/frontier-summary.json" \
+            --reason-text-out "$work/reason-summary.txt"
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          work = Path('build/do-while-zero')
+          rows = json.loads((work / 'batch-results.json').read_text())
+          summary = json.loads((work / 'frontier-summary.json').read_text())
+          by_index = {int(row['index']): row for row in rows}
+          required_pass = {113,120,135,185,192,240,261,290,348,357,372,374,416,465,470,494}
+          bad = {idx: by_index.get(idx) for idx in required_pass
+                 if by_index.get(idx, {}).get('status') != 'PASS'}
+          if len(rows) != 19:
+              raise SystemExit(f'expected 19 rows, got {len(rows)}')
+          if summary['error'] != 0 or summary['preprocess_missing'] != 0:
+              raise SystemExit(
+                  f"M120 cohort ERROR/missing: error={summary['error']} "
+                  f"missing={summary['preprocess_missing']}"
+              )
+          if bad:
+              raise SystemExit(f'M120 required PASS regressions: {bad}')
+          stale_break = [family for family in summary.get('feature_families', [])
+                         if family.get('family') == 'statement:MINIC_STATEMENT_BREAK']
+          if stale_break:
+              raise SystemExit(f'M120 old BREAK frontier remains: {stale_break}')
+          print(
+              f"CORE_DO_WHILE_ZERO_ACCEPT pass={summary['pass']} "
+              f"unsupported={summary['unsupported']} error=0 selected=19"
+          )
+          print('CORE_DO_WHILE_ZERO_NEW_FEATURES ' +
+                json.dumps(summary.get('feature_families', [])[:10], sort_keys=True))
+          PY
+
+      - name: Commit single-iteration CFG semantic fix
+        if: steps.state.outputs.needs_patch == 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/core/core_lower.c
+          git diff --cached --quiet && { echo 'no semantic changes'; exit 1; }
+          git commit -m 'core: lower do-while-zero as single-iteration CFG'
+          git push origin HEAD:refactor/declaration-sema-v1
+
+      - name: Persist cohort evidence
+        if: always() && steps.state.outputs.needs_patch == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: core-do-while-zero-${{ github.sha }}
+          path: |
+            build/do-while-zero/batch-results.json
+            build/do-while-zero/frontier-summary.json
+            build/do-while-zero/reason-summary.txt
+            build/do-while-zero/minic-stderr/**
+          if-no-files-found: warn

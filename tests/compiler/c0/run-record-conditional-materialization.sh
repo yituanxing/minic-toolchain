@@ -13,8 +13,11 @@ mkdir -p "$work"
     -o "$work/input.i"
 "$minic" -S "$work/input.i" -o "$work/output.s"
 
-grep -F '.Lminic_record_cond_false_' "$work/output.s" >/dev/null
-grep -F '.Lminic_record_cond_end_' "$work/output.s" >/dev/null
+# Record conditionals are represented by Core CFG blocks. Require both
+# conditional and explicit false-edge branches without depending on legacy
+# materializer label names.
+grep -E '^[[:space:]]+bnez[[:space:]]+[^,]+,[[:space:]]*\.L[^[:space:]]+_core_bb[0-9]+$'     "$work/output.s" >/dev/null
+grep -E '^[[:space:]]+j[[:space:]]+\.L[^[:space:]]+_core_bb[0-9]+$'     "$work/output.s" >/dev/null
 grep -F '  call pgprot_from_va' "$work/output.s" >/dev/null
 grep -F '  call consume' "$work/output.s" >/dev/null
 
@@ -22,4 +25,13 @@ if command -v riscv64-linux-gnu-gcc >/dev/null 2>&1; then
     riscv64-linux-gnu-gcc -c "$work/output.s" -o "$work/output.o"
 fi
 
-printf '%s\n' 'PASS compiler/c0/record_conditional_materialization record-rvalue=conditional producers=address,call sink=assignment,call-argument'
+"$host_cc" -E -P -std=gnu11 -x c \
+    "$root/tests/compiler/c0/record_call_argument_materialization.c" \
+    -o "$work/call-argument.i"
+MINIC_CORE_IR=strict "$minic" -S "$work/call-argument.i" \
+    -o "$work/call-argument.strict.s"
+grep -E '^[[:space:]]+bnez[[:space:]]+[^,]+,[[:space:]]*\.L[^[:space:]]+_core_bb[0-9]+$'     "$work/call-argument.strict.s" >/dev/null
+grep -E '^[[:space:]]+j[[:space:]]+\.L[^[:space:]]+_core_bb[0-9]+$'     "$work/call-argument.strict.s" >/dev/null
+grep -F '  call consume_word' "$work/call-argument.strict.s" >/dev/null
+
+printf '%s\n' 'PASS compiler/c0/record_conditional_materialization record-rvalue=conditional producers=address,call sink=assignment,call-argument strict-call-argument=1'

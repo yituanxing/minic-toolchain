@@ -173,6 +173,100 @@ bool minic_c0_program_add_local_fixed_register_binding(MinicC0Program *program,
                                       binding_id);
 }
 
+typedef struct MinicGlobalObjectInitialState {
+    const char *section_name;
+    size_t section_name_length;
+    size_t explicit_alignment;
+    MinicSymbolVisibility visibility;
+    bool is_internal;
+    bool is_read_only;
+    bool is_extern;
+    bool is_weak;
+    bool is_block_scope_extern_only;
+} MinicGlobalObjectInitialState;
+
+static void global_object_initial_state_initialize(MinicGlobalObjectInitialState *state) {
+    if (state == NULL) {
+        return;
+    }
+    (void)memset(state, 0, sizeof(*state));
+    state->visibility = MINIC_SYMBOL_VISIBILITY_DEFAULT;
+}
+
+static void global_object_initialize_defaults(MinicGlobalObject *object) {
+    if (object == NULL) {
+        return;
+    }
+    (void)memset(object, 0, sizeof(*object));
+    object->alias_target = MINIC_GLOBAL_OBJECT_INVALID;
+}
+
+static bool global_object_initial_state_valid(const MinicGlobalObjectInitialState *state) {
+    size_t alignment;
+
+    if (state == NULL || ((state->section_name == NULL) != (state->section_name_length == 0U)) ||
+        state->section_name_length == SIZE_MAX ||
+        state->visibility < MINIC_SYMBOL_VISIBILITY_DEFAULT ||
+        state->visibility > MINIC_SYMBOL_VISIBILITY_PROTECTED ||
+        (state->is_weak && state->is_internal)) {
+        return false;
+    }
+    alignment = state->explicit_alignment;
+    return alignment == 0U || (alignment & (alignment - 1U)) == 0U;
+}
+
+static bool add_global_object_entity_with_state(MinicC0Program *program,
+                                                const char *name,
+                                                size_t name_length,
+                                                MinicType type,
+                                                const MinicGlobalObjectInitialState *state,
+                                                MinicGlobalObjectId *global_object_id) {
+    MinicGlobalObject object;
+
+    if (program == NULL || name == NULL || global_object_id == NULL ||
+        !global_object_initial_state_valid(state) ||
+        (minic_type_is_void(type) && !state->is_extern) ||
+        name_conflicts(program, name, name_length)) {
+        return false;
+    }
+
+    global_object_initialize_defaults(&object);
+    object.name = copy_name(name, name_length);
+    if (object.name == NULL) {
+        return false;
+    }
+    if (state->section_name != NULL) {
+        object.section_name = copy_name(state->section_name, state->section_name_length);
+        if (object.section_name == NULL) {
+            free(object.name);
+            return false;
+        }
+    }
+    if (!grow_array((void **)&program->global_objects,
+                    &program->global_object_capacity,
+                    program->global_object_count,
+                    sizeof(*program->global_objects))) {
+        free(object.section_name);
+        free(object.name);
+        return false;
+    }
+
+    object.name_length = name_length;
+    object.section_name_length = state->section_name_length;
+    object.type = type;
+    object.explicit_alignment = state->explicit_alignment;
+    object.visibility = state->visibility;
+    object.is_internal = state->is_internal;
+    object.is_weak = state->is_weak;
+    object.is_read_only = state->is_read_only;
+    object.is_extern = state->is_extern;
+    object.is_block_scope_extern_only = state->is_block_scope_extern_only;
+    *global_object_id = program->global_object_count;
+    program->global_objects[program->global_object_count] = object;
+    program->global_object_count += 1U;
+    return true;
+}
+
 static bool add_global_object_entity(MinicC0Program *program,
                                      const char *name,
                                      size_t name_length,
@@ -181,33 +275,14 @@ static bool add_global_object_entity(MinicC0Program *program,
                                      bool is_read_only,
                                      bool is_extern,
                                      MinicGlobalObjectId *global_object_id) {
-    MinicGlobalObject object;
+    MinicGlobalObjectInitialState state;
 
-    if (program == NULL || name == NULL || global_object_id == NULL ||
-        (minic_type_is_void(type) && !is_extern) || name_conflicts(program, name, name_length)) {
-        return false;
-    }
-    if (!grow_array((void **)&program->global_objects,
-                    &program->global_object_capacity,
-                    program->global_object_count,
-                    sizeof(*program->global_objects))) {
-        return false;
-    }
-
-    (void)memset(&object, 0, sizeof(object));
-    object.name = copy_name(name, name_length);
-    if (object.name == NULL) {
-        return false;
-    }
-    object.name_length = name_length;
-    object.type = type;
-    object.is_internal = is_internal;
-    object.is_read_only = is_read_only;
-    object.is_extern = is_extern;
-    *global_object_id = program->global_object_count;
-    program->global_objects[program->global_object_count] = object;
-    program->global_object_count += 1U;
-    return true;
+    global_object_initial_state_initialize(&state);
+    state.is_internal = is_internal;
+    state.is_read_only = is_read_only;
+    state.is_extern = is_extern;
+    return add_global_object_entity_with_state(
+        program, name, name_length, type, &state, global_object_id);
 }
 
 bool minic_c0_program_add_global_object(MinicC0Program *program,
@@ -229,6 +304,34 @@ bool minic_c0_program_add_extern_global_object(MinicC0Program *program,
                                                MinicGlobalObjectId *global_object_id) {
     return add_global_object_entity(
         program, name, name_length, type, false, is_read_only, true, global_object_id);
+}
+
+bool minic_c0_program_add_extern_global_object_with_metadata(
+    MinicC0Program *program,
+    const char *name,
+    size_t name_length,
+    MinicType type,
+    bool is_read_only,
+    const char *section_name,
+    size_t section_name_length,
+    size_t explicit_alignment,
+    MinicSymbolVisibility visibility,
+    bool is_weak,
+    bool is_block_scope_extern_only,
+    MinicGlobalObjectId *global_object_id) {
+    MinicGlobalObjectInitialState state;
+
+    global_object_initial_state_initialize(&state);
+    state.section_name = section_name;
+    state.section_name_length = section_name_length;
+    state.explicit_alignment = explicit_alignment;
+    state.visibility = visibility;
+    state.is_read_only = is_read_only;
+    state.is_extern = true;
+    state.is_weak = is_weak;
+    state.is_block_scope_extern_only = is_block_scope_extern_only;
+    return add_global_object_entity_with_state(
+        program, name, name_length, type, &state, global_object_id);
 }
 
 bool minic_c0_program_add_tentative_global_object(MinicC0Program *program,
@@ -328,6 +431,48 @@ bool minic_c0_global_object_add_initializer_bits(MinicC0Program *program,
     }
     object->initializer_values[object->initializer_count] = bits;
     object->initializer_count += 1U;
+    return true;
+}
+
+bool minic_c0_global_object_replace_aggregate_initializer_bits(
+    MinicC0Program *program,
+    MinicGlobalObjectId global_object_id,
+    size_t initializer_index,
+    uint64_t bits) {
+    MinicGlobalObject *object;
+    size_t relocation_index;
+
+    if (program == NULL || global_object_id >= program->global_object_count) {
+        return false;
+    }
+    object = &program->global_objects[global_object_id];
+    if (object->is_tentative || object->is_zero_initialized ||
+        initializer_index >= object->initializer_count) {
+        return false;
+    }
+
+    /* C designated initializers are last-writer-wins.  A backward designator
+     * may replace either scalar bits or a previously-recorded symbolic value
+     * at the same flattened aggregate slot. */
+    relocation_index = 0U;
+    while (relocation_index < object->relocation_count) {
+        MinicGlobalRelocation *relocation;
+
+        relocation = &object->relocations[relocation_index];
+        if (relocation->location_kind == MINIC_GLOBAL_RELOCATION_LOCATION_AGGREGATE_SCALAR &&
+            relocation->location_index == initializer_index) {
+            if (relocation_index + 1U < object->relocation_count) {
+                (void)memmove(&object->relocations[relocation_index],
+                              &object->relocations[relocation_index + 1U],
+                              (object->relocation_count - relocation_index - 1U) *
+                                  sizeof(*object->relocations));
+            }
+            object->relocation_count -= 1U;
+            continue;
+        }
+        relocation_index += 1U;
+    }
+    object->initializer_values[initializer_index] = bits;
     return true;
 }
 
@@ -781,14 +926,25 @@ static bool global_object_member_path_type(const MinicC0Program *program,
         const MinicRecord *record;
         const MinicRecordField *field;
 
+        /* Static subobject addresses persist array subscripts as byte addends.
+         * When a later member access follows such a subscript, recover the
+         * semantic record base by peeling the intervening array layers here. */
+        while (minic_type_is_array(type)) {
+            const MinicArrayType *array_type;
+
+            array_type = minic_c0_program_array_type(program, type.array_type_id);
+            if (array_type == NULL) {
+                return false;
+            }
+            type = array_type->element_type;
+        }
         if (!minic_type_is_record(type)) {
             return false;
         }
         record = minic_c0_program_record(program, type.record_id);
         field = record == NULL ? NULL : minic_c0_record_field(record, member_indices[depth]);
         if (field == NULL || field->element_count == 0U || field->is_bit_field ||
-            field->is_flexible_array || (field->is_array && depth + 1U != member_depth) ||
-            (!field->is_array && field->element_count != 1U)) {
+            (!field->is_array && !field->is_flexible_array && field->element_count != 1U)) {
             return false;
         }
         type = field->type;
@@ -812,10 +968,24 @@ bool minic_c0_global_relocation_object_target_type(const MinicC0Program *program
                                           target_type);
 }
 
-static bool global_relocation_pointer_target_type_compatible(MinicType slot_type,
-                                                             MinicType source_pointer_type) {
-    return minic_type_assignment_compatible(slot_type, source_pointer_type) ||
-           minic_type_gnu_pointer_sign_compatible(slot_type, source_pointer_type);
+static bool global_relocation_pointer_target_type_compatible(
+    const MinicC0Program *program,
+    MinicType slot_type,
+    MinicType source_pointer_type) {
+    MinicType slot_pointee;
+    MinicType source_pointee;
+
+    if (minic_type_assignment_compatible(slot_type, source_pointer_type) ||
+        minic_type_gnu_pointer_sign_compatible(slot_type, source_pointer_type)) {
+        return true;
+    }
+    /* Pointer-to-array types can be structurally compatible even when the
+       frontend materialized equivalent array descriptors at different IDs.
+       Static symbolic relocation must use Program-aware composite type
+       compatibility rather than raw descriptor identity. */
+    return program != NULL && minic_type_pointee(slot_type, &slot_pointee) &&
+           minic_type_pointee(source_pointer_type, &source_pointee) &&
+           minic_c0_types_compatible(program, slot_pointee, source_pointee);
 }
 
 static bool global_relocation_object_target_type_compatible(const MinicC0Program *program,
@@ -848,7 +1018,7 @@ static bool global_relocation_object_target_type_compatible(const MinicC0Program
     }
     /* A symbolic object address can denote the object itself (`&object`). */
     if (minic_type_pointer_to(target_type, &source_pointer_type) &&
-        global_relocation_pointer_target_type_compatible(slot_type, source_pointer_type)) {
+        global_relocation_pointer_target_type_compatible(program, slot_type, source_pointer_type)) {
         return true;
     }
     /* Array-to-pointer decay and `&array[0]` have the same symbol/addend as
@@ -860,7 +1030,7 @@ static bool global_relocation_object_target_type_compatible(const MinicC0Program
         array_type = minic_c0_program_array_type(program, target_type.array_type_id);
         if (array_type != NULL &&
             minic_type_pointer_to(array_type->element_type, &source_pointer_type) &&
-            global_relocation_pointer_target_type_compatible(slot_type, source_pointer_type)) {
+            global_relocation_pointer_target_type_compatible(program, slot_type, source_pointer_type)) {
             return true;
         }
     }
@@ -1303,6 +1473,31 @@ minic_c0_program_fixed_register_binding(const MinicC0Program *program,
         return NULL;
     }
     return &program->fixed_register_bindings[binding_id];
+}
+
+bool minic_c0_global_object_set_alias(MinicC0Program *program,
+                                      MinicGlobalObjectId global_object_id,
+                                      MinicGlobalObjectId target_object_id) {
+    MinicGlobalObject *object;
+    const MinicGlobalObject *target;
+
+    if (program == NULL || global_object_id >= program->global_object_count ||
+        target_object_id >= program->global_object_count || global_object_id == target_object_id) {
+        return false;
+    }
+    object = &program->global_objects[global_object_id];
+    target = &program->global_objects[target_object_id];
+    if (!object->is_extern || object->is_internal || object->is_tentative ||
+        object->is_zero_initialized || object->is_block_scope_extern_only ||
+        object->initializer_count != 0U || object->relocation_count != 0U ||
+        target->is_extern || target->is_tentative ||
+        !minic_c0_types_compatible(program, object->type, target->type) ||
+        (object->alias_target != MINIC_GLOBAL_OBJECT_INVALID &&
+         object->alias_target != target_object_id)) {
+        return false;
+    }
+    object->alias_target = target_object_id;
+    return true;
 }
 
 bool minic_c0_global_object_set_weak(MinicC0Program *program,

@@ -1,0 +1,143 @@
+name: Core M34 Void Conditional Qualification
+
+on:
+  pull_request:
+
+jobs:
+  qualify:
+    if: github.head_ref == 'refactor/declaration-sema-v1'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refactor/declaration-sema-v1
+          fetch-depth: 0
+      - name: Install validation tools
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mapfile -t packages < <(grep -Ev '^[[:space:]]*(#|$)' tools/ci/ubuntu-24.04-packages.txt)
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends "${packages[@]}"
+          sh tools/ci/verify-validation-tools.sh
+      - name: Restore frozen Linux corpus
+        id: corpus
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-focus-corpus
+          key: linux-focus-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-${{ hashFiles('tests/external/linux/replay-indices.txt') }}
+      - name: Apply M31b through M34 and build release
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "${{ steps.corpus.outputs.cache-hit }}" = true
+          test -s build/linux-focus-corpus/selected-tus.txt
+          python3 tools/dev/run-core-frontier-batch-m31b.py
+          python3 tools/dev/patch-core-frontier-batch-m32.py
+          python3 tools/dev/patch-core-frontier-batch-m33.py
+          python3 tools/dev/patch-core-frontier-batch-m34.py
+          clang-format-18 -i src/core/core_ir.h src/core/core_ir.c src/core/core_lower.c src/target/riscv64/core_codegen.c
+          git diff --check
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/m34-candidate
+      - name: Focused void conditional and bitop shapes
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          c="$GITHUB_WORKSPACE/build/m34-candidate/bin/minic"; w=build/m34-shapes; mkdir -p "$w"
+          cat > "$w/void_conditional.c" <<'EOF'
+          static void add3(long *p) { *p += 3; }
+          static void add5(long *p) { *p += 5; }
+          void f(int c, long *p) { c ? add3(p) : add5(p); }
+          EOF
+          cat > "$w/bitop_inner.c" <<'EOF'
+          static void g(unsigned long nr, unsigned long *addr) {
+              unsigned long mask = 1UL << (nr % 64UL);
+              unsigned long *p = addr + (nr / 64UL);
+              *p |= mask;
+          }
+          void f(int c, unsigned long nr, unsigned long *addr) {
+              c ? g(nr, addr) : g(nr, addr);
+          }
+          EOF
+          for src in "$w/void_conditional.c" "$w/bitop_inner.c"; do
+            name=$(basename "$src" .c)
+            MINIC_CORE_IR=strict "$c" -S "$src" -o "$w/$name.s"
+            echo "M34_SHAPE_PASS name=$name"
+          done
+      - name: RISC-V QEMU differential
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          c="$GITHUB_WORKSPACE/build/m34-candidate/bin/minic"; w=build/m34-shapes
+          cat > "$w/void_runtime.c" <<'EOF'
+          #include <stdio.h>
+          void f(int, long *);
+          int main(void) { long x=10,y=10; f(1,&x); f(0,&y); printf("%ld %ld\n",x,y); return 0; }
+          EOF
+          MINIC_CORE_IR=strict "$c" -S "$w/void_conditional.c" -o "$w/void_minic.s"
+          riscv64-linux-gnu-gcc -O0 -static "$w/void_runtime.c" "$w/void_minic.s" -o "$w/void_minic.elf"
+          riscv64-linux-gnu-gcc -O0 -static "$w/void_runtime.c" "$w/void_conditional.c" -o "$w/void_gcc.elf"
+          qemu-riscv64 "$w/void_minic.elf" > "$w/void_minic.out"
+          qemu-riscv64 "$w/void_gcc.elf" > "$w/void_gcc.out"
+          diff -u "$w/void_gcc.out" "$w/void_minic.out"
+          grep -Fx '13 15' "$w/void_minic.out"
+          cat > "$w/bit_runtime.c" <<'EOF'
+          #include <stdio.h>
+          void f(int, unsigned long, unsigned long *);
+          int main(void) { unsigned long a[2]={0,0}; f(1,1,a); f(0,65,a); printf("%lu %lu\n",a[0],a[1]); return 0; }
+          EOF
+          MINIC_CORE_IR=strict "$c" -S "$w/bitop_inner.c" -o "$w/bit_minic.s"
+          riscv64-linux-gnu-gcc -O0 -static "$w/bit_runtime.c" "$w/bit_minic.s" -o "$w/bit_minic.elf"
+          riscv64-linux-gnu-gcc -O0 -static "$w/bit_runtime.c" "$w/bitop_inner.c" -o "$w/bit_gcc.elf"
+          qemu-riscv64 "$w/bit_minic.elf" > "$w/bit_minic.out"
+          qemu-riscv64 "$w/bit_gcc.elf" > "$w/bit_gcc.out"
+          diff -u "$w/bit_gcc.out" "$w/bit_minic.out"
+          grep -Fx '2 2' "$w/bit_minic.out"
+          echo M34_QEMU_DIFF_PASS
+      - name: Frozen representative leaves __set_bit_le
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          c="$GITHUB_WORKSPACE/build/m34-candidate/bin/minic"; w=build/m34-rep; mkdir -p "$w"
+          set +e
+          MINIC_CORE_IR=strict "$c" -S build/linux-focus-corpus/kbuild/init/version.i -o "$w/version.s" 2>"$w/version.err"
+          rc=$?
+          set -e
+          cat "$w/version.err"
+          ! grep -Fq "Core IR shadow does not yet support function '__set_bit_le'" "$w/version.err"
+          if [ "$rc" -ne 0 ]; then grep -Fq 'Core IR shadow does not yet support function' "$w/version.err"; fi
+          printf 'M34_REP_MOVED rc=%d\n' "$rc"
+      - name: Frozen strict first500 replay and classify
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          c="$GITHUB_WORKSPACE/build/m34-candidate/bin/minic"; w="$GITHUB_WORKSPACE/build/m34-strict500"
+          set +e
+          MINIC_CORE_IR=strict python3 tests/external/linux/corpus_replay.py --minic "$c" --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" --work "$w" --jobs 5 --offset 0 --limit 500 --sample-count 0 --indices ''
+          rc=$?
+          set -e
+          printf 'M34_STRICT500_REPLAY_STATUS=%d\n' "$rc"
+          python3 tools/ci/classify-core-strict-frontier.py "$w/batch-results.json" --examples 5 --json-out "$w/frontier-summary.json" --require-no-errors
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          s=json.loads(Path('build/m34-strict500/frontier-summary.json').read_text())
+          assert s['selected']==500 and s['error']==0 and s['preprocess_missing']==0, s
+          assert s['pass']+s['unsupported']==500, s
+          b={r['function']:r['count'] for r in s['blockers']}
+          assert b.get('__set_bit_le',0)==0, b.get('__set_bit_le')
+          print(f"M34_STRICT500 selected=500 pass={s['pass']} unsupported={s['unsupported']} error=0 distinct={len(s['blockers'])}")
+          for r in s['blockers'][:40]: print(f"M34_NEXT_BLOCKER count={r['count']} function={r['function']}")
+          PY
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: core-frontier-m34-evidence
+          path: |
+            build/m34-shapes/
+            build/m34-rep/
+            build/m34-strict500/frontier-summary.json
+            build/m34-strict500/batch-results.json
+          if-no-files-found: warn

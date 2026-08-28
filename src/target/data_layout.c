@@ -13,6 +13,8 @@ static const MinicDataLayout minic_rv64_data_layout = {
     .float_alignment = 4U,
     .double_size = 8U,
     .double_alignment = 8U,
+    .long_double_size = 16U,
+    .long_double_alignment = 16U,
 };
 
 const MinicDataLayout *minic_default_data_layout(void) {
@@ -45,9 +47,10 @@ static bool minic_data_layout_apply_explicit_alignment(MinicType type, size_t *a
     if ((type.explicit_alignment & (type.explicit_alignment - 1U)) != 0U) {
         return false;
     }
-    if (type.explicit_alignment > *alignment) {
-        *alignment = type.explicit_alignment;
-    }
+    /* A type-carried explicit alignment comes from typedef semantics, where
+       GNU aligned(N) may either raise or lower natural alignment. Record,
+       field, and object declarations keep separate minimum-alignment owners. */
+    *alignment = type.explicit_alignment;
     return true;
 }
 
@@ -69,6 +72,7 @@ static bool minic_data_layout_record_depth(const MinicDataLayout *layout,
                                            size_t *alignment) {
     size_t storage_bits;
     size_t record_alignment;
+    size_t pack_alignment;
     size_t index;
 
     if (layout == NULL || program == NULL || record == NULL || size == NULL || alignment == NULL ||
@@ -77,6 +81,11 @@ static bool minic_data_layout_record_depth(const MinicDataLayout *layout,
     }
     storage_bits = 0U;
     record_alignment = 1U;
+    pack_alignment = record->is_packed ? 1U : record->pack_alignment;
+    if (pack_alignment != 0U &&
+        (pack_alignment > 16U || (pack_alignment & (pack_alignment - 1U)) != 0U)) {
+        return false;
+    }
     for (index = 0U; index < record->field_count; ++index) {
         const MinicRecordField *field;
         size_t element_size;
@@ -91,6 +100,9 @@ static bool minic_data_layout_record_depth(const MinicDataLayout *layout,
                 layout, program, field->type, depth + 1U, &element_size, &field_alignment) ||
             element_size > SIZE_MAX / field->element_count) {
             return false;
+        }
+        if (pack_alignment != 0U && field_alignment > pack_alignment) {
+            field_alignment = pack_alignment;
         }
         field_bit_offset = 0U;
         if (field->is_bit_field) {
@@ -122,7 +134,7 @@ static bool minic_data_layout_record_depth(const MinicDataLayout *layout,
                 storage_bits = field_start_bits;
             } else {
                 field_start_bits = storage_bits;
-                if (!record->is_packed) {
+                if (pack_alignment != 1U) {
                     size_t within_boundary;
 
                     within_boundary = field_start_bits % alignment_bits;
@@ -141,8 +153,8 @@ static bool minic_data_layout_record_depth(const MinicDataLayout *layout,
             }
             field_offset = field_start_bits / 8U;
             field_bit_offset = field_start_bits % 8U;
-            if (!record->is_packed && field->name_length != 0U && field->bit_width != 0U &&
-                field_alignment > record_alignment) {
+            if (pack_alignment != 1U && field->name_length != 0U &&
+                field->bit_width != 0U && field_alignment > record_alignment) {
                 record_alignment = field_alignment;
             }
         } else {
@@ -171,7 +183,7 @@ static bool minic_data_layout_record_depth(const MinicDataLayout *layout,
                 if (field_size > storage_size) {
                     storage_size = field_size;
                 }
-            } else if (record->is_packed && field->explicit_alignment == 0U) {
+            } else if (pack_alignment == 1U && field->explicit_alignment == 0U) {
                 field_offset = storage_size;
                 if (field_offset > SIZE_MAX - field_size) {
                     return false;
@@ -197,7 +209,7 @@ static bool minic_data_layout_record_depth(const MinicDataLayout *layout,
             } else {
                 storage_bits = storage_size * 8U;
             }
-            if ((!record->is_packed || field->explicit_alignment != 0U) &&
+            if ((pack_alignment != 1U || field->explicit_alignment != 0U) &&
                 field_alignment > record_alignment) {
                 record_alignment = field_alignment;
             }
@@ -269,6 +281,11 @@ static bool minic_data_layout_type_depth(const MinicDataLayout *layout,
     if (minic_type_is_double(type)) {
         *size = layout->double_size;
         *alignment = layout->double_alignment;
+        return minic_data_layout_apply_explicit_alignment(type, alignment);
+    }
+    if (minic_type_is_long_double(type)) {
+        *size = layout->long_double_size;
+        *alignment = layout->long_double_alignment;
         return minic_data_layout_apply_explicit_alignment(type, alignment);
     }
     if (minic_type_is_array(type)) {
@@ -801,6 +818,18 @@ bool minic_data_layout_global_relocation_target_addend(const MinicDataLayout *la
         const MinicRecordField *field;
         size_t field_offset;
 
+        /* Subscript offsets are already accumulated in target_byte_addend.
+         * Peel only the semantic array layers so member offsets can continue
+         * from the selected element without double-counting its byte offset. */
+        while (minic_type_is_array(type)) {
+            const MinicArrayType *array_type;
+
+            array_type = minic_c0_program_array_type(program, type.array_type_id);
+            if (array_type == NULL) {
+                return false;
+            }
+            type = array_type->element_type;
+        }
         if (!minic_type_is_record(type)) {
             return false;
         }
@@ -809,9 +838,7 @@ bool minic_data_layout_global_relocation_target_addend(const MinicDataLayout *la
                     ? NULL
                     : minic_c0_record_field(record, relocation->target_member_indices[depth]);
         if (field == NULL || field->element_count == 0U || field->is_bit_field ||
-            field->is_flexible_array ||
-            (field->is_array && depth + 1U != relocation->target_member_depth) ||
-            (!field->is_array && field->element_count != 1U) ||
+            (!field->is_array && !field->is_flexible_array && field->element_count != 1U) ||
             !minic_data_layout_record_field_offset(
                 layout, program, record, relocation->target_member_indices[depth], &field_offset) ||
             result > SIZE_MAX - field_offset) {

@@ -47,6 +47,8 @@ fi
 cat >"$work/rv64-va-list-model.c" <<'EOF'
 _Static_assert(__builtin_types_compatible_p(__builtin_va_list, void *),
                "RV64 GCC __builtin_va_list is not void *");
+_Static_assert(sizeof(long double) == 16, "RV64 GCC long double size is not 16");
+_Static_assert(_Alignof(long double) == 16, "RV64 GCC long double alignment is not 16");
 int main(void) { return 0; }
 EOF
 "$target_cc" -std=c11 -c "$work/rv64-va-list-model.c" -o "$work/rv64-va-list-model.o"

@@ -67,6 +67,7 @@ typedef enum MinicExpressionKind {
     MINIC_EXPRESSION_BUILTIN_VA_START,
     MINIC_EXPRESSION_BUILTIN_VA_COPY,
     MINIC_EXPRESSION_BUILTIN_VA_END,
+    MINIC_EXPRESSION_BUILTIN_VA_ARG,
     MINIC_EXPRESSION_BUILTIN_UNARY,
     MINIC_EXPRESSION_BUILTIN_OVERFLOW
 } MinicExpressionKind;
@@ -106,8 +107,12 @@ typedef enum MinicBinaryOperator {
 } MinicBinaryOperator;
 
 typedef enum MinicBuiltinUnaryOperator {
-    MINIC_BUILTIN_UNARY_CLZLL = 0,
+    MINIC_BUILTIN_UNARY_CLZ = 0,
+    MINIC_BUILTIN_UNARY_CLZL,
+    MINIC_BUILTIN_UNARY_CLZLL,
+    MINIC_BUILTIN_UNARY_CTZ,
     MINIC_BUILTIN_UNARY_CTZL,
+    MINIC_BUILTIN_UNARY_CTZLL,
     MINIC_BUILTIN_UNARY_FFSLL,
     MINIC_BUILTIN_UNARY_ISDIGIT
 } MinicBuiltinUnaryOperator;
@@ -196,6 +201,8 @@ typedef struct MinicExpression {
     } value;
 } MinicExpression;
 
+/* Transitional read model: callers must preserve legacy object semantics until
+ * producers are migrated to one materialized ArrayType representation. */
 typedef struct MinicArrayObjectInfo {
     MinicType element_type;
     size_t element_count;
@@ -208,6 +215,7 @@ typedef struct MinicLocal {
     MinicSourceSpan name_span;
     MinicType type;
     size_t element_count;
+    size_t explicit_alignment;
     bool is_array;
     bool is_register_storage;
 } MinicLocal;
@@ -356,6 +364,7 @@ typedef struct MinicRecord {
     size_t field_count;
     size_t field_capacity;
     size_t explicit_alignment;
+    size_t pack_alignment;
     bool is_union;
     bool is_packed;
     bool is_transparent_union;
@@ -446,6 +455,8 @@ typedef struct MinicGlobalObject {
     char *section_name;
     size_t section_name_length;
     MinicType type;
+    /* GNU object aliases remain declarations; the target owns storage and emission payload. */
+    MinicGlobalObjectId alias_target;
     uint64_t *initializer_values;
     size_t initializer_count;
     size_t initializer_capacity;
@@ -539,6 +550,7 @@ typedef struct MinicC0Program {
 
 void minic_c0_program_initialize(MinicC0Program *program);
 void minic_c0_program_destroy(MinicC0Program *program);
+void minic_c0_local_initialize(MinicLocal *local);
 
 bool minic_c0_program_add_expression(MinicC0Program *program,
                                      const MinicExpression *expression,
@@ -747,6 +759,18 @@ bool minic_c0_program_add_extern_global_object(MinicC0Program *program,
                                                MinicType type,
                                                bool is_read_only,
                                                MinicGlobalObjectId *global_object_id);
+bool minic_c0_program_add_extern_global_object_with_metadata(MinicC0Program *program,
+                                                             const char *name,
+                                                             size_t name_length,
+                                                             MinicType type,
+                                                             bool is_read_only,
+                                                             const char *section_name,
+                                                             size_t section_name_length,
+                                                             size_t explicit_alignment,
+                                                             MinicSymbolVisibility visibility,
+                                                             bool is_weak,
+                                                             bool is_block_scope_extern_only,
+                                                             MinicGlobalObjectId *global_object_id);
 bool minic_c0_program_add_tentative_global_object(MinicC0Program *program,
                                                   const char *name,
                                                   size_t name_length,
@@ -768,6 +792,11 @@ bool minic_c0_global_object_replace_zero_initializer_bits(MinicC0Program *progra
                                                           MinicGlobalObjectId global_object_id,
                                                           size_t initializer_index,
                                                           uint64_t bits);
+bool minic_c0_global_object_replace_aggregate_initializer_bits(
+    MinicC0Program *program,
+    MinicGlobalObjectId global_object_id,
+    size_t initializer_index,
+    uint64_t bits);
 bool minic_c0_global_object_set_flexible_array_initializer_count(
     MinicC0Program *program, MinicGlobalObjectId global_object_id, size_t element_count);
 bool minic_c0_type_initializer_slot_count(const MinicC0Program *program,
@@ -884,6 +913,9 @@ bool minic_c0_global_object_set_zero_initialized(MinicC0Program *program,
                                                  MinicGlobalObjectId global_object_id);
 bool minic_c0_global_object_set_extern(MinicC0Program *program,
                                        MinicGlobalObjectId global_object_id);
+bool minic_c0_global_object_set_alias(MinicC0Program *program,
+                                      MinicGlobalObjectId global_object_id,
+                                      MinicGlobalObjectId target_object_id);
 bool minic_c0_global_object_set_weak(MinicC0Program *program,
                                      MinicGlobalObjectId global_object_id,
                                      bool is_weak);

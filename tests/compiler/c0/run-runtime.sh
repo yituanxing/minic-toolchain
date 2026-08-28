@@ -48,7 +48,7 @@ run_double_return_abi() {
     "$minic" -S "$work/$name.i" -o "$work/$name.s"
     grep -F "  fmv.x.d a0, fa0" "$work/$name.s" >/dev/null
     grep -F "  fmv.d.x fa0, a0" "$work/$name.s" >/dev/null
-    grep -F "  li a0, 0x405ee00000000000" "$work/$name.s" >/dev/null
+    grep -F "0x405ee00000000000" "$work/$name.s" >/dev/null
     grep -F "  fadd.d ft0, ft0, ft1" "$work/$name.s" >/dev/null
     grep -F "  fsub.d ft0, ft0, ft1" "$work/$name.s" >/dev/null
     grep -F "  fmul.d ft0, ft0, ft1" "$work/$name.s" >/dev/null
@@ -112,4 +112,13 @@ run_case runtime_record_array_value_initializer 0 runtime_record_array_value_ini
 run_case static_zero_length_record_field_relocation 0 static_zero_length_record_field_relocation
 run_case gnu_cleanup_runtime 0 gnu_cleanup_runtime
 run_case gnu_void_pointer_relational 0 gnu_void_pointer_relational
+run_case core_scalar_comma_qualified_runtime 0 core_scalar_comma_qualified_runtime
+run_case long_double_declaration_runtime 0 long_double_declaration_runtime
+run_case gnu_word_mode_runtime 0 gnu_word_mode_runtime
+run_case double_to_float_runtime 0 double_to_float_runtime
+run_case main_parameters_runtime 0 main_parameters_runtime
+run_case static_label_jump_table_runtime 0 static_label_jump_table_runtime
+run_case core_double_compound_runtime 0 core_double_compound_runtime
+run_case builtin_huge_val_runtime 0 builtin_huge_val_runtime
+run_case gnu_extension_prefix_runtime 0 gnu_extension_prefix_runtime
 run_double_return_abi

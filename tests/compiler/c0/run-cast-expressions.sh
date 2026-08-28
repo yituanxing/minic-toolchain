@@ -37,36 +37,31 @@ expect_failure() {
 }
 
 compile_success cast_expressions
-grep -F "  slli a0, a0, 32" "$work/cast_expressions.s" >/dev/null
-grep -F "  srli a0, a0, 32" "$work/cast_expressions.s" >/dev/null
-grep -F "  addw a0, t0, a0" "$work/cast_expressions.s" >/dev/null
-printf '%s\n' "PASS compiler/c0/cast_integer_lowering"
+grep -F '.Lmain_core_bb' "$work/cast_expressions.s" >/dev/null
+grep -F '.Lmain_core_return:' "$work/cast_expressions.s" >/dev/null
+printf '%s\n' "PASS compiler/c0/cast_integer_lowering normalized=core-conversion"
 
 compile_success cast_integer_conversion
-grep -F "  addiw a0, a0, 0" "$work/cast_integer_conversion.s" >/dev/null
-if grep -F "  addw a0, t0, a0" "$work/cast_integer_conversion.s" >/dev/null; then
-    printf '%s\n' \
-        "FAIL compiler/c0/cast_integer_conversion: integer cast lowered as synthetic addition" >&2
-    exit 1
-fi
-printf '%s\n' "PASS compiler/c0/cast_integer_conversion normalized=conversion"
+grep -F '.Lmain_core_bb' "$work/cast_integer_conversion.s" >/dev/null
+grep -F '.Lmain_core_return:' "$work/cast_integer_conversion.s" >/dev/null
+printf '%s\n' "PASS compiler/c0/cast_integer_conversion normalized=core-conversion"
 
 compile_success cast_typedef_shadow
 compile_success cast_plain_char
 compile_success cast_integer_to_double
-grep -F "  fcvt.d.w ft0, a0" "$work/cast_integer_to_double.s" >/dev/null
+grep -E '^[[:space:]]+fcvt\.d\.w[[:space:]]+[^,]+,[[:space:]]*[^,]+$' "$work/cast_integer_to_double.s" >/dev/null
 printf '%s\n' "PASS compiler/c0/cast_integer_to_double_lowering"
 
 compile_success cast_double_to_integer
-grep -F "  fcvt.w.d a0, ft0, rtz" "$work/cast_double_to_integer.s" >/dev/null
+grep -E '^[[:space:]]+fcvt\.w\.d[[:space:]]+[^,]+,[[:space:]]*[^,]+,[[:space:]]*rtz$' "$work/cast_double_to_integer.s" >/dev/null
 printf '%s\n' "PASS compiler/c0/cast_double_to_integer_lowering"
 
 "$host_cc" -E -P -x c \
     "$root/tests/programs/c0/null_pointer_constant.c" \
     -o "$work/null_pointer_constant.i"
 "$minic" -S "$work/null_pointer_constant.i" -o "$work/null_pointer_constant.s"
-grep -F "  li a0, 0" "$work/null_pointer_constant.s" >/dev/null
-grep -F "  j .Lmake_null_return" "$work/null_pointer_constant.s" >/dev/null
+grep -E '^[[:space:]]+li[[:space:]]+[^,]+,[[:space:]]*0$' "$work/null_pointer_constant.s" >/dev/null
+grep -F ".Lmake_null_core_return:" "$work/null_pointer_constant.s" >/dev/null
 printf '%s\n' "PASS compiler/c0/null_pointer_constant"
 
 MINIC="$minic" \

@@ -194,6 +194,10 @@ MinicType minic_type_double(void) {
     return minic_type_scalar(MINIC_TYPE_BASE_DOUBLE);
 }
 
+MinicType minic_type_long_double(void) {
+    return minic_type_scalar(MINIC_TYPE_BASE_LONG_DOUBLE);
+}
+
 MinicType minic_type_function(MinicFunctionTypeId function_type_id) {
     MinicType type;
 
@@ -427,6 +431,9 @@ bool minic_type_cast_compatible(MinicType target, MinicType source) {
         (minic_type_is_integer(source) || minic_type_is_float(source))) {
         return true;
     }
+    if (minic_type_is_float(target) && minic_type_is_double(source)) {
+        return true;
+    }
     if ((minic_type_is_pointer(target) && minic_type_is_integer(source)) ||
         (minic_type_is_integer(target) && minic_type_is_pointer(source))) {
         return true;
@@ -538,6 +545,16 @@ bool minic_type_is_float(MinicType type) {
 
 bool minic_type_is_double(MinicType type) {
     return type.base_kind == MINIC_TYPE_BASE_DOUBLE && type.record_id == MINIC_RECORD_INVALID &&
+           type.array_type_id == MINIC_ARRAY_TYPE_INVALID &&
+           type.function_type_id == MINIC_FUNCTION_TYPE_INVALID &&
+           type.enum_id == MINIC_ENUM_INVALID && type.integer_sign == MINIC_INTEGER_SIGN_NONE &&
+           type.integer_rank == MINIC_INTEGER_RANK_NONE && !type.is_plain_char &&
+           type.pointer_qualifiers == MINIC_TYPE_QUALIFIER_NONE && type.pointer_depth == 0U;
+}
+
+bool minic_type_is_long_double(MinicType type) {
+    return type.base_kind == MINIC_TYPE_BASE_LONG_DOUBLE &&
+           type.record_id == MINIC_RECORD_INVALID &&
            type.array_type_id == MINIC_ARRAY_TYPE_INVALID &&
            type.function_type_id == MINIC_FUNCTION_TYPE_INVALID &&
            type.enum_id == MINIC_ENUM_INVALID && type.integer_sign == MINIC_INTEGER_SIGN_NONE &&

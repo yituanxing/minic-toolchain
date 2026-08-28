@@ -24,22 +24,34 @@ typedef struct MinicSourceBuffer {
     size_t size;
 } MinicSourceBuffer;
 
-typedef enum MinicCoreShadowMode {
-    MINIC_CORE_SHADOW_DISABLED = 0,
-    MINIC_CORE_SHADOW_OPTIONAL,
-    MINIC_CORE_SHADOW_STRICT
-} MinicCoreShadowMode;
-
-typedef enum MinicCoreCodegenMode {
-    MINIC_CORE_CODEGEN_DISABLED = 0,
-    MINIC_CORE_CODEGEN_BASIC_V0
-} MinicCoreCodegenMode;
-
-typedef struct MinicCoreCandidates {
+typedef struct MinicCoreFunctionSet {
     MinicCoreFunction *functions;
     MinicCoreLowerStatus *statuses;
     size_t function_count;
-} MinicCoreCandidates;
+} MinicCoreFunctionSet;
+
+/* Bootstrap diagnostics are deliberately opt-in.  They let a target-built
+   compiler expose the exact phase/function where self-host replay stops
+   making progress without changing normal compiler output or semantics. */
+static bool minic_bootstrap_trace_enabled(void) {
+    return getenv("MINIC_BOOTSTRAP_TRACE") != NULL;
+}
+
+static void minic_bootstrap_trace_stage(const char *input_path,
+                                        const char *stage,
+                                        const char *state,
+                                        size_t function_count) {
+    if (!minic_bootstrap_trace_enabled()) {
+        return;
+    }
+    (void)fprintf(stderr,
+                  "MINIC_BOOTSTRAP_TRACE stage=%s state=%s functions=%zu input=%s\n",
+                  stage != NULL ? stage : "?",
+                  state != NULL ? state : "?",
+                  function_count,
+                  input_path != NULL ? input_path : "?");
+    (void)fflush(stderr);
+}
 
 static void minic_set_diagnostic(MinicDiagnostic *diagnostic,
                                  const char *path,
@@ -60,148 +72,116 @@ static void minic_set_diagnostic(MinicDiagnostic *diagnostic,
     va_end(arguments);
 }
 
-static void minic_core_candidates_initialize(MinicCoreCandidates *candidates) {
-    if (candidates == NULL) {
+static void minic_core_function_set_initialize(MinicCoreFunctionSet *set) {
+    if (set == NULL) {
         return;
     }
-    candidates->functions = NULL;
-    candidates->statuses = NULL;
-    candidates->function_count = 0U;
+    set->functions = NULL;
+    set->statuses = NULL;
+    set->function_count = 0U;
 }
 
-static void minic_core_candidates_destroy(MinicCoreCandidates *candidates) {
+static void minic_core_function_set_destroy(MinicCoreFunctionSet *set) {
     size_t function_index;
 
-    if (candidates == NULL) {
+    if (set == NULL) {
         return;
     }
-    if (candidates->functions != NULL) {
-        for (function_index = 0U; function_index < candidates->function_count; ++function_index) {
-            minic_core_function_destroy(&candidates->functions[function_index]);
+    if (set->functions != NULL) {
+        for (function_index = 0U; function_index < set->function_count; ++function_index) {
+            minic_core_function_destroy(&set->functions[function_index]);
         }
     }
-    free(candidates->functions);
-    free(candidates->statuses);
-    minic_core_candidates_initialize(candidates);
+    free(set->functions);
+    free(set->statuses);
+    minic_core_function_set_initialize(set);
 }
 
-static bool minic_prepare_core_candidates(const MinicC0Program *program,
-                                          MinicCoreCandidates *output) {
-    MinicCoreCandidates candidates;
+static bool minic_prepare_core_function_set(const MinicC0Program *program,
+                                            const MinicTargetInfo *target,
+                                            MinicCoreFunctionSet *output) {
+    MinicCoreFunctionSet set;
     size_t function_index;
 
-    if (program == NULL || output == NULL ||
-        program->function_count > SIZE_MAX / sizeof(*candidates.functions) ||
-        program->function_count > SIZE_MAX / sizeof(*candidates.statuses)) {
+    if (program == NULL || target == NULL || output == NULL ||
+        program->function_count > SIZE_MAX / sizeof(*set.functions) ||
+        program->function_count > SIZE_MAX / sizeof(*set.statuses)) {
         return false;
     }
-    minic_core_candidates_initialize(&candidates);
-    candidates.function_count = program->function_count;
-    if (candidates.function_count != 0U) {
-        candidates.functions =
-            (MinicCoreFunction *)calloc(candidates.function_count, sizeof(*candidates.functions));
-        candidates.statuses = (MinicCoreLowerStatus *)malloc(candidates.function_count *
-                                                             sizeof(*candidates.statuses));
-        if (candidates.functions == NULL || candidates.statuses == NULL) {
-            free(candidates.functions);
-            free(candidates.statuses);
+    minic_core_function_set_initialize(&set);
+    set.function_count = program->function_count;
+    if (set.function_count != 0U) {
+        set.functions =
+            (MinicCoreFunction *)calloc(set.function_count, sizeof(*set.functions));
+        set.statuses = (MinicCoreLowerStatus *)malloc(set.function_count *
+                                                       sizeof(*set.statuses));
+        if (set.functions == NULL || set.statuses == NULL) {
+            free(set.functions);
+            free(set.statuses);
             return false;
         }
     }
-    for (function_index = 0U; function_index < candidates.function_count; ++function_index) {
-        minic_core_function_initialize(&candidates.functions[function_index]);
-        candidates.statuses[function_index] = MINIC_CORE_LOWER_UNSUPPORTED;
+    for (function_index = 0U; function_index < set.function_count; ++function_index) {
+        minic_core_function_initialize(&set.functions[function_index]);
+        set.statuses[function_index] = MINIC_CORE_LOWER_UNSUPPORTED;
     }
-    for (function_index = 0U; function_index < candidates.function_count; ++function_index) {
+    for (function_index = 0U; function_index < set.function_count; ++function_index) {
         const MinicFunction *function;
         MinicFunctionBodyView body;
 
         function = minic_c0_program_function(program, function_index);
         if (function == NULL) {
-            candidates.statuses[function_index] = MINIC_CORE_LOWER_ERROR;
+            set.statuses[function_index] = MINIC_CORE_LOWER_ERROR;
             continue;
         }
         if (!function->is_defined) {
             continue;
         }
         if (!minic_c0_function_body_view(program, function_index, &body)) {
-            candidates.statuses[function_index] = MINIC_CORE_LOWER_ERROR;
+            set.statuses[function_index] = MINIC_CORE_LOWER_ERROR;
             continue;
         }
-        candidates.statuses[function_index] =
-            minic_core_lower_function(&body, &candidates.functions[function_index]);
+        if (minic_bootstrap_trace_enabled()) {
+            (void)fprintf(stderr,
+                          "MINIC_BOOTSTRAP_TRACE stage=core-lower state=begin "
+                          "index=%zu function=%s\n",
+                          function_index,
+                          function->name != NULL ? function->name : "?");
+            (void)fflush(stderr);
+        }
+        set.statuses[function_index] =
+            minic_core_lower_function(&body, target, &set.functions[function_index]);
+        if (minic_bootstrap_trace_enabled()) {
+            (void)fprintf(stderr,
+                          "MINIC_BOOTSTRAP_TRACE stage=core-lower state=end "
+                          "index=%zu function=%s status=%d blocks=%zu instructions=%zu\n",
+                          function_index,
+                          function->name != NULL ? function->name : "?",
+                          (int)set.statuses[function_index],
+                          set.functions[function_index].block_count,
+                          set.functions[function_index].instruction_count);
+            (void)fflush(stderr);
+        }
     }
-    minic_core_candidates_destroy(output);
-    *output = candidates;
+    minic_core_function_set_destroy(output);
+    *output = set;
     return true;
 }
 
-static bool minic_core_shadow_mode(const char *input_path,
-                                   MinicDiagnostic *diagnostic,
-                                   MinicCoreShadowMode *mode) {
-    const char *value;
-
-    if (mode == NULL) {
-        return false;
-    }
-    value = getenv("MINIC_CORE_IR");
-    if (value == NULL || value[0] == '\0') {
-        *mode = MINIC_CORE_SHADOW_DISABLED;
-        return true;
-    }
-    if (strcmp(value, "shadow") == 0) {
-        *mode = MINIC_CORE_SHADOW_OPTIONAL;
-        return true;
-    }
-    if (strcmp(value, "strict") == 0) {
-        *mode = MINIC_CORE_SHADOW_STRICT;
-        return true;
-    }
-    minic_set_diagnostic(
-        diagnostic, input_path, 1U, 1U, "MINIC_CORE_IR must be unset, 'shadow', or 'strict'");
-    return false;
-}
-
-static bool minic_core_codegen_mode(const char *input_path,
-                                    MinicDiagnostic *diagnostic,
-                                    MinicCoreCodegenMode *mode) {
-    const char *value;
-
-    if (mode == NULL) {
-        return false;
-    }
-    value = getenv("MINIC_CORE_CODEGEN");
-    if (value == NULL || value[0] == '\0') {
-        *mode = MINIC_CORE_CODEGEN_DISABLED;
-        return true;
-    }
-    if (strcmp(value, "basic-v0") == 0) {
-        *mode = MINIC_CORE_CODEGEN_BASIC_V0;
-        return true;
-    }
-    minic_set_diagnostic(
-        diagnostic, input_path, 1U, 1U, "MINIC_CORE_CODEGEN must be unset or 'basic-v0'");
-    return false;
-}
-
-static bool minic_validate_core_shadow(const char *input_path,
-                                       const MinicC0Program *program,
-                                       const MinicCoreCandidates *candidates,
-                                       MinicCoreShadowMode mode,
-                                       MinicDiagnostic *diagnostic) {
+static bool minic_validate_core_functions(const char *input_path,
+                                          const MinicC0Program *program,
+                                          const MinicCoreFunctionSet *set,
+                                          MinicDiagnostic *diagnostic) {
     size_t function_index;
 
-    if (program == NULL || candidates == NULL) {
+    if (program == NULL || set == NULL) {
         return false;
     }
-    if (mode == MINIC_CORE_SHADOW_DISABLED) {
-        return true;
-    }
-    if (candidates->function_count != program->function_count ||
-        (candidates->function_count != 0U &&
-         (candidates->functions == NULL || candidates->statuses == NULL))) {
+    if (set->function_count != program->function_count ||
+        (set->function_count != 0U &&
+         (set->functions == NULL || set->statuses == NULL))) {
         minic_set_diagnostic(
-            diagnostic, input_path, 1U, 1U, "Core IR candidates do not match source program");
+            diagnostic, input_path, 1U, 1U, "Core IR functions do not match source program");
         return false;
     }
     for (function_index = 0U; function_index < program->function_count; ++function_index) {
@@ -211,21 +191,18 @@ static bool minic_validate_core_shadow(const char *input_path,
         function = minic_c0_program_function(program, function_index);
         if (function == NULL) {
             minic_set_diagnostic(
-                diagnostic, input_path, 1U, 1U, "Core IR shadow cannot access function");
+                diagnostic, input_path, 1U, 1U, "Core lowering cannot access function");
             return false;
         }
         if (!function->is_defined) {
             continue;
         }
-        status = candidates->statuses[function_index];
+        status = set->statuses[function_index];
         if (status == MINIC_CORE_LOWER_OK &&
-            !minic_core_function_verify(&candidates->functions[function_index])) {
+            !minic_core_function_verify(&set->functions[function_index])) {
             status = MINIC_CORE_LOWER_ERROR;
         }
         if (status == MINIC_CORE_LOWER_OK) {
-            continue;
-        }
-        if (status == MINIC_CORE_LOWER_UNSUPPORTED && mode == MINIC_CORE_SHADOW_OPTIONAL) {
             continue;
         }
         if (status == MINIC_CORE_LOWER_UNSUPPORTED) {
@@ -233,7 +210,7 @@ static bool minic_validate_core_shadow(const char *input_path,
                                  input_path,
                                  1U,
                                  1U,
-                                 "Core IR shadow does not yet support function '%s'",
+                                 "Core IR does not yet support function '%s'",
                                  function->name);
             return false;
         }
@@ -241,7 +218,7 @@ static bool minic_validate_core_shadow(const char *input_path,
                              input_path,
                              1U,
                              1U,
-                             "Core IR shadow lowering failed for function '%s'",
+                             "Core IR lowering failed for function '%s'",
                              function->name);
         return false;
     }
@@ -297,16 +274,58 @@ minic_read_file(const char *path, MinicSourceBuffer *buffer, MinicDiagnostic *di
     return true;
 }
 
+static void minic_set_ast_verify_diagnostic(const char *input_path,
+                                            const char *form_name,
+                                            const MinicC0AstVerifyFailure *failure,
+                                            MinicDiagnostic *diagnostic) {
+    const char *stage_name;
+    const char *reason;
+
+    stage_name = failure == NULL ? "unknown" : minic_c0_ast_verify_stage_name(failure->stage);
+    reason = failure == NULL || failure->reason == NULL ? "contract violation" : failure->reason;
+    if (failure != NULL && failure->index != MINIC_C0_AST_VERIFY_INDEX_NONE) {
+        if (failure->subindex != MINIC_C0_AST_VERIFY_INDEX_NONE) {
+            minic_set_diagnostic(diagnostic,
+                                 input_path,
+                                 1U,
+                                 1U,
+                                 "%s AST contract failed at %s[%zu:%zu]: %s",
+                                 form_name,
+                                 stage_name,
+                                 failure->index,
+                                 failure->subindex,
+                                 reason);
+        } else {
+            minic_set_diagnostic(diagnostic,
+                                 input_path,
+                                 1U,
+                                 1U,
+                                 "%s AST contract failed at %s[%zu]: %s",
+                                 form_name,
+                                 stage_name,
+                                 failure->index,
+                                 reason);
+        }
+    } else {
+        minic_set_diagnostic(diagnostic,
+                             input_path,
+                             1U,
+                             1U,
+                             "%s AST contract failed at %s: %s",
+                             form_name,
+                             stage_name,
+                             reason);
+    }
+}
+
 int minic_compile_preprocessed_file(const char *input_path,
                                     const char *output_path,
                                     MinicDiagnostic *diagnostic) {
     MinicSourceBuffer buffer;
     MinicC0Program program;
-    MinicCoreCandidates core_candidates;
+    MinicCoreFunctionSet core_set;
     const MinicTargetInfo *target_info;
-    MinicCoreCodegenMode core_codegen_mode;
-    MinicCoreShadowMode core_shadow_mode;
-    MinicCoreShadowMode core_validation_mode;
+    MinicC0AstVerifyFailure verify_failure;
     bool success;
 
     if (input_path == NULL || output_path == NULL) {
@@ -319,18 +338,6 @@ int minic_compile_preprocessed_file(const char *input_path,
         diagnostic->column = 1U;
         diagnostic->message[0] = '\0';
     }
-    if (!minic_core_shadow_mode(input_path, diagnostic, &core_shadow_mode)) {
-        return 1;
-    }
-    if (!minic_core_codegen_mode(input_path, diagnostic, &core_codegen_mode)) {
-        return 1;
-    }
-    core_validation_mode = core_shadow_mode;
-    if (core_codegen_mode != MINIC_CORE_CODEGEN_DISABLED &&
-        core_validation_mode == MINIC_CORE_SHADOW_DISABLED) {
-        core_validation_mode = MINIC_CORE_SHADOW_OPTIONAL;
-    }
-
     buffer.data = NULL;
     buffer.size = 0U;
     if (!minic_read_file(input_path, &buffer, diagnostic)) {
@@ -338,12 +345,15 @@ int minic_compile_preprocessed_file(const char *input_path,
     }
 
     minic_c0_program_initialize(&program);
-    minic_core_candidates_initialize(&core_candidates);
+    minic_core_function_set_initialize(&core_set);
     target_info = minic_default_target_info();
+    minic_bootstrap_trace_stage(input_path, "parse", "begin", 0U);
     success = minic_parse_c0_program(input_path, buffer.data, buffer.size, &program, diagnostic);
-    if (success && !minic_c0_program_verify_target(&program, MINIC_C0_AST_PARSED, target_info)) {
-        minic_set_diagnostic(
-            diagnostic, input_path, 1U, 1U, "parsed AST violates compiler contracts");
+    minic_bootstrap_trace_stage(input_path, "parse", success ? "end-ok" : "end-fail",
+                                program.function_count);
+    if (success && !minic_c0_program_verify_target_detailed(
+                       &program, MINIC_C0_AST_PARSED, target_info, &verify_failure)) {
+        minic_set_ast_verify_diagnostic(input_path, "parsed", &verify_failure, diagnostic);
         success = false;
     }
     if (success && !minic_c0_program_validate_function_body_ownership(&program)) {
@@ -351,14 +361,22 @@ int minic_compile_preprocessed_file(const char *input_path,
             diagnostic, input_path, 1U, 1U, "parsed FunctionBody ownership is invalid");
         success = false;
     }
+    if (success) {
+        minic_bootstrap_trace_stage(input_path, "normalize", "begin", program.function_count);
+    }
     if (success && !minic_c0_program_normalize_casts(&program)) {
         minic_set_diagnostic(diagnostic, input_path, 1U, 1U, "cannot normalize cast expressions");
         success = false;
     }
-    if (success &&
-        !minic_c0_program_verify_target(&program, MINIC_C0_AST_NORMALIZED, target_info)) {
-        minic_set_diagnostic(
-            diagnostic, input_path, 1U, 1U, "normalized AST violates backend contracts");
+    if (minic_bootstrap_trace_enabled()) {
+        minic_bootstrap_trace_stage(input_path,
+                                    "normalize",
+                                    success ? "end-ok" : "end-fail",
+                                    program.function_count);
+    }
+    if (success && !minic_c0_program_verify_target_detailed(
+                       &program, MINIC_C0_AST_NORMALIZED, target_info, &verify_failure)) {
+        minic_set_ast_verify_diagnostic(input_path, "normalized", &verify_failure, diagnostic);
         success = false;
     }
     if (success && !minic_c0_program_validate_function_body_ownership(&program)) {
@@ -366,31 +384,52 @@ int minic_compile_preprocessed_file(const char *input_path,
             diagnostic, input_path, 1U, 1U, "normalized FunctionBody ownership is invalid");
         success = false;
     }
-    if (success && core_validation_mode != MINIC_CORE_SHADOW_DISABLED &&
-        !minic_prepare_core_candidates(&program, &core_candidates)) {
+    if (success) {
+        minic_bootstrap_trace_stage(input_path, "core-set", "begin", program.function_count);
+    }
+    if (success && !minic_prepare_core_function_set(&program, target_info, &core_set)) {
         minic_set_diagnostic(
             diagnostic, input_path, 1U, 1U, "cannot retain Core IR lowering results");
         success = false;
     }
-    if (success) {
-        success = minic_validate_core_shadow(
-            input_path, &program, &core_candidates, core_validation_mode, diagnostic);
+    if (minic_bootstrap_trace_enabled()) {
+        minic_bootstrap_trace_stage(input_path,
+                                    "core-set",
+                                    success ? "end-ok" : "end-fail",
+                                    program.function_count);
     }
     if (success) {
-        success = minic_riscv64_layout_program(input_path, &program, diagnostic);
-    }
-    if (success && core_codegen_mode == MINIC_CORE_CODEGEN_BASIC_V0) {
+        minic_bootstrap_trace_stage(input_path, "core-validate", "begin", program.function_count);
         success =
-            minic_riscv64_write_c0_program_with_core_candidates(output_path,
-                                                                &program,
-                                                                core_candidates.functions,
-                                                                core_candidates.function_count,
-                                                                diagnostic);
-    } else if (success) {
-        success = minic_riscv64_write_c0_program(output_path, &program, diagnostic);
+            minic_validate_core_functions(input_path, &program, &core_set, diagnostic);
+        minic_bootstrap_trace_stage(input_path,
+                                    "core-validate",
+                                    success ? "end-ok" : "end-fail",
+                                    program.function_count);
+    }
+    if (success) {
+        minic_bootstrap_trace_stage(input_path, "layout", "begin", program.function_count);
+        success = minic_riscv64_layout_program(input_path, &program, diagnostic);
+        minic_bootstrap_trace_stage(input_path,
+                                    "layout",
+                                    success ? "end-ok" : "end-fail",
+                                    program.function_count);
+    }
+    if (success) {
+        minic_bootstrap_trace_stage(input_path, "codegen", "begin", program.function_count);
+        success =
+            minic_riscv64_write_c0_program_with_core_functions(output_path,
+                                                               &program,
+                                                               core_set.functions,
+                                                               core_set.function_count,
+                                                               diagnostic);
+        minic_bootstrap_trace_stage(input_path,
+                                    "codegen",
+                                    success ? "end-ok" : "end-fail",
+                                    program.function_count);
     }
 
-    minic_core_candidates_destroy(&core_candidates);
+    minic_core_function_set_destroy(&core_set);
     minic_c0_program_destroy(&program);
     free(buffer.data);
     return success ? 0 : 1;

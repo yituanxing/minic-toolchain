@@ -141,6 +141,7 @@ const MinicTargetInfo *minic_default_target_info(void) {
         target.data_layout = minic_default_data_layout();
         target.integer_model = &minic_rv64_integer_model;
         target.wide_character_type = minic_type_unsigned_short();
+        target.word_integer_rank = MINIC_INTEGER_RANK_LONG;
         target.gnu_sizeof_void_is_one = true;
         target.gnu_sizeof_function_is_one = true;
         target.call_frame_return_address_level0 = true;
@@ -184,6 +185,18 @@ bool minic_target_info_wide_character_type(const MinicTargetInfo *target, MinicT
     }
     *type = target->wide_character_type;
     return true;
+}
+
+bool minic_target_info_word_integer_type(const MinicTargetInfo *target,
+                                         MinicIntegerSign sign,
+                                         MinicType *type) {
+    if (target == NULL || target->integer_model == NULL || type == NULL ||
+        target->word_integer_rank <= MINIC_INTEGER_RANK_NONE ||
+        target->word_integer_rank > MINIC_INTEGER_RANK_INT128 ||
+        (sign != MINIC_INTEGER_SIGN_SIGNED && sign != MINIC_INTEGER_SIGN_UNSIGNED)) {
+        return false;
+    }
+    return integer_type_with_rank(sign, target->word_integer_rank, type);
 }
 
 bool minic_target_info_sizeof_type(const MinicTargetInfo *target,
@@ -335,7 +348,9 @@ bool minic_target_info_integer_literal_type(const MinicTargetInfo *target,
     bool decimal;
 
     if (target == NULL || target->integer_model == NULL || result == NULL || long_count > 2U ||
-        (base != MINIC_INTEGER_LITERAL_BASE_DECIMAL && base != MINIC_INTEGER_LITERAL_BASE_OCTAL &&
+        (base != MINIC_INTEGER_LITERAL_BASE_BINARY &&
+         base != MINIC_INTEGER_LITERAL_BASE_DECIMAL &&
+         base != MINIC_INTEGER_LITERAL_BASE_OCTAL &&
          base != MINIC_INTEGER_LITERAL_BASE_HEXADECIMAL)) {
         return false;
     }

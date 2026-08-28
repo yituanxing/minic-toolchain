@@ -39,3 +39,14 @@ int pointer_integer_roundtrip_case(unsigned long value) {
         return 0;
     }
 }
+
+int unsigned_64_case(unsigned long value) {
+    switch (value) {
+    case (3UL | (1UL << 63)):
+        return 1;
+    case -4ULL:
+        return 2;
+    default:
+        return 0;
+    }
+}

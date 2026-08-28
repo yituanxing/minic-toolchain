@@ -4,18 +4,41 @@ set -eu
 export LC_ALL=C
 export LANG=C
 
+progress_bar() {
+    phase=$1
+    done=$2
+    total=$3
+    if test "$total" -le 0; then
+        pct=100
+        filled=20
+    else
+        pct=$((done * 100 / total))
+        filled=$((done * 20 / total))
+    fi
+    empty=$((20 - filled))
+    bar=$(printf '%*s' "$filled" '' | tr ' ' '#')
+    rest=$(printf '%*s' "$empty" '' | tr ' ' '.')
+    printf '%s\n' "LINUX_PROGRESS phase=$phase [$bar$rest] ${pct}% done=$done total=$total"
+}
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
 work=${BUILD_DIR:-"$root/build/linux-batch"}
 minic=${MINIC:-"$root/build/linux-compiler/bin/minic"}
 cross_compile=${CROSS_COMPILE:-riscv64-linux-gnu-}
 version=6.6.143
 archive=${LINUX_ARCHIVE_CACHE:-"$work/linux-$version.tar.xz"}
-src="$work/linux-$version"
+source_tree=${LINUX_SOURCE_TREE:-}
+if test -n "$source_tree"; then
+    src=$(CDPATH= cd -- "$source_tree" && pwd)
+else
+    src="$work/linux-$version"
+fi
 out="$work/kbuild"
 limit=${LINUX_BATCH_LIMIT:-100}
 offset=${LINUX_BATCH_OFFSET:-0}
 minic_jobs=${LINUX_BATCH_JOBS:-2}
 selection=${LINUX_BATCH_SELECTION:-}
+materialize_only=${LINUX_BATCH_MATERIALIZE_ONLY:-0}
+materialize_make_jobs=${LINUX_BATCH_MATERIALIZE_MAKE_JOBS:-4}
 sha256=dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932
 url="https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-$version.tar.xz"
 
@@ -26,7 +49,18 @@ if test "$minic_jobs" -eq 0; then
     printf '%s\n' 'LINUX_BATCH_ERROR LINUX_BATCH_JOBS must be greater than zero' >&2
     exit 2
 fi
-if test ! -x "$minic"; then
+case "$materialize_only" in
+    0|1) ;;
+    *) printf '%s\n' 'LINUX_BATCH_ERROR LINUX_BATCH_MATERIALIZE_ONLY must be 0 or 1' >&2; exit 2 ;;
+esac
+case "$materialize_make_jobs" in
+    ''|*[!0-9]*) printf '%s\n' 'LINUX_BATCH_ERROR materialize make jobs must be a positive integer' >&2; exit 2 ;;
+esac
+if test "$materialize_make_jobs" -eq 0; then
+    printf '%s\n' 'LINUX_BATCH_ERROR materialize make jobs must be greater than zero' >&2
+    exit 2
+fi
+if test "$materialize_only" -ne 1 && test ! -x "$minic"; then
     printf '%s\n' "LINUX_BATCH_ERROR MiniC not executable: $minic" >&2
     exit 2
 fi
@@ -34,19 +68,24 @@ fi
 rm -rf "$work"
 mkdir -p "$work" "$(dirname -- "$archive")"
 
-archive_valid=false
-if test -s "$archive" && printf '%s  %s\n' "$sha256" "$archive" | sha256sum -c - >/dev/null 2>&1; then
-    archive_valid=true
-    printf '%s\n' "LINUX_ARCHIVE_CACHE hit path=$archive"
+if test -n "$source_tree"; then
+    test -f "$src/Makefile"
+    printf '%s\n' "LINUX_SOURCE_TREE external path=$src version=$version"
+else
+    archive_valid=false
+    if test -s "$archive" && printf '%s  %s\n' "$sha256" "$archive" | sha256sum -c - >/dev/null 2>&1; then
+        archive_valid=true
+        printf '%s\n' "LINUX_ARCHIVE_CACHE hit path=$archive"
+    fi
+    if test "$archive_valid" != true; then
+        rm -f "$archive" "$archive.tmp"
+        curl --http1.1 --retry 5 --retry-all-errors --retry-delay 2 -fsSL "$url" -o "$archive.tmp"
+        mv "$archive.tmp" "$archive"
+        printf '%s\n' "LINUX_ARCHIVE_CACHE fill path=$archive"
+    fi
+    printf '%s  %s\n' "$sha256" "$archive" | sha256sum -c -
+    tar -xJf "$archive" -C "$work"
 fi
-if test "$archive_valid" != true; then
-    rm -f "$archive" "$archive.tmp"
-    curl -fsSL "$url" -o "$archive.tmp"
-    mv "$archive.tmp" "$archive"
-    printf '%s\n' "LINUX_ARCHIVE_CACHE fill path=$archive"
-fi
-printf '%s  %s\n' "$sha256" "$archive" | sha256sum -c -
-tar -xJf "$archive" -C "$work"
 
 make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE="$cross_compile" defconfig \
     >"$work/defconfig.log" 2>&1
@@ -150,21 +189,76 @@ if test "$plan_status" -ne 0; then
     printf '%s\n' "LINUX_BATCH_PLAN_NOTE dry-run status=$plan_status; continuing because a C TU manifest was recovered"
 fi
 
-# Build the exact selected objects through Kbuild instead of asking its generic
-# %.i helper to recreate each command. This preserves generated-header and
-# object-specific dependencies. GCC -save-temps=obj leaves the preprocessed .i
-# beside each selected object using the same full Kbuild command line.
-set --
-for object in $(cut -f2 "$work/selected-tus.txt"); do
-    set -- "$@" "$object"
+# Build selected objects through Kbuild in bounded chunks. This preserves exact
+# object-specific dependencies while exposing deterministic GCC -> .i progress.
+selected_total=$(wc -l < "$work/selected-tus.txt" | tr -d ' ')
+chunk_size=${LINUX_BATCH_MATERIALIZE_CHUNK:-25}
+case "$chunk_size" in
+    ''|*[!0-9]*) printf '%s\n' 'LINUX_BATCH_ERROR materialize chunk must be a positive integer' >&2; exit 2 ;;
+esac
+if test "$chunk_size" -eq 0; then
+    printf '%s\n' 'LINUX_BATCH_ERROR materialize chunk must be greater than zero' >&2
+    exit 2
+fi
+
+: >"$work/preprocess.log"
+materialize_status=0
+materialized=0
+progress_bar gcc-to-i 0 "$selected_total"
+
+while test "$materialized" -lt "$selected_total"; do
+    set --
+    chunk_end=$((materialized + chunk_size))
+    if test "$chunk_end" -gt "$selected_total"; then
+        chunk_end=$selected_total
+    fi
+    line=$((materialized + 1))
+    while test "$line" -le "$chunk_end"; do
+        object=$(sed -n "${line}p" "$work/selected-tus.txt" | cut -f2)
+        set -- "$@" "$object"
+        line=$((line + 1))
+    done
+
+    set +e
+make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE="$cross_compile" \
+        KCFLAGS=-save-temps=obj -k -j"$materialize_make_jobs" "$@" >>"$work/preprocess.log" 2>&1
+    chunk_status=$?
+    set -e
+    if test "$chunk_status" -ne 0; then
+        materialize_status=$chunk_status
+    fi
+    materialized=$chunk_end
+    progress_bar gcc-to-i "$materialized" "$selected_total"
 done
 
-set +e
-make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE="$cross_compile" \
-    KCFLAGS=-save-temps=obj -k -j4 "$@" >"$work/preprocess.log" 2>&1
-materialize_status=$?
-set -e
-printf '%s\n' "LINUX_BATCH_MATERIALIZE status=$materialize_status selected=$(wc -l < "$work/selected-tus.txt" | tr -d ' ')"
+printf '%s\n' "LINUX_BATCH_MATERIALIZE status=$materialize_status selected=$selected_total"
+
+if test "$materialize_only" -eq 1; then
+    python3 - "$out" "$work/selected-tus.txt" <<'PY'
+from pathlib import Path
+import sys
+
+out_root = Path(sys.argv[1])
+selected = Path(sys.argv[2])
+rows = [line for line in selected.read_text().splitlines() if line.strip()]
+missing = []
+for row in rows:
+    _, _, rel_i, _ = row.split("\t", 3)
+    path = out_root / rel_i
+    if not path.is_file() or path.stat().st_size == 0:
+        missing.append(rel_i)
+
+print(
+    f"LINUX_BATCH_MATERIALIZE_ONLY selected={len(rows)} "
+    f"preprocess_missing={len(missing)}"
+)
+if missing:
+    for rel_i in missing[:50]:
+        print(f"LINUX_BATCH_MATERIALIZE_MISSING input={rel_i}")
+    raise SystemExit(1)
+PY
+    exit 0
+fi
 
 python3 - "$minic" "$out" "$work/selected-tus.txt" "$work" "$minic_jobs" <<'PY'
 from concurrent.futures import ThreadPoolExecutor, as_completed

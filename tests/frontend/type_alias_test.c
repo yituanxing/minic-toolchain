@@ -17,6 +17,7 @@ int main(void)
     MinicType state_pointer;
     MinicTypeAliasId alias_id;
     MinicTypeAliasId duplicate_id;
+    MinicTypeAliasId void_alias_id;
     const MinicArrayType *descriptor;
     const MinicTypeAlias *alias;
     char alias_name[] = "state_t";
@@ -59,6 +60,22 @@ int main(void)
         minic_c0_program_destroy(&program);
         return fail("outer array descriptor");
     }
+    if (!minic_c0_program_add_type_alias(
+            &program,
+            "opaque_t",
+            sizeof("opaque_t") - 1U,
+            minic_type_void(),
+            &void_alias_id)) {
+        minic_c0_program_destroy(&program);
+        return fail("void alias construction");
+    }
+    alias = minic_c0_program_type_alias(&program, void_alias_id);
+    if (alias == NULL || strcmp(alias->name, "opaque_t") != 0 ||
+        !minic_type_is_void(alias->type)) {
+        minic_c0_program_destroy(&program);
+        return fail("void alias ownership and identity");
+    }
+
     descriptor = minic_c0_program_array_type(
         &program,
         inner_array.array_type_id);

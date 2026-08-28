@@ -339,8 +339,48 @@ static bool choose_enum_compatible_type(MinicParser *parser,
     return false;
 }
 
+static bool choose_packed_enum_compatible_type(MinicParser *parser,
+                                               bool saw_negative,
+                                               int64_t minimum,
+                                               uint64_t maximum,
+                                               MinicType *compatible_type) {
+    if (saw_negative) {
+        MinicType candidates[] = {minic_type_signed_char(),
+                                  minic_type_short(),
+                                  minic_type_int(),
+                                  minic_type_long(),
+                                  minic_type_long_long()};
+        size_t index;
+
+        for (index = 0U; index < sizeof(candidates) / sizeof(candidates[0]); ++index) {
+            if (signed_type_fits(parser, candidates[index], minimum, maximum)) {
+                *compatible_type = candidates[index];
+                return true;
+            }
+        }
+        return false;
+    }
+    {
+        MinicType candidates[] = {minic_type_unsigned_char(),
+                                  minic_type_unsigned_short(),
+                                  minic_type_unsigned_int(),
+                                  minic_type_unsigned_long(),
+                                  minic_type_unsigned_long_long()};
+        size_t index;
+
+        for (index = 0U; index < sizeof(candidates) / sizeof(candidates[0]); ++index) {
+            if (unsigned_type_fits(parser, candidates[index], maximum)) {
+                *compatible_type = candidates[index];
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 typedef struct MinicEnumAttributeContext {
     bool has_byte_mode;
+    bool has_packed;
 } MinicEnumAttributeContext;
 
 static bool enum_mode_argument_is_byte(const MinicParser *parser,
@@ -382,17 +422,24 @@ static bool consume_enum_attribute(MinicParser *parser,
     }
     context = (MinicEnumAttributeContext *)opaque_context;
     if (attribute->descriptor == NULL ||
-        !minic_attribute_allowed_on(attribute->descriptor, MINIC_ATTRIBUTE_TARGET_TYPE) ||
-        attribute->descriptor->kind != MINIC_ATTRIBUTE_MODE) {
+        !minic_attribute_allowed_on(attribute->descriptor, MINIC_ATTRIBUTE_TARGET_TYPE)) {
         minic_parser_error(parser, "unsupported GNU enum type attribute");
         return false;
     }
-    if (!enum_mode_argument_is_byte(parser, attribute)) {
-        minic_parser_error(parser, "unsupported GNU enum mode; only mode(byte) is implemented");
-        return false;
+    if (attribute->descriptor->kind == MINIC_ATTRIBUTE_MODE) {
+        if (!enum_mode_argument_is_byte(parser, attribute)) {
+            minic_parser_error(parser, "unsupported GNU enum mode; only mode(byte) is implemented");
+            return false;
+        }
+        context->has_byte_mode = true;
+        return true;
     }
-    context->has_byte_mode = true;
-    return true;
+    if (attribute->descriptor->kind == MINIC_ATTRIBUTE_PACKED) {
+        context->has_packed = true;
+        return true;
+    }
+    minic_parser_error(parser, "unsupported GNU enum type attribute");
+    return false;
 }
 
 bool minic_parser_parse_enum_specifier(MinicParser *parser, MinicType *enum_type) {
@@ -550,6 +597,13 @@ bool minic_parser_parse_enum_specifier(MinicParser *parser, MinicType *enum_type
                                      : unsigned_type_fits(parser, compatible_type, maximum);
             if (!type_fits) {
                 minic_parser_error(parser, "enum mode(byte) cannot represent enumerator values");
+                return false;
+            }
+        } else if (attribute_context.has_packed) {
+            if (!choose_packed_enum_compatible_type(
+                    parser, saw_negative, minimum, maximum, &compatible_type)) {
+                minic_parser_error(parser,
+                                   "packed enum values do not fit a supported integer type");
                 return false;
             }
         } else if (!choose_enum_compatible_type(

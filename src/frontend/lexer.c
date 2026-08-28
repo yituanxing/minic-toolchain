@@ -98,6 +98,10 @@ static bool minic_is_decimal_digit(char character) {
     return character >= '0' && character <= '9';
 }
 
+static bool minic_is_binary_digit(char character) {
+    return character == '0' || character == '1';
+}
+
 static bool minic_is_hexadecimal_digit(char character) {
     return minic_is_decimal_digit(character) || (character >= 'a' && character <= 'f') ||
            (character >= 'A' && character <= 'F');
@@ -163,7 +167,9 @@ static MinicTokenKind minic_classify_identifier(const char *text, size_t length)
     if (length == 5U && memcmp(text, "const", 5U) == 0) {
         return MINIC_TOKEN_KW_CONST;
     }
-    if (length == 8U && memcmp(text, "volatile", 8U) == 0) {
+    if ((length == 8U && memcmp(text, "volatile", 8U) == 0) ||
+        (length == 12U && memcmp(text, "__volatile__", 12U) == 0) ||
+        (length == 10U && memcmp(text, "__volatile", 10U) == 0)) {
         return MINIC_TOKEN_KW_VOLATILE;
     }
     if (length == 7U && memcmp(text, "typedef", 7U) == 0) {
@@ -513,6 +519,14 @@ bool minic_lexer_next(MinicLexer *lexer, MinicToken *token, MinicDiagnostic *dia
         return minic_lexer_scan_string_literal(
             lexer, token, diagnostic, begin, MINIC_TOKEN_WIDE_STRING_LITERAL);
     }
+    if (character == 'L' && minic_lexer_peek_next(lexer) == '\'') {
+        /* Wide character constants remain integer constants in the frontend.
+           On the current RV64 GNU target wchar_t has int representation; keep
+           the prefix in the source span but reuse the character token/value
+           machinery instead of tokenizing the L as an identifier. */
+        minic_lexer_advance(lexer);
+        return minic_lexer_scan_character_constant(lexer, token, diagnostic, begin);
+    }
 
     if (minic_is_identifier_start(character)) {
         size_t start;
@@ -575,6 +589,20 @@ bool minic_lexer_next(MinicLexer *lexer, MinicToken *token, MinicDiagnostic *dia
             do {
                 minic_lexer_advance(lexer);
             } while (minic_is_hexadecimal_digit(minic_lexer_peek(lexer)));
+        } else if (character == '0' &&
+                   (minic_lexer_peek_next(lexer) == 'b' ||
+                    minic_lexer_peek_next(lexer) == 'B')) {
+            minic_lexer_advance(lexer);
+            minic_lexer_advance(lexer);
+            if (!minic_is_binary_digit(minic_lexer_peek(lexer))) {
+                token->span.end = minic_lexer_position(lexer);
+                minic_lexer_set_message(
+                    lexer, diagnostic, begin, "expected binary digit after 0b");
+                return false;
+            }
+            do {
+                minic_lexer_advance(lexer);
+            } while (minic_is_binary_digit(minic_lexer_peek(lexer)));
         } else {
             do {
                 minic_lexer_advance(lexer);

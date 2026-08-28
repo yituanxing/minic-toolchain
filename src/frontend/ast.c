@@ -41,6 +41,13 @@ static char *minic_copy_name(const char *name, size_t name_length) {
     return copy;
 }
 
+void minic_c0_local_initialize(MinicLocal *local) {
+    if (local == NULL) {
+        return;
+    }
+    (void)memset(local, 0, sizeof(*local));
+}
+
 void minic_c0_program_initialize(MinicC0Program *program) {
     (void)memset(program, 0, sizeof(*program));
     program->body_block = MINIC_BLOCK_INVALID;
@@ -807,6 +814,34 @@ bool minic_c0_block_add_statement(MinicC0Program *program,
     return true;
 }
 
+static void minic_c0_function_initialize_defaults(MinicFunction *function) {
+    size_t parameter_index;
+
+    if (function == NULL) {
+        return;
+    }
+    (void)memset(function, 0, sizeof(*function));
+    function->return_type = minic_type_int();
+    for (parameter_index = 0U;
+         parameter_index < sizeof(function->parameter_types) / sizeof(function->parameter_types[0]);
+         ++parameter_index) {
+        function->parameter_types[parameter_index] = minic_type_int();
+    }
+    function->alias_target = MINIC_FUNCTION_INVALID;
+}
+
+static void minic_c0_record_initialize_defaults(MinicRecord *record) {
+    if (record != NULL) {
+        (void)memset(record, 0, sizeof(*record));
+    }
+}
+
+static void minic_c0_record_field_initialize_defaults(MinicRecordField *field) {
+    if (field != NULL) {
+        (void)memset(field, 0, sizeof(*field));
+    }
+}
+
 bool minic_c0_program_add_function(MinicC0Program *program,
                                    const char *name,
                                    size_t name_length,
@@ -815,7 +850,6 @@ bool minic_c0_program_add_function(MinicC0Program *program,
                                    MinicBlockId body_block,
                                    MinicFunctionId *function_id) {
     MinicFunction function;
-    size_t parameter_index;
 
     if (name == NULL || function_id == NULL ||
         (body_block != MINIC_BLOCK_INVALID && body_block >= program->block_count) ||
@@ -829,23 +863,16 @@ bool minic_c0_program_add_function(MinicC0Program *program,
         return false;
     }
 
-    (void)memset(&function, 0, sizeof(function));
+    minic_c0_function_initialize_defaults(&function);
     function.name = minic_copy_name(name, name_length);
     if (function.name == NULL) {
         return false;
     }
     function.name_length = name_length;
-    function.return_type = minic_type_int();
-    for (parameter_index = 0U;
-         parameter_index < sizeof(function.parameter_types) / sizeof(function.parameter_types[0]);
-         ++parameter_index) {
-        function.parameter_types[parameter_index] = minic_type_int();
-    }
     function.local_begin = local_begin;
     function.local_count = local_count;
     function.parameter_count = 0U;
     function.body_block = body_block;
-    function.alias_target = MINIC_FUNCTION_INVALID;
     function.is_defined = body_block != MINIC_BLOCK_INVALID;
 
     *function_id = program->function_count;
@@ -968,7 +995,7 @@ bool minic_c0_program_add_record(MinicC0Program *program,
         return false;
     }
 
-    (void)memset(&record, 0, sizeof(record));
+    minic_c0_record_initialize_defaults(&record);
     record.name = minic_copy_name(name, name_length);
     if (record.name == NULL) {
         return false;
@@ -1038,7 +1065,7 @@ bool minic_c0_record_add_field(MinicC0Program *program,
         return false;
     }
 
-    (void)memset(&field, 0, sizeof(field));
+    minic_c0_record_field_initialize_defaults(&field);
     field.name = minic_copy_name(name, name_length);
     if (field.name == NULL) {
         return false;
@@ -1319,7 +1346,7 @@ bool minic_c0_program_add_type_alias(MinicC0Program *program,
     MinicTypeAlias alias;
     size_t index;
 
-    if (program == NULL || name == NULL || alias_id == NULL || minic_type_is_void(type)) {
+    if (program == NULL || name == NULL || alias_id == NULL) {
         return false;
     }
     for (index = 0U; index < program->type_alias_count; ++index) {
@@ -1368,6 +1395,20 @@ bool minic_c0_expression_array_object_info(const MinicC0Program *program,
         return false;
     }
     (void)memset(&resolved, 0, sizeof(resolved));
+    if (expression->kind == MINIC_EXPRESSION_COMPOUND_LITERAL) {
+        const MinicLocal *local;
+
+        local = minic_c0_program_local(program, expression->value.compound_literal.local_id);
+        if (local != NULL && local->is_array) {
+            resolved.element_type = expression->type;
+            resolved.element_count = local->element_count;
+            resolved.is_incomplete = local->element_count == 0U;
+            if (info != NULL) {
+                *info = resolved;
+            }
+            return true;
+        }
+    }
     if (expression->kind == MINIC_EXPRESSION_LOCAL) {
         const MinicLocal *local;
 
@@ -1506,7 +1547,8 @@ static bool minic_c0_record_value_is_copy_source_bounded(const MinicC0Program *p
         !minic_type_is_record(expression->type)) {
         return false;
     }
-    if (expression->kind == MINIC_EXPRESSION_CALL) {
+    if (expression->kind == MINIC_EXPRESSION_CALL ||
+        expression->kind == MINIC_EXPRESSION_BUILTIN_VA_ARG) {
         return true;
     }
     if (expression->kind == MINIC_EXPRESSION_ASSIGNMENT) {

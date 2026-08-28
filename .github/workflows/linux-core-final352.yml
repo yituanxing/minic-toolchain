@@ -1,0 +1,369 @@
+name: Linux Core Final352 Frontier
+
+on:
+  push:
+    branches:
+      - refactor/declaration-sema-v1
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  prepare-final352-corpus:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[next500e]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      DEBIAN_FRONTEND: noninteractive
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: Restore frozen final352 corpus
+        id: final352-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-final352-corpus
+          key: linux-final352-corpus-v2-6.6.143-rv64-defconfig-gcc13.3.0-indices-3000-3351
+
+      - name: Validate cached final352 corpus
+        if: steps.final352-cache.outputs.cache-hit == 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          manifest=build/linux-final352-corpus/selected-tus.txt
+          test -s "$manifest"
+          test "$(grep -cve '^[[:space:]]*$' "$manifest")" -eq 352
+          test "$(head -1 "$manifest" | cut -f1)" -eq 3000
+          test "$(tail -1 "$manifest" | cut -f1)" -eq 3351
+          echo 'LINUX_FINAL352_CORPUS cache=hit selected=352 indices=3000-3351'
+
+      - name: Fetch exact Linux 6.6.143 stable source
+        if: steps.final352-cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          rm -rf build/linux-source
+          git init -q build/linux-source
+          git -C build/linux-source remote add origin https://github.com/gregkh/linux.git
+          git -C build/linux-source fetch --depth=1 --no-tags --progress origin d1cfde2d5d15be14123bdd1689162bd27f995a90
+          git -C build/linux-source checkout -q --detach FETCH_HEAD
+          test "$(git -C build/linux-source rev-parse HEAD)" = d1cfde2d5d15be14123bdd1689162bd27f995a90
+
+      - name: Install corpus materialization dependencies
+        if: steps.final352-cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 update
+          sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 install -y --no-install-recommends \
+            gcc-riscv64-linux-gnu libc6-dev-riscv64-cross flex bison bc libelf-dev libssl-dev
+          command -v riscv64-linux-gnu-gcc
+
+      - name: Materialize indices 3000 through 3351 once
+        if: steps.final352-cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          builder="$GITHUB_WORKSPACE/build/linux-final352-builder"
+          corpus="$GITHUB_WORKSPACE/build/linux-final352-corpus"
+          LINUX_BATCH_MATERIALIZE_ONLY=1 \
+            BUILD_DIR="$builder" \
+            LINUX_SOURCE_TREE="$GITHUB_WORKSPACE/build/linux-source" \
+            CROSS_COMPILE=riscv64-linux-gnu- \
+            LINUX_BATCH_OFFSET=3000 \
+            LINUX_BATCH_LIMIT=352 \
+            LINUX_BATCH_JOBS=4 \
+            LINUX_BATCH_MATERIALIZE_MAKE_JOBS=1 \
+            sh tests/external/linux/batch_probe.sh
+
+          python3 - <<'PY'
+          from pathlib import Path
+          import shutil
+
+          builder = Path("build/linux-final352-builder")
+          corpus = Path("build/linux-final352-corpus")
+          selected = builder / "selected-tus.txt"
+          rows = [line for line in selected.read_text().splitlines() if line.strip()]
+          indices = [int(line.split("\t", 1)[0]) for line in rows]
+          if len(rows) != 352 or indices[0] != 3000 or indices[-1] != 3351:
+              raise SystemExit(
+                  f"unexpected final352 selection: count={len(rows)} "
+                  f"first={indices[0] if indices else None} "
+                  f"last={indices[-1] if indices else None}"
+              )
+          shutil.rmtree(corpus, ignore_errors=True)
+          inputs = corpus / "kbuild"
+          inputs.mkdir(parents=True)
+          shutil.copy2(selected, corpus / "selected-tus.txt")
+          manifest = builder / "tu-manifest.txt"
+          if manifest.is_file():
+              shutil.copy2(manifest, corpus / "tu-manifest.txt")
+          total_bytes = 0
+          for row in rows:
+              _, _, rel_i, _ = row.split("\t", 3)
+              source = builder / "kbuild" / rel_i
+              if not source.is_file() or source.stat().st_size == 0:
+                  raise SystemExit(f"missing materialized input: {source}")
+              target = inputs / rel_i
+              target.parent.mkdir(parents=True, exist_ok=True)
+              shutil.copy2(source, target)
+              total_bytes += target.stat().st_size
+          (corpus / "corpus-info.txt").write_text(
+              f"linux=6.6.143\nindices=3000-3351\nselected=352\nbytes={total_bytes}\n"
+          )
+          print(f"LINUX_FINAL352_CORPUS cache=fill selected=352 bytes={total_bytes}")
+          PY
+
+      - name: Validate materialized preprocessed corpus
+        if: steps.final352-cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          from concurrent.futures import ThreadPoolExecutor, as_completed
+          from pathlib import Path
+          import subprocess
+
+          corpus = Path("build/linux-final352-corpus")
+          rows = [line for line in (corpus / "selected-tus.txt").read_text().splitlines()
+                  if line.strip()]
+
+          def check(row):
+              index, _, rel_i, _ = row.split("\t", 3)
+              path = corpus / "kbuild" / rel_i
+              proc = subprocess.run(
+                  ["riscv64-linux-gnu-gcc", "-std=gnu11", "-fshort-wchar",
+                   "-fsyntax-only", "-w", str(path)],
+                  stdout=subprocess.DEVNULL,
+                  stderr=subprocess.PIPE,
+                  text=True,
+                  errors="replace",
+              )
+              return int(index), rel_i, proc.returncode, proc.stderr
+
+          failures = []
+          with ThreadPoolExecutor(max_workers=4) as pool:
+              futures = [pool.submit(check, row) for row in rows]
+              for future in as_completed(futures):
+                  index, rel_i, rc, stderr = future.result()
+                  if rc != 0:
+                      failures.append((index, rel_i, stderr))
+
+          failures.sort()
+          print(
+              f"LINUX_FINAL352_CORPUS_SYNTAX selected={len(rows)} "
+              f"gcc_fail={len(failures)}"
+          )
+          if failures:
+              for index, rel_i, stderr in failures[:20]:
+                  first = next((line for line in stderr.splitlines() if line.strip()), "")
+                  print(
+                      f"LINUX_FINAL352_CORPUS_SYNTAX_ERROR "
+                      f"index={index} input={rel_i} diagnostic={first}"
+                  )
+              raise SystemExit(1)
+          PY
+
+      - name: Save frozen final352 corpus
+        if: steps.final352-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: build/linux-final352-corpus
+          key: linux-final352-corpus-v2-6.6.143-rv64-defconfig-gcc13.3.0-indices-3000-3351
+
+  sample16:
+    if: contains(github.event.head_commit.message, '[next500e-sample]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: Restore frozen final352 corpus
+        id: final352-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-final352-corpus
+          key: linux-final352-corpus-v2-6.6.143-rv64-defconfig-gcc13.3.0-indices-3000-3351
+
+      - name: Require frozen final352 corpus
+        run: |
+          test "${{ steps.final352-cache.outputs.cache-hit }}" = true
+          test "$(grep -cve '^[[:space:]]*$' build/linux-final352-corpus/selected-tus.txt)" -eq 352
+
+      - name: Build exact compiler
+        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/final352-sample-compiler
+
+      - name: Replay focused final352 tails
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          compiler="$GITHUB_WORKSPACE/build/final352-sample-compiler/bin/minic"
+          work="$GITHUB_WORKSPACE/build/final352-sample16"
+          set +e
+          CORE_FAST_TRACE=1 python3 tests/external/linux/corpus_replay.py \
+            --minic "$compiler" \
+            --corpus "$GITHUB_WORKSPACE/build/linux-final352-corpus" \
+            --work "$work" \
+            --jobs 4 \
+            --indices 3014,3018,3030,3034,3035,3037,3044,3067,3070,3075,3152,3210,3216,3272,3304,3306 \
+            --sample-count 0
+          replay_status=$?
+          set -e
+          echo "LINUX_FINAL352_SAMPLE16_REPLAY_STATUS=$replay_status"
+
+          python3 tools/ci/classify-core-strict-frontier.py \
+            "$work/batch-results.json" \
+            --stderr-root "$work/minic-stderr" \
+            --ast-header "$GITHUB_WORKSPACE/src/frontend/ast.h" \
+            --examples 50 \
+            --json-out "$work/frontier-summary.json" \
+            --reason-text-out "$work/reason-summary.txt"
+
+          python3 tools/ci/summarize-core-frontier-progress.py \
+            "$work/batch-results.json" \
+            --expect-selected 16 \
+            --json-out "$work/progress-summary.json" \
+            --text-out "$work/progress-summary.txt"
+
+          echo "===== FINAL352 FAILURE CONTEXTS ====="
+          cat "$work/failure-contexts.txt" || true
+          echo "===== END FINAL352 FAILURE CONTEXTS ====="
+          echo "===== FINAL352 INTERNAL TRACE ====="
+          grep -R -h -E 'CORE_|AST_|STATIC_RELOC_DETAIL|EXTERN_DEF_DETAIL|set_tcp_state|ip_vs_est_calc_phase' "$work/minic-stderr" || true
+          echo "===== END FINAL352 INTERNAL TRACE ====="
+
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          work = Path("build/final352-sample16")
+          summary = json.loads((work / "frontier-summary.json").read_text())
+          print(
+              f"LINUX_FINAL352_SAMPLE16_EXACT selected={summary['selected']} "
+              f"pass={summary['pass']} unsupported={summary['unsupported']} "
+              f"error={summary['error']} preprocess_missing={summary['preprocess_missing']}"
+          )
+          PY
+
+      - name: Persist focused evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-final352-sample16-${{ github.sha }}
+          path: |
+            build/final352-sample16/batch-results.json
+            build/final352-sample16/batch-results.tsv
+            build/final352-sample16/frontier-summary.json
+            build/final352-sample16/reason-summary.txt
+            build/final352-sample16/progress-summary.json
+            build/final352-sample16/progress-summary.txt
+            build/final352-sample16/failure-contexts.txt
+            build/final352-sample16/minic-stderr/**
+          if-no-files-found: warn
+
+  full352:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[next500e]')
+    needs: prepare-final352-corpus
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    concurrency:
+      group: linux-final352-full-${{ github.ref }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: Restore frozen final352 corpus
+        id: final352-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-final352-corpus
+          key: linux-final352-corpus-v2-6.6.143-rv64-defconfig-gcc13.3.0-indices-3000-3351
+
+      - name: Require frozen final352 corpus
+        run: |
+          test "${{ steps.final352-cache.outputs.cache-hit }}" = true
+          test "$(grep -cve '^[[:space:]]*$' build/linux-final352-corpus/selected-tus.txt)" -eq 352
+
+      - name: Build exact compiler
+        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/final352-full-compiler
+
+      - name: Replay all final352
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          compiler="$GITHUB_WORKSPACE/build/final352-full-compiler/bin/minic"
+          work="$GITHUB_WORKSPACE/build/final352-full"
+          set +e
+          CORE_FAST_TRACE=1 python3 tests/external/linux/corpus_replay.py \
+            --minic "$compiler" \
+            --corpus "$GITHUB_WORKSPACE/build/linux-final352-corpus" \
+            --work "$work" \
+            --jobs 4 \
+            --offset 0 \
+            --limit 352 \
+            --sample-count 0
+          replay_status=$?
+          set -e
+          echo "LINUX_FINAL352_REPLAY_STATUS=$replay_status"
+
+          python3 tools/ci/classify-core-strict-frontier.py \
+            "$work/batch-results.json" \
+            --stderr-root "$work/minic-stderr" \
+            --ast-header "$GITHUB_WORKSPACE/src/frontend/ast.h" \
+            --examples 50 \
+            --json-out "$work/frontier-summary.json" \
+            --reason-text-out "$work/reason-summary.txt"
+
+          python3 tools/ci/summarize-core-frontier-progress.py \
+            "$work/batch-results.json" \
+            --expect-selected 352 \
+            --json-out "$work/progress-summary.json" \
+            --text-out "$work/progress-summary.txt"
+
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          work = Path("build/final352-full")
+          summary = json.loads((work / "frontier-summary.json").read_text())
+          if summary["selected"] != 352 or summary["preprocess_missing"] != 0:
+              raise SystemExit(f"final352 infrastructure failure: {summary}")
+          headline = (
+              f"LINUX_FINAL352_EXACT selected={summary['selected']} "
+              f"pass={summary['pass']} unsupported={summary['unsupported']} "
+              f"error={summary['error']} preprocess_missing={summary['preprocess_missing']}"
+          )
+          print(headline)
+          (work / "headline.txt").write_text(headline + "\n")
+          with Path(os.environ["GITHUB_STEP_SUMMARY"]).open("a") as output:
+              output.write("## Linux final352 census\n\n")
+              output.write(f"`{headline}`\n\n")
+              output.write((work / "reason-summary.txt").read_text())
+          PY
+
+      - name: Persist final352 evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-final352-${{ github.sha }}
+          path: |
+            build/final352-full/headline.txt
+            build/final352-full/batch-results.json
+            build/final352-full/batch-results.tsv
+            build/final352-full/frontier-summary.json
+            build/final352-full/reason-summary.txt
+            build/final352-full/progress-summary.json
+            build/final352-full/progress-summary.txt
+            build/final352-full/failure-contexts.txt
+            build/final352-full/minic-stderr/**
+          if-no-files-found: warn

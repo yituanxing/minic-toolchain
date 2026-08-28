@@ -1,0 +1,83 @@
+name: Core Expression Trace Productizer
+
+on:
+  pull_request:
+
+permissions:
+  contents: write
+
+jobs:
+  expression-trace:
+    if: github.head_ref == 'refactor/declaration-sema-v1'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refactor/declaration-sema-v1
+          fetch-depth: 0
+
+      - name: Detect trace state
+        id: state
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          if grep -Fq 'CORE_EXPR_STMT_DETAIL' src/core/core_lower.c; then
+            echo 'needs_patch=false' >> "$GITHUB_OUTPUT"
+          else
+            echo 'needs_patch=true' >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Add expression-statement unsupported route trace
+        if: steps.state.outputs.needs_patch == 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          p = Path('src/core/core_lower.c')
+          s = p.read_text()
+
+          anchor = '''static MinicCoreLowerStatus lower_expression_statement(MinicCoreLowerContext *context,\n                                                       const MinicStatement *statement) {\n'''
+          if s.count(anchor) != 1:
+              raise SystemExit(f'expression statement definition anchor count={s.count(anchor)}')
+          helper = '''static MinicCoreLowerStatus core_trace_expression_statement_status(\n    const MinicCoreLowerContext *context,\n    const MinicExpression *expression,\n    const char *route,\n    MinicCoreLowerStatus status) {\n    if (status == MINIC_CORE_LOWER_UNSUPPORTED && context != NULL &&\n        context->source_function != NULL && context->source_function->name != NULL &&\n        expression != NULL && route != NULL) {\n        (void)fprintf(stderr,\n                      "CORE_EXPR_STMT_DETAIL function=%s route=%s expression_kind=%d "\n                      "value_category=%d\\n",\n                      context->source_function->name,\n                      route,\n                      (int)expression->kind,\n                      (int)expression->value_category);\n    }\n    return status;\n}\n\n'''
+          s = s.replace(anchor, helper + anchor, 1)
+
+          replacements = [
+              ('''        {\n            MinicCoreValueId discarded_value;\n\n            return lower_expression(context, statement->expression, &discarded_value);\n        }\n''', '''        {\n            MinicCoreValueId discarded_value;\n            MinicCoreLowerStatus status;\n\n            status = lower_expression(context, statement->expression, &discarded_value);\n            return core_trace_expression_statement_status(context, expression, "call", status);\n        }\n'''),
+              ('''    if (expression->kind == MINIC_EXPRESSION_COMPOUND_ASSIGNMENT) {\n        MinicCoreValueId discarded_value;\n\n        return lower_expression(context, statement->expression, &discarded_value);\n    }\n''', '''    if (expression->kind == MINIC_EXPRESSION_COMPOUND_ASSIGNMENT) {\n        MinicCoreValueId discarded_value;\n        MinicCoreLowerStatus status;\n\n        status = lower_expression(context, statement->expression, &discarded_value);\n        return core_trace_expression_statement_status(\n            context, expression, "compound-assignment", status);\n    }\n'''),
+              ('''    if (expression->kind == MINIC_EXPRESSION_DISCARD) {\n        MinicCoreValueId discarded_value;\n\n        return lower_expression(context, statement->expression, &discarded_value);\n    }\n''', '''    if (expression->kind == MINIC_EXPRESSION_DISCARD) {\n        MinicCoreValueId discarded_value;\n        MinicCoreLowerStatus status;\n\n        status = lower_expression(context, statement->expression, &discarded_value);\n        return core_trace_expression_statement_status(context, expression, "discard", status);\n    }\n'''),
+              ('''        return lower_scalar_update(context, expression, &discarded_value);\n''', '''        return core_trace_expression_statement_status(\n            context,\n            expression,\n            "scalar-update",\n            lower_scalar_update(context, expression, &discarded_value));\n'''),
+              ('''        if (!core_scalar_expression_value_type(context->body, expression, &discarded_type)) {\n            return MINIC_CORE_LOWER_UNSUPPORTED;\n        }\n        (void)discarded_type;\n        return lower_expression(context, statement->expression, &discarded_value);\n''', '''        if (!core_scalar_expression_value_type(context->body, expression, &discarded_type)) {\n            return core_trace_expression_statement_status(\n                context, expression, "scalar-type-gate", MINIC_CORE_LOWER_UNSUPPORTED);\n        }\n        (void)discarded_type;\n        return core_trace_expression_statement_status(\n            context,\n            expression,\n            "generic-scalar",\n            lower_expression(context, statement->expression, &discarded_value));\n'''),
+              ('''    return lower_assignment_pair(context, target_id, source_id, expression->span, NULL);\n}\n''', '''    return core_trace_expression_statement_status(\n        context,\n        expression,\n        "assignment",\n        lower_assignment_pair(context, target_id, source_id, expression->span, NULL));\n}\n'''),
+          ]
+          for old, new in replacements:
+              if s.count(old) != 1:
+                  raise SystemExit(f'route anchor expected once, got {s.count(old)}: {old.splitlines()[0]}')
+              s = s.replace(old, new, 1)
+
+          p.write_text(s)
+          PY
+          git diff --check
+          git diff -- src/core/core_lower.c
+
+      - name: Build traced compiler
+        if: steps.state.outputs.needs_patch == 'true'
+        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/expression-trace-compiler
+
+      - name: Run fast regression gate
+        if: steps.state.outputs.needs_patch == 'true'
+        run: make -j4 check-fast MODE=release CFLAGS=-Werror BUILD_DIR=build/expression-trace-check
+
+      - name: Commit trace instrumentation
+        if: steps.state.outputs.needs_patch == 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/core/core_lower.c
+          git diff --cached --quiet && { echo 'no trace changes'; exit 1; }
+          git commit -m 'core: trace unsupported expression-statement routes'
+          git push origin HEAD:refactor/declaration-sema-v1

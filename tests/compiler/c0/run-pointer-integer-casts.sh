@@ -14,6 +14,6 @@ mkdir -p "$work"
 "$minic" -S "$work/pointer_integer_casts.i" \
     -o "$work/pointer_integer_casts.s"
 
-grep -F '  la a0, value' "$work/pointer_integer_casts.s" >/dev/null
-grep -F '  la a0, target' "$work/pointer_integer_casts.s" >/dev/null
+grep -E '^[[:space:]]+la[[:space:]]+[^,]+,[[:space:]]*value$' "$work/pointer_integer_casts.s" >/dev/null
+grep -E '^[[:space:]]+la[[:space:]]+[^,]+,[[:space:]]*target$' "$work/pointer_integer_casts.s" >/dev/null
 printf '%s\n' 'PASS compiler/c0/pointer_integer_casts object=1 function=1 roundtrip-through-ulong=1 implicit-assignment-unchanged=1'

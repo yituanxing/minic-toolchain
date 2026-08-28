@@ -33,6 +33,8 @@ grep -F '.dword subobject_address_target+4' "$work/static_object_address_relocat
 grep -F '.dword subobject_address_target+12' "$work/static_object_address_relocation.s" >/dev/null
 grep -F '.dword subobject_address_target+21' "$work/static_object_address_relocation.s" >/dev/null
 grep -F '.dword subobject_address_target+24' "$work/static_object_address_relocation.s" >/dev/null
+grep -F 'array_member_nested_relocation:' "$work/static_object_address_relocation.s" >/dev/null
+grep -F '.dword array_member_relocation_target+12' "$work/static_object_address_relocation.s" >/dev/null
 
 if "$minic" -S "$root/tests/compiler/c0/invalid_static_object_address_type.c" \
     -o "$work/invalid-type.s" >"$work/invalid-type.stdout" 2>"$work/invalid-type.stderr"; then

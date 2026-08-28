@@ -1,0 +1,109 @@
+name: Compiler Runtime R0
+
+on:
+  push:
+    branches:
+      - refactor/declaration-sema-v1
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  micro-runtime:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[runtime-r0]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: Install RV64 runtime toolchain
+        run: |
+          sudo apt-get -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends             gcc-riscv64-linux-gnu libc6-dev-riscv64-cross qemu-user
+
+      - name: Build exact compiler
+        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/runtime-r0-compiler
+
+      - name: Run focused and differential runtime gates
+        run: |
+          make check-runtime             MODE=release             CFLAGS=-Werror             BUILD_DIR=build/runtime-r0-compiler             RISCV_CC=riscv64-linux-gnu-gcc             QEMU_RISCV64=qemu-riscv64             REQUIRE_RISCV_RUNTIME=1
+          echo "RUNTIME_R0_MICRO=PASS head=$GITHUB_SHA"
+
+  real-project-runtime:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[runtime-r0]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        project:
+          - tiny-aes
+          - cjson
+          - sds
+          - parson
+          - linenoise
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: Install RV64 runtime toolchain
+        run: |
+          sudo apt-get -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends             gcc-riscv64-linux-gnu libc6-dev-riscv64-cross qemu-user curl ca-certificates
+
+      - name: Build exact compiler
+        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/runtime-r0-${{ matrix.project }}-compiler
+
+      - name: Run real-project runtime differential
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          project="${{ matrix.project }}"
+          compiler="$GITHUB_WORKSPACE/build/runtime-r0-$project-compiler/bin/minic"
+          case "$project" in
+            tiny-aes)
+              MINIC="$compiler"               RISCV_CC=riscv64-linux-gnu-gcc               QEMU_RISCV64=qemu-riscv64               BUILD_DIR="$GITHUB_WORKSPACE/build/runtime-r0-tiny-aes"                 sh tests/external/tiny-aes-c/probe.sh
+              ;;
+            cjson)
+              MINIC="$compiler"               RISCV_CC=riscv64-linux-gnu-gcc               QEMU_RISCV64=qemu-riscv64               BUILD_DIR="$GITHUB_WORKSPACE/build/runtime-r0-cjson"                 sh tests/external/cjson/probe.sh
+              RISCV_CC=riscv64-linux-gnu-gcc               QEMU_RISCV64=qemu-riscv64               BUILD_DIR="$GITHUB_WORKSPACE/build/runtime-r0-cjson"                 sh tests/external/cjson/final_differential.sh
+              ;;
+            sds)
+              discovery="$GITHUB_WORKSPACE/build/runtime-r0-sds-discovery"
+              MINIC="$compiler" HOST_CC=cc BUILD_DIR="$discovery"                 sh tests/external/sds/probe.sh
+              MINIC="$compiler" HOST_CC=cc BUILD_DIR="$discovery"                 sh tests/external/sds/upstream_test_probe.sh
+              RISCV_CC=riscv64-linux-gnu-gcc               QEMU_RISCV64=qemu-riscv64               SDS_TEST_ASSEMBLY="$discovery/sds-test.s"               BUILD_DIR="$GITHUB_WORKSPACE/build/runtime-r0-sds-runtime"                 sh tests/external/sds/runtime_differential.sh
+              ;;
+            parson)
+              discovery="$GITHUB_WORKSPACE/build/runtime-r0-parson-discovery"
+              MINIC="$compiler"               RISCV_CC=riscv64-linux-gnu-gcc               BUILD_DIR="$discovery"                 sh tests/external/parson/probe.sh
+              RISCV_CC=riscv64-linux-gnu-gcc               QEMU_RISCV64=qemu-riscv64               PARSON_ASSEMBLY="$discovery/parson.s"               BUILD_DIR="$GITHUB_WORKSPACE/build/runtime-r0-parson-runtime"                 sh tests/external/parson/runtime_differential.sh
+              ;;
+            linenoise)
+              discovery="$GITHUB_WORKSPACE/build/runtime-r0-linenoise-discovery"
+              MINIC="$compiler" HOST_CC=cc BUILD_DIR="$discovery"                 sh tests/external/linenoise/probe.sh
+              RISCV_CC=riscv64-linux-gnu-gcc               QEMU_RISCV64=qemu-riscv64               LINENOISE_ASSEMBLY="$discovery/linenoise.s"               BUILD_DIR="$GITHUB_WORKSPACE/build/runtime-r0-linenoise-runtime"                 sh tests/external/linenoise/runtime_differential.sh
+              ;;
+          esac
+          echo "RUNTIME_R0_PROJECT project=$project status=PASS head=$GITHUB_SHA"
+
+  runtime-r0:
+    if: always() && (github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[runtime-r0]'))
+    needs:
+      - micro-runtime
+      - real-project-runtime
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Require all runtime lanes
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "${{ needs.micro-runtime.result }}" = success
+          test "${{ needs.real-project-runtime.result }}" = success
+          echo "RUNTIME_R0_EXACT head=$GITHUB_SHA micro=PASS projects=5/5"

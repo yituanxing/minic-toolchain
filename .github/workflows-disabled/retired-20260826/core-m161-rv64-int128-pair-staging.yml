@@ -1,0 +1,137 @@
+name: Core M161 RV64 Int128 Pair Staging
+
+on:
+  push:
+    branches:
+      - refactor/declaration-sema-v1
+    paths:
+      - '.github/workflows/core-m161-rv64-int128-pair-staging.yml'
+      - 'tools/ci/apply-m161-rv64-int128-pair.py'
+  pull_request:
+    paths:
+      - '.github/workflows/core-m161-rv64-int128-pair-staging.yml'
+      - 'tools/ci/apply-m161-rv64-int128-pair.py'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  stage-int128-pair:
+    if: github.event_name != 'pull_request' || github.head_ref == 'refactor/declaration-sema-v1'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refactor/declaration-sema-v1
+          fetch-depth: 0
+
+      - name: Require unchanged M160 semantic source
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$(git hash-object src/target/riscv64/core_codegen.c)" = a5414575a573abd9ce9ced00fb6c234d785e4e03
+          echo "M161_SOURCE_BASE=$(git rev-parse HEAD)"
+
+      - name: Apply M161 staged Core RV64 int128 pair
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 tools/ci/apply-m161-rv64-int128-pair.py
+          git diff --check
+          git diff --stat
+
+      - name: Build staged compiler
+        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/m161-compiler
+
+      - name: Run fast regression gate
+        run: make -j4 check-fast MODE=release CFLAGS=-Werror BUILD_DIR=build/m161-check
+
+      - name: Focused int128 Core RV64 probe
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mkdir -p build/m161-focused
+          cat > build/m161-focused/mul_u64_u32_shr.i <<'EOF'
+          typedef unsigned long u64;
+          typedef unsigned int u32;
+          static u64 mul_u64_u32_shr(u64 a, u32 mul, unsigned int shift)
+          {
+              return (u64)(((unsigned __int128)a * mul) >> shift);
+          }
+          u64 probe(u64 a, u32 mul, unsigned int shift) {
+              return mul_u64_u32_shr(a, mul, shift);
+          }
+          EOF
+          MINIC_CORE_IR=strict MINIC_CORE_CODEGEN=basic-v0 \
+            build/m161-compiler/bin/minic -S build/m161-focused/mul_u64_u32_shr.i \
+            -o build/m161-focused/mul_u64_u32_shr.s
+          test -s build/m161-focused/mul_u64_u32_shr.s
+
+      - name: Restore frozen Linux corpus
+        uses: actions/cache@v4
+        with:
+          path: build/linux-first500-real-final
+          key: core-linux-first500-real-final-v1
+
+      - name: Replay full500 with staged M161
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -d build/linux-first500-real-final/inputs
+          rm -rf build/m161-core-rv64
+          MINIC_CORE_IR=strict MINIC_CORE_CODEGEN=basic-v0 \
+            bash tools/ci/run-linux-first500-strict.sh \
+              --compiler build/m161-compiler/bin/minic \
+              --corpus build/linux-first500-real-final/inputs \
+              --work-dir build/m161-core-rv64 \
+              --keep-going
+
+      - name: Require frontier improvement
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          import json
+          import re
+          from collections import Counter
+          from pathlib import Path
+
+          p = Path('build/m161-core-rv64/batch-results.json')
+          rows = json.loads(p.read_text())
+          passed = sum(r.get('status') == 'PASS' for r in rows)
+          failed = sum(r.get('status') == 'FAIL' for r in rows)
+          missing = sum(r.get('status') == 'PREPROCESS_MISSING' for r in rows)
+          fn_re = re.compile(r"(?:Core-owned function '([^']+)' cannot be emitted by RV64 basic-v0|cannot emit RISC-V function '([^']+)' \\(index=\\d+\\))")
+          functions = Counter()
+          for row in rows:
+              if row.get('status') != 'FAIL':
+                  continue
+              m = fn_re.search(str(row.get('message', '')))
+              if m:
+                  functions[m.group(1) or m.group(2)] += 1
+          headline = f'M161_CORE_RV64 selected={len(rows)} pass={passed} fail={failed} missing={missing}'
+          print(headline)
+          for name, count in functions.most_common(20):
+              print(f'{count:4d}  {name}')
+          Path('build/m161-core-rv64/m161-summary.txt').write_text(
+              headline + '\n' + '\n'.join(f'{count:4d}  {name}' for name, count in functions.most_common(50)) + '\n'
+          )
+          if len(rows) != 500 or missing != 0:
+              raise SystemExit('M161 corpus invariant failed')
+          if passed <= 9:
+              raise SystemExit(f'M161 did not improve M160 9/500 baseline: pass={passed}')
+          PY
+
+      - name: Persist M161 staging evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: core-m161-rv64-int128-pair-${{ github.sha }}
+          path: |
+            build/m161-focused/mul_u64_u32_shr.s
+            build/m161-core-rv64/batch-results.json
+            build/m161-core-rv64/batch-summary.txt
+            build/m161-core-rv64/m161-summary.txt
+            build/m161-core-rv64/minic-stderr
+          if-no-files-found: warn

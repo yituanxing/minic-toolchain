@@ -1,0 +1,93 @@
+name: Bootstrap Core Lower Trace
+
+on:
+  push:
+    branches:
+      - refactor/declaration-sema-v1
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  trace:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[bootstrap-core-lower-trace]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Install RV64 runtime toolchain
+        run: |
+          sudo apt-get -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            gcc-riscv64-linux-gnu libc6-dev-riscv64-cross qemu-user make
+
+      - name: Build Stage1 and core_lower input
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/bootstrap-core-lower-stage0
+          stage0="$GITHUB_WORKSPACE/build/bootstrap-core-lower-stage0/bin/minic"
+          work="$GITHUB_WORKSPACE/build/bootstrap-core-lower-trace"
+          mkdir -p "$work/i" "$work/s"
+          asm_inputs=""
+
+          while IFS= read -r source; do
+            test -n "$source" || continue
+            key=$(printf '%s' "$source" | tr '/.' '__')
+            pre="$work/i/$key.i"
+            asm="$work/s/$key.s"
+            riscv64-linux-gnu-gcc -E -P -std=c11 -Iinclude -Isrc "$source" -o "$pre"
+            "$stage0" -S "$pre" -o "$asm"
+            asm_inputs="$asm_inputs $asm"
+          done < tests/compiler/bootstrap/b0-sources.txt
+
+          riscv64-linux-gnu-gcc -static $asm_inputs -o "$work/minic-stage1-rv64"
+          qemu-riscv64 "$work/minic-stage1-rv64" -S tests/compiler/c0/return_42.c -o "$work/smoke.s" || true
+          echo "BOOTSTRAP_CORE_LOWER_TRACE_STAGE1=READY"
+
+      - name: Trace Stage1 compiling core_lower.c
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/bootstrap-core-lower-trace"
+          input="$work/i/src_core_core_lower_c.i"
+          output="$work/core_lower.stage1.s"
+          log="$work/core_lower.trace.log"
+
+          set +e
+          MINIC_BOOTSTRAP_TRACE=1 timeout 60 \
+            qemu-riscv64 "$work/minic-stage1-rv64" -S "$input" -o "$output" \
+            >"$work/core_lower.stdout" 2>"$log"
+          status=$?
+          set -e
+
+          echo "BOOTSTRAP_CORE_LOWER_TRACE_STATUS=$status"
+          echo "BOOTSTRAP_CORE_LOWER_TRACE_LOG_BEGIN"
+          tail -n 300 "$log" || true
+          echo "BOOTSTRAP_CORE_LOWER_TRACE_LOG_END"
+
+          if test "$status" -eq 0; then
+            echo "BOOTSTRAP_CORE_LOWER_TRACE=PASS"
+          elif test "$status" -eq 124; then
+            echo "BOOTSTRAP_CORE_LOWER_TRACE=TIMEOUT seconds=60" >&2
+            exit 124
+          else
+            echo "BOOTSTRAP_CORE_LOWER_TRACE=FAIL status=$status" >&2
+            exit "$status"
+          fi
+
+      - name: Preserve targeted trace
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bootstrap-core-lower-trace
+          path: |
+            build/bootstrap-core-lower-trace/core_lower.trace.log
+            build/bootstrap-core-lower-trace/core_lower.stdout
+            build/bootstrap-core-lower-trace/core_lower.stage1.s
+          if-no-files-found: ignore
+          retention-days: 1

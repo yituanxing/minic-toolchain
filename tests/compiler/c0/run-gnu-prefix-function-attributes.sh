@@ -21,6 +21,7 @@ grep -F 'prefix_external_identity:' "$assembly" >/dev/null
 grep -F '.globl prefix_external_identity' "$assembly" >/dev/null
 grep -F 'externally_visible_decl:' "$assembly" >/dev/null
 grep -F 'instrumentation_policy_aliases:' "$assembly" >/dev/null
+grep -F 'prefix_plain_spelling_identity:' "$assembly" >/dev/null
 grep -F '.globl externally_visible_decl' "$assembly" >/dev/null
 grep -F '.section .probe.externally-visible.text' "$assembly" >/dev/null
 grep -F 'externally_visible_object' "$assembly" >/dev/null
@@ -40,4 +41,4 @@ fi
 grep -F 'GNU extern inline gnu_inline requires inline-only emission semantics' \
     "$work/gnu_extern_inline_attribute.err" >/dev/null
 
-printf '%s\n' 'PASS compiler/c0/gnu_prefix_function_attributes prefix=1 metadata=unused,no-instrument,externally-visible function+object=1 reachability=parse-only public-linkage=preserved gnu-inline=static+bare extern-inline=fail-closed no-sanitize-address=parse-only no-stack-protector=parse-only'
+printf '%s\n' 'PASS compiler/c0/gnu_prefix_function_attributes prefix=1 metadata=unused,no-instrument,externally-visible function+object=1 reachability=parse-only public-linkage=preserved gnu-inline=static+bare+plain-spelling always-inline=underscored+plain-spelling extern-inline=fail-closed no-sanitize-address=parse-only no-stack-protector=parse-only'

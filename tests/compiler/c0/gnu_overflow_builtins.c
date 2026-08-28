@@ -10,6 +10,10 @@ static _Bool checked_mul_ulong(unsigned long a, unsigned long b, unsigned long *
     return __builtin_mul_overflow(a, b, result);
 }
 
+static _Bool checked_mul_int_uint(int a, unsigned int b, int *result) {
+    return __builtin_mul_overflow(a, b, result);
+}
+
 static _Bool checked_sub_ulong(unsigned long a, unsigned long b, unsigned long *result) {
     return __builtin_sub_overflow(a, b, result);
 }
@@ -20,11 +24,15 @@ static _Bool checked_mul_representable_constant(unsigned long value, unsigned lo
 
 int main(void) {
     int i = 0;
+    int mixed = 0;
     long l = 0;
     unsigned long ul = 0;
 
     return checked_add_int(1, 2, &i) || checked_mul_long(2, 3, &l) ||
-                   checked_mul_ulong(4UL, 5UL, &ul) || checked_sub_ulong(8UL, 3UL, &ul) ||
+                   checked_mul_ulong(4UL, 5UL, &ul) ||
+                   checked_mul_int_uint(-2, 3U, &mixed) ||
+                   !checked_mul_int_uint(2147483647, 2U, &mixed) ||
+                   checked_sub_ulong(8UL, 3UL, &ul) ||
                    checked_mul_representable_constant(2UL, &ul)
                ? 1
                : (i == 3 && l == 6 && ul == 2000UL ? 0 : 2);

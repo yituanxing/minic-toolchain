@@ -255,8 +255,8 @@ static bool emit_one(FILE *file,
     if (!builder(function)) {
         return false;
     }
-    success = minic_riscv64_core_function_can_emit_basic_v0(function) &&
-              minic_riscv64_emit_core_function_basic_v0(file, function, symbol_name);
+    success = minic_riscv64_core_function_can_emit(function) &&
+              minic_riscv64_emit_core_function(file, function, symbol_name);
     minic_core_function_destroy(function);
     return success;
 }

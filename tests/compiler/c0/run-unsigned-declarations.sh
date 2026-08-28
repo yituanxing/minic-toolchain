@@ -16,8 +16,8 @@ mkdir -p "$work"
     -o "$work/unsigned_declarations.s"
 
 grep -F ".globl main" "$work/unsigned_declarations.s" >/dev/null
-grep -F ".Lmain_return:" "$work/unsigned_declarations.s" >/dev/null
-grep -F "  mv s0, sp" "$work/unsigned_declarations.s" >/dev/null
+grep -F ".Lmain_core_bb0:" "$work/unsigned_declarations.s" >/dev/null
+grep -F ".Lmain_core_return:" "$work/unsigned_declarations.s" >/dev/null
 printf '%s\n' "PASS compiler/c0/unsigned_declarations"
 
 "$host_cc" -E -P -x c \

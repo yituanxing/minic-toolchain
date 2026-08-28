@@ -42,12 +42,18 @@ compile_success \
     "$root/tests/programs/c0/global_array_read.c"
 grep -F ".section .rodata" "$work/global_array_read.s" >/dev/null
 grep -F "table:" "$work/global_array_read.s" >/dev/null
-grep -F "  la a0, table" "$work/global_array_read.s" >/dev/null
-grep -F "  slli a0, a0, 2" "$work/global_array_read.s" >/dev/null
-grep -F "  lw a0, 0(a0)" "$work/global_array_read.s" >/dev/null
+grep -F ".Lread_table_core_bb" "$work/global_array_read.s" >/dev/null
+grep -F ".Lread_table_core_return:" "$work/global_array_read.s" >/dev/null
+# Core owns pointer stride semantically; the RV64 emitter need not preserve the
+# legacy emitter's strength-reduced slli-by-two peephole for int indexing.
+grep -E '^[[:space:]]+la[[:space:]]+[^,]+,[[:space:]]*table$' \
+    "$work/global_array_read.s" >/dev/null
+grep -E '^[[:space:]]+mul[[:space:]]+' "$work/global_array_read.s" >/dev/null
+grep -E '^[[:space:]]+lw[[:space:]]+[^,]+,[[:space:]]*0\([^)]*\)$' \
+    "$work/global_array_read.s" >/dev/null
 grep -F "  call read_table" "$work/global_array_read.s" >/dev/null
-test "$(grep -c -F '  la a0, table' "$work/global_array_read.s")" -eq 1
-printf '%s\n' "PASS compiler/c0/global_array_read"
+test "$(grep -E -c '^[[:space:]]+la[[:space:]]+[^,]+,[[:space:]]*table$' "$work/global_array_read.s")" -eq 1
+printf '%s\n' "PASS compiler/c0/global_array_read normalized=core-global-address"
 
 expect_failure \
     invalid_global_array_assignment \

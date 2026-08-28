@@ -1,0 +1,138 @@
+name: Frozen Linux Corpus Export
+
+on:
+  push:
+    branches:
+      - refactor/declaration-sema-v1
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  first500:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[export-frozen-linux-corpus]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Restore frozen first500 cache
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-focus-corpus
+          key: linux-focus-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-${{ hashFiles('tests/external/linux/replay-indices.txt') }}
+          fail-on-cache-miss: true
+
+      - name: Validate and package first500
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          dir=build/linux-focus-corpus
+          test -s "$dir/selected-tus.txt"
+          test "$(grep -cve '^[[:space:]]*$' "$dir/selected-tus.txt")" -eq 500
+
+          out=build/frozen-linux-corpus-first500
+          mkdir -p "$out"
+          (
+            cd build
+            find linux-focus-corpus -type f -print0 |
+              LC_ALL=C sort -z |
+              xargs -0 sha256sum
+          ) >"$out/files.sha256"
+          tar -C build -czf "$out/corpus.tar.gz" linux-focus-corpus
+          sha256sum "$out/corpus.tar.gz" >"$out/corpus.tar.gz.sha256"
+          printf '%s\n'             'label=first500'             'expected=500'             "source_branch=$GITHUB_REF_NAME"             "source_head=$GITHUB_SHA"             >"$out/provenance.txt"
+          echo "FROZEN_CORPUS_EXPORT label=first500 selected=500 archive_sha=$(cut -d' ' -f1 "$out/corpus.tar.gz.sha256")"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: frozen-linux-corpus-first500
+          path: build/frozen-linux-corpus-first500
+          retention-days: 90
+          if-no-files-found: error
+
+  shards:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[export-frozen-linux-corpus]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: new500
+            corpus_dir: linux-new500-corpus
+            cache_key: linux-new500-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-indices-500-999
+            expected: 500
+          - label: next500
+            corpus_dir: linux-next500-corpus
+            cache_key: linux-next500-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-indices-1000-1499
+            expected: 500
+          - label: next500b
+            corpus_dir: linux-next500b-corpus
+            cache_key: linux-next500b-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-indices-1500-1999
+            expected: 500
+          - label: next500c
+            corpus_dir: linux-next500c-corpus
+            cache_key: linux-next500c-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-indices-2000-2499
+            expected: 500
+          - label: next500d
+            corpus_dir: linux-next500d-corpus
+            cache_key: linux-next500d-corpus-v4-6.6.143-rv64-defconfig-gcc13.3.0-indices-2500-2999
+            expected: 500
+          - label: final352
+            corpus_dir: linux-final352-corpus
+            cache_key: linux-final352-corpus-v2-6.6.143-rv64-defconfig-gcc13.3.0-indices-3000-3351
+            expected: 352
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Restore frozen shard cache
+        uses: actions/cache/restore@v4
+        with:
+          path: build/${{ matrix.corpus_dir }}
+          key: ${{ matrix.cache_key }}
+          fail-on-cache-miss: true
+
+      - name: Validate and package shard
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          label="${{ matrix.label }}"
+          dir="build/${{ matrix.corpus_dir }}"
+          expected=${{ matrix.expected }}
+          test -s "$dir/selected-tus.txt"
+          test "$(grep -cve '^[[:space:]]*$' "$dir/selected-tus.txt")" -eq "$expected"
+
+          out="build/frozen-linux-corpus-$label"
+          mkdir -p "$out"
+          (
+            cd build
+            find "${{ matrix.corpus_dir }}" -type f -print0 |
+              LC_ALL=C sort -z |
+              xargs -0 sha256sum
+          ) >"$out/files.sha256"
+          tar -C build -czf "$out/corpus.tar.gz" "${{ matrix.corpus_dir }}"
+          sha256sum "$out/corpus.tar.gz" >"$out/corpus.tar.gz.sha256"
+          printf '%s\n'             "label=$label"             "expected=$expected"             "source_branch=$GITHUB_REF_NAME"             "source_head=$GITHUB_SHA"             >"$out/provenance.txt"
+          echo "FROZEN_CORPUS_EXPORT label=$label selected=$expected archive_sha=$(cut -d' ' -f1 "$out/corpus.tar.gz.sha256")"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: frozen-linux-corpus-${{ matrix.label }}
+          path: build/frozen-linux-corpus-${{ matrix.label }}
+          retention-days: 90
+          if-no-files-found: error
+
+  complete:
+    if: always() && (github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[export-frozen-linux-corpus]'))
+    needs: [first500, shards]
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Require all seven corpus exports
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "${{ needs.first500.result }}" = success
+          test "${{ needs.shards.result }}" = success
+          echo "FROZEN_LINUX_CORPUS_EXPORT=PASS shards=7 selected=3352 source_head=$GITHUB_SHA"

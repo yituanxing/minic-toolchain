@@ -8,8 +8,9 @@
 #include <stdint.h>
 
 typedef enum MinicIntegerLiteralBase {
-    MINIC_INTEGER_LITERAL_BASE_DECIMAL = 10,
+    MINIC_INTEGER_LITERAL_BASE_BINARY = 2,
     MINIC_INTEGER_LITERAL_BASE_OCTAL = 8,
+    MINIC_INTEGER_LITERAL_BASE_DECIMAL = 10,
     MINIC_INTEGER_LITERAL_BASE_HEXADECIMAL = 16
 } MinicIntegerLiteralBase;
 
@@ -25,6 +26,7 @@ typedef struct MinicTargetInfo {
     const MinicDataLayout *data_layout;
     const MinicTargetIntegerModel *integer_model;
     MinicType wide_character_type;
+    MinicIntegerRank word_integer_rank;
     bool gnu_sizeof_void_is_one;
     bool gnu_sizeof_function_is_one;
     bool call_frame_return_address_level0;
@@ -39,6 +41,9 @@ const MinicTargetIntegerModel *minic_target_info_integer_model(const MinicTarget
 bool minic_target_info_plain_char_sign(const MinicTargetInfo *target, MinicIntegerSign *sign);
 bool minic_target_info_plain_char_type(const MinicTargetInfo *target, MinicType *type);
 bool minic_target_info_wide_character_type(const MinicTargetInfo *target, MinicType *type);
+bool minic_target_info_word_integer_type(const MinicTargetInfo *target,
+                                         MinicIntegerSign sign,
+                                         MinicType *type);
 bool minic_target_info_sizeof_type(const MinicTargetInfo *target,
                                    const MinicC0Program *program,
                                    MinicType type,

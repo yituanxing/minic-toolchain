@@ -1,5 +1,15 @@
 # Compiler-first Development Roadmap / 编译器优先开发路线
 
+> **2026-08-28 status:** the compiler-construction track described below is now
+> **FROZEN / maintenance mode**.  The acceptance evidence and maintenance
+> boundary are recorded in
+> [`docs/milestones/compiler-v1-frozen.md`](../milestones/compiler-v1-frozen.md).
+> The active project line is now **frozen Stage2 MiniC -> Linux integration ->
+> Image -> QEMU runtime**.  This document remains the historical development
+> rationale; its former "active track" wording is no longer a request to expand
+> compiler scope.
+
+
 ## 1. Permanent development rule / 长期开发规则
 
 MiniC evolves through **real, executable vertical slices**, but only one toolchain boundary is replaced at a time.

@@ -45,6 +45,9 @@ MINIC_SOURCES := \
 	src/compiler/compiler.c \
 	src/core/core_ir.c \
 	src/core/core_lower.c \
+	src/core/core_lower_types.c \
+	src/core/core_lower_metadata.c \
+	src/core/core_lower_asm.c \
 	src/frontend/attribute.c \
 	src/frontend/ast.c \
 	src/frontend/expression_semantics.c \
@@ -54,6 +57,7 @@ MINIC_SOURCES := \
 	src/frontend/ast_verifier.c \
 	src/frontend/cast_normalization.c \
 	src/frontend/const_eval.c \
+	src/frontend/declaration_sema.c \
 	src/frontend/ast_function.c \
 	src/frontend/ast_global.c \
 	src/frontend/lexer.c \
@@ -82,9 +86,6 @@ MINIC_SOURCES := \
 	src/target/riscv64/layout.c \
 	src/target/riscv64/codegen_support.c \
 	src/target/riscv64/core_codegen.c \
-	src/target/riscv64/codegen_expression.c \
-	src/target/riscv64/codegen_inline_asm.c \
-	src/target/riscv64/codegen_statement.c \
 	src/target/riscv64/codegen_function.c \
 	tools/minic/main.c
 MINIC_OBJECTS := $(patsubst %.c,$(BUILD_DIR)/obj/%.o,$(MINIC_SOURCES))

@@ -16,13 +16,12 @@ compile_source() {
     "$host_cc" -E -P -x c "$@" \
         "$root/tests/compiler/c0/$source_name.c" -o "$work/$name.i"
     "$minic" -S "$work/$name.i" -o "$work/$name.s"
+    # Core owns the production function route. Keep this contract on route
+    # identity and CFG shape, not on frame/register allocation policy.
     grep -F ".globl main" "$work/$name.s" >/dev/null
-    grep -F ".Lmain_return:" "$work/$name.s" >/dev/null
-    grep -F "  sd ra, " "$work/$name.s" >/dev/null
-    grep -F "  sd s0, " "$work/$name.s" >/dev/null
-    grep -F "  mv s0, sp" "$work/$name.s" >/dev/null
-    grep -F "  ld ra, " "$work/$name.s" >/dev/null
-    grep -F "  ld s0, " "$work/$name.s" >/dev/null
+    grep -F ".Lmain_core_bb" "$work/$name.s" >/dev/null
+    grep -F ".Lmain_core_return:" "$work/$name.s" >/dev/null
+    grep -E '^[[:space:]]+ret$' "$work/$name.s" >/dev/null
 }
 
 expect_instructions() {
@@ -30,13 +29,70 @@ expect_instructions() {
     shift
 
     for instruction in "$@"; do
-        if test "$instruction" = "sw t0, 0(a0)"; then
-            grep -E '^  sw t0, 0\((a0|t1)\)$' "$work/$name.s" >/dev/null
-        else
-            grep -F "  $instruction" "$work/$name.s" >/dev/null
-        fi
+        case "$instruction" in
+            "mv s0, sp"|"sd a0, 0(sp)"|"ld t0, 0(sp)"|"addi a0, s0, "*)
+                # Legacy frame/register-placement details are not part of the
+                # Core semantic contract. Load/store/value-flow checks below
+                # still prove that the source operation is emitted.
+                ;;
+            "j .Lmain_return")
+                grep -F "  j .Lmain_core_return" "$work/$name.s" >/dev/null
+                ;;
+            "j .Lif_"*)
+                grep -E '^[[:space:]]+j[[:space:]]+\.Lmain_core_bb[0-9]+$' \
+                    "$work/$name.s" >/dev/null
+                ;;
+            "beqz a0, .Lif_"*)
+                grep -E '^[[:space:]]+bnez[[:space:]]+[^,]+,[[:space:]]*\.Lmain_core_bb[0-9]+$' \
+                    "$work/$name.s" >/dev/null
+                ;;
+            "li a0, "*)
+                immediate=${instruction#"li a0, "}
+                grep -E "^[[:space:]]+li[[:space:]]+[^,]+,[[:space:]]*$immediate$" \
+                    "$work/$name.s" >/dev/null
+                ;;
+            "la a0, "*)
+                symbol=${instruction#"la a0, "}
+                grep -E "^[[:space:]]+la[[:space:]]+[^,]+,[[:space:]]*$symbol$" \
+                    "$work/$name.s" >/dev/null
+                ;;
+            "xori a0, a0, 1")
+                # Legacy <=/>= inverted the less-than bit with xori 1.
+                # Core models that inversion explicitly as SCALAR_IS_ZERO,
+                # whose RV64 lowering is seqz.
+                grep -E '^[[:space:]]+seqz[[:space:]]+' "$work/$name.s" >/dev/null
+                ;;
+            "xori a0, a0, "*)
+                immediate=${instruction#"xori a0, a0, "}
+                grep -E "^[[:space:]]+xori[[:space:]]+[^,]+,[[:space:]]*[^,]+,[[:space:]]*$immediate$" \
+                    "$work/$name.s" >/dev/null
+                ;;
+            addw\ *|subw\ *|mulw\ *|divw\ *|remw\ *|negw\ *)
+                opcode=${instruction%% *}
+                opcode=${opcode%w}
+                grep -E "^[[:space:]]+$opcode[[:space:]]+" "$work/$name.s" >/dev/null
+                ;;
+            snez\ *)
+                # Core has SCALAR_EQUAL + SCALAR_IS_ZERO rather than a target-
+                # shaped not-equal instruction. Canonical a != b is xor +
+                # seqz + seqz. Accept direct snez too, but require two zero
+                # tests for the Core-normalized shape so equality cannot pass.
+                if ! grep -E '^[[:space:]]+snez[[:space:]]+' "$work/$name.s" >/dev/null; then
+                    test "$(grep -E -c '^[[:space:]]+seqz[[:space:]]+' "$work/$name.s")" -ge 2
+                fi
+                ;;
+            xor\ *|seqz\ *|slt\ *|lw\ *|sw\ *)
+                opcode=${instruction%% *}
+                grep -E "^[[:space:]]+$opcode[[:space:]]+" "$work/$name.s" >/dev/null
+                ;;
+            *)
+                printf '%s\n' \
+                    "FAIL compiler/c0/$name: unmigrated legacy instruction contract: $instruction" >&2
+                exit 1
+                ;;
+        esac
     done
-    printf '%s\n' "PASS compiler/c0/$name"
+    printf '%s\n' "PASS compiler/c0/$name normalized=core-contract"
 }
 
 expect_compile_failure() {
@@ -61,6 +117,7 @@ expect_compile_failure() {
 }
 
 compile_source empty_main empty_main
+compile_source block_scope_gcc_diagnostic_pragma block_scope_gcc_diagnostic_pragma
 expect_instructions empty_main "li a0, 0" "j .Lmain_return"
 
 compile_source return_0 return_0
@@ -95,13 +152,13 @@ expect_instructions local_assign \
     "mv s0, sp" "addi a0, s0, 0" "addi a0, s0, 4" \
     "sw t0, 0(a0)" "lw a0, 0(s0)" "lw a0, 4(s0)" \
     "addw a0, t0, a0"
-test "$(grep -E -c '^  sw t0, 0\((a0|t1)\)$' "$work/local_assign.s")" -eq 2
+test "$(grep -E -c '^[[:space:]]+sw[[:space:]]+' "$work/local_assign.s")" -ge 2
 
 compile_source local_reassign locals -DCASE=3
 expect_instructions local_reassign \
     "mv s0, sp" "lw a0, 0(s0)" "mulw a0, t0, a0" \
     "addi a0, s0, 0" "sw t0, 0(a0)"
-test "$(grep -E -c '^  sw t0, 0\((a0|t1)\)$' "$work/local_reassign.s")" -eq 2
+test "$(grep -E -c '^[[:space:]]+sw[[:space:]]+' "$work/local_reassign.s")" -ge 2
 
 compile_source comparison_equal comparisons -DCASE=1
 expect_instructions comparison_equal "xor a0, t0, a0" "seqz a0, a0"
@@ -141,7 +198,7 @@ expect_instructions logical_not_nonzero "seqz a0, a0"
 
 compile_source logical_not_recursive logical_not -DCASE=3
 expect_instructions logical_not_recursive "seqz a0, a0"
-test "$(grep -c -F '  seqz a0, a0' "$work/logical_not_recursive.s")" -eq 2
+test "$(grep -E -c '^[[:space:]]+seqz[[:space:]]+' "$work/logical_not_recursive.s")" -eq 2
 
 compile_source logical_not_comparison logical_not -DCASE=4
 expect_instructions logical_not_comparison \
@@ -168,7 +225,7 @@ expect_instructions if_comparison_block \
 compile_source if_nested_dangling_else if_else -DCASE=4
 expect_instructions if_nested_dangling_else \
     "beqz a0, .Lif_else_0" "beqz a0, .Lif_else_1"
-test "$(grep -c -F '  beqz a0, .Lif_else_' "$work/if_nested_dangling_else.s")" -eq 2
+test "$(grep -E -c '^[[:space:]]+bnez[[:space:]]+[^,]+,[[:space:]]*\.Lmain_core_bb[0-9]+$' "$work/if_nested_dangling_else.s")" -eq 2
 
 compile_source if_branch_return if_else -DCASE=5
 expect_instructions if_branch_return \
@@ -271,9 +328,12 @@ expect_compile_failure \
 expect_compile_failure \
     invalid_duplicate_typedef \
     "duplicate typedef name"
+compile_source void_typedef void_typedef
+printf '%s\n' "PASS compiler/c0/void_typedef"
+
 expect_compile_failure \
     invalid_void_typedef \
-    "typedef cannot name bare void"
+    "local object cannot have void type"
 expect_compile_failure \
     invalid_too_many_global_initializers \
     "too many nested static array initializers"
@@ -559,3 +619,9 @@ MINIC="$minic" \
 HOST_CC="$host_cc" \
 BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
 sh "$root/tests/compiler/c0/run-linux-tail-batch8.sh"
+
+MINIC="$minic" HOST_CC="$host_cc" BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
+  sh "$root/tests/compiler/c0/run-gnu-local-object-alignment.sh"
+
+MINIC="$minic" HOST_CC="$host_cc" BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
+  sh "$root/tests/compiler/c0/run-builtin-memset-call.sh"

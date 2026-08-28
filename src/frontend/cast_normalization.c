@@ -151,6 +151,8 @@ static bool append_normalized_cast(MinicC0Program *rewritten,
     if ((minic_type_is_double(cast_expression->type) &&
          (minic_type_is_integer(operand_expression->type) ||
           minic_type_is_float(operand_expression->type))) ||
+        (minic_type_is_float(cast_expression->type) &&
+         minic_type_is_double(operand_expression->type)) ||
         (minic_type_is_integer(cast_expression->type) &&
          minic_type_is_double(operand_expression->type))) {
         return append_normalized_conversion(

@@ -13,7 +13,7 @@ mkdir -p "$work"
     -o "$work/signed_char_semantics.i"
 "$minic" -S "$work/signed_char_semantics.i" -o "$work/signed_char_semantics.s"
 
-grep -F '  lb a0, 0(a0)' "$work/signed_char_semantics.s" >/dev/null
-grep -F '  lbu a0, 0(a0)' "$work/signed_char_semantics.s" >/dev/null
-grep -F '  sb t0, 0(t1)' "$work/signed_char_semantics.s" >/dev/null
+grep -E '^[[:space:]]+lb[[:space:]]+[^,]+,[[:space:]]*0\([^)]*\)$' "$work/signed_char_semantics.s" >/dev/null
+grep -E '^[[:space:]]+lbu[[:space:]]+[^,]+,[[:space:]]*0\([^)]*\)$' "$work/signed_char_semantics.s" >/dev/null
+grep -E '^[[:space:]]+sb[[:space:]]+[^,]+,[[:space:]]*0\([^)]*\)$' "$work/signed_char_semantics.s" >/dev/null
 printf '%s\n' 'PASS compiler/c0/signed_char_semantics signed-load=lb unsigned-and-plain-load=lbu store=sb'

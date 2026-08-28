@@ -70,3 +70,16 @@ int read_named_hook(void) {
     return named_hooks[0].name[0] + named_hooks[0].name[5] + named_hooks[0].read_u64() +
            named_hooks[0].write_u64() + exact_tags[0].tag[2] + exact_tags[0].marker;
 }
+
+struct MiniGridCell {
+    int value;
+};
+
+static const struct MiniGridCell matrix_cells[2][3] = {
+    {{1}, {2}, {3}},
+    {{4}, {5}, {6}},
+};
+
+int read_matrix_cell(void) {
+    return matrix_cells[1][2].value;
+}

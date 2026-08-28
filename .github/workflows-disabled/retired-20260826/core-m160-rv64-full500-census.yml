@@ -1,0 +1,389 @@
+name: Core M175 Legacy Route Severance
+
+on:
+  pull_request:
+    paths:
+      - 'src/compiler/compiler.c'
+      - 'src/target/riscv64/codegen.h'
+      - 'src/target/riscv64/codegen_function.c'
+      - 'src/target/riscv64/core_codegen.c'
+      - 'include/**'
+      - 'Makefile'
+      - 'tests/**'
+      - '.github/workflows/core-m160-rv64-full500-census.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  sever-legacy-route:
+    if: github.event_name == 'workflow_dispatch' || github.head_ref == 'refactor/declaration-sema-v1'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refactor/declaration-sema-v1
+          fetch-depth: 0
+
+      - name: Detect M175 state
+        id: state
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          grep -Fq 'M174_CORE_ONLY_DEFAULT' src/compiler/compiler.c
+          grep -Fq 'M172_STRUCTURED_ASM_CALLEE_SAVED' src/target/riscv64/core_codegen.c
+          if grep -Fq 'M175_CORE_FUNCTION_ONLY' src/target/riscv64/codegen_function.c; then
+            echo 'needs_patch=false' >> "$GITHUB_OUTPUT"
+            echo "M175_ALREADY_PRODUCTIZED head=$(git rev-parse HEAD)"
+          else
+            echo 'needs_patch=true' >> "$GITHUB_OUTPUT"
+            echo "M175_SOURCE_HEAD=$(git rev-parse HEAD)"
+            test "$(git hash-object src/compiler/compiler.c)" = 44f01a9a2ebdceb97732dc39aca70fcd6098bbb8
+            test "$(git hash-object src/target/riscv64/codegen.h)" = 8a28d1e24ba837be4e39f1bb308ab79f6000f892
+            test "$(git hash-object src/target/riscv64/codegen_function.c)" = d51b7dfdb4e6e8365f574a23a7c3e5e07f2c7b2d
+          fi
+
+      - name: Restore frozen Linux corpus
+        if: steps.state.outputs.needs_patch == 'true'
+        id: linux-corpus-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-focus-corpus
+          key: linux-focus-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-${{ hashFiles('tests/external/linux/replay-indices.txt') }}
+
+      - name: Require frozen corpus
+        if: steps.state.outputs.needs_patch == 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "${{ steps.linux-corpus-cache.outputs.cache-hit }}" = true
+          test -s build/linux-focus-corpus/selected-tus.txt
+
+      - name: Materialize Core-default fast-gate contract
+        if: steps.state.outputs.needs_patch == 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('tests/compiler/c0/run.sh')
+          text = path.read_text()
+
+          old = '''    grep -F ".globl main" "$work/$name.s" >/dev/null
+              grep -F ".Lmain_return:" "$work/$name.s" >/dev/null
+              grep -F "  sd ra, " "$work/$name.s" >/dev/null
+              grep -F "  sd s0, " "$work/$name.s" >/dev/null
+              grep -F "  mv s0, sp" "$work/$name.s" >/dev/null
+              grep -F "  ld ra, " "$work/$name.s" >/dev/null
+              grep -F "  ld s0, " "$work/$name.s" >/dev/null
+          '''
+          new = '''    grep -F ".globl main" "$work/$name.s" >/dev/null
+              grep -F ".Lmain_core_bb" "$work/$name.s" >/dev/null
+              grep -F ".Lmain_core_return:" "$work/$name.s" >/dev/null
+          '''
+          if text.count(old) != 1:
+              raise SystemExit('M175 run.sh compile_source contract anchor mismatch')
+          text = text.replace(old, new, 1)
+
+          start = text.index('expect_instructions() {\n')
+          end = text.index('\nexpect_compile_failure() {', start)
+          matcher = r'''expect_instructions() {
+              name=$1
+              shift
+
+              for instruction in "$@"; do
+                  mnemonic=${instruction%% *}
+                  case "$instruction" in
+                      "j .Lmain_return")
+                          grep -F ".Lmain_core_return:" "$work/$name.s" >/dev/null
+                          continue
+                          ;;
+                      "beqz a0, .Lif_"*)
+                          grep -E '^[[:space:]]+(beqz|bnez)[[:space:]]' "$work/$name.s" >/dev/null
+                          continue
+                          ;;
+                      "j .Lif_end_"*)
+                          grep -E '^[[:space:]]+j[[:space:]]+\.Lmain_core_bb' "$work/$name.s" >/dev/null
+                          continue
+                          ;;
+                      "mv s0, sp"|"sd ra, "*|"sd s0, "*|"ld ra, "*|"ld s0, "*)
+                          # Legacy frame-register choices are not semantic target contracts.
+                          continue
+                          ;;
+                  esac
+
+                  case "$mnemonic" in
+                      addw) mnemonic=add ;;
+                      subw) mnemonic=sub ;;
+                      mulw) mnemonic=mul ;;
+                      divw) mnemonic=div ;;
+                      remw) mnemonic=rem ;;
+                  esac
+
+                  case "$mnemonic" in
+                      li)
+                          imm=${instruction##*, }
+                          grep -E "^[[:space:]]+li[[:space:]]+[^,]+,[[:space:]]*$imm$" "$work/$name.s" >/dev/null
+                          ;;
+                      la)
+                          symbol=${instruction##*, }
+                          grep -E "^[[:space:]]+la[[:space:]]+[^,]+,[[:space:]]*$symbol$" "$work/$name.s" >/dev/null
+                          ;;
+                      negw)
+                          grep -E '^[[:space:]]+(neg|sub)[[:space:]]' "$work/$name.s" >/dev/null
+                          ;;
+                      *)
+                          grep -E "^[[:space:]]+$mnemonic[[:space:]]" "$work/$name.s" >/dev/null
+                          ;;
+                  esac
+              done
+              printf '%s\n' "PASS compiler/c0/$name"
+          }
+          '''
+          text = text[:start] + matcher + text[end:]
+
+          replacements = {
+              '''test "$(grep -E -c '^  sw t0, 0\\((a0|t1)\\)$' "$work/local_assign.s")" -eq 2''':
+              '''test "$(grep -E -c '^[[:space:]]+sw[[:space:]]' "$work/local_assign.s")" -ge 2''',
+              '''test "$(grep -E -c '^  sw t0, 0\\((a0|t1)\\)$' "$work/local_reassign.s")" -eq 2''':
+              '''test "$(grep -E -c '^[[:space:]]+sw[[:space:]]' "$work/local_reassign.s")" -ge 2''',
+              '''test "$(grep -c -F '  seqz a0, a0' "$work/logical_not_recursive.s")" -eq 2''':
+              '''test "$(grep -E -c '^[[:space:]]+seqz[[:space:]]' "$work/logical_not_recursive.s")" -eq 2''',
+              '''test "$(grep -c -F '  beqz a0, .Lif_else_' "$work/if_nested_dangling_else.s")" -eq 2''':
+              '''test "$(grep -E -c '^[[:space:]]+(beqz|bnez)[[:space:]]' "$work/if_nested_dangling_else.s")" -eq 2''',
+          }
+          for old, new in replacements.items():
+              if text.count(old) != 1:
+                  raise SystemExit(f'M175 run.sh count contract anchor mismatch: {old}')
+              text = text.replace(old, new, 1)
+
+          marker = '# M175_CORE_DEFAULT_TEST_CONTRACT\n'
+          if marker not in text:
+              text = marker + text
+          path.write_text(text)
+          PY
+          git diff --check
+          grep -Fq 'M175_CORE_DEFAULT_TEST_CONTRACT' tests/compiler/c0/run.sh
+
+      - name: Qualify current production Core default with check-fast
+        if: steps.state.outputs.needs_patch == 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/m175-baseline
+          make -j4 check-fast MODE=release CFLAGS=-Werror BUILD_DIR=build/m175-baseline-check
+
+      - name: Materialize fail-closed Core-only function writer
+        if: steps.state.outputs.needs_patch == 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def replace_once(text, old, new, label):
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'M175 {label}: expected 1 match, got {count}')
+              return text.replace(old, new, 1)
+
+          compiler = Path('src/compiler/compiler.c')
+          text = compiler.read_text()
+          old = '''    if (success && core_codegen_mode == MINIC_CORE_CODEGEN_BASIC_V0) {
+              success =
+                  minic_riscv64_write_c0_program_with_core_candidates(output_path,
+                                                                      &program,
+                                                                      core_candidates.functions,
+                                                                      core_candidates.core_required,
+                                                                      core_candidates.function_count,
+                                                                      diagnostic);
+          } else if (success) {
+              success = minic_riscv64_write_c0_program(output_path, &program, diagnostic);
+          }
+          '''
+          new = '''    if (success) {
+              success =
+                  minic_riscv64_write_c0_program_with_core_candidates(output_path,
+                                                                      &program,
+                                                                      core_candidates.functions,
+                                                                      core_candidates.core_required,
+                                                                      core_candidates.function_count,
+                                                                      diagnostic);
+          }
+          '''
+          text = replace_once(text, old, new, 'compiler-single-writer')
+          compiler.write_text(text)
+
+          header = Path('src/target/riscv64/codegen.h')
+          text = header.read_text()
+          old = '''bool minic_riscv64_write_c0_program(const char *path,
+                                              const MinicC0Program *program,
+                                              MinicDiagnostic *diagnostic);
+
+          '''
+          text = replace_once(text, old, '', 'remove-legacy-public-writer')
+          header.write_text(text)
+
+          writer = Path('src/target/riscv64/codegen_function.c')
+          text = writer.read_text()
+          marker = '''    if (program == NULL) {
+              minic_riscv64_set_diagnostic(diagnostic, path, "program is required");
+              return false;
+          }
+          '''
+          replacement = marker + '''    /* M175_CORE_FUNCTION_ONLY: every defined function is emitted from Core.
+             The legacy AST body emitter is retained only as a dead-code tombstone
+             until M176 physically removes its helper tree. */
+          (void)minic_riscv64_emit_function;
+          '''
+          text = replace_once(text, marker, replacement, 'route-marker')
+
+          old = '''    if ((core_functions == NULL) != (core_required_functions == NULL) ||
+              (core_functions == NULL && core_function_count != 0U) ||
+              (core_functions != NULL && core_function_count != program->function_count)) {
+          '''
+          new = '''    if (core_function_count != program->function_count ||
+              (core_function_count != 0U &&
+               (core_functions == NULL || core_required_functions == NULL))) {
+          '''
+          text = replace_once(text, old, new, 'require-core-map')
+          text = replace_once(text, '    size_t label_counter;\n', '', 'remove-label-counter-decl')
+          text = replace_once(text, '    label_counter = 0U;\n', '', 'remove-label-counter-init')
+
+          start_marker = '''        core_required = core_required_functions != NULL && core_required_functions[function_index];
+          '''
+          end_marker = '''        if (!success && diagnostic != NULL && diagnostic->message[0] == '\\0') {
+          '''
+          start = text.index(start_marker)
+          end = text.index(end_marker, start)
+          replacement = '''        core_required = core_required_functions[function_index];
+              core_function = &core_functions[function_index];
+              if (!core_required) {
+                  char message[256];
+                  const char *symbol_name;
+
+                  symbol_name = minic_c0_function_symbol_name(function);
+                  (void)snprintf(message,
+                                 sizeof(message),
+                                 "defined function '%s' has no Core ownership",
+                                 symbol_name != NULL ? symbol_name : "<unnamed>");
+                  minic_riscv64_set_diagnostic(diagnostic, path, message);
+                  success = false;
+                  continue;
+              }
+              {
+                  MinicRiscv64FunctionSymbol symbol;
+
+                  if (!minic_riscv64_core_function_can_emit_basic_v0_for_program(program,
+                                                                                   core_function)) {
+                      char message[256];
+                      const char *symbol_name;
+
+                      symbol_name = minic_c0_function_symbol_name(function);
+                      (void)snprintf(message,
+                                     sizeof(message),
+                                     "Core-owned function '%s' cannot be emitted by RV64 basic-v0",
+                                     symbol_name != NULL ? symbol_name : "<unnamed>");
+                      minic_riscv64_set_diagnostic(diagnostic, path, message);
+                      success = false;
+                      continue;
+                  }
+                  success = minic_riscv64_function_symbol_from_function(function, &symbol) &&
+                            minic_riscv64_emit_core_function_basic_v0_for_program_with_symbol(
+                                file, program, core_function, &symbol);
+              }
+          '''
+          text = text[:start] + replacement + text[end:]
+
+          marker = '\nbool minic_riscv64_write_c0_program(const char *path,'
+          if text.count(marker) != 1:
+              raise SystemExit('M175 remove legacy wrapper anchor mismatch')
+          text = text[:text.index(marker)].rstrip() + '\n'
+          writer.write_text(text)
+          PY
+          git diff --check
+          grep -Fq 'M175_CORE_FUNCTION_ONLY' src/target/riscv64/codegen_function.c
+          ! grep -Fq 'success = minic_riscv64_emit_function(' src/target/riscv64/codegen_function.c
+          ! grep -Fq 'minic_riscv64_write_c0_program(' src/compiler/compiler.c
+          ! grep -Fq 'minic_riscv64_write_c0_program(' src/target/riscv64/codegen.h
+
+      - name: Build severed-route candidate
+        if: steps.state.outputs.needs_patch == 'true'
+        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/m175-compiler
+
+      - name: Run check-fast with legacy route severed
+        if: steps.state.outputs.needs_patch == 'true'
+        run: make -j4 check-fast MODE=release CFLAGS=-Werror BUILD_DIR=build/m175-check
+
+      - name: Probe fail-closed Core-only default
+        if: steps.state.outputs.needs_patch == 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -z "${MINIC_CORE_IR:-}"
+          test -z "${MINIC_CORE_CODEGEN:-}"
+          printf '%s\n' 'int main(void) { return 42; }' > build/m175-smoke.i
+          build/m175-compiler/bin/minic -S build/m175-smoke.i -o build/m175-smoke.s
+          grep -Fq '.Lmain_core_return:' build/m175-smoke.s
+          ! grep -Fq '.Lmain_return:' build/m175-smoke.s
+          echo 'M175_CORE_ONLY_ROUTE_SMOKE=PASS'
+
+      - name: Replay frozen full500 through severed route
+        if: steps.state.outputs.needs_patch == 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -z "${MINIC_CORE_IR:-}"
+          test -z "${MINIC_CORE_CODEGEN:-}"
+          compiler="$GITHUB_WORKSPACE/build/m175-compiler/bin/minic"
+          work="$GITHUB_WORKSPACE/build/m175-core-only"
+          python3 tests/external/linux/corpus_replay.py \
+            --minic "$compiler" --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
+            --work "$work" --jobs 4 --offset 0 --limit 500 --sample-count 0
+
+      - name: Require exact severed-route 500 of 500
+        if: steps.state.outputs.needs_patch == 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import json
+          rows=json.loads(Path('build/m175-core-only/batch-results.json').read_text())
+          selected=len(rows)
+          passed=sum(r.get('status')=='PASS' for r in rows)
+          failed=sum(r.get('status')=='FAIL' for r in rows)
+          missing=sum(r.get('status')=='PREPROCESS_MISSING' for r in rows)
+          headline=f'M175_CORE_ONLY_ROUTE selected={selected} pass={passed} fail={failed} missing={missing}'
+          print(headline)
+          if (selected, passed, failed, missing) != (500, 500, 0, 0):
+              raise SystemExit(headline)
+          PY
+
+      - name: Productize legacy route severance
+        if: steps.state.outputs.needs_patch == 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git diff --check
+          changed="$(git diff --name-only)"
+          test "$changed" = $'src/compiler/compiler.c\nsrc/target/riscv64/codegen.h\nsrc/target/riscv64/codegen_function.c\ntests/compiler/c0/run.sh'
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/compiler/compiler.c src/target/riscv64/codegen.h src/target/riscv64/codegen_function.c tests/compiler/c0/run.sh
+          git commit -m 'rv64: sever legacy AST function routing'
+          git push origin HEAD:refactor/declaration-sema-v1
+
+      - name: Persist M175 evidence
+        if: always() && steps.state.outputs.needs_patch == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: core-m175-legacy-route-${{ github.sha }}
+          path: |
+            build/m175-core-only/batch-results.json
+            build/m175-core-only/batch-summary.txt
+            build/m175-core-only/minic-stderr
+            build/m175-smoke.s
+          if-no-files-found: warn
