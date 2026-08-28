@@ -212,3 +212,47 @@ Stage2 full Image
 ```
 
 This changes test frequency, not the final quality bar.
+
+
+## 2026-08-28 implemented status
+
+The design above is now implemented far enough to freeze the validation
+architecture.
+
+- B3 self-hosted Stage2 Linux spread sample: **112/112 PASS** across 7/7
+  shards (run `33177107948`).
+- P0 one-boot init canary is implemented and checks proc, sysfs, devtmpfs,
+  cmdline, tmpfs read/write, PID1 and clean poweroff.
+- P1 is intentionally capped at a **single boot** containing 12 high-value
+  syscall canaries:
+  - eventfd read/write;
+  - epoll + eventfd readiness;
+  - timerfd;
+  - signalfd;
+  - inotify;
+  - Unix socketpair;
+  - IPv6 TCP loopback;
+  - memfd;
+  - pidfd;
+  - futex;
+  - io_uring setup;
+  - mmap + mprotect.
+- P1 also proves fork/exec/wait by executing the probe as a child of PID1.
+- The P1 boundary is machine-readable in
+  `tests/external/linux/runtime_v2_checks.tsv`; older rootfs/module/netfilter/
+  crypto checks are P2, not P1.
+- GCC Linux 6.6.143 calibration run `33182572335` passed both:
+  - historical full runtime contract: **2/2 lanes PASS**;
+  - P1: **12/12 syscall canaries PASS in one boot**.
+- The calibrated P1 QEMU phase itself completes in roughly two seconds on the
+  current hosted runner; therefore it is suitable for routine Image
+  qualification.
+- `Linux Runtime V2 P1 Reuse` consumes an already-built MiniC Image artifact
+  so P1 does not trigger a second kernel build.
+
+P2 and P3 are deliberately not expanded further during compiler V1 closure.
+The historical 145-module / 203-function gate remains the P3 release oracle.
+
+The remaining compiler-phase integration action is only to qualify a
+MiniC-built Image through P1.  No further runtime-test architecture work is
+required before starting the native preprocessor module.
