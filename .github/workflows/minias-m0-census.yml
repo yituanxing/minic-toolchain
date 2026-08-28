@@ -8,29 +8,45 @@ on:
 
 permissions:
   contents: read
+  actions: read
+
+env:
+  FROZEN_CORPUS_EXPORT_RUN: "33186855250"
 
 jobs:
   first500:
     if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[minias-census]')
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
 
-      - name: Restore frozen first500 corpus
-        uses: actions/cache/restore@v4
+      - name: Download exported frozen first500 corpus
+        uses: actions/download-artifact@v4
         with:
-          path: build/linux-focus-corpus
-          key: linux-focus-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-${{ hashFiles('tests/external/linux/replay-indices.txt') }}
-          fail-on-cache-miss: true
+          name: frozen-linux-corpus-first500
+          path: build/import-first500
+          repository: ${{ github.repository }}
+          run-id: ${{ env.FROZEN_CORPUS_EXPORT_RUN }}
+          github-token: ${{ github.token }}
 
-      - name: Validate frozen first500 corpus
+      - name: Verify and restore frozen first500 corpus
         shell: bash
         run: |
           set -Eeuo pipefail
+          import=build/import-first500
+          expected_archive_sha=$(cut -d' ' -f1 "$import/corpus.tar.gz.sha256")
+          actual_archive_sha=$(sha256sum "$import/corpus.tar.gz" | cut -d' ' -f1)
+          test "$actual_archive_sha" = "$expected_archive_sha"
+          tar -C build -xzf "$import/corpus.tar.gz"
+          (
+            cd build
+            sha256sum -c import-first500/files.sha256
+          )
           manifest=build/linux-focus-corpus/selected-tus.txt
           test -s "$manifest"
           test "$(grep -cve '^[[:space:]]*$' "$manifest")" -eq 500
+          echo "FROZEN_CORPUS_IMPORT=PASS label=first500 export_run=${FROZEN_CORPUS_EXPORT_RUN} archive_sha=$actual_archive_sha"
 
       - name: Build frozen compiler
         run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/minias-census-first500-compiler
@@ -71,56 +87,64 @@ jobs:
             build/minias-census-first500/census-first500.md
             build/minias-census-first500/cover-first500.txt
           retention-days: 14
+          if-no-files-found: error
 
   shards:
     if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[minias-census]')
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
         include:
           - label: new500
             corpus_dir: linux-new500-corpus
-            cache_key: linux-new500-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-indices-500-999
             expected: 500
           - label: next500
             corpus_dir: linux-next500-corpus
-            cache_key: linux-next500-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-indices-1000-1499
             expected: 500
           - label: next500b
             corpus_dir: linux-next500b-corpus
-            cache_key: linux-next500b-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-indices-1500-1999
             expected: 500
           - label: next500c
             corpus_dir: linux-next500c-corpus
-            cache_key: linux-next500c-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-indices-2000-2499
             expected: 500
           - label: next500d
             corpus_dir: linux-next500d-corpus
-            cache_key: linux-next500d-corpus-v4-6.6.143-rv64-defconfig-gcc13.3.0-indices-2500-2999
             expected: 500
           - label: final352
             corpus_dir: linux-final352-corpus
-            cache_key: linux-final352-corpus-v2-6.6.143-rv64-defconfig-gcc13.3.0-indices-3000-3351
             expected: 352
     steps:
       - uses: actions/checkout@v4
 
-      - name: Restore frozen Linux shard
-        uses: actions/cache/restore@v4
+      - name: Download exported frozen shard
+        uses: actions/download-artifact@v4
         with:
-          path: build/${{ matrix.corpus_dir }}
-          key: ${{ matrix.cache_key }}
-          fail-on-cache-miss: true
+          name: frozen-linux-corpus-${{ matrix.label }}
+          path: build/import-${{ matrix.label }}
+          repository: ${{ github.repository }}
+          run-id: ${{ env.FROZEN_CORPUS_EXPORT_RUN }}
+          github-token: ${{ github.token }}
 
-      - name: Validate frozen shard
+      - name: Verify and restore frozen shard
         shell: bash
         run: |
           set -Eeuo pipefail
+          label="${{ matrix.label }}"
+          import="build/import-$label"
+          expected_archive_sha=$(cut -d' ' -f1 "$import/corpus.tar.gz.sha256")
+          actual_archive_sha=$(sha256sum "$import/corpus.tar.gz" | cut -d' ' -f1)
+          test "$actual_archive_sha" = "$expected_archive_sha"
+          tar -C build -xzf "$import/corpus.tar.gz"
+          (
+            cd build
+            sha256sum -c "import-$label/files.sha256"
+          )
           manifest="build/${{ matrix.corpus_dir }}/selected-tus.txt"
           test -s "$manifest"
           test "$(grep -cve '^[[:space:]]*$' "$manifest")" -eq ${{ matrix.expected }}
+          echo "FROZEN_CORPUS_IMPORT=PASS label=$label export_run=${FROZEN_CORPUS_EXPORT_RUN} archive_sha=$actual_archive_sha"
 
       - name: Build frozen compiler
         run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/minias-census-${{ matrix.label }}-compiler
@@ -165,6 +189,7 @@ jobs:
             build/minias-census-${{ matrix.label }}/census-${{ matrix.label }}.md
             build/minias-census-${{ matrix.label }}/cover-${{ matrix.label }}.txt
           retention-days: 14
+          if-no-files-found: error
 
   all3352:
     if: always() && (github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[minias-census]'))
@@ -223,3 +248,4 @@ jobs:
             build/minias-census-all3352.md
             build/minias-census-cover-all3352.txt
           retention-days: 30
+          if-no-files-found: error
