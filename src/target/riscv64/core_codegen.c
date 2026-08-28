@@ -271,11 +271,24 @@ static bool core_call_outgoing_stack_size(const MinicC0Program *program,
             if (is_fixed_parameter) {
                 argument_type = parameter_types[argument_index];
             } else {
-                if (!is_variadic || argument->kind != MINIC_CORE_CALL_ARGUMENT_VALUE ||
-                    argument->value.value_id >= function->value_count) {
+                if (!is_variadic) {
                     return false;
                 }
-                argument_type = function->values[argument->value.value_id].type;
+                if (argument->kind == MINIC_CORE_CALL_ARGUMENT_VALUE) {
+                    if (argument->value.value_id >= function->value_count) {
+                        return false;
+                    }
+                    argument_type = function->values[argument->value.value_id].type;
+                } else if (argument->kind == MINIC_CORE_CALL_ARGUMENT_OBJECT) {
+                    if (argument->value.object_id >= function->object_count ||
+                        !minic_type_is_record(
+                            function->objects[argument->value.object_id].type)) {
+                        return false;
+                    }
+                    argument_type = function->objects[argument->value.object_id].type;
+                } else {
+                    return false;
+                }
             }
             if (!minic_riscv64_abi_place_argument(
                     program, argument_type, is_fixed_parameter, &cursor, &location)) {
@@ -1581,12 +1594,26 @@ static bool core_direct_call_supported(const MinicC0Program *program,
         if (is_fixed_parameter) {
             argument_type = callee->parameter_types[argument_index];
         } else {
-            if (!callee->is_variadic || argument->kind != MINIC_CORE_CALL_ARGUMENT_VALUE ||
-                argument->value.value_id >= function->value_count) {
+            if (!callee->is_variadic) {
                 return false;
             }
-            argument_type = function->values[argument->value.value_id].type;
-            if (!core_scalar_type(argument_type)) {
+            if (argument->kind == MINIC_CORE_CALL_ARGUMENT_VALUE) {
+                if (argument->value.value_id >= function->value_count) {
+                    return false;
+                }
+                argument_type = function->values[argument->value.value_id].type;
+                if (!core_scalar_type(argument_type)) {
+                    return false;
+                }
+            } else if (argument->kind == MINIC_CORE_CALL_ARGUMENT_OBJECT) {
+                if (argument->value.object_id >= function->object_count) {
+                    return false;
+                }
+                argument_type = function->objects[argument->value.object_id].type;
+                if (!minic_type_is_record(argument_type)) {
+                    return false;
+                }
+            } else {
                 return false;
             }
         }
@@ -1605,7 +1632,7 @@ static bool core_direct_call_supported(const MinicC0Program *program,
                    location.stack_slot_count == 1U))) {
                 return false;
             }
-        } else if (is_fixed_parameter && minic_type_is_record(argument_type)) {
+        } else if (minic_type_is_record(argument_type)) {
             MinicCoreObjectId object_id;
 
             if (argument->kind != MINIC_CORE_CALL_ARGUMENT_OBJECT) {
@@ -2419,11 +2446,22 @@ static bool emit_call(FILE *file,
         if (is_fixed_parameter) {
             argument_type = callee->parameter_types[argument_index];
         } else {
-            if (!callee->is_variadic || argument->kind != MINIC_CORE_CALL_ARGUMENT_VALUE ||
-                argument->value.value_id >= function->value_count) {
+            if (!callee->is_variadic) {
                 return false;
             }
-            argument_type = function->values[argument->value.value_id].type;
+            if (argument->kind == MINIC_CORE_CALL_ARGUMENT_VALUE) {
+                if (argument->value.value_id >= function->value_count) {
+                    return false;
+                }
+                argument_type = function->values[argument->value.value_id].type;
+            } else if (argument->kind == MINIC_CORE_CALL_ARGUMENT_OBJECT) {
+                if (argument->value.object_id >= function->object_count) {
+                    return false;
+                }
+                argument_type = function->objects[argument->value.object_id].type;
+            } else {
+                return false;
+            }
         }
         if (!minic_riscv64_abi_place_argument(
                 program, argument_type, is_fixed_parameter, &cursor, &location)) {
@@ -2460,8 +2498,8 @@ static bool emit_call(FILE *file,
             size_t chunk_index;
             size_t object_offset;
 
-            if (!is_fixed_parameter ||
-                !core_object_offset(program, function, argument->value.object_id, &object_offset)) {
+            if (!core_object_offset(
+                    program, function, argument->value.object_id, &object_offset)) {
                 return false;
             }
             if (location.value.kind == MINIC_RISCV64_ABI_VALUE_IGNORE) {
