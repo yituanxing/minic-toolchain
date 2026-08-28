@@ -1160,6 +1160,13 @@ static bool parse_static_scalar_constant_at(MinicParser *parser,
                 parser->program, parser->target_info, &constant, type, &converted)) {
             parsed_bits = converted.bits;
             has_symbolic_address = false;
+        } else if (minic_const_eval_arithmetic_to_integer(parser->program,
+                                                         parser->target_info,
+                                                         expression_id,
+                                                         type,
+                                                         &converted)) {
+            parsed_bits = converted.bits;
+            has_symbolic_address = false;
         } else if (static_integer_address_slot_supported(parser, type) &&
                    static_integer_address_relocation_target(
                        parser, expression_id, &relocation_target)) {
@@ -1167,7 +1174,8 @@ static bool parse_static_scalar_constant_at(MinicParser *parser,
             has_symbolic_address = true;
         } else {
             minic_parser_error(parser,
-                               "integer initializer requires an integer constant expression");
+                               "integer initializer requires an arithmetic constant or "
+                               "pointer-sized symbolic address");
             return false;
         }
         if (overwrite) {
