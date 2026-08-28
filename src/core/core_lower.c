@@ -669,6 +669,21 @@ MinicCoreLowerStatus lower_address(MinicCoreLowerContext *context,
         }
         if (index_value >= context->function->value_count ||
             !minic_type_equal(context->function->values[index_value].type, index_value_type)) {
+            (void)fprintf(stderr,
+                          "CORE_SUBSCRIPT_STAGE function=%s stage=index-type "
+                          "value=%" PRIu32 " value_count=%zu expected_base=%d expected_ptr=%u "
+                          "actual_base=%d actual_ptr=%u\n",
+                          context->source_function != NULL ? context->source_function->name : "?",
+                          index_value,
+                          context->function->value_count,
+                          (int)index_value_type.base_kind,
+                          index_value_type.pointer_depth,
+                          index_value < context->function->value_count
+                              ? (int)context->function->values[index_value].type.base_kind
+                              : -1,
+                          index_value < context->function->value_count
+                              ? context->function->values[index_value].type.pointer_depth
+                              : 0U);
             return MINIC_CORE_LOWER_ERROR;
         }
         subscript_status =
@@ -689,10 +704,18 @@ MinicCoreLowerStatus lower_address(MinicCoreLowerContext *context,
         offset_instruction.value.pointer_offset.base = base_value;
         offset_instruction.value.pointer_offset.index = index_value;
         offset_instruction.value.pointer_offset.element_size = element_size;
-        return minic_core_function_append_value_instruction(
-                   context->function, context->block_id, &offset_instruction, address_id)
-                   ? MINIC_CORE_LOWER_OK
-                   : MINIC_CORE_LOWER_ERROR;
+        if (!minic_core_function_append_value_instruction(
+                context->function, context->block_id, &offset_instruction, address_id)) {
+            (void)fprintf(stderr,
+                          "CORE_SUBSCRIPT_STAGE function=%s stage=append-offset "
+                          "base=%" PRIu32 " index=%" PRIu32 " element_size=%zu\n",
+                          context->source_function != NULL ? context->source_function->name : "?",
+                          base_value,
+                          index_value,
+                          element_size);
+            return MINIC_CORE_LOWER_ERROR;
+        }
+        return MINIC_CORE_LOWER_OK;
     }
     if (expression->kind == MINIC_EXPRESSION_MEMBER) {
         const MinicExpression *base;
