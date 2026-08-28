@@ -3833,18 +3833,15 @@ MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
         status = lower_expression_statement(context, &discarded_statement);
         if (status != MINIC_CORE_LOWER_OK) {
             if (getenv("CORE_FAST_TRACE") != NULL) {
+                const MinicExpression *right_expression =
+                    minic_c0_program_expression(context->body->program,
+                                                expression->value.binary.right);
                 (void)fprintf(stderr,
                               "CORE_COMMA_TRACE function=%s stage=left status=%d left_kind=%d right_kind=%d\n",
                               context->source_function != NULL ? context->source_function->name : "?",
                               (int)status,
                               discarded_expression != NULL ? (int)discarded_expression->kind : -1,
-                              (int)(minic_c0_program_expression(
-                                  context->body->program,
-                                  expression->value.binary.right) != NULL
-                                  ? minic_c0_program_expression(
-                                        context->body->program,
-                                        expression->value.binary.right)->kind
-                                  : -1));
+                              right_expression != NULL ? (int)right_expression->kind : -1);
             }
             return status;
         }
