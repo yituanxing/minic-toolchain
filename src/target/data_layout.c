@@ -13,6 +13,8 @@ static const MinicDataLayout minic_rv64_data_layout = {
     .float_alignment = 4U,
     .double_size = 8U,
     .double_alignment = 8U,
+    .long_double_size = 16U,
+    .long_double_alignment = 16U,
 };
 
 const MinicDataLayout *minic_default_data_layout(void) {
@@ -279,6 +281,11 @@ static bool minic_data_layout_type_depth(const MinicDataLayout *layout,
     if (minic_type_is_double(type)) {
         *size = layout->double_size;
         *alignment = layout->double_alignment;
+        return minic_data_layout_apply_explicit_alignment(type, alignment);
+    }
+    if (minic_type_is_long_double(type)) {
+        *size = layout->long_double_size;
+        *alignment = layout->long_double_alignment;
         return minic_data_layout_apply_explicit_alignment(type, alignment);
     }
     if (minic_type_is_array(type)) {
