@@ -3318,7 +3318,7 @@ static bool probe_static_array_designator_extent(MinicParser *probe, size_t *fir
     if (!minic_parser_parse_array_designator(probe, 0U, true, first, last)) {
         return false;
     }
-    if (!minic_semantic_snapshot_rollback_probe_expressions(&snapshot, program)) {
+    if (!minic_semantic_snapshot_rollback_probe_expression_types(&snapshot, program)) {
         minic_parser_error(probe,
                            "inferred aggregate array designator probe requires a "
                            "side-effect-free integer constant expression");
