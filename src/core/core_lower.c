@@ -8637,6 +8637,66 @@ static MinicCoreLowerStatus lower_switch_case_dispatch(MinicCoreLowerContext *co
     }
 }
 
+static bool core_switch_label_has_function_reentry(
+    const MinicCoreLowerContext *context, MinicStatementId label_id) {
+    const MinicC0Program *program;
+    const MinicStatement *label;
+    size_t index;
+
+    if (context == NULL || context->body == NULL || context->body->program == NULL) {
+        return false;
+    }
+    program = context->body->program;
+    label = minic_c0_program_statement(program, label_id);
+    if (label == NULL || label->kind != MINIC_STATEMENT_LABEL) {
+        return false;
+    }
+    for (index = 0U; index < program->statement_count; ++index) {
+        const MinicStatement *source;
+
+        source = minic_c0_program_statement(program, index);
+        if (source == NULL) {
+            return false;
+        }
+        if (source->kind == MINIC_STATEMENT_GOTO &&
+            source->expression == MINIC_EXPRESSION_INVALID &&
+            source->target_statement == label_id) {
+            return true;
+        }
+        if (source->kind == MINIC_STATEMENT_INLINE_ASM &&
+            source->inline_asm_id < program->inline_asm_count) {
+            const MinicInlineAsm *inline_asm = &program->inline_asms[source->inline_asm_id];
+            size_t label_index;
+
+            if (!inline_asm->is_goto) {
+                continue;
+            }
+            for (label_index = 0U; label_index < inline_asm->label_count; ++label_index) {
+                if (inline_asm->labels[label_index].target_statement == label_id) {
+                    return true;
+                }
+            }
+        }
+    }
+    for (index = 0U; index < program->expression_count; ++index) {
+        const MinicExpression *expression = minic_c0_program_expression(program, index);
+
+        if (expression == NULL) {
+            return false;
+        }
+        if (expression->kind == MINIC_EXPRESSION_LABEL_ADDRESS &&
+            expression->value.label_statement_id == label_id) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/* M176_SWITCH_POST_BREAK_LABEL_REENTRY: a direct break ends ordinary switch
+   fallthrough, but a later ordinary C label remains a valid goto target. Keep
+   that re-entry path separate from the case segment so break still reaches the
+   synthetic switch exit and only a genuinely referenced label can revive the
+   unreachable tail. */
 static MinicCoreLowerStatus
 lower_switch(MinicCoreLowerContext *context, const MinicStatement *statement, bool *terminated) {
     const MinicBlock *body;
@@ -8830,6 +8890,7 @@ lower_switch(MinicCoreLowerContext *context, const MinicStatement *statement, bo
         MinicBlock segment;
         MinicCoreBlockId fallthrough_target;
         size_t break_index;
+        size_t reentry_index;
         size_t segment_begin;
         size_t segment_end;
         size_t scan;
@@ -8840,6 +8901,7 @@ lower_switch(MinicCoreLowerContext *context, const MinicStatement *statement, bo
         segment_end = source_index + 1U < label_count ? labels[source_index + 1U].source_index
                                                       : body->statement_count;
         break_index = SIZE_MAX;
+        reentry_index = SIZE_MAX;
         for (scan = segment_begin; scan < segment_end; ++scan) {
             const MinicStatement *segment_statement;
 
@@ -8848,15 +8910,18 @@ lower_switch(MinicCoreLowerContext *context, const MinicStatement *statement, bo
             if (segment_statement == NULL) {
                 return MINIC_CORE_LOWER_ERROR;
             }
-            /* A direct break terminates this switch segment. Parser flattening
-               can leave another source break immediately after it, for example
-               one inside a braced case body plus one after the brace. Such
-               trailing breaks are unreachable and have no re-entry label
-               inside this segment. Accept only that narrow redundant-tail
-               shape; any other statement after the first direct break remains
-               fail-closed. */
+            /* A direct break terminates ordinary switch fallthrough. A later
+               ordinary LABEL is reachable only when the function really owns
+               a goto/asm-goto/label-address edge to it; split that tail into
+               its own Core entry instead of reconnecting the break path. */
             if (break_index != SIZE_MAX &&
                 segment_statement->kind != MINIC_STATEMENT_BREAK) {
+                if (segment_statement->kind == MINIC_STATEMENT_LABEL &&
+                    core_switch_label_has_function_reentry(
+                        context, body->statements[scan])) {
+                    reentry_index = scan;
+                    break;
+                }
                 (void)fprintf(stderr,
                               "CORE_SWITCH_DETAIL function=%s gate=post-break "
                               "source_index=%zu scan=%zu kind=%d\n",
@@ -8915,6 +8980,55 @@ lower_switch(MinicCoreLowerContext *context, const MinicStatement *statement, bo
         status = set_branch(context, context->block_id, statement->span, fallthrough_target);
         if (status != MINIC_CORE_LOWER_OK) {
             return status;
+        }
+
+        if (reentry_index != SIZE_MAX) {
+            const MinicStatement *reentry_label;
+            MinicCoreBlockId reentry_block;
+            MinicBlock reentry_segment;
+            bool reentry_terminated;
+
+            reentry_label = minic_c0_program_statement(
+                context->body->program, body->statements[reentry_index]);
+            if (reentry_label == NULL || reentry_label->kind != MINIC_STATEMENT_LABEL ||
+                reentry_label->target_expression != MINIC_EXPRESSION_INVALID ||
+                reentry_label->expression != MINIC_EXPRESSION_INVALID ||
+                reentry_label->target_statement != MINIC_STATEMENT_INVALID) {
+                return MINIC_CORE_LOWER_UNSUPPORTED;
+            }
+            status = ensure_statement_block(
+                context, body->statements[reentry_index], &reentry_block);
+            if (status != MINIC_CORE_LOWER_OK) {
+                return status;
+            }
+            context->block_id = reentry_block;
+            reentry_terminated = false;
+            reentry_segment = *body;
+            reentry_segment.statements = body->statements + reentry_index + 1U;
+            reentry_segment.statement_count = segment_end - (reentry_index + 1U);
+            reentry_segment.statement_capacity = reentry_segment.statement_count;
+            if (reentry_segment.statement_count != 0U) {
+                saved_break_target = context->break_target;
+                context->break_target = exit_block;
+                status = lower_block(context, &reentry_segment, &reentry_terminated);
+                context->break_target = saved_break_target;
+                if (status != MINIC_CORE_LOWER_OK) {
+                    return status;
+                }
+            }
+            if (!reentry_terminated) {
+                MinicCoreBlockId reentry_fallthrough;
+
+                reentry_fallthrough =
+                    source_index + 1U < label_count
+                        ? labels[source_index + 1U].body_block
+                        : exit_block;
+                status = set_branch(
+                    context, context->block_id, reentry_label->span, reentry_fallthrough);
+                if (status != MINIC_CORE_LOWER_OK) {
+                    return status;
+                }
+            }
         }
     }
 
