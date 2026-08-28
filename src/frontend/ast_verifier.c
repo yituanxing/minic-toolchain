@@ -266,12 +266,17 @@ static bool array_object_type_matches(const MinicC0Program *program,
                                       MinicType array_type) {
     const MinicArrayType *materialized;
 
-    if (program == NULL || info == NULL || !minic_type_is_array(array_type) ||
-        info->is_zero_length) {
+    if (program == NULL || info == NULL || !minic_type_is_array(array_type)) {
         return false;
     }
     materialized = minic_c0_program_array_type(program, array_type.array_type_id);
     if (materialized == NULL || !minic_type_equal(materialized->element_type, info->element_type)) {
+        return false;
+    }
+    if (info->is_zero_length) {
+        return materialized->is_zero_length && materialized->element_count == 0U;
+    }
+    if (materialized->is_zero_length) {
         return false;
     }
     return info->is_incomplete ? materialized->element_count == 0U
