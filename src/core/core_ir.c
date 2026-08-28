@@ -1319,8 +1319,7 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
         }
         inline_asm = &function->inline_asms[
             instruction->value.structured_inline_asm.inline_asm_id];
-        if (inline_asm->template_text == NULL || inline_asm->template_length == 0U ||
-            !inline_asm->is_volatile) {
+        if (inline_asm->template_text == NULL || !inline_asm->is_volatile) {
             return false;
         }
         for (operand_index = 0U;
