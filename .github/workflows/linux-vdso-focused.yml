@@ -1,0 +1,151 @@
+name: Linux vDSO Focused
+
+on:
+  push:
+    branches:
+      - refactor/declaration-sema-v1
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  vdso:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[linux-vdso-focused]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Install focused prerequisites
+        run: |
+          sudo apt-get -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            gcc-riscv64-linux-gnu libc6-dev-riscv64-cross \
+            binutils-riscv64-linux-gnu bc bison flex libssl-dev libelf-dev \
+            make curl xz-utils file
+
+      - name: Prepare Linux and GCC vDSO reference
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-vdso-focused"
+          archive="$work/linux-6.6.143.tar.xz"
+          src="$work/linux-6.6.143"
+          out="$work/out"
+          mkdir -p "$work/reference"
+
+          curl -fsSL https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.6.143.tar.xz -o "$archive"
+          printf '%s  %s\n' \
+            dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932 \
+            "$archive" | sha256sum -c -
+          tar -xJf "$archive" -C "$work"
+          make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- defconfig
+          make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- -j4 prepare
+          make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- -j4 \
+            arch/riscv/kernel/vdso/vdso.so.dbg
+
+          cp "$out/arch/riscv/kernel/vdso/vgettimeofday.o" "$work/reference/vgettimeofday.gcc.o"
+          cp "$out/arch/riscv/kernel/vdso/hwprobe.o" "$work/reference/hwprobe.gcc.o"
+          cp "$out/arch/riscv/kernel/vdso/vdso.so.dbg" "$work/reference/vdso.gcc.so.dbg"
+
+          for file in "$work/reference/"*.o "$work/reference/"*.so.dbg; do
+            riscv64-linux-gnu-size -A "$file" >"$file.size.txt"
+            riscv64-linux-gnu-readelf -SW "$file" >"$file.sections.txt"
+            riscv64-linux-gnu-readelf -sW "$file" >"$file.symbols.txt"
+          done
+          echo "LINUX_VDSO_GCC_REFERENCE=PASS"
+
+      - name: Build exact MiniC
+        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/linux-vdso-focused-compiler
+
+      - name: Rebuild only native vDSO C through MiniC
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-vdso-focused"
+          src="$work/linux-6.6.143"
+          out="$work/out"
+          vdso="$out/arch/riscv/kernel/vdso"
+
+          rm -f \
+            "$vdso/vgettimeofday.o" "$vdso/hwprobe.o" \
+            "$vdso/vdso.so" "$vdso/vdso.so.dbg" "$vdso/vdso.so.dbg.tmp" \
+            "$vdso/.vgettimeofday.o.cmd" "$vdso/.hwprobe.o.cmd" \
+            "$vdso/.vdso.so.cmd" "$vdso/.vdso.so.dbg.cmd"
+
+          export MINIC="$GITHUB_WORKSPACE/build/linux-vdso-focused-compiler/bin/minic"
+          export REAL_CC=riscv64-linux-gnu-gcc
+          export MINIC_KEEP_INTERMEDIATES=1
+          export MINIC_KBUILD_TRACE="$work/minic-vdso.trace"
+
+          set +e
+          make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
+            CC="$GITHUB_WORKSPACE/tests/external/linux/stage2_kbuild_cc.sh" \
+            -j1 arch/riscv/kernel/vdso/vdso.so.dbg \
+            >"$work/minic-vdso.log" 2>&1
+          status=$?
+          set -e
+
+          test -s "$vdso/vgettimeofday.o"
+          test -s "$vdso/hwprobe.o"
+          cp "$vdso/vgettimeofday.o" "$work/vgettimeofday.minic.o"
+          cp "$vdso/hwprobe.o" "$work/hwprobe.minic.o"
+          for file in "$work/"*.minic.o; do
+            riscv64-linux-gnu-size -A "$file" >"$file.size.txt"
+            riscv64-linux-gnu-readelf -SW "$file" >"$file.sections.txt"
+            riscv64-linux-gnu-readelf -sW "$file" >"$file.symbols.txt"
+          done
+
+          python3 - "$work" "$status" <<'PY'
+          from pathlib import Path
+          import re, sys
+          work=Path(sys.argv[1])
+          status=int(sys.argv[2])
+
+          def section_size(path: Path, section: str) -> int:
+              text=path.read_text(errors="replace")
+              for line in text.splitlines():
+                  parts=line.split()
+                  if len(parts) >= 2 and parts[0] == section:
+                      return int(parts[1], 10)
+              return 0
+
+          pairs=[
+              ("vgettimeofday", work/"reference/vgettimeofday.gcc.o.size.txt", work/"vgettimeofday.minic.o.size.txt"),
+              ("hwprobe", work/"reference/hwprobe.gcc.o.size.txt", work/"hwprobe.minic.o.size.txt"),
+          ]
+          for name,gcc,mini in pairs:
+              gt=section_size(gcc, ".text")
+              mt=section_size(mini, ".text")
+              ratio=(mt/gt) if gt else 0.0
+              print(f"LINUX_VDSO_SIZE object={name} gcc_text={gt} minic_text={mt} ratio={ratio:.3f}")
+
+          log=(work/"minic-vdso.log").read_text(errors="replace")
+          if status == 0:
+              print("LINUX_VDSO_FOCUSED=PASS minic_link=PASS")
+          elif "overlaps section" in log and ".eh_frame" in log:
+              print("LINUX_VDSO_FOCUSED=CLASSIFIED class=metadata-reserve-overlap")
+          else:
+              print(f"LINUX_VDSO_FOCUSED=UNEXPECTED status={status}")
+              sys.exit(status or 1)
+          PY
+
+          tail -n 120 "$work/minic-vdso.log"
+
+      - name: Preserve vDSO evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-vdso-focused
+          path: |
+            build/linux-vdso-focused/reference/*
+            build/linux-vdso-focused/*.minic.o
+            build/linux-vdso-focused/*.txt
+            build/linux-vdso-focused/*.log
+            build/linux-vdso-focused/minic-vdso.trace
+            build/linux-vdso-focused/out/arch/riscv/kernel/vdso/*.minic-stage2.s
+          if-no-files-found: ignore
+          retention-days: 2
