@@ -668,23 +668,15 @@ MinicCoreLowerStatus lower_address(MinicCoreLowerContext *context,
             return subscript_status;
         }
         if (index_value >= context->function->value_count ||
-            !minic_type_equal(context->function->values[index_value].type, index_value_type)) {
-            (void)fprintf(stderr,
-                          "CORE_SUBSCRIPT_STAGE function=%s stage=index-type "
-                          "value=%" PRIu32 " value_count=%zu expected_base=%d expected_ptr=%u "
-                          "actual_base=%d actual_ptr=%u\n",
-                          context->source_function != NULL ? context->source_function->name : "?",
-                          index_value,
-                          context->function->value_count,
-                          (int)index_value_type.base_kind,
-                          index_value_type.pointer_depth,
-                          index_value < context->function->value_count
-                              ? (int)context->function->values[index_value].type.base_kind
-                              : -1,
-                          index_value < context->function->value_count
-                              ? context->function->values[index_value].type.pointer_depth
-                              : 0U);
+            !minic_type_is_integer(context->function->values[index_value].type)) {
             return MINIC_CORE_LOWER_ERROR;
+        }
+        if (!minic_type_equal(context->function->values[index_value].type, index_value_type)) {
+            subscript_status = append_integer_conversion(
+                context, index->span, index_value_type, index_value, &index_value);
+            if (subscript_status != MINIC_CORE_LOWER_OK) {
+                return subscript_status;
+            }
         }
         subscript_status =
             reload_scalar_value(context, base->span, pointer_type, base_object, &base_value);
