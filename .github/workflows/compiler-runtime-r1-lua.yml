@@ -10,7 +10,7 @@ permissions:
   contents: read
 
 jobs:
-  lua-compile-frontier:
+  lua-runtime:
     if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[runtime-r1-lua]')
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -25,7 +25,7 @@ jobs:
           sudo apt-get -o Acquire::Retries=3 update
           sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
             gcc-riscv64-linux-gnu libc6-dev-riscv64-cross qemu-user \
-            curl ca-certificates make
+            curl ca-certificates make file
 
       - name: Build exact compiler
         run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/runtime-r1-lua-compiler
@@ -51,10 +51,11 @@ jobs:
           if test -d "$src/src"; then
             src="$src/src"
           fi
-          sources='lapi.c lcode.c lctype.c ldebug.c ldo.c ldump.c lfunc.c lgc.c llex.c lmem.c lobject.c lopcodes.c lparser.c lstate.c lstring.c ltable.c ltm.c lundump.c lvm.c lzio.c lauxlib.c lbaselib.c lcorolib.c ldblib.c liolib.c lmathlib.c loadlib.c loslib.c lstrlib.c ltablib.c lutf8lib.c linit.c lua.c'
 
-          gcc_inputs=
-          asm_inputs=
+          sources="lapi.c lcode.c lctype.c ldebug.c ldo.c ldump.c lfunc.c lgc.c llex.c lmem.c lobject.c lopcodes.c lparser.c lstate.c lstring.c ltable.c ltm.c lundump.c lvm.c lzio.c lauxlib.c lbaselib.c lcorolib.c ldblib.c liolib.c lmathlib.c loadlib.c loslib.c lstrlib.c ltablib.c lutf8lib.c linit.c lua.c"
+
+          gcc_inputs=""
+          asm_inputs=""
           for source in $sources; do
             base=${source%.c}
             gcc_inputs="$gcc_inputs $src/$source"
@@ -87,7 +88,9 @@ jobs:
           print("function", fib(10))
           print("string", string.upper("minic"), string.sub("runtime", 2, 5))
           local s = 0
-          for i = 1, 100 do s = s + i end
+          for i = 1, 100 do
+            s = s + i
+          end
           print("loop", s)
           collectgarbage("collect")
           print("gc", collectgarbage("count") > 0)
@@ -118,54 +121,9 @@ jobs:
           diff -u "$work/gcc-smoke.stderr" "$work/minic-smoke.stderr"
 
           test "$(cat "$work/minic-smoke.status")" -eq 0
-          grep -F "function"
-        with:
-          name: runtime-r1-lua-blocker
-          path: |
-            build/runtime-r1-lua/*.s
-            build/runtime-r1-lua/*.status
-            build/runtime-r1-lua/*.stdout
-            build/runtime-r1-lua/*.stderr
-            build/runtime-r1-lua/runtime-smoke.lua
-            build/runtime-r1-lua/lua-*-rv64tderr
-            build/runtime-r1-lua/*.stdout
-            build/runtime-r1-lua/*.i
-            build/runtime-r1-lua/*.s
-          if-no-files-found: ignore
-          retention-days: 1
-\t'"55" "$work/minic-smoke.stdout" >/dev/null
-          grep -F "loop"
-        with:
-          name: runtime-r1-lua-blocker
-          path: |
-            build/runtime-r1-lua/*.stderr
-            build/runtime-r1-lua/*.stdout
-            build/runtime-r1-lua/*.i
-            build/runtime-r1-lua/*.s
-          if-no-files-found: ignore
-          retention-days: 1
-\t'"5050" "$work/minic-smoke.stdout" >/dev/null
-          grep -F "string"
-        with:
-          name: runtime-r1-lua-blocker
-          path: |
-            build/runtime-r1-lua/*.stderr
-            build/runtime-r1-lua/*.stdout
-            build/runtime-r1-lua/*.i
-            build/runtime-r1-lua/*.s
-          if-no-files-found: ignore
-          retention-days: 1
-\t'"MINIC"
-        with:
-          name: runtime-r1-lua-blocker
-          path: |
-            build/runtime-r1-lua/*.stderr
-            build/runtime-r1-lua/*.stdout
-            build/runtime-r1-lua/*.i
-            build/runtime-r1-lua/*.s
-          if-no-files-found: ignore
-          retention-days: 1
-\t'"unti" "$work/minic-smoke.stdout" >/dev/null
+          grep -E '^function[[:space:]]+55$' "$work/minic-smoke.stdout" >/dev/null
+          grep -E '^loop[[:space:]]+5050$' "$work/minic-smoke.stdout" >/dev/null
+          grep -E '^string[[:space:]]+MINIC[[:space:]]+unti$' "$work/minic-smoke.stdout" >/dev/null
           echo "RUNTIME_R1_LUA_QEMU=PASS differential=gcc-vs-minic head=$GITHUB_SHA"
 
       - name: Preserve Lua blocker
@@ -174,9 +132,12 @@ jobs:
         with:
           name: runtime-r1-lua-blocker
           path: |
-            build/runtime-r1-lua/*.stderr
-            build/runtime-r1-lua/*.stdout
             build/runtime-r1-lua/*.i
             build/runtime-r1-lua/*.s
+            build/runtime-r1-lua/*.status
+            build/runtime-r1-lua/*.stdout
+            build/runtime-r1-lua/*.stderr
+            build/runtime-r1-lua/runtime-smoke.lua
+            build/runtime-r1-lua/lua-*-rv64
           if-no-files-found: ignore
           retention-days: 1
