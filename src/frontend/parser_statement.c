@@ -642,6 +642,10 @@ done:
 static bool parse_fixed_runtime_array_initializer(MinicParser *parser,
                                                   MinicExpressionId base_id,
                                                   size_t element_count);
+static bool parse_runtime_character_array_string_initializer(MinicParser *parser,
+                                                             MinicExpressionId base_id,
+                                                             MinicType element_type,
+                                                             size_t element_count);
 
 static bool parse_fixed_runtime_nested_array_initializer(
     MinicParser *parser, MinicExpressionId base_id, size_t element_count) {
