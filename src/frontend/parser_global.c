@@ -4507,38 +4507,29 @@ static bool parse_static_pointer_array(MinicParser *parser,
     inferred_bound = false;
     if (parser == NULL || section_name == NULL || section_capacity == 0U ||
         section_name_length == NULL || has_section == NULL || explicit_alignment == NULL ||
-        !minic_type_is_pointer(element_type) ||
-        !minic_parser_expect(parser, MINIC_TOKEN_LBRACKET, "expected '['")) {
+        !minic_type_is_pointer(element_type)) {
         return false;
     }
-    if (parser->current.kind == MINIC_TOKEN_RBRACKET) {
-        inferred_bound = true;
-        if (!minic_parser_advance(parser) || !minic_c0_program_add_incomplete_array_type(
-                                                 parser->program, element_type, &object_type)) {
-            return false;
-        }
-    } else {
-        size_t parsed_element_count;
-        bool is_zero_length;
+    {
+        const MinicArrayType *outer_array;
+        bool is_array;
 
-        parsed_element_count = 0U;
-        is_zero_length = false;
-        if (!minic_parser_parse_record_array_bound(
-                parser, &parsed_element_count, &is_zero_length)) {
+        is_array = false;
+        if (!minic_parser_parse_array_declarator_suffix(
+                parser, element_type, true, &object_type, &is_array) ||
+            !is_array || !minic_type_is_array(object_type)) {
+            if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
+                minic_parser_error(parser, "cannot build static pointer array type");
+            }
             return false;
         }
-        element_count = is_zero_length ? 0U : parsed_element_count;
-        if ((is_zero_length && !minic_c0_program_add_zero_length_array_type(
-                                   parser->program, element_type, &object_type)) ||
-            (!is_zero_length && !minic_c0_program_add_array_type(
-                                    parser->program, element_type, element_count, &object_type))) {
-            minic_parser_error(parser, "cannot build static pointer array type");
+        outer_array = minic_c0_program_array_type(parser->program, object_type.array_type_id);
+        if (outer_array == NULL) {
+            minic_parser_error(parser, "invalid static pointer array type");
             return false;
         }
-    }
-    if (parser->current.kind == MINIC_TOKEN_LBRACKET) {
-        minic_parser_error(parser, "multi-dimensional static pointer arrays are not supported yet");
-        return false;
+        inferred_bound = outer_array->element_count == 0U && !outer_array->is_zero_length;
+        element_count = outer_array->element_count;
     }
     if (!minic_parser_parse_gnu_object_attribute_lists(parser,
                                                        section_name,
