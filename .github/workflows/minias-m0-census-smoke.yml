@@ -56,6 +56,22 @@ jobs:
           assert len(rows)==16 and all(r["status"]=="PASS" for r in rows), rows
           PY
 
+      - name: Inspect generated assembly size and line shape
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          root=build/census-smoke16/minic-out
+          echo "ASSEMBLY_FILES"
+          find "$root" -type f -name '*.s' -printf '%s %p\n' | sort -nr | head -n 16
+          first=$(find "$root" -type f -name '*.s' | LC_ALL=C sort | head -n 1)
+          echo "FIRST_FILE=$first"
+          wc -lc "$first"
+          awk 'length($0)>max {max=length($0); line=NR} END {print "MAX_LINE_LENGTH=" max " LINE=" line}' "$first"
+          printf 'LINES_HASH='; grep -c '#' "$first" || true
+          printf 'LINES_PERCENT='; grep -c '%' "$first" || true
+          printf 'LINES_AT='; grep -c '@' "$first" || true
+          printf 'LINES_PAREN='; grep -c '(' "$first" || true
+
       - name: Time census
         shell: bash
         run: |
