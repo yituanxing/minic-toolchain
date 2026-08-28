@@ -716,7 +716,8 @@ static bool parse_cast(MinicParser *parser, MinicExpressionId *expression_id) {
 }
 
 static bool variadic_argument_type_supported(MinicType type) {
-    return minic_type_is_integer(type) || minic_type_is_pointer(type) || minic_type_is_double(type);
+    return minic_type_is_integer(type) || minic_type_is_pointer(type) ||
+           minic_type_is_double(type) || minic_type_is_record(type);
 }
 
 static bool gnu_enum_integer_pointer_call_conversion_compatible(
@@ -854,6 +855,10 @@ static bool parse_call_argument(MinicParser *parser,
         }
     } else if (!variadic_argument_type_supported(argument->type)) {
         minic_parser_error(parser, "unsupported variadic argument type");
+        return false;
+    } else if (minic_type_is_record(argument->type) &&
+               !minic_parser_require_complete_object_type(
+                   parser, argument->type, "variadic record argument requires a complete type")) {
         return false;
     }
     return true;
@@ -2504,8 +2509,15 @@ static bool parse_builtin_va_arg(MinicParser *parser, MinicExpressionId *express
     }
     (void)target_span;
     if ((!minic_type_is_integer(value_type) && !minic_type_is_pointer(value_type) &&
-         !minic_type_is_double(value_type)) || minic_type_is_bool_integer(value_type)) {
-        minic_parser_error(parser, "__builtin_va_arg currently requires an integer, pointer, or double type");
+         !minic_type_is_double(value_type) && !minic_type_is_record(value_type)) ||
+        minic_type_is_bool_integer(value_type)) {
+        minic_parser_error(
+            parser, "__builtin_va_arg requires an integer, pointer, double, or record type");
+        return false;
+    }
+    if (minic_type_is_record(value_type) &&
+        !minic_parser_require_complete_object_type(
+            parser, value_type, "__builtin_va_arg record type must be complete")) {
         return false;
     }
     if (parser->current.kind != MINIC_TOKEN_RPAREN) {
