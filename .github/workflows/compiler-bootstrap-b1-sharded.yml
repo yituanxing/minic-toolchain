@@ -138,7 +138,8 @@ jobs:
             begin=$(date +%s)
             echo "BOOTSTRAP_B1_REPLAY_BEGIN shard=$shard index=$index key=$key source=$source"
             set +e
-            timeout 1200 qemu-riscv64 "$seed/minic-stage1-rv64" -S "$pre" -o "$out" \
+            MINIC_BOOTSTRAP_TRACE=1 timeout 1200 \
+              qemu-riscv64 "$seed/minic-stage1-rv64" -S "$pre" -o "$out" \
               >"$work/logs/$key.stdout" 2>"$err"
             status=$?
             set -e
