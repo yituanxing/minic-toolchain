@@ -79,6 +79,12 @@ typedef struct MiniAsSymbolExpr {
     int64_t addend;
 } MiniAsSymbolExpr;
 
+typedef struct MiniAsConditional {
+    bool parent_active;
+    bool condition_true;
+    bool else_seen;
+} MiniAsConditional;
+
 typedef struct MiniAsStmt {
     MiniAsStmtKind kind;
     char *op;
@@ -110,6 +116,10 @@ typedef struct MiniAs {
     size_t expr_anchor_counter;
     size_t *numeric_label_counts;
     size_t numeric_label_capacity;
+    MiniAsConditional *conditionals;
+    size_t conditional_count;
+    size_t conditional_capacity;
+    bool conditional_active;
     int current_section;
     int previous_section;
     char error[MINIAS_MAX_ERROR];
