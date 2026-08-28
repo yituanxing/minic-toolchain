@@ -87,8 +87,12 @@ MINIC_SOURCES := \
 	src/target/riscv64/codegen_support.c \
 	src/target/riscv64/core_codegen.c \
 	src/target/riscv64/codegen_function.c \
-	tools/minic/main.c
+	tools/minic-cc/main.c
 MINIC_OBJECTS := $(patsubst %.c,$(BUILD_DIR)/obj/%.o,$(MINIC_SOURCES))
+MINIC_CC_BINARY := $(BUILD_DIR)/bin/minic-cc
+# Compatibility compiler entrypoint during the staged driver migration.
+# Existing compiler CI continues to consume MINIC_BINARY until `minic` becomes
+# the real multi-tool driver in a later milestone.
 MINIC_BINARY  := $(BUILD_DIR)/bin/minic
 
 TOKEN_MODEL_TEST_SOURCES := \
@@ -171,12 +175,12 @@ RV64_ABI_TEST_BINARY  := $(BUILD_DIR)/tests/target/riscv64/abi-test
 	check-runtime sanitize bootstrap bootstrap-compare format format-check \
 	clean distclean print-config
 
-all: $(MINIC_BINARY)
+all: $(MINIC_CC_BINARY) $(MINIC_BINARY)
 
 help:
 	@printf '%s\n' \
 		"MiniC Toolchain build targets:" \
-		"  make                    Build the active MiniC compiler" \
+		"  make                    Build minic-cc and the temporary minic compatibility entrypoint" \
 		"  make check-fast         Run the fast frontend and C0 gates" \
 		"  make check-token-model  Run the token data-model unit gate" \
 		"  make check-lexer        Run the C0 lexer unit gate" \
@@ -221,9 +225,13 @@ $(BUILD_DIR)/obj/%.o: %.c
 	@mkdir -p "$(dir $@)"
 	$(CC) $(CPPFLAGS) $(MINIC_INCLUDES) $(MINIC_CFLAGS) -MMD -MP -c "$<" -o "$@"
 
-$(MINIC_BINARY): $(MINIC_OBJECTS)
+$(MINIC_CC_BINARY): $(MINIC_OBJECTS)
 	@mkdir -p "$(dir $@)"
 	$(CC) $(MINIC_OBJECTS) $(MINIC_LDFLAGS) -o "$@"
+
+$(MINIC_BINARY): $(MINIC_CC_BINARY)
+	@mkdir -p "$(dir $@)"
+	@cp "$(MINIC_CC_BINARY)" "$@"
 
 $(TOKEN_MODEL_TEST_BINARY): $(TOKEN_MODEL_TEST_OBJECTS)
 	@mkdir -p "$(dir $@)"
@@ -453,6 +461,7 @@ print-config:
 		"CPPFLAGS=$(CPPFLAGS)" \
 		"MINIC_CFLAGS=$(MINIC_CFLAGS)" \
 		"MINIC_LDFLAGS=$(MINIC_LDFLAGS)" \
+		"MINIC_CC_BINARY=$(MINIC_CC_BINARY)" \
 		"MINIC_BINARY=$(MINIC_BINARY)"
 
 clean:
