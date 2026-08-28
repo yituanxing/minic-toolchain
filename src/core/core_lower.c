@@ -2016,6 +2016,22 @@ static MinicCoreLowerStatus lower_scalar_assignment_value(MinicCoreLowerContext 
             return MINIC_CORE_LOWER_UNSUPPORTED;
         }
         if (!minic_type_equal(context->function->values[source_value].type, source_type)) {
+            if (getenv("CORE_FAST_TRACE") != NULL) {
+                const MinicType actual_type = context->function->values[source_value].type;
+                (void)fprintf(stderr,
+                              "CORE_SCALAR_ASSIGN_TRACE function=%s stage=double-source-type "
+                              "expr_kind=%d value=%u expected_base=%d expected_ptr=%u "
+                              "actual_base=%d actual_ptr=%u expected_qual=%u actual_qual=%u\n",
+                              context->source_function != NULL ? context->source_function->name : "?",
+                              (int)expression->kind,
+                              (unsigned int)source_value,
+                              (int)source_type.base_kind,
+                              source_type.pointer_depth,
+                              (int)actual_type.base_kind,
+                              actual_type.pointer_depth,
+                              source_type.base_qualifiers,
+                              actual_type.base_qualifiers);
+            }
             return MINIC_CORE_LOWER_ERROR;
         }
         if (minic_type_is_double(source_type)) {
