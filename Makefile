@@ -95,6 +95,15 @@ MINIC_CC_BINARY := $(BUILD_DIR)/bin/minic-cc
 # the real multi-tool driver in a later milestone.
 MINIC_BINARY  := $(BUILD_DIR)/bin/minic
 
+MINIAS_INCLUDES := -Iassembler/src
+MINIAS_SOURCES := \
+	assembler/src/assembler.c \
+	assembler/src/riscv_encode.c \
+	assembler/src/elf_writer.c \
+	tools/minic-as/main.c
+MINIAS_OBJECTS := $(patsubst %.c,$(BUILD_DIR)/obj/%.o,$(MINIAS_SOURCES))
+MINIAS_BINARY := $(BUILD_DIR)/bin/minic-as
+
 TOKEN_MODEL_TEST_SOURCES := \
 	src/frontend/token.c \
 	tests/frontend/token_model_test.c
@@ -162,7 +171,7 @@ RV64_ABI_TEST_SOURCES := \
 RV64_ABI_TEST_OBJECTS := $(patsubst %.c,$(BUILD_DIR)/obj/%.o,$(RV64_ABI_TEST_SOURCES))
 RV64_ABI_TEST_BINARY  := $(BUILD_DIR)/tests/target/riscv64/abi-test
 
-.PHONY: all help prepare check check-fast check-token-model check-lexer \
+.PHONY: all help prepare check check-fast check-minias-a0 check-token-model check-lexer \
 	check-type check-record check-type-alias check-ast-contract check-layout check-rv64-abi \
 	check-static-functions \
 	check-unsigned-declarations check-long-types check-for-loops check-unbounded-for-break \
@@ -175,12 +184,13 @@ RV64_ABI_TEST_BINARY  := $(BUILD_DIR)/tests/target/riscv64/abi-test
 	check-runtime sanitize bootstrap bootstrap-compare format format-check \
 	clean distclean print-config
 
-all: $(MINIC_CC_BINARY) $(MINIC_BINARY)
+all: $(MINIC_CC_BINARY) $(MINIC_BINARY) $(MINIAS_BINARY)
 
 help:
 	@printf '%s\n' \
 		"MiniC Toolchain build targets:" \
-		"  make                    Build minic-cc and the temporary minic compatibility entrypoint" \
+		"  make                    Build minic-cc, minic-as and the temporary minic compatibility entrypoint" \
+		"  make check-minias-a0    Run the initial .s -> ELF ET_REL MiniAS gate" \
 		"  make check-fast         Run the fast frontend and C0 gates" \
 		"  make check-token-model  Run the token data-model unit gate" \
 		"  make check-lexer        Run the C0 lexer unit gate" \
@@ -232,6 +242,23 @@ $(MINIC_CC_BINARY): $(MINIC_OBJECTS)
 $(MINIC_BINARY): $(MINIC_CC_BINARY)
 	@mkdir -p "$(dir $@)"
 	@cp "$(MINIC_CC_BINARY)" "$@"
+
+$(BUILD_DIR)/obj/assembler/%.o: assembler/%.c
+	@mkdir -p "$(dir $@)"
+	$(CC) $(CPPFLAGS) $(MINIAS_INCLUDES) $(MINIC_CFLAGS) -MMD -MP -c "$<" -o "$@"
+
+$(BUILD_DIR)/obj/tools/minic-as/%.o: tools/minic-as/%.c
+	@mkdir -p "$(dir $@)"
+	$(CC) $(CPPFLAGS) $(MINIAS_INCLUDES) $(MINIC_CFLAGS) -MMD -MP -c "$<" -o "$@"
+
+$(MINIAS_BINARY): $(MINIAS_OBJECTS)
+	@mkdir -p "$(dir $@)"
+	$(CC) $(MINIAS_OBJECTS) $(MINIC_LDFLAGS) -o "$@"
+
+check-minias-a0: $(MINIAS_BINARY)
+	MINIAS="$(abspath $(MINIAS_BINARY))" \
+	BUILD_DIR="$(abspath $(BUILD_DIR))" \
+	sh tests/assembler/run-a0.sh
 
 $(TOKEN_MODEL_TEST_BINARY): $(TOKEN_MODEL_TEST_OBJECTS)
 	@mkdir -p "$(dir $@)"
@@ -471,6 +498,7 @@ distclean:
 	@rm -rf build
 
 -include $(MINIC_OBJECTS:.o=.d)
+-include $(MINIAS_OBJECTS:.o=.d)
 -include $(TOKEN_MODEL_TEST_OBJECTS:.o=.d)
 -include $(LEXER_TEST_OBJECTS:.o=.d)
 -include $(TYPE_TEST_OBJECTS:.o=.d)
