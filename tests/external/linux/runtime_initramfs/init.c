@@ -6,6 +6,7 @@
 #include <sys/mount.h>
 #include <sys/reboot.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 static int mount_runtime_fs(const char *source,
@@ -69,6 +70,39 @@ static int tmpfs_roundtrip(void) {
     return 0;
 }
 
+static int cmdline_has(const char *needle) {
+    FILE *file;
+    char buffer[2048];
+    size_t count;
+
+    file = fopen("/proc/cmdline", "r");
+    if (file == NULL) {
+        return 0;
+    }
+    count = fread(buffer, 1U, sizeof(buffer) - 1U, file);
+    (void)fclose(file);
+    buffer[count] = '\0';
+    return strstr(buffer, needle) != NULL;
+}
+
+static int run_runtime_probe(void) {
+    pid_t child;
+    int status;
+
+    child = fork();
+    if (child == 0) {
+        execl("/bin/runtime-probe", "runtime-probe", (char *)NULL);
+        _exit(127);
+    }
+    if (child < 0 || waitpid(child, &status, 0) != child ||
+        !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+        (void)fprintf(stderr, "INIT_RUNTIME_PROBE=FAIL errno=%d\n", errno);
+        return 1;
+    }
+    (void)puts("INIT_RUNTIME_PROBE=PASS");
+    return 0;
+}
+
 static int show_cmdline(void) {
     FILE *file;
     char buffer[1024];
@@ -101,6 +135,9 @@ int main(void) {
     failures += mount_runtime_fs("devtmpfs", "/dev", "devtmpfs", "INIT_DEVTMPFS_MOUNT=PASS");
     failures += show_cmdline();
     failures += tmpfs_roundtrip();
+    if (cmdline_has("minic_runtime=p1")) {
+        failures += run_runtime_probe();
+    }
 
     if (failures == 0) {
         (void)puts("USER_SHELL_OK");
