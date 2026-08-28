@@ -1687,6 +1687,23 @@ static bool materialize_static_array_slots(MinicParser *parser,
     return true;
 }
 
+static bool static_array_string_element_compatible(MinicParser *parser,
+                                                   MinicType element_type,
+                                                   MinicTokenKind literal_kind) {
+    MinicType expected_type;
+    MinicType unqualified_type;
+
+    if (parser == NULL || !minic_type_unqualified(element_type, &unqualified_type)) {
+        return false;
+    }
+    if (literal_kind == MINIC_TOKEN_STRING_LITERAL) {
+        return minic_type_is_char_integer(unqualified_type);
+    }
+    return literal_kind == MINIC_TOKEN_WIDE_STRING_LITERAL &&
+           minic_target_info_wide_character_type(parser->target_info, &expected_type) &&
+           minic_type_equal(unqualified_type, expected_type);
+}
+
 static bool parse_static_scalar_array_transaction(MinicParser *parser,
                                                   MinicGlobalObjectId object_id,
                                                   MinicType element_type,
@@ -1709,8 +1726,8 @@ static bool parse_static_scalar_array_transaction(MinicParser *parser,
     extent = 0U;
     success = false;
     if (parser != NULL && !infer_bound && element_count != 0U &&
-        minic_type_is_char_integer(element_type) &&
-        parser->current.kind == MINIC_TOKEN_STRING_LITERAL) {
+        static_array_string_element_compatible(
+            parser, element_type, parser->current.kind)) {
         return minic_parser_add_bounded_string_literal_initializer(
             parser, object_id, element_count);
     }
@@ -4772,10 +4789,27 @@ static bool parse_static_inferred_integer_array(MinicParser *parser,
                                       *section_name_length,
                                       *has_section,
                                       *explicit_alignment) ||
-        !minic_parser_expect(parser, MINIC_TOKEN_EQUAL, "expected '=' after static array") ||
-        !parse_static_scalar_array_transaction(parser, object_id, element_type, 0U, true)) {
+        !minic_parser_expect(parser, MINIC_TOKEN_EQUAL, "expected '=' after static array")) {
         if (parser != NULL && parser->diagnostic != NULL &&
             parser->diagnostic->message[0] == '\0') {
+            minic_parser_error(parser, "cannot parse inferred static integer array");
+        }
+        return false;
+    }
+    if (static_array_string_element_compatible(
+            parser, element_type, parser->current.kind)) {
+        size_t string_count;
+
+        if (!minic_parser_add_string_literal_initializer(parser, object_id, &string_count) ||
+            !minic_c0_program_complete_array_type(parser->program, object_type, string_count)) {
+            if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
+                minic_parser_error(parser, "cannot initialize inferred static wide array");
+            }
+            return false;
+        }
+    } else if (!parse_static_scalar_array_transaction(
+                   parser, object_id, element_type, 0U, true)) {
+        if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
             minic_parser_error(parser, "cannot parse inferred static integer array");
         }
         return false;
