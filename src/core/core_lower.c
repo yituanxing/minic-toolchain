@@ -1380,6 +1380,34 @@ static MinicCoreLowerStatus lower_record_materialized_address(
     if (expression == NULL || !minic_type_is_record(expression->type)) {
         return MINIC_CORE_LOWER_UNSUPPORTED;
     }
+    if (expression->kind == MINIC_EXPRESSION_STATEMENT) {
+        const MinicBlock *statement_block;
+        const MinicExpression *statement_result;
+        bool terminated;
+
+        if (expression->value.statement_expression.result == MINIC_EXPRESSION_INVALID) {
+            return MINIC_CORE_LOWER_UNSUPPORTED;
+        }
+        statement_block = minic_c0_program_block(
+            context->body->program, expression->value.statement_expression.block);
+        statement_result = minic_c0_program_expression(
+            context->body->program, expression->value.statement_expression.result);
+        if (statement_block == NULL || statement_result == NULL ||
+            !minic_type_is_record(statement_result->type) ||
+            statement_result->type.record_id != expression->type.record_id) {
+            return MINIC_CORE_LOWER_ERROR;
+        }
+        terminated = false;
+        status = lower_block(context, statement_block, &terminated);
+        if (status != MINIC_CORE_LOWER_OK) {
+            return status;
+        }
+        if (terminated) {
+            return MINIC_CORE_LOWER_UNSUPPORTED;
+        }
+        return lower_record_materialized_address(
+            context, expression->value.statement_expression.result, address_id);
+    }
     if (expression->kind == MINIC_EXPRESSION_CONDITIONAL) {
         status = lower_record_conditional_object(context, expression, &object_id);
     } else if (expression->kind == MINIC_EXPRESSION_CALL &&
