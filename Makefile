@@ -98,6 +98,7 @@ MINIC_BINARY  := $(BUILD_DIR)/bin/minic
 MINIAS_INCLUDES := -Iassembler/src
 MINIAS_SOURCES := \
 	assembler/src/assembler.c \
+	assembler/src/expression.c \
 	assembler/src/riscv_encode.c \
 	assembler/src/elf_writer.c \
 	tools/minic-as/main.c
