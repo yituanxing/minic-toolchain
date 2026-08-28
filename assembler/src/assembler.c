@@ -613,7 +613,19 @@ static bool add_data_stmt(MiniAs *as, const char *op, char *args, size_t line) {
     char *copy = NULL;
     char *cursor;
 
-    if (strcmp(op, ".zero") == 0 || strcmp(op, ".space") == 0) {
+    if (strcmp(op, ".asciz") == 0 || strcmp(op, ".string") == 0 ||
+        strcmp(op, ".ascii") == 0) {
+        unsigned char *decoded = NULL;
+        size_t decoded_size = 0U;
+        bool terminate = strcmp(op, ".ascii") != 0;
+
+        if (!minias_decode_string_literals(args, terminate, &decoded, &decoded_size)) {
+            minias_set_error(as, "unsupported-string:%s:line=%zu", op, line);
+            return false;
+        }
+        free(decoded);
+        bytes = (uint64_t)decoded_size;
+    } else if (strcmp(op, ".zero") == 0 || strcmp(op, ".space") == 0) {
         if (!parse_u64(minias_trim(args), &count)) {
             minias_set_error(as, "unsupported-expression:%s:line=%zu", op, line);
             return false;
@@ -668,6 +680,21 @@ static bool emit_data_stmt(MiniAs *as, const MiniAsStmt *stmt) {
     char *copy;
     char *cursor;
 
+    if (strcmp(stmt->op, ".asciz") == 0 || strcmp(stmt->op, ".string") == 0 ||
+        strcmp(stmt->op, ".ascii") == 0) {
+        unsigned char *decoded = NULL;
+        size_t decoded_size = 0U;
+        bool terminate = strcmp(stmt->op, ".ascii") != 0;
+        bool ok;
+
+        if (!minias_decode_string_literals(stmt->args, terminate, &decoded, &decoded_size)) {
+            minias_set_error(as, "unsupported-string:%s:line=%zu", stmt->op, stmt->line);
+            return false;
+        }
+        ok = minias_section_append(as, stmt->section, decoded, decoded_size);
+        free(decoded);
+        return ok;
+    }
     if (strcmp(stmt->op, ".zero") == 0 || strcmp(stmt->op, ".space") == 0) {
         return minias_section_append_zero(as, stmt->section, stmt->size);
     }
@@ -825,7 +852,8 @@ static bool process_statement(MiniAs *as, char *text, size_t line) {
             return handle_align(as, op, args, line);
         }
         if (data_width(op) != 0U || strcmp(op, ".zero") == 0 ||
-            strcmp(op, ".space") == 0) {
+            strcmp(op, ".space") == 0 || strcmp(op, ".asciz") == 0 ||
+            strcmp(op, ".string") == 0 || strcmp(op, ".ascii") == 0) {
             return add_data_stmt(as, op, args, line);
         }
         minias_set_error(as, "unsupported-directive:%s:line=%zu", op, line);
