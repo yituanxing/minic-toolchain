@@ -62,6 +62,10 @@ static MinicCoreLowerStatus append_integer_conversion(MinicCoreLowerContext *con
                                                       MinicType target_type,
                                                       MinicCoreValueId source_value,
                                                       MinicCoreValueId *value_id);
+static MinicCoreLowerStatus lower_scalar_assignment_value(MinicCoreLowerContext *context,
+                                                          MinicType target_type,
+                                                          MinicExpressionId expression_id,
+                                                          MinicCoreValueId *value_id);
 
 MinicCoreLowerStatus ensure_statement_block(MinicCoreLowerContext *context, MinicStatementId statement_id, MinicCoreBlockId *block_id) {
     MinicCoreBlockId mapped;
