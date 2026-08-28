@@ -1639,22 +1639,27 @@ static bool core_direct_call_supported(const MinicC0Program *program,
                 argument->value.value_id >= function->value_count) {
                 return false;
             }
-            if (location.value.kind == MINIC_RISCV64_ABI_VALUE_FLOAT) {
-                if (!is_fixed_parameter || !minic_type_is_double(argument_type) ||
+            if (location.floating_register_count != 0U) {
+                if (!is_fixed_parameter ||
+                    location.value.kind != MINIC_RISCV64_ABI_VALUE_FLOAT ||
+                    !minic_type_is_double(argument_type) ||
                     location.floating_register_count != 1U ||
                     location.floating_register_begin >= 8U ||
                     location.integer_register_count != 0U ||
                     location.stack_slot_count != 0U) {
                     return false;
                 }
-            } else if (location.value.kind != MINIC_RISCV64_ABI_VALUE_INTEGER ||
-                       location.floating_register_count != 0U ||
-                       !((location.integer_register_count == 1U &&
-                          location.integer_register_begin < 8U &&
-                          location.stack_slot_count == 0U) ||
-                         (location.integer_register_count == 0U &&
-                          location.stack_slot_count == 1U))) {
-                return false;
+            } else {
+                if ((location.value.kind != MINIC_RISCV64_ABI_VALUE_INTEGER &&
+                     !(location.value.kind == MINIC_RISCV64_ABI_VALUE_FLOAT &&
+                       !is_fixed_parameter && minic_type_is_double(argument_type))) ||
+                    !((location.integer_register_count == 1U &&
+                       location.integer_register_begin < 8U &&
+                       location.stack_slot_count == 0U) ||
+                      (location.integer_register_count == 0U &&
+                       location.stack_slot_count == 1U))) {
+                    return false;
+                }
             }
         } else if (minic_type_is_record(argument_type)) {
             MinicCoreObjectId object_id;
@@ -1792,22 +1797,27 @@ static bool core_indirect_call_supported(const MinicC0Program *program,
                 argument->value.value_id >= function->value_count) {
                 return false;
             }
-            if (location.value.kind == MINIC_RISCV64_ABI_VALUE_FLOAT) {
-                if (!is_fixed_parameter || !minic_type_is_double(argument_type) ||
+            if (location.floating_register_count != 0U) {
+                if (!is_fixed_parameter ||
+                    location.value.kind != MINIC_RISCV64_ABI_VALUE_FLOAT ||
+                    !minic_type_is_double(argument_type) ||
                     location.floating_register_count != 1U ||
                     location.floating_register_begin >= 8U ||
                     location.integer_register_count != 0U ||
                     location.stack_slot_count != 0U) {
                     return false;
                 }
-            } else if (location.value.kind != MINIC_RISCV64_ABI_VALUE_INTEGER ||
-                       location.floating_register_count != 0U ||
-                       !((location.integer_register_count == 1U &&
-                          location.integer_register_begin < 8U &&
-                          location.stack_slot_count == 0U) ||
-                         (location.integer_register_count == 0U &&
-                          location.stack_slot_count == 1U))) {
-                return false;
+            } else {
+                if ((location.value.kind != MINIC_RISCV64_ABI_VALUE_INTEGER &&
+                     !(location.value.kind == MINIC_RISCV64_ABI_VALUE_FLOAT &&
+                       !is_fixed_parameter && minic_type_is_double(argument_type))) ||
+                    !((location.integer_register_count == 1U &&
+                       location.integer_register_begin < 8U &&
+                       location.stack_slot_count == 0U) ||
+                      (location.integer_register_count == 0U &&
+                       location.stack_slot_count == 1U))) {
+                    return false;
+                }
             }
         } else if (is_fixed_parameter && minic_type_is_record(argument_type)) {
             MinicCoreObjectId object_id;
@@ -2536,8 +2546,10 @@ static bool emit_call(FILE *file,
             return false;
         }
         if (argument->kind == MINIC_CORE_CALL_ARGUMENT_VALUE) {
-            if (location.value.kind == MINIC_RISCV64_ABI_VALUE_FLOAT) {
-                if (!is_fixed_parameter || !minic_type_is_double(argument_type) ||
+            if (location.floating_register_count != 0U) {
+                if (!is_fixed_parameter ||
+                    location.value.kind != MINIC_RISCV64_ABI_VALUE_FLOAT ||
+                    !minic_type_is_double(argument_type) ||
                     location.floating_register_count != 1U ||
                     location.floating_register_begin >= 8U ||
                     location.integer_register_count != 0U ||
@@ -2761,8 +2773,10 @@ static bool emit_indirect_call(FILE *file,
             return false;
         }
         if (argument->kind == MINIC_CORE_CALL_ARGUMENT_VALUE) {
-            if (location.value.kind == MINIC_RISCV64_ABI_VALUE_FLOAT) {
-                if (!is_fixed_parameter || !minic_type_is_double(argument_type) ||
+            if (location.floating_register_count != 0U) {
+                if (!is_fixed_parameter ||
+                    location.value.kind != MINIC_RISCV64_ABI_VALUE_FLOAT ||
+                    !minic_type_is_double(argument_type) ||
                     location.floating_register_count != 1U ||
                     location.floating_register_begin >= 8U ||
                     location.integer_register_count != 0U ||
