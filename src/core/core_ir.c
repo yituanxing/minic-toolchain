@@ -994,6 +994,12 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
                instruction->value.operand < function->value_count &&
                available_values[instruction->value.operand] &&
                minic_type_is_float(function->values[instruction->value.operand].type);
+    case MINIC_CORE_INSTRUCTION_DOUBLE_TO_FLOAT:
+        return instruction_result_is_valid(function, instruction) &&
+               minic_type_is_float(instruction->type) &&
+               instruction->value.operand < function->value_count &&
+               available_values[instruction->value.operand] &&
+               minic_type_is_double(function->values[instruction->value.operand].type);
     case MINIC_CORE_INSTRUCTION_DOUBLE_TO_INTEGER:
         return instruction_result_is_valid(function, instruction) &&
                minic_type_is_integer(instruction->type) &&
@@ -1992,6 +1998,11 @@ static bool dump_instruction(FILE *output,
     case MINIC_CORE_INSTRUCTION_FLOAT_TO_DOUBLE:
         return fprintf(output,
                        "  %%%" PRIu32 " = convert.float-to-double %%%" PRIu32 "\n",
+                       instruction->result,
+                       instruction->value.operand) >= 0;
+    case MINIC_CORE_INSTRUCTION_DOUBLE_TO_FLOAT:
+        return fprintf(output,
+                       "  %%%" PRIu32 " = convert.double-to-float %%%" PRIu32 "\n",
                        instruction->result,
                        instruction->value.operand) >= 0;
     case MINIC_CORE_INSTRUCTION_DOUBLE_TO_INTEGER:
