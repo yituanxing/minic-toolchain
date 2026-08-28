@@ -402,6 +402,11 @@ typedef struct MinicCoreBlock {
     size_t instruction_capacity;
     MinicCoreTerminator terminator;
     bool has_terminator;
+    /* RUNTIME_R1_LOCAL_LABEL_RELOCATION: stable source-label identity.
+       Static data relocations use the TU-local .Luser_<statement-id> symbol;
+       Core owns the CFG block and carries only the identity needed for the
+       backend to emit a colocated alias without reopening Semantic AST. */
+    MinicStatementId source_label_statement;
 } MinicCoreBlock;
 
 typedef struct MinicCoreFunction {
