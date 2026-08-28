@@ -94,10 +94,14 @@ bool minic_parser_parse_function_parameter_suffix(MinicParser *parser,
                parser, MINIC_TOKEN_RPAREN, "expected ')' after function parameter list");
 }
 
-bool minic_parser_parse_parenthesized_pointer_to_array_declarator(MinicParser *parser,
-                                                                  MinicType element_type,
-                                                                  MinicSourceSpan *name_span,
-                                                                  MinicType *declarator_type) {
+bool minic_parser_parse_parenthesized_pointer_to_array_declarator(
+    MinicParser *parser,
+    MinicType element_type,
+    MinicSourceSpan *name_span,
+    MinicType *declarator_type,
+    bool *name_is_array,
+    bool *name_array_inferred,
+    size_t *name_array_count) {
     MinicType type;
     size_t pointer_depth;
     size_t level;
@@ -106,10 +110,14 @@ bool minic_parser_parse_parenthesized_pointer_to_array_declarator(MinicParser *p
     bool is_array;
 
     if (parser == NULL || name_span == NULL || declarator_type == NULL ||
+        name_is_array == NULL || name_array_inferred == NULL || name_array_count == NULL ||
         !minic_parser_expect(
             parser, MINIC_TOKEN_LPAREN, "expected '(' before parenthesized pointer declarator")) {
         return false;
     }
+    *name_is_array = false;
+    *name_array_inferred = false;
+    *name_array_count = 0U;
     pointer_depth = 0U;
     pointer_const_qualifiers = 0U;
     pointer_volatile_qualifiers = 0U;
@@ -126,8 +134,30 @@ bool minic_parser_parse_parenthesized_pointer_to_array_declarator(MinicParser *p
         return false;
     }
     *name_span = parser->current.span;
-    if (!minic_parser_advance(parser) ||
-        !minic_parser_expect(
+    if (!minic_parser_advance(parser)) {
+        return false;
+    }
+    if (parser->current.kind == MINIC_TOKEN_LBRACKET) {
+        *name_is_array = true;
+        if (!minic_parser_advance(parser)) {
+            return false;
+        }
+        if (parser->current.kind == MINIC_TOKEN_RBRACKET) {
+            *name_array_inferred = true;
+            if (!minic_parser_advance(parser)) {
+                return false;
+            }
+        } else if (!minic_parser_parse_fixed_array_bound(parser, name_array_count)) {
+            return false;
+        }
+        if (parser->current.kind == MINIC_TOKEN_LBRACKET) {
+            minic_parser_error(
+                parser,
+                "parenthesized pointer declarator supports one outer name array dimension");
+            return false;
+        }
+    }
+    if (!minic_parser_expect(
             parser, MINIC_TOKEN_RPAREN, "expected ')' after parenthesized pointer declarator") ||
         !minic_parser_parse_array_declarator_suffix(
             parser, element_type, false, &type, &is_array) ||
