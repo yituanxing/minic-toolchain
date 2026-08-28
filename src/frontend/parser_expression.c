@@ -2884,6 +2884,34 @@ static bool parse_primary(MinicParser *parser, MinicExpressionId *expression_id,
             }
             return finish_value_expression(parser, primary_id, decay_array, expression_id);
         }
+        {
+            const char *trace = getenv("CORE_FAST_TRACE");
+            if (trace != NULL && trace[0] != '\0' && strcmp(trace, "0") != 0) {
+                MinicGlobalObjectId entity_id;
+                const MinicGlobalObject *entity;
+
+                entity_id = minic_parser_find_global_object_entity(parser, name_span);
+                entity = entity_id == MINIC_GLOBAL_OBJECT_INVALID
+                             ? NULL
+                             : minic_c0_program_global_object(parser->program, entity_id);
+                (void)fprintf(stderr,
+                              "FRONTEND_LOOKUP_DETAIL name=%.*s local=%llu function=%llu "
+                              "global=%llu entity=%llu fixed=%llu enum=%llu globals=%zu "
+                              "entity_block_scope_only=%d entity_extern=%d entity_tentative=%d\n",
+                              (int)minic_parser_span_length(name_span),
+                              parser->source + name_span.begin.offset,
+                              (unsigned long long)local_id,
+                              (unsigned long long)function_id,
+                              (unsigned long long)global_object_id,
+                              (unsigned long long)entity_id,
+                              (unsigned long long)fixed_register_binding_id,
+                              (unsigned long long)enumerator_id,
+                              parser->program->global_object_count,
+                              entity != NULL && entity->is_block_scope_extern_only ? 1 : 0,
+                              entity != NULL && entity->is_extern ? 1 : 0,
+                              entity != NULL && entity->is_tentative ? 1 : 0);
+            }
+        }
         minic_parser_error(parser, "use of undeclared local");
         return false;
     }
