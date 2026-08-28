@@ -1677,6 +1677,23 @@ bool minic_c0_program_verify_target_detailed(const MinicC0Program *program,
     subindex = MINIC_C0_AST_VERIFY_INDEX_NONE;
     for (index = 0U; index < program->expression_count; ++index) {
         if (!verify_expression(program, index, form, target)) {
+            const char *trace;
+
+            trace = getenv("CORE_FAST_TRACE");
+            if (trace != NULL && trace[0] != '\0' && strcmp(trace, "0") != 0) {
+                const MinicExpression *bad = &program->expressions[index];
+                (void)fprintf(stderr,
+                              "AST_EXPR_DETAIL index=%zu kind=%d value_category=%d "
+                              "base_kind=%d pointer_depth=%u left=%u right=%u operand=%u\n",
+                              index,
+                              (int)bad->kind,
+                              (int)bad->value_category,
+                              (int)bad->type.base_kind,
+                              bad->type.pointer_depth,
+                              (unsigned)bad->value.binary.left,
+                              (unsigned)bad->value.binary.right,
+                              (unsigned)bad->value.unary.operand);
+            }
             MINIC_AST_VERIFY_FAIL("invalid expression contract");
         }
     }
