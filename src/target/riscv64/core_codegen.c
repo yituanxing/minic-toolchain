@@ -1835,6 +1835,7 @@ static bool core_instruction_supported(const MinicC0Program *program,
     case MINIC_CORE_INSTRUCTION_DOUBLE_EQUAL:
     case MINIC_CORE_INSTRUCTION_DOUBLE_LESS:
     case MINIC_CORE_INSTRUCTION_DOUBLE_LESS_EQUAL:
+    case MINIC_CORE_INSTRUCTION_DOUBLE_NEGATE:
     case MINIC_CORE_INSTRUCTION_INTEGER_ADD:
     case MINIC_CORE_INSTRUCTION_INTEGER_SUBTRACT:
     case MINIC_CORE_INSTRUCTION_INTEGER_MULTIPLY:
@@ -3835,6 +3836,15 @@ static bool emit_instruction(FILE *file,
         if (minic_type_is_integer(instruction->type) &&
             !minic_riscv64_emit_integer_conversion_for_program(
                 file, program, instruction->type, "t0")) {
+            return false;
+        }
+        return store_core_value(file, frame, instruction->result, "t0");
+    case MINIC_CORE_INSTRUCTION_DOUBLE_NEGATE:
+        if (!load_core_value(file, frame, instruction->value.operand, "t0") ||
+            fprintf(file,
+                    "  fmv.d.x ft0, t0\n"
+                    "  fsgnjn.d ft0, ft0, ft0\n"
+                    "  fmv.x.d t0, ft0\n") < 0) {
             return false;
         }
         return store_core_value(file, frame, instruction->result, "t0");

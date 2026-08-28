@@ -4324,6 +4324,36 @@ MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
         return lower_scalar_update(context, expression, value_id);
     }
     if (expression->kind == MINIC_EXPRESSION_UNARY &&
+        expression->value.unary.operator_kind == MINIC_UNARY_NEGATE &&
+        minic_type_is_double(expression->type)) {
+        const MinicExpression *operand_expression;
+        MinicCoreValueId operand_value;
+        MinicCoreLowerStatus status;
+
+        operand_expression = minic_c0_program_expression(
+            context->body->program, expression->value.unary.operand);
+        if (operand_expression == NULL) {
+            return MINIC_CORE_LOWER_ERROR;
+        }
+        status = lower_scalar_assignment_value(context,
+                                               minic_type_double(),
+                                               expression->value.unary.operand,
+                                               &operand_value);
+        if (status != MINIC_CORE_LOWER_OK) {
+            return status;
+        }
+        (void)memset(&instruction, 0, sizeof(instruction));
+        instruction.kind = MINIC_CORE_INSTRUCTION_DOUBLE_NEGATE;
+        instruction.span = expression->span;
+        instruction.type = minic_type_double();
+        instruction.result = MINIC_CORE_VALUE_INVALID;
+        instruction.value.operand = operand_value;
+        return minic_core_function_append_value_instruction(
+                   context->function, context->block_id, &instruction, value_id)
+                   ? MINIC_CORE_LOWER_OK
+                   : MINIC_CORE_LOWER_ERROR;
+    }
+    if (expression->kind == MINIC_EXPRESSION_UNARY &&
         expression->value.unary.operator_kind == MINIC_UNARY_NEGATE) {
         const MinicExpression *operand_expression;
         MinicCoreValueId operand_value;

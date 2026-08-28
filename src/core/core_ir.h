@@ -115,7 +115,8 @@ typedef enum MinicCoreInstructionKind {
        semantics explicitly.  In particular >= is not modeled as !(<). */
     MINIC_CORE_INSTRUCTION_DOUBLE_EQUAL,
     MINIC_CORE_INSTRUCTION_DOUBLE_LESS,
-    MINIC_CORE_INSTRUCTION_DOUBLE_LESS_EQUAL
+    MINIC_CORE_INSTRUCTION_DOUBLE_LESS_EQUAL,
+    MINIC_CORE_INSTRUCTION_DOUBLE_NEGATE
 } MinicCoreInstructionKind;
 
 /* M91_BUILTIN_UNREACHABLE_TERMINATOR: unreachable is a CFG fact, not a

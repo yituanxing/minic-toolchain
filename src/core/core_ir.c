@@ -1000,6 +1000,13 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
                available_values[instruction->value.operand] &&
                minic_core_scalar_bitcast_types_valid(
                    instruction->type, function->values[instruction->value.operand].type);
+    case MINIC_CORE_INSTRUCTION_DOUBLE_NEGATE:
+        return instruction_result_is_valid(function, instruction) &&
+               minic_type_is_double(instruction->type) &&
+               instruction->value.operand < function->value_count &&
+               available_values[instruction->value.operand] &&
+               minic_type_equal(function->values[instruction->value.operand].type,
+                                instruction->type);
     case MINIC_CORE_INSTRUCTION_INTEGER_NEGATE:
     case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_NOT:
         return instruction_result_is_valid(function, instruction) &&
@@ -1984,6 +1991,11 @@ static bool dump_instruction(FILE *output,
     case MINIC_CORE_INSTRUCTION_SCALAR_BITCAST:
         return fprintf(output,
                        "  %%%" PRIu32 " = bitcast.scalar %%%" PRIu32 "\n",
+                       instruction->result,
+                       instruction->value.operand) >= 0;
+    case MINIC_CORE_INSTRUCTION_DOUBLE_NEGATE:
+        return fprintf(output,
+                       "  %%%" PRIu32 " = neg.double %%%" PRIu32 "\n",
                        instruction->result,
                        instruction->value.operand) >= 0;
     case MINIC_CORE_INSTRUCTION_INTEGER_NEGATE:
