@@ -2158,8 +2158,14 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
     (void)memset(section_name, 0, sizeof(section_name));
     (void)memset(parameter_name_spans, 0, sizeof(parameter_name_spans));
     (void)memset(parameter_types, 0, sizeof(parameter_types));
-    if (!parse_gnu_prefix_function_visibility(parser, &visibility, &has_visibility) ||
-        !parse_declaration_prefix(parser, is_internal, &declaration_prefix)) {
+    if (!parse_gnu_prefix_function_visibility(parser, &visibility, &has_visibility)) {
+        return false;
+    }
+    if (!has_visibility && parser->default_visibility != MINIC_SYMBOL_VISIBILITY_DEFAULT) {
+        visibility = parser->default_visibility;
+        has_visibility = true;
+    }
+    if (!parse_declaration_prefix(parser, is_internal, &declaration_prefix)) {
         return false;
     }
     is_extern_declaration = declaration_prefix.is_extern;
