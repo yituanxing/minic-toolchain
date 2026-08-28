@@ -722,7 +722,7 @@ static bool parse_record_field(MinicParser *parser, MinicRecordId record_id) {
             return false;
         }
     }
-}}
+}
 
 bool minic_parser_parse_record_definition_specifier(MinicParser *parser, MinicType *record_type) {
     MinicRecordId record_id;
