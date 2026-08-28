@@ -238,7 +238,16 @@ bool minias_riscv_measure(const char *op,
         *size = 8U;
         return true;
     }
-    if (strcmp(op, "call") == 0 || strcmp(op, "tail") == 0) {
+    if (strcmp(op, "call") == 0) {
+        MiniAsSymbolExpr expr;
+        if (count != 1U || !minias_parse_symbol_addend(operands[0], &expr)) {
+            (void)snprintf(reason, reason_size, "unsupported-expression:%s", args);
+            return false;
+        }
+        *size = 8U;
+        return true;
+    }
+    if (strcmp(op, "tail") == 0) {
         (void)snprintf(reason, reason_size, "unsupported-reloc-instruction:%s", op);
         return false;
     }
@@ -324,6 +333,28 @@ bool minias_riscv_encode(MiniAs *as, const MiniAsStmt *stmt) {
         }
         return append_u32(as, stmt->section, enc_i(0x1bU, rd, 0U, rd, lo));
     }
+    if (strcmp(stmt->op, "call") == 0) {
+        MiniAsSymbolExpr expr;
+
+        if (count != 1U || !minias_parse_symbol_addend(operands[0], &expr)) {
+            minias_set_error(as,
+                             "unsupported-expression:%s:line=%zu",
+                             stmt->args,
+                             stmt->line);
+            return false;
+        }
+        if (!append_u32(as, stmt->section, 0x00000097U) ||
+            !append_u32(as, stmt->section, enc_i(0x67U, 1, 0U, 1, 0))) {
+            return false;
+        }
+        return minias_add_relocation(as,
+                                     stmt->section,
+                                     stmt->offset,
+                                     MINIAS_R_RISCV_CALL_PLT,
+                                     expr.name,
+                                     expr.addend);
+    }
+
     if (strcmp(stmt->op, "lla") == 0 || strcmp(stmt->op, "la") == 0) {
         MiniAsSymbolExpr expr;
         MiniAsSymbol *anchor;
