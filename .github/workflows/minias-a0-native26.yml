@@ -238,6 +238,7 @@ jobs:
           path: |
             build/minias-native26-manifest.json
             build/minias-native26-targets.txt
+            build/minias-native26-inputs/**/*.s
             build/minias-native26-results/results.tsv
             build/minias-native26-results/summary.txt
             build/minias-native26-results/**/*.err
