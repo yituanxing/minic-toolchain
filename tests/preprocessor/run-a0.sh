@@ -381,4 +381,12 @@ int object_dot = BITS_PER_WORD.0;
 EOF
 run_exact object-number-padding
 
-printf 'MINIPP_A0_EXACT=PASS cases=41 mode=byte-identical\n'
+cat >"$work/leading-comment-columns.c" <<'EOF'
+	/**/TOKEN_A
+	/*x*/TOKEN_B
+	/*open
+close*/TOKEN_C
+EOF
+run_exact leading-comment-columns
+
+printf 'MINIPP_A0_EXACT=PASS cases=42 mode=byte-identical\n'
