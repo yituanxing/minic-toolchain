@@ -396,6 +396,10 @@ static bool minipp_build_logical_args(MiniPpState *state,
                        : 1U))) {
         goto oom;
     }
+    if (fixed_count < raw_args->count) {
+        logical_args->leading_space[logical_args->count - 1U] =
+            raw_args->leading_space[fixed_count];
+    }
     minipp_string_destroy(&variadic);
     return true;
 
@@ -746,6 +750,18 @@ static bool minipp_substitute_function_macro(MiniPpState *state,
                             }
                             index = cursor + length;
                             continue;
+                        }
+                        if (!raw_args->leading_space[param_index]) {
+                            while (substituted->size != 0U) {
+                                char previous =
+                                    substituted->data[substituted->size - 1U];
+                                if (previous != ' ' && previous != '\t' &&
+                                    previous != '\v' && previous != '\f') {
+                                    break;
+                                }
+                                --substituted->size;
+                                substituted->data[substituted->size] = '\0';
+                            }
                         }
                         index = cursor;
                         continue;
