@@ -89,6 +89,7 @@ static void minipp_release_macro_payload(MiniPpMacro *macro) {
     macro->params = NULL;
     macro->param_count = 0U;
     macro->function_like = false;
+    macro->variadic = false;
 }
 
 static bool minipp_define_macro_full(MiniPpState *state,
@@ -96,7 +97,8 @@ static bool minipp_define_macro_full(MiniPpState *state,
                                      const char *replacement,
                                      char *const *params,
                                      size_t param_count,
-                                     bool function_like) {
+                                     bool function_like,
+                                     bool variadic) {
     MiniPpMacro *macro = minipp_find_macro(state, name);
     char *next_replacement;
     char **next_params = NULL;
@@ -158,6 +160,7 @@ static bool minipp_define_macro_full(MiniPpState *state,
     macro->params = next_params;
     macro->param_count = param_count;
     macro->function_like = function_like;
+    macro->variadic = variadic;
     return true;
 }
 
@@ -169,6 +172,7 @@ static bool minipp_define_macro(MiniPpState *state,
                                     replacement,
                                     NULL,
                                     0U,
+                                    false,
                                     false);
 }
 
@@ -415,6 +419,7 @@ static bool minipp_parse_define(MiniPpState *state, const char *rest) {
     size_t param_count = 0U;
     size_t param_capacity = 0U;
     bool function_like = false;
+    bool variadic = false;
     char *name;
     char *replacement;
     bool ok;
@@ -432,8 +437,32 @@ static bool minipp_parse_define(MiniPpState *state, const char *rest) {
         cursor = minipp_skip_horizontal_space(cursor);
         if (*cursor != ')') {
             for (;;) {
-                size_t param_size = minipp_identifier_length(cursor);
+                size_t param_size;
 
+                if (strncmp(cursor, "...", 3U) == 0) {
+                    if (!minipp_append_param(&params,
+                                             &param_count,
+                                             &param_capacity,
+                                             "__VA_ARGS__",
+                                             strlen("__VA_ARGS__"))) {
+                        fprintf(state->diagnostics, "minic-cpp: out-of-memory\n");
+                        minipp_free_param_list(params, param_count);
+                        return false;
+                    }
+                    variadic = true;
+                    cursor = minipp_skip_horizontal_space(cursor + 3);
+                    if (*cursor != ')') {
+                        fprintf(state->diagnostics,
+                                "minic-cpp: invalid-variadic-parameter-list:%.*s\n",
+                                (int)name_size,
+                                name_text);
+                        minipp_free_param_list(params, param_count);
+                        return false;
+                    }
+                    break;
+                }
+
+                param_size = minipp_identifier_length(cursor);
                 if (param_size == 0U) {
                     fprintf(state->diagnostics,
                             "minic-cpp: invalid-macro-parameter:%.*s\n",
@@ -452,6 +481,21 @@ static bool minipp_parse_define(MiniPpState *state, const char *rest) {
                     return false;
                 }
                 cursor = minipp_skip_horizontal_space(cursor + param_size);
+
+                if (strncmp(cursor, "...", 3U) == 0) {
+                    variadic = true;
+                    cursor = minipp_skip_horizontal_space(cursor + 3);
+                    if (*cursor != ')') {
+                        fprintf(state->diagnostics,
+                                "minic-cpp: invalid-gnu-variadic-parameter:%.*s\n",
+                                (int)name_size,
+                                name_text);
+                        minipp_free_param_list(params, param_count);
+                        return false;
+                    }
+                    break;
+                }
+
                 if (*cursor == ')') {
                     break;
                 }
@@ -498,7 +542,8 @@ static bool minipp_parse_define(MiniPpState *state, const char *rest) {
                                       replacement,
                                       params,
                                       param_count,
-                                      true);
+                                      true,
+                                      variadic);
     } else {
         ok = minipp_define_macro(state, name, replacement);
     }
