@@ -987,9 +987,8 @@ static bool parse_size(MiniAs *as, char *args, size_t line) {
         return false;
     }
     *comma = '\0';
-    symbol = minias_get_symbol(as, minias_trim(args), false);
-    if (symbol == NULL || !symbol->defined) {
-        minias_set_error(as, "bad-size-symbol:%s:line=%zu", minias_trim(args), line);
+    symbol = minias_get_symbol(as, minias_trim(args), true);
+    if (symbol == NULL) {
         return false;
     }
     expr = minias_trim(comma + 1);
@@ -997,6 +996,17 @@ static bool parse_size(MiniAs *as, char *args, size_t line) {
         uint64_t explicit_size;
         MiniAsSymbol *size_symbol;
         if (parse_u64(expr, &explicit_size)) {
+            /*
+             * GNU GCC commonly emits .size before the object's label:
+             *
+             *   .type object, @object
+             *   .size object, 8
+             * object:
+             *
+             * The size declaration is independent of definition order, so
+             * retain it on the symbol and let the later label define value
+             * and section ownership.
+             */
             symbol->size = explicit_size;
             return true;
         }
@@ -1006,6 +1016,10 @@ static bool parse_size(MiniAs *as, char *args, size_t line) {
             symbol->size = size_symbol->value;
             return true;
         }
+    }
+    if (!symbol->defined) {
+        minias_set_error(as, "bad-size-symbol:%s:line=%zu", symbol->name, line);
+        return false;
     }
     for (p = expr; *p != '\0'; ++p) {
         if (*p == ' ' || *p == '\t') {
