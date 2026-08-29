@@ -87,25 +87,53 @@ jobs:
           mapfile -t files < <(find "$root" -type f -name '*.s' | LC_ALL=C sort)
           test "${#files[@]}" -eq 500
 
-          for asm in "${files[@]}"; do
-            rel="${asm#"$root"/}"
-            obj="$out/${rel%.s}.o"
-            err="$out/${rel%.s}.err"
-            mkdir -p "$(dirname "$obj")"
-            if "$minias" -o "$obj" "$asm" 2>"$err"; then
-              pass=$((pass + 1))
-              printf 'PASS\t%s\t-\n' "$rel" >> "$out/results.tsv"
-              readelf -h "$obj" | grep -q 'RISC-V'
-              readelf -h "$obj" | grep -q 'REL (Relocatable file)'
-            else
-              fail=$((fail + 1))
-              raw=$(head -n 1 "$err")
-              first=$(printf '%s\n' "$raw" | sed -E 's/^minic-as: //; s/:line=[0-9]+$//')
-              test -n "$first"
-              printf '%s\n' "$first" >> "$out/blockers.txt"
-              printf 'FAIL\t%s\t%s\n' "$rel" "$first" >> "$out/results.tsv"
-            fi
-          done
+          worker="$out/assemble-one.sh"
+          cat >"$worker" <<'SH'
+          #!/usr/bin/env bash
+          set -Eeuo pipefail
+          minias=$1
+          root=$2
+          out=$3
+          asm=$4
+          rel="${asm#"$root"/}"
+          stem="$out/${rel%.s}"
+          obj="$stem.o"
+          err="$stem.err"
+          result="$stem.result"
+          blocker="$stem.blocker"
+          mkdir -p "$(dirname "$obj")"
+          if "$minias" -o "$obj" "$asm" 2>"$err"; then
+            readelf -h "$obj" | grep -q 'RISC-V'
+            readelf -h "$obj" | grep -q 'REL (Relocatable file)'
+            printf 'PASS\t%s\t-\n' "$rel" >"$result"
+          else
+            raw=$(head -n 1 "$err")
+            first=$(printf '%s\n' "$raw" | sed -E 's/^minic-as: //; s/:line=[0-9]+$//')
+            test -n "$first"
+            printf '%s\n' "$first" >"$blocker"
+            printf 'FAIL\t%s\t%s\n' "$rel" "$first" >"$result"
+          fi
+          SH
+          chmod +x "$worker"
+
+          jobs="${MINIAS_ASSEMBLY_JOBS:-4}"
+          printf '%s\0' "${files[@]}" |
+            xargs -0 -n1 -P"$jobs" "$worker" "$minias" "$root" "$out"
+
+          mapfile -d '' -t result_files < <(
+            find "$out" -type f -name '*.result' -print0 | LC_ALL=C sort -z
+          )
+          test "${#result_files[@]}" -eq 500
+          for result in "${result_files[@]}"; do
+            cat "$result"
+          done >"$out/results.tsv"
+
+          find "$out" -type f -name '*.blocker' -print0 |
+            LC_ALL=C sort -z |
+            xargs -0 -r cat >"$out/blockers.txt"
+
+          pass=$(awk -F '\t' '$1=="PASS" {n++} END {print n+0}' "$out/results.tsv")
+          fail=$(awk -F '\t' '$1=="FAIL" {n++} END {print n+0}' "$out/results.tsv")
 
           {
             echo "MINIAS_FIRST500_SUMMARY pass=$pass fail=$fail total=500"
