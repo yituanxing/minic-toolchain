@@ -1,4 +1,5 @@
 name: MiniAS Semantic Oracle 3536
+# Exact-head retrigger after in-process comparator + normalization fixes.
 
 on:
   push:
