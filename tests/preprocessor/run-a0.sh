@@ -329,4 +329,17 @@ int directive_in_arg = IDENTITY(
 EOF
 run_exact directive-in-macro-arg
 
-printf 'MINIPP_A0_EXACT=PASS cases=36 mode=byte-identical\n'
+cat >"$work/whitespace-render.c" <<'EOF'
+		int leading_tabs;
+int		interior_tabs	=	1;
+
+
+int after_blank_lines;
+/* comment-only line */
+#define EMPTY_LINE_MACRO()
+EMPTY_LINE_MACRO()
+int after_empty_macro;
+EOF
+run_exact whitespace-render
+
+printf 'MINIPP_A0_EXACT=PASS cases=37 mode=byte-identical\n'
