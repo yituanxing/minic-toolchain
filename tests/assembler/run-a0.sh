@@ -718,7 +718,46 @@ native_gas_forms_hex="$(
     awk '/0x[0-9a-f]+/ {for (i=2; i<=NF; ++i) if ($i ~ /^[0-9a-f]+$/ && length($i) % 2 == 0) printf "%s", $i}'
 )"
 test "$native_gas_forms_hex" = "4d5a073005002334150007a1c50023a835007390320073002010"
-readelf -Ws "$work/native-gas-forms.o" | grep -Eq 'FUNC[[:space:]]+GLOBAL.* native_gas_forms"$MINIAS" -o "$work/native-macro-quotes.o" "$work/native-macro-quotes.s"
+readelf -Ws "$work/native-gas-forms.o" | grep -Eq 'FUNC[[:space:]]+GLOBAL.* native_gas_forms$'
+
+cat >"$work/native-macro-comma.s" <<'EOF'
+.text
+.macro emit_alt old_c, new_c, vendor, patch, enable
+  \old_c
+  addi a0, zero, \enable
+.endm
+emit_alt "nop; nop", "nop", 0, ((12) << 16) | 34, 1
+EOF
+"$MINIAS" -o "$work/native-macro-comma.o" "$work/native-macro-comma.s"
+native_macro_comma_hex="$(
+    readelf -x .text "$work/native-macro-comma.o" |
+    awk '/0x[0-9a-f]+/ {for (i=2; i<=NF; ++i) if ($i ~ /^[0-9a-f]{8}$/) printf "%s", $i}'
+)"
+test "$native_macro_comma_hex" = "130000001300000013051000"
+
+cat >"$work/native-set-size.s" <<'EOF'
+.text
+.globl native_set_size
+native_set_size:
+  nop
+.set .Lnative_set_size, . - native_set_size
+.size native_set_size, .Lnative_set_size
+.type native_set_size STT_FUNC
+EOF
+"$MINIAS" -o "$work/native-set-size.o" "$work/native-set-size.s"
+test "$(readelf -Ws "$work/native-set-size.o" | awk '$8=="native_set_size" {print $3}')" = "4"
+readelf -Ws "$work/native-set-size.o" | grep -Eq 'FUNC[[:space:]]+GLOBAL.* native_set_size$'
+
+cat >"$work/native-macro-quotes.s" <<'EOF'
+.text
+.macro emit_one insn:req
+  \insn
+.endm
+.altmacro
+emit_one "nop"
+.noaltmacro
+EOF
+"$MINIAS" -o "$work/native-macro-quotes.o" "$work/native-macro-quotes.s"
 native_macro_quotes_hex="$(
     readelf -x .text "$work/native-macro-quotes.o" |
     awk '/0x[0-9a-f]+/ {for (i=2; i<=NF; ++i) if ($i ~ /^[0-9a-f]{8}$/) printf "%s", $i}'
