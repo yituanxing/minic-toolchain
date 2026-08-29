@@ -63,6 +63,9 @@ bool minipp_string_append_char(MiniPpString *string, char value);
 bool minipp_expand_text(MiniPpState *state,
                         const char *text,
                         MiniPpString *out);
+bool minipp_eval_if_expression(MiniPpState *state,
+                               const char *expression,
+                               bool *value);
 bool minipp_strip_comments_line(MiniPpState *state,
                                 const char *line,
                                 size_t line_size,
