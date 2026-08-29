@@ -1020,6 +1020,13 @@ static bool minipp_expand_function_macro(MiniPpState *state,
                 minipp_arg_list_destroy(&expanded_args);
                 return false;
             }
+            /*
+             * Argument prescan is an internal token stream.  GCC's output
+             * padding at a top-level macro boundary must not become real
+             * leading whitespace when that expansion is substituted as an
+             * argument of another macro.
+             */
+            minipp_normalize_leading_expansion_space(expanded, false);
         }
         if (!minipp_string_append_char(expanded, '\0')) {
             minipp_arg_list_destroy(&raw_args);
