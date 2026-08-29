@@ -59,22 +59,19 @@ jobs:
           echo "MINIAS_NATIVE26_PLAN_STATUS=$rc"
           test -s build/native26-plan.raw
 
-      - name: Preprocess exact native .S inputs
+      - name: Materialize exact native .s targets through Kbuild
         shell: bash
         run: |
           set -Eeuo pipefail
           python3 - <<'PY'
           from pathlib import Path, PurePosixPath
-          import re, shlex, subprocess
+          import re
 
           plan = Path("build/native26-plan.raw").read_text(errors="replace").splitlines()
           out_root = Path("build/linux-native26-out").resolve()
-          dst_root = Path("build/minias-native26-inputs")
-          dst_root.mkdir(parents=True, exist_ok=True)
           object_re = re.compile(r"(?:^|\s)-o\s+([^\s;]+\.o)(?=\s|;|$)")
           source_re = re.compile(r"(?:^|\s)([^\s;]+\.S)(?=\s|;|$)")
           entries = {}
-
           for line in plan:
               if "riscv64-linux-gnu-gcc" not in line or " -c " not in f" {line} ":
                   continue
@@ -92,38 +89,31 @@ jobs:
               rel_text = PurePosixPath(rel.as_posix()).as_posix()
               if rel_text.startswith(("scripts/","tools/")) or "/scripts/" in rel_text:
                   continue
-              src = srcs[-1].strip("'\"")
-              entries[rel_text] = (line, src)
-
+              entries[rel_text] = srcs[-1].strip("'\"")
           if len(entries) != 26:
               raise SystemExit(f"expected 26 configured native .S objects, got {len(entries)}")
-
-          manifest=[]
-          for rel_obj,(line,src) in sorted(entries.items()):
-              # Keep only the gcc command from the V=1 shell line.
-              start=line.find("riscv64-linux-gnu-gcc")
-              segment=line[start:]
-              tokens=shlex.split(segment, posix=True)
-              src_index=next((i for i,t in enumerate(tokens) if t.endswith(".S")), None)
-              if src_index is None:
-                  raise SystemExit(f"cannot locate .S token: {rel_obj}")
-              tokens=tokens[:src_index+1]
-              if "-c" not in tokens or "-o" not in tokens:
-                  raise SystemExit(f"unexpected gcc command: {rel_obj}")
-              out_index=tokens.index("-o")+1
-              rel_s=rel_obj[:-2]+".s"
-              dst=dst_root/rel_s
-              dst.parent.mkdir(parents=True, exist_ok=True)
-              tokens[tokens.index("-c")]="-E"
-              tokens[out_index]=str(dst.resolve())
-              proc=subprocess.run(tokens, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
-              if proc.returncode != 0 or not dst.is_file() or dst.stat().st_size == 0:
-                  raise SystemExit(f"preprocess failed {rel_obj}: rc={proc.returncode}\n{proc.stderr[-2000:]}")
-              manifest.append(f"{rel_obj}\t{rel_s}\t{src}")
-          Path("build/minias-native26-manifest.tsv").write_text("\n".join(manifest)+"\n")
-          print(f"MINIAS_NATIVE26_INPUTS selected={len(manifest)}")
+          targets=[obj[:-2]+".s" for obj in sorted(entries)]
+          Path("build/minias-native26-targets.txt").write_text("\n".join(targets)+"\n")
+          Path("build/minias-native26-sources.tsv").write_text("\n".join(
+              f"{obj}\t{obj[:-2]}.s\t{entries[obj]}" for obj in sorted(entries)
+          )+"\n")
+          print(f"MINIAS_NATIVE26_TARGETS selected={len(targets)}")
           PY
-
+          src="$GITHUB_WORKSPACE/build/linux-native26-src"
+          out="$GITHUB_WORKSPACE/build/linux-native26-out"
+          mapfile -t targets <build/minias-native26-targets.txt
+          test "${#targets[@]}" -eq 26
+          make -s -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- -j4 "${targets[@]}"
+          root="$GITHUB_WORKSPACE/build/minias-native26-inputs"
+          rm -rf "$root"
+          mkdir -p "$root"
+          while IFS=$'\t' read -r obj rel_s source; do
+            test -s "$out/$rel_s"
+            mkdir -p "$root/$(dirname "$rel_s")"
+            cp "$out/$rel_s" "$root/$rel_s"
+          done <build/minias-native26-sources.tsv
+          cp build/minias-native26-sources.tsv build/minias-native26-manifest.tsv
+          echo "MINIAS_NATIVE26_INPUTS selected=26"
       - name: Assemble native26 and classify first blockers
         shell: bash
         run: |
