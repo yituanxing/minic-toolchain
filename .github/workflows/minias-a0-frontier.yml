@@ -12,6 +12,8 @@ permissions:
 
 env:
   FROZEN_CORPUS_EXPORT_RUN: "33186855250"
+  FROZEN_SIDECARS_RUN: "33237304382"
+  FROZEN_CONFIG_GZ_SHA256: "8511a666382dda596a9ddba313113f77182d3156fed890a2ea9f2e86223226ff"
 
 jobs:
   frontier:
@@ -53,6 +55,27 @@ jobs:
           Path('build/minias-frontier-indices.txt').write_text(','.join(map(str, indices)) + '\n')
           print(f"MINIAS_FRONTIER_MAP count={len(frontier)} indices={indices}")
           PY
+
+      - name: Restore frozen MiniAS Linux sidecars
+        uses: actions/download-artifact@v4
+        with:
+          name: minias-linux-sidecars-v1
+          path: build/import-minias-sidecars
+          repository: ${{ github.repository }}
+          run-id: ${{ env.FROZEN_SIDECARS_RUN }}
+          github-token: ${{ github.token }}
+
+      - name: Verify and install frozen incbin sidecar
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          payload=build/import-minias-sidecars/kernel/config_data.gz
+          test -s "$payload"
+          actual=$(sha256sum "$payload" | cut -d' ' -f1)
+          test "$actual" = "$FROZEN_CONFIG_GZ_SHA256"
+          mkdir -p kernel
+          cp "$payload" kernel/config_data.gz
+          echo "MINIAS_INCBIN_SIDECAR=PASS sha256=$actual"
 
       - name: Build compiler and MiniAS
         run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/minias-frontier-toolchain all
