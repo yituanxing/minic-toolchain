@@ -4593,10 +4593,11 @@ bool minias_emit_sections(MiniAs *as) {
     return true;
 }
 
-int minias_assemble_file_class(const char *input_path,
-                               const char *output_path,
-                               bool elf32,
-                               FILE *diagnostic) {
+int minias_assemble_file_target(const char *input_path,
+                                const char *output_path,
+                                bool elf32,
+                                uint32_t elf_flags,
+                                FILE *diagnostic) {
     size_t *long_branch_lines = NULL;
     size_t long_branch_count = 0U;
     size_t long_branch_capacity = 0U;
@@ -4608,6 +4609,7 @@ int minias_assemble_file_class(const char *input_path,
         bool added_long_branches = false;
 
         minias_init(&as);
+        as.elf_flags = elf_flags;
         as.forced_long_branch_lines = long_branch_lines;
         as.forced_long_branch_count = long_branch_count;
         parsed = as.error[0] == '\0' && minias_parse_file(&as, input_path);
@@ -4639,6 +4641,17 @@ int minias_assemble_file_class(const char *input_path,
     }
     free(long_branch_lines);
     return rc;
+}
+
+int minias_assemble_file_class(const char *input_path,
+                               const char *output_path,
+                               bool elf32,
+                               FILE *diagnostic) {
+    return minias_assemble_file_target(input_path,
+                                       output_path,
+                                       elf32,
+                                       0U,
+                                       diagnostic);
 }
 
 int minias_assemble_file(const char *input_path,
