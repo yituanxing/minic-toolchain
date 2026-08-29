@@ -59,169 +59,187 @@ jobs:
           echo "MINIAS_NATIVE26_PLAN_STATUS=$rc"
           test -s build/native26-plan.raw
 
-      - name: Materialize exact native .s targets through Kbuild
+      - name: Resolve and build native .s targets through Kbuild
         shell: bash
         run: |
           set -Eeuo pipefail
           python3 - <<'PY'
           from pathlib import Path, PurePosixPath
-          import re
+          import json, re
 
           plan = Path("build/native26-plan.raw").read_text(errors="replace").splitlines()
           out_root = Path("build/linux-native26-out").resolve()
+          src_root = Path("build/linux-native26-src").resolve()
           object_re = re.compile(r"(?:^|\s)-o\s+([^\s;]+\.o)(?=\s|;|$)")
           source_re = re.compile(r"(?:^|\s)([^\s;]+\.S)(?=\s|;|$)")
           entries = {}
+
           for line in plan:
               if "riscv64-linux-gnu-gcc" not in line or " -c " not in f" {line} ":
                   continue
-              objs = object_re.findall(line)
-              srcs = source_re.findall(line)
-              if not objs or not srcs:
+              objects = object_re.findall(line)
+              sources = source_re.findall(line)
+              if not objects or not sources:
                   continue
-              raw_obj = objs[-1].strip("'\"")
+              raw_obj = objects[-1].strip("'\"")
               obj = Path(raw_obj)
               if obj.is_absolute():
-                  try: rel = obj.resolve().relative_to(out_root)
-                  except ValueError: continue
+                  try:
+                      rel_obj = obj.resolve().relative_to(out_root)
+                  except ValueError:
+                      continue
               else:
-                  rel = obj
-              rel_text = PurePosixPath(rel.as_posix()).as_posix()
-              if rel_text.startswith(("scripts/","tools/")) or "/scripts/" in rel_text:
+                  rel_obj = obj
+              rel_obj_text = PurePosixPath(rel_obj.as_posix()).as_posix()
+              if rel_obj_text.startswith(("scripts/", "tools/")) or "/scripts/" in rel_obj_text:
                   continue
-              entries[rel_text] = srcs[-1].strip("'\"")
+              source = Path(sources[-1].strip("'\"")).resolve()
+              try:
+                  rel_source = PurePosixPath(source.relative_to(src_root).as_posix()).as_posix()
+              except ValueError:
+                  continue
+              entries[rel_obj_text] = rel_source
+
           if len(entries) != 26:
               raise SystemExit(f"expected 26 configured native .S objects, got {len(entries)}")
-          src_root = Path("build/linux-native26-src").resolve()
-          materialized = []
+
+          manifest = []
           targets = []
           for obj in sorted(entries):
-              source = Path(entries[obj]).resolve()
-              try:
-                  source_rel = PurePosixPath(source.relative_to(src_root).as_posix()).as_posix()
-              except ValueError:
-                  raise SystemExit(f"native source outside Linux tree: {source}")
+              source = entries[obj]
               desired_s = obj[:-2] + ".s"
               matching_source = obj[:-2] + ".S"
-              target_s = desired_s if source_rel == matching_source else source_rel[:-2] + ".s"
-              materialized.append((obj, desired_s, target_s, str(source)))
+              target_s = desired_s if source == matching_source else source[:-2] + ".s"
+              manifest.append({
+                  "object": obj,
+                  "source": source,
+                  "desired_s": desired_s,
+                  "target_s": target_s,
+              })
               if target_s not in targets:
                   targets.append(target_s)
-          Path("build/minias-native26-targets.txt").write_text("\n".join(targets)+"\n")
-          Path("build/minias-native26-sources.tsv").write_text("\n".join(
-              f"{obj}\t{desired_s}\t{target_s}\t{source}"
-              for obj,desired_s,target_s,source in materialized
-          )+"\n")
-          print(f"MINIAS_NATIVE26_TARGETS objects={len(materialized)} unique_s_targets={len(targets)}")
+
+          Path("build/minias-native26-manifest.json").write_text(
+              json.dumps(manifest, indent=2, sort_keys=True) + "\n"
+          )
+          Path("build/minias-native26-targets.txt").write_text("\n".join(targets) + "\n")
+          print(
+              f"MINIAS_NATIVE26_TARGETS objects={len(manifest)} "
+              f"unique_s_targets={len(targets)}"
+          )
           PY
+
           src="$GITHUB_WORKSPACE/build/linux-native26-src"
           out="$GITHUB_WORKSPACE/build/linux-native26-out"
-          mapfile -t targets <build/minias-native26-targets.txt
-          test "${#targets[@]}" -ge 1
+          mapfile -t targets < build/minias-native26-targets.txt
+          test "${#targets[@]}" -gt 0
           make -s -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- -j4 "${targets[@]}"
-          root="$GITHUB_WORKSPACE/build/minias-native26-inputs"
-          rm -rf "$root"
-          mkdir -p "$root"
-          while IFS=      - name: Assemble native26 and classify first blockers
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          minias="$GITHUB_WORKSPACE/build/minias-native26-toolchain/bin/minic-as"
-          root="$GITHUB_WORKSPACE/build/minias-native26-inputs"
-          out="$GITHUB_WORKSPACE/build/minias-native26-results"
-          mkdir -p "$out"
-          while IFS=$'\t' read -r obj rel_s source; do
-            stem="$out/${rel_s%.s}"
-            mkdir -p "$(dirname "$stem")"
-            err="$stem.err"; result="$stem.result"; blocker="$stem.blocker"
-            if (cd "$GITHUB_WORKSPACE/build/linux-native26-out" && "$minias" -o "$GITHUB_WORKSPACE/$stem.o" "$GITHUB_WORKSPACE/$root/$rel_s" 2>"$GITHUB_WORKSPACE/$err"); then
-              readelf -h "$stem.o" | grep -q "RISC-V"
-              readelf -h "$stem.o" | grep -q "REL (Relocatable file)"
-              printf "PASS\t%s\t-\n" "$rel_s" >"$result"
-            else
-              raw=$(head -n1 "$err" || true)
-              first=$(printf "%s\n" "$raw" | sed -E "s/^minic-as: //; s/:line=[0-9]+$//")
-              test -n "$first" || first="internal:no-diagnostic"
-              printf "%s\n" "$first" >"$blocker"
-              printf "FAIL\t%s\t%s\n" "$rel_s" "$first" >"$result"
-            fi
-          done <build/minias-native26-manifest.tsv
-          find "$out" -type f -name "*.result" -print0 | LC_ALL=C sort -z | xargs -0 cat >"$out/results.tsv"
-          find "$out" -type f -name "*.blocker" -print0 | LC_ALL=C sort -z | xargs -0 -r cat >"$out/blockers.txt"
-          test "$(wc -l < "$out/results.tsv")" -eq 26
-          pass=$(awk -F "\t" '$1=="PASS"{n++}END{print n+0}' "$out/results.tsv")
-          fail=$(awk -F "\t" '$1=="FAIL"{n++}END{print n+0}' "$out/results.tsv")
-          {
-            echo "MINIAS_NATIVE26_SUMMARY pass=$pass fail=$fail total=26"
-            echo "MINIAS_NATIVE26_TOP_BLOCKERS"
-            if test -s "$out/blockers.txt"; then LC_ALL=C sort "$out/blockers.txt" | uniq -c | sort -nr; else echo "  none"; fi
-            echo "MINIAS_NATIVE26_FILES"
-            cat "$out/results.tsv"
-          } | tee "$out/summary.txt"
-          test $((pass + fail)) -eq 26
 
-      - uses: actions/upload-artifact@v4
-        with:
-          name: minias-a0-native26-progress
-          path: |
-            build/minias-native26-manifest.tsv
-            build/minias-native26-results/results.tsv
-            build/minias-native26-results/summary.txt
-            build/minias-native26-results/**/*.err
-          retention-days: 14
-          if-no-files-found: error\t' read -r obj rel_s target_s source; do
-            test -s "$out/$target_s"
-            mkdir -p "$root/$(dirname "$rel_s")"
-            cp "$out/$target_s" "$root/$rel_s"
-          done <build/minias-native26-sources.tsv
-          awk -F '\t' '{print $1 "\t" $2 "\t" $4}' build/minias-native26-sources.tsv >build/minias-native26-manifest.tsv
-          test "$(wc -l <build/minias-native26-manifest.tsv)" -eq 26
-          echo "MINIAS_NATIVE26_INPUTS selected=26"
+          python3 - <<'PY'
+          from pathlib import Path
+          import json, shutil
+
+          manifest = json.loads(Path("build/minias-native26-manifest.json").read_text())
+          out = Path("build/linux-native26-out")
+          root = Path("build/minias-native26-inputs")
+          shutil.rmtree(root, ignore_errors=True)
+          root.mkdir(parents=True)
+          for row in manifest:
+              source = out / row["target_s"]
+              if not source.is_file() or source.stat().st_size == 0:
+                  raise SystemExit(f"missing Kbuild .s target: {row['target_s']}")
+              target = root / row["desired_s"]
+              target.parent.mkdir(parents=True, exist_ok=True)
+              shutil.copy2(source, target)
+          print(f"MINIAS_NATIVE26_INPUTS selected={len(manifest)}")
+          PY
+
       - name: Assemble native26 and classify first blockers
         shell: bash
         run: |
           set -Eeuo pipefail
-          minias="$GITHUB_WORKSPACE/build/minias-native26-toolchain/bin/minic-as"
-          root="$GITHUB_WORKSPACE/build/minias-native26-inputs"
-          out="$GITHUB_WORKSPACE/build/minias-native26-results"
-          mkdir -p "$out"
-          while IFS=$'\t' read -r obj rel_s source; do
-            stem="$out/${rel_s%.s}"
-            mkdir -p "$(dirname "$stem")"
-            err="$stem.err"; result="$stem.result"; blocker="$stem.blocker"
-            if (cd "$GITHUB_WORKSPACE/build/linux-native26-out" && "$minias" -o "$GITHUB_WORKSPACE/$stem.o" "$GITHUB_WORKSPACE/$root/$rel_s" 2>"$GITHUB_WORKSPACE/$err"); then
-              readelf -h "$stem.o" | grep -q "RISC-V"
-              readelf -h "$stem.o" | grep -q "REL (Relocatable file)"
-              printf "PASS\t%s\t-\n" "$rel_s" >"$result"
-            else
-              raw=$(head -n1 "$err" || true)
-              first=$(printf "%s\n" "$raw" | sed -E "s/^minic-as: //; s/:line=[0-9]+$//")
-              test -n "$first" || first="internal:no-diagnostic"
-              printf "%s\n" "$first" >"$blocker"
-              printf "FAIL\t%s\t%s\n" "$rel_s" "$first" >"$result"
-            fi
-          done <build/minias-native26-manifest.tsv
-          find "$out" -type f -name "*.result" -print0 | LC_ALL=C sort -z | xargs -0 cat >"$out/results.tsv"
-          find "$out" -type f -name "*.blocker" -print0 | LC_ALL=C sort -z | xargs -0 -r cat >"$out/blockers.txt"
-          test "$(wc -l < "$out/results.tsv")" -eq 26
-          pass=$(awk -F "\t" '$1=="PASS"{n++}END{print n+0}' "$out/results.tsv")
-          fail=$(awk -F "\t" '$1=="FAIL"{n++}END{print n+0}' "$out/results.tsv")
-          {
-            echo "MINIAS_NATIVE26_SUMMARY pass=$pass fail=$fail total=26"
-            echo "MINIAS_NATIVE26_TOP_BLOCKERS"
-            if test -s "$out/blockers.txt"; then LC_ALL=C sort "$out/blockers.txt" | uniq -c | sort -nr; else echo "  none"; fi
-            echo "MINIAS_NATIVE26_FILES"
-            cat "$out/results.tsv"
-          } | tee "$out/summary.txt"
-          test $((pass + fail)) -eq 26
+          python3 - <<'PY'
+          from pathlib import Path
+          from collections import Counter
+          import json, re, subprocess
+
+          workspace = Path.cwd().resolve()
+          minias = workspace / "build/minias-native26-toolchain/bin/minic-as"
+          linux_out = workspace / "build/linux-native26-out"
+          input_root = workspace / "build/minias-native26-inputs"
+          result_root = workspace / "build/minias-native26-results"
+          result_root.mkdir(parents=True, exist_ok=True)
+          manifest = json.loads((workspace / "build/minias-native26-manifest.json").read_text())
+          results = []
+          blockers = Counter()
+
+          for row in manifest:
+              rel_s = row["desired_s"]
+              inp = input_root / rel_s
+              obj = result_root / (rel_s[:-2] + ".o")
+              err = result_root / (rel_s[:-2] + ".err")
+              obj.parent.mkdir(parents=True, exist_ok=True)
+              err.parent.mkdir(parents=True, exist_ok=True)
+              proc = subprocess.run(
+                  [str(minias), "-o", str(obj), str(inp)],
+                  cwd=linux_out,
+                  stdout=subprocess.DEVNULL,
+                  stderr=subprocess.PIPE,
+                  text=True,
+                  errors="replace",
+              )
+              err.write_text(proc.stderr)
+              if proc.returncode == 0 and obj.is_file() and obj.stat().st_size:
+                  check = subprocess.run(
+                      ["readelf", "-h", str(obj)],
+                      stdout=subprocess.PIPE,
+                      stderr=subprocess.PIPE,
+                      text=True,
+                      errors="replace",
+                  )
+                  ok = check.returncode == 0 and "RISC-V" in check.stdout and "REL (Relocatable file)" in check.stdout
+              else:
+                  ok = False
+              if ok:
+                  results.append(("PASS", rel_s, "-"))
+                  continue
+              raw = next((line.strip() for line in proc.stderr.splitlines() if line.strip()), "internal:no-diagnostic")
+              blocker = re.sub(r"^minic-as:\s*", "", raw)
+              blocker = re.sub(r":line=[0-9]+$", "", blocker)
+              blockers[blocker] += 1
+              results.append(("FAIL", rel_s, blocker))
+
+          (result_root / "results.tsv").write_text(
+              "".join(f"{status}\t{path}\t{blocker}\n" for status, path, blocker in results)
+          )
+          pass_count = sum(status == "PASS" for status, _, _ in results)
+          fail_count = len(results) - pass_count
+          lines = [
+              f"MINIAS_NATIVE26_SUMMARY pass={pass_count} fail={fail_count} total={len(results)}",
+              "MINIAS_NATIVE26_TOP_BLOCKERS",
+          ]
+          lines.extend(
+              [f"  {count:5d} {blocker}" for blocker, count in blockers.most_common()]
+              or ["  none"]
+          )
+          lines.append("MINIAS_NATIVE26_FILES")
+          lines.extend(f"{status}\t{path}\t{blocker}" for status, path, blocker in results)
+          summary = "\n".join(lines) + "\n"
+          (result_root / "summary.txt").write_text(summary)
+          print(summary, end="")
+          if len(results) != 26:
+              raise SystemExit(f"expected 26 results, got {len(results)}")
+          PY
 
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: minias-a0-native26-progress
           path: |
-            build/minias-native26-manifest.tsv
+            build/minias-native26-manifest.json
+            build/minias-native26-targets.txt
             build/minias-native26-results/results.tsv
             build/minias-native26-results/summary.txt
             build/minias-native26-results/**/*.err
           retention-days: 14
-          if-no-files-found: error
+          if-no-files-found: warn
