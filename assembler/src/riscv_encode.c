@@ -1202,7 +1202,7 @@ bool minias_riscv_measure(const char *op,
         SIMPLE("pause") ||
         SIMPLE("wfi") || SIMPLE("add") || SIMPLE("sub") || SIMPLE("sll") ||
         SIMPLE("srl") || SIMPLE("and") || SIMPLE("or") ||
-        SIMPLE("xor") || SIMPLE("slt") || SIMPLE("sltu") || SIMPLE("mul") ||
+        SIMPLE("xor") || SIMPLE("slt") || SIMPLE("sltu") || SIMPLE("sgt") || SIMPLE("sgtu") || SIMPLE("mul") ||
         SIMPLE("mulh") || SIMPLE("mulhu") || SIMPLE("div") || SIMPLE("divu") ||
         SIMPLE("rem") || SIMPLE("remu") || SIMPLE("addw") || SIMPLE("subw") ||
         SIMPLE("sllw") || SIMPLE("srlw") || SIMPLE("sraw") || SIMPLE("mulw") ||
@@ -1942,6 +1942,21 @@ bool minias_riscv_encode(MiniAs *as, const MiniAsStmt *stmt) {
             value |= 0x40000000U;
         }
         return append_u32(as, stmt->section, value);
+    }
+    if (strcmp(stmt->op, "sgt") == 0 || strcmp(stmt->op, "sgtu") == 0) {
+        if (count != 3U || !require_reg(as, stmt, operands[0], &rd) ||
+            !require_reg(as, stmt, operands[1], &rs1) ||
+            !require_reg(as, stmt, operands[2], &rs2)) {
+            return false;
+        }
+        return append_u32(as,
+                          stmt->section,
+                          enc_r(0x33U,
+                                rd,
+                                strcmp(stmt->op, "sgt") == 0 ? 2U : 3U,
+                                rs2,
+                                rs1,
+                                0U));
     }
     if (strcmp(stmt->op, "addw") == 0 || strcmp(stmt->op, "subw") == 0 ||
         strcmp(stmt->op, "sllw") == 0 || strcmp(stmt->op, "srlw") == 0 ||
