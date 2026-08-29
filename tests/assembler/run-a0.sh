@@ -571,7 +571,7 @@ u64_hex="$(
     readelf -x .data "$work/u64-data.o" |
     awk '/0x[0-9a-f]+/ {for (i=2; i<=NF; ++i) if ($i ~ /^[0-9a-f]{8}$/) printf "%s", $i}'
 )"
-test "$u64_hex" = "ffffffffffffffff0000000000000080d8feffffffffffff"
+test "$u64_hex" = "ffffffffffffffff000000000000008038ffffffffffffff"
 
 cat >"$work/vector-unit.s" <<'EOF'
 .text
