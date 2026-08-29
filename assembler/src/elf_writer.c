@@ -53,12 +53,54 @@ static size_t relocation_count_for_section(const MiniAs *as, size_t section) {
     return count;
 }
 
+static bool symbol_referenced_by_relocation(const MiniAs *as,
+                                             size_t symbol_index) {
+    size_t i;
+
+    for (i = 0U; i < as->reloc_count; ++i) {
+        if (as->relocs[i].symbol_index == symbol_index) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool should_emit_symbol(const MiniAs *as, size_t symbol_index) {
+    const MiniAsSymbol *symbol = &as->symbols[symbol_index];
+
+    /*
+     * GNU as treats .L-prefixed names as temporary local labels: once their
+     * assembly-time role is finished, they are omitted unless a relocation
+     * still needs them. Keep undefined locals visible so invalid input is not
+     * silently accepted.
+     */
+    if (symbol->bind == MINIAS_STB_LOCAL &&
+        symbol->defined &&
+        strncmp(symbol->name, ".L", 2U) == 0 &&
+        !symbol_referenced_by_relocation(as, symbol_index)) {
+        return false;
+    }
+    return true;
+}
+
+static size_t emitted_symbol_count(const MiniAs *as) {
+    size_t i;
+    size_t count = 0U;
+
+    for (i = 0U; i < as->symbol_count; ++i) {
+        if (should_emit_symbol(as, i)) {
+            ++count;
+        }
+    }
+    return count;
+}
+
 bool minias_write_elf64(MiniAs *as, const char *path) {
     size_t i;
     size_t pass;
     size_t section_count = as->section_count;
     size_t relocation_section_count = 0U;
-    size_t symbol_count = 1U + section_count + as->symbol_count;
+    size_t symbol_count = 1U + section_count + emitted_symbol_count(as);
     size_t output_section_count;
     size_t symtab_index;
     size_t strtab_index;
@@ -182,6 +224,9 @@ bool minias_write_elf64(MiniAs *as, const char *path) {
     }
 
     for (i = 0U; i < as->symbol_count; ++i) {
+        if (!should_emit_symbol(as, i)) {
+            continue;
+        }
         if (!append_string(&strtab,
                            &strtab_size,
                            &strtab_capacity,
@@ -203,6 +248,9 @@ bool minias_write_elf64(MiniAs *as, const char *path) {
             MiniAsSymbol *symbol = &as->symbols[i];
             bool local = symbol->bind == MINIAS_STB_LOCAL;
 
+            if (!should_emit_symbol(as, i)) {
+                continue;
+            }
             if ((pass == 0U) != local) {
                 continue;
             }
@@ -352,7 +400,9 @@ bool minias_write_elf64(MiniAs *as, const char *path) {
                 if (reloc->section < 0 || (size_t)reloc->section != i) {
                     continue;
                 }
-                if (reloc->symbol_index >= as->symbol_count) {
+                if (reloc->symbol_index >= as->symbol_count ||
+                    !should_emit_symbol(as, reloc->symbol_index) ||
+                    elf_symbol_indices[reloc->symbol_index] == 0U) {
                     minias_set_error(as, "internal:bad-relocation-symbol");
                     goto done;
                 }
@@ -422,7 +472,7 @@ bool minias_write_elf32(MiniAs *as, const char *path) {
     size_t pass;
     size_t section_count = as->section_count;
     size_t relocation_section_count = 0U;
-    size_t symbol_count = 1U + section_count + as->symbol_count;
+    size_t symbol_count = 1U + section_count + emitted_symbol_count(as);
     size_t output_section_count;
     size_t symtab_index;
     size_t strtab_index;
@@ -546,6 +596,9 @@ bool minias_write_elf32(MiniAs *as, const char *path) {
     }
 
     for (i = 0U; i < as->symbol_count; ++i) {
+        if (!should_emit_symbol(as, i)) {
+            continue;
+        }
         if (!append_string(&strtab,
                            &strtab_size,
                            &strtab_capacity,
@@ -567,6 +620,9 @@ bool minias_write_elf32(MiniAs *as, const char *path) {
             MiniAsSymbol *symbol = &as->symbols[i];
             bool local = symbol->bind == MINIAS_STB_LOCAL;
 
+            if (!should_emit_symbol(as, i)) {
+                continue;
+            }
             if ((pass == 0U) != local) {
                 continue;
             }
@@ -723,7 +779,9 @@ bool minias_write_elf32(MiniAs *as, const char *path) {
                 if (reloc->section < 0 || (size_t)reloc->section != i) {
                     continue;
                 }
-                if (reloc->symbol_index >= as->symbol_count) {
+                if (reloc->symbol_index >= as->symbol_count ||
+                    !should_emit_symbol(as, reloc->symbol_index) ||
+                    elf_symbol_indices[reloc->symbol_index] == 0U) {
                     minias_set_error(as, "internal:bad-relocation-symbol");
                     goto done;
                 }
