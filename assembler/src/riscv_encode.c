@@ -566,7 +566,7 @@ bool minias_riscv_measure(const char *op,
         SIMPLE("bgtu") || SIMPLE("bleu") || SIMPLE("addi") || SIMPLE("addiw") ||
         SIMPLE("andi") || SIMPLE("ori") || SIMPLE("xori") || SIMPLE("slti") ||
         SIMPLE("sltiu") || SIMPLE("slli") || SIMPLE("srli") || SIMPLE("srai") ||
-        SIMPLE("sra") || SIMPLE("fence") || SIMPLE("csrr") || SIMPLE("csrrc") ||
+        SIMPLE("sra") || SIMPLE("fence") || SIMPLE("fence.i") || SIMPLE("csrr") || SIMPLE("csrrc") ||
         SIMPLE("csrs") || SIMPLE("csrc") || SIMPLE("ebreak") || SIMPLE("pause") ||
         SIMPLE("wfi") || SIMPLE("add") || SIMPLE("sub") || SIMPLE("sll") ||
         SIMPLE("srl") || SIMPLE("and") || SIMPLE("or") ||
@@ -953,6 +953,13 @@ bool minias_riscv_encode(MiniAs *as, const MiniAsStmt *stmt) {
                           stmt->section,
                           0x73U | (3U << 12U) |
                               ((uint32_t)rs1 << 15U) | (csr << 20U));
+    }
+    if (strcmp(stmt->op, "fence.i") == 0) {
+        if (count != 0U) {
+            minias_set_error(as, "operand-count:fence.i:line=%zu", stmt->line);
+            return false;
+        }
+        return append_u32(as, stmt->section, 0x0000100fU);
     }
     if (strcmp(stmt->op, "fence") == 0) {
         uint32_t pred = 0xfU;
