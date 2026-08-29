@@ -75,6 +75,7 @@ jobs:
           export MINIPP="$GITHUB_WORKSPACE/build/minipp-linux/bin/minic-cpp"
           export MINIPP_LINUX_TRACE="$trace"
           export MINIPP_LINUX_WORK="$probe"
+          export MINIPP_LINUX_SRC="$src"
 
           make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
             CC="$GITHUB_WORKSPACE/tests/preprocessor/linux_kbuild_pp_cc.sh" \
