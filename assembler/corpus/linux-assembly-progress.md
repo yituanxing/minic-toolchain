@@ -63,6 +63,44 @@ object compile rules** observed in successful GNU Kbuild. Run `33248367296`
 computes exact overlap / ground-truth-only / frozen-only object-path manifests
 before any further C-delta acceptance claim is made.
 
+## Standalone Linux runtime acceptance
+
+MiniAS standalone runtime acceptance is now frozen at exact head
+`b16cb444745cea4dfe275674d61dea7772209834`, workflow run
+`33258924708`.
+
+The experiment changed only the assembler under GCC/Kbuild:
+
+```text
+Linux C / native .S
+  -> GCC / CPP
+  -> MiniAS
+  -> GNU binutils / ld
+  -> Linux 6.6.143 Image
+  -> QEMU runtime
+```
+
+Observed acceptance markers:
+
+- `MINIAS_LINUX_GCC_BUILD=PASS assembled=2232 passed=2198 probe_failures=41 query_delegates=1 elapsed_s=267`
+- `MINIAS_LINUX_GCC_RUNTIME=PASS p0=PASS p1=12/12`
+
+The 41 recorded assembler failures are Kbuild/GCC capability probes whose failure
+is intentionally consumed by feature detection. Required production-object
+failure would make `make Image` fail before the runtime gate. This run produced a
+non-empty Linux Image and passed both the P0 boot contract and the complete P1
+12/12 userspace runtime profile.
+
+This freezes the first product-level MiniAS baseline: the assembler is no longer
+accepted only on isolated `.s -> .o` coverage; it has assembled a complete
+Linux Image that boots and passes the runtime contract.
+
+Next acceptance lanes are:
+
+1. GNU-as vs MiniAS semantic object oracle over the 3536 ground-truth inputs.
+2. MiniC -> MiniAS -> GNU ld Linux integration, preserving explicit provenance
+   for any compiler-side GCC delegation.
+
 ## First500 convergence history
 
 | Exact head | Run | PASS | FAIL | ΔPASS | Wall | First-blocker state after run |
