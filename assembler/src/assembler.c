@@ -1501,6 +1501,42 @@ static bool parse_set(MiniAs *as, char *args, size_t line) {
         return false;
     }
 
+    if (expression[0] == '.' &&
+        (expression[1] == '\0' || expression[1] == ' ' ||
+         expression[1] == '\t' || expression[1] == '+' ||
+         expression[1] == '-')) {
+        int64_t value;
+
+        /*
+         * GCC emits section anchors as:
+         *
+         *   .set .LANCHOR0, . + 0
+         *
+         * "." is the location counter, not a symbol named ".".  Keep the
+         * resulting symbol relocatable in the current section/subsection.
+         */
+        if (!evaluate_absolute_expression(as, expression, &value) || value < 0) {
+            minias_set_error(as,
+                             "unsupported-expression:.set:%s:line=%zu",
+                             expression,
+                             line);
+            return false;
+        }
+        alias = minias_get_symbol(as, name, true);
+        if (alias == NULL) {
+            return false;
+        }
+        if (alias->defined || alias->alias_pending) {
+            minias_set_error(as, "duplicate-symbol:%s:line=%zu", name, line);
+            return false;
+        }
+        alias->defined = true;
+        alias->section = as->current_section;
+        alias->subsection = as->current_subsection;
+        alias->value = (uint64_t)value;
+        return true;
+    }
+
     if (minias_parse_symbol_addend(expression, &expr)) {
         target = minias_get_symbol(as, expr.name, true);
         if (target == NULL) {
