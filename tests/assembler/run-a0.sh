@@ -395,4 +395,30 @@ test "$subsection_hex" = "113322"
 test "$(readelf -Ws "$work/subsection.o" | awk '$8=="subsection_zero_tail" {print $2}')" = "0000000000000001"
 test "$(readelf -Ws "$work/subsection.o" | awk '$8=="subsection_one" {print $2}')" = "0000000000000002"
 
-echo "MINIAS_A0=PASS objects=18 format=ELF64-RISCV-ET_REL relocations=15 strings=2 pseudos=14 previous=2 subsection=1 numeric_labels=14 isa_next=13 csr_amo=4 section_stack=1 org=1 local_difference=1 lr_sc=2 inline_labels=2 branch_pseudos=8 extern=1 symbol_minus_dot=4 symbol_difference=1 absolute32=1 jal=2 high_numeric_labels=2 conditional=1"
+cat >"$work/alternative-org.s" <<'EOF'
+.text
+.globl alternative_org
+.type alternative_org, @function
+alternative_org:
+886:
+  nop
+887:
+.subsection 1
+888:
+  nop
+889:
+  .org . - (887b - 886b) + (889b - 888b)
+  .org . - (889b - 888b) + (887b - 886b)
+.previous
+  ret
+.size alternative_org, .-alternative_org
+EOF
+"$MINIAS" -o "$work/alternative-org.o" "$work/alternative-org.s"
+readelf -h "$work/alternative-org.o" | grep -q 'RISC-V'
+alternative_org_hex="$(
+    readelf -x .text "$work/alternative-org.o" |
+    awk '/0x[0-9a-f]+/ {for (i=2; i<=NF; ++i) if ($i ~ /^[0-9a-f]+$/ && length($i) <= 8 && length($i) % 2 == 0) printf "%s", $i}'
+)"
+test "$alternative_org_hex" = "130000006780000013000000"
+
+echo "MINIAS_A0=PASS objects=19 format=ELF64-RISCV-ET_REL relocations=15 strings=2 pseudos=14 previous=3 subsection=2 numeric_labels=18 isa_next=13 csr_amo=4 section_stack=1 org=3 local_difference=1 lr_sc=2 inline_labels=2 branch_pseudos=8 extern=1 symbol_minus_dot=4 symbol_difference=1 absolute32=1 jal=2 high_numeric_labels=2 conditional=1"
