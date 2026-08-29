@@ -1,5 +1,6 @@
 name: MiniAS Semantic Oracle 3536
 # Exact-head retrigger after in-process comparator + normalization fixes.
+# Canonical C lane rerun after disabling RVC/relaxation variance.
 
 on:
   push:
