@@ -36,6 +36,8 @@ typedef struct MiniPpState {
     size_t conditional_capacity;
     bool active;
     bool in_block_comment;
+    const char **include_paths;
+    size_t include_path_count;
     FILE *diagnostics;
 } MiniPpState;
 
@@ -59,5 +61,11 @@ bool minipp_strip_comments_line(MiniPpState *state,
                                 const char *line,
                                 size_t line_size,
                                 MiniPpString *out);
+
+bool minipp_resolve_include(const MiniPpState *state,
+                            const char *current_path,
+                            const char *name,
+                            bool angled,
+                            MiniPpString *resolved_path);
 
 #endif
