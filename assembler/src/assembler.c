@@ -2763,6 +2763,72 @@ static bool define_label(MiniAs *as, char *label, size_t line) {
     return true;
 }
 
+static bool is_conditional_branch_op(const char *op) {
+    return strcmp(op, "beq") == 0 || strcmp(op, "bne") == 0 ||
+           strcmp(op, "blt") == 0 || strcmp(op, "bge") == 0 ||
+           strcmp(op, "bltu") == 0 || strcmp(op, "bgeu") == 0 ||
+           strcmp(op, "beqz") == 0 || strcmp(op, "bnez") == 0 ||
+           strcmp(op, "bltz") == 0 || strcmp(op, "bgez") == 0 ||
+           strcmp(op, "bgtz") == 0 || strcmp(op, "blez") == 0 ||
+           strcmp(op, "bgt") == 0 || strcmp(op, "ble") == 0 ||
+           strcmp(op, "bgtu") == 0 || strcmp(op, "bleu") == 0;
+}
+
+static bool force_long_branch_for_line(const MiniAs *as, size_t line) {
+    size_t i;
+
+    for (i = 0U; i < as->forced_long_branch_count; ++i) {
+        if (as->forced_long_branch_lines[i] == line) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool find_out_of_range_branch(MiniAs *as, size_t *line_out) {
+    size_t i;
+
+    for (i = 0U; i < as->stmt_count; ++i) {
+        MiniAsStmt *stmt = &as->stmts[i];
+        const char *comma;
+        const char *target_text;
+        MiniAsSymbolExpr expr;
+        MiniAsSymbol *symbol;
+        int64_t displacement;
+
+        if (stmt->kind != MINIAS_STMT_INSN || stmt->size != 4U ||
+            !is_conditional_branch_op(stmt->op)) {
+            continue;
+        }
+        comma = strrchr(stmt->args, ',');
+        if (comma == NULL) {
+            continue;
+        }
+        target_text = comma + 1;
+        while (*target_text == ' ' || *target_text == '\t') {
+            ++target_text;
+        }
+        if (!minias_parse_symbol_addend(target_text, &expr)) {
+            continue;
+        }
+        symbol = minias_get_symbol(as, expr.name, false);
+        if (symbol == NULL || !symbol->defined ||
+            symbol->section != stmt->section ||
+            symbol->value > (uint64_t)INT64_MAX ||
+            stmt->offset > (uint64_t)INT64_MAX) {
+            continue;
+        }
+        displacement = (int64_t)symbol->value + expr.addend -
+                       (int64_t)stmt->offset;
+        if ((displacement & 1) == 0 &&
+            (displacement < -4096 || displacement > 4094)) {
+            *line_out = stmt->line;
+            return true;
+        }
+    }
+    return false;
+}
+
 static MiniAsMacro *find_macro(MiniAs *as, const char *name);
 static bool expand_macro_invocation(MiniAs *as,
                                     MiniAsMacro *macro,
@@ -3022,6 +3088,10 @@ static bool process_statement(MiniAs *as, char *text, size_t line) {
             minias_set_error(as, "%s:line=%zu", reason, line);
             free(rewritten_args);
             return false;
+        }
+        if (size == 4U && is_conditional_branch_op(op) &&
+            force_long_branch_for_line(as, line)) {
+            size = 8U;
         }
         ok = add_stmt(as,
                       MINIAS_STMT_INSN,
@@ -4503,22 +4573,61 @@ int minias_assemble_file_class(const char *input_path,
                                const char *output_path,
                                bool elf32,
                                FILE *diagnostic) {
-    MiniAs as;
+    size_t *long_branch_lines = NULL;
+    size_t long_branch_count = 0U;
+    size_t long_branch_capacity = 0U;
     int rc = 1;
 
-    minias_init(&as);
-    if (as.error[0] == '\0' && minias_parse_file(&as, input_path) &&
-        minias_emit_sections(&as) &&
-        (elf32 ? minias_write_elf32(&as, output_path)
-               : minias_write_elf64(&as, output_path))) {
-        rc = 0;
+    for (;;) {
+        MiniAs as;
+        size_t relax_line = 0U;
+        bool parsed;
+
+        minias_init(&as);
+        as.forced_long_branch_lines = long_branch_lines;
+        as.forced_long_branch_count = long_branch_count;
+        parsed = as.error[0] == '\0' && minias_parse_file(&as, input_path);
+        if (parsed && find_out_of_range_branch(&as, &relax_line)) {
+            size_t i;
+            bool already_forced = false;
+
+            for (i = 0U; i < long_branch_count; ++i) {
+                if (long_branch_lines[i] == relax_line) {
+                    already_forced = true;
+                    break;
+                }
+            }
+            if (already_forced) {
+                minias_set_error(&as,
+                                 "branch-relaxation-stalled:line=%zu",
+                                 relax_line);
+            } else if (!grow_array((void **)&long_branch_lines,
+                                   &long_branch_capacity,
+                                   sizeof(*long_branch_lines),
+                                   long_branch_count + 1U)) {
+                minias_set_error(&as,
+                                 "out-of-memory:branch-relaxation");
+            } else {
+                long_branch_lines[long_branch_count++] = relax_line;
+                minias_destroy(&as);
+                continue;
+            }
+        }
+        if (parsed && as.error[0] == '\0' &&
+            minias_emit_sections(&as) &&
+            (elf32 ? minias_write_elf32(&as, output_path)
+                   : minias_write_elf64(&as, output_path))) {
+            rc = 0;
+        }
+        if (rc != 0 && diagnostic != NULL) {
+            fprintf(diagnostic,
+                    "minic-as: %s\n",
+                    as.error[0] == '\0' ? "unknown-error" : as.error);
+        }
+        minias_destroy(&as);
+        break;
     }
-    if (rc != 0 && diagnostic != NULL) {
-        fprintf(diagnostic,
-                "minic-as: %s\n",
-                as.error[0] == '\0' ? "unknown-error" : as.error);
-    }
-    minias_destroy(&as);
+    free(long_branch_lines);
     return rc;
 }
 
