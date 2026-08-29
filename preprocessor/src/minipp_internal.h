@@ -40,6 +40,7 @@ typedef struct MiniPpState {
     size_t conditional_capacity;
     bool active;
     bool in_block_comment;
+    bool expansion_incomplete;
     const char **include_paths;
     size_t include_path_count;
     FILE *diagnostics;
