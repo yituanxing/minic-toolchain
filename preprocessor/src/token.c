@@ -46,6 +46,7 @@ static bool minipp_macro_is_disabled(const char *name,
 typedef struct MiniPpArgList {
     MiniPpString *items;
     bool *leading_space;
+    size_t *source_line;
     size_t count;
     size_t capacity;
 } MiniPpArgList;
@@ -58,6 +59,7 @@ static void minipp_arg_list_destroy(MiniPpArgList *list) {
     }
     free(list->items);
     free(list->leading_space);
+    free(list->source_line);
     memset(list, 0, sizeof(*list));
 }
 
@@ -126,7 +128,8 @@ static bool minipp_append_normalized_argument(MiniPpString *item,
 
 static bool minipp_arg_list_append(MiniPpArgList *list,
                                    const char *text,
-                                   size_t size) {
+                                   size_t size,
+                                   size_t source_line) {
     MiniPpString *item;
 
     if (list->count == list->capacity) {
@@ -138,6 +141,7 @@ static bool minipp_arg_list_append(MiniPpArgList *list,
             return false;
         }
         bool *next_leading;
+        size_t *next_source_line;
 
         next = realloc(list->items, capacity * sizeof(*next));
         if (next == NULL) {
@@ -150,17 +154,28 @@ static bool minipp_arg_list_append(MiniPpArgList *list,
             return false;
         }
         list->leading_space = next_leading;
+        next_source_line = realloc(list->source_line,
+                                   capacity * sizeof(*next_source_line));
+        if (next_source_line == NULL) {
+            return false;
+        }
+        list->source_line = next_source_line;
         list->capacity = capacity;
     }
 
     item = &list->items[list->count];
     {
         size_t leading = 0U;
+        size_t token_line = source_line;
         while (leading < size &&
                isspace((unsigned char)text[leading]) != 0) {
+            if (text[leading] == '\n') {
+                ++token_line;
+            }
             ++leading;
         }
         list->leading_space[list->count] = leading != 0U;
+        list->source_line[list->count] = token_line;
     }
     minipp_string_init(item);
     if (!minipp_append_normalized_argument(item, text, size) ||
@@ -176,11 +191,14 @@ static bool minipp_arg_list_append(MiniPpArgList *list,
 static bool minipp_parse_invocation_args(MiniPpState *state,
                                          const char *text,
                                          size_t open_index,
+                                         size_t open_line,
                                          size_t expected_count,
                                          MiniPpArgList *args,
                                          size_t *after_index) {
     size_t index = open_index + 1U;
     size_t segment_start = index;
+    size_t segment_line = open_line;
+    size_t current_line = open_line;
     size_t paren_depth = 1U;
 
     memset(args, 0, sizeof(*args));
@@ -191,6 +209,9 @@ static bool minipp_parse_invocation_args(MiniPpState *state,
     }
 
     while (text[index] != '\0') {
+        if (text[index] == '\n') {
+            ++current_line;
+        }
         if (text[index] == '"' || text[index] == '\'') {
             char quote = text[index++];
             while (text[index] != '\0') {
@@ -216,7 +237,8 @@ static bool minipp_parse_invocation_args(MiniPpState *state,
             if (paren_depth == 0U) {
                 if (!minipp_arg_list_append(args,
                                             text + segment_start,
-                                            index - segment_start)) {
+                                            index - segment_start,
+                                            segment_line)) {
                     fprintf(state->diagnostics, "minic-cpp: out-of-memory\n");
                     minipp_arg_list_destroy(args);
                     return false;
@@ -230,13 +252,15 @@ static bool minipp_parse_invocation_args(MiniPpState *state,
         if (text[index] == ',' && paren_depth == 1U) {
             if (!minipp_arg_list_append(args,
                                         text + segment_start,
-                                        index - segment_start)) {
+                                        index - segment_start,
+                                        segment_line)) {
                 fprintf(state->diagnostics, "minic-cpp: out-of-memory\n");
                 minipp_arg_list_destroy(args);
                 return false;
             }
             ++index;
             segment_start = index;
+            segment_line = current_line;
             continue;
         }
 
@@ -299,7 +323,8 @@ static bool minipp_build_logical_args(MiniPpState *state,
         for (index = 0U; index < raw_args->count; ++index) {
             if (!minipp_arg_list_append(logical_args,
                                         raw_args->items[index].data,
-                                        raw_args->items[index].size)) {
+                                        raw_args->items[index].size,
+                                        raw_args->source_line[index])) {
                 fprintf(state->diagnostics, "minic-cpp: out-of-memory\n");
                 minipp_arg_list_destroy(logical_args);
                 return false;
@@ -328,7 +353,8 @@ static bool minipp_build_logical_args(MiniPpState *state,
     for (index = 0U; index < fixed_count; ++index) {
         if (!minipp_arg_list_append(logical_args,
                                     raw_args->items[index].data,
-                                    raw_args->items[index].size)) {
+                                    raw_args->items[index].size,
+                                    raw_args->source_line[index])) {
             fprintf(state->diagnostics, "minic-cpp: out-of-memory\n");
             minipp_arg_list_destroy(logical_args);
             return false;
@@ -356,9 +382,15 @@ static bool minipp_build_logical_args(MiniPpState *state,
         goto oom;
     }
     --variadic.size;
-    if (!minipp_arg_list_append(logical_args,
-                                variadic.data,
-                                variadic.size)) {
+    if (!minipp_arg_list_append(
+            logical_args,
+            variadic.data,
+            variadic.size,
+            fixed_count < raw_args->count
+                ? raw_args->source_line[fixed_count]
+                : (fixed_count != 0U
+                       ? raw_args->source_line[fixed_count - 1U]
+                       : 1U))) {
         goto oom;
     }
     minipp_string_destroy(&variadic);
@@ -958,6 +990,7 @@ static bool minipp_expand_function_macro(MiniPpState *state,
                                          size_t source_line,
                                          bool *invoked) {
     size_t cursor = *index;
+    size_t open_line = source_line;
     MiniPpArgList parsed_args;
     MiniPpArgList raw_args;
     MiniPpArgList expanded_args;
@@ -970,6 +1003,9 @@ static bool minipp_expand_function_macro(MiniPpState *state,
 
     *invoked = false;
     while (isspace((unsigned char)text[cursor]) != 0) {
+        if (text[cursor] == '\n') {
+            ++open_line;
+        }
         ++cursor;
     }
     if (text[cursor] != '(') {
@@ -980,6 +1016,7 @@ static bool minipp_expand_function_macro(MiniPpState *state,
     if (!minipp_parse_invocation_args(state,
                                       text,
                                       cursor,
+                                      open_line,
                                       macro->param_count,
                                       &parsed_args,
                                       index)) {
@@ -1014,7 +1051,7 @@ static bool minipp_expand_function_macro(MiniPpState *state,
                                               disabled,
                                               disabled_count,
                                               depth + 1U,
-                                              source_line)) {
+                                              raw_args.source_line[arg_index])) {
                 minipp_arg_list_destroy(&raw_args);
                 expanded_args.count = arg_index + 1U;
                 minipp_arg_list_destroy(&expanded_args);
