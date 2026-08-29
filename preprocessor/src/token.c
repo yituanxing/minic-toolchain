@@ -524,6 +524,90 @@ static bool minipp_append_stringized_arg(MiniPpString *out,
     return minipp_string_append_char(out, '"');
 }
 
+static bool minipp_arg_ends_pp_number(const MiniPpString *arg) {
+    size_t index = 0U;
+    bool last_pp_number = false;
+
+    while (index < arg->size) {
+        unsigned char ch = (unsigned char)arg->data[index];
+
+        if (isspace(ch) != 0) {
+            ++index;
+            continue;
+        }
+
+        if (isdigit(ch) != 0 ||
+            (arg->data[index] == '.' &&
+             index + 1U < arg->size &&
+             isdigit((unsigned char)arg->data[index + 1U]) != 0)) {
+            char previous = '\0';
+
+            last_pp_number = true;
+            ++index;
+            while (index < arg->size) {
+                char value = arg->data[index];
+                unsigned char uch = (unsigned char)value;
+
+                if (isalnum(uch) != 0 || value == '_' ||
+                    value == '.' || value == '\'') {
+                    previous = value;
+                    ++index;
+                    continue;
+                }
+                if ((value == '+' || value == '-') &&
+                    (previous == 'e' || previous == 'E' ||
+                     previous == 'p' || previous == 'P')) {
+                    previous = value;
+                    ++index;
+                    continue;
+                }
+                break;
+            }
+            continue;
+        }
+
+        last_pp_number = false;
+        if (minipp_is_identifier_start(arg->data[index])) {
+            ++index;
+            while (index < arg->size &&
+                   minipp_is_identifier_continue(arg->data[index])) {
+                ++index;
+            }
+            continue;
+        }
+
+        if (arg->data[index] == '"' || arg->data[index] == '\'') {
+            char quote = arg->data[index++];
+            while (index < arg->size) {
+                char value = arg->data[index++];
+                if (value == '\\' && index < arg->size) {
+                    ++index;
+                    continue;
+                }
+                if (value == quote) {
+                    break;
+                }
+            }
+            continue;
+        }
+
+        ++index;
+    }
+
+    return last_pp_number;
+}
+
+static bool minipp_needs_post_arg_separator(const MiniPpString *arg,
+                                            const char *replacement,
+                                            size_t next_index) {
+    char next = replacement[next_index];
+
+    if (!minipp_arg_ends_pp_number(arg)) {
+        return false;
+    }
+    return next == '+' || next == '-' || next == '.';
+}
+
 static bool minipp_substitute_function_macro(MiniPpState *state,
                                              const MiniPpMacro *macro,
                                              const MiniPpArgList *raw_args,
@@ -679,14 +763,21 @@ static bool minipp_substitute_function_macro(MiniPpState *state,
                                          macro->replacement + start,
                                          length,
                                          &param_index)) {
+                bool paste_operand =
+                    minipp_param_is_paste_operand(macro, start, index);
                 const MiniPpArgList *source_args =
-                    minipp_param_is_paste_operand(macro, start, index)
-                        ? raw_args
-                        : expanded_args;
+                    paste_operand ? raw_args : expanded_args;
                 const MiniPpString *arg = &source_args->items[param_index];
                 if (!minipp_string_append_n(substituted,
                                             arg->data == NULL ? "" : arg->data,
                                             arg->size)) {
+                    goto oom;
+                }
+                if (!paste_operand &&
+                    minipp_needs_post_arg_separator(arg,
+                                                    macro->replacement,
+                                                    index) &&
+                    !minipp_string_append_char(substituted, ' ')) {
                     goto oom;
                 }
             } else if (!minipp_string_append_n(substituted,
