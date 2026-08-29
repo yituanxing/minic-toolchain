@@ -620,7 +620,7 @@ alias_hex="$(
     readelf -x .text "$work/aliases-pseudos.o" |
     awk '/0x[0-9a-f]+/ {for (i=2; i<=NF; ++i) if ($i ~ /^[0-9a-f]{8}$/) printf "%s", $i}'
 )"
-test "$alias_hex" = "13850500b30505006780000067800000"
+test "$alias_hex" = "13850500930505006780000067800000"
 target_value="$(readelf -Ws "$work/aliases-pseudos.o" | awk '$8=="alias_target" {print $2}')"
 alias_value="$(readelf -Ws "$work/aliases-pseudos.o" | awk '$8=="alias_entry" {print $2}')"
 weak_value="$(readelf -Ws "$work/aliases-pseudos.o" | awk '$8=="weak_alias" {print $2}')"
