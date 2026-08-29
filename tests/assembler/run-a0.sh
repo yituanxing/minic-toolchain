@@ -421,4 +421,22 @@ alternative_org_hex="$(
 )"
 test "$alternative_org_hex" = "130000006780000013000000"
 
-echo "MINIAS_A0=PASS objects=19 format=ELF64-RISCV-ET_REL relocations=15 strings=2 pseudos=14 previous=3 subsection=2 numeric_labels=18 isa_next=13 csr_amo=4 section_stack=1 org=3 local_difference=1 lr_sc=2 inline_labels=2 branch_pseudos=8 extern=1 symbol_minus_dot=4 symbol_difference=1 absolute32=1 jal=2 high_numeric_labels=2 conditional=1"
+cat >"$work/sfence-vma.s" <<'EOF'
+.text
+.globl sfence_vma_family
+.type sfence_vma_family, @function
+sfence_vma_family:
+  sfence.vma
+  sfence.vma a0
+  sfence.vma a0, a1
+  ret
+.size sfence_vma_family, .-sfence_vma_family
+EOF
+"$MINIAS" -o "$work/sfence-vma.o" "$work/sfence-vma.s"
+sfence_hex="$(
+    readelf -x .text "$work/sfence-vma.o" |
+    awk '/0x[0-9a-f]+/ {for (i=2; i<=NF; ++i) if ($i ~ /^[0-9a-f]+$/ && length($i) <= 8 && length($i) % 2 == 0) printf "%s", $i}'
+)"
+test "$sfence_hex" = "73000012730005127300b51267800000"
+
+echo "MINIAS_A0=PASS objects=20 format=ELF64-RISCV-ET_REL relocations=15 strings=2 pseudos=14 previous=3 subsection=2 numeric_labels=18 isa_next=13 csr_amo=4 sfence_vma=3 section_stack=1 org=3 local_difference=1 lr_sc=2 inline_labels=2 branch_pseudos=8 extern=1 symbol_minus_dot=4 symbol_difference=1 absolute32=1 jal=2 high_numeric_labels=2 conditional=1"
