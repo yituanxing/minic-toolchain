@@ -1,0 +1,30 @@
+name: MiniPP A0 Exact
+
+on:
+  push:
+    branches:
+      - 'toolchain/minipp-*'
+    paths:
+      - 'preprocessor/**'
+      - 'tools/minic-cpp/**'
+      - 'tests/preprocessor/**'
+      - 'Makefile'
+      - '.github/workflows/minipp-a0.yml'
+  workflow_dispatch:
+
+jobs:
+  exact-a0:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build independent MiniPP
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/minipp-a0 all
+
+      - name: Compare exact preprocessed output with GCC
+        run: |
+          set -Eeuo pipefail
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/minipp-a0 check-minipp-a0
