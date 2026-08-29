@@ -1450,15 +1450,18 @@ static bool handle_org(MiniAs *as, const char *args, size_t line) {
 }
 
 static bool handle_align(MiniAs *as, const char *op, char *args, size_t line) {
+    int64_t evaluated;
     uint64_t value;
     uint64_t pad;
     uint64_t current;
     uint64_t alignment;
 
-    if (!parse_u64(minias_trim(args), &value)) {
+    if (!evaluate_absolute_expression(as, minias_trim(args), &evaluated) ||
+        evaluated < 0) {
         minias_set_error(as, "unsupported-expression:%s:line=%zu", op, line);
         return false;
     }
+    value = (uint64_t)evaluated;
     if (strcmp(op, ".p2align") == 0 || strcmp(op, ".align") == 0) {
         if (value >= 63U) {
             minias_set_error(as, "unsupported-alignment:%s:line=%zu", args, line);
