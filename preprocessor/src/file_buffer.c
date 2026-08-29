@@ -164,6 +164,7 @@ bool minipp_splice_backslash_newlines(const MiniPpString *input,
 bool minipp_render_gcc_p_output(const MiniPpString *input,
                                 MiniPpString *output) {
     size_t index = 0U;
+    size_t leading_spaces = 0U;
     bool line_start = true;
     bool pending_space = false;
 
@@ -173,6 +174,7 @@ bool minipp_render_gcc_p_output(const MiniPpString *input,
         char value = input->data[index];
 
         if (value == '\n') {
+            leading_spaces = 0U;
             pending_space = false;
             if (!minipp_string_append_char(output, '\n')) {
                 goto oom;
@@ -185,15 +187,21 @@ bool minipp_render_gcc_p_output(const MiniPpString *input,
         if (value == ' ' || value == '\t' ||
             value == '\v' || value == '\f') {
             if (line_start) {
-                if (!minipp_string_append_char(output, ' ')) {
-                    goto oom;
-                }
+                ++leading_spaces;
             } else {
                 pending_space = true;
             }
             ++index;
             continue;
         }
+
+        while (line_start && leading_spaces != 0U) {
+            if (!minipp_string_append_char(output, ' ')) {
+                goto oom;
+            }
+            --leading_spaces;
+        }
+        line_start = false;
 
         if (pending_space) {
             if (!minipp_string_append_char(output, ' ')) {
@@ -208,7 +216,6 @@ bool minipp_render_gcc_p_output(const MiniPpString *input,
             if (!minipp_string_append_char(output, value)) {
                 goto oom;
             }
-            line_start = false;
             ++index;
             while (index < input->size) {
                 value = input->data[index];
@@ -234,7 +241,6 @@ bool minipp_render_gcc_p_output(const MiniPpString *input,
         if (!minipp_string_append_char(output, value)) {
             goto oom;
         }
-        line_start = false;
         ++index;
     }
 
