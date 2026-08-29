@@ -1827,6 +1827,66 @@ static bool parse_symbol_minus_dot(const char *text, MiniAsSymbolExpr *expr) {
     return ok;
 }
 
+static bool parse_symbol_minus_dot_divisor(const char *text,
+                                           MiniAsSymbolExpr *expr,
+                                           uint64_t *divisor) {
+    char *copy;
+    char *normalized;
+    char *slash = NULL;
+    int depth = 0;
+    char quote = '\0';
+    char *p;
+    uint64_t value;
+    bool ok;
+
+    if (text == NULL || expr == NULL || divisor == NULL) {
+        return false;
+    }
+    copy = minias_strdup(text);
+    if (copy == NULL) {
+        return false;
+    }
+    normalized = minias_trim(copy);
+    for (p = normalized; *p != '\0'; ++p) {
+        if (quote != '\0') {
+            if (*p == '\\' && p[1] != '\0') {
+                ++p;
+            } else if (*p == quote) {
+                quote = '\0';
+            }
+            continue;
+        }
+        if (*p == '\'' || *p == '"') {
+            quote = *p;
+        } else if (*p == '(') {
+            ++depth;
+        } else if (*p == ')') {
+            if (depth > 0) {
+                --depth;
+            }
+        } else if (*p == '/' && depth == 0) {
+            slash = p;
+            break;
+        }
+    }
+    if (slash == NULL) {
+        free(copy);
+        return false;
+    }
+    *slash = '\0';
+    if (!parse_u64(minias_trim(slash + 1), &value) || value == 0U) {
+        free(copy);
+        return false;
+    }
+    normalized = strip_outer_parens(minias_trim(normalized));
+    ok = parse_symbol_minus_dot(normalized, expr);
+    if (ok) {
+        *divisor = value;
+    }
+    free(copy);
+    return ok;
+}
+
 static bool parse_symbol_difference(const char *text,
                                     MiniAsSymbolExpr *lhs_expr,
                                     MiniAsSymbolExpr *rhs_expr) {
@@ -1964,11 +2024,15 @@ static bool add_data_stmt(MiniAs *as, const char *op, char *args, size_t line) {
                 MiniAsSymbolExpr expr;
                 const char *trimmed = minias_trim(cursor);
                 MiniAsSymbolExpr rhs_expr;
+                uint64_t divisor;
                 bool supported =
                     ((width == 2U || width == 4U || width == 8U) &&
                      minias_parse_symbol_addend(trimmed, &expr)) ||
                     ((width == 2U || width == 4U || width == 8U) &&
                      (parse_symbol_minus_dot(trimmed, &expr) ||
+                      parse_symbol_minus_dot_divisor(trimmed,
+                                                     &expr,
+                                                     &divisor) ||
                       parse_symbol_difference(trimmed, &expr, &rhs_expr)));
 
                 if (!supported) {
@@ -2078,6 +2142,43 @@ static bool emit_symbol_minus_dot(MiniAs *as,
                                      anchor_name,
                                      0);
     }
+}
+
+static bool emit_symbol_minus_dot_divided(
+    MiniAs *as,
+    const MiniAsStmt *stmt,
+    unsigned int width,
+    uint64_t relocation_offset,
+    const MiniAsSymbolExpr *expr,
+    uint64_t divisor) {
+    MiniAsSymbol *target = minias_get_symbol(as, expr->name, false);
+    int64_t difference;
+    int64_t quotient;
+    uint64_t bits;
+    unsigned char bytes[8];
+    unsigned int i;
+
+    if (divisor == 0U || divisor > (uint64_t)INT64_MAX ||
+        target == NULL || !target->defined ||
+        target->section != stmt->section ||
+        target->subsection != stmt->subsection ||
+        target->value > (uint64_t)INT64_MAX ||
+        relocation_offset > (uint64_t)INT64_MAX) {
+        minias_set_error(as,
+                         "unsupported-divided-symbol-difference:%s/%llu:line=%zu",
+                         expr->name,
+                         (unsigned long long)divisor,
+                         stmt->line);
+        return false;
+    }
+    difference = (int64_t)target->value + expr->addend -
+                 (int64_t)relocation_offset;
+    quotient = difference / (int64_t)divisor;
+    bits = (uint64_t)quotient;
+    for (i = 0U; i < width; ++i) {
+        bytes[i] = (unsigned char)((bits >> (i * 8U)) & 0xffU);
+    }
+    return minias_section_append(as, stmt->section, bytes, width);
 }
 
 static bool emit_symbol_difference(MiniAs *as,
@@ -2229,6 +2330,7 @@ static bool emit_data_stmt(MiniAs *as, const MiniAsStmt *stmt) {
 
             {
                 MiniAsSymbolExpr rhs_expr;
+                uint64_t divisor;
                 if ((width == 2U || width == 4U || width == 8U) &&
                     parse_symbol_minus_dot(trimmed, &expr)) {
                     if (!emit_symbol_minus_dot(as,
@@ -2236,6 +2338,19 @@ static bool emit_data_stmt(MiniAs *as, const MiniAsStmt *stmt) {
                                                width,
                                                relocation_offset,
                                                &expr)) {
+                        free(copy);
+                        return false;
+                    }
+                } else if ((width == 2U || width == 4U || width == 8U) &&
+                           parse_symbol_minus_dot_divisor(trimmed,
+                                                          &expr,
+                                                          &divisor)) {
+                    if (!emit_symbol_minus_dot_divided(as,
+                                                       stmt,
+                                                       width,
+                                                       relocation_offset,
+                                                       &expr,
+                                                       divisor)) {
                         free(copy);
                         return false;
                     }
