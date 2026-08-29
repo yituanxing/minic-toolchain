@@ -27,11 +27,18 @@ def parse_args() -> argparse.Namespace:
 
 
 def target_for(rel: str, native35: bool) -> tuple[str, str]:
-    if "compat_vdso/" in rel:
-        return "rv32imafdc_zicsr_zifencei", "ilp32"
     if native35:
+        if "compat_vdso/" in rel:
+            return "rv32imafdc_zicsr_zifencei", "ilp32"
         return "rv64imafdc_zicsr_zifencei_zihintpause", "lp64"
-    return "rv64imac_zicsr_zifencei_zihintpause", "lp64"
+
+    # MiniC-generated assembly does not intentionally select compressed
+    # encodings. Compare it in a canonical uncompressed ISA so GNU as cannot
+    # turn equivalent 32-bit instructions into RVC forms and cascade every
+    # subsequent symbol/relocation offset.
+    if "compat_vdso/" in rel:
+        return "rv32imafd_zicsr_zifencei", "ilp32"
+    return "rv64ima_zicsr_zifencei_zihintpause", "lp64"
 
 
 def first_line(text: str) -> str:
@@ -90,7 +97,7 @@ def main() -> int:
                 f"-mabi={mabi}",
                 "-mcmodel=medany",
                 "-mstrict-align",
-                "-Wa,-mno-arch-attr",
+                "-Wa,-mno-relax,-mno-arch-attr",
                 "-x", "assembler", "-c",
                 str(inp), "-o", str(ref),
             ],
