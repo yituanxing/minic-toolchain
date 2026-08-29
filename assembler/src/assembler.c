@@ -2785,9 +2785,14 @@ static bool force_long_branch_for_line(const MiniAs *as, size_t line) {
     return false;
 }
 
-static bool find_out_of_range_branch(MiniAs *as, size_t *line_out) {
+static bool collect_out_of_range_branches(MiniAs *as,
+                                          size_t **lines,
+                                          size_t *count,
+                                          size_t *capacity,
+                                          bool *added) {
     size_t i;
 
+    *added = false;
     for (i = 0U; i < as->stmt_count; ++i) {
         MiniAsStmt *stmt = &as->stmts[i];
         const char *comma;
@@ -2795,6 +2800,8 @@ static bool find_out_of_range_branch(MiniAs *as, size_t *line_out) {
         MiniAsSymbolExpr expr;
         MiniAsSymbol *symbol;
         int64_t displacement;
+        size_t j;
+        bool known = false;
 
         if (stmt->kind != MINIAS_STMT_INSN || stmt->size != 4U ||
             !is_conditional_branch_op(stmt->op)) {
@@ -2820,13 +2827,30 @@ static bool find_out_of_range_branch(MiniAs *as, size_t *line_out) {
         }
         displacement = (int64_t)symbol->value + expr.addend -
                        (int64_t)stmt->offset;
-        if ((displacement & 1) == 0 &&
-            (displacement < -4096 || displacement > 4094)) {
-            *line_out = stmt->line;
-            return true;
+        if ((displacement & 1) != 0 ||
+            (displacement >= -4096 && displacement <= 4094)) {
+            continue;
         }
+        for (j = 0U; j < *count; ++j) {
+            if ((*lines)[j] == stmt->line) {
+                known = true;
+                break;
+            }
+        }
+        if (known) {
+            continue;
+        }
+        if (!grow_array((void **)lines,
+                        capacity,
+                        sizeof(**lines),
+                        *count + 1U)) {
+            minias_set_error(as, "out-of-memory:branch-relaxation");
+            return false;
+        }
+        (*lines)[(*count)++] = stmt->line;
+        *added = true;
     }
-    return false;
+    return true;
 }
 
 static MiniAsMacro *find_macro(MiniAs *as, const char *name);
@@ -4580,38 +4604,24 @@ int minias_assemble_file_class(const char *input_path,
 
     for (;;) {
         MiniAs as;
-        size_t relax_line = 0U;
         bool parsed;
+        bool added_long_branches = false;
 
         minias_init(&as);
         as.forced_long_branch_lines = long_branch_lines;
         as.forced_long_branch_count = long_branch_count;
         parsed = as.error[0] == '\0' && minias_parse_file(&as, input_path);
-        if (parsed && find_out_of_range_branch(&as, &relax_line)) {
-            size_t i;
-            bool already_forced = false;
-
-            for (i = 0U; i < long_branch_count; ++i) {
-                if (long_branch_lines[i] == relax_line) {
-                    already_forced = true;
-                    break;
-                }
-            }
-            if (already_forced) {
-                minias_set_error(&as,
-                                 "branch-relaxation-stalled:line=%zu",
-                                 relax_line);
-            } else if (!grow_array((void **)&long_branch_lines,
-                                   &long_branch_capacity,
-                                   sizeof(*long_branch_lines),
-                                   long_branch_count + 1U)) {
-                minias_set_error(&as,
-                                 "out-of-memory:branch-relaxation");
-            } else {
-                long_branch_lines[long_branch_count++] = relax_line;
-                minias_destroy(&as);
-                continue;
-            }
+        if (parsed &&
+            !collect_out_of_range_branches(&as,
+                                           &long_branch_lines,
+                                           &long_branch_count,
+                                           &long_branch_capacity,
+                                           &added_long_branches)) {
+            parsed = false;
+        }
+        if (parsed && added_long_branches) {
+            minias_destroy(&as);
+            continue;
         }
         if (parsed && as.error[0] == '\0' &&
             minias_emit_sections(&as) &&
