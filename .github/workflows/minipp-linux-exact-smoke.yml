@@ -71,7 +71,7 @@ jobs:
           : >"$trace"
 
           export REAL_CC=riscv64-linux-gnu-gcc
-          export REFERENCE_CPP=gcc
+          export REFERENCE_CPP=riscv64-linux-gnu-gcc
           export MINIPP="$GITHUB_WORKSPACE/build/minipp-linux/bin/minic-cpp"
           export MINIPP_LINUX_TRACE="$trace"
           export MINIPP_LINUX_WORK="$probe"
@@ -86,7 +86,7 @@ jobs:
           fail=$(grep -c ' status=MINIPP_FAIL' "$trace" || true)
           diff=$(grep -c ' status=DIFF' "$trace" || true)
           test "$selected" -eq 2
-          printf 'MINIPP_LINUX_EXACT_SMOKE selected=%s exact=%s minipp_fail=%s diff=%s mode=kbuild-undef\n' \
+          printf 'MINIPP_LINUX_EXACT_SMOKE selected=%s exact=%s minipp_fail=%s diff=%s mode=kbuild-frozen-rv64-predefines\n' \
             "$selected" "$exact" "$fail" "$diff"
 
       - name: Preserve exact-smoke evidence
