@@ -470,7 +470,10 @@ static bool minipp_param_needs_prescan(const MiniPpMacro *macro,
                     macro->replacement[left - 1U] == '\f')) {
                 --left;
             }
-            if (left != 0U && macro->replacement[left - 1U] == '#') {
+            if (left != 0U &&
+                macro->replacement[left - 1U] == '#' &&
+                !(left >= 2U &&
+                  macro->replacement[left - 2U] == '#')) {
                 continue;
             }
 
