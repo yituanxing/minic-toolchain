@@ -169,6 +169,88 @@ static bool finalize_subsection_layout(MiniAs *as) {
     return true;
 }
 
+static bool resolve_symbol_aliases(MiniAs *as) {
+    size_t remaining = 0U;
+    size_t i;
+
+    for (i = 0U; i < as->symbol_count; ++i) {
+        if (as->symbols[i].alias_pending) {
+            ++remaining;
+        }
+    }
+    while (remaining != 0U) {
+        bool progress = false;
+
+        for (i = 0U; i < as->symbol_count; ++i) {
+            MiniAsSymbol *alias = &as->symbols[i];
+            MiniAsSymbol *target;
+            uint64_t value;
+
+            if (!alias->alias_pending) {
+                continue;
+            }
+            if (alias->alias_target_index >= as->symbol_count) {
+                minias_set_error(as, "internal:set-target-index:%s", alias->name);
+                return false;
+            }
+            target = &as->symbols[alias->alias_target_index];
+            if (!target->defined || target->alias_pending) {
+                continue;
+            }
+            value = target->value;
+            if (alias->alias_addend >= 0) {
+                uint64_t addend = (uint64_t)alias->alias_addend;
+                if (addend > UINT64_MAX - value) {
+                    minias_set_error(as,
+                                     "set-value-overflow:%s:line=%zu",
+                                     alias->name,
+                                     alias->alias_line);
+                    return false;
+                }
+                value += addend;
+            } else {
+                uint64_t magnitude =
+                    (uint64_t)(-(alias->alias_addend + 1)) + 1U;
+                if (magnitude > value) {
+                    minias_set_error(as,
+                                     "set-value-underflow:%s:line=%zu",
+                                     alias->name,
+                                     alias->alias_line);
+                    return false;
+                }
+                value -= magnitude;
+            }
+            alias->defined = true;
+            alias->section = target->section;
+            alias->subsection = target->subsection;
+            alias->value = value;
+            alias->type = target->type;
+            if (alias->size == 0U) {
+                alias->size = target->size;
+            }
+            alias->alias_pending = false;
+            --remaining;
+            progress = true;
+        }
+        if (!progress) {
+            for (i = 0U; i < as->symbol_count; ++i) {
+                MiniAsSymbol *alias = &as->symbols[i];
+                if (alias->alias_pending) {
+                    MiniAsSymbol *target =
+                        &as->symbols[alias->alias_target_index];
+                    minias_set_error(as,
+                                     "unresolved-set-target:%s:%s:line=%zu",
+                                     alias->name,
+                                     target->name,
+                                     alias->alias_line);
+                    return false;
+                }
+            }
+        }
+    }
+    return true;
+}
+
 char *minias_strdup(const char *text) {
     size_t n = strlen(text) + 1U;
     char *copy = malloc(n);
@@ -1251,8 +1333,8 @@ static bool parse_equ(MiniAs *as, char *args, size_t line) {
     if (symbol == NULL) {
         return false;
     }
-    if (symbol->defined) {
-        if (symbol->section == MINIAS_SECTION_ABS &&
+    if (symbol->defined || symbol->alias_pending) {
+        if (symbol->defined && symbol->section == MINIAS_SECTION_ABS &&
             symbol->value == (uint64_t)value) {
             return true;
         }
@@ -1273,11 +1355,7 @@ static bool parse_set(MiniAs *as, char *args, size_t line) {
     MiniAsSymbolExpr expr;
     MiniAsSymbol *target;
     MiniAsSymbol *alias;
-    int target_section;
-    uint32_t target_subsection;
-    uint64_t target_value;
-    uint64_t target_size;
-    uint8_t target_type;
+    size_t target_index;
 
     if (comma == NULL) {
         minias_set_error(as, "bad-directive:.set:line=%zu", line);
@@ -1295,64 +1373,24 @@ static bool parse_set(MiniAs *as, char *args, size_t line) {
         return false;
     }
 
-    target = minias_get_symbol(as, expr.name, false);
-    if (target == NULL || !target->defined) {
-        minias_set_error(as,
-                         "unsupported-expression:.set:%s:line=%zu",
-                         expression,
-                         line);
+    target = minias_get_symbol(as, expr.name, true);
+    if (target == NULL) {
         return false;
     }
-    target_section = target->section;
-    target_subsection = target->subsection;
-    target_value = target->value;
-    target_size = target->size;
-    target_type = target->type;
-
-    if (expr.addend >= 0) {
-        uint64_t addend = (uint64_t)expr.addend;
-        if (addend > UINT64_MAX - target_value) {
-            minias_set_error(as,
-                             "unsupported-expression:.set:%s:line=%zu",
-                             expression,
-                             line);
-            return false;
-        }
-        target_value += addend;
-    } else {
-        uint64_t magnitude = (uint64_t)(-(expr.addend + 1)) + 1U;
-        if (magnitude > target_value) {
-            minias_set_error(as,
-                             "unsupported-expression:.set:%s:line=%zu",
-                             expression,
-                             line);
-            return false;
-        }
-        target_value -= magnitude;
-    }
+    target_index = (size_t)(target - as->symbols);
 
     alias = minias_get_symbol(as, name, true);
     if (alias == NULL) {
         return false;
     }
-    if (alias->defined) {
-        if (alias->section == target_section &&
-            alias->subsection == target_subsection &&
-            alias->value == target_value) {
-            return true;
-        }
+    if (alias->defined || alias->alias_pending) {
         minias_set_error(as, "duplicate-symbol:%s:line=%zu", name, line);
         return false;
     }
-
-    alias->defined = true;
-    alias->section = target_section;
-    alias->subsection = target_subsection;
-    alias->value = target_value;
-    alias->type = target_type;
-    if (alias->size == 0U) {
-        alias->size = target_size;
-    }
+    alias->alias_pending = true;
+    alias->alias_target_index = target_index;
+    alias->alias_addend = expr.addend;
+    alias->alias_line = line;
     return true;
 }
 
@@ -2274,7 +2312,7 @@ static bool define_label(MiniAs *as, char *label, size_t line) {
     if (symbol == NULL) {
         return false;
     }
-    if (symbol->defined) {
+    if (symbol->defined || symbol->alias_pending) {
         minias_set_error(as, "duplicate-symbol:%s:line=%zu", symbol->name, line);
         return false;
     }
@@ -3065,7 +3103,10 @@ bool minias_parse_file(MiniAs *as, const char *path) {
         return false;
     }
     fclose(file);
-    return finalize_subsection_layout(as);
+    if (!finalize_subsection_layout(as)) {
+        return false;
+    }
+    return resolve_symbol_aliases(as);
 }
 
 typedef struct MiniAsEmitRef {

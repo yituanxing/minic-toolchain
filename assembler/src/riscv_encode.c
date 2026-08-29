@@ -90,23 +90,76 @@ static bool decode_vector_unit_stride(const char *op,
     return true;
 }
 
+static bool checked_mul_i64(int64_t lhs, int64_t rhs, int64_t *out) {
+    if (lhs == 0 || rhs == 0) {
+        *out = 0;
+        return true;
+    }
+    if (lhs == -1 && rhs == INT64_MIN) {
+        return false;
+    }
+    if (rhs == -1 && lhs == INT64_MIN) {
+        return false;
+    }
+    if (lhs > 0) {
+        if ((rhs > 0 && lhs > INT64_MAX / rhs) ||
+            (rhs < 0 && rhs < INT64_MIN / lhs)) {
+            return false;
+        }
+    } else {
+        if ((rhs > 0 && lhs < INT64_MIN / rhs) ||
+            (rhs < 0 && lhs < INT64_MAX / rhs)) {
+            return false;
+        }
+    }
+    *out = lhs * rhs;
+    return true;
+}
+
 static bool parse_i64(const char *text, int64_t *value) {
+    const char *cursor = text;
     char *end = NULL;
     long long parsed;
+    int64_t result;
 
+    while (*cursor == ' ' || *cursor == '\t') {
+        ++cursor;
+    }
     errno = 0;
-    parsed = strtoll(text, &end, 0);
-    if (errno != 0 || end == text) {
+    parsed = strtoll(cursor, &end, 0);
+    if (errno != 0 || end == cursor) {
         return false;
     }
-    while (*end == ' ' || *end == '\t') {
-        ++end;
+    result = (int64_t)parsed;
+    cursor = end;
+    for (;;) {
+        int64_t factor;
+
+        while (*cursor == ' ' || *cursor == '\t') {
+            ++cursor;
+        }
+        if (*cursor == '\0') {
+            *value = result;
+            return true;
+        }
+        if (*cursor != '*') {
+            return false;
+        }
+        ++cursor;
+        while (*cursor == ' ' || *cursor == '\t') {
+            ++cursor;
+        }
+        errno = 0;
+        parsed = strtoll(cursor, &end, 0);
+        if (errno != 0 || end == cursor) {
+            return false;
+        }
+        factor = (int64_t)parsed;
+        if (!checked_mul_i64(result, factor, &result)) {
+            return false;
+        }
+        cursor = end;
     }
-    if (*end != '\0') {
-        return false;
-    }
-    *value = (int64_t)parsed;
-    return true;
 }
 
 static bool parse_li_bits(const char *text,
@@ -1397,8 +1450,27 @@ bool minias_riscv_encode(MiniAs *as, const MiniAsStmt *stmt) {
         uint32_t funct7 = 0U;
 
         if (count != 3U || !require_reg(as, stmt, operands[0], &rd) ||
-            !require_reg(as, stmt, operands[1], &rs1) ||
-            !require_reg(as, stmt, operands[2], &rs2)) {
+            !require_reg(as, stmt, operands[1], &rs1)) {
+            return false;
+        }
+        if ((strcmp(stmt->op, "sll") == 0 || strcmp(stmt->op, "srl") == 0 ||
+             strcmp(stmt->op, "sra") == 0) &&
+            parse_i64(operands[2], &immediate)) {
+            if (immediate < 0 || immediate > 63) {
+                minias_set_error(as, "shift-range:%s:line=%zu", stmt->op, stmt->line);
+                return false;
+            }
+            value = enc_i(0x13U,
+                          rd,
+                          strcmp(stmt->op, "sll") == 0 ? 1U : 5U,
+                          rs1,
+                          immediate);
+            if (strcmp(stmt->op, "sra") == 0) {
+                value |= 0x40000000U;
+            }
+            return append_u32(as, stmt->section, value);
+        }
+        if (!require_reg(as, stmt, operands[2], &rs2)) {
             return false;
         }
         if (strcmp(stmt->op, "sub") == 0) {

@@ -74,6 +74,10 @@ typedef struct MiniAsSymbol {
     uint8_t visibility;
     uint32_t subsection;
     bool defined;
+    bool alias_pending;
+    size_t alias_target_index;
+    int64_t alias_addend;
+    size_t alias_line;
 } MiniAsSymbol;
 
 typedef enum MiniAsStmtKind {

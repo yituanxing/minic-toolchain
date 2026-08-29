@@ -606,20 +606,44 @@ alias_target:
 .weak weak_alias
 .type weak_alias, @function
 .set weak_alias, alias_target
+.globl forward_alias
+.type forward_alias, @function
+.set forward_alias, forward_target
+.type forward_target, @function
+forward_target:
+  ret
+.size forward_target, .-forward_target
 EOF
 "$MINIAS" -o "$work/aliases-pseudos.o" "$work/aliases-pseudos.s"
 alias_hex="$(
     readelf -x .text "$work/aliases-pseudos.o" |
     awk '/0x[0-9a-f]+/ {for (i=2; i<=NF; ++i) if ($i ~ /^[0-9a-f]{8}$/) printf "%s", $i}'
 )"
-test "$alias_hex" = "13850500b305050067800000"
+test "$alias_hex" = "13850500b30505006780000067800000"
 target_value="$(readelf -Ws "$work/aliases-pseudos.o" | awk '$8=="alias_target" {print $2}')"
 alias_value="$(readelf -Ws "$work/aliases-pseudos.o" | awk '$8=="alias_entry" {print $2}')"
 weak_value="$(readelf -Ws "$work/aliases-pseudos.o" | awk '$8=="weak_alias" {print $2}')"
+forward_value="$(readelf -Ws "$work/aliases-pseudos.o" | awk '$8=="forward_alias" {print $2}')"
+forward_target_value="$(readelf -Ws "$work/aliases-pseudos.o" | awk '$8=="forward_target" {print $2}')"
 test "$target_value" = "$alias_value"
 test "$target_value" = "$weak_value"
+test "$forward_value" = "$forward_target_value"
 readelf -Ws "$work/aliases-pseudos.o" | grep -Eq 'FUNC[[:space:]]+GLOBAL.* alias_entry$'
 readelf -Ws "$work/aliases-pseudos.o" | grep -Eq 'FUNC[[:space:]]+WEAK.* weak_alias$'
+
+cat >"$work/immediate-expr.s" <<'EOF'
+.text
+addi t0, zero, 2*8
+addi t1, zero, -2*8
+sll t1, t1, 16
+ret
+EOF
+"$MINIAS" -o "$work/immediate-expr.o" "$work/immediate-expr.s"
+immediate_expr_hex="$(
+    readelf -x .text "$work/immediate-expr.o" |
+    awk '/0x[0-9a-f]+/ {for (i=2; i<=NF; ++i) if ($i ~ /^[0-9a-f]{8}$/) printf "%s", $i}'
+)"
+test "$immediate_expr_hex" = "93020001130300ff1313030167800000"
 
 cat >"$work/raw-insn.s" <<'EOF'
 .text
@@ -655,4 +679,4 @@ vector_hex="$(
 )"
 test "$vector_hex" = "d772300c57b00f5e57b40f5e57b80f5e57bc0f5e27000e0227040e0207d1050287040400"
 
-echo "MINIAS_A0=PASS objects=9 format=ELF64-RISCV-ET_REL relocations=16 strings=2 pseudos=14 previous=3 subsection=2 numeric_labels=18 ecall=1 isa_next=13 csr_amo=7 sfence_vma=3 fence_i=1 vsetvl=1 vsetvli=1 vmv_v_i=4 rept=2 nested_rept=1 irp=4 section_stack=1 org=3 local_difference=1 lr_sc=2 inline_labels=2 branch_pseudos=8 extern=1 symbol_minus_dot=4 symbol_difference=1 absolute32=1 jal=2 jal_subsection=1 high_numeric_labels=2 u64_data=3 raw_insn=4 set_alias=2 move=1 numeric_zero=1 conditional=1"
+echo "MINIAS_A0=PASS objects=10 format=ELF64-RISCV-ET_REL relocations=16 strings=2 pseudos=14 previous=3 subsection=2 numeric_labels=18 ecall=1 isa_next=13 csr_amo=7 sfence_vma=3 fence_i=1 vsetvl=1 vsetvli=1 vmv_v_i=4 rept=2 nested_rept=1 irp=4 section_stack=1 org=3 local_difference=1 lr_sc=2 inline_labels=2 branch_pseudos=8 extern=1 symbol_minus_dot=4 symbol_difference=1 absolute32=1 jal=2 jal_subsection=1 high_numeric_labels=2 u64_data=3 raw_insn=4 set_alias=3 move=1 numeric_zero=1 immediate_product=2 shift_immediate=1 conditional=1"
