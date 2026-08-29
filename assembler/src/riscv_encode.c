@@ -733,7 +733,7 @@ bool minias_riscv_measure(const char *op,
         SIMPLE("andi") || SIMPLE("ori") || SIMPLE("xori") || SIMPLE("slti") ||
         SIMPLE("sltiu") || SIMPLE("slli") || SIMPLE("srli") || SIMPLE("srai") ||
         SIMPLE("sra") || SIMPLE("fence") || SIMPLE("fence.i") || SIMPLE("vsetvl") ||
-        SIMPLE("csrr") || SIMPLE("csrrc") || SIMPLE("csrw") ||
+        SIMPLE("csrr") || SIMPLE("csrrw") || SIMPLE("csrrc") || SIMPLE("csrw") ||
         SIMPLE("csrs") || SIMPLE("csrc") || SIMPLE("ecall") || SIMPLE("ebreak") ||
         SIMPLE("pause") ||
         SIMPLE("wfi") || SIMPLE("add") || SIMPLE("sub") || SIMPLE("sll") ||
@@ -1174,6 +1174,20 @@ bool minias_riscv_encode(MiniAs *as, const MiniAsStmt *stmt) {
                           stmt->section,
                           0x73U | ((uint32_t)rd << 7U) | (2U << 12U) |
                               (csr << 20U));
+    }
+    if (strcmp(stmt->op, "csrrw") == 0) {
+        uint32_t csr;
+
+        if (count != 3U || !require_reg(as, stmt, operands[0], &rd) ||
+            !parse_csr(operands[1], &csr) ||
+            !require_reg(as, stmt, operands[2], &rs1)) {
+            minias_set_error(as, "bad-csrrw:line=%zu", stmt->line);
+            return false;
+        }
+        return append_u32(as,
+                          stmt->section,
+                          0x73U | ((uint32_t)rd << 7U) | (1U << 12U) |
+                              ((uint32_t)rs1 << 15U) | (csr << 20U));
     }
     if (strcmp(stmt->op, "csrrc") == 0) {
         uint32_t csr;
