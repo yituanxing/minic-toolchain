@@ -1923,6 +1923,35 @@ bool minias_riscv_encode(MiniAs *as, const MiniAsStmt *stmt) {
             }
             return append_u32(as, stmt->section, value);
         }
+        if ((strcmp(stmt->op, "add") == 0 ||
+             strcmp(stmt->op, "sub") == 0) &&
+            parse_i64(operands[2], &immediate)) {
+            if (strcmp(stmt->op, "sub") == 0) {
+                if (immediate == INT64_MIN) {
+                    minias_set_error(as,
+                                     "immediate-range:sub:%s:line=%zu",
+                                     operands[2],
+                                     stmt->line);
+                    return false;
+                }
+                immediate = -immediate;
+            }
+            if (immediate < -2048 || immediate > 2047) {
+                minias_set_error(as,
+                                 "immediate-range:%s:%s:line=%zu",
+                                 stmt->op,
+                                 operands[2],
+                                 stmt->line);
+                return false;
+            }
+            return append_u32(as,
+                              stmt->section,
+                              enc_i(0x13U,
+                                    rd,
+                                    0U,
+                                    rs1,
+                                    immediate));
+        }
         if ((strcmp(stmt->op, "and") == 0 ||
              strcmp(stmt->op, "or") == 0 ||
              strcmp(stmt->op, "xor") == 0) &&
