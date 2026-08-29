@@ -393,8 +393,11 @@ cat >"$work/empty-leading-nested-macro.c" <<'EOF'
 #define EMPTY(x)
 #define KEEP(x) x
 #define OUT(x) EMPTY(x) KEEP(x)
+#define OUT4(x) EMPTY(x)    KEEP(x)
 OUT(column_zero)
 		OUT(indented)
+OUT4(column_zero_four)
+		OUT4(indented_four)
 EOF
 run_exact empty-leading-nested-macro
 
