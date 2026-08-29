@@ -3,6 +3,7 @@
 
 #include <ctype.h>
 #include <errno.h>
+#include <limits.h>
 #include <stdarg.h>
 #include <stdlib.h>
 #include <string.h>
@@ -718,32 +719,185 @@ static bool parse_size(MiniAs *as, char *args, size_t line) {
     return true;
 }
 
+typedef struct MiniAsAbsoluteExpressionParser {
+    MiniAs *as;
+    const char *cursor;
+    int64_t dot;
+} MiniAsAbsoluteExpressionParser;
+
+static void skip_absolute_expression_space(MiniAsAbsoluteExpressionParser *parser) {
+    while (*parser->cursor == ' ' || *parser->cursor == '\t') {
+        ++parser->cursor;
+    }
+}
+
+static bool absolute_symbol_start(char ch) {
+    return ch == '.' || ch == '$' || ch == '_' || isalpha((unsigned char)ch);
+}
+
+static bool absolute_symbol_continue(char ch) {
+    return absolute_symbol_start(ch) || isdigit((unsigned char)ch);
+}
+
+static bool checked_add_i64(int64_t lhs, int64_t rhs, int64_t *out) {
+    if ((rhs > 0 && lhs > INT64_MAX - rhs) ||
+        (rhs < 0 && lhs < INT64_MIN - rhs)) {
+        return false;
+    }
+    *out = lhs + rhs;
+    return true;
+}
+
+static bool checked_sub_i64(int64_t lhs, int64_t rhs, int64_t *out) {
+    if ((rhs < 0 && lhs > INT64_MAX + rhs) ||
+        (rhs > 0 && lhs < INT64_MIN + rhs)) {
+        return false;
+    }
+    *out = lhs - rhs;
+    return true;
+}
+
+static bool parse_absolute_sum(MiniAsAbsoluteExpressionParser *parser, int64_t *value);
+
+static bool parse_absolute_primary(MiniAsAbsoluteExpressionParser *parser,
+                                   int64_t *value) {
+    const char *start;
+    char name[256];
+    size_t length;
+    MiniAsSymbol *symbol;
+    char *end = NULL;
+    long long number;
+
+    skip_absolute_expression_space(parser);
+    if (*parser->cursor == '(') {
+        ++parser->cursor;
+        if (!parse_absolute_sum(parser, value)) {
+            return false;
+        }
+        skip_absolute_expression_space(parser);
+        if (*parser->cursor != ')') {
+            return false;
+        }
+        ++parser->cursor;
+        return true;
+    }
+    if (*parser->cursor == '.' &&
+        !absolute_symbol_continue(parser->cursor[1])) {
+        *value = parser->dot;
+        ++parser->cursor;
+        return true;
+    }
+    if (absolute_symbol_start(*parser->cursor)) {
+        start = parser->cursor++;
+        while (absolute_symbol_continue(*parser->cursor)) {
+            ++parser->cursor;
+        }
+        length = (size_t)(parser->cursor - start);
+        if (length == 0U || length >= sizeof(name)) {
+            return false;
+        }
+        memcpy(name, start, length);
+        name[length] = '\0';
+        symbol = minias_get_symbol(parser->as, name, false);
+        if (symbol == NULL || !symbol->defined || symbol->value > (uint64_t)INT64_MAX) {
+            return false;
+        }
+        *value = (int64_t)symbol->value;
+        return true;
+    }
+
+    errno = 0;
+    number = strtoll(parser->cursor, &end, 0);
+    if (errno != 0 || end == parser->cursor) {
+        return false;
+    }
+    parser->cursor = end;
+    *value = (int64_t)number;
+    return true;
+}
+
+static bool parse_absolute_unary(MiniAsAbsoluteExpressionParser *parser,
+                                 int64_t *value) {
+    skip_absolute_expression_space(parser);
+    if (*parser->cursor == '+') {
+        ++parser->cursor;
+        return parse_absolute_unary(parser, value);
+    }
+    if (*parser->cursor == '-') {
+        int64_t operand;
+        ++parser->cursor;
+        if (!parse_absolute_unary(parser, &operand) || operand == INT64_MIN) {
+            return false;
+        }
+        *value = -operand;
+        return true;
+    }
+    return parse_absolute_primary(parser, value);
+}
+
+static bool parse_absolute_sum(MiniAsAbsoluteExpressionParser *parser, int64_t *value) {
+    int64_t result;
+
+    if (!parse_absolute_unary(parser, &result)) {
+        return false;
+    }
+    for (;;) {
+        char op;
+        int64_t rhs;
+        int64_t next;
+
+        skip_absolute_expression_space(parser);
+        op = *parser->cursor;
+        if (op != '+' && op != '-') {
+            break;
+        }
+        ++parser->cursor;
+        if (!parse_absolute_unary(parser, &rhs)) {
+            return false;
+        }
+        if (op == '+') {
+            if (!checked_add_i64(result, rhs, &next)) {
+                return false;
+            }
+        } else if (!checked_sub_i64(result, rhs, &next)) {
+            return false;
+        }
+        result = next;
+    }
+    *value = result;
+    return true;
+}
+
+static bool evaluate_absolute_expression(MiniAs *as,
+                                         const char *text,
+                                         int64_t *value) {
+    MiniAsAbsoluteExpressionParser parser;
+    uint64_t dot;
+
+    if (!current_location(as, &dot) || dot > (uint64_t)INT64_MAX) {
+        return false;
+    }
+    parser.as = as;
+    parser.cursor = text;
+    parser.dot = (int64_t)dot;
+    if (!parse_absolute_sum(&parser, value)) {
+        return false;
+    }
+    skip_absolute_expression_space(&parser);
+    return *parser.cursor == '\0';
+}
+
 static bool handle_org(MiniAs *as, const char *args, size_t line) {
-    MiniAsSymbolExpr expr;
-    MiniAsSymbol *target;
+    int64_t evaluated;
     uint64_t desired;
     uint64_t current;
     uint64_t pad;
 
-    if (!minias_parse_symbol_addend(args, &expr)) {
+    if (!evaluate_absolute_expression(as, args, &evaluated) || evaluated < 0) {
         minias_set_error(as, "unsupported-expression:.org:%s:line=%zu", args, line);
         return false;
     }
-    target = minias_get_symbol(as, expr.name, false);
-    if (target == NULL || !target->defined ||
-        target->section != as->current_section ||
-        target->subsection != as->current_subsection) {
-        minias_set_error(as, "unresolved-org:%s:line=%zu", args, line);
-        return false;
-    }
-    if (expr.addend < 0 &&
-        target->value < (uint64_t)(-(expr.addend + 1)) + 1U) {
-        minias_set_error(as, "org-before-zero:%s:line=%zu", args, line);
-        return false;
-    }
-    desired = expr.addend >= 0
-                  ? target->value + (uint64_t)expr.addend
-                  : target->value - ((uint64_t)(-(expr.addend + 1)) + 1U);
+    desired = (uint64_t)evaluated;
     if (!current_location(as, &current)) {
         return false;
     }
