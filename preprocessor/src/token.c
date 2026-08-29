@@ -452,6 +452,51 @@ static bool minipp_substitute_function_macro(MiniPpState *state,
 
         if (macro->replacement[index] == '#') {
             if (macro->replacement[index + 1U] == '#') {
+                size_t cursor = index + 2U;
+                size_t length = 0U;
+                size_t param_index = 0U;
+
+                while (macro->replacement[cursor] == ' ' ||
+                       macro->replacement[cursor] == '\t' ||
+                       macro->replacement[cursor] == '\v' ||
+                       macro->replacement[cursor] == '\f') {
+                    ++cursor;
+                }
+                if (minipp_is_identifier_start(macro->replacement[cursor])) {
+                    length = 1U;
+                    while (minipp_is_identifier_continue(
+                               macro->replacement[cursor + length])) {
+                        ++length;
+                    }
+                }
+
+                if (length != 0U &&
+                    minipp_macro_param_index(macro,
+                                             macro->replacement + cursor,
+                                             length,
+                                             &param_index) &&
+                    macro->variadic &&
+                    param_index + 1U == macro->param_count &&
+                    raw_args->items[param_index].size == 0U) {
+                    while (substituted->size != 0U) {
+                        char previous =
+                            substituted->data[substituted->size - 1U];
+                        if (previous != ' ' && previous != '\t' &&
+                            previous != '\v' && previous != '\f') {
+                            break;
+                        }
+                        --substituted->size;
+                        substituted->data[substituted->size] = '\0';
+                    }
+                    if (substituted->size != 0U &&
+                        substituted->data[substituted->size - 1U] == ',') {
+                        --substituted->size;
+                        substituted->data[substituted->size] = '\0';
+                    }
+                    index = cursor + length;
+                    continue;
+                }
+
                 if (!minipp_string_append_n(substituted, "##", 2U)) {
                     goto oom;
                 }
