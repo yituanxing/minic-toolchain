@@ -1,0 +1,208 @@
+name: MiniAS Linux Runtime GCC Single Variable
+
+on:
+  push:
+    branches:
+      - "toolchain/minias-m0-boundary-freeze"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  gcc-minias-linux-runtime:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[minias-linux-runtime]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Install RISC-V Linux runtime prerequisites
+        run: |
+          sudo apt-get -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu libc6-dev-riscv64-cross \
+            bc bison flex libssl-dev libelf-dev make curl xz-utils cpio gzip file \
+            qemu-system-misc opensbi
+
+      - name: Build exact MiniAS
+        run: |
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/minias-linux-runtime-toolchain all
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/minias-linux-runtime-toolchain check-minias-a0
+
+      - name: Build deterministic runtime initramfs with GNU toolchain
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          BUILD_DIR="$GITHUB_WORKSPACE/build/minias-linux-runtime/initramfs" \
+          OUTPUT_INITRAMFS="$GITHUB_WORKSPACE/build/minias-linux-runtime/runtime-initramfs.cpio.gz" \
+          RISCV_CC=riscv64-linux-gnu-gcc \
+            bash tests/external/linux/build_runtime_initramfs.sh
+
+      - name: Install MiniAS as GCC assembler subprocess only
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          bindir="$GITHUB_WORKSPACE/build/minias-linux-runtime/as-override"
+          mkdir -p "$bindir"
+          cat >"$bindir/riscv64-linux-gnu-as" <<'SH'
+          #!/usr/bin/env bash
+          set -Eeuo pipefail
+          minias=${MINIAS:?MINIAS is not set}
+          trace=${MINIAS_AS_TRACE:?MINIAS_AS_TRACE is not set}
+          real_as=${REAL_AS:-/usr/bin/riscv64-linux-gnu-as}
+          args=("$@")
+          out=
+          input=
+          query=0
+          for ((i=0; i<${#args[@]}; ++i)); do
+            arg=${args[i]}
+            case "$arg" in
+              --version|-v|--help) query=1 ;;
+              -o)
+                if (( i + 1 < ${#args[@]} )); then
+                  out=${args[i+1]}
+                  ((++i))
+                fi
+                ;;
+              -*)
+                ;;
+              *)
+                if [[ -f "$arg" ]]; then
+                  input=$arg
+                fi
+                ;;
+            esac
+          done
+
+          if [[ -z "$input" || -z "$out" ]]; then
+            if (( query )); then
+              printf 'delegate-query' >>"$trace"
+              printf ' %q' "$@"
+              printf '\n' >>"$trace"
+              exec "$real_as" "$@"
+            fi
+            {
+              printf 'MINIAS_AS_WRAPPER_ERROR missing input/output'
+              printf ' %q' "$@"
+              printf '\n'
+            } >&2
+            exit 2
+          fi
+
+          {
+            printf 'assemble input=%q output=%q' "$input" "$out"
+            printf ' argv='
+            printf ' %q' "$@"
+            printf '\n'
+          } >>"$trace"
+
+          if "$minias" -o "$out" "$input"; then
+            printf 'pass input=%q output=%q\n' "$input" "$out" >>"$trace"
+          else
+            status=$?
+            printf 'fail status=%s input=%q output=%q\n' "$status" "$input" "$out" >>"$trace"
+            exit "$status"
+          fi
+          SH
+          chmod +x "$bindir/riscv64-linux-gnu-as"
+
+      - name: Build Linux 6.6.143 with GCC frontend plus MiniAS only
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/minias-linux-runtime"
+          archive="$work/linux-6.6.143.tar.xz"
+          src="$work/linux-6.6.143"
+          out="$work/out"
+          bindir="$work/as-override"
+          mkdir -p "$work"
+          : >"$work/minias-as.trace"
+
+          curl -fsSL https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.6.143.tar.xz -o "$archive"
+          printf '%s  %s\n' \
+            dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932 \
+            "$archive" | sha256sum -c -
+          tar -xJf "$archive" -C "$work"
+
+          make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- defconfig
+          "$src/scripts/config" --file "$out/.config" \
+            -e BLK_DEV_INITRD -e DEVTMPFS -e DEVTMPFS_MOUNT \
+            -e SERIAL_8250 -e SERIAL_8250_CONSOLE
+          make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- olddefconfig
+
+          export MINIAS="$GITHUB_WORKSPACE/build/minias-linux-runtime-toolchain/bin/minic-as"
+          export MINIAS_AS_TRACE="$work/minias-as.trace"
+          export REAL_AS=/usr/bin/riscv64-linux-gnu-as
+
+          started=$(date +%s)
+          make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
+            CC="riscv64-linux-gnu-gcc -B$bindir/" \
+            AS="$bindir/riscv64-linux-gnu-as" \
+            -j4 Image >"$work/kbuild.log" 2>&1
+          elapsed=$(( $(date +%s) - started ))
+
+          image="$out/arch/riscv/boot/Image"
+          test -s "$image"
+          file "$image"
+
+          assembled=$(grep -c '^assemble ' "$work/minias-as.trace" || true)
+          passed=$(grep -c '^pass ' "$work/minias-as.trace" || true)
+          failed=$(grep -c '^fail ' "$work/minias-as.trace" || true)
+          delegated=$(grep -c '^delegate-query ' "$work/minias-as.trace" || true)
+          test "$assembled" -gt 3000
+          test "$passed" -eq "$assembled"
+          test "$failed" -eq 0
+
+          sha256sum "$image" >"$work/Image.sha256"
+          printf 'MINIAS_LINUX_GCC_BUILD=PASS assembled=%s passed=%s failed=%s query_delegates=%s elapsed_s=%s head=%s\n' \
+            "$assembled" "$passed" "$failed" "$delegated" "$elapsed" "$GITHUB_SHA"
+
+      - name: Run Python-era runtime contract and P1
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/minias-linux-runtime"
+          image="$work/out/arch/riscv/boot/Image"
+          initramfs="$work/runtime-initramfs.cpio.gz"
+
+          LINUX_IMAGE="$image" \
+          INITRAMFS="$initramfs" \
+          BUILD_DIR="$work/qemu-p0" \
+          LINUX_RELEASE=6.6.143 \
+          QEMU_SYSTEM_RISCV64=qemu-system-riscv64 \
+          QEMU_TIMEOUT_SECONDS=90 \
+          QEMU_SHELL_INPUT_DELAY_SECONDS=8 \
+            bash tests/external/linux/runtime_boot.sh
+
+          LINUX_IMAGE="$image" \
+          INITRAMFS="$initramfs" \
+          BUILD_DIR="$work/qemu-p1" \
+          LINUX_RELEASE=6.6.143 \
+          LINUX_RUNTIME_PROFILE=p1 \
+          QEMU_SYSTEM_RISCV64=qemu-system-riscv64 \
+          QEMU_TIMEOUT_SECONDS=90 \
+          QEMU_SHELL_INPUT_DELAY_SECONDS=8 \
+            bash tests/external/linux/runtime_boot.sh
+
+          python3 tests/external/linux/runtime_v2_log_check.py \
+            --profile p1 \
+            --log "$work/qemu-p1/rdinit-init.log"
+
+          echo "MINIAS_LINUX_GCC_RUNTIME=PASS p0=PASS p1=12/12 head=$GITHUB_SHA"
+
+      - name: Preserve blocker evidence
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: minias-linux-gcc-runtime-blocker
+          path: |
+            build/minias-linux-runtime/kbuild.log
+            build/minias-linux-runtime/minias-as.trace
+            build/minias-linux-runtime/out/.config
+            build/minias-linux-runtime/qemu-p0/*.log
+            build/minias-linux-runtime/qemu-p1/*.log
+          if-no-files-found: ignore
+          retention-days: 3
