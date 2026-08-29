@@ -519,6 +519,17 @@ bool minias_riscv_measure(const char *op,
         return false;
     }
 
+    if (strcmp(op, "sfence.vma") == 0) {
+        if (count > 2U ||
+            (count >= 1U && reg_number(operands[0]) < 0) ||
+            (count == 2U && reg_number(operands[1]) < 0)) {
+            (void)snprintf(reason, reason_size, "bad-operands:sfence.vma:%s", args);
+            return false;
+        }
+        *size = 4U;
+        return true;
+    }
+
     {
         bool is_lr;
         uint32_t atomic_width;
@@ -585,6 +596,19 @@ bool minias_riscv_encode(MiniAs *as, const MiniAsStmt *stmt) {
     uint32_t funct3;
     MiniAsSymbol *symbol;
 
+    if (strcmp(stmt->op, "sfence.vma") == 0) {
+        rs1 = 0;
+        rs2 = 0;
+        if (count > 2U ||
+            (count >= 1U && !require_reg(as, stmt, operands[0], &rs1)) ||
+            (count == 2U && !require_reg(as, stmt, operands[1], &rs2))) {
+            return false;
+        }
+        return append_u32(as,
+                          stmt->section,
+                          0x12000073U | ((uint32_t)rs1 << 15U) |
+                              ((uint32_t)rs2 << 20U));
+    }
     if (strcmp(stmt->op, "ret") == 0) {
         return append_u32(as, stmt->section, enc_i(0x67U, 0, 0U, 1, 0));
     }
