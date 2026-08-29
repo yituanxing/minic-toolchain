@@ -361,6 +361,18 @@ int gnu_many = GNU_VARGS(1, 2, 3);
 EOF
 run_exact gnu-variadic-spacing
 
+cat >"$work/nested-variadic-padding.c" <<'EOF'
+#define STMT(x) ({ x; })
+#define WRAP_IF(cond, func, ...) ({ if (cond) func(__VA_ARGS__); })
+#define WRAP(func, ...) WRAP_IF(1, func, ##__VA_ARGS__)
+#define IDX(fn, fmt, ...) ({ fn(fmt, ##__VA_ARGS__); })
+#define PRINT(fmt, ...) IDX(F, fmt, ##__VA_ARGS__)
+#define ONCE(fmt, ...) WRAP(PRINT, fmt, ##__VA_ARGS__)
+#define INFO(fmt, ...) ONCE("x" fmt, ##__VA_ARGS__)
+INFO("y", STMT(2))
+EOF
+run_exact nested-variadic-padding
+
 cat >"$work/pp-number-padding.c" <<'EOF'
 #define MINUS_ONE(x) x-1
 #define PLUS_ONE(x) x+1
@@ -401,4 +413,4 @@ OUT4(column_zero_four)
 EOF
 run_exact empty-leading-nested-macro
 
-printf 'MINIPP_A0_EXACT=PASS cases=43 mode=byte-identical\n'
+printf 'MINIPP_A0_EXACT=PASS cases=44 mode=byte-identical\n'
