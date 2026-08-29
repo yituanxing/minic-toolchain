@@ -372,6 +372,71 @@ static bool minipp_param_is_paste_operand(const MiniPpMacro *macro,
            macro->replacement[right + 1U] == '#';
 }
 
+static bool minipp_param_needs_prescan(const MiniPpMacro *macro,
+                                      size_t target_param) {
+    size_t index = 0U;
+
+    while (macro->replacement[index] != '\0') {
+        if (macro->replacement[index] == '"' ||
+            macro->replacement[index] == '\'') {
+            char quote = macro->replacement[index++];
+            while (macro->replacement[index] != '\0') {
+                char value = macro->replacement[index++];
+                if (value == '\\' && macro->replacement[index] != '\0') {
+                    ++index;
+                    continue;
+                }
+                if (value == quote) {
+                    break;
+                }
+            }
+            continue;
+        }
+
+        if (minipp_is_identifier_start(macro->replacement[index])) {
+            size_t start = index;
+            size_t length;
+            size_t param_index;
+            size_t left;
+
+            ++index;
+            while (minipp_is_identifier_continue(macro->replacement[index])) {
+                ++index;
+            }
+            length = index - start;
+            if (!minipp_macro_param_index(macro,
+                                          macro->replacement + start,
+                                          length,
+                                          &param_index) ||
+                param_index != target_param) {
+                continue;
+            }
+
+            if (minipp_param_is_paste_operand(macro, start, index)) {
+                continue;
+            }
+
+            left = start;
+            while (left != 0U &&
+                   (macro->replacement[left - 1U] == ' ' ||
+                    macro->replacement[left - 1U] == '\t' ||
+                    macro->replacement[left - 1U] == '\v' ||
+                    macro->replacement[left - 1U] == '\f')) {
+                --left;
+            }
+            if (left != 0U && macro->replacement[left - 1U] == '#') {
+                continue;
+            }
+
+            return true;
+        }
+
+        ++index;
+    }
+
+    return false;
+}
+
 static bool minipp_append_stringized_arg(MiniPpString *out,
                                          const MiniPpString *arg) {
     size_t index;
@@ -731,14 +796,21 @@ static bool minipp_expand_function_macro(MiniPpState *state,
         MiniPpString *expanded = &expanded_args.items[arg_index];
 
         minipp_string_init(expanded);
-        if (!minipp_expand_text_recursive(state,
-                                          raw_args.items[arg_index].data,
-                                          expanded,
-                                          disabled,
-                                          disabled_count,
-                                          depth + 1U,
-                                          source_line) ||
-            !minipp_string_append_char(expanded, '\0')) {
+        if (minipp_param_needs_prescan(macro, arg_index)) {
+            if (!minipp_expand_text_recursive(state,
+                                              raw_args.items[arg_index].data,
+                                              expanded,
+                                              disabled,
+                                              disabled_count,
+                                              depth + 1U,
+                                              source_line)) {
+                minipp_arg_list_destroy(&raw_args);
+                expanded_args.count = arg_index + 1U;
+                minipp_arg_list_destroy(&expanded_args);
+                return false;
+            }
+        }
+        if (!minipp_string_append_char(expanded, '\0')) {
             minipp_arg_list_destroy(&raw_args);
             expanded_args.count = arg_index + 1U;
             minipp_arg_list_destroy(&expanded_args);
