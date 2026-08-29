@@ -194,6 +194,7 @@ csr_amo:
   amoor.d.aqrl a0, a1, (a2)
   csrw 0x8, t3
   csrw 0xf, t6
+  csrr a2, 0xc00 + 16 + 8 + 4 + 2 + 1
   ret
 .size csr_amo, .-csr_amo
 EOF
@@ -202,7 +203,7 @@ csr_amo_hex="$(
     readelf -x .text "$work/csr-amo.o" |
     awk '/0x[0-9a-f]+/ {for (i=2; i<=NF; ++i) if ($i ~ /^[0-9a-f]+$/ && length($i) <= 8 && length($i) % 2 == 0) printf "%s", $i}'
 )"
-test "$csr_amo_hex" = "73b50510f31505102f25b6402f25b6202f35b64673108e007390ff0067800000"
+test "$csr_amo_hex" = "73b50510f31505102f25b6402f25b6202f35b64673108e007390ff007326f0c167800000"
 
 cat >"$work/section-stack.s" <<'EOF'
 .text
