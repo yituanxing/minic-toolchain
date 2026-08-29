@@ -18,6 +18,9 @@ typedef struct MiniPpString {
 typedef struct MiniPpMacro {
     char *name;
     char *replacement;
+    char **params;
+    size_t param_count;
+    bool function_like;
 } MiniPpMacro;
 
 typedef struct MiniPpConditional {
