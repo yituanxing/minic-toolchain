@@ -251,7 +251,8 @@ static bool minipp_expand_text_recursive(MiniPpState *state,
                                          MiniPpString *out,
                                          const char *const *disabled,
                                          size_t disabled_count,
-                                         size_t depth);
+                                         size_t depth,
+                                         size_t source_line);
 
 static bool minipp_build_logical_args(MiniPpState *state,
                                       const MiniPpMacro *macro,
@@ -678,6 +679,7 @@ static bool minipp_expand_function_macro(MiniPpState *state,
                                          const char *const *disabled,
                                          size_t disabled_count,
                                          size_t depth,
+                                         size_t source_line,
                                          bool *invoked) {
     size_t cursor = *index;
     MiniPpArgList parsed_args;
@@ -734,7 +736,8 @@ static bool minipp_expand_function_macro(MiniPpState *state,
                                           expanded,
                                           disabled,
                                           disabled_count,
-                                          depth + 1U) ||
+                                          depth + 1U,
+                                          source_line) ||
             !minipp_string_append_char(expanded, '\0')) {
             minipp_arg_list_destroy(&raw_args);
             expanded_args.count = arg_index + 1U;
@@ -778,7 +781,8 @@ static bool minipp_expand_function_macro(MiniPpState *state,
                                       out,
                                       next_disabled,
                                       next_count,
-                                      depth + 1U);
+                                      depth + 1U,
+                                      source_line);
 
 done:
     free(next_disabled);
@@ -825,13 +829,47 @@ static const MiniPpMacro *minipp_find_trailing_function_macro(
     }
 }
 
+static bool minipp_append_file_builtin(MiniPpState *state,
+                                       MiniPpString *out) {
+    const char *path = state->current_file == NULL ? "" : state->current_file;
+    const unsigned char *cursor = (const unsigned char *)path;
+
+    if (!minipp_string_append_char(out, '"')) {
+        return false;
+    }
+    while (*cursor != '\0') {
+        if (*cursor == '\\' || *cursor == '"') {
+            if (!minipp_string_append_char(out, '\\')) {
+                return false;
+            }
+        }
+        if (!minipp_string_append_char(out, (char)*cursor)) {
+            return false;
+        }
+        ++cursor;
+    }
+    return minipp_string_append_char(out, '"');
+}
+
+static bool minipp_append_line_builtin(MiniPpString *out, size_t line) {
+    char buffer[32];
+    int length = snprintf(buffer, sizeof(buffer), "%zu", line);
+
+    if (length < 0 || (size_t)length >= sizeof(buffer)) {
+        return false;
+    }
+    return minipp_string_append_n(out, buffer, (size_t)length);
+}
+
 static bool minipp_expand_text_recursive(MiniPpState *state,
                                          const char *text,
                                          MiniPpString *out,
                                          const char *const *disabled,
                                          size_t disabled_count,
-                                         size_t depth) {
+                                         size_t depth,
+                                         size_t source_line) {
     size_t index = 0U;
+    size_t current_line = source_line;
 
     if (depth > MINIPP_MAX_EXPANSION_DEPTH) {
         fprintf(state->diagnostics, "minic-cpp: macro-expansion-depth\n");
@@ -875,6 +913,22 @@ static bool minipp_expand_text_recursive(MiniPpState *state,
                 ++index;
             }
             length = index - start;
+            if (length == 8U &&
+                memcmp(text + start, "__FILE__", 8U) == 0) {
+                if (!minipp_append_file_builtin(state, out)) {
+                    fprintf(state->diagnostics, "minic-cpp: out-of-memory\n");
+                    return false;
+                }
+                continue;
+            }
+            if (length == 8U &&
+                memcmp(text + start, "__LINE__", 8U) == 0) {
+                if (!minipp_append_line_builtin(out, current_line)) {
+                    fprintf(state->diagnostics, "minic-cpp: out-of-memory\n");
+                    return false;
+                }
+                continue;
+            }
             macro = minipp_find_macro(state, text + start, length);
             if (macro != NULL &&
                 !minipp_macro_is_disabled(macro->name,
@@ -891,6 +945,7 @@ static bool minipp_expand_text_recursive(MiniPpState *state,
                                                       disabled,
                                                       disabled_count,
                                                       depth,
+                                                      current_line,
                                                       &invoked)) {
                         return false;
                     }
@@ -922,7 +977,8 @@ static bool minipp_expand_text_recursive(MiniPpState *state,
                                                       &replacement,
                                                       next_disabled,
                                                       next_count,
-                                                      depth + 1U);
+                                                      depth + 1U,
+                                                      current_line);
                     if (ok) {
                         size_t tail_start = 0U;
                         const MiniPpMacro *tail_macro =
@@ -952,6 +1008,7 @@ static bool minipp_expand_text_recursive(MiniPpState *state,
                                            next_disabled,
                                            next_count,
                                            depth + 1U,
+                                           current_line,
                                            &invoked)) {
                                 ok = false;
                             } else if (invoked) {
@@ -993,6 +1050,9 @@ static bool minipp_expand_text_recursive(MiniPpState *state,
         if (!minipp_string_append_char(out, text[index])) {
             return false;
         }
+        if (text[index] == '\n') {
+            ++current_line;
+        }
         ++index;
     }
 
@@ -1003,7 +1063,14 @@ bool minipp_expand_text(MiniPpState *state,
                         const char *text,
                         MiniPpString *out) {
     state->expansion_incomplete = false;
-    return minipp_expand_text_recursive(state, text, out, NULL, 0U, 0U);
+    return minipp_expand_text_recursive(state,
+                                        text,
+                                        out,
+                                        NULL,
+                                        0U,
+                                        0U,
+                                        state->current_line == 0U ? 1U :
+                                                                    state->current_line);
 }
 
 bool minipp_strip_comments_line(MiniPpState *state,
