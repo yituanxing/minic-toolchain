@@ -1390,18 +1390,31 @@ bool minipp_strip_comments_line(MiniPpState *state,
                                 size_t line_size,
                                 MiniPpString *out) {
     size_t index = 0U;
+    bool leading_only = true;
 
     while (index < line_size) {
         if (state->in_block_comment) {
             if (index + 1U < line_size &&
                 line[index] == '*' &&
                 line[index + 1U] == '/') {
+                if (leading_only &&
+                    (!minipp_string_append_char(out, ' ') ||
+                     !minipp_string_append_char(out, ' '))) {
+                    return false;
+                }
                 state->in_block_comment = false;
                 index += 2U;
                 continue;
             }
-            if (line[index] == '\n' &&
-                !minipp_string_append_char(out, '\n')) {
+            if (line[index] == '\n') {
+                if (!minipp_string_append_char(out, '\n')) {
+                    return false;
+                }
+                ++index;
+                continue;
+            }
+            if (leading_only &&
+                !minipp_string_append_char(out, ' ')) {
                 return false;
             }
             ++index;
@@ -1410,6 +1423,7 @@ bool minipp_strip_comments_line(MiniPpState *state,
 
         if (line[index] == '"' || line[index] == '\'') {
             char quote = line[index];
+            leading_only = false;
             if (!minipp_string_append_char(out, line[index])) {
                 return false;
             }
@@ -1446,7 +1460,12 @@ bool minipp_strip_comments_line(MiniPpState *state,
         if (index + 1U < line_size &&
             line[index] == '/' &&
             line[index + 1U] == '*') {
-            if (!minipp_string_append_char(out, ' ')) {
+            if (leading_only) {
+                if (!minipp_string_append_char(out, ' ') ||
+                    !minipp_string_append_char(out, ' ')) {
+                    return false;
+                }
+            } else if (!minipp_string_append_char(out, ' ')) {
                 return false;
             }
             state->in_block_comment = true;
@@ -1456,6 +1475,11 @@ bool minipp_strip_comments_line(MiniPpState *state,
 
         if (!minipp_string_append_char(out, line[index])) {
             return false;
+        }
+        if (line[index] != ' ' && line[index] != '\t' &&
+            line[index] != '\v' && line[index] != '\f' &&
+            line[index] != '\r' && line[index] != '\n') {
+            leading_only = false;
         }
         ++index;
     }
