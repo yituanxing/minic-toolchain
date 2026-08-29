@@ -524,21 +524,62 @@ static bool parse_u64(const char *text, uint64_t *out) {
 }
 
 static bool parse_i64_data(const char *text, int64_t *out) {
+    char *copy = minias_strdup(text);
+    char *normalized;
     char *end = NULL;
     long long value;
 
+    if (copy == NULL) {
+        return false;
+    }
+    normalized = minias_trim(copy);
+    for (;;) {
+        size_t len = strlen(normalized);
+        size_t i;
+        int depth = 0;
+        bool encloses_all = true;
+
+        if (len < 2U || normalized[0] != '(' ||
+            normalized[len - 1U] != ')') {
+            break;
+        }
+        for (i = 0U; i < len; ++i) {
+            if (normalized[i] == '(') {
+                ++depth;
+            } else if (normalized[i] == ')') {
+                --depth;
+                if (depth < 0) {
+                    encloses_all = false;
+                    break;
+                }
+                if (depth == 0 && i + 1U != len) {
+                    encloses_all = false;
+                    break;
+                }
+            }
+        }
+        if (!encloses_all || depth != 0) {
+            break;
+        }
+        normalized[len - 1U] = '\0';
+        normalized = minias_trim(normalized + 1);
+    }
+
     errno = 0;
-    value = strtoll(text, &end, 0);
-    if (errno != 0 || end == text) {
+    value = strtoll(normalized, &end, 0);
+    if (errno != 0 || end == normalized) {
+        free(copy);
         return false;
     }
     while (*end == ' ' || *end == '\t') {
         ++end;
     }
     if (*end != '\0') {
+        free(copy);
         return false;
     }
     *out = (int64_t)value;
+    free(copy);
     return true;
 }
 
