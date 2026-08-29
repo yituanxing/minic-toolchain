@@ -1,5 +1,9 @@
 name: MiniPP Linux Exact Smoke
 
+concurrency:
+  group: minipp-linux-exact-${{ github.ref }}
+  cancel-in-progress: true
+
 on:
   push:
     branches:
