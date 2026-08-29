@@ -235,4 +235,12 @@ int multiline_invocation = SUM3(1,
 EOF
 run_exact multiline-invocation
 
-printf 'MINIPP_A0_EXACT=PASS cases=26 mode=byte-identical\n'
+cat >"$work/pragma.c" <<'EOF'
+  #   pragma   GCC   diagnostic   push
+#pragma GCC diagnostic ignored "-Wunused-variable"
+int pragma_value;
+#pragma GCC diagnostic pop
+EOF
+run_exact pragma
+
+printf 'MINIPP_A0_EXACT=PASS cases=27 mode=byte-identical\n'
