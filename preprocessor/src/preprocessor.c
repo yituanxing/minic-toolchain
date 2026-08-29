@@ -935,6 +935,19 @@ static bool minipp_build_logical_line_numbers(const MiniPpString *input,
     return true;
 }
 
+static bool minipp_line_has_nonspace(const MiniPpString *line) {
+    size_t index;
+
+    for (index = 0U; index < line->size; ++index) {
+        unsigned char ch = (unsigned char)line->data[index];
+        if (ch != ' ' && ch != '\t' && ch != '\v' &&
+            ch != '\f' && ch != '\r' && ch != '\n') {
+            return true;
+        }
+    }
+    return false;
+}
+
 static bool minipp_process_source(MiniPpState *state,
                                   const char *current_path,
                                   const MiniPpString *input,
@@ -994,6 +1007,12 @@ static bool minipp_process_source(MiniPpState *state,
         }
 
         if (!handled && state->active) {
+            if (pending.size == 0U && !minipp_line_has_nonspace(&stripped)) {
+                minipp_string_destroy(&stripped);
+                offset = end;
+                ++logical_line;
+                continue;
+            }
             if (pending.size == 0U) {
                 pending_line = state->current_line;
             }
@@ -1094,6 +1113,7 @@ int minipp_preprocess_file(const char *input_path,
                            FILE *diagnostics) {
     MiniPpState state;
     MiniPpString output;
+    MiniPpString rendered;
     size_t index;
     bool ok;
 
@@ -1119,10 +1139,12 @@ int minipp_preprocess_file(const char *input_path,
     state.include_path_count = config->include_path_count;
     state.diagnostics = diagnostics;
     minipp_string_init(&output);
+    minipp_string_init(&rendered);
 
     for (index = 0U; index < config->define_count; ++index) {
         if (!minipp_parse_command_line_define(&state, config->defines[index])) {
             minipp_state_destroy(&state);
+            minipp_string_destroy(&rendered);
             minipp_string_destroy(&output);
             return 1;
         }
@@ -1150,14 +1172,20 @@ int minipp_preprocess_file(const char *input_path,
         minipp_string_destroy(&resolved);
     }
 
-    ok = ok &&
-         minipp_process_file(&state, input_path, &output) &&
-         minipp_write_file(output_path,
-                           output.data == NULL ? "" : output.data,
-                           output.size,
-                           diagnostics);
+    ok = ok && minipp_process_file(&state, input_path, &output);
+    if (ok && !minipp_render_gcc_p_output(&output, &rendered)) {
+        fprintf(diagnostics, "minic-cpp: out-of-memory\n");
+        ok = false;
+    }
+    if (ok) {
+        ok = minipp_write_file(output_path,
+                               rendered.data == NULL ? "" : rendered.data,
+                               rendered.size,
+                               diagnostics);
+    }
 
     minipp_state_destroy(&state);
+    minipp_string_destroy(&rendered);
     minipp_string_destroy(&output);
     return ok ? 0 : 1;
 }
