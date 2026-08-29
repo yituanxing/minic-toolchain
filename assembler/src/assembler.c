@@ -2698,6 +2698,13 @@ typedef struct MiniAsSourceLine {
     size_t line;
 } MiniAsSourceLine;
 
+static void destroy_source_lines(MiniAsSourceLine *lines, size_t count);
+static bool valid_irp_parameter_name(const char *name);
+static char *substitute_irp_parameter(MiniAs *as,
+                                      const char *source,
+                                      const char *name,
+                                      const char *value);
+
 enum {
     MINIAS_MACRO_NONE = 0,
     MINIAS_MACRO_BEGIN = 1,
@@ -3589,51 +3596,6 @@ static bool read_repeat_block(MiniAs *as,
             destroy_source_lines(lines, count);
             return false;
         }
-        {
-            char macro_argument[1024];
-            int macro_kind =
-                classify_macro_line(linebuf,
-                                    macro_argument,
-                                    sizeof(macro_argument));
-            if (macro_kind < 0) {
-                minias_set_error(as, "out-of-memory:macro-classify");
-                fclose(file);
-                return false;
-            }
-            if (macro_kind == MINIAS_MACRO_END) {
-                minias_set_error(as,
-                                 "unmatched-directive:.endm:line=%zu",
-                                 line_no);
-                fclose(file);
-                return false;
-            }
-            if (macro_kind == MINIAS_MACRO_BEGIN) {
-                MiniAsSourceLine *macro_lines = NULL;
-                size_t macro_count = 0U;
-                size_t opener_line = line_no;
-
-                if (!read_macro_block(as,
-                                      file,
-                                      &line_no,
-                                      &macro_lines,
-                                      &macro_count)) {
-                    fclose(file);
-                    return false;
-                }
-                if (!define_macro(as,
-                                  macro_argument,
-                                  macro_lines,
-                                  macro_count,
-                                  opener_line)) {
-                    destroy_source_lines(macro_lines, macro_count);
-                    fclose(file);
-                    return false;
-                }
-                destroy_source_lines(macro_lines, macro_count);
-                continue;
-            }
-        }
-
         kind = classify_repeat_line(linebuf, argument, sizeof(argument));
         if (kind < 0) {
             minias_set_error(as, "out-of-memory:repeat-classify");
@@ -3699,6 +3661,51 @@ bool minias_parse_file(MiniAs *as, const char *path) {
             minias_set_error(as, "line-too-long:line=%zu", line_no);
             fclose(file);
             return false;
+        }
+
+        {
+            char macro_argument[1024];
+            int macro_kind =
+                classify_macro_line(linebuf,
+                                    macro_argument,
+                                    sizeof(macro_argument));
+            if (macro_kind < 0) {
+                minias_set_error(as, "out-of-memory:macro-classify");
+                fclose(file);
+                return false;
+            }
+            if (macro_kind == MINIAS_MACRO_END) {
+                minias_set_error(as,
+                                 "unmatched-directive:.endm:line=%zu",
+                                 line_no);
+                fclose(file);
+                return false;
+            }
+            if (macro_kind == MINIAS_MACRO_BEGIN) {
+                MiniAsSourceLine *macro_lines = NULL;
+                size_t macro_count = 0U;
+                size_t opener_line = line_no;
+
+                if (!read_macro_block(as,
+                                      file,
+                                      &line_no,
+                                      &macro_lines,
+                                      &macro_count)) {
+                    fclose(file);
+                    return false;
+                }
+                if (!define_macro(as,
+                                  macro_argument,
+                                  macro_lines,
+                                  macro_count,
+                                  opener_line)) {
+                    destroy_source_lines(macro_lines, macro_count);
+                    fclose(file);
+                    return false;
+                }
+                destroy_source_lines(macro_lines, macro_count);
+                continue;
+            }
         }
 
         kind = classify_repeat_line(linebuf, argument, sizeof(argument));
