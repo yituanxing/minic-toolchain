@@ -252,4 +252,17 @@ int chain_call = CHAIN(5);
 EOF
 run_exact object-to-function-rescan
 
-printf 'MINIPP_A0_EXACT=PASS cases=28 mode=byte-identical\n'
+cat >"$work/computed-include.h" <<'EOF'
+#define COMPUTED_INCLUDE_VALUE 53
+EOF
+cat >"$work/computed-include.c" <<'EOF'
+#define STR1(x) #x
+#define STR(x) STR1(x)
+#define HEADER_NAME computed-include.h
+#define HEADER(x) STR(x)
+#include HEADER(HEADER_NAME)
+int computed_include = COMPUTED_INCLUDE_VALUE;
+EOF
+run_exact computed-include
+
+printf 'MINIPP_A0_EXACT=PASS cases=29 mode=byte-identical\n'
