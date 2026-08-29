@@ -180,6 +180,7 @@ void minias_destroy(MiniAs *as);
 bool minias_parse_file(MiniAs *as, const char *path);
 bool minias_emit_sections(MiniAs *as);
 bool minias_write_elf64(MiniAs *as, const char *path);
+bool minias_write_elf32(MiniAs *as, const char *path);
 
 int minias_find_section(const MiniAs *as, const char *name);
 int minias_ensure_section(MiniAs *as, const char *name, uint32_t type, uint64_t flags, uint64_t align);
