@@ -861,6 +861,12 @@ static bool minipp_append_line_builtin(MiniPpString *out, size_t line) {
     return minipp_string_append_n(out, buffer, (size_t)length);
 }
 
+static bool minipp_append_counter_builtin(MiniPpState *state,
+                                          MiniPpString *out) {
+    size_t value = state->counter_value++;
+    return minipp_append_line_builtin(out, value);
+}
+
 static bool minipp_expand_text_recursive(MiniPpState *state,
                                          const char *text,
                                          MiniPpString *out,
@@ -924,6 +930,14 @@ static bool minipp_expand_text_recursive(MiniPpState *state,
             if (length == 8U &&
                 memcmp(text + start, "__LINE__", 8U) == 0) {
                 if (!minipp_append_line_builtin(out, current_line)) {
+                    fprintf(state->diagnostics, "minic-cpp: out-of-memory\n");
+                    return false;
+                }
+                continue;
+            }
+            if (length == 11U &&
+                memcmp(text + start, "__COUNTER__", 11U) == 0) {
+                if (!minipp_append_counter_builtin(state, out)) {
                     fprintf(state->diagnostics, "minic-cpp: out-of-memory\n");
                     return false;
                 }
