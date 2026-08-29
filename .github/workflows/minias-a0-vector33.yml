@@ -1,0 +1,106 @@
+name: MiniAS A0 Focused Vector33
+
+on:
+  push:
+    branches:
+      - "toolchain/minias-m0-boundary-freeze"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  FROZEN_CORPUS_EXPORT_RUN: "33186855250"
+
+jobs:
+  vector33:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[minias-vector33]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download frozen first500 corpus
+        uses: actions/download-artifact@v4
+        with:
+          name: frozen-linux-corpus-first500
+          path: build/import-first500
+          repository: ${{ github.repository }}
+          run-id: ${{ env.FROZEN_CORPUS_EXPORT_RUN }}
+          github-token: ${{ github.token }}
+
+      - name: Verify frozen corpus
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          import=build/import-first500
+          expected=$(cut -d' ' -f1 "$import/corpus.tar.gz.sha256")
+          actual=$(sha256sum "$import/corpus.tar.gz" | cut -d' ' -f1)
+          test "$actual" = "$expected"
+          tar -C build -xzf "$import/corpus.tar.gz"
+          (cd build && sha256sum -c import-first500/files.sha256 >/dev/null)
+          grep -q $'^33\t.*arch/riscv/kernel/vector\.i\t' build/linux-focus-corpus/selected-tus.txt
+          echo "MINIAS_VECTOR33_CORPUS=PASS archive_sha=$actual"
+
+      - name: Build compiler and MiniAS
+        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/minias-vector33-toolchain all
+
+      - name: Run MiniAS micro gate
+        run: make MODE=release CFLAGS=-Werror BUILD_DIR=build/minias-vector33-toolchain check-minias-a0
+
+      - name: Generate vector33 assembly
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          compiler="$GITHUB_WORKSPACE/build/minias-vector33-toolchain/bin/minic-cc"
+          work="$GITHUB_WORKSPACE/build/minias-vector33"
+          CORE_FAST_TRACE=1 python3 tests/external/linux/corpus_replay.py \
+            --minic "$compiler" \
+            --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
+            --work "$work" --jobs 1 --indices 33
+          python3 - "$work/batch-results.json" <<'PY'
+          import json, sys
+          rows=json.load(open(sys.argv[1]))
+          assert len(rows)==1 and rows[0]["status"]=="PASS", rows
+          print("MINIAS_VECTOR33_INPUT=PASS index=33")
+          PY
+
+      - name: Assemble vector33 and print frontier
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          minias="$GITHUB_WORKSPACE/build/minias-vector33-toolchain/bin/minic-as"
+          root="$GITHUB_WORKSPACE/build/minias-vector33/minic-out"
+          asm=$(find "$root" -type f -path '*/arch/riscv/kernel/vector.i.s' -print -quit)
+          test -n "$asm"
+          out="$GITHUB_WORKSPACE/build/minias-vector33/minias-out"
+          mkdir -p "$out"
+          obj="$out/vector.o"
+          err="$out/vector.err"
+          if "$minias" -o "$obj" "$asm" 2>"$err"; then
+            readelf -h "$obj" | grep -q 'RISC-V'
+            readelf -h "$obj" | grep -q 'REL (Relocatable file)'
+            echo "MINIAS_VECTOR33_SUMMARY pass=1 fail=0"
+          else
+            raw=$(head -n 1 "$err")
+            first=$(printf '%s\n' "$raw" | sed -E 's/^minic-as: //; s/:line=[0-9]+$//')
+            line=$(printf '%s\n' "$raw" | sed -nE 's/.*:line=([0-9]+)$/\1/p')
+            echo "MINIAS_VECTOR33_SUMMARY pass=0 fail=1 blocker=$first"
+            if [[ "$line" =~ ^[0-9]+$ ]]; then
+              from=$(( line > 4 ? line - 4 : 1 ))
+              to=$(( line + 8 ))
+              printf 'MINIAS_VECTOR33_CONTEXT line=%s blocker=%s\n' "$line" "$first"
+              nl -ba "$asm" | sed -n "${from},${to}p"
+            fi
+          fi
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: minias-a0-vector33
+          path: |
+            build/minias-vector33/minias-out/vector.err
+            build/minias-vector33/minias-out/vector.o
+          retention-days: 7
+          if-no-files-found: warn
