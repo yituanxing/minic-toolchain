@@ -8,7 +8,7 @@
 static void usage(FILE *output, const char *argv0) {
     fprintf(output,
             "usage: %s -E -P -undef -nostdinc "
-            "[-DNAME[=VALUE]] [-UNAME] -o OUTPUT INPUT.c\n",
+            "[-DNAME[=VALUE]] [-UNAME] [-IDIR] -o OUTPUT INPUT.c\n",
             argv0);
 }
 
@@ -18,18 +18,22 @@ int main(int argc, char **argv) {
     const char *output = NULL;
     const char **defines;
     const char **undefines;
+    const char **include_paths;
     size_t define_count = 0U;
     size_t undefine_count = 0U;
+    size_t include_path_count = 0U;
     int index;
     int status;
 
     memset(&config, 0, sizeof(config));
     defines = calloc((size_t)argc, sizeof(*defines));
     undefines = calloc((size_t)argc, sizeof(*undefines));
-    if (defines == NULL || undefines == NULL) {
+    include_paths = calloc((size_t)argc, sizeof(*include_paths));
+    if (defines == NULL || undefines == NULL || include_paths == NULL) {
         fprintf(stderr, "minic-cpp: out-of-memory\n");
         free(defines);
         free(undefines);
+        free(include_paths);
         return 1;
     }
 
@@ -92,6 +96,18 @@ int main(int argc, char **argv) {
             }
             continue;
         }
+        if (strncmp(argument, "-I", 2U) == 0) {
+            if (argument[2] != '\0') {
+                include_paths[include_path_count++] = argument + 2;
+            } else if (++index < argc) {
+                include_paths[include_path_count++] = argv[index];
+            } else {
+                usage(stderr, argv[0]);
+                status = 2;
+                goto done;
+            }
+            continue;
+        }
         if (strcmp(argument, "-h") == 0 ||
             strcmp(argument, "--help") == 0) {
             usage(stdout, argv[0]);
@@ -121,10 +137,13 @@ int main(int argc, char **argv) {
     config.define_count = define_count;
     config.undefines = undefines;
     config.undefine_count = undefine_count;
+    config.include_paths = include_paths;
+    config.include_path_count = include_path_count;
     status = minipp_preprocess_file(input, output, &config, stderr);
 
 done:
     free(defines);
     free(undefines);
+    free(include_paths);
     return status;
 }
