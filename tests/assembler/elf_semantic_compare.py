@@ -9,6 +9,7 @@ from elftools.elf.elffile import ELFFile
 from elftools.elf.relocation import RelocationSection
 
 IGNORE_SECTION_NAMES = {".symtab", ".strtab", ".shstrtab"}
+R_RISCV_ALIGN = 43
 R_RISCV_RELAX = 51
 
 # Widths are only used to mask bytes that the linker will rewrite. Unknown
@@ -94,6 +95,13 @@ def relocation_counter(elf):
             if typ == R_RISCV_RELAX:
                 # RELAX is a linker optimization hint, not required for the
                 # unrelaxed object's functional semantics.
+                continue
+            if typ == R_RISCV_ALIGN:
+                # GNU as may reserve relaxable alignment padding and let the
+                # linker delete excess bytes. MiniAS currently commits the
+                # final padding in the object, so ALIGN is optional metadata.
+                if addend > 0:
+                    masks[target_name].append((offset, offset + addend))
                 continue
 
             sym = symtab.get_symbol(int(rel["r_info_sym"]))
