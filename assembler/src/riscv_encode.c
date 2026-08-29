@@ -23,6 +23,9 @@ static int reg_number(const char *name) {
     char *end = NULL;
     long value;
 
+    if (strcmp(name, "0") == 0) {
+        return 0;
+    }
     if (name[0] == 'x') {
         errno = 0;
         value = strtol(name + 1, &end, 10);
@@ -803,7 +806,7 @@ bool minias_riscv_measure(const char *op,
     }
 
 #define SIMPLE(OP) strcmp(op, OP) == 0
-    if (SIMPLE("ret") || SIMPLE("nop") || SIMPLE("mv") || SIMPLE("jr") ||
+    if (SIMPLE("ret") || SIMPLE("nop") || SIMPLE("mv") || SIMPLE("move") || SIMPLE("jr") ||
         SIMPLE("snez") || SIMPLE("seqz") || SIMPLE("neg") || SIMPLE("jalr") ||
         SIMPLE("j") || SIMPLE("jal") || SIMPLE("beq") || SIMPLE("bne") ||
         SIMPLE("blt") || SIMPLE("bge") || SIMPLE("bltu") || SIMPLE("bgeu") ||
@@ -959,7 +962,7 @@ bool minias_riscv_encode(MiniAs *as, const MiniAsStmt *stmt) {
     if (strcmp(stmt->op, "nop") == 0) {
         return append_u32(as, stmt->section, enc_i(0x13U, 0, 0U, 0, 0));
     }
-    if (strcmp(stmt->op, "mv") == 0) {
+    if (strcmp(stmt->op, "mv") == 0 || strcmp(stmt->op, "move") == 0) {
         if (count != 2U || !require_reg(as, stmt, operands[0], &rd) ||
             !require_reg(as, stmt, operands[1], &rs1)) {
             return false;

@@ -1266,6 +1266,96 @@ static bool parse_equ(MiniAs *as, char *args, size_t line) {
     return true;
 }
 
+static bool parse_set(MiniAs *as, char *args, size_t line) {
+    char *comma = strchr(args, ',');
+    char *name;
+    char *expression;
+    MiniAsSymbolExpr expr;
+    MiniAsSymbol *target;
+    MiniAsSymbol *alias;
+    int target_section;
+    uint32_t target_subsection;
+    uint64_t target_value;
+    uint64_t target_size;
+    uint8_t target_type;
+
+    if (comma == NULL) {
+        minias_set_error(as, "bad-directive:.set:line=%zu", line);
+        return false;
+    }
+    *comma = '\0';
+    name = minias_trim(args);
+    expression = minias_trim(comma + 1);
+    if (*name == '\0' || *expression == '\0' ||
+        !minias_parse_symbol_addend(expression, &expr)) {
+        minias_set_error(as,
+                         "unsupported-expression:.set:%s:line=%zu",
+                         expression,
+                         line);
+        return false;
+    }
+
+    target = minias_get_symbol(as, expr.name, false);
+    if (target == NULL || !target->defined) {
+        minias_set_error(as,
+                         "unsupported-expression:.set:%s:line=%zu",
+                         expression,
+                         line);
+        return false;
+    }
+    target_section = target->section;
+    target_subsection = target->subsection;
+    target_value = target->value;
+    target_size = target->size;
+    target_type = target->type;
+
+    if (expr.addend >= 0) {
+        uint64_t addend = (uint64_t)expr.addend;
+        if (addend > UINT64_MAX - target_value) {
+            minias_set_error(as,
+                             "unsupported-expression:.set:%s:line=%zu",
+                             expression,
+                             line);
+            return false;
+        }
+        target_value += addend;
+    } else {
+        uint64_t magnitude = (uint64_t)(-(expr.addend + 1)) + 1U;
+        if (magnitude > target_value) {
+            minias_set_error(as,
+                             "unsupported-expression:.set:%s:line=%zu",
+                             expression,
+                             line);
+            return false;
+        }
+        target_value -= magnitude;
+    }
+
+    alias = minias_get_symbol(as, name, true);
+    if (alias == NULL) {
+        return false;
+    }
+    if (alias->defined) {
+        if (alias->section == target_section &&
+            alias->subsection == target_subsection &&
+            alias->value == target_value) {
+            return true;
+        }
+        minias_set_error(as, "duplicate-symbol:%s:line=%zu", name, line);
+        return false;
+    }
+
+    alias->defined = true;
+    alias->section = target_section;
+    alias->subsection = target_subsection;
+    alias->value = target_value;
+    alias->type = target_type;
+    if (alias->size == 0U) {
+        alias->size = target_size;
+    }
+    return true;
+}
+
 static bool handle_org(MiniAs *as, const char *args, size_t line) {
     int64_t evaluated;
     uint64_t desired;
@@ -2312,6 +2402,9 @@ static bool process_statement(MiniAs *as, char *text, size_t line) {
         }
         if (strcmp(op, ".equ") == 0) {
             return parse_equ(as, args, line);
+        }
+        if (strcmp(op, ".set") == 0) {
+            return parse_set(as, args, line);
         }
         if (strcmp(op, ".previous") == 0) {
             int swap_section = as->current_section;
