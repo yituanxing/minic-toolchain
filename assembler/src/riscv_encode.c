@@ -801,8 +801,15 @@ bool minias_riscv_encode(MiniAs *as, const MiniAsStmt *stmt) {
     }
 
     if (strcmp(stmt->op, "vmv.v.i") == 0) {
-        int vector_reg = vector_reg_number(operands[0]);
-        if (count != 2U || vector_reg < 0 ||
+        int vector_reg;
+        if (count != 2U) {
+            minias_set_error(as, "bad-operands:vmv.v.i:%s:line=%zu",
+                             stmt->args,
+                             stmt->line);
+            return false;
+        }
+        vector_reg = vector_reg_number(operands[0]);
+        if (vector_reg < 0 ||
             !require_imm(as, stmt, operands[1], &immediate) ||
             immediate < -16 || immediate > 15) {
             minias_set_error(as, "bad-operands:vmv.v.i:%s:line=%zu",
