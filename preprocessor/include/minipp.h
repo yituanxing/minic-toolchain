@@ -13,6 +13,8 @@ typedef struct MiniPpConfig {
     size_t define_count;
     const char **undefines;
     size_t undefine_count;
+    const char **include_paths;
+    size_t include_path_count;
 } MiniPpConfig;
 
 int minipp_preprocess_file(const char *input_path,
