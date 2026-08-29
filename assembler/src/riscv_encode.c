@@ -444,6 +444,73 @@ static bool require_imm(MiniAs *as,
     return true;
 }
 
+static bool parse_vsetvli_vtype(char operands[][128],
+                                  size_t count,
+                                  uint32_t *vtypei) {
+    size_t index = 2U;
+    uint32_t vsew;
+    uint32_t vlmul = 0U;
+    uint32_t vta;
+    uint32_t vma;
+
+    if (count != 5U && count != 6U) {
+        return false;
+    }
+    if (strcmp(operands[index], "e8") == 0) {
+        vsew = 0U;
+    } else if (strcmp(operands[index], "e16") == 0) {
+        vsew = 1U;
+    } else if (strcmp(operands[index], "e32") == 0) {
+        vsew = 2U;
+    } else if (strcmp(operands[index], "e64") == 0) {
+        vsew = 3U;
+    } else {
+        return false;
+    }
+    ++index;
+
+    if (count == 6U) {
+        if (strcmp(operands[index], "m1") == 0) {
+            vlmul = 0U;
+        } else if (strcmp(operands[index], "m2") == 0) {
+            vlmul = 1U;
+        } else if (strcmp(operands[index], "m4") == 0) {
+            vlmul = 2U;
+        } else if (strcmp(operands[index], "m8") == 0) {
+            vlmul = 3U;
+        } else if (strcmp(operands[index], "mf2") == 0) {
+            vlmul = 7U;
+        } else if (strcmp(operands[index], "mf4") == 0) {
+            vlmul = 6U;
+        } else if (strcmp(operands[index], "mf8") == 0) {
+            vlmul = 5U;
+        } else {
+            return false;
+        }
+        ++index;
+    }
+
+    if (strcmp(operands[index], "ta") == 0) {
+        vta = 1U;
+    } else if (strcmp(operands[index], "tu") == 0) {
+        vta = 0U;
+    } else {
+        return false;
+    }
+    ++index;
+
+    if (strcmp(operands[index], "ma") == 0) {
+        vma = 1U;
+    } else if (strcmp(operands[index], "mu") == 0) {
+        vma = 0U;
+    } else {
+        return false;
+    }
+
+    *vtypei = (vma << 7U) | (vta << 6U) | (vsew << 3U) | vlmul;
+    return true;
+}
+
 static bool parse_mem(const char *text, int64_t *offset, char base[128]) {
     const char *left = strchr(text, '(');
     const char *right = strrchr(text, ')');
@@ -472,8 +539,8 @@ bool minias_riscv_measure(const char *op,
                           uint32_t *size,
                           char *reason,
                           size_t reason_size) {
-    char operands[4][128];
-    size_t count = split_operands(args, operands, 4U);
+    char operands[8][128];
+    size_t count = split_operands(args, operands, 8U);
 
     if (strcmp(op, "li") == 0) {
         uint64_t bits;
@@ -517,6 +584,20 @@ bool minias_riscv_measure(const char *op,
     if (strcmp(op, "tail") == 0) {
         (void)snprintf(reason, reason_size, "unsupported-reloc-instruction:%s", op);
         return false;
+    }
+
+    if (strcmp(op, "vsetvli") == 0) {
+        uint32_t vtypei;
+        if ((count != 5U && count != 6U) ||
+            reg_number(operands[0]) < 0 ||
+            reg_number(operands[1]) < 0 ||
+            !parse_vsetvli_vtype(operands, count, &vtypei)) {
+            (void)snprintf(reason, reason_size, "bad-operands:vsetvli:%s", args);
+            return false;
+        }
+        (void)vtypei;
+        *size = 4U;
+        return true;
     }
 
     if (strcmp(op, "sfence.vma") == 0) {
@@ -587,8 +668,8 @@ bool minias_riscv_measure(const char *op,
 }
 
 bool minias_riscv_encode(MiniAs *as, const MiniAsStmt *stmt) {
-    char operands[4][128];
-    size_t count = split_operands(stmt->args, operands, 4U);
+    char operands[8][128];
+    size_t count = split_operands(stmt->args, operands, 8U);
     int rd;
     int rs1;
     int rs2;
@@ -596,6 +677,21 @@ bool minias_riscv_encode(MiniAs *as, const MiniAsStmt *stmt) {
     uint32_t value = 0U;
     uint32_t funct3;
     MiniAsSymbol *symbol;
+
+    if (strcmp(stmt->op, "vsetvli") == 0) {
+        uint32_t vtypei;
+        if (!require_reg(as, stmt, operands[0], &rd) ||
+            !require_reg(as, stmt, operands[1], &rs1) ||
+            !parse_vsetvli_vtype(operands, count, &vtypei)) {
+            minias_set_error(as, "bad-operands:vsetvli:%s:line=%zu",
+                             stmt->args,
+                             stmt->line);
+            return false;
+        }
+        value = (vtypei << 20U) | ((uint32_t)rs1 << 15U) |
+                (7U << 12U) | ((uint32_t)rd << 7U) | 0x57U;
+        return append_u32(as, stmt->section, value);
+    }
 
     if (strcmp(stmt->op, "vsetvl") == 0) {
         if (count != 3U ||
