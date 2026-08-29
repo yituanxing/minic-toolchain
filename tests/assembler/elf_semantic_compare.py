@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import argparse
 import collections
+import hashlib
 import json
 from pathlib import Path
 
@@ -47,6 +48,10 @@ def symbol_semantic_key(elf, sym):
     name = sym.name or ""
 
     if typ == "STT_FILE":
+        return None
+    if bind == "STB_LOCAL" and (name.startswith("$x") or name.startswith("$d")):
+        # RISC-V mapping symbols are assembler/disassembler metadata, not
+        # link-visible source symbols.
         return None
     if typ == "STT_SECTION":
         return ("SECTION", sec)
@@ -107,20 +112,35 @@ def relocation_counter(elf):
 
 
 def section_metadata(elf):
-    out = {}
+    core = {}
+    alignment = {}
     for sec in elf.iter_sections():
         name = sec.name
         if name in IGNORE_SECTION_NAMES or isinstance(sec, RelocationSection):
             continue
         hdr = sec.header
-        out[name] = {
+        core[name] = {
             "type": str(hdr["sh_type"]),
             "flags": int(hdr["sh_flags"]),
-            "align": int(hdr["sh_addralign"]),
             "entsize": int(hdr["sh_entsize"]),
             "size": int(hdr["sh_size"]),
         }
-    return out
+        alignment[name] = int(hdr["sh_addralign"])
+    return core, alignment
+
+
+def alignment_compatible(reference, candidate):
+    if set(reference) != set(candidate):
+        return False
+    for name, ref_align in reference.items():
+        cand_align = candidate[name]
+        if ref_align == 0:
+            if cand_align != 0:
+                return False
+            continue
+        if cand_align < ref_align or cand_align % ref_align != 0:
+            return False
+    return True
 
 
 def masked_bytes(data, ranges):
@@ -144,7 +164,11 @@ def comparable_contents(elf, masks, unknown_width):
         if unknown_width.get(name):
             skipped[name] = list(unknown_width[name])
             continue
-        out[name] = masked_bytes(sec.data(), masks.get(name, [])).hex()
+        data = masked_bytes(sec.data(), masks.get(name, []))
+        out[name] = {
+            "size": len(data),
+            "sha256": hashlib.sha256(data).hexdigest(),
+        }
     return out, skipped
 
 
@@ -159,6 +183,7 @@ def load_semantics(path):
         elf = ELFFile(f)
         relocs, masks, unknown = relocation_counter(elf)
         contents, skipped = comparable_contents(elf, masks, unknown)
+        section_core, section_alignment = section_metadata(elf)
         return {
             "header": {
                 "class": int(elf.elfclass),
@@ -167,7 +192,8 @@ def load_semantics(path):
                 "machine": str(elf.header["e_machine"]),
                 "flags": int(elf.header["e_flags"]),
             },
-            "sections": section_metadata(elf),
+            "section_core": section_core,
+            "section_alignment": section_alignment,
             "symbols": counter_to_sorted_list(symbol_counter(elf)),
             "relocations": counter_to_sorted_list(relocs),
             "contents_masked": contents,
@@ -187,24 +213,46 @@ def main():
     reference = load_semantics(args.reference)
     candidate = load_semantics(args.candidate)
     dimensions = {
-        key: reference[key] == candidate[key]
-        for key in ("header", "sections", "symbols", "relocations", "contents_masked")
+        "header": reference["header"] == candidate["header"],
+        "section_core": reference["section_core"] == candidate["section_core"],
+        "section_alignment_compatible": alignment_compatible(
+            reference["section_alignment"], candidate["section_alignment"]
+        ),
+        "symbols": reference["symbols"] == candidate["symbols"],
+        "relocations": reference["relocations"] == candidate["relocations"],
+        "contents_masked": reference["contents_masked"] == candidate["contents_masked"],
     }
+    strict_alignment = reference["section_alignment"] == candidate["section_alignment"]
 
     result = {
         "reference": str(Path(args.reference)),
         "candidate": str(Path(args.candidate)),
         "equal": all(dimensions.values()),
+        "strict_equal": all(dimensions.values()) and strict_alignment,
         "dimensions": dimensions,
+        "strict_section_alignment": strict_alignment,
         "reference_skipped_content": reference["content_skipped_unknown_reloc_width"],
         "candidate_skipped_content": candidate["content_skipped_unknown_reloc_width"],
     }
-    if not result["equal"]:
-        result["differences"] = {
-            key: {"reference": reference[key], "candidate": candidate[key]}
-            for key, equal in dimensions.items()
-            if not equal
-        }
+    if not result["equal"] or not strict_alignment:
+        differences = {}
+        for key, equal in dimensions.items():
+            if not equal and key != "section_alignment_compatible":
+                ref_value = reference[key]
+                cand_value = candidate[key]
+                differences[key] = {
+                    "reference_count": len(ref_value) if hasattr(ref_value, "__len__") else None,
+                    "candidate_count": len(cand_value) if hasattr(cand_value, "__len__") else None,
+                    "reference_sample": list(ref_value.items())[:20] if isinstance(ref_value, dict) else ref_value[:20],
+                    "candidate_sample": list(cand_value.items())[:20] if isinstance(cand_value, dict) else cand_value[:20],
+                }
+        if not dimensions["section_alignment_compatible"] or not strict_alignment:
+            differences["section_alignment"] = {
+                "reference": reference["section_alignment"],
+                "candidate": candidate["section_alignment"],
+                "compatible": dimensions["section_alignment_compatible"],
+            }
+        result["differences"] = differences
 
     output = json.dumps(result, indent=2, sort_keys=True)
     if args.json_out:
