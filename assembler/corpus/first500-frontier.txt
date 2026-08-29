@@ -4,4 +4,3 @@ arch/riscv/kvm/main.i.s
 arch/riscv/kvm/vcpu_exit.i.s
 fs/nfs/blocklayout/blocklayout.i.s
 kernel/configs.i.s
-mm/hugetlb.i.s
