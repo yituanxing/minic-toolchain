@@ -4444,13 +4444,18 @@ bool minias_emit_sections(MiniAs *as) {
     return true;
 }
 
-int minias_assemble_file(const char *input_path, const char *output_path, FILE *diagnostic) {
+int minias_assemble_file_class(const char *input_path,
+                               const char *output_path,
+                               bool elf32,
+                               FILE *diagnostic) {
     MiniAs as;
     int rc = 1;
 
     minias_init(&as);
     if (as.error[0] == '\0' && minias_parse_file(&as, input_path) &&
-        minias_emit_sections(&as) && minias_write_elf64(&as, output_path)) {
+        minias_emit_sections(&as) &&
+        (elf32 ? minias_write_elf32(&as, output_path)
+               : minias_write_elf64(&as, output_path))) {
         rc = 0;
     }
     if (rc != 0 && diagnostic != NULL) {
@@ -4460,4 +4465,10 @@ int minias_assemble_file(const char *input_path, const char *output_path, FILE *
     }
     minias_destroy(&as);
     return rc;
+}
+
+int minias_assemble_file(const char *input_path,
+                         const char *output_path,
+                         FILE *diagnostic) {
+    return minias_assemble_file_class(input_path, output_path, false, diagnostic);
 }
