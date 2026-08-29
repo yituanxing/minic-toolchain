@@ -8,13 +8,14 @@ source; this file records the promotion state and makes the update rules explici
 
 - Linux: 6.6.143
 - Architecture/config: RISC-V `defconfig`
-- C translation units selected by the configured Kbuild plan: **3352**
-- Configured native preprocessed assembly objects sourced from `.S`: **26**
-- Configured raw `.s` objects: **0**
-- Configured Rust objects: **0**
-- Total configured assembler-stage object inputs: **3378**
-- Input-inventory run: `33237625114`
-- Inventory head: `d0601327e2a32e38cbaafb094a119166768686e7`
+- Frozen compiler corpus translation units: **3352**
+- Ground-truth C object compile rules: **3501**
+- Ground-truth native preprocessed assembly object rules sourced from `.S`: **35**
+- Ground-truth raw `.s` object rules: **0**
+- Ground-truth Rust object rules: **0**
+- Ground-truth assembler-stage object inputs: **3536**
+- Ground-truth inventory run: `33237934886`
+- Current exact-delta run: `33248367296`
 
 The frozen compiler corpus and the native assembly cohort are separate coverage
 populations. The original configured-plan inventory counted 3378 assembler-stage
@@ -34,14 +35,18 @@ reconciled against the 3536 ground-truth workload.
 | C next500b | 1500-1999 | `787fc6a888b7c9c1ead201f28c64295d7dd2fb56` | `33238043396` | 500 | 0 | 0 | 190 s | **PASS** |
 | C next500c | 2000-2499 | `ba87fd14d9b19e3eb65d596e71a0b949267176b9` | `33238335068` | 500 | 0 | 0 | 201 s | **PASS** |
 | C next500d | 2500-2999 | `af52735e7df06e9cccb106d6dba485a596bb28a5` | `33244118305` | 500 | 0 | 0 | 187 s | **FROZEN** |
-| C final352 | 3000-3351 | - | - | - | - | - | - | **active** |
-| native asm26 | configured .S objects | - | - | - | - | - | - | active |
+| C final352 | 3000-3351 | `bc9b649c5fe3b5fd5fa8e7ee06428e65bebd9c6d` | `33244266799` | 352 | 0 | 0 | - | **FROZEN** |
+| C all3352 exact | frozen 0-3351 | `795406f1316716d2328e1871d79745f2f08cb910` | `33244431157` | 3352 | 0 | 0 | - | **FROZEN** |
+| native asm35 | ground-truth native .S rules | `2f6818b192e980742f4eebdffabe21ed82a91bf6` | `33247444588` | 35 | 0 | 0 | - | **FROZEN** |
+| C ground-truth delta | 3501 C object rules vs frozen3352 | `d43a1885b84e3feb842d719615d96322435602fc` | `33248367296` | - | - | - | - | **active** |
 
-Cumulative authoritative frozen-C coverage now proven: **3000/3352**. All six
-500-file windows are exact green. Run `33244118305` closed the only next500d
-failure (`drivers/perf/riscv_pmu.i.s`, previously `bad-csrr`) by accepting
-the additive constant CSR expression emitted from the real Linux inline-asm
-shape. The remaining frozen-C frontier is exactly **352 files** (3000-3351).
+Cumulative authoritative frozen-C coverage is now **3352/3352** at one exact
+head, and the complete ground-truth native assembly cohort is **35/35**. The
+remaining assembler completeness gap is no longer native assembly; it is the
+object-identity delta between the frozen 3352 C corpus and the **3501 actual C
+object compile rules** observed in successful GNU Kbuild. Run `33248367296`
+computes exact overlap / ground-truth-only / frozen-only object-path manifests
+before any further C-delta acceptance claim is made.
 
 ## First500 convergence history
 
@@ -88,6 +93,5 @@ After every authoritative full-window run:
 
 Record wall-clock time from each GitHub Actions run rather than extrapolating it
 into evidence. Current observed full-window runs are roughly 2.5-4 minutes:
-first500 most recently took 149 seconds and new500 took 222 seconds. The final
-all3378 wall time must be measured by its own aggregate run; projected time is
-not a substitute for that measurement.
+first500 most recently took 149 seconds and new500 took 222 seconds. The final exact ground-truth 3536-object wall time must be measured by its own
+aggregate run; projected time is not a substitute for that measurement.
