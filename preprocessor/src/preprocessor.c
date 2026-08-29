@@ -605,9 +605,32 @@ static bool minipp_handle_include(MiniPpState *state,
     const char *name_end;
     char terminator;
     bool angled;
-    char *name;
+    char *name = NULL;
+    MiniPpString expanded;
     MiniPpString resolved;
-    bool ok;
+    bool have_expanded = false;
+    bool ok = false;
+
+    minipp_string_init(&expanded);
+
+    if (*text != '"' && *text != '<') {
+        if (!minipp_expand_text(state, text, &expanded) ||
+            !minipp_string_append_char(&expanded, '\0')) {
+            if (state->expansion_incomplete) {
+                fprintf(state->diagnostics,
+                        "minic-cpp: unterminated-include-macro:%s",
+                        rest);
+            } else {
+                fprintf(state->diagnostics,
+                        "minic-cpp: include-macro-expansion-failed:%s",
+                        rest);
+            }
+            goto done;
+        }
+        --expanded.size;
+        have_expanded = true;
+        text = minipp_skip_horizontal_space(expanded.data);
+    }
 
     if (*text == '"') {
         angled = false;
@@ -618,8 +641,8 @@ static bool minipp_handle_include(MiniPpState *state,
     } else {
         fprintf(state->diagnostics,
                 "minic-cpp: unsupported-include-expression:%s",
-                rest);
-        return false;
+                have_expanded ? expanded.data : rest);
+        goto done;
     }
 
     name_start = text + 1;
@@ -629,8 +652,10 @@ static bool minipp_handle_include(MiniPpState *state,
         ++name_end;
     }
     if (*name_end != terminator || name_end == name_start) {
-        fprintf(state->diagnostics, "minic-cpp: invalid-include:%s", rest);
-        return false;
+        fprintf(state->diagnostics,
+                "minic-cpp: invalid-include:%s",
+                have_expanded ? expanded.data : rest);
+        goto done;
     }
 
     text = minipp_skip_horizontal_space(name_end + 1);
@@ -640,15 +665,15 @@ static bool minipp_handle_include(MiniPpState *state,
     if (*text != '\0') {
         fprintf(state->diagnostics,
                 "minic-cpp: trailing-include-tokens:%s",
-                rest);
-        return false;
+                have_expanded ? expanded.data : rest);
+        goto done;
     }
 
     name = minipp_duplicate_range(name_start,
                                   (size_t)(name_end - name_start));
     if (name == NULL) {
         fprintf(state->diagnostics, "minic-cpp: out-of-memory\n");
-        return false;
+        goto done;
     }
 
     if (!minipp_resolve_include(state,
@@ -659,13 +684,15 @@ static bool minipp_handle_include(MiniPpState *state,
         fprintf(state->diagnostics,
                 "minic-cpp: include-not-found:%s\n",
                 name);
-        free(name);
-        return false;
+        goto done;
     }
 
     ok = minipp_process_file(state, resolved.data, output);
     minipp_string_destroy(&resolved);
+
+done:
     free(name);
+    minipp_string_destroy(&expanded);
     return ok;
 }
 
