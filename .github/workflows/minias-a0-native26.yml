@@ -17,6 +17,7 @@ concurrency:
 env:
   FROZEN_NATIVE26_RUN: "33245348705"
   FROZEN_NATIVE26_FILES_SHA256: "fdbdf1f8fbf4ddcb1af4ff689225780f12e0e243dec3b9540fc493e766b429f6"
+  FROZEN_NATIVE26_SIDECARS_RUN: "33247095350"
 
 jobs:
   native26:
@@ -83,6 +84,39 @@ jobs:
           actual=$(sha256sum build/native26-files.sha256 | cut -d' ' -f1)
           test "$actual" = "$FROZEN_NATIVE26_FILES_SHA256"
           echo "MINIAS_NATIVE26_FROZEN=PASS selected=26 files_sha256=$actual source_run=$FROZEN_NATIVE26_RUN"
+
+      - name: Download frozen native26 incbin sidecars
+        uses: actions/download-artifact@v4
+        with:
+          name: minias-native26-sidecars-v1
+          path: build/import-native26-sidecars
+          repository: ${{ github.repository }}
+          run-id: ${{ env.FROZEN_NATIVE26_SIDECARS_RUN }}
+          github-token: ${{ github.token }}
+
+      - name: Verify and materialize frozen native26 incbin sidecars
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          import=build/import-native26-sidecars
+          target=build/linux-native26-out
+          test -s "$import/SHA256SUMS"
+          (
+            cd "$import"
+            sha256sum -c SHA256SUMS
+          )
+          sidecars=(
+            arch/riscv/kernel/vdso/vdso.so
+            arch/riscv/kernel/compat_vdso/compat_vdso.so
+            arch/riscv/purgatory/purgatory.ro
+            usr/initramfs_inc_data
+          )
+          for rel in "${sidecars[@]}"; do
+            test -s "$import/$rel"
+            mkdir -p "$target/$(dirname "$rel")"
+            cp "$import/$rel" "$target/$rel"
+          done
+          echo "MINIAS_NATIVE26_SIDECARS=PASS count=4 source_run=$FROZEN_NATIVE26_SIDECARS_RUN"
 
       - name: Assemble native26 and classify first blockers
         shell: bash
