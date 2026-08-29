@@ -30,13 +30,31 @@ if (( ! compile_only )) || [[ -z "$source_file" ]]; then
   exec "$real_cc" "$@"
 fi
 
-case "$source_file" in
-  */init/main.c|init/main.c|*/kernel/configs.c|kernel/configs.c)
-    ;;
-  *)
-    exec "$real_cc" "$@"
-    ;;
+linux_src=${MINIPP_LINUX_SRC:?MINIPP_LINUX_SRC is not set}
+rel_source=$source_file
+case "$rel_source" in
+  "$linux_src"/*) rel_source=${rel_source#"$linux_src"/} ;;
+  ./*) rel_source=${rel_source#./} ;;
 esac
+
+select_file=${MINIPP_LINUX_SELECT_FILE:-}
+if [[ -n "$select_file" ]]; then
+  if [[ ! -f "$select_file" ]]; then
+    printf 'minipp-linux-wrapper: selector-not-found:%s\n' "$select_file" >&2
+    exit 2
+  fi
+  if ! grep -Fxq -- "$rel_source" "$select_file"; then
+    exec "$real_cc" "$@"
+  fi
+else
+  case "$rel_source" in
+    init/main.c|kernel/configs.c)
+      ;;
+    *)
+      exec "$real_cc" "$@"
+      ;;
+  esac
+fi
 
 mkdir -p "$work" "$(dirname "$trace")"
 key=${source_file//\//__}
@@ -77,8 +95,6 @@ done
 predefines="$work/riscv64-gcc-predefines.h"
 if [[ ! -s "$predefines" ]]; then
   tmp_predefines="$predefines.tmp"
-  linux_src=${MINIPP_LINUX_SRC:?MINIPP_LINUX_SRC is not set}
-
   "$real_cc" "${predef_args[@]}" -dM -E -x c /dev/null >"$tmp_predefines"
 
   cat >>"$tmp_predefines" <<'EOF'
