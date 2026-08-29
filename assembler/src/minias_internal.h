@@ -48,7 +48,20 @@ typedef struct MiniAsSection {
     unsigned char *data;
     size_t size;
     size_t capacity;
+    uint64_t layout_size;
 } MiniAsSection;
+
+typedef struct MiniAsSubsection {
+    int section;
+    uint32_t number;
+    uint64_t size;
+    uint64_t base;
+} MiniAsSubsection;
+
+typedef struct MiniAsSectionState {
+    int section;
+    uint32_t subsection;
+} MiniAsSectionState;
 
 typedef struct MiniAsSymbol {
     char *name;
@@ -58,6 +71,7 @@ typedef struct MiniAsSymbol {
     uint8_t bind;
     uint8_t type;
     uint8_t visibility;
+    uint32_t subsection;
     bool defined;
 } MiniAsSymbol;
 
@@ -92,6 +106,7 @@ typedef struct MiniAsStmt {
     char *args;
     size_t line;
     int section;
+    uint32_t subsection;
     uint64_t offset;
     uint32_t size;
     uint64_t align;
@@ -110,7 +125,10 @@ typedef struct MiniAs {
     MiniAsReloc *relocs;
     size_t reloc_count;
     size_t reloc_capacity;
-    int *section_stack;
+    MiniAsSubsection *subsections;
+    size_t subsection_count;
+    size_t subsection_capacity;
+    MiniAsSectionState *section_stack;
     size_t section_stack_count;
     size_t section_stack_capacity;
     size_t pcrel_anchor_counter;
@@ -122,7 +140,9 @@ typedef struct MiniAs {
     size_t conditional_capacity;
     bool conditional_active;
     int current_section;
+    uint32_t current_subsection;
     int previous_section;
+    uint32_t previous_subsection;
     char error[MINIAS_MAX_ERROR];
 } MiniAs;
 
