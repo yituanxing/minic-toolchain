@@ -79,7 +79,7 @@ jobs:
 
           if (( query )); then
             printf 'delegate-query' >>"$trace"
-            printf ' %q' "$@"
+            printf ' %q' "$@" >>"$trace"
             printf '\n' >>"$trace"
             exec "$real_as" "$@"
           fi
