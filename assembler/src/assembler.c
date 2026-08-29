@@ -1506,7 +1506,6 @@ static bool parse_set(MiniAs *as, char *args, size_t line) {
         bool location_constant = false;
 
         if (*tail == '.') {
-            int64_t ignored;
             ++tail;
             while (*tail == ' ' || *tail == '\t') {
                 ++tail;
@@ -1518,7 +1517,7 @@ static bool parse_set(MiniAs *as, char *args, size_t line) {
                 while (*tail == ' ' || *tail == '\t') {
                     ++tail;
                 }
-                location_constant = parse_i64(tail, &ignored);
+                location_constant = isdigit((unsigned char)*tail) != 0;
             }
         }
 
