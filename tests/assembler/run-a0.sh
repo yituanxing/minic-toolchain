@@ -618,7 +618,11 @@ alias_value="$(readelf -Ws "$work/aliases-pseudos.o" | awk '$8=="alias_entry" {p
 weak_value="$(readelf -Ws "$work/aliases-pseudos.o" | awk '$8=="weak_alias" {print $2}')"
 test "$target_value" = "$alias_value"
 test "$target_value" = "$weak_value"
-readelf -Ws "$work/aliases-pseudos.o" | grep -Eq 'FUNC[[:space:]]+GLOBAL.* alias_entry.text
+readelf -Ws "$work/aliases-pseudos.o" | grep -Eq 'FUNC[[:space:]]+GLOBAL.* alias_entry$'
+readelf -Ws "$work/aliases-pseudos.o" | grep -Eq 'FUNC[[:space:]]+WEAK.* weak_alias$'
+
+cat >"$work/raw-insn.s" <<'EOF'
+.text
 .insn r 115, 0, 12, x0, x0, x0
 .insn r 115, 4, 50, t0, t2, x3
 .insn i 15, 2, x0, a0, 2
