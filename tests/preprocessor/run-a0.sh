@@ -132,4 +132,25 @@ int zero_value = ZERO();
 EOF
 run_exact function-zero
 
-printf 'MINIPP_A0_EXACT=PASS cases=14 mode=byte-identical\n'
+mkdir -p "$work/forced"
+cat >"$work/forced/forced.h" <<'EOF'
+#define FORCED_VALUE 37
+int from_forced_header = FORCED_VALUE;
+EOF
+cat >"$work/forced-include.c" <<'EOF'
+int after_forced = FORCED_VALUE + 1;
+EOF
+run_exact forced-include -I"$work/forced" -include forced.h
+
+mkdir -p "$work/system"
+cat >"$work/system/system-header.h" <<'EOF'
+#define SYSTEM_VALUE 41
+int from_system_header = SYSTEM_VALUE;
+EOF
+cat >"$work/system-include.c" <<'EOF'
+#include <system-header.h>
+int after_system = SYSTEM_VALUE + 1;
+EOF
+run_exact system-include -isystem "$work/system"
+
+printf 'MINIPP_A0_EXACT=PASS cases=16 mode=byte-identical\n'
