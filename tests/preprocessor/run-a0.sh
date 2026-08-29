@@ -357,6 +357,7 @@ cat >"$work/gnu-variadic-spacing.c" <<'EOF'
 int vargs_tight = VARGS(1,2);
 int vargs_spaced = VARGS(1, 2);
 int gnu_one = GNU_VARGS(1, 2);
+int gnu_tight = GNU_VARGS(1,2);
 int gnu_many = GNU_VARGS(1, 2, 3);
 EOF
 run_exact gnu-variadic-spacing
