@@ -469,6 +469,25 @@ rept_hex="$(
 test "$rept_hex" = "aabbbbbbaabbbbbb"
 test "$(readelf -Ws "$work/rept.o" | awk '$8=="rept_nops" {print $3}')" = "32"
 
+cat >"$work/irp.s" <<'EOF'
+.section .rodata,"a"
+.globl irp_bytes
+.type irp_bytes, @object
+irp_bytes:
+.irp num,0,1,2,31
+  .equ .L__gpr_num_x\num, \num
+  .byte \num
+.endr
+.size irp_bytes, 4
+EOF
+"$MINIAS" -o "$work/irp.o" "$work/irp.s"
+irp_hex="$(
+    readelf -x .rodata "$work/irp.o" |
+    awk '/0x[0-9a-f]+/ {for (i=2; i<=NF; ++i) if ($i ~ /^[0-9a-f]+$/ && length($i) <= 8 && length($i) % 2 == 0) printf "%s", $i}'
+)"
+test "$irp_hex" = "0001021f"
+readelf -Ws "$work/irp.o" | grep -q '.L__gpr_num_x31'
+
 cat >"$work/fence-i.s" <<'EOF'
 .text
 .globl fence_i_user
@@ -485,4 +504,4 @@ fence_i_hex="$(
 )"
 test "$fence_i_hex" = "0f10000067800000"
 
-echo "MINIAS_A0=PASS objects=22 format=ELF64-RISCV-ET_REL relocations=15 strings=2 pseudos=14 previous=3 subsection=2 numeric_labels=18 isa_next=13 csr_amo=4 sfence_vma=3 fence_i=1 rept=2 nested_rept=1 section_stack=1 org=3 local_difference=1 lr_sc=2 inline_labels=2 branch_pseudos=8 extern=1 symbol_minus_dot=4 symbol_difference=1 absolute32=1 jal=2 high_numeric_labels=2 conditional=1"
+echo "MINIAS_A0=PASS objects=23 format=ELF64-RISCV-ET_REL relocations=15 strings=2 pseudos=14 previous=3 subsection=2 numeric_labels=18 isa_next=13 csr_amo=4 sfence_vma=3 fence_i=1 rept=2 nested_rept=1 irp=4 section_stack=1 org=3 local_difference=1 lr_sc=2 inline_labels=2 branch_pseudos=8 extern=1 symbol_minus_dot=4 symbol_difference=1 absolute32=1 jal=2 high_numeric_labels=2 conditional=1"
