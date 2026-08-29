@@ -8,7 +8,8 @@
 static void usage(FILE *output, const char *argv0) {
     fprintf(output,
             "usage: %s -E -P -undef -nostdinc "
-            "[-DNAME[=VALUE]] [-UNAME] [-IDIR] -o OUTPUT INPUT.c\n",
+            "[-DNAME[=VALUE]] [-UNAME] [-IDIR] [-isystem DIR] "
+            "[-include FILE] -o OUTPUT INPUT.c\n",
             argv0);
 }
 
@@ -19,9 +20,11 @@ int main(int argc, char **argv) {
     const char **defines;
     const char **undefines;
     const char **include_paths;
+    const char **forced_includes;
     size_t define_count = 0U;
     size_t undefine_count = 0U;
     size_t include_path_count = 0U;
+    size_t forced_include_count = 0U;
     int index;
     int status;
 
@@ -29,11 +32,14 @@ int main(int argc, char **argv) {
     defines = calloc((size_t)argc, sizeof(*defines));
     undefines = calloc((size_t)argc, sizeof(*undefines));
     include_paths = calloc((size_t)argc, sizeof(*include_paths));
-    if (defines == NULL || undefines == NULL || include_paths == NULL) {
+    forced_includes = calloc((size_t)argc, sizeof(*forced_includes));
+    if (defines == NULL || undefines == NULL || include_paths == NULL ||
+        forced_includes == NULL) {
         fprintf(stderr, "minic-cpp: out-of-memory\n");
         free(defines);
         free(undefines);
         free(include_paths);
+        free(forced_includes);
         return 1;
     }
 
@@ -108,6 +114,29 @@ int main(int argc, char **argv) {
             }
             continue;
         }
+        if (strcmp(argument, "-isystem") == 0) {
+            if (++index >= argc) {
+                usage(stderr, argv[0]);
+                status = 2;
+                goto done;
+            }
+            include_paths[include_path_count++] = argv[index];
+            continue;
+        }
+        if (strncmp(argument, "-isystem", 8U) == 0 &&
+            argument[8] != '\0') {
+            include_paths[include_path_count++] = argument + 8;
+            continue;
+        }
+        if (strcmp(argument, "-include") == 0) {
+            if (++index >= argc) {
+                usage(stderr, argv[0]);
+                status = 2;
+                goto done;
+            }
+            forced_includes[forced_include_count++] = argv[index];
+            continue;
+        }
         if (strcmp(argument, "-h") == 0 ||
             strcmp(argument, "--help") == 0) {
             usage(stdout, argv[0]);
@@ -139,11 +168,14 @@ int main(int argc, char **argv) {
     config.undefine_count = undefine_count;
     config.include_paths = include_paths;
     config.include_path_count = include_path_count;
+    config.forced_includes = forced_includes;
+    config.forced_include_count = forced_include_count;
     status = minipp_preprocess_file(input, output, &config, stderr);
 
 done:
     free(defines);
     free(undefines);
     free(include_paths);
+    free(forced_includes);
     return status;
 }
