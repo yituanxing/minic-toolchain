@@ -61,9 +61,9 @@ jobs:
           .size foo,.-foo
           ASM
 
-          riscv64-linux-gnu-as -march=rv64imac_zicsr_zifencei -mabi=lp64 \
+          riscv64-linux-gnu-as -mno-arch-attr -march=rv64imac_zicsr_zifencei -mabi=lp64 \
             -o "$work/basic.gnu.o" "$work/basic.s"
-          riscv64-linux-gnu-as -march=rv64imac_zicsr_zifencei -mabi=lp64 \
+          riscv64-linux-gnu-as -mno-arch-attr -march=rv64imac_zicsr_zifencei -mabi=lp64 \
             -o "$work/basic-mutated.gnu.o" "$work/basic-mutated.s"
 
           python3 "$oracle" "$work/basic.gnu.o" "$work/basic.gnu.o" \
@@ -112,7 +112,7 @@ jobs:
 
           : >"$work/results.tsv"
           for name in basic call store far-branch; do
-            riscv64-linux-gnu-as -march=rv64imac_zicsr_zifencei -mabi=lp64 \
+            riscv64-linux-gnu-as -mno-arch-attr -march=rv64imac_zicsr_zifencei -mabi=lp64 \
               -o "$work/$name.gnu.o" "$work/$name.s"
             "$minias" -march=rv64imac_zicsr_zifencei -mabi=lp64 \
               -o "$work/$name.minias.o" "$work/$name.s"
