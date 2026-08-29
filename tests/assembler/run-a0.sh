@@ -372,4 +372,27 @@ grep -q 'R_RISCV_SUB32.*Lminias_expr' "$work/conditional-alt.txt"
 grep -q 'R_RISCV_ADD16.*Lminias_num_889_1' "$work/conditional-alt.txt"
 grep -q 'R_RISCV_SUB16.*Lminias_num_888_1' "$work/conditional-alt.txt"
 
-echo "MINIAS_A0=PASS objects=17 format=ELF64-RISCV-ET_REL relocations=15 strings=2 pseudos=14 previous=1 numeric_labels=14 isa_next=13 csr_amo=4 section_stack=1 org=1 local_difference=1 lr_sc=2 inline_labels=2 branch_pseudos=8 extern=1 symbol_minus_dot=4 symbol_difference=1 absolute32=1 jal=2 high_numeric_labels=2 conditional=1"
+cat >"$work/subsection.s" <<'EOF'
+.text
+.globl subsection_layout
+.type subsection_layout, @object
+subsection_layout:
+  .byte 0x11
+.subsection 1
+subsection_one:
+  .byte 0x22
+.previous
+subsection_zero_tail:
+  .byte 0x33
+.size subsection_layout, 3
+EOF
+"$MINIAS" -o "$work/subsection.o" "$work/subsection.s"
+subsection_hex="$(
+    readelf -x .text "$work/subsection.o" |
+    awk '/0x[0-9a-f]+/ {for (i=2; i<=NF; ++i) if ($i ~ /^[0-9a-f]+$/ && length($i) <= 8 && length($i) % 2 == 0) printf "%s", $i}'
+)"
+test "$subsection_hex" = "113322"
+test "$(readelf -Ws "$work/subsection.o" | awk '$8=="subsection_zero_tail" {print $2}')" = "0000000000000001"
+test "$(readelf -Ws "$work/subsection.o" | awk '$8=="subsection_one" {print $2}')" = "0000000000000002"
+
+echo "MINIAS_A0=PASS objects=18 format=ELF64-RISCV-ET_REL relocations=15 strings=2 pseudos=14 previous=2 subsection=1 numeric_labels=14 isa_next=13 csr_amo=4 section_stack=1 org=1 local_difference=1 lr_sc=2 inline_labels=2 branch_pseudos=8 extern=1 symbol_minus_dot=4 symbol_difference=1 absolute32=1 jal=2 high_numeric_labels=2 conditional=1"
