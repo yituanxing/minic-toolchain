@@ -38,6 +38,7 @@
 #define MINIAS_R_RISCV_RELAX 51U
 
 #define MINIAS_SECTION_UNDEF (-1)
+#define MINIAS_SECTION_ABS (-2)
 #define MINIAS_MAX_ERROR 256U
 
 typedef struct MiniAsSection {

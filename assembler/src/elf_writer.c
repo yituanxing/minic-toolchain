@@ -215,8 +215,14 @@ bool minias_write_elf64(MiniAs *as, const char *path) {
             symbols[symbol_index].st_info =
                 (unsigned char)ELF64_ST_INFO(symbol->bind, symbol->type);
             symbols[symbol_index].st_other = symbol->visibility;
-            symbols[symbol_index].st_shndx =
-                symbol->defined ? (Elf64_Section)(symbol->section + 1) : SHN_UNDEF;
+            if (!symbol->defined) {
+                symbols[symbol_index].st_shndx = SHN_UNDEF;
+            } else if (symbol->section == MINIAS_SECTION_ABS) {
+                symbols[symbol_index].st_shndx = SHN_ABS;
+            } else {
+                symbols[symbol_index].st_shndx =
+                    (Elf64_Section)(symbol->section + 1);
+            }
             symbols[symbol_index].st_value = symbol->defined ? symbol->value : 0U;
             symbols[symbol_index].st_size = symbol->size;
             ++symbol_index;

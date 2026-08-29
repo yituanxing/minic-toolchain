@@ -156,7 +156,7 @@ static bool finalize_subsection_layout(MiniAs *as) {
         MiniAsSymbol *symbol = &as->symbols[i];
         MiniAsSubsection *sub;
 
-        if (!symbol->defined || symbol->section == MINIAS_SECTION_UNDEF) {
+        if (!symbol->defined || symbol->section < 0) {
             continue;
         }
         sub = find_subsection(as, symbol->section, symbol->subsection);
@@ -885,6 +885,44 @@ static bool evaluate_absolute_expression(MiniAs *as,
     }
     skip_absolute_expression_space(&parser);
     return *parser.cursor == '\0';
+}
+
+static bool parse_equ(MiniAs *as, char *args, size_t line) {
+    char *comma = strchr(args, ',');
+    char *name;
+    char *expression;
+    int64_t value;
+    MiniAsSymbol *symbol;
+
+    if (comma == NULL) {
+        minias_set_error(as, "bad-directive:.equ:line=%zu", line);
+        return false;
+    }
+    *comma = '\0';
+    name = minias_trim(args);
+    expression = minias_trim(comma + 1);
+    if (*name == '\0' || *expression == '\0' ||
+        !evaluate_absolute_expression(as, expression, &value) ||
+        value < 0) {
+        minias_set_error(as,
+                         "unsupported-expression:.equ:%s:line=%zu",
+                         expression,
+                         line);
+        return false;
+    }
+    symbol = minias_get_symbol(as, name, true);
+    if (symbol == NULL) {
+        return false;
+    }
+    if (symbol->defined) {
+        minias_set_error(as, "duplicate-symbol:%s:line=%zu", name, line);
+        return false;
+    }
+    symbol->defined = true;
+    symbol->section = MINIAS_SECTION_ABS;
+    symbol->subsection = 0U;
+    symbol->value = (uint64_t)value;
+    return true;
 }
 
 static bool handle_org(MiniAs *as, const char *args, size_t line) {
@@ -1932,6 +1970,9 @@ static bool process_statement(MiniAs *as, char *text, size_t line) {
         }
         if (strcmp(op, ".size") == 0) {
             return parse_size(as, args, line);
+        }
+        if (strcmp(op, ".equ") == 0) {
+            return parse_equ(as, args, line);
         }
         if (strcmp(op, ".previous") == 0) {
             int swap_section = as->current_section;
