@@ -38,6 +38,54 @@ static int reg_number(const char *name) {
     return -1;
 }
 
+static int vector_reg_number(const char *name) {
+    char *end = NULL;
+    long value;
+
+    if (name == NULL || name[0] != 'v' || !isdigit((unsigned char)name[1])) {
+        return -1;
+    }
+    errno = 0;
+    value = strtol(name + 1, &end, 10);
+    if (errno != 0 || end == name + 1 || *end != '\0' || value < 0 || value > 31) {
+        return -1;
+    }
+    return (int)value;
+}
+
+static bool decode_vector_unit_stride(const char *op,
+                                      bool *is_store,
+                                      uint32_t *width_funct3) {
+    const char *prefix;
+    const char *width_text;
+
+    if (op == NULL || is_store == NULL || width_funct3 == NULL) {
+        return false;
+    }
+    if (strncmp(op, "vle", 3U) == 0) {
+        *is_store = false;
+        prefix = "vle";
+    } else if (strncmp(op, "vse", 3U) == 0) {
+        *is_store = true;
+        prefix = "vse";
+    } else {
+        return false;
+    }
+    width_text = op + strlen(prefix);
+    if (strcmp(width_text, "8.v") == 0) {
+        *width_funct3 = 0U;
+    } else if (strcmp(width_text, "16.v") == 0) {
+        *width_funct3 = 5U;
+    } else if (strcmp(width_text, "32.v") == 0) {
+        *width_funct3 = 6U;
+    } else if (strcmp(width_text, "64.v") == 0) {
+        *width_funct3 = 7U;
+    } else {
+        return false;
+    }
+    return true;
+}
+
 static bool parse_i64(const char *text, int64_t *value) {
     char *end = NULL;
     long long parsed;
@@ -586,6 +634,31 @@ bool minias_riscv_measure(const char *op,
         return false;
     }
 
+    {
+        bool vector_store;
+        uint32_t vector_width;
+        if (decode_vector_unit_stride(op, &vector_store, &vector_width)) {
+            int64_t offset;
+            char base[128];
+            bool mask_ok = count == 2U ||
+                           (count == 3U && strcmp(operands[2], "v0.t") == 0);
+            (void)vector_store;
+            (void)vector_width;
+            if (!mask_ok || vector_reg_number(operands[0]) < 0 ||
+                !parse_mem(operands[1], &offset, base) || offset != 0 ||
+                reg_number(base) < 0) {
+                (void)snprintf(reason,
+                               reason_size,
+                               "bad-operands:%s:%s",
+                               op,
+                               args);
+                return false;
+            }
+            *size = 4U;
+            return true;
+        }
+    }
+
     if (strcmp(op, "vsetvli") == 0) {
         uint32_t vtypei;
         if ((count != 5U && count != 6U) ||
@@ -677,6 +750,43 @@ bool minias_riscv_encode(MiniAs *as, const MiniAsStmt *stmt) {
     uint32_t value = 0U;
     uint32_t funct3;
     MiniAsSymbol *symbol;
+
+    {
+        bool vector_store;
+        uint32_t vector_width;
+        if (decode_vector_unit_stride(stmt->op, &vector_store, &vector_width)) {
+            int vector_reg;
+            char base[128];
+            bool masked;
+            uint32_t vm;
+
+            if ((count != 2U && count != 3U) ||
+                (count == 3U && strcmp(operands[2], "v0.t") != 0)) {
+                minias_set_error(as,
+                                 "bad-operands:%s:%s:line=%zu",
+                                 stmt->op,
+                                 stmt->args,
+                                 stmt->line);
+                return false;
+            }
+            vector_reg = vector_reg_number(operands[0]);
+            if (vector_reg < 0 || !parse_mem(operands[1], &immediate, base) ||
+                immediate != 0 || !require_reg(as, stmt, base, &rs1)) {
+                minias_set_error(as,
+                                 "bad-operands:%s:%s:line=%zu",
+                                 stmt->op,
+                                 stmt->args,
+                                 stmt->line);
+                return false;
+            }
+            masked = count == 3U;
+            vm = masked ? 0U : 1U;
+            value = (vm << 25U) | ((uint32_t)rs1 << 15U) |
+                    (vector_width << 12U) | ((uint32_t)vector_reg << 7U) |
+                    (vector_store ? 0x27U : 0x07U);
+            return append_u32(as, stmt->section, value);
+        }
+    }
 
     if (strcmp(stmt->op, "vsetvli") == 0) {
         uint32_t vtypei;
