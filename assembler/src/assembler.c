@@ -4073,15 +4073,35 @@ bool minias_emit_sections(MiniAs *as) {
         }
         if (stmt->kind == MINIAS_STMT_ALIGN) {
             if (!minias_section_append_zero(as, stmt->section, stmt->size)) {
+                if (as->error[0] == '\0') {
+                    minias_set_error(as,
+                                     "emit-align-failed:%s:line=%zu",
+                                     stmt->op,
+                                     stmt->line);
+                }
                 free(refs);
                 return false;
             }
         } else if (stmt->kind == MINIAS_STMT_DATA) {
             if (!emit_data_stmt(as, stmt)) {
+                if (as->error[0] == '\0') {
+                    minias_set_error(as,
+                                     "emit-data-failed:%s:%s:line=%zu",
+                                     stmt->op,
+                                     stmt->args,
+                                     stmt->line);
+                }
                 free(refs);
                 return false;
             }
         } else if (!minias_riscv_encode(as, stmt)) {
+            if (as->error[0] == '\0') {
+                minias_set_error(as,
+                                 "encode-failed:%s:%s:line=%zu",
+                                 stmt->op,
+                                 stmt->args,
+                                 stmt->line);
+            }
             free(refs);
             return false;
         }
@@ -4099,6 +4119,11 @@ bool minias_emit_sections(MiniAs *as) {
             uint64_t gap = section->layout_size - (uint64_t)section->size;
             if (gap > SIZE_MAX ||
                 !minias_section_append_zero(as, (int)i, (size_t)gap)) {
+                if (as->error[0] == '\0') {
+                    minias_set_error(as,
+                                     "emit-section-pad-failed:%s",
+                                     section->name);
+                }
                 return false;
             }
         }
