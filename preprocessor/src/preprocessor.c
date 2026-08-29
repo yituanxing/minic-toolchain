@@ -728,11 +728,58 @@ static bool minipp_handle_directive(MiniPpState *state,
     return false;
 }
 
+static bool minipp_try_flush_pending(MiniPpState *state,
+                                     MiniPpString *pending,
+                                     MiniPpString *output,
+                                     bool final) {
+    MiniPpString expanded;
+    bool ok;
+
+    if (pending->size == 0U) {
+        return true;
+    }
+
+    minipp_string_init(&expanded);
+    ok = minipp_expand_text(state, pending->data, &expanded);
+    if (!ok) {
+        bool incomplete = state->expansion_incomplete;
+        minipp_string_destroy(&expanded);
+        if (incomplete && !final) {
+            return true;
+        }
+        if (incomplete) {
+            fprintf(state->diagnostics,
+                    "minic-cpp: unterminated-macro-invocation\n");
+        } else {
+            fprintf(state->diagnostics, "minic-cpp: expansion-failed\n");
+        }
+        return false;
+    }
+
+    if (!minipp_string_append_n(output,
+                                expanded.data == NULL ? "" : expanded.data,
+                                expanded.size)) {
+        minipp_string_destroy(&expanded);
+        fprintf(state->diagnostics, "minic-cpp: out-of-memory\n");
+        return false;
+    }
+    minipp_string_destroy(&expanded);
+
+    pending->size = 0U;
+    if (pending->data != NULL) {
+        pending->data[0] = '\0';
+    }
+    return true;
+}
+
 static bool minipp_process_source(MiniPpState *state,
                                   const char *current_path,
                                   const MiniPpString *input,
                                   MiniPpString *output) {
     size_t offset = 0U;
+    MiniPpString pending;
+
+    minipp_string_init(&pending);
 
     while (offset < input->size) {
         size_t end = offset;
@@ -752,29 +799,46 @@ static bool minipp_process_source(MiniPpState *state,
                                         end - offset,
                                         &stripped)) {
             minipp_string_destroy(&stripped);
+            minipp_string_destroy(&pending);
             fprintf(state->diagnostics, "minic-cpp: out-of-memory\n");
             return false;
         }
 
         if (!minipp_string_append_char(&stripped, '\0')) {
             minipp_string_destroy(&stripped);
+            minipp_string_destroy(&pending);
             fprintf(state->diagnostics, "minic-cpp: out-of-memory\n");
             return false;
         }
         --stripped.size;
 
-        if (!minipp_handle_directive(state,
-                                     current_path,
-                                     stripped.data,
-                                     output,
-                                     &handled)) {
-            minipp_string_destroy(&stripped);
-            return false;
-        }
-        if (!handled && state->active) {
-            if (!minipp_expand_text(state, stripped.data, output)) {
+        if (pending.size == 0U) {
+            if (!minipp_handle_directive(state,
+                                         current_path,
+                                         stripped.data,
+                                         output,
+                                         &handled)) {
                 minipp_string_destroy(&stripped);
-                fprintf(state->diagnostics, "minic-cpp: expansion-failed\n");
+                minipp_string_destroy(&pending);
+                return false;
+            }
+        }
+
+        if (!handled && (state->active || pending.size != 0U)) {
+            if (!minipp_string_append_n(&pending,
+                                        stripped.data == NULL ? "" : stripped.data,
+                                        stripped.size)) {
+                minipp_string_destroy(&stripped);
+                minipp_string_destroy(&pending);
+                fprintf(state->diagnostics, "minic-cpp: out-of-memory\n");
+                return false;
+            }
+            if (!minipp_try_flush_pending(state,
+                                          &pending,
+                                          output,
+                                          false)) {
+                minipp_string_destroy(&stripped);
+                minipp_string_destroy(&pending);
                 return false;
             }
         }
@@ -783,6 +847,12 @@ static bool minipp_process_source(MiniPpState *state,
         offset = end;
     }
 
+    if (!minipp_try_flush_pending(state, &pending, output, true)) {
+        minipp_string_destroy(&pending);
+        return false;
+    }
+
+    minipp_string_destroy(&pending);
     return true;
 }
 
