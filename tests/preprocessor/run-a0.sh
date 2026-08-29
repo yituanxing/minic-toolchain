@@ -227,4 +227,12 @@ int bitwise_ternary = 0;
 EOF
 run_exact if-bitwise-ternary
 
-printf 'MINIPP_A0_EXACT=PASS cases=25 mode=byte-identical\n'
+cat >"$work/multiline-invocation.c" <<'EOF'
+#define SUM3(a, b, c) ((a) + (b) + (c))
+int multiline_invocation = SUM3(1,
+                                2,
+                                3);
+EOF
+run_exact multiline-invocation
+
+printf 'MINIPP_A0_EXACT=PASS cases=26 mode=byte-identical\n'
