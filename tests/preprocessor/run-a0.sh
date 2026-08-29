@@ -290,4 +290,13 @@ int after_builtin_header = __LINE__;
 EOF
 run_exact builtin-include
 
-printf 'MINIPP_A0_EXACT=PASS cases=32 mode=byte-identical\n'
+cat >"$work/builtin-counter.c" <<'EOF'
+#define COUNTER_PASTE2(a, b) a##b
+#define COUNTER_PASTE(a, b) COUNTER_PASTE2(a, b)
+int counter_zero = __COUNTER__;
+int counter_one = __COUNTER__;
+int COUNTER_PASTE(unique_, __COUNTER__) = 2;
+EOF
+run_exact builtin-counter
+
+printf 'MINIPP_A0_EXACT=PASS cases=33 mode=byte-identical\n'
