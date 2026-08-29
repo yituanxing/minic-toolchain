@@ -1157,13 +1157,85 @@ static bool parse_absolute_unary(MiniAsAbsoluteExpressionParser *parser,
         *value = -operand;
         return true;
     }
+    if (*parser->cursor == '~') {
+        int64_t operand;
+        ++parser->cursor;
+        if (!parse_absolute_unary(parser, &operand)) {
+            return false;
+        }
+        *value = ~operand;
+        return true;
+    }
     return parse_absolute_primary(parser, value);
+}
+
+static bool checked_mul_absolute_i64(int64_t lhs,
+                                     int64_t rhs,
+                                     int64_t *out) {
+    if (lhs == 0 || rhs == 0) {
+        *out = 0;
+        return true;
+    }
+    if ((lhs == -1 && rhs == INT64_MIN) ||
+        (rhs == -1 && lhs == INT64_MIN)) {
+        return false;
+    }
+    if (lhs > 0) {
+        if ((rhs > 0 && lhs > INT64_MAX / rhs) ||
+            (rhs < 0 && rhs < INT64_MIN / lhs)) {
+            return false;
+        }
+    } else {
+        if ((rhs > 0 && lhs < INT64_MIN / rhs) ||
+            (rhs < 0 && lhs < INT64_MAX / rhs)) {
+            return false;
+        }
+    }
+    *out = lhs * rhs;
+    return true;
+}
+
+static bool parse_absolute_mul(MiniAsAbsoluteExpressionParser *parser,
+                               int64_t *value) {
+    int64_t result;
+
+    if (!parse_absolute_unary(parser, &result)) {
+        return false;
+    }
+    for (;;) {
+        char op;
+        int64_t rhs;
+        int64_t next;
+
+        skip_absolute_expression_space(parser);
+        op = *parser->cursor;
+        if (op != '*' && op != '/' && op != '%') {
+            break;
+        }
+        ++parser->cursor;
+        if (!parse_absolute_unary(parser, &rhs)) {
+            return false;
+        }
+        if (op == '*') {
+            if (!checked_mul_absolute_i64(result, rhs, &next)) {
+                return false;
+            }
+        } else {
+            if (rhs == 0 || (result == INT64_MIN && rhs == -1)) {
+                return false;
+            }
+            next = op == '/' ? result / rhs : result % rhs;
+        }
+        result = next;
+    }
+    *value = result;
+    return true;
 }
 
 static bool parse_absolute_sum(MiniAsAbsoluteExpressionParser *parser, int64_t *value) {
     int64_t result;
 
-    if (!parse_absolute_unary(parser, &result)) {
+    if (!parse_absolute_mul(parser, &result)) {
         return false;
     }
     for (;;) {
@@ -1177,7 +1249,7 @@ static bool parse_absolute_sum(MiniAsAbsoluteExpressionParser *parser, int64_t *
             break;
         }
         ++parser->cursor;
-        if (!parse_absolute_unary(parser, &rhs)) {
+        if (!parse_absolute_mul(parser, &rhs)) {
             return false;
         }
         if (op == '+') {
@@ -1893,7 +1965,7 @@ static bool add_data_stmt(MiniAs *as, const char *op, char *args, size_t line) {
                 const char *trimmed = minias_trim(cursor);
                 MiniAsSymbolExpr rhs_expr;
                 bool supported =
-                    ((width == 4U || width == 8U) &&
+                    ((width == 2U || width == 4U || width == 8U) &&
                      minias_parse_symbol_addend(trimmed, &expr)) ||
                     ((width == 2U || width == 4U || width == 8U) &&
                      (parse_symbol_minus_dot(trimmed, &expr) ||
