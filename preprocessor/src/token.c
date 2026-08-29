@@ -59,23 +59,73 @@ static void minipp_arg_list_destroy(MiniPpArgList *list) {
     memset(list, 0, sizeof(*list));
 }
 
+static bool minipp_append_normalized_argument(MiniPpString *item,
+                                              const char *text,
+                                              size_t size) {
+    size_t index = 0U;
+    bool pending_space = false;
+    bool have_token = false;
+
+    while (index < size) {
+        unsigned char ch = (unsigned char)text[index];
+
+        if (isspace(ch) != 0) {
+            if (have_token) {
+                pending_space = true;
+            }
+            ++index;
+            continue;
+        }
+
+        if (pending_space) {
+            if (!minipp_string_append_char(item, ' ')) {
+                return false;
+            }
+            pending_space = false;
+        }
+
+        if (text[index] == '"' || text[index] == '\'') {
+            char quote = text[index];
+
+            if (!minipp_string_append_char(item, text[index])) {
+                return false;
+            }
+            ++index;
+            while (index < size) {
+                char value = text[index];
+                if (!minipp_string_append_char(item, value)) {
+                    return false;
+                }
+                ++index;
+                if (value == '\\' && index < size) {
+                    if (!minipp_string_append_char(item, text[index])) {
+                        return false;
+                    }
+                    ++index;
+                    continue;
+                }
+                if (value == quote) {
+                    break;
+                }
+            }
+            have_token = true;
+            continue;
+        }
+
+        if (!minipp_string_append_char(item, text[index])) {
+            return false;
+        }
+        have_token = true;
+        ++index;
+    }
+
+    return true;
+}
+
 static bool minipp_arg_list_append(MiniPpArgList *list,
                                    const char *text,
                                    size_t size) {
-    size_t start = 0U;
-    size_t end = size;
     MiniPpString *item;
-
-    while (start < end &&
-           (text[start] == ' ' || text[start] == '\t' ||
-            text[start] == '\v' || text[start] == '\f')) {
-        ++start;
-    }
-    while (end > start &&
-           (text[end - 1U] == ' ' || text[end - 1U] == '\t' ||
-            text[end - 1U] == '\v' || text[end - 1U] == '\f')) {
-        --end;
-    }
 
     if (list->count == list->capacity) {
         size_t capacity = list->capacity == 0U ? 4U : list->capacity * 2U;
@@ -95,7 +145,7 @@ static bool minipp_arg_list_append(MiniPpArgList *list,
 
     item = &list->items[list->count];
     minipp_string_init(item);
-    if (!minipp_string_append_n(item, text + start, end - start) ||
+    if (!minipp_append_normalized_argument(item, text, size) ||
         !minipp_string_append_char(item, '\0')) {
         minipp_string_destroy(item);
         return false;
