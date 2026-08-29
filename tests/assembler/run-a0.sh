@@ -134,8 +134,8 @@ numeric_labels:
 EOF
 "$MINIAS" -o "$work/numeric-labels.o" "$work/numeric-labels.s"
 readelf -s "$work/numeric-labels.o" >"$work/numeric-labels.txt"
-grep -q '.Lminias_num_1_1' "$work/numeric-labels.txt"
-grep -q '.Lminias_num_1_2' "$work/numeric-labels.txt"
+! grep -q '.Lminias_num_1_1' "$work/numeric-labels.txt"
+! grep -q '.Lminias_num_1_2' "$work/numeric-labels.txt"
 
 cat >"$work/ecall.s" <<'EOF'
 .text
@@ -231,6 +231,20 @@ stack_data="$(
 )"
 test "$stack_text" = "1300000067800000"
 test "$stack_data" = "aa000000bb"
+
+cat >"$work/note-section.s" <<'EOF'
+.section .note.Linux,"a",@note
+.align 2
+.long 6
+.long 4
+.long 0
+.asciz "Linux"
+.align 2
+.long 0
+EOF
+"$MINIAS" -o "$work/note-section.o" "$work/note-section.s"
+readelf -SW "$work/note-section.o" >"$work/note-section.sections"
+grep -Eq '\] \.note\.Linux[[:space:]]+NOTE[[:space:]]' "$work/note-section.sections"
 
 cat >"$work/local-difference.s" <<'EOF'
 .data
@@ -529,7 +543,7 @@ irp_hex="$(
     awk '/0x[0-9a-f]+/ {for (i=2; i<=NF; ++i) if ($i ~ /^[0-9a-f]+$/ && length($i) <= 8 && length($i) % 2 == 0) printf "%s", $i}'
 )"
 test "$irp_hex" = "0001021f03004100"
-readelf -Ws "$work/irp.o" | grep -q '.L__gpr_num_x31'
+! readelf -Ws "$work/irp.o" | grep -q '.L__gpr_num_x31'
 
 cat >"$work/vsetvl.s" <<'EOF'
 .text
@@ -746,7 +760,801 @@ native_set_size:
 EOF
 "$MINIAS" -o "$work/native-set-size.o" "$work/native-set-size.s"
 test "$(readelf -Ws "$work/native-set-size.o" | awk '$8=="native_set_size" {print $3}')" = "4"
-readelf -Ws "$work/native-set-size.o" | grep -Eq 'FUNC[[:space:]]+GLOBAL.* native_set_size$'
+readelf -Ws "$work/native-set-size.o" >"$work/native-set-size.sym"
+grep -Eq 'FUNC[[:space:]]+GLOBAL.* native_set_size
+
+cat >"$work/native-macro-quotes.s" <<'EOF'
+.text
+.macro emit_one insn:req
+  \insn
+.endm
+.altmacro
+emit_one "nop"
+.noaltmacro
+EOF
+"$MINIAS" -o "$work/native-macro-quotes.o" "$work/native-macro-quotes.s"
+native_macro_quotes_hex="$(
+    readelf -x .text "$work/native-macro-quotes.o" |
+    awk '/0x[0-9a-f]+/ {for (i=2; i<=NF; ++i) if ($i ~ /^[0-9a-f]{8}$/) printf "%s", $i}'
+)"
+test "$native_macro_quotes_hex" = "13000000"
+
+cat >"$work/align-expr.s" <<'EOF'
+.text
+.byte 1
+.balign (1 << 4)
+.byte 2
+EOF
+"$MINIAS" -o "$work/align-expr.o" "$work/align-expr.s"
+align_expr_hex="$(
+    readelf -x .text "$work/align-expr.o" |
+    awk '/0x[0-9a-f]+/ {for (i=2; i<=NF; ++i) if ($i ~ /^[0-9a-f]+$/ && length($i) % 2 == 0) printf "%s", $i}'
+)"
+test "$align_expr_hex" = "0100000000000000000000000000000002"
+
+cat >"$work/sext-w.s" <<'EOF'
+.text
+sext.w a0, a1
+EOF
+"$MINIAS" -o "$work/sext-w.o" "$work/sext-w.s"
+sext_w_hex="$(
+    readelf -x .text "$work/sext-w.o" |
+    awk '/0x[0-9a-f]+/ {for (i=2; i<=NF; ++i) if ($i ~ /^[0-9a-f]{8}$/) printf "%s", $i}'
+)"
+test "$sext_w_hex" = "1b850500"
+
+cat >"$work/macro.s" <<'EOF'
+.text
+.macro inc_one dst:req src
+  addi \dst, \src, 1
+.endm
+.macro add_imm, dst:req, src:req, imm=7
+  addi \dst, \src, \imm
+.endm
+.macro twice op reg
+  \op \reg, \reg, 1
+  \op \reg, \reg, 1
+.endm
+inc_one a0 a1
+add_imm a2, a3
+twice addi a4
+EOF
+"$MINIAS" -o "$work/macro.o" "$work/macro.s"
+macro_hex="$(
+    readelf -x .text "$work/macro.o" |
+    awk '/0x[0-9a-f]+/ {for (i=2; i<=NF; ++i) if ($i ~ /^[0-9a-f]{8}$/) printf "%s", $i}'
+)"
+test "$macro_hex" = "13851500138676001307170013071700"
+
+cat >"$work/vector-unit.s" <<'EOF'
+.text
+.option arch,+v
+vsetvli t0, x0, e8, m8, ta, ma
+vmv.v.i v0, -1
+vmv.v.i v8, -1
+vmv.v.i v16, -1
+vmv.v.i v24, -1
+vse8.v v0, (t3)
+vse8.v v8, (t3)
+vle16.v v2, (a1)
+vle8.v v9, (s0), v0.t
+EOF
+"$MINIAS" -o "$work/vector-unit.o" "$work/vector-unit.s"
+vector_hex="$(
+    readelf -x .text "$work/vector-unit.o" |
+    awk '/0x[0-9a-f]+/ {for (i=2; i<=NF; ++i) if ($i ~ /^[0-9a-f]{8}$/) printf "%s", $i}'
+)"
+test "$vector_hex" = "d772300c57b00f5e57b40f5e57b80f5e57bc0f5e27000e0227040e0207d1050287040400"
+
+cat >"$work/native-zbb-tail-memexpr.s" <<'EOF'
+.text
+.extern external_tail
+.globl native_zbb_tail_memexpr
+.type native_zbb_tail_memexpr, @function
+native_zbb_tail_memexpr:
+  orc.b a0, a1
+  rev8 a2, a3
+  ctz a4, a5
+  ld t0, (0 + 8)(a0)
+  sd t1, ((0 * 8) - (2 * 8))(t3)
+  and t2, t2, 8 -1
+  tail external_tail
+.size native_zbb_tail_memexpr, . - native_zbb_tail_memexpr
+EOF
+"$MINIAS" -o "$work/native-zbb-tail-memexpr.o" "$work/native-zbb-tail-memexpr.s"
+native_zbb_tail_memexpr_hex="$(
+    readelf -x .text "$work/native-zbb-tail-memexpr.o" |
+    awk '/0x[0-9a-f]+/ {for (i=2; i<=NF; ++i) if ($i ~ /^[0-9a-f]{8}$/) printf "%s", $i}'
+)"
+test "$native_zbb_tail_memexpr_hex" = "13d5752813d6866b139717608332850023386efe93f373001703000067000300"
+readelf -r "$work/native-zbb-tail-memexpr.o" | grep -Eq 'R_RISCV_CALL_PLT[[:space:]]+.*external_tail'
+test "$(readelf -Ws "$work/native-zbb-tail-memexpr.o" | awk '$8=="native_zbb_tail_memexpr" {print $3}')" = "32"
+
+cat >"$work/native-jalr-symbol-load.s" <<'EOF'
+.text
+.extern native_load_word
+.extern native_load_dword
+.globl native_jalr_symbol_load
+.type native_jalr_symbol_load, @function
+native_jalr_symbol_load:
+  jalr t1
+  jalr zero, 0x0(t0)
+  lw a1, native_load_word
+  ld a2, native_load_dword
+.size native_jalr_symbol_load, . - native_jalr_symbol_load
+EOF
+"$MINIAS" -o "$work/native-jalr-symbol-load.o" "$work/native-jalr-symbol-load.s"
+native_jalr_symbol_load_hex="$(
+    readelf -x .text "$work/native-jalr-symbol-load.o" |
+    awk '/0x[0-9a-f]+/ {for (i=2; i<=NF; ++i) if ($i ~ /^[0-9a-f]{8}$/) printf "%s", $i}'
+)"
+echo "MINIAS_A0_NATIVE_JALR_HEX=$native_jalr_symbol_load_hex"
+native_jalr_relocs="$(readelf -Wr "$work/native-jalr-symbol-load.o")"
+printf '%s\n' "$native_jalr_relocs"
+native_jalr_size="$(readelf -Ws "$work/native-jalr-symbol-load.o" | awk '$8=="native_jalr_symbol_load" {print $3}')"
+echo "MINIAS_A0_NATIVE_JALR_SIZE=$native_jalr_size"
+test "$native_jalr_symbol_load_hex" = "e7000300678002009705000083a505001706000003360600"
+printf '%s\n' "$native_jalr_relocs" | grep -Eq 'R_RISCV_PCREL_HI20[[:space:]]+.*native_load_word'
+printf '%s\n' "$native_jalr_relocs" | grep -Eq 'R_RISCV_PCREL_HI20[[:space:]]+.*native_load_dword'
+test "$(printf '%s\n' "$native_jalr_relocs" | grep -c 'R_RISCV_PCREL_LO12_I')" -eq 2
+test "$native_jalr_size" = "24"
+
+cat >"$work/native-forward-short.s" <<'EOF'
+.data
+.short section_count
+section_table:
+.space 80
+section_table_end:
+.set section_count, (section_table_end - section_table) / 40
+EOF
+"$MINIAS" -o "$work/native-forward-short.o" "$work/native-forward-short.s"
+native_forward_data="$(readelf -x .data "$work/native-forward-short.o")"
+native_forward_symbols="$(readelf -Ws "$work/native-forward-short.o")"
+printf '%s\n' "$native_forward_data"
+printf '%s\n' "$native_forward_symbols" | grep 'section_count' || true
+native_forward_value="$(printf '%s\n' "$native_forward_symbols" | awk '$8=="section_count" {print $2}')"
+echo "MINIAS_A0_NATIVE_FORWARD_VALUE=$native_forward_value"
+printf '%s\n' "$native_forward_data" | grep -Eq '0x00000000[[:space:]]+0200'
+test "$native_forward_value" = "0000000000000002"
+
+cat >"$work/native-mixed-macro.s" <<'EOF'
+.text
+.macro _asm_extable, insn, fixup
+  .pushsection __ex_table, "a"
+  .balign 4
+  .long ((\insn) - .)
+  .long ((\fixup) - .)
+  .short 1
+  .short 0
+  .popsection
+.endm
+.macro fixup op reg addr lbl
+100:
+  \op \reg, \addr
+  _asm_extable 100b, \lbl
+.endm
+.globl native_mixed_macro
+native_mixed_macro:
+  fixup lb a5, 0(a1), 10f
+10:
+  ret
+EOF
+"$MINIAS" -o "$work/native-mixed-macro.o" "$work/native-mixed-macro.s"
+native_mixed_macro_text="$(
+    readelf -x .text "$work/native-mixed-macro.o" |
+    awk '/0x[0-9a-f]+/ {for (i=2; i<=NF; ++i) if ($i ~ /^[0-9a-f]{8}$/) printf "%s", $i}'
+)"
+echo "MINIAS_A0_NATIVE_MIXED_HEX=$native_mixed_macro_text"
+native_mixed_sections="$(readelf -SW "$work/native-mixed-macro.o")"
+native_mixed_extable="$(readelf -x __ex_table "$work/native-mixed-macro.o")"
+printf '%s\n' "$native_mixed_sections" | grep '__ex_table' || true
+printf '%s\n' "$native_mixed_extable"
+test "$native_mixed_macro_text" = "8387050067800000"
+test "$(printf '%s\n' "$native_mixed_sections" | grep -Ec '\] __ex_table[[:space:]]')" -eq 1
+test "$(printf '%s\n' "$native_mixed_extable" | grep -c '0x00000000')" -ge 1
+
+cat >"$work/native-divided-difference.s" <<'EOF'
+.data
+.long (section_table_div - .) / 8
+.space 12
+section_table_div:
+.byte 0
+EOF
+"$MINIAS" -o "$work/native-divided-difference.o" "$work/native-divided-difference.s"
+native_divided_data="$(
+    readelf -x .data "$work/native-divided-difference.o" |
+    awk '/0x00000000/ {print $2}'
+)"
+test "$native_divided_data" = "02000000"
+
+cat >"$work/native-symbol-addend-expr.s" <<'EOF'
+.text
+.extern native_addend_base
+.globl native_symbol_addend_expr
+native_symbol_addend_expr:
+  la sp, native_addend_base + ((1 << (12)) << (2 + 0))
+EOF
+"$MINIAS" -o "$work/native-symbol-addend-expr.o" "$work/native-symbol-addend-expr.s"
+native_symbol_addend_hex="$(
+    readelf -x .text "$work/native-symbol-addend-expr.o" |
+    awk '/0x[0-9a-f]+/ {for (i=2; i<=NF; ++i) if ($i ~ /^[0-9a-f]{8}$/) printf "%s", $i}'
+)"
+test "$native_symbol_addend_hex" = "1701000013010100"
+native_symbol_addend_relocs="$(readelf -Wr "$work/native-symbol-addend-expr.o")"
+printf '%s\n' "$native_symbol_addend_relocs" | grep -Eq 'R_RISCV_PCREL_HI20[[:space:]]+.*native_addend_base \+ 4000'
+printf '%s\n' "$native_symbol_addend_relocs" | grep -Eq 'R_RISCV_PCREL_LO12_I'
+
+cat >"$work/native-add-sub-immediate.s" <<'EOF'
+.text
+.globl native_add_sub_immediate
+native_add_sub_immediate:
+  add a3, a3, 8
+  sub a4, a4, 16
+EOF
+"$MINIAS" -o "$work/native-add-sub-immediate.o" "$work/native-add-sub-immediate.s"
+native_add_sub_immediate_hex="$(
+    readelf -x .text "$work/native-add-sub-immediate.o" |
+    awk '/0x[0-9a-f]+/ {for (i=2; i<=NF; ++i) if ($i ~ /^[0-9a-f]{8}$/) printf "%s", $i}'
+)"
+echo "MINIAS_A0_NATIVE_ADD_SUB_HEX=$native_add_sub_immediate_hex"
+test "$native_add_sub_immediate_hex" = "93868600130707ff"
+
+cat >"$work/native-cfi-boundary.s" <<'EOF'
+.text
+.globl native_cfi_boundary
+native_cfi_boundary:
+  .cfi_startproc
+  nop
+  .cfi_signal_frame
+  ret
+  .cfi_endproc
+EOF
+"$MINIAS" -o "$work/native-cfi-boundary.o" "$work/native-cfi-boundary.s"
+native_cfi_hex="$(
+    readelf -x .text "$work/native-cfi-boundary.o" |
+    awk '/0x[0-9a-f]+/ {for (i=2; i<=NF; ++i) if ($i ~ /^[0-9a-f]{8}$/) printf "%s", $i}'
+)"
+test "$native_cfi_hex" = "1300000067800000"
+
+cat >"$work/native-cfi-unclosed.s" <<'EOF'
+.text
+.cfi_startproc
+nop
+EOF
+if "$MINIAS" -o "$work/native-cfi-unclosed.o" "$work/native-cfi-unclosed.s" 2>"$work/native-cfi-unclosed.err"; then
+    echo "expected unterminated CFI rejection" >&2
+    exit 1
+fi
+grep -q 'unterminated-directive:.cfi_startproc' "$work/native-cfi-unclosed.err"
+
+cat >"$work/gcc-vdso-word-ops.s" <<'EOF'
+.text
+.globl gcc_vdso_word_ops
+.type gcc_vdso_word_ops, @function
+gcc_vdso_word_ops:
+  addw a0, a1, a2
+  subw a3, a4, a5
+  sllw a6, a7, t0
+  srlw t1, t2, t3
+  sraw t4, t5, t6
+  mulw a0, a1, a2
+  divw a3, a4, a5
+  divuw a6, a7, t0
+  remw t1, t2, t3
+  remuw t4, t5, t6
+  slliw a0, a1, 7
+  srliw a2, a3, 11
+  sraiw a4, a5, 3
+  ret
+.size gcc_vdso_word_ops, . - gcc_vdso_word_ops
+EOF
+"$MINIAS" -o "$work/gcc-vdso-word-ops.o" "$work/gcc-vdso-word-ops.s"
+gcc_vdso_word_hex="$(
+    readelf -x .text "$work/gcc-vdso-word-ops.o" |
+    awk '/0x[0-9a-f]+/ {for (i=2; i<=NF; ++i) if ($i ~ /^[0-9a-f]{8}$/) printf "%s", $i}'
+)"
+test "$gcc_vdso_word_hex" = "3b85c500bb06f7403b9858003bd3c301bb5eff413b85c502bb46f7023bd858023be3c303bb7eff031b9575001bd6b6001bd7374067800000"
+
+cat >"$work/gcc-vdso-plt.s" <<'EOF'
+.text
+.extern riscv_hwprobe
+.globl gcc_vdso_plt
+.type gcc_vdso_plt, @function
+gcc_vdso_plt:
+  call riscv_hwprobe@plt
+  ret
+.size gcc_vdso_plt, . - gcc_vdso_plt
+EOF
+"$MINIAS" -o "$work/gcc-vdso-plt.o" "$work/gcc-vdso-plt.s"
+readelf -Wr "$work/gcc-vdso-plt.o" | grep -Eq 'R_RISCV_CALL_PLT[[:space:]]+.*riscv_hwprobe'
+if readelf -Ws "$work/gcc-vdso-plt.o" | grep -q 'riscv_hwprobe@plt'; then
+    echo "unexpected @plt suffix retained in symbol table" >&2
+    exit 1
+fi
+
+cat >"$work/gcc-size-before-label.s" <<'EOF'
+.data
+.globl gcc_size_before_label
+.type gcc_size_before_label, @object
+.size gcc_size_before_label, 8
+gcc_size_before_label:
+  .dword 0x1122334455667788
+EOF
+"$MINIAS" -o "$work/gcc-size-before-label.o" "$work/gcc-size-before-label.s"
+test "$(readelf -Ws "$work/gcc-size-before-label.o" | awk '$8=="gcc_size_before_label" {print $3}')" = "8"
+
+cat >"$work/gcc-sgt-pseudos.s" <<'EOF'
+.text
+.globl gcc_sgt_pseudos
+.type gcc_sgt_pseudos, @function
+gcc_sgt_pseudos:
+  sgt a0, a1, a2
+  sgtu a3, a4, a5
+.size gcc_sgt_pseudos, . - gcc_sgt_pseudos
+EOF
+"$MINIAS" -o "$work/gcc-sgt-pseudos.o" "$work/gcc-sgt-pseudos.s"
+gcc_sgt_hex="$(
+    readelf -x .text "$work/gcc-sgt-pseudos.o" |
+    awk '/0x[0-9a-f]+/ {for (i=2; i<=NF; ++i) if ($i ~ /^[0-9a-f]{8}$/) printf "%s", $i}'
+)"
+test "$gcc_sgt_hex" = "3325b600b3b6e700"
+
+cat >"$work/rv32-elf.s" <<'EOF'
+.text
+.extern rv32_external
+.globl rv32_entry
+.type rv32_entry, @function
+rv32_entry:
+  call rv32_external
+  ret
+.size rv32_entry, . - rv32_entry
+EOF
+"$MINIAS" -march=rv32imac -mabi=ilp32 -o "$work/rv32-elf.o" "$work/rv32-elf.s"
+readelf -h "$work/rv32-elf.o" >"$work/rv32-elf.hdr"
+grep -q 'Class:[[:space:]]*ELF32' "$work/rv32-elf.hdr"
+grep -q 'Machine:[[:space:]]*RISC-V' "$work/rv32-elf.hdr"
+grep -q 'REL (Relocatable file)' "$work/rv32-elf.hdr"
+readelf -Wr "$work/rv32-elf.o" | grep -Eq 'R_RISCV_CALL_PLT[[:space:]]+.*rv32_external'
+
+cat >"$work/gcc-lanchor-set.s" <<'EOF'
+.bss
+.align 3
+.set .LANCHOR0, . + 0
+.type anchored_object, @object
+.size anchored_object, 16
+anchored_object:
+  .zero 16
+.text
+.globl gcc_lanchor_user
+.type gcc_lanchor_user, @function
+gcc_lanchor_user:
+  lla a0, .LANCHOR0
+  ret
+.size gcc_lanchor_user, . - gcc_lanchor_user
+EOF
+"$MINIAS" -o "$work/gcc-lanchor-set.o" "$work/gcc-lanchor-set.s"
+readelf -Ws "$work/gcc-lanchor-set.o" >"$work/gcc-lanchor-set.sym"
+grep -Eq '[[:space:]]\.LANCHOR0$' "$work/gcc-lanchor-set.sym"
+readelf -Wr "$work/gcc-lanchor-set.o" | grep -Eq 'R_RISCV_PCREL_HI20[[:space:]]+.*\.LANCHOR0'
+
+cat >"$work/far-conditional-branch.s" <<'EOF'
+.text
+.globl far_conditional_branch
+.type far_conditional_branch, @function
+far_conditional_branch:
+  beq a0, a1, .Lfar_target
+  .space 5000
+.Lfar_target:
+  ret
+.size far_conditional_branch, . - far_conditional_branch
+EOF
+"$MINIAS" -o "$work/far-conditional-branch.o" "$work/far-conditional-branch.s"
+far_branch_prefix="$(
+    readelf -x .text "$work/far-conditional-branch.o" |
+    awk '/0x00000000/ {print $2 $3; exit}'
+)"
+test "$far_branch_prefix" = "6314b5006f10c038"
+test "$(readelf -Ws "$work/far-conditional-branch.o" | awk '$8=="far_conditional_branch" {print $3}')" = "5012"
+
+echo "MINIAS_A0=PASS objects=27 format=ELF64-RISCV-ET_REL relocations=23 strings=2 pseudos=17 previous=3 subsection=2 numeric_labels=18 ecall=1 isa_next=13 csr_amo=8 sfence_vma=3 fence_i=1 vsetvl=1 vsetvli=1 vmv_v_i=4 rept=2 nested_rept=1 irp=4 section_stack=1 org=3 local_difference=1 lr_sc=2 inline_labels=2 branch_pseudos=8 extern=1 symbol_minus_dot=4 symbol_difference=1 absolute32=1 jal=2 jal_subsection=1 high_numeric_labels=2 u64_data=3 raw_insn=4 set_alias=3 move=1 numeric_zero=1 immediate_product=2 shift_immediate=1 incbin=1 align_expr=1 native_expr=6 native_zbb_tail_memexpr=1 native_jalr_symbol_load=1 native_forward_short=1 native_mixed_macro=1 native_divided_difference=1 native_symbol_addend_expr=1 native_add_sub_immediate=1 native_cfi_boundary=1 native_gas_forms=1 native_set_size=1 native_macro_comma=1 native_macro_quotes=1 sext_w=1 macro=4 conditional=1"
+ "$work/native-set-size.sym"
+! grep -q '[[:space:]]\.Lnative_set_size
+
+cat >"$work/native-macro-quotes.s" <<'EOF'
+.text
+.macro emit_one insn:req
+  \insn
+.endm
+.altmacro
+emit_one "nop"
+.noaltmacro
+EOF
+"$MINIAS" -o "$work/native-macro-quotes.o" "$work/native-macro-quotes.s"
+native_macro_quotes_hex="$(
+    readelf -x .text "$work/native-macro-quotes.o" |
+    awk '/0x[0-9a-f]+/ {for (i=2; i<=NF; ++i) if ($i ~ /^[0-9a-f]{8}$/) printf "%s", $i}'
+)"
+test "$native_macro_quotes_hex" = "13000000"
+
+cat >"$work/align-expr.s" <<'EOF'
+.text
+.byte 1
+.balign (1 << 4)
+.byte 2
+EOF
+"$MINIAS" -o "$work/align-expr.o" "$work/align-expr.s"
+align_expr_hex="$(
+    readelf -x .text "$work/align-expr.o" |
+    awk '/0x[0-9a-f]+/ {for (i=2; i<=NF; ++i) if ($i ~ /^[0-9a-f]+$/ && length($i) % 2 == 0) printf "%s", $i}'
+)"
+test "$align_expr_hex" = "0100000000000000000000000000000002"
+
+cat >"$work/sext-w.s" <<'EOF'
+.text
+sext.w a0, a1
+EOF
+"$MINIAS" -o "$work/sext-w.o" "$work/sext-w.s"
+sext_w_hex="$(
+    readelf -x .text "$work/sext-w.o" |
+    awk '/0x[0-9a-f]+/ {for (i=2; i<=NF; ++i) if ($i ~ /^[0-9a-f]{8}$/) printf "%s", $i}'
+)"
+test "$sext_w_hex" = "1b850500"
+
+cat >"$work/macro.s" <<'EOF'
+.text
+.macro inc_one dst:req src
+  addi \dst, \src, 1
+.endm
+.macro add_imm, dst:req, src:req, imm=7
+  addi \dst, \src, \imm
+.endm
+.macro twice op reg
+  \op \reg, \reg, 1
+  \op \reg, \reg, 1
+.endm
+inc_one a0 a1
+add_imm a2, a3
+twice addi a4
+EOF
+"$MINIAS" -o "$work/macro.o" "$work/macro.s"
+macro_hex="$(
+    readelf -x .text "$work/macro.o" |
+    awk '/0x[0-9a-f]+/ {for (i=2; i<=NF; ++i) if ($i ~ /^[0-9a-f]{8}$/) printf "%s", $i}'
+)"
+test "$macro_hex" = "13851500138676001307170013071700"
+
+cat >"$work/vector-unit.s" <<'EOF'
+.text
+.option arch,+v
+vsetvli t0, x0, e8, m8, ta, ma
+vmv.v.i v0, -1
+vmv.v.i v8, -1
+vmv.v.i v16, -1
+vmv.v.i v24, -1
+vse8.v v0, (t3)
+vse8.v v8, (t3)
+vle16.v v2, (a1)
+vle8.v v9, (s0), v0.t
+EOF
+"$MINIAS" -o "$work/vector-unit.o" "$work/vector-unit.s"
+vector_hex="$(
+    readelf -x .text "$work/vector-unit.o" |
+    awk '/0x[0-9a-f]+/ {for (i=2; i<=NF; ++i) if ($i ~ /^[0-9a-f]{8}$/) printf "%s", $i}'
+)"
+test "$vector_hex" = "d772300c57b00f5e57b40f5e57b80f5e57bc0f5e27000e0227040e0207d1050287040400"
+
+cat >"$work/native-zbb-tail-memexpr.s" <<'EOF'
+.text
+.extern external_tail
+.globl native_zbb_tail_memexpr
+.type native_zbb_tail_memexpr, @function
+native_zbb_tail_memexpr:
+  orc.b a0, a1
+  rev8 a2, a3
+  ctz a4, a5
+  ld t0, (0 + 8)(a0)
+  sd t1, ((0 * 8) - (2 * 8))(t3)
+  and t2, t2, 8 -1
+  tail external_tail
+.size native_zbb_tail_memexpr, . - native_zbb_tail_memexpr
+EOF
+"$MINIAS" -o "$work/native-zbb-tail-memexpr.o" "$work/native-zbb-tail-memexpr.s"
+native_zbb_tail_memexpr_hex="$(
+    readelf -x .text "$work/native-zbb-tail-memexpr.o" |
+    awk '/0x[0-9a-f]+/ {for (i=2; i<=NF; ++i) if ($i ~ /^[0-9a-f]{8}$/) printf "%s", $i}'
+)"
+test "$native_zbb_tail_memexpr_hex" = "13d5752813d6866b139717608332850023386efe93f373001703000067000300"
+readelf -r "$work/native-zbb-tail-memexpr.o" | grep -Eq 'R_RISCV_CALL_PLT[[:space:]]+.*external_tail'
+test "$(readelf -Ws "$work/native-zbb-tail-memexpr.o" | awk '$8=="native_zbb_tail_memexpr" {print $3}')" = "32"
+
+cat >"$work/native-jalr-symbol-load.s" <<'EOF'
+.text
+.extern native_load_word
+.extern native_load_dword
+.globl native_jalr_symbol_load
+.type native_jalr_symbol_load, @function
+native_jalr_symbol_load:
+  jalr t1
+  jalr zero, 0x0(t0)
+  lw a1, native_load_word
+  ld a2, native_load_dword
+.size native_jalr_symbol_load, . - native_jalr_symbol_load
+EOF
+"$MINIAS" -o "$work/native-jalr-symbol-load.o" "$work/native-jalr-symbol-load.s"
+native_jalr_symbol_load_hex="$(
+    readelf -x .text "$work/native-jalr-symbol-load.o" |
+    awk '/0x[0-9a-f]+/ {for (i=2; i<=NF; ++i) if ($i ~ /^[0-9a-f]{8}$/) printf "%s", $i}'
+)"
+echo "MINIAS_A0_NATIVE_JALR_HEX=$native_jalr_symbol_load_hex"
+native_jalr_relocs="$(readelf -Wr "$work/native-jalr-symbol-load.o")"
+printf '%s\n' "$native_jalr_relocs"
+native_jalr_size="$(readelf -Ws "$work/native-jalr-symbol-load.o" | awk '$8=="native_jalr_symbol_load" {print $3}')"
+echo "MINIAS_A0_NATIVE_JALR_SIZE=$native_jalr_size"
+test "$native_jalr_symbol_load_hex" = "e7000300678002009705000083a505001706000003360600"
+printf '%s\n' "$native_jalr_relocs" | grep -Eq 'R_RISCV_PCREL_HI20[[:space:]]+.*native_load_word'
+printf '%s\n' "$native_jalr_relocs" | grep -Eq 'R_RISCV_PCREL_HI20[[:space:]]+.*native_load_dword'
+test "$(printf '%s\n' "$native_jalr_relocs" | grep -c 'R_RISCV_PCREL_LO12_I')" -eq 2
+test "$native_jalr_size" = "24"
+
+cat >"$work/native-forward-short.s" <<'EOF'
+.data
+.short section_count
+section_table:
+.space 80
+section_table_end:
+.set section_count, (section_table_end - section_table) / 40
+EOF
+"$MINIAS" -o "$work/native-forward-short.o" "$work/native-forward-short.s"
+native_forward_data="$(readelf -x .data "$work/native-forward-short.o")"
+native_forward_symbols="$(readelf -Ws "$work/native-forward-short.o")"
+printf '%s\n' "$native_forward_data"
+printf '%s\n' "$native_forward_symbols" | grep 'section_count' || true
+native_forward_value="$(printf '%s\n' "$native_forward_symbols" | awk '$8=="section_count" {print $2}')"
+echo "MINIAS_A0_NATIVE_FORWARD_VALUE=$native_forward_value"
+printf '%s\n' "$native_forward_data" | grep -Eq '0x00000000[[:space:]]+0200'
+test "$native_forward_value" = "0000000000000002"
+
+cat >"$work/native-mixed-macro.s" <<'EOF'
+.text
+.macro _asm_extable, insn, fixup
+  .pushsection __ex_table, "a"
+  .balign 4
+  .long ((\insn) - .)
+  .long ((\fixup) - .)
+  .short 1
+  .short 0
+  .popsection
+.endm
+.macro fixup op reg addr lbl
+100:
+  \op \reg, \addr
+  _asm_extable 100b, \lbl
+.endm
+.globl native_mixed_macro
+native_mixed_macro:
+  fixup lb a5, 0(a1), 10f
+10:
+  ret
+EOF
+"$MINIAS" -o "$work/native-mixed-macro.o" "$work/native-mixed-macro.s"
+native_mixed_macro_text="$(
+    readelf -x .text "$work/native-mixed-macro.o" |
+    awk '/0x[0-9a-f]+/ {for (i=2; i<=NF; ++i) if ($i ~ /^[0-9a-f]{8}$/) printf "%s", $i}'
+)"
+echo "MINIAS_A0_NATIVE_MIXED_HEX=$native_mixed_macro_text"
+native_mixed_sections="$(readelf -SW "$work/native-mixed-macro.o")"
+native_mixed_extable="$(readelf -x __ex_table "$work/native-mixed-macro.o")"
+printf '%s\n' "$native_mixed_sections" | grep '__ex_table' || true
+printf '%s\n' "$native_mixed_extable"
+test "$native_mixed_macro_text" = "8387050067800000"
+test "$(printf '%s\n' "$native_mixed_sections" | grep -Ec '\] __ex_table[[:space:]]')" -eq 1
+test "$(printf '%s\n' "$native_mixed_extable" | grep -c '0x00000000')" -ge 1
+
+cat >"$work/native-divided-difference.s" <<'EOF'
+.data
+.long (section_table_div - .) / 8
+.space 12
+section_table_div:
+.byte 0
+EOF
+"$MINIAS" -o "$work/native-divided-difference.o" "$work/native-divided-difference.s"
+native_divided_data="$(
+    readelf -x .data "$work/native-divided-difference.o" |
+    awk '/0x00000000/ {print $2}'
+)"
+test "$native_divided_data" = "02000000"
+
+cat >"$work/native-symbol-addend-expr.s" <<'EOF'
+.text
+.extern native_addend_base
+.globl native_symbol_addend_expr
+native_symbol_addend_expr:
+  la sp, native_addend_base + ((1 << (12)) << (2 + 0))
+EOF
+"$MINIAS" -o "$work/native-symbol-addend-expr.o" "$work/native-symbol-addend-expr.s"
+native_symbol_addend_hex="$(
+    readelf -x .text "$work/native-symbol-addend-expr.o" |
+    awk '/0x[0-9a-f]+/ {for (i=2; i<=NF; ++i) if ($i ~ /^[0-9a-f]{8}$/) printf "%s", $i}'
+)"
+test "$native_symbol_addend_hex" = "1701000013010100"
+native_symbol_addend_relocs="$(readelf -Wr "$work/native-symbol-addend-expr.o")"
+printf '%s\n' "$native_symbol_addend_relocs" | grep -Eq 'R_RISCV_PCREL_HI20[[:space:]]+.*native_addend_base \+ 4000'
+printf '%s\n' "$native_symbol_addend_relocs" | grep -Eq 'R_RISCV_PCREL_LO12_I'
+
+cat >"$work/native-add-sub-immediate.s" <<'EOF'
+.text
+.globl native_add_sub_immediate
+native_add_sub_immediate:
+  add a3, a3, 8
+  sub a4, a4, 16
+EOF
+"$MINIAS" -o "$work/native-add-sub-immediate.o" "$work/native-add-sub-immediate.s"
+native_add_sub_immediate_hex="$(
+    readelf -x .text "$work/native-add-sub-immediate.o" |
+    awk '/0x[0-9a-f]+/ {for (i=2; i<=NF; ++i) if ($i ~ /^[0-9a-f]{8}$/) printf "%s", $i}'
+)"
+echo "MINIAS_A0_NATIVE_ADD_SUB_HEX=$native_add_sub_immediate_hex"
+test "$native_add_sub_immediate_hex" = "93868600130707ff"
+
+cat >"$work/native-cfi-boundary.s" <<'EOF'
+.text
+.globl native_cfi_boundary
+native_cfi_boundary:
+  .cfi_startproc
+  nop
+  .cfi_signal_frame
+  ret
+  .cfi_endproc
+EOF
+"$MINIAS" -o "$work/native-cfi-boundary.o" "$work/native-cfi-boundary.s"
+native_cfi_hex="$(
+    readelf -x .text "$work/native-cfi-boundary.o" |
+    awk '/0x[0-9a-f]+/ {for (i=2; i<=NF; ++i) if ($i ~ /^[0-9a-f]{8}$/) printf "%s", $i}'
+)"
+test "$native_cfi_hex" = "1300000067800000"
+
+cat >"$work/native-cfi-unclosed.s" <<'EOF'
+.text
+.cfi_startproc
+nop
+EOF
+if "$MINIAS" -o "$work/native-cfi-unclosed.o" "$work/native-cfi-unclosed.s" 2>"$work/native-cfi-unclosed.err"; then
+    echo "expected unterminated CFI rejection" >&2
+    exit 1
+fi
+grep -q 'unterminated-directive:.cfi_startproc' "$work/native-cfi-unclosed.err"
+
+cat >"$work/gcc-vdso-word-ops.s" <<'EOF'
+.text
+.globl gcc_vdso_word_ops
+.type gcc_vdso_word_ops, @function
+gcc_vdso_word_ops:
+  addw a0, a1, a2
+  subw a3, a4, a5
+  sllw a6, a7, t0
+  srlw t1, t2, t3
+  sraw t4, t5, t6
+  mulw a0, a1, a2
+  divw a3, a4, a5
+  divuw a6, a7, t0
+  remw t1, t2, t3
+  remuw t4, t5, t6
+  slliw a0, a1, 7
+  srliw a2, a3, 11
+  sraiw a4, a5, 3
+  ret
+.size gcc_vdso_word_ops, . - gcc_vdso_word_ops
+EOF
+"$MINIAS" -o "$work/gcc-vdso-word-ops.o" "$work/gcc-vdso-word-ops.s"
+gcc_vdso_word_hex="$(
+    readelf -x .text "$work/gcc-vdso-word-ops.o" |
+    awk '/0x[0-9a-f]+/ {for (i=2; i<=NF; ++i) if ($i ~ /^[0-9a-f]{8}$/) printf "%s", $i}'
+)"
+test "$gcc_vdso_word_hex" = "3b85c500bb06f7403b9858003bd3c301bb5eff413b85c502bb46f7023bd858023be3c303bb7eff031b9575001bd6b6001bd7374067800000"
+
+cat >"$work/gcc-vdso-plt.s" <<'EOF'
+.text
+.extern riscv_hwprobe
+.globl gcc_vdso_plt
+.type gcc_vdso_plt, @function
+gcc_vdso_plt:
+  call riscv_hwprobe@plt
+  ret
+.size gcc_vdso_plt, . - gcc_vdso_plt
+EOF
+"$MINIAS" -o "$work/gcc-vdso-plt.o" "$work/gcc-vdso-plt.s"
+readelf -Wr "$work/gcc-vdso-plt.o" | grep -Eq 'R_RISCV_CALL_PLT[[:space:]]+.*riscv_hwprobe'
+if readelf -Ws "$work/gcc-vdso-plt.o" | grep -q 'riscv_hwprobe@plt'; then
+    echo "unexpected @plt suffix retained in symbol table" >&2
+    exit 1
+fi
+
+cat >"$work/gcc-size-before-label.s" <<'EOF'
+.data
+.globl gcc_size_before_label
+.type gcc_size_before_label, @object
+.size gcc_size_before_label, 8
+gcc_size_before_label:
+  .dword 0x1122334455667788
+EOF
+"$MINIAS" -o "$work/gcc-size-before-label.o" "$work/gcc-size-before-label.s"
+test "$(readelf -Ws "$work/gcc-size-before-label.o" | awk '$8=="gcc_size_before_label" {print $3}')" = "8"
+
+cat >"$work/gcc-sgt-pseudos.s" <<'EOF'
+.text
+.globl gcc_sgt_pseudos
+.type gcc_sgt_pseudos, @function
+gcc_sgt_pseudos:
+  sgt a0, a1, a2
+  sgtu a3, a4, a5
+.size gcc_sgt_pseudos, . - gcc_sgt_pseudos
+EOF
+"$MINIAS" -o "$work/gcc-sgt-pseudos.o" "$work/gcc-sgt-pseudos.s"
+gcc_sgt_hex="$(
+    readelf -x .text "$work/gcc-sgt-pseudos.o" |
+    awk '/0x[0-9a-f]+/ {for (i=2; i<=NF; ++i) if ($i ~ /^[0-9a-f]{8}$/) printf "%s", $i}'
+)"
+test "$gcc_sgt_hex" = "3325b600b3b6e700"
+
+cat >"$work/rv32-elf.s" <<'EOF'
+.text
+.extern rv32_external
+.globl rv32_entry
+.type rv32_entry, @function
+rv32_entry:
+  call rv32_external
+  ret
+.size rv32_entry, . - rv32_entry
+EOF
+"$MINIAS" -march=rv32imac -mabi=ilp32 -o "$work/rv32-elf.o" "$work/rv32-elf.s"
+readelf -h "$work/rv32-elf.o" >"$work/rv32-elf.hdr"
+grep -q 'Class:[[:space:]]*ELF32' "$work/rv32-elf.hdr"
+grep -q 'Machine:[[:space:]]*RISC-V' "$work/rv32-elf.hdr"
+grep -q 'REL (Relocatable file)' "$work/rv32-elf.hdr"
+readelf -Wr "$work/rv32-elf.o" | grep -Eq 'R_RISCV_CALL_PLT[[:space:]]+.*rv32_external'
+
+cat >"$work/gcc-lanchor-set.s" <<'EOF'
+.bss
+.align 3
+.set .LANCHOR0, . + 0
+.type anchored_object, @object
+.size anchored_object, 16
+anchored_object:
+  .zero 16
+.text
+.globl gcc_lanchor_user
+.type gcc_lanchor_user, @function
+gcc_lanchor_user:
+  lla a0, .LANCHOR0
+  ret
+.size gcc_lanchor_user, . - gcc_lanchor_user
+EOF
+"$MINIAS" -o "$work/gcc-lanchor-set.o" "$work/gcc-lanchor-set.s"
+readelf -Ws "$work/gcc-lanchor-set.o" >"$work/gcc-lanchor-set.sym"
+grep -Eq '[[:space:]]\.LANCHOR0$' "$work/gcc-lanchor-set.sym"
+readelf -Wr "$work/gcc-lanchor-set.o" | grep -Eq 'R_RISCV_PCREL_HI20[[:space:]]+.*\.LANCHOR0'
+
+cat >"$work/far-conditional-branch.s" <<'EOF'
+.text
+.globl far_conditional_branch
+.type far_conditional_branch, @function
+far_conditional_branch:
+  beq a0, a1, .Lfar_target
+  .space 5000
+.Lfar_target:
+  ret
+.size far_conditional_branch, . - far_conditional_branch
+EOF
+"$MINIAS" -o "$work/far-conditional-branch.o" "$work/far-conditional-branch.s"
+far_branch_prefix="$(
+    readelf -x .text "$work/far-conditional-branch.o" |
+    awk '/0x00000000/ {print $2 $3; exit}'
+)"
+test "$far_branch_prefix" = "6314b5006f10c038"
+test "$(readelf -Ws "$work/far-conditional-branch.o" | awk '$8=="far_conditional_branch" {print $3}')" = "5012"
+
+echo "MINIAS_A0=PASS objects=27 format=ELF64-RISCV-ET_REL relocations=23 strings=2 pseudos=17 previous=3 subsection=2 numeric_labels=18 ecall=1 isa_next=13 csr_amo=8 sfence_vma=3 fence_i=1 vsetvl=1 vsetvli=1 vmv_v_i=4 rept=2 nested_rept=1 irp=4 section_stack=1 org=3 local_difference=1 lr_sc=2 inline_labels=2 branch_pseudos=8 extern=1 symbol_minus_dot=4 symbol_difference=1 absolute32=1 jal=2 jal_subsection=1 high_numeric_labels=2 u64_data=3 raw_insn=4 set_alias=3 move=1 numeric_zero=1 immediate_product=2 shift_immediate=1 incbin=1 align_expr=1 native_expr=6 native_zbb_tail_memexpr=1 native_jalr_symbol_load=1 native_forward_short=1 native_mixed_macro=1 native_divided_difference=1 native_symbol_addend_expr=1 native_add_sub_immediate=1 native_cfi_boundary=1 native_gas_forms=1 native_set_size=1 native_macro_comma=1 native_macro_quotes=1 sext_w=1 macro=4 conditional=1"
+ "$work/native-set-size.sym"
 
 cat >"$work/native-macro-quotes.s" <<'EOF'
 .text
