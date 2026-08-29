@@ -8,14 +8,15 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: minias-native26-${{ github.ref }}
   cancel-in-progress: true
 
 env:
-  LINUX_VERSION: "6.6.143"
-  LINUX_ARCHIVE_SHA256: "dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932"
+  FROZEN_NATIVE26_RUN: "33245348705"
+  FROZEN_NATIVE26_FILES_SHA256: "fdbdf1f8fbf4ddcb1af4ff689225780f12e0e243dec3b9540fc493e766b429f6"
 
 jobs:
   native26:
@@ -25,138 +26,63 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install RISC-V Kbuild dependencies
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 update
-          sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 install -y --no-install-recommends \
-            gcc-riscv64-linux-gnu libc6-dev-riscv64-cross flex bison bc libelf-dev libssl-dev
-
       - name: Build MiniAS
         run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/minias-native26-toolchain all
 
       - name: Run MiniAS micro gate
         run: make MODE=release CFLAGS=-Werror BUILD_DIR=build/minias-native26-toolchain check-minias-a0
 
-      - name: Materialize configured native assembly plan
+      - name: Download frozen native26 inputs
+        uses: actions/download-artifact@v4
+        with:
+          name: minias-a0-native26-progress
+          path: build/import-native26
+          repository: ${{ github.repository }}
+          run-id: ${{ env.FROZEN_NATIVE26_RUN }}
+          github-token: ${{ github.token }}
+
+      - name: Verify and materialize frozen native26 inputs
         shell: bash
         run: |
           set -Eeuo pipefail
-          src="$GITHUB_WORKSPACE/build/linux-native26-src"
-          out="$GITHUB_WORKSPACE/build/linux-native26-out"
-          archive="$GITHUB_WORKSPACE/build/linux-${LINUX_VERSION}.tar.xz"
-          mkdir -p build
-          curl --http1.1 --retry 5 --retry-all-errors --retry-delay 2 -fsSL \
-            "https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-${LINUX_VERSION}.tar.xz" -o "$archive"
-          echo "${LINUX_ARCHIVE_SHA256}  $archive" | sha256sum -c -
-          rm -rf "$src" "$out"
-          mkdir -p "$src" "$out"
-          tar -xJf "$archive" -C "$src" --strip-components=1
-          make -s -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- defconfig
-          make -s -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- -j4 prepare scripts
-          set +e
-          make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- -n -j1 V=1 \
-            >build/native26-plan.raw 2>build/native26-plan.stderr
-          rc=$?
-          set -e
-          echo "MINIAS_NATIVE26_PLAN_STATUS=$rc"
-          test -s build/native26-plan.raw
+          import=build/import-native26
+          test -s "$import/minias-native26-manifest.json"
+          test -d "$import/minias-native26-inputs"
+          rm -rf build/minias-native26-inputs build/linux-native26-out
+          cp "$import/minias-native26-manifest.json" build/minias-native26-manifest.json
+          if test -s "$import/minias-native26-targets.txt"; then
+            cp "$import/minias-native26-targets.txt" build/minias-native26-targets.txt
+          else
+            : > build/minias-native26-targets.txt
+          fi
+          cp -a "$import/minias-native26-inputs" build/minias-native26-inputs
+          mkdir -p build/linux-native26-out
 
-      - name: Resolve and build native .s targets through Kbuild
-        shell: bash
-        run: |
-          set -Eeuo pipefail
+          count=$(find build/minias-native26-inputs -type f -name '*.s' | wc -l)
+          test "$count" -eq 26
           python3 - <<'PY'
-          from pathlib import Path, PurePosixPath
-          import json, re
-
-          plan = Path("build/native26-plan.raw").read_text(errors="replace").splitlines()
-          out_root = Path("build/linux-native26-out").resolve()
-          src_root = Path("build/linux-native26-src").resolve()
-          object_re = re.compile(r"(?:^|\s)-o\s+([^\s;]+\.o)(?=\s|;|$)")
-          source_re = re.compile(r"(?:^|\s)([^\s;]+\.S)(?=\s|;|$)")
-          entries = {}
-
-          for line in plan:
-              if "riscv64-linux-gnu-gcc" not in line or " -c " not in f" {line} ":
-                  continue
-              objects = object_re.findall(line)
-              sources = source_re.findall(line)
-              if not objects or not sources:
-                  continue
-              raw_obj = objects[-1].strip("'\"")
-              obj = Path(raw_obj)
-              if obj.is_absolute():
-                  try:
-                      rel_obj = obj.resolve().relative_to(out_root)
-                  except ValueError:
-                      continue
-              else:
-                  rel_obj = obj
-              rel_obj_text = PurePosixPath(rel_obj.as_posix()).as_posix()
-              if rel_obj_text.startswith(("scripts/", "tools/")) or "/scripts/" in rel_obj_text:
-                  continue
-              source = Path(sources[-1].strip("'\"")).resolve()
-              try:
-                  rel_source = PurePosixPath(source.relative_to(src_root).as_posix()).as_posix()
-              except ValueError:
-                  continue
-              entries[rel_obj_text] = rel_source
-
-          if len(entries) != 26:
-              raise SystemExit(f"expected 26 configured native .S objects, got {len(entries)}")
-
-          manifest = []
-          targets = []
-          for obj in sorted(entries):
-              source = entries[obj]
-              desired_s = obj[:-2] + ".s"
-              matching_source = obj[:-2] + ".S"
-              target_s = desired_s if source == matching_source else source[:-2] + ".s"
-              manifest.append({
-                  "object": obj,
-                  "source": source,
-                  "desired_s": desired_s,
-                  "target_s": target_s,
-              })
-              if target_s not in targets:
-                  targets.append(target_s)
-
-          Path("build/minias-native26-manifest.json").write_text(
-              json.dumps(manifest, indent=2, sort_keys=True) + "\n"
-          )
-          Path("build/minias-native26-targets.txt").write_text("\n".join(targets) + "\n")
-          print(
-              f"MINIAS_NATIVE26_TARGETS objects={len(manifest)} "
-              f"unique_s_targets={len(targets)}"
-          )
-          PY
-
-          src="$GITHUB_WORKSPACE/build/linux-native26-src"
-          out="$GITHUB_WORKSPACE/build/linux-native26-out"
-          mapfile -t targets < build/minias-native26-targets.txt
-          test "${#targets[@]}" -gt 0
-          make -s -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- -j4 "${targets[@]}"
-
-          python3 - <<'PY'
+          import json
           from pathlib import Path
-          import json, shutil
-
-          manifest = json.loads(Path("build/minias-native26-manifest.json").read_text())
-          out = Path("build/linux-native26-out")
-          root = Path("build/minias-native26-inputs")
-          shutil.rmtree(root, ignore_errors=True)
-          root.mkdir(parents=True)
-          for row in manifest:
-              source = out / row["target_s"]
-              if not source.is_file() or source.stat().st_size == 0:
-                  raise SystemExit(f"missing Kbuild .s target: {row['target_s']}")
-              target = root / row["desired_s"]
-              target.parent.mkdir(parents=True, exist_ok=True)
-              shutil.copy2(source, target)
-          print(f"MINIAS_NATIVE26_INPUTS selected={len(manifest)}")
+          rows=json.loads(Path("build/minias-native26-manifest.json").read_text())
+          assert len(rows)==26, len(rows)
+          expected={row["desired_s"] for row in rows}
+          actual={
+              p.relative_to("build/minias-native26-inputs").as_posix()
+              for p in Path("build/minias-native26-inputs").rglob("*.s")
+          }
+          assert actual == expected, (sorted(expected-actual), sorted(actual-expected))
+          print("MINIAS_NATIVE26_MANIFEST=PASS selected=26")
           PY
+
+          (
+            cd build/minias-native26-inputs
+            find . -type f -name '*.s' -print0 |
+              LC_ALL=C sort -z |
+              xargs -0 sha256sum > ../native26-files.sha256
+          )
+          actual=$(sha256sum build/native26-files.sha256 | cut -d' ' -f1)
+          test "$actual" = "$FROZEN_NATIVE26_FILES_SHA256"
+          echo "MINIAS_NATIVE26_FROZEN=PASS selected=26 files_sha256=$actual source_run=$FROZEN_NATIVE26_RUN"
 
       - name: Assemble native26 and classify first blockers
         shell: bash
