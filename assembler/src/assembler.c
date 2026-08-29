@@ -971,6 +971,9 @@ static bool parse_size(MiniAs *as, char *args, size_t line) {
     MiniAsSymbol *symbol;
     char *expr;
     char expected[512];
+    char compact[512];
+    size_t compact_size = 0U;
+    const char *p;
 
     if (comma == NULL) {
         minias_set_error(as, "bad-directive:.size:line=%zu", line);
@@ -990,8 +993,19 @@ static bool parse_size(MiniAs *as, char *args, size_t line) {
             return true;
         }
     }
+    for (p = expr; *p != '\0'; ++p) {
+        if (*p == ' ' || *p == '\t') {
+            continue;
+        }
+        if (compact_size + 1U >= sizeof(compact)) {
+            minias_set_error(as, "unsupported-expression:.size:%s:line=%zu", expr, line);
+            return false;
+        }
+        compact[compact_size++] = *p;
+    }
+    compact[compact_size] = '\0';
     (void)snprintf(expected, sizeof(expected), ".-%s", symbol->name);
-    if (strcmp(expr, expected) != 0) {
+    if (strcmp(compact, expected) != 0) {
         minias_set_error(as, "unsupported-expression:.size:%s:line=%zu", expr, line);
         return false;
     }
@@ -2623,7 +2637,8 @@ static bool process_statement(MiniAs *as, char *text, size_t line) {
             return pop_section(as, line);
         }
         if (strcmp(op, ".option") == 0 || strcmp(op, ".file") == 0 ||
-            strcmp(op, ".ident") == 0) {
+            strcmp(op, ".ident") == 0 || strcmp(op, ".altmacro") == 0 ||
+            strcmp(op, ".noaltmacro") == 0) {
             return true;
         }
         if (strcmp(op, ".align") == 0 || strcmp(op, ".balign") == 0 ||
@@ -3018,6 +3033,22 @@ static bool process_source_range(MiniAs *as,
                                  size_t begin,
                                  size_t end);
 
+static char *strip_macro_argument_quotes(char *text) {
+    size_t len;
+
+    if (text == NULL) {
+        return text;
+    }
+    len = strlen(text);
+    if (len >= 2U &&
+        ((text[0] == '"' && text[len - 1U] == '"') ||
+         (text[0] == '\'' && text[len - 1U] == '\''))) {
+        memmove(text, text + 1U, len - 2U);
+        text[len - 2U] = '\0';
+    }
+    return text;
+}
+
 static bool expand_macro_invocation(MiniAs *as,
                                     MiniAsMacro *macro,
                                     const char *args,
@@ -3044,7 +3075,7 @@ static bool expand_macro_invocation(MiniAs *as,
     }
     for (i = 0U; i < macro->param_count; ++i) {
         if (i < supplied) {
-            values[i] = tokens[i];
+            values[i] = strip_macro_argument_quotes(tokens[i]);
         } else if (macro->params[i].default_value != NULL) {
             values[i] = macro->params[i].default_value;
         } else if (macro->params[i].required) {
