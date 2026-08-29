@@ -902,7 +902,27 @@ int minipp_preprocess_file(const char *input_path,
         minipp_undefine_macro(&state, config->undefines[index]);
     }
 
-    ok = minipp_process_file(&state, input_path, &output) &&
+    ok = true;
+    for (index = 0U; index < config->forced_include_count && ok; ++index) {
+        MiniPpString resolved;
+
+        if (!minipp_resolve_include(&state,
+                                    "",
+                                    config->forced_includes[index],
+                                    false,
+                                    &resolved)) {
+            fprintf(diagnostics,
+                    "minic-cpp: forced-include-not-found:%s\n",
+                    config->forced_includes[index]);
+            ok = false;
+            break;
+        }
+        ok = minipp_process_file(&state, resolved.data, &output);
+        minipp_string_destroy(&resolved);
+    }
+
+    ok = ok &&
+         minipp_process_file(&state, input_path, &output) &&
          minipp_write_file(output_path,
                            output.data == NULL ? "" : output.data,
                            output.size,
