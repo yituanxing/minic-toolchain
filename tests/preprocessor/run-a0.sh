@@ -243,4 +243,13 @@ int pragma_value;
 EOF
 run_exact pragma
 
-printf 'MINIPP_A0_EXACT=PASS cases=27 mode=byte-identical\n'
+cat >"$work/object-to-function-rescan.c" <<'EOF'
+#define TARGET(x) ((x) + 1)
+#define ALIAS TARGET
+#define CHAIN ALIAS
+int alias_call = ALIAS(4);
+int chain_call = CHAIN(5);
+EOF
+run_exact object-to-function-rescan
+
+printf 'MINIPP_A0_EXACT=PASS cases=28 mode=byte-identical\n'
