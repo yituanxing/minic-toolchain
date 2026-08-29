@@ -16,8 +16,13 @@ source; this file records the promotion state and makes the update rules explici
 - Input-inventory run: `33237625114`
 - Inventory head: `d0601327e2a32e38cbaafb094a119166768686e7`
 
-The 3352 C TUs and 26 native assembly objects are separate coverage populations.
-The final Linux MiniAS claim is therefore `3378/3378`, not `3352/3352`.
+The frozen compiler corpus and the native assembly cohort are separate coverage
+populations. The original configured-plan inventory counted 3378 assembler-stage
+inputs, while the later successful ground-truth Kbuild inventory measured **3536**
+actual assembler inputs: 3501 C compile rules + 35 native `.S` rules, with 0
+raw `.s` and 0 Rust rules (run `33237934886`). The frozen 3352 lane remains
+the convergence oracle first; full Linux MiniAS acceptance must eventually be
+reconciled against the 3536 ground-truth workload.
 
 ## Window ledger
 
@@ -25,16 +30,18 @@ The final Linux MiniAS claim is therefore `3378/3378`, not `3352/3352`.
 | --- | ---: | --- | ---: | ---: | ---: | ---: | ---: | --- |
 | C first500 | 0-499 | `c7bad59bb975a6cc66db6430fd5e0764b4c77add` | `33237394302` | 500 | 0 | 0 | 149 s | **FROZEN** |
 | C new500 | 500-999 | `d0601327e2a32e38cbaafb094a119166768686e7` | `33237625079` | 500 | 0 | 0 | 222 s | **PASS / freeze next** |
-| C next500 | 1000-1499 | - | - | - | - | - | - | pending |
-| C next500b | 1500-1999 | - | - | - | - | - | - | pending |
-| C next500c | 2000-2499 | - | - | - | - | - | - | pending |
-| C next500d | 2500-2999 | - | - | - | - | - | - | pending |
-| C final352 | 3000-3351 | - | - | - | - | - | - | pending |
+| C next500 | 1000-1499 | `c781ab134adedf1dff32efd8c2652d5b9bcafd23` | `33237834301` | 500 | 0 | 0 | 139 s | **PASS** |
+| C next500b | 1500-1999 | `787fc6a888b7c9c1ead201f28c64295d7dd2fb56` | `33238043396` | 500 | 0 | 0 | 190 s | **PASS** |
+| C next500c | 2000-2499 | `ba87fd14d9b19e3eb65d596e71a0b949267176b9` | `33238335068` | 500 | 0 | 0 | 201 s | **PASS** |
+| C next500d | 2500-2999 | `af52735e7df06e9cccb106d6dba485a596bb28a5` | `33244118305` | 500 | 0 | 0 | 187 s | **FROZEN** |
+| C final352 | 3000-3351 | - | - | - | - | - | - | **active** |
 | native asm26 | configured .S objects | - | - | - | - | - | - | active |
 
-Cumulative authoritative C coverage currently proven: **1000/3352** over the
-first two frozen windows. The first window is frozen; the second has exact
-500/500 evidence and is ready to freeze before opening 1000-1499.
+Cumulative authoritative frozen-C coverage now proven: **3000/3352**. All six
+500-file windows are exact green. Run `33244118305` closed the only next500d
+failure (`drivers/perf/riscv_pmu.i.s`, previously `bad-csrr`) by accepting
+the additive constant CSR expression emitted from the real Linux inline-asm
+shape. The remaining frozen-C frontier is exactly **352 files** (3000-3351).
 
 ## First500 convergence history
 
@@ -71,8 +78,11 @@ After every authoritative full-window run:
 9. On exact `500/500` (or `352/352`), freeze the head/evidence and open the
    next fixed window immediately.
 10. Keep already-frozen windows as cumulative regression contracts.
-11. After all 3352 C TUs converge, require the native asm26 cohort as well.
-12. Final MiniAS Linux acceptance requires an exact **3378/3378** aggregate gate.
+11. After all 3352 frozen C TUs converge, reconcile the additional C compile
+    rules from the 3536 ground-truth inventory and require all 35 native `.S`
+    rules as well.
+12. Final MiniAS Linux acceptance requires an exact ground-truth aggregate gate;
+    the current measured target is **3536 assembler inputs**.
 
 ## Timing policy
 
