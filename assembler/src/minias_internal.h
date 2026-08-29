@@ -166,6 +166,8 @@ typedef struct MiniAs {
     size_t macro_expansion_counter;
     size_t macro_expansion_depth;
     bool conditional_active;
+    bool cfi_active;
+    bool cfi_signal_frame;
     int current_section;
     uint32_t current_subsection;
     int previous_section;
