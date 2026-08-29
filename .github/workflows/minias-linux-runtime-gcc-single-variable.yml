@@ -54,6 +54,7 @@ jobs:
           trace=${MINIAS_AS_TRACE:?MINIAS_AS_TRACE is not set}
           real_as=${REAL_AS:-/usr/bin/riscv64-linux-gnu-as}
           args=("$@")
+          minias_opts=()
           out=
           input=
           query=0
@@ -61,6 +62,7 @@ jobs:
             arg=${args[i]}
             case "$arg" in
               --version|-v|--help) query=1 ;;
+              -march=*|-mabi=*) minias_opts+=("$arg") ;;
               -o)
                 if (( i + 1 < ${#args[@]} )); then
                   out=${args[i+1]}
@@ -100,11 +102,15 @@ jobs:
             printf '\n'
           } >>"$trace"
 
-          if "$minias" -o "$out" "$input"; then
+          if "$minias" "${minias_opts[@]}" -o "$out" "$input"; then
             printf 'pass input=%q output=%q\n' "$input" "$out" >>"$trace"
           else
             status=$?
             printf 'fail status=%s input=%q output=%q\n' "$status" "$input" "$out" >>"$trace"
+            if [[ -n "${MINIAS_FAILURE_DIR:-}" && -f "$input" ]]; then
+              mkdir -p "$MINIAS_FAILURE_DIR"
+              cp "$input" "$MINIAS_FAILURE_DIR/$(basename "$out").s"
+            fi
             exit "$status"
           fi
           SH
@@ -136,6 +142,7 @@ jobs:
 
           export MINIAS="$GITHUB_WORKSPACE/build/minias-linux-runtime-toolchain/bin/minic-as"
           export MINIAS_AS_TRACE="$work/minias-as.trace"
+          export MINIAS_FAILURE_DIR="$work/failure-inputs"
           export REAL_AS=/usr/bin/riscv64-linux-gnu-as
 
           started=$(date +%s)
@@ -202,6 +209,7 @@ jobs:
           path: |
             build/minias-linux-runtime/kbuild.log
             build/minias-linux-runtime/minias-as.trace
+            build/minias-linux-runtime/failure-inputs/*.s
             build/minias-linux-runtime/out/.config
             build/minias-linux-runtime/qemu-p0/*.log
             build/minias-linux-runtime/qemu-p1/*.log
