@@ -510,6 +510,22 @@ irp_hex="$(
 test "$irp_hex" = "0001021f03004100"
 readelf -Ws "$work/irp.o" | grep -q '.L__gpr_num_x31'
 
+cat >"$work/vsetvl.s" <<'EOF'
+.text
+.globl vsetvl_user
+.type vsetvl_user, @function
+vsetvl_user:
+  vsetvl x0, t5, t4
+  ret
+.size vsetvl_user, .-vsetvl_user
+EOF
+"$MINIAS" -o "$work/vsetvl.o" "$work/vsetvl.s"
+vsetvl_hex="$(
+    readelf -x .text "$work/vsetvl.o" |
+    awk '/0x[0-9a-f]+/ {for (i=2; i<=NF; ++i) if ($i ~ /^[0-9a-f]+$/ && length($i) <= 8 && length($i) % 2 == 0) printf "%s", $i}'
+)"
+test "$vsetvl_hex" = "5770df8167800000"
+
 cat >"$work/fence-i.s" <<'EOF'
 .text
 .globl fence_i_user
@@ -526,4 +542,4 @@ fence_i_hex="$(
 )"
 test "$fence_i_hex" = "0f10000067800000"
 
-echo "MINIAS_A0=PASS objects=24 format=ELF64-RISCV-ET_REL relocations=16 strings=2 pseudos=14 previous=3 subsection=2 numeric_labels=18 isa_next=13 csr_amo=4 sfence_vma=3 fence_i=1 rept=2 nested_rept=1 irp=4 section_stack=1 org=3 local_difference=1 lr_sc=2 inline_labels=2 branch_pseudos=8 extern=1 symbol_minus_dot=4 symbol_difference=1 absolute32=1 jal=2 jal_subsection=1 high_numeric_labels=2 conditional=1"
+echo "MINIAS_A0=PASS objects=25 format=ELF64-RISCV-ET_REL relocations=16 strings=2 pseudos=14 previous=3 subsection=2 numeric_labels=18 isa_next=13 csr_amo=4 sfence_vma=3 fence_i=1 vsetvl=1 rept=2 nested_rept=1 irp=4 section_stack=1 org=3 local_difference=1 lr_sc=2 inline_labels=2 branch_pseudos=8 extern=1 symbol_minus_dot=4 symbol_difference=1 absolute32=1 jal=2 jal_subsection=1 high_numeric_labels=2 conditional=1"

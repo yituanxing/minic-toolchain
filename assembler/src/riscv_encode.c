@@ -566,7 +566,8 @@ bool minias_riscv_measure(const char *op,
         SIMPLE("bgtu") || SIMPLE("bleu") || SIMPLE("addi") || SIMPLE("addiw") ||
         SIMPLE("andi") || SIMPLE("ori") || SIMPLE("xori") || SIMPLE("slti") ||
         SIMPLE("sltiu") || SIMPLE("slli") || SIMPLE("srli") || SIMPLE("srai") ||
-        SIMPLE("sra") || SIMPLE("fence") || SIMPLE("fence.i") || SIMPLE("csrr") || SIMPLE("csrrc") ||
+        SIMPLE("sra") || SIMPLE("fence") || SIMPLE("fence.i") || SIMPLE("vsetvl") ||
+        SIMPLE("csrr") || SIMPLE("csrrc") ||
         SIMPLE("csrs") || SIMPLE("csrc") || SIMPLE("ebreak") || SIMPLE("pause") ||
         SIMPLE("wfi") || SIMPLE("add") || SIMPLE("sub") || SIMPLE("sll") ||
         SIMPLE("srl") || SIMPLE("and") || SIMPLE("or") ||
@@ -596,6 +597,17 @@ bool minias_riscv_encode(MiniAs *as, const MiniAsStmt *stmt) {
     uint32_t funct3;
     MiniAsSymbol *symbol;
 
+    if (strcmp(stmt->op, "vsetvl") == 0) {
+        if (count != 3U ||
+            !require_reg(as, stmt, operands[0], &rd) ||
+            !require_reg(as, stmt, operands[1], &rs1) ||
+            !require_reg(as, stmt, operands[2], &rs2)) {
+            return false;
+        }
+        return append_u32(as,
+                          stmt->section,
+                          enc_r(0x57U, rd, 7U, rs1, rs2, 0x40U));
+    }
     if (strcmp(stmt->op, "sfence.vma") == 0) {
         rs1 = 0;
         rs2 = 0;
