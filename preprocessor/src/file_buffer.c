@@ -131,3 +131,31 @@ bool minipp_write_file(const char *path,
     }
     return true;
 }
+
+bool minipp_splice_backslash_newlines(const MiniPpString *input,
+                                      MiniPpString *output) {
+    size_t index = 0U;
+
+    minipp_string_init(output);
+    while (index < input->size) {
+        if (input->data[index] == '\\' && index + 1U < input->size) {
+            if (input->data[index + 1U] == '\n') {
+                index += 2U;
+                continue;
+            }
+            if (input->data[index + 1U] == '\r' &&
+                index + 2U < input->size &&
+                input->data[index + 2U] == '\n') {
+                index += 3U;
+                continue;
+            }
+        }
+
+        if (!minipp_string_append_char(output, input->data[index])) {
+            minipp_string_destroy(output);
+            return false;
+        }
+        ++index;
+    }
+    return true;
+}
