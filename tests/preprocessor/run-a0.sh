@@ -272,4 +272,22 @@ STATIC_ASSERT(1 + 1 == 2);
 EOF
 run_exact gnu-empty-variadic
 
-printf 'MINIPP_A0_EXACT=PASS cases=30 mode=byte-identical\n'
+cat >"$work/builtin-location.c" <<'EOF'
+const char *builtin_file = __FILE__;
+int builtin_line = __LINE__;
+#define BUILTIN_LINE() __LINE__
+int macro_builtin_line = BUILTIN_LINE();
+EOF
+run_exact builtin-location
+
+cat >"$work/builtin-header.h" <<'EOF'
+const char *header_builtin_file = __FILE__;
+int header_builtin_line = __LINE__;
+EOF
+cat >"$work/builtin-include.c" <<'EOF'
+#include "builtin-header.h"
+int after_builtin_header = __LINE__;
+EOF
+run_exact builtin-include
+
+printf 'MINIPP_A0_EXACT=PASS cases=32 mode=byte-identical\n'
