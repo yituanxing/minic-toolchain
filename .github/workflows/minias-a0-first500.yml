@@ -14,8 +14,20 @@ env:
   FROZEN_CORPUS_EXPORT_RUN: "33186855250"
 
 jobs:
-  first500:
+  first500-shard:
     if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[minias-first500]')
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: s0
+            offset: 0
+          - name: s1
+            offset: 125
+          - name: s2
+            offset: 250
+          - name: s3
+            offset: 375
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -39,12 +51,9 @@ jobs:
           actual=$(sha256sum "$import/corpus.tar.gz" | cut -d' ' -f1)
           test "$actual" = "$expected"
           tar -C build -xzf "$import/corpus.tar.gz"
-          (
-            cd build
-            sha256sum -c import-first500/files.sha256 >/dev/null
-          )
+          (cd build && sha256sum -c import-first500/files.sha256 >/dev/null)
           test "$(grep -cve '^[[:space:]]*$' build/linux-focus-corpus/selected-tus.txt)" -eq 500
-          echo "FROZEN_CORPUS=PASS archive_sha=$actual"
+          echo "FROZEN_CORPUS=PASS archive_sha=$actual shard=${{ matrix.name }}"
 
       - name: Build compiler and MiniAS
         run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/minias-first500-toolchain all
@@ -52,41 +61,33 @@ jobs:
       - name: Run MiniAS micro gate
         run: make MODE=release CFLAGS=-Werror BUILD_DIR=build/minias-first500-toolchain check-minias-a0
 
-      - name: Generate all first500 assembly files
+      - name: Generate shard assembly files
         shell: bash
         run: |
           set -Eeuo pipefail
           compiler="$GITHUB_WORKSPACE/build/minias-first500-toolchain/bin/minic-cc"
-          work="$GITHUB_WORKSPACE/build/minias-first500"
+          work="$GITHUB_WORKSPACE/build/minias-first500-${{ matrix.name }}"
           CORE_FAST_TRACE=1 python3 tests/external/linux/corpus_replay.py \
             --minic "$compiler" \
             --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
             --work "$work" \
-            --jobs 4 --offset 0 --limit 500 --sample-count 0
+            --jobs 4 --offset ${{ matrix.offset }} --limit 125 --sample-count 0
           python3 - "$work/batch-results.json" <<'PY'
           import json, sys
           rows=json.load(open(sys.argv[1]))
           bad=[r for r in rows if r["status"]!="PASS"]
-          assert len(rows)==500 and not bad, (len(rows), bad[:5])
-          print("MINIAS_FIRST500_INPUT=PASS generated=500")
+          assert len(rows)==125 and not bad, (len(rows), bad[:5])
+          print("MINIAS_FIRST500_SHARD_INPUT=PASS generated=125")
           PY
 
-      - name: Assemble first500 and measure complete passes
+      - name: Assemble shard and classify first blockers
         shell: bash
         run: |
           set -Eeuo pipefail
           minias="$GITHUB_WORKSPACE/build/minias-first500-toolchain/bin/minic-as"
-          root="$GITHUB_WORKSPACE/build/minias-first500/minic-out"
-          out="$GITHUB_WORKSPACE/build/minias-first500/minias-out"
+          root="$GITHUB_WORKSPACE/build/minias-first500-${{ matrix.name }}/minic-out"
+          out="$GITHUB_WORKSPACE/build/minias-first500-${{ matrix.name }}/minias-out"
           mkdir -p "$out"
-          : > "$out/results.tsv"
-          : > "$out/blockers.txt"
-          pass=0
-          fail=0
-
-          mapfile -t files < <(find "$root" -type f -name '*.s' | LC_ALL=C sort)
-          test "${#files[@]}" -eq 500
-
           worker="$out/assemble-one.sh"
           cat >"$worker" <<'SH'
           #!/usr/bin/env bash
@@ -115,26 +116,53 @@ jobs:
           fi
           SH
           chmod +x "$worker"
-
-          jobs="${MINIAS_ASSEMBLY_JOBS:-4}"
+          mapfile -t files < <(find "$root" -type f -name '*.s' | LC_ALL=C sort)
+          test "${#files[@]}" -eq 125
           printf '%s\0' "${files[@]}" |
-            xargs -0 -n1 -P"$jobs" "$worker" "$minias" "$root" "$out"
-
-          mapfile -d '' -t result_files < <(
-            find "$out" -type f -name '*.result' -print0 | LC_ALL=C sort -z
-          )
-          test "${#result_files[@]}" -eq 500
-          for result in "${result_files[@]}"; do
-            cat "$result"
-          done >"$out/results.tsv"
-
-          find "$out" -type f -name '*.blocker' -print0 |
-            LC_ALL=C sort -z |
-            xargs -0 -r cat >"$out/blockers.txt"
-
+            xargs -0 -n1 -P"${MINIAS_ASSEMBLY_JOBS:-4}" "$worker" "$minias" "$root" "$out"
+          mapfile -d '' -t result_files < <(find "$out" -type f -name '*.result' -print0 | LC_ALL=C sort -z)
+          test "${#result_files[@]}" -eq 125
+          for result in "${result_files[@]}"; do cat "$result"; done >"$out/results.tsv"
+          find "$out" -type f -name '*.blocker' -print0 | LC_ALL=C sort -z | xargs -0 -r cat >"$out/blockers.txt"
           pass=$(awk -F '\t' '$1=="PASS" {n++} END {print n+0}' "$out/results.tsv")
           fail=$(awk -F '\t' '$1=="FAIL" {n++} END {print n+0}' "$out/results.tsv")
+          echo "MINIAS_FIRST500_SHARD name=${{ matrix.name }} offset=${{ matrix.offset }} pass=$pass fail=$fail total=125"
+          test $((pass + fail)) -eq 125
 
+      - uses: actions/upload-artifact@v4
+        with:
+          name: minias-a0-first500-shard-${{ matrix.name }}
+          path: |
+            build/minias-first500-${{ matrix.name }}/minias-out/results.tsv
+            build/minias-first500-${{ matrix.name }}/minias-out/blockers.txt
+          retention-days: 14
+          if-no-files-found: error
+
+  first500:
+    needs: first500-shard
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[minias-first500]')
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: minias-a0-first500-shard-*
+          path: build/minias-first500-shards
+
+      - name: Aggregate frozen first500 headline
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          out=build/minias-first500-aggregate
+          mkdir -p "$out"
+          mapfile -t results < <(find build/minias-first500-shards -type f -name results.tsv | LC_ALL=C sort)
+          mapfile -t blockers < <(find build/minias-first500-shards -type f -name blockers.txt | LC_ALL=C sort)
+          test "${#results[@]}" -eq 4
+          for f in "${results[@]}"; do cat "$f"; done | LC_ALL=C sort -t $'\t' -k2,2 >"$out/results.tsv"
+          : >"$out/blockers.txt"
+          for f in "${blockers[@]}"; do cat "$f"; done >"$out/blockers.txt"
+          test "$(wc -l < "$out/results.tsv")" -eq 500
+          pass=$(awk -F '\t' '$1=="PASS" {n++} END {print n+0}' "$out/results.tsv")
+          fail=$(awk -F '\t' '$1=="FAIL" {n++} END {print n+0}' "$out/results.tsv")
           {
             echo "MINIAS_FIRST500_SUMMARY pass=$pass fail=$fail total=500"
             echo "MINIAS_FIRST500_TOP_BLOCKERS"
@@ -146,14 +174,13 @@ jobs:
             echo "MINIAS_FIRST500_FIRST_PASSES"
             awk -F '\t' '$1=="PASS" {print $2}' "$out/results.tsv" | head -n 30
           } | tee "$out/summary.txt"
-
           test $((pass + fail)) -eq 500
 
       - uses: actions/upload-artifact@v4
         with:
           name: minias-a0-first500-progress
           path: |
-            build/minias-first500/minias-out/results.tsv
-            build/minias-first500/minias-out/summary.txt
+            build/minias-first500-aggregate/results.tsv
+            build/minias-first500-aggregate/summary.txt
           retention-days: 14
           if-no-files-found: error
