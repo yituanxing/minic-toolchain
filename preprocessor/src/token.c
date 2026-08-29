@@ -299,12 +299,14 @@ static bool minipp_expand_text_recursive(MiniPpState *state,
                                          const char *const *disabled,
                                          size_t disabled_count,
                                          size_t depth,
-                                         size_t source_line);
+                                         size_t source_line,
+                                         bool preserve_argument_spacing);
 
 static bool minipp_build_logical_args(MiniPpState *state,
                                       const MiniPpMacro *macro,
                                       const MiniPpArgList *raw_args,
-                                      MiniPpArgList *logical_args) {
+                                      MiniPpArgList *logical_args,
+                                      bool preserve_argument_spacing) {
     size_t fixed_count;
     size_t index;
     MiniPpString variadic;
@@ -367,7 +369,8 @@ static bool minipp_build_logical_args(MiniPpState *state,
             if (!minipp_string_append_char(&variadic, ',')) {
                 goto oom;
             }
-            if (raw_args->leading_space[index] &&
+            if (preserve_argument_spacing &&
+                raw_args->leading_space[index] &&
                 !minipp_string_append_char(&variadic, ' ')) {
                 goto oom;
             }
@@ -988,6 +991,7 @@ static bool minipp_expand_function_macro(MiniPpState *state,
                                          size_t disabled_count,
                                          size_t depth,
                                          size_t source_line,
+                                         bool preserve_argument_spacing,
                                          bool *invoked) {
     size_t cursor = *index;
     size_t open_line = source_line;
@@ -1022,7 +1026,11 @@ static bool minipp_expand_function_macro(MiniPpState *state,
                                       index)) {
         return false;
     }
-    if (!minipp_build_logical_args(state, macro, &parsed_args, &raw_args)) {
+    if (!minipp_build_logical_args(state,
+                                   macro,
+                                   &parsed_args,
+                                   &raw_args,
+                                   preserve_argument_spacing)) {
         minipp_arg_list_destroy(&parsed_args);
         return false;
     }
@@ -1051,7 +1059,8 @@ static bool minipp_expand_function_macro(MiniPpState *state,
                                               disabled,
                                               disabled_count,
                                               depth + 1U,
-                                              raw_args.source_line[arg_index])) {
+                                              raw_args.source_line[arg_index],
+                                              true)) {
                 minipp_arg_list_destroy(&raw_args);
                 expanded_args.count = arg_index + 1U;
                 minipp_arg_list_destroy(&expanded_args);
@@ -1113,7 +1122,8 @@ static bool minipp_expand_function_macro(MiniPpState *state,
                                           next_disabled,
                                           next_count,
                                           depth + 1U,
-                                          source_line);
+                                          source_line,
+                                          false);
         if (ok) {
             minipp_normalize_leading_expansion_space(
                 &replacement,
@@ -1146,6 +1156,7 @@ static bool minipp_expand_function_macro(MiniPpState *state,
                                                          next_count,
                                                          depth + 1U,
                                                          source_line,
+                                                         preserve_argument_spacing,
                                                          &tail_invoked)) {
                     ok = false;
                 } else if (tail_invoked) {
@@ -1258,7 +1269,8 @@ static bool minipp_expand_text_recursive(MiniPpState *state,
                                          const char *const *disabled,
                                          size_t disabled_count,
                                          size_t depth,
-                                         size_t source_line) {
+                                         size_t source_line,
+                                         bool preserve_argument_spacing) {
     size_t index = 0U;
     size_t current_line = source_line;
 
@@ -1345,6 +1357,7 @@ static bool minipp_expand_text_recursive(MiniPpState *state,
                                                       disabled_count,
                                                       depth,
                                                       current_line,
+                                                      preserve_argument_spacing,
                                                       &invoked)) {
                         return false;
                     }
@@ -1377,7 +1390,8 @@ static bool minipp_expand_text_recursive(MiniPpState *state,
                                                       next_disabled,
                                                       next_count,
                                                       depth + 1U,
-                                                      current_line);
+                                                      current_line,
+                                                      false);
                     if (ok) {
                         size_t tail_start = 0U;
                         const MiniPpMacro *tail_macro =
@@ -1408,6 +1422,7 @@ static bool minipp_expand_text_recursive(MiniPpState *state,
                                            next_count,
                                            depth + 1U,
                                            current_line,
+                                           preserve_argument_spacing,
                                            &invoked)) {
                                 ok = false;
                             } else if (invoked) {
@@ -1479,7 +1494,8 @@ bool minipp_expand_text(MiniPpState *state,
                                         0U,
                                         0U,
                                         state->current_line == 0U ? 1U :
-                                                                    state->current_line);
+                                                                    state->current_line,
+                                        true);
 }
 
 bool minipp_strip_comments_line(MiniPpState *state,
