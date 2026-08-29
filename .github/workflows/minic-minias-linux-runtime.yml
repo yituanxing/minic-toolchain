@@ -1,4 +1,5 @@
 name: MiniC MiniAS Linux Runtime Integration
+# Exact-head retrigger after semantic-oracle cleanup.
 
 on:
   push:
