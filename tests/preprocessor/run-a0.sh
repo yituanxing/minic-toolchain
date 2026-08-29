@@ -372,4 +372,13 @@ int minus_ident = MINUS_ONE(name);
 EOF
 run_exact pp-number-padding
 
-printf 'MINIPP_A0_EXACT=PASS cases=40 mode=byte-identical\n'
+cat >"$work/object-number-padding.c" <<'EOF'
+#define BITS_PER_WORD 64
+#define HEX_LIMIT 0x10U
+int object_minus = BITS_PER_WORD-1;
+int object_plus = HEX_LIMIT+1;
+int object_dot = BITS_PER_WORD.0;
+EOF
+run_exact object-number-padding
+
+printf 'MINIPP_A0_EXACT=PASS cases=41 mode=byte-identical\n'
