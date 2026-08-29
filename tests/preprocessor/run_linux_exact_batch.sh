@@ -30,6 +30,7 @@ done
 
 : >"$trace"
 export MINIPP_LINUX_SELECT_FILE="$manifest"
+printf 'MINIPP_LINUX_BATCH_JOBS=%s\n' "$jobs"
 
 make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
   CC="$cc_wrapper" -j"$jobs" V=1 "${targets[@]}" >"$work/kbuild-batch.log" 2>&1
