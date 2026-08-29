@@ -153,4 +153,17 @@ int after_system = SYSTEM_VALUE + 1;
 EOF
 run_exact system-include -isystem "$work/system"
 
-printf 'MINIPP_A0_EXACT=PASS cases=16 mode=byte-identical\n'
+cat >"$work/splice-source.c" <<'EOF'
+int splice_source = 1 + \
+2;
+EOF
+run_exact splice-source
+
+cat >"$work/splice-macro.c" <<'EOF'
+#define SPLICE_ADD(a, b) ((a)+\
+(b))
+int splice_macro = SPLICE_ADD(3, 4);
+EOF
+run_exact splice-macro
+
+printf 'MINIPP_A0_EXACT=PASS cases=18 mode=byte-identical\n'
