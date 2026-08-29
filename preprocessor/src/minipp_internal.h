@@ -49,6 +49,8 @@ bool minipp_write_file(const char *path,
                        const char *data,
                        size_t size,
                        FILE *diagnostics);
+bool minipp_splice_backslash_newlines(const MiniPpString *input,
+                                      MiniPpString *output);
 
 void minipp_string_init(MiniPpString *string);
 void minipp_string_destroy(MiniPpString *string);
