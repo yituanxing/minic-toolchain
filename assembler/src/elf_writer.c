@@ -323,6 +323,7 @@ bool minias_write_elf64(MiniAs *as, const char *path) {
         header->e_ident[EI_VERSION] = EV_CURRENT;
         header->e_type = ET_REL;
         header->e_machine = EM_RISCV;
+        header->e_flags = as->elf_flags;
         header->e_version = EV_CURRENT;
         header->e_ehsize = sizeof(Elf64_Ehdr);
         header->e_shoff = section_header_offset;
@@ -693,6 +694,7 @@ bool minias_write_elf32(MiniAs *as, const char *path) {
         header->e_ident[EI_VERSION] = EV_CURRENT;
         header->e_type = ET_REL;
         header->e_machine = EM_RISCV;
+        header->e_flags = as->elf_flags;
         header->e_version = EV_CURRENT;
         header->e_ehsize = sizeof(Elf32_Ehdr);
         header->e_shoff = (Elf32_Off)section_header_offset;
