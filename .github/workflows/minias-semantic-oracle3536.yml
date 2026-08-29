@@ -1,0 +1,417 @@
+name: MiniAS Semantic Oracle 3536
+
+on:
+  push:
+    branches:
+      - "toolchain/minias-m0-boundary-freeze"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  FROZEN_CORPUS_EXPORT_RUN: "33186855250"
+  FROZEN_SIDECARS_RUN: "33237304382"
+  FROZEN_CONFIG_GZ_SHA256: "8511a666382dda596a9ddba313113f77182d3156fed890a2ea9f2e86223226ff"
+  C149_EXPORT_RUN: "33248985705"
+  FROZEN_NATIVE26_RUN: "33245348705"
+  FROZEN_NATIVE26_FILES_SHA256: "fdbdf1f8fbf4ddcb1af4ff689225780f12e0e243dec3b9540fc493e766b429f6"
+  FROZEN_NATIVE35_EXTRA9_RUN: "33247303056"
+  FROZEN_NATIVE35_SIDECARS_RUN: "33247303056"
+
+jobs:
+  c-shards:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[minias-semantic-oracle3536]')
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: first500
+            artifact: frozen-linux-corpus-first500
+            corpus_dir: linux-focus-corpus
+            total: 500
+          - label: new500
+            artifact: frozen-linux-corpus-new500
+            corpus_dir: linux-new500-corpus
+            total: 500
+          - label: next500
+            artifact: frozen-linux-corpus-next500
+            corpus_dir: linux-next500-corpus
+            total: 500
+          - label: next500b
+            artifact: frozen-linux-corpus-next500b
+            corpus_dir: linux-next500b-corpus
+            total: 500
+          - label: next500c
+            artifact: frozen-linux-corpus-next500c
+            corpus_dir: linux-next500c-corpus
+            total: 500
+          - label: next500d
+            artifact: frozen-linux-corpus-next500d
+            corpus_dir: linux-next500d-corpus
+            total: 500
+          - label: final352
+            artifact: frozen-linux-corpus-final352
+            corpus_dir: linux-final352-corpus
+            total: 352
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Install oracle dependencies
+        run: |
+          sudo apt-get -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu python3-pyelftools
+
+      - name: Download frozen Linux corpus
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: build/import-${{ matrix.label }}
+          repository: ${{ github.repository }}
+          run-id: ${{ env.FROZEN_CORPUS_EXPORT_RUN }}
+          github-token: ${{ github.token }}
+
+      - name: Verify frozen Linux corpus
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          import="build/import-${{ matrix.label }}"
+          expected=$(cut -d' ' -f1 "$import/corpus.tar.gz.sha256")
+          actual=$(sha256sum "$import/corpus.tar.gz" | cut -d' ' -f1)
+          test "$actual" = "$expected"
+          tar -C build -xzf "$import/corpus.tar.gz"
+          (cd build && sha256sum -c "import-${{ matrix.label }}/files.sha256" >/dev/null)
+          manifest="build/${{ matrix.corpus_dir }}/selected-tus.txt"
+          test "$(grep -cve '^[[:space:]]*$' "$manifest")" -eq ${{ matrix.total }}
+
+      - name: Restore frozen incbin sidecar
+        uses: actions/download-artifact@v4
+        with:
+          name: minias-linux-sidecars-v1
+          path: build/import-minias-sidecars
+          repository: ${{ github.repository }}
+          run-id: ${{ env.FROZEN_SIDECARS_RUN }}
+          github-token: ${{ github.token }}
+
+      - name: Verify and install sidecar
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          payload=build/import-minias-sidecars/kernel/config_data.gz
+          test -s "$payload"
+          test "$(sha256sum "$payload" | cut -d' ' -f1)" = "$FROZEN_CONFIG_GZ_SHA256"
+          mkdir -p kernel
+          cp "$payload" kernel/config_data.gz
+
+      - name: Build exact MiniC and MiniAS
+        run: |
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/minias-semantic-${{ matrix.label }}-toolchain all
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/minias-semantic-${{ matrix.label }}-toolchain check-minias-a0
+
+      - name: Generate exact MiniC assembly
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          compiler="$GITHUB_WORKSPACE/build/minias-semantic-${{ matrix.label }}-toolchain/bin/minic-cc"
+          corpus="$GITHUB_WORKSPACE/build/${{ matrix.corpus_dir }}"
+          work="$GITHUB_WORKSPACE/build/minias-semantic-${{ matrix.label }}"
+          CORE_FAST_TRACE=1 python3 tests/external/linux/corpus_replay.py \
+            --minic "$compiler" --corpus "$corpus" --work "$work" \
+            --jobs 4 --offset 0 --limit ${{ matrix.total }} --sample-count 0
+          test "$(find "$work/minic-out" -type f -name '*.s' | wc -l)" -eq ${{ matrix.total }}
+
+      - name: Compare GNU as and MiniAS semantically
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 tests/assembler/run_semantic_oracle.py \
+            --input-root "build/minias-semantic-${{ matrix.label }}/minic-out" \
+            --output-root "build/minias-semantic-${{ matrix.label }}/oracle" \
+            --minias "build/minias-semantic-${{ matrix.label }}-toolchain/bin/minic-as" \
+            --oracle tests/assembler/elf_semantic_compare.py \
+            --jobs 4 --expected ${{ matrix.total }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: minias-semantic-${{ matrix.label }}
+          path: |
+            build/minias-semantic-${{ matrix.label }}/oracle/results.tsv
+            build/minias-semantic-${{ matrix.label }}/oracle/summary.txt
+            build/minias-semantic-${{ matrix.label }}/oracle/semantic/**/*.json
+          retention-days: 14
+          if-no-files-found: error
+
+  c149:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[minias-semantic-oracle3536]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Install oracle dependencies
+        run: |
+          sudo apt-get -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu python3-pyelftools
+
+      - name: Download frozen C149 corpus
+        uses: actions/download-artifact@v4
+        with:
+          name: minias-ground-truth-c149-corpus
+          path: build/import-c149
+          repository: ${{ github.repository }}
+          run-id: ${{ env.C149_EXPORT_RUN }}
+          github-token: ${{ github.token }}
+
+      - name: Verify and extract C149
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          expected=$(cut -d' ' -f1 build/import-c149/minias-ground-truth-c149-corpus.tar.gz.sha256)
+          actual=$(sha256sum build/import-c149/minias-ground-truth-c149-corpus.tar.gz | cut -d' ' -f1)
+          test "$actual" = "$expected"
+          cd build
+          tar -xzf import-c149/minias-ground-truth-c149-corpus.tar.gz
+          corpus="$GITHUB_WORKSPACE/build/minias-ground-truth-c149-corpus"
+          test "$(grep -cve '^[[:space:]]*$' "$corpus/selected-tus.txt")" -eq 149
+          (cd "$corpus" && sha256sum -c files.sha256 >/dev/null)
+
+      - name: Restore frozen incbin sidecar
+        uses: actions/download-artifact@v4
+        with:
+          name: minias-linux-sidecars-v1
+          path: build/import-minias-sidecars
+          repository: ${{ github.repository }}
+          run-id: ${{ env.FROZEN_SIDECARS_RUN }}
+          github-token: ${{ github.token }}
+
+      - name: Install sidecar
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          payload=build/import-minias-sidecars/kernel/config_data.gz
+          test "$(sha256sum "$payload" | cut -d' ' -f1)" = "$FROZEN_CONFIG_GZ_SHA256"
+          mkdir -p kernel
+          cp "$payload" kernel/config_data.gz
+
+      - name: Build exact MiniC and MiniAS
+        run: |
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/minias-semantic-c149-toolchain all
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/minias-semantic-c149-toolchain check-minias-a0
+
+      - name: Replay C149 through MiniC
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          CORE_FAST_TRACE=1 python3 tests/external/linux/corpus_replay.py \
+            --minic "$GITHUB_WORKSPACE/build/minias-semantic-c149-toolchain/bin/minic-cc" \
+            --corpus "$GITHUB_WORKSPACE/build/minias-ground-truth-c149-corpus" \
+            --work "$GITHUB_WORKSPACE/build/minias-semantic-c149-replay" \
+            --jobs 4 --offset 0 --limit 149 --sample-count 0
+          test "$(find build/minias-semantic-c149-replay/minic-out -type f -name '*.s' | wc -l)" -eq 149
+
+      - name: Compare C149 objects semantically
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 tests/assembler/run_semantic_oracle.py \
+            --input-root build/minias-semantic-c149-replay/minic-out \
+            --output-root build/minias-semantic-c149-oracle \
+            --minias build/minias-semantic-c149-toolchain/bin/minic-as \
+            --oracle tests/assembler/elf_semantic_compare.py \
+            --jobs 4 --expected 149
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: minias-semantic-c149
+          path: |
+            build/minias-semantic-c149-oracle/results.tsv
+            build/minias-semantic-c149-oracle/summary.txt
+            build/minias-semantic-c149-oracle/semantic/**/*.json
+          retention-days: 14
+          if-no-files-found: error
+
+  native35:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[minias-semantic-oracle3536]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Install oracle dependencies
+        run: |
+          sudo apt-get -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu python3-pyelftools
+
+      - name: Build exact MiniAS
+        run: |
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/minias-semantic-native35-toolchain all
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/minias-semantic-native35-toolchain check-minias-a0
+
+      - name: Download frozen native26
+        uses: actions/download-artifact@v4
+        with:
+          name: minias-a0-native26-progress
+          path: build/import-native26
+          repository: ${{ github.repository }}
+          run-id: ${{ env.FROZEN_NATIVE26_RUN }}
+          github-token: ${{ github.token }}
+
+      - name: Materialize native26
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          root=build/minias-semantic-native35-inputs
+          mkdir -p "$root"
+          cp -a build/import-native26/minias-native26-inputs/. "$root/"
+          test "$(find "$root" -type f -name '*.s' | wc -l)" -eq 26
+          (
+            cd "$root"
+            find . -type f -name '*.s' -print0 | LC_ALL=C sort -z | xargs -0 sha256sum > ../native26-files.sha256
+          )
+          test "$(sha256sum build/native26-files.sha256 | cut -d' ' -f1)" = "$FROZEN_NATIVE26_FILES_SHA256"
+
+      - name: Download native35 extra9
+        uses: actions/download-artifact@v4
+        with:
+          name: minias-native35-extra9-v1
+          path: build/import-native35-extra9
+          repository: ${{ github.repository }}
+          run-id: ${{ env.FROZEN_NATIVE35_EXTRA9_RUN }}
+          github-token: ${{ github.token }}
+
+      - name: Merge native35 extra9
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          root=build/minias-semantic-native35-inputs
+          while IFS= read -r -d '' src; do
+            rel=${src#"build/import-native35-extra9/"}
+            test ! -e "$root/$rel"
+            mkdir -p "$root/$(dirname "$rel")"
+            cp "$src" "$root/$rel"
+          done < <(find build/import-native35-extra9 -type f -name '*.s' -print0 | LC_ALL=C sort -z)
+          test "$(find "$root" -type f -name '*.s' | wc -l)" -eq 35
+
+      - name: Download native sidecars
+        uses: actions/download-artifact@v4
+        with:
+          name: minias-native26-sidecars-v1
+          path: build/import-native35-sidecars
+          repository: ${{ github.repository }}
+          run-id: ${{ env.FROZEN_NATIVE35_SIDECARS_RUN }}
+          github-token: ${{ github.token }}
+
+      - name: Materialize native sidecars
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          import=build/import-native35-sidecars
+          target=build/minias-semantic-native35-cwd
+          (cd "$import" && sha256sum -c SHA256SUMS)
+          sidecars=(
+            arch/riscv/kernel/vdso/vdso.so
+            arch/riscv/kernel/compat_vdso/compat_vdso.so
+            arch/riscv/purgatory/purgatory.ro
+            usr/initramfs_inc_data
+          )
+          for rel in "${sidecars[@]}"; do
+            mkdir -p "$target/$(dirname "$rel")"
+            cp "$import/$rel" "$target/$rel"
+          done
+
+      - name: Compare native35 objects semantically
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 tests/assembler/run_semantic_oracle.py \
+            --input-root build/minias-semantic-native35-inputs \
+            --output-root build/minias-semantic-native35-oracle \
+            --minias build/minias-semantic-native35-toolchain/bin/minic-as \
+            --oracle tests/assembler/elf_semantic_compare.py \
+            --cwd build/minias-semantic-native35-cwd \
+            --native35 --jobs 4 --expected 35
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: minias-semantic-native35
+          path: |
+            build/minias-semantic-native35-oracle/results.tsv
+            build/minias-semantic-native35-oracle/summary.txt
+            build/minias-semantic-native35-oracle/semantic/**/*.json
+          retention-days: 14
+          if-no-files-found: error
+
+  aggregate:
+    if: always() && (github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[minias-semantic-oracle3536]'))
+    needs: [c-shards, c149, native35]
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Require classification jobs
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "${{ needs.c-shards.result }}" = success
+          test "${{ needs.c149.result }}" = success
+          test "${{ needs.native35.result }}" = success
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: minias-semantic-*
+          path: build/minias-semantic-3536
+
+      - name: Aggregate 3536 semantic baseline
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          from collections import Counter
+          from pathlib import Path
+
+          root=Path("build/minias-semantic-3536")
+          files=sorted(root.rglob("results.tsv"))
+          if len(files) != 9:
+              raise SystemExit(f"expected 9 result cohorts, got {len(files)}")
+
+          status=Counter()
+          dimensions=Counter()
+          strict=0
+          total=0
+          for path in files:
+              for raw in path.read_text().splitlines():
+                  if not raw.strip():
+                      continue
+                  state, rel, strict_flag, dims = raw.split("\t", 3)
+                  total += 1
+                  status[state] += 1
+                  strict += strict_flag == "1"
+                  if dims != "-":
+                      for dim in dims.split(","):
+                          dimensions[dim] += 1
+
+          print(
+              f"MINIAS_SEMANTIC_3536_BASELINE selected={total} "
+              f"semantic_equal={status['PASS']} semantic_diff={status['DIFF']} "
+              f"strict_equal={strict} gnu_fail={status['GNU_FAIL']} "
+              f"minias_fail={status['MINIAS_FAIL']} oracle_error={status['ORACLE_ERROR']}"
+          )
+          print("MINIAS_SEMANTIC_3536_DIMENSIONS")
+          for name,count in dimensions.most_common():
+              print(f"{count:5d} {name}")
+
+          if total != 3536:
+              raise SystemExit(f"expected 3536 classified objects, got {total}")
+          if status['GNU_FAIL'] or status['MINIAS_FAIL'] or status['ORACLE_ERROR']:
+              raise SystemExit("semantic oracle infrastructure failure")
+          PY
