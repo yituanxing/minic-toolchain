@@ -929,8 +929,13 @@ native_mixed_macro_text="$(
     readelf -x .text "$work/native-mixed-macro.o" |
     awk '/0x[0-9a-f]+/ {for (i=2; i<=NF; ++i) if ($i ~ /^[0-9a-f]{8}$/) printf "%s", $i}'
 )"
+echo "MINIAS_A0_NATIVE_MIXED_HEX=$native_mixed_macro_text"
+native_mixed_sections="$(readelf -SW "$work/native-mixed-macro.o")"
+native_mixed_extable="$(readelf -x __ex_table "$work/native-mixed-macro.o")"
+printf '%s\n' "$native_mixed_sections" | grep '__ex_table' || true
+printf '%s\n' "$native_mixed_extable"
 test "$native_mixed_macro_text" = "8387050067800000"
-test "$(readelf -S "$work/native-mixed-macro.o" | grep -c '__ex_table')" -eq 1
-test "$(readelf -x __ex_table "$work/native-mixed-macro.o" | grep -c '0x00000000')" -ge 1
+test "$(printf '%s\n' "$native_mixed_sections" | grep -c '__ex_table')" -eq 1
+test "$(printf '%s\n' "$native_mixed_extable" | grep -c '0x00000000')" -ge 1
 
 echo "MINIAS_A0=PASS objects=23 format=ELF64-RISCV-ET_REL relocations=21 strings=2 pseudos=17 previous=3 subsection=2 numeric_labels=18 ecall=1 isa_next=13 csr_amo=8 sfence_vma=3 fence_i=1 vsetvl=1 vsetvli=1 vmv_v_i=4 rept=2 nested_rept=1 irp=4 section_stack=1 org=3 local_difference=1 lr_sc=2 inline_labels=2 branch_pseudos=8 extern=1 symbol_minus_dot=4 symbol_difference=1 absolute32=1 jal=2 jal_subsection=1 high_numeric_labels=2 u64_data=3 raw_insn=4 set_alias=3 move=1 numeric_zero=1 immediate_product=2 shift_immediate=1 incbin=1 align_expr=1 native_expr=6 native_zbb_tail_memexpr=1 native_jalr_symbol_load=1 native_forward_short=1 native_mixed_macro=1 native_gas_forms=1 native_set_size=1 native_macro_comma=1 native_macro_quotes=1 sext_w=1 macro=4 conditional=1"
