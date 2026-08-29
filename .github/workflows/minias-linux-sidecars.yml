@@ -90,15 +90,24 @@ jobs:
           make -s -C "$src" O="$build" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- defconfig
           make -s -C "$src" O="$build" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- -j4 prepare scripts
 
-          targets=(
+          # Build the real Kbuild consumers.  The four .incbin payloads are
+          # internal subdirectory targets and are not valid top-level make goals.
+          # Their consumer objects express the authoritative dependency edges.
+          driver_targets=(
+            arch/riscv/kernel/vdso/vdso.o
+            arch/riscv/kernel/compat_vdso/compat_vdso.o
+            arch/riscv/purgatory/kexec-purgatory.o
+            usr/initramfs_data.o
+          )
+          make -s -C "$src" O="$build" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- -j4 "${driver_targets[@]}"
+
+          sidecars=(
             arch/riscv/kernel/vdso/vdso.so
             arch/riscv/kernel/compat_vdso/compat_vdso.so
             arch/riscv/purgatory/purgatory.ro
             usr/initramfs_inc_data
           )
-          make -s -C "$src" O="$build" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- -j4 "${targets[@]}"
-
-          for rel in "${targets[@]}"; do
+          for rel in "${sidecars[@]}"; do
             test -f "$build/$rel"
             mkdir -p "$out/$(dirname "$rel")"
             cp "$build/$rel" "$out/$rel"
