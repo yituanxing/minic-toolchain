@@ -56,3 +56,73 @@ jobs:
           path: build/minias-linux-sidecars
           retention-days: 90
           if-no-files-found: error
+
+  native-incbin-sidecars:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[minias-sidecars]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install RISC-V Kbuild dependencies
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 update
+          sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 install -y --no-install-recommends \
+            gcc-riscv64-linux-gnu libc6-dev-riscv64-cross flex bison bc libelf-dev libssl-dev
+
+      - name: Build exact native incbin sidecars
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          src="$GITHUB_WORKSPACE/build/linux-native-sidecar-src"
+          build="$GITHUB_WORKSPACE/build/linux-native-sidecar-build"
+          out="$GITHUB_WORKSPACE/build/minias-native26-sidecars"
+          archive="$GITHUB_WORKSPACE/build/linux-${LINUX_VERSION}.tar.xz"
+          mkdir -p "$src" "$build" "$out"
+          curl --http1.1 --fail --location --retry 5 --retry-all-errors --retry-delay 2 \
+            "https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-${LINUX_VERSION}.tar.xz" \
+            -o "$archive"
+          echo "${LINUX_ARCHIVE_SHA256}  $archive" | sha256sum -c -
+          tar -xJf "$archive" -C "$src" --strip-components=1
+
+          make -s -C "$src" O="$build" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- defconfig
+          make -s -C "$src" O="$build" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- -j4 prepare scripts
+
+          targets=(
+            arch/riscv/kernel/vdso/vdso.so
+            arch/riscv/kernel/compat_vdso/compat_vdso.so
+            arch/riscv/purgatory/purgatory.ro
+            usr/initramfs_inc_data
+          )
+          make -s -C "$src" O="$build" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- -j4 "${targets[@]}"
+
+          for rel in "${targets[@]}"; do
+            test -f "$build/$rel"
+            mkdir -p "$out/$(dirname "$rel")"
+            cp "$build/$rel" "$out/$rel"
+          done
+
+          (
+            cd "$out"
+            find . -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum > SHA256SUMS
+          )
+          {
+            echo "linux_version=${LINUX_VERSION}"
+            echo "linux_archive_sha256=${LINUX_ARCHIVE_SHA256}"
+            echo "arch=riscv"
+            echo "cross_compile=riscv64-linux-gnu-"
+            echo "config=defconfig"
+            echo "targets=arch/riscv/kernel/vdso/vdso.so arch/riscv/kernel/compat_vdso/compat_vdso.so arch/riscv/purgatory/purgatory.ro usr/initramfs_inc_data"
+          } >"$out/provenance.txt"
+          cat "$out/SHA256SUMS"
+          cat "$out/provenance.txt"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: minias-native26-sidecars-v1
+          path: build/minias-native26-sidecars
+          retention-days: 90
+          if-no-files-found: error
+
