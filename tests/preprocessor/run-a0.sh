@@ -197,4 +197,34 @@ int kconfig_no = __is_defined(CONFIG_MINIPP_MISSING);
 EOF
 run_exact kconfig-style
 
-printf 'MINIPP_A0_EXACT=PASS cases=22 mode=byte-identical\n'
+cat >"$work/if-relational.c" <<'EOF'
+#if __STDC_VERSION__ < 202311L
+int pre_c23 = 1;
+#else
+int pre_c23 = 0;
+#endif
+EOF
+run_exact if-relational -D__STDC_VERSION__=201710L
+
+cat >"$work/if-precedence.c" <<'EOF'
+#define LEFT 3
+#define RIGHT 4
+#if defined(LEFT) && !defined(MISSING) && ((LEFT + RIGHT * 2) == 11)
+int precedence = 1;
+#else
+int precedence = 0;
+#endif
+EOF
+run_exact if-precedence
+
+cat >"$work/if-bitwise-ternary.c" <<'EOF'
+#define MASK 0x6U
+#if ((MASK & 0x2U) != 0U) ? ((8 >> 1) == 4) : 0
+int bitwise_ternary = 1;
+#else
+int bitwise_ternary = 0;
+#endif
+EOF
+run_exact if-bitwise-ternary
+
+printf 'MINIPP_A0_EXACT=PASS cases=25 mode=byte-identical\n'
