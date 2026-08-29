@@ -28,9 +28,7 @@ jobs:
       - name: Build MiniAS
         run: |
           make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/minias-semantic-smoke-toolchain all
-          MINIAS="$GITHUB_WORKSPACE/build/minias-semantic-smoke-toolchain/bin/minic-as" \
-          BUILD_DIR="$GITHUB_WORKSPACE/build/minias-semantic-smoke-toolchain" \
-            sh -x tests/assembler/run-a0.sh
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/minias-semantic-smoke-toolchain check-minias-a0
 
       - name: Self-check comparator and classify real pairs
         shell: bash
