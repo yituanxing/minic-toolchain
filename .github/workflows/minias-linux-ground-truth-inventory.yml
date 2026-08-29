@@ -203,6 +203,141 @@ jobs:
           PY
           cat build/minias-ground-truth-c-delta.json
 
+      - name: Export exact ground-truth C149 preprocessed corpus
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          from concurrent.futures import ThreadPoolExecutor, as_completed
+          from pathlib import Path
+          import hashlib, json, shlex, subprocess
+
+          out = Path("build/linux-ground-truth-out").resolve()
+          corpus = Path("build/minias-ground-truth-c149-corpus")
+          kbuild = corpus / "kbuild"
+          corpus.mkdir(parents=True, exist_ok=True)
+          kbuild.mkdir(parents=True, exist_ok=True)
+
+          rows = []
+          for line in Path("build/minias-ground-truth-c-only.tsv").read_text().splitlines():
+              if not line.strip():
+                  continue
+              obj, source, cmdfile = line.split("\t", 2)
+              rows.append((obj, source, cmdfile))
+          if len(rows) != 149:
+              raise SystemExit(f"expected 149 ground-truth-only C rules, got {len(rows)}")
+
+          def normalize_output(token: str) -> str:
+              path = Path(token.strip("'\""))
+              if path.is_absolute():
+                  try:
+                      return path.resolve().relative_to(out).as_posix()
+                  except ValueError:
+                      return ""
+              return path.as_posix()
+
+          def command_for(obj: str, cmdfile: str) -> list[str]:
+              path = out / cmdfile
+              if not path.is_file():
+                  raise RuntimeError(f"missing cmd file for {obj}: {cmdfile}")
+              matches = []
+              for raw in path.read_text(errors="replace").splitlines():
+                  if ":=" not in raw or " -c " not in f" {raw} ":
+                      continue
+                  command = raw.split(":=", 1)[1].strip()
+                  try:
+                      tokens = shlex.split(command, posix=True)
+                  except ValueError:
+                      continue
+                  for index, token in enumerate(tokens[:-1]):
+                      if token == "-o" and normalize_output(tokens[index + 1]) == obj:
+                          matches.append(tokens)
+                          break
+              if len(matches) != 1:
+                  raise RuntimeError(
+                      f"expected one exact compile command for {obj}, got {len(matches)}"
+                  )
+              return matches[0]
+
+          def preprocess(index_row):
+              index, (obj, source, cmdfile) = index_row
+              tokens = command_for(obj, cmdfile)
+              try:
+                  compile_index = tokens.index("-c")
+                  output_index = tokens.index("-o")
+              except ValueError as error:
+                  raise RuntimeError(f"compile command shape missing -c/-o for {obj}") from error
+
+              rel_i = obj[:-2] + ".i"
+              target = (kbuild / rel_i).resolve()
+              target.parent.mkdir(parents=True, exist_ok=True)
+              tokens[compile_index] = "-E"
+              tokens[output_index + 1] = str(target)
+
+              proc = subprocess.run(
+                  tokens,
+                  cwd=out,
+                  stdout=subprocess.DEVNULL,
+                  stderr=subprocess.PIPE,
+                  text=True,
+                  errors="replace",
+                  check=False,
+              )
+              if proc.returncode != 0 or not target.is_file() or target.stat().st_size == 0:
+                  raise RuntimeError(
+                      f"preprocess failed obj={obj} rc={proc.returncode}: "
+                      + proc.stderr[-2000:]
+                  )
+              digest = hashlib.sha256(target.read_bytes()).hexdigest()
+              return index, obj, rel_i, source, digest
+
+          results = []
+          with ThreadPoolExecutor(max_workers=4) as pool:
+              futures = [
+                  pool.submit(preprocess, item)
+                  for item in enumerate(rows)
+              ]
+              for future in as_completed(futures):
+                  results.append(future.result())
+          results.sort()
+
+          (corpus / "selected-tus.txt").write_text(
+              "".join(
+                  f"{index}\t{obj}\t{rel_i}\t{source}\n"
+                  for index, obj, rel_i, source, _ in results
+              )
+          )
+          (corpus / "files.sha256").write_text(
+              "".join(
+                  f"{digest}  kbuild/{rel_i}\n"
+                  for _, _, rel_i, _, digest in results
+              )
+          )
+          summary = {
+              "selected": len(results),
+              "linux": "6.6.143",
+              "arch": "riscv",
+              "config": "defconfig",
+              "source": "ground-truth successful GNU Kbuild object delta",
+          }
+          (corpus / "manifest.json").write_text(
+              json.dumps(summary, indent=2, sort_keys=True) + "\n"
+          )
+          print(f"MINIAS_GROUND_TRUTH_C149_EXPORT selected={len(results)}")
+          PY
+
+          tar -C build -czf build/minias-ground-truth-c149-corpus.tar.gz             minias-ground-truth-c149-corpus
+          sha256sum build/minias-ground-truth-c149-corpus.tar.gz             > build/minias-ground-truth-c149-corpus.tar.gz.sha256
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: minias-ground-truth-c149-corpus
+          path: |
+            build/minias-ground-truth-c149-corpus.tar.gz
+            build/minias-ground-truth-c149-corpus.tar.gz.sha256
+          retention-days: 90
+          if-no-files-found: error
+
       - uses: actions/upload-artifact@v4
         with:
           name: minias-linux-ground-truth-inventory
