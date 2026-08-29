@@ -1093,6 +1093,10 @@ static bool parse_equ(MiniAs *as, char *args, size_t line) {
         return false;
     }
     if (symbol->defined) {
+        if (symbol->section == MINIAS_SECTION_ABS &&
+            symbol->value == (uint64_t)value) {
+            return true;
+        }
         minias_set_error(as, "duplicate-symbol:%s:line=%zu", name, line);
         return false;
     }

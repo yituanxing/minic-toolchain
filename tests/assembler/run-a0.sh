@@ -497,6 +497,7 @@ irp_bytes:
   .equ .L__gpr_num_x\num, \num
   .byte \num
 .endr
+  .equ .L__gpr_num_x0, 0
   .short (3)
   .short (((.L__gpr_num_x1 << 0) | (.L__gpr_num_x2 << 5)))
 .size irp_bytes, 8
