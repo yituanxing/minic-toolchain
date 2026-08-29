@@ -583,6 +583,75 @@ static bool parse_mem(const char *text, int64_t *offset, char base[128]) {
     return parse_i64(offbuf, offset);
 }
 
+static bool parse_raw_insn_directive(const char *args, uint32_t *word) {
+    const char *p = args;
+    char format;
+    char operands[8][128];
+    size_t count;
+    int64_t opcode;
+    int64_t funct3;
+    int64_t funct7;
+    int64_t immediate;
+    int rd;
+    int rs1;
+    int rs2;
+
+    while (*p == ' ' || *p == '\t') {
+        ++p;
+    }
+    if ((p[0] != 'r' && p[0] != 'i') ||
+        (p[1] != ' ' && p[1] != '\t')) {
+        return false;
+    }
+    format = p[0];
+    ++p;
+    while (*p == ' ' || *p == '\t') {
+        ++p;
+    }
+    count = split_operands(p, operands, 8U);
+
+    if (format == 'r') {
+        if (count != 6U ||
+            !parse_i64(operands[0], &opcode) || opcode < 0 || opcode > 0x7f ||
+            !parse_i64(operands[1], &funct3) || funct3 < 0 || funct3 > 0x7 ||
+            !parse_i64(operands[2], &funct7) || funct7 < 0 || funct7 > 0x7f) {
+            return false;
+        }
+        rd = reg_number(operands[3]);
+        rs1 = reg_number(operands[4]);
+        rs2 = reg_number(operands[5]);
+        if (rd < 0 || rs1 < 0 || rs2 < 0) {
+            return false;
+        }
+        *word = (uint32_t)opcode |
+                ((uint32_t)rd << 7U) |
+                ((uint32_t)funct3 << 12U) |
+                ((uint32_t)rs1 << 15U) |
+                ((uint32_t)rs2 << 20U) |
+                ((uint32_t)funct7 << 25U);
+        return true;
+    }
+
+    if (count != 5U ||
+        !parse_i64(operands[0], &opcode) || opcode < 0 || opcode > 0x7f ||
+        !parse_i64(operands[1], &funct3) || funct3 < 0 || funct3 > 0x7 ||
+        !parse_i64(operands[4], &immediate) ||
+        immediate < -2048 || immediate > 2047) {
+        return false;
+    }
+    rd = reg_number(operands[2]);
+    rs1 = reg_number(operands[3]);
+    if (rd < 0 || rs1 < 0) {
+        return false;
+    }
+    *word = (uint32_t)opcode |
+            ((uint32_t)rd << 7U) |
+            ((uint32_t)funct3 << 12U) |
+            ((uint32_t)rs1 << 15U) |
+            (((uint32_t)immediate & 0xfffU) << 20U);
+    return true;
+}
+
 bool minias_riscv_measure(const char *op,
                           const char *args,
                           uint32_t *size,
@@ -590,6 +659,17 @@ bool minias_riscv_measure(const char *op,
                           size_t reason_size) {
     char operands[8][128];
     size_t count = split_operands(args, operands, 8U);
+
+    if (strcmp(op, ".insn") == 0) {
+        uint32_t word;
+        if (!parse_raw_insn_directive(args, &word)) {
+            (void)snprintf(reason, reason_size, "bad-operands:.insn:%s", args);
+            return false;
+        }
+        (void)word;
+        *size = 4U;
+        return true;
+    }
 
     if (strcmp(op, "li") == 0) {
         uint64_t bits;
@@ -756,6 +836,16 @@ bool minias_riscv_measure(const char *op,
 bool minias_riscv_encode(MiniAs *as, const MiniAsStmt *stmt) {
     char operands[8][128];
     size_t count = split_operands(stmt->args, operands, 8U);
+    if (strcmp(stmt->op, ".insn") == 0) {
+        uint32_t raw_word;
+        if (!parse_raw_insn_directive(stmt->args, &raw_word)) {
+            minias_set_error(as, "bad-operands:.insn:%s:line=%zu",
+                             stmt->args,
+                             stmt->line);
+            return false;
+        }
+        return append_u32(as, stmt->section, raw_word);
+    }
     int rd;
     int rs1;
     int rs2;

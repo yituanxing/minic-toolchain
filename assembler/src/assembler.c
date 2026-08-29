@@ -2261,7 +2261,7 @@ static bool process_statement(MiniAs *as, char *text, size_t line) {
     }
     op = text;
 
-    if (op[0] == '.') {
+    if (op[0] == '.' && strcmp(op, ".insn") != 0) {
         if (strcmp(op, ".text") == 0) {
             return switch_section(as,
                                   ".text",
