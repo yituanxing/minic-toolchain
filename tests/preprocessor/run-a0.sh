@@ -307,4 +307,26 @@ int multiline_builtin_line = WHERE(
 EOF
 run_exact multiline-builtin-line
 
-printf 'MINIPP_A0_EXACT=PASS cases=34 mode=byte-identical\n'
+cat >"$work/unused-counter-arg.c" <<'EOF'
+#define SECOND(a, b) b
+int counter_before = __COUNTER__;
+int counter_macro = SECOND(
+    __COUNTER__,
+    __COUNTER__);
+int counter_after = __COUNTER__;
+EOF
+run_exact unused-counter-arg
+
+cat >"$work/directive-in-macro-arg.c" <<'EOF'
+#define IDENTITY(x) x
+int directive_in_arg = IDENTITY(
+#if 1
+    7
+#else
+    9
+#endif
+);
+EOF
+run_exact directive-in-macro-arg
+
+printf 'MINIPP_A0_EXACT=PASS cases=36 mode=byte-identical\n'
