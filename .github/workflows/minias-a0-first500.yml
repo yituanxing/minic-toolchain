@@ -161,6 +161,44 @@ jobs:
           : >"$out/blockers.txt"
           for f in "${blockers[@]}"; do cat "$f"; done >"$out/blockers.txt"
           test "$(wc -l < "$out/results.tsv")" -eq 500
+          awk -F '\t' '$1=="FAIL" {print}' "$out/results.tsv" >"$out/failure-pool.tsv"
+          awk -F '\t' '$1=="FAIL" && ($3 ~ /^internal:/ || $3 ~ /^out-of-memory:/) {print}' "$out/results.tsv" >"$out/error-pool.tsv"
+          python3 - "$out/failure-pool.tsv" "$out/candidate-active-sample.txt" <<'PY'
+          from collections import defaultdict
+          from pathlib import Path
+          import sys
+
+          pool = Path(sys.argv[1])
+          target = Path(sys.argv[2])
+          rows = []
+          for line in pool.read_text().splitlines():
+              if not line.strip():
+                  continue
+              status, path, blocker = line.split("\t", 2)
+              rows.append((path, blocker))
+
+          groups = defaultdict(list)
+          for path, blocker in rows:
+              groups[blocker].append(path)
+          for paths in groups.values():
+              paths.sort()
+          ordered = sorted(groups, key=lambda b: (-len(groups[b]), b))
+
+          active = []
+          while len(active) < min(16, len(rows)):
+              progressed = False
+              for blocker in ordered:
+                  if groups[blocker] and len(active) < 16:
+                      active.append(groups[blocker].pop(0))
+                      progressed = True
+              if not progressed:
+                  break
+          target.write_text("".join(path + "\\n" for path in active))
+          print(
+              f"MINIAS_FIRST500_FAILURE_POOL fail={len(rows)} "
+              f"candidate_active={len(active)}"
+          )
+          PY
           pass=$(awk -F '\t' '$1=="PASS" {n++} END {print n+0}' "$out/results.tsv")
           fail=$(awk -F '\t' '$1=="FAIL" {n++} END {print n+0}' "$out/results.tsv")
           {
@@ -173,6 +211,10 @@ jobs:
             fi
             echo "MINIAS_FIRST500_FIRST_PASSES"
             awk -F '\t' '$1=="PASS" && shown < 30 {print $2; shown++}' "$out/results.tsv"
+            echo "MINIAS_FIRST500_CANDIDATE_ACTIVE_SAMPLE"
+            cat "$out/candidate-active-sample.txt"
+            echo "MINIAS_FIRST500_ERROR_POOL"
+            if test -s "$out/error-pool.tsv"; then cat "$out/error-pool.tsv"; else echo "  none"; fi
           } | tee "$out/summary.txt"
           test $((pass + fail)) -eq 500
 
@@ -182,5 +224,8 @@ jobs:
           path: |
             build/minias-first500-aggregate/results.tsv
             build/minias-first500-aggregate/summary.txt
+            build/minias-first500-aggregate/failure-pool.tsv
+            build/minias-first500-aggregate/error-pool.tsv
+            build/minias-first500-aggregate/candidate-active-sample.txt
           retention-days: 14
           if-no-files-found: error
