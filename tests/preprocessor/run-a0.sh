@@ -106,4 +106,30 @@ int after_nested = LEAF_VALUE + 1;
 EOF
 run_exact nested-include
 
-printf 'MINIPP_A0_EXACT=PASS cases=10 mode=byte-identical\n'
+cat >"$work/function.c" <<'EOF'
+#define ADD(a, b) ((a)+(b))
+int function_value = ADD(2, 3);
+EOF
+run_exact function
+
+cat >"$work/prescan.c" <<'EOF'
+#define VALUE 7
+#define ID(x) x
+int prescan_value = ID(VALUE);
+EOF
+run_exact prescan
+
+cat >"$work/function-nested.c" <<'EOF'
+#define TWICE(x) ((x)+(x))
+#define WRAP(x) TWICE(x)
+int nested_function_value = WRAP(4);
+EOF
+run_exact function-nested
+
+cat >"$work/function-zero.c" <<'EOF'
+#define ZERO() 0
+int zero_value = ZERO();
+EOF
+run_exact function-zero
+
+printf 'MINIPP_A0_EXACT=PASS cases=14 mode=byte-identical\n'
