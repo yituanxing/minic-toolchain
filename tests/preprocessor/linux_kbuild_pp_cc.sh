@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 
 real_cc=${REAL_CC:-riscv64-linux-gnu-gcc}
-reference_cpp=${REFERENCE_CPP:-gcc}
+reference_cpp=${REFERENCE_CPP:-riscv64-linux-gnu-gcc}
 minipp=${MINIPP:?MINIPP is not set}
 trace=${MINIPP_LINUX_TRACE:?MINIPP_LINUX_TRACE is not set}
 work=${MINIPP_LINUX_WORK:?MINIPP_LINUX_WORK is not set}
@@ -47,12 +47,10 @@ mini_err="$work/$key.mini.err"
 diff_file="$work/$key.diff"
 
 pp_args=()
+predef_args=()
 for ((i=0; i<${#args[@]}; ++i)); do
   arg=${args[i]}
   case "$arg" in
-    -D*|-U*|-I*|-nostdinc)
-      pp_args+=("$arg")
-      ;;
     -D|-U|-I|-isystem|-include)
       pp_args+=("$arg")
       if (( i + 1 < ${#args[@]} )); then
@@ -60,8 +58,11 @@ for ((i=0; i<${#args[@]}; ++i)); do
         pp_args+=("${args[i]}")
       fi
       ;;
-    -isystem*|-include*)
+    -D*|-U*|-I*|-nostdinc|-isystem*|-include*)
       pp_args+=("$arg")
+      ;;
+    -march=*|-mabi=*|-std=*|-fshort-wchar|-funsigned-char|-fsigned-char|-fno-PIE|-fPIE|-fno-pie|-fpie|-fPIC|-fpic)
+      predef_args+=("$arg")
       ;;
     -Wp,*|-MMD|-MD|-MP)
       ;;
@@ -73,17 +74,28 @@ for ((i=0; i<${#args[@]}; ++i)); do
   esac
 done
 
+predefines="$work/riscv64-gcc-predefines.h"
+if [[ ! -s "$predefines" ]]; then
+  tmp_predefines="$predefines.tmp.$"
+  "$real_cc" "${predef_args[@]}" -dM -E -x c /dev/null >"$tmp_predefines"
+  mv "$tmp_predefines" "$predefines"
+fi
+pp_args=(-include "$predefines" "${pp_args[@]}")
+
 {
   printf 'SOURCE %q\n' "$source_file"
+  printf 'PREDEF_ARGS'
+  printf ' %q' "${predef_args[@]}"
+  printf '\n'
   printf 'PP_ARGS'
   printf ' %q' "${pp_args[@]}"
   printf '\n'
 } >>"$trace"
 
-"$reference_cpp" -E -P -undef -x c "${pp_args[@]}"   "$source_file" -o "$ref_i"
+"$reference_cpp" -E -P -undef -x c "${pp_args[@]}" "$source_file" -o "$ref_i"
 
 set +e
-"$minipp" -E -P -undef -x c "${pp_args[@]}"   "$source_file" -o "$mini_i" 2>"$mini_err"
+"$minipp" -E -P -undef -x c "${pp_args[@]}" "$source_file" -o "$mini_i" 2>"$mini_err"
 mini_status=$?
 set -e
 
