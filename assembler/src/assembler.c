@@ -30,6 +30,144 @@ static bool grow_array(void **ptr, size_t *capacity, size_t elem_size, size_t ne
     return true;
 }
 
+static MiniAsSubsection *find_subsection(MiniAs *as, int section, uint32_t number) {
+    size_t i;
+
+    for (i = 0U; i < as->subsection_count; ++i) {
+        MiniAsSubsection *sub = &as->subsections[i];
+        if (sub->section == section && sub->number == number) {
+            return sub;
+        }
+    }
+    return NULL;
+}
+
+static MiniAsSubsection *ensure_subsection(MiniAs *as, int section, uint32_t number) {
+    MiniAsSubsection *sub = find_subsection(as, section, number);
+
+    if (sub != NULL) {
+        return sub;
+    }
+    if (!grow_array((void **)&as->subsections,
+                    &as->subsection_capacity,
+                    sizeof(*as->subsections),
+                    as->subsection_count + 1U)) {
+        minias_set_error(as, "out-of-memory:subsection");
+        return NULL;
+    }
+    sub = &as->subsections[as->subsection_count++];
+    memset(sub, 0, sizeof(*sub));
+    sub->section = section;
+    sub->number = number;
+    return sub;
+}
+
+static bool current_location(MiniAs *as, uint64_t *value) {
+    MiniAsSubsection *sub;
+
+    if (as->current_section < 0 ||
+        (size_t)as->current_section >= as->section_count) {
+        minias_set_error(as, "internal:bad-current-section");
+        return false;
+    }
+    sub = ensure_subsection(as, as->current_section, as->current_subsection);
+    if (sub == NULL) {
+        return false;
+    }
+    *value = sub->size;
+    return true;
+}
+
+static bool advance_current_location(MiniAs *as, uint64_t amount) {
+    MiniAsSubsection *sub =
+        ensure_subsection(as, as->current_section, as->current_subsection);
+
+    if (sub == NULL) {
+        return false;
+    }
+    if (amount > UINT64_MAX - sub->size) {
+        minias_set_error(as, "subsection-size-overflow");
+        return false;
+    }
+    sub->size += amount;
+    return true;
+}
+
+static int compare_subsections(const void *lhs_ptr, const void *rhs_ptr) {
+    const MiniAsSubsection *lhs = lhs_ptr;
+    const MiniAsSubsection *rhs = rhs_ptr;
+
+    if (lhs->section != rhs->section) {
+        return lhs->section < rhs->section ? -1 : 1;
+    }
+    if (lhs->number != rhs->number) {
+        return lhs->number < rhs->number ? -1 : 1;
+    }
+    return 0;
+}
+
+static bool finalize_subsection_layout(MiniAs *as) {
+    size_t i;
+    int active_section = -1;
+    uint64_t cursor = 0U;
+
+    if (as->subsection_count != 0U) {
+        qsort(as->subsections,
+              as->subsection_count,
+              sizeof(*as->subsections),
+              compare_subsections);
+    }
+    for (i = 0U; i < as->section_count; ++i) {
+        as->sections[i].layout_size = 0U;
+    }
+    for (i = 0U; i < as->subsection_count; ++i) {
+        MiniAsSubsection *sub = &as->subsections[i];
+
+        if (sub->section != active_section) {
+            if (active_section >= 0) {
+                as->sections[(size_t)active_section].layout_size = cursor;
+            }
+            active_section = sub->section;
+            cursor = 0U;
+        }
+        sub->base = cursor;
+        if (sub->size > UINT64_MAX - cursor) {
+            minias_set_error(as, "section-layout-overflow");
+            return false;
+        }
+        cursor += sub->size;
+    }
+    if (active_section >= 0) {
+        as->sections[(size_t)active_section].layout_size = cursor;
+    }
+
+    for (i = 0U; i < as->stmt_count; ++i) {
+        MiniAsStmt *stmt = &as->stmts[i];
+        MiniAsSubsection *sub =
+            find_subsection(as, stmt->section, stmt->subsection);
+        if (sub == NULL || stmt->offset > UINT64_MAX - sub->base) {
+            minias_set_error(as, "internal:stmt-subsection-layout");
+            return false;
+        }
+        stmt->offset += sub->base;
+    }
+    for (i = 0U; i < as->symbol_count; ++i) {
+        MiniAsSymbol *symbol = &as->symbols[i];
+        MiniAsSubsection *sub;
+
+        if (!symbol->defined || symbol->section == MINIAS_SECTION_UNDEF) {
+            continue;
+        }
+        sub = find_subsection(as, symbol->section, symbol->subsection);
+        if (sub == NULL || symbol->value > UINT64_MAX - sub->base) {
+            minias_set_error(as, "internal:symbol-subsection-layout:%s", symbol->name);
+            return false;
+        }
+        symbol->value += sub->base;
+    }
+    return true;
+}
+
 char *minias_strdup(const char *text) {
     size_t n = strlen(text) + 1U;
     char *copy = malloc(n);
@@ -261,8 +399,11 @@ void minias_init(MiniAs *as) {
                                 MINIAS_SHF_ALLOC | MINIAS_SHF_WRITE,
                                 1U);
     as->current_section = minias_find_section(as, ".text");
+    as->current_subsection = 0U;
     as->previous_section = as->current_section;
+    as->previous_subsection = 0U;
     as->conditional_active = true;
+    (void)ensure_subsection(as, as->current_section, 0U);
 }
 
 void minias_destroy(MiniAs *as) {
@@ -283,6 +424,7 @@ void minias_destroy(MiniAs *as) {
     }
     free(as->stmts);
     free(as->relocs);
+    free(as->subsections);
     free(as->section_stack);
     free(as->numeric_label_counts);
     free(as->conditionals);
@@ -312,7 +454,14 @@ static bool add_stmt(MiniAs *as,
     st->args = minias_strdup(args == NULL ? "" : args);
     st->line = line;
     st->section = as->current_section;
-    st->offset = (uint64_t)as->sections[(size_t)as->current_section].size;
+    st->subsection = as->current_subsection;
+    if (!current_location(as, &st->offset)) {
+        free(st->op);
+        free(st->args);
+        st->op = NULL;
+        st->args = NULL;
+        return false;
+    }
     st->size = size;
     st->align = align;
     if (st->op == NULL || st->args == NULL) {
@@ -402,11 +551,13 @@ static bool switch_section(MiniAs *as,
     if (index < 0) {
         return false;
     }
-    if (index != as->current_section) {
+    if (index != as->current_section || as->current_subsection != 0U) {
         as->previous_section = as->current_section;
+        as->previous_subsection = as->current_subsection;
         as->current_section = index;
+        as->current_subsection = 0U;
     }
-    return true;
+    return ensure_subsection(as, as->current_section, as->current_subsection) != NULL;
 }
 
 static bool parse_section_directive(MiniAs *as, char *args, size_t line) {
@@ -551,12 +702,19 @@ static bool parse_size(MiniAs *as, char *args, size_t line) {
         minias_set_error(as, "unsupported-expression:.size:%s:line=%zu", expr, line);
         return false;
     }
-    if (symbol->section != as->current_section) {
+    if (symbol->section != as->current_section ||
+        symbol->subsection != as->current_subsection) {
         minias_set_error(as, "size-section-mismatch:%s:line=%zu", symbol->name, line);
         return false;
     }
-    symbol->size =
-        (uint64_t)as->sections[(size_t)as->current_section].size - symbol->value;
+    {
+        uint64_t here;
+        if (!current_location(as, &here) || here < symbol->value) {
+            minias_set_error(as, "size-location-mismatch:%s:line=%zu", symbol->name, line);
+            return false;
+        }
+        symbol->size = here - symbol->value;
+    }
     return true;
 }
 
@@ -573,7 +731,8 @@ static bool handle_org(MiniAs *as, const char *args, size_t line) {
     }
     target = minias_get_symbol(as, expr.name, false);
     if (target == NULL || !target->defined ||
-        target->section != as->current_section) {
+        target->section != as->current_section ||
+        target->subsection != as->current_subsection) {
         minias_set_error(as, "unresolved-org:%s:line=%zu", args, line);
         return false;
     }
@@ -585,7 +744,9 @@ static bool handle_org(MiniAs *as, const char *args, size_t line) {
     desired = expr.addend >= 0
                   ? target->value + (uint64_t)expr.addend
                   : target->value - ((uint64_t)(-(expr.addend + 1)) + 1U);
-    current = (uint64_t)as->sections[(size_t)as->current_section].size;
+    if (!current_location(as, &current)) {
+        return false;
+    }
     if (desired < current) {
         minias_set_error(as,
                          "org-backwards:%s:current=%llu:target=%llu:line=%zu",
@@ -609,8 +770,7 @@ static bool handle_org(MiniAs *as, const char *args, size_t line) {
                   1U)) {
         return false;
     }
-    as->sections[(size_t)as->current_section].size += (size_t)pad;
-    return true;
+    return advance_current_location(as, pad);
 }
 
 static bool handle_align(MiniAs *as, const char *op, char *args, size_t line) {
@@ -636,12 +796,16 @@ static bool handle_align(MiniAs *as, const char *op, char *args, size_t line) {
         minias_set_error(as, "unsupported-alignment:%s:line=%zu", args, line);
         return false;
     }
-    current = (uint64_t)as->sections[(size_t)as->current_section].size;
+    if (!current_location(as, &current)) {
+        return false;
+    }
     pad = (alignment - (current & (alignment - 1U))) & (alignment - 1U);
     if (!add_stmt(as, MINIAS_STMT_ALIGN, op, "", line, (uint32_t)pad, alignment)) {
         return false;
     }
-    as->sections[(size_t)as->current_section].size += (size_t)pad;
+    if (!advance_current_location(as, pad)) {
+        return false;
+    }
     if (alignment > as->sections[(size_t)as->current_section].align) {
         as->sections[(size_t)as->current_section].align = alignment;
     }
@@ -969,8 +1133,7 @@ static bool add_data_stmt(MiniAs *as, const char *op, char *args, size_t line) {
     if (!add_stmt(as, MINIAS_STMT_DATA, op, args, line, (uint32_t)bytes, 1U)) {
         return false;
     }
-    as->sections[(size_t)as->current_section].size += (size_t)bytes;
-    return true;
+    return advance_current_location(as, bytes);
 }
 
 static uint32_t add_relocation_type_for_width(unsigned int width) {
@@ -1427,7 +1590,9 @@ static bool push_section(MiniAs *as, char *args, size_t line) {
         minias_set_error(as, "out-of-memory:section-stack");
         return false;
     }
-    as->section_stack[as->section_stack_count++] = as->current_section;
+    as->section_stack[as->section_stack_count].section = as->current_section;
+    as->section_stack[as->section_stack_count].subsection = as->current_subsection;
+    ++as->section_stack_count;
     if (!parse_section_directive(as, args, line)) {
         --as->section_stack_count;
         return false;
@@ -1442,10 +1607,17 @@ static bool pop_section(MiniAs *as, size_t line) {
         minias_set_error(as, "bad-directive:.popsection:line=%zu", line);
         return false;
     }
-    old_current = as->current_section;
-    as->current_section = as->section_stack[--as->section_stack_count];
-    as->previous_section = old_current;
-    return true;
+    {
+        uint32_t old_subsection = as->current_subsection;
+        MiniAsSectionState restored = as->section_stack[--as->section_stack_count];
+
+        old_current = as->current_section;
+        as->current_section = restored.section;
+        as->current_subsection = restored.subsection;
+        as->previous_section = old_current;
+        as->previous_subsection = old_subsection;
+    }
+    return ensure_subsection(as, as->current_section, as->current_subsection) != NULL;
 }
 
 static bool define_label(MiniAs *as, char *label, size_t line) {
@@ -1487,7 +1659,11 @@ static bool define_label(MiniAs *as, char *label, size_t line) {
     }
     symbol->defined = true;
     symbol->section = as->current_section;
-    symbol->value = (uint64_t)as->sections[(size_t)as->current_section].size;
+    symbol->subsection = as->current_subsection;
+    if (!current_location(as, &symbol->value)) {
+        symbol->defined = false;
+        return false;
+    }
     return true;
 }
 
@@ -1604,15 +1780,35 @@ static bool process_statement(MiniAs *as, char *text, size_t line) {
             return parse_size(as, args, line);
         }
         if (strcmp(op, ".previous") == 0) {
-            int swap = as->current_section;
+            int swap_section = as->current_section;
+            uint32_t swap_subsection = as->current_subsection;
             if (as->previous_section < 0 ||
                 (size_t)as->previous_section >= as->section_count) {
                 minias_set_error(as, "bad-directive:.previous:line=%zu", line);
                 return false;
             }
             as->current_section = as->previous_section;
-            as->previous_section = swap;
-            return true;
+            as->current_subsection = as->previous_subsection;
+            as->previous_section = swap_section;
+            as->previous_subsection = swap_subsection;
+            return ensure_subsection(as,
+                                     as->current_section,
+                                     as->current_subsection) != NULL;
+        }
+        if (strcmp(op, ".subsection") == 0) {
+            uint64_t number;
+            if (!parse_u64(args, &number) || number > 8192U) {
+                minias_set_error(as, "bad-directive:.subsection:%s:line=%zu", args, line);
+                return false;
+            }
+            if ((uint32_t)number != as->current_subsection) {
+                as->previous_section = as->current_section;
+                as->previous_subsection = as->current_subsection;
+                as->current_subsection = (uint32_t)number;
+            }
+            return ensure_subsection(as,
+                                     as->current_section,
+                                     as->current_subsection) != NULL;
         }
         if (strcmp(op, ".pushsection") == 0) {
             return push_section(as, args, line);
@@ -1690,8 +1886,7 @@ static bool process_statement(MiniAs *as, char *text, size_t line) {
             return false;
         }
     }
-    as->sections[(size_t)as->current_section].size += (size_t)size;
-    return true;
+    return advance_current_location(as, size);
 }
 
 bool minias_parse_file(MiniAs *as, const char *path) {
@@ -1742,33 +1937,97 @@ bool minias_parse_file(MiniAs *as, const char *path) {
         return false;
     }
     fclose(file);
-    return true;
+    return finalize_subsection_layout(as);
+}
+
+typedef struct MiniAsEmitRef {
+    MiniAsStmt *stmt;
+    size_t order;
+} MiniAsEmitRef;
+
+static int compare_emit_refs(const void *lhs_ptr, const void *rhs_ptr) {
+    const MiniAsEmitRef *lhs = lhs_ptr;
+    const MiniAsEmitRef *rhs = rhs_ptr;
+
+    if (lhs->stmt->section != rhs->stmt->section) {
+        return lhs->stmt->section < rhs->stmt->section ? -1 : 1;
+    }
+    if (lhs->stmt->offset != rhs->stmt->offset) {
+        return lhs->stmt->offset < rhs->stmt->offset ? -1 : 1;
+    }
+    if (lhs->order != rhs->order) {
+        return lhs->order < rhs->order ? -1 : 1;
+    }
+    return 0;
 }
 
 bool minias_emit_sections(MiniAs *as) {
     size_t i;
+    MiniAsEmitRef *refs = NULL;
 
     for (i = 0U; i < as->section_count; ++i) {
         as->sections[i].size = 0U;
     }
+    if (as->stmt_count != 0U) {
+        refs = malloc(as->stmt_count * sizeof(*refs));
+        if (refs == NULL) {
+            minias_set_error(as, "out-of-memory:emit-order");
+            return false;
+        }
+        for (i = 0U; i < as->stmt_count; ++i) {
+            refs[i].stmt = &as->stmts[i];
+            refs[i].order = i;
+        }
+        qsort(refs, as->stmt_count, sizeof(*refs), compare_emit_refs);
+    }
+
     for (i = 0U; i < as->stmt_count; ++i) {
-        MiniAsStmt *stmt = &as->stmts[i];
+        MiniAsStmt *stmt = refs[i].stmt;
         MiniAsSection *section = &as->sections[(size_t)stmt->section];
 
-        if (section->size != (size_t)stmt->offset) {
+        if ((uint64_t)section->size > stmt->offset) {
             minias_set_error(as, "internal-offset:%s:line=%zu", stmt->op, stmt->line);
+            free(refs);
             return false;
+        }
+        if ((uint64_t)section->size < stmt->offset) {
+            uint64_t gap = stmt->offset - (uint64_t)section->size;
+            if (gap > SIZE_MAX ||
+                !minias_section_append_zero(as, stmt->section, (size_t)gap)) {
+                free(refs);
+                return false;
+            }
         }
         if (stmt->kind == MINIAS_STMT_ALIGN) {
             if (!minias_section_append_zero(as, stmt->section, stmt->size)) {
+                free(refs);
                 return false;
             }
         } else if (stmt->kind == MINIAS_STMT_DATA) {
             if (!emit_data_stmt(as, stmt)) {
+                free(refs);
                 return false;
             }
         } else if (!minias_riscv_encode(as, stmt)) {
+            free(refs);
             return false;
+        }
+    }
+    free(refs);
+
+    for (i = 0U; i < as->section_count; ++i) {
+        MiniAsSection *section = &as->sections[i];
+
+        if ((uint64_t)section->size > section->layout_size) {
+            minias_set_error(as, "internal:section-layout-size:%s", section->name);
+            return false;
+        }
+        if ((uint64_t)section->size < section->layout_size) {
+            uint64_t gap = section->layout_size - (uint64_t)section->size;
+            if (gap > SIZE_MAX ||
+                !minias_section_append_zero(as, (int)i, (size_t)gap)) {
+                return false;
+            }
         }
     }
     return true;
