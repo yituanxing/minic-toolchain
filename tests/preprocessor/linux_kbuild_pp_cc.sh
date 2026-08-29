@@ -76,8 +76,43 @@ done
 
 predefines="$work/riscv64-gcc-predefines.h"
 if [[ ! -s "$predefines" ]]; then
-  tmp_predefines="$predefines.tmp.$"
+  tmp_predefines="$predefines.tmp"
+  linux_src=${MINIPP_LINUX_SRC:?MINIPP_LINUX_SRC is not set}
+
   "$real_cc" "${predef_args[@]}" -dM -E -x c /dev/null >"$tmp_predefines"
+
+  cat >>"$tmp_predefines" <<'EOF'
+#define __MINIPP_PP_CAT2(a, b) a##b
+#define __MINIPP_PP_CAT(a, b) __MINIPP_PP_CAT2(a, b)
+EOF
+
+  for capability in attribute builtin; do
+    names="$work/has-$capability.names"
+    {
+      grep -RhoE "__has_${capability}\\([[:space:]]*[A-Za-z_][A-Za-z0-9_]*" \
+        "$linux_src/include" "$linux_src/arch/riscv/include" 2>/dev/null || true
+    } |
+      sed -E "s/^__has_${capability}\\([[:space:]]*//" |
+      LC_ALL=C sort -u >"$names"
+
+    while IFS= read -r name; do
+      [[ -n "$name" ]] || continue
+      value=$(
+        printf '#if __has_%s(%s)\n1\n#else\n0\n#endif\n' \
+          "$capability" "$name" |
+          "$real_cc" "${predef_args[@]}" -E -P -x c - |
+          tail -n 1
+      )
+      upper=${capability^^}
+      printf '#define __MINIPP_HAS_%s_%s %s\n' \
+        "$upper" "$name" "$value" >>"$tmp_predefines"
+    done <"$names"
+
+    upper=${capability^^}
+    printf '#define __has_%s(x) __MINIPP_PP_CAT(__MINIPP_HAS_%s_, x)\n' \
+      "$capability" "$upper" >>"$tmp_predefines"
+  done
+
   mv "$tmp_predefines" "$predefines"
 fi
 pp_args=(-include "$predefines" "${pp_args[@]}")
