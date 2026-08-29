@@ -193,7 +193,7 @@ jobs:
                       progressed = True
               if not progressed:
                   break
-          target.write_text("".join(path + "\\n" for path in active))
+          target.write_text("".join(path + "\n" for path in active))
           print(
               f"MINIAS_FIRST500_FAILURE_POOL fail={len(rows)} "
               f"candidate_active={len(active)}"
