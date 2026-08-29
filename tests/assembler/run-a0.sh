@@ -673,6 +673,17 @@ raw_insn_hex="$(
 )"
 test "$raw_insn_hex" = "73000018f3c233640f2025000f201500"
 
+cat >"$work/sext-w.s" <<'EOF'
+.text
+sext.w a0, a1
+EOF
+"$MINIAS" -o "$work/sext-w.o" "$work/sext-w.s"
+sext_w_hex="$(
+    readelf -x .text "$work/sext-w.o" |
+    awk '/0x[0-9a-f]+/ {for (i=2; i<=NF; ++i) if ($i ~ /^[0-9a-f]{8}$/) printf "%s", $i}'
+)"
+test "$sext_w_hex" = "1b850500"
+
 cat >"$work/macro.s" <<'EOF'
 .text
 .macro inc_one dst:req src
@@ -716,4 +727,4 @@ vector_hex="$(
 )"
 test "$vector_hex" = "d772300c57b00f5e57b40f5e57b80f5e57bc0f5e27000e0227040e0207d1050287040400"
 
-echo "MINIAS_A0=PASS objects=12 format=ELF64-RISCV-ET_REL relocations=16 strings=2 pseudos=14 previous=3 subsection=2 numeric_labels=18 ecall=1 isa_next=13 csr_amo=7 sfence_vma=3 fence_i=1 vsetvl=1 vsetvli=1 vmv_v_i=4 rept=2 nested_rept=1 irp=4 section_stack=1 org=3 local_difference=1 lr_sc=2 inline_labels=2 branch_pseudos=8 extern=1 symbol_minus_dot=4 symbol_difference=1 absolute32=1 jal=2 jal_subsection=1 high_numeric_labels=2 u64_data=3 raw_insn=4 set_alias=3 move=1 numeric_zero=1 immediate_product=2 shift_immediate=1 incbin=1 macro=3 conditional=1"
+echo "MINIAS_A0=PASS objects=13 format=ELF64-RISCV-ET_REL relocations=16 strings=2 pseudos=14 previous=3 subsection=2 numeric_labels=18 ecall=1 isa_next=13 csr_amo=7 sfence_vma=3 fence_i=1 vsetvl=1 vsetvli=1 vmv_v_i=4 rept=2 nested_rept=1 irp=4 section_stack=1 org=3 local_difference=1 lr_sc=2 inline_labels=2 branch_pseudos=8 extern=1 symbol_minus_dot=4 symbol_difference=1 absolute32=1 jal=2 jal_subsection=1 high_numeric_labels=2 u64_data=3 raw_insn=4 set_alias=3 move=1 numeric_zero=1 immediate_product=2 shift_immediate=1 incbin=1 sext_w=1 macro=3 conditional=1"

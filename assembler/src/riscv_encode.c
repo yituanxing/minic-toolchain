@@ -860,7 +860,7 @@ bool minias_riscv_measure(const char *op,
 
 #define SIMPLE(OP) strcmp(op, OP) == 0
     if (SIMPLE("ret") || SIMPLE("nop") || SIMPLE("mv") || SIMPLE("move") || SIMPLE("jr") ||
-        SIMPLE("snez") || SIMPLE("seqz") || SIMPLE("neg") || SIMPLE("jalr") ||
+        SIMPLE("snez") || SIMPLE("seqz") || SIMPLE("neg") || SIMPLE("sext.w") || SIMPLE("jalr") ||
         SIMPLE("j") || SIMPLE("jal") || SIMPLE("beq") || SIMPLE("bne") ||
         SIMPLE("blt") || SIMPLE("bge") || SIMPLE("bltu") || SIMPLE("bgeu") ||
         SIMPLE("beqz") || SIMPLE("bnez") || SIMPLE("bltz") || SIMPLE("bgez") ||
@@ -1186,6 +1186,15 @@ bool minias_riscv_encode(MiniAs *as, const MiniAsStmt *stmt) {
                 ((uint32_t)rd << 7U) |
                 (((uint32_t)immediate & 0xfffffU) << 12U);
         return append_u32(as, stmt->section, value);
+    }
+    if (strcmp(stmt->op, "sext.w") == 0) {
+        if (count != 2U || !require_reg(as, stmt, operands[0], &rd) ||
+            !require_reg(as, stmt, operands[1], &rs1)) {
+            return false;
+        }
+        return append_u32(as,
+                          stmt->section,
+                          enc_i(0x1bU, rd, 0U, rs1, 0));
     }
     if (strcmp(stmt->op, "addi") == 0 || strcmp(stmt->op, "addiw") == 0 ||
         strcmp(stmt->op, "andi") == 0 || strcmp(stmt->op, "ori") == 0 ||
