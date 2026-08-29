@@ -113,6 +113,39 @@ jobs:
             cp "$build/$rel" "$out/$rel"
           done
 
+          # The ground-truth inventory contains nine VDSO assembly rules that
+          # are not part of the historical native26 cohort.  Materialize their
+          # preprocessed .s form through Kbuild so MiniAS can converge on the
+          # exact 35-rule native workload.
+          extra="$GITHUB_WORKSPACE/build/minias-native35-extra9"
+          mkdir -p "$extra"
+          extra_targets=(
+            arch/riscv/kernel/compat_vdso/flush_icache.s
+            arch/riscv/kernel/compat_vdso/getcpu.s
+            arch/riscv/kernel/compat_vdso/note.s
+            arch/riscv/kernel/compat_vdso/rt_sigreturn.s
+            arch/riscv/kernel/vdso/flush_icache.s
+            arch/riscv/kernel/vdso/getcpu.s
+            arch/riscv/kernel/vdso/note.s
+            arch/riscv/kernel/vdso/rt_sigreturn.s
+            arch/riscv/kernel/vdso/sys_hwprobe.s
+          )
+          make -s -C "$src" O="$build" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- -j4 "${extra_targets[@]}"
+          for rel in "${extra_targets[@]}"; do
+            test -s "$build/$rel"
+            mkdir -p "$extra/$(dirname "$rel")"
+            cp "$build/$rel" "$extra/$rel"
+          done
+          (
+            cd "$extra"
+            find . -type f -print0 |
+              LC_ALL=C sort -z |
+              xargs -0 sha256sum > SHA256SUMS.tmp
+            mv SHA256SUMS.tmp SHA256SUMS
+          )
+          test "$(find "$extra" -type f -name '*.s' | wc -l)" -eq 9
+          echo "MINIAS_NATIVE35_EXTRA9=PASS selected=9"
+
           (
             cd "$out"
             find . -type f ! -name SHA256SUMS -print0 |
@@ -134,6 +167,13 @@ jobs:
         with:
           name: minias-native26-sidecars-v1
           path: build/minias-native26-sidecars
+          retention-days: 90
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: minias-native35-extra9-v1
+          path: build/minias-native35-extra9
           retention-days: 90
           if-no-files-found: error
 
