@@ -1,0 +1,58 @@
+name: MiniAS Linux Sidecars
+
+on:
+  push:
+    branches:
+      - "toolchain/minias-m0-boundary-freeze"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  LINUX_VERSION: "6.6.143"
+  LINUX_ARCHIVE_SHA256: "dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932"
+
+jobs:
+  sidecars:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[minias-sidecars]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Rebuild deterministic RISC-V defconfig sidecars
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          src="$GITHUB_WORKSPACE/build/linux-sidecar-src"
+          out="$GITHUB_WORKSPACE/build/minias-linux-sidecars"
+          build="$GITHUB_WORKSPACE/build/linux-sidecar-build"
+          mkdir -p "$src" "$out/kernel" "$build"
+          archive="$src/linux-${LINUX_VERSION}.tar.xz"
+          curl --fail --location --retry 3 \
+            "https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-${LINUX_VERSION}.tar.xz" \
+            -o "$archive"
+          echo "${LINUX_ARCHIVE_SHA256}  $archive" | sha256sum -c -
+          tar -C "$src" -xf "$archive"
+          make -s -C "$src/linux-${LINUX_VERSION}" \
+            ARCH=riscv O="$build" defconfig
+          test -s "$build/.config"
+          cp "$build/.config" "$out/riscv-defconfig.config"
+          gzip -n -f -9 <"$build/.config" >"$out/kernel/config_data.gz"
+          test -s "$out/kernel/config_data.gz"
+          {
+            echo "linux_version=${LINUX_VERSION}"
+            echo "linux_archive_sha256=${LINUX_ARCHIVE_SHA256}"
+            echo "config_sha256=$(sha256sum "$out/riscv-defconfig.config" | cut -d' ' -f1)"
+            echo "kernel_config_data_gz_sha256=$(sha256sum "$out/kernel/config_data.gz" | cut -d' ' -f1)"
+            echo "rule=make ARCH=riscv defconfig; gzip -n -f -9"
+          } >"$out/provenance.txt"
+          cat "$out/provenance.txt"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: minias-linux-sidecars-v1
+          path: build/minias-linux-sidecars
+          retention-days: 90
+          if-no-files-found: error
