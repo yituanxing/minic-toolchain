@@ -897,8 +897,10 @@ oom:
     return false;
 }
 
-static void minipp_trim_leading_expansion_space(MiniPpString *text) {
+static void minipp_normalize_leading_expansion_space(MiniPpString *text,
+                                                            bool keep_one) {
     size_t start = 0U;
+    size_t keep;
 
     while (start < text->size &&
            (text->data[start] == ' ' || text->data[start] == '\t' ||
@@ -908,10 +910,17 @@ static void minipp_trim_leading_expansion_space(MiniPpString *text) {
     if (start == 0U) {
         return;
     }
+
+    keep = keep_one && start < text->size ? 1U : 0U;
     if (start < text->size) {
-        memmove(text->data, text->data + start, text->size - start);
+        memmove(text->data + keep,
+                text->data + start,
+                text->size - start);
     }
-    text->size -= start;
+    if (keep != 0U) {
+        text->data[0] = ' ';
+    }
+    text->size = text->size - start + keep;
     if (text->data != NULL) {
         text->data[text->size] = '\0';
     }
@@ -1062,9 +1071,9 @@ static bool minipp_expand_function_macro(MiniPpState *state,
                                           depth + 1U,
                                           source_line);
         if (ok) {
-            if (minipp_output_has_line_indentation(out)) {
-                minipp_trim_leading_expansion_space(&replacement);
-            }
+            minipp_normalize_leading_expansion_space(
+                &replacement,
+                !minipp_output_has_line_indentation(out));
             size_t tail_start = 0U;
             const MiniPpMacro *tail_macro =
                 minipp_find_trailing_function_macro(state,
