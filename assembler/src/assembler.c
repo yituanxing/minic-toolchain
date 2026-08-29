@@ -995,8 +995,15 @@ static bool parse_size(MiniAs *as, char *args, size_t line) {
     expr = minias_trim(comma + 1);
     {
         uint64_t explicit_size;
+        MiniAsSymbol *size_symbol;
         if (parse_u64(expr, &explicit_size)) {
             symbol->size = explicit_size;
+            return true;
+        }
+        size_symbol = minias_get_symbol(as, expr, false);
+        if (size_symbol != NULL && size_symbol->defined &&
+            size_symbol->section == MINIAS_SECTION_ABS) {
+            symbol->size = size_symbol->value;
             return true;
         }
     }
@@ -1400,8 +1407,7 @@ static bool parse_set(MiniAs *as, char *args, size_t line) {
     *comma = '\0';
     name = minias_trim(args);
     expression = minias_trim(comma + 1);
-    if (*name == '\0' || *expression == '\0' ||
-        !minias_parse_symbol_addend(expression, &expr)) {
+    if (*name == '\0' || *expression == '\0') {
         minias_set_error(as,
                          "unsupported-expression:.set:%s:line=%zu",
                          expression,
@@ -1409,25 +1415,51 @@ static bool parse_set(MiniAs *as, char *args, size_t line) {
         return false;
     }
 
-    target = minias_get_symbol(as, expr.name, true);
-    if (target == NULL) {
-        return false;
-    }
-    target_index = (size_t)(target - as->symbols);
+    if (minias_parse_symbol_addend(expression, &expr)) {
+        target = minias_get_symbol(as, expr.name, true);
+        if (target == NULL) {
+            return false;
+        }
+        target_index = (size_t)(target - as->symbols);
 
-    alias = minias_get_symbol(as, name, true);
-    if (alias == NULL) {
-        return false;
+        alias = minias_get_symbol(as, name, true);
+        if (alias == NULL) {
+            return false;
+        }
+        if (alias->defined || alias->alias_pending) {
+            minias_set_error(as, "duplicate-symbol:%s:line=%zu", name, line);
+            return false;
+        }
+        alias->alias_pending = true;
+        alias->alias_target_index = target_index;
+        alias->alias_addend = expr.addend;
+        alias->alias_line = line;
+        return true;
     }
-    if (alias->defined || alias->alias_pending) {
-        minias_set_error(as, "duplicate-symbol:%s:line=%zu", name, line);
-        return false;
+
+    {
+        int64_t value;
+        if (!evaluate_absolute_expression(as, expression, &value) || value < 0) {
+            minias_set_error(as,
+                             "unsupported-expression:.set:%s:line=%zu",
+                             expression,
+                             line);
+            return false;
+        }
+        alias = minias_get_symbol(as, name, true);
+        if (alias == NULL) {
+            return false;
+        }
+        if (alias->defined || alias->alias_pending) {
+            minias_set_error(as, "duplicate-symbol:%s:line=%zu", name, line);
+            return false;
+        }
+        alias->defined = true;
+        alias->section = MINIAS_SECTION_ABS;
+        alias->subsection = 0U;
+        alias->value = (uint64_t)value;
+        return true;
     }
-    alias->alias_pending = true;
-    alias->alias_target_index = target_index;
-    alias->alias_addend = expr.addend;
-    alias->alias_line = line;
-    return true;
 }
 
 static bool handle_org(MiniAs *as, const char *args, size_t line) {
@@ -3364,6 +3396,35 @@ static int classify_repeat_line(const char *text,
     return kind;
 }
 
+static char *find_statement_separator(char *text) {
+    char quote = '\0';
+    bool escaped = false;
+    char *p;
+
+    for (p = text; *p != '\0'; ++p) {
+        if (escaped) {
+            escaped = false;
+            continue;
+        }
+        if (quote != '\0') {
+            if (*p == '\\') {
+                escaped = true;
+            } else if (*p == quote) {
+                quote = '\0';
+            }
+            continue;
+        }
+        if (*p == '\'' || *p == '"') {
+            quote = *p;
+            continue;
+        }
+        if (*p == ';') {
+            return p;
+        }
+    }
+    return NULL;
+}
+
 static bool process_source_line(MiniAs *as, const char *source, size_t line) {
     char *copy = minias_strdup(source);
     char *cursor;
@@ -3375,7 +3436,7 @@ static bool process_source_line(MiniAs *as, const char *source, size_t line) {
     strip_comment(copy);
     cursor = copy;
     while (cursor != NULL) {
-        char *semicolon = strchr(cursor, ';');
+        char *semicolon = find_statement_separator(cursor);
         if (semicolon != NULL) {
             *semicolon = '\0';
         }
