@@ -172,7 +172,7 @@ jobs:
               echo "  none"
             fi
             echo "MINIAS_FIRST500_FIRST_PASSES"
-            awk -F '\t' '$1=="PASS" {print $2}' "$out/results.tsv" | head -n 30
+            awk -F '\t' '$1=="PASS" && shown < 30 {print $2; shown++}' "$out/results.tsv"
           } | tee "$out/summary.txt"
           test $((pass + fail)) -eq 500
 
