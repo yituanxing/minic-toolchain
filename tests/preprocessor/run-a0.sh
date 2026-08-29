@@ -351,4 +351,25 @@ int pasted_function_boundary = DISPATCH(0, 4);
 EOF
 run_exact pasted-function-boundary
 
-printf 'MINIPP_A0_EXACT=PASS cases=38 mode=byte-identical\n'
+cat >"$work/gnu-variadic-spacing.c" <<'EOF'
+#define VARGS(...) f(__VA_ARGS__)
+#define GNU_VARGS(first, ...) f(first, ## __VA_ARGS__)
+int vargs_tight = VARGS(1,2);
+int vargs_spaced = VARGS(1, 2);
+int gnu_one = GNU_VARGS(1, 2);
+int gnu_many = GNU_VARGS(1, 2, 3);
+EOF
+run_exact gnu-variadic-spacing
+
+cat >"$work/pp-number-padding.c" <<'EOF'
+#define MINUS_ONE(x) x-1
+#define PLUS_ONE(x) x+1
+#define DOT_ZERO(x) x.0
+int minus_number = MINUS_ONE(64);
+int plus_number = PLUS_ONE(0x10U);
+int dot_number = DOT_ZERO(1);
+int minus_ident = MINUS_ONE(name);
+EOF
+run_exact pp-number-padding
+
+printf 'MINIPP_A0_EXACT=PASS cases=40 mode=byte-identical\n'
