@@ -43,6 +43,7 @@ typedef struct MiniPpState {
     bool expansion_incomplete;
     const char *current_file;
     size_t current_line;
+    size_t counter_value;
     const char **include_paths;
     size_t include_path_count;
     FILE *diagnostics;
