@@ -646,8 +646,7 @@ static bool minipp_expand_function_macro(MiniPpState *state,
     bool ok = false;
 
     *invoked = false;
-    while (text[cursor] == ' ' || text[cursor] == '\t' ||
-           text[cursor] == '\v' || text[cursor] == '\f') {
+    while (isspace((unsigned char)text[cursor]) != 0) {
         ++cursor;
     }
     if (text[cursor] != '(') {
@@ -745,6 +744,42 @@ done:
     return ok;
 }
 
+static const MiniPpMacro *minipp_find_trailing_function_macro(
+    const MiniPpState *state,
+    const MiniPpString *replacement,
+    size_t *token_start) {
+    size_t end = replacement->size;
+    size_t start;
+
+    while (end != 0U &&
+           isspace((unsigned char)replacement->data[end - 1U]) != 0) {
+        --end;
+    }
+    if (end == 0U ||
+        !minipp_is_identifier_continue(replacement->data[end - 1U])) {
+        return NULL;
+    }
+
+    start = end - 1U;
+    while (start != 0U &&
+           minipp_is_identifier_continue(replacement->data[start - 1U])) {
+        --start;
+    }
+    if (!minipp_is_identifier_start(replacement->data[start])) {
+        return NULL;
+    }
+
+    {
+        const MiniPpMacro *macro =
+            minipp_find_macro(state, replacement->data + start, end - start);
+        if (macro == NULL || !macro->function_like) {
+            return NULL;
+        }
+        *token_start = start;
+        return macro;
+    }
+}
+
 static bool minipp_expand_text_recursive(MiniPpState *state,
                                          const char *text,
                                          MiniPpString *out,
@@ -820,6 +855,7 @@ static bool minipp_expand_text_recursive(MiniPpState *state,
                 } else {
                     const char **next_disabled;
                     size_t next_count = disabled_count + 1U;
+                    MiniPpString replacement;
                     bool ok;
 
                     next_disabled = malloc(next_count * sizeof(*next_disabled));
@@ -834,12 +870,67 @@ static bool minipp_expand_text_recursive(MiniPpState *state,
                                disabled_count * sizeof(*next_disabled));
                     }
                     next_disabled[disabled_count] = macro->name;
+
+                    minipp_string_init(&replacement);
                     ok = minipp_expand_text_recursive(state,
                                                       macro->replacement,
-                                                      out,
+                                                      &replacement,
                                                       next_disabled,
                                                       next_count,
                                                       depth + 1U);
+                    if (ok) {
+                        size_t tail_start = 0U;
+                        const MiniPpMacro *tail_macro =
+                            minipp_find_trailing_function_macro(state,
+                                                                &replacement,
+                                                                &tail_start);
+                        bool invoked = false;
+
+                        if (tail_macro != NULL &&
+                            !minipp_macro_is_disabled(tail_macro->name,
+                                                      next_disabled,
+                                                      next_count)) {
+                            size_t invocation_index = index;
+
+                            if (!minipp_string_append_n(out,
+                                                        replacement.data,
+                                                        tail_start)) {
+                                fprintf(state->diagnostics,
+                                        "minic-cpp: out-of-memory\n");
+                                ok = false;
+                            } else if (!minipp_expand_function_macro(
+                                           state,
+                                           tail_macro,
+                                           text,
+                                           &invocation_index,
+                                           out,
+                                           next_disabled,
+                                           next_count,
+                                           depth + 1U,
+                                           &invoked)) {
+                                ok = false;
+                            } else if (invoked) {
+                                index = invocation_index;
+                            } else if (!minipp_string_append_n(
+                                           out,
+                                           replacement.data + tail_start,
+                                           replacement.size - tail_start)) {
+                                fprintf(state->diagnostics,
+                                        "minic-cpp: out-of-memory\n");
+                                ok = false;
+                            }
+                        } else if (!minipp_string_append_n(
+                                       out,
+                                       replacement.data == NULL ? "" :
+                                                                  replacement.data,
+                                       replacement.size)) {
+                            fprintf(state->diagnostics,
+                                    "minic-cpp: out-of-memory\n");
+                            ok = false;
+                        }
+                    }
+
+                    minipp_string_destroy(&replacement);
                     free(next_disabled);
                     if (!ok) {
                         return false;
