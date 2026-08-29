@@ -265,4 +265,11 @@ int computed_include = COMPUTED_INCLUDE_VALUE;
 EOF
 run_exact computed-include
 
-printf 'MINIPP_A0_EXACT=PASS cases=29 mode=byte-identical\n'
+cat >"$work/gnu-empty-variadic.c" <<'EOF'
+#define STATIC_ASSERT(expr, ...) INNER_ASSERT(expr, ##__VA_ARGS__, #expr)
+#define INNER_ASSERT(expr, msg, ...) _Static_assert(expr, msg)
+STATIC_ASSERT(1 + 1 == 2);
+EOF
+run_exact gnu-empty-variadic
+
+printf 'MINIPP_A0_EXACT=PASS cases=30 mode=byte-identical\n'
