@@ -31,69 +31,146 @@ physical code template.
 
 ## Real-program convergence
 
-## Linux convergence loop: full500 + dynamic frontier + fixed real16
+## Linux convergence pipeline
 
-MiniAS uses three validation scopes with different ownership. Their results must
-not be conflated.
+MiniAS convergence is a pipeline, not a single sample loop. The frozen full
+window owns the coverage headline; the fast lane continuously works a bounded
+active failure sample while the slow full-window lane runs independently.
 
-### Current frontier — dynamic failure cohort
+### 1. Frozen window and authoritative headline
 
-The active development sample is **not permanently fixed**.
-
-After every authoritative frozen first500 run, every failing TU is extracted into
-`assembler/corpus/first500-frontier.txt`. That file replaces the previous frontier
-and becomes the high-frequency development cohort for the next convergence batch.
-
-The frontier exists to:
-
-- preserve exactly the failures discovered by the latest full500 headline;
-- make second blockers visible without rerunning all 500 TUs;
-- allow one coherent blocker family to be fixed across all currently affected TUs;
-- stay small and fast as the tail converges.
-
-If full500 reports 12 failures, the next frontier is those 12. If the next full500
-reports 7 different failures, the frontier is replaced by those 7. A stale frontier
-must never be treated as the current development sample.
-
-### Fixed real16 — regression sentinel
-
-`MiniAS A0 Real Linux 16` remains a deterministic spread sample. It is a stable
-regression sentinel and useful smoke gate, but once it is green it is **not** the
-primary source of new work. Passing real16 does not mean the current full500 tail
-is green.
-
-### Frozen first500 — authoritative headline
-
-`MiniAS A0 First500 Progress` is the full convergence line over the frozen 500
-Linux translation units. It owns the only authoritative first500 headline and
-the Pareto ordering of first blockers.
-
-Its job is to:
-
-- establish `PASS / FAIL / total=500`;
-- classify one stable first blocker per failing `.s`;
-- rank blocker classes by frequency;
-- detect regressions outside focused/frontier samples;
-- produce the next dynamic frontier cohort.
-
-### Promotion cadence
+The Linux 6.6.143 corpus is frozen into fixed ordered windows:
 
 ```text
-frozen first500
-  -> authoritative PASS/FAIL + Pareto
-  -> replace current frontier with every FAIL
-  -> choose the largest coherent blocker class
-  -> focused micro regression
-  -> current frontier replay
-  -> continue peeling second blockers inside the same frontier
-  -> fixed real16 regression sentinel
-  -> when current frontier is green, rerun frozen first500
-  -> replace frontier again from the new FAIL set
+0-499       first500
+500-999     new500
+1000-1499   next500
+1500-1999   next500b
+2000-2499   next500c
+2500-2999   next500d
+3000-3351   final352
 ```
 
-Do not rerun first500 after every tiny edit while the current frontier still
-contains known failures. Do rerun it when the current frontier has converged, when
-the global Pareto must be refreshed, or when a broader regression must be ruled out.
+A full-window replay is the only source of the official `PASS / FAIL / ERROR`
+headline. Focused or sampled results must never be extrapolated into `X/500`.
+
+### 2. Failure pool and active sample are different objects
+
+Every full-window run produces the complete **failure pool**: every non-PASS TU,
+its frozen index/path, first blocker, and failure context.
+
+The fast development lane uses an **active sample of at most 16 TUs** selected
+from that pool. When the pool has fewer than 16 entries, the active sample shrinks
+naturally (for example sample10 or sample7). When the pool is larger than 16, keep
+16 active blocker slots and refill them from the remaining pool as slots become
+true PASS.
+
+`assembler/corpus/first500-frontier.txt` records the current active sample for the
+first window. It is a moving frontier, not a permanent regression corpus.
+
+### 3. TU state transition rule
+
+A TU leaves the active sample **only when MiniAS produces a valid relocatable
+object for that TU**.
+
+```text
+same first blocker       -> stays ACTIVE
+later/different blocker  -> FRONTIER ADVANCE, stays ACTIVE
+internal error/crash     -> ERROR cohort, stays ACTIVE and is prioritized
+valid ET_REL object      -> PASS, retire slot and refill from failure pool
+```
+
+Moving from one blocker to the next is diagnostic progress, not coverage progress.
+For example, removing `csrrw` from a TU that then stops on `.insn` does not turn
+that TU green.
+
+### 4. Blocker cohorts and batch repair
+
+Within the active sample, classify by first blocker/root cause. Prefer the largest
+coherent blocker cohorts, but independent well-understood cohorts may be repaired
+in the same batch instead of forcing one edit/run cycle per TU.
+
+The implementation loop is:
+
+```text
+real failure context
+  -> exact-shape micro regression
+  -> general assembler capability
+  -> affected blocker cohort
+  -> whole active sample
+  -> fixed spread regression sample
+```
+
+Do not special-case Linux filenames or individual indices. A fix is promoted as a
+general assembler rule and locked by a focused regression.
+
+### 5. PASS-slot retirement and refill
+
+After each active-sample replay:
+
+1. keep every TU that still fails, even if its blocker moved later;
+2. remove only true PASS TUs;
+3. refill empty slots from the latest full-window failure pool;
+4. rerun the refreshed active sample;
+5. when the pool is exhausted and the active sample is green, force a new full
+   window replay instead of assuming the remaining window is green.
+
+This keeps pressure on new failures without repeatedly paying for all 500 TUs.
+
+### 6. Separate ERROR lane
+
+`unsupported-*`/ordinary capability gaps and `ERROR`/internal/crash failures are
+not equivalent. Internal errors or crashes are extracted into a dedicated error
+cohort and diagnosed immediately. A window is never promotable with `ERROR != 0`.
+
+### 7. Two concurrent lanes
+
+The fast and slow lanes run concurrently:
+
+```text
+FAST: active sample -> cohort fixes -> refill -> active sample -> ...
+SLOW: frozen full window -> exact headline/Pareto/failure pool -> next mature head
+```
+
+Do not idle the fast lane while a full-window run is executing. Conversely, do not
+let sampled success replace the slow lane. Each full run is tied to its exact head;
+when it completes, consume its evidence and start the next required full run from
+the newest mature head.
+
+The deterministic real16 sample is retained only as a stable spread regression
+sentinel. Once it is green, it is not the primary source of frontier work.
+
+### 8. Window promotion
+
+When the current window reaches exact `500/500` (or `352/352` for the final
+window), freeze the exact semantic head and evidence and immediately advance to
+the next fixed window. Already-converged windows remain regression contracts; a
+later capability must not silently regress them.
+
+After all windows converge, run the complete frozen 3352-TU assembly corpus before
+claiming Linux assembly coverage complete.
+
+### 9. End-to-end cadence
+
+```text
+full window
+  -> exact headline + complete failure pool + Pareto
+  -> select/refill active sample <= 16
+  -> split sample into coherent blocker cohorts
+  -> exact-shape tests + batch general fixes
+  -> replay active sample
+       PASS      -> retire/refill
+       ADVANCED  -> keep and peel next blocker
+       ERROR     -> dedicated error cohort
+  -> real16 regression sentinel
+  -> slow full-window refresh on mature head
+  -> repeat until exact window is all PASS and ERROR=0
+  -> freeze window
+  -> next 500 window
+  -> ...
+  -> final352
+  -> all3352 regression
+```
 
 GNU `as` remains the differential oracle:
 
