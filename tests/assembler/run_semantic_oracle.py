@@ -4,10 +4,10 @@ from __future__ import annotations
 import argparse
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import importlib.util
 import json
 from pathlib import Path
 import subprocess
-import sys
 import time
 
 
@@ -38,6 +38,15 @@ def first_line(text: str) -> str:
     return next((line.strip() for line in text.splitlines() if line.strip()), "-")
 
 
+def load_oracle(path: Path):
+    spec = importlib.util.spec_from_file_location("minias_elf_semantic_compare", path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"cannot load semantic oracle: {path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def main() -> int:
     args = parse_args()
     if args.jobs <= 0:
@@ -48,6 +57,7 @@ def main() -> int:
     cwd = (args.cwd or Path.cwd()).resolve()
     minias = args.minias.resolve()
     oracle = args.oracle.resolve()
+    oracle_module = load_oracle(oracle)
     files = sorted(root.rglob("*.s"))
 
     if args.expected is not None and len(files) != args.expected:
@@ -106,21 +116,12 @@ def main() -> int:
         if mini.returncode != 0:
             return {"status": "MINIAS_FAIL", "path": rel, "message": first_line(mini.stderr)}
 
-        cmp = subprocess.run(
-            [
-                sys.executable, str(oracle), str(ref), str(cand),
-                "--json-out", str(semantic),
-            ],
-            cwd=cwd,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
-            text=True,
-            errors="replace",
-        )
-        if cmp.returncode not in (0, 1) or not semantic.is_file():
-            return {"status": "ORACLE_ERROR", "path": rel, "message": first_line(cmp.stderr)}
+        try:
+            data = oracle_module.compare_paths(ref, cand)
+            semantic.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n")
+        except Exception as exc:
+            return {"status": "ORACLE_ERROR", "path": rel, "message": str(exc)}
 
-        data = json.loads(semantic.read_text())
         failed_dims = sorted(k for k, ok in data["dimensions"].items() if not ok)
         return {
             "status": "PASS" if bool(data["equal"]) else "DIFF",
