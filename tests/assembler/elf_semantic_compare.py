@@ -209,17 +209,9 @@ def load_semantics(path):
         }
 
 
-def main():
-    parser = argparse.ArgumentParser(
-        description="Compare RISC-V ELF relocatable objects semantically."
-    )
-    parser.add_argument("reference")
-    parser.add_argument("candidate")
-    parser.add_argument("--json-out")
-    args = parser.parse_args()
-
-    reference = load_semantics(args.reference)
-    candidate = load_semantics(args.candidate)
+def compare_paths(reference_path, candidate_path):
+    reference = load_semantics(reference_path)
+    candidate = load_semantics(candidate_path)
     dimensions = {
         "header": reference["header"] == candidate["header"],
         "section_core": reference["section_core"] == candidate["section_core"],
@@ -233,8 +225,8 @@ def main():
     strict_alignment = reference["section_alignment"] == candidate["section_alignment"]
 
     result = {
-        "reference": str(Path(args.reference)),
-        "candidate": str(Path(args.candidate)),
+        "reference": str(Path(reference_path)),
+        "candidate": str(Path(candidate_path)),
         "equal": all(dimensions.values()),
         "strict_equal": all(dimensions.values()) and strict_alignment,
         "dimensions": dimensions,
@@ -261,7 +253,19 @@ def main():
                 "compatible": dimensions["section_alignment_compatible"],
             }
         result["differences"] = differences
+    return result
 
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Compare RISC-V ELF relocatable objects semantically."
+    )
+    parser.add_argument("reference")
+    parser.add_argument("candidate")
+    parser.add_argument("--json-out")
+    args = parser.parse_args()
+
+    result = compare_paths(args.reference, args.candidate)
     output = json.dumps(result, indent=2, sort_keys=True)
     if args.json_out:
         Path(args.json_out).write_text(output + "\n")
