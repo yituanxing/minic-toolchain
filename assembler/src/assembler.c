@@ -2826,6 +2826,26 @@ static MiniAsMacro *find_macro(MiniAs *as, const char *name) {
     return NULL;
 }
 
+static void compact_macro_parameter_spacing(char *text) {
+    char *read = text;
+    char *write = text;
+
+    while (*read != '\0') {
+        if (*read == '=' || *read == ':') {
+            while (write > text && (write[-1] == ' ' || write[-1] == '\t')) {
+                --write;
+            }
+            *write++ = *read++;
+            while (*read == ' ' || *read == '\t') {
+                ++read;
+            }
+            continue;
+        }
+        *write++ = *read++;
+    }
+    *write = '\0';
+}
+
 static bool define_macro(MiniAs *as,
                          const char *argument,
                          MiniAsSourceLine *lines,
@@ -2841,6 +2861,7 @@ static bool define_macro(MiniAs *as,
         minias_set_error(as, "out-of-memory:macro-definition");
         return false;
     }
+    compact_macro_parameter_spacing(copy);
     token_count = split_macro_tokens(copy, tokens, 64U);
     if (token_count == SIZE_MAX || token_count == 0U ||
         !valid_irp_parameter_name(tokens[0])) {
