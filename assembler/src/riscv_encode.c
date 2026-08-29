@@ -660,6 +660,17 @@ bool minias_riscv_measure(const char *op,
         }
     }
 
+    if (strcmp(op, "vmv.v.i") == 0) {
+        int64_t imm;
+        if (count != 2U || vector_reg_number(operands[0]) < 0 ||
+            !parse_i64(operands[1], &imm) || imm < -16 || imm > 15) {
+            (void)snprintf(reason, reason_size, "bad-operands:vmv.v.i:%s", args);
+            return false;
+        }
+        *size = 4U;
+        return true;
+    }
+
     if (strcmp(op, "vsetvli") == 0) {
         uint32_t vtypei;
         if ((count != 5U && count != 6U) ||
@@ -787,6 +798,22 @@ bool minias_riscv_encode(MiniAs *as, const MiniAsStmt *stmt) {
                     (vector_store ? 0x27U : 0x07U);
             return append_u32(as, stmt->section, value);
         }
+    }
+
+    if (strcmp(stmt->op, "vmv.v.i") == 0) {
+        int vector_reg = vector_reg_number(operands[0]);
+        if (count != 2U || vector_reg < 0 ||
+            !require_imm(as, stmt, operands[1], &immediate) ||
+            immediate < -16 || immediate > 15) {
+            minias_set_error(as, "bad-operands:vmv.v.i:%s:line=%zu",
+                             stmt->args,
+                             stmt->line);
+            return false;
+        }
+        value = (0x17U << 26U) | (1U << 25U) |
+                (((uint32_t)immediate & 0x1fU) << 15U) |
+                (3U << 12U) | ((uint32_t)vector_reg << 7U) | 0x57U;
+        return append_u32(as, stmt->section, value);
     }
 
     if (strcmp(stmt->op, "vsetvli") == 0) {
