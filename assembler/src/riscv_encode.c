@@ -1012,6 +1012,17 @@ bool minias_riscv_measure(const char *op,
         }
     }
 
+    if (strcmp(op, "sb") == 0 || strcmp(op, "sh") == 0 ||
+        strcmp(op, "sw") == 0 || strcmp(op, "sd") == 0) {
+        MiniAsSymbolExpr expr;
+        if (count == 3U && reg_number(operands[0]) >= 0 &&
+            minias_parse_symbol_addend(operands[1], &expr) &&
+            reg_number(operands[2]) >= 0) {
+            *size = 8U;
+            return true;
+        }
+    }
+
     if (strcmp(op, "c.li") == 0) {
         int64_t imm;
         int rd;
@@ -1807,10 +1818,24 @@ bool minias_riscv_encode(MiniAs *as, const MiniAsStmt *stmt) {
     }
     if (strcmp(stmt->op, "csrrw") == 0) {
         uint32_t csr;
+        int64_t zimm;
 
         if (count != 3U || !require_reg(as, stmt, operands[0], &rd) ||
-            !parse_csr(operands[1], &csr) ||
-            !require_reg(as, stmt, operands[2], &rs1)) {
+            !parse_csr(operands[1], &csr)) {
+            minias_set_error(as, "bad-csrrw:line=%zu", stmt->line);
+            return false;
+        }
+        if (parse_i64(operands[2], &zimm)) {
+            if (zimm < 0 || zimm > 31) {
+                minias_set_error(as, "bad-csrrw-zimm:line=%zu", stmt->line);
+                return false;
+            }
+            return append_u32(as,
+                              stmt->section,
+                              0x73U | ((uint32_t)rd << 7U) | (5U << 12U) |
+                                  ((uint32_t)zimm << 15U) | (csr << 20U));
+        }
+        if (!require_reg(as, stmt, operands[2], &rs1)) {
             minias_set_error(as, "bad-csrrw:line=%zu", stmt->line);
             return false;
         }
@@ -1821,10 +1846,24 @@ bool minias_riscv_encode(MiniAs *as, const MiniAsStmt *stmt) {
     }
     if (strcmp(stmt->op, "csrrc") == 0) {
         uint32_t csr;
+        int64_t zimm;
 
         if (count != 3U || !require_reg(as, stmt, operands[0], &rd) ||
-            !parse_csr(operands[1], &csr) ||
-            !require_reg(as, stmt, operands[2], &rs1)) {
+            !parse_csr(operands[1], &csr)) {
+            minias_set_error(as, "bad-csrrc:line=%zu", stmt->line);
+            return false;
+        }
+        if (parse_i64(operands[2], &zimm)) {
+            if (zimm < 0 || zimm > 31) {
+                minias_set_error(as, "bad-csrrc-zimm:line=%zu", stmt->line);
+                return false;
+            }
+            return append_u32(as,
+                              stmt->section,
+                              0x73U | ((uint32_t)rd << 7U) | (7U << 12U) |
+                                  ((uint32_t)zimm << 15U) | (csr << 20U));
+        }
+        if (!require_reg(as, stmt, operands[2], &rs1)) {
             minias_set_error(as, "bad-csrrc:line=%zu", stmt->line);
             return false;
         }
@@ -1835,9 +1874,23 @@ bool minias_riscv_encode(MiniAs *as, const MiniAsStmt *stmt) {
     }
     if (strcmp(stmt->op, "csrw") == 0) {
         uint32_t csr;
+        int64_t zimm;
 
-        if (count != 2U || !parse_csr(operands[0], &csr) ||
-            !require_reg(as, stmt, operands[1], &rs1)) {
+        if (count != 2U || !parse_csr(operands[0], &csr)) {
+            minias_set_error(as, "bad-csrw:line=%zu", stmt->line);
+            return false;
+        }
+        if (parse_i64(operands[1], &zimm)) {
+            if (zimm < 0 || zimm > 31) {
+                minias_set_error(as, "bad-csrw-zimm:line=%zu", stmt->line);
+                return false;
+            }
+            return append_u32(as,
+                              stmt->section,
+                              0x73U | (5U << 12U) |
+                                  ((uint32_t)zimm << 15U) | (csr << 20U));
+        }
+        if (!require_reg(as, stmt, operands[1], &rs1)) {
             minias_set_error(as, "bad-csrw:line=%zu", stmt->line);
             return false;
         }
@@ -1848,9 +1901,23 @@ bool minias_riscv_encode(MiniAs *as, const MiniAsStmt *stmt) {
     }
     if (strcmp(stmt->op, "csrs") == 0) {
         uint32_t csr;
+        int64_t zimm;
 
-        if (count != 2U || !parse_csr(operands[0], &csr) ||
-            !require_reg(as, stmt, operands[1], &rs1)) {
+        if (count != 2U || !parse_csr(operands[0], &csr)) {
+            minias_set_error(as, "bad-csrs:line=%zu", stmt->line);
+            return false;
+        }
+        if (parse_i64(operands[1], &zimm)) {
+            if (zimm < 0 || zimm > 31) {
+                minias_set_error(as, "bad-csrs-zimm:line=%zu", stmt->line);
+                return false;
+            }
+            return append_u32(as,
+                              stmt->section,
+                              0x73U | (6U << 12U) |
+                                  ((uint32_t)zimm << 15U) | (csr << 20U));
+        }
+        if (!require_reg(as, stmt, operands[1], &rs1)) {
             minias_set_error(as, "bad-csrs:line=%zu", stmt->line);
             return false;
         }
@@ -1861,9 +1928,23 @@ bool minias_riscv_encode(MiniAs *as, const MiniAsStmt *stmt) {
     }
     if (strcmp(stmt->op, "csrc") == 0) {
         uint32_t csr;
+        int64_t zimm;
 
-        if (count != 2U || !parse_csr(operands[0], &csr) ||
-            !require_reg(as, stmt, operands[1], &rs1)) {
+        if (count != 2U || !parse_csr(operands[0], &csr)) {
+            minias_set_error(as, "bad-csrc:line=%zu", stmt->line);
+            return false;
+        }
+        if (parse_i64(operands[1], &zimm)) {
+            if (zimm < 0 || zimm > 31) {
+                minias_set_error(as, "bad-csrc-zimm:line=%zu", stmt->line);
+                return false;
+            }
+            return append_u32(as,
+                              stmt->section,
+                              0x73U | (7U << 12U) |
+                                  ((uint32_t)zimm << 15U) | (csr << 20U));
+        }
+        if (!require_reg(as, stmt, operands[1], &rs1)) {
             minias_set_error(as, "bad-csrc:line=%zu", stmt->line);
             return false;
         }
@@ -2216,16 +2297,75 @@ bool minias_riscv_encode(MiniAs *as, const MiniAsStmt *stmt) {
         strcmp(stmt->op, "sw") == 0 || strcmp(stmt->op, "sd") == 0) {
         char base[128];
 
-        if (count != 2U || !require_reg(as, stmt, operands[0], &rs2) ||
-            !parse_mem(operands[1], &immediate, base) ||
-            !require_reg(as, stmt, base, &rs1)) {
-            return false;
-        }
         funct3 = strcmp(stmt->op, "sb") == 0   ? 0U
                  : strcmp(stmt->op, "sh") == 0 ? 1U
                  : strcmp(stmt->op, "sw") == 0 ? 2U
                                                 : 3U;
-        return append_u32(as, stmt->section, enc_s(funct3, rs1, rs2, immediate));
+        if (count == 2U) {
+            if (!require_reg(as, stmt, operands[0], &rs2) ||
+                !parse_mem(operands[1], &immediate, base) ||
+                !require_reg(as, stmt, base, &rs1)) {
+                return false;
+            }
+            return append_u32(as,
+                              stmt->section,
+                              enc_s(funct3, rs1, rs2, immediate));
+        }
+        if (count == 3U) {
+            MiniAsSymbolExpr expr;
+            MiniAsSymbol *anchor;
+            char anchor_name[96];
+
+            if (!require_reg(as, stmt, operands[0], &rs2) ||
+                !minias_parse_symbol_addend(operands[1], &expr) ||
+                !require_reg(as, stmt, operands[2], &rs1)) {
+                minias_set_error(as,
+                                 "bad-symbol-store:%s:%s:line=%zu",
+                                 stmt->op,
+                                 stmt->args,
+                                 stmt->line);
+                return false;
+            }
+            (void)snprintf(anchor_name,
+                           sizeof(anchor_name),
+                           ".Lminias_store_%zu",
+                           ++as->pcrel_anchor_counter);
+            anchor = minias_get_symbol(as, anchor_name, true);
+            if (anchor == NULL) {
+                return false;
+            }
+            anchor->defined = true;
+            anchor->section = stmt->section;
+            anchor->subsection = stmt->subsection;
+            anchor->value = stmt->offset;
+            anchor->bind = MINIAS_STB_LOCAL;
+
+            if (!append_u32(as,
+                            stmt->section,
+                            0x17U | ((uint32_t)rs1 << 7U)) ||
+                !append_u32(as,
+                            stmt->section,
+                            enc_s(funct3, rs1, rs2, 0))) {
+                return false;
+            }
+            return minias_add_relocation(as,
+                                         stmt->section,
+                                         stmt->offset,
+                                         MINIAS_R_RISCV_PCREL_HI20,
+                                         expr.name,
+                                         expr.addend) &&
+                   minias_add_relocation(as,
+                                         stmt->section,
+                                         stmt->offset + 4U,
+                                         MINIAS_R_RISCV_PCREL_LO12_S,
+                                         anchor_name,
+                                         0);
+        }
+        minias_set_error(as,
+                         "operand-count:%s:line=%zu",
+                         stmt->op,
+                         stmt->line);
+        return false;
     }
     if (strcmp(stmt->op, "jalr") == 0) {
         if (count == 1U) {
