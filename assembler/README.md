@@ -31,6 +31,64 @@ physical code template.
 
 ## Real-program convergence
 
+## Dual-line Linux convergence loop
+
+MiniAS uses two independent validation lines. They answer different questions and
+must not be conflated.
+
+### Fast line — deterministic real16
+
+`MiniAS A0 Real Linux 16` is the high-frequency feedback line.
+
+Its job is to:
+
+- expose the next concrete assembler blocker quickly;
+- validate a narrow implementation change against real Linux-produced assembly;
+- print exact first-blocker context for failed translation units;
+- keep iteration latency low while a blocker class is being implemented.
+
+A `16/16` result is useful focused evidence, but it is **not** the project-wide
+Linux coverage headline.
+
+### Full line — frozen first500
+
+`MiniAS A0 First500 Progress` is the full convergence line over the same frozen
+500 Linux translation units used as the compiler safety corpus.
+
+Its job is to:
+
+- establish the real coverage headline (`PASS / FAIL / total=500`);
+- classify exactly one first stable blocker per failing `.s`;
+- rank blocker classes by frequency (Pareto);
+- detect regressions outside the real16 sample;
+- decide which blocker family should be attacked next.
+
+The frozen selection must stay stable while comparing iterations. Focused or
+real16 results must never be reported as though they were a first500 result.
+
+### Promotion cadence
+
+The normal development loop is:
+
+```text
+frozen first500
+  -> rank first blockers by frequency
+  -> choose the largest coherent blocker class
+  -> implement the general assembler capability
+  -> micro regression
+  -> real16 / exact focused replay
+  -> repeat focused fixes while the same class is converging
+  -> frozen first500 again
+  -> update the only authoritative 500-TU headline
+```
+
+Do not rerun first500 after every tiny edit when real16/focused evidence is enough
+to continue the same blocker class. Do rerun first500 after a coherent batch has
+moved, when choosing the next Pareto class, or whenever a regression outside the
+sample must be ruled out.
+
+The full line requires internal/error-style assembler failures to remain explicit:
+a new internal failure must not be hidden as an ordinary unsupported capability.
 The frozen Linux corpus is the primary development pressure. MiniAS is run on real
 compiler-produced `.s` files and failures are grouped by the first stable diagnostic
 class, for example:
