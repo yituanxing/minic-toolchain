@@ -175,7 +175,7 @@ static bool minipp_parse_invocation_args(MiniPpState *state,
         ++index;
     }
 
-    fprintf(state->diagnostics, "minic-cpp: unterminated-macro-invocation\n");
+    state->expansion_incomplete = true;
     minipp_arg_list_destroy(args);
     return false;
 }
@@ -816,6 +816,7 @@ static bool minipp_expand_text_recursive(MiniPpState *state,
 bool minipp_expand_text(MiniPpState *state,
                         const char *text,
                         MiniPpString *out) {
+    state->expansion_incomplete = false;
     return minipp_expand_text_recursive(state, text, out, NULL, 0U, 0U);
 }
 
