@@ -313,7 +313,7 @@ int minias_ensure_section(MiniAs *as,
         if (align > sec->align) {
             sec->align = align;
         }
-        if (type == MINIAS_SHT_NOBITS) {
+        if (type != MINIAS_SHT_PROGBITS) {
             sec->type = type;
         }
         return found;
@@ -857,6 +857,7 @@ static bool parse_section_directive(MiniAs *as, char *args, size_t line) {
     char *comma = strchr(args, ',');
     char *name;
     uint64_t flags = 0U;
+    uint32_t type = MINIAS_SHT_PROGBITS;
 
     if (comma != NULL) {
         *comma = '\0';
@@ -873,9 +874,19 @@ static bool parse_section_directive(MiniAs *as, char *args, size_t line) {
         minias_set_error(as, "bad-directive:.section:line=%zu", line);
         return false;
     }
+
+    if (strncmp(name, ".bss", 4U) == 0) {
+        type = MINIAS_SHT_NOBITS;
+    }
+
     if (comma != NULL) {
-        char *q = strchr(comma + 1, '"');
+        char *rest = comma + 1;
+        char *q = strchr(rest, '"');
+        char *type_separator = NULL;
+
         if (q != NULL) {
+            char *flag_end;
+
             ++q;
             while (*q != '\0' && *q != '"') {
                 if (*q == 'a') {
@@ -887,23 +898,39 @@ static bool parse_section_directive(MiniAs *as, char *args, size_t line) {
                 }
                 ++q;
             }
+            flag_end = q;
+            type_separator = strchr(flag_end, ',');
+        } else {
+            type_separator = strchr(rest, ',');
+        }
+
+        if (type_separator != NULL) {
+            char *kind = minias_trim(type_separator + 1);
+            if (*kind == '@' || *kind == '%') {
+                ++kind;
+            }
+            if (strcmp(kind, "note") == 0) {
+                type = MINIAS_SHT_NOTE;
+            } else if (strcmp(kind, "nobits") == 0) {
+                type = MINIAS_SHT_NOBITS;
+            } else if (strcmp(kind, "progbits") == 0) {
+                type = MINIAS_SHT_PROGBITS;
+            }
         }
     }
+
     if (flags == 0U) {
         if (strncmp(name, ".text", 5U) == 0) {
             flags = MINIAS_SHF_ALLOC | MINIAS_SHF_EXECINSTR;
-        } else if (strncmp(name, ".rodata", 7U) == 0) {
+        } else if (strncmp(name, ".rodata", 7U) == 0 ||
+                   strncmp(name, ".note", 5U) == 0) {
             flags = MINIAS_SHF_ALLOC;
-        } else if (strncmp(name, ".data", 5U) == 0 || strncmp(name, ".bss", 4U) == 0) {
+        } else if (strncmp(name, ".data", 5U) == 0 ||
+                   strncmp(name, ".bss", 4U) == 0) {
             flags = MINIAS_SHF_ALLOC | MINIAS_SHF_WRITE;
         }
     }
-    return switch_section(as,
-                          name,
-                          strncmp(name, ".bss", 4U) == 0 ? MINIAS_SHT_NOBITS
-                                                          : MINIAS_SHT_PROGBITS,
-                          flags,
-                          1U);
+    return switch_section(as, name, type, flags, 1U);
 }
 
 static bool handle_symbol_list(MiniAs *as,
