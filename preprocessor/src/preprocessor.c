@@ -834,6 +834,7 @@ static bool minipp_try_flush_pending(MiniPpState *state,
                                      bool final) {
     MiniPpString expanded;
     size_t saved_line = state->current_line;
+    size_t saved_counter = state->counter_value;
     bool ok;
 
     if (pending->size == 0U) {
@@ -848,6 +849,7 @@ static bool minipp_try_flush_pending(MiniPpState *state,
         bool incomplete = state->expansion_incomplete;
         minipp_string_destroy(&expanded);
         if (incomplete && !final) {
+            state->counter_value = saved_counter;
             return true;
         }
         if (incomplete) {
@@ -981,19 +983,17 @@ static bool minipp_process_source(MiniPpState *state,
         }
         --stripped.size;
 
-        if (pending.size == 0U) {
-            if (!minipp_handle_directive(state,
-                                         current_path,
-                                         stripped.data,
-                                         output,
-                                         &handled)) {
-                minipp_string_destroy(&stripped);
-                minipp_string_destroy(&pending);
-                return false;
-            }
+        if (!minipp_handle_directive(state,
+                                     current_path,
+                                     stripped.data,
+                                     output,
+                                     &handled)) {
+            minipp_string_destroy(&stripped);
+            minipp_string_destroy(&pending);
+            return false;
         }
 
-        if (!handled && (state->active || pending.size != 0U)) {
+        if (!handled && state->active) {
             if (pending.size == 0U) {
                 pending_line = state->current_line;
             }
