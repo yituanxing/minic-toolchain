@@ -1185,10 +1185,12 @@ bool minias_riscv_encode(MiniAs *as, const MiniAsStmt *stmt) {
         strcmp(stmt->op, "ctz") == 0) {
         int64_t encoded_imm;
         uint32_t encoded_funct3;
+        int encoded_rd;
+        int encoded_rs1;
 
         if (count != 2U ||
-            !require_reg(as, stmt, operands[0], &rd) ||
-            !require_reg(as, stmt, operands[1], &rs1)) {
+            !require_reg(as, stmt, operands[0], &encoded_rd) ||
+            !require_reg(as, stmt, operands[1], &encoded_rs1)) {
             return false;
         }
         if (strcmp(stmt->op, "orc.b") == 0) {
@@ -1204,9 +1206,9 @@ bool minias_riscv_encode(MiniAs *as, const MiniAsStmt *stmt) {
         return append_u32(as,
                           stmt->section,
                           enc_i(0x13U,
-                                rd,
+                                encoded_rd,
                                 encoded_funct3,
-                                rs1,
+                                encoded_rs1,
                                 encoded_imm));
     }
 
