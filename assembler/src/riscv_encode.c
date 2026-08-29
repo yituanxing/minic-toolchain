@@ -2459,6 +2459,7 @@ bool minias_riscv_encode(MiniAs *as, const MiniAsStmt *stmt) {
         strcmp(stmt->op, "bgt") == 0 || strcmp(stmt->op, "ble") == 0 ||
         strcmp(stmt->op, "bgtu") == 0 || strcmp(stmt->op, "bleu") == 0) {
         const char *target;
+        MiniAsSymbolExpr branch_expr;
 
         if (strcmp(stmt->op, "beqz") == 0 || strcmp(stmt->op, "bnez") == 0 ||
             strcmp(stmt->op, "bltz") == 0 || strcmp(stmt->op, "bgez") == 0 ||
@@ -2522,7 +2523,15 @@ bool minias_riscv_encode(MiniAs *as, const MiniAsStmt *stmt) {
                                                           : 0U;
             }
         }
-        symbol = minias_get_symbol(as, target, false);
+        if (!minias_parse_symbol_addend(target, &branch_expr)) {
+            minias_set_error(as,
+                             "unsupported-expression:%s:%s:line=%zu",
+                             stmt->op,
+                             target,
+                             stmt->line);
+            return false;
+        }
+        symbol = minias_get_symbol(as, branch_expr.name, false);
         if (symbol == NULL || !symbol->defined || symbol->section != stmt->section) {
             minias_set_error(as,
                              "unsupported-relocation:%s:line=%zu",
@@ -2530,7 +2539,29 @@ bool minias_riscv_encode(MiniAs *as, const MiniAsStmt *stmt) {
                              stmt->line);
             return false;
         }
-        immediate = (int64_t)symbol->value - (int64_t)stmt->offset;
+        immediate = (int64_t)symbol->value + branch_expr.addend -
+                    (int64_t)stmt->offset;
+        if (stmt->size == 8U) {
+            int64_t jal_displacement =
+                (int64_t)symbol->value + branch_expr.addend -
+                (int64_t)(stmt->offset + 4U);
+
+            if ((jal_displacement & 1) != 0 ||
+                jal_displacement < -(1LL << 20) ||
+                jal_displacement > (1LL << 20) - 2) {
+                minias_set_error(as,
+                                 "branch-long-jal-range:%s:line=%zu",
+                                 stmt->op,
+                                 stmt->line);
+                return false;
+            }
+            return append_u32(as,
+                              stmt->section,
+                              enc_b(funct3 ^ 1U, rs1, rs2, 8)) &&
+                   append_u32(as,
+                              stmt->section,
+                              enc_j(0, jal_displacement));
+        }
         if ((immediate & 1) != 0 || immediate < -4096 || immediate > 4094) {
             minias_set_error(as, "branch-range:%s:line=%zu", stmt->op, stmt->line);
             return false;
