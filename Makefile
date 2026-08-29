@@ -109,6 +109,7 @@ MINIAS_BINARY := $(BUILD_DIR)/bin/minic-as
 MINIPP_INCLUDES := -Ipreprocessor/include -Ipreprocessor/src
 MINIPP_SOURCES := \
 	preprocessor/src/file_buffer.c \
+	preprocessor/src/expression.c \
 	preprocessor/src/include.c \
 	preprocessor/src/token.c \
 	preprocessor/src/preprocessor.c \
