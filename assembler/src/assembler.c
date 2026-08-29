@@ -257,17 +257,99 @@ int minias_ensure_section(MiniAs *as,
     return (int)(as->section_count - 1U);
 }
 
-MiniAsSymbol *minias_get_symbol(MiniAs *as, const char *name, bool create) {
+static size_t symbol_name_hash(const char *name) {
+    uint64_t hash = UINT64_C(1469598103934665603);
+    const unsigned char *p = (const unsigned char *)name;
+
+    while (*p != '\0') {
+        hash ^= (uint64_t)*p++;
+        hash *= UINT64_C(1099511628211);
+    }
+    return (size_t)hash;
+}
+
+static bool rebuild_symbol_index(MiniAs *as, size_t minimum_capacity) {
+    size_t capacity = 16U;
+    size_t *slots;
     size_t i;
+
+    while (capacity < minimum_capacity) {
+        if (capacity > SIZE_MAX / 2U) {
+            minias_set_error(as, "symbol-index-too-large");
+            return false;
+        }
+        capacity *= 2U;
+    }
+    slots = calloc(capacity, sizeof(*slots));
+    if (slots == NULL) {
+        minias_set_error(as, "out-of-memory:symbol-index");
+        return false;
+    }
+    for (i = 0U; i < as->symbol_count; ++i) {
+        size_t slot = symbol_name_hash(as->symbols[i].name) & (capacity - 1U);
+        while (slots[slot] != 0U) {
+            slot = (slot + 1U) & (capacity - 1U);
+        }
+        slots[slot] = i + 1U;
+    }
+    free(as->symbol_slots);
+    as->symbol_slots = slots;
+    as->symbol_slot_capacity = capacity;
+    return true;
+}
+
+static bool find_symbol_slot(const MiniAs *as,
+                             const char *name,
+                             size_t *slot_out,
+                             size_t *index_out) {
+    size_t slot;
+    size_t scanned;
+
+    if (as->symbol_slot_capacity == 0U) {
+        *slot_out = 0U;
+        return false;
+    }
+    slot = symbol_name_hash(name) & (as->symbol_slot_capacity - 1U);
+    for (scanned = 0U; scanned < as->symbol_slot_capacity; ++scanned) {
+        size_t encoded = as->symbol_slots[slot];
+        if (encoded == 0U) {
+            *slot_out = slot;
+            return false;
+        }
+        if (strcmp(as->symbols[encoded - 1U].name, name) == 0) {
+            *slot_out = slot;
+            *index_out = encoded - 1U;
+            return true;
+        }
+        slot = (slot + 1U) & (as->symbol_slot_capacity - 1U);
+    }
+    *slot_out = 0U;
+    return false;
+}
+
+MiniAsSymbol *minias_get_symbol(MiniAs *as, const char *name, bool create) {
+    size_t slot = 0U;
+    size_t index = 0U;
     MiniAsSymbol *sym;
 
-    for (i = 0U; i < as->symbol_count; ++i) {
-        if (strcmp(as->symbols[i].name, name) == 0) {
-            return &as->symbols[i];
-        }
+    if (find_symbol_slot(as, name, &slot, &index)) {
+        return &as->symbols[index];
     }
     if (!create) {
         return NULL;
+    }
+    if (as->symbol_slot_capacity == 0U ||
+        as->symbol_count + 1U >= as->symbol_slot_capacity / 2U) {
+        size_t next_capacity =
+            as->symbol_slot_capacity == 0U ? 16U
+                                          : as->symbol_slot_capacity * 2U;
+        if (next_capacity < as->symbol_slot_capacity ||
+            !rebuild_symbol_index(as, next_capacity)) {
+            return NULL;
+        }
+        if (find_symbol_slot(as, name, &slot, &index)) {
+            return &as->symbols[index];
+        }
     }
     if (!grow_array((void **)&as->symbols,
                     &as->symbol_capacity,
@@ -288,6 +370,7 @@ MiniAsSymbol *minias_get_symbol(MiniAs *as, const char *name, bool create) {
     sym->type = MINIAS_STT_NOTYPE;
     sym->visibility = MINIAS_STV_DEFAULT;
     ++as->symbol_count;
+    as->symbol_slots[slot] = as->symbol_count;
     return sym;
 }
 
@@ -419,6 +502,7 @@ void minias_destroy(MiniAs *as) {
         free(as->symbols[i].name);
     }
     free(as->symbols);
+    free(as->symbol_slots);
     for (i = 0U; i < as->stmt_count; ++i) {
         free(as->stmts[i].op);
         free(as->stmts[i].args);

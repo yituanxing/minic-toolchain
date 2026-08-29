@@ -120,6 +120,8 @@ typedef struct MiniAs {
     MiniAsSymbol *symbols;
     size_t symbol_count;
     size_t symbol_capacity;
+    size_t *symbol_slots;
+    size_t symbol_slot_capacity;
     MiniAsStmt *stmts;
     size_t stmt_count;
     size_t stmt_capacity;
