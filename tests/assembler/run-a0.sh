@@ -674,6 +674,45 @@ raw_insn_hex="$(
 )"
 test "$raw_insn_hex" = "73000018f3c233640f2025000f201500"
 
+cat >"$work/native-expr-pseudos.s" <<'EOF'
+.text
+.globl native_expr_pseudos
+.type native_expr_pseudos, @function
+native_expr_pseudos:
+  li t0, 0x00040000 | (0x00006000 | 0x00000600)
+  li t1, (1 << (12))
+  addi t2, zero, 9*8
+  andi a0, a1, ~((8*8)-1)
+  addi a2, a3, 8 -1
+  not a4, a5
+  negw a6, a7
+  frcsr t0
+.size native_expr_pseudos, . - native_expr_pseudos
+EOF
+"$MINIAS" -o "$work/native-expr-pseudos.o" "$work/native-expr-pseudos.s"
+native_expr_pseudos_hex="$(
+    readelf -x .text "$work/native-expr-pseudos.o" |
+    awk '/0x[0-9a-f]+/ {for (i=2; i<=NF; ++i) if ($i ~ /^[0-9a-f]{8}$/) printf "%s", $i}'
+)"
+test "$native_expr_pseudos_hex" = "b76204009b820260371300001b0303009303800413f505fc1386760013c7f7ff3b081041f3223000"
+test "$(readelf -Ws "$work/native-expr-pseudos.o" | awk '$8=="native_expr_pseudos" {print $3}')" = "40"
+
+cat >"$work/native-macro-quotes.s" <<'EOF'
+.text
+.macro emit_one insn:req
+  \insn
+.endm
+.altmacro
+emit_one "nop"
+.noaltmacro
+EOF
+"$MINIAS" -o "$work/native-macro-quotes.o" "$work/native-macro-quotes.s"
+native_macro_quotes_hex="$(
+    readelf -x .text "$work/native-macro-quotes.o" |
+    awk '/0x[0-9a-f]+/ {for (i=2; i<=NF; ++i) if ($i ~ /^[0-9a-f]{8}$/) printf "%s", $i}'
+)"
+test "$native_macro_quotes_hex" = "13000000"
+
 cat >"$work/align-expr.s" <<'EOF'
 .text
 .byte 1
@@ -741,4 +780,4 @@ vector_hex="$(
 )"
 test "$vector_hex" = "d772300c57b00f5e57b40f5e57b80f5e57bc0f5e27000e0227040e0207d1050287040400"
 
-echo "MINIAS_A0=PASS objects=14 format=ELF64-RISCV-ET_REL relocations=16 strings=2 pseudos=14 previous=3 subsection=2 numeric_labels=18 ecall=1 isa_next=13 csr_amo=7 sfence_vma=3 fence_i=1 vsetvl=1 vsetvli=1 vmv_v_i=4 rept=2 nested_rept=1 irp=4 section_stack=1 org=3 local_difference=1 lr_sc=2 inline_labels=2 branch_pseudos=8 extern=1 symbol_minus_dot=4 symbol_difference=1 absolute32=1 jal=2 jal_subsection=1 high_numeric_labels=2 u64_data=3 raw_insn=4 set_alias=3 move=1 numeric_zero=1 immediate_product=2 shift_immediate=1 incbin=1 align_expr=1 sext_w=1 macro=3 conditional=1"
+echo "MINIAS_A0=PASS objects=16 format=ELF64-RISCV-ET_REL relocations=16 strings=2 pseudos=17 previous=3 subsection=2 numeric_labels=18 ecall=1 isa_next=13 csr_amo=8 sfence_vma=3 fence_i=1 vsetvl=1 vsetvli=1 vmv_v_i=4 rept=2 nested_rept=1 irp=4 section_stack=1 org=3 local_difference=1 lr_sc=2 inline_labels=2 branch_pseudos=8 extern=1 symbol_minus_dot=4 symbol_difference=1 absolute32=1 jal=2 jal_subsection=1 high_numeric_labels=2 u64_data=3 raw_insn=4 set_alias=3 move=1 numeric_zero=1 immediate_product=2 shift_immediate=1 incbin=1 align_expr=1 native_expr=6 native_macro_quotes=1 sext_w=1 macro=4 conditional=1"
