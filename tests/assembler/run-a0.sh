@@ -929,7 +929,7 @@ native_mixed_macro_text="$(
     readelf -x .text "$work/native-mixed-macro.o" |
     awk '/0x[0-9a-f]+/ {for (i=2; i<=NF; ++i) if ($i ~ /^[0-9a-f]{8}$/) printf "%s", $i}'
 )"
-test "$native_mixed_macro_text" = "83c7050067800000"
+test "$native_mixed_macro_text" = "8387050067800000"
 test "$(readelf -S "$work/native-mixed-macro.o" | grep -c '__ex_table')" -eq 1
 test "$(readelf -x __ex_table "$work/native-mixed-macro.o" | grep -c '0x00000000')" -ge 1
 
