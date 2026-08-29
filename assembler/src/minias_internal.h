@@ -105,6 +105,21 @@ typedef struct MiniAsConditional {
     bool else_seen;
 } MiniAsConditional;
 
+typedef struct MiniAsMacroParam {
+    char *name;
+    char *default_value;
+    bool required;
+} MiniAsMacroParam;
+
+typedef struct MiniAsMacro {
+    char *name;
+    MiniAsMacroParam *params;
+    size_t param_count;
+    char **body;
+    size_t *body_lines;
+    size_t body_count;
+} MiniAsMacro;
+
 typedef struct MiniAsStmt {
     MiniAsStmtKind kind;
     char *op;
@@ -145,6 +160,11 @@ typedef struct MiniAs {
     MiniAsConditional *conditionals;
     size_t conditional_count;
     size_t conditional_capacity;
+    MiniAsMacro *macros;
+    size_t macro_count;
+    size_t macro_capacity;
+    size_t macro_expansion_counter;
+    size_t macro_expansion_depth;
     bool conditional_active;
     int current_section;
     uint32_t current_subsection;

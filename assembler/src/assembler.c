@@ -595,6 +595,21 @@ void minias_destroy(MiniAs *as) {
     free(as->section_stack);
     free(as->numeric_label_counts);
     free(as->conditionals);
+    for (i = 0U; i < as->macro_count; ++i) {
+        size_t j;
+        free(as->macros[i].name);
+        for (j = 0U; j < as->macros[i].param_count; ++j) {
+            free(as->macros[i].params[j].name);
+            free(as->macros[i].params[j].default_value);
+        }
+        free(as->macros[i].params);
+        for (j = 0U; j < as->macros[i].body_count; ++j) {
+            free(as->macros[i].body[j]);
+        }
+        free(as->macros[i].body);
+        free(as->macros[i].body_lines);
+    }
+    free(as->macros);
     memset(as, 0, sizeof(*as));
 }
 
@@ -2436,6 +2451,12 @@ static bool define_label(MiniAs *as, char *label, size_t line) {
     return true;
 }
 
+static MiniAsMacro *find_macro(MiniAs *as, const char *name);
+static bool expand_macro_invocation(MiniAs *as,
+                                    MiniAsMacro *macro,
+                                    const char *args,
+                                    size_t line);
+
 static bool process_statement(MiniAs *as, char *text, size_t line) {
     char *space;
     char *op;
@@ -2498,6 +2519,13 @@ static bool process_statement(MiniAs *as, char *text, size_t line) {
         args = space;
     }
     op = text;
+
+    {
+        MiniAsMacro *macro = find_macro(as, op);
+        if (macro != NULL) {
+            return expand_macro_invocation(as, macro, args, line);
+        }
+    }
 
     if (op[0] == '.' && strcmp(op, ".insn") != 0) {
         if (strcmp(op, ".text") == 0) {
@@ -2669,6 +2697,440 @@ typedef struct MiniAsSourceLine {
     char *text;
     size_t line;
 } MiniAsSourceLine;
+
+enum {
+    MINIAS_MACRO_NONE = 0,
+    MINIAS_MACRO_BEGIN = 1,
+    MINIAS_MACRO_END = 2
+};
+
+static int classify_macro_line(const char *text,
+                               char *argument,
+                               size_t argument_size) {
+    char *copy = minias_strdup(text);
+    char *trimmed;
+    const char *rest = NULL;
+    int kind = MINIAS_MACRO_NONE;
+
+    if (argument_size != 0U) {
+        argument[0] = '\0';
+    }
+    if (copy == NULL) {
+        return -1;
+    }
+    strip_comment(copy);
+    trimmed = minias_trim(copy);
+    if (strncmp(trimmed, ".macro", 6U) == 0 &&
+        (trimmed[6] == '\0' || isspace((unsigned char)trimmed[6]))) {
+        rest = trimmed + 6;
+        kind = MINIAS_MACRO_BEGIN;
+    } else if (strcmp(trimmed, ".endm") == 0 ||
+               strcmp(trimmed, ".endmacro") == 0) {
+        kind = MINIAS_MACRO_END;
+    }
+    if (rest != NULL) {
+        while (*rest == ' ' || *rest == '\t') {
+            ++rest;
+        }
+        if (argument_size != 0U) {
+            int written = snprintf(argument, argument_size, "%s", rest);
+            if (written < 0 || (size_t)written >= argument_size) {
+                free(copy);
+                return -1;
+            }
+        }
+    }
+    free(copy);
+    return kind;
+}
+
+static size_t split_macro_tokens(char *text, char **tokens, size_t capacity) {
+    size_t count = 0U;
+    char *p = text;
+
+    while (*p != '\0') {
+        char *start;
+        int depth = 0;
+        char quote = '\0';
+
+        while (*p == ' ' || *p == '\t' || *p == ',') {
+            ++p;
+        }
+        if (*p == '\0') {
+            break;
+        }
+        if (count == capacity) {
+            return SIZE_MAX;
+        }
+        start = p;
+        while (*p != '\0') {
+            if (quote != '\0') {
+                if (*p == '\\' && p[1] != '\0') {
+                    p += 2;
+                    continue;
+                }
+                if (*p == quote) {
+                    quote = '\0';
+                }
+                ++p;
+                continue;
+            }
+            if (*p == '\'' || *p == '"') {
+                quote = *p++;
+                continue;
+            }
+            if (*p == '(' || *p == '[' || *p == '{') {
+                ++depth;
+                ++p;
+                continue;
+            }
+            if (*p == ')' || *p == ']' || *p == '}') {
+                if (depth > 0) {
+                    --depth;
+                }
+                ++p;
+                continue;
+            }
+            if (depth == 0 &&
+                (*p == ',' || *p == ' ' || *p == '\t')) {
+                break;
+            }
+            ++p;
+        }
+        if (*p != '\0') {
+            *p++ = '\0';
+        }
+        tokens[count++] = start;
+    }
+    return count;
+}
+
+static MiniAsMacro *find_macro(MiniAs *as, const char *name) {
+    size_t i;
+
+    for (i = 0U; i < as->macro_count; ++i) {
+        if (strcmp(as->macros[i].name, name) == 0) {
+            return &as->macros[i];
+        }
+    }
+    return NULL;
+}
+
+static bool define_macro(MiniAs *as,
+                         const char *argument,
+                         MiniAsSourceLine *lines,
+                         size_t count,
+                         size_t line) {
+    char *copy = minias_strdup(argument);
+    char *tokens[64];
+    size_t token_count;
+    MiniAsMacro *macro;
+    size_t i;
+
+    if (copy == NULL) {
+        minias_set_error(as, "out-of-memory:macro-definition");
+        return false;
+    }
+    token_count = split_macro_tokens(copy, tokens, 64U);
+    if (token_count == SIZE_MAX || token_count == 0U ||
+        !valid_irp_parameter_name(tokens[0])) {
+        minias_set_error(as, "bad-directive:.macro:line=%zu", line);
+        free(copy);
+        return false;
+    }
+    if (find_macro(as, tokens[0]) != NULL) {
+        minias_set_error(as, "duplicate-macro:%s:line=%zu", tokens[0], line);
+        free(copy);
+        return false;
+    }
+    if (!grow_array((void **)&as->macros,
+                    &as->macro_capacity,
+                    sizeof(*as->macros),
+                    as->macro_count + 1U)) {
+        minias_set_error(as, "out-of-memory:macro");
+        free(copy);
+        return false;
+    }
+    macro = &as->macros[as->macro_count];
+    memset(macro, 0, sizeof(*macro));
+    macro->name = minias_strdup(tokens[0]);
+    if (macro->name == NULL) {
+        minias_set_error(as, "out-of-memory:macro-name");
+        free(copy);
+        return false;
+    }
+    if (token_count > 1U) {
+        macro->params = calloc(token_count - 1U, sizeof(*macro->params));
+        if (macro->params == NULL) {
+            minias_set_error(as, "out-of-memory:macro-params");
+            free(copy);
+            return false;
+        }
+    }
+    macro->param_count = token_count - 1U;
+    for (i = 1U; i < token_count; ++i) {
+        char *spec = tokens[i];
+        char *qualifier = strchr(spec, ':');
+        char *equal = strchr(spec, '=');
+        char *end = NULL;
+
+        if (qualifier != NULL && (equal == NULL || qualifier < equal)) {
+            *qualifier++ = '\0';
+            end = qualifier - 1;
+        } else if (equal != NULL) {
+            *equal++ = '\0';
+            end = equal - 1;
+        }
+        if (!valid_irp_parameter_name(spec)) {
+            minias_set_error(as, "bad-macro-parameter:%s:line=%zu",
+                             spec, line);
+            free(copy);
+            return false;
+        }
+        macro->params[i - 1U].name = minias_strdup(spec);
+        if (macro->params[i - 1U].name == NULL) {
+            minias_set_error(as, "out-of-memory:macro-param-name");
+            free(copy);
+            return false;
+        }
+        if (qualifier != NULL) {
+            if (strcmp(qualifier, "req") != 0) {
+                minias_set_error(as, "unsupported-macro-qualifier:%s:line=%zu",
+                                 qualifier, line);
+                free(copy);
+                return false;
+            }
+            macro->params[i - 1U].required = true;
+        }
+        if (equal != NULL) {
+            macro->params[i - 1U].default_value = minias_strdup(equal);
+            if (macro->params[i - 1U].default_value == NULL) {
+                minias_set_error(as, "out-of-memory:macro-param-default");
+                free(copy);
+                return false;
+            }
+        }
+        (void)end;
+    }
+    if (count != 0U) {
+        macro->body = calloc(count, sizeof(*macro->body));
+        macro->body_lines = calloc(count, sizeof(*macro->body_lines));
+        if (macro->body == NULL || macro->body_lines == NULL) {
+            minias_set_error(as, "out-of-memory:macro-body");
+            free(copy);
+            return false;
+        }
+    }
+    macro->body_count = count;
+    for (i = 0U; i < count; ++i) {
+        macro->body[i] = minias_strdup(lines[i].text);
+        macro->body_lines[i] = lines[i].line;
+        if (macro->body[i] == NULL) {
+            minias_set_error(as, "out-of-memory:macro-body-line");
+            free(copy);
+            return false;
+        }
+    }
+    ++as->macro_count;
+    free(copy);
+    return true;
+}
+
+static char *substitute_macro_counter(MiniAs *as,
+                                      const char *source,
+                                      size_t counter) {
+    char counter_text[32];
+    size_t counter_len;
+    size_t occurrences = 0U;
+    size_t i;
+    size_t source_len = strlen(source);
+    char *output;
+    size_t out = 0U;
+
+    (void)snprintf(counter_text, sizeof(counter_text), "%zu", counter);
+    counter_len = strlen(counter_text);
+    for (i = 0U; i + 1U < source_len; ++i) {
+        if (source[i] == '\\' && source[i + 1U] == '@') {
+            ++occurrences;
+            ++i;
+        }
+    }
+    if (occurrences == 0U) {
+        return minias_strdup(source);
+    }
+    if (counter_len > 2U &&
+        occurrences > (SIZE_MAX - source_len) / (counter_len - 2U)) {
+        minias_set_error(as, "source-size-overflow:macro-counter");
+        return NULL;
+    }
+    output = malloc(source_len + occurrences * (counter_len - 2U) + 1U);
+    if (output == NULL) {
+        minias_set_error(as, "out-of-memory:macro-counter");
+        return NULL;
+    }
+    for (i = 0U; i < source_len; ++i) {
+        if (source[i] == '\\' && i + 1U < source_len &&
+            source[i + 1U] == '@') {
+            memcpy(output + out, counter_text, counter_len);
+            out += counter_len;
+            ++i;
+        } else {
+            output[out++] = source[i];
+        }
+    }
+    output[out] = '\0';
+    return output;
+}
+
+static bool process_source_range(MiniAs *as,
+                                 MiniAsSourceLine *lines,
+                                 size_t begin,
+                                 size_t end);
+
+static bool expand_macro_invocation(MiniAs *as,
+                                    MiniAsMacro *macro,
+                                    const char *args,
+                                    size_t line) {
+    char *copy = minias_strdup(args);
+    char *tokens[64];
+    const char *values[64];
+    size_t supplied;
+    MiniAsSourceLine *expanded = NULL;
+    size_t i;
+    size_t counter;
+    bool ok = false;
+
+    if (copy == NULL) {
+        minias_set_error(as, "out-of-memory:macro-arguments");
+        return false;
+    }
+    supplied = split_macro_tokens(copy, tokens, 64U);
+    if (supplied == SIZE_MAX || supplied > macro->param_count) {
+        minias_set_error(as, "bad-macro-arguments:%s:line=%zu",
+                         macro->name, line);
+        free(copy);
+        return false;
+    }
+    for (i = 0U; i < macro->param_count; ++i) {
+        if (i < supplied) {
+            values[i] = tokens[i];
+        } else if (macro->params[i].default_value != NULL) {
+            values[i] = macro->params[i].default_value;
+        } else if (macro->params[i].required) {
+            minias_set_error(as, "missing-macro-argument:%s:%s:line=%zu",
+                             macro->name, macro->params[i].name, line);
+            free(copy);
+            return false;
+        } else {
+            values[i] = "";
+        }
+    }
+    if (as->macro_expansion_depth >= 64U) {
+        minias_set_error(as, "macro-expansion-depth:%s:line=%zu",
+                         macro->name, line);
+        free(copy);
+        return false;
+    }
+    if (macro->body_count != 0U) {
+        expanded = calloc(macro->body_count, sizeof(*expanded));
+        if (expanded == NULL) {
+            minias_set_error(as, "out-of-memory:macro-expanded-lines");
+            free(copy);
+            return false;
+        }
+    }
+    counter = as->macro_expansion_counter++;
+    for (i = 0U; i < macro->body_count; ++i) {
+        char *current = substitute_macro_counter(as, macro->body[i], counter);
+        size_t p;
+
+        if (current == NULL) {
+            goto done;
+        }
+        for (p = 0U; p < macro->param_count; ++p) {
+            char *next = substitute_irp_parameter(as,
+                                                  current,
+                                                  macro->params[p].name,
+                                                  values[p]);
+            free(current);
+            if (next == NULL) {
+                goto done;
+            }
+            current = next;
+        }
+        expanded[i].text = current;
+        expanded[i].line = macro->body_lines[i];
+    }
+    ++as->macro_expansion_depth;
+    ok = process_source_range(as, expanded, 0U, macro->body_count);
+    --as->macro_expansion_depth;
+
+done:
+    destroy_source_lines(expanded, macro->body_count);
+    free(copy);
+    return ok;
+}
+
+static bool read_macro_block(MiniAs *as,
+                             FILE *file,
+                             size_t *line_no,
+                             MiniAsSourceLine **lines_out,
+                             size_t *count_out) {
+    char linebuf[65536];
+    MiniAsSourceLine *lines = NULL;
+    size_t count = 0U;
+    size_t capacity = 0U;
+    size_t depth = 1U;
+
+    while (fgets(linebuf, sizeof(linebuf), file) != NULL) {
+        char argument[1024];
+        int kind;
+        size_t len;
+
+        ++*line_no;
+        len = strlen(linebuf);
+        if (len == sizeof(linebuf) - 1U && linebuf[len - 1U] != '\n') {
+            minias_set_error(as, "line-too-long:line=%zu", *line_no);
+            destroy_source_lines(lines, count);
+            return false;
+        }
+        kind = classify_macro_line(linebuf, argument, sizeof(argument));
+        if (kind < 0) {
+            minias_set_error(as, "out-of-memory:macro-classify");
+            destroy_source_lines(lines, count);
+            return false;
+        }
+        if (kind == MINIAS_MACRO_BEGIN) {
+            ++depth;
+        } else if (kind == MINIAS_MACRO_END) {
+            --depth;
+            if (depth == 0U) {
+                *lines_out = lines;
+                *count_out = count;
+                return true;
+            }
+        }
+        if (!grow_array((void **)&lines,
+                        &capacity,
+                        sizeof(*lines),
+                        count + 1U)) {
+            minias_set_error(as, "out-of-memory:macro-source-lines");
+            destroy_source_lines(lines, count);
+            return false;
+        }
+        lines[count].text = minias_strdup(linebuf);
+        lines[count].line = *line_no;
+        if (lines[count].text == NULL) {
+            minias_set_error(as, "out-of-memory:macro-source-line");
+            destroy_source_lines(lines, count);
+            return false;
+        }
+        ++count;
+    }
+    minias_set_error(as, "unterminated-directive:.macro");
+    destroy_source_lines(lines, count);
+    return false;
+}
 
 enum {
     MINIAS_REPEAT_NONE = 0,
@@ -2968,8 +3430,65 @@ static bool process_source_range(MiniAs *as,
     size_t i = begin;
 
     while (i < end) {
+        char macro_argument[1024];
+        int macro_kind =
+            classify_macro_line(lines[i].text,
+                                macro_argument,
+                                sizeof(macro_argument));
         char argument[256];
-        int kind = classify_repeat_line(lines[i].text,
+        int kind;
+
+        if (macro_kind < 0) {
+            minias_set_error(as, "out-of-memory:macro-classify");
+            return false;
+        }
+        if (macro_kind == MINIAS_MACRO_END) {
+            minias_set_error(as,
+                             "unmatched-directive:.endm:line=%zu",
+                             lines[i].line);
+            return false;
+        }
+        if (macro_kind == MINIAS_MACRO_BEGIN) {
+            size_t j = i + 1U;
+            size_t depth = 1U;
+
+            while (j < end && depth != 0U) {
+                char nested_argument[1024];
+                int nested_kind =
+                    classify_macro_line(lines[j].text,
+                                        nested_argument,
+                                        sizeof(nested_argument));
+                if (nested_kind < 0) {
+                    minias_set_error(as, "out-of-memory:macro-classify");
+                    return false;
+                }
+                if (nested_kind == MINIAS_MACRO_BEGIN) {
+                    ++depth;
+                } else if (nested_kind == MINIAS_MACRO_END) {
+                    --depth;
+                }
+                if (depth != 0U) {
+                    ++j;
+                }
+            }
+            if (depth != 0U || j >= end) {
+                minias_set_error(as,
+                                 "unterminated-directive:.macro:line=%zu",
+                                 lines[i].line);
+                return false;
+            }
+            if (!define_macro(as,
+                              macro_argument,
+                              lines + i + 1U,
+                              j - i - 1U,
+                              lines[i].line)) {
+                return false;
+            }
+            i = j + 1U;
+            continue;
+        }
+
+        kind = classify_repeat_line(lines[i].text,
                                         argument,
                                         sizeof(argument));
         if (kind < 0) {
@@ -3070,6 +3589,51 @@ static bool read_repeat_block(MiniAs *as,
             destroy_source_lines(lines, count);
             return false;
         }
+        {
+            char macro_argument[1024];
+            int macro_kind =
+                classify_macro_line(linebuf,
+                                    macro_argument,
+                                    sizeof(macro_argument));
+            if (macro_kind < 0) {
+                minias_set_error(as, "out-of-memory:macro-classify");
+                fclose(file);
+                return false;
+            }
+            if (macro_kind == MINIAS_MACRO_END) {
+                minias_set_error(as,
+                                 "unmatched-directive:.endm:line=%zu",
+                                 line_no);
+                fclose(file);
+                return false;
+            }
+            if (macro_kind == MINIAS_MACRO_BEGIN) {
+                MiniAsSourceLine *macro_lines = NULL;
+                size_t macro_count = 0U;
+                size_t opener_line = line_no;
+
+                if (!read_macro_block(as,
+                                      file,
+                                      &line_no,
+                                      &macro_lines,
+                                      &macro_count)) {
+                    fclose(file);
+                    return false;
+                }
+                if (!define_macro(as,
+                                  macro_argument,
+                                  macro_lines,
+                                  macro_count,
+                                  opener_line)) {
+                    destroy_source_lines(macro_lines, macro_count);
+                    fclose(file);
+                    return false;
+                }
+                destroy_source_lines(macro_lines, macro_count);
+                continue;
+            }
+        }
+
         kind = classify_repeat_line(linebuf, argument, sizeof(argument));
         if (kind < 0) {
             minias_set_error(as, "out-of-memory:repeat-classify");
