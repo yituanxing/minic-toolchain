@@ -645,6 +645,20 @@ immediate_expr_hex="$(
 )"
 test "$immediate_expr_hex" = "93020001130300ff1313030167800000"
 
+printf '\001\002\377A' >"$work/incbin.bin"
+cat >"$work/incbin.s" <<EOF
+.section .rodata,"a"
+.byte 0xaa
+.incbin "$work/incbin.bin"
+.byte 0xbb
+EOF
+"$MINIAS" -o "$work/incbin.o" "$work/incbin.s"
+incbin_hex="$(
+    readelf -x .rodata "$work/incbin.o" |
+    awk '/0x[0-9a-f]+/ {for (i=2; i<=NF; ++i) if ($i ~ /^[0-9a-f]+$/ && length($i) % 2 == 0) printf "%s", $i}'
+)"
+test "$incbin_hex" = "aa0102ff41bb"
+
 cat >"$work/raw-insn.s" <<'EOF'
 .text
 .insn r 115, 0, 12, x0, x0, x0
@@ -679,4 +693,4 @@ vector_hex="$(
 )"
 test "$vector_hex" = "d772300c57b00f5e57b40f5e57b80f5e57bc0f5e27000e0227040e0207d1050287040400"
 
-echo "MINIAS_A0=PASS objects=10 format=ELF64-RISCV-ET_REL relocations=16 strings=2 pseudos=14 previous=3 subsection=2 numeric_labels=18 ecall=1 isa_next=13 csr_amo=7 sfence_vma=3 fence_i=1 vsetvl=1 vsetvli=1 vmv_v_i=4 rept=2 nested_rept=1 irp=4 section_stack=1 org=3 local_difference=1 lr_sc=2 inline_labels=2 branch_pseudos=8 extern=1 symbol_minus_dot=4 symbol_difference=1 absolute32=1 jal=2 jal_subsection=1 high_numeric_labels=2 u64_data=3 raw_insn=4 set_alias=3 move=1 numeric_zero=1 immediate_product=2 shift_immediate=1 conditional=1"
+echo "MINIAS_A0=PASS objects=11 format=ELF64-RISCV-ET_REL relocations=16 strings=2 pseudos=14 previous=3 subsection=2 numeric_labels=18 ecall=1 isa_next=13 csr_amo=7 sfence_vma=3 fence_i=1 vsetvl=1 vsetvli=1 vmv_v_i=4 rept=2 nested_rept=1 irp=4 section_stack=1 org=3 local_difference=1 lr_sc=2 inline_labels=2 branch_pseudos=8 extern=1 symbol_minus_dot=4 symbol_difference=1 absolute32=1 jal=2 jal_subsection=1 high_numeric_labels=2 u64_data=3 raw_insn=4 set_alias=3 move=1 numeric_zero=1 immediate_product=2 shift_immediate=1 incbin=1 conditional=1"

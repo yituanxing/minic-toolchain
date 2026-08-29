@@ -1720,6 +1720,60 @@ static bool parse_symbol_difference(const char *text,
     return ok;
 }
 
+static char *decode_incbin_path(MiniAs *as,
+                                const char *args,
+                                size_t line) {
+    unsigned char *decoded = NULL;
+    size_t decoded_size = 0U;
+    char *path;
+
+    if (!minias_decode_string_literals(args, false, &decoded, &decoded_size) ||
+        decoded_size == 0U || memchr(decoded, '\0', decoded_size) != NULL) {
+        free(decoded);
+        minias_set_error(as, "bad-directive:.incbin:line=%zu", line);
+        return NULL;
+    }
+    path = malloc(decoded_size + 1U);
+    if (path == NULL) {
+        free(decoded);
+        minias_set_error(as, "out-of-memory:incbin-path");
+        return NULL;
+    }
+    memcpy(path, decoded, decoded_size);
+    path[decoded_size] = '\0';
+    free(decoded);
+    return path;
+}
+
+static bool measure_incbin(MiniAs *as,
+                           const char *args,
+                           size_t line,
+                           uint64_t *bytes) {
+    char *path = decode_incbin_path(as, args, line);
+    FILE *file;
+    long end;
+
+    if (path == NULL) {
+        return false;
+    }
+    file = fopen(path, "rb");
+    if (file == NULL) {
+        minias_set_error(as, "incbin-open:%s:line=%zu", path, line);
+        free(path);
+        return false;
+    }
+    if (fseek(file, 0L, SEEK_END) != 0 || (end = ftell(file)) < 0L) {
+        minias_set_error(as, "incbin-size:%s:line=%zu", path, line);
+        fclose(file);
+        free(path);
+        return false;
+    }
+    fclose(file);
+    free(path);
+    *bytes = (uint64_t)end;
+    return true;
+}
+
 static bool add_data_stmt(MiniAs *as, const char *op, char *args, size_t line) {
     uint64_t count = 0U;
     uint64_t bytes;
@@ -1727,7 +1781,11 @@ static bool add_data_stmt(MiniAs *as, const char *op, char *args, size_t line) {
     char *copy = NULL;
     char *cursor;
 
-    if (strcmp(op, ".asciz") == 0 || strcmp(op, ".string") == 0 ||
+    if (strcmp(op, ".incbin") == 0) {
+        if (!measure_incbin(as, args, line, &bytes)) {
+            return false;
+        }
+    } else if (strcmp(op, ".asciz") == 0 || strcmp(op, ".string") == 0 ||
         strcmp(op, ".ascii") == 0) {
         unsigned char *decoded = NULL;
         size_t decoded_size = 0U;
@@ -1933,6 +1991,58 @@ static bool emit_data_stmt(MiniAs *as, const MiniAsStmt *stmt) {
     unsigned int width = data_width(stmt->op);
     char *copy;
     char *cursor;
+
+    if (strcmp(stmt->op, ".incbin") == 0) {
+        char *path = decode_incbin_path(as, stmt->args, stmt->line);
+        FILE *file;
+        unsigned char buffer[8192];
+        uint64_t total = 0U;
+
+        if (path == NULL) {
+            return false;
+        }
+        file = fopen(path, "rb");
+        if (file == NULL) {
+            minias_set_error(as, "incbin-open:%s:line=%zu", path, stmt->line);
+            free(path);
+            return false;
+        }
+        for (;;) {
+            size_t count = fread(buffer, 1U, sizeof(buffer), file);
+            if (count != 0U) {
+                if (total > UINT64_MAX - count ||
+                    !minias_section_append(as, stmt->section, buffer, count)) {
+                    fclose(file);
+                    free(path);
+                    return false;
+                }
+                total += count;
+            }
+            if (count < sizeof(buffer)) {
+                if (ferror(file)) {
+                    minias_set_error(as,
+                                     "incbin-read:%s:line=%zu",
+                                     path,
+                                     stmt->line);
+                    fclose(file);
+                    free(path);
+                    return false;
+                }
+                break;
+            }
+        }
+        fclose(file);
+        if (total != stmt->size) {
+            minias_set_error(as,
+                             "incbin-size-changed:%s:line=%zu",
+                             path,
+                             stmt->line);
+            free(path);
+            return false;
+        }
+        free(path);
+        return true;
+    }
 
     if (strcmp(stmt->op, ".asciz") == 0 || strcmp(stmt->op, ".string") == 0 ||
         strcmp(stmt->op, ".ascii") == 0) {
@@ -2505,7 +2615,8 @@ static bool process_statement(MiniAs *as, char *text, size_t line) {
         }
         if (data_width(op) != 0U || strcmp(op, ".zero") == 0 ||
             strcmp(op, ".space") == 0 || strcmp(op, ".asciz") == 0 ||
-            strcmp(op, ".string") == 0 || strcmp(op, ".ascii") == 0) {
+            strcmp(op, ".string") == 0 || strcmp(op, ".ascii") == 0 ||
+            strcmp(op, ".incbin") == 0) {
             char *rewritten_args = NULL;
             bool ok;
 
