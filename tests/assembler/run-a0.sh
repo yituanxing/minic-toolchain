@@ -396,8 +396,8 @@ high_numeric_labels:
 EOF
 "$MINIAS" -o "$work/high-numeric-labels.o" "$work/high-numeric-labels.s"
 readelf -Ws "$work/high-numeric-labels.o" >"$work/high-numeric-labels.txt"
-! grep -q '.Lminias_num_886_1' "$work/high-numeric-labels.txt"
-! grep -q '.Lminias_num_887_1' "$work/high-numeric-labels.txt"
+grep -q '.Lminias_num_886_1' "$work/high-numeric-labels.txt"
+grep -q '.Lminias_num_887_1' "$work/high-numeric-labels.txt"
 
 cat >"$work/conditional-alt.s" <<'EOF'
 .text
