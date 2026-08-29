@@ -954,6 +954,33 @@ static bool parse_raw_insn_directive(const char *args, uint32_t *word) {
     return true;
 }
 
+static bool parse_call_target(const char *text, MiniAsSymbolExpr *expr) {
+    char normalized[256];
+    char *plt;
+    char *suffix;
+    size_t length;
+
+    if (text == NULL || expr == NULL) {
+        return false;
+    }
+    length = strlen(text);
+    if (length >= sizeof(normalized)) {
+        return false;
+    }
+    memcpy(normalized, text, length + 1U);
+
+    plt = strstr(normalized, "@plt");
+    if (plt != NULL) {
+        suffix = plt + 4;
+        if (*suffix != '\0' && *suffix != ' ' && *suffix != '\t' &&
+            *suffix != '+' && *suffix != '-') {
+            return false;
+        }
+        memmove(plt, suffix, strlen(suffix) + 1U);
+    }
+    return minias_parse_symbol_addend(normalized, expr);
+}
+
 bool minias_riscv_measure(const char *op,
                           const char *args,
                           uint32_t *size,
@@ -1043,7 +1070,7 @@ bool minias_riscv_measure(const char *op,
     }
     if (strcmp(op, "call") == 0) {
         MiniAsSymbolExpr expr;
-        if (count != 1U || !minias_parse_symbol_addend(operands[0], &expr)) {
+        if (count != 1U || !parse_call_target(operands[0], &expr)) {
             (void)snprintf(reason, reason_size, "unsupported-expression:%s", args);
             return false;
         }
@@ -1052,7 +1079,7 @@ bool minias_riscv_measure(const char *op,
     }
     if (strcmp(op, "tail") == 0) {
         MiniAsSymbolExpr expr;
-        if (count != 1U || !minias_parse_symbol_addend(operands[0], &expr)) {
+        if (count != 1U || !parse_call_target(operands[0], &expr)) {
             (void)snprintf(reason, reason_size, "unsupported-expression:%s", args);
             return false;
         }
@@ -1168,6 +1195,7 @@ bool minias_riscv_measure(const char *op,
         SIMPLE("bgtu") || SIMPLE("bleu") || SIMPLE("addi") || SIMPLE("addiw") ||
         SIMPLE("andi") || SIMPLE("ori") || SIMPLE("xori") || SIMPLE("slti") ||
         SIMPLE("sltiu") || SIMPLE("slli") || SIMPLE("srli") || SIMPLE("srai") ||
+        SIMPLE("slliw") || SIMPLE("srliw") || SIMPLE("sraiw") ||
         SIMPLE("sra") || SIMPLE("fence") || SIMPLE("fence.i") || SIMPLE("vsetvl") || SIMPLE("sret") ||
         SIMPLE("csrr") || SIMPLE("csrrw") || SIMPLE("csrrc") || SIMPLE("csrw") ||
         SIMPLE("csrs") || SIMPLE("csrc") || SIMPLE("ecall") || SIMPLE("ebreak") ||
@@ -1176,7 +1204,10 @@ bool minias_riscv_measure(const char *op,
         SIMPLE("srl") || SIMPLE("and") || SIMPLE("or") ||
         SIMPLE("xor") || SIMPLE("slt") || SIMPLE("sltu") || SIMPLE("mul") ||
         SIMPLE("mulh") || SIMPLE("mulhu") || SIMPLE("div") || SIMPLE("divu") ||
-        SIMPLE("rem") || SIMPLE("remu") || SIMPLE("lb") || SIMPLE("lbu") ||
+        SIMPLE("rem") || SIMPLE("remu") || SIMPLE("addw") || SIMPLE("subw") ||
+        SIMPLE("sllw") || SIMPLE("srlw") || SIMPLE("sraw") || SIMPLE("mulw") ||
+        SIMPLE("divw") || SIMPLE("divuw") || SIMPLE("remw") || SIMPLE("remuw") ||
+        SIMPLE("lb") || SIMPLE("lbu") ||
         SIMPLE("lh") || SIMPLE("lhu") || SIMPLE("lw") || SIMPLE("lwu") ||
         SIMPLE("ld") || SIMPLE("sb") || SIMPLE("sh") || SIMPLE("sw") ||
         SIMPLE("sd") || SIMPLE("lui") || SIMPLE("auipc")) {
@@ -1533,7 +1564,7 @@ bool minias_riscv_encode(MiniAs *as, const MiniAsStmt *stmt) {
     if (strcmp(stmt->op, "call") == 0) {
         MiniAsSymbolExpr expr;
 
-        if (count != 1U || !minias_parse_symbol_addend(operands[0], &expr)) {
+        if (count != 1U || !parse_call_target(operands[0], &expr)) {
             minias_set_error(as,
                              "unsupported-expression:%s:line=%zu",
                              stmt->args,
@@ -1554,7 +1585,7 @@ bool minias_riscv_encode(MiniAs *as, const MiniAsStmt *stmt) {
     if (strcmp(stmt->op, "tail") == 0) {
         MiniAsSymbolExpr expr;
 
-        if (count != 1U || !minias_parse_symbol_addend(operands[0], &expr)) {
+        if (count != 1U || !parse_call_target(operands[0], &expr)) {
             minias_set_error(as,
                              "unsupported-expression:%s:line=%zu",
                              stmt->args,
@@ -1870,6 +1901,27 @@ bool minias_riscv_encode(MiniAs *as, const MiniAsStmt *stmt) {
                                 0,
                                 (int64_t)((pred << 4U) | succ)));
     }
+    if (strcmp(stmt->op, "slliw") == 0 || strcmp(stmt->op, "srliw") == 0 ||
+        strcmp(stmt->op, "sraiw") == 0) {
+        if (count != 3U || !require_reg(as, stmt, operands[0], &rd) ||
+            !require_reg(as, stmt, operands[1], &rs1) ||
+            !require_imm(as, stmt, operands[2], &immediate)) {
+            return false;
+        }
+        if (immediate < 0 || immediate > 31) {
+            minias_set_error(as, "shift-range:%s:line=%zu", stmt->op, stmt->line);
+            return false;
+        }
+        value = enc_i(0x1bU,
+                      rd,
+                      strcmp(stmt->op, "slliw") == 0 ? 1U : 5U,
+                      rs1,
+                      immediate);
+        if (strcmp(stmt->op, "sraiw") == 0) {
+            value |= 0x40000000U;
+        }
+        return append_u32(as, stmt->section, value);
+    }
     if (strcmp(stmt->op, "slli") == 0 || strcmp(stmt->op, "srli") == 0 ||
         strcmp(stmt->op, "srai") == 0) {
         if (count != 3U || !require_reg(as, stmt, operands[0], &rd) ||
@@ -1890,6 +1942,52 @@ bool minias_riscv_encode(MiniAs *as, const MiniAsStmt *stmt) {
             value |= 0x40000000U;
         }
         return append_u32(as, stmt->section, value);
+    }
+    if (strcmp(stmt->op, "addw") == 0 || strcmp(stmt->op, "subw") == 0 ||
+        strcmp(stmt->op, "sllw") == 0 || strcmp(stmt->op, "srlw") == 0 ||
+        strcmp(stmt->op, "sraw") == 0 || strcmp(stmt->op, "mulw") == 0 ||
+        strcmp(stmt->op, "divw") == 0 || strcmp(stmt->op, "divuw") == 0 ||
+        strcmp(stmt->op, "remw") == 0 || strcmp(stmt->op, "remuw") == 0) {
+        uint32_t word_funct3 = 0U;
+        uint32_t word_funct7 = 0U;
+
+        if (count != 3U || !require_reg(as, stmt, operands[0], &rd) ||
+            !require_reg(as, stmt, operands[1], &rs1) ||
+            !require_reg(as, stmt, operands[2], &rs2)) {
+            return false;
+        }
+        if (strcmp(stmt->op, "subw") == 0) {
+            word_funct7 = 0x20U;
+        } else if (strcmp(stmt->op, "sllw") == 0) {
+            word_funct3 = 1U;
+        } else if (strcmp(stmt->op, "srlw") == 0) {
+            word_funct3 = 5U;
+        } else if (strcmp(stmt->op, "sraw") == 0) {
+            word_funct3 = 5U;
+            word_funct7 = 0x20U;
+        } else if (strcmp(stmt->op, "mulw") == 0) {
+            word_funct7 = 1U;
+        } else if (strcmp(stmt->op, "divw") == 0) {
+            word_funct3 = 4U;
+            word_funct7 = 1U;
+        } else if (strcmp(stmt->op, "divuw") == 0) {
+            word_funct3 = 5U;
+            word_funct7 = 1U;
+        } else if (strcmp(stmt->op, "remw") == 0) {
+            word_funct3 = 6U;
+            word_funct7 = 1U;
+        } else if (strcmp(stmt->op, "remuw") == 0) {
+            word_funct3 = 7U;
+            word_funct7 = 1U;
+        }
+        return append_u32(as,
+                          stmt->section,
+                          enc_r(0x3bU,
+                                rd,
+                                word_funct3,
+                                rs1,
+                                rs2,
+                                word_funct7));
     }
     if (strcmp(stmt->op, "add") == 0 || strcmp(stmt->op, "sub") == 0 ||
         strcmp(stmt->op, "sll") == 0 || strcmp(stmt->op, "srl") == 0 ||
