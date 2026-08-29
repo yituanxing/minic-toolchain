@@ -1,10 +1,7 @@
 arch/riscv/kernel/irq.i.s
 arch/riscv/kernel/traps.i.s
 arch/riscv/kvm/main.i.s
-arch/riscv/kvm/tlb.i.s
 arch/riscv/kvm/vcpu_exit.i.s
-arch/riscv/mm/dma-noncoherent.i.s
-arch/riscv/mm/pmem.i.s
 fs/nfs/blocklayout/blocklayout.i.s
 kernel/configs.i.s
 mm/hugetlb.i.s
