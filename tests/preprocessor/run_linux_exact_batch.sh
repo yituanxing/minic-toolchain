@@ -9,6 +9,7 @@ out=${MINIPP_LINUX_OUT:?MINIPP_LINUX_OUT is not set}
 trace=${MINIPP_LINUX_TRACE:?MINIPP_LINUX_TRACE is not set}
 work=${MINIPP_LINUX_WORK:?MINIPP_LINUX_WORK is not set}
 cc_wrapper=${MINIPP_LINUX_CC_WRAPPER:?MINIPP_LINUX_CC_WRAPPER is not set}
+jobs=${MINIPP_LINUX_JOBS:-4}
 
 if [[ ! -s "$manifest" ]]; then
   printf 'MINIPP_LINUX_BATCH=ERROR reason=empty-manifest manifest=%s\n' "$manifest" >&2
@@ -31,7 +32,7 @@ done
 export MINIPP_LINUX_SELECT_FILE="$manifest"
 
 make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
-  CC="$cc_wrapper" -j1 V=1 "${targets[@]}" >"$work/kbuild-batch.log" 2>&1
+  CC="$cc_wrapper" -j"$jobs" V=1 "${targets[@]}" >"$work/kbuild-batch.log" 2>&1
 
 selected=$(grep -c '^RESULT ' "$trace" || true)
 exact=$(grep -c ' status=EXACT' "$trace" || true)
