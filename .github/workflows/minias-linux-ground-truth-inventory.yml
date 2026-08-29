@@ -8,6 +8,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 env:
   LINUX_VERSION: "6.6.143"
@@ -105,6 +106,10 @@ jobs:
               "assembler_inputs_without_rust":assembler_inputs,
           }
           Path("build/minias-ground-truth-inventory.json").write_text(json.dumps(result,indent=2,sort_keys=True)+"\n")
+          Path("build/minias-ground-truth-c.tsv").write_text("\n".join(
+              f"{obj}\t{row['source']}\t{row['cmdfile']}"
+              for obj,row in sorted(rows.items()) if row["kind"]=="c"
+          )+"\n")
           Path("build/minias-ground-truth-native-asm.tsv").write_text("\n".join(
               f"{obj}\t{row['kind']}\t{row['source']}\t{row['cmdfile']}"
               for obj,row in sorted(rows.items()) if row["kind"].startswith("asm_")
@@ -122,11 +127,92 @@ jobs:
           PY
           cat build/minias-ground-truth-inventory.json
 
+      - name: Download frozen compiler corpus manifests
+        uses: actions/download-artifact@v4
+        with:
+          pattern: frozen-linux-corpus-*
+          path: build/frozen-corpus-artifacts
+          repository: ${{ github.repository }}
+          run-id: "33186855250"
+          github-token: ${{ github.token }}
+
+      - name: Compute frozen3352 vs ground-truth C delta
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import csv, io, json, tarfile
+
+          roots=Path("build/frozen-corpus-artifacts")
+          frozen={}
+          for archive in sorted(roots.rglob("corpus.tar.gz")):
+              with tarfile.open(archive, "r:gz") as tf:
+                  selected=[m for m in tf.getmembers() if m.name.endswith("/selected-tus.txt")]
+                  if len(selected)!=1:
+                      raise SystemExit(f"expected one selected-tus.txt in {archive}, got {len(selected)}")
+                  text=tf.extractfile(selected[0]).read().decode()
+                  for line in text.splitlines():
+                      if not line.strip():
+                          continue
+                      parts=line.split("\t")
+                      if len(parts)<4:
+                          raise SystemExit(f"bad frozen manifest line: {line!r}")
+                      index,obj,ipath,source=parts[:4]
+                      if obj in frozen:
+                          raise SystemExit(f"duplicate frozen object path: {obj}")
+                      frozen[obj]={"index":int(index),"i":ipath,"source":source}
+
+          gt={}
+          for line in Path("build/minias-ground-truth-c.tsv").read_text().splitlines():
+              if not line.strip():
+                  continue
+              obj,source,cmdfile=line.split("\t",2)
+              gt[obj]={"source":source,"cmdfile":cmdfile}
+
+          frozen_set=set(frozen)
+          gt_set=set(gt)
+          overlap=sorted(frozen_set & gt_set)
+          gt_only=sorted(gt_set - frozen_set)
+          frozen_only=sorted(frozen_set - gt_set)
+
+          def write_rows(path, names, left, right=None):
+              lines=[]
+              for obj in names:
+                  if right is None:
+                      row=left[obj]
+                      lines.append("\t".join([obj]+[str(v) for v in row.values()]))
+                  else:
+                      l=left[obj]; r=right[obj]
+                      lines.append("\t".join([obj,l.get("source",""),r.get("source",""),r.get("cmdfile","")]))
+              Path(path).write_text("\n".join(lines)+("\n" if lines else ""))
+
+          write_rows("build/minias-ground-truth-c-only.tsv",gt_only,gt)
+          write_rows("build/minias-frozen3352-only.tsv",frozen_only,frozen)
+          write_rows("build/minias-frozen3352-overlap.tsv",overlap,frozen,gt)
+
+          summary={
+              "frozen_objects":len(frozen_set),
+              "ground_truth_c_objects":len(gt_set),
+              "overlap_objects":len(overlap),
+              "ground_truth_only_objects":len(gt_only),
+              "frozen_only_objects":len(frozen_only),
+          }
+          Path("build/minias-ground-truth-c-delta.json").write_text(json.dumps(summary,indent=2,sort_keys=True)+"\n")
+          print("MINIAS_GROUND_TRUTH_C_DELTA "+" ".join(f"{k}={v}" for k,v in summary.items()))
+          PY
+          cat build/minias-ground-truth-c-delta.json
+
       - uses: actions/upload-artifact@v4
         with:
           name: minias-linux-ground-truth-inventory
           path: |
             build/minias-ground-truth-inventory.json
+            build/minias-ground-truth-c.tsv
+            build/minias-ground-truth-c-delta.json
+            build/minias-ground-truth-c-only.tsv
+            build/minias-frozen3352-only.tsv
+            build/minias-frozen3352-overlap.tsv
             build/minias-ground-truth-native-asm.tsv
             build/minias-ground-truth-rust.tsv
           retention-days: 30
