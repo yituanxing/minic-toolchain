@@ -299,4 +299,12 @@ int COUNTER_PASTE(unique_, __COUNTER__) = 2;
 EOF
 run_exact builtin-counter
 
-printf 'MINIPP_A0_EXACT=PASS cases=33 mode=byte-identical\n'
+cat >"$work/multiline-builtin-line.c" <<'EOF'
+#define WHERE(x) __LINE__
+int multiline_builtin_line = WHERE(
+    1
+);
+EOF
+run_exact multiline-builtin-line
+
+printf 'MINIPP_A0_EXACT=PASS cases=34 mode=byte-identical\n'
