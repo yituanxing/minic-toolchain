@@ -940,20 +940,27 @@ static bool handle_symbol_list(MiniAs *as,
 }
 
 static bool parse_type(MiniAs *as, char *args, size_t line) {
-    char *comma = strchr(args, ',');
+    char *separator = strchr(args, ',');
     MiniAsSymbol *symbol;
     char *kind;
 
-    if (comma == NULL) {
-        minias_set_error(as, "bad-directive:.type:line=%zu", line);
-        return false;
+    if (separator == NULL) {
+        separator = args;
+        while (*separator != '\0' &&
+               !isspace((unsigned char)*separator)) {
+            ++separator;
+        }
+        if (*separator == '\0') {
+            minias_set_error(as, "bad-directive:.type:line=%zu", line);
+            return false;
+        }
     }
-    *comma = '\0';
+    *separator = '\0';
     symbol = minias_get_symbol(as, minias_trim(args), true);
     if (symbol == NULL) {
         return false;
     }
-    kind = minias_trim(comma + 1);
+    kind = minias_trim(separator + 1);
     if (strcmp(kind, "@function") == 0 || strcmp(kind, "%function") == 0 ||
         strcmp(kind, "STT_FUNC") == 0) {
         symbol->type = MINIAS_STT_FUNC;
@@ -2638,7 +2645,7 @@ static bool process_statement(MiniAs *as, char *text, size_t line) {
         }
         if (strcmp(op, ".option") == 0 || strcmp(op, ".file") == 0 ||
             strcmp(op, ".ident") == 0 || strcmp(op, ".altmacro") == 0 ||
-            strcmp(op, ".noaltmacro") == 0) {
+            strcmp(op, ".noaltmacro") == 0 || strcmp(op, ".end") == 0) {
             return true;
         }
         if (strcmp(op, ".align") == 0 || strcmp(op, ".balign") == 0 ||
@@ -2826,6 +2833,105 @@ static size_t split_macro_tokens(char *text, char **tokens, size_t capacity) {
             *p++ = '\0';
         }
         tokens[count++] = start;
+    }
+    return count;
+}
+
+static bool macro_has_top_level_comma(const char *text) {
+    int depth = 0;
+    char quote = '\0';
+
+    for (; *text != '\0'; ++text) {
+        if (quote != '\0') {
+            if (*text == '\\' && text[1] != '\0') {
+                ++text;
+                continue;
+            }
+            if (*text == quote) {
+                quote = '\0';
+            }
+            continue;
+        }
+        if (*text == '\'' || *text == '"') {
+            quote = *text;
+        } else if (*text == '(' || *text == '[' || *text == '{') {
+            ++depth;
+        } else if (*text == ')' || *text == ']' || *text == '}') {
+            if (depth > 0) {
+                --depth;
+            }
+        } else if (*text == ',' && depth == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static size_t split_macro_arguments(char *text,
+                                    char **tokens,
+                                    size_t capacity) {
+    size_t count = 0U;
+    char *cursor = text;
+
+    if (!macro_has_top_level_comma(text)) {
+        return split_macro_tokens(text, tokens, capacity);
+    }
+
+    while (*cursor != '\0') {
+        char *start;
+        char *p;
+        int depth = 0;
+        char quote = '\0';
+
+        while (*cursor == ' ' || *cursor == '\t') {
+            ++cursor;
+        }
+        if (*cursor == '\0') {
+            break;
+        }
+        if (count == capacity) {
+            return SIZE_MAX;
+        }
+        start = cursor;
+        p = cursor;
+        while (*p != '\0') {
+            if (quote != '\0') {
+                if (*p == '\\' && p[1] != '\0') {
+                    p += 2;
+                    continue;
+                }
+                if (*p == quote) {
+                    quote = '\0';
+                }
+                ++p;
+                continue;
+            }
+            if (*p == '\'' || *p == '"') {
+                quote = *p++;
+                continue;
+            }
+            if (*p == '(' || *p == '[' || *p == '{') {
+                ++depth;
+                ++p;
+                continue;
+            }
+            if (*p == ')' || *p == ']' || *p == '}') {
+                if (depth > 0) {
+                    --depth;
+                }
+                ++p;
+                continue;
+            }
+            if (*p == ',' && depth == 0) {
+                break;
+            }
+            ++p;
+        }
+        if (*p == ',') {
+            *p++ = '\0';
+        }
+        tokens[count++] = minias_trim(start);
+        cursor = p;
     }
     return count;
 }
@@ -3066,7 +3172,7 @@ static bool expand_macro_invocation(MiniAs *as,
         minias_set_error(as, "out-of-memory:macro-arguments");
         return false;
     }
-    supplied = split_macro_tokens(copy, tokens, 64U);
+    supplied = split_macro_arguments(copy, tokens, 64U);
     if (supplied == SIZE_MAX || supplied > macro->param_count) {
         minias_set_error(as, "bad-macro-arguments:%s:line=%zu",
                          macro->name, line);
