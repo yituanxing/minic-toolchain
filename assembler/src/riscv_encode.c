@@ -238,6 +238,63 @@ static uint32_t li64_materialized_size(uint64_t bits) {
     return instructions * 4U;
 }
 
+static bool parse_csr_numeric_expression(const char *text, uint32_t *csr) {
+    const char *cursor = text;
+    char *end = NULL;
+    unsigned long long result;
+
+    while (*cursor == ' ' || *cursor == '\t') {
+        ++cursor;
+    }
+    errno = 0;
+    result = strtoull(cursor, &end, 0);
+    if (errno != 0 || end == cursor) {
+        return false;
+    }
+    cursor = end;
+
+    for (;;) {
+        char op;
+        unsigned long long term;
+
+        while (*cursor == ' ' || *cursor == '\t') {
+            ++cursor;
+        }
+        if (*cursor == '\0') {
+            if (result > 0xfffULL) {
+                return false;
+            }
+            *csr = (uint32_t)result;
+            return true;
+        }
+        op = *cursor;
+        if (op != '+' && op != '-') {
+            return false;
+        }
+        ++cursor;
+        while (*cursor == ' ' || *cursor == '\t') {
+            ++cursor;
+        }
+        errno = 0;
+        term = strtoull(cursor, &end, 0);
+        if (errno != 0 || end == cursor) {
+            return false;
+        }
+        if (op == '+') {
+            if (term > UINT64_MAX - result) {
+                return false;
+            }
+            result += term;
+        } else {
+            if (term > result) {
+                return false;
+            }
+            result -= term;
+        }
+        cursor = end;
+    }
+}
+
 static bool parse_csr(const char *text, uint32_t *csr) {
     static const struct {
         const char *name;
@@ -253,8 +310,6 @@ static bool parse_csr(const char *text, uint32_t *csr) {
         {"instret", 0xc02U}, {"mhartid", 0xf14U},
     };
     size_t i;
-    char *end = NULL;
-    unsigned long value;
 
     for (i = 0U; i < sizeof(names) / sizeof(names[0]); ++i) {
         if (strcmp(text, names[i].name) == 0) {
@@ -262,19 +317,7 @@ static bool parse_csr(const char *text, uint32_t *csr) {
             return true;
         }
     }
-    errno = 0;
-    value = strtoul(text, &end, 0);
-    if (errno != 0 || end == text || value > 0xfffUL) {
-        return false;
-    }
-    while (*end == ' ' || *end == '\t') {
-        ++end;
-    }
-    if (*end != '\0') {
-        return false;
-    }
-    *csr = (uint32_t)value;
-    return true;
+    return parse_csr_numeric_expression(text, csr);
 }
 
 static bool parse_fence_set(const char *text, uint32_t *mask) {
