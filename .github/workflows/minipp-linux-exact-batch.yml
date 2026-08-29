@@ -1,7 +1,7 @@
 name: MiniPP Linux Exact Batch
 
 concurrency:
-  group: minipp-linux-batch-${{ github.ref }}
+  group: minipp-linux-batch-${{ github.ref }}-${{ contains(github.event.head_commit.message, '[minipp-linux-batch]') && 'active' || github.sha }}
   cancel-in-progress: true
 
 on:
