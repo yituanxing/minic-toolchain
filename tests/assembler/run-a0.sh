@@ -873,11 +873,16 @@ native_jalr_symbol_load_hex="$(
     readelf -x .text "$work/native-jalr-symbol-load.o" |
     awk '/0x[0-9a-f]+/ {for (i=2; i<=NF; ++i) if ($i ~ /^[0-9a-f]{8}$/) printf "%s", $i}'
 )"
+echo "MINIAS_A0_NATIVE_JALR_HEX=$native_jalr_symbol_load_hex"
+native_jalr_relocs="$(readelf -r "$work/native-jalr-symbol-load.o")"
+printf '%s\n' "$native_jalr_relocs"
+native_jalr_size="$(readelf -Ws "$work/native-jalr-symbol-load.o" | awk '$8=="native_jalr_symbol_load" {print $3}')"
+echo "MINIAS_A0_NATIVE_JALR_SIZE=$native_jalr_size"
 test "$native_jalr_symbol_load_hex" = "e7000300678002009705000083a505001706000003360600"
-readelf -r "$work/native-jalr-symbol-load.o" | grep -Eq 'R_RISCV_PCREL_HI20[[:space:]]+.*native_load_word'
-readelf -r "$work/native-jalr-symbol-load.o" | grep -Eq 'R_RISCV_PCREL_HI20[[:space:]]+.*native_load_dword'
-test "$(readelf -r "$work/native-jalr-symbol-load.o" | grep -c 'R_RISCV_PCREL_LO12_I')" -eq 2
-test "$(readelf -Ws "$work/native-jalr-symbol-load.o" | awk '$8=="native_jalr_symbol_load" {print $3}')" = "24"
+printf '%s\n' "$native_jalr_relocs" | grep -Eq 'R_RISCV_PCREL_HI20[[:space:]]+.*native_load_word'
+printf '%s\n' "$native_jalr_relocs" | grep -Eq 'R_RISCV_PCREL_HI20[[:space:]]+.*native_load_dword'
+test "$(printf '%s\n' "$native_jalr_relocs" | grep -c 'R_RISCV_PCREL_LO12_I')" -eq 2
+test "$native_jalr_size" = "24"
 
 cat >"$work/native-forward-short.s" <<'EOF'
 .data
@@ -888,7 +893,13 @@ section_table_end:
 .set section_count, (section_table_end - section_table) / 40
 EOF
 "$MINIAS" -o "$work/native-forward-short.o" "$work/native-forward-short.s"
-readelf -x .data "$work/native-forward-short.o" | grep -Eq '0x00000000[[:space:]]+0200'
-test "$(readelf -Ws "$work/native-forward-short.o" | awk '$8=="section_count" {print $2}')" = "0000000000000002"
+native_forward_data="$(readelf -x .data "$work/native-forward-short.o")"
+native_forward_symbols="$(readelf -Ws "$work/native-forward-short.o")"
+printf '%s\n' "$native_forward_data"
+printf '%s\n' "$native_forward_symbols" | grep 'section_count' || true
+native_forward_value="$(printf '%s\n' "$native_forward_symbols" | awk '$8=="section_count" {print $2}')"
+echo "MINIAS_A0_NATIVE_FORWARD_VALUE=$native_forward_value"
+printf '%s\n' "$native_forward_data" | grep -Eq '0x00000000[[:space:]]+0200'
+test "$native_forward_value" = "0000000000000002"
 
 echo "MINIAS_A0=PASS objects=22 format=ELF64-RISCV-ET_REL relocations=21 strings=2 pseudos=17 previous=3 subsection=2 numeric_labels=18 ecall=1 isa_next=13 csr_amo=8 sfence_vma=3 fence_i=1 vsetvl=1 vsetvli=1 vmv_v_i=4 rept=2 nested_rept=1 irp=4 section_stack=1 org=3 local_difference=1 lr_sc=2 inline_labels=2 branch_pseudos=8 extern=1 symbol_minus_dot=4 symbol_difference=1 absolute32=1 jal=2 jal_subsection=1 high_numeric_labels=2 u64_data=3 raw_insn=4 set_alias=3 move=1 numeric_zero=1 immediate_product=2 shift_immediate=1 incbin=1 align_expr=1 native_expr=6 native_zbb_tail_memexpr=1 native_jalr_symbol_load=1 native_forward_short=1 native_gas_forms=1 native_set_size=1 native_macro_comma=1 native_macro_quotes=1 sext_w=1 macro=4 conditional=1"
