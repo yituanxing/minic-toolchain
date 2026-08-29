@@ -669,6 +669,75 @@ static bool minipp_handle_include(MiniPpState *state,
     return ok;
 }
 
+static bool minipp_emit_pragma(MiniPpState *state,
+                               const char *rest,
+                               MiniPpString *output) {
+    const char *text = minipp_skip_horizontal_space(rest);
+    bool pending_space = false;
+
+    if (!minipp_string_append_n(output, "#pragma", 7U)) {
+        goto oom;
+    }
+    if (*text != '\0' && *text != '\n') {
+        if (!minipp_string_append_char(output, ' ')) {
+            goto oom;
+        }
+    }
+
+    while (*text != '\0' && *text != '\n') {
+        if (*text == ' ' || *text == '\t' ||
+            *text == '\v' || *text == '\f') {
+            pending_space = true;
+            ++text;
+            continue;
+        }
+
+        if (pending_space) {
+            if (!minipp_string_append_char(output, ' ')) {
+                goto oom;
+            }
+            pending_space = false;
+        }
+
+        if (*text == '"' || *text == '\'') {
+            char quote = *text;
+            if (!minipp_string_append_char(output, *text++)) {
+                goto oom;
+            }
+            while (*text != '\0' && *text != '\n') {
+                char value = *text;
+                if (!minipp_string_append_char(output, value)) {
+                    goto oom;
+                }
+                ++text;
+                if (value == '\\' && *text != '\0' && *text != '\n') {
+                    if (!minipp_string_append_char(output, *text++)) {
+                        goto oom;
+                    }
+                    continue;
+                }
+                if (value == quote) {
+                    break;
+                }
+            }
+            continue;
+        }
+
+        if (!minipp_string_append_char(output, *text++)) {
+            goto oom;
+        }
+    }
+
+    if (!minipp_string_append_char(output, '\n')) {
+        goto oom;
+    }
+    return true;
+
+oom:
+    fprintf(state->diagnostics, "minic-cpp: out-of-memory\n");
+    return false;
+}
+
 static bool minipp_handle_directive(MiniPpState *state,
                                     const char *current_path,
                                     const char *line,
@@ -720,6 +789,9 @@ static bool minipp_handle_directive(MiniPpState *state,
     }
     if (strcmp(directive, "include") == 0) {
         return minipp_handle_include(state, current_path, rest, output);
+    }
+    if (strcmp(directive, "pragma") == 0) {
+        return minipp_emit_pragma(state, rest, output);
     }
 
     fprintf(state->diagnostics,
