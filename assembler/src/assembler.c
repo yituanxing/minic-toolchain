@@ -2048,6 +2048,13 @@ typedef struct MiniAsSourceLine {
     size_t line;
 } MiniAsSourceLine;
 
+enum {
+    MINIAS_REPEAT_NONE = 0,
+    MINIAS_REPEAT_REPT = 1,
+    MINIAS_REPEAT_ENDR = 2,
+    MINIAS_REPEAT_IRP = 3
+};
+
 static void destroy_source_lines(MiniAsSourceLine *lines, size_t count) {
     size_t i;
 
@@ -2062,8 +2069,8 @@ static int classify_repeat_line(const char *text,
                                 size_t argument_size) {
     char *copy;
     char *trimmed;
-    const char *rest;
-    int kind = 0;
+    const char *rest = NULL;
+    int kind = MINIAS_REPEAT_NONE;
 
     if (argument_size != 0U) {
         argument[0] = '\0';
@@ -2078,6 +2085,17 @@ static int classify_repeat_line(const char *text,
     if (strncmp(trimmed, ".rept", 5U) == 0 &&
         (trimmed[5] == '\0' || isspace((unsigned char)trimmed[5]))) {
         rest = trimmed + 5;
+        kind = MINIAS_REPEAT_REPT;
+    } else if (strncmp(trimmed, ".irp", 4U) == 0 &&
+               (trimmed[4] == '\0' ||
+                isspace((unsigned char)trimmed[4]))) {
+        rest = trimmed + 4;
+        kind = MINIAS_REPEAT_IRP;
+    } else if (strcmp(trimmed, ".endr") == 0) {
+        kind = MINIAS_REPEAT_ENDR;
+    }
+
+    if (rest != NULL) {
         while (*rest == ' ' || *rest == '\t') {
             ++rest;
         }
@@ -2088,9 +2106,6 @@ static int classify_repeat_line(const char *text,
                 return -1;
             }
         }
-        kind = 1;
-    } else if (strcmp(trimmed, ".endr") == 0) {
-        kind = 2;
     }
 
     free(copy);
@@ -2148,6 +2163,182 @@ static bool repeat_count_value(MiniAs *as,
     return true;
 }
 
+static bool valid_irp_parameter_name(const char *name) {
+    const unsigned char *p = (const unsigned char *)name;
+
+    if (*p == '\0') {
+        return false;
+    }
+    for (; *p != '\0'; ++p) {
+        if (!isalnum(*p) && *p != '_') {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool irp_parameter_match(const char *text,
+                                const char *name,
+                                size_t name_len,
+                                size_t *consumed) {
+    size_t n = 1U + name_len;
+    unsigned char next;
+
+    if (text[0] != '\\' || strncmp(text + 1, name, name_len) != 0) {
+        return false;
+    }
+    next = (unsigned char)text[n];
+    if (isalnum(next) || next == '_') {
+        return false;
+    }
+    if (text[n] == '\\' && text[n + 1U] == '(' &&
+        text[n + 2U] == ')') {
+        n += 3U;
+    }
+    *consumed = n;
+    return true;
+}
+
+static char *substitute_irp_parameter(MiniAs *as,
+                                      const char *source,
+                                      const char *name,
+                                      const char *value) {
+    size_t source_pos = 0U;
+    size_t output_size = 0U;
+    size_t name_len = strlen(name);
+    size_t value_len = strlen(value);
+    char *output;
+    size_t output_pos = 0U;
+
+    while (source[source_pos] != '\0') {
+        size_t consumed;
+        if (irp_parameter_match(source + source_pos,
+                                name,
+                                name_len,
+                                &consumed)) {
+            if (value_len > SIZE_MAX - output_size) {
+                minias_set_error(as, "source-size-overflow:.irp");
+                return NULL;
+            }
+            output_size += value_len;
+            source_pos += consumed;
+        } else {
+            if (output_size == SIZE_MAX) {
+                minias_set_error(as, "source-size-overflow:.irp");
+                return NULL;
+            }
+            ++output_size;
+            ++source_pos;
+        }
+    }
+    if (output_size == SIZE_MAX) {
+        minias_set_error(as, "source-size-overflow:.irp");
+        return NULL;
+    }
+    output = malloc(output_size + 1U);
+    if (output == NULL) {
+        minias_set_error(as, "out-of-memory:irp-substitution");
+        return NULL;
+    }
+
+    source_pos = 0U;
+    while (source[source_pos] != '\0') {
+        size_t consumed;
+        if (irp_parameter_match(source + source_pos,
+                                name,
+                                name_len,
+                                &consumed)) {
+            if (value_len != 0U) {
+                memcpy(output + output_pos, value, value_len);
+            }
+            output_pos += value_len;
+            source_pos += consumed;
+        } else {
+            output[output_pos++] = source[source_pos++];
+        }
+    }
+    output[output_pos] = '\0';
+    return output;
+}
+
+static bool process_source_range(MiniAs *as,
+                                 MiniAsSourceLine *lines,
+                                 size_t begin,
+                                 size_t end);
+
+static bool process_irp_block(MiniAs *as,
+                              MiniAsSourceLine *lines,
+                              size_t count,
+                              const char *argument,
+                              size_t line) {
+    char *copy = minias_strdup(argument);
+    char *comma;
+    char *name;
+    char *cursor;
+
+    if (copy == NULL) {
+        minias_set_error(as, "out-of-memory:irp-argument");
+        return false;
+    }
+    comma = strchr(copy, ',');
+    if (comma == NULL) {
+        minias_set_error(as, "bad-directive:.irp:line=%zu", line);
+        free(copy);
+        return false;
+    }
+    *comma = '\0';
+    name = minias_trim(copy);
+    if (!valid_irp_parameter_name(name)) {
+        minias_set_error(as, "bad-directive:.irp:line=%zu", line);
+        free(copy);
+        return false;
+    }
+
+    cursor = comma + 1;
+    for (;;) {
+        char *next = strchr(cursor, ',');
+        char *value;
+        MiniAsSourceLine *expanded = NULL;
+        size_t i;
+
+        if (next != NULL) {
+            *next = '\0';
+        }
+        value = minias_trim(cursor);
+        if (count != 0U) {
+            expanded = calloc(count, sizeof(*expanded));
+            if (expanded == NULL) {
+                minias_set_error(as, "out-of-memory:irp-lines");
+                free(copy);
+                return false;
+            }
+        }
+        for (i = 0U; i < count; ++i) {
+            expanded[i].line = lines[i].line;
+            expanded[i].text =
+                substitute_irp_parameter(as, lines[i].text, name, value);
+            if (expanded[i].text == NULL) {
+                destroy_source_lines(expanded, count);
+                free(copy);
+                return false;
+            }
+        }
+        if (!process_source_range(as, expanded, 0U, count)) {
+            destroy_source_lines(expanded, count);
+            free(copy);
+            return false;
+        }
+        destroy_source_lines(expanded, count);
+        if (next == NULL) {
+            break;
+        }
+        cursor = next + 1;
+    }
+
+    free(copy);
+    return true;
+}
+
 static bool process_source_range(MiniAs *as,
                                  MiniAsSourceLine *lines,
                                  size_t begin,
@@ -2163,17 +2354,15 @@ static bool process_source_range(MiniAs *as,
             minias_set_error(as, "out-of-memory:repeat-classify");
             return false;
         }
-        if (kind == 2) {
+        if (kind == MINIAS_REPEAT_ENDR) {
             minias_set_error(as,
                              "unmatched-directive:.endr:line=%zu",
                              lines[i].line);
             return false;
         }
-        if (kind == 1) {
+        if (kind == MINIAS_REPEAT_REPT || kind == MINIAS_REPEAT_IRP) {
             size_t j = i + 1U;
             size_t depth = 1U;
-            uint64_t repetitions;
-            uint64_t iteration;
 
             while (j < end && depth != 0U) {
                 char nested_argument[256];
@@ -2185,9 +2374,10 @@ static bool process_source_range(MiniAs *as,
                     minias_set_error(as, "out-of-memory:repeat-classify");
                     return false;
                 }
-                if (nested_kind == 1) {
+                if (nested_kind == MINIAS_REPEAT_REPT ||
+                    nested_kind == MINIAS_REPEAT_IRP) {
                     ++depth;
-                } else if (nested_kind == 2) {
+                } else if (nested_kind == MINIAS_REPEAT_ENDR) {
                     --depth;
                 }
                 if (depth != 0U) {
@@ -2196,20 +2386,32 @@ static bool process_source_range(MiniAs *as,
             }
             if (depth != 0U || j >= end) {
                 minias_set_error(as,
-                                 "unterminated-directive:.rept:line=%zu",
+                                 "unterminated-directive:%s:line=%zu",
+                                 kind == MINIAS_REPEAT_IRP ? ".irp" : ".rept",
                                  lines[i].line);
                 return false;
             }
-            if (!repeat_count_value(as,
-                                    argument,
-                                    lines[i].line,
-                                    &repetitions)) {
-                return false;
-            }
-            for (iteration = 0U; iteration < repetitions; ++iteration) {
-                if (!process_source_range(as, lines, i + 1U, j)) {
+            if (kind == MINIAS_REPEAT_REPT) {
+                uint64_t repetitions;
+                uint64_t iteration;
+
+                if (!repeat_count_value(as,
+                                        argument,
+                                        lines[i].line,
+                                        &repetitions)) {
                     return false;
                 }
+                for (iteration = 0U; iteration < repetitions; ++iteration) {
+                    if (!process_source_range(as, lines, i + 1U, j)) {
+                        return false;
+                    }
+                }
+            } else if (!process_irp_block(as,
+                                          lines + i + 1U,
+                                          j - i - 1U,
+                                          argument,
+                                          lines[i].line)) {
+                return false;
             }
             i = j + 1U;
             continue;
@@ -2225,6 +2427,7 @@ static bool process_source_range(MiniAs *as,
 static bool read_repeat_block(MiniAs *as,
                               FILE *file,
                               size_t *line_no,
+                              int opener_kind,
                               MiniAsSourceLine **lines_out,
                               size_t *count_out) {
     MiniAsSourceLine *lines = NULL;
@@ -2251,9 +2454,9 @@ static bool read_repeat_block(MiniAs *as,
             destroy_source_lines(lines, count);
             return false;
         }
-        if (kind == 1) {
+        if (kind == MINIAS_REPEAT_REPT || kind == MINIAS_REPEAT_IRP) {
             ++depth;
-        } else if (kind == 2) {
+        } else if (kind == MINIAS_REPEAT_ENDR) {
             --depth;
             if (depth == 0U) {
                 *lines_out = lines;
@@ -2282,7 +2485,9 @@ static bool read_repeat_block(MiniAs *as,
     if (ferror(file)) {
         minias_set_error(as, "input-read:repeat-block");
     } else {
-        minias_set_error(as, "unterminated-directive:.rept");
+        minias_set_error(as,
+                         "unterminated-directive:%s",
+                         opener_kind == MINIAS_REPEAT_IRP ? ".irp" : ".rept");
     }
     destroy_source_lines(lines, count);
     return false;
@@ -2316,38 +2521,55 @@ bool minias_parse_file(MiniAs *as, const char *path) {
             fclose(file);
             return false;
         }
-        if (kind == 2) {
+        if (kind == MINIAS_REPEAT_ENDR) {
             minias_set_error(as,
                              "unmatched-directive:.endr:line=%zu",
                              line_no);
             fclose(file);
             return false;
         }
-        if (kind == 1) {
+        if (kind == MINIAS_REPEAT_REPT || kind == MINIAS_REPEAT_IRP) {
             MiniAsSourceLine *lines = NULL;
             size_t count = 0U;
-            uint64_t repetitions;
-            uint64_t iteration;
+            size_t opener_line = line_no;
 
             if (!read_repeat_block(as,
                                    file,
                                    &line_no,
+                                   kind,
                                    &lines,
-                                   &count) ||
-                !repeat_count_value(as,
-                                    argument,
-                                    line_no - count - 1U,
-                                    &repetitions)) {
+                                   &count)) {
                 destroy_source_lines(lines, count);
                 fclose(file);
                 return false;
             }
-            for (iteration = 0U; iteration < repetitions; ++iteration) {
-                if (!process_source_range(as, lines, 0U, count)) {
+            if (kind == MINIAS_REPEAT_REPT) {
+                uint64_t repetitions;
+                uint64_t iteration;
+
+                if (!repeat_count_value(as,
+                                        argument,
+                                        opener_line,
+                                        &repetitions)) {
                     destroy_source_lines(lines, count);
                     fclose(file);
                     return false;
                 }
+                for (iteration = 0U; iteration < repetitions; ++iteration) {
+                    if (!process_source_range(as, lines, 0U, count)) {
+                        destroy_source_lines(lines, count);
+                        fclose(file);
+                        return false;
+                    }
+                }
+            } else if (!process_irp_block(as,
+                                          lines,
+                                          count,
+                                          argument,
+                                          opener_line)) {
+                destroy_source_lines(lines, count);
+                fclose(file);
+                return false;
             }
             destroy_source_lines(lines, count);
             continue;
