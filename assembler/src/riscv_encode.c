@@ -973,6 +973,18 @@ bool minias_riscv_measure(const char *op,
         return true;
     }
 
+    if (strcmp(op, "lb") == 0 || strcmp(op, "lbu") == 0 ||
+        strcmp(op, "lh") == 0 || strcmp(op, "lhu") == 0 ||
+        strcmp(op, "lw") == 0 || strcmp(op, "lwu") == 0 ||
+        strcmp(op, "ld") == 0) {
+        MiniAsSymbolExpr expr;
+        if (count == 2U && reg_number(operands[0]) >= 0 &&
+            minias_parse_symbol_addend(operands[1], &expr)) {
+            *size = 8U;
+            return true;
+        }
+    }
+
     if (strcmp(op, "c.li") == 0) {
         int64_t imm;
         int rd;
@@ -1990,9 +2002,7 @@ bool minias_riscv_encode(MiniAs *as, const MiniAsStmt *stmt) {
         strcmp(stmt->op, "ld") == 0) {
         char base[128];
 
-        if (count != 2U || !require_reg(as, stmt, operands[0], &rd) ||
-            !parse_mem(operands[1], &immediate, base) ||
-            !require_reg(as, stmt, base, &rs1)) {
+        if (count != 2U || !require_reg(as, stmt, operands[0], &rd)) {
             return false;
         }
         funct3 = strcmp(stmt->op, "lb") == 0    ? 0U
@@ -2002,7 +2012,62 @@ bool minias_riscv_encode(MiniAs *as, const MiniAsStmt *stmt) {
                  : strcmp(stmt->op, "lbu") == 0 ? 4U
                  : strcmp(stmt->op, "lhu") == 0 ? 5U
                                                  : 6U;
-        return append_u32(as, stmt->section, enc_i(0x03U, rd, funct3, rs1, immediate));
+        if (parse_mem(operands[1], &immediate, base)) {
+            if (!require_reg(as, stmt, base, &rs1)) {
+                return false;
+            }
+            return append_u32(as,
+                              stmt->section,
+                              enc_i(0x03U, rd, funct3, rs1, immediate));
+        }
+        {
+            MiniAsSymbolExpr expr;
+            MiniAsSymbol *anchor;
+            char anchor_name[96];
+
+            if (!minias_parse_symbol_addend(operands[1], &expr)) {
+                minias_set_error(as,
+                                 "unsupported-expression:%s:%s:line=%zu",
+                                 stmt->op,
+                                 operands[1],
+                                 stmt->line);
+                return false;
+            }
+            (void)snprintf(anchor_name,
+                           sizeof(anchor_name),
+                           ".Lminias_load_%zu",
+                           ++as->pcrel_anchor_counter);
+            anchor = minias_get_symbol(as, anchor_name, true);
+            if (anchor == NULL) {
+                return false;
+            }
+            anchor->defined = true;
+            anchor->section = stmt->section;
+            anchor->subsection = stmt->subsection;
+            anchor->value = stmt->offset;
+            anchor->bind = MINIAS_STB_LOCAL;
+
+            if (!append_u32(as,
+                            stmt->section,
+                            0x17U | ((uint32_t)rd << 7U)) ||
+                !append_u32(as,
+                            stmt->section,
+                            enc_i(0x03U, rd, funct3, rd, 0))) {
+                return false;
+            }
+            return minias_add_relocation(as,
+                                         stmt->section,
+                                         stmt->offset,
+                                         MINIAS_R_RISCV_PCREL_HI20,
+                                         expr.name,
+                                         expr.addend) &&
+                   minias_add_relocation(as,
+                                         stmt->section,
+                                         stmt->offset + 4U,
+                                         MINIAS_R_RISCV_PCREL_LO12_I,
+                                         anchor_name,
+                                         0);
+        }
     }
     if (strcmp(stmt->op, "sb") == 0 || strcmp(stmt->op, "sh") == 0 ||
         strcmp(stmt->op, "sw") == 0 || strcmp(stmt->op, "sd") == 0) {
@@ -2020,12 +2085,33 @@ bool minias_riscv_encode(MiniAs *as, const MiniAsStmt *stmt) {
         return append_u32(as, stmt->section, enc_s(funct3, rs1, rs2, immediate));
     }
     if (strcmp(stmt->op, "jalr") == 0) {
-        if (count != 3U || !require_reg(as, stmt, operands[0], &rd) ||
-            !require_reg(as, stmt, operands[1], &rs1) ||
-            !require_imm(as, stmt, operands[2], &immediate)) {
+        if (count == 1U) {
+            if (!require_reg(as, stmt, operands[0], &rs1)) {
+                return false;
+            }
+            rd = 1;
+            immediate = 0;
+        } else if (count == 2U) {
+            char base[128];
+
+            if (!require_reg(as, stmt, operands[0], &rd) ||
+                !parse_mem(operands[1], &immediate, base) ||
+                !require_reg(as, stmt, base, &rs1)) {
+                return false;
+            }
+        } else if (count == 3U) {
+            if (!require_reg(as, stmt, operands[0], &rd) ||
+                !require_reg(as, stmt, operands[1], &rs1) ||
+                !require_imm(as, stmt, operands[2], &immediate)) {
+                return false;
+            }
+        } else {
+            minias_set_error(as, "operand-count:jalr:line=%zu", stmt->line);
             return false;
         }
-        return append_u32(as, stmt->section, enc_i(0x67U, rd, 0U, rs1, immediate));
+        return append_u32(as,
+                          stmt->section,
+                          enc_i(0x67U, rd, 0U, rs1, immediate));
     }
     if (strcmp(stmt->op, "j") == 0 || strcmp(stmt->op, "jal") == 0) {
         MiniAsSymbolExpr expr;
