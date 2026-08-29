@@ -133,10 +133,6 @@ numeric_labels:
 .size numeric_labels, .-numeric_labels
 EOF
 "$MINIAS" -o "$work/numeric-labels.o" "$work/numeric-labels.s"
-readelf -s "$work/numeric-labels.o" >"$work/numeric-labels.txt"
-! grep -q '.Lminias_num_1_1' "$work/numeric-labels.txt"
-! grep -q '.Lminias_num_1_2' "$work/numeric-labels.txt"
-
 cat >"$work/ecall.s" <<'EOF'
 .text
 .globl ecall_user
@@ -399,10 +395,6 @@ high_numeric_labels:
 .size high_numeric_labels, .-high_numeric_labels
 EOF
 "$MINIAS" -o "$work/high-numeric-labels.o" "$work/high-numeric-labels.s"
-readelf -Ws "$work/high-numeric-labels.o" >"$work/high-numeric-labels.txt"
-grep -q '.Lminias_num_886_1' "$work/high-numeric-labels.txt"
-grep -q '.Lminias_num_887_1' "$work/high-numeric-labels.txt"
-
 cat >"$work/conditional-alt.s" <<'EOF'
 .text
 .globl conditional_alt
@@ -547,7 +539,10 @@ irp_hex="$(
     awk '/0x[0-9a-f]+/ {for (i=2; i<=NF; ++i) if ($i ~ /^[0-9a-f]+$/ && length($i) <= 8 && length($i) % 2 == 0) printf "%s", $i}'
 )"
 test "$irp_hex" = "0001021f03004100"
-! readelf -Ws "$work/irp.o" | grep -q '.L__gpr_num_x31'
+if readelf -Ws "$work/irp.o" | grep -q '.L__gpr_num_x31'; then
+    echo "unexpected temporary local leaked: .L__gpr_num_x31" >&2
+    exit 1
+fi
 
 cat >"$work/vsetvl.s" <<'EOF'
 .text
@@ -766,7 +761,10 @@ EOF
 test "$(readelf -Ws "$work/native-set-size.o" | awk '$8=="native_set_size" {print $3}')" = "4"
 readelf -Ws "$work/native-set-size.o" >"$work/native-set-size.sym"
 grep -Eq 'FUNC[[:space:]]+GLOBAL.* native_set_size$' "$work/native-set-size.sym"
-! grep -q '[[:space:]]\.Lnative_set_size$' "$work/native-set-size.sym"
+if grep -q '[[:space:]]\.Lnative_set_size$' "$work/native-set-size.sym"; then
+    echo "unexpected temporary local leaked: .Lnative_set_size" >&2
+    exit 1
+fi
 
 cat >"$work/native-macro-quotes.s" <<'EOF'
 .text
