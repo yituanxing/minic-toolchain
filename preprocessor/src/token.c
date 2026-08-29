@@ -45,6 +45,7 @@ static bool minipp_macro_is_disabled(const char *name,
 
 typedef struct MiniPpArgList {
     MiniPpString *items;
+    bool *leading_space;
     size_t count;
     size_t capacity;
 } MiniPpArgList;
@@ -56,6 +57,7 @@ static void minipp_arg_list_destroy(MiniPpArgList *list) {
         minipp_string_destroy(&list->items[index]);
     }
     free(list->items);
+    free(list->leading_space);
     memset(list, 0, sizeof(*list));
 }
 
@@ -135,15 +137,31 @@ static bool minipp_arg_list_append(MiniPpArgList *list,
             capacity > SIZE_MAX / sizeof(*next)) {
             return false;
         }
+        bool *next_leading;
+
         next = realloc(list->items, capacity * sizeof(*next));
         if (next == NULL) {
             return false;
         }
         list->items = next;
+        next_leading = realloc(list->leading_space,
+                               capacity * sizeof(*next_leading));
+        if (next_leading == NULL) {
+            return false;
+        }
+        list->leading_space = next_leading;
         list->capacity = capacity;
     }
 
     item = &list->items[list->count];
+    {
+        size_t leading = 0U;
+        while (leading < size &&
+               isspace((unsigned char)text[leading]) != 0) {
+            ++leading;
+        }
+        list->leading_space[list->count] = leading != 0U;
+    }
     minipp_string_init(item);
     if (!minipp_append_normalized_argument(item, text, size) ||
         !minipp_string_append_char(item, '\0')) {
@@ -319,9 +337,14 @@ static bool minipp_build_logical_args(MiniPpState *state,
 
     minipp_string_init(&variadic);
     for (index = fixed_count; index < raw_args->count; ++index) {
-        if (index != fixed_count &&
-            !minipp_string_append_char(&variadic, ',')) {
-            goto oom;
+        if (index != fixed_count) {
+            if (!minipp_string_append_char(&variadic, ',')) {
+                goto oom;
+            }
+            if (raw_args->leading_space[index] &&
+                !minipp_string_append_char(&variadic, ' ')) {
+                goto oom;
+            }
         }
         if (!minipp_string_append_n(&variadic,
                                     raw_args->items[index].data,
@@ -364,6 +387,24 @@ static bool minipp_param_is_paste_operand(const MiniPpMacro *macro,
     if (left >= 2U &&
         macro->replacement[left - 1U] == '#' &&
         macro->replacement[left - 2U] == '#') {
+        size_t param_index = 0U;
+        size_t before_paste = left - 2U;
+
+        while (before_paste != 0U &&
+               isspace((unsigned char)
+                           macro->replacement[before_paste - 1U]) != 0) {
+            --before_paste;
+        }
+        if (macro->variadic &&
+            minipp_macro_param_index(macro,
+                                     macro->replacement + start,
+                                     end - start,
+                                     &param_index) &&
+            param_index + 1U == macro->param_count &&
+            before_paste != 0U &&
+            macro->replacement[before_paste - 1U] == ',') {
+            return false;
+        }
         return true;
     }
 
@@ -547,25 +588,37 @@ static bool minipp_substitute_function_macro(MiniPpState *state,
                                              length,
                                              &param_index) &&
                     macro->variadic &&
-                    param_index + 1U == macro->param_count &&
-                    raw_args->items[param_index].size == 0U) {
-                    while (substituted->size != 0U) {
-                        char previous =
-                            substituted->data[substituted->size - 1U];
-                        if (previous != ' ' && previous != '\t' &&
-                            previous != '\v' && previous != '\f') {
-                            break;
+                    param_index + 1U == macro->param_count) {
+                    size_t before_paste = index;
+                    while (before_paste != 0U &&
+                           isspace((unsigned char)
+                                       macro->replacement[before_paste - 1U]) != 0) {
+                        --before_paste;
+                    }
+                    if (before_paste != 0U &&
+                        macro->replacement[before_paste - 1U] == ',') {
+                        if (raw_args->items[param_index].size == 0U) {
+                            while (substituted->size != 0U) {
+                                char previous =
+                                    substituted->data[substituted->size - 1U];
+                                if (previous != ' ' && previous != '\t' &&
+                                    previous != '\v' && previous != '\f') {
+                                    break;
+                                }
+                                --substituted->size;
+                                substituted->data[substituted->size] = '\0';
+                            }
+                            if (substituted->size != 0U &&
+                                substituted->data[substituted->size - 1U] == ',') {
+                                --substituted->size;
+                                substituted->data[substituted->size] = '\0';
+                            }
+                            index = cursor + length;
+                            continue;
                         }
-                        --substituted->size;
-                        substituted->data[substituted->size] = '\0';
+                        index = cursor;
+                        continue;
                     }
-                    if (substituted->size != 0U &&
-                        substituted->data[substituted->size - 1U] == ',') {
-                        --substituted->size;
-                        substituted->data[substituted->size] = '\0';
-                    }
-                    index = cursor + length;
-                    continue;
                 }
 
                 if (!minipp_string_append_n(substituted, "##", 2U)) {
