@@ -2043,6 +2043,251 @@ static bool process_statement(MiniAs *as, char *text, size_t line) {
     return advance_current_location(as, size);
 }
 
+typedef struct MiniAsSourceLine {
+    char *text;
+    size_t line;
+} MiniAsSourceLine;
+
+static void destroy_source_lines(MiniAsSourceLine *lines, size_t count) {
+    size_t i;
+
+    for (i = 0U; i < count; ++i) {
+        free(lines[i].text);
+    }
+    free(lines);
+}
+
+static int classify_repeat_line(const char *text,
+                                char *argument,
+                                size_t argument_size) {
+    char *copy;
+    char *trimmed;
+    const char *rest;
+    int kind = 0;
+
+    if (argument_size != 0U) {
+        argument[0] = '\0';
+    }
+    copy = minias_strdup(text);
+    if (copy == NULL) {
+        return -1;
+    }
+    strip_comment(copy);
+    trimmed = minias_trim(copy);
+
+    if (strncmp(trimmed, ".rept", 5U) == 0 &&
+        (trimmed[5] == '\0' || isspace((unsigned char)trimmed[5]))) {
+        rest = trimmed + 5;
+        while (*rest == ' ' || *rest == '\t') {
+            ++rest;
+        }
+        if (argument_size != 0U) {
+            int written = snprintf(argument, argument_size, "%s", rest);
+            if (written < 0 || (size_t)written >= argument_size) {
+                free(copy);
+                return -1;
+            }
+        }
+        kind = 1;
+    } else if (strcmp(trimmed, ".endr") == 0) {
+        kind = 2;
+    }
+
+    free(copy);
+    return kind;
+}
+
+static bool process_source_line(MiniAs *as, const char *source, size_t line) {
+    char *copy = minias_strdup(source);
+    char *cursor;
+
+    if (copy == NULL) {
+        minias_set_error(as, "out-of-memory:source-line");
+        return false;
+    }
+    strip_comment(copy);
+    cursor = copy;
+    while (cursor != NULL) {
+        char *semicolon = strchr(cursor, ';');
+        if (semicolon != NULL) {
+            *semicolon = '\0';
+        }
+        if (!process_statement(as, cursor, line)) {
+            free(copy);
+            return false;
+        }
+        cursor = semicolon == NULL ? NULL : semicolon + 1;
+    }
+    free(copy);
+    return true;
+}
+
+static bool repeat_count_value(MiniAs *as,
+                               const char *argument,
+                               size_t line,
+                               uint64_t *count) {
+    int64_t value;
+
+    if (*argument == '\0' ||
+        !evaluate_absolute_expression(as, argument, &value) ||
+        value < 0) {
+        minias_set_error(as,
+                         "unsupported-expression:.rept:%s:line=%zu",
+                         argument,
+                         line);
+        return false;
+    }
+    if ((uint64_t)value > UINT32_MAX) {
+        minias_set_error(as,
+                         "repeat-count-too-large:%s:line=%zu",
+                         argument,
+                         line);
+        return false;
+    }
+    *count = (uint64_t)value;
+    return true;
+}
+
+static bool process_source_range(MiniAs *as,
+                                 MiniAsSourceLine *lines,
+                                 size_t begin,
+                                 size_t end) {
+    size_t i = begin;
+
+    while (i < end) {
+        char argument[256];
+        int kind = classify_repeat_line(lines[i].text,
+                                        argument,
+                                        sizeof(argument));
+        if (kind < 0) {
+            minias_set_error(as, "out-of-memory:repeat-classify");
+            return false;
+        }
+        if (kind == 2) {
+            minias_set_error(as,
+                             "unmatched-directive:.endr:line=%zu",
+                             lines[i].line);
+            return false;
+        }
+        if (kind == 1) {
+            size_t j = i + 1U;
+            size_t depth = 1U;
+            uint64_t repetitions;
+            uint64_t iteration;
+
+            while (j < end && depth != 0U) {
+                char nested_argument[256];
+                int nested_kind =
+                    classify_repeat_line(lines[j].text,
+                                         nested_argument,
+                                         sizeof(nested_argument));
+                if (nested_kind < 0) {
+                    minias_set_error(as, "out-of-memory:repeat-classify");
+                    return false;
+                }
+                if (nested_kind == 1) {
+                    ++depth;
+                } else if (nested_kind == 2) {
+                    --depth;
+                }
+                if (depth != 0U) {
+                    ++j;
+                }
+            }
+            if (depth != 0U || j >= end) {
+                minias_set_error(as,
+                                 "unterminated-directive:.rept:line=%zu",
+                                 lines[i].line);
+                return false;
+            }
+            if (!repeat_count_value(as,
+                                    argument,
+                                    lines[i].line,
+                                    &repetitions)) {
+                return false;
+            }
+            for (iteration = 0U; iteration < repetitions; ++iteration) {
+                if (!process_source_range(as, lines, i + 1U, j)) {
+                    return false;
+                }
+            }
+            i = j + 1U;
+            continue;
+        }
+        if (!process_source_line(as, lines[i].text, lines[i].line)) {
+            return false;
+        }
+        ++i;
+    }
+    return true;
+}
+
+static bool read_repeat_block(MiniAs *as,
+                              FILE *file,
+                              size_t *line_no,
+                              MiniAsSourceLine **lines_out,
+                              size_t *count_out) {
+    MiniAsSourceLine *lines = NULL;
+    size_t count = 0U;
+    size_t capacity = 0U;
+    size_t depth = 1U;
+    char linebuf[65536];
+
+    while (fgets(linebuf, sizeof(linebuf), file) != NULL) {
+        size_t len;
+        char argument[256];
+        int kind;
+
+        ++*line_no;
+        len = strlen(linebuf);
+        if (len == sizeof(linebuf) - 1U && linebuf[len - 1U] != '\n') {
+            minias_set_error(as, "line-too-long:line=%zu", *line_no);
+            destroy_source_lines(lines, count);
+            return false;
+        }
+        kind = classify_repeat_line(linebuf, argument, sizeof(argument));
+        if (kind < 0) {
+            minias_set_error(as, "out-of-memory:repeat-classify");
+            destroy_source_lines(lines, count);
+            return false;
+        }
+        if (kind == 1) {
+            ++depth;
+        } else if (kind == 2) {
+            --depth;
+            if (depth == 0U) {
+                *lines_out = lines;
+                *count_out = count;
+                return true;
+            }
+        }
+        if (!grow_array((void **)&lines,
+                        &capacity,
+                        sizeof(*lines),
+                        count + 1U)) {
+            minias_set_error(as, "out-of-memory:repeat-lines");
+            destroy_source_lines(lines, count);
+            return false;
+        }
+        lines[count].text = minias_strdup(linebuf);
+        lines[count].line = *line_no;
+        if (lines[count].text == NULL) {
+            minias_set_error(as, "out-of-memory:repeat-line");
+            destroy_source_lines(lines, count);
+            return false;
+        }
+        ++count;
+    }
+
+    if (ferror(file)) {
+        minias_set_error(as, "input-read:repeat-block");
+    } else {
+        minias_set_error(as, "unterminated-directive:.rept");
+    }
+    destroy_source_lines(lines, count);
+    return false;
+}
+
 bool minias_parse_file(MiniAs *as, const char *path) {
     FILE *file = fopen(path, "r");
     char linebuf[65536];
@@ -2053,9 +2298,9 @@ bool minias_parse_file(MiniAs *as, const char *path) {
         return false;
     }
     while (fgets(linebuf, sizeof(linebuf), file) != NULL) {
-        char *cursor;
-        char *semicolon;
         size_t len;
+        char argument[256];
+        int kind;
 
         ++line_no;
         len = strlen(linebuf);
@@ -2064,18 +2309,52 @@ bool minias_parse_file(MiniAs *as, const char *path) {
             fclose(file);
             return false;
         }
-        strip_comment(linebuf);
-        cursor = linebuf;
-        while (cursor != NULL) {
-            semicolon = strchr(cursor, ';');
-            if (semicolon != NULL) {
-                *semicolon = '\0';
-            }
-            if (!process_statement(as, cursor, line_no)) {
+
+        kind = classify_repeat_line(linebuf, argument, sizeof(argument));
+        if (kind < 0) {
+            minias_set_error(as, "out-of-memory:repeat-classify");
+            fclose(file);
+            return false;
+        }
+        if (kind == 2) {
+            minias_set_error(as,
+                             "unmatched-directive:.endr:line=%zu",
+                             line_no);
+            fclose(file);
+            return false;
+        }
+        if (kind == 1) {
+            MiniAsSourceLine *lines = NULL;
+            size_t count = 0U;
+            uint64_t repetitions;
+            uint64_t iteration;
+
+            if (!read_repeat_block(as,
+                                   file,
+                                   &line_no,
+                                   &lines,
+                                   &count) ||
+                !repeat_count_value(as,
+                                    argument,
+                                    line_no - count - 1U,
+                                    &repetitions)) {
+                destroy_source_lines(lines, count);
                 fclose(file);
                 return false;
             }
-            cursor = semicolon == NULL ? NULL : semicolon + 1;
+            for (iteration = 0U; iteration < repetitions; ++iteration) {
+                if (!process_source_range(as, lines, 0U, count)) {
+                    destroy_source_lines(lines, count);
+                    fclose(file);
+                    return false;
+                }
+            }
+            destroy_source_lines(lines, count);
+            continue;
+        }
+        if (!process_source_line(as, linebuf, line_no)) {
+            fclose(file);
+            return false;
         }
     }
     if (ferror(file)) {
