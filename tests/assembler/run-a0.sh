@@ -560,6 +560,19 @@ fence_i_hex="$(
 )"
 test "$fence_i_hex" = "0f10000067800000"
 
+cat >"$work/u64-data.s" <<'EOF'
+.data
+.dword 18446744073709551615
+.dword 9223372036854775808
+.dword 18446744073709551416
+EOF
+"$MINIAS" -o "$work/u64-data.o" "$work/u64-data.s"
+u64_hex="$(
+    readelf -x .data "$work/u64-data.o" |
+    awk '/0x[0-9a-f]+/ {for (i=2; i<=NF; ++i) if ($i ~ /^[0-9a-f]{8}$/) printf "%s", $i}'
+)"
+test "$u64_hex" = "ffffffffffffffff0000000000000080d8feffffffffffff"
+
 cat >"$work/vector-unit.s" <<'EOF'
 .text
 .option arch,+v
@@ -580,4 +593,4 @@ vector_hex="$(
 )"
 test "$vector_hex" = "d772300c57b00f5e57b40f5e57b80f5e57bc0f5e27000e0227040e0207d1050287040400"
 
-echo "MINIAS_A0=PASS objects=5 format=ELF64-RISCV-ET_REL relocations=16 strings=2 pseudos=14 previous=3 subsection=2 numeric_labels=18 isa_next=13 csr_amo=6 sfence_vma=3 fence_i=1 vsetvl=1 vsetvli=1 vmv_v_i=4 rept=2 nested_rept=1 irp=4 section_stack=1 org=3 local_difference=1 lr_sc=2 inline_labels=2 branch_pseudos=8 extern=1 symbol_minus_dot=4 symbol_difference=1 absolute32=1 jal=2 jal_subsection=1 high_numeric_labels=2 conditional=1"
+echo "MINIAS_A0=PASS objects=6 format=ELF64-RISCV-ET_REL relocations=16 strings=2 pseudos=14 previous=3 subsection=2 numeric_labels=18 isa_next=13 csr_amo=6 sfence_vma=3 fence_i=1 vsetvl=1 vsetvli=1 vmv_v_i=4 rept=2 nested_rept=1 irp=4 section_stack=1 org=3 local_difference=1 lr_sc=2 inline_labels=2 branch_pseudos=8 extern=1 symbol_minus_dot=4 symbol_difference=1 absolute32=1 jal=2 jal_subsection=1 high_numeric_labels=2 u64_data=3 conditional=1"

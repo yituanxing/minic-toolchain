@@ -667,6 +667,76 @@ static bool parse_i64_data(const char *text, int64_t *out) {
     return true;
 }
 
+static bool parse_data_integer_bits(const char *text, uint64_t *out) {
+    int64_t signed_value;
+    char *copy;
+    char *normalized;
+    char *end = NULL;
+    unsigned long long value;
+
+    if (parse_i64_data(text, &signed_value)) {
+        *out = (uint64_t)signed_value;
+        return true;
+    }
+    copy = minias_strdup(text);
+    if (copy == NULL) {
+        return false;
+    }
+    normalized = minias_trim(copy);
+    for (;;) {
+        size_t len = strlen(normalized);
+        size_t i;
+        int depth = 0;
+        bool encloses_all = true;
+
+        if (len < 2U || normalized[0] != '(' ||
+            normalized[len - 1U] != ')') {
+            break;
+        }
+        for (i = 0U; i < len; ++i) {
+            if (normalized[i] == '(') {
+                ++depth;
+            } else if (normalized[i] == ')') {
+                --depth;
+                if (depth < 0) {
+                    encloses_all = false;
+                    break;
+                }
+                if (depth == 0 && i + 1U != len) {
+                    encloses_all = false;
+                    break;
+                }
+            }
+        }
+        if (!encloses_all || depth != 0) {
+            break;
+        }
+        normalized[len - 1U] = '\0';
+        normalized = minias_trim(normalized + 1);
+    }
+    if (*normalized == '-') {
+        free(copy);
+        return false;
+    }
+    errno = 0;
+    value = strtoull(normalized, &end, 0);
+    if (errno != 0 || end == normalized) {
+        free(copy);
+        return false;
+    }
+    while (*end == ' ' || *end == '\t') {
+        ++end;
+    }
+    if (*end != '\0') {
+        free(copy);
+        return false;
+    }
+    *out = (uint64_t)value;
+    free(copy);
+    return true;
+}
+
+
 static bool switch_section(MiniAs *as,
                            const char *name,
                            uint32_t type,
@@ -1126,13 +1196,14 @@ static bool evaluate_absolute_expression(MiniAs *as,
     return *parser.cursor == '\0';
 }
 
-static bool parse_absolute_data_value(MiniAs *as,
-                                      const char *text,
-                                      int64_t *value) {
+static bool parse_absolute_data_bits(MiniAs *as,
+                                     const char *text,
+                                     uint64_t *value) {
     MiniAsAbsoluteExpressionParser parser;
     uint64_t dot;
+    int64_t signed_value;
 
-    if (parse_i64_data(text, value)) {
+    if (parse_data_integer_bits(text, value)) {
         return true;
     }
     if (!current_location(as, &dot) || dot > (uint64_t)INT64_MAX) {
@@ -1142,11 +1213,15 @@ static bool parse_absolute_data_value(MiniAs *as,
     parser.cursor = text;
     parser.dot = (int64_t)dot;
     parser.only_absolute_symbols = true;
-    if (!parse_absolute_or(&parser, value)) {
+    if (!parse_absolute_or(&parser, &signed_value)) {
         return false;
     }
     skip_absolute_expression_space(&parser);
-    return *parser.cursor == '\0' && parser.only_absolute_symbols;
+    if (*parser.cursor != '\0' || !parser.only_absolute_symbols) {
+        return false;
+    }
+    *value = (uint64_t)signed_value;
+    return true;
 }
 
 static bool parse_equ(MiniAs *as, char *args, size_t line) {
@@ -1551,12 +1626,12 @@ static bool add_data_stmt(MiniAs *as, const char *op, char *args, size_t line) {
         cursor = copy;
         while (cursor != NULL) {
             char *comma = strchr(cursor, ',');
-            int64_t value;
+            uint64_t value;
 
             if (comma != NULL) {
                 *comma = '\0';
             }
-            if (!parse_absolute_data_value(as, minias_trim(cursor), &value)) {
+            if (!parse_absolute_data_bits(as, minias_trim(cursor), &value)) {
                 MiniAsSymbolExpr expr;
                 const char *trimmed = minias_trim(cursor);
                 MiniAsSymbolExpr rhs_expr;
@@ -1758,7 +1833,6 @@ static bool emit_data_stmt(MiniAs *as, const MiniAsStmt *stmt) {
     cursor = copy;
     while (cursor != NULL) {
         char *comma = strchr(cursor, ',');
-        int64_t signed_value;
         uint64_t value;
         unsigned char bytes[8];
         unsigned int i;
@@ -1766,7 +1840,7 @@ static bool emit_data_stmt(MiniAs *as, const MiniAsStmt *stmt) {
         if (comma != NULL) {
             *comma = '\0';
         }
-        if (!parse_absolute_data_value(as, minias_trim(cursor), &signed_value)) {
+        if (!parse_absolute_data_bits(as, minias_trim(cursor), &value)) {
             MiniAsSymbolExpr expr;
             const char *trimmed = minias_trim(cursor);
             uint64_t relocation_offset =
@@ -1822,7 +1896,6 @@ static bool emit_data_stmt(MiniAs *as, const MiniAsStmt *stmt) {
                 }
             }
         } else {
-            value = (uint64_t)signed_value;
             for (i = 0U; i < width; ++i) {
                 bytes[i] = (unsigned char)((value >> (i * 8U)) & 0xffU);
             }
