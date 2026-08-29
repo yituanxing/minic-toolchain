@@ -3,6 +3,18 @@
 #include <stdio.h>
 #include <string.h>
 
+static bool arch_has_standard_extension(const char *arch, char extension) {
+    const char *p = arch + 4;
+
+    while (*p != '\0' && *p != '_') {
+        if (*p == extension) {
+            return true;
+        }
+        ++p;
+    }
+    return false;
+}
+
 static void usage(FILE *out, const char *argv0) {
     fprintf(out,
             "usage: %s [-march=rv32...|-march=rv64...] "
@@ -14,6 +26,7 @@ int main(int argc, char **argv) {
     const char *input = NULL;
     const char *output = NULL;
     bool elf32 = false;
+    uint32_t elf_flags = 0U;
     int i;
 
     for (i = 1; i < argc; ++i) {
@@ -32,6 +45,11 @@ int main(int argc, char **argv) {
             } else {
                 fprintf(stderr, "minic-as: unsupported-arch:%s\n", arch);
                 return 2;
+            }
+            if (arch_has_standard_extension(arch, 'c')) {
+                elf_flags |= 1U; /* EF_RISCV_RVC */
+            } else {
+                elf_flags &= ~1U;
             }
         } else if (strncmp(argv[i], "-mabi=", 6U) == 0) {
             const char *abi = argv[i] + 6;
@@ -61,5 +79,9 @@ int main(int argc, char **argv) {
         usage(stderr, argv[0]);
         return 2;
     }
-    return minias_assemble_file_class(input, output, elf32, stderr);
+    return minias_assemble_file_target(input,
+                                       output,
+                                       elf32,
+                                       elf_flags,
+                                       stderr);
 }
