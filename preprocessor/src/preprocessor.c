@@ -831,16 +831,22 @@ static bool minipp_process_file(MiniPpState *state,
                                 const char *path,
                                 MiniPpString *output) {
     MiniPpString input;
+    MiniPpString logical;
     size_t conditional_base = state->conditional_count;
     bool previous_comment_state = state->in_block_comment;
     bool ok;
 
     minipp_string_init(&input);
+    minipp_string_init(&logical);
     state->in_block_comment = false;
 
     ok = minipp_read_file(path, &input, state->diagnostics) &&
-         minipp_process_source(state, path, &input, output);
+         minipp_splice_backslash_newlines(&input, &logical) &&
+         minipp_process_source(state, path, &logical, output);
 
+    if (!ok && logical.data == NULL && input.data != NULL) {
+        fprintf(state->diagnostics, "minic-cpp: out-of-memory\n");
+    }
     if (ok && state->in_block_comment) {
         fprintf(state->diagnostics,
                 "minic-cpp: unterminated-comment:%s\n",
@@ -855,6 +861,7 @@ static bool minipp_process_file(MiniPpState *state,
     }
 
     state->in_block_comment = previous_comment_state;
+    minipp_string_destroy(&logical);
     minipp_string_destroy(&input);
     return ok;
 }
