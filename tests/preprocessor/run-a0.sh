@@ -71,4 +71,39 @@ int/* comment */value = 3;
 EOF
 run_exact comment
 
-printf 'MINIPP_A0_EXACT=PASS cases=7 mode=byte-identical\n'
+cat >"$work/local.h" <<'EOF'
+#define LOCAL_VALUE 17
+int from_local_header = LOCAL_VALUE;
+EOF
+cat >"$work/quoted-include.c" <<'EOF'
+#include "local.h"
+int after_local = LOCAL_VALUE + 1;
+EOF
+run_exact quoted-include
+
+mkdir -p "$work/inc"
+cat >"$work/inc/angle.h" <<'EOF'
+#define ANGLE_VALUE 23
+int from_angle_header = ANGLE_VALUE;
+EOF
+cat >"$work/angle-include.c" <<'EOF'
+#include <angle.h>
+int after_angle = ANGLE_VALUE + 1;
+EOF
+run_exact angle-include -I"$work/inc"
+
+mkdir -p "$work/nested"
+cat >"$work/nested/leaf.h" <<'EOF'
+#define LEAF_VALUE 31
+EOF
+cat >"$work/nested/root.h" <<'EOF'
+#include "leaf.h"
+int from_nested_header = LEAF_VALUE;
+EOF
+cat >"$work/nested-include.c" <<'EOF'
+#include "nested/root.h"
+int after_nested = LEAF_VALUE + 1;
+EOF
+run_exact nested-include
+
+printf 'MINIPP_A0_EXACT=PASS cases=10 mode=byte-identical\n'
