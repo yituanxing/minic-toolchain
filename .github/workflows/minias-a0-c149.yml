@@ -38,9 +38,10 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
-          cd build/import-c149
-          sha256sum -c minias-ground-truth-c149-corpus.tar.gz.sha256
-          cd ..
+          expected=$(cut -d' ' -f1 build/import-c149/minias-ground-truth-c149-corpus.tar.gz.sha256)
+          actual=$(sha256sum build/import-c149/minias-ground-truth-c149-corpus.tar.gz | cut -d' ' -f1)
+          test "$actual" = "$expected"
+          cd build
           tar -xzf import-c149/minias-ground-truth-c149-corpus.tar.gz
           corpus="$GITHUB_WORKSPACE/build/minias-ground-truth-c149-corpus"
           test -s "$corpus/selected-tus.txt"
