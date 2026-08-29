@@ -101,10 +101,6 @@ jobs:
           import=build/import-native26-sidecars
           target=build/linux-native26-out
           test -s "$import/SHA256SUMS"
-          (
-            cd "$import"
-            sha256sum -c SHA256SUMS
-          )
           sidecars=(
             arch/riscv/kernel/vdso/vdso.so
             arch/riscv/kernel/compat_vdso/compat_vdso.so
@@ -113,6 +109,10 @@ jobs:
           )
           for rel in "${sidecars[@]}"; do
             test -s "$import/$rel"
+            expected=$(awk -v p="./$rel" '$2 == p {print $1}' "$import/SHA256SUMS")
+            test -n "$expected"
+            actual=$(sha256sum "$import/$rel" | cut -d' ' -f1)
+            test "$actual" = "$expected"
             mkdir -p "$target/$(dirname "$rel")"
             cp "$import/$rel" "$target/$rel"
           done
