@@ -90,76 +90,252 @@ static bool decode_vector_unit_stride(const char *op,
     return true;
 }
 
-static bool checked_mul_i64(int64_t lhs, int64_t rhs, int64_t *out) {
-    if (lhs == 0 || rhs == 0) {
-        *out = 0;
+typedef struct MiniAsConstExpressionParser {
+    const char *cursor;
+} MiniAsConstExpressionParser;
+
+static void skip_const_space(MiniAsConstExpressionParser *parser) {
+    while (*parser->cursor == ' ' || *parser->cursor == '\t') {
+        ++parser->cursor;
+    }
+}
+
+static bool parse_const_or(MiniAsConstExpressionParser *parser, uint64_t *value);
+
+static bool parse_const_primary(MiniAsConstExpressionParser *parser,
+                                uint64_t *value) {
+    char *end = NULL;
+    unsigned long long parsed;
+
+    skip_const_space(parser);
+    if (*parser->cursor == '(') {
+        ++parser->cursor;
+        if (!parse_const_or(parser, value)) {
+            return false;
+        }
+        skip_const_space(parser);
+        if (*parser->cursor != ')') {
+            return false;
+        }
+        ++parser->cursor;
         return true;
     }
-    if (lhs == -1 && rhs == INT64_MIN) {
+
+    errno = 0;
+    parsed = strtoull(parser->cursor, &end, 0);
+    if (errno != 0 || end == parser->cursor) {
         return false;
     }
-    if (rhs == -1 && lhs == INT64_MIN) {
-        return false;
-    }
-    if (lhs > 0) {
-        if ((rhs > 0 && lhs > INT64_MAX / rhs) ||
-            (rhs < 0 && rhs < INT64_MIN / lhs)) {
-            return false;
-        }
-    } else {
-        if ((rhs > 0 && lhs < INT64_MIN / rhs) ||
-            (rhs < 0 && lhs < INT64_MAX / rhs)) {
-            return false;
-        }
-    }
-    *out = lhs * rhs;
+    parser->cursor = end;
+    *value = (uint64_t)parsed;
     return true;
 }
 
-static bool parse_i64(const char *text, int64_t *value) {
-    const char *cursor = text;
-    char *end = NULL;
-    long long parsed;
-    int64_t result;
-
-    while (*cursor == ' ' || *cursor == '\t') {
-        ++cursor;
+static bool parse_const_unary(MiniAsConstExpressionParser *parser,
+                              uint64_t *value) {
+    skip_const_space(parser);
+    if (*parser->cursor == '+') {
+        ++parser->cursor;
+        return parse_const_unary(parser, value);
     }
-    errno = 0;
-    parsed = strtoll(cursor, &end, 0);
-    if (errno != 0 || end == cursor) {
+    if (*parser->cursor == '-') {
+        uint64_t operand;
+        ++parser->cursor;
+        if (!parse_const_unary(parser, &operand)) {
+            return false;
+        }
+        *value = UINT64_C(0) - operand;
+        return true;
+    }
+    if (*parser->cursor == '~') {
+        uint64_t operand;
+        ++parser->cursor;
+        if (!parse_const_unary(parser, &operand)) {
+            return false;
+        }
+        *value = ~operand;
+        return true;
+    }
+    return parse_const_primary(parser, value);
+}
+
+static bool parse_const_mul(MiniAsConstExpressionParser *parser,
+                            uint64_t *value) {
+    uint64_t result;
+
+    if (!parse_const_unary(parser, &result)) {
         return false;
     }
-    result = (int64_t)parsed;
-    cursor = end;
     for (;;) {
-        int64_t factor;
+        char op;
+        uint64_t rhs;
 
-        while (*cursor == ' ' || *cursor == '\t') {
-            ++cursor;
+        skip_const_space(parser);
+        op = *parser->cursor;
+        if (op != '*' && op != '/' && op != '%') {
+            break;
         }
-        if (*cursor == '\0') {
-            *value = result;
-            return true;
-        }
-        if (*cursor != '*') {
+        ++parser->cursor;
+        if (!parse_const_unary(parser, &rhs)) {
             return false;
         }
-        ++cursor;
-        while (*cursor == ' ' || *cursor == '\t') {
-            ++cursor;
+        if (op == '*') {
+            result *= rhs;
+        } else {
+            if (rhs == 0U) {
+                return false;
+            }
+            result = op == '/' ? result / rhs : result % rhs;
         }
-        errno = 0;
-        parsed = strtoll(cursor, &end, 0);
-        if (errno != 0 || end == cursor) {
-            return false;
-        }
-        factor = (int64_t)parsed;
-        if (!checked_mul_i64(result, factor, &result)) {
-            return false;
-        }
-        cursor = end;
     }
+    *value = result;
+    return true;
+}
+
+static bool parse_const_sum(MiniAsConstExpressionParser *parser,
+                            uint64_t *value) {
+    uint64_t result;
+
+    if (!parse_const_mul(parser, &result)) {
+        return false;
+    }
+    for (;;) {
+        char op;
+        uint64_t rhs;
+
+        skip_const_space(parser);
+        op = *parser->cursor;
+        if (op != '+' && op != '-') {
+            break;
+        }
+        ++parser->cursor;
+        if (!parse_const_mul(parser, &rhs)) {
+            return false;
+        }
+        result = op == '+' ? result + rhs : result - rhs;
+    }
+    *value = result;
+    return true;
+}
+
+static bool parse_const_shift(MiniAsConstExpressionParser *parser,
+                              uint64_t *value) {
+    uint64_t result;
+
+    if (!parse_const_sum(parser, &result)) {
+        return false;
+    }
+    for (;;) {
+        bool left;
+        uint64_t rhs;
+
+        skip_const_space(parser);
+        if (strncmp(parser->cursor, "<<", 2U) == 0) {
+            left = true;
+        } else if (strncmp(parser->cursor, ">>", 2U) == 0) {
+            left = false;
+        } else {
+            break;
+        }
+        parser->cursor += 2;
+        if (!parse_const_sum(parser, &rhs) || rhs >= 64U) {
+            return false;
+        }
+        result = left ? result << (unsigned int)rhs
+                      : result >> (unsigned int)rhs;
+    }
+    *value = result;
+    return true;
+}
+
+static bool parse_const_and(MiniAsConstExpressionParser *parser,
+                            uint64_t *value) {
+    uint64_t result;
+
+    if (!parse_const_shift(parser, &result)) {
+        return false;
+    }
+    for (;;) {
+        uint64_t rhs;
+        skip_const_space(parser);
+        if (*parser->cursor != '&' || parser->cursor[1] == '&') {
+            break;
+        }
+        ++parser->cursor;
+        if (!parse_const_shift(parser, &rhs)) {
+            return false;
+        }
+        result &= rhs;
+    }
+    *value = result;
+    return true;
+}
+
+static bool parse_const_xor(MiniAsConstExpressionParser *parser,
+                            uint64_t *value) {
+    uint64_t result;
+
+    if (!parse_const_and(parser, &result)) {
+        return false;
+    }
+    for (;;) {
+        uint64_t rhs;
+        skip_const_space(parser);
+        if (*parser->cursor != '^') {
+            break;
+        }
+        ++parser->cursor;
+        if (!parse_const_and(parser, &rhs)) {
+            return false;
+        }
+        result ^= rhs;
+    }
+    *value = result;
+    return true;
+}
+
+static bool parse_const_or(MiniAsConstExpressionParser *parser,
+                           uint64_t *value) {
+    uint64_t result;
+
+    if (!parse_const_xor(parser, &result)) {
+        return false;
+    }
+    for (;;) {
+        uint64_t rhs;
+        skip_const_space(parser);
+        if (*parser->cursor != '|' || parser->cursor[1] == '|') {
+            break;
+        }
+        ++parser->cursor;
+        if (!parse_const_xor(parser, &rhs)) {
+            return false;
+        }
+        result |= rhs;
+    }
+    *value = result;
+    return true;
+}
+
+static bool parse_const_expression_bits(const char *text, uint64_t *value) {
+    MiniAsConstExpressionParser parser;
+
+    parser.cursor = text;
+    if (!parse_const_or(&parser, value)) {
+        return false;
+    }
+    skip_const_space(&parser);
+    return *parser.cursor == '\0';
+}
+
+static bool parse_i64(const char *text, int64_t *value) {
+    uint64_t bits;
+
+    if (!parse_const_expression_bits(text, &bits)) {
+        return false;
+    }
+    *value = (int64_t)bits;
+    return true;
 }
 
 static bool parse_li_bits(const char *text,
@@ -179,44 +355,48 @@ static bool parse_li_bits(const char *text,
         long long parsed;
         errno = 0;
         parsed = strtoll(text, &end, 0);
-        if (errno != 0 || end == text) {
-            return false;
+        if (errno == 0 && end != text) {
+            while (*end == ' ' || *end == '\t') {
+                ++end;
+            }
+            if (*end == '\0') {
+                *signed_value = (int64_t)parsed;
+                *bits = (uint64_t)*signed_value;
+                *fits_signed32 =
+                    *signed_value >= INT32_MIN && *signed_value <= INT32_MAX;
+                return true;
+            }
         }
-        while (*end == ' ' || *end == '\t') {
-            ++end;
-        }
-        if (*end != '\0') {
-            return false;
-        }
-        *signed_value = (int64_t)parsed;
-        *bits = (uint64_t)*signed_value;
-        *fits_signed32 =
-            *signed_value >= INT32_MIN && *signed_value <= INT32_MAX;
-        return true;
-    }
-    {
+    } else {
         unsigned long long parsed;
         errno = 0;
         parsed = strtoull(text, &end, 0);
-        if (errno != 0 || end == text) {
-            return false;
+        if (errno == 0 && end != text) {
+            while (*end == ' ' || *end == '\t') {
+                ++end;
+            }
+            if (*end == '\0') {
+                *bits = (uint64_t)parsed;
+                if (*bits <= (uint64_t)INT64_MAX) {
+                    *signed_value = (int64_t)*bits;
+                    *fits_signed32 =
+                        *signed_value >= INT32_MIN && *signed_value <= INT32_MAX;
+                } else {
+                    *signed_value = 0;
+                    *fits_signed32 = false;
+                }
+                return true;
+            }
         }
-        while (*end == ' ' || *end == '\t') {
-            ++end;
-        }
-        if (*end != '\0') {
-            return false;
-        }
-        *bits = (uint64_t)parsed;
-        if (*bits <= (uint64_t)INT64_MAX) {
-            *signed_value = (int64_t)*bits;
-            *fits_signed32 = *signed_value <= INT32_MAX;
-        } else {
-            *signed_value = 0;
-            *fits_signed32 = false;
-        }
-        return true;
     }
+
+    if (!parse_const_expression_bits(text, bits)) {
+        return false;
+    }
+    *signed_value = (int64_t)*bits;
+    *fits_signed32 =
+        *signed_value >= INT32_MIN && *signed_value <= INT32_MAX;
+    return true;
 }
 
 static uint32_t li64_materialized_size(uint64_t bits) {
@@ -903,7 +1083,7 @@ bool minias_riscv_measure(const char *op,
 
 #define SIMPLE(OP) strcmp(op, OP) == 0
     if (SIMPLE("ret") || SIMPLE("nop") || SIMPLE("mv") || SIMPLE("move") || SIMPLE("jr") ||
-        SIMPLE("snez") || SIMPLE("seqz") || SIMPLE("neg") || SIMPLE("sext.w") || SIMPLE("jalr") ||
+        SIMPLE("snez") || SIMPLE("seqz") || SIMPLE("neg") || SIMPLE("negw") || SIMPLE("not") || SIMPLE("frcsr") || SIMPLE("sext.w") || SIMPLE("jalr") ||
         SIMPLE("j") || SIMPLE("jal") || SIMPLE("beq") || SIMPLE("bne") ||
         SIMPLE("blt") || SIMPLE("bge") || SIMPLE("bltu") || SIMPLE("bgeu") ||
         SIMPLE("beqz") || SIMPLE("bnez") || SIMPLE("bltz") || SIMPLE("bgez") ||
@@ -1091,6 +1271,29 @@ bool minias_riscv_encode(MiniAs *as, const MiniAsStmt *stmt) {
             return false;
         }
         return append_u32(as, stmt->section, enc_r(0x33U, rd, 0U, 0, rs1, 0x20U));
+    }
+    if (strcmp(stmt->op, "negw") == 0) {
+        if (count != 2U || !require_reg(as, stmt, operands[0], &rd) ||
+            !require_reg(as, stmt, operands[1], &rs1)) {
+            return false;
+        }
+        return append_u32(as, stmt->section, enc_r(0x3bU, rd, 0U, 0, rs1, 0x20U));
+    }
+    if (strcmp(stmt->op, "not") == 0) {
+        if (count != 2U || !require_reg(as, stmt, operands[0], &rd) ||
+            !require_reg(as, stmt, operands[1], &rs1)) {
+            return false;
+        }
+        return append_u32(as, stmt->section, enc_i(0x13U, rd, 4U, rs1, -1));
+    }
+    if (strcmp(stmt->op, "frcsr") == 0) {
+        if (count != 1U || !require_reg(as, stmt, operands[0], &rd)) {
+            return false;
+        }
+        return append_u32(as,
+                          stmt->section,
+                          0x73U | ((uint32_t)rd << 7U) | (2U << 12U) |
+                              (0x003U << 20U));
     }
     if (strcmp(stmt->op, "li") == 0) {
         uint64_t bits;
