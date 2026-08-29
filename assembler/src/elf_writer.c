@@ -613,10 +613,10 @@ bool minias_write_elf32(MiniAs *as, const char *path) {
         cursor = align_up_u64(cursor, alignment);
         section_headers[i + 1U].sh_name = section_names[i];
         section_headers[i + 1U].sh_type = section->type;
-        section_headers[i + 1U].sh_flags = section->flags;
-        section_headers[i + 1U].sh_offset = cursor;
+        section_headers[i + 1U].sh_flags = (Elf32_Word)section->flags;
+        section_headers[i + 1U].sh_offset = (Elf32_Off)cursor;
         section_headers[i + 1U].sh_size = (Elf32_Word)section->size;
-        section_headers[i + 1U].sh_addralign = alignment;
+        section_headers[i + 1U].sh_addralign = (Elf32_Word)alignment;
         if (section->type != SHT_NOBITS) {
             cursor += (uint64_t)section->size;
         }
@@ -633,8 +633,8 @@ bool minias_write_elf32(MiniAs *as, const char *path) {
             section_headers[index].sh_name = relocation_names[i];
             section_headers[index].sh_type = SHT_RELA;
             section_headers[index].sh_flags = SHF_INFO_LINK;
-            section_headers[index].sh_offset = cursor;
-            section_headers[index].sh_size = bytes;
+            section_headers[index].sh_offset = (Elf32_Off)cursor;
+            section_headers[index].sh_size = (Elf32_Word)bytes;
             section_headers[index].sh_link = (Elf32_Word)symtab_index;
             section_headers[index].sh_info = (Elf32_Word)(i + 1U);
             section_headers[index].sh_addralign = 4U;
@@ -647,7 +647,7 @@ bool minias_write_elf32(MiniAs *as, const char *path) {
     cursor = align_up_u64(cursor, 4U);
     section_headers[symtab_index].sh_name = symtab_name;
     section_headers[symtab_index].sh_type = SHT_SYMTAB;
-    section_headers[symtab_index].sh_offset = cursor;
+    section_headers[symtab_index].sh_offset = (Elf32_Off)cursor;
     section_headers[symtab_index].sh_size =
         (Elf32_Word)(symbol_count * sizeof(Elf32_Sym));
     section_headers[symtab_index].sh_link = (Elf32_Word)strtab_index;
@@ -658,14 +658,14 @@ bool minias_write_elf32(MiniAs *as, const char *path) {
 
     section_headers[strtab_index].sh_name = strtab_name;
     section_headers[strtab_index].sh_type = SHT_STRTAB;
-    section_headers[strtab_index].sh_offset = cursor;
+    section_headers[strtab_index].sh_offset = (Elf32_Off)cursor;
     section_headers[strtab_index].sh_size = (Elf32_Word)strtab_size;
     section_headers[strtab_index].sh_addralign = 1U;
     cursor += (uint64_t)strtab_size;
 
     section_headers[shstrtab_index].sh_name = shstrtab_name;
     section_headers[shstrtab_index].sh_type = SHT_STRTAB;
-    section_headers[shstrtab_index].sh_offset = cursor;
+    section_headers[shstrtab_index].sh_offset = (Elf32_Off)cursor;
     section_headers[shstrtab_index].sh_size = (Elf32_Word)shstrtab_size;
     section_headers[shstrtab_index].sh_addralign = 1U;
     cursor += (uint64_t)shstrtab_size;
@@ -695,7 +695,7 @@ bool minias_write_elf32(MiniAs *as, const char *path) {
         header->e_machine = EM_RISCV;
         header->e_version = EV_CURRENT;
         header->e_ehsize = sizeof(Elf32_Ehdr);
-        header->e_shoff = section_header_offset;
+        header->e_shoff = (Elf32_Off)section_header_offset;
         header->e_shentsize = sizeof(Elf32_Shdr);
         header->e_shnum = (Elf32_Half)(output_section_count + 1U);
         header->e_shstrndx = (Elf32_Half)shstrtab_index;
