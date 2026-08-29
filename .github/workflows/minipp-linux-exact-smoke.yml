@@ -1,0 +1,101 @@
+name: MiniPP Linux Exact Smoke
+
+on:
+  push:
+    branches:
+      - 'toolchain/minipp-*'
+    paths:
+      - 'preprocessor/**'
+      - 'tools/minic-cpp/**'
+      - 'tests/preprocessor/**'
+      - '.github/workflows/minipp-linux-exact-smoke.yml'
+      - 'Makefile'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  linux-exact-smoke:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux preprocessing prerequisites
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            gcc gcc-riscv64-linux-gnu libc6-dev-riscv64-cross \
+            bc bison flex libssl-dev libelf-dev make curl xz-utils
+
+      - name: Build independent MiniPP
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/minipp-linux toolchain 2>/dev/null || \
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/minipp-linux all
+          test -x build/minipp-linux/bin/minic-cpp
+          gcc --version | head -n 1
+
+      - name: Prepare Linux 6.6.143
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/minipp-linux-smoke"
+          archive="$work/linux-6.6.143.tar.xz"
+          src="$work/linux-6.6.143"
+          out="$work/out"
+          mkdir -p "$work"
+          curl -fsSL https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.6.143.tar.xz -o "$archive"
+          printf '%s  %s\n' \
+            dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932 \
+            "$archive" | sha256sum -c -
+          tar -xJf "$archive" -C "$work"
+          make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- defconfig
+          make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- prepare
+          echo "MINIPP_LINUX_PREPARE=PASS linux=6.6.143"
+
+      - name: Probe real Kbuild preprocessing inputs
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/minipp-linux-smoke"
+          src="$work/linux-6.6.143"
+          out="$work/out"
+          trace="$work/minipp-linux.trace"
+          probe="$work/probe"
+          rm -f "$out/init/main.o" "$out/init/.main.o.cmd"
+          rm -f "$out/kernel/configs.o" "$out/kernel/.configs.o.cmd"
+          : >"$trace"
+
+          export REAL_CC=riscv64-linux-gnu-gcc
+          export REFERENCE_CPP=gcc
+          export MINIPP="$GITHUB_WORKSPACE/build/minipp-linux/bin/minic-cpp"
+          export MINIPP_LINUX_TRACE="$trace"
+          export MINIPP_LINUX_WORK="$probe"
+
+          make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
+            CC="$GITHUB_WORKSPACE/tests/preprocessor/linux_kbuild_pp_cc.sh" \
+            -j1 V=1 init/main.o kernel/configs.o >"$work/kbuild.log" 2>&1
+
+          grep '^RESULT ' "$trace" || true
+          selected=$(grep -c '^RESULT ' "$trace" || true)
+          exact=$(grep -c ' status=EXACT' "$trace" || true)
+          fail=$(grep -c ' status=MINIPP_FAIL' "$trace" || true)
+          diff=$(grep -c ' status=DIFF' "$trace" || true)
+          test "$selected" -eq 2
+          printf 'MINIPP_LINUX_EXACT_SMOKE selected=%s exact=%s minipp_fail=%s diff=%s mode=kbuild-undef\n' \
+            "$selected" "$exact" "$fail" "$diff"
+
+      - name: Preserve exact-smoke evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: minipp-linux-exact-smoke
+          path: |
+            build/minipp-linux-smoke/minipp-linux.trace
+            build/minipp-linux-smoke/kbuild.log
+            build/minipp-linux-smoke/probe/*
+          if-no-files-found: ignore
+          retention-days: 2
