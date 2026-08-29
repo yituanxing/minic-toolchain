@@ -166,4 +166,35 @@ int splice_macro = SPLICE_ADD(3, 4);
 EOF
 run_exact splice-macro
 
-printf 'MINIPP_A0_EXACT=PASS cases=18 mode=byte-identical\n'
+cat >"$work/variadic.c" <<'EOF'
+#define PICK(first, second, ...) second
+int variadic_pick = PICK(1, 2, 3, 4);
+EOF
+run_exact variadic
+
+cat >"$work/token-paste.c" <<'EOF'
+#define CAT(a, b) a##b
+#define token42 99
+int token_paste_value = CAT(token, 42);
+EOF
+run_exact token-paste
+
+cat >"$work/stringize.c" <<'EOF'
+#define STR(x) #x
+const char *stringized = STR(hello world);
+EOF
+run_exact stringize
+
+cat >"$work/kconfig-style.c" <<'EOF'
+#define __ARG_PLACEHOLDER_1 0,
+#define __take_second_arg(__ignored, val, ...) val
+#define __is_defined(x) ___is_defined(x)
+#define ___is_defined(val) ____is_defined(__ARG_PLACEHOLDER_##val)
+#define ____is_defined(arg1_or_junk) __take_second_arg(arg1_or_junk 1, 0)
+#define CONFIG_MINIPP_FEATURE 1
+int kconfig_yes = __is_defined(CONFIG_MINIPP_FEATURE);
+int kconfig_no = __is_defined(CONFIG_MINIPP_MISSING);
+EOF
+run_exact kconfig-style
+
+printf 'MINIPP_A0_EXACT=PASS cases=22 mode=byte-identical\n'
