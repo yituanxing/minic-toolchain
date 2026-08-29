@@ -474,8 +474,87 @@ static bool minipp_handle_conditional_directive(MiniPpState *state,
     return false;
 }
 
+static bool minipp_process_file(MiniPpState *state,
+                                const char *path,
+                                MiniPpString *output);
+
+static bool minipp_handle_include(MiniPpState *state,
+                                  const char *current_path,
+                                  const char *rest,
+                                  MiniPpString *output) {
+    const char *text = minipp_skip_horizontal_space(rest);
+    const char *name_start;
+    const char *name_end;
+    char terminator;
+    bool angled;
+    char *name;
+    MiniPpString resolved;
+    bool ok;
+
+    if (*text == '"') {
+        angled = false;
+        terminator = '"';
+    } else if (*text == '<') {
+        angled = true;
+        terminator = '>';
+    } else {
+        fprintf(state->diagnostics,
+                "minic-cpp: unsupported-include-expression:%s",
+                rest);
+        return false;
+    }
+
+    name_start = text + 1;
+    name_end = name_start;
+    while (*name_end != '\0' && *name_end != terminator &&
+           *name_end != '\n') {
+        ++name_end;
+    }
+    if (*name_end != terminator || name_end == name_start) {
+        fprintf(state->diagnostics, "minic-cpp: invalid-include:%s", rest);
+        return false;
+    }
+
+    text = minipp_skip_horizontal_space(name_end + 1);
+    if (*text == '\n') {
+        ++text;
+    }
+    if (*text != '\0') {
+        fprintf(state->diagnostics,
+                "minic-cpp: trailing-include-tokens:%s",
+                rest);
+        return false;
+    }
+
+    name = minipp_duplicate_range(name_start,
+                                  (size_t)(name_end - name_start));
+    if (name == NULL) {
+        fprintf(state->diagnostics, "minic-cpp: out-of-memory\n");
+        return false;
+    }
+
+    if (!minipp_resolve_include(state,
+                                current_path,
+                                name,
+                                angled,
+                                &resolved)) {
+        fprintf(state->diagnostics,
+                "minic-cpp: include-not-found:%s\n",
+                name);
+        free(name);
+        return false;
+    }
+
+    ok = minipp_process_file(state, resolved.data, output);
+    minipp_string_destroy(&resolved);
+    free(name);
+    return ok;
+}
+
 static bool minipp_handle_directive(MiniPpState *state,
+                                    const char *current_path,
                                     const char *line,
+                                    MiniPpString *output,
                                     bool *handled) {
     const char *text = minipp_skip_horizontal_space(line);
     const char *directive_text;
@@ -521,6 +600,9 @@ static bool minipp_handle_directive(MiniPpState *state,
     if (strcmp(directive, "undef") == 0) {
         return minipp_parse_undef(state, rest);
     }
+    if (strcmp(directive, "include") == 0) {
+        return minipp_handle_include(state, current_path, rest, output);
+    }
 
     fprintf(state->diagnostics,
             "minic-cpp: unsupported-directive:%s\n",
@@ -529,6 +611,7 @@ static bool minipp_handle_directive(MiniPpState *state,
 }
 
 static bool minipp_process_source(MiniPpState *state,
+                                  const char *current_path,
                                   const MiniPpString *input,
                                   MiniPpString *output) {
     size_t offset = 0U;
@@ -562,7 +645,11 @@ static bool minipp_process_source(MiniPpState *state,
         }
         --stripped.size;
 
-        if (!minipp_handle_directive(state, stripped.data, &handled)) {
+        if (!minipp_handle_directive(state,
+                                     current_path,
+                                     stripped.data,
+                                     output,
+                                     &handled)) {
             minipp_string_destroy(&stripped);
             return false;
         }
@@ -578,15 +665,39 @@ static bool minipp_process_source(MiniPpState *state,
         offset = end;
     }
 
-    if (state->in_block_comment) {
-        fprintf(state->diagnostics, "minic-cpp: unterminated-comment\n");
-        return false;
-    }
-    if (state->conditional_count != 0U) {
-        fprintf(state->diagnostics, "minic-cpp: unterminated-conditional\n");
-        return false;
-    }
     return true;
+}
+
+static bool minipp_process_file(MiniPpState *state,
+                                const char *path,
+                                MiniPpString *output) {
+    MiniPpString input;
+    size_t conditional_base = state->conditional_count;
+    bool previous_comment_state = state->in_block_comment;
+    bool ok;
+
+    minipp_string_init(&input);
+    state->in_block_comment = false;
+
+    ok = minipp_read_file(path, &input, state->diagnostics) &&
+         minipp_process_source(state, path, &input, output);
+
+    if (ok && state->in_block_comment) {
+        fprintf(state->diagnostics,
+                "minic-cpp: unterminated-comment:%s\n",
+                path);
+        ok = false;
+    }
+    if (ok && state->conditional_count != conditional_base) {
+        fprintf(state->diagnostics,
+                "minic-cpp: unterminated-conditional:%s\n",
+                path);
+        ok = false;
+    }
+
+    state->in_block_comment = previous_comment_state;
+    minipp_string_destroy(&input);
+    return ok;
 }
 
 int minipp_preprocess_file(const char *input_path,
@@ -594,7 +705,6 @@ int minipp_preprocess_file(const char *input_path,
                            const MiniPpConfig *config,
                            FILE *diagnostics) {
     MiniPpState state;
-    MiniPpString input;
     MiniPpString output;
     size_t index;
     bool ok;
@@ -611,20 +721,20 @@ int minipp_preprocess_file(const char *input_path,
     }
     if (!config->no_standard_includes) {
         fprintf(diagnostics,
-                "minic-cpp: m0-requires-nostdinc:include-search-not-yet-implemented\n");
+                "minic-cpp: m0-requires-nostdinc:standard-include-search-not-yet-implemented\n");
         return 2;
     }
 
     memset(&state, 0, sizeof(state));
     state.active = true;
+    state.include_paths = config->include_paths;
+    state.include_path_count = config->include_path_count;
     state.diagnostics = diagnostics;
-    minipp_string_init(&input);
     minipp_string_init(&output);
 
     for (index = 0U; index < config->define_count; ++index) {
         if (!minipp_parse_command_line_define(&state, config->defines[index])) {
             minipp_state_destroy(&state);
-            minipp_string_destroy(&input);
             minipp_string_destroy(&output);
             return 1;
         }
@@ -633,15 +743,13 @@ int minipp_preprocess_file(const char *input_path,
         minipp_undefine_macro(&state, config->undefines[index]);
     }
 
-    ok = minipp_read_file(input_path, &input, diagnostics) &&
-         minipp_process_source(&state, &input, &output) &&
+    ok = minipp_process_file(&state, input_path, &output) &&
          minipp_write_file(output_path,
                            output.data == NULL ? "" : output.data,
                            output.size,
                            diagnostics);
 
     minipp_state_destroy(&state);
-    minipp_string_destroy(&input);
     minipp_string_destroy(&output);
     return ok ? 0 : 1;
 }
