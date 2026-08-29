@@ -1,6 +1,1 @@
-arch/riscv/kernel/irq.i.s
-arch/riscv/kernel/traps.i.s
-arch/riscv/kvm/main.i.s
-arch/riscv/kvm/vcpu_exit.i.s
-fs/nfs/blocklayout/blocklayout.i.s
 kernel/configs.i.s
