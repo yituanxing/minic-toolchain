@@ -1,0 +1,141 @@
+name: MiniAS Semantic Oracle Smoke
+
+on:
+  push:
+    branches:
+      - "toolchain/minias-m0-boundary-freeze"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[minias-semantic-oracle-smoke]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Install oracle dependencies
+        run: |
+          sudo apt-get -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu python3-pyelftools
+
+      - name: Build MiniAS
+        run: |
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/minias-semantic-smoke-toolchain all
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/minias-semantic-smoke-toolchain check-minias-a0
+
+      - name: Self-check comparator and classify real pairs
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/minias-semantic-smoke"
+          mkdir -p "$work"
+          minias="$GITHUB_WORKSPACE/build/minias-semantic-smoke-toolchain/bin/minic-as"
+          oracle="$GITHUB_WORKSPACE/tests/assembler/elf_semantic_compare.py"
+
+          cat >"$work/basic.s" <<'ASM'
+          .option norvc
+          .text
+          .globl foo
+          .type foo,@function
+          foo:
+            addi a0,a0,1
+            ret
+          .size foo,.-foo
+          ASM
+
+          cat >"$work/basic-mutated.s" <<'ASM'
+          .option norvc
+          .text
+          .globl foo
+          .type foo,@function
+          foo:
+            addi a0,a0,2
+            ret
+          .size foo,.-foo
+          ASM
+
+          riscv64-linux-gnu-as -march=rv64imac_zicsr_zifencei -mabi=lp64 \
+            -o "$work/basic.gnu.o" "$work/basic.s"
+          riscv64-linux-gnu-as -march=rv64imac_zicsr_zifencei -mabi=lp64 \
+            -o "$work/basic-mutated.gnu.o" "$work/basic-mutated.s"
+
+          python3 "$oracle" "$work/basic.gnu.o" "$work/basic.gnu.o" \
+            --json-out "$work/self-equal.json"
+
+          if python3 "$oracle" "$work/basic.gnu.o" "$work/basic-mutated.gnu.o" \
+              --json-out "$work/self-different.json"; then
+            echo "MINIAS_SEMANTIC_ORACLE_SELFTEST=FAIL missed intentional code difference" >&2
+            exit 1
+          fi
+          echo "MINIAS_SEMANTIC_ORACLE_SELFTEST=PASS"
+
+          cat >"$work/call.s" <<'ASM'
+          .option norvc
+          .text
+          .globl caller
+          caller:
+            call target@plt
+            ret
+          ASM
+
+          cat >"$work/store.s" <<'ASM'
+          .option norvc
+          .text
+          .globl store_one
+          store_one:
+            sd a0,target_data,a5
+            ret
+          .data
+          .globl target_data
+          target_data:
+            .dword 0
+          ASM
+
+          cat >"$work/far-branch.s" <<'ASM'
+          .option norvc
+          .text
+          .globl far_branch
+          far_branch:
+            beq a0,a1,.Lfar
+            ret
+            .space 5000
+          .Lfar:
+            ret
+          ASM
+
+          : >"$work/results.tsv"
+          for name in basic call store far-branch; do
+            riscv64-linux-gnu-as -march=rv64imac_zicsr_zifencei -mabi=lp64 \
+              -o "$work/$name.gnu.o" "$work/$name.s"
+            "$minias" -march=rv64imac_zicsr_zifencei -mabi=lp64 \
+              -o "$work/$name.minias.o" "$work/$name.s"
+            if python3 "$oracle" "$work/$name.gnu.o" "$work/$name.minias.o" \
+                --json-out "$work/$name.semantic.json" >/dev/null; then
+              printf 'PASS\t%s\n' "$name" >>"$work/results.tsv"
+            else
+              printf 'DIFF\t%s\n' "$name" >>"$work/results.tsv"
+            fi
+          done
+
+          cat "$work/results.tsv"
+          pass=$(awk -F '\t' '$1=="PASS"{n++} END{print n+0}' "$work/results.tsv")
+          diff=$(awk -F '\t' '$1=="DIFF"{n++} END{print n+0}' "$work/results.tsv")
+          test $((pass + diff)) -eq 4
+          echo "MINIAS_SEMANTIC_ORACLE_SMOKE=PASS classified=4 semantic_equal=$pass semantic_diff=$diff"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: minias-semantic-oracle-smoke
+          path: |
+            build/minias-semantic-smoke/results.tsv
+            build/minias-semantic-smoke/*.semantic.json
+            build/minias-semantic-smoke/self-*.json
+          retention-days: 14
+          if-no-files-found: error
