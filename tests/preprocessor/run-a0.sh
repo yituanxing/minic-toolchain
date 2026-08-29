@@ -342,4 +342,13 @@ int after_empty_macro;
 EOF
 run_exact whitespace-render
 
-printf 'MINIPP_A0_EXACT=PASS cases=37 mode=byte-identical\n'
+cat >"$work/pasted-function-boundary.c" <<'EOF'
+#define CAT2(a, b) a##b
+#define CAT(a, b) CAT2(a, b)
+#define TARGET_0(x) ((x) + 1)
+#define DISPATCH(flag, x) CAT(TARGET_, flag)(x)
+int pasted_function_boundary = DISPATCH(0, 4);
+EOF
+run_exact pasted-function-boundary
+
+printf 'MINIPP_A0_EXACT=PASS cases=38 mode=byte-identical\n'
