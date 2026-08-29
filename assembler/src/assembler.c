@@ -764,6 +764,7 @@ typedef struct MiniAsAbsoluteExpressionParser {
     MiniAs *as;
     const char *cursor;
     int64_t dot;
+    bool only_absolute_symbols;
 } MiniAsAbsoluteExpressionParser;
 
 static void skip_absolute_expression_space(MiniAsAbsoluteExpressionParser *parser) {
@@ -798,7 +799,7 @@ static bool checked_sub_i64(int64_t lhs, int64_t rhs, int64_t *out) {
     return true;
 }
 
-static bool parse_absolute_sum(MiniAsAbsoluteExpressionParser *parser, int64_t *value);
+static bool parse_absolute_or(MiniAsAbsoluteExpressionParser *parser, int64_t *value);
 
 static bool parse_absolute_primary(MiniAsAbsoluteExpressionParser *parser,
                                    int64_t *value) {
@@ -812,7 +813,7 @@ static bool parse_absolute_primary(MiniAsAbsoluteExpressionParser *parser,
     skip_absolute_expression_space(parser);
     if (*parser->cursor == '(') {
         ++parser->cursor;
-        if (!parse_absolute_sum(parser, value)) {
+        if (!parse_absolute_or(parser, value)) {
             return false;
         }
         skip_absolute_expression_space(parser);
@@ -824,6 +825,7 @@ static bool parse_absolute_primary(MiniAsAbsoluteExpressionParser *parser,
     }
     if (*parser->cursor == '.' &&
         !absolute_symbol_continue(parser->cursor[1])) {
+        parser->only_absolute_symbols = false;
         *value = parser->dot;
         ++parser->cursor;
         return true;
@@ -842,6 +844,9 @@ static bool parse_absolute_primary(MiniAsAbsoluteExpressionParser *parser,
         symbol = minias_get_symbol(parser->as, name, false);
         if (symbol == NULL || !symbol->defined || symbol->value > (uint64_t)INT64_MAX) {
             return false;
+        }
+        if (symbol->section != MINIAS_SECTION_ABS) {
+            parser->only_absolute_symbols = false;
         }
         *value = (int64_t)symbol->value;
         return true;
@@ -909,6 +914,114 @@ static bool parse_absolute_sum(MiniAsAbsoluteExpressionParser *parser, int64_t *
     return true;
 }
 
+static bool parse_absolute_shift(MiniAsAbsoluteExpressionParser *parser,
+                                 int64_t *value) {
+    int64_t result;
+
+    if (!parse_absolute_sum(parser, &result)) {
+        return false;
+    }
+    for (;;) {
+        bool left;
+        int64_t shift;
+
+        skip_absolute_expression_space(parser);
+        if (strncmp(parser->cursor, "<<", 2U) == 0) {
+            left = true;
+        } else if (strncmp(parser->cursor, ">>", 2U) == 0) {
+            left = false;
+        } else {
+            break;
+        }
+        parser->cursor += 2;
+        if (!parse_absolute_sum(parser, &shift) || shift < 0 || shift >= 63) {
+            return false;
+        }
+        if (left) {
+            if (result < 0 || result > (INT64_MAX >> (unsigned int)shift)) {
+                return false;
+            }
+            result <<= (unsigned int)shift;
+        } else {
+            result >>= (unsigned int)shift;
+        }
+    }
+    *value = result;
+    return true;
+}
+
+static bool parse_absolute_and(MiniAsAbsoluteExpressionParser *parser,
+                               int64_t *value) {
+    int64_t result;
+
+    if (!parse_absolute_shift(parser, &result)) {
+        return false;
+    }
+    for (;;) {
+        int64_t rhs;
+
+        skip_absolute_expression_space(parser);
+        if (*parser->cursor != '&' || parser->cursor[1] == '&') {
+            break;
+        }
+        ++parser->cursor;
+        if (!parse_absolute_shift(parser, &rhs)) {
+            return false;
+        }
+        result &= rhs;
+    }
+    *value = result;
+    return true;
+}
+
+static bool parse_absolute_xor(MiniAsAbsoluteExpressionParser *parser,
+                               int64_t *value) {
+    int64_t result;
+
+    if (!parse_absolute_and(parser, &result)) {
+        return false;
+    }
+    for (;;) {
+        int64_t rhs;
+
+        skip_absolute_expression_space(parser);
+        if (*parser->cursor != '^') {
+            break;
+        }
+        ++parser->cursor;
+        if (!parse_absolute_and(parser, &rhs)) {
+            return false;
+        }
+        result ^= rhs;
+    }
+    *value = result;
+    return true;
+}
+
+static bool parse_absolute_or(MiniAsAbsoluteExpressionParser *parser,
+                              int64_t *value) {
+    int64_t result;
+
+    if (!parse_absolute_xor(parser, &result)) {
+        return false;
+    }
+    for (;;) {
+        int64_t rhs;
+
+        skip_absolute_expression_space(parser);
+        if (*parser->cursor != '|' || parser->cursor[1] == '|') {
+            break;
+        }
+        ++parser->cursor;
+        if (!parse_absolute_xor(parser, &rhs)) {
+            return false;
+        }
+        result |= rhs;
+    }
+    *value = result;
+    return true;
+}
+
 static bool evaluate_absolute_expression(MiniAs *as,
                                          const char *text,
                                          int64_t *value) {
@@ -921,11 +1034,35 @@ static bool evaluate_absolute_expression(MiniAs *as,
     parser.as = as;
     parser.cursor = text;
     parser.dot = (int64_t)dot;
-    if (!parse_absolute_sum(&parser, value)) {
+    parser.only_absolute_symbols = true;
+    if (!parse_absolute_or(&parser, value)) {
         return false;
     }
     skip_absolute_expression_space(&parser);
     return *parser.cursor == '\0';
+}
+
+static bool parse_absolute_data_value(MiniAs *as,
+                                      const char *text,
+                                      int64_t *value) {
+    MiniAsAbsoluteExpressionParser parser;
+    uint64_t dot;
+
+    if (parse_i64_data(text, value)) {
+        return true;
+    }
+    if (!current_location(as, &dot) || dot > (uint64_t)INT64_MAX) {
+        return false;
+    }
+    parser.as = as;
+    parser.cursor = text;
+    parser.dot = (int64_t)dot;
+    parser.only_absolute_symbols = true;
+    if (!parse_absolute_or(&parser, value)) {
+        return false;
+    }
+    skip_absolute_expression_space(&parser);
+    return *parser.cursor == '\0' && parser.only_absolute_symbols;
 }
 
 static bool parse_equ(MiniAs *as, char *args, size_t line) {
@@ -1331,7 +1468,7 @@ static bool add_data_stmt(MiniAs *as, const char *op, char *args, size_t line) {
             if (comma != NULL) {
                 *comma = '\0';
             }
-            if (!parse_i64_data(minias_trim(cursor), &value)) {
+            if (!parse_absolute_data_value(as, minias_trim(cursor), &value)) {
                 MiniAsSymbolExpr expr;
                 const char *trimmed = minias_trim(cursor);
                 MiniAsSymbolExpr rhs_expr;
@@ -1541,7 +1678,7 @@ static bool emit_data_stmt(MiniAs *as, const MiniAsStmt *stmt) {
         if (comma != NULL) {
             *comma = '\0';
         }
-        if (!parse_i64_data(minias_trim(cursor), &signed_value)) {
+        if (!parse_absolute_data_value(as, minias_trim(cursor), &signed_value)) {
             MiniAsSymbolExpr expr;
             const char *trimmed = minias_trim(cursor);
             uint64_t relocation_offset =

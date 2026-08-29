@@ -498,14 +498,15 @@ irp_bytes:
   .byte \num
 .endr
   .short (3)
-.size irp_bytes, 6
+  .short (((.L__gpr_num_x1 << 0) | (.L__gpr_num_x2 << 5)))
+.size irp_bytes, 8
 EOF
 "$MINIAS" -o "$work/irp.o" "$work/irp.s"
 irp_hex="$(
     readelf -x .rodata "$work/irp.o" |
     awk '/0x[0-9a-f]+/ {for (i=2; i<=NF; ++i) if ($i ~ /^[0-9a-f]+$/ && length($i) <= 8 && length($i) % 2 == 0) printf "%s", $i}'
 )"
-test "$irp_hex" = "0001021f0300"
+test "$irp_hex" = "0001021f03004100"
 readelf -Ws "$work/irp.o" | grep -q '.L__gpr_num_x31'
 
 cat >"$work/fence-i.s" <<'EOF'
