@@ -174,6 +174,8 @@ csr_amo:
   amoor.w a0, a1, (a2)
   amoxor.w a0, a1, (a2)
   amoor.d.aqrl a0, a1, (a2)
+  csrw 0x8, t3
+  csrw 0xf, t6
   ret
 .size csr_amo, .-csr_amo
 EOF
@@ -182,7 +184,7 @@ csr_amo_hex="$(
     readelf -x .text "$work/csr-amo.o" |
     awk '/0x[0-9a-f]+/ {for (i=2; i<=NF; ++i) if ($i ~ /^[0-9a-f]+$/ && length($i) <= 8 && length($i) % 2 == 0) printf "%s", $i}'
 )"
-test "$csr_amo_hex" = "73b505102f25b6402f25b6202f35b64667800000"
+test "$csr_amo_hex" = "73b505102f25b6402f25b6202f35b64673108e007390ff0067800000"
 
 cat >"$work/section-stack.s" <<'EOF'
 .text
@@ -542,4 +544,4 @@ fence_i_hex="$(
 )"
 test "$fence_i_hex" = "0f10000067800000"
 
-echo "MINIAS_A0=PASS objects=25 format=ELF64-RISCV-ET_REL relocations=16 strings=2 pseudos=14 previous=3 subsection=2 numeric_labels=18 isa_next=13 csr_amo=4 sfence_vma=3 fence_i=1 vsetvl=1 rept=2 nested_rept=1 irp=4 section_stack=1 org=3 local_difference=1 lr_sc=2 inline_labels=2 branch_pseudos=8 extern=1 symbol_minus_dot=4 symbol_difference=1 absolute32=1 jal=2 jal_subsection=1 high_numeric_labels=2 conditional=1"
+echo "MINIAS_A0=PASS objects=25 format=ELF64-RISCV-ET_REL relocations=16 strings=2 pseudos=14 previous=3 subsection=2 numeric_labels=18 isa_next=13 csr_amo=6 sfence_vma=3 fence_i=1 vsetvl=1 rept=2 nested_rept=1 irp=4 section_stack=1 org=3 local_difference=1 lr_sc=2 inline_labels=2 branch_pseudos=8 extern=1 symbol_minus_dot=4 symbol_difference=1 absolute32=1 jal=2 jal_subsection=1 high_numeric_labels=2 conditional=1"
