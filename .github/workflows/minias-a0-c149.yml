@@ -1,0 +1,228 @@
+name: MiniAS A0 Ground Truth C149
+
+on:
+  push:
+    branches:
+      - "toolchain/minias-m0-boundary-freeze"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: minias-c149-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  C149_EXPORT_RUN: "33248985705"
+
+jobs:
+  c149:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[minias-c149]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download frozen ground-truth C149 corpus
+        uses: actions/download-artifact@v4
+        with:
+          name: minias-ground-truth-c149-corpus
+          path: build/import-c149
+          repository: ${{ github.repository }}
+          run-id: ${{ env.C149_EXPORT_RUN }}
+          github-token: ${{ github.token }}
+
+      - name: Verify and extract frozen C149 corpus
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          cd build/import-c149
+          sha256sum -c minias-ground-truth-c149-corpus.tar.gz.sha256
+          cd ..
+          tar -xzf import-c149/minias-ground-truth-c149-corpus.tar.gz
+          corpus="$GITHUB_WORKSPACE/build/minias-ground-truth-c149-corpus"
+          test -s "$corpus/selected-tus.txt"
+          test "$(grep -cve '^[[:space:]]*$' "$corpus/selected-tus.txt")" -eq 149
+          (cd "$corpus" && sha256sum -c files.sha256 >/dev/null)
+          echo "MINIAS_C149_CORPUS=PASS selected=149"
+
+      - name: Build MiniC and MiniAS
+        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/minias-c149-toolchain all
+
+      - name: Run MiniAS micro gate
+        run: make MODE=release CFLAGS=-Werror BUILD_DIR=build/minias-c149-toolchain check-minias-a0
+
+      - name: Replay C149 through MiniC
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          set +e
+          CORE_FAST_TRACE=1 python3 tests/external/linux/corpus_replay.py \
+            --minic "$GITHUB_WORKSPACE/build/minias-c149-toolchain/bin/minic-cc" \
+            --corpus "$GITHUB_WORKSPACE/build/minias-ground-truth-c149-corpus" \
+            --work "$GITHUB_WORKSPACE/build/minias-c149-replay" \
+            --jobs 4 \
+            --offset 0 \
+            --limit 149 \
+            --sample-count 0
+          rc=$?
+          set -e
+          echo "MINIAS_C149_MINIC_REPLAY_RC=$rc"
+          test -s build/minias-c149-replay/batch-results.json
+
+      - name: Assemble MiniC outputs and build failure pool
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          from collections import Counter, defaultdict
+          from pathlib import Path
+          import json, re, subprocess
+
+          root = Path.cwd()
+          replay = root / "build/minias-c149-replay"
+          minias = root / "build/minias-c149-toolchain/bin/minic-as"
+          out = root / "build/minias-c149-results"
+          out.mkdir(parents=True, exist_ok=True)
+
+          rows = json.loads((replay / "batch-results.json").read_text())
+          if len(rows) != 149:
+              raise SystemExit(f"expected 149 MiniC replay rows, got {len(rows)}")
+
+          results = []
+          pool = []
+          for row in rows:
+              index = int(row["index"])
+              rel_i = str(row["input"])
+              source = str(row["source"])
+              if row["status"] != "PASS":
+                  blocker = str(row.get("message") or "compiler:no-diagnostic")
+                  results.append(("COMPILE_FAIL", index, rel_i, source, blocker))
+                  pool.append(("compiler", index, rel_i, source, blocker))
+                  continue
+
+              asm = replay / "minic-out" / f"{rel_i}.s"
+              obj = out / f"{rel_i}.o"
+              err = out / f"{rel_i}.err"
+              obj.parent.mkdir(parents=True, exist_ok=True)
+              err.parent.mkdir(parents=True, exist_ok=True)
+              proc = subprocess.run(
+                  [str(minias), "-o", str(obj), str(asm)],
+                  stdout=subprocess.DEVNULL,
+                  stderr=subprocess.PIPE,
+                  text=True,
+                  errors="replace",
+              )
+              err.write_text(proc.stderr)
+              ok = False
+              if proc.returncode == 0 and obj.is_file() and obj.stat().st_size:
+                  check = subprocess.run(
+                      ["readelf", "-h", str(obj)],
+                      stdout=subprocess.PIPE,
+                      stderr=subprocess.PIPE,
+                      text=True,
+                      errors="replace",
+                  )
+                  ok = (
+                      check.returncode == 0
+                      and "RISC-V" in check.stdout
+                      and "REL (Relocatable file)" in check.stdout
+                  )
+              if ok:
+                  results.append(("PASS", index, rel_i, source, "-"))
+              else:
+                  raw = next(
+                      (line.strip() for line in proc.stderr.splitlines() if line.strip()),
+                      f"assembler:returncode={proc.returncode}",
+                  )
+                  blocker = re.sub(r"^minic-as:\\s*", "", raw)
+                  blocker = re.sub(r":line=[0-9]+$", "", blocker)
+                  results.append(("ASSEMBLE_FAIL", index, rel_i, source, blocker))
+                  pool.append(("assembler", index, rel_i, source, blocker))
+
+          results.sort(key=lambda row: row[1])
+          pool.sort(key=lambda row: row[1])
+          (out / "results.tsv").write_text(
+              "".join(
+                  f"{status}\t{index}\t{rel_i}\t{source}\t{blocker}\n"
+                  for status, index, rel_i, source, blocker in results
+              )
+          )
+          (out / "failure-pool.tsv").write_text(
+              "".join(
+                  f"{stage}\t{index}\t{rel_i}\t{source}\t{blocker}\n"
+                  for stage, index, rel_i, source, blocker in pool
+              )
+          )
+
+          families = defaultdict(list)
+          for stage, index, rel_i, source, blocker in pool:
+              signature = f"{stage}:{blocker}"
+              families[signature].append((stage, index, rel_i, source, blocker))
+          ordered = sorted(
+              families.items(),
+              key=lambda item: (-len(item[1]), item[0]),
+          )
+          active = []
+          offsets = {signature: 0 for signature, _ in ordered}
+          while len(active) < 16:
+              progressed = False
+              for signature, members in ordered:
+                  pos = offsets[signature]
+                  if pos >= len(members):
+                      continue
+                  active.append(members[pos])
+                  offsets[signature] = pos + 1
+                  progressed = True
+                  if len(active) == 16:
+                      break
+              if not progressed:
+                  break
+          (out / "candidate-active-sample.txt").write_text(
+              "".join(f"{index}\t{rel_i}\n" for _, index, rel_i, _, _ in active)
+          )
+
+          counts = Counter(status for status, *_ in results)
+          blockers = Counter(f"{stage}:{blocker}" for stage, _, _, _, blocker in pool)
+          chain_pass = counts["PASS"]
+          summary = [
+              f"MINIAS_C149_SUMMARY selected=149 chain_pass={chain_pass} "
+              f"compile_fail={counts['COMPILE_FAIL']} assemble_fail={counts['ASSEMBLE_FAIL']}",
+              f"MINIAS_C149_FAILURE_POOL fail={len(pool)} candidate_active={len(active)}",
+              "MINIAS_C149_TOP_BLOCKERS",
+          ]
+          summary.extend(
+              [f"  {count:5d} {blocker}" for blocker, count in blockers.most_common()]
+              or ["  none"]
+          )
+          summary.append("MINIAS_C149_FILES")
+          summary.extend(
+              f"{status}\t{index}\t{rel_i}\t{blocker}"
+              for status, index, rel_i, _, blocker in results
+              if status != "PASS"
+          )
+          text = "\n".join(summary) + "\n"
+          (out / "summary.txt").write_text(text)
+          print(text, end="")
+          if chain_pass != 149:
+              raise SystemExit(1)
+          PY
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: minias-a0-c149-progress
+          path: |
+            build/minias-c149-replay/batch-results.json
+            build/minias-c149-replay/batch-results.tsv
+            build/minias-c149-replay/batch-summary.txt
+            build/minias-c149-replay/failure-contexts.txt
+            build/minias-c149-results/results.tsv
+            build/minias-c149-results/failure-pool.tsv
+            build/minias-c149-results/candidate-active-sample.txt
+            build/minias-c149-results/summary.txt
+            build/minias-c149-results/**/*.err
+          retention-days: 30
+          if-no-files-found: warn
