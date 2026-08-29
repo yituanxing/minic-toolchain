@@ -1911,6 +1911,30 @@ bool minias_riscv_encode(MiniAs *as, const MiniAsStmt *stmt) {
             }
             return append_u32(as, stmt->section, value);
         }
+        if ((strcmp(stmt->op, "and") == 0 ||
+             strcmp(stmt->op, "or") == 0 ||
+             strcmp(stmt->op, "xor") == 0) &&
+            parse_i64(operands[2], &immediate)) {
+            uint32_t imm_funct3 =
+                strcmp(stmt->op, "and") == 0 ? 7U
+                : strcmp(stmt->op, "or") == 0 ? 6U
+                                               : 4U;
+            if (immediate < -2048 || immediate > 2047) {
+                minias_set_error(as,
+                                 "immediate-range:%s:%s:line=%zu",
+                                 stmt->op,
+                                 operands[2],
+                                 stmt->line);
+                return false;
+            }
+            return append_u32(as,
+                              stmt->section,
+                              enc_i(0x13U,
+                                    rd,
+                                    imm_funct3,
+                                    rs1,
+                                    immediate));
+        }
         if (!require_reg(as, stmt, operands[2], &rs2)) {
             return false;
         }
