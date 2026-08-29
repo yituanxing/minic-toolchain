@@ -830,8 +830,10 @@ static bool minipp_handle_directive(MiniPpState *state,
 static bool minipp_try_flush_pending(MiniPpState *state,
                                      MiniPpString *pending,
                                      MiniPpString *output,
+                                     size_t source_line,
                                      bool final) {
     MiniPpString expanded;
+    size_t saved_line = state->current_line;
     bool ok;
 
     if (pending->size == 0U) {
@@ -839,7 +841,9 @@ static bool minipp_try_flush_pending(MiniPpState *state,
     }
 
     minipp_string_init(&expanded);
+    state->current_line = source_line;
     ok = minipp_expand_text(state, pending->data, &expanded);
+    state->current_line = saved_line;
     if (!ok) {
         bool incomplete = state->expansion_incomplete;
         minipp_string_destroy(&expanded);
@@ -937,6 +941,7 @@ static bool minipp_process_source(MiniPpState *state,
                                   MiniPpString *output) {
     size_t offset = 0U;
     size_t logical_line = 0U;
+    size_t pending_line = 0U;
     MiniPpString pending;
 
     minipp_string_init(&pending);
@@ -989,6 +994,9 @@ static bool minipp_process_source(MiniPpState *state,
         }
 
         if (!handled && (state->active || pending.size != 0U)) {
+            if (pending.size == 0U) {
+                pending_line = state->current_line;
+            }
             if (!minipp_string_append_n(&pending,
                                         stripped.data == NULL ? "" : stripped.data,
                                         stripped.size)) {
@@ -1000,6 +1008,7 @@ static bool minipp_process_source(MiniPpState *state,
             if (!minipp_try_flush_pending(state,
                                           &pending,
                                           output,
+                                          pending_line,
                                           false)) {
                 minipp_string_destroy(&stripped);
                 minipp_string_destroy(&pending);
@@ -1012,7 +1021,11 @@ static bool minipp_process_source(MiniPpState *state,
         ++logical_line;
     }
 
-    if (!minipp_try_flush_pending(state, &pending, output, true)) {
+    if (!minipp_try_flush_pending(state,
+                                  &pending,
+                                  output,
+                                  pending_line,
+                                  true)) {
         minipp_string_destroy(&pending);
         return false;
     }
