@@ -2971,11 +2971,46 @@ static bool macro_has_top_level_comma(const char *text) {
     return false;
 }
 
+static char *find_macro_argument_space(char *text) {
+    int depth = 0;
+    char quote = '\0';
+    char *p;
+
+    for (p = text; *p != '\0'; ++p) {
+        if (quote != '\0') {
+            if (*p == '\\' && p[1] != '\0') {
+                ++p;
+                continue;
+            }
+            if (*p == quote) {
+                quote = '\0';
+            }
+            continue;
+        }
+        if (*p == '\'' || *p == '"') {
+            quote = *p;
+        } else if (*p == '(' || *p == '[' || *p == '{') {
+            ++depth;
+        } else if (*p == ')' || *p == ']' || *p == '}') {
+            if (depth > 0) {
+                --depth;
+            }
+        } else if (depth == 0 && (*p == ' ' || *p == '\t')) {
+            return p;
+        }
+    }
+    return NULL;
+}
+
 static size_t split_macro_arguments(char *text,
                                     char **tokens,
-                                    size_t capacity) {
+                                    size_t capacity,
+                                    size_t expected_count) {
+    char *segments[64];
+    size_t segment_count = 0U;
     size_t count = 0U;
     char *cursor = text;
+    size_t needed;
 
     if (!macro_has_top_level_comma(text)) {
         return split_macro_tokens(text, tokens, capacity);
@@ -2993,7 +3028,7 @@ static size_t split_macro_arguments(char *text,
         if (*cursor == '\0') {
             break;
         }
-        if (count == capacity) {
+        if (segment_count == sizeof(segments) / sizeof(segments[0])) {
             return SIZE_MAX;
         }
         start = cursor;
@@ -3034,8 +3069,45 @@ static size_t split_macro_arguments(char *text,
         if (*p == ',') {
             *p++ = '\0';
         }
-        tokens[count++] = minias_trim(start);
+        segments[segment_count++] = minias_trim(start);
         cursor = p;
+    }
+
+    needed = expected_count > segment_count
+                 ? expected_count - segment_count
+                 : 0U;
+    for (size_t i = 0U; i < segment_count; ++i) {
+        char *segment = segments[i];
+
+        while (needed != 0U) {
+            char *space = find_macro_argument_space(segment);
+            char *rest;
+
+            if (space == NULL) {
+                break;
+            }
+            *space = '\0';
+            rest = space + 1U;
+            while (*rest == ' ' || *rest == '\t') {
+                ++rest;
+            }
+            if (*segment == '\0' || *rest == '\0') {
+                segment = rest;
+                continue;
+            }
+            if (count == capacity) {
+                return SIZE_MAX;
+            }
+            tokens[count++] = minias_trim(segment);
+            segment = rest;
+            --needed;
+        }
+        if (*segment != '\0') {
+            if (count == capacity) {
+                return SIZE_MAX;
+            }
+            tokens[count++] = minias_trim(segment);
+        }
     }
     return count;
 }
@@ -3276,7 +3348,10 @@ static bool expand_macro_invocation(MiniAs *as,
         minias_set_error(as, "out-of-memory:macro-arguments");
         return false;
     }
-    supplied = split_macro_arguments(copy, tokens, 64U);
+    supplied = split_macro_arguments(copy,
+                                     tokens,
+                                     64U,
+                                     macro->param_count);
     if (supplied == SIZE_MAX || supplied > macro->param_count) {
         minias_set_error(as, "bad-macro-arguments:%s:line=%zu",
                          macro->name, line);
