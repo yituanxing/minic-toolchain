@@ -439,4 +439,34 @@ sfence_hex="$(
 )"
 test "$sfence_hex" = "73000012730005127300b51267800000"
 
-echo "MINIAS_A0=PASS objects=20 format=ELF64-RISCV-ET_REL relocations=15 strings=2 pseudos=14 previous=3 subsection=2 numeric_labels=18 isa_next=13 csr_amo=4 sfence_vma=3 section_stack=1 org=3 local_difference=1 lr_sc=2 inline_labels=2 branch_pseudos=8 extern=1 symbol_minus_dot=4 symbol_difference=1 absolute32=1 jal=2 high_numeric_labels=2 conditional=1"
+cat >"$work/rept.s" <<'EOF'
+.section .rodata,"a"
+.globl rept_bytes
+.type rept_bytes, @object
+rept_bytes:
+.rept 2
+  .byte 0xaa
+  .rept 3
+    .byte 0xbb
+  .endr
+.endr
+.size rept_bytes, 8
+.text
+.globl rept_nops
+.type rept_nops, @function
+rept_nops:
+.rept 7
+  nop
+.endr
+  ret
+.size rept_nops, .-rept_nops
+EOF
+"$MINIAS" -o "$work/rept.o" "$work/rept.s"
+rept_hex="$(
+    readelf -x .rodata "$work/rept.o" |
+    awk '/0x[0-9a-f]+/ {for (i=2; i<=NF; ++i) if ($i ~ /^[0-9a-f]+$/ && length($i) <= 8 && length($i) % 2 == 0) printf "%s", $i}'
+)"
+test "$rept_hex" = "aabbbbbbaabbbbbb"
+test "$(readelf -Ws "$work/rept.o" | awk '$8=="rept_nops" {print $3}')" = "32"
+
+echo "MINIAS_A0=PASS objects=21 format=ELF64-RISCV-ET_REL relocations=15 strings=2 pseudos=14 previous=3 subsection=2 numeric_labels=18 isa_next=13 csr_amo=4 sfence_vma=3 rept=2 nested_rept=1 section_stack=1 org=3 local_difference=1 lr_sc=2 inline_labels=2 branch_pseudos=8 extern=1 symbol_minus_dot=4 symbol_difference=1 absolute32=1 jal=2 high_numeric_labels=2 conditional=1"
