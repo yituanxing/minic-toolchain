@@ -38,7 +38,7 @@ reconciled against the 3536 ground-truth workload.
 | C final352 | 3000-3351 | `bc9b649c5fe3b5fd5fa8e7ee06428e65bebd9c6d` | `33244266799` | 352 | 0 | 0 | - | **FROZEN** |
 | C all3352 exact | frozen 0-3351 | `795406f1316716d2328e1871d79745f2f08cb910` | `33244431157` | 3352 | 0 | 0 | - | **FROZEN** |
 | native asm35 | ground-truth native .S rules | `2f6818b192e980742f4eebdffabe21ed82a91bf6` | `33247444588` | 35 | 0 | 0 | - | **FROZEN** |
-| C ground-truth delta149 | ground-truth-only C object rules | `561153b6f0c83831b0ee38b9011a0ce087988b59` | `33248985705` | - | - | - | 718 s GNU build | **frozen corpus / replay active** |
+| C ground-truth delta149 | ground-truth-only C object rules | `206084dd66ce43c731efe7f8d9f5d11b56351fb7` | `33249661431` | 149 | 0 | 0 | - | **FROZEN** |
 
 Cumulative authoritative frozen-C coverage is now **3352/3352** at one exact
 head, and the complete ground-truth native assembly cohort is **35/35**.
@@ -48,6 +48,13 @@ Run `33248985705` re-confirmed exact C object identity
 The C149 population is 145 generated `*.mod.c` objects plus four special
 objects (`.vmlinux.export.c`, RISC-V VDSO `hwprobe.c` /
 `vgettimeofday.c`, and `init/version-timestamp.c`).
+
+Run `33249661431` then replayed the frozen C149 corpus through the
+current MiniC and MiniAS chain: **149/149 PASS**, with
+`compile_fail=0`, `assemble_fail=0`, and an empty failure pool.
+Therefore the separately proven populations now cover all
+`3352 + 149 + 35 = 3536` ground-truth assembler inputs. The remaining
+acceptance action is a same-head rerun of all three hard gates.
 
  The
 remaining assembler completeness gap is no longer native assembly; it is the
