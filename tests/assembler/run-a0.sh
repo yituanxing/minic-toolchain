@@ -137,6 +137,23 @@ readelf -s "$work/numeric-labels.o" >"$work/numeric-labels.txt"
 grep -q '.Lminias_num_1_1' "$work/numeric-labels.txt"
 grep -q '.Lminias_num_1_2' "$work/numeric-labels.txt"
 
+cat >"$work/ecall.s" <<'EOF'
+.text
+.globl ecall_user
+.type ecall_user, @function
+ecall_user:
+  ecall
+  ebreak
+  ret
+.size ecall_user, .-ecall_user
+EOF
+"$MINIAS" -o "$work/ecall.o" "$work/ecall.s"
+ecall_hex="$(
+    readelf -x .text "$work/ecall.o" |
+    awk '/0x[0-9a-f]+/ {for (i=2; i<=NF; ++i) if ($i ~ /^[0-9a-f]+$/ && length($i) <= 8 && length($i) % 2 == 0) printf "%s", $i}'
+)"
+test "$ecall_hex" = "730000007300100067800000"
+
 cat >"$work/isa-next.s" <<'EOF'
 .text
 .globl isa_next
@@ -593,4 +610,4 @@ vector_hex="$(
 )"
 test "$vector_hex" = "d772300c57b00f5e57b40f5e57b80f5e57bc0f5e27000e0227040e0207d1050287040400"
 
-echo "MINIAS_A0=PASS objects=6 format=ELF64-RISCV-ET_REL relocations=16 strings=2 pseudos=14 previous=3 subsection=2 numeric_labels=18 isa_next=13 csr_amo=6 sfence_vma=3 fence_i=1 vsetvl=1 vsetvli=1 vmv_v_i=4 rept=2 nested_rept=1 irp=4 section_stack=1 org=3 local_difference=1 lr_sc=2 inline_labels=2 branch_pseudos=8 extern=1 symbol_minus_dot=4 symbol_difference=1 absolute32=1 jal=2 jal_subsection=1 high_numeric_labels=2 u64_data=3 conditional=1"
+echo "MINIAS_A0=PASS objects=7 format=ELF64-RISCV-ET_REL relocations=16 strings=2 pseudos=14 previous=3 subsection=2 numeric_labels=18 ecall=1 isa_next=13 csr_amo=6 sfence_vma=3 fence_i=1 vsetvl=1 vsetvli=1 vmv_v_i=4 rept=2 nested_rept=1 irp=4 section_stack=1 org=3 local_difference=1 lr_sc=2 inline_labels=2 branch_pseudos=8 extern=1 symbol_minus_dot=4 symbol_difference=1 absolute32=1 jal=2 jal_subsection=1 high_numeric_labels=2 u64_data=3 conditional=1"

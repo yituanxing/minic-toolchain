@@ -734,7 +734,8 @@ bool minias_riscv_measure(const char *op,
         SIMPLE("sltiu") || SIMPLE("slli") || SIMPLE("srli") || SIMPLE("srai") ||
         SIMPLE("sra") || SIMPLE("fence") || SIMPLE("fence.i") || SIMPLE("vsetvl") ||
         SIMPLE("csrr") || SIMPLE("csrrc") || SIMPLE("csrw") ||
-        SIMPLE("csrs") || SIMPLE("csrc") || SIMPLE("ebreak") || SIMPLE("pause") ||
+        SIMPLE("csrs") || SIMPLE("csrc") || SIMPLE("ecall") || SIMPLE("ebreak") ||
+        SIMPLE("pause") ||
         SIMPLE("wfi") || SIMPLE("add") || SIMPLE("sub") || SIMPLE("sll") ||
         SIMPLE("srl") || SIMPLE("and") || SIMPLE("or") ||
         SIMPLE("xor") || SIMPLE("slt") || SIMPLE("sltu") || SIMPLE("mul") ||
@@ -1146,6 +1147,13 @@ bool minias_riscv_encode(MiniAs *as, const MiniAsStmt *stmt) {
                                   ((uint32_t)rs2 << 20U) |
                                   amo_ordering | (amo_funct5 << 27U));
         }
+    }
+    if (strcmp(stmt->op, "ecall") == 0) {
+        if (count != 0U) {
+            minias_set_error(as, "operand-count:ecall:line=%zu", stmt->line);
+            return false;
+        }
+        return append_u32(as, stmt->section, 0x00000073U);
     }
     if (strcmp(stmt->op, "ebreak") == 0) {
         if (count != 0U) {
