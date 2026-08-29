@@ -115,7 +115,9 @@ jobs:
 
           (
             cd "$out"
-            find . -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum > SHA256SUMS
+            find . -type f ! -name SHA256SUMS -print0 |
+              LC_ALL=C sort -z |
+              xargs -0 sha256sum > SHA256SUMS
           )
           {
             echo "linux_version=${LINUX_VERSION}"
