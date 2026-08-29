@@ -329,6 +329,25 @@ EOF
 readelf -Wr "$work/jal.o" >"$work/jal.txt"
 grep -q 'R_RISCV_JAL.*external_jump_target' "$work/jal.txt"
 
+cat >"$work/jal-subsection.s" <<'EOF'
+.text
+.globl jal_subsection_target
+.type jal_subsection_target, @function
+jal_subsection_target:
+  ret
+.size jal_subsection_target, .-jal_subsection_target
+.subsection 1
+.globl jal_subsection_user
+.type jal_subsection_user, @function
+jal_subsection_user:
+  j jal_subsection_target
+  ret
+.size jal_subsection_user, .-jal_subsection_user
+EOF
+"$MINIAS" -o "$work/jal-subsection.o" "$work/jal-subsection.s"
+readelf -Wr "$work/jal-subsection.o" >"$work/jal-subsection.txt"
+grep -q 'R_RISCV_JAL.*jal_subsection_target' "$work/jal-subsection.txt"
+
 cat >"$work/high-numeric-labels.s" <<'EOF'
 .text
 .globl high_numeric_labels
@@ -505,4 +524,4 @@ fence_i_hex="$(
 )"
 test "$fence_i_hex" = "0f10000067800000"
 
-echo "MINIAS_A0=PASS objects=23 format=ELF64-RISCV-ET_REL relocations=15 strings=2 pseudos=14 previous=3 subsection=2 numeric_labels=18 isa_next=13 csr_amo=4 sfence_vma=3 fence_i=1 rept=2 nested_rept=1 irp=4 section_stack=1 org=3 local_difference=1 lr_sc=2 inline_labels=2 branch_pseudos=8 extern=1 symbol_minus_dot=4 symbol_difference=1 absolute32=1 jal=2 high_numeric_labels=2 conditional=1"
+echo "MINIAS_A0=PASS objects=24 format=ELF64-RISCV-ET_REL relocations=16 strings=2 pseudos=14 previous=3 subsection=2 numeric_labels=18 isa_next=13 csr_amo=4 sfence_vma=3 fence_i=1 rept=2 nested_rept=1 irp=4 section_stack=1 org=3 local_difference=1 lr_sc=2 inline_labels=2 branch_pseudos=8 extern=1 symbol_minus_dot=4 symbol_difference=1 absolute32=1 jal=2 jal_subsection=1 high_numeric_labels=2 conditional=1"

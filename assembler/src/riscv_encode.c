@@ -1143,7 +1143,8 @@ bool minias_riscv_encode(MiniAs *as, const MiniAsStmt *stmt) {
         }
 
         symbol = minias_get_symbol(as, expr.name, false);
-        if (symbol != NULL && symbol->defined && symbol->section == stmt->section) {
+        if (symbol != NULL && symbol->defined && symbol->section == stmt->section &&
+            symbol->subsection == stmt->subsection) {
             immediate = (int64_t)symbol->value + expr.addend -
                         (int64_t)stmt->offset;
             if ((immediate & 1) != 0 || immediate < -(1LL << 20) ||
