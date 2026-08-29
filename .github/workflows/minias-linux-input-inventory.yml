@@ -1,0 +1,132 @@
+name: MiniAS Linux Assembler Input Inventory
+
+on:
+  push:
+    branches:
+      - "toolchain/minias-m0-boundary-freeze"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  LINUX_VERSION: "6.6.143"
+  LINUX_ARCHIVE_SHA256: "dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932"
+
+jobs:
+  inventory:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[minias-input-inventory]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install exact Kbuild dependencies
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 update
+          sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 install -y --no-install-recommends \
+            gcc-riscv64-linux-gnu libc6-dev-riscv64-cross flex bison bc libelf-dev libssl-dev
+          riscv64-linux-gnu-gcc --version | head -1
+
+      - name: Materialize exact RISC-V defconfig Kbuild plan
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          src="$GITHUB_WORKSPACE/build/linux-input-inventory-src"
+          out="$GITHUB_WORKSPACE/build/linux-input-inventory-out"
+          archive="$GITHUB_WORKSPACE/build/linux-${LINUX_VERSION}.tar.xz"
+          mkdir -p build
+          curl --http1.1 --retry 5 --retry-all-errors --retry-delay 2 -fsSL \
+            "https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-${LINUX_VERSION}.tar.xz" -o "$archive"
+          echo "${LINUX_ARCHIVE_SHA256}  $archive" | sha256sum -c -
+          rm -rf "$src" "$out"
+          mkdir -p "$src" "$out"
+          tar -xJf "$archive" -C "$src" --strip-components=1
+          make -s -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- defconfig
+          make -s -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- -j4 prepare scripts
+          set +e
+          make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- -n -j1 V=1 \
+            >build/minias-kbuild-plan.raw 2>build/minias-kbuild-plan.stderr
+          rc=$?
+          set -e
+          echo "MINIAS_KBUILD_PLAN_STATUS=$rc"
+          test -s build/minias-kbuild-plan.raw
+
+      - name: Count configured assembler inputs
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          from pathlib import Path, PurePosixPath
+          import json, re
+
+          plan = Path("build/minias-kbuild-plan.raw").read_text(errors="replace").splitlines()
+          out_root = Path("build/linux-input-inventory-out").resolve()
+          cross = "riscv64-linux-gnu-"
+          object_re = re.compile(r"(?:^|\s)-o\s+([^\s;]+\.o)(?=\s|;|$)")
+          source_re = re.compile(r"(?:^|\s)([^\s;]+\.(?:c|S|s|rs))(?=\s|;|$)")
+
+          by_obj = {}
+          for line in plan:
+              if " -c " not in f" {line} ":
+                  continue
+              objects = object_re.findall(line)
+              sources = source_re.findall(line)
+              if not objects or not sources:
+                  continue
+              raw_obj = objects[-1].strip("'\"")
+              obj = Path(raw_obj)
+              if obj.is_absolute():
+                  try:
+                      rel = obj.resolve().relative_to(out_root)
+                  except ValueError:
+                      continue
+              else:
+                  rel = obj
+              rel_text = PurePosixPath(rel.as_posix()).as_posix()
+              if rel_text.startswith(("scripts/", "tools/")) or "/scripts/" in rel_text:
+                  continue
+              src = sources[-1].strip("'\"")
+              suffix = Path(src).suffix
+              kind = {".c":"c", ".S":"asm_preprocessed", ".s":"asm_raw", ".rs":"rust"}[suffix]
+              by_obj[rel_text] = {"source": src, "kind": kind}
+
+          counts = {k:0 for k in ("c","asm_preprocessed","asm_raw","rust")}
+          for row in by_obj.values(): counts[row["kind"]] += 1
+          native_asm = counts["asm_preprocessed"] + counts["asm_raw"]
+          external_as_inputs = counts["c"] + native_asm
+          result = {
+              "linux":"6.6.143", "arch":"riscv", "config":"defconfig",
+              "configured_object_compile_rules":len(by_obj),
+              **counts, "native_asm_total":native_asm,
+              "assembler_inputs_without_rust":external_as_inputs,
+          }
+          Path("build/minias-assembler-input-inventory.json").write_text(json.dumps(result, indent=2, sort_keys=True)+"\n")
+          Path("build/minias-native-asm-files.txt").write_text("\n".join(
+              f"{obj}\t{row['kind']}\t{row['source']}"
+              for obj,row in sorted(by_obj.items()) if row["kind"].startswith("asm_")
+          )+"\n")
+          Path("build/minias-rust-files.txt").write_text("\n".join(
+              f"{obj}\t{row['source']}" for obj,row in sorted(by_obj.items()) if row["kind"]=="rust"
+          )+"\n")
+          print(
+              "MINIAS_ASSEMBLER_INPUT_INVENTORY "
+              f"c={counts['c']} native_S={counts['asm_preprocessed']} native_s={counts['asm_raw']} "
+              f"native_asm_total={native_asm} rust={counts['rust']} "
+              f"assembler_inputs_without_rust={external_as_inputs} configured_objects={len(by_obj)}"
+          )
+          PY
+          cat build/minias-assembler-input-inventory.json
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: minias-linux-assembler-input-inventory
+          path: |
+            build/minias-assembler-input-inventory.json
+            build/minias-native-asm-files.txt
+            build/minias-rust-files.txt
+            build/minias-kbuild-plan.stderr
+          retention-days: 30
+          if-no-files-found: error
