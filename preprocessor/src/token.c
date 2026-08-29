@@ -897,6 +897,26 @@ oom:
     return false;
 }
 
+static void minipp_trim_leading_expansion_space(MiniPpString *text) {
+    size_t start = 0U;
+
+    while (start < text->size &&
+           (text->data[start] == ' ' || text->data[start] == '\t' ||
+            text->data[start] == '\v' || text->data[start] == '\f')) {
+        ++start;
+    }
+    if (start == 0U) {
+        return;
+    }
+    if (start < text->size) {
+        memmove(text->data, text->data + start, text->size - start);
+    }
+    text->size -= start;
+    if (text->data != NULL) {
+        text->data[text->size] = '\0';
+    }
+}
+
 static bool minipp_expand_function_macro(MiniPpState *state,
                                          const MiniPpMacro *macro,
                                          const char *text,
@@ -1021,6 +1041,7 @@ static bool minipp_expand_function_macro(MiniPpState *state,
                                           depth + 1U,
                                           source_line);
         if (ok) {
+            minipp_trim_leading_expansion_space(&replacement);
             size_t tail_start = 0U;
             const MiniPpMacro *tail_macro =
                 minipp_find_trailing_function_macro(state,
