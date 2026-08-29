@@ -159,3 +159,88 @@ bool minipp_splice_backslash_newlines(const MiniPpString *input,
     }
     return true;
 }
+
+
+bool minipp_render_gcc_p_output(const MiniPpString *input,
+                                MiniPpString *output) {
+    size_t index = 0U;
+    bool line_start = true;
+    bool pending_space = false;
+
+    minipp_string_init(output);
+
+    while (index < input->size) {
+        char value = input->data[index];
+
+        if (value == '\n') {
+            pending_space = false;
+            if (!minipp_string_append_char(output, '\n')) {
+                goto oom;
+            }
+            line_start = true;
+            ++index;
+            continue;
+        }
+
+        if (value == ' ' || value == '\t' ||
+            value == '\v' || value == '\f') {
+            if (line_start) {
+                if (!minipp_string_append_char(output, ' ')) {
+                    goto oom;
+                }
+            } else {
+                pending_space = true;
+            }
+            ++index;
+            continue;
+        }
+
+        if (pending_space) {
+            if (!minipp_string_append_char(output, ' ')) {
+                goto oom;
+            }
+            pending_space = false;
+        }
+
+        if (value == '"' || value == '\'') {
+            char quote = value;
+
+            if (!minipp_string_append_char(output, value)) {
+                goto oom;
+            }
+            line_start = false;
+            ++index;
+            while (index < input->size) {
+                value = input->data[index];
+                if (!minipp_string_append_char(output, value)) {
+                    goto oom;
+                }
+                ++index;
+                if (value == '\\' && index < input->size) {
+                    if (!minipp_string_append_char(output,
+                                                   input->data[index])) {
+                        goto oom;
+                    }
+                    ++index;
+                    continue;
+                }
+                if (value == quote) {
+                    break;
+                }
+            }
+            continue;
+        }
+
+        if (!minipp_string_append_char(output, value)) {
+            goto oom;
+        }
+        line_start = false;
+        ++index;
+    }
+
+    return true;
+
+oom:
+    minipp_string_destroy(output);
+    return false;
+}
