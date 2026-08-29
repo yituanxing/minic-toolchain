@@ -21,6 +21,7 @@ typedef struct MiniPpMacro {
     char **params;
     size_t param_count;
     bool function_like;
+    bool variadic;
 } MiniPpMacro;
 
 typedef struct MiniPpConditional {
