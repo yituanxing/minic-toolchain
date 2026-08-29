@@ -61,6 +61,23 @@ jobs:
           make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- prepare
           echo "MINIPP_LINUX_PREPARE=PASS linux=6.6.143"
 
+      - name: Freeze RISC-V GCC predefines and feature tests
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/minipp-linux-smoke"
+          src="$work/linux-6.6.143"
+          probe="$work/probe"
+          mkdir -p "$probe"
+          export REAL_CC=riscv64-linux-gnu-gcc
+          export MINIPP_LINUX_SRC="$src"
+          export MINIPP_PREDEFINES_OUT="$probe/riscv64-gcc-predefines.h"
+          bash tests/preprocessor/build_reference_predefines.sh \
+            -std=gnu11 -fshort-wchar -funsigned-char -fno-PIE \
+            -mabi=lp64 -march=rv64imac_zicsr_zifencei_zihintpause
+          grep -F '__MINIPP_HAS_ATTRIBUTE_btf_type_tag' \
+            "$probe/riscv64-gcc-predefines.h" || true
+
       - name: Probe real Kbuild preprocessing inputs
         shell: bash
         run: |
