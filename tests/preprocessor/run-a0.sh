@@ -389,4 +389,12 @@ close*/TOKEN_C
 EOF
 run_exact leading-comment-columns
 
-printf 'MINIPP_A0_EXACT=PASS cases=42 mode=byte-identical\n'
+cat >"$work/empty-leading-nested-macro.c" <<'EOF'
+#define EMPTY(x)
+#define KEEP(x) x
+#define OUT(x) EMPTY(x) KEEP(x)
+		OUT(value)
+EOF
+run_exact empty-leading-nested-macro
+
+printf 'MINIPP_A0_EXACT=PASS cases=43 mode=byte-identical\n'
