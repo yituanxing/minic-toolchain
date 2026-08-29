@@ -863,7 +863,7 @@ static bool parse_vsetvli_vtype(char operands[][128],
 }
 
 static bool parse_mem(const char *text, int64_t *offset, char base[128]) {
-    const char *left = strchr(text, '(');
+    const char *left = strrchr(text, '(');
     const char *right = strrchr(text, ')');
     char offbuf[128];
     size_t n;
@@ -1039,8 +1039,13 @@ bool minias_riscv_measure(const char *op,
         return true;
     }
     if (strcmp(op, "tail") == 0) {
-        (void)snprintf(reason, reason_size, "unsupported-reloc-instruction:%s", op);
-        return false;
+        MiniAsSymbolExpr expr;
+        if (count != 1U || !minias_parse_symbol_addend(operands[0], &expr)) {
+            (void)snprintf(reason, reason_size, "unsupported-expression:%s", args);
+            return false;
+        }
+        *size = 8U;
+        return true;
     }
 
     {
@@ -1066,6 +1071,17 @@ bool minias_riscv_measure(const char *op,
             *size = 4U;
             return true;
         }
+    }
+
+    if (strcmp(op, "orc.b") == 0 || strcmp(op, "rev8") == 0 ||
+        strcmp(op, "ctz") == 0) {
+        if (count != 2U || reg_number(operands[0]) < 0 ||
+            reg_number(operands[1]) < 0) {
+            (void)snprintf(reason, reason_size, "bad-operands:%s:%s", op, args);
+            return false;
+        }
+        *size = 4U;
+        return true;
     }
 
     if (strcmp(op, "vmv.v.i") == 0) {
@@ -1164,6 +1180,36 @@ bool minias_riscv_measure(const char *op,
 bool minias_riscv_encode(MiniAs *as, const MiniAsStmt *stmt) {
     char operands[8][128];
     size_t count = split_operands(stmt->args, operands, 8U);
+    if (strcmp(stmt->op, "orc.b") == 0 ||
+        strcmp(stmt->op, "rev8") == 0 ||
+        strcmp(stmt->op, "ctz") == 0) {
+        int64_t encoded_imm;
+        uint32_t encoded_funct3;
+
+        if (count != 2U ||
+            !require_reg(as, stmt, operands[0], &rd) ||
+            !require_reg(as, stmt, operands[1], &rs1)) {
+            return false;
+        }
+        if (strcmp(stmt->op, "orc.b") == 0) {
+            encoded_imm = 0x287;
+            encoded_funct3 = 5U;
+        } else if (strcmp(stmt->op, "rev8") == 0) {
+            encoded_imm = 0x6b8;
+            encoded_funct3 = 5U;
+        } else {
+            encoded_imm = 0x601;
+            encoded_funct3 = 1U;
+        }
+        return append_u32(as,
+                          stmt->section,
+                          enc_i(0x13U,
+                                rd,
+                                encoded_funct3,
+                                rs1,
+                                encoded_imm));
+    }
+
     if (strcmp(stmt->op, "c.li") == 0) {
         int64_t imm;
         int compressed_rd;
@@ -1482,6 +1528,27 @@ bool minias_riscv_encode(MiniAs *as, const MiniAsStmt *stmt) {
         }
         if (!append_u32(as, stmt->section, 0x00000097U) ||
             !append_u32(as, stmt->section, enc_i(0x67U, 1, 0U, 1, 0))) {
+            return false;
+        }
+        return minias_add_relocation(as,
+                                     stmt->section,
+                                     stmt->offset,
+                                     MINIAS_R_RISCV_CALL_PLT,
+                                     expr.name,
+                                     expr.addend);
+    }
+    if (strcmp(stmt->op, "tail") == 0) {
+        MiniAsSymbolExpr expr;
+
+        if (count != 1U || !minias_parse_symbol_addend(operands[0], &expr)) {
+            minias_set_error(as,
+                             "unsupported-expression:%s:line=%zu",
+                             stmt->args,
+                             stmt->line);
+            return false;
+        }
+        if (!append_u32(as, stmt->section, 0x00000317U) ||
+            !append_u32(as, stmt->section, enc_i(0x67U, 0, 0U, 6, 0))) {
             return false;
         }
         return minias_add_relocation(as,
