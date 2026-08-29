@@ -31,78 +31,69 @@ physical code template.
 
 ## Real-program convergence
 
-## Dual-line Linux convergence loop
+## Linux convergence loop: full500 + dynamic frontier + fixed real16
 
-MiniAS uses two independent validation lines. They answer different questions and
-must not be conflated.
+MiniAS uses three validation scopes with different ownership. Their results must
+not be conflated.
 
-### Fast line — deterministic real16
+### Current frontier — dynamic failure cohort
 
-`MiniAS A0 Real Linux 16` is the high-frequency feedback line.
+The active development sample is **not permanently fixed**.
+
+After every authoritative frozen first500 run, every failing TU is extracted into
+`assembler/corpus/first500-frontier.txt`. That file replaces the previous frontier
+and becomes the high-frequency development cohort for the next convergence batch.
+
+The frontier exists to:
+
+- preserve exactly the failures discovered by the latest full500 headline;
+- make second blockers visible without rerunning all 500 TUs;
+- allow one coherent blocker family to be fixed across all currently affected TUs;
+- stay small and fast as the tail converges.
+
+If full500 reports 12 failures, the next frontier is those 12. If the next full500
+reports 7 different failures, the frontier is replaced by those 7. A stale frontier
+must never be treated as the current development sample.
+
+### Fixed real16 — regression sentinel
+
+`MiniAS A0 Real Linux 16` remains a deterministic spread sample. It is a stable
+regression sentinel and useful smoke gate, but once it is green it is **not** the
+primary source of new work. Passing real16 does not mean the current full500 tail
+is green.
+
+### Frozen first500 — authoritative headline
+
+`MiniAS A0 First500 Progress` is the full convergence line over the frozen 500
+Linux translation units. It owns the only authoritative first500 headline and
+the Pareto ordering of first blockers.
 
 Its job is to:
 
-- expose the next concrete assembler blocker quickly;
-- validate a narrow implementation change against real Linux-produced assembly;
-- print exact first-blocker context for failed translation units;
-- keep iteration latency low while a blocker class is being implemented.
-
-A `16/16` result is useful focused evidence, but it is **not** the project-wide
-Linux coverage headline.
-
-### Full line — frozen first500
-
-`MiniAS A0 First500 Progress` is the full convergence line over the same frozen
-500 Linux translation units used as the compiler safety corpus.
-
-Its job is to:
-
-- establish the real coverage headline (`PASS / FAIL / total=500`);
-- classify exactly one first stable blocker per failing `.s`;
-- rank blocker classes by frequency (Pareto);
-- detect regressions outside the real16 sample;
-- decide which blocker family should be attacked next.
-
-The frozen selection must stay stable while comparing iterations. Focused or
-real16 results must never be reported as though they were a first500 result.
+- establish `PASS / FAIL / total=500`;
+- classify one stable first blocker per failing `.s`;
+- rank blocker classes by frequency;
+- detect regressions outside focused/frontier samples;
+- produce the next dynamic frontier cohort.
 
 ### Promotion cadence
 
-The normal development loop is:
-
 ```text
 frozen first500
-  -> rank first blockers by frequency
+  -> authoritative PASS/FAIL + Pareto
+  -> replace current frontier with every FAIL
   -> choose the largest coherent blocker class
-  -> implement the general assembler capability
-  -> micro regression
-  -> real16 / exact focused replay
-  -> repeat focused fixes while the same class is converging
-  -> frozen first500 again
-  -> update the only authoritative 500-TU headline
+  -> focused micro regression
+  -> current frontier replay
+  -> continue peeling second blockers inside the same frontier
+  -> fixed real16 regression sentinel
+  -> when current frontier is green, rerun frozen first500
+  -> replace frontier again from the new FAIL set
 ```
 
-Do not rerun first500 after every tiny edit when real16/focused evidence is enough
-to continue the same blocker class. Do rerun first500 after a coherent batch has
-moved, when choosing the next Pareto class, or whenever a regression outside the
-sample must be ruled out.
-
-The full line requires internal/error-style assembler failures to remain explicit:
-a new internal failure must not be hidden as an ordinary unsupported capability.
-The frozen Linux corpus is the primary development pressure. MiniAS is run on real
-compiler-produced `.s` files and failures are grouped by the first stable diagnostic
-class, for example:
-
-```text
-unsupported-directive:.foo
-unsupported-instruction:bar
-unsupported-reloc-instruction:lla
-unsupported-expression:...
-```
-
-A capability is added because a real input requires it, then the same batch is
-replayed before widening the batch. Static census tooling is auxiliary and must not
-block assembler implementation.
+Do not rerun first500 after every tiny edit while the current frontier still
+contains known failures. Do rerun it when the current frontier has converged, when
+the global Pareto must be refreshed, or when a broader regression must be ruled out.
 
 GNU `as` remains the differential oracle:
 
