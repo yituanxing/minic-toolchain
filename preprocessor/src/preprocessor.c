@@ -871,11 +871,72 @@ static bool minipp_try_flush_pending(MiniPpState *state,
     return true;
 }
 
+static bool minipp_build_logical_line_numbers(const MiniPpString *input,
+                                              size_t **numbers_out,
+                                              size_t *count_out) {
+    size_t *numbers = NULL;
+    size_t count = 0U;
+    size_t capacity = 0U;
+    size_t physical_line = 1U;
+    size_t index = 0U;
+
+#define MINIPP_PUSH_LINE_NUMBER(value) do {                                      \
+        if (count == capacity) {                                                 \
+            size_t next_capacity = capacity == 0U ? 64U : capacity * 2U;        \
+            size_t *next;                                                        \
+            if (next_capacity < capacity ||                                     \
+                next_capacity > SIZE_MAX / sizeof(*numbers)) {                   \
+                free(numbers);                                                   \
+                return false;                                                    \
+            }                                                                    \
+            next = realloc(numbers, next_capacity * sizeof(*numbers));           \
+            if (next == NULL) {                                                  \
+                free(numbers);                                                   \
+                return false;                                                    \
+            }                                                                    \
+            numbers = next;                                                      \
+            capacity = next_capacity;                                            \
+        }                                                                        \
+        numbers[count++] = (value);                                              \
+    } while (0)
+
+    MINIPP_PUSH_LINE_NUMBER(physical_line);
+    while (index < input->size) {
+        if (input->data[index] == '\\' && index + 1U < input->size) {
+            if (input->data[index + 1U] == '\n') {
+                ++physical_line;
+                index += 2U;
+                continue;
+            }
+            if (input->data[index + 1U] == '\r' &&
+                index + 2U < input->size &&
+                input->data[index + 2U] == '\n') {
+                ++physical_line;
+                index += 3U;
+                continue;
+            }
+        }
+        if (input->data[index] == '\n') {
+            ++physical_line;
+            MINIPP_PUSH_LINE_NUMBER(physical_line);
+        }
+        ++index;
+    }
+
+#undef MINIPP_PUSH_LINE_NUMBER
+    *numbers_out = numbers;
+    *count_out = count;
+    return true;
+}
+
 static bool minipp_process_source(MiniPpState *state,
                                   const char *current_path,
                                   const MiniPpString *input,
+                                  const size_t *line_numbers,
+                                  size_t line_number_count,
                                   MiniPpString *output) {
     size_t offset = 0U;
+    size_t logical_line = 0U;
     MiniPpString pending;
 
     minipp_string_init(&pending);
@@ -892,6 +953,10 @@ static bool minipp_process_source(MiniPpState *state,
             ++end;
         }
 
+        state->current_file = current_path;
+        state->current_line =
+            logical_line < line_number_count ? line_numbers[logical_line] :
+                                               state->current_line;
         minipp_string_init(&stripped);
         if (!minipp_strip_comments_line(state,
                                         input->data + offset,
@@ -944,6 +1009,7 @@ static bool minipp_process_source(MiniPpState *state,
 
         minipp_string_destroy(&stripped);
         offset = end;
+        ++logical_line;
     }
 
     if (!minipp_try_flush_pending(state, &pending, output, true)) {
@@ -960,8 +1026,12 @@ static bool minipp_process_file(MiniPpState *state,
                                 MiniPpString *output) {
     MiniPpString input;
     MiniPpString logical;
+    size_t *line_numbers = NULL;
+    size_t line_number_count = 0U;
     size_t conditional_base = state->conditional_count;
     bool previous_comment_state = state->in_block_comment;
+    const char *previous_file = state->current_file;
+    size_t previous_line = state->current_line;
     bool ok;
 
     minipp_string_init(&input);
@@ -969,8 +1039,16 @@ static bool minipp_process_file(MiniPpState *state,
     state->in_block_comment = false;
 
     ok = minipp_read_file(path, &input, state->diagnostics) &&
+         minipp_build_logical_line_numbers(&input,
+                                           &line_numbers,
+                                           &line_number_count) &&
          minipp_splice_backslash_newlines(&input, &logical) &&
-         minipp_process_source(state, path, &logical, output);
+         minipp_process_source(state,
+                               path,
+                               &logical,
+                               line_numbers,
+                               line_number_count,
+                               output);
 
     if (!ok && logical.data == NULL && input.data != NULL) {
         fprintf(state->diagnostics, "minic-cpp: out-of-memory\n");
@@ -989,6 +1067,9 @@ static bool minipp_process_file(MiniPpState *state,
     }
 
     state->in_block_comment = previous_comment_state;
+    state->current_file = previous_file;
+    state->current_line = previous_line;
+    free(line_numbers);
     minipp_string_destroy(&logical);
     minipp_string_destroy(&input);
     return ok;
