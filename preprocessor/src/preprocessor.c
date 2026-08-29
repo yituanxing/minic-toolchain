@@ -77,35 +77,99 @@ static bool minipp_reserve_macros(MiniPpState *state, size_t required) {
     return true;
 }
 
-static bool minipp_define_macro(MiniPpState *state,
-                                const char *name,
-                                const char *replacement) {
+static void minipp_release_macro_payload(MiniPpMacro *macro) {
+    size_t index;
+
+    free(macro->replacement);
+    macro->replacement = NULL;
+    for (index = 0U; index < macro->param_count; ++index) {
+        free(macro->params[index]);
+    }
+    free(macro->params);
+    macro->params = NULL;
+    macro->param_count = 0U;
+    macro->function_like = false;
+}
+
+static bool minipp_define_macro_full(MiniPpState *state,
+                                     const char *name,
+                                     const char *replacement,
+                                     const char *const *params,
+                                     size_t param_count,
+                                     bool function_like) {
     MiniPpMacro *macro = minipp_find_macro(state, name);
-    char *next_replacement = minipp_duplicate_range(replacement,
-                                                     strlen(replacement));
+    char *next_replacement;
+    char **next_params = NULL;
+    size_t index;
+
+    next_replacement = minipp_duplicate_range(replacement,
+                                              strlen(replacement));
     if (next_replacement == NULL) {
         return false;
     }
 
-    if (macro != NULL) {
-        free(macro->replacement);
-        macro->replacement = next_replacement;
-        return true;
+    if (param_count != 0U) {
+        next_params = calloc(param_count, sizeof(*next_params));
+        if (next_params == NULL) {
+            free(next_replacement);
+            return false;
+        }
+        for (index = 0U; index < param_count; ++index) {
+            next_params[index] = minipp_duplicate_range(params[index],
+                                                        strlen(params[index]));
+            if (next_params[index] == NULL) {
+                while (index != 0U) {
+                    --index;
+                    free(next_params[index]);
+                }
+                free(next_params);
+                free(next_replacement);
+                return false;
+            }
+        }
     }
 
-    if (!minipp_reserve_macros(state, state->macro_count + 1U)) {
-        free(next_replacement);
-        return false;
+    if (macro == NULL) {
+        if (!minipp_reserve_macros(state, state->macro_count + 1U)) {
+            for (index = 0U; index < param_count; ++index) {
+                free(next_params[index]);
+            }
+            free(next_params);
+            free(next_replacement);
+            return false;
+        }
+        macro = &state->macros[state->macro_count];
+        memset(macro, 0, sizeof(*macro));
+        macro->name = minipp_duplicate_range(name, strlen(name));
+        if (macro->name == NULL) {
+            for (index = 0U; index < param_count; ++index) {
+                free(next_params[index]);
+            }
+            free(next_params);
+            free(next_replacement);
+            return false;
+        }
+        ++state->macro_count;
+    } else {
+        minipp_release_macro_payload(macro);
     }
-    macro = &state->macros[state->macro_count];
-    macro->name = minipp_duplicate_range(name, strlen(name));
-    if (macro->name == NULL) {
-        free(next_replacement);
-        return false;
-    }
+
     macro->replacement = next_replacement;
-    ++state->macro_count;
+    macro->params = next_params;
+    macro->param_count = param_count;
+    macro->function_like = function_like;
     return true;
+}
+
+static bool minipp_define_macro(MiniPpState *state,
+                                const char *name,
+                                const char *replacement) {
+    return minipp_define_macro_full(state,
+                                    name,
+                                    replacement,
+                                    NULL,
+                                    0U,
+                                    false);
 }
 
 static void minipp_undefine_macro(MiniPpState *state, const char *name) {
@@ -114,7 +178,7 @@ static void minipp_undefine_macro(MiniPpState *state, const char *name) {
     for (index = 0U; index < state->macro_count; ++index) {
         if (strcmp(state->macros[index].name, name) == 0) {
             free(state->macros[index].name);
-            free(state->macros[index].replacement);
+            minipp_release_macro_payload(&state->macros[index]);
             if (index + 1U < state->macro_count) {
                 memmove(&state->macros[index],
                         &state->macros[index + 1U],
@@ -132,7 +196,7 @@ static void minipp_state_destroy(MiniPpState *state) {
 
     for (index = 0U; index < state->macro_count; ++index) {
         free(state->macros[index].name);
-        free(state->macros[index].replacement);
+        minipp_release_macro_payload(&state->macros[index]);
     }
     free(state->macros);
     free(state->conditionals);
