@@ -2771,6 +2771,38 @@ static bool process_statement(MiniAs *as, char *text, size_t line) {
     }
 
     if (op[0] == '.' && strcmp(op, ".insn") != 0) {
+        /*
+         * Native Linux VDSO sources use only the procedure-boundary CFI
+         * surface at this stage.  Track and validate its state now; actual
+         * .eh_frame byte emission is a later semantic-differential contract.
+         */
+        if (strcmp(op, ".cfi_startproc") == 0) {
+            if (as->cfi_active ||
+                (*args != '\0' && strcmp(args, "simple") != 0)) {
+                minias_set_error(as, "bad-directive:.cfi_startproc:line=%zu", line);
+                return false;
+            }
+            as->cfi_active = true;
+            as->cfi_signal_frame = false;
+            return true;
+        }
+        if (strcmp(op, ".cfi_signal_frame") == 0) {
+            if (!as->cfi_active || *args != '\0') {
+                minias_set_error(as, "bad-directive:.cfi_signal_frame:line=%zu", line);
+                return false;
+            }
+            as->cfi_signal_frame = true;
+            return true;
+        }
+        if (strcmp(op, ".cfi_endproc") == 0) {
+            if (!as->cfi_active || *args != '\0') {
+                minias_set_error(as, "bad-directive:.cfi_endproc:line=%zu", line);
+                return false;
+            }
+            as->cfi_active = false;
+            as->cfi_signal_frame = false;
+            return true;
+        }
         if (strcmp(op, ".text") == 0) {
             return switch_section(as,
                                   ".text",
@@ -4265,6 +4297,11 @@ bool minias_parse_file(MiniAs *as, const char *path) {
         minias_set_error(as,
                          "unterminated-directive:.if:depth=%zu",
                          as->conditional_count);
+        fclose(file);
+        return false;
+    }
+    if (as->cfi_active) {
+        minias_set_error(as, "unterminated-directive:.cfi_startproc");
         fclose(file);
         return false;
     }
