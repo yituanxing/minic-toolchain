@@ -279,8 +279,12 @@ inline_atomic_hex="$(
 )"
 test "$inline_atomic_hex" = "afa203106388d2013383c2012fa3631ae31803fe67800000"
 readelf -s "$work/inline-atomic-loop.o" >"$work/inline-atomic-loop.txt"
-grep -q '.Lminias_num_0_1' "$work/inline-atomic-loop.txt"
-grep -q '.Lminias_num_1_1' "$work/inline-atomic-loop.txt"
+# Numeric local labels whose branches are fully resolved at assembly time are
+# private implementation details. Match GNU as: do not retain the generated
+# .Lminias_num_* names in the final ELF symbol table unless a relocation still
+# needs them.
+! grep -q '.Lminias_num_0_1' "$work/inline-atomic-loop.txt"
+! grep -q '.Lminias_num_1_1' "$work/inline-atomic-loop.txt"
 
 cat >"$work/branch-pseudos.s" <<'EOF'
 .text
