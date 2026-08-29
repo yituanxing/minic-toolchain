@@ -1012,4 +1012,49 @@ if "$MINIAS" -o "$work/native-cfi-unclosed.o" "$work/native-cfi-unclosed.s" 2>"$
 fi
 grep -q 'unterminated-directive:.cfi_startproc' "$work/native-cfi-unclosed.err"
 
+cat >"$work/gcc-vdso-word-ops.s" <<'EOF'
+.text
+.globl gcc_vdso_word_ops
+.type gcc_vdso_word_ops, @function
+gcc_vdso_word_ops:
+  addw a0, a1, a2
+  subw a3, a4, a5
+  sllw a6, a7, t0
+  srlw t1, t2, t3
+  sraw t4, t5, t6
+  mulw a0, a1, a2
+  divw a3, a4, a5
+  divuw a6, a7, t0
+  remw t1, t2, t3
+  remuw t4, t5, t6
+  slliw a0, a1, 7
+  srliw a2, a3, 11
+  sraiw a4, a5, 3
+  ret
+.size gcc_vdso_word_ops, . - gcc_vdso_word_ops
+EOF
+"$MINIAS" -o "$work/gcc-vdso-word-ops.o" "$work/gcc-vdso-word-ops.s"
+gcc_vdso_word_hex="$(
+    readelf -x .text "$work/gcc-vdso-word-ops.o" |
+    awk '/0x[0-9a-f]+/ {for (i=2; i<=NF; ++i) if ($i ~ /^[0-9a-f]{8}$/) printf "%s", $i}'
+)"
+test "$gcc_vdso_word_hex" = "3b85c500bb06f7403b9858003bd3c301bb5eff413b85c502bb46f7023bd858023be3c303bb7eff031b9575001bd6b6001bd7374067800000"
+
+cat >"$work/gcc-vdso-plt.s" <<'EOF'
+.text
+.extern riscv_hwprobe
+.globl gcc_vdso_plt
+.type gcc_vdso_plt, @function
+gcc_vdso_plt:
+  call riscv_hwprobe@plt
+  ret
+.size gcc_vdso_plt, . - gcc_vdso_plt
+EOF
+"$MINIAS" -o "$work/gcc-vdso-plt.o" "$work/gcc-vdso-plt.s"
+readelf -Wr "$work/gcc-vdso-plt.o" | grep -Eq 'R_RISCV_CALL_PLT[[:space:]]+.*riscv_hwprobe'
+if readelf -Ws "$work/gcc-vdso-plt.o" | grep -q 'riscv_hwprobe@plt'; then
+    echo "unexpected @plt suffix retained in symbol table" >&2
+    exit 1
+fi
+
 echo "MINIAS_A0=PASS objects=27 format=ELF64-RISCV-ET_REL relocations=23 strings=2 pseudos=17 previous=3 subsection=2 numeric_labels=18 ecall=1 isa_next=13 csr_amo=8 sfence_vma=3 fence_i=1 vsetvl=1 vsetvli=1 vmv_v_i=4 rept=2 nested_rept=1 irp=4 section_stack=1 org=3 local_difference=1 lr_sc=2 inline_labels=2 branch_pseudos=8 extern=1 symbol_minus_dot=4 symbol_difference=1 absolute32=1 jal=2 jal_subsection=1 high_numeric_labels=2 u64_data=3 raw_insn=4 set_alias=3 move=1 numeric_zero=1 immediate_product=2 shift_immediate=1 incbin=1 align_expr=1 native_expr=6 native_zbb_tail_memexpr=1 native_jalr_symbol_load=1 native_forward_short=1 native_mixed_macro=1 native_divided_difference=1 native_symbol_addend_expr=1 native_add_sub_immediate=1 native_cfi_boundary=1 native_gas_forms=1 native_set_size=1 native_macro_comma=1 native_macro_quotes=1 sext_w=1 macro=4 conditional=1"
