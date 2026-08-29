@@ -1925,6 +1925,7 @@ bool minias_riscv_encode(MiniAs *as, const MiniAsStmt *stmt) {
         }
         if ((strcmp(stmt->op, "add") == 0 ||
              strcmp(stmt->op, "sub") == 0) &&
+            reg_number(operands[2]) < 0 &&
             parse_i64(operands[2], &immediate)) {
             if (strcmp(stmt->op, "sub") == 0) {
                 if (immediate == INT64_MIN) {
