@@ -371,6 +371,14 @@ int nested_argument_line = PASS_LINE(
 EOF
 run_exact nested-argument-line
 
+cat >"$work/nested-mid-argument-line.c" <<'EOF'
+#define INNER_MID_LINE() __LINE__
+#define PASS_MID_LINE(x) x
+int nested_mid_argument_line = PASS_MID_LINE(1 +
+    INNER_MID_LINE());
+EOF
+run_exact nested-mid-argument-line
+
 cat >"$work/nested-variadic-padding.c" <<'EOF'
 #define STMT(x) ({ x; })
 #define WRAP_IF(cond, func, ...) ({ if (cond) func(__VA_ARGS__); })
@@ -429,4 +437,4 @@ OUT4(column_zero_four)
 EOF
 run_exact empty-leading-nested-macro
 
-printf 'MINIPP_A0_EXACT=PASS cases=46 mode=byte-identical\n'
+printf 'MINIPP_A0_EXACT=PASS cases=47 mode=byte-identical\n'
