@@ -119,6 +119,7 @@ def main():
     parser.add_argument("--plan", required=True)
     parser.add_argument("--src", required=True)
     parser.add_argument("--out", required=True)
+    parser.add_argument("--offset", type=int, default=0)
     parser.add_argument("--limit", type=int, default=500)
     parser.add_argument("--tsv", required=True)
     parser.add_argument("--sources", required=True)
@@ -170,10 +171,10 @@ def main():
             }
         )
 
-    selected = entries[: args.limit]
+    selected = entries[args.offset : args.offset + args.limit]
     if len(selected) != args.limit:
         raise SystemExit(
-            f"MINIPP_LINUX_FREEZE expected={args.limit} actual={len(selected)} total={len(entries)}"
+            f"MINIPP_LINUX_FREEZE offset={args.offset} expected={args.limit} actual={len(selected)} total={len(entries)}"
         )
 
     tsv = Path(args.tsv)
@@ -183,7 +184,7 @@ def main():
 
     with tsv.open("w") as output:
         output.write("index\tobject\tsource\n")
-        for index, entry in enumerate(selected):
+        for index, entry in enumerate(selected, start=args.offset):
             output.write(f"{index}\t{entry['object']}\t{entry['source']}\n")
 
     with source_manifest.open("w") as output:
@@ -192,7 +193,7 @@ def main():
 
     normalized_rows = "".join(
         f"{index}\t{entry['object']}\t{entry['source']}\n"
-        for index, entry in enumerate(selected)
+        for index, entry in enumerate(selected, start=args.offset)
     ).encode()
     mapped_digest = hashlib.sha256(normalized_rows).hexdigest()
 
@@ -202,7 +203,7 @@ def main():
         contract.parent.mkdir(parents=True, exist_ok=True)
         canonical_lines = []
         with contract.open("w") as output:
-            for index, entry in enumerate(selected):
+            for index, entry in enumerate(selected, start=args.offset):
                 row = {"index": index, **entry}
                 line = json.dumps(row, sort_keys=True, separators=(",", ":"))
                 output.write(line + "\n")
@@ -211,7 +212,7 @@ def main():
 
     noncanonical = [
         (index, entry["object"], entry["source"])
-        for index, entry in enumerate(selected)
+        for index, entry in enumerate(selected, start=args.offset)
         if entry["object"][:-2] + ".c" != entry["source"]
     ]
     predef_contexts = {
@@ -220,7 +221,7 @@ def main():
     }
 
     headline = (
-        f"MINIPP_LINUX_FREEZE total_c_tus={len(entries)} selected={len(selected)} "
+        f"MINIPP_LINUX_FREEZE total_c_tus={len(entries)} offset={args.offset} selected={len(selected)} "
         f"noncanonical={len(noncanonical)} predef_contexts={len(predef_contexts)} "
         f"mapped_sha256={mapped_digest}"
     )
