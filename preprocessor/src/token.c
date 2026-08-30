@@ -1763,6 +1763,30 @@ static void minipp_demote_generated_argument_padding(MiniPpString *text) {
     }
 }
 
+static bool minipp_debug_contains_double_tab_semicolon(
+    const MiniPpString *text) {
+    size_t index;
+
+    if (text == NULL || text->data == NULL) {
+        return false;
+    }
+    if (text->size >= 3U &&
+        text->data[0] == '\t' &&
+        text->data[1] == '\t' &&
+        text->data[2] == ';') {
+        return true;
+    }
+    for (index = 0U; index + 3U < text->size; ++index) {
+        if ((text->data[index] == '\n' || text->data[index] == '\r') &&
+            text->data[index + 1U] == '\t' &&
+            text->data[index + 2U] == '\t' &&
+            text->data[index + 3U] == ';') {
+            return true;
+        }
+    }
+    return false;
+}
+
 static bool minipp_expand_function_macro(MiniPpState *state,
                                          const MiniPpMacro *macro,
                                          const char *text,
@@ -1938,6 +1962,15 @@ static bool minipp_expand_function_macro(MiniPpState *state,
                                           depth + 1U,
                                           source_line,
                                           false);
+        if (ok &&
+            getenv("MINIPP_DEBUG_PADDING") != NULL &&
+            minipp_debug_contains_double_tab_semicolon(&replacement)) {
+            fprintf(state->diagnostics,
+                    "MINIPP_DEBUG_MACRO_PADDING kind=function macro=%s depth=%zu size=%zu\n",
+                    macro->name,
+                    depth,
+                    replacement.size);
+        }
         if (ok) {
             bool top_level_empty_padding =
                 depth == 0U &&
@@ -2243,6 +2276,15 @@ static bool minipp_expand_text_recursive(MiniPpState *state,
                                                       depth + 1U,
                                                       current_line,
                                                       false);
+                    if (ok &&
+                        getenv("MINIPP_DEBUG_PADDING") != NULL &&
+                        minipp_debug_contains_double_tab_semicolon(&replacement)) {
+                        fprintf(state->diagnostics,
+                                "MINIPP_DEBUG_MACRO_PADDING kind=object macro=%s depth=%zu size=%zu\n",
+                                macro->name,
+                                depth,
+                                replacement.size);
+                    }
                     if (ok) {
                         size_t tail_start = 0U;
                         const MiniPpMacro *tail_macro =
