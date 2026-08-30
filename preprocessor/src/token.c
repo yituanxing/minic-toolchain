@@ -372,7 +372,8 @@ static bool minipp_arg_starts_expanding_macro(
 static bool minipp_build_logical_args(MiniPpState *state,
                                       const MiniPpMacro *macro,
                                       const MiniPpArgList *raw_args,
-                                      MiniPpArgList *logical_args) {
+                                      MiniPpArgList *logical_args,
+                                      bool preserve_argument_spacing) {
     size_t fixed_count;
     size_t index;
     MiniPpString variadic;
@@ -440,13 +441,20 @@ static bool minipp_build_logical_args(MiniPpState *state,
                 goto oom;
             }
             if (raw_args->leading_space[index]) {
-                char separator =
-                    (raw_args->leading_space_generated[index] ||
-                     minipp_arg_starts_expanding_macro(
-                         state, &raw_args->items[index]))
-                        ? '\v'
-                        : ' ';
-                if (!minipp_string_append_char(&variadic, separator)) {
+                char separator = ' ';
+                bool emit_separator = true;
+
+                if (preserve_argument_spacing &&
+                    minipp_arg_starts_expanding_macro(
+                        state, &raw_args->items[index])) {
+                    separator = '\v';
+                } else if (!preserve_argument_spacing &&
+                           raw_args->leading_space_generated[index]) {
+                    emit_separator = false;
+                }
+
+                if (emit_separator &&
+                    !minipp_string_append_char(&variadic, separator)) {
                     goto oom;
                 }
             }
@@ -477,8 +485,9 @@ static bool minipp_build_logical_args(MiniPpState *state,
             raw_args->leading_space[fixed_count];
         logical_args->leading_space_generated[logical_args->count - 1U] =
             raw_args->leading_space_generated[fixed_count] ||
-            minipp_arg_starts_expanding_macro(
-                state, &raw_args->items[fixed_count]);
+            (preserve_argument_spacing &&
+             minipp_arg_starts_expanding_macro(
+                 state, &raw_args->items[fixed_count]));
     }
     minipp_string_destroy(&variadic);
     return true;
@@ -739,23 +748,6 @@ static bool minipp_needs_post_arg_separator(const MiniPpString *arg,
     return next == '+' || next == '-' || next == '.';
 }
 
-static bool minipp_append_macro_argument(
-    MiniPpString *out,
-    const MiniPpString *arg,
-    bool consume_generated_padding) {
-    size_t index;
-
-    for (index = 0U; index < arg->size; ++index) {
-        if (consume_generated_padding && arg->data[index] == '\v') {
-            continue;
-        }
-        if (!minipp_string_append_char(out, arg->data[index])) {
-            return false;
-        }
-    }
-    return true;
-}
-
 static bool minipp_substitute_function_macro(MiniPpState *state,
                                              const MiniPpMacro *macro,
                                              const MiniPpArgList *raw_args,
@@ -940,8 +932,9 @@ static bool minipp_substitute_function_macro(MiniPpState *state,
                 const MiniPpArgList *source_args =
                     paste_operand ? raw_args : expanded_args;
                 const MiniPpString *arg = &source_args->items[param_index];
-                if (!minipp_append_macro_argument(
-                        substituted, arg, !paste_operand)) {
+                if (!minipp_string_append_n(substituted,
+                                            arg->data == NULL ? "" : arg->data,
+                                            arg->size)) {
                     goto oom;
                 }
                 if (!paste_operand &&
@@ -1153,7 +1146,8 @@ static bool minipp_expand_function_macro(MiniPpState *state,
     if (!minipp_build_logical_args(state,
                                    macro,
                                    &parsed_args,
-                                   &raw_args)) {
+                                   &raw_args,
+                                   preserve_argument_spacing)) {
         minipp_arg_list_destroy(&parsed_args);
         return false;
     }
