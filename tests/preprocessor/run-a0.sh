@@ -370,6 +370,14 @@ int computed_include = COMPUTED_INCLUDE_VALUE;
 EOF
 run_exact computed-include
 
+cat >"$work/self-reference-token-paste-hideset.c" <<'EOF'
+#define PASTE_TARGET_SELF 7
+#define PASTE_INNER(op, value) PASTE_TARGET_##op value
+#define SELF(value) PASTE_INNER(SELF, value)
+SELF(3)
+EOF
+run_exact self-reference-token-paste-hideset
+
 cat >"$work/self-referential-macro-hideset.c" <<'EOF'
 #define HIDE_ATTR __attribute__((unused))
 #define inline inline HIDE_ATTR
@@ -585,4 +593,4 @@ OUT4(column_zero_four)
 EOF
 run_exact empty-leading-nested-macro
 
-printf 'MINIPP_A0_EXACT=PASS cases=62 mode=byte-identical\n'
+printf 'MINIPP_A0_EXACT=PASS cases=63 mode=byte-identical\n'
