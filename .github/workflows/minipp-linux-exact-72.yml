@@ -1,4 +1,4 @@
-# validation-trigger: focus11-closed
+# validation-trigger: focus4-closed
 name: MiniPP Linux Exact 72
 
 concurrency:
