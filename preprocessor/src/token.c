@@ -1089,13 +1089,40 @@ static bool minipp_needs_post_arg_separator(const MiniPpString *arg,
     return next == '+' || next == '-' || next == '.';
 }
 
-static bool minipp_arg_has_stringize_origin(const MiniPpString *arg) {
-    size_t index;
+static bool minipp_first_variadic_arg_has_stringize_origin(
+    const MiniPpString *arg) {
+    size_t index = 0U;
+    size_t paren_depth = 0U;
 
-    for (index = 0U; index < arg->size; ++index) {
-        if (arg->data[index] == '\b') {
+    while (index < arg->size) {
+        char value = arg->data[index];
+
+        if (value == '\b') {
             return true;
         }
+        if (value == '"' || value == '\'') {
+            char quote = value;
+            ++index;
+            while (index < arg->size) {
+                value = arg->data[index++];
+                if (value == '\\' && index < arg->size) {
+                    ++index;
+                    continue;
+                }
+                if (value == quote) {
+                    break;
+                }
+            }
+            continue;
+        }
+        if (value == '(') {
+            ++paren_depth;
+        } else if (value == ')' && paren_depth != 0U) {
+            --paren_depth;
+        } else if (value == ',' && paren_depth == 0U) {
+            return false;
+        }
+        ++index;
     }
     return false;
 }
@@ -1397,7 +1424,7 @@ static bool minipp_substitute_function_macro(MiniPpState *state,
                         }
                         if (!raw_args->leading_space[param_index] ||
                             raw_args->leading_space_stringized[param_index] ||
-                            minipp_arg_has_stringize_origin(
+                            minipp_first_variadic_arg_has_stringize_origin(
                                 &raw_args->items[param_index])) {
                             while (substituted->size != 0U) {
                                 char previous =
