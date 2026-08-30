@@ -40,12 +40,20 @@ def main():
     parser.add_argument("--gcc", default="riscv64-linux-gnu-gcc")
     parser.add_argument("--jobs", type=int, default=8)
     parser.add_argument("--linux-id", default="linux-6.6.143-rv64-defconfig")
+    parser.add_argument("--logical-root", default="/tmp/minipp-linux-first500")
     args = parser.parse_args()
 
     contract = Path(args.contract).resolve()
     src = Path(args.src).resolve()
     out = Path(args.out).resolve()
     corpus = Path(args.corpus).resolve()
+    logical_root = Path(args.logical_root)
+    shutil.rmtree(logical_root, ignore_errors=True)
+    logical_root.mkdir(parents=True, exist_ok=True)
+    logical_src = logical_root / "src"
+    logical_out = logical_root / "out"
+    logical_src.symlink_to(src, target_is_directory=True)
+    logical_out.symlink_to(out, target_is_directory=True)
     refs = corpus / "refs"
     predefs = corpus / "predefines"
     stderr_root = corpus / "gcc-stderr"
@@ -72,23 +80,23 @@ def main():
         output = predefs / f"{key}.h"
         env = os.environ.copy()
         env["REAL_CC"] = args.gcc
-        env["MINIPP_LINUX_SRC"] = str(src)
+        env["MINIPP_LINUX_SRC"] = str(logical_src)
         env["MINIPP_PREDEFINES_OUT"] = str(output)
         command = [
             "bash",
             str(predef_script),
-            *[expand_arg(value, src, out) for value in raw_args],
+            *[expand_arg(value, logical_src, logical_out) for value in raw_args],
         ]
         subprocess.run(command, cwd=repo_root, env=env, check=True)
 
     def build_one(row):
         index = int(row["index"])
-        source = src / row["source"]
+        source = logical_src / row["source"]
         ref = refs / f"{index:04d}.gcc.i"
         err = stderr_root / f"{index:04d}.stderr"
         key = context_id(row["predef_args"])
         predef = predefs / f"{key}.h"
-        pp_args = [expand_arg(value, src, out) for value in row["pp_args"]]
+        pp_args = [expand_arg(value, logical_src, logical_out) for value in row["pp_args"]]
         command = [
             args.gcc,
             "-E",
@@ -106,7 +114,7 @@ def main():
         one_started = time.monotonic()
         proc = subprocess.run(
             command,
-            cwd=out,
+            cwd=logical_out,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.PIPE,
             text=True,
@@ -215,6 +223,7 @@ def main():
         "gcc_machine": gcc_machine,
         "total_reference_bytes": total_bytes,
         "build_seconds": time.monotonic() - started,
+        "logical_root": str(logical_root),
     }
     (corpus / "meta.json").write_text(
         json.dumps(meta, indent=2, sort_keys=True) + "\n"
