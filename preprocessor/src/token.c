@@ -690,6 +690,39 @@ static bool minipp_variadic_padding_survives_gnu_forward(
     return saw_variadic;
 }
 
+static void minipp_debug_macro_args(const char *stage,
+                                    const MiniPpMacro *macro,
+                                    const MiniPpArgList *args,
+                                    bool preserve_argument_spacing,
+                                    FILE *diagnostics) {
+    size_t index;
+
+    if (getenv("MINIPP_DEBUG_SPACING") == NULL ||
+        (strcmp(macro->name, "printk") != 0 &&
+         strcmp(macro->name, "printk_index_wrap") != 0)) {
+        return;
+    }
+    fprintf(diagnostics,
+            "MINIPP_DEBUG_SPACING stage=%s macro=%s preserve=%d count=%zu\n",
+            stage, macro->name, preserve_argument_spacing ? 1 : 0, args->count);
+    for (index = 0U; index < args->count; ++index) {
+        size_t show = args->items[index].size;
+        if (show > 160U) {
+            show = 160U;
+        }
+        fprintf(diagnostics,
+                "MINIPP_DEBUG_ARG macro=%s index=%zu lead=%d generated=%d stringized=%d size=%zu text=%.*s\n",
+                macro->name,
+                index,
+                args->leading_space[index] ? 1 : 0,
+                args->leading_space_generated[index] ? 1 : 0,
+                args->leading_space_stringized[index] ? 1 : 0,
+                args->items[index].size,
+                (int)show,
+                args->items[index].data == NULL ? "" : args->items[index].data);
+    }
+}
+
 static bool minipp_build_logical_args(MiniPpState *state,
                                       const MiniPpMacro *macro,
                                       const MiniPpArgList *raw_args,
@@ -700,6 +733,12 @@ static bool minipp_build_logical_args(MiniPpState *state,
     MiniPpString variadic;
 
     memset(logical_args, 0, sizeof(*logical_args));
+
+    minipp_debug_macro_args("raw",
+                            macro,
+                            raw_args,
+                            preserve_argument_spacing,
+                            state->diagnostics);
 
     if (!macro->variadic) {
         if (raw_args->count != macro->param_count) {
