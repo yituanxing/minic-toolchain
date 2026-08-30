@@ -1562,6 +1562,31 @@ static bool minipp_expand_function_macro(MiniPpState *state,
     }
     minipp_arg_list_destroy(&parsed_args);
 
+    if (strncmp(macro->name, "NR_", 3U) == 0) {
+        size_t debug_arg;
+        for (debug_arg = 0U; debug_arg < raw_args.count; ++debug_arg) {
+            size_t debug_index;
+            size_t f_count = 0U;
+            for (debug_index = 0U;
+                 debug_index < raw_args.items[debug_arg].size;
+                 ++debug_index) {
+                if (raw_args.items[debug_arg].data[debug_index] == '\f') {
+                    ++f_count;
+                }
+            }
+            fprintf(state->diagnostics,
+                    "MINIPP_NR2_RAW macro=%s arg=%zu lead=%d gen=%d str=%d f=%zu text=[%.*s]\n",
+                    macro->name,
+                    debug_arg,
+                    raw_args.leading_space[debug_arg] ? 1 : 0,
+                    raw_args.leading_space_generated[debug_arg] ? 1 : 0,
+                    raw_args.leading_space_stringized[debug_arg] ? 1 : 0,
+                    f_count,
+                    (int)raw_args.items[debug_arg].size,
+                    raw_args.items[debug_arg].data);
+        }
+    }
+
     memset(&expanded_args, 0, sizeof(expanded_args));
     if (macro->param_count != 0U) {
         expanded_args.items = calloc(macro->param_count,
@@ -1631,6 +1656,13 @@ static bool minipp_expand_function_macro(MiniPpState *state,
         minipp_arg_list_destroy(&raw_args);
         minipp_arg_list_destroy(&expanded_args);
         return false;
+    }
+    if (strncmp(macro->name, "NR_", 3U) == 0) {
+        fprintf(state->diagnostics,
+                "MINIPP_NR2_SUB macro=%s text=[%.*s]\n",
+                macro->name,
+                (int)substituted.size,
+                substituted.data == NULL ? "" : substituted.data);
     }
     if (!minipp_apply_token_paste(state, &substituted, &pasted)) {
         minipp_string_destroy(&substituted);
