@@ -71,6 +71,7 @@ static bool minipp_append_normalized_argument(MiniPpString *item,
     size_t index = 0U;
     bool pending_space = false;
     bool pending_space_generated = false;
+    bool pending_space_stringized = false;
     size_t pending_line_breaks = 0U;
     bool have_token = false;
 
@@ -82,6 +83,9 @@ static bool minipp_append_normalized_argument(MiniPpString *item,
                 pending_space = true;
                 if (text[index] == '\v') {
                     pending_space_generated = true;
+                }
+                if (text[index] == '\f') {
+                    pending_space_stringized = true;
                 }
                 if (text[index] == '\n' ||
                     (text[index] == '\r' &&
@@ -96,8 +100,12 @@ static bool minipp_append_normalized_argument(MiniPpString *item,
         if (pending_space) {
             size_t line_break;
 
-            if (pending_space_generated &&
-                !minipp_string_append_char(item, '\v')) {
+            if (pending_space_stringized) {
+                if (!minipp_string_append_char(item, '\f')) {
+                    return false;
+                }
+            } else if (pending_space_generated &&
+                       !minipp_string_append_char(item, '\v')) {
                 return false;
             }
             if (pending_line_breaks != 0U) {
@@ -109,11 +117,13 @@ static bool minipp_append_normalized_argument(MiniPpString *item,
                     }
                 }
             } else if (!pending_space_generated &&
+                       !pending_space_stringized &&
                        !minipp_string_append_char(item, ' ')) {
                 return false;
             }
             pending_space = false;
             pending_space_generated = false;
+            pending_space_stringized = false;
             pending_line_breaks = 0U;
         }
 
