@@ -220,13 +220,6 @@ bool minipp_render_gcc_p_output(const MiniPpString *input,
             continue;
         }
 
-        if (line_start && empty_macro_padding_count != 0U) {
-            if (leading_spaces > empty_macro_padding_count) {
-                leading_spaces -= empty_macro_padding_count;
-            } else {
-                leading_spaces = 0U;
-            }
-        }
         while (line_start && leading_spaces != 0U) {
             if (!minipp_string_append_char(output, ' ')) {
                 goto oom;
