@@ -203,6 +203,11 @@ bool minipp_render_gcc_p_output(const MiniPpString *input,
             continue;
         }
 
+        if (value == '\b') {
+            ++index;
+            continue;
+        }
+
         if (value == ' ' || value == '\t' ||
             value == '\v' || value == '\f' || value == '\r') {
             if (line_start) {
