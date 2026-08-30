@@ -35,10 +35,10 @@ printf 'MINIPP_LINUX_BATCH_JOBS=%s\n' "$jobs"
 make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
   CC="$cc_wrapper" -j"$jobs" V=1 "${targets[@]}" >"$work/kbuild-batch.log" 2>&1
 
-selected=$(grep -c '^RESULT ' "$trace" || true)
 exact=$(grep -c ' status=EXACT' "$trace" || true)
 fail=$(grep -c ' status=MINIPP_FAIL' "$trace" || true)
 diff=$(grep -c ' status=DIFF' "$trace" || true)
+selected=$((exact + fail + diff))
 expected=${#sources[@]}
 
 failure_pool="$work/failure-pool.txt"
