@@ -370,6 +370,20 @@ int computed_include = COMPUTED_INCLUDE_VALUE;
 EOF
 run_exact computed-include
 
+cat >"$work/object-multiline-replacement-padding.c" <<'EOF'
+#define OM_EM(a, b) ;
+#define OM_EMPTY(x)
+#define OM_KEEP(x) x
+#define OM_LIST						\
+	OM_EMPTY(	OM_EM(A, "A"))			\
+	OM_EMPTY(	OM_EM(B, "B"))			\
+				OM_EM(C, "C")		\
+	OM_KEEP(	OM_EM(D, "D"))			\
+				OM_EM(E, "E")
+OM_LIST
+EOF
+run_exact object-multiline-replacement-padding
+
 cat >"$work/multiline-arg-leading-padding.c" <<'EOF'
 #define ML_EMIT(x) x
  ML_EMIT(
@@ -579,4 +593,4 @@ OUT4(column_zero_four)
 EOF
 run_exact empty-leading-nested-macro
 
-printf 'MINIPP_A0_EXACT=PASS cases=61 mode=byte-identical\n'
+printf 'MINIPP_A0_EXACT=PASS cases=62 mode=byte-identical\n'
