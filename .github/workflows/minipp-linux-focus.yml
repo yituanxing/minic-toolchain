@@ -1,0 +1,126 @@
+name: MiniPP Linux Failure Pool
+
+concurrency:
+  group: minipp-linux-focus-${{ github.ref }}
+  cancel-in-progress: true
+
+on:
+  push:
+    branches:
+      - 'toolchain/minipp-*'
+    paths:
+      - 'preprocessor/**'
+      - 'tools/minic-cpp/**'
+      - '.github/workflows/minipp-linux-focus.yml'
+      - 'Makefile'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  linux-failure-pool:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[minipp-linux-focus]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux preprocessing prerequisites
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            gcc gcc-riscv64-linux-gnu libc6-dev-riscv64-cross \
+            bc bison flex libssl-dev libelf-dev make curl xz-utils
+
+      - name: Build independent MiniPP
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/minipp-linux-focus toolchain 2>/dev/null || \
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/minipp-linux-focus all
+          test -x build/minipp-linux-focus/bin/minic-cpp
+
+      - name: Prepare Linux 6.6.143
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/minipp-linux-focus-work"
+          archive="$work/linux-6.6.143.tar.xz"
+          src="$work/linux-6.6.143"
+          out="$work/out"
+          mkdir -p "$work"
+          curl -fsSL https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.6.143.tar.xz -o "$archive"
+          printf '%s  %s\n' \
+            dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932 \
+            "$archive" | sha256sum -c -
+          tar -xJf "$archive" -C "$work"
+          make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- defconfig
+          make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- prepare
+
+      - name: Freeze RISC-V GCC predefines
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/minipp-linux-focus-work"
+          src="$work/linux-6.6.143"
+          probe="$work/probe"
+          mkdir -p "$probe"
+          export REAL_CC=riscv64-linux-gnu-gcc
+          export MINIPP_LINUX_SRC="$src"
+          export MINIPP_PREDEFINES_OUT="$probe/riscv64-gcc-predefines.h"
+          bash tests/preprocessor/build_reference_predefines.sh \
+            -std=gnu11 -fshort-wchar -funsigned-char -fno-PIE \
+            -mabi=lp64 -march=rv64imac_zicsr_zifencei_zihintpause
+
+      - name: Run current failure pool
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/minipp-linux-focus-work"
+          src="$work/linux-6.6.143"
+          out="$work/out"
+          probe="$work/probe"
+          trace="$work/minipp-linux-focus.trace"
+          manifest="$work/failure-input.txt"
+
+          cat >"$manifest" <<'EOF'
+          kernel/params.c
+          kernel/irq/irqdesc.c
+          kernel/irq/handle.c
+          kernel/irq/manage.c
+          kernel/locking/rwsem.c
+          kernel/irq/spurious.c
+          kernel/irq/resend.c
+          kernel/irq/chip.c
+          kernel/irq/dummychip.c
+          kernel/irq/devres.c
+          kernel/sched/build_utility.c
+          EOF
+          sed -i 's/^[[:space:]]*//' "$manifest"
+
+          export REAL_CC=riscv64-linux-gnu-gcc
+          export REFERENCE_CPP=riscv64-linux-gnu-gcc
+          export MINIPP="$GITHUB_WORKSPACE/build/minipp-linux-focus/bin/minic-cpp"
+          export MINIPP_LINUX_TRACE="$trace"
+          export MINIPP_LINUX_WORK="$probe"
+          export MINIPP_LINUX_SRC="$src"
+          export MINIPP_LINUX_OUT="$out"
+          export MINIPP_LINUX_CC_WRAPPER="$GITHUB_WORKSPACE/tests/preprocessor/linux_kbuild_pp_cc.sh"
+          export MINIPP_LINUX_JOBS=4
+
+          bash tests/preprocessor/run_linux_exact_batch.sh "$manifest"
+
+      - name: Preserve focus evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: minipp-linux-failure-pool
+          path: |
+            build/minipp-linux-focus-work/minipp-linux-focus.trace
+            build/minipp-linux-focus-work/kbuild-batch.log
+            build/minipp-linux-focus-work/probe/*
+            build/minipp-linux-focus-work/failure-pool.txt
+            build/minipp-linux-focus-work/failure-input.txt
+          if-no-files-found: ignore
+          retention-days: 3
