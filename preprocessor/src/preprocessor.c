@@ -1084,16 +1084,19 @@ static bool minipp_pending_ends_function_macro(
         --end;
     }
     if (end == 0U ||
-        !minipp_is_identifier_continue(pending->data[end - 1U])) {
+        !(isalnum((unsigned char)pending->data[end - 1U]) != 0 ||
+          pending->data[end - 1U] == '_')) {
         return false;
     }
 
     start = end - 1U;
     while (start != 0U &&
-           minipp_is_identifier_continue(pending->data[start - 1U])) {
+           (isalnum((unsigned char)pending->data[start - 1U]) != 0 ||
+            pending->data[start - 1U] == '_')) {
         --start;
     }
-    if (!minipp_is_identifier_start(pending->data[start])) {
+    if (!(isalpha((unsigned char)pending->data[start]) != 0 ||
+          pending->data[start] == '_')) {
         return false;
     }
 
