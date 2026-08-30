@@ -305,8 +305,7 @@ static bool minipp_expand_text_recursive(MiniPpState *state,
 static bool minipp_build_logical_args(MiniPpState *state,
                                       const MiniPpMacro *macro,
                                       const MiniPpArgList *raw_args,
-                                      MiniPpArgList *logical_args,
-                                      bool preserve_argument_spacing) {
+                                      MiniPpArgList *logical_args) {
     size_t fixed_count;
     size_t index;
     MiniPpString variadic;
@@ -1044,8 +1043,7 @@ static bool minipp_expand_function_macro(MiniPpState *state,
     if (!minipp_build_logical_args(state,
                                    macro,
                                    &parsed_args,
-                                   &raw_args,
-                                   preserve_argument_spacing)) {
+                                   &raw_args)) {
         minipp_arg_list_destroy(&parsed_args);
         return false;
     }
