@@ -121,19 +121,67 @@ def main():
             "bytes": ref.stat().st_size if ref.is_file() else 0,
         }
 
-    results = []
-    with ThreadPoolExecutor(max_workers=args.jobs) as pool:
-        futures = {pool.submit(build_one, row): row for row in rows}
-        for future in as_completed(futures):
-            results.append(future.result())
-    results.sort(key=lambda item: item["index"])
+    def build_many(selected_rows):
+        built = []
+        with ThreadPoolExecutor(max_workers=args.jobs) as pool:
+            futures = {pool.submit(build_one, row): row for row in selected_rows}
+            for future in as_completed(futures):
+                built.append(future.result())
+        built.sort(key=lambda item: item["index"])
+        return built
 
-    failures = [item for item in results if item["returncode"] != 0 or item["bytes"] == 0]
+    results = build_many(rows)
+    failures = [
+        item for item in results
+        if item["returncode"] != 0 or item["bytes"] == 0
+    ]
+
+    if failures:
+        by_index = {int(row["index"]): row for row in rows}
+        retry_rows = [by_index[item["index"]] for item in failures]
+        targets = [row["object"] for row in retry_rows]
+        print(
+            "MINIPP_REFERENCE_CORPUS_KBUILD_RETRY "
+            f"count={len(targets)} targets={','.join(targets)}"
+        )
+        subprocess.run(
+            [
+                "make",
+                "-C",
+                str(src),
+                f"O={out}",
+                "ARCH=riscv",
+                "CROSS_COMPILE=riscv64-linux-gnu-",
+                "-k",
+                f"-j{max(1, min(args.jobs, 8))}",
+                *targets,
+            ],
+            check=False,
+        )
+
+        retry_results = {item["index"]: item for item in build_many(retry_rows)}
+        results = [
+            retry_results.get(item["index"], item)
+            for item in results
+        ]
+        failures = [
+            item for item in results
+            if item["returncode"] != 0 or item["bytes"] == 0
+        ]
+
     if failures:
         for item in failures[:30]:
+            err = stderr_root / f"{item['index']:04d}.stderr"
+            first = ""
+            if err.is_file():
+                first = next(
+                    (line.strip() for line in err.read_text(errors="replace").splitlines() if line.strip()),
+                    "",
+                )
             print(
                 "MINIPP_REFERENCE_CORPUS_FAIL "
-                f"index={item['index']} rc={item['returncode']} bytes={item['bytes']}"
+                f"index={item['index']} rc={item['returncode']} "
+                f"bytes={item['bytes']} reason={first!r}"
             )
         raise SystemExit(
             f"MINIPP_REFERENCE_CORPUS failed={len(failures)} selected={len(rows)}"
