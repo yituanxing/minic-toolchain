@@ -5,6 +5,7 @@
 
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
 #include <stdio.h>
 
 #define MINIPP_MAX_EXPANSION_DEPTH 64U
@@ -17,6 +18,8 @@ typedef struct MiniPpString {
 
 typedef struct MiniPpMacro {
     char *name;
+    size_t name_size;
+    uint64_t name_hash;
     char *replacement;
     char **params;
     size_t param_count;
@@ -35,6 +38,8 @@ typedef struct MiniPpState {
     MiniPpMacro *macros;
     size_t macro_count;
     size_t macro_capacity;
+    size_t *macro_slots;
+    size_t macro_slot_capacity;
     MiniPpConditional *conditionals;
     size_t conditional_count;
     size_t conditional_capacity;
@@ -65,6 +70,10 @@ bool minipp_string_append_n(MiniPpString *string,
                             const char *data,
                             size_t size);
 bool minipp_string_append_char(MiniPpString *string, char value);
+
+const MiniPpMacro *minipp_find_macro_n(const MiniPpState *state,
+                                         const char *name,
+                                         size_t name_size);
 
 bool minipp_expand_text(MiniPpState *state,
                         const char *text,
