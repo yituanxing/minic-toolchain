@@ -272,7 +272,8 @@ cat >"$work/once-lite-gnu-bare-forward-spacing.c" <<'EOF'
 #define OL_ONCE(func, ...) OL_ONCE_IF(1, func, ##__VA_ARGS__)
 #define OL_PRINTK_ONCE(fmt, ...) OL_ONCE(OL_PRINTK, fmt, ##__VA_ARGS__)
 #define OL_WARN_ONCE(fmt, ...) OL_PRINTK_ONCE("W" fmt, ##__VA_ARGS__)
-OL_WARN_ONCE("%s (%d)", current_comm, current_pid)
+#define OL_CURRENT get_current()
+OL_WARN_ONCE("%s (%d)", OL_CURRENT->comm, OL_CURRENT->pid)
 EOF
 run_exact once-lite-gnu-bare-forward-spacing
 
