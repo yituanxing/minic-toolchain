@@ -1072,6 +1072,37 @@ static bool minipp_line_has_nonspace(const MiniPpString *line) {
     return false;
 }
 
+static bool minipp_pending_ends_function_macro(
+    const MiniPpState *state,
+    const MiniPpString *pending) {
+    size_t end = pending->size;
+    size_t start;
+    const MiniPpMacro *macro;
+
+    while (end != 0U &&
+           isspace((unsigned char)pending->data[end - 1U]) != 0) {
+        --end;
+    }
+    if (end == 0U ||
+        !minipp_is_identifier_continue(pending->data[end - 1U])) {
+        return false;
+    }
+
+    start = end - 1U;
+    while (start != 0U &&
+           minipp_is_identifier_continue(pending->data[start - 1U])) {
+        --start;
+    }
+    if (!minipp_is_identifier_start(pending->data[start])) {
+        return false;
+    }
+
+    macro = minipp_find_macro_n(state,
+                                pending->data + start,
+                                end - start);
+    return macro != NULL && macro->function_like;
+}
+
 static bool minipp_process_source(MiniPpState *state,
                                   const char *current_path,
                                   const MiniPpString *input,
@@ -1148,7 +1179,8 @@ static bool minipp_process_source(MiniPpState *state,
                 fprintf(state->diagnostics, "minic-cpp: out-of-memory\n");
                 return false;
             }
-            if (!minipp_try_flush_pending(state,
+            if (!minipp_pending_ends_function_macro(state, &pending) &&
+                !minipp_try_flush_pending(state,
                                           &pending,
                                           output,
                                           pending_line,
