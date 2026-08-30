@@ -80,8 +80,10 @@ jobs:
           gcc_pkg=$(dpkg-query -W -f='${Version}' gcc-riscv64-linux-gnu 2>/dev/null || true)
           gcc_sig=$(printf '%s\n%s\n%s\n' "$gcc_fullversion" "$gcc_machine" "$gcc_pkg" | sha256sum | cut -d' ' -f1)
           logic_sig=$(sha256sum \
+            tests/preprocessor/freeze_linux_kbuild_manifest.py \
             tests/preprocessor/build_reference_predefines.sh \
-            tests/preprocessor/build_linux_reference_corpus.py | sha256sum | cut -d' ' -f1)
+            tests/preprocessor/build_linux_reference_corpus.py \
+            tests/preprocessor/run_linux_cached_exact.py | sha256sum | cut -d' ' -f1)
           cache_key="minipp-linux-ref500b-v1-linux-6.6.143-$MINIPP_LINUX_ARCHIVE_SHA256-$contract_sha-$gcc_sig-$logic_sig"
 
           echo "contract_sha=$contract_sha" >>"$GITHUB_OUTPUT"
