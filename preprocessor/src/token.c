@@ -690,6 +690,41 @@ static bool minipp_variadic_padding_survives_gnu_forward(
     return saw_variadic;
 }
 
+static void minipp_debug_once_args(const char *stage,
+                                   const MiniPpMacro *macro,
+                                   const MiniPpArgList *args,
+                                   bool preserve,
+                                   FILE *diagnostics) {
+    size_t arg_index;
+
+    if (strncmp(macro->name, "OL_", 3U) != 0) {
+        return;
+    }
+    fprintf(diagnostics,
+            "MINIPP_ONCE stage=%s macro=%s preserve=%d count=%zu\n",
+            stage, macro->name, preserve ? 1 : 0, args->count);
+    for (arg_index = 0U; arg_index < args->count; ++arg_index) {
+        const MiniPpString *arg = &args->items[arg_index];
+        size_t i;
+        fprintf(diagnostics,
+                "MINIPP_ONCE_ARG macro=%s idx=%zu lead=%d gen=%d str=%d data=",
+                macro->name,
+                arg_index,
+                args->leading_space[arg_index] ? 1 : 0,
+                args->leading_space_generated[arg_index] ? 1 : 0,
+                args->leading_space_stringized[arg_index] ? 1 : 0);
+        for (i = 0U; i < arg->size && i < 180U; ++i) {
+            unsigned char ch = (unsigned char)arg->data[i];
+            if (ch >= 32U && ch < 127U) {
+                fputc((int)ch, diagnostics);
+            } else {
+                fprintf(diagnostics, "<%02x>", (unsigned int)ch);
+            }
+        }
+        fputc('\n', diagnostics);
+    }
+}
+
 static bool minipp_build_logical_args(MiniPpState *state,
                                       const MiniPpMacro *macro,
                                       const MiniPpArgList *raw_args,
@@ -700,6 +735,11 @@ static bool minipp_build_logical_args(MiniPpState *state,
     MiniPpString variadic;
 
     memset(logical_args, 0, sizeof(*logical_args));
+    minipp_debug_once_args("raw",
+                           macro,
+                           raw_args,
+                           preserve_argument_spacing,
+                           state->diagnostics);
 
     if (!macro->variadic) {
         if (raw_args->count != macro->param_count) {
@@ -829,6 +869,11 @@ static bool minipp_build_logical_args(MiniPpState *state,
         logical_args->leading_space_stringized[logical_args->count - 1U] =
             raw_args->leading_space_stringized[fixed_count];
     }
+    minipp_debug_once_args("logical",
+                           macro,
+                           logical_args,
+                           preserve_argument_spacing,
+                           state->diagnostics);
     minipp_string_destroy(&variadic);
     return true;
 
