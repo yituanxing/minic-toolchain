@@ -1819,7 +1819,9 @@ static bool minipp_output_has_line_indentation(const MiniPpString *out) {
     for (index = start; index < out->size; ++index) {
         char value = out->data[index];
         if (value != ' ' && value != '\t' &&
-            value != '\v' && value != '\f') {
+            value != '\v' && value != '\f' &&
+            value != '\a' && value != '\b' &&
+            value != '\x0e') {
             return false;
         }
     }
