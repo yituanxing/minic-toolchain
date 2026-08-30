@@ -31,6 +31,14 @@ def expand_arg(value: str, src: Path, out: Path):
     return value.replace("{SRC}", str(src)).replace("{OUT}", str(out))
 
 
+def resolve_contract_source(value: str, src: Path, out: Path):
+    if value.startswith("{OUT}/"):
+        return out / value[len("{OUT}/") :]
+    if value.startswith("{SRC}/"):
+        return src / value[len("{SRC}/") :]
+    return src / value
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--contract", required=True)
@@ -93,7 +101,7 @@ def main():
 
     def build_one(row):
         index = int(row["index"])
-        source = logical_src / row["source"]
+        source = resolve_contract_source(row["source"], logical_src, logical_out)
         ref = refs / f"{index:04d}.gcc.i"
         err = stderr_root / f"{index:04d}.stderr"
         key = context_id(row["predef_args"])
@@ -199,6 +207,29 @@ def main():
         )
 
     frozen_generated = set()
+    for row in rows:
+        source_value = row["source"]
+        if not source_value.startswith("{OUT}/"):
+            continue
+        rel = Path(source_value[len("{OUT}/") :])
+        generated_source = out / rel
+        if not generated_source.is_file():
+            raise SystemExit(
+                f"MINIPP_REFERENCE_CORPUS generated-source-missing source={source_value}"
+            )
+        destination = generated_root / rel
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(generated_source, destination)
+        frozen_generated.add(rel.as_posix())
+
+        sibling_header = generated_source.with_suffix(".h")
+        if sibling_header.is_file():
+            header_rel = sibling_header.relative_to(out)
+            header_destination = generated_root / header_rel
+            header_destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(sibling_header, header_destination)
+            frozen_generated.add(header_rel.as_posix())
+
     for row in rows:
         pp_args = row["pp_args"]
         index = 0
