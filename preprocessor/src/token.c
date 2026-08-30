@@ -1069,6 +1069,30 @@ static bool minipp_arg_ends_pp_number(const MiniPpString *arg) {
     return last_pp_number;
 }
 
+static bool minipp_output_needs_identifier_separator(
+    const MiniPpString *out,
+    char next) {
+    size_t index = out->size;
+    char previous;
+
+    if (!minipp_is_identifier_start(next)) {
+        return false;
+    }
+    while (index != 0U &&
+           (out->data[index - 1U] == '\a' ||
+            out->data[index - 1U] == '\b')) {
+        --index;
+    }
+    if (index == 0U) {
+        return false;
+    }
+    previous = out->data[index - 1U];
+    if (isspace((unsigned char)previous) != 0) {
+        return false;
+    }
+    return minipp_is_identifier_continue(previous);
+}
+
 static bool minipp_needs_post_expansion_separator(
     const MiniPpString *expanded,
     char next) {
@@ -1418,6 +1442,16 @@ static bool minipp_substitute_function_macro(MiniPpState *state,
                                 substituted->data[substituted->size - 1U] == ',') {
                                 --substituted->size;
                                 substituted->data[substituted->size] = '\0';
+                                while (substituted->size != 0U) {
+                                    char previous =
+                                        substituted->data[substituted->size - 1U];
+                                    if (previous != ' ' && previous != '\t' &&
+                                        previous != '\v' && previous != '\f') {
+                                        break;
+                                    }
+                                    --substituted->size;
+                                    substituted->data[substituted->size] = '\0';
+                                }
                             }
                             index = cursor + length;
                             continue;
@@ -1967,6 +2001,12 @@ static bool minipp_expand_function_macro(MiniPpState *state,
                 fprintf(state->diagnostics, "minic-cpp: out-of-memory\n");
                 ok = false;
             }
+        }
+        if (ok &&
+            minipp_output_needs_identifier_separator(out, text[*index]) &&
+            !minipp_string_append_char(out, ' ')) {
+            fprintf(state->diagnostics, "minic-cpp: out-of-memory\n");
+            ok = false;
         }
         minipp_string_destroy(&replacement);
     }
