@@ -1,4 +1,4 @@
-# convergence-replay: fat-plus-token-separator
+# convergence-replay: hideset-five
 # focus-generation: first500-pragma-rescan
 name: MiniPP Linux Failure Pool
 
@@ -88,21 +88,10 @@ jobs:
 
           cat >"$manifest" <<'EOF'
           kernel/cgroup/rstat.c
-          kernel/bpf/helpers.c
-          kernel/bpf/bpf_iter.c
-          kernel/bpf/map_iter.c
-          arch/riscv/kernel/traps.c
           kernel/cgroup/cgroup.c
-          mm/oom_kill.c
-          mm/mm_init.c
-          mm/interval_tree.c
-          mm/swapfile.c
-          fs/ext4/balloc.c
-          fs/ext4/namei.c
           fs/ext4/super.c
-          fs/fat/dir.c
-          fs/fat/inode.c
-          init/version.c
+          mm/oom_kill.c
+          mm/interval_tree.c
           EOF
           sed -i 's/^[[:space:]]*//' "$manifest"
 
