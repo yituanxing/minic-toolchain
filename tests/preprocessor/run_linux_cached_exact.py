@@ -60,6 +60,9 @@ def main():
     minipp = Path(args.minipp).resolve()
     work = Path(args.work).resolve()
     logical_root = Path(args.logical_root)
+    generated_root = corpus / "generated-out"
+    if generated_root.is_dir():
+        shutil.copytree(generated_root, out, dirs_exist_ok=True)
     shutil.rmtree(logical_root, ignore_errors=True)
     logical_root.mkdir(parents=True, exist_ok=True)
     logical_src = logical_root / "src"
