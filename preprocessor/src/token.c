@@ -1139,25 +1139,6 @@ static bool minipp_substitute_function_macro(MiniPpState *state,
                     paste_operand ? raw_args : expanded_args;
                 const MiniPpString *arg = &source_args->items[param_index];
 
-                if (!paste_operand) {
-                    size_t padding = substituted->size;
-
-                    while (padding != 0U) {
-                        char previous = substituted->data[padding - 1U];
-
-                        if (previous == ' ' || previous == '\t') {
-                            substituted->data[padding - 1U] = '\f';
-                            --padding;
-                            continue;
-                        }
-                        if (previous == '\v' || previous == '\f') {
-                            --padding;
-                            continue;
-                        }
-                        break;
-                    }
-                }
-
                 if (!minipp_string_append_n(substituted,
                                             arg->data == NULL ? "" : arg->data,
                                             arg->size)) {
