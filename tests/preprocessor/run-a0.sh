@@ -185,6 +185,19 @@ const char *stringized = STR(hello world);
 EOF
 run_exact stringize
 
+cat >"$work/stringize-forward-padding.c" <<'EOF'
+#define SINK(a, b) FINAL(a, b)
+#define DIRECT(x) FINAL("k", #x)
+#define FORWARD(x) SINK("k", #x)
+#define VPASS(fmt, ...) VSINK(fmt, ##__VA_ARGS__)
+#define VSINK(fmt, ...) FINAL(fmt, ##__VA_ARGS__)
+#define VFORWARD(x) VPASS("k", #x)
+DIRECT(IRQ_LEVEL)
+FORWARD(IRQ_LEVEL)
+VFORWARD(IRQ_LEVEL)
+EOF
+run_exact stringize-forward-padding
+
 cat >"$work/kconfig-style.c" <<'EOF'
 #define __ARG_PLACEHOLDER_1 0,
 #define __take_second_arg(__ignored, val, ...) val
@@ -445,4 +458,4 @@ OUT4(column_zero_four)
 EOF
 run_exact empty-leading-nested-macro
 
-printf 'MINIPP_A0_EXACT=PASS cases=48 mode=byte-identical\n'
+printf 'MINIPP_A0_EXACT=PASS cases=49 mode=byte-identical\n'
