@@ -1297,6 +1297,50 @@ int minipp_preprocess_file(const char *input_path,
     }
 
     ok = ok && minipp_process_file(&state, input_path, &output);
+    if (ok && getenv("MINIPP_DEBUG_PADDING") != NULL) {
+        size_t line_start = 0U;
+        size_t cursor = 0U;
+        size_t line_number = 1U;
+        size_t emitted = 0U;
+
+        while (cursor <= output.size && emitted < 24U) {
+            if (cursor == output.size || output.data[cursor] == '\n') {
+                size_t line_size = cursor - line_start;
+                bool has_semis = false;
+                size_t scan;
+
+                for (scan = line_start; scan + 4U < cursor; ++scan) {
+                    if (output.data[scan] == ';' &&
+                        output.data[scan + 1U] == ' ' &&
+                        output.data[scan + 2U] == ';') {
+                        has_semis = true;
+                        break;
+                    }
+                }
+                if (has_semis) {
+                    size_t limit = line_size < 48U ? line_size : 48U;
+                    fprintf(diagnostics,
+                            "MINIPP_DEBUG_PADDING line=%zu size=%zu hex=",
+                            line_number,
+                            line_size);
+                    for (scan = 0U; scan < limit; ++scan) {
+                        fprintf(diagnostics,
+                                "%02x",
+                                (unsigned int)(unsigned char)
+                                    output.data[line_start + scan]);
+                        if (scan + 1U != limit) {
+                            fputc(':', diagnostics);
+                        }
+                    }
+                    fputc('\n', diagnostics);
+                    ++emitted;
+                }
+                line_start = cursor + 1U;
+                ++line_number;
+            }
+            ++cursor;
+        }
+    }
     if (ok && !minipp_render_gcc_p_output(&output, &rendered)) {
         fprintf(diagnostics, "minic-cpp: out-of-memory\n");
         ok = false;
