@@ -1547,7 +1547,7 @@ static bool minipp_expand_function_macro(MiniPpState *state,
     MiniPpArgList expanded_args;
     MiniPpString substituted;
     MiniPpString pasted;
-    const char **next_disabled = NULL;
+    const char *next_disabled[MINIPP_MAX_EXPANSION_DEPTH + 1U];
     size_t next_count = disabled_count + 1U;
     size_t arg_index;
     bool ok = false;
@@ -1661,9 +1661,8 @@ static bool minipp_expand_function_macro(MiniPpState *state,
         return false;
     }
 
-    next_disabled = malloc(next_count * sizeof(*next_disabled));
-    if (next_disabled == NULL) {
-        fprintf(state->diagnostics, "minic-cpp: out-of-memory\n");
+    if (next_count > MINIPP_MAX_EXPANSION_DEPTH + 1U) {
+        fprintf(state->diagnostics, "minic-cpp: macro-expansion-depth\n");
         goto done;
     }
     if (disabled_count != 0U) {
@@ -1752,7 +1751,6 @@ static bool minipp_expand_function_macro(MiniPpState *state,
     }
 
 done:
-    free(next_disabled);
     minipp_string_destroy(&pasted);
     minipp_string_destroy(&substituted);
     minipp_arg_list_destroy(&raw_args);
@@ -1936,15 +1934,14 @@ static bool minipp_expand_text_recursive(MiniPpState *state,
                         continue;
                     }
                 } else {
-                    const char **next_disabled;
+                    const char *next_disabled[MINIPP_MAX_EXPANSION_DEPTH + 1U];
                     size_t next_count = disabled_count + 1U;
                     MiniPpString replacement;
                     bool ok;
 
-                    next_disabled = malloc(next_count * sizeof(*next_disabled));
-                    if (next_disabled == NULL) {
+                    if (next_count > MINIPP_MAX_EXPANSION_DEPTH + 1U) {
                         fprintf(state->diagnostics,
-                                "minic-cpp: out-of-memory\n");
+                                "minic-cpp: macro-expansion-depth\n");
                         return false;
                     }
                     if (disabled_count != 0U) {
@@ -2028,7 +2025,6 @@ static bool minipp_expand_text_recursive(MiniPpState *state,
                     }
 
                     minipp_string_destroy(&replacement);
-                    free(next_disabled);
                     if (!ok) {
                         return false;
                     }
