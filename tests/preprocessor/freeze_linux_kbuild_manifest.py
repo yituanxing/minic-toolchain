@@ -100,10 +100,10 @@ def extract_contract_args(line: str, src_root: Path, out_root: Path):
             continue
 
         if (
-            arg.startswith("-march=")
-            or arg.startswith("-mabi=")
+            arg.startswith("-m")
             or arg.startswith("-std=")
             or arg in PREDEF_EXACT
+            or arg in {"-ffreestanding", "-fhosted"}
         ):
             predef_args.append(arg)
             index += 1
