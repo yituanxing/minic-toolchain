@@ -1371,35 +1371,6 @@ static bool minipp_expand_function_macro(MiniPpState *state,
     }
     minipp_arg_list_destroy(&parsed_args);
 
-    if (strncmp(macro->name, "BR_", 3U) == 0) {
-        size_t debug_arg;
-
-        for (debug_arg = 0U; debug_arg < raw_args.count; ++debug_arg) {
-            size_t debug_index;
-            size_t boundary_count = 0U;
-            size_t origin_count = 0U;
-            for (debug_index = 0U;
-                 debug_index < raw_args.items[debug_arg].size;
-                 ++debug_index) {
-                if (raw_args.items[debug_arg].data[debug_index] == '\f') {
-                    ++boundary_count;
-                }
-                if (raw_args.items[debug_arg].data[debug_index] == '\b') {
-                    ++origin_count;
-                }
-            }
-            fprintf(state->diagnostics,
-                    "MINIPP_DEBUG macro=%s arg=%zu leading=%d generated=%d boundary=%d internal_boundary=%zu origin=%zu\n",
-                    macro->name,
-                    debug_arg,
-                    raw_args.leading_space[debug_arg] ? 1 : 0,
-                    raw_args.leading_space_generated[debug_arg] ? 1 : 0,
-                    raw_args.leading_space_stringized[debug_arg] ? 1 : 0,
-                    boundary_count,
-                    origin_count);
-        }
-    }
-
     memset(&expanded_args, 0, sizeof(expanded_args));
     if (macro->param_count != 0U) {
         expanded_args.items = calloc(macro->param_count,
