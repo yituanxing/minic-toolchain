@@ -302,10 +302,58 @@ static bool minipp_expand_text_recursive(MiniPpState *state,
                                          size_t source_line,
                                          bool preserve_argument_spacing);
 
+static bool minipp_arg_starts_expanding_macro(
+    const MiniPpState *state,
+    const MiniPpString *arg) {
+    size_t index = 0U;
+    size_t start;
+    size_t length;
+    const MiniPpMacro *macro;
+
+    while (index < arg->size &&
+           isspace((unsigned char)arg->data[index]) != 0) {
+        ++index;
+    }
+    if (index >= arg->size ||
+        !minipp_is_identifier_start(arg->data[index])) {
+        return false;
+    }
+
+    start = index++;
+    while (index < arg->size &&
+           minipp_is_identifier_continue(arg->data[index])) {
+        ++index;
+    }
+    length = index - start;
+
+    if ((length == 8U &&
+         (memcmp(arg->data + start, "__FILE__", 8U) == 0 ||
+          memcmp(arg->data + start, "__LINE__", 8U) == 0)) ||
+        (length == 11U &&
+         memcmp(arg->data + start, "__COUNTER__", 11U) == 0)) {
+        return true;
+    }
+
+    macro = minipp_find_macro(state, arg->data + start, length);
+    if (macro == NULL) {
+        return false;
+    }
+    if (!macro->function_like) {
+        return true;
+    }
+
+    while (index < arg->size &&
+           isspace((unsigned char)arg->data[index]) != 0) {
+        ++index;
+    }
+    return index < arg->size && arg->data[index] == '(';
+}
+
 static bool minipp_build_logical_args(MiniPpState *state,
                                       const MiniPpMacro *macro,
                                       const MiniPpArgList *raw_args,
-                                      MiniPpArgList *logical_args) {
+                                      MiniPpArgList *logical_args,
+                                      bool preserve_argument_spacing) {
     size_t fixed_count;
     size_t index;
     MiniPpString variadic;
@@ -369,6 +417,9 @@ static bool minipp_build_logical_args(MiniPpState *state,
                 goto oom;
             }
             if (raw_args->leading_space[index] &&
+                (preserve_argument_spacing ||
+                 !minipp_arg_starts_expanding_macro(
+                     state, &raw_args->items[index])) &&
                 !minipp_string_append_char(&variadic, ' ')) {
                 goto oom;
             }
@@ -1043,7 +1094,8 @@ static bool minipp_expand_function_macro(MiniPpState *state,
     if (!minipp_build_logical_args(state,
                                    macro,
                                    &parsed_args,
-                                   &raw_args)) {
+                                   &raw_args,
+                                   preserve_argument_spacing)) {
         minipp_arg_list_destroy(&parsed_args);
         return false;
     }
