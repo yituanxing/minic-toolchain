@@ -137,6 +137,7 @@ cat >"$work/empty-macro-padding.c" <<'EOF'
 int empty_macro_padding(void)
 {
        EMPTY_ATTR(lock)
+        EMPTY_ATTR(lock);
 }
 EOF
 run_exact empty-macro-padding
