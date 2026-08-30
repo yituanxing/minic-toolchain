@@ -1433,6 +1433,7 @@ static bool minipp_substitute_function_macro(MiniPpState *state,
                                              const MiniPpMacro *macro,
                                              const MiniPpArgList *raw_args,
                                              const MiniPpArgList *expanded_args,
+                                             bool preserve_argument_spacing,
                                              MiniPpString *substituted) {
     size_t index = 0U;
 
@@ -1549,6 +1550,7 @@ static bool minipp_substitute_function_macro(MiniPpState *state,
                             raw_args->leading_space_generated[param_index]) {
                             size_t padding = substituted->size;
                             bool forwarded_multiarg_pack =
+                                !preserve_argument_spacing &&
                                 minipp_variadic_pack_has_generated_internal_separator(
                                     &raw_args->items[param_index]);
 
