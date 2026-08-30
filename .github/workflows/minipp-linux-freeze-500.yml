@@ -1,0 +1,160 @@
+name: MiniPP Linux Freeze 500
+
+on:
+  push:
+    branches:
+      - 'toolchain/minipp-*'
+    paths:
+      - '.github/workflows/minipp-linux-freeze-500.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  freeze-first500:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[minipp-linux-freeze500]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Kbuild planning prerequisites
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            gcc-riscv64-linux-gnu libc6-dev-riscv64-cross \
+            bc bison flex libssl-dev libelf-dev make curl xz-utils
+
+      - name: Prepare Linux 6.6.143
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/minipp-linux-freeze500"
+          archive="$work/linux-6.6.143.tar.xz"
+          src="$work/linux-6.6.143"
+          out="$work/out"
+          mkdir -p "$work"
+          curl -fsSL https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.6.143.tar.xz -o "$archive"
+          printf '%s  %s\n' \
+            dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932 \
+            "$archive" | sha256sum -c -
+          tar -xJf "$archive" -C "$work"
+          make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- defconfig
+          make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- -j4 prepare scripts
+
+      - name: Freeze Kbuild first500 C translation units
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/minipp-linux-freeze500"
+          src="$work/linux-6.6.143"
+          out="$work/out"
+
+          set +e
+          make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- -n -j1 V=1 \
+            >"$work/kbuild-plan.raw" 2>"$work/kbuild-plan.stderr"
+          plan_status=$?
+          set -e
+          echo "MINIPP_LINUX_FREEZE500_PLAN_STATUS=$plan_status"
+
+          python3 - "$work/kbuild-plan.raw" "$src" "$out" "$work/linux-batch500.txt" "$work/linux-batch500.tsv" <<'PY'
+          from pathlib import Path, PurePosixPath
+          import re
+          import sys
+
+          plan_path = Path(sys.argv[1])
+          src_root = Path(sys.argv[2]).resolve()
+          out_root = Path(sys.argv[3]).resolve()
+          manifest = Path(sys.argv[4])
+          table = Path(sys.argv[5])
+
+          object_pattern = re.compile(r"(?:^|\s)-o\s+([^\s;]+\.o)(?=\s|;|$)")
+          source_pattern = re.compile(r"(?:^|\s)([^\s;]+\.c)(?=\s|;|$)")
+          entries = []
+          seen = set()
+
+          def source_relative(raw_source, obj_rel):
+              raw = Path(raw_source.strip("'\""))
+              candidates = []
+              if raw.is_absolute():
+                  candidates.append(raw.resolve())
+              else:
+                  candidates.append((out_root / raw).resolve())
+                  candidates.append((src_root / raw).resolve())
+              fallback = src_root / (obj_rel[:-2] + ".c")
+              candidates.append(fallback.resolve())
+              for candidate in candidates:
+                  try:
+                      return PurePosixPath(candidate.relative_to(src_root).as_posix()).as_posix()
+                  except ValueError:
+                      pass
+              return None
+
+          for line in plan_path.read_text(errors="replace").splitlines():
+              padded = f" {line} "
+              if "riscv64-linux-gnu-" not in line or " -c " not in padded:
+                  continue
+              sources = source_pattern.findall(line)
+              objects = object_pattern.findall(line)
+              if not sources or not objects:
+                  continue
+              raw_obj = objects[-1].strip("'\"")
+              obj = Path(raw_obj)
+              if obj.is_absolute():
+                  try:
+                      rel_obj = obj.resolve().relative_to(out_root).as_posix()
+                  except ValueError:
+                      continue
+              else:
+                  rel_obj = PurePosixPath(obj.as_posix()).as_posix()
+              if rel_obj.startswith("./"):
+                  rel_obj = rel_obj[2:]
+              if rel_obj.startswith(("scripts/", "tools/")) or "/scripts/" in rel_obj:
+                  continue
+              if not rel_obj.endswith(".o") or rel_obj in seen:
+                  continue
+              rel_source = source_relative(sources[-1], rel_obj)
+              if rel_source is None:
+                  continue
+              seen.add(rel_obj)
+              entries.append((rel_obj, rel_source, sources[-1].strip("'\"")))
+
+          first = entries[:500]
+          if len(first) != 500:
+              raise SystemExit(f"MINIPP_LINUX_FREEZE500 expected=500 actual={len(first)} total={len(entries)}")
+
+          noncanonical = []
+          with manifest.open("w") as out:
+              for obj, source, _ in first:
+                  out.write(source + "\n")
+          with table.open("w") as out:
+              out.write("index\tobject\tsource\traw_source\n")
+              for index, (obj, source, raw_source) in enumerate(first):
+                  out.write(f"{index}\t{obj}\t{source}\t{raw_source}\n")
+                  canonical = obj[:-2] + ".c"
+                  if canonical != source:
+                      noncanonical.append((index, obj, source))
+
+          print(
+              f"MINIPP_LINUX_FREEZE500 total_c_tus={len(entries)} "
+              f"selected={len(first)} noncanonical={len(noncanonical)}"
+          )
+          for index, obj, source in noncanonical[:30]:
+              print(f"MINIPP_LINUX_FREEZE500_NONCANON index={index} object={obj} source={source}")
+          PY
+
+          test "$(grep -cve '^[[:space:]]*$' "$work/linux-batch500.txt")" -eq 500
+          sha256sum "$work/linux-batch500.txt" | tee "$work/linux-batch500.sha256"
+
+      - name: Preserve frozen first500 manifest
+        uses: actions/upload-artifact@v4
+        with:
+          name: minipp-linux-first500-manifest
+          path: |
+            build/minipp-linux-freeze500/linux-batch500.txt
+            build/minipp-linux-freeze500/linux-batch500.tsv
+            build/minipp-linux-freeze500/linux-batch500.sha256
+            build/minipp-linux-freeze500/kbuild-plan.stderr
+          retention-days: 7
