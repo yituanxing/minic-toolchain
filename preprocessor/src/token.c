@@ -1483,7 +1483,15 @@ static bool minipp_substitute_function_macro(MiniPpState *state,
                                 --padding;
                             }
                         }
-                        index = cursor;
+                        if (!minipp_string_append_n(
+                                substituted,
+                                raw_args->items[param_index].data == NULL
+                                    ? ""
+                                    : raw_args->items[param_index].data,
+                                raw_args->items[param_index].size)) {
+                            goto oom;
+                        }
+                        index = cursor + length;
                         continue;
                     }
                 }
