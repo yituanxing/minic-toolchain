@@ -1391,9 +1391,19 @@ static bool minipp_expand_function_macro(MiniPpState *state,
                                           source_line,
                                           false);
         if (ok) {
+            bool top_level_empty_padding =
+                depth == 0U &&
+                replacement.size == 0U &&
+                minipp_output_has_line_indentation(out);
+
             minipp_normalize_leading_expansion_space(
                 &replacement,
                 !minipp_output_has_line_indentation(out));
+            if (top_level_empty_padding &&
+                !minipp_string_append_char(out, '\a')) {
+                fprintf(state->diagnostics, "minic-cpp: out-of-memory\n");
+                ok = false;
+            }
             size_t tail_start = 0U;
             const MiniPpMacro *tail_macro =
                 minipp_find_trailing_function_macro(state,
