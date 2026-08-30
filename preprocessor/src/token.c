@@ -690,6 +690,11 @@ static bool minipp_variadic_padding_survives_gnu_forward(
     return saw_variadic;
 }
 
+static bool minipp_variadic_forward_reaches_bare_bridge(
+    const MiniPpState *state,
+    const MiniPpMacro *macro,
+    size_t depth);
+
 static bool minipp_build_logical_args(MiniPpState *state,
                                       const MiniPpMacro *macro,
                                       const MiniPpArgList *raw_args,
@@ -822,7 +827,12 @@ static bool minipp_build_logical_args(MiniPpState *state,
         logical_args->leading_space[logical_args->count - 1U] =
             raw_args->leading_space[fixed_count];
         logical_args->leading_space_generated[logical_args->count - 1U] =
-            raw_args->leading_space_generated[fixed_count];
+            raw_args->leading_space_generated[fixed_count] ||
+            (preserve_argument_spacing &&
+             minipp_arg_starts_expanding_macro(
+                 state, &raw_args->items[fixed_count]) &&
+             minipp_variadic_forward_reaches_bare_bridge(
+                 state, macro, 0U));
         logical_args->leading_space_stringized[logical_args->count - 1U] =
             raw_args->leading_space_stringized[fixed_count];
     }
@@ -881,6 +891,264 @@ static bool minipp_param_is_paste_operand(const MiniPpMacro *macro,
     }
     return macro->replacement[right] == '#' &&
            macro->replacement[right + 1U] == '#';
+}
+
+static const MiniPpMacro *minipp_variadic_forward_callee(
+    const MiniPpState *state,
+    const MiniPpMacro *owner,
+    size_t param_start) {
+    size_t index = 0U;
+    size_t depth = 0U;
+    size_t target_depth;
+    size_t open_index = SIZE_MAX;
+    size_t cursor;
+    size_t token_end;
+    size_t token_start;
+    const MiniPpMacro *callee;
+    size_t argument_index = 0U;
+    size_t scan;
+    size_t scan_depth;
+    size_t fixed_count;
+
+    while (index < param_start) {
+        if (owner->replacement[index] == '"' ||
+            owner->replacement[index] == '\'') {
+            char quote = owner->replacement[index++];
+            while (index < param_start &&
+                   owner->replacement[index] != '\0') {
+                char value = owner->replacement[index++];
+                if (value == '\\' &&
+                    index < param_start &&
+                    owner->replacement[index] != '\0') {
+                    ++index;
+                    continue;
+                }
+                if (value == quote) {
+                    break;
+                }
+            }
+            continue;
+        }
+        if (owner->replacement[index] == '(') {
+            ++depth;
+        } else if (owner->replacement[index] == ')' && depth != 0U) {
+            --depth;
+        }
+        ++index;
+    }
+
+    target_depth = depth;
+    if (target_depth == 0U) {
+        return NULL;
+    }
+
+    index = 0U;
+    depth = 0U;
+    while (index < param_start) {
+        if (owner->replacement[index] == '"' ||
+            owner->replacement[index] == '\'') {
+            char quote = owner->replacement[index++];
+            while (index < param_start &&
+                   owner->replacement[index] != '\0') {
+                char value = owner->replacement[index++];
+                if (value == '\\' &&
+                    index < param_start &&
+                    owner->replacement[index] != '\0') {
+                    ++index;
+                    continue;
+                }
+                if (value == quote) {
+                    break;
+                }
+            }
+            continue;
+        }
+        if (owner->replacement[index] == '(') {
+            ++depth;
+            if (depth == target_depth) {
+                open_index = index;
+            }
+            ++index;
+            continue;
+        }
+        if (owner->replacement[index] == ')') {
+            if (depth == target_depth) {
+                open_index = SIZE_MAX;
+            }
+            if (depth != 0U) {
+                --depth;
+            }
+            ++index;
+            continue;
+        }
+        ++index;
+    }
+
+    if (open_index == SIZE_MAX) {
+        return NULL;
+    }
+
+    cursor = open_index;
+    while (cursor != 0U &&
+           isspace((unsigned char)owner->replacement[cursor - 1U]) != 0) {
+        --cursor;
+    }
+    token_end = cursor;
+    while (cursor != 0U &&
+           minipp_is_identifier_continue(owner->replacement[cursor - 1U])) {
+        --cursor;
+    }
+    token_start = cursor;
+    if (token_start == token_end ||
+        !minipp_is_identifier_start(owner->replacement[token_start])) {
+        return NULL;
+    }
+
+    callee = minipp_find_macro_n(state,
+                                 owner->replacement + token_start,
+                                 token_end - token_start);
+    if (callee == NULL || !callee->function_like || !callee->variadic ||
+        callee->param_count == 0U) {
+        return NULL;
+    }
+
+    scan = open_index + 1U;
+    scan_depth = target_depth;
+    fixed_count = callee->param_count - 1U;
+    while (scan < param_start) {
+        char value = owner->replacement[scan];
+
+        if (value == '"' || value == '\'') {
+            char quote = value;
+            ++scan;
+            while (scan < param_start &&
+                   owner->replacement[scan] != '\0') {
+                value = owner->replacement[scan++];
+                if (value == '\\' &&
+                    scan < param_start &&
+                    owner->replacement[scan] != '\0') {
+                    ++scan;
+                    continue;
+                }
+                if (value == quote) {
+                    break;
+                }
+            }
+            continue;
+        }
+        if (value == '(') {
+            ++scan_depth;
+            ++scan;
+            continue;
+        }
+        if (value == ')') {
+            if (scan_depth != 0U) {
+                --scan_depth;
+            }
+            ++scan;
+            continue;
+        }
+        if (value == ',' && scan_depth == target_depth) {
+            ++argument_index;
+        }
+        ++scan;
+    }
+
+    return argument_index >= fixed_count ? callee : NULL;
+}
+
+static bool minipp_variadic_forward_reaches_bare_bridge(
+    const MiniPpState *state,
+    const MiniPpMacro *macro,
+    size_t depth) {
+    size_t index = 0U;
+    size_t variadic_index;
+
+    if (!macro->variadic || macro->param_count == 0U || depth >= 16U) {
+        return false;
+    }
+    variadic_index = macro->param_count - 1U;
+
+    while (macro->replacement[index] != '\0') {
+        if (macro->replacement[index] == '"' ||
+            macro->replacement[index] == '\'') {
+            char quote = macro->replacement[index++];
+            while (macro->replacement[index] != '\0') {
+                char value = macro->replacement[index++];
+                if (value == '\\' && macro->replacement[index] != '\0') {
+                    ++index;
+                    continue;
+                }
+                if (value == quote) {
+                    break;
+                }
+            }
+            continue;
+        }
+
+        if (minipp_is_identifier_start(macro->replacement[index])) {
+            size_t start = index++;
+            size_t end;
+            size_t param_index;
+            size_t left;
+            size_t before_paste;
+            bool gnu_comma_paste = false;
+
+            while (minipp_is_identifier_continue(macro->replacement[index])) {
+                ++index;
+            }
+            end = index;
+            if (!minipp_macro_param_index(macro,
+                                          macro->replacement + start,
+                                          end - start,
+                                          &param_index) ||
+                param_index != variadic_index) {
+                continue;
+            }
+
+            left = start;
+            while (left != 0U &&
+                   isspace((unsigned char)
+                               macro->replacement[left - 1U]) != 0) {
+                --left;
+            }
+            if (left >= 2U &&
+                macro->replacement[left - 1U] == '#' &&
+                macro->replacement[left - 2U] == '#') {
+                before_paste = left - 2U;
+                while (before_paste != 0U &&
+                       isspace((unsigned char)
+                                   macro->replacement[before_paste - 1U]) != 0) {
+                    --before_paste;
+                }
+                gnu_comma_paste =
+                    before_paste != 0U &&
+                    macro->replacement[before_paste - 1U] == ',';
+            }
+
+            if (!gnu_comma_paste) {
+                if (!minipp_param_is_paste_operand(macro, start, end)) {
+                    return true;
+                }
+                continue;
+            }
+
+            {
+                const MiniPpMacro *callee =
+                    minipp_variadic_forward_callee(state, macro, start);
+                if (callee != NULL && callee != macro &&
+                    minipp_variadic_forward_reaches_bare_bridge(
+                        state, callee, depth + 1U)) {
+                    return true;
+                }
+            }
+            continue;
+        }
+
+        ++index;
+    }
+
+    return false;
 }
 
 static bool minipp_param_needs_prescan(const MiniPpMacro *macro,
