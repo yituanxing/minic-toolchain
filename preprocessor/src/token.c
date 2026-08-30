@@ -835,6 +835,30 @@ static bool minipp_build_logical_args(MiniPpState *state,
                  state, macro, 0U));
         logical_args->leading_space_stringized[logical_args->count - 1U] =
             raw_args->leading_space_stringized[fixed_count];
+        if (strcmp(macro->name, "pr_warn_once") == 0 ||
+            strcmp(macro->name, "printk_once") == 0 ||
+            strcmp(macro->name, "DO_ONCE_LITE") == 0 ||
+            strcmp(macro->name, "DO_ONCE_LITE_IF") == 0 ||
+            strcmp(macro->name, "printk") == 0 ||
+            strcmp(macro->name, "printk_index_wrap") == 0) {
+            bool trace_starts = minipp_arg_starts_expanding_macro(
+                state, &raw_args->items[fixed_count]);
+            bool trace_bridge = minipp_variadic_forward_reaches_bare_bridge(
+                state, macro, 0U);
+            fprintf(state->diagnostics,
+                    "MINIPP_VARTRACE macro=%s preserve=%d raw_lead=%d raw_gen=%d starts=%d bridge=%d logical_gen=%d first=%.80s\\n",
+                    macro->name,
+                    preserve_argument_spacing ? 1 : 0,
+                    raw_args->leading_space[fixed_count] ? 1 : 0,
+                    raw_args->leading_space_generated[fixed_count] ? 1 : 0,
+                    trace_starts ? 1 : 0,
+                    trace_bridge ? 1 : 0,
+                    logical_args->leading_space_generated[
+                        logical_args->count - 1U] ? 1 : 0,
+                    raw_args->items[fixed_count].data == NULL
+                        ? ""
+                        : raw_args->items[fixed_count].data);
+        }
     }
     minipp_string_destroy(&variadic);
     return true;
