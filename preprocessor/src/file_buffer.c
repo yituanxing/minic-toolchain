@@ -184,6 +184,22 @@ bool minipp_render_gcc_p_output(const MiniPpString *input,
             continue;
         }
 
+        if (value == '\a') {
+            if (line_start && leading_spaces > 1U) {
+                size_t keep = leading_spaces - 1U;
+                while (keep != 0U) {
+                    if (!minipp_string_append_char(output, ' ')) {
+                        goto oom;
+                    }
+                    --keep;
+                }
+            }
+            leading_spaces = 0U;
+            pending_space = false;
+            ++index;
+            continue;
+        }
+
         if (value == ' ' || value == '\t' ||
             value == '\v' || value == '\f' || value == '\r') {
             if (line_start) {
