@@ -346,6 +346,96 @@ static const MiniPpMacro *minipp_find_trailing_function_macro(
     const MiniPpString *replacement,
     size_t *token_start);
 
+static bool minipp_expand_pragma_operator(MiniPpState *state,
+                                          const char *text,
+                                          size_t *index,
+                                          MiniPpString *out,
+                                          bool *expanded) {
+    size_t cursor = *index;
+    size_t content_start;
+
+    *expanded = false;
+    while (text[cursor] == ' ' || text[cursor] == '\t' ||
+           text[cursor] == '\v' || text[cursor] == '\f') {
+        ++cursor;
+    }
+    if (text[cursor] != '(') {
+        return true;
+    }
+    ++cursor;
+    while (text[cursor] == ' ' || text[cursor] == '\t' ||
+           text[cursor] == '\v' || text[cursor] == '\f') {
+        ++cursor;
+    }
+    if (text[cursor] != '"') {
+        return true;
+    }
+    ++cursor;
+    content_start = cursor;
+
+    /*
+     * C's _Pragma destringizes the string literal: escaped quotes and
+     * backslashes lose one level of quoting before becoming a #pragma line.
+     */
+    while (text[cursor] != '\0' && text[cursor] != '"') {
+        if (text[cursor] == '\\' && text[cursor + 1U] != '\0') {
+            cursor += 2U;
+            continue;
+        }
+        ++cursor;
+    }
+    if (text[cursor] != '"') {
+        return true;
+    }
+
+    {
+        size_t close_quote = cursor;
+        size_t scan = content_start;
+
+        ++cursor;
+        while (text[cursor] == ' ' || text[cursor] == '\t' ||
+               text[cursor] == '\v' || text[cursor] == '\f') {
+            ++cursor;
+        }
+        if (text[cursor] != ')') {
+            return true;
+        }
+
+        while (out->size != 0U) {
+            char previous = out->data[out->size - 1U];
+            if (previous != ' ' && previous != '\t' &&
+                previous != '\v' && previous != '\f') {
+                break;
+            }
+            --out->size;
+            out->data[out->size] = '\0';
+        }
+        if (!minipp_string_append_char(out, '\n') ||
+            !minipp_string_append_n(out, "#pragma ", 8U)) {
+            fprintf(state->diagnostics, "minic-cpp: out-of-memory\n");
+            return false;
+        }
+        while (scan < close_quote) {
+            char value = text[scan++];
+            if (value == '\\' && scan < close_quote &&
+                (text[scan] == '\\' || text[scan] == '"')) {
+                value = text[scan++];
+            }
+            if (!minipp_string_append_char(out, value)) {
+                fprintf(state->diagnostics, "minic-cpp: out-of-memory\n");
+                return false;
+            }
+        }
+        if (!minipp_string_append_char(out, '\n')) {
+            fprintf(state->diagnostics, "minic-cpp: out-of-memory\n");
+            return false;
+        }
+        *index = cursor + 1U;
+        *expanded = true;
+        return true;
+    }
+}
+
 static bool minipp_expand_text_recursive(MiniPpState *state,
                                          const char *text,
                                          MiniPpString *out,
@@ -1902,6 +1992,21 @@ static bool minipp_expand_text_recursive(MiniPpState *state,
                     return false;
                 }
                 continue;
+            }
+            if (length == 7U &&
+                memcmp(text + start, "_Pragma", 7U) == 0) {
+                bool pragma_expanded = false;
+
+                if (!minipp_expand_pragma_operator(state,
+                                                   text,
+                                                   &index,
+                                                   out,
+                                                   &pragma_expanded)) {
+                    return false;
+                }
+                if (pragma_expanded) {
+                    continue;
+                }
             }
             if (length == 11U &&
                 memcmp(text + start, "__COUNTER__", 11U) == 0) {
