@@ -1,0 +1,252 @@
+name: MiniPP Linux Exact 500
+
+concurrency:
+  group: minipp-linux-500-${{ github.ref }}
+  cancel-in-progress: true
+
+on:
+  push:
+    branches:
+      - 'toolchain/minipp-*'
+    paths:
+      - 'preprocessor/**'
+      - 'tools/minic-cpp/**'
+      - 'tests/preprocessor/**'
+      - '.github/workflows/minipp-linux-exact-500.yml'
+      - 'Makefile'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  MINIPP_FIRST500_MAPPED_SHA256: 3edea2d1606d5e3c889f1698010d3f8d21bf32a715d156c591d40478cc1d12c8
+  MINIPP_FIRST500_SOURCE_SHA256: 3da4c61e26e921a7716b1be488641527fd4541f20f86f760507543501b2a7ab3
+
+jobs:
+  sample16:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[minipp-linux-500]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux preprocessing prerequisites
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            gcc gcc-riscv64-linux-gnu libc6-dev-riscv64-cross \
+            bc bison flex libssl-dev libelf-dev make curl xz-utils
+
+      - name: Build independent MiniPP
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/minipp-linux-500-sample toolchain 2>/dev/null || \
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/minipp-linux-500-sample all
+          test -x build/minipp-linux-500-sample/bin/minic-cpp
+          chmod +x tests/preprocessor/linux_kbuild_pp_cc_mapped.sh
+
+      - name: Prepare Linux and freeze first500 identity
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/minipp-linux-500-sample-work"
+          archive="$work/linux-6.6.143.tar.xz"
+          src="$work/linux-6.6.143"
+          out="$work/out"
+          mkdir -p "$work"
+          curl -fsSL https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.6.143.tar.xz -o "$archive"
+          printf '%s  %s\n' \
+            dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932 \
+            "$archive" | sha256sum -c -
+          tar -xJf "$archive" -C "$work"
+          make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- defconfig
+          make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- -j4 prepare scripts
+
+          set +e
+          make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- -n -j1 V=1 \
+            >"$work/kbuild-plan.raw" 2>"$work/kbuild-plan.stderr"
+          plan_status=$?
+          set -e
+          echo "MINIPP_LINUX_500_SAMPLE_PLAN_STATUS=$plan_status"
+
+          python3 tests/preprocessor/freeze_linux_kbuild_manifest.py \
+            --plan "$work/kbuild-plan.raw" --src "$src" --out "$out" --limit 500 \
+            --tsv "$work/first500.tsv" --sources "$work/first500.txt"
+
+          mapped_sha=$(tail -n +2 "$work/first500.tsv" | sha256sum | cut -d' ' -f1)
+          source_sha=$(sha256sum "$work/first500.txt" | cut -d' ' -f1)
+          test "$mapped_sha" = "$MINIPP_FIRST500_MAPPED_SHA256"
+          test "$source_sha" = "$MINIPP_FIRST500_SOURCE_SHA256"
+
+          {
+            head -n 1 "$work/first500.tsv"
+            while IFS= read -r index; do
+              awk -F '\t' -v index="$index" 'NR > 1 && $1 == index { print; exit }' "$work/first500.tsv"
+            done < tests/preprocessor/linux-first500-sample16-indices.txt
+          } >"$work/sample16.tsv"
+          test "$(($(wc -l <"$work/sample16.tsv") - 1))" -eq 16
+          echo "MINIPP_LINUX_500_SAMPLE_IDENTITY=PASS mapped_sha256=$mapped_sha selected=16"
+
+      - name: Freeze RISC-V GCC predefines
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/minipp-linux-500-sample-work"
+          src="$work/linux-6.6.143"
+          probe="$work/probe"
+          mkdir -p "$probe"
+          export REAL_CC=riscv64-linux-gnu-gcc
+          export MINIPP_LINUX_SRC="$src"
+          export MINIPP_PREDEFINES_OUT="$probe/riscv64-gcc-predefines.h"
+          bash tests/preprocessor/build_reference_predefines.sh \
+            -std=gnu11 -fshort-wchar -funsigned-char -fno-PIE \
+            -mabi=lp64 -march=rv64imac_zicsr_zifencei_zihintpause
+
+      - name: Replay coverage sample16
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/minipp-linux-500-sample-work"
+          src="$work/linux-6.6.143"
+          out="$work/out"
+          probe="$work/probe"
+
+          export REAL_CC=riscv64-linux-gnu-gcc
+          export REFERENCE_CPP=riscv64-linux-gnu-gcc
+          export MINIPP="$GITHUB_WORKSPACE/build/minipp-linux-500-sample/bin/minic-cpp"
+          export MINIPP_LINUX_TRACE="$work/minipp-linux-500-sample.trace"
+          export MINIPP_LINUX_WORK="$probe"
+          export MINIPP_LINUX_SRC="$src"
+          export MINIPP_LINUX_OUT="$out"
+          export MINIPP_LINUX_CC_WRAPPER="$GITHUB_WORKSPACE/tests/preprocessor/linux_kbuild_pp_cc_mapped.sh"
+          export MINIPP_LINUX_JOBS=4
+
+          bash tests/preprocessor/run_linux_exact_kbuild_batch.sh "$work/sample16.tsv"
+
+      - name: Preserve sample16 evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: minipp-linux-first500-sample16
+          path: |
+            build/minipp-linux-500-sample-work/sample16.tsv
+            build/minipp-linux-500-sample-work/minipp-linux-500-sample.trace
+            build/minipp-linux-500-sample-work/kbuild-mapped-batch.log
+            build/minipp-linux-500-sample-work/failure-pool.tsv
+            build/minipp-linux-500-sample-work/probe/*.diff
+          if-no-files-found: ignore
+          retention-days: 3
+
+  product500:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[minipp-linux-500]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux preprocessing prerequisites
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            gcc gcc-riscv64-linux-gnu libc6-dev-riscv64-cross \
+            bc bison flex libssl-dev libelf-dev make curl xz-utils
+
+      - name: Build independent MiniPP
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/minipp-linux-500 toolchain 2>/dev/null || \
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/minipp-linux-500 all
+          test -x build/minipp-linux-500/bin/minic-cpp
+          chmod +x tests/preprocessor/linux_kbuild_pp_cc_mapped.sh
+
+      - name: Prepare Linux and require frozen first500 identity
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/minipp-linux-500-work"
+          archive="$work/linux-6.6.143.tar.xz"
+          src="$work/linux-6.6.143"
+          out="$work/out"
+          mkdir -p "$work"
+          curl -fsSL https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.6.143.tar.xz -o "$archive"
+          printf '%s  %s\n' \
+            dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932 \
+            "$archive" | sha256sum -c -
+          tar -xJf "$archive" -C "$work"
+          make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- defconfig
+          make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- -j4 prepare scripts
+
+          set +e
+          make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- -n -j1 V=1 \
+            >"$work/kbuild-plan.raw" 2>"$work/kbuild-plan.stderr"
+          plan_status=$?
+          set -e
+          echo "MINIPP_LINUX_500_PLAN_STATUS=$plan_status"
+
+          python3 tests/preprocessor/freeze_linux_kbuild_manifest.py \
+            --plan "$work/kbuild-plan.raw" --src "$src" --out "$out" --limit 500 \
+            --tsv "$work/first500.tsv" --sources "$work/first500.txt"
+
+          mapped_sha=$(tail -n +2 "$work/first500.tsv" | sha256sum | cut -d' ' -f1)
+          source_sha=$(sha256sum "$work/first500.txt" | cut -d' ' -f1)
+          test "$mapped_sha" = "$MINIPP_FIRST500_MAPPED_SHA256"
+          test "$source_sha" = "$MINIPP_FIRST500_SOURCE_SHA256"
+          test "$(($(wc -l <"$work/first500.tsv") - 1))" -eq 500
+          echo "MINIPP_LINUX_500_IDENTITY=PASS mapped_sha256=$mapped_sha selected=500"
+
+      - name: Freeze RISC-V GCC predefines
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/minipp-linux-500-work"
+          src="$work/linux-6.6.143"
+          probe="$work/probe"
+          mkdir -p "$probe"
+          export REAL_CC=riscv64-linux-gnu-gcc
+          export MINIPP_LINUX_SRC="$src"
+          export MINIPP_PREDEFINES_OUT="$probe/riscv64-gcc-predefines.h"
+          bash tests/preprocessor/build_reference_predefines.sh \
+            -std=gnu11 -fshort-wchar -funsigned-char -fno-PIE \
+            -mabi=lp64 -march=rv64imac_zicsr_zifencei_zihintpause
+
+      - name: Run frozen product500
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/minipp-linux-500-work"
+          src="$work/linux-6.6.143"
+          out="$work/out"
+          probe="$work/probe"
+
+          export REAL_CC=riscv64-linux-gnu-gcc
+          export REFERENCE_CPP=riscv64-linux-gnu-gcc
+          export MINIPP="$GITHUB_WORKSPACE/build/minipp-linux-500/bin/minic-cpp"
+          export MINIPP_LINUX_TRACE="$work/minipp-linux-500.trace"
+          export MINIPP_LINUX_WORK="$probe"
+          export MINIPP_LINUX_SRC="$src"
+          export MINIPP_LINUX_OUT="$out"
+          export MINIPP_LINUX_CC_WRAPPER="$GITHUB_WORKSPACE/tests/preprocessor/linux_kbuild_pp_cc_mapped.sh"
+          export MINIPP_LINUX_JOBS=4
+
+          bash tests/preprocessor/run_linux_exact_kbuild_batch.sh \
+            "$work/first500.tsv" \
+            "$GITHUB_WORKSPACE/tests/preprocessor/linux-first500-sample16-indices.txt"
+
+      - name: Preserve product500 evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: minipp-linux-exact-500
+          path: |
+            build/minipp-linux-500-work/first500.tsv
+            build/minipp-linux-500-work/first500.txt
+            build/minipp-linux-500-work/minipp-linux-500.trace
+            build/minipp-linux-500-work/kbuild-mapped-batch.log
+            build/minipp-linux-500-work/failure-pool.tsv
+            build/minipp-linux-500-work/probe/*.diff
+            build/minipp-linux-500-work/kbuild-plan.stderr
+          if-no-files-found: ignore
+          retention-days: 3
