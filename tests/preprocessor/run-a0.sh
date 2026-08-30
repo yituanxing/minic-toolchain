@@ -216,6 +216,16 @@ BR_STRINGIZE(IRQ_LEVEL)
 EOF
 run_exact stringize-forward-padding
 
+cat >"$work/variadic-prescan-boundary-padding.c" <<'EOF'
+#define ZERO_ARG(x) 0
+#define SPLIT_ARG(x) hi(ZERO_ARG(x)), lo(ZERO_ARG(x))
+#define VP_OUT(fmt, ...) FINAL(fmt, ##__VA_ARGS__)
+#define VP_CONT(fmt, ...) VP_OUT(fmt, ##__VA_ARGS__)
+#define VP_SEQ(m, args...) do { if (m) direct(m, args); else VP_CONT(args); } while (0)
+VP_SEQ(m, "fmt", SPLIT_ARG(value))
+EOF
+run_exact variadic-prescan-boundary-padding
+
 cat >"$work/kconfig-style.c" <<'EOF'
 #define __ARG_PLACEHOLDER_1 0,
 #define __take_second_arg(__ignored, val, ...) val
@@ -484,4 +494,4 @@ OUT4(column_zero_four)
 EOF
 run_exact empty-leading-nested-macro
 
-printf 'MINIPP_A0_EXACT=PASS cases=51 mode=byte-identical\n'
+printf 'MINIPP_A0_EXACT=PASS cases=52 mode=byte-identical\n'
