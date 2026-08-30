@@ -71,6 +71,7 @@ static bool minipp_append_normalized_argument(MiniPpString *item,
     size_t index = 0U;
     bool pending_space = false;
     bool pending_space_generated = false;
+    size_t pending_line_breaks = 0U;
     bool have_token = false;
 
     while (index < size) {
@@ -82,18 +83,38 @@ static bool minipp_append_normalized_argument(MiniPpString *item,
                 if (text[index] == '\v') {
                     pending_space_generated = true;
                 }
+                if (text[index] == '\n' ||
+                    (text[index] == '\r' &&
+                     (index + 1U >= size || text[index + 1U] != '\n'))) {
+                    ++pending_line_breaks;
+                }
             }
             ++index;
             continue;
         }
 
         if (pending_space) {
-            if (!minipp_string_append_char(
-                    item, pending_space_generated ? '\v' : ' ')) {
+            size_t line_break;
+
+            if (pending_space_generated &&
+                !minipp_string_append_char(item, '\v')) {
+                return false;
+            }
+            if (pending_line_breaks != 0U) {
+                for (line_break = 0U;
+                     line_break < pending_line_breaks;
+                     ++line_break) {
+                    if (!minipp_string_append_char(item, '\r')) {
+                        return false;
+                    }
+                }
+            } else if (!pending_space_generated &&
+                       !minipp_string_append_char(item, ' ')) {
                 return false;
             }
             pending_space = false;
             pending_space_generated = false;
+            pending_line_breaks = 0U;
         }
 
         if (text[index] == '"' || text[index] == '\'') {
@@ -185,7 +206,9 @@ static bool minipp_arg_list_append(MiniPpArgList *list,
         bool generated = false;
         while (leading < size &&
                isspace((unsigned char)text[leading]) != 0) {
-            if (text[leading] == '\n') {
+            if (text[leading] == '\n' ||
+                (text[leading] == '\r' &&
+                 (leading + 1U >= size || text[leading + 1U] != '\n'))) {
                 ++token_line;
             }
             if (text[leading] == '\v') {
@@ -229,7 +252,8 @@ static bool minipp_parse_invocation_args(MiniPpState *state,
     }
 
     while (text[index] != '\0') {
-        if (text[index] == '\n') {
+        if (text[index] == '\n' ||
+            (text[index] == '\r' && text[index + 1U] != '\n')) {
             ++current_line;
         }
         if (text[index] == '"' || text[index] == '\'') {
@@ -1208,7 +1232,8 @@ static bool minipp_expand_function_macro(MiniPpState *state,
 
     *invoked = false;
     while (isspace((unsigned char)text[cursor]) != 0) {
-        if (text[cursor] == '\n') {
+        if (text[cursor] == '\n' ||
+            (text[cursor] == '\r' && text[cursor + 1U] != '\n')) {
             ++open_line;
         }
         ++cursor;
@@ -1675,7 +1700,8 @@ static bool minipp_expand_text_recursive(MiniPpState *state,
         if (!minipp_string_append_char(out, text[index])) {
             return false;
         }
-        if (text[index] == '\n') {
+        if (text[index] == '\n' ||
+            (text[index] == '\r' && text[index + 1U] != '\n')) {
             ++current_line;
         }
         ++index;
