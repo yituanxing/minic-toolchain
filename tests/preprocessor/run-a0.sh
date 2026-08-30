@@ -370,6 +370,14 @@ int computed_include = COMPUTED_INCLUDE_VALUE;
 EOF
 run_exact computed-include
 
+cat >"$work/self-referential-macro-hideset.c" <<'EOF'
+#define HIDE_ATTR __attribute__((unused))
+#define inline inline HIDE_ATTR
+#define HIDE_PAIR(prefix) prefix int hide_a; prefix int hide_b;
+HIDE_PAIR(static inline)
+EOF
+run_exact self-referential-macro-hideset
+
 cat >"$work/post-expansion-identifier-separator.c" <<'EOF'
 #define LEFT(name) name
 #define RIGHT suffix
@@ -577,4 +585,4 @@ OUT4(column_zero_four)
 EOF
 run_exact empty-leading-nested-macro
 
-printf 'MINIPP_A0_EXACT=PASS cases=61 mode=byte-identical\n'
+printf 'MINIPP_A0_EXACT=PASS cases=62 mode=byte-identical\n'
