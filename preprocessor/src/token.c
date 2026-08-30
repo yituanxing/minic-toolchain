@@ -417,6 +417,41 @@ static bool minipp_arg_starts_expanding_macro(
     return index < arg->size && arg->data[index] == '(';
 }
 
+static bool minipp_arg_starts_function_like_macro(
+    const MiniPpState *state,
+    const MiniPpString *arg) {
+    size_t index = 0U;
+    size_t start;
+    size_t length;
+    const MiniPpMacro *macro;
+
+    while (index < arg->size &&
+           isspace((unsigned char)arg->data[index]) != 0) {
+        ++index;
+    }
+    if (index >= arg->size ||
+        !minipp_is_identifier_start(arg->data[index])) {
+        return false;
+    }
+
+    start = index++;
+    while (index < arg->size &&
+           minipp_is_identifier_continue(arg->data[index])) {
+        ++index;
+    }
+    length = index - start;
+    macro = minipp_find_macro(state, arg->data + start, length);
+    if (macro == NULL || !macro->function_like) {
+        return false;
+    }
+
+    while (index < arg->size &&
+           isspace((unsigned char)arg->data[index]) != 0) {
+        ++index;
+    }
+    return index < arg->size && arg->data[index] == '(';
+}
+
 static bool minipp_variadic_padding_survives_gnu_forward(
     const MiniPpMacro *macro) {
     size_t index = 0U;
@@ -577,6 +612,10 @@ static bool minipp_build_logical_args(MiniPpState *state,
                 bool emit_separator = true;
 
                 if (raw_args->leading_space_stringized[index]) {
+                    separator = '\f';
+                } else if (!minipp_variadic_padding_survives_gnu_forward(macro) &&
+                           minipp_arg_starts_function_like_macro(
+                               state, &raw_args->items[index])) {
                     separator = '\f';
                 } else if (preserve_argument_spacing &&
                     minipp_arg_starts_expanding_macro(
