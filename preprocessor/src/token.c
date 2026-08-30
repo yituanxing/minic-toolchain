@@ -1835,9 +1835,19 @@ static void minipp_demote_generated_argument_padding(MiniPpString *text) {
     size_t index;
 
     for (index = 0U; index < text->size; ++index) {
-        if (text->data[index] == '\v') {
-            text->data[index] = ' ';
+        if (text->data[index] != '\v') {
+            continue;
         }
+        /*
+         * A generated separator immediately following a comma is
+         * inter-argument provenance, not ordinary prescan padding.  It
+         * must survive forwarding so a later variadic bridge can decide
+         * whether it is still internal or has become pack-leading.
+         */
+        if (index != 0U && text->data[index - 1U] == ',') {
+            continue;
+        }
+        text->data[index] = ' ';
     }
 }
 
