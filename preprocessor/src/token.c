@@ -1697,11 +1697,18 @@ static bool minipp_expand_text_recursive(MiniPpState *state,
             continue;
         }
 
+        if (text[index] == '\r' && text[index + 1U] != '\n') {
+            if (!minipp_string_append_char(out, ' ')) {
+                return false;
+            }
+            ++current_line;
+            ++index;
+            continue;
+        }
         if (!minipp_string_append_char(out, text[index])) {
             return false;
         }
-        if (text[index] == '\n' ||
-            (text[index] == '\r' && text[index + 1U] != '\n')) {
+        if (text[index] == '\n') {
             ++current_line;
         }
         ++index;
