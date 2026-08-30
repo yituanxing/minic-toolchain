@@ -26,19 +26,44 @@ PREDEF_EXACT = {
 
 def source_relative(raw_source: str, src_root: Path, out_root: Path, obj_rel: str):
     raw = Path(raw_source.strip("'\""))
-    candidates = []
-    if raw.is_absolute():
-        candidates.append(raw.resolve())
-    else:
-        candidates.append((out_root / raw).resolve())
-        candidates.append((src_root / raw).resolve())
-    candidates.append((src_root / (obj_rel[:-2] + ".c")).resolve())
-    for candidate in candidates:
+
+    def encode(candidate: Path):
+        candidate = candidate.resolve()
         try:
             return PurePosixPath(candidate.relative_to(src_root).as_posix()).as_posix()
         except ValueError:
             pass
-    return None
+        try:
+            rel = PurePosixPath(candidate.relative_to(out_root).as_posix()).as_posix()
+            return "{OUT}/" + rel
+        except ValueError:
+            return None
+
+    if raw.is_absolute():
+        encoded = encode(raw)
+        if encoded is not None:
+            return encoded
+        return None
+
+    src_candidate = (src_root / raw).resolve()
+    if src_candidate.is_file():
+        return PurePosixPath(src_candidate.relative_to(src_root).as_posix()).as_posix()
+
+    out_candidate = (out_root / raw).resolve()
+    if out_candidate.is_file():
+        return "{OUT}/" + PurePosixPath(
+            out_candidate.relative_to(out_root).as_posix()
+        ).as_posix()
+
+    canonical_src = (src_root / (obj_rel[:-2] + ".c")).resolve()
+    if canonical_src.is_file():
+        return PurePosixPath(canonical_src.relative_to(src_root).as_posix()).as_posix()
+
+    # Kbuild may name generated C inputs in the dry-run plan before the
+    # generator has materialized them under O=.  If no source-tree candidate
+    # exists, preserve that ownership explicitly instead of inventing an
+    # in-tree path.
+    return "{OUT}/" + PurePosixPath(raw.as_posix()).as_posix()
 
 
 def normalize_arg(value: str, src_root: Path, out_root: Path):
