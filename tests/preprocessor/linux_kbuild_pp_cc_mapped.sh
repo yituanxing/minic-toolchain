@@ -47,16 +47,18 @@ if [[ -z "$output_file" ]]; then
   exec "$real_cc" "$@"
 fi
 
-rel_target=$output_file
-case "$rel_target" in
-  "$linux_out"/*)
-    rel_target=${rel_target#"$linux_out"/}
+if [[ "$output_file" == /* ]]; then
+  target_abs=$(realpath -m "$output_file")
+else
+  target_abs=$(realpath -m "$PWD/$output_file")
+fi
+out_abs=$(realpath -m "$linux_out")
+case "$target_abs" in
+  "$out_abs"/*)
+    rel_target=${target_abs#"$out_abs"/}
     ;;
-  /*)
-    rel_target=$(realpath -m --relative-to="$linux_out" "$rel_target")
-    ;;
-  ./*)
-    rel_target=${rel_target#./}
+  *)
+    exec "$real_cc" "$@"
     ;;
 esac
 
