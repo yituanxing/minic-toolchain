@@ -1739,6 +1739,7 @@ static bool minipp_expand_function_macro(MiniPpState *state,
                                          size_t depth,
                                          size_t source_line,
                                          bool preserve_argument_spacing,
+                                         const char *prescan_reenable_macro,
                                          bool *invoked) {
     size_t cursor = *index;
     size_t open_line = source_line;
@@ -1748,6 +1749,9 @@ static bool minipp_expand_function_macro(MiniPpState *state,
     MiniPpString substituted;
     MiniPpString pasted;
     const char **next_disabled = NULL;
+    const char *prescan_disabled_storage[MINIPP_MAX_EXPANSION_DEPTH + 1U];
+    const char *const *prescan_disabled = disabled;
+    size_t prescan_disabled_count = disabled_count;
     size_t next_count = disabled_count + 1U;
     size_t arg_index;
     bool ok = false;
@@ -1796,6 +1800,21 @@ static bool minipp_expand_function_macro(MiniPpState *state,
         expanded_args.capacity = macro->param_count;
     }
 
+    if (prescan_reenable_macro != NULL) {
+        size_t source_index;
+        size_t target_index = 0U;
+
+        for (source_index = 0U; source_index < disabled_count; ++source_index) {
+            if (strcmp(disabled[source_index], prescan_reenable_macro) == 0) {
+                continue;
+            }
+            prescan_disabled_storage[target_index++] = disabled[source_index];
+        }
+        prescan_disabled = prescan_disabled_storage;
+        prescan_disabled_count = target_index;
+    }
+
+
     for (arg_index = 0U; arg_index < macro->param_count; ++arg_index) {
         MiniPpString *expanded = &expanded_args.items[arg_index];
 
@@ -1812,8 +1831,8 @@ static bool minipp_expand_function_macro(MiniPpState *state,
             if (!minipp_expand_text_recursive(state,
                                               raw_args.items[arg_index].data,
                                               expanded,
-                                              disabled,
-                                              disabled_count,
+                                              prescan_disabled,
+                                              prescan_disabled_count,
                                               depth + 1U,
                                               argument_source_line,
                                               true)) {
@@ -1928,6 +1947,7 @@ static bool minipp_expand_function_macro(MiniPpState *state,
                                                          depth + 1U,
                                                          source_line,
                                                          preserve_argument_spacing,
+                                                         NULL,
                                                          &tail_invoked)) {
                     ok = false;
                 } else if (tail_invoked) {
@@ -2148,6 +2168,7 @@ static bool minipp_expand_text_recursive(MiniPpState *state,
                                                       depth,
                                                       current_line,
                                                       preserve_argument_spacing,
+                                                      NULL,
                                                       &invoked)) {
                         return false;
                     }
@@ -2213,6 +2234,7 @@ static bool minipp_expand_text_recursive(MiniPpState *state,
                                            depth + 1U,
                                            current_line,
                                            preserve_argument_spacing,
+                                           macro->name,
                                            &invoked)) {
                                 ok = false;
                             } else if (invoked) {
