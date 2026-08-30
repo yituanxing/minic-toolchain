@@ -2266,6 +2266,32 @@ static bool minipp_expand_text_recursive(MiniPpState *state,
                 }
                 continue;
             }
+            if (length == 20U &&
+                memcmp(text + start, "fsparam_string_empty", 20U) == 0) {
+                const MiniPpMacro *dbg_macro =
+                    minipp_find_macro_n(state, text + start, length);
+                size_t dbg = index;
+                fprintf(state->diagnostics,
+                        "MINIPP_DEBUG_FSPARAM found=%d function=%d disabled=%d bytes=",
+                        dbg_macro != NULL ? 1 : 0,
+                        dbg_macro != NULL && dbg_macro->function_like ? 1 : 0,
+                        dbg_macro != NULL &&
+                                minipp_macro_is_disabled(dbg_macro->name,
+                                                         disabled,
+                                                         disabled_count)
+                            ? 1
+                            : 0);
+                while (text[dbg] != '\0' && dbg < index + 32U) {
+                    fprintf(state->diagnostics,
+                            "%02x",
+                            (unsigned int)(unsigned char)text[dbg]);
+                    if (text[dbg] == '(') {
+                        break;
+                    }
+                    ++dbg;
+                }
+                fprintf(state->diagnostics, "\n");
+            }
             macro = no_reexpand
                         ? NULL
                         : minipp_find_macro_n(state, text + start, length);
