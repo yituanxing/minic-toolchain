@@ -172,16 +172,17 @@ def main():
     if failures:
         for item in failures[:30]:
             err = stderr_root / f"{item['index']:04d}.stderr"
-            first = ""
+            details = []
             if err.is_file():
-                first = next(
-                    (line.strip() for line in err.read_text(errors="replace").splitlines() if line.strip()),
-                    "",
-                )
+                details = [
+                    line.strip()
+                    for line in err.read_text(errors="replace").splitlines()
+                    if line.strip()
+                ][:20]
             print(
                 "MINIPP_REFERENCE_CORPUS_FAIL "
                 f"index={item['index']} rc={item['returncode']} "
-                f"bytes={item['bytes']} reason={first!r}"
+                f"bytes={item['bytes']} reason={details!r}"
             )
         raise SystemExit(
             f"MINIPP_REFERENCE_CORPUS failed={len(failures)} selected={len(rows)}"
