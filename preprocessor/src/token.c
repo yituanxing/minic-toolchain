@@ -690,6 +690,187 @@ static bool minipp_variadic_padding_survives_gnu_forward(
     return saw_variadic;
 }
 
+static const MiniPpMacro *minipp_variadic_forward_callee(
+    const MiniPpState *state,
+    const MiniPpMacro *owner,
+    size_t param_start) {
+    size_t index = 0U;
+    size_t depth = 0U;
+    size_t target_depth;
+    size_t open_index = SIZE_MAX;
+    size_t cursor;
+    size_t token_end;
+    size_t token_start;
+
+    while (index < param_start) {
+        if (owner->replacement[index] == '"' ||
+            owner->replacement[index] == '\'') {
+            char quote = owner->replacement[index++];
+            while (index < param_start &&
+                   owner->replacement[index] != '\0') {
+                char value = owner->replacement[index++];
+                if (value == '\\' &&
+                    index < param_start &&
+                    owner->replacement[index] != '\0') {
+                    ++index;
+                    continue;
+                }
+                if (value == quote) {
+                    break;
+                }
+            }
+            continue;
+        }
+        if (owner->replacement[index] == '(') {
+            ++depth;
+        } else if (owner->replacement[index] == ')' && depth != 0U) {
+            --depth;
+        }
+        ++index;
+    }
+
+    target_depth = depth;
+    if (target_depth == 0U) {
+        return NULL;
+    }
+
+    index = 0U;
+    depth = 0U;
+    while (index < param_start) {
+        if (owner->replacement[index] == '"' ||
+            owner->replacement[index] == '\'') {
+            char quote = owner->replacement[index++];
+            while (index < param_start &&
+                   owner->replacement[index] != '\0') {
+                char value = owner->replacement[index++];
+                if (value == '\\' &&
+                    index < param_start &&
+                    owner->replacement[index] != '\0') {
+                    ++index;
+                    continue;
+                }
+                if (value == quote) {
+                    break;
+                }
+            }
+            continue;
+        }
+        if (owner->replacement[index] == '(') {
+            ++depth;
+            if (depth == target_depth) {
+                open_index = index;
+            }
+            ++index;
+            continue;
+        }
+        if (owner->replacement[index] == ')') {
+            if (depth == target_depth) {
+                open_index = SIZE_MAX;
+            }
+            if (depth != 0U) {
+                --depth;
+            }
+            ++index;
+            continue;
+        }
+        ++index;
+    }
+
+    if (open_index == SIZE_MAX) {
+        return NULL;
+    }
+
+    cursor = open_index;
+    while (cursor != 0U &&
+           isspace((unsigned char)owner->replacement[cursor - 1U]) != 0) {
+        --cursor;
+    }
+    token_end = cursor;
+    while (cursor != 0U &&
+           minipp_is_identifier_continue(owner->replacement[cursor - 1U])) {
+        --cursor;
+    }
+    token_start = cursor;
+    if (token_start == token_end ||
+        !minipp_is_identifier_start(owner->replacement[token_start])) {
+        return NULL;
+    }
+
+    return minipp_find_macro_n(state,
+                               owner->replacement + token_start,
+                               token_end - token_start);
+}
+
+static bool minipp_variadic_forward_reaches_bare_bridge(
+    const MiniPpState *state,
+    const MiniPpMacro *macro,
+    size_t depth) {
+    size_t index = 0U;
+    size_t variadic_index;
+
+    if (!macro->variadic || macro->param_count == 0U) {
+        return false;
+    }
+    if (!minipp_variadic_padding_survives_gnu_forward(macro)) {
+        return true;
+    }
+    if (depth >= 8U) {
+        return false;
+    }
+
+    variadic_index = macro->param_count - 1U;
+    while (macro->replacement[index] != '\0') {
+        if (macro->replacement[index] == '"' ||
+            macro->replacement[index] == '\'') {
+            char quote = macro->replacement[index++];
+            while (macro->replacement[index] != '\0') {
+                char value = macro->replacement[index++];
+                if (value == '\\' && macro->replacement[index] != '\0') {
+                    ++index;
+                    continue;
+                }
+                if (value == quote) {
+                    break;
+                }
+            }
+            continue;
+        }
+
+        if (minipp_is_identifier_start(macro->replacement[index])) {
+            size_t start = index++;
+            size_t length;
+            size_t param_index;
+            const MiniPpMacro *callee;
+
+            while (minipp_is_identifier_continue(macro->replacement[index])) {
+                ++index;
+            }
+            length = index - start;
+            if (!minipp_macro_param_index(macro,
+                                          macro->replacement + start,
+                                          length,
+                                          &param_index) ||
+                param_index != variadic_index) {
+                continue;
+            }
+
+            callee = minipp_variadic_forward_callee(state, macro, start);
+            if (callee != NULL &&
+                callee != macro &&
+                callee->function_like &&
+                callee->variadic &&
+                minipp_variadic_forward_reaches_bare_bridge(
+                    state, callee, depth + 1U)) {
+                return true;
+            }
+            continue;
+        }
+        ++index;
+    }
+
+    return false;
+}
+
 static bool minipp_build_logical_args(MiniPpState *state,
                                       const MiniPpMacro *macro,
                                       const MiniPpArgList *raw_args,
@@ -824,7 +1005,8 @@ static bool minipp_build_logical_args(MiniPpState *state,
         logical_args->leading_space_generated[logical_args->count - 1U] =
             raw_args->leading_space_generated[fixed_count] ||
             (preserve_argument_spacing &&
-             !minipp_variadic_padding_survives_gnu_forward(macro) &&
+             minipp_variadic_forward_reaches_bare_bridge(
+                 state, macro, 0U) &&
              minipp_arg_starts_expanding_macro(
                  state, &raw_args->items[fixed_count]));
         logical_args->leading_space_stringized[logical_args->count - 1U] =
