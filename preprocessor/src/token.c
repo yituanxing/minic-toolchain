@@ -369,8 +369,7 @@ static bool minipp_build_logical_args(MiniPpState *state,
             if (!minipp_string_append_char(&variadic, ',')) {
                 goto oom;
             }
-            if (preserve_argument_spacing &&
-                raw_args->leading_space[index] &&
+            if (raw_args->leading_space[index] &&
                 !minipp_string_append_char(&variadic, ' ')) {
                 goto oom;
             }
