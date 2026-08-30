@@ -964,7 +964,7 @@ static bool minipp_append_stringized_arg(MiniPpString *out,
     for (index = 0U; index < arg->size; ++index) {
         unsigned char ch = (unsigned char)arg->data[index];
 
-        if (arg->data[index] == '\b') {
+        if (arg->data[index] == '\b' || arg->data[index] == '\x0e') {
             continue;
         }
 
@@ -2146,13 +2146,16 @@ static bool minipp_expand_text_recursive(MiniPpState *state,
             size_t start = index;
             size_t length;
             const MiniPpMacro *macro;
+            bool no_reexpand =
+                start != 0U && text[start - 1U] == '\x0e';
 
             ++index;
             while (minipp_is_identifier_continue(text[index])) {
                 ++index;
             }
             length = index - start;
-            if (length == 8U &&
+            if (!no_reexpand &&
+                length == 8U &&
                 memcmp(text + start, "__FILE__", 8U) == 0) {
                 if (!minipp_append_file_builtin(state, out)) {
                     fprintf(state->diagnostics, "minic-cpp: out-of-memory\n");
@@ -2160,7 +2163,8 @@ static bool minipp_expand_text_recursive(MiniPpState *state,
                 }
                 continue;
             }
-            if (length == 8U &&
+            if (!no_reexpand &&
+                length == 8U &&
                 memcmp(text + start, "__LINE__", 8U) == 0) {
                 if (!minipp_append_line_builtin(out, current_line)) {
                     fprintf(state->diagnostics, "minic-cpp: out-of-memory\n");
@@ -2168,7 +2172,8 @@ static bool minipp_expand_text_recursive(MiniPpState *state,
                 }
                 continue;
             }
-            if (length == 7U &&
+            if (!no_reexpand &&
+                length == 7U &&
                 memcmp(text + start, "_Pragma", 7U) == 0) {
                 bool pragma_expanded = false;
 
@@ -2187,7 +2192,8 @@ static bool minipp_expand_text_recursive(MiniPpState *state,
                     continue;
                 }
             }
-            if (length == 11U &&
+            if (!no_reexpand &&
+                length == 11U &&
                 memcmp(text + start, "__COUNTER__", 11U) == 0) {
                 if (!minipp_append_counter_builtin(state, out)) {
                     fprintf(state->diagnostics, "minic-cpp: out-of-memory\n");
@@ -2195,7 +2201,9 @@ static bool minipp_expand_text_recursive(MiniPpState *state,
                 }
                 continue;
             }
-            macro = minipp_find_macro_n(state, text + start, length);
+            macro = no_reexpand
+                        ? NULL
+                        : minipp_find_macro_n(state, text + start, length);
             if (macro != NULL &&
                 !minipp_macro_is_disabled(macro->name,
                                           disabled,
@@ -2322,6 +2330,15 @@ static bool minipp_expand_text_recursive(MiniPpState *state,
                 }
             }
 
+            if (!no_reexpand &&
+                macro != NULL &&
+                minipp_macro_is_disabled(macro->name,
+                                         disabled,
+                                         disabled_count) &&
+                !minipp_string_append_char(out, '\x0e')) {
+                fprintf(state->diagnostics, "minic-cpp: out-of-memory\n");
+                return false;
+            }
             if (!minipp_string_append_n(out, text + start, length)) {
                 return false;
             }
