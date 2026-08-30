@@ -959,6 +959,7 @@ static bool minipp_try_flush_pending(MiniPpState *state,
     MiniPpString expanded;
     size_t saved_line = state->current_line;
     size_t saved_counter = state->counter_value;
+    bool saved_final_pending_flush = state->final_pending_flush;
     bool ok;
 
     if (pending->size == 0U) {
@@ -967,7 +968,9 @@ static bool minipp_try_flush_pending(MiniPpState *state,
 
     minipp_string_init(&expanded);
     state->current_line = source_line;
+    state->final_pending_flush = final;
     ok = minipp_expand_text(state, pending->data, &expanded);
+    state->final_pending_flush = saved_final_pending_flush;
     state->current_line = saved_line;
     if (!ok) {
         bool incomplete = state->expansion_incomplete;
