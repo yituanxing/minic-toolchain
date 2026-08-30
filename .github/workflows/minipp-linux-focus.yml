@@ -1,4 +1,4 @@
-# convergence-replay: paste-hideset-five
+# debug-focus: fsparam-only
 # focus-generation: first500-pragma-rescan
 name: MiniPP Linux Failure Pool
 
@@ -87,11 +87,7 @@ jobs:
           manifest="$work/failure-input.txt"
 
           cat >"$manifest" <<'EOF'
-          kernel/cgroup/rstat.c
-          kernel/cgroup/cgroup.c
           fs/ext4/super.c
-          mm/oom_kill.c
-          mm/interval_tree.c
           EOF
           sed -i 's/^[[:space:]]*//' "$manifest"
 
