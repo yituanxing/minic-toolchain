@@ -658,7 +658,14 @@ static bool minipp_handle_include(MiniPpState *state,
         goto done;
     }
 
-    text = minipp_skip_horizontal_space(name_end + 1);
+    text = name_end + 1;
+    for (;;) {
+        text = minipp_skip_horizontal_space(text);
+        if (*text != '\b') {
+            break;
+        }
+        ++text;
+    }
     if (*text == '\n') {
         ++text;
     }
