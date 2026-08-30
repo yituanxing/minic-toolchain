@@ -16,3 +16,4 @@
 499
 # macro-hash integrated validation
 # first500 convergence replay after pragma/variadic/alias fixes
+# current-head full500 convergence measurement after remaining-five focus
