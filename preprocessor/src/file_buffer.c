@@ -185,7 +185,7 @@ bool minipp_render_gcc_p_output(const MiniPpString *input,
         }
 
         if (value == ' ' || value == '\t' ||
-            value == '\v' || value == '\f') {
+            value == '\v' || value == '\f' || value == '\r') {
             if (line_start) {
                 ++leading_spaces;
             } else {
