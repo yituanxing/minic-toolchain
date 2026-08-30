@@ -1720,6 +1720,12 @@ static bool minipp_substitute_function_macro(MiniPpState *state,
                         } else if (
                             raw_args->leading_space_generated[param_index]) {
                             size_t padding = substituted->size;
+                            /*
+                             * Source-owned spacing survives the outermost
+                             * invocation.  Once the pack is being rescanned,
+                             * a generated head separator belongs to the
+                             * forwarding boundary and GCC consumes it.
+                             */
                             bool consume_generated_head =
                                 !preserve_argument_spacing;
 
