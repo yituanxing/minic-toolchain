@@ -980,7 +980,8 @@ static bool minipp_substitute_function_macro(MiniPpState *state,
                             index = cursor + length;
                             continue;
                         }
-                        if (!raw_args->leading_space[param_index]) {
+                        if (!raw_args->leading_space[param_index] ||
+                            raw_args->leading_space_stringized[param_index]) {
                             while (substituted->size != 0U) {
                                 char previous =
                                     substituted->data[substituted->size - 1U];
