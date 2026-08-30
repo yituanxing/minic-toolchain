@@ -1317,8 +1317,9 @@ int minipp_preprocess_file(const char *input_path,
                         break;
                     }
                 }
-                if (has_semis) {
-                    size_t limit = line_size < 48U ? line_size : 48U;
+                if (has_semis ||
+                    (line_number >= 43120U && line_number <= 43142U)) {
+                    size_t limit = line_size < 96U ? line_size : 96U;
                     fprintf(diagnostics,
                             "MINIPP_DEBUG_PADDING line=%zu size=%zu hex=",
                             line_number,
