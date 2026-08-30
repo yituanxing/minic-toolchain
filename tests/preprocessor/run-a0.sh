@@ -256,10 +256,13 @@ EOF
 run_exact gnu-to-bare-variadic-source-spacing
 
 cat >"$work/gnu-double-forward-first-vararg.c" <<'EOF'
-#define GF_INDEX(_func, _fmt, ...) _func(_fmt, ##__VA_ARGS__)
+#define GF_EMIT(_fmt) ((void)0)
+#define GF_INDEX(_func, _fmt, ...) ({ GF_EMIT(_fmt); _func(_fmt, ##__VA_ARGS__); })
 #define GF_PRINT(fmt, ...) GF_INDEX(GF_FINAL, fmt, ##__VA_ARGS__)
-GF_PRINT("Assertion %s %s",
+#define GF_OUTER(cond) do { if (cond) { GF_PRINT("Assertion %s %s", first_arg, second_arg); } } while (0)
+GF_PRINT("Top %s %s",
          first_arg, second_arg)
+GF_OUTER(1)
 EOF
 run_exact gnu-double-forward-first-vararg
 
