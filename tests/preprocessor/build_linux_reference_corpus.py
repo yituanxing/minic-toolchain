@@ -178,7 +178,7 @@ def main():
                     line.strip()
                     for line in err.read_text(errors="replace").splitlines()
                     if line.strip()
-                ][:20]
+                ][:200]
             print(
                 "MINIPP_REFERENCE_CORPUS_FAIL "
                 f"index={item['index']} rc={item['returncode']} "
