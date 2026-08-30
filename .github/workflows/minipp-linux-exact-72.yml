@@ -1,0 +1,114 @@
+name: MiniPP Linux Exact 72
+
+concurrency:
+  group: minipp-linux-72-${{ github.ref }}
+  cancel-in-progress: true
+
+on:
+  push:
+    branches:
+      - 'toolchain/minipp-*'
+    paths:
+      - 'preprocessor/**'
+      - 'tools/minic-cpp/**'
+      - 'tests/preprocessor/**'
+      - '.github/workflows/minipp-linux-exact-72.yml'
+      - 'Makefile'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  linux-exact-72:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[minipp-linux-72]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux preprocessing prerequisites
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            gcc gcc-riscv64-linux-gnu libc6-dev-riscv64-cross \
+            bc bison flex libssl-dev libelf-dev make curl xz-utils
+
+      - name: Build independent MiniPP
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/minipp-linux-72 toolchain 2>/dev/null || \
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/minipp-linux-72 all
+          test -x build/minipp-linux-72/bin/minic-cpp
+
+      - name: Prepare Linux 6.6.143
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/minipp-linux-72-work"
+          archive="$work/linux-6.6.143.tar.xz"
+          src="$work/linux-6.6.143"
+          out="$work/out"
+          mkdir -p "$work"
+          curl -fsSL https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.6.143.tar.xz -o "$archive"
+          printf '%s  %s\n' \
+            dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932 \
+            "$archive" | sha256sum -c -
+          tar -xJf "$archive" -C "$work"
+          make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- defconfig
+          make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- prepare
+          echo "MINIPP_LINUX_72_PREPARE=PASS linux=6.6.143"
+
+      - name: Freeze RISC-V GCC predefines and feature tests
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/minipp-linux-72-work"
+          src="$work/linux-6.6.143"
+          probe="$work/probe"
+          mkdir -p "$probe"
+          export REAL_CC=riscv64-linux-gnu-gcc
+          export MINIPP_LINUX_SRC="$src"
+          export MINIPP_PREDEFINES_OUT="$probe/riscv64-gcc-predefines.h"
+          bash tests/preprocessor/build_reference_predefines.sh \
+            -std=gnu11 -fshort-wchar -funsigned-char -fno-PIE \
+            -mabi=lp64 -march=rv64imac_zicsr_zifencei_zihintpause
+
+      - name: Run product72 and derive sample16
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/minipp-linux-72-work"
+          src="$work/linux-6.6.143"
+          out="$work/out"
+          probe="$work/probe"
+          trace="$work/minipp-linux-72.trace"
+
+          export REAL_CC=riscv64-linux-gnu-gcc
+          export REFERENCE_CPP=riscv64-linux-gnu-gcc
+          export MINIPP="$GITHUB_WORKSPACE/build/minipp-linux-72/bin/minic-cpp"
+          export MINIPP_LINUX_TRACE="$trace"
+          export MINIPP_LINUX_WORK="$probe"
+          export MINIPP_LINUX_SRC="$src"
+          export MINIPP_LINUX_OUT="$out"
+          export MINIPP_LINUX_CC_WRAPPER="$GITHUB_WORKSPACE/tests/preprocessor/linux_kbuild_pp_cc.sh"
+          export MINIPP_LINUX_JOBS=4
+
+          bash tests/preprocessor/run_linux_exact_batch.sh \
+            "$GITHUB_WORKSPACE/tests/preprocessor/linux-batch72.txt" \
+            "$GITHUB_WORKSPACE/tests/preprocessor/linux-sample16.txt"
+
+      - name: Preserve 72-TU evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: minipp-linux-exact-72
+          path: |
+            build/minipp-linux-72-work/minipp-linux-72.trace
+            build/minipp-linux-72-work/kbuild-batch.log
+            build/minipp-linux-72-work/probe/*
+            build/minipp-linux-72-work/probe/*.diff
+            build/minipp-linux-72-work/failure-pool.txt
+          if-no-files-found: ignore
+          retention-days: 3
