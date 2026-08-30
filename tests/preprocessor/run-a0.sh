@@ -255,6 +255,14 @@ NR_WARN("fmt",
 EOF
 run_exact gnu-to-bare-variadic-source-spacing
 
+cat >"$work/gnu-double-forward-first-vararg.c" <<'EOF'
+#define GF_INDEX(_func, _fmt, ...) _func(_fmt, ##__VA_ARGS__)
+#define GF_PRINT(fmt, ...) GF_INDEX(GF_FINAL, fmt, ##__VA_ARGS__)
+GF_PRINT("Assertion %s %s",
+         first_arg, second_arg)
+EOF
+run_exact gnu-double-forward-first-vararg
+
 cat >"$work/kconfig-style.c" <<'EOF'
 #define __ARG_PLACEHOLDER_1 0,
 #define __take_second_arg(__ignored, val, ...) val
@@ -539,4 +547,4 @@ OUT4(column_zero_four)
 EOF
 run_exact empty-leading-nested-macro
 
-printf 'MINIPP_A0_EXACT=PASS cases=56 mode=byte-identical\n'
+printf 'MINIPP_A0_EXACT=PASS cases=57 mode=byte-identical\n'
