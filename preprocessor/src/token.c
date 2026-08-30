@@ -1871,6 +1871,10 @@ static bool minipp_expand_function_macro(MiniPpState *state,
         }
         ++cursor;
     }
+    if (text[cursor] == '\0' && !state->final_pending_flush) {
+        state->expansion_incomplete = true;
+        return false;
+    }
     if (text[cursor] != '(') {
         return true;
     }
