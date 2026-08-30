@@ -167,6 +167,7 @@ bool minipp_render_gcc_p_output(const MiniPpString *input,
     size_t leading_spaces = 0U;
     bool line_start = true;
     bool pending_space = false;
+    bool empty_macro_padding = false;
 
     minipp_string_init(output);
 
@@ -174,18 +175,7 @@ bool minipp_render_gcc_p_output(const MiniPpString *input,
         char value = input->data[index];
 
         if (value == '\n') {
-            leading_spaces = 0U;
-            pending_space = false;
-            if (!minipp_string_append_char(output, '\n')) {
-                goto oom;
-            }
-            line_start = true;
-            ++index;
-            continue;
-        }
-
-        if (value == '\a') {
-            if (line_start && leading_spaces > 1U) {
+            if (line_start && empty_macro_padding && leading_spaces > 1U) {
                 size_t keep = leading_spaces - 1U;
                 while (keep != 0U) {
                     if (!minipp_string_append_char(output, ' ')) {
@@ -196,6 +186,19 @@ bool minipp_render_gcc_p_output(const MiniPpString *input,
             }
             leading_spaces = 0U;
             pending_space = false;
+            empty_macro_padding = false;
+            if (!minipp_string_append_char(output, '\n')) {
+                goto oom;
+            }
+            line_start = true;
+            ++index;
+            continue;
+        }
+
+        if (value == '\a') {
+            if (line_start) {
+                empty_macro_padding = true;
+            }
             ++index;
             continue;
         }
@@ -218,6 +221,7 @@ bool minipp_render_gcc_p_output(const MiniPpString *input,
             --leading_spaces;
         }
         line_start = false;
+        empty_macro_padding = false;
 
         if (pending_space) {
             if (!minipp_string_append_char(output, ' ')) {
