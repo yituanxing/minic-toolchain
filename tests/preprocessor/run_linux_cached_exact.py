@@ -27,6 +27,14 @@ def expand_arg(value: str, src: Path, out: Path):
     return value.replace("{SRC}", str(src)).replace("{OUT}", str(out))
 
 
+def resolve_contract_source(value: str, src: Path, out: Path):
+    if value.startswith("{OUT}/"):
+        return out / value[len("{OUT}/") :]
+    if value.startswith("{SRC}/"):
+        return src / value[len("{SRC}/") :]
+    return src / value
+
+
 def read_indices(path):
     if path is None:
         return None
@@ -98,7 +106,7 @@ def main():
 
     def run_one(row):
         index = int(row["index"])
-        source = logical_src / row["source"]
+        source = resolve_contract_source(row["source"], logical_src, logical_out)
         ref = corpus / "refs" / f"{index:04d}.gcc.i"
         predef = corpus / "predefines" / f"{context_id(row['predef_args'])}.h"
         mini = mini_root / f"{index:04d}.mini.i"
