@@ -46,6 +46,7 @@ static bool minipp_macro_is_disabled(const char *name,
 typedef struct MiniPpArgList {
     MiniPpString *items;
     bool *leading_space;
+    bool *leading_space_generated;
     size_t *source_line;
     size_t count;
     size_t capacity;
@@ -59,6 +60,7 @@ static void minipp_arg_list_destroy(MiniPpArgList *list) {
     }
     free(list->items);
     free(list->leading_space);
+    free(list->leading_space_generated);
     free(list->source_line);
     memset(list, 0, sizeof(*list));
 }
@@ -141,6 +143,7 @@ static bool minipp_arg_list_append(MiniPpArgList *list,
             return false;
         }
         bool *next_leading;
+        bool *next_generated;
         size_t *next_source_line;
 
         next = realloc(list->items, capacity * sizeof(*next));
@@ -154,6 +157,12 @@ static bool minipp_arg_list_append(MiniPpArgList *list,
             return false;
         }
         list->leading_space = next_leading;
+        next_generated = realloc(list->leading_space_generated,
+                                 capacity * sizeof(*next_generated));
+        if (next_generated == NULL) {
+            return false;
+        }
+        list->leading_space_generated = next_generated;
         next_source_line = realloc(list->source_line,
                                    capacity * sizeof(*next_source_line));
         if (next_source_line == NULL) {
@@ -167,14 +176,19 @@ static bool minipp_arg_list_append(MiniPpArgList *list,
     {
         size_t leading = 0U;
         size_t token_line = source_line;
+        bool generated = false;
         while (leading < size &&
                isspace((unsigned char)text[leading]) != 0) {
             if (text[leading] == '\n') {
                 ++token_line;
             }
+            if (text[leading] == '\v') {
+                generated = true;
+            }
             ++leading;
         }
         list->leading_space[list->count] = leading != 0U;
+        list->leading_space_generated[list->count] = generated;
         list->source_line[list->count] = token_line;
     }
     minipp_string_init(item);
@@ -378,6 +392,8 @@ static bool minipp_build_logical_args(MiniPpState *state,
                 minipp_arg_list_destroy(logical_args);
                 return false;
             }
+            logical_args->leading_space_generated[logical_args->count - 1U] =
+                raw_args->leading_space_generated[index];
         }
         return true;
     }
@@ -408,6 +424,8 @@ static bool minipp_build_logical_args(MiniPpState *state,
             minipp_arg_list_destroy(logical_args);
             return false;
         }
+        logical_args->leading_space_generated[logical_args->count - 1U] =
+            raw_args->leading_space_generated[index];
     }
 
     minipp_string_init(&variadic);
@@ -416,12 +434,23 @@ static bool minipp_build_logical_args(MiniPpState *state,
             if (!minipp_string_append_char(&variadic, ',')) {
                 goto oom;
             }
-            if (raw_args->leading_space[index] &&
-                (preserve_argument_spacing ||
-                 !minipp_arg_starts_expanding_macro(
-                     state, &raw_args->items[index])) &&
-                !minipp_string_append_char(&variadic, ' ')) {
-                goto oom;
+            if (raw_args->leading_space[index]) {
+                char separator = ' ';
+                bool emit_separator = true;
+
+                if (preserve_argument_spacing &&
+                    minipp_arg_starts_expanding_macro(
+                        state, &raw_args->items[index])) {
+                    separator = '\v';
+                } else if (!preserve_argument_spacing &&
+                           raw_args->leading_space_generated[index]) {
+                    emit_separator = false;
+                }
+
+                if (emit_separator &&
+                    !minipp_string_append_char(&variadic, separator)) {
+                    goto oom;
+                }
             }
         }
         if (!minipp_string_append_n(&variadic,
@@ -448,6 +477,8 @@ static bool minipp_build_logical_args(MiniPpState *state,
     if (fixed_count < raw_args->count) {
         logical_args->leading_space[logical_args->count - 1U] =
             raw_args->leading_space[fixed_count];
+        logical_args->leading_space_generated[logical_args->count - 1U] =
+            raw_args->leading_space_generated[fixed_count];
     }
     minipp_string_destroy(&variadic);
     return true;
