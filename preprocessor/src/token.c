@@ -781,11 +781,14 @@ static bool minipp_build_logical_args(MiniPpState *state,
                     separator = '\v';
                 } else if (!preserve_argument_spacing &&
                            raw_args->leading_space_generated[index]) {
-                    if (minipp_variadic_padding_survives_gnu_forward(macro)) {
-                        separator = '\v';
-                    } else {
-                        emit_separator = false;
-                    }
+                    /*
+                     * Keep generated inter-argument padding as provenance.
+                     * If this separator later becomes the front of a
+                     * forwarded variadic pack, leading normalization may
+                     * discard it.  If it remains between arguments, GCC -P
+                     * renders it as the required single space.
+                     */
+                    separator = '\v';
                 }
 
                 if (emit_separator &&
