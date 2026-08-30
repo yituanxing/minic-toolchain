@@ -349,6 +349,13 @@ int chain_call = CHAIN(5);
 EOF
 run_exact object-to-function-rescan
 
+cat >"$work/function-macro-cross-line-invocation.c" <<'EOF'
+#define CROSS_LINE(name, value) { .name = name, .value = value }
+CROSS_LINE
+    ("alpha", 7)
+EOF
+run_exact function-macro-cross-line-invocation
+
 cat >"$work/object-alias-reentry-arg.c" <<'EOF'
 #define OA_ALIAS OA_IMPL
 #define OA_IMPL(n, d) (((n) + (d) - 1) / (d))
@@ -593,4 +600,4 @@ OUT4(column_zero_four)
 EOF
 run_exact empty-leading-nested-macro
 
-printf 'MINIPP_A0_EXACT=PASS cases=63 mode=byte-identical\n'
+printf 'MINIPP_A0_EXACT=PASS cases=64 mode=byte-identical\n'
