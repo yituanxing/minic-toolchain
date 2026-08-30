@@ -2331,6 +2331,14 @@ static bool minipp_expand_text_recursive(MiniPpState *state,
             ++index;
             continue;
         }
+        if (depth != 0U &&
+            (text[index] == ' ' || text[index] == '\t') &&
+            out->size != 0U &&
+            (out->data[out->size - 1U] == ' ' ||
+             out->data[out->size - 1U] == '\t')) {
+            ++index;
+            continue;
+        }
         if (!minipp_string_append_char(out, text[index])) {
             return false;
         }
