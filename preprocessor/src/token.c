@@ -369,6 +369,86 @@ static bool minipp_arg_starts_expanding_macro(
     return index < arg->size && arg->data[index] == '(';
 }
 
+static bool minipp_variadic_padding_survives_gnu_forward(
+    const MiniPpMacro *macro) {
+    size_t index = 0U;
+    size_t variadic_index;
+    bool saw_variadic = false;
+
+    if (!macro->variadic || macro->param_count == 0U) {
+        return false;
+    }
+    variadic_index = macro->param_count - 1U;
+
+    while (macro->replacement[index] != '\0') {
+        if (macro->replacement[index] == '"' ||
+            macro->replacement[index] == '\'') {
+            char quote = macro->replacement[index++];
+            while (macro->replacement[index] != '\0') {
+                char value = macro->replacement[index++];
+                if (value == '\\' && macro->replacement[index] != '\0') {
+                    ++index;
+                    continue;
+                }
+                if (value == quote) {
+                    break;
+                }
+            }
+            continue;
+        }
+
+        if (minipp_is_identifier_start(macro->replacement[index])) {
+            size_t start = index;
+            size_t length;
+            size_t param_index;
+            size_t left;
+            size_t before_paste;
+
+            ++index;
+            while (minipp_is_identifier_continue(macro->replacement[index])) {
+                ++index;
+            }
+            length = index - start;
+            if (!minipp_macro_param_index(macro,
+                                          macro->replacement + start,
+                                          length,
+                                          &param_index) ||
+                param_index != variadic_index) {
+                continue;
+            }
+
+            saw_variadic = true;
+            left = start;
+            while (left != 0U &&
+                   isspace((unsigned char)
+                               macro->replacement[left - 1U]) != 0) {
+                --left;
+            }
+            if (left < 2U ||
+                macro->replacement[left - 1U] != '#' ||
+                macro->replacement[left - 2U] != '#') {
+                return false;
+            }
+
+            before_paste = left - 2U;
+            while (before_paste != 0U &&
+                   isspace((unsigned char)
+                               macro->replacement[before_paste - 1U]) != 0) {
+                --before_paste;
+            }
+            if (before_paste == 0U ||
+                macro->replacement[before_paste - 1U] != ',') {
+                return false;
+            }
+            continue;
+        }
+
+        ++index;
+    }
+
+    return saw_variadic;
+}
+
 static bool minipp_build_logical_args(MiniPpState *state,
                                       const MiniPpMacro *macro,
                                       const MiniPpArgList *raw_args,
@@ -450,7 +530,11 @@ static bool minipp_build_logical_args(MiniPpState *state,
                     separator = '\v';
                 } else if (!preserve_argument_spacing &&
                            raw_args->leading_space_generated[index]) {
-                    emit_separator = false;
+                    if (minipp_variadic_padding_survives_gnu_forward(macro)) {
+                        separator = '\v';
+                    } else {
+                        emit_separator = false;
+                    }
                 }
 
                 if (emit_separator &&
