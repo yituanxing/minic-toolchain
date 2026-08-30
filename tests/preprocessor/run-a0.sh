@@ -313,6 +313,15 @@ int pragma_value;
 EOF
 run_exact pragma
 
+cat >"$work/pragma-operator.c" <<'EOF'
+#define DO_PRAGMA(x) _Pragma(#x)
+DO_PRAGMA(GCC diagnostic push);
+DO_PRAGMA(GCC diagnostic ignored "-Wmissing-prototypes");
+int pragma_operator_value;
+DO_PRAGMA(GCC diagnostic pop);
+EOF
+run_exact pragma-operator
+
 cat >"$work/object-to-function-rescan.c" <<'EOF'
 #define TARGET(x) ((x) + 1)
 #define ALIAS TARGET
@@ -523,4 +532,4 @@ OUT4(column_zero_four)
 EOF
 run_exact empty-leading-nested-macro
 
-printf 'MINIPP_A0_EXACT=PASS cases=55 mode=byte-identical\n'
+printf 'MINIPP_A0_EXACT=PASS cases=56 mode=byte-identical\n'
