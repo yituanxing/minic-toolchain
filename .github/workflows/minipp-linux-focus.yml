@@ -85,17 +85,10 @@ jobs:
           manifest="$work/failure-input.txt"
 
           cat >"$manifest" <<'EOF'
-          kernel/params.c
-          kernel/irq/irqdesc.c
-          kernel/irq/handle.c
-          kernel/irq/manage.c
-          kernel/locking/rwsem.c
-          kernel/irq/spurious.c
-          kernel/irq/resend.c
-          kernel/irq/chip.c
-          kernel/irq/dummychip.c
-          kernel/irq/devres.c
-          kernel/sched/build_utility.c
+          kernel/resource.c
+          kernel/sysctl.c
+          kernel/pid.c
+          kernel/extable.c
           EOF
           sed -i 's/^[[:space:]]*//' "$manifest"
 
