@@ -1207,6 +1207,16 @@ static bool minipp_output_has_line_indentation(const MiniPpString *out) {
     return true;
 }
 
+static void minipp_demote_generated_argument_padding(MiniPpString *text) {
+    size_t index;
+
+    for (index = 0U; index < text->size; ++index) {
+        if (text->data[index] == '\v') {
+            text->data[index] = ' ';
+        }
+    }
+}
+
 static bool minipp_expand_function_macro(MiniPpState *state,
                                          const MiniPpMacro *macro,
                                          const char *text,
@@ -1299,6 +1309,11 @@ static bool minipp_expand_function_macro(MiniPpState *state,
              * argument of another macro.
              */
             minipp_normalize_leading_expansion_space(expanded, false);
+            if (macro->variadic &&
+                arg_index + 1U == macro->param_count &&
+                !minipp_variadic_padding_survives_gnu_forward(macro)) {
+                minipp_demote_generated_argument_padding(expanded);
+            }
         }
         if (!minipp_string_append_char(expanded, '\0')) {
             minipp_arg_list_destroy(&raw_args);
