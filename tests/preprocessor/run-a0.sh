@@ -142,6 +142,21 @@ static int annotated_function(void)
 EOF
 run_exact multiple-empty-annotation-padding
 
+cat >"$work/conditional-empty-enum-line-padding.c" <<'EOF'
+#define CE_TRACE_DEFINE_ENUM(x)
+#define CE_EM(a, b) CE_TRACE_DEFINE_ENUM(a);
+#define CE_IF_DISABLED(x)
+#define CE_IF_ENABLED(x) x
+#define CE_ZONE_TYPE \
+        CE_IF_DISABLED(CE_EM(ZONE_A, "A")) \
+        CE_IF_ENABLED(CE_EM(ZONE_B, "B")) \
+                        CE_EM(ZONE_C, "C") \
+        CE_IF_DISABLED(CE_EM(ZONE_D, "D")) \
+                        CE_EM(ZONE_E, "E")
+CE_ZONE_TYPE
+EOF
+run_exact conditional-empty-enum-line-padding
+
 cat >"$work/empty-macro-padding.c" <<'EOF'
 #define EMPTY_ATTR(x)
 int empty_macro_padding(void)
@@ -622,4 +637,4 @@ OUT4(column_zero_four)
 EOF
 run_exact empty-leading-nested-macro
 
-printf 'MINIPP_A0_EXACT=PASS cases=66 mode=byte-identical\n'
+printf 'MINIPP_A0_EXACT=PASS cases=67 mode=byte-identical\n'
