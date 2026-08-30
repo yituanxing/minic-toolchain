@@ -70,6 +70,7 @@ static bool minipp_append_normalized_argument(MiniPpString *item,
                                               size_t size) {
     size_t index = 0U;
     bool pending_space = false;
+    bool pending_space_generated = false;
     bool have_token = false;
 
     while (index < size) {
@@ -78,16 +79,21 @@ static bool minipp_append_normalized_argument(MiniPpString *item,
         if (isspace(ch) != 0) {
             if (have_token) {
                 pending_space = true;
+                if (text[index] == '\v') {
+                    pending_space_generated = true;
+                }
             }
             ++index;
             continue;
         }
 
         if (pending_space) {
-            if (!minipp_string_append_char(item, ' ')) {
+            if (!minipp_string_append_char(
+                    item, pending_space_generated ? '\v' : ' ')) {
                 return false;
             }
             pending_space = false;
+            pending_space_generated = false;
         }
 
         if (text[index] == '"' || text[index] == '\'') {
