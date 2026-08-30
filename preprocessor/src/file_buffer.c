@@ -220,6 +220,14 @@ bool minipp_render_gcc_p_output(const MiniPpString *input,
             continue;
         }
 
+        if (getenv("MINIPP_DEBUG_EMPTY_PADDING") != NULL &&
+            line_start && value == ';' && leading_spaces <= 8U) {
+            fprintf(stderr,
+                    "MINIPP_DEBUG_RENDER token=semicolon spaces=%zu markers=%zu\n",
+                    leading_spaces,
+                    empty_macro_padding_count);
+        }
+
         while (line_start && leading_spaces != 0U) {
             if (!minipp_string_append_char(output, ' ')) {
                 goto oom;
