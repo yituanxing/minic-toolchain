@@ -43,15 +43,126 @@ static size_t minipp_identifier_length(const char *text) {
     return size;
 }
 
-static MiniPpMacro *minipp_find_macro(MiniPpState *state, const char *name) {
+static uint64_t minipp_hash_identifier(const char *name, size_t name_size) {
+    uint64_t hash = UINT64_C(1469598103934665603);
     size_t index;
 
-    for (index = 0U; index < state->macro_count; ++index) {
-        if (strcmp(state->macros[index].name, name) == 0) {
-            return &state->macros[index];
+    for (index = 0U; index < name_size; ++index) {
+        hash ^= (uint64_t)(unsigned char)name[index];
+        hash *= UINT64_C(1099511628211);
+    }
+    return hash;
+}
+
+static void minipp_macro_index_insert(MiniPpState *state, size_t macro_index) {
+    size_t mask = state->macro_slot_capacity - 1U;
+    size_t slot = (size_t)(state->macros[macro_index].name_hash & (uint64_t)mask);
+
+    while (state->macro_slots[slot] != 0U) {
+        slot = (slot + 1U) & mask;
+    }
+    state->macro_slots[slot] = macro_index + 1U;
+}
+
+static bool minipp_rebuild_macro_index(MiniPpState *state, size_t capacity) {
+    size_t *slots;
+    size_t index;
+
+    if (capacity < 64U) {
+        capacity = 64U;
+    }
+    if ((capacity & (capacity - 1U)) != 0U) {
+        size_t rounded = 64U;
+        while (rounded < capacity) {
+            if (rounded > SIZE_MAX / 2U) {
+                return false;
+            }
+            rounded *= 2U;
         }
+        capacity = rounded;
+    }
+
+    slots = calloc(capacity, sizeof(*slots));
+    if (slots == NULL) {
+        return false;
+    }
+
+    free(state->macro_slots);
+    state->macro_slots = slots;
+    state->macro_slot_capacity = capacity;
+    for (index = 0U; index < state->macro_count; ++index) {
+        minipp_macro_index_insert(state, index);
+    }
+    return true;
+}
+
+static bool minipp_reserve_macro_index(MiniPpState *state, size_t required) {
+    size_t capacity = state->macro_slot_capacity;
+
+    if (capacity != 0U && required <= capacity / 2U) {
+        return true;
+    }
+    if (capacity == 0U) {
+        capacity = 64U;
+    }
+    while (required > capacity / 2U) {
+        if (capacity > SIZE_MAX / 2U) {
+            return false;
+        }
+        capacity *= 2U;
+    }
+    return minipp_rebuild_macro_index(state, capacity);
+}
+
+static void minipp_rebuild_macro_index_in_place(MiniPpState *state) {
+    size_t index;
+
+    if (state->macro_slot_capacity == 0U) {
+        return;
+    }
+    memset(state->macro_slots,
+           0,
+           state->macro_slot_capacity * sizeof(*state->macro_slots));
+    for (index = 0U; index < state->macro_count; ++index) {
+        minipp_macro_index_insert(state, index);
+    }
+}
+
+const MiniPpMacro *minipp_find_macro_n(const MiniPpState *state,
+                                        const char *name,
+                                        size_t name_size) {
+    uint64_t hash;
+    size_t mask;
+    size_t slot;
+    size_t probes;
+
+    if (state->macro_slot_capacity == 0U) {
+        return NULL;
+    }
+
+    hash = minipp_hash_identifier(name, name_size);
+    mask = state->macro_slot_capacity - 1U;
+    slot = (size_t)(hash & (uint64_t)mask);
+    for (probes = 0U; probes < state->macro_slot_capacity; ++probes) {
+        size_t encoded = state->macro_slots[slot];
+        const MiniPpMacro *macro;
+
+        if (encoded == 0U) {
+            return NULL;
+        }
+        macro = &state->macros[encoded - 1U];
+        if (macro->name_hash == hash &&
+            macro->name_size == name_size &&
+            memcmp(macro->name, name, name_size) == 0) {
+            return macro;
+        }
+        slot = (slot + 1U) & mask;
     }
     return NULL;
+}
+
+static MiniPpMacro *minipp_find_macro(MiniPpState *state, const char *name) {
+    return (MiniPpMacro *)minipp_find_macro_n(state, name, strlen(name));
 }
 
 static bool minipp_reserve_macros(MiniPpState *state, size_t required) {
@@ -132,7 +243,8 @@ static bool minipp_define_macro_full(MiniPpState *state,
     }
 
     if (macro == NULL) {
-        if (!minipp_reserve_macros(state, state->macro_count + 1U)) {
+        if (!minipp_reserve_macro_index(state, state->macro_count + 1U) ||
+            !minipp_reserve_macros(state, state->macro_count + 1U)) {
             for (index = 0U; index < param_count; ++index) {
                 free(next_params[index]);
             }
@@ -142,7 +254,9 @@ static bool minipp_define_macro_full(MiniPpState *state,
         }
         macro = &state->macros[state->macro_count];
         memset(macro, 0, sizeof(*macro));
-        macro->name = minipp_duplicate_range(name, strlen(name));
+        macro->name_size = strlen(name);
+        macro->name_hash = minipp_hash_identifier(name, macro->name_size);
+        macro->name = minipp_duplicate_range(name, macro->name_size);
         if (macro->name == NULL) {
             for (index = 0U; index < param_count; ++index) {
                 free(next_params[index]);
@@ -152,6 +266,7 @@ static bool minipp_define_macro_full(MiniPpState *state,
             return false;
         }
         ++state->macro_count;
+        minipp_macro_index_insert(state, state->macro_count - 1U);
     } else {
         minipp_release_macro_payload(macro);
     }
@@ -177,22 +292,23 @@ static bool minipp_define_macro(MiniPpState *state,
 }
 
 static void minipp_undefine_macro(MiniPpState *state, const char *name) {
+    MiniPpMacro *macro = minipp_find_macro(state, name);
     size_t index;
 
-    for (index = 0U; index < state->macro_count; ++index) {
-        if (strcmp(state->macros[index].name, name) == 0) {
-            free(state->macros[index].name);
-            minipp_release_macro_payload(&state->macros[index]);
-            if (index + 1U < state->macro_count) {
-                memmove(&state->macros[index],
-                        &state->macros[index + 1U],
-                        (state->macro_count - index - 1U) *
-                            sizeof(state->macros[0]));
-            }
-            --state->macro_count;
-            return;
-        }
+    if (macro == NULL) {
+        return;
     }
+    index = (size_t)(macro - state->macros);
+    free(state->macros[index].name);
+    minipp_release_macro_payload(&state->macros[index]);
+    if (index + 1U < state->macro_count) {
+        memmove(&state->macros[index],
+                &state->macros[index + 1U],
+                (state->macro_count - index - 1U) *
+                    sizeof(state->macros[0]));
+    }
+    --state->macro_count;
+    minipp_rebuild_macro_index_in_place(state);
 }
 
 static void minipp_state_destroy(MiniPpState *state) {
@@ -203,6 +319,7 @@ static void minipp_state_destroy(MiniPpState *state) {
         minipp_release_macro_payload(&state->macros[index]);
     }
     free(state->macros);
+    free(state->macro_slots);
     free(state->conditionals);
     memset(state, 0, sizeof(*state));
 }
