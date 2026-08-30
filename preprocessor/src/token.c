@@ -1418,6 +1418,16 @@ static bool minipp_substitute_function_macro(MiniPpState *state,
                                 substituted->data[substituted->size - 1U] == ',') {
                                 --substituted->size;
                                 substituted->data[substituted->size] = '\0';
+                                while (substituted->size != 0U) {
+                                    char previous =
+                                        substituted->data[substituted->size - 1U];
+                                    if (previous != ' ' && previous != '\t' &&
+                                        previous != '\v' && previous != '\f') {
+                                        break;
+                                    }
+                                    --substituted->size;
+                                    substituted->data[substituted->size] = '\0';
+                                }
                             }
                             index = cursor + length;
                             continue;
