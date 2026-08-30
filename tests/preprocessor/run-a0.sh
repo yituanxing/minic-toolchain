@@ -208,11 +208,14 @@ cat >"$work/stringize-forward-padding.c" <<'EOF'
 #define BR_CONT(fmt, ...) BR_PRINT(fmt, ##__VA_ARGS__)
 #define BR_SEQ(m, args...) do { if (m) seq(m, args); else BR_CONT(args); } while (0)
 #define BR_STRINGIZE(x) BR_SEQ(m, "fmt", #x, value)
+#define BR_MID(s, v) BR_SEQ(m, "fmt", s, v)
+#define BR_STRINGIZE_MID(x) BR_MID(#x, value)
 DIRECT(IRQ_LEVEL)
 FORWARD(IRQ_LEVEL)
 VFORWARD(IRQ_LEVEL)
 NAMED_FORWARD(IRQ_LEVEL)
 BR_STRINGIZE(IRQ_LEVEL)
+BR_STRINGIZE_MID(IRQ_LEVEL)
 EOF
 run_exact stringize-forward-padding
 
