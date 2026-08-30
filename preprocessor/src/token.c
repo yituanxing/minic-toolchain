@@ -1359,14 +1359,37 @@ static bool minipp_append_paste_operand_arg(MiniPpString *out,
     return true;
 }
 
-static bool minipp_variadic_pack_has_generated_internal_separator(
+static bool minipp_variadic_pack_has_multiple_args(
     const MiniPpString *arg) {
-    size_t index;
+    size_t index = 0U;
+    size_t paren_depth = 0U;
 
-    for (index = 1U; index < arg->size; ++index) {
-        if (arg->data[index] == '\v' && arg->data[index - 1U] == ',') {
+    while (index < arg->size) {
+        char value = arg->data[index];
+
+        if (value == '"' || value == '\'') {
+            char quote = value;
+            ++index;
+            while (index < arg->size) {
+                value = arg->data[index++];
+                if (value == '\\' && index < arg->size) {
+                    ++index;
+                    continue;
+                }
+                if (value == quote) {
+                    break;
+                }
+            }
+            continue;
+        }
+        if (value == '(') {
+            ++paren_depth;
+        } else if (value == ')' && paren_depth != 0U) {
+            --paren_depth;
+        } else if (value == ',' && paren_depth == 0U) {
             return true;
         }
+        ++index;
     }
     return false;
 }
@@ -1734,7 +1757,7 @@ static bool minipp_substitute_function_macro(MiniPpState *state,
                             size_t padding = substituted->size;
                             bool forwarded_multiarg_pack =
                                 !preserve_argument_spacing &&
-                                minipp_variadic_pack_has_generated_internal_separator(
+                                minipp_variadic_pack_has_multiple_args(
                                     &raw_args->items[param_index]);
 
                             while (padding != 0U) {
