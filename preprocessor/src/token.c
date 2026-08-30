@@ -822,10 +822,7 @@ static bool minipp_build_logical_args(MiniPpState *state,
         logical_args->leading_space[logical_args->count - 1U] =
             raw_args->leading_space[fixed_count];
         logical_args->leading_space_generated[logical_args->count - 1U] =
-            raw_args->leading_space_generated[fixed_count] ||
-            (preserve_argument_spacing &&
-             minipp_arg_starts_expanding_macro(
-                 state, &raw_args->items[fixed_count]));
+            raw_args->leading_space_generated[fixed_count];
         logical_args->leading_space_stringized[logical_args->count - 1U] =
             raw_args->leading_space_stringized[fixed_count];
     }
