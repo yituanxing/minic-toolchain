@@ -396,7 +396,8 @@ static bool minipp_expand_pragma_operator(MiniPpState *state,
 
         ++cursor;
         while (text[cursor] == ' ' || text[cursor] == '\t' ||
-               text[cursor] == '\v' || text[cursor] == '\f') {
+               text[cursor] == '\v' || text[cursor] == '\f' ||
+               text[cursor] == '\a' || text[cursor] == '\b') {
             ++cursor;
         }
         if (text[cursor] != ')') {
