@@ -132,6 +132,15 @@ int zero_value = ZERO();
 EOF
 run_exact function-zero
 
+cat >"$work/empty-macro-padding.c" <<'EOF'
+#define EMPTY_ATTR(x)
+int empty_macro_padding(void)
+{
+       EMPTY_ATTR(lock)
+}
+EOF
+run_exact empty-macro-padding
+
 mkdir -p "$work/forced"
 cat >"$work/forced/forced.h" <<'EOF'
 #define FORCED_VALUE 37
@@ -466,4 +475,4 @@ OUT4(column_zero_four)
 EOF
 run_exact empty-leading-nested-macro
 
-printf 'MINIPP_A0_EXACT=PASS cases=50 mode=byte-identical\n'
+printf 'MINIPP_A0_EXACT=PASS cases=51 mode=byte-identical\n'
