@@ -2361,6 +2361,9 @@ static bool minipp_expand_text_recursive(MiniPpState *state,
                                                       current_line,
                                                       false);
                     if (ok) {
+                        minipp_normalize_leading_expansion_space(
+                            &replacement,
+                            !minipp_output_has_line_indentation(out));
                         size_t tail_start = 0U;
                         const MiniPpMacro *tail_macro =
                             minipp_find_trailing_function_macro(state,
