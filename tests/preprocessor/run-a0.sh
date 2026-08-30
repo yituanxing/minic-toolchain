@@ -289,6 +289,19 @@ DL_WARN("%s (%d)", DL_CURRENT->comm, DL_CURRENT->pid)
 EOF
 run_exact direct-gnu-forward-object-first-vararg
 
+cat >"$work/once-lite-identity-format-forward-spacing.c" <<'EOF'
+#define OI_INDEX(_p, _fmt, ...) _p(_fmt, ##__VA_ARGS__)
+#define OI_PRINTK(fmt, ...) OI_INDEX(OI_FINAL, fmt, ##__VA_ARGS__)
+#define OI_ONCE_IF(condition, func, ...) func(__VA_ARGS__)
+#define OI_ONCE(func, ...) OI_ONCE_IF(1, func, ##__VA_ARGS__)
+#define OI_PRINTK_ONCE(fmt, ...) OI_ONCE(OI_PRINTK, fmt, ##__VA_ARGS__)
+#define OI_PR_FMT(fmt) fmt
+#define OI_WARN_ONCE(fmt, ...) OI_PRINTK_ONCE(OI_PR_FMT(fmt), ##__VA_ARGS__)
+#define OI_CURRENT get_current()
+OI_WARN_ONCE("%s (%d)", OI_CURRENT->comm, OI_CURRENT->pid)
+EOF
+run_exact once-lite-identity-format-forward-spacing
+
 cat >"$work/once-lite-gnu-bare-forward-spacing.c" <<'EOF'
 #define OL_INDEX(_p, _fmt, ...) _p(_fmt, ##__VA_ARGS__)
 #define OL_PRINTK(fmt, ...) OL_INDEX(OL_FINAL, fmt, ##__VA_ARGS__)
@@ -646,4 +659,4 @@ OUT4(column_zero_four)
 EOF
 run_exact empty-leading-nested-macro
 
-printf 'MINIPP_A0_EXACT=PASS cases=68 mode=byte-identical\n'
+printf 'MINIPP_A0_EXACT=PASS cases=69 mode=byte-identical\n'
