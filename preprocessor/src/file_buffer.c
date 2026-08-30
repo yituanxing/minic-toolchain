@@ -203,7 +203,7 @@ bool minipp_render_gcc_p_output(const MiniPpString *input,
             continue;
         }
 
-        if (value == '\b') {
+        if (value == '\b' || value == '\x0e') {
             ++index;
             continue;
         }
