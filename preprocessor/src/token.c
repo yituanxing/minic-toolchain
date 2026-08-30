@@ -927,6 +927,17 @@ static bool minipp_needs_post_arg_separator(const MiniPpString *arg,
     return next == '+' || next == '-' || next == '.';
 }
 
+static bool minipp_arg_has_stringize_origin(const MiniPpString *arg) {
+    size_t index;
+
+    for (index = 0U; index < arg->size; ++index) {
+        if (arg->data[index] == '\b') {
+            return true;
+        }
+    }
+    return false;
+}
+
 static bool minipp_substitute_function_macro(MiniPpState *state,
                                              const MiniPpMacro *macro,
                                              const MiniPpArgList *raw_args,
@@ -1020,7 +1031,9 @@ static bool minipp_substitute_function_macro(MiniPpState *state,
                             continue;
                         }
                         if (!raw_args->leading_space[param_index] ||
-                            raw_args->leading_space_stringized[param_index]) {
+                            raw_args->leading_space_stringized[param_index] ||
+                            minipp_arg_has_stringize_origin(
+                                &raw_args->items[param_index])) {
                             while (substituted->size != 0U) {
                                 char previous =
                                     substituted->data[substituted->size - 1U];
@@ -1097,7 +1110,8 @@ static bool minipp_substitute_function_macro(MiniPpState *state,
                     }
                 }
                 if (!minipp_append_stringized_arg(substituted,
-                                                  &raw_args->items[param_index])) {
+                                                  &raw_args->items[param_index]) ||
+                    !minipp_string_append_char(substituted, '\b')) {
                     goto oom;
                 }
                 index = cursor + length;
@@ -1125,20 +1139,6 @@ static bool minipp_substitute_function_macro(MiniPpState *state,
                     paste_operand ? raw_args : expanded_args;
                 const MiniPpString *arg = &source_args->items[param_index];
 
-                if (!paste_operand &&
-                    raw_args->leading_space_stringized[param_index]) {
-                    size_t padding = substituted->size;
-
-                    while (padding != 0U) {
-                        char previous = substituted->data[padding - 1U];
-                        if (previous != ' ' && previous != '\t' &&
-                            previous != '\v' && previous != '\f') {
-                            break;
-                        }
-                        substituted->data[padding - 1U] = '\f';
-                        --padding;
-                    }
-                }
                 if (!minipp_string_append_n(substituted,
                                             arg->data == NULL ? "" : arg->data,
                                             arg->size)) {
@@ -1377,21 +1377,26 @@ static bool minipp_expand_function_macro(MiniPpState *state,
         for (debug_arg = 0U; debug_arg < raw_args.count; ++debug_arg) {
             size_t debug_index;
             size_t boundary_count = 0U;
+            size_t origin_count = 0U;
             for (debug_index = 0U;
                  debug_index < raw_args.items[debug_arg].size;
                  ++debug_index) {
                 if (raw_args.items[debug_arg].data[debug_index] == '\f') {
                     ++boundary_count;
                 }
+                if (raw_args.items[debug_arg].data[debug_index] == '\b') {
+                    ++origin_count;
+                }
             }
             fprintf(state->diagnostics,
-                    "MINIPP_DEBUG macro=%s arg=%zu leading=%d generated=%d boundary=%d internal_boundary=%zu\n",
+                    "MINIPP_DEBUG macro=%s arg=%zu leading=%d generated=%d boundary=%d internal_boundary=%zu origin=%zu\n",
                     macro->name,
                     debug_arg,
                     raw_args.leading_space[debug_arg] ? 1 : 0,
                     raw_args.leading_space_generated[debug_arg] ? 1 : 0,
                     raw_args.leading_space_stringized[debug_arg] ? 1 : 0,
-                    boundary_count);
+                    boundary_count,
+                    origin_count);
         }
     }
 
