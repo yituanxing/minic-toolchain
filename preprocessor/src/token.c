@@ -806,6 +806,10 @@ static bool minipp_append_stringized_arg(MiniPpString *out,
     for (index = 0U; index < arg->size; ++index) {
         unsigned char ch = (unsigned char)arg->data[index];
 
+        if (arg->data[index] == '\b') {
+            continue;
+        }
+
         if (isspace(ch) != 0) {
             if (emitted) {
                 pending_space = true;
