@@ -1052,10 +1052,60 @@ static bool minipp_param_is_direct_bare_variadic_argument(
     callee = minipp_find_macro(state,
                                owner->replacement + token_start,
                                token_end - token_start);
-    return callee != NULL &&
-           callee->function_like &&
-           callee->variadic &&
-           !minipp_variadic_padding_survives_gnu_forward(callee);
+    if (callee == NULL ||
+        !callee->function_like ||
+        !callee->variadic ||
+        minipp_variadic_padding_survives_gnu_forward(callee)) {
+        return false;
+    }
+
+    {
+        size_t argument_index = 0U;
+        size_t scan = open_index + 1U;
+        size_t scan_depth = target_depth;
+        size_t fixed_count = callee->param_count - 1U;
+
+        while (scan < param_start) {
+            char value = owner->replacement[scan];
+
+            if (value == '"' || value == '\'') {
+                char quote = value;
+                ++scan;
+                while (scan < param_start &&
+                       owner->replacement[scan] != '\0') {
+                    value = owner->replacement[scan++];
+                    if (value == '\\' &&
+                        scan < param_start &&
+                        owner->replacement[scan] != '\0') {
+                        ++scan;
+                        continue;
+                    }
+                    if (value == quote) {
+                        break;
+                    }
+                }
+                continue;
+            }
+            if (value == '(') {
+                ++scan_depth;
+                ++scan;
+                continue;
+            }
+            if (value == ')') {
+                if (scan_depth != 0U) {
+                    --scan_depth;
+                }
+                ++scan;
+                continue;
+            }
+            if (value == ',' && scan_depth == target_depth) {
+                ++argument_index;
+            }
+            ++scan;
+        }
+
+        return argument_index > fixed_count;
+    }
 }
 
 static bool minipp_substitute_function_macro(MiniPpState *state,
@@ -1512,36 +1562,6 @@ static bool minipp_expand_function_macro(MiniPpState *state,
     }
     minipp_arg_list_destroy(&parsed_args);
 
-    if (strncmp(macro->name, "NR_", 3U) == 0) {
-        size_t debug_arg;
-        for (debug_arg = 0U; debug_arg < raw_args.count; ++debug_arg) {
-            size_t debug_index;
-            size_t v_count = 0U;
-            size_t f_count = 0U;
-            size_t b_count = 0U;
-            for (debug_index = 0U;
-                 debug_index < raw_args.items[debug_arg].size;
-                 ++debug_index) {
-                char value = raw_args.items[debug_arg].data[debug_index];
-                if (value == '\v') ++v_count;
-                if (value == '\f') ++f_count;
-                if (value == '\b') ++b_count;
-            }
-            fprintf(state->diagnostics,
-                    "MINIPP_NR_RAW macro=%s arg=%zu lead=%d gen=%d str=%d v=%zu f=%zu b=%zu text=[%.*s]\n",
-                    macro->name,
-                    debug_arg,
-                    raw_args.leading_space[debug_arg] ? 1 : 0,
-                    raw_args.leading_space_generated[debug_arg] ? 1 : 0,
-                    raw_args.leading_space_stringized[debug_arg] ? 1 : 0,
-                    v_count,
-                    f_count,
-                    b_count,
-                    (int)raw_args.items[debug_arg].size,
-                    raw_args.items[debug_arg].data);
-        }
-    }
-
     memset(&expanded_args, 0, sizeof(expanded_args));
     if (macro->param_count != 0U) {
         expanded_args.items = calloc(macro->param_count,
@@ -1611,13 +1631,6 @@ static bool minipp_expand_function_macro(MiniPpState *state,
         minipp_arg_list_destroy(&raw_args);
         minipp_arg_list_destroy(&expanded_args);
         return false;
-    }
-    if (strncmp(macro->name, "NR_", 3U) == 0) {
-        fprintf(state->diagnostics,
-                "MINIPP_NR_SUB macro=%s text=[%.*s]\n",
-                macro->name,
-                (int)substituted.size,
-                substituted.data == NULL ? "" : substituted.data);
     }
     if (!minipp_apply_token_paste(state, &substituted, &pasted)) {
         minipp_string_destroy(&substituted);
