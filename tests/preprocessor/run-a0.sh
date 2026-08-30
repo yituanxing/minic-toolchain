@@ -370,6 +370,13 @@ int computed_include = COMPUTED_INCLUDE_VALUE;
 EOF
 run_exact computed-include
 
+cat >"$work/post-expansion-identifier-separator.c" <<'EOF'
+#define LEFT(name) name
+#define RIGHT suffix
+LEFT(foo)RIGHT
+EOF
+run_exact post-expansion-identifier-separator
+
 cat >"$work/gnu-named-empty-comma-padding.c" <<'EOF'
 #define FAT_ERR(sb, fmt, args...) F(sb, 1, fmt , ## args)
 FAT_ERR(s, "Odd directory size");
@@ -564,4 +571,4 @@ OUT4(column_zero_four)
 EOF
 run_exact empty-leading-nested-macro
 
-printf 'MINIPP_A0_EXACT=PASS cases=59 mode=byte-identical\n'
+printf 'MINIPP_A0_EXACT=PASS cases=60 mode=byte-identical\n'
