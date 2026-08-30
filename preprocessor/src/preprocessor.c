@@ -969,6 +969,23 @@ static bool minipp_try_flush_pending(MiniPpState *state,
     state->current_line = source_line;
     ok = minipp_expand_text(state, pending->data, &expanded);
     state->current_line = saved_line;
+    if (ok && getenv("MINIPP_DEBUG_TRACE_OWNER") != NULL &&
+        expanded.data != NULL) {
+        size_t scan;
+        for (scan = 0U; scan + 2U < expanded.size; ++scan) {
+            if (expanded.data[scan] == '\t' &&
+                expanded.data[scan + 1U] == '\t' &&
+                expanded.data[scan + 2U] == ';') {
+                size_t show = pending->size < 600U ? pending->size : 600U;
+                fprintf(state->diagnostics,
+                        "MINIPP_DEBUG_TRACE_OWNER line=%zu pending=%.*s\n",
+                        source_line,
+                        (int)show,
+                        pending->data == NULL ? "" : pending->data);
+                break;
+            }
+        }
+    }
     if (!ok) {
         bool incomplete = state->expansion_incomplete;
         minipp_string_destroy(&expanded);
