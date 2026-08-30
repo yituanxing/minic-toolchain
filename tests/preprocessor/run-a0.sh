@@ -219,6 +219,14 @@ BR_STRINGIZE_MID(IRQ_LEVEL)
 EOF
 run_exact stringize-forward-padding
 
+cat >"$work/nested-stringize-origin.c" <<'EOF'
+#define NS_INNER(ns) .ascii #ns "\\0"
+#define NS_STRINGIFY_1(x) #x
+#define NS_STRINGIFY(x) NS_STRINGIFY_1(x)
+NS_STRINGIFY(NS_INNER(CXL))
+EOF
+run_exact nested-stringize-origin
+
 cat >"$work/variadic-prescan-boundary-padding.c" <<'EOF'
 #define ZERO_ARG(x) 0
 #define SPLIT_ARG(x) hi(ZERO_ARG(x)), lo(ZERO_ARG(x))
@@ -237,6 +245,15 @@ cat >"$work/fixed-parameter-boundary-padding.c" <<'EOF'
 FP_BRIDGE("name", value)
 EOF
 run_exact fixed-parameter-boundary-padding
+
+cat >"$work/gnu-to-bare-variadic-source-spacing.c" <<'EOF'
+#define NR_FUNCTION(function, ...) function(__VA_ARGS__)
+#define NR_WARN(fmt, ...) NR_FUNCTION(NR_PRINT, fmt, ##__VA_ARGS__)
+#define NR_PRINT(fmt, ...) FINAL(fmt, ##__VA_ARGS__)
+NR_WARN("fmt",
+        dev_name, queue_index)
+EOF
+run_exact gnu-to-bare-variadic-source-spacing
 
 cat >"$work/kconfig-style.c" <<'EOF'
 #define __ARG_PLACEHOLDER_1 0,
@@ -506,4 +523,4 @@ OUT4(column_zero_four)
 EOF
 run_exact empty-leading-nested-macro
 
-printf 'MINIPP_A0_EXACT=PASS cases=53 mode=byte-identical\n'
+printf 'MINIPP_A0_EXACT=PASS cases=55 mode=byte-identical\n'
