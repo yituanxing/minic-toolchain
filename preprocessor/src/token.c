@@ -47,6 +47,7 @@ typedef struct MiniPpArgList {
     MiniPpString *items;
     bool *leading_space;
     bool *leading_space_generated;
+    bool *leading_space_stringized;
     size_t *source_line;
     size_t count;
     size_t capacity;
@@ -61,6 +62,7 @@ static void minipp_arg_list_destroy(MiniPpArgList *list) {
     free(list->items);
     free(list->leading_space);
     free(list->leading_space_generated);
+    free(list->leading_space_stringized);
     free(list->source_line);
     memset(list, 0, sizeof(*list));
 }
@@ -181,6 +183,7 @@ static bool minipp_arg_list_append(MiniPpArgList *list,
         }
         bool *next_leading;
         bool *next_generated;
+        bool *next_stringized;
         size_t *next_source_line;
 
         next = realloc(list->items, capacity * sizeof(*next));
@@ -200,6 +203,12 @@ static bool minipp_arg_list_append(MiniPpArgList *list,
             return false;
         }
         list->leading_space_generated = next_generated;
+        next_stringized = realloc(list->leading_space_stringized,
+                                  capacity * sizeof(*next_stringized));
+        if (next_stringized == NULL) {
+            return false;
+        }
+        list->leading_space_stringized = next_stringized;
         next_source_line = realloc(list->source_line,
                                    capacity * sizeof(*next_source_line));
         if (next_source_line == NULL) {
@@ -230,9 +239,9 @@ static bool minipp_arg_list_append(MiniPpArgList *list,
             }
             ++leading;
         }
-        list->leading_space[list->count] =
-            leading != 0U && !stringize_padding;
+        list->leading_space[list->count] = leading != 0U;
         list->leading_space_generated[list->count] = generated;
+        list->leading_space_stringized[list->count] = stringize_padding;
         list->source_line[list->count] = token_line;
     }
     minipp_string_init(item);
