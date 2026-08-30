@@ -265,6 +265,17 @@ NR_WARN("fmt",
 EOF
 run_exact gnu-to-bare-variadic-source-spacing
 
+cat >"$work/once-lite-gnu-bare-forward-spacing.c" <<'EOF'
+#define OL_INDEX(_p, _fmt, ...) _p(_fmt, ##__VA_ARGS__)
+#define OL_PRINTK(fmt, ...) OL_INDEX(OL_FINAL, fmt, ##__VA_ARGS__)
+#define OL_ONCE_IF(condition, func, ...) func(__VA_ARGS__)
+#define OL_ONCE(func, ...) OL_ONCE_IF(1, func, ##__VA_ARGS__)
+#define OL_PRINTK_ONCE(fmt, ...) OL_ONCE(OL_PRINTK, fmt, ##__VA_ARGS__)
+#define OL_WARN_ONCE(fmt, ...) OL_PRINTK_ONCE("W" fmt, ##__VA_ARGS__)
+OL_WARN_ONCE("%s (%d)", current_comm, current_pid)
+EOF
+run_exact once-lite-gnu-bare-forward-spacing
+
 cat >"$work/gnu-double-forward-first-vararg.c" <<'EOF'
 #define GF_EMIT(_fmt) ((void)0)
 #define GF_INDEX(_func, _fmt, ...) ({ GF_EMIT(_fmt); _func(_fmt, ##__VA_ARGS__); })
@@ -610,4 +621,4 @@ OUT4(column_zero_four)
 EOF
 run_exact empty-leading-nested-macro
 
-printf 'MINIPP_A0_EXACT=PASS cases=65 mode=byte-identical\n'
+printf 'MINIPP_A0_EXACT=PASS cases=66 mode=byte-identical\n'
