@@ -1,3 +1,4 @@
+# validation-trigger: full-m-target-predefs
 name: MiniPP Linux Freeze 500
 
 on:
