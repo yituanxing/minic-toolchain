@@ -2010,6 +2010,7 @@ static bool minipp_expand_function_macro(MiniPpState *state,
                                           macro,
                                           &raw_args,
                                           &expanded_args,
+                                          preserve_argument_spacing,
                                           &substituted)) {
         minipp_arg_list_destroy(&raw_args);
         minipp_arg_list_destroy(&expanded_args);
