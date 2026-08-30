@@ -379,11 +379,13 @@ cat >"$work/nested-variadic-padding.c" <<'EOF'
 #define PRINT(fmt, ...) IDX(F, fmt, ##__VA_ARGS__)
 #define ONCE(fmt, ...) WRAP(PRINT, fmt, ##__VA_ARGS__)
 #define INFO(fmt, ...) ONCE("x" fmt, ##__VA_ARGS__)
+#define PASTE_ONLY(fmt, ...) PRINT(fmt, ##__VA_ARGS__)
 IDX(F, "a", STMT(1))
 PRINT("b", STMT(2))
 WRAP(PRINT, "c", STMT(3))
 ONCE("d", STMT(4))
 INFO("e", STMT(5))
+PASTE_ONLY("p", STMT(6))
 EOF
 run_exact nested-variadic-padding
 
@@ -427,4 +429,4 @@ OUT4(column_zero_four)
 EOF
 run_exact empty-leading-nested-macro
 
-printf 'MINIPP_A0_EXACT=PASS cases=45 mode=byte-identical\n'
+printf 'MINIPP_A0_EXACT=PASS cases=46 mode=byte-identical\n'
