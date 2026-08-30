@@ -2033,6 +2033,34 @@ static bool minipp_expand_function_macro(MiniPpState *state,
                 &replacement,
                 !minipp_output_has_line_indentation(out));
             if (top_level_empty_padding &&
+                getenv("MINIPP_DEBUG_EMPTY_PADDING") != NULL) {
+                size_t line_start = out->size;
+                size_t physical_padding = 0U;
+                size_t existing_markers = 0U;
+                size_t scan;
+
+                while (line_start != 0U &&
+                       out->data[line_start - 1U] != '\n') {
+                    --line_start;
+                }
+                for (scan = line_start; scan < out->size; ++scan) {
+                    char value = out->data[scan];
+                    if (value == ' ' || value == '\t' ||
+                        value == '\v' || value == '\f') {
+                        ++physical_padding;
+                    } else if (value == '\a') {
+                        ++existing_markers;
+                    }
+                }
+                fprintf(state->diagnostics,
+                        "MINIPP_DEBUG_EMPTY macro=%s depth=%zu padding=%zu markers=%zu line=%zu\n",
+                        macro->name,
+                        depth,
+                        physical_padding,
+                        existing_markers,
+                        source_line);
+            }
+            if (top_level_empty_padding &&
                 !minipp_string_append_char(out, '\a')) {
                 fprintf(state->diagnostics, "minic-cpp: out-of-memory\n");
                 ok = false;
