@@ -1861,14 +1861,11 @@ static bool minipp_expand_function_macro(MiniPpState *state,
         MiniPpString *expanded = &expanded_args.items[arg_index];
 
         minipp_string_init(expanded);
-        if (minipp_param_needs_prescan(macro, arg_index)) {
+        if (minipp_param_needs_prescan(macro, arg_index) &&
+            !(macro->variadic &&
+              arg_index + 1U == macro->param_count &&
+              minipp_variadic_padding_survives_gnu_forward(macro))) {
             size_t argument_source_line = raw_args.source_line[arg_index];
-
-            if (macro->variadic &&
-                arg_index + 1U == macro->param_count &&
-                minipp_variadic_padding_survives_gnu_forward(macro)) {
-                argument_source_line = source_line;
-            }
 
             if (!minipp_expand_text_recursive(state,
                                               raw_args.items[arg_index].data,
