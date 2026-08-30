@@ -528,6 +528,8 @@ static bool minipp_build_logical_args(MiniPpState *state,
             }
             logical_args->leading_space_generated[logical_args->count - 1U] =
                 raw_args->leading_space_generated[index];
+            logical_args->leading_space_stringized[logical_args->count - 1U] =
+                raw_args->leading_space_stringized[index];
         }
         return true;
     }
@@ -560,6 +562,8 @@ static bool minipp_build_logical_args(MiniPpState *state,
         }
         logical_args->leading_space_generated[logical_args->count - 1U] =
             raw_args->leading_space_generated[index];
+        logical_args->leading_space_stringized[logical_args->count - 1U] =
+            raw_args->leading_space_stringized[index];
     }
 
     minipp_string_init(&variadic);
@@ -572,7 +576,9 @@ static bool minipp_build_logical_args(MiniPpState *state,
                 char separator = ' ';
                 bool emit_separator = true;
 
-                if (preserve_argument_spacing &&
+                if (raw_args->leading_space_stringized[index]) {
+                    separator = '\f';
+                } else if (preserve_argument_spacing &&
                     minipp_arg_starts_expanding_macro(
                         state, &raw_args->items[index])) {
                     separator = '\v';
@@ -620,6 +626,8 @@ static bool minipp_build_logical_args(MiniPpState *state,
             (preserve_argument_spacing &&
              minipp_arg_starts_expanding_macro(
                  state, &raw_args->items[fixed_count]));
+        logical_args->leading_space_stringized[logical_args->count - 1U] =
+            raw_args->leading_space_stringized[fixed_count];
     }
     minipp_string_destroy(&variadic);
     return true;
