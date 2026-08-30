@@ -156,6 +156,7 @@ jobs:
             build/minipp-linux-ref500-work/first500-contract.jsonl
             build/minipp-linux-ref500-corpus/meta.json
             build/minipp-linux-ref500-corpus/sha256sums.txt
+            build/minipp-linux-ref500-corpus/gcc-stderr/**
           if-no-files-found: ignore
           retention-days: 3
 
