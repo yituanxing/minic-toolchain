@@ -59,90 +59,23 @@ jobs:
           set -e
           echo "MINIPP_LINUX_FREEZE500_PLAN_STATUS=$plan_status"
 
-          python3 - "$work/kbuild-plan.raw" "$src" "$out" "$work/linux-batch500.txt" "$work/linux-batch500.tsv" <<'PY'
-          from pathlib import Path, PurePosixPath
-          import re
+          python3 tests/preprocessor/freeze_linux_kbuild_manifest.py \
+            --plan "$work/kbuild-plan.raw" \
+            --src "$src" \
+            --out "$out" \
+            --limit 500 \
+            --tsv "$work/linux-batch500.tsv" \
+            --sources "$work/linux-batch500.txt" \
+            --contract "$work/linux-first500-contract.jsonl"
+
+          python3 - "$work/linux-batch500.tsv" <<'PY'
+          from pathlib import Path
           import sys
 
-          plan_path = Path(sys.argv[1])
-          src_root = Path(sys.argv[2]).resolve()
-          out_root = Path(sys.argv[3]).resolve()
-          manifest = Path(sys.argv[4])
-          table = Path(sys.argv[5])
-
-          object_pattern = re.compile(r"(?:^|\s)-o\s+([^\s;]+\.o)(?=\s|;|$)")
-          source_pattern = re.compile(r"(?:^|\s)([^\s;]+\.c)(?=\s|;|$)")
-          entries = []
-          seen = set()
-
-          def source_relative(raw_source, obj_rel):
-              raw = Path(raw_source.strip("'\""))
-              candidates = []
-              if raw.is_absolute():
-                  candidates.append(raw.resolve())
-              else:
-                  candidates.append((out_root / raw).resolve())
-                  candidates.append((src_root / raw).resolve())
-              fallback = src_root / (obj_rel[:-2] + ".c")
-              candidates.append(fallback.resolve())
-              for candidate in candidates:
-                  try:
-                      return PurePosixPath(candidate.relative_to(src_root).as_posix()).as_posix()
-                  except ValueError:
-                      pass
-              return None
-
-          for line in plan_path.read_text(errors="replace").splitlines():
-              padded = f" {line} "
-              if "riscv64-linux-gnu-" not in line or " -c " not in padded:
-                  continue
-              sources = source_pattern.findall(line)
-              objects = object_pattern.findall(line)
-              if not sources or not objects:
-                  continue
-              raw_obj = objects[-1].strip("'\"")
-              obj = Path(raw_obj)
-              if obj.is_absolute():
-                  try:
-                      rel_obj = obj.resolve().relative_to(out_root).as_posix()
-                  except ValueError:
-                      continue
-              else:
-                  rel_obj = PurePosixPath(obj.as_posix()).as_posix()
-              if rel_obj.startswith("./"):
-                  rel_obj = rel_obj[2:]
-              if rel_obj.startswith(("scripts/", "tools/")) or "/scripts/" in rel_obj:
-                  continue
-              if not rel_obj.endswith(".o") or rel_obj in seen:
-                  continue
-              rel_source = source_relative(sources[-1], rel_obj)
-              if rel_source is None:
-                  continue
-              seen.add(rel_obj)
-              entries.append((rel_obj, rel_source, sources[-1].strip("'\"")))
-
-          first = entries[:500]
-          if len(first) != 500:
-              raise SystemExit(f"MINIPP_LINUX_FREEZE500 expected=500 actual={len(first)} total={len(entries)}")
-
-          noncanonical = []
-          with manifest.open("w") as out:
-              for obj, source, _ in first:
-                  out.write(source + "\n")
-          with table.open("w") as out:
-              out.write("index\tobject\tsource\traw_source\n")
-              for index, (obj, source, raw_source) in enumerate(first):
-                  out.write(f"{index}\t{obj}\t{source}\t{raw_source}\n")
-                  canonical = obj[:-2] + ".c"
-                  if canonical != source:
-                      noncanonical.append((index, obj, source))
-
-          print(
-              f"MINIPP_LINUX_FREEZE500 total_c_tus={len(entries)} "
-              f"selected={len(first)} noncanonical={len(noncanonical)}"
-          )
-          for index, obj, source in noncanonical[:30]:
-              print(f"MINIPP_LINUX_FREEZE500_NONCANON index={index} object={obj} source={source}")
+          rows = [line for line in Path(sys.argv[1]).read_text().splitlines()[1:] if line.strip()]
+          if len(rows) != 500:
+              raise SystemExit(f"MINIPP_LINUX_FREEZE500 expected=500 actual={len(rows)}")
+          print("MINIPP_LINUX_FREEZE500_CONTRACT=PASS selected=500")
           PY
 
           test "$(grep -cve '^[[:space:]]*$' "$work/linux-batch500.txt")" -eq 500
@@ -156,5 +89,7 @@ jobs:
             build/minipp-linux-freeze500/linux-batch500.txt
             build/minipp-linux-freeze500/linux-batch500.tsv
             build/minipp-linux-freeze500/linux-batch500.sha256
+            build/minipp-linux-freeze500/linux-first500-contract.jsonl
+            build/minipp-linux-freeze500/kbuild-plan.raw
             build/minipp-linux-freeze500/kbuild-plan.stderr
           retention-days: 7
