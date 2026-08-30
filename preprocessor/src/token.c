@@ -15,21 +15,6 @@ static bool minipp_is_identifier_continue(char value) {
     return value == '_' || isalnum(ch) != 0;
 }
 
-static const MiniPpMacro *minipp_find_macro(const MiniPpState *state,
-                                            const char *name,
-                                            size_t name_size) {
-    size_t index;
-
-    for (index = 0U; index < state->macro_count; ++index) {
-        const MiniPpMacro *macro = &state->macros[index];
-        if (strlen(macro->name) == name_size &&
-            memcmp(macro->name, name, name_size) == 0) {
-            return macro;
-        }
-    }
-    return NULL;
-}
-
 static bool minipp_macro_is_disabled(const char *name,
                                      const char *const *disabled,
                                      size_t disabled_count) {
@@ -402,7 +387,7 @@ static bool minipp_arg_starts_expanding_macro(
         return true;
     }
 
-    macro = minipp_find_macro(state, arg->data + start, length);
+    macro = minipp_find_macro_n(state, arg->data + start, length);
     if (macro == NULL) {
         return false;
     }
@@ -440,7 +425,7 @@ static bool minipp_arg_starts_function_like_macro(
         ++index;
     }
     length = index - start;
-    macro = minipp_find_macro(state, arg->data + start, length);
+    macro = minipp_find_macro_n(state, arg->data + start, length);
     if (macro == NULL || !macro->function_like) {
         return false;
     }
@@ -1086,7 +1071,7 @@ static bool minipp_param_is_direct_bare_variadic_argument(
         return false;
     }
 
-    callee = minipp_find_macro(state,
+    callee = minipp_find_macro_n(state,
                                owner->replacement + token_start,
                                token_end - token_start);
     if (callee == NULL ||
@@ -1802,7 +1787,7 @@ static const MiniPpMacro *minipp_find_trailing_function_macro(
 
     {
         const MiniPpMacro *macro =
-            minipp_find_macro(state, replacement->data + start, end - start);
+            minipp_find_macro_n(state, replacement->data + start, end - start);
         if (macro == NULL || !macro->function_like) {
             return NULL;
         }
@@ -1926,7 +1911,7 @@ static bool minipp_expand_text_recursive(MiniPpState *state,
                 }
                 continue;
             }
-            macro = minipp_find_macro(state, text + start, length);
+            macro = minipp_find_macro_n(state, text + start, length);
             if (macro != NULL &&
                 !minipp_macro_is_disabled(macro->name,
                                           disabled,
