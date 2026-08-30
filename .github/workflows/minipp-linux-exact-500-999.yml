@@ -12,7 +12,7 @@ on:
       - 'preprocessor/**'
       - 'tools/minic-cpp/**'
       - 'tests/preprocessor/**'
-      - '.github/workflows/minipp-linux-exact-500-999-999.yml'
+      - '.github/workflows/minipp-linux-exact-500-999.yml'
       - 'Makefile'
   workflow_dispatch:
 
@@ -115,6 +115,7 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/minipp-linux-ref500b-work"
           corpus="$GITHUB_WORKSPACE/build/minipp-linux-ref500b-corpus"
           test -s "$corpus/meta.json"
           test -s "$corpus/contract.jsonl"
