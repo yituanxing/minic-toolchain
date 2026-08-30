@@ -1176,6 +1176,18 @@ static bool minipp_append_paste_operand_arg(MiniPpString *out,
     return true;
 }
 
+static bool minipp_variadic_pack_has_generated_internal_separator(
+    const MiniPpString *arg) {
+    size_t index;
+
+    for (index = 1U; index < arg->size; ++index) {
+        if (arg->data[index] == '\v' && arg->data[index - 1U] == ',') {
+            return true;
+        }
+    }
+    return false;
+}
+
 static bool minipp_first_variadic_arg_has_stringize_origin(
     const MiniPpString *arg) {
     size_t index = 0U;
@@ -1536,13 +1548,22 @@ static bool minipp_substitute_function_macro(MiniPpState *state,
                         } else if (
                             raw_args->leading_space_generated[param_index]) {
                             size_t padding = substituted->size;
+                            bool forwarded_multiarg_pack =
+                                minipp_variadic_pack_has_generated_internal_separator(
+                                    &raw_args->items[param_index]);
+
                             while (padding != 0U) {
                                 char previous = substituted->data[padding - 1U];
                                 if (previous != ' ' && previous != '\t' &&
                                     previous != '\v' && previous != '\f') {
                                     break;
                                 }
-                                substituted->data[padding - 1U] = '\v';
+                                if (forwarded_multiarg_pack) {
+                                    --substituted->size;
+                                    substituted->data[substituted->size] = '\0';
+                                } else {
+                                    substituted->data[padding - 1U] = '\v';
+                                }
                                 --padding;
                             }
                         }
