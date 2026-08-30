@@ -349,6 +349,14 @@ int chain_call = CHAIN(5);
 EOF
 run_exact object-to-function-rescan
 
+cat >"$work/object-alias-reentry-arg.c" <<'EOF'
+#define OA_ALIAS OA_IMPL
+#define OA_IMPL(n, d) (((n) + (d) - 1) / (d))
+#define OA_INNER OA_ALIAS(8, 2)
+int object_alias_reentry_arg = OA_ALIAS(20, OA_INNER);
+EOF
+run_exact object-alias-reentry-arg
+
 cat >"$work/computed-include.h" <<'EOF'
 #define COMPUTED_INCLUDE_VALUE 53
 EOF
@@ -550,4 +558,4 @@ OUT4(column_zero_four)
 EOF
 run_exact empty-leading-nested-macro
 
-printf 'MINIPP_A0_EXACT=PASS cases=57 mode=byte-identical\n'
+printf 'MINIPP_A0_EXACT=PASS cases=58 mode=byte-identical\n'
