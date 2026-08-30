@@ -132,6 +132,16 @@ int zero_value = ZERO();
 EOF
 run_exact function-zero
 
+cat >"$work/multiple-empty-annotation-padding.c" <<'EOF'
+#define EMPTY_ANNOTATION(x)
+static int annotated_function(void)
+	EMPTY_ANNOTATION(lock_a) EMPTY_ANNOTATION(lock_b)
+{
+	return 0;
+}
+EOF
+run_exact multiple-empty-annotation-padding
+
 cat >"$work/empty-macro-padding.c" <<'EOF'
 #define EMPTY_ATTR(x)
 int empty_macro_padding(void)
@@ -600,4 +610,4 @@ OUT4(column_zero_four)
 EOF
 run_exact empty-leading-nested-macro
 
-printf 'MINIPP_A0_EXACT=PASS cases=64 mode=byte-identical\n'
+printf 'MINIPP_A0_EXACT=PASS cases=65 mode=byte-identical\n'
