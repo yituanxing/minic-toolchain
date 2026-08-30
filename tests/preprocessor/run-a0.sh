@@ -383,6 +383,12 @@ FAT_ERR(s, "Odd directory size");
 EOF
 run_exact gnu-named-empty-comma-padding
 
+cat >"$work/gnu-comma-paste-repeated-counter-rescan.c" <<'EOF'
+#define COUNTER_TWICE(fmt, arg...) A(fmt, ##arg); B(fmt, ##arg)
+COUNTER_TWICE("x", __COUNTER__, __COUNTER__)
+EOF
+run_exact gnu-comma-paste-repeated-counter-rescan
+
 cat >"$work/gnu-empty-variadic.c" <<'EOF'
 #define STATIC_ASSERT(expr, ...) INNER_ASSERT(expr, ##__VA_ARGS__, #expr)
 #define INNER_ASSERT(expr, msg, ...) _Static_assert(expr, msg)
@@ -571,4 +577,4 @@ OUT4(column_zero_four)
 EOF
 run_exact empty-leading-nested-macro
 
-printf 'MINIPP_A0_EXACT=PASS cases=60 mode=byte-identical\n'
+printf 'MINIPP_A0_EXACT=PASS cases=61 mode=byte-identical\n'
