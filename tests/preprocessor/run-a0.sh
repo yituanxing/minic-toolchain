@@ -229,6 +229,15 @@ VP_SEQ(m, "fmt", SPLIT_ARG(value))
 EOF
 run_exact variadic-prescan-boundary-padding
 
+cat >"$work/fixed-parameter-boundary-padding.c" <<'EOF'
+#define FP_OUT(fmt, ...) FINAL(fmt, ##__VA_ARGS__)
+#define FP_CONT(fmt, ...) FP_OUT(fmt, ##__VA_ARGS__)
+#define FP_SEQ(m, args...) do { if (m) direct(m, args); else FP_CONT(args); } while (0)
+#define FP_BRIDGE(s, v) FP_SEQ(m, "fmt", s, v)
+FP_BRIDGE("name", value)
+EOF
+run_exact fixed-parameter-boundary-padding
+
 cat >"$work/kconfig-style.c" <<'EOF'
 #define __ARG_PLACEHOLDER_1 0,
 #define __take_second_arg(__ignored, val, ...) val
@@ -497,4 +506,4 @@ OUT4(column_zero_four)
 EOF
 run_exact empty-leading-nested-macro
 
-printf 'MINIPP_A0_EXACT=PASS cases=52 mode=byte-identical\n'
+printf 'MINIPP_A0_EXACT=PASS cases=53 mode=byte-identical\n'
