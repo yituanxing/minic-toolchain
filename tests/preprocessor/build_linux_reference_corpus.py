@@ -230,6 +230,17 @@ def main():
             shutil.copy2(sibling_header, header_destination)
             frozen_generated.add(header_rel.as_posix())
 
+    for generated_header in out.rglob("*.h"):
+        if not generated_header.is_file():
+            continue
+        rel = generated_header.relative_to(out)
+        if (src / rel).is_file():
+            continue
+        destination = generated_root / rel
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(generated_header, destination)
+        frozen_generated.add(rel.as_posix())
+
     for row in rows:
         pp_args = row["pp_args"]
         index = 0
