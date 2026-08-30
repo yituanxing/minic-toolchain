@@ -346,99 +346,6 @@ static const MiniPpMacro *minipp_find_trailing_function_macro(
     const MiniPpString *replacement,
     size_t *token_start);
 
-static bool minipp_expand_pragma_operator(MiniPpState *state,
-                                          const char *text,
-                                          size_t *index,
-                                          MiniPpString *out,
-                                          bool *expanded) {
-    size_t cursor = *index;
-    size_t content_start;
-
-    *expanded = false;
-    while (text[cursor] == ' ' || text[cursor] == '\t' ||
-           text[cursor] == '\v' || text[cursor] == '\f' ||
-           text[cursor] == '\a' || text[cursor] == '\b') {
-        ++cursor;
-    }
-    if (text[cursor] != '(') {
-        return true;
-    }
-    ++cursor;
-    while (text[cursor] == ' ' || text[cursor] == '\t' ||
-           text[cursor] == '\v' || text[cursor] == '\f' ||
-           text[cursor] == '\a' || text[cursor] == '\b') {
-        ++cursor;
-    }
-    if (text[cursor] != '"') {
-        return true;
-    }
-    ++cursor;
-    content_start = cursor;
-
-    /*
-     * C's _Pragma destringizes the string literal: escaped quotes and
-     * backslashes lose one level of quoting before becoming a #pragma line.
-     */
-    while (text[cursor] != '\0' && text[cursor] != '"') {
-        if (text[cursor] == '\\' && text[cursor + 1U] != '\0') {
-            cursor += 2U;
-            continue;
-        }
-        ++cursor;
-    }
-    if (text[cursor] != '"') {
-        return true;
-    }
-
-    {
-        size_t close_quote = cursor;
-        size_t scan = content_start;
-
-        ++cursor;
-        while (text[cursor] == ' ' || text[cursor] == '\t' ||
-               text[cursor] == '\v' || text[cursor] == '\f' ||
-               text[cursor] == '\a' || text[cursor] == '\b') {
-            ++cursor;
-        }
-        if (text[cursor] != ')') {
-            return true;
-        }
-
-        while (out->size != 0U) {
-            char previous = out->data[out->size - 1U];
-            if (previous != ' ' && previous != '\t' &&
-                previous != '\v' && previous != '\f') {
-                break;
-            }
-            --out->size;
-            out->data[out->size] = '\0';
-        }
-        if (!minipp_string_append_char(out, '\n') ||
-            !minipp_string_append_n(out, "#pragma ", 8U)) {
-            fprintf(state->diagnostics, "minic-cpp: out-of-memory\n");
-            return false;
-        }
-        while (scan < close_quote) {
-            char value = text[scan++];
-            if (value == '\\' && scan < close_quote &&
-                (text[scan] == '\\' || text[scan] == '"')) {
-                value = text[scan++];
-            }
-            if (!minipp_string_append_char(out, value)) {
-                fprintf(state->diagnostics, "minic-cpp: out-of-memory\n");
-                return false;
-            }
-        }
-        if (!minipp_string_append_char(out, '\n')) {
-            fprintf(state->diagnostics, "minic-cpp: out-of-memory\n");
-            return false;
-        }
-        *index = cursor + 1U;
-        *expanded = true;
-        return true;
-    }
-}
-
 static bool minipp_expand_text_recursive(MiniPpState *state,
                                          const char *text,
                                          MiniPpString *out,
@@ -447,6 +354,179 @@ static bool minipp_expand_text_recursive(MiniPpState *state,
                                          size_t depth,
                                          size_t source_line,
                                          bool preserve_argument_spacing);
+
+static bool minipp_is_pragma_padding(char value) {
+    return value == ' ' || value == '\t' || value == '\v' ||
+           value == '\f' || value == '\a' || value == '\b';
+}
+
+static bool minipp_append_pragma_literal(MiniPpState *state,
+                                         const char *literal,
+                                         MiniPpString *out,
+                                         bool *recognized) {
+    size_t cursor = 0U;
+    size_t content_start;
+    size_t close_quote;
+    size_t scan;
+
+    *recognized = false;
+    while (minipp_is_pragma_padding(literal[cursor])) {
+        ++cursor;
+    }
+    if (literal[cursor] != '"') {
+        return true;
+    }
+    ++cursor;
+    content_start = cursor;
+    while (literal[cursor] != '\0' && literal[cursor] != '"') {
+        if (literal[cursor] == '\\' && literal[cursor + 1U] != '\0') {
+            cursor += 2U;
+            continue;
+        }
+        ++cursor;
+    }
+    if (literal[cursor] != '"') {
+        return true;
+    }
+    close_quote = cursor++;
+    while (minipp_is_pragma_padding(literal[cursor])) {
+        ++cursor;
+    }
+    if (literal[cursor] != '\0') {
+        return true;
+    }
+
+    while (out->size != 0U) {
+        char previous = out->data[out->size - 1U];
+        if (previous != ' ' && previous != '\t' &&
+            previous != '\v' && previous != '\f') {
+            break;
+        }
+        --out->size;
+        out->data[out->size] = '\0';
+    }
+    if (!minipp_string_append_char(out, '\n') ||
+        !minipp_string_append_n(out, "#pragma ", 8U)) {
+        fprintf(state->diagnostics, "minic-cpp: out-of-memory\n");
+        return false;
+    }
+
+    scan = content_start;
+    while (scan < close_quote) {
+        char value = literal[scan++];
+        if (value == '\\' && scan < close_quote &&
+            (literal[scan] == '\\' || literal[scan] == '"')) {
+            value = literal[scan++];
+        }
+        if (!minipp_string_append_char(out, value)) {
+            fprintf(state->diagnostics, "minic-cpp: out-of-memory\n");
+            return false;
+        }
+    }
+    if (!minipp_string_append_char(out, '\n')) {
+        fprintf(state->diagnostics, "minic-cpp: out-of-memory\n");
+        return false;
+    }
+    *recognized = true;
+    return true;
+}
+
+static bool minipp_expand_pragma_operator(MiniPpState *state,
+                                          const char *text,
+                                          size_t *index,
+                                          MiniPpString *out,
+                                          const char *const *disabled,
+                                          size_t disabled_count,
+                                          size_t depth,
+                                          size_t source_line,
+                                          bool *expanded) {
+    size_t cursor = *index;
+    size_t operand_start;
+    size_t paren_depth = 1U;
+    MiniPpString operand;
+    MiniPpString expanded_operand;
+    bool recognized = false;
+    bool ok;
+
+    *expanded = false;
+    while (minipp_is_pragma_padding(text[cursor])) {
+        ++cursor;
+    }
+    if (text[cursor] != '(') {
+        return true;
+    }
+    operand_start = ++cursor;
+
+    while (text[cursor] != '\0') {
+        if (text[cursor] == '"' || text[cursor] == '\'') {
+            char quote = text[cursor++];
+            while (text[cursor] != '\0') {
+                char value = text[cursor++];
+                if (value == '\\' && text[cursor] != '\0') {
+                    ++cursor;
+                    continue;
+                }
+                if (value == quote) {
+                    break;
+                }
+            }
+            continue;
+        }
+        if (text[cursor] == '(') {
+            ++paren_depth;
+        } else if (text[cursor] == ')') {
+            --paren_depth;
+            if (paren_depth == 0U) {
+                break;
+            }
+        }
+        ++cursor;
+    }
+    if (paren_depth != 0U) {
+        return true;
+    }
+
+    minipp_string_init(&operand);
+    minipp_string_init(&expanded_operand);
+    if (!minipp_string_append_n(&operand,
+                                text + operand_start,
+                                cursor - operand_start) ||
+        !minipp_string_append_char(&operand, '\0')) {
+        fprintf(state->diagnostics, "minic-cpp: out-of-memory\n");
+        minipp_string_destroy(&operand);
+        minipp_string_destroy(&expanded_operand);
+        return false;
+    }
+    --operand.size;
+
+    ok = minipp_expand_text_recursive(state,
+                                      operand.data,
+                                      &expanded_operand,
+                                      disabled,
+                                      disabled_count,
+                                      depth + 1U,
+                                      source_line,
+                                      false);
+    if (ok) {
+        ok = minipp_append_pragma_literal(state,
+                                          expanded_operand.data == NULL ? "" :
+                                                                          expanded_operand.data,
+                                          out,
+                                          &recognized);
+    }
+    minipp_string_destroy(&expanded_operand);
+    minipp_string_destroy(&operand);
+    if (!ok) {
+        return false;
+    }
+    if (!recognized) {
+        return true;
+    }
+
+    *index = cursor + 1U;
+    *expanded = true;
+    return true;
+}
 
 static bool minipp_arg_starts_expanding_macro(
     const MiniPpState *state,
@@ -2004,6 +2084,10 @@ static bool minipp_expand_text_recursive(MiniPpState *state,
                                                    text,
                                                    &index,
                                                    out,
+                                                   disabled,
+                                                   disabled_count,
+                                                   depth,
+                                                   current_line,
                                                    &pragma_expanded)) {
                     return false;
                 }
