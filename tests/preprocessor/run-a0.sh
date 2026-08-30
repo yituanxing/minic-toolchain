@@ -202,9 +202,12 @@ cat >"$work/stringize-forward-padding.c" <<'EOF'
 #define VPASS(fmt, ...) VSINK(fmt, ##__VA_ARGS__)
 #define VSINK(fmt, ...) FINAL(fmt, ##__VA_ARGS__)
 #define VFORWARD(x) VPASS("k", #x)
+#define NAMED_PACK(args...) VPASS(args)
+#define NAMED_FORWARD(x) NAMED_PACK("k", #x)
 DIRECT(IRQ_LEVEL)
 FORWARD(IRQ_LEVEL)
 VFORWARD(IRQ_LEVEL)
+NAMED_FORWARD(IRQ_LEVEL)
 EOF
 run_exact stringize-forward-padding
 
