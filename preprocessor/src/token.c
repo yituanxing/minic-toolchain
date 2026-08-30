@@ -1154,6 +1154,25 @@ static bool minipp_macro_replacement_has_self_identifier(
     return false;
 }
 
+static bool minipp_append_paste_operand_arg(MiniPpString *out,
+                                             const MiniPpString *arg) {
+    size_t index;
+
+    for (index = 0U; index < arg->size; ++index) {
+        /*
+         * ## creates a new preprocessing token. The source token's hideset
+         * does not become a generic suppression flag on the pasted token.
+         */
+        if (arg->data[index] == '\x0e') {
+            continue;
+        }
+        if (!minipp_string_append_char(out, arg->data[index])) {
+            return false;
+        }
+    }
+    return true;
+}
+
 static bool minipp_first_variadic_arg_has_stringize_origin(
     const MiniPpString *arg) {
     size_t index = 0U;
@@ -1635,9 +1654,14 @@ static bool minipp_substitute_function_macro(MiniPpState *state,
                     }
                 }
 
-                if (!minipp_string_append_n(substituted,
-                                            arg->data == NULL ? "" : arg->data,
-                                            arg->size)) {
+                if (paste_operand) {
+                    if (!minipp_append_paste_operand_arg(substituted, arg)) {
+                        goto oom;
+                    }
+                } else if (!minipp_string_append_n(
+                               substituted,
+                               arg->data == NULL ? "" : arg->data,
+                               arg->size)) {
                     goto oom;
                 }
                 if (!paste_operand &&
