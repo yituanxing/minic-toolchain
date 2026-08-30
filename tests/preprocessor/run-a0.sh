@@ -350,7 +350,7 @@ EOF
 run_exact object-to-function-rescan
 
 cat >"$work/function-macro-cross-line-invocation.c" <<'EOF'
-#define CROSS_LINE(name, value) { .name = name, .value = value }
+#define CROSS_LINE(n, v) { .label = n, .number = v }
 CROSS_LINE
     ("alpha", 7)
 EOF
