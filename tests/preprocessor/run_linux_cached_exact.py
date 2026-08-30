@@ -7,6 +7,7 @@ import hashlib
 import json
 import subprocess
 import time
+import shutil
 
 
 def load_contract(path: Path):
@@ -49,6 +50,7 @@ def main():
     parser.add_argument("--indices")
     parser.add_argument("--jobs", type=int, default=8)
     parser.add_argument("--label", default="product")
+    parser.add_argument("--logical-root", default="/tmp/minipp-linux-first500")
     args = parser.parse_args()
 
     contract_path = Path(args.contract).resolve()
@@ -57,6 +59,13 @@ def main():
     out = Path(args.out).resolve()
     minipp = Path(args.minipp).resolve()
     work = Path(args.work).resolve()
+    logical_root = Path(args.logical_root)
+    shutil.rmtree(logical_root, ignore_errors=True)
+    logical_root.mkdir(parents=True, exist_ok=True)
+    logical_src = logical_root / "src"
+    logical_out = logical_root / "out"
+    logical_src.symlink_to(src, target_is_directory=True)
+    logical_out.symlink_to(out, target_is_directory=True)
 
     meta = json.loads((corpus / "meta.json").read_text())
     contract_sha = hashlib.sha256(contract_path.read_bytes()).hexdigest()
@@ -86,12 +95,12 @@ def main():
 
     def run_one(row):
         index = int(row["index"])
-        source = src / row["source"]
+        source = logical_src / row["source"]
         ref = corpus / "refs" / f"{index:04d}.gcc.i"
         predef = corpus / "predefines" / f"{context_id(row['predef_args'])}.h"
         mini = mini_root / f"{index:04d}.mini.i"
         err = stderr_root / f"{index:04d}.stderr"
-        pp_args = [expand_arg(value, src, out) for value in row["pp_args"]]
+        pp_args = [expand_arg(value, logical_src, logical_out) for value in row["pp_args"]]
         command = [
             str(minipp),
             "-E",
@@ -109,7 +118,7 @@ def main():
         started = time.monotonic()
         proc = subprocess.run(
             command,
-            cwd=out,
+            cwd=logical_out,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.PIPE,
             text=True,
