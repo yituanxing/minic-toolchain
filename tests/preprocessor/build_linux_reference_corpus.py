@@ -57,6 +57,7 @@ def main():
     refs = corpus / "refs"
     predefs = corpus / "predefines"
     stderr_root = corpus / "gcc-stderr"
+    generated_root = corpus / "generated-out"
 
     rows = load_contract(contract)
     if not rows:
@@ -66,6 +67,7 @@ def main():
     refs.mkdir(parents=True)
     predefs.mkdir(parents=True)
     stderr_root.mkdir(parents=True)
+    generated_root.mkdir(parents=True)
 
     repo_root = Path(__file__).resolve().parents[2]
     predef_script = repo_root / "tests/preprocessor/build_reference_predefines.sh"
@@ -196,6 +198,26 @@ def main():
             f"MINIPP_REFERENCE_CORPUS failed={len(failures)} selected={len(rows)}"
         )
 
+    frozen_generated = set()
+    for row in rows:
+        pp_args = row["pp_args"]
+        index = 0
+        while index < len(pp_args):
+            if pp_args[index] == "-include" and index + 1 < len(pp_args):
+                raw_include = pp_args[index + 1]
+                expanded_include = expand_arg(raw_include, src, out)
+                include_path = Path(expanded_include)
+                if not include_path.is_absolute():
+                    candidate = out / include_path
+                    if candidate.is_file():
+                        destination = generated_root / include_path
+                        destination.parent.mkdir(parents=True, exist_ok=True)
+                        shutil.copy2(candidate, destination)
+                        frozen_generated.add(include_path.as_posix())
+                index += 2
+                continue
+            index += 1
+
     shutil.copy2(contract, corpus / "contract.jsonl")
     gcc_version = subprocess.check_output(
         [args.gcc, "-dumpfullversion"], text=True
@@ -224,6 +246,7 @@ def main():
         "total_reference_bytes": total_bytes,
         "build_seconds": time.monotonic() - started,
         "logical_root": str(logical_root),
+        "frozen_generated_includes": sorted(frozen_generated),
     }
     (corpus / "meta.json").write_text(
         json.dumps(meta, indent=2, sort_keys=True) + "\n"
@@ -234,6 +257,7 @@ def main():
         f"selected={meta['selected']} predef_contexts={meta['predef_contexts']} "
         f"bytes={total_bytes} seconds={meta['build_seconds']:.3f} "
         f"gcc={gcc_version} machine={gcc_machine} "
+        f"generated_includes={len(frozen_generated)} "
         f"contract_sha256={meta['contract_sha256']}"
     )
 
