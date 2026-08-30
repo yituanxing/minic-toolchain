@@ -204,6 +204,7 @@ static bool minipp_arg_list_append(MiniPpArgList *list,
         size_t leading = 0U;
         size_t token_line = source_line;
         bool generated = false;
+        bool stringize_padding = false;
         while (leading < size &&
                isspace((unsigned char)text[leading]) != 0) {
             if (text[leading] == '\n' ||
@@ -214,9 +215,13 @@ static bool minipp_arg_list_append(MiniPpArgList *list,
             if (text[leading] == '\v') {
                 generated = true;
             }
+            if (text[leading] == '\f') {
+                stringize_padding = true;
+            }
             ++leading;
         }
-        list->leading_space[list->count] = leading != 0U;
+        list->leading_space[list->count] =
+            leading != 0U && !stringize_padding;
         list->leading_space_generated[list->count] = generated;
         list->source_line[list->count] = token_line;
     }
@@ -1011,6 +1016,18 @@ static bool minipp_substitute_function_macro(MiniPpState *state,
                             macro->name);
                     minipp_string_destroy(substituted);
                     return false;
+                }
+                {
+                    size_t padding = substituted->size;
+                    while (padding != 0U) {
+                        char previous = substituted->data[padding - 1U];
+                        if (previous != ' ' && previous != '\t' &&
+                            previous != '\v' && previous != '\f') {
+                            break;
+                        }
+                        substituted->data[padding - 1U] = '\f';
+                        --padding;
+                    }
                 }
                 if (!minipp_append_stringized_arg(substituted,
                                                   &raw_args->items[param_index])) {
