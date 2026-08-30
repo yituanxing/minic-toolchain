@@ -780,12 +780,9 @@ static bool minipp_build_logical_args(MiniPpState *state,
                         state, &raw_args->items[index])) {
                     separator = '\v';
                 } else if (!preserve_argument_spacing &&
-                           raw_args->leading_space_generated[index]) {
-                    if (minipp_variadic_padding_survives_gnu_forward(macro)) {
-                        separator = '\v';
-                    } else {
-                        emit_separator = false;
-                    }
+                           raw_args->leading_space_generated[index] &&
+                           minipp_variadic_padding_survives_gnu_forward(macro)) {
+                    separator = '\v';
                 }
 
                 if (emit_separator &&
