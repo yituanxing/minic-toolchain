@@ -1359,41 +1359,6 @@ static bool minipp_append_paste_operand_arg(MiniPpString *out,
     return true;
 }
 
-static bool minipp_variadic_pack_has_multiple_args(
-    const MiniPpString *arg) {
-    size_t index = 0U;
-    size_t paren_depth = 0U;
-
-    while (index < arg->size) {
-        char value = arg->data[index];
-
-        if (value == '"' || value == '\'') {
-            char quote = value;
-            ++index;
-            while (index < arg->size) {
-                value = arg->data[index++];
-                if (value == '\\' && index < arg->size) {
-                    ++index;
-                    continue;
-                }
-                if (value == quote) {
-                    break;
-                }
-            }
-            continue;
-        }
-        if (value == '(') {
-            ++paren_depth;
-        } else if (value == ')' && paren_depth != 0U) {
-            --paren_depth;
-        } else if (value == ',' && paren_depth == 0U) {
-            return true;
-        }
-        ++index;
-    }
-    return false;
-}
-
 static bool minipp_first_variadic_arg_has_stringize_origin(
     const MiniPpString *arg) {
     size_t index = 0U;
@@ -1755,10 +1720,8 @@ static bool minipp_substitute_function_macro(MiniPpState *state,
                         } else if (
                             raw_args->leading_space_generated[param_index]) {
                             size_t padding = substituted->size;
-                            bool forwarded_multiarg_pack =
-                                !preserve_argument_spacing &&
-                                minipp_variadic_pack_has_multiple_args(
-                                    &raw_args->items[param_index]);
+                            bool consume_generated_head =
+                                !preserve_argument_spacing;
 
                             while (padding != 0U) {
                                 char previous = substituted->data[padding - 1U];
@@ -1766,7 +1729,7 @@ static bool minipp_substitute_function_macro(MiniPpState *state,
                                     previous != '\v' && previous != '\f') {
                                     break;
                                 }
-                                if (forwarded_multiarg_pack) {
+                                if (consume_generated_head) {
                                     --substituted->size;
                                     substituted->data[substituted->size] = '\0';
                                 } else {
