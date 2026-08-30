@@ -87,11 +87,16 @@ jobs:
           manifest="$work/failure-input.txt"
 
           cat >"$manifest" <<'EOF'
-          kernel/cgroup/rstat.c
           kernel/cgroup/cgroup.c
-          fs/ext4/super.c
+          kernel/cgroup/rstat.c
           mm/oom_kill.c
-          mm/interval_tree.c
+          mm/vmscan.c
+          mm/slab_common.c
+          mm/mmap.c
+          mm/mremap.c
+          fs/proc/base.c
+          fs/ext4/super.c
+          fs/hugetlbfs/inode.c
           EOF
           sed -i 's/^[[:space:]]*//' "$manifest"
 
