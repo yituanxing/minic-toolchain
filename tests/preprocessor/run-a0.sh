@@ -315,9 +315,16 @@ run_exact pragma
 
 cat >"$work/pragma-operator.c" <<'EOF'
 #define DO_PRAGMA(x) _Pragma(#x)
+#define DIAG_STR1(x) #x
+#define DIAG_STR(x) DIAG_STR1(x)
+#define DIAG(x) _Pragma(DIAG_STR(GCC diagnostic x))
+#define DIAG_PUSH() DIAG(push)
+#define DIAG_POP() DIAG(pop)
 DO_PRAGMA(GCC diagnostic push);
 DO_PRAGMA(GCC diagnostic ignored "-Wmissing-prototypes");
+DIAG_PUSH();
 int pragma_operator_value;
+DIAG_POP();
 DO_PRAGMA(GCC diagnostic pop);
 EOF
 run_exact pragma-operator
