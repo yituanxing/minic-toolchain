@@ -1113,6 +1113,47 @@ static bool minipp_needs_post_arg_separator(const MiniPpString *arg,
     return next == '+' || next == '-' || next == '.';
 }
 
+static bool minipp_macro_replacement_has_self_identifier(
+    const MiniPpMacro *macro) {
+    size_t index = 0U;
+
+    while (macro->replacement[index] != '\0') {
+        if (macro->replacement[index] == '"' ||
+            macro->replacement[index] == '\'') {
+            char quote = macro->replacement[index++];
+            while (macro->replacement[index] != '\0') {
+                char value = macro->replacement[index++];
+                if (value == '\\' && macro->replacement[index] != '\0') {
+                    ++index;
+                    continue;
+                }
+                if (value == quote) {
+                    break;
+                }
+            }
+            continue;
+        }
+        if (minipp_is_identifier_start(macro->replacement[index])) {
+            size_t start = index++;
+            size_t length;
+
+            while (minipp_is_identifier_continue(macro->replacement[index])) {
+                ++index;
+            }
+            length = index - start;
+            if (length == macro->name_size &&
+                memcmp(macro->replacement + start,
+                       macro->name,
+                       length) == 0) {
+                return true;
+            }
+            continue;
+        }
+        ++index;
+    }
+    return false;
+}
+
 static bool minipp_first_variadic_arg_has_stringize_origin(
     const MiniPpString *arg) {
     size_t index = 0U;
@@ -2335,6 +2376,7 @@ static bool minipp_expand_text_recursive(MiniPpState *state,
                 minipp_macro_is_disabled(macro->name,
                                          disabled,
                                          disabled_count) &&
+                minipp_macro_replacement_has_self_identifier(macro) &&
                 !minipp_string_append_char(out, '\x0e')) {
                 fprintf(state->diagnostics, "minic-cpp: out-of-memory\n");
                 return false;
