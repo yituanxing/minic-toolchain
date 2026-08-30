@@ -397,6 +397,14 @@ PASTE_ONLY("p", STMT(6))
 EOF
 run_exact nested-variadic-padding
 
+cat >"$work/named-variadic-prescan-spacing.c" <<'EOF'
+#define NAMED_OBJ CUR()
+#define NAMED_FORWARD(format...) NAMED_TARGET(format)
+#define NAMED_TARGET(...) F(__VA_ARGS__)
+NAMED_FORWARD("x", NAMED_OBJ, NAMED_OBJ)
+EOF
+run_exact named-variadic-prescan-spacing
+
 cat >"$work/pp-number-padding.c" <<'EOF'
 #define MINUS_ONE(x) x-1
 #define PLUS_ONE(x) x+1
@@ -437,4 +445,4 @@ OUT4(column_zero_four)
 EOF
 run_exact empty-leading-nested-macro
 
-printf 'MINIPP_A0_EXACT=PASS cases=47 mode=byte-identical\n'
+printf 'MINIPP_A0_EXACT=PASS cases=48 mode=byte-identical\n'
