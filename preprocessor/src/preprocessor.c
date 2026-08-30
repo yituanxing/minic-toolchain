@@ -18,6 +18,60 @@ static char *minipp_duplicate_range(const char *text, size_t size) {
     return copy;
 }
 
+static char *minipp_normalize_replacement_whitespace(const char *text,
+                                                      size_t size) {
+    char *normalized = malloc(size + 1U);
+    size_t input = 0U;
+    size_t output = 0U;
+    bool pending_space = false;
+
+    if (normalized == NULL) {
+        return NULL;
+    }
+
+    while (input < size) {
+        char value = text[input];
+
+        if (value == '"' || value == '\'') {
+            char quote = value;
+
+            if (pending_space && output != 0U) {
+                normalized[output++] = ' ';
+                pending_space = false;
+            }
+            normalized[output++] = text[input++];
+            while (input < size) {
+                value = text[input++];
+                normalized[output++] = value;
+                if (value == '\\' && input < size) {
+                    normalized[output++] = text[input++];
+                    continue;
+                }
+                if (value == quote) {
+                    break;
+                }
+            }
+            continue;
+        }
+
+        if (isspace((unsigned char)value) != 0) {
+            pending_space = output != 0U;
+            ++input;
+            continue;
+        }
+
+        if (pending_space) {
+            normalized[output++] = ' ';
+            pending_space = false;
+        }
+        normalized[output++] = value;
+        ++input;
+    }
+
+    normalized[output] = '\0';
+    return normalized;
+}
+
 static const char *minipp_skip_horizontal_space(const char *text) {
     while (*text == ' ' || *text == '\t' || *text == '\v' || *text == '\f') {
         ++text;
@@ -556,9 +610,9 @@ static bool minipp_parse_define(MiniPpState *state, const char *rest) {
     }
 
     name = minipp_duplicate_range(name_text, name_size);
-    replacement = minipp_duplicate_range(replacement_start,
-                                         (size_t)(replacement_end -
-                                                  replacement_start));
+    replacement = minipp_normalize_replacement_whitespace(
+        replacement_start,
+        (size_t)(replacement_end - replacement_start));
     if (name == NULL || replacement == NULL) {
         free(name);
         free(replacement);
