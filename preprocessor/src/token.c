@@ -982,7 +982,10 @@ static bool minipp_build_logical_args(MiniPpState *state,
         strcmp(macro->name, "VMM_PRINT") == 0 ||
         strcmp(macro->name, "nvkm_printk_") == 0 ||
         strcmp(macro->name, "nvkm_printk__") == 0 ||
-        strcmp(macro->name, "nvkm_printk___") == 0) {
+        strcmp(macro->name, "nvkm_printk___") == 0 ||
+        strcmp(macro->name, "dev_dbg") == 0 ||
+        strcmp(macro->name, "dev_no_printk") == 0 ||
+        strcmp(macro->name, "dev_printk_index_wrap") == 0) {
         fprintf(state->diagnostics,
                 "MINIPP_ARG_TRACE macro=%s preserve=%d fixed=%zu raw=%zu\n",
                 macro->name,
@@ -1088,7 +1091,10 @@ static bool minipp_build_logical_args(MiniPpState *state,
         strcmp(macro->name, "VMM_PRINT") == 0 ||
         strcmp(macro->name, "nvkm_printk_") == 0 ||
         strcmp(macro->name, "nvkm_printk__") == 0 ||
-        strcmp(macro->name, "nvkm_printk___") == 0) {
+        strcmp(macro->name, "nvkm_printk___") == 0 ||
+        strcmp(macro->name, "dev_dbg") == 0 ||
+        strcmp(macro->name, "dev_no_printk") == 0 ||
+        strcmp(macro->name, "dev_printk_index_wrap") == 0) {
         fprintf(state->diagnostics, "MINIPP_PACK_TRACE macro=%s data=", macro->name);
         for (index = 0U; index < variadic.size; ++index) {
             char value = variadic.data[index];
