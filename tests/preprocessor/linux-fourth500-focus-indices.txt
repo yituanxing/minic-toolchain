@@ -2,4 +2,4 @@
 1579
 1580
 1600
-# fourth500 semantic focus: DRM dev_* variadic spacing + Radeon endian expansion
+# fourth500 semantic focus: closed 4/4; variadic source padding + cross-line alias rescan
