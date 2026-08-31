@@ -850,4 +850,11 @@ EP_OUTER(ok);
 EOF
 run_exact empty-left-paste-boundary
 
-printf 'MINIPP_A0_EXACT=PASS cases=89 mode=byte-identical\n'
+cat >"$work/source-leading-fixed-to-variadic-restore.c" <<'EOF'
+#define SR_OUT(fmt, a...) SR_FINAL(fmt, fixed, ##a)
+#define SR_WRAP(x, fmt) SR_OUT(fmt, x)
+SR_WRAP( value, "x")
+EOF
+run_exact source-leading-fixed-to-variadic-restore
+
+printf 'MINIPP_A0_EXACT=PASS cases=90 mode=byte-identical\n'
