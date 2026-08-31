@@ -32,6 +32,7 @@ typedef struct MiniPpArgList {
     MiniPpString *items;
     bool *leading_space;
     bool *leading_space_generated;
+    bool *leading_space_source_generated;
     bool *leading_space_stringized;
     bool *trailing_space;
     bool *trailing_space_generated;
@@ -50,6 +51,7 @@ static void minipp_arg_list_destroy(MiniPpArgList *list) {
     free(list->items);
     free(list->leading_space);
     free(list->leading_space_generated);
+    free(list->leading_space_source_generated);
     free(list->leading_space_stringized);
     free(list->trailing_space);
     free(list->trailing_space_generated);
@@ -71,7 +73,7 @@ static bool minipp_append_normalized_argument(MiniPpString *item,
     while (index < size) {
         unsigned char ch = (unsigned char)text[index];
 
-        if (text[index] == '\x13') {
+        if (text[index] == '\x13' || text[index] == '\x14') {
             ++index;
             continue;
         }
@@ -186,6 +188,7 @@ static bool minipp_arg_list_append(MiniPpArgList *list,
         }
         bool *next_leading;
         bool *next_generated;
+        bool *next_source_generated;
         bool *next_stringized;
         bool *next_trailing;
         bool *next_trailing_generated;
@@ -209,6 +212,13 @@ static bool minipp_arg_list_append(MiniPpArgList *list,
             return false;
         }
         list->leading_space_generated = next_generated;
+        next_source_generated =
+            realloc(list->leading_space_source_generated,
+                    capacity * sizeof(*next_source_generated));
+        if (next_source_generated == NULL) {
+            return false;
+        }
+        list->leading_space_source_generated = next_source_generated;
         next_stringized = realloc(list->leading_space_stringized,
                                   capacity * sizeof(*next_stringized));
         if (next_stringized == NULL) {
@@ -250,6 +260,7 @@ static bool minipp_arg_list_append(MiniPpArgList *list,
         size_t trailing = size;
         size_t token_line = source_line;
         bool generated = false;
+        bool source_generated = false;
         bool stringize_padding = false;
         bool trailing_generated = false;
         bool trailing_stringized = false;
@@ -272,8 +283,15 @@ static bool minipp_arg_list_append(MiniPpArgList *list,
 
         while (leading < size &&
                (isspace((unsigned char)text[leading]) != 0 ||
-                text[leading] == '\x13')) {
+                text[leading] == '\x13' ||
+                text[leading] == '\x14')) {
             if (text[leading] == '\x13') {
+                ++leading;
+                continue;
+            }
+            if (text[leading] == '\x14') {
+                generated = true;
+                source_generated = true;
                 ++leading;
                 continue;
             }
@@ -292,6 +310,7 @@ static bool minipp_arg_list_append(MiniPpArgList *list,
         }
         list->leading_space[list->count] = leading != 0U;
         list->leading_space_generated[list->count] = generated;
+        list->leading_space_source_generated[list->count] = source_generated;
         list->leading_space_stringized[list->count] = stringize_padding;
         list->source_line[list->count] = token_line;
     }
@@ -424,7 +443,7 @@ static bool minipp_expand_text_recursive(MiniPpState *state,
 static bool minipp_is_pragma_padding(char value) {
     return value == ' ' || value == '\t' || value == '\v' ||
            value == '\f' || value == '\a' || value == '\b' ||
-           value == '\x13';
+           value == '\x13' || value == '\x14';
 }
 
 static bool minipp_append_pragma_literal(MiniPpState *state,
@@ -975,6 +994,8 @@ static bool minipp_build_logical_args(MiniPpState *state,
                 raw_args->leading_space[index];
             logical_args->leading_space_generated[logical_args->count - 1U] =
                 raw_args->leading_space_generated[index];
+            logical_args->leading_space_source_generated[logical_args->count - 1U] =
+                raw_args->leading_space_source_generated[index];
             logical_args->leading_space_stringized[logical_args->count - 1U] =
                 raw_args->leading_space_stringized[index];
         }
@@ -1041,6 +1062,8 @@ static bool minipp_build_logical_args(MiniPpState *state,
             raw_args->leading_space[index];
         logical_args->leading_space_generated[logical_args->count - 1U] =
             raw_args->leading_space_generated[index];
+        logical_args->leading_space_source_generated[logical_args->count - 1U] =
+            raw_args->leading_space_source_generated[index];
         logical_args->leading_space_stringized[logical_args->count - 1U] =
             raw_args->leading_space_stringized[index];
     }
@@ -1153,15 +1176,24 @@ static bool minipp_build_logical_args(MiniPpState *state,
         goto oom;
     }
     if (fixed_count < raw_args->count) {
-        logical_args->leading_space[logical_args->count - 1U] =
-            raw_args->leading_space[fixed_count];
-        logical_args->leading_space_generated[logical_args->count - 1U] =
-            raw_args->leading_space_generated[fixed_count] ||
+        bool source_generated_head =
+            raw_args->leading_space_source_generated[fixed_count] ||
             (preserve_argument_spacing &&
+             raw_args->leading_space[fixed_count] &&
+             !raw_args->leading_space_generated[fixed_count] &&
+             !raw_args->leading_space_stringized[fixed_count] &&
              minipp_variadic_forward_reaches_bare_bridge(
                  state, macro, 0U) &&
              minipp_arg_starts_expanding_macro(
                  state, &raw_args->items[fixed_count]));
+
+        logical_args->leading_space[logical_args->count - 1U] =
+            raw_args->leading_space[fixed_count];
+        logical_args->leading_space_generated[logical_args->count - 1U] =
+            raw_args->leading_space_generated[fixed_count] ||
+            source_generated_head;
+        logical_args->leading_space_source_generated[logical_args->count - 1U] =
+            source_generated_head;
         logical_args->leading_space_stringized[logical_args->count - 1U] =
             raw_args->leading_space_stringized[fixed_count];
     }
@@ -1308,6 +1340,7 @@ static bool minipp_append_stringized_arg(MiniPpString *out,
             arg->data[index] == '\x0f' ||
             arg->data[index] == '\x10' ||
             arg->data[index] == '\x13' ||
+            arg->data[index] == '\x14' ||
             arg->data[index] == '\v') {
             /*
              * \v is a generated renderer separator, not source whitespace.
@@ -1352,7 +1385,9 @@ static bool minipp_arg_ends_pp_number(const MiniPpString *arg) {
     while (index < arg->size) {
         unsigned char ch = (unsigned char)arg->data[index];
 
-        if (isspace(ch) != 0 || arg->data[index] == '\x13') {
+        if (isspace(ch) != 0 ||
+            arg->data[index] == '\x13' ||
+            arg->data[index] == '\x14') {
             ++index;
             continue;
         }
@@ -1431,7 +1466,8 @@ static bool minipp_output_needs_identifier_separator(
            (out->data[index - 1U] == '\a' ||
             out->data[index - 1U] == '\b' ||
             out->data[index - 1U] == '\x11' ||
-            out->data[index - 1U] == '\x13')) {
+            out->data[index - 1U] == '\x13' ||
+            out->data[index - 1U] == '\x14')) {
         --index;
     }
     if (index == 0U) {
@@ -1475,7 +1511,8 @@ static bool minipp_needs_pre_arg_separator(const MiniPpString *out,
            (out->data[left - 1U] == '\a' ||
             out->data[left - 1U] == '\b' ||
             out->data[left - 1U] == '\x0e' ||
-            out->data[left - 1U] == '\x13')) {
+            out->data[left - 1U] == '\x13' ||
+            out->data[left - 1U] == '\x14')) {
         --left;
     }
     if (left == 0U) {
@@ -1490,7 +1527,8 @@ static bool minipp_needs_pre_arg_separator(const MiniPpString *out,
            (arg->data[right] == '\a' ||
             arg->data[right] == '\b' ||
             arg->data[right] == '\x0e' ||
-            arg->data[right] == '\x13')) {
+            arg->data[right] == '\x13' ||
+            arg->data[right] == '\x14')) {
         ++right;
     }
     if (right >= arg->size ||
@@ -1938,11 +1976,12 @@ static bool minipp_substitute_function_macro(MiniPpState *state,
                         macro->replacement[before_paste - 1U] == ',') {
                         fprintf(state->diagnostics,
                                 "MINIPP_GNU_VARG_TRACE owner=%s "
-                                "leading=%d generated=%d stringized=%d "
-                                "preserve=%d size=%zu head=%02x\n",
+                                "leading=%d generated=%d source_generated=%d "
+                                "stringized=%d preserve=%d size=%zu head=%02x\n",
                                 macro->name,
                                 raw_args->leading_space[param_index] ? 1 : 0,
                                 raw_args->leading_space_generated[param_index] ? 1 : 0,
+                                raw_args->leading_space_source_generated[param_index] ? 1 : 0,
                                 raw_args->leading_space_stringized[param_index] ? 1 : 0,
                                 preserve_argument_spacing ? 1 : 0,
                                 raw_args->items[param_index].size,
@@ -2003,6 +2042,21 @@ static bool minipp_substitute_function_macro(MiniPpState *state,
                              * that one-hop suppression and keeps its own
                              * source padding, restoring GCC's visible space.
                              */
+                        } else if (
+                            raw_args->leading_space_source_generated[param_index]) {
+                            /*
+                             * The first variadic token started with a real
+                             * source-owned separator, but prescan expanded
+                             * that token and therefore also marked the head
+                             * generated.  Preserve that ownership across
+                             * every GNU ,##args forwarding hop.  The marker
+                             * renders as one separator at a terminal use and
+                             * reconstructs this provenance at another macro
+                             * invocation.
+                             */
+                            if (!minipp_string_append_char(substituted, '\x14')) {
+                                goto oom;
+                            }
                         } else if (
                             raw_args->leading_space_generated[param_index]) {
                             size_t padding = substituted->size;
@@ -2733,7 +2787,7 @@ static bool minipp_is_zero_width_provenance(char value) {
     return value == '\a' || value == '\b' ||
            value == '\x0e' || value == '\x0f' ||
            value == '\x10' || value == '\x11' ||
-           value == '\x13';
+           value == '\x13' || value == '\x14';
 }
 
 static bool minipp_expanding_token_follows_top_level_comma_padding(
