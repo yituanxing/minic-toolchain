@@ -767,4 +767,21 @@ PC_OUT(path ? path : "<n/a>" , &vaf)
 EOF
 run_exact pre-comma-source-space
 
-printf 'MINIPP_A0_EXACT=PASS cases=80 mode=byte-identical\n'
+cat >"$work/owner-variadic-first-slot-source-spacing.c" <<'EOF'
+#define OV_INDEX(fn, fmt, ...) fn(fmt, ##__VA_ARGS__)
+#define OV_DEV(fmt, ...) OV_INDEX(OV_FINAL, fmt, ##__VA_ARGS__)
+#define OV_WRAP(fmt, ...) OV_DEV(fmt, __VA_ARGS__)
+OV_WRAP("err %d %d", ret, addr)
+EOF
+run_exact owner-variadic-first-slot-source-spacing
+
+cat >"$work/object-to-function-cross-line-rescan.c" <<'EOF'
+#define OF_TARGET(x) ((unsigned short)(x))
+#define OF_ALIAS OF_TARGET
+int object_to_function_cross_line =
+    OF_ALIAS
+    (value);
+EOF
+run_exact object-to-function-cross-line-rescan
+
+printf 'MINIPP_A0_EXACT=PASS cases=82 mode=byte-identical\n'
