@@ -978,6 +978,33 @@ static bool minipp_build_logical_args(MiniPpState *state,
         return false;
     }
 
+    if (strcmp(macro->name, "VMM_SPAM") == 0 ||
+        strcmp(macro->name, "VMM_PRINT") == 0 ||
+        strcmp(macro->name, "nvkm_printk_") == 0 ||
+        strcmp(macro->name, "nvkm_printk__") == 0 ||
+        strcmp(macro->name, "nvkm_printk___") == 0) {
+        fprintf(state->diagnostics,
+                "MINIPP_ARG_TRACE macro=%s preserve=%d fixed=%zu raw=%zu\n",
+                macro->name,
+                preserve_argument_spacing ? 1 : 0,
+                fixed_count,
+                raw_args->count);
+        for (index = 0U; index < raw_args->count; ++index) {
+            fprintf(state->diagnostics,
+                    "MINIPP_ARG_TRACE_ITEM macro=%s i=%zu "
+                    "lead=%d lead_gen=%d trail=%d trail_gen=%d text=[%.*s]\n",
+                    macro->name,
+                    index,
+                    raw_args->leading_space[index] ? 1 : 0,
+                    raw_args->leading_space_generated[index] ? 1 : 0,
+                    raw_args->trailing_space[index] ? 1 : 0,
+                    raw_args->trailing_space_generated[index] ? 1 : 0,
+                    (int)raw_args->items[index].size,
+                    raw_args->items[index].data == NULL ? "" :
+                                                         raw_args->items[index].data);
+        }
+    }
+
     for (index = 0U; index < fixed_count; ++index) {
         if (!minipp_arg_list_append(logical_args,
                                     raw_args->items[index].data,
@@ -1056,6 +1083,31 @@ static bool minipp_build_logical_args(MiniPpState *state,
                                     raw_args->items[index].size)) {
             goto oom;
         }
+    }
+    if (strcmp(macro->name, "VMM_SPAM") == 0 ||
+        strcmp(macro->name, "VMM_PRINT") == 0 ||
+        strcmp(macro->name, "nvkm_printk_") == 0 ||
+        strcmp(macro->name, "nvkm_printk__") == 0 ||
+        strcmp(macro->name, "nvkm_printk___") == 0) {
+        fprintf(state->diagnostics, "MINIPP_PACK_TRACE macro=%s data=", macro->name);
+        for (index = 0U; index < variadic.size; ++index) {
+            char value = variadic.data[index];
+
+            if (value == ' ') {
+                fputs("<S>", state->diagnostics);
+            } else if (value == '\v') {
+                fputs("<V>", state->diagnostics);
+            } else if (value == '\f') {
+                fputs("<F>", state->diagnostics);
+            } else if (value == '\t') {
+                fputs("<T>", state->diagnostics);
+            } else if (value == '\n') {
+                fputs("<N>", state->diagnostics);
+            } else {
+                fputc(value, state->diagnostics);
+            }
+        }
+        fputc('\n', state->diagnostics);
     }
     if (!minipp_string_append_char(&variadic, '\0')) {
         goto oom;
