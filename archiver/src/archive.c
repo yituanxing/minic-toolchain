@@ -785,7 +785,7 @@ static bool expand_thin_member_path(const char *path,
     if (!load_file(path, &data, &size, diagnostics)) {
         return false;
     }
-    if (archive_magic(data, size, &thin) && thin) {
+    if (archive_magic(data, size, &thin)) {
         MiniArExpandContext context;
         bool ok;
 
