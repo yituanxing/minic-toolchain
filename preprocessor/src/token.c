@@ -886,6 +886,32 @@ static bool minipp_build_logical_args(MiniPpState *state,
 
     memset(logical_args, 0, sizeof(*logical_args));
 
+    if (strcmp(macro->name, "PF_WARN") == 0 ||
+        strcmp(macro->name, "PF_FMT") == 0 ||
+        strcmp(macro->name, "PF_PRINT") == 0 ||
+        strcmp(macro->name, "PF_INDEX") == 0) {
+        fprintf(state->diagnostics,
+                "MINIPP_PF_TRACE macro=%s preserve=%d raw_count=%zu params=%zu variadic=%d\n",
+                macro->name,
+                preserve_argument_spacing ? 1 : 0,
+                raw_args->count,
+                macro->param_count,
+                macro->variadic ? 1 : 0);
+        for (size_t trace_i = 0U; trace_i < raw_args->count; ++trace_i) {
+            fprintf(state->diagnostics,
+                    "MINIPP_PF_ARG macro=%s i=%zu lead=%d gen=%d str=%d size=%zu text=[%.*s]\n",
+                    macro->name,
+                    trace_i,
+                    raw_args->leading_space[trace_i] ? 1 : 0,
+                    raw_args->leading_space_generated[trace_i] ? 1 : 0,
+                    raw_args->leading_space_stringized[trace_i] ? 1 : 0,
+                    raw_args->items[trace_i].size,
+                    (int)raw_args->items[trace_i].size,
+                    raw_args->items[trace_i].data == NULL ? "" :
+                                                             raw_args->items[trace_i].data);
+        }
+    }
+
     if (!macro->variadic) {
         if (raw_args->count != macro->param_count) {
             fprintf(state->diagnostics,
