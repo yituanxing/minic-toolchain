@@ -2251,6 +2251,16 @@ static void store_u32le(unsigned char *data, uint32_t value) {
     data[3] = (unsigned char)((value >> 24U) & 0xffU);
 }
 
+static uint64_t load_u64le(const unsigned char *data) {
+    uint64_t value = 0U;
+    size_t i;
+
+    for (i = 0U; i < 8U; ++i) {
+        value |= (uint64_t)data[i] << (i * 8U);
+    }
+    return value;
+}
+
 static void store_u64le(unsigned char *data, uint64_t value) {
     size_t i;
 
@@ -2739,7 +2749,9 @@ static bool static_apply_relocations(MiniLdState *state,
         int64_t target;
         int64_t delta;
 
-        if (reloc->type == R_RISCV_NONE || reloc->type == R_RISCV_RELAX ||
+        if (reloc->type == R_RISCV_NONE ||
+            reloc->type == R_RISCV_RELAX ||
+            reloc->type == R_RISCV_ALIGN ||
             reloc->type == R_RISCV_PCREL_LO12_I ||
             reloc->type == R_RISCV_PCREL_LO12_S) {
             continue;
@@ -2851,6 +2863,71 @@ static bool static_apply_relocations(MiniLdState *state,
                 return false;
             }
             break;
+        case R_RISCV_ADD16:
+        case R_RISCV_SUB16: {
+            uint16_t current;
+            uint16_t operand;
+
+            if (section->type == SHT_NOBITS || reloc->offset > SIZE_MAX ||
+                !range_ok((size_t)reloc->offset, 2U, section->size)) {
+                fprintf(state->diagnostics,
+                        "minic-ld: R_RISCV_ADD_SUB16-offset-out-of-range\n");
+                free(pcrel);
+                return false;
+            }
+            current = load_u16le(section->data + (size_t)reloc->offset);
+            operand = (uint16_t)(uint64_t)target;
+            if (reloc->type == R_RISCV_ADD16) {
+                current = (uint16_t)(current + operand);
+            } else {
+                current = (uint16_t)(current - operand);
+            }
+            store_u16le(section->data + (size_t)reloc->offset, current);
+            break;
+        }
+        case R_RISCV_ADD32:
+        case R_RISCV_SUB32: {
+            uint32_t current;
+            uint32_t operand;
+
+            if (section->type == SHT_NOBITS || reloc->offset > SIZE_MAX ||
+                !range_ok((size_t)reloc->offset, 4U, section->size)) {
+                fprintf(state->diagnostics,
+                        "minic-ld: R_RISCV_ADD_SUB32-offset-out-of-range\n");
+                free(pcrel);
+                return false;
+            }
+            current = load_u32le(section->data + (size_t)reloc->offset);
+            operand = (uint32_t)(uint64_t)target;
+            if (reloc->type == R_RISCV_ADD32) {
+                current += operand;
+            } else {
+                current -= operand;
+            }
+            store_u32le(section->data + (size_t)reloc->offset, current);
+            break;
+        }
+        case R_RISCV_ADD64:
+        case R_RISCV_SUB64: {
+            uint64_t current = 0U;
+            uint64_t operand = (uint64_t)target;
+
+            if (section->type == SHT_NOBITS || reloc->offset > SIZE_MAX ||
+                !range_ok((size_t)reloc->offset, 8U, section->size)) {
+                fprintf(state->diagnostics,
+                        "minic-ld: R_RISCV_ADD_SUB64-offset-out-of-range\n");
+                free(pcrel);
+                return false;
+            }
+            current = load_u64le(section->data + (size_t)reloc->offset);
+            if (reloc->type == R_RISCV_ADD64) {
+                current += operand;
+            } else {
+                current -= operand;
+            }
+            store_u64le(section->data + (size_t)reloc->offset, current);
+            break;
+        }
         case R_RISCV_RVC_BRANCH:
             delta = target - (int64_t)place;
             if (!static_patch_rvc_branch(section,
