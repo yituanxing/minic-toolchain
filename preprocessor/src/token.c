@@ -1619,7 +1619,8 @@ static bool minipp_first_variadic_arg_has_stringize_origin(
 static bool minipp_param_is_direct_bare_variadic_argument(
     const MiniPpState *state,
     const MiniPpMacro *owner,
-    size_t param_start) {
+    size_t param_start,
+    bool *first_variadic_slot) {
     size_t index = 0U;
     size_t depth = 0U;
     size_t target_depth;
@@ -1629,6 +1630,10 @@ static bool minipp_param_is_direct_bare_variadic_argument(
     size_t token_start;
     const MiniPpMacro *callee;
     bool owner_param_is_variadic = false;
+
+    if (first_variadic_slot != NULL) {
+        *first_variadic_slot = false;
+    }
 
     {
         size_t param_end = param_start;
@@ -1829,6 +1834,12 @@ static bool minipp_param_is_direct_bare_variadic_argument(
                 argument_index > fixed_count ||
                 (argument_index == fixed_count &&
                  !owner_param_is_variadic);
+
+            if (first_variadic_slot != NULL) {
+                *first_variadic_slot =
+                    argument_index == fixed_count &&
+                    !owner_param_is_variadic;
+            }
 
             if (strcmp(owner->name, "VMM_PRINT") == 0 ||
                 strcmp(owner->name, "VMM_SPAM") == 0 ||
@@ -2105,23 +2116,26 @@ static bool minipp_substitute_function_macro(MiniPpState *state,
                                          &param_index)) {
                 bool paste_operand =
                     minipp_param_is_paste_operand(macro, start, index);
-                bool source_leading_carrier =
+                bool first_variadic_slot = false;
+                bool source_leading =
                     !paste_operand &&
                     raw_args->leading_space[param_index] &&
                     !raw_args->leading_space_generated[param_index] &&
                     !raw_args->leading_space_stringized[param_index];
+                bool direct_variadic_bridge =
+                    !paste_operand &&
+                    minipp_param_is_direct_bare_variadic_argument(
+                        state, macro, start, &first_variadic_slot);
+                bool source_leading_carrier =
+                    source_leading && !direct_variadic_bridge;
                 const MiniPpArgList *source_args =
                     paste_operand ? raw_args : expanded_args;
                 const MiniPpString *arg = &source_args->items[param_index];
 
-                if (!paste_operand &&
-                    minipp_param_is_direct_bare_variadic_argument(
-                        state, macro, start)) {
+                if (direct_variadic_bridge) {
                     size_t padding = substituted->size;
                     bool restore_source_leading =
-                        raw_args->leading_space[param_index] &&
-                        !raw_args->leading_space_generated[param_index] &&
-                        !raw_args->leading_space_stringized[param_index];
+                        first_variadic_slot && source_leading;
 
                     while (padding != 0U) {
                         char previous = substituted->data[padding - 1U];
