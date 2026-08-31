@@ -8,4 +8,4 @@
 3243
 3304
 3340
-# final352 focus10: 10/10 closed; launch full-corpus closure verification
+# final352 focus10: 10/10 closed; formal same-head full-corpus closure
