@@ -1602,8 +1602,7 @@ static bool minipp_param_is_direct_bare_variadic_argument(
                                token_end - token_start);
     if (callee == NULL ||
         !callee->function_like ||
-        !callee->variadic ||
-        minipp_variadic_padding_survives_gnu_forward(callee)) {
+        !callee->variadic) {
         return false;
     }
 
@@ -1652,7 +1651,14 @@ static bool minipp_param_is_direct_bare_variadic_argument(
             ++scan;
         }
 
-        return argument_index > fixed_count;
+        /*
+         * A fixed owner parameter can become the callee's very first
+         * variadic argument.  GCC treats the replacement-list padding at
+         * that bridge as generated ownership too.  The owner's own GNU
+         * ##__VA_ARGS__ parameter is excluded by the guard at the start of
+         * this helper, so source-owned GNU forwarding keeps its old rule.
+         */
+        return argument_index >= fixed_count;
     }
 }
 
