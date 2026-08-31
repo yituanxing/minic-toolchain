@@ -792,4 +792,13 @@ NV_OUTER("x", ptei, ptes)
 EOF
 run_exact named-variadic-deep-forward-source-spacing
 
-printf 'MINIPP_A0_EXACT=PASS cases=83 mode=byte-identical\n'
+cat >"$work/named-variadic-token-paste-deep-spacing.c" <<'EOF'
+#define NT_DEV_info(fmt, ...) NT_FINAL(fmt, ##__VA_ARGS__)
+#define NT_PASTE(p, fmt, a...) NT_DEV_##p(fmt, fixed, ##a)
+#define NT_INNER(fmt, a...) NT_PASTE(info, fmt, ##a)
+#define NT_OUTER(fmt, a...) NT_INNER(fmt, ##a)
+NT_OUTER("x", ptei, ptes)
+EOF
+run_exact named-variadic-token-paste-deep-spacing
+
+printf 'MINIPP_A0_EXACT=PASS cases=84 mode=byte-identical\n'
