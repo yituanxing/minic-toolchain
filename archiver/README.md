@@ -27,3 +27,7 @@ A0 does not yet implement archive mutation operations such as delete/extract or
 incremental replacement of an existing archive. Linux Kbuild removes archive
 outputs before its `r` invocations, so those operations are outside the first
 production boundary.
+
+A1 also accepts the Linux Kbuild final archive reorder boundary (`ar mPiT`).
+On RISC-V defconfig the selected move-member set is empty, so GNU ar defines
+this invocation as a successful no-op; the differential gate locks that behavior.
