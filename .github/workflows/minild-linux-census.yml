@@ -1,0 +1,134 @@
+name: MiniLD Linux Census
+
+on:
+  push:
+    branches:
+      - "toolchain/minild-census"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  linux-ld-census:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Install Linux build prerequisites
+        run: |
+          sudo apt-get -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
+            bc bison flex libssl-dev libelf-dev make curl xz-utils file
+
+      - name: Prepare Linux 6.6.143
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/minild-census"
+          archive="$work/linux-6.6.143.tar.xz"
+          src="$work/linux-6.6.143"
+          out="$work/out"
+          mkdir -p "$work"
+          curl -fsSL https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.6.143.tar.xz -o "$archive"
+          printf '%s  %s\n' \
+            dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932 \
+            "$archive" | sha256sum -c -
+          tar -xJf "$archive" -C "$work"
+          make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- defconfig
+
+      - name: Install GNU ld trace wrapper
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/minild-census"
+          wrapper="$work/riscv64-linux-gnu-ld-trace"
+          cat >"$wrapper" <<'SH'
+          #!/usr/bin/env bash
+          set -Eeuo pipefail
+          : "${MINILD_TRACE:?MINILD_TRACE is not set}"
+          {
+            printf 'ld'
+            printf ' %q' "$@"
+            printf '\n'
+          } >>"$MINILD_TRACE"
+          exec /usr/bin/riscv64-linux-gnu-ld "$@"
+          SH
+          chmod +x "$wrapper"
+          : >"$work/ld.trace"
+
+      - name: Build Linux Image through traced GNU ld
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/minild-census"
+          src="$work/linux-6.6.143"
+          out="$work/out"
+          wrapper="$work/riscv64-linux-gnu-ld-trace"
+          export MINILD_TRACE="$work/ld.trace"
+
+          started=$(date +%s)
+          make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
+            LD="$wrapper" V=1 -j4 Image >"$work/kbuild-v1.log" 2>&1
+          elapsed=$(( $(date +%s) - started ))
+
+          test -s "$out/arch/riscv/boot/Image"
+          calls=$(wc -l <"$work/ld.trace")
+          test "$calls" -gt 0
+
+          python3 - <<'PY'
+          import collections, pathlib, shlex
+          trace = pathlib.Path("build/minild-census/ld.trace")
+          option_counts = collections.Counter()
+          scripts = collections.Counter()
+          outputs = []
+          for line in trace.read_text().splitlines():
+              argv = shlex.split(line)[1:]
+              i = 0
+              while i < len(argv):
+                  a = argv[i]
+                  if a in ("-T", "--script") and i + 1 < len(argv):
+                      scripts[argv[i+1]] += 1
+                      i += 2
+                      continue
+                  if a == "-o" and i + 1 < len(argv):
+                      outputs.append(argv[i+1])
+                      i += 2
+                      continue
+                  if a.startswith("-"):
+                      option_counts[a] += 1
+                  i += 1
+          out = pathlib.Path("build/minild-census/ld-census.txt")
+          with out.open("w") as f:
+              f.write(f"calls={sum(1 for _ in trace.read_text().splitlines())}\n")
+              f.write("options:\n")
+              for k,v in option_counts.most_common():
+                  f.write(f"{v:4d} {k}\n")
+              f.write("scripts:\n")
+              for k,v in scripts.most_common():
+                  f.write(f"{v:4d} {k}\n")
+              f.write("outputs:\n")
+              for x in outputs:
+                  f.write(x + "\n")
+          print(out.read_text())
+          PY
+
+          printf 'MINILD_LINUX_CENSUS=PASS ld_calls=%s elapsed_s=%s head=%s\n' \
+            "$calls" "$elapsed" "$GITHUB_SHA"
+
+      - name: Preserve linker census
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: minild-linux-census
+          path: |
+            build/minild-census/ld.trace
+            build/minild-census/ld-census.txt
+            build/minild-census/kbuild-v1.log
+            build/minild-census/out/.config
+          if-no-files-found: ignore
+          retention-days: 3
