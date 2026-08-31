@@ -93,12 +93,19 @@ static bool minipp_append_normalized_argument(MiniPpString *item,
         if (pending_space) {
             size_t line_break;
 
-            if (pending_space_stringized) {
-                if (!minipp_string_append_char(item, '\f')) {
-                    return false;
-                }
-            } else if (pending_space_generated &&
-                       !minipp_string_append_char(item, '\v')) {
+            /*
+             * A whitespace boundary may carry more than one provenance
+             * bit.  In particular, a fixed argument with source-leading
+             * whitespace can be suppressed at a first-variadic bridge
+             * (\f) while also carrying a one-hop restore marker (\v).
+             * Preserve both markers instead of collapsing them here.
+             */
+            if (pending_space_stringized &&
+                !minipp_string_append_char(item, '\f')) {
+                return false;
+            }
+            if (pending_space_generated &&
+                !minipp_string_append_char(item, '\v')) {
                 return false;
             }
             if (pending_line_breaks != 0U) {
