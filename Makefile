@@ -198,7 +198,7 @@ RV64_ABI_TEST_SOURCES := \
 RV64_ABI_TEST_OBJECTS := $(patsubst %.c,$(BUILD_DIR)/obj/%.o,$(RV64_ABI_TEST_SOURCES))
 RV64_ABI_TEST_BINARY  := $(BUILD_DIR)/tests/target/riscv64/abi-test
 
-.PHONY: all help prepare check check-fast check-minias-a0 check-minipp-a0 check-miniar-a0 check-miniar-a1 check-minild-a0 check-token-model check-lexer \
+.PHONY: all help prepare check check-fast check-minias-a0 check-minipp-a0 check-miniar-a0 check-miniar-a1 check-minild-a0 check-minild-a1 check-token-model check-lexer \
 	check-type check-record check-type-alias check-ast-contract check-layout check-rv64-abi \
 	check-static-functions \
 	check-unsigned-declarations check-long-types check-for-loops check-unbounded-for-break \
@@ -222,6 +222,7 @@ help:
 		"  make check-miniar-a0    Compare MiniAR archives byte-for-byte with GNU ar" \
 		"  make check-miniar-a1    Check thin flattening and archive listing" \
 		"  make check-minild-a0    Validate ELF64 RISC-V relocatable linking against GNU ld" \
+		"  make check-minild-a1    Validate thin archive whole/group semantics" \
 		"  make check-fast         Run the fast frontend and C0 gates" \
 		"  make check-token-model  Run the token data-model unit gate" \
 		"  make check-lexer        Run the C0 lexer unit gate" \
@@ -348,6 +349,11 @@ check-minild-a0: $(MINILD_BINARY)
 	MINILD="$(abspath $(MINILD_BINARY))" \
 	BUILD_DIR="$(abspath $(BUILD_DIR))" \
 	sh tests/linker/run-a0.sh
+
+check-minild-a1: $(MINILD_BINARY)
+	MINILD="$(abspath $(MINILD_BINARY))" \
+	BUILD_DIR="$(abspath $(BUILD_DIR))" \
+	sh tests/linker/run-a1.sh
 
 $(TOKEN_MODEL_TEST_BINARY): $(TOKEN_MODEL_TEST_OBJECTS)
 	@mkdir -p "$(dir $@)"
