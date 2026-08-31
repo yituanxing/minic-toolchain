@@ -1477,11 +1477,279 @@ static bool object_defines_needed_symbol(MiniLdState *state,
     return ok;
 }
 
-static bool process_whole_archive(MiniLdState *state, const char *path) {
-    MiniLdArchiveMembers members = {NULL, 0U, 0U};
+
+static void embedded_archive_destroy(MiniLdEmbeddedArchive *archive) {
+    size_t i;
+
+    for (i = 0U; i < archive->count; ++i) {
+        free(archive->members[i].name);
+    }
+    free(archive->members);
+    free(archive->data);
+    archive->members = NULL;
+    archive->data = NULL;
+    archive->count = 0U;
+    archive->capacity = 0U;
+    archive->size = 0U;
+}
+
+static bool embedded_archive_append(MiniLdEmbeddedArchive *archive,
+                                    char *name,
+                                    size_t data_offset,
+                                    size_t data_size) {
+    MiniLdEmbeddedMember *next;
+    size_t capacity;
+
+    if (archive->count == archive->capacity) {
+        capacity = archive->capacity == 0U ? 64U : archive->capacity * 2U;
+        if (capacity < archive->capacity ||
+            capacity > SIZE_MAX / sizeof(*archive->members)) {
+            return false;
+        }
+        next = realloc(archive->members, capacity * sizeof(*archive->members));
+        if (next == NULL) {
+            return false;
+        }
+        archive->members = next;
+        archive->capacity = capacity;
+    }
+    archive->members[archive->count].name = name;
+    archive->members[archive->count].data_offset = data_offset;
+    archive->members[archive->count].data_size = data_size;
+    ++archive->count;
+    return true;
+}
+
+static bool read_regular_archive(const char *archive_path,
+                                 MiniLdEmbeddedArchive *archive,
+                                 FILE *diagnostics) {
+    size_t cursor = 8U;
+    const unsigned char *long_names = NULL;
+    size_t long_names_size = 0U;
+    bool ok = false;
+
+    if (!read_file(archive_path, &archive->data, &archive->size, diagnostics)) {
+        return false;
+    }
+    if (archive->size < 8U ||
+        memcmp(archive->data, "!<arch>\n", 8U) != 0) {
+        fprintf(diagnostics,
+                "minic-ld: A3 archive input must be GNU regular archive:%s\n",
+                archive_path);
+        goto done;
+    }
+
+    while (cursor < archive->size) {
+        const unsigned char *header;
+        char field[17];
+        uint64_t member_size;
+        size_t payload_offset;
+
+        if (!range_ok(cursor, 60U, archive->size)) {
+            fprintf(diagnostics,
+                    "minic-ld: truncated-regular-archive-header:%s\n",
+                    archive_path);
+            goto done;
+        }
+        header = archive->data + cursor;
+        if (header[58] != (unsigned char)0x60 || header[59] != '\n' ||
+            !parse_archive_name_field(header, field) ||
+            !parse_archive_decimal(header + 48U, 10U, &member_size) ||
+            member_size > SIZE_MAX) {
+            fprintf(diagnostics,
+                    "minic-ld: invalid-regular-archive-header:%s\n",
+                    archive_path);
+            goto done;
+        }
+        cursor += 60U;
+        payload_offset = cursor;
+        if (!range_ok(payload_offset, (size_t)member_size, archive->size)) {
+            fprintf(diagnostics,
+                    "minic-ld: truncated-regular-archive-member:%s:%s\n",
+                    archive_path,
+                    field);
+            goto done;
+        }
+
+        if (strcmp(field, "//") == 0) {
+            long_names = archive->data + payload_offset;
+            long_names_size = (size_t)member_size;
+        } else if (strcmp(field, "/") != 0 &&
+                   strcmp(field, "/SYM64/") != 0) {
+            char *name = NULL;
+
+            if (!decode_archive_member_name(long_names,
+                                            long_names_size,
+                                            field,
+                                            &name)) {
+                fprintf(diagnostics,
+                        "minic-ld: unsupported-regular-member-name:%s:%s\n",
+                        archive_path,
+                        field);
+                goto done;
+            }
+            if (!embedded_archive_append(archive,
+                                         name,
+                                         payload_offset,
+                                         (size_t)member_size)) {
+                free(name);
+                fprintf(diagnostics,
+                        "minic-ld: out-of-memory:regular-archive-members\n");
+                goto done;
+            }
+        }
+
+        cursor += (size_t)member_size;
+        if ((member_size & 1U) != 0U) {
+            if (!range_ok(cursor, 1U, archive->size)) {
+                fprintf(diagnostics,
+                        "minic-ld: truncated-regular-archive-padding:%s\n",
+                        archive_path);
+                goto done;
+            }
+            ++cursor;
+        }
+    }
+
+    ok = true;
+
+done:
+    if (!ok) {
+        embedded_archive_destroy(archive);
+    }
+    return ok;
+}
+
+static int archive_file_kind(const char *path, FILE *diagnostics) {
+    FILE *file;
+    unsigned char magic[8];
+    size_t got;
+
+    file = fopen(path, "rb");
+    if (file == NULL) {
+        fprintf(diagnostics,
+                "minic-ld: cannot-open:%s:%s\n",
+                path,
+                strerror(errno));
+        return -1;
+    }
+    got = fread(magic, 1U, sizeof(magic), file);
+    if (fclose(file) != 0) {
+        fprintf(diagnostics, "minic-ld: cannot-close:%s\n", path);
+        return -1;
+    }
+    if (got != sizeof(magic)) {
+        return 0;
+    }
+    if (memcmp(magic, "!<thin>\n", 8U) == 0) {
+        return 1;
+    }
+    if (memcmp(magic, "!<arch>\n", 8U) == 0) {
+        return 2;
+    }
+    return 0;
+}
+
+static bool process_regular_whole_archive(MiniLdState *state,
+                                          const char *path) {
+    MiniLdEmbeddedArchive archive = {NULL, 0U, NULL, 0U, 0U};
     size_t i;
     bool ok = false;
 
+    if (!read_regular_archive(path, &archive, state->diagnostics)) {
+        goto done;
+    }
+    for (i = 0U; i < archive.count; ++i) {
+        MiniLdEmbeddedMember *member = &archive.members[i];
+
+        if (!process_input_data(state,
+                                archive.data + member->data_offset,
+                                member->data_size,
+                                member->name)) {
+            goto done;
+        }
+    }
+    ok = true;
+
+done:
+    embedded_archive_destroy(&archive);
+    return ok;
+}
+
+static bool process_regular_group_archive(MiniLdState *state,
+                                          const char *path) {
+    MiniLdEmbeddedArchive archive = {NULL, 0U, NULL, 0U, 0U};
+    bool *selected = NULL;
+    bool changed;
+    size_t i;
+    bool ok = false;
+
+    if (!read_regular_archive(path, &archive, state->diagnostics)) {
+        goto done;
+    }
+    selected = calloc(archive.count == 0U ? 1U : archive.count,
+                      sizeof(*selected));
+    if (selected == NULL) {
+        fprintf(state->diagnostics,
+                "minic-ld: out-of-memory:regular-archive-selection\n");
+        goto done;
+    }
+
+    do {
+        changed = false;
+        for (i = 0U; i < archive.count; ++i) {
+            MiniLdEmbeddedMember *member = &archive.members[i];
+            bool needed = false;
+
+            if (selected[i]) {
+                continue;
+            }
+            if (!object_data_defines_needed_symbol(
+                    state,
+                    archive.data + member->data_offset,
+                    member->data_size,
+                    member->name,
+                    &needed)) {
+                goto done;
+            }
+            if (!needed) {
+                continue;
+            }
+            if (!process_input_data(state,
+                                    archive.data + member->data_offset,
+                                    member->data_size,
+                                    member->name)) {
+                goto done;
+            }
+            selected[i] = true;
+            changed = true;
+        }
+    } while (changed);
+
+    ok = true;
+
+done:
+    free(selected);
+    embedded_archive_destroy(&archive);
+    return ok;
+}
+
+static bool process_whole_archive(MiniLdState *state, const char *path) {
+    MiniLdArchiveMembers members = {NULL, 0U, 0U};
+    int kind = archive_file_kind(path, state->diagnostics);
+    size_t i;
+    bool ok = false;
+
+    if (kind < 0) {
+        return false;
+    }
+    if (kind == 2) {
+        return process_regular_whole_archive(state, path);
+    }
+    if (kind != 1) {
+        fprintf(state->diagnostics, "minic-ld: expected-archive:%s\n", path);
+        return false;
+    }
     if (!read_thin_archive_members(path, &members, state->diagnostics)) {
         goto done;
     }
@@ -1499,11 +1767,22 @@ done:
 
 static bool process_group_archive(MiniLdState *state, const char *path) {
     MiniLdArchiveMembers members = {NULL, 0U, 0U};
+    int kind = archive_file_kind(path, state->diagnostics);
     bool *selected = NULL;
     bool changed;
     size_t i;
     bool ok = false;
 
+    if (kind < 0) {
+        return false;
+    }
+    if (kind == 2) {
+        return process_regular_group_archive(state, path);
+    }
+    if (kind != 1) {
+        fprintf(state->diagnostics, "minic-ld: expected-archive:%s\n", path);
+        return false;
+    }
     if (!read_thin_archive_members(path, &members, state->diagnostics)) {
         goto done;
     }
