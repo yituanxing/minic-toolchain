@@ -230,16 +230,20 @@ def main():
             shutil.copy2(sibling_header, header_destination)
             frozen_generated.add(header_rel.as_posix())
 
-    for generated_header in out.rglob("*.h"):
-        if not generated_header.is_file():
-            continue
-        rel = generated_header.relative_to(out)
-        if (src / rel).is_file():
-            continue
-        destination = generated_root / rel
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(generated_header, destination)
-        frozen_generated.add(rel.as_posix())
+    # Freeze generated include inputs, not only headers.  Kbuild also
+    # produces C fragments that are included textually (for example
+    # oid_registry_data.c); cached replay must restore those under O= too.
+    for pattern in ("*.h", "*.c"):
+        for generated_include in out.rglob(pattern):
+            if not generated_include.is_file():
+                continue
+            rel = generated_include.relative_to(out)
+            if (src / rel).is_file():
+                continue
+            destination = generated_root / rel
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(generated_include, destination)
+            frozen_generated.add(rel.as_posix())
 
     for row in rows:
         pp_args = row["pp_args"]
