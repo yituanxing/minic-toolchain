@@ -167,6 +167,7 @@ bool minipp_render_gcc_p_output(const MiniPpString *input,
     size_t leading_spaces = 0U;
     bool line_start = true;
     bool pending_space = false;
+    bool preserve_space_before_pragma_newline = false;
     size_t empty_macro_padding_count = 0U;
 
     minipp_string_init(output);
@@ -175,6 +176,13 @@ bool minipp_render_gcc_p_output(const MiniPpString *input,
         char value = input->data[index];
 
         if (value == '\n') {
+            if (!line_start &&
+                preserve_space_before_pragma_newline &&
+                pending_space) {
+                if (!minipp_string_append_char(output, ' ')) {
+                    goto oom;
+                }
+            }
             if (line_start && empty_macro_padding_count != 0U &&
                 leading_spaces > empty_macro_padding_count) {
                 size_t keep = leading_spaces - empty_macro_padding_count;
@@ -187,6 +195,7 @@ bool minipp_render_gcc_p_output(const MiniPpString *input,
             }
             leading_spaces = 0U;
             pending_space = false;
+            preserve_space_before_pragma_newline = false;
             empty_macro_padding_count = 0U;
             if (!minipp_string_append_char(output, '\n')) {
                 goto oom;
@@ -199,6 +208,19 @@ bool minipp_render_gcc_p_output(const MiniPpString *input,
         if (value == '\a') {
             if (line_start) {
                 ++empty_macro_padding_count;
+            }
+            ++index;
+            continue;
+        }
+
+        if (value == '\x0f') {
+            /*
+             * _Pragma forces a synthetic newline.  GCC keeps one
+             * source-owned/replacement-list space immediately before that
+             * newline, while ordinary trailing whitespace is still dropped.
+             */
+            if (!line_start && pending_space) {
+                preserve_space_before_pragma_newline = true;
             }
             ++index;
             continue;
@@ -234,6 +256,7 @@ bool minipp_render_gcc_p_output(const MiniPpString *input,
                 goto oom;
             }
             pending_space = false;
+            preserve_space_before_pragma_newline = false;
         }
 
         if (value == '"' || value == '\'') {
