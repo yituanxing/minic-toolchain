@@ -1656,6 +1656,48 @@ static bool minipp_param_is_direct_bare_variadic_argument(
     }
 }
 
+static bool minipp_replacement_comma_is_top_level(
+    const char *replacement,
+    size_t comma_index) {
+    size_t index = 0U;
+    size_t depth = 0U;
+
+    if (replacement[comma_index] != ',') {
+        return false;
+    }
+
+    while (index < comma_index) {
+        char value = replacement[index];
+
+        if (value == '"' || value == '\'') {
+            char quote = value;
+            ++index;
+            while (index < comma_index && replacement[index] != '\0') {
+                value = replacement[index++];
+                if (value == '\\' &&
+                    index < comma_index &&
+                    replacement[index] != '\0') {
+                    ++index;
+                    continue;
+                }
+                if (value == quote) {
+                    break;
+                }
+            }
+            continue;
+        }
+        if (value == '(' || value == '[' || value == '{') {
+            ++depth;
+        } else if ((value == ')' || value == ']' || value == '}') &&
+                   depth != 0U) {
+            --depth;
+        }
+        ++index;
+    }
+
+    return depth == 0U;
+}
+
 static bool minipp_substitute_function_macro(MiniPpState *state,
                                              const MiniPpMacro *macro,
                                              const MiniPpArgList *raw_args,
@@ -1958,7 +2000,9 @@ static bool minipp_substitute_function_macro(MiniPpState *state,
             if (!preserve_argument_spacing &&
                 (value == ' ' || value == '\t') &&
                 index != 0U &&
-                macro->replacement[index - 1U] == ',') {
+                macro->replacement[index - 1U] == ',' &&
+                minipp_replacement_comma_is_top_level(
+                    macro->replacement, index - 1U)) {
                 emitted = '\v';
             }
 
