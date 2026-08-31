@@ -426,7 +426,8 @@ static bool minipp_append_pragma_literal(MiniPpState *state,
             return false;
         }
     }
-    if (!minipp_string_append_char(out, '\n')) {
+    if (!minipp_string_append_char(out, '\n') ||
+        !minipp_string_append_char(out, '\x10')) {
         fprintf(state->diagnostics, "minic-cpp: out-of-memory\n");
         return false;
     }
@@ -1156,6 +1157,7 @@ static bool minipp_append_stringized_arg(MiniPpString *out,
         if (arg->data[index] == '\b' ||
             arg->data[index] == '\x0e' ||
             arg->data[index] == '\x0f' ||
+            arg->data[index] == '\x10' ||
             arg->data[index] == '\v') {
             /*
              * \v is a generated renderer separator, not source whitespace.
