@@ -1,0 +1,17 @@
+1000
+1009
+1010
+1012
+1065
+1068
+1072
+1100
+1150
+1200
+1231
+1300
+1350
+1400
+1450
+1499
+# third500 coverage sample16: same relative positions as prior batches
