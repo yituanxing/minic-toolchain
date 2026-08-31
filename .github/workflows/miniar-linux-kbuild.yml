@@ -24,7 +24,8 @@ jobs:
           sudo apt-get -o Acquire::Retries=3 update
           sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
             gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
-            bc bison flex libssl-dev libelf-dev make curl xz-utils file
+            bc bison flex libssl-dev libelf-dev make curl xz-utils file \
+            cpio gzip qemu-system-misc opensbi
 
       - name: Build exact MiniAR
         run: |
@@ -47,6 +48,21 @@ jobs:
             "$archive" | sha256sum -c -
           tar -xJf "$archive" -C "$work"
           make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- defconfig
+          "$src/scripts/config" --file "$out/.config" \
+            -e BLK_DEV_INITRD -e DEVTMPFS -e DEVTMPFS_MOUNT \
+            -e SERIAL_8250 -e SERIAL_8250_CONSOLE
+          make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- olddefconfig
+
+      - name: Build deterministic runtime initramfs
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/miniar-linux-kbuild"
+          BUILD_DIR="$work/initramfs" \
+          OUTPUT_INITRAMFS="$work/runtime-initramfs.cpio.gz" \
+          RISCV_CC=riscv64-linux-gnu-gcc \
+            bash tests/external/linux/build_runtime_initramfs.sh
+          test -s "$work/runtime-initramfs.cpio.gz"
 
       - name: Install MiniAR at the Kbuild AR boundary
         shell: bash
@@ -99,6 +115,21 @@ jobs:
           printf 'MINIAR_LINUX_KBUILD=PASS ar_calls=%s create_calls=%s list_calls=%s archives=%s elapsed_s=%s head=%s\n' \
             "$ar_calls" "$create_calls" "$list_calls" "$archive_count" "$elapsed" "$GITHUB_SHA"
 
+      - name: Boot MiniAR-built Linux
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/miniar-linux-kbuild"
+          LINUX_IMAGE="$work/out/arch/riscv/boot/Image" \
+          INITRAMFS="$work/runtime-initramfs.cpio.gz" \
+          BUILD_DIR="$work/qemu-runtime" \
+          LINUX_RELEASE=6.6.143 \
+          LINUX_RUNTIME_PROFILE=fast \
+          QEMU_SYSTEM_RISCV64=qemu-system-riscv64 \
+          QEMU_TIMEOUT_SECONDS=90 \
+            bash tests/external/linux/runtime_boot.sh
+          echo "MINIAR_LINUX_RUNTIME=PASS head=$GITHUB_SHA"
+
       - name: Preserve Linux integration evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -109,5 +140,6 @@ jobs:
             build/miniar-linux-kbuild/kbuild.log
             build/miniar-linux-kbuild/Image.sha256
             build/miniar-linux-kbuild/out/.config
+            build/miniar-linux-kbuild/qemu-runtime/*.log
           if-no-files-found: ignore
           retention-days: 3
