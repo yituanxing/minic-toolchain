@@ -801,4 +801,23 @@ NT_OUTER("x", ptei, ptes)
 EOF
 run_exact named-variadic-token-paste-deep-spacing
 
-printf 'MINIPP_A0_EXACT=PASS cases=84 mode=byte-identical\n'
+cat >"$work/fixed-to-deep-named-variadic-source-spacing.c" <<'EOF'
+#define FD_SINK(fmt, ...) FD_FINAL(fmt, fixed, ##__VA_ARGS__)
+#define FD_INNER(fmt, a...) FD_SINK(fmt, ##a)
+#define FD_OUTER(fmt, a...) FD_INNER(fmt, ##a)
+#define FD_TOP(first, second) FD_OUTER("x", first, second)
+FD_TOP(ptei, ptes)
+EOF
+run_exact fixed-to-deep-named-variadic-source-spacing
+
+cat >"$work/fixed-to-token-paste-deep-named-variadic-spacing.c" <<'EOF'
+#define FT_DEV_info(fmt, ...) FT_FINAL(fmt, fixed, ##__VA_ARGS__)
+#define FT_PASTE(p, fmt, a...) FT_DEV_##p(fmt, ##a)
+#define FT_INNER(fmt, a...) FT_PASTE(info, fmt, ##a)
+#define FT_OUTER(fmt, a...) FT_INNER(fmt, ##a)
+#define FT_TOP(first, second) FT_OUTER("x", first, second)
+FT_TOP(ptei, ptes)
+EOF
+run_exact fixed-to-token-paste-deep-named-variadic-spacing
+
+printf 'MINIPP_A0_EXACT=PASS cases=86 mode=byte-identical\n'
