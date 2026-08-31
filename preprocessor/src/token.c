@@ -1879,22 +1879,6 @@ static bool minipp_param_is_direct_bare_variadic_argument(
                     !owner_param_is_variadic;
             }
 
-            if (strcmp(owner->name, "VMM_PRINT") == 0 ||
-                strcmp(owner->name, "VMM_SPAM") == 0 ||
-                strcmp(owner->name, "nvkm_printk_") == 0 ||
-                strcmp(owner->name, "nvkm_printk__") == 0 ||
-                strcmp(owner->name, "nvkm_printk___") == 0) {
-                fprintf(state->diagnostics,
-                        "MINIPP_VARG_TRACE owner=%s callee=%s "
-                        "arg_index=%zu fixed_count=%zu owner_variadic=%d "
-                        "result=%d\n",
-                        owner->name,
-                        callee->name,
-                        argument_index,
-                        fixed_count,
-                        owner_param_is_variadic ? 1 : 0,
-                        result ? 1 : 0);
-            }
             return result;
         }
     }
@@ -1974,20 +1958,6 @@ static bool minipp_substitute_function_macro(MiniPpState *state,
                     }
                     if (before_paste != 0U &&
                         macro->replacement[before_paste - 1U] == ',') {
-                        fprintf(state->diagnostics,
-                                "MINIPP_GNU_VARG_TRACE owner=%s "
-                                "leading=%d generated=%d source_generated=%d "
-                                "stringized=%d preserve=%d size=%zu head=%02x\n",
-                                macro->name,
-                                raw_args->leading_space[param_index] ? 1 : 0,
-                                raw_args->leading_space_generated[param_index] ? 1 : 0,
-                                raw_args->leading_space_source_generated[param_index] ? 1 : 0,
-                                raw_args->leading_space_stringized[param_index] ? 1 : 0,
-                                preserve_argument_spacing ? 1 : 0,
-                                raw_args->items[param_index].size,
-                                raw_args->items[param_index].size != 0U
-                                    ? (unsigned char)raw_args->items[param_index].data[0]
-                                    : 0U);
                         if (raw_args->items[param_index].size == 0U) {
                             while (substituted->size != 0U) {
                                 char previous =
