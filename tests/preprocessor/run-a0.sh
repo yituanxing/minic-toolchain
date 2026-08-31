@@ -784,4 +784,12 @@ int object_to_function_cross_line =
 EOF
 run_exact object-to-function-cross-line-rescan
 
-printf 'MINIPP_A0_EXACT=PASS cases=82 mode=byte-identical\n'
+cat >"$work/named-variadic-deep-forward-source-spacing.c" <<'EOF'
+#define NV_SINK(fmt, ...) NV_FINAL(fmt, ##__VA_ARGS__)
+#define NV_INNER(fmt, a...) NV_SINK(fmt, fixed, ##a)
+#define NV_OUTER(fmt, a...) NV_INNER(fmt, ##a)
+NV_OUTER("x", ptei, ptes)
+EOF
+run_exact named-variadic-deep-forward-source-spacing
+
+printf 'MINIPP_A0_EXACT=PASS cases=83 mode=byte-identical\n'
