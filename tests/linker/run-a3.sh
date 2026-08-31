@@ -7,6 +7,7 @@ set -eu
 AS=${RISCV_AS:-riscv64-linux-gnu-as}
 AR=${RISCV_AR:-riscv64-linux-gnu-ar}
 LD=${RISCV_LD:-riscv64-linux-gnu-ld}
+OBJCOPY=${RISCV_OBJCOPY:-riscv64-linux-gnu-objcopy}
 QEMU=${QEMU_RISCV64:-qemu-riscv64}
 
 work="$BUILD_DIR/tests/linker/a3"
@@ -75,6 +76,11 @@ free:
 .size free, .-free
 EOF
 
+cat >"$work/runtime/symbol_less_member.s" <<'EOF'
+.section .note.minild.a3,"",@progbits
+.byte 1,2,3,4
+EOF
+
 cat >"$work/runtime/unused_runtime_member_with_bad_reference.s" <<'EOF'
 .text
 .globl unused_runtime_member
@@ -94,6 +100,12 @@ EOF
   -o "$work/runtime/runtime_free_coalesce_member.o" \
   "$work/runtime/runtime_free_coalesce_member.s"
 "$AS" -march=rv64gc -mabi=lp64d \
+  -o "$work/runtime/symbol_less_member.unstripped.o" \
+  "$work/runtime/symbol_less_member.s"
+"$OBJCOPY" --strip-all \
+  "$work/runtime/symbol_less_member.unstripped.o" \
+  "$work/runtime/symbol_less_member.o"
+"$AS" -march=rv64gc -mabi=lp64d \
   -o "$work/runtime/unused_runtime_member_with_bad_reference.o" \
   "$work/runtime/unused_runtime_member_with_bad_reference.s"
 
@@ -102,6 +114,7 @@ EOF
   "$AR" rcsD libmini_runtime.a \
     runtime/runtime_malloc_allocator_member.o \
     runtime/runtime_free_coalesce_member.o \
+    runtime/symbol_less_member.o \
     runtime/unused_runtime_member_with_bad_reference.o
   test "$(head -c 7 libmini_runtime.a)" = '!<arch>'
 )
@@ -125,4 +138,4 @@ echo "MINILD_A3_DIAG reference_rc=$reference_rc product_rc=$product_rc archive_m
 test "$reference_rc" -eq 42
 test "$product_rc" -eq 42
 
-echo "MINILD_A3=PASS regular-archive=PASS lazy-selection=PASS malloc=PASS free=PASS qemu_rc=$product_rc"
+echo "MINILD_A3=PASS regular-archive=PASS symbol-less-member=PASS lazy-selection=PASS malloc=PASS free=PASS qemu_rc=$product_rc"
