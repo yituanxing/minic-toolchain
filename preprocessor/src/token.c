@@ -1831,6 +1831,19 @@ static bool minipp_substitute_function_macro(MiniPpState *state,
                     }
                     if (before_paste != 0U &&
                         macro->replacement[before_paste - 1U] == ',') {
+                        fprintf(state->diagnostics,
+                                "MINIPP_GNU_VARG_TRACE owner=%s "
+                                "leading=%d generated=%d stringized=%d "
+                                "preserve=%d size=%zu head=%02x\n",
+                                macro->name,
+                                raw_args->leading_space[param_index] ? 1 : 0,
+                                raw_args->leading_space_generated[param_index] ? 1 : 0,
+                                raw_args->leading_space_stringized[param_index] ? 1 : 0,
+                                preserve_argument_spacing ? 1 : 0,
+                                raw_args->items[param_index].size,
+                                raw_args->items[param_index].size != 0U
+                                    ? (unsigned char)raw_args->items[param_index].data[0]
+                                    : 0U);
                         if (raw_args->items[param_index].size == 0U) {
                             while (substituted->size != 0U) {
                                 char previous =
