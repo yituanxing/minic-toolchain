@@ -1534,6 +1534,7 @@ static bool minipp_param_is_direct_bare_variadic_argument(
     size_t token_end;
     size_t token_start;
     const MiniPpMacro *callee;
+    bool owner_param_is_variadic = false;
 
     {
         size_t param_end = param_start;
@@ -1549,6 +1550,7 @@ static bool minipp_param_is_direct_bare_variadic_argument(
                                      &owner_param_index) &&
             owner_param_index + 1U == owner->param_count) {
             size_t left = param_start;
+            owner_param_is_variadic = true;
             size_t before_paste;
 
             while (left != 0U &&
@@ -1722,12 +1724,15 @@ static bool minipp_param_is_direct_bare_variadic_argument(
 
         /*
          * A fixed owner parameter can become the callee's very first
-         * variadic argument.  GCC treats the replacement-list padding at
-         * that bridge as generated ownership too.  The owner's own GNU
-         * ##__VA_ARGS__ parameter is excluded by the guard at the start of
-         * this helper, so source-owned GNU forwarding keeps its old rule.
+         * variadic argument, and replacement-list padding at that bridge is
+         * generated ownership.  The owner's own variadic pack is different:
+         * when it lands in the first variadic slot, its leading space is
+         * source-owned and must survive.  For later variadic slots the older
+         * direct-bridge rule still applies.
          */
-        return argument_index >= fixed_count;
+        return argument_index > fixed_count ||
+               (argument_index == fixed_count &&
+                !owner_param_is_variadic);
     }
 }
 
