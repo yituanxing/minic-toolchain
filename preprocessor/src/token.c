@@ -71,6 +71,11 @@ static bool minipp_append_normalized_argument(MiniPpString *item,
     while (index < size) {
         unsigned char ch = (unsigned char)text[index];
 
+        if (text[index] == '\x13') {
+            ++index;
+            continue;
+        }
+
         if (isspace(ch) != 0) {
             if (have_token) {
                 pending_space = true;
@@ -266,7 +271,12 @@ static bool minipp_arg_list_append(MiniPpArgList *list,
         list->trailing_space_stringized[list->count] = trailing_stringized;
 
         while (leading < size &&
-               isspace((unsigned char)text[leading]) != 0) {
+               (isspace((unsigned char)text[leading]) != 0 ||
+                text[leading] == '\x13')) {
+            if (text[leading] == '\x13') {
+                ++leading;
+                continue;
+            }
             if (text[leading] == '\n' ||
                 (text[leading] == '\r' &&
                  (leading + 1U >= size || text[leading + 1U] != '\n'))) {
@@ -413,7 +423,8 @@ static bool minipp_expand_text_recursive(MiniPpState *state,
 
 static bool minipp_is_pragma_padding(char value) {
     return value == ' ' || value == '\t' || value == '\v' ||
-           value == '\f' || value == '\a' || value == '\b';
+           value == '\f' || value == '\a' || value == '\b' ||
+           value == '\x13';
 }
 
 static bool minipp_append_pragma_literal(MiniPpState *state,
@@ -1296,6 +1307,7 @@ static bool minipp_append_stringized_arg(MiniPpString *out,
             arg->data[index] == '\x0e' ||
             arg->data[index] == '\x0f' ||
             arg->data[index] == '\x10' ||
+            arg->data[index] == '\x13' ||
             arg->data[index] == '\v') {
             /*
              * \v is a generated renderer separator, not source whitespace.
@@ -1340,7 +1352,7 @@ static bool minipp_arg_ends_pp_number(const MiniPpString *arg) {
     while (index < arg->size) {
         unsigned char ch = (unsigned char)arg->data[index];
 
-        if (isspace(ch) != 0) {
+        if (isspace(ch) != 0 || arg->data[index] == '\x13') {
             ++index;
             continue;
         }
@@ -1418,7 +1430,8 @@ static bool minipp_output_needs_identifier_separator(
     while (index != 0U &&
            (out->data[index - 1U] == '\a' ||
             out->data[index - 1U] == '\b' ||
-            out->data[index - 1U] == '\x11')) {
+            out->data[index - 1U] == '\x11' ||
+            out->data[index - 1U] == '\x13')) {
         --index;
     }
     if (index == 0U) {
@@ -1461,7 +1474,8 @@ static bool minipp_needs_pre_arg_separator(const MiniPpString *out,
     while (left != 0U &&
            (out->data[left - 1U] == '\a' ||
             out->data[left - 1U] == '\b' ||
-            out->data[left - 1U] == '\x0e')) {
+            out->data[left - 1U] == '\x0e' ||
+            out->data[left - 1U] == '\x13')) {
         --left;
     }
     if (left == 0U) {
@@ -1475,7 +1489,8 @@ static bool minipp_needs_pre_arg_separator(const MiniPpString *out,
     while (right < arg->size &&
            (arg->data[right] == '\a' ||
             arg->data[right] == '\b' ||
-            arg->data[right] == '\x0e')) {
+            arg->data[right] == '\x0e' ||
+            arg->data[right] == '\x13')) {
         ++right;
     }
     if (right >= arg->size ||
@@ -2090,6 +2105,11 @@ static bool minipp_substitute_function_macro(MiniPpState *state,
                                          &param_index)) {
                 bool paste_operand =
                     minipp_param_is_paste_operand(macro, start, index);
+                bool source_leading_carrier =
+                    !paste_operand &&
+                    raw_args->leading_space[param_index] &&
+                    !raw_args->leading_space_generated[param_index] &&
+                    !raw_args->leading_space_stringized[param_index];
                 const MiniPpArgList *source_args =
                     paste_operand ? raw_args : expanded_args;
                 const MiniPpString *arg = &source_args->items[param_index];
@@ -2135,6 +2155,18 @@ static bool minipp_substitute_function_macro(MiniPpState *state,
                 if (!paste_operand &&
                     minipp_needs_pre_arg_separator(substituted, arg) &&
                     !minipp_string_append_char(substituted, ' ')) {
+                    goto oom;
+                }
+
+                /*
+                 * Carry source-leading argument ownership invisibly through
+                 * ordinary fixed-parameter forwarding.  The marker renders
+                 * as zero width, but a later macro invocation reconstructs
+                 * leading_space from it so a GNU variadic bridge can make
+                 * the same spacing decision as GCC.
+                 */
+                if (source_leading_carrier &&
+                    !minipp_string_append_char(substituted, '\x13')) {
                     goto oom;
                 }
 
@@ -2686,7 +2718,8 @@ static bool minipp_append_counter_builtin(MiniPpState *state,
 static bool minipp_is_zero_width_provenance(char value) {
     return value == '\a' || value == '\b' ||
            value == '\x0e' || value == '\x0f' ||
-           value == '\x10' || value == '\x11';
+           value == '\x10' || value == '\x11' ||
+           value == '\x13';
 }
 
 static bool minipp_expanding_token_follows_top_level_comma_padding(
