@@ -2,7 +2,7 @@ name: MiniPP Linux Exact 2000-2999
 
 concurrency:
   group: minipp-linux-2000-2999-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 on:
   push:
