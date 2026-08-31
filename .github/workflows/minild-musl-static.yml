@@ -1,0 +1,151 @@
+name: MiniLD Static musl malloc/free
+
+on:
+  push:
+    branches:
+      - "toolchain/minild-musl-static"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  musl-static:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Install RISC-V static build/runtime prerequisites
+        run: |
+          sudo apt-get -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            build-essential gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
+            qemu-user curl
+
+      - name: Build MiniLD and keep A0-A3 green
+        run: |
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/minild-musl all
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/minild-musl check-minild-a0
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/minild-musl check-minild-a1
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/minild-musl check-minild-a2
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/minild-musl check-minild-a3
+
+      - name: Build pristine musl 1.2.5 static archive with GNU producer
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/minild-musl-static"
+          mkdir -p "$work"
+          curl -fsSL https://musl.libc.org/releases/musl-1.2.5.tar.gz -o "$work/musl-1.2.5.tar.gz"
+          printf '%s  %s\n' \
+            a9a118bbe84d8764da0ea0d28b3ab3fae8477fc7e4085d90102b8596fc7c75e4 \
+            "$work/musl-1.2.5.tar.gz" | sha256sum -c -
+          tar -xzf "$work/musl-1.2.5.tar.gz" -C "$work"
+          src="$work/musl-1.2.5"
+          out="$work/musl-build"
+          mkdir -p "$out"
+          cd "$out"
+          CC=riscv64-linux-gnu-gcc \
+          AR=riscv64-linux-gnu-ar \
+          RANLIB=riscv64-linux-gnu-ranlib \
+            "$src/configure" \
+              --target=riscv64-linux-gnu \
+              --disable-shared \
+              --prefix=/usr
+          make -j4
+          test -s lib/libc.a
+          test -s crt/crt1.o
+          test -s crt/crti.o
+          test -s crt/crtn.o
+          printf 'MUSL_STATIC_OBJECTS=%s LIBC_BYTES=%s\n' \
+            "$(find obj -type f -name '*.o' | wc -l)" \
+            "$(stat -c %s lib/libc.a)"
+
+      - name: Build malloc/free probe
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/minild-musl-static"
+          cat >"$work/malloc_free_test.c" <<'C'
+          typedef unsigned long size_t;
+          void *malloc(size_t);
+          void free(void *);
+          int main(void) {
+              unsigned long *p = (unsigned long *)malloc(4 * sizeof(unsigned long));
+              unsigned long sum;
+              if (!p) return 11;
+              p[0] = 7;
+              p[1] = 11;
+              p[2] = 13;
+              p[3] = 11;
+              sum = p[0] + p[1] + p[2] + p[3];
+              free(p);
+              return sum == 42 ? 0 : 12;
+          }
+          C
+          riscv64-linux-gnu-gcc -O2 -fno-pie -fno-pic -c \
+            "$work/malloc_free_test.c" -o "$work/malloc_free_test.o"
+
+      - name: Validate GNU static reference
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/minild-musl-static"
+          musl="$work/musl-build"
+          libgcc="$(riscv64-linux-gnu-gcc -print-libgcc-file-name)"
+          riscv64-linux-gnu-ld -melf64lriscv -static -e _start \
+            -o "$work/reference" \
+            "$musl/crt/crt1.o" "$musl/crt/crti.o" "$work/malloc_free_test.o" \
+            --start-group "$musl/lib/libc.a" "$libgcc" --end-group \
+            "$musl/crt/crtn.o"
+          qemu-riscv64 "$work/reference"
+          echo "MUSL_GNU_REFERENCE=PASS"
+
+      - name: Link and run static musl with MiniLD
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/minild-musl-static"
+          musl="$work/musl-build"
+          libgcc="$(riscv64-linux-gnu-gcc -print-libgcc-file-name)"
+          minild="$GITHUB_WORKSPACE/build/minild-musl/bin/minic-ld"
+
+          started=$(date +%s)
+          "$minild" -melf64lriscv -static -e _start \
+            -o "$work/product" \
+            "$musl/crt/crt1.o" "$musl/crt/crti.o" "$work/malloc_free_test.o" \
+            --start-group "$musl/lib/libc.a" "$libgcc" --end-group \
+            "$musl/crt/crtn.o" \
+            >"$work/minild.stdout" 2>"$work/minild.stderr"
+          link_elapsed=$(( $(date +%s) - started ))
+
+          riscv64-linux-gnu-readelf -h "$work/product" >"$work/product.header"
+          riscv64-linux-gnu-readelf -l "$work/product" >"$work/product.programs"
+          set +e
+          qemu-riscv64 -strace "$work/product" >"$work/qemu.stdout" 2>"$work/qemu.stderr"
+          runtime_rc=$?
+          set -e
+          cat "$work/minild.stderr"
+          cat "$work/qemu.stdout"
+          cat "$work/qemu.stderr"
+          test "$runtime_rc" -eq 0
+          printf 'MINILD_MUSL_STATIC=PASS malloc=PASS free=PASS qemu_rc=%s link_elapsed_s=%s product_bytes=%s head=%s\n' \
+            "$runtime_rc" "$link_elapsed" "$(stat -c %s "$work/product")" "$GITHUB_SHA"
+
+      - name: Preserve static musl evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: minild-musl-static-evidence
+          path: |
+            build/minild-musl-static/minild.stderr
+            build/minild-musl-static/minild.stdout
+            build/minild-musl-static/qemu.stdout
+            build/minild-musl-static/qemu.stderr
+            build/minild-musl-static/product.header
+            build/minild-musl-static/product.programs
+          if-no-files-found: ignore
+          retention-days: 3
