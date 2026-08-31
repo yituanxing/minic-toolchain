@@ -117,6 +117,13 @@ MINIPP_SOURCES := \
 MINIPP_OBJECTS := $(patsubst %.c,$(BUILD_DIR)/obj/%.o,$(MINIPP_SOURCES))
 MINIPP_BINARY := $(BUILD_DIR)/bin/minic-cpp
 
+MINIAR_INCLUDES := -Iarchiver/include
+MINIAR_SOURCES := \
+	archiver/src/archive.c \
+	tools/minic-ar/main.c
+MINIAR_OBJECTS := $(patsubst %.c,$(BUILD_DIR)/obj/%.o,$(MINIAR_SOURCES))
+MINIAR_BINARY := $(BUILD_DIR)/bin/minic-ar
+
 TOKEN_MODEL_TEST_SOURCES := \
 	src/frontend/token.c \
 	tests/frontend/token_model_test.c
@@ -184,7 +191,7 @@ RV64_ABI_TEST_SOURCES := \
 RV64_ABI_TEST_OBJECTS := $(patsubst %.c,$(BUILD_DIR)/obj/%.o,$(RV64_ABI_TEST_SOURCES))
 RV64_ABI_TEST_BINARY  := $(BUILD_DIR)/tests/target/riscv64/abi-test
 
-.PHONY: all help prepare check check-fast check-minias-a0 check-minipp-a0 check-token-model check-lexer \
+.PHONY: all help prepare check check-fast check-minias-a0 check-minipp-a0 check-miniar-a0 check-token-model check-lexer \
 	check-type check-record check-type-alias check-ast-contract check-layout check-rv64-abi \
 	check-static-functions \
 	check-unsigned-declarations check-long-types check-for-loops check-unbounded-for-break \
@@ -197,14 +204,15 @@ RV64_ABI_TEST_BINARY  := $(BUILD_DIR)/tests/target/riscv64/abi-test
 	check-runtime sanitize bootstrap bootstrap-compare format format-check \
 	clean distclean print-config
 
-all: $(MINIC_CC_BINARY) $(MINIC_BINARY) $(MINIAS_BINARY) $(MINIPP_BINARY)
+all: $(MINIC_CC_BINARY) $(MINIC_BINARY) $(MINIAS_BINARY) $(MINIPP_BINARY) $(MINIAR_BINARY)
 
 help:
 	@printf '%s\n' \
 		"MiniC Toolchain build targets:" \
-		"  make                    Build minic-cc, minic-as, minic-cpp and the temporary minic compatibility entrypoint" \
+		"  make                    Build minic-cc, minic-as, minic-cpp, minic-ar and the temporary minic compatibility entrypoint" \
 		"  make check-minias-a0    Run the initial .s -> ELF ET_REL MiniAS gate" \
 		"  make check-minipp-a0    Compare independent MiniPP output byte-for-byte with GCC" \
+		"  make check-miniar-a0    Compare MiniAR archives byte-for-byte with GNU ar" \
 		"  make check-fast         Run the fast frontend and C0 gates" \
 		"  make check-token-model  Run the token data-model unit gate" \
 		"  make check-lexer        Run the C0 lexer unit gate" \
@@ -290,6 +298,24 @@ check-minipp-a0: $(MINIPP_BINARY)
 	MINIPP="$(abspath $(MINIPP_BINARY))" \
 	BUILD_DIR="$(abspath $(BUILD_DIR))" \
 	sh tests/preprocessor/run-a0.sh
+
+$(BUILD_DIR)/obj/archiver/%.o: archiver/%.c
+	@mkdir -p "$(dir $@)"
+	$(CC) $(CPPFLAGS) $(MINIAR_INCLUDES) $(MINIC_CFLAGS) -MMD -MP -c "$<" -o "$@"
+
+$(BUILD_DIR)/obj/tools/minic-ar/%.o: tools/minic-ar/%.c
+	@mkdir -p "$(dir $@)"
+	$(CC) $(CPPFLAGS) $(MINIAR_INCLUDES) $(MINIC_CFLAGS) -MMD -MP -c "$<" -o "$@"
+
+$(MINIAR_BINARY): $(MINIAR_OBJECTS)
+	@mkdir -p "$(dir $@)"
+	$(CC) $(MINIAR_OBJECTS) $(MINIC_LDFLAGS) -o "$@"
+
+check-miniar-a0: $(MINIAR_BINARY)
+	MINIAR="$(abspath $(MINIAR_BINARY))" \
+	BUILD_DIR="$(abspath $(BUILD_DIR))" \
+	HOST_CC="$(CC)" \
+	sh tests/archiver/run-a0.sh
 
 $(TOKEN_MODEL_TEST_BINARY): $(TOKEN_MODEL_TEST_OBJECTS)
 	@mkdir -p "$(dir $@)"
@@ -531,6 +557,7 @@ distclean:
 -include $(MINIC_OBJECTS:.o=.d)
 -include $(MINIAS_OBJECTS:.o=.d)
 -include $(MINIPP_OBJECTS:.o=.d)
+-include $(MINIAR_OBJECTS:.o=.d)
 -include $(TOKEN_MODEL_TEST_OBJECTS:.o=.d)
 -include $(LEXER_TEST_OBJECTS:.o=.d)
 -include $(TYPE_TEST_OBJECTS:.o=.d)
