@@ -960,6 +960,8 @@ static bool minipp_build_logical_args(MiniPpState *state,
                 minipp_arg_list_destroy(logical_args);
                 return false;
             }
+            logical_args->leading_space[logical_args->count - 1U] =
+                raw_args->leading_space[index];
             logical_args->leading_space_generated[logical_args->count - 1U] =
                 raw_args->leading_space_generated[index];
             logical_args->leading_space_stringized[logical_args->count - 1U] =
@@ -1024,6 +1026,8 @@ static bool minipp_build_logical_args(MiniPpState *state,
             minipp_arg_list_destroy(logical_args);
             return false;
         }
+        logical_args->leading_space[logical_args->count - 1U] =
+            raw_args->leading_space[index];
         logical_args->leading_space_generated[logical_args->count - 1U] =
             raw_args->leading_space_generated[index];
         logical_args->leading_space_stringized[logical_args->count - 1U] =
