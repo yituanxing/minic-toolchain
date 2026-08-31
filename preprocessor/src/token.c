@@ -405,7 +405,13 @@ static bool minipp_append_pragma_literal(MiniPpState *state,
         --out->size;
         out->data[out->size] = '\0';
     }
-    if (!minipp_string_append_char(out, '\n') ||
+    /*
+     * Keep a zero-width provenance marker immediately before the synthetic
+     * newline.  The final -P renderer can then preserve a preceding
+     * source-owned space without changing ordinary trailing-space behavior.
+     */
+    if (!minipp_string_append_char(out, '\x0f') ||
+        !minipp_string_append_char(out, '\n') ||
         !minipp_string_append_n(out, "#pragma ", 8U)) {
         fprintf(state->diagnostics, "minic-cpp: out-of-memory\n");
         return false;
@@ -1152,6 +1158,7 @@ static bool minipp_append_stringized_arg(MiniPpString *out,
 
         if (arg->data[index] == '\b' ||
             arg->data[index] == '\x0e' ||
+            arg->data[index] == '\x0f' ||
             arg->data[index] == '\v') {
             /*
              * \v is a generated renderer separator, not source whitespace.
