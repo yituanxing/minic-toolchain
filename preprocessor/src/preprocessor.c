@@ -793,8 +793,33 @@ static bool minipp_handle_include(MiniPpState *state,
         goto done;
     }
 
-    name = minipp_duplicate_range(name_start,
-                                  (size_t)(name_end - name_start));
+    if (have_expanded) {
+        size_t source_index;
+        size_t target_index = 0U;
+        size_t name_size = (size_t)(name_end - name_start);
+
+        name = malloc(name_size + 1U);
+        if (name != NULL) {
+            /*
+             * Generated token-separation provenance protects preprocessing
+             * tokens while a macro replacement is rescanned.  Once the
+             * replacement has formed a header-name token, that separator is
+             * not part of the header spelling (e.g. 9p + .h).
+             * Preserve ordinary source whitespace; discard only the
+             * zero-width generated separator.
+             */
+            for (source_index = 0U; source_index < name_size; ++source_index) {
+                if (name_start[source_index] == '\v') {
+                    continue;
+                }
+                name[target_index++] = name_start[source_index];
+            }
+            name[target_index] = '\0';
+        }
+    } else {
+        name = minipp_duplicate_range(name_start,
+                                      (size_t)(name_end - name_start));
+    }
     if (name == NULL) {
         fprintf(state->diagnostics, "minic-cpp: out-of-memory\n");
         goto done;
