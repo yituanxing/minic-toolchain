@@ -670,4 +670,51 @@ OUT4(column_zero_four)
 EOF
 run_exact empty-leading-nested-macro
 
-printf 'MINIPP_A0_EXACT=PASS cases=70 mode=byte-identical\n'
+cat >"$work/pragma-operator-boundary-space.c" <<'EOF'
+#define PB_STR1(s) #s
+#define PB_STR(s) PB_STR1(s)
+#define PB_DIAG(s) _Pragma(PB_STR(GCC diagnostic s))
+#define PB_IGNORE() PB_DIAG(ignored "-Wformat-zero-length")
+#define PB_WARN() PB_DIAG(warning "-Wformat-zero-length")
+#define PB_ASSERT(x) do { PB_IGNORE(); do { x; } while (0); PB_WARN(); } while (0)
+PB_ASSERT(foo())
+EOF
+run_exact pragma-operator-boundary-space
+
+cat >"$work/empty-prefix-annotation-column.c" <<'EOF'
+#define EP_ANNOT
+struct ep_record {
+ EP_ANNOT char *hname;
+};
+EOF
+run_exact empty-prefix-annotation-column
+
+cat >"$work/unary-minus-parameter-boundary.c" <<'EOF'
+#define UB_ERRNO 111
+#define UB_DROP(x) (((-x) << 16) | 0)
+UB_DROP(-UB_ERRNO)
+EOF
+run_exact unary-minus-parameter-boundary
+
+cat >"$work/dotted-pp-number-stringize.c" <<'EOF'
+#define DS_MAJOR 1
+#define DS_MINOR 5
+#define DS_RELEASE 2
+#define DS_VERSION DS_MAJOR.DS_MINOR.DS_RELEASE
+#define DS_QUOTE(x) #x
+#define DS_EXPAND_QUOTE(x) DS_QUOTE(x)
+DS_EXPAND_QUOTE(DS_VERSION)
+EOF
+run_exact dotted-pp-number-stringize
+
+cat >"$work/prfmt-fixed-to-variadic-spacing.c" <<'EOF'
+#define PF_INDEX(_p, _fmt, ...) _p(_fmt, ##__VA_ARGS__)
+#define PF_PRINT(fmt, ...) PF_INDEX(PF_FINAL, fmt, ##__VA_ARGS__)
+#define PF_FMT(fmt) "mod" ":pid:%d:%s: " fmt, PF_CURRENT->pid, __func__
+#define PF_WARN(fmt, ...) PF_PRINT("W" PF_FMT(fmt), ##__VA_ARGS__)
+#define PF_CURRENT get_current()
+PF_WARN("bad\n")
+EOF
+run_exact prfmt-fixed-to-variadic-spacing
+
+printf 'MINIPP_A0_EXACT=PASS cases=75 mode=byte-identical\n'
