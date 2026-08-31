@@ -8,3 +8,4 @@
 # second500 focused representatives:
 # autofs variadic spacing; SELinux token boundary; AppArmor pragma/spacing;
 # generated-header AppArmor case; AppArmor errno spacing; broad pragma stress; zstd stringize
+# gate: A0 77/77 + focus7 7/7 before full replay
