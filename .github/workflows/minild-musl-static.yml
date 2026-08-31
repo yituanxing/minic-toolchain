@@ -57,9 +57,9 @@ jobs:
               --prefix=/usr
           make -j4
           test -s lib/libc.a
-          test -s crt/crt1.o
-          test -s crt/crti.o
-          test -s crt/crtn.o
+          test -s obj/crt/crt1.o
+          test -s obj/crt/crti.o
+          test -s obj/crt/crtn.o
           printf 'MUSL_STATIC_OBJECTS=%s LIBC_BYTES=%s\n' \
             "$(find obj -type f -name '*.o' | wc -l)" \
             "$(stat -c %s lib/libc.a)"
@@ -98,9 +98,9 @@ jobs:
           libgcc="$(riscv64-linux-gnu-gcc -print-libgcc-file-name)"
           riscv64-linux-gnu-ld -melf64lriscv -static -e _start \
             -o "$work/reference" \
-            "$musl/crt/crt1.o" "$musl/crt/crti.o" "$work/malloc_free_test.o" \
+            "$musl/obj/crt/crt1.o" "$musl/obj/crt/crti.o" "$work/malloc_free_test.o" \
             --start-group "$musl/lib/libc.a" "$libgcc" --end-group \
-            "$musl/crt/crtn.o"
+            "$musl/obj/crt/crtn.o"
           qemu-riscv64 "$work/reference"
           echo "MUSL_GNU_REFERENCE=PASS"
 
@@ -116,9 +116,9 @@ jobs:
           started=$(date +%s)
           "$minild" -melf64lriscv -static -e _start \
             -o "$work/product" \
-            "$musl/crt/crt1.o" "$musl/crt/crti.o" "$work/malloc_free_test.o" \
+            "$musl/obj/crt/crt1.o" "$musl/obj/crt/crti.o" "$work/malloc_free_test.o" \
             --start-group "$musl/lib/libc.a" "$libgcc" --end-group \
-            "$musl/crt/crtn.o" \
+            "$musl/obj/crt/crtn.o" \
             >"$work/minild.stdout" 2>"$work/minild.stderr"
           link_elapsed=$(( $(date +%s) - started ))
 
