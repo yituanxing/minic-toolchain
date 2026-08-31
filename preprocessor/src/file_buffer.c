@@ -271,7 +271,7 @@ bool minipp_render_gcc_p_output(const MiniPpString *input,
         }
 
         if (value == '\b' || value == '\x0e' ||
-            value == '\x13') {
+            value == '\x13' || value == '\x14') {
             ++index;
             continue;
         }
