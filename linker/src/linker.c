@@ -27,6 +27,7 @@ typedef struct MiniLdSection {
     unsigned char *data;
     size_t size;
     size_t capacity;
+    size_t relocation_count;
 } MiniLdSection;
 
 typedef struct MiniLdSymbol {
@@ -47,6 +48,11 @@ typedef struct MiniLdReloc {
     int64_t addend;
 } MiniLdReloc;
 
+typedef struct MiniLdIndexSlot {
+    uint64_t hash;
+    size_t index_plus_one;
+} MiniLdIndexSlot;
+
 typedef struct MiniLdState {
     MiniLdSection *sections;
     size_t section_count;
@@ -57,6 +63,11 @@ typedef struct MiniLdState {
     MiniLdReloc *relocs;
     size_t reloc_count;
     size_t reloc_capacity;
+    MiniLdIndexSlot *section_index;
+    size_t section_index_capacity;
+    MiniLdIndexSlot *global_index;
+    size_t global_index_capacity;
+    size_t global_index_count;
     uint32_t elf_flags;
     bool have_input;
     FILE *diagnostics;
@@ -234,6 +245,8 @@ static void state_destroy(MiniLdState *state) {
     free(state->sections);
     free(state->symbols);
     free(state->relocs);
+    free(state->section_index);
+    free(state->global_index);
 }
 
 static bool ensure_section_capacity(MiniLdState *state) {
@@ -348,6 +361,126 @@ static bool section_append_data(MiniLdSection *section,
     return true;
 }
 
+
+static uint64_t hash_text(const char *text) {
+    uint64_t hash = UINT64_C(14695981039346656037);
+
+    while (*text != '\0') {
+        hash ^= (unsigned char)*text++;
+        hash *= UINT64_C(1099511628211);
+    }
+    return hash;
+}
+
+static void insert_index_slot(MiniLdIndexSlot *slots,
+                              size_t capacity,
+                              uint64_t hash,
+                              size_t index) {
+    size_t position = (size_t)hash & (capacity - 1U);
+
+    while (slots[position].index_plus_one != 0U) {
+        position = (position + 1U) & (capacity - 1U);
+    }
+    slots[position].hash = hash;
+    slots[position].index_plus_one = index + 1U;
+}
+
+static bool rebuild_section_index(MiniLdState *state, size_t capacity) {
+    MiniLdIndexSlot *slots;
+    size_t i;
+
+    slots = calloc(capacity, sizeof(*slots));
+    if (slots == NULL) {
+        return false;
+    }
+    for (i = 0U; i < state->section_count; ++i) {
+        uint64_t hash = hash_text(state->sections[i].name);
+        insert_index_slot(slots, capacity, hash, i);
+    }
+    free(state->section_index);
+    state->section_index = slots;
+    state->section_index_capacity = capacity;
+    return true;
+}
+
+static bool ensure_section_index_insert(MiniLdState *state) {
+    size_t capacity = state->section_index_capacity;
+
+    if (capacity != 0U &&
+        (state->section_count + 1U) * 10U < capacity * 7U) {
+        return true;
+    }
+    if (capacity == 0U) {
+        capacity = 128U;
+    } else {
+        if (capacity > SIZE_MAX / 2U) {
+            return false;
+        }
+        capacity *= 2U;
+    }
+    return rebuild_section_index(state, capacity);
+}
+
+static size_t find_section_index(const MiniLdState *state,
+                                 const char *name,
+                                 uint64_t hash) {
+    size_t position;
+
+    if (state->section_index_capacity == 0U) {
+        return SIZE_MAX;
+    }
+    position = (size_t)hash & (state->section_index_capacity - 1U);
+    while (state->section_index[position].index_plus_one != 0U) {
+        const MiniLdIndexSlot *slot = &state->section_index[position];
+        size_t index = slot->index_plus_one - 1U;
+
+        if (slot->hash == hash &&
+            strcmp(state->sections[index].name, name) == 0) {
+            return index;
+        }
+        position = (position + 1U) & (state->section_index_capacity - 1U);
+    }
+    return SIZE_MAX;
+}
+
+static bool rebuild_global_index(MiniLdState *state, size_t capacity) {
+    MiniLdIndexSlot *slots;
+    size_t i;
+
+    slots = calloc(capacity, sizeof(*slots));
+    if (slots == NULL) {
+        return false;
+    }
+    for (i = 0U; i < state->symbol_count; ++i) {
+        if (ELF64_ST_BIND(state->symbols[i].info) != STB_LOCAL) {
+            uint64_t hash = hash_text(state->symbols[i].name);
+            insert_index_slot(slots, capacity, hash, i);
+        }
+    }
+    free(state->global_index);
+    state->global_index = slots;
+    state->global_index_capacity = capacity;
+    return true;
+}
+
+static bool ensure_global_index_insert(MiniLdState *state) {
+    size_t capacity = state->global_index_capacity;
+
+    if (capacity != 0U &&
+        (state->global_index_count + 1U) * 10U < capacity * 7U) {
+        return true;
+    }
+    if (capacity == 0U) {
+        capacity = 256U;
+    } else {
+        if (capacity > SIZE_MAX / 2U) {
+            return false;
+        }
+        capacity *= 2U;
+    }
+    return rebuild_global_index(state, capacity);
+}
+
 static bool find_or_add_section(MiniLdState *state,
                                 const char *name,
                                 uint32_t type,
@@ -355,31 +488,32 @@ static bool find_or_add_section(MiniLdState *state,
                                 uint64_t align,
                                 uint64_t entsize,
                                 size_t *section_out) {
-    size_t i;
+    uint64_t hash = hash_text(name);
+    size_t index = find_section_index(state, name, hash);
     MiniLdSection *section;
 
-    for (i = 0U; i < state->section_count; ++i) {
-        section = &state->sections[i];
-        if (strcmp(section->name, name) == 0) {
-            if (section->type != type || section->flags != flags ||
-                section->entsize != entsize) {
-                fprintf(state->diagnostics,
-                        "minic-ld: incompatible-section:%s\n",
-                        name);
-                return false;
-            }
-            if (align > section->align) {
-                section->align = align;
-            }
-            *section_out = i;
-            return true;
+    if (index != SIZE_MAX) {
+        section = &state->sections[index];
+        if (section->type != type || section->flags != flags ||
+            section->entsize != entsize) {
+            fprintf(state->diagnostics,
+                    "minic-ld: incompatible-section:%s\n",
+                    name);
+            return false;
         }
+        if (align > section->align) {
+            section->align = align;
+        }
+        *section_out = index;
+        return true;
     }
-    if (!ensure_section_capacity(state)) {
+    if (!ensure_section_capacity(state) ||
+        !ensure_section_index_insert(state)) {
         fprintf(state->diagnostics, "minic-ld: out-of-memory:sections\n");
         return false;
     }
-    section = &state->sections[state->section_count];
+    index = state->section_count;
+    section = &state->sections[index];
     memset(section, 0, sizeof(*section));
     section->name = minild_strdup(name);
     if (section->name == NULL) {
@@ -390,7 +524,12 @@ static bool find_or_add_section(MiniLdState *state,
     section->flags = flags;
     section->align = align == 0U ? 1U : align;
     section->entsize = entsize;
-    *section_out = state->section_count++;
+    ++state->section_count;
+    insert_index_slot(state->section_index,
+                      state->section_index_capacity,
+                      hash,
+                      index);
+    *section_out = index;
     return true;
 }
 
@@ -430,13 +569,22 @@ static bool symbol_is_defined(const MiniLdSymbol *symbol) {
 }
 
 static size_t find_global_symbol(const MiniLdState *state, const char *name) {
-    size_t i;
+    uint64_t hash = hash_text(name);
+    size_t position;
 
-    for (i = 0U; i < state->symbol_count; ++i) {
-        if (ELF64_ST_BIND(state->symbols[i].info) != STB_LOCAL &&
-            strcmp(state->symbols[i].name, name) == 0) {
-            return i;
+    if (state->global_index_capacity == 0U) {
+        return SIZE_MAX;
+    }
+    position = (size_t)hash & (state->global_index_capacity - 1U);
+    while (state->global_index[position].index_plus_one != 0U) {
+        const MiniLdIndexSlot *slot = &state->global_index[position];
+        size_t index = slot->index_plus_one - 1U;
+
+        if (slot->hash == hash &&
+            strcmp(state->symbols[index].name, name) == 0) {
+            return index;
         }
+        position = (position + 1U) & (state->global_index_capacity - 1U);
     }
     return SIZE_MAX;
 }
@@ -453,14 +601,27 @@ static bool add_or_merge_global_symbol(MiniLdState *state,
     unsigned new_bind = ELF64_ST_BIND(info);
 
     if (existing_index == SIZE_MAX) {
-        return add_local_symbol(state,
-                                name,
-                                section,
-                                value,
-                                size,
-                                info,
-                                other,
-                                symbol_out);
+        size_t index;
+        uint64_t hash = hash_text(name);
+
+        if (!ensure_global_index_insert(state) ||
+            !add_local_symbol(state,
+                              name,
+                              section,
+                              value,
+                              size,
+                              info,
+                              other,
+                              &index)) {
+            return false;
+        }
+        insert_index_slot(state->global_index,
+                          state->global_index_capacity,
+                          hash,
+                          index);
+        ++state->global_index_count;
+        *symbol_out = index;
+        return true;
     }
 
     {
@@ -516,6 +677,7 @@ static bool add_relocation(MiniLdState *state,
     reloc->type = type;
     reloc->symbol = symbol;
     reloc->addend = addend;
+    ++state->sections[section].relocation_count;
     return true;
 }
 
@@ -1343,15 +1505,7 @@ done:
 
 static size_t relocation_count_for_section(const MiniLdState *state,
                                            size_t section) {
-    size_t i;
-    size_t count = 0U;
-
-    for (i = 0U; i < state->reloc_count; ++i) {
-        if (state->relocs[i].section == section) {
-            ++count;
-        }
-    }
-    return count;
+    return state->sections[section].relocation_count;
 }
 
 static bool assign_symbol_indices(MiniLdState *state, size_t *local_count_out) {
@@ -1381,6 +1535,7 @@ static bool write_output(MiniLdState *state, const char *path) {
     size_t strtab_index;
     size_t shstrtab_index;
     size_t *relocation_section_indices = NULL;
+    size_t *relocation_write_counts = NULL;
     uint32_t *section_name_offsets = NULL;
     uint32_t *relocation_name_offsets = NULL;
     uint32_t *symbol_name_offsets = NULL;
@@ -1414,6 +1569,9 @@ static bool write_output(MiniLdState *state, const char *path) {
     relocation_section_indices =
         malloc((state->section_count == 0U ? 1U : state->section_count) *
                sizeof(*relocation_section_indices));
+    relocation_write_counts =
+        calloc(state->section_count == 0U ? 1U : state->section_count,
+               sizeof(*relocation_write_counts));
     section_name_offsets =
         calloc(state->section_count == 0U ? 1U : state->section_count,
                sizeof(*section_name_offsets));
@@ -1425,8 +1583,9 @@ static bool write_output(MiniLdState *state, const char *path) {
                sizeof(*symbol_name_offsets));
     headers = calloc(output_section_count + 1U, sizeof(*headers));
     symbols = calloc(state->symbol_count + 1U, sizeof(*symbols));
-    if (relocation_section_indices == NULL || section_name_offsets == NULL ||
-        relocation_name_offsets == NULL || symbol_name_offsets == NULL ||
+    if (relocation_section_indices == NULL || relocation_write_counts == NULL ||
+        section_name_offsets == NULL || relocation_name_offsets == NULL ||
+        symbol_name_offsets == NULL ||
         headers == NULL || symbols == NULL) {
         goto oom;
     }
@@ -1640,34 +1799,30 @@ static bool write_output(MiniLdState *state, const char *path) {
         }
     }
 
-    for (i = 0U; i < state->section_count; ++i) {
-        size_t index = relocation_section_indices[i];
-        size_t write_index = 0U;
-        size_t j;
+    for (i = 0U; i < state->reloc_count; ++i) {
+        MiniLdReloc *input = &state->relocs[i];
+        size_t section = input->section;
+        size_t index = relocation_section_indices[section];
+        size_t write_index = relocation_write_counts[section]++;
+        Elf64_Rela output;
+        size_t symbol_index = 0U;
 
         if (index == SIZE_MAX) {
-            continue;
+            fprintf(state->diagnostics,
+                    "minic-ld: internal-missing-rela-section:%zu\n",
+                    section);
+            goto done;
         }
-        for (j = 0U; j < state->reloc_count; ++j) {
-            MiniLdReloc *input = &state->relocs[j];
-            Elf64_Rela output;
-            size_t symbol_index = 0U;
-
-            if (input->section != i) {
-                continue;
-            }
-            if (input->symbol != SIZE_MAX) {
-                symbol_index = state->symbols[input->symbol].final_index;
-            }
-            output.r_offset = input->offset;
-            output.r_info = ELF64_R_INFO(symbol_index, input->type);
-            output.r_addend = input->addend;
-            memcpy(image + headers[index].sh_offset +
-                       write_index * sizeof(output),
-                   &output,
-                   sizeof(output));
-            ++write_index;
+        if (input->symbol != SIZE_MAX) {
+            symbol_index = state->symbols[input->symbol].final_index;
         }
+        output.r_offset = input->offset;
+        output.r_info = ELF64_R_INFO(symbol_index, input->type);
+        output.r_addend = input->addend;
+        memcpy(image + headers[index].sh_offset +
+                   write_index * sizeof(output),
+               &output,
+               sizeof(output));
     }
 
     memcpy(image + headers[symtab_index].sh_offset,
@@ -1712,6 +1867,7 @@ done:
     free(headers);
     free(symbols);
     free(relocation_section_indices);
+    free(relocation_write_counts);
     free(section_name_offsets);
     free(relocation_name_offsets);
     free(symbol_name_offsets);
