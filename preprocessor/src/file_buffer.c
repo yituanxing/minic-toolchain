@@ -170,6 +170,9 @@ bool minipp_render_gcc_p_output(const MiniPpString *input,
     bool preserve_space_before_pragma_newline = false;
     bool suppress_next_physical_newline_after_pragma = false;
     size_t empty_macro_padding_count = 0U;
+    size_t empty_object_boundary_count = 0U;
+    bool empty_object_had_leading_indent = false;
+    bool empty_object_followed_source_space = false;
 
     minipp_string_init(output);
 
@@ -183,6 +186,9 @@ bool minipp_render_gcc_p_output(const MiniPpString *input,
                 pending_space = false;
                 preserve_space_before_pragma_newline = false;
                 empty_macro_padding_count = 0U;
+                empty_object_boundary_count = 0U;
+                empty_object_had_leading_indent = false;
+                empty_object_followed_source_space = false;
                 line_start = true;
                 ++index;
                 continue;
@@ -208,6 +214,9 @@ bool minipp_render_gcc_p_output(const MiniPpString *input,
             pending_space = false;
             preserve_space_before_pragma_newline = false;
             empty_macro_padding_count = 0U;
+            empty_object_boundary_count = 0U;
+            empty_object_had_leading_indent = false;
+            empty_object_followed_source_space = false;
             if (!minipp_string_append_char(output, '\n')) {
                 goto oom;
             }
@@ -219,6 +228,18 @@ bool minipp_render_gcc_p_output(const MiniPpString *input,
         if (value == '\a') {
             if (line_start) {
                 ++empty_macro_padding_count;
+            }
+            ++index;
+            continue;
+        }
+
+        if (value == '\x11') {
+            if (line_start) {
+                if (empty_object_boundary_count == 0U &&
+                    leading_spaces != 0U) {
+                    empty_object_had_leading_indent = true;
+                }
+                ++empty_object_boundary_count;
             }
             ++index;
             continue;
@@ -258,6 +279,10 @@ bool minipp_render_gcc_p_output(const MiniPpString *input,
             value == '\v' || value == '\f' || value == '\r') {
             if (line_start) {
                 ++leading_spaces;
+                if (empty_object_boundary_count != 0U &&
+                    (value == ' ' || value == '\t')) {
+                    empty_object_followed_source_space = true;
+                }
             } else {
                 pending_space = true;
             }
@@ -266,6 +291,13 @@ bool minipp_render_gcc_p_output(const MiniPpString *input,
         }
 
         suppress_next_physical_newline_after_pragma = false;
+        if (line_start &&
+            empty_object_boundary_count == 1U &&
+            empty_object_had_leading_indent &&
+            empty_object_followed_source_space &&
+            leading_spaces != 0U) {
+            --leading_spaces;
+        }
         while (line_start && leading_spaces != 0U) {
             if (!minipp_string_append_char(output, ' ')) {
                 goto oom;
@@ -274,6 +306,9 @@ bool minipp_render_gcc_p_output(const MiniPpString *input,
         }
         line_start = false;
         empty_macro_padding_count = 0U;
+        empty_object_boundary_count = 0U;
+        empty_object_had_leading_indent = false;
+        empty_object_followed_source_space = false;
 
         if (pending_space) {
             if (!minipp_string_append_char(output, ' ')) {
