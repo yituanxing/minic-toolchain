@@ -6,16 +6,19 @@
 
 static void usage(FILE *out, const char *argv0) {
     fprintf(out,
-            "usage: %s -r -o OUTPUT [--whole-archive ARCHIVE --no-whole-archive] "
+            "usage: %s [-r|-static] -o OUTPUT [-e SYMBOL] "
+            "[--whole-archive ARCHIVE --no-whole-archive] "
             "[--start-group ARCHIVE --end-group] INPUT...\n",
             argv0);
 }
 
 int main(int argc, char **argv) {
     const char *output = NULL;
+    const char *entry_symbol = "_start";
     MiniLdInput inputs[4096];
     size_t input_count = 0U;
     bool relocatable = false;
+    bool static_link = false;
     bool whole_archive = false;
     bool group_mode = false;
     int i;
@@ -33,6 +36,8 @@ int main(int argc, char **argv) {
     for (i = 1; i < argc; ++i) {
         if (strcmp(argv[i], "-r") == 0) {
             relocatable = true;
+        } else if (strcmp(argv[i], "-static") == 0) {
+            static_link = true;
         } else if (strcmp(argv[i], "-o") == 0) {
             if (++i >= argc) {
                 usage(stderr, argv[0]);
@@ -79,10 +84,7 @@ int main(int argc, char **argv) {
                 usage(stderr, argv[0]);
                 return 2;
             }
-            /*
-             * Entry selection has no effect on an ET_REL output. Accept it
-             * because Linux purgatory passes -e together with -r.
-             */
+            entry_symbol = argv[i];
         } else if (argv[i][0] == '-') {
             fprintf(stderr, "minic-ld: unsupported-option:%s\n", argv[i]);
             return 2;
@@ -103,14 +105,22 @@ int main(int argc, char **argv) {
         }
     }
 
-    if (!relocatable || output == NULL || input_count == 0U ||
-        whole_archive || group_mode) {
+    if (output == NULL || input_count == 0U || whole_archive || group_mode) {
         usage(stderr, argv[0]);
         return 2;
     }
 
-    return minild_link_relocatable_elf64_riscv_inputs(output,
-                                                       inputs,
-                                                       input_count,
-                                                       stderr);
+    if (relocatable) {
+        return minild_link_relocatable_elf64_riscv_inputs(output,
+                                                           inputs,
+                                                           input_count,
+                                                           stderr);
+    }
+
+    (void)static_link;
+    return minild_link_static_elf64_riscv_inputs(output,
+                                                  inputs,
+                                                  input_count,
+                                                  entry_symbol,
+                                                  stderr);
 }
