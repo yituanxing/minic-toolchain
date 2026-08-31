@@ -1730,9 +1730,30 @@ static bool minipp_param_is_direct_bare_variadic_argument(
          * source-owned and must survive.  For later variadic slots the older
          * direct-bridge rule still applies.
          */
-        return argument_index > fixed_count ||
-               (argument_index == fixed_count &&
-                !owner_param_is_variadic);
+        {
+            bool result =
+                argument_index > fixed_count ||
+                (argument_index == fixed_count &&
+                 !owner_param_is_variadic);
+
+            if (strcmp(owner->name, "VMM_PRINT") == 0 ||
+                strcmp(owner->name, "VMM_SPAM") == 0 ||
+                strcmp(owner->name, "nvkm_printk_") == 0 ||
+                strcmp(owner->name, "nvkm_printk__") == 0 ||
+                strcmp(owner->name, "nvkm_printk___") == 0) {
+                fprintf(state->diagnostics,
+                        "MINIPP_VARG_TRACE owner=%s callee=%s "
+                        "arg_index=%zu fixed_count=%zu owner_variadic=%d "
+                        "result=%d\n",
+                        owner->name,
+                        callee->name,
+                        argument_index,
+                        fixed_count,
+                        owner_param_is_variadic ? 1 : 0,
+                        result ? 1 : 0);
+            }
+            return result;
+        }
     }
 }
 
