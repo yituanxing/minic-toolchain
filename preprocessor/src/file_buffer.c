@@ -169,6 +169,8 @@ bool minipp_render_gcc_p_output(const MiniPpString *input,
     bool pending_space = false;
     bool preserve_space_before_pragma_newline = false;
     size_t empty_macro_padding_count = 0U;
+    bool empty_macro_had_leading_indent = false;
+    bool empty_macro_followed_source_space = false;
 
     minipp_string_init(output);
 
@@ -197,6 +199,8 @@ bool minipp_render_gcc_p_output(const MiniPpString *input,
             pending_space = false;
             preserve_space_before_pragma_newline = false;
             empty_macro_padding_count = 0U;
+            empty_macro_had_leading_indent = false;
+            empty_macro_followed_source_space = false;
             if (!minipp_string_append_char(output, '\n')) {
                 goto oom;
             }
@@ -207,6 +211,10 @@ bool minipp_render_gcc_p_output(const MiniPpString *input,
 
         if (value == '\a') {
             if (line_start) {
+                if (empty_macro_padding_count == 0U &&
+                    leading_spaces != 0U) {
+                    empty_macro_had_leading_indent = true;
+                }
                 ++empty_macro_padding_count;
             }
             ++index;
@@ -235,6 +243,10 @@ bool minipp_render_gcc_p_output(const MiniPpString *input,
             value == '\v' || value == '\f' || value == '\r') {
             if (line_start) {
                 ++leading_spaces;
+                if (empty_macro_padding_count != 0U &&
+                    (value == ' ' || value == '\t')) {
+                    empty_macro_followed_source_space = true;
+                }
             } else {
                 pending_space = true;
             }
@@ -242,6 +254,19 @@ bool minipp_render_gcc_p_output(const MiniPpString *input,
             continue;
         }
 
+        if (line_start &&
+            empty_macro_padding_count == 1U &&
+            empty_macro_had_leading_indent &&
+            empty_macro_followed_source_space &&
+            leading_spaces != 0U) {
+            /*
+             * GCC coalesces the indentation and the separator around a
+             * single empty leading annotation into one boundary.  Keep this
+             * narrow: multiple empty macros and empty-only lines retain the
+             * existing padding contract.
+             */
+            --leading_spaces;
+        }
         while (line_start && leading_spaces != 0U) {
             if (!minipp_string_append_char(output, ' ')) {
                 goto oom;
@@ -250,6 +275,8 @@ bool minipp_render_gcc_p_output(const MiniPpString *input,
         }
         line_start = false;
         empty_macro_padding_count = 0U;
+        empty_macro_had_leading_indent = false;
+        empty_macro_followed_source_space = false;
 
         if (pending_space) {
             if (!minipp_string_append_char(output, ' ')) {
