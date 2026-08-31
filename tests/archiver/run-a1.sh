@@ -29,6 +29,15 @@ SRC
 
 (
     cd "$work/inner"
+    "$HOST_AR" rcSD empty-child.a
+    "$HOST_AR" rcSTPD reference-empty-parent.a empty-child.a leaf/a.o
+    "$MINIAR" rcSTPD product-empty-parent.a empty-child.a leaf/a.o
+    cmp reference-empty-parent.a product-empty-parent.a
+    test "$("$HOST_AR" t product-empty-parent.a)" = "leaf/a.o"
+)
+
+(
+    cd "$work/inner"
     "$HOST_AR" rcsTPD reference-inner.a leaf/a.o leaf/b.o
     "$MINIAR" rcsTPD product-inner.a leaf/a.o leaf/b.o
     cmp reference-inner.a product-inner.a
@@ -71,4 +80,4 @@ SRC
     cmp ordinary.reference.list ordinary.product.list
 )
 
-echo "MINIAR_A1=PASS thin-flatten=byte-exact list=gnu-exact noop-mPiT=byte-exact nested-link=PASS"
+echo "MINIAR_A1=PASS thin-flatten=byte-exact empty-archive-flatten=byte-exact list=gnu-exact noop-mPiT=byte-exact nested-link=PASS"
