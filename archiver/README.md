@@ -31,3 +31,6 @@ production boundary.
 A1 also accepts the Linux Kbuild final archive reorder boundary (`ar mPiT`).
 On RISC-V defconfig the selected move-member set is empty, so GNU ar defines
 this invocation as a successful no-op; the differential gate locks that behavior.
+
+Empty ordinary subarchives are also flattened when constructing a thin archive.
+This matches GNU ar and is required by Linux directory-level empty built-in archives.
