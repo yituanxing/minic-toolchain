@@ -867,4 +867,12 @@ SM_WRAP(value, yy)
 EOF
 run_exact source-leading-multihop-fixed-to-variadic
 
-printf 'MINIPP_A0_EXACT=PASS cases=91 mode=byte-identical\n'
+cat >"$work/source-generated-head-through-gnu-chain.c" <<'EOF'
+#define SG_VALUE 32
+#define SG_INNER(fmt, args...) SG_FINAL("", ##args, "")
+#define SG_MOD(fmt, args...) SG_INNER("mod " fmt, ##args)
+SG_MOD("x %u", SG_VALUE - 1)
+EOF
+run_exact source-generated-head-through-gnu-chain
+
+printf 'MINIPP_A0_EXACT=PASS cases=92 mode=byte-identical\n'
