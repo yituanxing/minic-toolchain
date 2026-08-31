@@ -1,0 +1,124 @@
+name: MiniLD Linux Purgatory
+
+on:
+  push:
+    branches:
+      - "toolchain/minild-purgatory"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  linux-purgatory:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Install Linux build prerequisites
+        run: |
+          sudo apt-get -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
+            bc bison flex libssl-dev libelf-dev make curl xz-utils file
+
+      - name: Build exact MiniLD
+        run: |
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/minild-purgatory all
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/minild-purgatory check-minild-a0
+
+      - name: Prepare Linux 6.6.143
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/minild-linux-purgatory"
+          archive="$work/linux-6.6.143.tar.xz"
+          src="$work/linux-6.6.143"
+          out="$work/out"
+          mkdir -p "$work"
+          curl -fsSL https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.6.143.tar.xz -o "$archive"
+          printf '%s  %s\n' \
+            dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932 \
+            "$archive" | sha256sum -c -
+          tar -xJf "$archive" -C "$work"
+          make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- defconfig
+
+      - name: Install single-target MiniLD wrapper
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/minild-linux-purgatory"
+          wrapper="$work/riscv64-linux-gnu-ld-minild-purgatory"
+          cat >"$wrapper" <<'SH'
+          #!/usr/bin/env bash
+          set -Eeuo pipefail
+          : "${MINILD:?MINILD is not set}"
+          : "${MINILD_TRACE:?MINILD_TRACE is not set}"
+          args=("$@")
+          output=
+          for ((i=0; i<${#args[@]}; ++i)); do
+            if [[ "${args[i]}" == "-o" && $((i+1)) -lt ${#args[@]} ]]; then
+              output="${args[i+1]}"
+              break
+            fi
+          done
+          if [[ "$output" == "arch/riscv/purgatory/purgatory.ro" ]]; then
+            {
+              printf 'minild'
+              printf ' %q' "$@"
+              printf '\n'
+            } >>"$MINILD_TRACE"
+            exec "$MINILD" "$@"
+          fi
+          {
+            printf 'gnu-ld'
+            printf ' %q' "$@"
+            printf '\n'
+          } >>"$MINILD_TRACE"
+          exec /usr/bin/riscv64-linux-gnu-ld "$@"
+          SH
+          chmod +x "$wrapper"
+          : >"$work/minild.trace"
+
+      - name: Build Linux Image with MiniLD purgatory boundary
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/minild-linux-purgatory"
+          src="$work/linux-6.6.143"
+          out="$work/out"
+          wrapper="$work/riscv64-linux-gnu-ld-minild-purgatory"
+          export MINILD="$GITHUB_WORKSPACE/build/minild-purgatory/bin/minic-ld"
+          export MINILD_TRACE="$work/minild.trace"
+
+          started=$(date +%s)
+          make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
+            LD="$wrapper" -j4 Image >"$work/kbuild.log" 2>&1
+          elapsed=$(( $(date +%s) - started ))
+
+          test -s "$out/arch/riscv/purgatory/purgatory.ro"
+          test -s "$out/arch/riscv/purgatory/purgatory.chk"
+          test -s "$out/arch/riscv/boot/Image"
+          test "$(grep -c '^minild ' "$work/minild.trace")" -eq 1
+          riscv64-linux-gnu-readelf -h "$out/arch/riscv/purgatory/purgatory.ro" |
+            grep -q 'REL (Relocatable file)'
+          riscv64-linux-gnu-readelf -Wr "$out/arch/riscv/purgatory/purgatory.ro" \
+            >"$work/purgatory.relocs"
+          printf 'MINILD_LINUX_PURGATORY=PASS minild_calls=1 elapsed_s=%s head=%s\n' \
+            "$elapsed" "$GITHUB_SHA"
+
+      - name: Preserve MiniLD purgatory evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: minild-linux-purgatory
+          path: |
+            build/minild-linux-purgatory/minild.trace
+            build/minild-linux-purgatory/kbuild.log
+            build/minild-linux-purgatory/purgatory.relocs
+            build/minild-linux-purgatory/out/.config
+          if-no-files-found: ignore
+          retention-days: 3
