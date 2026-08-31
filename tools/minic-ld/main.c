@@ -5,14 +5,19 @@
 #include <string.h>
 
 static void usage(FILE *out, const char *argv0) {
-    fprintf(out, "usage: %s -r -o OUTPUT INPUT.o [INPUT.o ...]\n", argv0);
+    fprintf(out,
+            "usage: %s -r -o OUTPUT [--whole-archive ARCHIVE --no-whole-archive] "
+            "[--start-group ARCHIVE --end-group] INPUT...\n",
+            argv0);
 }
 
 int main(int argc, char **argv) {
     const char *output = NULL;
-    const char *inputs[1024];
+    MiniLdInput inputs[4096];
     size_t input_count = 0U;
     bool relocatable = false;
+    bool whole_archive = false;
+    bool group_mode = false;
     int i;
 
     if (argc == 2 &&
@@ -21,7 +26,7 @@ int main(int argc, char **argv) {
         return 0;
     }
     if (argc == 2 && strcmp(argv[1], "--version") == 0) {
-        puts("minic-ld 0.1");
+        puts("minic-ld 0.2");
         return 0;
     }
 
@@ -34,6 +39,16 @@ int main(int argc, char **argv) {
                 return 2;
             }
             output = argv[i];
+        } else if (strcmp(argv[i], "--whole-archive") == 0) {
+            whole_archive = true;
+        } else if (strcmp(argv[i], "--no-whole-archive") == 0) {
+            whole_archive = false;
+        } else if (strcmp(argv[i], "--start-group") == 0 ||
+                   strcmp(argv[i], "-(") == 0) {
+            group_mode = true;
+        } else if (strcmp(argv[i], "--end-group") == 0 ||
+                   strcmp(argv[i], "-)") == 0) {
+            group_mode = false;
         } else if (strncmp(argv[i], "-m", 2U) == 0) {
             const char *emulation = argv[i] + 2;
             if (*emulation == '\0') {
@@ -76,17 +91,26 @@ int main(int argc, char **argv) {
                 fprintf(stderr, "minic-ld: too-many-inputs\n");
                 return 2;
             }
-            inputs[input_count++] = argv[i];
+            inputs[input_count].path = argv[i];
+            if (whole_archive) {
+                inputs[input_count].kind = MINILD_INPUT_WHOLE_ARCHIVE;
+            } else if (group_mode) {
+                inputs[input_count].kind = MINILD_INPUT_GROUP_ARCHIVE;
+            } else {
+                inputs[input_count].kind = MINILD_INPUT_OBJECT;
+            }
+            ++input_count;
         }
     }
 
-    if (!relocatable || output == NULL || input_count == 0U) {
+    if (!relocatable || output == NULL || input_count == 0U ||
+        whole_archive || group_mode) {
         usage(stderr, argv[0]);
         return 2;
     }
 
-    return minild_link_relocatable_elf64_riscv(output,
-                                                inputs,
-                                                input_count,
-                                                stderr);
+    return minild_link_relocatable_elf64_riscv_inputs(output,
+                                                       inputs,
+                                                       input_count,
+                                                       stderr);
 }
