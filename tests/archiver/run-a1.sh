@@ -56,10 +56,19 @@ SRC
 
 (
     cd "$work"
+    cp product-outer.a move.reference.a
+    cp product-outer.a move.product.a
+    "$HOST_AR" mPiT inner/leaf/a.o move.reference.a
+    "$MINIAR" mPiT inner/leaf/a.o move.product.a
+    cmp move.reference.a move.product.a
+)
+
+(
+    cd "$work"
     "$HOST_AR" rcsDP ordinary.a inner/leaf/a.o inner/leaf/b.o
     "$HOST_AR" t ordinary.a >ordinary.reference.list
     "$MINIAR" t ordinary.a >ordinary.product.list
     cmp ordinary.reference.list ordinary.product.list
 )
 
-echo "MINIAR_A1=PASS thin-flatten=byte-exact list=gnu-exact nested-link=PASS"
+echo "MINIAR_A1=PASS thin-flatten=byte-exact list=gnu-exact noop-mPiT=byte-exact nested-link=PASS"
