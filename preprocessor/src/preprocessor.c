@@ -1072,12 +1072,57 @@ static bool minipp_line_has_nonspace(const MiniPpString *line) {
     return false;
 }
 
+static const MiniPpMacro *minipp_object_alias_target(
+    const MiniPpState *state,
+    const MiniPpMacro *macro) {
+    size_t start = 0U;
+    size_t end;
+    const MiniPpMacro *target;
+
+    if (macro == NULL || macro->function_like ||
+        macro->replacement == NULL) {
+        return NULL;
+    }
+
+    while (isspace((unsigned char)macro->replacement[start]) != 0) {
+        ++start;
+    }
+    if (!(isalpha((unsigned char)macro->replacement[start]) != 0 ||
+          macro->replacement[start] == '_')) {
+        return NULL;
+    }
+
+    end = start + 1U;
+    while (isalnum((unsigned char)macro->replacement[end]) != 0 ||
+           macro->replacement[end] == '_') {
+        ++end;
+    }
+    {
+        size_t tail = end;
+        while (isspace((unsigned char)macro->replacement[tail]) != 0) {
+            ++tail;
+        }
+        if (macro->replacement[tail] != '\0') {
+            return NULL;
+        }
+    }
+
+    target = minipp_find_macro_n(state,
+                                 macro->replacement + start,
+                                 end - start);
+    if (target == macro) {
+        return NULL;
+    }
+    return target;
+}
+
 static bool minipp_pending_ends_function_macro(
     const MiniPpState *state,
     const MiniPpString *pending) {
     size_t end = pending->size;
     size_t start;
     const MiniPpMacro *macro;
+    size_t depth;
 
     while (end != 0U &&
            isspace((unsigned char)pending->data[end - 1U]) != 0) {
@@ -1103,7 +1148,15 @@ static bool minipp_pending_ends_function_macro(
     macro = minipp_find_macro_n(state,
                                 pending->data + start,
                                 end - start);
-    return macro != NULL && macro->function_like;
+    for (depth = 0U;
+         macro != NULL && depth <= MINIPP_MAX_EXPANSION_DEPTH;
+         ++depth) {
+        if (macro->function_like) {
+            return true;
+        }
+        macro = minipp_object_alias_target(state, macro);
+    }
+    return false;
 }
 
 static bool minipp_process_source(MiniPpState *state,
