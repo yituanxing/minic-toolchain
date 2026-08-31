@@ -1400,9 +1400,20 @@ static bool object_data_defines_needed_symbol(MiniLdState *state,
             break;
         }
     }
-    if (symtab == NULL || symtab->sh_link >= ehdr.e_shnum ||
+    if (symtab == NULL) {
+        /*
+         * A regular archive may contain ET_REL members with no symbol table.
+         * Such a member cannot satisfy a named unresolved global, so lazy
+         * archive selection must simply leave it unselected.
+         */
+        ok = true;
+        goto done;
+    }
+    if (symtab->sh_link >= ehdr.e_shnum ||
         symtab->sh_entsize != sizeof(Elf64_Sym)) {
-        fprintf(state->diagnostics, "minic-ld: missing-archive-object-symtab:%s\n", path);
+        fprintf(state->diagnostics,
+                "minic-ld: invalid-archive-object-symtab:%s\n",
+                path);
         goto done;
     }
     strtab = &sections[symtab->sh_link];
