@@ -1942,7 +1942,8 @@ static bool minipp_substitute_function_macro(MiniPpState *state,
                             continue;
                         }
                         if (!raw_args->leading_space[param_index] ||
-                            raw_args->leading_space_stringized[param_index] ||
+                            (raw_args->leading_space_stringized[param_index] &&
+                             !raw_args->leading_space_generated[param_index]) ||
                             minipp_first_variadic_arg_has_stringize_origin(
                                 &raw_args->items[param_index])) {
                             while (substituted->size != 0U) {
@@ -1955,6 +1956,16 @@ static bool minipp_substitute_function_macro(MiniPpState *state,
                                 --substituted->size;
                                 substituted->data[substituted->size] = '\0';
                             }
+                        } else if (
+                            raw_args->leading_space_stringized[param_index] &&
+                            raw_args->leading_space_generated[param_index]) {
+                            /*
+                             * A source-leading fixed argument was suppressed
+                             * at the immediately preceding first-variadic
+                             * bridge.  The current ,##args boundary consumes
+                             * that one-hop suppression and keeps its own
+                             * source padding, restoring GCC's visible space.
+                             */
                         } else if (
                             raw_args->leading_space_generated[param_index]) {
                             size_t padding = substituted->size;
@@ -2076,6 +2087,10 @@ static bool minipp_substitute_function_macro(MiniPpState *state,
                     minipp_param_is_direct_bare_variadic_argument(
                         state, macro, start)) {
                     size_t padding = substituted->size;
+                    bool restore_source_leading =
+                        raw_args->leading_space[param_index] &&
+                        !raw_args->leading_space_generated[param_index] &&
+                        !raw_args->leading_space_stringized[param_index];
 
                     while (padding != 0U) {
                         char previous = substituted->data[padding - 1U];
@@ -2090,6 +2105,19 @@ static bool minipp_substitute_function_macro(MiniPpState *state,
                             continue;
                         }
                         break;
+                    }
+
+                    /*
+                     * \f suppresses this bridge's replacement padding.
+                     * If the substituted fixed argument itself carried
+                     * source-owned leading whitespace, pair the suppression
+                     * with generated provenance.  A subsequent GNU variadic
+                     * forwarding boundary can then restore one source space;
+                     * the marker is consumed there and does not persist.
+                     */
+                    if (restore_source_leading &&
+                        !minipp_string_append_char(substituted, '\v')) {
+                        goto oom;
                     }
                 }
 
