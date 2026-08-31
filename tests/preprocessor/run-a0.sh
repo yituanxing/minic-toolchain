@@ -857,4 +857,14 @@ SR_WRAP( value, "x")
 EOF
 run_exact source-leading-fixed-to-variadic-restore
 
-printf 'MINIPP_A0_EXACT=PASS cases=90 mode=byte-identical\n'
+cat >"$work/source-leading-multihop-fixed-to-variadic.c" <<'EOF'
+#define SM_OUT(fmt, a...) SM_FINAL(fmt, fixed, ##a)
+#define SM_SPAM(fmt, a...) SM_OUT(fmt, ##a)
+#define SM_MAP(x, y) SM_SPAM("x", x,y)
+#define SM_WRAP(x, y) SM_MAP(x,y)
+SM_WRAP( value, yy)
+SM_WRAP(value, yy)
+EOF
+run_exact source-leading-multihop-fixed-to-variadic
+
+printf 'MINIPP_A0_EXACT=PASS cases=91 mode=byte-identical\n'
