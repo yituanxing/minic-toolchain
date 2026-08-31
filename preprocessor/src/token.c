@@ -396,15 +396,12 @@ static bool minipp_append_pragma_literal(MiniPpState *state,
         return true;
     }
 
-    while (out->size != 0U) {
-        char previous = out->data[out->size - 1U];
-        if (previous != ' ' && previous != '\t' &&
-            previous != '\v' && previous != '\f') {
-            break;
-        }
-        --out->size;
-        out->data[out->size] = '\0';
-    }
+    /*
+     * Do not trim the separator before _Pragma here.  GCC preserves one
+     * separator before the synthetic pragma newline when the invocation had
+     * one, and preserves none for a tight boundary.  The final -P renderer
+     * owns that decision using the pragma-newline provenance marker below.
+     */
     /*
      * Keep a zero-width provenance marker immediately before the synthetic
      * newline.  The final -P renderer can then preserve a preceding
