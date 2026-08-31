@@ -8,4 +8,4 @@
 3243
 3304
 3340
-# final352 focus10: 10/10 closed; formal same-head full-corpus closure
+# final352 focus10: 10/10 closed; clean trace-free same-head freeze
