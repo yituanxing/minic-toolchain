@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 
 #define MINILD_SECTION_UNDEF (-1)
 #define MINILD_SECTION_ABS (-2)
@@ -1874,6 +1875,845 @@ done:
     free(strtab.data);
     free(shstrtab.data);
     return ok;
+}
+
+
+typedef struct MiniLdPcrelSlot {
+    size_t section_plus_one;
+    uint64_t offset;
+    int64_t delta;
+} MiniLdPcrelSlot;
+
+typedef struct MiniLdStaticLayout {
+    uint64_t *section_vaddr;
+    size_t *section_file_offset;
+    size_t rx_file_offset;
+    uint64_t rx_vaddr;
+    size_t rx_file_size;
+    size_t rw_file_offset;
+    uint64_t rw_vaddr;
+    size_t rw_file_size;
+    size_t rw_mem_size;
+    bool have_rx;
+    bool have_rw;
+} MiniLdStaticLayout;
+
+static uint32_t load_u32le(const unsigned char *data) {
+    return (uint32_t)data[0] |
+           ((uint32_t)data[1] << 8U) |
+           ((uint32_t)data[2] << 16U) |
+           ((uint32_t)data[3] << 24U);
+}
+
+static void store_u32le(unsigned char *data, uint32_t value) {
+    data[0] = (unsigned char)(value & 0xffU);
+    data[1] = (unsigned char)((value >> 8U) & 0xffU);
+    data[2] = (unsigned char)((value >> 16U) & 0xffU);
+    data[3] = (unsigned char)((value >> 24U) & 0xffU);
+}
+
+static void store_u64le(unsigned char *data, uint64_t value) {
+    size_t i;
+
+    for (i = 0U; i < 8U; ++i) {
+        data[i] = (unsigned char)((value >> (i * 8U)) & 0xffU);
+    }
+}
+
+static int64_t riscv_hi20(int64_t value) {
+    return (value + INT64_C(0x800)) >> 12;
+}
+
+static int64_t riscv_lo12(int64_t value) {
+    int64_t high = riscv_hi20(value);
+    return value - (high << 12);
+}
+
+static bool static_patch_utype(MiniLdSection *section,
+                               uint64_t offset,
+                               int64_t imm20,
+                               FILE *diagnostics) {
+    uint32_t instruction;
+
+    if (section->type == SHT_NOBITS || offset > SIZE_MAX ||
+        !range_ok((size_t)offset, 4U, section->size)) {
+        fprintf(diagnostics, "minic-ld: relocation-offset-out-of-range\n");
+        return false;
+    }
+    instruction = load_u32le(section->data + (size_t)offset);
+    instruction &= UINT32_C(0x00000fff);
+    instruction |= ((uint32_t)imm20 & UINT32_C(0x000fffff)) << 12U;
+    store_u32le(section->data + (size_t)offset, instruction);
+    return true;
+}
+
+static bool static_patch_itype(MiniLdSection *section,
+                               uint64_t offset,
+                               int64_t imm12,
+                               FILE *diagnostics) {
+    uint32_t instruction;
+
+    if (section->type == SHT_NOBITS || offset > SIZE_MAX ||
+        !range_ok((size_t)offset, 4U, section->size)) {
+        fprintf(diagnostics, "minic-ld: relocation-offset-out-of-range\n");
+        return false;
+    }
+    instruction = load_u32le(section->data + (size_t)offset);
+    instruction &= UINT32_C(0x000fffff);
+    instruction |= ((uint32_t)imm12 & UINT32_C(0x00000fff)) << 20U;
+    store_u32le(section->data + (size_t)offset, instruction);
+    return true;
+}
+
+static bool static_patch_stype(MiniLdSection *section,
+                               uint64_t offset,
+                               int64_t imm12,
+                               FILE *diagnostics) {
+    uint32_t instruction;
+    uint32_t encoded = (uint32_t)imm12 & UINT32_C(0x00000fff);
+
+    if (section->type == SHT_NOBITS || offset > SIZE_MAX ||
+        !range_ok((size_t)offset, 4U, section->size)) {
+        fprintf(diagnostics, "minic-ld: relocation-offset-out-of-range\n");
+        return false;
+    }
+    instruction = load_u32le(section->data + (size_t)offset);
+    instruction &= ~UINT32_C(0xfe000f80);
+    instruction |= ((encoded >> 5U) & UINT32_C(0x7f)) << 25U;
+    instruction |= (encoded & UINT32_C(0x1f)) << 7U;
+    store_u32le(section->data + (size_t)offset, instruction);
+    return true;
+}
+
+static bool static_patch_branch(MiniLdSection *section,
+                                uint64_t offset,
+                                int64_t delta,
+                                FILE *diagnostics) {
+    uint32_t instruction;
+    uint32_t encoded;
+
+    if ((delta & 1) != 0 || delta < -4096 || delta > 4094) {
+        fprintf(diagnostics,
+                "minic-ld: R_RISCV_BRANCH-overflow:delta=%lld\n",
+                (long long)delta);
+        return false;
+    }
+    if (section->type == SHT_NOBITS || offset > SIZE_MAX ||
+        !range_ok((size_t)offset, 4U, section->size)) {
+        fprintf(diagnostics, "minic-ld: relocation-offset-out-of-range\n");
+        return false;
+    }
+    encoded = (uint32_t)delta & UINT32_C(0x1fff);
+    instruction = load_u32le(section->data + (size_t)offset);
+    instruction &= ~UINT32_C(0xfe000f80);
+    instruction |= ((encoded >> 12U) & 1U) << 31U;
+    instruction |= ((encoded >> 5U) & UINT32_C(0x3f)) << 25U;
+    instruction |= ((encoded >> 1U) & UINT32_C(0x0f)) << 8U;
+    instruction |= ((encoded >> 11U) & 1U) << 7U;
+    store_u32le(section->data + (size_t)offset, instruction);
+    return true;
+}
+
+static bool static_patch_jal(MiniLdSection *section,
+                             uint64_t offset,
+                             int64_t delta,
+                             FILE *diagnostics) {
+    uint32_t instruction;
+    uint32_t encoded;
+
+    if ((delta & 1) != 0 || delta < -1048576 || delta > 1048574) {
+        fprintf(diagnostics,
+                "minic-ld: R_RISCV_JAL-overflow:delta=%lld\n",
+                (long long)delta);
+        return false;
+    }
+    if (section->type == SHT_NOBITS || offset > SIZE_MAX ||
+        !range_ok((size_t)offset, 4U, section->size)) {
+        fprintf(diagnostics, "minic-ld: relocation-offset-out-of-range\n");
+        return false;
+    }
+    encoded = (uint32_t)delta & UINT32_C(0x1fffff);
+    instruction = load_u32le(section->data + (size_t)offset);
+    instruction &= UINT32_C(0x00000fff);
+    instruction |= ((encoded >> 20U) & 1U) << 31U;
+    instruction |= ((encoded >> 1U) & UINT32_C(0x03ff)) << 21U;
+    instruction |= ((encoded >> 11U) & 1U) << 20U;
+    instruction |= ((encoded >> 12U) & UINT32_C(0x00ff)) << 12U;
+    store_u32le(section->data + (size_t)offset, instruction);
+    return true;
+}
+
+static bool static_allocate_common(MiniLdState *state) {
+    size_t bss_index = SIZE_MAX;
+    size_t i;
+
+    for (i = 0U; i < state->symbol_count; ++i) {
+        MiniLdSymbol *symbol = &state->symbols[i];
+        size_t aligned;
+        uint64_t alignment;
+
+        if (symbol->section != MINILD_SECTION_COMMON) {
+            continue;
+        }
+        if (bss_index == SIZE_MAX &&
+            !find_or_add_section(state,
+                                 ".bss",
+                                 SHT_NOBITS,
+                                 SHF_ALLOC | SHF_WRITE,
+                                 16U,
+                                 0U,
+                                 &bss_index)) {
+            return false;
+        }
+        alignment = symbol->value == 0U ? 1U : symbol->value;
+        if (!align_up_size(state->sections[bss_index].size,
+                           alignment,
+                           &aligned) ||
+            !section_append_zero(&state->sections[bss_index],
+                                 aligned - state->sections[bss_index].size) ||
+            !section_append_zero(&state->sections[bss_index],
+                                 (size_t)symbol->size)) {
+            fprintf(state->diagnostics, "minic-ld: common-allocation-overflow\n");
+            return false;
+        }
+        symbol->section = (int)bss_index;
+        symbol->value = aligned;
+    }
+    return true;
+}
+
+static bool static_build_layout(MiniLdState *state,
+                                MiniLdStaticLayout *layout) {
+    const size_t page = 4096U;
+    const size_t header_page = 4096U;
+    const uint64_t base_vaddr = UINT64_C(0x10000);
+    size_t rx_cursor = 0U;
+    size_t rw_file_cursor = 0U;
+    size_t rw_mem_cursor = 0U;
+    size_t i;
+
+    memset(layout, 0, sizeof(*layout));
+    layout->section_vaddr =
+        calloc(state->section_count == 0U ? 1U : state->section_count,
+               sizeof(*layout->section_vaddr));
+    layout->section_file_offset =
+        malloc((state->section_count == 0U ? 1U : state->section_count) *
+               sizeof(*layout->section_file_offset));
+    if (layout->section_vaddr == NULL || layout->section_file_offset == NULL) {
+        fprintf(state->diagnostics, "minic-ld: out-of-memory:static-layout\n");
+        return false;
+    }
+    for (i = 0U; i < state->section_count; ++i) {
+        layout->section_file_offset[i] = SIZE_MAX;
+    }
+
+    layout->rx_file_offset = header_page;
+    layout->rx_vaddr = base_vaddr;
+
+    for (i = 0U; i < state->section_count; ++i) {
+        MiniLdSection *section = &state->sections[i];
+        size_t aligned;
+
+        if ((section->flags & SHF_ALLOC) == 0U ||
+            (section->flags & SHF_WRITE) != 0U) {
+            continue;
+        }
+        if (section->type == SHT_NOBITS) {
+            fprintf(state->diagnostics,
+                    "minic-ld: unsupported-rx-nobits:%s\n",
+                    section->name);
+            return false;
+        }
+        if (!align_up_size(rx_cursor, section->align, &aligned)) {
+            fprintf(state->diagnostics, "minic-ld: static-layout-overflow\n");
+            return false;
+        }
+        rx_cursor = aligned;
+        layout->section_vaddr[i] = layout->rx_vaddr + rx_cursor;
+        layout->section_file_offset[i] = layout->rx_file_offset + rx_cursor;
+        if (!add_size(rx_cursor, section->size, &rx_cursor)) {
+            fprintf(state->diagnostics, "minic-ld: static-layout-overflow\n");
+            return false;
+        }
+        layout->have_rx = true;
+    }
+    layout->rx_file_size = rx_cursor;
+
+    if (!align_up_size(layout->rx_file_offset + layout->rx_file_size,
+                       page,
+                       &layout->rw_file_offset)) {
+        fprintf(state->diagnostics, "minic-ld: static-layout-overflow\n");
+        return false;
+    }
+    {
+        size_t next_vaddr;
+        if (!align_up_size((size_t)(layout->rx_vaddr + layout->rx_file_size),
+                           page,
+                           &next_vaddr)) {
+            fprintf(state->diagnostics, "minic-ld: static-layout-overflow\n");
+            return false;
+        }
+        layout->rw_vaddr = (uint64_t)next_vaddr;
+    }
+
+    for (i = 0U; i < state->section_count; ++i) {
+        MiniLdSection *section = &state->sections[i];
+        size_t aligned;
+
+        if ((section->flags & (SHF_ALLOC | SHF_WRITE)) !=
+                (SHF_ALLOC | SHF_WRITE) ||
+            section->type == SHT_NOBITS) {
+            continue;
+        }
+        if (!align_up_size(rw_file_cursor, section->align, &aligned)) {
+            fprintf(state->diagnostics, "minic-ld: static-layout-overflow\n");
+            return false;
+        }
+        rw_file_cursor = aligned;
+        rw_mem_cursor = aligned;
+        layout->section_vaddr[i] = layout->rw_vaddr + rw_mem_cursor;
+        layout->section_file_offset[i] =
+            layout->rw_file_offset + rw_file_cursor;
+        if (!add_size(rw_file_cursor, section->size, &rw_file_cursor) ||
+            !add_size(rw_mem_cursor, section->size, &rw_mem_cursor)) {
+            fprintf(state->diagnostics, "minic-ld: static-layout-overflow\n");
+            return false;
+        }
+        layout->have_rw = true;
+    }
+
+    for (i = 0U; i < state->section_count; ++i) {
+        MiniLdSection *section = &state->sections[i];
+        size_t aligned;
+
+        if ((section->flags & (SHF_ALLOC | SHF_WRITE)) !=
+                (SHF_ALLOC | SHF_WRITE) ||
+            section->type != SHT_NOBITS) {
+            continue;
+        }
+        if (!align_up_size(rw_mem_cursor, section->align, &aligned)) {
+            fprintf(state->diagnostics, "minic-ld: static-layout-overflow\n");
+            return false;
+        }
+        rw_mem_cursor = aligned;
+        layout->section_vaddr[i] = layout->rw_vaddr + rw_mem_cursor;
+        if (!add_size(rw_mem_cursor, section->size, &rw_mem_cursor)) {
+            fprintf(state->diagnostics, "minic-ld: static-layout-overflow\n");
+            return false;
+        }
+        layout->have_rw = true;
+    }
+
+    layout->rw_file_size = rw_file_cursor;
+    layout->rw_mem_size = rw_mem_cursor;
+    return layout->have_rx;
+}
+
+static void static_layout_destroy(MiniLdStaticLayout *layout) {
+    free(layout->section_vaddr);
+    free(layout->section_file_offset);
+    layout->section_vaddr = NULL;
+    layout->section_file_offset = NULL;
+}
+
+static bool static_resolve_symbol(MiniLdState *state,
+                                  const MiniLdStaticLayout *layout,
+                                  size_t symbol_index,
+                                  uint64_t *value_out) {
+    MiniLdSymbol *symbol;
+
+    if (symbol_index >= state->symbol_count) {
+        fprintf(state->diagnostics, "minic-ld: relocation-symbol-out-of-range\n");
+        return false;
+    }
+    symbol = &state->symbols[symbol_index];
+    if (symbol->section == MINILD_SECTION_UNDEF) {
+        if (ELF64_ST_BIND(symbol->info) == STB_WEAK) {
+            *value_out = 0U;
+            return true;
+        }
+        fprintf(state->diagnostics,
+                "minic-ld: undefined-reference:%s\n",
+                symbol->name);
+        return false;
+    }
+    if (symbol->section == MINILD_SECTION_ABS) {
+        *value_out = symbol->value;
+        return true;
+    }
+    if (symbol->section < 0 ||
+        (size_t)symbol->section >= state->section_count ||
+        (state->sections[symbol->section].flags & SHF_ALLOC) == 0U) {
+        fprintf(state->diagnostics,
+                "minic-ld: unsupported-static-symbol:%s\n",
+                symbol->name);
+        return false;
+    }
+    *value_out = layout->section_vaddr[symbol->section] + symbol->value;
+    return true;
+}
+
+static size_t pcrel_capacity_for(size_t relocation_count) {
+    size_t capacity = 64U;
+    size_t target;
+
+    if (relocation_count > (SIZE_MAX - 1U) / 2U) {
+        return 0U;
+    }
+    target = relocation_count * 2U + 1U;
+    while (capacity < target) {
+        if (capacity > SIZE_MAX / 2U) {
+            return 0U;
+        }
+        capacity *= 2U;
+    }
+    return capacity;
+}
+
+static size_t pcrel_hash(size_t section, uint64_t offset, size_t capacity) {
+    uint64_t hash = offset ^ (UINT64_C(0x9e3779b97f4a7c15) *
+                              (uint64_t)(section + 1U));
+    hash ^= hash >> 33U;
+    hash *= UINT64_C(0xff51afd7ed558ccd);
+    hash ^= hash >> 33U;
+    return (size_t)hash & (capacity - 1U);
+}
+
+static void pcrel_insert(MiniLdPcrelSlot *slots,
+                         size_t capacity,
+                         size_t section,
+                         uint64_t offset,
+                         int64_t delta) {
+    size_t position = pcrel_hash(section, offset, capacity);
+
+    while (slots[position].section_plus_one != 0U) {
+        position = (position + 1U) & (capacity - 1U);
+    }
+    slots[position].section_plus_one = section + 1U;
+    slots[position].offset = offset;
+    slots[position].delta = delta;
+}
+
+static bool pcrel_find(const MiniLdPcrelSlot *slots,
+                       size_t capacity,
+                       size_t section,
+                       uint64_t offset,
+                       int64_t *delta_out) {
+    size_t position = pcrel_hash(section, offset, capacity);
+
+    while (slots[position].section_plus_one != 0U) {
+        if (slots[position].section_plus_one == section + 1U &&
+            slots[position].offset == offset) {
+            *delta_out = slots[position].delta;
+            return true;
+        }
+        position = (position + 1U) & (capacity - 1U);
+    }
+    return false;
+}
+
+static bool static_apply_relocations(MiniLdState *state,
+                                     const MiniLdStaticLayout *layout) {
+    size_t capacity = pcrel_capacity_for(state->reloc_count);
+    MiniLdPcrelSlot *pcrel;
+    size_t i;
+
+    if (capacity == 0U) {
+        fprintf(state->diagnostics, "minic-ld: relocation-index-overflow\n");
+        return false;
+    }
+    pcrel = calloc(capacity, sizeof(*pcrel));
+    if (pcrel == NULL) {
+        fprintf(state->diagnostics, "minic-ld: out-of-memory:pcrel-index\n");
+        return false;
+    }
+
+    for (i = 0U; i < state->reloc_count; ++i) {
+        MiniLdReloc *reloc = &state->relocs[i];
+        MiniLdSection *section = &state->sections[reloc->section];
+        uint64_t symbol_value = 0U;
+        uint64_t place = layout->section_vaddr[reloc->section] + reloc->offset;
+        int64_t target;
+        int64_t delta;
+
+        if (reloc->type == R_RISCV_NONE || reloc->type == R_RISCV_RELAX ||
+            reloc->type == R_RISCV_PCREL_LO12_I ||
+            reloc->type == R_RISCV_PCREL_LO12_S) {
+            continue;
+        }
+        if (reloc->symbol != SIZE_MAX &&
+            !static_resolve_symbol(state, layout, reloc->symbol, &symbol_value)) {
+            free(pcrel);
+            return false;
+        }
+        target = (int64_t)symbol_value + reloc->addend;
+
+        switch (reloc->type) {
+        case R_RISCV_64:
+            if (section->type == SHT_NOBITS || reloc->offset > SIZE_MAX ||
+                !range_ok((size_t)reloc->offset, 8U, section->size)) {
+                fprintf(state->diagnostics,
+                        "minic-ld: R_RISCV_64-offset-out-of-range\n");
+                free(pcrel);
+                return false;
+            }
+            store_u64le(section->data + (size_t)reloc->offset,
+                        (uint64_t)target);
+            break;
+        case R_RISCV_32:
+            if (section->type == SHT_NOBITS || reloc->offset > SIZE_MAX ||
+                !range_ok((size_t)reloc->offset, 4U, section->size)) {
+                fprintf(state->diagnostics,
+                        "minic-ld: R_RISCV_32-offset-out-of-range\n");
+                free(pcrel);
+                return false;
+            }
+            store_u32le(section->data + (size_t)reloc->offset,
+                        (uint32_t)target);
+            break;
+        case R_RISCV_CALL:
+        case R_RISCV_CALL_PLT:
+            delta = target - (int64_t)place;
+            if (!static_patch_utype(section,
+                                    reloc->offset,
+                                    riscv_hi20(delta),
+                                    state->diagnostics) ||
+                !static_patch_itype(section,
+                                    reloc->offset + 4U,
+                                    riscv_lo12(delta),
+                                    state->diagnostics)) {
+                free(pcrel);
+                return false;
+            }
+            break;
+        case R_RISCV_PCREL_HI20:
+            delta = target - (int64_t)place;
+            if (!static_patch_utype(section,
+                                    reloc->offset,
+                                    riscv_hi20(delta),
+                                    state->diagnostics)) {
+                free(pcrel);
+                return false;
+            }
+            pcrel_insert(pcrel,
+                         capacity,
+                         reloc->section,
+                         reloc->offset,
+                         delta);
+            break;
+        case R_RISCV_HI20:
+            if (!static_patch_utype(section,
+                                    reloc->offset,
+                                    riscv_hi20(target),
+                                    state->diagnostics)) {
+                free(pcrel);
+                return false;
+            }
+            break;
+        case R_RISCV_LO12_I:
+            if (!static_patch_itype(section,
+                                    reloc->offset,
+                                    riscv_lo12(target),
+                                    state->diagnostics)) {
+                free(pcrel);
+                return false;
+            }
+            break;
+        case R_RISCV_LO12_S:
+            if (!static_patch_stype(section,
+                                    reloc->offset,
+                                    riscv_lo12(target),
+                                    state->diagnostics)) {
+                free(pcrel);
+                return false;
+            }
+            break;
+        case R_RISCV_BRANCH:
+            delta = target - (int64_t)place;
+            if (!static_patch_branch(section,
+                                     reloc->offset,
+                                     delta,
+                                     state->diagnostics)) {
+                free(pcrel);
+                return false;
+            }
+            break;
+        case R_RISCV_JAL:
+            delta = target - (int64_t)place;
+            if (!static_patch_jal(section,
+                                  reloc->offset,
+                                  delta,
+                                  state->diagnostics)) {
+                free(pcrel);
+                return false;
+            }
+            break;
+        default:
+            fprintf(state->diagnostics,
+                    "minic-ld: unsupported-static-relocation:%u\n",
+                    reloc->type);
+            free(pcrel);
+            return false;
+        }
+    }
+
+    for (i = 0U; i < state->reloc_count; ++i) {
+        MiniLdReloc *reloc = &state->relocs[i];
+        MiniLdSection *section;
+        MiniLdSymbol *label;
+        int64_t delta;
+
+        if (reloc->type != R_RISCV_PCREL_LO12_I &&
+            reloc->type != R_RISCV_PCREL_LO12_S) {
+            continue;
+        }
+        if (reloc->symbol == SIZE_MAX ||
+            reloc->symbol >= state->symbol_count) {
+            fprintf(state->diagnostics,
+                    "minic-ld: invalid-pcrel-lo-symbol\n");
+            free(pcrel);
+            return false;
+        }
+        label = &state->symbols[reloc->symbol];
+        if (label->section < 0 ||
+            (size_t)label->section >= state->section_count ||
+            !pcrel_find(pcrel,
+                        capacity,
+                        (size_t)label->section,
+                        label->value + (uint64_t)reloc->addend,
+                        &delta)) {
+            fprintf(state->diagnostics,
+                    "minic-ld: missing-matching-pcrel-hi20\n");
+            free(pcrel);
+            return false;
+        }
+        section = &state->sections[reloc->section];
+        if (reloc->type == R_RISCV_PCREL_LO12_I) {
+            if (!static_patch_itype(section,
+                                    reloc->offset,
+                                    riscv_lo12(delta),
+                                    state->diagnostics)) {
+                free(pcrel);
+                return false;
+            }
+        } else if (!static_patch_stype(section,
+                                       reloc->offset,
+                                       riscv_lo12(delta),
+                                       state->diagnostics)) {
+            free(pcrel);
+            return false;
+        }
+    }
+
+    free(pcrel);
+    return true;
+}
+
+static bool static_entry_address(MiniLdState *state,
+                                 const MiniLdStaticLayout *layout,
+                                 const char *entry_symbol,
+                                 uint64_t *entry_out) {
+    size_t index = find_global_symbol(state, entry_symbol);
+
+    if (index == SIZE_MAX) {
+        fprintf(state->diagnostics,
+                "minic-ld: undefined-entry:%s\n",
+                entry_symbol);
+        return false;
+    }
+    return static_resolve_symbol(state, layout, index, entry_out);
+}
+
+static bool static_write_executable(MiniLdState *state,
+                                    const MiniLdStaticLayout *layout,
+                                    const char *path,
+                                    uint64_t entry) {
+    size_t phnum = (layout->have_rx ? 1U : 0U) +
+                   (layout->have_rw ? 1U : 0U);
+    size_t image_size = sizeof(Elf64_Ehdr) + phnum * sizeof(Elf64_Phdr);
+    unsigned char *image;
+    Elf64_Ehdr header;
+    Elf64_Phdr *programs;
+    size_t i;
+    size_t program_index = 0U;
+    FILE *file = NULL;
+    bool ok = false;
+
+    if (layout->have_rx &&
+        layout->rx_file_offset + layout->rx_file_size > image_size) {
+        image_size = layout->rx_file_offset + layout->rx_file_size;
+    }
+    if (layout->have_rw &&
+        layout->rw_file_offset + layout->rw_file_size > image_size) {
+        image_size = layout->rw_file_offset + layout->rw_file_size;
+    }
+    image = calloc(image_size == 0U ? 1U : image_size, 1U);
+    if (image == NULL) {
+        fprintf(state->diagnostics, "minic-ld: out-of-memory:static-image\n");
+        return false;
+    }
+
+    memset(&header, 0, sizeof(header));
+    memcpy(header.e_ident, ELFMAG, SELFMAG);
+    header.e_ident[EI_CLASS] = ELFCLASS64;
+    header.e_ident[EI_DATA] = ELFDATA2LSB;
+    header.e_ident[EI_VERSION] = EV_CURRENT;
+    header.e_ident[EI_OSABI] = ELFOSABI_NONE;
+    header.e_type = ET_EXEC;
+    header.e_machine = EM_RISCV;
+    header.e_version = EV_CURRENT;
+    header.e_entry = entry;
+    header.e_phoff = sizeof(Elf64_Ehdr);
+    header.e_flags = state->elf_flags;
+    header.e_ehsize = sizeof(Elf64_Ehdr);
+    header.e_phentsize = sizeof(Elf64_Phdr);
+    header.e_phnum = (Elf64_Half)phnum;
+    memcpy(image, &header, sizeof(header));
+
+    programs = (Elf64_Phdr *)(void *)(image + sizeof(Elf64_Ehdr));
+    if (layout->have_rx) {
+        Elf64_Phdr *ph = &programs[program_index++];
+        memset(ph, 0, sizeof(*ph));
+        ph->p_type = PT_LOAD;
+        ph->p_flags = PF_R | PF_X;
+        ph->p_offset = layout->rx_file_offset;
+        ph->p_vaddr = layout->rx_vaddr;
+        ph->p_paddr = layout->rx_vaddr;
+        ph->p_filesz = layout->rx_file_size;
+        ph->p_memsz = layout->rx_file_size;
+        ph->p_align = 4096U;
+    }
+    if (layout->have_rw) {
+        Elf64_Phdr *ph = &programs[program_index++];
+        memset(ph, 0, sizeof(*ph));
+        ph->p_type = PT_LOAD;
+        ph->p_flags = PF_R | PF_W;
+        ph->p_offset = layout->rw_file_offset;
+        ph->p_vaddr = layout->rw_vaddr;
+        ph->p_paddr = layout->rw_vaddr;
+        ph->p_filesz = layout->rw_file_size;
+        ph->p_memsz = layout->rw_mem_size;
+        ph->p_align = 4096U;
+    }
+
+    for (i = 0U; i < state->section_count; ++i) {
+        MiniLdSection *section = &state->sections[i];
+        size_t offset = layout->section_file_offset[i];
+
+        if ((section->flags & SHF_ALLOC) == 0U ||
+            section->type == SHT_NOBITS ||
+            section->size == 0U) {
+            continue;
+        }
+        if (offset == SIZE_MAX ||
+            !range_ok(offset, section->size, image_size)) {
+            fprintf(state->diagnostics,
+                    "minic-ld: invalid-static-section-layout:%s\n",
+                    section->name);
+            goto done;
+        }
+        memcpy(image + offset, section->data, section->size);
+    }
+
+    file = fopen(path, "wb");
+    if (file == NULL) {
+        fprintf(state->diagnostics,
+                "minic-ld: cannot-create:%s:%s\n",
+                path,
+                strerror(errno));
+        goto done;
+    }
+    if (fwrite(image, 1U, image_size, file) != image_size ||
+        fflush(file) != 0) {
+        fprintf(state->diagnostics, "minic-ld: write-error:%s\n", path);
+        goto done;
+    }
+    ok = true;
+
+done:
+    if (file != NULL && fclose(file) != 0) {
+        ok = false;
+    }
+    if (ok) {
+        if (chmod(path, 0755) != 0) {
+            fprintf(state->diagnostics,
+                    "minic-ld: chmod-error:%s:%s\n",
+                    path,
+                    strerror(errno));
+            ok = false;
+        }
+    }
+    if (!ok) {
+        (void)remove(path);
+    }
+    free(image);
+    return ok;
+}
+
+int minild_link_static_elf64_riscv_inputs(const char *output_path,
+                                          const MiniLdInput *inputs,
+                                          size_t input_count,
+                                          const char *entry_symbol,
+                                          FILE *diagnostics) {
+    MiniLdState state;
+    MiniLdStaticLayout layout;
+    size_t i;
+    uint64_t entry = 0U;
+    bool layout_ready = false;
+    bool ok = false;
+
+    if (output_path == NULL || inputs == NULL || input_count == 0U ||
+        entry_symbol == NULL || diagnostics == NULL) {
+        return 2;
+    }
+    memset(&state, 0, sizeof(state));
+    memset(&layout, 0, sizeof(layout));
+    state.diagnostics = diagnostics;
+
+    for (i = 0U; i < input_count; ++i) {
+        bool input_ok;
+
+        switch (inputs[i].kind) {
+        case MINILD_INPUT_OBJECT:
+            input_ok = process_input(&state, inputs[i].path);
+            break;
+        case MINILD_INPUT_WHOLE_ARCHIVE:
+            input_ok = process_whole_archive(&state, inputs[i].path);
+            break;
+        case MINILD_INPUT_GROUP_ARCHIVE:
+            input_ok = process_group_archive(&state, inputs[i].path);
+            break;
+        default:
+            fprintf(diagnostics,
+                    "minic-ld: invalid-input-kind:%s\n",
+                    inputs[i].path);
+            input_ok = false;
+            break;
+        }
+        if (!input_ok) {
+            goto done;
+        }
+    }
+
+    if (!state.have_input ||
+        !static_allocate_common(&state) ||
+        !static_build_layout(&state, &layout)) {
+        goto done;
+    }
+    layout_ready = true;
+    if (!static_apply_relocations(&state, &layout) ||
+        !static_entry_address(&state, &layout, entry_symbol, &entry) ||
+        !static_write_executable(&state, &layout, output_path, entry)) {
+        goto done;
+    }
+    ok = true;
+
+done:
+    if (layout_ready) {
+        static_layout_destroy(&layout);
+    }
+    state_destroy(&state);
+    return ok ? 0 : 1;
 }
 
 int minild_link_relocatable_elf64_riscv_inputs(const char *output_path,
