@@ -1,0 +1,113 @@
+name: MiniAR Linux Kbuild Integration
+
+on:
+  push:
+    branches:
+      - "toolchain/miniar-linux"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  linux-kbuild:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[miniar-linux-kbuild]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Install Linux build prerequisites
+        run: |
+          sudo apt-get -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
+            bc bison flex libssl-dev libelf-dev make curl xz-utils file
+
+      - name: Build exact MiniAR
+        run: |
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/miniar-linux all
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/miniar-linux check-miniar-a0
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/miniar-linux check-miniar-a1
+
+      - name: Prepare Linux 6.6.143
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/miniar-linux-kbuild"
+          archive="$work/linux-6.6.143.tar.xz"
+          src="$work/linux-6.6.143"
+          out="$work/out"
+          mkdir -p "$work"
+          curl -fsSL https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.6.143.tar.xz -o "$archive"
+          printf '%s  %s\n' \
+            dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932 \
+            "$archive" | sha256sum -c -
+          tar -xJf "$archive" -C "$work"
+          make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- defconfig
+
+      - name: Install MiniAR at the Kbuild AR boundary
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/miniar-linux-kbuild"
+          wrapper="$work/riscv64-linux-gnu-ar-miniar"
+          cat >"$wrapper" <<'SH'
+          #!/usr/bin/env bash
+          set -Eeuo pipefail
+          : "${MINIAR:?MINIAR is not set}"
+          : "${MINIAR_TRACE:?MINIAR_TRACE is not set}"
+          {
+            printf 'ar'
+            printf ' %q' "$@"
+            printf '\n'
+          } >>"$MINIAR_TRACE"
+          exec "$MINIAR" "$@"
+          SH
+          chmod +x "$wrapper"
+          : >"$work/miniar.trace"
+
+      - name: Build Linux Image with MiniAR only
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/miniar-linux-kbuild"
+          src="$work/linux-6.6.143"
+          out="$work/out"
+          export MINIAR="$GITHUB_WORKSPACE/build/miniar-linux/bin/minic-ar"
+          export MINIAR_TRACE="$work/miniar.trace"
+          wrapper="$work/riscv64-linux-gnu-ar-miniar"
+
+          started=$(date +%s)
+          make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
+            AR="$wrapper" -j4 Image >"$work/kbuild.log" 2>&1
+          elapsed=$(( $(date +%s) - started ))
+
+          image="$out/arch/riscv/boot/Image"
+          test -s "$image"
+          ar_calls=$(wc -l <"$work/miniar.trace")
+          create_calls=$(grep -Ec '^ar .*r[^ ]*' "$work/miniar.trace" || true)
+          list_calls=$(grep -Ec '^ar .*t[^ ]*' "$work/miniar.trace" || true)
+          archive_count=$(find "$out" -type f -name '*.a' | wc -l)
+
+          test "$ar_calls" -gt 50
+          test "$archive_count" -gt 20
+          file "$image"
+          sha256sum "$image" >"$work/Image.sha256"
+          printf 'MINIAR_LINUX_KBUILD=PASS ar_calls=%s create_calls=%s list_calls=%s archives=%s elapsed_s=%s head=%s\n' \
+            "$ar_calls" "$create_calls" "$list_calls" "$archive_count" "$elapsed" "$GITHUB_SHA"
+
+      - name: Preserve Linux integration evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: miniar-linux-kbuild-evidence
+          path: |
+            build/miniar-linux-kbuild/miniar.trace
+            build/miniar-linux-kbuild/kbuild.log
+            build/miniar-linux-kbuild/Image.sha256
+            build/miniar-linux-kbuild/out/.config
+          if-no-files-found: ignore
+          retention-days: 3
