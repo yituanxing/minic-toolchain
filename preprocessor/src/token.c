@@ -2111,85 +2111,6 @@ static void minipp_demote_generated_argument_padding(MiniPpString *text) {
     }
 }
 
-static size_t minipp_top_level_comma_count(const MiniPpString *text) {
-    size_t index = 0U;
-    size_t depth = 0U;
-    size_t count = 0U;
-
-    while (index < text->size) {
-        char value = text->data[index];
-
-        if (value == '"' || value == '\'') {
-            char quote = value;
-            ++index;
-            while (index < text->size) {
-                value = text->data[index++];
-                if (value == '\\' && index < text->size) {
-                    ++index;
-                    continue;
-                }
-                if (value == quote) {
-                    break;
-                }
-            }
-            continue;
-        }
-
-        if (value == '(' || value == '[' || value == '{') {
-            ++depth;
-        } else if ((value == ')' || value == ']' || value == '}') &&
-                   depth != 0U) {
-            --depth;
-        } else if (value == ',' && depth == 0U) {
-            ++count;
-        }
-        ++index;
-    }
-    return count;
-}
-
-static void minipp_mark_top_level_comma_padding_generated(
-    MiniPpString *text) {
-    size_t index = 0U;
-    size_t depth = 0U;
-
-    while (index < text->size) {
-        char value = text->data[index];
-
-        if (value == '"' || value == '\'') {
-            char quote = value;
-            ++index;
-            while (index < text->size) {
-                value = text->data[index++];
-                if (value == '\\' && index < text->size) {
-                    ++index;
-                    continue;
-                }
-                if (value == quote) {
-                    break;
-                }
-            }
-            continue;
-        }
-
-        if (value == '(' || value == '[' || value == '{') {
-            ++depth;
-        } else if ((value == ')' || value == ']' || value == '}') &&
-                   depth != 0U) {
-            --depth;
-        } else if (value == ',' && depth == 0U) {
-            size_t padding = index + 1U;
-
-            if (padding < text->size &&
-                (text->data[padding] == ' ' ||
-                 text->data[padding] == '\t')) {
-                text->data[padding] = '\v';
-            }
-        }
-        ++index;
-    }
-}
-
 static bool minipp_expand_function_macro(MiniPpState *state,
                                          const MiniPpMacro *macro,
                                          const char *text,
@@ -2306,11 +2227,6 @@ static bool minipp_expand_function_macro(MiniPpState *state,
              * argument of another macro.
              */
             minipp_normalize_leading_expansion_space(expanded, false);
-            if (minipp_top_level_comma_count(
-                    &raw_args.items[arg_index]) == 0U &&
-                minipp_top_level_comma_count(expanded) != 0U) {
-                minipp_mark_top_level_comma_padding_generated(expanded);
-            }
             if (macro->variadic &&
                 arg_index + 1U == macro->param_count &&
                 !minipp_variadic_padding_survives_gnu_forward(macro)) {
@@ -2524,6 +2440,84 @@ static bool minipp_append_counter_builtin(MiniPpState *state,
     return minipp_append_line_builtin(out, value);
 }
 
+static bool minipp_is_zero_width_provenance(char value) {
+    return value == '\a' || value == '\b' ||
+           value == '\x0e' || value == '\x0f' ||
+           value == '\x10' || value == '\x11';
+}
+
+static bool minipp_expanding_token_follows_top_level_comma_padding(
+    const char *text,
+    size_t token_start) {
+    size_t index = 0U;
+    size_t depth = 0U;
+    size_t last_token = SIZE_MAX;
+
+    while (index < token_start) {
+        char value = text[index];
+
+        if (value == '"' || value == '\'') {
+            char quote = value;
+            last_token = index;
+            ++index;
+            while (index < token_start && text[index] != '\0') {
+                value = text[index++];
+                if (value == '\\' &&
+                    index < token_start &&
+                    text[index] != '\0') {
+                    ++index;
+                    continue;
+                }
+                if (value == quote) {
+                    break;
+                }
+            }
+            continue;
+        }
+
+        if (isspace((unsigned char)value) != 0 ||
+            minipp_is_zero_width_provenance(value)) {
+            ++index;
+            continue;
+        }
+
+        if (value == '(' || value == '[' || value == '{') {
+            ++depth;
+        } else if ((value == ')' || value == ']' || value == '}') &&
+                   depth != 0U) {
+            --depth;
+        }
+        last_token = index;
+        ++index;
+    }
+
+    return depth == 0U &&
+           last_token != SIZE_MAX &&
+           text[last_token] == ',' &&
+           last_token + 1U < token_start;
+}
+
+static void minipp_mark_trailing_expansion_padding_generated(
+    MiniPpString *out) {
+    if (out->size == 0U) {
+        return;
+    }
+    if (out->data[out->size - 1U] == ' ' ||
+        out->data[out->size - 1U] == '\t') {
+        out->data[out->size - 1U] = '\v';
+    }
+}
+
+static bool minipp_function_like_invoked_here(const char *text,
+                                              size_t after_name) {
+    size_t cursor = after_name;
+
+    while (isspace((unsigned char)text[cursor]) != 0) {
+        ++cursor;
+    }
+    return text[cursor] == '(';
+}
+
 static bool minipp_expand_text_recursive(MiniPpState *state,
                                          const char *text,
                                          MiniPpString *out,
@@ -2582,6 +2576,10 @@ static bool minipp_expand_text_recursive(MiniPpState *state,
             if (!no_reexpand &&
                 length == 8U &&
                 memcmp(text + start, "__FILE__", 8U) == 0) {
+                if (minipp_expanding_token_follows_top_level_comma_padding(
+                        text, start)) {
+                    minipp_mark_trailing_expansion_padding_generated(out);
+                }
                 if (!minipp_append_file_builtin(state, out)) {
                     fprintf(state->diagnostics, "minic-cpp: out-of-memory\n");
                     return false;
@@ -2591,6 +2589,10 @@ static bool minipp_expand_text_recursive(MiniPpState *state,
             if (!no_reexpand &&
                 length == 8U &&
                 memcmp(text + start, "__LINE__", 8U) == 0) {
+                if (minipp_expanding_token_follows_top_level_comma_padding(
+                        text, start)) {
+                    minipp_mark_trailing_expansion_padding_generated(out);
+                }
                 if (!minipp_append_line_builtin(out, current_line)) {
                     fprintf(state->diagnostics, "minic-cpp: out-of-memory\n");
                     return false;
@@ -2620,6 +2622,10 @@ static bool minipp_expand_text_recursive(MiniPpState *state,
             if (!no_reexpand &&
                 length == 11U &&
                 memcmp(text + start, "__COUNTER__", 11U) == 0) {
+                if (minipp_expanding_token_follows_top_level_comma_padding(
+                        text, start)) {
+                    minipp_mark_trailing_expansion_padding_generated(out);
+                }
                 if (!minipp_append_counter_builtin(state, out)) {
                     fprintf(state->diagnostics, "minic-cpp: out-of-memory\n");
                     return false;
@@ -2633,6 +2639,16 @@ static bool minipp_expand_text_recursive(MiniPpState *state,
                 !minipp_macro_is_disabled(macro->name,
                                           disabled,
                                           disabled_count)) {
+                bool expands_here =
+                    !macro->function_like ||
+                    minipp_function_like_invoked_here(text, index);
+
+                if (expands_here &&
+                    minipp_expanding_token_follows_top_level_comma_padding(
+                        text, start)) {
+                    minipp_mark_trailing_expansion_padding_generated(out);
+                }
+
                 if (macro->function_like) {
                     bool invoked = false;
 
