@@ -745,4 +745,13 @@ PF_WARN("bad\n")
 EOF
 run_exact prfmt-fixed-to-variadic-spacing
 
-printf 'MINIPP_A0_EXACT=PASS cases=77 mode=byte-identical\n'
+cat >"$work/prfmt-fixed-plain-variadic-spacing.c" <<'EOF'
+#define PP_INDEX(_p, _fmt, ...) _p(_fmt, ##__VA_ARGS__)
+#define PP_PRINT(fmt, ...) PP_INDEX(PP_FINAL, fmt, ##__VA_ARGS__)
+#define PP_FMT(fmt) "%s: " fmt, __func__
+#define PP_WARN(fmt, ...) PP_PRINT("W" PP_FMT(fmt), ##__VA_ARGS__)
+PP_WARN("bad\n")
+EOF
+run_exact prfmt-fixed-plain-variadic-spacing
+
+printf 'MINIPP_A0_EXACT=PASS cases=78 mode=byte-identical\n'
