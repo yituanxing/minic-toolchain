@@ -48,6 +48,7 @@ jobs:
           out="$work/musl-build"
           mkdir -p "$out"
           cd "$out"
+          CFLAGS="-O2 -fno-pic -fno-pie" \
           CC=riscv64-linux-gnu-gcc \
           AR=riscv64-linux-gnu-ar \
           RANLIB=riscv64-linux-gnu-ranlib \
@@ -60,6 +61,11 @@ jobs:
           test -s obj/crt/crt1.o
           test -s obj/crt/crti.o
           test -s obj/crt/crtn.o
+          if riscv64-linux-gnu-readelf -Wr lib/libc.a 2>/dev/null | grep -q 'R_RISCV_GOT_HI20'; then
+            echo "MUSL_STATIC_PRODUCER_ERROR=GOT_HI20_PRESENT" >&2
+            exit 1
+          fi
+          printf 'MUSL_STATIC_PRODUCER=PASS nonpic=1\n'
           printf 'MUSL_STATIC_OBJECTS=%s LIBC_BYTES=%s\n' \
             "$(find obj -type f -name '*.o' | wc -l)" \
             "$(stat -c %s lib/libc.a)"
