@@ -398,8 +398,12 @@ static bool minipp_append_pragma_literal(MiniPpState *state,
 
     while (out->size != 0U) {
         char previous = out->data[out->size - 1U];
-        if (previous != ' ' && previous != '\t' &&
-            previous != '\v' && previous != '\f') {
+        /*
+         * A source/replacement-list space before _Pragma belongs to the
+         * preceding output line in GCC -P.  Only MiniPP's generated boundary
+         * padding is disposable when the pragma operator starts a new line.
+         */
+        if (previous != '\v' && previous != '\f') {
             break;
         }
         --out->size;
