@@ -1942,9 +1942,29 @@ static bool minipp_substitute_function_macro(MiniPpState *state,
             continue;
         }
 
-        if (!minipp_string_append_char(substituted,
-                                       macro->replacement[index])) {
-            goto oom;
+        {
+            char value = macro->replacement[index];
+            char emitted = value;
+
+            /*
+             * During replacement-list rescan, whitespace immediately after a
+             * literal comma is expansion-owned provenance.  It still renders
+             * as one ordinary space, but if that comma later becomes the
+             * argument boundary of an enclosing variadic invocation (e.g.
+             * pr_fmt(fmt) expanding to fmt, current->pid, __func__), the
+             * existing generated-pack logic may consume the pack-leading
+             * separator exactly as GCC does.
+             */
+            if (!preserve_argument_spacing &&
+                (value == ' ' || value == '\t') &&
+                index != 0U &&
+                macro->replacement[index - 1U] == ',') {
+                emitted = '\v';
+            }
+
+            if (!minipp_string_append_char(substituted, emitted)) {
+                goto oom;
+            }
         }
         ++index;
     }
