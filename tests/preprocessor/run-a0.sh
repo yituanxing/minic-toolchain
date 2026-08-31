@@ -842,4 +842,12 @@ int trace_9p_value = TRACE_9P_VALUE;
 EOF
 run_exact computed-angle-ppnumber-include -I"$work"
 
-printf 'MINIPP_A0_EXACT=PASS cases=88 mode=byte-identical\n'
+cat >"$work/empty-left-paste-boundary.c" <<'EOF'
+#define EP_DO(x) do { x; } while (0)
+#define EP_INNER(mod, x) if (x) mod##EP_DO(x)
+#define EP_OUTER(x) EP_INNER(, x)
+EP_OUTER(ok);
+EOF
+run_exact empty-left-paste-boundary
+
+printf 'MINIPP_A0_EXACT=PASS cases=89 mode=byte-identical\n'
