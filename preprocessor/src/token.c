@@ -1527,6 +1527,16 @@ static bool minipp_append_paste_operand_arg(MiniPpString *out,
                                              const MiniPpString *arg) {
     size_t index;
 
+    /*
+     * Keep an internal placemarker for an empty ## operand.  Without it,
+     * apply_token_paste cannot distinguish "empty ## TOKEN" from an
+     * ordinary "LEFT ## TOKEN" and incorrectly strips the whitespace
+     * before the empty operand.
+     */
+    if (arg->size == 0U) {
+        return minipp_string_append_char(out, '\x12');
+    }
+
     for (index = 0U; index < arg->size; ++index) {
         /*
          * ## creates a new preprocessing token. The source token's hideset
@@ -2178,15 +2188,26 @@ static bool minipp_apply_token_paste(MiniPpState *state,
         if (index + 1U < substituted->size &&
             substituted->data[index] == '#' &&
             substituted->data[index + 1U] == '#') {
-            while (pasted->size != 0U) {
-                char previous = pasted->data[pasted->size - 1U];
-                if (previous != ' ' && previous != '\t' &&
-                    previous != '\v' && previous != '\f') {
-                    break;
-                }
+            bool left_placemarker =
+                pasted->size != 0U &&
+                pasted->data[pasted->size - 1U] == '\x12';
+
+            if (left_placemarker) {
                 --pasted->size;
                 if (pasted->data != NULL) {
                     pasted->data[pasted->size] = '\0';
+                }
+            } else {
+                while (pasted->size != 0U) {
+                    char previous = pasted->data[pasted->size - 1U];
+                    if (previous != ' ' && previous != '\t' &&
+                        previous != '\v' && previous != '\f') {
+                        break;
+                    }
+                    --pasted->size;
+                    if (pasted->data != NULL) {
+                        pasted->data[pasted->size] = '\0';
+                    }
                 }
             }
             index += 2U;
@@ -2195,6 +2216,10 @@ static bool minipp_apply_token_paste(MiniPpState *state,
                     substituted->data[index] == '\t' ||
                     substituted->data[index] == '\v' ||
                     substituted->data[index] == '\f')) {
+                ++index;
+            }
+            if (index < substituted->size &&
+                substituted->data[index] == '\x12') {
                 ++index;
             }
             continue;
