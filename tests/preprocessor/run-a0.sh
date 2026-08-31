@@ -681,6 +681,34 @@ PB_ASSERT(foo())
 EOF
 run_exact pragma-operator-boundary-space
 
+cat >"$work/pragma-operator-tight-boundary.c" <<'EOF'
+#define PT_STR1(s) #s
+#define PT_STR(s) PT_STR1(s)
+#define PT_DIAG(s) _Pragma(PT_STR(GCC diagnostic s))
+foo();PT_DIAG(push)
+bar(); PT_DIAG(pop)
+EOF
+run_exact pragma-operator-tight-boundary
+
+cat >"$work/pragma-operator-deep-multiline-boundary.c" <<'EOF'
+#define PD_STR1(s) #s
+#define PD_STR(s) PD_STR1(s)
+#define PD_DIAG(s) _Pragma(PD_STR(GCC diagnostic s))
+#define PD_GCC_ignore ignored
+#define PD_GCC_warn warning
+#define PD_GCC_8(s) PD_DIAG(s)
+#define PD_GCC(version, severity, s) PD_GCC_ ## version(PD_GCC_ ## severity s)
+#define PD_IGNORE(option) PD_GCC(8, ignore, option)
+#define PD_WARN(option) PD_GCC(8, warn, option)
+#define PD_ASSERT(x) do { \
+        PD_IGNORE("-Wformat-zero-length"); \
+        do { x; } while (0); \
+        PD_WARN("-Wformat-zero-length"); \
+} while (0)
+PD_ASSERT(foo())
+EOF
+run_exact pragma-operator-deep-multiline-boundary
+
 cat >"$work/empty-prefix-annotation-column.c" <<'EOF'
 #define EP_ANNOT
 struct ep_record {
@@ -717,4 +745,4 @@ PF_WARN("bad\n")
 EOF
 run_exact prfmt-fixed-to-variadic-spacing
 
-printf 'MINIPP_A0_EXACT=PASS cases=75 mode=byte-identical\n'
+printf 'MINIPP_A0_EXACT=PASS cases=77 mode=byte-identical\n'
