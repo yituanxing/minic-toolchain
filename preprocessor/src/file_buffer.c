@@ -167,7 +167,6 @@ bool minipp_render_gcc_p_output(const MiniPpString *input,
     size_t leading_spaces = 0U;
     bool line_start = true;
     bool pending_space = false;
-    bool pending_space_source_owned = false;
     bool preserve_space_before_pragma_newline = false;
     size_t empty_macro_padding_count = 0U;
 
@@ -179,8 +178,7 @@ bool minipp_render_gcc_p_output(const MiniPpString *input,
         if (value == '\n') {
             if (!line_start &&
                 preserve_space_before_pragma_newline &&
-                pending_space &&
-                pending_space_source_owned) {
+                pending_space) {
                 if (!minipp_string_append_char(output, ' ')) {
                     goto oom;
                 }
@@ -197,7 +195,6 @@ bool minipp_render_gcc_p_output(const MiniPpString *input,
             }
             leading_spaces = 0U;
             pending_space = false;
-            pending_space_source_owned = false;
             preserve_space_before_pragma_newline = false;
             empty_macro_padding_count = 0U;
             if (!minipp_string_append_char(output, '\n')) {
@@ -222,7 +219,7 @@ bool minipp_render_gcc_p_output(const MiniPpString *input,
              * source-owned/replacement-list space immediately before that
              * newline, while ordinary trailing whitespace is still dropped.
              */
-            if (!line_start && pending_space && pending_space_source_owned) {
+            if (!line_start && pending_space) {
                 preserve_space_before_pragma_newline = true;
             }
             ++index;
@@ -240,9 +237,6 @@ bool minipp_render_gcc_p_output(const MiniPpString *input,
                 ++leading_spaces;
             } else {
                 pending_space = true;
-                if (value == ' ' || value == '\t') {
-                    pending_space_source_owned = true;
-                }
             }
             ++index;
             continue;
@@ -262,7 +256,6 @@ bool minipp_render_gcc_p_output(const MiniPpString *input,
                 goto oom;
             }
             pending_space = false;
-            pending_space_source_owned = false;
             preserve_space_before_pragma_newline = false;
         }
 
