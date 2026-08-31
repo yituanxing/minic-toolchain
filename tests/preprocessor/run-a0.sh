@@ -754,4 +754,17 @@ PP_WARN("bad\n")
 EOF
 run_exact prfmt-fixed-plain-variadic-spacing
 
-printf 'MINIPP_A0_EXACT=PASS cases=78 mode=byte-identical\n'
+cat >"$work/fixed-param-to-variadic-head-spacing.c" <<'EOF'
+#define FV_OUT(fmt, ...) FV_FINAL(fmt, ##__VA_ARGS__)
+#define FV_WRAP(x, fmt, ...) FV_OUT(fmt, x, ##__VA_ARGS__)
+FV_WRAP(obj->label, "x")
+EOF
+run_exact fixed-param-to-variadic-head-spacing
+
+cat >"$work/pre-comma-source-space.c" <<'EOF'
+#define PC_OUT(...) PC_FINAL(__VA_ARGS__)
+PC_OUT(path ? path : "<n/a>" , &vaf)
+EOF
+run_exact pre-comma-source-space
+
+printf 'MINIPP_A0_EXACT=PASS cases=80 mode=byte-identical\n'
