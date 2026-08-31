@@ -18,4 +18,6 @@ int miniar_create_archive(const char *output_path,
                           const MiniArOptions *options,
                           FILE *diagnostics);
 
+int miniar_list_archive(const char *archive_path, FILE *out, FILE *diagnostics);
+
 #endif
