@@ -33,6 +33,9 @@ typedef struct MiniPpArgList {
     bool *leading_space;
     bool *leading_space_generated;
     bool *leading_space_stringized;
+    bool *trailing_space;
+    bool *trailing_space_generated;
+    bool *trailing_space_stringized;
     size_t *source_line;
     size_t count;
     size_t capacity;
@@ -48,6 +51,9 @@ static void minipp_arg_list_destroy(MiniPpArgList *list) {
     free(list->leading_space);
     free(list->leading_space_generated);
     free(list->leading_space_stringized);
+    free(list->trailing_space);
+    free(list->trailing_space_generated);
+    free(list->trailing_space_stringized);
     free(list->source_line);
     memset(list, 0, sizeof(*list));
 }
@@ -169,6 +175,9 @@ static bool minipp_arg_list_append(MiniPpArgList *list,
         bool *next_leading;
         bool *next_generated;
         bool *next_stringized;
+        bool *next_trailing;
+        bool *next_trailing_generated;
+        bool *next_trailing_stringized;
         size_t *next_source_line;
 
         next = realloc(list->items, capacity * sizeof(*next));
@@ -194,6 +203,26 @@ static bool minipp_arg_list_append(MiniPpArgList *list,
             return false;
         }
         list->leading_space_stringized = next_stringized;
+        next_trailing = realloc(list->trailing_space,
+                                capacity * sizeof(*next_trailing));
+        if (next_trailing == NULL) {
+            return false;
+        }
+        list->trailing_space = next_trailing;
+        next_trailing_generated =
+            realloc(list->trailing_space_generated,
+                    capacity * sizeof(*next_trailing_generated));
+        if (next_trailing_generated == NULL) {
+            return false;
+        }
+        list->trailing_space_generated = next_trailing_generated;
+        next_trailing_stringized =
+            realloc(list->trailing_space_stringized,
+                    capacity * sizeof(*next_trailing_stringized));
+        if (next_trailing_stringized == NULL) {
+            return false;
+        }
+        list->trailing_space_stringized = next_trailing_stringized;
         next_source_line = realloc(list->source_line,
                                    capacity * sizeof(*next_source_line));
         if (next_source_line == NULL) {
