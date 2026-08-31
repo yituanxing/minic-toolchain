@@ -2871,6 +2871,20 @@ static bool static_apply_relocations(MiniLdState *state,
                 return false;
             }
             break;
+        case R_RISCV_32_PCREL:
+            delta = target - (int64_t)place;
+            if (delta < INT32_MIN || delta > INT32_MAX ||
+                section->type == SHT_NOBITS || reloc->offset > SIZE_MAX ||
+                !range_ok((size_t)reloc->offset, 4U, section->size)) {
+                fprintf(state->diagnostics,
+                        "minic-ld: R_RISCV_32_PCREL-overflow-or-range:delta=%lld\n",
+                        (long long)delta);
+                free(pcrel);
+                return false;
+            }
+            store_u32le(section->data + (size_t)reloc->offset,
+                        (uint32_t)(int32_t)delta);
+            break;
         default:
             fprintf(state->diagnostics,
                     "minic-ld: unsupported-static-relocation:%u\n",
