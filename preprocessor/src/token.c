@@ -996,6 +996,26 @@ static bool minipp_build_logical_args(MiniPpState *state,
     minipp_string_init(&variadic);
     for (index = fixed_count; index < raw_args->count; ++index) {
         if (index != fixed_count) {
+            size_t previous = index - 1U;
+
+            /*
+             * GCC drops trailing whitespace from an ordinary fixed macro
+             * argument, but preserves it when that same source boundary is
+             * internal to a variadic pack (for example: a , b).  Restore the
+             * boundary only while assembling __VA_ARGS__.
+             */
+            if (raw_args->trailing_space[previous]) {
+                char separator = ' ';
+
+                if (raw_args->trailing_space_stringized[previous]) {
+                    separator = '\f';
+                } else if (raw_args->trailing_space_generated[previous]) {
+                    separator = '\v';
+                }
+                if (!minipp_string_append_char(&variadic, separator)) {
+                    goto oom;
+                }
+            }
             if (!minipp_string_append_char(&variadic, ',')) {
                 goto oom;
             }
