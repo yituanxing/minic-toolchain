@@ -8,4 +8,4 @@
 3243
 3304
 3340
-# final352 focus10: IPv6 whitespace cluster + 9p computed include + bridge variadic spacing
+# final352 focus10: 9/10 closed; validate final bridge variadic spacing residual
