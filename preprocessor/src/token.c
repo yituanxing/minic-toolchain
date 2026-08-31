@@ -1656,48 +1656,6 @@ static bool minipp_param_is_direct_bare_variadic_argument(
     }
 }
 
-static bool minipp_replacement_comma_is_top_level(
-    const char *replacement,
-    size_t comma_index) {
-    size_t index = 0U;
-    size_t depth = 0U;
-
-    if (replacement[comma_index] != ',') {
-        return false;
-    }
-
-    while (index < comma_index) {
-        char value = replacement[index];
-
-        if (value == '"' || value == '\'') {
-            char quote = value;
-            ++index;
-            while (index < comma_index && replacement[index] != '\0') {
-                value = replacement[index++];
-                if (value == '\\' &&
-                    index < comma_index &&
-                    replacement[index] != '\0') {
-                    ++index;
-                    continue;
-                }
-                if (value == quote) {
-                    break;
-                }
-            }
-            continue;
-        }
-        if (value == '(' || value == '[' || value == '{') {
-            ++depth;
-        } else if ((value == ')' || value == ']' || value == '}') &&
-                   depth != 0U) {
-            --depth;
-        }
-        ++index;
-    }
-
-    return depth == 0U;
-}
-
 static bool minipp_substitute_function_macro(MiniPpState *state,
                                              const MiniPpMacro *macro,
                                              const MiniPpArgList *raw_args,
@@ -1984,31 +1942,9 @@ static bool minipp_substitute_function_macro(MiniPpState *state,
             continue;
         }
 
-        {
-            char value = macro->replacement[index];
-            char emitted = value;
-
-            /*
-             * During replacement-list rescan, whitespace immediately after a
-             * literal comma is expansion-owned provenance.  It still renders
-             * as one ordinary space, but if that comma later becomes the
-             * argument boundary of an enclosing variadic invocation (e.g.
-             * pr_fmt(fmt) expanding to fmt, current->pid, __func__), the
-             * existing generated-pack logic may consume the pack-leading
-             * separator exactly as GCC does.
-             */
-            if (!preserve_argument_spacing &&
-                (value == ' ' || value == '\t') &&
-                index != 0U &&
-                macro->replacement[index - 1U] == ',' &&
-                minipp_replacement_comma_is_top_level(
-                    macro->replacement, index - 1U)) {
-                emitted = '\v';
-            }
-
-            if (!minipp_string_append_char(substituted, emitted)) {
-                goto oom;
-            }
+        if (!minipp_string_append_char(substituted,
+                                       macro->replacement[index])) {
+            goto oom;
         }
         ++index;
     }
@@ -2175,6 +2111,85 @@ static void minipp_demote_generated_argument_padding(MiniPpString *text) {
     }
 }
 
+static size_t minipp_top_level_comma_count(const MiniPpString *text) {
+    size_t index = 0U;
+    size_t depth = 0U;
+    size_t count = 0U;
+
+    while (index < text->size) {
+        char value = text->data[index];
+
+        if (value == '"' || value == '\'') {
+            char quote = value;
+            ++index;
+            while (index < text->size) {
+                value = text->data[index++];
+                if (value == '\\' && index < text->size) {
+                    ++index;
+                    continue;
+                }
+                if (value == quote) {
+                    break;
+                }
+            }
+            continue;
+        }
+
+        if (value == '(' || value == '[' || value == '{') {
+            ++depth;
+        } else if ((value == ')' || value == ']' || value == '}') &&
+                   depth != 0U) {
+            --depth;
+        } else if (value == ',' && depth == 0U) {
+            ++count;
+        }
+        ++index;
+    }
+    return count;
+}
+
+static void minipp_mark_top_level_comma_padding_generated(
+    MiniPpString *text) {
+    size_t index = 0U;
+    size_t depth = 0U;
+
+    while (index < text->size) {
+        char value = text->data[index];
+
+        if (value == '"' || value == '\'') {
+            char quote = value;
+            ++index;
+            while (index < text->size) {
+                value = text->data[index++];
+                if (value == '\\' && index < text->size) {
+                    ++index;
+                    continue;
+                }
+                if (value == quote) {
+                    break;
+                }
+            }
+            continue;
+        }
+
+        if (value == '(' || value == '[' || value == '{') {
+            ++depth;
+        } else if ((value == ')' || value == ']' || value == '}') &&
+                   depth != 0U) {
+            --depth;
+        } else if (value == ',' && depth == 0U) {
+            size_t padding = index + 1U;
+
+            if (padding < text->size &&
+                (text->data[padding] == ' ' ||
+                 text->data[padding] == '\t')) {
+                text->data[padding] = '\v';
+            }
+        }
+        ++index;
+    }
+}
+
 static bool minipp_expand_function_macro(MiniPpState *state,
                                          const MiniPpMacro *macro,
                                          const char *text,
@@ -2291,6 +2306,11 @@ static bool minipp_expand_function_macro(MiniPpState *state,
              * argument of another macro.
              */
             minipp_normalize_leading_expansion_space(expanded, false);
+            if (minipp_top_level_comma_count(
+                    &raw_args.items[arg_index]) == 0U &&
+                minipp_top_level_comma_count(expanded) != 0U) {
+                minipp_mark_top_level_comma_padding_generated(expanded);
+            }
             if (macro->variadic &&
                 arg_index + 1U == macro->param_count &&
                 !minipp_variadic_padding_survives_gnu_forward(macro)) {
