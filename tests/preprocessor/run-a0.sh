@@ -820,4 +820,13 @@ FT_TOP(ptei, ptes)
 EOF
 run_exact fixed-to-token-paste-deep-named-variadic-spacing
 
-printf 'MINIPP_A0_EXACT=PASS cases=86 mode=byte-identical\n'
+cat >"$work/token-paste-fixed-prefix-forwarded-pack-spacing.c" <<'EOF'
+#define TF_DEV_info(fmt, ...) TF_FINAL(fmt, ##__VA_ARGS__)
+#define TF_PASTE(p, fmt, a...) TF_DEV_##p(fmt, fixed1, fixed2, ##a)
+#define TF_INNER(fmt, a...) TF_PASTE(info, fmt, ##a)
+#define TF_TOP(first, second) TF_INNER("x", first, second)
+TF_TOP(ptei, ptes)
+EOF
+run_exact token-paste-fixed-prefix-forwarded-pack-spacing
+
+printf 'MINIPP_A0_EXACT=PASS cases=87 mode=byte-identical\n'
