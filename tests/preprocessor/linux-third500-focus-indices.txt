@@ -2,4 +2,4 @@
 1148
 1388
 1400
-# third500 semantic focus: GPIO variadic spacing + ACPI comma-boundary spacing
+# third500 semantic focus: closed 4/4; GPIO variadic head + ACPI comma boundary
