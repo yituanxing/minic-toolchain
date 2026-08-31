@@ -2216,6 +2216,16 @@ typedef struct MiniLdStaticLayout {
     bool have_rw;
 } MiniLdStaticLayout;
 
+static uint16_t load_u16le(const unsigned char *data) {
+    return (uint16_t)((uint16_t)data[0] |
+                      ((uint16_t)data[1] << 8U));
+}
+
+static void store_u16le(unsigned char *data, uint16_t value) {
+    data[0] = (unsigned char)(value & UINT16_C(0xff));
+    data[1] = (unsigned char)((value >> 8U) & UINT16_C(0xff));
+}
+
 static uint32_t load_u32le(const unsigned char *data) {
     return (uint32_t)data[0] |
            ((uint32_t)data[1] << 8U) |
@@ -2329,6 +2339,70 @@ static bool static_patch_branch(MiniLdSection *section,
     instruction |= ((encoded >> 1U) & UINT32_C(0x0f)) << 8U;
     instruction |= ((encoded >> 11U) & 1U) << 7U;
     store_u32le(section->data + (size_t)offset, instruction);
+    return true;
+}
+
+
+static bool static_patch_rvc_branch(MiniLdSection *section,
+                                    uint64_t offset,
+                                    int64_t delta,
+                                    FILE *diagnostics) {
+    uint16_t instruction;
+    uint16_t encoded;
+
+    if ((delta & 1) != 0 || delta < -256 || delta > 254) {
+        fprintf(diagnostics,
+                "minic-ld: R_RISCV_RVC_BRANCH-overflow:delta=%lld\n",
+                (long long)delta);
+        return false;
+    }
+    if (section->type == SHT_NOBITS || offset > SIZE_MAX ||
+        !range_ok((size_t)offset, 2U, section->size)) {
+        fprintf(diagnostics, "minic-ld: relocation-offset-out-of-range\n");
+        return false;
+    }
+    encoded = (uint16_t)((uint64_t)delta & UINT64_C(0x1ff));
+    instruction = load_u16le(section->data + (size_t)offset);
+    instruction &= (uint16_t)~UINT16_C(0x1c7c);
+    instruction |= (uint16_t)(((encoded >> 8U) & 1U) << 12U);
+    instruction |= (uint16_t)(((encoded >> 3U) & 3U) << 10U);
+    instruction |= (uint16_t)(((encoded >> 6U) & 3U) << 5U);
+    instruction |= (uint16_t)(((encoded >> 1U) & 3U) << 3U);
+    instruction |= (uint16_t)(((encoded >> 5U) & 1U) << 2U);
+    store_u16le(section->data + (size_t)offset, instruction);
+    return true;
+}
+
+static bool static_patch_rvc_jump(MiniLdSection *section,
+                                  uint64_t offset,
+                                  int64_t delta,
+                                  FILE *diagnostics) {
+    uint16_t instruction;
+    uint16_t encoded;
+
+    if ((delta & 1) != 0 || delta < -2048 || delta > 2046) {
+        fprintf(diagnostics,
+                "minic-ld: R_RISCV_RVC_JUMP-overflow:delta=%lld\n",
+                (long long)delta);
+        return false;
+    }
+    if (section->type == SHT_NOBITS || offset > SIZE_MAX ||
+        !range_ok((size_t)offset, 2U, section->size)) {
+        fprintf(diagnostics, "minic-ld: relocation-offset-out-of-range\n");
+        return false;
+    }
+    encoded = (uint16_t)((uint64_t)delta & UINT64_C(0xfff));
+    instruction = load_u16le(section->data + (size_t)offset);
+    instruction &= (uint16_t)~UINT16_C(0x1ffc);
+    instruction |= (uint16_t)(((encoded >> 11U) & 1U) << 12U);
+    instruction |= (uint16_t)(((encoded >> 4U) & 1U) << 11U);
+    instruction |= (uint16_t)(((encoded >> 8U) & 3U) << 9U);
+    instruction |= (uint16_t)(((encoded >> 10U) & 1U) << 8U);
+    instruction |= (uint16_t)(((encoded >> 6U) & 1U) << 7U);
+    instruction |= (uint16_t)(((encoded >> 7U) & 1U) << 6U);
+    instruction |= (uint16_t)(((encoded >> 1U) & 7U) << 3U);
+    instruction |= (uint16_t)(((encoded >> 5U) & 1U) << 2U);
+    store_u16le(section->data + (size_t)offset, instruction);
     return true;
 }
 
@@ -2762,6 +2836,26 @@ static bool static_apply_relocations(MiniLdState *state,
                                   reloc->offset,
                                   delta,
                                   state->diagnostics)) {
+                free(pcrel);
+                return false;
+            }
+            break;
+        case R_RISCV_RVC_BRANCH:
+            delta = target - (int64_t)place;
+            if (!static_patch_rvc_branch(section,
+                                         reloc->offset,
+                                         delta,
+                                         state->diagnostics)) {
+                free(pcrel);
+                return false;
+            }
+            break;
+        case R_RISCV_RVC_JUMP:
+            delta = target - (int64_t)place;
+            if (!static_patch_rvc_jump(section,
+                                       reloc->offset,
+                                       delta,
+                                       state->diagnostics)) {
                 free(pcrel);
                 return false;
             }
