@@ -2103,7 +2103,14 @@ static bool minipp_substitute_function_macro(MiniPpState *state,
                     minipp_needs_post_arg_separator(arg,
                                                     macro->replacement,
                                                     index) &&
-                    !minipp_string_append_char(substituted, ' ')) {
+                    !minipp_string_append_char(substituted, '\v')) {
+                    /*
+                     * This separator exists only to prevent the expanded
+                     * pp-number from being re-lexed with the following
+                     * +, -, or . token.  Keep it as generated provenance:
+                     * normal -P rendering emits one space, stringizing and
+                     * computed header-name formation treat it as zero-width.
+                     */
                     goto oom;
                 }
             } else if (!minipp_string_append_n(substituted,
