@@ -68,6 +68,12 @@ typedef struct MiniLdSectionMap {
     bool mapped;
 } MiniLdSectionMap;
 
+typedef struct MiniLdArchiveMembers {
+    char **paths;
+    size_t count;
+    size_t capacity;
+} MiniLdArchiveMembers;
+
 static char *minild_strdup(const char *text) {
     size_t size = strlen(text) + 1U;
     char *copy = malloc(size);
@@ -858,6 +864,474 @@ done:
     return ok;
 }
 
+static char *archive_directory(const char *path) {
+    const char *slash = strrchr(path, '/');
+    size_t length;
+    char *result;
+
+    if (slash == NULL) {
+        return minild_strdup(".");
+    }
+    if (slash == path) {
+        return minild_strdup("/");
+    }
+    length = (size_t)(slash - path);
+    result = malloc(length + 1U);
+    if (result == NULL) {
+        return NULL;
+    }
+    memcpy(result, path, length);
+    result[length] = '\0';
+    return result;
+}
+
+static char *join_path(const char *directory, const char *name) {
+    size_t directory_size;
+    size_t name_size;
+    bool needs_slash;
+    char *result;
+
+    if (name[0] == '/') {
+        return minild_strdup(name);
+    }
+    directory_size = strlen(directory);
+    name_size = strlen(name);
+    needs_slash = directory_size != 0U && directory[directory_size - 1U] != '/';
+    if (directory_size > SIZE_MAX - name_size - (needs_slash ? 2U : 1U)) {
+        return NULL;
+    }
+    result = malloc(directory_size + (needs_slash ? 1U : 0U) + name_size + 1U);
+    if (result == NULL) {
+        return NULL;
+    }
+    memcpy(result, directory, directory_size);
+    if (needs_slash) {
+        result[directory_size++] = '/';
+    }
+    memcpy(result + directory_size, name, name_size + 1U);
+    return result;
+}
+
+static void archive_members_destroy(MiniLdArchiveMembers *members) {
+    size_t i;
+
+    for (i = 0U; i < members->count; ++i) {
+        free(members->paths[i]);
+    }
+    free(members->paths);
+    members->paths = NULL;
+    members->count = 0U;
+    members->capacity = 0U;
+}
+
+static bool archive_members_append(MiniLdArchiveMembers *members, char *path) {
+    char **next;
+    size_t capacity;
+
+    if (members->count == members->capacity) {
+        capacity = members->capacity == 0U ? 64U : members->capacity * 2U;
+        if (capacity < members->capacity ||
+            capacity > SIZE_MAX / sizeof(*members->paths)) {
+            return false;
+        }
+        next = realloc(members->paths, capacity * sizeof(*members->paths));
+        if (next == NULL) {
+            return false;
+        }
+        members->paths = next;
+        members->capacity = capacity;
+    }
+    members->paths[members->count++] = path;
+    return true;
+}
+
+static bool parse_archive_decimal(const unsigned char *field,
+                                  size_t width,
+                                  uint64_t *value_out) {
+    uint64_t value = 0U;
+    size_t i = 0U;
+    bool saw_digit = false;
+
+    while (i < width && field[i] == ' ') {
+        ++i;
+    }
+    for (; i < width && field[i] != ' '; ++i) {
+        unsigned digit;
+
+        if (field[i] < '0' || field[i] > '9') {
+            return false;
+        }
+        digit = (unsigned)(field[i] - '0');
+        if (value > (UINT64_MAX - digit) / 10U) {
+            return false;
+        }
+        value = value * 10U + digit;
+        saw_digit = true;
+    }
+    while (i < width) {
+        if (field[i] != ' ') {
+            return false;
+        }
+        ++i;
+    }
+    if (!saw_digit) {
+        value = 0U;
+    }
+    *value_out = value;
+    return true;
+}
+
+static bool parse_archive_name_field(const unsigned char *header,
+                                     char field[17]) {
+    size_t length = 16U;
+
+    memcpy(field, header, 16U);
+    field[16] = '\0';
+    while (length != 0U && field[length - 1U] == ' ') {
+        field[--length] = '\0';
+    }
+    return length != 0U;
+}
+
+static bool decode_archive_member_name(const unsigned char *long_names,
+                                       size_t long_names_size,
+                                       const char field[17],
+                                       char **name_out) {
+    char *name;
+    size_t length;
+
+    if (field[0] == '/' && field[1] >= '0' && field[1] <= '9') {
+        uint64_t offset = 0U;
+        const char *p = field + 1;
+        size_t end;
+
+        while (*p >= '0' && *p <= '9') {
+            unsigned digit = (unsigned)(*p - '0');
+            if (offset > (UINT64_MAX - digit) / 10U) {
+                return false;
+            }
+            offset = offset * 10U + digit;
+            ++p;
+        }
+        if (*p != '\0' || offset > SIZE_MAX ||
+            (size_t)offset >= long_names_size) {
+            return false;
+        }
+        end = (size_t)offset;
+        while (end < long_names_size && long_names[end] != '\n') {
+            ++end;
+        }
+        if (end == long_names_size || end == (size_t)offset ||
+            long_names[end - 1U] != '/') {
+            return false;
+        }
+        --end;
+        length = end - (size_t)offset;
+        name = malloc(length + 1U);
+        if (name == NULL) {
+            return false;
+        }
+        memcpy(name, long_names + (size_t)offset, length);
+        name[length] = '\0';
+        *name_out = name;
+        return true;
+    }
+
+    if (strncmp(field, "#1/", 3U) == 0) {
+        return false;
+    }
+    {
+        const char *slash = strchr(field, '/');
+        length = slash == NULL ? strlen(field) : (size_t)(slash - field);
+    }
+    name = malloc(length + 1U);
+    if (name == NULL) {
+        return false;
+    }
+    memcpy(name, field, length);
+    name[length] = '\0';
+    *name_out = name;
+    return true;
+}
+
+static bool read_thin_archive_members(const char *archive_path,
+                                      MiniLdArchiveMembers *members,
+                                      FILE *diagnostics) {
+    unsigned char *data = NULL;
+    size_t size = 0U;
+    size_t cursor = 8U;
+    const unsigned char *long_names = NULL;
+    size_t long_names_size = 0U;
+    char *directory = NULL;
+    bool ok = false;
+
+    if (!read_file(archive_path, &data, &size, diagnostics)) {
+        return false;
+    }
+    if (size < 8U || memcmp(data, "!<thin>\n", 8U) != 0) {
+        fprintf(diagnostics,
+                "minic-ld: A1 archive input must be GNU thin archive:%s\n",
+                archive_path);
+        goto done;
+    }
+    directory = archive_directory(archive_path);
+    if (directory == NULL) {
+        fprintf(diagnostics, "minic-ld: out-of-memory:archive-directory\n");
+        goto done;
+    }
+
+    while (cursor < size) {
+        const unsigned char *header;
+        char field[17];
+        uint64_t member_size;
+        bool embedded;
+
+        if (!range_ok(cursor, 60U, size)) {
+            fprintf(diagnostics, "minic-ld: truncated-archive-header:%s\n", archive_path);
+            goto done;
+        }
+        header = data + cursor;
+        if (header[58] != (unsigned char)0x60 || header[59] != '\n' ||
+            !parse_archive_name_field(header, field) ||
+            !parse_archive_decimal(header + 48U, 10U, &member_size) ||
+            member_size > SIZE_MAX) {
+            fprintf(diagnostics, "minic-ld: invalid-archive-header:%s\n", archive_path);
+            goto done;
+        }
+        cursor += 60U;
+        embedded = strcmp(field, "/") == 0 || strcmp(field, "//") == 0 ||
+                   strcmp(field, "/SYM64/") == 0;
+
+        if (embedded && !range_ok(cursor, (size_t)member_size, size)) {
+            fprintf(diagnostics, "minic-ld: truncated-archive-special:%s\n", archive_path);
+            goto done;
+        }
+
+        if (strcmp(field, "//") == 0) {
+            long_names = data + cursor;
+            long_names_size = (size_t)member_size;
+        } else if (strcmp(field, "/") != 0 && strcmp(field, "/SYM64/") != 0) {
+            char *name = NULL;
+            char *path = NULL;
+
+            if (!decode_archive_member_name(long_names,
+                                            long_names_size,
+                                            field,
+                                            &name)) {
+                fprintf(diagnostics,
+                        "minic-ld: unsupported-archive-member-name:%s:%s\n",
+                        archive_path,
+                        field);
+                goto done;
+            }
+            path = join_path(directory, name);
+            free(name);
+            if (path == NULL || !archive_members_append(members, path)) {
+                free(path);
+                fprintf(diagnostics, "minic-ld: out-of-memory:archive-members\n");
+                goto done;
+            }
+        }
+
+        if (embedded) {
+            cursor += (size_t)member_size;
+            if ((member_size & 1U) != 0U) {
+                if (!range_ok(cursor, 1U, size)) {
+                    fprintf(diagnostics,
+                            "minic-ld: truncated-archive-padding:%s\n",
+                            archive_path);
+                    goto done;
+                }
+                ++cursor;
+            }
+        }
+    }
+
+    ok = true;
+
+done:
+    free(directory);
+    free(data);
+    return ok;
+}
+
+static bool state_has_unresolved_nonweak(const MiniLdState *state,
+                                         const char *name) {
+    size_t index = find_global_symbol(state, name);
+
+    if (index == SIZE_MAX) {
+        return false;
+    }
+    return !symbol_is_defined(&state->symbols[index]) &&
+           ELF64_ST_BIND(state->symbols[index].info) != STB_WEAK;
+}
+
+static bool object_defines_needed_symbol(MiniLdState *state,
+                                         const char *path,
+                                         bool *needed_out) {
+    unsigned char *data = NULL;
+    size_t size = 0U;
+    Elf64_Ehdr ehdr;
+    const Elf64_Shdr *sections;
+    const Elf64_Shdr *symtab = NULL;
+    const Elf64_Shdr *strtab = NULL;
+    size_t i;
+    bool ok = false;
+
+    *needed_out = false;
+    if (!read_file(path, &data, &size, state->diagnostics)) {
+        return false;
+    }
+    if (!range_ok(0U, sizeof(ehdr), size)) {
+        fprintf(state->diagnostics, "minic-ld: truncated-elf:%s\n", path);
+        goto done;
+    }
+    memcpy(&ehdr, data, sizeof(ehdr));
+    if (memcmp(ehdr.e_ident, ELFMAG, SELFMAG) != 0 ||
+        ehdr.e_ident[EI_CLASS] != ELFCLASS64 ||
+        ehdr.e_ident[EI_DATA] != ELFDATA2LSB ||
+        ehdr.e_type != ET_REL ||
+        ehdr.e_machine != EM_RISCV ||
+        ehdr.e_shentsize != sizeof(Elf64_Shdr) ||
+        ehdr.e_shoff > SIZE_MAX ||
+        !range_ok((size_t)ehdr.e_shoff,
+                  (size_t)ehdr.e_shnum * sizeof(Elf64_Shdr),
+                  size)) {
+        fprintf(state->diagnostics, "minic-ld: unsupported-archive-object:%s\n", path);
+        goto done;
+    }
+    sections = (const Elf64_Shdr *)(const void *)(data + (size_t)ehdr.e_shoff);
+    for (i = 1U; i < ehdr.e_shnum; ++i) {
+        if (sections[i].sh_type == SHT_SYMTAB) {
+            symtab = &sections[i];
+            break;
+        }
+    }
+    if (symtab == NULL || symtab->sh_link >= ehdr.e_shnum ||
+        symtab->sh_entsize != sizeof(Elf64_Sym)) {
+        fprintf(state->diagnostics, "minic-ld: missing-archive-object-symtab:%s\n", path);
+        goto done;
+    }
+    strtab = &sections[symtab->sh_link];
+    if (strtab->sh_type != SHT_STRTAB ||
+        symtab->sh_offset > SIZE_MAX || symtab->sh_size > SIZE_MAX ||
+        strtab->sh_offset > SIZE_MAX || strtab->sh_size > SIZE_MAX ||
+        !range_ok((size_t)symtab->sh_offset, (size_t)symtab->sh_size, size) ||
+        !range_ok((size_t)strtab->sh_offset, (size_t)strtab->sh_size, size)) {
+        fprintf(state->diagnostics, "minic-ld: invalid-archive-object-symtab:%s\n", path);
+        goto done;
+    }
+
+    {
+        size_t count = (size_t)(symtab->sh_size / symtab->sh_entsize);
+        for (i = 1U; i < count; ++i) {
+            Elf64_Sym symbol;
+            size_t offset = (size_t)symtab->sh_offset +
+                            i * (size_t)symtab->sh_entsize;
+            const char *name;
+            unsigned bind;
+
+            if (!range_ok(offset, sizeof(symbol), size)) {
+                fprintf(state->diagnostics,
+                        "minic-ld: truncated-archive-object-symbol:%s\n",
+                        path);
+                goto done;
+            }
+            memcpy(&symbol, data + offset, sizeof(symbol));
+            bind = ELF64_ST_BIND(symbol.st_info);
+            if ((bind != STB_GLOBAL && bind != STB_WEAK) ||
+                symbol.st_shndx == SHN_UNDEF || symbol.st_name == 0U ||
+                symbol.st_name >= strtab->sh_size) {
+                continue;
+            }
+            name = (const char *)data + (size_t)strtab->sh_offset + symbol.st_name;
+            if (memchr(name,
+                       '\0',
+                       (size_t)strtab->sh_size - symbol.st_name) == NULL) {
+                fprintf(state->diagnostics,
+                        "minic-ld: invalid-archive-object-symbol-name:%s\n",
+                        path);
+                goto done;
+            }
+            if (state_has_unresolved_nonweak(state, name)) {
+                *needed_out = true;
+                break;
+            }
+        }
+    }
+    ok = true;
+
+done:
+    free(data);
+    return ok;
+}
+
+static bool process_whole_archive(MiniLdState *state, const char *path) {
+    MiniLdArchiveMembers members = {NULL, 0U, 0U};
+    size_t i;
+    bool ok = false;
+
+    if (!read_thin_archive_members(path, &members, state->diagnostics)) {
+        goto done;
+    }
+    for (i = 0U; i < members.count; ++i) {
+        if (!process_input(state, members.paths[i])) {
+            goto done;
+        }
+    }
+    ok = true;
+
+done:
+    archive_members_destroy(&members);
+    return ok;
+}
+
+static bool process_group_archive(MiniLdState *state, const char *path) {
+    MiniLdArchiveMembers members = {NULL, 0U, 0U};
+    bool *selected = NULL;
+    bool changed;
+    size_t i;
+    bool ok = false;
+
+    if (!read_thin_archive_members(path, &members, state->diagnostics)) {
+        goto done;
+    }
+    selected = calloc(members.count == 0U ? 1U : members.count, sizeof(*selected));
+    if (selected == NULL) {
+        fprintf(state->diagnostics, "minic-ld: out-of-memory:archive-selection\n");
+        goto done;
+    }
+
+    do {
+        changed = false;
+        for (i = 0U; i < members.count; ++i) {
+            bool needed = false;
+
+            if (selected[i]) {
+                continue;
+            }
+            if (!object_defines_needed_symbol(state, members.paths[i], &needed)) {
+                goto done;
+            }
+            if (!needed) {
+                continue;
+            }
+            if (!process_input(state, members.paths[i])) {
+                goto done;
+            }
+            selected[i] = true;
+            changed = true;
+        }
+    } while (changed);
+
+    ok = true;
+
+done:
+    free(selected);
+    archive_members_destroy(&members);
+    return ok;
+}
+
 static size_t relocation_count_for_section(const MiniLdState *state,
                                            size_t section) {
     size_t i;
@@ -1237,15 +1711,15 @@ done:
     return ok;
 }
 
-int minild_link_relocatable_elf64_riscv(const char *output_path,
-                                        const char *const *input_paths,
-                                        size_t input_count,
-                                        FILE *diagnostics) {
+int minild_link_relocatable_elf64_riscv_inputs(const char *output_path,
+                                               const MiniLdInput *inputs,
+                                               size_t input_count,
+                                               FILE *diagnostics) {
     MiniLdState state;
     size_t i;
     bool ok = false;
 
-    if (output_path == NULL || input_paths == NULL || input_count == 0U ||
+    if (output_path == NULL || inputs == NULL || input_count == 0U ||
         diagnostics == NULL) {
         return 2;
     }
@@ -1253,7 +1727,26 @@ int minild_link_relocatable_elf64_riscv(const char *output_path,
     state.diagnostics = diagnostics;
 
     for (i = 0U; i < input_count; ++i) {
-        if (!process_input(&state, input_paths[i])) {
+        bool input_ok;
+
+        switch (inputs[i].kind) {
+        case MINILD_INPUT_OBJECT:
+            input_ok = process_input(&state, inputs[i].path);
+            break;
+        case MINILD_INPUT_WHOLE_ARCHIVE:
+            input_ok = process_whole_archive(&state, inputs[i].path);
+            break;
+        case MINILD_INPUT_GROUP_ARCHIVE:
+            input_ok = process_group_archive(&state, inputs[i].path);
+            break;
+        default:
+            fprintf(diagnostics,
+                    "minic-ld: invalid-input-kind:%s\n",
+                    inputs[i].path);
+            input_ok = false;
+            break;
+        }
+        if (!input_ok) {
             goto done;
         }
     }
@@ -1265,4 +1758,33 @@ int minild_link_relocatable_elf64_riscv(const char *output_path,
 done:
     state_destroy(&state);
     return ok ? 0 : 1;
+}
+
+int minild_link_relocatable_elf64_riscv(const char *output_path,
+                                        const char *const *input_paths,
+                                        size_t input_count,
+                                        FILE *diagnostics) {
+    MiniLdInput *inputs;
+    size_t i;
+    int result;
+
+    if (output_path == NULL || input_paths == NULL || input_count == 0U ||
+        diagnostics == NULL) {
+        return 2;
+    }
+    inputs = malloc(input_count * sizeof(*inputs));
+    if (inputs == NULL) {
+        fprintf(diagnostics, "minic-ld: out-of-memory:inputs\n");
+        return 1;
+    }
+    for (i = 0U; i < input_count; ++i) {
+        inputs[i].path = input_paths[i];
+        inputs[i].kind = MINILD_INPUT_OBJECT;
+    }
+    result = minild_link_relocatable_elf64_riscv_inputs(output_path,
+                                                         inputs,
+                                                         input_count,
+                                                         diagnostics);
+    free(inputs);
+    return result;
 }
