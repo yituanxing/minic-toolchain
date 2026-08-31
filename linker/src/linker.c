@@ -86,6 +86,20 @@ typedef struct MiniLdArchiveMembers {
     size_t capacity;
 } MiniLdArchiveMembers;
 
+typedef struct MiniLdEmbeddedMember {
+    char *name;
+    size_t data_offset;
+    size_t data_size;
+} MiniLdEmbeddedMember;
+
+typedef struct MiniLdEmbeddedArchive {
+    unsigned char *data;
+    size_t size;
+    MiniLdEmbeddedMember *members;
+    size_t count;
+    size_t capacity;
+} MiniLdEmbeddedArchive;
+
 static char *minild_strdup(const char *text) {
     size_t size = strlen(text) + 1U;
     char *copy = malloc(size);
@@ -721,9 +735,10 @@ static bool section_supported_for_merge(const Elf64_Shdr *section) {
     return true;
 }
 
-static bool process_input(MiniLdState *state, const char *path) {
-    unsigned char *data = NULL;
-    size_t size = 0U;
+static bool process_input_data(MiniLdState *state,
+                               const unsigned char *data,
+                               size_t size,
+                               const char *path) {
     Elf64_Ehdr ehdr;
     const Elf64_Shdr *section_headers;
     const Elf64_Shdr *shstrtab;
@@ -737,9 +752,6 @@ static bool process_input(MiniLdState *state, const char *path) {
     size_t i;
     bool ok = false;
 
-    if (!read_file(path, &data, &size, state->diagnostics)) {
-        return false;
-    }
     if (!range_ok(0U, sizeof(ehdr), size)) {
         fprintf(state->diagnostics, "minic-ld: truncated-elf:%s\n", path);
         goto done;
@@ -1023,6 +1035,18 @@ static bool process_input(MiniLdState *state, const char *path) {
 done:
     free(symbol_map);
     free(section_map);
+    return ok;
+}
+
+static bool process_input(MiniLdState *state, const char *path) {
+    unsigned char *data = NULL;
+    size_t size = 0U;
+    bool ok;
+
+    if (!read_file(path, &data, &size, state->diagnostics)) {
+        return false;
+    }
+    ok = process_input_data(state, data, size, path);
     free(data);
     return ok;
 }
@@ -1338,11 +1362,11 @@ static bool state_has_unresolved_nonweak(const MiniLdState *state,
            ELF64_ST_BIND(state->symbols[index].info) != STB_WEAK;
 }
 
-static bool object_defines_needed_symbol(MiniLdState *state,
-                                         const char *path,
-                                         bool *needed_out) {
-    unsigned char *data = NULL;
-    size_t size = 0U;
+static bool object_data_defines_needed_symbol(MiniLdState *state,
+                                              const unsigned char *data,
+                                              size_t size,
+                                              const char *path,
+                                              bool *needed_out) {
     Elf64_Ehdr ehdr;
     const Elf64_Shdr *sections;
     const Elf64_Shdr *symtab = NULL;
@@ -1351,9 +1375,6 @@ static bool object_defines_needed_symbol(MiniLdState *state,
     bool ok = false;
 
     *needed_out = false;
-    if (!read_file(path, &data, &size, state->diagnostics)) {
-        return false;
-    }
     if (!range_ok(0U, sizeof(ehdr), size)) {
         fprintf(state->diagnostics, "minic-ld: truncated-elf:%s\n", path);
         goto done;
@@ -1434,6 +1455,24 @@ static bool object_defines_needed_symbol(MiniLdState *state,
     ok = true;
 
 done:
+    return ok;
+}
+
+static bool object_defines_needed_symbol(MiniLdState *state,
+                                         const char *path,
+                                         bool *needed_out) {
+    unsigned char *data = NULL;
+    size_t size = 0U;
+    bool ok;
+
+    if (!read_file(path, &data, &size, state->diagnostics)) {
+        return false;
+    }
+    ok = object_data_defines_needed_symbol(state,
+                                           data,
+                                           size,
+                                           path,
+                                           needed_out);
     free(data);
     return ok;
 }
