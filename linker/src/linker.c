@@ -1013,6 +1013,15 @@ static bool decode_archive_member_name(const unsigned char *long_names,
             offset = offset * 10U + digit;
             ++p;
         }
+        while (*p == ' ') {
+            ++p;
+        }
+        if (*p == '/') {
+            ++p;
+        }
+        while (*p == ' ') {
+            ++p;
+        }
         if (*p != '\0' || offset > SIZE_MAX ||
             (size_t)offset >= long_names_size) {
             return false;
