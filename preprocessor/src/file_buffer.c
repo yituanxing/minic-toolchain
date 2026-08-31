@@ -168,6 +168,7 @@ bool minipp_render_gcc_p_output(const MiniPpString *input,
     bool line_start = true;
     bool pending_space = false;
     bool preserve_space_before_pragma_newline = false;
+    bool suppress_next_physical_newline_after_pragma = false;
     size_t empty_macro_padding_count = 0U;
 
     minipp_string_init(output);
@@ -176,6 +177,16 @@ bool minipp_render_gcc_p_output(const MiniPpString *input,
         char value = input->data[index];
 
         if (value == '\n') {
+            if (suppress_next_physical_newline_after_pragma) {
+                suppress_next_physical_newline_after_pragma = false;
+                leading_spaces = 0U;
+                pending_space = false;
+                preserve_space_before_pragma_newline = false;
+                empty_macro_padding_count = 0U;
+                line_start = true;
+                ++index;
+                continue;
+            }
             if (!line_start &&
                 preserve_space_before_pragma_newline &&
                 pending_space) {
@@ -226,6 +237,18 @@ bool minipp_render_gcc_p_output(const MiniPpString *input,
             continue;
         }
 
+        if (value == '\x10') {
+            /*
+             * The pragma operator already emitted its terminating newline.
+             * If the invocation itself ended the physical source line, GCC
+             * does not render a second blank line.  Keep source-line tracking
+             * intact internally and collapse only at -P rendering time.
+             */
+            suppress_next_physical_newline_after_pragma = true;
+            ++index;
+            continue;
+        }
+
         if (value == '\b' || value == '\x0e') {
             ++index;
             continue;
@@ -242,6 +265,7 @@ bool minipp_render_gcc_p_output(const MiniPpString *input,
             continue;
         }
 
+        suppress_next_physical_newline_after_pragma = false;
         while (line_start && leading_spaces != 0U) {
             if (!minipp_string_append_char(output, ' ')) {
                 goto oom;
