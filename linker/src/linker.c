@@ -582,7 +582,7 @@ static bool process_input(MiniLdState *state, const char *path) {
         ehdr.e_type != ET_REL ||
         ehdr.e_machine != EM_RISCV ||
         ehdr.e_version != EV_CURRENT ||
-        ehdr.e_shentsize < sizeof(Elf64_Shdr) ||
+        ehdr.e_shentsize != sizeof(Elf64_Shdr) ||
         ehdr.e_shnum == 0U ||
         ehdr.e_shstrndx == SHN_UNDEF ||
         ehdr.e_shstrndx >= ehdr.e_shnum) {
@@ -983,13 +983,6 @@ static bool write_output(MiniLdState *state, const char *path) {
         }
     }
 
-    {
-        uint32_t ignored;
-        if (!buffer_append_string(&shstrtab, ".symtab", &ignored)) {
-            goto oom;
-        }
-        headers[0].sh_name = ignored;
-    }
     for (i = 0U; i < state->symbol_count; ++i) {
         if (state->symbols[i].name[0] != '\0' &&
             !buffer_append_string(&strtab,
