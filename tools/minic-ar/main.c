@@ -17,6 +17,8 @@ int main(int argc, char **argv) {
     const char *flags;
     bool replace = false;
     bool list = false;
+    bool move = false;
+    bool insert_before = false;
     size_t i;
 
     if (argc == 2 && (strcmp(argv[1], "--help") == 0 || strcmp(argv[1], "-h") == 0)) {
@@ -44,6 +46,12 @@ int main(int argc, char **argv) {
         case 't':
             list = true;
             break;
+        case 'm':
+            move = true;
+            break;
+        case 'i':
+            insert_before = true;
+            break;
         case 'c':
             break;
         case 's':
@@ -69,8 +77,8 @@ int main(int argc, char **argv) {
             return 2;
         }
     }
-    if (replace == list) {
-        fprintf(stderr, "minic-ar: A1 requires exactly one operation: r or t\n");
+    if ((replace ? 1 : 0) + (list ? 1 : 0) + (move ? 1 : 0) != 1) {
+        fprintf(stderr, "minic-ar: A1 requires exactly one operation: r, t, or m\n");
         return 2;
     }
     if (list) {
@@ -79,6 +87,42 @@ int main(int argc, char **argv) {
             return 2;
         }
         return miniar_list_archive(argv[2], stdout, stderr);
+    }
+
+
+    if (move) {
+        FILE *archive;
+
+        if (!insert_before) {
+            fprintf(stderr, "minic-ar: A1 move requires modifier i\n");
+            return 2;
+        }
+        if (argc < 4) {
+            usage(stderr, argv[0]);
+            return 2;
+        }
+        if (argc > 4) {
+            fprintf(stderr, "minic-ar: A1 move with explicit members is not yet supported\n");
+            return 2;
+        }
+
+        /*
+         * Linux Kbuild may invoke:
+         *   ar mPiT RELPOS ARCHIVE
+         * with no members after ARCHIVE. GNU ar treats this as a successful
+         * no-op when the archive already exists. Preserve that exact boundary.
+         */
+        archive = fopen(argv[3], "rb");
+        if (archive != NULL) {
+            fclose(archive);
+            return 0;
+        }
+
+        return miniar_create_archive(argv[3],
+                                     NULL,
+                                     0U,
+                                     &options,
+                                     stderr);
     }
 
     return miniar_create_archive(argv[2],
