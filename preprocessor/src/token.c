@@ -235,9 +235,29 @@ static bool minipp_arg_list_append(MiniPpArgList *list,
     item = &list->items[list->count];
     {
         size_t leading = 0U;
+        size_t trailing = size;
         size_t token_line = source_line;
         bool generated = false;
         bool stringize_padding = false;
+        bool trailing_generated = false;
+        bool trailing_stringized = false;
+
+        while (trailing != 0U &&
+               isspace((unsigned char)text[trailing - 1U]) != 0) {
+            char value = text[trailing - 1U];
+
+            if (value == '\v') {
+                trailing_generated = true;
+            }
+            if (value == '\f') {
+                trailing_stringized = true;
+            }
+            --trailing;
+        }
+        list->trailing_space[list->count] = trailing != size;
+        list->trailing_space_generated[list->count] = trailing_generated;
+        list->trailing_space_stringized[list->count] = trailing_stringized;
+
         while (leading < size &&
                isspace((unsigned char)text[leading]) != 0) {
             if (text[leading] == '\n' ||
