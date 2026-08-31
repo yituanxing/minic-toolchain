@@ -829,4 +829,17 @@ TF_TOP(ptei, ptes)
 EOF
 run_exact token-paste-fixed-prefix-forwarded-pack-spacing
 
-printf 'MINIPP_A0_EXACT=PASS cases=87 mode=byte-identical\n'
+mkdir -p "$work/trace/events"
+cat >"$work/trace/events/9p.h" <<'EOF'
+#define TRACE_9P_VALUE 91
+EOF
+cat >"$work/computed-angle-ppnumber-include.c" <<'EOF'
+#define TRACE_SYSTEM 9p
+#define __TRACE_INCLUDE(system) <trace/events/system.h>
+#define TRACE_INCLUDE(system) __TRACE_INCLUDE(system)
+#include TRACE_INCLUDE(TRACE_SYSTEM)
+int trace_9p_value = TRACE_9P_VALUE;
+EOF
+run_exact computed-angle-ppnumber-include -I"$work"
+
+printf 'MINIPP_A0_EXACT=PASS cases=88 mode=byte-identical\n'
