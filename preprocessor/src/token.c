@@ -398,12 +398,8 @@ static bool minipp_append_pragma_literal(MiniPpState *state,
 
     while (out->size != 0U) {
         char previous = out->data[out->size - 1U];
-        /*
-         * A source/replacement-list space before _Pragma belongs to the
-         * preceding output line in GCC -P.  Only MiniPP's generated boundary
-         * padding is disposable when the pragma operator starts a new line.
-         */
-        if (previous != '\v' && previous != '\f') {
+        if (previous != ' ' && previous != '\t' &&
+            previous != '\v' && previous != '\f') {
             break;
         }
         --out->size;
@@ -1154,7 +1150,14 @@ static bool minipp_append_stringized_arg(MiniPpString *out,
     for (index = 0U; index < arg->size; ++index) {
         unsigned char ch = (unsigned char)arg->data[index];
 
-        if (arg->data[index] == '\b' || arg->data[index] == '\x0e') {
+        if (arg->data[index] == '\b' ||
+            arg->data[index] == '\x0e' ||
+            arg->data[index] == '\v') {
+            /*
+             * \v is a generated renderer separator, not source whitespace.
+             * It must keep adjacent preprocessing tokens distinct in -P
+             * output, but it does not contribute whitespace to stringizing.
+             */
             continue;
         }
 
@@ -1301,6 +1304,48 @@ static bool minipp_needs_post_arg_separator(const MiniPpString *arg,
         return false;
     }
     return next == '+' || next == '-' || next == '.';
+}
+
+static bool minipp_needs_pre_arg_separator(const MiniPpString *out,
+                                           const MiniPpString *arg) {
+    size_t left = out->size;
+    size_t right = 0U;
+    char previous;
+    char first;
+
+    while (left != 0U &&
+           (out->data[left - 1U] == '\a' ||
+            out->data[left - 1U] == '\b' ||
+            out->data[left - 1U] == '\x0e')) {
+        --left;
+    }
+    if (left == 0U) {
+        return false;
+    }
+    previous = out->data[left - 1U];
+    if (isspace((unsigned char)previous) != 0) {
+        return false;
+    }
+
+    while (right < arg->size &&
+           (arg->data[right] == '\a' ||
+            arg->data[right] == '\b' ||
+            arg->data[right] == '\x0e')) {
+        ++right;
+    }
+    if (right >= arg->size ||
+        isspace((unsigned char)arg->data[right]) != 0) {
+        return false;
+    }
+    first = arg->data[right];
+
+    /*
+     * Function-like substitution preserves preprocessing-token boundaries.
+     * Without a renderer separator, "- -E" becomes the different token "--".
+     * The same applies to the symmetric '+' case.
+     */
+    return (previous == '-' && first == '-') ||
+           (previous == '+' && first == '+');
 }
 
 static bool minipp_macro_replacement_has_self_identifier(
@@ -1857,6 +1902,12 @@ static bool minipp_substitute_function_macro(MiniPpState *state,
                         }
                         break;
                     }
+                }
+
+                if (!paste_operand &&
+                    minipp_needs_pre_arg_separator(substituted, arg) &&
+                    !minipp_string_append_char(substituted, ' ')) {
+                    goto oom;
                 }
 
                 if (paste_operand) {
@@ -2599,7 +2650,7 @@ static bool minipp_expand_text_recursive(MiniPpState *state,
                                 minipp_needs_post_expansion_separator(
                                     &replacement,
                                     text[index]) &&
-                                !minipp_string_append_char(out, ' ')) {
+                                !minipp_string_append_char(out, '\v')) {
                                 fprintf(state->diagnostics,
                                         "minic-cpp: out-of-memory\n");
                                 ok = false;
