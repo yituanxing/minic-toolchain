@@ -6,7 +6,9 @@
 
 static void usage(FILE *out, const char *argv0) {
     fprintf(out,
-            "usage: %s [-]r[c][s|S][T][P][D|U] ARCHIVE [MEMBER ...]\n",
+            "usage: %s [-]r[c][s|S][T][P][D|U] ARCHIVE [MEMBER ...]\n"
+            "       %s [-]t ARCHIVE\n",
+            argv0,
             argv0);
 }
 
@@ -14,6 +16,7 @@ int main(int argc, char **argv) {
     MiniArOptions options = {false, true, false, false};
     const char *flags;
     bool replace = false;
+    bool list = false;
     size_t i;
 
     if (argc == 2 && (strcmp(argv[1], "--help") == 0 || strcmp(argv[1], "-h") == 0)) {
@@ -37,6 +40,9 @@ int main(int argc, char **argv) {
         switch (flags[i]) {
         case 'r':
             replace = true;
+            break;
+        case 't':
+            list = true;
             break;
         case 'c':
             break;
@@ -63,9 +69,16 @@ int main(int argc, char **argv) {
             return 2;
         }
     }
-    if (!replace) {
-        fprintf(stderr, "minic-ar: A0 supports replace/create operation 'r' only\n");
+    if (replace == list) {
+        fprintf(stderr, "minic-ar: A1 requires exactly one operation: r or t\n");
         return 2;
+    }
+    if (list) {
+        if (argc != 3) {
+            fprintf(stderr, "minic-ar: A1 list does not accept member filters\n");
+            return 2;
+        }
+        return miniar_list_archive(argv[2], stdout, stderr);
     }
 
     return miniar_create_archive(argv[2],
