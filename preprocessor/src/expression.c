@@ -17,7 +17,8 @@ typedef struct MiniPpExprParser {
 } MiniPpExprParser;
 
 static void minipp_expr_skip_space(MiniPpExprParser *parser) {
-    while (isspace((unsigned char)*parser->cursor) != 0) {
+    while (isspace((unsigned char)*parser->cursor) != 0 ||
+           *parser->cursor == '\x13') {
         ++parser->cursor;
     }
 }
