@@ -39,6 +39,20 @@ typedef struct MiniArBuffer {
     size_t capacity;
 } MiniArBuffer;
 
+typedef struct MiniArPathList {
+    char **items;
+    size_t count;
+    size_t capacity;
+} MiniArPathList;
+
+typedef struct MiniArArchiveView {
+    const unsigned char *data;
+    size_t size;
+    bool thin;
+    const unsigned char *long_names;
+    size_t long_names_size;
+} MiniArArchiveView;
+
 static char *miniar_strdup(const char *text) {
     size_t size = strlen(text) + 1U;
     char *copy = malloc(size);
@@ -114,6 +128,64 @@ static char *stored_member_name(const char *archive_path,
 
 static bool range_ok(size_t offset, size_t amount, size_t total) {
     return offset <= total && amount <= total - offset;
+}
+
+static char *join_path(const char *directory, const char *name) {
+    size_t directory_size;
+    size_t name_size;
+    bool needs_slash;
+    char *result;
+
+    if (name[0] == '/') {
+        return miniar_strdup(name);
+    }
+    directory_size = strlen(directory);
+    name_size = strlen(name);
+    needs_slash = directory_size != 0U && directory[directory_size - 1U] != '/';
+    if (directory_size > SIZE_MAX - name_size - (needs_slash ? 2U : 1U)) {
+        return NULL;
+    }
+    result = malloc(directory_size + (needs_slash ? 1U : 0U) + name_size + 1U);
+    if (result == NULL) {
+        return NULL;
+    }
+    memcpy(result, directory, directory_size);
+    if (needs_slash) {
+        result[directory_size++] = '/';
+    }
+    memcpy(result + directory_size, name, name_size + 1U);
+    return result;
+}
+
+static void path_list_destroy(MiniArPathList *list) {
+    size_t i;
+
+    for (i = 0U; i < list->count; ++i) {
+        free(list->items[i]);
+    }
+    free(list->items);
+    list->items = NULL;
+    list->count = 0U;
+    list->capacity = 0U;
+}
+
+static bool path_list_append_owned(MiniArPathList *list, char *path) {
+    char **next_items;
+
+    if (list->count == list->capacity) {
+        size_t next = list->capacity == 0U ? 16U : list->capacity * 2U;
+        if (next < list->capacity || next > SIZE_MAX / sizeof(*list->items)) {
+            return false;
+        }
+        next_items = realloc(list->items, next * sizeof(*list->items));
+        if (next_items == NULL) {
+            return false;
+        }
+        list->items = next_items;
+        list->capacity = next;
+    }
+    list->items[list->count++] = path;
+    return true;
 }
 
 static bool buffer_reserve(MiniArBuffer *buffer, size_t extra) {
@@ -199,6 +271,215 @@ static bool load_file(const char *path,
     }
     *data_out = data;
     *size_out = size;
+    return true;
+}
+
+
+static bool parse_decimal_field(const unsigned char *field,
+                                size_t width,
+                                uint64_t *value_out) {
+    uint64_t value = 0U;
+    size_t i = 0U;
+    bool saw_digit = false;
+
+    while (i < width && field[i] == ' ') {
+        ++i;
+    }
+    for (; i < width && field[i] != ' '; ++i) {
+        unsigned digit;
+
+        if (field[i] < '0' || field[i] > '9') {
+            return false;
+        }
+        digit = (unsigned)(field[i] - '0');
+        if (value > (UINT64_MAX - digit) / 10U) {
+            return false;
+        }
+        value = value * 10U + digit;
+        saw_digit = true;
+    }
+    while (i < width) {
+        if (field[i] != ' ') {
+            return false;
+        }
+        ++i;
+    }
+    if (!saw_digit) {
+        value = 0U;
+    }
+    *value_out = value;
+    return true;
+}
+
+static bool archive_magic(const unsigned char *data, size_t size, bool *thin_out) {
+    if (size < 8U) {
+        return false;
+    }
+    if (memcmp(data, "!<arch>\n", 8U) == 0) {
+        *thin_out = false;
+        return true;
+    }
+    if (memcmp(data, "!<thin>\n", 8U) == 0) {
+        *thin_out = true;
+        return true;
+    }
+    return false;
+}
+
+static bool archive_header_name(const unsigned char *header, char field[17]) {
+    size_t length = 16U;
+
+    memcpy(field, header, 16U);
+    field[16] = '\0';
+    while (length != 0U && field[length - 1U] == ' ') {
+        field[--length] = '\0';
+    }
+    return length != 0U;
+}
+
+static bool archive_long_name_at(const MiniArArchiveView *view,
+                                 size_t offset,
+                                 char **name_out) {
+    size_t end;
+    char *name;
+
+    if (view->long_names == NULL || offset >= view->long_names_size) {
+        return false;
+    }
+    end = offset;
+    while (end < view->long_names_size && view->long_names[end] != '\n') {
+        ++end;
+    }
+    if (end == view->long_names_size || end == offset ||
+        view->long_names[end - 1U] != '/') {
+        return false;
+    }
+    --end;
+    name = malloc(end - offset + 1U);
+    if (name == NULL) {
+        return false;
+    }
+    memcpy(name, view->long_names + offset, end - offset);
+    name[end - offset] = '\0';
+    *name_out = name;
+    return true;
+}
+
+static bool archive_decode_member_name(const MiniArArchiveView *view,
+                                       const char field[17],
+                                       char **name_out) {
+    size_t length;
+    char *name;
+
+    if (field[0] == '/' && field[1] >= '0' && field[1] <= '9') {
+        uint64_t offset = 0U;
+        const char *p = field + 1;
+
+        while (*p >= '0' && *p <= '9') {
+            unsigned digit = (unsigned)(*p - '0');
+            if (offset > (UINT64_MAX - digit) / 10U) {
+                return false;
+            }
+            offset = offset * 10U + digit;
+            ++p;
+        }
+        if (*p != '\0' || offset > SIZE_MAX) {
+            return false;
+        }
+        return archive_long_name_at(view, (size_t)offset, name_out);
+    }
+    if (strncmp(field, "#1/", 3U) == 0) {
+        return false;
+    }
+    {
+        const char *slash = strchr(field, '/');
+        length = slash == NULL ? strlen(field) : (size_t)(slash - field);
+    }
+    name = malloc(length + 1U);
+    if (name == NULL) {
+        return false;
+    }
+    memcpy(name, field, length);
+    name[length] = '\0';
+    *name_out = name;
+    return true;
+}
+
+typedef bool (*MiniArMemberVisitor)(const MiniArArchiveView *view,
+                                    const char *name,
+                                    void *context,
+                                    FILE *diagnostics);
+
+static bool visit_archive_members(const unsigned char *data,
+                                  size_t size,
+                                  MiniArMemberVisitor visitor,
+                                  void *context,
+                                  FILE *diagnostics) {
+    MiniArArchiveView view = {data, size, false, NULL, 0U};
+    size_t cursor = 8U;
+
+    if (!archive_magic(data, size, &view.thin)) {
+        fprintf(diagnostics, "minic-ar: invalid-archive-magic\n");
+        return false;
+    }
+    while (cursor < size) {
+        const unsigned char *header;
+        char field[17];
+        uint64_t payload_size;
+        size_t payload_offset;
+        bool embedded_payload;
+
+        if (!range_ok(cursor, MINIAR_HEADER_SIZE, size)) {
+            fprintf(diagnostics, "minic-ar: truncated-archive-header\n");
+            return false;
+        }
+        header = data + cursor;
+        if (header[58] != (unsigned char)0x60 || header[59] != '\n') {
+            fprintf(diagnostics, "minic-ar: invalid-archive-header-trailer\n");
+            return false;
+        }
+        cursor += MINIAR_HEADER_SIZE;
+        if (!archive_header_name(header, field) ||
+            !parse_decimal_field(header + 48U, 10U, &payload_size) ||
+            payload_size > SIZE_MAX) {
+            fprintf(diagnostics, "minic-ar: invalid-archive-header\n");
+            return false;
+        }
+        payload_offset = cursor;
+        embedded_payload =
+            !view.thin || strcmp(field, "/") == 0 || strcmp(field, "//") == 0;
+        if (embedded_payload &&
+            !range_ok(payload_offset, (size_t)payload_size, size)) {
+            fprintf(diagnostics, "minic-ar: truncated-archive-member:%s\n", field);
+            return false;
+        }
+        if (strcmp(field, "//") == 0) {
+            view.long_names = data + payload_offset;
+            view.long_names_size = (size_t)payload_size;
+        } else if (strcmp(field, "/") != 0 && strcmp(field, "/SYM64/") != 0) {
+            char *name = NULL;
+
+            if (!archive_decode_member_name(&view, field, &name)) {
+                fprintf(diagnostics, "minic-ar: unsupported-member-name:%s\n", field);
+                return false;
+            }
+            if (!visitor(&view, name, context, diagnostics)) {
+                free(name);
+                return false;
+            }
+            free(name);
+        }
+        if (embedded_payload) {
+            cursor += (size_t)payload_size;
+            if ((payload_size & 1U) != 0U) {
+                if (!range_ok(cursor, 1U, size)) {
+                    fprintf(diagnostics, "minic-ar: truncated-archive-padding\n");
+                    return false;
+                }
+                ++cursor;
+            }
+        }
+    }
     return true;
 }
 
@@ -452,6 +733,105 @@ static void free_symbols(MiniArSymbol *symbols, size_t count) {
         free(symbols[i].name);
     }
     free(symbols);
+}
+
+
+typedef struct MiniArExpandContext {
+    MiniArPathList *paths;
+    char *archive_directory;
+    size_t depth;
+} MiniArExpandContext;
+
+static bool expand_thin_member_path(const char *path,
+                                    MiniArPathList *expanded,
+                                    size_t depth,
+                                    FILE *diagnostics);
+
+static bool expand_thin_member_visitor(const MiniArArchiveView *view,
+                                       const char *name,
+                                       void *context,
+                                       FILE *diagnostics) {
+    MiniArExpandContext *expand = context;
+    char *path;
+    bool ok;
+
+    (void)view;
+    path = join_path(expand->archive_directory, name);
+    if (path == NULL) {
+        fprintf(diagnostics, "minic-ar: out-of-memory:thin-member-path\n");
+        return false;
+    }
+    ok = expand_thin_member_path(path,
+                                 expand->paths,
+                                 expand->depth + 1U,
+                                 diagnostics);
+    free(path);
+    return ok;
+}
+
+static bool expand_thin_member_path(const char *path,
+                                    MiniArPathList *expanded,
+                                    size_t depth,
+                                    FILE *diagnostics) {
+    unsigned char *data = NULL;
+    size_t size = 0U;
+    bool thin = false;
+    char *copy;
+
+    if (depth > 32U) {
+        fprintf(diagnostics, "minic-ar: thin-archive-nesting-too-deep:%s\n", path);
+        return false;
+    }
+    if (!load_file(path, &data, &size, diagnostics)) {
+        return false;
+    }
+    if (archive_magic(data, size, &thin) && thin) {
+        MiniArExpandContext context;
+        bool ok;
+
+        context.paths = expanded;
+        context.archive_directory = archive_directory(path);
+        context.depth = depth;
+        if (context.archive_directory == NULL) {
+            free(data);
+            fprintf(diagnostics,
+                    "minic-ar: out-of-memory:thin-archive-directory\n");
+            return false;
+        }
+        ok = visit_archive_members(data,
+                                   size,
+                                   expand_thin_member_visitor,
+                                   &context,
+                                   diagnostics);
+        free(context.archive_directory);
+        free(data);
+        return ok;
+    }
+    free(data);
+    copy = miniar_strdup(path);
+    if (copy == NULL || !path_list_append_owned(expanded, copy)) {
+        free(copy);
+        fprintf(diagnostics, "minic-ar: out-of-memory:expanded-members\n");
+        return false;
+    }
+    return true;
+}
+
+static bool expand_thin_members(const char *const *member_paths,
+                                size_t member_count,
+                                MiniArPathList *expanded,
+                                FILE *diagnostics) {
+    size_t i;
+
+    for (i = 0U; i < member_count; ++i) {
+        if (!expand_thin_member_path(member_paths[i],
+                                     expanded,
+                                     0U,
+                                     diagnostics)) {
+            return false;
+        }
+    }
+    return true;
 }
 
 static bool prepare_members(const char *output,
@@ -814,6 +1194,9 @@ int miniar_create_archive(const char *output_path,
     MiniArMember *members = NULL;
     MiniArSymbol *symbols = NULL;
     MiniArBuffer long_names = {NULL, 0U, 0U};
+    MiniArPathList expanded = {NULL, 0U, 0U};
+    const char *const *effective_paths = member_paths;
+    size_t effective_count = member_count;
     size_t symbol_count = 0U;
     uint64_t symbol_table_size = 0U;
     FILE *file = NULL;
@@ -823,9 +1206,17 @@ int miniar_create_archive(const char *output_path,
     if (output_path == NULL || options == NULL || diagnostics == NULL) {
         return 2;
     }
+    if (options->thin &&
+        !expand_thin_members(member_paths, member_count, &expanded, diagnostics)) {
+        goto done;
+    }
+    if (options->thin) {
+        effective_paths = (const char *const *)expanded.items;
+        effective_count = expanded.count;
+    }
     if (!prepare_members(output_path,
-                         member_paths,
-                         member_count,
+                         effective_paths,
+                         effective_count,
                          options,
                          &members,
                          &long_names,
@@ -833,7 +1224,7 @@ int miniar_create_archive(const char *output_path,
                          &symbol_count,
                          diagnostics) ||
         !compute_layout(members,
-                        member_count,
+                        effective_count,
                         options,
                         long_names.size,
                         symbols,
@@ -849,7 +1240,7 @@ int miniar_create_archive(const char *output_path,
         goto done;
     }
     {
-        const char *magic = options->thin && member_count != 0U
+        const char *magic = options->thin && effective_count != 0U
                                 ? "!<thin>\n"
                                 : "!<arch>\n";
         if (fwrite(magic, 1U, 8U, file) != 8U) {
@@ -869,7 +1260,7 @@ int miniar_create_archive(const char *output_path,
     if (!write_long_name_table(file, &long_names, diagnostics)) {
         goto done;
     }
-    for (i = 0U; i < member_count; ++i) {
+    for (i = 0U; i < effective_count; ++i) {
         if (!write_member(file, &members[i], options->thin, diagnostics)) {
             goto done;
         }
@@ -887,8 +1278,49 @@ done:
     if (!ok) {
         (void)remove(output_path);
     }
-    free_members(members, member_count);
+    free_members(members, effective_count);
     free_symbols(symbols, symbol_count);
     free(long_names.data);
+    path_list_destroy(&expanded);
+    return ok ? 0 : 1;
+}
+
+typedef struct MiniArListContext {
+    FILE *out;
+} MiniArListContext;
+
+static bool list_member_visitor(const MiniArArchiveView *view,
+                                const char *name,
+                                void *context,
+                                FILE *diagnostics) {
+    MiniArListContext *list = context;
+
+    (void)view;
+    if (fprintf(list->out, "%s\n", name) < 0) {
+        fprintf(diagnostics, "minic-ar: write-error:list\n");
+        return false;
+    }
+    return true;
+}
+
+int miniar_list_archive(const char *archive_path, FILE *out, FILE *diagnostics) {
+    unsigned char *data = NULL;
+    size_t size = 0U;
+    MiniArListContext context;
+    bool ok;
+
+    if (archive_path == NULL || out == NULL || diagnostics == NULL) {
+        return 2;
+    }
+    if (!load_file(archive_path, &data, &size, diagnostics)) {
+        return 1;
+    }
+    context.out = out;
+    ok = visit_archive_members(data,
+                               size,
+                               list_member_visitor,
+                               &context,
+                               diagnostics);
+    free(data);
     return ok ? 0 : 1;
 }
