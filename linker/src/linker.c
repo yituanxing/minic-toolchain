@@ -3960,6 +3960,43 @@ static bool shared_symbol_eligible(const MiniLdState *state, size_t index) {
     return true;
 }
 
+static bool shared_symbol_is_preemptible(const MiniLdSymbol *symbol);
+
+static bool shared_relocation_is_link_time(uint32_t type) {
+    switch (type) {
+    case R_RISCV_CALL:
+    case R_RISCV_CALL_PLT:
+    case R_RISCV_GOT_HI20:
+    case R_RISCV_PCREL_HI20:
+    case R_RISCV_PCREL_LO12_I:
+    case R_RISCV_PCREL_LO12_S:
+    case R_RISCV_HI20:
+    case R_RISCV_LO12_I:
+    case R_RISCV_LO12_S:
+    case R_RISCV_BRANCH:
+    case R_RISCV_JAL:
+    case R_RISCV_RVC_BRANCH:
+    case R_RISCV_RVC_JUMP:
+    case R_RISCV_32_PCREL:
+    case R_RISCV_ADD8:
+    case R_RISCV_ADD16:
+    case R_RISCV_ADD32:
+    case R_RISCV_ADD64:
+    case R_RISCV_SUB6:
+    case R_RISCV_SUB8:
+    case R_RISCV_SUB16:
+    case R_RISCV_SUB32:
+    case R_RISCV_SUB64:
+    case R_RISCV_SET6:
+    case R_RISCV_SET8:
+    case R_RISCV_SET16:
+    case R_RISCV_SET32:
+        return true;
+    default:
+        return false;
+    }
+}
+
 static bool shared_prepare_metadata(MiniLdState *state,
                                     const char *soname,
                                     MiniLdSharedImage *shared) {
@@ -3978,6 +4015,10 @@ static bool shared_prepare_metadata(MiniLdState *state,
     shared->dynsym_section = SIZE_MAX;
     shared->hash_section = SIZE_MAX;
     shared->rela_section = SIZE_MAX;
+    shared->rela_plt_section = SIZE_MAX;
+    shared->plt_section = SIZE_MAX;
+    shared->got_section = SIZE_MAX;
+    shared->got_plt_section = SIZE_MAX;
     shared->dynamic_section = SIZE_MAX;
 
     shared->dynsym_index =
@@ -3986,13 +4027,104 @@ static bool shared_prepare_metadata(MiniLdState *state,
     shared->dynstr_name_offset =
         calloc(state->symbol_count == 0U ? 1U : state->symbol_count,
                sizeof(*shared->dynstr_name_offset));
+    shared->got_slot_offsets =
+        malloc((state->symbol_count == 0U ? 1U : state->symbol_count) *
+               sizeof(*shared->got_slot_offsets));
+    shared->plt_indices =
+        malloc((state->symbol_count == 0U ? 1U : state->symbol_count) *
+               sizeof(*shared->plt_indices));
     if (shared->dynsym_index == NULL ||
-        shared->dynstr_name_offset == NULL) {
-        fprintf(state->diagnostics, "minic-ld: out-of-memory:shared-symbol-map\n");
+        shared->dynstr_name_offset == NULL ||
+        shared->got_slot_offsets == NULL ||
+        shared->plt_indices == NULL) {
+        fprintf(state->diagnostics,
+                "minic-ld: out-of-memory:shared-symbol-map\n");
         goto fail;
     }
     for (i = 0U; i < state->symbol_count; ++i) {
         shared->dynsym_index[i] = SIZE_MAX;
+        shared->got_slot_offsets[i] = SIZE_MAX;
+        shared->plt_indices[i] = SIZE_MAX;
+    }
+
+    /*
+     * Classify the real PIC input surface before laying out metadata.
+     * Instruction relocations are resolved link-time.  Absolute pointer
+     * relocations and GOT slots become .rela.dyn; preemptible calls get PLT.
+     */
+    for (i = 0U; i < state->reloc_count; ++i) {
+        MiniLdReloc *reloc = &state->relocs[i];
+        MiniLdSymbol *target = NULL;
+
+        if (reloc->section >= state->section_count ||
+            (state->sections[reloc->section].flags & SHF_ALLOC) == 0U) {
+            continue;
+        }
+        if (reloc->type == R_RISCV_NONE ||
+            reloc->type == R_RISCV_RELAX ||
+            reloc->type == R_RISCV_ALIGN) {
+            continue;
+        }
+        if (reloc->symbol != SIZE_MAX) {
+            if (reloc->symbol >= state->symbol_count) {
+                fprintf(state->diagnostics,
+                        "minic-ld: shared-relocation-symbol-out-of-range\n");
+                goto fail;
+            }
+            target = &state->symbols[reloc->symbol];
+        }
+
+        if (reloc->type == R_RISCV_64) {
+            if (target == NULL) {
+                fprintf(state->diagnostics,
+                        "minic-ld: invalid-shared-R_RISCV_64\n");
+                goto fail;
+            }
+            ++shared->rela_count;
+            continue;
+        }
+
+        if (reloc->type == R_RISCV_GOT_HI20) {
+            if (target == NULL || reloc->addend != 0) {
+                fprintf(state->diagnostics,
+                        "minic-ld: invalid-shared-R_RISCV_GOT_HI20\n");
+                goto fail;
+            }
+            if (shared->got_slot_offsets[reloc->symbol] == SIZE_MAX) {
+                if (shared->got_count > SIZE_MAX / 8U) {
+                    goto oom;
+                }
+                shared->got_slot_offsets[reloc->symbol] =
+                    shared->got_count * 8U;
+                ++shared->got_count;
+                ++shared->rela_count;
+            }
+            continue;
+        }
+
+        if (reloc->type == R_RISCV_CALL ||
+            reloc->type == R_RISCV_CALL_PLT) {
+            if (target == NULL) {
+                fprintf(state->diagnostics,
+                        "minic-ld: invalid-shared-call-relocation\n");
+                goto fail;
+            }
+            if ((target->section == MINILD_SECTION_UNDEF ||
+                 shared_symbol_is_preemptible(target)) &&
+                shared->plt_indices[reloc->symbol] == SIZE_MAX) {
+                shared->plt_indices[reloc->symbol] = shared->plt_count++;
+            }
+            continue;
+        }
+
+        if (shared_relocation_is_link_time(reloc->type)) {
+            continue;
+        }
+
+        fprintf(state->diagnostics,
+                "minic-ld: unsupported-shared-relocation:%u\n",
+                reloc->type);
+        goto fail;
     }
 
     if (!find_or_add_section(state,
@@ -4022,8 +4154,48 @@ static bool shared_prepare_metadata(MiniLdState *state,
                              SHF_ALLOC,
                              8U,
                              sizeof(Elf64_Rela),
-                             &shared->rela_section) ||
+                             &shared->rela_section)) {
+        goto fail;
+    }
+
+    if (shared->got_count != 0U &&
         !find_or_add_section(state,
+                             ".got",
+                             SHT_PROGBITS,
+                             SHF_ALLOC | SHF_WRITE,
+                             8U,
+                             8U,
+                             &shared->got_section)) {
+        goto fail;
+    }
+
+    if (shared->plt_count != 0U) {
+        if (!find_or_add_section(state,
+                                 ".plt",
+                                 SHT_PROGBITS,
+                                 SHF_ALLOC | SHF_EXECINSTR,
+                                 16U,
+                                 16U,
+                                 &shared->plt_section) ||
+            !find_or_add_section(state,
+                                 ".got.plt",
+                                 SHT_PROGBITS,
+                                 SHF_ALLOC | SHF_WRITE,
+                                 8U,
+                                 8U,
+                                 &shared->got_plt_section) ||
+            !find_or_add_section(state,
+                                 ".rela.plt",
+                                 SHT_RELA,
+                                 SHF_ALLOC | SHF_INFO_LINK,
+                                 8U,
+                                 sizeof(Elf64_Rela),
+                                 &shared->rela_plt_section)) {
+            goto fail;
+        }
+    }
+
+    if (!find_or_add_section(state,
                              ".dynamic",
                              SHT_DYNAMIC,
                              SHF_ALLOC | SHF_WRITE,
@@ -4097,35 +4269,42 @@ static bool shared_prepare_metadata(MiniLdState *state,
         goto oom;
     }
 
-    for (i = 0U; i < state->reloc_count; ++i) {
-        MiniLdReloc *reloc = &state->relocs[i];
-
-        if (reloc->section >= state->section_count ||
-            (state->sections[reloc->section].flags & SHF_ALLOC) == 0U) {
-            continue;
-        }
-        if (reloc->type == R_RISCV_NONE ||
-            reloc->type == R_RISCV_RELAX ||
-            reloc->type == R_RISCV_ALIGN) {
-            continue;
-        }
-        if (reloc->type != R_RISCV_64) {
-            fprintf(state->diagnostics,
-                    "minic-ld: unsupported-shared-relocation:%u\n",
-                    reloc->type);
-            goto fail;
-        }
-        ++shared->rela_count;
-    }
     if (shared->rela_count > SIZE_MAX / sizeof(Elf64_Rela) ||
         !section_append_zero(rela,
                              shared->rela_count * sizeof(Elf64_Rela))) {
         goto oom;
     }
 
+    if (shared->got_count != 0U) {
+        MiniLdSection *got = &state->sections[shared->got_section];
+        if (shared->got_count > SIZE_MAX / 8U ||
+            !section_append_zero(got, shared->got_count * 8U)) {
+            goto oom;
+        }
+    }
+
+    if (shared->plt_count != 0U) {
+        MiniLdSection *plt = &state->sections[shared->plt_section];
+        MiniLdSection *gotplt = &state->sections[shared->got_plt_section];
+        MiniLdSection *relaplt = &state->sections[shared->rela_plt_section];
+
+        if (shared->plt_count > (SIZE_MAX - 32U) / 16U ||
+            !section_append_zero(plt, 32U + shared->plt_count * 16U) ||
+            shared->plt_count > (SIZE_MAX - 16U) / 8U ||
+            !section_append_zero(gotplt, 16U + shared->plt_count * 8U) ||
+            shared->plt_count > SIZE_MAX / sizeof(Elf64_Rela) ||
+            !section_append_zero(relaplt,
+                                 shared->plt_count * sizeof(Elf64_Rela))) {
+            goto oom;
+        }
+    }
+
     dynamic_entries = 6U; /* HASH/STRTAB/SYMTAB/STRSZ/SYMENT/NULL */
     if (shared->rela_count != 0U) {
         dynamic_entries += 3U; /* RELA/RELASZ/RELAENT */
+    }
+    if (shared->plt_count != 0U) {
+        dynamic_entries += 4U; /* PLTGOT/PLTRELSZ/PLTREL/JMPREL */
     }
     if (shared->have_soname) {
         ++dynamic_entries;
@@ -4139,7 +4318,8 @@ static bool shared_prepare_metadata(MiniLdState *state,
     return true;
 
 oom:
-    fprintf(state->diagnostics, "minic-ld: out-of-memory:shared-metadata\n");
+    fprintf(state->diagnostics,
+            "minic-ld: out-of-memory:shared-metadata\n");
 fail:
     shared_image_destroy(shared);
     return false;
