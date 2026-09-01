@@ -2,8 +2,8 @@
 set -eu
 
 root=$(CDPATH= cd -- "$(dirname "$0")/../.." && pwd)
-cc=\${HOST_CC:-cc}
-build=\${BUILD_DIR:-"$root/build/debug"}
+cc=${HOST_CC:-cc}
+build=${BUILD_DIR:-"$root/build/debug"}
 out="$build/tests/linker-script-a0"
 
 mkdir -p "$out"
