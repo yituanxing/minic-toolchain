@@ -113,6 +113,85 @@ if grep -Eq 'GLOBAL[[:space:]]+DEFAULT.* unused_member$' "$work/group.symbols"; 
   exit 1
 fi
 
+cat >"$work/cross-root.s" <<'EOF'
+.text
+.globl cross_root
+.type cross_root, @function
+cross_root:
+  tail late_entry
+.size cross_root, .-cross_root
+EOF
+
+cat >"$work/lib/early.s" <<'EOF'
+.text
+.globl early_helper
+.type early_helper, @function
+early_helper:
+  li a0, 23
+  ret
+.size early_helper, .-early_helper
+EOF
+
+cat >"$work/lib/late.s" <<'EOF'
+.text
+.globl late_entry
+.type late_entry, @function
+late_entry:
+  tail early_helper
+.size late_entry, .-late_entry
+EOF
+
+"$AS" -march=rv64gc -mabi=lp64d -o "$work/cross-root.o" "$work/cross-root.s"
+"$AS" -march=rv64gc -mabi=lp64d -o "$work/lib/early.o" "$work/lib/early.s"
+"$AS" -march=rv64gc -mabi=lp64d -o "$work/lib/late.o" "$work/lib/late.s"
+(
+  cd "$work"
+  "$AR" rcsD early.a lib/early.o
+  "$AR" rcsD late.a lib/late.o
+)
+
+"$LD" -melf64lriscv -r -o "$work/reference-cross-group.o" \
+  "$work/cross-root.o" \
+  --start-group "$work/early.a" "$work/late.a" --end-group
+"$MINILD" -melf64lriscv -r -o "$work/product-cross-group.o" \
+  "$work/cross-root.o" \
+  --start-group "$work/early.a" "$work/late.a" --end-group
+
+"$READELF" -Ws "$work/product-cross-group.o" >"$work/cross-group.symbols"
+grep -Eq 'GLOBAL[[:space:]]+DEFAULT.* late_entry
+"$LD" -melf64lriscv -Ttext=0x10000 -e root \
+  "$work/product-group.o" -o "$work/product.elf"
+"$OBJCOPY" -O binary --only-section=.text "$work/reference.elf" "$work/reference.text"
+"$OBJCOPY" -O binary --only-section=.text "$work/product.elf" "$work/product.text"
+cmp "$work/reference.text" "$work/product.text"
+
+echo "MINILD_A1=PASS thin-whole=PASS long-name-slash=PASS archive-group-selection=PASS group-rescan=PASS object-inside-group=PASS gnu-final-consumer=PASS"
+ "$work/cross-group.symbols"
+grep -Eq 'GLOBAL[[:space:]]+DEFAULT.* early_helper
+"$LD" -melf64lriscv -Ttext=0x10000 -e root \
+  "$work/product-group.o" -o "$work/product.elf"
+"$OBJCOPY" -O binary --only-section=.text "$work/reference.elf" "$work/reference.text"
+"$OBJCOPY" -O binary --only-section=.text "$work/product.elf" "$work/product.text"
+cmp "$work/reference.text" "$work/product.text"
+
+echo "MINILD_A1=PASS thin-whole=PASS long-name-slash=PASS archive-group-selection=PASS object-inside-group=PASS gnu-final-consumer=PASS"
+ "$work/cross-group.symbols"
+if grep -Eq 'UND[[:space:]]+early_helper
+"$LD" -melf64lriscv -Ttext=0x10000 -e root \
+  "$work/product-group.o" -o "$work/product.elf"
+"$OBJCOPY" -O binary --only-section=.text "$work/reference.elf" "$work/reference.text"
+"$OBJCOPY" -O binary --only-section=.text "$work/product.elf" "$work/product.text"
+cmp "$work/reference.text" "$work/product.text"
+
+echo "MINILD_A1=PASS thin-whole=PASS long-name-slash=PASS archive-group-selection=PASS object-inside-group=PASS gnu-final-consumer=PASS"
+ "$work/cross-group.symbols"; then
+  echo "MINILD_A1_ERROR group-wide rescan left early_helper undefined" >&2
+  exit 1
+fi
+
+"$LD" -melf64lriscv -Ttext=0x11000 -e cross_root \
+  "$work/product-cross-group.o" -o "$work/product-cross-group.elf"
+
 "$LD" -melf64lriscv -Ttext=0x10000 -e root \
   "$work/reference-group.o" -o "$work/reference.elf"
 "$LD" -melf64lriscv -Ttext=0x10000 -e root \
