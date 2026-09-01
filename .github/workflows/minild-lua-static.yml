@@ -124,6 +124,27 @@ jobs:
           printf 'LUA_STATIC_PRODUCER=PASS translation_units=%s archive_members=%s\n' \
             "$count" "$members"
 
+          riscv64-linux-gnu-readelf -Wr "$obj/liblua.a" \
+            >"$work/lua-lib.relocations"
+          libgcc="$(riscv64-linux-gnu-gcc -print-libgcc-file-name)"
+          riscv64-linux-gnu-readelf -Wr "$libgcc" \
+            >"$work/libgcc.relocations"
+          lua_got="$(awk '/R_RISCV_GOT_HI20/{n++} END{print n+0}' "$work/lua-lib.relocations")"
+          libgcc_got="$(awk '/R_RISCV_GOT_HI20/{n++} END{print n+0}' "$work/libgcc.relocations")"
+          printf 'LUA_STATIC_GOT_AUDIT lua=%s libgcc=%s\n' "$lua_got" "$libgcc_got"
+          if test "$lua_got" -ne 0; then
+            awk '
+              /^File:/ {file=$0}
+              /R_RISCV_GOT_HI20/ {print file; print}
+            ' "$work/lua-lib.relocations" >"$work/lua-got.frontier"
+          fi
+          if test "$libgcc_got" -ne 0; then
+            awk '
+              /^File:/ {file=$0}
+              /R_RISCV_GOT_HI20/ {print file; print}
+            ' "$work/libgcc.relocations" >"$work/libgcc-got.frontier"
+          fi
+
       - name: Link and run GNU static Lua reference
         shell: bash
         run: |
@@ -227,6 +248,10 @@ jobs:
             build/minild-lua-static/product.header
             build/minild-lua-static/product.programs
             build/minild-lua-static/musl-libc.relocations
+            build/minild-lua-static/lua-lib.relocations
+            build/minild-lua-static/libgcc.relocations
+            build/minild-lua-static/lua-got.frontier
+            build/minild-lua-static/libgcc-got.frontier
             build/minild-lua-static/runtime-smoke.lua
           if-no-files-found: ignore
           retention-days: 3
