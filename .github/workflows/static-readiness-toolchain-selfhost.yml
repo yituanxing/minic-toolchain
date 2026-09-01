@@ -103,7 +103,18 @@ jobs:
             obj="$work/o/$tool-$key.o"
 
             riscv64-linux-gnu-gcc               --sysroot="$work/musl-sysroot"               -E -P -std=c11 $includes "$source" -o "$pre"
-            qemu-riscv64 "$stage2" -S "$pre" -o "$asm"
+            err="$work/i/$tool-$key.stage2.err"
+            if ! qemu-riscv64 "$stage2" -S "$pre" -o "$asm" 2>"$err"; then
+              echo "STATIC_TOOLCHAIN_SELFHOST_COMPILE_FAIL tool=$tool source=$source pre=$pre" >&2
+              cat "$err" >&2
+              line=$(sed -n 's/.*:\([0-9][0-9]*\):[0-9][0-9]*: error:.*/\1/p' "$err" | head -n1)
+              if test -n "$line"; then
+                start=$(( line > 12 ? line - 12 : 1 ))
+                end=$(( line + 12 ))
+                nl -ba "$pre" | sed -n "${start},${end}p" >&2
+              fi
+              return 1
+            fi
             "$minias" -o "$obj" "$asm"
             test -s "$obj"
             printf '%s\n' "$obj"
@@ -201,6 +212,7 @@ jobs:
           name: static-toolchain-selfhost-evidence
           path: |
             build/static-toolchain-selfhost/*.objects
+            build/static-toolchain-selfhost/i/*.stage2.err
             build/static-toolchain-selfhost/ar-list.txt
             build/static-toolchain-selfhost/selfhost.i
             build/static-toolchain-selfhost/bin/
