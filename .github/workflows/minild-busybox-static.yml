@@ -298,11 +298,20 @@ jobs:
             ordinal=$((ordinal + 1))
             printf 'INPUT %02d %s\n' "$ordinal" "$p" >>"$work/unpack-bz2-audit.txt"
             riscv64-linux-gnu-nm -A "$out/$p" 2>/dev/null \
-              | grep -E '(^|[[:space:]])unpack_bz2_data
+              | awk '/[[:space:]]unpack_bz2_data$/ {print}' \
+              >>"$work/unpack-bz2-audit.txt" || true
+          done
+          printf '%s\n' '--- musl/libgcc ---' >>"$work/unpack-bz2-audit.txt"
+          riscv64-linux-gnu-nm -A "$musl/lib/libc.a" "$libgcc" 2>/dev/null \
+            | awk '/[[:space:]]unpack_bz2_data$/ {print}' \
+            >>"$work/unpack-bz2-audit.txt" || true
+          cat "$work/unpack-bz2-audit.txt"
+
+          started=$(date +%s)
           "$minild" -melf64lriscv -static -e _start \
             -o "$work/busybox-product" \
             "$musl/obj/crt/crt1.o" "$musl/obj/crt/crti.o" \
-            --start-group "${abs_inputs[@]}" --end-group \
+            "${abs_inputs[@]}" \
             --start-group "$musl/lib/libc.a" "$libgcc" --end-group \
             "$musl/obj/crt/crtn.o" \
             >"$work/minild.stdout" 2>"$work/minild.stderr"
@@ -335,111 +344,6 @@ jobs:
             build/minild-busybox-static/minild.stdout
             build/minild-busybox-static/minild.stderr
             build/minild-busybox-static/unpack-bz2-audit.txt
-            build/minild-busybox-static/reference.header
-            build/minild-busybox-static/reference.applets
-            build/minild-busybox-static/reference-ash.stdout
-            build/minild-busybox-static/reference-ash.stderr
-            build/minild-busybox-static/product.header
-            build/minild-busybox-static/product.programs
-            build/minild-busybox-static/product.applets
-            build/minild-busybox-static/product-list.stderr
-            build/minild-busybox-static/product-ash.stdout
-            build/minild-busybox-static/product-ash.stderr
-          if-no-files-found: ignore
-          retention-days: 3
- \
-              >>"$work/unpack-bz2-audit.txt" || true
-          done
-          printf '%s\n' '--- musl/libgcc ---' >>"$work/unpack-bz2-audit.txt"
-          riscv64-linux-gnu-nm -A "$musl/lib/libc.a" "$libgcc" 2>/dev/null \
-            | grep -E '(^|[[:space:]])unpack_bz2_data
-          "$minild" -melf64lriscv -static -e _start \
-            -o "$work/busybox-product" \
-            "$musl/obj/crt/crt1.o" "$musl/obj/crt/crti.o" \
-            --start-group "${abs_inputs[@]}" --end-group \
-            --start-group "$musl/lib/libc.a" "$libgcc" --end-group \
-            "$musl/obj/crt/crtn.o" \
-            >"$work/minild.stdout" 2>"$work/minild.stderr"
-          link_elapsed=$(( $(date +%s) - started ))
-
-          riscv64-linux-gnu-readelf -h "$work/busybox-product" >"$work/product.header"
-          riscv64-linux-gnu-readelf -l "$work/busybox-product" >"$work/product.programs"
-
-          qemu-riscv64 "$work/busybox-product" --list \
-            >"$work/product.applets" 2>"$work/product-list.stderr"
-          test "$(wc -l <"$work/product.applets")" -eq 408
-          cmp "$work/reference.applets" "$work/product.applets"
-
-          qemu-riscv64 "$work/busybox-product" ash -c \
-            'i=1; s=0; while [ "$i" -le 100 ]; do s=$((s+i)); i=$((i+1)); done; echo ASH_OK "$s"' \
-            >"$work/product-ash.stdout" 2>"$work/product-ash.stderr"
-          grep -q '^ASH_OK 5050$' "$work/product-ash.stdout"
-          diff -u "$work/reference-ash.stdout" "$work/product-ash.stdout"
-
-          printf 'MINILD_BUSYBOX_STATIC=PASS applets=408 ash=PASS link_elapsed_s=%s product_bytes=%s head=%s\n' \
-            "$link_elapsed" "$(stat -c %s "$work/busybox-product")" "$GITHUB_SHA"
-
-      - name: Preserve BusyBox static evidence
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: minild-busybox-static-evidence
-          path: |
-            build/minild-busybox-static/busybox-build.log
-            build/minild-busybox-static/minild.stdout
-            build/minild-busybox-static/minild.stderr
-            build/minild-busybox-static/reference.header
-            build/minild-busybox-static/reference.applets
-            build/minild-busybox-static/reference-ash.stdout
-            build/minild-busybox-static/reference-ash.stderr
-            build/minild-busybox-static/product.header
-            build/minild-busybox-static/product.programs
-            build/minild-busybox-static/product.applets
-            build/minild-busybox-static/product-list.stderr
-            build/minild-busybox-static/product-ash.stdout
-            build/minild-busybox-static/product-ash.stderr
-          if-no-files-found: ignore
-          retention-days: 3
- \
-            >>"$work/unpack-bz2-audit.txt" || true
-          cat "$work/unpack-bz2-audit.txt"
-
-          started=$(date +%s)
-          "$minild" -melf64lriscv -static -e _start \
-            -o "$work/busybox-product" \
-            "$musl/obj/crt/crt1.o" "$musl/obj/crt/crti.o" \
-            --start-group "${abs_inputs[@]}" --end-group \
-            --start-group "$musl/lib/libc.a" "$libgcc" --end-group \
-            "$musl/obj/crt/crtn.o" \
-            >"$work/minild.stdout" 2>"$work/minild.stderr"
-          link_elapsed=$(( $(date +%s) - started ))
-
-          riscv64-linux-gnu-readelf -h "$work/busybox-product" >"$work/product.header"
-          riscv64-linux-gnu-readelf -l "$work/busybox-product" >"$work/product.programs"
-
-          qemu-riscv64 "$work/busybox-product" --list \
-            >"$work/product.applets" 2>"$work/product-list.stderr"
-          test "$(wc -l <"$work/product.applets")" -eq 408
-          cmp "$work/reference.applets" "$work/product.applets"
-
-          qemu-riscv64 "$work/busybox-product" ash -c \
-            'i=1; s=0; while [ "$i" -le 100 ]; do s=$((s+i)); i=$((i+1)); done; echo ASH_OK "$s"' \
-            >"$work/product-ash.stdout" 2>"$work/product-ash.stderr"
-          grep -q '^ASH_OK 5050$' "$work/product-ash.stdout"
-          diff -u "$work/reference-ash.stdout" "$work/product-ash.stdout"
-
-          printf 'MINILD_BUSYBOX_STATIC=PASS applets=408 ash=PASS link_elapsed_s=%s product_bytes=%s head=%s\n' \
-            "$link_elapsed" "$(stat -c %s "$work/busybox-product")" "$GITHUB_SHA"
-
-      - name: Preserve BusyBox static evidence
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: minild-busybox-static-evidence
-          path: |
-            build/minild-busybox-static/busybox-build.log
-            build/minild-busybox-static/minild.stdout
-            build/minild-busybox-static/minild.stderr
             build/minild-busybox-static/reference.header
             build/minild-busybox-static/reference.applets
             build/minild-busybox-static/reference-ash.stdout
