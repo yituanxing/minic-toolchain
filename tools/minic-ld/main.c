@@ -15,7 +15,7 @@ static bool has_archive_suffix(const char *path) {
 
 static void usage(FILE *out, const char *argv0) {
     fprintf(out,
-            "usage: %s [-r|-static] -o OUTPUT [-e SYMBOL] "
+            "usage: %s [-r|-static|-shared] -o OUTPUT [-e SYMBOL] [-soname NAME] "
             "[--whole-archive ARCHIVE --no-whole-archive] "
             "[--start-group ARCHIVE --end-group] INPUT...\n",
             argv0);
@@ -24,10 +24,12 @@ static void usage(FILE *out, const char *argv0) {
 int main(int argc, char **argv) {
     const char *output = NULL;
     const char *entry_symbol = "_start";
+    const char *soname = NULL;
     MiniLdInput inputs[4096];
     size_t input_count = 0U;
     bool relocatable = false;
     bool static_link = false;
+    bool shared_link = false;
     bool whole_archive = false;
     bool group_mode = false;
     int i;
@@ -47,6 +49,19 @@ int main(int argc, char **argv) {
             relocatable = true;
         } else if (strcmp(argv[i], "-static") == 0) {
             static_link = true;
+        } else if (strcmp(argv[i], "-shared") == 0) {
+            shared_link = true;
+        } else if (strcmp(argv[i], "-soname") == 0 ||
+                   strcmp(argv[i], "--soname") == 0) {
+            if (++i >= argc) {
+                usage(stderr, argv[0]);
+                return 2;
+            }
+            soname = argv[i];
+        } else if (strncmp(argv[i], "-soname=", 8U) == 0) {
+            soname = argv[i] + 8U;
+        } else if (strncmp(argv[i], "--soname=", 9U) == 0) {
+            soname = argv[i] + 9U;
         } else if (strcmp(argv[i], "-o") == 0) {
             if (++i >= argc) {
                 usage(stderr, argv[0]);
@@ -129,11 +144,23 @@ int main(int argc, char **argv) {
         return 2;
     }
 
+    if ((relocatable ? 1 : 0) + (shared_link ? 1 : 0) > 1) {
+        fprintf(stderr, "minic-ld: incompatible-link-modes\n");
+        return 2;
+    }
+
     if (relocatable) {
         return minild_link_relocatable_elf64_riscv_inputs(output,
                                                            inputs,
                                                            input_count,
                                                            stderr);
+    }
+    if (shared_link) {
+        return minild_link_shared_elf64_riscv_inputs(output,
+                                                      inputs,
+                                                      input_count,
+                                                      soname,
+                                                      stderr);
     }
 
     (void)static_link;
