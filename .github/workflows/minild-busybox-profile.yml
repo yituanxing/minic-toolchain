@@ -39,6 +39,7 @@ jobs:
 
           src="$work/busybox-1.38.0"
           out="$work/out"
+          mkdir -p "$out"
           make -C "$src" O="$out" defconfig HOSTCC=/usr/bin/cc
 
           if grep -q '^# CONFIG_STATIC is not set$' "$out/.config"; then
