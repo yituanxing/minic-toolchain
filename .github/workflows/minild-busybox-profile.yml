@@ -50,7 +50,11 @@ jobs:
             echo 'CONFIG_STATIC=y' >>"$out/.config"
           fi
 
+          set +e
           yes "" | make -C "$src" O="$out" oldconfig HOSTCC=/usr/bin/cc
+          oldconfig_rc=${PIPESTATUS[1]}
+          set -e
+          test "$oldconfig_rc" -eq 0
           hash="$(sha256sum "$out/.config" | awk '{print $1}')"
           printf 'BUSYBOX_PROFILE_SHA256=%s\n' "$hash"
           grep '^CONFIG_STATIC=' "$out/.config" || true
