@@ -3894,22 +3894,36 @@ typedef struct MiniLdSharedImage {
     size_t dynsym_section;
     size_t hash_section;
     size_t rela_section;
+    size_t rela_plt_section;
+    size_t plt_section;
+    size_t got_section;
+    size_t got_plt_section;
     size_t dynamic_section;
     uint32_t soname_offset;
     size_t *dynsym_index;
     uint32_t *dynstr_name_offset;
+    size_t *got_slot_offsets;
+    size_t *plt_indices;
     size_t dynsym_count;
     size_t rela_count;
+    size_t got_count;
+    size_t plt_count;
     bool have_soname;
 } MiniLdSharedImage;
 
 static void shared_image_destroy(MiniLdSharedImage *shared) {
     free(shared->dynsym_index);
     free(shared->dynstr_name_offset);
+    free(shared->got_slot_offsets);
+    free(shared->plt_indices);
     shared->dynsym_index = NULL;
     shared->dynstr_name_offset = NULL;
+    shared->got_slot_offsets = NULL;
+    shared->plt_indices = NULL;
     shared->dynsym_count = 0U;
     shared->rela_count = 0U;
+    shared->got_count = 0U;
+    shared->plt_count = 0U;
 }
 
 static uint32_t shared_elf_hash(const char *name) {
