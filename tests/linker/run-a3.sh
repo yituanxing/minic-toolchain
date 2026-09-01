@@ -164,7 +164,7 @@ EOF
   --start-group "$work/libmini_runtime.a" --end-group
 
 "$MINILD" -melf64lriscv -static -e _start -o "$work/product" \
-  "$work/start.o" "$work/probe.o" \
+  "$work/start.o" "$work/bounds.o" "$work/probe.o" \
   --start-group "$work/libmini_runtime.a" --end-group
 
 set +e
