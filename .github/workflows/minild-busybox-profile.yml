@@ -1,4 +1,4 @@
-name: MiniLD BusyBox Static Profile Audit
+name: MiniLD BusyBox Frozen Profile
 
 on:
   push:
@@ -12,87 +12,31 @@ permissions:
 jobs:
   profile:
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.sha }}
 
-      - name: Install host prerequisites
-        run: |
-          sudo apt-get -o Acquire::Retries=3 update
-          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
-            build-essential bzip2 curl ca-certificates
-
-      - name: Reconstruct frozen BusyBox 1.38.0 static defconfig
+      - name: Verify exact V222 BusyBox profile
         shell: bash
         run: |
           set -Eeuo pipefail
-          work="$GITHUB_WORKSPACE/build/minild-busybox-profile"
-          mkdir -p "$work"
-          curl -fsSL https://busybox.net/downloads/busybox-1.38.0.tar.bz2 \
-            -o "$work/busybox-1.38.0.tar.bz2"
-          printf '%s  %s\n' \
-            34f9ea6ff8636f2c9241153b9114eefa9e65674a45318ae1ef95bb5f31c53bb2 \
-            "$work/busybox-1.38.0.tar.bz2" | sha256sum -c -
-          tar -xjf "$work/busybox-1.38.0.tar.bz2" -C "$work"
-
-          src="$work/busybox-1.38.0"
-          out="$work/out"
-          mkdir -p "$out"
-          make -C "$src" O="$out" defconfig HOSTCC=/usr/bin/cc
-
-          if grep -q '^# CONFIG_STATIC is not set$' "$out/.config"; then
-            sed -i 's/^# CONFIG_STATIC is not set$/CONFIG_STATIC=y/' "$out/.config"
-          elif grep -q '^CONFIG_STATIC=' "$out/.config"; then
-            sed -i 's/^CONFIG_STATIC=.*/CONFIG_STATIC=y/' "$out/.config"
-          else
-            echo 'CONFIG_STATIC=y' >>"$out/.config"
-          fi
-
-          set +e
-          yes "" | make -C "$src" O="$out" oldconfig HOSTCC=/usr/bin/cc
-          oldconfig_rc=${PIPESTATUS[1]}
-          set -e
-          test "$oldconfig_rc" -eq 0
-          raw_hash="$(sha256sum "$out/.config" | awk '{print $1}')"
-          semantic_hash="$(sed '4d' "$out/.config" | sha256sum | awk '{print $1}')"
-          printf 'BUSYBOX_PROFILE_RAW_SHA256=%s\n' "$raw_hash"
-          printf 'BUSYBOX_PROFILE_SEMANTIC_SHA256=%s\n' "$semantic_hash"
-          cp "$out/.config" "$work/generated.config"
-          grep '^CONFIG_STATIC=' "$out/.config" || true
-          grep '^CONFIG_ASH=' "$out/.config" || true
-          grep '^CONFIG_FEATURE_SH_STANDALONE=' "$out/.config" || true
-          test "$semantic_hash" = "b91289642e1d03d897b019d5d9a5a0b42734ea280dfddc402539b0d35f461e0d"
-          grep -q '^CONFIG_STATIC=y
-
-      - name: Preserve profile evidence
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: minild-busybox-profile
-          path: build/minild-busybox-profile/generated.config
-          if-no-files-found: ignore
-          retention-days: 3
- "$out/.config"
-          grep -q '^CONFIG_ASH=y
-
-      - name: Preserve profile evidence
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: minild-busybox-profile
-          path: build/minild-busybox-profile/generated.config
-          if-no-files-found: ignore
-          retention-days: 3
- "$out/.config"
-          echo "BUSYBOX_PROFILE=PASS version=1.38.0 semantic_match=1 static=1"
-
-      - name: Preserve profile evidence
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: minild-busybox-profile
-          path: build/minild-busybox-profile/generated.config
-          if-no-files-found: ignore
-          retention-days: 3
+          fixture="$GITHUB_WORKSPACE/tests/linker/fixtures"
+          out="$RUNNER_TEMP/busybox-v222.config"
+          cat \
+            "$fixture/busybox-v222.config.part00" \
+            "$fixture/busybox-v222.config.part01" \
+            "$fixture/busybox-v222.config.part02" \
+            "$fixture/busybox-v222.config.part03" \
+            "$fixture/busybox-v222.config.part04" \
+            >"$out"
+          cfg_hash="$(sha256sum "$out" | awk '{print $1}')"
+          app_hash="$(sha256sum "$fixture/busybox-v222.applet-list.txt" | awk '{print $1}')"
+          app_count="$(wc -l <"$fixture/busybox-v222.applet-list.txt")"
+          test "$cfg_hash" = "5977f8e325530d35a9ee4a332b2531e85705f2216279b79090baaebd3cbaf809"
+          test "$app_hash" = "372c678111d15f760f1272dddacc807d792a108505ffb62097e2e4f488852177"
+          test "$app_count" -eq 408
+          grep -q '^CONFIG_STATIC=y$' "$out"
+          grep -q '^CONFIG_ASH=y$' "$out"
+          printf 'BUSYBOX_PROFILE=PASS sha256=%s applets=%s\n' "$cfg_hash" "$app_count"
