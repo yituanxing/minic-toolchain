@@ -3957,10 +3957,14 @@ static bool shared_symbol_eligible(const MiniLdState *state, size_t index) {
 }
 
 static bool shared_symbol_needs_plt(const MiniLdSymbol *symbol) {
+    unsigned bind = ELF64_ST_BIND(symbol->info);
+    unsigned visibility = ELF64_ST_VISIBILITY(symbol->other);
+
     if (symbol->section == MINILD_SECTION_UNDEF) {
         return true;
     }
-    return shared_symbol_is_preemptible(symbol);
+    return (bind == STB_GLOBAL || bind == STB_WEAK) &&
+           visibility == STV_DEFAULT;
 }
 
 static bool shared_prepare_metadata(MiniLdState *state,
