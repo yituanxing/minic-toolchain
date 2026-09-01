@@ -8,6 +8,7 @@ AS=${RISCV_AS:-riscv64-linux-gnu-as}
 LD=${RISCV_LD:-riscv64-linux-gnu-ld}
 CC=${RISCV_CC:-riscv64-linux-gnu-gcc}
 READELF=${RISCV_READELF:-riscv64-linux-gnu-readelf}
+OBJDUMP=${RISCV_OBJDUMP:-riscv64-linux-gnu-objdump}
 QEMU=${QEMU_RISCV64:-qemu-riscv64}
 SYSROOT=${RISCV_GLIBC_ROOT:-/usr/riscv64-linux-gnu}
 
@@ -79,6 +80,20 @@ grep -Eq 'R_RISCV_CALL(_PLT)?[[:space:]].*external_add' "$work/caller.relocs"
 "$READELF" -Ws "$work/product.so" >"$work/product.symbols"
 "$READELF" -Wr "$work/product.so" >"$work/product.relocs"
 
+"$OBJDUMP" -d -j .plt "$work/reference.so" >"$work/reference.plt.dis"
+"$OBJDUMP" -d -j .plt "$work/product.so" >"$work/product.plt.dis"
+"$READELF" -x .got.plt "$work/reference.so" >"$work/reference.gotplt.hex"
+"$READELF" -x .got.plt "$work/product.so" >"$work/product.gotplt.hex"
+
+echo "=== A5 GNU PLT ==="
+cat "$work/reference.plt.dis"
+echo "=== A5 MiniLD PLT ==="
+cat "$work/product.plt.dis"
+echo "=== A5 GNU GOT.PLT ==="
+cat "$work/reference.gotplt.hex"
+echo "=== A5 MiniLD GOT.PLT ==="
+cat "$work/product.gotplt.hex"
+
 grep -q 'DYN (Shared object file)' "$work/product.header"
 grep -Eq '] \.plt[[:space:]]+PROGBITS' "$work/product.sections"
 grep -Eq '] \.got\.plt[[:space:]]+PROGBITS' "$work/product.sections"
@@ -93,11 +108,28 @@ grep -Eq 'GLOBAL[[:space:]]+DEFAULT.* shared_call_external$' "$work/product.symb
 
 "$CC" -O2 -Wall -Wextra -Werror -Wl,-E   "$work/consumer.c" -ldl -o "$work/consumer"
 
-"$QEMU" -L "$SYSROOT" "$work/consumer" "$work/reference.so"   >"$work/reference.stdout" 2>"$work/reference.stderr"
-"$QEMU" -L "$SYSROOT" "$work/consumer" "$work/product.so"   >"$work/product.stdout" 2>"$work/product.stderr"
+timeout 5s "$QEMU" -L "$SYSROOT" "$work/consumer" "$work/reference.so"   >"$work/reference.stdout" 2>"$work/reference.stderr"
 
-grep -q '^MINILD_A5_RUNTIME=42$' "$work/reference.stdout"
-grep -q '^MINILD_A5_RUNTIME=42$' "$work/product.stdout"
+set +e
+timeout 5s "$QEMU" -L "$SYSROOT" "$work/consumer" "$work/product.so"   >"$work/product.stdout" 2>"$work/product.stderr"
+product_rc=$?
+set -e
+
+echo "A5_PRODUCT_QEMU_RC=$product_rc"
+cat "$work/product.stdout"
+cat "$work/product.stderr"
+
+grep -q '^MINILD_A5_RUNTIME=42
+cmp "$work/reference.stdout" "$work/product.stdout"
+
+echo "MINILD_A5=PASS plt=PASS gotplt=PASS jump_slot=PASS call_plt=PASS dlopen=PASS dlsym=PASS qemu=PASS"
+ "$work/reference.stdout"
+test "$product_rc" -eq 0
+grep -q '^MINILD_A5_RUNTIME=42
+cmp "$work/reference.stdout" "$work/product.stdout"
+
+echo "MINILD_A5=PASS plt=PASS gotplt=PASS jump_slot=PASS call_plt=PASS dlopen=PASS dlsym=PASS qemu=PASS"
+ "$work/product.stdout"
 cmp "$work/reference.stdout" "$work/product.stdout"
 
 echo "MINILD_A5=PASS plt=PASS gotplt=PASS jump_slot=PASS call_plt=PASS dlopen=PASS dlsym=PASS qemu=PASS"
