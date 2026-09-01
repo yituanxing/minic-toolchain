@@ -3389,6 +3389,9 @@ int minild_link_static_elf64_riscv_inputs(const char *output_path,
         case MINILD_INPUT_GROUP_ARCHIVE:
             input_ok = process_group_archive(&state, inputs[i].path);
             break;
+        case MINILD_INPUT_ARCHIVE:
+            input_ok = process_group_archive(&state, inputs[i].path);
+            break;
         default:
             fprintf(diagnostics,
                     "minic-ld: invalid-input-kind:%s\n",
@@ -3449,6 +3452,9 @@ int minild_link_relocatable_elf64_riscv_inputs(const char *output_path,
             input_ok = process_whole_archive(&state, inputs[i].path);
             break;
         case MINILD_INPUT_GROUP_ARCHIVE:
+            input_ok = process_group_archive(&state, inputs[i].path);
+            break;
+        case MINILD_INPUT_ARCHIVE:
             input_ok = process_group_archive(&state, inputs[i].path);
             break;
         default:
