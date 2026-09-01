@@ -259,6 +259,35 @@ jobs:
             sysklogd/lib.a
             util-linux/lib.a
             util-linux/volume_id/lib.a
+            archival/built-in.o
+            archival/libarchive/built-in.o
+            console-tools/built-in.o
+            coreutils/built-in.o
+            coreutils/libcoreutils/built-in.o
+            debianutils/built-in.o
+            klibc-utils/built-in.o
+            e2fsprogs/built-in.o
+            editors/built-in.o
+            findutils/built-in.o
+            init/built-in.o
+            libbb/built-in.o
+            libbb/yescrypt/built-in.o
+            libpwdgrp/built-in.o
+            loginutils/built-in.o
+            mailutils/built-in.o
+            miscutils/built-in.o
+            modutils/built-in.o
+            networking/built-in.o
+            networking/libiproute/built-in.o
+            networking/udhcp/built-in.o
+            printutils/built-in.o
+            procps/built-in.o
+            runit/built-in.o
+            selinux/built-in.o
+            shell/built-in.o
+            sysklogd/built-in.o
+            util-linux/built-in.o
+            util-linux/volume_id/built-in.o
           )
           abs_inputs=()
           for p in "${inputs[@]}"; do
