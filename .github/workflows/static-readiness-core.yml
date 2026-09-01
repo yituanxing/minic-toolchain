@@ -65,11 +65,12 @@ jobs:
           make MODE=release CFLAGS=-Werror BUILD_DIR=build/static-readiness check-minias-a0
           make MODE=release CFLAGS=-Werror BUILD_DIR=build/static-readiness check-miniar-a0
           make MODE=release CFLAGS=-Werror BUILD_DIR=build/static-readiness check-miniar-a1
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/static-readiness check-minild-script-a0
           make MODE=release CFLAGS=-Werror BUILD_DIR=build/static-readiness check-minild-a0
           make MODE=release CFLAGS=-Werror BUILD_DIR=build/static-readiness check-minild-a1
           make MODE=release CFLAGS=-Werror BUILD_DIR=build/static-readiness check-minild-a2
           make MODE=release CFLAGS=-Werror BUILD_DIR=build/static-readiness check-minild-a3
-          echo "STATIC_COMPONENT_BOUNDARIES=PASS pp=PASS as=PASS ar=PASS ld=A0-A3"
+          echo "STATIC_COMPONENT_BOUNDARIES=PASS pp=PASS as=PASS ar=PASS ld=A0-A3 script=A0"
 
       - name: Freeze core audit marker
         run: |
