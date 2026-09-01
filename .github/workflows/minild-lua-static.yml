@@ -1,0 +1,232 @@
+name: MiniLD Static Lua 5.5
+
+on:
+  push:
+    branches:
+      - "toolchain/minild-lua-static"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  lua-static:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Install RV64 build/runtime prerequisites
+        run: |
+          sudo apt-get -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            build-essential gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
+            qemu-user curl ca-certificates
+
+      - name: Build MiniLD and keep A0-A3 green
+        run: |
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/minild-lua all
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/minild-lua check-minild-a0
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/minild-lua check-minild-a1
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/minild-lua check-minild-a2
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/minild-lua check-minild-a3
+
+      - name: Build pristine musl 1.2.5 static producer
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/minild-lua-static"
+          mkdir -p "$work"
+          curl -fsSL https://musl.libc.org/releases/musl-1.2.5.tar.gz \
+            -o "$work/musl-1.2.5.tar.gz"
+          printf '%s  %s\n' \
+            a9a118bbe84d8764da0ea0d28b3ab3fae8477fc7e4085d90102b8596fc7c75e4 \
+            "$work/musl-1.2.5.tar.gz" | sha256sum -c -
+          tar -xzf "$work/musl-1.2.5.tar.gz" -C "$work"
+
+          src="$work/musl-1.2.5"
+          out="$work/musl-build"
+          sysroot="$work/musl-sysroot"
+          mkdir -p "$out" "$sysroot"
+
+          cd "$out"
+          CFLAGS="-O2 -fno-pic -fno-pie" \
+          CC=riscv64-linux-gnu-gcc \
+          AR=riscv64-linux-gnu-ar \
+          RANLIB=riscv64-linux-gnu-ranlib \
+            "$src/configure" \
+              --target=riscv64-linux-gnu \
+              --disable-shared \
+              --prefix=/usr
+          make -j4
+          make DESTDIR="$sysroot" install-headers
+
+          test -s lib/libc.a
+          test -s obj/crt/crt1.o
+          test -s obj/crt/crti.o
+          test -s obj/crt/crtn.o
+          test -s "$sysroot/usr/include/stdio.h"
+
+          riscv64-linux-gnu-readelf -Wr lib/libc.a \
+            >"$work/musl-libc.relocations" 2>"$work/musl-libc.readelf.stderr"
+          if grep -q 'R_RISCV_GOT_HI20' "$work/musl-libc.relocations"; then
+            echo "LUA_MUSL_PRODUCER_ERROR=GOT_HI20_PRESENT" >&2
+            exit 1
+          fi
+          printf 'LUA_MUSL_STATIC=PASS objects=%s libc_bytes=%s\n' \
+            "$(find obj -type f -name '*.o' | wc -l)" \
+            "$(stat -c %s lib/libc.a)"
+
+      - name: Build pristine Lua 5.5.0 into 33 RV64 objects
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/minild-lua-static"
+          curl -fsSL https://www.lua.org/ftp/lua-5.5.0.tar.gz \
+            -o "$work/lua-5.5.0.tar.gz"
+          printf '%s  %s\n' \
+            57ccc32bbbd005cab75bcc52444052535af691789dba2b9016d5c50640d68b3d \
+            "$work/lua-5.5.0.tar.gz" | sha256sum -c -
+          tar -xzf "$work/lua-5.5.0.tar.gz" -C "$work"
+
+          src="$work/lua-5.5.0/src"
+          obj="$work/lua-obj"
+          sysroot="$work/musl-sysroot"
+          mkdir -p "$obj"
+
+          sources="lapi.c lcode.c lctype.c ldebug.c ldo.c ldump.c lfunc.c lgc.c llex.c lmem.c lobject.c lopcodes.c lparser.c lstate.c lstring.c ltable.c ltm.c lundump.c lvm.c lzio.c lauxlib.c lbaselib.c lcorolib.c ldblib.c liolib.c lmathlib.c loadlib.c loslib.c lstrlib.c ltablib.c lutf8lib.c linit.c lua.c"
+
+          count=0
+          for source in $sources; do
+            base=${source%.c}
+            riscv64-linux-gnu-gcc \
+              --sysroot="$sysroot" \
+              -std=c99 -O2 -fno-pic -fno-pie -DLUA_USE_LINUX \
+              -I"$src" \
+              -c "$src/$source" -o "$obj/$base.o"
+            count=$((count + 1))
+          done
+          test "$count" -eq 33
+
+          (
+            cd "$obj"
+            riscv64-linux-gnu-ar rcsD liblua.a \
+              lapi.o lcode.o lctype.o ldebug.o ldo.o ldump.o lfunc.o lgc.o \
+              llex.o lmem.o lobject.o lopcodes.o lparser.o lstate.o lstring.o \
+              ltable.o ltm.o lundump.o lvm.o lzio.o lauxlib.o lbaselib.o \
+              lcorolib.o ldblib.o liolib.o lmathlib.o loadlib.o loslib.o \
+              lstrlib.o ltablib.o lutf8lib.o linit.o
+          )
+          members="$(riscv64-linux-gnu-ar t "$obj/liblua.a" | wc -l)"
+          test "$members" -eq 32
+          printf 'LUA_STATIC_PRODUCER=PASS translation_units=%s archive_members=%s\n' \
+            "$count" "$members"
+
+      - name: Link and run GNU static Lua reference
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/minild-lua-static"
+          musl="$work/musl-build"
+          obj="$work/lua-obj"
+          libgcc="$(riscv64-linux-gnu-gcc -print-libgcc-file-name)"
+
+          riscv64-linux-gnu-ld -melf64lriscv -static -e _start \
+            -o "$work/lua-reference" \
+            "$musl/obj/crt/crt1.o" "$musl/obj/crt/crti.o" \
+            "$obj/lua.o" "$obj/liblua.a" \
+            --start-group "$musl/lib/libc.a" "$libgcc" --end-group \
+            "$musl/obj/crt/crtn.o"
+
+          cat >"$work/runtime-smoke.lua" <<'LUA'
+          local sum = 0
+          for i = 1, 10000 do sum = sum + i end
+          assert(sum == 50005000)
+          local t = {alpha = 7, beta = 35}
+          assert(t.alpha + t.beta == 42)
+          assert(string.upper("lua") == "LUA")
+          assert(math.floor(3.9) == 3)
+          local function fib(n)
+            if n < 2 then return n end
+            return fib(n - 1) + fib(n - 2)
+          end
+          assert(fib(10) == 55)
+          collectgarbage("collect")
+          print("LUA_MINILD_STATIC_OK", _VERSION, sum)
+          LUA
+
+          qemu-riscv64 "$work/lua-reference" -v \
+            >"$work/reference-version.stdout" 2>"$work/reference-version.stderr"
+          qemu-riscv64 "$work/lua-reference" "$work/runtime-smoke.lua" \
+            >"$work/reference-smoke.stdout" 2>"$work/reference-smoke.stderr"
+          grep -q 'LUA_MINILD_STATIC_OK' "$work/reference-smoke.stdout"
+          echo "LUA_GNU_REFERENCE=PASS"
+
+      - name: Link and run static Lua with MiniLD
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/minild-lua-static"
+          musl="$work/musl-build"
+          obj="$work/lua-obj"
+          libgcc="$(riscv64-linux-gnu-gcc -print-libgcc-file-name)"
+          minild="$GITHUB_WORKSPACE/build/minild-lua/bin/minic-ld"
+
+          started=$(date +%s)
+          "$minild" -melf64lriscv -static -e _start \
+            -o "$work/lua-product" \
+            "$musl/obj/crt/crt1.o" "$musl/obj/crt/crti.o" \
+            "$obj/lua.o" "$obj/liblua.a" \
+            --start-group "$musl/lib/libc.a" "$libgcc" --end-group \
+            "$musl/obj/crt/crtn.o" \
+            >"$work/minild.stdout" 2>"$work/minild.stderr"
+          link_elapsed=$(( $(date +%s) - started ))
+
+          riscv64-linux-gnu-readelf -h "$work/lua-product" >"$work/product.header"
+          riscv64-linux-gnu-readelf -l "$work/lua-product" >"$work/product.programs"
+
+          set +e
+          qemu-riscv64 "$work/lua-product" -v \
+            >"$work/product-version.stdout" 2>"$work/product-version.stderr"
+          version_rc=$?
+          qemu-riscv64 "$work/lua-product" "$work/runtime-smoke.lua" \
+            >"$work/product-smoke.stdout" 2>"$work/product-smoke.stderr"
+          smoke_rc=$?
+          set -e
+
+          cat "$work/minild.stderr"
+          cat "$work/product-version.stdout"
+          cat "$work/product-version.stderr"
+          cat "$work/product-smoke.stdout"
+          cat "$work/product-smoke.stderr"
+
+          test "$version_rc" -eq 0
+          test "$smoke_rc" -eq 0
+          grep -q 'Lua 5.5' "$work/product-version.stderr" "$work/product-version.stdout"
+          grep -q 'LUA_MINILD_STATIC_OK' "$work/product-smoke.stdout"
+          diff -u "$work/reference-smoke.stdout" "$work/product-smoke.stdout"
+
+          printf 'MINILD_LUA_STATIC=PASS version_rc=%s smoke_rc=%s link_elapsed_s=%s product_bytes=%s head=%s\n' \
+            "$version_rc" "$smoke_rc" "$link_elapsed" \
+            "$(stat -c %s "$work/lua-product")" "$GITHUB_SHA"
+
+      - name: Preserve static Lua evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: minild-lua-static-evidence
+          path: |
+            build/minild-lua-static/minild.stderr
+            build/minild-lua-static/minild.stdout
+            build/minild-lua-static/reference-*.stdout
+            build/minild-lua-static/reference-*.stderr
+            build/minild-lua-static/product-*.stdout
+            build/minild-lua-static/product-*.stderr
+            build/minild-lua-static/product.header
+            build/minild-lua-static/product.programs
+            build/minild-lua-static/musl-libc.relocations
+            build/minild-lua-static/runtime-smoke.lua
+          if-no-files-found: ignore
+          retention-days: 3
