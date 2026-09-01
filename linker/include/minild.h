@@ -36,6 +36,7 @@ int minild_link_shared_elf64_riscv_inputs(const char *output_path,
                                           const MiniLdInput *inputs,
                                           size_t input_count,
                                           const char *soname,
+                                          const char *entry_symbol,
                                           FILE *diagnostics);
 
 #endif
