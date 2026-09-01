@@ -1,0 +1,319 @@
+name: MiniLD Static BusyBox 1.38
+
+on:
+  push:
+    branches:
+      - "toolchain/minild-busybox-static"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  busybox-static:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Install RV64 build/runtime prerequisites
+        run: |
+          sudo apt-get -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            build-essential gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
+            linux-libc-dev-riscv64-cross qemu-user bzip2 curl ca-certificates
+
+      - name: Build MiniLD and keep A0-A3 green
+        run: |
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/minild-busybox all
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/minild-busybox check-minild-a0
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/minild-busybox check-minild-a1
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/minild-busybox check-minild-a2
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/minild-busybox check-minild-a3
+
+      - name: Build pristine musl 1.2.5 static producer
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/minild-busybox-static"
+          mkdir -p "$work"
+          curl -fsSL https://musl.libc.org/releases/musl-1.2.5.tar.gz \
+            -o "$work/musl-1.2.5.tar.gz"
+          printf '%s  %s\n' \
+            a9a118bbe84d8764da0ea0d28b3ab3fae8477fc7e4085d90102b8596fc7c75e4 \
+            "$work/musl-1.2.5.tar.gz" | sha256sum -c -
+          tar -xzf "$work/musl-1.2.5.tar.gz" -C "$work"
+
+          src="$work/musl-1.2.5"
+          out="$work/musl-build"
+          sysroot="$work/musl-sysroot"
+          mkdir -p "$out" "$sysroot/usr/include"
+          cp -a /usr/riscv64-linux-gnu/include/linux "$sysroot/usr/include/"
+          cp -a /usr/riscv64-linux-gnu/include/asm "$sysroot/usr/include/"
+          cp -a /usr/riscv64-linux-gnu/include/asm-generic "$sysroot/usr/include/"
+
+          cd "$out"
+          CFLAGS="-O2 -fno-pic -fno-pie" \
+          CC=riscv64-linux-gnu-gcc \
+          AR=riscv64-linux-gnu-ar \
+          RANLIB=riscv64-linux-gnu-ranlib \
+            "$src/configure" \
+              --target=riscv64-linux-gnu \
+              --disable-shared \
+              --prefix=/usr
+          make -j4
+          make DESTDIR="$sysroot" install-headers
+
+          test -s lib/libc.a
+          test -s obj/crt/crt1.o
+          test -s obj/crt/crti.o
+          test -s obj/crt/crtn.o
+          printf 'BUSYBOX_MUSL_STATIC=PASS objects=%s libc_bytes=%s\n' \
+            "$(find obj -type f -name '*.o' | wc -l)" \
+            "$(stat -c %s lib/libc.a)"
+
+      - name: Prepare frozen BusyBox 1.38.0 static defconfig
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/minild-busybox-static"
+          curl -fsSL https://busybox.net/downloads/busybox-1.38.0.tar.bz2 \
+            -o "$work/busybox-1.38.0.tar.bz2"
+          printf '%s  %s\n' \
+            34f9ea6ff8636f2c9241153b9114eefa9e65674a45318ae1ef95bb5f31c53bb2 \
+            "$work/busybox-1.38.0.tar.bz2" | sha256sum -c -
+          tar -xjf "$work/busybox-1.38.0.tar.bz2" -C "$work"
+
+          src="$work/busybox-1.38.0"
+          out="$work/busybox-out"
+          mkdir -p "$out"
+          make -C "$src" O="$out" defconfig HOSTCC=/usr/bin/cc
+          sed -i 's/^# CONFIG_STATIC is not set$/CONFIG_STATIC=y/' "$out/.config"
+          set +e
+          yes "" | make -C "$src" O="$out" oldconfig HOSTCC=/usr/bin/cc
+          oldconfig_rc=${PIPESTATUS[1]}
+          set -e
+          test "$oldconfig_rc" -eq 0
+
+          semantic_hash="$(sed '4d' "$out/.config" | sha256sum | awk '{print $1}')"
+          test "$semantic_hash" = "b91289642e1d03d897b019d5d9a5a0b42734ea280dfddc402539b0d35f461e0d"
+          grep -q '^CONFIG_STATIC=y$' "$out/.config"
+          grep -q '^CONFIG_ASH=y$' "$out/.config"
+          printf 'BUSYBOX_PROFILE=PASS semantic_sha256=%s\n' "$semantic_hash"
+
+      - name: Build GNU-produced BusyBox target tree and reference
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/minild-busybox-static"
+          src="$work/busybox-1.38.0"
+          out="$work/busybox-out"
+          sysroot="$work/musl-sysroot"
+          musl="$work/musl-build"
+          libgcc="$(riscv64-linux-gnu-gcc -print-libgcc-file-name)"
+          mkdir -p "$work/bin"
+
+          cat >"$work/bin/riscv-musl-gcc" <<'SH'
+          #!/usr/bin/env bash
+          set -Eeuo pipefail
+          : "${BUSYBOX_MUSL_SYSROOT:?}"
+          : "${BUSYBOX_MUSL_BUILD:?}"
+          : "${BUSYBOX_LIBGCC:?}"
+          compile=0
+          for arg in "$@"; do
+            case "$arg" in
+              -c|-E|-S|-M|-MM) compile=1 ;;
+            esac
+          done
+          if test "$compile" -eq 1; then
+            exec riscv64-linux-gnu-gcc \
+              --sysroot="$BUSYBOX_MUSL_SYSROOT" \
+              -fno-pic -fno-pie "$@"
+          fi
+
+          filtered=()
+          for arg in "$@"; do
+            case "$arg" in
+              -lm|-lcrypt|-lrt|-lresolv|-lpthread|-lc)
+                ;;
+              *)
+                filtered+=("$arg")
+                ;;
+            esac
+          done
+          exec riscv64-linux-gnu-gcc \
+            --sysroot="$BUSYBOX_MUSL_SYSROOT" \
+            -nostdlib -static -Wl,-e,_start \
+            "$BUSYBOX_MUSL_BUILD/obj/crt/crt1.o" \
+            "$BUSYBOX_MUSL_BUILD/obj/crt/crti.o" \
+            "${filtered[@]}" \
+            -Wl,--start-group \
+            "$BUSYBOX_MUSL_BUILD/lib/libc.a" \
+            "$BUSYBOX_LIBGCC" \
+            -Wl,--end-group \
+            "$BUSYBOX_MUSL_BUILD/obj/crt/crtn.o"
+          SH
+          chmod +x "$work/bin/riscv-musl-gcc"
+
+          export BUSYBOX_MUSL_SYSROOT="$sysroot"
+          export BUSYBOX_MUSL_BUILD="$musl"
+          export BUSYBOX_LIBGCC="$libgcc"
+
+          started=$(date +%s)
+          make -C "$src" O="$out" -j4 V=1 \
+            HOSTCC=/usr/bin/cc \
+            CC="$work/bin/riscv-musl-gcc" \
+            AR=riscv64-linux-gnu-ar \
+            NM=riscv64-linux-gnu-nm \
+            STRIP=riscv64-linux-gnu-strip \
+            OBJCOPY=riscv64-linux-gnu-objcopy \
+            OBJDUMP=riscv64-linux-gnu-objdump \
+            busybox_unstripped \
+            >"$work/busybox-build.log" 2>&1
+          build_elapsed=$(( $(date +%s) - started ))
+
+          test -s "$out/busybox_unstripped"
+          riscv64-linux-gnu-readelf -h "$out/busybox_unstripped" >"$work/reference.header"
+          qemu-riscv64 "$out/busybox_unstripped" --list >"$work/reference.applets"
+          test "$(wc -l <"$work/reference.applets")" -eq 408
+          test "$(sha256sum "$work/reference.applets" | awk '{print $1}')" = \
+            "372c678111d15f760f1272dddacc807d792a108505ffb62097e2e4f488852177"
+
+          qemu-riscv64 "$out/busybox_unstripped" ash -c \
+            'i=1; s=0; while [ "$i" -le 100 ]; do s=$((s+i)); i=$((i+1)); done; echo ASH_OK "$s"' \
+            >"$work/reference-ash.stdout" 2>"$work/reference-ash.stderr"
+          grep -q '^ASH_OK 5050$' "$work/reference-ash.stdout"
+
+          printf 'BUSYBOX_GNU_REFERENCE=PASS applets=408 build_elapsed_s=%s objects=%s archives=%s bytes=%s\n' \
+            "$build_elapsed" \
+            "$(find "$out" -type f -name '*.o' | wc -l)" \
+            "$(find "$out" -type f -name 'lib.a' | wc -l)" \
+            "$(stat -c %s "$out/busybox_unstripped")"
+
+      - name: Link same BusyBox tree with MiniLD
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/minild-busybox-static"
+          out="$work/busybox-out"
+          musl="$work/musl-build"
+          libgcc="$(riscv64-linux-gnu-gcc -print-libgcc-file-name)"
+          minild="$GITHUB_WORKSPACE/build/minild-busybox/bin/minic-ld"
+
+          inputs=(
+            applets/built-in.o
+            archival/lib.a
+            archival/libarchive/lib.a
+            console-tools/lib.a
+            coreutils/lib.a
+            coreutils/libcoreutils/lib.a
+            debianutils/lib.a
+            klibc-utils/lib.a
+            e2fsprogs/lib.a
+            editors/lib.a
+            findutils/lib.a
+            init/lib.a
+            libbb/lib.a
+            libbb/yescrypt/lib.a
+            libpwdgrp/lib.a
+            loginutils/lib.a
+            mailutils/lib.a
+            miscutils/lib.a
+            modutils/lib.a
+            networking/lib.a
+            networking/libiproute/lib.a
+            networking/udhcp/lib.a
+            printutils/lib.a
+            procps/lib.a
+            runit/lib.a
+            selinux/lib.a
+            shell/lib.a
+            sysklogd/lib.a
+            util-linux/lib.a
+            util-linux/volume_id/lib.a
+            archival/built-in.o
+            archival/libarchive/built-in.o
+            console-tools/built-in.o
+            coreutils/built-in.o
+            coreutils/libcoreutils/built-in.o
+            debianutils/built-in.o
+            klibc-utils/built-in.o
+            e2fsprogs/built-in.o
+            editors/built-in.o
+            findutils/built-in.o
+            init/built-in.o
+            libbb/built-in.o
+            libbb/yescrypt/built-in.o
+            libpwdgrp/built-in.o
+            loginutils/built-in.o
+            mailutils/built-in.o
+            miscutils/built-in.o
+            modutils/built-in.o
+            networking/built-in.o
+            networking/libiproute/built-in.o
+            networking/udhcp/built-in.o
+            printutils/built-in.o
+            procps/built-in.o
+            runit/built-in.o
+            selinux/built-in.o
+            shell/built-in.o
+            sysklogd/built-in.o
+            util-linux/built-in.o
+            util-linux/volume_id/built-in.o
+          )
+          abs_inputs=()
+          for p in "${inputs[@]}"; do
+            test -s "$out/$p"
+            abs_inputs+=("$out/$p")
+          done
+
+          started=$(date +%s)
+          "$minild" -melf64lriscv -static -e _start \
+            -o "$work/busybox-product" \
+            "$musl/obj/crt/crt1.o" "$musl/obj/crt/crti.o" \
+            --start-group "${abs_inputs[@]}" --end-group \
+            --start-group "$musl/lib/libc.a" "$libgcc" --end-group \
+            "$musl/obj/crt/crtn.o" \
+            >"$work/minild.stdout" 2>"$work/minild.stderr"
+          link_elapsed=$(( $(date +%s) - started ))
+
+          riscv64-linux-gnu-readelf -h "$work/busybox-product" >"$work/product.header"
+          riscv64-linux-gnu-readelf -l "$work/busybox-product" >"$work/product.programs"
+
+          qemu-riscv64 "$work/busybox-product" --list \
+            >"$work/product.applets" 2>"$work/product-list.stderr"
+          test "$(wc -l <"$work/product.applets")" -eq 408
+          cmp "$work/reference.applets" "$work/product.applets"
+
+          qemu-riscv64 "$work/busybox-product" ash -c \
+            'i=1; s=0; while [ "$i" -le 100 ]; do s=$((s+i)); i=$((i+1)); done; echo ASH_OK "$s"' \
+            >"$work/product-ash.stdout" 2>"$work/product-ash.stderr"
+          grep -q '^ASH_OK 5050$' "$work/product-ash.stdout"
+          diff -u "$work/reference-ash.stdout" "$work/product-ash.stdout"
+
+          printf 'MINILD_BUSYBOX_STATIC=PASS applets=408 ash=PASS link_elapsed_s=%s product_bytes=%s head=%s\n' \
+            "$link_elapsed" "$(stat -c %s "$work/busybox-product")" "$GITHUB_SHA"
+
+      - name: Preserve BusyBox static evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: minild-busybox-static-evidence
+          path: |
+            build/minild-busybox-static/busybox-build.log
+            build/minild-busybox-static/minild.stdout
+            build/minild-busybox-static/minild.stderr
+            build/minild-busybox-static/reference.header
+            build/minild-busybox-static/reference.applets
+            build/minild-busybox-static/reference-ash.stdout
+            build/minild-busybox-static/reference-ash.stderr
+            build/minild-busybox-static/product.header
+            build/minild-busybox-static/product.programs
+            build/minild-busybox-static/product.applets
+            build/minild-busybox-static/product-list.stderr
+            build/minild-busybox-static/product-ash.stdout
+            build/minild-busybox-static/product-ash.stderr
+          if-no-files-found: ignore
+          retention-days: 3
