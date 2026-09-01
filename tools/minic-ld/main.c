@@ -82,7 +82,8 @@ int main(int argc, char **argv) {
                 return 2;
             }
             if (strcmp(argv[i], "noexecstack") != 0 &&
-                strcmp(argv[i], "nodefaultlib") != 0) {
+                strcmp(argv[i], "nodefaultlib") != 0 &&
+                strcmp(argv[i], "norelro") != 0) {
                 fprintf(stderr, "minic-ld: unsupported-z:%s\n", argv[i]);
                 return 2;
             }
