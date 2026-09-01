@@ -1,0 +1,155 @@
+name: MiniLD Real musl Shared Frontier
+
+on:
+  push:
+    branches:
+      - "toolchain/minild-musl-shared"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  musl-shared-frontier:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Install RV64 shared-musl prerequisites
+        run: |
+          sudo apt-get -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            build-essential gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
+            qemu-user curl ca-certificates python3
+
+      - name: Build MiniLD and keep A0-A4 green
+        run: |
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/minild-musl-shared all
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/minild-musl-shared check-minild-a0
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/minild-musl-shared check-minild-a1
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/minild-musl-shared check-minild-a2
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/minild-musl-shared check-minild-a3
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/minild-musl-shared check-minild-a4
+
+      - name: Build pristine musl 1.2.5 GNU shared oracle
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/minild-musl-shared"
+          mkdir -p "$work"
+          curl -fsSL https://musl.libc.org/releases/musl-1.2.5.tar.gz \
+            -o "$work/musl-1.2.5.tar.gz"
+          printf '%s  %s\n' \
+            a9a118bbe84d8764da0ea0d28b3ab3fae8477fc7e4085d90102b8596fc7c75e4 \
+            "$work/musl-1.2.5.tar.gz" | sha256sum -c -
+          tar -xzf "$work/musl-1.2.5.tar.gz" -C "$work"
+
+          src="$work/musl-1.2.5"
+          out="$work/musl-build"
+          mkdir -p "$out"
+          cd "$out"
+          CC=riscv64-linux-gnu-gcc \
+          AR=riscv64-linux-gnu-ar \
+          RANLIB=riscv64-linux-gnu-ranlib \
+            "$src/configure" \
+              --target=riscv64-linux-gnu \
+              --enable-shared \
+              --prefix=/usr \
+            >"$work/configure.log" 2>&1
+
+          started=$(date +%s)
+          make -j4 V=1 lib/libc.so >"$work/make.log" 2>&1
+          elapsed=$(( $(date +%s) - started ))
+          test -s lib/libc.so
+
+          riscv64-linux-gnu-readelf -Wr lib/libc.so >"$work/gnu.relocations"
+          riscv64-linux-gnu-readelf -d lib/libc.so >"$work/gnu.dynamic"
+          riscv64-linux-gnu-readelf -S lib/libc.so >"$work/gnu.sections"
+
+          python3 - "$work/make.log" "$work/input-list.txt" <<'PY'
+          import shlex, sys
+          lines=open(sys.argv[1], encoding="utf-8", errors="replace").read().splitlines()
+          for i,line in enumerate(lines):
+              if " -nostdlib -shared " in line:
+                  full=line.rstrip()
+                  j=i+1
+                  while full.endswith("\\") and j < len(lines):
+                      full=full[:-1] + " " + lines[j].strip()
+                      j += 1
+                  words=shlex.split(full)
+                  objs=[w for w in words if w.endswith(".lo")]
+                  if len(objs) < 1000:
+                      continue
+                  open(sys.argv[2],"w").write("\n".join(objs)+"\n")
+                  print("MUSL_SHARED_LINK_OBJECTS=%d" % len(objs))
+                  break
+          else:
+              raise SystemExit("shared link command not found")
+          PY
+
+          count="$(wc -l <"$work/input-list.txt")"
+          test "$count" -eq 1350
+          printf 'MUSL_SHARED_GNU=PASS pic_objects=%s elapsed_s=%s libc_bytes=%s\n' \
+            "$count" "$elapsed" "$(stat -c %s lib/libc.so)"
+
+      - name: Drive exact PIC object surface through MiniLD
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/minild-musl-shared"
+          out="$work/musl-build"
+          minild="$GITHUB_WORKSPACE/build/minild-musl-shared/bin/minic-ld"
+          libgcc="$(riscv64-linux-gnu-gcc -print-libgcc-file-name)"
+          libgcc_eh="$(riscv64-linux-gnu-gcc -print-file-name=libgcc_eh.a)"
+          mapfile -t rel_inputs <"$work/input-list.txt"
+          inputs=()
+          for p in "${rel_inputs[@]}"; do
+            test -s "$out/$p"
+            inputs+=("$out/$p")
+          done
+          test -s "$libgcc"
+          test -s "$libgcc_eh"
+
+          set +e
+          "$minild" -melf64lriscv -shared -e _dlstart \
+            -o "$work/libc-minild.so" \
+            "${inputs[@]}" "$libgcc" "$libgcc_eh" \
+            >"$work/minild.stdout" 2>"$work/minild.stderr"
+          rc=$?
+          set -e
+
+          cat "$work/minild.stderr"
+          if test "$rc" -ne 0; then
+            first="$(grep -m1 '^minic-ld:' "$work/minild.stderr" || true)"
+            printf 'MINILD_MUSL_SHARED_FRONTIER=FAIL rc=%s first=%s\n' "$rc" "$first"
+            exit "$rc"
+          fi
+
+          riscv64-linux-gnu-readelf -h "$work/libc-minild.so" >"$work/minild.header"
+          riscv64-linux-gnu-readelf -Wr "$work/libc-minild.so" >"$work/minild.relocations"
+          riscv64-linux-gnu-readelf -d "$work/libc-minild.so" >"$work/minild.dynamic"
+          printf 'MINILD_MUSL_SHARED_STRUCTURAL=PASS bytes=%s\n' \
+            "$(stat -c %s "$work/libc-minild.so")"
+
+      - name: Preserve real shared-musl evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: minild-real-musl-shared-frontier
+          path: |
+            build/minild-musl-shared/configure.log
+            build/minild-musl-shared/make.log
+            build/minild-musl-shared/input-list.txt
+            build/minild-musl-shared/gnu.relocations
+            build/minild-musl-shared/gnu.dynamic
+            build/minild-musl-shared/gnu.sections
+            build/minild-musl-shared/minild.stdout
+            build/minild-musl-shared/minild.stderr
+            build/minild-musl-shared/minild.header
+            build/minild-musl-shared/minild.relocations
+            build/minild-musl-shared/minild.dynamic
+          if-no-files-found: ignore
+          retention-days: 3
