@@ -4903,13 +4903,88 @@ static bool shared_fill_dynamic(MiniLdState *state,
     return true;
 }
 
+
+typedef struct MiniLdSharedTlsSegment {
+    bool present;
+    size_t file_offset;
+    uint64_t vaddr;
+    uint64_t filesz;
+    uint64_t memsz;
+    uint64_t align;
+} MiniLdSharedTlsSegment;
+
+static bool shared_tls_segment(const MiniLdState *state,
+                               const MiniLdStaticLayout *layout,
+                               MiniLdSharedTlsSegment *tls) {
+    uint64_t base = UINT64_MAX;
+    uint64_t memory_end = 0U;
+    uint64_t file_end = 0U;
+    uint64_t alignment = 1U;
+    size_t i;
+    bool have_file = false;
+
+    memset(tls, 0, sizeof(*tls));
+    for (i = 0U; i < state->section_count; ++i) {
+        const MiniLdSection *section = &state->sections[i];
+        uint64_t start;
+        uint64_t end;
+
+        if ((section->flags & (SHF_ALLOC | SHF_TLS)) !=
+            (SHF_ALLOC | SHF_TLS)) {
+            continue;
+        }
+        start = layout->section_vaddr[i];
+        if (section->size > UINT64_MAX - start) {
+            return false;
+        }
+        end = start + (uint64_t)section->size;
+        if (!tls->present || start < base) {
+            base = start;
+        }
+        if (!tls->present || end > memory_end) {
+            memory_end = end;
+        }
+        if (section->align > alignment) {
+            alignment = section->align;
+        }
+        if (section->type != SHT_NOBITS && section->size != 0U) {
+            if (layout->section_file_offset[i] == SIZE_MAX) {
+                return false;
+            }
+            if (!have_file || end > file_end) {
+                file_end = end;
+            }
+            have_file = true;
+        }
+        tls->present = true;
+    }
+
+    if (!tls->present) {
+        return true;
+    }
+    if (!layout->have_rw || base < layout->rw_vaddr ||
+        base - layout->rw_vaddr > SIZE_MAX ||
+        layout->rw_file_offset >
+            SIZE_MAX - (size_t)(base - layout->rw_vaddr)) {
+        return false;
+    }
+
+    tls->vaddr = base;
+    tls->file_offset =
+        layout->rw_file_offset + (size_t)(base - layout->rw_vaddr);
+    tls->filesz = have_file ? file_end - base : 0U;
+    tls->memsz = memory_end - base;
+    tls->align = alignment == 0U ? 1U : alignment;
+    return true;
+}
+
 static bool shared_write_object(MiniLdState *state,
                                 const MiniLdStaticLayout *layout,
                                 const MiniLdSharedImage *shared,
                                 const char *path) {
-    size_t phnum = (layout->have_rx ? 1U : 0U) +
-                   (layout->have_rw ? 1U : 0U) + 1U;
-    size_t image_size = sizeof(Elf64_Ehdr) + phnum * sizeof(Elf64_Phdr);
+    MiniLdSharedTlsSegment tls;
+    size_t phnum;
+    size_t image_size;
     MiniLdBuffer shstrtab = {NULL, 0U, 0U};
     uint32_t *name_offsets = NULL;
     Elf64_Shdr *section_headers = NULL;
@@ -4925,6 +5000,16 @@ static bool shared_write_object(MiniLdState *state,
     Elf64_Phdr *programs;
     FILE *file = NULL;
     bool ok = false;
+
+    if (!shared_tls_segment(state, layout, &tls)) {
+        fprintf(state->diagnostics,
+                "minic-ld: invalid-shared-tls-segment-layout\n");
+        return false;
+    }
+    phnum = (layout->have_rx ? 1U : 0U) +
+            (layout->have_rw ? 1U : 0U) +
+            (tls.present ? 1U : 0U) + 1U;
+    image_size = sizeof(Elf64_Ehdr) + phnum * sizeof(Elf64_Phdr);
 
     if (section_count > UINT16_MAX) {
         fprintf(state->diagnostics,
@@ -5018,6 +5103,17 @@ static bool shared_write_object(MiniLdState *state,
         ph->p_filesz = layout->rw_file_size;
         ph->p_memsz = layout->rw_mem_size;
         ph->p_align = 4096U;
+    }
+    if (tls.present) {
+        Elf64_Phdr *ph = &programs[program_index++];
+        ph->p_type = PT_TLS;
+        ph->p_flags = PF_R;
+        ph->p_offset = tls.file_offset;
+        ph->p_vaddr = tls.vaddr;
+        ph->p_paddr = tls.vaddr;
+        ph->p_filesz = tls.filesz;
+        ph->p_memsz = tls.memsz;
+        ph->p_align = tls.align;
     }
     {
         Elf64_Phdr *ph = &programs[program_index++];
