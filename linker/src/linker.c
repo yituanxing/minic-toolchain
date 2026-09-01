@@ -3939,9 +3939,11 @@ static uint32_t shared_elf_hash(const char *name) {
 static bool shared_symbol_eligible(const MiniLdState *state, size_t index) {
     const MiniLdSymbol *symbol = &state->symbols[index];
     unsigned bind = ELF64_ST_BIND(symbol->info);
+    unsigned visibility = ELF64_ST_VISIBILITY(symbol->other);
 
     if ((bind != STB_GLOBAL && bind != STB_WEAK) ||
-        symbol->name[0] == '\0') {
+        symbol->name[0] == '\0' ||
+        (visibility != STV_DEFAULT && visibility != STV_PROTECTED)) {
         return false;
     }
     if (symbol->section >= 0) {
@@ -3954,6 +3956,13 @@ static bool shared_symbol_eligible(const MiniLdState *state, size_t index) {
     return true;
 }
 
+static bool shared_symbol_needs_plt(const MiniLdSymbol *symbol) {
+    if (symbol->section == MINILD_SECTION_UNDEF) {
+        return true;
+    }
+    return shared_symbol_is_preemptible(symbol);
+}
+
 static bool shared_prepare_metadata(MiniLdState *state,
                                     const char *soname,
                                     MiniLdSharedImage *shared) {
@@ -3961,6 +3970,9 @@ static bool shared_prepare_metadata(MiniLdState *state,
     MiniLdSection *dynsym;
     MiniLdSection *hash;
     MiniLdSection *rela;
+    MiniLdSection *plt;
+    MiniLdSection *gotplt;
+    MiniLdSection *rela_plt;
     MiniLdSection *dynamic;
     size_t dynsym_size;
     size_t hash_words;
@@ -3972,6 +3984,9 @@ static bool shared_prepare_metadata(MiniLdState *state,
     shared->dynsym_section = SIZE_MAX;
     shared->hash_section = SIZE_MAX;
     shared->rela_section = SIZE_MAX;
+    shared->plt_section = SIZE_MAX;
+    shared->gotplt_section = SIZE_MAX;
+    shared->rela_plt_section = SIZE_MAX;
     shared->dynamic_section = SIZE_MAX;
 
     shared->dynsym_index =
@@ -3980,13 +3995,18 @@ static bool shared_prepare_metadata(MiniLdState *state,
     shared->dynstr_name_offset =
         calloc(state->symbol_count == 0U ? 1U : state->symbol_count,
                sizeof(*shared->dynstr_name_offset));
+    shared->plt_index =
+        malloc((state->symbol_count == 0U ? 1U : state->symbol_count) *
+               sizeof(*shared->plt_index));
     if (shared->dynsym_index == NULL ||
-        shared->dynstr_name_offset == NULL) {
+        shared->dynstr_name_offset == NULL ||
+        shared->plt_index == NULL) {
         fprintf(state->diagnostics, "minic-ld: out-of-memory:shared-symbol-map\n");
         goto fail;
     }
     for (i = 0U; i < state->symbol_count; ++i) {
         shared->dynsym_index[i] = SIZE_MAX;
+        shared->plt_index[i] = SIZE_MAX;
     }
 
     if (!find_or_add_section(state,
@@ -4018,6 +4038,27 @@ static bool shared_prepare_metadata(MiniLdState *state,
                              sizeof(Elf64_Rela),
                              &shared->rela_section) ||
         !find_or_add_section(state,
+                             ".plt",
+                             SHT_PROGBITS,
+                             SHF_ALLOC | SHF_EXECINSTR,
+                             16U,
+                             16U,
+                             &shared->plt_section) ||
+        !find_or_add_section(state,
+                             ".got.plt",
+                             SHT_PROGBITS,
+                             SHF_ALLOC | SHF_WRITE,
+                             8U,
+                             8U,
+                             &shared->gotplt_section) ||
+        !find_or_add_section(state,
+                             ".rela.plt",
+                             SHT_RELA,
+                             SHF_ALLOC,
+                             8U,
+                             sizeof(Elf64_Rela),
+                             &shared->rela_plt_section) ||
+        !find_or_add_section(state,
                              ".dynamic",
                              SHT_DYNAMIC,
                              SHF_ALLOC | SHF_WRITE,
@@ -4031,6 +4072,9 @@ static bool shared_prepare_metadata(MiniLdState *state,
     dynsym = &state->sections[shared->dynsym_section];
     hash = &state->sections[shared->hash_section];
     rela = &state->sections[shared->rela_section];
+    plt = &state->sections[shared->plt_section];
+    gotplt = &state->sections[shared->gotplt_section];
+    rela_plt = &state->sections[shared->rela_plt_section];
     dynamic = &state->sections[shared->dynamic_section];
 
     if (!section_append_zero(dynstr, 1U)) {
@@ -4093,6 +4137,7 @@ static bool shared_prepare_metadata(MiniLdState *state,
 
     for (i = 0U; i < state->reloc_count; ++i) {
         MiniLdReloc *reloc = &state->relocs[i];
+        MiniLdSymbol *target;
 
         if (reloc->section >= state->section_count ||
             (state->sections[reloc->section].flags & SHF_ALLOC) == 0U) {
@@ -4101,6 +4146,27 @@ static bool shared_prepare_metadata(MiniLdState *state,
         if (reloc->type == R_RISCV_NONE ||
             reloc->type == R_RISCV_RELAX ||
             reloc->type == R_RISCV_ALIGN) {
+            continue;
+        }
+        if (reloc->type == R_RISCV_CALL ||
+            reloc->type == R_RISCV_CALL_PLT) {
+            if (reloc->symbol == SIZE_MAX ||
+                reloc->symbol >= state->symbol_count) {
+                fprintf(state->diagnostics,
+                        "minic-ld: invalid-shared-call-relocation\n");
+                goto fail;
+            }
+            target = &state->symbols[reloc->symbol];
+            if (shared_symbol_needs_plt(target) &&
+                shared->plt_index[reloc->symbol] == SIZE_MAX) {
+                if (shared->dynsym_index[reloc->symbol] == SIZE_MAX) {
+                    fprintf(state->diagnostics,
+                            "minic-ld: missing-dynsym-for-plt:%s\n",
+                            target->name);
+                    goto fail;
+                }
+                shared->plt_index[reloc->symbol] = shared->plt_count++;
+            }
             continue;
         }
         if (reloc->type != R_RISCV_64) {
@@ -4117,9 +4183,32 @@ static bool shared_prepare_metadata(MiniLdState *state,
         goto oom;
     }
 
+    if (shared->plt_count != 0U) {
+        size_t plt_size;
+        size_t gotplt_size;
+        size_t rela_plt_size;
+
+        if (shared->plt_count > (SIZE_MAX - 32U) / 16U ||
+            shared->plt_count > (SIZE_MAX - 16U) / 8U ||
+            shared->plt_count > SIZE_MAX / sizeof(Elf64_Rela)) {
+            goto oom;
+        }
+        plt_size = 32U + shared->plt_count * 16U;
+        gotplt_size = 16U + shared->plt_count * 8U;
+        rela_plt_size = shared->plt_count * sizeof(Elf64_Rela);
+        if (!section_append_zero(plt, plt_size) ||
+            !section_append_zero(gotplt, gotplt_size) ||
+            !section_append_zero(rela_plt, rela_plt_size)) {
+            goto oom;
+        }
+    }
+
     dynamic_entries = 6U; /* HASH/STRTAB/SYMTAB/STRSZ/SYMENT/NULL */
     if (shared->rela_count != 0U) {
         dynamic_entries += 3U; /* RELA/RELASZ/RELAENT */
+    }
+    if (shared->plt_count != 0U) {
+        dynamic_entries += 4U; /* PLTGOT/PLTRELSZ/PLTREL/JMPREL */
     }
     if (shared->have_soname) {
         ++dynamic_entries;
