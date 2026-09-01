@@ -4197,8 +4197,8 @@ static bool shared_prepare_metadata(MiniLdState *state,
             shared->plt_count > SIZE_MAX / sizeof(Elf64_Rela)) {
             goto oom;
         }
-        plt_size = 32U + shared->plt_count * 16U;
-        gotplt_size = 16U + shared->plt_count * 8U;
+        plt_size = shared->plt_count * 16U;
+        gotplt_size = (3U + shared->plt_count) * 8U;
         rela_plt_size = shared->plt_count * sizeof(Elf64_Rela);
         if (!section_append_zero(plt, plt_size) ||
             !section_append_zero(gotplt, gotplt_size) ||
@@ -4212,7 +4212,7 @@ static bool shared_prepare_metadata(MiniLdState *state,
         dynamic_entries += 3U; /* RELA/RELASZ/RELAENT */
     }
     if (shared->plt_count != 0U) {
-        dynamic_entries += 4U; /* PLTGOT/PLTRELSZ/PLTREL/JMPREL */
+        dynamic_entries += 5U; /* PLTGOT/PLTRELSZ/PLTREL/JMPREL/BIND_NOW */
     }
     if (shared->have_soname) {
         ++dynamic_entries;
@@ -4462,11 +4462,6 @@ static bool shared_fill_plt(MiniLdState *state,
     if (shared->plt_count == 0U) {
         return true;
     }
-    if ((state->elf_flags & EF_RISCV_RVE) != 0U) {
-        fprintf(state->diagnostics,
-                "minic-ld: RVE-PLT-is-not-supported\n");
-        return false;
-    }
 
     plt = &state->sections[shared->plt_section];
     gotplt = &state->sections[shared->gotplt_section];
@@ -4474,8 +4469,8 @@ static bool shared_fill_plt(MiniLdState *state,
     plt_address = layout->section_vaddr[shared->plt_section];
     gotplt_address = layout->section_vaddr[shared->gotplt_section];
 
-    if (plt->size != 32U + shared->plt_count * 16U ||
-        gotplt->size != 16U + shared->plt_count * 8U ||
+    if (plt->size != shared->plt_count * 16U ||
+        gotplt->size != (3U + shared->plt_count) * 8U ||
         rela_plt->size != shared->plt_count * sizeof(Elf64_Rela)) {
         fprintf(state->diagnostics,
                 "minic-ld: invalid-shared-plt-size\n");
@@ -4483,36 +4478,16 @@ static bool shared_fill_plt(MiniLdState *state,
     }
 
     /*
-     * Standard RV64 PLT0, matching the psABI/binutils normal PLT:
-     *   auipc t2, %pcrel_hi(.got.plt)
-     *   sub   t1, t1, t3
-     *   ld    t3, %pcrel_lo(.got.plt)(t2)
-     *   addi  t1, t1, -44
-     *   addi  t0, t2, %pcrel_lo(.got.plt)
-     *   srli  t1, t1, 1
-     *   ld    t0, 8(t0)
+     * D019-proven eager RV64 PLT.  There is deliberately no lazy PLT0:
+     *
+     *   auipc t3, %pcrel_hi(slot)
+     *   ld    t3, %pcrel_lo(slot)(t3)
      *   jalr  x0, t3, 0
+     *   nop
+     *
+     * R_RISCV_JUMP_SLOT plus DT_BIND_NOW resolves each slot before first use.
      */
-    delta = (int64_t)gotplt_address - (int64_t)plt_address;
-    hi = riscv_hi20(delta);
-    lo = riscv_lo12(delta);
-    store_u32le(plt->data + 0U,
-                shared_riscv_utype(0x17U, 7U, hi));
-    store_u32le(plt->data + 4U,
-                shared_riscv_rtype(0x33U, 6U, 0U, 6U, 28U, 0x20U));
-    store_u32le(plt->data + 8U,
-                shared_riscv_itype(0x03U, 28U, 3U, 7U, lo));
-    store_u32le(plt->data + 12U,
-                shared_riscv_itype(0x13U, 6U, 0U, 6U, -44));
-    store_u32le(plt->data + 16U,
-                shared_riscv_itype(0x13U, 5U, 0U, 7U, lo));
-    store_u32le(plt->data + 20U,
-                shared_riscv_itype(0x13U, 6U, 5U, 6U, 1));
-    store_u32le(plt->data + 24U,
-                shared_riscv_itype(0x03U, 5U, 3U, 5U, 8));
-    store_u32le(plt->data + 28U,
-                shared_riscv_itype(0x67U, 0U, 0U, 28U, 0));
-
+    memset(plt->data, 0, plt->size);
     memset(gotplt->data, 0, gotplt->size);
     memset(rela_plt->data, 0, rela_plt->size);
 
@@ -4541,8 +4516,8 @@ static bool shared_fill_plt(MiniLdState *state,
             return false;
         }
 
-        plt_offset = 32U + plt_index * 16U;
-        got_offset = 16U + plt_index * 8U;
+        plt_offset = plt_index * 16U;
+        got_offset = (3U + plt_index) * 8U;
         entry_address = plt_address + plt_offset;
         slot_address = gotplt_address + got_offset;
         delta = (int64_t)slot_address - (int64_t)entry_address;
@@ -4554,14 +4529,8 @@ static bool shared_fill_plt(MiniLdState *state,
         store_u32le(plt->data + plt_offset + 4U,
                     shared_riscv_itype(0x03U, 28U, 3U, 28U, lo));
         store_u32le(plt->data + plt_offset + 8U,
-                    shared_riscv_itype(0x67U, 6U, 0U, 28U, 0));
+                    shared_riscv_itype(0x67U, 0U, 0U, 28U, 0));
         store_u32le(plt->data + plt_offset + 12U, UINT32_C(0x00000013));
-
-        /*
-         * Lazy-binding initial value. RTLD_NOW overwrites it before use;
-         * lazy loaders route it through PLT0.
-         */
-        store_u64le(gotplt->data + got_offset, plt_address);
 
         memset(&relocation, 0, sizeof(relocation));
         relocation.r_offset = slot_address;
@@ -4605,7 +4574,7 @@ static bool shared_fill_plt(MiniLdState *state,
                         target->name);
                 return false;
             }
-            destination = plt_address + 32U + plt_index * 16U;
+            destination = plt_address + plt_index * 16U;
         } else {
             if (!static_resolve_symbol(state,
                                        layout,
@@ -4664,6 +4633,7 @@ static bool shared_fill_dynamic(MiniLdState *state,
         MINILD_DYN(DT_PLTRELSZ, state->sections[shared->rela_plt_section].size);
         MINILD_DYN(DT_PLTREL, DT_RELA);
         MINILD_DYN(DT_JMPREL, layout->section_vaddr[shared->rela_plt_section]);
+        MINILD_DYN(DT_BIND_NOW, 0U);
     }
     if (shared->have_soname) {
         MINILD_DYN(DT_SONAME, shared->soname_offset);
