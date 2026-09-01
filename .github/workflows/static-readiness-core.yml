@@ -1,0 +1,76 @@
+name: Static Readiness Core Audit
+
+on:
+  push:
+    branches:
+      - "toolchain/static-readiness"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  core-audit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: Require frozen component ancestry
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git merge-base --is-ancestor 4723f09429dd98b97303510bea7cf223acf7e37b HEAD
+          git merge-base --is-ancestor b069a1d41ac6025483d731041789ff581d1f6b61 HEAD
+          git merge-base --is-ancestor 557723ca068a95993bf6b92f0aa17fb6c923002d HEAD
+          git merge-base --is-ancestor 94bfa06b2a075055733ac208fb592965a79e898f HEAD
+          echo "STATIC_COMPONENT_ANCESTRY=PASS pp=4723f094 cc=b069a1d4 as=557723ca ar=94bfa06b"
+
+      - name: Require frozen source tree identities
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          tree_sha() { git ls-tree HEAD "$1" | awk '{print $3}'; }
+
+          test "$(tree_sha preprocessor)" = c10e07633613c91843a3afb0ae558d37ee93f979
+          test "$(tree_sha compiler)" = b994f2efd0be49b7dea0bee2efdb50fe05ea3d5d
+          test "$(tree_sha src)" = 401a4045b935f828ed73ee54bb9a73024c7d91a4
+          test "$(tree_sha assembler)" = 076e332a04d627dde37b2fc4a95fe5e0b6718cab
+          test "$(tree_sha archiver)" = 557bf7326fd4a5cbbd1ecf71bdc6b502e017574e
+
+          echo "STATIC_COMPONENT_TREE=PASS pp=c10e0763 compiler=b994f2ef src=401a4045 as=076e332a ar=557bf732"
+
+      - name: Install RV64 smoke prerequisites
+        run: |
+          sudo apt-get -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends             build-essential gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu qemu-user
+
+      - name: Strict-build the complete static toolchain
+        run: |
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/static-readiness all
+          test -x build/static-readiness/bin/minic
+          test -x build/static-readiness/bin/minic-cpp
+          test -x build/static-readiness/bin/minic-as
+          test -x build/static-readiness/bin/minic-ar
+          test -x build/static-readiness/bin/minic-ld
+          echo "STATIC_TOOLCHAIN_BUILD=PASS tools=5"
+
+      - name: Re-run component boundary gates on same head
+        run: |
+          set -Eeuo pipefail
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/static-readiness check-minipp-a0
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/static-readiness check-minias-a0
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/static-readiness check-miniar-a0
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/static-readiness check-miniar-a1
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/static-readiness check-minild-a0
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/static-readiness check-minild-a1
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/static-readiness check-minild-a2
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/static-readiness check-minild-a3
+          echo "STATIC_COMPONENT_BOUNDARIES=PASS pp=PASS as=PASS ar=PASS ld=A0-A3"
+
+      - name: Freeze core audit marker
+        run: |
+          echo "STATIC_READINESS_CORE=PASS head=$GITHUB_SHA pp=3352-exact-frozen cc=v1-frozen as=m0-frozen ar=linux-frozen ld=static-a3"
