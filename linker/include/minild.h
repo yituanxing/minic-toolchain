@@ -7,7 +7,8 @@
 typedef enum MiniLdInputKind {
     MINILD_INPUT_OBJECT = 0,
     MINILD_INPUT_WHOLE_ARCHIVE = 1,
-    MINILD_INPUT_GROUP_ARCHIVE = 2
+    MINILD_INPUT_GROUP_ARCHIVE = 2,
+    MINILD_INPUT_ARCHIVE = 3
 } MiniLdInputKind;
 
 typedef struct MiniLdInput {
