@@ -70,6 +70,7 @@ typedef struct MiniLdState {
     size_t global_index_capacity;
     size_t global_index_count;
     uint32_t elf_flags;
+    size_t processed_object_count;
     bool have_input;
     FILE *diagnostics;
 } MiniLdState;
@@ -1029,6 +1030,7 @@ static bool process_input_data(MiniLdState *state,
     }
 
     state->elf_flags |= ehdr.e_flags;
+    ++state->processed_object_count;
     state->have_input = true;
     ok = true;
 
@@ -1844,6 +1846,87 @@ static bool process_object_or_archive(MiniLdState *state,
         return process_group_archive(state, path);
     }
     return process_input(state, path);
+}
+
+
+static bool process_group_sequence(MiniLdState *state,
+                                   const MiniLdInput *inputs,
+                                   size_t input_count) {
+    bool first_pass = true;
+    bool changed;
+    size_t i;
+
+    do {
+        size_t before = state->processed_object_count;
+
+        for (i = 0U; i < input_count; ++i) {
+            int kind = archive_file_kind(inputs[i].path, state->diagnostics);
+
+            if (kind < 0) {
+                return false;
+            }
+            if (kind == 1 || kind == 2) {
+                if (!process_group_archive(state, inputs[i].path)) {
+                    return false;
+                }
+            } else if (first_pass) {
+                if (!process_input(state, inputs[i].path)) {
+                    return false;
+                }
+            }
+        }
+        changed = state->processed_object_count != before;
+        first_pass = false;
+    } while (changed);
+
+    return true;
+}
+
+static bool process_input_sequence(MiniLdState *state,
+                                   const MiniLdInput *inputs,
+                                   size_t input_count) {
+    size_t i = 0U;
+
+    while (i < input_count) {
+        bool input_ok;
+
+        if (inputs[i].kind == MINILD_INPUT_GROUP_ARCHIVE) {
+            size_t end = i + 1U;
+
+            while (end < input_count &&
+                   inputs[end].kind == MINILD_INPUT_GROUP_ARCHIVE) {
+                ++end;
+            }
+            if (!process_group_sequence(state, inputs + i, end - i)) {
+                return false;
+            }
+            i = end;
+            continue;
+        }
+
+        switch (inputs[i].kind) {
+        case MINILD_INPUT_OBJECT:
+            input_ok = process_object_or_archive(state, inputs[i].path);
+            break;
+        case MINILD_INPUT_WHOLE_ARCHIVE:
+            input_ok = process_whole_archive(state, inputs[i].path);
+            break;
+        case MINILD_INPUT_ARCHIVE:
+            input_ok = process_group_archive(state, inputs[i].path);
+            break;
+        default:
+            fprintf(state->diagnostics,
+                    "minic-ld: invalid-input-kind:%s\n",
+                    inputs[i].path);
+            input_ok = false;
+            break;
+        }
+        if (!input_ok) {
+            return false;
+        }
+        ++i;
+    }
+    return true;
 }
 
 static size_t relocation_count_for_section(const MiniLdState *state,
@@ -3524,7 +3607,6 @@ int minild_link_static_elf64_riscv_inputs(const char *output_path,
     MiniLdState state;
     MiniLdStaticLayout layout;
     MiniLdStaticGot got;
-    size_t i;
     uint64_t entry = 0U;
     bool layout_ready = false;
     bool ok = false;
@@ -3539,32 +3621,8 @@ int minild_link_static_elf64_riscv_inputs(const char *output_path,
     got.section = SIZE_MAX;
     state.diagnostics = diagnostics;
 
-    for (i = 0U; i < input_count; ++i) {
-        bool input_ok;
-
-        switch (inputs[i].kind) {
-        case MINILD_INPUT_OBJECT:
-            input_ok = process_object_or_archive(&state, inputs[i].path);
-            break;
-        case MINILD_INPUT_WHOLE_ARCHIVE:
-            input_ok = process_whole_archive(&state, inputs[i].path);
-            break;
-        case MINILD_INPUT_GROUP_ARCHIVE:
-            input_ok = process_group_archive(&state, inputs[i].path);
-            break;
-        case MINILD_INPUT_ARCHIVE:
-            input_ok = process_group_archive(&state, inputs[i].path);
-            break;
-        default:
-            fprintf(diagnostics,
-                    "minic-ld: invalid-input-kind:%s\n",
-                    inputs[i].path);
-            input_ok = false;
-            break;
-        }
-        if (!input_ok) {
-            goto done;
-        }
+    if (!process_input_sequence(&state, inputs, input_count)) {
+        goto done;
     }
 
     if (!state.have_input ||
@@ -3597,7 +3655,6 @@ int minild_link_relocatable_elf64_riscv_inputs(const char *output_path,
                                                size_t input_count,
                                                FILE *diagnostics) {
     MiniLdState state;
-    size_t i;
     bool ok = false;
 
     if (output_path == NULL || inputs == NULL || input_count == 0U ||
@@ -3607,33 +3664,10 @@ int minild_link_relocatable_elf64_riscv_inputs(const char *output_path,
     memset(&state, 0, sizeof(state));
     state.diagnostics = diagnostics;
 
-    for (i = 0U; i < input_count; ++i) {
-        bool input_ok;
-
-        switch (inputs[i].kind) {
-        case MINILD_INPUT_OBJECT:
-            input_ok = process_object_or_archive(&state, inputs[i].path);
-            break;
-        case MINILD_INPUT_WHOLE_ARCHIVE:
-            input_ok = process_whole_archive(&state, inputs[i].path);
-            break;
-        case MINILD_INPUT_GROUP_ARCHIVE:
-            input_ok = process_group_archive(&state, inputs[i].path);
-            break;
-        case MINILD_INPUT_ARCHIVE:
-            input_ok = process_group_archive(&state, inputs[i].path);
-            break;
-        default:
-            fprintf(diagnostics,
-                    "minic-ld: invalid-input-kind:%s\n",
-                    inputs[i].path);
-            input_ok = false;
-            break;
-        }
-        if (!input_ok) {
-            goto done;
-        }
+    if (!process_input_sequence(&state, inputs, input_count)) {
+        goto done;
     }
+
     if (!state.have_input || !write_output(&state, output_path)) {
         goto done;
     }
