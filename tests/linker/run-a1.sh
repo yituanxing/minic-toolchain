@@ -168,6 +168,25 @@ fi
 "$LD" -melf64lriscv -Ttext=0x11000 -e cross_root \
   "$work/product-cross-group.o" -o "$work/product-cross-group.elf"
 
+# BusyBox-shaped group: an archive appears before a plain object.  The object
+# introduces a new unresolved symbol, so the earlier archive must be rescanned.
+"$LD" -melf64lriscv -r -o "$work/reference-object-after-archive.o" \
+  "$work/cross-root.o" \
+  --start-group "$work/early.a" "$work/lib/late.o" --end-group
+"$MINILD" -melf64lriscv -r -o "$work/product-object-after-archive.o" \
+  "$work/cross-root.o" \
+  --start-group "$work/early.a" "$work/lib/late.o" --end-group
+
+"$READELF" -Ws "$work/product-object-after-archive.o" \
+  >"$work/object-after-archive.symbols"
+awk '$8 == "early_helper" && $7 != "UND" { found=1 } END { exit found ? 0 : 1 }' \
+  "$work/object-after-archive.symbols"
+if awk '$8 == "early_helper" && $7 == "UND" { found=1 } END { exit found ? 0 : 1 }' \
+  "$work/object-after-archive.symbols"; then
+  echo "MINILD_A1_ERROR object-after-archive group rescan failed" >&2
+  exit 1
+fi
+
 "$LD" -melf64lriscv -Ttext=0x10000 -e root \
   "$work/reference-group.o" -o "$work/reference.elf"
 "$LD" -melf64lriscv -Ttext=0x10000 -e root \
@@ -176,4 +195,4 @@ fi
 "$OBJCOPY" -O binary --only-section=.text "$work/product.elf" "$work/product.text"
 cmp "$work/reference.text" "$work/product.text"
 
-echo "MINILD_A1=PASS thin-whole=PASS long-name-slash=PASS archive-group-selection=PASS group-rescan=PASS object-inside-group=PASS gnu-final-consumer=PASS"
+echo "MINILD_A1=PASS thin-whole=PASS long-name-slash=PASS archive-group-selection=PASS group-rescan=PASS object-inside-group=PASS object-after-archive=PASS gnu-final-consumer=PASS"
