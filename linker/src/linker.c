@@ -4432,20 +4432,6 @@ static uint32_t shared_riscv_itype(unsigned opcode,
            (uint32_t)opcode;
 }
 
-static uint32_t shared_riscv_rtype(unsigned opcode,
-                                   unsigned rd,
-                                   unsigned funct3,
-                                   unsigned rs1,
-                                   unsigned rs2,
-                                   unsigned funct7) {
-    return ((uint32_t)funct7 << 25U) |
-           ((uint32_t)rs2 << 20U) |
-           ((uint32_t)rs1 << 15U) |
-           ((uint32_t)funct3 << 12U) |
-           ((uint32_t)rd << 7U) |
-           (uint32_t)opcode;
-}
-
 static bool shared_fill_plt(MiniLdState *state,
                             const MiniLdStaticLayout *layout,
                             const MiniLdSharedImage *shared) {
