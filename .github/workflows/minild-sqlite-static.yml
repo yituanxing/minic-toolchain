@@ -1,0 +1,272 @@
+name: MiniLD Static SQLite 3.53.3
+
+on:
+  push:
+    branches:
+      - "toolchain/minild-sqlite-static"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  sqlite-static:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Install RV64 build/runtime prerequisites
+        run: |
+          sudo apt-get -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            build-essential gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
+            qemu-user curl ca-certificates unzip openssl
+
+      - name: Build MiniLD and keep A0-A3 green
+        run: |
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/minild-sqlite all
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/minild-sqlite check-minild-a0
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/minild-sqlite check-minild-a1
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/minild-sqlite check-minild-a2
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/minild-sqlite check-minild-a3
+
+      - name: Build pristine musl 1.2.5 static producer
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/minild-sqlite-static"
+          mkdir -p "$work"
+          curl -fsSL https://musl.libc.org/releases/musl-1.2.5.tar.gz \
+            -o "$work/musl-1.2.5.tar.gz"
+          printf '%s  %s\n' \
+            a9a118bbe84d8764da0ea0d28b3ab3fae8477fc7e4085d90102b8596fc7c75e4 \
+            "$work/musl-1.2.5.tar.gz" | sha256sum -c -
+          tar -xzf "$work/musl-1.2.5.tar.gz" -C "$work"
+
+          src="$work/musl-1.2.5"
+          out="$work/musl-build"
+          sysroot="$work/musl-sysroot"
+          mkdir -p "$out" "$sysroot"
+          cd "$out"
+          CFLAGS="-O2 -fno-pic -fno-pie" \
+          CC=riscv64-linux-gnu-gcc \
+          AR=riscv64-linux-gnu-ar \
+          RANLIB=riscv64-linux-gnu-ranlib \
+            "$src/configure" \
+              --target=riscv64-linux-gnu \
+              --disable-shared \
+              --prefix=/usr
+          make -j4
+          make DESTDIR="$sysroot" install-headers
+
+          test -s lib/libc.a
+          test -s obj/crt/crt1.o
+          test -s obj/crt/crti.o
+          test -s obj/crt/crtn.o
+          printf 'SQLITE_MUSL_STATIC=PASS objects=%s libc_bytes=%s\n' \
+            "$(find obj -type f -name '*.o' | wc -l)" \
+            "$(stat -c %s lib/libc.a)"
+
+      - name: Build pristine SQLite 3.53.3 amalgamation and harness
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/minild-sqlite-static"
+          archive="$work/sqlite-amalgamation-3530300.zip"
+          curl -fsSL https://www.sqlite.org/2026/sqlite-amalgamation-3530300.zip \
+            -o "$archive"
+          actual="$(openssl dgst -sha3-256 "$archive" | awk '{print $2}')"
+          test "$actual" = "d45c688a8cb23f68611a894a756a12d7eb6ab6e9e2468ca70adbeab3808b5ab9"
+          unzip -q "$archive" -d "$work"
+
+          src="$work/sqlite-amalgamation-3530300"
+          sysroot="$work/musl-sysroot"
+          cat >"$work/sqlite_runtime_test.c" <<'C'
+          #include "sqlite3.h"
+          #include <stdio.h>
+          #include <stdlib.h>
+          #include <string.h>
+          #include <unistd.h>
+
+          static void die(sqlite3 *db, const char *where, int rc) {
+              fprintf(stderr, "SQLITE_FAIL %s rc=%d msg=%s\n",
+                      where, rc, db != NULL ? sqlite3_errmsg(db) : "no-db");
+              if (db != NULL) sqlite3_close(db);
+              exit(2);
+          }
+
+          static void run_sql(sqlite3 *db, const char *sql) {
+              char *error = NULL;
+              int rc = sqlite3_exec(db, sql, NULL, NULL, &error);
+              if (rc != SQLITE_OK) {
+                  fprintf(stderr, "SQLITE_SQL_FAIL rc=%d msg=%s sql=%s\n",
+                          rc, error != NULL ? error : "", sql);
+                  sqlite3_free(error);
+                  sqlite3_close(db);
+                  exit(3);
+              }
+          }
+
+          int main(int argc, char **argv) {
+              const char *path = argc > 1 ? argv[1] : "minild-sqlite.db";
+              sqlite3 *db = NULL;
+              sqlite3_stmt *stmt = NULL;
+              int rc;
+              int i;
+              int rows;
+              sqlite3_int64 sum;
+              const unsigned char *integrity;
+
+              (void)unlink(path);
+              rc = sqlite3_open(path, &db);
+              if (rc != SQLITE_OK) die(db, "open-1", rc);
+
+              run_sql(db, "CREATE TABLE t(id INTEGER PRIMARY KEY, v INTEGER NOT NULL);");
+              run_sql(db, "BEGIN;");
+              rc = sqlite3_prepare_v2(db, "INSERT INTO t(id,v) VALUES(?1,?2);",
+                                      -1, &stmt, NULL);
+              if (rc != SQLITE_OK) die(db, "prepare-insert", rc);
+              for (i = 1; i <= 1000; ++i) {
+                  sqlite3_int64 v = (sqlite3_int64)i * (sqlite3_int64)i;
+                  sqlite3_bind_int(stmt, 1, i);
+                  sqlite3_bind_int64(stmt, 2, v);
+                  rc = sqlite3_step(stmt);
+                  if (rc != SQLITE_DONE) die(db, "insert-step", rc);
+                  sqlite3_reset(stmt);
+                  sqlite3_clear_bindings(stmt);
+              }
+              sqlite3_finalize(stmt);
+              stmt = NULL;
+              run_sql(db, "COMMIT;");
+              run_sql(db, "CREATE INDEX idx_t_v ON t(v);");
+
+              rc = sqlite3_close(db);
+              db = NULL;
+              if (rc != SQLITE_OK) die(NULL, "close-1", rc);
+
+              rc = sqlite3_open(path, &db);
+              if (rc != SQLITE_OK) die(db, "open-2", rc);
+              rc = sqlite3_prepare_v2(db, "SELECT count(*), sum(v) FROM t;",
+                                      -1, &stmt, NULL);
+              if (rc != SQLITE_OK) die(db, "prepare-aggregate", rc);
+              rc = sqlite3_step(stmt);
+              if (rc != SQLITE_ROW) die(db, "aggregate-step", rc);
+              rows = sqlite3_column_int(stmt, 0);
+              sum = sqlite3_column_int64(stmt, 1);
+              sqlite3_finalize(stmt);
+              stmt = NULL;
+
+              rc = sqlite3_prepare_v2(db, "PRAGMA integrity_check;",
+                                      -1, &stmt, NULL);
+              if (rc != SQLITE_OK) die(db, "prepare-integrity", rc);
+              rc = sqlite3_step(stmt);
+              if (rc != SQLITE_ROW) die(db, "integrity-step", rc);
+              integrity = sqlite3_column_text(stmt, 0);
+              if (integrity == NULL) die(db, "integrity-null", SQLITE_ERROR);
+
+              printf("SQLITE_MINILD_STATIC_OK %d %lld %s\n",
+                     rows, (long long)sum, (const char *)integrity);
+              rc = (rows == 1000 &&
+                    sum == (sqlite3_int64)333833500 &&
+                    strcmp((const char *)integrity, "ok") == 0) ? 0 : 4;
+              sqlite3_finalize(stmt);
+              stmt = NULL;
+              sqlite3_close(db);
+              (void)unlink(path);
+              return rc;
+          }
+          C
+
+          common="-std=c99 -O2 -fno-pic -fno-pie -DSQLITE_THREADSAFE=0 -DSQLITE_OMIT_LOAD_EXTENSION -DSQLITE_DEFAULT_MEMSTATUS=0"
+          riscv64-linux-gnu-gcc --sysroot="$sysroot" $common -I"$src" \
+            -c "$src/sqlite3.c" -o "$work/sqlite3.o"
+          riscv64-linux-gnu-gcc --sysroot="$sysroot" $common -I"$src" \
+            -c "$work/sqlite_runtime_test.c" -o "$work/sqlite_runtime_test.o"
+
+          riscv64-linux-gnu-readelf -Wr "$work/sqlite3.o" \
+            >"$work/sqlite3.relocations"
+          printf 'SQLITE_STATIC_PRODUCER=PASS sqlite3_bytes=%s harness_bytes=%s\n' \
+            "$(stat -c %s "$work/sqlite3.o")" \
+            "$(stat -c %s "$work/sqlite_runtime_test.o")"
+
+      - name: Link and run GNU static SQLite reference
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/minild-sqlite-static"
+          musl="$work/musl-build"
+          libgcc="$(riscv64-linux-gnu-gcc -print-libgcc-file-name)"
+
+          riscv64-linux-gnu-ld -melf64lriscv -static -e _start \
+            -o "$work/sqlite-reference" \
+            "$musl/obj/crt/crt1.o" "$musl/obj/crt/crti.o" \
+            "$work/sqlite_runtime_test.o" "$work/sqlite3.o" \
+            --start-group "$musl/lib/libc.a" "$libgcc" --end-group \
+            "$musl/obj/crt/crtn.o"
+
+          qemu-riscv64 "$work/sqlite-reference" "$work/reference.db" \
+            >"$work/reference.stdout" 2>"$work/reference.stderr"
+          grep -q '^SQLITE_MINILD_STATIC_OK 1000 333833500 ok$' \
+            "$work/reference.stdout"
+          echo "SQLITE_GNU_REFERENCE=PASS"
+
+      - name: Link and run static SQLite with MiniLD
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/minild-sqlite-static"
+          musl="$work/musl-build"
+          libgcc="$(riscv64-linux-gnu-gcc -print-libgcc-file-name)"
+          minild="$GITHUB_WORKSPACE/build/minild-sqlite/bin/minic-ld"
+
+          started=$(date +%s)
+          "$minild" -melf64lriscv -static -e _start \
+            -o "$work/sqlite-product" \
+            "$musl/obj/crt/crt1.o" "$musl/obj/crt/crti.o" \
+            "$work/sqlite_runtime_test.o" "$work/sqlite3.o" \
+            --start-group "$musl/lib/libc.a" "$libgcc" --end-group \
+            "$musl/obj/crt/crtn.o" \
+            >"$work/minild.stdout" 2>"$work/minild.stderr"
+          link_elapsed=$(( $(date +%s) - started ))
+
+          riscv64-linux-gnu-readelf -h "$work/sqlite-product" >"$work/product.header"
+          riscv64-linux-gnu-readelf -l "$work/sqlite-product" >"$work/product.programs"
+
+          set +e
+          qemu-riscv64 "$work/sqlite-product" "$work/product.db" \
+            >"$work/product.stdout" 2>"$work/product.stderr"
+          runtime_rc=$?
+          set -e
+
+          cat "$work/minild.stderr"
+          cat "$work/product.stdout"
+          cat "$work/product.stderr"
+          test "$runtime_rc" -eq 0
+          grep -q '^SQLITE_MINILD_STATIC_OK 1000 333833500 ok$' \
+            "$work/product.stdout"
+          diff -u "$work/reference.stdout" "$work/product.stdout"
+
+          printf 'MINILD_SQLITE_STATIC=PASS qemu_rc=%s link_elapsed_s=%s product_bytes=%s head=%s\n' \
+            "$runtime_rc" "$link_elapsed" \
+            "$(stat -c %s "$work/sqlite-product")" "$GITHUB_SHA"
+
+      - name: Preserve static SQLite evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: minild-sqlite-static-evidence
+          path: |
+            build/minild-sqlite-static/minild.stderr
+            build/minild-sqlite-static/minild.stdout
+            build/minild-sqlite-static/reference.stdout
+            build/minild-sqlite-static/reference.stderr
+            build/minild-sqlite-static/product.stdout
+            build/minild-sqlite-static/product.stderr
+            build/minild-sqlite-static/product.header
+            build/minild-sqlite-static/product.programs
+            build/minild-sqlite-static/sqlite3.relocations
+          if-no-files-found: ignore
+          retention-days: 3
