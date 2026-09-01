@@ -87,7 +87,15 @@ int main(int argc, char **argv) {
                 fprintf(stderr, "minic-ld: unsupported-z:%s\n", argv[i]);
                 return 2;
             }
-        } else if (strcmp(argv[i], "--no-warn-rwx-segments") == 0) {
+        } else if (strcmp(argv[i], "--no-warn-rwx-segments") == 0 ||
+                   strcmp(argv[i], "--strip-debug") == 0 ||
+                   strcmp(argv[i], "--build-id=sha1") == 0 ||
+                   strcmp(argv[i], "--orphan-handling=warn") == 0) {
+            /*
+             * These options affect ELF metadata/debug retention or diagnostics,
+             * not the A2/A3 static load image. Accept the Linux final-link
+             * spellings now; dedicated metadata emission can refine them later.
+             */
             continue;
         } else if (strcmp(argv[i], "-e") == 0) {
             if (++i >= argc) {

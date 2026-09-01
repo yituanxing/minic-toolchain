@@ -62,9 +62,11 @@ EOF
 "$AS" -march=rv64gc -mabi=lp64d -o "$work/start.o" "$work/start.s"
 "$AS" -march=rv64gc -mabi=lp64d -o "$work/compute.o" "$work/compute.s"
 
-"$LD" -melf64lriscv -static -z norelro -e _start -o "$work/reference" \
+"$LD" -melf64lriscv -static -z norelro --build-id=sha1 \
+  --orphan-handling=warn --strip-debug -e _start -o "$work/reference" \
   "$work/start.o" "$work/compute.o"
-"$MINILD" -melf64lriscv -static -z norelro -e _start -o "$work/product" \
+"$MINILD" -melf64lriscv -static -z norelro --build-id=sha1 \
+  --orphan-handling=warn --strip-debug -e _start -o "$work/product" \
   "$work/start.o" "$work/compute.o"
 
 "$READELF" -h "$work/product" >"$work/product.header"
