@@ -3465,6 +3465,27 @@ static bool static_apply_relocations(MiniLdState *state,
             break;
         case R_RISCV_JAL:
             delta = target - (int64_t)place;
+            if ((delta & 1) != 0 ||
+                delta < -1048576 ||
+                delta > 1048574) {
+                const char *symbol_name =
+                    (reloc->symbol != SIZE_MAX &&
+                     reloc->symbol < state->symbol_count)
+                        ? state->symbols[reloc->symbol].name
+                        : "<none>";
+                fprintf(state->diagnostics,
+                        "minic-ld: R_RISCV_JAL-overflow:"
+                        "section=%s:offset=%llu:symbol=%s:"
+                        "place=0x%llx:target=0x%llx:delta=%lld\n",
+                        section->name,
+                        (unsigned long long)reloc->offset,
+                        symbol_name,
+                        (unsigned long long)place,
+                        (unsigned long long)(uint64_t)target,
+                        (long long)delta);
+                free(pcrel);
+                return false;
+            }
             if (!static_patch_jal(section,
                                   reloc->offset,
                                   delta,
