@@ -25,6 +25,43 @@ _start:
 .size _start, .-_start
 EOF
 
+cat >"$work/bounds.s" <<'EOF'
+.text
+.globl check_array_bounds
+.type check_array_bounds, @function
+check_array_bounds:
+  la t0, __init_array_start
+  la t1, __init_array_end
+  sub t1, t1, t0
+  li t2, 8
+  bne t1, t2, 1f
+
+  la t0, __preinit_array_start
+  la t1, __preinit_array_end
+  bne t0, t1, 1f
+
+  la t0, __fini_array_start
+  la t1, __fini_array_end
+  bne t0, t1, 1f
+
+  li a0, 0
+  ret
+1:
+  li a0, 99
+  ret
+.size check_array_bounds, .-check_array_bounds
+
+.section .init_array.0100,"aw",@progbits
+.align 3
+.dword runtime_init_stub
+
+.text
+.type runtime_init_stub, @function
+runtime_init_stub:
+  ret
+.size runtime_init_stub, .-runtime_init_stub
+EOF
+
 cat >"$work/probe.s" <<'EOF'
 .text
 .globl runtime_malloc_free_probe
@@ -32,6 +69,8 @@ cat >"$work/probe.s" <<'EOF'
 runtime_malloc_free_probe:
   addi sp, sp, -16
   sd ra, 8(sp)
+  call check_array_bounds
+  bnez a0, 1f
   li a0, 32
   call malloc
   beqz a0, 1f
@@ -92,6 +131,7 @@ unused_runtime_member:
 EOF
 
 "$AS" -march=rv64gc -mabi=lp64d -o "$work/start.o" "$work/start.s"
+"$AS" -march=rv64gc -mabi=lp64d -o "$work/bounds.o" "$work/bounds.s"
 "$AS" -march=rv64gc -mabi=lp64d -o "$work/probe.o" "$work/probe.s"
 "$AS" -march=rv64gc -mabi=lp64d \
   -o "$work/runtime/runtime_malloc_allocator_member.o" \
@@ -120,7 +160,7 @@ EOF
 )
 
 "$LD" -melf64lriscv -static -e _start -o "$work/reference" \
-  "$work/start.o" "$work/probe.o" \
+  "$work/start.o" "$work/bounds.o" "$work/probe.o" \
   --start-group "$work/libmini_runtime.a" --end-group
 
 "$MINILD" -melf64lriscv -static -e _start -o "$work/product" \
@@ -138,4 +178,4 @@ echo "MINILD_A3_DIAG reference_rc=$reference_rc product_rc=$product_rc archive_m
 test "$reference_rc" -eq 42
 test "$product_rc" -eq 42
 
-echo "MINILD_A3=PASS regular-archive=PASS symbol-less-member=PASS lazy-selection=PASS malloc=PASS free=PASS qemu_rc=$product_rc"
+echo "MINILD_A3=PASS regular-archive=PASS symbol-less-member=PASS lazy-selection=PASS array-bounds=PASS malloc=PASS free=PASS qemu_rc=$product_rc"
