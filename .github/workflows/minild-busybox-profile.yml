@@ -57,6 +57,7 @@ jobs:
           test "$oldconfig_rc" -eq 0
           hash="$(sha256sum "$out/.config" | awk '{print $1}')"
           printf 'BUSYBOX_PROFILE_SHA256=%s\n' "$hash"
+          cp "$out/.config" "$work/generated.config"
           grep '^CONFIG_STATIC=' "$out/.config" || true
           grep '^CONFIG_ASH=' "$out/.config" || true
           grep '^CONFIG_FEATURE_SH_STANDALONE=' "$out/.config" || true
@@ -68,6 +69,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: minild-busybox-profile
-          path: build/minild-busybox-profile/out/.config
+          path: build/minild-busybox-profile/generated.config
           if-no-files-found: ignore
           retention-days: 3
