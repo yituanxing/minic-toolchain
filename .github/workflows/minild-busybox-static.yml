@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - "toolchain/minild-busybox-static"
+      - "toolchain/static-readiness"
   workflow_dispatch:
 
 permissions:
@@ -11,6 +12,7 @@ permissions:
 
 jobs:
   busybox-static:
+    if: github.event_name == 'workflow_dispatch' || github.ref_name == 'toolchain/minild-busybox-static' || contains(github.event.head_commit.message, '[static-busybox]')
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
