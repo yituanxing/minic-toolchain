@@ -2227,6 +2227,14 @@ typedef struct MiniLdStaticLayout {
     bool have_rw;
 } MiniLdStaticLayout;
 
+static uint8_t load_u8(const unsigned char *data) {
+    return data[0];
+}
+
+static void store_u8(unsigned char *data, uint8_t value) {
+    data[0] = value;
+}
+
 static uint16_t load_u16le(const unsigned char *data) {
     return (uint16_t)((uint16_t)data[0] |
                       ((uint16_t)data[1] << 8U));
@@ -2953,6 +2961,79 @@ static bool static_apply_relocations(MiniLdState *state,
                 free(pcrel);
                 return false;
             }
+            break;
+
+        case R_RISCV_ADD8:
+        case R_RISCV_SUB8: {
+            uint8_t current;
+            uint8_t operand;
+
+            if (section->type == SHT_NOBITS || reloc->offset > SIZE_MAX ||
+                !range_ok((size_t)reloc->offset, 1U, section->size)) {
+                fprintf(state->diagnostics,
+                        "minic-ld: R_RISCV_ADD_SUB8-offset-out-of-range\n");
+                free(pcrel);
+                return false;
+            }
+            current = load_u8(section->data + (size_t)reloc->offset);
+            operand = (uint8_t)(uint64_t)target;
+            if (reloc->type == R_RISCV_ADD8) {
+                current = (uint8_t)(current + operand);
+            } else {
+                current = (uint8_t)(current - operand);
+            }
+            store_u8(section->data + (size_t)reloc->offset, current);
+            break;
+        }
+        case R_RISCV_SET6: {
+            uint8_t current;
+            uint8_t encoded;
+
+            if (section->type == SHT_NOBITS || reloc->offset > SIZE_MAX ||
+                !range_ok((size_t)reloc->offset, 1U, section->size)) {
+                fprintf(state->diagnostics,
+                        "minic-ld: R_RISCV_SET6-offset-out-of-range\n");
+                free(pcrel);
+                return false;
+            }
+            current = load_u8(section->data + (size_t)reloc->offset);
+            encoded = (uint8_t)((uint64_t)target & UINT64_C(0x3f));
+            current = (uint8_t)((current & UINT8_C(0xc0)) | encoded);
+            store_u8(section->data + (size_t)reloc->offset, current);
+            break;
+        }
+        case R_RISCV_SET8:
+            if (section->type == SHT_NOBITS || reloc->offset > SIZE_MAX ||
+                !range_ok((size_t)reloc->offset, 1U, section->size)) {
+                fprintf(state->diagnostics,
+                        "minic-ld: R_RISCV_SET8-offset-out-of-range\n");
+                free(pcrel);
+                return false;
+            }
+            store_u8(section->data + (size_t)reloc->offset,
+                     (uint8_t)(uint64_t)target);
+            break;
+        case R_RISCV_SET16:
+            if (section->type == SHT_NOBITS || reloc->offset > SIZE_MAX ||
+                !range_ok((size_t)reloc->offset, 2U, section->size)) {
+                fprintf(state->diagnostics,
+                        "minic-ld: R_RISCV_SET16-offset-out-of-range\n");
+                free(pcrel);
+                return false;
+            }
+            store_u16le(section->data + (size_t)reloc->offset,
+                        (uint16_t)(uint64_t)target);
+            break;
+        case R_RISCV_SET32:
+            if (section->type == SHT_NOBITS || reloc->offset > SIZE_MAX ||
+                !range_ok((size_t)reloc->offset, 4U, section->size)) {
+                fprintf(state->diagnostics,
+                        "minic-ld: R_RISCV_SET32-offset-out-of-range\n");
+                free(pcrel);
+                return false;
+            }
+            store_u32le(section->data + (size_t)reloc->offset,
+                        (uint32_t)(uint64_t)target);
             break;
         case R_RISCV_ADD16:
         case R_RISCV_SUB16: {
