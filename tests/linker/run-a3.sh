@@ -184,15 +184,17 @@ grep -q 'R_RISCV_GOT_HI20' "$work/got.relocations"
     runtime/symbol_less_member.o \
     runtime/unused_runtime_member_with_bad_reference.o
   test "$(head -c 7 libmini_runtime.a)" = '!<arch>'
+  cp libmini_runtime.a runtime-archive.o
+  test "$(head -c 7 runtime-archive.o)" = '!<arch>'
 )
 
 "$LD" -melf64lriscv -static -e _start -o "$work/reference" \
   "$work/start.o" "$work/bounds.o" "$work/got.o" "$work/probe.o" \
-  "$work/libmini_runtime.a"
+  "$work/runtime-archive.o"
 
 "$MINILD" -melf64lriscv -static -e _start -o "$work/product" \
   "$work/start.o" "$work/bounds.o" "$work/got.o" "$work/probe.o" \
-  "$work/libmini_runtime.a"
+  "$work/runtime-archive.o"
 
 set +e
 "$QEMU" "$work/reference"
@@ -201,8 +203,8 @@ reference_rc=$?
 product_rc=$?
 set -e
 
-echo "MINILD_A3_DIAG reference_rc=$reference_rc product_rc=$product_rc archive_magic=$(head -c 7 "$work/libmini_runtime.a")"
+echo "MINILD_A3_DIAG reference_rc=$reference_rc product_rc=$product_rc archive_magic=$(head -c 7 "$work/runtime-archive.o")"
 test "$reference_rc" -eq 42
 test "$product_rc" -eq 42
 
-echo "MINILD_A3=PASS regular-archive=PASS ordinary-archive=PASS symbol-less-member=PASS lazy-selection=PASS array-bounds=PASS static-got=PASS malloc=PASS free=PASS qemu_rc=$product_rc"
+echo "MINILD_A3=PASS regular-archive=PASS magic-archive-o=PASS ordinary-archive=PASS symbol-less-member=PASS lazy-selection=PASS array-bounds=PASS static-got=PASS malloc=PASS free=PASS qemu_rc=$product_rc"
