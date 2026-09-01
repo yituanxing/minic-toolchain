@@ -3894,6 +3894,7 @@ typedef struct MiniLdSharedImage {
     size_t dynsym_section;
     size_t hash_section;
     size_t rela_section;
+    size_t got_section;
     size_t plt_section;
     size_t gotplt_section;
     size_t rela_plt_section;
@@ -3902,9 +3903,11 @@ typedef struct MiniLdSharedImage {
     size_t *dynsym_index;
     uint32_t *dynstr_name_offset;
     size_t *plt_index;
+    size_t *tls_gd_offset;
     size_t dynsym_count;
     size_t rela_count;
     size_t plt_count;
+    size_t tls_gd_count;
     bool have_soname;
 } MiniLdSharedImage;
 
@@ -3912,12 +3915,15 @@ static void shared_image_destroy(MiniLdSharedImage *shared) {
     free(shared->dynsym_index);
     free(shared->dynstr_name_offset);
     free(shared->plt_index);
+    free(shared->tls_gd_offset);
     shared->dynsym_index = NULL;
     shared->dynstr_name_offset = NULL;
     shared->plt_index = NULL;
+    shared->tls_gd_offset = NULL;
     shared->dynsym_count = 0U;
     shared->rela_count = 0U;
     shared->plt_count = 0U;
+    shared->tls_gd_count = 0U;
 }
 
 static uint32_t shared_elf_hash(const char *name) {
@@ -3974,6 +3980,7 @@ static bool shared_prepare_metadata(MiniLdState *state,
     MiniLdSection *dynsym;
     MiniLdSection *hash;
     MiniLdSection *rela;
+    MiniLdSection *got;
     MiniLdSection *plt;
     MiniLdSection *gotplt;
     MiniLdSection *rela_plt;
@@ -3988,6 +3995,7 @@ static bool shared_prepare_metadata(MiniLdState *state,
     shared->dynsym_section = SIZE_MAX;
     shared->hash_section = SIZE_MAX;
     shared->rela_section = SIZE_MAX;
+    shared->got_section = SIZE_MAX;
     shared->plt_section = SIZE_MAX;
     shared->gotplt_section = SIZE_MAX;
     shared->rela_plt_section = SIZE_MAX;
@@ -4002,15 +4010,20 @@ static bool shared_prepare_metadata(MiniLdState *state,
     shared->plt_index =
         malloc((state->symbol_count == 0U ? 1U : state->symbol_count) *
                sizeof(*shared->plt_index));
+    shared->tls_gd_offset =
+        malloc((state->symbol_count == 0U ? 1U : state->symbol_count) *
+               sizeof(*shared->tls_gd_offset));
     if (shared->dynsym_index == NULL ||
         shared->dynstr_name_offset == NULL ||
-        shared->plt_index == NULL) {
+        shared->plt_index == NULL ||
+        shared->tls_gd_offset == NULL) {
         fprintf(state->diagnostics, "minic-ld: out-of-memory:shared-symbol-map\n");
         goto fail;
     }
     for (i = 0U; i < state->symbol_count; ++i) {
         shared->dynsym_index[i] = SIZE_MAX;
         shared->plt_index[i] = SIZE_MAX;
+        shared->tls_gd_offset[i] = SIZE_MAX;
     }
 
     if (!find_or_add_section(state,
@@ -4041,6 +4054,13 @@ static bool shared_prepare_metadata(MiniLdState *state,
                              8U,
                              sizeof(Elf64_Rela),
                              &shared->rela_section) ||
+        !find_or_add_section(state,
+                             ".got",
+                             SHT_PROGBITS,
+                             SHF_ALLOC | SHF_WRITE,
+                             8U,
+                             8U,
+                             &shared->got_section) ||
         !find_or_add_section(state,
                              ".plt",
                              SHT_PROGBITS,
@@ -4076,6 +4096,7 @@ static bool shared_prepare_metadata(MiniLdState *state,
     dynsym = &state->sections[shared->dynsym_section];
     hash = &state->sections[shared->hash_section];
     rela = &state->sections[shared->rela_section];
+    got = &state->sections[shared->got_section];
     plt = &state->sections[shared->plt_section];
     gotplt = &state->sections[shared->gotplt_section];
     rela_plt = &state->sections[shared->rela_plt_section];
@@ -4152,6 +4173,32 @@ static bool shared_prepare_metadata(MiniLdState *state,
             reloc->type == R_RISCV_ALIGN) {
             continue;
         }
+        if (reloc->type == R_RISCV_TLS_GD_HI20) {
+            if (reloc->symbol == SIZE_MAX ||
+                reloc->symbol >= state->symbol_count ||
+                shared->dynsym_index[reloc->symbol] == SIZE_MAX) {
+                fprintf(state->diagnostics,
+                        "minic-ld: invalid-shared-tls-gd-relocation\n");
+                goto fail;
+            }
+            if (shared->tls_gd_offset[reloc->symbol] == SIZE_MAX) {
+                if (shared->tls_gd_count > (SIZE_MAX / 16U) - 1U) {
+                    goto oom;
+                }
+                shared->tls_gd_offset[reloc->symbol] =
+                    shared->tls_gd_count * 16U;
+                ++shared->tls_gd_count;
+                if (shared->rela_count > SIZE_MAX - 2U) {
+                    goto oom;
+                }
+                shared->rela_count += 2U;
+            }
+            continue;
+        }
+        if (reloc->type == R_RISCV_PCREL_LO12_I ||
+            reloc->type == R_RISCV_PCREL_LO12_S) {
+            continue;
+        }
         if (reloc->type == R_RISCV_CALL ||
             reloc->type == R_RISCV_CALL_PLT) {
             if (reloc->symbol == SIZE_MAX ||
@@ -4180,6 +4227,12 @@ static bool shared_prepare_metadata(MiniLdState *state,
             goto fail;
         }
         ++shared->rela_count;
+    }
+    if (shared->tls_gd_count != 0U) {
+        if (shared->tls_gd_count > SIZE_MAX / 16U ||
+            !section_append_zero(got, shared->tls_gd_count * 16U)) {
+            goto oom;
+        }
     }
     if (shared->rela_count > SIZE_MAX / sizeof(Elf64_Rela) ||
         !section_append_zero(rela,
