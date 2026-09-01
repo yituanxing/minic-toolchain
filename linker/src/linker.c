@@ -5067,7 +5067,8 @@ static bool shared_fill_dynamic(MiniLdState *state,
 static bool shared_write_object(MiniLdState *state,
                                 const MiniLdStaticLayout *layout,
                                 const MiniLdSharedImage *shared,
-                                const char *path) {
+                                const char *path,
+                                uint64_t entry) {
     size_t phnum = (layout->have_rx ? 1U : 0U) +
                    (layout->have_rw ? 1U : 0U) + 1U;
     size_t image_size = sizeof(Elf64_Ehdr) + phnum * sizeof(Elf64_Phdr);
@@ -5145,7 +5146,7 @@ static bool shared_write_object(MiniLdState *state,
     header.e_type = ET_DYN;
     header.e_machine = EM_RISCV;
     header.e_version = EV_CURRENT;
-    header.e_entry = 0U;
+    header.e_entry = entry;
     header.e_phoff = sizeof(Elf64_Ehdr);
     header.e_shoff = section_header_offset;
     header.e_flags = state->elf_flags;
@@ -5318,10 +5319,12 @@ int minild_link_shared_elf64_riscv_inputs(const char *output_path,
                                           const MiniLdInput *inputs,
                                           size_t input_count,
                                           const char *soname,
+                                          const char *entry_symbol,
                                           FILE *diagnostics) {
     MiniLdState state;
     MiniLdStaticLayout layout;
     MiniLdSharedImage shared;
+    uint64_t entry = 0U;
     bool layout_ready = false;
     bool ok = false;
 
@@ -5343,11 +5346,14 @@ int minild_link_shared_elf64_riscv_inputs(const char *output_path,
     }
     layout_ready = true;
 
-    if (!shared_fill_dynsym(&state, &layout, &shared) ||
+    if ((entry_symbol != NULL &&
+         !static_entry_address(&state, &layout, entry_symbol, &entry)) ||
+        !shared_fill_dynsym(&state, &layout, &shared) ||
         !shared_fill_hash(&state, &shared) ||
+        !shared_fill_plt(&state, &layout, &shared) ||
         !shared_fill_relocations(&state, &layout, &shared) ||
         !shared_fill_dynamic(&state, &layout, &shared) ||
-        !shared_write_object(&state, &layout, &shared, output_path)) {
+        !shared_write_object(&state, &layout, &shared, output_path, entry)) {
         goto done;
     }
     ok = true;
