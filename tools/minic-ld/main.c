@@ -4,6 +4,15 @@
 #include <stdio.h>
 #include <string.h>
 
+static bool has_archive_suffix(const char *path) {
+    size_t length = strlen(path);
+
+    return length >= 2U &&
+           path[length - 2U] == '.' &&
+           path[length - 1U] == 'a';
+}
+
+
 static void usage(FILE *out, const char *argv0) {
     fprintf(out,
             "usage: %s [-r|-static] -o OUTPUT [-e SYMBOL] "
@@ -98,6 +107,8 @@ int main(int argc, char **argv) {
                 inputs[input_count].kind = MINILD_INPUT_WHOLE_ARCHIVE;
             } else if (group_mode) {
                 inputs[input_count].kind = MINILD_INPUT_GROUP_ARCHIVE;
+            } else if (has_archive_suffix(argv[i])) {
+                inputs[input_count].kind = MINILD_INPUT_ARCHIVE;
             } else {
                 inputs[input_count].kind = MINILD_INPUT_OBJECT;
             }
