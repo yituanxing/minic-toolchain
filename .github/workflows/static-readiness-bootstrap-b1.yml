@@ -1,4 +1,5 @@
 name: Static Readiness Bootstrap B1
+# Current static-readiness compiler source is the bootstrap subject.
 
 on:
   push:
