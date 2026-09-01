@@ -4421,14 +4421,523 @@ static bool shared_symbol_is_preemptible(const MiniLdSymbol *symbol) {
            visibility == STV_DEFAULT;
 }
 
+static uint32_t shared_encode_utype(unsigned rd, int64_t imm20) {
+    return (((uint32_t)imm20 & UINT32_C(0x000fffff)) << 12U) |
+           ((uint32_t)rd << 7U) |
+           UINT32_C(0x17);
+}
+
+static uint32_t shared_encode_itype(uint32_t opcode,
+                                    unsigned rd,
+                                    unsigned funct3,
+                                    unsigned rs1,
+                                    int64_t imm12) {
+    return (((uint32_t)imm12 & UINT32_C(0x00000fff)) << 20U) |
+           ((uint32_t)rs1 << 15U) |
+           ((uint32_t)funct3 << 12U) |
+           ((uint32_t)rd << 7U) |
+           opcode;
+}
+
+static uint32_t shared_encode_rtype(uint32_t opcode,
+                                    unsigned rd,
+                                    unsigned funct3,
+                                    unsigned rs1,
+                                    unsigned rs2,
+                                    unsigned funct7) {
+    return ((uint32_t)funct7 << 25U) |
+           ((uint32_t)rs2 << 20U) |
+           ((uint32_t)rs1 << 15U) |
+           ((uint32_t)funct3 << 12U) |
+           ((uint32_t)rd << 7U) |
+           opcode;
+}
+
+static bool shared_fill_plt(MiniLdState *state,
+                            const MiniLdStaticLayout *layout,
+                            const MiniLdSharedImage *shared) {
+    MiniLdSection *plt;
+    MiniLdSection *gotplt;
+    MiniLdSection *relaplt;
+    uint64_t plt_address;
+    uint64_t gotplt_address;
+    int64_t header_delta;
+    size_t i;
+
+    if (shared->plt_count == 0U) {
+        return true;
+    }
+    plt = &state->sections[shared->plt_section];
+    gotplt = &state->sections[shared->got_plt_section];
+    relaplt = &state->sections[shared->rela_plt_section];
+    plt_address = layout->section_vaddr[shared->plt_section];
+    gotplt_address = layout->section_vaddr[shared->got_plt_section];
+    header_delta = (int64_t)gotplt_address - (int64_t)plt_address;
+
+    /*
+     * RISC-V psABI PLT0, 32 bytes:
+     *   auipc t2,%pcrel_hi(.got.plt)
+     *   sub   t1,t1,t3
+     *   ld    t3,%pcrel_lo(.got.plt)(t2)
+     *   addi  t1,t1,-44
+     *   addi  t0,t2,%pcrel_lo(.got.plt)
+     *   srli  t1,t1,1
+     *   ld    t0,8(t0)
+     *   jr    t3
+     */
+    store_u32le(plt->data + 0U, shared_encode_utype(7U, riscv_hi20(header_delta)));
+    store_u32le(plt->data + 4U,
+                shared_encode_rtype(UINT32_C(0x33),
+                                    6U, 0U, 6U, 28U, 32U));
+    store_u32le(plt->data + 8U,
+                shared_encode_itype(UINT32_C(0x03),
+                                    28U, 3U, 7U, riscv_lo12(header_delta)));
+    store_u32le(plt->data + 12U,
+                shared_encode_itype(UINT32_C(0x13),
+                                    6U, 0U, 6U, -44));
+    store_u32le(plt->data + 16U,
+                shared_encode_itype(UINT32_C(0x13),
+                                    5U, 0U, 7U, riscv_lo12(header_delta)));
+    store_u32le(plt->data + 20U,
+                shared_encode_itype(UINT32_C(0x13),
+                                    6U, 5U, 6U, 1));
+    store_u32le(plt->data + 24U,
+                shared_encode_itype(UINT32_C(0x03),
+                                    5U, 3U, 5U, 8));
+    store_u32le(plt->data + 28U,
+                shared_encode_itype(UINT32_C(0x67),
+                                    0U, 0U, 28U, 0));
+
+    /* GOTPLT[0:2] are loader-owned.  Each function slot starts at PLT0. */
+    memset(gotplt->data, 0, gotplt->size);
+    memset(relaplt->data, 0, relaplt->size);
+
+    for (i = 0U; i < state->symbol_count; ++i) {
+        size_t plt_index = shared->plt_indices[i];
+        uint64_t entry_address;
+        uint64_t slot_address;
+        int64_t delta;
+        size_t entry_offset;
+        size_t slot_offset;
+        Elf64_Rela rela;
+        size_t dynamic_index;
+
+        if (plt_index == SIZE_MAX) {
+            continue;
+        }
+        entry_offset = 32U + plt_index * 16U;
+        slot_offset = 16U + plt_index * 8U;
+        entry_address = plt_address + entry_offset;
+        slot_address = gotplt_address + slot_offset;
+        delta = (int64_t)slot_address - (int64_t)entry_address;
+
+        store_u32le(plt->data + entry_offset + 0U,
+                    shared_encode_utype(28U, riscv_hi20(delta)));
+        store_u32le(plt->data + entry_offset + 4U,
+                    shared_encode_itype(UINT32_C(0x03),
+                                        28U, 3U, 28U, riscv_lo12(delta)));
+        store_u32le(plt->data + entry_offset + 8U,
+                    shared_encode_itype(UINT32_C(0x67),
+                                        6U, 0U, 28U, 0));
+        store_u32le(plt->data + entry_offset + 12U, UINT32_C(0x00000013));
+
+        store_u64le(gotplt->data + slot_offset, plt_address);
+
+        dynamic_index = shared->dynsym_index[i];
+        if (dynamic_index == SIZE_MAX) {
+            fprintf(state->diagnostics,
+                    "minic-ld: missing-dynsym-for-plt:%s\n",
+                    state->symbols[i].name);
+            return false;
+        }
+        memset(&rela, 0, sizeof(rela));
+        rela.r_offset = slot_address;
+        rela.r_info = ELF64_R_INFO(dynamic_index, R_RISCV_JUMP_SLOT);
+        rela.r_addend = 0;
+        memcpy(relaplt->data + plt_index * sizeof(rela),
+               &rela,
+               sizeof(rela));
+    }
+    return true;
+}
+
 static bool shared_fill_relocations(MiniLdState *state,
                                     const MiniLdStaticLayout *layout,
                                     const MiniLdSharedImage *shared) {
     MiniLdSection *rela = &state->sections[shared->rela_section];
+    size_t pcrel_capacity = pcrel_capacity_for(state->reloc_count);
+    MiniLdPcrelSlot *pcrel = NULL;
     size_t write_index = 0U;
     size_t i;
 
+    if (pcrel_capacity == 0U) {
+        fprintf(state->diagnostics,
+                "minic-ld: shared-pcrel-index-overflow\n");
+        return false;
+    }
+    pcrel = calloc(pcrel_capacity, sizeof(*pcrel));
+    if (pcrel == NULL) {
+        fprintf(state->diagnostics,
+                "minic-ld: out-of-memory:shared-pcrel-index\n");
+        return false;
+    }
+
     memset(rela->data, 0, rela->size);
+
+    /* First emit runtime relocations for GOT entries created by GOT_HI20. */
+    if (shared->got_count != 0U) {
+        MiniLdSection *got = &state->sections[shared->got_section];
+        for (i = 0U; i < state->symbol_count; ++i) {
+            size_t slot = shared->got_slot_offsets[i];
+            MiniLdSymbol *target;
+            Elf64_Rela output;
+
+            if (slot == SIZE_MAX) {
+                continue;
+            }
+            target = &state->symbols[i];
+            memset(&output, 0, sizeof(output));
+            output.r_offset =
+                layout->section_vaddr[shared->got_section] + slot;
+
+            if (target->section != MINILD_SECTION_UNDEF &&
+                !shared_symbol_is_preemptible(target)) {
+                uint64_t target_value;
+                if (!static_resolve_symbol(state, layout, i, &target_value)) {
+                    free(pcrel);
+                    return false;
+                }
+                output.r_info = ELF64_R_INFO(0U, R_RISCV_RELATIVE);
+                output.r_addend = (Elf64_Sxword)target_value;
+            } else {
+                size_t dynamic_index = shared->dynsym_index[i];
+                if (dynamic_index == SIZE_MAX) {
+                    fprintf(state->diagnostics,
+                            "minic-ld: missing-dynsym-for-got:%s\n",
+                            target->name);
+                    free(pcrel);
+                    return false;
+                }
+                output.r_info =
+                    ELF64_R_INFO(dynamic_index, R_RISCV_64);
+                output.r_addend = 0;
+            }
+            store_u64le(got->data + slot, 0U);
+            memcpy(rela->data + write_index * sizeof(output),
+                   &output,
+                   sizeof(output));
+            ++write_index;
+        }
+    }
+
+    /*
+     * Link-time relocation pass.  CALL/PCREL/GOT address calculations are
+     * position independent; R_RISCV_64 remains a runtime relocation below.
+     */
+    for (i = 0U; i < state->reloc_count; ++i) {
+        MiniLdReloc *input = &state->relocs[i];
+        MiniLdSection *source;
+        MiniLdSymbol *target = NULL;
+        uint64_t symbol_value = 0U;
+        uint64_t place;
+        int64_t resolved;
+        int64_t delta;
+
+        if (input->section >= state->section_count ||
+            (state->sections[input->section].flags & SHF_ALLOC) == 0U ||
+            input->type == R_RISCV_NONE ||
+            input->type == R_RISCV_RELAX ||
+            input->type == R_RISCV_ALIGN ||
+            input->type == R_RISCV_64 ||
+            input->type == R_RISCV_PCREL_LO12_I ||
+            input->type == R_RISCV_PCREL_LO12_S) {
+            continue;
+        }
+        source = &state->sections[input->section];
+        place = layout->section_vaddr[input->section] + input->offset;
+
+        if (input->symbol != SIZE_MAX) {
+            if (input->symbol >= state->symbol_count) {
+                fprintf(state->diagnostics,
+                        "minic-ld: shared-linktime-symbol-out-of-range\n");
+                free(pcrel);
+                return false;
+            }
+            target = &state->symbols[input->symbol];
+        }
+
+        switch (input->type) {
+        case R_RISCV_CALL:
+        case R_RISCV_CALL_PLT:
+            if (target == NULL) {
+                fprintf(state->diagnostics,
+                        "minic-ld: invalid-shared-call-target\n");
+                free(pcrel);
+                return false;
+            }
+            if (shared->plt_indices[input->symbol] != SIZE_MAX) {
+                symbol_value =
+                    layout->section_vaddr[shared->plt_section] +
+                    32U + shared->plt_indices[input->symbol] * 16U;
+            } else if (!static_resolve_symbol(state,
+                                              layout,
+                                              input->symbol,
+                                              &symbol_value)) {
+                free(pcrel);
+                return false;
+            }
+            delta = (int64_t)symbol_value + input->addend - (int64_t)place;
+            if (!static_patch_utype(source,
+                                    input->offset,
+                                    riscv_hi20(delta),
+                                    state->diagnostics) ||
+                !static_patch_itype(source,
+                                    input->offset + 4U,
+                                    riscv_lo12(delta),
+                                    state->diagnostics)) {
+                free(pcrel);
+                return false;
+            }
+            break;
+
+        case R_RISCV_GOT_HI20: {
+            size_t slot;
+            uint64_t got_address;
+
+            if (target == NULL ||
+                shared->got_section == SIZE_MAX ||
+                input->symbol >= state->symbol_count) {
+                fprintf(state->diagnostics,
+                        "minic-ld: invalid-shared-got-relocation\n");
+                free(pcrel);
+                return false;
+            }
+            slot = shared->got_slot_offsets[input->symbol];
+            if (slot == SIZE_MAX) {
+                fprintf(state->diagnostics,
+                        "minic-ld: missing-shared-got-slot:%s\n",
+                        target->name);
+                free(pcrel);
+                return false;
+            }
+            got_address = layout->section_vaddr[shared->got_section] + slot;
+            delta = (int64_t)got_address - (int64_t)place;
+            if (!static_patch_utype(source,
+                                    input->offset,
+                                    riscv_hi20(delta),
+                                    state->diagnostics)) {
+                free(pcrel);
+                return false;
+            }
+            pcrel_insert(pcrel,
+                         pcrel_capacity,
+                         input->section,
+                         input->offset,
+                         delta);
+            break;
+        }
+
+        case R_RISCV_PCREL_HI20:
+            if (target == NULL ||
+                !static_resolve_symbol(state,
+                                       layout,
+                                       input->symbol,
+                                       &symbol_value)) {
+                free(pcrel);
+                return false;
+            }
+            delta = (int64_t)symbol_value + input->addend - (int64_t)place;
+            if (!static_patch_utype(source,
+                                    input->offset,
+                                    riscv_hi20(delta),
+                                    state->diagnostics)) {
+                free(pcrel);
+                return false;
+            }
+            pcrel_insert(pcrel,
+                         pcrel_capacity,
+                         input->section,
+                         input->offset,
+                         delta);
+            break;
+
+        case R_RISCV_BRANCH:
+            if (target == NULL ||
+                !static_resolve_symbol(state,
+                                       layout,
+                                       input->symbol,
+                                       &symbol_value) ||
+                !static_patch_branch(source,
+                                     input->offset,
+                                     (int64_t)symbol_value + input->addend -
+                                         (int64_t)place,
+                                     state->diagnostics)) {
+                free(pcrel);
+                return false;
+            }
+            break;
+
+        case R_RISCV_JAL:
+            if (target == NULL ||
+                !static_resolve_symbol(state,
+                                       layout,
+                                       input->symbol,
+                                       &symbol_value) ||
+                !static_patch_jal(source,
+                                  input->offset,
+                                  (int64_t)symbol_value + input->addend -
+                                      (int64_t)place,
+                                  state->diagnostics)) {
+                free(pcrel);
+                return false;
+            }
+            break;
+
+        case R_RISCV_RVC_BRANCH:
+            if (target == NULL ||
+                !static_resolve_symbol(state,
+                                       layout,
+                                       input->symbol,
+                                       &symbol_value) ||
+                !static_patch_rvc_branch(source,
+                                         input->offset,
+                                         (int64_t)symbol_value +
+                                             input->addend -
+                                             (int64_t)place,
+                                         state->diagnostics)) {
+                free(pcrel);
+                return false;
+            }
+            break;
+
+        case R_RISCV_RVC_JUMP:
+            if (target == NULL ||
+                !static_resolve_symbol(state,
+                                       layout,
+                                       input->symbol,
+                                       &symbol_value) ||
+                !static_patch_rvc_jump(source,
+                                       input->offset,
+                                       (int64_t)symbol_value +
+                                           input->addend -
+                                           (int64_t)place,
+                                       state->diagnostics)) {
+                free(pcrel);
+                return false;
+            }
+            break;
+
+        case R_RISCV_HI20:
+        case R_RISCV_LO12_I:
+        case R_RISCV_LO12_S:
+            if (target == NULL ||
+                !static_resolve_symbol(state,
+                                       layout,
+                                       input->symbol,
+                                       &symbol_value)) {
+                free(pcrel);
+                return false;
+            }
+            resolved = (int64_t)symbol_value + input->addend;
+            if ((input->type == R_RISCV_HI20 &&
+                 !static_patch_utype(source,
+                                     input->offset,
+                                     riscv_hi20(resolved),
+                                     state->diagnostics)) ||
+                (input->type == R_RISCV_LO12_I &&
+                 !static_patch_itype(source,
+                                     input->offset,
+                                     riscv_lo12(resolved),
+                                     state->diagnostics)) ||
+                (input->type == R_RISCV_LO12_S &&
+                 !static_patch_stype(source,
+                                     input->offset,
+                                     riscv_lo12(resolved),
+                                     state->diagnostics))) {
+                free(pcrel);
+                return false;
+            }
+            break;
+
+        case R_RISCV_32_PCREL:
+            if (target == NULL ||
+                !static_resolve_symbol(state,
+                                       layout,
+                                       input->symbol,
+                                       &symbol_value)) {
+                free(pcrel);
+                return false;
+            }
+            delta = (int64_t)symbol_value + input->addend - (int64_t)place;
+            if (delta < INT32_MIN || delta > INT32_MAX ||
+                source->type == SHT_NOBITS || input->offset > SIZE_MAX ||
+                !range_ok((size_t)input->offset, 4U, source->size)) {
+                fprintf(state->diagnostics,
+                        "minic-ld: shared-R_RISCV_32_PCREL-range\n");
+                free(pcrel);
+                return false;
+            }
+            store_u32le(source->data + (size_t)input->offset,
+                        (uint32_t)(int32_t)delta);
+            break;
+
+        default:
+            fprintf(state->diagnostics,
+                    "minic-ld: unsupported-shared-linktime-relocation:%u\n",
+                    input->type);
+            free(pcrel);
+            return false;
+        }
+    }
+
+    /* Resolve PCREL_LO12 against the corresponding HI20/GOT_HI20 label. */
+    for (i = 0U; i < state->reloc_count; ++i) {
+        MiniLdReloc *input = &state->relocs[i];
+        MiniLdSymbol *label;
+        MiniLdSection *source;
+        int64_t delta;
+
+        if (input->type != R_RISCV_PCREL_LO12_I &&
+            input->type != R_RISCV_PCREL_LO12_S) {
+            continue;
+        }
+        if (input->symbol == SIZE_MAX ||
+            input->symbol >= state->symbol_count) {
+            fprintf(state->diagnostics,
+                    "minic-ld: invalid-shared-pcrel-lo-symbol\n");
+            free(pcrel);
+            return false;
+        }
+        label = &state->symbols[input->symbol];
+        if (label->section < 0 ||
+            (size_t)label->section >= state->section_count ||
+            !pcrel_find(pcrel,
+                        pcrel_capacity,
+                        (size_t)label->section,
+                        label->value + (uint64_t)input->addend,
+                        &delta)) {
+            fprintf(state->diagnostics,
+                    "minic-ld: missing-shared-pcrel-hi20\n");
+            free(pcrel);
+            return false;
+        }
+        source = &state->sections[input->section];
+        if ((input->type == R_RISCV_PCREL_LO12_I &&
+             !static_patch_itype(source,
+                                 input->offset,
+                                 riscv_lo12(delta),
+                                 state->diagnostics)) ||
+            (input->type == R_RISCV_PCREL_LO12_S &&
+             !static_patch_stype(source,
+                                 input->offset,
+                                 riscv_lo12(delta),
+                                 state->diagnostics))) {
+            free(pcrel);
+            return false;
+        }
+    }
+
+    /* Finally emit the input R_RISCV_64 runtime relocations. */
     for (i = 0U; i < state->reloc_count; ++i) {
         MiniLdReloc *input = &state->relocs[i];
         MiniLdSection *source;
@@ -4438,16 +4947,14 @@ static bool shared_fill_relocations(MiniLdState *state,
 
         if (input->section >= state->section_count ||
             (state->sections[input->section].flags & SHF_ALLOC) == 0U ||
-            input->type == R_RISCV_NONE ||
-            input->type == R_RISCV_RELAX ||
-            input->type == R_RISCV_ALIGN) {
+            input->type != R_RISCV_64) {
             continue;
         }
-        if (input->type != R_RISCV_64 ||
-            input->symbol == SIZE_MAX ||
+        if (input->symbol == SIZE_MAX ||
             input->symbol >= state->symbol_count) {
             fprintf(state->diagnostics,
-                    "minic-ld: invalid-shared-relocation\n");
+                    "minic-ld: invalid-shared-R_RISCV_64\n");
+            free(pcrel);
             return false;
         }
         source = &state->sections[input->section];
@@ -4456,6 +4963,7 @@ static bool shared_fill_relocations(MiniLdState *state,
             !range_ok((size_t)input->offset, 8U, source->size)) {
             fprintf(state->diagnostics,
                     "minic-ld: shared-relocation-offset-out-of-range\n");
+            free(pcrel);
             return false;
         }
         target = &state->symbols[input->symbol];
@@ -4471,17 +4979,19 @@ static bool shared_fill_relocations(MiniLdState *state,
                                        layout,
                                        input->symbol,
                                        &target_value)) {
+                free(pcrel);
                 return false;
             }
             output.r_info = ELF64_R_INFO(0U, R_RISCV_RELATIVE);
-            output.r_addend = (Elf64_Sxword)((int64_t)target_value +
-                                             input->addend);
+            output.r_addend =
+                (Elf64_Sxword)((int64_t)target_value + input->addend);
         } else {
             dynamic_index = shared->dynsym_index[input->symbol];
             if (dynamic_index == SIZE_MAX) {
                 fprintf(state->diagnostics,
                         "minic-ld: missing-dynsym-for-relocation:%s\n",
                         target->name);
+                free(pcrel);
                 return false;
             }
             output.r_info =
@@ -4494,9 +5004,13 @@ static bool shared_fill_relocations(MiniLdState *state,
                sizeof(output));
         ++write_index;
     }
+
+    free(pcrel);
     if (write_index != shared->rela_count) {
         fprintf(state->diagnostics,
-                "minic-ld: shared-relocation-count-mismatch\n");
+                "minic-ld: shared-relocation-count-mismatch:%zu:%zu\n",
+                write_index,
+                shared->rela_count);
         return false;
     }
     return true;
