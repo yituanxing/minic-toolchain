@@ -1,0 +1,116 @@
+name: MiniLD Dynamic A4 GNU Census
+
+on:
+  push:
+    branches:
+      - "toolchain/minild-dynamic-a4"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  shared-musl-census:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Install RV64 shared-musl prerequisites
+        run: |
+          sudo apt-get -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            build-essential gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
+            curl ca-certificates file
+
+      - name: Build pristine musl 1.2.5 shared GNU oracle
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/minild-dynamic-a4-census"
+          mkdir -p "$work"
+          curl -fsSL https://musl.libc.org/releases/musl-1.2.5.tar.gz \
+            -o "$work/musl-1.2.5.tar.gz"
+          printf '%s  %s\n' \
+            a9a118bbe84d8764da0ea0d28b3ab3fae8477fc7e4085d90102b8596fc7c75e4 \
+            "$work/musl-1.2.5.tar.gz" | sha256sum -c -
+          tar -xzf "$work/musl-1.2.5.tar.gz" -C "$work"
+
+          src="$work/musl-1.2.5"
+          out="$work/musl-build"
+          mkdir -p "$out"
+          cd "$out"
+          CC=riscv64-linux-gnu-gcc \
+          AR=riscv64-linux-gnu-ar \
+          RANLIB=riscv64-linux-gnu-ranlib \
+            "$src/configure" \
+              --target=riscv64-linux-gnu \
+              --enable-shared \
+              --prefix=/usr             >"$work/configure.log" 2>&1
+
+          started=$(date +%s)
+          make -j4 V=1 >"$work/make.log" 2>&1
+          elapsed=$(( $(date +%s) - started ))
+
+          test -s lib/libc.so
+          printf 'DYNAMIC_CENSUS_MUSL_BUILD=PASS elapsed_s=%s pic_objects=%s libc_bytes=%s\n' \
+            "$elapsed" "$(find obj -type f -name '*.o' | wc -l)" \
+            "$(stat -c %s lib/libc.so)"
+
+      - name: Capture exact shared-link command and ELF surface
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/minild-dynamic-a4-census"
+          out="$work/musl-build"
+          libc="$out/lib/libc.so"
+
+          grep -E '(^|[[:space:]])(riscv64-linux-gnu-(gcc|ld)|[^ ]*gcc)[^\n]*(lib/libc\.so| -shared )' \
+            "$work/make.log" >"$work/libc-link-command.txt" || true
+
+          riscv64-linux-gnu-readelf -h "$libc" >"$work/libc.header"
+          riscv64-linux-gnu-readelf -lW "$libc" >"$work/libc.programs"
+          riscv64-linux-gnu-readelf -SW "$libc" >"$work/libc.sections"
+          riscv64-linux-gnu-readelf -dW "$libc" >"$work/libc.dynamic"
+          riscv64-linux-gnu-readelf -Ws "$libc" >"$work/libc.symbols"
+          riscv64-linux-gnu-readelf -Wr "$libc" >"$work/libc.relocations"
+
+          grep -q 'DYN (Shared object file)' "$work/libc.header"
+          for sec in .dynsym .dynstr .dynamic .rela.dyn .got; do
+            grep -Fq "$sec" "$work/libc.sections"
+          done
+
+          dynrelocs="$(grep -c 'R_RISCV_' "$work/libc.relocations" || true)"
+          dynsyms="$(awk '/Symbol table .*\.dynsym/{on=1; next} on && /^[[:space:]]*[0-9]+:/{n++} END{print n+0}' "$work/libc.symbols")"
+          printf 'DYNAMIC_CENSUS=PASS dynrelocs=%s dynsyms=%s\n' "$dynrelocs" "$dynsyms"
+
+          echo 'DYNAMIC_RELOC_TYPES_BEGIN'
+          grep -o 'R_RISCV_[A-Z0-9_]*' "$work/libc.relocations" | sort | uniq -c
+          echo 'DYNAMIC_RELOC_TYPES_END'
+          echo 'DYNAMIC_TAGS_BEGIN'
+          grep -E '\((SONAME|HASH|GNU_HASH|STRTAB|SYMTAB|RELA|RELASZ|RELAENT|PLTGOT|INIT_ARRAY|FINI_ARRAY)\)' \
+            "$work/libc.dynamic" || true
+          echo 'DYNAMIC_TAGS_END'
+          echo 'LIBC_LINK_COMMAND_BEGIN'
+          cat "$work/libc-link-command.txt"
+          echo 'LIBC_LINK_COMMAND_END'
+
+      - name: Preserve dynamic census evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: minild-dynamic-a4-census
+          path: |
+            build/minild-dynamic-a4-census/configure.log
+            build/minild-dynamic-a4-census/make.log
+            build/minild-dynamic-a4-census/libc-link-command.txt
+            build/minild-dynamic-a4-census/libc.header
+            build/minild-dynamic-a4-census/libc.programs
+            build/minild-dynamic-a4-census/libc.sections
+            build/minild-dynamic-a4-census/libc.dynamic
+            build/minild-dynamic-a4-census/libc.symbols
+            build/minild-dynamic-a4-census/libc.relocations
+          if-no-files-found: ignore
+          retention-days: 3
