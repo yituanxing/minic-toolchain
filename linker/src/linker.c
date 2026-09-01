@@ -1833,6 +1833,19 @@ done:
     return ok;
 }
 
+static bool process_object_or_archive(MiniLdState *state,
+                                      const char *path) {
+    int kind = archive_file_kind(path, state->diagnostics);
+
+    if (kind < 0) {
+        return false;
+    }
+    if (kind == 1 || kind == 2) {
+        return process_group_archive(state, path);
+    }
+    return process_input(state, path);
+}
+
 static size_t relocation_count_for_section(const MiniLdState *state,
                                            size_t section) {
     return state->sections[section].relocation_count;
@@ -3531,7 +3544,7 @@ int minild_link_static_elf64_riscv_inputs(const char *output_path,
 
         switch (inputs[i].kind) {
         case MINILD_INPUT_OBJECT:
-            input_ok = process_input(&state, inputs[i].path);
+            input_ok = process_object_or_archive(&state, inputs[i].path);
             break;
         case MINILD_INPUT_WHOLE_ARCHIVE:
             input_ok = process_whole_archive(&state, inputs[i].path);
@@ -3599,7 +3612,7 @@ int minild_link_relocatable_elf64_riscv_inputs(const char *output_path,
 
         switch (inputs[i].kind) {
         case MINILD_INPUT_OBJECT:
-            input_ok = process_input(&state, inputs[i].path);
+            input_ok = process_object_or_archive(&state, inputs[i].path);
             break;
         case MINILD_INPUT_WHOLE_ARCHIVE:
             input_ok = process_whole_archive(&state, inputs[i].path);
