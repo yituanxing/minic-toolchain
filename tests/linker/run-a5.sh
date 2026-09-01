@@ -1,16 +1,16 @@
 #!/bin/sh
 set -eu
 
-: "\${MINILD:?MINILD must point to minic-ld}"
-: "\${BUILD_DIR:?BUILD_DIR must be set}"
+: "${MINILD:?MINILD must point to minic-ld}"
+: "${BUILD_DIR:?BUILD_DIR must be set}"
 
-AS=\${RISCV_AS:-riscv64-linux-gnu-as}
-LD=\${RISCV_LD:-riscv64-linux-gnu-ld}
-CC=\${RISCV_CC:-riscv64-linux-gnu-gcc}
-READELF=\${RISCV_READELF:-riscv64-linux-gnu-readelf}
-OBJDUMP=\${RISCV_OBJDUMP:-riscv64-linux-gnu-objdump}
-QEMU=\${QEMU_RISCV64:-qemu-riscv64}
-SYSROOT=\${RISCV_GLIBC_ROOT:-/usr/riscv64-linux-gnu}
+AS=${RISCV_AS:-riscv64-linux-gnu-as}
+LD=${RISCV_LD:-riscv64-linux-gnu-ld}
+CC=${RISCV_CC:-riscv64-linux-gnu-gcc}
+READELF=${RISCV_READELF:-riscv64-linux-gnu-readelf}
+OBJDUMP=${RISCV_OBJDUMP:-riscv64-linux-gnu-objdump}
+QEMU=${QEMU_RISCV64:-qemu-riscv64}
+SYSROOT=${RISCV_GLIBC_ROOT:-/usr/riscv64-linux-gnu}
 
 work="$BUILD_DIR/tests/linker/a5"
 rm -rf "$work"
