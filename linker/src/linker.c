@@ -2227,6 +2227,13 @@ typedef struct MiniLdStaticLayout {
     bool have_rw;
 } MiniLdStaticLayout;
 
+typedef struct MiniLdStaticGot {
+    size_t section;
+    size_t *slot_offsets;
+    size_t symbol_count;
+    bool present;
+} MiniLdStaticGot;
+
 static uint8_t load_u8(const unsigned char *data) {
     return data[0];
 }
@@ -2503,6 +2510,79 @@ static bool static_allocate_common(MiniLdState *state) {
     return true;
 }
 
+
+static void static_got_destroy(MiniLdStaticGot *got) {
+    free(got->slot_offsets);
+    got->slot_offsets = NULL;
+    got->symbol_count = 0U;
+    got->section = SIZE_MAX;
+    got->present = false;
+}
+
+static bool static_build_got(MiniLdState *state, MiniLdStaticGot *got) {
+    size_t i;
+
+    memset(got, 0, sizeof(*got));
+    got->section = SIZE_MAX;
+    got->symbol_count = state->symbol_count;
+    got->slot_offsets =
+        malloc((got->symbol_count == 0U ? 1U : got->symbol_count) *
+               sizeof(*got->slot_offsets));
+    if (got->slot_offsets == NULL) {
+        fprintf(state->diagnostics, "minic-ld: out-of-memory:static-got\n");
+        return false;
+    }
+    for (i = 0U; i < got->symbol_count; ++i) {
+        got->slot_offsets[i] = SIZE_MAX;
+    }
+
+    for (i = 0U; i < state->reloc_count; ++i) {
+        MiniLdReloc *reloc = &state->relocs[i];
+        MiniLdSection *section;
+        size_t aligned;
+
+        if (reloc->type != R_RISCV_GOT_HI20) {
+            continue;
+        }
+        if (reloc->symbol == SIZE_MAX ||
+            reloc->symbol >= got->symbol_count ||
+            reloc->addend != 0) {
+            fprintf(state->diagnostics,
+                    "minic-ld: invalid-R_RISCV_GOT_HI20\n");
+            static_got_destroy(got);
+            return false;
+        }
+        if (got->slot_offsets[reloc->symbol] != SIZE_MAX) {
+            continue;
+        }
+        if (!got->present) {
+            if (!find_or_add_section(state,
+                                     ".got",
+                                     SHT_PROGBITS,
+                                     SHF_ALLOC | SHF_WRITE,
+                                     8U,
+                                     0U,
+                                     &got->section)) {
+                static_got_destroy(got);
+                return false;
+            }
+            got->present = true;
+        }
+
+        section = &state->sections[got->section];
+        if (!align_up_size(section->size, 8U, &aligned) ||
+            !section_append_zero(section, aligned - section->size) ||
+            !section_append_zero(section, 8U)) {
+            fprintf(state->diagnostics,
+                    "minic-ld: static-got-allocation-overflow\n");
+            static_got_destroy(got);
+            return false;
+        }
+        got->slot_offsets[reloc->symbol] = aligned;
+    }
+    return true;
+}
+
 static bool static_build_layout(MiniLdState *state,
                                 MiniLdStaticLayout *layout) {
     const size_t page = 4096U;
@@ -2701,6 +2781,37 @@ static bool static_synthesize_array_bound_pair(
            static_define_absolute_if_undefined(state, end_name, end);
 }
 
+
+static bool static_fill_got(MiniLdState *state,
+                            const MiniLdStaticLayout *layout,
+                            const MiniLdStaticGot *got) {
+    MiniLdSection *section;
+    size_t i;
+
+    if (!got->present) {
+        return true;
+    }
+    if (got->section >= state->section_count) {
+        fprintf(state->diagnostics, "minic-ld: invalid-static-got-section\n");
+        return false;
+    }
+    section = &state->sections[got->section];
+
+    for (i = 0U; i < got->symbol_count; ++i) {
+        uint64_t value;
+
+        if (got->slot_offsets[i] == SIZE_MAX) {
+            continue;
+        }
+        if (!static_resolve_symbol(state, layout, i, &value) ||
+            !range_ok(got->slot_offsets[i], 8U, section->size)) {
+            return false;
+        }
+        store_u64le(section->data + got->slot_offsets[i], value);
+    }
+    return true;
+}
+
 static bool static_synthesize_runtime_boundaries(
     MiniLdState *state,
     const MiniLdStaticLayout *layout) {
@@ -2825,7 +2936,8 @@ static bool pcrel_find(const MiniLdPcrelSlot *slots,
 }
 
 static bool static_apply_relocations(MiniLdState *state,
-                                     const MiniLdStaticLayout *layout) {
+                                     const MiniLdStaticLayout *layout,
+                                     const MiniLdStaticGot *got) {
     size_t capacity = pcrel_capacity_for(state->reloc_count);
     MiniLdPcrelSlot *pcrel;
     size_t i;
@@ -2900,6 +3012,36 @@ static bool static_apply_relocations(MiniLdState *state,
                 return false;
             }
             break;
+
+        case R_RISCV_GOT_HI20: {
+            uint64_t got_address;
+
+            if (!got->present || reloc->symbol == SIZE_MAX ||
+                reloc->symbol >= got->symbol_count ||
+                got->slot_offsets[reloc->symbol] == SIZE_MAX ||
+                reloc->addend != 0) {
+                fprintf(state->diagnostics,
+                        "minic-ld: invalid-R_RISCV_GOT_HI20-slot\n");
+                free(pcrel);
+                return false;
+            }
+            got_address = layout->section_vaddr[got->section] +
+                          (uint64_t)got->slot_offsets[reloc->symbol];
+            delta = (int64_t)got_address - (int64_t)place;
+            if (!static_patch_utype(section,
+                                    reloc->offset,
+                                    riscv_hi20(delta),
+                                    state->diagnostics)) {
+                free(pcrel);
+                return false;
+            }
+            pcrel_insert(pcrel,
+                         capacity,
+                         reloc->section,
+                         reloc->offset,
+                         delta);
+            break;
+        }
         case R_RISCV_PCREL_HI20:
             delta = target - (int64_t)place;
             if (!static_patch_utype(section,
@@ -3363,6 +3505,7 @@ int minild_link_static_elf64_riscv_inputs(const char *output_path,
                                           FILE *diagnostics) {
     MiniLdState state;
     MiniLdStaticLayout layout;
+    MiniLdStaticGot got;
     size_t i;
     uint64_t entry = 0U;
     bool layout_ready = false;
@@ -3374,6 +3517,8 @@ int minild_link_static_elf64_riscv_inputs(const char *output_path,
     }
     memset(&state, 0, sizeof(state));
     memset(&layout, 0, sizeof(layout));
+    memset(&got, 0, sizeof(got));
+    got.section = SIZE_MAX;
     state.diagnostics = diagnostics;
 
     for (i = 0U; i < input_count; ++i) {
@@ -3406,12 +3551,14 @@ int minild_link_static_elf64_riscv_inputs(const char *output_path,
 
     if (!state.have_input ||
         !static_allocate_common(&state) ||
+        !static_build_got(&state, &got) ||
         !static_build_layout(&state, &layout)) {
         goto done;
     }
     layout_ready = true;
     if (!static_synthesize_runtime_boundaries(&state, &layout) ||
-        !static_apply_relocations(&state, &layout) ||
+        !static_fill_got(&state, &layout, &got) ||
+        !static_apply_relocations(&state, &layout, &got) ||
         !static_entry_address(&state, &layout, entry_symbol, &entry) ||
         !static_write_executable(&state, &layout, output_path, entry)) {
         goto done;
@@ -3422,6 +3569,7 @@ done:
     if (layout_ready) {
         static_layout_destroy(&layout);
     }
+    static_got_destroy(&got);
     state_destroy(&state);
     return ok ? 0 : 1;
 }
