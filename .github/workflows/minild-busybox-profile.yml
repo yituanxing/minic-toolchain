@@ -55,14 +55,38 @@ jobs:
           oldconfig_rc=${PIPESTATUS[1]}
           set -e
           test "$oldconfig_rc" -eq 0
-          hash="$(sha256sum "$out/.config" | awk '{print $1}')"
-          printf 'BUSYBOX_PROFILE_SHA256=%s\n' "$hash"
+          raw_hash="$(sha256sum "$out/.config" | awk '{print $1}')"
+          semantic_hash="$(sed '4d' "$out/.config" | sha256sum | awk '{print $1}')"
+          printf 'BUSYBOX_PROFILE_RAW_SHA256=%s\n' "$raw_hash"
+          printf 'BUSYBOX_PROFILE_SEMANTIC_SHA256=%s\n' "$semantic_hash"
           cp "$out/.config" "$work/generated.config"
           grep '^CONFIG_STATIC=' "$out/.config" || true
           grep '^CONFIG_ASH=' "$out/.config" || true
           grep '^CONFIG_FEATURE_SH_STANDALONE=' "$out/.config" || true
-          test "$hash" = "5977f8e325530d35a9ee4a332b2531e85705f2216279b79090baaebd3cbaf809"
-          echo "BUSYBOX_PROFILE=PASS version=1.38.0 static=1"
+          test "$semantic_hash" = "b91289642e1d03d897b019d5d9a5a0b42734ea280dfddc402539b0d35f461e0d"
+          grep -q '^CONFIG_STATIC=y
+
+      - name: Preserve profile evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: minild-busybox-profile
+          path: build/minild-busybox-profile/generated.config
+          if-no-files-found: ignore
+          retention-days: 3
+ "$out/.config"
+          grep -q '^CONFIG_ASH=y
+
+      - name: Preserve profile evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: minild-busybox-profile
+          path: build/minild-busybox-profile/generated.config
+          if-no-files-found: ignore
+          retention-days: 3
+ "$out/.config"
+          echo "BUSYBOX_PROFILE=PASS version=1.38.0 semantic_match=1 static=1"
 
       - name: Preserve profile evidence
         if: always()
