@@ -13,6 +13,7 @@ permissions:
 
 jobs:
   seed:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[static-bootstrap]')
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
@@ -88,6 +89,7 @@ jobs:
           compression-level: 6
 
   replay:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[static-bootstrap]')
     needs: seed
     runs-on: ubuntu-24.04
     timeout-minutes: 35
@@ -189,6 +191,7 @@ jobs:
           retention-days: 1
 
   stage2:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[static-bootstrap]')
     needs: [seed, replay]
     runs-on: ubuntu-24.04
     timeout-minutes: 45
