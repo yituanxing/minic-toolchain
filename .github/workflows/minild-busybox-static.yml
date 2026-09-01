@@ -121,6 +121,7 @@ jobs:
           : "${BUSYBOX_MUSL_SYSROOT:?}"
           : "${BUSYBOX_MUSL_BUILD:?}"
           : "${BUSYBOX_LIBGCC:?}"
+          : "${BUSYBOX_UAPI_COMPAT:?}"
           compile=0
           for arg in "$@"; do
             case "$arg" in
@@ -130,6 +131,7 @@ jobs:
           if test "$compile" -eq 1; then
             exec riscv64-linux-gnu-gcc \
               --sysroot="$BUSYBOX_MUSL_SYSROOT" \
+              -I"$BUSYBOX_UAPI_COMPAT" \
               -fno-pic -fno-pie "$@"
           fi
 
@@ -160,6 +162,10 @@ jobs:
           export BUSYBOX_MUSL_SYSROOT="$sysroot"
           export BUSYBOX_MUSL_BUILD="$musl"
           export BUSYBOX_LIBGCC="$libgcc"
+          export BUSYBOX_UAPI_COMPAT="$GITHUB_WORKSPACE/tests/linker/fixtures/busybox-uapi"
+          grep -q '^#define TCA_CBQ_MAX ' "$BUSYBOX_UAPI_COMPAT/linux/pkt_sched.h"
+          grep -q '^struct tc_cbq_lssopt {' "$BUSYBOX_UAPI_COMPAT/linux/pkt_sched.h"
+          echo "BUSYBOX_UAPI_CBQ=PASS source=D028-frozen-sysroot"
 
           started=$(date +%s)
           make -C "$src" O="$out" -j4 V=1 \
