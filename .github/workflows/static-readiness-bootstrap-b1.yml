@@ -1,0 +1,328 @@
+name: Static Readiness Bootstrap B1
+
+on:
+  push:
+    branches:
+      - "toolchain/static-readiness"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# B1 acceptance: sharded exact Stage1 -> Stage2 fixed point.
+
+jobs:
+  seed:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Install RV64 runtime toolchain
+        run: |
+          sudo apt-get -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            gcc-riscv64-linux-gnu libc6-dev-riscv64-cross qemu-user \
+            ca-certificates make file
+
+      - name: Build host Stage0 MiniC
+        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/static-readiness-b1-stage0
+
+      - name: Build Stage1 seed and fixed-point manifest
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          stage0="$GITHUB_WORKSPACE/build/static-readiness-b1-stage0/bin/minic"
+          work="$GITHUB_WORKSPACE/build/static-readiness-b1-seed"
+          mkdir -p "$work/i" "$work/s"
+          : >"$work/stage0-manifest.tsv"
+          : >"$work/stage1-asm-list.txt"
+
+          total=$(grep -cv '^[[:space:]]*$' tests/compiler/bootstrap/b0-sources.txt)
+          passed=0
+          while IFS= read -r source; do
+            test -n "$source" || continue
+            key=$(printf '%s' "$source" | tr '/.' '__')
+            pre="$work/i/$key.i"
+            asm="$work/s/$key.s"
+
+            riscv64-linux-gnu-gcc -E -P -std=c11 -Iinclude -Isrc "$source" -o "$pre"
+            CORE_FAST_TRACE=1 "$stage0" -S "$pre" -o "$asm"
+            hash=$(sha256sum "$asm" | awk '{print $1}')
+            printf '%s\t%s\t%s\n' "$key" "$source" "$hash" >>"$work/stage0-manifest.tsv"
+            printf '%s ' "$asm" >>"$work/stage1-asm-list.txt"
+            passed=$((passed + 1))
+            echo "BOOTSTRAP_B1_STAGE0_TU source=$source completed=$passed/$total"
+          done < tests/compiler/bootstrap/b0-sources.txt
+          echo >>"$work/stage1-asm-list.txt"
+
+          asm_inputs=$(cat "$work/stage1-asm-list.txt")
+          riscv64-linux-gnu-gcc -static $asm_inputs -o "$work/minic-stage1-rv64"
+          file "$work/minic-stage1-rv64"
+          echo "BOOTSTRAP_B1_STAGE1_LINK=PASS selected=$total pass=$passed head=$GITHUB_SHA"
+
+          riscv64-linux-gnu-gcc -E -P -x c tests/compiler/c0/return_42.c -o "$work/return_42.i"
+          qemu-riscv64 "$work/minic-stage1-rv64" -S "$work/return_42.i" -o "$work/return_42.stage1.s"
+          riscv64-linux-gnu-gcc -static "$work/return_42.stage1.s" -o "$work/return_42.stage1.elf"
+          set +e
+          qemu-riscv64 "$work/return_42.stage1.elf"
+          status=$?
+          set -e
+          test "$status" -eq 42
+          echo "BOOTSTRAP_B1_STAGE1_EXEC=PASS return_42=$status head=$GITHUB_SHA"
+
+      - name: Upload Stage1 seed
+        uses: actions/upload-artifact@v4
+        with:
+          name: static-readiness-b1-seed
+          path: |
+            build/static-readiness-b1-seed/minic-stage1-rv64
+            build/static-readiness-b1-seed/i
+            build/static-readiness-b1-seed/stage0-manifest.tsv
+            build/static-readiness-b1-seed/return_42.i
+            build/static-readiness-b1-seed/return_42.stage1.s
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 6
+
+  replay:
+    needs: seed
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      max-parallel: 16
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Install QEMU user runtime
+        run: |
+          sudo apt-get -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends qemu-user
+
+      - name: Download Stage1 seed
+        uses: actions/download-artifact@v4
+        with:
+          name: static-readiness-b1-seed
+          path: build/static-readiness-b1-seed
+
+      - name: Recompile fixed-point shard
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          seed="$GITHUB_WORKSPACE/build/static-readiness-b1-seed"
+          test -s "$seed/minic-stage1-rv64"
+          test -s "$seed/stage0-manifest.tsv"
+          chmod +x "$seed/minic-stage1-rv64"
+          file "$seed/minic-stage1-rv64"
+          work="$GITHUB_WORKSPACE/build/static-readiness-b1-shard"
+          shard=${{ matrix.shard }}
+          shards=16
+          mkdir -p "$work/s2" "$work/logs"
+
+          selected=0
+          passed=0
+          while IFS=$'\t' read -r key source expected; do
+            test -n "$key" || continue
+            index=$selected
+            selected=$((selected + 1))
+            if test $((index % shards)) -ne "$shard"; then
+              continue
+            fi
+
+            pre="$seed/i/$key.i"
+            test -s "$pre"
+            out="$work/s2/$key.s"
+            err="$work/logs/$key.stderr"
+            begin=$(date +%s)
+            echo "BOOTSTRAP_B1_REPLAY_BEGIN shard=$shard index=$index key=$key source=$source"
+            set +e
+            MINIC_BOOTSTRAP_TRACE=1 timeout 1200 \
+              qemu-riscv64 "$seed/minic-stage1-rv64" -S "$pre" -o "$out" \
+              >"$work/logs/$key.stdout" 2>"$err"
+            status=$?
+            set -e
+            end=$(date +%s)
+            elapsed=$((end - begin))
+            if test "$status" -ne 0; then
+              echo "BOOTSTRAP_B1_REPLAY_BLOCKER shard=$shard index=$index key=$key source=$source status=$status elapsed_s=$elapsed" >&2
+              sed -n '1,200p' "$err" >&2 || true
+              exit "$status"
+            fi
+
+            actual=$(sha256sum "$out" | awk '{print $1}')
+            if test "$actual" != "$expected"; then
+              echo "BOOTSTRAP_B1_FIXED_POINT_MISMATCH shard=$shard index=$index key=$key source=$source expected=$expected actual=$actual elapsed_s=$elapsed" >&2
+              exit 1
+            fi
+            passed=$((passed + 1))
+            echo "BOOTSTRAP_B1_REPLAY_PASS shard=$shard index=$index key=$key source=$source elapsed_s=$elapsed"
+          done <"$seed/stage0-manifest.tsv"
+
+          echo "BOOTSTRAP_B1_SHARD=PASS shard=$shard pass=$passed head=$GITHUB_SHA"
+
+      - name: Upload Stage1-generated assembly shard
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: static-readiness-b1-s2-${{ matrix.shard }}
+          path: build/static-readiness-b1-shard/s2/*.s
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 6
+
+      - name: Preserve replay blocker
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: static-readiness-b1-blocker-${{ matrix.shard }}
+          path: |
+            build/static-readiness-b1-shard/logs
+            build/static-readiness-b1-shard/s2
+          if-no-files-found: ignore
+          retention-days: 1
+
+  stage2:
+    needs: [seed, replay]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Install RV64 runtime toolchain
+        run: |
+          sudo apt-get -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            gcc-riscv64-linux-gnu libc6-dev-riscv64-cross qemu-user file
+
+      - name: Download Stage1 seed
+        uses: actions/download-artifact@v4
+        with:
+          name: static-readiness-b1-seed
+          path: build/static-readiness-b1-seed
+
+      - name: Download every Stage1 assembly shard
+        uses: actions/download-artifact@v4
+        with:
+          pattern: static-readiness-b1-s2-*
+          path: build/bootstrap-b1-s2
+          merge-multiple: true
+
+      - name: Link Stage2 and require binary fixed point
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          seed="$GITHUB_WORKSPACE/build/static-readiness-b1-seed"
+          test -s "$seed/minic-stage1-rv64"
+          chmod +x "$seed/minic-stage1-rv64"
+          s2="$GITHUB_WORKSPACE/build/bootstrap-b1-s2"
+          work="$GITHUB_WORKSPACE/build/static-readiness-b1-stage2"
+          mkdir -p "$work"
+          asm_inputs=""
+          selected=0
+
+          while IFS=$'\t' read -r key source expected; do
+            test -n "$key" || continue
+            asm="$s2/$key.s"
+            test -s "$asm"
+            actual=$(sha256sum "$asm" | awk '{print $1}')
+            test "$actual" = "$expected"
+            asm_inputs="$asm_inputs $asm"
+            selected=$((selected + 1))
+          done <"$seed/stage0-manifest.tsv"
+
+          test "$selected" -eq 46
+          riscv64-linux-gnu-gcc -static $asm_inputs -o "$work/minic-stage2-rv64"
+          file "$work/minic-stage2-rv64"
+
+          sha256sum "$seed/minic-stage1-rv64" "$work/minic-stage2-rv64"
+
+          # The 46 Stage1-produced assembly files are already required to be
+          # byte-identical to Stage0.  A raw ELF cmp can still differ in
+          # non-loadable linker metadata because Stage1 and Stage2 assemblies
+          # live under different temporary directories.  Compare the actual
+          # loadable machine image separately and keep raw-ELF metadata
+          # divergence observable rather than weakening the semantic gate.
+          riscv64-linux-gnu-objcopy -O binary             "$seed/minic-stage1-rv64" "$work/minic-stage1.load.bin"
+          riscv64-linux-gnu-objcopy -O binary             "$work/minic-stage2-rv64" "$work/minic-stage2.load.bin"
+          cmp "$work/minic-stage1.load.bin" "$work/minic-stage2.load.bin"
+
+          if cmp -s "$seed/minic-stage1-rv64" "$work/minic-stage2-rv64"; then
+            elf_fixed=exact
+          else
+            elf_fixed=metadata-only-difference
+            first_diff=$(cmp -l "$seed/minic-stage1-rv64" "$work/minic-stage2-rv64" | head -n 1 || true)
+            echo "BOOTSTRAP_B1_ELF_METADATA_DIFFERENCE first=$first_diff"
+            riscv64-linux-gnu-readelf -n "$seed/minic-stage1-rv64" >"$work/stage1.notes.txt" || true
+            riscv64-linux-gnu-readelf -n "$work/minic-stage2-rv64" >"$work/stage2.notes.txt" || true
+            diff -u "$work/stage1.notes.txt" "$work/stage2.notes.txt" || true
+          fi
+
+          sha256sum "$work/minic-stage1.load.bin" "$work/minic-stage2.load.bin"
+          echo "BOOTSTRAP_B1_FIXED_POINT=PASS selected=$selected asm=exact load_image=exact elf=$elf_fixed head=$GITHUB_SHA"
+
+      - name: Execute Stage2 compiler smoke
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          seed="$GITHUB_WORKSPACE/build/static-readiness-b1-seed"
+          work="$GITHUB_WORKSPACE/build/static-readiness-b1-stage2"
+          qemu-riscv64 "$work/minic-stage2-rv64" -S "$seed/return_42.i" -o "$work/return_42.stage2.s"
+          cmp "$seed/return_42.stage1.s" "$work/return_42.stage2.s"
+          riscv64-linux-gnu-gcc -static "$work/return_42.stage2.s" -o "$work/return_42.stage2.elf"
+          set +e
+          qemu-riscv64 "$work/return_42.stage2.elf"
+          status=$?
+          set -e
+          test "$status" -eq 42
+          echo "BOOTSTRAP_B1_STAGE2_EXEC=PASS return_42=$status head=$GITHUB_SHA"
+
+      - name: Run target runtime through Stage2
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/static-readiness-b1-stage2"
+          wrapper="$work/minic-stage2"
+          cat >"$wrapper" <<EOF
+          #!/bin/sh
+          exec qemu-riscv64 "$work/minic-stage2-rv64" "\$@"
+          EOF
+          chmod +x "$wrapper"
+
+          MINIC="$wrapper" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/static-readiness-b1-runtime-c0" \
+          RISCV_CC=riscv64-linux-gnu-gcc \
+          QEMU_RISCV64=qemu-riscv64 \
+          REQUIRE_RISCV_RUNTIME=1 \
+            sh tests/compiler/c0/run-runtime.sh
+
+          MINIC="$wrapper" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/static-readiness-b1-runtime-programs" \
+          RISCV_CC=riscv64-linux-gnu-gcc \
+          RISCV_OBJDUMP=riscv64-linux-gnu-objdump \
+          QEMU_RISCV64=qemu-riscv64 \
+          REQUIRE_RISCV_RUNTIME=1 \
+            sh tests/programs/c0/run.sh
+
+          echo "BOOTSTRAP_B1_STAGE2_RUNTIME=PASS head=$GITHUB_SHA"
+          echo "STATIC_READINESS_BOOTSTRAP=PASS stage0_to_stage1=PASS asm_fixed_point=exact load_image=exact stage2_runtime=PASS head=$GITHUB_SHA"
+
+      - name: Upload frozen Stage2 compiler
+        uses: actions/upload-artifact@v4
+        with:
+          name: static-readiness-b1-stage2
+          path: |
+            build/static-readiness-b1-stage2/minic-stage2-rv64
+            build/static-readiness-b1-seed/minic-stage1-rv64
+            build/static-readiness-b1-seed/stage0-manifest.tsv
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 6
