@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - "toolchain/minild-sqlite-static"
+      - "toolchain/static-readiness"
   workflow_dispatch:
 
 permissions:
@@ -11,6 +12,7 @@ permissions:
 
 jobs:
   sqlite-static:
+    if: github.event_name == 'workflow_dispatch' || github.ref_name == 'toolchain/minild-sqlite-static' || contains(github.event.head_commit.message, '[static-sqlite]')
     runs-on: ubuntu-24.04
     timeout-minutes: 50
     steps:
