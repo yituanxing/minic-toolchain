@@ -1951,6 +1951,7 @@ typedef struct MinicParsedDeclarationPrefix {
     bool is_static;
     bool is_register;
     bool is_inline;
+    bool is_noreturn;
 } MinicParsedDeclarationPrefix;
 
 static bool parse_declaration_prefix(MinicParser *parser,
@@ -2007,6 +2008,17 @@ static bool parse_declaration_prefix(MinicParser *parser,
                 return false;
             }
             prefix->is_inline = true;
+            if (!minic_parser_advance(parser)) {
+                return false;
+            }
+            continue;
+        }
+        if (function_identifier_is(parser, "_Noreturn")) {
+            if (prefix->is_noreturn) {
+                minic_parser_error(parser, "duplicate _Noreturn declaration specifier");
+                return false;
+            }
+            prefix->is_noreturn = true;
             if (!minic_parser_advance(parser)) {
                 return false;
             }
@@ -2195,6 +2207,7 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
     bool is_function_pointer_object;
     bool has_preparsed_function_parameters;
     bool is_inline;
+    bool is_noreturn;
     bool is_register_declaration;
     bool is_static_declaration;
     bool is_main;
@@ -2218,6 +2231,7 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
     is_function_pointer_object = false;
     has_preparsed_function_parameters = false;
     is_inline = false;
+    is_noreturn = false;
     is_register_declaration = false;
     is_static_declaration = false;
     (void)memset(&deferred_attributes, 0, sizeof(deferred_attributes));
@@ -2249,6 +2263,7 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
     is_register_declaration = declaration_prefix.is_register;
     is_internal = declaration_prefix.is_static;
     is_inline = declaration_prefix.is_inline;
+    is_noreturn = declaration_prefix.is_noreturn;
     if (!has_visibility && !is_internal && !is_register_declaration &&
         parser->default_visibility != MINIC_SYMBOL_VISIBILITY_DEFAULT) {
         visibility = parser->default_visibility;
@@ -2495,6 +2510,10 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
             minic_parser_error(parser, "inline specifier requires a function declarator");
             return false;
         }
+        if (is_noreturn) {
+            minic_parser_error(parser, "_Noreturn specifier requires a function declarator");
+            return false;
+        }
         if (!minic_parser_apply_object_attribute_list(parser,
                                                       &deferred_attributes,
                                                       section_name,
@@ -2556,6 +2575,10 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
         (is_function_pointer_object || parser->current.kind != MINIC_TOKEN_LPAREN)) {
         if (is_inline) {
             minic_parser_error(parser, "inline specifier requires a function declarator");
+            return false;
+        }
+        if (is_noreturn) {
+            minic_parser_error(parser, "_Noreturn specifier requires a function declarator");
             return false;
         }
         if (!minic_parser_apply_object_attribute_list_with_symbol_metadata(
