@@ -103,12 +103,14 @@ int main(int argc, char **argv) {
                 return 2;
             }
             inputs[input_count].path = argv[i];
-            if (whole_archive) {
-                inputs[input_count].kind = MINILD_INPUT_WHOLE_ARCHIVE;
-            } else if (group_mode) {
-                inputs[input_count].kind = MINILD_INPUT_GROUP_ARCHIVE;
-            } else if (has_archive_suffix(argv[i])) {
-                inputs[input_count].kind = MINILD_INPUT_ARCHIVE;
+            if (has_archive_suffix(argv[i])) {
+                if (whole_archive) {
+                    inputs[input_count].kind = MINILD_INPUT_WHOLE_ARCHIVE;
+                } else if (group_mode) {
+                    inputs[input_count].kind = MINILD_INPUT_GROUP_ARCHIVE;
+                } else {
+                    inputs[input_count].kind = MINILD_INPUT_ARCHIVE;
+                }
             } else {
                 inputs[input_count].kind = MINILD_INPUT_OBJECT;
             }
