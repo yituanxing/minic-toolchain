@@ -2882,13 +2882,10 @@ static bool static_relax_align_section(MiniLdState *state,
 
         events[event_count].raw_end = raw_offset + max_padding;
         events[event_count].cumulative_deleted =
-            events[event_count == 0U ? 0U : event_count - 1U].
-                cumulative_deleted +
+            (event_count == 0U
+                 ? 0U
+                 : events[event_count - 1U].cumulative_deleted) +
             (max_padding - required);
-        if (event_count == 0U) {
-            events[event_count].cumulative_deleted =
-                max_padding - required;
-        }
         ++event_count;
         cursor = raw_offset + max_padding;
     }
