@@ -1,0 +1,208 @@
+name: Static Readiness Toolchain Selfhost
+
+on:
+  push:
+    branches:
+      - "toolchain/static-readiness"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  resolve-stage2:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[static-toolchain-selfhost]')
+    runs-on: ubuntu-24.04
+    outputs:
+      run_id: ${{ steps.resolve.outputs.run_id }}
+    steps:
+      - name: Resolve successful static Stage2
+        id: resolve
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          run_id=$(gh api             "repos/$GITHUB_REPOSITORY/actions/workflows/static-readiness-bootstrap-b1.yml/runs?branch=toolchain%2Fstatic-readiness&status=success&per_page=20"             --jq '.workflow_runs[] | select(.conclusion=="success") | .id' | head -n1)
+          test -n "$run_id"
+          echo "run_id=$run_id" >>"$GITHUB_OUTPUT"
+          echo "STATIC_TOOLCHAIN_SELFHOST_STAGE2_SOURCE=$run_id"
+
+  selfhost-tools:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[static-toolchain-selfhost]')
+    needs: resolve-stage2
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Install RV64 build/runtime prerequisites
+        run: |
+          sudo apt-get -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends build-essential gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu qemu-user curl ca-certificates
+
+      - name: Download bootstrapped Stage2 compiler
+        uses: actions/download-artifact@v4
+        with:
+          name: static-readiness-b1-stage2
+          path: build/static-toolchain-selfhost/stage2
+          repository: ${{ github.repository }}
+          run-id: ${{ needs.resolve-stage2.outputs.run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Build current host MiniAS and MiniLD
+        run: |
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/static-toolchain-host all
+          test -x build/static-toolchain-host/bin/minic-as
+          test -x build/static-toolchain-host/bin/minic-ld
+
+      - name: Build pristine musl 1.2.5 static producer
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/static-toolchain-selfhost"
+          mkdir -p "$work"
+          curl -fsSL https://musl.libc.org/releases/musl-1.2.5.tar.gz -o "$work/musl-1.2.5.tar.gz"
+          printf '%s  %s\n'             a9a118bbe84d8764da0ea0d28b3ab3fae8477fc7e4085d90102b8596fc7c75e4             "$work/musl-1.2.5.tar.gz" | sha256sum -c -
+          tar -xzf "$work/musl-1.2.5.tar.gz" -C "$work"
+          src="$work/musl-1.2.5"
+          out="$work/musl-build"
+          sysroot="$work/musl-sysroot"
+          mkdir -p "$out" "$sysroot"
+          cd "$out"
+          CFLAGS="-O2 -fno-pic -fno-pie"           CC=riscv64-linux-gnu-gcc           AR=riscv64-linux-gnu-ar           RANLIB=riscv64-linux-gnu-ranlib             "$src/configure" --target=riscv64-linux-gnu --disable-shared --prefix=/usr
+          make -j4
+          make DESTDIR="$sysroot" install-headers
+          test -s lib/libc.a
+          test -s obj/crt/crt1.o
+          test -s obj/crt/crti.o
+          test -s obj/crt/crtn.o
+          echo "STATIC_TOOLCHAIN_SELFHOST_MUSL=PASS objects=$(find obj -type f -name '*.o' | wc -l)"
+
+      - name: Compile PP AS AR LD through Stage2 and MiniAS
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/static-toolchain-selfhost"
+          stage2=$(find "$work/stage2" -type f -name minic-stage2-rv64 -print -quit)
+          test -s "$stage2"
+          chmod +x "$stage2"
+          minias="$GITHUB_WORKSPACE/build/static-toolchain-host/bin/minic-as"
+          mkdir -p "$work/i" "$work/s" "$work/o"
+
+          compile_one() {
+            tool="$1"
+            includes="$2"
+            source="$3"
+            key=$(printf '%s' "$source" | tr '/.' '__')
+            pre="$work/i/$tool-$key.i"
+            asm="$work/s/$tool-$key.s"
+            obj="$work/o/$tool-$key.o"
+
+            riscv64-linux-gnu-gcc               --sysroot="$work/musl-sysroot"               -E -P -std=c11 $includes "$source" -o "$pre"
+            qemu-riscv64 "$stage2" -S "$pre" -o "$asm"
+            "$minias" -o "$obj" "$asm"
+            test -s "$obj"
+            printf '%s\n' "$obj"
+          }
+
+          : >"$work/cpp.objects"
+          for source in             preprocessor/src/file_buffer.c             preprocessor/src/expression.c             preprocessor/src/include.c             preprocessor/src/token.c             preprocessor/src/preprocessor.c             tools/minic-cpp/main.c
+          do
+            compile_one cpp "-Ipreprocessor/include -Ipreprocessor/src" "$source" >>"$work/cpp.objects"
+          done
+
+          : >"$work/as.objects"
+          for source in             assembler/src/assembler.c             assembler/src/expression.c             assembler/src/riscv_encode.c             assembler/src/string_literal.c             assembler/src/elf_writer.c             tools/minic-as/main.c
+          do
+            compile_one as "-Iassembler/src" "$source" >>"$work/as.objects"
+          done
+
+          : >"$work/ar.objects"
+          for source in archiver/src/archive.c tools/minic-ar/main.c
+          do
+            compile_one ar "-Iarchiver/include" "$source" >>"$work/ar.objects"
+          done
+
+          : >"$work/ld.objects"
+          for source in linker/src/linker.c tools/minic-ld/main.c
+          do
+            compile_one ld "-Ilinker/include" "$source" >>"$work/ld.objects"
+          done
+
+          printf 'STATIC_TOOLCHAIN_SELFHOST_COMPILE=PASS cpp=%s as=%s ar=%s ld=%s\n'             "$(wc -l <"$work/cpp.objects")"             "$(wc -l <"$work/as.objects")"             "$(wc -l <"$work/ar.objects")"             "$(wc -l <"$work/ld.objects")"
+
+      - name: Link self-hosted tools with current MiniLD
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/static-toolchain-selfhost"
+          musl="$work/musl-build"
+          minild="$GITHUB_WORKSPACE/build/static-toolchain-host/bin/minic-ld"
+          libgcc="$(riscv64-linux-gnu-gcc -print-libgcc-file-name)"
+          mkdir -p "$work/bin"
+
+          link_tool() {
+            tool="$1"
+            objects=$(tr '\n' ' ' <"$work/$tool.objects")
+            "$minild" -melf64lriscv -static -e _start               -o "$work/bin/minic-$tool"               "$musl/obj/crt/crt1.o" "$musl/obj/crt/crti.o"               $objects               --start-group "$musl/lib/libc.a" "$libgcc" --end-group               "$musl/obj/crt/crtn.o"
+            test -s "$work/bin/minic-$tool"
+          }
+
+          link_tool cpp
+          link_tool as
+          link_tool ar
+          link_tool ld
+          echo "STATIC_TOOLCHAIN_SELFHOST_LINK=PASS tools=4"
+
+      - name: Run self-hosted tool functional smoke
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/static-toolchain-selfhost"
+          cpp="$work/bin/minic-cpp"
+          as="$work/bin/minic-as"
+          ar="$work/bin/minic-ar"
+          ld="$work/bin/minic-ld"
+
+          cat >"$work/selfhost.c" <<'C'
+          #define ANSWER 42
+          int value = ANSWER;
+          C
+          qemu-riscv64 "$cpp" -E -P -undef -nostdinc "$work/selfhost.c" -o "$work/selfhost.i"
+          grep -q 'int value = 42;' "$work/selfhost.i"
+
+          cat >"$work/selfhost.s" <<'S'
+          .text
+          .globl selfhost_symbol
+          selfhost_symbol:
+            li a0, 42
+            ret
+          S
+          qemu-riscv64 "$as" -o "$work/selfhost.o" "$work/selfhost.s"
+          riscv64-linux-gnu-readelf -h "$work/selfhost.o" | grep -q 'REL (Relocatable file)'
+
+          qemu-riscv64 "$ar" rcsD "$work/selfhost.a" "$work/selfhost.o"
+          qemu-riscv64 "$ar" t "$work/selfhost.a" >"$work/ar-list.txt"
+          grep -q 'selfhost.o' "$work/ar-list.txt"
+
+          qemu-riscv64 "$ld" -melf64lriscv -r -o "$work/selfhost-merged.o" "$work/selfhost.o"
+          riscv64-linux-gnu-readelf -h "$work/selfhost-merged.o" | grep -q 'REL (Relocatable file)'
+
+          echo "STATIC_TOOLCHAIN_SELFHOST=PASS compiler=stage2 pp=PASS as=PASS ar=PASS ld=PASS"
+
+      - name: Preserve selfhost evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: static-toolchain-selfhost-evidence
+          path: |
+            build/static-toolchain-selfhost/*.objects
+            build/static-toolchain-selfhost/ar-list.txt
+            build/static-toolchain-selfhost/selfhost.i
+            build/static-toolchain-selfhost/bin/
+          if-no-files-found: ignore
+          retention-days: 3
