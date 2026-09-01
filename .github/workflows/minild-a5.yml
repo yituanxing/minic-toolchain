@@ -1,0 +1,40 @@
+name: MiniLD A5 Dynamic PLT Runtime
+
+on:
+  push:
+    branches:
+      - "toolchain/minild-dynamic-a5"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  minild-a5:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Install RISC-V dynamic runtime oracle
+        run: |
+          sudo apt-get -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            build-essential gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
+            libc6-riscv64-cross libc6-dev-riscv64-cross qemu-user
+
+      - name: Build MiniLD with strict warnings
+        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/minild-a5 all
+
+      - name: Keep A0-A4 green
+        run: |
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/minild-a5 check-minild-a0
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/minild-a5 check-minild-a1
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/minild-a5 check-minild-a2
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/minild-a5 check-minild-a3
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/minild-a5 check-minild-a4
+
+      - name: Run PLT JUMP_SLOT runtime gate
+        run: make MODE=release CFLAGS=-Werror BUILD_DIR=build/minild-a5 check-minild-a5
