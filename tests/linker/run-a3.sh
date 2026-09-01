@@ -191,7 +191,7 @@ grep -q 'R_RISCV_GOT_HI20' "$work/got.relocations"
   "$work/libmini_runtime.a"
 
 "$MINILD" -melf64lriscv -static -e _start -o "$work/product" \
-  "$work/start.o" "$work/bounds.o" "$work/probe.o" \
+  "$work/start.o" "$work/bounds.o" "$work/got.o" "$work/probe.o" \
   "$work/libmini_runtime.a"
 
 set +e
