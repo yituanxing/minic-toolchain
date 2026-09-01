@@ -1,0 +1,133 @@
+name: Static Readiness Linux Final Link
+
+on:
+  push:
+    branches:
+      - "toolchain/static-readiness"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  linux-final:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Install Linux build prerequisites
+        run: |
+          sudo apt-get -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends             build-essential gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu             bc bison flex libssl-dev libelf-dev make curl xz-utils file
+
+      - name: Build MiniLD and static gates
+        run: |
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/static-linux-final all
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/static-linux-final check-minild-a0
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/static-linux-final check-minild-a1
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/static-linux-final check-minild-a2
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/static-linux-final check-minild-a3
+
+      - name: Prepare Linux 6.6.143
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/static-linux-final-work"
+          archive="$work/linux-6.6.143.tar.xz"
+          src="$work/linux-6.6.143"
+          out="$work/out"
+          mkdir -p "$work"
+          curl -fsSL https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.6.143.tar.xz -o "$archive"
+          printf '%s  %s\n'             dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932             "$archive" | sha256sum -c -
+          tar -xJf "$archive" -C "$work"
+          make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- defconfig
+
+      - name: Install final-vmlinux-only MiniLD wrapper
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/static-linux-final-work"
+          wrapper="$work/riscv64-linux-gnu-ld-static-final"
+          cat >"$wrapper" <<'SH'
+          #!/usr/bin/env bash
+          set -Eeuo pipefail
+          : "${MINILD:?MINILD is not set}"
+          : "${MINILD_TRACE:?MINILD_TRACE is not set}"
+          args=("$@")
+          output=
+          for ((i=0; i<${#args[@]}; ++i)); do
+            if [[ "${args[i]}" == "-o" && $((i+1)) -lt ${#args[@]} ]]; then
+              output="${args[i+1]}"
+              break
+            fi
+          done
+          case "$output" in
+            .tmp_vmlinux.kallsyms1|.tmp_vmlinux.kallsyms2|vmlinux)
+              {
+                printf 'minild'
+                printf ' %q' "$@"
+                printf '\n'
+              } >>"$MINILD_TRACE"
+              exec "$MINILD" "$@"
+              ;;
+            *)
+              {
+                printf 'gnu-ld'
+                printf ' %q' "$@"
+                printf '\n'
+              } >>"$MINILD_TRACE"
+              exec /usr/bin/riscv64-linux-gnu-ld "$@"
+              ;;
+          esac
+          SH
+          chmod +x "$wrapper"
+          : >"$work/minild.trace"
+
+      - name: Build Linux Image with MiniLD final-vmlinux boundary
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/static-linux-final-work"
+          src="$work/linux-6.6.143"
+          out="$work/out"
+          wrapper="$work/riscv64-linux-gnu-ld-static-final"
+          export MINILD="$GITHUB_WORKSPACE/build/static-linux-final/bin/minic-ld"
+          export MINILD_TRACE="$work/minild.trace"
+
+          set +e
+          make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu-             LD="$wrapper" -j4 Image >"$work/kbuild.log" 2>&1
+          status=$?
+          set -e
+
+          cp "$out/arch/riscv/kernel/vmlinux.lds" "$work/vmlinux.lds" 2>/dev/null || true
+          grep '^minild ' "$work/minild.trace" >"$work/minild-final.trace" || true
+          if test "$status" -ne 0; then
+            echo "STATIC_LINUX_FINAL_FRONTIER=FAIL status=$status" >&2
+            tail -n 120 "$work/kbuild.log" >&2 || true
+            exit "$status"
+          fi
+
+          test -s "$out/vmlinux"
+          test -s "$out/arch/riscv/boot/Image"
+          test "$(grep -c '^minild ' "$work/minild.trace")" -eq 3
+          riscv64-linux-gnu-readelf -h "$out/vmlinux" >"$work/vmlinux.header"
+          riscv64-linux-gnu-readelf -l "$out/vmlinux" >"$work/vmlinux.programs"
+          printf 'STATIC_LINUX_FINAL=PASS minild_final_calls=3 vmlinux_bytes=%s image_bytes=%s head=%s\n'             "$(stat -c %s "$out/vmlinux")"             "$(stat -c %s "$out/arch/riscv/boot/Image")" "$GITHUB_SHA"
+
+      - name: Preserve final-link frontier
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: static-linux-final-frontier
+          path: |
+            build/static-linux-final-work/minild.trace
+            build/static-linux-final-work/minild-final.trace
+            build/static-linux-final-work/kbuild.log
+            build/static-linux-final-work/vmlinux.lds
+            build/static-linux-final-work/vmlinux.header
+            build/static-linux-final-work/vmlinux.programs
+          if-no-files-found: ignore
+          retention-days: 3
