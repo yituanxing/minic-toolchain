@@ -161,11 +161,11 @@ EOF
 
 "$LD" -melf64lriscv -static -e _start -o "$work/reference" \
   "$work/start.o" "$work/bounds.o" "$work/probe.o" \
-  --start-group "$work/libmini_runtime.a" --end-group
+  "$work/libmini_runtime.a"
 
 "$MINILD" -melf64lriscv -static -e _start -o "$work/product" \
   "$work/start.o" "$work/bounds.o" "$work/probe.o" \
-  --start-group "$work/libmini_runtime.a" --end-group
+  "$work/libmini_runtime.a"
 
 set +e
 "$QEMU" "$work/reference"
@@ -178,4 +178,4 @@ echo "MINILD_A3_DIAG reference_rc=$reference_rc product_rc=$product_rc archive_m
 test "$reference_rc" -eq 42
 test "$product_rc" -eq 42
 
-echo "MINILD_A3=PASS regular-archive=PASS symbol-less-member=PASS lazy-selection=PASS array-bounds=PASS malloc=PASS free=PASS qemu_rc=$product_rc"
+echo "MINILD_A3=PASS regular-archive=PASS ordinary-archive=PASS symbol-less-member=PASS lazy-selection=PASS array-bounds=PASS malloc=PASS free=PASS qemu_rc=$product_rc"
