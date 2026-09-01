@@ -8,6 +8,7 @@ AS=${RISCV_AS:-riscv64-linux-gnu-as}
 AR=${RISCV_AR:-riscv64-linux-gnu-ar}
 LD=${RISCV_LD:-riscv64-linux-gnu-ld}
 OBJCOPY=${RISCV_OBJCOPY:-riscv64-linux-gnu-objcopy}
+READELF=${RISCV_READELF:-riscv64-linux-gnu-readelf}
 QEMU=${QEMU_RISCV64:-qemu-riscv64}
 
 work="$BUILD_DIR/tests/linker/a3"
@@ -62,6 +63,26 @@ runtime_init_stub:
 .size runtime_init_stub, .-runtime_init_stub
 EOF
 
+cat >"$work/got.s" <<'EOF'
+.option pic
+.text
+.globl got_probe
+.type got_probe, @function
+got_probe:
+  la t0, got_value
+  ld a0, 0(t0)
+  ret
+.size got_probe, .-got_probe
+
+.data
+.align 3
+.globl got_value
+.type got_value, @object
+got_value:
+  .dword 42
+.size got_value, 8
+EOF
+
 cat >"$work/probe.s" <<'EOF'
 .text
 .globl runtime_malloc_free_probe
@@ -71,6 +92,9 @@ runtime_malloc_free_probe:
   sd ra, 8(sp)
   call check_array_bounds
   bnez a0, 1f
+  call got_probe
+  li t0, 42
+  bne a0, t0, 1f
   li a0, 32
   call malloc
   beqz a0, 1f
@@ -132,6 +156,9 @@ EOF
 
 "$AS" -march=rv64gc -mabi=lp64d -o "$work/start.o" "$work/start.s"
 "$AS" -march=rv64gc -mabi=lp64d -o "$work/bounds.o" "$work/bounds.s"
+"$AS" -march=rv64gc -mabi=lp64d -o "$work/got.o" "$work/got.s"
+"$READELF" -Wr "$work/got.o" >"$work/got.relocations"
+grep -q 'R_RISCV_GOT_HI20' "$work/got.relocations"
 "$AS" -march=rv64gc -mabi=lp64d -o "$work/probe.o" "$work/probe.s"
 "$AS" -march=rv64gc -mabi=lp64d \
   -o "$work/runtime/runtime_malloc_allocator_member.o" \
@@ -160,7 +187,7 @@ EOF
 )
 
 "$LD" -melf64lriscv -static -e _start -o "$work/reference" \
-  "$work/start.o" "$work/bounds.o" "$work/probe.o" \
+  "$work/start.o" "$work/bounds.o" "$work/got.o" "$work/probe.o" \
   "$work/libmini_runtime.a"
 
 "$MINILD" -melf64lriscv -static -e _start -o "$work/product" \
@@ -178,4 +205,4 @@ echo "MINILD_A3_DIAG reference_rc=$reference_rc product_rc=$product_rc archive_m
 test "$reference_rc" -eq 42
 test "$product_rc" -eq 42
 
-echo "MINILD_A3=PASS regular-archive=PASS ordinary-archive=PASS symbol-less-member=PASS lazy-selection=PASS array-bounds=PASS malloc=PASS free=PASS qemu_rc=$product_rc"
+echo "MINILD_A3=PASS regular-archive=PASS ordinary-archive=PASS symbol-less-member=PASS lazy-selection=PASS array-bounds=PASS static-got=PASS malloc=PASS free=PASS qemu_rc=$product_rc"
