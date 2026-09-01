@@ -5041,6 +5041,14 @@ static bool shared_fill_dynamic(MiniLdState *state,
         MINILD_DYN(DT_RELASZ, state->sections[shared->rela_section].size);
         MINILD_DYN(DT_RELAENT, sizeof(Elf64_Rela));
     }
+    if (shared->plt_count != 0U) {
+        MINILD_DYN(DT_PLTGOT, layout->section_vaddr[shared->got_plt_section]);
+        MINILD_DYN(DT_PLTRELSZ,
+                   state->sections[shared->rela_plt_section].size);
+        MINILD_DYN(DT_PLTREL, DT_RELA);
+        MINILD_DYN(DT_JMPREL,
+                   layout->section_vaddr[shared->rela_plt_section]);
+    }
     if (shared->have_soname) {
         MINILD_DYN(DT_SONAME, shared->soname_offset);
     }
@@ -5218,6 +5226,9 @@ static bool shared_write_object(MiniLdState *state,
             sh->sh_link = (Elf64_Word)(shared->dynsym_section + 1U);
         } else if (i == shared->rela_section) {
             sh->sh_link = (Elf64_Word)(shared->dynsym_section + 1U);
+        } else if (i == shared->rela_plt_section) {
+            sh->sh_link = (Elf64_Word)(shared->dynsym_section + 1U);
+            sh->sh_info = (Elf64_Word)(shared->got_plt_section + 1U);
         } else if (i == shared->dynamic_section) {
             sh->sh_link = (Elf64_Word)(shared->dynstr_section + 1U);
         }
