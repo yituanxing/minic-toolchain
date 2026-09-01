@@ -4573,6 +4573,132 @@ static uint32_t shared_riscv_itype(unsigned opcode,
            (uint32_t)opcode;
 }
 
+
+static bool shared_patch_tls_gd(MiniLdState *state,
+                                const MiniLdStaticLayout *layout,
+                                const MiniLdSharedImage *shared) {
+    size_t capacity = pcrel_capacity_for(state->reloc_count);
+    MiniLdPcrelSlot *pcrel;
+    size_t i;
+
+    if (capacity == 0U) {
+        fprintf(state->diagnostics,
+                "minic-ld: shared-tls-pcrel-index-overflow\n");
+        return false;
+    }
+    pcrel = calloc(capacity, sizeof(*pcrel));
+    if (pcrel == NULL) {
+        fprintf(state->diagnostics,
+                "minic-ld: out-of-memory:shared-tls-pcrel\n");
+        return false;
+    }
+
+    for (i = 0U; i < state->reloc_count; ++i) {
+        MiniLdReloc *reloc = &state->relocs[i];
+        MiniLdSection *source;
+        uint64_t place;
+        uint64_t descriptor;
+        int64_t delta;
+
+        if (reloc->type != R_RISCV_TLS_GD_HI20) {
+            continue;
+        }
+        if (reloc->section >= state->section_count ||
+            reloc->symbol == SIZE_MAX ||
+            reloc->symbol >= state->symbol_count ||
+            shared->got_section >= state->section_count ||
+            shared->tls_gd_offset[reloc->symbol] == SIZE_MAX) {
+            fprintf(state->diagnostics,
+                    "minic-ld: invalid-shared-tls-gd-patch\n");
+            free(pcrel);
+            return false;
+        }
+
+        source = &state->sections[reloc->section];
+        place = layout->section_vaddr[reloc->section] + reloc->offset;
+        descriptor =
+            layout->section_vaddr[shared->got_section] +
+            (uint64_t)shared->tls_gd_offset[reloc->symbol];
+        delta = (int64_t)descriptor + reloc->addend - (int64_t)place;
+
+        if (!static_patch_utype(source,
+                                reloc->offset,
+                                riscv_hi20(delta),
+                                state->diagnostics)) {
+            free(pcrel);
+            return false;
+        }
+        pcrel_insert(pcrel,
+                     capacity,
+                     reloc->section,
+                     reloc->offset,
+                     delta);
+    }
+
+    for (i = 0U; i < state->reloc_count; ++i) {
+        MiniLdReloc *reloc = &state->relocs[i];
+        MiniLdSymbol *anchor_symbol;
+        MiniLdSection *source;
+        int64_t anchor_offset;
+        int64_t delta;
+
+        if (reloc->type != R_RISCV_PCREL_LO12_I &&
+            reloc->type != R_RISCV_PCREL_LO12_S) {
+            continue;
+        }
+        if (reloc->symbol == SIZE_MAX ||
+            reloc->symbol >= state->symbol_count) {
+            fprintf(state->diagnostics,
+                    "minic-ld: invalid-shared-tls-lo12-symbol\n");
+            free(pcrel);
+            return false;
+        }
+        anchor_symbol = &state->symbols[reloc->symbol];
+        if (anchor_symbol->section < 0 ||
+            (size_t)anchor_symbol->section >= state->section_count) {
+            fprintf(state->diagnostics,
+                    "minic-ld: invalid-shared-tls-lo12-anchor:%s\n",
+                    anchor_symbol->name);
+            free(pcrel);
+            return false;
+        }
+        anchor_offset =
+            (int64_t)anchor_symbol->value + reloc->addend;
+        if (anchor_offset < 0 ||
+            !pcrel_find(pcrel,
+                        capacity,
+                        (size_t)anchor_symbol->section,
+                        (uint64_t)anchor_offset,
+                        &delta)) {
+            fprintf(state->diagnostics,
+                    "minic-ld: missing-shared-tls-hi20-for-lo12:%s\n",
+                    anchor_symbol->name);
+            free(pcrel);
+            return false;
+        }
+
+        source = &state->sections[reloc->section];
+        if (reloc->type == R_RISCV_PCREL_LO12_I) {
+            if (!static_patch_itype(source,
+                                    reloc->offset,
+                                    riscv_lo12(delta),
+                                    state->diagnostics)) {
+                free(pcrel);
+                return false;
+            }
+        } else if (!static_patch_stype(source,
+                                       reloc->offset,
+                                       riscv_lo12(delta),
+                                       state->diagnostics)) {
+            free(pcrel);
+            return false;
+        }
+    }
+
+    free(pcrel);
+    return true;
+}
+
 static bool shared_fill_plt(MiniLdState *state,
                             const MiniLdStaticLayout *layout,
                             const MiniLdSharedImage *shared) {
@@ -5057,6 +5183,7 @@ int minild_link_shared_elf64_riscv_inputs(const char *output_path,
     if (!shared_fill_dynsym(&state, &layout, &shared) ||
         !shared_fill_hash(&state, &shared) ||
         !shared_fill_relocations(&state, &layout, &shared) ||
+        !shared_patch_tls_gd(&state, &layout, &shared) ||
         !shared_fill_plt(&state, &layout, &shared) ||
         !shared_fill_dynamic(&state, &layout, &shared) ||
         !shared_write_object(&state, &layout, &shared, output_path)) {
