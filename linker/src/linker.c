@@ -3973,6 +3973,32 @@ static bool shared_symbol_needs_plt(const MiniLdSymbol *symbol) {
            visibility == STV_DEFAULT;
 }
 
+
+static bool shared_tls_base_address(const MiniLdState *state,
+                                    const MiniLdStaticLayout *layout,
+                                    uint64_t *base_out,
+                                    bool *present_out) {
+    uint64_t base = UINT64_MAX;
+    size_t i;
+    bool present = false;
+
+    for (i = 0U; i < state->section_count; ++i) {
+        const MiniLdSection *section = &state->sections[i];
+
+        if ((section->flags & (SHF_ALLOC | SHF_TLS)) !=
+            (SHF_ALLOC | SHF_TLS)) {
+            continue;
+        }
+        if (layout->section_vaddr[i] < base) {
+            base = layout->section_vaddr[i];
+        }
+        present = true;
+    }
+    *present_out = present;
+    *base_out = present ? base : 0U;
+    return true;
+}
+
 static bool shared_prepare_metadata(MiniLdState *state,
                                     const char *soname,
                                     MiniLdSharedImage *shared) {
@@ -4315,8 +4341,29 @@ static bool shared_fill_dynsym(MiniLdState *state,
                    (size_t)input->section < state->section_count) {
             output.st_shndx =
                 (Elf64_Section)((size_t)input->section + 1U);
-            output.st_value =
-                layout->section_vaddr[input->section] + input->value;
+            if (ELF64_ST_TYPE(input->info) == STT_TLS) {
+                uint64_t tls_base = 0U;
+                bool tls_present = false;
+
+                if (!shared_tls_base_address(state,
+                                             layout,
+                                             &tls_base,
+                                             &tls_present) ||
+                    !tls_present ||
+                    layout->section_vaddr[input->section] + input->value <
+                        tls_base) {
+                    fprintf(state->diagnostics,
+                            "minic-ld: invalid-shared-tls-symbol:%s\n",
+                            input->name);
+                    return false;
+                }
+                output.st_value =
+                    layout->section_vaddr[input->section] +
+                    input->value - tls_base;
+            } else {
+                output.st_value =
+                    layout->section_vaddr[input->section] + input->value;
+            }
         } else {
             fprintf(state->diagnostics,
                     "minic-ld: unsupported-shared-symbol:%s\n",
