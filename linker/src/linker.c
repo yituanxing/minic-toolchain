@@ -2782,6 +2782,11 @@ static bool static_synthesize_array_bound_pair(
 }
 
 
+static bool static_resolve_symbol(MiniLdState *state,
+                                  const MiniLdStaticLayout *layout,
+                                  size_t symbol_index,
+                                  uint64_t *value_out);
+
 static bool static_fill_got(MiniLdState *state,
                             const MiniLdStaticLayout *layout,
                             const MiniLdStaticGot *got) {
