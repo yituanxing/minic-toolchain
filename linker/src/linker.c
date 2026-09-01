@@ -4449,7 +4449,10 @@ static bool shared_fill_relocations(MiniLdState *state,
             input->type == R_RISCV_RELAX ||
             input->type == R_RISCV_ALIGN ||
             input->type == R_RISCV_CALL ||
-            input->type == R_RISCV_CALL_PLT) {
+            input->type == R_RISCV_CALL_PLT ||
+            input->type == R_RISCV_TLS_GD_HI20 ||
+            input->type == R_RISCV_PCREL_LO12_I ||
+            input->type == R_RISCV_PCREL_LO12_S) {
             continue;
         }
         if (input->type != R_RISCV_64 ||
@@ -4503,6 +4506,44 @@ static bool shared_fill_relocations(MiniLdState *state,
                sizeof(output));
         ++write_index;
     }
+    for (i = 0U; i < state->symbol_count; ++i) {
+        size_t offset = shared->tls_gd_offset[i];
+        size_t dynamic_index;
+        uint64_t slot_address;
+        Elf64_Rela output;
+
+        if (offset == SIZE_MAX) {
+            continue;
+        }
+        dynamic_index = shared->dynsym_index[i];
+        if (dynamic_index == SIZE_MAX ||
+            shared->got_section >= state->section_count) {
+            fprintf(state->diagnostics,
+                    "minic-ld: invalid-shared-tls-gd-dynsym\n");
+            return false;
+        }
+        slot_address =
+            layout->section_vaddr[shared->got_section] + (uint64_t)offset;
+
+        memset(&output, 0, sizeof(output));
+        output.r_offset = slot_address;
+        output.r_info =
+            ELF64_R_INFO(dynamic_index, R_RISCV_TLS_DTPMOD64);
+        memcpy(rela->data + write_index * sizeof(output),
+               &output,
+               sizeof(output));
+        ++write_index;
+
+        memset(&output, 0, sizeof(output));
+        output.r_offset = slot_address + 8U;
+        output.r_info =
+            ELF64_R_INFO(dynamic_index, R_RISCV_TLS_DTPREL64);
+        memcpy(rela->data + write_index * sizeof(output),
+               &output,
+               sizeof(output));
+        ++write_index;
+    }
+
     if (write_index != shared->rela_count) {
         fprintf(state->diagnostics,
                 "minic-ld: shared-relocation-count-mismatch\n");
