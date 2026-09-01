@@ -263,6 +263,9 @@ compile_source function_typed_prototype function_typed_prototype
 expect_instructions function_typed_prototype \
     "mv s0, sp" "li a0, 0" "j .Lmain_return"
 
+compile_source c11_noreturn c11_noreturn
+expect_instructions c11_noreturn "li a0, 0" "j .Lmain_return"
+
 compile_source typedef_multidimensional_array typedef_multidimensional_array
 expect_instructions typedef_multidimensional_array \
     "mv s0, sp" "li a0, 0" "j .Lmain_return"
