@@ -1,0 +1,68 @@
+name: MiniLD BusyBox Static Profile Audit
+
+on:
+  push:
+    branches:
+      - "toolchain/minild-busybox-static"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  profile:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Install host prerequisites
+        run: |
+          sudo apt-get -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            build-essential bzip2 curl ca-certificates
+
+      - name: Reconstruct frozen BusyBox 1.38.0 static defconfig
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/minild-busybox-profile"
+          mkdir -p "$work"
+          curl -fsSL https://busybox.net/downloads/busybox-1.38.0.tar.bz2 \
+            -o "$work/busybox-1.38.0.tar.bz2"
+          printf '%s  %s\n' \
+            34f9ea6ff8636f2c9241153b9114eefa9e65674a45318ae1ef95bb5f31c53bb2 \
+            "$work/busybox-1.38.0.tar.bz2" | sha256sum -c -
+          tar -xjf "$work/busybox-1.38.0.tar.bz2" -C "$work"
+
+          src="$work/busybox-1.38.0"
+          out="$work/out"
+          make -C "$src" O="$out" defconfig HOSTCC=/usr/bin/cc
+
+          if grep -q '^# CONFIG_STATIC is not set$' "$out/.config"; then
+            sed -i 's/^# CONFIG_STATIC is not set$/CONFIG_STATIC=y/' "$out/.config"
+          elif grep -q '^CONFIG_STATIC=' "$out/.config"; then
+            sed -i 's/^CONFIG_STATIC=.*/CONFIG_STATIC=y/' "$out/.config"
+          else
+            echo 'CONFIG_STATIC=y' >>"$out/.config"
+          fi
+
+          yes "" | make -C "$src" O="$out" oldconfig HOSTCC=/usr/bin/cc
+          hash="$(sha256sum "$out/.config" | awk '{print $1}')"
+          printf 'BUSYBOX_PROFILE_SHA256=%s\n' "$hash"
+          grep '^CONFIG_STATIC=' "$out/.config" || true
+          grep '^CONFIG_ASH=' "$out/.config" || true
+          grep '^CONFIG_FEATURE_SH_STANDALONE=' "$out/.config" || true
+          test "$hash" = "5977f8e325530d35a9ee4a332b2531e85705f2216279b79090baaebd3cbaf809"
+          echo "BUSYBOX_PROFILE=PASS version=1.38.0 static=1"
+
+      - name: Preserve profile evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: minild-busybox-profile
+          path: build/minild-busybox-profile/out/.config
+          if-no-files-found: ignore
+          retention-days: 3
