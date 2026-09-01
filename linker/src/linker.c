@@ -4347,7 +4347,9 @@ static bool shared_fill_relocations(MiniLdState *state,
             (state->sections[input->section].flags & SHF_ALLOC) == 0U ||
             input->type == R_RISCV_NONE ||
             input->type == R_RISCV_RELAX ||
-            input->type == R_RISCV_ALIGN) {
+            input->type == R_RISCV_ALIGN ||
+            input->type == R_RISCV_CALL ||
+            input->type == R_RISCV_CALL_PLT) {
             continue;
         }
         if (input->type != R_RISCV_64 ||
@@ -4406,6 +4408,229 @@ static bool shared_fill_relocations(MiniLdState *state,
                 "minic-ld: shared-relocation-count-mismatch\n");
         return false;
     }
+    return true;
+}
+
+
+static uint32_t shared_riscv_utype(unsigned opcode,
+                                   unsigned rd,
+                                   int64_t imm20) {
+    return (((uint32_t)imm20 & UINT32_C(0xfffff)) << 12U) |
+           ((uint32_t)rd << 7U) |
+           (uint32_t)opcode;
+}
+
+static uint32_t shared_riscv_itype(unsigned opcode,
+                                   unsigned rd,
+                                   unsigned funct3,
+                                   unsigned rs1,
+                                   int64_t imm12) {
+    return (((uint32_t)imm12 & UINT32_C(0xfff)) << 20U) |
+           ((uint32_t)rs1 << 15U) |
+           ((uint32_t)funct3 << 12U) |
+           ((uint32_t)rd << 7U) |
+           (uint32_t)opcode;
+}
+
+static uint32_t shared_riscv_rtype(unsigned opcode,
+                                   unsigned rd,
+                                   unsigned funct3,
+                                   unsigned rs1,
+                                   unsigned rs2,
+                                   unsigned funct7) {
+    return ((uint32_t)funct7 << 25U) |
+           ((uint32_t)rs2 << 20U) |
+           ((uint32_t)rs1 << 15U) |
+           ((uint32_t)funct3 << 12U) |
+           ((uint32_t)rd << 7U) |
+           (uint32_t)opcode;
+}
+
+static bool shared_fill_plt(MiniLdState *state,
+                            const MiniLdStaticLayout *layout,
+                            const MiniLdSharedImage *shared) {
+    MiniLdSection *plt;
+    MiniLdSection *gotplt;
+    MiniLdSection *rela_plt;
+    uint64_t plt_address;
+    uint64_t gotplt_address;
+    int64_t delta;
+    int64_t hi;
+    int64_t lo;
+    size_t i;
+
+    if (shared->plt_count == 0U) {
+        return true;
+    }
+    if ((state->elf_flags & EF_RISCV_RVE) != 0U) {
+        fprintf(state->diagnostics,
+                "minic-ld: RVE-PLT-is-not-supported\n");
+        return false;
+    }
+
+    plt = &state->sections[shared->plt_section];
+    gotplt = &state->sections[shared->gotplt_section];
+    rela_plt = &state->sections[shared->rela_plt_section];
+    plt_address = layout->section_vaddr[shared->plt_section];
+    gotplt_address = layout->section_vaddr[shared->gotplt_section];
+
+    if (plt->size != 32U + shared->plt_count * 16U ||
+        gotplt->size != 16U + shared->plt_count * 8U ||
+        rela_plt->size != shared->plt_count * sizeof(Elf64_Rela)) {
+        fprintf(state->diagnostics,
+                "minic-ld: invalid-shared-plt-size\n");
+        return false;
+    }
+
+    /*
+     * Standard RV64 PLT0, matching the psABI/binutils normal PLT:
+     *   auipc t2, %pcrel_hi(.got.plt)
+     *   sub   t1, t1, t3
+     *   ld    t3, %pcrel_lo(.got.plt)(t2)
+     *   addi  t1, t1, -44
+     *   addi  t0, t2, %pcrel_lo(.got.plt)
+     *   srli  t1, t1, 1
+     *   ld    t0, 8(t0)
+     *   jalr  x0, t3, 0
+     */
+    delta = (int64_t)gotplt_address - (int64_t)plt_address;
+    hi = riscv_hi20(delta);
+    lo = riscv_lo12(delta);
+    store_u32le(plt->data + 0U,
+                shared_riscv_utype(0x17U, 7U, hi));
+    store_u32le(plt->data + 4U,
+                shared_riscv_rtype(0x33U, 6U, 0U, 6U, 28U, 0x20U));
+    store_u32le(plt->data + 8U,
+                shared_riscv_itype(0x03U, 28U, 3U, 7U, lo));
+    store_u32le(plt->data + 12U,
+                shared_riscv_itype(0x13U, 6U, 0U, 6U, -44));
+    store_u32le(plt->data + 16U,
+                shared_riscv_itype(0x13U, 5U, 0U, 7U, lo));
+    store_u32le(plt->data + 20U,
+                shared_riscv_itype(0x13U, 6U, 5U, 6U, 1));
+    store_u32le(plt->data + 24U,
+                shared_riscv_itype(0x03U, 5U, 3U, 5U, 8));
+    store_u32le(plt->data + 28U,
+                shared_riscv_itype(0x67U, 0U, 0U, 28U, 0));
+
+    memset(gotplt->data, 0, gotplt->size);
+    memset(rela_plt->data, 0, rela_plt->size);
+
+    for (i = 0U; i < state->symbol_count; ++i) {
+        size_t plt_index = shared->plt_index[i];
+        size_t plt_offset;
+        size_t got_offset;
+        uint64_t entry_address;
+        uint64_t slot_address;
+        Elf64_Rela relocation;
+        size_t dynamic_index;
+
+        if (plt_index == SIZE_MAX) {
+            continue;
+        }
+        if (plt_index >= shared->plt_count) {
+            fprintf(state->diagnostics,
+                    "minic-ld: invalid-shared-plt-index\n");
+            return false;
+        }
+        dynamic_index = shared->dynsym_index[i];
+        if (dynamic_index == SIZE_MAX) {
+            fprintf(state->diagnostics,
+                    "minic-ld: missing-dynsym-for-jump-slot:%s\n",
+                    state->symbols[i].name);
+            return false;
+        }
+
+        plt_offset = 32U + plt_index * 16U;
+        got_offset = 16U + plt_index * 8U;
+        entry_address = plt_address + plt_offset;
+        slot_address = gotplt_address + got_offset;
+        delta = (int64_t)slot_address - (int64_t)entry_address;
+        hi = riscv_hi20(delta);
+        lo = riscv_lo12(delta);
+
+        store_u32le(plt->data + plt_offset + 0U,
+                    shared_riscv_utype(0x17U, 28U, hi));
+        store_u32le(plt->data + plt_offset + 4U,
+                    shared_riscv_itype(0x03U, 28U, 3U, 28U, lo));
+        store_u32le(plt->data + plt_offset + 8U,
+                    shared_riscv_itype(0x67U, 6U, 0U, 28U, 0));
+        store_u32le(plt->data + plt_offset + 12U, UINT32_C(0x00000013));
+
+        /*
+         * Lazy-binding initial value. RTLD_NOW overwrites it before use;
+         * lazy loaders route it through PLT0.
+         */
+        store_u64le(gotplt->data + got_offset, plt_address);
+
+        memset(&relocation, 0, sizeof(relocation));
+        relocation.r_offset = slot_address;
+        relocation.r_info =
+            ELF64_R_INFO(dynamic_index, R_RISCV_JUMP_SLOT);
+        relocation.r_addend = 0;
+        memcpy(rela_plt->data + plt_index * sizeof(relocation),
+               &relocation,
+               sizeof(relocation));
+    }
+
+    for (i = 0U; i < state->reloc_count; ++i) {
+        MiniLdReloc *reloc = &state->relocs[i];
+        MiniLdSection *source;
+        MiniLdSymbol *target;
+        uint64_t destination;
+
+        if (reloc->type != R_RISCV_CALL &&
+            reloc->type != R_RISCV_CALL_PLT) {
+            continue;
+        }
+        if (reloc->section >= state->section_count ||
+            (state->sections[reloc->section].flags & SHF_ALLOC) == 0U) {
+            continue;
+        }
+        if (reloc->symbol == SIZE_MAX ||
+            reloc->symbol >= state->symbol_count) {
+            fprintf(state->diagnostics,
+                    "minic-ld: invalid-shared-call-symbol\n");
+            return false;
+        }
+
+        source = &state->sections[reloc->section];
+        target = &state->symbols[reloc->symbol];
+        if (shared_symbol_needs_plt(target)) {
+            size_t plt_index = shared->plt_index[reloc->symbol];
+
+            if (plt_index == SIZE_MAX) {
+                fprintf(state->diagnostics,
+                        "minic-ld: missing-plt-for-call:%s\n",
+                        target->name);
+                return false;
+            }
+            destination = plt_address + 32U + plt_index * 16U;
+        } else {
+            if (!static_resolve_symbol(state,
+                                       layout,
+                                       reloc->symbol,
+                                       &destination)) {
+                return false;
+            }
+            destination = (uint64_t)((int64_t)destination + reloc->addend);
+        }
+
+        delta = (int64_t)destination -
+                (int64_t)(layout->section_vaddr[reloc->section] +
+                          reloc->offset);
+        if (!static_patch_utype(source,
+                                reloc->offset,
+                                riscv_hi20(delta),
+                                state->diagnostics) ||
+            !static_patch_itype(source,
+                                reloc->offset + 4U,
+                                riscv_lo12(delta),
+                                state->diagnostics)) {
+            return false;
+        }
+    }
+
     return true;
 }
 
