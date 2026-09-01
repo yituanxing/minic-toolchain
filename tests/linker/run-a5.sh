@@ -21,7 +21,11 @@ cat >"$work/caller.s" <<'EOF'
 .globl shared_call_external
 .type shared_call_external, @function
 shared_call_external:
+  addi sp, sp, -16
+  sd ra, 8(sp)
   call external_add
+  ld ra, 8(sp)
+  addi sp, sp, 16
   ret
 .size shared_call_external, .-shared_call_external
 EOF
