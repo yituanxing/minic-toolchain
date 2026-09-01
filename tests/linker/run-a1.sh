@@ -102,9 +102,9 @@ grep -Eq 'GLOBAL[[:space:]]+DEFAULT.* needed$' "$work/whole-slash.symbols"
 grep -Eq 'GLOBAL[[:space:]]+DEFAULT.* unused_member$' "$work/whole-slash.symbols"
 
 "$LD" -melf64lriscv -r -o "$work/reference-group.o" \
-  "$work/root.o" --start-group "$work/group.a" --end-group
+  --start-group "$work/root.o" "$work/group.a" --end-group
 "$MINILD" -melf64lriscv -r -o "$work/product-group.o" \
-  "$work/root.o" --start-group "$work/group.a" --end-group
+  --start-group "$work/root.o" "$work/group.a" --end-group
 
 "$READELF" -Ws "$work/product-group.o" >"$work/group.symbols"
 grep -Eq 'GLOBAL[[:space:]]+DEFAULT.* needed$' "$work/group.symbols"
@@ -121,4 +121,4 @@ fi
 "$OBJCOPY" -O binary --only-section=.text "$work/product.elf" "$work/product.text"
 cmp "$work/reference.text" "$work/product.text"
 
-echo "MINILD_A1=PASS thin-whole=PASS long-name-slash=PASS archive-group-selection=PASS gnu-final-consumer=PASS"
+echo "MINILD_A1=PASS thin-whole=PASS long-name-slash=PASS archive-group-selection=PASS object-inside-group=PASS gnu-final-consumer=PASS"
