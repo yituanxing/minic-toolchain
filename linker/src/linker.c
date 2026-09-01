@@ -2985,6 +2985,26 @@ static bool static_apply_relocations(MiniLdState *state,
             store_u8(section->data + (size_t)reloc->offset, current);
             break;
         }
+        case R_RISCV_SUB6: {
+            uint8_t current;
+            uint8_t low6;
+            uint8_t operand;
+
+            if (section->type == SHT_NOBITS || reloc->offset > SIZE_MAX ||
+                !range_ok((size_t)reloc->offset, 1U, section->size)) {
+                fprintf(state->diagnostics,
+                        "minic-ld: R_RISCV_SUB6-offset-out-of-range\n");
+                free(pcrel);
+                return false;
+            }
+            current = load_u8(section->data + (size_t)reloc->offset);
+            low6 = (uint8_t)(current & UINT8_C(0x3f));
+            operand = (uint8_t)((uint64_t)target & UINT64_C(0x3f));
+            low6 = (uint8_t)((low6 - operand) & UINT8_C(0x3f));
+            current = (uint8_t)((current & UINT8_C(0xc0)) | low6);
+            store_u8(section->data + (size_t)reloc->offset, current);
+            break;
+        }
         case R_RISCV_SET6: {
             uint8_t current;
             uint8_t encoded;
