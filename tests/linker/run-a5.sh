@@ -1,16 +1,16 @@
 #!/bin/sh
 set -eu
 
-: "${MINILD:?MINILD must point to minic-ld}"
-: "${BUILD_DIR:?BUILD_DIR must be set}"
+: "\${MINILD:?MINILD must point to minic-ld}"
+: "\${BUILD_DIR:?BUILD_DIR must be set}"
 
-AS=${RISCV_AS:-riscv64-linux-gnu-as}
-LD=${RISCV_LD:-riscv64-linux-gnu-ld}
-CC=${RISCV_CC:-riscv64-linux-gnu-gcc}
-READELF=${RISCV_READELF:-riscv64-linux-gnu-readelf}
-OBJDUMP=${RISCV_OBJDUMP:-riscv64-linux-gnu-objdump}
-QEMU=${QEMU_RISCV64:-qemu-riscv64}
-SYSROOT=${RISCV_GLIBC_ROOT:-/usr/riscv64-linux-gnu}
+AS=\${RISCV_AS:-riscv64-linux-gnu-as}
+LD=\${RISCV_LD:-riscv64-linux-gnu-ld}
+CC=\${RISCV_CC:-riscv64-linux-gnu-gcc}
+READELF=\${RISCV_READELF:-riscv64-linux-gnu-readelf}
+OBJDUMP=\${RISCV_OBJDUMP:-riscv64-linux-gnu-objdump}
+QEMU=\${QEMU_RISCV64:-qemu-riscv64}
+SYSROOT=\${RISCV_GLIBC_ROOT:-/usr/riscv64-linux-gnu}
 
 work="$BUILD_DIR/tests/linker/a5"
 rm -rf "$work"
@@ -69,21 +69,22 @@ EOF
 "$READELF" -Wr "$work/caller.o" >"$work/caller.relocs"
 grep -Eq 'R_RISCV_CALL(_PLT)?[[:space:]].*external_add' "$work/caller.relocs"
 
-"$LD" -melf64lriscv -shared -soname libminild-a5.so   -o "$work/reference.so" "$work/caller.o"
+"$LD" -melf64lriscv -shared -soname libminild-a5.so \
+  -o "$work/reference.so" "$work/caller.o"
 
-"$MINILD" -melf64lriscv -shared -soname libminild-a5.so   -o "$work/product.so" "$work/caller.o"
+"$MINILD" -melf64lriscv -shared -soname libminild-a5.so \
+  -o "$work/product.so" "$work/caller.o"
 
-"$READELF" -h "$work/product.so" >"$work/product.header"
-"$READELF" -lW "$work/product.so" >"$work/product.programs"
-"$READELF" -SW "$work/product.so" >"$work/product.sections"
-"$READELF" -dW "$work/product.so" >"$work/product.dynamic"
-"$READELF" -Ws "$work/product.so" >"$work/product.symbols"
-"$READELF" -Wr "$work/product.so" >"$work/product.relocs"
-
-"$OBJDUMP" -d -j .plt "$work/reference.so" >"$work/reference.plt.dis"
-"$OBJDUMP" -d -j .plt "$work/product.so" >"$work/product.plt.dis"
-"$READELF" -x .got.plt "$work/reference.so" >"$work/reference.gotplt.hex"
-"$READELF" -x .got.plt "$work/product.so" >"$work/product.gotplt.hex"
+for kind in reference product; do
+  "$READELF" -h "$work/$kind.so" >"$work/$kind.header"
+  "$READELF" -lW "$work/$kind.so" >"$work/$kind.programs"
+  "$READELF" -SW "$work/$kind.so" >"$work/$kind.sections"
+  "$READELF" -dW "$work/$kind.so" >"$work/$kind.dynamic"
+  "$READELF" -Ws "$work/$kind.so" >"$work/$kind.symbols"
+  "$READELF" -Wr "$work/$kind.so" >"$work/$kind.relocs"
+  "$OBJDUMP" -d -j .plt "$work/$kind.so" >"$work/$kind.plt.dis"
+  "$READELF" -x .got.plt "$work/$kind.so" >"$work/$kind.gotplt.hex"
+done
 
 echo "=== A5 GNU PLT ==="
 cat "$work/reference.plt.dis"
@@ -93,6 +94,16 @@ echo "=== A5 GNU GOT.PLT ==="
 cat "$work/reference.gotplt.hex"
 echo "=== A5 MiniLD GOT.PLT ==="
 cat "$work/product.gotplt.hex"
+echo "=== A5 GNU DYNAMIC ==="
+cat "$work/reference.dynamic"
+echo "=== A5 MiniLD DYNAMIC ==="
+cat "$work/product.dynamic"
+echo "=== A5 GNU RELOCATIONS ==="
+cat "$work/reference.relocs"
+echo "=== A5 MiniLD RELOCATIONS ==="
+cat "$work/product.relocs"
+echo "=== A5 MiniLD DYNSYM ==="
+grep -E 'Num:|external_add|shared_call_external' "$work/product.symbols" || true
 
 grep -q 'DYN (Shared object file)' "$work/product.header"
 grep -Eq '] \.plt[[:space:]]+PROGBITS' "$work/product.sections"
@@ -106,30 +117,28 @@ grep -Eq 'R_RISCV_JUMP_SLOT.*external_add' "$work/product.relocs"
 grep -Eq 'GLOBAL[[:space:]]+DEFAULT.*UND.* external_add$' "$work/product.symbols"
 grep -Eq 'GLOBAL[[:space:]]+DEFAULT.* shared_call_external$' "$work/product.symbols"
 
-"$CC" -O2 -Wall -Wextra -Werror -Wl,-E   "$work/consumer.c" -ldl -o "$work/consumer"
+"$CC" -O2 -Wall -Wextra -Werror -Wl,-E \
+  "$work/consumer.c" -ldl -o "$work/consumer"
 
-timeout 5s "$QEMU" -L "$SYSROOT" "$work/consumer" "$work/reference.so"   >"$work/reference.stdout" 2>"$work/reference.stderr"
+timeout 5s "$QEMU" -L "$SYSROOT" "$work/consumer" "$work/reference.so" \
+  >"$work/reference.stdout" 2>"$work/reference.stderr"
 
 set +e
-timeout 5s "$QEMU" -L "$SYSROOT" "$work/consumer" "$work/product.so"   >"$work/product.stdout" 2>"$work/product.stderr"
+timeout 5s "$QEMU" -E LD_DEBUG=reloc,bindings -L "$SYSROOT" \
+  "$work/consumer" "$work/product.so" \
+  >"$work/product.stdout" 2>"$work/product.stderr"
 product_rc=$?
 set -e
 
 echo "A5_PRODUCT_QEMU_RC=$product_rc"
+echo "=== A5 product stdout ==="
 cat "$work/product.stdout"
+echo "=== A5 product loader stderr ==="
 cat "$work/product.stderr"
 
-grep -q '^MINILD_A5_RUNTIME=42
-cmp "$work/reference.stdout" "$work/product.stdout"
-
-echo "MINILD_A5=PASS plt=PASS gotplt=PASS jump_slot=PASS call_plt=PASS dlopen=PASS dlsym=PASS qemu=PASS"
- "$work/reference.stdout"
+grep -q '^MINILD_A5_RUNTIME=42$' "$work/reference.stdout"
 test "$product_rc" -eq 0
-grep -q '^MINILD_A5_RUNTIME=42
-cmp "$work/reference.stdout" "$work/product.stdout"
-
-echo "MINILD_A5=PASS plt=PASS gotplt=PASS jump_slot=PASS call_plt=PASS dlopen=PASS dlsym=PASS qemu=PASS"
- "$work/product.stdout"
+grep -q '^MINILD_A5_RUNTIME=42$' "$work/product.stdout"
 cmp "$work/reference.stdout" "$work/product.stdout"
 
 echo "MINILD_A5=PASS plt=PASS gotplt=PASS jump_slot=PASS call_plt=PASS dlopen=PASS dlsym=PASS qemu=PASS"
