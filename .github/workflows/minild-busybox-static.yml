@@ -299,7 +299,7 @@ jobs:
           "$minild" -melf64lriscv -static -e _start \
             -o "$work/busybox-product" \
             "$musl/obj/crt/crt1.o" "$musl/obj/crt/crti.o" \
-            "${abs_inputs[@]}" \
+            --start-group "${abs_inputs[@]}" --end-group \
             --start-group "$musl/lib/libc.a" "$libgcc" --end-group \
             "$musl/obj/crt/crtn.o" \
             >"$work/minild.stdout" 2>"$work/minild.stderr"
