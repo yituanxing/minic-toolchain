@@ -61,7 +61,12 @@ jobs:
           test -s obj/crt/crt1.o
           test -s obj/crt/crti.o
           test -s obj/crt/crtn.o
-          if riscv64-linux-gnu-readelf -Wr lib/libc.a 2>/dev/null | grep -q 'R_RISCV_GOT_HI20'; then
+          riscv64-linux-gnu-readelf -Wr lib/libc.a \
+            >"$work/musl-libc.relocations" 2>"$work/musl-libc.readelf.stderr" || {
+              cat "$work/musl-libc.readelf.stderr" >&2
+              exit 1
+            }
+          if grep -q 'R_RISCV_GOT_HI20' "$work/musl-libc.relocations"; then
             echo "MUSL_STATIC_PRODUCER_ERROR=GOT_HI20_PRESENT" >&2
             exit 1
           fi
@@ -153,5 +158,7 @@ jobs:
             build/minild-musl-static/qemu.stderr
             build/minild-musl-static/product.header
             build/minild-musl-static/product.programs
+            build/minild-musl-static/musl-libc.relocations
+            build/minild-musl-static/musl-libc.readelf.stderr
           if-no-files-found: ignore
           retention-days: 3
