@@ -158,33 +158,9 @@ EOF
   --start-group "$work/early.a" "$work/late.a" --end-group
 
 "$READELF" -Ws "$work/product-cross-group.o" >"$work/cross-group.symbols"
-grep -Eq 'GLOBAL[[:space:]]+DEFAULT.* late_entry
-"$LD" -melf64lriscv -Ttext=0x10000 -e root \
-  "$work/product-group.o" -o "$work/product.elf"
-"$OBJCOPY" -O binary --only-section=.text "$work/reference.elf" "$work/reference.text"
-"$OBJCOPY" -O binary --only-section=.text "$work/product.elf" "$work/product.text"
-cmp "$work/reference.text" "$work/product.text"
-
-echo "MINILD_A1=PASS thin-whole=PASS long-name-slash=PASS archive-group-selection=PASS group-rescan=PASS object-inside-group=PASS gnu-final-consumer=PASS"
- "$work/cross-group.symbols"
-grep -Eq 'GLOBAL[[:space:]]+DEFAULT.* early_helper
-"$LD" -melf64lriscv -Ttext=0x10000 -e root \
-  "$work/product-group.o" -o "$work/product.elf"
-"$OBJCOPY" -O binary --only-section=.text "$work/reference.elf" "$work/reference.text"
-"$OBJCOPY" -O binary --only-section=.text "$work/product.elf" "$work/product.text"
-cmp "$work/reference.text" "$work/product.text"
-
-echo "MINILD_A1=PASS thin-whole=PASS long-name-slash=PASS archive-group-selection=PASS object-inside-group=PASS gnu-final-consumer=PASS"
- "$work/cross-group.symbols"
-if grep -Eq 'UND[[:space:]]+early_helper
-"$LD" -melf64lriscv -Ttext=0x10000 -e root \
-  "$work/product-group.o" -o "$work/product.elf"
-"$OBJCOPY" -O binary --only-section=.text "$work/reference.elf" "$work/reference.text"
-"$OBJCOPY" -O binary --only-section=.text "$work/product.elf" "$work/product.text"
-cmp "$work/reference.text" "$work/product.text"
-
-echo "MINILD_A1=PASS thin-whole=PASS long-name-slash=PASS archive-group-selection=PASS object-inside-group=PASS gnu-final-consumer=PASS"
- "$work/cross-group.symbols"; then
+awk '$8 == "late_entry" && $7 != "UND" { found=1 } END { exit found ? 0 : 1 }' "$work/cross-group.symbols"
+awk '$8 == "early_helper" && $7 != "UND" { found=1 } END { exit found ? 0 : 1 }' "$work/cross-group.symbols"
+if awk '$8 == "early_helper" && $7 == "UND" { found=1 } END { exit found ? 0 : 1 }' "$work/cross-group.symbols"; then
   echo "MINILD_A1_ERROR group-wide rescan left early_helper undefined" >&2
   exit 1
 fi
@@ -200,4 +176,4 @@ fi
 "$OBJCOPY" -O binary --only-section=.text "$work/product.elf" "$work/product.text"
 cmp "$work/reference.text" "$work/product.text"
 
-echo "MINILD_A1=PASS thin-whole=PASS long-name-slash=PASS archive-group-selection=PASS object-inside-group=PASS gnu-final-consumer=PASS"
+echo "MINILD_A1=PASS thin-whole=PASS long-name-slash=PASS archive-group-selection=PASS group-rescan=PASS object-inside-group=PASS gnu-final-consumer=PASS"
