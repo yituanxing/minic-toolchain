@@ -25,6 +25,7 @@ int main(int argc, char **argv) {
     const char *output = NULL;
     const char *entry_symbol = "_start";
     const char *soname = NULL;
+    bool entry_explicit = false;
     MiniLdInput inputs[4096];
     size_t input_count = 0U;
     bool relocatable = false;
@@ -109,6 +110,7 @@ int main(int argc, char **argv) {
                 return 2;
             }
             entry_symbol = argv[i];
+            entry_explicit = true;
         } else if (argv[i][0] == '-') {
             fprintf(stderr, "minic-ld: unsupported-option:%s\n", argv[i]);
             return 2;
@@ -160,6 +162,7 @@ int main(int argc, char **argv) {
                                                       inputs,
                                                       input_count,
                                                       soname,
+                                                      entry_explicit ? entry_symbol : NULL,
                                                       stderr);
     }
 
