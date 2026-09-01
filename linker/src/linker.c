@@ -2622,6 +2622,97 @@ static bool static_build_layout(MiniLdState *state,
     return layout->have_rx;
 }
 
+
+static bool static_section_has_prefix(const char *name, const char *prefix) {
+    size_t length = strlen(prefix);
+
+    return strcmp(name, prefix) == 0 ||
+           (strncmp(name, prefix, length) == 0 && name[length] == '.');
+}
+
+static bool static_define_absolute_if_undefined(MiniLdState *state,
+                                                const char *name,
+                                                uint64_t value) {
+    size_t existing = find_global_symbol(state, name);
+    size_t symbol_index;
+
+    if (existing != SIZE_MAX &&
+        symbol_is_defined(&state->symbols[existing])) {
+        return true;
+    }
+    return add_or_merge_global_symbol(state,
+                                      name,
+                                      MINILD_SECTION_ABS,
+                                      value,
+                                      0U,
+                                      ELF64_ST_INFO(STB_GLOBAL, STT_NOTYPE),
+                                      STV_DEFAULT,
+                                      &symbol_index);
+}
+
+static bool static_synthesize_array_bound_pair(
+    MiniLdState *state,
+    const MiniLdStaticLayout *layout,
+    const char *section_prefix,
+    const char *start_name,
+    const char *end_name) {
+    uint64_t start = UINT64_MAX;
+    uint64_t end = 0U;
+    bool found = false;
+    size_t i;
+
+    for (i = 0U; i < state->section_count; ++i) {
+        MiniLdSection *section = &state->sections[i];
+        uint64_t section_start;
+        uint64_t section_end;
+
+        if ((section->flags & SHF_ALLOC) == 0U ||
+            !static_section_has_prefix(section->name, section_prefix)) {
+            continue;
+        }
+        section_start = layout->section_vaddr[i];
+        section_end = section_start + (uint64_t)section->size;
+        if (!found || section_start < start) {
+            start = section_start;
+        }
+        if (!found || section_end > end) {
+            end = section_end;
+        }
+        found = true;
+    }
+
+    if (!found) {
+        /*
+         * Match the old Python linker: absent constructor/destructor arrays
+         * are represented by a zero-length range at the end of writable data.
+         */
+        start = layout->rw_vaddr + (uint64_t)layout->rw_mem_size;
+        end = start;
+    }
+    return static_define_absolute_if_undefined(state, start_name, start) &&
+           static_define_absolute_if_undefined(state, end_name, end);
+}
+
+static bool static_synthesize_runtime_boundaries(
+    MiniLdState *state,
+    const MiniLdStaticLayout *layout) {
+    return static_synthesize_array_bound_pair(state,
+                                               layout,
+                                               ".preinit_array",
+                                               "__preinit_array_start",
+                                               "__preinit_array_end") &&
+           static_synthesize_array_bound_pair(state,
+                                               layout,
+                                               ".init_array",
+                                               "__init_array_start",
+                                               "__init_array_end") &&
+           static_synthesize_array_bound_pair(state,
+                                               layout,
+                                               ".fini_array",
+                                               "__fini_array_start",
+                                               "__fini_array_end");
+}
+
 static void static_layout_destroy(MiniLdStaticLayout *layout) {
     free(layout->section_vaddr);
     free(layout->section_file_offset);
@@ -3215,7 +3306,8 @@ int minild_link_static_elf64_riscv_inputs(const char *output_path,
         goto done;
     }
     layout_ready = true;
-    if (!static_apply_relocations(&state, &layout) ||
+    if (!static_synthesize_runtime_boundaries(&state, &layout) ||
+        !static_apply_relocations(&state, &layout) ||
         !static_entry_address(&state, &layout, entry_symbol, &entry) ||
         !static_write_executable(&state, &layout, output_path, entry)) {
         goto done;
