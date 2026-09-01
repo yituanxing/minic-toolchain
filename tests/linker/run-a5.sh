@@ -128,7 +128,7 @@ timeout 5s "$QEMU" -L "$SYSROOT" "$work/consumer" "$work/reference.so" \
   >"$work/reference.stdout" 2>"$work/reference.stderr"
 
 set +e
-timeout 5s "$QEMU" -E LD_DEBUG=reloc,bindings -L "$SYSROOT" \
+timeout 5s "$QEMU" -E LD_DEBUG=reloc:bindings -L "$SYSROOT" \
   "$work/consumer" "$work/product.so" \
   >"$work/product.stdout" 2>"$work/product.stderr"
 product_rc=$?
