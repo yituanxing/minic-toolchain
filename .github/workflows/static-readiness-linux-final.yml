@@ -105,6 +105,35 @@ jobs:
 
           cp "$out/arch/riscv/kernel/vmlinux.lds" "$work/vmlinux.lds" 2>/dev/null || true
           grep '^minild ' "$work/minild.trace" >"$work/minild-final.trace" || true
+
+          freeze_archive() {
+            archive="$1"
+            destination="$2"
+            test -s "$archive" || return 0
+            magic=$(head -c 8 "$archive" || true)
+            if test "$magic" = '!<thin>'; then
+              (
+                cd "$out"
+                mapfile -t members < <(riscv64-linux-gnu-ar t "$archive")
+                test "${#members[@]}" -gt 0
+                riscv64-linux-gnu-ar rcsD "$destination" "${members[@]}"
+              )
+            else
+              cp "$archive" "$destination"
+            fi
+          }
+
+          freeze_archive "$out/vmlinux.a" "$work/vmlinux.seed.a"
+          freeze_archive "$out/drivers/firmware/efi/libstub/lib.a" "$work/libstub.seed.a"
+          cp "$out/.vmlinux.export.o" "$work/vmlinux-export.seed.o" 2>/dev/null || true
+          cp "$out/init/version-timestamp.o" "$work/version-timestamp.seed.o" 2>/dev/null || true
+          if test -s "$work/vmlinux.seed.a"; then
+            printf 'STATIC_LINUX_FINAL_SEED=READY vmlinux_members=%s vmlinux_bytes=%s libstub_bytes=%s\n' \
+              "$(riscv64-linux-gnu-ar t "$work/vmlinux.seed.a" | wc -l)" \
+              "$(stat -c %s "$work/vmlinux.seed.a")" \
+              "$(stat -c %s "$work/libstub.seed.a" 2>/dev/null || echo 0)"
+          fi
+
           if test "$status" -ne 0; then
             echo "STATIC_LINUX_FINAL_FRONTIER=FAIL status=$status" >&2
             tail -n 120 "$work/kbuild.log" >&2 || true
@@ -130,5 +159,9 @@ jobs:
             build/static-linux-final-work/vmlinux.lds
             build/static-linux-final-work/vmlinux.header
             build/static-linux-final-work/vmlinux.programs
+            build/static-linux-final-work/vmlinux.seed.a
+            build/static-linux-final-work/libstub.seed.a
+            build/static-linux-final-work/vmlinux-export.seed.o
+            build/static-linux-final-work/version-timestamp.seed.o
           if-no-files-found: ignore
           retention-days: 3
