@@ -3888,6 +3888,760 @@ done:
     return ok;
 }
 
+
+typedef struct MiniLdSharedImage {
+    size_t dynstr_section;
+    size_t dynsym_section;
+    size_t hash_section;
+    size_t rela_section;
+    size_t dynamic_section;
+    uint32_t soname_offset;
+    size_t *dynsym_index;
+    uint32_t *dynstr_name_offset;
+    size_t dynsym_count;
+    size_t rela_count;
+    bool have_soname;
+} MiniLdSharedImage;
+
+static void shared_image_destroy(MiniLdSharedImage *shared) {
+    free(shared->dynsym_index);
+    free(shared->dynstr_name_offset);
+    shared->dynsym_index = NULL;
+    shared->dynstr_name_offset = NULL;
+    shared->dynsym_count = 0U;
+    shared->rela_count = 0U;
+}
+
+static uint32_t shared_elf_hash(const char *name) {
+    uint32_t hash = 0U;
+
+    while (*name != '\0') {
+        uint32_t high;
+
+        hash = (hash << 4U) + (unsigned char)*name++;
+        high = hash & UINT32_C(0xf0000000);
+        if (high != 0U) {
+            hash ^= high >> 24U;
+        }
+        hash &= ~high;
+    }
+    return hash;
+}
+
+static bool shared_symbol_eligible(const MiniLdState *state, size_t index) {
+    const MiniLdSymbol *symbol = &state->symbols[index];
+    unsigned bind = ELF64_ST_BIND(symbol->info);
+
+    if ((bind != STB_GLOBAL && bind != STB_WEAK) ||
+        symbol->name[0] == '\0') {
+        return false;
+    }
+    if (symbol->section >= 0) {
+        size_t section = (size_t)symbol->section;
+        if (section >= state->section_count ||
+            (state->sections[section].flags & SHF_ALLOC) == 0U) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool shared_prepare_metadata(MiniLdState *state,
+                                    const char *soname,
+                                    MiniLdSharedImage *shared) {
+    MiniLdSection *dynstr;
+    MiniLdSection *dynsym;
+    MiniLdSection *hash;
+    MiniLdSection *rela;
+    MiniLdSection *dynamic;
+    size_t dynsym_size;
+    size_t hash_words;
+    size_t dynamic_entries;
+    size_t i;
+
+    memset(shared, 0, sizeof(*shared));
+    shared->dynstr_section = SIZE_MAX;
+    shared->dynsym_section = SIZE_MAX;
+    shared->hash_section = SIZE_MAX;
+    shared->rela_section = SIZE_MAX;
+    shared->dynamic_section = SIZE_MAX;
+
+    shared->dynsym_index =
+        malloc((state->symbol_count == 0U ? 1U : state->symbol_count) *
+               sizeof(*shared->dynsym_index));
+    shared->dynstr_name_offset =
+        calloc(state->symbol_count == 0U ? 1U : state->symbol_count,
+               sizeof(*shared->dynstr_name_offset));
+    if (shared->dynsym_index == NULL ||
+        shared->dynstr_name_offset == NULL) {
+        fprintf(state->diagnostics, "minic-ld: out-of-memory:shared-symbol-map\n");
+        goto fail;
+    }
+    for (i = 0U; i < state->symbol_count; ++i) {
+        shared->dynsym_index[i] = SIZE_MAX;
+    }
+
+    if (!find_or_add_section(state,
+                             ".dynstr",
+                             SHT_STRTAB,
+                             SHF_ALLOC,
+                             1U,
+                             0U,
+                             &shared->dynstr_section) ||
+        !find_or_add_section(state,
+                             ".dynsym",
+                             SHT_DYNSYM,
+                             SHF_ALLOC,
+                             8U,
+                             sizeof(Elf64_Sym),
+                             &shared->dynsym_section) ||
+        !find_or_add_section(state,
+                             ".hash",
+                             SHT_HASH,
+                             SHF_ALLOC,
+                             4U,
+                             sizeof(uint32_t),
+                             &shared->hash_section) ||
+        !find_or_add_section(state,
+                             ".rela.dyn",
+                             SHT_RELA,
+                             SHF_ALLOC,
+                             8U,
+                             sizeof(Elf64_Rela),
+                             &shared->rela_section) ||
+        !find_or_add_section(state,
+                             ".dynamic",
+                             SHT_DYNAMIC,
+                             SHF_ALLOC | SHF_WRITE,
+                             8U,
+                             sizeof(Elf64_Dyn),
+                             &shared->dynamic_section)) {
+        goto fail;
+    }
+
+    dynstr = &state->sections[shared->dynstr_section];
+    dynsym = &state->sections[shared->dynsym_section];
+    hash = &state->sections[shared->hash_section];
+    rela = &state->sections[shared->rela_section];
+    dynamic = &state->sections[shared->dynamic_section];
+
+    if (!section_append_zero(dynstr, 1U)) {
+        goto oom;
+    }
+    if (soname != NULL && soname[0] != '\0') {
+        if (dynstr->size > UINT32_MAX) {
+            goto oom;
+        }
+        shared->soname_offset = (uint32_t)dynstr->size;
+        if (!section_append_data(dynstr,
+                                 (const unsigned char *)soname,
+                                 strlen(soname) + 1U)) {
+            goto oom;
+        }
+        shared->have_soname = true;
+    }
+
+    shared->dynsym_count = 1U;
+    for (i = 0U; i < state->symbol_count; ++i) {
+        if (!shared_symbol_eligible(state, i)) {
+            continue;
+        }
+        if (dynstr->size > UINT32_MAX) {
+            goto oom;
+        }
+        shared->dynstr_name_offset[i] = (uint32_t)dynstr->size;
+        if (!section_append_data(dynstr,
+                                 (const unsigned char *)state->symbols[i].name,
+                                 strlen(state->symbols[i].name) + 1U)) {
+            goto oom;
+        }
+        shared->dynsym_index[i] = shared->dynsym_count++;
+    }
+
+    if (shared->dynsym_count > SIZE_MAX / sizeof(Elf64_Sym)) {
+        goto oom;
+    }
+    dynsym_size = shared->dynsym_count * sizeof(Elf64_Sym);
+    if (!section_append_zero(dynsym, dynsym_size)) {
+        goto oom;
+    }
+
+    {
+        size_t nbucket = shared->dynsym_count < 4U
+                             ? 1U
+                             : shared->dynsym_count / 4U;
+        if (nbucket == 0U) {
+            nbucket = 1U;
+        }
+        if (nbucket > SIZE_MAX - shared->dynsym_count - 2U) {
+            goto oom;
+        }
+        hash_words = 2U + nbucket + shared->dynsym_count;
+    }
+    if (hash_words > SIZE_MAX / sizeof(uint32_t) ||
+        !section_append_zero(hash, hash_words * sizeof(uint32_t))) {
+        goto oom;
+    }
+
+    for (i = 0U; i < state->reloc_count; ++i) {
+        MiniLdReloc *reloc = &state->relocs[i];
+
+        if (reloc->section >= state->section_count ||
+            (state->sections[reloc->section].flags & SHF_ALLOC) == 0U) {
+            continue;
+        }
+        if (reloc->type == R_RISCV_NONE ||
+            reloc->type == R_RISCV_RELAX ||
+            reloc->type == R_RISCV_ALIGN) {
+            continue;
+        }
+        if (reloc->type != R_RISCV_64) {
+            fprintf(state->diagnostics,
+                    "minic-ld: unsupported-shared-relocation:%u\n",
+                    reloc->type);
+            goto fail;
+        }
+        ++shared->rela_count;
+    }
+    if (shared->rela_count > SIZE_MAX / sizeof(Elf64_Rela) ||
+        !section_append_zero(rela,
+                             shared->rela_count * sizeof(Elf64_Rela))) {
+        goto oom;
+    }
+
+    dynamic_entries = 6U; /* HASH/STRTAB/SYMTAB/STRSZ/SYMENT/NULL */
+    if (shared->rela_count != 0U) {
+        dynamic_entries += 3U; /* RELA/RELASZ/RELAENT */
+    }
+    if (shared->have_soname) {
+        ++dynamic_entries;
+    }
+    if (dynamic_entries > SIZE_MAX / sizeof(Elf64_Dyn) ||
+        !section_append_zero(dynamic,
+                             dynamic_entries * sizeof(Elf64_Dyn))) {
+        goto oom;
+    }
+
+    return true;
+
+oom:
+    fprintf(state->diagnostics, "minic-ld: out-of-memory:shared-metadata\n");
+fail:
+    shared_image_destroy(shared);
+    return false;
+}
+
+static bool shared_fill_dynsym(MiniLdState *state,
+                               const MiniLdStaticLayout *layout,
+                               const MiniLdSharedImage *shared) {
+    MiniLdSection *dynsym = &state->sections[shared->dynsym_section];
+    size_t i;
+
+    memset(dynsym->data, 0, dynsym->size);
+    for (i = 0U; i < state->symbol_count; ++i) {
+        MiniLdSymbol *input = &state->symbols[i];
+        size_t dynamic_index = shared->dynsym_index[i];
+        Elf64_Sym output;
+
+        if (dynamic_index == SIZE_MAX) {
+            continue;
+        }
+        memset(&output, 0, sizeof(output));
+        output.st_name = shared->dynstr_name_offset[i];
+        output.st_info = input->info;
+        output.st_other = input->other;
+        output.st_size = input->size;
+        if (input->section == MINILD_SECTION_UNDEF) {
+            output.st_shndx = SHN_UNDEF;
+            output.st_value = 0U;
+        } else if (input->section == MINILD_SECTION_ABS) {
+            output.st_shndx = SHN_ABS;
+            output.st_value = input->value;
+        } else if (input->section >= 0 &&
+                   (size_t)input->section < state->section_count) {
+            output.st_shndx =
+                (Elf64_Section)((size_t)input->section + 1U);
+            output.st_value =
+                layout->section_vaddr[input->section] + input->value;
+        } else {
+            fprintf(state->diagnostics,
+                    "minic-ld: unsupported-shared-symbol:%s\n",
+                    input->name);
+            return false;
+        }
+        memcpy(dynsym->data + dynamic_index * sizeof(output),
+               &output,
+               sizeof(output));
+    }
+    return true;
+}
+
+static bool shared_fill_hash(MiniLdState *state,
+                             const MiniLdSharedImage *shared) {
+    MiniLdSection *hash = &state->sections[shared->hash_section];
+    size_t nbucket = shared->dynsym_count < 4U
+                         ? 1U
+                         : shared->dynsym_count / 4U;
+    uint32_t *words = (uint32_t *)(void *)hash->data;
+    uint32_t *buckets;
+    uint32_t *chains;
+    size_t i;
+
+    if (nbucket == 0U) {
+        nbucket = 1U;
+    }
+    memset(hash->data, 0, hash->size);
+    words[0] = (uint32_t)nbucket;
+    words[1] = (uint32_t)shared->dynsym_count;
+    buckets = words + 2U;
+    chains = buckets + nbucket;
+
+    for (i = 0U; i < state->symbol_count; ++i) {
+        size_t dynamic_index = shared->dynsym_index[i];
+        uint32_t bucket;
+        uint32_t *slot;
+
+        if (dynamic_index == SIZE_MAX) {
+            continue;
+        }
+        bucket = shared_elf_hash(state->symbols[i].name) % (uint32_t)nbucket;
+        slot = &buckets[bucket];
+        if (*slot == 0U) {
+            *slot = (uint32_t)dynamic_index;
+        } else {
+            uint32_t cursor = *slot;
+            while (chains[cursor] != 0U) {
+                cursor = chains[cursor];
+            }
+            chains[cursor] = (uint32_t)dynamic_index;
+        }
+    }
+    return true;
+}
+
+static bool shared_symbol_is_preemptible(const MiniLdSymbol *symbol) {
+    unsigned bind = ELF64_ST_BIND(symbol->info);
+    unsigned visibility = ELF64_ST_VISIBILITY(symbol->other);
+
+    return (bind == STB_GLOBAL || bind == STB_WEAK) &&
+           visibility == STV_DEFAULT;
+}
+
+static bool shared_fill_relocations(MiniLdState *state,
+                                    const MiniLdStaticLayout *layout,
+                                    const MiniLdSharedImage *shared) {
+    MiniLdSection *rela = &state->sections[shared->rela_section];
+    size_t write_index = 0U;
+    size_t i;
+
+    memset(rela->data, 0, rela->size);
+    for (i = 0U; i < state->reloc_count; ++i) {
+        MiniLdReloc *input = &state->relocs[i];
+        MiniLdSection *source;
+        MiniLdSymbol *target;
+        Elf64_Rela output;
+        size_t dynamic_index = 0U;
+
+        if (input->section >= state->section_count ||
+            (state->sections[input->section].flags & SHF_ALLOC) == 0U ||
+            input->type == R_RISCV_NONE ||
+            input->type == R_RISCV_RELAX ||
+            input->type == R_RISCV_ALIGN) {
+            continue;
+        }
+        if (input->type != R_RISCV_64 ||
+            input->symbol == SIZE_MAX ||
+            input->symbol >= state->symbol_count) {
+            fprintf(state->diagnostics,
+                    "minic-ld: invalid-shared-relocation\n");
+            return false;
+        }
+        source = &state->sections[input->section];
+        if (source->type == SHT_NOBITS ||
+            input->offset > SIZE_MAX ||
+            !range_ok((size_t)input->offset, 8U, source->size)) {
+            fprintf(state->diagnostics,
+                    "minic-ld: shared-relocation-offset-out-of-range\n");
+            return false;
+        }
+        target = &state->symbols[input->symbol];
+
+        memset(&output, 0, sizeof(output));
+        output.r_offset =
+            layout->section_vaddr[input->section] + input->offset;
+        if (target->section != MINILD_SECTION_UNDEF &&
+            !shared_symbol_is_preemptible(target)) {
+            uint64_t target_value;
+
+            if (!static_resolve_symbol(state,
+                                       layout,
+                                       input->symbol,
+                                       &target_value)) {
+                return false;
+            }
+            output.r_info = ELF64_R_INFO(0U, R_RISCV_RELATIVE);
+            output.r_addend = (Elf64_Sxword)((int64_t)target_value +
+                                             input->addend);
+        } else {
+            dynamic_index = shared->dynsym_index[input->symbol];
+            if (dynamic_index == SIZE_MAX) {
+                fprintf(state->diagnostics,
+                        "minic-ld: missing-dynsym-for-relocation:%s\n",
+                        target->name);
+                return false;
+            }
+            output.r_info =
+                ELF64_R_INFO(dynamic_index, R_RISCV_64);
+            output.r_addend = input->addend;
+        }
+        store_u64le(source->data + (size_t)input->offset, 0U);
+        memcpy(rela->data + write_index * sizeof(output),
+               &output,
+               sizeof(output));
+        ++write_index;
+    }
+    if (write_index != shared->rela_count) {
+        fprintf(state->diagnostics,
+                "minic-ld: shared-relocation-count-mismatch\n");
+        return false;
+    }
+    return true;
+}
+
+static bool shared_fill_dynamic(MiniLdState *state,
+                                const MiniLdStaticLayout *layout,
+                                const MiniLdSharedImage *shared) {
+    MiniLdSection *dynamic = &state->sections[shared->dynamic_section];
+    Elf64_Dyn *entries = (Elf64_Dyn *)(void *)dynamic->data;
+    size_t index = 0U;
+
+#define MINILD_DYN(TAG, VALUE)          \
+    do {                                \
+        entries[index].d_tag = (TAG);   \
+        entries[index].d_un.d_val = (VALUE); \
+        ++index;                        \
+    } while (0)
+
+    memset(dynamic->data, 0, dynamic->size);
+    MINILD_DYN(DT_HASH, layout->section_vaddr[shared->hash_section]);
+    MINILD_DYN(DT_STRTAB, layout->section_vaddr[shared->dynstr_section]);
+    MINILD_DYN(DT_SYMTAB, layout->section_vaddr[shared->dynsym_section]);
+    MINILD_DYN(DT_STRSZ, state->sections[shared->dynstr_section].size);
+    MINILD_DYN(DT_SYMENT, sizeof(Elf64_Sym));
+    if (shared->rela_count != 0U) {
+        MINILD_DYN(DT_RELA, layout->section_vaddr[shared->rela_section]);
+        MINILD_DYN(DT_RELASZ, state->sections[shared->rela_section].size);
+        MINILD_DYN(DT_RELAENT, sizeof(Elf64_Rela));
+    }
+    if (shared->have_soname) {
+        MINILD_DYN(DT_SONAME, shared->soname_offset);
+    }
+    MINILD_DYN(DT_NULL, 0U);
+
+#undef MINILD_DYN
+
+    if (index * sizeof(Elf64_Dyn) != dynamic->size) {
+        fprintf(state->diagnostics,
+                "minic-ld: shared-dynamic-size-mismatch\n");
+        return false;
+    }
+    return true;
+}
+
+static bool shared_write_object(MiniLdState *state,
+                                const MiniLdStaticLayout *layout,
+                                const MiniLdSharedImage *shared,
+                                const char *path) {
+    size_t phnum = (layout->have_rx ? 1U : 0U) +
+                   (layout->have_rw ? 1U : 0U) + 1U;
+    size_t image_size = sizeof(Elf64_Ehdr) + phnum * sizeof(Elf64_Phdr);
+    MiniLdBuffer shstrtab = {NULL, 0U, 0U};
+    uint32_t *name_offsets = NULL;
+    Elf64_Shdr *section_headers = NULL;
+    unsigned char *image = NULL;
+    size_t section_count = state->section_count + 2U; /* null + shstrtab */
+    size_t shstrtab_index = state->section_count + 1U;
+    size_t shstrtab_offset;
+    size_t section_header_offset;
+    size_t total_size;
+    size_t i;
+    size_t program_index = 0U;
+    Elf64_Ehdr header;
+    Elf64_Phdr *programs;
+    FILE *file = NULL;
+    bool ok = false;
+
+    if (section_count > UINT16_MAX) {
+        fprintf(state->diagnostics,
+                "minic-ld: too-many-shared-sections\n");
+        return false;
+    }
+    if (layout->have_rx &&
+        layout->rx_file_offset + layout->rx_file_size > image_size) {
+        image_size = layout->rx_file_offset + layout->rx_file_size;
+    }
+    if (layout->have_rw &&
+        layout->rw_file_offset + layout->rw_file_size > image_size) {
+        image_size = layout->rw_file_offset + layout->rw_file_size;
+    }
+    shstrtab_offset = image_size;
+
+    name_offsets =
+        calloc(state->section_count == 0U ? 1U : state->section_count,
+               sizeof(*name_offsets));
+    if (name_offsets == NULL ||
+        !buffer_append_zero(&shstrtab, 1U)) {
+        goto oom;
+    }
+    for (i = 0U; i < state->section_count; ++i) {
+        if (!buffer_append_string(&shstrtab,
+                                  state->sections[i].name,
+                                  &name_offsets[i])) {
+            goto oom;
+        }
+    }
+    {
+        uint32_t ignored;
+        if (!buffer_append_string(&shstrtab, ".shstrtab", &ignored)) {
+            goto oom;
+        }
+    }
+    if (!add_size(shstrtab_offset, shstrtab.size, &section_header_offset) ||
+        !align_up_size(section_header_offset, 8U, &section_header_offset) ||
+        section_count > SIZE_MAX / sizeof(Elf64_Shdr) ||
+        !add_size(section_header_offset,
+                  section_count * sizeof(Elf64_Shdr),
+                  &total_size)) {
+        goto oom;
+    }
+
+    image = calloc(total_size == 0U ? 1U : total_size, 1U);
+    section_headers = calloc(section_count, sizeof(*section_headers));
+    if (image == NULL || section_headers == NULL) {
+        goto oom;
+    }
+
+    memset(&header, 0, sizeof(header));
+    memcpy(header.e_ident, ELFMAG, SELFMAG);
+    header.e_ident[EI_CLASS] = ELFCLASS64;
+    header.e_ident[EI_DATA] = ELFDATA2LSB;
+    header.e_ident[EI_VERSION] = EV_CURRENT;
+    header.e_type = ET_DYN;
+    header.e_machine = EM_RISCV;
+    header.e_version = EV_CURRENT;
+    header.e_entry = 0U;
+    header.e_phoff = sizeof(Elf64_Ehdr);
+    header.e_shoff = section_header_offset;
+    header.e_flags = state->elf_flags;
+    header.e_ehsize = sizeof(Elf64_Ehdr);
+    header.e_phentsize = sizeof(Elf64_Phdr);
+    header.e_phnum = (Elf64_Half)phnum;
+    header.e_shentsize = sizeof(Elf64_Shdr);
+    header.e_shnum = (Elf64_Half)section_count;
+    header.e_shstrndx = (Elf64_Half)shstrtab_index;
+    memcpy(image, &header, sizeof(header));
+
+    programs = (Elf64_Phdr *)(void *)(image + sizeof(Elf64_Ehdr));
+    if (layout->have_rx) {
+        Elf64_Phdr *ph = &programs[program_index++];
+        ph->p_type = PT_LOAD;
+        ph->p_flags = PF_R | PF_X;
+        ph->p_offset = layout->rx_file_offset;
+        ph->p_vaddr = layout->rx_vaddr;
+        ph->p_paddr = layout->rx_vaddr;
+        ph->p_filesz = layout->rx_file_size;
+        ph->p_memsz = layout->rx_file_size;
+        ph->p_align = 4096U;
+    }
+    if (layout->have_rw) {
+        Elf64_Phdr *ph = &programs[program_index++];
+        ph->p_type = PT_LOAD;
+        ph->p_flags = PF_R | PF_W;
+        ph->p_offset = layout->rw_file_offset;
+        ph->p_vaddr = layout->rw_vaddr;
+        ph->p_paddr = layout->rw_vaddr;
+        ph->p_filesz = layout->rw_file_size;
+        ph->p_memsz = layout->rw_mem_size;
+        ph->p_align = 4096U;
+    }
+    {
+        Elf64_Phdr *ph = &programs[program_index++];
+        MiniLdSection *dynamic = &state->sections[shared->dynamic_section];
+        size_t offset = layout->section_file_offset[shared->dynamic_section];
+
+        if (offset == SIZE_MAX) {
+            fprintf(state->diagnostics,
+                    "minic-ld: missing-shared-dynamic-file-offset\n");
+            goto done;
+        }
+        ph->p_type = PT_DYNAMIC;
+        ph->p_flags = PF_R | PF_W;
+        ph->p_offset = offset;
+        ph->p_vaddr = layout->section_vaddr[shared->dynamic_section];
+        ph->p_paddr = ph->p_vaddr;
+        ph->p_filesz = dynamic->size;
+        ph->p_memsz = dynamic->size;
+        ph->p_align = 8U;
+    }
+
+    for (i = 0U; i < state->section_count; ++i) {
+        MiniLdSection *section = &state->sections[i];
+        Elf64_Shdr *sh = &section_headers[i + 1U];
+        size_t offset = layout->section_file_offset[i];
+
+        sh->sh_name = name_offsets[i];
+        sh->sh_type = section->type;
+        sh->sh_flags = section->flags;
+        sh->sh_addr =
+            (section->flags & SHF_ALLOC) != 0U
+                ? layout->section_vaddr[i]
+                : 0U;
+        sh->sh_offset =
+            section->type == SHT_NOBITS || offset == SIZE_MAX
+                ? 0U
+                : offset;
+        sh->sh_size = section->size;
+        sh->sh_addralign = section->align;
+        sh->sh_entsize = section->entsize;
+        if (i == shared->dynsym_section) {
+            sh->sh_link = (Elf64_Word)(shared->dynstr_section + 1U);
+            sh->sh_info = 1U;
+        } else if (i == shared->hash_section) {
+            sh->sh_link = (Elf64_Word)(shared->dynsym_section + 1U);
+        } else if (i == shared->rela_section) {
+            sh->sh_link = (Elf64_Word)(shared->dynsym_section + 1U);
+        } else if (i == shared->dynamic_section) {
+            sh->sh_link = (Elf64_Word)(shared->dynstr_section + 1U);
+        }
+
+        if ((section->flags & SHF_ALLOC) != 0U &&
+            section->type != SHT_NOBITS &&
+            section->size != 0U) {
+            if (offset == SIZE_MAX ||
+                !range_ok(offset, section->size, total_size)) {
+                fprintf(state->diagnostics,
+                        "minic-ld: invalid-shared-section-layout:%s\n",
+                        section->name);
+                goto done;
+            }
+            memcpy(image + offset, section->data, section->size);
+        }
+    }
+
+    {
+        Elf64_Shdr *sh = &section_headers[shstrtab_index];
+        uint32_t shstrtab_name = 0U;
+        size_t cursor = 1U;
+
+        for (i = 0U; i < state->section_count; ++i) {
+            cursor += strlen(state->sections[i].name) + 1U;
+        }
+        if (cursor > UINT32_MAX) {
+            goto oom;
+        }
+        shstrtab_name = (uint32_t)cursor;
+        sh->sh_name = shstrtab_name;
+        sh->sh_type = SHT_STRTAB;
+        sh->sh_offset = shstrtab_offset;
+        sh->sh_size = shstrtab.size;
+        sh->sh_addralign = 1U;
+    }
+
+    memcpy(image + shstrtab_offset, shstrtab.data, shstrtab.size);
+    memcpy(image + section_header_offset,
+           section_headers,
+           section_count * sizeof(*section_headers));
+
+    file = fopen(path, "wb");
+    if (file == NULL) {
+        fprintf(state->diagnostics,
+                "minic-ld: cannot-create:%s:%s\n",
+                path,
+                strerror(errno));
+        goto done;
+    }
+    if (fwrite(image, 1U, total_size, file) != total_size ||
+        fflush(file) != 0) {
+        fprintf(state->diagnostics,
+                "minic-ld: write-error:%s\n",
+                path);
+        goto done;
+    }
+    ok = true;
+
+done:
+    if (file != NULL && fclose(file) != 0) {
+        ok = false;
+    }
+    if (ok && chmod(path, 0755) != 0) {
+        fprintf(state->diagnostics,
+                "minic-ld: chmod-error:%s:%s\n",
+                path,
+                strerror(errno));
+        ok = false;
+    }
+    if (!ok) {
+        (void)remove(path);
+    }
+    free(name_offsets);
+    free(section_headers);
+    free(image);
+    free(shstrtab.data);
+    return ok;
+
+oom:
+    fprintf(state->diagnostics,
+            "minic-ld: out-of-memory:shared-writer\n");
+    goto done;
+}
+
+int minild_link_shared_elf64_riscv_inputs(const char *output_path,
+                                          const MiniLdInput *inputs,
+                                          size_t input_count,
+                                          const char *soname,
+                                          FILE *diagnostics) {
+    MiniLdState state;
+    MiniLdStaticLayout layout;
+    MiniLdSharedImage shared;
+    bool layout_ready = false;
+    bool ok = false;
+
+    if (output_path == NULL || inputs == NULL || input_count == 0U ||
+        diagnostics == NULL) {
+        return 2;
+    }
+    memset(&state, 0, sizeof(state));
+    memset(&layout, 0, sizeof(layout));
+    memset(&shared, 0, sizeof(shared));
+    state.diagnostics = diagnostics;
+
+    if (!process_input_sequence(&state, inputs, input_count) ||
+        !state.have_input ||
+        !static_allocate_common(&state) ||
+        !shared_prepare_metadata(&state, soname, &shared) ||
+        !static_build_layout(&state, &layout)) {
+        goto done;
+    }
+    layout_ready = true;
+
+    if (!shared_fill_dynsym(&state, &layout, &shared) ||
+        !shared_fill_hash(&state, &shared) ||
+        !shared_fill_relocations(&state, &layout, &shared) ||
+        !shared_fill_dynamic(&state, &layout, &shared) ||
+        !shared_write_object(&state, &layout, &shared, output_path)) {
+        goto done;
+    }
+    ok = true;
+
+done:
+    if (layout_ready) {
+        static_layout_destroy(&layout);
+    }
+    shared_image_destroy(&shared);
+    state_destroy(&state);
+    return ok ? 0 : 1;
+}
+
 int minild_link_static_elf64_riscv_inputs(const char *output_path,
                                           const MiniLdInput *inputs,
                                           size_t input_count,
