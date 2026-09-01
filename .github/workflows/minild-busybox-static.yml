@@ -123,9 +123,11 @@ jobs:
           : "${BUSYBOX_LIBGCC:?}"
           : "${BUSYBOX_UAPI_COMPAT:?}"
           compile=0
+          relocatable=0
           for arg in "$@"; do
             case "$arg" in
               -c|-E|-S|-M|-MM) compile=1 ;;
+              -r) relocatable=1 ;;
             esac
           done
           if test "$compile" -eq 1; then
@@ -133,6 +135,11 @@ jobs:
               --sysroot="$BUSYBOX_MUSL_SYSROOT" \
               -I"$BUSYBOX_UAPI_COMPAT" \
               -fno-pic -fno-pie "$@"
+          fi
+          if test "$relocatable" -eq 1; then
+            exec riscv64-linux-gnu-gcc \
+              --sysroot="$BUSYBOX_MUSL_SYSROOT" \
+              -nostdlib "$@"
           fi
 
           filtered=()
