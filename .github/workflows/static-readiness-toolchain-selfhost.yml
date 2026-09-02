@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - "toolchain/static-readiness"
+      - "toolchain/miniobjcopy-linux-m0"
   workflow_dispatch:
 
 permissions:
@@ -242,7 +243,13 @@ jobs:
           grep -q 'selfhost.o' "$work/ar-list.txt"
 
           qemu-riscv64 "$nm" "$work/selfhost.a" >"$work/nm-list.txt"
-          grep -q ' T selfhost_symbol          qemu-riscv64 "$ld" -melf64lriscv -r -o "$work/selfhost-merged.o" "$work/selfhost.o"
+          grep -q ' T selfhost_symbol$' "$work/nm-list.txt"
+
+          riscv64-linux-gnu-objcopy -O binary "$work/selfhost.o" "$work/selfhost.gnu.bin"
+          qemu-riscv64 "$objcopy" -O binary "$work/selfhost.o" "$work/selfhost.mini.bin"
+          cmp "$work/selfhost.gnu.bin" "$work/selfhost.mini.bin"
+
+          qemu-riscv64 "$ld" -melf64lriscv -r -o "$work/selfhost-merged.o" "$work/selfhost.o"
           riscv64-linux-gnu-readelf -h "$work/selfhost-merged.o" | grep -q 'REL (Relocatable file)'
 
           echo "STATIC_TOOLCHAIN_SELFHOST=PASS compiler=stage2 pp=PASS as=PASS ar=PASS nm=PASS objcopy=PASS ld=PASS"
@@ -259,31 +266,6 @@ jobs:
             build/static-toolchain-selfhost/nm-list.txt
             build/static-toolchain-selfhost/selfhost.gnu.bin
             build/static-toolchain-selfhost/selfhost.mini.bin
-            build/static-toolchain-selfhost/selfhost.i
-            build/static-toolchain-selfhost/bin/
-          if-no-files-found: ignore
-          retention-days: 3
- "$work/nm-list.txt"
-
-          riscv64-linux-gnu-objcopy -O binary "$work/selfhost.o" "$work/selfhost.gnu.bin"
-          qemu-riscv64 "$objcopy" -O binary "$work/selfhost.o" "$work/selfhost.mini.bin"
-          cmp "$work/selfhost.gnu.bin" "$work/selfhost.mini.bin"
-
-          qemu-riscv64 "$ld" -melf64lriscv -r -o "$work/selfhost-merged.o" "$work/selfhost.o"
-          riscv64-linux-gnu-readelf -h "$work/selfhost-merged.o" | grep -q 'REL (Relocatable file)'
-
-          echo "STATIC_TOOLCHAIN_SELFHOST=PASS compiler=stage2 pp=PASS as=PASS ar=PASS nm=PASS ld=PASS"
-
-      - name: Preserve selfhost evidence
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: static-toolchain-selfhost-evidence
-          path: |
-            build/static-toolchain-selfhost/*.objects
-            build/static-toolchain-selfhost/i/*.stage2.err
-            build/static-toolchain-selfhost/ar-list.txt
-            build/static-toolchain-selfhost/nm-list.txt
             build/static-toolchain-selfhost/selfhost.i
             build/static-toolchain-selfhost/bin/
           if-no-files-found: ignore
