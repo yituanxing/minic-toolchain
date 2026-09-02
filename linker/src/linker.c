@@ -3768,8 +3768,24 @@ static bool static_write_executable(MiniLdState *state,
                                     uint64_t entry) {
     size_t phnum = (layout->have_rx ? 1U : 0U) +
                    (layout->have_rw ? 1U : 0U);
-    size_t image_size = sizeof(Elf64_Ehdr) + phnum * sizeof(Elf64_Phdr);
-    unsigned char *image;
+    size_t load_image_size =
+        sizeof(Elf64_Ehdr) + phnum * sizeof(Elf64_Phdr);
+    size_t output_section_count;
+    size_t symtab_index;
+    size_t strtab_index;
+    size_t shstrtab_index;
+    size_t local_count;
+    size_t cursor;
+    size_t section_header_offset;
+    size_t total_size;
+    size_t *section_file_offsets = NULL;
+    uint32_t *section_name_offsets = NULL;
+    uint32_t *symbol_name_offsets = NULL;
+    MiniLdBuffer strtab = {NULL, 0U, 0U};
+    MiniLdBuffer shstrtab = {NULL, 0U, 0U};
+    Elf64_Shdr *headers = NULL;
+    Elf64_Sym *symbols = NULL;
+    unsigned char *image = NULL;
     Elf64_Ehdr header;
     Elf64_Phdr *programs;
     size_t i;
@@ -3778,17 +3794,229 @@ static bool static_write_executable(MiniLdState *state,
     bool ok = false;
 
     if (layout->have_rx &&
-        layout->rx_file_offset + layout->rx_file_size > image_size) {
-        image_size = layout->rx_file_offset + layout->rx_file_size;
+        layout->rx_file_offset + layout->rx_file_size >
+            load_image_size) {
+        load_image_size =
+            layout->rx_file_offset + layout->rx_file_size;
     }
     if (layout->have_rw &&
-        layout->rw_file_offset + layout->rw_file_size > image_size) {
-        image_size = layout->rw_file_offset + layout->rw_file_size;
+        layout->rw_file_offset + layout->rw_file_size >
+            load_image_size) {
+        load_image_size =
+            layout->rw_file_offset + layout->rw_file_size;
     }
-    image = calloc(image_size == 0U ? 1U : image_size, 1U);
+
+    if (state->section_count > SIZE_MAX - 3U) {
+        goto oom;
+    }
+    output_section_count = state->section_count + 3U;
+    if (output_section_count + 1U > UINT16_MAX) {
+        fprintf(state->diagnostics,
+                "minic-ld: too-many-static-output-sections\n");
+        goto done;
+    }
+
+    section_file_offsets =
+        malloc((state->section_count == 0U ? 1U : state->section_count) *
+               sizeof(*section_file_offsets));
+    section_name_offsets =
+        calloc(state->section_count == 0U ? 1U : state->section_count,
+               sizeof(*section_name_offsets));
+    symbol_name_offsets =
+        calloc(state->symbol_count == 0U ? 1U : state->symbol_count,
+               sizeof(*symbol_name_offsets));
+    headers = calloc(output_section_count + 1U, sizeof(*headers));
+    symbols = calloc(state->symbol_count + 1U, sizeof(*symbols));
+    if (section_file_offsets == NULL ||
+        section_name_offsets == NULL ||
+        symbol_name_offsets == NULL ||
+        headers == NULL ||
+        symbols == NULL ||
+        !buffer_append_zero(&strtab, 1U) ||
+        !buffer_append_zero(&shstrtab, 1U)) {
+        goto oom;
+    }
+
+    (void)assign_symbol_indices(state, &local_count);
+    cursor = load_image_size;
+
+    for (i = 0U; i < state->section_count; ++i) {
+        MiniLdSection *section = &state->sections[i];
+        size_t aligned;
+
+        if (!buffer_append_string(&shstrtab,
+                                  section->name,
+                                  &section_name_offsets[i])) {
+            goto oom;
+        }
+
+        section_file_offsets[i] = layout->section_file_offset[i];
+        if ((section->flags & SHF_ALLOC) != 0U) {
+            if (section->type != SHT_NOBITS &&
+                section->size != 0U &&
+                (section_file_offsets[i] == SIZE_MAX ||
+                 !range_ok(section_file_offsets[i],
+                           section->size,
+                           load_image_size))) {
+                fprintf(state->diagnostics,
+                        "minic-ld: invalid-static-section-layout:%s\n",
+                        section->name);
+                goto done;
+            }
+            continue;
+        }
+
+        if (section->type == SHT_NOBITS || section->size == 0U) {
+            section_file_offsets[i] = 0U;
+            continue;
+        }
+        if (!align_up_size(cursor,
+                           section->align == 0U ? 1U : section->align,
+                           &aligned)) {
+            goto oom;
+        }
+        cursor = aligned;
+        section_file_offsets[i] = cursor;
+        if (!add_size(cursor, section->size, &cursor)) {
+            goto oom;
+        }
+    }
+
+    for (i = 0U; i < state->symbol_count; ++i) {
+        if (state->symbols[i].name[0] != '\0' &&
+            !buffer_append_string(&strtab,
+                                  state->symbols[i].name,
+                                  &symbol_name_offsets[i])) {
+            goto oom;
+        }
+    }
+
+    symtab_index = 1U + state->section_count;
+    strtab_index = symtab_index + 1U;
+    shstrtab_index = symtab_index + 2U;
+    {
+        uint32_t symtab_name;
+        uint32_t strtab_name;
+        uint32_t shstrtab_name;
+
+        if (!buffer_append_string(&shstrtab,
+                                  ".symtab",
+                                  &symtab_name) ||
+            !buffer_append_string(&shstrtab,
+                                  ".strtab",
+                                  &strtab_name) ||
+            !buffer_append_string(&shstrtab,
+                                  ".shstrtab",
+                                  &shstrtab_name)) {
+            goto oom;
+        }
+        headers[symtab_index].sh_name = symtab_name;
+        headers[strtab_index].sh_name = strtab_name;
+        headers[shstrtab_index].sh_name = shstrtab_name;
+    }
+
+    for (i = 0U; i < state->section_count; ++i) {
+        MiniLdSection *section = &state->sections[i];
+        Elf64_Shdr *output = &headers[i + 1U];
+
+        output->sh_name = section_name_offsets[i];
+        output->sh_type = section->type;
+        output->sh_flags = section->flags;
+        output->sh_addr =
+            (section->flags & SHF_ALLOC) != 0U
+                ? layout->section_vaddr[i]
+                : 0U;
+        output->sh_offset =
+            section->type == SHT_NOBITS
+                ? 0U
+                : section_file_offsets[i];
+        output->sh_size = section->size;
+        output->sh_addralign =
+            section->align == 0U ? 1U : section->align;
+        output->sh_entsize = section->entsize;
+    }
+
+    for (i = 0U; i < state->symbol_count; ++i) {
+        MiniLdSymbol *input = &state->symbols[i];
+        Elf64_Sym *output = &symbols[input->final_index];
+
+        output->st_name = symbol_name_offsets[i];
+        output->st_info = input->info;
+        output->st_other = input->other;
+        output->st_size = input->size;
+        if (input->section == MINILD_SECTION_UNDEF) {
+            output->st_shndx = SHN_UNDEF;
+            output->st_value = 0U;
+        } else if (input->section == MINILD_SECTION_ABS) {
+            output->st_shndx = SHN_ABS;
+            output->st_value = input->value;
+        } else if (input->section == MINILD_SECTION_COMMON) {
+            output->st_shndx = SHN_COMMON;
+            output->st_value = input->value;
+        } else if (input->section >= 0 &&
+                   (size_t)input->section < state->section_count) {
+            output->st_shndx =
+                (Elf64_Section)((size_t)input->section + 1U);
+            output->st_value =
+                (state->sections[input->section].flags & SHF_ALLOC) != 0U
+                    ? layout->section_vaddr[input->section] +
+                          input->value
+                    : input->value;
+        } else {
+            fprintf(state->diagnostics,
+                    "minic-ld: invalid-static-symbol-section:%s\n",
+                    input->name);
+            goto done;
+        }
+    }
+
+    {
+        size_t aligned;
+        if (!align_up_size(cursor, 8U, &aligned)) {
+            goto oom;
+        }
+        cursor = aligned;
+    }
+    headers[symtab_index].sh_type = SHT_SYMTAB;
+    headers[symtab_index].sh_offset = cursor;
+    headers[symtab_index].sh_size =
+        (state->symbol_count + 1U) * sizeof(Elf64_Sym);
+    headers[symtab_index].sh_link = (Elf64_Word)strtab_index;
+    headers[symtab_index].sh_info = (Elf64_Word)local_count;
+    headers[symtab_index].sh_addralign = 8U;
+    headers[symtab_index].sh_entsize = sizeof(Elf64_Sym);
+    if (!add_size(cursor,
+                  headers[symtab_index].sh_size,
+                  &cursor)) {
+        goto oom;
+    }
+
+    headers[strtab_index].sh_type = SHT_STRTAB;
+    headers[strtab_index].sh_offset = cursor;
+    headers[strtab_index].sh_size = strtab.size;
+    headers[strtab_index].sh_addralign = 1U;
+    if (!add_size(cursor, strtab.size, &cursor)) {
+        goto oom;
+    }
+
+    headers[shstrtab_index].sh_type = SHT_STRTAB;
+    headers[shstrtab_index].sh_offset = cursor;
+    headers[shstrtab_index].sh_size = shstrtab.size;
+    headers[shstrtab_index].sh_addralign = 1U;
+    if (!add_size(cursor, shstrtab.size, &cursor) ||
+        !align_up_size(cursor, 8U, &section_header_offset) ||
+        output_section_count + 1U >
+            (SIZE_MAX - section_header_offset) /
+                sizeof(Elf64_Shdr)) {
+        goto oom;
+    }
+
+    total_size =
+        section_header_offset +
+        (output_section_count + 1U) * sizeof(Elf64_Shdr);
+    image = calloc(total_size == 0U ? 1U : total_size, 1U);
     if (image == NULL) {
-        fprintf(state->diagnostics, "minic-ld: out-of-memory:static-image\n");
-        return false;
+        goto oom;
     }
 
     memset(&header, 0, sizeof(header));
@@ -3802,13 +4030,19 @@ static bool static_write_executable(MiniLdState *state,
     header.e_version = EV_CURRENT;
     header.e_entry = entry;
     header.e_phoff = sizeof(Elf64_Ehdr);
+    header.e_shoff = section_header_offset;
     header.e_flags = state->elf_flags;
     header.e_ehsize = sizeof(Elf64_Ehdr);
     header.e_phentsize = sizeof(Elf64_Phdr);
     header.e_phnum = (Elf64_Half)phnum;
+    header.e_shentsize = sizeof(Elf64_Shdr);
+    header.e_shnum =
+        (Elf64_Half)(output_section_count + 1U);
+    header.e_shstrndx = (Elf64_Half)shstrtab_index;
     memcpy(image, &header, sizeof(header));
 
-    programs = (Elf64_Phdr *)(void *)(image + sizeof(Elf64_Ehdr));
+    programs =
+        (Elf64_Phdr *)(void *)(image + sizeof(Elf64_Ehdr));
     if (layout->have_rx) {
         Elf64_Phdr *ph = &programs[program_index++];
         memset(ph, 0, sizeof(*ph));
@@ -3836,22 +4070,37 @@ static bool static_write_executable(MiniLdState *state,
 
     for (i = 0U; i < state->section_count; ++i) {
         MiniLdSection *section = &state->sections[i];
-        size_t offset = layout->section_file_offset[i];
 
-        if ((section->flags & SHF_ALLOC) == 0U ||
-            section->type == SHT_NOBITS ||
+        if (section->type == SHT_NOBITS ||
             section->size == 0U) {
             continue;
         }
-        if (offset == SIZE_MAX ||
-            !range_ok(offset, section->size, image_size)) {
+        if (section_file_offsets[i] == SIZE_MAX ||
+            !range_ok(section_file_offsets[i],
+                      section->size,
+                      total_size)) {
             fprintf(state->diagnostics,
-                    "minic-ld: invalid-static-section-layout:%s\n",
+                    "minic-ld: invalid-static-section-output:%s\n",
                     section->name);
             goto done;
         }
-        memcpy(image + offset, section->data, section->size);
+        memcpy(image + section_file_offsets[i],
+               section->data,
+               section->size);
     }
+
+    memcpy(image + headers[symtab_index].sh_offset,
+           symbols,
+           headers[symtab_index].sh_size);
+    memcpy(image + headers[strtab_index].sh_offset,
+           strtab.data,
+           strtab.size);
+    memcpy(image + headers[shstrtab_index].sh_offset,
+           shstrtab.data,
+           shstrtab.size);
+    memcpy(image + section_header_offset,
+           headers,
+           (output_section_count + 1U) * sizeof(*headers));
 
     file = fopen(path, "wb");
     if (file == NULL) {
@@ -3861,12 +4110,19 @@ static bool static_write_executable(MiniLdState *state,
                 strerror(errno));
         goto done;
     }
-    if (fwrite(image, 1U, image_size, file) != image_size ||
+    if (fwrite(image, 1U, total_size, file) != total_size ||
         fflush(file) != 0) {
-        fprintf(state->diagnostics, "minic-ld: write-error:%s\n", path);
+        fprintf(state->diagnostics,
+                "minic-ld: write-error:%s\n",
+                path);
         goto done;
     }
     ok = true;
+    goto done;
+
+oom:
+    fprintf(state->diagnostics,
+            "minic-ld: out-of-memory:static-output\n");
 
 done:
     if (file != NULL && fclose(file) != 0) {
@@ -3885,6 +4141,13 @@ done:
         (void)remove(path);
     }
     free(image);
+    free(symbols);
+    free(headers);
+    free(symbol_name_offsets);
+    free(section_name_offsets);
+    free(section_file_offsets);
+    free(strtab.data);
+    free(shstrtab.data);
     return ok;
 }
 
