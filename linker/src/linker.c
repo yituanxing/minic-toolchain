@@ -3334,9 +3334,11 @@ static bool script_layout_bind_output_symbols(
 
         if (script_state->section_owner[i] == command_index &&
             !script_state->layout->section_discarded[i] &&
-            (section->flags & SHF_ALLOC) != 0U) {
+            (section->flags & SHF_ALLOC) != 0U &&
+            (anchor == SIZE_MAX ||
+             script_state->layout->section_vaddr[i] <
+                 script_state->layout->section_vaddr[anchor])) {
             anchor = i;
-            break;
         }
     }
     if (anchor == SIZE_MAX) {
