@@ -96,10 +96,10 @@ MINIC_CC_BINARY := $(BUILD_DIR)/bin/minic-cc
 MINIC_BINARY  := $(BUILD_DIR)/bin/minic
 
 MINIELF_INCLUDES := -Ielf/include
-MINIELF_SOURCES := \
-	elf/src/reader.c \
-	elf/src/relocatable_writer.c
-MINIELF_OBJECTS := $(patsubst %.c,$(BUILD_DIR)/obj/%.o,$(MINIELF_SOURCES))
+MINIELF_READER_OBJECT := $(BUILD_DIR)/obj/elf/src/reader.o
+MINIELF_REL_WRITER_OBJECT := $(BUILD_DIR)/obj/elf/src/relocatable_writer.o
+MINIELF_BINARY_EXPORT_OBJECT := $(BUILD_DIR)/obj/elf/src/binary_export.o
+MINIELF_REL_OBJECTS := $(MINIELF_READER_OBJECT) $(MINIELF_REL_WRITER_OBJECT)
 
 MINIAS_INCLUDES := -Iassembler/src $(MINIELF_INCLUDES)
 MINIAS_SOURCES := \
@@ -109,7 +109,7 @@ MINIAS_SOURCES := \
 	assembler/src/string_literal.c \
 	assembler/src/elf_writer.c \
 	tools/minic-as/main.c
-MINIAS_OBJECTS := $(MINIELF_OBJECTS) $(patsubst %.c,$(BUILD_DIR)/obj/%.o,$(MINIAS_SOURCES))
+MINIAS_OBJECTS := $(MINIELF_REL_OBJECTS) $(patsubst %.c,$(BUILD_DIR)/obj/%.o,$(MINIAS_SOURCES))
 MINIAS_BINARY := $(BUILD_DIR)/bin/minic-as
 
 MINIPP_INCLUDES := -Ipreprocessor/include -Ipreprocessor/src
@@ -127,7 +127,7 @@ MINIAR_INCLUDES := -Iarchiver/include $(MINIELF_INCLUDES)
 MINIAR_SOURCES := \
 	archiver/src/archive.c \
 	tools/minic-ar/main.c
-MINIAR_OBJECTS := $(BUILD_DIR)/obj/elf/src/reader.o $(patsubst %.c,$(BUILD_DIR)/obj/%.o,$(MINIAR_SOURCES))
+MINIAR_OBJECTS := $(MINIELF_READER_OBJECT) $(patsubst %.c,$(BUILD_DIR)/obj/%.o,$(MINIAR_SOURCES))
 MINIAR_BINARY := $(BUILD_DIR)/bin/minic-ar
 
 MINILD_INCLUDES := -Ilinker/include -Ilinker/src $(MINIELF_INCLUDES)
@@ -138,14 +138,20 @@ MINILD_SOURCES := \
 	linker/src/linker_script_match.c \
 	linker/src/linker.c \
 	tools/minic-ld/main.c
-MINILD_OBJECTS := $(MINIELF_OBJECTS) $(patsubst %.c,$(BUILD_DIR)/obj/%.o,$(MINILD_SOURCES))
+MINILD_OBJECTS := $(MINIELF_REL_OBJECTS) $(patsubst %.c,$(BUILD_DIR)/obj/%.o,$(MINILD_SOURCES))
 MINILD_BINARY := $(BUILD_DIR)/bin/minic-ld
 
 MININM_INCLUDES := $(MINIELF_INCLUDES) -Iarchiver/include
 MININM_SOURCES := \
 	tools/minic-nm/main.c
-MININM_OBJECTS := $(BUILD_DIR)/obj/elf/src/reader.o $(BUILD_DIR)/obj/archiver/src/archive.o $(patsubst %.c,$(BUILD_DIR)/obj/%.o,$(MININM_SOURCES))
+MININM_OBJECTS := $(MINIELF_READER_OBJECT) $(BUILD_DIR)/obj/archiver/src/archive.o $(patsubst %.c,$(BUILD_DIR)/obj/%.o,$(MININM_SOURCES))
 MININM_BINARY := $(BUILD_DIR)/bin/minic-nm
+
+MINIOBJCOPY_INCLUDES := $(MINIELF_INCLUDES)
+MINIOBJCOPY_SOURCES := \
+	tools/minic-objcopy/main.c
+MINIOBJCOPY_OBJECTS := $(MINIELF_READER_OBJECT) $(MINIELF_BINARY_EXPORT_OBJECT) $(patsubst %.c,$(BUILD_DIR)/obj/%.o,$(MINIOBJCOPY_SOURCES))
+MINIOBJCOPY_BINARY := $(BUILD_DIR)/bin/minic-objcopy
 
 TOKEN_MODEL_TEST_SOURCES := \
 	src/frontend/token.c \
@@ -214,7 +220,7 @@ RV64_ABI_TEST_SOURCES := \
 RV64_ABI_TEST_OBJECTS := $(patsubst %.c,$(BUILD_DIR)/obj/%.o,$(RV64_ABI_TEST_SOURCES))
 RV64_ABI_TEST_BINARY  := $(BUILD_DIR)/tests/target/riscv64/abi-test
 
-.PHONY: all help prepare check check-fast check-minias-a0 check-minipp-a0 check-minielf-reader-a0 check-mininm-a0 check-mininm-a1 check-miniar-a0 check-miniar-a1 check-minild-a0 check-minild-a1 check-minild-a2 check-minild-a3 check-minild-script-a0 check-minild-script-a1 check-token-model check-lexer \
+.PHONY: all help prepare check check-fast check-minias-a0 check-minipp-a0 check-minielf-reader-a0 check-mininm-a0 check-mininm-a1 check-miniobjcopy-a0 check-miniar-a0 check-miniar-a1 check-minild-a0 check-minild-a1 check-minild-a2 check-minild-a3 check-minild-script-a0 check-minild-script-a1 check-token-model check-lexer \
 	check-type check-record check-type-alias check-ast-contract check-layout check-rv64-abi \
 	check-static-functions \
 	check-unsigned-declarations check-long-types check-for-loops check-unbounded-for-break \
@@ -227,7 +233,7 @@ RV64_ABI_TEST_BINARY  := $(BUILD_DIR)/tests/target/riscv64/abi-test
 	check-runtime sanitize bootstrap bootstrap-compare format format-check \
 	clean distclean print-config
 
-all: $(MINIC_CC_BINARY) $(MINIC_BINARY) $(MINIAS_BINARY) $(MINIPP_BINARY) $(MINIAR_BINARY) $(MINILD_BINARY) $(MININM_BINARY)
+all: $(MINIC_CC_BINARY) $(MINIC_BINARY) $(MINIAS_BINARY) $(MINIPP_BINARY) $(MINIAR_BINARY) $(MINILD_BINARY) $(MININM_BINARY) $(MINIOBJCOPY_BINARY)
 
 help:
 	@printf '%s\n' \
@@ -238,6 +244,7 @@ help:
 		"  make check-minielf-reader-a0 Validate shared ELF reader on GNU-as RV32/RV64 objects" \
 		"  make check-mininm-a0    Differentially validate minic-nm against GNU nm" \
 		"  make check-mininm-a1    Differentially validate regular/thin archive nm" \
+		"  make check-miniobjcopy-a0 Differentially validate ELF -> binary export" \
 		"  make check-miniar-a0    Compare MiniAR archives byte-for-byte with GNU ar" \
 		"  make check-miniar-a1    Check thin flattening and archive listing" \
 		"  make check-minild-a0    Validate ELF64 RISC-V relocatable linking against GNU ld" \
@@ -380,6 +387,14 @@ $(MININM_BINARY): $(MININM_OBJECTS)
 	@mkdir -p "$(dir $@)"
 	$(CC) $(MININM_OBJECTS) $(MINIC_LDFLAGS) -o "$@"
 
+$(BUILD_DIR)/obj/tools/minic-objcopy/%.o: tools/minic-objcopy/%.c
+	@mkdir -p "$(dir $@)"
+	$(CC) $(CPPFLAGS) $(MINIOBJCOPY_INCLUDES) $(MINIC_CFLAGS) -MMD -MP -c "$<" -o "$@"
+
+$(MINIOBJCOPY_BINARY): $(MINIOBJCOPY_OBJECTS)
+	@mkdir -p "$(dir $@)"
+	$(CC) $(MINIOBJCOPY_OBJECTS) $(MINIC_LDFLAGS) -o "$@"
+
 check-minielf-reader-a0:
 	HOST_CC="$(CC)" \
 	BUILD_DIR="$(abspath $(BUILD_DIR))" \
@@ -394,6 +409,11 @@ check-mininm-a1: $(MININM_BINARY)
 	MININM="$(abspath $(MININM_BINARY))" \
 	BUILD_DIR="$(abspath $(BUILD_DIR))" \
 	sh tests/nm/run-a1.sh
+
+check-miniobjcopy-a0: $(MINIOBJCOPY_BINARY)
+	MINIOBJCOPY="$(abspath $(MINIOBJCOPY_BINARY))" \
+	BUILD_DIR="$(abspath $(BUILD_DIR))" \
+	sh tests/objcopy/run-a0.sh
 
 check-minild-a0: $(MINILD_BINARY)
 	MINILD="$(abspath $(MINILD_BINARY))" \
@@ -669,6 +689,7 @@ distclean:
 -include $(MINIELF_OBJECTS:.o=.d)
 -include $(MINILD_OBJECTS:.o=.d)
 -include $(MININM_OBJECTS:.o=.d)
+-include $(MINIOBJCOPY_OBJECTS:.o=.d)
 -include $(TOKEN_MODEL_TEST_OBJECTS:.o=.d)
 -include $(LEXER_TEST_OBJECTS:.o=.d)
 -include $(TYPE_TEST_OBJECTS:.o=.d)

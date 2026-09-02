@@ -124,6 +124,22 @@ bool minielf_open(MiniElfView *view, const void *data, size_t size) {
         section_name_index = load_u16(view, bytes + 50U);
     }
 
+    if (view->program_header_count != 0U) {
+        size_t program_header_size =
+            view->elf_class == ELFCLASS64 ? 56U : 32U;
+
+        if (view->program_header_entry_size < program_header_size ||
+            view->program_header_offset > SIZE_MAX ||
+            (size_t)view->program_header_count >
+                SIZE_MAX / view->program_header_entry_size ||
+            !range_ok((size_t)view->program_header_offset,
+                      (size_t)view->program_header_count *
+                          view->program_header_entry_size,
+                      size)) {
+            return false;
+        }
+    }
+
     if (section_count == 0U) {
         if (view->section_header_offset != 0U || section_name_index != SHN_UNDEF) {
             return false;
@@ -142,6 +158,87 @@ bool minielf_open(MiniElfView *view, const void *data, size_t size) {
 
     view->section_count = section_count;
     view->section_name_table_index = section_name_index;
+    return true;
+}
+
+bool minielf_program_header(const MiniElfView *view,
+                            size_t index,
+                            MiniElfProgramHeader *program_out) {
+    const unsigned char *data;
+    size_t minimum;
+    size_t offset;
+
+    if (view == NULL || program_out == NULL ||
+        index >= view->program_header_count ||
+        view->program_header_offset > SIZE_MAX) {
+        return false;
+    }
+    minimum = view->elf_class == ELFCLASS64 ? 56U : 32U;
+    if (view->program_header_entry_size < minimum ||
+        index > (SIZE_MAX - (size_t)view->program_header_offset) /
+                    view->program_header_entry_size) {
+        return false;
+    }
+    offset = (size_t)view->program_header_offset +
+             index * view->program_header_entry_size;
+    if (!range_ok(offset, minimum, view->size)) {
+        return false;
+    }
+
+    data = view->data + offset;
+    memset(program_out, 0, sizeof(*program_out));
+    program_out->type = load_u32(view, data);
+    if (view->elf_class == ELFCLASS64) {
+        program_out->flags = load_u32(view, data + 4U);
+        program_out->offset = load_u64(view, data + 8U);
+        program_out->virtual_address = load_u64(view, data + 16U);
+        program_out->physical_address = load_u64(view, data + 24U);
+        program_out->file_size = load_u64(view, data + 32U);
+        program_out->memory_size = load_u64(view, data + 40U);
+        program_out->alignment = load_u64(view, data + 48U);
+    } else {
+        program_out->offset = load_u32(view, data + 4U);
+        program_out->virtual_address = load_u32(view, data + 8U);
+        program_out->physical_address = load_u32(view, data + 12U);
+        program_out->file_size = load_u32(view, data + 16U);
+        program_out->memory_size = load_u32(view, data + 20U);
+        program_out->flags = load_u32(view, data + 24U);
+        program_out->alignment = load_u32(view, data + 28U);
+    }
+    return true;
+}
+
+bool minielf_section_load_address(const MiniElfView *view,
+                                  const MiniElfSection *section,
+                                  uint64_t *address_out) {
+    size_t i;
+
+    if (view == NULL || section == NULL || address_out == NULL) {
+        return false;
+    }
+
+    for (i = 0U; i < view->program_header_count; ++i) {
+        MiniElfProgramHeader program;
+        uint64_t relative;
+
+        if (!minielf_program_header(view, i, &program)) {
+            return false;
+        }
+        if (program.type != PT_LOAD ||
+            section->address < program.virtual_address) {
+            continue;
+        }
+        relative = section->address - program.virtual_address;
+        if (relative > program.memory_size ||
+            section->size > program.memory_size - relative ||
+            program.physical_address > UINT64_MAX - relative) {
+            continue;
+        }
+        *address_out = program.physical_address + relative;
+        return true;
+    }
+
+    *address_out = section->address;
     return true;
 }
 
