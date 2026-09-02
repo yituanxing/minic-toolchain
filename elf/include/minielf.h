@@ -84,4 +84,61 @@ uint32_t minielf_rela_type(const MiniElfView *view, uint64_t info);
 unsigned minielf_symbol_bind(unsigned char info);
 unsigned minielf_symbol_type(unsigned char info);
 
+typedef enum MiniElfWriteError {
+    MINIELF_WRITE_OK = 0,
+    MINIELF_WRITE_INVALID_ARGUMENT,
+    MINIELF_WRITE_OUT_OF_MEMORY,
+    MINIELF_WRITE_LIMIT,
+    MINIELF_WRITE_INVALID_SECTION,
+    MINIELF_WRITE_INVALID_SYMBOL,
+    MINIELF_WRITE_INVALID_RELOCATION
+} MiniElfWriteError;
+
+typedef struct MiniElfWriteSection {
+    const char *name;
+    uint32_t type;
+    uint64_t flags;
+    uint64_t alignment;
+    uint64_t entry_size;
+    const unsigned char *data;
+    size_t size;
+} MiniElfWriteSection;
+
+typedef struct MiniElfWriteSymbol {
+    const char *name;
+    unsigned char info;
+    unsigned char other;
+    uint16_t section_index;
+    uint64_t value;
+    uint64_t size;
+} MiniElfWriteSymbol;
+
+typedef struct MiniElfWriteRela {
+    size_t target_section;
+    uint64_t offset;
+    size_t symbol_index;
+    uint32_t type;
+    int64_t addend;
+} MiniElfWriteRela;
+
+typedef struct MiniElfRelocatableSpec {
+    unsigned char elf_class;
+    unsigned char data_encoding;
+    uint16_t machine;
+    uint32_t flags;
+    const MiniElfWriteSection *sections;
+    size_t section_count;
+    const MiniElfWriteSymbol *symbols;
+    size_t symbol_count;
+    const MiniElfWriteRela *relocations;
+    size_t relocation_count;
+    bool emit_section_symbols;
+} MiniElfRelocatableSpec;
+
+bool minielf_build_relocatable(const MiniElfRelocatableSpec *spec,
+                               unsigned char **image_out,
+                               size_t *size_out,
+                               MiniElfWriteError *error_out);
+const char *minielf_write_error_string(MiniElfWriteError error);
+
 #endif
