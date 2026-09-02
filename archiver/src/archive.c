@@ -406,14 +406,16 @@ static bool archive_decode_member_name(const MiniArArchiveView *view,
     return true;
 }
 
-typedef bool (*MiniArMemberVisitor)(const MiniArArchiveView *view,
-                                    const char *name,
-                                    void *context,
-                                    FILE *diagnostics);
+typedef bool (*MiniArRawMemberVisitor)(const MiniArArchiveView *view,
+                                       const char *name,
+                                       const unsigned char *data,
+                                       size_t size,
+                                       void *context,
+                                       FILE *diagnostics);
 
 static bool visit_archive_members(const unsigned char *data,
                                   size_t size,
-                                  MiniArMemberVisitor visitor,
+                                  MiniArRawMemberVisitor visitor,
                                   void *context,
                                   FILE *diagnostics) {
     MiniArArchiveView view = {data, size, false, NULL, 0U};
@@ -464,7 +466,12 @@ static bool visit_archive_members(const unsigned char *data,
                 fprintf(diagnostics, "minic-ar: unsupported-member-name:%s\n", field);
                 return false;
             }
-            if (!visitor(&view, name, context, diagnostics)) {
+            if (!visitor(&view,
+                         name,
+                         embedded_payload ? data + payload_offset : NULL,
+                         (size_t)payload_size,
+                         context,
+                         diagnostics)) {
                 free(name);
                 return false;
             }
@@ -633,6 +640,8 @@ static bool expand_thin_member_path(const char *path,
 
 static bool expand_thin_member_visitor(const MiniArArchiveView *view,
                                        const char *name,
+                                       const unsigned char *data,
+                                       size_t size,
                                        void *context,
                                        FILE *diagnostics) {
     MiniArExpandContext *expand = context;
@@ -640,6 +649,8 @@ static bool expand_thin_member_visitor(const MiniArArchiveView *view,
     bool ok;
 
     (void)view;
+    (void)data;
+    (void)size;
     path = join_path(expand->archive_directory, name);
     if (path == NULL) {
         fprintf(diagnostics, "minic-ar: out-of-memory:thin-member-path\n");
@@ -1169,18 +1180,87 @@ done:
     return ok ? 0 : 1;
 }
 
+typedef struct MiniArVisitContext {
+    char *archive_directory;
+    MiniArMemberVisitor visitor;
+    void *context;
+} MiniArVisitContext;
+
+static bool public_member_visitor(const MiniArArchiveView *view,
+                                  const char *name,
+                                  const unsigned char *data,
+                                  size_t size,
+                                  void *context,
+                                  FILE *diagnostics) {
+    MiniArVisitContext *visit = context;
+    MiniArMemberView member;
+    char *external_path = NULL;
+    bool ok;
+
+    memset(&member, 0, sizeof(member));
+    member.name = name;
+    member.data = data;
+    member.size = size;
+    member.thin = view->thin;
+    if (view->thin) {
+        external_path = join_path(visit->archive_directory, name);
+        if (external_path == NULL) {
+            fprintf(diagnostics, "minic-ar: out-of-memory:thin-member-path\n");
+            return false;
+        }
+        member.external_path = external_path;
+    }
+
+    ok = visit->visitor(&member, visit->context, diagnostics);
+    free(external_path);
+    return ok;
+}
+
+int miniar_visit_archive(const char *archive_path,
+                         MiniArMemberVisitor visitor,
+                         void *context,
+                         FILE *diagnostics) {
+    unsigned char *data = NULL;
+    size_t size = 0U;
+    MiniArVisitContext visit;
+    bool ok;
+
+    if (archive_path == NULL || visitor == NULL || diagnostics == NULL) {
+        return 2;
+    }
+    if (!load_file(archive_path, &data, &size, diagnostics)) {
+        return 1;
+    }
+    memset(&visit, 0, sizeof(visit));
+    visit.archive_directory = archive_directory(archive_path);
+    visit.visitor = visitor;
+    visit.context = context;
+    if (visit.archive_directory == NULL) {
+        fprintf(diagnostics, "minic-ar: out-of-memory:archive-directory\n");
+        free(data);
+        return 1;
+    }
+
+    ok = visit_archive_members(data,
+                               size,
+                               public_member_visitor,
+                               &visit,
+                               diagnostics);
+    free(visit.archive_directory);
+    free(data);
+    return ok ? 0 : 1;
+}
+
 typedef struct MiniArListContext {
     FILE *out;
 } MiniArListContext;
 
-static bool list_member_visitor(const MiniArArchiveView *view,
-                                const char *name,
+static bool list_member_visitor(const MiniArMemberView *member,
                                 void *context,
                                 FILE *diagnostics) {
     MiniArListContext *list = context;
 
-    (void)view;
-    if (fprintf(list->out, "%s\n", name) < 0) {
+    if (fprintf(list->out, "%s\n", member->name) < 0) {
         fprintf(diagnostics, "minic-ar: write-error:list\n");
         return false;
     }
@@ -1188,23 +1268,14 @@ static bool list_member_visitor(const MiniArArchiveView *view,
 }
 
 int miniar_list_archive(const char *archive_path, FILE *out, FILE *diagnostics) {
-    unsigned char *data = NULL;
-    size_t size = 0U;
     MiniArListContext context;
-    bool ok;
 
     if (archive_path == NULL || out == NULL || diagnostics == NULL) {
         return 2;
     }
-    if (!load_file(archive_path, &data, &size, diagnostics)) {
-        return 1;
-    }
     context.out = out;
-    ok = visit_archive_members(data,
-                               size,
-                               list_member_visitor,
-                               &context,
-                               diagnostics);
-    free(data);
-    return ok ? 0 : 1;
+    return miniar_visit_archive(archive_path,
+                                list_member_visitor,
+                                &context,
+                                diagnostics);
 }
