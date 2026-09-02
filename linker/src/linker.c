@@ -1,5 +1,6 @@
 #include "minild.h"
 #include "linker_script.h"
+#include "minielf.h"
 
 #include <elf.h>
 #include <errno.h>
@@ -698,40 +699,14 @@ static bool add_relocation(MiniLdState *state,
     return true;
 }
 
-static bool input_string(const unsigned char *data,
-                         size_t size,
-                         const Elf64_Shdr *table,
-                         uint32_t offset,
-                         const char **text_out) {
-    size_t base;
-    size_t available;
-    const char *text;
-
-    if (table->sh_offset > SIZE_MAX || table->sh_size > SIZE_MAX ||
-        offset >= table->sh_size) {
+static bool section_supported_for_merge(const MiniElfSection *section) {
+    if (section->type == SHT_GROUP ||
+        section->type == SHT_SYMTAB_SHNDX ||
+        section->type == SHT_REL) {
         return false;
     }
-    base = (size_t)table->sh_offset;
-    if (!range_ok(base, (size_t)table->sh_size, size)) {
-        return false;
-    }
-    text = (const char *)data + base + offset;
-    available = (size_t)table->sh_size - offset;
-    if (memchr(text, '\0', available) == NULL) {
-        return false;
-    }
-    *text_out = text;
-    return true;
-}
-
-static bool section_supported_for_merge(const Elf64_Shdr *section) {
-    if (section->sh_type == SHT_GROUP ||
-        section->sh_type == SHT_SYMTAB_SHNDX ||
-        section->sh_type == SHT_REL) {
-        return false;
-    }
-    if ((section->sh_flags & SHF_LINK_ORDER) != 0U ||
-        (section->sh_flags & SHF_GROUP) != 0U) {
+    if ((section->flags & SHF_LINK_ORDER) != 0U ||
+        (section->flags & SHF_GROUP) != 0U) {
         return false;
     }
     return true;
@@ -741,11 +716,10 @@ static bool process_input_data(MiniLdState *state,
                                const unsigned char *data,
                                size_t size,
                                const char *path) {
-    Elf64_Ehdr ehdr;
-    const Elf64_Shdr *section_headers;
-    const Elf64_Shdr *shstrtab;
-    const Elf64_Shdr *symtab = NULL;
-    const Elf64_Shdr *strtab = NULL;
+    MiniElfView elf;
+    MiniElfSection shstrtab;
+    MiniElfSection symtab;
+    MiniElfSection strtab;
     size_t symtab_index = SIZE_MAX;
     size_t strtab_index = SIZE_MAX;
     MiniLdSectionMap *section_map = NULL;
@@ -754,105 +728,96 @@ static bool process_input_data(MiniLdState *state,
     size_t i;
     bool ok = false;
 
-    if (!range_ok(0U, sizeof(ehdr), size)) {
-        fprintf(state->diagnostics, "minic-ld: truncated-elf:%s\n", path);
-        goto done;
-    }
-    memcpy(&ehdr, data, sizeof(ehdr));
-    if (memcmp(ehdr.e_ident, ELFMAG, SELFMAG) != 0 ||
-        ehdr.e_ident[EI_CLASS] != ELFCLASS64 ||
-        ehdr.e_ident[EI_DATA] != ELFDATA2LSB ||
-        ehdr.e_type != ET_REL ||
-        ehdr.e_machine != EM_RISCV ||
-        ehdr.e_version != EV_CURRENT ||
-        ehdr.e_shentsize != sizeof(Elf64_Shdr) ||
-        ehdr.e_shnum == 0U ||
-        ehdr.e_shstrndx == SHN_UNDEF ||
-        ehdr.e_shstrndx >= ehdr.e_shnum) {
+    if (!minielf_open(&elf, data, size) ||
+        elf.elf_class != ELFCLASS64 ||
+        elf.data_encoding != ELFDATA2LSB ||
+        elf.type != ET_REL ||
+        elf.machine != EM_RISCV ||
+        elf.version != EV_CURRENT ||
+        elf.section_count == 0U ||
+        elf.section_name_table_index == SHN_UNDEF) {
         fprintf(state->diagnostics, "minic-ld: unsupported-elf:%s\n", path);
         goto done;
     }
-    if (ehdr.e_shoff > SIZE_MAX ||
-        !range_ok((size_t)ehdr.e_shoff,
-                  (size_t)ehdr.e_shnum * (size_t)ehdr.e_shentsize,
-                  size)) {
-        fprintf(state->diagnostics, "minic-ld: invalid-section-table:%s\n", path);
-        goto done;
-    }
-
-    section_headers = (const Elf64_Shdr *)(const void *)(data + (size_t)ehdr.e_shoff);
-    shstrtab = &section_headers[ehdr.e_shstrndx];
-    if (shstrtab->sh_type != SHT_STRTAB ||
-        shstrtab->sh_offset > SIZE_MAX ||
-        shstrtab->sh_size > SIZE_MAX ||
-        !range_ok((size_t)shstrtab->sh_offset, (size_t)shstrtab->sh_size, size)) {
+    if (!minielf_section(&elf, elf.section_name_table_index, &shstrtab) ||
+        shstrtab.type != SHT_STRTAB) {
         fprintf(state->diagnostics, "minic-ld: invalid-shstrtab:%s\n", path);
         goto done;
     }
 
-    for (i = 1U; i < ehdr.e_shnum; ++i) {
-        if (section_headers[i].sh_type == SHT_SYMTAB) {
-            if (symtab != NULL) {
+    for (i = 1U; i < elf.section_count; ++i) {
+        MiniElfSection section;
+
+        if (!minielf_section(&elf, i, &section)) {
+            fprintf(state->diagnostics, "minic-ld: invalid-section-table:%s\n", path);
+            goto done;
+        }
+        if (section.type == SHT_SYMTAB) {
+            if (symtab_index != SIZE_MAX) {
                 fprintf(state->diagnostics, "minic-ld: multiple-symtabs:%s\n", path);
                 goto done;
             }
-            symtab = &section_headers[i];
+            symtab = section;
             symtab_index = i;
         }
     }
-    if (symtab == NULL || symtab->sh_link >= ehdr.e_shnum ||
-        symtab->sh_entsize < sizeof(Elf64_Sym)) {
+    if (symtab_index == SIZE_MAX ||
+        symtab.link >= elf.section_count ||
+        symtab.entry_size < sizeof(Elf64_Sym)) {
         fprintf(state->diagnostics, "minic-ld: missing-symtab:%s\n", path);
         goto done;
     }
-    strtab_index = symtab->sh_link;
-    strtab = &section_headers[strtab_index];
-    if (strtab->sh_type != SHT_STRTAB ||
-        symtab->sh_offset > SIZE_MAX || symtab->sh_size > SIZE_MAX ||
-        strtab->sh_offset > SIZE_MAX || strtab->sh_size > SIZE_MAX ||
-        !range_ok((size_t)symtab->sh_offset, (size_t)symtab->sh_size, size) ||
-        !range_ok((size_t)strtab->sh_offset, (size_t)strtab->sh_size, size)) {
+    strtab_index = symtab.link;
+    if (!minielf_section(&elf, strtab_index, &strtab) ||
+        strtab.type != SHT_STRTAB) {
         fprintf(state->diagnostics, "minic-ld: invalid-symtab:%s\n", path);
         goto done;
     }
 
-    section_map = calloc(ehdr.e_shnum, sizeof(*section_map));
+    section_map = calloc(elf.section_count, sizeof(*section_map));
     if (section_map == NULL) {
         fprintf(state->diagnostics, "minic-ld: out-of-memory:section-map\n");
         goto done;
     }
 
-    for (i = 1U; i < ehdr.e_shnum; ++i) {
-        const Elf64_Shdr *input = &section_headers[i];
+    for (i = 1U; i < elf.section_count; ++i) {
+        MiniElfSection input;
         const char *name;
         size_t output_index;
         MiniLdSection *output;
         size_t base;
-        uint64_t alignment = input->sh_addralign == 0U ? 1U : input->sh_addralign;
+        uint64_t alignment;
+        const unsigned char *section_data;
+        size_t section_size;
 
+        if (!minielf_section(&elf, i, &input)) {
+            fprintf(state->diagnostics, "minic-ld: invalid-section-table:%s\n", path);
+            goto done;
+        }
         if (i == symtab_index || i == strtab_index ||
-            i == ehdr.e_shstrndx ||
-            input->sh_type == SHT_RELA) {
+            i == elf.section_name_table_index ||
+            input.type == SHT_RELA) {
             continue;
         }
-        if (!section_supported_for_merge(input)) {
+        if (!section_supported_for_merge(&input)) {
             fprintf(state->diagnostics,
                     "minic-ld: unsupported-section-type:%s:index=%zu:type=%u\n",
                     path,
                     i,
-                    input->sh_type);
+                    input.type);
             goto done;
         }
-        if (!input_string(data, size, shstrtab, input->sh_name, &name)) {
+        if (!minielf_section_name(&elf, i, &name)) {
             fprintf(state->diagnostics, "minic-ld: invalid-section-name:%s\n", path);
             goto done;
         }
+        alignment = input.alignment == 0U ? 1U : input.alignment;
         if (!find_or_add_section(state,
                                  name,
-                                 input->sh_type,
-                                 input->sh_flags,
+                                 input.type,
+                                 input.flags,
                                  alignment,
-                                 input->sh_entsize,
+                                 input.entry_size,
                                  &output_index)) {
             goto done;
         }
@@ -864,21 +829,18 @@ static bool process_input_data(MiniLdState *state,
                     name);
             goto done;
         }
-        if (input->sh_size > SIZE_MAX) {
+        if (input.size > SIZE_MAX) {
             fprintf(state->diagnostics, "minic-ld: section-too-large:%s\n", name);
             goto done;
         }
-        if (input->sh_type == SHT_NOBITS) {
-            if (!section_append_zero(output, (size_t)input->sh_size)) {
+        if (input.type == SHT_NOBITS) {
+            if (!section_append_zero(output, (size_t)input.size)) {
                 fprintf(state->diagnostics, "minic-ld: section-overflow:%s\n", name);
                 goto done;
             }
         } else {
-            if (input->sh_offset > SIZE_MAX ||
-                !range_ok((size_t)input->sh_offset, (size_t)input->sh_size, size) ||
-                !section_append_data(output,
-                                     data + (size_t)input->sh_offset,
-                                     (size_t)input->sh_size)) {
+            if (!minielf_section_data(&elf, i, &section_data, &section_size) ||
+                !section_append_data(output, section_data, section_size)) {
                 fprintf(state->diagnostics, "minic-ld: invalid-section-data:%s\n", name);
                 goto done;
             }
@@ -888,9 +850,12 @@ static bool process_input_data(MiniLdState *state,
         section_map[i].mapped = true;
     }
 
-    symbol_count = (size_t)(symtab->sh_size / symtab->sh_entsize);
-    symbol_map = malloc((symbol_count == 0U ? 1U : symbol_count) *
-                        sizeof(*symbol_map));
+    symbol_count = minielf_symbol_count(&elf, &symtab);
+    if (symbol_count == 0U) {
+        fprintf(state->diagnostics, "minic-ld: invalid-symtab:%s\n", path);
+        goto done;
+    }
+    symbol_map = malloc(symbol_count * sizeof(*symbol_map));
     if (symbol_map == NULL) {
         fprintf(state->diagnostics, "minic-ld: out-of-memory:symbol-map\n");
         goto done;
@@ -900,51 +865,50 @@ static bool process_input_data(MiniLdState *state,
     }
 
     for (i = 1U; i < symbol_count; ++i) {
-        size_t offset = (size_t)symtab->sh_offset + i * (size_t)symtab->sh_entsize;
-        Elf64_Sym input_symbol;
+        MiniElfSymbol input_symbol;
         const char *name;
         int output_section = MINILD_SECTION_UNDEF;
         uint64_t value;
         size_t output_symbol;
         unsigned bind;
 
-        if (!range_ok(offset, sizeof(input_symbol), size)) {
+        if (!minielf_symbol(&elf, symtab_index, i, &input_symbol)) {
             fprintf(state->diagnostics, "minic-ld: truncated-symbol:%s\n", path);
             goto done;
         }
-        memcpy(&input_symbol, data + offset, sizeof(input_symbol));
-        if (!input_string(data, size, strtab, input_symbol.st_name, &name)) {
+        if (!minielf_string(&elf, strtab_index, input_symbol.name, &name)) {
             fprintf(state->diagnostics, "minic-ld: invalid-symbol-name:%s\n", path);
             goto done;
         }
-        value = input_symbol.st_value;
-        if (input_symbol.st_shndx == SHN_UNDEF) {
+        value = input_symbol.value;
+        if (input_symbol.section_index == SHN_UNDEF) {
             output_section = MINILD_SECTION_UNDEF;
-        } else if (input_symbol.st_shndx == SHN_ABS) {
+        } else if (input_symbol.section_index == SHN_ABS) {
             output_section = MINILD_SECTION_ABS;
-        } else if (input_symbol.st_shndx == SHN_COMMON) {
+        } else if (input_symbol.section_index == SHN_COMMON) {
             output_section = MINILD_SECTION_COMMON;
-        } else if (input_symbol.st_shndx >= ehdr.e_shnum ||
-                   !section_map[input_symbol.st_shndx].mapped) {
+        } else if (input_symbol.section_index >= elf.section_count ||
+                   !section_map[input_symbol.section_index].mapped) {
             fprintf(state->diagnostics,
                     "minic-ld: unsupported-symbol-section:%s:%s\n",
                     path,
                     name);
             goto done;
         } else {
-            output_section = (int)section_map[input_symbol.st_shndx].output_section;
-            value += section_map[input_symbol.st_shndx].base;
+            output_section =
+                (int)section_map[input_symbol.section_index].output_section;
+            value += section_map[input_symbol.section_index].base;
         }
 
-        bind = ELF64_ST_BIND(input_symbol.st_info);
+        bind = minielf_symbol_bind(input_symbol.info);
         if (bind == STB_LOCAL) {
             if (!add_local_symbol(state,
                                   name,
                                   output_section,
                                   value,
-                                  input_symbol.st_size,
-                                  input_symbol.st_info,
-                                  input_symbol.st_other,
+                                  input_symbol.size,
+                                  input_symbol.info,
+                                  input_symbol.other,
                                   &output_symbol)) {
                 goto done;
             }
@@ -953,9 +917,9 @@ static bool process_input_data(MiniLdState *state,
                                             name,
                                             output_section,
                                             value,
-                                            input_symbol.st_size,
-                                            input_symbol.st_info,
-                                            input_symbol.st_other,
+                                            input_symbol.size,
+                                            input_symbol.info,
+                                            input_symbol.other,
                                             &output_symbol)) {
                 goto done;
             }
@@ -970,42 +934,42 @@ static bool process_input_data(MiniLdState *state,
         symbol_map[i] = output_symbol;
     }
 
-    for (i = 1U; i < ehdr.e_shnum; ++i) {
-        const Elf64_Shdr *rela_section = &section_headers[i];
+    for (i = 1U; i < elf.section_count; ++i) {
+        MiniElfSection rela_section;
         size_t count;
         size_t j;
         MiniLdSectionMap target_map;
 
-        if (rela_section->sh_type != SHT_RELA) {
+        if (!minielf_section(&elf, i, &rela_section)) {
+            fprintf(state->diagnostics, "minic-ld: invalid-section-table:%s\n", path);
+            goto done;
+        }
+        if (rela_section.type != SHT_RELA) {
             continue;
         }
-        if (rela_section->sh_link != symtab_index ||
-            rela_section->sh_info >= ehdr.e_shnum ||
-            !section_map[rela_section->sh_info].mapped ||
-            rela_section->sh_entsize < sizeof(Elf64_Rela) ||
-            rela_section->sh_offset > SIZE_MAX ||
-            rela_section->sh_size > SIZE_MAX ||
-            !range_ok((size_t)rela_section->sh_offset,
-                      (size_t)rela_section->sh_size,
-                      size)) {
+        if (rela_section.link != symtab_index ||
+            rela_section.info >= elf.section_count ||
+            !section_map[rela_section.info].mapped ||
+            rela_section.entry_size < sizeof(Elf64_Rela)) {
             fprintf(state->diagnostics, "minic-ld: invalid-rela:%s\n", path);
             goto done;
         }
-        target_map = section_map[rela_section->sh_info];
-        count = (size_t)(rela_section->sh_size / rela_section->sh_entsize);
+        target_map = section_map[rela_section.info];
+        count = minielf_rela_count(&elf, &rela_section);
+        if (count == 0U && rela_section.size != 0U) {
+            fprintf(state->diagnostics, "minic-ld: invalid-rela:%s\n", path);
+            goto done;
+        }
         for (j = 0U; j < count; ++j) {
-            size_t offset = (size_t)rela_section->sh_offset +
-                            j * (size_t)rela_section->sh_entsize;
-            Elf64_Rela rela;
+            MiniElfRela rela;
             size_t input_symbol_index;
             size_t output_symbol = SIZE_MAX;
 
-            if (!range_ok(offset, sizeof(rela), size)) {
+            if (!minielf_rela(&elf, i, j, &rela)) {
                 fprintf(state->diagnostics, "minic-ld: truncated-rela:%s\n", path);
                 goto done;
             }
-            memcpy(&rela, data + offset, sizeof(rela));
-            input_symbol_index = (size_t)ELF64_R_SYM(rela.r_info);
+            input_symbol_index = minielf_rela_symbol(&elf, rela.info);
             if (input_symbol_index >= symbol_count) {
                 fprintf(state->diagnostics, "minic-ld: invalid-rela-symbol:%s\n", path);
                 goto done;
@@ -1021,16 +985,16 @@ static bool process_input_data(MiniLdState *state,
             }
             if (!add_relocation(state,
                                 target_map.output_section,
-                                rela.r_offset + target_map.base,
-                                (uint32_t)ELF64_R_TYPE(rela.r_info),
+                                rela.offset + target_map.base,
+                                minielf_rela_type(&elf, rela.info),
                                 output_symbol,
-                                rela.r_addend)) {
+                                rela.addend)) {
                 goto done;
             }
         }
     }
 
-    state->elf_flags |= ehdr.e_flags;
+    state->elf_flags |= elf.flags;
     ++state->processed_object_count;
     state->have_input = true;
     ok = true;
@@ -1370,40 +1334,41 @@ static bool object_data_defines_needed_symbol(MiniLdState *state,
                                               size_t size,
                                               const char *path,
                                               bool *needed_out) {
-    Elf64_Ehdr ehdr;
-    const Elf64_Shdr *sections;
-    const Elf64_Shdr *symtab = NULL;
-    const Elf64_Shdr *strtab = NULL;
+    MiniElfView elf;
+    MiniElfSection symtab;
+    MiniElfSection strtab;
+    size_t symtab_index = SIZE_MAX;
     size_t i;
     bool ok = false;
 
     *needed_out = false;
-    if (!range_ok(0U, sizeof(ehdr), size)) {
-        fprintf(state->diagnostics, "minic-ld: truncated-elf:%s\n", path);
+    if (!minielf_open(&elf, data, size) ||
+        elf.elf_class != ELFCLASS64 ||
+        elf.data_encoding != ELFDATA2LSB ||
+        elf.type != ET_REL ||
+        elf.machine != EM_RISCV) {
+        fprintf(state->diagnostics,
+                "minic-ld: unsupported-archive-object:%s\n",
+                path);
         goto done;
     }
-    memcpy(&ehdr, data, sizeof(ehdr));
-    if (memcmp(ehdr.e_ident, ELFMAG, SELFMAG) != 0 ||
-        ehdr.e_ident[EI_CLASS] != ELFCLASS64 ||
-        ehdr.e_ident[EI_DATA] != ELFDATA2LSB ||
-        ehdr.e_type != ET_REL ||
-        ehdr.e_machine != EM_RISCV ||
-        ehdr.e_shentsize != sizeof(Elf64_Shdr) ||
-        ehdr.e_shoff > SIZE_MAX ||
-        !range_ok((size_t)ehdr.e_shoff,
-                  (size_t)ehdr.e_shnum * sizeof(Elf64_Shdr),
-                  size)) {
-        fprintf(state->diagnostics, "minic-ld: unsupported-archive-object:%s\n", path);
-        goto done;
-    }
-    sections = (const Elf64_Shdr *)(const void *)(data + (size_t)ehdr.e_shoff);
-    for (i = 1U; i < ehdr.e_shnum; ++i) {
-        if (sections[i].sh_type == SHT_SYMTAB) {
-            symtab = &sections[i];
+
+    for (i = 1U; i < elf.section_count; ++i) {
+        MiniElfSection section;
+
+        if (!minielf_section(&elf, i, &section)) {
+            fprintf(state->diagnostics,
+                    "minic-ld: unsupported-archive-object:%s\n",
+                    path);
+            goto done;
+        }
+        if (section.type == SHT_SYMTAB) {
+            symtab = section;
+            symtab_index = i;
             break;
         }
     }
-    if (symtab == NULL) {
+    if (symtab_index == SIZE_MAX) {
         /*
          * A regular archive may contain ET_REL members with no symbol table.
          * Such a member cannot satisfy a named unresolved global, so lazy
@@ -1412,49 +1377,42 @@ static bool object_data_defines_needed_symbol(MiniLdState *state,
         ok = true;
         goto done;
     }
-    if (symtab->sh_link >= ehdr.e_shnum ||
-        symtab->sh_entsize != sizeof(Elf64_Sym)) {
+    if (symtab.link >= elf.section_count ||
+        symtab.entry_size != sizeof(Elf64_Sym) ||
+        !minielf_section(&elf, symtab.link, &strtab) ||
+        strtab.type != SHT_STRTAB) {
         fprintf(state->diagnostics,
                 "minic-ld: invalid-archive-object-symtab:%s\n",
                 path);
         goto done;
     }
-    strtab = &sections[symtab->sh_link];
-    if (strtab->sh_type != SHT_STRTAB ||
-        symtab->sh_offset > SIZE_MAX || symtab->sh_size > SIZE_MAX ||
-        strtab->sh_offset > SIZE_MAX || strtab->sh_size > SIZE_MAX ||
-        !range_ok((size_t)symtab->sh_offset, (size_t)symtab->sh_size, size) ||
-        !range_ok((size_t)strtab->sh_offset, (size_t)strtab->sh_size, size)) {
-        fprintf(state->diagnostics, "minic-ld: invalid-archive-object-symtab:%s\n", path);
-        goto done;
-    }
 
     {
-        size_t count = (size_t)(symtab->sh_size / symtab->sh_entsize);
+        size_t count = minielf_symbol_count(&elf, &symtab);
+
+        if (count == 0U && symtab.size != 0U) {
+            fprintf(state->diagnostics,
+                    "minic-ld: invalid-archive-object-symtab:%s\n",
+                    path);
+            goto done;
+        }
         for (i = 1U; i < count; ++i) {
-            Elf64_Sym symbol;
-            size_t offset = (size_t)symtab->sh_offset +
-                            i * (size_t)symtab->sh_entsize;
+            MiniElfSymbol symbol;
             const char *name;
             unsigned bind;
 
-            if (!range_ok(offset, sizeof(symbol), size)) {
+            if (!minielf_symbol(&elf, symtab_index, i, &symbol)) {
                 fprintf(state->diagnostics,
                         "minic-ld: truncated-archive-object-symbol:%s\n",
                         path);
                 goto done;
             }
-            memcpy(&symbol, data + offset, sizeof(symbol));
-            bind = ELF64_ST_BIND(symbol.st_info);
+            bind = minielf_symbol_bind(symbol.info);
             if ((bind != STB_GLOBAL && bind != STB_WEAK) ||
-                symbol.st_shndx == SHN_UNDEF || symbol.st_name == 0U ||
-                symbol.st_name >= strtab->sh_size) {
+                symbol.section_index == SHN_UNDEF || symbol.name == 0U) {
                 continue;
             }
-            name = (const char *)data + (size_t)strtab->sh_offset + symbol.st_name;
-            if (memchr(name,
-                       '\0',
-                       (size_t)strtab->sh_size - symbol.st_name) == NULL) {
+            if (!minielf_string(&elf, symtab.link, symbol.name, &name)) {
                 fprintf(state->diagnostics,
                         "minic-ld: invalid-archive-object-symbol-name:%s\n",
                         path);
