@@ -1,4 +1,2 @@
-source_head=005d474f8af72cad74d242de659ef4289798ad18
-bootstrap_run=33614809726
-bootstrap_status=PASS
-reason=run PP AS AR LD through freshly bootstrapped Stage2
+source_head=3c012f507ff056f4f1601ea61bba935208252721
+reason=post-MiniELF reader+ET_REL writer total static validation
