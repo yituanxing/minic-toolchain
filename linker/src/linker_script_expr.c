@@ -271,8 +271,14 @@ static bool evaluate_expression(const MiniLdScript *script,
                                  context,
                                  &right,
                                  diagnostics,
-                                 depth + 1U) ||
-            right == 0U || (right & (right - 1U)) != 0U) {
+                                 depth + 1U)) {
+            return false;
+        }
+        if (right == 0U) {
+            *value_out = context->dot;
+            return true;
+        }
+        if ((right & (right - 1U)) != 0U) {
             fprintf(diagnostics, "minic-ld: linker-script-invalid-alignment\n");
             return false;
         }

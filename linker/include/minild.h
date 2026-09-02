@@ -16,6 +16,11 @@ typedef struct MiniLdInput {
     MiniLdInputKind kind;
 } MiniLdInput;
 
+typedef struct MiniLdStaticOptions {
+    const char *entry_symbol;
+    const char *script_path;
+} MiniLdStaticOptions;
+
 int minild_link_relocatable_elf64_riscv(const char *output_path,
                                         const char *const *input_paths,
                                         size_t input_count,
@@ -25,6 +30,13 @@ int minild_link_relocatable_elf64_riscv_inputs(const char *output_path,
                                                const MiniLdInput *inputs,
                                                size_t input_count,
                                                FILE *diagnostics);
+
+int minild_link_static_elf64_riscv_inputs_options(
+    const char *output_path,
+    const MiniLdInput *inputs,
+    size_t input_count,
+    const MiniLdStaticOptions *options,
+    FILE *diagnostics);
 
 int minild_link_static_elf64_riscv_inputs(const char *output_path,
                                           const MiniLdInput *inputs,

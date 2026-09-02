@@ -1,4 +1,5 @@
 #include "minild.h"
+#include "linker_script.h"
 
 #include <elf.h>
 #include <errno.h>
@@ -2311,7 +2312,9 @@ typedef struct MiniLdPcrelSlot {
 
 typedef struct MiniLdStaticLayout {
     uint64_t *section_vaddr;
+    uint64_t *section_laddr;
     size_t *section_file_offset;
+    bool *section_discarded;
     size_t rx_file_offset;
     uint64_t rx_vaddr;
     size_t rx_file_size;
@@ -2321,6 +2324,7 @@ typedef struct MiniLdStaticLayout {
     size_t rw_mem_size;
     bool have_rx;
     bool have_rw;
+    bool scripted;
 } MiniLdStaticLayout;
 
 typedef struct MiniLdAlignSite {
@@ -2951,10 +2955,18 @@ static bool static_build_layout(MiniLdState *state,
     layout->section_vaddr =
         calloc(state->section_count == 0U ? 1U : state->section_count,
                sizeof(*layout->section_vaddr));
+    layout->section_laddr =
+        calloc(state->section_count == 0U ? 1U : state->section_count,
+               sizeof(*layout->section_laddr));
     layout->section_file_offset =
         malloc((state->section_count == 0U ? 1U : state->section_count) *
                sizeof(*layout->section_file_offset));
-    if (layout->section_vaddr == NULL || layout->section_file_offset == NULL) {
+    layout->section_discarded =
+        calloc(state->section_count == 0U ? 1U : state->section_count,
+               sizeof(*layout->section_discarded));
+    if (layout->section_vaddr == NULL || layout->section_laddr == NULL ||
+        layout->section_file_offset == NULL ||
+        layout->section_discarded == NULL) {
         fprintf(state->diagnostics, "minic-ld: out-of-memory:static-layout\n");
         return false;
     }
@@ -2985,6 +2997,7 @@ static bool static_build_layout(MiniLdState *state,
         }
         rx_cursor = aligned;
         layout->section_vaddr[i] = layout->rx_vaddr + rx_cursor;
+        layout->section_laddr[i] = layout->section_vaddr[i];
         layout->section_file_offset[i] = layout->rx_file_offset + rx_cursor;
         if (!static_relax_align_section(state,
                                         i,
@@ -3032,6 +3045,7 @@ static bool static_build_layout(MiniLdState *state,
         rw_file_cursor = aligned;
         rw_mem_cursor = aligned;
         layout->section_vaddr[i] = layout->rw_vaddr + rw_mem_cursor;
+        layout->section_laddr[i] = layout->section_vaddr[i];
         layout->section_file_offset[i] =
             layout->rw_file_offset + rw_file_cursor;
         if (!static_relax_align_section(state,
@@ -3062,6 +3076,7 @@ static bool static_build_layout(MiniLdState *state,
         }
         rw_mem_cursor = aligned;
         layout->section_vaddr[i] = layout->rw_vaddr + rw_mem_cursor;
+        layout->section_laddr[i] = layout->section_vaddr[i];
         if (!add_size(rw_mem_cursor, section->size, &rw_mem_cursor)) {
             fprintf(state->diagnostics, "minic-ld: static-layout-overflow\n");
             return false;
@@ -3074,6 +3089,615 @@ static bool static_build_layout(MiniLdState *state,
     return layout->have_rx;
 }
 
+
+typedef struct MiniLdScriptLayoutState {
+    MiniLdState *state;
+    MiniLdStaticLayout *layout;
+    const MiniLdScript *script;
+    bool *section_placed;
+    size_t *section_owner;
+    uint64_t *output_vaddr;
+    bool *output_defined;
+    uint64_t dot;
+    uint64_t load_bias;
+    bool have_load_bias;
+} MiniLdScriptLayoutState;
+
+static bool static_align_up_u64(uint64_t value,
+                                uint64_t alignment,
+                                uint64_t *out) {
+    uint64_t mask;
+
+    if (alignment <= 1U) {
+        *out = value;
+        return true;
+    }
+    if ((alignment & (alignment - 1U)) != 0U) {
+        return false;
+    }
+    mask = alignment - 1U;
+    if (value > UINT64_MAX - mask) {
+        return false;
+    }
+    *out = (value + mask) & ~mask;
+    return true;
+}
+
+static bool script_layout_symbol_value(void *context,
+                                       const char *name,
+                                       uint64_t *value_out) {
+    MiniLdScriptLayoutState *script_state = context;
+    size_t index = find_global_symbol(script_state->state, name);
+    MiniLdSymbol *symbol;
+
+    if (index == SIZE_MAX) {
+        return false;
+    }
+    symbol = &script_state->state->symbols[index];
+    if (symbol->section == MINILD_SECTION_ABS) {
+        *value_out = symbol->value;
+        return true;
+    }
+    if (symbol->section < 0 ||
+        (size_t)symbol->section >= script_state->state->section_count ||
+        !script_state->section_placed[symbol->section] ||
+        script_state->layout->section_discarded[symbol->section]) {
+        return false;
+    }
+    *value_out = script_state->layout->section_vaddr[symbol->section] +
+                 symbol->value;
+    return true;
+}
+
+static bool script_layout_section_value(void *context,
+                                        const char *name,
+                                        uint64_t *value_out) {
+    MiniLdScriptLayoutState *script_state = context;
+    size_t i;
+
+    for (i = 0U; i < script_state->script->command_count; ++i) {
+        const MiniLdScriptCommand *command = &script_state->script->commands[i];
+
+        if (command->kind == MINILD_SCRIPT_OUTPUT_SECTION &&
+            script_state->output_defined[i] &&
+            strcmp(command->value.section.name, name) == 0) {
+            *value_out = script_state->output_vaddr[i];
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool script_layout_evaluate(MiniLdScriptLayoutState *script_state,
+                                   MiniLdScriptExprId expression,
+                                   uint64_t *value_out) {
+    MiniLdScriptEvalContext context;
+
+    memset(&context, 0, sizeof(context));
+    context.dot = script_state->dot;
+    context.resolve_symbol = script_layout_symbol_value;
+    context.resolve_section = script_layout_section_value;
+    context.user = script_state;
+    return minild_script_evaluate(script_state->script,
+                                  expression,
+                                  &context,
+                                  value_out,
+                                  script_state->state->diagnostics);
+}
+
+static bool script_layout_define_symbol(MiniLdScriptLayoutState *script_state,
+                                        const char *name,
+                                        uint64_t value) {
+    size_t index = find_global_symbol(script_state->state, name);
+    size_t added;
+
+    if (index != SIZE_MAX) {
+        MiniLdSymbol *symbol = &script_state->state->symbols[index];
+        uint64_t current;
+
+        if (script_layout_symbol_value(script_state, name, &current) &&
+            current == value) {
+            return true;
+        }
+        symbol->section = MINILD_SECTION_ABS;
+        symbol->value = value;
+        symbol->size = 0U;
+        symbol->info = ELF64_ST_INFO(STB_GLOBAL, STT_NOTYPE);
+        symbol->other = STV_DEFAULT;
+        return true;
+    }
+
+    return add_or_merge_global_symbol(script_state->state,
+                                      name,
+                                      MINILD_SECTION_ABS,
+                                      value,
+                                      0U,
+                                      ELF64_ST_INFO(STB_GLOBAL, STT_NOTYPE),
+                                      STV_DEFAULT,
+                                      &added);
+}
+
+static bool script_layout_place_section(MiniLdScriptLayoutState *script_state,
+                                        size_t section_index,
+                                        size_t command_index) {
+    MiniLdSection *section = &script_state->state->sections[section_index];
+    uint64_t aligned;
+
+    if (!static_align_up_u64(script_state->dot,
+                             section->align == 0U ? 1U : section->align,
+                             &aligned)) {
+        fprintf(script_state->state->diagnostics,
+                "minic-ld: linker-script-section-alignment-overflow:%s\n",
+                section->name);
+        return false;
+    }
+    script_state->dot = aligned;
+    script_state->layout->section_vaddr[section_index] = script_state->dot;
+    script_state->section_placed[section_index] = true;
+    script_state->section_owner[section_index] = command_index;
+
+    if ((section->flags & SHF_ALLOC) != 0U &&
+        !static_relax_align_section(script_state->state,
+                                    section_index,
+                                    script_state->dot)) {
+        return false;
+    }
+    if ((uint64_t)section->size > UINT64_MAX - script_state->dot) {
+        fprintf(script_state->state->diagnostics,
+                "minic-ld: linker-script-section-size-overflow:%s\n",
+                section->name);
+        return false;
+    }
+    script_state->dot += (uint64_t)section->size;
+    return true;
+}
+
+static bool script_layout_place_pattern(MiniLdScriptLayoutState *script_state,
+                                        const MiniLdScriptPattern *pattern,
+                                        size_t command_index,
+                                        bool discard) {
+    size_t *matches;
+    size_t count = 0U;
+    size_t i;
+
+    if (pattern->common) {
+        return true;
+    }
+
+    matches = malloc((script_state->state->section_count == 0U
+                          ? 1U
+                          : script_state->state->section_count) *
+                     sizeof(*matches));
+    if (matches == NULL) {
+        fprintf(script_state->state->diagnostics,
+                "minic-ld: out-of-memory:linker-script-pattern\n");
+        return false;
+    }
+
+    for (i = 0U; i < script_state->state->section_count; ++i) {
+        if (script_state->section_placed[i] ||
+            script_state->layout->section_discarded[i]) {
+            continue;
+        }
+        if (minild_script_pattern_matches(pattern,
+                                          script_state->state->sections[i].name)) {
+            matches[count++] = i;
+        }
+    }
+
+    if (pattern->sort) {
+        size_t j;
+
+        for (i = 1U; i < count; ++i) {
+            size_t current = matches[i];
+            j = i;
+            while (j > 0U &&
+                   strcmp(script_state->state->sections[matches[j - 1U]].name,
+                          script_state->state->sections[current].name) > 0) {
+                matches[j] = matches[j - 1U];
+                --j;
+            }
+            matches[j] = current;
+        }
+    }
+
+    for (i = 0U; i < count; ++i) {
+        size_t section_index = matches[i];
+
+        if (discard) {
+            script_state->layout->section_discarded[section_index] = true;
+            script_state->section_placed[section_index] = true;
+            continue;
+        }
+        if (!script_layout_place_section(script_state,
+                                         section_index,
+                                         command_index)) {
+            free(matches);
+            return false;
+        }
+    }
+
+    free(matches);
+    return true;
+}
+
+static bool script_layout_process_output(MiniLdScriptLayoutState *script_state,
+                                         const MiniLdScriptOutputSection *output,
+                                         size_t command_index) {
+    uint64_t output_start;
+    uint64_t lma_start;
+    size_t i;
+
+    if (output->discard) {
+        for (i = 0U; i < output->item_count; ++i) {
+            const MiniLdScriptSectionItem *item = &output->items[i];
+
+            if (item->kind == MINILD_SCRIPT_SECTION_PATTERN &&
+                !script_layout_place_pattern(script_state,
+                                             &item->value.pattern,
+                                             command_index,
+                                             true)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    if (output->address != MINILD_SCRIPT_EXPR_NONE) {
+        if (!script_layout_evaluate(script_state,
+                                    output->address,
+                                    &script_state->dot)) {
+            return false;
+        }
+    }
+    if (output->align != MINILD_SCRIPT_EXPR_NONE) {
+        uint64_t alignment;
+
+        if (!script_layout_evaluate(script_state,
+                                    output->align,
+                                    &alignment) ||
+            !static_align_up_u64(script_state->dot,
+                                 alignment == 0U ? 1U : alignment,
+                                 &script_state->dot)) {
+            fprintf(script_state->state->diagnostics,
+                    "minic-ld: linker-script-output-alignment:%s\n",
+                    output->name);
+            return false;
+        }
+    }
+
+    output_start = script_state->dot;
+    script_state->output_vaddr[command_index] = output_start;
+    script_state->output_defined[command_index] = true;
+
+    for (i = 0U; i < output->item_count; ++i) {
+        const MiniLdScriptSectionItem *item = &output->items[i];
+        uint64_t value;
+
+        switch (item->kind) {
+        case MINILD_SCRIPT_SECTION_PATTERN:
+            if (!script_layout_place_pattern(script_state,
+                                             &item->value.pattern,
+                                             command_index,
+                                             false)) {
+                return false;
+            }
+            break;
+        case MINILD_SCRIPT_SECTION_DEFINE_SYMBOL:
+            if (!script_layout_evaluate(script_state,
+                                        item->value.symbol.expression,
+                                        &value) ||
+                !script_layout_define_symbol(script_state,
+                                             item->value.symbol.name,
+                                             value)) {
+                return false;
+            }
+            break;
+        case MINILD_SCRIPT_SECTION_SET_DOT:
+            if (!script_layout_evaluate(script_state,
+                                        item->value.expression,
+                                        &value)) {
+                return false;
+            }
+            if (value < script_state->dot) {
+                fprintf(script_state->state->diagnostics,
+                        "minic-ld: linker-script-dot-moved-backward:%s\n",
+                        output->name);
+                return false;
+            }
+            script_state->dot = value;
+            break;
+        case MINILD_SCRIPT_SECTION_BYTE:
+            if (!script_layout_evaluate(script_state,
+                                        item->value.expression,
+                                        &value)) {
+                return false;
+            }
+            (void)value;
+            if (script_state->dot == UINT64_MAX) {
+                fprintf(script_state->state->diagnostics,
+                        "minic-ld: linker-script-BYTE-overflow:%s\n",
+                        output->name);
+                return false;
+            }
+            ++script_state->dot;
+            break;
+        case MINILD_SCRIPT_SECTION_CONSTRUCTORS:
+            break;
+        }
+    }
+
+    if (output->at != MINILD_SCRIPT_EXPR_NONE) {
+        if (!script_layout_evaluate(script_state,
+                                    output->at,
+                                    &lma_start)) {
+            return false;
+        }
+        script_state->load_bias = output_start - lma_start;
+        script_state->have_load_bias = true;
+    } else if (script_state->have_load_bias) {
+        lma_start = output_start - script_state->load_bias;
+    } else {
+        lma_start = output_start;
+    }
+
+    for (i = 0U; i < script_state->state->section_count; ++i) {
+        if (script_state->section_owner[i] == command_index) {
+            script_state->layout->section_laddr[i] =
+                lma_start +
+                (script_state->layout->section_vaddr[i] - output_start);
+        }
+    }
+    return true;
+}
+
+static bool static_build_script_layout(MiniLdState *state,
+                                       const MiniLdScript *script,
+                                       MiniLdStaticLayout *layout) {
+    MiniLdScriptLayoutState script_state;
+    bool *file_assigned = NULL;
+    bool *command_deferred = NULL;
+    size_t i;
+    size_t alloc_count = 0U;
+    size_t file_cursor;
+    size_t header_size;
+    bool ok = false;
+
+    memset(layout, 0, sizeof(*layout));
+    memset(&script_state, 0, sizeof(script_state));
+
+    layout->section_vaddr =
+        calloc(state->section_count == 0U ? 1U : state->section_count,
+               sizeof(*layout->section_vaddr));
+    layout->section_laddr =
+        calloc(state->section_count == 0U ? 1U : state->section_count,
+               sizeof(*layout->section_laddr));
+    layout->section_file_offset =
+        malloc((state->section_count == 0U ? 1U : state->section_count) *
+               sizeof(*layout->section_file_offset));
+    layout->section_discarded =
+        calloc(state->section_count == 0U ? 1U : state->section_count,
+               sizeof(*layout->section_discarded));
+    script_state.section_placed =
+        calloc(state->section_count == 0U ? 1U : state->section_count,
+               sizeof(*script_state.section_placed));
+    script_state.section_owner =
+        malloc((state->section_count == 0U ? 1U : state->section_count) *
+               sizeof(*script_state.section_owner));
+    script_state.output_vaddr =
+        calloc(script->command_count == 0U ? 1U : script->command_count,
+               sizeof(*script_state.output_vaddr));
+    script_state.output_defined =
+        calloc(script->command_count == 0U ? 1U : script->command_count,
+               sizeof(*script_state.output_defined));
+    command_deferred =
+        calloc(script->command_count == 0U ? 1U : script->command_count,
+               sizeof(*command_deferred));
+
+    if (layout->section_vaddr == NULL || layout->section_laddr == NULL ||
+        layout->section_file_offset == NULL ||
+        layout->section_discarded == NULL ||
+        script_state.section_placed == NULL ||
+        script_state.section_owner == NULL ||
+        script_state.output_vaddr == NULL ||
+        script_state.output_defined == NULL ||
+        command_deferred == NULL) {
+        fprintf(state->diagnostics,
+                "minic-ld: out-of-memory:linker-script-layout\n");
+        goto done;
+    }
+
+    for (i = 0U; i < state->section_count; ++i) {
+        layout->section_file_offset[i] = SIZE_MAX;
+        script_state.section_owner[i] = SIZE_MAX;
+    }
+    script_state.state = state;
+    script_state.layout = layout;
+    script_state.script = script;
+
+    for (i = 0U; i < script->command_count; ++i) {
+        const MiniLdScriptCommand *command = &script->commands[i];
+        uint64_t value;
+
+        switch (command->kind) {
+        case MINILD_SCRIPT_SET_DOT:
+            if (!script_layout_evaluate(&script_state,
+                                        command->value.expression,
+                                        &value)) {
+                goto done;
+            }
+            if (value < script_state.dot) {
+                fprintf(state->diagnostics,
+                        "minic-ld: linker-script-top-level-dot-moved-backward\n");
+                goto done;
+            }
+            script_state.dot = value;
+            break;
+        case MINILD_SCRIPT_DEFINE_SYMBOL:
+            if (script->expressions[command->value.symbol.expression].kind ==
+                    MINILD_SCRIPT_EXPR_SYMBOL &&
+                !script_layout_symbol_value(
+                    &script_state,
+                    script->expressions[command->value.symbol.expression].name,
+                    &value)) {
+                command_deferred[i] = true;
+                break;
+            }
+            if (!script_layout_evaluate(&script_state,
+                                        command->value.symbol.expression,
+                                        &value) ||
+                !script_layout_define_symbol(&script_state,
+                                             command->value.symbol.name,
+                                             value)) {
+                goto done;
+            }
+            break;
+        case MINILD_SCRIPT_OUTPUT_SECTION:
+            if (!script_layout_process_output(&script_state,
+                                             &command->value.section,
+                                             i)) {
+                goto done;
+            }
+            break;
+        }
+    }
+
+    for (i = 0U; i < script->command_count; ++i) {
+        const MiniLdScriptCommand *command = &script->commands[i];
+        uint64_t value;
+
+        if (command->kind != MINILD_SCRIPT_DEFINE_SYMBOL ||
+            !command_deferred[i]) {
+            continue;
+        }
+        if (!script_layout_evaluate(&script_state,
+                                    command->value.symbol.expression,
+                                    &value) ||
+            !script_layout_define_symbol(&script_state,
+                                         command->value.symbol.name,
+                                         value)) {
+            goto done;
+        }
+    }
+
+    for (i = 0U; i < state->section_count; ++i) {
+        MiniLdSection *section = &state->sections[i];
+
+        if (script_state.section_placed[i] ||
+            layout->section_discarded[i]) {
+            continue;
+        }
+        if ((section->flags & SHF_ALLOC) != 0U && section->size != 0U) {
+            fprintf(state->diagnostics,
+                    "minic-ld: linker-script-unplaced-alloc-section:%s:size=%zu\n",
+                    section->name,
+                    section->size);
+            goto done;
+        }
+        layout->section_discarded[i] = true;
+        script_state.section_placed[i] = true;
+    }
+
+    for (i = 0U; i < state->section_count; ++i) {
+        MiniLdSection *section = &state->sections[i];
+
+        if (layout->section_discarded[i] ||
+            (section->flags & SHF_ALLOC) == 0U ||
+            section->size == 0U) {
+            continue;
+        }
+        ++alloc_count;
+        if ((section->flags & SHF_WRITE) != 0U) {
+            layout->have_rw = true;
+        } else {
+            layout->have_rx = true;
+        }
+    }
+
+    if (alloc_count > (SIZE_MAX - sizeof(Elf64_Ehdr)) / sizeof(Elf64_Phdr) ||
+        !align_up_size(sizeof(Elf64_Ehdr) +
+                           alloc_count * sizeof(Elf64_Phdr),
+                       4096U,
+                       &header_size)) {
+        fprintf(state->diagnostics,
+                "minic-ld: linker-script-header-overflow\n");
+        goto done;
+    }
+    file_cursor = header_size;
+    file_assigned =
+        calloc(state->section_count == 0U ? 1U : state->section_count,
+               sizeof(*file_assigned));
+    if (file_assigned == NULL) {
+        fprintf(state->diagnostics,
+                "minic-ld: out-of-memory:linker-script-file-order\n");
+        goto done;
+    }
+
+    for (;;) {
+        size_t best = SIZE_MAX;
+
+        for (i = 0U; i < state->section_count; ++i) {
+            MiniLdSection *section = &state->sections[i];
+
+            if (file_assigned[i] || layout->section_discarded[i] ||
+                (section->flags & SHF_ALLOC) == 0U || section->size == 0U) {
+                continue;
+            }
+            if (best == SIZE_MAX ||
+                layout->section_laddr[i] < layout->section_laddr[best] ||
+                (layout->section_laddr[i] == layout->section_laddr[best] &&
+                 layout->section_vaddr[i] < layout->section_vaddr[best])) {
+                best = i;
+            }
+        }
+        if (best == SIZE_MAX) {
+            break;
+        }
+
+        {
+            MiniLdSection *section = &state->sections[best];
+            size_t aligned;
+
+            if (!align_up_size(file_cursor,
+                               section->align == 0U ? 1U : section->align,
+                               &aligned)) {
+                fprintf(state->diagnostics,
+                        "minic-ld: linker-script-file-layout-overflow:%s\n",
+                        section->name);
+                goto done;
+            }
+            file_cursor = aligned;
+            layout->section_file_offset[best] = file_cursor;
+            if (section->type != SHT_NOBITS &&
+                !add_size(file_cursor, section->size, &file_cursor)) {
+                fprintf(state->diagnostics,
+                        "minic-ld: linker-script-file-layout-overflow:%s\n",
+                        section->name);
+                goto done;
+            }
+            file_assigned[best] = true;
+        }
+    }
+
+    layout->scripted = true;
+    ok = true;
+
+done:
+    free(file_assigned);
+    free(command_deferred);
+    free(script_state.output_defined);
+    free(script_state.output_vaddr);
+    free(script_state.section_owner);
+    free(script_state.section_placed);
+    if (!ok) {
+        free(layout->section_discarded);
+        free(layout->section_file_offset);
+        free(layout->section_laddr);
+        free(layout->section_vaddr);
+        memset(layout, 0, sizeof(*layout));
+    }
+    return ok;
+}
 
 static bool static_section_has_prefix(const char *name, const char *prefix) {
     size_t length = strlen(prefix);
@@ -3119,6 +3743,8 @@ static bool static_synthesize_array_bound_pair(
         uint64_t section_end;
 
         if ((section->flags & SHF_ALLOC) == 0U ||
+            (layout->section_discarded != NULL &&
+             layout->section_discarded[i]) ||
             !static_section_has_prefix(section->name, section_prefix)) {
             continue;
         }
@@ -3136,9 +3762,27 @@ static bool static_synthesize_array_bound_pair(
     if (!found) {
         /*
          * Match the old Python linker: absent constructor/destructor arrays
-         * are represented by a zero-length range at the end of writable data.
+         * are represented by a zero-length range at the end of the load image.
          */
-        start = layout->rw_vaddr + (uint64_t)layout->rw_mem_size;
+        if (layout->scripted) {
+            start = 0U;
+            for (i = 0U; i < state->section_count; ++i) {
+                MiniLdSection *section = &state->sections[i];
+                uint64_t candidate;
+
+                if ((section->flags & SHF_ALLOC) == 0U ||
+                    layout->section_discarded[i]) {
+                    continue;
+                }
+                candidate = layout->section_vaddr[i] +
+                            (uint64_t)section->size;
+                if (candidate > start) {
+                    start = candidate;
+                }
+            }
+        } else {
+            start = layout->rw_vaddr + (uint64_t)layout->rw_mem_size;
+        }
         end = start;
     }
     return static_define_absolute_if_undefined(state, start_name, start) &&
@@ -3203,9 +3847,13 @@ static bool static_synthesize_runtime_boundaries(
 
 static void static_layout_destroy(MiniLdStaticLayout *layout) {
     free(layout->section_vaddr);
+    free(layout->section_laddr);
     free(layout->section_file_offset);
+    free(layout->section_discarded);
     layout->section_vaddr = NULL;
+    layout->section_laddr = NULL;
     layout->section_file_offset = NULL;
+    layout->section_discarded = NULL;
 }
 
 static bool static_resolve_symbol(MiniLdState *state,
@@ -3235,7 +3883,9 @@ static bool static_resolve_symbol(MiniLdState *state,
     }
     if (symbol->section < 0 ||
         (size_t)symbol->section >= state->section_count ||
-        (state->sections[symbol->section].flags & SHF_ALLOC) == 0U) {
+        (state->sections[symbol->section].flags & SHF_ALLOC) == 0U ||
+        (layout->section_discarded != NULL &&
+         layout->section_discarded[symbol->section])) {
         fprintf(state->diagnostics,
                 "minic-ld: unsupported-static-symbol:%s\n",
                 symbol->name);
@@ -3325,6 +3975,12 @@ static bool static_apply_relocations(MiniLdState *state,
         MiniLdReloc *reloc = &state->relocs[i];
         MiniLdSection *section = &state->sections[reloc->section];
         uint64_t symbol_value = 0U;
+
+        if (layout->scripted &&
+            ((section->flags & SHF_ALLOC) == 0U ||
+             layout->section_discarded[reloc->section])) {
+            continue;
+        }
         uint64_t place = layout->section_vaddr[reloc->section] + reloc->offset;
         int64_t target;
         int64_t delta;
@@ -3766,10 +4422,8 @@ static bool static_write_executable(MiniLdState *state,
                                     const MiniLdStaticLayout *layout,
                                     const char *path,
                                     uint64_t entry) {
-    size_t phnum = (layout->have_rx ? 1U : 0U) +
-                   (layout->have_rw ? 1U : 0U);
-    size_t load_image_size =
-        sizeof(Elf64_Ehdr) + phnum * sizeof(Elf64_Phdr);
+    size_t phnum = 0U;
+    size_t load_image_size;
     size_t output_section_count;
     size_t symtab_index;
     size_t strtab_index;
@@ -3793,17 +4447,58 @@ static bool static_write_executable(MiniLdState *state,
     FILE *file = NULL;
     bool ok = false;
 
-    if (layout->have_rx &&
-        layout->rx_file_offset + layout->rx_file_size >
-            load_image_size) {
-        load_image_size =
-            layout->rx_file_offset + layout->rx_file_size;
+    if (layout->scripted) {
+        for (i = 0U; i < state->section_count; ++i) {
+            MiniLdSection *section = &state->sections[i];
+
+            if (layout->section_discarded[i] ||
+                (section->flags & SHF_ALLOC) == 0U ||
+                section->size == 0U) {
+                continue;
+            }
+            ++phnum;
+        }
+    } else {
+        phnum = (layout->have_rx ? 1U : 0U) +
+                (layout->have_rw ? 1U : 0U);
     }
-    if (layout->have_rw &&
-        layout->rw_file_offset + layout->rw_file_size >
-            load_image_size) {
-        load_image_size =
-            layout->rw_file_offset + layout->rw_file_size;
+    if (phnum > UINT16_MAX ||
+        phnum > (SIZE_MAX - sizeof(Elf64_Ehdr)) / sizeof(Elf64_Phdr)) {
+        fprintf(state->diagnostics, "minic-ld: too-many-static-segments\n");
+        goto done;
+    }
+    load_image_size = sizeof(Elf64_Ehdr) + phnum * sizeof(Elf64_Phdr);
+
+    if (layout->scripted) {
+        for (i = 0U; i < state->section_count; ++i) {
+            MiniLdSection *section = &state->sections[i];
+            size_t end;
+
+            if (layout->section_discarded[i] ||
+                (section->flags & SHF_ALLOC) == 0U ||
+                section->type == SHT_NOBITS || section->size == 0U) {
+                continue;
+            }
+            if (layout->section_file_offset[i] == SIZE_MAX ||
+                !add_size(layout->section_file_offset[i], section->size, &end)) {
+                fprintf(state->diagnostics,
+                        "minic-ld: invalid-script-section-file-offset:%s\n",
+                        section->name);
+                goto done;
+            }
+            if (end > load_image_size) {
+                load_image_size = end;
+            }
+        }
+    } else {
+        if (layout->have_rx &&
+            layout->rx_file_offset + layout->rx_file_size > load_image_size) {
+            load_image_size = layout->rx_file_offset + layout->rx_file_size;
+        }
+        if (layout->have_rw &&
+            layout->rw_file_offset + layout->rw_file_size > load_image_size) {
+            load_image_size = layout->rw_file_offset + layout->rw_file_size;
+        }
     }
 
     if (state->section_count > SIZE_MAX - 3U) {
@@ -3851,7 +4546,15 @@ static bool static_write_executable(MiniLdState *state,
         }
 
         section_file_offsets[i] = layout->section_file_offset[i];
+        if (layout->scripted && layout->section_discarded[i]) {
+            section_file_offsets[i] = 0U;
+            continue;
+        }
         if ((section->flags & SHF_ALLOC) != 0U) {
+            if (section->size == 0U) {
+                section_file_offsets[i] = 0U;
+                continue;
+            }
             if (section->type != SHT_NOBITS &&
                 section->size != 0U &&
                 (section_file_offsets[i] == SIZE_MAX ||
@@ -3920,6 +4623,11 @@ static bool static_write_executable(MiniLdState *state,
         Elf64_Shdr *output = &headers[i + 1U];
 
         output->sh_name = section_name_offsets[i];
+        if (layout->scripted && layout->section_discarded[i]) {
+            output->sh_type = SHT_NOBITS;
+            output->sh_addralign = 1U;
+            continue;
+        }
         output->sh_type = section->type;
         output->sh_flags = section->flags;
         output->sh_addr =
@@ -3954,7 +4662,9 @@ static bool static_write_executable(MiniLdState *state,
             output->st_shndx = SHN_COMMON;
             output->st_value = input->value;
         } else if (input->section >= 0 &&
-                   (size_t)input->section < state->section_count) {
+                   (size_t)input->section < state->section_count &&
+                   !(layout->scripted &&
+                     layout->section_discarded[input->section])) {
             output->st_shndx =
                 (Elf64_Section)((size_t)input->section + 1U);
             output->st_value =
@@ -3962,6 +4672,12 @@ static bool static_write_executable(MiniLdState *state,
                     ? layout->section_vaddr[input->section] +
                           input->value
                     : input->value;
+        } else if (input->section >= 0 &&
+                   (size_t)input->section < state->section_count &&
+                   layout->scripted &&
+                   layout->section_discarded[input->section]) {
+            output->st_shndx = SHN_UNDEF;
+            output->st_value = 0U;
         } else {
             fprintf(state->diagnostics,
                     "minic-ld: invalid-static-symbol-section:%s\n",
@@ -4043,36 +4759,65 @@ static bool static_write_executable(MiniLdState *state,
 
     programs =
         (Elf64_Phdr *)(void *)(image + sizeof(Elf64_Ehdr));
-    if (layout->have_rx) {
-        Elf64_Phdr *ph = &programs[program_index++];
-        memset(ph, 0, sizeof(*ph));
-        ph->p_type = PT_LOAD;
-        ph->p_flags = PF_R | PF_X;
-        ph->p_offset = layout->rx_file_offset;
-        ph->p_vaddr = layout->rx_vaddr;
-        ph->p_paddr = layout->rx_vaddr;
-        ph->p_filesz = layout->rx_file_size;
-        ph->p_memsz = layout->rx_file_size;
-        ph->p_align = 4096U;
-    }
-    if (layout->have_rw) {
-        Elf64_Phdr *ph = &programs[program_index++];
-        memset(ph, 0, sizeof(*ph));
-        ph->p_type = PT_LOAD;
-        ph->p_flags = PF_R | PF_W;
-        ph->p_offset = layout->rw_file_offset;
-        ph->p_vaddr = layout->rw_vaddr;
-        ph->p_paddr = layout->rw_vaddr;
-        ph->p_filesz = layout->rw_file_size;
-        ph->p_memsz = layout->rw_mem_size;
-        ph->p_align = 4096U;
+    if (layout->scripted) {
+        for (i = 0U; i < state->section_count; ++i) {
+            MiniLdSection *section = &state->sections[i];
+            Elf64_Phdr *ph;
+
+            if (layout->section_discarded[i] ||
+                (section->flags & SHF_ALLOC) == 0U ||
+                section->size == 0U) {
+                continue;
+            }
+            ph = &programs[program_index++];
+            memset(ph, 0, sizeof(*ph));
+            ph->p_type = PT_LOAD;
+            ph->p_flags = PF_R;
+            if ((section->flags & SHF_WRITE) != 0U) {
+                ph->p_flags |= PF_W;
+            }
+            if ((section->flags & SHF_EXECINSTR) != 0U) {
+                ph->p_flags |= PF_X;
+            }
+            ph->p_offset = layout->section_file_offset[i];
+            ph->p_vaddr = layout->section_vaddr[i];
+            ph->p_paddr = layout->section_laddr[i];
+            ph->p_filesz = section->type == SHT_NOBITS ? 0U : section->size;
+            ph->p_memsz = section->size;
+            ph->p_align = 1U;
+        }
+    } else {
+        if (layout->have_rx) {
+            Elf64_Phdr *ph = &programs[program_index++];
+            memset(ph, 0, sizeof(*ph));
+            ph->p_type = PT_LOAD;
+            ph->p_flags = PF_R | PF_X;
+            ph->p_offset = layout->rx_file_offset;
+            ph->p_vaddr = layout->rx_vaddr;
+            ph->p_paddr = layout->rx_vaddr;
+            ph->p_filesz = layout->rx_file_size;
+            ph->p_memsz = layout->rx_file_size;
+            ph->p_align = 4096U;
+        }
+        if (layout->have_rw) {
+            Elf64_Phdr *ph = &programs[program_index++];
+            memset(ph, 0, sizeof(*ph));
+            ph->p_type = PT_LOAD;
+            ph->p_flags = PF_R | PF_W;
+            ph->p_offset = layout->rw_file_offset;
+            ph->p_vaddr = layout->rw_vaddr;
+            ph->p_paddr = layout->rw_vaddr;
+            ph->p_filesz = layout->rw_file_size;
+            ph->p_memsz = layout->rw_mem_size;
+            ph->p_align = 4096U;
+        }
     }
 
     for (i = 0U; i < state->section_count; ++i) {
         MiniLdSection *section = &state->sections[i];
 
-        if (section->type == SHT_NOBITS ||
-            section->size == 0U) {
+        if ((layout->scripted && layout->section_discarded[i]) ||
+            section->type == SHT_NOBITS || section->size == 0U) {
             continue;
         }
         if (section_file_offsets[i] == SIZE_MAX ||
@@ -4151,27 +4896,54 @@ done:
     return ok;
 }
 
-int minild_link_static_elf64_riscv_inputs(const char *output_path,
-                                          const MiniLdInput *inputs,
-                                          size_t input_count,
-                                          const char *entry_symbol,
-                                          FILE *diagnostics) {
+int minild_link_static_elf64_riscv_inputs_options(
+    const char *output_path,
+    const MiniLdInput *inputs,
+    size_t input_count,
+    const MiniLdStaticOptions *options,
+    FILE *diagnostics) {
     MiniLdState state;
     MiniLdStaticLayout layout;
     MiniLdStaticGot got;
+    MiniLdScript script;
+    const char *entry_symbol;
     uint64_t entry = 0U;
+    bool have_script = false;
     bool layout_ready = false;
     bool ok = false;
 
     if (output_path == NULL || inputs == NULL || input_count == 0U ||
-        entry_symbol == NULL || diagnostics == NULL) {
+        diagnostics == NULL) {
         return 2;
     }
     memset(&state, 0, sizeof(state));
     memset(&layout, 0, sizeof(layout));
     memset(&got, 0, sizeof(got));
+    minild_script_initialize(&script);
     got.section = SIZE_MAX;
     state.diagnostics = diagnostics;
+
+    if (options != NULL && options->script_path != NULL) {
+        if (!minild_script_parse_file(options->script_path,
+                                      &script,
+                                      diagnostics)) {
+            goto done;
+        }
+        if (script.output_arch != NULL &&
+            strcmp(script.output_arch, "riscv") != 0) {
+            fprintf(diagnostics,
+                    "minic-ld: unsupported-linker-script-arch:%s\n",
+                    script.output_arch);
+            goto done;
+        }
+        have_script = true;
+    }
+
+    entry_symbol = options != NULL && options->entry_symbol != NULL
+                       ? options->entry_symbol
+                       : have_script && script.entry_symbol != NULL
+                             ? script.entry_symbol
+                             : "_start";
 
     if (!process_input_sequence(&state, inputs, input_count)) {
         goto done;
@@ -4180,7 +4952,8 @@ int minild_link_static_elf64_riscv_inputs(const char *output_path,
     if (!state.have_input ||
         !static_allocate_common(&state) ||
         !static_build_got(&state, &got) ||
-        !static_build_layout(&state, &layout)) {
+        !(have_script ? static_build_script_layout(&state, &script, &layout)
+                      : static_build_layout(&state, &layout))) {
         goto done;
     }
     layout_ready = true;
@@ -4197,9 +4970,26 @@ done:
     if (layout_ready) {
         static_layout_destroy(&layout);
     }
+    minild_script_destroy(&script);
     static_got_destroy(&got);
     state_destroy(&state);
     return ok ? 0 : 1;
+}
+
+int minild_link_static_elf64_riscv_inputs(const char *output_path,
+                                          const MiniLdInput *inputs,
+                                          size_t input_count,
+                                          const char *entry_symbol,
+                                          FILE *diagnostics) {
+    MiniLdStaticOptions options;
+
+    options.entry_symbol = entry_symbol;
+    options.script_path = NULL;
+    return minild_link_static_elf64_riscv_inputs_options(output_path,
+                                                          inputs,
+                                                          input_count,
+                                                          &options,
+                                                          diagnostics);
 }
 
 int minild_link_relocatable_elf64_riscv_inputs(const char *output_path,

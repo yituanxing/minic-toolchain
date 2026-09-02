@@ -23,7 +23,8 @@ static void usage(FILE *out, const char *argv0) {
 
 int main(int argc, char **argv) {
     const char *output = NULL;
-    const char *entry_symbol = "_start";
+    const char *entry_symbol = NULL;
+    const char *script_path = NULL;
     MiniLdInput inputs[4096];
     size_t input_count = 0U;
     bool relocatable = false;
@@ -53,6 +54,19 @@ int main(int argc, char **argv) {
                 return 2;
             }
             output = argv[i];
+        } else if (strncmp(argv[i], "--script=", 9U) == 0) {
+            script_path = argv[i] + 9U;
+            if (*script_path == '\0') {
+                fprintf(stderr, "minic-ld: empty-linker-script\n");
+                return 2;
+            }
+        } else if (strcmp(argv[i], "--script") == 0 ||
+                   strcmp(argv[i], "-T") == 0) {
+            if (++i >= argc) {
+                usage(stderr, argv[0]);
+                return 2;
+            }
+            script_path = argv[i];
         } else if (strcmp(argv[i], "--whole-archive") == 0) {
             whole_archive = true;
         } else if (strcmp(argv[i], "--no-whole-archive") == 0) {
@@ -145,10 +159,16 @@ int main(int argc, char **argv) {
                                                            stderr);
     }
 
-    (void)static_link;
-    return minild_link_static_elf64_riscv_inputs(output,
-                                                  inputs,
-                                                  input_count,
-                                                  entry_symbol,
-                                                  stderr);
+    {
+        MiniLdStaticOptions options;
+
+        (void)static_link;
+        options.entry_symbol = entry_symbol;
+        options.script_path = script_path;
+        return minild_link_static_elf64_riscv_inputs_options(output,
+                                                              inputs,
+                                                              input_count,
+                                                              &options,
+                                                              stderr);
+    }
 }
