@@ -244,39 +244,6 @@ static bool patch_symbol_bind(unsigned char *entry,
     return true;
 }
 
-static bool rewrite_relocation_symbols(
-    const MiniElfView *view,
-    const MiniElfSection *section,
-    const size_t *symbol_map,
-    size_t symbol_count,
-    unsigned char **data_out,
-    size_t *size_out) {
-    const unsigned char *input;
-    size_t input_size;
-    unsigned char *output;
-    size_t minimum;
-    size_t count;
-    size_t i;
-
-    if (!minielf_section_data(view,
-                              (size_t)(section - section),
-                              &input,
-                              &input_size)) {
-        return false;
-    }
-    (void)input;
-    (void)input_size;
-    (void)output;
-    (void)minimum;
-    (void)count;
-    (void)i;
-    (void)symbol_map;
-    (void)symbol_count;
-    (void)data_out;
-    (void)size_out;
-    return false;
-}
-
 static bool build_localized_symtab(const MiniElfView *view,
                                    size_t symtab_index,
                                    MiniElfRewriteSectionState *states,
