@@ -139,9 +139,15 @@ jobs:
           done
 
           : >"$work/ld.objects"
-          for source in linker/src/linker.c tools/minic-ld/main.c
+          for source in \
+            linker/src/linker_script_lex.c \
+            linker/src/linker_script_expr.c \
+            linker/src/linker_script_parse.c \
+            linker/src/linker_script_match.c \
+            linker/src/linker.c \
+            tools/minic-ld/main.c
           do
-            compile_one ld "-Ilinker/include" "$source" >>"$work/ld.objects"
+            compile_one ld "-Ilinker/include -Ilinker/src" "$source" >>"$work/ld.objects"
           done
 
           printf 'STATIC_TOOLCHAIN_SELFHOST_COMPILE=PASS cpp=%s as=%s ar=%s ld=%s\n'             "$(wc -l <"$work/cpp.objects")"             "$(wc -l <"$work/as.objects")"             "$(wc -l <"$work/ar.objects")"             "$(wc -l <"$work/ld.objects")"
