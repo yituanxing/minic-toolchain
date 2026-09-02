@@ -1,0 +1,73 @@
+         return 2;
+     }
+     memset(&state, 0, sizeof(state));
+     memset(&layout, 0, sizeof(layout));
+     memset(&got, 0, sizeof(got));
++    minild_script_initialize(&script);
+     got.section = SIZE_MAX;
+     state.diagnostics = diagnostics;
+ 
++    if (options != NULL && options->script_path != NULL) {
++        if (!minild_script_parse_file(options->script_path,
++                                      &script,
++                                      diagnostics)) {
++            goto done;
++        }
++        if (script.output_arch != NULL &&
++            strcmp(script.output_arch, "riscv") != 0) {
++            fprintf(diagnostics,
++                    "minic-ld: unsupported-linker-script-arch:%s\n",
++                    script.output_arch);
++            goto done;
++        }
++        have_script = true;
++    }
++
++    entry_symbol = options != NULL && options->entry_symbol != NULL
++                       ? options->entry_symbol
++                       : have_script && script.entry_symbol != NULL
++                             ? script.entry_symbol
++                             : "_start";
++
+     if (!process_input_sequence(&state, inputs, input_count)) {
+         goto done;
+     }
+@@ -4180,7 +4952,8 @@
+     if (!state.have_input ||
+         !static_allocate_common(&state) ||
+         !static_build_got(&state, &got) ||
+-        !static_build_layout(&state, &layout)) {
++        !(have_script ? static_build_script_layout(&state, &script, &layout)
++                      : static_build_layout(&state, &layout))) {
+         goto done;
+     }
+     layout_ready = true;
+@@ -4197,11 +4970,28 @@
+     if (layout_ready) {
+         static_layout_destroy(&layout);
+     }
++    minild_script_destroy(&script);
+     static_got_destroy(&got);
+     state_destroy(&state);
+     return ok ? 0 : 1;
+ }
+ 
++int minild_link_static_elf64_riscv_inputs(const char *output_path,
++                                          const MiniLdInput *inputs,
++                                          size_t input_count,
++                                          const char *entry_symbol,
++                                          FILE *diagnostics) {
++    MiniLdStaticOptions options;
++
++    options.entry_symbol = entry_symbol;
++    options.script_path = NULL;
++    return minild_link_static_elf64_riscv_inputs_options(output_path,
++                                                          inputs,
++                                                          input_count,
++                                                          &options,
++                                                          diagnostics);
++}
++
+ int minild_link_relocatable_elf64_riscv_inputs(const char *output_path,
+                                                const MiniLdInput *inputs,
+                                                size_t input_count,
