@@ -1,0 +1,36 @@
+name: Apply MiniLD Script A1
+
+on:
+  push:
+    branches:
+      - "toolchain/static-readiness"
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: contains(github.event.head_commit.message, '[apply-minild-script-a1]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: Apply locally validated patch
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          cat tools/dev/minild-script-a1.part* > /tmp/minild-script-a1.patch
+          git apply --check /tmp/minild-script-a1.patch
+          git apply /tmp/minild-script-a1.patch
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/apply-script-a1 build/apply-script-a1/bin/minic-ld
+          rm -f tools/dev/minild-script-a1.part*
+          rm -f .github/workflows/apply-minild-script-a1.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "linker: execute Linux vmlinux script layout [minild-script-a1] [static-linux-final]"
+          git push origin HEAD:toolchain/static-readiness
