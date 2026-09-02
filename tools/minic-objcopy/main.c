@@ -423,8 +423,6 @@ int main(int argc, char **argv) {
         }
         if (strcmp(argument, "-G") == 0 ||
             strcmp(argument, "--keep-global-symbol") == 0) {
-            const char *value;
-
             if (++i >= argc ||
                 !append_keep_global(&options, argv[i])) {
                 fprintf(stderr,
