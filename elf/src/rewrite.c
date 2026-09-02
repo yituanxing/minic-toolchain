@@ -513,7 +513,10 @@ bool minielf_rewrite(const MiniElfView *view,
     }
     if (view == NULL || options == NULL ||
         image_out == NULL || size_out == NULL ||
-        (view->type != ET_EXEC && view->type != ET_DYN) ||
+        (view->type != ET_EXEC && view->type != ET_DYN &&
+         view->type != ET_REL) ||
+        (view->type == ET_REL &&
+         (options->strip_all || options->keep_global_count != 0U)) ||
         view->section_count == 0U ||
         view->section_name_table_index == SHN_UNDEF) {
         set_error(error_out,
@@ -704,7 +707,8 @@ bool minielf_rewrite(const MiniElfView *view,
             states[i].new_offset = section->offset;
             continue;
         }
-        if ((section->flags & SHF_ALLOC) != 0U) {
+        if (view->type != ET_REL &&
+            (section->flags & SHF_ALLOC) != 0U) {
             set_error(error_out, MINIELF_REWRITE_UNSUPPORTED_FILE);
             goto done;
         }
