@@ -1,2 +1,4 @@
-source_head=f9a74dccd98e412497b40246715a9f24f4109f26
-reason=same-head Core Audit and Linux final validation for MiniLD script A1
+source_head=005d474f8af72cad74d242de659ef4289798ad18
+bootstrap_run=33614809726
+bootstrap_status=PASS
+reason=run PP AS AR LD through freshly bootstrapped Stage2
