@@ -1,0 +1,181 @@
++            layout->rx_file_offset + layout->rx_file_size > load_image_size) {
++            load_image_size = layout->rx_file_offset + layout->rx_file_size;
++        }
++        if (layout->have_rw &&
++            layout->rw_file_offset + layout->rw_file_size > load_image_size) {
++            load_image_size = layout->rw_file_offset + layout->rw_file_size;
++        }
+     }
+ 
+     if (state->section_count > SIZE_MAX - 3U) {
+@@ -3851,7 +4546,15 @@
+         }
+ 
+         section_file_offsets[i] = layout->section_file_offset[i];
++        if (layout->scripted && layout->section_discarded[i]) {
++            section_file_offsets[i] = 0U;
++            continue;
++        }
+         if ((section->flags & SHF_ALLOC) != 0U) {
++            if (section->size == 0U) {
++                section_file_offsets[i] = 0U;
++                continue;
++            }
+             if (section->type != SHT_NOBITS &&
+                 section->size != 0U &&
+                 (section_file_offsets[i] == SIZE_MAX ||
+@@ -3920,6 +4623,11 @@
+         Elf64_Shdr *output = &headers[i + 1U];
+ 
+         output->sh_name = section_name_offsets[i];
++        if (layout->scripted && layout->section_discarded[i]) {
++            output->sh_type = SHT_NOBITS;
++            output->sh_addralign = 1U;
++            continue;
++        }
+         output->sh_type = section->type;
+         output->sh_flags = section->flags;
+         output->sh_addr =
+@@ -3954,7 +4662,9 @@
+             output->st_shndx = SHN_COMMON;
+             output->st_value = input->value;
+         } else if (input->section >= 0 &&
+-                   (size_t)input->section < state->section_count) {
++                   (size_t)input->section < state->section_count &&
++                   !(layout->scripted &&
++                     layout->section_discarded[input->section])) {
+             output->st_shndx =
+                 (Elf64_Section)((size_t)input->section + 1U);
+             output->st_value =
+@@ -3962,6 +4672,12 @@
+                     ? layout->section_vaddr[input->section] +
+                           input->value
+                     : input->value;
++        } else if (input->section >= 0 &&
++                   (size_t)input->section < state->section_count &&
++                   layout->scripted &&
++                   layout->section_discarded[input->section]) {
++            output->st_shndx = SHN_UNDEF;
++            output->st_value = 0U;
+         } else {
+             fprintf(state->diagnostics,
+                     "minic-ld: invalid-static-symbol-section:%s\n",
+@@ -4043,36 +4759,65 @@
+ 
+     programs =
+         (Elf64_Phdr *)(void *)(image + sizeof(Elf64_Ehdr));
+-    if (layout->have_rx) {
+-        Elf64_Phdr *ph = &programs[program_index++];
+-        memset(ph, 0, sizeof(*ph));
+-        ph->p_type = PT_LOAD;
+-        ph->p_flags = PF_R | PF_X;
+-        ph->p_offset = layout->rx_file_offset;
+-        ph->p_vaddr = layout->rx_vaddr;
+-        ph->p_paddr = layout->rx_vaddr;
+-        ph->p_filesz = layout->rx_file_size;
+-        ph->p_memsz = layout->rx_file_size;
+-        ph->p_align = 4096U;
+-    }
+-    if (layout->have_rw) {
+-        Elf64_Phdr *ph = &programs[program_index++];
+-        memset(ph, 0, sizeof(*ph));
+-        ph->p_type = PT_LOAD;
+-        ph->p_flags = PF_R | PF_W;
+-        ph->p_offset = layout->rw_file_offset;
+-        ph->p_vaddr = layout->rw_vaddr;
+-        ph->p_paddr = layout->rw_vaddr;
+-        ph->p_filesz = layout->rw_file_size;
+-        ph->p_memsz = layout->rw_mem_size;
+-        ph->p_align = 4096U;
++    if (layout->scripted) {
++        for (i = 0U; i < state->section_count; ++i) {
++            MiniLdSection *section = &state->sections[i];
++            Elf64_Phdr *ph;
++
++            if (layout->section_discarded[i] ||
++                (section->flags & SHF_ALLOC) == 0U ||
++                section->size == 0U) {
++                continue;
++            }
++            ph = &programs[program_index++];
++            memset(ph, 0, sizeof(*ph));
++            ph->p_type = PT_LOAD;
++            ph->p_flags = PF_R;
++            if ((section->flags & SHF_WRITE) != 0U) {
++                ph->p_flags |= PF_W;
++            }
++            if ((section->flags & SHF_EXECINSTR) != 0U) {
++                ph->p_flags |= PF_X;
++            }
++            ph->p_offset = layout->section_file_offset[i];
++            ph->p_vaddr = layout->section_vaddr[i];
++            ph->p_paddr = layout->section_laddr[i];
++            ph->p_filesz = section->type == SHT_NOBITS ? 0U : section->size;
++            ph->p_memsz = section->size;
++            ph->p_align = 1U;
++        }
++    } else {
++        if (layout->have_rx) {
++            Elf64_Phdr *ph = &programs[program_index++];
++            memset(ph, 0, sizeof(*ph));
++            ph->p_type = PT_LOAD;
++            ph->p_flags = PF_R | PF_X;
++            ph->p_offset = layout->rx_file_offset;
++            ph->p_vaddr = layout->rx_vaddr;
++            ph->p_paddr = layout->rx_vaddr;
++            ph->p_filesz = layout->rx_file_size;
++            ph->p_memsz = layout->rx_file_size;
++            ph->p_align = 4096U;
++        }
++        if (layout->have_rw) {
++            Elf64_Phdr *ph = &programs[program_index++];
++            memset(ph, 0, sizeof(*ph));
++            ph->p_type = PT_LOAD;
++            ph->p_flags = PF_R | PF_W;
++            ph->p_offset = layout->rw_file_offset;
++            ph->p_vaddr = layout->rw_vaddr;
++            ph->p_paddr = layout->rw_vaddr;
++            ph->p_filesz = layout->rw_file_size;
++            ph->p_memsz = layout->rw_mem_size;
++            ph->p_align = 4096U;
++        }
+     }
+ 
+     for (i = 0U; i < state->section_count; ++i) {
+         MiniLdSection *section = &state->sections[i];
+ 
+-        if (section->type == SHT_NOBITS ||
+-            section->size == 0U) {
++        if ((layout->scripted && layout->section_discarded[i]) ||
++            section->type == SHT_NOBITS || section->size == 0U) {
+             continue;
+         }
+         if (section_file_offsets[i] == SIZE_MAX ||
+@@ -4151,28 +4896,55 @@
+     return ok;
+ }
+ 
+-int minild_link_static_elf64_riscv_inputs(const char *output_path,
+-                                          const MiniLdInput *inputs,
+-                                          size_t input_count,
+-                                          const char *entry_symbol,
+-                                          FILE *diagnostics) {
++int minild_link_static_elf64_riscv_inputs_options(
++    const char *output_path,
++    const MiniLdInput *inputs,
++    size_t input_count,
++    const MiniLdStaticOptions *options,
++    FILE *diagnostics) {
+     MiniLdState state;
+     MiniLdStaticLayout layout;
+     MiniLdStaticGot got;
++    MiniLdScript script;
++    const char *entry_symbol;
+     uint64_t entry = 0U;
++    bool have_script = false;
+     bool layout_ready = false;
+     bool ok = false;
+ 
+     if (output_path == NULL || inputs == NULL || input_count == 0U ||
+-        entry_symbol == NULL || diagnostics == NULL) {
++        diagnostics == NULL) {
