@@ -124,7 +124,12 @@ MINIAR_SOURCES := \
 MINIAR_OBJECTS := $(patsubst %.c,$(BUILD_DIR)/obj/%.o,$(MINIAR_SOURCES))
 MINIAR_BINARY := $(BUILD_DIR)/bin/minic-ar
 
-MINILD_INCLUDES := -Ilinker/include -Ilinker/src
+MINIELF_INCLUDES := -Ielf/include
+MINIELF_SOURCES := \
+	elf/src/reader.c
+MINIELF_OBJECTS := $(patsubst %.c,$(BUILD_DIR)/obj/%.o,$(MINIELF_SOURCES))
+
+MINILD_INCLUDES := -Ilinker/include -Ilinker/src $(MINIELF_INCLUDES)
 MINILD_SOURCES := \
 	linker/src/linker_script_lex.c \
 	linker/src/linker_script_expr.c \
@@ -132,7 +137,7 @@ MINILD_SOURCES := \
 	linker/src/linker_script_match.c \
 	linker/src/linker.c \
 	tools/minic-ld/main.c
-MINILD_OBJECTS := $(patsubst %.c,$(BUILD_DIR)/obj/%.o,$(MINILD_SOURCES))
+MINILD_OBJECTS := $(MINIELF_OBJECTS) $(patsubst %.c,$(BUILD_DIR)/obj/%.o,$(MINILD_SOURCES))
 MINILD_BINARY := $(BUILD_DIR)/bin/minic-ld
 
 TOKEN_MODEL_TEST_SOURCES := \
@@ -340,6 +345,10 @@ check-miniar-a1: $(MINIAR_BINARY)
 	BUILD_DIR="$(abspath $(BUILD_DIR))" \
 	HOST_CC="$(CC)" \
 	sh tests/archiver/run-a1.sh
+
+$(BUILD_DIR)/obj/elf/%.o: elf/%.c
+	@mkdir -p "$(dir $@)"
+	$(CC) $(CPPFLAGS) $(MINIELF_INCLUDES) $(MINIC_CFLAGS) -MMD -MP -c "$<" -o "$@"
 
 $(BUILD_DIR)/obj/linker/%.o: linker/%.c
 	@mkdir -p "$(dir $@)"
@@ -624,6 +633,7 @@ distclean:
 -include $(MINIAS_OBJECTS:.o=.d)
 -include $(MINIPP_OBJECTS:.o=.d)
 -include $(MINIAR_OBJECTS:.o=.d)
+-include $(MINIELF_OBJECTS:.o=.d)
 -include $(MINILD_OBJECTS:.o=.d)
 -include $(TOKEN_MODEL_TEST_OBJECTS:.o=.d)
 -include $(LEXER_TEST_OBJECTS:.o=.d)
