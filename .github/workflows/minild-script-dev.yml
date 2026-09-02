@@ -1,0 +1,39 @@
+name: MiniLD Script Dev Binary
+
+on:
+  push:
+    branches:
+      - "toolchain/static-readiness"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-minild:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      contains(github.event.head_commit.message, '[minild-script') ||
+      contains(github.event.head_commit.message, '[minild-a2]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Strict-build MiniLD
+        run: |
+          make -j4 MODE=release CFLAGS=-Werror \
+            BUILD_DIR=build/minild-script-dev \
+            build/minild-script-dev/bin/minic-ld
+          build/minild-script-dev/bin/minic-ld --version
+
+      - name: Upload MiniLD dev binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: minild-script-dev-${{ github.sha }}
+          path: build/minild-script-dev/bin/minic-ld
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0
