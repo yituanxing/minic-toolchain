@@ -95,7 +95,13 @@ MINIC_CC_BINARY := $(BUILD_DIR)/bin/minic-cc
 # the real multi-tool driver in a later milestone.
 MINIC_BINARY  := $(BUILD_DIR)/bin/minic
 
-MINIAS_INCLUDES := -Iassembler/src
+MINIELF_INCLUDES := -Ielf/include
+MINIELF_SOURCES := \
+	elf/src/reader.c \
+	elf/src/relocatable_writer.c
+MINIELF_OBJECTS := $(patsubst %.c,$(BUILD_DIR)/obj/%.o,$(MINIELF_SOURCES))
+
+MINIAS_INCLUDES := -Iassembler/src $(MINIELF_INCLUDES)
 MINIAS_SOURCES := \
 	assembler/src/assembler.c \
 	assembler/src/expression.c \
@@ -103,7 +109,7 @@ MINIAS_SOURCES := \
 	assembler/src/string_literal.c \
 	assembler/src/elf_writer.c \
 	tools/minic-as/main.c
-MINIAS_OBJECTS := $(patsubst %.c,$(BUILD_DIR)/obj/%.o,$(MINIAS_SOURCES))
+MINIAS_OBJECTS := $(MINIELF_OBJECTS) $(patsubst %.c,$(BUILD_DIR)/obj/%.o,$(MINIAS_SOURCES))
 MINIAS_BINARY := $(BUILD_DIR)/bin/minic-as
 
 MINIPP_INCLUDES := -Ipreprocessor/include -Ipreprocessor/src
@@ -123,11 +129,6 @@ MINIAR_SOURCES := \
 	tools/minic-ar/main.c
 MINIAR_OBJECTS := $(patsubst %.c,$(BUILD_DIR)/obj/%.o,$(MINIAR_SOURCES))
 MINIAR_BINARY := $(BUILD_DIR)/bin/minic-ar
-
-MINIELF_INCLUDES := -Ielf/include
-MINIELF_SOURCES := \
-	elf/src/reader.c
-MINIELF_OBJECTS := $(patsubst %.c,$(BUILD_DIR)/obj/%.o,$(MINIELF_SOURCES))
 
 MINILD_INCLUDES := -Ilinker/include -Ilinker/src $(MINIELF_INCLUDES)
 MINILD_SOURCES := \
