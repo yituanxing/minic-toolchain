@@ -162,6 +162,7 @@ jobs:
           for source in \
             elf/src/reader.c \
             elf/src/binary_export.c \
+            elf/src/rewrite.c \
             tools/minic-objcopy/main.c
           do
             compile_one objcopy "-Ielf/include" "$source" >>"$work/objcopy.objects"
@@ -248,6 +249,14 @@ jobs:
           qemu-riscv64 "$objcopy" -O binary "$work/selfhost.o" "$work/selfhost.mini.bin"
           cmp "$work/selfhost.gnu.bin" "$work/selfhost.mini.bin"
 
+          riscv64-linux-gnu-ld -shared -o "$work/selfhost.so" "$work/selfhost.o"
+          qemu-riscv64 "$objcopy" -S "$work/selfhost.so" "$work/selfhost.stripped.so"
+          riscv64-linux-gnu-readelf -h "$work/selfhost.stripped.so" | grep -q 'DYN (Shared object file)'
+          if riscv64-linux-gnu-readelf -SW "$work/selfhost.stripped.so" | grep -q '\.symtab'; then
+            echo "STATIC_TOOLCHAIN_SELFHOST_OBJCOPY_STRIP=FAIL" >&2
+            exit 1
+          fi
+
           qemu-riscv64 "$ld" -melf64lriscv -r -o "$work/selfhost-merged.o" "$work/selfhost.o"
           riscv64-linux-gnu-readelf -h "$work/selfhost-merged.o" | grep -q 'REL (Relocatable file)'
 
@@ -265,6 +274,7 @@ jobs:
             build/static-toolchain-selfhost/nm-list.txt
             build/static-toolchain-selfhost/selfhost.gnu.bin
             build/static-toolchain-selfhost/selfhost.mini.bin
+            build/static-toolchain-selfhost/selfhost.stripped.so
             build/static-toolchain-selfhost/selfhost.i
             build/static-toolchain-selfhost/bin/
           if-no-files-found: ignore
