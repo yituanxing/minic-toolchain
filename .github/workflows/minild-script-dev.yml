@@ -33,7 +33,13 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: minild-script-dev-${{ github.sha }}
-          path: build/minild-script-dev/bin/minic-ld
+          path: |
+            build/minild-script-dev/bin/minic-ld
+            linker/include
+            linker/src
+            tools/minic-ld
+            tests/linker
+            Makefile
           if-no-files-found: error
           retention-days: 1
           compression-level: 0
