@@ -415,8 +415,12 @@ static bool process_archive_member(const MiniArMemberView *member,
                               archive->options,
                               true);
     } else if (member->external_path != NULL) {
+        /*
+         * GNU nm identifies thin-archive members by the resolved external
+         * path rather than by the path token stored in the archive.
+         */
         ok = process_elf_path(member->external_path,
-                              member->name,
+                              member->external_path,
                               archive->options,
                               true);
     } else {
