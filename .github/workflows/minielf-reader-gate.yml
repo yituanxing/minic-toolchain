@@ -1,0 +1,44 @@
+name: MiniELF Reader Gate
+
+on:
+  push:
+    branches:
+      - "toolchain/minielf-reader"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  reader-gate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Install RV64 test prerequisites
+        run: |
+          sudo apt-get -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            build-essential gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu qemu-user
+
+      - name: Strict build
+        run: |
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/minielf-reader all
+
+      - name: Validate shared reader on real RV32 and RV64 objects
+        run: |
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/minielf-reader check-minielf-reader-a0
+
+      - name: Re-run MiniLD boundaries through shared reader
+        run: |
+          set -Eeuo pipefail
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/minielf-reader check-minild-script-a0
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/minielf-reader check-minild-script-a1
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/minielf-reader check-minild-a0
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/minielf-reader check-minild-a1
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/minielf-reader check-minild-a2
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/minielf-reader check-minild-a3
+          echo "MINIELF_READER_GATE=PASS ld=A0-A3 script=A0-A1"

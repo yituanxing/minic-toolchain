@@ -124,7 +124,12 @@ MINIAR_SOURCES := \
 MINIAR_OBJECTS := $(patsubst %.c,$(BUILD_DIR)/obj/%.o,$(MINIAR_SOURCES))
 MINIAR_BINARY := $(BUILD_DIR)/bin/minic-ar
 
-MINILD_INCLUDES := -Ilinker/include -Ilinker/src
+MINIELF_INCLUDES := -Ielf/include
+MINIELF_SOURCES := \
+	elf/src/reader.c
+MINIELF_OBJECTS := $(patsubst %.c,$(BUILD_DIR)/obj/%.o,$(MINIELF_SOURCES))
+
+MINILD_INCLUDES := -Ilinker/include -Ilinker/src $(MINIELF_INCLUDES)
 MINILD_SOURCES := \
 	linker/src/linker_script_lex.c \
 	linker/src/linker_script_expr.c \
@@ -132,7 +137,7 @@ MINILD_SOURCES := \
 	linker/src/linker_script_match.c \
 	linker/src/linker.c \
 	tools/minic-ld/main.c
-MINILD_OBJECTS := $(patsubst %.c,$(BUILD_DIR)/obj/%.o,$(MINILD_SOURCES))
+MINILD_OBJECTS := $(MINIELF_OBJECTS) $(patsubst %.c,$(BUILD_DIR)/obj/%.o,$(MINILD_SOURCES))
 MINILD_BINARY := $(BUILD_DIR)/bin/minic-ld
 
 TOKEN_MODEL_TEST_SOURCES := \
@@ -202,7 +207,7 @@ RV64_ABI_TEST_SOURCES := \
 RV64_ABI_TEST_OBJECTS := $(patsubst %.c,$(BUILD_DIR)/obj/%.o,$(RV64_ABI_TEST_SOURCES))
 RV64_ABI_TEST_BINARY  := $(BUILD_DIR)/tests/target/riscv64/abi-test
 
-.PHONY: all help prepare check check-fast check-minias-a0 check-minipp-a0 check-miniar-a0 check-miniar-a1 check-minild-a0 check-minild-a1 check-minild-a2 check-minild-a3 check-minild-script-a0 check-minild-script-a1 check-token-model check-lexer \
+.PHONY: all help prepare check check-fast check-minias-a0 check-minipp-a0 check-minielf-reader-a0 check-miniar-a0 check-miniar-a1 check-minild-a0 check-minild-a1 check-minild-a2 check-minild-a3 check-minild-script-a0 check-minild-script-a1 check-token-model check-lexer \
 	check-type check-record check-type-alias check-ast-contract check-layout check-rv64-abi \
 	check-static-functions \
 	check-unsigned-declarations check-long-types check-for-loops check-unbounded-for-break \
@@ -223,6 +228,7 @@ help:
 		"  make                    Build minic-cc, minic-as, minic-cpp, minic-ar, minic-ld and the temporary minic compatibility entrypoint" \
 		"  make check-minias-a0    Run the initial .s -> ELF ET_REL MiniAS gate" \
 		"  make check-minipp-a0    Compare independent MiniPP output byte-for-byte with GCC" \
+		"  make check-minielf-reader-a0 Validate shared ELF reader on GNU-as RV32/RV64 objects" \
 		"  make check-miniar-a0    Compare MiniAR archives byte-for-byte with GNU ar" \
 		"  make check-miniar-a1    Check thin flattening and archive listing" \
 		"  make check-minild-a0    Validate ELF64 RISC-V relocatable linking against GNU ld" \
@@ -341,6 +347,10 @@ check-miniar-a1: $(MINIAR_BINARY)
 	HOST_CC="$(CC)" \
 	sh tests/archiver/run-a1.sh
 
+$(BUILD_DIR)/obj/elf/%.o: elf/%.c
+	@mkdir -p "$(dir $@)"
+	$(CC) $(CPPFLAGS) $(MINIELF_INCLUDES) $(MINIC_CFLAGS) -MMD -MP -c "$<" -o "$@"
+
 $(BUILD_DIR)/obj/linker/%.o: linker/%.c
 	@mkdir -p "$(dir $@)"
 	$(CC) $(CPPFLAGS) $(MINILD_INCLUDES) $(MINIC_CFLAGS) -MMD -MP -c "$<" -o "$@"
@@ -352,6 +362,11 @@ $(BUILD_DIR)/obj/tools/minic-ld/%.o: tools/minic-ld/%.c
 $(MINILD_BINARY): $(MINILD_OBJECTS)
 	@mkdir -p "$(dir $@)"
 	$(CC) $(MINILD_OBJECTS) $(MINIC_LDFLAGS) -o "$@"
+
+check-minielf-reader-a0:
+	HOST_CC="$(CC)" \
+	BUILD_DIR="$(abspath $(BUILD_DIR))" \
+	sh tests/elf/run-reader-a0.sh
 
 check-minild-a0: $(MINILD_BINARY)
 	MINILD="$(abspath $(MINILD_BINARY))" \
@@ -624,6 +639,7 @@ distclean:
 -include $(MINIAS_OBJECTS:.o=.d)
 -include $(MINIPP_OBJECTS:.o=.d)
 -include $(MINIAR_OBJECTS:.o=.d)
+-include $(MINIELF_OBJECTS:.o=.d)
 -include $(MINILD_OBJECTS:.o=.d)
 -include $(TOKEN_MODEL_TEST_OBJECTS:.o=.d)
 -include $(LEXER_TEST_OBJECTS:.o=.d)
