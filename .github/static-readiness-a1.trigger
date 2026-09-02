@@ -1,2 +1,3 @@
-source_head=3c012f507ff056f4f1601ea61bba935208252721
-reason=post-MiniELF reader+ET_REL writer total static validation
+source_head=e75620b89358a64c480017fcf05224ec954de7fd
+bootstrap_run=33623125739
+reason=selfhost shared MiniELF stack through fresh Stage2
