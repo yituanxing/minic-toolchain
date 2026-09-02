@@ -3321,6 +3321,63 @@ static bool script_layout_place_pattern(MiniLdScriptLayoutState *script_state,
     return true;
 }
 
+static bool script_layout_bind_output_symbols(
+    MiniLdScriptLayoutState *script_state,
+    const MiniLdScriptOutputSection *output,
+    size_t command_index) {
+    size_t anchor = SIZE_MAX;
+    uint64_t anchor_vaddr;
+    size_t i;
+
+    for (i = 0U; i < script_state->state->section_count; ++i) {
+        MiniLdSection *section = &script_state->state->sections[i];
+
+        if (script_state->section_owner[i] == command_index &&
+            !script_state->layout->section_discarded[i] &&
+            (section->flags & SHF_ALLOC) != 0U) {
+            anchor = i;
+            break;
+        }
+    }
+    if (anchor == SIZE_MAX) {
+        return true;
+    }
+    anchor_vaddr = script_state->layout->section_vaddr[anchor];
+
+    for (i = 0U; i < output->item_count; ++i) {
+        const MiniLdScriptSectionItem *item = &output->items[i];
+        MiniLdSymbol *symbol;
+        size_t symbol_index;
+
+        if (item->kind != MINILD_SCRIPT_SECTION_DEFINE_SYMBOL) {
+            continue;
+        }
+        if (item->value.symbol.expression >=
+                script_state->script->expression_count ||
+            script_state->script->expressions[
+                item->value.symbol.expression].kind ==
+                MINILD_SCRIPT_EXPR_ABSOLUTE) {
+            continue;
+        }
+        symbol_index = find_global_symbol(script_state->state,
+                                          item->value.symbol.name);
+        if (symbol_index == SIZE_MAX) {
+            fprintf(script_state->state->diagnostics,
+                    "minic-ld: linker-script-missing-defined-symbol:%s\n",
+                    item->value.symbol.name);
+            return false;
+        }
+        symbol = &script_state->state->symbols[symbol_index];
+        if (symbol->section != MINILD_SECTION_ABS ||
+            symbol->value < anchor_vaddr) {
+            continue;
+        }
+        symbol->section = (int)anchor;
+        symbol->value -= anchor_vaddr;
+    }
+    return true;
+}
+
 static bool script_layout_process_output(MiniLdScriptLayoutState *script_state,
                                          const MiniLdScriptOutputSection *output,
                                          size_t command_index) {
@@ -3448,7 +3505,9 @@ static bool script_layout_process_output(MiniLdScriptLayoutState *script_state,
                 (script_state->layout->section_vaddr[i] - output_start);
         }
     }
-    return true;
+    return script_layout_bind_output_symbols(script_state,
+                                             output,
+                                             command_index);
 }
 
 static bool static_build_script_layout(MiniLdState *state,
