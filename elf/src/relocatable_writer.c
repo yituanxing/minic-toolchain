@@ -164,20 +164,6 @@ static void store_u64(unsigned char *data,
     }
 }
 
-static bool store_offset(unsigned char *data,
-                         const MiniElfRelocatableSpec *spec,
-                         uint64_t value) {
-    if (spec->elf_class == ELFCLASS64) {
-        store_u64(data, spec->data_encoding, value);
-        return true;
-    }
-    if (value > UINT32_MAX) {
-        return false;
-    }
-    store_u32(data, spec->data_encoding, (uint32_t)value);
-    return true;
-}
-
 static void set_error(MiniElfWriteError *error_out, MiniElfWriteError error) {
     if (error_out != NULL) {
         *error_out = error;
