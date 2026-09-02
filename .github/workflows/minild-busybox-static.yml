@@ -41,7 +41,7 @@ jobs:
           set -Eeuo pipefail
           work="$GITHUB_WORKSPACE/build/minild-busybox-static"
           mkdir -p "$work"
-          curl -fsSL https://musl.libc.org/releases/musl-1.2.5.tar.gz \
+          curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors https://musl.libc.org/releases/musl-1.2.5.tar.gz \
             -o "$work/musl-1.2.5.tar.gz"
           printf '%s  %s\n' \
             a9a118bbe84d8764da0ea0d28b3ab3fae8477fc7e4085d90102b8596fc7c75e4 \
@@ -83,7 +83,7 @@ jobs:
           work="$GITHUB_WORKSPACE/build/minild-busybox-static"
           fixture="$GITHUB_WORKSPACE/tests/linker/fixtures"
 
-          curl -fsSL https://busybox.net/downloads/busybox-1.38.0.tar.bz2 \
+          curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors https://busybox.net/downloads/busybox-1.38.0.tar.bz2 \
             -o "$work/busybox-1.38.0.tar.bz2"
           printf '%s  %s\n' \
             34f9ea6ff8636f2c9241153b9114eefa9e65674a45318ae1ef95bb5f31c53bb2 \
