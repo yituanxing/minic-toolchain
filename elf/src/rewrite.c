@@ -558,7 +558,8 @@ bool minielf_rewrite(const MiniElfView *view,
             options->remove_sections[i]) {
             states[i].remove = true;
         }
-        if (i != 0U && options->strip_debug &&
+        if (i != 0U &&
+            (options->strip_debug || options->strip_all) &&
             debug_section_name(name)) {
             states[i].remove = true;
         }
