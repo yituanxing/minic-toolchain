@@ -7,6 +7,7 @@ set -eu
 AS=${RISCV_AS:-riscv64-linux-gnu-as}
 LD=${RISCV_LD:-riscv64-linux-gnu-ld}
 READELF=${RISCV_READELF:-riscv64-linux-gnu-readelf}
+NM=${RISCV_NM:-riscv64-linux-gnu-nm}
 QEMU=${QEMU_RISCV64:-qemu-riscv64}
 
 work="$BUILD_DIR/tests/linker/a2"
@@ -71,11 +72,66 @@ EOF
 
 "$READELF" -h "$work/product" >"$work/product.header"
 "$READELF" -l "$work/product" >"$work/product.programs"
+"$READELF" -S "$work/product" >"$work/product.sections"
+"$READELF" -s "$work/product" >"$work/product.symbols"
+"$NM" -n "$work/product" >"$work/product.nm"
 cat "$work/product.header"
 cat "$work/product.programs"
+cat "$work/product.sections"
+cat "$work/product.nm"
 grep -q 'EXEC (Executable file)' "$work/product.header"
 grep -q 'RISC-V' "$work/product.header"
 test "$(grep -c ' LOAD ' "$work/product.programs")" -eq 2
+grep -q ' .symtab ' "$work/product.sections"
+grep -q ' .strtab ' "$work/product.sections"
+grep -q ' _start"$QEMU" "$work/reference"
+reference_rc=$?
+"$QEMU" "$work/product"
+product_rc=$?
+set -e
+
+echo "MINILD_A2_DIAG reference_rc=$reference_rc product_rc=$product_rc"
+test "$reference_rc" -eq 42
+test "$product_rc" -eq 42
+
+echo "MINILD_A2=PASS et_exec=PASS pt_load=2 symtab=PASS nm=PASS call=PASS pcrel=PASS data64=PASS qemu_rc=$product_rc"
+ "$work/product.nm"
+grep -q ' compute"$QEMU" "$work/reference"
+reference_rc=$?
+"$QEMU" "$work/product"
+product_rc=$?
+set -e
+
+echo "MINILD_A2_DIAG reference_rc=$reference_rc product_rc=$product_rc"
+test "$reference_rc" -eq 42
+test "$product_rc" -eq 42
+
+echo "MINILD_A2=PASS et_exec=PASS pt_load=2 call=PASS pcrel=PASS data64=PASS qemu_rc=$product_rc"
+ "$work/product.nm"
+grep -q ' stored_value"$QEMU" "$work/reference"
+reference_rc=$?
+"$QEMU" "$work/product"
+product_rc=$?
+set -e
+
+echo "MINILD_A2_DIAG reference_rc=$reference_rc product_rc=$product_rc"
+test "$reference_rc" -eq 42
+test "$product_rc" -eq 42
+
+echo "MINILD_A2=PASS et_exec=PASS pt_load=2 call=PASS pcrel=PASS data64=PASS qemu_rc=$product_rc"
+ "$work/product.nm"
+grep -q ' zero_slot"$QEMU" "$work/reference"
+reference_rc=$?
+"$QEMU" "$work/product"
+product_rc=$?
+set -e
+
+echo "MINILD_A2_DIAG reference_rc=$reference_rc product_rc=$product_rc"
+test "$reference_rc" -eq 42
+test "$product_rc" -eq 42
+
+echo "MINILD_A2=PASS et_exec=PASS pt_load=2 call=PASS pcrel=PASS data64=PASS qemu_rc=$product_rc"
+ "$work/product.nm"
 
 set +e
 "$QEMU" "$work/reference"
