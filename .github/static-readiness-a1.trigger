@@ -1,3 +1,2 @@
-source_head=e75620b89358a64c480017fcf05224ec954de7fd
-bootstrap_run=33623125739
-reason=selfhost shared MiniELF stack through fresh Stage2
+source_head=4d73d340d7091228bc042264b1bc1db6aa20dea3
+reason=selfhost shared MiniAR and MiniNM five-tool stack
