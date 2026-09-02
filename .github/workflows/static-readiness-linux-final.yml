@@ -163,5 +163,15 @@ jobs:
             build/static-linux-final-work/libstub.seed.a
             build/static-linux-final-work/vmlinux-export.seed.o
             build/static-linux-final-work/version-timestamp.seed.o
+            build/static-linux-final-work/out/.tmp_vmlinux.kallsyms1
+            build/static-linux-final-work/out/.tmp_vmlinux.kallsyms1.syms
+            build/static-linux-final-work/out/.tmp_vmlinux.kallsyms1.S
+            build/static-linux-final-work/out/.tmp_vmlinux.kallsyms1.o
+            build/static-linux-final-work/out/.tmp_vmlinux.kallsyms2
+            build/static-linux-final-work/out/.tmp_vmlinux.kallsyms2.syms
+            build/static-linux-final-work/out/.tmp_vmlinux.kallsyms2.S
+            build/static-linux-final-work/out/.tmp_vmlinux.kallsyms2.o
+            build/static-linux-final-work/out/vmlinux
+            build/static-linux-final-work/out/arch/riscv/boot/Image
           if-no-files-found: ignore
           retention-days: 3
