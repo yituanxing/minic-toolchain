@@ -38,10 +38,11 @@ jobs:
           test "$(tree_sha preprocessor)" = c10e07633613c91843a3afb0ae558d37ee93f979
           test "$(tree_sha compiler)" = b994f2efd0be49b7dea0bee2efdb50fe05ea3d5d
           test "$(tree_sha src)" = 3d6869566c304e1224a985aefab808ea523d832e
-          test "$(tree_sha assembler)" = 076e332a04d627dde37b2fc4a95fe5e0b6718cab
+          test "$(tree_sha assembler)" = 8522270c9b1c9b884765146a432200840c496582
           test "$(tree_sha archiver)" = 557bf7326fd4a5cbbd1ecf71bdc6b502e017574e
+          test "$(tree_sha elf)" = b5002755f1a35d1ecb810dbece954b2700586ada
 
-          echo "STATIC_COMPONENT_TREE=PASS pp=c10e0763 compiler=b994f2ef src=3d686956 as=076e332a ar=557bf732"
+          echo "STATIC_COMPONENT_TREE=PASS pp=c10e0763 compiler=b994f2ef src=3d686956 as=8522270c ar=557bf732 elf=b5002755"
 
       - name: Install RV64 smoke prerequisites
         run: |
@@ -75,4 +76,4 @@ jobs:
 
       - name: Freeze core audit marker
         run: |
-          echo "STATIC_READINESS_CORE=PASS head=$GITHUB_SHA pp=3352-exact-frozen cc=v1-frozen as=m0-frozen ar=linux-frozen ld=static-a3"
+          echo "STATIC_READINESS_CORE=PASS head=$GITHUB_SHA pp=3352-exact-frozen cc=v1-frozen as=m0-minielf-frozen ar=linux-frozen elf=reader+rel-writer-frozen ld=static-a3"
