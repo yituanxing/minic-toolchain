@@ -1,0 +1,42 @@
+name: MiniAR Shared Reader Gate
+
+on:
+  push:
+    branches:
+      - "toolchain/miniar-shared-reader"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  miniar-shared:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Install RV32 RV64 oracle toolchain
+        run: |
+          sudo apt-get -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            build-essential gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu
+
+      - name: Strict build
+        run: |
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/miniar-shared all
+
+      - name: Validate MiniELF reader
+        run: |
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/miniar-shared check-minielf-reader-a0
+
+      - name: Preserve MiniAR byte exactness
+        run: |
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/miniar-shared check-miniar-a0
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/miniar-shared check-miniar-a1
+
+      - name: Preserve MiniNM consumer
+        run: |
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/miniar-shared check-mininm-a0
