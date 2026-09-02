@@ -40,3 +40,4 @@ jobs:
       - name: Preserve MiniNM consumer
         run: |
           make MODE=release CFLAGS=-Werror BUILD_DIR=build/miniar-shared check-mininm-a0
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/miniar-shared check-mininm-a1
