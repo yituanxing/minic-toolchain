@@ -1888,11 +1888,6 @@ static bool process_input_sequence(MiniLdState *state,
     return true;
 }
 
-static size_t relocation_count_for_section(const MiniLdState *state,
-                                           size_t section) {
-    return state->sections[section].relocation_count;
-}
-
 static bool assign_symbol_indices(MiniLdState *state, size_t *local_count_out) {
     size_t i;
     size_t next = 1U;
@@ -1912,316 +1907,109 @@ static bool assign_symbol_indices(MiniLdState *state, size_t *local_count_out) {
 }
 
 static bool write_output(MiniLdState *state, const char *path) {
-    size_t i;
-    size_t local_count;
-    size_t relocation_section_count = 0U;
-    size_t output_section_count;
-    size_t symtab_index;
-    size_t strtab_index;
-    size_t shstrtab_index;
-    size_t *relocation_section_indices = NULL;
-    size_t *relocation_write_counts = NULL;
-    uint32_t *section_name_offsets = NULL;
-    uint32_t *relocation_name_offsets = NULL;
-    uint32_t *symbol_name_offsets = NULL;
-    MiniLdBuffer strtab = {NULL, 0U, 0U};
-    MiniLdBuffer shstrtab = {NULL, 0U, 0U};
-    Elf64_Shdr *headers = NULL;
-    Elf64_Sym *symbols = NULL;
+    MiniElfWriteSection *sections = NULL;
+    MiniElfWriteSymbol *symbols = NULL;
+    MiniElfWriteRela *relocations = NULL;
+    MiniElfRelocatableSpec spec;
+    MiniElfWriteError write_error = MINIELF_WRITE_OK;
     unsigned char *image = NULL;
-    size_t cursor;
-    size_t section_header_offset;
-    size_t total_size;
+    size_t image_size = 0U;
+    size_t i;
     FILE *file = NULL;
     bool ok = false;
 
-    (void)assign_symbol_indices(state, &local_count);
-    for (i = 0U; i < state->section_count; ++i) {
-        if (relocation_count_for_section(state, i) != 0U) {
-            ++relocation_section_count;
-        }
-    }
-    if (state->section_count > SIZE_MAX - relocation_section_count - 3U) {
-        goto oom;
-    }
-    output_section_count =
-        state->section_count + relocation_section_count + 3U;
-    if (output_section_count + 1U > UINT16_MAX) {
-        fprintf(state->diagnostics, "minic-ld: too-many-output-sections\n");
+    sections = calloc(state->section_count == 0U ? 1U : state->section_count,
+                      sizeof(*sections));
+    symbols = calloc(state->symbol_count == 0U ? 1U : state->symbol_count,
+                     sizeof(*symbols));
+    relocations = calloc(state->reloc_count == 0U ? 1U : state->reloc_count,
+                         sizeof(*relocations));
+    if (sections == NULL || symbols == NULL || relocations == NULL) {
+        fprintf(state->diagnostics, "minic-ld: out-of-memory:output\n");
         goto done;
     }
 
-    relocation_section_indices =
-        malloc((state->section_count == 0U ? 1U : state->section_count) *
-               sizeof(*relocation_section_indices));
-    relocation_write_counts =
-        calloc(state->section_count == 0U ? 1U : state->section_count,
-               sizeof(*relocation_write_counts));
-    section_name_offsets =
-        calloc(state->section_count == 0U ? 1U : state->section_count,
-               sizeof(*section_name_offsets));
-    relocation_name_offsets =
-        calloc(state->section_count == 0U ? 1U : state->section_count,
-               sizeof(*relocation_name_offsets));
-    symbol_name_offsets =
-        calloc(state->symbol_count == 0U ? 1U : state->symbol_count,
-               sizeof(*symbol_name_offsets));
-    headers = calloc(output_section_count + 1U, sizeof(*headers));
-    symbols = calloc(state->symbol_count + 1U, sizeof(*symbols));
-    if (relocation_section_indices == NULL || relocation_write_counts == NULL ||
-        section_name_offsets == NULL || relocation_name_offsets == NULL ||
-        symbol_name_offsets == NULL ||
-        headers == NULL || symbols == NULL) {
-        goto oom;
-    }
     for (i = 0U; i < state->section_count; ++i) {
-        relocation_section_indices[i] = SIZE_MAX;
-    }
-    if (!buffer_append_zero(&strtab, 1U) ||
-        !buffer_append_zero(&shstrtab, 1U)) {
-        goto oom;
-    }
+        const MiniLdSection *input = &state->sections[i];
+        MiniElfWriteSection *output = &sections[i];
 
-    for (i = 0U; i < state->section_count; ++i) {
-        if (!buffer_append_string(&shstrtab,
-                                  state->sections[i].name,
-                                  &section_name_offsets[i])) {
-            goto oom;
-        }
-    }
-    {
-        size_t ordinal = 0U;
-        for (i = 0U; i < state->section_count; ++i) {
-            if (relocation_count_for_section(state, i) != 0U) {
-                char name[512];
-                int written = snprintf(name,
-                                       sizeof(name),
-                                       ".rela%s",
-                                       state->sections[i].name);
-                if (written < 0 || (size_t)written >= sizeof(name) ||
-                    !buffer_append_string(&shstrtab,
-                                          name,
-                                          &relocation_name_offsets[i])) {
-                    goto oom;
-                }
-                relocation_section_indices[i] =
-                    1U + state->section_count + ordinal++;
-            }
-        }
+        output->name = input->name;
+        output->type = input->type;
+        output->flags = input->flags;
+        output->alignment = input->align == 0U ? 1U : input->align;
+        output->entry_size = input->entsize;
+        output->data = input->data;
+        output->size = input->size;
     }
 
     for (i = 0U; i < state->symbol_count; ++i) {
-        if (state->symbols[i].name[0] != '\0' &&
-            !buffer_append_string(&strtab,
-                                  state->symbols[i].name,
-                                  &symbol_name_offsets[i])) {
-            goto oom;
-        }
-    }
+        const MiniLdSymbol *input = &state->symbols[i];
+        MiniElfWriteSymbol *output = &symbols[i];
 
-    symtab_index = 1U + state->section_count + relocation_section_count;
-    strtab_index = symtab_index + 1U;
-    shstrtab_index = symtab_index + 2U;
-
-    {
-        uint32_t symtab_name;
-        uint32_t strtab_name;
-        uint32_t shstrtab_name;
-
-        if (!buffer_append_string(&shstrtab, ".symtab", &symtab_name) ||
-            !buffer_append_string(&shstrtab, ".strtab", &strtab_name) ||
-            !buffer_append_string(&shstrtab, ".shstrtab", &shstrtab_name)) {
-            goto oom;
-        }
-        headers[symtab_index].sh_name = symtab_name;
-        headers[strtab_index].sh_name = strtab_name;
-        headers[shstrtab_index].sh_name = shstrtab_name;
-    }
-
-    for (i = 0U; i < state->symbol_count; ++i) {
-        MiniLdSymbol *input = &state->symbols[i];
-        Elf64_Sym *output = &symbols[input->final_index];
-
-        output->st_name = symbol_name_offsets[i];
-        output->st_info = input->info;
-        output->st_other = input->other;
-        output->st_value = input->value;
-        output->st_size = input->size;
+        output->name = input->name;
+        output->info = input->info;
+        output->other = input->other;
+        output->value = input->value;
+        output->size = input->size;
         if (input->section == MINILD_SECTION_UNDEF) {
-            output->st_shndx = SHN_UNDEF;
+            output->section_index = SHN_UNDEF;
         } else if (input->section == MINILD_SECTION_ABS) {
-            output->st_shndx = SHN_ABS;
+            output->section_index = SHN_ABS;
         } else if (input->section == MINILD_SECTION_COMMON) {
-            output->st_shndx = SHN_COMMON;
+            output->section_index = SHN_COMMON;
+        } else if (input->section < 0 ||
+                   (size_t)input->section >= state->section_count ||
+                   (size_t)input->section + 1U > UINT16_MAX) {
+            fprintf(state->diagnostics,
+                    "minic-ld: invalid-output-symbol-section:%s\n",
+                    input->name);
+            goto done;
         } else {
-            output->st_shndx = (Elf64_Section)((size_t)input->section + 1U);
-        }
-    }
-
-    cursor = sizeof(Elf64_Ehdr);
-    for (i = 0U; i < state->section_count; ++i) {
-        MiniLdSection *section = &state->sections[i];
-        size_t aligned;
-
-        if (!align_up_size(cursor, section->align, &aligned)) {
-            goto oom;
-        }
-        cursor = aligned;
-        headers[i + 1U].sh_name = section_name_offsets[i];
-        headers[i + 1U].sh_type = section->type;
-        headers[i + 1U].sh_flags = section->flags;
-        headers[i + 1U].sh_offset = cursor;
-        headers[i + 1U].sh_size = section->size;
-        headers[i + 1U].sh_addralign = section->align;
-        headers[i + 1U].sh_entsize = section->entsize;
-        if (section->type != SHT_NOBITS &&
-            !add_size(cursor, section->size, &cursor)) {
-            goto oom;
-        }
-    }
-
-    for (i = 0U; i < state->section_count; ++i) {
-        size_t count = relocation_count_for_section(state, i);
-        size_t index;
-        size_t aligned;
-
-        if (count == 0U) {
-            continue;
-        }
-        index = relocation_section_indices[i];
-        if (!align_up_size(cursor, 8U, &aligned)) {
-            goto oom;
-        }
-        cursor = aligned;
-        headers[index].sh_name = relocation_name_offsets[i];
-        headers[index].sh_type = SHT_RELA;
-        headers[index].sh_flags = SHF_INFO_LINK;
-        headers[index].sh_offset = cursor;
-        headers[index].sh_size = count * sizeof(Elf64_Rela);
-        headers[index].sh_link = (Elf64_Word)symtab_index;
-        headers[index].sh_info = (Elf64_Word)(i + 1U);
-        headers[index].sh_addralign = 8U;
-        headers[index].sh_entsize = sizeof(Elf64_Rela);
-        if (!add_size(cursor, headers[index].sh_size, &cursor)) {
-            goto oom;
-        }
-    }
-
-    {
-        size_t aligned;
-        if (!align_up_size(cursor, 8U, &aligned)) {
-            goto oom;
-        }
-        cursor = aligned;
-    }
-    headers[symtab_index].sh_type = SHT_SYMTAB;
-    headers[symtab_index].sh_offset = cursor;
-    headers[symtab_index].sh_size =
-        (state->symbol_count + 1U) * sizeof(Elf64_Sym);
-    headers[symtab_index].sh_link = (Elf64_Word)strtab_index;
-    headers[symtab_index].sh_info = (Elf64_Word)local_count;
-    headers[symtab_index].sh_addralign = 8U;
-    headers[symtab_index].sh_entsize = sizeof(Elf64_Sym);
-    if (!add_size(cursor, headers[symtab_index].sh_size, &cursor)) {
-        goto oom;
-    }
-
-    headers[strtab_index].sh_type = SHT_STRTAB;
-    headers[strtab_index].sh_offset = cursor;
-    headers[strtab_index].sh_size = strtab.size;
-    headers[strtab_index].sh_addralign = 1U;
-    if (!add_size(cursor, strtab.size, &cursor)) {
-        goto oom;
-    }
-
-    headers[shstrtab_index].sh_type = SHT_STRTAB;
-    headers[shstrtab_index].sh_offset = cursor;
-    headers[shstrtab_index].sh_size = shstrtab.size;
-    headers[shstrtab_index].sh_addralign = 1U;
-    if (!add_size(cursor, shstrtab.size, &cursor)) {
-        goto oom;
-    }
-
-    if (!align_up_size(cursor, 8U, &section_header_offset) ||
-        output_section_count + 1U >
-            (SIZE_MAX - section_header_offset) / sizeof(Elf64_Shdr)) {
-        goto oom;
-    }
-    total_size =
-        section_header_offset +
-        (output_section_count + 1U) * sizeof(Elf64_Shdr);
-    image = calloc(total_size == 0U ? 1U : total_size, 1U);
-    if (image == NULL) {
-        goto oom;
-    }
-
-    {
-        Elf64_Ehdr output;
-        memset(&output, 0, sizeof(output));
-        memcpy(output.e_ident, ELFMAG, SELFMAG);
-        output.e_ident[EI_CLASS] = ELFCLASS64;
-        output.e_ident[EI_DATA] = ELFDATA2LSB;
-        output.e_ident[EI_VERSION] = EV_CURRENT;
-        output.e_ident[EI_OSABI] = ELFOSABI_NONE;
-        output.e_type = ET_REL;
-        output.e_machine = EM_RISCV;
-        output.e_version = EV_CURRENT;
-        output.e_flags = state->elf_flags;
-        output.e_ehsize = sizeof(Elf64_Ehdr);
-        output.e_shentsize = sizeof(Elf64_Shdr);
-        output.e_shnum = (Elf64_Half)(output_section_count + 1U);
-        output.e_shstrndx = (Elf64_Half)shstrtab_index;
-        output.e_shoff = section_header_offset;
-        memcpy(image, &output, sizeof(output));
-    }
-
-    for (i = 0U; i < state->section_count; ++i) {
-        MiniLdSection *section = &state->sections[i];
-        if (section->type != SHT_NOBITS && section->size != 0U) {
-            memcpy(image + headers[i + 1U].sh_offset,
-                   section->data,
-                   section->size);
+            output->section_index =
+                (uint16_t)((size_t)input->section + 1U);
         }
     }
 
     for (i = 0U; i < state->reloc_count; ++i) {
-        MiniLdReloc *input = &state->relocs[i];
-        size_t section = input->section;
-        size_t index = relocation_section_indices[section];
-        size_t write_index = relocation_write_counts[section]++;
-        Elf64_Rela output;
-        size_t symbol_index = 0U;
+        const MiniLdReloc *input = &state->relocs[i];
+        MiniElfWriteRela *output = &relocations[i];
 
-        if (index == SIZE_MAX) {
+        if (input->section >= state->section_count ||
+            (input->symbol != SIZE_MAX &&
+             input->symbol >= state->symbol_count)) {
             fprintf(state->diagnostics,
-                    "minic-ld: internal-missing-rela-section:%zu\n",
-                    section);
+                    "minic-ld: invalid-output-relocation\n");
             goto done;
         }
-        if (input->symbol != SIZE_MAX) {
-            symbol_index = state->symbols[input->symbol].final_index;
-        }
-        output.r_offset = input->offset;
-        output.r_info = ELF64_R_INFO(symbol_index, input->type);
-        output.r_addend = input->addend;
-        memcpy(image + headers[index].sh_offset +
-                   write_index * sizeof(output),
-               &output,
-               sizeof(output));
+        output->target_section = input->section;
+        output->offset = input->offset;
+        output->symbol_index = input->symbol;
+        output->type = input->type;
+        output->addend = input->addend;
     }
 
-    memcpy(image + headers[symtab_index].sh_offset,
-           symbols,
-           headers[symtab_index].sh_size);
-    memcpy(image + headers[strtab_index].sh_offset,
-           strtab.data,
-           strtab.size);
-    memcpy(image + headers[shstrtab_index].sh_offset,
-           shstrtab.data,
-           shstrtab.size);
-    memcpy(image + section_header_offset,
-           headers,
-           (output_section_count + 1U) * sizeof(*headers));
+    memset(&spec, 0, sizeof(spec));
+    spec.elf_class = ELFCLASS64;
+    spec.data_encoding = ELFDATA2LSB;
+    spec.machine = EM_RISCV;
+    spec.flags = state->elf_flags;
+    spec.sections = sections;
+    spec.section_count = state->section_count;
+    spec.symbols = symbols;
+    spec.symbol_count = state->symbol_count;
+    spec.relocations = relocations;
+    spec.relocation_count = state->reloc_count;
+    spec.emit_section_symbols = false;
+
+    if (!minielf_build_relocatable(&spec,
+                                   &image,
+                                   &image_size,
+                                   &write_error)) {
+        fprintf(state->diagnostics,
+                "minic-ld: cannot-build-output:%s\n",
+                minielf_write_error_string(write_error));
+        goto done;
+    }
 
     file = fopen(path, "wb");
     if (file == NULL) {
@@ -2231,15 +2019,12 @@ static bool write_output(MiniLdState *state, const char *path) {
                 strerror(errno));
         goto done;
     }
-    if (fwrite(image, 1U, total_size, file) != total_size || fflush(file) != 0) {
+    if (fwrite(image, 1U, image_size, file) != image_size ||
+        fflush(file) != 0) {
         fprintf(state->diagnostics, "minic-ld: write-error:%s\n", path);
         goto done;
     }
     ok = true;
-    goto done;
-
-oom:
-    fprintf(state->diagnostics, "minic-ld: out-of-memory:output\n");
 
 done:
     if (file != NULL && fclose(file) != 0) {
@@ -2249,18 +2034,11 @@ done:
         (void)remove(path);
     }
     free(image);
-    free(headers);
+    free(relocations);
     free(symbols);
-    free(relocation_section_indices);
-    free(relocation_write_counts);
-    free(section_name_offsets);
-    free(relocation_name_offsets);
-    free(symbol_name_offsets);
-    free(strtab.data);
-    free(shstrtab.data);
+    free(sections);
     return ok;
 }
-
 
 typedef struct MiniLdPcrelSlot {
     size_t section_plus_one;
