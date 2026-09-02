@@ -84,54 +84,10 @@ grep -q 'RISC-V' "$work/product.header"
 test "$(grep -c ' LOAD ' "$work/product.programs")" -eq 2
 grep -q ' .symtab ' "$work/product.sections"
 grep -q ' .strtab ' "$work/product.sections"
-grep -q ' _start"$QEMU" "$work/reference"
-reference_rc=$?
-"$QEMU" "$work/product"
-product_rc=$?
-set -e
-
-echo "MINILD_A2_DIAG reference_rc=$reference_rc product_rc=$product_rc"
-test "$reference_rc" -eq 42
-test "$product_rc" -eq 42
-
-echo "MINILD_A2=PASS et_exec=PASS pt_load=2 symtab=PASS nm=PASS call=PASS pcrel=PASS data64=PASS qemu_rc=$product_rc"
- "$work/product.nm"
-grep -q ' compute"$QEMU" "$work/reference"
-reference_rc=$?
-"$QEMU" "$work/product"
-product_rc=$?
-set -e
-
-echo "MINILD_A2_DIAG reference_rc=$reference_rc product_rc=$product_rc"
-test "$reference_rc" -eq 42
-test "$product_rc" -eq 42
-
-echo "MINILD_A2=PASS et_exec=PASS pt_load=2 call=PASS pcrel=PASS data64=PASS qemu_rc=$product_rc"
- "$work/product.nm"
-grep -q ' stored_value"$QEMU" "$work/reference"
-reference_rc=$?
-"$QEMU" "$work/product"
-product_rc=$?
-set -e
-
-echo "MINILD_A2_DIAG reference_rc=$reference_rc product_rc=$product_rc"
-test "$reference_rc" -eq 42
-test "$product_rc" -eq 42
-
-echo "MINILD_A2=PASS et_exec=PASS pt_load=2 call=PASS pcrel=PASS data64=PASS qemu_rc=$product_rc"
- "$work/product.nm"
-grep -q ' zero_slot"$QEMU" "$work/reference"
-reference_rc=$?
-"$QEMU" "$work/product"
-product_rc=$?
-set -e
-
-echo "MINILD_A2_DIAG reference_rc=$reference_rc product_rc=$product_rc"
-test "$reference_rc" -eq 42
-test "$product_rc" -eq 42
-
-echo "MINILD_A2=PASS et_exec=PASS pt_load=2 call=PASS pcrel=PASS data64=PASS qemu_rc=$product_rc"
- "$work/product.nm"
+grep -q ' _start$' "$work/product.nm"
+grep -q ' compute$' "$work/product.nm"
+grep -q ' stored_value$' "$work/product.nm"
+grep -q ' zero_slot$' "$work/product.nm"
 
 set +e
 "$QEMU" "$work/reference"
@@ -144,4 +100,4 @@ echo "MINILD_A2_DIAG reference_rc=$reference_rc product_rc=$product_rc"
 test "$reference_rc" -eq 42
 test "$product_rc" -eq 42
 
-echo "MINILD_A2=PASS et_exec=PASS pt_load=2 call=PASS pcrel=PASS data64=PASS qemu_rc=$product_rc"
+echo "MINILD_A2=PASS et_exec=PASS pt_load=2 symtab=PASS nm=PASS call=PASS pcrel=PASS data64=PASS qemu_rc=$product_rc"
