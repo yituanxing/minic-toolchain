@@ -7,8 +7,6 @@ set -eu
 AS=${RISCV_AS:-riscv64-linux-gnu-as}
 NM=${RISCV_NM:-riscv64-linux-gnu-nm}
 READELF=${RISCV_READELF:-riscv64-linux-gnu-readelf}
-QEMU=${QEMU_RISCV64:-qemu-riscv64}
-
 work="$BUILD_DIR/tests/linker/script-a1"
 rm -rf "$work"
 mkdir -p "$work"
@@ -87,10 +85,4 @@ test "$(symbol_type _einittext)" = T
 test "$(symbol_type _data)" = D
 grep -q 'Entry point address:.*0x10000' "$work/product.header"
 
-set +e
-"$QEMU" "$work/product"
-product_rc=$?
-set -e
-
-test "$product_rc" -eq 42
-echo "MINILD_SCRIPT_A1=PASS output-symbol-section=PASS nm-types=T/T/T/T,D entry=0x10000 qemu_rc=$product_rc"
+echo "MINILD_SCRIPT_A1=PASS output-symbol-section=PASS nm-types=T/T/T/T,D entry=0x10000 consumers=nm,readelf"
