@@ -37,6 +37,17 @@ typedef struct MiniElfSection {
     uint64_t entry_size;
 } MiniElfSection;
 
+typedef struct MiniElfProgramHeader {
+    uint32_t type;
+    uint32_t flags;
+    uint64_t offset;
+    uint64_t virtual_address;
+    uint64_t physical_address;
+    uint64_t file_size;
+    uint64_t memory_size;
+    uint64_t alignment;
+} MiniElfProgramHeader;
+
 typedef struct MiniElfSymbol {
     uint32_t name;
     unsigned char info;
@@ -56,6 +67,12 @@ bool minielf_open(MiniElfView *view, const void *data, size_t size);
 bool minielf_section(const MiniElfView *view,
                      size_t index,
                      MiniElfSection *section_out);
+bool minielf_program_header(const MiniElfView *view,
+                            size_t index,
+                            MiniElfProgramHeader *program_out);
+bool minielf_section_load_address(const MiniElfView *view,
+                                  const MiniElfSection *section,
+                                  uint64_t *address_out);
 bool minielf_section_name(const MiniElfView *view,
                           size_t index,
                           const char **name_out);
@@ -140,5 +157,22 @@ bool minielf_build_relocatable(const MiniElfRelocatableSpec *spec,
                                size_t *size_out,
                                MiniElfWriteError *error_out);
 const char *minielf_write_error_string(MiniElfWriteError error);
+
+typedef enum MiniElfBinaryError {
+    MINIELF_BINARY_OK = 0,
+    MINIELF_BINARY_INVALID_ARGUMENT,
+    MINIELF_BINARY_INVALID_SECTION,
+    MINIELF_BINARY_NO_LOADABLE_SECTIONS,
+    MINIELF_BINARY_LIMIT,
+    MINIELF_BINARY_OUT_OF_MEMORY
+} MiniElfBinaryError;
+
+bool minielf_build_binary(const MiniElfView *view,
+                          const bool *include_sections,
+                          unsigned char **image_out,
+                          size_t *size_out,
+                          uint64_t *base_address_out,
+                          MiniElfBinaryError *error_out);
+const char *minielf_binary_error_string(MiniElfBinaryError error);
 
 #endif
