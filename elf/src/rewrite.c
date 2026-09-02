@@ -87,18 +87,6 @@ static uint64_t load_u64(const MiniElfView *view,
     return value;
 }
 
-static void store_u16(unsigned char *data,
-                      unsigned char encoding,
-                      uint16_t value) {
-    if (encoding == ELFDATA2MSB) {
-        data[0] = (unsigned char)((value >> 8U) & UINT16_C(0xff));
-        data[1] = (unsigned char)(value & UINT16_C(0xff));
-    } else {
-        data[0] = (unsigned char)(value & UINT16_C(0xff));
-        data[1] = (unsigned char)((value >> 8U) & UINT16_C(0xff));
-    }
-}
-
 static void store_u32(unsigned char *data,
                       unsigned char encoding,
                       uint32_t value) {
