@@ -141,10 +141,10 @@ MINILD_SOURCES := \
 MINILD_OBJECTS := $(MINIELF_OBJECTS) $(patsubst %.c,$(BUILD_DIR)/obj/%.o,$(MINILD_SOURCES))
 MINILD_BINARY := $(BUILD_DIR)/bin/minic-ld
 
-MININM_INCLUDES := $(MINIELF_INCLUDES)
+MININM_INCLUDES := $(MINIELF_INCLUDES) -Iarchiver/include
 MININM_SOURCES := \
 	tools/minic-nm/main.c
-MININM_OBJECTS := $(BUILD_DIR)/obj/elf/src/reader.o $(patsubst %.c,$(BUILD_DIR)/obj/%.o,$(MININM_SOURCES))
+MININM_OBJECTS := $(BUILD_DIR)/obj/elf/src/reader.o $(BUILD_DIR)/obj/archiver/src/archive.o $(patsubst %.c,$(BUILD_DIR)/obj/%.o,$(MININM_SOURCES))
 MININM_BINARY := $(BUILD_DIR)/bin/minic-nm
 
 TOKEN_MODEL_TEST_SOURCES := \
