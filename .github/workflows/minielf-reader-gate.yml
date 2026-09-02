@@ -28,6 +28,10 @@ jobs:
         run: |
           make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/minielf-reader all
 
+      - name: Validate shared reader on real RV32 and RV64 objects
+        run: |
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/minielf-reader check-minielf-reader-a0
+
       - name: Re-run MiniLD boundaries through shared reader
         run: |
           set -Eeuo pipefail
