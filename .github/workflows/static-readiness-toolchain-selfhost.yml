@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - "toolchain/static-readiness"
+      - "toolchain/miniobjcopy-elf-a1"
   workflow_dispatch:
 
 permissions:
