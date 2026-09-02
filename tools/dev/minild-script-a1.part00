@@ -1,0 +1,191 @@
+--- a/linker/include/minild.h
++++ b/linker/include/minild.h
+@@ -16,6 +16,11 @@
+     MiniLdInputKind kind;
+ } MiniLdInput;
+ 
++typedef struct MiniLdStaticOptions {
++    const char *entry_symbol;
++    const char *script_path;
++} MiniLdStaticOptions;
++
+ int minild_link_relocatable_elf64_riscv(const char *output_path,
+                                         const char *const *input_paths,
+                                         size_t input_count,
+@@ -26,6 +31,13 @@
+                                                size_t input_count,
+                                                FILE *diagnostics);
+ 
++int minild_link_static_elf64_riscv_inputs_options(
++    const char *output_path,
++    const MiniLdInput *inputs,
++    size_t input_count,
++    const MiniLdStaticOptions *options,
++    FILE *diagnostics);
++
+ int minild_link_static_elf64_riscv_inputs(const char *output_path,
+                                           const MiniLdInput *inputs,
+                                           size_t input_count,
+--- a/tools/minic-ld/main.c
++++ b/tools/minic-ld/main.c
+@@ -23,7 +23,8 @@
+ 
+ int main(int argc, char **argv) {
+     const char *output = NULL;
+-    const char *entry_symbol = "_start";
++    const char *entry_symbol = NULL;
++    const char *script_path = NULL;
+     MiniLdInput inputs[4096];
+     size_t input_count = 0U;
+     bool relocatable = false;
+@@ -53,6 +54,19 @@
+                 return 2;
+             }
+             output = argv[i];
++        } else if (strncmp(argv[i], "--script=", 9U) == 0) {
++            script_path = argv[i] + 9U;
++            if (*script_path == '\0') {
++                fprintf(stderr, "minic-ld: empty-linker-script\n");
++                return 2;
++            }
++        } else if (strcmp(argv[i], "--script") == 0 ||
++                   strcmp(argv[i], "-T") == 0) {
++            if (++i >= argc) {
++                usage(stderr, argv[0]);
++                return 2;
++            }
++            script_path = argv[i];
+         } else if (strcmp(argv[i], "--whole-archive") == 0) {
+             whole_archive = true;
+         } else if (strcmp(argv[i], "--no-whole-archive") == 0) {
+@@ -145,10 +159,16 @@
+                                                            stderr);
+     }
+ 
+-    (void)static_link;
+-    return minild_link_static_elf64_riscv_inputs(output,
+-                                                  inputs,
+-                                                  input_count,
+-                                                  entry_symbol,
+-                                                  stderr);
++    {
++        MiniLdStaticOptions options;
++
++        (void)static_link;
++        options.entry_symbol = entry_symbol;
++        options.script_path = script_path;
++        return minild_link_static_elf64_riscv_inputs_options(output,
++                                                              inputs,
++                                                              input_count,
++                                                              &options,
++                                                              stderr);
++    }
+ }
+--- a/linker/src/linker_script_expr.c
++++ b/linker/src/linker_script_expr.c
+@@ -271,8 +271,14 @@
+                                  context,
+                                  &right,
+                                  diagnostics,
+-                                 depth + 1U) ||
+-            right == 0U || (right & (right - 1U)) != 0U) {
++                                 depth + 1U)) {
++            return false;
++        }
++        if (right == 0U) {
++            *value_out = context->dot;
++            return true;
++        }
++        if ((right & (right - 1U)) != 0U) {
+             fprintf(diagnostics, "minic-ld: linker-script-invalid-alignment\n");
+             return false;
+         }
+--- a/linker/src/linker.c
++++ b/linker/src/linker.c
+@@ -1,4 +1,5 @@
+ #include "minild.h"
++#include "linker_script.h"
+ 
+ #include <elf.h>
+ #include <errno.h>
+@@ -2311,7 +2312,9 @@
+ 
+ typedef struct MiniLdStaticLayout {
+     uint64_t *section_vaddr;
++    uint64_t *section_laddr;
+     size_t *section_file_offset;
++    bool *section_discarded;
+     size_t rx_file_offset;
+     uint64_t rx_vaddr;
+     size_t rx_file_size;
+@@ -2321,6 +2324,7 @@
+     size_t rw_mem_size;
+     bool have_rx;
+     bool have_rw;
++    bool scripted;
+ } MiniLdStaticLayout;
+ 
+ typedef struct MiniLdAlignSite {
+@@ -2951,10 +2955,18 @@
+     layout->section_vaddr =
+         calloc(state->section_count == 0U ? 1U : state->section_count,
+                sizeof(*layout->section_vaddr));
++    layout->section_laddr =
++        calloc(state->section_count == 0U ? 1U : state->section_count,
++               sizeof(*layout->section_laddr));
+     layout->section_file_offset =
+         malloc((state->section_count == 0U ? 1U : state->section_count) *
+                sizeof(*layout->section_file_offset));
+-    if (layout->section_vaddr == NULL || layout->section_file_offset == NULL) {
++    layout->section_discarded =
++        calloc(state->section_count == 0U ? 1U : state->section_count,
++               sizeof(*layout->section_discarded));
++    if (layout->section_vaddr == NULL || layout->section_laddr == NULL ||
++        layout->section_file_offset == NULL ||
++        layout->section_discarded == NULL) {
+         fprintf(state->diagnostics, "minic-ld: out-of-memory:static-layout\n");
+         return false;
+     }
+@@ -2985,6 +2997,7 @@
+         }
+         rx_cursor = aligned;
+         layout->section_vaddr[i] = layout->rx_vaddr + rx_cursor;
++        layout->section_laddr[i] = layout->section_vaddr[i];
+         layout->section_file_offset[i] = layout->rx_file_offset + rx_cursor;
+         if (!static_relax_align_section(state,
+                                         i,
+@@ -3032,6 +3045,7 @@
+         rw_file_cursor = aligned;
+         rw_mem_cursor = aligned;
+         layout->section_vaddr[i] = layout->rw_vaddr + rw_mem_cursor;
++        layout->section_laddr[i] = layout->section_vaddr[i];
+         layout->section_file_offset[i] =
+             layout->rw_file_offset + rw_file_cursor;
+         if (!static_relax_align_section(state,
+@@ -3062,6 +3076,7 @@
+         }
+         rw_mem_cursor = aligned;
+         layout->section_vaddr[i] = layout->rw_vaddr + rw_mem_cursor;
++        layout->section_laddr[i] = layout->section_vaddr[i];
+         if (!add_size(rw_mem_cursor, section->size, &rw_mem_cursor)) {
+             fprintf(state->diagnostics, "minic-ld: static-layout-overflow\n");
+             return false;
+@@ -3075,6 +3090,615 @@
+ }
+ 
+ 
++typedef struct MiniLdScriptLayoutState {
++    MiniLdState *state;
++    MiniLdStaticLayout *layout;
++    const MiniLdScript *script;
++    bool *section_placed;
++    size_t *section_owner;
++    uint64_t *output_vaddr;
++    bool *output_defined;
++    uint64_t dot;
++    uint64_t load_bias;
++    bool have_load_bias;
++} MiniLdScriptLayoutState;
++
++static bool static_align_up_u64(uint64_t value,
++                                uint64_t alignment,
