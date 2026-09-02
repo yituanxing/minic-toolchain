@@ -638,8 +638,11 @@ bool minielf_rewrite(const MiniElfView *view,
     prefix_end = header_size;
     if (view->program_header_count != 0U) {
         size_t ph_end;
+        size_t minimum_phentsize =
+            view->elf_class == ELFCLASS64 ? 56U : 32U;
 
-        if (view->program_header_offset > SIZE_MAX ||
+        if (view->program_header_entry_size < minimum_phentsize ||
+            view->program_header_offset > SIZE_MAX ||
             view->program_header_count >
                 (SIZE_MAX - (size_t)view->program_header_offset) /
                     view->program_header_entry_size) {
