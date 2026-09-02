@@ -1,4 +1,5 @@
 #include "minielf.h"
+#include "miniar.h"
 
 #include <elf.h>
 #include <errno.h>
@@ -151,6 +152,13 @@ static char classify_symbol(const MiniElfView *view,
     return localize_type('N', bind);
 }
 
+static bool is_mapping_symbol(const char *name) {
+    if (name[0] != '$') {
+        return false;
+    }
+    return name[1] == 'x' || name[1] == 'd';
+}
+
 static bool should_show(const NmOptions *options,
                         const MiniElfSymbol *symbol,
                         const char *name) {
@@ -162,7 +170,8 @@ static bool should_show(const NmOptions *options,
         return false;
     }
     if (!options->debug_symbols &&
-        (type == STT_SECTION || type == STT_FILE)) {
+        (type == STT_SECTION || type == STT_FILE ||
+         (bind == STB_LOCAL && is_mapping_symbol(name)))) {
         return false;
     }
     if (options->external_only && bind == STB_LOCAL) {
@@ -277,11 +286,11 @@ static void print_entry(const MiniElfView *view,
     }
 }
 
-static bool process_elf(const char *path,
-                        const NmOptions *options,
-                        bool print_header) {
-    unsigned char *data = NULL;
-    size_t size = 0U;
+static bool process_elf_data(const unsigned char *data,
+                             size_t size,
+                             const char *display_name,
+                             const NmOptions *options,
+                             bool print_header) {
     MiniElfView view;
     MiniElfSection symtab;
     size_t symtab_index;
@@ -291,32 +300,35 @@ static bool process_elf(const char *path,
     size_t i;
     bool ok = false;
 
-    if (!read_file(path, &data, &size)) {
-        goto done;
-    }
     if (!minielf_open(&view, data, size) ||
         (view.type != ET_REL && view.type != ET_EXEC && view.type != ET_DYN)) {
-        fprintf(stderr, "minic-nm: %s: unsupported file format\n", path);
+        fprintf(stderr,
+                "minic-nm: %s: unsupported file format\n",
+                display_name);
         goto done;
     }
     if (!find_symbol_table(&view, &symtab_index, &symtab)) {
-        fprintf(stderr, "minic-nm: %s: no symbols\n", path);
+        fprintf(stderr, "minic-nm: %s: no symbols\n", display_name);
         goto done;
     }
     if (symtab.link >= view.section_count) {
-        fprintf(stderr, "minic-nm: %s: invalid symbol table\n", path);
+        fprintf(stderr,
+                "minic-nm: %s: invalid symbol table\n",
+                display_name);
         goto done;
     }
 
     symbol_count = minielf_symbol_count(&view, &symtab);
     if (symbol_count == 0U && symtab.size != 0U) {
-        fprintf(stderr, "minic-nm: %s: invalid symbol table\n", path);
+        fprintf(stderr,
+                "minic-nm: %s: invalid symbol table\n",
+                display_name);
         goto done;
     }
     entries = calloc(symbol_count == 0U ? 1U : symbol_count,
                      sizeof(*entries));
     if (entries == NULL) {
-        fprintf(stderr, "minic-nm: %s: out of memory\n", path);
+        fprintf(stderr, "minic-nm: %s: out of memory\n", display_name);
         goto done;
     }
 
@@ -327,7 +339,9 @@ static bool process_elf(const char *path,
 
         if (!minielf_symbol(&view, symtab_index, i, &symbol) ||
             !minielf_string(&view, symtab.link, symbol.name, &name)) {
-            fprintf(stderr, "minic-nm: %s: invalid symbol entry\n", path);
+            fprintf(stderr,
+                    "minic-nm: %s: invalid symbol entry\n",
+                    display_name);
             goto done;
         }
         if (!should_show(options, &symbol, name)) {
@@ -350,17 +364,112 @@ static bool process_elf(const char *path,
     }
 
     if (print_header && !options->print_file_name) {
-        printf("\n%s:\n", path);
+        printf("\n%s:\n", display_name);
     }
     for (i = 0U; i < entry_count; ++i) {
-        print_entry(&view, options, path, &entries[i]);
+        print_entry(&view, options, display_name, &entries[i]);
     }
     ok = true;
 
 done:
     free(entries);
+    return ok;
+}
+
+static bool process_elf_path(const char *path,
+                             const char *display_name,
+                             const NmOptions *options,
+                             bool print_header) {
+    unsigned char *data = NULL;
+    size_t size = 0U;
+    bool ok;
+
+    if (!read_file(path, &data, &size)) {
+        return false;
+    }
+    ok = process_elf_data(data,
+                          size,
+                          display_name,
+                          options,
+                          print_header);
     free(data);
     return ok;
+}
+
+typedef struct NmArchiveContext {
+    const NmOptions *options;
+    bool ok;
+} NmArchiveContext;
+
+static bool process_archive_member(const MiniArMemberView *member,
+                                   void *context,
+                                   FILE *diagnostics) {
+    NmArchiveContext *archive = context;
+    bool ok;
+
+    (void)diagnostics;
+    if (member->data != NULL) {
+        ok = process_elf_data(member->data,
+                              member->size,
+                              member->name,
+                              archive->options,
+                              true);
+    } else if (member->external_path != NULL) {
+        /*
+         * GNU nm identifies thin-archive members by the resolved external
+         * path rather than by the path token stored in the archive.
+         */
+        ok = process_elf_path(member->external_path,
+                              member->external_path,
+                              archive->options,
+                              true);
+    } else {
+        fprintf(stderr,
+                "minic-nm: %s: archive member has no payload\n",
+                member->name);
+        ok = false;
+    }
+    if (!ok) {
+        archive->ok = false;
+    }
+    return true;
+}
+
+static bool process_path(const char *path,
+                         const NmOptions *options,
+                         bool print_header) {
+    unsigned char *data = NULL;
+    size_t size = 0U;
+    bool archive = false;
+    bool ok;
+
+    if (!read_file(path, &data, &size)) {
+        return false;
+    }
+    if (size >= 8U &&
+        (memcmp(data, "!<arch>\n", 8U) == 0 ||
+         memcmp(data, "!<thin>\n", 8U) == 0)) {
+        archive = true;
+    }
+    if (!archive) {
+        ok = process_elf_data(data, size, path, options, print_header);
+        free(data);
+        return ok;
+    }
+    free(data);
+
+    {
+        NmArchiveContext context;
+        int status;
+
+        context.options = options;
+        context.ok = true;
+        status = miniar_visit_archive(path,
+                                      process_archive_member,
+                                      &context,
+                                      stderr);
+        return status == 0 && context.ok;
+    }
 }
 
 static bool parse_short_options(const char *argument, NmOptions *options) {
@@ -461,7 +570,7 @@ int main(int argc, char **argv) {
 
     file_count = argc - first_file;
     for (i = first_file; i < argc; ++i) {
-        if (!process_elf(argv[i], &options, file_count > 1)) {
+        if (!process_path(argv[i], &options, file_count > 1)) {
             ++failures;
         }
     }

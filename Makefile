@@ -123,11 +123,11 @@ MINIPP_SOURCES := \
 MINIPP_OBJECTS := $(patsubst %.c,$(BUILD_DIR)/obj/%.o,$(MINIPP_SOURCES))
 MINIPP_BINARY := $(BUILD_DIR)/bin/minic-cpp
 
-MINIAR_INCLUDES := -Iarchiver/include
+MINIAR_INCLUDES := -Iarchiver/include $(MINIELF_INCLUDES)
 MINIAR_SOURCES := \
 	archiver/src/archive.c \
 	tools/minic-ar/main.c
-MINIAR_OBJECTS := $(patsubst %.c,$(BUILD_DIR)/obj/%.o,$(MINIAR_SOURCES))
+MINIAR_OBJECTS := $(BUILD_DIR)/obj/elf/src/reader.o $(patsubst %.c,$(BUILD_DIR)/obj/%.o,$(MINIAR_SOURCES))
 MINIAR_BINARY := $(BUILD_DIR)/bin/minic-ar
 
 MINILD_INCLUDES := -Ilinker/include -Ilinker/src $(MINIELF_INCLUDES)
@@ -141,10 +141,10 @@ MINILD_SOURCES := \
 MINILD_OBJECTS := $(MINIELF_OBJECTS) $(patsubst %.c,$(BUILD_DIR)/obj/%.o,$(MINILD_SOURCES))
 MINILD_BINARY := $(BUILD_DIR)/bin/minic-ld
 
-MININM_INCLUDES := $(MINIELF_INCLUDES)
+MININM_INCLUDES := $(MINIELF_INCLUDES) -Iarchiver/include
 MININM_SOURCES := \
 	tools/minic-nm/main.c
-MININM_OBJECTS := $(BUILD_DIR)/obj/elf/src/reader.o $(patsubst %.c,$(BUILD_DIR)/obj/%.o,$(MININM_SOURCES))
+MININM_OBJECTS := $(BUILD_DIR)/obj/elf/src/reader.o $(BUILD_DIR)/obj/archiver/src/archive.o $(patsubst %.c,$(BUILD_DIR)/obj/%.o,$(MININM_SOURCES))
 MININM_BINARY := $(BUILD_DIR)/bin/minic-nm
 
 TOKEN_MODEL_TEST_SOURCES := \
@@ -214,7 +214,7 @@ RV64_ABI_TEST_SOURCES := \
 RV64_ABI_TEST_OBJECTS := $(patsubst %.c,$(BUILD_DIR)/obj/%.o,$(RV64_ABI_TEST_SOURCES))
 RV64_ABI_TEST_BINARY  := $(BUILD_DIR)/tests/target/riscv64/abi-test
 
-.PHONY: all help prepare check check-fast check-minias-a0 check-minipp-a0 check-minielf-reader-a0 check-mininm-a0 check-miniar-a0 check-miniar-a1 check-minild-a0 check-minild-a1 check-minild-a2 check-minild-a3 check-minild-script-a0 check-minild-script-a1 check-token-model check-lexer \
+.PHONY: all help prepare check check-fast check-minias-a0 check-minipp-a0 check-minielf-reader-a0 check-mininm-a0 check-mininm-a1 check-miniar-a0 check-miniar-a1 check-minild-a0 check-minild-a1 check-minild-a2 check-minild-a3 check-minild-script-a0 check-minild-script-a1 check-token-model check-lexer \
 	check-type check-record check-type-alias check-ast-contract check-layout check-rv64-abi \
 	check-static-functions \
 	check-unsigned-declarations check-long-types check-for-loops check-unbounded-for-break \
@@ -237,6 +237,7 @@ help:
 		"  make check-minipp-a0    Compare independent MiniPP output byte-for-byte with GCC" \
 		"  make check-minielf-reader-a0 Validate shared ELF reader on GNU-as RV32/RV64 objects" \
 		"  make check-mininm-a0    Differentially validate minic-nm against GNU nm" \
+		"  make check-mininm-a1    Differentially validate regular/thin archive nm" \
 		"  make check-miniar-a0    Compare MiniAR archives byte-for-byte with GNU ar" \
 		"  make check-miniar-a1    Check thin flattening and archive listing" \
 		"  make check-minild-a0    Validate ELF64 RISC-V relocatable linking against GNU ld" \
@@ -388,6 +389,11 @@ check-mininm-a0: $(MININM_BINARY)
 	MININM="$(abspath $(MININM_BINARY))" \
 	BUILD_DIR="$(abspath $(BUILD_DIR))" \
 	sh tests/nm/run-a0.sh
+
+check-mininm-a1: $(MININM_BINARY)
+	MININM="$(abspath $(MININM_BINARY))" \
+	BUILD_DIR="$(abspath $(BUILD_DIR))" \
+	sh tests/nm/run-a1.sh
 
 check-minild-a0: $(MINILD_BINARY)
 	MINILD="$(abspath $(MINILD_BINARY))" \

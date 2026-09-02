@@ -1,4 +1,5 @@
 #include "miniar.h"
+#include "minielf.h"
 
 #include <elf.h>
 #include <errno.h>
@@ -405,14 +406,16 @@ static bool archive_decode_member_name(const MiniArArchiveView *view,
     return true;
 }
 
-typedef bool (*MiniArMemberVisitor)(const MiniArArchiveView *view,
-                                    const char *name,
-                                    void *context,
-                                    FILE *diagnostics);
+typedef bool (*MiniArRawMemberVisitor)(const MiniArArchiveView *view,
+                                       const char *name,
+                                       const unsigned char *data,
+                                       size_t size,
+                                       void *context,
+                                       FILE *diagnostics);
 
 static bool visit_archive_members(const unsigned char *data,
                                   size_t size,
-                                  MiniArMemberVisitor visitor,
+                                  MiniArRawMemberVisitor visitor,
                                   void *context,
                                   FILE *diagnostics) {
     MiniArArchiveView view = {data, size, false, NULL, 0U};
@@ -463,7 +466,12 @@ static bool visit_archive_members(const unsigned char *data,
                 fprintf(diagnostics, "minic-ar: unsupported-member-name:%s\n", field);
                 return false;
             }
-            if (!visitor(&view, name, context, diagnostics)) {
+            if (!visitor(&view,
+                         name,
+                         embedded_payload ? data + payload_offset : NULL,
+                         (size_t)payload_size,
+                         context,
+                         diagnostics)) {
                 free(name);
                 return false;
             }
@@ -517,159 +525,6 @@ static bool visible_bind(unsigned bind) {
     return bind == STB_GLOBAL || bind == STB_WEAK || bind == STB_GNU_UNIQUE;
 }
 
-static bool collect_elf64_symbols(const unsigned char *data,
-                                  size_t size,
-                                  size_t member_index,
-                                  MiniArSymbol **symbols,
-                                  size_t *symbol_count,
-                                  size_t *symbol_capacity) {
-    Elf64_Ehdr ehdr;
-    size_t i;
-
-    if (!range_ok(0U, sizeof(ehdr), size)) {
-        return true;
-    }
-    memcpy(&ehdr, data, sizeof(ehdr));
-    if (ehdr.e_shentsize < sizeof(Elf64_Shdr) || ehdr.e_shnum == 0U ||
-        ehdr.e_shoff > SIZE_MAX) {
-        return true;
-    }
-    for (i = 0U; i < (size_t)ehdr.e_shnum; ++i) {
-        size_t shoff = (size_t)ehdr.e_shoff + i * (size_t)ehdr.e_shentsize;
-        Elf64_Shdr symtab;
-        Elf64_Shdr strtab;
-        size_t j;
-        size_t count;
-
-        if (!range_ok(shoff, sizeof(symtab), size)) {
-            return true;
-        }
-        memcpy(&symtab, data + shoff, sizeof(symtab));
-        if (symtab.sh_type != SHT_SYMTAB || symtab.sh_entsize < sizeof(Elf64_Sym) ||
-            symtab.sh_link >= ehdr.e_shnum || symtab.sh_offset > SIZE_MAX ||
-            symtab.sh_size > SIZE_MAX) {
-            continue;
-        }
-        shoff = (size_t)ehdr.e_shoff +
-                (size_t)symtab.sh_link * (size_t)ehdr.e_shentsize;
-        if (!range_ok(shoff, sizeof(strtab), size)) {
-            continue;
-        }
-        memcpy(&strtab, data + shoff, sizeof(strtab));
-        if (strtab.sh_type != SHT_STRTAB || strtab.sh_offset > SIZE_MAX ||
-            strtab.sh_size > SIZE_MAX ||
-            !range_ok((size_t)symtab.sh_offset, (size_t)symtab.sh_size, size) ||
-            !range_ok((size_t)strtab.sh_offset, (size_t)strtab.sh_size, size)) {
-            continue;
-        }
-        count = (size_t)symtab.sh_size / (size_t)symtab.sh_entsize;
-        for (j = 1U; j < count; ++j) {
-            size_t off = (size_t)symtab.sh_offset + j * (size_t)symtab.sh_entsize;
-            Elf64_Sym symbol;
-            const char *name;
-            size_t limit;
-
-            if (!range_ok(off, sizeof(symbol), size)) {
-                break;
-            }
-            memcpy(&symbol, data + off, sizeof(symbol));
-            if (!visible_bind(ELF64_ST_BIND(symbol.st_info)) ||
-                symbol.st_shndx == SHN_UNDEF || symbol.st_name == 0U ||
-                symbol.st_name >= strtab.sh_size) {
-                continue;
-            }
-            name = (const char *)data + (size_t)strtab.sh_offset + symbol.st_name;
-            limit = (size_t)strtab.sh_size - symbol.st_name;
-            if (memchr(name, '\0', limit) == NULL) {
-                continue;
-            }
-            if (!append_symbol(symbols,
-                               symbol_count,
-                               symbol_capacity,
-                               name,
-                               member_index)) {
-                return false;
-            }
-        }
-    }
-    return true;
-}
-
-static bool collect_elf32_symbols(const unsigned char *data,
-                                  size_t size,
-                                  size_t member_index,
-                                  MiniArSymbol **symbols,
-                                  size_t *symbol_count,
-                                  size_t *symbol_capacity) {
-    Elf32_Ehdr ehdr;
-    size_t i;
-
-    if (!range_ok(0U, sizeof(ehdr), size)) {
-        return true;
-    }
-    memcpy(&ehdr, data, sizeof(ehdr));
-    if (ehdr.e_shentsize < sizeof(Elf32_Shdr) || ehdr.e_shnum == 0U) {
-        return true;
-    }
-    for (i = 0U; i < (size_t)ehdr.e_shnum; ++i) {
-        size_t shoff = (size_t)ehdr.e_shoff + i * (size_t)ehdr.e_shentsize;
-        Elf32_Shdr symtab;
-        Elf32_Shdr strtab;
-        size_t j;
-        size_t count;
-
-        if (!range_ok(shoff, sizeof(symtab), size)) {
-            return true;
-        }
-        memcpy(&symtab, data + shoff, sizeof(symtab));
-        if (symtab.sh_type != SHT_SYMTAB || symtab.sh_entsize < sizeof(Elf32_Sym) ||
-            symtab.sh_link >= ehdr.e_shnum) {
-            continue;
-        }
-        shoff = (size_t)ehdr.e_shoff +
-                (size_t)symtab.sh_link * (size_t)ehdr.e_shentsize;
-        if (!range_ok(shoff, sizeof(strtab), size)) {
-            continue;
-        }
-        memcpy(&strtab, data + shoff, sizeof(strtab));
-        if (strtab.sh_type != SHT_STRTAB ||
-            !range_ok((size_t)symtab.sh_offset, (size_t)symtab.sh_size, size) ||
-            !range_ok((size_t)strtab.sh_offset, (size_t)strtab.sh_size, size)) {
-            continue;
-        }
-        count = (size_t)symtab.sh_size / (size_t)symtab.sh_entsize;
-        for (j = 1U; j < count; ++j) {
-            size_t off = (size_t)symtab.sh_offset + j * (size_t)symtab.sh_entsize;
-            Elf32_Sym symbol;
-            const char *name;
-            size_t limit;
-
-            if (!range_ok(off, sizeof(symbol), size)) {
-                break;
-            }
-            memcpy(&symbol, data + off, sizeof(symbol));
-            if (!visible_bind(ELF32_ST_BIND(symbol.st_info)) ||
-                symbol.st_shndx == SHN_UNDEF || symbol.st_name == 0U ||
-                symbol.st_name >= strtab.sh_size) {
-                continue;
-            }
-            name = (const char *)data + (size_t)strtab.sh_offset + symbol.st_name;
-            limit = (size_t)strtab.sh_size - symbol.st_name;
-            if (memchr(name, '\0', limit) == NULL) {
-                continue;
-            }
-            if (!append_symbol(symbols,
-                               symbol_count,
-                               symbol_capacity,
-                               name,
-                               member_index)) {
-                return false;
-            }
-        }
-    }
-    return true;
-}
-
 static bool collect_member_symbols(const char *path,
                                    size_t member_index,
                                    MiniArSymbol **symbols,
@@ -678,29 +533,65 @@ static bool collect_member_symbols(const char *path,
                                    FILE *diagnostics) {
     unsigned char *data = NULL;
     size_t size = 0U;
+    MiniElfView elf;
+    size_t i;
     bool ok = true;
 
     if (!load_file(path, &data, &size, diagnostics)) {
         return false;
     }
-    if (size >= EI_NIDENT && memcmp(data, ELFMAG, SELFMAG) == 0 &&
-        data[EI_DATA] == ELFDATA2LSB) {
-        if (data[EI_CLASS] == ELFCLASS64) {
-            ok = collect_elf64_symbols(data,
-                                       size,
-                                       member_index,
-                                       symbols,
-                                       symbol_count,
-                                       symbol_capacity);
-        } else if (data[EI_CLASS] == ELFCLASS32) {
-            ok = collect_elf32_symbols(data,
-                                       size,
-                                       member_index,
-                                       symbols,
-                                       symbol_count,
-                                       symbol_capacity);
+    if (!minielf_open(&elf, data, size)) {
+        free(data);
+        return true;
+    }
+
+    for (i = 1U; i < elf.section_count; ++i) {
+        MiniElfSection symtab;
+        size_t count;
+        size_t j;
+
+        if (!minielf_section(&elf, i, &symtab)) {
+            continue;
+        }
+        if (symtab.type != SHT_SYMTAB && symtab.type != SHT_DYNSYM) {
+            continue;
+        }
+        if (symtab.link >= elf.section_count) {
+            continue;
+        }
+        count = minielf_symbol_count(&elf, &symtab);
+        if (count == 0U && symtab.size != 0U) {
+            continue;
+        }
+        for (j = 1U; j < count; ++j) {
+            MiniElfSymbol symbol;
+            const char *name;
+            unsigned bind;
+
+            if (!minielf_symbol(&elf, i, j, &symbol)) {
+                break;
+            }
+            bind = minielf_symbol_bind(symbol.info);
+            if (!visible_bind(bind) ||
+                symbol.section_index == SHN_UNDEF ||
+                symbol.name == 0U ||
+                !minielf_string(&elf, symtab.link, symbol.name, &name)) {
+                continue;
+            }
+            if (!append_symbol(symbols,
+                               symbol_count,
+                               symbol_capacity,
+                               name,
+                               member_index)) {
+                ok = false;
+                break;
+            }
+        }
+        if (!ok) {
+            break;
         }
     }
+
     free(data);
     if (!ok) {
         fprintf(diagnostics, "minic-ar: out-of-memory:symbol-index\n");
@@ -749,6 +640,8 @@ static bool expand_thin_member_path(const char *path,
 
 static bool expand_thin_member_visitor(const MiniArArchiveView *view,
                                        const char *name,
+                                       const unsigned char *data,
+                                       size_t size,
                                        void *context,
                                        FILE *diagnostics) {
     MiniArExpandContext *expand = context;
@@ -756,6 +649,8 @@ static bool expand_thin_member_visitor(const MiniArArchiveView *view,
     bool ok;
 
     (void)view;
+    (void)data;
+    (void)size;
     path = join_path(expand->archive_directory, name);
     if (path == NULL) {
         fprintf(diagnostics, "minic-ar: out-of-memory:thin-member-path\n");
@@ -1285,18 +1180,87 @@ done:
     return ok ? 0 : 1;
 }
 
+typedef struct MiniArVisitContext {
+    char *archive_directory;
+    MiniArMemberVisitor visitor;
+    void *context;
+} MiniArVisitContext;
+
+static bool public_member_visitor(const MiniArArchiveView *view,
+                                  const char *name,
+                                  const unsigned char *data,
+                                  size_t size,
+                                  void *context,
+                                  FILE *diagnostics) {
+    MiniArVisitContext *visit = context;
+    MiniArMemberView member;
+    char *external_path = NULL;
+    bool ok;
+
+    memset(&member, 0, sizeof(member));
+    member.name = name;
+    member.data = data;
+    member.size = size;
+    member.thin = view->thin;
+    if (view->thin) {
+        external_path = join_path(visit->archive_directory, name);
+        if (external_path == NULL) {
+            fprintf(diagnostics, "minic-ar: out-of-memory:thin-member-path\n");
+            return false;
+        }
+        member.external_path = external_path;
+    }
+
+    ok = visit->visitor(&member, visit->context, diagnostics);
+    free(external_path);
+    return ok;
+}
+
+int miniar_visit_archive(const char *archive_path,
+                         MiniArMemberVisitor visitor,
+                         void *context,
+                         FILE *diagnostics) {
+    unsigned char *data = NULL;
+    size_t size = 0U;
+    MiniArVisitContext visit;
+    bool ok;
+
+    if (archive_path == NULL || visitor == NULL || diagnostics == NULL) {
+        return 2;
+    }
+    if (!load_file(archive_path, &data, &size, diagnostics)) {
+        return 1;
+    }
+    memset(&visit, 0, sizeof(visit));
+    visit.archive_directory = archive_directory(archive_path);
+    visit.visitor = visitor;
+    visit.context = context;
+    if (visit.archive_directory == NULL) {
+        fprintf(diagnostics, "minic-ar: out-of-memory:archive-directory\n");
+        free(data);
+        return 1;
+    }
+
+    ok = visit_archive_members(data,
+                               size,
+                               public_member_visitor,
+                               &visit,
+                               diagnostics);
+    free(visit.archive_directory);
+    free(data);
+    return ok ? 0 : 1;
+}
+
 typedef struct MiniArListContext {
     FILE *out;
 } MiniArListContext;
 
-static bool list_member_visitor(const MiniArArchiveView *view,
-                                const char *name,
+static bool list_member_visitor(const MiniArMemberView *member,
                                 void *context,
                                 FILE *diagnostics) {
     MiniArListContext *list = context;
 
-    (void)view;
-    if (fprintf(list->out, "%s\n", name) < 0) {
+    if (fprintf(list->out, "%s\n", member->name) < 0) {
         fprintf(diagnostics, "minic-ar: write-error:list\n");
         return false;
     }
@@ -1304,23 +1268,14 @@ static bool list_member_visitor(const MiniArArchiveView *view,
 }
 
 int miniar_list_archive(const char *archive_path, FILE *out, FILE *diagnostics) {
-    unsigned char *data = NULL;
-    size_t size = 0U;
     MiniArListContext context;
-    bool ok;
 
     if (archive_path == NULL || out == NULL || diagnostics == NULL) {
         return 2;
     }
-    if (!load_file(archive_path, &data, &size, diagnostics)) {
-        return 1;
-    }
     context.out = out;
-    ok = visit_archive_members(data,
-                               size,
-                               list_member_visitor,
-                               &context,
-                               diagnostics);
-    free(data);
-    return ok ? 0 : 1;
+    return miniar_visit_archive(archive_path,
+                                list_member_visitor,
+                                &context,
+                                diagnostics);
 }
