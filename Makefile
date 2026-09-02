@@ -123,11 +123,11 @@ MINIPP_SOURCES := \
 MINIPP_OBJECTS := $(patsubst %.c,$(BUILD_DIR)/obj/%.o,$(MINIPP_SOURCES))
 MINIPP_BINARY := $(BUILD_DIR)/bin/minic-cpp
 
-MINIAR_INCLUDES := -Iarchiver/include
+MINIAR_INCLUDES := -Iarchiver/include $(MINIELF_INCLUDES)
 MINIAR_SOURCES := \
 	archiver/src/archive.c \
 	tools/minic-ar/main.c
-MINIAR_OBJECTS := $(patsubst %.c,$(BUILD_DIR)/obj/%.o,$(MINIAR_SOURCES))
+MINIAR_OBJECTS := $(BUILD_DIR)/obj/elf/src/reader.o $(patsubst %.c,$(BUILD_DIR)/obj/%.o,$(MINIAR_SOURCES))
 MINIAR_BINARY := $(BUILD_DIR)/bin/minic-ar
 
 MINILD_INCLUDES := -Ilinker/include -Ilinker/src $(MINIELF_INCLUDES)
