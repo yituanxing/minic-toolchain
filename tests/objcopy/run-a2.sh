@@ -90,7 +90,10 @@ if ! cmp "$work/gnu.sections" "$work/mini.sections"; then
   exit 1
 fi
 
-test ! -s <("$READELF" -SW "$work/mini.o" | grep '\.note\.gnu\.property' || true)
+if "$READELF" -SW "$work/mini.o" | grep -q '\.note\.gnu\.property'; then
+  echo "MINIOBJCOPY_A2_FAIL remove-section=.note.gnu.property" >&2
+  exit 1
+fi
 
 normalize_external_reloc "$work/gnu.o" >"$work/gnu.reloc"
 normalize_external_reloc "$work/mini.o" >"$work/mini.reloc"
