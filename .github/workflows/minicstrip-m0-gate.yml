@@ -28,10 +28,11 @@ jobs:
         run: |
           make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/minicstrip all
 
-      - name: Preserve Objcopy A0 A1
+      - name: Preserve Objcopy A0 A1 A2
         run: |
           make MODE=release CFLAGS=-Werror BUILD_DIR=build/minicstrip check-miniobjcopy-a0
           make MODE=release CFLAGS=-Werror BUILD_DIR=build/minicstrip check-miniobjcopy-a1
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/minicstrip check-miniobjcopy-a2
 
       - name: Differentially validate MiniStrip M0
         run: |
