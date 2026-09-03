@@ -1,0 +1,110 @@
+name: Linux ObjDump Census
+
+on:
+  push:
+    branches:
+      - "toolchain/objdump-linux-census"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  census:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Install Linux build prerequisites
+        run: |
+          sudo apt-get -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            build-essential gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
+            bc bison flex libssl-dev libelf-dev make curl xz-utils file
+
+      - name: Prepare Linux 6.6.143
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/objdump-census"
+          archive="$work/linux-6.6.143.tar.xz"
+          src="$work/linux-6.6.143"
+          out="$work/out"
+          mkdir -p "$work"
+          curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors \
+            https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.6.143.tar.xz \
+            -o "$archive"
+          printf '%s  %s\n' \
+            dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932 \
+            "$archive" | sha256sum -c -
+          tar -xJf "$archive" -C "$work"
+          make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- defconfig
+
+      - name: Install GNU objdump trace wrapper
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/objdump-census"
+          wrapper="$work/riscv64-linux-gnu-objdump-trace"
+          cat >"$wrapper" <<'SH'
+          #!/usr/bin/env bash
+          set -Eeuo pipefail
+          : "${OBJDUMP_TRACE:?OBJDUMP_TRACE is not set}"
+          {
+            printf 'objdump'
+            printf ' %q' "$@"
+            printf '\n'
+          } >>"$OBJDUMP_TRACE"
+          exec /usr/bin/riscv64-linux-gnu-objdump "$@"
+          SH
+          chmod +x "$wrapper"
+          : >"$work/objdump.trace"
+
+      - name: Build Linux Image and trace objdump
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/objdump-census"
+          src="$work/linux-6.6.143"
+          out="$work/out"
+          wrapper="$work/riscv64-linux-gnu-objdump-trace"
+          export OBJDUMP_TRACE="$work/objdump.trace"
+
+          make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
+            OBJDUMP="$wrapper" -j4 Image >"$work/kbuild.log" 2>&1
+
+          test -s "$out/arch/riscv/boot/Image"
+          calls=$(wc -l <"$work/objdump.trace")
+          printf 'OBJDUMP_LINUX_CENSUS_CALLS=%s\n' "$calls"
+
+          python3 - <<'PY'
+          from pathlib import Path
+          import shlex
+          from collections import Counter
+
+          lines=Path("build/objdump-census/objdump.trace").read_text().splitlines()
+          patterns=Counter()
+          for line in lines:
+              argv=shlex.split(line)[1:]
+              options=[]
+              for arg in argv:
+                  if arg.startswith("-"):
+                      options.append(arg)
+              patterns[" ".join(options)] += 1
+          for pattern,count in patterns.most_common():
+              print(f"OBJDUMP_LINUX_PATTERN count={count} options={pattern or '<none>'}")
+          PY
+
+      - name: Preserve census
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: objdump-linux-census
+          path: |
+            build/objdump-census/objdump.trace
+            build/objdump-census/kbuild.log
+          if-no-files-found: ignore
+          retention-days: 3
