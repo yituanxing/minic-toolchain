@@ -5,6 +5,7 @@ on:
     branches:
       - "toolchain/static-readiness"
       - "toolchain/miniobjcopy-elf-a1"
+      - "toolchain/minicstrip-selfhost"
   workflow_dispatch:
 
 permissions:
@@ -169,6 +170,15 @@ jobs:
             compile_one objcopy "-Ielf/include" "$source" >>"$work/objcopy.objects"
           done
 
+          : >"$work/strip.objects"
+          for source in \
+            elf/src/reader.c \
+            elf/src/rewrite.c \
+            tools/minic-strip/main.c
+          do
+            compile_one strip "-Ielf/include" "$source" >>"$work/strip.objects"
+          done
+
           : >"$work/ld.objects"
           for source in \
             elf/src/reader.c \
@@ -183,7 +193,7 @@ jobs:
             compile_one ld "-Ilinker/include -Ilinker/src -Ielf/include" "$source" >>"$work/ld.objects"
           done
 
-          printf 'STATIC_TOOLCHAIN_SELFHOST_COMPILE=PASS cpp=%s as=%s ar=%s nm=%s objcopy=%s ld=%s\n'             "$(wc -l <"$work/cpp.objects")"             "$(wc -l <"$work/as.objects")"             "$(wc -l <"$work/ar.objects")"             "$(wc -l <"$work/nm.objects")"             "$(wc -l <"$work/objcopy.objects")"             "$(wc -l <"$work/ld.objects")"
+          printf 'STATIC_TOOLCHAIN_SELFHOST_COMPILE=PASS cpp=%s as=%s ar=%s nm=%s objcopy=%s strip=%s ld=%s\n'             "$(wc -l <"$work/cpp.objects")"             "$(wc -l <"$work/as.objects")"             "$(wc -l <"$work/ar.objects")"             "$(wc -l <"$work/nm.objects")"             "$(wc -l <"$work/objcopy.objects")"             "$(wc -l <"$work/strip.objects")"             "$(wc -l <"$work/ld.objects")"
 
       - name: Link self-hosted tools with current MiniLD
         shell: bash
@@ -207,8 +217,9 @@ jobs:
           link_tool ar
           link_tool nm
           link_tool objcopy
+          link_tool strip
           link_tool ld
-          echo "STATIC_TOOLCHAIN_SELFHOST_LINK=PASS tools=6"
+          echo "STATIC_TOOLCHAIN_SELFHOST_LINK=PASS tools=7"
 
       - name: Run self-hosted tool functional smoke
         shell: bash
@@ -220,6 +231,7 @@ jobs:
           ar="$work/bin/minic-ar"
           nm="$work/bin/minic-nm"
           objcopy="$work/bin/minic-objcopy"
+          strip="$work/bin/minic-strip"
           ld="$work/bin/minic-ld"
 
           cat >"$work/selfhost.c" <<'C'
@@ -235,6 +247,9 @@ jobs:
           selfhost_symbol:
             li a0, 42
             ret
+
+          .section .debug_info,"",@progbits
+          .byte 1, 2, 3, 4
           S
           qemu-riscv64 "$as" -o "$work/selfhost.o" "$work/selfhost.s"
           riscv64-linux-gnu-readelf -h "$work/selfhost.o" | grep -q 'REL (Relocatable file)'
@@ -258,10 +273,19 @@ jobs:
             exit 1
           fi
 
+          cp "$work/selfhost.o" "$work/selfhost-strip.o"
+          qemu-riscv64 "$strip" --strip-debug "$work/selfhost-strip.o"
+          riscv64-linux-gnu-readelf -h "$work/selfhost-strip.o" | grep -q 'REL (Relocatable file)'
+          if riscv64-linux-gnu-readelf -SW "$work/selfhost-strip.o" | grep -q '\.debug_info'; then
+            echo "STATIC_TOOLCHAIN_SELFHOST_STRIP_DEBUG=FAIL" >&2
+            exit 1
+          fi
+          echo "STATIC_TOOLCHAIN_SELFHOST_STRIP_DEBUG=PASS"
+
           qemu-riscv64 "$ld" -melf64lriscv -r -o "$work/selfhost-merged.o" "$work/selfhost.o"
           riscv64-linux-gnu-readelf -h "$work/selfhost-merged.o" | grep -q 'REL (Relocatable file)'
 
-          echo "STATIC_TOOLCHAIN_SELFHOST=PASS compiler=stage2 pp=PASS as=PASS ar=PASS nm=PASS objcopy=PASS ld=PASS"
+          echo "STATIC_TOOLCHAIN_SELFHOST=PASS compiler=stage2 pp=PASS as=PASS ar=PASS nm=PASS objcopy=PASS strip=PASS ld=PASS"
 
       - name: Preserve selfhost evidence
         if: always()
@@ -276,6 +300,7 @@ jobs:
             build/static-toolchain-selfhost/selfhost.gnu.bin
             build/static-toolchain-selfhost/selfhost.mini.bin
             build/static-toolchain-selfhost/selfhost.stripped.so
+            build/static-toolchain-selfhost/selfhost-strip.o
             build/static-toolchain-selfhost/selfhost.i
             build/static-toolchain-selfhost/bin/
           if-no-files-found: ignore
