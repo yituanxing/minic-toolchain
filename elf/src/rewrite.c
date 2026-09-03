@@ -236,10 +236,6 @@ static bool effective_local_symbol(const MiniElfRewriteOptions *options,
     return false;
 }
 
-static bool mapping_symbol_name(const char *name) {
-    return name[0] == '$' && (name[1] == 'x' || name[1] == 'd');
-}
-
 static bool strip_debug_symbol(const MiniElfView *view,
                                const MiniElfRewriteSectionState *states,
                                const MiniElfSymbol *symbol,
@@ -255,8 +251,8 @@ static bool strip_debug_symbol(const MiniElfView *view,
     if (bind != STB_LOCAL) {
         return false;
     }
-    return type == STT_FILE || type == STT_SECTION ||
-           mapping_symbol_name(name);
+    (void)name;
+    return type == STT_FILE || type == STT_SECTION;
 }
 
 static bool build_strip_debug_symtab(
