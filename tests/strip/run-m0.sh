@@ -61,7 +61,9 @@ selected_symbols() {
 
 text_relocations() {
   "$READELF" -rW "$1" |
-    grep -E 'external_target|Relocation section.*\.rela\.text' || true
+    sed -n \
+      -e "/Relocation section '.rela.text'/s/ at offset 0x[0-9a-fA-F]*//p" \
+      -e '/external_target/p'
 }
 
 run_case() {
