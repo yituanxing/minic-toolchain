@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - "toolchain/miniobjcopy-elf-a1"
+      - "toolchain/minicstrip-m0"
   workflow_dispatch:
 
 permissions:
@@ -31,6 +32,7 @@ jobs:
           make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/miniobjcopy-linux-tool all
           make MODE=release CFLAGS=-Werror BUILD_DIR=build/miniobjcopy-linux-tool check-miniobjcopy-a0
           make MODE=release CFLAGS=-Werror BUILD_DIR=build/miniobjcopy-linux-tool check-miniobjcopy-a1
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/miniobjcopy-linux-tool check-miniobjcopy-a2
           make MODE=release CFLAGS=-Werror BUILD_DIR=build/miniobjcopy-linux-tool check-minild-a0
           make MODE=release CFLAGS=-Werror BUILD_DIR=build/miniobjcopy-linux-tool check-minild-a1
           make MODE=release CFLAGS=-Werror BUILD_DIR=build/miniobjcopy-linux-tool check-minild-a2
