@@ -452,6 +452,7 @@ static bool build_prefixed_section_names(
 
     states[0].section.name = 0U;
     for (i = 1U; i < view->section_count; ++i) {
+        MiniElfSection *section = &states[i].section;
         const char *name;
         const char *use_prefix = NULL;
         uint32_t name_offset;
@@ -459,15 +460,53 @@ static bool build_prefixed_section_names(
         if (!minielf_section_name(view, i, &name)) {
             goto done;
         }
+
         if (!states[i].remove &&
-            (states[i].section.flags & SHF_ALLOC) != 0U) {
-            use_prefix = prefix;
-        }
-        if (!rewrite_buffer_append_name(&strings,
-                                        use_prefix,
-                                        name,
-                                        &name_offset)) {
-            goto done;
+            (section->type == SHT_RELA || section->type == SHT_REL) &&
+            section->info < view->section_count &&
+            !states[section->info].remove &&
+            (states[section->info].section.flags & SHF_ALLOC) != 0U) {
+            const char *target_name;
+            const char *rel_prefix =
+                section->type == SHT_RELA ? ".rela" : ".rel";
+            size_t rel_prefix_size = strlen(rel_prefix);
+            size_t prefix_size = strlen(prefix);
+            size_t target_size;
+
+            if (!minielf_section_name(view, section->info, &target_name)) {
+                goto done;
+            }
+            target_size = strlen(target_name) + 1U;
+            if (strings.size > UINT32_MAX ||
+                rel_prefix_size > SIZE_MAX - prefix_size ||
+                rel_prefix_size + prefix_size > SIZE_MAX - target_size ||
+                strings.size > UINT32_MAX -
+                    (rel_prefix_size + prefix_size + target_size - 1U)) {
+                goto done;
+            }
+            name_offset = (uint32_t)strings.size;
+            if (!rewrite_buffer_append(&strings,
+                                       rel_prefix,
+                                       rel_prefix_size) ||
+                !rewrite_buffer_append(&strings,
+                                       prefix,
+                                       prefix_size) ||
+                !rewrite_buffer_append(&strings,
+                                       target_name,
+                                       target_size)) {
+                goto done;
+            }
+        } else {
+            if (!states[i].remove &&
+                (section->flags & SHF_ALLOC) != 0U) {
+                use_prefix = prefix;
+            }
+            if (!rewrite_buffer_append_name(&strings,
+                                            use_prefix,
+                                            name,
+                                            &name_offset)) {
+                goto done;
+            }
         }
         states[i].section.name = name_offset;
     }
