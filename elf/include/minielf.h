@@ -192,6 +192,8 @@ typedef struct MiniElfRewriteOptions {
     bool strip_debug;
     const char *const *keep_global_symbols;
     size_t keep_global_count;
+    const char *symbol_prefix;
+    const char *alloc_section_prefix;
 } MiniElfRewriteOptions;
 
 bool minielf_rewrite(const MiniElfView *view,
