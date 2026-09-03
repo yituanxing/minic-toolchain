@@ -166,6 +166,131 @@ static bool effective_local_symbol(const MiniElfRewriteOptions *options,
     return false;
 }
 
+static bool mapping_symbol_name(const char *name) {
+    return name[0] == '$' && (name[1] == 'x' || name[1] == 'd');
+}
+
+static bool strip_debug_symbol(const MiniElfView *view,
+                               const MiniElfRewriteSectionState *states,
+                               const MiniElfSymbol *symbol,
+                               const char *name) {
+    unsigned bind = minielf_symbol_bind(symbol->info);
+    unsigned type = minielf_symbol_type(symbol->info);
+
+    if (symbol->section_index < SHN_LORESERVE &&
+        symbol->section_index < view->section_count &&
+        states[symbol->section_index].remove) {
+        return true;
+    }
+    if (bind != STB_LOCAL) {
+        return false;
+    }
+    return type == STT_FILE || type == STT_SECTION ||
+           mapping_symbol_name(name);
+}
+
+static bool build_strip_debug_symtab(
+    const MiniElfView *view,
+    size_t symtab_index,
+    MiniElfRewriteSectionState *states,
+    size_t **symbol_map_out,
+    size_t *symbol_count_out) {
+    MiniElfSection *symtab = &states[symtab_index].section;
+    const unsigned char *input;
+    size_t input_size;
+    size_t entry_size;
+    size_t count;
+    bool *keep = NULL;
+    size_t *symbol_map = NULL;
+    unsigned char *output = NULL;
+    size_t kept_count = 1U;
+    size_t local_count = 0U;
+    size_t next = 1U;
+    size_t i;
+    bool ok = false;
+
+    if (symtab->link >= view->section_count ||
+        !minielf_section_data(view, symtab_index, &input, &input_size)) {
+        return false;
+    }
+    entry_size = (size_t)symtab->entry_size;
+    if (entry_size < (view->elf_class == ELFCLASS64 ? 24U : 16U) ||
+        entry_size == 0U || input_size % entry_size != 0U) {
+        return false;
+    }
+    count = input_size / entry_size;
+    if (count == 0U) {
+        return false;
+    }
+
+    keep = calloc(count, sizeof(*keep));
+    symbol_map = malloc(count * sizeof(*symbol_map));
+    if (keep == NULL || symbol_map == NULL) {
+        goto done;
+    }
+    keep[0] = true;
+    symbol_map[0] = 0U;
+
+    for (i = 1U; i < count; ++i) {
+        MiniElfSymbol symbol;
+        const char *name;
+
+        symbol_map[i] = SIZE_MAX;
+        if (!minielf_symbol(view, symtab_index, i, &symbol) ||
+            !minielf_string(view, symtab->link, symbol.name, &name)) {
+            goto done;
+        }
+        if (strip_debug_symbol(view, states, &symbol, name)) {
+            continue;
+        }
+        keep[i] = true;
+        ++kept_count;
+        if (minielf_symbol_bind(symbol.info) == STB_LOCAL) {
+            ++local_count;
+        }
+    }
+
+    if (kept_count > SIZE_MAX / entry_size) {
+        goto done;
+    }
+    output = malloc(kept_count * entry_size);
+    if (output == NULL) {
+        goto done;
+    }
+    memcpy(output, input, entry_size);
+
+    for (i = 1U; i < count; ++i) {
+        if (!keep[i]) {
+            continue;
+        }
+        symbol_map[i] = next;
+        memcpy(output + next * entry_size,
+               input + i * entry_size,
+               entry_size);
+        ++next;
+    }
+    if (next != kept_count || 1U + local_count > UINT32_MAX) {
+        goto done;
+    }
+
+    states[symtab_index].modified_data = output;
+    states[symtab_index].modified_size = kept_count * entry_size;
+    states[symtab_index].section.size = kept_count * entry_size;
+    states[symtab_index].new_info = (uint32_t)(1U + local_count);
+    output = NULL;
+
+    *symbol_map_out = symbol_map;
+    *symbol_count_out = count;
+    symbol_map = NULL;
+    ok = true;
+
+done:
+    free(output);
+    free(symbol_map);
+    free(keep);
+    return ok;
+}
+
 static bool write_section_header(unsigned char *data,
                                  const MiniElfView *view,
                                  const MiniElfSection *section,
@@ -356,6 +481,10 @@ static bool rewrite_linked_symbol_indices(
         if (section->info >= symbol_count) {
             return false;
         }
+        if (symbol_map[section->info] == SIZE_MAX ||
+            symbol_map[section->info] > UINT32_MAX) {
+            return false;
+        }
         states[section_index].new_info =
             (uint32_t)symbol_map[section->info];
         return true;
@@ -423,6 +552,10 @@ static bool rewrite_linked_symbol_indices(
             old_symbol = (size_t)(info >> 32U);
             type = (uint32_t)info;
             if (old_symbol >= symbol_count) {
+                free(output);
+                return false;
+            }
+            if (symbol_map[old_symbol] == SIZE_MAX) {
                 free(output);
                 return false;
             }
@@ -600,6 +733,43 @@ bool minielf_rewrite(const MiniElfView *view,
             symtab_index != SIZE_MAX &&
             section->link == symtab_index) {
             states[i].remove = true;
+        }
+    }
+
+    if (view->type == ET_REL &&
+        options->strip_debug &&
+        symtab_index != SIZE_MAX &&
+        !states[symtab_index].remove) {
+        if (!build_strip_debug_symtab(view,
+                                      symtab_index,
+                                      states,
+                                      &symbol_map,
+                                      &symbol_count)) {
+            set_error(error_out,
+                      MINIELF_REWRITE_INVALID_SYMBOL_TABLE);
+            goto done;
+        }
+        for (i = 1U; i < view->section_count; ++i) {
+            MiniElfSection *section = &states[i].section;
+
+            if (i == symtab_index || states[i].remove ||
+                section->link != symtab_index) {
+                continue;
+            }
+            if (section->type == SHT_SYMTAB_SHNDX) {
+                set_error(error_out,
+                          MINIELF_REWRITE_UNSUPPORTED_SYMBOL_REFERENCE);
+                goto done;
+            }
+            if (!rewrite_linked_symbol_indices(view,
+                                               i,
+                                               states,
+                                               symbol_map,
+                                               symbol_count)) {
+                set_error(error_out,
+                          MINIELF_REWRITE_UNSUPPORTED_SYMBOL_REFERENCE);
+                goto done;
+            }
         }
     }
 
