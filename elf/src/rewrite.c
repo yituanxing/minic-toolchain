@@ -14,6 +14,76 @@ typedef struct MiniElfRewriteSectionState {
     size_t modified_size;
 } MiniElfRewriteSectionState;
 
+typedef struct MiniElfRewriteBuffer {
+    unsigned char *data;
+    size_t size;
+    size_t capacity;
+} MiniElfRewriteBuffer;
+
+static bool rewrite_buffer_reserve(MiniElfRewriteBuffer *buffer,
+                                   size_t extra) {
+    size_t required;
+    size_t next;
+    unsigned char *data;
+
+    if (extra > SIZE_MAX - buffer->size) {
+        return false;
+    }
+    required = buffer->size + extra;
+    if (required <= buffer->capacity) {
+        return true;
+    }
+    next = buffer->capacity == 0U ? 128U : buffer->capacity;
+    while (next < required) {
+        if (next > SIZE_MAX / 2U) {
+            next = required;
+            break;
+        }
+        next *= 2U;
+    }
+    data = realloc(buffer->data, next);
+    if (data == NULL) {
+        return false;
+    }
+    buffer->data = data;
+    buffer->capacity = next;
+    return true;
+}
+
+static bool rewrite_buffer_append(MiniElfRewriteBuffer *buffer,
+                                  const void *data,
+                                  size_t size) {
+    if (!rewrite_buffer_reserve(buffer, size)) {
+        return false;
+    }
+    if (size != 0U) {
+        memcpy(buffer->data + buffer->size, data, size);
+    }
+    buffer->size += size;
+    return true;
+}
+
+static bool rewrite_buffer_append_name(MiniElfRewriteBuffer *buffer,
+                                       const char *prefix,
+                                       const char *name,
+                                       uint32_t *offset_out) {
+    size_t prefix_size = prefix == NULL ? 0U : strlen(prefix);
+    size_t name_size = strlen(name) + 1U;
+
+    if (buffer->size > UINT32_MAX ||
+        prefix_size > SIZE_MAX - name_size ||
+        buffer->size > UINT32_MAX - prefix_size ||
+        buffer->size + prefix_size > UINT32_MAX - name_size + 1U) {
+        return false;
+    }
+    *offset_out = (uint32_t)buffer->size;
+    if (prefix_size != 0U &&
+        !rewrite_buffer_append(buffer, prefix, prefix_size)) {
+        return false;
+    }
+    return rewrite_buffer_append(buffer, name, name_size);
+}
+
 static void set_error(MiniElfRewriteError *error_out,
                       MiniElfRewriteError error) {
     if (error_out != NULL) {
@@ -288,6 +358,132 @@ done:
     free(output);
     free(symbol_map);
     free(keep);
+    return ok;
+}
+
+static bool build_prefixed_symtab(
+    const MiniElfView *view,
+    size_t symtab_index,
+    MiniElfRewriteSectionState *states,
+    const char *prefix) {
+    MiniElfSection *symtab = &states[symtab_index].section;
+    size_t strtab_index = symtab->link;
+    const unsigned char *input;
+    size_t input_size;
+    size_t entry_size;
+    size_t count;
+    unsigned char *output = NULL;
+    MiniElfRewriteBuffer strings = {NULL, 0U, 0U};
+    size_t i;
+    bool ok = false;
+
+    if (prefix == NULL || prefix[0] == '\0') {
+        return true;
+    }
+    if (strtab_index >= view->section_count ||
+        states[strtab_index].remove ||
+        states[strtab_index].section.type != SHT_STRTAB ||
+        !minielf_section_data(view, symtab_index, &input, &input_size)) {
+        return false;
+    }
+    entry_size = (size_t)symtab->entry_size;
+    if (entry_size < (view->elf_class == ELFCLASS64 ? 24U : 16U) ||
+        entry_size == 0U || input_size % entry_size != 0U) {
+        return false;
+    }
+    count = input_size / entry_size;
+    output = malloc(input_size == 0U ? 1U : input_size);
+    if (output == NULL || !rewrite_buffer_append(&strings, "", 1U)) {
+        goto done;
+    }
+    memcpy(output, input, input_size);
+
+    for (i = 1U; i < count; ++i) {
+        MiniElfSymbol symbol;
+        const char *name;
+        uint32_t name_offset;
+
+        if (!minielf_symbol(view, symtab_index, i, &symbol) ||
+            !minielf_string(view, strtab_index, symbol.name, &name)) {
+            goto done;
+        }
+        if (name[0] == '\0') {
+            name_offset = 0U;
+        } else if (!rewrite_buffer_append_name(&strings,
+                                               prefix,
+                                               name,
+                                               &name_offset)) {
+            goto done;
+        }
+        store_u32(output + i * entry_size,
+                  view->data_encoding,
+                  name_offset);
+    }
+
+    states[symtab_index].modified_data = output;
+    states[symtab_index].modified_size = input_size;
+    output = NULL;
+    states[strtab_index].modified_data = strings.data;
+    states[strtab_index].modified_size = strings.size;
+    states[strtab_index].section.size = strings.size;
+    strings.data = NULL;
+    ok = true;
+
+done:
+    free(strings.data);
+    free(output);
+    return ok;
+}
+
+static bool build_prefixed_section_names(
+    const MiniElfView *view,
+    MiniElfRewriteSectionState *states,
+    const char *prefix) {
+    size_t shstrtab_index = view->section_name_table_index;
+    MiniElfRewriteBuffer strings = {NULL, 0U, 0U};
+    size_t i;
+    bool ok = false;
+
+    if (prefix == NULL || prefix[0] == '\0') {
+        return true;
+    }
+    if (shstrtab_index >= view->section_count ||
+        states[shstrtab_index].remove ||
+        states[shstrtab_index].section.type != SHT_STRTAB ||
+        !rewrite_buffer_append(&strings, "", 1U)) {
+        goto done;
+    }
+
+    states[0].section.name = 0U;
+    for (i = 1U; i < view->section_count; ++i) {
+        const char *name;
+        const char *use_prefix = NULL;
+        uint32_t name_offset;
+
+        if (!minielf_section_name(view, i, &name)) {
+            goto done;
+        }
+        if (!states[i].remove &&
+            (states[i].section.flags & SHF_ALLOC) != 0U) {
+            use_prefix = prefix;
+        }
+        if (!rewrite_buffer_append_name(&strings,
+                                        use_prefix,
+                                        name,
+                                        &name_offset)) {
+            goto done;
+        }
+        states[i].section.name = name_offset;
+    }
+
+    states[shstrtab_index].modified_data = strings.data;
+    states[shstrtab_index].modified_size = strings.size;
+    states[shstrtab_index].section.size = strings.size;
+    strings.data = NULL;
+    ok = true;
+
+done:
+    free(strings.data);
     return ok;
 }
 
@@ -650,6 +846,11 @@ bool minielf_rewrite(const MiniElfView *view,
          view->type != ET_REL) ||
         (view->type == ET_REL &&
          (options->strip_all || options->keep_global_count != 0U)) ||
+        ((options->symbol_prefix != NULL ||
+          options->alloc_section_prefix != NULL) &&
+         (view->type != ET_REL ||
+          options->strip_all || options->strip_debug ||
+          options->keep_global_count != 0U)) ||
         view->section_count == 0U ||
         view->section_name_table_index == SHN_UNDEF) {
         set_error(error_out,
@@ -771,6 +972,25 @@ bool minielf_rewrite(const MiniElfView *view,
                 goto done;
             }
         }
+    }
+
+    if (options->symbol_prefix != NULL) {
+        if (symtab_index == SIZE_MAX || states[symtab_index].remove ||
+            !build_prefixed_symtab(view,
+                                   symtab_index,
+                                   states,
+                                   options->symbol_prefix)) {
+            set_error(error_out,
+                      MINIELF_REWRITE_INVALID_SYMBOL_TABLE);
+            goto done;
+        }
+    }
+    if (options->alloc_section_prefix != NULL &&
+        !build_prefixed_section_names(view,
+                                      states,
+                                      options->alloc_section_prefix)) {
+        set_error(error_out, MINIELF_REWRITE_INVALID_SECTION);
+        goto done;
     }
 
     if (options->keep_global_count != 0U) {
