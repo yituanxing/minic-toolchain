@@ -17,6 +17,8 @@ typedef struct ObjcopyOptions {
     bool strip_all;
     bool strip_debug;
     bool binary_output;
+    const char *symbol_prefix;
+    const char *alloc_section_prefix;
 } ObjcopyOptions;
 
 static void usage(FILE *stream, const char *program) {
@@ -26,7 +28,9 @@ static void usage(FILE *stream, const char *program) {
             "  -R SECTION                remove SECTION\n"
             "  -S, --strip-all           strip the static symbol/debug tables\n"
             "      --strip-debug         remove debug sections\n"
-            "  -G SYMBOL                 keep SYMBOL global, localize other definitions\n",
+            "  -G SYMBOL                 keep SYMBOL global, localize other definitions\n"
+            "      --prefix-symbols=TEXT  prefix static symbol names (ET_REL)\n"
+            "      --prefix-alloc-sections=TEXT prefix allocated section names (ET_REL)\n",
             program);
 }
 
@@ -291,12 +295,6 @@ static int rewrite_elf(const ObjcopyOptions *options,
     if (open_elf(input_path, &input, &input_size, &elf) != 0) {
         goto done;
     }
-    if (elf.type == ET_REL) {
-        fprintf(stderr,
-                "minic-objcopy: %s: ELF-to-ELF ET_REL rewrite is not in A1\n",
-                input_path);
-        goto done;
-    }
     if (!build_remove_map(options, &elf, &remove)) {
         fprintf(stderr,
                 "minic-objcopy: %s: cannot build section filter\n",
@@ -310,6 +308,8 @@ static int rewrite_elf(const ObjcopyOptions *options,
     rewrite_options.strip_debug = options->strip_debug;
     rewrite_options.keep_global_symbols = options->keep_globals;
     rewrite_options.keep_global_count = options->keep_global_count;
+    rewrite_options.symbol_prefix = options->symbol_prefix;
+    rewrite_options.alloc_section_prefix = options->alloc_section_prefix;
 
     if (!minielf_rewrite(&elf,
                          &rewrite_options,
@@ -440,6 +440,46 @@ int main(int argc, char **argv) {
             }
             continue;
         }
+        if (strncmp(argument, "--prefix-symbols=", 17U) == 0) {
+            if (argument[17U] == '\0') {
+                fprintf(stderr,
+                        "minic-objcopy: invalid prefix-symbols option\n");
+                result = 2;
+                goto done;
+            }
+            options.symbol_prefix = argument + 17U;
+            continue;
+        }
+        if (strcmp(argument, "--prefix-symbols") == 0) {
+            if (++i >= argc || argv[i][0] == '\0') {
+                fprintf(stderr,
+                        "minic-objcopy: invalid prefix-symbols option\n");
+                result = 2;
+                goto done;
+            }
+            options.symbol_prefix = argv[i];
+            continue;
+        }
+        if (strncmp(argument, "--prefix-alloc-sections=", 24U) == 0) {
+            if (argument[24U] == '\0') {
+                fprintf(stderr,
+                        "minic-objcopy: invalid prefix-alloc-sections option\n");
+                result = 2;
+                goto done;
+            }
+            options.alloc_section_prefix = argument + 24U;
+            continue;
+        }
+        if (strcmp(argument, "--prefix-alloc-sections") == 0) {
+            if (++i >= argc || argv[i][0] == '\0') {
+                fprintf(stderr,
+                        "minic-objcopy: invalid prefix-alloc-sections option\n");
+                result = 2;
+                goto done;
+            }
+            options.alloc_section_prefix = argv[i];
+            continue;
+        }
         if (strcmp(argument, "-S") == 0 ||
             strcmp(argument, "--strip-all") == 0) {
             options.strip_all = true;
@@ -469,6 +509,15 @@ int main(int argc, char **argv) {
 
     if (input_path == NULL || output_path == NULL) {
         usage(stderr, argv[0]);
+        result = 2;
+        goto done;
+    }
+
+    if (options.binary_output &&
+        (options.symbol_prefix != NULL ||
+         options.alloc_section_prefix != NULL)) {
+        fprintf(stderr,
+                "minic-objcopy: prefix options require ELF output\n");
         result = 2;
         goto done;
     }
