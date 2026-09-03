@@ -105,6 +105,10 @@ run_case() {
   if ! cmp "$dir/gnu.reloc" "$dir/mini.reloc"; then
     echo "MINISTRIP_M0_DIFF bits=$bits phase=text-relocations" >&2
     diff -u "$dir/gnu.reloc" "$dir/mini.reloc" >&2 || true
+    echo "--- GNU symtab ---" >&2
+    "$READELF" -sW "$dir/gnu.o" >&2 || true
+    echo "--- Mini symtab ---" >&2
+    "$READELF" -sW "$dir/mini.o" >&2 || true
     exit 1
   fi
 
