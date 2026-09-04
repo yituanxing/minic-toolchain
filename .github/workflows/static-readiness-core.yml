@@ -40,11 +40,13 @@ jobs:
           test "$(tree_sha src)" = 3d6869566c304e1224a985aefab808ea523d832e
           test "$(tree_sha assembler)" = 8522270c9b1c9b884765146a432200840c496582
           test "$(tree_sha archiver)" = fa6e7016de5c3d2717d9b6bc87107b73b27d31a9
-          test "$(tree_sha elf)" = 1d80fb5be97bbaff99c6512e7b3430f348954793
+          test "$(tree_sha elf)" = 2886d1eeef99c0a7fc1b9efb88d137575a5103be
+          test "$(tree_sha linker)" = 4f5cbe192484c167687a89d533d5cc9a27c49f64
           test "$(tree_sha tools/minic-nm)" = 99ce3ef90f35a06f7ed7366a25b4db445c93ab9d
-          test "$(tree_sha tools/minic-objcopy)" = 6b93a114043f4a6b1e61c107a745f65e875809d6
+          test "$(tree_sha tools/minic-objcopy)" = 77e6add1cc173c7ae30d60c19734bd4599269184
+          test "$(tree_sha tools/minic-ld)" = 5a7b7d6a7115bb7f341b961dd91f88cd38a97e2a
 
-          echo "STATIC_COMPONENT_TREE=PASS pp=c10e0763 compiler=b994f2ef src=3d686956 as=8522270c ar=fa6e7016 elf=1d80fb5b nm=99ce3ef9 objcopy=6b93a114"
+          echo "STATIC_COMPONENT_TREE=PASS pp=c10e0763 compiler=b994f2ef src=3d686956 as=8522270c ar=fa6e7016 elf=2886d1ee linker=4f5cbe19 nm=99ce3ef9 objcopy=77e6add1 ld=5a7b7d6a"
 
       - name: Install RV64 smoke prerequisites
         run: |
@@ -82,4 +84,4 @@ jobs:
 
       - name: Freeze core audit marker
         run: |
-          echo "STATIC_READINESS_CORE=PASS head=$GITHUB_SHA pp=3352-exact-frozen cc=v1-frozen as=m0-minielf-frozen ar=linux-minielf-frozen nm=m0-a1-frozen objcopy=linux-binary-m0-frozen elf=reader+rel-writer+binary-export-frozen ld=static-a3"
+          echo "STATIC_READINESS_CORE=PASS head=$GITHUB_SHA pp=3352-exact-frozen cc=v1-frozen as=m0-minielf-frozen ar=linux-minielf-frozen nm=m0-a1-frozen objcopy=linux-rewrite-frozen elf=shared-reader-writer-frozen ld=musl-shared-runtime-frozen"
