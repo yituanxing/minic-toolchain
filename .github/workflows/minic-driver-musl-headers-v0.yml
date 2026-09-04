@@ -1,0 +1,204 @@
+name: MiniC Driver Musl Headers V0
+
+on:
+  push:
+    branches:
+      - "toolchain/minic-driver-musl-headers-v0"
+  pull_request:
+    branches:
+      - "toolchain/static-readiness"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  driver-musl-headers-v0:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Install RV64 musl prerequisites
+        run: |
+          timeout 240s sudo apt-get -o Acquire::Retries=3 update
+          timeout 240s sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            build-essential gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
+            libc6-riscv64-cross libc6-dev-riscv64-cross qemu-user \
+            curl ca-certificates python3
+
+      - name: Build current toolchain and driver
+        run: |
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/driver-musl-headers-v0 all
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/driver-musl-headers-v0 check-minild-a6
+
+      - name: Build pristine musl and MiniLD loader
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/driver-musl-headers-v0"
+          mkdir -p "$work"
+          curl -fsSL https://musl.libc.org/releases/musl-1.2.5.tar.gz \
+            -o "$work/musl-1.2.5.tar.gz"
+          printf '%s  %s\n' \
+            a9a118bbe84d8764da0ea0d28b3ab3fae8477fc7e4085d90102b8596fc7c75e4 \
+            "$work/musl-1.2.5.tar.gz" | sha256sum -c -
+          tar -xzf "$work/musl-1.2.5.tar.gz" -C "$work"
+
+          src="$work/musl-1.2.5"
+          out="$work/musl-build"
+          mkdir -p "$out"
+          cd "$out"
+          CC=riscv64-linux-gnu-gcc \
+          AR=riscv64-linux-gnu-ar \
+          RANLIB=riscv64-linux-gnu-ranlib \
+            "$src/configure" \
+              --target=riscv64-linux-gnu \
+              --enable-shared \
+              --prefix=/usr \
+            >"$work/configure.log" 2>&1
+
+          make -j4 V=1 lib/libc.so lib/Scrt1.o lib/crti.o lib/crtn.o \
+            >"$work/make.log" 2>&1
+
+          sysroot="$work/musl-sysroot"
+          mkdir -p "$sysroot"
+          make DESTDIR="$sysroot" install-headers >>"$work/make.log" 2>&1
+          mkdir -p "$sysroot/usr/lib"
+          cp "$out/lib/Scrt1.o" "$out/lib/crti.o" "$out/lib/crtn.o" "$sysroot/usr/lib/"
+          cp "$out/lib/libc.so" "$sysroot/usr/lib/libc.so"
+          test -s "$sysroot/usr/include/stdlib.h"
+          test -s "$sysroot/usr/include/unistd.h"
+          test -s "$sysroot/usr/lib/libc.so"
+
+          python3 - "$work/make.log" "$work/input-list.txt" <<'PY'
+          import shlex, sys
+          lines=open(sys.argv[1], encoding="utf-8", errors="replace").read().splitlines()
+          for i,line in enumerate(lines):
+              if " -nostdlib -shared " not in line:
+                  continue
+              full=line.rstrip()
+              j=i+1
+              while full.endswith("\\") and j < len(lines):
+                  full=full[:-1] + " " + lines[j].strip()
+                  j += 1
+              words=shlex.split(full)
+              objs=[w for w in words if w.endswith(".lo")]
+              if len(objs) >= 1000:
+                  open(sys.argv[2],"w").write("\n".join(objs)+"\n")
+                  print("DYNEXEC_MUSL_LINK_OBJECTS=%d" % len(objs))
+                  break
+          else:
+              raise SystemExit("shared musl link command not found")
+          PY
+
+          minild="$GITHUB_WORKSPACE/build/driver-musl-headers-v0/bin/minic-ld"
+          dynamic_list="$src/dynamic.list"
+          libgcc="$(riscv64-linux-gnu-gcc -print-libgcc-file-name)"
+          libgcc_eh="$(riscv64-linux-gnu-gcc -print-file-name=libgcc_eh.a)"
+          mapfile -t rel_inputs <"$work/input-list.txt"
+          inputs=()
+          for p in "${rel_inputs[@]}"; do
+            inputs+=("$out/$p")
+          done
+
+          "$minild" -melf64lriscv -shared -e _dlstart \
+            --dynamic-list="$dynamic_list" \
+            -o "$work/libc-minild.so" \
+            "${inputs[@]}" "$libgcc" "$libgcc_eh"
+
+          chmod +x "$work/libc-minild.so"
+          set +e
+          qemu-riscv64 "$work/libc-minild.so" \
+            >"$work/loader.stdout" 2>"$work/loader.stderr"
+          loader_rc=$?
+          set -e
+          test "$loader_rc" -eq 1
+          echo "DYNEXEC_MINILD_LOADER=PASS rc=$loader_rc"
+
+      - name: Compile real musl-header C program through minic driver
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/driver-musl-headers-v0"
+          out="$work/musl-build"
+          sysroot="$work/musl-sysroot"
+          driver="$work/bin/minic"
+
+          cat >"$work/app.c" <<'C'
+          #include <stdio.h>
+          #include <stdlib.h>
+
+          int main(void)
+          {
+              void *p;
+
+              p = malloc(8);
+              if (!p) return 2;
+              free(p);
+              if (printf("MINIC_PRINTF_%d\n", 42) < 0) return 3;
+              return 0;
+          }
+          C
+
+          set +e
+          "$driver" --sysroot "$sysroot/usr" -o "$work/app-minic" "$work/app.c" \
+            >"$work/app-minic.stdout" 2>"$work/app-minic.stderr"
+          driver_rc=$?
+          set -e
+          echo "MINIC_MUSL_HEADERS_DRIVER_RC=$driver_rc"
+          cat "$work/app-minic.stdout"
+          cat "$work/app-minic.stderr"
+          test "$driver_rc" -eq 0
+
+          test -x "$work/app-minic"
+          riscv64-linux-gnu-readelf -h "$work/app-minic" >"$work/app-minic.header"
+          riscv64-linux-gnu-readelf -lW "$work/app-minic" >"$work/app-minic.programs"
+          riscv64-linux-gnu-readelf -d "$work/app-minic" >"$work/app-minic.dynamic"
+
+          grep -q 'DYN (Position-Independent Executable file)' "$work/app-minic.header"
+          grep -q 'Requesting program interpreter: /lib/ld-musl-riscv64.so.1' "$work/app-minic.programs"
+          grep -q '(NEEDED).*\[libc.so\]' "$work/app-minic.dynamic"
+
+          mkdir -p "$sysroot/lib"
+          cp "$work/libc-minild.so" "$sysroot/lib/ld-musl-riscv64.so.1"
+          cp "$work/libc-minild.so" "$sysroot/lib/libc.so"
+          chmod +x "$sysroot/lib/ld-musl-riscv64.so.1" "$sysroot/lib/libc.so"
+
+          set +e
+          timeout 5s qemu-riscv64 -L "$sysroot" "$work/app-minic" \
+            >"$work/direct.stdout" 2>"$work/direct.stderr"
+          direct_rc=$?
+          set -e
+          echo "MINIC_MUSL_HEADERS_DIRECT_RC=$direct_rc"
+          cat "$work/direct.stdout"
+          cat "$work/direct.stderr"
+          test "$direct_rc" -eq 0
+          grep -qx 'MINIC_PRINTF_42' "$work/direct.stdout"
+          echo "MINIC_DRIVER_MUSL_PRINTF_V0=PASS headers=stdio.h,stdlib.h variadic_call=printf rv64_abi=PASS pipeline=cpp,cc,as,ld direct_qemu=PASS"
+
+      - name: Preserve driver evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: minic-driver-musl-headers-v0
+          path: |
+            build/driver-musl-headers-v0/configure.log
+            build/driver-musl-headers-v0/make.log
+            build/driver-musl-headers-v0/input-list.txt
+            build/driver-musl-headers-v0/loader.stdout
+            build/driver-musl-headers-v0/loader.stderr
+            build/driver-musl-headers-v0/app.c
+            build/driver-musl-headers-v0/app-minic.stdout
+            build/driver-musl-headers-v0/app-minic.stderr
+            build/driver-musl-headers-v0/app-minic.header
+            build/driver-musl-headers-v0/app-minic.programs
+            build/driver-musl-headers-v0/app-minic.dynamic
+            build/driver-musl-headers-v0/app.stdout
+            build/driver-musl-headers-v0/app.stderr
+            build/driver-musl-headers-v0/direct.stdout
+            build/driver-musl-headers-v0/direct.stderr
+          if-no-files-found: ignore
+          retention-days: 3
