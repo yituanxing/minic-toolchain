@@ -69,6 +69,7 @@ if "$minic" -S "$work/undefined.c" -o "$work/undefined.s"     >"$work/undefined.
     printf '%s\n' 'FAIL compiler/c0/gnu-function-copy-alias step=undefined-unexpected-success' >&2
     exit 1
 fi
-require_text "$work/undefined.err"     'parsed AST violates compiler contracts' undefined-diagnostic
+require_text "$work/undefined.err"     'parsed AST contract failed at function' undefined-contract
+require_text "$work/undefined.err"     'invalid function metadata or signature' undefined-diagnostic
 
 printf '%s\n' 'PASS compiler/c0/gnu-function-copy-alias'
