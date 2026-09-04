@@ -154,6 +154,7 @@ jobs:
           riscv64-linux-gnu-readelf -Ws "$work/app-minild" >"$work/app-minild.symbols"
 
           grep -q 'DYN (Position-Independent Executable file)' "$work/app-minild.header"
+          grep -q '^[[:space:]]*PHDR[[:space:]]' "$work/app-minild.programs"
           grep -q 'Requesting program interpreter: /lib/ld-musl-riscv64.so.1' "$work/app-minild.programs"
           grep -q '(NEEDED).*\[libc.so\]' "$work/app-minild.dynamic"
           grep -q '(FLAGS_1).*PIE' "$work/app-minild.dynamic"
