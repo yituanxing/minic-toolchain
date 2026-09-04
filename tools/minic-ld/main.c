@@ -2,6 +2,7 @@
 
 #include <stdbool.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 static bool has_archive_suffix(const char *path) {
@@ -13,10 +14,83 @@ static bool has_archive_suffix(const char *path) {
 }
 
 
+static bool file_exists(const char *path) {
+    FILE *file = fopen(path, "rb");
+
+    if (file == NULL) {
+        return false;
+    }
+    (void)fclose(file);
+    return true;
+}
+
+static char *library_candidate(const char *directory,
+                               const char *name,
+                               const char *suffix) {
+    size_t directory_size = strlen(directory);
+    size_t name_size = strlen(name);
+    size_t suffix_size = strlen(suffix);
+    bool slash = directory_size != 0U &&
+                 directory[directory_size - 1U] != '/';
+    size_t total;
+    char *path;
+
+    if (directory_size > SIZE_MAX - name_size - suffix_size - 5U) {
+        return NULL;
+    }
+    total = directory_size + (slash ? 1U : 0U) +
+            3U + name_size + suffix_size + 1U;
+    path = malloc(total);
+    if (path == NULL) {
+        return NULL;
+    }
+    (void)snprintf(path,
+                   total,
+                   "%s%slib%s%s",
+                   directory,
+                   slash ? "/" : "",
+                   name,
+                   suffix);
+    return path;
+}
+
+static char *find_library(const char *const *directories,
+                          size_t directory_count,
+                          const char *name,
+                          bool static_only) {
+    size_t i;
+
+    for (i = 0U; i < directory_count; ++i) {
+        char *candidate;
+
+        if (!static_only) {
+            candidate = library_candidate(directories[i], name, ".so");
+            if (candidate == NULL) {
+                return NULL;
+            }
+            if (file_exists(candidate)) {
+                return candidate;
+            }
+            free(candidate);
+        }
+
+        candidate = library_candidate(directories[i], name, ".a");
+        if (candidate == NULL) {
+            return NULL;
+        }
+        if (file_exists(candidate)) {
+            return candidate;
+        }
+        free(candidate);
+    }
+    return NULL;
+}
+
 static void usage(FILE *out, const char *argv0) {
     fprintf(out,
             "usage: %s [-r|-static|-shared|-pie] -o OUTPUT [-e SYMBOL] [-soname NAME] "
             "[--dynamic-list FILE] [--needed NAME] [--dynamic-linker PATH] "
+            "[-L DIR] [-l NAME] "
             "[--whole-archive ARCHIVE --no-whole-archive] "
             "[--start-group ARCHIVE --end-group] INPUT...\n",
             argv0);
@@ -31,7 +105,11 @@ int main(int argc, char **argv) {
     const char *needed_name = NULL;
     const char *interpreter_path = NULL;
     MiniLdInput inputs[4096];
+    const char *library_dirs[256];
+    char *owned_library_inputs[4096];
     size_t input_count = 0U;
+    size_t library_dir_count = 0U;
+    size_t owned_library_input_count = 0U;
     bool relocatable = false;
     bool static_link = false;
     bool shared_link = false;
@@ -51,6 +129,30 @@ int main(int argc, char **argv) {
     }
 
     for (i = 1; i < argc; ++i) {
+        const char *directory = NULL;
+
+        if (strcmp(argv[i], "-L") == 0) {
+            if (i + 1 >= argc) {
+                usage(stderr, argv[0]);
+                return 2;
+            }
+            directory = argv[++i];
+        } else if (strncmp(argv[i], "-L", 2U) == 0 &&
+                   argv[i][2] != '\0') {
+            directory = argv[i] + 2U;
+        }
+        if (directory != NULL) {
+            if (*directory == '\0' ||
+                library_dir_count ==
+                    sizeof(library_dirs) / sizeof(library_dirs[0])) {
+                fprintf(stderr, "minic-ld: invalid-library-path\n");
+                return 2;
+            }
+            library_dirs[library_dir_count++] = directory;
+        }
+    }
+
+    for (i = 1; i < argc; ++i) {
         if (strcmp(argv[i], "-r") == 0) {
             relocatable = true;
         } else if (strcmp(argv[i], "-static") == 0) {
@@ -59,6 +161,52 @@ int main(int argc, char **argv) {
             shared_link = true;
         } else if (strcmp(argv[i], "-pie") == 0) {
             pie_link = true;
+        } else if (strcmp(argv[i], "-L") == 0) {
+            if (++i >= argc) {
+                usage(stderr, argv[0]);
+                return 2;
+            }
+        } else if (strncmp(argv[i], "-L", 2U) == 0 &&
+                   argv[i][2] != '\0') {
+            continue;
+        } else if (strcmp(argv[i], "-l") == 0 ||
+                   (strncmp(argv[i], "-l", 2U) == 0 &&
+                    argv[i][2] != '\0')) {
+            const char *name;
+            char *path;
+
+            if (strcmp(argv[i], "-l") == 0) {
+                if (++i >= argc) {
+                    usage(stderr, argv[0]);
+                    return 2;
+                }
+                name = argv[i];
+            } else {
+                name = argv[i] + 2U;
+            }
+            if (*name == '\0' ||
+                input_count == sizeof(inputs) / sizeof(inputs[0])) {
+                fprintf(stderr, "minic-ld: invalid-library:%s\n", name);
+                return 2;
+            }
+            path = find_library(library_dirs,
+                                library_dir_count,
+                                name,
+                                static_link);
+            if (path == NULL) {
+                fprintf(stderr,
+                        "minic-ld: cannot-find-library:%s\n",
+                        name);
+                return 2;
+            }
+            owned_library_inputs[owned_library_input_count++] = path;
+            inputs[input_count].path = path;
+            inputs[input_count].kind =
+                has_archive_suffix(path)
+                    ? (whole_archive ? MINILD_INPUT_WHOLE_ARCHIVE
+                                     : MINILD_INPUT_ARCHIVE)
+                    : MINILD_INPUT_OBJECT;
+            ++input_count;
         } else if (strcmp(argv[i], "--dynamic-linker") == 0 ||
                    strcmp(argv[i], "-dynamic-linker") == 0) {
             if (++i >= argc) {
