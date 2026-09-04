@@ -144,7 +144,7 @@ jobs:
             -o "$work/app-minild" \
             "$out/lib/Scrt1.o" "$out/lib/crti.o" \
             "$work/app.o" "$out/lib/crtn.o" \
-            "$out/lib/libc.so" \
+            -L"$out/lib" -lc \
             >"$work/app-minild.stdout" 2>"$work/app-minild.stderr"
 
           riscv64-linux-gnu-readelf -h "$work/app-minild" >"$work/app-minild.header"
@@ -194,7 +194,7 @@ jobs:
           test "$direct_rc" -eq 0
           cmp "$work/app.stdout" "$work/direct.stdout"
           grep -qx 'MINILD_DYNAMIC_EXEC_OK' "$work/direct.stdout"
-          echo "MINILD_DSO_INPUT_V0=PASS producer=MiniLD dso_input=libc.so needed=automatic direct_qemu=PASS libc_calls=malloc,write,free"
+          echo "MINILD_DSO_INPUT_V1=PASS producer=MiniLD library_search=-L,-l dso_input=libc.so needed=automatic direct_qemu=PASS libc_calls=malloc,write,free"
 
       - name: Preserve dynamic executable evidence
         if: always()
