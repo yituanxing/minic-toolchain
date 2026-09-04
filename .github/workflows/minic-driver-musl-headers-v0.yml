@@ -179,6 +179,65 @@ jobs:
           grep -qx 'MINIC_PRINTF_42' "$work/direct.stdout"
           echo "MINIC_DRIVER_MUSL_PRINTF_V0=PASS headers=stdio.h,stdlib.h variadic_call=printf rv64_abi=PASS pipeline=cpp,cc,as,ld direct_qemu=PASS"
 
+      - name: Validate multi-input C and archive driver link
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/driver-musl-headers-v0"
+          sysroot="$work/musl-sysroot"
+          driver="$work/bin/minic"
+          miniar="$work/bin/minic-ar"
+
+          cat >"$work/multi-helper.c" <<'C'
+          int helper_value(void)
+          {
+              return 40;
+          }
+          C
+
+          cat >"$work/multi-archive.c" <<'C'
+          int archive_value(void)
+          {
+              return 2;
+          }
+          C
+
+          cat >"$work/multi-main.c" <<'C'
+          #include <stdio.h>
+
+          int helper_value(void);
+          int archive_value(void);
+
+          int main(void)
+          {
+              int value = helper_value() + archive_value();
+
+              if (printf("MINIC_MULTI_%d\n", value) < 0) return 3;
+              return value == 42 ? 0 : 4;
+          }
+          C
+
+          "$driver" --sysroot "$sysroot/usr" -c             "$work/multi-archive.c" -o "$work/multi-archive.o"
+          "$miniar" rcs "$work/libmulti_extra.a" "$work/multi-archive.o"
+
+          "$driver" --sysroot "$sysroot/usr"             -L"$work" -lmulti_extra             "$work/multi-main.c" "$work/multi-helper.c"             -o "$work/multi-app"
+
+          test -x "$work/multi-app"
+          riscv64-linux-gnu-readelf -h "$work/multi-app" >"$work/multi-app.header"
+          riscv64-linux-gnu-readelf -d "$work/multi-app" >"$work/multi-app.dynamic"
+          grep -q 'DYN (Position-Independent Executable file)' "$work/multi-app.header"
+          grep -q '(NEEDED).*\[libc.so\]' "$work/multi-app.dynamic"
+
+          set +e
+          timeout 5s qemu-riscv64 -L "$sysroot" "$work/multi-app"             >"$work/multi-app.stdout" 2>"$work/multi-app.stderr"
+          rc=$?
+          set -e
+          cat "$work/multi-app.stdout"
+          cat "$work/multi-app.stderr"
+          test "$rc" -eq 0
+          grep -qx 'MINIC_MULTI_42' "$work/multi-app.stdout"
+          echo "MINIC_DRIVER_MULTIINPUT_V0=PASS c_inputs=2 archive=1 L_l=PASS qemu=PASS"
+
       - name: Preserve driver evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -200,5 +259,12 @@ jobs:
             build/driver-musl-headers-v0/app.stderr
             build/driver-musl-headers-v0/direct.stdout
             build/driver-musl-headers-v0/direct.stderr
+            build/driver-musl-headers-v0/multi-main.c
+            build/driver-musl-headers-v0/multi-helper.c
+            build/driver-musl-headers-v0/multi-archive.c
+            build/driver-musl-headers-v0/multi-app.stdout
+            build/driver-musl-headers-v0/multi-app.stderr
+            build/driver-musl-headers-v0/multi-app.header
+            build/driver-musl-headers-v0/multi-app.dynamic
           if-no-files-found: ignore
           retention-days: 3
