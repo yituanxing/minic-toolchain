@@ -10,6 +10,10 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+#define MINIC_DRIVER_MAX_INPUTS 128U
+#define MINIC_DRIVER_MAX_FORWARD_OPTIONS 128U
+#define MINIC_DRIVER_MAX_LINK_ARGUMENTS 512U
+
 typedef enum MinicDriverMode {
     MINIC_DRIVER_LINK,
     MINIC_DRIVER_COMPILE,
@@ -47,7 +51,8 @@ static void append_rv64_linux_musl_predefines(char **arguments,
 static void usage(FILE *out, const char *argv0) {
     fprintf(out,
             "usage: %s [-S|-c] [--sysroot DIR] [-DNAME[=VALUE]] [-UNAME] "
-            "[-IDIR] [-isystem DIR] [-include FILE] -o OUTPUT INPUT\n",
+            "[-IDIR] [-isystem DIR] [-include FILE] [-LDIR] [-lNAME] "
+            "-o OUTPUT INPUT...\n",
             argv0);
 }
 
@@ -142,46 +147,167 @@ static int run_tool(char *const arguments[]) {
     return 1;
 }
 
-static bool make_temp(char *path) {
-    int descriptor = mkstemp(path);
+static char *make_temp_path(const char *pattern) {
+    char *path = duplicate_text(pattern);
+    int descriptor;
 
+    if (path == NULL) {
+        fprintf(stderr, "minic: out-of-memory:temp-path\n");
+        return NULL;
+    }
+    descriptor = mkstemp(path);
     if (descriptor < 0) {
         perror("minic: mkstemp");
-        return false;
+        free(path);
+        return NULL;
     }
     if (close(descriptor) != 0) {
         perror("minic: close");
         (void)unlink(path);
+        free(path);
+        return NULL;
+    }
+    return path;
+}
+
+static bool has_suffix(const char *path, const char *suffix) {
+    size_t path_size;
+    size_t suffix_size;
+
+    if (path == NULL || suffix == NULL) {
         return false;
     }
+    path_size = strlen(path);
+    suffix_size = strlen(suffix);
+    return path_size >= suffix_size &&
+           memcmp(path + path_size - suffix_size, suffix, suffix_size) == 0;
+}
+
+static int compile_c_to_object(const char *input,
+                               const char *output,
+                               const char *sysroot,
+                               const char *const *cpp_forward,
+                               size_t cpp_forward_count,
+                               char *cpp,
+                               char *cc,
+                               char *as) {
+    char *include_dir = NULL;
+    char *temp_i = NULL;
+    char *temp_s = NULL;
+    int status = 1;
+
+    temp_i = make_temp_path("/tmp/minic-driver-i-XXXXXX");
+    temp_s = make_temp_path("/tmp/minic-driver-s-XXXXXX");
+    if (temp_i == NULL || temp_s == NULL) {
+        goto done;
+    }
+
+    {
+        char *arguments[256];
+        size_t count = 0U;
+        size_t index;
+
+        arguments[count++] = cpp;
+        arguments[count++] = "-E";
+        arguments[count++] = "-P";
+        arguments[count++] = "-undef";
+        arguments[count++] = "-nostdinc";
+        append_rv64_linux_musl_predefines(arguments, &count);
+        if (sysroot != NULL && sysroot[0] != '\0') {
+            include_dir = join_path(sysroot, "include");
+            if (include_dir == NULL) {
+                fprintf(stderr, "minic: out-of-memory:include-path\n");
+                goto done;
+            }
+            arguments[count++] = "-isystem";
+            arguments[count++] = include_dir;
+        }
+        for (index = 0U; index < cpp_forward_count; ++index) {
+            arguments[count++] = (char *)cpp_forward[index];
+        }
+        arguments[count++] = "-o";
+        arguments[count++] = temp_i;
+        arguments[count++] = (char *)input;
+        arguments[count] = NULL;
+
+        status = run_tool(arguments);
+        if (status != 0) {
+            goto done;
+        }
+    }
+
+    {
+        char *arguments[] = {cc, "-S", temp_i, "-o", temp_s, NULL};
+
+        status = run_tool(arguments);
+        if (status != 0) {
+            goto done;
+        }
+    }
+
+    {
+        char *arguments[] = {
+            as,
+            "-march=rv64gc",
+            "-mabi=lp64d",
+            "-o",
+            (char *)output,
+            temp_s,
+            NULL
+        };
+
+        status = run_tool(arguments);
+    }
+
+done:
+    if (temp_i != NULL) {
+        (void)unlink(temp_i);
+    }
+    if (temp_s != NULL) {
+        (void)unlink(temp_s);
+    }
+    free(temp_i);
+    free(temp_s);
+    free(include_dir);
+    return status;
+}
+
+static bool append_forward_option(const char **options,
+                                  size_t *count,
+                                  const char *value) {
+    if (*count >= MINIC_DRIVER_MAX_FORWARD_OPTIONS) {
+        fprintf(stderr, "minic: too-many-forward-options\n");
+        return false;
+    }
+    options[(*count)++] = value;
     return true;
 }
 
 int main(int argc, char **argv) {
-    const char *input = NULL;
+    const char *inputs[MINIC_DRIVER_MAX_INPUTS];
+    size_t input_count = 0U;
     const char *output = NULL;
     const char *sysroot = NULL;
-    const char *cpp_forward[128];
+    const char *cpp_forward[MINIC_DRIVER_MAX_FORWARD_OPTIONS];
     size_t cpp_forward_count = 0U;
+    const char *ld_forward[MINIC_DRIVER_MAX_FORWARD_OPTIONS];
+    size_t ld_forward_count = 0U;
     MinicDriverMode mode = MINIC_DRIVER_LINK;
     char *cpp = NULL;
     char *cc = NULL;
     char *as = NULL;
     char *ld = NULL;
-    char *include_dir = NULL;
     char *lib_dir = NULL;
     char *scrt1 = NULL;
     char *crti = NULL;
     char *crtn = NULL;
     char *library_option = NULL;
-    char temp_i[] = "/tmp/minic-driver-i-XXXXXX";
-    char temp_s[] = "/tmp/minic-driver-s-XXXXXX";
-    char temp_o[] = "/tmp/minic-driver-o-XXXXXX";
-    bool have_i = false;
-    bool have_s = false;
-    bool have_o = false;
+    char *temporary_objects[MINIC_DRIVER_MAX_INPUTS];
+    size_t temporary_object_count = 0U;
     int index;
     int status = 1;
+
+    (void)memset(temporary_objects, 0, sizeof(temporary_objects));
 
     for (index = 1; index < argc; ++index) {
         const char *argument = argv[index];
@@ -213,39 +339,55 @@ int main(int argc, char **argv) {
                    strncmp(argument, "-I", 2U) == 0) {
             if (argument[2] == '\0') {
                 if (index + 1 >= argc ||
-                    cpp_forward_count + 2U >
-                        sizeof(cpp_forward) / sizeof(cpp_forward[0])) {
+                    !append_forward_option(cpp_forward,
+                                           &cpp_forward_count,
+                                           argument) ||
+                    !append_forward_option(cpp_forward,
+                                           &cpp_forward_count,
+                                           argv[++index])) {
                     usage(stderr, argv[0]);
                     return 2;
                 }
-                cpp_forward[cpp_forward_count++] = argument;
-                cpp_forward[cpp_forward_count++] = argv[++index];
-            } else {
-                if (cpp_forward_count ==
-                    sizeof(cpp_forward) / sizeof(cpp_forward[0])) {
-                    fprintf(stderr, "minic: too-many-cpp-options\n");
-                    return 2;
-                }
-                cpp_forward[cpp_forward_count++] = argument;
+            } else if (!append_forward_option(
+                           cpp_forward, &cpp_forward_count, argument)) {
+                return 2;
             }
         } else if (strcmp(argument, "-isystem") == 0 ||
                    strcmp(argument, "-include") == 0) {
             if (index + 1 >= argc ||
-                cpp_forward_count + 2U >
-                    sizeof(cpp_forward) / sizeof(cpp_forward[0])) {
+                !append_forward_option(
+                    cpp_forward, &cpp_forward_count, argument) ||
+                !append_forward_option(
+                    cpp_forward, &cpp_forward_count, argv[++index])) {
                 usage(stderr, argv[0]);
                 return 2;
             }
-            cpp_forward[cpp_forward_count++] = argument;
-            cpp_forward[cpp_forward_count++] = argv[++index];
         } else if (strncmp(argument, "-isystem", 8U) == 0 &&
                    argument[8] != '\0') {
-            if (cpp_forward_count ==
-                sizeof(cpp_forward) / sizeof(cpp_forward[0])) {
-                fprintf(stderr, "minic: too-many-cpp-options\n");
+            if (!append_forward_option(
+                    cpp_forward, &cpp_forward_count, argument)) {
                 return 2;
             }
-            cpp_forward[cpp_forward_count++] = argument;
+        } else if (strcmp(argument, "-L") == 0 ||
+                   strcmp(argument, "-l") == 0) {
+            if (index + 1 >= argc ||
+                !append_forward_option(ld_forward,
+                                       &ld_forward_count,
+                                       argument) ||
+                !append_forward_option(ld_forward,
+                                       &ld_forward_count,
+                                       argv[++index])) {
+                usage(stderr, argv[0]);
+                return 2;
+            }
+        } else if ((strncmp(argument, "-L", 2U) == 0 ||
+                    strncmp(argument, "-l", 2U) == 0) &&
+                   argument[2] != '\0') {
+            if (!append_forward_option(ld_forward,
+                                       &ld_forward_count,
+                                       argument)) {
+                return 2;
+            }
         } else if (strcmp(argument, "-h") == 0 ||
                    strcmp(argument, "--help") == 0) {
             usage(stdout, argv[0]);
@@ -253,16 +395,25 @@ int main(int argc, char **argv) {
         } else if (argument[0] == '-') {
             fprintf(stderr, "minic: unsupported-option:%s\n", argument);
             return 2;
-        } else if (input == NULL) {
-            input = argument;
         } else {
-            fprintf(stderr, "minic: multiple-inputs\n");
-            return 2;
+            if (input_count >= MINIC_DRIVER_MAX_INPUTS) {
+                fprintf(stderr, "minic: too-many-inputs\n");
+                return 2;
+            }
+            inputs[input_count++] = argument;
         }
     }
 
-    if (input == NULL || output == NULL) {
+    if (input_count == 0U || output == NULL) {
         usage(stderr, argv[0]);
+        return 2;
+    }
+    if (mode != MINIC_DRIVER_LINK && input_count != 1U) {
+        fprintf(stderr, "minic: -S-and--c-require-one-input\n");
+        return 2;
+    }
+    if (mode != MINIC_DRIVER_LINK && ld_forward_count != 0U) {
+        fprintf(stderr, "minic: linker-options-require-link-mode\n");
         return 2;
     }
     if (sysroot == NULL) {
@@ -286,101 +437,23 @@ int main(int argc, char **argv) {
 
     if (mode == MINIC_DRIVER_ASSEMBLY) {
         char *cc_arguments[] = {
-            cc, "-S", (char *)input, "-o", (char *)output, NULL
+            cc, "-S", (char *)inputs[0], "-o", (char *)output, NULL
         };
 
         status = run_tool(cc_arguments);
         goto done;
     }
 
-    if (!make_temp(temp_i)) {
-        goto done;
-    }
-    have_i = true;
-    if (!make_temp(temp_s)) {
-        goto done;
-    }
-    have_s = true;
-
-    {
-        char *arguments[256];
-        size_t count = 0U;
-        size_t i;
-
-        arguments[count++] = cpp;
-        arguments[count++] = "-E";
-        arguments[count++] = "-P";
-        arguments[count++] = "-undef";
-        arguments[count++] = "-nostdinc";
-        append_rv64_linux_musl_predefines(arguments, &count);
-        if (sysroot != NULL && sysroot[0] != '\0') {
-            include_dir = join_path(sysroot, "include");
-            if (include_dir == NULL) {
-                fprintf(stderr, "minic: out-of-memory:include-path\n");
-                goto done;
-            }
-            arguments[count++] = "-isystem";
-            arguments[count++] = include_dir;
-        }
-        for (i = 0U; i < cpp_forward_count; ++i) {
-            arguments[count++] = (char *)cpp_forward[i];
-        }
-        arguments[count++] = "-o";
-        arguments[count++] = temp_i;
-        arguments[count++] = (char *)input;
-        arguments[count] = NULL;
-
-        status = run_tool(arguments);
-        if (status != 0) {
-            goto done;
-        }
-    }
-
-    {
-        char *arguments[] = {
-            cc, "-S", temp_i, "-o", temp_s, NULL
-        };
-
-        status = run_tool(arguments);
-        if (status != 0) {
-            goto done;
-        }
-    }
-
     if (mode == MINIC_DRIVER_COMPILE) {
-        char *arguments[] = {
-            as,
-            "-march=rv64gc",
-            "-mabi=lp64d",
-            "-o",
-            (char *)output,
-            temp_s,
-            NULL
-        };
-
-        status = run_tool(arguments);
+        status = compile_c_to_object(inputs[0],
+                                     output,
+                                     sysroot,
+                                     cpp_forward,
+                                     cpp_forward_count,
+                                     cpp,
+                                     cc,
+                                     as);
         goto done;
-    }
-
-    if (!make_temp(temp_o)) {
-        goto done;
-    }
-    have_o = true;
-    {
-        char *arguments[] = {
-            as,
-            "-march=rv64gc",
-            "-mabi=lp64d",
-            "-o",
-            temp_o,
-            temp_s,
-            NULL
-        };
-
-        status = run_tool(arguments);
-        if (status != 0) {
-            goto done;
-        }
     }
 
     lib_dir = join_path(sysroot, "lib");
@@ -407,23 +480,60 @@ int main(int argc, char **argv) {
     }
 
     {
-        char *arguments[] = {
-            ld,
-            "-melf64lriscv",
-            "-pie",
-            "-e",
-            "_start",
-            "--dynamic-linker=/lib/ld-musl-riscv64.so.1",
-            "-o",
-            (char *)output,
-            scrt1,
-            crti,
-            temp_o,
-            crtn,
-            library_option,
-            "-lc",
-            NULL
-        };
+        char *link_inputs[MINIC_DRIVER_MAX_INPUTS];
+        char *arguments[MINIC_DRIVER_MAX_LINK_ARGUMENTS];
+        size_t link_input_count = 0U;
+        size_t count = 0U;
+        size_t input_index;
+        size_t option_index;
+
+        for (input_index = 0U; input_index < input_count; ++input_index) {
+            if (has_suffix(inputs[input_index], ".c")) {
+                char *object_path =
+                    make_temp_path("/tmp/minic-driver-o-XXXXXX");
+
+                if (object_path == NULL) {
+                    goto done;
+                }
+                temporary_objects[temporary_object_count++] = object_path;
+                status = compile_c_to_object(inputs[input_index],
+                                             object_path,
+                                             sysroot,
+                                             cpp_forward,
+                                             cpp_forward_count,
+                                             cpp,
+                                             cc,
+                                             as);
+                if (status != 0) {
+                    goto done;
+                }
+                link_inputs[link_input_count++] = object_path;
+            } else {
+                link_inputs[link_input_count++] = (char *)inputs[input_index];
+            }
+        }
+
+        arguments[count++] = ld;
+        arguments[count++] = "-melf64lriscv";
+        arguments[count++] = "-pie";
+        arguments[count++] = "-e";
+        arguments[count++] = "_start";
+        arguments[count++] =
+            "--dynamic-linker=/lib/ld-musl-riscv64.so.1";
+        arguments[count++] = "-o";
+        arguments[count++] = (char *)output;
+        arguments[count++] = scrt1;
+        arguments[count++] = crti;
+        for (input_index = 0U; input_index < link_input_count; ++input_index) {
+            arguments[count++] = link_inputs[input_index];
+        }
+        arguments[count++] = crtn;
+        arguments[count++] = library_option;
+        for (option_index = 0U; option_index < ld_forward_count; ++option_index) {
+            arguments[count++] = (char *)ld_forward[option_index];
+        }
+        arguments[count++] = "-lc";
+        arguments[count] = NULL;
 
         status = run_tool(arguments);
         if (status != 0) {
@@ -439,20 +549,18 @@ int main(int argc, char **argv) {
     status = 0;
 
 done:
-    if (have_i) {
-        (void)unlink(temp_i);
-    }
-    if (have_s) {
-        (void)unlink(temp_s);
-    }
-    if (have_o) {
-        (void)unlink(temp_o);
+    while (temporary_object_count != 0U) {
+        char *path = temporary_objects[--temporary_object_count];
+
+        if (path != NULL) {
+            (void)unlink(path);
+            free(path);
+        }
     }
     free(cpp);
     free(cc);
     free(as);
     free(ld);
-    free(include_dir);
     free(lib_dir);
     free(scrt1);
     free(crti);
