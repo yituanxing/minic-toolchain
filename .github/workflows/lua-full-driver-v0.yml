@@ -1,0 +1,57 @@
+name: Lua Full Driver V0
+
+on:
+  push:
+    branches:
+      - "external/lua-full-driver-v0"
+  pull_request:
+    branches:
+      - "toolchain/minic-driver-multiinput-v0"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  lua-frontier:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Install Lua discovery prerequisites
+        run: |
+          timeout 240s sudo apt-get -o Acquire::Retries=3 update
+          timeout 240s sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            build-essential gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
+            libc6-riscv64-cross libc6-dev-riscv64-cross qemu-user \
+            curl ca-certificates python3
+
+      - name: Build current C toolchain
+        run: |
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/lua-full-driver-v0 all
+
+      - name: Measure official Lua 5.5.0 TU frontier
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          MINIC="$GITHUB_WORKSPACE/build/lua-full-driver-v0/bin/minic" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/lua-full-driver-v0/lua-probe" \
+          TARGET_CC=riscv64-linux-gnu-gcc \
+          HOST_CC=cc \
+            sh tests/external/lua/probe.sh 2>&1 | tee build/lua-full-driver-v0/lua-frontier.log
+
+      - name: Preserve Lua frontier evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lua-full-driver-v0-frontier
+          path: |
+            build/lua-full-driver-v0/lua-frontier.log
+            build/lua-full-driver-v0/lua-probe/*.stderr
+            build/lua-full-driver-v0/lua-probe/*.stdout
+            build/lua-full-driver-v0/lua-probe/*.i
+          if-no-files-found: ignore
+          retention-days: 5
