@@ -25,6 +25,7 @@ typedef struct MiniLdSharedOptions {
     const char *soname;
     const char *entry_symbol;
     const char *dynamic_list_path;
+    const char *needed_name;
 } MiniLdSharedOptions;
 
 int minild_link_relocatable_elf64_riscv(const char *output_path,
