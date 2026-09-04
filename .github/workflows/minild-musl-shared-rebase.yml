@@ -111,6 +111,7 @@ jobs:
           work="$GITHUB_WORKSPACE/build/minild-musl-rebase"
           out="$work/musl-build"
           minild="$GITHUB_WORKSPACE/build/minild-musl-rebase/bin/minic-ld"
+          dynamic_list="$work/musl-1.2.5/dynamic.list"
           libgcc="$(riscv64-linux-gnu-gcc -print-libgcc-file-name)"
           libgcc_eh="$(riscv64-linux-gnu-gcc -print-file-name=libgcc_eh.a)"
           mapfile -t rel_inputs <"$work/input-list.txt"
@@ -121,9 +122,11 @@ jobs:
           done
           test -s "$libgcc"
           test -s "$libgcc_eh"
+          test -s "$dynamic_list"
 
           set +e
           "$minild" -melf64lriscv -shared -e _dlstart \
+            --dynamic-list="$dynamic_list" \
             -o "$work/libc-minild.so" \
             "${inputs[@]}" "$libgcc" "$libgcc_eh" \
             >"$work/minild.stdout" 2>"$work/minild.stderr"
@@ -141,6 +144,14 @@ jobs:
           riscv64-linux-gnu-readelf -lW "$work/libc-minild.so" >"$work/minild.programs"
           riscv64-linux-gnu-readelf -Wr "$work/libc-minild.so" >"$work/minild.relocations"
           riscv64-linux-gnu-readelf -d "$work/libc-minild.so" >"$work/minild.dynamic"
+          awk '/R_RISCV_JUMP_SLOT/ {print $5}' "$work/gnu.relocations" |
+            sort -u >"$work/gnu.jump-slot-symbols"
+          awk '/R_RISCV_JUMP_SLOT/ {print $5}' "$work/minild.relocations" |
+            sort -u >"$work/minild.jump-slot-symbols"
+          cmp "$work/gnu.jump-slot-symbols" "$work/minild.jump-slot-symbols"
+          printf 'MINILD_MUSL_PLT_ORACLE=PASS jump_slots=%s\n' \
+            "$(wc -l <"$work/minild.jump-slot-symbols")"
+
           riscv64-linux-gnu-readelf -h "$out/lib/libc.so" >"$work/gnu.header"
           riscv64-linux-gnu-readelf -lW "$out/lib/libc.so" >"$work/gnu.programs"
 
@@ -204,6 +215,8 @@ jobs:
             build/minild-musl-rebase/minild.programs
             build/minild-musl-rebase/minild.relocations
             build/minild-musl-rebase/minild.dynamic
+            build/minild-musl-rebase/gnu.jump-slot-symbols
+            build/minild-musl-rebase/minild.jump-slot-symbols
             build/minild-musl-rebase/gnu.header
             build/minild-musl-rebase/gnu.programs
             build/minild-musl-rebase/reference-loader.stdout
