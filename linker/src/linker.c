@@ -5738,6 +5738,8 @@ static bool shared_patch_final_layout_relocations(
             continue;
         }
         if (reloc->symbol != SIZE_MAX &&
+            reloc->type != R_RISCV_GOT_HI20 &&
+            reloc->type != R_RISCV_TLS_GD_HI20 &&
             (reloc->symbol >= state->symbol_count ||
              !static_resolve_symbol(state,
                                     layout,
