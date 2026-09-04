@@ -125,19 +125,17 @@ jobs:
           driver="$work/bin/minic"
 
           cat >"$work/app.c" <<'C'
+          #include <stdio.h>
           #include <stdlib.h>
-          #include <unistd.h>
 
           int main(void)
           {
               void *p;
-              long written;
 
               p = malloc(8);
               if (!p) return 2;
               free(p);
-              written = write(1, "MINIC_MUSL_HEADERS_OK\n", 22);
-              if (written != 22) return 3;
+              if (puts("MINIC_STDIO_OK") < 0) return 3;
               return 0;
           }
           C
@@ -175,8 +173,8 @@ jobs:
           cat "$work/direct.stdout"
           cat "$work/direct.stderr"
           test "$direct_rc" -eq 0
-          grep -qx 'MINIC_MUSL_HEADERS_OK' "$work/direct.stdout"
-          echo "MINIC_DRIVER_MUSL_HEADERS_V0=PASS headers=stdlib.h,unistd.h pipeline=cpp,cc,as,ld direct_qemu=PASS"
+          grep -qx 'MINIC_STDIO_OK' "$work/direct.stdout"
+          echo "MINIC_DRIVER_MUSL_STDIO_V0=PASS headers=stdio.h,stdlib.h libc_call=puts pipeline=cpp,cc,as,ld direct_qemu=PASS"
 
       - name: Preserve driver evidence
         if: always()
