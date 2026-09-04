@@ -378,6 +378,20 @@ int bitwise_ternary = 0;
 EOF
 run_exact if-bitwise-ternary
 
+cat >"$work/if-prefixed-character.c" <<'EOF'
+#if L'\0' - 1 > 0
+int wide_zero_relation = 0;
+#else
+int wide_zero_relation = 1;
+#endif
+#if L'A' == 65 && u'B' == 66 && U'C' == 67
+int prefixed_character_values = 1;
+#else
+int prefixed_character_values = 0;
+#endif
+EOF
+run_exact if-prefixed-character
+
 cat >"$work/multiline-invocation.c" <<'EOF'
 #define SUM3(a, b, c) ((a) + (b) + (c))
 int multiline_invocation = SUM3(1,
