@@ -21,6 +21,12 @@ typedef struct MiniLdStaticOptions {
     const char *script_path;
 } MiniLdStaticOptions;
 
+typedef struct MiniLdSharedOptions {
+    const char *soname;
+    const char *entry_symbol;
+    const char *dynamic_list_path;
+} MiniLdSharedOptions;
+
 int minild_link_relocatable_elf64_riscv(const char *output_path,
                                         const char *const *input_paths,
                                         size_t input_count,
@@ -43,6 +49,13 @@ int minild_link_static_elf64_riscv_inputs(const char *output_path,
                                           size_t input_count,
                                           const char *entry_symbol,
                                           FILE *diagnostics);
+
+int minild_link_shared_elf64_riscv_inputs_options(
+    const char *output_path,
+    const MiniLdInput *inputs,
+    size_t input_count,
+    const MiniLdSharedOptions *options,
+    FILE *diagnostics);
 
 int minild_link_shared_elf64_riscv_inputs(const char *output_path,
                                           const MiniLdInput *inputs,
