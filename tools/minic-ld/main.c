@@ -106,10 +106,8 @@ int main(int argc, char **argv) {
     const char *interpreter_path = NULL;
     MiniLdInput inputs[4096];
     const char *library_dirs[256];
-    char *owned_library_inputs[4096];
     size_t input_count = 0U;
     size_t library_dir_count = 0U;
-    size_t owned_library_input_count = 0U;
     bool relocatable = false;
     bool static_link = false;
     bool shared_link = false;
@@ -199,7 +197,6 @@ int main(int argc, char **argv) {
                         name);
                 return 2;
             }
-            owned_library_inputs[owned_library_input_count++] = path;
             inputs[input_count].path = path;
             inputs[input_count].kind =
                 has_archive_suffix(path)
