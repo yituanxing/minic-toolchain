@@ -43,6 +43,136 @@ jobs:
           HOST_CC=cc \
             sh tests/external/lua/probe.sh 2>&1 | tee build/lua-full-driver-v0/lua-frontier.log
 
+      - name: Build pristine musl runtime and MiniLD loader
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/lua-full-driver-v0"
+          curl -fsSL https://musl.libc.org/releases/musl-1.2.5.tar.gz             -o "$work/musl-1.2.5.tar.gz"
+          printf '%s  %s\n'             a9a118bbe84d8764da0ea0d28b3ab3fae8477fc7e4085d90102b8596fc7c75e4             "$work/musl-1.2.5.tar.gz" | sha256sum -c -
+          tar -xzf "$work/musl-1.2.5.tar.gz" -C "$work"
+
+          musl_src="$work/musl-1.2.5"
+          musl_out="$work/musl-build"
+          mkdir -p "$musl_out"
+          cd "$musl_out"
+          CC=riscv64-linux-gnu-gcc           AR=riscv64-linux-gnu-ar           RANLIB=riscv64-linux-gnu-ranlib             "$musl_src/configure"               --target=riscv64-linux-gnu               --enable-shared               --prefix=/usr             >"$work/musl-configure.log" 2>&1
+
+          make -j4 V=1 lib/libc.so lib/Scrt1.o lib/crti.o lib/crtn.o             >"$work/musl-make.log" 2>&1
+
+          sysroot="$work/musl-sysroot"
+          mkdir -p "$sysroot"
+          make DESTDIR="$sysroot" install-headers >>"$work/musl-make.log" 2>&1
+          mkdir -p "$sysroot/usr/lib"
+          cp "$musl_out/lib/Scrt1.o" "$musl_out/lib/crti.o" "$musl_out/lib/crtn.o"             "$sysroot/usr/lib/"
+          cp "$musl_out/lib/libc.so" "$sysroot/usr/lib/libc.so"
+
+          python3 - "$work/musl-make.log" "$work/musl-input-list.txt" <<'PY'
+          import shlex, sys
+          lines=open(sys.argv[1], encoding="utf-8", errors="replace").read().splitlines()
+          for i,line in enumerate(lines):
+              if " -nostdlib -shared " not in line:
+                  continue
+              full=line.rstrip()
+              j=i+1
+              while full.endswith("\\") and j < len(lines):
+                  full=full[:-1] + " " + lines[j].strip()
+                  j += 1
+              words=shlex.split(full)
+              objs=[w for w in words if w.endswith(".lo")]
+              if len(objs) >= 1000:
+                  open(sys.argv[2],"w").write("\n".join(objs)+"\n")
+                  print("LUA_MUSL_LINK_OBJECTS=%d" % len(objs))
+                  break
+          else:
+              raise SystemExit("shared musl link command not found")
+          PY
+
+          minild="$GITHUB_WORKSPACE/build/lua-full-driver-v0/bin/minic-ld"
+          libgcc="$(riscv64-linux-gnu-gcc -print-libgcc-file-name)"
+          libgcc_eh="$(riscv64-linux-gnu-gcc -print-file-name=libgcc_eh.a)"
+          mapfile -t rel_inputs <"$work/musl-input-list.txt"
+          inputs=()
+          for p in "${rel_inputs[@]}"; do
+            inputs+=("$musl_out/$p")
+          done
+
+          "$minild" -melf64lriscv -shared -e _dlstart             --dynamic-list="$musl_src/dynamic.list"             -o "$work/libc-minild.so"             "${inputs[@]}" "$libgcc" "$libgcc_eh"
+
+          mkdir -p "$sysroot/lib"
+          cp "$work/libc-minild.so" "$sysroot/lib/ld-musl-riscv64.so.1"
+          cp "$work/libc-minild.so" "$sysroot/lib/libc.so"
+          chmod +x "$sysroot/lib/ld-musl-riscv64.so.1" "$sysroot/lib/libc.so"
+
+      - name: Build official Lua through raw C multi-input driver
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/lua-full-driver-v0"
+          src="$work/lua-probe/lua-5.5.0/src"
+          sysroot="$work/musl-sysroot"
+          driver="$work/bin/minic"
+
+          sources=(
+            lapi.c lcode.c lctype.c ldebug.c ldo.c ldump.c lfunc.c lgc.c
+            llex.c lmem.c lobject.c lopcodes.c lparser.c lstate.c lstring.c
+            ltable.c ltm.c lundump.c lvm.c lzio.c lauxlib.c lbaselib.c
+            lcorolib.c ldblib.c liolib.c lmathlib.c loadlib.c loslib.c
+            lstrlib.c ltablib.c lutf8lib.c linit.c lua.c
+          )
+          inputs=()
+          for source in "${sources[@]}"; do
+            inputs+=("$src/$source")
+          done
+
+          set +e
+          "$driver" --sysroot "$sysroot/usr"             -DLUA_USE_LINUX -I"$src"             -o "$work/lua-minic" "${inputs[@]}"             >"$work/lua-driver.stdout" 2>"$work/lua-driver.stderr"
+          driver_rc=$?
+          set -e
+          echo "LUA_FULL_DRIVER_RC=$driver_rc"
+          cat "$work/lua-driver.stdout"
+          cat "$work/lua-driver.stderr"
+          test "$driver_rc" -eq 0
+          test -x "$work/lua-minic"
+
+          riscv64-linux-gnu-readelf -h "$work/lua-minic" >"$work/lua-minic.header"
+          riscv64-linux-gnu-readelf -lW "$work/lua-minic" >"$work/lua-minic.programs"
+          riscv64-linux-gnu-readelf -d "$work/lua-minic" >"$work/lua-minic.dynamic"
+          grep -q 'DYN (Position-Independent Executable file)' "$work/lua-minic.header"
+          grep -q 'Requesting program interpreter: /lib/ld-musl-riscv64.so.1'             "$work/lua-minic.programs"
+          grep -q '(NEEDED).*\[libc.so\]' "$work/lua-minic.dynamic"
+
+      - name: Run Lua smoke under MiniLD-built musl
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/lua-full-driver-v0"
+          sysroot="$work/musl-sysroot"
+
+          cat >"$work/smoke.lua" <<'LUA'
+          assert(_VERSION == "Lua 5.5")
+          local values = {3, 4, 5}
+          local total = 0
+          for _, value in ipairs(values) do
+              total = total + value
+          end
+          assert(total == 12)
+          assert(string.upper("mini") == "MINI")
+          assert(math.floor(6.9) == 6)
+          io.write("LUA_MINIC_OK\n")
+          LUA
+
+          set +e
+          timeout 10s qemu-riscv64 -L "$sysroot" "$work/lua-minic" "$work/smoke.lua"             >"$work/lua-smoke.stdout" 2>"$work/lua-smoke.stderr"
+          rc=$?
+          set -e
+          echo "LUA_SMOKE_RC=$rc"
+          cat "$work/lua-smoke.stdout"
+          cat "$work/lua-smoke.stderr"
+          test "$rc" -eq 0
+          grep -qx 'LUA_MINIC_OK' "$work/lua-smoke.stdout"
+          echo "LUA_FULL_DRIVER_V0=PASS release=5.5.0 tus=33 pipeline=cpp,cc,as,ld musl=minild qemu=PASS"
+
       - name: Preserve Lua frontier evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -53,5 +183,16 @@ jobs:
             build/lua-full-driver-v0/lua-probe/*.stderr
             build/lua-full-driver-v0/lua-probe/*.stdout
             build/lua-full-driver-v0/lua-probe/*.i
+            build/lua-full-driver-v0/musl-configure.log
+            build/lua-full-driver-v0/musl-make.log
+            build/lua-full-driver-v0/musl-input-list.txt
+            build/lua-full-driver-v0/lua-driver.stdout
+            build/lua-full-driver-v0/lua-driver.stderr
+            build/lua-full-driver-v0/lua-minic.header
+            build/lua-full-driver-v0/lua-minic.programs
+            build/lua-full-driver-v0/lua-minic.dynamic
+            build/lua-full-driver-v0/smoke.lua
+            build/lua-full-driver-v0/lua-smoke.stdout
+            build/lua-full-driver-v0/lua-smoke.stderr
           if-no-files-found: ignore
           retention-days: 5
