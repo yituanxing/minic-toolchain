@@ -26,7 +26,11 @@ if "$minic" -S "$work/invalid_inferred.i" -o "$work/invalid_inferred.s" \
     echo 'FAIL inferred local array without initializer unexpectedly compiled' >&2
     exit 1
 fi
-grep -F 'inferred local array requires an initializer' "$work/invalid_inferred.stderr" >/dev/null
+if ! grep -F 'inferred local array requires an initializer' "$work/invalid_inferred.stderr" >/dev/null; then
+    printf '%s\n' 'FAIL runtime-local-array negative=inferred diagnostic-mismatch' >&2
+    cat "$work/invalid_inferred.stderr" >&2
+    exit 1
+fi
 
 "$host_cc" -E -P -x c "$root/tests/compiler/c0/invalid_local_array_initializer_element.c" \
     -o "$work/invalid_element.i"
@@ -35,5 +39,9 @@ if "$minic" -S "$work/invalid_element.i" -o "$work/invalid_element.s" \
     echo 'FAIL incompatible local array initializer unexpectedly compiled' >&2
     exit 1
 fi
-grep -F 'local array initializer element type does not match element type' "$work/invalid_element.stderr" >/dev/null
+if ! grep -F 'local array initializer element type does not match element type' "$work/invalid_element.stderr" >/dev/null; then
+    printf '%s\n' 'FAIL runtime-local-array negative=element diagnostic-mismatch' >&2
+    cat "$work/invalid_element.stderr" >&2
+    exit 1
+fi
 printf '%s\n' 'PASS compiler/c0/runtime_local_array_initializer negative=inferred-without-init+incompatible-element'
