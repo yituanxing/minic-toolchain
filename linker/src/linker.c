@@ -6530,7 +6530,8 @@ static bool shared_write_object(MiniLdState *state,
                 "minic-ld: invalid-shared-tls-segment-layout\n");
         return false;
     }
-    phnum = (shared->have_interp ? 1U : 0U) +
+    phnum = (shared->pie ? 1U : 0U) +
+            (shared->have_interp ? 1U : 0U) +
             (layout->have_rx ? 1U : 0U) +
             (layout->have_rw ? 1U : 0U) +
             (tls.present ? 1U : 0U) + 1U;
@@ -6607,6 +6608,27 @@ static bool shared_write_object(MiniLdState *state,
     memcpy(image, &header, sizeof(header));
 
     programs = (Elf64_Phdr *)(void *)(image + sizeof(Elf64_Ehdr));
+    if (shared->pie) {
+        Elf64_Phdr *ph = &programs[program_index++];
+        uint64_t header_vaddr;
+
+        if (!layout->have_rx ||
+            (uint64_t)layout->rx_file_offset > layout->rx_vaddr) {
+            fprintf(state->diagnostics,
+                    "minic-ld: invalid-pie-phdr-layout\n");
+            goto done;
+        }
+        header_vaddr =
+            layout->rx_vaddr - (uint64_t)layout->rx_file_offset;
+        ph->p_type = PT_PHDR;
+        ph->p_flags = PF_R;
+        ph->p_offset = sizeof(Elf64_Ehdr);
+        ph->p_vaddr = header_vaddr + sizeof(Elf64_Ehdr);
+        ph->p_paddr = ph->p_vaddr;
+        ph->p_filesz = phnum * sizeof(Elf64_Phdr);
+        ph->p_memsz = ph->p_filesz;
+        ph->p_align = sizeof(Elf64_Addr);
+    }
     if (shared->have_interp) {
         Elf64_Phdr *ph = &programs[program_index++];
         const MiniLdSection *interp;
