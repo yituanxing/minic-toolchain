@@ -2677,11 +2677,11 @@ done:
     return ok;
 }
 
-static bool static_build_layout(MiniLdState *state,
-                                MiniLdStaticLayout *layout) {
+static bool static_build_layout_at(MiniLdState *state,
+                                   MiniLdStaticLayout *layout,
+                                   uint64_t base_vaddr) {
     const size_t page = 4096U;
     const size_t header_page = 4096U;
-    const uint64_t base_vaddr = UINT64_C(0x10000);
     size_t rx_cursor = 0U;
     size_t rw_file_cursor = 0U;
     size_t rw_mem_cursor = 0U;
@@ -2823,6 +2823,22 @@ static bool static_build_layout(MiniLdState *state,
     layout->rw_file_size = rw_file_cursor;
     layout->rw_mem_size = rw_mem_cursor;
     return layout->have_rx;
+}
+
+static bool static_build_layout(MiniLdState *state,
+                                MiniLdStaticLayout *layout) {
+    return static_build_layout_at(state, layout, UINT64_C(0x10000));
+}
+
+static bool shared_build_layout(MiniLdState *state,
+                                MiniLdStaticLayout *layout) {
+    /*
+     * ET_DYN load bias is defined relative to virtual address zero.
+     * Keep the ELF/program headers at vaddr 0 and place the first
+     * allocatable section one page later so e_phoff is addressable as
+     * base + e_phoff during the dynamic linker's stage-1 bootstrap.
+     */
+    return static_build_layout_at(state, layout, UINT64_C(0x1000));
 }
 
 
@@ -6747,7 +6763,7 @@ int minild_link_shared_elf64_riscv_inputs_options(
                                  soname,
                                  dynamic_list_path,
                                  &shared) ||
-        !static_build_layout(&state, &layout)) {
+        !shared_build_layout(&state, &layout)) {
         goto done;
     }
     layout_ready = true;
