@@ -33,6 +33,7 @@ jobs:
         run: |
           make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/lua-full-driver-v0 all
           make MODE=release CFLAGS=-Werror BUILD_DIR=build/lua-full-driver-v0 check-minipp-a0
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/lua-full-driver-v0 check-minias-a0
 
       - name: Measure official Lua 5.5.0 TU frontier
         shell: bash
