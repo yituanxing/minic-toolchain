@@ -16,6 +16,7 @@ static bool has_archive_suffix(const char *path) {
 static void usage(FILE *out, const char *argv0) {
     fprintf(out,
             "usage: %s [-r|-static|-shared] -o OUTPUT [-e SYMBOL] [-soname NAME] "
+            "[--dynamic-list FILE] "
             "[--whole-archive ARCHIVE --no-whole-archive] "
             "[--start-group ARCHIVE --end-group] INPUT...\n",
             argv0);
@@ -26,6 +27,7 @@ int main(int argc, char **argv) {
     const char *entry_symbol = NULL;
     const char *script_path = NULL;
     const char *soname = NULL;
+    const char *dynamic_list_path = NULL;
     MiniLdInput inputs[4096];
     size_t input_count = 0U;
     bool relocatable = false;
@@ -63,6 +65,18 @@ int main(int argc, char **argv) {
             soname = argv[i] + 8U;
         } else if (strncmp(argv[i], "--soname=", 9U) == 0) {
             soname = argv[i] + 9U;
+        } else if (strcmp(argv[i], "--dynamic-list") == 0) {
+            if (++i >= argc) {
+                usage(stderr, argv[0]);
+                return 2;
+            }
+            dynamic_list_path = argv[i];
+        } else if (strncmp(argv[i], "--dynamic-list=", 15U) == 0) {
+            dynamic_list_path = argv[i] + 15U;
+            if (*dynamic_list_path == '\0') {
+                fprintf(stderr, "minic-ld: empty-dynamic-list\n");
+                return 2;
+            }
         } else if (strcmp(argv[i], "-o") == 0) {
             if (++i >= argc) {
                 usage(stderr, argv[0]);
@@ -179,12 +193,16 @@ int main(int argc, char **argv) {
                                                            stderr);
     }
     if (shared_link) {
-        return minild_link_shared_elf64_riscv_inputs(output,
-                                                      inputs,
-                                                      input_count,
-                                                      soname,
-                                                      entry_symbol,
-                                                      stderr);
+        MiniLdSharedOptions options;
+
+        options.soname = soname;
+        options.entry_symbol = entry_symbol;
+        options.dynamic_list_path = dynamic_list_path;
+        return minild_link_shared_elf64_riscv_inputs_options(output,
+                                                              inputs,
+                                                              input_count,
+                                                              &options,
+                                                              stderr);
     }
 
     {
