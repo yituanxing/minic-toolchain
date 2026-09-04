@@ -1,0 +1,311 @@
+name: MiniLD Real musl Shared Rebase Frontier
+
+on:
+  push:
+    branches:
+      - "toolchain/minild-musl-shared-rebase"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  musl-shared-frontier:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Install RV64 shared-musl prerequisites
+        run: |
+          timeout 240s sudo apt-get -o Acquire::Retries=3 update
+          timeout 240s sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            build-essential gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
+            libc6-riscv64-cross libc6-dev-riscv64-cross qemu-user \
+            curl ca-certificates python3
+
+      - name: Build current toolchain and keep A6 green
+        run: |
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/minild-musl-rebase all
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/minild-musl-rebase check-minild-a6
+
+      - name: Build pristine musl 1.2.5 GNU shared oracle
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/minild-musl-rebase"
+          mkdir -p "$work"
+          curl -fsSL https://musl.libc.org/releases/musl-1.2.5.tar.gz \
+            -o "$work/musl-1.2.5.tar.gz"
+          printf '%s  %s\n' \
+            a9a118bbe84d8764da0ea0d28b3ab3fae8477fc7e4085d90102b8596fc7c75e4 \
+            "$work/musl-1.2.5.tar.gz" | sha256sum -c -
+          tar -xzf "$work/musl-1.2.5.tar.gz" -C "$work"
+
+          src="$work/musl-1.2.5"
+          out="$work/musl-build"
+          mkdir -p "$out"
+          cd "$out"
+          CC=riscv64-linux-gnu-gcc \
+          AR=riscv64-linux-gnu-ar \
+          RANLIB=riscv64-linux-gnu-ranlib \
+            "$src/configure" \
+              --target=riscv64-linux-gnu \
+              --enable-shared \
+              --prefix=/usr \
+            >"$work/configure.log" 2>&1
+
+          started=$(date +%s)
+          make -j4 V=1 lib/libc.so >"$work/make.log" 2>&1
+          elapsed=$(( $(date +%s) - started ))
+          test -s lib/libc.so
+
+          riscv64-linux-gnu-readelf -Wr lib/libc.so >"$work/gnu.relocations"
+          riscv64-linux-gnu-readelf -d lib/libc.so >"$work/gnu.dynamic"
+          riscv64-linux-gnu-readelf -S lib/libc.so >"$work/gnu.sections"
+
+          python3 - "$work/make.log" "$work/input-list.txt" <<'PY'
+          import shlex, sys
+          lines=open(sys.argv[1], encoding="utf-8", errors="replace").read().splitlines()
+          for i,line in enumerate(lines):
+              if " -nostdlib -shared " in line:
+                  full=line.rstrip()
+                  j=i+1
+                  while full.endswith("\\") and j < len(lines):
+                      full=full[:-1] + " " + lines[j].strip()
+                      j += 1
+                  words=shlex.split(full)
+                  objs=[w for w in words if w.endswith(".lo")]
+                  if len(objs) < 1000:
+                      continue
+                  open(sys.argv[2],"w").write("\n".join(objs)+"\n")
+                  print("MUSL_SHARED_LINK_OBJECTS=%d" % len(objs))
+                  break
+          else:
+              raise SystemExit("shared link command not found")
+          PY
+
+          count="$(wc -l <"$work/input-list.txt")"
+          test "$count" -gt 1300
+
+          (
+            cd "$out"
+            xargs -r riscv64-linux-gnu-readelf -Wr <"$work/input-list.txt"
+          ) |
+            awk '{ for (i = 1; i <= NF; ++i) if ($i ~ /^R_RISCV_/) print $i }' |
+            sort |
+            uniq -c |
+            sort -k1,1nr -k2,2 >"$work/relocation-census.txt"
+          echo "=== MUSL PIC RELOCATION CENSUS ==="
+          cat "$work/relocation-census.txt"
+
+          printf 'MUSL_SHARED_GNU=PASS link_inputs=%s elapsed_s=%s libc_bytes=%s\n' \
+            "$count" "$elapsed" "$(stat -c %s lib/libc.so)"
+
+      - name: Drive exact PIC object surface through current MiniLD
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/minild-musl-rebase"
+          out="$work/musl-build"
+          minild="$GITHUB_WORKSPACE/build/minild-musl-rebase/bin/minic-ld"
+          dynamic_list="$work/musl-1.2.5/dynamic.list"
+          libgcc="$(riscv64-linux-gnu-gcc -print-libgcc-file-name)"
+          libgcc_eh="$(riscv64-linux-gnu-gcc -print-file-name=libgcc_eh.a)"
+          mapfile -t rel_inputs <"$work/input-list.txt"
+          inputs=()
+          for p in "${rel_inputs[@]}"; do
+            test -s "$out/$p"
+            inputs+=("$out/$p")
+          done
+          test -s "$libgcc"
+          test -s "$libgcc_eh"
+          test -s "$dynamic_list"
+
+          set +e
+          "$minild" -melf64lriscv -shared -e _dlstart \
+            --dynamic-list="$dynamic_list" \
+            -o "$work/libc-minild.so" \
+            "${inputs[@]}" "$libgcc" "$libgcc_eh" \
+            >"$work/minild.stdout" 2>"$work/minild.stderr"
+          rc=$?
+          set -e
+
+          cat "$work/minild.stderr"
+          if test "$rc" -ne 0; then
+            first="$(grep -m1 '^minic-ld:' "$work/minild.stderr" || true)"
+            printf 'MINILD_MUSL_SHARED_FRONTIER=FAIL rc=%s first=%s\n' "$rc" "$first"
+            exit "$rc"
+          fi
+
+          riscv64-linux-gnu-readelf -h "$work/libc-minild.so" >"$work/minild.header"
+          riscv64-linux-gnu-readelf -lW "$work/libc-minild.so" >"$work/minild.programs"
+          riscv64-linux-gnu-readelf -Wr "$work/libc-minild.so" >"$work/minild.relocations"
+          riscv64-linux-gnu-readelf -d "$work/libc-minild.so" >"$work/minild.dynamic"
+          riscv64-linux-gnu-readelf -Ws "$work/libc-minild.so" >"$work/minild.symbols"
+          riscv64-linux-gnu-objdump -dr "$work/libc-minild.so" >"$work/minild.disasm"
+          awk '/R_RISCV_JUMP_SLOT/ {print $5}' "$work/gnu.relocations" |
+            sort -u >"$work/gnu.jump-slot-symbols"
+          awk '/R_RISCV_JUMP_SLOT/ {print $5}' "$work/minild.relocations" |
+            sort -u >"$work/minild.jump-slot-symbols"
+          cmp "$work/gnu.jump-slot-symbols" "$work/minild.jump-slot-symbols"
+          printf 'MINILD_MUSL_PLT_ORACLE=PASS jump_slots=%s\n' \
+            "$(wc -l <"$work/minild.jump-slot-symbols")"
+
+          riscv64-linux-gnu-readelf -h "$out/lib/libc.so" >"$work/gnu.header"
+          riscv64-linux-gnu-readelf -lW "$out/lib/libc.so" >"$work/gnu.programs"
+          riscv64-linux-gnu-readelf -Ws "$out/lib/libc.so" >"$work/gnu.symbols"
+
+          entry="$(awk '/Entry point address:/ {print $4}' "$work/minild.header")"
+          first_load_offset="$(awk '/^[[:space:]]*LOAD[[:space:]]/ {print $2; exit}' "$work/minild.programs")"
+          first_load_vaddr="$(awk '/^[[:space:]]*LOAD[[:space:]]/ {print $3; exit}' "$work/minild.programs")"
+          test "$entry" != "0x0"
+          test "$first_load_offset" = "0x000000"
+          test "$first_load_vaddr" = "0x0000000000000000"
+          grep -q 'DYNAMIC' "$work/minild.programs"
+          printf 'MINILD_MUSL_SHARED_STRUCTURAL=PASS bytes=%s entry=%s first_load_offset=%s first_load_vaddr=%s\n' \
+            "$(stat -c %s "$work/libc-minild.so")" "$entry" "$first_load_offset" "$first_load_vaddr"
+
+      - name: Execute MiniLD-built musl loader startup
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/minild-musl-rebase"
+          reference="$work/musl-build/lib/libc.so"
+          product="$work/libc-minild.so"
+
+          chmod +x "$reference" "$product"
+          set +e
+          timeout 5s qemu-riscv64 "$reference" \
+            >"$work/reference-loader.stdout" 2>"$work/reference-loader.stderr"
+          reference_rc=$?
+          timeout 5s qemu-riscv64 -strace "$product" \
+            >"$work/product-loader.stdout" 2>"$work/product-loader.stderr"
+          product_rc=$?
+          set -e
+
+          echo "MUSL_LOADER_REFERENCE_RC=$reference_rc"
+          echo "MUSL_LOADER_PRODUCT_RC=$product_rc"
+          echo "=== EARLY LINKER SYMBOLS ==="
+          grep -E '(_dlstart$|_dlstart_c$|__dls2$|__global_pointer\\$|_DYNAMIC$|__ehdr_start$)' \
+            "$work/minild.symbols" || true
+          echo "=== PRODUCT LOADER STDOUT ==="
+          cat "$work/product-loader.stdout"
+          echo "=== PRODUCT LOADER STRACE ==="
+          cat "$work/product-loader.stderr"
+
+          test "$reference_rc" -ne 124
+          test "$product_rc" -ne 124
+          test "$product_rc" -ne 139
+          if test ! -s "$work/product-loader.stdout" &&
+             test ! -s "$work/product-loader.stderr"; then
+            echo "MINILD_MUSL_LOADER_STARTUP=FAIL no-output" >&2
+            exit 1
+          fi
+          echo "MINILD_MUSL_LOADER_STARTUP=PASS product_rc=$product_rc"
+
+      - name: Execute real dynamic musl program with MiniLD loader
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/minild-musl-rebase"
+          src="$work/musl-1.2.5"
+          out="$work/musl-build"
+          sysroot="$work/musl-sysroot"
+          reference="$out/lib/libc.so"
+          product="$work/libc-minild.so"
+
+          cd "$out"
+          make -j4 lib/Scrt1.o lib/crti.o lib/crtn.o >/dev/null
+          make DESTDIR="$sysroot" install-headers >/dev/null
+
+          sh "$src/tools/musl-gcc.specs.sh"             "$sysroot/usr/include"             "$out/lib"             /lib/ld-musl-riscv64.so.1 >"$work/musl-test.specs"
+
+          cat >"$work/dynamic-smoke.c" <<'EOF'
+          #include <stdlib.h>
+          #include <string.h>
+          #include <unistd.h>
+
+          int main(void)
+          {
+              static const char message[] = "MINILD_MUSL_APP_OK\n";
+              size_t size = sizeof(message);
+              char *copy = malloc(size);
+
+              if (copy == 0) return 2;
+              memcpy(copy, message, size);
+              if (write(1, copy, size - 1) != (ssize_t)(size - 1)) {
+                  free(copy);
+                  return 3;
+              }
+              free(copy);
+              return 0;
+          }
+          EOF
+
+          riscv64-linux-gnu-gcc             -specs "$work/musl-test.specs"             -fPIE -pie             "$work/dynamic-smoke.c"             -o "$work/dynamic-smoke"
+
+          riscv64-linux-gnu-readelf -h "$work/dynamic-smoke"             >"$work/dynamic-smoke.header"
+          riscv64-linux-gnu-readelf -d "$work/dynamic-smoke"             >"$work/dynamic-smoke.dynamic"
+          riscv64-linux-gnu-readelf -Wr "$work/dynamic-smoke"             >"$work/dynamic-smoke.relocations"
+
+          set +e
+          timeout 5s qemu-riscv64 "$reference" "$work/dynamic-smoke"             >"$work/reference-app.stdout" 2>"$work/reference-app.stderr"
+          reference_rc=$?
+          timeout 5s qemu-riscv64 "$product" "$work/dynamic-smoke"             >"$work/product-app.stdout" 2>"$work/product-app.stderr"
+          product_rc=$?
+          set -e
+
+          echo "MUSL_APP_REFERENCE_RC=$reference_rc"
+          echo "MUSL_APP_PRODUCT_RC=$product_rc"
+          cat "$work/product-app.stdout"
+          cat "$work/product-app.stderr"
+
+          test "$reference_rc" -eq 0
+          test "$product_rc" -eq 0
+          cmp "$work/reference-app.stdout" "$work/product-app.stdout"
+          grep -qx 'MINILD_MUSL_APP_OK' "$work/product-app.stdout"
+          echo "MINILD_MUSL_DYNAMIC_APP=PASS malloc=PASS write=PASS free=PASS"
+
+      - name: Preserve real shared-musl evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: minild-real-musl-shared-rebase-frontier
+          path: |
+            build/minild-musl-rebase/configure.log
+            build/minild-musl-rebase/make.log
+            build/minild-musl-rebase/input-list.txt
+            build/minild-musl-rebase/relocation-census.txt
+            build/minild-musl-rebase/gnu.relocations
+            build/minild-musl-rebase/gnu.dynamic
+            build/minild-musl-rebase/gnu.sections
+            build/minild-musl-rebase/minild.stdout
+            build/minild-musl-rebase/minild.stderr
+            build/minild-musl-rebase/minild.header
+            build/minild-musl-rebase/minild.programs
+            build/minild-musl-rebase/minild.relocations
+            build/minild-musl-rebase/minild.dynamic
+            build/minild-musl-rebase/minild.symbols
+            build/minild-musl-rebase/minild.disasm
+            build/minild-musl-rebase/gnu.jump-slot-symbols
+            build/minild-musl-rebase/minild.jump-slot-symbols
+            build/minild-musl-rebase/gnu.header
+            build/minild-musl-rebase/gnu.programs
+            build/minild-musl-rebase/gnu.symbols
+            build/minild-musl-rebase/reference-loader.stdout
+            build/minild-musl-rebase/reference-loader.stderr
+            build/minild-musl-rebase/product-loader.stdout
+            build/minild-musl-rebase/product-loader.stderr
+            build/minild-musl-rebase/dynamic-smoke.c
+            build/minild-musl-rebase/dynamic-smoke.header
+            build/minild-musl-rebase/dynamic-smoke.dynamic
+            build/minild-musl-rebase/dynamic-smoke.relocations
+            build/minild-musl-rebase/reference-app.stdout
+            build/minild-musl-rebase/reference-app.stderr
+            build/minild-musl-rebase/product-app.stdout
+            build/minild-musl-rebase/product-app.stderr
+          if-no-files-found: ignore
+          retention-days: 3
