@@ -4856,37 +4856,29 @@ static bool shared_relocation_is_final_layout(uint32_t type) {
 static bool shared_define_dynamic_symbol(MiniLdState *state,
                                          size_t dynamic_section) {
     size_t index = find_global_symbol(state, "_DYNAMIC");
-    size_t added;
+    MiniLdSymbol *symbol;
 
+    if (index == SIZE_MAX) {
+        return true;
+    }
     if (dynamic_section >= state->section_count) {
         fprintf(state->diagnostics,
                 "minic-ld: invalid-shared-dynamic-section\n");
         return false;
     }
-    if (index != SIZE_MAX) {
-        MiniLdSymbol *symbol = &state->symbols[index];
-
-        if (symbol->section != MINILD_SECTION_UNDEF &&
-            symbol->section != (int)dynamic_section) {
-            fprintf(state->diagnostics,
-                    "minic-ld: conflicting-linker-symbol:_DYNAMIC\n");
-            return false;
-        }
-        symbol->section = (int)dynamic_section;
-        symbol->value = 0U;
-        symbol->size = 0U;
-        symbol->info = ELF64_ST_INFO(STB_GLOBAL, STT_OBJECT);
-        symbol->other = STV_HIDDEN;
-        return true;
+    symbol = &state->symbols[index];
+    if (symbol->section != MINILD_SECTION_UNDEF &&
+        symbol->section != (int)dynamic_section) {
+        fprintf(state->diagnostics,
+                "minic-ld: conflicting-linker-symbol:_DYNAMIC\n");
+        return false;
     }
-    return add_or_merge_global_symbol(state,
-                                      "_DYNAMIC",
-                                      (int)dynamic_section,
-                                      0U,
-                                      0U,
-                                      ELF64_ST_INFO(STB_GLOBAL, STT_OBJECT),
-                                      STV_HIDDEN,
-                                      &added);
+    symbol->section = (int)dynamic_section;
+    symbol->value = 0U;
+    symbol->size = 0U;
+    symbol->info = ELF64_ST_INFO(STB_GLOBAL, STT_OBJECT);
+    symbol->other = STV_HIDDEN;
+    return true;
 }
 
 static bool shared_prepare_metadata(MiniLdState *state,
