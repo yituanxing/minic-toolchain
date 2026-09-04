@@ -139,8 +139,9 @@ jobs:
           riscv64-linux-gnu-gcc -O0 -fPIE -fno-stack-protector -fno-builtin \
             -c "$work/app.c" -o "$work/app.o"
 
-          "$minild" -melf64lriscv -shared -e _start \
+          "$minild" -melf64lriscv -pie -e _start \
             --needed=libc.so \
+            --dynamic-linker=/lib/ld-musl-riscv64.so.1 \
             -o "$work/app-minild" \
             "$out/lib/Scrt1.o" "$out/lib/crti.o" \
             "$work/app.o" "$out/lib/crtn.o" \
@@ -152,8 +153,10 @@ jobs:
           riscv64-linux-gnu-readelf -Wr "$work/app-minild" >"$work/app-minild.relocations"
           riscv64-linux-gnu-readelf -Ws "$work/app-minild" >"$work/app-minild.symbols"
 
-          grep -q 'DYN (Position-Independent Executable file)' "$work/app-minild.header" ||
-            grep -q 'DYN (Shared object file)' "$work/app-minild.header"
+          grep -q 'DYN (Position-Independent Executable file)' "$work/app-minild.header"
+          grep -q 'Requesting program interpreter: /lib/ld-musl-riscv64.so.1' "$work/app-minild.programs"
+          grep -q '(NEEDED).*\[libc.so\]' "$work/app-minild.dynamic"
+          grep -q '(FLAGS_1).*PIE' "$work/app-minild.dynamic"
           grep -q '_start' "$work/app-minild.symbols"
           grep -q '__libc_start_main' "$work/app-minild.symbols"
           grep -q 'malloc' "$work/app-minild.symbols"
@@ -171,7 +174,26 @@ jobs:
 
           test "$rc" -eq 0
           grep -qx 'MINILD_DYNAMIC_EXEC_OK' "$work/app.stdout"
-          echo "MINILD_DYNAMIC_EXEC_V0=PASS producer=MiniLD loader=MiniLD libc_calls=malloc,write,free"
+
+          root="$work/root"
+          mkdir -p "$root/lib"
+          cp "$work/libc-minild.so" "$root/lib/ld-musl-riscv64.so.1"
+          cp "$work/libc-minild.so" "$root/lib/libc.so"
+          chmod +x "$root/lib/ld-musl-riscv64.so.1" "$root/lib/libc.so"
+
+          set +e
+          timeout 5s qemu-riscv64 -L "$root" "$work/app-minild" \
+            >"$work/direct.stdout" 2>"$work/direct.stderr"
+          direct_rc=$?
+          set -e
+          echo "DYNEXEC_DIRECT_RC=$direct_rc"
+          cat "$work/direct.stdout"
+          cat "$work/direct.stderr"
+
+          test "$direct_rc" -eq 0
+          cmp "$work/app.stdout" "$work/direct.stdout"
+          grep -qx 'MINILD_DYNAMIC_EXEC_OK' "$work/direct.stdout"
+          echo "MINILD_DYNAMIC_EXEC_V1=PASS producer=MiniLD pt_interp=PASS needed=libc.so direct_qemu=PASS libc_calls=malloc,write,free"
 
       - name: Preserve dynamic executable evidence
         if: always()
@@ -194,5 +216,7 @@ jobs:
             build/dynamic-exec-v0/app-minild.symbols
             build/dynamic-exec-v0/app.stdout
             build/dynamic-exec-v0/app.stderr
+            build/dynamic-exec-v0/direct.stdout
+            build/dynamic-exec-v0/direct.stderr
           if-no-files-found: ignore
           retention-days: 3
