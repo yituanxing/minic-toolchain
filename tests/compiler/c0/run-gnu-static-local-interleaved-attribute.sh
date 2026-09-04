@@ -26,12 +26,10 @@ int bad(void)
 }
 EOF
 "$host_cc" -E -P -std=gnu11 -x c "$work/layout-attribute.c" -o "$work/layout-attribute.i"
-if "$minic" -S "$work/layout-attribute.i" -o "$work/layout-attribute.s"     2>"$work/layout-attribute.stderr"; then
-    printf '%s
-' 'layout-bearing static-local interleaved attribute unexpectedly ignored' >&2
-    exit 1
-fi
-grep -F 'GNU static local object attribute semantics are not implemented at this placement'     "$work/layout-attribute.stderr" >/dev/null
+"$minic" -S "$work/layout-attribute.i" -o "$work/layout-attribute.s"
+test -s "$work/layout-attribute.s"
+grep -F '__minic_static_local_' "$work/layout-attribute.s" >/dev/null
+grep -F '.align 4' "$work/layout-attribute.s" >/dev/null
+grep -F '.zero 4' "$work/layout-attribute.s" >/dev/null
 
-printf '%s
-'   'PASS compiler/c0/gnu_static_local_interleaved_attribute placement=type-before-declarator unused=informational record-empty-init=zero scalar=preserved section=global-object declaration-wide=2 aligned=fail-closed'
+printf '%s\n' 'PASS compiler/c0/gnu_static_local_interleaved_attribute placement=type-before-declarator unused=informational record-empty-init=zero scalar=preserved section=global-object declaration-wide=2 aligned=global-object-16'
