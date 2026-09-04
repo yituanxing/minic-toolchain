@@ -167,17 +167,14 @@ MinicType minic_type_unsigned_long_long(void) {
     return minic_type_integer(MINIC_INTEGER_SIGN_UNSIGNED, MINIC_INTEGER_RANK_LONG_LONG);
 }
 
-MinicType minic_type_enum(MinicEnumId enum_id, MinicType compatible_type) {
+MinicType minic_type_enum(MinicEnumId enum_id) {
     MinicType type;
 
-    if (enum_id == MINIC_ENUM_INVALID || !minic_type_is_integer(compatible_type) ||
-        compatible_type.base_kind != MINIC_TYPE_BASE_INT || compatible_type.pointer_depth != 0U) {
+    if (enum_id == MINIC_ENUM_INVALID) {
         return minic_type_void();
     }
     type = minic_type_scalar(MINIC_TYPE_BASE_ENUM);
     type.enum_id = enum_id;
-    type.integer_sign = compatible_type.integer_sign;
-    type.integer_rank = compatible_type.integer_rank;
     return type;
 }
 
@@ -442,13 +439,9 @@ bool minic_type_is_enum(MinicType type) {
            type.record_id == MINIC_RECORD_INVALID &&
            type.array_type_id == MINIC_ARRAY_TYPE_INVALID &&
            type.function_type_id == MINIC_FUNCTION_TYPE_INVALID &&
-           (type.integer_sign == MINIC_INTEGER_SIGN_SIGNED ||
-            type.integer_sign == MINIC_INTEGER_SIGN_UNSIGNED) &&
-           (type.integer_rank == MINIC_INTEGER_RANK_INT ||
-            type.integer_rank == MINIC_INTEGER_RANK_LONG ||
-            type.integer_rank == MINIC_INTEGER_RANK_LONG_LONG) &&
-           !type.is_plain_char && type.pointer_qualifiers == MINIC_TYPE_QUALIFIER_NONE &&
-           type.pointer_depth == 0U;
+           type.integer_sign == MINIC_INTEGER_SIGN_NONE &&
+           type.integer_rank == MINIC_INTEGER_RANK_NONE && !type.is_plain_char &&
+           type.pointer_qualifiers == MINIC_TYPE_QUALIFIER_NONE && type.pointer_depth == 0U;
 }
 
 bool minic_type_is_integer(MinicType type) {

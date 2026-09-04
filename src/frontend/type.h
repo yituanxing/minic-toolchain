@@ -77,7 +77,7 @@ MinicType minic_type_long(void);
 MinicType minic_type_unsigned_long(void);
 MinicType minic_type_long_long(void);
 MinicType minic_type_unsigned_long_long(void);
-MinicType minic_type_enum(MinicEnumId enum_id, MinicType compatible_type);
+MinicType minic_type_enum(MinicEnumId enum_id);
 MinicType minic_type_int128(void);
 MinicType minic_type_unsigned_int128(void);
 MinicType minic_type_float(void);

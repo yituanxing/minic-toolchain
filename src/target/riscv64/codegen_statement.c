@@ -33,9 +33,11 @@ minic_riscv64_emit_block_with_break_target(FILE *file,
                                            size_t *label_counter,
                                            MinicBreakTarget break_target);
 
-static bool
-minic_riscv64_emit_normalize_word(FILE *file, MinicType type, const char *register_name) {
-    return minic_riscv64_emit_integer_conversion(file, type, register_name);
+static bool minic_riscv64_emit_normalize_word(FILE *file,
+                                              const MinicC0Program *program,
+                                              MinicType type,
+                                              const char *register_name) {
+    return minic_riscv64_emit_integer_conversion_for_program(file, program, type, register_name);
 }
 
 static bool minic_riscv64_emit_assignment(FILE *file,
@@ -67,10 +69,10 @@ static bool minic_riscv64_emit_assignment(FILE *file,
         return false;
     }
     if (minic_type_is_integer(target->type) &&
-        !minic_riscv64_emit_integer_conversion(file, target->type, "t0")) {
+        !minic_riscv64_emit_integer_conversion_for_program(file, program, target->type, "t0")) {
         return false;
     }
-    if (!minic_riscv64_emit_scalar_store(file, target->type, "t0", "a0")) {
+    if (!minic_riscv64_emit_scalar_store_for_program(file, program, target->type, "t0", "a0")) {
         return false;
     }
     return true;
@@ -103,25 +105,25 @@ static bool minic_riscv64_emit_xor_assignment(FILE *file,
     value = minic_c0_program_expression(program, statement->expression);
     if (target == NULL || value == NULL || target->value_category != MINIC_VALUE_LVALUE ||
         !minic_type_is_integer(target->type) || !minic_type_is_integer(value->type) ||
-        !minic_target_info_integer_common(
-            minic_default_target_info(), target->type, value->type, &common_type) ||
+        !minic_target_info_integer_common_for_program(
+            minic_default_target_info(), program, target->type, value->type, &common_type) ||
         !minic_riscv64_emit_lvalue_address(
             file, program, function, function_layout, statement->target_expression) ||
         fprintf(file, "  addi sp, sp, -16\n  sd a0, 0(sp)\n") < 0 ||
-        !minic_riscv64_emit_scalar_load(file, target->type, "t0", "a0") ||
-        !minic_riscv64_emit_normalize_word(file, common_type, "t0") ||
+        !minic_riscv64_emit_scalar_load_for_program(file, program, target->type, "t0", "a0") ||
+        !minic_riscv64_emit_normalize_word(file, program, common_type, "t0") ||
         fprintf(file, "  sd t0, 8(sp)\n") < 0 ||
         !minic_riscv64_emit_expression(
             file, program, function, function_layout, statement->expression) ||
-        !minic_riscv64_emit_normalize_word(file, common_type, "a0") ||
+        !minic_riscv64_emit_normalize_word(file, program, common_type, "a0") ||
         fprintf(file,
                 "  ld t0, 8(sp)\n"
                 "  xor a0, t0, a0\n") < 0 ||
-        !minic_riscv64_emit_normalize_word(file, target->type, "a0") ||
+        !minic_riscv64_emit_normalize_word(file, program, target->type, "a0") ||
         fprintf(file,
                 "  ld t0, 0(sp)\n"
                 "  addi sp, sp, 16\n") < 0 ||
-        !minic_riscv64_emit_scalar_store(file, target->type, "a0", "t0")) {
+        !minic_riscv64_emit_scalar_store_for_program(file, program, target->type, "a0", "t0")) {
         return false;
     }
     return true;
@@ -242,7 +244,8 @@ static bool minic_riscv64_emit_return(FILE *file,
             return false;
         }
         if (minic_type_is_integer(function->return_type) &&
-            !minic_riscv64_emit_integer_conversion(file, function->return_type, "a0")) {
+            !minic_riscv64_emit_integer_conversion_for_program(
+                file, program, function->return_type, "a0")) {
             return false;
         }
     }
@@ -370,7 +373,7 @@ static bool minic_riscv64_emit_switch(FILE *file,
     *label_counter += 1U;
     if (!minic_riscv64_emit_expression(
             file, program, function, function_layout, statement->expression) ||
-        !minic_riscv64_emit_integer_conversion(file, selector->type, "a0") ||
+        !minic_riscv64_emit_integer_conversion_for_program(file, program, selector->type, "a0") ||
         fprintf(file, "  mv t0, a0\n") < 0) {
         return false;
     }

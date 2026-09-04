@@ -18,14 +18,28 @@ bool minic_riscv64_emit_sp_store64(FILE *file, const char *register_name, size_t
 bool minic_riscv64_emit_sp_load64(FILE *file, const char *register_name, size_t offset);
 bool minic_riscv64_emit_s0_load64(FILE *file, const char *register_name, size_t offset);
 bool minic_riscv64_emit_integer_conversion(FILE *file, MinicType type, const char *register_name);
+bool minic_riscv64_emit_integer_conversion_for_program(FILE *file,
+                                                       const MinicC0Program *program,
+                                                       MinicType type,
+                                                       const char *register_name);
 bool minic_riscv64_emit_scalar_load(FILE *file,
                                     MinicType type,
                                     const char *destination_register,
                                     const char *address_register);
+bool minic_riscv64_emit_scalar_load_for_program(FILE *file,
+                                                const MinicC0Program *program,
+                                                MinicType type,
+                                                const char *destination_register,
+                                                const char *address_register);
 bool minic_riscv64_emit_scalar_store(FILE *file,
                                      MinicType type,
                                      const char *source_register,
                                      const char *address_register);
+bool minic_riscv64_emit_scalar_store_for_program(FILE *file,
+                                                 const MinicC0Program *program,
+                                                 MinicType type,
+                                                 const char *source_register,
+                                                 const char *address_register);
 
 bool minic_riscv64_emit_object_address(FILE *file,
                                        const MinicC0Program *program,
