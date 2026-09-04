@@ -39,7 +39,7 @@ if "$minic" -S "$work/invalid_element.i" -o "$work/invalid_element.s" \
     echo 'FAIL incompatible local array initializer unexpectedly compiled' >&2
     exit 1
 fi
-if ! grep -F 'local array initializer element type does not match element type' "$work/invalid_element.stderr" >/dev/null; then
+if ! grep -F 'runtime array initializer element type mismatch' "$work/invalid_element.stderr" >/dev/null; then
     printf '%s\n' 'FAIL runtime-local-array negative=element diagnostic-mismatch' >&2
     cat "$work/invalid_element.stderr" >&2
     exit 1
