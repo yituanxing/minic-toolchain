@@ -4707,10 +4707,12 @@ typedef struct MiniLdSharedImage {
     size_t *dynsym_index;
     uint32_t *dynstr_name_offset;
     size_t *plt_index;
+    size_t *got_slot_offset;
     size_t *tls_gd_offset;
     size_t dynsym_count;
     size_t rela_count;
     size_t plt_count;
+    size_t got_count;
     size_t tls_gd_count;
     bool have_soname;
 } MiniLdSharedImage;
@@ -4719,14 +4721,17 @@ static void shared_image_destroy(MiniLdSharedImage *shared) {
     free(shared->dynsym_index);
     free(shared->dynstr_name_offset);
     free(shared->plt_index);
+    free(shared->got_slot_offset);
     free(shared->tls_gd_offset);
     shared->dynsym_index = NULL;
     shared->dynstr_name_offset = NULL;
     shared->plt_index = NULL;
+    shared->got_slot_offset = NULL;
     shared->tls_gd_offset = NULL;
     shared->dynsym_count = 0U;
     shared->rela_count = 0U;
     shared->plt_count = 0U;
+    shared->got_count = 0U;
     shared->tls_gd_count = 0U;
 }
 
@@ -4824,6 +4829,30 @@ static bool shared_relocation_is_arithmetic(uint32_t type) {
     }
 }
 
+static bool shared_relocation_is_final_layout(uint32_t type) {
+    if (shared_relocation_is_arithmetic(type)) {
+        return true;
+    }
+    switch (type) {
+    case R_RISCV_GOT_HI20:
+    case R_RISCV_PCREL_HI20:
+    case R_RISCV_PCREL_LO12_I:
+    case R_RISCV_PCREL_LO12_S:
+    case R_RISCV_HI20:
+    case R_RISCV_LO12_I:
+    case R_RISCV_LO12_S:
+    case R_RISCV_BRANCH:
+    case R_RISCV_JAL:
+    case R_RISCV_RVC_BRANCH:
+    case R_RISCV_RVC_JUMP:
+    case R_RISCV_32_PCREL:
+    case R_RISCV_TLS_GD_HI20:
+        return true;
+    default:
+        return false;
+    }
+}
+
 static bool shared_prepare_metadata(MiniLdState *state,
                                     const char *soname,
                                     MiniLdSharedImage *shared) {
@@ -4861,12 +4890,16 @@ static bool shared_prepare_metadata(MiniLdState *state,
     shared->plt_index =
         malloc((state->symbol_count == 0U ? 1U : state->symbol_count) *
                sizeof(*shared->plt_index));
+    shared->got_slot_offset =
+        malloc((state->symbol_count == 0U ? 1U : state->symbol_count) *
+               sizeof(*shared->got_slot_offset));
     shared->tls_gd_offset =
         malloc((state->symbol_count == 0U ? 1U : state->symbol_count) *
                sizeof(*shared->tls_gd_offset));
     if (shared->dynsym_index == NULL ||
         shared->dynstr_name_offset == NULL ||
         shared->plt_index == NULL ||
+        shared->got_slot_offset == NULL ||
         shared->tls_gd_offset == NULL) {
         fprintf(state->diagnostics, "minic-ld: out-of-memory:shared-symbol-map\n");
         goto fail;
@@ -4874,6 +4907,7 @@ static bool shared_prepare_metadata(MiniLdState *state,
     for (i = 0U; i < state->symbol_count; ++i) {
         shared->dynsym_index[i] = SIZE_MAX;
         shared->plt_index[i] = SIZE_MAX;
+        shared->got_slot_offset[i] = SIZE_MAX;
         shared->tls_gd_offset[i] = SIZE_MAX;
     }
 
@@ -5024,6 +5058,26 @@ static bool shared_prepare_metadata(MiniLdState *state,
             reloc->type == R_RISCV_ALIGN) {
             continue;
         }
+        if (reloc->type == R_RISCV_GOT_HI20) {
+            if (reloc->symbol == SIZE_MAX ||
+                reloc->symbol >= state->symbol_count ||
+                reloc->addend != 0) {
+                fprintf(state->diagnostics,
+                        "minic-ld: invalid-shared-got-hi20-relocation\n");
+                goto fail;
+            }
+            if (shared->got_slot_offset[reloc->symbol] == SIZE_MAX) {
+                if (shared->got_count > (SIZE_MAX / 8U) - 1U ||
+                    shared->rela_count == SIZE_MAX) {
+                    goto oom;
+                }
+                shared->got_slot_offset[reloc->symbol] =
+                    shared->got_count * 8U;
+                ++shared->got_count;
+                ++shared->rela_count;
+            }
+            continue;
+        }
         if (reloc->type == R_RISCV_TLS_GD_HI20) {
             if (reloc->symbol == SIZE_MAX ||
                 reloc->symbol >= state->symbol_count ||
@@ -5046,12 +5100,7 @@ static bool shared_prepare_metadata(MiniLdState *state,
             }
             continue;
         }
-        if (reloc->type == R_RISCV_PCREL_LO12_I ||
-            reloc->type == R_RISCV_PCREL_LO12_S ||
-            reloc->type == R_RISCV_32_PCREL) {
-            continue;
-        }
-        if (shared_relocation_is_arithmetic(reloc->type)) {
+        if (shared_relocation_is_final_layout(reloc->type)) {
             continue;
         }
         if (reloc->type == R_RISCV_CALL ||
@@ -5083,11 +5132,26 @@ static bool shared_prepare_metadata(MiniLdState *state,
         }
         ++shared->rela_count;
     }
+    if (shared->got_count > SIZE_MAX / 8U ||
+        shared->tls_gd_count > SIZE_MAX / 16U ||
+        shared->got_count * 8U >
+            SIZE_MAX - shared->tls_gd_count * 16U) {
+        goto oom;
+    }
     if (shared->tls_gd_count != 0U) {
-        if (shared->tls_gd_count > SIZE_MAX / 16U ||
-            !section_append_zero(got, shared->tls_gd_count * 16U)) {
-            goto oom;
+        size_t got_prefix = shared->got_count * 8U;
+
+        for (i = 0U; i < state->symbol_count; ++i) {
+            if (shared->tls_gd_offset[i] != SIZE_MAX) {
+                shared->tls_gd_offset[i] += got_prefix;
+            }
         }
+    }
+    if ((shared->got_count != 0U || shared->tls_gd_count != 0U) &&
+        !section_append_zero(got,
+                             shared->got_count * 8U +
+                                 shared->tls_gd_count * 16U)) {
+        goto oom;
     }
     if (shared->rela_count > SIZE_MAX / sizeof(Elf64_Rela) ||
         !section_append_zero(rela,
@@ -5441,271 +5505,235 @@ static bool shared_patch_arithmetic_relocations(
     return true;
 }
 
-static bool shared_patch_pcrel32(MiniLdState *state,
-                                 const MiniLdStaticLayout *layout) {
-    size_t i;
-
-    for (i = 0U; i < state->reloc_count; ++i) {
-        MiniLdReloc *reloc = &state->relocs[i];
-        MiniLdSection *source;
-        uint64_t target_value;
-        uint64_t place;
-        int64_t delta;
-
-        if (reloc->type != R_RISCV_32_PCREL) {
-            continue;
-        }
-        if (reloc->section >= state->section_count ||
-            reloc->symbol == SIZE_MAX ||
-            reloc->symbol >= state->symbol_count) {
-            fprintf(state->diagnostics,
-                    "minic-ld: invalid-shared-pcrel32-relocation\n");
-            return false;
-        }
-        source = &state->sections[reloc->section];
-        if ((source->flags & SHF_ALLOC) == 0U ||
-            source->type == SHT_NOBITS ||
-            reloc->offset > SIZE_MAX ||
-            !range_ok((size_t)reloc->offset, 4U, source->size)) {
-            fprintf(state->diagnostics,
-                    "minic-ld: shared-pcrel32-offset-out-of-range\n");
-            return false;
-        }
-        if (!static_resolve_symbol(state,
-                                   layout,
-                                   reloc->symbol,
-                                   &target_value)) {
-            fprintf(state->diagnostics,
-                    "minic-ld: unresolved-shared-pcrel32-symbol:%s\n",
-                    state->symbols[reloc->symbol].name);
-            return false;
-        }
-        place = layout->section_vaddr[reloc->section] + reloc->offset;
-        delta = (int64_t)target_value + reloc->addend - (int64_t)place;
-        if (delta < INT32_MIN || delta > INT32_MAX) {
-            fprintf(state->diagnostics,
-                    "minic-ld: shared-pcrel32-overflow:delta=%lld\n",
-                    (long long)delta);
-            return false;
-        }
-        store_u32le(source->data + (size_t)reloc->offset,
-                    (uint32_t)(int32_t)delta);
-    }
-    return true;
-}
-
-static bool shared_fill_relocations(MiniLdState *state,
-                                    const MiniLdStaticLayout *layout,
-                                    const MiniLdSharedImage *shared) {
-    MiniLdSection *rela = &state->sections[shared->rela_section];
-    size_t write_index = 0U;
-    size_t i;
-
-    memset(rela->data, 0, rela->size);
-    for (i = 0U; i < state->reloc_count; ++i) {
-        MiniLdReloc *input = &state->relocs[i];
-        MiniLdSection *source;
-        MiniLdSymbol *target;
-        Elf64_Rela output;
-        size_t dynamic_index = 0U;
-
-        if (input->section >= state->section_count ||
-            (state->sections[input->section].flags & SHF_ALLOC) == 0U ||
-            input->type == R_RISCV_NONE ||
-            input->type == R_RISCV_RELAX ||
-            input->type == R_RISCV_ALIGN ||
-            input->type == R_RISCV_CALL ||
-            input->type == R_RISCV_CALL_PLT ||
-            input->type == R_RISCV_TLS_GD_HI20 ||
-            input->type == R_RISCV_PCREL_LO12_I ||
-            input->type == R_RISCV_PCREL_LO12_S ||
-            input->type == R_RISCV_32_PCREL ||
-            shared_relocation_is_arithmetic(input->type)) {
-            continue;
-        }
-        if (input->type != R_RISCV_64 ||
-            input->symbol == SIZE_MAX ||
-            input->symbol >= state->symbol_count) {
-            fprintf(state->diagnostics,
-                    "minic-ld: invalid-shared-relocation\n");
-            return false;
-        }
-        source = &state->sections[input->section];
-        if (source->type == SHT_NOBITS ||
-            input->offset > SIZE_MAX ||
-            !range_ok((size_t)input->offset, 8U, source->size)) {
-            fprintf(state->diagnostics,
-                    "minic-ld: shared-relocation-offset-out-of-range\n");
-            return false;
-        }
-        target = &state->symbols[input->symbol];
-
-        memset(&output, 0, sizeof(output));
-        output.r_offset =
-            layout->section_vaddr[input->section] + input->offset;
-        if (target->section != MINILD_SECTION_UNDEF &&
-            !shared_symbol_is_preemptible(target)) {
-            uint64_t target_value;
-
-            if (!static_resolve_symbol(state,
-                                       layout,
-                                       input->symbol,
-                                       &target_value)) {
-                return false;
-            }
-            output.r_info = ELF64_R_INFO(0U, R_RISCV_RELATIVE);
-            output.r_addend = (Elf64_Sxword)((int64_t)target_value +
-                                             input->addend);
-        } else {
-            dynamic_index = shared->dynsym_index[input->symbol];
-            if (dynamic_index == SIZE_MAX) {
-                fprintf(state->diagnostics,
-                        "minic-ld: missing-dynsym-for-relocation:%s\n",
-                        target->name);
-                return false;
-            }
-            output.r_info =
-                ELF64_R_INFO(dynamic_index, R_RISCV_64);
-            output.r_addend = input->addend;
-        }
-        store_u64le(source->data + (size_t)input->offset, 0U);
-        memcpy(rela->data + write_index * sizeof(output),
-               &output,
-               sizeof(output));
-        ++write_index;
-    }
-    for (i = 0U; i < state->symbol_count; ++i) {
-        size_t offset = shared->tls_gd_offset[i];
-        size_t dynamic_index;
-        uint64_t slot_address;
-        Elf64_Rela output;
-
-        if (offset == SIZE_MAX) {
-            continue;
-        }
-        dynamic_index = shared->dynsym_index[i];
-        if (dynamic_index == SIZE_MAX ||
-            shared->got_section >= state->section_count) {
-            fprintf(state->diagnostics,
-                    "minic-ld: invalid-shared-tls-gd-dynsym\n");
-            return false;
-        }
-        slot_address =
-            layout->section_vaddr[shared->got_section] + (uint64_t)offset;
-
-        memset(&output, 0, sizeof(output));
-        output.r_offset = slot_address;
-        output.r_info =
-            ELF64_R_INFO(dynamic_index, R_RISCV_TLS_DTPMOD64);
-        memcpy(rela->data + write_index * sizeof(output),
-               &output,
-               sizeof(output));
-        ++write_index;
-
-        memset(&output, 0, sizeof(output));
-        output.r_offset = slot_address + 8U;
-        output.r_info =
-            ELF64_R_INFO(dynamic_index, R_RISCV_TLS_DTPREL64);
-        memcpy(rela->data + write_index * sizeof(output),
-               &output,
-               sizeof(output));
-        ++write_index;
-    }
-
-    if (write_index != shared->rela_count) {
-        fprintf(state->diagnostics,
-                "minic-ld: shared-relocation-count-mismatch\n");
-        return false;
-    }
-    return true;
-}
-
-
-static uint32_t shared_riscv_utype(unsigned opcode,
-                                   unsigned rd,
-                                   int64_t imm20) {
-    return (((uint32_t)imm20 & UINT32_C(0xfffff)) << 12U) |
-           ((uint32_t)rd << 7U) |
-           (uint32_t)opcode;
-}
-
-static uint32_t shared_riscv_itype(unsigned opcode,
-                                   unsigned rd,
-                                   unsigned funct3,
-                                   unsigned rs1,
-                                   int64_t imm12) {
-    return (((uint32_t)imm12 & UINT32_C(0xfff)) << 20U) |
-           ((uint32_t)rs1 << 15U) |
-           ((uint32_t)funct3 << 12U) |
-           ((uint32_t)rd << 7U) |
-           (uint32_t)opcode;
-}
-
-
-static bool shared_patch_tls_gd(MiniLdState *state,
-                                const MiniLdStaticLayout *layout,
-                                const MiniLdSharedImage *shared) {
+static bool shared_patch_final_layout_relocations(
+    MiniLdState *state,
+    const MiniLdStaticLayout *layout,
+    const MiniLdSharedImage *shared) {
     size_t capacity = pcrel_capacity_for(state->reloc_count);
     MiniLdPcrelSlot *pcrel;
     size_t i;
 
+    if (!shared_patch_arithmetic_relocations(state, layout)) {
+        return false;
+    }
     if (capacity == 0U) {
         fprintf(state->diagnostics,
-                "minic-ld: shared-tls-pcrel-index-overflow\n");
+                "minic-ld: shared-pcrel-index-overflow\n");
         return false;
     }
     pcrel = calloc(capacity, sizeof(*pcrel));
     if (pcrel == NULL) {
         fprintf(state->diagnostics,
-                "minic-ld: out-of-memory:shared-tls-pcrel\n");
+                "minic-ld: out-of-memory:shared-pcrel-index\n");
         return false;
     }
 
     for (i = 0U; i < state->reloc_count; ++i) {
         MiniLdReloc *reloc = &state->relocs[i];
         MiniLdSection *source;
+        uint64_t symbol_value = 0U;
         uint64_t place;
-        uint64_t descriptor;
+        int64_t target;
         int64_t delta;
 
-        if (reloc->type != R_RISCV_TLS_GD_HI20) {
+        if (reloc->section >= state->section_count ||
+            (state->sections[reloc->section].flags & SHF_ALLOC) == 0U ||
+            reloc->type == R_RISCV_NONE ||
+            reloc->type == R_RISCV_RELAX ||
+            reloc->type == R_RISCV_ALIGN ||
+            reloc->type == R_RISCV_64 ||
+            reloc->type == R_RISCV_CALL ||
+            reloc->type == R_RISCV_CALL_PLT ||
+            reloc->type == R_RISCV_PCREL_LO12_I ||
+            reloc->type == R_RISCV_PCREL_LO12_S ||
+            shared_relocation_is_arithmetic(reloc->type)) {
             continue;
         }
-        if (reloc->section >= state->section_count ||
-            reloc->symbol == SIZE_MAX ||
-            reloc->symbol >= state->symbol_count ||
-            shared->got_section >= state->section_count ||
-            shared->tls_gd_offset[reloc->symbol] == SIZE_MAX) {
-            fprintf(state->diagnostics,
-                    "minic-ld: invalid-shared-tls-gd-patch\n");
+        if (!shared_relocation_is_final_layout(reloc->type)) {
+            continue;
+        }
+        if (reloc->symbol != SIZE_MAX &&
+            (reloc->symbol >= state->symbol_count ||
+             !static_resolve_symbol(state,
+                                    layout,
+                                    reloc->symbol,
+                                    &symbol_value))) {
             free(pcrel);
             return false;
         }
 
         source = &state->sections[reloc->section];
         place = layout->section_vaddr[reloc->section] + reloc->offset;
-        descriptor =
-            layout->section_vaddr[shared->got_section] +
-            (uint64_t)shared->tls_gd_offset[reloc->symbol];
-        delta = (int64_t)descriptor + reloc->addend - (int64_t)place;
+        target = (int64_t)symbol_value + reloc->addend;
 
-        if (!static_patch_utype(source,
-                                reloc->offset,
-                                riscv_hi20(delta),
-                                state->diagnostics)) {
+        switch (reloc->type) {
+        case R_RISCV_GOT_HI20: {
+            size_t offset;
+            uint64_t got_address;
+
+            if (reloc->symbol == SIZE_MAX ||
+                reloc->symbol >= state->symbol_count ||
+                shared->got_slot_offset[reloc->symbol] == SIZE_MAX) {
+                fprintf(state->diagnostics,
+                        "minic-ld: missing-shared-got-slot\n");
+                free(pcrel);
+                return false;
+            }
+            offset = shared->got_slot_offset[reloc->symbol];
+            got_address =
+                layout->section_vaddr[shared->got_section] + (uint64_t)offset;
+            delta = (int64_t)got_address - (int64_t)place;
+            if (!static_patch_utype(source,
+                                    reloc->offset,
+                                    riscv_hi20(delta),
+                                    state->diagnostics)) {
+                free(pcrel);
+                return false;
+            }
+            pcrel_insert(pcrel,
+                         capacity,
+                         reloc->section,
+                         reloc->offset,
+                         delta);
+            break;
+        }
+        case R_RISCV_TLS_GD_HI20: {
+            uint64_t descriptor;
+
+            if (reloc->symbol == SIZE_MAX ||
+                reloc->symbol >= state->symbol_count ||
+                shared->tls_gd_offset[reloc->symbol] == SIZE_MAX) {
+                fprintf(state->diagnostics,
+                        "minic-ld: missing-shared-tls-gd-slot\n");
+                free(pcrel);
+                return false;
+            }
+            descriptor =
+                layout->section_vaddr[shared->got_section] +
+                (uint64_t)shared->tls_gd_offset[reloc->symbol];
+            delta = (int64_t)descriptor + reloc->addend - (int64_t)place;
+            if (!static_patch_utype(source,
+                                    reloc->offset,
+                                    riscv_hi20(delta),
+                                    state->diagnostics)) {
+                free(pcrel);
+                return false;
+            }
+            pcrel_insert(pcrel,
+                         capacity,
+                         reloc->section,
+                         reloc->offset,
+                         delta);
+            break;
+        }
+        case R_RISCV_PCREL_HI20:
+            delta = target - (int64_t)place;
+            if (!static_patch_utype(source,
+                                    reloc->offset,
+                                    riscv_hi20(delta),
+                                    state->diagnostics)) {
+                free(pcrel);
+                return false;
+            }
+            pcrel_insert(pcrel,
+                         capacity,
+                         reloc->section,
+                         reloc->offset,
+                         delta);
+            break;
+        case R_RISCV_HI20:
+            if (!static_patch_utype(source,
+                                    reloc->offset,
+                                    riscv_hi20(target),
+                                    state->diagnostics)) {
+                free(pcrel);
+                return false;
+            }
+            break;
+        case R_RISCV_LO12_I:
+            if (!static_patch_itype(source,
+                                    reloc->offset,
+                                    riscv_lo12(target),
+                                    state->diagnostics)) {
+                free(pcrel);
+                return false;
+            }
+            break;
+        case R_RISCV_LO12_S:
+            if (!static_patch_stype(source,
+                                    reloc->offset,
+                                    riscv_lo12(target),
+                                    state->diagnostics)) {
+                free(pcrel);
+                return false;
+            }
+            break;
+        case R_RISCV_BRANCH:
+            delta = target - (int64_t)place;
+            if (!static_patch_branch(source,
+                                     reloc->offset,
+                                     delta,
+                                     state->diagnostics)) {
+                free(pcrel);
+                return false;
+            }
+            break;
+        case R_RISCV_JAL:
+            delta = target - (int64_t)place;
+            if (!static_patch_jal(source,
+                                  reloc->offset,
+                                  delta,
+                                  state->diagnostics)) {
+                free(pcrel);
+                return false;
+            }
+            break;
+        case R_RISCV_RVC_BRANCH:
+            delta = target - (int64_t)place;
+            if (!static_patch_rvc_branch(source,
+                                         reloc->offset,
+                                         delta,
+                                         state->diagnostics)) {
+                free(pcrel);
+                return false;
+            }
+            break;
+        case R_RISCV_RVC_JUMP:
+            delta = target - (int64_t)place;
+            if (!static_patch_rvc_jump(source,
+                                       reloc->offset,
+                                       delta,
+                                       state->diagnostics)) {
+                free(pcrel);
+                return false;
+            }
+            break;
+        case R_RISCV_32_PCREL:
+            delta = target - (int64_t)place;
+            if (delta < INT32_MIN || delta > INT32_MAX ||
+                source->type == SHT_NOBITS ||
+                reloc->offset > SIZE_MAX ||
+                !range_ok((size_t)reloc->offset, 4U, source->size)) {
+                fprintf(state->diagnostics,
+                        "minic-ld: shared-R_RISCV_32_PCREL-range\n");
+                free(pcrel);
+                return false;
+            }
+            store_u32le(source->data + (size_t)reloc->offset,
+                        (uint32_t)(int32_t)delta);
+            break;
+        default:
+            fprintf(state->diagnostics,
+                    "minic-ld: unsupported-shared-final-layout:%u\n",
+                    reloc->type);
             free(pcrel);
             return false;
         }
-        pcrel_insert(pcrel,
-                     capacity,
-                     reloc->section,
-                     reloc->offset,
-                     delta);
     }
 
     for (i = 0U; i < state->reloc_count; ++i) {
         MiniLdReloc *reloc = &state->relocs[i];
-        MiniLdSymbol *anchor_symbol;
+        MiniLdSymbol *anchor;
         MiniLdSection *source;
         int64_t anchor_offset;
         int64_t delta;
@@ -5717,47 +5745,43 @@ static bool shared_patch_tls_gd(MiniLdState *state,
         if (reloc->symbol == SIZE_MAX ||
             reloc->symbol >= state->symbol_count) {
             fprintf(state->diagnostics,
-                    "minic-ld: invalid-shared-tls-lo12-symbol\n");
+                    "minic-ld: invalid-shared-pcrel-lo-symbol\n");
             free(pcrel);
             return false;
         }
-        anchor_symbol = &state->symbols[reloc->symbol];
-        if (anchor_symbol->section < 0 ||
-            (size_t)anchor_symbol->section >= state->section_count) {
+        anchor = &state->symbols[reloc->symbol];
+        if (anchor->section < 0 ||
+            (size_t)anchor->section >= state->section_count) {
             fprintf(state->diagnostics,
-                    "minic-ld: invalid-shared-tls-lo12-anchor:%s\n",
-                    anchor_symbol->name);
+                    "minic-ld: invalid-shared-pcrel-lo-anchor:%s\n",
+                    anchor->name);
             free(pcrel);
             return false;
         }
-        anchor_offset =
-            (int64_t)anchor_symbol->value + reloc->addend;
+        anchor_offset = (int64_t)anchor->value + reloc->addend;
         if (anchor_offset < 0 ||
             !pcrel_find(pcrel,
                         capacity,
-                        (size_t)anchor_symbol->section,
+                        (size_t)anchor->section,
                         (uint64_t)anchor_offset,
                         &delta)) {
             fprintf(state->diagnostics,
-                    "minic-ld: missing-shared-tls-hi20-for-lo12:%s\n",
-                    anchor_symbol->name);
+                    "minic-ld: missing-shared-pcrel-hi20:%s\n",
+                    anchor->name);
             free(pcrel);
             return false;
         }
-
         source = &state->sections[reloc->section];
-        if (reloc->type == R_RISCV_PCREL_LO12_I) {
-            if (!static_patch_itype(source,
-                                    reloc->offset,
-                                    riscv_lo12(delta),
-                                    state->diagnostics)) {
-                free(pcrel);
-                return false;
-            }
-        } else if (!static_patch_stype(source,
-                                       reloc->offset,
-                                       riscv_lo12(delta),
-                                       state->diagnostics)) {
+        if ((reloc->type == R_RISCV_PCREL_LO12_I &&
+             !static_patch_itype(source,
+                                 reloc->offset,
+                                 riscv_lo12(delta),
+                                 state->diagnostics)) ||
+            (reloc->type == R_RISCV_PCREL_LO12_S &&
+             !static_patch_stype(source,
+                                 reloc->offset,
+                                 riscv_lo12(delta),
+                                 state->diagnostics))) {
             free(pcrel);
             return false;
         }
@@ -6347,9 +6371,7 @@ int minild_link_shared_elf64_riscv_inputs(const char *output_path,
     if (!shared_fill_dynsym(&state, &layout, &shared) ||
         !shared_fill_hash(&state, &shared) ||
         !shared_fill_relocations(&state, &layout, &shared) ||
-        !shared_patch_arithmetic_relocations(&state, &layout) ||
-        !shared_patch_pcrel32(&state, &layout) ||
-        !shared_patch_tls_gd(&state, &layout, &shared) ||
+        !shared_patch_final_layout_relocations(&state, &layout, &shared) ||
         !shared_fill_plt(&state, &layout, &shared) ||
         !shared_fill_dynamic(&state, &layout, &shared) ||
         !shared_write_object(&state, &layout, &shared, output_path)) {
