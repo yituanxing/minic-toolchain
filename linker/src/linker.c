@@ -1095,8 +1095,8 @@ static bool process_dso_input_data(MiniLdState *state,
                                    size_t size,
                                    const char *path) {
     MiniElfView elf;
-    MiniElfSection dynsym;
-    MiniElfSection dynamic;
+    MiniElfSection dynsym = {0};
+    MiniElfSection dynamic = {0};
     size_t dynsym_index = SIZE_MAX;
     size_t dynamic_index = SIZE_MAX;
     const char *needed_name = NULL;
