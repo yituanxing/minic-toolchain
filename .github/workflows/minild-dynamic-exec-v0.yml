@@ -140,6 +140,7 @@ jobs:
             -c "$work/app.c" -o "$work/app.o"
 
           "$minild" -melf64lriscv -shared -e _start \
+            --needed=libc.so \
             -o "$work/app-minild" \
             "$out/lib/Scrt1.o" "$out/lib/crti.o" \
             "$work/app.o" "$out/lib/crtn.o" \
