@@ -175,4 +175,30 @@ bool minielf_build_binary(const MiniElfView *view,
                           MiniElfBinaryError *error_out);
 const char *minielf_binary_error_string(MiniElfBinaryError error);
 
+typedef enum MiniElfRewriteError {
+    MINIELF_REWRITE_OK = 0,
+    MINIELF_REWRITE_INVALID_ARGUMENT,
+    MINIELF_REWRITE_UNSUPPORTED_FILE,
+    MINIELF_REWRITE_INVALID_SECTION,
+    MINIELF_REWRITE_INVALID_SYMBOL_TABLE,
+    MINIELF_REWRITE_UNSUPPORTED_SYMBOL_REFERENCE,
+    MINIELF_REWRITE_LIMIT,
+    MINIELF_REWRITE_OUT_OF_MEMORY
+} MiniElfRewriteError;
+
+typedef struct MiniElfRewriteOptions {
+    const bool *remove_sections;
+    bool strip_all;
+    bool strip_debug;
+    const char *const *keep_global_symbols;
+    size_t keep_global_count;
+} MiniElfRewriteOptions;
+
+bool minielf_rewrite(const MiniElfView *view,
+                     const MiniElfRewriteOptions *options,
+                     unsigned char **image_out,
+                     size_t *size_out,
+                     MiniElfRewriteError *error_out);
+const char *minielf_rewrite_error_string(MiniElfRewriteError error);
+
 #endif

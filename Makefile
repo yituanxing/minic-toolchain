@@ -99,6 +99,7 @@ MINIELF_INCLUDES := -Ielf/include
 MINIELF_READER_OBJECT := $(BUILD_DIR)/obj/elf/src/reader.o
 MINIELF_REL_WRITER_OBJECT := $(BUILD_DIR)/obj/elf/src/relocatable_writer.o
 MINIELF_BINARY_EXPORT_OBJECT := $(BUILD_DIR)/obj/elf/src/binary_export.o
+MINIELF_REWRITE_OBJECT := $(BUILD_DIR)/obj/elf/src/rewrite.o
 MINIELF_REL_OBJECTS := $(MINIELF_READER_OBJECT) $(MINIELF_REL_WRITER_OBJECT)
 
 MINIAS_INCLUDES := -Iassembler/src $(MINIELF_INCLUDES)
@@ -150,7 +151,7 @@ MININM_BINARY := $(BUILD_DIR)/bin/minic-nm
 MINIOBJCOPY_INCLUDES := $(MINIELF_INCLUDES)
 MINIOBJCOPY_SOURCES := \
 	tools/minic-objcopy/main.c
-MINIOBJCOPY_OBJECTS := $(MINIELF_READER_OBJECT) $(MINIELF_BINARY_EXPORT_OBJECT) $(patsubst %.c,$(BUILD_DIR)/obj/%.o,$(MINIOBJCOPY_SOURCES))
+MINIOBJCOPY_OBJECTS := $(MINIELF_READER_OBJECT) $(MINIELF_BINARY_EXPORT_OBJECT) $(MINIELF_REWRITE_OBJECT) $(patsubst %.c,$(BUILD_DIR)/obj/%.o,$(MINIOBJCOPY_SOURCES))
 MINIOBJCOPY_BINARY := $(BUILD_DIR)/bin/minic-objcopy
 
 TOKEN_MODEL_TEST_SOURCES := \
@@ -220,7 +221,7 @@ RV64_ABI_TEST_SOURCES := \
 RV64_ABI_TEST_OBJECTS := $(patsubst %.c,$(BUILD_DIR)/obj/%.o,$(RV64_ABI_TEST_SOURCES))
 RV64_ABI_TEST_BINARY  := $(BUILD_DIR)/tests/target/riscv64/abi-test
 
-.PHONY: all help prepare check check-fast check-minias-a0 check-minipp-a0 check-minielf-reader-a0 check-mininm-a0 check-mininm-a1 check-miniobjcopy-a0 check-miniar-a0 check-miniar-a1 check-minild-a0 check-minild-a1 check-minild-a2 check-minild-a3 check-minild-script-a0 check-minild-script-a1 check-token-model check-lexer \
+.PHONY: all help prepare check check-fast check-minias-a0 check-minipp-a0 check-minielf-reader-a0 check-mininm-a0 check-mininm-a1 check-miniobjcopy-a0 check-miniobjcopy-a1 check-miniar-a0 check-miniar-a1 check-minild-a0 check-minild-a1 check-minild-a2 check-minild-a3 check-minild-script-a0 check-minild-script-a1 check-token-model check-lexer \
 	check-type check-record check-type-alias check-ast-contract check-layout check-rv64-abi \
 	check-static-functions \
 	check-unsigned-declarations check-long-types check-for-loops check-unbounded-for-break \
@@ -245,6 +246,7 @@ help:
 		"  make check-mininm-a0    Differentially validate minic-nm against GNU nm" \
 		"  make check-mininm-a1    Differentially validate regular/thin archive nm" \
 		"  make check-miniobjcopy-a0 Differentially validate ELF -> binary export" \
+		"  make check-miniobjcopy-a1 Differentially validate ELF rewrite (-G/-S/-R)" \
 		"  make check-miniar-a0    Compare MiniAR archives byte-for-byte with GNU ar" \
 		"  make check-miniar-a1    Check thin flattening and archive listing" \
 		"  make check-minild-a0    Validate ELF64 RISC-V relocatable linking against GNU ld" \
@@ -414,6 +416,11 @@ check-miniobjcopy-a0: $(MINIOBJCOPY_BINARY)
 	MINIOBJCOPY="$(abspath $(MINIOBJCOPY_BINARY))" \
 	BUILD_DIR="$(abspath $(BUILD_DIR))" \
 	sh tests/objcopy/run-a0.sh
+
+check-miniobjcopy-a1: $(MINIOBJCOPY_BINARY)
+	MINIOBJCOPY="$(abspath $(MINIOBJCOPY_BINARY))" \
+	BUILD_DIR="$(abspath $(BUILD_DIR))" \
+	sh tests/objcopy/run-a1.sh
 
 check-minild-a0: $(MINILD_BINARY)
 	MINILD="$(abspath $(MINILD_BINARY))" \
