@@ -1807,9 +1807,11 @@ static MinicCoreLowerStatus lower_record_conditional_object(
     return MINIC_CORE_LOWER_OK;
 }
 
-/* BATCH_M_RECORD_LOAD: turn an address-backed record rvalue/lvalue wrapper
-   into a private Core snapshot object.  The source pointer keeps its qualifiers
-   so volatile aggregate reads remain explicit at the IR boundary. */
+/* BATCH_M_RECORD_LOAD: turn a record value with a materializable address
+   into a private Core snapshot object.  This includes ordinary address-backed
+   records and aggregate assignment values whose fully evaluated RHS snapshot
+   is owned by lower_record_materialized_address().  The source pointer keeps
+   its qualifiers so volatile aggregate reads remain explicit at the IR boundary. */
 static MinicCoreLowerStatus lower_record_load_object(MinicCoreLowerContext *context,
                                                      MinicExpressionId expression_id,
                                                      MinicCoreObjectId *object_id) {
@@ -1827,12 +1829,11 @@ static MinicCoreLowerStatus lower_record_load_object(MinicCoreLowerContext *cont
     }
     expression = minic_c0_program_expression(context->body->program, expression_id);
     if (expression == NULL || !minic_type_is_record(expression->type) ||
-        !minic_c0_record_value_is_address_backed(context->body->program, expression_id) ||
         !minic_type_unqualified(expression->type, &expression_type) ||
         !minic_type_is_record(expression_type)) {
         return MINIC_CORE_LOWER_UNSUPPORTED;
     }
-    status = lower_record_value_address(context, expression_id, &source_address);
+    status = lower_record_materialized_address(context, expression_id, &source_address);
     if (status != MINIC_CORE_LOWER_OK) {
         return status;
     }
@@ -8204,7 +8205,8 @@ static MinicCoreLowerStatus lower_return(MinicCoreLowerContext *context,
                        minic_type_is_record(expression->type)) {
                 status = lower_record_conditional_object(
                     context, expression, &terminator.return_object);
-            } else if (minic_c0_record_value_is_address_backed(
+            } else if (expression->kind == MINIC_EXPRESSION_ASSIGNMENT ||
+                       minic_c0_record_value_is_address_backed(
                            context->body->program, statement->expression)) {
                 status = lower_record_load_object(
                     context, statement->expression, &terminator.return_object);

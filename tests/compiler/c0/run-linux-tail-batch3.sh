@@ -38,7 +38,12 @@ if "$minic" -S "$work/alias-section-mismatch.c" -o "$work/alias-section-mismatch
     echo 'mismatched alias sections unexpectedly compiled' >&2
     exit 1
 fi
-grep -F 'parsed AST violates compiler contracts' "$work/alias-section-mismatch.err" >/dev/null
+if ! grep -F 'parsed AST contract failed at function' "$work/alias-section-mismatch.err" >/dev/null ||
+   ! grep -F 'invalid function metadata or signature' "$work/alias-section-mismatch.err" >/dev/null; then
+    printf '%s\n' 'FAIL compiler/c0/linux-tail-batch3 alias-section-mismatch diagnostic' >&2
+    cat "$work/alias-section-mismatch.err" >&2
+    exit 1
+fi
 
 cat >"$work/flatten.c" <<'SRC'
 static int __attribute__((flatten)) add_one(int value) { return value + 1; }
