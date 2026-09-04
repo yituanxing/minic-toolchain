@@ -4853,6 +4853,42 @@ static bool shared_relocation_is_final_layout(uint32_t type) {
     }
 }
 
+static bool shared_define_dynamic_symbol(MiniLdState *state,
+                                         size_t dynamic_section) {
+    size_t index = find_global_symbol(state, "_DYNAMIC");
+    size_t added;
+
+    if (dynamic_section >= state->section_count) {
+        fprintf(state->diagnostics,
+                "minic-ld: invalid-shared-dynamic-section\n");
+        return false;
+    }
+    if (index != SIZE_MAX) {
+        MiniLdSymbol *symbol = &state->symbols[index];
+
+        if (symbol->section != MINILD_SECTION_UNDEF &&
+            symbol->section != (int)dynamic_section) {
+            fprintf(state->diagnostics,
+                    "minic-ld: conflicting-linker-symbol:_DYNAMIC\n");
+            return false;
+        }
+        symbol->section = (int)dynamic_section;
+        symbol->value = 0U;
+        symbol->size = 0U;
+        symbol->info = ELF64_ST_INFO(STB_GLOBAL, STT_OBJECT);
+        symbol->other = STV_HIDDEN;
+        return true;
+    }
+    return add_or_merge_global_symbol(state,
+                                      "_DYNAMIC",
+                                      (int)dynamic_section,
+                                      0U,
+                                      0U,
+                                      ELF64_ST_INFO(STB_GLOBAL, STT_OBJECT),
+                                      STV_HIDDEN,
+                                      &added);
+}
+
 static bool shared_prepare_metadata(MiniLdState *state,
                                     const char *soname,
                                     MiniLdSharedImage *shared) {
@@ -4986,6 +5022,10 @@ static bool shared_prepare_metadata(MiniLdState *state,
     gotplt = &state->sections[shared->gotplt_section];
     rela_plt = &state->sections[shared->rela_plt_section];
     dynamic = &state->sections[shared->dynamic_section];
+
+    if (!shared_define_dynamic_symbol(state, shared->dynamic_section)) {
+        goto fail;
+    }
 
     if (!section_append_zero(dynstr, 1U)) {
         goto oom;
