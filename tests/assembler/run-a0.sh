@@ -733,6 +733,57 @@ native_gas_forms_hex="$(
 test "$native_gas_forms_hex" = "4d5a073005002334150007a1c50023a835007390320073002010"
 readelf -Ws "$work/native-gas-forms.o" | grep -Eq 'FUNC[[:space:]]+GLOBAL.* native_gas_forms$'
 
+cat >"$work/scalar-fp.s" <<'EOF'
+.text
+.globl scalar_fp
+.type scalar_fp, @function
+scalar_fp:
+  fcvt.d.w ft0, t0
+  fcvt.d.wu ft1, t1
+  fcvt.d.l ft2, t2
+  fcvt.d.lu ft3, s0
+  fcvt.w.d a0, fa0, rtz
+  fcvt.wu.d a1, fa1, rtz
+  fcvt.l.d a2, fa2, rtz
+  fcvt.lu.d a3, fa3, rtz
+  fcvt.d.s ft4, ft5
+  fcvt.s.d ft6, ft7
+  fadd.d ft0, ft1, ft2
+  fsub.d ft3, ft4, ft5
+  fmul.d ft6, ft7, fa0
+  fdiv.d fa1, fa2, fa3
+  fsgnjn.d ft0, ft1, ft2
+  feq.d a4, ft0, ft1
+  flt.d a5, ft2, ft3
+  fle.d a6, ft4, ft5
+  fmv.x.d a7, fa0
+  fmv.d.x fa1, t0
+  fmv.x.w a0, fa2
+  fmv.w.x fa3, t1
+  ret
+.size scalar_fp, . - scalar_fp
+EOF
+"$MINIAS" -o "$work/scalar-fp.o" "$work/scalar-fp.s"
+scalar_fp_hex="$(
+    readelf -x .text "$work/scalar-fp.o" |
+    awk '/0x[0-9a-f]+/ {for (i=2; i<=NF; ++i) if ($i ~ /^[0-9a-f]{8}$/) printf "%s", $i}'
+)"
+test -n "$scalar_fp_hex"
+if command -v riscv64-linux-gnu-as >/dev/null 2>&1; then
+    riscv64-linux-gnu-as -march=rv64gc -o "$work/scalar-fp.gnu.o" "$work/scalar-fp.s"
+    scalar_fp_gnu_hex="$(
+        readelf -x .text "$work/scalar-fp.gnu.o" |
+        awk '/0x[0-9a-f]+/ {for (i=2; i<=NF; ++i) if ($i ~ /^[0-9a-f]{8}$/) printf "%s", $i}'
+    )"
+    if test "$scalar_fp_hex" != "$scalar_fp_gnu_hex"; then
+        echo "MINIAS_A0_FP_GNU_DIFF=FAIL" >&2
+        echo "mini=$scalar_fp_hex" >&2
+        echo "gnu=$scalar_fp_gnu_hex" >&2
+        exit 1
+    fi
+    echo "MINIAS_A0_FP_GNU_DIFF=PASS instructions=22"
+fi
+
 cat >"$work/native-macro-comma.s" <<'EOF'
 .text
 .macro emit_alt old_c, new_c, vendor, patch, enable
