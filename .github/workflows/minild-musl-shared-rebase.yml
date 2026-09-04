@@ -144,6 +144,8 @@ jobs:
           riscv64-linux-gnu-readelf -lW "$work/libc-minild.so" >"$work/minild.programs"
           riscv64-linux-gnu-readelf -Wr "$work/libc-minild.so" >"$work/minild.relocations"
           riscv64-linux-gnu-readelf -d "$work/libc-minild.so" >"$work/minild.dynamic"
+          riscv64-linux-gnu-readelf -Ws "$work/libc-minild.so" >"$work/minild.symbols"
+          riscv64-linux-gnu-objdump -dr "$work/libc-minild.so" >"$work/minild.disasm"
           awk '/R_RISCV_JUMP_SLOT/ {print $5}' "$work/gnu.relocations" |
             sort -u >"$work/gnu.jump-slot-symbols"
           awk '/R_RISCV_JUMP_SLOT/ {print $5}' "$work/minild.relocations" |
@@ -154,6 +156,7 @@ jobs:
 
           riscv64-linux-gnu-readelf -h "$out/lib/libc.so" >"$work/gnu.header"
           riscv64-linux-gnu-readelf -lW "$out/lib/libc.so" >"$work/gnu.programs"
+          riscv64-linux-gnu-readelf -Ws "$out/lib/libc.so" >"$work/gnu.symbols"
 
           entry="$(awk '/Entry point address:/ {print $4}' "$work/minild.header")"
           first_load_offset="$(awk '/^[[:space:]]*LOAD[[:space:]]/ {print $2; exit}' "$work/minild.programs")"
@@ -176,14 +179,19 @@ jobs:
           timeout 5s qemu-riscv64 "$reference" \
             >"$work/reference-loader.stdout" 2>"$work/reference-loader.stderr"
           reference_rc=$?
-          timeout 5s qemu-riscv64 "$product" \
+          timeout 5s qemu-riscv64 -strace "$product" \
             >"$work/product-loader.stdout" 2>"$work/product-loader.stderr"
           product_rc=$?
           set -e
 
           echo "MUSL_LOADER_REFERENCE_RC=$reference_rc"
           echo "MUSL_LOADER_PRODUCT_RC=$product_rc"
+          echo "=== EARLY LINKER SYMBOLS ==="
+          grep -E '(_dlstart$|_dlstart_c$|__dls2$|__global_pointer\\$|_DYNAMIC$|__ehdr_start$)' \
+            "$work/minild.symbols" || true
+          echo "=== PRODUCT LOADER STDOUT ==="
           cat "$work/product-loader.stdout"
+          echo "=== PRODUCT LOADER STRACE ==="
           cat "$work/product-loader.stderr"
 
           test "$reference_rc" -ne 124
@@ -215,10 +223,13 @@ jobs:
             build/minild-musl-rebase/minild.programs
             build/minild-musl-rebase/minild.relocations
             build/minild-musl-rebase/minild.dynamic
+            build/minild-musl-rebase/minild.symbols
+            build/minild-musl-rebase/minild.disasm
             build/minild-musl-rebase/gnu.jump-slot-symbols
             build/minild-musl-rebase/minild.jump-slot-symbols
             build/minild-musl-rebase/gnu.header
             build/minild-musl-rebase/gnu.programs
+            build/minild-musl-rebase/gnu.symbols
             build/minild-musl-rebase/reference-loader.stdout
             build/minild-musl-rebase/reference-loader.stderr
             build/minild-musl-rebase/product-loader.stdout
