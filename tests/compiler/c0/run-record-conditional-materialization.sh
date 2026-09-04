@@ -10,7 +10,7 @@ mkdir -p "$work"
 
 require_core_conditional_edges() {
     file=$1
-    if ! grep -E '^[[:space:]]+b(ne|e)z[[:space:]]+[^,]+,[[:space:]]*(1f|\.L[^[:space:]]+_core_bb[0-9]+)$' "$file" >/dev/null; then
+    if ! grep -E '^[[:space:]]+b(eq|ne)z[[:space:]]+[^,]+,[[:space:]]*(1f|\.L[^[:space:]]+_core_bb[0-9]+)$' "$file" >/dev/null; then
         printf '%s\n' "FAIL record-conditional missing conditional edge: $file" >&2
         exit 1
     fi
