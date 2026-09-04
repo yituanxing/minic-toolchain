@@ -16,10 +16,38 @@ typedef enum MinicDriverMode {
     MINIC_DRIVER_ASSEMBLY
 } MinicDriverMode;
 
+static void append_rv64_linux_musl_predefines(char **arguments,
+                                               size_t *count) {
+    arguments[(*count)++] = "-D__STDC__=1";
+    arguments[(*count)++] = "-D__STDC_VERSION__=201112L";
+    arguments[(*count)++] = "-D__STDC_HOSTED__=1";
+    arguments[(*count)++] = "-D__linux__=1";
+    arguments[(*count)++] = "-D__linux=1";
+    arguments[(*count)++] = "-Dlinux=1";
+    arguments[(*count)++] = "-D__unix__=1";
+    arguments[(*count)++] = "-D__unix=1";
+    arguments[(*count)++] = "-D__riscv=1";
+    arguments[(*count)++] = "-D__riscv_xlen=64";
+    arguments[(*count)++] = "-D__LP64__=1";
+    arguments[(*count)++] = "-D_LP64=1";
+    arguments[(*count)++] = "-D__riscv_float_abi_double=1";
+    arguments[(*count)++] = "-D__ORDER_LITTLE_ENDIAN__=1234";
+    arguments[(*count)++] = "-D__ORDER_BIG_ENDIAN__=4321";
+    arguments[(*count)++] =
+        "-D__BYTE_ORDER__=__ORDER_LITTLE_ENDIAN__";
+    arguments[(*count)++] = "-D__CHAR_BIT__=8";
+    arguments[(*count)++] = "-D__SIZEOF_SHORT__=2";
+    arguments[(*count)++] = "-D__SIZEOF_INT__=4";
+    arguments[(*count)++] = "-D__SIZEOF_LONG__=8";
+    arguments[(*count)++] = "-D__SIZEOF_LONG_LONG__=8";
+    arguments[(*count)++] = "-D__SIZEOF_POINTER__=8";
+    arguments[(*count)++] = "-D__SIZEOF_SIZE_T__=8";
+}
+
 static void usage(FILE *out, const char *argv0) {
     fprintf(out,
-            "usage: %s [-S|-c] [--sysroot DIR] [-DNAME[=VALUE]] [-IDIR] "
-            "-o OUTPUT INPUT\n",
+            "usage: %s [-S|-c] [--sysroot DIR] [-DNAME[=VALUE]] [-UNAME] "
+            "[-IDIR] [-isystem DIR] [-include FILE] -o OUTPUT INPUT\n",
             argv0);
 }
 
@@ -181,6 +209,7 @@ int main(int argc, char **argv) {
             }
             sysroot = argument + 10U;
         } else if (strncmp(argument, "-D", 2U) == 0 ||
+                   strncmp(argument, "-U", 2U) == 0 ||
                    strncmp(argument, "-I", 2U) == 0) {
             if (argument[2] == '\0') {
                 if (index + 1 >= argc ||
@@ -199,6 +228,24 @@ int main(int argc, char **argv) {
                 }
                 cpp_forward[cpp_forward_count++] = argument;
             }
+        } else if (strcmp(argument, "-isystem") == 0 ||
+                   strcmp(argument, "-include") == 0) {
+            if (index + 1 >= argc ||
+                cpp_forward_count + 2U >
+                    sizeof(cpp_forward) / sizeof(cpp_forward[0])) {
+                usage(stderr, argv[0]);
+                return 2;
+            }
+            cpp_forward[cpp_forward_count++] = argument;
+            cpp_forward[cpp_forward_count++] = argv[++index];
+        } else if (strncmp(argument, "-isystem", 8U) == 0 &&
+                   argument[8] != '\0') {
+            if (cpp_forward_count ==
+                sizeof(cpp_forward) / sizeof(cpp_forward[0])) {
+                fprintf(stderr, "minic: too-many-cpp-options\n");
+                return 2;
+            }
+            cpp_forward[cpp_forward_count++] = argument;
         } else if (strcmp(argument, "-h") == 0 ||
                    strcmp(argument, "--help") == 0) {
             usage(stdout, argv[0]);
@@ -256,7 +303,7 @@ int main(int argc, char **argv) {
     have_s = true;
 
     {
-        char *arguments[160];
+        char *arguments[256];
         size_t count = 0U;
         size_t i;
 
@@ -265,6 +312,7 @@ int main(int argc, char **argv) {
         arguments[count++] = "-P";
         arguments[count++] = "-undef";
         arguments[count++] = "-nostdinc";
+        append_rv64_linux_musl_predefines(arguments, &count);
         if (sysroot != NULL && sysroot[0] != '\0') {
             include_dir = join_path(sysroot, "include");
             if (include_dir == NULL) {
