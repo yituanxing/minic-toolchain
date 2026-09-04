@@ -4803,6 +4803,27 @@ static bool shared_tls_base_address(const MiniLdState *state,
     return true;
 }
 
+static bool shared_relocation_is_arithmetic(uint32_t type) {
+    switch (type) {
+    case R_RISCV_ADD8:
+    case R_RISCV_ADD16:
+    case R_RISCV_ADD32:
+    case R_RISCV_ADD64:
+    case R_RISCV_SUB6:
+    case R_RISCV_SUB8:
+    case R_RISCV_SUB16:
+    case R_RISCV_SUB32:
+    case R_RISCV_SUB64:
+    case R_RISCV_SET6:
+    case R_RISCV_SET8:
+    case R_RISCV_SET16:
+    case R_RISCV_SET32:
+        return true;
+    default:
+        return false;
+    }
+}
+
 static bool shared_prepare_metadata(MiniLdState *state,
                                     const char *soname,
                                     MiniLdSharedImage *shared) {
@@ -5030,6 +5051,9 @@ static bool shared_prepare_metadata(MiniLdState *state,
             reloc->type == R_RISCV_32_PCREL) {
             continue;
         }
+        if (shared_relocation_is_arithmetic(reloc->type)) {
+            continue;
+        }
         if (reloc->type == R_RISCV_CALL ||
             reloc->type == R_RISCV_CALL_PLT) {
             if (reloc->symbol == SIZE_MAX ||
@@ -5233,6 +5257,190 @@ static bool shared_symbol_is_preemptible(const MiniLdSymbol *symbol) {
            visibility == STV_DEFAULT;
 }
 
+static bool shared_patch_arithmetic_relocations(
+    MiniLdState *state,
+    const MiniLdStaticLayout *layout) {
+    size_t i;
+
+    for (i = 0U; i < state->reloc_count; ++i) {
+        MiniLdReloc *reloc = &state->relocs[i];
+        MiniLdSection *section;
+        uint64_t symbol_value = 0U;
+        int64_t target;
+
+        if (!shared_relocation_is_arithmetic(reloc->type)) {
+            continue;
+        }
+        if (reloc->section >= state->section_count ||
+            (state->sections[reloc->section].flags & SHF_ALLOC) == 0U) {
+            continue;
+        }
+        section = &state->sections[reloc->section];
+        if (reloc->symbol != SIZE_MAX &&
+            (reloc->symbol >= state->symbol_count ||
+             !static_resolve_symbol(state,
+                                    layout,
+                                    reloc->symbol,
+                                    &symbol_value))) {
+            return false;
+        }
+        target = (int64_t)symbol_value + reloc->addend;
+
+        switch (reloc->type) {
+        case R_RISCV_ADD8:
+        case R_RISCV_SUB8: {
+            uint8_t current;
+            uint8_t operand;
+
+            if (section->type == SHT_NOBITS || reloc->offset > SIZE_MAX ||
+                !range_ok((size_t)reloc->offset, 1U, section->size)) {
+                fprintf(state->diagnostics,
+                        "minic-ld: shared-ADD_SUB8-offset-out-of-range\n");
+                return false;
+            }
+            current = load_u8(section->data + (size_t)reloc->offset);
+            operand = (uint8_t)(uint64_t)target;
+            current = reloc->type == R_RISCV_ADD8
+                          ? (uint8_t)(current + operand)
+                          : (uint8_t)(current - operand);
+            store_u8(section->data + (size_t)reloc->offset, current);
+            break;
+        }
+        case R_RISCV_SUB6: {
+            uint8_t current;
+            uint8_t low6;
+            uint8_t operand;
+
+            if (section->type == SHT_NOBITS || reloc->offset > SIZE_MAX ||
+                !range_ok((size_t)reloc->offset, 1U, section->size)) {
+                fprintf(state->diagnostics,
+                        "minic-ld: shared-SUB6-offset-out-of-range\n");
+                return false;
+            }
+            current = load_u8(section->data + (size_t)reloc->offset);
+            low6 = (uint8_t)(current & UINT8_C(0x3f));
+            operand = (uint8_t)((uint64_t)target & UINT64_C(0x3f));
+            low6 = (uint8_t)((low6 - operand) & UINT8_C(0x3f));
+            current = (uint8_t)((current & UINT8_C(0xc0)) | low6);
+            store_u8(section->data + (size_t)reloc->offset, current);
+            break;
+        }
+        case R_RISCV_SET6: {
+            uint8_t current;
+            uint8_t encoded;
+
+            if (section->type == SHT_NOBITS || reloc->offset > SIZE_MAX ||
+                !range_ok((size_t)reloc->offset, 1U, section->size)) {
+                fprintf(state->diagnostics,
+                        "minic-ld: shared-SET6-offset-out-of-range\n");
+                return false;
+            }
+            current = load_u8(section->data + (size_t)reloc->offset);
+            encoded = (uint8_t)((uint64_t)target & UINT64_C(0x3f));
+            current = (uint8_t)((current & UINT8_C(0xc0)) | encoded);
+            store_u8(section->data + (size_t)reloc->offset, current);
+            break;
+        }
+        case R_RISCV_SET8:
+            if (section->type == SHT_NOBITS || reloc->offset > SIZE_MAX ||
+                !range_ok((size_t)reloc->offset, 1U, section->size)) {
+                fprintf(state->diagnostics,
+                        "minic-ld: shared-SET8-offset-out-of-range\n");
+                return false;
+            }
+            store_u8(section->data + (size_t)reloc->offset,
+                     (uint8_t)(uint64_t)target);
+            break;
+        case R_RISCV_SET16:
+            if (section->type == SHT_NOBITS || reloc->offset > SIZE_MAX ||
+                !range_ok((size_t)reloc->offset, 2U, section->size)) {
+                fprintf(state->diagnostics,
+                        "minic-ld: shared-SET16-offset-out-of-range\n");
+                return false;
+            }
+            store_u16le(section->data + (size_t)reloc->offset,
+                        (uint16_t)(uint64_t)target);
+            break;
+        case R_RISCV_SET32:
+            if (section->type == SHT_NOBITS || reloc->offset > SIZE_MAX ||
+                !range_ok((size_t)reloc->offset, 4U, section->size)) {
+                fprintf(state->diagnostics,
+                        "minic-ld: shared-SET32-offset-out-of-range\n");
+                return false;
+            }
+            store_u32le(section->data + (size_t)reloc->offset,
+                        (uint32_t)(uint64_t)target);
+            break;
+        case R_RISCV_ADD16:
+        case R_RISCV_SUB16: {
+            uint16_t current;
+            uint16_t operand;
+
+            if (section->type == SHT_NOBITS || reloc->offset > SIZE_MAX ||
+                !range_ok((size_t)reloc->offset, 2U, section->size)) {
+                fprintf(state->diagnostics,
+                        "minic-ld: shared-ADD_SUB16-offset-out-of-range\n");
+                return false;
+            }
+            current = load_u16le(section->data + (size_t)reloc->offset);
+            operand = (uint16_t)(uint64_t)target;
+            current = reloc->type == R_RISCV_ADD16
+                          ? (uint16_t)(current + operand)
+                          : (uint16_t)(current - operand);
+            store_u16le(section->data + (size_t)reloc->offset, current);
+            break;
+        }
+        case R_RISCV_ADD32:
+        case R_RISCV_SUB32: {
+            uint32_t current;
+            uint32_t operand;
+
+            if (section->type == SHT_NOBITS || reloc->offset > SIZE_MAX ||
+                !range_ok((size_t)reloc->offset, 4U, section->size)) {
+                fprintf(state->diagnostics,
+                        "minic-ld: shared-ADD_SUB32-offset-out-of-range\n");
+                return false;
+            }
+            current = load_u32le(section->data + (size_t)reloc->offset);
+            operand = (uint32_t)(uint64_t)target;
+            if (reloc->type == R_RISCV_ADD32) {
+                current += operand;
+            } else {
+                current -= operand;
+            }
+            store_u32le(section->data + (size_t)reloc->offset, current);
+            break;
+        }
+        case R_RISCV_ADD64:
+        case R_RISCV_SUB64: {
+            uint64_t current;
+            uint64_t operand = (uint64_t)target;
+
+            if (section->type == SHT_NOBITS || reloc->offset > SIZE_MAX ||
+                !range_ok((size_t)reloc->offset, 8U, section->size)) {
+                fprintf(state->diagnostics,
+                        "minic-ld: shared-ADD_SUB64-offset-out-of-range\n");
+                return false;
+            }
+            current = load_u64le(section->data + (size_t)reloc->offset);
+            if (reloc->type == R_RISCV_ADD64) {
+                current += operand;
+            } else {
+                current -= operand;
+            }
+            store_u64le(section->data + (size_t)reloc->offset, current);
+            break;
+        }
+        default:
+            fprintf(state->diagnostics,
+                    "minic-ld: internal-shared-arithmetic-relocation:%u\n",
+                    reloc->type);
+            return false;
+        }
+    }
+    return true;
+}
+
 static bool shared_patch_pcrel32(MiniLdState *state,
                                  const MiniLdStaticLayout *layout) {
     size_t i;
@@ -5311,7 +5519,8 @@ static bool shared_fill_relocations(MiniLdState *state,
             input->type == R_RISCV_TLS_GD_HI20 ||
             input->type == R_RISCV_PCREL_LO12_I ||
             input->type == R_RISCV_PCREL_LO12_S ||
-            input->type == R_RISCV_32_PCREL) {
+            input->type == R_RISCV_32_PCREL ||
+            shared_relocation_is_arithmetic(input->type)) {
             continue;
         }
         if (input->type != R_RISCV_64 ||
@@ -6138,6 +6347,7 @@ int minild_link_shared_elf64_riscv_inputs(const char *output_path,
     if (!shared_fill_dynsym(&state, &layout, &shared) ||
         !shared_fill_hash(&state, &shared) ||
         !shared_fill_relocations(&state, &layout, &shared) ||
+        !shared_patch_arithmetic_relocations(&state, &layout) ||
         !shared_patch_pcrel32(&state, &layout) ||
         !shared_patch_tls_gd(&state, &layout, &shared) ||
         !shared_fill_plt(&state, &layout, &shared) ||
