@@ -4853,31 +4853,69 @@ static bool shared_relocation_is_final_layout(uint32_t type) {
     }
 }
 
-static bool shared_define_dynamic_symbol(MiniLdState *state,
-                                         size_t dynamic_section) {
-    size_t index = find_global_symbol(state, "_DYNAMIC");
+static bool shared_define_linker_symbols_pre_layout(
+    MiniLdState *state,
+    size_t dynamic_section) {
+    size_t index;
     MiniLdSymbol *symbol;
+
+    index = find_global_symbol(state, "_DYNAMIC");
+    if (index != SIZE_MAX) {
+        if (dynamic_section >= state->section_count) {
+            fprintf(state->diagnostics,
+                    "minic-ld: invalid-shared-dynamic-section\n");
+            return false;
+        }
+        symbol = &state->symbols[index];
+        if (symbol->section != MINILD_SECTION_UNDEF &&
+            symbol->section != (int)dynamic_section) {
+            fprintf(state->diagnostics,
+                    "minic-ld: conflicting-linker-symbol:_DYNAMIC\n");
+            return false;
+        }
+        symbol->section = (int)dynamic_section;
+        symbol->value = 0U;
+        symbol->size = 0U;
+        symbol->info = ELF64_ST_INFO(STB_GLOBAL, STT_OBJECT);
+        symbol->other = STV_HIDDEN;
+    }
+
+    index = find_global_symbol(state, "__ehdr_start");
+    if (index != SIZE_MAX) {
+        symbol = &state->symbols[index];
+        if (symbol->section != MINILD_SECTION_UNDEF &&
+            symbol->section != MINILD_SECTION_ABS) {
+            fprintf(state->diagnostics,
+                    "minic-ld: conflicting-linker-symbol:__ehdr_start\n");
+            return false;
+        }
+        symbol->section = MINILD_SECTION_ABS;
+        symbol->value = 0U;
+        symbol->size = 0U;
+        symbol->info = ELF64_ST_INFO(STB_GLOBAL, STT_NOTYPE);
+        symbol->other = STV_HIDDEN;
+    }
+    return true;
+}
+
+static bool shared_finalize_ehdr_symbol(MiniLdState *state,
+                                        const MiniLdStaticLayout *layout) {
+    size_t index = find_global_symbol(state, "__ehdr_start");
+    uint64_t header_vaddr;
 
     if (index == SIZE_MAX) {
         return true;
     }
-    if (dynamic_section >= state->section_count) {
+    if (!layout->have_rx ||
+        (uint64_t)layout->rx_file_offset > layout->rx_vaddr) {
         fprintf(state->diagnostics,
-                "minic-ld: invalid-shared-dynamic-section\n");
+                "minic-ld: invalid-shared-header-load-layout\n");
         return false;
     }
-    symbol = &state->symbols[index];
-    if (symbol->section != MINILD_SECTION_UNDEF &&
-        symbol->section != (int)dynamic_section) {
-        fprintf(state->diagnostics,
-                "minic-ld: conflicting-linker-symbol:_DYNAMIC\n");
-        return false;
-    }
-    symbol->section = (int)dynamic_section;
-    symbol->value = 0U;
-    symbol->size = 0U;
-    symbol->info = ELF64_ST_INFO(STB_GLOBAL, STT_OBJECT);
-    symbol->other = STV_HIDDEN;
+    header_vaddr =
+        layout->rx_vaddr - (uint64_t)layout->rx_file_offset;
+    state->symbols[index].section = MINILD_SECTION_ABS;
+    state->symbols[index].value = header_vaddr;
     return true;
 }
 
@@ -5015,7 +5053,9 @@ static bool shared_prepare_metadata(MiniLdState *state,
     rela_plt = &state->sections[shared->rela_plt_section];
     dynamic = &state->sections[shared->dynamic_section];
 
-    if (!shared_define_dynamic_symbol(state, shared->dynamic_section)) {
+    if (!shared_define_linker_symbols_pre_layout(
+            state,
+            shared->dynamic_section)) {
         goto fail;
     }
 
@@ -6396,13 +6436,25 @@ static bool shared_write_object(MiniLdState *state,
     programs = (Elf64_Phdr *)(void *)(image + sizeof(Elf64_Ehdr));
     if (layout->have_rx) {
         Elf64_Phdr *ph = &programs[program_index++];
+        uint64_t header_vaddr;
+
+        if ((uint64_t)layout->rx_file_offset > layout->rx_vaddr ||
+            layout->rx_file_offset >
+                SIZE_MAX - layout->rx_file_size) {
+            fprintf(state->diagnostics,
+                    "minic-ld: invalid-shared-header-load-layout\n");
+            goto done;
+        }
+        header_vaddr =
+            layout->rx_vaddr - (uint64_t)layout->rx_file_offset;
         ph->p_type = PT_LOAD;
         ph->p_flags = PF_R | PF_X;
-        ph->p_offset = layout->rx_file_offset;
-        ph->p_vaddr = layout->rx_vaddr;
-        ph->p_paddr = layout->rx_vaddr;
-        ph->p_filesz = layout->rx_file_size;
-        ph->p_memsz = layout->rx_file_size;
+        ph->p_offset = 0U;
+        ph->p_vaddr = header_vaddr;
+        ph->p_paddr = header_vaddr;
+        ph->p_filesz =
+            (uint64_t)(layout->rx_file_offset + layout->rx_file_size);
+        ph->p_memsz = ph->p_filesz;
         ph->p_align = 4096U;
     }
     if (layout->have_rw) {
@@ -6590,7 +6642,8 @@ int minild_link_shared_elf64_riscv_inputs(const char *output_path,
     }
     layout_ready = true;
 
-    if ((entry_symbol != NULL &&
+    if (!shared_finalize_ehdr_symbol(&state, &layout) ||
+        (entry_symbol != NULL &&
          !static_entry_address(&state, &layout, entry_symbol, &entry)) ||
         !shared_fill_dynsym(&state, &layout, &shared) ||
         !shared_fill_hash(&state, &shared) ||
