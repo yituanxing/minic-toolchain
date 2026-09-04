@@ -4698,6 +4698,7 @@ typedef struct MiniLdSharedImage {
     size_t dynsym_section;
     size_t hash_section;
     size_t rela_section;
+    size_t got_section;
     size_t plt_section;
     size_t gotplt_section;
     size_t rela_plt_section;
@@ -4706,9 +4707,11 @@ typedef struct MiniLdSharedImage {
     size_t *dynsym_index;
     uint32_t *dynstr_name_offset;
     size_t *plt_index;
+    size_t *tls_gd_offset;
     size_t dynsym_count;
     size_t rela_count;
     size_t plt_count;
+    size_t tls_gd_count;
     bool have_soname;
 } MiniLdSharedImage;
 
@@ -4716,12 +4719,15 @@ static void shared_image_destroy(MiniLdSharedImage *shared) {
     free(shared->dynsym_index);
     free(shared->dynstr_name_offset);
     free(shared->plt_index);
+    free(shared->tls_gd_offset);
     shared->dynsym_index = NULL;
     shared->dynstr_name_offset = NULL;
     shared->plt_index = NULL;
+    shared->tls_gd_offset = NULL;
     shared->dynsym_count = 0U;
     shared->rela_count = 0U;
     shared->plt_count = 0U;
+    shared->tls_gd_count = 0U;
 }
 
 static uint32_t shared_elf_hash(const char *name) {
@@ -4771,6 +4777,32 @@ static bool shared_symbol_needs_plt(const MiniLdSymbol *symbol) {
            visibility == STV_DEFAULT;
 }
 
+
+static bool shared_tls_base_address(const MiniLdState *state,
+                                    const MiniLdStaticLayout *layout,
+                                    uint64_t *base_out,
+                                    bool *present_out) {
+    uint64_t base = UINT64_MAX;
+    size_t i;
+    bool present = false;
+
+    for (i = 0U; i < state->section_count; ++i) {
+        const MiniLdSection *section = &state->sections[i];
+
+        if ((section->flags & (SHF_ALLOC | SHF_TLS)) !=
+            (SHF_ALLOC | SHF_TLS)) {
+            continue;
+        }
+        if (layout->section_vaddr[i] < base) {
+            base = layout->section_vaddr[i];
+        }
+        present = true;
+    }
+    *present_out = present;
+    *base_out = present ? base : 0U;
+    return true;
+}
+
 static bool shared_prepare_metadata(MiniLdState *state,
                                     const char *soname,
                                     MiniLdSharedImage *shared) {
@@ -4778,6 +4810,7 @@ static bool shared_prepare_metadata(MiniLdState *state,
     MiniLdSection *dynsym;
     MiniLdSection *hash;
     MiniLdSection *rela;
+    MiniLdSection *got;
     MiniLdSection *plt;
     MiniLdSection *gotplt;
     MiniLdSection *rela_plt;
@@ -4792,6 +4825,7 @@ static bool shared_prepare_metadata(MiniLdState *state,
     shared->dynsym_section = SIZE_MAX;
     shared->hash_section = SIZE_MAX;
     shared->rela_section = SIZE_MAX;
+    shared->got_section = SIZE_MAX;
     shared->plt_section = SIZE_MAX;
     shared->gotplt_section = SIZE_MAX;
     shared->rela_plt_section = SIZE_MAX;
@@ -4806,15 +4840,20 @@ static bool shared_prepare_metadata(MiniLdState *state,
     shared->plt_index =
         malloc((state->symbol_count == 0U ? 1U : state->symbol_count) *
                sizeof(*shared->plt_index));
+    shared->tls_gd_offset =
+        malloc((state->symbol_count == 0U ? 1U : state->symbol_count) *
+               sizeof(*shared->tls_gd_offset));
     if (shared->dynsym_index == NULL ||
         shared->dynstr_name_offset == NULL ||
-        shared->plt_index == NULL) {
+        shared->plt_index == NULL ||
+        shared->tls_gd_offset == NULL) {
         fprintf(state->diagnostics, "minic-ld: out-of-memory:shared-symbol-map\n");
         goto fail;
     }
     for (i = 0U; i < state->symbol_count; ++i) {
         shared->dynsym_index[i] = SIZE_MAX;
         shared->plt_index[i] = SIZE_MAX;
+        shared->tls_gd_offset[i] = SIZE_MAX;
     }
 
     if (!find_or_add_section(state,
@@ -4845,6 +4884,13 @@ static bool shared_prepare_metadata(MiniLdState *state,
                              8U,
                              sizeof(Elf64_Rela),
                              &shared->rela_section) ||
+        !find_or_add_section(state,
+                             ".got",
+                             SHT_PROGBITS,
+                             SHF_ALLOC | SHF_WRITE,
+                             8U,
+                             8U,
+                             &shared->got_section) ||
         !find_or_add_section(state,
                              ".plt",
                              SHT_PROGBITS,
@@ -4880,6 +4926,7 @@ static bool shared_prepare_metadata(MiniLdState *state,
     dynsym = &state->sections[shared->dynsym_section];
     hash = &state->sections[shared->hash_section];
     rela = &state->sections[shared->rela_section];
+    got = &state->sections[shared->got_section];
     plt = &state->sections[shared->plt_section];
     gotplt = &state->sections[shared->gotplt_section];
     rela_plt = &state->sections[shared->rela_plt_section];
@@ -4956,6 +5003,32 @@ static bool shared_prepare_metadata(MiniLdState *state,
             reloc->type == R_RISCV_ALIGN) {
             continue;
         }
+        if (reloc->type == R_RISCV_TLS_GD_HI20) {
+            if (reloc->symbol == SIZE_MAX ||
+                reloc->symbol >= state->symbol_count ||
+                shared->dynsym_index[reloc->symbol] == SIZE_MAX) {
+                fprintf(state->diagnostics,
+                        "minic-ld: invalid-shared-tls-gd-relocation\n");
+                goto fail;
+            }
+            if (shared->tls_gd_offset[reloc->symbol] == SIZE_MAX) {
+                if (shared->tls_gd_count > (SIZE_MAX / 16U) - 1U) {
+                    goto oom;
+                }
+                shared->tls_gd_offset[reloc->symbol] =
+                    shared->tls_gd_count * 16U;
+                ++shared->tls_gd_count;
+                if (shared->rela_count > SIZE_MAX - 2U) {
+                    goto oom;
+                }
+                shared->rela_count += 2U;
+            }
+            continue;
+        }
+        if (reloc->type == R_RISCV_PCREL_LO12_I ||
+            reloc->type == R_RISCV_PCREL_LO12_S) {
+            continue;
+        }
         if (reloc->type == R_RISCV_CALL ||
             reloc->type == R_RISCV_CALL_PLT) {
             if (reloc->symbol == SIZE_MAX ||
@@ -4984,6 +5057,12 @@ static bool shared_prepare_metadata(MiniLdState *state,
             goto fail;
         }
         ++shared->rela_count;
+    }
+    if (shared->tls_gd_count != 0U) {
+        if (shared->tls_gd_count > SIZE_MAX / 16U ||
+            !section_append_zero(got, shared->tls_gd_count * 16U)) {
+            goto oom;
+        }
     }
     if (shared->rela_count > SIZE_MAX / sizeof(Elf64_Rela) ||
         !section_append_zero(rela,
@@ -5066,8 +5145,29 @@ static bool shared_fill_dynsym(MiniLdState *state,
                    (size_t)input->section < state->section_count) {
             output.st_shndx =
                 (Elf64_Section)((size_t)input->section + 1U);
-            output.st_value =
-                layout->section_vaddr[input->section] + input->value;
+            if (ELF64_ST_TYPE(input->info) == STT_TLS) {
+                uint64_t tls_base = 0U;
+                bool tls_present = false;
+
+                if (!shared_tls_base_address(state,
+                                             layout,
+                                             &tls_base,
+                                             &tls_present) ||
+                    !tls_present ||
+                    layout->section_vaddr[input->section] + input->value <
+                        tls_base) {
+                    fprintf(state->diagnostics,
+                            "minic-ld: invalid-shared-tls-symbol:%s\n",
+                            input->name);
+                    return false;
+                }
+                output.st_value =
+                    layout->section_vaddr[input->section] +
+                    input->value - tls_base;
+            } else {
+                output.st_value =
+                    layout->section_vaddr[input->section] + input->value;
+            }
         } else {
             fprintf(state->diagnostics,
                     "minic-ld: unsupported-shared-symbol:%s\n",
@@ -5153,7 +5253,10 @@ static bool shared_fill_relocations(MiniLdState *state,
             input->type == R_RISCV_RELAX ||
             input->type == R_RISCV_ALIGN ||
             input->type == R_RISCV_CALL ||
-            input->type == R_RISCV_CALL_PLT) {
+            input->type == R_RISCV_CALL_PLT ||
+            input->type == R_RISCV_TLS_GD_HI20 ||
+            input->type == R_RISCV_PCREL_LO12_I ||
+            input->type == R_RISCV_PCREL_LO12_S) {
             continue;
         }
         if (input->type != R_RISCV_64 ||
@@ -5207,6 +5310,44 @@ static bool shared_fill_relocations(MiniLdState *state,
                sizeof(output));
         ++write_index;
     }
+    for (i = 0U; i < state->symbol_count; ++i) {
+        size_t offset = shared->tls_gd_offset[i];
+        size_t dynamic_index;
+        uint64_t slot_address;
+        Elf64_Rela output;
+
+        if (offset == SIZE_MAX) {
+            continue;
+        }
+        dynamic_index = shared->dynsym_index[i];
+        if (dynamic_index == SIZE_MAX ||
+            shared->got_section >= state->section_count) {
+            fprintf(state->diagnostics,
+                    "minic-ld: invalid-shared-tls-gd-dynsym\n");
+            return false;
+        }
+        slot_address =
+            layout->section_vaddr[shared->got_section] + (uint64_t)offset;
+
+        memset(&output, 0, sizeof(output));
+        output.r_offset = slot_address;
+        output.r_info =
+            ELF64_R_INFO(dynamic_index, R_RISCV_TLS_DTPMOD64);
+        memcpy(rela->data + write_index * sizeof(output),
+               &output,
+               sizeof(output));
+        ++write_index;
+
+        memset(&output, 0, sizeof(output));
+        output.r_offset = slot_address + 8U;
+        output.r_info =
+            ELF64_R_INFO(dynamic_index, R_RISCV_TLS_DTPREL64);
+        memcpy(rela->data + write_index * sizeof(output),
+               &output,
+               sizeof(output));
+        ++write_index;
+    }
+
     if (write_index != shared->rela_count) {
         fprintf(state->diagnostics,
                 "minic-ld: shared-relocation-count-mismatch\n");
@@ -5234,6 +5375,132 @@ static uint32_t shared_riscv_itype(unsigned opcode,
            ((uint32_t)funct3 << 12U) |
            ((uint32_t)rd << 7U) |
            (uint32_t)opcode;
+}
+
+
+static bool shared_patch_tls_gd(MiniLdState *state,
+                                const MiniLdStaticLayout *layout,
+                                const MiniLdSharedImage *shared) {
+    size_t capacity = pcrel_capacity_for(state->reloc_count);
+    MiniLdPcrelSlot *pcrel;
+    size_t i;
+
+    if (capacity == 0U) {
+        fprintf(state->diagnostics,
+                "minic-ld: shared-tls-pcrel-index-overflow\n");
+        return false;
+    }
+    pcrel = calloc(capacity, sizeof(*pcrel));
+    if (pcrel == NULL) {
+        fprintf(state->diagnostics,
+                "minic-ld: out-of-memory:shared-tls-pcrel\n");
+        return false;
+    }
+
+    for (i = 0U; i < state->reloc_count; ++i) {
+        MiniLdReloc *reloc = &state->relocs[i];
+        MiniLdSection *source;
+        uint64_t place;
+        uint64_t descriptor;
+        int64_t delta;
+
+        if (reloc->type != R_RISCV_TLS_GD_HI20) {
+            continue;
+        }
+        if (reloc->section >= state->section_count ||
+            reloc->symbol == SIZE_MAX ||
+            reloc->symbol >= state->symbol_count ||
+            shared->got_section >= state->section_count ||
+            shared->tls_gd_offset[reloc->symbol] == SIZE_MAX) {
+            fprintf(state->diagnostics,
+                    "minic-ld: invalid-shared-tls-gd-patch\n");
+            free(pcrel);
+            return false;
+        }
+
+        source = &state->sections[reloc->section];
+        place = layout->section_vaddr[reloc->section] + reloc->offset;
+        descriptor =
+            layout->section_vaddr[shared->got_section] +
+            (uint64_t)shared->tls_gd_offset[reloc->symbol];
+        delta = (int64_t)descriptor + reloc->addend - (int64_t)place;
+
+        if (!static_patch_utype(source,
+                                reloc->offset,
+                                riscv_hi20(delta),
+                                state->diagnostics)) {
+            free(pcrel);
+            return false;
+        }
+        pcrel_insert(pcrel,
+                     capacity,
+                     reloc->section,
+                     reloc->offset,
+                     delta);
+    }
+
+    for (i = 0U; i < state->reloc_count; ++i) {
+        MiniLdReloc *reloc = &state->relocs[i];
+        MiniLdSymbol *anchor_symbol;
+        MiniLdSection *source;
+        int64_t anchor_offset;
+        int64_t delta;
+
+        if (reloc->type != R_RISCV_PCREL_LO12_I &&
+            reloc->type != R_RISCV_PCREL_LO12_S) {
+            continue;
+        }
+        if (reloc->symbol == SIZE_MAX ||
+            reloc->symbol >= state->symbol_count) {
+            fprintf(state->diagnostics,
+                    "minic-ld: invalid-shared-tls-lo12-symbol\n");
+            free(pcrel);
+            return false;
+        }
+        anchor_symbol = &state->symbols[reloc->symbol];
+        if (anchor_symbol->section < 0 ||
+            (size_t)anchor_symbol->section >= state->section_count) {
+            fprintf(state->diagnostics,
+                    "minic-ld: invalid-shared-tls-lo12-anchor:%s\n",
+                    anchor_symbol->name);
+            free(pcrel);
+            return false;
+        }
+        anchor_offset =
+            (int64_t)anchor_symbol->value + reloc->addend;
+        if (anchor_offset < 0 ||
+            !pcrel_find(pcrel,
+                        capacity,
+                        (size_t)anchor_symbol->section,
+                        (uint64_t)anchor_offset,
+                        &delta)) {
+            fprintf(state->diagnostics,
+                    "minic-ld: missing-shared-tls-hi20-for-lo12:%s\n",
+                    anchor_symbol->name);
+            free(pcrel);
+            return false;
+        }
+
+        source = &state->sections[reloc->section];
+        if (reloc->type == R_RISCV_PCREL_LO12_I) {
+            if (!static_patch_itype(source,
+                                    reloc->offset,
+                                    riscv_lo12(delta),
+                                    state->diagnostics)) {
+                free(pcrel);
+                return false;
+            }
+        } else if (!static_patch_stype(source,
+                                       reloc->offset,
+                                       riscv_lo12(delta),
+                                       state->diagnostics)) {
+            free(pcrel);
+            return false;
+        }
+    }
+
+    free(pcrel);
+    return true;
 }
 
 static bool shared_fill_plt(MiniLdState *state,
@@ -5440,13 +5707,88 @@ static bool shared_fill_dynamic(MiniLdState *state,
     return true;
 }
 
+
+typedef struct MiniLdSharedTlsSegment {
+    bool present;
+    size_t file_offset;
+    uint64_t vaddr;
+    uint64_t filesz;
+    uint64_t memsz;
+    uint64_t align;
+} MiniLdSharedTlsSegment;
+
+static bool shared_tls_segment(const MiniLdState *state,
+                               const MiniLdStaticLayout *layout,
+                               MiniLdSharedTlsSegment *tls) {
+    uint64_t base = UINT64_MAX;
+    uint64_t memory_end = 0U;
+    uint64_t file_end = 0U;
+    uint64_t alignment = 1U;
+    size_t i;
+    bool have_file = false;
+
+    memset(tls, 0, sizeof(*tls));
+    for (i = 0U; i < state->section_count; ++i) {
+        const MiniLdSection *section = &state->sections[i];
+        uint64_t start;
+        uint64_t end;
+
+        if ((section->flags & (SHF_ALLOC | SHF_TLS)) !=
+            (SHF_ALLOC | SHF_TLS)) {
+            continue;
+        }
+        start = layout->section_vaddr[i];
+        if (section->size > UINT64_MAX - start) {
+            return false;
+        }
+        end = start + (uint64_t)section->size;
+        if (!tls->present || start < base) {
+            base = start;
+        }
+        if (!tls->present || end > memory_end) {
+            memory_end = end;
+        }
+        if (section->align > alignment) {
+            alignment = section->align;
+        }
+        if (section->type != SHT_NOBITS && section->size != 0U) {
+            if (layout->section_file_offset[i] == SIZE_MAX) {
+                return false;
+            }
+            if (!have_file || end > file_end) {
+                file_end = end;
+            }
+            have_file = true;
+        }
+        tls->present = true;
+    }
+
+    if (!tls->present) {
+        return true;
+    }
+    if (!layout->have_rw || base < layout->rw_vaddr ||
+        base - layout->rw_vaddr > SIZE_MAX ||
+        layout->rw_file_offset >
+            SIZE_MAX - (size_t)(base - layout->rw_vaddr)) {
+        return false;
+    }
+
+    tls->vaddr = base;
+    tls->file_offset =
+        layout->rw_file_offset + (size_t)(base - layout->rw_vaddr);
+    tls->filesz = have_file ? file_end - base : 0U;
+    tls->memsz = memory_end - base;
+    tls->align = alignment == 0U ? 1U : alignment;
+    return true;
+}
+
 static bool shared_write_object(MiniLdState *state,
                                 const MiniLdStaticLayout *layout,
                                 const MiniLdSharedImage *shared,
                                 const char *path) {
-    size_t phnum = (layout->have_rx ? 1U : 0U) +
-                   (layout->have_rw ? 1U : 0U) + 1U;
-    size_t image_size = sizeof(Elf64_Ehdr) + phnum * sizeof(Elf64_Phdr);
+    MiniLdSharedTlsSegment tls;
+    size_t phnum;
+    size_t image_size;
     MiniLdBuffer shstrtab = {NULL, 0U, 0U};
     uint32_t *name_offsets = NULL;
     Elf64_Shdr *section_headers = NULL;
@@ -5462,6 +5804,16 @@ static bool shared_write_object(MiniLdState *state,
     Elf64_Phdr *programs;
     FILE *file = NULL;
     bool ok = false;
+
+    if (!shared_tls_segment(state, layout, &tls)) {
+        fprintf(state->diagnostics,
+                "minic-ld: invalid-shared-tls-segment-layout\n");
+        return false;
+    }
+    phnum = (layout->have_rx ? 1U : 0U) +
+            (layout->have_rw ? 1U : 0U) +
+            (tls.present ? 1U : 0U) + 1U;
+    image_size = sizeof(Elf64_Ehdr) + phnum * sizeof(Elf64_Phdr);
 
     if (section_count > UINT16_MAX) {
         fprintf(state->diagnostics,
@@ -5555,6 +5907,17 @@ static bool shared_write_object(MiniLdState *state,
         ph->p_filesz = layout->rw_file_size;
         ph->p_memsz = layout->rw_mem_size;
         ph->p_align = 4096U;
+    }
+    if (tls.present) {
+        Elf64_Phdr *ph = &programs[program_index++];
+        ph->p_type = PT_TLS;
+        ph->p_flags = PF_R;
+        ph->p_offset = tls.file_offset;
+        ph->p_vaddr = tls.vaddr;
+        ph->p_paddr = tls.vaddr;
+        ph->p_filesz = tls.filesz;
+        ph->p_memsz = tls.memsz;
+        ph->p_align = tls.align;
     }
     {
         Elf64_Phdr *ph = &programs[program_index++];
@@ -5720,6 +6083,7 @@ int minild_link_shared_elf64_riscv_inputs(const char *output_path,
     if (!shared_fill_dynsym(&state, &layout, &shared) ||
         !shared_fill_hash(&state, &shared) ||
         !shared_fill_relocations(&state, &layout, &shared) ||
+        !shared_patch_tls_gd(&state, &layout, &shared) ||
         !shared_fill_plt(&state, &layout, &shared) ||
         !shared_fill_dynamic(&state, &layout, &shared) ||
         !shared_write_object(&state, &layout, &shared, output_path)) {
