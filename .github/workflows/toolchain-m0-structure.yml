@@ -16,14 +16,17 @@ jobs:
       - name: Build frozen compiler boundary
         run: make clean && make -j2
 
-      - name: Verify minic-cc and compatibility entrypoint
+      - name: Verify minic-cc and independent driver entrypoint
         shell: bash
         run: |
           set -Eeuo pipefail
           test -x build/debug/bin/minic-cc
           test -x build/debug/bin/minic
-          cmp build/debug/bin/minic-cc build/debug/bin/minic
-          echo "M0_BINARY_BOUNDARY=PASS compiler=minic-cc compatibility=minic"
+          if cmp -s build/debug/bin/minic-cc build/debug/bin/minic; then
+            echo "minic driver unexpectedly aliases minic-cc" >&2
+            exit 1
+          fi
+          echo "M0_BINARY_BOUNDARY=PASS compiler=minic-cc driver=minic"
 
       - name: Run focused ownership gates
         run: |
@@ -41,4 +44,4 @@ jobs:
           build/debug/bin/minic-cc -S "$work/input.i" -o "$work/minic-cc.s"
           build/debug/bin/minic -S "$work/input.i" -o "$work/minic-compat.s"
           cmp "$work/minic-cc.s" "$work/minic-compat.s"
-          echo "M0_COMPILER_CLI_IDENTITY=PASS boundary=.i-to-.s"
+          echo "M0_COMPILER_CLI_IDENTITY=PASS boundary=.i-to-.s driver_compat=PASS"
