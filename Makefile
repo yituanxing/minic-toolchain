@@ -227,7 +227,7 @@ RV64_ABI_TEST_SOURCES := \
 RV64_ABI_TEST_OBJECTS := $(patsubst %.c,$(BUILD_DIR)/obj/%.o,$(RV64_ABI_TEST_SOURCES))
 RV64_ABI_TEST_BINARY  := $(BUILD_DIR)/tests/target/riscv64/abi-test
 
-.PHONY: all help prepare check check-fast check-minias-a0 check-minipp-a0 check-minielf-reader-a0 check-mininm-a0 check-mininm-a1 check-miniobjcopy-a0 check-miniobjcopy-a1 check-minicstrip-a0 check-miniar-a0 check-miniar-a1 check-minild-a0 check-minild-a1 check-minild-a2 check-minild-a3 check-minild-a4 check-minild-script-a0 check-minild-script-a1 check-token-model check-lexer \
+.PHONY: all help prepare check check-fast check-minias-a0 check-minipp-a0 check-minielf-reader-a0 check-mininm-a0 check-mininm-a1 check-miniobjcopy-a0 check-miniobjcopy-a1 check-minicstrip-a0 check-miniar-a0 check-miniar-a1 check-minild-a0 check-minild-a1 check-minild-a2 check-minild-a3 check-minild-a4 check-minild-a5 check-minild-script-a0 check-minild-script-a1 check-token-model check-lexer \
 	check-type check-record check-type-alias check-ast-contract check-layout check-rv64-abi \
 	check-static-functions \
 	check-unsigned-declarations check-long-types check-for-loops check-unbounded-for-break \
@@ -261,6 +261,7 @@ help:
 		"  make check-minild-a2    Validate static ET_EXEC and QEMU runtime" \
 		"  make check-minild-a3    Validate regular archive malloc/free runtime" \
 		"  make check-minild-a4    Validate minimal ET_DYN dynamic metadata" \
+		"  make check-minild-a5    Validate PLT/GOT/JUMP_SLOT shared runtime" \
 		"  make check-minild-script-a0 Parse the Linux linker-script subset" \
 		"  make check-minild-script-a1 Validate script-directed ET_EXEC symbol semantics" \
 		"  make check-fast         Run the fast frontend and C0 gates" \
@@ -467,6 +468,11 @@ check-minild-a4: $(MINILD_BINARY)
 	MINILD="$(abspath $(MINILD_BINARY))" \
 	BUILD_DIR="$(abspath $(BUILD_DIR))" \
 	sh tests/linker/run-a4.sh
+
+check-minild-a5: $(MINILD_BINARY)
+	MINILD="$(abspath $(MINILD_BINARY))" \
+	BUILD_DIR="$(abspath $(BUILD_DIR))" \
+	sh tests/linker/run-a5.sh
 
 check-minild-script-a0: $(MINILD_BINARY)
 	HOST_CC="$(CC)" \
