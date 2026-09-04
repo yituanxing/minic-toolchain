@@ -798,7 +798,8 @@ bool minic_parser_apply_fixed_call_argument_conversion(MinicParser *parser,
         return true;
     }
     needs_explicit_conversion =
-        (minic_type_is_double(target_type) && minic_type_is_integer(source->type)) ||
+        (minic_type_is_double(target_type) &&
+         (minic_type_is_integer(source->type) || minic_type_is_float(source->type))) ||
         minic_type_gnu_pointer_sign_compatible(target_type, source->type) ||
         gnu_enum_integer_pointer_call_conversion_compatible(
             parser->program, target_type, source->type) ||
