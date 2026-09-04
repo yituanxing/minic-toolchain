@@ -215,6 +215,10 @@ static bool minipp_expr_parse_character(MiniPpExprParser *parser,
     uint64_t result = 0U;
     size_t count = 0U;
 
+    if ((cursor[0] == 'L' || cursor[0] == 'u' || cursor[0] == 'U') &&
+        cursor[1] == '\'') {
+        ++cursor;
+    }
     if (*cursor != '\'') {
         return false;
     }
@@ -318,7 +322,10 @@ static bool minipp_expr_parse_primary(MiniPpExprParser *parser,
         return true;
     }
 
-    if (*parser->cursor == '\'') {
+    if (*parser->cursor == '\'' ||
+        ((parser->cursor[0] == 'L' || parser->cursor[0] == 'u' ||
+          parser->cursor[0] == 'U') &&
+         parser->cursor[1] == '\'')) {
         return minipp_expr_parse_character(parser, value);
     }
 
