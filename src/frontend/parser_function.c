@@ -2776,8 +2776,8 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
         return false;
     }
     if (!minic_type_is_integer(return_type) && !minic_type_is_void(return_type) &&
-        !minic_type_is_pointer(return_type) && !minic_type_is_double(return_type) &&
-        !minic_type_is_record(return_type)) {
+        !minic_type_is_pointer(return_type) && !minic_type_is_float(return_type) &&
+        !minic_type_is_double(return_type) && !minic_type_is_record(return_type)) {
         minic_parser_error(parser, "unsupported function return type");
         return false;
     }
