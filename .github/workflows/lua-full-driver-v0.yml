@@ -122,6 +122,25 @@ jobs:
             lcorolib.c ldblib.c liolib.c lmathlib.c loadlib.c loslib.c
             lstrlib.c ltablib.c lutf8lib.c linit.c lua.c
           )
+          raw_tu_dir="$work/raw-tu"
+          mkdir -p "$raw_tu_dir"
+          raw_passed=0
+          for source in "${sources[@]}"; do
+            base="${source%.c}"
+            set +e
+            "$driver" --sysroot "$sysroot/usr" -DLUA_USE_LINUX -I"$src" -c               "$src/$source" -o "$raw_tu_dir/$base.o"               >"$raw_tu_dir/$base.stdout" 2>"$raw_tu_dir/$base.stderr"
+            tu_rc=$?
+            set -e
+            if test "$tu_rc" -ne 0; then
+              echo "LUA_RAW_TU_BLOCKER source=$source completed=$raw_passed rc=$tu_rc"
+              cat "$raw_tu_dir/$base.stderr"
+              exit "$tu_rc"
+            fi
+            raw_passed=$((raw_passed + 1))
+            echo "LUA_RAW_TU_PASS source=$source completed=$raw_passed"
+          done
+          echo "LUA_RAW_TU_V0=PASS tus=$raw_passed pipeline=cpp,cc,as"
+
           inputs=()
           for source in "${sources[@]}"; do
             inputs+=("$src/$source")
@@ -214,6 +233,8 @@ jobs:
             build/lua-full-driver-v0/musl-input-list.txt
             build/lua-full-driver-v0/lua-driver.stdout
             build/lua-full-driver-v0/lua-driver.stderr
+            build/lua-full-driver-v0/raw-tu/*.stderr
+            build/lua-full-driver-v0/raw-tu/*.stdout
             build/lua-full-driver-v0/lua-minic.header
             build/lua-full-driver-v0/lua-minic.programs
             build/lua-full-driver-v0/lua-minic.dynamic
