@@ -6,7 +6,7 @@ on:
       - "external/lua-full-driver-v0"
   pull_request:
     branches:
-      - "toolchain/minic-driver-multiinput-v0"
+      - "toolchain/static-readiness"
   workflow_dispatch:
 
 permissions:
