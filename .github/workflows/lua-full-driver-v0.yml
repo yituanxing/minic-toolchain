@@ -174,6 +174,30 @@ jobs:
           grep -qx 'LUA_MINIC_OK' "$work/lua-smoke.stdout"
           echo "LUA_FULL_DRIVER_V0=PASS release=5.5.0 tus=33 pipeline=cpp,cc,as,ld musl=minild qemu=PASS"
 
+      - name: Run official Lua 5.5.0 basic test suite
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/lua-full-driver-v0"
+          sysroot="$work/musl-sysroot"
+
+          curl -fsSL https://www.lua.org/tests/lua-5.5.0-tests.tar.gz             -o "$work/lua-5.5.0-tests.tar.gz"
+          printf '%s  %s\n'             5e47bbfad7db2965d69580e918ee64edeb8d8d32de404b8dae9ce5c6d76a1472             "$work/lua-5.5.0-tests.tar.gz" | sha256sum -c -
+          tar -xzf "$work/lua-5.5.0-tests.tar.gz" -C "$work"
+
+          tests="$work/lua-5.5.0-tests"
+          cd "$tests"
+          set +e
+          timeout 120s qemu-riscv64 -L "$sysroot" "$work/lua-minic"             -e"_U=true" all.lua             >"$work/lua-suite.stdout" 2>"$work/lua-suite.stderr"
+          rc=$?
+          set -e
+          echo "LUA_BASIC_SUITE_RC=$rc"
+          tail -n 80 "$work/lua-suite.stdout"
+          tail -n 80 "$work/lua-suite.stderr"
+          test "$rc" -eq 0
+          grep -F 'final OK' "$work/lua-suite.stdout" >/dev/null
+          echo "LUA_BASIC_SUITE_V0=PASS release=5.5.0 official=1 _U=true final_OK=1"
+
       - name: Preserve Lua frontier evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -195,5 +219,7 @@ jobs:
             build/lua-full-driver-v0/smoke.lua
             build/lua-full-driver-v0/lua-smoke.stdout
             build/lua-full-driver-v0/lua-smoke.stderr
+            build/lua-full-driver-v0/lua-suite.stdout
+            build/lua-full-driver-v0/lua-suite.stderr
           if-no-files-found: ignore
           retention-days: 5
