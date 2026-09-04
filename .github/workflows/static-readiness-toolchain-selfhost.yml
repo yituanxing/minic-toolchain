@@ -6,7 +6,6 @@ on:
       - "toolchain/static-readiness"
       - "toolchain/miniobjcopy-elf-a1"
       - "toolchain/minic-strip-m0"
-      - "toolchain/minic-driver-v0"
   workflow_dispatch:
 
 permissions:
