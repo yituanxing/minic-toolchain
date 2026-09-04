@@ -17,15 +17,22 @@ grep -F 'unnamed_array_parameter:' "$work/output.s" >/dev/null
 grep -F 'adjusted_size:' "$work/output.s" >/dev/null
 
 cat >"$work/static-bound.c" <<'EOF'
-void unsupported(int values[static 4]);
+void bounded(int values[static 4]);
+void bounded(int *values)
+{
+    values[0] = 7;
+}
+int call_bounded(void)
+{
+    int values[4] = { 0 };
+    bounded(values);
+    return values[0];
+}
 EOF
 "$host_cc" -E -P -std=gnu11 -x c "$work/static-bound.c" -o "$work/static-bound.i"
-if "$minic" -S "$work/static-bound.i" -o "$work/static-bound.s" 2>"$work/static-bound.stderr"; then
-    printf '%s
-' 'parameter [static N] unexpectedly accepted by bounded v0' >&2
-    exit 1
-fi
-test -s "$work/static-bound.stderr"
+"$minic" -S "$work/static-bound.i" -o "$work/static-bound.s"
+test -s "$work/static-bound.s"
+grep -F 'bounded:' "$work/static-bound.s" >/dev/null
+grep -F 'call_bounded:' "$work/static-bound.s" >/dev/null
 
-printf '%s
-'   'PASS compiler/c0/array_parameter_adjustment named=1 unnamed=1 fixed-bound=discarded function-type=pointer redeclaration=array-pointer-compatible function-pointer-typedef=1 sizeof=pointer static-bound=fail-closed'
+printf '%s\n' 'PASS compiler/c0/array_parameter_adjustment named=1 unnamed=1 fixed-bound=discarded function-type=pointer redeclaration=array-pointer-compatible function-pointer-typedef=1 sizeof=pointer static-bound=adjusted-pointer'
