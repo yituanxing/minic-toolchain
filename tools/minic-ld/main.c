@@ -183,6 +183,7 @@ int main(int argc, char **argv) {
                                                       inputs,
                                                       input_count,
                                                       soname,
+                                                      entry_symbol,
                                                       stderr);
     }
 
