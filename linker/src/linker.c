@@ -4720,6 +4720,7 @@ typedef struct MiniLdSharedImage {
     size_t rela_plt_section;
     size_t dynamic_section;
     uint32_t soname_offset;
+    uint32_t needed_offset;
     size_t *dynsym_index;
     uint32_t *dynstr_name_offset;
     size_t *plt_index;
@@ -4734,6 +4735,7 @@ typedef struct MiniLdSharedImage {
     size_t got_count;
     size_t tls_gd_count;
     bool have_soname;
+    bool have_needed;
     bool have_dynamic_list;
 } MiniLdSharedImage;
 
@@ -4758,6 +4760,8 @@ static void shared_image_destroy(MiniLdSharedImage *shared) {
     shared->plt_count = 0U;
     shared->got_count = 0U;
     shared->tls_gd_count = 0U;
+    shared->have_soname = false;
+    shared->have_needed = false;
     shared->have_dynamic_list = false;
 }
 
@@ -5034,6 +5038,7 @@ static bool shared_finalize_ehdr_symbol(MiniLdState *state,
 static bool shared_prepare_metadata(MiniLdState *state,
                                     const char *soname,
                                     const char *dynamic_list_path,
+                                    const char *needed_name,
                                     MiniLdSharedImage *shared) {
     MiniLdSection *dynstr;
     MiniLdSection *dynsym;
@@ -5197,6 +5202,18 @@ static bool shared_prepare_metadata(MiniLdState *state,
             goto oom;
         }
         shared->have_soname = true;
+    }
+    if (needed_name != NULL && needed_name[0] != '\0') {
+        if (dynstr->size > UINT32_MAX) {
+            goto oom;
+        }
+        shared->needed_offset = (uint32_t)dynstr->size;
+        if (!section_append_data(dynstr,
+                                 (const unsigned char *)needed_name,
+                                 strlen(needed_name) + 1U)) {
+            goto oom;
+        }
+        shared->have_needed = true;
     }
 
     shared->dynsym_count = 1U;
@@ -5385,6 +5402,9 @@ static bool shared_prepare_metadata(MiniLdState *state,
         dynamic_entries += 5U; /* PLTGOT/PLTRELSZ/PLTREL/JMPREL/BIND_NOW */
     }
     if (shared->have_soname) {
+        ++dynamic_entries;
+    }
+    if (shared->have_needed) {
         ++dynamic_entries;
     }
     if (dynamic_entries > SIZE_MAX / sizeof(Elf64_Dyn) ||
@@ -6357,6 +6377,9 @@ static bool shared_fill_dynamic(MiniLdState *state,
         MINILD_DYN(DT_JMPREL, layout->section_vaddr[shared->rela_plt_section]);
         MINILD_DYN(DT_BIND_NOW, 0U);
     }
+    if (shared->have_needed) {
+        MINILD_DYN(DT_NEEDED, shared->needed_offset);
+    }
     if (shared->have_soname) {
         MINILD_DYN(DT_SONAME, shared->soname_offset);
     }
@@ -6740,6 +6763,8 @@ int minild_link_shared_elf64_riscv_inputs_options(
         options != NULL ? options->entry_symbol : NULL;
     const char *dynamic_list_path =
         options != NULL ? options->dynamic_list_path : NULL;
+    const char *needed_name =
+        options != NULL ? options->needed_name : NULL;
     MiniLdState state;
     MiniLdStaticLayout layout;
     MiniLdSharedImage shared;
@@ -6762,6 +6787,7 @@ int minild_link_shared_elf64_riscv_inputs_options(
         !shared_prepare_metadata(&state,
                                  soname,
                                  dynamic_list_path,
+                                 needed_name,
                                  &shared) ||
         !shared_build_layout(&state, &layout)) {
         goto done;
@@ -6806,6 +6832,7 @@ int minild_link_shared_elf64_riscv_inputs(const char *output_path,
     options.soname = soname;
     options.entry_symbol = entry_symbol;
     options.dynamic_list_path = NULL;
+    options.needed_name = NULL;
     return minild_link_shared_elf64_riscv_inputs_options(output_path,
                                                           inputs,
                                                           input_count,
