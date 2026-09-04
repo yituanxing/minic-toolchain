@@ -71,9 +71,16 @@ typedef struct MiniLdState {
     MiniLdIndexSlot *global_index;
     size_t global_index_capacity;
     size_t global_index_count;
+    char **dso_needed_names;
+    size_t dso_needed_count;
+    size_t dso_needed_capacity;
+    char **dso_symbol_names;
+    size_t dso_symbol_count;
+    size_t dso_symbol_capacity;
     uint32_t elf_flags;
     size_t processed_object_count;
     bool have_input;
+    bool allow_dso_inputs;
     FILE *diagnostics;
 } MiniLdState;
 
@@ -260,11 +267,89 @@ static void state_destroy(MiniLdState *state) {
     for (i = 0U; i < state->symbol_count; ++i) {
         free(state->symbols[i].name);
     }
+    for (i = 0U; i < state->dso_needed_count; ++i) {
+        free(state->dso_needed_names[i]);
+    }
+    for (i = 0U; i < state->dso_symbol_count; ++i) {
+        free(state->dso_symbol_names[i]);
+    }
+    free(state->dso_needed_names);
+    free(state->dso_symbol_names);
     free(state->sections);
     free(state->symbols);
     free(state->relocs);
     free(state->section_index);
     free(state->global_index);
+}
+
+static bool string_set_append(char ***items,
+                              size_t *count,
+                              size_t *capacity,
+                              const char *text) {
+    size_t i;
+    size_t next_capacity;
+    char **next;
+    char *copy;
+
+    for (i = 0U; i < *count; ++i) {
+        if (strcmp((*items)[i], text) == 0) {
+            return true;
+        }
+    }
+    if (*count == *capacity) {
+        next_capacity = *capacity == 0U ? 16U : *capacity * 2U;
+        if (next_capacity < *capacity ||
+            next_capacity > SIZE_MAX / sizeof(**items)) {
+            return false;
+        }
+        next = realloc(*items, next_capacity * sizeof(**items));
+        if (next == NULL) {
+            return false;
+        }
+        *items = next;
+        *capacity = next_capacity;
+    }
+    copy = minild_strdup(text);
+    if (copy == NULL) {
+        return false;
+    }
+    (*items)[(*count)++] = copy;
+    return true;
+}
+
+static bool state_add_dso_needed(MiniLdState *state, const char *name) {
+    if (!string_set_append(&state->dso_needed_names,
+                           &state->dso_needed_count,
+                           &state->dso_needed_capacity,
+                           name)) {
+        fprintf(state->diagnostics,
+                "minic-ld: out-of-memory:dso-needed\n");
+        return false;
+    }
+    return true;
+}
+
+static bool state_add_dso_symbol(MiniLdState *state, const char *name) {
+    if (!string_set_append(&state->dso_symbol_names,
+                           &state->dso_symbol_count,
+                           &state->dso_symbol_capacity,
+                           name)) {
+        fprintf(state->diagnostics,
+                "minic-ld: out-of-memory:dso-symbol\n");
+        return false;
+    }
+    return true;
+}
+
+static bool state_dso_defines(const MiniLdState *state, const char *name) {
+    size_t i;
+
+    for (i = 0U; i < state->dso_symbol_count; ++i) {
+        if (strcmp(state->dso_symbol_names[i], name) == 0) {
+            return true;
+        }
+    }
+    return false;
 }
 
 static bool ensure_section_capacity(MiniLdState *state) {
@@ -1005,15 +1090,180 @@ done:
     return ok;
 }
 
+static bool process_dso_input_data(MiniLdState *state,
+                                   const unsigned char *data,
+                                   size_t size,
+                                   const char *path) {
+    MiniElfView elf;
+    MiniElfSection dynsym = {0};
+    MiniElfSection dynamic = {0};
+    size_t dynsym_index = SIZE_MAX;
+    size_t dynamic_index = SIZE_MAX;
+    const char *needed_name = NULL;
+    size_t i;
+
+    if (!minielf_open(&elf, data, size) ||
+        elf.elf_class != ELFCLASS64 ||
+        elf.data_encoding != ELFDATA2LSB ||
+        elf.type != ET_DYN ||
+        elf.machine != EM_RISCV ||
+        elf.version != EV_CURRENT) {
+        fprintf(state->diagnostics,
+                "minic-ld: unsupported-shared-input:%s\n",
+                path);
+        return false;
+    }
+    for (i = 1U; i < elf.section_count; ++i) {
+        MiniElfSection section;
+
+        if (!minielf_section(&elf, i, &section)) {
+            fprintf(state->diagnostics,
+                    "minic-ld: invalid-shared-input-section:%s\n",
+                    path);
+            return false;
+        }
+        if (section.type == SHT_DYNSYM) {
+            if (dynsym_index != SIZE_MAX) {
+                fprintf(state->diagnostics,
+                        "minic-ld: multiple-dynsym:%s\n",
+                        path);
+                return false;
+            }
+            dynsym = section;
+            dynsym_index = i;
+        } else if (section.type == SHT_DYNAMIC &&
+                   dynamic_index == SIZE_MAX) {
+            dynamic = section;
+            dynamic_index = i;
+        }
+    }
+    if (dynsym_index == SIZE_MAX ||
+        dynsym.link >= elf.section_count ||
+        dynsym.entry_size < sizeof(Elf64_Sym)) {
+        fprintf(state->diagnostics,
+                "minic-ld: missing-dynsym:%s\n",
+                path);
+        return false;
+    }
+
+    if (dynamic_index != SIZE_MAX) {
+        const unsigned char *dynamic_data;
+        size_t dynamic_size;
+        size_t entry_size =
+            dynamic.entry_size == 0U ? sizeof(Elf64_Dyn)
+                                     : (size_t)dynamic.entry_size;
+
+        if (dynamic.link >= elf.section_count ||
+            entry_size < sizeof(Elf64_Dyn) ||
+            !minielf_section_data(&elf,
+                                  dynamic_index,
+                                  &dynamic_data,
+                                  &dynamic_size)) {
+            fprintf(state->diagnostics,
+                    "minic-ld: invalid-shared-dynamic:%s\n",
+                    path);
+            return false;
+        }
+        for (i = 0U; i + sizeof(Elf64_Dyn) <= dynamic_size;
+             i += entry_size) {
+            Elf64_Dyn entry;
+
+            if (entry_size > dynamic_size - i) {
+                break;
+            }
+            memcpy(&entry, dynamic_data + i, sizeof(entry));
+            if (entry.d_tag == DT_NULL) {
+                break;
+            }
+            if (entry.d_tag == DT_SONAME) {
+                if (entry.d_un.d_val > UINT32_MAX ||
+                    !minielf_string(&elf,
+                                    dynamic.link,
+                                    (uint32_t)entry.d_un.d_val,
+                                    &needed_name)) {
+                    fprintf(state->diagnostics,
+                            "minic-ld: invalid-shared-soname:%s\n",
+                            path);
+                    return false;
+                }
+                break;
+            }
+        }
+    }
+    if (needed_name == NULL || needed_name[0] == '\0') {
+        const char *slash = strrchr(path, '/');
+        needed_name = slash == NULL ? path : slash + 1;
+    }
+    if (needed_name[0] == '\0' ||
+        !state_add_dso_needed(state, needed_name)) {
+        return false;
+    }
+
+    {
+        size_t count = minielf_symbol_count(&elf, &dynsym);
+
+        if (count == 0U && dynsym.size != 0U) {
+            fprintf(state->diagnostics,
+                    "minic-ld: invalid-dynsym:%s\n",
+                    path);
+            return false;
+        }
+        for (i = 1U; i < count; ++i) {
+            MiniElfSymbol symbol;
+            const char *name;
+            unsigned bind;
+            unsigned visibility;
+
+            if (!minielf_symbol(&elf, dynsym_index, i, &symbol)) {
+                fprintf(state->diagnostics,
+                        "minic-ld: truncated-dynsym:%s\n",
+                        path);
+                return false;
+            }
+            bind = minielf_symbol_bind(symbol.info);
+            visibility = ELF64_ST_VISIBILITY(symbol.other);
+            if ((bind != STB_GLOBAL && bind != STB_WEAK) ||
+                symbol.section_index == SHN_UNDEF ||
+                symbol.name == 0U ||
+                (visibility != STV_DEFAULT &&
+                 visibility != STV_PROTECTED)) {
+                continue;
+            }
+            if (!minielf_string(&elf, dynsym.link, symbol.name, &name)) {
+                fprintf(state->diagnostics,
+                        "minic-ld: invalid-dynsym-name:%s\n",
+                        path);
+                return false;
+            }
+            if (!state_add_dso_symbol(state, name)) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
 static bool process_input(MiniLdState *state, const char *path) {
     unsigned char *data = NULL;
     size_t size = 0U;
+    MiniElfView elf;
     bool ok;
 
     if (!read_file(path, &data, &size, state->diagnostics)) {
         return false;
     }
-    ok = process_input_data(state, data, size, path);
+    if (minielf_open(&elf, data, size) && elf.type == ET_DYN) {
+        if (!state->allow_dso_inputs) {
+            fprintf(state->diagnostics,
+                    "minic-ld: shared-input-requires-dynamic-link:%s\n",
+                    path);
+            ok = false;
+        } else {
+            ok = process_dso_input_data(state, data, size, path);
+        }
+    } else {
+        ok = process_input_data(state, data, size, path);
+    }
     free(data);
     return ok;
 }
@@ -4721,7 +4971,8 @@ typedef struct MiniLdSharedImage {
     size_t dynamic_section;
     size_t interp_section;
     uint32_t soname_offset;
-    uint32_t needed_offset;
+    uint32_t *needed_offsets;
+    size_t needed_count;
     size_t *dynsym_index;
     uint32_t *dynstr_name_offset;
     size_t *plt_index;
@@ -4736,7 +4987,6 @@ typedef struct MiniLdSharedImage {
     size_t got_count;
     size_t tls_gd_count;
     bool have_soname;
-    bool have_needed;
     bool have_interp;
     bool pie;
     bool have_dynamic_list;
@@ -4749,6 +4999,7 @@ static void shared_image_destroy(MiniLdSharedImage *shared) {
     free(shared->got_slot_offset);
     free(shared->tls_gd_offset);
     free(shared->preemptible);
+    free(shared->needed_offsets);
     free(shared->dynamic_list_data);
     shared->dynsym_index = NULL;
     shared->dynstr_name_offset = NULL;
@@ -4756,6 +5007,8 @@ static void shared_image_destroy(MiniLdSharedImage *shared) {
     shared->got_slot_offset = NULL;
     shared->tls_gd_offset = NULL;
     shared->preemptible = NULL;
+    shared->needed_offsets = NULL;
+    shared->needed_count = 0U;
     shared->dynamic_list_data = NULL;
     shared->dynamic_list_size = 0U;
     shared->dynsym_count = 0U;
@@ -4764,7 +5017,6 @@ static void shared_image_destroy(MiniLdSharedImage *shared) {
     shared->got_count = 0U;
     shared->tls_gd_count = 0U;
     shared->have_soname = false;
-    shared->have_needed = false;
     shared->have_interp = false;
     shared->pie = false;
     shared->have_dynamic_list = false;
@@ -5092,12 +5344,21 @@ static bool shared_prepare_metadata(MiniLdState *state,
     shared->preemptible =
         calloc(state->symbol_count == 0U ? 1U : state->symbol_count,
                sizeof(*shared->preemptible));
+    {
+        size_t maximum_needed = state->dso_needed_count +
+            (needed_name != NULL && needed_name[0] != '\0' ? 1U : 0U);
+
+        shared->needed_offsets =
+            calloc(maximum_needed == 0U ? 1U : maximum_needed,
+                   sizeof(*shared->needed_offsets));
+    }
     if (shared->dynsym_index == NULL ||
         shared->dynstr_name_offset == NULL ||
         shared->plt_index == NULL ||
         shared->got_slot_offset == NULL ||
         shared->tls_gd_offset == NULL ||
-        shared->preemptible == NULL) {
+        shared->preemptible == NULL ||
+        shared->needed_offsets == NULL) {
         fprintf(state->diagnostics, "minic-ld: out-of-memory:shared-symbol-map\n");
         goto fail;
     }
@@ -5232,13 +5493,30 @@ static bool shared_prepare_metadata(MiniLdState *state,
         if (dynstr->size > UINT32_MAX) {
             goto oom;
         }
-        shared->needed_offset = (uint32_t)dynstr->size;
+        shared->needed_offsets[shared->needed_count++] =
+            (uint32_t)dynstr->size;
         if (!section_append_data(dynstr,
                                  (const unsigned char *)needed_name,
                                  strlen(needed_name) + 1U)) {
             goto oom;
         }
-        shared->have_needed = true;
+    }
+    for (i = 0U; i < state->dso_needed_count; ++i) {
+        const char *name = state->dso_needed_names[i];
+
+        if (needed_name != NULL && strcmp(needed_name, name) == 0) {
+            continue;
+        }
+        if (dynstr->size > UINT32_MAX) {
+            goto oom;
+        }
+        shared->needed_offsets[shared->needed_count++] =
+            (uint32_t)dynstr->size;
+        if (!section_append_data(dynstr,
+                                 (const unsigned char *)name,
+                                 strlen(name) + 1U)) {
+            goto oom;
+        }
     }
 
     shared->dynsym_count = 1U;
@@ -5429,9 +5707,10 @@ static bool shared_prepare_metadata(MiniLdState *state,
     if (shared->have_soname) {
         ++dynamic_entries;
     }
-    if (shared->have_needed) {
-        ++dynamic_entries;
+    if (shared->needed_count > SIZE_MAX - dynamic_entries) {
+        goto oom;
     }
+    dynamic_entries += shared->needed_count;
     if (shared->pie) {
         ++dynamic_entries; /* FLAGS_1 */
     }
@@ -6405,8 +6684,14 @@ static bool shared_fill_dynamic(MiniLdState *state,
         MINILD_DYN(DT_JMPREL, layout->section_vaddr[shared->rela_plt_section]);
         MINILD_DYN(DT_BIND_NOW, 0U);
     }
-    if (shared->have_needed) {
-        MINILD_DYN(DT_NEEDED, shared->needed_offset);
+    {
+        size_t needed_index;
+
+        for (needed_index = 0U;
+             needed_index < shared->needed_count;
+             ++needed_index) {
+            MINILD_DYN(DT_NEEDED, shared->needed_offsets[needed_index]);
+        }
     }
     if (shared->have_soname) {
         MINILD_DYN(DT_SONAME, shared->soname_offset);
@@ -6826,6 +7111,33 @@ oom:
     goto done;
 }
 
+static bool shared_validate_pie_dso_symbols(
+    const MiniLdState *state) {
+    size_t i;
+
+    if (state->dso_needed_count == 0U) {
+        return true;
+    }
+    for (i = 0U; i < state->symbol_count; ++i) {
+        const MiniLdSymbol *symbol = &state->symbols[i];
+        unsigned bind = ELF64_ST_BIND(symbol->info);
+
+        if (symbol->section != MINILD_SECTION_UNDEF ||
+            bind == STB_WEAK ||
+            bind == STB_LOCAL ||
+            symbol->name[0] == '\0') {
+            continue;
+        }
+        if (!state_dso_defines(state, symbol->name)) {
+            fprintf(state->diagnostics,
+                    "minic-ld: unresolved-pie-symbol:%s\n",
+                    symbol->name);
+            return false;
+        }
+    }
+    return true;
+}
+
 int minild_link_shared_elf64_riscv_inputs_options(
     const char *output_path,
     const MiniLdInput *inputs,
@@ -6859,6 +7171,7 @@ int minild_link_shared_elf64_riscv_inputs_options(
     memset(&layout, 0, sizeof(layout));
     memset(&shared, 0, sizeof(shared));
     state.diagnostics = diagnostics;
+    state.allow_dso_inputs = true;
 
     if (!process_input_sequence(&state, inputs, input_count) ||
         !state.have_input ||
@@ -6870,6 +7183,7 @@ int minild_link_shared_elf64_riscv_inputs_options(
                                  interpreter_path,
                                  pie,
                                  &shared) ||
+        (pie && !shared_validate_pie_dso_symbols(&state)) ||
         !shared_build_layout(&state, &layout)) {
         goto done;
     }
