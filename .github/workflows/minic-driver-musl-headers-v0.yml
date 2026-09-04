@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - "toolchain/minic-driver-musl-headers-v0"
+  pull_request:
+    branches:
+      - "toolchain/static-readiness"
   workflow_dispatch:
 
 permissions:
