@@ -734,6 +734,7 @@ test "$native_gas_forms_hex" = "4d5a073005002334150007a1c50023a83500739032007300
 readelf -Ws "$work/native-gas-forms.o" | grep -Eq 'FUNC[[:space:]]+GLOBAL.* native_gas_forms$'
 
 cat >"$work/scalar-fp.s" <<'EOF'
+.option norvc
 .text
 .globl scalar_fp
 .type scalar_fp, @function
