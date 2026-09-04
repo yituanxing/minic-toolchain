@@ -89,6 +89,18 @@ jobs:
 
           count="$(wc -l <"$work/input-list.txt")"
           test "$count" -gt 1300
+
+          (
+            cd "$out"
+            xargs -r riscv64-linux-gnu-readelf -Wr <"$work/input-list.txt"
+          ) |
+            awk '{ for (i = 1; i <= NF; ++i) if ($i ~ /^R_RISCV_/) print $i }' |
+            sort |
+            uniq -c |
+            sort -k1,1nr -k2,2 >"$work/relocation-census.txt"
+          echo "=== MUSL PIC RELOCATION CENSUS ==="
+          cat "$work/relocation-census.txt"
+
           printf 'MUSL_SHARED_GNU=PASS link_inputs=%s elapsed_s=%s libc_bytes=%s\n' \
             "$count" "$elapsed" "$(stat -c %s lib/libc.so)"
 
@@ -140,6 +152,7 @@ jobs:
             build/minild-musl-rebase/configure.log
             build/minild-musl-rebase/make.log
             build/minild-musl-rebase/input-list.txt
+            build/minild-musl-rebase/relocation-census.txt
             build/minild-musl-rebase/gnu.relocations
             build/minild-musl-rebase/gnu.dynamic
             build/minild-musl-rebase/gnu.sections
