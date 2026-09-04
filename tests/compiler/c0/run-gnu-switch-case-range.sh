@@ -22,7 +22,7 @@ SRC
 # semantic shape without pinning the removed AST->RV64 label namespace.
 grep -Fq 'classify:' "$work/positive.s"
 sltu_count=$(grep -E -c '^[[:space:]]+sltu[[:space:]]+' "$work/positive.s" || true)
-core_branch_count=$(grep -E -c '^[[:space:]]+bnez[[:space:]]+[^,]+,[[:space:]]*\.L[^[:space:]]+_core_bb[0-9]+$' "$work/positive.s" || true)
+core_branch_count=$(grep -E -c '^[[:space:]]+b(eq|ne)z[[:space:]]+[^,]+,[[:space:]]*(1f|\.L[^[:space:]]+_core_bb[0-9]+)$' "$work/positive.s" || true)
 test "$sltu_count" -ge 6
 test "$core_branch_count" -ge 6
 if grep -Fq '.Lswitch_range_next_' "$work/positive.s"; then
