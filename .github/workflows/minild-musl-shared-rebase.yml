@@ -221,7 +221,7 @@ jobs:
           make -j4 lib/Scrt1.o lib/crti.o lib/crtn.o >/dev/null
           make DESTDIR="$sysroot" install-headers >/dev/null
 
-          "$src/tools/musl-gcc.specs.sh"             "$sysroot/usr/include"             "$out/lib"             /lib/ld-musl-riscv64.so.1 >"$work/musl-test.specs"
+          sh "$src/tools/musl-gcc.specs.sh"             "$sysroot/usr/include"             "$out/lib"             /lib/ld-musl-riscv64.so.1 >"$work/musl-test.specs"
 
           cat >"$work/dynamic-smoke.c" <<'EOF'
           #include <stdlib.h>
