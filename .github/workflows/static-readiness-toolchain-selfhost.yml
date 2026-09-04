@@ -6,6 +6,7 @@ on:
       - "toolchain/static-readiness"
       - "toolchain/miniobjcopy-elf-a1"
       - "toolchain/minic-strip-m0"
+      - "toolchain/minic-driver-v0"
   workflow_dispatch:
 
 permissions:
@@ -84,7 +85,7 @@ jobs:
           test -s obj/crt/crtn.o
           echo "STATIC_TOOLCHAIN_SELFHOST_MUSL=PASS objects=$(find obj -type f -name '*.o' | wc -l)"
 
-      - name: Compile PP AS AR NM OBJCOPY STRIP LD through Stage2 and MiniAS
+      - name: Compile DRIVER PP AS AR NM OBJCOPY STRIP LD through Stage2 and MiniAS
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -121,6 +122,9 @@ jobs:
             test -s "$obj"
             printf '%s\n' "$obj"
           }
+
+          : >"$work/driver.objects"
+          compile_one driver "" tools/minic/main.c >>"$work/driver.objects"
 
           : >"$work/cpp.objects"
           for source in             preprocessor/src/file_buffer.c             preprocessor/src/expression.c             preprocessor/src/include.c             preprocessor/src/token.c             preprocessor/src/preprocessor.c             tools/minic-cpp/main.c
@@ -193,7 +197,7 @@ jobs:
             compile_one ld "-Ilinker/include -Ilinker/src -Ielf/include" "$source" >>"$work/ld.objects"
           done
 
-          printf 'STATIC_TOOLCHAIN_SELFHOST_COMPILE=PASS cpp=%s as=%s ar=%s nm=%s objcopy=%s strip=%s ld=%s\n'             "$(wc -l <"$work/cpp.objects")"             "$(wc -l <"$work/as.objects")"             "$(wc -l <"$work/ar.objects")"             "$(wc -l <"$work/nm.objects")"             "$(wc -l <"$work/objcopy.objects")"             "$(wc -l <"$work/strip.objects")"             "$(wc -l <"$work/ld.objects")"
+          printf 'STATIC_TOOLCHAIN_SELFHOST_COMPILE=PASS driver=%s cpp=%s as=%s ar=%s nm=%s objcopy=%s strip=%s ld=%s\n'             "$(wc -l <"$work/driver.objects")"             "$(wc -l <"$work/cpp.objects")"             "$(wc -l <"$work/as.objects")"             "$(wc -l <"$work/ar.objects")"             "$(wc -l <"$work/nm.objects")"             "$(wc -l <"$work/objcopy.objects")"             "$(wc -l <"$work/strip.objects")"             "$(wc -l <"$work/ld.objects")"
 
       - name: Link self-hosted tools with current MiniLD
         shell: bash
@@ -212,6 +216,8 @@ jobs:
             test -s "$work/bin/minic-$tool"
           }
 
+          link_tool driver
+          mv "$work/bin/minic-driver" "$work/bin/minic"
           link_tool cpp
           link_tool as
           link_tool ar
@@ -219,13 +225,14 @@ jobs:
           link_tool objcopy
           link_tool strip
           link_tool ld
-          echo "STATIC_TOOLCHAIN_SELFHOST_LINK=PASS tools=7"
+          echo "STATIC_TOOLCHAIN_SELFHOST_LINK=PASS tools=8"
 
       - name: Run self-hosted tool functional smoke
         shell: bash
         run: |
           set -Eeuo pipefail
           work="$GITHUB_WORKSPACE/build/static-toolchain-selfhost"
+          driver="$work/bin/minic"
           cpp="$work/bin/minic-cpp"
           as="$work/bin/minic-as"
           ar="$work/bin/minic-ar"
@@ -233,6 +240,9 @@ jobs:
           objcopy="$work/bin/minic-objcopy"
           strip="$work/bin/minic-strip"
           ld="$work/bin/minic-ld"
+
+          qemu-riscv64 "$driver" --help >"$work/driver-help.txt"
+          grep -q '^usage: .*\[-S|-c\]' "$work/driver-help.txt"
 
           cat >"$work/selfhost.c" <<'C'
           #define ANSWER 42
@@ -284,7 +294,7 @@ jobs:
           qemu-riscv64 "$ld" -melf64lriscv -r -o "$work/selfhost-merged.o" "$work/selfhost.o"
           riscv64-linux-gnu-readelf -h "$work/selfhost-merged.o" | grep -q 'REL (Relocatable file)'
 
-          echo "STATIC_TOOLCHAIN_SELFHOST=PASS compiler=stage2 pp=PASS as=PASS ar=PASS nm=PASS objcopy=PASS strip=PASS ld=PASS"
+          echo "STATIC_TOOLCHAIN_SELFHOST=PASS compiler=stage2 driver=PASS pp=PASS as=PASS ar=PASS nm=PASS objcopy=PASS strip=PASS ld=PASS"
 
       - name: Preserve selfhost evidence
         if: always()
@@ -294,6 +304,7 @@ jobs:
           path: |
             build/static-toolchain-selfhost/*.objects
             build/static-toolchain-selfhost/i/*.stage2.err
+            build/static-toolchain-selfhost/driver-help.txt
             build/static-toolchain-selfhost/ar-list.txt
             build/static-toolchain-selfhost/nm-list.txt
             build/static-toolchain-selfhost/selfhost.gnu.bin
