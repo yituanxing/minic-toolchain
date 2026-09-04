@@ -5505,6 +5505,191 @@ static bool shared_patch_arithmetic_relocations(
     return true;
 }
 
+static bool shared_fill_relocations(MiniLdState *state,
+                                    const MiniLdStaticLayout *layout,
+                                    const MiniLdSharedImage *shared) {
+    MiniLdSection *rela = &state->sections[shared->rela_section];
+    size_t write_index = 0U;
+    size_t i;
+
+    memset(rela->data, 0, rela->size);
+
+    for (i = 0U; i < state->symbol_count; ++i) {
+        size_t offset = shared->got_slot_offset[i];
+        MiniLdSymbol *target;
+        Elf64_Rela output;
+
+        if (offset == SIZE_MAX) {
+            continue;
+        }
+        target = &state->symbols[i];
+        memset(&output, 0, sizeof(output));
+        output.r_offset =
+            layout->section_vaddr[shared->got_section] + (uint64_t)offset;
+        if (target->section != MINILD_SECTION_UNDEF &&
+            !shared_symbol_is_preemptible(target)) {
+            uint64_t target_value;
+
+            if (!static_resolve_symbol(state, layout, i, &target_value)) {
+                return false;
+            }
+            output.r_info = ELF64_R_INFO(0U, R_RISCV_RELATIVE);
+            output.r_addend = (Elf64_Sxword)target_value;
+        } else {
+            size_t dynamic_index = shared->dynsym_index[i];
+
+            if (dynamic_index == SIZE_MAX) {
+                fprintf(state->diagnostics,
+                        "minic-ld: missing-dynsym-for-got:%s\n",
+                        target->name);
+                return false;
+            }
+            output.r_info = ELF64_R_INFO(dynamic_index, R_RISCV_64);
+            output.r_addend = 0;
+        }
+        memcpy(rela->data + write_index * sizeof(output),
+               &output,
+               sizeof(output));
+        ++write_index;
+    }
+
+    for (i = 0U; i < state->reloc_count; ++i) {
+        MiniLdReloc *input = &state->relocs[i];
+        MiniLdSection *source;
+        MiniLdSymbol *target;
+        Elf64_Rela output;
+        size_t dynamic_index = 0U;
+
+        if (input->section >= state->section_count ||
+            (state->sections[input->section].flags & SHF_ALLOC) == 0U ||
+            input->type == R_RISCV_NONE ||
+            input->type == R_RISCV_RELAX ||
+            input->type == R_RISCV_ALIGN ||
+            input->type == R_RISCV_CALL ||
+            input->type == R_RISCV_CALL_PLT ||
+            shared_relocation_is_final_layout(input->type)) {
+            continue;
+        }
+        if (input->type != R_RISCV_64 ||
+            input->symbol == SIZE_MAX ||
+            input->symbol >= state->symbol_count) {
+            fprintf(state->diagnostics,
+                    "minic-ld: invalid-shared-relocation:%u\n",
+                    input->type);
+            return false;
+        }
+        source = &state->sections[input->section];
+        if (source->type == SHT_NOBITS ||
+            input->offset > SIZE_MAX ||
+            !range_ok((size_t)input->offset, 8U, source->size)) {
+            fprintf(state->diagnostics,
+                    "minic-ld: shared-relocation-offset-out-of-range\n");
+            return false;
+        }
+        target = &state->symbols[input->symbol];
+
+        memset(&output, 0, sizeof(output));
+        output.r_offset =
+            layout->section_vaddr[input->section] + input->offset;
+        if (target->section != MINILD_SECTION_UNDEF &&
+            !shared_symbol_is_preemptible(target)) {
+            uint64_t target_value;
+
+            if (!static_resolve_symbol(state,
+                                       layout,
+                                       input->symbol,
+                                       &target_value)) {
+                return false;
+            }
+            output.r_info = ELF64_R_INFO(0U, R_RISCV_RELATIVE);
+            output.r_addend =
+                (Elf64_Sxword)((int64_t)target_value + input->addend);
+        } else {
+            dynamic_index = shared->dynsym_index[input->symbol];
+            if (dynamic_index == SIZE_MAX) {
+                fprintf(state->diagnostics,
+                        "minic-ld: missing-dynsym-for-relocation:%s\n",
+                        target->name);
+                return false;
+            }
+            output.r_info = ELF64_R_INFO(dynamic_index, R_RISCV_64);
+            output.r_addend = input->addend;
+        }
+        store_u64le(source->data + (size_t)input->offset, 0U);
+        memcpy(rela->data + write_index * sizeof(output),
+               &output,
+               sizeof(output));
+        ++write_index;
+    }
+
+    for (i = 0U; i < state->symbol_count; ++i) {
+        size_t offset = shared->tls_gd_offset[i];
+        size_t dynamic_index;
+        uint64_t slot_address;
+        Elf64_Rela output;
+
+        if (offset == SIZE_MAX) {
+            continue;
+        }
+        dynamic_index = shared->dynsym_index[i];
+        if (dynamic_index == SIZE_MAX ||
+            shared->got_section >= state->section_count) {
+            fprintf(state->diagnostics,
+                    "minic-ld: invalid-shared-tls-gd-dynsym\n");
+            return false;
+        }
+        slot_address =
+            layout->section_vaddr[shared->got_section] + (uint64_t)offset;
+
+        memset(&output, 0, sizeof(output));
+        output.r_offset = slot_address;
+        output.r_info =
+            ELF64_R_INFO(dynamic_index, R_RISCV_TLS_DTPMOD64);
+        memcpy(rela->data + write_index * sizeof(output),
+               &output,
+               sizeof(output));
+        ++write_index;
+
+        memset(&output, 0, sizeof(output));
+        output.r_offset = slot_address + 8U;
+        output.r_info =
+            ELF64_R_INFO(dynamic_index, R_RISCV_TLS_DTPREL64);
+        memcpy(rela->data + write_index * sizeof(output),
+               &output,
+               sizeof(output));
+        ++write_index;
+    }
+
+    if (write_index != shared->rela_count) {
+        fprintf(state->diagnostics,
+                "minic-ld: shared-relocation-count-mismatch:%zu:%zu\n",
+                write_index,
+                shared->rela_count);
+        return false;
+    }
+    return true;
+}
+
+static uint32_t shared_riscv_utype(unsigned opcode,
+                                   unsigned rd,
+                                   int64_t imm20) {
+    return (((uint32_t)imm20 & UINT32_C(0xfffff)) << 12U) |
+           ((uint32_t)rd << 7U) |
+           (uint32_t)opcode;
+}
+
+static uint32_t shared_riscv_itype(unsigned opcode,
+                                   unsigned rd,
+                                   unsigned funct3,
+                                   unsigned rs1,
+                                   int64_t imm12) {
+    return (((uint32_t)imm12 & UINT32_C(0xfff)) << 20U) |
+           ((uint32_t)rs1 << 15U) |
+           ((uint32_t)funct3 << 12U) |
+           ((uint32_t)rd << 7U) |
+           (uint32_t)opcode;
+}
+
 static bool shared_patch_final_layout_relocations(
     MiniLdState *state,
     const MiniLdStaticLayout *layout,
