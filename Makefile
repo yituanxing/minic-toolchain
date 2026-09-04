@@ -90,9 +90,9 @@ MINIC_SOURCES := \
 	tools/minic-cc/main.c
 MINIC_OBJECTS := $(patsubst %.c,$(BUILD_DIR)/obj/%.o,$(MINIC_SOURCES))
 MINIC_CC_BINARY := $(BUILD_DIR)/bin/minic-cc
-# Compatibility compiler entrypoint during the staged driver migration.
-# Existing compiler CI continues to consume MINIC_BINARY until `minic` becomes
-# the real multi-tool driver in a later milestone.
+MINIC_DRIVER_OBJECTS := $(BUILD_DIR)/obj/tools/minic/main.o
+# The compiler boundary stays in minic-cc. minic is the user-facing staged
+# driver and preserves the historical -S preprocessed-input compatibility path.
 MINIC_BINARY  := $(BUILD_DIR)/bin/minic
 
 MINIELF_INCLUDES := -Ielf/include
@@ -245,7 +245,7 @@ all: $(MINIC_CC_BINARY) $(MINIC_BINARY) $(MINIAS_BINARY) $(MINIPP_BINARY) $(MINI
 help:
 	@printf '%s\n' \
 		"MiniC Toolchain build targets:" \
-		"  make                    Build minic-cc, minic-as, minic-cpp, minic-ar, minic-ld and the temporary minic compatibility entrypoint" \
+		"  make                    Build minic driver plus minic-cc/cpp/as/ar/ld/binutils tools" \
 		"  make check-minias-a0    Run the initial .s -> ELF ET_REL MiniAS gate" \
 		"  make check-minipp-a0    Compare independent MiniPP output byte-for-byte with GCC" \
 		"  make check-minielf-reader-a0 Validate shared ELF reader on GNU-as RV32/RV64 objects" \
@@ -313,9 +313,9 @@ $(MINIC_CC_BINARY): $(MINIC_OBJECTS)
 	@mkdir -p "$(dir $@)"
 	$(CC) $(MINIC_OBJECTS) $(MINIC_LDFLAGS) -o "$@"
 
-$(MINIC_BINARY): $(MINIC_CC_BINARY)
+$(MINIC_BINARY): $(MINIC_DRIVER_OBJECTS)
 	@mkdir -p "$(dir $@)"
-	@cp "$(MINIC_CC_BINARY)" "$@"
+	$(CC) $(MINIC_DRIVER_OBJECTS) $(MINIC_LDFLAGS) -o "$@"
 
 $(BUILD_DIR)/obj/assembler/%.o: assembler/%.c
 	@mkdir -p "$(dir $@)"
