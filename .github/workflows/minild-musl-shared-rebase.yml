@@ -138,10 +138,52 @@ jobs:
           fi
 
           riscv64-linux-gnu-readelf -h "$work/libc-minild.so" >"$work/minild.header"
+          riscv64-linux-gnu-readelf -lW "$work/libc-minild.so" >"$work/minild.programs"
           riscv64-linux-gnu-readelf -Wr "$work/libc-minild.so" >"$work/minild.relocations"
           riscv64-linux-gnu-readelf -d "$work/libc-minild.so" >"$work/minild.dynamic"
-          printf 'MINILD_MUSL_SHARED_STRUCTURAL=PASS bytes=%s\n' \
-            "$(stat -c %s "$work/libc-minild.so")"
+          riscv64-linux-gnu-readelf -h "$out/lib/libc.so" >"$work/gnu.header"
+          riscv64-linux-gnu-readelf -lW "$out/lib/libc.so" >"$work/gnu.programs"
+
+          entry="$(awk '/Entry point address:/ {print $4}' "$work/minild.header")"
+          first_load_offset="$(awk '/^[[:space:]]*LOAD[[:space:]]/ {print $2; exit}' "$work/minild.programs")"
+          test "$entry" != "0x0"
+          test "$first_load_offset" = "0x000000"
+          grep -q 'DYNAMIC' "$work/minild.programs"
+          printf 'MINILD_MUSL_SHARED_STRUCTURAL=PASS bytes=%s entry=%s first_load_offset=%s\n' \
+            "$(stat -c %s "$work/libc-minild.so")" "$entry" "$first_load_offset"
+
+      - name: Execute MiniLD-built musl loader startup
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/minild-musl-rebase"
+          reference="$work/musl-build/lib/libc.so"
+          product="$work/libc-minild.so"
+
+          chmod +x "$reference" "$product"
+          set +e
+          timeout 5s qemu-riscv64 "$reference" \
+            >"$work/reference-loader.stdout" 2>"$work/reference-loader.stderr"
+          reference_rc=$?
+          timeout 5s qemu-riscv64 "$product" \
+            >"$work/product-loader.stdout" 2>"$work/product-loader.stderr"
+          product_rc=$?
+          set -e
+
+          echo "MUSL_LOADER_REFERENCE_RC=$reference_rc"
+          echo "MUSL_LOADER_PRODUCT_RC=$product_rc"
+          cat "$work/product-loader.stdout"
+          cat "$work/product-loader.stderr"
+
+          test "$reference_rc" -ne 124
+          test "$product_rc" -ne 124
+          test "$product_rc" -ne 139
+          if test ! -s "$work/product-loader.stdout" &&
+             test ! -s "$work/product-loader.stderr"; then
+            echo "MINILD_MUSL_LOADER_STARTUP=FAIL no-output" >&2
+            exit 1
+          fi
+          echo "MINILD_MUSL_LOADER_STARTUP=PASS product_rc=$product_rc"
 
       - name: Preserve real shared-musl evidence
         if: always()
@@ -159,7 +201,14 @@ jobs:
             build/minild-musl-rebase/minild.stdout
             build/minild-musl-rebase/minild.stderr
             build/minild-musl-rebase/minild.header
+            build/minild-musl-rebase/minild.programs
             build/minild-musl-rebase/minild.relocations
             build/minild-musl-rebase/minild.dynamic
+            build/minild-musl-rebase/gnu.header
+            build/minild-musl-rebase/gnu.programs
+            build/minild-musl-rebase/reference-loader.stdout
+            build/minild-musl-rebase/reference-loader.stderr
+            build/minild-musl-rebase/product-loader.stdout
+            build/minild-musl-rebase/product-loader.stderr
           if-no-files-found: ignore
           retention-days: 3
