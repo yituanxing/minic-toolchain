@@ -5026,7 +5026,8 @@ static bool shared_prepare_metadata(MiniLdState *state,
             continue;
         }
         if (reloc->type == R_RISCV_PCREL_LO12_I ||
-            reloc->type == R_RISCV_PCREL_LO12_S) {
+            reloc->type == R_RISCV_PCREL_LO12_S ||
+            reloc->type == R_RISCV_32_PCREL) {
             continue;
         }
         if (reloc->type == R_RISCV_CALL ||
@@ -5232,6 +5233,59 @@ static bool shared_symbol_is_preemptible(const MiniLdSymbol *symbol) {
            visibility == STV_DEFAULT;
 }
 
+static bool shared_patch_pcrel32(MiniLdState *state,
+                                 const MiniLdStaticLayout *layout) {
+    size_t i;
+
+    for (i = 0U; i < state->reloc_count; ++i) {
+        MiniLdReloc *reloc = &state->relocs[i];
+        MiniLdSection *source;
+        uint64_t target_value;
+        uint64_t place;
+        int64_t delta;
+
+        if (reloc->type != R_RISCV_32_PCREL) {
+            continue;
+        }
+        if (reloc->section >= state->section_count ||
+            reloc->symbol == SIZE_MAX ||
+            reloc->symbol >= state->symbol_count) {
+            fprintf(state->diagnostics,
+                    "minic-ld: invalid-shared-pcrel32-relocation\n");
+            return false;
+        }
+        source = &state->sections[reloc->section];
+        if ((source->flags & SHF_ALLOC) == 0U ||
+            source->type == SHT_NOBITS ||
+            reloc->offset > SIZE_MAX ||
+            !range_ok((size_t)reloc->offset, 4U, source->size)) {
+            fprintf(state->diagnostics,
+                    "minic-ld: shared-pcrel32-offset-out-of-range\n");
+            return false;
+        }
+        if (!static_resolve_symbol(state,
+                                   layout,
+                                   reloc->symbol,
+                                   &target_value)) {
+            fprintf(state->diagnostics,
+                    "minic-ld: unresolved-shared-pcrel32-symbol:%s\n",
+                    state->symbols[reloc->symbol].name);
+            return false;
+        }
+        place = layout->section_vaddr[reloc->section] + reloc->offset;
+        delta = (int64_t)target_value + reloc->addend - (int64_t)place;
+        if (delta < INT32_MIN || delta > INT32_MAX) {
+            fprintf(state->diagnostics,
+                    "minic-ld: shared-pcrel32-overflow:delta=%lld\n",
+                    (long long)delta);
+            return false;
+        }
+        store_u32le(source->data + (size_t)reloc->offset,
+                    (uint32_t)(int32_t)delta);
+    }
+    return true;
+}
+
 static bool shared_fill_relocations(MiniLdState *state,
                                     const MiniLdStaticLayout *layout,
                                     const MiniLdSharedImage *shared) {
@@ -5256,7 +5310,8 @@ static bool shared_fill_relocations(MiniLdState *state,
             input->type == R_RISCV_CALL_PLT ||
             input->type == R_RISCV_TLS_GD_HI20 ||
             input->type == R_RISCV_PCREL_LO12_I ||
-            input->type == R_RISCV_PCREL_LO12_S) {
+            input->type == R_RISCV_PCREL_LO12_S ||
+            input->type == R_RISCV_32_PCREL) {
             continue;
         }
         if (input->type != R_RISCV_64 ||
@@ -6083,6 +6138,7 @@ int minild_link_shared_elf64_riscv_inputs(const char *output_path,
     if (!shared_fill_dynsym(&state, &layout, &shared) ||
         !shared_fill_hash(&state, &shared) ||
         !shared_fill_relocations(&state, &layout, &shared) ||
+        !shared_patch_pcrel32(&state, &layout) ||
         !shared_patch_tls_gd(&state, &layout, &shared) ||
         !shared_fill_plt(&state, &layout, &shared) ||
         !shared_fill_dynamic(&state, &layout, &shared) ||
