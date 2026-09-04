@@ -10,8 +10,13 @@ rm -rf "$work"
 mkdir -p "$work"
 "$host_cc" -E -P -x c "$root/tests/programs/c0/character_array_string_initializer.c" \
     -o "$work/character_array_string_initializer.i"
-"$minic" -S "$work/character_array_string_initializer.i" \
-    -o "$work/character_array_string_initializer.s"
+if ! "$minic" -S "$work/character_array_string_initializer.i" \
+    -o "$work/character_array_string_initializer.s" \
+    >"$work/minic.stdout" 2>"$work/minic.stderr"; then
+    printf '%s\n' 'FAIL compiler/c0/character-array-string-initializer compile' >&2
+    cat "$work/minic.stderr" >&2
+    exit 1
+fi
 
 expect_assembly_text() {
     text=$1
