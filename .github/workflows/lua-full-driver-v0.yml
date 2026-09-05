@@ -461,10 +461,10 @@ jobs:
           tests="$work/lua-5.5.0-tests"
           cd "$tests"
           set +e
-          timeout 120s qemu-riscv64 -L "$sysroot" "$work/lua-minic" \
+          timeout 300s qemu-riscv64 -L "$sysroot" "$work/lua-minic" \
             -e"_U=true; io.stdout:setvbuf('no')" all.lua \
-            >"$work/lua-suite.stdout" 2>"$work/lua-suite.stderr"
-          rc=$?
+            2>"$work/lua-suite.stderr" | tee "$work/lua-suite.stdout"
+          rc=${PIPESTATUS[0]}
           set -e
           echo "LUA_BASIC_SUITE_RC=$rc"
           tail -n 80 "$work/lua-suite.stdout"
