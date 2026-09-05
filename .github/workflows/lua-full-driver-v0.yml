@@ -447,6 +447,110 @@ jobs:
           grep -F 'GC_CYCLE_FRONTIER_V0=PASS' "$work/gc-thread-probe.stdout" >/dev/null
           grep -F 'GC_STOP_GROW_FRONTIER_V0=PASS' "$work/gc-thread-probe.stdout" >/dev/null
 
+      - name: Profile official gc.lua stateful frontier
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/lua-full-driver-v0"
+          sysroot="$work/musl-sysroot"
+
+          rm -rf "$work/lua-5.5.0-tests"
+          test -s "$work/lua-5.5.0-tests.tar.gz"
+          printf '%s  %s\n'             5e47bbfad7db2965d69580e918ee64edeb8d8d32de404b8dae9ce5c6d76a1472             "$work/lua-5.5.0-tests.tar.gz" | sha256sum -c -
+
+          tests="$work/lua-5.5.0-tests"
+          python3 - "$tests/gc.lua" "$tests/gc-profile.lua" "$tests/all.lua" "$tests/all-gc-profile.lua" <<'PY'
+          import pathlib, sys
+
+          gc_src = pathlib.Path(sys.argv[1]).read_text()
+          gc_src = gc_src.replace(
+              'print("self-referenced threads")\n',
+              'print("self-referenced threads")\n'
+              'io.stderr:write(string.format("\\nGC_OFFICIAL_THREAD_START clock=%.6f\\n", os.clock())); '
+              'io.stderr:flush()\n',
+              1,
+          )
+          gc_src = gc_src.replace(
+              '    thread_id = thread_id + 1\n',
+              '    thread_id = thread_id + 1\n'
+              '    if thread_id % 100 == 0 then\n'
+              '      io.stderr:write(string.format("GC_OFFICIAL_THREAD_PROGRESS=%d clock=%.6f\\n", '
+              'thread_id, os.clock())); io.stderr:flush()\n'
+              '    end\n',
+              1,
+          )
+          gc_src = gc_src.replace(
+              '-- Create a closure (function inside \'f\') with an upvalue (\'param\') that\n',
+              'io.stderr:write(string.format("GC_OFFICIAL_THREAD_DONE clock=%.6f\\n", os.clock())); '
+              'io.stderr:flush()\n\n'
+              '-- Create a closure (function inside \'f\') with an upvalue (\'param\') that\n',
+              1,
+          )
+          gc_src = gc_src.replace(
+              '  local collected = false   -- to detect collection\n',
+              '  io.stderr:write(string.format("GC_OFFICIAL_CYCLE_START clock=%.6f\\n", os.clock())); '
+              'io.stderr:flush()\n'
+              '  local collected = false   -- to detect collection\n',
+              1,
+          )
+          gc_src = gc_src.replace(
+              '  collectgarbage("restart")\nend\n\n\ndo\n  collectgarbage()\n',
+              '  collectgarbage("restart")\n'
+              '  io.stderr:write(string.format("GC_OFFICIAL_CYCLE_DONE clock=%.6f\\n", os.clock())); '
+              'io.stderr:flush()\n'
+              'end\n\n\ndo\n'
+              '  io.stderr:write(string.format("GC_OFFICIAL_STOP_GROW_START clock=%.6f\\n", os.clock())); '
+              'io.stderr:flush()\n'
+              '  collectgarbage()\n',
+              1,
+          )
+          gc_src = gc_src.replace(
+              '  _ENV.a = nil\nend\n\n\nif T then',
+              '  _ENV.a = nil\n'
+              '  io.stderr:write(string.format("GC_OFFICIAL_STOP_GROW_DONE clock=%.6f\\n", os.clock())); '
+              'io.stderr:flush()\n'
+              'end\n\n\nif T then',
+              1,
+          )
+          gc_src = gc_src.replace(
+              "print('OK')\n",
+              "io.stderr:write(string.format(\"GC_OFFICIAL_END clock=%.6f\\n\", os.clock())); "
+              "io.stderr:flush()\nprint('OK')\n",
+              1,
+          )
+          pathlib.Path(sys.argv[2]).write_text(gc_src)
+
+          all_src = pathlib.Path(sys.argv[3]).read_text()
+          old = """report"gc.lua"
+          local f = assert(loadfile('gc.lua'))
+          f()
+
+          dofile('db.lua')"""
+          new = """report"gc-profile.lua"
+          local f = assert(loadfile('gc-profile.lua'))
+          f()
+          io.stderr:write(string.format("GC_PROFILE_DONE clock=%.6f\\n", os.clock()))
+          io.stderr:flush()
+          os.exit(0)
+
+          dofile('db.lua')"""
+          if old not in all_src:
+              raise SystemExit("all.lua gc seam not found")
+          pathlib.Path(sys.argv[4]).write_text(all_src.replace(old, new, 1))
+          PY
+
+          cd "$tests"
+          set +e
+          timeout 30s qemu-riscv64 -L "$sysroot" "$work/lua-minic"             -e"_U=true; io.stdout:setvbuf('no')" all-gc-profile.lua             >"$work/lua-gc-profile.stdout" 2>"$work/lua-gc-profile.stderr"
+          rc=$?
+          set -e
+          echo "LUA_GC_PROFILE_RC=$rc"
+          cat "$work/lua-gc-profile.stdout"
+          cat "$work/lua-gc-profile.stderr"
+          test "$rc" -eq 0
+          grep -F 'GC_PROFILE_DONE' "$work/lua-gc-profile.stderr" >/dev/null
+          echo "LUA_GC_STATEFUL_FRONTIER_V0=PASS official_prefix=main+tracegc+gc"
+
       - name: Run official Lua 5.5.0 basic test suite
         shell: bash
         run: |
@@ -514,6 +618,8 @@ jobs:
             build/lua-full-driver-v0/gc-thread-probe.lua
             build/lua-full-driver-v0/gc-thread-probe.stdout
             build/lua-full-driver-v0/gc-thread-probe.stderr
+            build/lua-full-driver-v0/lua-gc-profile.stdout
+            build/lua-full-driver-v0/lua-gc-profile.stderr
             build/lua-full-driver-v0/lua-smoke.stdout
             build/lua-full-driver-v0/lua-smoke.stderr
             build/lua-full-driver-v0/lua-suite.stdout
