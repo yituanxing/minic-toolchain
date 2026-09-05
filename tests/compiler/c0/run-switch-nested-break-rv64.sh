@@ -24,6 +24,8 @@ set -e
 
 if test "$gcc_status" -ne 0 || test "$minic_status" -ne "$gcc_status"; then
     printf '%s\n' "FAIL compiler/c0/switch_nested_break_rv64 gcc=$gcc_status minic=$minic_status" >&2
+    printf '%s\n' '--- MINIC SWITCH NESTED BREAK ASSEMBLY ---' >&2
+    cat "$work/minic.s" >&2
     exit 1
 fi
 printf '%s\n' 'PASS compiler/c0/switch_nested_break_rv64 macro-block=1 nested-if-break=1 post-switch-reachable=1 qemu=1'
