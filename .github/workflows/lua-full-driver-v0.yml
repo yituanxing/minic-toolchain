@@ -21,6 +21,16 @@ jobs:
         with:
           ref: ${{ github.sha }}
 
+      - name: Restore fixed Lua and musl header inputs
+        id: fast-input-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            build/lua-full-driver-v0/lua-source
+            build/lua-full-driver-v0/musl-1.2.5
+            build/lua-full-driver-v0/musl-sysroot/usr/include
+          key: lua-fast-inputs-v1-lua-5.5.0-musl-1.2.5-rv64
+
       - name: Verify fast-path host tools
         shell: bash
         run: |
@@ -30,6 +40,11 @@ jobs:
           command -v curl
           command -v python3
           command -v sed
+          if command -v ccache >/dev/null 2>&1; then
+            echo "LUA_FAST_CCACHE_AVAILABLE=1 path=$(command -v ccache)"
+          else
+            echo "LUA_FAST_CCACHE_AVAILABLE=0"
+          fi
           echo "LUA_FAST_HOST_TOOLS=PASS"
 
       - name: Build fast-path Mini tools
@@ -49,6 +64,13 @@ jobs:
         run: |
           set -Eeuo pipefail
           work="$GITHUB_WORKSPACE/build/lua-full-driver-v0"
+          if test "${{ steps.fast-input-cache.outputs.cache-hit }}" = "true"; then
+            test -d "$work/lua-source/lua-5.5.0/src"
+            test -f "$work/musl-1.2.5/include/math.h"
+            test -f "$work/musl-sysroot/usr/include/math.h"
+            echo "LUA_FAST_PREP=PASS cache=hit lua=5.5.0 musl_headers=1"
+            exit 0
+          fi
 
           curl -fsSL https://www.lua.org/ftp/lua-5.5.0.tar.gz -o "$work/lua-5.5.0.tar.gz"
           printf '%s  %s\n' \
@@ -70,7 +92,7 @@ jobs:
           make -C "$musl_src" \
             ARCH=riscv64 prefix=/usr DESTDIR="$sysroot" \
             install-headers >"$work/musl-headers.log" 2>&1
-          echo "LUA_FAST_PREP=PASS lua=5.5.0 musl_headers=1"
+          echo "LUA_FAST_PREP=PASS cache=miss lua=5.5.0 musl_headers=1"
 
       - name: Fast raw Lua TU frontier
         shell: bash
