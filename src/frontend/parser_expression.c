@@ -103,12 +103,18 @@ static bool parse_integer(MinicParser *parser, MinicExpressionId *expression_id)
 static bool parse_floating(MinicParser *parser, MinicExpressionId *expression_id) {
     MinicExpression expression;
     MinicSourceSpan span;
+    MinicType literal_type;
     char *end;
     char *text;
-    double value;
+    double double_value;
+    float float_value;
+    uint32_t float_bits;
     size_t length;
+    size_t numeric_length;
+    char suffix;
 
     _Static_assert(sizeof(double) == sizeof(uint64_t), "MiniC requires binary64 host double");
+    _Static_assert(sizeof(float) == sizeof(uint32_t), "MiniC requires binary32 host float");
 
     if (parser->current.kind != MINIC_TOKEN_FLOATING_CONSTANT) {
         minic_parser_error(parser, "expected floating constant");
@@ -116,7 +122,7 @@ static bool parse_floating(MinicParser *parser, MinicExpressionId *expression_id
     }
     span = parser->current.span;
     length = span.end.offset - span.begin.offset;
-    if (length == SIZE_MAX) {
+    if (length == 0U || length == SIZE_MAX) {
         minic_parser_error(parser, "floating constant is too long");
         return false;
     }
@@ -128,22 +134,53 @@ static bool parse_floating(MinicParser *parser, MinicExpressionId *expression_id
     (void)memcpy(text, parser->source + span.begin.offset, length);
     text[length] = '\0';
 
-    errno = 0;
-    end = NULL;
-    value = strtod(text, &end);
-    if (end != text + length || errno == ERANGE) {
+    suffix = text[length - 1U];
+    numeric_length = length;
+    literal_type = minic_type_double();
+    if (suffix == 'f' || suffix == 'F') {
+        literal_type = minic_type_float();
+        numeric_length -= 1U;
+    } else if (suffix == 'l' || suffix == 'L') {
         free(text);
-        minic_parser_error(parser, "invalid or out-of-range floating constant");
+        minic_parser_error(parser, "long double floating constants are not supported yet");
         return false;
+    } else {
+        suffix = '\0';
     }
-    free(text);
+    text[numeric_length] = '\0';
 
     (void)memset(&expression, 0, sizeof(expression));
     expression.kind = MINIC_EXPRESSION_FLOATING;
     expression.span = span;
-    expression.type = minic_type_double();
+    expression.type = literal_type;
     expression.value_category = MINIC_VALUE_RVALUE;
-    (void)memcpy(&expression.value.floating_bits, &value, sizeof(value));
+
+    errno = 0;
+    end = NULL;
+    if (minic_type_is_float(literal_type)) {
+        float_value = strtof(text, &end);
+        if (end != text + numeric_length) {
+            free(text);
+            minic_parser_error(parser, "invalid floating constant");
+            return false;
+        }
+        /* C translation accepts implementation-range results for floating
+           constants. Preserve the target binary32 result selected by strtof:
+           overflow becomes +/-infinity and underflow becomes the rounded
+           subnormal/zero rather than a frontend hard error. */
+        (void)memcpy(&float_bits, &float_value, sizeof(float_bits));
+        expression.value.floating_bits = (uint64_t)float_bits;
+    } else {
+        double_value = strtod(text, &end);
+        if (end != text + numeric_length) {
+            free(text);
+            minic_parser_error(parser, "invalid floating constant");
+            return false;
+        }
+        (void)memcpy(&expression.value.floating_bits, &double_value, sizeof(double_value));
+    }
+    free(text);
+
     return minic_parser_advance(parser) &&
            minic_parser_add_expression(parser, &expression, expression_id);
 }
@@ -244,7 +281,8 @@ static bool parse_function_reference(MinicParser *parser,
     MinicType function_type;
 
     function = minic_c0_program_function(parser->program, function_id);
-    if (function == NULL) {
+    if (function == NULL ||
+        !minic_c0_program_set_function_referenced(parser->program, function_id, true)) {
         minic_parser_error(parser, "invalid function reference");
         return false;
     }
@@ -798,7 +836,10 @@ bool minic_parser_apply_fixed_call_argument_conversion(MinicParser *parser,
         return true;
     }
     needs_explicit_conversion =
-        (minic_type_is_double(target_type) && minic_type_is_integer(source->type)) ||
+        ((minic_type_is_integer(target_type) || minic_type_is_float(target_type) ||
+          minic_type_is_double(target_type) || minic_type_is_long_double(target_type)) &&
+         (minic_type_is_integer(source->type) || minic_type_is_float(source->type) ||
+          minic_type_is_double(source->type) || minic_type_is_long_double(source->type))) ||
         minic_type_gnu_pointer_sign_compatible(target_type, source->type) ||
         gnu_enum_integer_pointer_call_conversion_compatible(
             parser->program, target_type, source->type) ||
@@ -2860,6 +2901,7 @@ static bool parse_primary(MinicParser *parser, MinicExpressionId *expression_id,
 
             callee = minic_c0_program_function(parser->program, function_id);
             if (callee == NULL || callee->parameter_count > MINIC_MAX_FUNCTION_PARAMETERS ||
+                !minic_c0_program_set_function_referenced(parser->program, function_id, true) ||
                 !minic_parser_advance(parser)) {
                 minic_parser_error(parser, "unsupported function call signature");
                 return false;
@@ -3639,6 +3681,73 @@ static bool normalize_conditional_null_pointer_arm(MinicParser *parser,
     return true;
 }
 
+static bool normalize_float_comparison_operands(MinicParser *parser,
+                                                MinicExpressionId *left_id,
+                                                MinicExpressionId *right_id,
+                                                MinicTokenKind kind) {
+    const MinicExpression *left;
+    const MinicExpression *right;
+    MinicExpression conversion;
+    MinicExpressionId converted_id;
+    bool eligible;
+
+    if (parser == NULL || left_id == NULL || right_id == NULL ||
+        !binary_is_comparison(kind)) {
+        return true;
+    }
+    left = minic_c0_program_expression(parser->program, *left_id);
+    right = minic_c0_program_expression(parser->program, *right_id);
+    if (left == NULL || right == NULL) {
+        return false;
+    }
+
+    /* Comparing binary32 values after exact widening to binary64 preserves all
+       IEEE-754 ordered/equality results, including NaNs, infinities and signed
+       zero.  Mixed float/double comparison is the ordinary C conversion to
+       double.  Do not use this bridge for float/integer arithmetic: converting
+       the integer to double would change C's float-rounding semantics. */
+    eligible =
+        (minic_type_is_float(left->type) &&
+         (minic_type_is_float(right->type) || minic_type_is_double(right->type))) ||
+        (minic_type_is_float(right->type) &&
+         (minic_type_is_float(left->type) || minic_type_is_double(left->type)));
+    if (!eligible) {
+        return true;
+    }
+
+    if (minic_type_is_float(left->type)) {
+        (void)memset(&conversion, 0, sizeof(conversion));
+        conversion.kind = MINIC_EXPRESSION_CAST;
+        conversion.span = left->span;
+        conversion.type = minic_type_double();
+        conversion.value_category = MINIC_VALUE_RVALUE;
+        conversion.value.unary.operand = *left_id;
+        if (!minic_parser_add_expression(parser, &conversion, &converted_id)) {
+            return false;
+        }
+        *left_id = converted_id;
+    }
+
+    /* Adding the left conversion may relocate Program expression storage. */
+    right = minic_c0_program_expression(parser->program, *right_id);
+    if (right == NULL) {
+        return false;
+    }
+    if (minic_type_is_float(right->type)) {
+        (void)memset(&conversion, 0, sizeof(conversion));
+        conversion.kind = MINIC_EXPRESSION_CAST;
+        conversion.span = right->span;
+        conversion.type = minic_type_double();
+        conversion.value_category = MINIC_VALUE_RVALUE;
+        conversion.value.unary.operand = *right_id;
+        if (!minic_parser_add_expression(parser, &conversion, &converted_id)) {
+            return false;
+        }
+        *right_id = converted_id;
+    }
+    return true;
+}
+
 static bool binary_result_type(const MinicTargetInfo *target,
                                const MinicC0Program *program,
                                MinicTokenKind kind,
@@ -3675,6 +3784,11 @@ static bool binary_result_type(const MinicTargetInfo *target,
     has_numeric_operands = (minic_type_is_double(left) || minic_type_is_integer(left)) &&
                            (minic_type_is_double(right) || minic_type_is_integer(right));
     if (binary_is_comparison(kind) && has_double_operand && has_numeric_operands) {
+        *result = minic_type_int();
+        return true;
+    }
+    if (binary_is_comparison(kind) && minic_type_is_long_double(left) &&
+        minic_type_is_long_double(right)) {
         *result = minic_type_int();
         return true;
     }
@@ -3726,6 +3840,10 @@ static bool parse_expression_internal(MinicParser *parser,
         }
         if (!minic_parser_apply_array_decay(parser, left, &left) || !minic_parser_advance(parser) ||
             !parse_expression_internal(parser, &right, precedence + 1U, true)) {
+            return false;
+        }
+        if (!normalize_float_comparison_operands(parser, &left, &right, token_kind)) {
+            minic_parser_error(parser, "cannot normalize floating comparison operands");
             return false;
         }
         left_expression = minic_c0_program_expression(parser->program, left);

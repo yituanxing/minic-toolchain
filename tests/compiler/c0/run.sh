@@ -641,3 +641,32 @@ MINIC="$minic" HOST_CC="$host_cc" BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" 
 
 MINIC="$minic" HOST_CC="$host_cc" BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
   sh "$root/tests/compiler/c0/run-builtin-memset-call.sh"
+
+MINIC="$minic" \
+BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
+sh "$root/tests/compiler/c0/run-float-to-double-fixed-call.sh"
+MINIC="$minic" \
+BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
+sh "$root/tests/compiler/c0/run-arithmetic-fixed-call-dead-long-double.sh"
+MINIC="$minic" \
+BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
+sh "$root/tests/compiler/c0/run-internal-inline-emission.sh"
+MINIC="$minic" \
+BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
+sh "$root/tests/compiler/c0/run-null-member-offset-constant.sh"
+MINIC="$minic" \
+BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
+sh "$root/tests/compiler/c0/run-relocatable-const-section.sh"
+MINIC="$minic" \
+BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
+RISCV_CC="${RISCV_CC:-riscv64-linux-gnu-gcc}" \
+QEMU_RISCV64="${QEMU_RISCV64:-qemu-riscv64}" \
+sh "$root/tests/compiler/c0/run-byte-field-or-assign-rv64.sh"
+MINIC="$minic" \
+BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
+RISCV_CC="${RISCV_CC:-riscv64-linux-gnu-gcc}" \
+QEMU_RISCV64="${QEMU_RISCV64:-qemu-riscv64}" \
+sh "$root/tests/compiler/c0/run-switch-nested-break-rv64.sh"
+MINIC="$minic" \
+BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
+sh "$root/tests/compiler/c0/run-core-block-spill-reuse.sh"

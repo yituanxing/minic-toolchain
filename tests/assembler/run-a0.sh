@@ -733,6 +733,58 @@ native_gas_forms_hex="$(
 test "$native_gas_forms_hex" = "4d5a073005002334150007a1c50023a835007390320073002010"
 readelf -Ws "$work/native-gas-forms.o" | grep -Eq 'FUNC[[:space:]]+GLOBAL.* native_gas_forms$'
 
+cat >"$work/scalar-fp.s" <<'EOF'
+.option norvc
+.text
+.globl scalar_fp
+.type scalar_fp, @function
+scalar_fp:
+  fcvt.d.w ft0, t0
+  fcvt.d.wu ft1, t1
+  fcvt.d.l ft2, t2
+  fcvt.d.lu ft3, s0
+  fcvt.w.d a0, fa0, rtz
+  fcvt.wu.d a1, fa1, rtz
+  fcvt.l.d a2, fa2, rtz
+  fcvt.lu.d a3, fa3, rtz
+  fcvt.d.s ft4, ft5
+  fcvt.s.d ft6, ft7
+  fadd.d ft0, ft1, ft2
+  fsub.d ft3, ft4, ft5
+  fmul.d ft6, ft7, fa0
+  fdiv.d fa1, fa2, fa3
+  fsgnjn.d ft0, ft1, ft2
+  feq.d a4, ft0, ft1
+  flt.d a5, ft2, ft3
+  fle.d a6, ft4, ft5
+  fmv.x.d a7, fa0
+  fmv.d.x fa1, t0
+  fmv.x.w a0, fa2
+  fmv.w.x fa3, t1
+  ret
+.size scalar_fp, . - scalar_fp
+EOF
+"$MINIAS" -o "$work/scalar-fp.o" "$work/scalar-fp.s"
+scalar_fp_hex="$(
+    readelf -x .text "$work/scalar-fp.o" |
+    awk '/0x[0-9a-f]+/ {for (i=2; i<=NF; ++i) if ($i ~ /^[0-9a-f]{8}$/) printf "%s", $i}'
+)"
+test -n "$scalar_fp_hex"
+if command -v riscv64-linux-gnu-as >/dev/null 2>&1; then
+    riscv64-linux-gnu-as -march=rv64gc -o "$work/scalar-fp.gnu.o" "$work/scalar-fp.s"
+    scalar_fp_gnu_hex="$(
+        readelf -x .text "$work/scalar-fp.gnu.o" |
+        awk '/0x[0-9a-f]+/ {for (i=2; i<=NF; ++i) if ($i ~ /^[0-9a-f]{8}$/) printf "%s", $i}'
+    )"
+    if test "$scalar_fp_hex" != "$scalar_fp_gnu_hex"; then
+        echo "MINIAS_A0_FP_GNU_DIFF=FAIL" >&2
+        echo "mini=$scalar_fp_hex" >&2
+        echo "gnu=$scalar_fp_gnu_hex" >&2
+        exit 1
+    fi
+    echo "MINIAS_A0_FP_GNU_DIFF=PASS instructions=22"
+fi
+
 cat >"$work/native-macro-comma.s" <<'EOF'
 .text
 .macro emit_alt old_c, new_c, vendor, patch, enable
@@ -970,6 +1022,49 @@ native_divided_data="$(
 )"
 test "$native_divided_data" = "02000000"
 
+cat >"$work/pic-la-got.s" <<'EOF'
+.text
+.extern minias_external_data
+.globl pic_la_got
+.type pic_la_got, @function
+pic_la_got:
+  la a0, minias_external_data
+  ret
+.size pic_la_got, . - pic_la_got
+EOF
+"$MINIAS" -o "$work/pic-la-got.o" "$work/pic-la-got.s"
+pic_la_got_hex="$(
+    readelf -x .text "$work/pic-la-got.o" |
+    awk '/0x[0-9a-f]+/ {for (i=2; i<=NF; ++i) if ($i ~ /^[0-9a-f]{8}$/) printf "%s", $i}'
+)"
+pic_la_got_relocs="$(readelf -Wr "$work/pic-la-got.o")"
+printf '%s\n' "$pic_la_got_relocs" | grep -Eq 'R_RISCV_GOT_HI20[[:space:]]+.*minias_external_data'
+printf '%s\n' "$pic_la_got_relocs" | grep -Eq 'R_RISCV_PCREL_LO12_I'
+test "$pic_la_got_hex" = "170500000335050067800000"
+
+if command -v riscv64-linux-gnu-as >/dev/null 2>&1; then
+    cat >"$work/pic-la-got.gnu.s" <<'EOF'
+.option pic
+.option norvc
+.text
+.extern minias_external_data
+.globl pic_la_got
+.type pic_la_got, @function
+pic_la_got:
+  la a0, minias_external_data
+  ret
+.size pic_la_got, . - pic_la_got
+EOF
+    riscv64-linux-gnu-as -march=rv64gc -o "$work/pic-la-got.gnu.o" "$work/pic-la-got.gnu.s"
+    pic_la_gnu_hex="$(
+        readelf -x .text "$work/pic-la-got.gnu.o" |
+        awk '/0x[0-9a-f]+/ {for (i=2; i<=NF; ++i) if ($i ~ /^[0-9a-f]{8}$/) printf "%s", $i}'
+    )"
+    test "$pic_la_got_hex" = "$pic_la_gnu_hex"
+    readelf -Wr "$work/pic-la-got.gnu.o" | grep -Eq 'R_RISCV_GOT_HI20[[:space:]]+.*minias_external_data'
+    echo "MINIAS_A0_PIC_LA_GNU_DIFF=PASS relocation=GOT_HI20 sequence=auipc+ld"
+fi
+
 cat >"$work/native-symbol-addend-expr.s" <<'EOF'
 .text
 .extern native_addend_base
@@ -1159,4 +1254,4 @@ far_branch_prefix="$(
 test "$far_branch_prefix" = "6314b5006f10c038"
 test "$(readelf -Ws "$work/far-conditional-branch.o" | awk '$8=="far_conditional_branch" {print $3}')" = "5012"
 
-echo "MINIAS_A0=PASS objects=27 format=ELF64-RISCV-ET_REL relocations=23 strings=2 pseudos=17 previous=3 subsection=2 numeric_labels=18 ecall=1 isa_next=13 csr_amo=8 sfence_vma=3 fence_i=1 vsetvl=1 vsetvli=1 vmv_v_i=4 rept=2 nested_rept=1 irp=4 section_stack=1 org=3 local_difference=1 lr_sc=2 inline_labels=2 branch_pseudos=8 extern=1 symbol_minus_dot=4 symbol_difference=1 absolute32=1 jal=2 jal_subsection=1 high_numeric_labels=2 u64_data=3 raw_insn=4 set_alias=3 move=1 numeric_zero=1 immediate_product=2 shift_immediate=1 incbin=1 align_expr=1 native_expr=6 native_zbb_tail_memexpr=1 native_jalr_symbol_load=1 native_forward_short=1 native_mixed_macro=1 native_divided_difference=1 native_symbol_addend_expr=1 native_add_sub_immediate=1 native_cfi_boundary=1 native_gas_forms=1 native_set_size=1 native_macro_comma=1 native_macro_quotes=1 sext_w=1 macro=4 conditional=1"
+echo "MINIAS_A0=PASS objects=27 format=ELF64-RISCV-ET_REL relocations=23 strings=2 pseudos=17 previous=3 subsection=2 numeric_labels=18 ecall=1 isa_next=13 csr_amo=8 sfence_vma=3 fence_i=1 vsetvl=1 vsetvli=1 vmv_v_i=4 rept=2 nested_rept=1 irp=4 section_stack=1 org=3 local_difference=1 lr_sc=2 inline_labels=2 branch_pseudos=8 extern=1 symbol_minus_dot=4 symbol_difference=1 absolute32=1 jal=2 jal_subsection=1 high_numeric_labels=2 u64_data=3 raw_insn=4 set_alias=3 move=1 numeric_zero=1 immediate_product=2 shift_immediate=1 incbin=1 align_expr=1 native_expr=6 native_zbb_tail_memexpr=1 native_jalr_symbol_load=1 native_forward_short=1 native_mixed_macro=1 native_divided_difference=1 native_symbol_addend_expr=1 native_add_sub_immediate=1 native_cfi_boundary=1 native_gas_forms=1 native_set_size=1 native_macro_comma=1 native_macro_quotes=1 pic_la_got=1 sext_w=1 macro=4 conditional=1"

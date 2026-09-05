@@ -43,18 +43,91 @@ static int reg_number(const char *name) {
 }
 
 static int float_reg_number(const char *name) {
+    static const struct {
+        const char *name;
+        int number;
+    } aliases[] = {
+        {"ft0", 0},  {"ft1", 1},  {"ft2", 2},  {"ft3", 3},
+        {"ft4", 4},  {"ft5", 5},  {"ft6", 6},  {"ft7", 7},
+        {"fs0", 8},  {"fs1", 9},
+        {"fa0", 10}, {"fa1", 11}, {"fa2", 12}, {"fa3", 13},
+        {"fa4", 14}, {"fa5", 15}, {"fa6", 16}, {"fa7", 17},
+        {"fs2", 18}, {"fs3", 19}, {"fs4", 20}, {"fs5", 21},
+        {"fs6", 22}, {"fs7", 23}, {"fs8", 24}, {"fs9", 25},
+        {"fs10", 26}, {"fs11", 27},
+        {"ft8", 28}, {"ft9", 29}, {"ft10", 30}, {"ft11", 31},
+    };
     char *end = NULL;
     long value;
+    size_t index;
 
-    if (name == NULL || name[0] != 'f' || !isdigit((unsigned char)name[1])) {
+    if (name == NULL) {
         return -1;
     }
-    errno = 0;
-    value = strtol(name + 1, &end, 10);
-    if (errno != 0 || end == name + 1 || *end != '\0' || value < 0 || value > 31) {
-        return -1;
+    if (name[0] == 'f' && isdigit((unsigned char)name[1])) {
+        errno = 0;
+        value = strtol(name + 1, &end, 10);
+        if (errno == 0 && end != name + 1 && *end == '\0' &&
+            value >= 0 && value <= 31) {
+            return (int)value;
+        }
     }
-    return (int)value;
+    for (index = 0U; index < sizeof(aliases) / sizeof(aliases[0]); ++index) {
+        if (strcmp(name, aliases[index].name) == 0) {
+            return aliases[index].number;
+        }
+    }
+    return -1;
+}
+
+static bool parse_fp_rounding_mode(const char *text, uint32_t *mode) {
+    static const struct {
+        const char *name;
+        uint32_t value;
+    } modes[] = {
+        {"rne", 0U}, {"rtz", 1U}, {"rdn", 2U},
+        {"rup", 3U}, {"rmm", 4U}, {"dyn", 7U},
+    };
+    size_t index;
+
+    if (text == NULL || mode == NULL) {
+        return false;
+    }
+    for (index = 0U; index < sizeof(modes) / sizeof(modes[0]); ++index) {
+        if (strcmp(text, modes[index].name) == 0) {
+            *mode = modes[index].value;
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool is_fp_binary_double(const char *op) {
+    return strcmp(op, "fadd.d") == 0 || strcmp(op, "fsub.d") == 0 ||
+           strcmp(op, "fmul.d") == 0 || strcmp(op, "fdiv.d") == 0;
+}
+
+static bool is_fp_compare_double(const char *op) {
+    return strcmp(op, "feq.d") == 0 || strcmp(op, "flt.d") == 0 ||
+           strcmp(op, "fle.d") == 0;
+}
+
+static bool is_fp_convert(const char *op) {
+    return strcmp(op, "fcvt.d.w") == 0 || strcmp(op, "fcvt.d.wu") == 0 ||
+           strcmp(op, "fcvt.d.l") == 0 || strcmp(op, "fcvt.d.lu") == 0 ||
+           strcmp(op, "fcvt.w.d") == 0 || strcmp(op, "fcvt.wu.d") == 0 ||
+           strcmp(op, "fcvt.l.d") == 0 || strcmp(op, "fcvt.lu.d") == 0 ||
+           strcmp(op, "fcvt.d.s") == 0 || strcmp(op, "fcvt.s.d") == 0;
+}
+
+static bool fp_convert_int_to_double(const char *op) {
+    return strcmp(op, "fcvt.d.w") == 0 || strcmp(op, "fcvt.d.wu") == 0 ||
+           strcmp(op, "fcvt.d.l") == 0 || strcmp(op, "fcvt.d.lu") == 0;
+}
+
+static bool fp_convert_double_to_int(const char *op) {
+    return strcmp(op, "fcvt.w.d") == 0 || strcmp(op, "fcvt.wu.d") == 0 ||
+           strcmp(op, "fcvt.l.d") == 0 || strcmp(op, "fcvt.lu.d") == 0;
 }
 
 static int vector_reg_number(const char *name) {
@@ -1035,6 +1108,89 @@ bool minias_riscv_measure(const char *op,
         return true;
     }
 
+    if (is_fp_binary_double(op)) {
+        uint32_t rounding_mode;
+        if ((count != 3U && count != 4U) ||
+            float_reg_number(operands[0]) < 0 ||
+            float_reg_number(operands[1]) < 0 ||
+            float_reg_number(operands[2]) < 0 ||
+            (count == 4U && !parse_fp_rounding_mode(operands[3], &rounding_mode))) {
+            (void)snprintf(reason, reason_size, "bad-operands:%s:%s", op, args);
+            return false;
+        }
+        *size = 4U;
+        return true;
+    }
+
+    if (strcmp(op, "fsgnjn.d") == 0) {
+        if (count != 3U || float_reg_number(operands[0]) < 0 ||
+            float_reg_number(operands[1]) < 0 ||
+            float_reg_number(operands[2]) < 0) {
+            (void)snprintf(reason, reason_size, "bad-operands:%s:%s", op, args);
+            return false;
+        }
+        *size = 4U;
+        return true;
+    }
+
+    if (is_fp_compare_double(op)) {
+        if (count != 3U || reg_number(operands[0]) < 0 ||
+            float_reg_number(operands[1]) < 0 ||
+            float_reg_number(operands[2]) < 0) {
+            (void)snprintf(reason, reason_size, "bad-operands:%s:%s", op, args);
+            return false;
+        }
+        *size = 4U;
+        return true;
+    }
+
+    if (strcmp(op, "fmv.x.d") == 0 || strcmp(op, "fmv.x.w") == 0) {
+        if (count != 2U || reg_number(operands[0]) < 0 ||
+            float_reg_number(operands[1]) < 0) {
+            (void)snprintf(reason, reason_size, "bad-operands:%s:%s", op, args);
+            return false;
+        }
+        *size = 4U;
+        return true;
+    }
+
+    if (strcmp(op, "fmv.d.x") == 0 || strcmp(op, "fmv.w.x") == 0) {
+        if (count != 2U || float_reg_number(operands[0]) < 0 ||
+            reg_number(operands[1]) < 0) {
+            (void)snprintf(reason, reason_size, "bad-operands:%s:%s", op, args);
+            return false;
+        }
+        *size = 4U;
+        return true;
+    }
+
+    if (is_fp_convert(op)) {
+        uint32_t rounding_mode;
+        bool registers_ok;
+
+        if (count != 2U && count != 3U) {
+            (void)snprintf(reason, reason_size, "bad-operands:%s:%s", op, args);
+            return false;
+        }
+        if (fp_convert_int_to_double(op)) {
+            registers_ok = float_reg_number(operands[0]) >= 0 &&
+                           reg_number(operands[1]) >= 0;
+        } else if (fp_convert_double_to_int(op)) {
+            registers_ok = reg_number(operands[0]) >= 0 &&
+                           float_reg_number(operands[1]) >= 0;
+        } else {
+            registers_ok = float_reg_number(operands[0]) >= 0 &&
+                           float_reg_number(operands[1]) >= 0;
+        }
+        if (!registers_ok ||
+            (count == 3U && !parse_fp_rounding_mode(operands[2], &rounding_mode))) {
+            (void)snprintf(reason, reason_size, "bad-operands:%s:%s", op, args);
+            return false;
+        }
+        *size = 4U;
+        return true;
+    }
+
     if (strcmp(op, "fld") == 0 || strcmp(op, "flw") == 0 ||
         strcmp(op, "fsd") == 0 || strcmp(op, "fsw") == 0) {
         int64_t offset;
@@ -1392,6 +1548,190 @@ bool minias_riscv_encode(MiniAs *as, const MiniAsStmt *stmt) {
                           stmt->section,
                           enc_r(0x57U, rd, 7U, rs1, rs2, 0x40U));
     }
+    if (is_fp_binary_double(stmt->op)) {
+        uint32_t base;
+        uint32_t rm = 7U;
+        int fd;
+        int fs1;
+        int fs2;
+
+        if ((count != 3U && count != 4U) ||
+            (fd = float_reg_number(operands[0])) < 0 ||
+            (fs1 = float_reg_number(operands[1])) < 0 ||
+            (fs2 = float_reg_number(operands[2])) < 0 ||
+            (count == 4U && !parse_fp_rounding_mode(operands[3], &rm))) {
+            minias_set_error(as, "bad-operands:%s:%s:line=%zu",
+                             stmt->op, stmt->args, stmt->line);
+            return false;
+        }
+        base = strcmp(stmt->op, "fadd.d") == 0 ? 0x02000053U
+               : strcmp(stmt->op, "fsub.d") == 0 ? 0x0a000053U
+               : strcmp(stmt->op, "fmul.d") == 0 ? 0x12000053U
+                                                  : 0x1a000053U;
+        return append_u32(as,
+                          stmt->section,
+                          base | ((uint32_t)fd << 7U) | (rm << 12U) |
+                              ((uint32_t)fs1 << 15U) |
+                              ((uint32_t)fs2 << 20U));
+    }
+
+    if (strcmp(stmt->op, "fsgnjn.d") == 0) {
+        int fd;
+        int fs1;
+        int fs2;
+
+        if (count != 3U || (fd = float_reg_number(operands[0])) < 0 ||
+            (fs1 = float_reg_number(operands[1])) < 0 ||
+            (fs2 = float_reg_number(operands[2])) < 0) {
+            minias_set_error(as, "bad-operands:fsgnjn.d:%s:line=%zu",
+                             stmt->args, stmt->line);
+            return false;
+        }
+        return append_u32(as,
+                          stmt->section,
+                          0x22001053U | ((uint32_t)fd << 7U) |
+                              ((uint32_t)fs1 << 15U) |
+                              ((uint32_t)fs2 << 20U));
+    }
+
+    if (is_fp_compare_double(stmt->op)) {
+        uint32_t base;
+        int dest;
+        int fs1;
+        int fs2;
+
+        if (count != 3U || !require_reg(as, stmt, operands[0], &dest) ||
+            (fs1 = float_reg_number(operands[1])) < 0 ||
+            (fs2 = float_reg_number(operands[2])) < 0) {
+            minias_set_error(as, "bad-operands:%s:%s:line=%zu",
+                             stmt->op, stmt->args, stmt->line);
+            return false;
+        }
+        base = strcmp(stmt->op, "feq.d") == 0 ? 0xa2002053U
+               : strcmp(stmt->op, "flt.d") == 0 ? 0xa2001053U
+                                                 : 0xa2000053U;
+        return append_u32(as,
+                          stmt->section,
+                          base | ((uint32_t)dest << 7U) |
+                              ((uint32_t)fs1 << 15U) |
+                              ((uint32_t)fs2 << 20U));
+    }
+
+    if (strcmp(stmt->op, "fmv.x.d") == 0 ||
+        strcmp(stmt->op, "fmv.x.w") == 0) {
+        uint32_t base = strcmp(stmt->op, "fmv.x.d") == 0
+                            ? 0xe2000053U
+                            : 0xe0000053U;
+        int dest;
+        int source;
+
+        if (count != 2U || !require_reg(as, stmt, operands[0], &dest) ||
+            (source = float_reg_number(operands[1])) < 0) {
+            minias_set_error(as, "bad-operands:%s:%s:line=%zu",
+                             stmt->op, stmt->args, stmt->line);
+            return false;
+        }
+        return append_u32(as,
+                          stmt->section,
+                          base | ((uint32_t)dest << 7U) |
+                              ((uint32_t)source << 15U));
+    }
+
+    if (strcmp(stmt->op, "fmv.d.x") == 0 ||
+        strcmp(stmt->op, "fmv.w.x") == 0) {
+        uint32_t base = strcmp(stmt->op, "fmv.d.x") == 0
+                            ? 0xf2000053U
+                            : 0xf0000053U;
+        int dest;
+        int source;
+
+        if (count != 2U || (dest = float_reg_number(operands[0])) < 0 ||
+            !require_reg(as, stmt, operands[1], &source)) {
+            minias_set_error(as, "bad-operands:%s:%s:line=%zu",
+                             stmt->op, stmt->args, stmt->line);
+            return false;
+        }
+        return append_u32(as,
+                          stmt->section,
+                          base | ((uint32_t)dest << 7U) |
+                              ((uint32_t)source << 15U));
+    }
+
+    if (is_fp_convert(stmt->op)) {
+        uint32_t base;
+        uint32_t rm;
+        int dest;
+        int source;
+
+        if (count != 2U && count != 3U) {
+            minias_set_error(as, "bad-operands:%s:%s:line=%zu",
+                             stmt->op, stmt->args, stmt->line);
+            return false;
+        }
+
+        if (strcmp(stmt->op, "fcvt.d.w") == 0) {
+            base = 0xd2000053U;
+            rm = 0U;
+        } else if (strcmp(stmt->op, "fcvt.d.wu") == 0) {
+            base = 0xd2100053U;
+            rm = 0U;
+        } else if (strcmp(stmt->op, "fcvt.d.l") == 0) {
+            base = 0xd2200053U;
+            rm = 7U;
+        } else if (strcmp(stmt->op, "fcvt.d.lu") == 0) {
+            base = 0xd2300053U;
+            rm = 7U;
+        } else if (strcmp(stmt->op, "fcvt.w.d") == 0) {
+            base = 0xc2000053U;
+            rm = 7U;
+        } else if (strcmp(stmt->op, "fcvt.wu.d") == 0) {
+            base = 0xc2100053U;
+            rm = 7U;
+        } else if (strcmp(stmt->op, "fcvt.l.d") == 0) {
+            base = 0xc2200053U;
+            rm = 7U;
+        } else if (strcmp(stmt->op, "fcvt.lu.d") == 0) {
+            base = 0xc2300053U;
+            rm = 7U;
+        } else if (strcmp(stmt->op, "fcvt.d.s") == 0) {
+            base = 0x42000053U;
+            rm = 0U;
+        } else {
+            base = 0x40100053U;
+            rm = 7U;
+        }
+        if (count == 3U && !parse_fp_rounding_mode(operands[2], &rm)) {
+            minias_set_error(as, "bad-rounding-mode:%s:line=%zu",
+                             operands[2], stmt->line);
+            return false;
+        }
+
+        if (fp_convert_int_to_double(stmt->op)) {
+            dest = float_reg_number(operands[0]);
+            if (dest < 0 || !require_reg(as, stmt, operands[1], &source)) {
+                return false;
+            }
+        } else if (fp_convert_double_to_int(stmt->op)) {
+            if (!require_reg(as, stmt, operands[0], &dest) ||
+                (source = float_reg_number(operands[1])) < 0) {
+                return false;
+            }
+        } else {
+            dest = float_reg_number(operands[0]);
+            source = float_reg_number(operands[1]);
+            if (dest < 0 || source < 0) {
+                minias_set_error(as, "bad-operands:%s:%s:line=%zu",
+                                 stmt->op, stmt->args, stmt->line);
+                return false;
+            }
+        }
+
+        return append_u32(as,
+                          stmt->section,
+                          base | ((uint32_t)dest << 7U) | (rm << 12U) |
+                              ((uint32_t)source << 15U));
+    }
+
     if (strcmp(stmt->op, "fld") == 0 || strcmp(stmt->op, "flw") == 0 ||
         strcmp(stmt->op, "fsd") == 0 || strcmp(stmt->op, "fsw") == 0) {
         int freg;
@@ -1618,13 +1958,24 @@ bool minias_riscv_encode(MiniAs *as, const MiniAsStmt *stmt) {
     if (strcmp(stmt->op, "lla") == 0 || strcmp(stmt->op, "la") == 0) {
         MiniAsSymbolExpr expr;
         MiniAsSymbol *anchor;
+        MiniAsSymbol *target_symbol;
         char anchor_name[96];
+        bool use_got;
 
         if (count != 2U || !require_reg(as, stmt, operands[0], &rd) ||
             !minias_parse_symbol_addend(operands[1], &expr)) {
             minias_set_error(as, "unsupported-expression:%s:line=%zu", stmt->args, stmt->line);
             return false;
         }
+        target_symbol = minias_get_symbol(as, expr.name, false);
+        /* GNU PIC 'la symbol' is a GOT load for an undefined external
+           symbol.  Preserve the historical symbol+addend form as PC-relative:
+           a GOT_HI20 relocation cannot carry a nonzero addend in the RISC-V
+           psABI, and expanding that form correctly would require a third
+           arithmetic instruction. */
+        use_got = strcmp(stmt->op, "la") == 0 && expr.addend == 0 &&
+                  (target_symbol == NULL || !target_symbol->defined);
+
         (void)snprintf(anchor_name,
                        sizeof(anchor_name),
                        ".Lminias_pcrel_%zu",
@@ -1638,14 +1989,22 @@ bool minias_riscv_encode(MiniAs *as, const MiniAsStmt *stmt) {
         anchor->value = stmt->offset;
         anchor->bind = MINIAS_STB_LOCAL;
 
-        if (!append_u32(as, stmt->section, 0x17U | ((uint32_t)rd << 7U)) ||
-            !append_u32(as, stmt->section, enc_i(0x13U, rd, 0U, rd, 0))) {
+        if (!append_u32(as, stmt->section, 0x17U | ((uint32_t)rd << 7U))) {
             return false;
         }
+        if (use_got) {
+            if (!append_u32(as, stmt->section, enc_i(0x03U, rd, 3U, rd, 0))) {
+                return false;
+            }
+        } else if (!append_u32(as, stmt->section, enc_i(0x13U, rd, 0U, rd, 0))) {
+            return false;
+        }
+
         return minias_add_relocation(as,
                                      stmt->section,
                                      stmt->offset,
-                                     MINIAS_R_RISCV_PCREL_HI20,
+                                     use_got ? MINIAS_R_RISCV_GOT_HI20
+                                             : MINIAS_R_RISCV_PCREL_HI20,
                                      expr.name,
                                      expr.addend) &&
                minias_add_relocation(as,

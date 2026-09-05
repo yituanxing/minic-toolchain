@@ -505,6 +505,10 @@ int main(int argc, char **argv) {
                                              cc,
                                              as);
                 if (status != 0) {
+                    fprintf(stderr,
+                            "minic: input-failed:%s status=%d\n",
+                            inputs[input_index],
+                            status);
                     goto done;
                 }
                 link_inputs[link_input_count++] = object_path;

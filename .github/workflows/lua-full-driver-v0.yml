@@ -1,0 +1,1119 @@
+name: Lua Full Driver V0
+
+on:
+  push:
+    branches:
+      - "external/lua-full-driver-v0"
+  pull_request:
+    branches:
+      - "toolchain/static-readiness"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  lua-frontier:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Restore fixed Lua and musl header inputs
+        id: fast-input-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            build/lua-full-driver-v0/lua-source
+            build/lua-full-driver-v0/musl-1.2.5
+            build/lua-full-driver-v0/musl-sysroot/usr/include
+          key: lua-fast-inputs-v1-lua-5.5.0-musl-1.2.5-rv64
+
+      - name: Verify fast-path host tools
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          command -v cc
+          command -v make
+          command -v curl
+          command -v python3
+          command -v sed
+          if command -v ccache >/dev/null 2>&1; then
+            echo "LUA_FAST_CCACHE_AVAILABLE=1 path=$(command -v ccache)"
+          else
+            echo "LUA_FAST_CCACHE_AVAILABLE=0"
+          fi
+          echo "LUA_FAST_HOST_TOOLS=PASS"
+
+      - name: Build fast-path Mini tools
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          build=build/lua-full-driver-v0
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$build" \
+            "$build/bin/minic" \
+            "$build/bin/minic-cc" \
+            "$build/bin/minic-cpp" \
+            "$build/bin/minic-as"
+          echo "LUA_FAST_TOOLCHAIN_BUILD=PASS tools=minic,minic-cc,minic-cpp,minic-as"
+
+      - name: Prepare Lua source and musl headers
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/lua-full-driver-v0"
+          if test "${{ steps.fast-input-cache.outputs.cache-hit }}" = "true"; then
+            test -d "$work/lua-source/lua-5.5.0/src"
+            test -f "$work/musl-1.2.5/include/math.h"
+            test -f "$work/musl-sysroot/usr/include/math.h"
+            echo "LUA_FAST_PREP=PASS cache=hit lua=5.5.0 musl_headers=1"
+            exit 0
+          fi
+
+          curl -fsSL https://www.lua.org/ftp/lua-5.5.0.tar.gz -o "$work/lua-5.5.0.tar.gz"
+          printf '%s  %s\n' \
+            57ccc32bbbd005cab75bcc52444052535af691789dba2b9016d5c50640d68b3d \
+            "$work/lua-5.5.0.tar.gz" | sha256sum -c -
+          mkdir -p "$work/lua-source"
+          tar -xzf "$work/lua-5.5.0.tar.gz" -C "$work/lua-source"
+
+          curl -fsSL https://musl.libc.org/releases/musl-1.2.5.tar.gz \
+            -o "$work/musl-1.2.5.tar.gz"
+          printf '%s  %s\n' \
+            a9a118bbe84d8764da0ea0d28b3ab3fae8477fc7e4085d90102b8596fc7c75e4 \
+            "$work/musl-1.2.5.tar.gz" | sha256sum -c -
+          tar -xzf "$work/musl-1.2.5.tar.gz" -C "$work"
+
+          musl_src="$work/musl-1.2.5"
+          sysroot="$work/musl-sysroot"
+          mkdir -p "$sysroot"
+          make -C "$musl_src" \
+            ARCH=riscv64 prefix=/usr DESTDIR="$sysroot" \
+            install-headers >"$work/musl-headers.log" 2>&1
+          echo "LUA_FAST_PREP=PASS cache=miss lua=5.5.0 musl_headers=1"
+
+      - name: Save fixed Lua and musl header inputs
+        if: steps.fast-input-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            build/lua-full-driver-v0/lua-source
+            build/lua-full-driver-v0/musl-1.2.5
+            build/lua-full-driver-v0/musl-sysroot/usr/include
+          key: lua-fast-inputs-v1-lua-5.5.0-musl-1.2.5-rv64
+
+      - name: Fast raw Lua TU frontier
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/lua-full-driver-v0"
+          src="$work/lua-source/lua-5.5.0/src"
+          sysroot="$work/musl-sysroot"
+          driver="$work/bin/minic"
+          cpp="$work/bin/minic-cpp"
+
+          sources=(
+            lapi.c lcode.c lctype.c ldebug.c ldo.c ldump.c lfunc.c lgc.c
+            llex.c lmem.c lobject.c lopcodes.c lparser.c lstate.c lstring.c
+            ltable.c ltm.c lundump.c lvm.c lzio.c lauxlib.c lbaselib.c
+            lcorolib.c ldblib.c liolib.c lmathlib.c loadlib.c loslib.c
+            lstrlib.c ltablib.c lutf8lib.c linit.c lua.c
+          )
+          raw_tu_dir="$work/raw-tu"
+          mkdir -p "$raw_tu_dir"
+          raw_passed=0
+          for source in "${sources[@]}"; do
+            base="${source%.c}"
+            set +e
+            "$driver" --sysroot "$sysroot/usr" -DLUA_USE_LINUX -I"$src" -c               "$src/$source" -o "$raw_tu_dir/$base.o"               >"$raw_tu_dir/$base.stdout" 2>"$raw_tu_dir/$base.stderr"
+            tu_rc=$?
+            set -e
+            if test "$tu_rc" -ne 0; then
+              echo "LUA_RAW_TU_BLOCKER source=$source completed=$raw_passed rc=$tu_rc"
+              cat "$raw_tu_dir/$base.stderr"
+              "$cpp" -E -P -undef -nostdinc \
+                -D__STDC__=1 -D__STDC_VERSION__=201112L -D__STDC_HOSTED__=1 \
+                -D__linux__=1 -D__linux=1 -Dlinux=1 \
+                -D__unix__=1 -D__unix=1 -D__riscv=1 -D__riscv_xlen=64 \
+                -D__LP64__=1 -D_LP64=1 -D__riscv_float_abi_double=1 \
+                -D__ORDER_LITTLE_ENDIAN__=1234 -D__ORDER_BIG_ENDIAN__=4321 \
+                -D__BYTE_ORDER__=__ORDER_LITTLE_ENDIAN__ -D__CHAR_BIT__=8 \
+                -D__SIZEOF_SHORT__=2 -D__SIZEOF_INT__=4 -D__SIZEOF_LONG__=8 \
+                -D__SIZEOF_LONG_LONG__=8 -D__SIZEOF_POINTER__=8 -D__SIZEOF_SIZE_T__=8 \
+                -isystem "$sysroot/usr/include" -DLUA_USE_LINUX -I"$src" \
+                "$src/$source" -o "$raw_tu_dir/$base.i"
+              echo "LUA_RAW_TU_PREPROCESSED=$raw_tu_dir/$base.i"
+              nl -ba "$raw_tu_dir/$base.i" | sed -n '18,26p'
+              exit "$tu_rc"
+            fi
+            raw_passed=$((raw_passed + 1))
+            echo "LUA_RAW_TU_PASS source=$source completed=$raw_passed"
+          done
+          echo "LUA_RAW_TU_V0=PASS tus=$raw_passed pipeline=cpp,cc,as"
+
+          echo "LUA_FAST_RAW_TU_V0=PASS tus=$raw_passed pipeline=cpp,cc,as"
+
+      - name: Install slow-path runtime qualification packages
+        run: |
+          timeout 240s sudo apt-get -o Acquire::Retries=3 update
+          timeout 240s sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
+            libc6-riscv64-cross libc6-dev-riscv64-cross qemu-user
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/lua-full-driver-v0 all
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/lua-full-driver-v0 check-minipp-a0
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/lua-full-driver-v0 check-minias-a0
+
+      - name: Run Lua GC byte-state RV64 compiler probe
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          MINIC="$GITHUB_WORKSPACE/build/lua-full-driver-v0/bin/minic"           BUILD_DIR="$GITHUB_WORKSPACE/build/lua-full-driver-v0/byte-gc-state"           RISCV_CC=riscv64-linux-gnu-gcc           QEMU_RISCV64=qemu-riscv64             sh tests/compiler/c0/run-byte-field-or-assign-rv64.sh
+
+      - name: Run nested switch-break RV64 compiler probe
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          MINIC="$GITHUB_WORKSPACE/build/lua-full-driver-v0/bin/minic"           BUILD_DIR="$GITHUB_WORKSPACE/build/lua-full-driver-v0/switch-break"           RISCV_CC=riscv64-linux-gnu-gcc           QEMU_RISCV64=qemu-riscv64             sh tests/compiler/c0/run-switch-nested-break-rv64.sh
+
+      - name: Confirm legacy Lua 33-TU compiler frontier
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          MINIC="$GITHUB_WORKSPACE/build/lua-full-driver-v0/bin/minic" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/lua-full-driver-v0/lua-probe" \
+          TARGET_CC=riscv64-linux-gnu-gcc \
+          HOST_CC=cc \
+            sh tests/external/lua/probe.sh 2>&1 | tee build/lua-full-driver-v0/lua-frontier.log
+
+      - name: Build pristine musl runtime and MiniLD loader
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/lua-full-driver-v0"
+          musl_src="$work/musl-1.2.5"
+          musl_out="$work/musl-build"
+          sysroot="$work/musl-sysroot"
+
+          rm -rf "$musl_out"
+          mkdir -p "$musl_out"
+          cd "$musl_out"
+          CC=riscv64-linux-gnu-gcc \
+          AR=riscv64-linux-gnu-ar \
+          RANLIB=riscv64-linux-gnu-ranlib \
+            "$musl_src/configure" \
+              --target=riscv64-linux-gnu \
+              --enable-shared \
+              --prefix=/usr \
+            >"$work/musl-configure.log" 2>&1
+          make -j4 V=1 lib/libc.so lib/Scrt1.o lib/crti.o lib/crtn.o \
+            >"$work/musl-make.log" 2>&1
+
+          mkdir -p "$sysroot/usr/lib"
+          cp "$musl_out/lib/Scrt1.o" "$musl_out/lib/crti.o" "$musl_out/lib/crtn.o" \
+            "$sysroot/usr/lib/"
+          cp "$musl_out/lib/libc.so" "$sysroot/usr/lib/libc.so"
+
+          python3 - "$work/musl-make.log" "$work/musl-input-list.txt" <<'PY'
+          import shlex, sys
+          lines=open(sys.argv[1], encoding="utf-8", errors="replace").read().splitlines()
+          for i,line in enumerate(lines):
+              if " -nostdlib -shared " not in line:
+                  continue
+              full=line.rstrip()
+              j=i+1
+              while full.endswith("\\") and j < len(lines):
+                  full=full[:-1] + " " + lines[j].strip()
+                  j += 1
+              words=shlex.split(full)
+              objs=[w for w in words if w.endswith(".lo")]
+              if len(objs) >= 1000:
+                  open(sys.argv[2],"w").write("\n".join(objs)+"\n")
+                  print("LUA_MUSL_LINK_OBJECTS=%d" % len(objs))
+                  break
+          else:
+              raise SystemExit("shared musl link command not found")
+          PY
+
+          minild="$GITHUB_WORKSPACE/build/lua-full-driver-v0/bin/minic-ld"
+          libgcc="$(riscv64-linux-gnu-gcc -print-libgcc-file-name)"
+          libgcc_eh="$(riscv64-linux-gnu-gcc -print-file-name=libgcc_eh.a)"
+          mapfile -t rel_inputs <"$work/musl-input-list.txt"
+          inputs=()
+          for p in "${rel_inputs[@]}"; do
+            inputs+=("$musl_out/$p")
+          done
+
+          "$minild" -melf64lriscv -shared -e _dlstart \
+            --dynamic-list="$musl_src/dynamic.list" \
+            -o "$work/libc-minild.so" \
+            "${inputs[@]}" "$libgcc" "$libgcc_eh"
+
+          mkdir -p "$sysroot/lib"
+          cp "$work/libc-minild.so" "$sysroot/lib/ld-musl-riscv64.so.1"
+          cp "$work/libc-minild.so" "$sysroot/lib/libc.so"
+          chmod +x "$sysroot/lib/ld-musl-riscv64.so.1" "$sysroot/lib/libc.so"
+
+      - name: Link official Lua through full multi-input driver
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/lua-full-driver-v0"
+          src="$work/lua-source/lua-5.5.0/src"
+          sysroot="$work/musl-sysroot"
+          driver="$work/bin/minic"
+
+          sources=(
+            lapi.c lcode.c lctype.c ldebug.c ldo.c ldump.c lfunc.c lgc.c
+            llex.c lmem.c lobject.c lopcodes.c lparser.c lstate.c lstring.c
+            ltable.c ltm.c lundump.c lvm.c lzio.c lauxlib.c lbaselib.c
+            lcorolib.c ldblib.c liolib.c lmathlib.c loadlib.c loslib.c
+            lstrlib.c ltablib.c lutf8lib.c linit.c lua.c
+          )
+          inputs=()
+          for source in "${sources[@]}"; do
+            inputs+=("$src/$source")
+          done
+
+          set +e
+          "$driver" --sysroot "$sysroot/usr" \
+            -DLUA_USE_LINUX -I"$src" \
+            -o "$work/lua-minic" "${inputs[@]}" \
+            >"$work/lua-driver.stdout" 2>"$work/lua-driver.stderr"
+          driver_rc=$?
+          set -e
+          echo "LUA_FULL_DRIVER_RC=$driver_rc"
+          cat "$work/lua-driver.stdout"
+          cat "$work/lua-driver.stderr"
+          test "$driver_rc" -eq 0
+          test -x "$work/lua-minic"
+
+          riscv64-linux-gnu-readelf -h "$work/lua-minic" >"$work/lua-minic.header"
+          riscv64-linux-gnu-readelf -lW "$work/lua-minic" >"$work/lua-minic.programs"
+          riscv64-linux-gnu-readelf -d "$work/lua-minic" >"$work/lua-minic.dynamic"
+          grep -q 'DYN (Position-Independent Executable file)' "$work/lua-minic.header"
+          grep -q 'Requesting program interpreter: /lib/ld-musl-riscv64.so.1' \
+            "$work/lua-minic.programs"
+          grep -q '(NEEDED).*\[libc.so\]' "$work/lua-minic.dynamic"
+          riscv64-linux-gnu-readelf -Ws "$work/lua-minic" >"$work/lua-minic.symbols"
+          riscv64-linux-gnu-readelf -Wr "$work/lua-minic" >"$work/lua-minic.relocations"
+          riscv64-linux-gnu-readelf -Ws "$sysroot/lib/ld-musl-riscv64.so.1" >"$work/musl-minild.symbols"
+          riscv64-linux-gnu-readelf -Wr "$sysroot/lib/ld-musl-riscv64.so.1" >"$work/musl-minild.relocations"
+
+      - name: Run external data GOT runtime probe
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/lua-full-driver-v0"
+          sysroot="$work/musl-sysroot"
+          driver="$work/bin/minic"
+
+          cat >"$work/got-data-probe.c" <<'C'
+          #include <stdio.h>
+          #include <unistd.h>
+          int main(void) {
+              static const char marker[] = "MINIC_DSO_DATA_GOT_OK\n";
+              if (stdin == 0 || stdout == 0 || stderr == 0)
+                  return 9;
+              return write(1, marker, sizeof(marker) - 1) == (ssize_t)(sizeof(marker) - 1) ? 0 : 8;
+          }
+          C
+
+          "$driver" --sysroot "$sysroot/usr"             -o "$work/got-data-probe" "$work/got-data-probe.c"             >"$work/got-data-probe.build.stdout"             2>"$work/got-data-probe.build.stderr"
+
+          set +e
+          timeout 5s qemu-riscv64 -strace -L "$sysroot" "$work/got-data-probe"             >"$work/got-data-probe.stdout" 2>"$work/got-data-probe.strace"
+          rc=$?
+          set -e
+          echo "MINIC_DSO_DATA_GOT_RC=$rc"
+          cat "$work/got-data-probe.stdout"
+          tail -n 80 "$work/got-data-probe.strace"
+          test "$rc" -eq 0
+          grep -qx 'MINIC_DSO_DATA_GOT_OK' "$work/got-data-probe.stdout"
+          echo "MINIC_DSO_DATA_GOT_V0=PASS symbols=stdin,stdout,stderr relocation=GOT_HI20 runtime=qemu"
+
+      - name: Run Lua smoke under MiniLD-built musl
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/lua-full-driver-v0"
+          sysroot="$work/musl-sysroot"
+
+          cat >"$work/smoke.lua" <<'LUA'
+          assert(_VERSION == "Lua 5.5")
+          local values = {3, 4, 5}
+          local total = 0
+          for _, value in ipairs(values) do
+              total = total + value
+          end
+          assert(total == 12)
+          assert(string.upper("mini") == "MINI")
+          assert(math.floor(6.9) == 6)
+          io.write("LUA_MINIC_OK\n")
+          LUA
+
+          set +e
+          timeout 10s qemu-riscv64 -strace -L "$sysroot" "$work/lua-minic" "$work/smoke.lua"             >"$work/lua-smoke.stdout" 2>"$work/lua-smoke.strace"
+          rc=$?
+          if [ "$rc" -ne 0 ]; then
+            timeout 3s qemu-riscv64 -d in_asm,guest_errors               -D "$work/lua-smoke.qemu.log"               -L "$sysroot" "$work/lua-minic" "$work/smoke.lua"               >"$work/lua-smoke.trace.stdout" 2>"$work/lua-smoke.trace.stderr"
+            trace_rc=$?
+            echo "LUA_SMOKE_TRACE_RC=$trace_rc"
+          fi
+          set -e
+          echo "LUA_SMOKE_RC=$rc"
+          cat "$work/lua-smoke.stdout"
+          tail -n 160 "$work/lua-smoke.strace"
+          test "$rc" -eq 0
+          grep -qx 'LUA_MINIC_OK' "$work/lua-smoke.stdout"
+          echo "LUA_FULL_DRIVER_V0=PASS release=5.5.0 tus=33 pipeline=cpp,cc,as,ld musl=minild qemu=PASS"
+
+      - name: Run Lua GC coroutine frontier probe
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/lua-full-driver-v0"
+          sysroot="$work/musl-sysroot"
+
+          cat >"$work/gc-thread-probe.lua" <<'LUA'
+          io.stdout:setvbuf("no")
+          local thread_id = 0
+          local threads = {}
+
+          local function fn (thread)
+              local x = {}
+              threads[thread_id] = function()
+                  thread = x
+              end
+              coroutine.yield()
+          end
+
+          local started = os.clock()
+          while thread_id < 1000 do
+              local thread = coroutine.create(fn)
+              local ok, err = coroutine.resume(thread, thread)
+              assert(ok, err)
+              thread_id = thread_id + 1
+              if thread_id % 100 == 0 then
+                  io.write(string.format("GC_THREAD_PROGRESS=%d clock=%.6f\n",
+                                         thread_id, os.clock() - started))
+              end
+          end
+          io.write(string.format("GC_THREAD_FRONTIER_V0=PASS threads=%d clock=%.6f\n",
+                                 thread_id, os.clock() - started))
+
+          io.write("GC_CYCLE_PHASE=prepare\n")
+          local collected = false
+          collectgarbage()
+          collectgarbage("stop")
+          do
+              local function f (param)
+                  ;(function ()
+                      assert(type(f) == "function" and type(param) == "thread")
+                      param = {param, f}
+                      setmetatable(param, {__gc = function () collected = true end})
+                      coroutine.yield(100)
+                  end)()
+              end
+              local co = coroutine.create(f)
+              assert(coroutine.resume(co, co))
+          end
+          io.write("GC_CYCLE_PHASE=collect-begin\n")
+          collectgarbage()
+          io.write(string.format("GC_CYCLE_PHASE=collect-end collected=%s\n",
+                                 tostring(collected)))
+          assert(collected)
+          collectgarbage("restart")
+          io.write("GC_CYCLE_FRONTIER_V0=PASS\n")
+
+          io.write("GC_STOP_GROW_PHASE=prepare\n")
+          collectgarbage()
+          collectgarbage("stop")
+          collectgarbage("step", 0)
+          local baseline = collectgarbage("count")
+          local rounds = 0
+          repeat
+              for i = 1, 1000 do _ENV.a = {} end
+              rounds = rounds + 1
+              if rounds % 10 == 0 then
+                  io.write(string.format("GC_STOP_GROW_PROGRESS=%d count=%.3f baseline=%.3f\n",
+                                         rounds, collectgarbage("count"), baseline))
+              end
+              assert(rounds < 10000)
+          until collectgarbage("count") > 2 * baseline
+          io.write(string.format("GC_STOP_GROW_FRONTIER_V0=PASS rounds=%d count=%.3f baseline=%.3f\n",
+                                 rounds, collectgarbage("count"), baseline))
+          collectgarbage("restart")
+          LUA
+
+          set +e
+          timeout 30s qemu-riscv64 -L "$sysroot" "$work/lua-minic"             "$work/gc-thread-probe.lua"             >"$work/gc-thread-probe.stdout" 2>"$work/gc-thread-probe.stderr"
+          rc=$?
+          set -e
+          echo "GC_THREAD_FRONTIER_RC=$rc"
+          cat "$work/gc-thread-probe.stdout"
+          cat "$work/gc-thread-probe.stderr"
+          test "$rc" -eq 0
+          grep -F 'GC_THREAD_FRONTIER_V0=PASS threads=1000'             "$work/gc-thread-probe.stdout" >/dev/null
+          grep -F 'GC_CYCLE_FRONTIER_V0=PASS' "$work/gc-thread-probe.stdout" >/dev/null
+          grep -F 'GC_STOP_GROW_FRONTIER_V0=PASS' "$work/gc-thread-probe.stdout" >/dev/null
+
+      - name: Diagnose Lua reentrant GC C state
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/lua-full-driver-v0"
+          sysroot="$work/musl-sysroot"
+          driver="$work/bin/minic"
+          src="$work/lua-source/lua-5.5.0/src"
+          diag="$work/lua-gcdiag-src"
+
+          rm -rf "$diag"
+          cp -a "$src" "$diag"
+
+          python3 - "$diag/lgc.c" "$diag/lapi.c" "$diag/lbaselib.c" <<'PY'
+          import pathlib, sys
+
+          def patch(path, old, new):
+              p = pathlib.Path(path)
+              s = p.read_text()
+              if old not in s:
+                  raise SystemExit(f"diagnostic patch anchor missing: {p.name}: {old[:80]!r}")
+              p.write_text(s.replace(old, new, 1))
+
+          helper = r'''
+          #include <unistd.h>
+
+          static void minic_gcdiag (char tag, unsigned int value) {
+            char msg[3];
+            msg[0] = tag;
+            msg[1] = (char)('0' + (value & 7u));
+            msg[2] = '\n';
+            (void)write(2, msg, sizeof(msg));
+          }
+
+          '''
+
+          lgc, lapi, lbase = sys.argv[1:4]
+
+          patch(lgc,
+                '#include "ltm.h"\n\n',
+                '#include "ltm.h"\n' + helper)
+          patch(lgc,
+                'static void dothecall (lua_State *L, void *ud) {\n'
+                '  UNUSED(ud);\n'
+                '  luaD_callnoyield(L, L->top.p - 2, 0);\n'
+                '}',
+                'static void dothecall (lua_State *L, void *ud) {\n'
+                '  UNUSED(ud);\n'
+                "  minic_gcdiag('D', G(L)->gcstp);\n"
+                '  luaD_callnoyield(L, L->top.p - 2, 0);\n'
+                '}')
+          patch(lgc,
+                '    lu_byte oldgcstp  = g->gcstp;\n'
+                '    g->gcstp |= GCSTPGC;  /* avoid GC steps */',
+                '    lu_byte oldgcstp  = g->gcstp;\n'
+                "    minic_gcdiag('B', g->gcstp);\n"
+                '    g->gcstp |= GCSTPGC;  /* avoid GC steps */\n'
+                "    minic_gcdiag('S', g->gcstp);")
+          patch(lgc,
+                '    status = luaD_pcall(L, dothecall, NULL, savestack(L, L->top.p - 2), 0);',
+                "    minic_gcdiag('P', g->gcstp);\n"
+                '    status = luaD_pcall(L, dothecall, NULL, savestack(L, L->top.p - 2), 0);')
+
+          patch(lapi,
+                '#include "lvm.h"\n\n',
+                '#include "lvm.h"\n' + helper)
+          patch(lapi,
+                '  global_State *g = G(L);\n'
+                '  if (g->gcstp & (GCSTPGC | GCSTPCLS))  /* internal stop? */\n'
+                '    return -1;  /* all options are invalid when stopped */',
+                '  global_State *g = G(L);\n'
+                "  minic_gcdiag('A', g->gcstp);\n"
+                '  if (g->gcstp & (GCSTPGC | GCSTPCLS)) {  /* internal stop? */\n'
+                "    minic_gcdiag('H', g->gcstp);\n"
+                '    return -1;  /* all options are invalid when stopped */\n'
+                '  }\n'
+                "  minic_gcdiag('N', g->gcstp);")
+
+          patch(lbase,
+                '#include "llimits.h"\n\n',
+                '#include "llimits.h"\n' + helper)
+          patch(lbase,
+                'static int luaB_collectgarbage (lua_State *L) {\n',
+                'static int luaB_collectgarbage (lua_State *L) {\n'
+                "  minic_gcdiag('E', 0);\n")
+          patch(lbase,
+                '  int o = optsnum[luaL_checkoption(L, 1, "collect", opts)];\n',
+                '  int o = optsnum[luaL_checkoption(L, 1, "collect", opts)];\n'
+                "  minic_gcdiag('O', (unsigned int)o);\n")
+          patch(lbase,
+                '    case LUA_GCISRUNNING: {\n'
+                '      int res = lua_gc(L, o);',
+                '    case LUA_GCISRUNNING: {\n'
+                "      minic_gcdiag('I', 0);\n"
+                '      int res = lua_gc(L, o);\n'
+                "      minic_gcdiag('R', (unsigned int)(res + 1));")
+          PY
+
+          sources=(
+            lapi.c lcode.c lctype.c ldebug.c ldo.c ldump.c lfunc.c lgc.c
+            llex.c lmem.c lobject.c lopcodes.c lparser.c lstate.c lstring.c
+            ltable.c ltm.c lundump.c lvm.c lzio.c lauxlib.c lbaselib.c
+            lcorolib.c ldblib.c liolib.c lmathlib.c loadlib.c loslib.c
+            lstrlib.c ltablib.c lutf8lib.c linit.c lua.c
+          )
+          inputs=()
+          for source in "${sources[@]}"; do
+            inputs+=("$diag/$source")
+          done
+
+          "$driver" --sysroot "$sysroot/usr"             -DLUA_USE_LINUX -I"$diag"             -o "$work/lua-minic-gcdiag" "${inputs[@]}"             >"$work/lua-gcdiag.build.stdout"             2>"$work/lua-gcdiag.build.stderr"
+
+          cat >"$work/gc-reentrant-diag.lua" <<'LUA'
+          io.stdout:setvbuf("no")
+          do
+            local object = {}
+            setmetatable(object, {
+              __gc = function ()
+                io.write("GC_DIAG_FINALIZER_ENTER\n")
+                local running = collectgarbage("isrunning")
+                io.write("GC_DIAG_ISRUNNING=" .. tostring(running) .. "\n")
+              end
+            })
+          end
+          io.write("GC_DIAG_COLLECT_BEGIN\n")
+          collectgarbage()
+          io.write("GC_DIAG_COLLECT_DONE\n")
+          LUA
+
+          set +e
+          timeout 5s qemu-riscv64 -L "$sysroot" "$work/lua-minic-gcdiag"             "$work/gc-reentrant-diag.lua"             >"$work/gc-reentrant-diag.stdout"             2>"$work/gc-reentrant-diag.stderr"
+          rc=$?
+          set -e
+          echo "GC_C_STATE_DIAG_RC=$rc"
+          cat "$work/gc-reentrant-diag.stdout"
+          cat "$work/gc-reentrant-diag.stderr"
+          # Diagnostic-only: preserve the state trace even when the known bug times out.
+          test "$rc" -eq 0 -o "$rc" -eq 124
+
+      - name: Run isolated Lua reentrant finalizer GC probe
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/lua-full-driver-v0"
+          sysroot="$work/musl-sysroot"
+
+          cat >"$work/gc-reentrant-probe.lua" <<'LUA'
+          io.stdout:setvbuf("no")
+          local entered = false
+          local exited = false
+          local result = "unset"
+
+          do
+              local object = {}
+              setmetatable(object, {
+                  __gc = function ()
+                      entered = true
+                      io.write("GC_REENTRANT_FINALIZER_ENTER\n")
+                      local running = collectgarbage("isrunning")
+                      io.write("GC_REENTRANT_ISRUNNING=" .. tostring(running) .. "\n")
+                      result = collectgarbage()
+                      io.write("GC_REENTRANT_RESULT=" .. tostring(result) .. "\n")
+                      exited = true
+                  end
+              })
+          end
+
+          io.write("GC_REENTRANT_COLLECT_BEGIN\n")
+          collectgarbage()
+          io.write("GC_REENTRANT_COLLECT_DONE\n")
+          assert(entered)
+          assert(exited)
+          assert(result == nil)
+          io.write("GC_REENTRANT_FRONTIER_V0=PASS\n")
+          LUA
+
+          set +e
+          timeout 5s qemu-riscv64 -L "$sysroot" "$work/lua-minic"             "$work/gc-reentrant-probe.lua"             >"$work/gc-reentrant-probe.stdout"             2>"$work/gc-reentrant-probe.stderr"
+          rc=$?
+          set -e
+          echo "GC_REENTRANT_FRONTIER_RC=$rc"
+          cat "$work/gc-reentrant-probe.stdout"
+          cat "$work/gc-reentrant-probe.stderr"
+          test "$rc" -eq 0
+          grep -F 'GC_REENTRANT_FRONTIER_V0=PASS'             "$work/gc-reentrant-probe.stdout" >/dev/null
+
+      - name: Profile official gc.lua stateful frontier
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/lua-full-driver-v0"
+          sysroot="$work/musl-sysroot"
+
+          rm -rf "$work/lua-5.5.0-tests"
+          curl -fsSL https://www.lua.org/tests/lua-5.5.0-tests.tar.gz \
+            -o "$work/lua-5.5.0-tests.tar.gz"
+          printf '%s  %s\n'             5e47bbfad7db2965d69580e918ee64edeb8d8d32de404b8dae9ce5c6d76a1472             "$work/lua-5.5.0-tests.tar.gz" | sha256sum -c -
+          tar -xzf "$work/lua-5.5.0-tests.tar.gz" -C "$work"
+
+          tests="$work/lua-5.5.0-tests"
+          python3 - "$tests/gc.lua" "$tests/gc-profile.lua" "$tests/all.lua" "$tests/all-gc-profile.lua" <<'PY'
+          import pathlib, sys
+
+          gc_src = pathlib.Path(sys.argv[1]).read_text()
+          gc_src = gc_src.replace(
+              'print("self-referenced threads")\n',
+              'print("self-referenced threads")\n'
+              'io.stderr:write(string.format("\\nGC_OFFICIAL_THREAD_START clock=%.6f\\n", os.clock())); '
+              'io.stderr:flush()\n',
+              1,
+          )
+          gc_src = gc_src.replace(
+              '    thread_id = thread_id + 1\n',
+              '    thread_id = thread_id + 1\n'
+              '    if thread_id % 100 == 0 then\n'
+              '      io.stderr:write(string.format("GC_OFFICIAL_THREAD_PROGRESS=%d clock=%.6f\\n", '
+              'thread_id, os.clock())); io.stderr:flush()\n'
+              '    end\n',
+              1,
+          )
+          gc_src = gc_src.replace(
+              '-- Create a closure (function inside \'f\') with an upvalue (\'param\') that\n',
+              'io.stderr:write(string.format("GC_OFFICIAL_THREAD_DONE clock=%.6f\\n", os.clock())); '
+              'io.stderr:flush()\n\n'
+              '-- Create a closure (function inside \'f\') with an upvalue (\'param\') that\n',
+              1,
+          )
+          gc_src = gc_src.replace(
+              '  local collected = false   -- to detect collection\n',
+              '  io.stderr:write(string.format("GC_OFFICIAL_CYCLE_START clock=%.6f\\n", os.clock())); '
+              'io.stderr:flush()\n'
+              '  local collected = false   -- to detect collection\n',
+              1,
+          )
+          gc_src = gc_src.replace(
+              '  collectgarbage("restart")\nend\n\n\ndo\n  collectgarbage()\n',
+              '  collectgarbage("restart")\n'
+              '  io.stderr:write(string.format("GC_OFFICIAL_CYCLE_DONE clock=%.6f\\n", os.clock())); '
+              'io.stderr:flush()\n'
+              'end\n\n\ndo\n'
+              '  io.stderr:write(string.format("GC_OFFICIAL_STOP_GROW_START clock=%.6f\\n", os.clock())); '
+              'io.stderr:flush()\n'
+              '  collectgarbage()\n',
+              1,
+          )
+          gc_src = gc_src.replace(
+              '  _ENV.a = nil\nend\n\n\nif T then',
+              '  _ENV.a = nil\n'
+              '  io.stderr:write(string.format("GC_OFFICIAL_STOP_GROW_DONE clock=%.6f\\n", os.clock())); '
+              'io.stderr:flush()\n'
+              'end\n\n\nif T then',
+              1,
+          )
+          gc_src = gc_src.replace(
+              '-- create an object to be collected when state is closed\n',
+              'io.stderr:write(string.format("GC_OFFICIAL_CLOSE_SETUP_START clock=%.6f\\n", os.clock())); '
+              'io.stderr:flush()\n'
+              '-- create an object to be collected when state is closed\n',
+              1,
+          )
+          gc_src = gc_src.replace(
+              '  ___Glob = {u}   -- avoid object being collected before program end\nend\n\n'
+              '-- create several objects to raise errors when collected while closing state\n',
+              '  ___Glob = {u}   -- avoid object being collected before program end\nend\n'
+              'io.stderr:write(string.format("GC_OFFICIAL_CLOSE_SETUP_DONE clock=%.6f\\n", os.clock())); '
+              'io.stderr:flush()\n\n'
+              '-- create several objects to raise errors when collected while closing state\n',
+              1,
+          )
+          gc_src = gc_src.replace(
+              "-- just to make sure\nassert(collectgarbage'isrunning')\n",
+              'io.stderr:write(string.format("GC_OFFICIAL_ISRUNNING_BEGIN clock=%.6f\\n", os.clock())); '
+              'io.stderr:flush()\n'
+              "-- just to make sure\nassert(collectgarbage'isrunning')\n"
+              'io.stderr:write(string.format("GC_OFFICIAL_ISRUNNING_DONE clock=%.6f\\n", os.clock())); '
+              'io.stderr:flush()\n',
+              1,
+          )
+          gc_src = gc_src.replace(
+              'do    -- check that the collector is not reentrant in incremental mode\n'
+              '  local res = true\n',
+              'io.stderr:write(string.format("GC_OFFICIAL_REENTRANT_START clock=%.6f\\n", os.clock())); '
+              'io.stderr:flush()\n'
+              'do    -- check that the collector is not reentrant in incremental mode\n'
+              '  local res = true\n',
+              1,
+          )
+          gc_src = gc_src.replace(
+              '  setmetatable({}, {__gc = function ()\n'
+              '    res = collectgarbage()\n'
+              '  end})\n'
+              '  collectgarbage()\n'
+              '  assert(not res)\n'
+              'end\n\n\ncollectgarbage(oldmode)\n',
+              '  setmetatable({}, {__gc = function ()\n'
+              '    io.stderr:write(string.format("GC_OFFICIAL_REENTRANT_FINALIZER_ENTER clock=%.6f\\n", os.clock())); '
+              'io.stderr:flush()\n'
+              '    res = collectgarbage()\n'
+              '    io.stderr:write(string.format("GC_OFFICIAL_REENTRANT_FINALIZER_EXIT clock=%.6f res=%s\\n", '
+              'os.clock(), tostring(res))); io.stderr:flush()\n'
+              '  end})\n'
+              '  io.stderr:write(string.format("GC_OFFICIAL_REENTRANT_COLLECT_BEGIN clock=%.6f\\n", os.clock())); '
+              'io.stderr:flush()\n'
+              '  collectgarbage()\n'
+              '  io.stderr:write(string.format("GC_OFFICIAL_REENTRANT_COLLECT_DONE clock=%.6f res=%s\\n", '
+              'os.clock(), tostring(res))); io.stderr:flush()\n'
+              '  assert(not res)\n'
+              'end\n'
+              'io.stderr:write(string.format("GC_OFFICIAL_REENTRANT_DONE clock=%.6f\\n", os.clock())); '
+              'io.stderr:flush()\n\n'
+              'io.stderr:write(string.format("GC_OFFICIAL_OLDMODE_BEGIN clock=%.6f\\n", os.clock())); '
+              'io.stderr:flush()\n'
+              'collectgarbage(oldmode)\n'
+              'io.stderr:write(string.format("GC_OFFICIAL_OLDMODE_DONE clock=%.6f\\n", os.clock())); '
+              'io.stderr:flush()\n',
+              1,
+          )
+          gc_src = gc_src.replace(
+              "print('OK')\n",
+              "io.stderr:write(string.format(\"GC_OFFICIAL_END clock=%.6f\\n\", os.clock())); "
+              "io.stderr:flush()\nprint('OK')\n",
+              1,
+          )
+          pathlib.Path(sys.argv[2]).write_text(gc_src)
+
+          all_src = pathlib.Path(sys.argv[3]).read_text()
+          old = """report"gc.lua"
+          local f = assert(loadfile('gc.lua'))
+          f()
+
+          dofile('db.lua')"""
+          new = """report"gc-profile.lua"
+          local f = assert(loadfile('gc-profile.lua'))
+          f()
+          io.stderr:write(string.format("GC_PROFILE_DONE clock=%.6f\\n", os.clock()))
+          io.stderr:flush()
+          os.exit(0)
+
+          dofile('db.lua')"""
+          if old not in all_src:
+              raise SystemExit("all.lua gc seam not found")
+          pathlib.Path(sys.argv[4]).write_text(all_src.replace(old, new, 1))
+          PY
+
+          cd "$tests"
+          set +e
+          timeout 30s qemu-riscv64 -L "$sysroot" "$work/lua-minic"             -e"_U=true; io.stdout:setvbuf('no')" all-gc-profile.lua             >"$work/lua-gc-profile.stdout" 2>"$work/lua-gc-profile.stderr"
+          rc=$?
+          set -e
+          echo "LUA_GC_PROFILE_RC=$rc"
+          cat "$work/lua-gc-profile.stdout"
+          cat "$work/lua-gc-profile.stderr"
+          test "$rc" -eq 0
+          grep -F 'GC_PROFILE_DONE' "$work/lua-gc-profile.stderr" >/dev/null
+          echo "LUA_GC_STATEFUL_FRONTIER_V0=PASS official_prefix=main+tracegc+gc"
+
+      - name: Run Lua tail-call runtime frontier probe
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/lua-full-driver-v0"
+          sysroot="$work/musl-sysroot"
+
+          cat >"$work/tail-call-probe.lua" <<'LUA'
+          io.stdout:setvbuf("no")
+
+          function deep (n)
+            if n > 0 then return deep(n - 1) else return 101 end
+          end
+
+          for _, n in ipairs({100, 1000, 10000, 30000}) do
+            io.write("TAIL_PURE_BEGIN=" .. n .. "\n")
+            assert(deep(n) == 101)
+            io.write("TAIL_PURE_PASS=" .. n .. "\n")
+          end
+
+          local a = {}
+          function a:deep (n)
+            if n > 0 then return self:deep(n - 1) else return 101 end
+          end
+          io.write("TAIL_METHOD_BEGIN=30000\n")
+          assert(a:deep(30000) == 101)
+          io.write("TAIL_METHOD_PASS=30000\n")
+
+          do
+            local function foo (x, ...)
+              local args = {...}
+              return x, args[1], args[2]
+            end
+            local function foo1 (x)
+              return foo(10, x, x + 1)
+            end
+            io.write("TAIL_VARARG_BEGIN\n")
+            local x, y, z = foo1(-2)
+            assert(x == 10 and y == -2 and z == -1)
+            io.write("TAIL_VARARG_PASS\n")
+
+            local t = setmetatable({}, {__call = foo})
+            local function foo2 (x)
+              return t(10, x)
+            end
+            io.write("TAIL_METACALL_BEGIN\n")
+            x, y, z = foo2(100)
+            assert(x == t and y == 10 and z == 100)
+            io.write("TAIL_METACALL_PASS\n")
+          end
+
+          do
+            local function foo (x, ...)
+              local args = {...}
+              return x, args[1], args[2]
+            end
+            io.write("TAIL_ZERO_RESULT_BEGIN\n")
+            local x, y = (function () return foo() end)()
+            assert(x == nil and y == nil)
+            io.write("TAIL_ZERO_RESULT_PASS\n")
+
+            local X, Y, A
+            local function sink (x, y, ...)
+              X = x
+              Y = y
+              A = {...}
+            end
+            local function forward (...) return sink(...) end
+
+            io.write("TAIL_FORWARD_BEGIN=0\n")
+            forward()
+            assert(X == nil and Y == nil and #A == 0)
+            io.write("TAIL_FORWARD_PASS=0\n")
+
+            io.write("TAIL_FORWARD_BEGIN=1\n")
+            forward(10)
+            assert(X == 10 and Y == nil and #A == 0)
+            io.write("TAIL_FORWARD_PASS=1\n")
+
+            io.write("TAIL_FORWARD_BEGIN=2\n")
+            forward(10, 20)
+            assert(X == 10 and Y == 20 and #A == 0)
+            io.write("TAIL_FORWARD_PASS=2\n")
+
+            io.write("TAIL_FORWARD_BEGIN=3\n")
+            forward(10, 20, 30)
+            assert(X == 10 and Y == 20 and #A == 1 and A[1] == 30)
+            io.write("TAIL_FORWARD_PASS=3\n")
+          end
+
+          do
+            local function loop ()
+              assert(pcall(loop))
+            end
+
+            io.write("CSTACK_OVERFLOW_BEGIN\n")
+            local err, msg = xpcall(loop, loop)
+            io.write("CSTACK_OVERFLOW_RETURN err=" .. tostring(err) ..
+                     " msgtype=" .. type(msg) .. "\n")
+            assert(not err and string.find(msg, "error"))
+            io.write("CSTACK_OVERFLOW_FRONTIER_V0=PASS\n")
+          end
+
+          do
+            local n = 10000
+            local function target ()
+              if n == 0 then
+                return 1023
+              else
+                n = n - 1
+                return target()
+              end
+            end
+
+            local callable = target
+            for i = 1, 15 do
+              callable = setmetatable({}, {__call = callable})
+            end
+
+            io.write("TAIL_CALL_CHAIN_BEGIN depth=15 recursion=10000\n")
+            local result = coroutine.wrap(function () return callable() end)()
+            assert(result == 1023)
+            io.write("TAIL_CALL_CHAIN_PASS depth=15 recursion=10000\n")
+          end
+
+          io.write("TAIL_CALL_FRONTIER_V0=PASS\n")
+          LUA
+
+          set +e
+          timeout 10s qemu-riscv64 -L "$sysroot" "$work/lua-minic"             "$work/tail-call-probe.lua"             >"$work/tail-call-probe.stdout"             2>"$work/tail-call-probe.stderr"
+          rc=$?
+          set -e
+          echo "TAIL_CALL_FRONTIER_RC=$rc"
+          cat "$work/tail-call-probe.stdout"
+          cat "$work/tail-call-probe.stderr"
+          test "$rc" -eq 0
+          grep -F 'CSTACK_OVERFLOW_FRONTIER_V0=PASS'             "$work/tail-call-probe.stdout" >/dev/null
+          grep -F 'TAIL_CALL_FRONTIER_V0=PASS'             "$work/tail-call-probe.stdout" >/dev/null
+
+      - name: Record musl LC_NUMERIC contract
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/lua-full-driver-v0"
+          sysroot="$work/musl-sysroot"
+
+          cat >"$work/musl-lc-numeric-probe.lua" <<'LUA'
+          io.stdout:setvbuf("no")
+          local loc = os.setlocale("pt_BR") or os.setlocale("ptb")
+          print("MUSL_LC_NUMERIC_LOCALE=" .. tostring(loc))
+          if loc then
+            local comma = tonumber("3,4")
+            local dot = tonumber("3.4")
+            print("MUSL_LC_NUMERIC_COMMA=" .. tostring(comma))
+            print("MUSL_LC_NUMERIC_DOT=" .. tostring(dot))
+            assert(comma == nil)
+            assert(dot == 3.4)
+            print("MUSL_LC_NUMERIC_DEVIATION_V0=PASS setlocale=name-only decimal_point=dot")
+          else
+            print("MUSL_LC_NUMERIC_DEVIATION_V0=SKIP locale-unavailable=1")
+          end
+          LUA
+
+          qemu-riscv64 -L "$sysroot" "$work/lua-minic"             "$work/musl-lc-numeric-probe.lua"             >"$work/musl-lc-numeric-probe.stdout"             2>"$work/musl-lc-numeric-probe.stderr"
+          cat "$work/musl-lc-numeric-probe.stdout"
+          cat "$work/musl-lc-numeric-probe.stderr"
+          grep -E 'MUSL_LC_NUMERIC_DEVIATION_V0=(PASS|SKIP)'             "$work/musl-lc-numeric-probe.stdout" >/dev/null
+
+      - name: Run official Lua 5.5.0 basic test suite
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/lua-full-driver-v0"
+          sysroot="$work/musl-sysroot"
+
+          curl -fsSL https://www.lua.org/tests/lua-5.5.0-tests.tar.gz             -o "$work/lua-5.5.0-tests.tar.gz"
+          printf '%s  %s\n'             5e47bbfad7db2965d69580e918ee64edeb8d8d32de404b8dae9ce5c6d76a1472             "$work/lua-5.5.0-tests.tar.gz" | sha256sum -c -
+          tar -xzf "$work/lua-5.5.0-tests.tar.gz" -C "$work"
+
+          tests="$work/lua-5.5.0-tests"
+          cd "$tests"
+          set +e
+          timeout 300s qemu-riscv64 -L "$sysroot" "$work/lua-minic" \
+            -e"_U=true; io.stdout:setvbuf('no')" all.lua \
+            2>"$work/lua-suite.stderr" | tee "$work/lua-suite.stdout"
+          rc=${PIPESTATUS[0]}
+          set -e
+          echo "LUA_BASIC_SUITE_RC=$rc"
+          tail -n 80 "$work/lua-suite.stdout"
+          tail -n 80 "$work/lua-suite.stderr"
+
+          if test "$rc" -eq 0; then
+            grep -F 'final OK' "$work/lua-suite.stdout" >/dev/null
+            echo "LUA_BASIC_SUITE_V0=PASS release=5.5.0 official=1 _U=true final_OK=1"
+          else
+            grep -F 'literals.lua:300: assertion failed!' "$work/lua-suite.stderr" >/dev/null
+            grep -F 'MUSL_LC_NUMERIC_DEVIATION_V0=PASS'               "$work/musl-lc-numeric-probe.stdout" >/dev/null
+            echo "LUA_BASIC_SUITE_V0=PLATFORM_DEVIATION release=5.5.0 official=1 cause=musl-lc-numeric literals_line=300"
+          fi
+
+      - name: Continue Lua suite past musl LC_NUMERIC deviation
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/lua-full-driver-v0"
+          sysroot="$work/musl-sysroot"
+          cont="$work/lua-suite-musl-cont"
+          rm -rf "$cont"
+          mkdir -p "$cont"
+          tar -xzf "$work/lua-5.5.0-tests.tar.gz" -C "$cont"
+          tests="$cont/lua-5.5.0-tests"
+
+          python3 - "$tests/literals.lua" <<'PY'
+          import pathlib, sys
+          path = pathlib.Path(sys.argv[1])
+          text = path.read_text()
+          old = 'if os.setlocale("pt_BR") or os.setlocale("ptb") then'
+          new = 'if (os.setlocale("pt_BR") or os.setlocale("ptb")) and tonumber("3,4") ~= nil then'
+          if text.count(old) != 1:
+              raise SystemExit("unexpected Lua 5.5.0 locale guard shape")
+          path.write_text(text.replace(old, new, 1))
+          PY
+
+          cd "$tests"
+          set +e
+          timeout 300s qemu-riscv64 -L "$sysroot" "$work/lua-minic" \
+            -e"_U=true; io.stdout:setvbuf('no')" all.lua \
+            2>"$work/lua-suite-musl-cont.stderr" | tee "$work/lua-suite-musl-cont.stdout"
+          rc=${PIPESTATUS[0]}
+          set -e
+          echo "LUA_MUSL_CONT_SUITE_RC=$rc"
+          tail -n 100 "$work/lua-suite-musl-cont.stdout"
+          tail -n 100 "$work/lua-suite-musl-cont.stderr"
+          test "$rc" -eq 0
+          grep -F 'final OK' "$work/lua-suite-musl-cont.stdout" >/dev/null
+          echo "LUA_MUSL_CONT_SUITE_V0=PASS release=5.5.0 known_deviation=LC_NUMERIC final_OK=1"
+
+      - name: Preserve Lua frontier evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lua-full-driver-v0-frontier
+          path: |
+            build/lua-full-driver-v0/lua-frontier.log
+            build/lua-full-driver-v0/lua-probe/*.stderr
+            build/lua-full-driver-v0/lua-probe/*.stdout
+            build/lua-full-driver-v0/lua-probe/*.i
+            build/lua-full-driver-v0/musl-configure.log
+            build/lua-full-driver-v0/musl-headers.log
+            build/lua-full-driver-v0/musl-make.log
+            build/lua-full-driver-v0/musl-input-list.txt
+            build/lua-full-driver-v0/lua-driver.stdout
+            build/lua-full-driver-v0/lua-driver.stderr
+            build/lua-full-driver-v0/raw-tu/*.stderr
+            build/lua-full-driver-v0/raw-tu/*.stdout
+            build/lua-full-driver-v0/raw-tu/*.i
+            build/lua-full-driver-v0/lua-minic.header
+            build/lua-full-driver-v0/lua-minic.programs
+            build/lua-full-driver-v0/lua-minic.dynamic
+            build/lua-full-driver-v0/lua-minic.symbols
+            build/lua-full-driver-v0/lua-minic.relocations
+            build/lua-full-driver-v0/musl-minild.symbols
+            build/lua-full-driver-v0/musl-minild.relocations
+            build/lua-full-driver-v0/got-data-probe.c
+            build/lua-full-driver-v0/got-data-probe.build.stdout
+            build/lua-full-driver-v0/got-data-probe.build.stderr
+            build/lua-full-driver-v0/got-data-probe.stdout
+            build/lua-full-driver-v0/got-data-probe.strace
+            build/lua-full-driver-v0/lua-minic
+            build/lua-full-driver-v0/got-data-probe
+            build/lua-full-driver-v0/smoke.lua
+            build/lua-full-driver-v0/lua-smoke.strace
+            build/lua-full-driver-v0/lua-smoke.qemu.log
+            build/lua-full-driver-v0/lua-smoke.trace.stdout
+            build/lua-full-driver-v0/lua-smoke.trace.stderr
+            build/lua-full-driver-v0/gc-thread-probe.lua
+            build/lua-full-driver-v0/gc-thread-probe.stdout
+            build/lua-full-driver-v0/gc-thread-probe.stderr
+            build/lua-full-driver-v0/gc-reentrant-probe.lua
+            build/lua-full-driver-v0/gc-reentrant-probe.stdout
+            build/lua-full-driver-v0/gc-reentrant-probe.stderr
+            build/lua-full-driver-v0/gc-reentrant-diag.lua
+            build/lua-full-driver-v0/gc-reentrant-diag.stdout
+            build/lua-full-driver-v0/gc-reentrant-diag.stderr
+            build/lua-full-driver-v0/lua-gcdiag.build.stdout
+            build/lua-full-driver-v0/lua-gcdiag.build.stderr
+            build/lua-full-driver-v0/lua-gc-profile.stdout
+            build/lua-full-driver-v0/lua-gc-profile.stderr
+            build/lua-full-driver-v0/tail-call-probe.lua
+            build/lua-full-driver-v0/tail-call-probe.stdout
+            build/lua-full-driver-v0/tail-call-probe.stderr
+            build/lua-full-driver-v0/lua-smoke.stdout
+            build/lua-full-driver-v0/lua-smoke.stderr
+            build/lua-full-driver-v0/lua-suite.stdout
+            build/lua-full-driver-v0/musl-lc-numeric-probe.lua
+            build/lua-full-driver-v0/musl-lc-numeric-probe.stdout
+            build/lua-full-driver-v0/musl-lc-numeric-probe.stderr
+            build/lua-full-driver-v0/lua-suite-musl-cont.stdout
+            build/lua-full-driver-v0/lua-suite-musl-cont.stderr
+            build/lua-full-driver-v0/lua-suite.stderr
+          if-no-files-found: ignore
+          retention-days: 5

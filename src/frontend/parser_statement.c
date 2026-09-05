@@ -4920,6 +4920,31 @@ bool minic_parser_add_default_return(MinicParser *parser) {
             return false;
         }
         parser->program->return_expression = statement.expression;
+    } else if (minic_type_is_float(function->return_type)) {
+        MinicExpression zero;
+        MinicExpression conversion;
+        MinicExpressionId zero_id;
+
+        (void)memset(&zero, 0, sizeof(zero));
+        zero.kind = MINIC_EXPRESSION_FLOATING;
+        zero.span = parser->current.span;
+        zero.type = minic_type_double();
+        zero.value_category = MINIC_VALUE_RVALUE;
+        zero.value.floating_bits = 0U;
+        if (!minic_parser_add_expression(parser, &zero, &zero_id)) {
+            return false;
+        }
+
+        (void)memset(&conversion, 0, sizeof(conversion));
+        conversion.kind = MINIC_EXPRESSION_CAST;
+        conversion.span = parser->current.span;
+        conversion.type = function->return_type;
+        conversion.value_category = MINIC_VALUE_RVALUE;
+        conversion.value.unary.operand = zero_id;
+        if (!minic_parser_add_expression(parser, &conversion, &statement.expression)) {
+            return false;
+        }
+        parser->program->return_expression = statement.expression;
     } else if (!minic_type_is_void(function->return_type)) {
         minic_parser_error(parser, "unsupported implicit return type");
         return false;

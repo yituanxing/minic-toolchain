@@ -2776,8 +2776,8 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
         return false;
     }
     if (!minic_type_is_integer(return_type) && !minic_type_is_void(return_type) &&
-        !minic_type_is_pointer(return_type) && !minic_type_is_double(return_type) &&
-        !minic_type_is_record(return_type)) {
+        !minic_type_is_pointer(return_type) && !minic_type_is_float(return_type) &&
+        !minic_type_is_double(return_type) && !minic_type_is_record(return_type)) {
         minic_parser_error(parser, "unsupported function return type");
         return false;
     }
@@ -2881,6 +2881,10 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
     } else if (!minic_c0_program_define_function(
                    parser->program, function_id, local_begin, body_block)) {
         minic_parser_error(parser, "cannot define previously declared function");
+        return false;
+    }
+    if (!minic_c0_program_set_function_inline(parser->program, function_id, is_inline)) {
+        minic_parser_error(parser, "cannot persist inline function metadata");
         return false;
     }
     if (is_weak && !minic_c0_program_set_function_weak(parser->program, function_id, true)) {

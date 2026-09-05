@@ -228,6 +228,10 @@ static bool verify_binary_type(const MinicC0Program *program,
         (minic_type_is_double(left->type) || minic_type_is_double(right->type))) {
         return minic_type_equal(expression->type, minic_type_int());
     }
+    if (binary_is_comparison(expression->value.binary.operator_kind) &&
+        minic_type_is_long_double(left->type) && minic_type_is_long_double(right->type)) {
+        return minic_type_equal(expression->type, minic_type_int());
+    }
 
     if ((minic_type_is_double(left->type) || minic_type_is_integer(left->type)) &&
         (minic_type_is_double(right->type) || minic_type_is_integer(right->type)) &&
@@ -362,7 +366,8 @@ static bool verify_expression(const MinicC0Program *program,
                minic_type_is_integer(expression->type);
     case MINIC_EXPRESSION_FLOATING:
         return expression->value_category == MINIC_VALUE_RVALUE &&
-               minic_type_is_double(expression->type);
+               (minic_type_is_float(expression->type) ||
+                minic_type_is_double(expression->type));
     case MINIC_EXPRESSION_LOCAL: {
         const MinicLocal *local;
 
@@ -514,12 +519,15 @@ static bool verify_expression(const MinicC0Program *program,
         operand = expression_before(program, expression->value.unary.operand, expression_index);
         return form == MINIC_C0_AST_NORMALIZED && operand != NULL &&
                expression->value_category == MINIC_VALUE_RVALUE &&
-               ((minic_type_is_double(expression->type) &&
-                 (minic_type_is_integer(operand->type) || minic_type_is_float(operand->type))) ||
-                (minic_type_is_float(expression->type) && minic_type_is_double(operand->type)) ||
-                (minic_type_is_integer(expression->type) && minic_type_is_double(operand->type)) ||
-                (minic_type_is_integer(expression->type) && minic_type_is_integer(operand->type) &&
-                 minic_type_cast_compatible(expression->type, operand->type)));
+               (minic_type_is_integer(expression->type) ||
+                minic_type_is_float(expression->type) ||
+                minic_type_is_double(expression->type) ||
+                minic_type_is_long_double(expression->type)) &&
+               (minic_type_is_integer(operand->type) ||
+                minic_type_is_float(operand->type) ||
+                minic_type_is_double(operand->type) ||
+                minic_type_is_long_double(operand->type)) &&
+               minic_type_cast_compatible(expression->type, operand->type);
     case MINIC_EXPRESSION_DISCARD:
         operand = expression_before(program, expression->value.unary.operand, expression_index);
         return form == MINIC_C0_AST_NORMALIZED && operand != NULL &&

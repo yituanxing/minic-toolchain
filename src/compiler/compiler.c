@@ -137,6 +137,9 @@ static bool minic_prepare_core_function_set(const MinicC0Program *program,
         if (!function->is_defined) {
             continue;
         }
+        if (function->is_internal && function->is_inline && !function->is_referenced) {
+            continue;
+        }
         if (!minic_c0_function_body_view(program, function_index, &body)) {
             set.statuses[function_index] = MINIC_CORE_LOWER_ERROR;
             continue;
@@ -195,6 +198,9 @@ static bool minic_validate_core_functions(const char *input_path,
             return false;
         }
         if (!function->is_defined) {
+            continue;
+        }
+        if (function->is_internal && function->is_inline && !function->is_referenced) {
             continue;
         }
         status = set->statuses[function_index];

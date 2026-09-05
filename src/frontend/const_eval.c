@@ -1,4 +1,5 @@
 #include "frontend/const_eval.h"
+#include "frontend/expression_semantics.h"
 
 #include <limits.h>
 #include <string.h>
@@ -238,6 +239,152 @@ static bool eval_expression(const MinicC0Program *program,
                             unsigned int depth,
                             MinicConstValue *value);
 
+static bool eval_null_based_pointer_constant(const MinicC0Program *program,
+                                             const MinicTargetInfo *target,
+                                             MinicExpressionId expression_id,
+                                             unsigned int depth,
+                                             uint64_t *byte_offset) {
+    const MinicExpression *expression;
+
+    if (program == NULL || target == NULL || byte_offset == NULL ||
+        depth > MINIC_CONST_EVAL_MAX_DEPTH) {
+        return false;
+    }
+    expression = minic_c0_program_expression(program, expression_id);
+    if (expression == NULL || !minic_type_is_pointer(expression->type)) {
+        return false;
+    }
+
+    if (expression->kind == MINIC_EXPRESSION_CAST ||
+        expression->kind == MINIC_EXPRESSION_BITCAST) {
+        const MinicExpression *operand;
+
+        operand = minic_c0_program_expression(program, expression->value.unary.operand);
+        if (operand == NULL) {
+            return false;
+        }
+        if (minic_type_is_pointer(operand->type)) {
+            return eval_null_based_pointer_constant(program,
+                                                    target,
+                                                    expression->value.unary.operand,
+                                                    depth + 1U,
+                                                    byte_offset);
+        }
+        if (minic_type_is_integer(operand->type)) {
+            MinicConstValue integer_value;
+            uint64_t normalized;
+
+            if (!eval_expression(program,
+                                 target,
+                                 expression->value.unary.operand,
+                                 depth + 1U,
+                                 &integer_value) ||
+                !normalize_bits(program,
+                                target,
+                                integer_value.type,
+                                integer_value.bits,
+                                &normalized) ||
+                normalized != 0U) {
+                return false;
+            }
+            *byte_offset = 0U;
+            return true;
+        }
+        return false;
+    }
+
+    if (expression->kind == MINIC_EXPRESSION_ADDRESS_OF) {
+        const MinicExpression *addressed;
+
+        addressed =
+            minic_c0_program_expression(program, expression->value.unary.operand);
+        if (addressed != NULL && addressed->kind == MINIC_EXPRESSION_MEMBER) {
+            const MinicRecord *record;
+            uint64_t base_offset;
+            size_t field_offset;
+
+            if (!eval_null_based_pointer_constant(program,
+                                                  target,
+                                                  addressed->value.member.base,
+                                                  depth + 1U,
+                                                  &base_offset)) {
+                return false;
+            }
+            record = minic_c0_program_record(program, addressed->value.member.record_id);
+            if (record == NULL ||
+                !minic_data_layout_record_field_offset(
+                    minic_target_info_data_layout(target),
+                    program,
+                    record,
+                    addressed->value.member.field_index,
+                    &field_offset) ||
+                base_offset > UINT64_MAX - (uint64_t)field_offset) {
+                return false;
+            }
+            *byte_offset = base_offset + (uint64_t)field_offset;
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool eval_null_based_pointer_difference(const MinicC0Program *program,
+                                               const MinicTargetInfo *target,
+                                               const MinicExpression *expression,
+                                               unsigned int depth,
+                                               MinicConstValue *value) {
+    const MinicExpression *left;
+    const MinicExpression *right;
+    MinicType pointee;
+    uint64_t left_offset;
+    uint64_t right_offset;
+    uint64_t magnitude;
+    size_t element_size;
+    int64_t difference;
+
+    if (program == NULL || target == NULL || expression == NULL || value == NULL ||
+        expression->kind != MINIC_EXPRESSION_BINARY ||
+        expression->value.binary.operator_kind != MINIC_BINARY_SUBTRACT ||
+        !minic_type_is_integer(expression->type)) {
+        return false;
+    }
+    left = minic_c0_program_expression(program, expression->value.binary.left);
+    right = minic_c0_program_expression(program, expression->value.binary.right);
+    if (left == NULL || right == NULL || !minic_type_is_pointer(left->type) ||
+        !minic_type_is_pointer(right->type) ||
+        !minic_c0_pointer_difference_compatible(program, left->type, right->type) ||
+        !eval_null_based_pointer_constant(
+            program, target, expression->value.binary.left, depth + 1U, &left_offset) ||
+        !eval_null_based_pointer_constant(
+            program, target, expression->value.binary.right, depth + 1U, &right_offset) ||
+        !minic_type_pointee(left->type, &pointee) ||
+        !minic_c0_pointer_arithmetic_element_size(
+            program, minic_target_info_data_layout(target), left->type, &element_size) ||
+        element_size == 0U) {
+        return false;
+    }
+    (void)pointee;
+
+    if (left_offset >= right_offset) {
+        magnitude = left_offset - right_offset;
+        if (magnitude % (uint64_t)element_size != 0U ||
+            magnitude / (uint64_t)element_size > (uint64_t)INT64_MAX) {
+            return false;
+        }
+        difference = (int64_t)(magnitude / (uint64_t)element_size);
+    } else {
+        magnitude = right_offset - left_offset;
+        if (magnitude % (uint64_t)element_size != 0U ||
+            magnitude / (uint64_t)element_size > (uint64_t)INT64_MAX) {
+            return false;
+        }
+        difference = -(int64_t)(magnitude / (uint64_t)element_size);
+    }
+    value->type = expression->type;
+    return normalize_bits(
+        program, target, expression->type, (uint64_t)difference, &value->bits);
+}
+
 static bool integer_cast_operand_is_pointer_roundtrip_constant(const MinicC0Program *program,
                                                                const MinicTargetInfo *target,
                                                                const MinicExpression *expression,
@@ -370,6 +517,10 @@ static bool eval_binary(const MinicC0Program *program,
     uint64_t right_bits;
     unsigned int width;
 
+    if (expression->value.binary.operator_kind == MINIC_BINARY_SUBTRACT &&
+        eval_null_based_pointer_difference(program, target, expression, depth, value)) {
+        return true;
+    }
     if (!eval_expression(program, target, expression->value.binary.left, depth + 1U, &left)) {
         return false;
     }

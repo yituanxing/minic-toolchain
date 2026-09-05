@@ -69,9 +69,12 @@ HOST_CC="$host_cc" \
 BUILD_DIR="$build_dir" \
 sh "$root/tests/compiler/c0/run-pointer-integer-casts.sh"
 
-expect_failure \
-    invalid_cast_integer_to_float \
-    "unsupported cast between these types"
+compile_success cast_integer_to_float
+grep -F '  fcvt.d.w ' "$work/cast_integer_to_float.s" >/dev/null
+grep -F '  fcvt.s.d ' "$work/cast_integer_to_float.s" >/dev/null
+grep -F '  li t0, 0x7f800000' "$work/cast_integer_to_float.s" >/dev/null
+grep -F '  li t0, 0x3e800000' "$work/cast_integer_to_float.s" >/dev/null
+printf '%s\n' 'PASS compiler/c0/cast_integer_to_float lowering=int->double->float literals=binary32 overflow=inf'
 expect_failure \
     invalid_cast_assignment_target \
     "assignment expression requires a modifiable object lvalue"
