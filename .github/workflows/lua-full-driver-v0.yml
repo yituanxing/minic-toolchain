@@ -165,6 +165,12 @@ jobs:
           make MODE=release CFLAGS=-Werror BUILD_DIR=build/lua-full-driver-v0 check-minipp-a0
           make MODE=release CFLAGS=-Werror BUILD_DIR=build/lua-full-driver-v0 check-minias-a0
 
+      - name: Run Lua GC byte-state RV64 compiler probe
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          MINIC="$GITHUB_WORKSPACE/build/lua-full-driver-v0/bin/minic"           BUILD_DIR="$GITHUB_WORKSPACE/build/lua-full-driver-v0/byte-gc-state"           RISCV_CC=riscv64-linux-gnu-gcc           QEMU_RISCV64=qemu-riscv64             sh tests/compiler/c0/run-byte-field-or-assign-rv64.sh
+
       - name: Confirm legacy Lua 33-TU compiler frontier
         shell: bash
         run: |
@@ -447,6 +453,53 @@ jobs:
           grep -F 'GC_CYCLE_FRONTIER_V0=PASS' "$work/gc-thread-probe.stdout" >/dev/null
           grep -F 'GC_STOP_GROW_FRONTIER_V0=PASS' "$work/gc-thread-probe.stdout" >/dev/null
 
+      - name: Run isolated Lua reentrant finalizer GC probe
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/lua-full-driver-v0"
+          sysroot="$work/musl-sysroot"
+
+          cat >"$work/gc-reentrant-probe.lua" <<'LUA'
+          io.stdout:setvbuf("no")
+          local entered = false
+          local exited = false
+          local result = "unset"
+
+          do
+              local object = {}
+              setmetatable(object, {
+                  __gc = function ()
+                      entered = true
+                      io.write("GC_REENTRANT_FINALIZER_ENTER\n")
+                      local running = collectgarbage("isrunning")
+                      io.write("GC_REENTRANT_ISRUNNING=" .. tostring(running) .. "\n")
+                      result = collectgarbage()
+                      io.write("GC_REENTRANT_RESULT=" .. tostring(result) .. "\n")
+                      exited = true
+                  end
+              })
+          end
+
+          io.write("GC_REENTRANT_COLLECT_BEGIN\n")
+          collectgarbage()
+          io.write("GC_REENTRANT_COLLECT_DONE\n")
+          assert(entered)
+          assert(exited)
+          assert(result == nil)
+          io.write("GC_REENTRANT_FRONTIER_V0=PASS\n")
+          LUA
+
+          set +e
+          timeout 5s qemu-riscv64 -L "$sysroot" "$work/lua-minic"             "$work/gc-reentrant-probe.lua"             >"$work/gc-reentrant-probe.stdout"             2>"$work/gc-reentrant-probe.stderr"
+          rc=$?
+          set -e
+          echo "GC_REENTRANT_FRONTIER_RC=$rc"
+          cat "$work/gc-reentrant-probe.stdout"
+          cat "$work/gc-reentrant-probe.stderr"
+          test "$rc" -eq 0
+          grep -F 'GC_REENTRANT_FRONTIER_V0=PASS'             "$work/gc-reentrant-probe.stdout" >/dev/null
+
       - name: Profile official gc.lua stateful frontier
         shell: bash
         run: |
@@ -684,6 +737,9 @@ jobs:
             build/lua-full-driver-v0/gc-thread-probe.lua
             build/lua-full-driver-v0/gc-thread-probe.stdout
             build/lua-full-driver-v0/gc-thread-probe.stderr
+            build/lua-full-driver-v0/gc-reentrant-probe.lua
+            build/lua-full-driver-v0/gc-reentrant-probe.stdout
+            build/lua-full-driver-v0/gc-reentrant-probe.stderr
             build/lua-full-driver-v0/lua-gc-profile.stdout
             build/lua-full-driver-v0/lua-gc-profile.stderr
             build/lua-full-driver-v0/lua-smoke.stdout
