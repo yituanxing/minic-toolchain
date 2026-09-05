@@ -402,8 +402,11 @@ bool minic_core_function_add_function_symbol(MinicCoreFunction *function,
 }
 
 static bool core_call_scalar_type(MinicType type) {
+    /* Scalar call transport is an IR contract, not an arithmetic capability.
+       Keep binary32 and binary64 on the same call seam; target ABI placement
+       still decides the physical floating registers. */
     return minic_type_is_integer(type) || minic_type_is_pointer(type) ||
-           minic_type_is_double(type);
+           minic_type_is_float(type) || minic_type_is_double(type);
 }
 
 /* M85_RECORD_CALL_ARGUMENT: direct calls may transport address-backed records
