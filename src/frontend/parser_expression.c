@@ -244,7 +244,8 @@ static bool parse_function_reference(MinicParser *parser,
     MinicType function_type;
 
     function = minic_c0_program_function(parser->program, function_id);
-    if (function == NULL) {
+    if (function == NULL ||
+        !minic_c0_program_set_function_referenced(parser->program, function_id, true)) {
         minic_parser_error(parser, "invalid function reference");
         return false;
     }
