@@ -3510,8 +3510,19 @@ static bool emit_instruction(FILE *file,
         }
         return store_core_value(file, frame, instruction->result, "t0");
     case MINIC_CORE_INSTRUCTION_FLOATING_CONSTANT:
-        if (!minic_type_is_double(instruction->type) ||
-            fprintf(file, "  li t0, 0x%016" PRIx64 "\n", instruction->value.floating_bits) < 0) {
+        if (minic_type_is_double(instruction->type)) {
+            if (fprintf(file,
+                        "  li t0, 0x%016" PRIx64 "\n",
+                        instruction->value.floating_bits) < 0) {
+                return false;
+            }
+        } else if (minic_type_is_float(instruction->type)) {
+            if (fprintf(file,
+                        "  li t0, 0x%08" PRIx64 "\n",
+                        instruction->value.floating_bits & UINT64_C(0xffffffff)) < 0) {
+                return false;
+            }
+        } else {
             return false;
         }
         return store_core_value(file, frame, instruction->result, "t0");
