@@ -906,6 +906,19 @@ jobs:
           end
 
           do
+            local function loop ()
+              assert(pcall(loop))
+            end
+
+            io.write("CSTACK_OVERFLOW_BEGIN\n")
+            local err, msg = xpcall(loop, loop)
+            io.write("CSTACK_OVERFLOW_RETURN err=" .. tostring(err) ..
+                     " msgtype=" .. type(msg) .. "\n")
+            assert(not err and string.find(msg, "error"))
+            io.write("CSTACK_OVERFLOW_FRONTIER_V0=PASS\n")
+          end
+
+          do
             local n = 10000
             local function target ()
               if n == 0 then
@@ -938,6 +951,7 @@ jobs:
           cat "$work/tail-call-probe.stdout"
           cat "$work/tail-call-probe.stderr"
           test "$rc" -eq 0
+          grep -F 'CSTACK_OVERFLOW_FRONTIER_V0=PASS'             "$work/tail-call-probe.stdout" >/dev/null
           grep -F 'TAIL_CALL_FRONTIER_V0=PASS'             "$work/tail-call-probe.stdout" >/dev/null
 
       - name: Run official Lua 5.5.0 basic test suite
