@@ -9880,10 +9880,14 @@ lower_switch(MinicCoreLowerContext *context, const MinicStatement *statement, bo
         for (source_index = label_count; source_index-- > 0U;) {
             bool path_terminates;
 
+            /* A segment can have a terminating continuation while another
+               branch breaks to the synthetic switch exit (for example
+               `if (bad) break; return value;`). Such a break makes the switch
+               itself non-terminating regardless of the segment continuation. */
             path_terminates =
-                segment_terminates[source_index] ||
-                (!segment_breaks[source_index] && source_index + 1U < label_count &&
-                 next_path_terminates);
+                !segment_breaks[source_index] &&
+                (segment_terminates[source_index] ||
+                 (source_index + 1U < label_count && next_path_terminates));
             if (!path_terminates) {
                 all_segments_terminate = false;
             }
