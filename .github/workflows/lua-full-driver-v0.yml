@@ -815,6 +815,70 @@ jobs:
           grep -F 'GC_PROFILE_DONE' "$work/lua-gc-profile.stderr" >/dev/null
           echo "LUA_GC_STATEFUL_FRONTIER_V0=PASS official_prefix=main+tracegc+gc"
 
+      - name: Run Lua tail-call runtime frontier probe
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/lua-full-driver-v0"
+          sysroot="$work/musl-sysroot"
+
+          cat >"$work/tail-call-probe.lua" <<'LUA'
+          io.stdout:setvbuf("no")
+
+          function deep (n)
+            if n > 0 then return deep(n - 1) else return 101 end
+          end
+
+          for _, n in ipairs({100, 1000, 10000, 30000}) do
+            io.write("TAIL_PURE_BEGIN=" .. n .. "\n")
+            assert(deep(n) == 101)
+            io.write("TAIL_PURE_PASS=" .. n .. "\n")
+          end
+
+          local a = {}
+          function a:deep (n)
+            if n > 0 then return self:deep(n - 1) else return 101 end
+          end
+          io.write("TAIL_METHOD_BEGIN=30000\n")
+          assert(a:deep(30000) == 101)
+          io.write("TAIL_METHOD_PASS=30000\n")
+
+          do
+            local function foo (x, ...)
+              local args = {...}
+              return x, args[1], args[2]
+            end
+            local function foo1 (x)
+              return foo(10, x, x + 1)
+            end
+            io.write("TAIL_VARARG_BEGIN\n")
+            local x, y, z = foo1(-2)
+            assert(x == 10 and y == -2 and z == -1)
+            io.write("TAIL_VARARG_PASS\n")
+
+            local t = setmetatable({}, {__call = foo})
+            local function foo2 (x)
+              return t(10, x)
+            end
+            io.write("TAIL_METACALL_BEGIN\n")
+            x, y, z = foo2(100)
+            assert(x == t and y == 10 and z == 100)
+            io.write("TAIL_METACALL_PASS\n")
+          end
+
+          io.write("TAIL_CALL_FRONTIER_V0=PASS\n")
+          LUA
+
+          set +e
+          timeout 10s qemu-riscv64 -L "$sysroot" "$work/lua-minic"             "$work/tail-call-probe.lua"             >"$work/tail-call-probe.stdout"             2>"$work/tail-call-probe.stderr"
+          rc=$?
+          set -e
+          echo "TAIL_CALL_FRONTIER_RC=$rc"
+          cat "$work/tail-call-probe.stdout"
+          cat "$work/tail-call-probe.stderr"
+          test "$rc" -eq 0
+          grep -F 'TAIL_CALL_FRONTIER_V0=PASS'             "$work/tail-call-probe.stdout" >/dev/null
+
       - name: Run official Lua 5.5.0 basic test suite
         shell: bash
         run: |
@@ -892,6 +956,9 @@ jobs:
             build/lua-full-driver-v0/lua-gcdiag.build.stderr
             build/lua-full-driver-v0/lua-gc-profile.stdout
             build/lua-full-driver-v0/lua-gc-profile.stderr
+            build/lua-full-driver-v0/tail-call-probe.lua
+            build/lua-full-driver-v0/tail-call-probe.stdout
+            build/lua-full-driver-v0/tail-call-probe.stderr
             build/lua-full-driver-v0/lua-smoke.stdout
             build/lua-full-driver-v0/lua-smoke.stderr
             build/lua-full-driver-v0/lua-suite.stdout
