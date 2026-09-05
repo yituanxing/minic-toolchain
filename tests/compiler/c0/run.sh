@@ -667,3 +667,6 @@ BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
 RISCV_CC="${RISCV_CC:-riscv64-linux-gnu-gcc}" \
 QEMU_RISCV64="${QEMU_RISCV64:-qemu-riscv64}" \
 sh "$root/tests/compiler/c0/run-switch-nested-break-rv64.sh"
+MINIC="$minic" \
+BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
+sh "$root/tests/compiler/c0/run-core-block-spill-reuse.sh"
