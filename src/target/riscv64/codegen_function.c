@@ -942,8 +942,22 @@ static bool minic_riscv64_emit_global_object(FILE *file,
         if (fprintf(file, ".section %s\n", object->section_name) < 0) {
             return false;
         }
-    } else if (fprintf(file, "%s\n", object->is_read_only ? ".section .rodata" : ".data") < 0) {
-        return false;
+    } else {
+        const char *storage_section;
+
+        /* A const object containing link-time addresses is only read-only after
+           dynamic relocation.  Keep pure constants in .rodata, but place
+           relocation-bearing const data in the conventional writable relocation
+           section so a PIE loader can apply R_RISCV_RELATIVE/R_RISCV_64 without
+           writing into the executable read-only LOAD segment. */
+        storage_section =
+            object->is_read_only
+                ? (object->relocation_count != 0U ? ".section .data.rel.ro"
+                                                  : ".section .rodata")
+                : ".data";
+        if (fprintf(file, "%s\n", storage_section) < 0) {
+            return false;
+        }
     }
     if (!object->is_internal) {
         if (fprintf(file, object->is_weak ? ".weak %s\n" : ".globl %s\n", object->name) < 0) {
