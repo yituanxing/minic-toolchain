@@ -515,6 +515,70 @@ jobs:
               1,
           )
           gc_src = gc_src.replace(
+              '-- create an object to be collected when state is closed\n',
+              'io.stderr:write(string.format("GC_OFFICIAL_CLOSE_SETUP_START clock=%.6f\\n", os.clock())); '
+              'io.stderr:flush()\n'
+              '-- create an object to be collected when state is closed\n',
+              1,
+          )
+          gc_src = gc_src.replace(
+              '  ___Glob = {u}   -- avoid object being collected before program end\nend\n\n'
+              '-- create several objects to raise errors when collected while closing state\n',
+              '  ___Glob = {u}   -- avoid object being collected before program end\nend\n'
+              'io.stderr:write(string.format("GC_OFFICIAL_CLOSE_SETUP_DONE clock=%.6f\\n", os.clock())); '
+              'io.stderr:flush()\n\n'
+              '-- create several objects to raise errors when collected while closing state\n',
+              1,
+          )
+          gc_src = gc_src.replace(
+              "-- just to make sure\nassert(collectgarbage'isrunning')\n",
+              'io.stderr:write(string.format("GC_OFFICIAL_ISRUNNING_BEGIN clock=%.6f\\n", os.clock())); '
+              'io.stderr:flush()\n'
+              "-- just to make sure\nassert(collectgarbage'isrunning')\n"
+              'io.stderr:write(string.format("GC_OFFICIAL_ISRUNNING_DONE clock=%.6f\\n", os.clock())); '
+              'io.stderr:flush()\n',
+              1,
+          )
+          gc_src = gc_src.replace(
+              'do    -- check that the collector is not reentrant in incremental mode\n'
+              '  local res = true\n',
+              'io.stderr:write(string.format("GC_OFFICIAL_REENTRANT_START clock=%.6f\\n", os.clock())); '
+              'io.stderr:flush()\n'
+              'do    -- check that the collector is not reentrant in incremental mode\n'
+              '  local res = true\n',
+              1,
+          )
+          gc_src = gc_src.replace(
+              '  setmetatable({}, {__gc = function ()\n'
+              '    res = collectgarbage()\n'
+              '  end})\n'
+              '  collectgarbage()\n'
+              '  assert(not res)\n'
+              'end\n\n\ncollectgarbage(oldmode)\n',
+              '  setmetatable({}, {__gc = function ()\n'
+              '    io.stderr:write(string.format("GC_OFFICIAL_REENTRANT_FINALIZER_ENTER clock=%.6f\\n", os.clock())); '
+              'io.stderr:flush()\n'
+              '    res = collectgarbage()\n'
+              '    io.stderr:write(string.format("GC_OFFICIAL_REENTRANT_FINALIZER_EXIT clock=%.6f res=%s\\n", '
+              'os.clock(), tostring(res))); io.stderr:flush()\n'
+              '  end})\n'
+              '  io.stderr:write(string.format("GC_OFFICIAL_REENTRANT_COLLECT_BEGIN clock=%.6f\\n", os.clock())); '
+              'io.stderr:flush()\n'
+              '  collectgarbage()\n'
+              '  io.stderr:write(string.format("GC_OFFICIAL_REENTRANT_COLLECT_DONE clock=%.6f res=%s\\n", '
+              'os.clock(), tostring(res))); io.stderr:flush()\n'
+              '  assert(not res)\n'
+              'end\n'
+              'io.stderr:write(string.format("GC_OFFICIAL_REENTRANT_DONE clock=%.6f\\n", os.clock())); '
+              'io.stderr:flush()\n\n'
+              'io.stderr:write(string.format("GC_OFFICIAL_OLDMODE_BEGIN clock=%.6f\\n", os.clock())); '
+              'io.stderr:flush()\n'
+              'collectgarbage(oldmode)\n'
+              'io.stderr:write(string.format("GC_OFFICIAL_OLDMODE_DONE clock=%.6f\\n", os.clock())); '
+              'io.stderr:flush()\n',
+              1,
+          )
+          gc_src = gc_src.replace(
               "print('OK')\n",
               "io.stderr:write(string.format(\"GC_OFFICIAL_END clock=%.6f\\n\", os.clock())); "
               "io.stderr:flush()\nprint('OK')\n",
