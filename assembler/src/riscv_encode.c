@@ -1958,13 +1958,26 @@ bool minias_riscv_encode(MiniAs *as, const MiniAsStmt *stmt) {
     if (strcmp(stmt->op, "lla") == 0 || strcmp(stmt->op, "la") == 0) {
         MiniAsSymbolExpr expr;
         MiniAsSymbol *anchor;
+        MiniAsSymbol *target_symbol;
         char anchor_name[96];
+        bool use_got;
 
         if (count != 2U || !require_reg(as, stmt, operands[0], &rd) ||
             !minias_parse_symbol_addend(operands[1], &expr)) {
             minias_set_error(as, "unsupported-expression:%s:line=%zu", stmt->args, stmt->line);
             return false;
         }
+        target_symbol = minias_get_symbol(as, expr.name, false);
+        use_got = strcmp(stmt->op, "la") == 0 &&
+                  (target_symbol == NULL || !target_symbol->defined);
+        if (use_got && expr.addend != 0) {
+            minias_set_error(as,
+                             "unsupported-got-addend:%s:line=%zu",
+                             stmt->args,
+                             stmt->line);
+            return false;
+        }
+
         (void)snprintf(anchor_name,
                        sizeof(anchor_name),
                        ".Lminias_pcrel_%zu",
@@ -1978,14 +1991,22 @@ bool minias_riscv_encode(MiniAs *as, const MiniAsStmt *stmt) {
         anchor->value = stmt->offset;
         anchor->bind = MINIAS_STB_LOCAL;
 
-        if (!append_u32(as, stmt->section, 0x17U | ((uint32_t)rd << 7U)) ||
-            !append_u32(as, stmt->section, enc_i(0x13U, rd, 0U, rd, 0))) {
+        if (!append_u32(as, stmt->section, 0x17U | ((uint32_t)rd << 7U))) {
             return false;
         }
+        if (use_got) {
+            if (!append_u32(as, stmt->section, enc_i(0x03U, rd, 3U, rd, 0))) {
+                return false;
+            }
+        } else if (!append_u32(as, stmt->section, enc_i(0x13U, rd, 0U, rd, 0))) {
+            return false;
+        }
+
         return minias_add_relocation(as,
                                      stmt->section,
                                      stmt->offset,
-                                     MINIAS_R_RISCV_PCREL_HI20,
+                                     use_got ? MINIAS_R_RISCV_GOT_HI20
+                                             : MINIAS_R_RISCV_PCREL_HI20,
                                      expr.name,
                                      expr.addend) &&
                minias_add_relocation(as,
