@@ -4596,6 +4596,21 @@ MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
             instruction.kind = MINIC_CORE_INSTRUCTION_FLOAT_TO_DOUBLE;
         } else if (minic_type_is_float(target_type) && minic_type_is_double(source_type)) {
             instruction.kind = MINIC_CORE_INSTRUCTION_DOUBLE_TO_FLOAT;
+        } else if (minic_type_is_float(target_type) && minic_type_is_integer(source_type)) {
+            MinicCoreValueId widened_value;
+
+            instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_TO_DOUBLE;
+            instruction.type = minic_type_double();
+            if (!minic_core_function_append_value_instruction(
+                    context->function,
+                    context->block_id,
+                    &instruction,
+                    &widened_value)) {
+                return MINIC_CORE_LOWER_ERROR;
+            }
+            instruction.kind = MINIC_CORE_INSTRUCTION_DOUBLE_TO_FLOAT;
+            instruction.type = target_type;
+            instruction.value.operand = widened_value;
         } else if (minic_type_is_integer(target_type) && minic_type_is_double(source_type)) {
             instruction.kind = MINIC_CORE_INSTRUCTION_DOUBLE_TO_INTEGER;
         } else {
