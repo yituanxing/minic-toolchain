@@ -3749,6 +3749,11 @@ static bool binary_result_type(const MinicTargetInfo *target,
         *result = minic_type_int();
         return true;
     }
+    if (binary_is_comparison(kind) && minic_type_is_long_double(left) &&
+        minic_type_is_long_double(right)) {
+        *result = minic_type_int();
+        return true;
+    }
     if (binary_is_comparison(kind) && !binary_is_equality(kind) && minic_type_is_pointer(left) &&
         minic_type_is_pointer(right) &&
         minic_c0_pointer_relational_compatible(program, left, right)) {
