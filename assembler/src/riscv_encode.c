@@ -1968,15 +1968,13 @@ bool minias_riscv_encode(MiniAs *as, const MiniAsStmt *stmt) {
             return false;
         }
         target_symbol = minias_get_symbol(as, expr.name, false);
-        use_got = strcmp(stmt->op, "la") == 0 &&
+        /* GNU PIC 'la symbol' is a GOT load for an undefined external
+           symbol.  Preserve the historical symbol+addend form as PC-relative:
+           a GOT_HI20 relocation cannot carry a nonzero addend in the RISC-V
+           psABI, and expanding that form correctly would require a third
+           arithmetic instruction. */
+        use_got = strcmp(stmt->op, "la") == 0 && expr.addend == 0 &&
                   (target_symbol == NULL || !target_symbol->defined);
-        if (use_got && expr.addend != 0) {
-            minias_set_error(as,
-                             "unsupported-got-addend:%s:line=%zu",
-                             stmt->args,
-                             stmt->line);
-            return false;
-        }
 
         (void)snprintf(anchor_name,
                        sizeof(anchor_name),
