@@ -657,3 +657,8 @@ sh "$root/tests/compiler/c0/run-null-member-offset-constant.sh"
 MINIC="$minic" \
 BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
 sh "$root/tests/compiler/c0/run-relocatable-const-section.sh"
+MINIC="$minic" \
+BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
+RISCV_CC="${RISCV_CC:-riscv64-linux-gnu-gcc}" \
+QEMU_RISCV64="${QEMU_RISCV64:-qemu-riscv64}" \
+sh "$root/tests/compiler/c0/run-byte-field-or-assign-rv64.sh"
