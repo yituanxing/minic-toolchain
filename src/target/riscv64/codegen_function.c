@@ -1134,6 +1134,10 @@ bool minic_riscv64_write_c0_program_with_core_functions(const char *path,
         const MinicCoreFunction *core_function;
 
         function = &program->functions[function_index];
+        if (function->is_defined && function->is_internal && function->is_inline &&
+            !function->is_referenced) {
+            continue;
+        }
         if (getenv("MINIC_BOOTSTRAP_TRACE") != NULL && function->is_defined) {
             const char *trace_symbol = minic_c0_function_symbol_name(function);
             (void)fprintf(stderr,
