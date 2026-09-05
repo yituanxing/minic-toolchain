@@ -455,7 +455,8 @@ jobs:
           sysroot="$work/musl-sysroot"
 
           rm -rf "$work/lua-5.5.0-tests"
-          test -s "$work/lua-5.5.0-tests.tar.gz"
+          curl -fsSL https://www.lua.org/tests/lua-5.5.0-tests.tar.gz \
+            -o "$work/lua-5.5.0-tests.tar.gz"
           printf '%s  %s\n'             5e47bbfad7db2965d69580e918ee64edeb8d8d32de404b8dae9ce5c6d76a1472             "$work/lua-5.5.0-tests.tar.gz" | sha256sum -c -
           tar -xzf "$work/lua-5.5.0-tests.tar.gz" -C "$work"
 
