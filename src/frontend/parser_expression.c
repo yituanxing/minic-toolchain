@@ -2901,6 +2901,7 @@ static bool parse_primary(MinicParser *parser, MinicExpressionId *expression_id,
 
             callee = minic_c0_program_function(parser->program, function_id);
             if (callee == NULL || callee->parameter_count > MINIC_MAX_FUNCTION_PARAMETERS ||
+                !minic_c0_program_set_function_referenced(parser->program, function_id, true) ||
                 !minic_parser_advance(parser)) {
                 minic_parser_error(parser, "unsupported function call signature");
                 return false;
