@@ -338,6 +338,8 @@ typedef struct MinicFunction {
     MinicFunctionId alias_target;
     bool is_defined;
     bool is_internal;
+    bool is_inline;
+    bool is_referenced;
     bool is_variadic;
     bool is_weak;
 } MinicFunction;
@@ -627,6 +629,12 @@ bool minic_c0_program_set_function_parameter_count(MinicC0Program *program,
 bool minic_c0_program_set_function_internal(MinicC0Program *program,
                                             MinicFunctionId function_id,
                                             bool is_internal);
+bool minic_c0_program_set_function_inline(MinicC0Program *program,
+                                          MinicFunctionId function_id,
+                                          bool is_inline);
+bool minic_c0_program_set_function_referenced(MinicC0Program *program,
+                                              MinicFunctionId function_id,
+                                              bool is_referenced);
 bool minic_c0_program_set_function_weak(MinicC0Program *program,
                                         MinicFunctionId function_id,
                                         bool is_weak);
