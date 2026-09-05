@@ -21,18 +21,28 @@ jobs:
         with:
           ref: ${{ github.sha }}
 
-      - name: Install Lua discovery prerequisites
+      - name: Verify fast-path host tools
+        shell: bash
         run: |
-          timeout 240s sudo apt-get -o Acquire::Retries=3 update
-          timeout 240s sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
-            gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
-            curl ca-certificates python3
+          set -Eeuo pipefail
+          command -v cc
+          command -v make
+          command -v curl
+          command -v python3
+          command -v sed
+          echo "LUA_FAST_HOST_TOOLS=PASS"
 
-      - name: Build current C toolchain
+      - name: Build fast-path Mini tools
+        shell: bash
         run: |
-          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/lua-full-driver-v0 all
-          make MODE=release CFLAGS=-Werror BUILD_DIR=build/lua-full-driver-v0 check-minipp-a0
-          make MODE=release CFLAGS=-Werror BUILD_DIR=build/lua-full-driver-v0 check-minias-a0
+          set -Eeuo pipefail
+          build=build/lua-full-driver-v0
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$build" \
+            "$build/bin/minic" \
+            "$build/bin/minic-cc" \
+            "$build/bin/minic-cpp" \
+            "$build/bin/minic-as"
+          echo "LUA_FAST_TOOLCHAIN_BUILD=PASS tools=minic,minic-cc,minic-cpp,minic-as"
 
       - name: Prepare Lua source and musl headers
         shell: bash
@@ -55,21 +65,11 @@ jobs:
           tar -xzf "$work/musl-1.2.5.tar.gz" -C "$work"
 
           musl_src="$work/musl-1.2.5"
-          musl_out="$work/musl-build"
-          mkdir -p "$musl_out"
-          cd "$musl_out"
-          CC=riscv64-linux-gnu-gcc \
-          AR=riscv64-linux-gnu-ar \
-          RANLIB=riscv64-linux-gnu-ranlib \
-            "$musl_src/configure" \
-              --target=riscv64-linux-gnu \
-              --enable-shared \
-              --prefix=/usr \
-            >"$work/musl-configure.log" 2>&1
-
           sysroot="$work/musl-sysroot"
           mkdir -p "$sysroot"
-          make DESTDIR="$sysroot" install-headers >"$work/musl-headers.log" 2>&1
+          make -C "$musl_src" \
+            ARCH=riscv64 prefix=/usr DESTDIR="$sysroot" \
+            install-headers >"$work/musl-headers.log" 2>&1
           echo "LUA_FAST_PREP=PASS lua=5.5.0 musl_headers=1"
 
       - name: Fast raw Lua TU frontier
@@ -125,8 +125,13 @@ jobs:
 
       - name: Install slow-path runtime qualification packages
         run: |
+          timeout 240s sudo apt-get -o Acquire::Retries=3 update
           timeout 240s sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
             libc6-riscv64-cross libc6-dev-riscv64-cross qemu-user
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/lua-full-driver-v0 all
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/lua-full-driver-v0 check-minipp-a0
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/lua-full-driver-v0 check-minias-a0
 
       - name: Confirm legacy Lua 33-TU compiler frontier
         shell: bash
@@ -147,7 +152,17 @@ jobs:
           musl_out="$work/musl-build"
           sysroot="$work/musl-sysroot"
 
+          rm -rf "$musl_out"
+          mkdir -p "$musl_out"
           cd "$musl_out"
+          CC=riscv64-linux-gnu-gcc \
+          AR=riscv64-linux-gnu-ar \
+          RANLIB=riscv64-linux-gnu-ranlib \
+            "$musl_src/configure" \
+              --target=riscv64-linux-gnu \
+              --enable-shared \
+              --prefix=/usr \
+            >"$work/musl-configure.log" 2>&1
           make -j4 V=1 lib/libc.so lib/Scrt1.o lib/crti.o lib/crtn.o \
             >"$work/musl-make.log" 2>&1
 
