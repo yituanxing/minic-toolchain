@@ -2883,6 +2883,10 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
         minic_parser_error(parser, "cannot define previously declared function");
         return false;
     }
+    if (!minic_c0_program_set_function_inline(parser->program, function_id, is_inline)) {
+        minic_parser_error(parser, "cannot persist inline function metadata");
+        return false;
+    }
     if (is_weak && !minic_c0_program_set_function_weak(parser->program, function_id, true)) {
         minic_parser_error(parser, "conflicting GNU weak function linkage");
         return false;
