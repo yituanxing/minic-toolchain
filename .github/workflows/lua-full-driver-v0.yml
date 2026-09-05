@@ -171,6 +171,12 @@ jobs:
           set -Eeuo pipefail
           MINIC="$GITHUB_WORKSPACE/build/lua-full-driver-v0/bin/minic"           BUILD_DIR="$GITHUB_WORKSPACE/build/lua-full-driver-v0/byte-gc-state"           RISCV_CC=riscv64-linux-gnu-gcc           QEMU_RISCV64=qemu-riscv64             sh tests/compiler/c0/run-byte-field-or-assign-rv64.sh
 
+      - name: Run nested switch-break RV64 compiler probe
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          MINIC="$GITHUB_WORKSPACE/build/lua-full-driver-v0/bin/minic"           BUILD_DIR="$GITHUB_WORKSPACE/build/lua-full-driver-v0/switch-break"           RISCV_CC=riscv64-linux-gnu-gcc           QEMU_RISCV64=qemu-riscv64             sh tests/compiler/c0/run-switch-nested-break-rv64.sh
+
       - name: Confirm legacy Lua 33-TU compiler frontier
         shell: bash
         run: |
