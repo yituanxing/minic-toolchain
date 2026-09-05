@@ -4547,7 +4547,8 @@ MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
                    : MINIC_CORE_LOWER_ERROR;
     }
     if (expression->kind == MINIC_EXPRESSION_FLOATING) {
-        if (!minic_type_is_double(expression->type)) {
+        if (!minic_type_is_float(expression->type) &&
+            !minic_type_is_double(expression->type)) {
             return MINIC_CORE_LOWER_UNSUPPORTED;
         }
         instruction.kind = MINIC_CORE_INSTRUCTION_FLOATING_CONSTANT;
