@@ -284,6 +284,42 @@ jobs:
           grep -q 'Requesting program interpreter: /lib/ld-musl-riscv64.so.1' \
             "$work/lua-minic.programs"
           grep -q '(NEEDED).*\[libc.so\]' "$work/lua-minic.dynamic"
+          riscv64-linux-gnu-readelf -Ws "$work/lua-minic" >"$work/lua-minic.symbols"
+          riscv64-linux-gnu-readelf -Wr "$work/lua-minic" >"$work/lua-minic.relocations"
+          riscv64-linux-gnu-readelf -Ws "$sysroot/lib/ld-musl-riscv64.so.1" >"$work/musl-minild.symbols"
+          riscv64-linux-gnu-readelf -Wr "$sysroot/lib/ld-musl-riscv64.so.1" >"$work/musl-minild.relocations"
+
+      - name: Run external data GOT runtime probe
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/lua-full-driver-v0"
+          sysroot="$work/musl-sysroot"
+          driver="$work/bin/minic"
+
+          cat >"$work/got-data-probe.c" <<'C'
+          #include <stdio.h>
+          #include <unistd.h>
+          int main(void) {
+              static const char marker[] = "MINIC_DSO_DATA_GOT_OK\n";
+              if (stdin == 0 || stdout == 0 || stderr == 0)
+                  return 9;
+              return write(1, marker, sizeof(marker) - 1) == (ssize_t)(sizeof(marker) - 1) ? 0 : 8;
+          }
+          C
+
+          "$driver" --sysroot "$sysroot/usr"             -o "$work/got-data-probe" "$work/got-data-probe.c"             >"$work/got-data-probe.build.stdout"             2>"$work/got-data-probe.build.stderr"
+
+          set +e
+          timeout 5s qemu-riscv64 -strace -L "$sysroot" "$work/got-data-probe"             >"$work/got-data-probe.stdout" 2>"$work/got-data-probe.strace"
+          rc=$?
+          set -e
+          echo "MINIC_DSO_DATA_GOT_RC=$rc"
+          cat "$work/got-data-probe.stdout"
+          tail -n 80 "$work/got-data-probe.strace"
+          test "$rc" -eq 0
+          grep -qx 'MINIC_DSO_DATA_GOT_OK' "$work/got-data-probe.stdout"
+          echo "MINIC_DSO_DATA_GOT_V0=PASS symbols=stdin,stdout,stderr relocation=GOT_HI20 runtime=qemu"
 
       - name: Run Lua smoke under MiniLD-built musl
         shell: bash
@@ -306,12 +342,17 @@ jobs:
           LUA
 
           set +e
-          timeout 10s qemu-riscv64 -L "$sysroot" "$work/lua-minic" "$work/smoke.lua"             >"$work/lua-smoke.stdout" 2>"$work/lua-smoke.stderr"
+          timeout 10s qemu-riscv64 -strace -L "$sysroot" "$work/lua-minic" "$work/smoke.lua"             >"$work/lua-smoke.stdout" 2>"$work/lua-smoke.strace"
           rc=$?
+          if [ "$rc" -ne 0 ]; then
+            timeout 3s qemu-riscv64 -d in_asm,guest_errors               -D "$work/lua-smoke.qemu.log"               -L "$sysroot" "$work/lua-minic" "$work/smoke.lua"               >"$work/lua-smoke.trace.stdout" 2>"$work/lua-smoke.trace.stderr"
+            trace_rc=$?
+            echo "LUA_SMOKE_TRACE_RC=$trace_rc"
+          fi
           set -e
           echo "LUA_SMOKE_RC=$rc"
           cat "$work/lua-smoke.stdout"
-          cat "$work/lua-smoke.stderr"
+          tail -n 160 "$work/lua-smoke.strace"
           test "$rc" -eq 0
           grep -qx 'LUA_MINIC_OK' "$work/lua-smoke.stdout"
           echo "LUA_FULL_DRIVER_V0=PASS release=5.5.0 tus=33 pipeline=cpp,cc,as,ld musl=minild qemu=PASS"
@@ -362,7 +403,22 @@ jobs:
             build/lua-full-driver-v0/lua-minic.header
             build/lua-full-driver-v0/lua-minic.programs
             build/lua-full-driver-v0/lua-minic.dynamic
+            build/lua-full-driver-v0/lua-minic.symbols
+            build/lua-full-driver-v0/lua-minic.relocations
+            build/lua-full-driver-v0/musl-minild.symbols
+            build/lua-full-driver-v0/musl-minild.relocations
+            build/lua-full-driver-v0/got-data-probe.c
+            build/lua-full-driver-v0/got-data-probe.build.stdout
+            build/lua-full-driver-v0/got-data-probe.build.stderr
+            build/lua-full-driver-v0/got-data-probe.stdout
+            build/lua-full-driver-v0/got-data-probe.strace
+            build/lua-full-driver-v0/lua-minic
+            build/lua-full-driver-v0/got-data-probe
             build/lua-full-driver-v0/smoke.lua
+            build/lua-full-driver-v0/lua-smoke.strace
+            build/lua-full-driver-v0/lua-smoke.qemu.log
+            build/lua-full-driver-v0/lua-smoke.trace.stdout
+            build/lua-full-driver-v0/lua-smoke.trace.stderr
             build/lua-full-driver-v0/lua-smoke.stdout
             build/lua-full-driver-v0/lua-smoke.stderr
             build/lua-full-driver-v0/lua-suite.stdout
