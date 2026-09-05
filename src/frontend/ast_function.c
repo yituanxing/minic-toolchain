@@ -15,6 +15,30 @@ bool minic_c0_program_set_function_internal(MinicC0Program *program,
     return true;
 }
 
+bool minic_c0_program_set_function_inline(MinicC0Program *program,
+                                          MinicFunctionId function_id,
+                                          bool is_inline) {
+    if (program == NULL || function_id >= program->function_count) {
+        return false;
+    }
+    if (is_inline) {
+        program->functions[function_id].is_inline = true;
+    }
+    return true;
+}
+
+bool minic_c0_program_set_function_referenced(MinicC0Program *program,
+                                              MinicFunctionId function_id,
+                                              bool is_referenced) {
+    if (program == NULL || function_id >= program->function_count) {
+        return false;
+    }
+    if (is_referenced) {
+        program->functions[function_id].is_referenced = true;
+    }
+    return true;
+}
+
 bool minic_c0_program_set_function_weak(MinicC0Program *program,
                                         MinicFunctionId function_id,
                                         bool is_weak) {
