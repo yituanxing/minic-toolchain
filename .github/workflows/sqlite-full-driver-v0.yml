@@ -1,0 +1,128 @@
+name: SQLite Full Driver V0
+
+on:
+  pull_request:
+    branches:
+      - toolchain/static-readiness
+  workflow_dispatch:
+
+jobs:
+  sqlite-frontier:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Verify fast-path host tools
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          command -v cc
+          command -v make
+          command -v curl
+          command -v python3
+          command -v tar
+          echo "SQLITE_FAST_HOST_TOOLS=PASS"
+
+      - name: Build fast-path Mini tools
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          build=build/sqlite-full-driver-v0
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$build" \
+            "$build/bin/minic" \
+            "$build/bin/minic-cc" \
+            "$build/bin/minic-cpp" \
+            "$build/bin/minic-as"
+          echo "SQLITE_FAST_TOOLCHAIN_BUILD=PASS tools=minic,minic-cc,minic-cpp,minic-as"
+
+      - name: Prepare SQLite 3.53.4 and musl headers
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/sqlite-full-driver-v0"
+          mkdir -p "$work"
+
+          curl -fsSL https://www.sqlite.org/2026/sqlite-amalgamation-3530400.zip \
+            -o "$work/sqlite-amalgamation-3530400.zip"
+          python3 - "$work/sqlite-amalgamation-3530400.zip" <<'PY'
+          import hashlib, pathlib, sys, zipfile
+          path = pathlib.Path(sys.argv[1])
+          expected = "628a44cfe82c66aed1ccbbe85a562d2e33ebe64b3288981ed76285612227934e"
+          got = hashlib.sha3_256(path.read_bytes()).hexdigest()
+          if got != expected:
+              raise SystemExit(f"SQLite SHA3-256 mismatch: {got}")
+          with zipfile.ZipFile(path) as zf:
+              zf.extractall(path.parent / "sqlite-source")
+          print("SQLITE_SOURCE_SHA3_256=PASS release=3.53.4")
+          PY
+
+          curl -fsSL https://musl.libc.org/releases/musl-1.2.5.tar.gz \
+            -o "$work/musl-1.2.5.tar.gz"
+          printf '%s  %s\n' \
+            a9a118bbe84d8764da0ea0d28b3ab3fae8477fc7e4085d90102b8596fc7c75e4 \
+            "$work/musl-1.2.5.tar.gz" | sha256sum -c -
+          tar -xzf "$work/musl-1.2.5.tar.gz" -C "$work"
+
+          sysroot="$work/musl-sysroot"
+          mkdir -p "$sysroot"
+          make -C "$work/musl-1.2.5" \
+            ARCH=riscv64 prefix=/usr DESTDIR="$sysroot" \
+            install-headers >"$work/musl-headers.log" 2>&1
+
+          test -f "$work/sqlite-source/sqlite-amalgamation-3530400/sqlite3.c"
+          test -f "$work/sqlite-source/sqlite-amalgamation-3530400/sqlite3.h"
+          test -f "$sysroot/usr/include/stdlib.h"
+          echo "SQLITE_FAST_PREP=PASS sqlite=3.53.4 musl_headers=1"
+
+      - name: Fast raw SQLite engine frontier
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/sqlite-full-driver-v0"
+          src="$work/sqlite-source/sqlite-amalgamation-3530400"
+          sysroot="$work/musl-sysroot"
+          driver="$work/bin/minic"
+          cpp="$work/bin/minic-cpp"
+          mkdir -p "$work/raw"
+
+          set +e
+          timeout 300s "$driver" --sysroot "$sysroot/usr" \
+            -I"$src" -c "$src/sqlite3.c" -o "$work/raw/sqlite3.o" \
+            >"$work/raw/sqlite3.stdout" 2>"$work/raw/sqlite3.stderr"
+          rc=$?
+          set -e
+
+          echo "SQLITE_RAW_ENGINE_RC=$rc"
+          if test "$rc" -ne 0; then
+            cat "$work/raw/sqlite3.stderr"
+            "$cpp" -E -P -undef -nostdinc \
+              -D__STDC__=1 -D__STDC_VERSION__=201112L -D__STDC_HOSTED__=1 \
+              -D__linux__=1 -D__linux=1 -Dlinux=1 \
+              -D__unix__=1 -D__unix=1 -D__riscv=1 -D__riscv_xlen=64 \
+              -D__LP64__=1 -D_LP64=1 -D__riscv_float_abi_double=1 \
+              -D__ORDER_LITTLE_ENDIAN__=1234 -D__ORDER_BIG_ENDIAN__=4321 \
+              -D__BYTE_ORDER__=__ORDER_LITTLE_ENDIAN__ -D__CHAR_BIT__=8 \
+              -D__SIZEOF_SHORT__=2 -D__SIZEOF_INT__=4 -D__SIZEOF_LONG__=8 \
+              -D__SIZEOF_LONG_LONG__=8 -D__SIZEOF_POINTER__=8 -D__SIZEOF_SIZE_T__=8 \
+              -isystem "$sysroot/usr/include" -I"$src" \
+              "$src/sqlite3.c" -o "$work/raw/sqlite3.i"
+            echo "SQLITE_RAW_ENGINE_PREPROCESSED=$work/raw/sqlite3.i"
+            exit "$rc"
+          fi
+
+          test -s "$work/raw/sqlite3.o"
+          echo "SQLITE_RAW_ENGINE_V0=PASS source=sqlite3.c pipeline=cpp,cc,as"
+
+      - name: Preserve SQLite frontier evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sqlite-full-driver-v0-frontier
+          path: |
+            build/sqlite-full-driver-v0/raw/sqlite3.stderr
+            build/sqlite-full-driver-v0/raw/sqlite3.stdout
+            build/sqlite-full-driver-v0/raw/sqlite3.i
+            build/sqlite-full-driver-v0/musl-headers.log
