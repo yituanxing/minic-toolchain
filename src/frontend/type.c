@@ -423,15 +423,14 @@ bool minic_type_pointer_equality_compatible(MinicType left, MinicType right) {
 }
 
 bool minic_type_cast_compatible(MinicType target, MinicType source) {
-    if (minic_type_is_integer(target) &&
-        (minic_type_is_integer(source) || minic_type_is_double(source))) {
-        return true;
-    }
-    if (minic_type_is_double(target) &&
-        (minic_type_is_integer(source) || minic_type_is_float(source))) {
-        return true;
-    }
-    if (minic_type_is_float(target) && minic_type_is_double(source)) {
+    const bool target_is_arithmetic =
+        minic_type_is_integer(target) || minic_type_is_float(target) ||
+        minic_type_is_double(target) || minic_type_is_long_double(target);
+    const bool source_is_arithmetic =
+        minic_type_is_integer(source) || minic_type_is_float(source) ||
+        minic_type_is_double(source) || minic_type_is_long_double(source);
+
+    if (target_is_arithmetic && source_is_arithmetic) {
         return true;
     }
     if ((minic_type_is_pointer(target) && minic_type_is_integer(source)) ||
