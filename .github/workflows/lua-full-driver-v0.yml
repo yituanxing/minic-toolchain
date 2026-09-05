@@ -390,6 +390,49 @@ jobs:
           end
           io.write(string.format("GC_THREAD_FRONTIER_V0=PASS threads=%d clock=%.6f\n",
                                  thread_id, os.clock() - started))
+
+          io.write("GC_CYCLE_PHASE=prepare\n")
+          local collected = false
+          collectgarbage()
+          collectgarbage("stop")
+          do
+              local function f (param)
+                  ;(function ()
+                      assert(type(f) == "function" and type(param) == "thread")
+                      param = {param, f}
+                      setmetatable(param, {__gc = function () collected = true end})
+                      coroutine.yield(100)
+                  end)()
+              end
+              local co = coroutine.create(f)
+              assert(coroutine.resume(co, co))
+          end
+          io.write("GC_CYCLE_PHASE=collect-begin\n")
+          collectgarbage()
+          io.write(string.format("GC_CYCLE_PHASE=collect-end collected=%s\n",
+                                 tostring(collected)))
+          assert(collected)
+          collectgarbage("restart")
+          io.write("GC_CYCLE_FRONTIER_V0=PASS\n")
+
+          io.write("GC_STOP_GROW_PHASE=prepare\n")
+          collectgarbage()
+          collectgarbage("stop")
+          collectgarbage("step", 0)
+          local baseline = collectgarbage("count")
+          local rounds = 0
+          repeat
+              for i = 1, 1000 do _ENV.a = {} end
+              rounds = rounds + 1
+              if rounds % 10 == 0 then
+                  io.write(string.format("GC_STOP_GROW_PROGRESS=%d count=%.3f baseline=%.3f\n",
+                                         rounds, collectgarbage("count"), baseline))
+              end
+              assert(rounds < 10000)
+          until collectgarbage("count") > 2 * baseline
+          io.write(string.format("GC_STOP_GROW_FRONTIER_V0=PASS rounds=%d count=%.3f baseline=%.3f\n",
+                                 rounds, collectgarbage("count"), baseline))
+          collectgarbage("restart")
           LUA
 
           set +e
@@ -401,6 +444,8 @@ jobs:
           cat "$work/gc-thread-probe.stderr"
           test "$rc" -eq 0
           grep -F 'GC_THREAD_FRONTIER_V0=PASS threads=1000'             "$work/gc-thread-probe.stdout" >/dev/null
+          grep -F 'GC_CYCLE_FRONTIER_V0=PASS' "$work/gc-thread-probe.stdout" >/dev/null
+          grep -F 'GC_STOP_GROW_FRONTIER_V0=PASS' "$work/gc-thread-probe.stdout" >/dev/null
 
       - name: Run official Lua 5.5.0 basic test suite
         shell: bash
