@@ -866,6 +866,67 @@ jobs:
             io.write("TAIL_METACALL_PASS\n")
           end
 
+          do
+            local function foo (x, ...)
+              local args = {...}
+              return x, args[1], args[2]
+            end
+            io.write("TAIL_ZERO_RESULT_BEGIN\n")
+            local x, y = (function () return foo() end)()
+            assert(x == nil and y == nil)
+            io.write("TAIL_ZERO_RESULT_PASS\n")
+
+            local X, Y, A
+            local function sink (x, y, ...)
+              X = x
+              Y = y
+              A = {...}
+            end
+            local function forward (...) return sink(...) end
+
+            io.write("TAIL_FORWARD_BEGIN=0\n")
+            forward()
+            assert(X == nil and Y == nil and #A == 0)
+            io.write("TAIL_FORWARD_PASS=0\n")
+
+            io.write("TAIL_FORWARD_BEGIN=1\n")
+            forward(10)
+            assert(X == 10 and Y == nil and #A == 0)
+            io.write("TAIL_FORWARD_PASS=1\n")
+
+            io.write("TAIL_FORWARD_BEGIN=2\n")
+            forward(10, 20)
+            assert(X == 10 and Y == 20 and #A == 0)
+            io.write("TAIL_FORWARD_PASS=2\n")
+
+            io.write("TAIL_FORWARD_BEGIN=3\n")
+            forward(10, 20, 30)
+            assert(X == 10 and Y == 20 and #A == 1 and A[1] == 30)
+            io.write("TAIL_FORWARD_PASS=3\n")
+          end
+
+          do
+            local n = 10000
+            local function target ()
+              if n == 0 then
+                return 1023
+              else
+                n = n - 1
+                return target()
+              end
+            end
+
+            local callable = target
+            for i = 1, 15 do
+              callable = setmetatable({}, {__call = callable})
+            end
+
+            io.write("TAIL_CALL_CHAIN_BEGIN depth=15 recursion=10000\n")
+            local result = coroutine.wrap(function () return callable() end)()
+            assert(result == 1023)
+            io.write("TAIL_CALL_CHAIN_PASS depth=15 recursion=10000\n")
+          end
+
           io.write("TAIL_CALL_FRONTIER_V0=PASS\n")
           LUA
 
