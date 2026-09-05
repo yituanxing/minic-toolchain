@@ -9481,6 +9481,56 @@ static bool core_switch_label_has_function_reentry(
     return false;
 }
 
+/* A break nested under an if/compound block still exits the current switch.
+   Breaks nested under a loop or another switch belong to that inner construct.
+   This query is intentionally conservative: it is used only to decide whether
+   the synthetic switch exit is reachable, never to prune executable source. */
+static bool core_switch_block_has_outer_break(const MinicCoreLowerContext *context,
+                                              const MinicBlock *block,
+                                              bool break_targets_outer) {
+    size_t index;
+
+    if (context == NULL || context->body == NULL || context->body->program == NULL ||
+        block == NULL) {
+        return true;
+    }
+    for (index = 0U; index < block->statement_count; ++index) {
+        const MinicStatement *statement;
+
+        statement = minic_c0_program_statement(
+            context->body->program, block->statements[index]);
+        if (statement == NULL) {
+            return true;
+        }
+        if (break_targets_outer && statement->kind == MINIC_STATEMENT_BREAK) {
+            return true;
+        }
+        if (statement->kind == MINIC_STATEMENT_IF) {
+            const MinicBlock *then_block;
+            const MinicBlock *else_block;
+
+            then_block =
+                statement->then_block == MINIC_BLOCK_INVALID
+                    ? NULL
+                    : minic_c0_program_block(context->body->program, statement->then_block);
+            else_block =
+                statement->else_block == MINIC_BLOCK_INVALID
+                    ? NULL
+                    : minic_c0_program_block(context->body->program, statement->else_block);
+            if ((then_block != NULL &&
+                 core_switch_block_has_outer_break(context, then_block, break_targets_outer)) ||
+                (else_block != NULL &&
+                 core_switch_block_has_outer_break(context, else_block, break_targets_outer))) {
+                return true;
+            }
+        }
+        /* Parser-normalized for/do loops are represented as WHILE. A break
+           below either WHILE or SWITCH targets that nested construct, not the
+           switch whose case segment we are classifying here. */
+    }
+    return false;
+}
+
 /* M176_SWITCH_POST_BREAK_LABEL_REENTRY: a direct break ends ordinary switch
    fallthrough, but a later ordinary C label remains a valid goto target. Keep
    that re-entry path separate from the case segment so break still reaches the
@@ -9755,7 +9805,9 @@ lower_switch(MinicCoreLowerContext *context, const MinicStatement *statement, bo
             }
         }
         segment_terminates[source_index] = segment_terminated;
-        segment_breaks[source_index] = break_index != SIZE_MAX;
+        segment_breaks[source_index] =
+            break_index != SIZE_MAX ||
+            core_switch_block_has_outer_break(context, &segment, true);
         if (segment_terminated) {
             continue;
         }
