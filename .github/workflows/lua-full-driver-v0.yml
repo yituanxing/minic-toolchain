@@ -357,6 +357,51 @@ jobs:
           grep -qx 'LUA_MINIC_OK' "$work/lua-smoke.stdout"
           echo "LUA_FULL_DRIVER_V0=PASS release=5.5.0 tus=33 pipeline=cpp,cc,as,ld musl=minild qemu=PASS"
 
+      - name: Run Lua GC coroutine frontier probe
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/lua-full-driver-v0"
+          sysroot="$work/musl-sysroot"
+
+          cat >"$work/gc-thread-probe.lua" <<'LUA'
+          io.stdout:setvbuf("no")
+          local thread_id = 0
+          local threads = {}
+
+          local function fn (thread)
+              local x = {}
+              threads[thread_id] = function()
+                  thread = x
+              end
+              coroutine.yield()
+          end
+
+          local started = os.clock()
+          while thread_id < 1000 do
+              local thread = coroutine.create(fn)
+              local ok, err = coroutine.resume(thread, thread)
+              assert(ok, err)
+              thread_id = thread_id + 1
+              if thread_id % 100 == 0 then
+                  io.write(string.format("GC_THREAD_PROGRESS=%d clock=%.6f\n",
+                                         thread_id, os.clock() - started))
+              end
+          end
+          io.write(string.format("GC_THREAD_FRONTIER_V0=PASS threads=%d clock=%.6f\n",
+                                 thread_id, os.clock() - started))
+          LUA
+
+          set +e
+          timeout 30s qemu-riscv64 -L "$sysroot" "$work/lua-minic"             "$work/gc-thread-probe.lua"             >"$work/gc-thread-probe.stdout" 2>"$work/gc-thread-probe.stderr"
+          rc=$?
+          set -e
+          echo "GC_THREAD_FRONTIER_RC=$rc"
+          cat "$work/gc-thread-probe.stdout"
+          cat "$work/gc-thread-probe.stderr"
+          test "$rc" -eq 0
+          grep -F 'GC_THREAD_FRONTIER_V0=PASS threads=1000'             "$work/gc-thread-probe.stdout" >/dev/null
+
       - name: Run official Lua 5.5.0 basic test suite
         shell: bash
         run: |
@@ -419,6 +464,9 @@ jobs:
             build/lua-full-driver-v0/lua-smoke.qemu.log
             build/lua-full-driver-v0/lua-smoke.trace.stdout
             build/lua-full-driver-v0/lua-smoke.trace.stderr
+            build/lua-full-driver-v0/gc-thread-probe.lua
+            build/lua-full-driver-v0/gc-thread-probe.stdout
+            build/lua-full-driver-v0/gc-thread-probe.stderr
             build/lua-full-driver-v0/lua-smoke.stdout
             build/lua-full-driver-v0/lua-smoke.stderr
             build/lua-full-driver-v0/lua-suite.stdout
