@@ -366,7 +366,8 @@ static bool verify_expression(const MinicC0Program *program,
                minic_type_is_integer(expression->type);
     case MINIC_EXPRESSION_FLOATING:
         return expression->value_category == MINIC_VALUE_RVALUE &&
-               minic_type_is_double(expression->type);
+               (minic_type_is_float(expression->type) ||
+                minic_type_is_double(expression->type));
     case MINIC_EXPRESSION_LOCAL: {
         const MinicLocal *local;
 
