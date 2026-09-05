@@ -654,3 +654,6 @@ sh "$root/tests/compiler/c0/run-internal-inline-emission.sh"
 MINIC="$minic" \
 BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
 sh "$root/tests/compiler/c0/run-null-member-offset-constant.sh"
+MINIC="$minic" \
+BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
+sh "$root/tests/compiler/c0/run-relocatable-const-section.sh"
