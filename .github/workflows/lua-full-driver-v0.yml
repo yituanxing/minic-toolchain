@@ -453,6 +453,145 @@ jobs:
           grep -F 'GC_CYCLE_FRONTIER_V0=PASS' "$work/gc-thread-probe.stdout" >/dev/null
           grep -F 'GC_STOP_GROW_FRONTIER_V0=PASS' "$work/gc-thread-probe.stdout" >/dev/null
 
+      - name: Diagnose Lua reentrant GC C state
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/lua-full-driver-v0"
+          sysroot="$work/musl-sysroot"
+          driver="$work/bin/minic"
+          src="$work/lua-source/lua-5.5.0/src"
+          diag="$work/lua-gcdiag-src"
+
+          rm -rf "$diag"
+          cp -a "$src" "$diag"
+
+          python3 - "$diag/lgc.c" "$diag/lapi.c" "$diag/lbaselib.c" <<'PY'
+          import pathlib, sys
+
+          def patch(path, old, new):
+              p = pathlib.Path(path)
+              s = p.read_text()
+              if old not in s:
+                  raise SystemExit(f"diagnostic patch anchor missing: {p.name}: {old[:80]!r}")
+              p.write_text(s.replace(old, new, 1))
+
+          helper = r'''
+          #include <unistd.h>
+
+          static void minic_gcdiag (char tag, unsigned int value) {
+            char msg[3];
+            msg[0] = tag;
+            msg[1] = (char)('0' + (value & 7u));
+            msg[2] = '\n';
+            (void)write(2, msg, sizeof(msg));
+          }
+
+          '''
+
+          lgc, lapi, lbase = sys.argv[1:4]
+
+          patch(lgc,
+                '#include "ltm.h"\n\n',
+                '#include "ltm.h"\n' + helper)
+          patch(lgc,
+                'static void dothecall (lua_State *L, void *ud) {\n'
+                '  UNUSED(ud);\n'
+                '  luaD_callnoyield(L, L->top.p - 2, 0);\n'
+                '}',
+                'static void dothecall (lua_State *L, void *ud) {\n'
+                '  UNUSED(ud);\n'
+                "  minic_gcdiag('D', G(L)->gcstp);\n"
+                '  luaD_callnoyield(L, L->top.p - 2, 0);\n'
+                '}')
+          patch(lgc,
+                '    lu_byte oldgcstp  = g->gcstp;\n'
+                '    g->gcstp |= GCSTPGC;  /* avoid GC steps */',
+                '    lu_byte oldgcstp  = g->gcstp;\n'
+                "    minic_gcdiag('B', g->gcstp);\n"
+                '    g->gcstp |= GCSTPGC;  /* avoid GC steps */\n'
+                "    minic_gcdiag('S', g->gcstp);")
+          patch(lgc,
+                '    status = luaD_pcall(L, dothecall, NULL, savestack(L, L->top.p - 2), 0);',
+                "    minic_gcdiag('P', g->gcstp);\n"
+                '    status = luaD_pcall(L, dothecall, NULL, savestack(L, L->top.p - 2), 0);')
+
+          patch(lapi,
+                '#include "lvm.h"\n\n',
+                '#include "lvm.h"\n' + helper)
+          patch(lapi,
+                '  global_State *g = G(L);\n'
+                '  if (g->gcstp & (GCSTPGC | GCSTPCLS))  /* internal stop? */\n'
+                '    return -1;  /* all options are invalid when stopped */',
+                '  global_State *g = G(L);\n'
+                "  minic_gcdiag('A', g->gcstp);\n"
+                '  if (g->gcstp & (GCSTPGC | GCSTPCLS)) {  /* internal stop? */\n'
+                "    minic_gcdiag('H', g->gcstp);\n"
+                '    return -1;  /* all options are invalid when stopped */\n'
+                '  }\n'
+                "  minic_gcdiag('N', g->gcstp);")
+
+          patch(lbase,
+                '#include "llimits.h"\n\n',
+                '#include "llimits.h"\n' + helper)
+          patch(lbase,
+                'static int luaB_collectgarbage (lua_State *L) {\n',
+                'static int luaB_collectgarbage (lua_State *L) {\n'
+                "  minic_gcdiag('E', 0);\n")
+          patch(lbase,
+                '  int o = optsnum[luaL_checkoption(L, 1, "collect", opts)];\n',
+                '  int o = optsnum[luaL_checkoption(L, 1, "collect", opts)];\n'
+                "  minic_gcdiag('O', (unsigned int)o);\n")
+          patch(lbase,
+                '    case LUA_GCISRUNNING: {\n'
+                '      int res = lua_gc(L, o);',
+                '    case LUA_GCISRUNNING: {\n'
+                "      minic_gcdiag('I', 0);\n"
+                '      int res = lua_gc(L, o);\n'
+                "      minic_gcdiag('R', (unsigned int)(res + 1));")
+          PY
+
+          sources=(
+            lapi.c lcode.c lctype.c ldebug.c ldo.c ldump.c lfunc.c lgc.c
+            llex.c lmem.c lobject.c lopcodes.c lparser.c lstate.c lstring.c
+            ltable.c ltm.c lundump.c lvm.c lzio.c lauxlib.c lbaselib.c
+            lcorolib.c ldblib.c liolib.c lmathlib.c loadlib.c loslib.c
+            lstrlib.c ltablib.c lutf8lib.c linit.c lua.c
+          )
+          inputs=()
+          for source in "${sources[@]}"; do
+            inputs+=("$diag/$source")
+          done
+
+          "$driver" --sysroot "$sysroot/usr"             -DLUA_USE_LINUX -I"$diag"             -o "$work/lua-minic-gcdiag" "${inputs[@]}"             >"$work/lua-gcdiag.build.stdout"             2>"$work/lua-gcdiag.build.stderr"
+
+          cat >"$work/gc-reentrant-diag.lua" <<'LUA'
+          io.stdout:setvbuf("no")
+          do
+            local object = {}
+            setmetatable(object, {
+              __gc = function ()
+                io.write("GC_DIAG_FINALIZER_ENTER\n")
+                local running = collectgarbage("isrunning")
+                io.write("GC_DIAG_ISRUNNING=" .. tostring(running) .. "\n")
+              end
+            })
+          end
+          io.write("GC_DIAG_COLLECT_BEGIN\n")
+          collectgarbage()
+          io.write("GC_DIAG_COLLECT_DONE\n")
+          LUA
+
+          set +e
+          timeout 5s qemu-riscv64 -L "$sysroot" "$work/lua-minic-gcdiag"             "$work/gc-reentrant-diag.lua"             >"$work/gc-reentrant-diag.stdout"             2>"$work/gc-reentrant-diag.stderr"
+          rc=$?
+          set -e
+          echo "GC_C_STATE_DIAG_RC=$rc"
+          cat "$work/gc-reentrant-diag.stdout"
+          cat "$work/gc-reentrant-diag.stderr"
+          # Diagnostic-only: preserve the state trace even when the known bug times out.
+          test "$rc" -eq 0 -o "$rc" -eq 124
+
       - name: Run isolated Lua reentrant finalizer GC probe
         shell: bash
         run: |
@@ -740,6 +879,11 @@ jobs:
             build/lua-full-driver-v0/gc-reentrant-probe.lua
             build/lua-full-driver-v0/gc-reentrant-probe.stdout
             build/lua-full-driver-v0/gc-reentrant-probe.stderr
+            build/lua-full-driver-v0/gc-reentrant-diag.lua
+            build/lua-full-driver-v0/gc-reentrant-diag.stdout
+            build/lua-full-driver-v0/gc-reentrant-diag.stderr
+            build/lua-full-driver-v0/lua-gcdiag.build.stdout
+            build/lua-full-driver-v0/lua-gcdiag.build.stderr
             build/lua-full-driver-v0/lua-gc-profile.stdout
             build/lua-full-driver-v0/lua-gc-profile.stderr
             build/lua-full-driver-v0/lua-smoke.stdout
