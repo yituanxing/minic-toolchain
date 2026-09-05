@@ -148,13 +148,15 @@ static bool append_normalized_cast(MinicC0Program *rewritten,
         return append_normalized_discard(rewritten, cast_expression, mapped_operand, normalized_id);
     }
 
-    if ((minic_type_is_double(cast_expression->type) &&
-         (minic_type_is_integer(operand_expression->type) ||
-          minic_type_is_float(operand_expression->type))) ||
-        (minic_type_is_float(cast_expression->type) &&
-         minic_type_is_double(operand_expression->type)) ||
-        (minic_type_is_integer(cast_expression->type) &&
-         minic_type_is_double(operand_expression->type))) {
+    if ((minic_type_is_integer(cast_expression->type) ||
+         minic_type_is_float(cast_expression->type) ||
+         minic_type_is_double(cast_expression->type) ||
+         minic_type_is_long_double(cast_expression->type)) &&
+        (minic_type_is_integer(operand_expression->type) ||
+         minic_type_is_float(operand_expression->type) ||
+         minic_type_is_double(operand_expression->type) ||
+         minic_type_is_long_double(operand_expression->type)) &&
+        minic_type_cast_compatible(cast_expression->type, operand_expression->type)) {
         return append_normalized_conversion(
             rewritten, cast_expression, mapped_operand, normalized_id);
     }
