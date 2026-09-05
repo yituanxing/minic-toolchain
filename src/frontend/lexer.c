@@ -283,6 +283,19 @@ static bool minic_lexer_scan_decimal_exponent(MinicLexer *lexer,
     return true;
 }
 
+static void minic_lexer_scan_floating_suffix(MinicLexer *lexer) {
+    char suffix;
+
+    if (lexer == NULL) {
+        return;
+    }
+    suffix = minic_lexer_peek(lexer);
+    if (suffix == 'f' || suffix == 'F' || suffix == 'l' || suffix == 'L') {
+        minic_lexer_advance(lexer);
+    }
+}
+
+
 static bool minic_lexer_scan_integer_suffix(MinicLexer *lexer,
                                             MinicDiagnostic *diagnostic,
                                             MinicSourcePosition begin) {
@@ -567,6 +580,7 @@ bool minic_lexer_next(MinicLexer *lexer, MinicToken *token, MinicDiagnostic *dia
             token->span.end = minic_lexer_position(lexer);
             return false;
         }
+        minic_lexer_scan_floating_suffix(lexer);
         token->kind = MINIC_TOKEN_FLOATING_CONSTANT;
         token->span.end = minic_lexer_position(lexer);
         return true;
@@ -625,6 +639,9 @@ bool minic_lexer_next(MinicLexer *lexer, MinicToken *token, MinicDiagnostic *dia
         if (!is_floating && !minic_lexer_scan_integer_suffix(lexer, diagnostic, begin)) {
             token->span.end = minic_lexer_position(lexer);
             return false;
+        }
+        if (is_floating) {
+            minic_lexer_scan_floating_suffix(lexer);
         }
         token->kind = is_floating ? MINIC_TOKEN_FLOATING_CONSTANT : MINIC_TOKEN_INTEGER_CONSTANT;
         token->span.end = minic_lexer_position(lexer);
