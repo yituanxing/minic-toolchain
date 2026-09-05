@@ -103,12 +103,18 @@ static bool parse_integer(MinicParser *parser, MinicExpressionId *expression_id)
 static bool parse_floating(MinicParser *parser, MinicExpressionId *expression_id) {
     MinicExpression expression;
     MinicSourceSpan span;
+    MinicType literal_type;
     char *end;
     char *text;
-    double value;
+    double double_value;
+    float float_value;
+    uint32_t float_bits;
     size_t length;
+    size_t numeric_length;
+    char suffix;
 
     _Static_assert(sizeof(double) == sizeof(uint64_t), "MiniC requires binary64 host double");
+    _Static_assert(sizeof(float) == sizeof(uint32_t), "MiniC requires binary32 host float");
 
     if (parser->current.kind != MINIC_TOKEN_FLOATING_CONSTANT) {
         minic_parser_error(parser, "expected floating constant");
@@ -116,7 +122,7 @@ static bool parse_floating(MinicParser *parser, MinicExpressionId *expression_id
     }
     span = parser->current.span;
     length = span.end.offset - span.begin.offset;
-    if (length == SIZE_MAX) {
+    if (length == 0U || length == SIZE_MAX) {
         minic_parser_error(parser, "floating constant is too long");
         return false;
     }
@@ -128,22 +134,53 @@ static bool parse_floating(MinicParser *parser, MinicExpressionId *expression_id
     (void)memcpy(text, parser->source + span.begin.offset, length);
     text[length] = '\0';
 
-    errno = 0;
-    end = NULL;
-    value = strtod(text, &end);
-    if (end != text + length || errno == ERANGE) {
+    suffix = text[length - 1U];
+    numeric_length = length;
+    literal_type = minic_type_double();
+    if (suffix == 'f' || suffix == 'F') {
+        literal_type = minic_type_float();
+        numeric_length -= 1U;
+    } else if (suffix == 'l' || suffix == 'L') {
         free(text);
-        minic_parser_error(parser, "invalid or out-of-range floating constant");
+        minic_parser_error(parser, "long double floating constants are not supported yet");
         return false;
+    } else {
+        suffix = '\0';
     }
-    free(text);
+    text[numeric_length] = '\0';
 
     (void)memset(&expression, 0, sizeof(expression));
     expression.kind = MINIC_EXPRESSION_FLOATING;
     expression.span = span;
-    expression.type = minic_type_double();
+    expression.type = literal_type;
     expression.value_category = MINIC_VALUE_RVALUE;
-    (void)memcpy(&expression.value.floating_bits, &value, sizeof(value));
+
+    errno = 0;
+    end = NULL;
+    if (minic_type_is_float(literal_type)) {
+        float_value = strtof(text, &end);
+        if (end != text + numeric_length) {
+            free(text);
+            minic_parser_error(parser, "invalid floating constant");
+            return false;
+        }
+        /* C translation accepts implementation-range results for floating
+           constants. Preserve the target binary32 result selected by strtof:
+           overflow becomes +/-infinity and underflow becomes the rounded
+           subnormal/zero rather than a frontend hard error. */
+        (void)memcpy(&float_bits, &float_value, sizeof(float_bits));
+        expression.value.floating_bits = (uint64_t)float_bits;
+    } else {
+        double_value = strtod(text, &end);
+        if (end != text + numeric_length) {
+            free(text);
+            minic_parser_error(parser, "invalid floating constant");
+            return false;
+        }
+        (void)memcpy(&expression.value.floating_bits, &double_value, sizeof(double_value));
+    }
+    free(text);
+
     return minic_parser_advance(parser) &&
            minic_parser_add_expression(parser, &expression, expression_id);
 }
