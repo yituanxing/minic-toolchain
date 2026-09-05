@@ -94,6 +94,16 @@ jobs:
             install-headers >"$work/musl-headers.log" 2>&1
           echo "LUA_FAST_PREP=PASS cache=miss lua=5.5.0 musl_headers=1"
 
+      - name: Save fixed Lua and musl header inputs
+        if: steps.fast-input-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            build/lua-full-driver-v0/lua-source
+            build/lua-full-driver-v0/musl-1.2.5
+            build/lua-full-driver-v0/musl-sysroot/usr/include
+          key: lua-fast-inputs-v1-lua-5.5.0-musl-1.2.5-rv64
+
       - name: Fast raw Lua TU frontier
         shell: bash
         run: |
