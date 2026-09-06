@@ -143,6 +143,12 @@ jobs:
             rc=0
             : >"$logs/$base.stdout"
             : >"$logs/$base.stderr"
+            : >"$logs/$base.cpp.stdout"
+            : >"$logs/$base.cpp.stderr"
+            : >"$logs/$base.cc.stdout"
+            : >"$logs/$base.cc.stderr"
+            : >"$logs/$base.as.stdout"
+            : >"$logs/$base.as.stderr"
 
             set +e
             timeout 300s "$cpp" -E -P -undef -nostdinc \
