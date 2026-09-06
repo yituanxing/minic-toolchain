@@ -494,22 +494,11 @@ int main(int argc, char **argv) {
     }
 
     if (mode == MINIC_DRIVER_ASSEMBLY) {
-        if (has_suffix(inputs[0], ".c")) {
-            status = compile_c_to_assembly(inputs[0],
-                                           output,
-                                           sysroot,
-                                           hosted,
-                                           no_stdinc,
-                                           cpp_forward,
-                                           cpp_forward_count,
-                                           cpp,
-                                           cc);
-        } else {
-            char *cc_arguments[] = {
-                cc, "-S", (char *)inputs[0], "-o", (char *)output, NULL
-            };
-            status = run_tool(cc_arguments);
-        }
+        char *cc_arguments[] = {
+            cc, "-S", (char *)inputs[0], "-o", (char *)output, NULL
+        };
+
+        status = run_tool(cc_arguments);
         goto done;
     }
 
