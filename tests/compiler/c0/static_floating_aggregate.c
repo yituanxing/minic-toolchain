@@ -11,6 +11,14 @@ static const struct {
     {3, "day", 5373485.0, 86400.0},
 };
 
+static const union {
+    double real;
+    unsigned long long bits;
+} floatingZero = {0};
+
+static const double integerToDouble = 7;
+static const float unsignedToFloat = 9u;
+
 float static_floating_aggregate_limit(int index)
 {
     return -aXformType[index].rLimit;
