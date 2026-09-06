@@ -203,6 +203,107 @@ jobs:
           test "$pass" -eq 11
           echo "TINYCC_CORE_FRONTIER_V0=PASS selected=11 pass=11 pipeline=MiniPP,MiniC,MiniAS"
 
+      - name: Build static musl runtime for TinyCC
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/tinycc-full-driver-v0"
+          musl_src="$work/musl-1.2.5"
+          musl_out="$work/musl-build"
+          sysroot="$work/musl-sysroot"
+
+          rm -rf "$musl_out"
+          mkdir -p "$musl_out"
+          cd "$musl_out"
+          CC=riscv64-linux-gnu-gcc \
+          AR=riscv64-linux-gnu-ar \
+          RANLIB=riscv64-linux-gnu-ranlib \
+            "$musl_src/configure" \
+              --target=riscv64-linux-gnu \
+              --disable-shared \
+              --prefix=/usr \
+            >"$work/musl-static-configure.log" 2>&1
+          make -j4 V=1 lib/libc.a lib/crt1.o lib/crti.o lib/crtn.o \
+            >"$work/musl-static-make.log" 2>&1
+
+          mkdir -p "$sysroot/usr/lib"
+          cp "$musl_out/lib/crt1.o" "$musl_out/lib/crti.o" "$musl_out/lib/crtn.o" \
+            "$sysroot/usr/lib/"
+          cp "$musl_out/lib/libc.a" "$sysroot/usr/lib/libc.a"
+          cp "$(riscv64-linux-gnu-gcc -print-libgcc-file-name)" \
+            "$sysroot/usr/lib/libgcc.a"
+
+          test -s "$sysroot/usr/lib/crt1.o"
+          test -s "$sysroot/usr/lib/libc.a"
+          test -s "$sysroot/usr/lib/libgcc.a"
+          echo "TINYCC_STATIC_MUSL_RUNTIME=PASS"
+
+      - name: Archive Mini-produced TinyCC library with MiniAR
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/tinycc-full-driver-v0"
+          out="$work/tinycc-obj"
+          miniar="$work/bin/minic-ar"
+          archive="$work/libtcc-minic.a"
+
+          members=(
+            libtcc.o tccpp.o tccgen.o tccdbg.o tccelf.o
+            tccasm.o tccrun.o riscv64-gen.o riscv64-link.o riscv64-asm.o
+          )
+          inputs=()
+          for member in "${members[@]}"; do
+            test -s "$out/$member"
+            inputs+=("$out/$member")
+          done
+
+          "$miniar" rcsD "$archive" "${inputs[@]}" \
+            >"$work/libtcc-ar.stdout" 2>"$work/libtcc-ar.stderr"
+          test -s "$archive"
+          "$miniar" t "$archive" >"$work/libtcc-ar.members"
+          cat "$work/libtcc-ar.members"
+          test "$(wc -l <"$work/libtcc-ar.members")" -eq 10
+          echo "TINYCC_MINIAR_V0=PASS members=10"
+
+      - name: Link and run static TinyCC through MiniLD
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/tinycc-full-driver-v0"
+          sysroot="$work/musl-sysroot"
+          driver="$work/bin/minic"
+          exe="$work/tcc-minic-static"
+
+          "$driver" --sysroot "$sysroot/usr" -static \
+            -o "$exe" \
+            "$work/tinycc-obj/tcc.o" "$work/libtcc-minic.a" \
+            >"$work/tcc-static-link.stdout" \
+            2>"$work/tcc-static-link.stderr"
+
+          test -x "$exe"
+          riscv64-linux-gnu-readelf -h "$exe" >"$work/tcc-static.header"
+          riscv64-linux-gnu-readelf -lW "$exe" >"$work/tcc-static.programs"
+          if grep -q 'Requesting program interpreter' "$work/tcc-static.programs"; then
+            echo "TINYCC_STATIC_LINK=FAIL unexpected-interpreter" >&2
+            exit 1
+          fi
+          if riscv64-linux-gnu-readelf -d "$exe" 2>/dev/null | grep -q '(NEEDED)'; then
+            echo "TINYCC_STATIC_LINK=FAIL unexpected-needed" >&2
+            exit 1
+          fi
+
+          set +e
+          timeout 60s qemu-riscv64 "$exe" -v \
+            >"$work/tcc-version.stdout" 2>"$work/tcc-version.stderr"
+          rc=$?
+          set -e
+          cat "$work/tcc-version.stdout"
+          cat "$work/tcc-version.stderr"
+          test "$rc" -eq 0
+          cat "$work/tcc-version.stdout" "$work/tcc-version.stderr" | \
+            grep -F 'tcc version 0.9.28rc' >/dev/null
+          echo "TINYCC_STATIC_RUNTIME_V0=PASS version=0.9.28rc producer=MiniPP,MiniC,MiniAS,MiniAR,MiniLD"
+
       - name: Preserve TinyCC frontier evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -216,5 +317,18 @@ jobs:
             build/tinycc-full-driver-v0/tinycc-tu-logs/
             build/tinycc-full-driver-v0/tinycc-i/
             build/tinycc-full-driver-v0/tinycc-s/
+            build/tinycc-full-driver-v0/musl-static-configure.log
+            build/tinycc-full-driver-v0/musl-static-make.log
+            build/tinycc-full-driver-v0/libtcc-ar.stdout
+            build/tinycc-full-driver-v0/libtcc-ar.stderr
+            build/tinycc-full-driver-v0/libtcc-ar.members
+            build/tinycc-full-driver-v0/libtcc-minic.a
+            build/tinycc-full-driver-v0/tcc-static-link.stdout
+            build/tinycc-full-driver-v0/tcc-static-link.stderr
+            build/tinycc-full-driver-v0/tcc-static.header
+            build/tinycc-full-driver-v0/tcc-static.programs
+            build/tinycc-full-driver-v0/tcc-version.stdout
+            build/tinycc-full-driver-v0/tcc-version.stderr
+            build/tinycc-full-driver-v0/tcc-minic-static
           if-no-files-found: ignore
           retention-days: 7
