@@ -2414,6 +2414,37 @@ static bool emit_parameter(FILE *file,
                                    location.floating_register_begin]) < 0) {
                 return false;
             }
+        } else if (location.value.kind == MINIC_RISCV64_ABI_VALUE_WIDE_SCALAR &&
+                   minic_type_is_long_double(instruction->type)) {
+            const char *chunk_registers[2] = {"t0", "t1"};
+            size_t chunk_index;
+
+            if (location.value.storage_size != 16U || location.value.slot_count != 2U ||
+                location.floating_register_count != 0U ||
+                location.integer_register_count + location.stack_slot_count != 2U) {
+                return false;
+            }
+            for (chunk_index = 0U; chunk_index < 2U; ++chunk_index) {
+                if (chunk_index < location.integer_register_count) {
+                    size_t register_index = location.integer_register_begin + chunk_index;
+                    if (register_index >= 8U ||
+                        fprintf(file, "  mv %s, %s\n",
+                                chunk_registers[chunk_index],
+                                minic_core_rv64_argument_registers[register_index]) < 0) {
+                        return false;
+                    }
+                } else {
+                    size_t stack_chunk = chunk_index - location.integer_register_count;
+                    if (stack_chunk >= location.stack_slot_count ||
+                        !emit_incoming_stack_load64(
+                            file, frame, chunk_registers[chunk_index],
+                            location.stack_slot_begin + stack_chunk)) {
+                        return false;
+                    }
+                }
+            }
+            return store_core_int128_value(
+                file, frame, instruction->result, chunk_registers[0], chunk_registers[1]);
         } else if (location.value.kind == MINIC_RISCV64_ABI_VALUE_INTEGER &&
                    location.floating_register_count == 0U) {
             if (location.integer_register_count == 1U && location.stack_slot_count == 0U &&
