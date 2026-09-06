@@ -115,4 +115,22 @@ bool minic_declaration_build_function_type(
     const MinicDeclarationArraySuffix *array_suffix,
     MinicType *type);
 
+bool minic_declaration_build_nested_function_pointer_type(
+    MinicC0Program *program,
+    MinicType return_type,
+    const MinicType *outer_parameter_types,
+    size_t outer_parameter_count,
+    bool outer_is_variadic,
+    size_t outer_pointer_depth,
+    unsigned int outer_pointer_const_qualifiers,
+    unsigned int outer_pointer_volatile_qualifiers,
+    const MinicDeclarationArraySuffix *outer_array_suffix,
+    const MinicType *inner_parameter_types,
+    size_t inner_parameter_count,
+    bool inner_is_variadic,
+    size_t inner_pointer_depth,
+    unsigned int inner_pointer_const_qualifiers,
+    unsigned int inner_pointer_volatile_qualifiers,
+    MinicType *type);
+
 #endif
