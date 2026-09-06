@@ -87,6 +87,7 @@ jobs:
           sysroot="$work/musl-sysroot"
           driver="$work/bin/minic"
           cpp="$work/bin/minic-cpp"
+          mkdir -p "$work/raw"
 
           set +e
           "$driver" --sysroot "$sysroot/usr" -I"$src" \
