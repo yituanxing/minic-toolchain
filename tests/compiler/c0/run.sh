@@ -670,3 +670,7 @@ sh "$root/tests/compiler/c0/run-switch-nested-break-rv64.sh"
 MINIC="$minic" \
 BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
 sh "$root/tests/compiler/c0/run-core-block-spill-reuse.sh"
+MINIC="$minic" \
+HOST_CC="$host_cc" \
+BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
+sh "$root/tests/compiler/c0/run-nested-function-pointer-field.sh"
