@@ -1,0 +1,156 @@
+name: TinyCC Full Driver V0
+
+on:
+  push:
+    branches:
+      - external/tinycc-full-driver-v0
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  tinycc-frontier:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Install RV64 hosted prerequisites
+        run: |
+          timeout 240s sudo apt-get -o Acquire::Retries=3 update
+          timeout 240s sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            build-essential gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
+            qemu-user curl ca-certificates python3
+
+      - name: Build current Mini toolchain
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/tinycc-full-driver-v0 all
+          echo "TINYCC_MINI_TOOLCHAIN=PASS"
+
+      - name: Fetch pinned TinyCC 0.9.28rc and musl headers
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/tinycc-full-driver-v0"
+          mkdir -p "$work"
+          tiny_sha=0fb54300b56512754221d80adda85ddb9815bceb
+          tiny_tar="$work/tinycc-$tiny_sha.tar.gz"
+          curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors \
+            "https://codeload.github.com/TinyCC/tinycc/tar.gz/$tiny_sha" \
+            -o "$tiny_tar"
+          sha256sum "$tiny_tar" | tee "$work/tinycc-source.sha256"
+          tar -xzf "$tiny_tar" -C "$work"
+          src="$work/tinycc-$tiny_sha"
+          test -f "$src/VERSION"
+          grep -Fx '0.9.28rc' "$src/VERSION"
+
+          musl_tar="$work/musl-1.2.5.tar.gz"
+          curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors \
+            https://musl.libc.org/releases/musl-1.2.5.tar.gz \
+            -o "$musl_tar"
+          printf '%s  %s\n' \
+            a9a118bbe84d8764da0ea0d28b3ab3fae8477fc7e4085d90102b8596fc7c75e4 \
+            "$musl_tar" | sha256sum -c -
+          tar -xzf "$musl_tar" -C "$work"
+
+          sysroot="$work/musl-sysroot"
+          mkdir -p "$sysroot"
+          make -C "$work/musl-1.2.5" ARCH=riscv64 prefix=/usr DESTDIR="$sysroot" \
+            install-headers >"$work/musl-headers.log" 2>&1
+          test -f "$sysroot/usr/include/stdio.h"
+          echo "TINYCC_SOURCE=PASS version=0.9.28rc commit=$tiny_sha"
+
+      - name: Configure TinyCC for riscv64 musl and generate tccdefs
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/tinycc-full-driver-v0"
+          tiny_sha=0fb54300b56512754221d80adda85ddb9815bceb
+          src="$work/tinycc-$tiny_sha"
+          cd "$src"
+          ./configure \
+            --cpu=riscv64 \
+            --config-musl \
+            --prefix=/usr \
+            --triplet=riscv64-linux-musl \
+            --sysincludepaths=/usr/include \
+            --libpaths=/usr/lib \
+            --crtprefix=/usr/lib \
+            --elfinterp=/lib/ld-musl-riscv64.so.1 \
+            >"$work/tinycc-configure.log" 2>&1
+          grep -q '^#define TCC_TARGET_RISCV64 1' config.h
+          grep -q '^#define CONFIG_TCC_MUSL 1' config.h
+          cc -DC2STR conftest.c -o c2str.exe
+          ./c2str.exe include/tccdefs.h tccdefs_.h
+          test -s tccdefs_.h
+          cp config.h "$work/tinycc-config.h"
+          echo "TINYCC_CONFIG=PASS cpu=riscv64 libc=musl"
+
+      - name: Compile TinyCC core translation units through Mini pipeline
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/tinycc-full-driver-v0"
+          tiny_sha=0fb54300b56512754221d80adda85ddb9815bceb
+          src="$work/tinycc-$tiny_sha"
+          sysroot="$work/musl-sysroot"
+          driver="$work/bin/minic"
+          out="$work/tinycc-obj"
+          logs="$work/tinycc-tu-logs"
+          mkdir -p "$out" "$logs"
+
+          sources="tcc.c libtcc.c tccpp.c tccgen.c tccdbg.c tccelf.c tccasm.c tccrun.c riscv64-gen.c riscv64-link.c riscv64-asm.c"
+          pass=0
+          fail=0
+          : >"$work/tinycc-tu-results.tsv"
+
+          for source in $sources; do
+            base=${source%.c}
+            started=$(date +%s)
+            set +e
+            timeout 300s "$driver" \
+              --sysroot "$sysroot/usr" \
+              -I"$src" \
+              -DONE_SOURCE=0 \
+              -c "$src/$source" -o "$out/$base.o" \
+              >"$logs/$base.stdout" 2>"$logs/$base.stderr"
+            rc=$?
+            set -e
+            elapsed=$(( $(date +%s) - started ))
+            if test "$rc" -eq 0 && test -s "$out/$base.o"; then
+              pass=$((pass + 1))
+              printf '%s\tPASS\t%s\t%s\n' "$source" "$rc" "$elapsed" \
+                >>"$work/tinycc-tu-results.tsv"
+              echo "TINYCC_TU=PASS source=$source elapsed_s=$elapsed"
+            else
+              fail=$((fail + 1))
+              printf '%s\tFAIL\t%s\t%s\n' "$source" "$rc" "$elapsed" \
+                >>"$work/tinycc-tu-results.tsv"
+              echo "TINYCC_TU=FAIL source=$source rc=$rc elapsed_s=$elapsed"
+              tail -n 80 "$logs/$base.stderr" || true
+            fi
+          done
+
+          echo "TINYCC_CORE_FRONTIER selected=11 pass=$pass fail=$fail"
+          test "$fail" -eq 0
+          test "$pass" -eq 11
+          echo "TINYCC_CORE_FRONTIER_V0=PASS selected=11 pass=11 pipeline=MiniPP,MiniC,MiniAS"
+
+      - name: Preserve TinyCC frontier evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tinycc-full-driver-v0-frontier
+          path: |
+            build/tinycc-full-driver-v0/tinycc-source.sha256
+            build/tinycc-full-driver-v0/tinycc-configure.log
+            build/tinycc-full-driver-v0/tinycc-config.h
+            build/tinycc-full-driver-v0/tinycc-tu-results.tsv
+            build/tinycc-full-driver-v0/tinycc-tu-logs/
+          if-no-files-found: ignore
+          retention-days: 7
