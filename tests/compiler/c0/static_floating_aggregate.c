@@ -21,6 +21,11 @@ double static_floating_aggregate_scaled(double r, int index)
     return r * 1000.0 * aXformType[index].rXform;
 }
 
+double static_floating_overflow_return(void)
+{
+    return 1e5000f;
+}
+
 int static_floating_aggregate_probe(void)
 {
     return aXformType[0].nName == 6 ? 0 : 1;
