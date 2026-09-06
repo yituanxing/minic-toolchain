@@ -299,7 +299,45 @@ bool minic_parser_parse_parenthesized_function_declarator(
         return false;
     }
 
-    if (parser->current.kind == MINIC_TOKEN_IDENTIFIER) {
+    if (parser->current.kind == MINIC_TOKEN_LPAREN &&
+        declarator->pointer_depth != 0U) {
+        MinicParsedFunctionDeclarator nested;
+
+        /* Compose one already-supported parenthesized function-pointer
+           declarator inside another: R (*(*name)(P))(Q).  The nested
+           declarator owns the object pointer and P parameter list; the outer
+           declarator owns the returned-function pointer and Q parameter list. */
+        if (!minic_parser_parse_parenthesized_function_declarator(
+                parser, require_name, true, &nested)) {
+            return false;
+        }
+        if (nested.has_inner_function_suffix ||
+            nested.has_nested_function_pointer_object ||
+            nested.array_dimension_count != 0U ||
+            nested.attributes.count != 0U ||
+            nested.parameter_count > MINIC_MAX_FUNCTION_PARAMETERS) {
+            minic_parser_error(
+                parser,
+                "unsupported nested function-pointer declarator shape");
+            return false;
+        }
+        declarator->name_span = nested.name_span;
+        declarator->has_name = nested.has_name;
+        declarator->has_nested_function_pointer_object = true;
+        declarator->inner_parameter_count = nested.parameter_count;
+        declarator->inner_is_variadic = nested.is_variadic;
+        declarator->nested_pointer_depth = nested.pointer_depth;
+        declarator->nested_pointer_const_qualifiers =
+            nested.pointer_const_qualifiers;
+        declarator->nested_pointer_volatile_qualifiers =
+            nested.pointer_volatile_qualifiers;
+        if (nested.parameter_count != 0U) {
+            (void)memcpy(declarator->inner_parameter_types,
+                         nested.parameter_types,
+                         nested.parameter_count *
+                             sizeof(*declarator->inner_parameter_types));
+        }
+    } else if (parser->current.kind == MINIC_TOKEN_IDENTIFIER) {
         declarator->name_span = parser->current.span;
         declarator->has_name = true;
         if (!minic_parser_advance(parser)) {
@@ -314,7 +352,8 @@ bool minic_parser_parse_parenthesized_function_declarator(
        carry a function suffix: R (*fn(P))(Q). Keep that inner suffix
        distinct from the outer (Q) suffix: fn takes P and returns a pointer
        to a function taking Q. */
-    if (declarator->has_name && declarator->pointer_depth != 0U &&
+    if (!declarator->has_nested_function_pointer_object &&
+        declarator->has_name && declarator->pointer_depth != 0U &&
         parser->current.kind == MINIC_TOKEN_LPAREN) {
         declarator->has_inner_function_suffix = true;
         declarator->inner_parameter_count = 0U;
@@ -404,6 +443,30 @@ bool minic_parser_build_function_declarator_type(MinicParser *parser,
     array_suffix.dimension_count = declarator->array_dimension_count;
     array_suffix.zero_length_mask = declarator->array_zero_length_mask;
     array_suffix.outermost_incomplete = declarator->array_outermost_incomplete;
+    if (declarator->has_nested_function_pointer_object) {
+        if (declarator->has_inner_function_suffix ||
+            declarator->inner_parameter_count > MINIC_MAX_FUNCTION_PARAMETERS ||
+            declarator->nested_pointer_depth == 0U) {
+            return false;
+        }
+        return minic_declaration_build_nested_function_pointer_type(
+            parser->program,
+            return_type,
+            declarator->parameter_types,
+            declarator->parameter_count,
+            declarator->is_variadic,
+            declarator->pointer_depth,
+            declarator->pointer_const_qualifiers,
+            declarator->pointer_volatile_qualifiers,
+            &array_suffix,
+            declarator->inner_parameter_types,
+            declarator->inner_parameter_count,
+            declarator->inner_is_variadic,
+            declarator->nested_pointer_depth,
+            declarator->nested_pointer_const_qualifiers,
+            declarator->nested_pointer_volatile_qualifiers,
+            declarator_type);
+    }
     return minic_declaration_build_function_type(parser->program,
                                                  return_type,
                                                  declarator->parameter_types,
