@@ -318,7 +318,8 @@ static bool minic_c0_type_initializer_slot_count_impl(const MinicC0Program *prog
     if (program == NULL || slot_count == NULL) {
         return false;
     }
-    if (minic_type_is_integer(type) || minic_type_is_pointer(type)) {
+    if (minic_type_is_integer(type) || minic_type_is_pointer(type) ||
+        minic_type_is_float(type) || minic_type_is_double(type)) {
         *slot_count = 1U;
         return true;
     }
