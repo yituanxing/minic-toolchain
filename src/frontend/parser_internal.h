@@ -149,6 +149,7 @@ typedef struct MinicParsedFunctionDeclarator {
     MinicType parameter_types[MINIC_MAX_FUNCTION_PARAMETERS];
     size_t parameter_count;
     MinicType inner_parameter_types[MINIC_MAX_FUNCTION_PARAMETERS];
+    MinicSourceSpan inner_parameter_name_spans[MINIC_MAX_FUNCTION_PARAMETERS];
     size_t inner_parameter_count;
     size_t pointer_depth;
     unsigned int pointer_const_qualifiers;
