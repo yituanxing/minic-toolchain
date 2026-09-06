@@ -32,6 +32,7 @@ typedef struct MinicParserLocalBinding {
     MinicSourceSpan name_span;
     MinicLocalId local_id;
     MinicGlobalObjectId global_object_id;
+    MinicTypeAliasId type_alias_id;
 } MinicParserLocalBinding;
 
 typedef struct MinicParserRecordTag {
@@ -360,6 +361,9 @@ bool minic_parser_bind_local(MinicParser *parser, MinicSourceSpan name_span, Min
 bool minic_parser_bind_scoped_global_object(MinicParser *parser,
                                             MinicSourceSpan name_span,
                                             MinicGlobalObjectId global_object_id);
+bool minic_parser_bind_type_alias(MinicParser *parser,
+                                  MinicSourceSpan name_span,
+                                  MinicTypeAliasId type_alias_id);
 bool minic_parser_name_bound_in_current_scope(const MinicParser *parser, MinicSourceSpan name_span);
 MinicLocalId minic_parser_find_local_in_current_scope(const MinicParser *parser,
                                                       MinicSourceSpan name_span);

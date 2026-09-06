@@ -5498,6 +5498,13 @@ bool minic_parser_parse_statement(MinicParser *parser, bool allow_declaration) {
         }
         return minic_parser_parse_static_assert_declaration(parser);
     }
+    if (parser->current.kind == MINIC_TOKEN_KW_TYPEDEF) {
+        if (!allow_declaration) {
+            minic_parser_error(parser, "typedef requires a declaration scope");
+            return false;
+        }
+        return minic_parser_parse_typedef(parser);
+    }
     if (parser->current.kind == MINIC_TOKEN_KW_IF) {
         return parse_if(parser);
     }

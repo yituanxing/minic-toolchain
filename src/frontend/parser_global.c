@@ -4916,6 +4916,7 @@ static bool parse_static_zero_definition(MinicParser *parser,
 
     if (parser == NULL || parser->current.kind != MINIC_TOKEN_SEMICOLON ||
         (!minic_type_is_integer(object_type) && !minic_type_is_pointer(object_type) &&
+         !minic_type_is_float(object_type) && !minic_type_is_double(object_type) &&
          !minic_type_is_record(object_type) && !minic_type_is_array(object_type))) {
         return false;
     }
@@ -5342,6 +5343,7 @@ bool minic_parser_parse_static_global_after_head(MinicParser *parser,
     MinicGlobalObjectId existing_object_id;
     if (parser == NULL ||
         (!minic_type_is_integer(element_type) && !minic_type_is_pointer(element_type) &&
+         !minic_type_is_float(element_type) && !minic_type_is_double(element_type) &&
          !minic_type_is_record(element_type) && !minic_type_is_array(element_type))) {
         if (parser != NULL) {
             minic_parser_error(parser, "unsupported static global object type");

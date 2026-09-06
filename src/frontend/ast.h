@@ -391,6 +391,7 @@ typedef struct MinicTypeAlias {
     char *name;
     size_t name_length;
     MinicType type;
+    bool is_block_scope;
 } MinicTypeAlias;
 
 typedef struct MinicEnum {
@@ -720,6 +721,11 @@ bool minic_c0_program_add_type_alias(MinicC0Program *program,
                                      size_t name_length,
                                      MinicType type,
                                      MinicTypeAliasId *alias_id);
+bool minic_c0_program_add_block_type_alias(MinicC0Program *program,
+                                           const char *name,
+                                           size_t name_length,
+                                           MinicType type,
+                                           MinicTypeAliasId *alias_id);
 bool minic_c0_program_add_enum(MinicC0Program *program,
                                const char *name,
                                size_t name_length,

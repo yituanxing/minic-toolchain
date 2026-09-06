@@ -1339,24 +1339,27 @@ bool minic_c0_program_add_function_type(MinicC0Program *program,
         program, return_type, parameter_types, parameter_count, false, function_type);
 }
 
-bool minic_c0_program_add_type_alias(MinicC0Program *program,
-                                     const char *name,
-                                     size_t name_length,
-                                     MinicType type,
-                                     MinicTypeAliasId *alias_id) {
+static bool minic_c0_program_add_type_alias_with_scope(MinicC0Program *program,
+                                                        const char *name,
+                                                        size_t name_length,
+                                                        MinicType type,
+                                                        bool is_block_scope,
+                                                        MinicTypeAliasId *alias_id) {
     MinicTypeAlias alias;
     size_t index;
 
     if (program == NULL || name == NULL || alias_id == NULL) {
         return false;
     }
-    for (index = 0U; index < program->type_alias_count; ++index) {
-        const MinicTypeAlias *existing;
+    if (!is_block_scope) {
+        for (index = 0U; index < program->type_alias_count; ++index) {
+            const MinicTypeAlias *existing;
 
-        existing = &program->type_aliases[index];
-        if (name_length == existing->name_length &&
-            memcmp(existing->name, name, name_length) == 0) {
-            return false;
+            existing = &program->type_aliases[index];
+            if (!existing->is_block_scope && name_length == existing->name_length &&
+                memcmp(existing->name, name, name_length) == 0) {
+                return false;
+            }
         }
     }
     if (!minic_grow_array((void **)&program->type_aliases,
@@ -1373,10 +1376,29 @@ bool minic_c0_program_add_type_alias(MinicC0Program *program,
     }
     alias.name_length = name_length;
     alias.type = type;
+    alias.is_block_scope = is_block_scope;
     *alias_id = program->type_alias_count;
     program->type_aliases[program->type_alias_count] = alias;
     program->type_alias_count += 1U;
     return true;
+}
+
+bool minic_c0_program_add_type_alias(MinicC0Program *program,
+                                     const char *name,
+                                     size_t name_length,
+                                     MinicType type,
+                                     MinicTypeAliasId *alias_id) {
+    return minic_c0_program_add_type_alias_with_scope(
+        program, name, name_length, type, false, alias_id);
+}
+
+bool minic_c0_program_add_block_type_alias(MinicC0Program *program,
+                                           const char *name,
+                                           size_t name_length,
+                                           MinicType type,
+                                           MinicTypeAliasId *alias_id) {
+    return minic_c0_program_add_type_alias_with_scope(
+        program, name, name_length, type, true, alias_id);
 }
 
 const MinicExpression *minic_c0_program_expression(const MinicC0Program *program,
