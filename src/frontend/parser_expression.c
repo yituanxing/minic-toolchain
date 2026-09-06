@@ -3682,7 +3682,7 @@ static bool normalize_conditional_null_pointer_arm(MinicParser *parser,
     return true;
 }
 
-static bool normalize_float_comparison_operands(MinicParser *parser,
+static bool normalize_float_binary_operands(MinicParser *parser,
                                                 MinicExpressionId *left_id,
                                                 MinicExpressionId *right_id,
                                                 MinicTokenKind kind) {
