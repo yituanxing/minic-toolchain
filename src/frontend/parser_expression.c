@@ -2875,7 +2875,8 @@ static bool parse_primary(MinicParser *parser, MinicExpressionId *expression_id,
         if (current_is_builtin_offsetof(parser)) {
             return parse_builtin_offsetof(parser, expression_id);
         }
-        if (current_identifier_is(parser, "__func__")) {
+        if (current_identifier_is(parser, "__func__") ||
+            current_identifier_is(parser, "__FUNCTION__")) {
             name_span = parser->current.span;
             if (!minic_parser_get_predefined_function_name_object(parser, &global_object_id) ||
                 !minic_parser_advance(parser) ||
