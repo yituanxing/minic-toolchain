@@ -9844,14 +9844,11 @@ lower_switch(MinicCoreLowerContext *context, const MinicStatement *statement, bo
                     reentry_index = scan;
                     break;
                 }
-                (void)fprintf(stderr,
-                              "CORE_SWITCH_DETAIL function=%s gate=post-break "
-                              "source_index=%zu scan=%zu kind=%d\n",
-                              context->source_function->name,
-                              source_index,
-                              scan,
-                              (int)segment_statement->kind);
-                return MINIC_CORE_LOWER_UNSUPPORTED;
+                /* The tail after an unconditional switch break is unreachable
+                   from this case segment. Keep scanning only to discover a real
+                   function-level label re-entry; ordinary statements need no Core
+                   lowering because no source path can execute them. */
+                continue;
             }
             if (segment_statement->kind == MINIC_STATEMENT_BREAK) {
                 if (!core_cleanup_edge_is_empty(segment_statement)) {
