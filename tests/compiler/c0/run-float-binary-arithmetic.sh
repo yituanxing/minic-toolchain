@@ -2,10 +2,11 @@
 set -eu
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
-minic=${MINIC:-"$root/build/debug/bin/minic"}
-minias=${MINIAS:-"$root/build/debug/bin/minic-as"}
+build_dir=${BUILD_DIR:-"$root/build/debug"}
+minic=${MINIC:-"$build_dir/bin/minic"}
+minias=${MINIAS:-"$build_dir/bin/minic-as"}
 host_cc=${HOST_CC:-${CC:-cc}}
-work=${BUILD_DIR:-"$root/build/debug"}/tests/compiler-c0-float-binary-arithmetic
+work="$build_dir/tests/compiler-c0-float-binary-arithmetic"
 source="$root/tests/compiler/c0/float_binary_arithmetic.c"
 
 rm -rf "$work"
