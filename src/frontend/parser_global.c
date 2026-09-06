@@ -933,15 +933,15 @@ static bool parse_static_pointer_initializer(MinicParser *parser,
     return false;
 }
 
-static bool static_floating_constant_value(const MinicC0Program *program,
+static bool static_floating_constant_value(MinicParser *parser,
                                            MinicExpressionId expression_id,
                                            double *value) {
     const MinicExpression *expression;
 
-    if (program == NULL || value == NULL) {
+    if (parser == NULL || parser->program == NULL || value == NULL) {
         return false;
     }
-    expression = minic_c0_program_expression(program, expression_id);
+    expression = minic_c0_program_expression(parser->program, expression_id);
     if (expression == NULL) {
         return false;
     }
@@ -961,10 +961,41 @@ static bool static_floating_constant_value(const MinicC0Program *program,
         }
         return false;
     }
+    if (minic_type_is_integer(expression->type)) {
+        MinicConstValue constant;
+
+        if (!minic_const_eval_integer(
+                parser->program, parser->target_info, expression_id, &constant)) {
+            return false;
+        }
+        if (minic_type_is_unsigned_integer(constant.type)) {
+            MinicConstValue widened;
+
+            if (!minic_const_value_convert_integer(parser->program,
+                                                   parser->target_info,
+                                                   &constant,
+                                                   minic_type_unsigned_long_long(),
+                                                   &widened)) {
+                return false;
+            }
+            *value = (double)widened.bits;
+            return true;
+        } else {
+            int64_t signed_value;
+
+            if (!minic_const_value_as_int64(
+                    parser->program, parser->target_info, &constant, &signed_value)) {
+                return false;
+            }
+            *value = (double)signed_value;
+            return true;
+        }
+    }
     if (expression->kind == MINIC_EXPRESSION_UNARY &&
         (expression->value.unary.operator_kind == MINIC_UNARY_PLUS ||
          expression->value.unary.operator_kind == MINIC_UNARY_NEGATE)) {
-        if (!static_floating_constant_value(program, expression->value.unary.operand, value)) {
+        if (!static_floating_constant_value(
+                parser, expression->value.unary.operand, value)) {
             return false;
         }
         if (expression->value.unary.operator_kind == MINIC_UNARY_NEGATE) {
@@ -987,11 +1018,11 @@ static bool parse_static_floating_initializer_bits(MinicParser *parser,
     if (parser == NULL || bits == NULL ||
         (!minic_type_is_float(target_type) && !minic_type_is_double(target_type)) ||
         !minic_parser_parse_expression(parser, &expression_id, 0U) ||
-        !static_floating_constant_value(parser->program, expression_id, &value)) {
+        !static_floating_constant_value(parser, expression_id, &value)) {
         if (parser != NULL && parser->diagnostic != NULL &&
             parser->diagnostic->message[0] == '\0') {
             minic_parser_error(parser,
-                               "static floating initializer requires a floating constant");
+                               "static floating initializer requires an arithmetic constant");
         }
         return false;
     }
