@@ -4422,7 +4422,7 @@ MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
         expression->value.unary.operator_kind == MINIC_UNARY_NEGATE &&
         minic_type_is_float(expression->type)) {
         const MinicExpression *operand_expression;
-        MinicCoreInstruction instruction;
+        MinicCoreInstruction float_instruction;
         MinicCoreLowerStatus status;
         MinicCoreValueId operand_value;
         MinicCoreValueId widened_value;
@@ -4442,30 +4442,30 @@ MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
             return MINIC_CORE_LOWER_ERROR;
         }
 
-        (void)memset(&instruction, 0, sizeof(instruction));
-        instruction.kind = MINIC_CORE_INSTRUCTION_FLOAT_TO_DOUBLE;
-        instruction.span = expression->span;
-        instruction.type = minic_type_double();
-        instruction.result = MINIC_CORE_VALUE_INVALID;
-        instruction.value.operand = operand_value;
+        (void)memset(&float_instruction, 0, sizeof(instruction));
+        float_instruction.kind = MINIC_CORE_INSTRUCTION_FLOAT_TO_DOUBLE;
+        float_instruction.span = expression->span;
+        float_instruction.type = minic_type_double();
+        float_instruction.result = MINIC_CORE_VALUE_INVALID;
+        float_instruction.value.operand = operand_value;
         if (!minic_core_function_append_value_instruction(
-                context->function, context->block_id, &instruction, &widened_value)) {
+                context->function, context->block_id, &float_instruction, &widened_value)) {
             return MINIC_CORE_LOWER_ERROR;
         }
 
-        instruction.kind = MINIC_CORE_INSTRUCTION_DOUBLE_NEGATE;
-        instruction.type = minic_type_double();
-        instruction.value.operand = widened_value;
+        float_instruction.kind = MINIC_CORE_INSTRUCTION_DOUBLE_NEGATE;
+        float_instruction.type = minic_type_double();
+        float_instruction.value.operand = widened_value;
         if (!minic_core_function_append_value_instruction(
-                context->function, context->block_id, &instruction, &negated_value)) {
+                context->function, context->block_id, &float_instruction, &negated_value)) {
             return MINIC_CORE_LOWER_ERROR;
         }
 
-        instruction.kind = MINIC_CORE_INSTRUCTION_DOUBLE_TO_FLOAT;
-        instruction.type = expression->type;
-        instruction.value.operand = negated_value;
+        float_instruction.kind = MINIC_CORE_INSTRUCTION_DOUBLE_TO_FLOAT;
+        float_instruction.type = expression->type;
+        float_instruction.value.operand = negated_value;
         return minic_core_function_append_value_instruction(
-                   context->function, context->block_id, &instruction, value_id)
+                   context->function, context->block_id, &float_instruction, value_id)
                    ? MINIC_CORE_LOWER_OK
                    : MINIC_CORE_LOWER_ERROR;
     }
