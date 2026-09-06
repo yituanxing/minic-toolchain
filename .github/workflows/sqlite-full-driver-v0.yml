@@ -1,6 +1,9 @@
 name: SQLite Full Driver V0
 
 on:
+  push:
+    branches:
+      - toolchain/minic-driver-static-v0
   pull_request:
     branches:
       - toolchain/static-readiness
@@ -200,13 +203,18 @@ jobs:
               --enable-shared \
               --prefix=/usr \
             >"$work/musl-configure.log" 2>&1
-          make -j4 V=1 lib/libc.so lib/Scrt1.o lib/crti.o lib/crtn.o \
+          make -j4 V=1 lib/libc.so lib/libc.a \
+            lib/Scrt1.o lib/crt1.o lib/crti.o lib/crtn.o \
             >"$work/musl-make.log" 2>&1
 
           mkdir -p "$sysroot/usr/lib"
-          cp "$musl_out/lib/Scrt1.o" "$musl_out/lib/crti.o" "$musl_out/lib/crtn.o" \
+          cp "$musl_out/lib/Scrt1.o" "$musl_out/lib/crt1.o" \
+            "$musl_out/lib/crti.o" "$musl_out/lib/crtn.o" \
             "$sysroot/usr/lib/"
           cp "$musl_out/lib/libc.so" "$sysroot/usr/lib/libc.so"
+          cp "$musl_out/lib/libc.a" "$sysroot/usr/lib/libc.a"
+          libgcc="$(riscv64-linux-gnu-gcc -print-libgcc-file-name)"
+          cp "$libgcc" "$sysroot/usr/lib/libgcc.a"
 
           python3 - "$work/musl-make.log" "$work/musl-input-list.txt" <<'PY'
           import shlex, sys
@@ -404,6 +412,46 @@ jobs:
           grep -F '3.53.4|42' "$work/sqlite-shell-smoke.stdout" >/dev/null
           echo "SQLITE_SHELL_RUNTIME_V0=PASS release=3.53.4 query=42"
 
+      - name: Link and run official sqlite3 CLI statically through full Mini driver
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/sqlite-full-driver-v0"
+          sysroot="$work/musl-sysroot"
+          driver="$work/bin/minic"
+          static_cli="$work/sqlite3-minic-static"
+
+          "$driver" --sysroot "$sysroot/usr" -static \
+            -o "$static_cli" \
+            "$work/raw/sqlite3.o" "$work/raw/shell.o" \
+            >"$work/sqlite-shell-static-link.stdout" \
+            2>"$work/sqlite-shell-static-link.stderr"
+          test -x "$static_cli"
+
+          riscv64-linux-gnu-readelf -h "$static_cli" \
+            >"$work/sqlite3-minic-static.header"
+          riscv64-linux-gnu-readelf -lW "$static_cli" \
+            >"$work/sqlite3-minic-static.programs"
+          if riscv64-linux-gnu-readelf -lW "$static_cli" | \
+             grep -q 'Requesting program interpreter'; then
+            echo "SQLITE_STATIC_DRIVER=FAIL unexpected-interpreter" >&2
+            exit 1
+          fi
+          if riscv64-linux-gnu-readelf -d "$static_cli" 2>/dev/null | \
+             grep -q '(NEEDED)'; then
+            echo "SQLITE_STATIC_DRIVER=FAIL unexpected-needed" >&2
+            exit 1
+          fi
+
+          timeout 60s qemu-riscv64 "$static_cli" \
+            -batch :memory: "select sqlite_version(), 6*7;" \
+            >"$work/sqlite-shell-static-smoke.stdout" \
+            2>"$work/sqlite-shell-static-smoke.stderr"
+          cat "$work/sqlite-shell-static-smoke.stdout"
+          cat "$work/sqlite-shell-static-smoke.stderr"
+          grep -F '3.53.4|42' "$work/sqlite-shell-static-smoke.stdout" >/dev/null
+          echo "SQLITE_STATIC_DRIVER_V0=PASS release=3.53.4 query=42 producer=MiniPP,MiniC,MiniAS,MiniLD"
+
       - name: Run official sqlite3 CLI file acceptance
         shell: bash
         run: |
@@ -495,6 +543,12 @@ jobs:
             build/sqlite-full-driver-v0/sqlite3-minic.programs
             build/sqlite-full-driver-v0/sqlite-shell-smoke.stdout
             build/sqlite-full-driver-v0/sqlite-shell-smoke.stderr
+            build/sqlite-full-driver-v0/sqlite-shell-static-link.stdout
+            build/sqlite-full-driver-v0/sqlite-shell-static-link.stderr
+            build/sqlite-full-driver-v0/sqlite3-minic-static.header
+            build/sqlite-full-driver-v0/sqlite3-minic-static.programs
+            build/sqlite-full-driver-v0/sqlite-shell-static-smoke.stdout
+            build/sqlite-full-driver-v0/sqlite-shell-static-smoke.stderr
             build/sqlite-full-driver-v0/sqlite3-minic
             build/sqlite-full-driver-v0/sqlite-shell.db
             build/sqlite-full-driver-v0/sqlite-shell-create.stdout
