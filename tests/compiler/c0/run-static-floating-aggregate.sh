@@ -17,6 +17,9 @@ grep -F '.word 1473454116' "$work/output.s" >/dev/null
 grep -F '.word 1065353216' "$work/output.s" >/dev/null
 grep -F '.word 1424045017' "$work/output.s" >/dev/null
 grep -F '.word 1114636288' "$work/output.s" >/dev/null
+grep -F 'fcvt.d.s' "$work/output.s" >/dev/null
+grep -F 'fsgnjn.d' "$work/output.s" >/dev/null
+grep -F 'fcvt.s.d' "$work/output.s" >/dev/null
 
 if command -v riscv64-linux-gnu-gcc >/dev/null 2>&1; then
     riscv64-linux-gnu-gcc -c "$work/output.s" -o "$work/output.o"
