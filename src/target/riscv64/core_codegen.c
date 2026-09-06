@@ -3687,6 +3687,16 @@ static bool emit_instruction(FILE *file,
         }
         return store_core_value(file, frame, instruction->result, "t0");
     case MINIC_CORE_INSTRUCTION_FLOATING_CONSTANT:
+        if (minic_type_is_long_double(instruction->type)) {
+            if (fprintf(file,
+                        "  li t0, 0x%016" PRIx64 "\n"
+                        "  li t1, 0x%016" PRIx64 "\n",
+                        instruction->value.floating128_bits.low,
+                        instruction->value.floating128_bits.high) < 0) {
+                return false;
+            }
+            return store_core_int128_value(file, frame, instruction->result, "t0", "t1");
+        }
         if (minic_type_is_double(instruction->type)) {
             if (fprintf(file,
                         "  li t0, 0x%016" PRIx64 "\n",
@@ -4507,7 +4517,8 @@ static bool emit_instruction(FILE *file,
         }
         return store_core_value(file, frame, instruction->result, "t0");
     case MINIC_CORE_INSTRUCTION_LOAD:
-        if (minic_type_is_int128_integer(instruction->type)) {
+        if (minic_type_is_int128_integer(instruction->type) ||
+            minic_type_is_long_double(instruction->type)) {
             if (!load_core_value(file, frame, instruction->value.load.address, "t0") ||
                 fprintf(file, "  ld t1, 0(t0)\n  ld t2, 8(t0)\n") < 0) {
                 return false;
@@ -4529,7 +4540,8 @@ static bool emit_instruction(FILE *file,
             return false;
         }
         stored_type = function->values[stored_value].type;
-        if (minic_type_is_int128_integer(stored_type)) {
+        if (minic_type_is_int128_integer(stored_type) ||
+            minic_type_is_long_double(stored_type)) {
             return load_core_value(file, frame, instruction->value.store.address, "t0") &&
                    load_core_int128_value(file, frame, stored_value, "t1", "t2") &&
                    fprintf(file, "  sd t1, 0(t0)\n  sd t2, 8(t0)\n") >= 0;
