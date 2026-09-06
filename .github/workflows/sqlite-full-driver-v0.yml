@@ -74,6 +74,7 @@ jobs:
 
           test -f "$work/sqlite-source/sqlite-amalgamation-3530400/sqlite3.c"
           test -f "$work/sqlite-source/sqlite-amalgamation-3530400/sqlite3.h"
+          test -f "$work/sqlite-source/sqlite-amalgamation-3530400/shell.c"
           test -f "$sysroot/usr/include/stdlib.h"
           echo "SQLITE_FAST_PREP=PASS sqlite=3.53.4 musl_headers=1"
 
@@ -329,6 +330,79 @@ jobs:
           test -s "$db"
           echo "SQLITE_RUNTIME_PERSISTENCE_V0=PASS db_bytes=$(stat -c %s "$db")"
 
+      - name: Compile official SQLite shell through Mini toolchain
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/sqlite-full-driver-v0"
+          src="$work/sqlite-source/sqlite-amalgamation-3530400"
+          sysroot="$work/musl-sysroot"
+          driver="$work/bin/minic"
+          cpp="$work/bin/minic-cpp"
+
+          set +e
+          "$driver" --sysroot "$sysroot/usr" -I"$src" \
+            -c "$src/shell.c" -o "$work/raw/shell.o" \
+            >"$work/raw/shell.stdout" 2>"$work/raw/shell.stderr"
+          rc=$?
+          set -e
+          echo "SQLITE_RAW_SHELL_RC=$rc"
+          if test "$rc" -ne 0; then
+            cat "$work/raw/shell.stderr"
+            "$cpp" -E -P -undef -nostdinc \
+              -D__STDC__=1 -D__STDC_VERSION__=201112L -D__STDC_HOSTED__=1 \
+              -D__linux__=1 -D__linux=1 -Dlinux=1 \
+              -D__unix__=1 -D__unix=1 -D__riscv=1 -D__riscv_xlen=64 \
+              -D__LP64__=1 -D_LP64=1 -D__riscv_float_abi_double=1 \
+              -D__ORDER_LITTLE_ENDIAN__=1234 -D__ORDER_BIG_ENDIAN__=4321 \
+              -D__BYTE_ORDER__=__ORDER_LITTLE_ENDIAN__ -D__CHAR_BIT__=8 \
+              -D__SIZEOF_SHORT__=2 -D__SIZEOF_INT__=4 -D__SIZEOF_LONG__=8 \
+              -D__SIZEOF_LONG_LONG__=8 -D__SIZEOF_POINTER__=8 -D__SIZEOF_SIZE_T__=8 \
+              -isystem "$sysroot/usr/include" -I"$src" \
+              "$src/shell.c" -o "$work/raw/shell.i"
+            fail_line="$(sed -n 's/.*:\([0-9][0-9]*\):[0-9][0-9]*: error:.*/\1/p' "$work/raw/shell.stderr" | head -n1)"
+            if test -n "$fail_line"; then
+              start=$((fail_line > 24 ? fail_line - 24 : 1))
+              end=$((fail_line + 24))
+              echo "SQLITE_SHELL_FRONTIER_CONTEXT_BEGIN line=$fail_line"
+              nl -ba "$work/raw/shell.i" | sed -n "${start},${end}p"
+              echo "SQLITE_SHELL_FRONTIER_CONTEXT_END line=$fail_line"
+            fi
+            exit "$rc"
+          fi
+          test -s "$work/raw/shell.o"
+          echo "SQLITE_RAW_SHELL_V0=PASS source=shell.c pipeline=cpp,cc,as"
+
+      - name: Link and run official sqlite3 CLI through MiniLD
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/sqlite-full-driver-v0"
+          sysroot="$work/musl-sysroot"
+          driver="$work/bin/minic"
+
+          "$driver" --sysroot "$sysroot/usr" \
+            -o "$work/sqlite3-minic" \
+            "$work/raw/sqlite3.o" "$work/raw/shell.o" \
+            >"$work/sqlite-shell-link.stdout" \
+            2>"$work/sqlite-shell-link.stderr"
+          test -x "$work/sqlite3-minic"
+
+          riscv64-linux-gnu-readelf -h "$work/sqlite3-minic" >"$work/sqlite3-minic.header"
+          riscv64-linux-gnu-readelf -lW "$work/sqlite3-minic" >"$work/sqlite3-minic.programs"
+          grep -q 'DYN (Position-Independent Executable file)' "$work/sqlite3-minic.header"
+          grep -q 'Requesting program interpreter: /lib/ld-musl-riscv64.so.1' \
+            "$work/sqlite3-minic.programs"
+
+          timeout 60s qemu-riscv64 -L "$sysroot" "$work/sqlite3-minic" \
+            -batch :memory: "select sqlite_version(), 6*7;" \
+            >"$work/sqlite-shell-smoke.stdout" \
+            2>"$work/sqlite-shell-smoke.stderr"
+          cat "$work/sqlite-shell-smoke.stdout"
+          cat "$work/sqlite-shell-smoke.stderr"
+          grep -F '3.53.4|42' "$work/sqlite-shell-smoke.stdout" >/dev/null
+          echo "SQLITE_SHELL_RUNTIME_V0=PASS release=3.53.4 query=42"
+
       - name: Preserve SQLite frontier evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -338,6 +412,10 @@ jobs:
             build/sqlite-full-driver-v0/raw/sqlite3.stderr
             build/sqlite-full-driver-v0/raw/sqlite3.stdout
             build/sqlite-full-driver-v0/raw/sqlite3.i
+            build/sqlite-full-driver-v0/raw/shell.stderr
+            build/sqlite-full-driver-v0/raw/shell.stdout
+            build/sqlite-full-driver-v0/raw/shell.i
+            build/sqlite-full-driver-v0/raw/shell.o
             build/sqlite-full-driver-v0/musl-headers.log
             build/sqlite-full-driver-v0/musl-configure.log
             build/sqlite-full-driver-v0/musl-make.log
@@ -354,3 +432,10 @@ jobs:
             build/sqlite-full-driver-v0/sqlite-runtime.stderr
             build/sqlite-full-driver-v0/sqlite-runtime
             build/sqlite-full-driver-v0/sqlite-runtime.db
+            build/sqlite-full-driver-v0/sqlite-shell-link.stdout
+            build/sqlite-full-driver-v0/sqlite-shell-link.stderr
+            build/sqlite-full-driver-v0/sqlite3-minic.header
+            build/sqlite-full-driver-v0/sqlite3-minic.programs
+            build/sqlite-full-driver-v0/sqlite-shell-smoke.stdout
+            build/sqlite-full-driver-v0/sqlite-shell-smoke.stderr
+            build/sqlite-full-driver-v0/sqlite3-minic
