@@ -11,6 +11,11 @@ static const struct {
     {3, "day", 5373485.0, 86400.0},
 };
 
+float static_floating_aggregate_limit(int index)
+{
+    return -aXformType[index].rLimit;
+}
+
 int static_floating_aggregate_probe(void)
 {
     return aXformType[0].nName == 6 ? 0 : 1;
