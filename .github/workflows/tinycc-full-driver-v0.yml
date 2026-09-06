@@ -354,6 +354,104 @@ jobs:
           test "$rc" -eq 0
           echo "TINYCC_SELF_HELLO_V0=PASS compiler=Mini-built-TinyCC object=RISC-V-ET_REL linker=MiniLD qemu_rc=0"
 
+      - name: Build TinyCC with its own Makefile through Mini wrapper
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/tinycc-full-driver-v0"
+          tiny_sha=0fb54300b56512754221d80adda85ddb9815bceb
+          src="$work/tinycc-$tiny_sha"
+          sysroot="$work/musl-sysroot"
+          wrapper="$work/minic-tinycc-wrapper.sh"
+          calls="$work/tinycc-own-make.calls"
+
+          cat >"$wrapper" <<'SH'
+          #!/usr/bin/env bash
+          set -Eeuo pipefail
+          : "${MINIC_DRIVER:?}"
+          : "${MINIC_SYSROOT:?}"
+          : "${MINIC_WRAPPER_LOG:?}"
+
+          printf 'RAW' >>"$MINIC_WRAPPER_LOG"
+          printf ' %q' "$@" >>"$MINIC_WRAPPER_LOG"
+          printf '\n' >>"$MINIC_WRAPPER_LOG"
+
+          args=()
+          compile=0
+          for arg in "$@"; do
+            case "$arg" in
+              -c)
+                compile=1
+                args+=("$arg")
+                ;;
+              -Wall|-Wextra|-Werror|-Wno-*|-W*)
+                ;;
+              -O|-O0|-O1|-O2|-O3|-Os|-Og|-Ofast)
+                ;;
+              -g|-g0|-g1|-g2|-g3)
+                ;;
+              -lm|-ldl|-lpthread)
+                # musl provides these interfaces from libc itself.
+                ;;
+              *)
+                args+=("$arg")
+                ;;
+            esac
+          done
+
+          printf 'MINI' >>"$MINIC_WRAPPER_LOG"
+          printf ' %q' "${args[@]}" >>"$MINIC_WRAPPER_LOG"
+          printf '\n' >>"$MINIC_WRAPPER_LOG"
+
+          if test "$compile" -eq 1; then
+            exec "$MINIC_DRIVER" --sysroot "$MINIC_SYSROOT" "${args[@]}"
+          fi
+          exec "$MINIC_DRIVER" --sysroot "$MINIC_SYSROOT" -static "${args[@]}"
+          SH
+          chmod +x "$wrapper"
+          : >"$calls"
+
+          export MINIC_DRIVER="$work/bin/minic"
+          export MINIC_SYSROOT="$sysroot/usr"
+          export MINIC_WRAPPER_LOG="$calls"
+
+          cd "$src"
+          rm -f tcc tcc.o libtcc.a \
+            libtcc.o tccpp.o tccgen.o tccdbg.o tccelf.o \
+            tccasm.o tccrun.o riscv64-gen.o riscv64-link.o riscv64-asm.o
+
+          make -j4 ONE_SOURCE=no \
+            CC="$wrapper" \
+            AR="$work/bin/minic-ar" \
+            CFLAGS= LDFLAGS= \
+            tcc libtcc.a \
+            >"$work/tinycc-own-make.stdout" \
+            2>"$work/tinycc-own-make.stderr"
+
+          test -x tcc
+          test -s libtcc.a
+          "$work/bin/minic-ar" t libtcc.a >"$work/tinycc-own-make.members"
+          test "$(wc -l <"$work/tinycc-own-make.members")" -eq 10
+
+          compile_calls="$(grep -c '^RAW .* -c ' "$calls" || true)"
+          test "$compile_calls" -eq 11
+          grep -F -- '-DONE_SOURCE=0' "$calls" >/dev/null
+
+          set +e
+          timeout 60s qemu-riscv64 ./tcc -v \
+            >"$work/tinycc-own-make-version.stdout" \
+            2>"$work/tinycc-own-make-version.stderr"
+          rc=$?
+          set -e
+          cat "$work/tinycc-own-make-version.stdout"
+          cat "$work/tinycc-own-make-version.stderr"
+          test "$rc" -eq 0
+          cat "$work/tinycc-own-make-version.stdout" \
+              "$work/tinycc-own-make-version.stderr" | \
+            grep -F 'tcc version 0.9.28rc' >/dev/null
+
+          echo "TINYCC_OWN_MAKE_V0=PASS one_source=no compile_calls=11 archive_members=10 linker=MiniLD runtime=qemu"
+
       - name: Preserve TinyCC frontier evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -390,5 +488,12 @@ jobs:
             build/tinycc-full-driver-v0/tinycc-self-run.stdout
             build/tinycc-full-driver-v0/tinycc-self-run.stderr
             build/tinycc-full-driver-v0/tinycc-self-hello
+            build/tinycc-full-driver-v0/minic-tinycc-wrapper.sh
+            build/tinycc-full-driver-v0/tinycc-own-make.calls
+            build/tinycc-full-driver-v0/tinycc-own-make.stdout
+            build/tinycc-full-driver-v0/tinycc-own-make.stderr
+            build/tinycc-full-driver-v0/tinycc-own-make.members
+            build/tinycc-full-driver-v0/tinycc-own-make-version.stdout
+            build/tinycc-full-driver-v0/tinycc-own-make-version.stderr
           if-no-files-found: ignore
           retention-days: 7
