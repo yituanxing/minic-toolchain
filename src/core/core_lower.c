@@ -4402,6 +4402,74 @@ MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
         return lower_scalar_update(context, expression, value_id);
     }
     if (expression->kind == MINIC_EXPRESSION_UNARY &&
+        expression->value.unary.operator_kind == MINIC_UNARY_PLUS &&
+        (minic_type_is_float(expression->type) || minic_type_is_double(expression->type))) {
+        MinicCoreLowerStatus status;
+        MinicCoreValueId operand_value;
+
+        status = lower_expression(context, expression->value.unary.operand, &operand_value);
+        if (status != MINIC_CORE_LOWER_OK) {
+            return status;
+        }
+        if (operand_value >= context->function->value_count ||
+            !minic_type_equal(context->function->values[operand_value].type, expression->type)) {
+            return MINIC_CORE_LOWER_UNSUPPORTED;
+        }
+        *value_id = operand_value;
+        return MINIC_CORE_LOWER_OK;
+    }
+    if (expression->kind == MINIC_EXPRESSION_UNARY &&
+        expression->value.unary.operator_kind == MINIC_UNARY_NEGATE &&
+        minic_type_is_float(expression->type)) {
+        const MinicExpression *operand_expression;
+        MinicCoreInstruction instruction;
+        MinicCoreLowerStatus status;
+        MinicCoreValueId operand_value;
+        MinicCoreValueId widened_value;
+        MinicCoreValueId negated_value;
+
+        operand_expression = minic_c0_program_expression(
+            context->body->program, expression->value.unary.operand);
+        if (operand_expression == NULL || !minic_type_is_float(operand_expression->type)) {
+            return MINIC_CORE_LOWER_UNSUPPORTED;
+        }
+        status = lower_expression(context, expression->value.unary.operand, &operand_value);
+        if (status != MINIC_CORE_LOWER_OK) {
+            return status;
+        }
+        if (operand_value >= context->function->value_count ||
+            !minic_type_is_float(context->function->values[operand_value].type)) {
+            return MINIC_CORE_LOWER_ERROR;
+        }
+
+        (void)memset(&instruction, 0, sizeof(instruction));
+        instruction.kind = MINIC_CORE_INSTRUCTION_FLOAT_TO_DOUBLE;
+        instruction.span = expression->span;
+        instruction.type = minic_type_double();
+        instruction.result = MINIC_CORE_VALUE_INVALID;
+        instruction.value.operand = operand_value;
+        if (!minic_core_function_append_value_instruction(
+                context->function, context->block_id, &instruction, &widened_value)) {
+            return MINIC_CORE_LOWER_ERROR;
+        }
+
+        instruction.kind = MINIC_CORE_INSTRUCTION_DOUBLE_NEGATE;
+        instruction.type = minic_type_double();
+        instruction.value.operand = widened_value;
+        if (!minic_core_function_append_value_instruction(
+                context->function, context->block_id, &instruction, &negated_value)) {
+            return MINIC_CORE_LOWER_ERROR;
+        }
+
+        instruction.kind = MINIC_CORE_INSTRUCTION_DOUBLE_TO_FLOAT;
+        instruction.type = expression->type;
+        instruction.value.operand = negated_value;
+        return minic_core_function_append_value_instruction(
+                   context->function, context->block_id, &instruction, value_id)
+                   ? MINIC_CORE_LOWER_OK
+                   : MINIC_CORE_LOWER_ERROR;
+    }
+    if (expression->kind == MINIC_EXPRESSION_UNARY &&
         expression->value.unary.operator_kind == MINIC_UNARY_NEGATE &&
         minic_type_is_double(expression->type)) {
         const MinicExpression *operand_expression;
