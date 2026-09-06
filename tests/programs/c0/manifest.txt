@@ -77,3 +77,4 @@ static_zero_size_local_array
 post_type_declaration_specifiers
 block_scope_function_declaration
 null_member_address_offset
+switch_unreachable_after_break
