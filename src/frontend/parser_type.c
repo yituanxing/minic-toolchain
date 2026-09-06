@@ -627,11 +627,6 @@ bool minic_parser_parse_type_name_preserving_incomplete(MinicParser *parser, Min
                 parser, false, true, &declarator)) {
             return false;
         }
-        if (declarator.is_variadic) {
-            minic_parser_error(parser,
-                               "variadic function-pointer type names are not supported yet");
-            return false;
-        }
         if (!minic_parser_build_function_declarator_type(
                 parser, declarator_base, &declarator, type)) {
             minic_parser_error(parser, "cannot build function-pointer type name");
