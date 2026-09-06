@@ -219,7 +219,7 @@ jobs:
             done
 
             set +e
-            "$BUSYBOX_MINIC" --sysroot "$BUSYBOX_MINI_SYSROOT" \
+            timeout 120s "$BUSYBOX_MINIC" --sysroot "$BUSYBOX_MINI_SYSROOT" \
               -I"$BUSYBOX_UAPI_COMPAT" "${filtered[@]}"
             rc=$?
             set -e
