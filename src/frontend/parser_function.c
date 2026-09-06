@@ -2046,6 +2046,79 @@ static bool parse_declaration_prefix(MinicParser *parser,
     return true;
 }
 
+static bool parse_post_type_declaration_specifiers(
+    MinicParser *parser, MinicParsedDeclarationPrefix *prefix) {
+    bool saw_storage_class;
+
+    if (parser == NULL || prefix == NULL) {
+        return false;
+    }
+    saw_storage_class = prefix->is_extern || prefix->is_static || prefix->is_register;
+
+    for (;;) {
+        if (function_identifier_is(parser, "register")) {
+            if (saw_storage_class) {
+                minic_parser_error(parser, "conflicting or duplicate declaration storage class");
+                return false;
+            }
+            prefix->is_register = true;
+            saw_storage_class = true;
+            if (!minic_parser_advance(parser)) {
+                return false;
+            }
+            continue;
+        }
+        if (parser->current.kind == MINIC_TOKEN_KW_STATIC) {
+            if (saw_storage_class) {
+                minic_parser_error(parser, "conflicting or duplicate declaration storage class");
+                return false;
+            }
+            prefix->is_static = true;
+            saw_storage_class = true;
+            if (!minic_parser_advance(parser)) {
+                return false;
+            }
+            continue;
+        }
+        if (parser->current.kind == MINIC_TOKEN_KW_EXTERN) {
+            if (saw_storage_class) {
+                minic_parser_error(parser, "conflicting or duplicate declaration storage class");
+                return false;
+            }
+            prefix->is_extern = true;
+            saw_storage_class = true;
+            if (!minic_parser_advance(parser)) {
+                return false;
+            }
+            continue;
+        }
+        if (parser->current.kind == MINIC_TOKEN_KW_INLINE) {
+            if (prefix->is_inline) {
+                minic_parser_error(parser, "duplicate inline declaration specifier");
+                return false;
+            }
+            prefix->is_inline = true;
+            if (!minic_parser_advance(parser)) {
+                return false;
+            }
+            continue;
+        }
+        if (function_identifier_is(parser, "_Noreturn")) {
+            if (prefix->is_noreturn) {
+                minic_parser_error(parser, "duplicate _Noreturn declaration specifier");
+                return false;
+            }
+            prefix->is_noreturn = true;
+            if (!minic_parser_advance(parser)) {
+                return false;
+            }
+            continue;
+        }
+        break;
+    }
+    return true;
+}
+
 static bool record_function_declaration_entity(MinicParser *parser,
                                                MinicSourceSpan name_span,
                                                MinicType return_type,
@@ -2258,6 +2331,12 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
     if (!parse_declaration_prefix(parser, is_internal, &declaration_prefix)) {
         return false;
     }
+    deferred_attributes = declaration_prefix.attributes;
+    if (!minic_parser_parse_type_specifiers(parser, &base_type) ||
+        !parse_post_type_declaration_specifiers(parser, &declaration_prefix) ||
+        !minic_parser_collect_gnu_attribute_lists(parser, &deferred_attributes)) {
+        return false;
+    }
     is_extern_declaration = declaration_prefix.is_extern;
     is_static_declaration = declaration_prefix.is_static;
     is_register_declaration = declaration_prefix.is_register;
@@ -2268,11 +2347,6 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
         parser->default_visibility != MINIC_SYMBOL_VISIBILITY_DEFAULT) {
         visibility = parser->default_visibility;
         has_visibility = true;
-    }
-    deferred_attributes = declaration_prefix.attributes;
-    if (!minic_parser_parse_type_specifiers(parser, &base_type) ||
-        !minic_parser_collect_gnu_attribute_lists(parser, &deferred_attributes)) {
-        return false;
     }
     return_type = base_type;
     for (;;) {
