@@ -52,7 +52,8 @@ static bool apply_assignment_conversion(MinicParser *parser,
     if (minic_c0_assignment_compatible(parser->program, target_type, source_id)) {
         return true;
     }
-    if (!minic_type_is_double(target_type) || !minic_type_is_integer(source->type)) {
+    if (!minic_type_is_double(target_type) ||
+        (!minic_type_is_integer(source->type) && !minic_type_is_float(source->type))) {
         return true;
     }
 
@@ -1160,7 +1161,11 @@ static bool add_zero_initialized_record_lvalue(MinicParser *parser,
             minic_parser_error(parser, "invalid record field in aggregate initialization");
             return false;
         }
-        if (field->is_flexible_array) {
+        /* Unnamed bit-fields are layout-only padding/alignment slots, not
+           members of the aggregate initializer sequence. In particular musl's
+           struct timespec uses target-dependent zero-width unnamed bit-fields;
+           emitting an assignment for them creates a non-addressable lvalue. */
+        if (field->is_flexible_array || (field->is_bit_field && field->name_length == 0U)) {
             continue;
         }
         (void)memset(&member, 0, sizeof(member));
@@ -5496,6 +5501,13 @@ bool minic_parser_parse_statement(MinicParser *parser, bool allow_declaration) {
             return false;
         }
         return minic_parser_parse_static_assert_declaration(parser);
+    }
+    if (parser->current.kind == MINIC_TOKEN_KW_TYPEDEF) {
+        if (!allow_declaration) {
+            minic_parser_error(parser, "typedef requires a declaration scope");
+            return false;
+        }
+        return minic_parser_parse_typedef(parser);
     }
     if (parser->current.kind == MINIC_TOKEN_KW_IF) {
         return parse_if(parser);

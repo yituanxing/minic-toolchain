@@ -49,7 +49,8 @@ static bool minic_riscv64_emit_typed_bits(FILE *file,
     uint64_t mask;
 
     if (file == NULL || program == NULL ||
-        (!minic_type_is_integer(type) && !minic_type_is_pointer(type)) ||
+        (!minic_type_is_integer(type) && !minic_type_is_pointer(type) &&
+         !minic_type_is_float(type) && !minic_type_is_double(type)) ||
         !minic_riscv64_type_layout(program, type, &width, &alignment) ||
         (width != 1U && width != 2U && width != 4U && width != 8U)) {
         return false;
@@ -67,7 +68,8 @@ static bool minic_riscv64_emit_typed_bits(FILE *file,
     }
     /* Preserve the historical byte spelling as an unsigned payload. GNU as
      * consumes the same low 8 bits, and plain char on this target is unsigned. */
-    if (width == 1U || (minic_type_is_integer(type) && minic_type_is_unsigned_integer(type))) {
+    if (width == 1U || minic_type_is_float(type) || minic_type_is_double(type) ||
+        (minic_type_is_integer(type) && minic_type_is_unsigned_integer(type))) {
         return fprintf(file, "  %s %" PRIu64 "\n", directive, bits) >= 0;
     }
     {
@@ -106,7 +108,8 @@ static bool minic_riscv64_global_scalar_type(const MinicC0Program *program,
         }
         type = array_type->element_type;
     }
-    if ((!minic_type_is_integer(type) && !minic_type_is_pointer(type)) ||
+    if ((!minic_type_is_integer(type) && !minic_type_is_pointer(type) &&
+         !minic_type_is_float(type) && !minic_type_is_double(type)) ||
         !minic_riscv64_type_layout(program, type, scalar_width, &alignment) ||
         (*scalar_width != 1U && *scalar_width != 2U && *scalar_width != 4U &&
          *scalar_width != 8U)) {
@@ -436,7 +439,8 @@ static bool minic_riscv64_emit_direct_record_values(FILE *file,
                 return false;
             }
             relocation_index += 1U;
-        } else if (minic_type_is_integer(field->type) || minic_type_is_pointer(field->type)) {
+        } else if (minic_type_is_integer(field->type) || minic_type_is_pointer(field->type) ||
+                   minic_type_is_float(field->type) || minic_type_is_double(field->type)) {
             if (!minic_riscv64_emit_typed_bits(file, program, field->type, value)) {
                 return false;
             }
@@ -468,7 +472,8 @@ static bool minic_riscv64_emit_constant_value(FILE *file,
         return false;
     }
     (void)type_alignment;
-    if (minic_type_is_integer(type) || minic_type_is_pointer(type)) {
+    if (minic_type_is_integer(type) || minic_type_is_pointer(type) ||
+        minic_type_is_float(type) || minic_type_is_double(type)) {
         const MinicGlobalRelocation *relocation;
         uint64_t bits;
         size_t slot_index;
