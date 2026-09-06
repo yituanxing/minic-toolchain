@@ -102,6 +102,11 @@ static bool parse_fp_rounding_mode(const char *text, uint32_t *mode) {
     return false;
 }
 
+static bool is_fp_binary_single(const char *op) {
+    return strcmp(op, "fadd.s") == 0 || strcmp(op, "fsub.s") == 0 ||
+           strcmp(op, "fmul.s") == 0 || strcmp(op, "fdiv.s") == 0;
+}
+
 static bool is_fp_binary_double(const char *op) {
     return strcmp(op, "fadd.d") == 0 || strcmp(op, "fsub.d") == 0 ||
            strcmp(op, "fmul.d") == 0 || strcmp(op, "fdiv.d") == 0;
@@ -1548,6 +1553,33 @@ bool minias_riscv_encode(MiniAs *as, const MiniAsStmt *stmt) {
                           stmt->section,
                           enc_r(0x57U, rd, 7U, rs1, rs2, 0x40U));
     }
+    if (is_fp_binary_single(stmt->op)) {
+        uint32_t base;
+        uint32_t rm = 7U;
+        int fd;
+        int fs1;
+        int fs2;
+
+        if ((count != 3U && count != 4U) ||
+            (fd = float_reg_number(operands[0])) < 0 ||
+            (fs1 = float_reg_number(operands[1])) < 0 ||
+            (fs2 = float_reg_number(operands[2])) < 0 ||
+            (count == 4U && !parse_fp_rounding_mode(operands[3], &rm))) {
+            minias_set_error(as, "bad-operands:%s:%s:line=%zu",
+                             stmt->op, stmt->args, stmt->line);
+            return false;
+        }
+        base = strcmp(stmt->op, "fadd.s") == 0 ? 0x00000053U
+               : strcmp(stmt->op, "fsub.s") == 0 ? 0x08000053U
+               : strcmp(stmt->op, "fmul.s") == 0 ? 0x10000053U
+                                                  : 0x18000053U;
+        return append_u32(as,
+                          stmt->section,
+                          base | ((uint32_t)fd << 7U) | (rm << 12U) |
+                              ((uint32_t)fs1 << 15U) |
+                              ((uint32_t)fs2 << 20U));
+    }
+
     if (is_fp_binary_double(stmt->op)) {
         uint32_t base;
         uint32_t rm = 7U;
