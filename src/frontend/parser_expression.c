@@ -3484,7 +3484,10 @@ static bool parse_unary(MinicParser *parser, MinicExpressionId *expression_id, b
         }
         expression.value.unary.operator_kind =
             operator_token.kind == MINIC_TOKEN_PLUS ? MINIC_UNARY_PLUS : MINIC_UNARY_NEGATE;
-        expression.type = operand_expression->type;
+        if (!minic_type_unqualified(operand_expression->type, &expression.type)) {
+            minic_parser_error(parser, "cannot form floating unary result type");
+            return false;
+        }
         return minic_parser_add_expression(parser, &expression, expression_id);
     }
     if (!minic_type_is_integer(operand_expression->type)) {
