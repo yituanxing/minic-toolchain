@@ -372,9 +372,12 @@ jobs:
           : "${MINIC_SYSROOT:?}"
           : "${MINIC_WRAPPER_LOG:?}"
 
-          printf 'RAW' >>"$MINIC_WRAPPER_LOG"
-          printf ' %q' "$@" >>"$MINIC_WRAPPER_LOG"
-          printf '\n' >>"$MINIC_WRAPPER_LOG"
+          raw_line=RAW
+          for arg in "$@"; do
+            printf -v quoted ' %q' "$arg"
+            raw_line+="$quoted"
+          done
+          printf '%s\n' "$raw_line" >>"$MINIC_WRAPPER_LOG"
 
           args=()
           compile=0
@@ -399,9 +402,12 @@ jobs:
             esac
           done
 
-          printf 'MINI' >>"$MINIC_WRAPPER_LOG"
-          printf ' %q' "${args[@]}" >>"$MINIC_WRAPPER_LOG"
-          printf '\n' >>"$MINIC_WRAPPER_LOG"
+          mini_line=MINI
+          for arg in "${args[@]}"; do
+            printf -v quoted ' %q' "$arg"
+            mini_line+="$quoted"
+          done
+          printf '%s\n' "$mini_line" >>"$MINIC_WRAPPER_LOG"
 
           if test "$compile" -eq 1; then
             exec "$MINIC_DRIVER" --sysroot "$MINIC_SYSROOT" "${args[@]}"
