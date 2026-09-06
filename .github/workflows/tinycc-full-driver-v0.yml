@@ -304,6 +304,56 @@ jobs:
             grep -F 'tcc version 0.9.28rc' >/dev/null
           echo "TINYCC_STATIC_RUNTIME_V0=PASS version=0.9.28rc producer=MiniPP,MiniC,MiniAS,MiniAR,MiniLD"
 
+      - name: Compile hello with Mini-built TinyCC and link with MiniLD
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/tinycc-full-driver-v0"
+          sysroot="$work/musl-sysroot"
+          tcc="$work/tcc-minic-static"
+          driver="$work/bin/minic"
+
+          cat >"$work/tinycc-self-hello.c" <<'C'
+          static int product(int left, int right)
+          {
+              return left * right;
+          }
+
+          int main(void)
+          {
+              return product(6, 7) == 42 ? 0 : 1;
+          }
+          C
+
+          timeout 60s qemu-riscv64 "$tcc" \
+            -c "$work/tinycc-self-hello.c" \
+            -o "$work/tinycc-self-hello.o" \
+            >"$work/tinycc-self-compile.stdout" \
+            2>"$work/tinycc-self-compile.stderr"
+
+          test -s "$work/tinycc-self-hello.o"
+          riscv64-linux-gnu-readelf -h "$work/tinycc-self-hello.o" \
+            >"$work/tinycc-self-hello.header"
+          grep -q 'REL (Relocatable file)' "$work/tinycc-self-hello.header"
+          grep -q 'Machine:.*RISC-V' "$work/tinycc-self-hello.header"
+
+          "$driver" --sysroot "$sysroot/usr" -static \
+            -o "$work/tinycc-self-hello" "$work/tinycc-self-hello.o" \
+            >"$work/tinycc-self-link.stdout" \
+            2>"$work/tinycc-self-link.stderr"
+          test -x "$work/tinycc-self-hello"
+
+          set +e
+          timeout 60s qemu-riscv64 "$work/tinycc-self-hello" \
+            >"$work/tinycc-self-run.stdout" \
+            2>"$work/tinycc-self-run.stderr"
+          rc=$?
+          set -e
+          cat "$work/tinycc-self-run.stdout"
+          cat "$work/tinycc-self-run.stderr"
+          test "$rc" -eq 0
+          echo "TINYCC_SELF_HELLO_V0=PASS compiler=Mini-built-TinyCC object=RISC-V-ET_REL linker=MiniLD qemu_rc=0"
+
       - name: Preserve TinyCC frontier evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -330,5 +380,15 @@ jobs:
             build/tinycc-full-driver-v0/tcc-version.stdout
             build/tinycc-full-driver-v0/tcc-version.stderr
             build/tinycc-full-driver-v0/tcc-minic-static
+            build/tinycc-full-driver-v0/tinycc-self-hello.c
+            build/tinycc-full-driver-v0/tinycc-self-compile.stdout
+            build/tinycc-full-driver-v0/tinycc-self-compile.stderr
+            build/tinycc-full-driver-v0/tinycc-self-hello.o
+            build/tinycc-full-driver-v0/tinycc-self-hello.header
+            build/tinycc-full-driver-v0/tinycc-self-link.stdout
+            build/tinycc-full-driver-v0/tinycc-self-link.stderr
+            build/tinycc-full-driver-v0/tinycc-self-run.stdout
+            build/tinycc-full-driver-v0/tinycc-self-run.stderr
+            build/tinycc-full-driver-v0/tinycc-self-hello
           if-no-files-found: ignore
           retention-days: 7
