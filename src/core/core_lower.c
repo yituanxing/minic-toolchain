@@ -2098,8 +2098,60 @@ static MinicCoreLowerStatus append_long_double_conversion(
             }
         }
     } else if (minic_type_is_long_double(source_type)) {
-        if (minic_type_is_double(target_type)) helper = "__trunctfdf2";
-        else if (minic_type_is_float(target_type)) helper = "__trunctfsf2";
+        if (minic_type_is_double(target_type)) {
+            helper = "__trunctfdf2";
+        } else if (minic_type_is_float(target_type)) {
+            helper = "__trunctfsf2";
+        } else if (minic_type_is_integer(target_type)) {
+            MinicCoreLowerStatus status;
+            MinicCoreValueId converted_value;
+            MinicType helper_return_type;
+            size_t target_alignment;
+            size_t target_size;
+
+            if (!minic_data_layout_type(core_data_layout(context),
+                                        context->body->program,
+                                        target_type,
+                                        &target_size,
+                                        &target_alignment) ||
+                target_size == 0U || target_size > 8U) {
+                return MINIC_CORE_LOWER_UNSUPPORTED;
+            }
+            (void)target_alignment;
+            if (target_size <= 4U) {
+                helper = minic_type_is_unsigned_integer(target_type)
+                             ? "__fixunstfsi"
+                             : "__fixtfsi";
+                helper_return_type = minic_type_is_unsigned_integer(target_type)
+                                         ? minic_type_unsigned_int()
+                                         : minic_type_int();
+            } else {
+                helper = minic_type_is_unsigned_integer(target_type)
+                             ? "__fixunstfdi"
+                             : "__fixtfdi";
+                helper_return_type = minic_type_is_unsigned_integer(target_type)
+                                         ? minic_type_unsigned_long_long()
+                                         : minic_type_long_long();
+            }
+            parameter_type = source_type;
+            status = append_runtime_scalar_call(context,
+                                                span,
+                                                helper,
+                                                helper_return_type,
+                                                &parameter_type,
+                                                &source_value,
+                                                1U,
+                                                &converted_value);
+            if (status != MINIC_CORE_LOWER_OK) {
+                return status;
+            }
+            if (minic_type_equal(helper_return_type, target_type)) {
+                *value_id = converted_value;
+                return MINIC_CORE_LOWER_OK;
+            }
+            return append_integer_conversion(
+                context, span, target_type, converted_value, value_id);
+        }
     }
     if (helper == NULL) return MINIC_CORE_LOWER_UNSUPPORTED;
     parameter_type = source_type;
@@ -5364,6 +5416,110 @@ MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
                    ? MINIC_CORE_LOWER_OK
                    : MINIC_CORE_LOWER_ERROR;
     }
+    /* Ordered binary128 comparisons use libgcc's comparison helpers.
+       __lttf2 returns a negative value only for an ordered less-than.
+       __letf2 returns a positive value for greater-than or unordered; therefore
+       !(0 < result) implements ordered <=.  Swap operands for > and >= so no
+       NaN-sensitive boolean inversion changes C semantics. */
+    if (expression->kind == MINIC_EXPRESSION_BINARY &&
+        (expression->value.binary.operator_kind == MINIC_BINARY_LESS ||
+         expression->value.binary.operator_kind == MINIC_BINARY_LESS_EQUAL ||
+         expression->value.binary.operator_kind == MINIC_BINARY_GREATER ||
+         expression->value.binary.operator_kind == MINIC_BINARY_GREATER_EQUAL)) {
+        const MinicExpression *left_expression;
+        const MinicExpression *right_expression;
+        MinicType left_type;
+        MinicType right_type;
+
+        left_expression = minic_c0_program_expression(
+            context->body->program, expression->value.binary.left);
+        right_expression = minic_c0_program_expression(
+            context->body->program, expression->value.binary.right);
+        if (left_expression == NULL || right_expression == NULL ||
+            !core_scalar_expression_value_type(context->body, left_expression, &left_type) ||
+            !core_scalar_expression_value_type(context->body, right_expression, &right_type)) {
+            return MINIC_CORE_LOWER_ERROR;
+        }
+        if (minic_type_is_long_double(left_type) ||
+            minic_type_is_long_double(right_type)) {
+            MinicCoreInstruction compare_instruction;
+            MinicCoreInstruction zero_instruction;
+            MinicCoreInstruction invert_instruction;
+            MinicCoreValueId compare_value;
+            MinicCoreValueId left;
+            MinicCoreValueId right;
+            MinicCoreValueId zero_value;
+            MinicCoreValueId predicate_value;
+            MinicCoreLowerStatus status;
+            bool inclusive;
+            bool swap;
+
+            if (!minic_type_equal(expression->type, minic_type_int())) {
+                return MINIC_CORE_LOWER_ERROR;
+            }
+            status = lower_floating_binary_operands(context,
+                                                    expression->value.binary.left,
+                                                    expression->value.binary.right,
+                                                    minic_type_long_double(),
+                                                    &left,
+                                                    &right);
+            if (status != MINIC_CORE_LOWER_OK) {
+                return status;
+            }
+            inclusive =
+                expression->value.binary.operator_kind == MINIC_BINARY_LESS_EQUAL ||
+                expression->value.binary.operator_kind == MINIC_BINARY_GREATER_EQUAL;
+            swap =
+                expression->value.binary.operator_kind == MINIC_BINARY_GREATER ||
+                expression->value.binary.operator_kind == MINIC_BINARY_GREATER_EQUAL;
+            status = append_long_double_binary_helper(context,
+                                                      expression->span,
+                                                      inclusive ? "__letf2" : "__lttf2",
+                                                      swap ? right : left,
+                                                      swap ? left : right,
+                                                      minic_type_int(),
+                                                      &compare_value);
+            if (status != MINIC_CORE_LOWER_OK) {
+                return status;
+            }
+            (void)memset(&zero_instruction, 0, sizeof(zero_instruction));
+            zero_instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
+            zero_instruction.span = expression->span;
+            zero_instruction.type = minic_type_int();
+            zero_instruction.result = MINIC_CORE_VALUE_INVALID;
+            zero_instruction.value.integer_value = 0;
+            if (!minic_core_function_append_value_instruction(
+                    context->function, context->block_id, &zero_instruction, &zero_value)) {
+                return MINIC_CORE_LOWER_ERROR;
+            }
+            (void)memset(&compare_instruction, 0, sizeof(compare_instruction));
+            compare_instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_LESS;
+            compare_instruction.span = expression->span;
+            compare_instruction.type = minic_type_int();
+            compare_instruction.result = MINIC_CORE_VALUE_INVALID;
+            compare_instruction.value.binary.left = inclusive ? zero_value : compare_value;
+            compare_instruction.value.binary.right = inclusive ? compare_value : zero_value;
+            if (!minic_core_function_append_value_instruction(
+                    context->function, context->block_id, &compare_instruction, &predicate_value)) {
+                return MINIC_CORE_LOWER_ERROR;
+            }
+            if (!inclusive) {
+                *value_id = predicate_value;
+                return MINIC_CORE_LOWER_OK;
+            }
+            (void)memset(&invert_instruction, 0, sizeof(invert_instruction));
+            invert_instruction.kind = MINIC_CORE_INSTRUCTION_SCALAR_IS_ZERO;
+            invert_instruction.span = expression->span;
+            invert_instruction.type = minic_type_int();
+            invert_instruction.result = MINIC_CORE_VALUE_INVALID;
+            invert_instruction.value.operand = predicate_value;
+            return minic_core_function_append_value_instruction(
+                       context->function, context->block_id, &invert_instruction, value_id)
+                       ? MINIC_CORE_LOWER_OK
+                       : MINIC_CORE_LOWER_ERROR;
+        }
+    }
+
     /* Ordered binary64 relational comparisons must remain direct IEEE-754
        predicates.  <= uses LE; > and >= swap operands.  No inversion is used,
        so unordered NaN inputs remain false as required by C. */
