@@ -50,9 +50,9 @@ static void append_rv64_linux_musl_predefines(char **arguments,
 
 static void usage(FILE *out, const char *argv0) {
     fprintf(out,
-            "usage: %s [-S|-c] [--sysroot DIR] [-DNAME[=VALUE]] [-UNAME] "
-            "[-IDIR] [-isystem DIR] [-include FILE] [-LDIR] [-lNAME] "
-            "-o OUTPUT INPUT...\n",
+            "usage: %s [-S|-c] [-static] [--sysroot DIR] [-DNAME[=VALUE]] "
+            "[-UNAME] [-IDIR] [-isystem DIR] [-include FILE] [-LDIR] "
+            "[-lNAME] -o OUTPUT INPUT...\n",
             argv0);
 }
 
@@ -293,12 +293,13 @@ int main(int argc, char **argv) {
     const char *ld_forward[MINIC_DRIVER_MAX_FORWARD_OPTIONS];
     size_t ld_forward_count = 0U;
     MinicDriverMode mode = MINIC_DRIVER_LINK;
+    bool static_link = false;
     char *cpp = NULL;
     char *cc = NULL;
     char *as = NULL;
     char *ld = NULL;
     char *lib_dir = NULL;
-    char *scrt1 = NULL;
+    char *crt1 = NULL;
     char *crti = NULL;
     char *crtn = NULL;
     char *library_option = NULL;
@@ -316,6 +317,8 @@ int main(int argc, char **argv) {
             mode = MINIC_DRIVER_ASSEMBLY;
         } else if (strcmp(argument, "-c") == 0) {
             mode = MINIC_DRIVER_COMPILE;
+        } else if (strcmp(argument, "-static") == 0) {
+            static_link = true;
         } else if (strcmp(argument, "-o") == 0) {
             if (++index >= argc || output != NULL) {
                 usage(stderr, argv[0]);
@@ -422,7 +425,7 @@ int main(int argc, char **argv) {
     if (mode == MINIC_DRIVER_LINK &&
         (sysroot == NULL || sysroot[0] == '\0')) {
         fprintf(stderr,
-                "minic: dynamic-link-requires---sysroot-or-MINIC_SYSROOT\n");
+                "minic: hosted-link-requires---sysroot-or-MINIC_SYSROOT\n");
         return 2;
     }
 
@@ -457,10 +460,11 @@ int main(int argc, char **argv) {
     }
 
     lib_dir = join_path(sysroot, "lib");
-    scrt1 = join_path(lib_dir != NULL ? lib_dir : "", "Scrt1.o");
+    crt1 = join_path(lib_dir != NULL ? lib_dir : "",
+                     static_link ? "crt1.o" : "Scrt1.o");
     crti = join_path(lib_dir != NULL ? lib_dir : "", "crti.o");
     crtn = join_path(lib_dir != NULL ? lib_dir : "", "crtn.o");
-    if (lib_dir == NULL || scrt1 == NULL || crti == NULL || crtn == NULL) {
+    if (lib_dir == NULL || crt1 == NULL || crti == NULL || crtn == NULL) {
         fprintf(stderr, "minic: out-of-memory:sysroot-paths\n");
         goto done;
     }
@@ -519,24 +523,37 @@ int main(int argc, char **argv) {
 
         arguments[count++] = ld;
         arguments[count++] = "-melf64lriscv";
-        arguments[count++] = "-pie";
+        if (static_link) {
+            arguments[count++] = "-static";
+        } else {
+            arguments[count++] = "-pie";
+        }
         arguments[count++] = "-e";
         arguments[count++] = "_start";
-        arguments[count++] =
-            "--dynamic-linker=/lib/ld-musl-riscv64.so.1";
+        if (!static_link) {
+            arguments[count++] =
+                "--dynamic-linker=/lib/ld-musl-riscv64.so.1";
+        }
         arguments[count++] = "-o";
         arguments[count++] = (char *)output;
-        arguments[count++] = scrt1;
+        arguments[count++] = crt1;
         arguments[count++] = crti;
         for (input_index = 0U; input_index < link_input_count; ++input_index) {
             arguments[count++] = link_inputs[input_index];
         }
-        arguments[count++] = crtn;
         arguments[count++] = library_option;
         for (option_index = 0U; option_index < ld_forward_count; ++option_index) {
             arguments[count++] = (char *)ld_forward[option_index];
         }
-        arguments[count++] = "-lc";
+        if (static_link) {
+            arguments[count++] = "--start-group";
+            arguments[count++] = "-lc";
+            arguments[count++] = "-lgcc";
+            arguments[count++] = "--end-group";
+        } else {
+            arguments[count++] = "-lc";
+        }
+        arguments[count++] = crtn;
         arguments[count] = NULL;
 
         status = run_tool(arguments);
@@ -566,7 +583,7 @@ done:
     free(as);
     free(ld);
     free(lib_dir);
-    free(scrt1);
+    free(crt1);
     free(crti);
     free(crtn);
     free(library_option);
