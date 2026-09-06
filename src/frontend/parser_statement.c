@@ -1161,7 +1161,11 @@ static bool add_zero_initialized_record_lvalue(MinicParser *parser,
             minic_parser_error(parser, "invalid record field in aggregate initialization");
             return false;
         }
-        if (field->is_flexible_array) {
+        /* Unnamed bit-fields are layout-only padding/alignment slots, not
+           members of the aggregate initializer sequence. In particular musl's
+           struct timespec uses target-dependent zero-width unnamed bit-fields;
+           emitting an assignment for them creates a non-addressable lvalue. */
+        if (field->is_flexible_array || (field->is_bit_field && field->name_length == 0U)) {
             continue;
         }
         (void)memset(&member, 0, sizeof(member));
