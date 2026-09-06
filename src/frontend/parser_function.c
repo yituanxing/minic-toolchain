@@ -2327,6 +2327,8 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
                      ++inner_parameter_index) {
                     parameter_types[inner_parameter_index] =
                         declarator.inner_parameter_types[inner_parameter_index];
+                    parameter_name_spans[inner_parameter_index] =
+                        declarator.inner_parameter_name_spans[inner_parameter_index];
                 }
                 has_preparsed_function_parameters = true;
                 is_function_pointer_object = false;
