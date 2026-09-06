@@ -210,8 +210,7 @@ static MinicCoreLowerStatus lower_parameter_ingress(MinicCoreLowerContext *conte
         if (parameter == NULL) {
             return MINIC_CORE_LOWER_ERROR;
         }
-        if (minic_type_is_volatile(parameter->type) || parameter->is_array ||
-            parameter->is_register_storage ||
+        if (parameter->is_array || parameter->is_register_storage ||
             !minic_type_unqualified(parameter->type, &parameter_value_type) ||
             !minic_type_equal(parameter_value_type,
                               context->source_function->parameter_types[parameter_index])) {
@@ -293,7 +292,7 @@ static MinicCoreLowerStatus lower_parameter_ingress(MinicCoreLowerContext *conte
             instruction.result = MINIC_CORE_VALUE_INVALID;
             instruction.value.store.address = address_id;
             instruction.value.store.stored_value = parameter_value;
-            instruction.value.store.is_volatile = false;
+            instruction.value.store.is_volatile = minic_type_is_volatile(parameter->type);
             if (!minic_core_function_append_effect_instruction(
                     context->function, context->block_id, &instruction)) {
                 return MINIC_CORE_LOWER_ERROR;
