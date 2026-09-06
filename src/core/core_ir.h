@@ -291,6 +291,10 @@ typedef struct MinicCoreInstruction {
         int64_t integer_value;
         uint64_t floating_bits;
         struct {
+            uint64_t low;
+            uint64_t high;
+        } floating128_bits;
+        struct {
             MinicCoreValueId left;
             MinicCoreValueId right;
         } binary;

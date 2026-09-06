@@ -81,6 +81,11 @@ bool minic_riscv64_classify_abi_value(const MinicC0Program *program,
         result->register_chunks = 1U;
         return true;
     }
+    if (minic_type_is_long_double(type) && size == 16U) {
+        result->kind = MINIC_RISCV64_ABI_VALUE_WIDE_SCALAR;
+        result->register_chunks = 2U;
+        return true;
+    }
     if (minic_type_is_integer(type) || minic_type_is_pointer(type)) {
         result->kind = MINIC_RISCV64_ABI_VALUE_INTEGER;
         result->register_chunks = 1U;
@@ -132,7 +137,8 @@ bool minic_riscv64_abi_classify_value(const MinicC0Program *program,
     if (value->kind == MINIC_RISCV64_ABI_VALUE_VOID ||
         value->kind == MINIC_RISCV64_ABI_VALUE_IGNORE) {
         value->slot_count = 0U;
-    } else if (value->kind == MINIC_RISCV64_ABI_VALUE_AGGREGATE) {
+    } else if (value->kind == MINIC_RISCV64_ABI_VALUE_AGGREGATE ||
+               value->kind == MINIC_RISCV64_ABI_VALUE_WIDE_SCALAR) {
         value->slot_count = value->register_chunks;
     } else {
         value->slot_count = 1U;
@@ -183,7 +189,10 @@ bool minic_riscv64_abi_place_argument(const MinicC0Program *program,
     }
 
     integer_slots =
-        result.value.kind == MINIC_RISCV64_ABI_VALUE_AGGREGATE ? result.value.slot_count : 1U;
+        (result.value.kind == MINIC_RISCV64_ABI_VALUE_AGGREGATE ||
+         result.value.kind == MINIC_RISCV64_ABI_VALUE_WIDE_SCALAR)
+            ? result.value.slot_count
+            : 1U;
     available_integer_registers =
         MINIC_RISCV64_ABI_ARGUMENT_REGISTER_COUNT - next.integer_register_count;
     result.integer_register_begin = next.integer_register_count;

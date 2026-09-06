@@ -136,6 +136,10 @@ typedef struct MinicExpression {
     union {
         int64_t integer_value;
         uint64_t floating_bits;
+        struct {
+            uint64_t low;
+            uint64_t high;
+        } floating128_bits;
         MinicLocalId local_id;
         MinicGlobalObjectId global_object_id;
         MinicFixedRegisterBindingId fixed_register_binding_id;

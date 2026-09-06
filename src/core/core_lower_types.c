@@ -10,7 +10,8 @@ bool core_memory_scalar_type(MinicType type) {
        binary32 currently enters Core so an explicit conversion can widen it
        to binary64; no float arithmetic opcode is implied. */
     return minic_type_is_integer(type) || minic_type_is_pointer(type) ||
-           minic_type_is_float(type) || minic_type_is_double(type);
+           minic_type_is_float(type) || minic_type_is_double(type) ||
+           minic_type_is_long_double(type);
 }
 
 /* M152_UNSIGNED_ENUM_BIT_FIELD_OWNER: enum bit-fields keep their semantic enum

@@ -100,6 +100,58 @@ static bool parse_integer(MinicParser *parser, MinicExpressionId *expression_id)
     return minic_parser_add_expression(parser, &expression, expression_id);
 }
 
+static void minic_binary128_from_binary64(double value, uint64_t *low, uint64_t *high) {
+    uint64_t bits;
+    uint64_t exponent;
+    uint64_t fraction;
+    uint64_t sign;
+
+    (void)memcpy(&bits, &value, sizeof(bits));
+    sign = bits >> 63U;
+    exponent = (bits >> 52U) & UINT64_C(0x7ff);
+    fraction = bits & UINT64_C(0x000fffffffffffff);
+    if (exponent == 0U) {
+        if (fraction == 0U) {
+            *low = 0U;
+            *high = sign << 63U;
+            return;
+        }
+        {
+            unsigned int highest = 51U;
+            int unbiased;
+            uint64_t payload;
+            unsigned int shift;
+            uint64_t high_fraction;
+
+            while ((fraction & (UINT64_C(1) << highest)) == 0U) {
+                --highest;
+            }
+            unbiased = (int)highest - 1074;
+            exponent = (uint64_t)(unbiased + 16383);
+            payload = fraction ^ (UINT64_C(1) << highest);
+            shift = 112U - highest;
+            if (shift >= 64U) {
+                *low = 0U;
+                high_fraction = payload << (shift - 64U);
+            } else {
+                *low = payload << shift;
+                high_fraction = payload >> (64U - shift);
+            }
+            *high = (sign << 63U) | (exponent << 48U) |
+                    (high_fraction & UINT64_C(0x0000ffffffffffff));
+            return;
+        }
+    }
+    if (exponent == UINT64_C(0x7ff)) {
+        *low = fraction << 60U;
+        *high = (sign << 63U) | UINT64_C(0x7fff000000000000) | (fraction >> 4U);
+        return;
+    }
+    exponent = exponent - UINT64_C(1023) + UINT64_C(16383);
+    *low = fraction << 60U;
+    *high = (sign << 63U) | (exponent << 48U) | (fraction >> 4U);
+}
+
 static bool parse_floating(MinicParser *parser, MinicExpressionId *expression_id) {
     MinicExpression expression;
     MinicSourceSpan span;
@@ -141,9 +193,8 @@ static bool parse_floating(MinicParser *parser, MinicExpressionId *expression_id
         literal_type = minic_type_float();
         numeric_length -= 1U;
     } else if (suffix == 'l' || suffix == 'L') {
-        free(text);
-        minic_parser_error(parser, "long double floating constants are not supported yet");
-        return false;
+        literal_type = minic_type_long_double();
+        numeric_length -= 1U;
     } else {
         suffix = '\0';
     }
@@ -177,7 +228,13 @@ static bool parse_floating(MinicParser *parser, MinicExpressionId *expression_id
             minic_parser_error(parser, "invalid floating constant");
             return false;
         }
-        (void)memcpy(&expression.value.floating_bits, &double_value, sizeof(double_value));
+        if (minic_type_is_long_double(literal_type)) {
+            minic_binary128_from_binary64(double_value,
+                                          &expression.value.floating128_bits.low,
+                                          &expression.value.floating128_bits.high);
+        } else {
+            (void)memcpy(&expression.value.floating_bits, &double_value, sizeof(double_value));
+        }
     }
     free(text);
 
@@ -341,7 +398,8 @@ static bool type_is_condition_scalar(MinicType type) {
 static bool same_floating_type(MinicType left, MinicType right) {
     return minic_type_equal(left, right) &&
            ((minic_type_is_double(left) && minic_type_is_double(right)) ||
-            (minic_type_is_float(left) && minic_type_is_float(right)));
+            (minic_type_is_float(left) && minic_type_is_float(right)) ||
+            (minic_type_is_long_double(left) && minic_type_is_long_double(right)));
 }
 
 static bool parse_static_duration_compound_literal(MinicParser *parser,
@@ -3706,6 +3764,43 @@ static bool normalize_float_binary_operands(MinicParser *parser,
         return false;
     }
 
+    if (minic_type_is_long_double(left->type) ||
+        minic_type_is_long_double(right->type)) {
+        bool left_numeric =
+            minic_type_is_integer(left->type) || minic_type_is_float(left->type) ||
+            minic_type_is_double(left->type) || minic_type_is_long_double(left->type);
+        bool right_numeric =
+            minic_type_is_integer(right->type) || minic_type_is_float(right->type) ||
+            minic_type_is_double(right->type) || minic_type_is_long_double(right->type);
+
+        if (!left_numeric || !right_numeric) {
+            return true;
+        }
+        if (!minic_type_is_long_double(left->type)) {
+            (void)memset(&conversion, 0, sizeof(conversion));
+            conversion.kind = MINIC_EXPRESSION_CAST;
+            conversion.span = left->span;
+            conversion.type = minic_type_long_double();
+            conversion.value_category = MINIC_VALUE_RVALUE;
+            conversion.value.unary.operand = *left_id;
+            if (!minic_parser_add_expression(parser, &conversion, &converted_id)) return false;
+            *left_id = converted_id;
+        }
+        right = minic_c0_program_expression(parser->program, *right_id);
+        if (right == NULL) return false;
+        if (!minic_type_is_long_double(right->type)) {
+            (void)memset(&conversion, 0, sizeof(conversion));
+            conversion.kind = MINIC_EXPRESSION_CAST;
+            conversion.span = right->span;
+            conversion.type = minic_type_long_double();
+            conversion.value_category = MINIC_VALUE_RVALUE;
+            conversion.value.unary.operand = *right_id;
+            if (!minic_parser_add_expression(parser, &conversion, &converted_id)) return false;
+            *right_id = converted_id;
+        }
+        return true;
+    }
+
     /* Comparing binary32 values after exact widening to binary64 preserves all
        IEEE-754 ordered/equality results, including NaNs, infinities and signed
        zero. Mixed float/double comparison and arithmetic use the ordinary C
@@ -3770,6 +3865,7 @@ static bool binary_result_type(const MinicTargetInfo *target,
     MinicType pointer_type;
     MinicType pointee_type;
     bool has_double_operand;
+    bool has_long_double_operand;
     bool has_numeric_operands;
 
     if (result == NULL) {
@@ -3798,15 +3894,25 @@ static bool binary_result_type(const MinicTargetInfo *target,
         *result = minic_type_float();
         return true;
     }
+    has_long_double_operand =
+        minic_type_is_long_double(left) || minic_type_is_long_double(right);
+    has_numeric_operands =
+        (minic_type_is_integer(left) || minic_type_is_float(left) ||
+         minic_type_is_double(left) || minic_type_is_long_double(left)) &&
+        (minic_type_is_integer(right) || minic_type_is_float(right) ||
+         minic_type_is_double(right) || minic_type_is_long_double(right));
+    if (binary_is_comparison(kind) && has_long_double_operand && has_numeric_operands) {
+        *result = minic_type_int();
+        return true;
+    }
+    if (has_long_double_operand && has_numeric_operands && binary_is_double_arithmetic(kind)) {
+        *result = minic_type_long_double();
+        return true;
+    }
     has_double_operand = minic_type_is_double(left) || minic_type_is_double(right);
     has_numeric_operands = (minic_type_is_double(left) || minic_type_is_integer(left)) &&
                            (minic_type_is_double(right) || minic_type_is_integer(right));
     if (binary_is_comparison(kind) && has_double_operand && has_numeric_operands) {
-        *result = minic_type_int();
-        return true;
-    }
-    if (binary_is_comparison(kind) && minic_type_is_long_double(left) &&
-        minic_type_is_long_double(right)) {
         *result = minic_type_int();
         return true;
     }
@@ -4079,15 +4185,19 @@ static bool parse_expression_internal(MinicParser *parser,
                     "pointer compound assignment expression requires += or -= with an integer");
                 return false;
             }
-        } else if (minic_type_is_double(target_type)) {
+        } else if (minic_type_is_float(target_type) ||
+                   minic_type_is_double(target_type) ||
+                   minic_type_is_long_double(target_type)) {
             if ((compound_operator != MINIC_BINARY_ADD &&
                  compound_operator != MINIC_BINARY_SUBTRACT &&
                  compound_operator != MINIC_BINARY_MULTIPLY &&
                  compound_operator != MINIC_BINARY_DIVIDE) ||
-                (!minic_type_is_double(value_expression->type) &&
-                 !minic_type_is_integer(value_expression->type))) {
+                (!minic_type_is_integer(value_expression->type) &&
+                 !minic_type_is_float(value_expression->type) &&
+                 !minic_type_is_double(value_expression->type) &&
+                 !minic_type_is_long_double(value_expression->type))) {
                 minic_parser_error(parser,
-                                   "double compound assignment requires arithmetic operands");
+                                   "floating compound assignment requires arithmetic operands");
                 return false;
             }
         } else {

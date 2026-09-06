@@ -371,7 +371,8 @@ static bool verify_expression(const MinicC0Program *program,
     case MINIC_EXPRESSION_FLOATING:
         return expression->value_category == MINIC_VALUE_RVALUE &&
                (minic_type_is_float(expression->type) ||
-                minic_type_is_double(expression->type));
+                minic_type_is_double(expression->type) ||
+                minic_type_is_long_double(expression->type));
     case MINIC_EXPRESSION_LOCAL: {
         const MinicLocal *local;
 
@@ -624,11 +625,16 @@ static bool verify_expression(const MinicC0Program *program,
                    minic_type_pointee(left->type, &pointee_type) &&
                    minic_c0_pointer_arithmetic_pointee_allowed(program, pointee_type);
         }
-        if (minic_type_is_double(left->type)) {
+        if (minic_type_is_float(left->type) ||
+            minic_type_is_double(left->type) ||
+            minic_type_is_long_double(left->type)) {
             return (operator_kind == MINIC_BINARY_ADD || operator_kind == MINIC_BINARY_SUBTRACT ||
                     operator_kind == MINIC_BINARY_MULTIPLY ||
                     operator_kind == MINIC_BINARY_DIVIDE) &&
-                   (minic_type_is_double(right->type) || minic_type_is_integer(right->type));
+                   (minic_type_is_integer(right->type) ||
+                    minic_type_is_float(right->type) ||
+                    minic_type_is_double(right->type) ||
+                    minic_type_is_long_double(right->type));
         }
         if (operator_kind != MINIC_BINARY_ADD && operator_kind != MINIC_BINARY_SUBTRACT &&
             operator_kind != MINIC_BINARY_MULTIPLY && operator_kind != MINIC_BINARY_DIVIDE &&
