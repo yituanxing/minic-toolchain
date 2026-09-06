@@ -1113,7 +1113,7 @@ bool minias_riscv_measure(const char *op,
         return true;
     }
 
-    if (is_fp_binary_double(op)) {
+    if (is_fp_binary_single(op) || is_fp_binary_double(op)) {
         uint32_t rounding_mode;
         if ((count != 3U && count != 4U) ||
             float_reg_number(operands[0]) < 0 ||
