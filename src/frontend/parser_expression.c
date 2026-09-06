@@ -392,7 +392,9 @@ static bool expression_is_integer_zero(const MinicExpression *expression) {
 }
 
 static bool type_is_condition_scalar(MinicType type) {
-    return minic_type_is_integer(type) || minic_type_is_pointer(type);
+    return minic_type_is_integer(type) || minic_type_is_pointer(type) ||
+           minic_type_is_float(type) || minic_type_is_double(type) ||
+           minic_type_is_long_double(type);
 }
 
 static bool same_floating_type(MinicType left, MinicType right) {
@@ -3536,7 +3538,8 @@ static bool parse_unary(MinicParser *parser, MinicExpressionId *expression_id, b
         return minic_parser_add_expression(parser, &expression, expression_id);
     }
     if (minic_type_is_double(operand_expression->type) ||
-        minic_type_is_float(operand_expression->type)) {
+        minic_type_is_float(operand_expression->type) ||
+        minic_type_is_long_double(operand_expression->type)) {
         if (operator_token.kind != MINIC_TOKEN_PLUS && operator_token.kind != MINIC_TOKEN_MINUS) {
             minic_parser_error(parser, "floating unary arithmetic requires '+' or '-'");
             return false;
