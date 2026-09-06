@@ -427,6 +427,7 @@ static bool minic_parser_bind_scoped_object(MinicParser *parser,
     binding->name_span = name_span;
     binding->local_id = local_id;
     binding->global_object_id = global_object_id;
+    binding->type_alias_id = MINIC_TYPE_ALIAS_INVALID;
     parser->local_binding_count += 1U;
     return true;
 }
@@ -443,6 +444,34 @@ bool minic_parser_bind_scoped_global_object(MinicParser *parser,
                                             MinicGlobalObjectId global_object_id) {
     return minic_parser_bind_scoped_object(
         parser, name_span, MINIC_LOCAL_INVALID, global_object_id);
+}
+
+bool minic_parser_bind_type_alias(MinicParser *parser,
+                                  MinicSourceSpan name_span,
+                                  MinicTypeAliasId type_alias_id) {
+    MinicParserLocalBinding *binding;
+
+    if (parser == NULL || parser->scope_count == 0U ||
+        type_alias_id == MINIC_TYPE_ALIAS_INVALID) {
+        if (parser != NULL) {
+            minic_parser_error(parser, "internal error: invalid scoped typedef binding");
+        }
+        return false;
+    }
+    if (parser->local_binding_count == parser->local_binding_capacity &&
+        !minic_parser_grow_array((void **)&parser->local_bindings,
+                                 &parser->local_binding_capacity,
+                                 sizeof(*parser->local_bindings))) {
+        minic_parser_error(parser, "out of memory while binding typedef name");
+        return false;
+    }
+    binding = &parser->local_bindings[parser->local_binding_count];
+    binding->name_span = name_span;
+    binding->local_id = MINIC_LOCAL_INVALID;
+    binding->global_object_id = MINIC_GLOBAL_OBJECT_INVALID;
+    binding->type_alias_id = type_alias_id;
+    parser->local_binding_count += 1U;
+    return true;
 }
 
 bool minic_parser_name_bound_in_current_scope(const MinicParser *parser,

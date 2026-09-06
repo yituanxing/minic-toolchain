@@ -2018,6 +2018,10 @@ static bool core_instruction_supported(const MinicC0Program *program,
     switch (instruction->kind) {
     case MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT:
     case MINIC_CORE_INSTRUCTION_FLOATING_CONSTANT:
+    case MINIC_CORE_INSTRUCTION_FLOAT_ADD:
+    case MINIC_CORE_INSTRUCTION_FLOAT_SUBTRACT:
+    case MINIC_CORE_INSTRUCTION_FLOAT_MULTIPLY:
+    case MINIC_CORE_INSTRUCTION_FLOAT_DIVIDE:
     case MINIC_CORE_INSTRUCTION_DOUBLE_ADD:
     case MINIC_CORE_INSTRUCTION_DOUBLE_SUBTRACT:
     case MINIC_CORE_INSTRUCTION_DOUBLE_MULTIPLY:
@@ -3638,6 +3642,45 @@ static bool emit_instruction(FILE *file,
             return false;
         }
         return store_core_value(file, frame, instruction->result, "t0");
+    case MINIC_CORE_INSTRUCTION_FLOAT_ADD:
+    case MINIC_CORE_INSTRUCTION_FLOAT_SUBTRACT:
+    case MINIC_CORE_INSTRUCTION_FLOAT_MULTIPLY:
+    case MINIC_CORE_INSTRUCTION_FLOAT_DIVIDE: {
+        const char *opcode;
+
+        if (!minic_type_is_float(instruction->type)) {
+            return false;
+        }
+        switch (instruction->kind) {
+        case MINIC_CORE_INSTRUCTION_FLOAT_ADD:
+            opcode = "fadd.s";
+            break;
+        case MINIC_CORE_INSTRUCTION_FLOAT_SUBTRACT:
+            opcode = "fsub.s";
+            break;
+        case MINIC_CORE_INSTRUCTION_FLOAT_MULTIPLY:
+            opcode = "fmul.s";
+            break;
+        case MINIC_CORE_INSTRUCTION_FLOAT_DIVIDE:
+            opcode = "fdiv.s";
+            break;
+        default:
+            return false;
+        }
+        if (!load_core_value(file, frame, instruction->value.binary.left, "t0") ||
+            !load_core_value(file, frame, instruction->value.binary.right, "t1") ||
+            fprintf(file,
+                    "  fmv.w.x ft0, t0\n"
+                    "  fmv.w.x ft1, t1\n"
+                    "  %s ft0, ft0, ft1\n"
+                    "  fmv.x.w t0, ft0\n"
+                    "  slli t0, t0, 32\n"
+                    "  srli t0, t0, 32\n",
+                    opcode) < 0) {
+            return false;
+        }
+        return store_core_value(file, frame, instruction->result, "t0");
+    }
     case MINIC_CORE_INSTRUCTION_DOUBLE_ADD:
     case MINIC_CORE_INSTRUCTION_DOUBLE_SUBTRACT:
     case MINIC_CORE_INSTRUCTION_DOUBLE_MULTIPLY:

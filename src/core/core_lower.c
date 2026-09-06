@@ -210,8 +210,7 @@ static MinicCoreLowerStatus lower_parameter_ingress(MinicCoreLowerContext *conte
         if (parameter == NULL) {
             return MINIC_CORE_LOWER_ERROR;
         }
-        if (minic_type_is_volatile(parameter->type) || parameter->is_array ||
-            parameter->is_register_storage ||
+        if (parameter->is_array || parameter->is_register_storage ||
             !minic_type_unqualified(parameter->type, &parameter_value_type) ||
             !minic_type_equal(parameter_value_type,
                               context->source_function->parameter_types[parameter_index])) {
@@ -293,7 +292,7 @@ static MinicCoreLowerStatus lower_parameter_ingress(MinicCoreLowerContext *conte
             instruction.result = MINIC_CORE_VALUE_INVALID;
             instruction.value.store.address = address_id;
             instruction.value.store.stored_value = parameter_value;
-            instruction.value.store.is_volatile = false;
+            instruction.value.store.is_volatile = minic_type_is_volatile(parameter->type);
             if (!minic_core_function_append_effect_instruction(
                     context->function, context->block_id, &instruction)) {
                 return MINIC_CORE_LOWER_ERROR;
@@ -1182,7 +1181,7 @@ static MinicCoreLowerStatus lower_integer_binary_operands(MinicCoreLowerContext 
     return MINIC_CORE_LOWER_OK;
 }
 
-static MinicCoreLowerStatus lower_double_binary_operands(MinicCoreLowerContext *context,
+static MinicCoreLowerStatus lower_floating_binary_operands(MinicCoreLowerContext *context,
                                                          MinicExpressionId left_id,
                                                          MinicExpressionId right_id,
                                                          MinicType result_type,
@@ -1197,7 +1196,7 @@ static MinicCoreLowerStatus lower_double_binary_operands(MinicCoreLowerContext *
 
     if (context == NULL || context->body == NULL || context->body->program == NULL ||
         context->function == NULL || left_value == NULL || right_value == NULL ||
-        !minic_type_is_double(result_type)) {
+        (!minic_type_is_float(result_type) && !minic_type_is_double(result_type))) {
         return MINIC_CORE_LOWER_ERROR;
     }
     left_expression = minic_c0_program_expression(context->body->program, left_id);
@@ -4402,6 +4401,74 @@ MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
         return lower_scalar_update(context, expression, value_id);
     }
     if (expression->kind == MINIC_EXPRESSION_UNARY &&
+        expression->value.unary.operator_kind == MINIC_UNARY_PLUS &&
+        (minic_type_is_float(expression->type) || minic_type_is_double(expression->type))) {
+        MinicCoreLowerStatus status;
+        MinicCoreValueId operand_value;
+
+        status = lower_expression(context, expression->value.unary.operand, &operand_value);
+        if (status != MINIC_CORE_LOWER_OK) {
+            return status;
+        }
+        if (operand_value >= context->function->value_count ||
+            !minic_type_equal(context->function->values[operand_value].type, expression->type)) {
+            return MINIC_CORE_LOWER_UNSUPPORTED;
+        }
+        *value_id = operand_value;
+        return MINIC_CORE_LOWER_OK;
+    }
+    if (expression->kind == MINIC_EXPRESSION_UNARY &&
+        expression->value.unary.operator_kind == MINIC_UNARY_NEGATE &&
+        minic_type_is_float(expression->type)) {
+        const MinicExpression *operand_expression;
+        MinicCoreInstruction float_instruction;
+        MinicCoreLowerStatus status;
+        MinicCoreValueId operand_value;
+        MinicCoreValueId widened_value;
+        MinicCoreValueId negated_value;
+
+        operand_expression = minic_c0_program_expression(
+            context->body->program, expression->value.unary.operand);
+        if (operand_expression == NULL || !minic_type_is_float(operand_expression->type)) {
+            return MINIC_CORE_LOWER_UNSUPPORTED;
+        }
+        status = lower_expression(context, expression->value.unary.operand, &operand_value);
+        if (status != MINIC_CORE_LOWER_OK) {
+            return status;
+        }
+        if (operand_value >= context->function->value_count ||
+            !minic_type_is_float(context->function->values[operand_value].type)) {
+            return MINIC_CORE_LOWER_ERROR;
+        }
+
+        (void)memset(&float_instruction, 0, sizeof(instruction));
+        float_instruction.kind = MINIC_CORE_INSTRUCTION_FLOAT_TO_DOUBLE;
+        float_instruction.span = expression->span;
+        float_instruction.type = minic_type_double();
+        float_instruction.result = MINIC_CORE_VALUE_INVALID;
+        float_instruction.value.operand = operand_value;
+        if (!minic_core_function_append_value_instruction(
+                context->function, context->block_id, &float_instruction, &widened_value)) {
+            return MINIC_CORE_LOWER_ERROR;
+        }
+
+        float_instruction.kind = MINIC_CORE_INSTRUCTION_DOUBLE_NEGATE;
+        float_instruction.type = minic_type_double();
+        float_instruction.value.operand = widened_value;
+        if (!minic_core_function_append_value_instruction(
+                context->function, context->block_id, &float_instruction, &negated_value)) {
+            return MINIC_CORE_LOWER_ERROR;
+        }
+
+        float_instruction.kind = MINIC_CORE_INSTRUCTION_DOUBLE_TO_FLOAT;
+        float_instruction.type = expression->type;
+        float_instruction.value.operand = negated_value;
+        return minic_core_function_append_value_instruction(
+                   context->function, context->block_id, &float_instruction, value_id)
+                   ? MINIC_CORE_LOWER_OK
+                   : MINIC_CORE_LOWER_ERROR;
+    }
+    if (expression->kind == MINIC_EXPRESSION_UNARY &&
         expression->value.unary.operator_kind == MINIC_UNARY_NEGATE &&
         minic_type_is_double(expression->type)) {
         const MinicExpression *operand_expression;
@@ -4956,7 +5023,7 @@ MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
             if (!minic_type_equal(expression->type, minic_type_int())) {
                 return MINIC_CORE_LOWER_ERROR;
             }
-            status = lower_double_binary_operands(context,
+            status = lower_floating_binary_operands(context,
                                                   expression->value.binary.left,
                                                   expression->value.binary.right,
                                                   minic_type_double(),
@@ -5093,7 +5160,7 @@ MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
             if (!minic_type_equal(expression->type, minic_type_int())) {
                 return MINIC_CORE_LOWER_ERROR;
             }
-            status = lower_double_binary_operands(context,
+            status = lower_floating_binary_operands(context,
                                                   expression->value.binary.left,
                                                   expression->value.binary.right,
                                                   minic_type_double(),
@@ -5648,19 +5715,21 @@ MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
                    ? MINIC_CORE_LOWER_OK
                    : MINIC_CORE_LOWER_ERROR;
     }
-    /* RUNTIME_R0_SCALAR_DOUBLE: preserve left-to-right evaluation by spilling
-       the left binary64 value across RHS lowering. */
+    /* RUNTIME_R0_SCALAR_FLOATING: preserve left-to-right evaluation by
+       spilling the left binary32/binary64 value across RHS lowering. */
     if (expression->kind == MINIC_EXPRESSION_BINARY &&
         (expression->value.binary.operator_kind == MINIC_BINARY_ADD ||
          expression->value.binary.operator_kind == MINIC_BINARY_SUBTRACT ||
          expression->value.binary.operator_kind == MINIC_BINARY_MULTIPLY ||
          expression->value.binary.operator_kind == MINIC_BINARY_DIVIDE) &&
-        minic_type_is_double(expression->type)) {
+        (minic_type_is_float(expression->type) || minic_type_is_double(expression->type))) {
         MinicCoreValueId left;
         MinicCoreValueId right;
         MinicCoreLowerStatus status;
+        bool is_float;
 
-        status = lower_double_binary_operands(context,
+        is_float = minic_type_is_float(expression->type);
+        status = lower_floating_binary_operands(context,
                                               expression->value.binary.left,
                                               expression->value.binary.right,
                                               expression->type,
@@ -5672,16 +5741,20 @@ MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
         (void)memset(&instruction, 0, sizeof(instruction));
         switch (expression->value.binary.operator_kind) {
         case MINIC_BINARY_ADD:
-            instruction.kind = MINIC_CORE_INSTRUCTION_DOUBLE_ADD;
+            instruction.kind = is_float ? MINIC_CORE_INSTRUCTION_FLOAT_ADD
+                                        : MINIC_CORE_INSTRUCTION_DOUBLE_ADD;
             break;
         case MINIC_BINARY_SUBTRACT:
-            instruction.kind = MINIC_CORE_INSTRUCTION_DOUBLE_SUBTRACT;
+            instruction.kind = is_float ? MINIC_CORE_INSTRUCTION_FLOAT_SUBTRACT
+                                        : MINIC_CORE_INSTRUCTION_DOUBLE_SUBTRACT;
             break;
         case MINIC_BINARY_MULTIPLY:
-            instruction.kind = MINIC_CORE_INSTRUCTION_DOUBLE_MULTIPLY;
+            instruction.kind = is_float ? MINIC_CORE_INSTRUCTION_FLOAT_MULTIPLY
+                                        : MINIC_CORE_INSTRUCTION_DOUBLE_MULTIPLY;
             break;
         case MINIC_BINARY_DIVIDE:
-            instruction.kind = MINIC_CORE_INSTRUCTION_DOUBLE_DIVIDE;
+            instruction.kind = is_float ? MINIC_CORE_INSTRUCTION_FLOAT_DIVIDE
+                                        : MINIC_CORE_INSTRUCTION_DOUBLE_DIVIDE;
             break;
         default:
             return MINIC_CORE_LOWER_ERROR;
@@ -6435,7 +6508,7 @@ MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
             target->value_category == MINIC_VALUE_LVALUE &&
             !minic_type_is_const(target->type) &&
             minic_type_unqualified(target->type, &stored_type) &&
-            minic_type_is_double(stored_type)) {
+            (minic_type_is_float(stored_type) || minic_type_is_double(stored_type))) {
             if (!minic_type_unqualified(expression->type, &expression_value_type) ||
                 !minic_type_equal(expression_value_type, stored_type)) {
                 return MINIC_CORE_LOWER_UNSUPPORTED;
@@ -6485,16 +6558,24 @@ MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
             (void)memset(&instruction, 0, sizeof(instruction));
             switch (expression->value.binary.operator_kind) {
             case MINIC_BINARY_ADD:
-                instruction.kind = MINIC_CORE_INSTRUCTION_DOUBLE_ADD;
+                instruction.kind = minic_type_is_float(stored_type)
+                                       ? MINIC_CORE_INSTRUCTION_FLOAT_ADD
+                                       : MINIC_CORE_INSTRUCTION_DOUBLE_ADD;
                 break;
             case MINIC_BINARY_SUBTRACT:
-                instruction.kind = MINIC_CORE_INSTRUCTION_DOUBLE_SUBTRACT;
+                instruction.kind = minic_type_is_float(stored_type)
+                                       ? MINIC_CORE_INSTRUCTION_FLOAT_SUBTRACT
+                                       : MINIC_CORE_INSTRUCTION_DOUBLE_SUBTRACT;
                 break;
             case MINIC_BINARY_MULTIPLY:
-                instruction.kind = MINIC_CORE_INSTRUCTION_DOUBLE_MULTIPLY;
+                instruction.kind = minic_type_is_float(stored_type)
+                                       ? MINIC_CORE_INSTRUCTION_FLOAT_MULTIPLY
+                                       : MINIC_CORE_INSTRUCTION_DOUBLE_MULTIPLY;
                 break;
             case MINIC_BINARY_DIVIDE:
-                instruction.kind = MINIC_CORE_INSTRUCTION_DOUBLE_DIVIDE;
+                instruction.kind = minic_type_is_float(stored_type)
+                                       ? MINIC_CORE_INSTRUCTION_FLOAT_DIVIDE
+                                       : MINIC_CORE_INSTRUCTION_DOUBLE_DIVIDE;
                 break;
             default:
                 return MINIC_CORE_LOWER_ERROR;

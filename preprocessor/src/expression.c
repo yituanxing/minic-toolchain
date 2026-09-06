@@ -16,9 +16,22 @@ typedef struct MiniPpExprParser {
     const char *cursor;
 } MiniPpExprParser;
 
+static bool minipp_expr_zero_width_marker(char value) {
+    /* Macro expansion carries source-spacing/provenance sentinels that are
+       meaningful only when rendering ordinary preprocessed text.  A #if
+       expression consumes preprocessing tokens, so these zero-width markers
+       must not become expression characters.  Keep the placemarker (0x12)
+       invisible here as well: it represents an empty ## operand, not a token. */
+    return value == '\a' || value == '\b' ||
+           value == '\x0e' || value == '\x0f' ||
+           value == '\x10' || value == '\x11' ||
+           value == '\x12' || value == '\x13' ||
+           value == '\x14';
+}
+
 static void minipp_expr_skip_space(MiniPpExprParser *parser) {
     while (isspace((unsigned char)*parser->cursor) != 0 ||
-           *parser->cursor == '\x13') {
+           minipp_expr_zero_width_marker(*parser->cursor)) {
         ++parser->cursor;
     }
 }

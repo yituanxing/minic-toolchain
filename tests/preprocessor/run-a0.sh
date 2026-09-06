@@ -392,6 +392,23 @@ int prefixed_character_values = 0;
 EOF
 run_exact if-prefixed-character
 
+cat >"$work/if-empty-object-arithmetic.c" <<'EOF'
+#define FLEXARRAY
+#if FLEXARRAY+1 > 1
+int flexarray_nonempty = 1;
+#else
+int flexarray_nonempty = 0;
+#endif
+
+#define FEATURE
+#if FEATURE + 2 == 2
+int empty_feature_arithmetic = 1;
+#else
+int empty_feature_arithmetic = 0;
+#endif
+EOF
+run_exact if-empty-object-arithmetic
+
 cat >"$work/multiline-invocation.c" <<'EOF'
 #define SUM3(a, b, c) ((a) + (b) + (c))
 int multiline_invocation = SUM3(1,
@@ -889,4 +906,4 @@ SG_MOD("x %u", SG_VALUE - 1)
 EOF
 run_exact source-generated-head-through-gnu-chain
 
-printf 'MINIPP_A0_EXACT=PASS cases=92 mode=byte-identical\n'
+printf 'MINIPP_A0_EXACT=PASS cases=93 mode=byte-identical\n'

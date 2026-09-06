@@ -2327,6 +2327,8 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
                      ++inner_parameter_index) {
                     parameter_types[inner_parameter_index] =
                         declarator.inner_parameter_types[inner_parameter_index];
+                    parameter_name_spans[inner_parameter_index] =
+                        declarator.inner_parameter_name_spans[inner_parameter_index];
                 }
                 has_preparsed_function_parameters = true;
                 is_function_pointer_object = false;
@@ -2339,17 +2341,36 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
                 is_function_pointer_object = true;
             }
         } else {
+            bool name_is_array;
+
+            name_is_array = false;
             if (!minic_parser_advance(parser)) {
                 return false;
             }
             if (parser->current.kind != MINIC_TOKEN_IDENTIFIER) {
-                minic_parser_error(parser, "expected function name in parenthesized declarator");
+                minic_parser_error(parser, "expected function or object name in parenthesized declarator");
                 return false;
             }
             name_span = parser->current.span;
-            if (!minic_parser_advance(parser) ||
-                !minic_parser_expect(
-                    parser, MINIC_TOKEN_RPAREN, "expected ')' after parenthesized function name")) {
+            if (!minic_parser_advance(parser)) {
+                return false;
+            }
+            if (parser->current.kind == MINIC_TOKEN_LBRACKET) {
+                MinicType array_type;
+
+                if (!minic_parser_parse_array_declarator_suffix(
+                        parser, return_type, true, &array_type, &name_is_array) ||
+                    !name_is_array) {
+                    if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
+                        minic_parser_error(parser,
+                                           "cannot build parenthesized array declarator type");
+                    }
+                    return false;
+                }
+                return_type = array_type;
+            }
+            if (!minic_parser_expect(
+                    parser, MINIC_TOKEN_RPAREN, "expected ')' after parenthesized declarator")) {
                 return false;
             }
         }

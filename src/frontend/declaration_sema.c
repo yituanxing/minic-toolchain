@@ -377,3 +377,65 @@ minic_declaration_build_function_type(MinicC0Program *program,
     *type = result;
     return true;
 }
+
+bool minic_declaration_build_nested_function_pointer_type(
+    MinicC0Program *program,
+    MinicType return_type,
+    const MinicType *outer_parameter_types,
+    size_t outer_parameter_count,
+    bool outer_is_variadic,
+    size_t outer_pointer_depth,
+    unsigned int outer_pointer_const_qualifiers,
+    unsigned int outer_pointer_volatile_qualifiers,
+    const MinicDeclarationArraySuffix *outer_array_suffix,
+    const MinicType *inner_parameter_types,
+    size_t inner_parameter_count,
+    bool inner_is_variadic,
+    size_t inner_pointer_depth,
+    unsigned int inner_pointer_const_qualifiers,
+    unsigned int inner_pointer_volatile_qualifiers,
+    MinicType *type) {
+    MinicSemanticSnapshot snapshot;
+    MinicDeclarationArraySuffix no_array;
+    MinicType outer_type;
+
+    if (program == NULL || type == NULL ||
+        outer_parameter_count > MINIC_MAX_FUNCTION_PARAMETERS ||
+        inner_parameter_count > MINIC_MAX_FUNCTION_PARAMETERS ||
+        (outer_parameter_count != 0U && outer_parameter_types == NULL) ||
+        (inner_parameter_count != 0U && inner_parameter_types == NULL)) {
+        return false;
+    }
+
+    snapshot = minic_semantic_snapshot_capture(program);
+    if (!minic_declaration_build_function_type(
+            program,
+            return_type,
+            outer_parameter_types,
+            outer_parameter_count,
+            outer_is_variadic,
+            outer_pointer_depth,
+            outer_pointer_const_qualifiers,
+            outer_pointer_volatile_qualifiers,
+            outer_array_suffix,
+            &outer_type)) {
+        return false;
+    }
+
+    (void)memset(&no_array, 0, sizeof(no_array));
+    if (!minic_declaration_build_function_type(
+            program,
+            outer_type,
+            inner_parameter_types,
+            inner_parameter_count,
+            inner_is_variadic,
+            inner_pointer_depth,
+            inner_pointer_const_qualifiers,
+            inner_pointer_volatile_qualifiers,
+            &no_array,
+            type)) {
+        (void)minic_semantic_snapshot_rollback_declarator_types(&snapshot, program);
+        return false;
+    }
+    return true;
+}
