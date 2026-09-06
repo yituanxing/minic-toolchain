@@ -361,7 +361,7 @@ bool minic_parser_parse_parenthesized_function_declarator(
         if (!minic_parser_expect(
                 parser, MINIC_TOKEN_LPAREN, "expected '(' before inner function parameter list") ||
             !minic_parser_parse_parameter_list(parser,
-                                               NULL,
+                                               declarator->inner_parameter_name_spans,
                                                declarator->inner_parameter_types,
                                                &declarator->inner_parameter_count,
                                                false,
