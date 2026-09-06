@@ -815,6 +815,16 @@ int object_to_function_cross_line =
 EOF
 run_exact object-to-function-cross-line-rescan
 
+cat >"$work/function-tail-paste-argument-rescan.c" <<'EOF'
+#define ELF64_ST_TYPE(v) ((v) & 0xf)
+#define ELF64_ST_BIND(v) ((v) >> 4)
+#define ELF64_ST_INFO(b, t) (((b) << 4) + ((t) & 0xf))
+#define ELFW(type) ELF##64##_##type
+int function_tail_paste_type = ELFW(ST_INFO)(2, ELFW(ST_TYPE)(0x31));
+int function_tail_paste_bind = ELFW(ST_INFO)(ELFW(ST_BIND)(0x31), 7);
+EOF
+run_exact function-tail-paste-argument-rescan
+
 cat >"$work/named-variadic-deep-forward-source-spacing.c" <<'EOF'
 #define NV_SINK(fmt, ...) NV_FINAL(fmt, ##__VA_ARGS__)
 #define NV_INNER(fmt, a...) NV_SINK(fmt, fixed, ##a)
@@ -906,4 +916,4 @@ SG_MOD("x %u", SG_VALUE - 1)
 EOF
 run_exact source-generated-head-through-gnu-chain
 
-printf 'MINIPP_A0_EXACT=PASS cases=93 mode=byte-identical\n'
+printf 'MINIPP_A0_EXACT=PASS cases=94 mode=byte-identical\n'
