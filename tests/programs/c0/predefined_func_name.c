@@ -8,6 +8,15 @@ static int check_func(void) {
     if (&__func__[0] != &__func__[0]) {
         return 3;
     }
+    if (sizeof(__FUNCTION__) != sizeof(__func__)) {
+        return 4;
+    }
+    if (__FUNCTION__[0] != 'c' || __FUNCTION__[9] != 'c') {
+        return 5;
+    }
+    if (&__FUNCTION__[0] != &__func__[0]) {
+        return 6;
+    }
     return 0;
 }
 
