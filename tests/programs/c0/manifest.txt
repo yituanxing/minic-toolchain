@@ -75,3 +75,4 @@ static_record_compound_literal
 static_nested_record_nonzero
 static_zero_size_local_array
 post_type_declaration_specifiers
+block_scope_function_declaration
