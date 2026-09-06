@@ -404,6 +404,62 @@ jobs:
           grep -F '3.53.4|42' "$work/sqlite-shell-smoke.stdout" >/dev/null
           echo "SQLITE_SHELL_RUNTIME_V0=PASS release=3.53.4 query=42"
 
+      - name: Run official sqlite3 CLI file acceptance
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/sqlite-full-driver-v0"
+          sysroot="$work/musl-sysroot"
+          cli="$work/sqlite3-minic"
+          db="$work/sqlite-shell.db"
+          rm -f "$db" "$db-journal" "$db-wal" "$db-shm"
+
+          timeout 60s qemu-riscv64 -L "$sysroot" "$cli" -batch "$db" \
+            "CREATE TABLE items(id INTEGER PRIMARY KEY, name TEXT NOT NULL, score INTEGER); \
+             BEGIN; \
+             INSERT INTO items(name,score) VALUES('alpha',10),('beta',20),('gamma',30); \
+             CREATE INDEX items_score ON items(score); \
+             COMMIT;" \
+            >"$work/sqlite-shell-create.stdout" \
+            2>"$work/sqlite-shell-create.stderr"
+          test -s "$db"
+
+          timeout 60s qemu-riscv64 -L "$sysroot" "$cli" -batch "$db" \
+            "BEGIN; UPDATE items SET score=25 WHERE name='beta'; \
+             DELETE FROM items WHERE name='gamma'; \
+             INSERT INTO items(name,score) VALUES('delta',40); COMMIT;" \
+            >"$work/sqlite-shell-mutate.stdout" \
+            2>"$work/sqlite-shell-mutate.stderr"
+
+          timeout 60s qemu-riscv64 -L "$sysroot" "$cli" -batch "$db" \
+            "SELECT count(*),sum(score),max(score) FROM items;" \
+            >"$work/sqlite-shell-query.stdout" \
+            2>"$work/sqlite-shell-query.stderr"
+          cat "$work/sqlite-shell-query.stdout"
+          grep -Fx '3|75|40' "$work/sqlite-shell-query.stdout" >/dev/null
+
+          timeout 60s qemu-riscv64 -L "$sysroot" "$cli" -batch "$db" \
+            "PRAGMA integrity_check;" \
+            >"$work/sqlite-shell-integrity.stdout" \
+            2>"$work/sqlite-shell-integrity.stderr"
+          grep -Fx 'ok' "$work/sqlite-shell-integrity.stdout" >/dev/null
+
+          timeout 60s qemu-riscv64 -L "$sysroot" "$cli" -batch "$db" \
+            ".schema items" \
+            >"$work/sqlite-shell-schema.stdout" \
+            2>"$work/sqlite-shell-schema.stderr"
+          grep -F 'CREATE TABLE items' "$work/sqlite-shell-schema.stdout" >/dev/null
+          grep -F 'CREATE INDEX items_score' "$work/sqlite-shell-schema.stdout" >/dev/null
+
+          timeout 60s qemu-riscv64 -L "$sysroot" "$cli" -batch "$db" \
+            ".dump items" \
+            >"$work/sqlite-shell-dump.stdout" \
+            2>"$work/sqlite-shell-dump.stderr"
+          grep -F 'CREATE TABLE items' "$work/sqlite-shell-dump.stdout" >/dev/null
+          test "$(grep -c '^INSERT INTO items' "$work/sqlite-shell-dump.stdout")" -eq 3
+
+          echo "SQLITE_SHELL_FILE_V0=PASS rows=3 sum=75 max=40 integrity=ok schema=1 dump=3 db_bytes=$(stat -c %s "$db")"
+
       - name: Preserve SQLite frontier evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -440,3 +496,16 @@ jobs:
             build/sqlite-full-driver-v0/sqlite-shell-smoke.stdout
             build/sqlite-full-driver-v0/sqlite-shell-smoke.stderr
             build/sqlite-full-driver-v0/sqlite3-minic
+            build/sqlite-full-driver-v0/sqlite-shell.db
+            build/sqlite-full-driver-v0/sqlite-shell-create.stdout
+            build/sqlite-full-driver-v0/sqlite-shell-create.stderr
+            build/sqlite-full-driver-v0/sqlite-shell-mutate.stdout
+            build/sqlite-full-driver-v0/sqlite-shell-mutate.stderr
+            build/sqlite-full-driver-v0/sqlite-shell-query.stdout
+            build/sqlite-full-driver-v0/sqlite-shell-query.stderr
+            build/sqlite-full-driver-v0/sqlite-shell-integrity.stdout
+            build/sqlite-full-driver-v0/sqlite-shell-integrity.stderr
+            build/sqlite-full-driver-v0/sqlite-shell-schema.stdout
+            build/sqlite-full-driver-v0/sqlite-shell-schema.stderr
+            build/sqlite-full-driver-v0/sqlite-shell-dump.stdout
+            build/sqlite-full-driver-v0/sqlite-shell-dump.stderr
