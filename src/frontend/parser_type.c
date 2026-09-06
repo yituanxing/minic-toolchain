@@ -609,7 +609,11 @@ static bool type_name_starts_parenthesized_function_pointer(const MinicParser *p
             break;
         }
     }
-    return token.kind == MINIC_TOKEN_RPAREN;
+    /* An abstract function-pointer type may itself contain another
+       parenthesized function-pointer declarator, for example
+       R (*(*)(P))(Q).  This is only a lookahead classifier: admit the nested
+       '(' here and let the shared declarator parser validate the full shape. */
+    return token.kind == MINIC_TOKEN_RPAREN || token.kind == MINIC_TOKEN_LPAREN;
 }
 
 bool minic_parser_parse_type_name_preserving_incomplete(MinicParser *parser, MinicType *type) {
