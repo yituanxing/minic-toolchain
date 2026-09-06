@@ -2582,7 +2582,7 @@ static bool minipp_expand_function_macro(MiniPpState *state,
                                                          depth + 1U,
                                                          source_line,
                                                          preserve_argument_spacing,
-                                                         NULL,
+                                                         macro->name,
                                                          &tail_invoked)) {
                     ok = false;
                 } else if (tail_invoked) {
