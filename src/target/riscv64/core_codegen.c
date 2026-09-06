@@ -321,6 +321,435 @@ static bool core_call_outgoing_stack_size(const MinicC0Program *program,
     return true;
 }
 
+
+typedef bool (*CoreValueUseVisitor)(MinicCoreValueId value_id, void *context);
+
+static bool core_visit_call_argument_uses(const MinicCoreFunction *function,
+                                          size_t argument_begin,
+                                          size_t argument_count,
+                                          CoreValueUseVisitor visitor,
+                                          void *context) {
+    size_t argument_index;
+
+    if (function == NULL || visitor == NULL ||
+        argument_begin > function->call_argument_count ||
+        argument_count > function->call_argument_count - argument_begin) {
+        return false;
+    }
+    for (argument_index = 0U; argument_index < argument_count; ++argument_index) {
+        const MinicCoreCallArgument *argument =
+            &function->call_arguments[argument_begin + argument_index];
+
+        if (argument->kind == MINIC_CORE_CALL_ARGUMENT_VALUE) {
+            if (!visitor(argument->value.value_id, context)) {
+                return false;
+            }
+        } else if (argument->kind != MINIC_CORE_CALL_ARGUMENT_OBJECT) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool core_instruction_visit_value_uses(const MinicCoreFunction *function,
+                                              const MinicCoreInstruction *instruction,
+                                              CoreValueUseVisitor visitor,
+                                              void *context) {
+    size_t operand_index;
+
+    if (function == NULL || instruction == NULL || visitor == NULL) {
+        return false;
+    }
+    switch (instruction->kind) {
+    case MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT:
+    case MINIC_CORE_INSTRUCTION_FLOATING_CONSTANT:
+    case MINIC_CORE_INSTRUCTION_PARAMETER:
+    case MINIC_CORE_INSTRUCTION_FIXED_REGISTER_READ:
+    case MINIC_CORE_INSTRUCTION_PARAMETER_OBJECT:
+    case MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS:
+    case MINIC_CORE_INSTRUCTION_GLOBAL_ADDRESS:
+    case MINIC_CORE_INSTRUCTION_FUNCTION_ADDRESS:
+    case MINIC_CORE_INSTRUCTION_BLOCK_ADDRESS:
+    case MINIC_CORE_INSTRUCTION_OPAQUE_INLINE_ASM:
+    case MINIC_CORE_INSTRUCTION_REGISTER_OUTPUT_INLINE_ASM:
+    case MINIC_CORE_INSTRUCTION_COMPILER_BARRIER:
+    case MINIC_CORE_INSTRUCTION_CALL_FRAME_ADDRESS:
+    case MINIC_CORE_INSTRUCTION_VARIADIC_ARGUMENT_ADDRESS:
+        return true;
+
+    case MINIC_CORE_INSTRUCTION_INTEGER_ADD:
+    case MINIC_CORE_INSTRUCTION_INTEGER_SUBTRACT:
+    case MINIC_CORE_INSTRUCTION_INTEGER_MULTIPLY:
+    case MINIC_CORE_INSTRUCTION_INTEGER_DIVIDE:
+    case MINIC_CORE_INSTRUCTION_INTEGER_REMAINDER:
+    case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_AND:
+    case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_XOR:
+    case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_OR:
+    case MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_LEFT:
+    case MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_RIGHT:
+    case MINIC_CORE_INSTRUCTION_INTEGER_LESS:
+    case MINIC_CORE_INSTRUCTION_POINTER_LESS:
+    case MINIC_CORE_INSTRUCTION_SCALAR_EQUAL:
+    case MINIC_CORE_INSTRUCTION_DOUBLE_ADD:
+    case MINIC_CORE_INSTRUCTION_DOUBLE_SUBTRACT:
+    case MINIC_CORE_INSTRUCTION_DOUBLE_MULTIPLY:
+    case MINIC_CORE_INSTRUCTION_DOUBLE_DIVIDE:
+    case MINIC_CORE_INSTRUCTION_DOUBLE_EQUAL:
+    case MINIC_CORE_INSTRUCTION_DOUBLE_LESS:
+    case MINIC_CORE_INSTRUCTION_DOUBLE_LESS_EQUAL:
+        return visitor(instruction->value.binary.left, context) &&
+               visitor(instruction->value.binary.right, context);
+
+    case MINIC_CORE_INSTRUCTION_INTEGER_OVERFLOW:
+        return visitor(instruction->value.integer_overflow.left, context) &&
+               visitor(instruction->value.integer_overflow.right, context) &&
+               visitor(instruction->value.integer_overflow.result_address, context);
+
+    case MINIC_CORE_INSTRUCTION_INTEGER_CONVERSION:
+    case MINIC_CORE_INSTRUCTION_INTEGER_TO_DOUBLE:
+    case MINIC_CORE_INSTRUCTION_DOUBLE_TO_INTEGER:
+    case MINIC_CORE_INSTRUCTION_SCALAR_BITCAST:
+    case MINIC_CORE_INSTRUCTION_INTEGER_NEGATE:
+    case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_NOT:
+    case MINIC_CORE_INSTRUCTION_INTEGER_CLZ:
+    case MINIC_CORE_INSTRUCTION_INTEGER_CTZ:
+    case MINIC_CORE_INSTRUCTION_SCALAR_IS_ZERO:
+    case MINIC_CORE_INSTRUCTION_DOUBLE_NEGATE:
+    case MINIC_CORE_INSTRUCTION_FLOAT_TO_DOUBLE:
+    case MINIC_CORE_INSTRUCTION_DOUBLE_TO_FLOAT:
+        return visitor(instruction->value.operand, context);
+
+    case MINIC_CORE_INSTRUCTION_FIELD_ADDRESS:
+        return visitor(instruction->value.field_address.base, context);
+
+    case MINIC_CORE_INSTRUCTION_POINTER_OFFSET:
+        return visitor(instruction->value.pointer_offset.base, context) &&
+               visitor(instruction->value.pointer_offset.index, context);
+
+    case MINIC_CORE_INSTRUCTION_LOAD:
+        return visitor(instruction->value.load.address, context);
+
+    case MINIC_CORE_INSTRUCTION_STORE:
+        return visitor(instruction->value.store.address, context) &&
+               visitor(instruction->value.store.stored_value, context);
+
+    case MINIC_CORE_INSTRUCTION_RECORD_LOAD:
+        return visitor(instruction->value.record_load.source_address, context);
+
+    case MINIC_CORE_INSTRUCTION_RECORD_COPY:
+        return visitor(instruction->value.record_copy.destination_address, context) &&
+               visitor(instruction->value.record_copy.source_address, context);
+
+    case MINIC_CORE_INSTRUCTION_REGISTER_OUTPUT_INPUT_INLINE_ASM:
+        return visitor(instruction->value.register_output_input_inline_asm.operand, context);
+
+    case MINIC_CORE_INSTRUCTION_MEMORY_READWRITE_SCALAR_INPUT_INLINE_ASM:
+        return visitor(
+                   instruction->value.memory_readwrite_scalar_input_inline_asm.memory_address,
+                   context) &&
+               visitor(instruction->value.memory_readwrite_scalar_input_inline_asm.operand,
+                       context);
+
+    case MINIC_CORE_INSTRUCTION_SCALAR_INPUT_INLINE_ASM:
+        return visitor(instruction->value.scalar_input_inline_asm.operand, context);
+
+    case MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM:
+        if (instruction->value.structured_inline_asm.operand_count >
+            MINIC_CORE_STRUCTURED_INLINE_ASM_OPERAND_LIMIT) {
+            return false;
+        }
+        for (operand_index = 0U;
+             operand_index < instruction->value.structured_inline_asm.operand_count;
+             ++operand_index) {
+            if (!visitor(instruction->value.structured_inline_asm.operands[operand_index].value,
+                         context)) {
+                return false;
+            }
+        }
+        return true;
+
+    case MINIC_CORE_INSTRUCTION_CALL:
+        return core_visit_call_argument_uses(function,
+                                             instruction->value.call.argument_begin,
+                                             instruction->value.call.argument_count,
+                                             visitor,
+                                             context);
+
+    case MINIC_CORE_INSTRUCTION_INDIRECT_CALL:
+        return visitor(instruction->value.indirect_call.callee, context) &&
+               core_visit_call_argument_uses(function,
+                                             instruction->value.indirect_call.argument_begin,
+                                             instruction->value.indirect_call.argument_count,
+                                             visitor,
+                                             context);
+    }
+    return false;
+}
+
+static bool core_terminator_visit_value_uses(const MinicCoreTerminator *terminator,
+                                             CoreValueUseVisitor visitor,
+                                             void *context) {
+    if (terminator == NULL || visitor == NULL) {
+        return false;
+    }
+    switch (terminator->kind) {
+    case MINIC_CORE_TERMINATOR_RETURN:
+        return terminator->return_value == MINIC_CORE_VALUE_INVALID ||
+               visitor(terminator->return_value, context);
+    case MINIC_CORE_TERMINATOR_BRANCH:
+    case MINIC_CORE_TERMINATOR_UNREACHABLE:
+        return true;
+    case MINIC_CORE_TERMINATOR_INDIRECT_BRANCH:
+        return visitor(terminator->indirect_target, context);
+    case MINIC_CORE_TERMINATOR_CONDITIONAL_BRANCH:
+        return visitor(terminator->conditional.condition, context);
+    }
+    return false;
+}
+
+typedef struct CoreLastUseContext {
+    size_t *last_uses;
+    size_t value_count;
+    size_t position;
+} CoreLastUseContext;
+
+static bool core_mark_last_use(MinicCoreValueId value_id, void *opaque) {
+    CoreLastUseContext *context = (CoreLastUseContext *)opaque;
+
+    if (context == NULL || context->last_uses == NULL ||
+        value_id >= context->value_count) {
+        return false;
+    }
+    context->last_uses[value_id] = context->position;
+    return true;
+}
+
+typedef struct CoreReleaseSlotContext {
+    size_t *last_uses;
+    const size_t *value_slots;
+    size_t value_count;
+    size_t position;
+    size_t *free_slots;
+    size_t *free_count;
+} CoreReleaseSlotContext;
+
+static bool core_release_last_use_slot(MinicCoreValueId value_id, void *opaque) {
+    CoreReleaseSlotContext *context = (CoreReleaseSlotContext *)opaque;
+
+    if (context == NULL || context->last_uses == NULL ||
+        context->value_slots == NULL || context->free_slots == NULL ||
+        context->free_count == NULL || value_id >= context->value_count) {
+        return false;
+    }
+    if (context->last_uses[value_id] != context->position) {
+        return true;
+    }
+    if (context->value_slots[value_id] == SIZE_MAX ||
+        *context->free_count >= context->value_count) {
+        return false;
+    }
+    context->free_slots[*context->free_count] = context->value_slots[value_id];
+    *context->free_count += 1U;
+    /* A value can occur more than once in one instruction. Mark it released
+       after the first visit so a duplicate operand cannot enqueue the same
+       physical slot twice. */
+    context->last_uses[value_id] = SIZE_MAX;
+    return true;
+}
+
+static bool core_frame_assign_value_slots(const MinicCoreFunction *function,
+                                          size_t base_offset,
+                                          size_t *value_offsets,
+                                          size_t *slot_count) {
+    size_t *last_uses;
+    size_t *value_slots;
+    size_t *free_slots;
+    size_t block_index;
+    size_t value_index;
+    size_t maximum_slots = 0U;
+
+    if (function == NULL || slot_count == NULL) {
+        return false;
+    }
+    *slot_count = 0U;
+    if (function->value_count == 0U) {
+        return true;
+    }
+    if (function->value_count > SIZE_MAX / sizeof(size_t)) {
+        return false;
+    }
+
+    last_uses = (size_t *)malloc(function->value_count * sizeof(*last_uses));
+    value_slots = (size_t *)malloc(function->value_count * sizeof(*value_slots));
+    free_slots = (size_t *)malloc(function->value_count * sizeof(*free_slots));
+    if (last_uses == NULL || value_slots == NULL || free_slots == NULL) {
+        free(last_uses);
+        free(value_slots);
+        free(free_slots);
+        return false;
+    }
+    for (value_index = 0U; value_index < function->value_count; ++value_index) {
+        last_uses[value_index] = SIZE_MAX;
+        value_slots[value_index] = SIZE_MAX;
+        if (value_offsets != NULL) {
+            value_offsets[value_index] = SIZE_MAX;
+        }
+    }
+
+    /* Pass 1: block-local SSA makes the last-use position a simple linear
+       property. Terminator uses live at position instruction_count. */
+    for (block_index = 0U; block_index < function->block_count; ++block_index) {
+        const MinicCoreBlock *block = &function->blocks[block_index];
+        size_t instruction_index;
+
+        for (instruction_index = 0U; instruction_index < block->instruction_count;
+             ++instruction_index) {
+            MinicCoreInstructionId instruction_id = block->instructions[instruction_index];
+            CoreLastUseContext context;
+
+            if (instruction_id >= function->instruction_count) {
+                free(last_uses);
+                free(value_slots);
+                free(free_slots);
+                return false;
+            }
+            context.last_uses = last_uses;
+            context.value_count = function->value_count;
+            context.position = instruction_index;
+            if (!core_instruction_visit_value_uses(function,
+                                                   &function->instructions[instruction_id],
+                                                   core_mark_last_use,
+                                                   &context)) {
+                free(last_uses);
+                free(value_slots);
+                free(free_slots);
+                return false;
+            }
+        }
+        if (block->has_terminator) {
+            CoreLastUseContext context;
+
+            context.last_uses = last_uses;
+            context.value_count = function->value_count;
+            context.position = block->instruction_count;
+            if (!core_terminator_visit_value_uses(
+                    &block->terminator, core_mark_last_use, &context)) {
+                free(last_uses);
+                free(value_slots);
+                free(free_slots);
+                return false;
+            }
+        }
+    }
+
+    /* Pass 2: allocate one 16-byte physical slot for each simultaneously-live
+       Core value. Values from prior instructions are released only after the
+       current instruction's result receives a slot, so result/input overlap is
+       never assumed by the backend. */
+    for (block_index = 0U; block_index < function->block_count; ++block_index) {
+        const MinicCoreBlock *block = &function->blocks[block_index];
+        size_t instruction_index;
+        size_t free_count = 0U;
+        size_t next_slot = 0U;
+
+        for (instruction_index = 0U; instruction_index < block->instruction_count;
+             ++instruction_index) {
+            MinicCoreInstructionId instruction_id = block->instructions[instruction_index];
+            const MinicCoreInstruction *instruction;
+            MinicCoreValueId result;
+
+            if (instruction_id >= function->instruction_count) {
+                free(last_uses);
+                free(value_slots);
+                free(free_slots);
+                return false;
+            }
+            instruction = &function->instructions[instruction_id];
+            result = instruction->result;
+            if (result != MINIC_CORE_VALUE_INVALID) {
+                size_t slot;
+
+                if (result >= function->value_count || value_slots[result] != SIZE_MAX) {
+                    free(last_uses);
+                    free(value_slots);
+                    free(free_slots);
+                    return false;
+                }
+                if (free_count != 0U) {
+                    slot = free_slots[--free_count];
+                } else {
+                    if (next_slot == SIZE_MAX) {
+                        free(last_uses);
+                        free(value_slots);
+                        free(free_slots);
+                        return false;
+                    }
+                    slot = next_slot++;
+                }
+                value_slots[result] = slot;
+                if (next_slot > maximum_slots) {
+                    maximum_slots = next_slot;
+                }
+                if (value_offsets != NULL) {
+                    if (slot > (SIZE_MAX - base_offset) / 16U) {
+                        free(last_uses);
+                        free(value_slots);
+                        free(free_slots);
+                        return false;
+                    }
+                    value_offsets[result] = base_offset + slot * 16U;
+                }
+            }
+
+            {
+                CoreReleaseSlotContext context;
+
+                context.last_uses = last_uses;
+                context.value_slots = value_slots;
+                context.value_count = function->value_count;
+                context.position = instruction_index;
+                context.free_slots = free_slots;
+                context.free_count = &free_count;
+                if (!core_instruction_visit_value_uses(function,
+                                                       instruction,
+                                                       core_release_last_use_slot,
+                                                       &context)) {
+                    free(last_uses);
+                    free(value_slots);
+                    free(free_slots);
+                    return false;
+                }
+            }
+
+            if (result != MINIC_CORE_VALUE_INVALID && last_uses[result] == SIZE_MAX) {
+                if (free_count >= function->value_count) {
+                    free(last_uses);
+                    free(value_slots);
+                    free(free_slots);
+                    return false;
+                }
+                free_slots[free_count++] = value_slots[result];
+            }
+        }
+    }
+
+    for (value_index = 0U; value_index < function->value_count; ++value_index) {
+        if (value_slots[value_index] == SIZE_MAX ||
+            (value_offsets != NULL && value_offsets[value_index] == SIZE_MAX)) {
+            free(last_uses);
+            free(value_slots);
+            free(free_slots);
+            return false;
+        }
+    }
+
+    free(last_uses);
+    free(value_slots);
+    free(free_slots);
+    *slot_count = maximum_slots;
+    return true;
+}
+
 static bool core_frame_initialize(const MinicC0Program *program,
                                   const MinicCoreFunction *function,
                                   MinicRiscv64CoreFrame *frame) {
@@ -383,49 +812,18 @@ static bool core_frame_initialize(const MinicC0Program *program,
         return false;
     }
     /*
-    ** Core v0 intentionally keeps SSA values block-local: the verifier clears
-    ** its available-value set at every basic-block boundary, while mutable
-    ** cross-block state is carried through CoreObject storage.  Exploit that
-    ** contract here instead of reserving one permanent 16-byte spill slot for
-    ** every value in the whole function.
-    **
-    ** Values produced by different basic blocks can therefore occupy the same
-    ** physical spill slots.  Keep values distinct within one block for now;
-    ** this is a conservative first reuse tier and requires no intra-block
-    ** liveness analysis.
+    ** Core SSA is block-local, so spill storage needs to cover only values live
+    ** at the same time inside one block. Reuse a physical 16-byte slot after a
+    ** value's final instruction use instead of keeping every block result live
+    ** until block end. This keeps the backend model unchanged while preventing
+    ** large generated functions (notably interpreter loops) from consuming
+    ** hundreds of kilobytes of native C stack per invocation.
     */
-    {
-        size_t block_index;
-        size_t maximum_block_values = 0U;
-
-        for (block_index = 0U; block_index < function->block_count; ++block_index) {
-            const MinicCoreBlock *block = &function->blocks[block_index];
-            size_t local_values = 0U;
-            size_t instruction_index;
-
-            for (instruction_index = 0U; instruction_index < block->instruction_count;
-                 ++instruction_index) {
-                MinicCoreInstructionId instruction_id = block->instructions[instruction_index];
-                if (instruction_id >= function->instruction_count) {
-                    return false;
-                }
-                if (function->instructions[instruction_id].result != MINIC_CORE_VALUE_INVALID) {
-                    if (local_values == SIZE_MAX) {
-                        return false;
-                    }
-                    ++local_values;
-                }
-            }
-            if (local_values > maximum_block_values) {
-                maximum_block_values = local_values;
-            }
-        }
-        if (maximum_block_values > (SIZE_MAX - frame->value_base_offset) / 16U) {
-            return false;
-        }
-        frame->value_slot_count = maximum_block_values;
-        storage_size = frame->value_base_offset + maximum_block_values * 16U;
+    if (!core_frame_assign_value_slots(function, 0U, NULL, &frame->value_slot_count) ||
+        frame->value_slot_count > (SIZE_MAX - frame->value_base_offset) / 16U) {
+        return false;
     }
+    storage_size = frame->value_base_offset + frame->value_slot_count * 16U;
     frame->saves_return_address = core_function_needs_saved_return_address(function);
     frame->return_address_offset = 0U;
     if (frame->saves_return_address) {
@@ -560,8 +958,7 @@ static bool core_frame_initialize(const MinicC0Program *program,
         }
     }
     if (function->value_count != 0U) {
-        size_t block_index;
-        size_t value_index;
+        size_t assigned_slot_count;
 
         if (function->value_count > SIZE_MAX / sizeof(*frame->value_offsets)) {
             free(frame->object_offsets);
@@ -575,54 +972,16 @@ static bool core_frame_initialize(const MinicC0Program *program,
             frame->object_offsets = NULL;
             return false;
         }
-        for (value_index = 0U; value_index < function->value_count; ++value_index) {
-            frame->value_offsets[value_index] = SIZE_MAX;
-        }
-
-        for (block_index = 0U; block_index < function->block_count; ++block_index) {
-            const MinicCoreBlock *block = &function->blocks[block_index];
-            size_t local_slot = 0U;
-            size_t instruction_index;
-
-            for (instruction_index = 0U; instruction_index < block->instruction_count;
-                 ++instruction_index) {
-                MinicCoreInstructionId instruction_id = block->instructions[instruction_index];
-                const MinicCoreInstruction *instruction;
-
-                if (instruction_id >= function->instruction_count) {
-                    free(frame->value_offsets);
-                    frame->value_offsets = NULL;
-                    free(frame->object_offsets);
-                    frame->object_offsets = NULL;
-                    return false;
-                }
-                instruction = &function->instructions[instruction_id];
-                if (instruction->result == MINIC_CORE_VALUE_INVALID) {
-                    continue;
-                }
-                if (instruction->result >= function->value_count ||
-                    local_slot >= frame->value_slot_count ||
-                    local_slot > (SIZE_MAX - frame->value_base_offset) / 16U ||
-                    frame->value_offsets[instruction->result] != SIZE_MAX) {
-                    free(frame->value_offsets);
-                    frame->value_offsets = NULL;
-                    free(frame->object_offsets);
-                    frame->object_offsets = NULL;
-                    return false;
-                }
-                frame->value_offsets[instruction->result] =
-                    frame->value_base_offset + local_slot * 16U;
-                ++local_slot;
-            }
-        }
-        for (value_index = 0U; value_index < function->value_count; ++value_index) {
-            if (frame->value_offsets[value_index] == SIZE_MAX) {
-                free(frame->value_offsets);
-                frame->value_offsets = NULL;
-                free(frame->object_offsets);
-                frame->object_offsets = NULL;
-                return false;
-            }
+        if (!core_frame_assign_value_slots(function,
+                                           frame->value_base_offset,
+                                           frame->value_offsets,
+                                           &assigned_slot_count) ||
+            assigned_slot_count != frame->value_slot_count) {
+            free(frame->value_offsets);
+            frame->value_offsets = NULL;
+            free(frame->object_offsets);
+            frame->object_offsets = NULL;
+            return false;
         }
     }
     return true;
