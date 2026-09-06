@@ -110,6 +110,14 @@ jobs:
               -isystem "$sysroot/usr/include" -I"$src" \
               "$src/sqlite3.c" -o "$work/raw/sqlite3.i"
             echo "SQLITE_RAW_ENGINE_PREPROCESSED=$work/raw/sqlite3.i"
+            fail_line="$(sed -n 's/.*:\([0-9][0-9]*\):[0-9][0-9]*: error:.*/\1/p' "$work/raw/sqlite3.stderr" | head -n1)"
+            if test -n "$fail_line"; then
+              start=$((fail_line > 24 ? fail_line - 24 : 1))
+              end=$((fail_line + 24))
+              echo "SQLITE_FRONTIER_CONTEXT_BEGIN line=$fail_line"
+              nl -ba "$work/raw/sqlite3.i" | sed -n "${start},${end}p"
+              echo "SQLITE_FRONTIER_CONTEXT_END line=$fail_line"
+            fi
             exit "$rc"
           fi
 
