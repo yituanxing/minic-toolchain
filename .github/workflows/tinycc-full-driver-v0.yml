@@ -102,29 +102,73 @@ jobs:
           tiny_sha=0fb54300b56512754221d80adda85ddb9815bceb
           src="$work/tinycc-$tiny_sha"
           sysroot="$work/musl-sysroot"
-          driver="$work/bin/minic"
+          cpp="$work/bin/minic-cpp"
+          cc="$work/bin/minic-cc"
+          as="$work/bin/minic-as"
           out="$work/tinycc-obj"
+          pp="$work/tinycc-i"
+          asm="$work/tinycc-s"
           logs="$work/tinycc-tu-logs"
-          mkdir -p "$out" "$logs"
+          mkdir -p "$out" "$pp" "$asm" "$logs"
 
           sources="tcc.c libtcc.c tccpp.c tccgen.c tccdbg.c tccelf.c tccasm.c tccrun.c riscv64-gen.c riscv64-link.c riscv64-asm.c"
           pass=0
           fail=0
           : >"$work/tinycc-tu-results.tsv"
 
+          predefs=(
+            -D__STDC__=1
+            -D__STDC_VERSION__=201112L
+            -D__STDC_HOSTED__=1
+            -D__linux__=1 -D__linux=1 -Dlinux=1
+            -D__unix__=1 -D__unix=1
+            -D__riscv=1 -D__riscv_xlen=64
+            -D__LP64__=1 -D_LP64=1
+            -D__riscv_float_abi_double=1
+            -D__ORDER_LITTLE_ENDIAN__=1234
+            -D__ORDER_BIG_ENDIAN__=4321
+            -D__BYTE_ORDER__=__ORDER_LITTLE_ENDIAN__
+            -D__CHAR_BIT__=8
+            -D__SIZEOF_SHORT__=2
+            -D__SIZEOF_INT__=4
+            -D__SIZEOF_LONG__=8
+            -D__SIZEOF_LONG_LONG__=8
+            -D__SIZEOF_POINTER__=8
+            -D__SIZEOF_SIZE_T__=8
+          )
+
           for source in $sources; do
             base=${source%.c}
             started=$(date +%s)
+            rc=0
+            : >"$logs/$base.stdout"
+            : >"$logs/$base.stderr"
+
             set +e
-            timeout 300s "$driver" \
-              --sysroot "$sysroot/usr" \
-              -I"$src" \
-              -DONE_SOURCE=0 \
-              -c "$src/$source" -o "$out/$base.o" \
-              >"$logs/$base.stdout" 2>"$logs/$base.stderr"
+            timeout 300s "$cpp" -E -P -undef -nostdinc \
+              "${predefs[@]}" \
+              -isystem "$sysroot/usr/include" \
+              -I"$src" -DONE_SOURCE=0 \
+              "$src/$source" -o "$pp/$base.i" \
+              >"$logs/$base.cpp.stdout" 2>"$logs/$base.cpp.stderr"
             rc=$?
+            if test "$rc" -eq 0; then
+              timeout 300s "$cc" -S "$pp/$base.i" -o "$asm/$base.s" \
+                >"$logs/$base.cc.stdout" 2>"$logs/$base.cc.stderr"
+              rc=$?
+            fi
+            if test "$rc" -eq 0; then
+              timeout 300s "$as" -march=rv64gc -mabi=lp64d \
+                -o "$out/$base.o" "$asm/$base.s" \
+                >"$logs/$base.as.stdout" 2>"$logs/$base.as.stderr"
+              rc=$?
+            fi
             set -e
+
+            cat "$logs/$base.cpp.stderr" "$logs/$base.cc.stderr" "$logs/$base.as.stderr" \
+              >"$logs/$base.stderr"
             elapsed=$(( $(date +%s) - started ))
+
             if test "$rc" -eq 0 && test -s "$out/$base.o"; then
               pass=$((pass + 1))
               printf '%s\tPASS\t%s\t%s\n' "$source" "$rc" "$elapsed" \
@@ -135,7 +179,16 @@ jobs:
               printf '%s\tFAIL\t%s\t%s\n' "$source" "$rc" "$elapsed" \
                 >>"$work/tinycc-tu-results.tsv"
               echo "TINYCC_TU=FAIL source=$source rc=$rc elapsed_s=$elapsed"
-              tail -n 80 "$logs/$base.stderr" || true
+              cat "$logs/$base.stderr" || true
+              diag_line=$(sed -n 's/.*:\([0-9][0-9]*\):[0-9][0-9]*: error:.*/\1/p' \
+                "$logs/$base.cc.stderr" | head -n1)
+              if test -n "$diag_line" && test -s "$pp/$base.i"; then
+                lo=$((diag_line > 6 ? diag_line - 6 : 1))
+                hi=$((diag_line + 6))
+                echo "TINYCC_CONTEXT_BEGIN source=$source line=$diag_line"
+                nl -ba "$pp/$base.i" | sed -n "${lo},${hi}p"
+                echo "TINYCC_CONTEXT_END source=$source line=$diag_line"
+              fi
             fi
           done
 
@@ -155,5 +208,7 @@ jobs:
             build/tinycc-full-driver-v0/tinycc-config.h
             build/tinycc-full-driver-v0/tinycc-tu-results.tsv
             build/tinycc-full-driver-v0/tinycc-tu-logs/
+            build/tinycc-full-driver-v0/tinycc-i/
+            build/tinycc-full-driver-v0/tinycc-s/
           if-no-files-found: ignore
           retention-days: 7
