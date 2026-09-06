@@ -3792,6 +3792,11 @@ static bool binary_result_type(const MinicTargetInfo *target,
         }
         return minic_target_info_integer_common_for_program(target, program, left, right, result);
     }
+    if (minic_type_is_float(left) && minic_type_is_float(right) &&
+        binary_is_double_arithmetic(kind)) {
+        *result = minic_type_float();
+        return true;
+    }
     has_double_operand = minic_type_is_double(left) || minic_type_is_double(right);
     has_numeric_operands = (minic_type_is_double(left) || minic_type_is_integer(left)) &&
                            (minic_type_is_double(right) || minic_type_is_integer(right));
