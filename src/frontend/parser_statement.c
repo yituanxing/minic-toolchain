@@ -52,7 +52,8 @@ static bool apply_assignment_conversion(MinicParser *parser,
     if (minic_c0_assignment_compatible(parser->program, target_type, source_id)) {
         return true;
     }
-    if (!minic_type_is_double(target_type) || !minic_type_is_integer(source->type)) {
+    if (!minic_type_is_double(target_type) ||
+        (!minic_type_is_integer(source->type) && !minic_type_is_float(source->type))) {
         return true;
     }
 
