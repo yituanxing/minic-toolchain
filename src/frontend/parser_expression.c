@@ -3693,7 +3693,7 @@ static bool normalize_float_comparison_operands(MinicParser *parser,
     bool eligible;
 
     if (parser == NULL || left_id == NULL || right_id == NULL ||
-        !binary_is_comparison(kind)) {
+        (!binary_is_comparison(kind) && !binary_is_double_arithmetic(kind))) {
         return true;
     }
     left = minic_c0_program_expression(parser->program, *left_id);
@@ -3704,15 +3704,23 @@ static bool normalize_float_comparison_operands(MinicParser *parser,
 
     /* Comparing binary32 values after exact widening to binary64 preserves all
        IEEE-754 ordered/equality results, including NaNs, infinities and signed
-       zero.  Mixed float/double comparison is the ordinary C conversion to
-       double.  Do not use this bridge for float/integer arithmetic: converting
-       the integer to double would change C's float-rounding semantics. */
+       zero. Mixed float/double comparison and arithmetic use the ordinary C
+       conversion to double. Keep float/float arithmetic in binary32, and do not
+       use this bridge for float/integer arithmetic: converting the integer to
+       double would change C's float-rounding semantics. */
     eligible =
         (minic_type_is_float(left->type) &&
          (minic_type_is_float(right->type) || minic_type_is_double(right->type))) ||
         (minic_type_is_float(right->type) &&
          (minic_type_is_float(left->type) || minic_type_is_double(left->type)));
     if (!eligible) {
+        return true;
+    }
+    if (binary_is_double_arithmetic(kind) && !binary_is_comparison(kind) &&
+        !((minic_type_is_float(left->type) && minic_type_is_double(right->type)) ||
+          (minic_type_is_double(left->type) && minic_type_is_float(right->type)))) {
+        /* float op float remains binary32. This bridge only owns the ordinary
+         * mixed float/double conversion to binary64. */
         return true;
     }
 
@@ -3843,8 +3851,8 @@ static bool parse_expression_internal(MinicParser *parser,
             !parse_expression_internal(parser, &right, precedence + 1U, true)) {
             return false;
         }
-        if (!normalize_float_comparison_operands(parser, &left, &right, token_kind)) {
-            minic_parser_error(parser, "cannot normalize floating comparison operands");
+        if (!normalize_float_binary_operands(parser, &left, &right, token_kind)) {
+            minic_parser_error(parser, "cannot normalize floating binary operands");
             return false;
         }
         left_expression = minic_c0_program_expression(parser->program, left);
