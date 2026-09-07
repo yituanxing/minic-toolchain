@@ -4,9 +4,6 @@ on:
   push:
     branches:
       - external/busybox-full-driver-v0
-  pull_request:
-    branches:
-      - external/tinycc-full-driver-v0
   workflow_dispatch:
 
 permissions:
