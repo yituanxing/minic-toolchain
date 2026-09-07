@@ -667,7 +667,7 @@ jobs:
 
           cd "$src"
           set +e
-          timeout 900s make -j1 test \
+          timeout 900s make -k -j1 test \
             CC="riscv64-linux-gnu-gcc -static" \
             TCCFLAGS="-B$src -I$src/include -I$src -static" \
             >"$work/tinycc-official-test.log" 2>&1
