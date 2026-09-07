@@ -72,6 +72,7 @@ jobs:
           cp -a /usr/riscv64-linux-gnu/include/linux "$sysroot/usr/include/"
           cp -a /usr/riscv64-linux-gnu/include/asm "$sysroot/usr/include/"
           cp -a /usr/riscv64-linux-gnu/include/asm-generic "$sysroot/usr/include/"
+          cp -a /usr/riscv64-linux-gnu/include/mtd "$sysroot/usr/include/"
 
           cd "$out"
           CFLAGS="-O2 -fno-pic -fno-pie" \
