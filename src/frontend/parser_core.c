@@ -61,6 +61,29 @@ bool minic_parser_parse_typed_integer_constant_expression(MinicParser *parser, i
         return false;
     }
     if (!minic_const_eval_integer(parser->program, parser->target_info, expression_id, &constant)) {
+        const char *trace = getenv("CORE_FAST_TRACE");
+
+        if (trace != NULL && trace[0] != '\0' && strcmp(trace, "0") != 0) {
+            const MinicExpression *expression =
+                minic_c0_program_expression(parser->program, expression_id);
+            if (expression != NULL &&
+                expression->span.begin.offset <= expression->span.end.offset &&
+                expression->span.end.offset <= parser->lexer.length) {
+                size_t raw_length = expression->span.end.offset - expression->span.begin.offset;
+                (void)fprintf(stderr,
+                              "FRONTEND_CONST_DETAIL expression=%u kind=%d category=%d "
+                              "span=%zu:%zu..%zu:%zu raw=%.*s\n",
+                              (unsigned)expression_id,
+                              (int)expression->kind,
+                              (int)expression->value_category,
+                              expression->span.begin.line,
+                              expression->span.begin.column,
+                              expression->span.end.line,
+                              expression->span.end.column,
+                              (int)(raw_length > 240U ? 240U : raw_length),
+                              parser->source + expression->span.begin.offset);
+            }
+        }
         minic_parser_error(parser, "expected integer constant expression");
         return false;
     }
