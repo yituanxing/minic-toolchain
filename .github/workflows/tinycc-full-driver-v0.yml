@@ -555,6 +555,63 @@ jobs:
           test "$rc" -eq 42
           echo "TINYCC_SELF_COMPILE_RUNTIME_V0=PASS source=hello.c qemu_rc=42 producer=Mini-built-TinyCC consumer=MiniLD"
 
+      - name: Link libc hello with Mini-produced TinyCC itself
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/tinycc-full-driver-v0"
+          sysroot="$work/musl-sysroot"
+          tcc="$work/tcc-minic-static"
+          exe="$work/tinycc-self-linked-libc-hello"
+
+          test -s "$sysroot/usr/lib/crt1.o"
+          test -s "$sysroot/usr/lib/crti.o"
+          test -s "$sysroot/usr/lib/crtn.o"
+          test -s "$sysroot/usr/lib/libc.a"
+          test -s "$sysroot/usr/lib/libgcc.a"
+
+          set +e
+          timeout 120s qemu-riscv64 "$tcc" \
+            -nostdlib -static \
+            -o "$exe" \
+            "$sysroot/usr/lib/crt1.o" \
+            "$sysroot/usr/lib/crti.o" \
+            "$work/tinycc-self-libc-hello.c" \
+            "$sysroot/usr/lib/libc.a" \
+            "$sysroot/usr/lib/libgcc.a" \
+            "$sysroot/usr/lib/crtn.o" \
+            >"$work/tinycc-self-linker.stdout" \
+            2>"$work/tinycc-self-linker.stderr"
+          link_rc=$?
+          set -e
+          cat "$work/tinycc-self-linker.stdout"
+          cat "$work/tinycc-self-linker.stderr"
+          test "$link_rc" -eq 0
+          test -x "$exe"
+
+          riscv64-linux-gnu-readelf -h "$exe" \
+            >"$work/tinycc-self-linked.header"
+          riscv64-linux-gnu-readelf -lW "$exe" \
+            >"$work/tinycc-self-linked.programs"
+          grep -q 'Machine:.*RISC-V' "$work/tinycc-self-linked.header"
+          if grep -q 'Requesting program interpreter' "$work/tinycc-self-linked.programs"; then
+            echo "TINYCC_SELF_LINKER_V0=FAIL unexpected-interpreter" >&2
+            exit 1
+          fi
+
+          set +e
+          timeout 60s qemu-riscv64 "$exe" \
+            >"$work/tinycc-self-linked.stdout" \
+            2>"$work/tinycc-self-linked.stderr"
+          rc=$?
+          set -e
+          cat "$work/tinycc-self-linked.stdout"
+          cat "$work/tinycc-self-linked.stderr"
+          test "$rc" -eq 42
+          grep -Fx 'hello from Mini-produced TinyCC' \
+            "$work/tinycc-self-linked.stdout" >/dev/null
+          echo "TINYCC_SELF_LINKER_V0=PASS compile=tcc link=tcc libc=musl static=1 qemu_rc=42"
+
       - name: Preserve TinyCC frontier evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -591,6 +648,13 @@ jobs:
             build/tinycc-full-driver-v0/tinycc-hello-run.stdout
             build/tinycc-full-driver-v0/tinycc-hello-run.stderr
             build/tinycc-full-driver-v0/tinycc-hello
+            build/tinycc-full-driver-v0/tinycc-self-linked-libc-hello
+            build/tinycc-full-driver-v0/tinycc-self-linker.stdout
+            build/tinycc-full-driver-v0/tinycc-self-linker.stderr
+            build/tinycc-full-driver-v0/tinycc-self-linked.header
+            build/tinycc-full-driver-v0/tinycc-self-linked.programs
+            build/tinycc-full-driver-v0/tinycc-self-linked.stdout
+            build/tinycc-full-driver-v0/tinycc-self-linked.stderr
             build/tinycc-full-driver-v0/tinycc-self-hello.c
             build/tinycc-full-driver-v0/tinycc-self-hello.o
             build/tinycc-full-driver-v0/tinycc-self-hello-compile.stdout
