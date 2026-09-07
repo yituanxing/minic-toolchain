@@ -154,11 +154,24 @@ jobs:
           : "${BUSYBOX_UAPI_COMPAT:?}"
           : "${BUSYBOX_C_RESULTS:?}"
 
+          # BusyBox probes CC for compiler identity before any target compile.
+          # Keep those build-system queries on the known GNU cross driver; only
+          # real target C producers below are routed through Mini.
+          for arg in "$@"; do
+            case "$arg" in
+              -dumpversion|-dumpfullversion|-dumpmachine)
+                exec riscv64-linux-gnu-gcc "$@"
+                ;;
+            esac
+          done
+
           compile=0
           relocatable=0
           dep_only=0
           source=
           output=
+          depfile=
+          dep_target=
           previous=
           for arg in "$@"; do
             case "$arg" in
@@ -169,7 +182,15 @@ jobs:
             esac
             if test "$previous" = "-o"; then
               output="$arg"
+            elif test "$previous" = "-MF"; then
+              depfile="$arg"
+            elif test "$previous" = "-MT" || test "$previous" = "-MQ"; then
+              dep_target="$arg"
             fi
+            case "$arg" in
+              -Wp,-MD,*) depfile="${arg#-Wp,-MD,}" ;;
+              -Wp,-MMD,*) depfile="${arg#-Wp,-MMD,}" ;;
+            esac
             previous="$arg"
           done
 
@@ -222,6 +243,39 @@ jobs:
             timeout 120s "$BUSYBOX_MINIC" --sysroot "$BUSYBOX_MINI_SYSROOT" \
               -I"$BUSYBOX_UAPI_COMPAT" "${filtered[@]}"
             rc=$?
+
+            # Mini does not consume GCC/Kbuild depfile switches yet. Generate
+            # dependency metadata separately without letting GNU produce the
+            # target object; the .o remains exclusively MiniPP/MiniC/MiniAS.
+            if test "$rc" -eq 0 && test -n "$depfile"; then
+              dep_cpp_args=()
+              dep_expect=
+              for arg in "$@"; do
+                if test -n "$dep_expect"; then
+                  dep_cpp_args+=("$dep_expect" "$arg")
+                  dep_expect=
+                  continue
+                fi
+                case "$arg" in
+                  -I|-D|-U|-include|-isystem|-iquote)
+                    dep_expect="$arg"
+                    ;;
+                  -I*|-D*|-U*|-include*|-isystem*|-iquote*)
+                    dep_cpp_args+=("$arg")
+                    ;;
+                esac
+              done
+              mkdir -p "$(dirname -- "$depfile")"
+              riscv64-linux-gnu-gcc \
+                --sysroot="$BUSYBOX_MINI_SYSROOT/.." \
+                -I"$BUSYBOX_UAPI_COMPAT" "${dep_cpp_args[@]}" \
+                -MMD -MF "$depfile" -MT "${dep_target:-$output}" \
+                -E "$source" -o /dev/null
+              dep_rc=$?
+              if test "$dep_rc" -ne 0; then
+                rc=$dep_rc
+              fi
+            fi
             set -e
             status=FAIL
             test "$rc" -eq 0 && status=PASS
