@@ -747,6 +747,7 @@ jobs:
           else
             control_rc="$(sed -n 's/^TINYCC_GCC_CONTROL_RC=//p' \
               "$work/tinycc-gcc-control.status" | tail -n1)"
+            set +e
             python3 - \
               "$work/tinycc-gcc-control.summary" \
               "$work/tinycc-official-test.summary" \
@@ -789,6 +790,7 @@ jobs:
               raise SystemExit(1)
           PY
             compare_rc=$?
+            set -e
             cat "$work/tinycc-baseline-compare.txt" || true
 
             if test -n "$control_rc" && test "$control_rc" -ne 0 && \
