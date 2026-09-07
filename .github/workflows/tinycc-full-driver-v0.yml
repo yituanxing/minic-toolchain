@@ -657,6 +657,65 @@ jobs:
           test -s "$work/tinycc-libtcc1.members"
           echo "TINYCC_OFFICIAL_TEST_RUNTIME=PASS binfmt=riscv64 libtcc1=1"
 
+      - name: Run GCC-built TinyCC official control suite
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/tinycc-full-driver-v0"
+          tiny_sha=0fb54300b56512754221d80adda85ddb9815bceb
+          control_root="$work/tinycc-gcc-control"
+          sysroot="$work/musl-sysroot"
+          rm -rf "$control_root"
+          mkdir -p "$control_root"
+          tar -xzf "$work/tinycc-$tiny_sha.tar.gz" -C "$control_root"
+          src="$control_root/tinycc-$tiny_sha"
+
+          cd "$src"
+          ./configure \
+            --cpu=riscv64 \
+            --config-musl \
+            --prefix=/usr \
+            --triplet=riscv64-linux-musl \
+            --sysroot="$sysroot" \
+            --sysincludepaths='{B}/include:{R}/usr/include' \
+            --libpaths='{B}:{R}/usr/lib' \
+            --crtprefix='{R}/usr/lib' \
+            --elfinterp=/lib/ld-musl-riscv64.so.1 \
+            >"$work/tinycc-gcc-control-configure.log" 2>&1
+
+          cc -DC2STR conftest.c -o c2str.exe
+          ./c2str.exe include/tccdefs.h tccdefs_.h
+          make -j1 ONE_SOURCE=no \
+            CC="riscv64-linux-gnu-gcc -static" \
+            AR=riscv64-linux-gnu-ar \
+            tcc libtcc1.a \
+            >"$work/tinycc-gcc-control-build.log" 2>&1
+
+          ./tcc -v \
+            >"$work/tinycc-gcc-control-version.stdout" \
+            2>"$work/tinycc-gcc-control-version.stderr"
+          cat "$work/tinycc-gcc-control-version.stdout" "$work/tinycc-gcc-control-version.stderr"
+
+          set +e
+          timeout 900s make -k -j1 test \
+            CC="riscv64-linux-gnu-gcc -static" \
+            TCCFLAGS="-B$src -I$src/include -I$src -static" \
+            >"$work/tinycc-gcc-control-test.log" 2>&1
+          control_rc=$?
+          set -e
+
+          printf 'TINYCC_GCC_CONTROL_RC=%s\n' "$control_rc" | \
+            tee "$work/tinycc-gcc-control.status"
+          grep -E '^------------ |ALL TESTS PASSED|Error [0-9]+|FAILED|failed|error:' \
+            "$work/tinycc-gcc-control-test.log" \
+            >"$work/tinycc-gcc-control.summary" || true
+          cat "$work/tinycc-gcc-control.summary"
+          if test "$control_rc" -eq 0; then
+            echo "TINYCC_GCC_CONTROL_V0=PASS suite=make-test"
+          else
+            echo "TINYCC_GCC_CONTROL_V0=BASELINE_FAIL suite=make-test rc=$control_rc"
+          fi
+
       - name: Run TinyCC official make test suite
         shell: bash
         run: |
@@ -782,5 +841,12 @@ jobs:
             build/tinycc-full-driver-v0/tinycc-official-test.log
             build/tinycc-full-driver-v0/tinycc-official-test.status
             build/tinycc-full-driver-v0/tinycc-official-test.summary
+            build/tinycc-full-driver-v0/tinycc-gcc-control-configure.log
+            build/tinycc-full-driver-v0/tinycc-gcc-control-build.log
+            build/tinycc-full-driver-v0/tinycc-gcc-control-version.stdout
+            build/tinycc-full-driver-v0/tinycc-gcc-control-version.stderr
+            build/tinycc-full-driver-v0/tinycc-gcc-control-test.log
+            build/tinycc-full-driver-v0/tinycc-gcc-control.status
+            build/tinycc-full-driver-v0/tinycc-gcc-control.summary
           if-no-files-found: ignore
           retention-days: 7
