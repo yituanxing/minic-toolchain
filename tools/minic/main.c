@@ -151,6 +151,11 @@ static int run_tool(char *const arguments[]) {
     return 1;
 }
 
+static bool minic_keep_failed_temps(void) {
+    const char *value = getenv("MINIC_KEEP_FAILED_TEMPS");
+    return value != NULL && value[0] != '\0' && strcmp(value, "0") != 0;
+}
+
 static char *make_temp_path(const char *pattern) {
     char *path = duplicate_text(pattern);
     int descriptor;
@@ -259,7 +264,14 @@ static int compile_c_to_assembly(const char *input,
         status = run_tool(arguments);
     }
 
-    (void)unlink(temp_i);
+    if (status != 0 && minic_keep_failed_temps()) {
+        (void)fprintf(stderr,
+                      "MINIC_FAILED_PREPROCESSED=%s source=%s\n",
+                      temp_i,
+                      input);
+    } else {
+        (void)unlink(temp_i);
+    }
     free(temp_i);
     return status;
 }
@@ -302,7 +314,14 @@ static int compile_c_to_object(const char *input,
         status = run_tool(arguments);
     }
 
-    (void)unlink(temp_s);
+    if (status != 0 && minic_keep_failed_temps()) {
+        (void)fprintf(stderr,
+                      "MINIC_FAILED_ASSEMBLY=%s source=%s\n",
+                      temp_s,
+                      input);
+    } else {
+        (void)unlink(temp_s);
+    }
     free(temp_s);
     return status;
 }
