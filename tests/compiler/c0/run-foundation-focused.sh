@@ -17,6 +17,7 @@ for test_script in \
     run-anonymous-record-field-types.sh \
     run-typedef-enum-definitions.sh \
     run-enum-constant-expressions.sh \
+    run-enum-constant-scopes.sh \
     run-integer-constant-bitwise.sh \
     run-unsigned-64-literals.sh \
     run-builtin-va-list.sh \
