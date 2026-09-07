@@ -392,6 +392,22 @@ jobs:
           grep -q '^ASH_OK 5050$' "$work/busybox-mini-ash.stdout"
           echo "BUSYBOX_C_RUNTIME_V0=PASS applets=408 ash=PASS"
 
+      - name: Stage failed Mini intermediates
+        if: always()
+        shell: bash
+        run: |
+          set -u
+          work="$GITHUB_WORKSPACE/build/busybox-full-driver-v0"
+          failed="$work/failed-intermediates"
+          mkdir -p "$failed"
+          copied=0
+          for path in /tmp/minic-driver-i-* /tmp/minic-driver-s-*; do
+            test -e "$path" || continue
+            cp -a "$path" "$failed/"
+            copied=$((copied + 1))
+          done
+          echo "BUSYBOX_FAILED_INTERMEDIATES_STAGED=$copied"
+
       - name: Preserve BusyBox producer evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -405,8 +421,7 @@ jobs:
             build/busybox-full-driver-v0/minic-busybox-wrapper.sh
             build/busybox-full-driver-v0/busybox-c-results.tsv
             build/busybox-full-driver-v0/busybox-mini-build.log
-            /tmp/minic-driver-i-*
-            /tmp/minic-driver-s-*
+            build/busybox-full-driver-v0/failed-intermediates/
             build/busybox-full-driver-v0/busybox-mini.applets
             build/busybox-full-driver-v0/busybox-mini-list.stderr
             build/busybox-full-driver-v0/busybox-mini-ash.stdout
