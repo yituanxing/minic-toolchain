@@ -745,9 +745,60 @@ jobs:
               "$work/tinycc-official-test.log" >/dev/null
             echo "TINYCC_OFFICIAL_TEST_V0=PASS suite=make-test"
           else
-            echo "TINYCC_OFFICIAL_TEST_V0=FAIL suite=make-test rc=$rc"
-            tail -n 160 "$work/tinycc-official-test.log"
-            exit "$rc"
+            control_rc="$(sed -n 's/^TINYCC_GCC_CONTROL_RC=//p' \
+              "$work/tinycc-gcc-control.status" | tail -n1)"
+            python3 - \
+              "$work/tinycc-gcc-control.summary" \
+              "$work/tinycc-official-test.summary" \
+              "$work/tinycc-baseline-compare.txt" <<'PY'
+          import re
+          import sys
+
+          def parse(path):
+              section = "<preamble>"
+              sections = []
+              failures = set()
+              for raw in open(path, encoding="utf-8", errors="replace"):
+                  line = raw.rstrip("\n")
+                  if line.startswith("------------ "):
+                      section = line
+                      sections.append(section)
+                      continue
+                  if re.search(r"Error [0-9]+|FAILED|failed|error:", line):
+                      failures.add((section, line))
+              return sections, failures
+
+          control_sections, control_failures = parse(sys.argv[1])
+          mini_sections, mini_failures = parse(sys.argv[2])
+          missing_sections = sorted(set(control_sections) - set(mini_sections))
+          extra_failures = sorted(mini_failures - control_failures)
+
+          with open(sys.argv[3], "w", encoding="utf-8") as out:
+              out.write(f"control_sections={len(set(control_sections))}\n")
+              out.write(f"mini_sections={len(set(mini_sections))}\n")
+              out.write(f"control_failures={len(control_failures)}\n")
+              out.write(f"mini_failures={len(mini_failures)}\n")
+              out.write(f"missing_sections={len(missing_sections)}\n")
+              out.write(f"extra_failures={len(extra_failures)}\n")
+              for section in missing_sections:
+                  out.write(f"MISSING_SECTION\t{section}\n")
+              for section, line in extra_failures:
+                  out.write(f"EXTRA_FAILURE\t{section}\t{line}\n")
+
+          if missing_sections or extra_failures:
+              raise SystemExit(1)
+          PY
+            compare_rc=$?
+            cat "$work/tinycc-baseline-compare.txt" || true
+
+            if test -n "$control_rc" && test "$control_rc" -ne 0 && \
+               test "$compare_rc" -eq 0; then
+              echo "TINYCC_OFFICIAL_TEST_V0=BASELINE_EQUIVALENT suite=make-test control_rc=$control_rc mini_rc=$rc extra_failures=0"
+            else
+              echo "TINYCC_OFFICIAL_TEST_V0=FAIL suite=make-test control_rc=${control_rc:-unknown} mini_rc=$rc"
+              tail -n 160 "$work/tinycc-official-test.log"
+              exit "$rc"
+            fi
           fi
 
       - name: Preserve TinyCC frontier evidence
@@ -848,5 +899,6 @@ jobs:
             build/tinycc-full-driver-v0/tinycc-gcc-control-test.log
             build/tinycc-full-driver-v0/tinycc-gcc-control.status
             build/tinycc-full-driver-v0/tinycc-gcc-control.summary
+            build/tinycc-full-driver-v0/tinycc-baseline-compare.txt
           if-no-files-found: ignore
           retention-days: 7
