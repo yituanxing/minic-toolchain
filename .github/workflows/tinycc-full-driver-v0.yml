@@ -26,7 +26,7 @@ jobs:
           timeout 240s sudo apt-get -o Acquire::Retries=3 update
           timeout 240s sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
             build-essential gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
-            qemu-user curl ca-certificates python3
+            qemu-user qemu-user-binfmt binfmt-support curl ca-certificates python3
 
       - name: Build current Mini toolchain
         shell: bash
@@ -81,9 +81,10 @@ jobs:
             --config-musl \
             --prefix=/usr \
             --triplet=riscv64-linux-musl \
-            --sysincludepaths=/usr/include \
-            --libpaths=/usr/lib \
-            --crtprefix=/usr/lib \
+            --sysroot="$sysroot" \
+            --sysincludepaths='{B}/include:{R}/usr/include' \
+            --libpaths='{B}:{R}/usr/lib' \
+            --crtprefix='{R}/usr/lib' \
             --elfinterp=/lib/ld-musl-riscv64.so.1 \
             >"$work/tinycc-configure.log" 2>&1
           grep -q '^#define TCC_TARGET_RISCV64 1' config.h
@@ -612,6 +613,82 @@ jobs:
             "$work/tinycc-self-linked.stdout" >/dev/null
           echo "TINYCC_SELF_LINKER_V0=PASS compile=tcc link=tcc libc=musl static=1 qemu_rc=42"
 
+      - name: Prepare TinyCC official test runtime
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/tinycc-full-driver-v0"
+          tiny_sha=0fb54300b56512754221d80adda85ddb9815bceb
+          src="$work/tinycc-$tiny_sha"
+          sysroot="$work/musl-sysroot"
+
+          sudo update-binfmts --enable qemu-riscv64
+          test -e /proc/sys/fs/binfmt_misc/qemu-riscv64
+          cat /proc/sys/fs/binfmt_misc/qemu-riscv64 \
+            >"$work/tinycc-binfmt-riscv64.txt"
+
+          # The TinyCC official tests execute ./tcc and the RISC-V binaries
+          # that it produces directly. Prove the host binfmt handoff first.
+          "$src/tcc" -v \
+            >"$work/tinycc-binfmt-version.stdout" \
+            2>"$work/tinycc-binfmt-version.stderr"
+          cat "$work/tinycc-binfmt-version.stdout" "$work/tinycc-binfmt-version.stderr"
+          cat "$work/tinycc-binfmt-version.stdout" "$work/tinycc-binfmt-version.stderr" | \
+            grep -F 'tcc version 0.9.28rc' >/dev/null
+
+          # musl supplies libm/libdl/libpthread APIs from libc. Its installed
+          # development layout normally contains compatibility archives;
+          # materialize empty archives so TinyCC's standard -lm/-ldl/-lpthread
+          # lookup follows that layout while symbols resolve from libc.a.
+          for lib in m dl pthread; do
+            riscv64-linux-gnu-ar rcs "$sysroot/usr/lib/lib$lib.a"
+          done
+
+          cd "$src"
+          rm -f libtcc1.a
+          make -j1 ONE_SOURCE=no libtcc1.a \
+            >"$work/tinycc-libtcc1.stdout" \
+            2>"$work/tinycc-libtcc1.stderr"
+          test -s libtcc1.a
+          riscv64-linux-gnu-ar t libtcc1.a \
+            >"$work/tinycc-libtcc1.members"
+          test -s "$work/tinycc-libtcc1.members"
+          echo "TINYCC_OFFICIAL_TEST_RUNTIME=PASS binfmt=riscv64 libtcc1=1"
+
+      - name: Run TinyCC official make test suite
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/tinycc-full-driver-v0"
+          tiny_sha=0fb54300b56512754221d80adda85ddb9815bceb
+          src="$work/tinycc-$tiny_sha"
+
+          cd "$src"
+          set +e
+          timeout 900s make -j1 test \
+            CC="riscv64-linux-gnu-gcc -static" \
+            TCCFLAGS="-B$src -I$src/include -I$src -static" \
+            >"$work/tinycc-official-test.log" 2>&1
+          rc=$?
+          set -e
+
+          printf 'TINYCC_OFFICIAL_TEST_RC=%s\n' "$rc" | \
+            tee "$work/tinycc-official-test.status"
+          grep -E '^------------ |ALL TESTS PASSED|Error [0-9]+|FAILED|failed|error:' \
+            "$work/tinycc-official-test.log" \
+            >"$work/tinycc-official-test.summary" || true
+          cat "$work/tinycc-official-test.summary"
+
+          if test "$rc" -eq 0; then
+            grep -F -- '------- ALL TESTS PASSED --------' \
+              "$work/tinycc-official-test.log" >/dev/null
+            echo "TINYCC_OFFICIAL_TEST_V0=PASS suite=make-test"
+          else
+            echo "TINYCC_OFFICIAL_TEST_V0=FAIL suite=make-test rc=$rc"
+            tail -n 160 "$work/tinycc-official-test.log"
+            exit "$rc"
+          fi
+
       - name: Preserve TinyCC frontier evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -694,5 +771,14 @@ jobs:
             build/tinycc-full-driver-v0/tinycc-self-libc-hello.stdout
             build/tinycc-full-driver-v0/tinycc-self-libc-hello.stderr
             build/tinycc-full-driver-v0/tinycc-self-libc-hello
+            build/tinycc-full-driver-v0/tinycc-binfmt-riscv64.txt
+            build/tinycc-full-driver-v0/tinycc-binfmt-version.stdout
+            build/tinycc-full-driver-v0/tinycc-binfmt-version.stderr
+            build/tinycc-full-driver-v0/tinycc-libtcc1.stdout
+            build/tinycc-full-driver-v0/tinycc-libtcc1.stderr
+            build/tinycc-full-driver-v0/tinycc-libtcc1.members
+            build/tinycc-full-driver-v0/tinycc-official-test.log
+            build/tinycc-full-driver-v0/tinycc-official-test.status
+            build/tinycc-full-driver-v0/tinycc-official-test.summary
           if-no-files-found: ignore
           retention-days: 7
