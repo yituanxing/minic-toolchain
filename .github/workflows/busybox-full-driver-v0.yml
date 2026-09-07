@@ -322,6 +322,7 @@ jobs:
           export BUSYBOX_UAPI_COMPAT="$uapi"
           export BUSYBOX_C_RESULTS="$results"
           export MINIC_KEEP_FAILED_TEMPS=1
+          export CORE_FAST_TRACE=1
 
           started="$(date +%s)"
           set +e
