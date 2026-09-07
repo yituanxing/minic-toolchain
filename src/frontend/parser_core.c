@@ -303,6 +303,7 @@ bool minic_parser_begin_scope(MinicParser *parser) {
     scope = &parser->scopes[parser->scope_count];
     scope->binding_begin = parser->local_binding_count;
     scope->record_tag_begin = parser->record_tag_count;
+    scope->enum_constant_begin = parser->enum_constant_count;
     scope->cleanup_context = parser->cleanup_context;
     parser->scope_count += 1U;
     return true;
@@ -325,6 +326,7 @@ void minic_parser_end_scope(MinicParser *parser) {
     parser->scope_count -= 1U;
     parser->local_binding_count = parser->scopes[parser->scope_count].binding_begin;
     parser->record_tag_count = parser->scopes[parser->scope_count].record_tag_begin;
+    parser->enum_constant_count = parser->scopes[parser->scope_count].enum_constant_begin;
     parser->cleanup_context = parser->scopes[parser->scope_count].cleanup_context;
 }
 
@@ -500,6 +502,7 @@ bool minic_parser_bind_type_alias(MinicParser *parser,
 bool minic_parser_name_bound_in_current_scope(const MinicParser *parser,
                                               MinicSourceSpan name_span) {
     size_t scope_begin;
+    size_t enum_begin;
     size_t index;
 
     if (parser->scope_count == 0U) {
@@ -511,6 +514,13 @@ bool minic_parser_name_bound_in_current_scope(const MinicParser *parser,
 
         binding = &parser->local_bindings[index - 1U];
         if (minic_parser_span_equals(parser, name_span, binding->name_span)) {
+            return true;
+        }
+    }
+    enum_begin = parser->scopes[parser->scope_count - 1U].enum_constant_begin;
+    for (index = parser->enum_constant_count; index > enum_begin; --index) {
+        if (minic_parser_span_equals(
+                parser, name_span, parser->enum_constants[index - 1U].name_span)) {
             return true;
         }
     }
