@@ -403,16 +403,34 @@ static bool integer_cast_operand_is_pointer_roundtrip_constant(const MinicC0Prog
     }
     pointer_cast = minic_c0_program_expression(program, expression->value.unary.operand);
     if (pointer_cast == NULL || !minic_type_is_pointer(pointer_cast->type) ||
-        (pointer_cast->kind != MINIC_EXPRESSION_CAST &&
-         pointer_cast->kind != MINIC_EXPRESSION_BITCAST)) {
+        !minic_target_info_sizeof_type(target, program, pointer_cast->type, &pointer_size) ||
+        pointer_size == 0U || pointer_size > sizeof(uint64_t)) {
+        return false;
+    }
+    pointer_width = (unsigned int)(pointer_size * (size_t)CHAR_BIT);
+    if (pointer_width == 0U || pointer_width > 64U) {
+        return false;
+    }
+
+    if (eval_null_based_pointer_constant(program,
+                                         target,
+                                         expression->value.unary.operand,
+                                         depth + 1U,
+                                         &operand_bits)) {
+        if (pointer_width < 64U && operand_bits > width_mask(pointer_width)) {
+            return false;
+        }
+        return normalize_bits(program, target, expression->type, operand_bits, bits);
+    }
+
+    if (pointer_cast->kind != MINIC_EXPRESSION_CAST &&
+        pointer_cast->kind != MINIC_EXPRESSION_BITCAST) {
         return false;
     }
     integer_operand = minic_c0_program_expression(program, pointer_cast->value.unary.operand);
     if (integer_operand == NULL || !minic_type_is_integer(integer_operand->type) ||
         !eval_expression(
-            program, target, pointer_cast->value.unary.operand, depth + 2U, &operand) ||
-        !minic_target_info_sizeof_type(target, program, pointer_cast->type, &pointer_size) ||
-        pointer_size == 0U || pointer_size > sizeof(uint64_t)) {
+            program, target, pointer_cast->value.unary.operand, depth + 2U, &operand)) {
         return false;
     }
     if (integer_type_is_signed(program, operand.type)) {
@@ -425,9 +443,7 @@ static bool integer_cast_operand_is_pointer_roundtrip_constant(const MinicC0Prog
     } else if (!normalize_bits(program, target, operand.type, operand.bits, &operand_bits)) {
         return false;
     }
-    pointer_width = (unsigned int)(pointer_size * (size_t)CHAR_BIT);
-    if (pointer_width == 0U || pointer_width > 64U ||
-        (pointer_width < 64U && operand_bits > width_mask(pointer_width))) {
+    if (pointer_width < 64U && operand_bits > width_mask(pointer_width)) {
         return false;
     }
     return normalize_bits(program, target, expression->type, operand_bits, bits);

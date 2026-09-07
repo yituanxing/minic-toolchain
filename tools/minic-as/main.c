@@ -1,5 +1,6 @@
 #include "minias.h"
 
+#include <elf.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -53,14 +54,38 @@ int main(int argc, char **argv) {
             }
         } else if (strncmp(argv[i], "-mabi=", 6U) == 0) {
             const char *abi = argv[i] + 6;
-            if (strncmp(abi, "ilp32", 5U) == 0) {
+            uint32_t abi_flags = 0U;
+
+            if (strcmp(abi, "ilp32") == 0) {
                 elf32 = true;
-            } else if (strncmp(abi, "lp64", 4U) == 0) {
+                abi_flags = EF_RISCV_FLOAT_ABI_SOFT;
+            } else if (strcmp(abi, "ilp32f") == 0) {
+                elf32 = true;
+                abi_flags = EF_RISCV_FLOAT_ABI_SINGLE;
+            } else if (strcmp(abi, "ilp32d") == 0) {
+                elf32 = true;
+                abi_flags = EF_RISCV_FLOAT_ABI_DOUBLE;
+            } else if (strcmp(abi, "ilp32e") == 0) {
+                elf32 = true;
+                abi_flags = EF_RISCV_FLOAT_ABI_SOFT | EF_RISCV_RVE;
+            } else if (strcmp(abi, "lp64") == 0) {
                 elf32 = false;
+                abi_flags = EF_RISCV_FLOAT_ABI_SOFT;
+            } else if (strcmp(abi, "lp64f") == 0) {
+                elf32 = false;
+                abi_flags = EF_RISCV_FLOAT_ABI_SINGLE;
+            } else if (strcmp(abi, "lp64d") == 0) {
+                elf32 = false;
+                abi_flags = EF_RISCV_FLOAT_ABI_DOUBLE;
+            } else if (strcmp(abi, "lp64q") == 0) {
+                elf32 = false;
+                abi_flags = EF_RISCV_FLOAT_ABI_QUAD;
             } else {
                 fprintf(stderr, "minic-as: unsupported-abi:%s\n", abi);
                 return 2;
             }
+            elf_flags &= ~(uint32_t)(EF_RISCV_FLOAT_ABI | EF_RISCV_RVE);
+            elf_flags |= abi_flags;
         } else if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
             usage(stdout, argv[0]);
             return 0;

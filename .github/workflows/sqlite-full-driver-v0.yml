@@ -1,0 +1,565 @@
+name: SQLite Full Driver V0
+
+on:
+  push:
+    branches:
+      - toolchain/minic-driver-static-v0
+  pull_request:
+    branches:
+      - toolchain/static-readiness
+  workflow_dispatch:
+
+jobs:
+  sqlite-frontier:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Verify fast-path host tools
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          command -v cc
+          command -v make
+          command -v curl
+          command -v python3
+          command -v tar
+          echo "SQLITE_FAST_HOST_TOOLS=PASS"
+
+      - name: Build fast-path Mini tools
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          build=build/sqlite-full-driver-v0
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$build" \
+            "$build/bin/minic" \
+            "$build/bin/minic-cc" \
+            "$build/bin/minic-cpp" \
+            "$build/bin/minic-as"
+          echo "SQLITE_FAST_TOOLCHAIN_BUILD=PASS tools=minic,minic-cc,minic-cpp,minic-as"
+
+      - name: Prepare SQLite 3.53.4 and musl headers
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/sqlite-full-driver-v0"
+          mkdir -p "$work"
+
+          curl -fsSL https://www.sqlite.org/2026/sqlite-amalgamation-3530400.zip \
+            -o "$work/sqlite-amalgamation-3530400.zip"
+          python3 - "$work/sqlite-amalgamation-3530400.zip" <<'PY'
+          import hashlib, pathlib, sys, zipfile
+          path = pathlib.Path(sys.argv[1])
+          expected = "628a44cfe82c66aed1ccbbe85a562d2e33ebe64b3288981ed76285612227934e"
+          got = hashlib.sha3_256(path.read_bytes()).hexdigest()
+          if got != expected:
+              raise SystemExit(f"SQLite SHA3-256 mismatch: {got}")
+          with zipfile.ZipFile(path) as zf:
+              zf.extractall(path.parent / "sqlite-source")
+          print("SQLITE_SOURCE_SHA3_256=PASS release=3.53.4")
+          PY
+
+          curl -fsSL https://musl.libc.org/releases/musl-1.2.5.tar.gz \
+            -o "$work/musl-1.2.5.tar.gz"
+          printf '%s  %s\n' \
+            a9a118bbe84d8764da0ea0d28b3ab3fae8477fc7e4085d90102b8596fc7c75e4 \
+            "$work/musl-1.2.5.tar.gz" | sha256sum -c -
+          tar -xzf "$work/musl-1.2.5.tar.gz" -C "$work"
+
+          sysroot="$work/musl-sysroot"
+          mkdir -p "$sysroot"
+          make -C "$work/musl-1.2.5" \
+            ARCH=riscv64 prefix=/usr DESTDIR="$sysroot" \
+            install-headers >"$work/musl-headers.log" 2>&1
+
+          test -f "$work/sqlite-source/sqlite-amalgamation-3530400/sqlite3.c"
+          test -f "$work/sqlite-source/sqlite-amalgamation-3530400/sqlite3.h"
+          test -f "$work/sqlite-source/sqlite-amalgamation-3530400/shell.c"
+          test -f "$sysroot/usr/include/stdlib.h"
+          echo "SQLITE_FAST_PREP=PASS sqlite=3.53.4 musl_headers=1"
+
+      - name: Compile official SQLite shell through Mini toolchain
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/sqlite-full-driver-v0"
+          src="$work/sqlite-source/sqlite-amalgamation-3530400"
+          sysroot="$work/musl-sysroot"
+          driver="$work/bin/minic"
+          cpp="$work/bin/minic-cpp"
+          mkdir -p "$work/raw"
+
+          set +e
+          "$driver" --sysroot "$sysroot/usr" -I"$src" \
+            -c "$src/shell.c" -o "$work/raw/shell.o" \
+            >"$work/raw/shell.stdout" 2>"$work/raw/shell.stderr"
+          rc=$?
+          set -e
+          echo "SQLITE_RAW_SHELL_RC=$rc"
+          if test "$rc" -ne 0; then
+            cat "$work/raw/shell.stderr"
+            "$cpp" -E -P -undef -nostdinc \
+              -D__STDC__=1 -D__STDC_VERSION__=201112L -D__STDC_HOSTED__=1 \
+              -D__linux__=1 -D__linux=1 -Dlinux=1 \
+              -D__unix__=1 -D__unix=1 -D__riscv=1 -D__riscv_xlen=64 \
+              -D__LP64__=1 -D_LP64=1 -D__riscv_float_abi_double=1 \
+              -D__ORDER_LITTLE_ENDIAN__=1234 -D__ORDER_BIG_ENDIAN__=4321 \
+              -D__BYTE_ORDER__=__ORDER_LITTLE_ENDIAN__ -D__CHAR_BIT__=8 \
+              -D__SIZEOF_SHORT__=2 -D__SIZEOF_INT__=4 -D__SIZEOF_LONG__=8 \
+              -D__SIZEOF_LONG_LONG__=8 -D__SIZEOF_POINTER__=8 -D__SIZEOF_SIZE_T__=8 \
+              -isystem "$sysroot/usr/include" -I"$src" \
+              "$src/shell.c" -o "$work/raw/shell.i"
+            fail_line="$(sed -n 's/.*:\([0-9][0-9]*\):[0-9][0-9]*: error:.*/\1/p' "$work/raw/shell.stderr" | head -n1)"
+            if test -n "$fail_line"; then
+              start=$((fail_line > 24 ? fail_line - 24 : 1))
+              end=$((fail_line + 24))
+              echo "SQLITE_SHELL_FRONTIER_CONTEXT_BEGIN line=$fail_line"
+              nl -ba "$work/raw/shell.i" | sed -n "${start},${end}p"
+              echo "SQLITE_SHELL_FRONTIER_CONTEXT_END line=$fail_line"
+            fi
+            exit "$rc"
+          fi
+          test -s "$work/raw/shell.o"
+          echo "SQLITE_RAW_SHELL_V0=PASS source=shell.c pipeline=cpp,cc,as"
+
+      - name: Fast raw SQLite engine frontier
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/sqlite-full-driver-v0"
+          src="$work/sqlite-source/sqlite-amalgamation-3530400"
+          sysroot="$work/musl-sysroot"
+          driver="$work/bin/minic"
+          cpp="$work/bin/minic-cpp"
+          mkdir -p "$work/raw"
+
+          set +e
+          timeout 300s "$driver" --sysroot "$sysroot/usr" \
+            -I"$src" -c "$src/sqlite3.c" -o "$work/raw/sqlite3.o" \
+            >"$work/raw/sqlite3.stdout" 2>"$work/raw/sqlite3.stderr"
+          rc=$?
+          set -e
+
+          echo "SQLITE_RAW_ENGINE_RC=$rc"
+          if test "$rc" -ne 0; then
+            cat "$work/raw/sqlite3.stderr"
+            "$cpp" -E -P -undef -nostdinc \
+              -D__STDC__=1 -D__STDC_VERSION__=201112L -D__STDC_HOSTED__=1 \
+              -D__linux__=1 -D__linux=1 -Dlinux=1 \
+              -D__unix__=1 -D__unix=1 -D__riscv=1 -D__riscv_xlen=64 \
+              -D__LP64__=1 -D_LP64=1 -D__riscv_float_abi_double=1 \
+              -D__ORDER_LITTLE_ENDIAN__=1234 -D__ORDER_BIG_ENDIAN__=4321 \
+              -D__BYTE_ORDER__=__ORDER_LITTLE_ENDIAN__ -D__CHAR_BIT__=8 \
+              -D__SIZEOF_SHORT__=2 -D__SIZEOF_INT__=4 -D__SIZEOF_LONG__=8 \
+              -D__SIZEOF_LONG_LONG__=8 -D__SIZEOF_POINTER__=8 -D__SIZEOF_SIZE_T__=8 \
+              -isystem "$sysroot/usr/include" -I"$src" \
+              "$src/sqlite3.c" -o "$work/raw/sqlite3.i"
+            echo "SQLITE_RAW_ENGINE_PREPROCESSED=$work/raw/sqlite3.i"
+            fail_line="$(sed -n 's/.*:\([0-9][0-9]*\):[0-9][0-9]*: error:.*/\1/p' "$work/raw/sqlite3.stderr" | head -n1)"
+            if test -n "$fail_line"; then
+              start=$((fail_line > 24 ? fail_line - 24 : 1))
+              end=$((fail_line + 24))
+              echo "SQLITE_FRONTIER_CONTEXT_BEGIN line=$fail_line"
+              nl -ba "$work/raw/sqlite3.i" | sed -n "${start},${end}p"
+              echo "SQLITE_FRONTIER_CONTEXT_END line=$fail_line"
+            fi
+            exit "$rc"
+          fi
+
+          test -s "$work/raw/sqlite3.o"
+          echo "SQLITE_RAW_ENGINE_V0=PASS source=sqlite3.c pipeline=cpp,cc,as"
+
+      - name: Install runtime qualification packages
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          timeout 240s sudo apt-get -o Acquire::Retries=3 update
+          timeout 240s sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
+            libc6-riscv64-cross libc6-dev-riscv64-cross qemu-user
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/sqlite-full-driver-v0 all
+          echo "SQLITE_RUNTIME_HOST_READY=PASS"
+
+      - name: Build pristine musl runtime and MiniLD loader
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/sqlite-full-driver-v0"
+          musl_src="$work/musl-1.2.5"
+          musl_out="$work/musl-build"
+          sysroot="$work/musl-sysroot"
+
+          rm -rf "$musl_out"
+          mkdir -p "$musl_out"
+          cd "$musl_out"
+          CC=riscv64-linux-gnu-gcc \
+          AR=riscv64-linux-gnu-ar \
+          RANLIB=riscv64-linux-gnu-ranlib \
+            "$musl_src/configure" \
+              --target=riscv64-linux-gnu \
+              --enable-shared \
+              --prefix=/usr \
+            >"$work/musl-configure.log" 2>&1
+          make -j4 V=1 lib/libc.so lib/libc.a \
+            lib/Scrt1.o lib/crt1.o lib/crti.o lib/crtn.o \
+            >"$work/musl-make.log" 2>&1
+
+          mkdir -p "$sysroot/usr/lib"
+          cp "$musl_out/lib/Scrt1.o" "$musl_out/lib/crt1.o" \
+            "$musl_out/lib/crti.o" "$musl_out/lib/crtn.o" \
+            "$sysroot/usr/lib/"
+          cp "$musl_out/lib/libc.so" "$sysroot/usr/lib/libc.so"
+          cp "$musl_out/lib/libc.a" "$sysroot/usr/lib/libc.a"
+          libgcc="$(riscv64-linux-gnu-gcc -print-libgcc-file-name)"
+          cp "$libgcc" "$sysroot/usr/lib/libgcc.a"
+
+          python3 - "$work/musl-make.log" "$work/musl-input-list.txt" <<'PY'
+          import shlex, sys
+          lines=open(sys.argv[1], encoding="utf-8", errors="replace").read().splitlines()
+          for i,line in enumerate(lines):
+              if " -nostdlib -shared " not in line:
+                  continue
+              full=line.rstrip()
+              j=i+1
+              while full.endswith("\\") and j < len(lines):
+                  full=full[:-1] + " " + lines[j].strip()
+                  j += 1
+              words=shlex.split(full)
+              objs=[w for w in words if w.endswith(".lo")]
+              if len(objs) >= 1000:
+                  open(sys.argv[2],"w").write("\n".join(objs)+"\n")
+                  print("SQLITE_MUSL_LINK_OBJECTS=%d" % len(objs))
+                  break
+          else:
+              raise SystemExit("shared musl link command not found")
+          PY
+
+          minild="$work/bin/minic-ld"
+          libgcc="$(riscv64-linux-gnu-gcc -print-libgcc-file-name)"
+          libgcc_eh="$(riscv64-linux-gnu-gcc -print-file-name=libgcc_eh.a)"
+          mapfile -t rel_inputs <"$work/musl-input-list.txt"
+          inputs=()
+          for p in "${rel_inputs[@]}"; do
+            inputs+=("$musl_out/$p")
+          done
+
+          "$minild" -melf64lriscv -shared -e _dlstart \
+            --dynamic-list="$musl_src/dynamic.list" \
+            -o "$work/libc-minild.so" \
+            "${inputs[@]}" "$libgcc" "$libgcc_eh"
+
+          mkdir -p "$sysroot/lib"
+          cp "$work/libc-minild.so" "$sysroot/lib/ld-musl-riscv64.so.1"
+          cp "$work/libc-minild.so" "$sysroot/lib/libc.so"
+          chmod +x "$sysroot/lib/ld-musl-riscv64.so.1" "$sysroot/lib/libc.so"
+          echo "SQLITE_MINILD_MUSL_LOADER=PASS"
+
+      - name: Build SQLite API persistence harness through Mini toolchain
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/sqlite-full-driver-v0"
+          src="$work/sqlite-source/sqlite-amalgamation-3530400"
+          sysroot="$work/musl-sysroot"
+          driver="$work/bin/minic"
+
+          cat >"$work/sqlite-runtime.c" <<'C'
+          #include "sqlite3.h"
+          #include <stdio.h>
+          #include <string.h>
+
+          static int fail(sqlite3 *db, const char *where, int rc) {
+              const char *msg = db ? sqlite3_errmsg(db) : "no-db";
+              fprintf(stderr, "SQLITE_RUNTIME_FAIL where=%s rc=%d msg=%s\n", where, rc, msg);
+              if (db) sqlite3_close(db);
+              return rc ? rc : 99;
+          }
+
+          int main(int argc, char **argv) {
+              sqlite3 *db = 0;
+              sqlite3_stmt *stmt = 0;
+              char *err = 0;
+              const unsigned char *top;
+              int rc;
+
+              if (argc != 2) {
+                  fprintf(stderr, "usage: sqlite-runtime DB\n");
+                  return 90;
+              }
+              rc = sqlite3_open(argv[1], &db);
+              if (rc != SQLITE_OK) return fail(db, "open-create", rc);
+
+              rc = sqlite3_exec(db,
+                  "DROP TABLE IF EXISTS items;"
+                  "CREATE TABLE items(id INTEGER PRIMARY KEY, name TEXT NOT NULL, score INTEGER);"
+                  "BEGIN;"
+                  "INSERT INTO items(name,score) VALUES('alpha',10),('beta',20),('gamma',30);"
+                  "COMMIT;",
+                  0, 0, &err);
+              if (rc != SQLITE_OK) {
+                  fprintf(stderr, "SQLITE_RUNTIME_EXEC_ERROR=%s\n", err ? err : "unknown");
+                  sqlite3_free(err);
+                  return fail(db, "schema-data", rc);
+              }
+              rc = sqlite3_close(db);
+              db = 0;
+              if (rc != SQLITE_OK) return fail(0, "close-create", rc);
+
+              rc = sqlite3_open(argv[1], &db);
+              if (rc != SQLITE_OK) return fail(db, "open-persisted", rc);
+              rc = sqlite3_prepare_v2(db,
+                  "SELECT count(*), sum(score), "
+                  "(SELECT name FROM items ORDER BY score DESC LIMIT 1) "
+                  "FROM items WHERE score >= ?1;",
+                  -1, &stmt, 0);
+              if (rc != SQLITE_OK) return fail(db, "prepare", rc);
+              rc = sqlite3_bind_int(stmt, 1, 15);
+              if (rc != SQLITE_OK) return fail(db, "bind", rc);
+              rc = sqlite3_step(stmt);
+              if (rc != SQLITE_ROW) return fail(db, "step-row", rc);
+
+              top = sqlite3_column_text(stmt, 2);
+              if (sqlite3_column_int(stmt, 0) != 2 ||
+                  sqlite3_column_int(stmt, 1) != 50 ||
+                  top == 0 || strcmp((const char *)top, "gamma") != 0) {
+                  fprintf(stderr, "SQLITE_RUNTIME_BAD_RESULT count=%d sum=%d top=%s\n",
+                          sqlite3_column_int(stmt, 0),
+                          sqlite3_column_int(stmt, 1),
+                          top ? (const char *)top : "(null)");
+                  sqlite3_finalize(stmt);
+                  sqlite3_close(db);
+                  return 91;
+              }
+              printf("SQLITE_RUNTIME_V0=PASS count=2 sum=50 top=gamma persistence=1 prepared=1\n");
+              rc = sqlite3_finalize(stmt);
+              if (rc != SQLITE_OK) return fail(db, "finalize", rc);
+              rc = sqlite3_close(db);
+              if (rc != SQLITE_OK) return fail(0, "close-final", rc);
+              return 0;
+          }
+          C
+
+          "$driver" --sysroot "$sysroot/usr" -I"$src" \
+            -c "$work/sqlite-runtime.c" -o "$work/sqlite-runtime.o" \
+            >"$work/sqlite-runtime-compile.stdout" \
+            2>"$work/sqlite-runtime-compile.stderr"
+
+          "$driver" --sysroot "$sysroot/usr" \
+            -o "$work/sqlite-runtime" \
+            "$work/raw/sqlite3.o" "$work/sqlite-runtime.o" \
+            >"$work/sqlite-runtime-link.stdout" \
+            2>"$work/sqlite-runtime-link.stderr"
+
+          test -x "$work/sqlite-runtime"
+          riscv64-linux-gnu-readelf -h "$work/sqlite-runtime" >"$work/sqlite-runtime.header"
+          riscv64-linux-gnu-readelf -lW "$work/sqlite-runtime" >"$work/sqlite-runtime.programs"
+          riscv64-linux-gnu-readelf -d "$work/sqlite-runtime" >"$work/sqlite-runtime.dynamic"
+          grep -q 'DYN (Position-Independent Executable file)' "$work/sqlite-runtime.header"
+          grep -q 'Requesting program interpreter: /lib/ld-musl-riscv64.so.1' \
+            "$work/sqlite-runtime.programs"
+          grep -q '(NEEDED).*\[libc.so\]' "$work/sqlite-runtime.dynamic"
+          echo "SQLITE_MINI_LINK_V0=PASS engine=sqlite3.o app=sqlite-runtime.o"
+
+      - name: Run SQLite API persistence suite under qemu-riscv64
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/sqlite-full-driver-v0"
+          sysroot="$work/musl-sysroot"
+          db="$work/sqlite-runtime.db"
+          rm -f "$db" "$db-journal" "$db-wal" "$db-shm"
+
+          timeout 60s qemu-riscv64 -L "$sysroot" "$work/sqlite-runtime" "$db" \
+            >"$work/sqlite-runtime.stdout" \
+            2>"$work/sqlite-runtime.stderr"
+          cat "$work/sqlite-runtime.stdout"
+          cat "$work/sqlite-runtime.stderr"
+          grep -F 'SQLITE_RUNTIME_V0=PASS count=2 sum=50 top=gamma persistence=1 prepared=1' \
+            "$work/sqlite-runtime.stdout" >/dev/null
+          test -s "$db"
+          echo "SQLITE_RUNTIME_PERSISTENCE_V0=PASS db_bytes=$(stat -c %s "$db")"
+
+      - name: Link and run official sqlite3 CLI through MiniLD
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/sqlite-full-driver-v0"
+          sysroot="$work/musl-sysroot"
+          driver="$work/bin/minic"
+
+          "$driver" --sysroot "$sysroot/usr" \
+            -o "$work/sqlite3-minic" \
+            "$work/raw/sqlite3.o" "$work/raw/shell.o" \
+            >"$work/sqlite-shell-link.stdout" \
+            2>"$work/sqlite-shell-link.stderr"
+          test -x "$work/sqlite3-minic"
+
+          riscv64-linux-gnu-readelf -h "$work/sqlite3-minic" >"$work/sqlite3-minic.header"
+          riscv64-linux-gnu-readelf -lW "$work/sqlite3-minic" >"$work/sqlite3-minic.programs"
+          grep -q 'DYN (Position-Independent Executable file)' "$work/sqlite3-minic.header"
+          grep -q 'Requesting program interpreter: /lib/ld-musl-riscv64.so.1' \
+            "$work/sqlite3-minic.programs"
+
+          timeout 60s qemu-riscv64 -L "$sysroot" "$work/sqlite3-minic" \
+            -batch :memory: "select sqlite_version(), 6*7;" \
+            >"$work/sqlite-shell-smoke.stdout" \
+            2>"$work/sqlite-shell-smoke.stderr"
+          cat "$work/sqlite-shell-smoke.stdout"
+          cat "$work/sqlite-shell-smoke.stderr"
+          grep -F '3.53.4|42' "$work/sqlite-shell-smoke.stdout" >/dev/null
+          echo "SQLITE_SHELL_RUNTIME_V0=PASS release=3.53.4 query=42"
+
+      - name: Link and run official sqlite3 CLI statically through full Mini driver
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/sqlite-full-driver-v0"
+          sysroot="$work/musl-sysroot"
+          driver="$work/bin/minic"
+          static_cli="$work/sqlite3-minic-static"
+
+          "$driver" --sysroot "$sysroot/usr" -static \
+            -o "$static_cli" \
+            "$work/raw/sqlite3.o" "$work/raw/shell.o" \
+            >"$work/sqlite-shell-static-link.stdout" \
+            2>"$work/sqlite-shell-static-link.stderr"
+          test -x "$static_cli"
+
+          riscv64-linux-gnu-readelf -h "$static_cli" \
+            >"$work/sqlite3-minic-static.header"
+          riscv64-linux-gnu-readelf -lW "$static_cli" \
+            >"$work/sqlite3-minic-static.programs"
+          if riscv64-linux-gnu-readelf -lW "$static_cli" | \
+             grep -q 'Requesting program interpreter'; then
+            echo "SQLITE_STATIC_DRIVER=FAIL unexpected-interpreter" >&2
+            exit 1
+          fi
+          if riscv64-linux-gnu-readelf -d "$static_cli" 2>/dev/null | \
+             grep -q '(NEEDED)'; then
+            echo "SQLITE_STATIC_DRIVER=FAIL unexpected-needed" >&2
+            exit 1
+          fi
+
+          timeout 60s qemu-riscv64 "$static_cli" \
+            -batch :memory: "select sqlite_version(), 6*7;" \
+            >"$work/sqlite-shell-static-smoke.stdout" \
+            2>"$work/sqlite-shell-static-smoke.stderr"
+          cat "$work/sqlite-shell-static-smoke.stdout"
+          cat "$work/sqlite-shell-static-smoke.stderr"
+          grep -F '3.53.4|42' "$work/sqlite-shell-static-smoke.stdout" >/dev/null
+          echo "SQLITE_STATIC_DRIVER_V0=PASS release=3.53.4 query=42 producer=MiniPP,MiniC,MiniAS,MiniLD"
+
+      - name: Run official sqlite3 CLI file acceptance
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/sqlite-full-driver-v0"
+          sysroot="$work/musl-sysroot"
+          cli="$work/sqlite3-minic"
+          db="$work/sqlite-shell.db"
+          rm -f "$db" "$db-journal" "$db-wal" "$db-shm"
+
+          timeout 60s qemu-riscv64 -L "$sysroot" "$cli" -batch "$db" \
+            "CREATE TABLE items(id INTEGER PRIMARY KEY, name TEXT NOT NULL, score INTEGER); \
+             BEGIN; \
+             INSERT INTO items(name,score) VALUES('alpha',10),('beta',20),('gamma',30); \
+             CREATE INDEX items_score ON items(score); \
+             COMMIT;" \
+            >"$work/sqlite-shell-create.stdout" \
+            2>"$work/sqlite-shell-create.stderr"
+          test -s "$db"
+
+          timeout 60s qemu-riscv64 -L "$sysroot" "$cli" -batch "$db" \
+            "BEGIN; UPDATE items SET score=25 WHERE name='beta'; \
+             DELETE FROM items WHERE name='gamma'; \
+             INSERT INTO items(name,score) VALUES('delta',40); COMMIT;" \
+            >"$work/sqlite-shell-mutate.stdout" \
+            2>"$work/sqlite-shell-mutate.stderr"
+
+          timeout 60s qemu-riscv64 -L "$sysroot" "$cli" -batch "$db" \
+            "SELECT count(*),sum(score),max(score) FROM items;" \
+            >"$work/sqlite-shell-query.stdout" \
+            2>"$work/sqlite-shell-query.stderr"
+          cat "$work/sqlite-shell-query.stdout"
+          grep -Fx '3|75|40' "$work/sqlite-shell-query.stdout" >/dev/null
+
+          timeout 60s qemu-riscv64 -L "$sysroot" "$cli" -batch "$db" \
+            "PRAGMA integrity_check;" \
+            >"$work/sqlite-shell-integrity.stdout" \
+            2>"$work/sqlite-shell-integrity.stderr"
+          grep -Fx 'ok' "$work/sqlite-shell-integrity.stdout" >/dev/null
+
+          timeout 60s qemu-riscv64 -L "$sysroot" "$cli" -batch "$db" \
+            ".schema items" \
+            >"$work/sqlite-shell-schema.stdout" \
+            2>"$work/sqlite-shell-schema.stderr"
+          grep -F 'CREATE TABLE items' "$work/sqlite-shell-schema.stdout" >/dev/null
+          grep -F 'CREATE INDEX items_score' "$work/sqlite-shell-schema.stdout" >/dev/null
+
+          timeout 60s qemu-riscv64 -L "$sysroot" "$cli" -batch "$db" \
+            ".dump items" \
+            >"$work/sqlite-shell-dump.stdout" \
+            2>"$work/sqlite-shell-dump.stderr"
+          grep -F 'CREATE TABLE items' "$work/sqlite-shell-dump.stdout" >/dev/null
+          test "$(grep -c '^INSERT INTO items' "$work/sqlite-shell-dump.stdout")" -eq 3
+
+          echo "SQLITE_SHELL_FILE_V0=PASS rows=3 sum=75 max=40 integrity=ok schema=1 dump=3 db_bytes=$(stat -c %s "$db")"
+
+      - name: Preserve SQLite frontier evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sqlite-full-driver-v0-frontier
+          path: |
+            build/sqlite-full-driver-v0/raw/sqlite3.stderr
+            build/sqlite-full-driver-v0/raw/sqlite3.stdout
+            build/sqlite-full-driver-v0/raw/sqlite3.i
+            build/sqlite-full-driver-v0/raw/shell.stderr
+            build/sqlite-full-driver-v0/raw/shell.stdout
+            build/sqlite-full-driver-v0/raw/shell.i
+            build/sqlite-full-driver-v0/raw/shell.o
+            build/sqlite-full-driver-v0/musl-headers.log
+            build/sqlite-full-driver-v0/musl-configure.log
+            build/sqlite-full-driver-v0/musl-make.log
+            build/sqlite-full-driver-v0/musl-input-list.txt
+            build/sqlite-full-driver-v0/sqlite-runtime.c
+            build/sqlite-full-driver-v0/sqlite-runtime-compile.stdout
+            build/sqlite-full-driver-v0/sqlite-runtime-compile.stderr
+            build/sqlite-full-driver-v0/sqlite-runtime-link.stdout
+            build/sqlite-full-driver-v0/sqlite-runtime-link.stderr
+            build/sqlite-full-driver-v0/sqlite-runtime.header
+            build/sqlite-full-driver-v0/sqlite-runtime.programs
+            build/sqlite-full-driver-v0/sqlite-runtime.dynamic
+            build/sqlite-full-driver-v0/sqlite-runtime.stdout
+            build/sqlite-full-driver-v0/sqlite-runtime.stderr
+            build/sqlite-full-driver-v0/sqlite-runtime
+            build/sqlite-full-driver-v0/sqlite-runtime.db
+            build/sqlite-full-driver-v0/sqlite-shell-link.stdout
+            build/sqlite-full-driver-v0/sqlite-shell-link.stderr
+            build/sqlite-full-driver-v0/sqlite3-minic.header
+            build/sqlite-full-driver-v0/sqlite3-minic.programs
+            build/sqlite-full-driver-v0/sqlite-shell-smoke.stdout
+            build/sqlite-full-driver-v0/sqlite-shell-smoke.stderr
+            build/sqlite-full-driver-v0/sqlite-shell-static-link.stdout
+            build/sqlite-full-driver-v0/sqlite-shell-static-link.stderr
+            build/sqlite-full-driver-v0/sqlite3-minic-static.header
+            build/sqlite-full-driver-v0/sqlite3-minic-static.programs
+            build/sqlite-full-driver-v0/sqlite-shell-static-smoke.stdout
+            build/sqlite-full-driver-v0/sqlite-shell-static-smoke.stderr
+            build/sqlite-full-driver-v0/sqlite3-minic
+            build/sqlite-full-driver-v0/sqlite-shell.db
+            build/sqlite-full-driver-v0/sqlite-shell-create.stdout
+            build/sqlite-full-driver-v0/sqlite-shell-create.stderr
+            build/sqlite-full-driver-v0/sqlite-shell-mutate.stdout
+            build/sqlite-full-driver-v0/sqlite-shell-mutate.stderr
+            build/sqlite-full-driver-v0/sqlite-shell-query.stdout
+            build/sqlite-full-driver-v0/sqlite-shell-query.stderr
+            build/sqlite-full-driver-v0/sqlite-shell-integrity.stdout
+            build/sqlite-full-driver-v0/sqlite-shell-integrity.stderr
+            build/sqlite-full-driver-v0/sqlite-shell-schema.stdout
+            build/sqlite-full-driver-v0/sqlite-shell-schema.stderr
+            build/sqlite-full-driver-v0/sqlite-shell-dump.stdout
+            build/sqlite-full-driver-v0/sqlite-shell-dump.stderr

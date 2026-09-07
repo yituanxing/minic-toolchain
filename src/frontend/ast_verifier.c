@@ -166,7 +166,9 @@ static bool expression_is_integer_zero(const MinicExpression *expression) {
 }
 
 static bool type_is_condition_scalar(MinicType type) {
-    return minic_type_is_integer(type) || minic_type_is_pointer(type);
+    return minic_type_is_integer(type) || minic_type_is_pointer(type) ||
+           minic_type_is_float(type) || minic_type_is_double(type) ||
+           minic_type_is_long_double(type);
 }
 
 static bool verify_binary_type(const MinicC0Program *program,
@@ -232,7 +234,16 @@ static bool verify_binary_type(const MinicC0Program *program,
         minic_type_is_long_double(left->type) && minic_type_is_long_double(right->type)) {
         return minic_type_equal(expression->type, minic_type_int());
     }
+    if (minic_type_is_long_double(left->type) &&
+        minic_type_is_long_double(right->type) &&
+        binary_is_double_arithmetic(expression->value.binary.operator_kind)) {
+        return minic_type_is_long_double(expression->type);
+    }
 
+    if (minic_type_is_float(left->type) && minic_type_is_float(right->type) &&
+        binary_is_double_arithmetic(expression->value.binary.operator_kind)) {
+        return minic_type_is_float(expression->type);
+    }
     if ((minic_type_is_double(left->type) || minic_type_is_integer(left->type)) &&
         (minic_type_is_double(right->type) || minic_type_is_integer(right->type)) &&
         (minic_type_is_double(left->type) || minic_type_is_double(right->type)) &&
@@ -367,7 +378,8 @@ static bool verify_expression(const MinicC0Program *program,
     case MINIC_EXPRESSION_FLOATING:
         return expression->value_category == MINIC_VALUE_RVALUE &&
                (minic_type_is_float(expression->type) ||
-                minic_type_is_double(expression->type));
+                minic_type_is_double(expression->type) ||
+                minic_type_is_long_double(expression->type));
     case MINIC_EXPRESSION_LOCAL: {
         const MinicLocal *local;
 
@@ -620,11 +632,16 @@ static bool verify_expression(const MinicC0Program *program,
                    minic_type_pointee(left->type, &pointee_type) &&
                    minic_c0_pointer_arithmetic_pointee_allowed(program, pointee_type);
         }
-        if (minic_type_is_double(left->type)) {
+        if (minic_type_is_float(left->type) ||
+            minic_type_is_double(left->type) ||
+            minic_type_is_long_double(left->type)) {
             return (operator_kind == MINIC_BINARY_ADD || operator_kind == MINIC_BINARY_SUBTRACT ||
                     operator_kind == MINIC_BINARY_MULTIPLY ||
                     operator_kind == MINIC_BINARY_DIVIDE) &&
-                   (minic_type_is_double(right->type) || minic_type_is_integer(right->type));
+                   (minic_type_is_integer(right->type) ||
+                    minic_type_is_float(right->type) ||
+                    minic_type_is_double(right->type) ||
+                    minic_type_is_long_double(right->type));
         }
         if (operator_kind != MINIC_BINARY_ADD && operator_kind != MINIC_BINARY_SUBTRACT &&
             operator_kind != MINIC_BINARY_MULTIPLY && operator_kind != MINIC_BINARY_DIVIDE &&
@@ -668,8 +685,12 @@ static bool verify_expression(const MinicC0Program *program,
         }
         if ((expression->value.unary.operator_kind == MINIC_UNARY_PLUS ||
              expression->value.unary.operator_kind == MINIC_UNARY_NEGATE) &&
-            minic_type_is_double(operand->type)) {
-            return minic_type_equal(expression->type, operand->type);
+            (minic_type_is_double(operand->type) || minic_type_is_float(operand->type) ||
+             minic_type_is_long_double(operand->type))) {
+            MinicType result_type;
+
+            return minic_type_unqualified(operand->type, &result_type) &&
+                   minic_type_equal(expression->type, result_type);
         }
         if (!minic_type_is_integer(operand->type) ||
             !minic_target_info_integer_promotion_for_program(

@@ -406,7 +406,8 @@ static bool core_call_scalar_type(MinicType type) {
        Keep binary32 and binary64 on the same call seam; target ABI placement
        still decides the physical floating registers. */
     return minic_type_is_integer(type) || minic_type_is_pointer(type) ||
-           minic_type_is_float(type) || minic_type_is_double(type);
+           minic_type_is_float(type) || minic_type_is_double(type) ||
+           minic_type_is_long_double(type);
 }
 
 /* M85_RECORD_CALL_ARGUMENT: direct calls may transport address-backed records
@@ -850,7 +851,25 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
     case MINIC_CORE_INSTRUCTION_FLOATING_CONSTANT:
         return instruction_result_is_valid(function, instruction) &&
                (minic_type_is_float(instruction->type) ||
-                minic_type_is_double(instruction->type));
+                minic_type_is_double(instruction->type) ||
+                minic_type_is_long_double(instruction->type));
+    case MINIC_CORE_INSTRUCTION_FLOAT_ADD:
+    case MINIC_CORE_INSTRUCTION_FLOAT_SUBTRACT:
+    case MINIC_CORE_INSTRUCTION_FLOAT_MULTIPLY:
+    case MINIC_CORE_INSTRUCTION_FLOAT_DIVIDE:
+        if (!instruction_result_is_valid(function, instruction) ||
+            !minic_type_is_float(instruction->type) ||
+            instruction->value.binary.left >= function->value_count ||
+            instruction->value.binary.right >= function->value_count ||
+            !available_values[instruction->value.binary.left] ||
+            !available_values[instruction->value.binary.right]) {
+            return false;
+        }
+        left = &function->values[instruction->value.binary.left];
+        right = &function->values[instruction->value.binary.right];
+        return minic_type_is_float(left->type) &&
+               minic_type_equal(left->type, instruction->type) &&
+               minic_type_equal(right->type, instruction->type);
     case MINIC_CORE_INSTRUCTION_DOUBLE_ADD:
     case MINIC_CORE_INSTRUCTION_DOUBLE_SUBTRACT:
     case MINIC_CORE_INSTRUCTION_DOUBLE_MULTIPLY:
@@ -1849,12 +1868,43 @@ static bool dump_instruction(FILE *output,
                        instruction->result,
                        instruction->value.integer_value) >= 0;
     case MINIC_CORE_INSTRUCTION_FLOATING_CONSTANT:
+        if (minic_type_is_long_double(instruction->type)) {
+            return fprintf(output,
+                           "  %%%" PRIu32 " = const.long_double.bits 0x%016" PRIx64 "%016" PRIx64 "\n",
+                           instruction->result,
+                           instruction->value.floating128_bits.high,
+                           instruction->value.floating128_bits.low) >= 0;
+        }
         return fprintf(output,
                        minic_type_is_float(instruction->type)
                            ? "  %%%" PRIu32 " = const.float.bits 0x%08" PRIx64 "\n"
                            : "  %%%" PRIu32 " = const.double.bits 0x%016" PRIx64 "\n",
                        instruction->result,
                        instruction->value.floating_bits) >= 0;
+    case MINIC_CORE_INSTRUCTION_FLOAT_ADD:
+        return fprintf(output,
+                       "  %%%" PRIu32 " = add.float %%%" PRIu32 ", %%%" PRIu32 "\n",
+                       instruction->result,
+                       instruction->value.binary.left,
+                       instruction->value.binary.right) >= 0;
+    case MINIC_CORE_INSTRUCTION_FLOAT_SUBTRACT:
+        return fprintf(output,
+                       "  %%%" PRIu32 " = sub.float %%%" PRIu32 ", %%%" PRIu32 "\n",
+                       instruction->result,
+                       instruction->value.binary.left,
+                       instruction->value.binary.right) >= 0;
+    case MINIC_CORE_INSTRUCTION_FLOAT_MULTIPLY:
+        return fprintf(output,
+                       "  %%%" PRIu32 " = mul.float %%%" PRIu32 ", %%%" PRIu32 "\n",
+                       instruction->result,
+                       instruction->value.binary.left,
+                       instruction->value.binary.right) >= 0;
+    case MINIC_CORE_INSTRUCTION_FLOAT_DIVIDE:
+        return fprintf(output,
+                       "  %%%" PRIu32 " = div.float %%%" PRIu32 ", %%%" PRIu32 "\n",
+                       instruction->result,
+                       instruction->value.binary.left,
+                       instruction->value.binary.right) >= 0;
     case MINIC_CORE_INSTRUCTION_DOUBLE_ADD:
         return fprintf(output,
                        "  %%%" PRIu32 " = add.double %%%" PRIu32 ", %%%" PRIu32 "\n",

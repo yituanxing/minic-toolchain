@@ -52,7 +52,8 @@ static bool apply_assignment_conversion(MinicParser *parser,
     if (minic_c0_assignment_compatible(parser->program, target_type, source_id)) {
         return true;
     }
-    if (!minic_type_is_double(target_type) || !minic_type_is_integer(source->type)) {
+    if (!minic_type_is_double(target_type) ||
+        (!minic_type_is_integer(source->type) && !minic_type_is_float(source->type))) {
         return true;
     }
 
@@ -1160,7 +1161,11 @@ static bool add_zero_initialized_record_lvalue(MinicParser *parser,
             minic_parser_error(parser, "invalid record field in aggregate initialization");
             return false;
         }
-        if (field->is_flexible_array) {
+        /* Unnamed bit-fields are layout-only padding/alignment slots, not
+           members of the aggregate initializer sequence. In particular musl's
+           struct timespec uses target-dependent zero-width unnamed bit-fields;
+           emitting an assignment for them creates a non-addressable lvalue. */
+        if (field->is_flexible_array || (field->is_bit_field && field->name_length == 0U)) {
             continue;
         }
         (void)memset(&member, 0, sizeof(member));
@@ -2453,6 +2458,58 @@ static bool parse_auto_type_local_declaration(MinicParser *parser) {
         parser, MINIC_TOKEN_SEMICOLON, "expected ';' after GNU __auto_type declaration");
 }
 
+static bool parse_block_scope_function_declaration_after_head(
+    MinicParser *parser, MinicType return_type, MinicSourceSpan name_span) {
+    MinicType parameter_types[16];
+    MinicFunctionId function_id;
+    const MinicFunction *existing_function;
+    size_t parameter_count;
+    bool is_variadic;
+
+    if (parser == NULL || parser->current.kind != MINIC_TOKEN_LPAREN) {
+        return false;
+    }
+    parameter_count = 0U;
+    is_variadic = false;
+    (void)memset(parameter_types, 0, sizeof(parameter_types));
+
+    if (!minic_parser_expect(parser, MINIC_TOKEN_LPAREN, "expected '('") ||
+        !minic_parser_parse_parameter_list(
+            parser, NULL, parameter_types, &parameter_count, false, &is_variadic) ||
+        !minic_parser_expect(parser, MINIC_TOKEN_RPAREN, "expected ')'") ||
+        !minic_parser_parse_gnu_function_attributes(parser) ||
+        !minic_parser_expect(
+            parser, MINIC_TOKEN_SEMICOLON, "expected ';' after block-scope function declaration")) {
+        return false;
+    }
+
+    function_id = minic_parser_find_function(parser, name_span);
+    if (function_id != MINIC_FUNCTION_INVALID) {
+        existing_function = minic_c0_program_function(parser->program, function_id);
+        if (!minic_parser_function_signature_matches(
+                existing_function, return_type, parameter_types, parameter_count, is_variadic)) {
+            minic_parser_error(parser, "conflicting block-scope function declaration");
+            return false;
+        }
+        return true;
+    }
+    if (!minic_c0_program_add_function(parser->program,
+                                       parser->source + name_span.begin.offset,
+                                       minic_parser_span_length(name_span),
+                                       parser->program->local_count,
+                                       0U,
+                                       MINIC_BLOCK_INVALID,
+                                       &function_id) ||
+        !minic_c0_program_set_function_signature(
+            parser->program, function_id, return_type, parameter_types, parameter_count) ||
+        !minic_c0_program_set_function_internal(parser->program, function_id, false) ||
+        !minic_c0_program_set_function_variadic(parser->program, function_id, is_variadic)) {
+        minic_parser_error(parser, "out of memory while declaring block-scope function");
+        return false;
+    }
+    return true;
+}
+
 static bool parse_declaration(MinicParser *parser) {
     MinicLocalObjectAttributes declaration_attributes;
     MinicType base_type;
@@ -2468,6 +2525,24 @@ static bool parse_declaration(MinicParser *parser) {
     if (parser->current.kind == MINIC_TOKEN_SEMICOLON &&
         (minic_type_is_record(base_type) || minic_type_is_enum(base_type))) {
         return minic_parser_advance(parser);
+    }
+
+    if (parser->current.kind == MINIC_TOKEN_IDENTIFIER) {
+        MinicParser probe;
+        MinicSourceSpan function_name_span;
+
+        probe = *parser;
+        function_name_span = parser->current.span;
+        if (!minic_parser_advance(&probe)) {
+            return false;
+        }
+        if (probe.current.kind == MINIC_TOKEN_LPAREN) {
+            if (!minic_parser_advance(parser)) {
+                return false;
+            }
+            return parse_block_scope_function_declaration_after_head(
+                parser, base_type, function_name_span);
+        }
     }
 
     for (;;) {
@@ -5496,6 +5571,13 @@ bool minic_parser_parse_statement(MinicParser *parser, bool allow_declaration) {
             return false;
         }
         return minic_parser_parse_static_assert_declaration(parser);
+    }
+    if (parser->current.kind == MINIC_TOKEN_KW_TYPEDEF) {
+        if (!allow_declaration) {
+            minic_parser_error(parser, "typedef requires a declaration scope");
+            return false;
+        }
+        return minic_parser_parse_typedef(parser);
     }
     if (parser->current.kind == MINIC_TOKEN_KW_IF) {
         return parse_if(parser);

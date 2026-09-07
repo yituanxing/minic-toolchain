@@ -32,6 +32,7 @@ typedef struct MinicParserLocalBinding {
     MinicSourceSpan name_span;
     MinicLocalId local_id;
     MinicGlobalObjectId global_object_id;
+    MinicTypeAliasId type_alias_id;
 } MinicParserLocalBinding;
 
 typedef struct MinicParserRecordTag {
@@ -149,10 +150,14 @@ typedef struct MinicParsedFunctionDeclarator {
     MinicType parameter_types[MINIC_MAX_FUNCTION_PARAMETERS];
     size_t parameter_count;
     MinicType inner_parameter_types[MINIC_MAX_FUNCTION_PARAMETERS];
+    MinicSourceSpan inner_parameter_name_spans[MINIC_MAX_FUNCTION_PARAMETERS];
     size_t inner_parameter_count;
     size_t pointer_depth;
     unsigned int pointer_const_qualifiers;
     unsigned int pointer_volatile_qualifiers;
+    size_t nested_pointer_depth;
+    unsigned int nested_pointer_const_qualifiers;
+    unsigned int nested_pointer_volatile_qualifiers;
     size_t array_bounds[8];
     size_t array_dimension_count;
     unsigned int array_zero_length_mask;
@@ -160,6 +165,7 @@ typedef struct MinicParsedFunctionDeclarator {
     bool has_name;
     bool is_variadic;
     bool has_inner_function_suffix;
+    bool has_nested_function_pointer_object;
     bool inner_is_variadic;
 } MinicParsedFunctionDeclarator;
 
@@ -355,6 +361,9 @@ bool minic_parser_bind_local(MinicParser *parser, MinicSourceSpan name_span, Min
 bool minic_parser_bind_scoped_global_object(MinicParser *parser,
                                             MinicSourceSpan name_span,
                                             MinicGlobalObjectId global_object_id);
+bool minic_parser_bind_type_alias(MinicParser *parser,
+                                  MinicSourceSpan name_span,
+                                  MinicTypeAliasId type_alias_id);
 bool minic_parser_name_bound_in_current_scope(const MinicParser *parser, MinicSourceSpan name_span);
 MinicLocalId minic_parser_find_local_in_current_scope(const MinicParser *parser,
                                                       MinicSourceSpan name_span);

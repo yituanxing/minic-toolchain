@@ -10,8 +10,16 @@ MinicTypeAliasId minic_parser_find_type_alias(const MinicParser *parser,
     size_t name_length;
     size_t index;
 
-    if (minic_parser_name_bound(parser, name_span)) {
+    if (parser == NULL) {
         return MINIC_TYPE_ALIAS_INVALID;
+    }
+    for (index = parser->local_binding_count; index > 0U; --index) {
+        const MinicParserLocalBinding *binding;
+
+        binding = &parser->local_bindings[index - 1U];
+        if (minic_parser_span_equals(parser, binding->name_span, name_span)) {
+            return binding->type_alias_id;
+        }
     }
 
     name_length = minic_parser_span_length(name_span);
@@ -19,7 +27,7 @@ MinicTypeAliasId minic_parser_find_type_alias(const MinicParser *parser,
         const MinicTypeAlias *alias;
 
         alias = minic_c0_program_type_alias(parser->program, index);
-        if (alias != NULL && alias->name_length == name_length &&
+        if (alias != NULL && !alias->is_block_scope && alias->name_length == name_length &&
             memcmp(alias->name, parser->source + name_span.begin.offset, name_length) == 0) {
             return index;
         }
@@ -475,7 +483,10 @@ static bool parse_one_typedef_declarator(
             is_function_declarator = true;
         }
     }
-    if (minic_parser_find_type_alias(parser, name_span) != MINIC_TYPE_ALIAS_INVALID ||
+    if ((parser->scope_count == 0U &&
+         minic_parser_find_type_alias(parser, name_span) != MINIC_TYPE_ALIAS_INVALID) ||
+        (parser->scope_count != 0U &&
+         minic_parser_name_bound_in_current_scope(parser, name_span)) ||
         pending_typedef_name_exists(parser, *aliases, *alias_count, name_span)) {
         minic_parser_error(parser, "duplicate typedef name");
         return false;
@@ -557,14 +568,30 @@ bool minic_parser_parse_typedef(MinicParser *parser) {
     }
     for (index = 0U; index < alias_count; ++index) {
         MinicTypeAliasId alias_id;
+        bool added;
 
-        if (!minic_c0_program_add_type_alias(
+        if (parser->scope_count == 0U) {
+            added = minic_c0_program_add_type_alias(
                 parser->program,
                 parser->source + aliases[index].name_span.begin.offset,
                 minic_parser_span_length(aliases[index].name_span),
                 aliases[index].type,
-                &alias_id)) {
+                &alias_id);
+        } else {
+            added = minic_c0_program_add_block_type_alias(
+                parser->program,
+                parser->source + aliases[index].name_span.begin.offset,
+                minic_parser_span_length(aliases[index].name_span),
+                aliases[index].type,
+                &alias_id);
+        }
+        if (!added) {
             minic_parser_error(parser, "out of memory while adding typedef");
+            free(aliases);
+            return false;
+        }
+        if (parser->scope_count != 0U &&
+            !minic_parser_bind_type_alias(parser, aliases[index].name_span, alias_id)) {
             free(aliases);
             return false;
         }

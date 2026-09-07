@@ -121,7 +121,13 @@ typedef enum MinicCoreInstructionKind {
        32-bit scalar here; arithmetic remains binary64-owned until separately
        admitted. */
     MINIC_CORE_INSTRUCTION_FLOAT_TO_DOUBLE,
-    MINIC_CORE_INSTRUCTION_DOUBLE_TO_FLOAT
+    MINIC_CORE_INSTRUCTION_DOUBLE_TO_FLOAT,
+    /* RUNTIME_R0_SCALAR_FLOAT: true binary32 arithmetic. Keep these appended
+       so previously established Core instruction kind numbers remain stable. */
+    MINIC_CORE_INSTRUCTION_FLOAT_ADD,
+    MINIC_CORE_INSTRUCTION_FLOAT_SUBTRACT,
+    MINIC_CORE_INSTRUCTION_FLOAT_MULTIPLY,
+    MINIC_CORE_INSTRUCTION_FLOAT_DIVIDE
 } MinicCoreInstructionKind;
 
 /* M91_BUILTIN_UNREACHABLE_TERMINATOR: unreachable is a CFG fact, not a
@@ -284,6 +290,10 @@ typedef struct MinicCoreInstruction {
     union {
         int64_t integer_value;
         uint64_t floating_bits;
+        struct {
+            uint64_t low;
+            uint64_t high;
+        } floating128_bits;
         struct {
             MinicCoreValueId left;
             MinicCoreValueId right;

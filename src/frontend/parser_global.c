@@ -933,6 +933,112 @@ static bool parse_static_pointer_initializer(MinicParser *parser,
     return false;
 }
 
+static bool static_floating_constant_value(MinicParser *parser,
+                                           MinicExpressionId expression_id,
+                                           double *value) {
+    const MinicExpression *expression;
+
+    if (parser == NULL || parser->program == NULL || value == NULL) {
+        return false;
+    }
+    expression = minic_c0_program_expression(parser->program, expression_id);
+    if (expression == NULL) {
+        return false;
+    }
+    if (expression->kind == MINIC_EXPRESSION_FLOATING) {
+        if (minic_type_is_float(expression->type)) {
+            uint32_t bits;
+            float floating_value;
+
+            bits = (uint32_t)expression->value.floating_bits;
+            (void)memcpy(&floating_value, &bits, sizeof(floating_value));
+            *value = (double)floating_value;
+            return true;
+        }
+        if (minic_type_is_double(expression->type)) {
+            (void)memcpy(value, &expression->value.floating_bits, sizeof(*value));
+            return true;
+        }
+        return false;
+    }
+    if (minic_type_is_integer(expression->type)) {
+        MinicConstValue constant;
+
+        if (!minic_const_eval_integer(
+                parser->program, parser->target_info, expression_id, &constant)) {
+            return false;
+        }
+        if (minic_type_is_unsigned_integer(constant.type)) {
+            MinicConstValue widened;
+
+            if (!minic_const_value_convert_integer(parser->program,
+                                                   parser->target_info,
+                                                   &constant,
+                                                   minic_type_unsigned_long_long(),
+                                                   &widened)) {
+                return false;
+            }
+            *value = (double)widened.bits;
+            return true;
+        } else {
+            int64_t signed_value;
+
+            if (!minic_const_value_as_int64(
+                    parser->program, parser->target_info, &constant, &signed_value)) {
+                return false;
+            }
+            *value = (double)signed_value;
+            return true;
+        }
+    }
+    if (expression->kind == MINIC_EXPRESSION_UNARY &&
+        (expression->value.unary.operator_kind == MINIC_UNARY_PLUS ||
+         expression->value.unary.operator_kind == MINIC_UNARY_NEGATE)) {
+        if (!static_floating_constant_value(
+                parser, expression->value.unary.operand, value)) {
+            return false;
+        }
+        if (expression->value.unary.operator_kind == MINIC_UNARY_NEGATE) {
+            *value = -*value;
+        }
+        return true;
+    }
+    return false;
+}
+
+static bool parse_static_floating_initializer_bits(MinicParser *parser,
+                                                   MinicType target_type,
+                                                   uint64_t *bits) {
+    MinicExpressionId expression_id;
+    double value;
+
+    _Static_assert(sizeof(float) == sizeof(uint32_t), "MiniC requires binary32 host float");
+    _Static_assert(sizeof(double) == sizeof(uint64_t), "MiniC requires binary64 host double");
+
+    if (parser == NULL || bits == NULL ||
+        (!minic_type_is_float(target_type) && !minic_type_is_double(target_type)) ||
+        !minic_parser_parse_expression(parser, &expression_id, 0U) ||
+        !static_floating_constant_value(parser, expression_id, &value)) {
+        if (parser != NULL && parser->diagnostic != NULL &&
+            parser->diagnostic->message[0] == '\0') {
+            minic_parser_error(parser,
+                               "static floating initializer requires an arithmetic constant");
+        }
+        return false;
+    }
+    if (minic_type_is_float(target_type)) {
+        float converted;
+        uint32_t converted_bits;
+
+        converted = (float)value;
+        (void)memcpy(&converted_bits, &converted, sizeof(converted_bits));
+        *bits = (uint64_t)converted_bits;
+    } else {
+        (void)memcpy(bits, &value, sizeof(value));
+    }
+    return true;
+}
+
 static bool begin_static_object_definition(MinicParser *parser,
                                            MinicType type,
                                            MinicSourceSpan name_span,
@@ -1063,6 +1169,16 @@ static bool parse_static_scalar(MinicParser *parser, MinicType type, MinicSource
             }
             return false;
         }
+    } else if (minic_type_is_float(type) || minic_type_is_double(type)) {
+        uint64_t bits;
+
+        if (!parse_static_floating_initializer_bits(parser, type, &bits) ||
+            !minic_c0_global_object_add_initializer_bits(parser->program, object_id, bits)) {
+            if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
+                minic_parser_error(parser, "cannot record static floating initializer");
+            }
+            return false;
+        }
     } else if (minic_type_is_pointer(type)) {
         if (!minic_parser_parse_static_pointer_object_initializer(parser, object_id, type)) {
             return false;
@@ -1140,8 +1256,9 @@ static bool append_static_field_zeros(MinicParser *parser,
 
 static bool
 append_static_constant_zero(MinicParser *parser, MinicGlobalObjectId object_id, MinicType type) {
-    if (minic_type_is_integer(type) || minic_type_is_pointer(type)) {
-        return minic_c0_global_object_add_initializer(parser->program, object_id, 0);
+    if (minic_type_is_integer(type) || minic_type_is_pointer(type) ||
+        minic_type_is_float(type) || minic_type_is_double(type)) {
+        return minic_c0_global_object_add_initializer_bits(parser->program, object_id, 0U);
     }
     if (minic_type_is_array(type)) {
         const MinicArrayType *array_type;
@@ -1378,6 +1495,23 @@ static bool parse_static_scalar_constant_at(MinicParser *parser,
                 minic_parser_error(parser, "cannot record static symbolic integer relocation");
                 return false;
             }
+        }
+    } else if (minic_type_is_float(type) || minic_type_is_double(type)) {
+        uint64_t parsed_bits;
+
+        if (!parse_static_floating_initializer_bits(parser, type, &parsed_bits)) {
+            return false;
+        }
+        if (overwrite) {
+            if (!minic_c0_global_object_replace_aggregate_initializer_bits(
+                    parser->program, object_id, overwrite_slot, parsed_bits)) {
+                minic_parser_error(parser, "cannot replace backward static floating initializer");
+                return false;
+            }
+        } else if (!minic_c0_global_object_add_initializer_bits(
+                       parser->program, object_id, parsed_bits)) {
+            minic_parser_error(parser, "cannot record static aggregate floating initializer");
+            return false;
         }
     } else if (minic_type_is_pointer(type)) {
         MinicStaticPointerInitializer initializer;
@@ -3734,7 +3868,8 @@ static bool parse_static_record_constant(MinicParser *parser,
 bool minic_parser_parse_static_storage_initializer_value(MinicParser *parser,
                                                          MinicGlobalObjectId object_id,
                                                          MinicType type) {
-    if (minic_type_is_integer(type) || minic_type_is_pointer(type)) {
+    if (minic_type_is_integer(type) || minic_type_is_pointer(type) ||
+        minic_type_is_float(type) || minic_type_is_double(type)) {
         return parse_static_scalar_constant(parser, object_id, type);
     }
     if (minic_type_is_array(type)) {
@@ -4781,6 +4916,7 @@ static bool parse_static_zero_definition(MinicParser *parser,
 
     if (parser == NULL || parser->current.kind != MINIC_TOKEN_SEMICOLON ||
         (!minic_type_is_integer(object_type) && !minic_type_is_pointer(object_type) &&
+         !minic_type_is_float(object_type) && !minic_type_is_double(object_type) &&
          !minic_type_is_record(object_type) && !minic_type_is_array(object_type))) {
         return false;
     }
@@ -5207,6 +5343,7 @@ bool minic_parser_parse_static_global_after_head(MinicParser *parser,
     MinicGlobalObjectId existing_object_id;
     if (parser == NULL ||
         (!minic_type_is_integer(element_type) && !minic_type_is_pointer(element_type) &&
+         !minic_type_is_float(element_type) && !minic_type_is_double(element_type) &&
          !minic_type_is_record(element_type) && !minic_type_is_array(element_type))) {
         if (parser != NULL) {
             minic_parser_error(parser, "unsupported static global object type");

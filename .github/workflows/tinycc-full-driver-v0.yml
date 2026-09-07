@@ -1,0 +1,906 @@
+name: TinyCC Full Driver V0
+
+on:
+  push:
+    branches:
+      - external/tinycc-full-driver-v0
+  pull_request:
+    branches:
+      - toolchain/static-readiness
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  tinycc-frontier:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Install RV64 hosted prerequisites
+        run: |
+          timeout 240s sudo apt-get -o Acquire::Retries=3 update
+          timeout 240s sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            build-essential gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
+            libc6-riscv64-cross libc6-dev-riscv64-cross \
+            qemu-user qemu-user-binfmt binfmt-support curl ca-certificates python3
+
+      - name: Build current Mini toolchain
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/tinycc-full-driver-v0 all
+          echo "TINYCC_MINI_TOOLCHAIN=PASS"
+
+      - name: Fetch pinned TinyCC 0.9.28rc and musl headers
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/tinycc-full-driver-v0"
+          mkdir -p "$work"
+          tiny_sha=0fb54300b56512754221d80adda85ddb9815bceb
+          tiny_tar="$work/tinycc-$tiny_sha.tar.gz"
+          curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors \
+            "https://codeload.github.com/TinyCC/tinycc/tar.gz/$tiny_sha" \
+            -o "$tiny_tar"
+          sha256sum "$tiny_tar" | tee "$work/tinycc-source.sha256"
+          tar -xzf "$tiny_tar" -C "$work"
+          src="$work/tinycc-$tiny_sha"
+          test -f "$src/VERSION"
+          grep -Fx '0.9.28rc' "$src/VERSION"
+
+          musl_tar="$work/musl-1.2.5.tar.gz"
+          curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors \
+            https://musl.libc.org/releases/musl-1.2.5.tar.gz \
+            -o "$musl_tar"
+          printf '%s  %s\n' \
+            a9a118bbe84d8764da0ea0d28b3ab3fae8477fc7e4085d90102b8596fc7c75e4 \
+            "$musl_tar" | sha256sum -c -
+          tar -xzf "$musl_tar" -C "$work"
+
+          sysroot="$work/musl-sysroot"
+          mkdir -p "$sysroot"
+          make -C "$work/musl-1.2.5" ARCH=riscv64 prefix=/usr DESTDIR="$sysroot" \
+            install-headers >"$work/musl-headers.log" 2>&1
+          test -f "$sysroot/usr/include/stdio.h"
+          echo "TINYCC_SOURCE=PASS version=0.9.28rc commit=$tiny_sha"
+
+      - name: Configure TinyCC for riscv64 musl and generate tccdefs
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/tinycc-full-driver-v0"
+          tiny_sha=0fb54300b56512754221d80adda85ddb9815bceb
+          src="$work/tinycc-$tiny_sha"
+          sysroot="$work/musl-sysroot"
+          cd "$src"
+          ./configure \
+            --cpu=riscv64 \
+            --config-musl \
+            --prefix=/usr \
+            --triplet=riscv64-linux-musl \
+            --sysroot="$sysroot" \
+            --sysincludepaths='{B}/include:{R}/usr/include' \
+            --libpaths='{B}:{R}/usr/lib' \
+            --crtprefix='{R}/usr/lib' \
+            --elfinterp=/lib/ld-musl-riscv64.so.1 \
+            >"$work/tinycc-configure.log" 2>&1
+          grep -q '^#define TCC_TARGET_RISCV64 1' config.h
+          grep -q '^#define CONFIG_TCC_MUSL 1' config.h
+          cc -DC2STR conftest.c -o c2str.exe
+          ./c2str.exe include/tccdefs.h tccdefs_.h
+          test -s tccdefs_.h
+          cp config.h "$work/tinycc-config.h"
+          echo "TINYCC_CONFIG=PASS cpu=riscv64 libc=musl"
+
+      - name: Compile TinyCC core translation units through Mini pipeline
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/tinycc-full-driver-v0"
+          tiny_sha=0fb54300b56512754221d80adda85ddb9815bceb
+          src="$work/tinycc-$tiny_sha"
+          sysroot="$work/musl-sysroot"
+          cpp="$work/bin/minic-cpp"
+          cc="$work/bin/minic-cc"
+          as="$work/bin/minic-as"
+          out="$work/tinycc-obj"
+          pp="$work/tinycc-i"
+          asm="$work/tinycc-s"
+          logs="$work/tinycc-tu-logs"
+          mkdir -p "$out" "$pp" "$asm" "$logs"
+
+          sources="tcc.c libtcc.c tccpp.c tccgen.c tccdbg.c tccelf.c tccasm.c tccrun.c riscv64-gen.c riscv64-link.c riscv64-asm.c"
+          pass=0
+          fail=0
+          : >"$work/tinycc-tu-results.tsv"
+
+          predefs=(
+            -D__STDC__=1
+            -D__STDC_VERSION__=201112L
+            -D__STDC_HOSTED__=1
+            -D__linux__=1 -D__linux=1 -Dlinux=1
+            -D__unix__=1 -D__unix=1
+            -D__riscv=1 -D__riscv_xlen=64
+            -D__LP64__=1 -D_LP64=1
+            -D__riscv_float_abi_double=1
+            -D__ORDER_LITTLE_ENDIAN__=1234
+            -D__ORDER_BIG_ENDIAN__=4321
+            -D__BYTE_ORDER__=__ORDER_LITTLE_ENDIAN__
+            -D__CHAR_BIT__=8
+            -D__SIZEOF_SHORT__=2
+            -D__SIZEOF_INT__=4
+            -D__SIZEOF_LONG__=8
+            -D__SIZEOF_LONG_LONG__=8
+            -D__SIZEOF_POINTER__=8
+            -D__SIZEOF_SIZE_T__=8
+          )
+
+          for source in $sources; do
+            base=${source%.c}
+            started=$(date +%s)
+            rc=0
+            : >"$logs/$base.stdout"
+            : >"$logs/$base.stderr"
+            : >"$logs/$base.cpp.stdout"
+            : >"$logs/$base.cpp.stderr"
+            : >"$logs/$base.cc.stdout"
+            : >"$logs/$base.cc.stderr"
+            : >"$logs/$base.as.stdout"
+            : >"$logs/$base.as.stderr"
+
+            set +e
+            timeout 300s "$cpp" -E -P -undef -nostdinc \
+              "${predefs[@]}" \
+              -isystem "$sysroot/usr/include" \
+              -I"$src" -DONE_SOURCE=0 \
+              "$src/$source" -o "$pp/$base.i" \
+              >"$logs/$base.cpp.stdout" 2>"$logs/$base.cpp.stderr"
+            rc=$?
+            if test "$rc" -eq 0; then
+              timeout 300s "$cc" -S "$pp/$base.i" -o "$asm/$base.s" \
+                >"$logs/$base.cc.stdout" 2>"$logs/$base.cc.stderr"
+              rc=$?
+            fi
+            if test "$rc" -eq 0; then
+              timeout 300s "$as" -march=rv64gc -mabi=lp64d \
+                -o "$out/$base.o" "$asm/$base.s" \
+                >"$logs/$base.as.stdout" 2>"$logs/$base.as.stderr"
+              rc=$?
+            fi
+            set -e
+
+            cat "$logs/$base.cpp.stderr" "$logs/$base.cc.stderr" "$logs/$base.as.stderr" \
+              >"$logs/$base.stderr"
+            elapsed=$(( $(date +%s) - started ))
+
+            if test "$rc" -eq 0 && test -s "$out/$base.o"; then
+              pass=$((pass + 1))
+              printf '%s\tPASS\t%s\t%s\n' "$source" "$rc" "$elapsed" \
+                >>"$work/tinycc-tu-results.tsv"
+              echo "TINYCC_TU=PASS source=$source elapsed_s=$elapsed"
+            else
+              fail=$((fail + 1))
+              printf '%s\tFAIL\t%s\t%s\n' "$source" "$rc" "$elapsed" \
+                >>"$work/tinycc-tu-results.tsv"
+              echo "TINYCC_TU=FAIL source=$source rc=$rc elapsed_s=$elapsed"
+              cat "$logs/$base.stderr" || true
+              diag_line=$(sed -n 's/.*:\([0-9][0-9]*\):[0-9][0-9]*: error:.*/\1/p' \
+                "$logs/$base.cc.stderr" | head -n1)
+              if test -n "$diag_line" && test -s "$pp/$base.i"; then
+                lo=$((diag_line > 6 ? diag_line - 6 : 1))
+                hi=$((diag_line + 6))
+                echo "TINYCC_CONTEXT_BEGIN source=$source line=$diag_line"
+                nl -ba "$pp/$base.i" | sed -n "${lo},${hi}p"
+                echo "TINYCC_CONTEXT_END source=$source line=$diag_line"
+              fi
+            fi
+          done
+
+          echo "TINYCC_CORE_FRONTIER selected=11 pass=$pass fail=$fail"
+          test "$fail" -eq 0
+          test "$pass" -eq 11
+          echo "TINYCC_CORE_FRONTIER_V0=PASS selected=11 pass=11 pipeline=MiniPP,MiniC,MiniAS"
+
+      - name: Build static musl runtime for TinyCC
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/tinycc-full-driver-v0"
+          musl_src="$work/musl-1.2.5"
+          musl_out="$work/musl-build"
+          sysroot="$work/musl-sysroot"
+
+          rm -rf "$musl_out"
+          mkdir -p "$musl_out"
+          cd "$musl_out"
+          CC=riscv64-linux-gnu-gcc \
+          AR=riscv64-linux-gnu-ar \
+          RANLIB=riscv64-linux-gnu-ranlib \
+            "$musl_src/configure" \
+              --target=riscv64-linux-gnu \
+              --disable-shared \
+              --prefix=/usr \
+            >"$work/musl-static-configure.log" 2>&1
+          make -j4 V=1 lib/libc.a lib/crt1.o lib/crti.o lib/crtn.o \
+            >"$work/musl-static-make.log" 2>&1
+
+          mkdir -p "$sysroot/usr/lib"
+          cp "$musl_out/lib/crt1.o" "$musl_out/lib/crti.o" "$musl_out/lib/crtn.o" \
+            "$sysroot/usr/lib/"
+          cp "$musl_out/lib/libc.a" "$sysroot/usr/lib/libc.a"
+          cp "$(riscv64-linux-gnu-gcc -print-libgcc-file-name)" \
+            "$sysroot/usr/lib/libgcc.a"
+
+          test -s "$sysroot/usr/lib/crt1.o"
+          test -s "$sysroot/usr/lib/libc.a"
+          test -s "$sysroot/usr/lib/libgcc.a"
+          echo "TINYCC_STATIC_MUSL_RUNTIME=PASS"
+
+      - name: Archive Mini-produced TinyCC library with MiniAR
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/tinycc-full-driver-v0"
+          out="$work/tinycc-obj"
+          miniar="$work/bin/minic-ar"
+          archive="$work/libtcc-minic.a"
+
+          members=(
+            libtcc.o tccpp.o tccgen.o tccdbg.o tccelf.o
+            tccasm.o tccrun.o riscv64-gen.o riscv64-link.o riscv64-asm.o
+          )
+          inputs=()
+          for member in "${members[@]}"; do
+            test -s "$out/$member"
+            inputs+=("$out/$member")
+          done
+
+          "$miniar" rcsD "$archive" "${inputs[@]}" \
+            >"$work/libtcc-ar.stdout" 2>"$work/libtcc-ar.stderr"
+          test -s "$archive"
+          "$miniar" t "$archive" >"$work/libtcc-ar.members"
+          cat "$work/libtcc-ar.members"
+          test "$(wc -l <"$work/libtcc-ar.members")" -eq 10
+          echo "TINYCC_MINIAR_V0=PASS members=10"
+
+      - name: Link and run static TinyCC through MiniLD
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/tinycc-full-driver-v0"
+          sysroot="$work/musl-sysroot"
+          driver="$work/bin/minic"
+          exe="$work/tcc-minic-static"
+
+          "$driver" --sysroot "$sysroot/usr" -static \
+            -o "$exe" \
+            "$work/tinycc-obj/tcc.o" "$work/libtcc-minic.a" \
+            >"$work/tcc-static-link.stdout" \
+            2>"$work/tcc-static-link.stderr"
+
+          test -x "$exe"
+          riscv64-linux-gnu-readelf -h "$exe" >"$work/tcc-static.header"
+          riscv64-linux-gnu-readelf -lW "$exe" >"$work/tcc-static.programs"
+          if grep -q 'Requesting program interpreter' "$work/tcc-static.programs"; then
+            echo "TINYCC_STATIC_LINK=FAIL unexpected-interpreter" >&2
+            exit 1
+          fi
+          if riscv64-linux-gnu-readelf -d "$exe" 2>/dev/null | grep -q '(NEEDED)'; then
+            echo "TINYCC_STATIC_LINK=FAIL unexpected-needed" >&2
+            exit 1
+          fi
+
+          set +e
+          timeout 60s qemu-riscv64 "$exe" -v \
+            >"$work/tcc-version.stdout" 2>"$work/tcc-version.stderr"
+          rc=$?
+          set -e
+          cat "$work/tcc-version.stdout"
+          cat "$work/tcc-version.stderr"
+          test "$rc" -eq 0
+          cat "$work/tcc-version.stdout" "$work/tcc-version.stderr" | \
+            grep -F 'tcc version 0.9.28rc' >/dev/null
+          echo "TINYCC_STATIC_RUNTIME_V0=PASS version=0.9.28rc producer=MiniPP,MiniC,MiniAS,MiniAR,MiniLD"
+
+      - name: Compile hello with Mini-built TinyCC and link with MiniLD
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/tinycc-full-driver-v0"
+          sysroot="$work/musl-sysroot"
+          tcc="$work/tcc-minic-static"
+          driver="$work/bin/minic"
+
+          cat >"$work/tinycc-self-hello.c" <<'C'
+          static int product(int left, int right)
+          {
+              return left * right;
+          }
+
+          int main(void)
+          {
+              return product(6, 7) == 42 ? 0 : 1;
+          }
+          C
+
+          timeout 60s qemu-riscv64 "$tcc" \
+            -c "$work/tinycc-self-hello.c" \
+            -o "$work/tinycc-self-hello.o" \
+            >"$work/tinycc-self-compile.stdout" \
+            2>"$work/tinycc-self-compile.stderr"
+
+          test -s "$work/tinycc-self-hello.o"
+          riscv64-linux-gnu-readelf -h "$work/tinycc-self-hello.o" \
+            >"$work/tinycc-self-hello.header"
+          grep -q 'REL (Relocatable file)' "$work/tinycc-self-hello.header"
+          grep -q 'Machine:.*RISC-V' "$work/tinycc-self-hello.header"
+
+          "$driver" --sysroot "$sysroot/usr" -static \
+            -o "$work/tinycc-self-hello" "$work/tinycc-self-hello.o" \
+            >"$work/tinycc-self-link.stdout" \
+            2>"$work/tinycc-self-link.stderr"
+          test -x "$work/tinycc-self-hello"
+
+          set +e
+          timeout 60s qemu-riscv64 "$work/tinycc-self-hello" \
+            >"$work/tinycc-self-run.stdout" \
+            2>"$work/tinycc-self-run.stderr"
+          rc=$?
+          set -e
+          cat "$work/tinycc-self-run.stdout"
+          cat "$work/tinycc-self-run.stderr"
+          test "$rc" -eq 0
+          echo "TINYCC_SELF_HELLO_V0=PASS compiler=Mini-built-TinyCC object=RISC-V-ET_REL linker=MiniLD qemu_rc=0"
+
+      - name: Build TinyCC with its own Makefile through Mini wrapper
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/tinycc-full-driver-v0"
+          tiny_sha=0fb54300b56512754221d80adda85ddb9815bceb
+          src="$work/tinycc-$tiny_sha"
+          sysroot="$work/musl-sysroot"
+          wrapper="$work/minic-tinycc-wrapper.sh"
+          calls="$work/tinycc-own-make.calls"
+
+          cat >"$wrapper" <<'SH'
+          #!/usr/bin/env bash
+          set -Eeuo pipefail
+          : "${MINIC_DRIVER:?}"
+          : "${MINIC_SYSROOT:?}"
+          : "${MINIC_WRAPPER_LOG:?}"
+
+          raw_line=RAW
+          for arg in "$@"; do
+            printf -v quoted ' %q' "$arg"
+            raw_line+="$quoted"
+          done
+          printf '%s\n' "$raw_line" >>"$MINIC_WRAPPER_LOG"
+
+          args=()
+          compile=0
+          for arg in "$@"; do
+            case "$arg" in
+              -c)
+                compile=1
+                args+=("$arg")
+                ;;
+              -Wall|-Wextra|-Werror|-Wno-*|-W*)
+                ;;
+              -O|-O0|-O1|-O2|-O3|-Os|-Og|-Ofast)
+                ;;
+              -g|-g0|-g1|-g2|-g3)
+                ;;
+              -lm|-ldl|-lpthread)
+                # musl provides these interfaces from libc itself.
+                ;;
+              *)
+                args+=("$arg")
+                ;;
+            esac
+          done
+
+          mini_line=MINI
+          for arg in "${args[@]}"; do
+            printf -v quoted ' %q' "$arg"
+            mini_line+="$quoted"
+          done
+          printf '%s\n' "$mini_line" >>"$MINIC_WRAPPER_LOG"
+
+          if test "$compile" -eq 1; then
+            exec "$MINIC_DRIVER" --sysroot "$MINIC_SYSROOT" "${args[@]}"
+          fi
+          exec "$MINIC_DRIVER" --sysroot "$MINIC_SYSROOT" -static "${args[@]}"
+          SH
+          chmod +x "$wrapper"
+          : >"$calls"
+
+          export MINIC_DRIVER="$work/bin/minic"
+          export MINIC_SYSROOT="$sysroot/usr"
+          export MINIC_WRAPPER_LOG="$calls"
+
+          cd "$src"
+          rm -f tcc tcc.o libtcc.a \
+            libtcc.o tccpp.o tccgen.o tccdbg.o tccelf.o \
+            tccasm.o tccrun.o riscv64-gen.o riscv64-link.o riscv64-asm.o
+
+          make -j4 ONE_SOURCE=no \
+            CC="$wrapper" \
+            AR="$work/bin/minic-ar" \
+            CFLAGS= LDFLAGS= \
+            tcc libtcc.a \
+            >"$work/tinycc-own-make.stdout" \
+            2>"$work/tinycc-own-make.stderr"
+
+          test -x tcc
+          test -s libtcc.a
+          "$work/bin/minic-ar" t libtcc.a >"$work/tinycc-own-make.members"
+          test "$(wc -l <"$work/tinycc-own-make.members")" -eq 10
+
+          compile_calls="$(grep -c '^RAW .* -c ' "$calls" || true)"
+          test "$compile_calls" -eq 11
+          grep -F -- '-DONE_SOURCE=0' "$calls" >/dev/null
+
+          set +e
+          timeout 60s qemu-riscv64 ./tcc -v \
+            >"$work/tinycc-own-make-version.stdout" \
+            2>"$work/tinycc-own-make-version.stderr"
+          rc=$?
+          set -e
+          cat "$work/tinycc-own-make-version.stdout"
+          cat "$work/tinycc-own-make-version.stderr"
+          test "$rc" -eq 0
+          cat "$work/tinycc-own-make-version.stdout" \
+              "$work/tinycc-own-make-version.stderr" | \
+            grep -F 'tcc version 0.9.28rc' >/dev/null
+
+          echo "TINYCC_OWN_MAKE_V0=PASS one_source=no compile_calls=11 archive_members=10 linker=MiniLD runtime=qemu"
+
+      - name: Compile and run libc hello with Mini-produced TinyCC
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/tinycc-full-driver-v0"
+          sysroot="$work/musl-sysroot"
+          tcc="$work/tcc-minic-static"
+          driver="$work/bin/minic"
+
+          cat >"$work/tinycc-self-libc-hello.c" <<'C'
+          extern int puts(const char *);
+
+          int main(void) {
+              puts("hello from Mini-produced TinyCC");
+              return 42;
+          }
+          C
+
+          timeout 60s qemu-riscv64 "$tcc" \
+            -c "$work/tinycc-self-libc-hello.c" \
+            -o "$work/tinycc-self-libc-hello.o" \
+            >"$work/tinycc-self-libc-hello-compile.stdout" \
+            2>"$work/tinycc-self-libc-hello-compile.stderr"
+
+          test -s "$work/tinycc-self-libc-hello.o"
+          riscv64-linux-gnu-readelf -h "$work/tinycc-self-libc-hello.o" \
+            >"$work/tinycc-self-libc-hello-object.header"
+          riscv64-linux-gnu-readelf -rW "$work/tinycc-self-libc-hello.o" \
+            >"$work/tinycc-self-libc-hello-object.relocs"
+          grep -q 'REL (Relocatable file)' "$work/tinycc-self-libc-hello-object.header"
+          grep -q 'Machine:.*RISC-V' "$work/tinycc-self-libc-hello-object.header"
+          echo "TINYCC_SELF_LIBC_OBJECT_V0=PASS producer=tcc format=ELF64-RISCV"
+
+          "$driver" --sysroot "$sysroot/usr" -static \
+            -o "$work/tinycc-self-libc-hello" "$work/tinycc-self-libc-hello.o" \
+            >"$work/tinycc-self-libc-hello-link.stdout" \
+            2>"$work/tinycc-self-libc-hello-link.stderr"
+          test -x "$work/tinycc-self-libc-hello"
+
+          set +e
+          timeout 60s qemu-riscv64 "$work/tinycc-self-libc-hello" \
+            >"$work/tinycc-self-libc-hello.stdout" \
+            2>"$work/tinycc-self-libc-hello.stderr"
+          rc=$?
+          set -e
+
+          cat "$work/tinycc-self-libc-hello.stdout"
+          cat "$work/tinycc-self-libc-hello.stderr"
+          test "$rc" -eq 42
+          grep -Fx 'hello from Mini-produced TinyCC' \
+            "$work/tinycc-self-libc-hello.stdout" >/dev/null
+          echo "TINYCC_SELF_LIBC_HELLO_V0=PASS compile=tcc link=MiniLD libc=musl qemu_rc=42"
+
+      - name: Compile and run hello through Mini-produced TinyCC
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/tinycc-full-driver-v0"
+          sysroot="$work/musl-sysroot"
+          tcc="$work/tcc-minic-static"
+          driver="$work/bin/minic"
+
+          cat >"$work/tinycc-hello.c" <<'C'
+          int main(void) {
+              return 42;
+          }
+          C
+
+          timeout 60s qemu-riscv64 "$tcc" \
+            -c "$work/tinycc-hello.c" -o "$work/tinycc-hello.o" \
+            >"$work/tinycc-hello-compile.stdout" \
+            2>"$work/tinycc-hello-compile.stderr"
+          test -s "$work/tinycc-hello.o"
+
+          riscv64-linux-gnu-readelf -h "$work/tinycc-hello.o" \
+            >"$work/tinycc-hello.header"
+          grep -q 'Type:.*REL' "$work/tinycc-hello.header"
+          grep -q 'Machine:.*RISC-V' "$work/tinycc-hello.header"
+          echo "TINYCC_SELF_COMPILE_ETREL_V0=PASS source=hello.c producer=Mini-built-TinyCC"
+
+          "$driver" --sysroot "$sysroot/usr" -static \
+            -o "$work/tinycc-hello" "$work/tinycc-hello.o" \
+            >"$work/tinycc-hello-link.stdout" \
+            2>"$work/tinycc-hello-link.stderr"
+          test -x "$work/tinycc-hello"
+
+          set +e
+          timeout 60s qemu-riscv64 "$work/tinycc-hello" \
+            >"$work/tinycc-hello-run.stdout" \
+            2>"$work/tinycc-hello-run.stderr"
+          rc=$?
+          set -e
+          cat "$work/tinycc-hello-run.stdout"
+          cat "$work/tinycc-hello-run.stderr"
+          test "$rc" -eq 42
+          echo "TINYCC_SELF_COMPILE_RUNTIME_V0=PASS source=hello.c qemu_rc=42 producer=Mini-built-TinyCC consumer=MiniLD"
+
+      - name: Link libc hello with Mini-produced TinyCC itself
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/tinycc-full-driver-v0"
+          sysroot="$work/musl-sysroot"
+          tcc="$work/tcc-minic-static"
+          exe="$work/tinycc-self-linked-libc-hello"
+
+          test -s "$sysroot/usr/lib/crt1.o"
+          test -s "$sysroot/usr/lib/crti.o"
+          test -s "$sysroot/usr/lib/crtn.o"
+          test -s "$sysroot/usr/lib/libc.a"
+          test -s "$sysroot/usr/lib/libgcc.a"
+
+          set +e
+          timeout 120s qemu-riscv64 "$tcc" \
+            -nostdlib -static \
+            -o "$exe" \
+            "$sysroot/usr/lib/crt1.o" \
+            "$sysroot/usr/lib/crti.o" \
+            "$work/tinycc-self-libc-hello.c" \
+            "$sysroot/usr/lib/libc.a" \
+            "$sysroot/usr/lib/libgcc.a" \
+            "$sysroot/usr/lib/crtn.o" \
+            >"$work/tinycc-self-linker.stdout" \
+            2>"$work/tinycc-self-linker.stderr"
+          link_rc=$?
+          set -e
+          cat "$work/tinycc-self-linker.stdout"
+          cat "$work/tinycc-self-linker.stderr"
+          test "$link_rc" -eq 0
+          test -x "$exe"
+
+          riscv64-linux-gnu-readelf -h "$exe" \
+            >"$work/tinycc-self-linked.header"
+          riscv64-linux-gnu-readelf -lW "$exe" \
+            >"$work/tinycc-self-linked.programs"
+          grep -q 'Machine:.*RISC-V' "$work/tinycc-self-linked.header"
+          if grep -q 'Requesting program interpreter' "$work/tinycc-self-linked.programs"; then
+            echo "TINYCC_SELF_LINKER_V0=FAIL unexpected-interpreter" >&2
+            exit 1
+          fi
+
+          set +e
+          timeout 60s qemu-riscv64 "$exe" \
+            >"$work/tinycc-self-linked.stdout" \
+            2>"$work/tinycc-self-linked.stderr"
+          rc=$?
+          set -e
+          cat "$work/tinycc-self-linked.stdout"
+          cat "$work/tinycc-self-linked.stderr"
+          test "$rc" -eq 42
+          grep -Fx 'hello from Mini-produced TinyCC' \
+            "$work/tinycc-self-linked.stdout" >/dev/null
+          echo "TINYCC_SELF_LINKER_V0=PASS compile=tcc link=tcc libc=musl static=1 qemu_rc=42"
+
+      - name: Prepare TinyCC official test runtime
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/tinycc-full-driver-v0"
+          tiny_sha=0fb54300b56512754221d80adda85ddb9815bceb
+          src="$work/tinycc-$tiny_sha"
+          sysroot="$work/musl-sysroot"
+
+          sudo update-binfmts --enable qemu-riscv64
+          test -e /proc/sys/fs/binfmt_misc/qemu-riscv64
+          cat /proc/sys/fs/binfmt_misc/qemu-riscv64 \
+            >"$work/tinycc-binfmt-riscv64.txt"
+
+          # The TinyCC official tests execute ./tcc and the RISC-V binaries
+          # that it produces directly. Prove the host binfmt handoff first.
+          "$src/tcc" -v \
+            >"$work/tinycc-binfmt-version.stdout" \
+            2>"$work/tinycc-binfmt-version.stderr"
+          cat "$work/tinycc-binfmt-version.stdout" "$work/tinycc-binfmt-version.stderr"
+          cat "$work/tinycc-binfmt-version.stdout" "$work/tinycc-binfmt-version.stderr" | \
+            grep -F 'tcc version 0.9.28rc' >/dev/null
+
+          # musl supplies libm/libdl/libpthread APIs from libc. Its installed
+          # development layout normally contains compatibility archives;
+          # materialize empty archives so TinyCC's standard -lm/-ldl/-lpthread
+          # lookup follows that layout while symbols resolve from libc.a.
+          for lib in m dl pthread; do
+            riscv64-linux-gnu-ar rcs "$sysroot/usr/lib/lib$lib.a"
+          done
+
+          cd "$src"
+          rm -f libtcc1.a
+          make -j1 ONE_SOURCE=no libtcc1.a \
+            >"$work/tinycc-libtcc1.stdout" \
+            2>"$work/tinycc-libtcc1.stderr"
+          test -s libtcc1.a
+          riscv64-linux-gnu-ar t libtcc1.a \
+            >"$work/tinycc-libtcc1.members"
+          test -s "$work/tinycc-libtcc1.members"
+          echo "TINYCC_OFFICIAL_TEST_RUNTIME=PASS binfmt=riscv64 libtcc1=1"
+
+      - name: Run GCC-built TinyCC official control suite
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/tinycc-full-driver-v0"
+          tiny_sha=0fb54300b56512754221d80adda85ddb9815bceb
+          control_root="$work/tinycc-gcc-control"
+          sysroot="$work/musl-sysroot"
+          rm -rf "$control_root"
+          mkdir -p "$control_root"
+          tar -xzf "$work/tinycc-$tiny_sha.tar.gz" -C "$control_root"
+          src="$control_root/tinycc-$tiny_sha"
+
+          cd "$src"
+          ./configure \
+            --cpu=riscv64 \
+            --config-musl \
+            --prefix=/usr \
+            --triplet=riscv64-linux-musl \
+            --sysroot="$sysroot" \
+            --sysincludepaths='{B}/include:{R}/usr/include' \
+            --libpaths='{B}:{R}/usr/lib' \
+            --crtprefix='{R}/usr/lib' \
+            --elfinterp=/lib/ld-musl-riscv64.so.1 \
+            >"$work/tinycc-gcc-control-configure.log" 2>&1
+
+          cc -DC2STR conftest.c -o c2str.exe
+          ./c2str.exe include/tccdefs.h tccdefs_.h
+          make -j1 ONE_SOURCE=no \
+            CC="riscv64-linux-gnu-gcc -static" \
+            AR=riscv64-linux-gnu-ar \
+            tcc libtcc1.a \
+            >"$work/tinycc-gcc-control-build.log" 2>&1
+
+          ./tcc -v \
+            >"$work/tinycc-gcc-control-version.stdout" \
+            2>"$work/tinycc-gcc-control-version.stderr"
+          cat "$work/tinycc-gcc-control-version.stdout" "$work/tinycc-gcc-control-version.stderr"
+
+          set +e
+          timeout 900s make -k -j1 test \
+            CC="riscv64-linux-gnu-gcc -static" \
+            TCCFLAGS="-B$src -I$src/include -I$src -static" \
+            >"$work/tinycc-gcc-control-test.log" 2>&1
+          control_rc=$?
+          set -e
+
+          printf 'TINYCC_GCC_CONTROL_RC=%s\n' "$control_rc" | \
+            tee "$work/tinycc-gcc-control.status"
+          grep -E '^------------ |ALL TESTS PASSED|Error [0-9]+|FAILED|failed|error:' \
+            "$work/tinycc-gcc-control-test.log" \
+            >"$work/tinycc-gcc-control.summary" || true
+          cat "$work/tinycc-gcc-control.summary"
+          if test "$control_rc" -eq 0; then
+            echo "TINYCC_GCC_CONTROL_V0=PASS suite=make-test"
+          else
+            echo "TINYCC_GCC_CONTROL_V0=BASELINE_FAIL suite=make-test rc=$control_rc"
+          fi
+
+      - name: Run TinyCC official make test suite
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/tinycc-full-driver-v0"
+          tiny_sha=0fb54300b56512754221d80adda85ddb9815bceb
+          src="$work/tinycc-$tiny_sha"
+
+          cd "$src"
+          set +e
+          timeout 900s make -k -j1 test \
+            CC="riscv64-linux-gnu-gcc -static" \
+            TCCFLAGS="-B$src -I$src/include -I$src -static" \
+            >"$work/tinycc-official-test.log" 2>&1
+          rc=$?
+          set -e
+
+          printf 'TINYCC_OFFICIAL_TEST_RC=%s\n' "$rc" | \
+            tee "$work/tinycc-official-test.status"
+          grep -E '^------------ |ALL TESTS PASSED|Error [0-9]+|FAILED|failed|error:' \
+            "$work/tinycc-official-test.log" \
+            >"$work/tinycc-official-test.summary" || true
+          cat "$work/tinycc-official-test.summary"
+
+          if test "$rc" -eq 0; then
+            grep -F -- '------- ALL TESTS PASSED --------' \
+              "$work/tinycc-official-test.log" >/dev/null
+            echo "TINYCC_OFFICIAL_TEST_V0=PASS suite=make-test"
+          else
+            control_rc="$(sed -n 's/^TINYCC_GCC_CONTROL_RC=//p' \
+              "$work/tinycc-gcc-control.status" | tail -n1)"
+            set +e
+            python3 - \
+              "$work/tinycc-gcc-control.summary" \
+              "$work/tinycc-official-test.summary" \
+              "$work/tinycc-baseline-compare.txt" <<'PY'
+          import re
+          import sys
+
+          def parse(path):
+              section = "<preamble>"
+              sections = []
+              failures = set()
+              for raw in open(path, encoding="utf-8", errors="replace"):
+                  line = raw.rstrip("\n")
+                  if line.startswith("------------ "):
+                      section = line
+                      sections.append(section)
+                      continue
+                  if re.search(r"Error [0-9]+|FAILED|failed|error:", line):
+                      failures.add((section, line))
+              return sections, failures
+
+          control_sections, control_failures = parse(sys.argv[1])
+          mini_sections, mini_failures = parse(sys.argv[2])
+          missing_sections = sorted(set(control_sections) - set(mini_sections))
+          extra_failures = sorted(mini_failures - control_failures)
+
+          with open(sys.argv[3], "w", encoding="utf-8") as out:
+              out.write(f"control_sections={len(set(control_sections))}\n")
+              out.write(f"mini_sections={len(set(mini_sections))}\n")
+              out.write(f"control_failures={len(control_failures)}\n")
+              out.write(f"mini_failures={len(mini_failures)}\n")
+              out.write(f"missing_sections={len(missing_sections)}\n")
+              out.write(f"extra_failures={len(extra_failures)}\n")
+              for section in missing_sections:
+                  out.write(f"MISSING_SECTION\t{section}\n")
+              for section, line in extra_failures:
+                  out.write(f"EXTRA_FAILURE\t{section}\t{line}\n")
+
+          if missing_sections or extra_failures:
+              raise SystemExit(1)
+          PY
+            compare_rc=$?
+            set -e
+            cat "$work/tinycc-baseline-compare.txt" || true
+
+            if test -n "$control_rc" && test "$control_rc" -ne 0 && \
+               test "$compare_rc" -eq 0; then
+              echo "TINYCC_OFFICIAL_TEST_V0=BASELINE_EQUIVALENT suite=make-test control_rc=$control_rc mini_rc=$rc extra_failures=0"
+            else
+              echo "TINYCC_OFFICIAL_TEST_V0=FAIL suite=make-test control_rc=${control_rc:-unknown} mini_rc=$rc"
+              tail -n 160 "$work/tinycc-official-test.log"
+              exit "$rc"
+            fi
+          fi
+
+      - name: Preserve TinyCC frontier evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tinycc-full-driver-v0-frontier
+          path: |
+            build/tinycc-full-driver-v0/tinycc-source.sha256
+            build/tinycc-full-driver-v0/tinycc-configure.log
+            build/tinycc-full-driver-v0/tinycc-config.h
+            build/tinycc-full-driver-v0/tinycc-tu-results.tsv
+            build/tinycc-full-driver-v0/tinycc-tu-logs/
+            build/tinycc-full-driver-v0/tinycc-i/
+            build/tinycc-full-driver-v0/tinycc-s/
+            build/tinycc-full-driver-v0/musl-static-configure.log
+            build/tinycc-full-driver-v0/musl-static-make.log
+            build/tinycc-full-driver-v0/libtcc-ar.stdout
+            build/tinycc-full-driver-v0/libtcc-ar.stderr
+            build/tinycc-full-driver-v0/libtcc-ar.members
+            build/tinycc-full-driver-v0/libtcc-minic.a
+            build/tinycc-full-driver-v0/tcc-static-link.stdout
+            build/tinycc-full-driver-v0/tcc-static-link.stderr
+            build/tinycc-full-driver-v0/tcc-static.header
+            build/tinycc-full-driver-v0/tcc-static.programs
+            build/tinycc-full-driver-v0/tcc-version.stdout
+            build/tinycc-full-driver-v0/tcc-version.stderr
+            build/tinycc-full-driver-v0/tcc-minic-static
+            build/tinycc-full-driver-v0/tinycc-hello.c
+            build/tinycc-full-driver-v0/tinycc-hello.o
+            build/tinycc-full-driver-v0/tinycc-hello.header
+            build/tinycc-full-driver-v0/tinycc-hello-compile.stdout
+            build/tinycc-full-driver-v0/tinycc-hello-compile.stderr
+            build/tinycc-full-driver-v0/tinycc-hello-link.stdout
+            build/tinycc-full-driver-v0/tinycc-hello-link.stderr
+            build/tinycc-full-driver-v0/tinycc-hello-run.stdout
+            build/tinycc-full-driver-v0/tinycc-hello-run.stderr
+            build/tinycc-full-driver-v0/tinycc-hello
+            build/tinycc-full-driver-v0/tinycc-self-linked-libc-hello
+            build/tinycc-full-driver-v0/tinycc-self-linker.stdout
+            build/tinycc-full-driver-v0/tinycc-self-linker.stderr
+            build/tinycc-full-driver-v0/tinycc-self-linked.header
+            build/tinycc-full-driver-v0/tinycc-self-linked.programs
+            build/tinycc-full-driver-v0/tinycc-self-linked.stdout
+            build/tinycc-full-driver-v0/tinycc-self-linked.stderr
+            build/tinycc-full-driver-v0/tinycc-self-hello.c
+            build/tinycc-full-driver-v0/tinycc-self-hello.o
+            build/tinycc-full-driver-v0/tinycc-self-hello-compile.stdout
+            build/tinycc-full-driver-v0/tinycc-self-hello-compile.stderr
+            build/tinycc-full-driver-v0/tinycc-self-hello-object.header
+            build/tinycc-full-driver-v0/tinycc-self-hello-object.relocs
+            build/tinycc-full-driver-v0/tinycc-self-hello-link.stdout
+            build/tinycc-full-driver-v0/tinycc-self-hello-link.stderr
+            build/tinycc-full-driver-v0/tinycc-self-hello.stdout
+            build/tinycc-full-driver-v0/tinycc-self-hello.stderr
+            build/tinycc-full-driver-v0/tinycc-self-hello
+            build/tinycc-full-driver-v0/tinycc-self-hello.c
+            build/tinycc-full-driver-v0/tinycc-self-compile.stdout
+            build/tinycc-full-driver-v0/tinycc-self-compile.stderr
+            build/tinycc-full-driver-v0/tinycc-self-hello.o
+            build/tinycc-full-driver-v0/tinycc-self-hello.header
+            build/tinycc-full-driver-v0/tinycc-self-link.stdout
+            build/tinycc-full-driver-v0/tinycc-self-link.stderr
+            build/tinycc-full-driver-v0/tinycc-self-run.stdout
+            build/tinycc-full-driver-v0/tinycc-self-run.stderr
+            build/tinycc-full-driver-v0/tinycc-self-hello
+            build/tinycc-full-driver-v0/minic-tinycc-wrapper.sh
+            build/tinycc-full-driver-v0/tinycc-own-make.calls
+            build/tinycc-full-driver-v0/tinycc-own-make.stdout
+            build/tinycc-full-driver-v0/tinycc-own-make.stderr
+            build/tinycc-full-driver-v0/tinycc-own-make.members
+            build/tinycc-full-driver-v0/tinycc-own-make-version.stdout
+            build/tinycc-full-driver-v0/tinycc-own-make-version.stderr
+            build/tinycc-full-driver-v0/tinycc-self-libc-hello.c
+            build/tinycc-full-driver-v0/tinycc-self-libc-hello.o
+            build/tinycc-full-driver-v0/tinycc-self-libc-hello-compile.stdout
+            build/tinycc-full-driver-v0/tinycc-self-libc-hello-compile.stderr
+            build/tinycc-full-driver-v0/tinycc-self-libc-hello-object.header
+            build/tinycc-full-driver-v0/tinycc-self-libc-hello-object.relocs
+            build/tinycc-full-driver-v0/tinycc-self-libc-hello-link.stdout
+            build/tinycc-full-driver-v0/tinycc-self-libc-hello-link.stderr
+            build/tinycc-full-driver-v0/tinycc-self-libc-hello.stdout
+            build/tinycc-full-driver-v0/tinycc-self-libc-hello.stderr
+            build/tinycc-full-driver-v0/tinycc-self-libc-hello
+            build/tinycc-full-driver-v0/tinycc-binfmt-riscv64.txt
+            build/tinycc-full-driver-v0/tinycc-binfmt-version.stdout
+            build/tinycc-full-driver-v0/tinycc-binfmt-version.stderr
+            build/tinycc-full-driver-v0/tinycc-libtcc1.stdout
+            build/tinycc-full-driver-v0/tinycc-libtcc1.stderr
+            build/tinycc-full-driver-v0/tinycc-libtcc1.members
+            build/tinycc-full-driver-v0/tinycc-official-test.log
+            build/tinycc-full-driver-v0/tinycc-official-test.status
+            build/tinycc-full-driver-v0/tinycc-official-test.summary
+            build/tinycc-full-driver-v0/tinycc-gcc-control-configure.log
+            build/tinycc-full-driver-v0/tinycc-gcc-control-build.log
+            build/tinycc-full-driver-v0/tinycc-gcc-control-version.stdout
+            build/tinycc-full-driver-v0/tinycc-gcc-control-version.stderr
+            build/tinycc-full-driver-v0/tinycc-gcc-control-test.log
+            build/tinycc-full-driver-v0/tinycc-gcc-control.status
+            build/tinycc-full-driver-v0/tinycc-gcc-control.summary
+            build/tinycc-full-driver-v0/tinycc-baseline-compare.txt
+          if-no-files-found: ignore
+          retention-days: 7
