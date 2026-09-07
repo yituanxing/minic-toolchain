@@ -511,6 +511,50 @@ jobs:
             "$work/tinycc-self-libc-hello.stdout" >/dev/null
           echo "TINYCC_SELF_LIBC_HELLO_V0=PASS compile=tcc link=MiniLD libc=musl qemu_rc=42"
 
+      - name: Compile and run hello through Mini-produced TinyCC
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/tinycc-full-driver-v0"
+          sysroot="$work/musl-sysroot"
+          tcc="$work/tcc-minic-static"
+          driver="$work/bin/minic"
+
+          cat >"$work/tinycc-hello.c" <<'C'
+          int main(void) {
+              return 42;
+          }
+          C
+
+          timeout 60s qemu-riscv64 "$tcc" \
+            -c "$work/tinycc-hello.c" -o "$work/tinycc-hello.o" \
+            >"$work/tinycc-hello-compile.stdout" \
+            2>"$work/tinycc-hello-compile.stderr"
+          test -s "$work/tinycc-hello.o"
+
+          riscv64-linux-gnu-readelf -h "$work/tinycc-hello.o" \
+            >"$work/tinycc-hello.header"
+          grep -q 'Type:.*REL' "$work/tinycc-hello.header"
+          grep -q 'Machine:.*RISC-V' "$work/tinycc-hello.header"
+          echo "TINYCC_SELF_COMPILE_ETREL_V0=PASS source=hello.c producer=Mini-built-TinyCC"
+
+          "$driver" --sysroot "$sysroot/usr" -static \
+            -o "$work/tinycc-hello" "$work/tinycc-hello.o" \
+            >"$work/tinycc-hello-link.stdout" \
+            2>"$work/tinycc-hello-link.stderr"
+          test -x "$work/tinycc-hello"
+
+          set +e
+          timeout 60s qemu-riscv64 "$work/tinycc-hello" \
+            >"$work/tinycc-hello-run.stdout" \
+            2>"$work/tinycc-hello-run.stderr"
+          rc=$?
+          set -e
+          cat "$work/tinycc-hello-run.stdout"
+          cat "$work/tinycc-hello-run.stderr"
+          test "$rc" -eq 42
+          echo "TINYCC_SELF_COMPILE_RUNTIME_V0=PASS source=hello.c qemu_rc=42 producer=Mini-built-TinyCC consumer=MiniLD"
+
       - name: Preserve TinyCC frontier evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -537,6 +581,16 @@ jobs:
             build/tinycc-full-driver-v0/tcc-version.stdout
             build/tinycc-full-driver-v0/tcc-version.stderr
             build/tinycc-full-driver-v0/tcc-minic-static
+            build/tinycc-full-driver-v0/tinycc-hello.c
+            build/tinycc-full-driver-v0/tinycc-hello.o
+            build/tinycc-full-driver-v0/tinycc-hello.header
+            build/tinycc-full-driver-v0/tinycc-hello-compile.stdout
+            build/tinycc-full-driver-v0/tinycc-hello-compile.stderr
+            build/tinycc-full-driver-v0/tinycc-hello-link.stdout
+            build/tinycc-full-driver-v0/tinycc-hello-link.stderr
+            build/tinycc-full-driver-v0/tinycc-hello-run.stdout
+            build/tinycc-full-driver-v0/tinycc-hello-run.stderr
+            build/tinycc-full-driver-v0/tinycc-hello
             build/tinycc-full-driver-v0/tinycc-self-hello.c
             build/tinycc-full-driver-v0/tinycc-self-hello.o
             build/tinycc-full-driver-v0/tinycc-self-hello-compile.stdout
