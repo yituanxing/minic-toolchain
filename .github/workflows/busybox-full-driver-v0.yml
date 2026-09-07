@@ -319,6 +319,7 @@ jobs:
           export BUSYBOX_LIBGCC="$libgcc"
           export BUSYBOX_UAPI_COMPAT="$uapi"
           export BUSYBOX_C_RESULTS="$results"
+          export MINIC_KEEP_FAILED_TEMPS=1
 
           started="$(date +%s)"
           set +e
@@ -385,6 +386,8 @@ jobs:
             build/busybox-full-driver-v0/minic-busybox-wrapper.sh
             build/busybox-full-driver-v0/busybox-c-results.tsv
             build/busybox-full-driver-v0/busybox-mini-build.log
+            /tmp/minic-driver-i-*
+            /tmp/minic-driver-s-*
             build/busybox-full-driver-v0/busybox-mini.applets
             build/busybox-full-driver-v0/busybox-mini-list.stderr
             build/busybox-full-driver-v0/busybox-mini-ash.stdout
