@@ -9,6 +9,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: busybox-full-driver-v0-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   busybox-producer-frontier:
     runs-on: ubuntu-24.04
