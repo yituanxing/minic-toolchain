@@ -43,6 +43,7 @@ typedef struct MinicParserRecordTag {
 typedef struct MinicParserScopeFrame {
     size_t binding_begin;
     size_t record_tag_begin;
+    size_t enum_constant_begin;
     MinicCleanupContextId cleanup_context;
 } MinicParserScopeFrame;
 
