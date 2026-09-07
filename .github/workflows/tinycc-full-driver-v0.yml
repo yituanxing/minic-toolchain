@@ -75,6 +75,7 @@ jobs:
           work="$GITHUB_WORKSPACE/build/tinycc-full-driver-v0"
           tiny_sha=0fb54300b56512754221d80adda85ddb9815bceb
           src="$work/tinycc-$tiny_sha"
+          sysroot="$work/musl-sysroot"
           cd "$src"
           ./configure \
             --cpu=riscv64 \
