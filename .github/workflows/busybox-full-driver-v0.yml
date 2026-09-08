@@ -368,18 +368,7 @@ jobs:
             STRIP=riscv64-linux-gnu-strip \
             OBJCOPY=riscv64-linux-gnu-objcopy \
             OBJDUMP=riscv64-linux-gnu-objdump \
-            archival/libarchive/decompress_gunzip.o \
-            archival/unzip.o \
-            runit/runsv.o \
-            util-linux/mkfs_vfat.o \
-            networking/ifenslave.o \
-            networking/ifplugd.o \
-            networking/udhcp/dhcpc.o \
-            networking/libiproute/ll_types.o \
-            miscutils/ubirename.o \
-            editors/awk.o \
-            networking/brctl.o \
-            networking/tc.o \
+            applets/applets.o \
             >"$work/busybox-mini-build.log" 2>&1
           build_rc=$?
           set -e
@@ -391,7 +380,7 @@ jobs:
           unique_sources="$(cut -f1 "$results" | sort -u | wc -l)"
           echo "BUSYBOX_C_FRONTIER selected=$total unique=$unique_sources pass=$passed fail=$failed make_rc=$build_rc elapsed_s=$elapsed"
 
-          if test "$failed" -ne 0 || test "$build_rc" -ne 0 || test "$unique_sources" -ne 12; then
+          if test "$failed" -ne 0 || test "$build_rc" -ne 0 || test "$unique_sources" -ne 1; then
             echo "BUSYBOX_C_FAILURE_POOL_BEGIN"
             awk -F '\t' '$2=="FAIL"{print}' "$results" | head -n 80
             echo "BUSYBOX_C_FAILURE_POOL_END"
@@ -399,8 +388,8 @@ jobs:
             exit 1
           fi
 
-          test "$unique_sources" -eq 12
-          echo "BUSYBOX_FAILURE_PROBE_V0=PASS selected=$total unique=$unique_sources pipeline=MiniPP,MiniC,MiniAS"
+          test "$unique_sources" -eq 1
+          echo "BUSYBOX_SHARED_PREREQ_PROBE_V0=PASS selected=$total unique=$unique_sources pipeline=MiniPP,MiniC,MiniAS"
 
       - name: Run 408-applet BusyBox acceptance
         if: false
