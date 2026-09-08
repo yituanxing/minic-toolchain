@@ -755,6 +755,17 @@ static bool verify_expression(const MinicC0Program *program,
                minic_c0_types_compatible(program, left->type, right->type) &&
                expression->value_category == MINIC_VALUE_RVALUE &&
                minic_type_is_void(expression->type);
+    case MINIC_EXPRESSION_BUILTIN_ALLOCA: {
+        const MinicExpression *size_expression;
+        MinicType pointee;
+
+        size_expression =
+            expression_before(program, expression->value.unary.operand, expression_index);
+        return size_expression != NULL &&
+               minic_type_equal(size_expression->type, minic_type_unsigned_long()) &&
+               expression->value_category == MINIC_VALUE_RVALUE &&
+               minic_type_pointee(expression->type, &pointee) && minic_type_is_void(pointee);
+    }
     case MINIC_EXPRESSION_BUILTIN_UNARY: {
         const MinicExpression *builtin_operand;
         MinicType expected_operand_type;
