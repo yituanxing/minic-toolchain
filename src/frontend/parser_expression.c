@@ -2267,6 +2267,66 @@ static bool parse_builtin_unreachable(MinicParser *parser, MinicExpressionId *ex
            minic_parser_add_expression(parser, &expression, expression_id);
 }
 
+static bool parse_builtin_alloca(MinicParser *parser, MinicExpressionId *expression_id) {
+    MinicExpression conversion;
+    MinicExpression expression;
+    const MinicExpression *operand;
+    MinicExpressionId converted_id;
+    MinicExpressionId operand_id;
+    MinicSourcePosition begin;
+    MinicSourcePosition end;
+    MinicType void_pointer_type;
+
+    if (parser == NULL || expression_id == NULL ||
+        !generic_token_text_equals(parser, "__builtin_alloca")) {
+        return false;
+    }
+    begin = parser->current.span.begin;
+    if (!minic_parser_advance(parser) ||
+        !minic_parser_expect(parser, MINIC_TOKEN_LPAREN, "expected '(' after __builtin_alloca") ||
+        !parse_expression_internal(parser, &operand_id, 0U, true)) {
+        return false;
+    }
+    operand = minic_c0_program_expression(parser->program, operand_id);
+    if (operand == NULL || !minic_type_is_integer(operand->type)) {
+        minic_parser_error(parser, "__builtin_alloca size must have integer type");
+        return false;
+    }
+    if (!minic_type_equal(operand->type, minic_type_unsigned_long())) {
+        (void)memset(&conversion, 0, sizeof(conversion));
+        conversion.kind = MINIC_EXPRESSION_CAST;
+        conversion.span = operand->span;
+        conversion.type = minic_type_unsigned_long();
+        conversion.value_category = MINIC_VALUE_RVALUE;
+        conversion.value.unary.operand = operand_id;
+        if (!minic_parser_add_expression(parser, &conversion, &converted_id)) {
+            return false;
+        }
+        operand_id = converted_id;
+    }
+    if (parser->current.kind != MINIC_TOKEN_RPAREN) {
+        minic_parser_error(parser, "expected ')' after __builtin_alloca size");
+        return false;
+    }
+    end = parser->current.span.end;
+    if (!minic_type_pointer_to(minic_type_void(), &void_pointer_type)) {
+        minic_parser_error(parser, "cannot form __builtin_alloca result type");
+        return false;
+    }
+    if (!minic_parser_advance(parser)) {
+        return false;
+    }
+
+    (void)memset(&expression, 0, sizeof(expression));
+    expression.kind = MINIC_EXPRESSION_BUILTIN_ALLOCA;
+    expression.span.begin = begin;
+    expression.span.end = end;
+    expression.type = void_pointer_type;
+    expression.value_category = MINIC_VALUE_RVALUE;
+    expression.value.unary.operand = operand_id;
+    return minic_parser_add_expression(parser, &expression, expression_id);
+}
+
 static bool parse_builtin_unary(MinicParser *parser,
                                 MinicBuiltinUnaryOperator operator_kind,
                                 const char *spelling,
@@ -2706,6 +2766,13 @@ static bool parse_primary(MinicParser *parser, MinicExpressionId *expression_id,
     }
     if (generic_token_text_equals(parser, "__builtin_huge_val")) {
         if (!parse_builtin_huge_val(parser, &primary_id) ||
+            !minic_parser_parse_postfix(parser, primary_id, &primary_id)) {
+            return false;
+        }
+        return finish_value_expression(parser, primary_id, decay_array, expression_id);
+    }
+    if (generic_token_text_equals(parser, "__builtin_alloca")) {
+        if (!parse_builtin_alloca(parser, &primary_id) ||
             !minic_parser_parse_postfix(parser, primary_id, &primary_id)) {
             return false;
         }
