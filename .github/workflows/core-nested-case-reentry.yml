@@ -67,7 +67,7 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
-          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/nested-case-check check-fast
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/nested-case-check all check-fast
 
       - name: Run direct minimal nested-case probe
         shell: bash
