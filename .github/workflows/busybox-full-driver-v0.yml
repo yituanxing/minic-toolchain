@@ -3,7 +3,7 @@ name: BusyBox Failure Pool V0
 on:
   push:
     branches:
-      - compiler/busybox-failure-pool-v0
+      - compiler/busybox-gnu27-probe-v0
   workflow_dispatch:
 
 permissions:
