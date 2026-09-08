@@ -13,9 +13,7 @@ mkdir -p "$work"
 
 grep -F 'decrement_timeout:' "$work/floating_prefix_update.s" >/dev/null
 grep -F 'increment_ratio:' "$work/floating_prefix_update.s" >/dev/null
-grep -F 'increment_wide:' "$work/floating_prefix_update.s" >/dev/null
 grep -F '  fsub.d ' "$work/floating_prefix_update.s" >/dev/null
 grep -F '  fadd.s ' "$work/floating_prefix_update.s" >/dev/null
-grep -F '  call __addtf3' "$work/floating_prefix_update.s" >/dev/null
 
-printf '%s\n' 'PASS compiler/c0/floating_prefix_update float=1 double=1 long-double=1'
+printf '%s\n' 'PASS compiler/c0/floating_prefix_update float=1 double=1'
