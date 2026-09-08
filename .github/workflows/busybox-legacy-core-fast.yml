@@ -15,13 +15,13 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
-      - name: Checkout pre-Core legacy compiler
+      - name: Checkout immediate pre-Core-default compiler
         uses: actions/checkout@v4
         with:
-          ref: 306ea3f456ededf12f54dd3a5de669f68443ff5e
+          ref: 91a7da74665e9b1bb6b89fcd0773db1c9ac0da10
           path: legacy
 
-      - name: Build legacy-default MiniC
+      - name: Build immediate pre-Core-default MiniC
         shell: bash
         run: |
           set -Eeuo pipefail
