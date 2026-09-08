@@ -5,17 +5,20 @@ int main(void) {
     long wide;
     int value;
     double precise;
+    float approximate;
 
     small = 7;
     wide = 1234;
     value = 29;
     precise = 2.5;
+    approximate = 1.25f;
     return verify_variadic(5,
                            11,
                            small,
                            wide,
                            &value,
                            precise,
+                           approximate,
                            61,
                            62,
                            63,
