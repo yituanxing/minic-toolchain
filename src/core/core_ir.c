@@ -1066,6 +1066,16 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
                available_values[instruction->value.operand] &&
                (minic_type_is_integer(function->values[instruction->value.operand].type) ||
                 minic_type_is_pointer(function->values[instruction->value.operand].type));
+    case MINIC_CORE_INSTRUCTION_STACK_ALLOCATE: {
+        MinicType pointee;
+
+        return instruction_result_is_valid(function, instruction) &&
+               instruction->value.operand < function->value_count &&
+               available_values[instruction->value.operand] &&
+               minic_type_equal(function->values[instruction->value.operand].type,
+                                minic_type_unsigned_long()) &&
+               minic_type_pointee(instruction->type, &pointee) && minic_type_is_void(pointee);
+    }
     /* M79_CALL_FRAME_RETURN_ADDRESS: Core validates the semantic shape only.
        Backend support for a particular kind/level pair is a target concern. */
     case MINIC_CORE_INSTRUCTION_CALL_FRAME_ADDRESS: {
