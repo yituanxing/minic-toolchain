@@ -104,7 +104,7 @@ jobs:
           tar -xzf "$work/musl-1.2.5.tar.gz" -C "$work"
           echo "BUSYBOX_SOURCE=PASS release=1.38.0 musl=1.2.5"
 
-      - name: Build static musl runtime and headers
+      - name: Prepare musl headers for fast producer probes
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -129,14 +129,11 @@ jobs:
               --disable-shared \
               --prefix=/usr \
             >"$work/musl-configure.log" 2>&1
-          make -j4 lib/libc.a obj/crt/crt1.o obj/crt/crti.o obj/crt/crtn.o \
-            >"$work/musl-make.log" 2>&1
           make DESTDIR="$sysroot" install-headers \
             >"$work/musl-install-headers.log" 2>&1
 
-          test -s lib/libc.a
-          test -s obj/crt/crt1.o
-          echo "BUSYBOX_MUSL_STATIC=PASS"
+          test -s "$sysroot/usr/include/stdio.h"
+          echo "BUSYBOX_MUSL_HEADERS=PASS"
 
       - name: Prepare frozen V222 408-applet profile
         shell: bash
@@ -365,38 +362,70 @@ jobs:
           export BUSYBOX_LIBGCC="$libgcc"
           export BUSYBOX_UAPI_COMPAT="$uapi"
           export BUSYBOX_C_RESULTS="$results"
-          export MINIC_KEEP_FAILED_TEMPS=1
+          unset MINIC_KEEP_FAILED_TEMPS
           export CORE_FAST_TRACE=1
 
+          mkdir -p "$out/include2"
+          ln -fsn "$src/include/asm-x86_64" "$out/include2/asm"
+
+          targets=(
+            archival/libarchive/decompress_gunzip.o
+            archival/unzip.o
+            runit/runsv.o
+            util-linux/mkfs_vfat.o
+            networking/ifenslave.o
+            networking/ifplugd.o
+            networking/udhcp/dhcpc.o
+            networking/libiproute/ll_types.o
+            miscutils/ubirename.o
+            editors/awk.o
+            networking/brctl.o
+            networking/tc.o
+            sysklogd/syslogd_and_logger.o
+            libbb/progress.o
+            libbb/xconnect.o
+            libbb/xreadlink.o
+          )
+
+          compile_target() {
+            target="$1"
+            rel="${target%.o}.c"
+            dir="${rel%/*}"
+            file="${rel##*/}"
+            base="${file%.c}"
+            mkdir -p "$out/$dir"
+            log="$work/sample-${base}.log"
+            set +e
+            (
+              cd "$out"
+              timeout 90s "$wrapper" \
+                "-Wp,-MD,$dir/.$base.o.d" \
+                -Iinclude -Ilibbb -Iinclude2 \
+                -I"$src/include" -I"$src/libbb" \
+                -include include/autoconf.h \
+                -D_GNU_SOURCE -DNDEBUG -D_LARGEFILE_SOURCE -D_LARGEFILE64_SOURCE \
+                -D_FILE_OFFSET_BITS=64 -D_TIME_BITS=64 '-DBB_VER="1.38.0"' \
+                -I"$src/$dir" -I"$dir" \
+                "-DKBUILD_BASENAME=\"$base\"" "-DKBUILD_MODNAME=\"$base\"" \
+                -c -o "$target" "$src/$rel"
+            ) >"$log" 2>&1
+            rc=$?
+            set -e
+            printf '%s\t%s\n' "$target" "$rc" >>"$work/sample-status.tsv"
+            return 0
+          }
+          export -f compile_target
+          export work src out wrapper
+
+          : >"$work/sample-status.tsv"
           started="$(date +%s)"
-          set +e
-          make -C "$src" O="$out" -k -j4 V=1 \
-            HOSTCC=/usr/bin/cc \
-            CC="$wrapper" \
-            AR=riscv64-linux-gnu-ar \
-            NM=riscv64-linux-gnu-nm \
-            STRIP=riscv64-linux-gnu-strip \
-            OBJCOPY=riscv64-linux-gnu-objcopy \
-            OBJDUMP=riscv64-linux-gnu-objdump \
-            archival/libarchive/decompress_gunzip.o \
-            archival/unzip.o \
-            runit/runsv.o \
-            util-linux/mkfs_vfat.o \
-            networking/ifenslave.o \
-            networking/ifplugd.o \
-            networking/udhcp/dhcpc.o \
-            networking/libiproute/ll_types.o \
-            miscutils/ubirename.o \
-            editors/awk.o \
-            networking/brctl.o \
-            networking/tc.o \
-            sysklogd/syslogd_and_logger.o \
-            libbb/progress.o \
-            libbb/xconnect.o \
-            libbb/xreadlink.o \            >"$work/busybox-mini-build.log" 2>&1
-          build_rc=$?
-          set -e
+          printf '%s\n' "${targets[@]}" | xargs -n1 -P4 bash -c 'compile_target "$1"' _
           elapsed=$(( $(date +%s) - started ))
+          cat "$work"/sample-*.log >"$work/busybox-mini-build.log" || true
+          build_rc=0
+          if awk -F '\t' '$2 != 0 { bad=1 } END { exit bad ? 0 : 1 }' "$work/sample-status.tsv"; then
+            build_rc=2
+          fi
 
           total="$(wc -l <"$results")"
           passed="$(awk -F '\t' '$2=="PASS"{n++} END{print n+0}' "$results")"
@@ -435,21 +464,14 @@ jobs:
           grep -q '^ASH_OK 5050$' "$work/busybox-mini-ash.stdout"
           echo "BUSYBOX_C_RUNTIME_V0=PASS applets=408 ash=PASS"
 
-      - name: Stage failed Mini intermediates
+      - name: Keep fast-lane evidence compact
         if: always()
         shell: bash
         run: |
           set -u
           work="$GITHUB_WORKSPACE/build/busybox-full-driver-v0"
-          failed="$work/failed-intermediates"
-          mkdir -p "$failed"
-          copied=0
-          for path in /tmp/minic-driver-i-* /tmp/minic-driver-s-*; do
-            test -e "$path" || continue
-            cp -a "$path" "$failed/"
-            copied=$((copied + 1))
-          done
-          echo "BUSYBOX_FAILED_INTERMEDIATES_STAGED=$copied"
+          echo "BUSYBOX_FAST_EVIDENCE=compact"
+          du -sh "$work" || true
 
       - name: Preserve BusyBox producer evidence
         if: always()
@@ -458,13 +480,13 @@ jobs:
           name: busybox-failure-pool-v0-frontier
           path: |
             build/busybox-full-driver-v0/musl-configure.log
-            build/busybox-full-driver-v0/musl-make.log
             build/busybox-full-driver-v0/musl-install-headers.log
             build/busybox-full-driver-v0/busybox-oldconfig.log
             build/busybox-full-driver-v0/minic-busybox-wrapper.sh
             build/busybox-full-driver-v0/busybox-c-results.tsv
             build/busybox-full-driver-v0/busybox-mini-build.log
-            build/busybox-full-driver-v0/failed-intermediates/
+            build/busybox-full-driver-v0/sample-status.tsv
+            build/busybox-full-driver-v0/sample-*.log
             build/busybox-full-driver-v0/busybox-mini.applets
             build/busybox-full-driver-v0/busybox-mini-list.stderr
             build/busybox-full-driver-v0/busybox-mini-ash.stdout
