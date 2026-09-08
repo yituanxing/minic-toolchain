@@ -52,9 +52,18 @@ static bool apply_assignment_conversion(MinicParser *parser,
     if (minic_c0_assignment_compatible(parser->program, target_type, source_id)) {
         return true;
     }
-    if (!minic_type_is_double(target_type) ||
-        (!minic_type_is_integer(source->type) && !minic_type_is_float(source->type))) {
-        return true;
+    {
+        const bool target_is_arithmetic =
+            minic_type_is_integer(target_type) || minic_type_is_float(target_type) ||
+            minic_type_is_double(target_type) || minic_type_is_long_double(target_type);
+        const bool source_is_arithmetic =
+            minic_type_is_integer(source->type) || minic_type_is_float(source->type) ||
+            minic_type_is_double(source->type) || minic_type_is_long_double(source->type);
+
+        if (!target_is_arithmetic || !source_is_arithmetic ||
+            !minic_type_cast_compatible(target_type, source->type)) {
+            return true;
+        }
     }
 
     (void)memset(&conversion, 0, sizeof(conversion));
