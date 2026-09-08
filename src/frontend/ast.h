@@ -69,7 +69,10 @@ typedef enum MinicExpressionKind {
     MINIC_EXPRESSION_BUILTIN_VA_END,
     MINIC_EXPRESSION_BUILTIN_VA_ARG,
     MINIC_EXPRESSION_BUILTIN_UNARY,
-    MINIC_EXPRESSION_BUILTIN_OVERFLOW
+    MINIC_EXPRESSION_BUILTIN_OVERFLOW,
+    /* GNU function-lifetime dynamic stack storage. Keep appended so the
+       established semantic expression kind numbers remain stable. */
+    MINIC_EXPRESSION_BUILTIN_ALLOCA
 } MinicExpressionKind;
 
 typedef enum MinicUnaryOperator {
