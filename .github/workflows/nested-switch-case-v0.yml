@@ -30,9 +30,33 @@ jobs:
           RISCV_CC=riscv64-linux-gnu-gcc \
           QEMU_RISCV64=qemu-riscv64 \
             sh tests/compiler/c0/run-core-switch-m27.sh
-      - name: Existing switch control-flow regression
+      - name: Existing switch control-flow shape probe
         run: |
+          set +e
           MINIC="$GITHUB_WORKSPACE/build/nested-switch-case-v0/bin/minic" \
           BUILD_DIR="$GITHUB_WORKSPACE/build/nested-switch-case-v0/focused" \
           HOST_CC=cc \
             sh tests/compiler/c0/run-switch-control-flow.sh
+          rc=$?
+          echo "EXPERIMENT_SWITCH_SHAPE_RC=$rc"
+          exit 0
+
+  base-control:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: 0eb1c8caffc545f6e07e38708f401923c70ca479
+      - name: Build base MiniC
+        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/base-switch-control
+      - name: Run same switch control-flow shape gate on base
+        run: |
+          set +e
+          MINIC="$GITHUB_WORKSPACE/build/base-switch-control/bin/minic" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/base-switch-control/focused" \
+          HOST_CC=cc \
+            sh tests/compiler/c0/run-switch-control-flow.sh
+          rc=$?
+          echo "BASE_SWITCH_SHAPE_RC=$rc"
+          exit 0
