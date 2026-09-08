@@ -168,6 +168,15 @@ jobs:
           test "$rc" -eq 0
           grep -q '^CONFIG_STATIC=y$' "$out/.config"
           grep -q '^CONFIG_ASH=y$' "$out/.config"
+
+          # The real BusyBox make graph generates this before target C compilation.
+          # The direct sample lane intentionally bypasses that graph, so reproduce
+          # the same generated header once rather than making every probe recurse.
+          (
+            cd "$out"
+            "$src/scripts/generate_BUFSIZ.sh" include/common_bufsiz.h
+          )
+          test -s "$out/include/common_bufsiz.h"
           echo "BUSYBOX_PROFILE=PASS applets=408 sha256=$cfg_hash"
 
       - name: Drive BusyBox C producer through Mini
