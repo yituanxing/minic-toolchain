@@ -45,7 +45,7 @@ void instrumentation_policy_aliases(void)
 }
 
 static inline __attribute__((gnu_inline)) __attribute__((always_inline))
-size_t prefix_plain_spelling_identity(size_t value)
+unsigned long prefix_plain_spelling_identity(unsigned long value)
 {
     return value;
 }
