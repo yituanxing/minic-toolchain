@@ -15,6 +15,8 @@ typedef struct MiniPpConfig {
     size_t undefine_count;
     const char **include_paths;
     size_t include_path_count;
+    const char **system_include_paths;
+    size_t system_include_path_count;
     const char **forced_includes;
     size_t forced_include_count;
 } MiniPpConfig;
