@@ -44,6 +44,7 @@ jobs:
           sh tests/compiler/c0/run-mixed-double-arithmetic.sh
           sh tests/compiler/c0/run-float-integer-arithmetic.sh
           sh tests/compiler/c0/run-floating-prefix-update.sh
+          sh tests/compiler/c0/run-variadic-default-promotions.sh
           sh tests/compiler/c0/run-gnu-function-attributes.sh
           sh tests/compiler/c0/run-gnu-prefix-function-attributes.sh
           echo "BUSYBOX_COMPILER_BATCH_FAST_V0=PASS"
