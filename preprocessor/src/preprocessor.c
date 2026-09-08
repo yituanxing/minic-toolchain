@@ -716,7 +716,8 @@ static bool minipp_process_file(MiniPpState *state,
 static bool minipp_handle_include(MiniPpState *state,
                                   const char *current_path,
                                   const char *rest,
-                                  MiniPpString *output) {
+                                  MiniPpString *output,
+                                  bool include_next) {
     const char *text = minipp_skip_horizontal_space(rest);
     const char *name_start;
     const char *name_end;
@@ -825,13 +826,12 @@ static bool minipp_handle_include(MiniPpState *state,
         goto done;
     }
 
-    if (!minipp_resolve_include(state,
-                                current_path,
-                                name,
-                                angled,
-                                &resolved)) {
+    if (!(include_next
+              ? minipp_resolve_include_next(state, current_path, name, &resolved)
+              : minipp_resolve_include(state, current_path, name, angled, &resolved))) {
         fprintf(state->diagnostics,
-                "minic-cpp: include-not-found:%s\n",
+                "minic-cpp: %s-not-found:%s\n",
+                include_next ? "include-next" : "include",
                 name);
         goto done;
     }
@@ -964,7 +964,10 @@ static bool minipp_handle_directive(MiniPpState *state,
         return minipp_parse_undef(state, rest);
     }
     if (strcmp(directive, "include") == 0) {
-        return minipp_handle_include(state, current_path, rest, output);
+        return minipp_handle_include(state, current_path, rest, output, false);
+    }
+    if (strcmp(directive, "include_next") == 0) {
+        return minipp_handle_include(state, current_path, rest, output, true);
     }
     if (strcmp(directive, "pragma") == 0) {
         return minipp_emit_pragma(state, rest, output);
