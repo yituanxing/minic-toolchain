@@ -221,6 +221,13 @@ static int preprocess_c_to_file(const char *input,
     arguments[count++] = "-undef";
     arguments[count++] = "-nostdinc";
     append_rv64_linux_musl_predefines(arguments, &count, hosted);
+    /* Match compiler-driver include search semantics: explicit user include
+     * paths precede the driver's default sysroot system directory.  This is
+     * also required for compatibility overlays that use #include_next to
+     * augment, rather than replace, a system header. */
+    for (index = 0U; index < cpp_forward_count; ++index) {
+        arguments[count++] = (char *)cpp_forward[index];
+    }
     if (!no_stdinc && sysroot != NULL && sysroot[0] != '\0') {
         include_dir = join_path(sysroot, "include");
         if (include_dir == NULL) {
@@ -229,9 +236,6 @@ static int preprocess_c_to_file(const char *input,
         }
         arguments[count++] = "-isystem";
         arguments[count++] = include_dir;
-    }
-    for (index = 0U; index < cpp_forward_count; ++index) {
-        arguments[count++] = (char *)cpp_forward[index];
     }
     arguments[count++] = "-o";
     arguments[count++] = (char *)output;
