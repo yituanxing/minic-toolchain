@@ -8,6 +8,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: busybox-compiler-batch-fast-v0-${{ github.ref }}
@@ -48,3 +49,104 @@ jobs:
           sh tests/compiler/c0/run-gnu-function-attributes.sh
           sh -x tests/compiler/c0/run-gnu-prefix-function-attributes.sh
           echo "BUSYBOX_COMPILER_BATCH_FAST_V0=PASS"
+
+      - name: Recompile frozen BusyBox failed-I pool
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/busybox-frozen-failures"
+          mkdir -p "$work/intermediates" "$work/logs" "$work/asm"
+          curl -fsSL --retry 3 \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${{ github.repository }}/actions/artifacts/10041020205/zip" \
+            -o "$work/pool.zip"
+          unzip -q "$work/pool.zip" 'failed-intermediates/minic-driver-i-*' -d "$work"
+          cat >"$work/map.tsv" <<'MAP'
+          archival/dpkg.c	xA4LAz
+          archival/lzop.c	ga2g1w
+          archival/libarchive/decompress_gunzip.c	c3kuvp
+          archival/unzip.c	igHQnr
+          editors/awk.c	zIf7jX
+          editors/diff.c	Bw5T8A
+          findutils/find.c	v0rdEr
+          editors/sed.c	7DxH8g
+          archival/libarchive/lzo1x_d.c	4xf3Iy
+          init/init.c	wAEDOx
+          libpwdgrp/uidgid_get.c	MTCCz9
+          mailutils/reformime.c	uM9VK4
+          mailutils/sendmail.c	nnjQMm
+          coreutils/od.c	5DDuEa
+          miscutils/bc.c	xo0XGL
+          miscutils/hdparm.c	UXw8AH
+          networking/brctl.c	1EZVM3
+          miscutils/less.c	GzAszz
+          networking/httpd.c	1ZqIvv
+          networking/ifenslave.c	fOgOU2
+          miscutils/nandwrite.c	0K5d9X
+          libbb/dump.c	27JOZP
+          networking/ifplugd.c	Gzasof
+          coreutils/tee.c	YzrT34
+          networking/inetd.c	u1y3hr
+          coreutils/timeout.c	qNNwQK
+          coreutils/tr.c	MBgYtk
+          networking/nslookup.c	yWdRUz
+          networking/ntpd.c	16ugVn
+          miscutils/ubirename.c	K98sUF
+          libbb/getopt32.c	T5musi
+          networking/tc.c	CoXJ42
+          libbb/in_ether.c	oLdzYX
+          networking/udhcp/dhcpc.c	LxouSm
+          networking/udhcp/dhcprelay.c	ZTzoJC
+          networking/libiproute/ll_types.c	uOaZVP
+          libbb/lineedit.c	HFemBJ
+          runit/runsv.c	q4iy3D
+          runit/runsvdir.c	TEf0Pf
+          runit/sv.c	TnormR
+          runit/svlogd.c	1BQeG6
+          procps/mpstat.c	bOpHmb
+          shell/ash.c	J2rAtS
+          shell/hush.c	PWcTqQ
+          procps/ps.c	nWD2Gf
+          shell/math.c	khgZel
+          sysklogd/syslogd_and_logger.c	MTYRmz
+          libbb/progress.c	9Xrgwv
+          util-linux/fdisk.c	6uf1hc
+          libbb/read_printf.c	IErJ6Q
+          util-linux/mdev.c	yRFbgp
+          util-linux/mkfs_vfat.c	4XreCm
+          libbb/wfopen_input.c	n3nnBD
+          libbb/xconnect.c	6pVHWQ
+          libbb/xreadlink.c	Uyh5nc
+          MAP
+          : >"$work/results.tsv"
+          while IFS=$'\t' read -r source base; do
+            (
+              input="$work/failed-intermediates/minic-driver-i-$base"
+              copy="$work/intermediates/$base.i"
+              cp "$input" "$copy"
+              set +e
+              timeout 60s "$GITHUB_WORKSPACE/build/busybox-batch-fast-v0/bin/minic" \
+                -S "$copy" -o "$work/asm/$base.s" \
+                >"$work/logs/$base.out" 2>"$work/logs/$base.err"
+              rc=$?
+              set -e
+              if test "$rc" -eq 0; then status=PASS; else status=FAIL; fi
+              first="$(grep -m1 -E 'error:|Core IR does not yet support' "$work/logs/$base.err" || true)"
+              {
+                flock 9
+                printf '%s\t%s\t%s\t%s\n' "$source" "$status" "$rc" "$first" >&9
+              } 9>>"$work/results.tsv"
+            ) &
+            while test "$(jobs -pr | wc -l)" -ge 8; do
+              wait -n || true
+            done
+          done <"$work/map.tsv"
+          wait
+          sort -o "$work/results.tsv" "$work/results.tsv"
+          pass="$(awk -F '\t' '$2=="PASS"{n++} END{print n+0}' "$work/results.tsv")"
+          fail="$(awk -F '\t' '$2=="FAIL"{n++} END{print n+0}' "$work/results.tsv")"
+          echo "BUSYBOX_FROZEN_I_FRONTIER pass=$pass fail=$fail total=$((pass+fail))"
+          cat "$work/results.tsv"
