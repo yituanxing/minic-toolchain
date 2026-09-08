@@ -5045,6 +5045,40 @@ MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
         return MINIC_CORE_LOWER_OK;
     }
 
+    if (expression->kind == MINIC_EXPRESSION_BUILTIN_ALLOCA) {
+        const MinicExpression *size_expression;
+        MinicCoreValueId size_value;
+        MinicCoreLowerStatus status;
+        MinicType pointee;
+
+        size_expression = minic_c0_program_expression(
+            context->body->program, expression->value.unary.operand);
+        if (size_expression == NULL ||
+            !minic_type_equal(size_expression->type, minic_type_unsigned_long()) ||
+            !minic_type_pointee(expression->type, &pointee) || !minic_type_is_void(pointee)) {
+            return MINIC_CORE_LOWER_UNSUPPORTED;
+        }
+        status = lower_expression(context, expression->value.unary.operand, &size_value);
+        if (status != MINIC_CORE_LOWER_OK) {
+            return status;
+        }
+        if (size_value >= context->function->value_count ||
+            !minic_type_equal(context->function->values[size_value].type,
+                              minic_type_unsigned_long())) {
+            return MINIC_CORE_LOWER_ERROR;
+        }
+        (void)memset(&instruction, 0, sizeof(instruction));
+        instruction.kind = MINIC_CORE_INSTRUCTION_STACK_ALLOCATE;
+        instruction.span = expression->span;
+        instruction.type = expression->type;
+        instruction.result = MINIC_CORE_VALUE_INVALID;
+        instruction.value.operand = size_value;
+        return minic_core_function_append_value_instruction(
+                   context->function, context->block_id, &instruction, value_id)
+                   ? MINIC_CORE_LOWER_OK
+                   : MINIC_CORE_LOWER_ERROR;
+    }
+
     /* M79_CALL_FRAME_RETURN_ADDRESS: keep the semantic builtin in Core rather
        than lowering it to a target register in the frontend. The first seam
        is GNU __builtin_return_address(0); deeper levels and frame-address
