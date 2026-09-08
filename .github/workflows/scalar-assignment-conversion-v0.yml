@@ -1,0 +1,36 @@
+name: Scalar Assignment Conversion V0
+
+on:
+  push:
+    branches:
+      - frontend/scalar-assignment-conversion-v0
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: scalar-assignment-conversion-v0-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  focused:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+      - name: Build Mini toolchain
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/scalar-assignment-v0 all
+      - name: Run cast and implicit assignment focused gate
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          MINIC="$GITHUB_WORKSPACE/build/scalar-assignment-v0/bin/minic" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/scalar-assignment-v0" \
+          HOST_CC=cc \
+            sh tests/compiler/c0/run-cast-expressions.sh
