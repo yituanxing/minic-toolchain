@@ -916,4 +916,33 @@ SG_MOD("x %u", SG_VALUE - 1)
 EOF
 run_exact source-generated-head-through-gnu-chain
 
-printf 'MINIPP_A0_EXACT=PASS cases=94 mode=byte-identical\n'
+mkdir -p "$work/include-tier-user" "$work/include-tier-system"
+cat >"$work/include-tier-user/priority.h" <<'EOF'
+#define INCLUDE_PRIORITY 1
+EOF
+cat >"$work/include-tier-system/priority.h" <<'EOF'
+#define INCLUDE_PRIORITY 2
+EOF
+cat >"$work/include-tier-priority.c" <<'EOF'
+#include <priority.h>
+int include_priority = INCLUDE_PRIORITY;
+EOF
+run_exact include-tier-priority \
+    -isystem "$work/include-tier-system" -I"$work/include-tier-user"
+
+mkdir -p "$work/include-next-a" "$work/include-next-b"
+cat >"$work/include-next-a/chain.h" <<'EOF'
+#define INCLUDE_NEXT_FIRST 11
+#include_next <chain.h>
+EOF
+cat >"$work/include-next-b/chain.h" <<'EOF'
+#define INCLUDE_NEXT_SECOND 22
+EOF
+cat >"$work/include-next-chain.c" <<'EOF'
+#include <chain.h>
+int include_next_sum = INCLUDE_NEXT_FIRST + INCLUDE_NEXT_SECOND;
+EOF
+run_exact include-next-chain \
+    -I"$work/include-next-a" -isystem "$work/include-next-b"
+
+printf 'MINIPP_A0_EXACT=PASS cases=96 mode=byte-identical\n'
