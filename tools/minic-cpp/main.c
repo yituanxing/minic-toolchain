@@ -20,10 +20,12 @@ int main(int argc, char **argv) {
     const char **defines;
     const char **undefines;
     const char **include_paths;
+    const char **system_include_paths;
     const char **forced_includes;
     size_t define_count = 0U;
     size_t undefine_count = 0U;
     size_t include_path_count = 0U;
+    size_t system_include_path_count = 0U;
     size_t forced_include_count = 0U;
     int index;
     int status;
@@ -32,13 +34,15 @@ int main(int argc, char **argv) {
     defines = calloc((size_t)argc, sizeof(*defines));
     undefines = calloc((size_t)argc, sizeof(*undefines));
     include_paths = calloc((size_t)argc, sizeof(*include_paths));
+    system_include_paths = calloc((size_t)argc, sizeof(*system_include_paths));
     forced_includes = calloc((size_t)argc, sizeof(*forced_includes));
     if (defines == NULL || undefines == NULL || include_paths == NULL ||
-        forced_includes == NULL) {
+        system_include_paths == NULL || forced_includes == NULL) {
         fprintf(stderr, "minic-cpp: out-of-memory\n");
         free(defines);
         free(undefines);
         free(include_paths);
+        free(system_include_paths);
         free(forced_includes);
         return 1;
     }
@@ -120,12 +124,12 @@ int main(int argc, char **argv) {
                 status = 2;
                 goto done;
             }
-            include_paths[include_path_count++] = argv[index];
+            system_include_paths[system_include_path_count++] = argv[index];
             continue;
         }
         if (strncmp(argument, "-isystem", 8U) == 0 &&
             argument[8] != '\0') {
-            include_paths[include_path_count++] = argument + 8;
+            system_include_paths[system_include_path_count++] = argument + 8;
             continue;
         }
         if (strcmp(argument, "-include") == 0) {
@@ -168,6 +172,8 @@ int main(int argc, char **argv) {
     config.undefine_count = undefine_count;
     config.include_paths = include_paths;
     config.include_path_count = include_path_count;
+    config.system_include_paths = system_include_paths;
+    config.system_include_path_count = system_include_path_count;
     config.forced_includes = forced_includes;
     config.forced_include_count = forced_include_count;
     status = minipp_preprocess_file(input, output, &config, stderr);
@@ -176,6 +182,7 @@ done:
     free(defines);
     free(undefines);
     free(include_paths);
+    free(system_include_paths);
     free(forced_includes);
     return status;
 }
