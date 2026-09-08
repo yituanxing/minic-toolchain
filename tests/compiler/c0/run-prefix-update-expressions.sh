@@ -19,4 +19,6 @@ grep -F '  addi t0, t0, -1' "$work/prefix_update_expression.s" >/dev/null
 grep -F '  addi t0, t0, 4' "$work/prefix_update_expression.s" >/dev/null
 grep -F '  addi t0, t0, -4' "$work/prefix_update_expression.s" >/dev/null
 test "$(grep -c -F '  mv a0, t0' "$work/prefix_update_expression.s")" -ge 4
-printf '%s\n' 'PASS compiler/c0/prefix_update_expression integer=++/-- pointer=++/-- result=new lvalue-address=once'
+grep -F '  fsub.d ft0, ft0, ft1' "$work/prefix_update_expression.s" >/dev/null
+grep -F '  fadd.d ft0, ft0, ft1' "$work/prefix_update_expression.s" >/dev/null
+printf '%s\n' 'PASS compiler/c0/prefix_update_expression integer=++/-- pointer=++/-- double=prefix+postfix result=typed lvalue-address=once'
