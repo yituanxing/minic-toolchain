@@ -11121,9 +11121,27 @@ lower_block(MinicCoreLowerContext *context, const MinicBlock *source_block, bool
                 statement->kind != MINIC_STATEMENT_DEFAULT) {
                 if (core_unreachable_statement_has_external_reentry(
                         context, statement, MINIC_STATEMENT_INVALID)) {
-                    return MINIC_CORE_LOWER_UNSUPPORTED;
+                    MinicCoreBlockId reentry_seed;
+
+                    /* A forward goto may target a label nested inside structured
+                       control flow.  The current sequential path is already dead,
+                       but the structured subtree itself is live through that label.
+                       Lower it from a deliberately unreachable seed block: normal
+                       entry remains unreachable, while the pre-bound label block
+                       receives the real goto edge and owns subsequent fallthrough. */
+                    if (statement->kind != MINIC_STATEMENT_IF &&
+                        statement->kind != MINIC_STATEMENT_WHILE &&
+                        statement->kind != MINIC_STATEMENT_SWITCH) {
+                        return MINIC_CORE_LOWER_UNSUPPORTED;
+                    }
+                    if (!minic_core_function_add_block(context->function, &reentry_seed)) {
+                        return MINIC_CORE_LOWER_ERROR;
+                    }
+                    context->block_id = reentry_seed;
+                    block_terminated = false;
+                } else {
+                    continue;
                 }
-                continue;
             }
         }
         /* BATCH_C_ZERO_DISTANCE_CLEANUP_EDGE: cleanup ids are semantic edge
