@@ -749,6 +749,14 @@ static bool verify_expression(const MinicC0Program *program,
                 minic_type_is_double(expression->type) ||
                 (minic_type_is_record(expression->type) &&
                  minic_c0_type_is_complete_object(program, expression->type)));
+    case MINIC_EXPRESSION_BUILTIN_ALLOCA: {
+        MinicType pointee_type;
+        operand = expression_before(program, expression->value.unary.operand, expression_index);
+        return operand != NULL && minic_type_is_integer(operand->type) &&
+               expression->value_category == MINIC_VALUE_RVALUE &&
+               minic_type_pointee(expression->type, &pointee_type) &&
+               minic_type_is_void(pointee_type);
+    }
     case MINIC_EXPRESSION_BUILTIN_VA_COPY:
         left = expression_before(program, expression->value.binary.left, expression_index);
         right = expression_before(program, expression->value.binary.right, expression_index);

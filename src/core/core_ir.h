@@ -102,6 +102,7 @@ typedef enum MinicCoreInstructionKind {
     /* M123_VARIADIC_ARGUMENT_ADDRESS: semantic origin of a va_list cursor.
        Backend ABI owns register-save-area placement and the concrete address. */
     MINIC_CORE_INSTRUCTION_VARIADIC_ARGUMENT_ADDRESS,
+    MINIC_CORE_INSTRUCTION_DYNAMIC_STACK_ALLOC,
     MINIC_CORE_INSTRUCTION_CALL,
     /* M83_FIRST_CLASS_INDIRECT_CALL: callee is an SSA function-pointer value. */
     MINIC_CORE_INSTRUCTION_INDIRECT_CALL,

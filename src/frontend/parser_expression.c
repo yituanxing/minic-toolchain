@@ -2159,6 +2159,49 @@ static bool parse_builtin_object_size(MinicParser *parser, MinicExpressionId *ex
     return minic_parser_add_expression(parser, &result, expression_id);
 }
 
+static bool parse_builtin_alloca(MinicParser *parser, MinicExpressionId *expression_id) {
+    MinicExpression expression;
+    MinicExpressionId size_id;
+    const MinicExpression *size_expression;
+    MinicSourcePosition begin;
+    MinicSourcePosition end;
+    MinicType result_type;
+
+    if (parser == NULL || expression_id == NULL ||
+        !generic_token_text_equals(parser, "__builtin_alloca")) {
+        return false;
+    }
+    begin = parser->current.span.begin;
+    if (!minic_parser_advance(parser) ||
+        !minic_parser_expect(parser, MINIC_TOKEN_LPAREN, "expected '(' after __builtin_alloca") ||
+        !minic_parser_parse_expression(parser, &size_id, 0U)) {
+        return false;
+    }
+    size_expression = minic_c0_program_expression(parser->program, size_id);
+    if (size_expression == NULL || !minic_type_is_integer(size_expression->type) ||
+        parser->current.kind != MINIC_TOKEN_RPAREN ||
+        !minic_parser_apply_fixed_call_argument_conversion(
+            parser, minic_type_unsigned_long(), &size_id)) {
+        if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
+            minic_parser_error(parser, "__builtin_alloca requires one integer size");
+        }
+        return false;
+    }
+    end = parser->current.span.end;
+    if (!minic_parser_advance(parser) ||
+        !minic_type_pointer_to(minic_type_void(), &result_type)) {
+        return false;
+    }
+    (void)memset(&expression, 0, sizeof(expression));
+    expression.kind = MINIC_EXPRESSION_BUILTIN_ALLOCA;
+    expression.span.begin = begin;
+    expression.span.end = end;
+    expression.type = result_type;
+    expression.value_category = MINIC_VALUE_RVALUE;
+    expression.value.unary.operand = size_id;
+    return minic_parser_add_expression(parser, &expression, expression_id);
+}
+
 static bool parse_builtin_constant_p(MinicParser *parser, MinicExpressionId *expression_id) {
     MinicExpression result;
     MinicExpressionId operand_id;
@@ -2853,6 +2896,13 @@ static bool parse_primary(MinicParser *parser, MinicExpressionId *expression_id,
     if (generic_token_text_equals(parser, "__builtin_isdigit")) {
         if (!parse_builtin_unary(
                 parser, MINIC_BUILTIN_UNARY_ISDIGIT, "__builtin_isdigit", &primary_id) ||
+            !minic_parser_parse_postfix(parser, primary_id, &primary_id)) {
+            return false;
+        }
+        return finish_value_expression(parser, primary_id, decay_array, expression_id);
+    }
+    if (generic_token_text_equals(parser, "__builtin_alloca")) {
+        if (!parse_builtin_alloca(parser, &primary_id) ||
             !minic_parser_parse_postfix(parser, primary_id, &primary_id)) {
             return false;
         }
