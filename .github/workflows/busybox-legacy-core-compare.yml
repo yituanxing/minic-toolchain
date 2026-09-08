@@ -1,0 +1,125 @@
+name: BusyBox Legacy vs Core Coverage
+
+on:
+  push:
+    branches:
+      - diagnostics/busybox-legacy-core-compare
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  compare:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout pre-Core legacy compiler
+        uses: actions/checkout@v4
+        with:
+          ref: 306ea3f456ededf12f54dd3a5de669f68443ff5e
+          path: legacy
+
+      - name: Build legacy-default MiniC
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          make -C legacy -j4 MODE=release CFLAGS=-Werror \
+            BUILD_DIR="$GITHUB_WORKSPACE/legacy-build" all
+          test -x "$GITHUB_WORKSPACE/legacy-build/bin/minic"
+          echo "LEGACY_COMPILER=PASS commit=306ea3f456ededf12f54dd3a5de669f68443ff5e"
+
+      - name: Download current BusyBox failure evidence
+        uses: actions/download-artifact@v4
+        with:
+          name: busybox-full-driver-v0-frontier
+          path: artifact
+          github-token: ${{ github.token }}
+          repository: yituanxing/minic-toolchain
+          run-id: 34144046751
+
+      - name: Compare current failures against legacy default codegen
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          log="$GITHUB_WORKSPACE/artifact/busybox-mini-build.log"
+          failed="$GITHUB_WORKSPACE/artifact/failed-intermediates"
+          legacy="$GITHUB_WORKSPACE/legacy-build/bin/minic"
+          work="$GITHUB_WORKSPACE/compare-out"
+          mkdir -p "$work"
+          test -s "$log"
+          test -d "$failed"
+
+          map="$work/current-failures.tsv"
+          : >"$map"
+          grep 'MINIC_FAILED_PREPROCESSED=' "$log" | while IFS= read -r line; do
+            tmp="${line#*MINIC_FAILED_PREPROCESSED=}"
+            tmp="${tmp%% source=*}"
+            src="${line#* source=}"
+            src="${src#*busybox-1.38.0/}"
+            printf '%s\t%s\n' "$tmp" "$src"
+          done | sort -u >"$map"
+
+          total=0
+          legacy_pass=0
+          legacy_fail=0
+          current_core=0
+          core_legacy_pass=0
+          core_legacy_fail=0
+          result="$work/results.tsv"
+          : >"$result"
+
+          while IFS=$'\t' read -r tmp src; do
+            test -n "$tmp" || continue
+            base="${tmp##*/}"
+            input="$failed/$base"
+            test -s "$input"
+            diag="$(grep -F -m1 "$tmp:" "$log" || true)"
+            reason=other
+            if printf '%s\n' "$diag" | grep -q 'Core IR does not yet support'; then
+              reason=core
+              current_core=$((current_core + 1))
+            fi
+
+            out="$work/${base}.s"
+            set +e
+            timeout 45s "$legacy" -S "$input" -o "$out" \
+              >"$work/${base}.stdout" 2>"$work/${base}.stderr"
+            rc=$?
+            set -e
+            total=$((total + 1))
+            if test "$rc" -eq 0 && test -s "$out"; then
+              legacy_status=PASS
+              legacy_pass=$((legacy_pass + 1))
+              if test "$reason" = core; then
+                core_legacy_pass=$((core_legacy_pass + 1))
+              fi
+            else
+              legacy_status=FAIL
+              legacy_fail=$((legacy_fail + 1))
+              if test "$reason" = core; then
+                core_legacy_fail=$((core_legacy_fail + 1))
+              fi
+            fi
+            printf '%s\t%s\t%s\t%s\t%s\n' \
+              "$src" "$reason" "$legacy_status" "$rc" "$diag" >>"$result"
+          done <"$map"
+
+          echo "BUSYBOX_LEGACY_COMPARE total=$total legacy_pass=$legacy_pass legacy_fail=$legacy_fail"
+          echo "BUSYBOX_CORE_REGRESSION_PROBE current_core=$current_core legacy_pass=$core_legacy_pass legacy_fail=$core_legacy_fail"
+          echo "BUSYBOX_LEGACY_PASS_BEGIN"
+          awk -F '\t' '$3=="PASS"{print}' "$result"
+          echo "BUSYBOX_LEGACY_PASS_END"
+          echo "BUSYBOX_LEGACY_FAIL_BEGIN"
+          awk -F '\t' '$3=="FAIL"{print}' "$result"
+          echo "BUSYBOX_LEGACY_FAIL_END"
+
+      - name: Preserve comparison
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: busybox-legacy-core-compare
+          path: compare-out/
+          if-no-files-found: error
+          retention-days: 7
