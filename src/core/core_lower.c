@@ -10331,18 +10331,8 @@ lower_switch(MinicCoreLowerContext *context, const MinicStatement *statement, bo
         nested_labels.first_case_label = SIZE_MAX;
         nested_labels.default_label = SIZE_MAX;
         if (!core_collect_nested_switch_labels(context, body, 0U, &nested_labels)) {
-            (void)fprintf(stderr,
-                          "CORE_NESTED_SWITCH_TRACE function=%s stage=collect result=unsupported\n",
-                          context->source_function->name);
             return MINIC_CORE_LOWER_UNSUPPORTED;
         }
-        (void)fprintf(stderr,
-                      "CORE_NESTED_SWITCH_TRACE function=%s stage=collect labels=%zu nested=%d first=%zu default=%zu\n",
-                      context->source_function->name,
-                      nested_labels.label_count,
-                      nested_labels.has_nested_label ? 1 : 0,
-                      nested_labels.first_case_label,
-                      nested_labels.default_label);
         if (nested_labels.has_nested_label) {
             return lower_switch_with_nested_labels(context,
                                                    statement,
