@@ -12,3 +12,11 @@ int *advance_pointer(int *pointer) {
 int *retreat_pointer(int *pointer) {
     return --pointer;
 }
+
+double decrement_duration(double value) {
+    return --value;
+}
+
+double increment_duration(double value) {
+    return value++;
+}
