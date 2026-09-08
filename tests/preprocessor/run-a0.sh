@@ -538,6 +538,20 @@ int after_builtin_header = __LINE__;
 EOF
 run_exact builtin-include
 
+mkdir -p "$work/include-next/overlay" "$work/include-next/system"
+cat >"$work/include-next/overlay/wrapped.h" <<'EOF'
+#define OVERLAY_VALUE 1
+#include_next <wrapped.h>
+EOF
+cat >"$work/include-next/system/wrapped.h" <<'EOF'
+#define SYSTEM_VALUE 2
+EOF
+cat >"$work/include-next.c" <<'EOF'
+#include <wrapped.h>
+int include_next_sum = OVERLAY_VALUE + SYSTEM_VALUE;
+EOF
+run_exact include-next -I"$work/include-next/overlay" -isystem "$work/include-next/system"
+
 cat >"$work/builtin-counter.c" <<'EOF'
 #define COUNTER_PASTE2(a, b) a##b
 #define COUNTER_PASTE(a, b) COUNTER_PASTE2(a, b)
@@ -916,4 +930,4 @@ SG_MOD("x %u", SG_VALUE - 1)
 EOF
 run_exact source-generated-head-through-gnu-chain
 
-printf 'MINIPP_A0_EXACT=PASS cases=94 mode=byte-identical\n'
+printf 'MINIPP_A0_EXACT=PASS cases=95 mode=byte-identical\n'
