@@ -815,7 +815,46 @@ static bool parse_cast(MinicParser *parser, MinicExpressionId *expression_id) {
 
 static bool variadic_argument_type_supported(MinicType type) {
     return minic_type_is_integer(type) || minic_type_is_pointer(type) ||
-           minic_type_is_double(type) || minic_type_is_record(type);
+           minic_type_is_double(type) || minic_type_is_long_double(type) ||
+           minic_type_is_record(type);
+}
+
+static bool apply_variadic_default_argument_promotion(MinicParser *parser,
+                                                      MinicExpressionId *argument_id) {
+    const MinicExpression *argument;
+    MinicExpression conversion;
+    MinicType promoted_type;
+    MinicExpressionId source_id;
+
+    if (parser == NULL || argument_id == NULL) {
+        return false;
+    }
+    source_id = *argument_id;
+    argument = minic_c0_program_expression(parser->program, source_id);
+    if (argument == NULL) {
+        return false;
+    }
+    if (minic_type_is_float(argument->type)) {
+        promoted_type = minic_type_double();
+    } else if (minic_type_is_integer(argument->type)) {
+        if (!minic_target_info_integer_promotion_for_program(
+                parser->target_info, parser->program, argument->type, &promoted_type)) {
+            return false;
+        }
+        if (minic_type_equal(promoted_type, argument->type)) {
+            return true;
+        }
+    } else {
+        return true;
+    }
+
+    (void)memset(&conversion, 0, sizeof(conversion));
+    conversion.kind = MINIC_EXPRESSION_CAST;
+    conversion.span = argument->span;
+    conversion.type = promoted_type;
+    conversion.value_category = MINIC_VALUE_RVALUE;
+    conversion.value.unary.operand = source_id;
+    return minic_parser_add_expression(parser, &conversion, argument_id);
 }
 
 static bool gnu_enum_integer_pointer_call_conversion_compatible(
@@ -954,10 +993,19 @@ static bool parse_call_argument(MinicParser *parser,
             minic_parser_error(parser, "call argument type does not match declaration");
             return false;
         }
-    } else if (!variadic_argument_type_supported(argument->type)) {
-        minic_parser_error(parser, "unsupported variadic argument type");
-        return false;
-    } else if (minic_type_is_record(argument->type) &&
+    } else {
+        if (!apply_variadic_default_argument_promotion(parser, &argument_id)) {
+            minic_parser_error(parser, "cannot apply variadic default argument promotion");
+            return false;
+        }
+        call_expression->value.call.arguments[argument_index] = argument_id;
+        argument = minic_c0_program_expression(parser->program, argument_id);
+        if (argument == NULL || !variadic_argument_type_supported(argument->type)) {
+            minic_parser_error(parser, "unsupported variadic argument type");
+            return false;
+        }
+    }
+    if (argument_index >= callee->parameter_count && minic_type_is_record(argument->type) &&
                !minic_parser_require_complete_object_type(
                    parser, argument->type, "variadic record argument requires a complete type")) {
         return false;
@@ -3460,8 +3508,11 @@ static bool parse_unary(MinicParser *parser, MinicExpressionId *expression_id, b
                                    "pointer update requires an arithmetic-compatible pointee type");
                 return false;
             }
-        } else if (!minic_type_is_integer(operand_expression->type)) {
-            minic_parser_error(parser, "prefix update requires integer or pointer lvalue");
+        } else if (!minic_type_is_integer(operand_expression->type) &&
+                   !minic_type_is_float(operand_expression->type) &&
+                   !minic_type_is_double(operand_expression->type) &&
+                   !minic_type_is_long_double(operand_expression->type)) {
+            minic_parser_error(parser, "prefix update requires arithmetic or pointer lvalue");
             return false;
         }
         expression.kind = MINIC_EXPRESSION_UNARY;
@@ -3804,12 +3855,46 @@ static bool normalize_float_binary_operands(MinicParser *parser,
         return true;
     }
 
+    /* C's usual arithmetic conversions keep float/integer operations in
+       binary32 when neither operand has double/long-double rank. Convert the
+       integer operand to float first. For comparisons, the existing exact
+       float->double comparison bridge below may then widen both binary32 values
+       without changing the comparison result. */
+    if (minic_type_is_float(left->type) && minic_type_is_integer(right->type)) {
+        (void)memset(&conversion, 0, sizeof(conversion));
+        conversion.kind = MINIC_EXPRESSION_CAST;
+        conversion.span = right->span;
+        conversion.type = minic_type_float();
+        conversion.value_category = MINIC_VALUE_RVALUE;
+        conversion.value.unary.operand = *right_id;
+        if (!minic_parser_add_expression(parser, &conversion, &converted_id)) {
+            return false;
+        }
+        *right_id = converted_id;
+    } else if (minic_type_is_integer(left->type) && minic_type_is_float(right->type)) {
+        (void)memset(&conversion, 0, sizeof(conversion));
+        conversion.kind = MINIC_EXPRESSION_CAST;
+        conversion.span = left->span;
+        conversion.type = minic_type_float();
+        conversion.value_category = MINIC_VALUE_RVALUE;
+        conversion.value.unary.operand = *left_id;
+        if (!minic_parser_add_expression(parser, &conversion, &converted_id)) {
+            return false;
+        }
+        *left_id = converted_id;
+    }
+
+    left = minic_c0_program_expression(parser->program, *left_id);
+    right = minic_c0_program_expression(parser->program, *right_id);
+    if (left == NULL || right == NULL) {
+        return false;
+    }
+
     /* Comparing binary32 values after exact widening to binary64 preserves all
        IEEE-754 ordered/equality results, including NaNs, infinities and signed
        zero. Mixed float/double comparison and arithmetic use the ordinary C
-       conversion to double. Keep float/float arithmetic in binary32, and do not
-       use this bridge for float/integer arithmetic: converting the integer to
-       double would change C's float-rounding semantics. */
+       conversion to double. Float/integer operands have already undergone the
+       required integer->float conversion above. */
     eligible =
         (minic_type_is_float(left->type) &&
          (minic_type_is_float(right->type) || minic_type_is_double(right->type))) ||

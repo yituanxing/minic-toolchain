@@ -62,6 +62,16 @@ jobs:
           HOST_CC=cc \
             sh tests/compiler/c0/run-cast-expressions.sh
 
+      - name: Validate BusyBox arithmetic and variadic regression batch
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          export MINIC="$GITHUB_WORKSPACE/build/busybox-full-driver-v0/bin/minic"
+          export BUILD_DIR="$GITHUB_WORKSPACE/build/busybox-full-driver-v0"
+          sh tests/compiler/c0/run-float-integer-arithmetic.sh
+          sh tests/compiler/c0/run-floating-prefix-update.sh
+          sh tests/compiler/c0/run-variadic-default-promotions.sh
+
       - name: Fetch pinned BusyBox 1.38.0 and musl 1.2.5
         shell: bash
         run: |

@@ -8160,6 +8160,57 @@ static MinicCoreLowerStatus lower_scalar_update(MinicCoreLowerContext *context,
                 context->function, context->block_id, &instruction, &updated)) {
             return MINIC_CORE_LOWER_ERROR;
         }
+    } else if (minic_type_is_float(stored_type) || minic_type_is_double(stored_type)) {
+        (void)memset(&instruction, 0, sizeof(instruction));
+        instruction.kind = MINIC_CORE_INSTRUCTION_FLOATING_CONSTANT;
+        instruction.span = expression->span;
+        instruction.type = stored_type;
+        instruction.result = MINIC_CORE_VALUE_INVALID;
+        instruction.value.floating_bits =
+            minic_type_is_float(stored_type) ? UINT64_C(0x3f800000)
+                                             : UINT64_C(0x3ff0000000000000);
+        if (!minic_core_function_append_value_instruction(
+                context->function, context->block_id, &instruction, &one)) {
+            return MINIC_CORE_LOWER_ERROR;
+        }
+
+        (void)memset(&instruction, 0, sizeof(instruction));
+        instruction.kind = minic_type_is_float(stored_type)
+                               ? (increment ? MINIC_CORE_INSTRUCTION_FLOAT_ADD
+                                            : MINIC_CORE_INSTRUCTION_FLOAT_SUBTRACT)
+                               : (increment ? MINIC_CORE_INSTRUCTION_DOUBLE_ADD
+                                            : MINIC_CORE_INSTRUCTION_DOUBLE_SUBTRACT);
+        instruction.span = expression->span;
+        instruction.type = stored_type;
+        instruction.result = MINIC_CORE_VALUE_INVALID;
+        instruction.value.binary.left = current;
+        instruction.value.binary.right = one;
+        if (!minic_core_function_append_value_instruction(
+                context->function, context->block_id, &instruction, &updated)) {
+            return MINIC_CORE_LOWER_ERROR;
+        }
+    } else if (minic_type_is_long_double(stored_type)) {
+        (void)memset(&instruction, 0, sizeof(instruction));
+        instruction.kind = MINIC_CORE_INSTRUCTION_FLOATING_CONSTANT;
+        instruction.span = expression->span;
+        instruction.type = stored_type;
+        instruction.result = MINIC_CORE_VALUE_INVALID;
+        instruction.value.floating128_bits.low = 0U;
+        instruction.value.floating128_bits.high = UINT64_C(0x3fff000000000000);
+        if (!minic_core_function_append_value_instruction(
+                context->function, context->block_id, &instruction, &one)) {
+            return MINIC_CORE_LOWER_ERROR;
+        }
+        status = append_long_double_binary_helper(context,
+                                                  expression->span,
+                                                  increment ? "__addtf3" : "__subtf3",
+                                                  current,
+                                                  one,
+                                                  stored_type,
+                                                  &updated);
+        if (status != MINIC_CORE_LOWER_OK) {
+            return status;
+        }
     } else if (minic_type_is_pointer(stored_type)) {
         size_t element_size;
 
