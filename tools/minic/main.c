@@ -29,11 +29,11 @@ static void append_rv64_linux_musl_predefines(char **arguments,
      * supports.  Several Linux-oriented headers gate the spelling of GNU
      * attributes on __GNUC__; leaving it undefined rewrites semantic layout
      * attributes such as __attribute__((packed)) to nothing before MiniC can
-     * parse them.  4.2.1 is the conventional low compatibility baseline and
+     * parse them.  2.7.0 is the minimum compatibility level BusyBox requires to retain GNU attributes and
      * avoids claiming newer GCC-only builtins that MiniC does not implement. */
-    arguments[(*count)++] = "-D__GNUC__=4";
-    arguments[(*count)++] = "-D__GNUC_MINOR__=2";
-    arguments[(*count)++] = "-D__GNUC_PATCHLEVEL__=1";
+    arguments[(*count)++] = "-D__GNUC__=2";
+    arguments[(*count)++] = "-D__GNUC_MINOR__=7";
+    arguments[(*count)++] = "-D__GNUC_PATCHLEVEL__=0";
     arguments[(*count)++] =
         hosted ? "-D__STDC_HOSTED__=1" : "-D__STDC_HOSTED__=0";
     arguments[(*count)++] = "-D__linux__=1";
