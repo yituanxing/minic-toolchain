@@ -41,14 +41,23 @@ jobs:
           QEMU_RISCV64=qemu-riscv64 \
             sh tests/compiler/c0/run-core-switch-m27.sh
 
-      - name: Keep existing switch frontend regression green
+      - name: Run C0 RV64 differential programs
         shell: bash
         run: |
           set -Eeuo pipefail
           MINIC="$GITHUB_WORKSPACE/build/nested-case/bin/minic" \
-          HOST_CC=cc \
-          BUILD_DIR="$GITHUB_WORKSPACE/build/nested-case/switch" \
-            sh tests/compiler/c0/run-switch-control-flow.sh
+          BUILD_DIR="$GITHUB_WORKSPACE/build/nested-case/programs" \
+          RISCV_CC=riscv64-linux-gnu-gcc \
+          RISCV_OBJDUMP=riscv64-linux-gnu-objdump \
+          QEMU_RISCV64=qemu-riscv64 \
+          REQUIRE_RISCV_RUNTIME=1 \
+            sh tests/programs/c0/run.sh
+
+      - name: Run host fast regression
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/nested-case-check check-fast
 
       - name: Run direct minimal nested-case probe
         shell: bash
