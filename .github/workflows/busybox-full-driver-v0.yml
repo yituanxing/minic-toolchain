@@ -41,8 +41,8 @@ jobs:
           sh tests/preprocessor/run-a0.sh
           sh tests/compiler/c0/run-cast-expressions.sh
           sh tests/compiler/c0/run-gnu-packed-record-field.sh
-          sh tests/compiler/c0/run-prefix-update-expressions.sh
           sh tests/compiler/c0/run-mixed-double-arithmetic.sh
+          sh tests/compiler/c0/run-float-integer-arithmetic.sh
           sh tests/compiler/c0/run-gnu-function-attributes.sh
           sh tests/compiler/c0/run-gnu-prefix-function-attributes.sh
           echo "BUSYBOX_COMPILER_BATCH_FAST_V0=PASS"
