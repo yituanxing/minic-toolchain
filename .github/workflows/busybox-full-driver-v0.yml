@@ -1,16 +1,16 @@
-name: BusyBox Full Driver V0
+name: BusyBox Failure Pool V0
 
 on:
   push:
     branches:
-      - external/busybox-full-driver-v0
+      - compiler/busybox-failure-pool-v0
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: busybox-full-driver-v0-${{ github.ref }}
+  group: busybox-failure-pool-v0-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -350,8 +350,61 @@ jobs:
             STRIP=riscv64-linux-gnu-strip \
             OBJCOPY=riscv64-linux-gnu-objcopy \
             OBJDUMP=riscv64-linux-gnu-objdump \
-            busybox_unstripped \
-            >"$work/busybox-mini-build.log" 2>&1
+            archival/dpkg.o \
+            archival/lzop.o \
+            archival/libarchive/decompress_gunzip.o \
+            archival/unzip.o \
+            editors/awk.o \
+            editors/diff.o \
+            findutils/find.o \
+            editors/sed.o \
+            archival/libarchive/lzo1x_d.o \
+            init/init.o \
+            libpwdgrp/uidgid_get.o \
+            mailutils/reformime.o \
+            mailutils/sendmail.o \
+            coreutils/od.o \
+            miscutils/bc.o \
+            miscutils/hdparm.o \
+            networking/brctl.o \
+            miscutils/less.o \
+            networking/httpd.o \
+            networking/ifenslave.o \
+            miscutils/nandwrite.o \
+            libbb/dump.o \
+            networking/ifplugd.o \
+            coreutils/tee.o \
+            networking/inetd.o \
+            coreutils/timeout.o \
+            coreutils/tr.o \
+            networking/nslookup.o \
+            networking/ntpd.o \
+            miscutils/ubirename.o \
+            libbb/getopt32.o \
+            networking/tc.o \
+            libbb/in_ether.o \
+            networking/udhcp/dhcpc.o \
+            networking/udhcp/dhcprelay.o \
+            networking/libiproute/ll_types.o \
+            libbb/lineedit.o \
+            runit/runsv.o \
+            runit/runsvdir.o \
+            runit/sv.o \
+            runit/svlogd.o \
+            procps/mpstat.o \
+            shell/ash.o \
+            shell/hush.o \
+            procps/ps.o \
+            shell/math.o \
+            sysklogd/syslogd_and_logger.o \
+            libbb/progress.o \
+            util-linux/fdisk.o \
+            libbb/read_printf.o \
+            util-linux/mdev.o \
+            util-linux/mkfs_vfat.o \
+            libbb/wfopen_input.o \
+            libbb/xconnect.o \
+            libbb/xreadlink.o \            >"$work/busybox-mini-build.log" 2>&1
           build_rc=$?
           set -e
           elapsed=$(( $(date +%s) - started ))
@@ -362,7 +415,7 @@ jobs:
           unique_sources="$(cut -f1 "$results" | sort -u | wc -l)"
           echo "BUSYBOX_C_FRONTIER selected=$total unique=$unique_sources pass=$passed fail=$failed make_rc=$build_rc elapsed_s=$elapsed"
 
-          if test "$failed" -ne 0 || test "$build_rc" -ne 0; then
+          if test "$failed" -ne 0 || test "$build_rc" -ne 0 || test "$unique_sources" -ne 55; then
             echo "BUSYBOX_C_FAILURE_POOL_BEGIN"
             awk -F '\t' '$2=="FAIL"{print}' "$results" | head -n 80
             echo "BUSYBOX_C_FAILURE_POOL_END"
@@ -370,10 +423,11 @@ jobs:
             exit 1
           fi
 
-          test -s "$out/busybox_unstripped"
-          echo "BUSYBOX_C_PRODUCER_V0=PASS selected=$total unique=$unique_sources pipeline=MiniPP,MiniC,MiniAS"
+          test "$unique_sources" -eq 55
+          echo "BUSYBOX_FAILURE_POOL_V0=PASS selected=$total unique=$unique_sources pipeline=MiniPP,MiniC,MiniAS"
 
       - name: Run 408-applet BusyBox acceptance
+        if: false
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -412,7 +466,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: busybox-full-driver-v0-frontier
+          name: busybox-failure-pool-v0-frontier
           path: |
             build/busybox-full-driver-v0/musl-configure.log
             build/busybox-full-driver-v0/musl-make.log
