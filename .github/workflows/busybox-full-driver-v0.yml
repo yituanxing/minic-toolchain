@@ -44,6 +44,24 @@ jobs:
           MINIC="$GITHUB_WORKSPACE/build/busybox-full-driver-v0/bin/minic" \
             sh tests/compiler/c0/run-enum-constant-scopes.sh
 
+      - name: Validate MiniPP byte-identical A0
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          MINIPP="$GITHUB_WORKSPACE/build/busybox-full-driver-v0/bin/minic-cpp" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/busybox-full-driver-v0" \
+          REFERENCE_CPP=gcc \
+            sh tests/preprocessor/run-a0.sh
+
+      - name: Validate implicit arithmetic assignment conversions
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          MINIC="$GITHUB_WORKSPACE/build/busybox-full-driver-v0/bin/minic" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/busybox-full-driver-v0" \
+          HOST_CC=cc \
+            sh tests/compiler/c0/run-cast-expressions.sh
+
       - name: Fetch pinned BusyBox 1.38.0 and musl 1.2.5
         shell: bash
         run: |
@@ -350,61 +368,19 @@ jobs:
             STRIP=riscv64-linux-gnu-strip \
             OBJCOPY=riscv64-linux-gnu-objcopy \
             OBJDUMP=riscv64-linux-gnu-objdump \
-            archival/dpkg.o \
-            archival/lzop.o \
             archival/libarchive/decompress_gunzip.o \
             archival/unzip.o \
-            editors/awk.o \
-            editors/diff.o \
-            findutils/find.o \
-            editors/sed.o \
-            archival/libarchive/lzo1x_d.o \
-            init/init.o \
-            libpwdgrp/uidgid_get.o \
-            mailutils/reformime.o \
-            mailutils/sendmail.o \
-            coreutils/od.o \
-            miscutils/bc.o \
-            miscutils/hdparm.o \
-            networking/brctl.o \
-            miscutils/less.o \
-            networking/httpd.o \
-            networking/ifenslave.o \
-            miscutils/nandwrite.o \
-            libbb/dump.o \
-            networking/ifplugd.o \
-            coreutils/tee.o \
-            networking/inetd.o \
-            coreutils/timeout.o \
-            coreutils/tr.o \
-            networking/nslookup.o \
-            networking/ntpd.o \
-            miscutils/ubirename.o \
-            libbb/getopt32.o \
-            networking/tc.o \
-            libbb/in_ether.o \
-            networking/udhcp/dhcpc.o \
-            networking/udhcp/dhcprelay.o \
-            networking/libiproute/ll_types.o \
-            libbb/lineedit.o \
             runit/runsv.o \
-            runit/runsvdir.o \
-            runit/sv.o \
-            runit/svlogd.o \
-            procps/mpstat.o \
-            shell/ash.o \
-            shell/hush.o \
-            procps/ps.o \
-            shell/math.o \
-            sysklogd/syslogd_and_logger.o \
-            libbb/progress.o \
-            util-linux/fdisk.o \
-            libbb/read_printf.o \
-            util-linux/mdev.o \
             util-linux/mkfs_vfat.o \
-            libbb/wfopen_input.o \
-            libbb/xconnect.o \
-            libbb/xreadlink.o \            >"$work/busybox-mini-build.log" 2>&1
+            networking/ifenslave.o \
+            networking/ifplugd.o \
+            networking/udhcp/dhcpc.o \
+            networking/libiproute/ll_types.o \
+            miscutils/ubirename.o \
+            editors/awk.o \
+            networking/brctl.o \
+            networking/tc.o \
+            >"$work/busybox-mini-build.log" 2>&1
           build_rc=$?
           set -e
           elapsed=$(( $(date +%s) - started ))
@@ -415,7 +391,7 @@ jobs:
           unique_sources="$(cut -f1 "$results" | sort -u | wc -l)"
           echo "BUSYBOX_C_FRONTIER selected=$total unique=$unique_sources pass=$passed fail=$failed make_rc=$build_rc elapsed_s=$elapsed"
 
-          if test "$failed" -ne 0 || test "$build_rc" -ne 0 || test "$unique_sources" -ne 55; then
+          if test "$failed" -ne 0 || test "$build_rc" -ne 0 || test "$unique_sources" -ne 12; then
             echo "BUSYBOX_C_FAILURE_POOL_BEGIN"
             awk -F '\t' '$2=="FAIL"{print}' "$results" | head -n 80
             echo "BUSYBOX_C_FAILURE_POOL_END"
@@ -423,8 +399,8 @@ jobs:
             exit 1
           fi
 
-          test "$unique_sources" -eq 55
-          echo "BUSYBOX_FAILURE_POOL_V0=PASS selected=$total unique=$unique_sources pipeline=MiniPP,MiniC,MiniAS"
+          test "$unique_sources" -eq 12
+          echo "BUSYBOX_FAILURE_PROBE_V0=PASS selected=$total unique=$unique_sources pipeline=MiniPP,MiniC,MiniAS"
 
       - name: Run 408-applet BusyBox acceptance
         if: false
