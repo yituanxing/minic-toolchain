@@ -91,6 +91,9 @@ bool minic_c0_expression_visit_child_id_refs(MinicExpression *expression,
         return visit_expression_id(
             &expression->value.statement_expression.result, visitor, context);
 
+    case MINIC_EXPRESSION_BUILTIN_ALLOCA:
+        return visit_expression_id(&expression->value.unary.operand, visitor, context);
+
     case MINIC_EXPRESSION_BUILTIN_UNARY:
         return visit_expression_id(&expression->value.builtin_unary.operand, visitor, context);
 
