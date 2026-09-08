@@ -91,5 +91,9 @@ bool minipp_resolve_include(const MiniPpState *state,
                             const char *name,
                             bool angled,
                             MiniPpString *resolved_path);
+bool minipp_resolve_include_next(const MiniPpState *state,
+                                 const char *current_path,
+                                 const char *name,
+                                 MiniPpString *resolved_path);
 
 #endif
