@@ -1,0 +1,92 @@
+name: BusyBox Legacy Core Fast Probe
+
+on:
+  push:
+    branches:
+      - diagnostics/busybox-legacy-core-fast
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  compare-core-only:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout pre-Core legacy compiler
+        uses: actions/checkout@v4
+        with:
+          ref: 306ea3f456ededf12f54dd3a5de669f68443ff5e
+          path: legacy
+
+      - name: Build legacy-default MiniC
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          make -C legacy -j4 MODE=release CFLAGS=-Werror \
+            BUILD_DIR="$GITHUB_WORKSPACE/legacy-build" all
+          test -x "$GITHUB_WORKSPACE/legacy-build/bin/minic"
+
+      - name: Download BusyBox #26 failure evidence
+        uses: actions/download-artifact@v4
+        with:
+          name: busybox-full-driver-v0-frontier
+          path: artifact
+          github-token: ${{ github.token }}
+          repository: yituanxing/minic-toolchain
+          run-id: 34144046751
+
+      - name: Replay only current Core-unsupported translation units
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          log="$GITHUB_WORKSPACE/artifact/busybox-mini-build.log"
+          failed="$GITHUB_WORKSPACE/artifact/failed-intermediates"
+          legacy="$GITHUB_WORKSPACE/legacy-build/bin/minic"
+          work="$GITHUB_WORKSPACE/core-fast"
+          mkdir -p "$work"
+
+          total=0
+          pass=0
+          fail=0
+          : >"$work/results.tsv"
+
+          grep "error: Core IR does not yet support function" "$log" |
+          while IFS= read -r diag; do
+            tmp="${diag%%:*}"
+            base="${tmp##*/}"
+            input="$failed/$base"
+            test -s "$input" || continue
+            src="$(grep -F "MINIC_FAILED_PREPROCESSED=$tmp source=" "$log" | head -n1 | sed 's#.*busybox-1.38.0/##')"
+            fn="$(printf '%s\n' "$diag" | sed -n "s/.*function '\([^']*\)'.*/\1/p")"
+            out="$work/$base.s"
+
+            set +e
+            timeout 8s "$legacy" -S "$input" -o "$out" \
+              >"$work/$base.stdout" 2>"$work/$base.stderr"
+            rc=$?
+            set -e
+
+            status=FAIL
+            if test "$rc" -eq 0 && test -s "$out"; then
+              status=PASS
+            fi
+            printf '%s\t%s\t%s\t%s\n' "$src" "$fn" "$status" "$rc" >>"$work/results.tsv"
+          done
+
+          total="$(wc -l <"$work/results.tsv")"
+          pass="$(awk -F '\t' '$3=="PASS"{n++} END{print n+0}' "$work/results.tsv")"
+          fail="$(awk -F '\t' '$3=="FAIL"{n++} END{print n+0}' "$work/results.tsv")"
+          echo "BUSYBOX_CORE_LEGACY_FAST total=$total legacy_pass=$pass legacy_fail=$fail"
+          cat "$work/results.tsv"
+
+      - name: Preserve fast probe
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: busybox-legacy-core-fast
+          path: core-fast/
+          if-no-files-found: error
+          retention-days: 7
