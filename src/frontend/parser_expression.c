@@ -920,6 +920,61 @@ bool minic_parser_apply_fixed_call_argument_conversion(MinicParser *parser,
     return minic_parser_add_expression(parser, &conversion, argument_id);
 }
 
+bool minic_parser_apply_variadic_argument_conversion(MinicParser *parser,
+                                                      MinicExpressionId *argument_id) {
+    const MinicExpression *source;
+    MinicExpression conversion;
+    MinicExpressionId decayed_id;
+    MinicType target_type;
+
+    if (parser == NULL || argument_id == NULL) {
+        return false;
+    }
+    decayed_id = *argument_id;
+    if (!minic_parser_apply_array_decay(parser, decayed_id, &decayed_id)) {
+        return false;
+    }
+    source = minic_c0_program_expression(parser->program, decayed_id);
+    if (source == NULL) {
+        minic_parser_error(parser, "invalid variadic call argument");
+        return false;
+    }
+
+    target_type = source->type;
+    if (minic_type_is_float(source->type)) {
+        target_type = minic_type_double();
+    } else if (minic_type_is_integer(source->type)) {
+        if (!minic_target_info_integer_promotion_for_program(
+                parser->target_info, parser->program, source->type, &target_type)) {
+            minic_parser_error(parser, "cannot apply default integer promotion to variadic argument");
+            return false;
+        }
+    }
+
+    if (!minic_type_equal(target_type, source->type)) {
+        (void)memset(&conversion, 0, sizeof(conversion));
+        conversion.kind = MINIC_EXPRESSION_CAST;
+        conversion.span = source->span;
+        conversion.type = target_type;
+        conversion.value_category = MINIC_VALUE_RVALUE;
+        conversion.value.unary.operand = decayed_id;
+        if (!minic_parser_add_expression(parser, &conversion, &decayed_id)) {
+            return false;
+        }
+        source = minic_c0_program_expression(parser->program, decayed_id);
+        if (source == NULL) {
+            return false;
+        }
+    }
+
+    if (!variadic_argument_type_supported(source->type)) {
+        minic_parser_error(parser, "unsupported variadic argument type");
+        return false;
+    }
+    *argument_id = decayed_id;
+    return true;
+}
+
 static bool parse_call_argument(MinicParser *parser,
                                 MinicExpression *call_expression,
                                 const MinicFunction *callee,
@@ -954,13 +1009,21 @@ static bool parse_call_argument(MinicParser *parser,
             minic_parser_error(parser, "call argument type does not match declaration");
             return false;
         }
-    } else if (!variadic_argument_type_supported(argument->type)) {
-        minic_parser_error(parser, "unsupported variadic argument type");
-        return false;
-    } else if (minic_type_is_record(argument->type) &&
-               !minic_parser_require_complete_object_type(
-                   parser, argument->type, "variadic record argument requires a complete type")) {
-        return false;
+    } else {
+        if (!minic_parser_apply_variadic_argument_conversion(parser, &argument_id)) {
+            return false;
+        }
+        call_expression->value.call.arguments[argument_index] = argument_id;
+        argument = minic_c0_program_expression(parser->program, argument_id);
+        if (argument == NULL) {
+            minic_parser_error(parser, "invalid converted variadic argument");
+            return false;
+        }
+        if (minic_type_is_record(argument->type) &&
+            !minic_parser_require_complete_object_type(
+                parser, argument->type, "variadic record argument requires a complete type")) {
+            return false;
+        }
     }
     return true;
 }
