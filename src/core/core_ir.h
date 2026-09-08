@@ -127,7 +127,11 @@ typedef enum MinicCoreInstructionKind {
     MINIC_CORE_INSTRUCTION_FLOAT_ADD,
     MINIC_CORE_INSTRUCTION_FLOAT_SUBTRACT,
     MINIC_CORE_INSTRUCTION_FLOAT_MULTIPLY,
-    MINIC_CORE_INSTRUCTION_FLOAT_DIVIDE
+    MINIC_CORE_INSTRUCTION_FLOAT_DIVIDE,
+    /* Function-lifetime dynamic stack storage. Appended to keep the existing
+       Core opcode numbering stable. Operand is an unsigned-long byte count;
+       result is void*. */
+    MINIC_CORE_INSTRUCTION_STACK_ALLOCATE
 } MinicCoreInstructionKind;
 
 /* M91_BUILTIN_UNREACHABLE_TERMINATOR: unreachable is a CFG fact, not a
