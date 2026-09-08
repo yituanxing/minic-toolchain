@@ -10012,20 +10012,24 @@ static bool core_collect_nested_switch_labels(const MinicCoreLowerContext *conte
         if (candidate->kind == MINIC_STATEMENT_SWITCH) {
             continue;
         }
-        if (candidate->then_block != MINIC_BLOCK_INVALID) {
-            const MinicBlock *then_block =
-                minic_c0_program_block(context->body->program, candidate->then_block);
-            if (then_block == NULL ||
-                !core_collect_nested_switch_labels(context, then_block, depth + 1U, set)) {
-                return false;
+        if (candidate->kind == MINIC_STATEMENT_IF ||
+            candidate->kind == MINIC_STATEMENT_WHILE) {
+            if (candidate->then_block != MINIC_BLOCK_INVALID) {
+                const MinicBlock *then_block =
+                    minic_c0_program_block(context->body->program, candidate->then_block);
+                if (then_block == NULL ||
+                    !core_collect_nested_switch_labels(context, then_block, depth + 1U, set)) {
+                    return false;
+                }
             }
-        }
-        if (candidate->else_block != MINIC_BLOCK_INVALID) {
-            const MinicBlock *else_block =
-                minic_c0_program_block(context->body->program, candidate->else_block);
-            if (else_block == NULL ||
-                !core_collect_nested_switch_labels(context, else_block, depth + 1U, set)) {
-                return false;
+            if (candidate->kind == MINIC_STATEMENT_IF &&
+                candidate->else_block != MINIC_BLOCK_INVALID) {
+                const MinicBlock *else_block =
+                    minic_c0_program_block(context->body->program, candidate->else_block);
+                if (else_block == NULL ||
+                    !core_collect_nested_switch_labels(context, else_block, depth + 1U, set)) {
+                    return false;
+                }
             }
         }
     }
@@ -10970,10 +10974,16 @@ static bool core_block_contains_mapped_switch_label(const MinicCoreLowerContext 
         if (statement->kind == MINIC_STATEMENT_SWITCH) {
             continue;
         }
-        if (core_block_contains_mapped_switch_label(
-                context, statement->then_block, depth + 1U) ||
-            core_block_contains_mapped_switch_label(
-                context, statement->else_block, depth + 1U)) {
+        if (statement->kind == MINIC_STATEMENT_IF) {
+            if (core_block_contains_mapped_switch_label(
+                    context, statement->then_block, depth + 1U) ||
+                core_block_contains_mapped_switch_label(
+                    context, statement->else_block, depth + 1U)) {
+                return true;
+            }
+        } else if (statement->kind == MINIC_STATEMENT_WHILE &&
+                   core_block_contains_mapped_switch_label(
+                       context, statement->then_block, depth + 1U)) {
             return true;
         }
     }
@@ -10986,8 +10996,14 @@ static bool core_statement_contains_mapped_switch_label(
     if (statement == NULL || statement->kind == MINIC_STATEMENT_SWITCH) {
         return false;
     }
-    return core_block_contains_mapped_switch_label(context, statement->then_block, 0U) ||
-           core_block_contains_mapped_switch_label(context, statement->else_block, 0U);
+    if (statement->kind == MINIC_STATEMENT_IF) {
+        return core_block_contains_mapped_switch_label(context, statement->then_block, 0U) ||
+               core_block_contains_mapped_switch_label(context, statement->else_block, 0U);
+    }
+    if (statement->kind == MINIC_STATEMENT_WHILE) {
+        return core_block_contains_mapped_switch_label(context, statement->then_block, 0U);
+    }
+    return false;
 }
 
 static MinicCoreLowerStatus
