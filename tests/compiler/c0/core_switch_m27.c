@@ -45,3 +45,26 @@ int core_m27_printk_get_level(const char *buffer) {
     }
     return 0;
 }
+
+
+int core_m27_switch_nested_case(int selector, int cond) {
+    int result;
+
+    result = 0;
+    switch (selector) {
+    case 3:
+    case 4:
+    case 5:
+        result = 3;
+        if (cond) {
+    case 0:
+    case 1:
+    case 2:
+            result = result + 10;
+        }
+        break;
+    default:
+        result = 99;
+    }
+    return result;
+}
