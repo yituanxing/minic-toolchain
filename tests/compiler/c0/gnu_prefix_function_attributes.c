@@ -49,3 +49,8 @@ unsigned long prefix_plain_spelling_identity(unsigned long value)
 {
     return value;
 }
+
+unsigned long call_prefix_plain_spelling_identity(unsigned long value)
+{
+    return prefix_plain_spelling_identity(value);
+}
