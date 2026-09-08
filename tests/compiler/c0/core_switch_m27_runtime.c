@@ -2,6 +2,8 @@ int core_m27_switch_simple(int value);
 int core_m27_switch_range(int value);
 int core_m27_switch_fallthrough(int value);
 int core_m27_printk_get_level(const char *buffer);
+int core_m27_switch_nested_case(int selector, int enabled);
+int core_m27_switch_nested_case_after_break(int selector, int enabled);
 
 int main(void) {
     const char level3[] = {'\001', '3', 0};
@@ -23,6 +25,17 @@ int main(void) {
     if (core_m27_printk_get_level(level3) != '3' || core_m27_printk_get_level(levelc) != 'c' ||
         core_m27_printk_get_level(plain) != 0) {
         return 4;
+    }
+    if (core_m27_switch_nested_case(1, 0) != 7 ||
+        core_m27_switch_nested_case(2, 1) != 7 ||
+        core_m27_switch_nested_case(2, 0) != 0 ||
+        core_m27_switch_nested_case(9, 1) != 9) {
+        return 5;
+    }
+    if (core_m27_switch_nested_case_after_break(1, 0) != 11 ||
+        core_m27_switch_nested_case_after_break(2, 1) != 2 ||
+        core_m27_switch_nested_case_after_break(9, 1) != 9) {
+        return 6;
     }
     return 0;
 }
