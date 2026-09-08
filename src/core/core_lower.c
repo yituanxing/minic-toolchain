@@ -9758,6 +9758,21 @@ lower_while(MinicCoreLowerContext *context,
         }
     }
     context->block_id = exit_block;
+    if (getenv("CORE_FAST_TRACE") != NULL) {
+        (void)fprintf(stderr,
+                      "CORE_FAST_TRACE stage=while-final function=%s constant_true=%d "
+                      "exit_predecessor=%d body_terminated=%d normalized_for=%d span=%zu:%zu\n",
+                      context->source_function->name,
+                      statement->expression != MINIC_EXPRESSION_INVALID &&
+                              core_loop_condition_is_constant_true(context, statement->expression)
+                          ? 1
+                          : 0,
+                      core_block_has_predecessor(context->function, exit_block) ? 1 : 0,
+                      body_terminated ? 1 : 0,
+                      normalized_for ? 1 : 0,
+                      statement->span.begin.line,
+                      statement->span.begin.column);
+    }
     /* M133_CONSTANT_TRUE_LOOP_REACHABILITY: reachability, not syntax spelling,
        owns loop fallthrough. Normal variable/false-capable conditions already
        contribute a false edge; omitted and constant-true conditions do not. */
