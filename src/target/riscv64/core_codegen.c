@@ -2223,6 +2223,16 @@ static bool core_instruction_supported(const MinicC0Program *program,
     case MINIC_CORE_INSTRUCTION_INTEGER_CTZ:
     case MINIC_CORE_INSTRUCTION_SCALAR_IS_ZERO:
         return true;
+    case MINIC_CORE_INSTRUCTION_STACK_ALLOCATE: {
+        MinicType pointee;
+
+        return instruction->result < function->value_count &&
+               instruction->value.operand < function->value_count &&
+               minic_type_equal(function->values[instruction->result].type, instruction->type) &&
+               minic_type_equal(function->values[instruction->value.operand].type,
+                                minic_type_unsigned_long()) &&
+               minic_type_pointee(instruction->type, &pointee) && minic_type_is_void(pointee);
+    }
     case MINIC_CORE_INSTRUCTION_CALL_FRAME_ADDRESS:
         return core_call_frame_address_supported(instruction);
     case MINIC_CORE_INSTRUCTION_VARIADIC_ARGUMENT_ADDRESS: {
@@ -4745,18 +4755,54 @@ static bool emit_instruction(FILE *file,
         }
         return store_core_value(file, frame, instruction->result, "t0");
     }
+    case MINIC_CORE_INSTRUCTION_STACK_ALLOCATE:
+        if (!frame->has_dynamic_stack_allocation ||
+            !load_core_value(file, frame, instruction->value.operand, "t0") ||
+            fprintf(file,
+                    "  addi t0, t0, 15\n"
+                    "  andi t0, t0, -16\n") < 0) {
+            return false;
+        }
+        if (frame->dynamic_outgoing_reserve != 0U) {
+            if (fprintf(file,
+                        "  li t1, %zu\n"
+                        "  add t0, t0, t1\n",
+                        frame->dynamic_outgoing_reserve) < 0) {
+                return false;
+            }
+        }
+        if (fprintf(file, "  sub sp, sp, t0\n") < 0) {
+            return false;
+        }
+        if (frame->dynamic_outgoing_reserve == 0U) {
+            if (fprintf(file, "  mv t0, sp\n") < 0) {
+                return false;
+            }
+        } else if (frame->dynamic_outgoing_reserve <= 2047U) {
+            if (fprintf(file, "  addi t0, sp, %zu\n",
+                        frame->dynamic_outgoing_reserve) < 0) {
+                return false;
+            }
+        } else if (fprintf(file,
+                           "  li t1, %zu\n"
+                           "  add t0, sp, t1\n",
+                           frame->dynamic_outgoing_reserve) < 0) {
+            return false;
+        }
+        return store_core_value(file, frame, instruction->result, "t0");
     case MINIC_CORE_INSTRUCTION_CALL_FRAME_ADDRESS:
         if (!core_call_frame_address_supported(instruction)) {
             return false;
         }
         if (instruction->value.call_frame_address.kind == MINIC_CORE_CALL_FRAME_ADDRESS_RETURN) {
             if (!frame->saves_return_address ||
-                !minic_riscv64_emit_sp_load64(file, "t0", frame->return_address_offset)) {
+                !emit_frame_load64(file, frame, "t0", frame->return_address_offset)) {
                 return false;
             }
         } else if (instruction->value.call_frame_address.kind ==
                    MINIC_CORE_CALL_FRAME_ADDRESS_FRAME) {
-            if (fprintf(file, "  mv t0, sp\n") < 0) {
+            if (fprintf(file, "  mv t0, %s\n",
+                        core_frame_base_register(frame)) < 0) {
                 return false;
             }
         } else {
@@ -4778,7 +4824,11 @@ static bool emit_instruction(FILE *file,
                 return false;
             }
             stack_byte_offset = frame->variadic_fixed_stack_slots * 8U;
-            if (frame->has_dynamic_stack_alignment) {
+            if (frame->has_dynamic_stack_allocation) {
+                if (!emit_frame_address(file, frame, "t0", frame->frame_size)) {
+                    return false;
+                }
+            } else if (frame->has_dynamic_stack_alignment) {
                 if (!minic_riscv64_emit_sp_load64(file, "t0", frame->entry_sp_offset)) {
                     return false;
                 }
@@ -5069,8 +5119,8 @@ static bool emit_terminator(FILE *file,
 
                 if (!frame->has_hidden_result_pointer || return_value.storage_size <= 16U ||
                     return_value.slot_count != 1U ||
-                    !minic_riscv64_emit_sp_load64(
-                        file, "t1", frame->hidden_result_pointer_offset)) {
+                    !emit_frame_load64(
+                        file, frame, "t1", frame->hidden_result_pointer_offset)) {
                     return false;
                 }
                 copied = 0U;
@@ -5224,20 +5274,27 @@ static bool emit_core_function_with_symbol(FILE *file,
     } else if (!minic_riscv64_emit_stack_allocate(file, frame.frame_size)) {
         return core_frame_fail(&frame);
     }
+    if (frame.has_dynamic_stack_allocation) {
+        if (!minic_riscv64_emit_sp_store64(
+                file, "s0", frame.saved_frame_base_offset) ||
+            fprintf(file, "  mv s0, sp\n") < 0) {
+            return core_frame_fail(&frame);
+        }
+    }
     if (frame.saves_return_address &&
-        !minic_riscv64_emit_sp_store64(file, "ra", frame.return_address_offset)) {
+        !emit_frame_store64(file, &frame, "ra", frame.return_address_offset)) {
         return core_frame_fail(&frame);
     }
     if (frame.has_hidden_result_pointer &&
-        !minic_riscv64_emit_sp_store64(file, "a0", frame.hidden_result_pointer_offset)) {
+        !emit_frame_store64(file, &frame, "a0", frame.hidden_result_pointer_offset)) {
         return core_frame_fail(&frame);
     }
     if (frame.preserves_structured_asm_callee_saved) {
         size_t saved_index;
         for (saved_index = 0U; saved_index < CORE_ASM_CALLEE_SAVED_COUNT; ++saved_index) {
             size_t saved_offset = frame.structured_asm_callee_saved_offset + saved_index * 8U;
-            if (!minic_riscv64_emit_sp_store64(
-                    file, core_asm_callee_saved_registers[saved_index], saved_offset)) {
+            if (!emit_frame_store64(
+                    file, &frame, core_asm_callee_saved_registers[saved_index], saved_offset)) {
                 return core_frame_fail(&frame);
             }
         }
@@ -5249,8 +5306,8 @@ static bool emit_core_function_with_symbol(FILE *file,
              ++register_index) {
             size_t offset = frame.varargs_offset +
                             (register_index - frame.integer_parameter_count) * 8U;
-            if (!minic_riscv64_emit_sp_store64(
-                    file, minic_core_rv64_argument_registers[register_index], offset)) {
+            if (!emit_frame_store64(
+                    file, &frame, minic_core_rv64_argument_registers[register_index], offset)) {
                 return core_frame_fail(&frame);
             }
         }
@@ -5300,20 +5357,28 @@ static bool emit_core_function_with_symbol(FILE *file,
         return core_frame_fail(&frame);
     }
     if (frame.saves_return_address &&
-        !minic_riscv64_emit_sp_load64(file, "ra", frame.return_address_offset)) {
+        !emit_frame_load64(file, &frame, "ra", frame.return_address_offset)) {
         return core_frame_fail(&frame);
     }
     if (frame.preserves_structured_asm_callee_saved) {
         size_t saved_index;
         for (saved_index = 0U; saved_index < CORE_ASM_CALLEE_SAVED_COUNT; ++saved_index) {
             size_t saved_offset = frame.structured_asm_callee_saved_offset + saved_index * 8U;
-            if (!minic_riscv64_emit_sp_load64(
-                    file, core_asm_callee_saved_registers[saved_index], saved_offset)) {
+            if (!emit_frame_load64(
+                    file, &frame, core_asm_callee_saved_registers[saved_index], saved_offset)) {
                 return core_frame_fail(&frame);
             }
         }
     }
-    if (frame.has_dynamic_stack_alignment) {
+    if (frame.has_dynamic_stack_allocation) {
+        if (!emit_frame_address(file, &frame, "t0", frame.frame_size) ||
+            !emit_frame_load64(file, &frame, "t1", frame.saved_frame_base_offset) ||
+            fprintf(file,
+                    "  mv sp, t0\n"
+                    "  mv s0, t1\n") < 0) {
+            return core_frame_fail(&frame);
+        }
+    } else if (frame.has_dynamic_stack_alignment) {
         if (!minic_riscv64_emit_sp_load64(file, "t0", frame.entry_sp_offset) ||
             fprintf(file, "  mv sp, t0\n") < 0) {
             return core_frame_fail(&frame);
