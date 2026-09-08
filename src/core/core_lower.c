@@ -10041,6 +10041,296 @@ static bool core_switch_block_has_outer_break(const MinicCoreLowerContext *conte
     return false;
 }
 
+
+typedef struct MinicCoreNestedSwitchLabel {
+    MinicStatementId statement_id;
+    const MinicStatement *statement;
+    MinicCoreBlockId body_block;
+    MinicCoreBlockId test_block;
+} MinicCoreNestedSwitchLabel;
+
+/* C case/default labels may appear inside an arbitrary statement nested within
+   the selected switch body. They still belong to the nearest enclosing switch;
+   labels below a nested switch belong to that inner switch and must not leak
+   into the outer dispatch table. Collect the nearest-switch label set in
+   source traversal order and remember whether any label is below the root
+   block. Parser-normalized blocks can be shared, so the walk is cycle-safe. */
+static MinicCoreLowerStatus core_collect_nested_switch_labels(
+    MinicCoreLowerContext *context,
+    MinicBlockId block_id,
+    bool root_block,
+    bool *visited_blocks,
+    MinicCoreNestedSwitchLabel *labels,
+    size_t *label_count,
+    bool *has_nested_label) {
+    const MinicBlock *block;
+    size_t index;
+
+    if (context == NULL || context->body == NULL || context->body->program == NULL ||
+        visited_blocks == NULL || labels == NULL || label_count == NULL ||
+        has_nested_label == NULL || block_id == MINIC_BLOCK_INVALID ||
+        block_id >= context->body->program->block_count) {
+        return MINIC_CORE_LOWER_ERROR;
+    }
+    if (visited_blocks[block_id]) {
+        return MINIC_CORE_LOWER_OK;
+    }
+    visited_blocks[block_id] = true;
+    block = minic_c0_program_block(context->body->program, block_id);
+    if (block == NULL) {
+        return MINIC_CORE_LOWER_ERROR;
+    }
+
+    for (index = 0U; index < block->statement_count; ++index) {
+        MinicStatementId statement_id;
+        const MinicStatement *source_statement;
+        MinicCoreLowerStatus status;
+
+        statement_id = block->statements[index];
+        source_statement =
+            minic_c0_program_statement(context->body->program, statement_id);
+        if (source_statement == NULL) {
+            return MINIC_CORE_LOWER_ERROR;
+        }
+        if (source_statement->kind == MINIC_STATEMENT_CASE ||
+            source_statement->kind == MINIC_STATEMENT_DEFAULT) {
+            if (*label_count >= MINIC_CORE_SWITCH_LABEL_LIMIT) {
+                return MINIC_CORE_LOWER_UNSUPPORTED;
+            }
+            labels[*label_count].statement_id = statement_id;
+            labels[*label_count].statement = source_statement;
+            labels[*label_count].body_block = MINIC_CORE_BLOCK_INVALID;
+            labels[*label_count].test_block = MINIC_CORE_BLOCK_INVALID;
+            *label_count += 1U;
+            if (!root_block) {
+                *has_nested_label = true;
+            }
+        }
+
+        /* The nearest enclosing switch owns case/default. Never descend into a
+           nested switch while building the current switch's dispatch table. */
+        if (source_statement->kind == MINIC_STATEMENT_SWITCH) {
+            continue;
+        }
+        if (source_statement->then_block != MINIC_BLOCK_INVALID) {
+            status = core_collect_nested_switch_labels(context,
+                                                       source_statement->then_block,
+                                                       false,
+                                                       visited_blocks,
+                                                       labels,
+                                                       label_count,
+                                                       has_nested_label);
+            if (status != MINIC_CORE_LOWER_OK) {
+                return status;
+            }
+        }
+        if (source_statement->else_block != MINIC_BLOCK_INVALID) {
+            status = core_collect_nested_switch_labels(context,
+                                                       source_statement->else_block,
+                                                       false,
+                                                       visited_blocks,
+                                                       labels,
+                                                       label_count,
+                                                       has_nested_label);
+            if (status != MINIC_CORE_LOWER_OK) {
+                return status;
+            }
+        }
+    }
+    return MINIC_CORE_LOWER_OK;
+}
+
+static MinicCoreLowerStatus lower_nested_case_switch(
+    MinicCoreLowerContext *context,
+    const MinicStatement *statement,
+    const MinicBlock *body,
+    MinicType selector_type,
+    bool *terminated) {
+    MinicCoreNestedSwitchLabel labels[MINIC_CORE_SWITCH_LABEL_LIMIT];
+    bool *visited_blocks;
+    MinicCoreBlockId body_entry;
+    MinicCoreBlockId default_target;
+    MinicCoreBlockId dispatch_target;
+    MinicCoreBlockId exit_block;
+    MinicCoreBlockId saved_break_target;
+    MinicCoreObjectId selector_object;
+    MinicCoreValueId selector_normalized;
+    MinicCoreValueId selector_source;
+    MinicCoreLowerStatus status;
+    size_t case_count;
+    size_t default_label;
+    size_t first_case_label;
+    size_t label_count;
+    size_t label_index;
+    bool body_terminated;
+    bool has_nested_label;
+
+    if (context == NULL || context->body == NULL || context->body->program == NULL ||
+        context->function == NULL || statement == NULL || body == NULL ||
+        terminated == NULL || context->target == NULL) {
+        return MINIC_CORE_LOWER_ERROR;
+    }
+
+    visited_blocks =
+        (bool *)calloc(context->body->program->block_count, sizeof(*visited_blocks));
+    if (visited_blocks == NULL && context->body->program->block_count != 0U) {
+        return MINIC_CORE_LOWER_ERROR;
+    }
+    label_count = 0U;
+    has_nested_label = false;
+    status = core_collect_nested_switch_labels(context,
+                                               statement->then_block,
+                                               true,
+                                               visited_blocks,
+                                               labels,
+                                               &label_count,
+                                               &has_nested_label);
+    free(visited_blocks);
+    if (status != MINIC_CORE_LOWER_OK) {
+        return status;
+    }
+    if (!has_nested_label || label_count == 0U) {
+        return MINIC_CORE_LOWER_UNSUPPORTED;
+    }
+
+    case_count = 0U;
+    default_label = SIZE_MAX;
+    first_case_label = SIZE_MAX;
+    for (label_index = 0U; label_index < label_count; ++label_index) {
+        const MinicStatement *label_statement = labels[label_index].statement;
+
+        if (!core_cleanup_edge_is_empty(label_statement) ||
+            label_statement->then_block != MINIC_BLOCK_INVALID ||
+            label_statement->else_block != MINIC_BLOCK_INVALID) {
+            return MINIC_CORE_LOWER_UNSUPPORTED;
+        }
+        if (label_statement->kind == MINIC_STATEMENT_CASE) {
+            if (label_statement->expression == MINIC_EXPRESSION_INVALID) {
+                return MINIC_CORE_LOWER_ERROR;
+            }
+            if (first_case_label == SIZE_MAX) {
+                first_case_label = label_index;
+            }
+            case_count += 1U;
+        } else {
+            if (default_label != SIZE_MAX ||
+                label_statement->expression != MINIC_EXPRESSION_INVALID ||
+                label_statement->target_expression != MINIC_EXPRESSION_INVALID) {
+                return MINIC_CORE_LOWER_ERROR;
+            }
+            default_label = label_index;
+        }
+    }
+
+    status = lower_expression(context, statement->expression, &selector_source);
+    if (status != MINIC_CORE_LOWER_OK) {
+        return status;
+    }
+    status = append_integer_conversion(
+        context, statement->span, selector_type, selector_source, &selector_normalized);
+    if (status != MINIC_CORE_LOWER_OK) {
+        return status;
+    }
+    status = spill_scalar_value(
+        context, statement->span, selector_type, selector_normalized, &selector_object);
+    if (status != MINIC_CORE_LOWER_OK) {
+        return status;
+    }
+
+    if (!minic_core_function_add_block(context->function, &exit_block) ||
+        !minic_core_function_add_block(context->function, &body_entry)) {
+        return MINIC_CORE_LOWER_ERROR;
+    }
+    for (label_index = 0U; label_index < label_count; ++label_index) {
+        status = ensure_statement_block(
+            context, labels[label_index].statement_id, &labels[label_index].body_block);
+        if (status != MINIC_CORE_LOWER_OK) {
+            return status;
+        }
+        if (labels[label_index].statement->kind == MINIC_STATEMENT_CASE &&
+            !minic_core_function_add_block(
+                context->function, &labels[label_index].test_block)) {
+            return MINIC_CORE_LOWER_ERROR;
+        }
+    }
+
+    default_target =
+        default_label == SIZE_MAX ? exit_block : labels[default_label].body_block;
+    dispatch_target =
+        first_case_label == SIZE_MAX ? default_target : labels[first_case_label].test_block;
+    status = set_branch(context, context->block_id, statement->span, dispatch_target);
+    if (status != MINIC_CORE_LOWER_OK) {
+        return status;
+    }
+
+    if (case_count != 0U) {
+        for (label_index = 0U; label_index < label_count; ++label_index) {
+            size_t next_label;
+            MinicCoreBlockId next_target;
+
+            if (labels[label_index].statement->kind != MINIC_STATEMENT_CASE) {
+                continue;
+            }
+            next_target = default_target;
+            for (next_label = label_index + 1U; next_label < label_count; ++next_label) {
+                if (labels[next_label].statement->kind == MINIC_STATEMENT_CASE) {
+                    next_target = labels[next_label].test_block;
+                    break;
+                }
+            }
+            context->block_id = labels[label_index].test_block;
+            status = lower_switch_case_dispatch(context,
+                                                labels[label_index].statement,
+                                                selector_type,
+                                                selector_object,
+                                                labels[label_index].body_block,
+                                                next_target);
+            if (status != MINIC_CORE_LOWER_OK) {
+                return status;
+            }
+        }
+    }
+
+    /* Lower the source body exactly once. body_entry is deliberately not
+       reachable from the selector dispatch: it owns only source statements
+       before the first case. Pre-created case blocks act as re-entry points
+       when dispatch jumps into an inner if/loop/compound. */
+    context->block_id = body_entry;
+    saved_break_target = context->break_target;
+    context->break_target = exit_block;
+    body_terminated = false;
+    status = lower_block(context, body, &body_terminated);
+    context->break_target = saved_break_target;
+    if (status != MINIC_CORE_LOWER_OK) {
+        return status;
+    }
+    if (!body_terminated) {
+        status = set_branch(context, context->block_id, statement->span, exit_block);
+        if (status != MINIC_CORE_LOWER_OK) {
+            return status;
+        }
+    }
+
+    context->block_id = exit_block;
+    if (!core_block_has_predecessor(context->function, exit_block)) {
+        MinicCoreTerminator exit_terminator;
+
+        (void)memset(&exit_terminator, 0, sizeof(exit_terminator));
+        exit_terminator.kind = MINIC_CORE_TERMINATOR_UNREACHABLE;
+        exit_terminator.span = statement->span;
+        exit_terminator.return_value = MINIC_CORE_VALUE_INVALID;
+        exit_terminator.return_object = MINIC_CORE_OBJECT_INVALID;
+        if (!minic_core_function_set_terminator(
+                context->function, exit_block, &exit_terminator)) {
+            return MINIC_CORE_LOWER_ERROR;
+        }
+        *terminated = true;
+    } else {
+        *terminated = false;
+    }
+    return MINIC_CORE_LOWER_OK;
+}
+
 /* M176_SWITCH_POST_BREAK_LABEL_REENTRY: a direct break ends ordinary switch
    fallthrough, but a later ordinary C label remains a valid goto target. Keep
    that re-entry path separate from the case segment so break still reaches the
@@ -10096,6 +10386,36 @@ lower_switch(MinicCoreLowerContext *context, const MinicStatement *statement, bo
         !minic_target_info_integer_promotion_for_program(
             context->target, context->body->program, selector_expression->type, &selector_type)) {
         return MINIC_CORE_LOWER_UNSUPPORTED;
+    }
+
+    {
+        MinicCoreNestedSwitchLabel nested_labels[MINIC_CORE_SWITCH_LABEL_LIMIT];
+        bool *visited_blocks;
+        bool has_nested_label;
+        size_t nested_label_count;
+
+        visited_blocks =
+            (bool *)calloc(context->body->program->block_count, sizeof(*visited_blocks));
+        if (visited_blocks == NULL && context->body->program->block_count != 0U) {
+            return MINIC_CORE_LOWER_ERROR;
+        }
+        nested_label_count = 0U;
+        has_nested_label = false;
+        status = core_collect_nested_switch_labels(context,
+                                                   statement->then_block,
+                                                   true,
+                                                   visited_blocks,
+                                                   nested_labels,
+                                                   &nested_label_count,
+                                                   &has_nested_label);
+        free(visited_blocks);
+        if (status != MINIC_CORE_LOWER_OK) {
+            return status;
+        }
+        if (has_nested_label) {
+            return lower_nested_case_switch(
+                context, statement, body, selector_type, terminated);
+        }
     }
 
     case_count = 0U;
@@ -10730,7 +11050,9 @@ lower_block(MinicCoreLowerContext *context, const MinicBlock *source_block, bool
                     continue;
                 }
             }
-            if (statement->kind != MINIC_STATEMENT_LABEL) {
+            if (statement->kind != MINIC_STATEMENT_LABEL &&
+                statement->kind != MINIC_STATEMENT_CASE &&
+                statement->kind != MINIC_STATEMENT_DEFAULT) {
                 if (core_unreachable_statement_has_external_reentry(
                         context, statement, MINIC_STATEMENT_INVALID)) {
                     return MINIC_CORE_LOWER_UNSUPPORTED;
@@ -10776,7 +11098,35 @@ lower_block(MinicCoreLowerContext *context, const MinicBlock *source_block, bool
             return MINIC_CORE_LOWER_UNSUPPORTED;
         }
         statement_terminated = false;
-        if (statement->kind == MINIC_STATEMENT_LABEL) {
+        if (statement->kind == MINIC_STATEMENT_CASE ||
+            statement->kind == MINIC_STATEMENT_DEFAULT) {
+            MinicCoreBlockId label_block;
+            MinicStatementId label_statement_id =
+                source_block->statements[statement_index];
+
+            /* Only lower case/default as generic re-entry labels when the
+               enclosing nested-switch fallback pre-bound this exact statement.
+               The established top-level switch segment path remains unchanged. */
+            if (context->statement_blocks == NULL ||
+                label_statement_id >= context->statement_block_count ||
+                context->statement_blocks[label_statement_id] ==
+                    MINIC_CORE_BLOCK_INVALID) {
+                return MINIC_CORE_LOWER_UNSUPPORTED;
+            }
+            status = ensure_statement_block(
+                context, label_statement_id, &label_block);
+            if (status != MINIC_CORE_LOWER_OK) {
+                return status;
+            }
+            if (!block_terminated && context->block_id != label_block) {
+                status = set_branch(
+                    context, context->block_id, statement->span, label_block);
+                if (status != MINIC_CORE_LOWER_OK) {
+                    return status;
+                }
+            }
+            context->block_id = label_block;
+        } else if (statement->kind == MINIC_STATEMENT_LABEL) {
             const MinicStatement *loop = NULL;
             bool internal_loop_label = false;
             if (statement_index + 1U < source_block->statement_count) {
