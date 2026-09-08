@@ -139,7 +139,12 @@ static bool consume_function_attribute(MinicParser *parser,
     descriptor = attribute->descriptor;
     if (descriptor == NULL ||
         !minic_attribute_allowed_on(descriptor, MINIC_ATTRIBUTE_TARGET_FUNCTION)) {
-        minic_parser_error(parser, "%s", context->unsupported_message);
+        size_t attribute_name_length = minic_parser_span_length(attribute->name_span);
+        minic_parser_error(parser,
+                           "%s: %.*s",
+                           context->unsupported_message,
+                           (int)attribute_name_length,
+                           parser->source + attribute->name_span.begin.offset);
         return false;
     }
 
