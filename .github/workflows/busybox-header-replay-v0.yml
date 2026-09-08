@@ -1,0 +1,51 @@
+name: BusyBox Header Replay V0
+
+on:
+  push:
+    branches:
+      - compiler/busybox-header-replay-v0
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  applets-replay:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Build current Mini toolchain
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/busybox-header-replay all
+
+      - name: Fetch frozen GNU 2.7 applets preprocessed TU
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -Eeuo pipefail
+          mkdir -p build/busybox-header-replay/frozen
+          gh api \
+            -H 'Accept: application/vnd.github+json' \
+            /repos/${{ github.repository }}/actions/artifacts/10046065195/zip \
+            > build/busybox-header-replay/frozen/artifact.zip
+          unzip -q build/busybox-header-replay/frozen/artifact.zip \
+            -d build/busybox-header-replay/frozen/artifact
+          test -s build/busybox-header-replay/frozen/artifact/failed-intermediates/minic-driver-i-yTVxmZ
+
+      - name: Replay applets TU through current MiniC
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          input="$GITHUB_WORKSPACE/build/busybox-header-replay/frozen/artifact/failed-intermediates/minic-driver-i-yTVxmZ"
+          output="$GITHUB_WORKSPACE/build/busybox-header-replay/applets.s"
+          "$GITHUB_WORKSPACE/build/busybox-header-replay/bin/minic" -S "$input" -o "$output"
+          test -s "$output"
+          echo "BUSYBOX_APPLETS_HEADER_REPLAY_V0=PASS"
