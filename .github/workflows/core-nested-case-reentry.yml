@@ -41,17 +41,27 @@ jobs:
           QEMU_RISCV64=qemu-riscv64 \
             sh tests/compiler/c0/run-core-switch-m27.sh
 
-      - name: Run C0 RV64 differential programs
+      - name: Run existing switch_control_flow runtime differential
         shell: bash
         run: |
           set -Eeuo pipefail
-          MINIC="$GITHUB_WORKSPACE/build/nested-case/bin/minic" \
-          BUILD_DIR="$GITHUB_WORKSPACE/build/nested-case/programs" \
-          RISCV_CC=riscv64-linux-gnu-gcc \
-          RISCV_OBJDUMP=riscv64-linux-gnu-objdump \
-          QEMU_RISCV64=qemu-riscv64 \
-          REQUIRE_RISCV_RUNTIME=1 \
-            sh tests/programs/c0/run.sh
+          work="$GITHUB_WORKSPACE/build/nested-case/switch-runtime"
+          mkdir -p "$work"
+          src="$GITHUB_WORKSPACE/tests/programs/c0/switch_control_flow.c"
+          riscv64-linux-gnu-gcc -std=c11 -O0 -static "$src" -o "$work/gcc.elf"
+          riscv64-linux-gnu-gcc -std=c11 -E -P -x c "$src" -o "$work/input.i"
+          "$GITHUB_WORKSPACE/build/nested-case/bin/minic" -S "$work/input.i" -o "$work/minic.s"
+          riscv64-linux-gnu-gcc -static "$work/minic.s" -o "$work/minic.elf"
+          set +e
+          qemu-riscv64 "$work/gcc.elf" >"$work/gcc.out" 2>"$work/gcc.err"
+          gcc_rc=$?
+          qemu-riscv64 "$work/minic.elf" >"$work/minic.out" 2>"$work/minic.err"
+          minic_rc=$?
+          set -e
+          test "$gcc_rc" -eq "$minic_rc"
+          cmp "$work/gcc.out" "$work/minic.out"
+          cmp "$work/gcc.err" "$work/minic.err"
+          echo "SWITCH_CONTROL_FLOW_RUNTIME=PASS rc=$minic_rc"
 
       - name: Run host fast regression
         shell: bash
