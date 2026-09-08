@@ -324,8 +324,11 @@ static bool parse_one_postfix_update(MinicParser *parser,
                                "pointer update requires an arithmetic-compatible pointee type");
             return false;
         }
-    } else if (!minic_type_is_integer(operand_type)) {
-        minic_parser_error(parser, "postfix update requires integer or pointer lvalue");
+    } else if (!minic_type_is_integer(operand_type) &&
+               !minic_type_is_float(operand_type) &&
+               !minic_type_is_double(operand_type) &&
+               !minic_type_is_long_double(operand_type)) {
+        minic_parser_error(parser, "postfix update requires arithmetic or pointer lvalue");
         return false;
     }
 
