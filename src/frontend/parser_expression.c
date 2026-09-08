@@ -3804,12 +3804,46 @@ static bool normalize_float_binary_operands(MinicParser *parser,
         return true;
     }
 
+    /* C's usual arithmetic conversions keep float/integer operations in
+       binary32 when neither operand has double/long-double rank. Convert the
+       integer operand to float first. For comparisons, the existing exact
+       float->double comparison bridge below may then widen both binary32 values
+       without changing the comparison result. */
+    if (minic_type_is_float(left->type) && minic_type_is_integer(right->type)) {
+        (void)memset(&conversion, 0, sizeof(conversion));
+        conversion.kind = MINIC_EXPRESSION_CAST;
+        conversion.span = right->span;
+        conversion.type = minic_type_float();
+        conversion.value_category = MINIC_VALUE_RVALUE;
+        conversion.value.unary.operand = *right_id;
+        if (!minic_parser_add_expression(parser, &conversion, &converted_id)) {
+            return false;
+        }
+        *right_id = converted_id;
+    } else if (minic_type_is_integer(left->type) && minic_type_is_float(right->type)) {
+        (void)memset(&conversion, 0, sizeof(conversion));
+        conversion.kind = MINIC_EXPRESSION_CAST;
+        conversion.span = left->span;
+        conversion.type = minic_type_float();
+        conversion.value_category = MINIC_VALUE_RVALUE;
+        conversion.value.unary.operand = *left_id;
+        if (!minic_parser_add_expression(parser, &conversion, &converted_id)) {
+            return false;
+        }
+        *left_id = converted_id;
+    }
+
+    left = minic_c0_program_expression(parser->program, *left_id);
+    right = minic_c0_program_expression(parser->program, *right_id);
+    if (left == NULL || right == NULL) {
+        return false;
+    }
+
     /* Comparing binary32 values after exact widening to binary64 preserves all
        IEEE-754 ordered/equality results, including NaNs, infinities and signed
        zero. Mixed float/double comparison and arithmetic use the ordinary C
-       conversion to double. Keep float/float arithmetic in binary32, and do not
-       use this bridge for float/integer arithmetic: converting the integer to
-       double would change C's float-rounding semantics. */
+       conversion to double. Float/integer operands have already undergone the
+       required integer->float conversion above. */
     eligible =
         (minic_type_is_float(left->type) &&
          (minic_type_is_float(right->type) || minic_type_is_double(right->type))) ||
