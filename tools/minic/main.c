@@ -25,6 +25,15 @@ static void append_rv64_linux_musl_predefines(char **arguments,
                                                bool hosted) {
     arguments[(*count)++] = "-D__STDC__=1";
     arguments[(*count)++] = "-D__STDC_VERSION__=201112L";
+    /* Advertise the conservative GNU compatibility level MiniC intentionally
+     * supports.  Several Linux-oriented headers gate the spelling of GNU
+     * attributes on __GNUC__; leaving it undefined rewrites semantic layout
+     * attributes such as __attribute__((packed)) to nothing before MiniC can
+     * parse them.  4.2.1 is the conventional low compatibility baseline and
+     * avoids claiming newer GCC-only builtins that MiniC does not implement. */
+    arguments[(*count)++] = "-D__GNUC__=4";
+    arguments[(*count)++] = "-D__GNUC_MINOR__=2";
+    arguments[(*count)++] = "-D__GNUC_PATCHLEVEL__=1";
     arguments[(*count)++] =
         hosted ? "-D__STDC_HOSTED__=1" : "-D__STDC_HOSTED__=0";
     arguments[(*count)++] = "-D__linux__=1";
