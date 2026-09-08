@@ -2112,6 +2112,11 @@ static bool dump_instruction(FILE *output,
                        "  %%%" PRIu32 " = scalar.is_zero %%%" PRIu32 "\n",
                        instruction->result,
                        instruction->value.operand) >= 0;
+    case MINIC_CORE_INSTRUCTION_STACK_ALLOCATE:
+        return fprintf(output,
+                       "  %%%" PRIu32 " = stack.allocate %%%" PRIu32 "\n",
+                       instruction->result,
+                       instruction->value.operand) >= 0;
     case MINIC_CORE_INSTRUCTION_CALL_FRAME_ADDRESS:
         return fprintf(output,
                        "  %%%" PRIu32 " = call.frame.%s level=%u\n",
