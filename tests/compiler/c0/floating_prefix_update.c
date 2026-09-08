@@ -9,9 +9,3 @@ float increment_ratio(float ratio)
     ++ratio;
     return ratio;
 }
-
-long double increment_wide(long double value)
-{
-    ++value;
-    return value;
-}
