@@ -52,7 +52,9 @@ typedef struct MinicRiscv64CoreFrame {
     size_t *value_offsets;
     size_t value_base_offset;
     size_t outgoing_argument_size;
+    size_t dynamic_outgoing_reserve;
     size_t return_address_offset;
+    size_t saved_frame_base_offset;
     /* M167D_INDIRECT_RECORD_RETURN: psABI hidden result pointer is incoming
        state and must survive arbitrary calls before a Core RETURN. */
     size_t hidden_result_pointer_offset;
@@ -66,6 +68,7 @@ typedef struct MinicRiscv64CoreFrame {
     bool saves_return_address;
     bool has_hidden_result_pointer;
     bool has_dynamic_stack_alignment;
+    bool has_dynamic_stack_allocation;
     bool preserves_structured_asm_callee_saved;
     bool has_variadic_argument_address;
 } MinicRiscv64CoreFrame;
@@ -156,6 +159,67 @@ static bool core_function_uses_structured_inline_asm(
         }
     }
     return false;
+}
+
+static bool core_function_uses_stack_allocate(const MinicCoreFunction *function) {
+    size_t instruction_index;
+
+    if (function == NULL) {
+        return false;
+    }
+    for (instruction_index = 0U; instruction_index < function->instruction_count;
+         ++instruction_index) {
+        if (function->instructions[instruction_index].kind ==
+            MINIC_CORE_INSTRUCTION_STACK_ALLOCATE) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool core_function_stack_allocate_compatible(const MinicCoreFunction *function) {
+    size_t binding_index;
+    size_t instruction_index;
+
+    if (!core_function_uses_stack_allocate(function)) {
+        return true;
+    }
+    if (function == NULL) {
+        return false;
+    }
+
+    /* s0 is the stable fixed-frame base while sp moves. Do not silently steal
+       a source-visible fixed register binding. */
+    for (binding_index = 0U; binding_index < function->fixed_register_binding_count;
+         ++binding_index) {
+        const MinicCoreFixedRegisterBinding *binding =
+            &function->fixed_register_bindings[binding_index];
+        if (binding->register_name != NULL &&
+            ((binding->register_name_length == 2U &&
+              memcmp(binding->register_name, "s0", 2U) == 0) ||
+             (binding->register_name_length == 2U &&
+              memcmp(binding->register_name, "fp", 2U) == 0))) {
+            return false;
+        }
+    }
+
+    /* Inline asm may name/clobber s0 outside Core's control. Admit that
+       combination only after the asm allocator can reserve a frame-base reg. */
+    for (instruction_index = 0U; instruction_index < function->instruction_count;
+         ++instruction_index) {
+        switch (function->instructions[instruction_index].kind) {
+        case MINIC_CORE_INSTRUCTION_OPAQUE_INLINE_ASM:
+        case MINIC_CORE_INSTRUCTION_REGISTER_OUTPUT_INLINE_ASM:
+        case MINIC_CORE_INSTRUCTION_REGISTER_OUTPUT_INPUT_INLINE_ASM:
+        case MINIC_CORE_INSTRUCTION_MEMORY_READWRITE_SCALAR_INPUT_INLINE_ASM:
+        case MINIC_CORE_INSTRUCTION_SCALAR_INPUT_INLINE_ASM:
+        case MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM:
+            return false;
+        default:
+            break;
+        }
+    }
+    return true;
 }
 
 static bool core_function_uses_variadic_argument_address(
@@ -341,6 +405,12 @@ static bool core_frame_initialize(const MinicC0Program *program,
         return false;
     }
     frame->outgoing_argument_size = outgoing_argument_size;
+    frame->has_dynamic_stack_allocation = core_function_uses_stack_allocate(function);
+    frame->dynamic_outgoing_reserve = 0U;
+    if (frame->has_dynamic_stack_allocation &&
+        !align_up(outgoing_argument_size, 16U, &frame->dynamic_outgoing_reserve)) {
+        return false;
+    }
     storage_size = outgoing_argument_size;
     maximum_object_alignment = 16U;
     for (object_index = 0U; object_index < function->object_count; ++object_index) {
@@ -437,6 +507,15 @@ static bool core_frame_initialize(const MinicC0Program *program,
         storage_size = frame->return_address_offset + 8U;
     }
 
+    frame->saved_frame_base_offset = 0U;
+    if (frame->has_dynamic_stack_allocation) {
+        if (!align_up(storage_size, 8U, &frame->saved_frame_base_offset) ||
+            frame->saved_frame_base_offset > SIZE_MAX - 8U) {
+            return false;
+        }
+        storage_size = frame->saved_frame_base_offset + 8U;
+    }
+
     frame->has_hidden_result_pointer = false;
     frame->hidden_result_pointer_offset = 0U;
     if (program != NULL) {
@@ -474,6 +553,9 @@ static bool core_frame_initialize(const MinicC0Program *program,
 
     frame->stack_alignment = maximum_object_alignment;
     frame->has_dynamic_stack_alignment = maximum_object_alignment > 16U;
+    if (frame->has_dynamic_stack_allocation && frame->has_dynamic_stack_alignment) {
+        return false;
+    }
     frame->entry_sp_offset = 0U;
     if (frame->has_dynamic_stack_alignment) {
         if (!align_up(storage_size, 8U, &frame->entry_sp_offset) ||
@@ -2176,6 +2258,10 @@ static bool core_function_can_emit(const MinicC0Program *program,
 
     if (function == NULL || !minic_core_function_verify(function)) {
         return core_rv64_capability_reject(function, "verify", 0U, -1);
+    }
+    if (!core_function_stack_allocate_compatible(function)) {
+        return core_rv64_capability_reject(function, "stack-allocate-frame-base", 0U,
+                                           MINIC_CORE_INSTRUCTION_STACK_ALLOCATE);
     }
     if (program == NULL) {
         if (!minic_type_is_void(function->return_type) &&
