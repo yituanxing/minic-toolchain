@@ -815,7 +815,8 @@ static bool parse_cast(MinicParser *parser, MinicExpressionId *expression_id) {
 
 static bool variadic_argument_type_supported(MinicType type) {
     return minic_type_is_integer(type) || minic_type_is_pointer(type) ||
-           minic_type_is_double(type) || minic_type_is_record(type);
+           minic_type_is_double(type) || minic_type_is_long_double(type) ||
+           minic_type_is_record(type);
 }
 
 static bool gnu_enum_integer_pointer_call_conversion_compatible(
@@ -940,9 +941,18 @@ bool minic_parser_apply_default_argument_promotion(MinicParser *parser,
 
     if (minic_type_is_float(source->type)) {
         promoted_type = minic_type_double();
-    } else if (minic_type_is_integer(source->type)) {
+    } else if (minic_type_is_integer(source->type) || minic_type_is_enum(source->type)) {
+        MinicType integer_source_type;
+
+        integer_source_type = source->type;
+        if (minic_type_is_enum(source->type) &&
+            !minic_c0_type_effective_integer_type(
+                parser->program, source->type, &integer_source_type)) {
+            minic_parser_error(parser, "cannot resolve enum default argument promotion");
+            return false;
+        }
         if (!minic_target_info_integer_promotion(
-                parser->target_info, source->type, &promoted_type)) {
+                parser->target_info, integer_source_type, &promoted_type)) {
             minic_parser_error(parser, "cannot apply default integer argument promotion");
             return false;
         }
