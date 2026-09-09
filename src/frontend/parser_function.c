@@ -979,9 +979,26 @@ bool minic_parser_parse_parameter_list(MinicParser *parser,
     }
 }
 
+static bool apply_external_object_metadata(MinicParser *parser,
+                                           MinicGlobalObjectId object_id,
+                                           const char *section_name,
+                                           size_t section_name_length,
+                                           bool has_section,
+                                           size_t explicit_alignment,
+                                           MinicSymbolVisibility visibility,
+                                           bool has_visibility);
+
 static bool parse_external_integer_array_definition(MinicParser *parser,
                                                     MinicType element_type,
-                                                    MinicSourceSpan name_span) {
+                                                    MinicSourceSpan name_span,
+                                                    char *section_name,
+                                                    size_t section_name_capacity,
+                                                    size_t *section_name_length,
+                                                    bool *has_section,
+                                                    size_t *explicit_alignment,
+                                                    MinicSymbolVisibility visibility,
+                                                    bool has_visibility,
+                                                    bool *is_weak) {
     MinicGlobalObjectId object_id;
     MinicGlobalObject *object;
     const MinicArrayType *array_type;
@@ -994,7 +1011,8 @@ static bool parse_external_integer_array_definition(MinicParser *parser,
     bool multidimensional;
     bool reused_existing;
 
-    if (parser == NULL ||
+    if (parser == NULL || section_name == NULL || section_name_length == NULL ||
+        has_section == NULL || explicit_alignment == NULL || is_weak == NULL ||
         (!minic_type_is_integer(element_type) && !minic_type_is_pointer(element_type)) ||
         parser->current.kind != MINIC_TOKEN_LBRACKET) {
         minic_parser_error(parser,
@@ -1035,6 +1053,19 @@ static bool parse_external_integer_array_definition(MinicParser *parser,
         }
         declared_element_type = nested_element_type;
         multidimensional = true;
+    }
+
+    if (!minic_parser_parse_gnu_object_attribute_lists_with_symbol_metadata(
+            parser,
+            section_name,
+            section_name_capacity,
+            section_name_length,
+            has_section,
+            explicit_alignment,
+            &visibility,
+            &has_visibility,
+            is_weak)) {
+        return false;
     }
 
     object_id = minic_parser_find_global_object(parser, name_span);
@@ -1084,6 +1115,14 @@ static bool parse_external_integer_array_definition(MinicParser *parser,
 
     object = &parser->program->global_objects[object_id];
     if ((reused_existing && !minic_c0_global_object_begin_definition(parser->program, object_id)) ||
+        !apply_external_object_metadata(parser,
+                                        object_id,
+                                        section_name,
+                                        *section_name_length,
+                                        *has_section,
+                                        *explicit_alignment,
+                                        visibility,
+                                        has_visibility) ||
         !minic_parser_expect(parser, MINIC_TOKEN_EQUAL, "expected '=' after external array")) {
         return false;
     }
@@ -1906,7 +1945,17 @@ static bool parse_visible_external_array(MinicParser *parser,
                                                                    visibility,
                                                                    has_visibility);
         }
-        return parse_external_integer_array_definition(parser, element_type, name_span);
+        return parse_external_integer_array_definition(parser,
+                                                       element_type,
+                                                       name_span,
+                                                       section_name,
+                                                       section_name_capacity,
+                                                       section_name_length,
+                                                       has_section,
+                                                       explicit_alignment,
+                                                       visibility,
+                                                       has_visibility,
+                                                       is_weak);
     }
 
     if (!minic_parser_parse_array_declarator_suffix(
