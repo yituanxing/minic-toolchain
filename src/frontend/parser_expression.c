@@ -3582,8 +3582,12 @@ static bool parse_unary(MinicParser *parser, MinicExpressionId *expression_id, b
                                    "pointer update requires an arithmetic-compatible pointee type");
                 return false;
             }
-        } else if (!minic_type_is_integer(operand_expression->type)) {
-            minic_parser_error(parser, "prefix update requires integer or pointer lvalue");
+        } else if (!minic_type_is_integer(operand_expression->type) &&
+                   !minic_type_is_float(operand_expression->type) &&
+                   !minic_type_is_double(operand_expression->type) &&
+                   !minic_type_is_long_double(operand_expression->type)) {
+            minic_parser_error(parser,
+                               "prefix update requires arithmetic or pointer lvalue");
             return false;
         }
         expression.kind = MINIC_EXPRESSION_UNARY;
