@@ -347,6 +347,7 @@ static bool verify_call_arguments(const MinicC0Program *program,
         } else if (!minic_type_is_integer(argument->type) &&
                    !minic_type_is_pointer(argument->type) &&
                    !minic_type_is_double(argument->type) &&
+                   !minic_type_is_long_double(argument->type) &&
                    !(minic_type_is_record(argument->type) &&
                      minic_c0_type_is_complete_object(program, argument->type))) {
             return false;
