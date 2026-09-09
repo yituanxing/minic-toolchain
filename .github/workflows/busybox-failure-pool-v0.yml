@@ -4,10 +4,6 @@ on:
   push:
     branches:
       - external/busybox-full-driver-v0
-      - agent/busybox-21-convergence-v1
-  pull_request:
-    branches:
-      - external/busybox-full-driver-v0
   workflow_dispatch:
 
 permissions:
@@ -190,21 +186,6 @@ jobs:
             "$src/scripts/generate_BUFSIZ.sh" include/common_bufsiz.h
           )
           test -s "$out/include/common_bufsiz.h"
-
-          # These three headers are also ordinary BusyBox generated prerequisites.
-          # Materialize them once so the targeted direct-CC lane tests Mini rather
-          # than failing before preprocessing on a bypassed Make dependency.
-          make -C "$src" O="$out" HOSTCC=/usr/bin/cc CC=/usr/bin/cc applets_dir \
-            >"$work/busybox-generated-headers.log" 2>&1
-          test -s "$out/include/applet_tables.h"
-          test -s "$out/include/NUM_APPLETS.h"
-          if test ! -s "$out/include/embedded_scripts.h"; then
-            (
-              cd "$out"
-              "$src/scripts/embedded_scripts" include/embedded_scripts.h "$src/embed" "$src/applets_sh"
-            )
-          fi
-          test -s "$out/include/embedded_scripts.h"
           echo "BUSYBOX_PROFILE=PASS applets=408 sha256=$cfg_hash"
 
       - name: Drive BusyBox C producer through Mini
@@ -406,27 +387,22 @@ jobs:
           ln -fsn "$src/include/asm-x86_64" "$out/include2/asm"
 
           targets=(
-            archival/libarchive/common.o
-            e2fsprogs/e2fs_lib.o
-            editors/sed.o
-            libbb/appletlib.o
-            mailutils/reformime.o
-            coreutils/od.o
-            libbb/c_escape.o
-            miscutils/bc.o
-            miscutils/hdparm.o
-            miscutils/nandwrite.o
-            libbb/getopt32.o
-            networking/ntpd.o
-            networking/udhcp/common.o
-            libbb/messages.o
-            shell/ash.o
-            procps/ps.o
-            shell/hush.o
-            shell/shell_common.o
-            util-linux/mdev.o
-            libbb/uuencode.o
-            libbb/wfopen_input.o
+            archival/libarchive/decompress_gunzip.o
+            archival/unzip.o
+            runit/runsv.o
+            util-linux/mkfs_vfat.o
+            networking/ifenslave.o
+            networking/ifplugd.o
+            networking/udhcp/dhcpc.o
+            networking/libiproute/ll_types.o
+            miscutils/ubirename.o
+            editors/awk.o
+            networking/brctl.o
+            networking/tc.o
+            sysklogd/syslogd_and_logger.o
+            libbb/progress.o
+            libbb/xconnect.o
+            libbb/xreadlink.o
           )
 
           compile_target() {
@@ -475,7 +451,7 @@ jobs:
           unique_sources="$(cut -f1 "$results" | sort -u | wc -l)"
           echo "BUSYBOX_C_FRONTIER selected=$total unique=$unique_sources pass=$passed fail=$failed make_rc=$build_rc elapsed_s=$elapsed"
 
-          if test "$failed" -ne 0 || test "$build_rc" -ne 0 || test "$unique_sources" -ne 21; then
+          if test "$failed" -ne 0 || test "$build_rc" -ne 0 || test "$unique_sources" -ne 16; then
             echo "BUSYBOX_C_FAILURE_POOL_BEGIN"
             awk -F '\t' '$2=="FAIL"{print}' "$results" | head -n 80
             echo "BUSYBOX_C_FAILURE_POOL_END"
@@ -483,7 +459,7 @@ jobs:
             exit 1
           fi
 
-          test "$unique_sources" -eq 21
+          test "$unique_sources" -eq 16
           echo "BUSYBOX_ACTIVE_SAMPLE16_V0=PASS selected=$total unique=$unique_sources pipeline=MiniPP,MiniC,MiniAS"
 
       - name: Run 408-applet BusyBox acceptance
