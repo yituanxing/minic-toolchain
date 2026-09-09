@@ -52,6 +52,7 @@ typedef struct MinicRiscv64CoreFrame {
     size_t *value_offsets;
     size_t value_base_offset;
     size_t outgoing_argument_size;
+    size_t dynamic_call_area_size;
     size_t return_address_offset;
     /* M167D_INDIRECT_RECORD_RETURN: psABI hidden result pointer is incoming
        state and must survive arbitrary calls before a Core RETURN. */
@@ -362,6 +363,11 @@ static bool core_frame_initialize(const MinicC0Program *program,
         return false;
     }
     frame->outgoing_argument_size = outgoing_argument_size;
+    frame->dynamic_call_area_size = 0U;
+    if (frame->has_dynamic_stack_alloc &&
+        !align_up(outgoing_argument_size, 16U, &frame->dynamic_call_area_size)) {
+        return false;
+    }
     storage_size = outgoing_argument_size;
     maximum_object_alignment = 16U;
     for (object_index = 0U; object_index < function->object_count; ++object_index) {
@@ -4633,8 +4639,23 @@ static bool emit_instruction(FILE *file,
                     "  addi t0, t0, 15\n"
                     "  li t1, -16\n"
                     "  and t0, t0, t1\n"
-                    "  sub sp, sp, t0\n"
-                    "  mv t0, sp\n") < 0) {
+                    "  sub sp, sp, t0\n") < 0) {
+            return false;
+        }
+        if (frame->dynamic_call_area_size == 0U) {
+            if (fprintf(file, "  mv t0, sp\n") < 0) {
+                return false;
+            }
+        } else if (frame->dynamic_call_area_size <= 2047U) {
+            if (fprintf(file,
+                        "  addi t0, sp, %zu\n",
+                        frame->dynamic_call_area_size) < 0) {
+                return false;
+            }
+        } else if (fprintf(file,
+                           "  li t0, %zu\n"
+                           "  add t0, sp, t0\n",
+                           frame->dynamic_call_area_size) < 0) {
             return false;
         }
         return store_core_value(file, frame, instruction->result, "t0");
@@ -4950,8 +4971,8 @@ static bool emit_terminator(FILE *file,
 
                 if (!frame->has_hidden_result_pointer || return_value.storage_size <= 16U ||
                     return_value.slot_count != 1U ||
-                    !minic_riscv64_emit_sp_load64(
-                        file, "t1", frame->hidden_result_pointer_offset)) {
+                    !emit_frame_load64(
+                        file, frame, "t1", frame->hidden_result_pointer_offset)) {
                     return false;
                 }
                 copied = 0U;
@@ -5105,20 +5126,28 @@ static bool emit_core_function_with_symbol(FILE *file,
     } else if (!minic_riscv64_emit_stack_allocate(file, frame.frame_size)) {
         return core_frame_fail(&frame);
     }
+    if (frame.has_dynamic_stack_alloc) {
+        if (!minic_riscv64_emit_sp_store64(
+                file, "s0", frame.saved_frame_base_offset) ||
+            fprintf(file, "  mv s0, sp\n") < 0 ||
+            !minic_riscv64_emit_stack_allocate(file, frame.dynamic_call_area_size)) {
+            return core_frame_fail(&frame);
+        }
+    }
     if (frame.saves_return_address &&
-        !minic_riscv64_emit_sp_store64(file, "ra", frame.return_address_offset)) {
+        !emit_frame_store64(file, &frame, "ra", frame.return_address_offset)) {
         return core_frame_fail(&frame);
     }
     if (frame.has_hidden_result_pointer &&
-        !minic_riscv64_emit_sp_store64(file, "a0", frame.hidden_result_pointer_offset)) {
+        !emit_frame_store64(file, &frame, "a0", frame.hidden_result_pointer_offset)) {
         return core_frame_fail(&frame);
     }
     if (frame.preserves_structured_asm_callee_saved) {
         size_t saved_index;
         for (saved_index = 0U; saved_index < CORE_ASM_CALLEE_SAVED_COUNT; ++saved_index) {
             size_t saved_offset = frame.structured_asm_callee_saved_offset + saved_index * 8U;
-            if (!minic_riscv64_emit_sp_store64(
-                    file, core_asm_callee_saved_registers[saved_index], saved_offset)) {
+            if (!emit_frame_store64(
+                    file, &frame, core_asm_callee_saved_registers[saved_index], saved_offset)) {
                 return core_frame_fail(&frame);
             }
         }
@@ -5130,8 +5159,8 @@ static bool emit_core_function_with_symbol(FILE *file,
              ++register_index) {
             size_t offset = frame.varargs_offset +
                             (register_index - frame.integer_parameter_count) * 8U;
-            if (!minic_riscv64_emit_sp_store64(
-                    file, minic_core_rv64_argument_registers[register_index], offset)) {
+            if (!emit_frame_store64(
+                    file, &frame, minic_core_rv64_argument_registers[register_index], offset)) {
                 return core_frame_fail(&frame);
             }
         }
@@ -5181,20 +5210,43 @@ static bool emit_core_function_with_symbol(FILE *file,
         return core_frame_fail(&frame);
     }
     if (frame.saves_return_address &&
-        !minic_riscv64_emit_sp_load64(file, "ra", frame.return_address_offset)) {
+        !emit_frame_load64(file, &frame, "ra", frame.return_address_offset)) {
         return core_frame_fail(&frame);
     }
     if (frame.preserves_structured_asm_callee_saved) {
         size_t saved_index;
         for (saved_index = 0U; saved_index < CORE_ASM_CALLEE_SAVED_COUNT; ++saved_index) {
             size_t saved_offset = frame.structured_asm_callee_saved_offset + saved_index * 8U;
-            if (!minic_riscv64_emit_sp_load64(
-                    file, core_asm_callee_saved_registers[saved_index], saved_offset)) {
+            if (!emit_frame_load64(
+                    file, &frame, core_asm_callee_saved_registers[saved_index], saved_offset)) {
                 return core_frame_fail(&frame);
             }
         }
     }
-    if (frame.has_dynamic_stack_alignment) {
+    if (frame.has_dynamic_stack_alloc) {
+        if (!emit_frame_load64(file, &frame, "t4", frame.saved_frame_base_offset)) {
+            return core_frame_fail(&frame);
+        }
+        if (frame.has_dynamic_stack_alignment) {
+            if (!emit_frame_load64(file, &frame, "t0", frame.entry_sp_offset)) {
+                return core_frame_fail(&frame);
+            }
+        } else if (frame.frame_size <= 2047U) {
+            if (fprintf(file, "  addi t0, s0, %zu\n", frame.frame_size) < 0) {
+                return core_frame_fail(&frame);
+            }
+        } else if (fprintf(file,
+                           "  li t0, %zu\n"
+                           "  add t0, s0, t0\n",
+                           frame.frame_size) < 0) {
+            return core_frame_fail(&frame);
+        }
+        if (fprintf(file,
+                    "  mv sp, t0\n"
+                    "  mv s0, t4\n") < 0) {
+            return core_frame_fail(&frame);
+        }
+    } else if (frame.has_dynamic_stack_alignment) {
         if (!minic_riscv64_emit_sp_load64(file, "t0", frame.entry_sp_offset) ||
             fprintf(file, "  mv sp, t0\n") < 0) {
             return core_frame_fail(&frame);
