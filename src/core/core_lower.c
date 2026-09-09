@@ -8582,11 +8582,41 @@ static MinicCoreLowerStatus lower_expression_statement(MinicCoreLowerContext *co
             return lower_direct_record_call_object(context, expression, &discarded_object);
         }
         {
+            const MinicFunction *callee;
             MinicCoreValueId discarded_value;
             MinicCoreLowerStatus status;
 
             status = lower_expression(context, statement->expression, &discarded_value);
-            return core_trace_expression_statement_status(context, expression, "call", status);
+            if (status != MINIC_CORE_LOWER_OK) {
+                return core_trace_expression_statement_status(
+                    context, expression, "call", status);
+            }
+            if (expression->value.call.function_id == MINIC_FUNCTION_INVALID) {
+                return MINIC_CORE_LOWER_OK;
+            }
+            callee = minic_c0_program_function(
+                context->body->program, expression->value.call.function_id);
+            if (callee == NULL) {
+                return MINIC_CORE_LOWER_ERROR;
+            }
+            if (callee->is_noreturn) {
+                MinicCoreTerminator terminator;
+
+                (void)memset(&terminator, 0, sizeof(terminator));
+                terminator.kind = MINIC_CORE_TERMINATOR_UNREACHABLE;
+                terminator.span = expression->span;
+                terminator.return_value = MINIC_CORE_VALUE_INVALID;
+                terminator.return_object = MINIC_CORE_OBJECT_INVALID;
+                terminator.branch_target = MINIC_CORE_BLOCK_INVALID;
+                terminator.conditional.condition = MINIC_CORE_VALUE_INVALID;
+                terminator.conditional.when_true = MINIC_CORE_BLOCK_INVALID;
+                terminator.conditional.when_false = MINIC_CORE_BLOCK_INVALID;
+                if (!minic_core_function_set_terminator(
+                        context->function, context->block_id, &terminator)) {
+                    return MINIC_CORE_LOWER_ERROR;
+                }
+            }
+            return MINIC_CORE_LOWER_OK;
         }
     }
     /* M54_VOID_CONDITIONAL_STATEMENT: expression statements are only an
