@@ -4688,10 +4688,9 @@ static bool emit_instruction(FILE *file,
                         return false;
                     }
                 } else if (fprintf(file,
-                                   "  li t0, %zu\n"
                                    frame->has_dynamic_stack_alloc
-                        ? "  add t0, s0, t0\n"
-                        : "  add t0, sp, t0\n",
+                                       ? "  li t0, %zu\n  add t0, s0, t0\n"
+                                       : "  li t0, %zu\n  add t0, sp, t0\n",
                                    frame->frame_size) < 0) {
                     return false;
                 }
