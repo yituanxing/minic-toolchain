@@ -15,4 +15,9 @@ test -s "$work/minic.s"
 "$riscv_cc" -O0 -static     "$work/minic.s"     "$root/tests/compiler/c0/dynamic_stack_alloca_helper.c"     -o "$work/minic.elf"
 "$qemu" "$work/minic.elf"
 
-printf '%s\n' 'PASS compiler/c0/dynamic_stack_alloca nested=2 fixed-frame=1 outgoing-stack-args=2 runtime=qemu'
+"$minic" -S "$root/tests/compiler/c0/dynamic_local_vla.c" -o "$work/vla.s"
+test -s "$work/vla.s"
+"$riscv_cc" -O0 -static "$work/vla.s" -o "$work/vla.elf"
+"$qemu" "$work/vla.elf"
+
+printf '%s\n' 'PASS compiler/c0/dynamic_stack_alloca nested=2 fixed-frame=1 outgoing-stack-args=2 vla=runtime-bound-once,int-elements runtime=qemu'
