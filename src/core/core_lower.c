@@ -528,6 +528,57 @@ MinicCoreLowerStatus lower_address(MinicCoreLowerContext *context,
                    : MINIC_CORE_LOWER_ERROR;
     }
     if (expression->kind == MINIC_EXPRESSION_LOCAL) {
+        const MinicLocal *local =
+            minic_c0_program_local(context->body->program, expression->value.local_id);
+
+        if (local == NULL) {
+            return MINIC_CORE_LOWER_ERROR;
+        }
+        if (local->is_array && local->element_count == 0U) {
+            const MinicLocal *address_local;
+            MinicCoreValueId slot_address;
+            MinicType expected_pointer;
+
+            if (local->dynamic_address_local_id == MINIC_LOCAL_INVALID ||
+                local->dynamic_address_local_id >= context->body->program->local_count ||
+                !minic_type_pointer_to(expression->type, &expected_pointer)) {
+                return MINIC_CORE_LOWER_UNSUPPORTED;
+            }
+            address_local = minic_c0_program_local(
+                context->body->program, local->dynamic_address_local_id);
+            if (address_local == NULL || address_local->is_array ||
+                address_local->element_count != 1U ||
+                !minic_type_equal(address_local->type, expected_pointer)) {
+                return MINIC_CORE_LOWER_UNSUPPORTED;
+            }
+            status = lower_local_object(
+                context, local->dynamic_address_local_id, &object_id);
+            if (status != MINIC_CORE_LOWER_OK) {
+                return status;
+            }
+            (void)memset(&instruction, 0, sizeof(instruction));
+            instruction.kind = MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS;
+            instruction.span = expression->span;
+            instruction.result = MINIC_CORE_VALUE_INVALID;
+            instruction.value.object_id = object_id;
+            if (!minic_type_pointer_to(address_local->type, &instruction.type) ||
+                !minic_core_function_append_value_instruction(
+                    context->function, context->block_id, &instruction, &slot_address)) {
+                return MINIC_CORE_LOWER_ERROR;
+            }
+            (void)memset(&instruction, 0, sizeof(instruction));
+            instruction.kind = MINIC_CORE_INSTRUCTION_LOAD;
+            instruction.span = expression->span;
+            instruction.type = address_local->type;
+            instruction.result = MINIC_CORE_VALUE_INVALID;
+            instruction.value.load.address = slot_address;
+            instruction.value.load.is_volatile = false;
+            return minic_core_function_append_value_instruction(
+                       context->function, context->block_id, &instruction, address_id)
+                       ? MINIC_CORE_LOWER_OK
+                       : MINIC_CORE_LOWER_ERROR;
+        }
+
         status = lower_local_object(context, expression->value.local_id, &object_id);
         if (status != MINIC_CORE_LOWER_OK) {
             return status;
