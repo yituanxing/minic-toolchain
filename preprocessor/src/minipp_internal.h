@@ -51,6 +51,7 @@ typedef struct MiniPpState {
     size_t counter_value;
     const char **include_paths;
     size_t include_path_count;
+    size_t current_include_path_index;
     FILE *diagnostics;
 } MiniPpState;
 
@@ -90,6 +91,11 @@ bool minipp_resolve_include(const MiniPpState *state,
                             const char *current_path,
                             const char *name,
                             bool angled,
-                            MiniPpString *resolved_path);
+                            MiniPpString *resolved_path,
+                            size_t *resolved_include_path_index);
+bool minipp_resolve_include_next(const MiniPpState *state,
+                                 const char *name,
+                                 MiniPpString *resolved_path,
+                                 size_t *resolved_include_path_index);
 
 #endif
