@@ -29,6 +29,7 @@ typedef struct MinicFunctionAttributeContext {
     size_t *section_name_length;
     bool *has_section;
     bool *is_weak;
+    bool *is_noreturn;
     MinicFunctionId *alias_target;
     const char *unsupported_message;
 } MinicFunctionAttributeContext;
@@ -192,6 +193,13 @@ static bool consume_function_attribute(MinicParser *parser,
         return true;
     }
 
+    if (descriptor->kind == MINIC_ATTRIBUTE_NORETURN) {
+        if (context->is_noreturn != NULL) {
+            *context->is_noreturn = true;
+        }
+        return true;
+    }
+
     if (descriptor->kind == MINIC_ATTRIBUTE_GNU_INLINE) {
         if (!context->allow_gnu_inline) {
             minic_parser_error(parser, "%s", context->unsupported_message);
@@ -237,6 +245,7 @@ static bool parse_function_attribute_lists(MinicParser *parser,
     context.section_name_length = NULL;
     context.has_section = NULL;
     context.is_weak = is_weak;
+    context.is_noreturn = NULL;
     context.alias_target = NULL;
     context.unsupported_message = unsupported_message;
     return minic_parser_parse_gnu_attribute_lists(parser, consume_function_attribute, &context);
@@ -253,6 +262,7 @@ static bool apply_function_attribute_list(MinicParser *parser,
                                           size_t *section_name_length,
                                           bool *has_section,
                                           bool *is_weak,
+                                          bool *is_noreturn,
                                           MinicFunctionId *alias_target,
                                           const char *unsupported_message) {
     MinicFunctionAttributeContext context;
@@ -270,6 +280,7 @@ static bool apply_function_attribute_list(MinicParser *parser,
     context.section_name_length = section_name_length;
     context.has_section = has_section;
     context.is_weak = is_weak;
+    context.is_noreturn = is_noreturn;
     context.alias_target = alias_target;
     context.unsupported_message = unsupported_message;
     for (index = 0U; index < attributes->count; ++index) {
@@ -410,6 +421,7 @@ static bool parse_persistent_function_attributes(MinicParser *parser,
                                                  size_t *section_name_length,
                                                  bool *has_section,
                                                  bool *is_weak,
+                                                 bool *is_noreturn,
                                                  MinicFunctionId *alias_target) {
     MinicFunctionAttributeContext context;
 
@@ -422,6 +434,7 @@ static bool parse_persistent_function_attributes(MinicParser *parser,
     context.section_name_length = section_name_length;
     context.has_section = has_section;
     context.is_weak = is_weak;
+    context.is_noreturn = is_noreturn;
     context.alias_target = alias_target;
     context.unsupported_message =
         "unsupported GNU function attribute; ABI/layout-affecting and unknown attributes must be "
