@@ -3074,6 +3074,13 @@ MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
     if (expression == NULL) {
         return MINIC_CORE_LOWER_ERROR;
     }
+    /* Runtime allocation is a pointer-producing rvalue. Its target-neutral
+       address value is already owned by lower_address(); admit it here so
+       casts, assignments, call arguments, and other scalar consumers can
+       compose with __builtin_alloca instead of failing before Core emission. */
+    if (expression->kind == MINIC_EXPRESSION_BUILTIN_ALLOCA) {
+        return lower_address(context, expression_id, value_id);
+    }
     /* M104_FUNCTION_DESIGNATOR_ADDRESS: the normalized frontend represents a
        function designator as its function-pointer semantic value already. C's
        `&function` therefore has the same pointer type and symbol identity; do
