@@ -11057,6 +11057,90 @@ static bool core_unreachable_statement_has_external_reentry(
     return unsafe;
 }
 
+/* A prior goto can pre-bind a label block inside an otherwise unreachable loop;
+   pruning that loop would leave the target block unterminated. */
+static bool core_unreachable_statement_has_bound_reentry(
+    const MinicCoreLowerContext *context,
+    const MinicStatement *root_statement,
+    MinicStatementId extra_statement_id) {
+    const MinicC0Program *program;
+    bool *visited_blocks;
+    bool *statement_membership;
+    bool root_found;
+    bool has_reentry;
+    size_t index;
+
+    if (context == NULL || context->body == NULL || context->body->program == NULL ||
+        context->statement_blocks == NULL || root_statement == NULL) {
+        return false;
+    }
+    program = context->body->program;
+    if (program->statement_count == 0U ||
+        context->statement_block_count < program->statement_count ||
+        program->block_count > SIZE_MAX / sizeof(*visited_blocks) ||
+        program->statement_count > SIZE_MAX / sizeof(*statement_membership)) {
+        return false;
+    }
+    visited_blocks = program->block_count == 0U
+                         ? NULL
+                         : (bool *)calloc(program->block_count, sizeof(*visited_blocks));
+    statement_membership =
+        (bool *)calloc(program->statement_count, sizeof(*statement_membership));
+    if ((program->block_count != 0U && visited_blocks == NULL) ||
+        statement_membership == NULL) {
+        free(visited_blocks);
+        free(statement_membership);
+        return false;
+    }
+
+    root_found = false;
+    for (index = 0U; index < program->statement_count; ++index) {
+        const MinicStatement *candidate = minic_c0_program_statement(program, index);
+        if (candidate == NULL) {
+            free(visited_blocks);
+            free(statement_membership);
+            return false;
+        }
+        if (candidate == root_statement) {
+            statement_membership[index] = true;
+            root_found = true;
+        }
+    }
+    if (!root_found ||
+        !core_mark_block_statement_membership(context,
+                                              root_statement->then_block,
+                                              visited_blocks,
+                                              program->block_count,
+                                              statement_membership,
+                                              program->statement_count) ||
+        !core_mark_block_statement_membership(context,
+                                              root_statement->else_block,
+                                              visited_blocks,
+                                              program->block_count,
+                                              statement_membership,
+                                              program->statement_count)) {
+        free(visited_blocks);
+        free(statement_membership);
+        return false;
+    }
+    if (extra_statement_id != MINIC_STATEMENT_INVALID &&
+        extra_statement_id < program->statement_count) {
+        statement_membership[extra_statement_id] = true;
+    }
+
+    has_reentry = false;
+    for (index = 0U; index < program->statement_count; ++index) {
+        if (index != extra_statement_id && statement_membership[index] &&
+            context->statement_blocks[index] != MINIC_CORE_BLOCK_INVALID) {
+            has_reentry = true;
+            break;
+        }
+    }
+    free(visited_blocks);
+    free(statement_membership);
+    return has_reentry;
+}
+
 /* M144_UNREFERENCED_LOOP_LABEL_METADATA_OWNER: parser loop normalization can
    leave an otherwise-empty label at the condition tail even when no source
    continue/goto refers to it.  internal_while_label_pair() gives this label a
@@ -11176,6 +11260,10 @@ lower_block(MinicCoreLowerContext *context, const MinicBlock *source_block, bool
                     if (core_unreachable_statement_has_external_reentry(
                             context,
                             unreachable_loop,
+                            source_block->statements[statement_index]) ||
+                        core_unreachable_statement_has_bound_reentry(
+                            context,
+                            unreachable_loop,
                             source_block->statements[statement_index])) {
                         MinicCoreBlockId detached_preheader;
 
@@ -11206,6 +11294,26 @@ lower_block(MinicCoreLowerContext *context, const MinicBlock *source_block, bool
                     statement_index += 1U;
                     continue;
                 }
+            }
+            if (statement->kind == MINIC_STATEMENT_WHILE &&
+                (core_unreachable_statement_has_external_reentry(
+                     context, statement, MINIC_STATEMENT_INVALID) ||
+                 core_unreachable_statement_has_bound_reentry(
+                     context, statement, MINIC_STATEMENT_INVALID))) {
+                MinicCoreBlockId detached_preheader;
+
+                if (!minic_core_function_add_block(
+                        context->function, &detached_preheader)) {
+                    return MINIC_CORE_LOWER_ERROR;
+                }
+                context->block_id = detached_preheader;
+                status = lower_while(
+                    context, statement, MINIC_STATEMENT_INVALID, &statement_terminated);
+                if (status != MINIC_CORE_LOWER_OK) {
+                    return status;
+                }
+                block_terminated = statement_terminated;
+                continue;
             }
             if (statement->kind != MINIC_STATEMENT_LABEL &&
                 statement->kind != MINIC_STATEMENT_CASE &&

@@ -129,7 +129,9 @@ expect_compile_failure() {
 
 compile_source empty_main empty_main
 compile_source block_scope_gcc_diagnostic_pragma block_scope_gcc_diagnostic_pragma
+compile_source goto_loop_reentry goto_loop_reentry
 expect_instructions empty_main "li a0, 0" "j .Lmain_return"
+expect_instructions goto_loop_reentry "j .Lmain_return"
 
 compile_source return_0 return_0
 expect_instructions return_0 "li a0, 0" "j .Lmain_return"
