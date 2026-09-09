@@ -222,6 +222,15 @@ static int preprocess_c_to_file(const char *input,
     arguments[count++] = "-undef";
     arguments[count++] = "-nostdinc";
     append_rv64_linux_musl_predefines(arguments, &count, hosted);
+    /*
+     * User include directories must shadow the driver's default sysroot
+     * headers, matching GCC's -I-before-system search semantics.  MiniPP
+     * currently stores -I and -isystem in one ordered search list, so forward
+     * explicit user paths before appending the implicit sysroot path.
+     */
+    for (index = 0U; index < cpp_forward_count; ++index) {
+        arguments[count++] = (char *)cpp_forward[index];
+    }
     if (!no_stdinc && sysroot != NULL && sysroot[0] != '\0') {
         include_dir = join_path(sysroot, "include");
         if (include_dir == NULL) {
@@ -230,9 +239,6 @@ static int preprocess_c_to_file(const char *input,
         }
         arguments[count++] = "-isystem";
         arguments[count++] = include_dir;
-    }
-    for (index = 0U; index < cpp_forward_count; ++index) {
-        arguments[count++] = (char *)cpp_forward[index];
     }
     arguments[count++] = "-o";
     arguments[count++] = (char *)output;
