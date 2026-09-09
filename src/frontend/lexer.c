@@ -132,7 +132,9 @@ static MinicTokenKind minic_classify_identifier(const char *text, size_t length)
     if (length == 5U && memcmp(text, "float", 5U) == 0) {
         return MINIC_TOKEN_KW_FLOAT;
     }
-    if (length == 6U && memcmp(text, "inline", 6U) == 0) {
+    if ((length == 6U && memcmp(text, "inline", 6U) == 0) ||
+        (length == 8U && memcmp(text, "__inline", 8U) == 0) ||
+        (length == 10U && memcmp(text, "__inline__", 10U) == 0)) {
         return MINIC_TOKEN_KW_INLINE;
     }
     if (length == 3U && memcmp(text, "int", 3U) == 0) {
