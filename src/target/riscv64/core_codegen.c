@@ -2629,23 +2629,27 @@ static bool emit_parameter(FILE *file,
 }
 
 static bool
-emit_sp_load_chunk(FILE *file, const char *destination_register, size_t offset, size_t size) {
+emit_frame_load_chunk(FILE *file,
+                      const MinicRiscv64CoreFrame *frame,
+                      const char *destination_register,
+                      size_t offset,
+                      size_t size) {
     const char *opcode;
     size_t byte_index;
 
-    if (file == NULL || destination_register == NULL || size == 0U || size > 8U) {
+    if (file == NULL || frame == NULL || destination_register == NULL ||
+        size == 0U || size > 8U) {
         return false;
     }
     if (size == 8U) {
-        return minic_riscv64_emit_sp_load64(file, destination_register, offset);
+        return emit_frame_load64(file, frame, destination_register, offset);
     }
     opcode = size == 4U ? "lwu" : size == 2U ? "lhu" : size == 1U ? "lbu" : NULL;
     if (opcode != NULL) {
-        if (offset <= 2047U) {
-            return fprintf(file, "  %s %s, %zu(sp)\n", opcode, destination_register, offset) >= 0;
+        if (!emit_frame_address(file, frame, "t3", offset)) {
+            return false;
         }
-        return emit_sp_address(file, "t3", offset) &&
-               fprintf(file, "  %s %s, 0(t3)\n", opcode, destination_register) >= 0;
+        return fprintf(file, "  %s %s, 0(t3)\n", opcode, destination_register) >= 0;
     }
     if (fprintf(file, "  li %s, 0\n", destination_register) < 0) {
         return false;
@@ -2657,12 +2661,8 @@ emit_sp_load_chunk(FILE *file, const char *destination_register, size_t offset, 
             return false;
         }
         byte_offset = offset + byte_index;
-        if (byte_offset <= 2047U) {
-            if (fprintf(file, "  lbu t1, %zu(sp)\n", byte_offset) < 0) {
-                return false;
-            }
-        } else if (!emit_sp_address(file, "t3", byte_offset) ||
-                   fprintf(file, "  lbu t1, 0(t3)\n") < 0) {
+        if (!emit_frame_address(file, frame, "t3", byte_offset) ||
+            fprintf(file, "  lbu t1, 0(t3)\n") < 0) {
             return false;
         }
         if (byte_index != 0U && fprintf(file, "  slli t1, t1, %zu\n", byte_index * 8U) < 0) {
@@ -2676,23 +2676,27 @@ emit_sp_load_chunk(FILE *file, const char *destination_register, size_t offset, 
 }
 
 static bool
-emit_sp_store_chunk(FILE *file, const char *source_register, size_t offset, size_t size) {
+emit_frame_store_chunk(FILE *file,
+                       const MinicRiscv64CoreFrame *frame,
+                       const char *source_register,
+                       size_t offset,
+                       size_t size) {
     const char *opcode;
     size_t byte_index;
 
-    if (file == NULL || source_register == NULL || size == 0U || size > 8U) {
+    if (file == NULL || frame == NULL || source_register == NULL ||
+        size == 0U || size > 8U) {
         return false;
     }
     if (size == 8U) {
-        return minic_riscv64_emit_sp_store64(file, source_register, offset);
+        return emit_frame_store64(file, frame, source_register, offset);
     }
     opcode = size == 4U ? "sw" : size == 2U ? "sh" : size == 1U ? "sb" : NULL;
     if (opcode != NULL) {
-        if (offset <= 2047U) {
-            return fprintf(file, "  %s %s, %zu(sp)\n", opcode, source_register, offset) >= 0;
+        if (!emit_frame_address(file, frame, "t3", offset)) {
+            return false;
         }
-        return emit_sp_address(file, "t3", offset) &&
-               fprintf(file, "  %s %s, 0(t3)\n", opcode, source_register) >= 0;
+        return fprintf(file, "  %s %s, 0(t3)\n", opcode, source_register) >= 0;
     }
     if (fprintf(file, "  mv t1, %s\n", source_register) < 0) {
         return false;
@@ -2704,12 +2708,8 @@ emit_sp_store_chunk(FILE *file, const char *source_register, size_t offset, size
             return false;
         }
         byte_offset = offset + byte_index;
-        if (byte_offset <= 2047U) {
-            if (fprintf(file, "  sb t1, %zu(sp)\n", byte_offset) < 0) {
-                return false;
-            }
-        } else if (!emit_sp_address(file, "t3", byte_offset) ||
-                   fprintf(file, "  sb t1, 0(t3)\n") < 0) {
+        if (!emit_frame_address(file, frame, "t3", byte_offset) ||
+            fprintf(file, "  sb t1, 0(t3)\n") < 0) {
             return false;
         }
         if (byte_index + 1U < size && fprintf(file, "  srli t1, t1, 8\n") < 0) {
@@ -2774,7 +2774,7 @@ static bool emit_parameter_object(FILE *file,
         } else {
             return false;
         }
-        if (!emit_sp_address(file, "t0", object_offset)) {
+        if (!emit_frame_address(file, frame, "t0", object_offset)) {
             return false;
         }
         copied = 0U;
@@ -2843,7 +2843,7 @@ static bool emit_parameter_object(FILE *file,
         if (chunk_size > 8U) {
             chunk_size = 8U;
         }
-        if (!emit_sp_store_chunk(file, source_register, object_offset + chunk_offset, chunk_size)) {
+        if (!emit_frame_store_chunk(file, frame, source_register, object_offset + chunk_offset, chunk_size)) {
             return false;
         }
     }
@@ -2876,7 +2876,7 @@ static bool emit_call(FILE *file,
         if (instruction->value.call.result_object >= function->object_count ||
             !core_object_offset(
                 program, function, frame, instruction->value.call.result_object, &result_offset) ||
-            !emit_sp_address(file, "a0", result_offset)) {
+            !emit_frame_address(file, frame, "a0", result_offset)) {
             return false;
         }
     }
@@ -3017,8 +3017,9 @@ static bool emit_call(FILE *file,
             if (location.value.kind == MINIC_RISCV64_ABI_VALUE_INDIRECT) {
                 if (location.integer_register_count == 1U && location.stack_slot_count == 0U) {
                     if (location.integer_register_begin >= 8U ||
-                        !emit_sp_address(file,
-                                         minic_core_rv64_argument_registers[
+                        !emit_frame_address(file,
+                                            frame,
+                                            minic_core_rv64_argument_registers[
                                              location.integer_register_begin],
                                          object_offset)) {
                         return false;
@@ -3027,7 +3028,7 @@ static bool emit_call(FILE *file,
                            location.stack_slot_count == 1U) {
                     size_t outgoing_offset;
                     if (location.stack_slot_begin > SIZE_MAX / 8U ||
-                        !emit_sp_address(file, "t0", object_offset)) {
+                        !emit_frame_address(file, frame, "t0", object_offset)) {
                         return false;
                     }
                     outgoing_offset = location.stack_slot_begin * 8U;
@@ -3057,7 +3058,7 @@ static bool emit_call(FILE *file,
                 if (chunk_index < location.integer_register_count) {
                     size_t register_index = location.integer_register_begin + chunk_index;
                     if (register_index >= 8U ||
-                        !emit_sp_load_chunk(file,
+                        !emit_frame_load_chunk(file, frame,
                                             minic_core_rv64_argument_registers[register_index],
                                             object_offset + chunk_offset,
                                             chunk_size)) {
@@ -3266,8 +3267,9 @@ static bool emit_indirect_call(FILE *file,
             if (location.value.kind == MINIC_RISCV64_ABI_VALUE_INDIRECT) {
                 if (location.integer_register_count == 1U && location.stack_slot_count == 0U) {
                     if (location.integer_register_begin >= 8U ||
-                        !emit_sp_address(file,
-                                         minic_core_rv64_argument_registers[
+                        !emit_frame_address(file,
+                                            frame,
+                                            minic_core_rv64_argument_registers[
                                              location.integer_register_begin],
                                          object_offset)) {
                         return false;
@@ -3277,7 +3279,7 @@ static bool emit_indirect_call(FILE *file,
                     size_t outgoing_offset;
 
                     if (location.stack_slot_begin > SIZE_MAX / 8U ||
-                        !emit_sp_address(file, "t0", object_offset)) {
+                        !emit_frame_address(file, frame, "t0", object_offset)) {
                         return false;
                     }
                     outgoing_offset = location.stack_slot_begin * 8U;
@@ -3307,7 +3309,7 @@ static bool emit_indirect_call(FILE *file,
                 if (chunk_index < location.integer_register_count) {
                     size_t register_index = location.integer_register_begin + chunk_index;
                     if (register_index >= 8U ||
-                        !emit_sp_load_chunk(file,
+                        !emit_frame_load_chunk(file, frame,
                                             minic_core_rv64_argument_registers[register_index],
                                             object_offset + chunk_offset,
                                             chunk_size)) {
@@ -4611,15 +4613,28 @@ static bool emit_instruction(FILE *file,
         }
         if (instruction->value.call_frame_address.kind == MINIC_CORE_CALL_FRAME_ADDRESS_RETURN) {
             if (!frame->saves_return_address ||
-                !minic_riscv64_emit_sp_load64(file, "t0", frame->return_address_offset)) {
+                !emit_frame_load64(file, frame, "t0", frame->return_address_offset)) {
                 return false;
             }
         } else if (instruction->value.call_frame_address.kind ==
                    MINIC_CORE_CALL_FRAME_ADDRESS_FRAME) {
-            if (fprintf(file, "  mv t0, sp\n") < 0) {
+            if (fprintf(file,
+                        frame->has_dynamic_stack_alloc ? "  mv t0, s0\n" : "  mv t0, sp\n") < 0) {
                 return false;
             }
         } else {
+            return false;
+        }
+        return store_core_value(file, frame, instruction->result, "t0");
+    case MINIC_CORE_INSTRUCTION_DYNAMIC_STACK_ALLOC:
+        if (!frame->has_dynamic_stack_alloc ||
+            !load_core_value(file, frame, instruction->value.operand, "t0") ||
+            fprintf(file,
+                    "  addi t0, t0, 15\n"
+                    "  li t1, -16\n"
+                    "  and t0, t0, t1\n"
+                    "  sub sp, sp, t0\n"
+                    "  mv t0, sp\n") < 0) {
             return false;
         }
         return store_core_value(file, frame, instruction->result, "t0");
@@ -4628,7 +4643,7 @@ static bool emit_instruction(FILE *file,
             return false;
         }
         if (frame->varargs_size != 0U) {
-            if (!emit_sp_address(file, "t0", frame->varargs_offset)) {
+            if (!emit_frame_address(file, frame, "t0", frame->varargs_offset)) {
                 return false;
             }
         } else {
@@ -4639,17 +4654,23 @@ static bool emit_instruction(FILE *file,
             }
             stack_byte_offset = frame->variadic_fixed_stack_slots * 8U;
             if (frame->has_dynamic_stack_alignment) {
-                if (!minic_riscv64_emit_sp_load64(file, "t0", frame->entry_sp_offset)) {
+                if (!emit_frame_load64(file, frame, "t0", frame->entry_sp_offset)) {
                     return false;
                 }
             } else {
                 if (frame->frame_size <= 2047U) {
-                    if (fprintf(file, "  addi t0, sp, %zu\n", frame->frame_size) < 0) {
+                    if (fprintf(file,
+                                frame->has_dynamic_stack_alloc
+                                    ? "  addi t0, s0, %zu\n"
+                                    : "  addi t0, sp, %zu\n",
+                                frame->frame_size) < 0) {
                         return false;
                     }
                 } else if (fprintf(file,
                                    "  li t0, %zu\n"
-                                   "  add t0, sp, t0\n",
+                                   frame->has_dynamic_stack_alloc
+                        ? "  add t0, s0, t0\n"
+                        : "  add t0, sp, t0\n",
                                    frame->frame_size) < 0) {
                     return false;
                 }
@@ -4674,7 +4695,7 @@ static bool emit_instruction(FILE *file,
         return emit_parameter_object(file, program, function, frame, instruction);
     case MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS:
         if (!core_object_offset(program, function, frame, instruction->value.object_id, &object_offset) ||
-            !emit_sp_address(file, "t0", object_offset)) {
+            !emit_frame_address(file, frame, "t0", object_offset)) {
             return false;
         }
         return store_core_value(file, frame, instruction->result, "t0");
@@ -4750,7 +4771,7 @@ static bool emit_instruction(FILE *file,
             opcode = record_size == 8U ? "ld" : record_size == 4U ? "lwu" :
                      record_size == 2U ? "lhu" : "lbu";
             if (fprintf(file, "  %s t1, 0(t0)\n", opcode) < 0 ||
-                !emit_sp_store_chunk(file, "t1", destination_offset, record_size)) {
+                !emit_frame_store_chunk(file, frame, "t1", destination_offset, record_size)) {
                 return false;
             }
             return true;
@@ -4759,7 +4780,7 @@ static bool emit_instruction(FILE *file,
         /* M162_CORE_RV64_RECORD_LOAD: materialize arbitrary non-empty records
            into the destination CoreObject without assuming source alignment.
            This mirrors RECORD_COPY's byte-safe O0 fallback. */
-        if (!emit_sp_address(file, "t1", destination_offset)) {
+        if (!emit_frame_address(file, frame, "t1", destination_offset)) {
             return false;
         }
         {
@@ -4912,7 +4933,7 @@ static bool emit_terminator(FILE *file,
                                   function->return_type) ||
                 !minic_riscv64_abi_classify_value(program, function->return_type, &return_value) ||
                 !core_object_offset(program, function, frame, terminator->return_object, &object_offset) ||
-                !emit_sp_address(file, "t0", object_offset)) {
+                !emit_frame_address(file, frame, "t0", object_offset)) {
                 return false;
             }
             if (return_value.kind == MINIC_RISCV64_ABI_VALUE_AGGREGATE) {
