@@ -234,7 +234,8 @@ static bool parse_indirect_arguments(MinicParser *parser,
                 !minic_parser_parse_expression(parser, &argument_id, 0U)) {
                 return false;
             }
-            if (!minic_parser_apply_array_decay(parser, argument_id, &argument_id)) {
+            if (!minic_parser_apply_array_decay(parser, argument_id, &argument_id) ||
+                !minic_parser_apply_default_argument_promotion(parser, &argument_id)) {
                 if (parser->diagnostic == NULL || parser->diagnostic->message[0] == '\0') {
                     minic_parser_error(parser, "unsupported variadic call argument type");
                 }
