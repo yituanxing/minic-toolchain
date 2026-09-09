@@ -137,6 +137,7 @@ for test_script in \
     run-gnu-extern-object-redeclaration.sh \
     run-gnu-section-symbol-attribute.sh \
     run-gnu-const-function-attribute.sh \
+    run-driver-gnu-predefines.sh \
     run-gnu-inline-keyword-spellings.sh \
     run-gnu-octal-character-case-range.sh
 do
