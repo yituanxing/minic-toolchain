@@ -46,6 +46,8 @@ void minic_c0_local_initialize(MinicLocal *local) {
         return;
     }
     (void)memset(local, 0, sizeof(*local));
+    local->dynamic_count_local_id = MINIC_LOCAL_INVALID;
+    local->dynamic_address_local_id = MINIC_LOCAL_INVALID;
 }
 
 void minic_c0_program_initialize(MinicC0Program *program) {
