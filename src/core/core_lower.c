@@ -11177,7 +11177,31 @@ lower_block(MinicCoreLowerContext *context, const MinicBlock *source_block, bool
                             context,
                             unreachable_loop,
                             source_block->statements[statement_index])) {
-                        return MINIC_CORE_LOWER_UNSUPPORTED;
+                        MinicCoreBlockId detached_preheader;
+
+                        /* A source goto may legally target a user label inside
+                           an otherwise unreachable loop body. Build the loop
+                           CFG from an orphan preheader so its condition/backedge
+                           structure exists without replacing the already-
+                           terminated outer path. The externally referenced user
+                           label has already been pre-bound by ordinary goto
+                           lowering and becomes the real entry edge. */
+                        if (!minic_core_function_add_block(
+                                context->function, &detached_preheader)) {
+                            return MINIC_CORE_LOWER_ERROR;
+                        }
+                        context->block_id = detached_preheader;
+                        status = lower_while(
+                            context,
+                            unreachable_loop,
+                            source_block->statements[statement_index],
+                            &statement_terminated);
+                        if (status != MINIC_CORE_LOWER_OK) {
+                            return status;
+                        }
+                        block_terminated = statement_terminated;
+                        statement_index += 1U;
+                        continue;
                     }
                     statement_index += 1U;
                     continue;
