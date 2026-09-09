@@ -1422,10 +1422,31 @@ bool minic_c0_program_verify_target_detailed(const MinicC0Program *program,
     for (index = 0U; index < program->local_count; ++index) {
         const MinicLocal *local;
         size_t explicit_alignment;
+        bool dynamic_vla;
 
         local = &program->locals[index];
         explicit_alignment = local->explicit_alignment;
-        if (local->element_count == 0U ||
+        dynamic_vla = false;
+        if (local->is_array && local->element_count == 0U &&
+            local->dynamic_count_local_id < program->local_count &&
+            local->dynamic_address_local_id < program->local_count &&
+            local->dynamic_count_local_id != index &&
+            local->dynamic_address_local_id != index &&
+            local->dynamic_count_local_id != local->dynamic_address_local_id) {
+            const MinicLocal *count_local =
+                &program->locals[local->dynamic_count_local_id];
+            const MinicLocal *address_local =
+                &program->locals[local->dynamic_address_local_id];
+            MinicType pointee;
+
+            dynamic_vla =
+                !count_local->is_array && count_local->element_count == 1U &&
+                minic_type_equal(count_local->type, minic_type_unsigned_long()) &&
+                !address_local->is_array && address_local->element_count == 1U &&
+                minic_type_pointee(address_local->type, &pointee) &&
+                minic_type_equal(pointee, local->type);
+        }
+        if ((local->element_count == 0U && !dynamic_vla) ||
             !type_is_valid(program, target, local->type) ||
             minic_type_is_function(local->type) ||
             (explicit_alignment != 0U &&
