@@ -3666,6 +3666,20 @@ static bool parse_static_record_constant(MinicParser *parser,
             field_index = designator_index;
             has_designator = true;
         }
+        if (!has_designator) {
+            while (field_index < field_limit &&
+                   record->fields[field_index].is_bit_field &&
+                   record->fields[field_index].name_length == 0U) {
+                if (!append_static_field_zeros(
+                        parser, object_id, &record->fields[field_index])) {
+                    minic_parser_error(
+                        parser, "cannot zero-fill unnamed static record bit-field");
+                    return false;
+                }
+                field_index += 1U;
+                materialized_field_limit += 1U;
+            }
+        }
         if (field_index >= field_limit) {
             minic_parser_error(parser, "too many nested static record initializers");
             return false;
