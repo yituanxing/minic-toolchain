@@ -53,8 +53,68 @@ grep -E '^[[:space:]]+fcvt\.d\.w[[:space:]]+[^,]+,[[:space:]]*[^,]+$' "$work/cas
 printf '%s\n' "PASS compiler/c0/cast_integer_to_double_lowering"
 
 compile_success cast_double_to_integer
-grep -E '^[[:space:]]+fcvt\.w\.d[[:space:]]+[^,]+,[[:space:]]*[^,]+,[[:space:]]*rtz$' "$work/cast_double_to_integer.s" >/dev/null
+grep -E '^[[:space:]]+fcvt\.w\.d[[:space:]]+[^,]+,[[:space:]]*[^,]+,[[:space:]]*rtz
+"$host_cc" -E -P -x c \
+    "$root/tests/programs/c0/null_pointer_constant.c" \
+    -o "$work/null_pointer_constant.i"
+"$minic" -S "$work/null_pointer_constant.i" -o "$work/null_pointer_constant.s"
+grep -E '^[[:space:]]+li[[:space:]]+[^,]+,[[:space:]]*0$' "$work/null_pointer_constant.s" >/dev/null
+grep -F ".Lmake_null_core_return:" "$work/null_pointer_constant.s" >/dev/null
+printf '%s\n' "PASS compiler/c0/null_pointer_constant"
+
+MINIC="$minic" \
+HOST_CC="$host_cc" \
+BUILD_DIR="$build_dir" \
+sh "$root/tests/compiler/c0/run-pointer-integer-casts.sh"
+
+compile_success cast_integer_to_float
+grep -F '  fcvt.d.w ' "$work/cast_integer_to_float.s" >/dev/null
+grep -F '  fcvt.s.d ' "$work/cast_integer_to_float.s" >/dev/null
+grep -F '  li t0, 0x7f800000' "$work/cast_integer_to_float.s" >/dev/null
+grep -F '  li t0, 0x3e800000' "$work/cast_integer_to_float.s" >/dev/null
+printf '%s\n' 'PASS compiler/c0/cast_integer_to_float lowering=int->double->float literals=binary32 overflow=inf'
+expect_failure \
+    invalid_cast_assignment_target \
+    "assignment expression requires a modifiable object lvalue"
+
+MINIC="$minic" \
+HOST_CC="$host_cc" \
+BUILD_DIR="$build_dir" \
+sh "$root/tests/compiler/c0/run-pointer-qualifications.sh"
+ "$work/cast_double_to_integer.s" >/dev/null
 printf '%s\n' "PASS compiler/c0/cast_double_to_integer_lowering"
+
+compile_success implicit_arithmetic_assignment
+test "$(grep -c -E '^[[:space:]]+fcvt\.wu\.d[[:space:]]+[^,]+,[[:space:]]*[^,]+,[[:space:]]*rtz
+"$host_cc" -E -P -x c \
+    "$root/tests/programs/c0/null_pointer_constant.c" \
+    -o "$work/null_pointer_constant.i"
+"$minic" -S "$work/null_pointer_constant.i" -o "$work/null_pointer_constant.s"
+grep -E '^[[:space:]]+li[[:space:]]+[^,]+,[[:space:]]*0$' "$work/null_pointer_constant.s" >/dev/null
+grep -F ".Lmake_null_core_return:" "$work/null_pointer_constant.s" >/dev/null
+printf '%s\n' "PASS compiler/c0/null_pointer_constant"
+
+MINIC="$minic" \
+HOST_CC="$host_cc" \
+BUILD_DIR="$build_dir" \
+sh "$root/tests/compiler/c0/run-pointer-integer-casts.sh"
+
+compile_success cast_integer_to_float
+grep -F '  fcvt.d.w ' "$work/cast_integer_to_float.s" >/dev/null
+grep -F '  fcvt.s.d ' "$work/cast_integer_to_float.s" >/dev/null
+grep -F '  li t0, 0x7f800000' "$work/cast_integer_to_float.s" >/dev/null
+grep -F '  li t0, 0x3e800000' "$work/cast_integer_to_float.s" >/dev/null
+printf '%s\n' 'PASS compiler/c0/cast_integer_to_float lowering=int->double->float literals=binary32 overflow=inf'
+expect_failure \
+    invalid_cast_assignment_target \
+    "assignment expression requires a modifiable object lvalue"
+
+MINIC="$minic" \
+HOST_CC="$host_cc" \
+BUILD_DIR="$build_dir" \
+sh "$root/tests/compiler/c0/run-pointer-qualifications.sh"
+ "$work/implicit_arithmetic_assignment.s")" -ge 2
+printf '%s\n' "PASS compiler/c0/implicit_arithmetic_assignment initializer=double-to-unsigned return=double-to-unsigned"
 
 "$host_cc" -E -P -x c \
     "$root/tests/programs/c0/null_pointer_constant.c" \
