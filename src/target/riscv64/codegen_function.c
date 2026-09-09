@@ -267,8 +267,31 @@ static bool minic_riscv64_emit_record_bit_field_run(FILE *file,
         return false;
     }
     run_first = *field_index;
+    if (record->fields[run_first].bit_width == 0U) {
+        const MinicGlobalRelocation *relocation;
+        size_t slot_index;
+
+        if (*initializer_index >= object->initializer_count) {
+            return false;
+        }
+        slot_index = *initializer_index;
+        if (object->initializer_values[slot_index] != 0U) {
+            return false;
+        }
+        relocation = *relocation_index < object->relocation_count
+                         ? &object->relocations[*relocation_index]
+                         : NULL;
+        if (relocation != NULL &&
+            relocation->location_kind == MINIC_GLOBAL_RELOCATION_LOCATION_AGGREGATE_SCALAR &&
+            relocation->location_index <= slot_index) {
+            return false;
+        }
+        *initializer_index += 1U;
+        return true;
+    }
     run_end = run_first;
-    while (run_end < field_limit && record->fields[run_end].is_bit_field) {
+    while (run_end < field_limit && record->fields[run_end].is_bit_field &&
+           record->fields[run_end].bit_width != 0U) {
         run_end += 1U;
     }
     if (!minic_data_layout_record_field_layout(minic_default_data_layout(),
