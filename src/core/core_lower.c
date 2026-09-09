@@ -368,7 +368,6 @@ MinicCoreLowerStatus lower_address(MinicCoreLowerContext *context,
     }
     if (expression->kind == MINIC_EXPRESSION_BUILTIN_ALLOCA) {
         MinicCoreValueId size_value;
-        MinicCoreLowerStatus status;
         MinicType void_pointer;
 
         status = lower_expression(context, expression->value.unary.operand, &size_value);
@@ -389,7 +388,7 @@ MinicCoreLowerStatus lower_address(MinicCoreLowerContext *context,
         instruction.result = MINIC_CORE_VALUE_INVALID;
         instruction.value.operand = size_value;
         return minic_core_function_append_value_instruction(
-                   context->function, context->block_id, &instruction, value_id)
+                   context->function, context->block_id, &instruction, address_id)
                    ? MINIC_CORE_LOWER_OK
                    : MINIC_CORE_LOWER_ERROR;
     }
