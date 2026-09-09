@@ -57,6 +57,7 @@ typedef struct MinicRiscv64CoreFrame {
        state and must survive arbitrary calls before a Core RETURN. */
     size_t hidden_result_pointer_offset;
     size_t entry_sp_offset;
+    size_t saved_frame_base_offset;
     size_t stack_alignment;
     size_t structured_asm_callee_saved_offset;
     size_t varargs_offset;
@@ -66,6 +67,7 @@ typedef struct MinicRiscv64CoreFrame {
     bool saves_return_address;
     bool has_hidden_result_pointer;
     bool has_dynamic_stack_alignment;
+    bool has_dynamic_stack_alloc;
     bool preserves_structured_asm_callee_saved;
     bool has_variadic_argument_address;
 } MinicRiscv64CoreFrame;
@@ -152,6 +154,23 @@ static bool core_function_uses_structured_inline_asm(
          ++instruction_index) {
         if (function->instructions[instruction_index].kind ==
             MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool core_function_uses_dynamic_stack_alloc(
+    const MinicCoreFunction *function) {
+    size_t instruction_index;
+
+    if (function == NULL) {
+        return false;
+    }
+    for (instruction_index = 0U; instruction_index < function->instruction_count;
+         ++instruction_index) {
+        if (function->instructions[instruction_index].kind ==
+            MINIC_CORE_INSTRUCTION_DYNAMIC_STACK_ALLOC) {
             return true;
         }
     }
@@ -337,6 +356,8 @@ static bool core_frame_initialize(const MinicC0Program *program,
     frame->object_offsets = NULL;
     frame->value_offsets = NULL;
     frame->value_slot_count = 0U;
+    frame->has_dynamic_stack_alloc = core_function_uses_dynamic_stack_alloc(function);
+    frame->saved_frame_base_offset = 0U;
     if (!core_call_outgoing_stack_size(program, function, &outgoing_argument_size)) {
         return false;
     }
@@ -460,8 +481,24 @@ static bool core_frame_initialize(const MinicC0Program *program,
         }
     }
 
+    if (frame->has_dynamic_stack_alloc) {
+        if (!align_up(storage_size, 8U, &frame->saved_frame_base_offset) ||
+            frame->saved_frame_base_offset > SIZE_MAX - 8U) {
+            return false;
+        }
+        storage_size = frame->saved_frame_base_offset + 8U;
+    }
+
     frame->preserves_structured_asm_callee_saved =
         core_function_uses_structured_inline_asm(function);
+    /*
+     * Structured inline asm may explicitly bind/clobber s0. Dynamic-stack
+     * functions reserve s0 as the stable fixed-frame base, so keep the mixed
+     * case fail-closed until the asm allocator can reserve a frame register.
+     */
+    if (frame->has_dynamic_stack_alloc && frame->preserves_structured_asm_callee_saved) {
+        return false;
+    }
     frame->structured_asm_callee_saved_offset = 0U;
     if (frame->preserves_structured_asm_callee_saved) {
         size_t saved_bytes = CORE_ASM_CALLEE_SAVED_COUNT * 8U;
@@ -684,6 +721,91 @@ static bool emit_sp_address(FILE *file, const char *destination_register, size_t
                    destination_register) >= 0;
 }
 
+static const char *core_frame_scratch_register(const char *value_register) {
+    return value_register != NULL && strcmp(value_register, "t6") == 0 ? "t5" : "t6";
+}
+
+static bool emit_frame_address(FILE *file,
+                               const MinicRiscv64CoreFrame *frame,
+                               const char *destination_register,
+                               size_t offset) {
+    const char *scratch;
+
+    if (file == NULL || frame == NULL || destination_register == NULL) {
+        return false;
+    }
+    if (!frame->has_dynamic_stack_alloc) {
+        return emit_sp_address(file, destination_register, offset);
+    }
+    if (offset <= 2047U) {
+        return fprintf(file, "  addi %s, s0, %zu\n", destination_register, offset) >= 0;
+    }
+    scratch = core_frame_scratch_register(destination_register);
+    return fprintf(file,
+                   "  li %s, %zu\n"
+                   "  add %s, s0, %s\n",
+                   scratch,
+                   offset,
+                   destination_register,
+                   scratch) >= 0;
+}
+
+static bool emit_frame_load64(FILE *file,
+                              const MinicRiscv64CoreFrame *frame,
+                              const char *destination_register,
+                              size_t offset) {
+    const char *scratch;
+
+    if (file == NULL || frame == NULL || destination_register == NULL) {
+        return false;
+    }
+    if (!frame->has_dynamic_stack_alloc) {
+        return minic_riscv64_emit_sp_load64(file, destination_register, offset);
+    }
+    if (offset <= 2047U) {
+        return fprintf(file, "  ld %s, %zu(s0)\n", destination_register, offset) >= 0;
+    }
+    scratch = core_frame_scratch_register(destination_register);
+    return fprintf(file,
+                   "  li %s, %zu\n"
+                   "  add %s, s0, %s\n"
+                   "  ld %s, 0(%s)\n",
+                   scratch,
+                   offset,
+                   scratch,
+                   scratch,
+                   destination_register,
+                   scratch) >= 0;
+}
+
+static bool emit_frame_store64(FILE *file,
+                               const MinicRiscv64CoreFrame *frame,
+                               const char *source_register,
+                               size_t offset) {
+    const char *scratch;
+
+    if (file == NULL || frame == NULL || source_register == NULL) {
+        return false;
+    }
+    if (!frame->has_dynamic_stack_alloc) {
+        return minic_riscv64_emit_sp_store64(file, source_register, offset);
+    }
+    if (offset <= 2047U) {
+        return fprintf(file, "  sd %s, %zu(s0)\n", source_register, offset) >= 0;
+    }
+    scratch = core_frame_scratch_register(source_register);
+    return fprintf(file,
+                   "  li %s, %zu\n"
+                   "  add %s, s0, %s\n"
+                   "  sd %s, 0(%s)\n",
+                   scratch,
+                   offset,
+                   scratch,
+                   scratch,
+                   source_register,
+                   scratch) >= 0;
+}
+
 static bool load_core_value(FILE *file,
                             const MinicRiscv64CoreFrame *frame,
                             MinicCoreValueId value_id,
@@ -691,7 +813,7 @@ static bool load_core_value(FILE *file,
     size_t offset;
 
     return core_value_offset(frame, value_id, &offset) &&
-           minic_riscv64_emit_sp_load64(file, register_name, offset);
+           emit_frame_load64(file, frame, register_name, offset);
 }
 
 static bool store_core_value(FILE *file,
@@ -701,7 +823,7 @@ static bool store_core_value(FILE *file,
     size_t offset;
 
     return core_value_offset(frame, value_id, &offset) &&
-           minic_riscv64_emit_sp_store64(file, register_name, offset);
+           emit_frame_store64(file, frame, register_name, offset);
 }
 
 /* M161_CORE_RV64_INT128_PAIR: Core remains target-neutral; RV64 lowers wide
@@ -715,8 +837,8 @@ static bool load_core_int128_value(FILE *file,
 
     return low_register != NULL && high_register != NULL &&
            core_value_offset(frame, value_id, &offset) && offset <= SIZE_MAX - 8U &&
-           minic_riscv64_emit_sp_load64(file, low_register, offset) &&
-           minic_riscv64_emit_sp_load64(file, high_register, offset + 8U);
+           emit_frame_load64(file, frame, low_register, offset) &&
+           emit_frame_load64(file, frame, high_register, offset + 8U);
 }
 
 static bool store_core_int128_value(FILE *file,
@@ -728,8 +850,8 @@ static bool store_core_int128_value(FILE *file,
 
     return low_register != NULL && high_register != NULL &&
            core_value_offset(frame, value_id, &offset) && offset <= SIZE_MAX - 8U &&
-           minic_riscv64_emit_sp_store64(file, low_register, offset) &&
-           minic_riscv64_emit_sp_store64(file, high_register, offset + 8U);
+           emit_frame_store64(file, frame, low_register, offset) &&
+           emit_frame_store64(file, frame, high_register, offset + 8U);
 }
 
 static bool core_integer_type_is_signed(const MinicCoreFunction *function,
@@ -2071,6 +2193,13 @@ static bool core_instruction_supported(const MinicC0Program *program,
         return true;
     case MINIC_CORE_INSTRUCTION_CALL_FRAME_ADDRESS:
         return core_call_frame_address_supported(instruction);
+    case MINIC_CORE_INSTRUCTION_DYNAMIC_STACK_ALLOC:
+        return instruction->result < function->value_count &&
+               instruction->value.operand < function->value_count &&
+               minic_type_is_pointer(instruction->type) &&
+               minic_type_equal(function->values[instruction->result].type, instruction->type) &&
+               minic_type_equal(function->values[instruction->value.operand].type,
+                                minic_type_unsigned_long());
     case MINIC_CORE_INSTRUCTION_VARIADIC_ARGUMENT_ADDRESS: {
         size_t fixed_stack_slots;
         size_t integer_parameter_count;
@@ -2356,10 +2485,21 @@ static bool emit_incoming_stack_load64(FILE *file,
         if (byte_offset > SIZE_MAX - frame->frame_size) {
             return false;
         }
-        return minic_riscv64_emit_sp_load64(
-            file, destination_register, frame->frame_size + byte_offset);
-    }
-    if (!minic_riscv64_emit_sp_load64(file, "t3", frame->entry_sp_offset)) {
+        if (!frame->has_dynamic_stack_alloc) {
+            return minic_riscv64_emit_sp_load64(
+                file, destination_register, frame->frame_size + byte_offset);
+        }
+        if (frame->frame_size <= 2047U) {
+            if (fprintf(file, "  addi t3, s0, %zu\n", frame->frame_size) < 0) {
+                return false;
+            }
+        } else if (fprintf(file,
+                           "  li t2, %zu\n"
+                           "  add t3, s0, t2\n",
+                           frame->frame_size) < 0) {
+            return false;
+        }
+    } else if (!emit_frame_load64(file, frame, "t3", frame->entry_sp_offset)) {
         return false;
     }
     if (byte_offset <= 2047U) {
