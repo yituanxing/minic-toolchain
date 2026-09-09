@@ -2289,6 +2289,54 @@ static bool parse_builtin_huge_val(MinicParser *parser, MinicExpressionId *expre
            minic_parser_add_expression(parser, &expression, expression_id);
 }
 
+static bool parse_builtin_alloca(MinicParser *parser, MinicExpressionId *expression_id) {
+    MinicExpression expression;
+    MinicExpressionId size_id;
+    const MinicExpression *size_expression;
+    MinicSourcePosition begin;
+    MinicSourcePosition end;
+
+    if (parser == NULL || expression_id == NULL ||
+        !generic_token_text_equals(parser, "__builtin_alloca")) {
+        return false;
+    }
+    begin = parser->current.span.begin;
+    if (!minic_parser_advance(parser) ||
+        !minic_parser_expect(parser, MINIC_TOKEN_LPAREN, "expected '(' after __builtin_alloca") ||
+        !parse_expression_internal(parser, &size_id, 0U, true)) {
+        return false;
+    }
+    size_expression = minic_c0_program_expression(parser->program, size_id);
+    if (size_expression == NULL || !minic_type_is_integer(size_expression->type) ||
+        !minic_parser_apply_fixed_call_argument_conversion(
+            parser, minic_type_unsigned_long(), &size_id)) {
+        if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
+            minic_parser_error(parser, "__builtin_alloca requires an integer byte count");
+        }
+        return false;
+    }
+    if (parser->current.kind != MINIC_TOKEN_RPAREN) {
+        minic_parser_error(parser, "expected ')' after __builtin_alloca");
+        return false;
+    }
+    end = parser->current.span.end;
+    if (!minic_parser_advance(parser)) {
+        return false;
+    }
+
+    (void)memset(&expression, 0, sizeof(expression));
+    expression.kind = MINIC_EXPRESSION_BUILTIN_ALLOCA;
+    expression.span.begin = begin;
+    expression.span.end = end;
+    expression.value_category = MINIC_VALUE_RVALUE;
+    expression.value.unary.operand = size_id;
+    if (!minic_type_pointer_to(minic_type_void(), &expression.type)) {
+        minic_parser_error(parser, "cannot form __builtin_alloca result type");
+        return false;
+    }
+    return minic_parser_add_expression(parser, &expression, expression_id);
+}
+
 static bool parse_builtin_unreachable(MinicParser *parser, MinicExpressionId *expression_id) {
     MinicExpression expression;
     MinicSourcePosition begin;
@@ -2756,6 +2804,13 @@ static bool parse_primary(MinicParser *parser, MinicExpressionId *expression_id,
     }
     if (generic_token_text_equals(parser, "__builtin_huge_val")) {
         if (!parse_builtin_huge_val(parser, &primary_id) ||
+            !minic_parser_parse_postfix(parser, primary_id, &primary_id)) {
+            return false;
+        }
+        return finish_value_expression(parser, primary_id, decay_array, expression_id);
+    }
+    if (generic_token_text_equals(parser, "__builtin_alloca")) {
+        if (!parse_builtin_alloca(parser, &primary_id) ||
             !minic_parser_parse_postfix(parser, primary_id, &primary_id)) {
             return false;
         }
