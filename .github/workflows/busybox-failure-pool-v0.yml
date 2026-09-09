@@ -194,11 +194,16 @@ jobs:
           # These three headers are also ordinary BusyBox generated prerequisites.
           # Materialize them once so the targeted direct-CC lane tests Mini rather
           # than failing before preprocessing on a bypassed Make dependency.
-          make -C "$src" O="$out" HOSTCC=/usr/bin/cc \
-            include/applet_tables.h include/NUM_APPLETS.h include/embedded_scripts.h \
+          make -C "$src" O="$out" HOSTCC=/usr/bin/cc CC=/usr/bin/cc applets_dir \
             >"$work/busybox-generated-headers.log" 2>&1
           test -s "$out/include/applet_tables.h"
           test -s "$out/include/NUM_APPLETS.h"
+          if test ! -s "$out/include/embedded_scripts.h"; then
+            (
+              cd "$out"
+              "$src/scripts/embedded_scripts" include/embedded_scripts.h "$src/embed" "$src/applets_sh"
+            )
+          fi
           test -s "$out/include/embedded_scripts.h"
           echo "BUSYBOX_PROFILE=PASS applets=408 sha256=$cfg_hash"
 
