@@ -149,6 +149,24 @@ jobs:
           test -s obj/crt/crt1.o
           echo "BUSYBOX_MUSL_STATIC=PASS"
 
+      - name: Validate BusyBox UAPI overlay precedence
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/busybox-full-driver-v0"
+          sysroot="$work/musl-sysroot"
+          uapi="$GITHUB_WORKSPACE/tests/linker/fixtures/busybox-uapi"
+          cat >"$work/busybox-uapi-overlay-probe.c" <<'EOF'
+          #include <linux/pkt_sched.h>
+          _Static_assert(TCA_CBQ_MAX > 0, "BusyBox CBQ compatibility overlay must shadow sysroot UAPI");
+          int busybox_uapi_overlay_probe(void) { return TCA_CBQ_MAX; }
+          EOF
+          "$work/bin/minic" --sysroot "$sysroot/usr" -I"$uapi" -c \
+            -o "$work/busybox-uapi-overlay-probe.o" \
+            "$work/busybox-uapi-overlay-probe.c"
+          test -s "$work/busybox-uapi-overlay-probe.o"
+          echo "BUSYBOX_UAPI_OVERLAY=PASS symbol=TCA_CBQ_MAX"
+
       - name: Prepare frozen V222 408-applet profile
         shell: bash
         run: |
