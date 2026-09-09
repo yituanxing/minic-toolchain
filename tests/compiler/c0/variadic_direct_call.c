@@ -4,11 +4,13 @@ int main(void) {
     char small;
     long wide;
     int value;
+    float approximate;
     double precise;
 
     small = 7;
     wide = 1234;
     value = 29;
+    approximate = 1.25f;
     precise = 2.5;
     return verify_variadic(5,
                            11,
@@ -16,6 +18,7 @@ int main(void) {
                            wide,
                            &value,
                            precise,
+                           approximate,
                            61,
                            62,
                            63,
