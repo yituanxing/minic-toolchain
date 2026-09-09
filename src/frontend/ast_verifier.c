@@ -435,6 +435,13 @@ static bool verify_expression(const MinicC0Program *program,
     case MINIC_EXPRESSION_BUILTIN_UNREACHABLE:
         return expression->value_category == MINIC_VALUE_RVALUE &&
                minic_type_is_void(expression->type);
+    case MINIC_EXPRESSION_BUILTIN_ALLOCA: {
+        MinicType pointee;
+        operand = expression_before(program, expression->value.unary.operand, expression_index);
+        return operand != NULL && minic_type_equal(operand->type, minic_type_unsigned_long()) &&
+               expression->value_category == MINIC_VALUE_RVALUE &&
+               minic_type_pointee(expression->type, &pointee) && minic_type_is_void(pointee);
+    }
     case MINIC_EXPRESSION_CALL_FRAME_ADDRESS: {
         MinicType pointee;
 
