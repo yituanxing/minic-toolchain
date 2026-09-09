@@ -366,6 +366,33 @@ MinicCoreLowerStatus lower_address(MinicCoreLowerContext *context,
     if (expression == NULL) {
         return MINIC_CORE_LOWER_ERROR;
     }
+    if (expression->kind == MINIC_EXPRESSION_BUILTIN_ALLOCA) {
+        MinicCoreValueId size_value;
+        MinicCoreLowerStatus status;
+        MinicType void_pointer;
+
+        status = lower_expression(context, expression->value.unary.operand, &size_value);
+        if (status != MINIC_CORE_LOWER_OK) {
+            return status;
+        }
+        if (size_value >= context->function->value_count ||
+            !minic_type_equal(context->function->values[size_value].type,
+                              minic_type_unsigned_long()) ||
+            !minic_type_pointer_to(minic_type_void(), &void_pointer) ||
+            !minic_type_equal(expression->type, void_pointer)) {
+            return MINIC_CORE_LOWER_UNSUPPORTED;
+        }
+        (void)memset(&instruction, 0, sizeof(instruction));
+        instruction.kind = MINIC_CORE_INSTRUCTION_DYNAMIC_STACK_ALLOC;
+        instruction.span = expression->span;
+        instruction.type = void_pointer;
+        instruction.result = MINIC_CORE_VALUE_INVALID;
+        instruction.value.operand = size_value;
+        return minic_core_function_append_value_instruction(
+                   context->function, context->block_id, &instruction, value_id)
+                   ? MINIC_CORE_LOWER_OK
+                   : MINIC_CORE_LOWER_ERROR;
+    }
     if (expression->value_category != MINIC_VALUE_LVALUE) {
         return MINIC_CORE_LOWER_UNSUPPORTED;
     }
