@@ -3940,12 +3940,41 @@ static bool normalize_float_binary_operands(MinicParser *parser,
         return true;
     }
 
+    /* Mixed float/integer arithmetic follows the ordinary arithmetic
+       conversions by converting the integer operand to binary32.  Do this
+       before the existing float/double bridge: widening the integer directly
+       to double would change the required float-rounding semantics. */
+    if (minic_type_is_float(left->type) && minic_type_is_integer(right->type)) {
+        (void)memset(&conversion, 0, sizeof(conversion));
+        conversion.kind = MINIC_EXPRESSION_CAST;
+        conversion.span = right->span;
+        conversion.type = minic_type_float();
+        conversion.value_category = MINIC_VALUE_RVALUE;
+        conversion.value.unary.operand = *right_id;
+        if (!minic_parser_add_expression(parser, &conversion, &converted_id)) {
+            return false;
+        }
+        *right_id = converted_id;
+        return true;
+    }
+    if (minic_type_is_integer(left->type) && minic_type_is_float(right->type)) {
+        (void)memset(&conversion, 0, sizeof(conversion));
+        conversion.kind = MINIC_EXPRESSION_CAST;
+        conversion.span = left->span;
+        conversion.type = minic_type_float();
+        conversion.value_category = MINIC_VALUE_RVALUE;
+        conversion.value.unary.operand = *left_id;
+        if (!minic_parser_add_expression(parser, &conversion, &converted_id)) {
+            return false;
+        }
+        *left_id = converted_id;
+        return true;
+    }
+
     /* Comparing binary32 values after exact widening to binary64 preserves all
        IEEE-754 ordered/equality results, including NaNs, infinities and signed
        zero. Mixed float/double comparison and arithmetic use the ordinary C
-       conversion to double. Keep float/float arithmetic in binary32, and do not
-       use this bridge for float/integer arithmetic: converting the integer to
-       double would change C's float-rounding semantics. */
+       conversion to double. */
     eligible =
         (minic_type_is_float(left->type) &&
          (minic_type_is_float(right->type) || minic_type_is_double(right->type))) ||
@@ -4028,9 +4057,11 @@ static bool binary_result_type(const MinicTargetInfo *target,
         }
         return minic_target_info_integer_common_for_program(target, program, left, right, result);
     }
-    if (minic_type_is_float(left) && minic_type_is_float(right) &&
-        binary_is_double_arithmetic(kind)) {
-        *result = minic_type_float();
+    if (((minic_type_is_float(left) && minic_type_is_float(right)) ||
+         (minic_type_is_float(left) && minic_type_is_integer(right)) ||
+         (minic_type_is_integer(left) && minic_type_is_float(right))) &&
+        (binary_is_double_arithmetic(kind) || binary_is_comparison(kind))) {
+        *result = binary_is_comparison(kind) ? minic_type_int() : minic_type_float();
         return true;
     }
     has_long_double_operand =
