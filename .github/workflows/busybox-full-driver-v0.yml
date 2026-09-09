@@ -58,6 +58,14 @@ jobs:
           MINIC="$GITHUB_WORKSPACE/build/busybox-full-driver-v0/bin/minic" \
             sh tests/compiler/c0/run-gnu-inline-keyword-spellings.sh
 
+      - name: Validate driver GNU attribute predefines
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          BUILD_DIR=build/busybox-full-driver-v0 \
+          MINIC="$GITHUB_WORKSPACE/build/busybox-full-driver-v0/bin/minic" \
+            sh tests/compiler/c0/run-driver-gnu-predefines.sh
+
       - name: Fetch pinned BusyBox 1.38.0 and musl 1.2.5
         shell: bash
         run: |
