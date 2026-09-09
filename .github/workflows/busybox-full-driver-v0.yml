@@ -36,6 +36,12 @@ jobs:
           make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/busybox-full-driver-v0 all
           echo "BUSYBOX_MINI_TOOLCHAIN=PASS"
 
+      - name: Validate MiniAS ABI flags
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/busybox-full-driver-v0 check-minias-a0
+
       - name: Validate scoped enum constant regression
         shell: bash
         run: |
