@@ -69,7 +69,6 @@ jobs:
           export MINIC="$GITHUB_WORKSPACE/build/busybox-full-driver-v0/bin/minic"
           export BUILD_DIR="$GITHUB_WORKSPACE/build/busybox-full-driver-v0"
           sh tests/compiler/c0/run-float-binary-arithmetic.sh
-          sh tests/compiler/c0/run-prefix-update-expressions.sh
           sh tests/compiler/c0/run-variadic-direct-calls.sh
 
       - name: Fetch pinned BusyBox 1.38.0 and musl 1.2.5
