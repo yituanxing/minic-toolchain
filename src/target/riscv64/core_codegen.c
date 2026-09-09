@@ -3080,8 +3080,8 @@ static bool emit_call(FILE *file,
                     }
                     stack_slot = location.stack_slot_begin + stack_chunk;
                     if (stack_slot > SIZE_MAX / 8U ||
-                        !emit_sp_load_chunk(
-                            file, "t0", object_offset + chunk_offset, chunk_size)) {
+                        !emit_frame_load_chunk(
+                            file, frame, "t0", object_offset + chunk_offset, chunk_size)) {
                         return false;
                     }
                     outgoing_offset = stack_slot * 8U;
@@ -3129,8 +3129,8 @@ static bool emit_call(FILE *file,
             if (chunk_size > 8U) {
                 chunk_size = 8U;
             }
-            if (!emit_sp_store_chunk(
-                    file, source_register, object_offset + chunk_offset, chunk_size)) {
+            if (!emit_frame_store_chunk(
+                    file, frame, source_register, object_offset + chunk_offset, chunk_size)) {
                 return false;
             }
         }
@@ -3332,8 +3332,8 @@ static bool emit_indirect_call(FILE *file,
                     }
                     stack_slot = location.stack_slot_begin + stack_chunk;
                     if (stack_slot > SIZE_MAX / 8U ||
-                        !emit_sp_load_chunk(
-                            file, "t0", object_offset + chunk_offset, chunk_size)) {
+                        !emit_frame_load_chunk(
+                            file, frame, "t0", object_offset + chunk_offset, chunk_size)) {
                         return false;
                     }
                     outgoing_offset = stack_slot * 8U;
