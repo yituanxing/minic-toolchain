@@ -657,9 +657,6 @@ static bool minic_riscv64_emit_constant_value(FILE *file,
                 }
                 continue;
             }
-            if (field->element_count == 0U) {
-                return false;
-            }
             if (field->is_bit_field) {
                 if (!minic_riscv64_emit_record_bit_field_run(file,
                                                              program,
@@ -677,6 +674,9 @@ static bool minic_riscv64_emit_constant_value(FILE *file,
                     break;
                 }
                 continue;
+            }
+            if (field->element_count == 0U) {
+                return false;
             }
             if (record->is_union) {
                 field_offset = 0U;
