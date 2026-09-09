@@ -3435,6 +3435,75 @@ static bool parse_sizeof(MinicParser *parser, MinicExpressionId *expression_id) 
             return false;
         }
         measured_type = operand->type;
+        if (operand->kind == MINIC_EXPRESSION_LOCAL) {
+            const MinicLocal *local;
+
+            local = minic_c0_program_local(parser->program, operand->value.local_id);
+            if (local != NULL && local->is_array &&
+                local->dynamic_count_local_id != MINIC_LOCAL_INVALID) {
+                MinicExpression count_lvalue;
+                MinicExpression count_read;
+                MinicExpression size_constant;
+                MinicExpression product;
+                MinicExpressionId count_lvalue_id;
+                MinicExpressionId count_read_id;
+                MinicExpressionId size_constant_id;
+                size_t element_size;
+
+                if (!minic_target_info_sizeof_type(
+                        parser->target_info, parser->program, local->type, &element_size) ||
+                    element_size == 0U || element_size > (size_t)INT64_MAX) {
+                    minic_parser_error(parser, "sizeof variable length array element is unsupported");
+                    return false;
+                }
+                end = operand->span.end;
+                (void)memset(&count_lvalue, 0, sizeof(count_lvalue));
+                count_lvalue.kind = MINIC_EXPRESSION_LOCAL;
+                count_lvalue.span.begin = begin;
+                count_lvalue.span.end = end;
+                count_lvalue.type = minic_type_unsigned_long();
+                count_lvalue.value_category = MINIC_VALUE_LVALUE;
+                count_lvalue.value.local_id = local->dynamic_count_local_id;
+                if (!minic_parser_add_expression(parser, &count_lvalue, &count_lvalue_id)) {
+                    return false;
+                }
+
+                (void)memset(&count_read, 0, sizeof(count_read));
+                count_read.kind = MINIC_EXPRESSION_LVALUE_READ;
+                count_read.span = count_lvalue.span;
+                count_read.type = minic_type_unsigned_long();
+                count_read.value_category = MINIC_VALUE_RVALUE;
+                count_read.value.unary.operand = count_lvalue_id;
+                if (!minic_parser_add_expression(parser, &count_read, &count_read_id)) {
+                    return false;
+                }
+                if (element_size == 1U) {
+                    *expression_id = count_read_id;
+                    return true;
+                }
+
+                (void)memset(&size_constant, 0, sizeof(size_constant));
+                size_constant.kind = MINIC_EXPRESSION_INTEGER;
+                size_constant.span = count_lvalue.span;
+                size_constant.type = minic_type_unsigned_long();
+                size_constant.value_category = MINIC_VALUE_RVALUE;
+                size_constant.value.integer_value = (int64_t)element_size;
+                if (!minic_parser_add_expression(
+                        parser, &size_constant, &size_constant_id)) {
+                    return false;
+                }
+
+                (void)memset(&product, 0, sizeof(product));
+                product.kind = MINIC_EXPRESSION_BINARY;
+                product.span = count_lvalue.span;
+                product.type = minic_type_unsigned_long();
+                product.value_category = MINIC_VALUE_RVALUE;
+                product.value.binary.operator_kind = MINIC_BINARY_MULTIPLY;
+                product.value.binary.left = count_read_id;
+                product.value.binary.right = size_constant_id;
+                return minic_parser_add_expression(parser, &product, expression_id);
+            }
+        }
         if (minic_c0_expression_array_object_info(parser->program, operand, NULL) &&
             !minic_parser_materialize_array_object_type(parser, operand_id, &measured_type)) {
             if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
