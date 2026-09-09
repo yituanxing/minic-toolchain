@@ -52,8 +52,13 @@ static bool apply_assignment_conversion(MinicParser *parser,
     if (minic_c0_assignment_compatible(parser->program, target_type, source_id)) {
         return true;
     }
-    if (!minic_type_is_double(target_type) ||
-        (!minic_type_is_integer(source->type) && !minic_type_is_float(source->type))) {
+    /* Statement-level assignment/initializer/return conversion must match
+       the expression-assignment path. When plain assignment compatibility is
+       insufficient, materialize any non-pointer scalar cast that the frontend
+       already accepts explicitly. This covers standard arithmetic conversions
+       such as double -> unsigned without admitting implicit pointer casts. */
+    if (minic_type_is_pointer(target_type) || minic_type_is_pointer(source->type) ||
+        !minic_type_cast_compatible(target_type, source->type)) {
         return true;
     }
 
