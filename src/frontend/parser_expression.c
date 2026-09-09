@@ -2307,13 +2307,30 @@ static bool parse_builtin_alloca(MinicParser *parser, MinicExpressionId *express
         return false;
     }
     size_expression = minic_c0_program_expression(parser->program, size_id);
-    if (size_expression == NULL || !minic_type_is_integer(size_expression->type) ||
-        !minic_parser_apply_fixed_call_argument_conversion(
-            parser, minic_type_unsigned_long(), &size_id)) {
+    if (size_expression == NULL || !minic_type_is_integer(size_expression->type)) {
         if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
             minic_parser_error(parser, "__builtin_alloca requires an integer byte count");
         }
         return false;
+    }
+    /* Core gives dynamic stack allocation one canonical byte-count type.
+       Assignment compatibility alone is insufficient here: e.g. alloca(int)
+       is a valid C/GNU use, but the AST verifier requires the builtin operand
+       itself to carry unsigned long after semantic conversion. */
+    if (!minic_type_equal(size_expression->type, minic_type_unsigned_long())) {
+        MinicExpression conversion;
+        MinicExpressionId source_id = size_id;
+        MinicSourceSpan source_span = size_expression->span;
+
+        (void)memset(&conversion, 0, sizeof(conversion));
+        conversion.kind = MINIC_EXPRESSION_CAST;
+        conversion.span = source_span;
+        conversion.type = minic_type_unsigned_long();
+        conversion.value_category = MINIC_VALUE_RVALUE;
+        conversion.value.unary.operand = source_id;
+        if (!minic_parser_add_expression(parser, &conversion, &size_id)) {
+            return false;
+        }
     }
     if (parser->current.kind != MINIC_TOKEN_RPAREN) {
         minic_parser_error(parser, "expected ')' after __builtin_alloca");
