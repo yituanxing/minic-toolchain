@@ -27,6 +27,18 @@ bool minic_c0_program_set_function_inline(MinicC0Program *program,
     return true;
 }
 
+bool minic_c0_program_set_function_noreturn(MinicC0Program *program,
+                                            MinicFunctionId function_id,
+                                            bool is_noreturn) {
+    if (program == NULL || function_id >= program->function_count) {
+        return false;
+    }
+    if (is_noreturn) {
+        program->functions[function_id].is_noreturn = true;
+    }
+    return true;
+}
+
 bool minic_c0_program_set_function_referenced(MinicC0Program *program,
                                               MinicFunctionId function_id,
                                               bool is_referenced) {
