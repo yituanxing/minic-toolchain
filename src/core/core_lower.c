@@ -8582,11 +8582,41 @@ static MinicCoreLowerStatus lower_expression_statement(MinicCoreLowerContext *co
             return lower_direct_record_call_object(context, expression, &discarded_object);
         }
         {
+            const MinicFunction *callee;
             MinicCoreValueId discarded_value;
             MinicCoreLowerStatus status;
 
             status = lower_expression(context, statement->expression, &discarded_value);
-            return core_trace_expression_statement_status(context, expression, "call", status);
+            if (status != MINIC_CORE_LOWER_OK) {
+                return core_trace_expression_statement_status(
+                    context, expression, "call", status);
+            }
+            if (expression->value.call.function_id == MINIC_FUNCTION_INVALID) {
+                return MINIC_CORE_LOWER_OK;
+            }
+            callee = minic_c0_program_function(
+                context->body->program, expression->value.call.function_id);
+            if (callee == NULL) {
+                return MINIC_CORE_LOWER_ERROR;
+            }
+            if (callee->is_noreturn) {
+                MinicCoreTerminator terminator;
+
+                (void)memset(&terminator, 0, sizeof(terminator));
+                terminator.kind = MINIC_CORE_TERMINATOR_UNREACHABLE;
+                terminator.span = expression->span;
+                terminator.return_value = MINIC_CORE_VALUE_INVALID;
+                terminator.return_object = MINIC_CORE_OBJECT_INVALID;
+                terminator.branch_target = MINIC_CORE_BLOCK_INVALID;
+                terminator.conditional.condition = MINIC_CORE_VALUE_INVALID;
+                terminator.conditional.when_true = MINIC_CORE_BLOCK_INVALID;
+                terminator.conditional.when_false = MINIC_CORE_BLOCK_INVALID;
+                if (!minic_core_function_set_terminator(
+                        context->function, context->block_id, &terminator)) {
+                    return MINIC_CORE_LOWER_ERROR;
+                }
+            }
+            return MINIC_CORE_LOWER_OK;
         }
     }
     /* M54_VOID_CONDITIONAL_STATEMENT: expression statements are only an
@@ -10486,6 +10516,8 @@ lower_switch(MinicCoreLowerContext *context, const MinicStatement *statement, bo
     size_t default_label;
     size_t first_case_label;
     size_t label_count;
+    MinicStatementId pre_case_labels[MINIC_CORE_SWITCH_LABEL_LIMIT];
+    size_t pre_case_label_count;
     size_t source_index;
     bool all_segments_terminate;
     bool segment_breaks[MINIC_CORE_SWITCH_LABEL_LIMIT];
@@ -10555,6 +10587,7 @@ lower_switch(MinicCoreLowerContext *context, const MinicStatement *statement, bo
     default_label = SIZE_MAX;
     first_case_label = SIZE_MAX;
     label_count = 0U;
+    pre_case_label_count = 0U;
     for (source_index = 0U; source_index < body->statement_count; ++source_index) {
         const MinicStatement *source_statement;
 
@@ -10566,6 +10599,16 @@ lower_switch(MinicCoreLowerContext *context, const MinicStatement *statement, bo
         if (source_statement->kind != MINIC_STATEMENT_CASE &&
             source_statement->kind != MINIC_STATEMENT_DEFAULT) {
             if (label_count == 0U) {
+                if (source_statement->kind == MINIC_STATEMENT_LABEL &&
+                    source_statement->target_expression == MINIC_EXPRESSION_INVALID &&
+                    source_statement->expression == MINIC_EXPRESSION_INVALID &&
+                    source_statement->target_statement == MINIC_STATEMENT_INVALID &&
+                    pre_case_label_count < MINIC_CORE_SWITCH_LABEL_LIMIT &&
+                    core_switch_label_has_function_reentry(
+                        context, body->statements[source_index])) {
+                    pre_case_labels[pre_case_label_count++] = body->statements[source_index];
+                    continue;
+                }
                 (void)fprintf(stderr,
                               "CORE_SWITCH_DETAIL function=%s gate=prelabel source_index=%zu "
                               "kind=%d\n",
@@ -10641,6 +10684,35 @@ lower_switch(MinicCoreLowerContext *context, const MinicStatement *statement, bo
         if (labels[source_index].statement->kind == MINIC_STATEMENT_CASE &&
             !minic_core_function_add_block(context->function, &labels[source_index].test_block)) {
             return MINIC_CORE_LOWER_ERROR;
+        }
+    }
+
+    if (pre_case_label_count != 0U) {
+        MinicCoreBlockId first_body_target;
+        size_t pre_index;
+
+        if (label_count == 0U) {
+            return MINIC_CORE_LOWER_UNSUPPORTED;
+        }
+        first_body_target = labels[0].body_block;
+        for (pre_index = 0U; pre_index < pre_case_label_count; ++pre_index) {
+            const MinicStatement *pre_label;
+            MinicCoreBlockId pre_block;
+
+            pre_label = minic_c0_program_statement(
+                context->body->program, pre_case_labels[pre_index]);
+            if (pre_label == NULL ||
+                ensure_statement_block(
+                    context, pre_case_labels[pre_index], &pre_block) != MINIC_CORE_LOWER_OK) {
+                return MINIC_CORE_LOWER_ERROR;
+            }
+            if (!context->function->blocks[pre_block].has_terminator) {
+                status = set_branch(
+                    context, pre_block, pre_label->span, first_body_target);
+                if (status != MINIC_CORE_LOWER_OK) {
+                    return status;
+                }
+            }
         }
     }
 

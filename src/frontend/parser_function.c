@@ -29,6 +29,7 @@ typedef struct MinicFunctionAttributeContext {
     size_t *section_name_length;
     bool *has_section;
     bool *is_weak;
+    bool *is_noreturn;
     MinicFunctionId *alias_target;
     const char *unsupported_message;
 } MinicFunctionAttributeContext;
@@ -192,6 +193,13 @@ static bool consume_function_attribute(MinicParser *parser,
         return true;
     }
 
+    if (descriptor->kind == MINIC_ATTRIBUTE_NORETURN) {
+        if (context->is_noreturn != NULL) {
+            *context->is_noreturn = true;
+        }
+        return true;
+    }
+
     if (descriptor->kind == MINIC_ATTRIBUTE_GNU_INLINE) {
         if (!context->allow_gnu_inline) {
             minic_parser_error(parser, "%s", context->unsupported_message);
@@ -237,6 +245,7 @@ static bool parse_function_attribute_lists(MinicParser *parser,
     context.section_name_length = NULL;
     context.has_section = NULL;
     context.is_weak = is_weak;
+    context.is_noreturn = NULL;
     context.alias_target = NULL;
     context.unsupported_message = unsupported_message;
     return minic_parser_parse_gnu_attribute_lists(parser, consume_function_attribute, &context);
@@ -253,6 +262,7 @@ static bool apply_function_attribute_list(MinicParser *parser,
                                           size_t *section_name_length,
                                           bool *has_section,
                                           bool *is_weak,
+                                          bool *is_noreturn,
                                           MinicFunctionId *alias_target,
                                           const char *unsupported_message) {
     MinicFunctionAttributeContext context;
@@ -270,6 +280,7 @@ static bool apply_function_attribute_list(MinicParser *parser,
     context.section_name_length = section_name_length;
     context.has_section = has_section;
     context.is_weak = is_weak;
+    context.is_noreturn = is_noreturn;
     context.alias_target = alias_target;
     context.unsupported_message = unsupported_message;
     for (index = 0U; index < attributes->count; ++index) {
@@ -410,6 +421,7 @@ static bool parse_persistent_function_attributes(MinicParser *parser,
                                                  size_t *section_name_length,
                                                  bool *has_section,
                                                  bool *is_weak,
+                                                 bool *is_noreturn,
                                                  MinicFunctionId *alias_target) {
     MinicFunctionAttributeContext context;
 
@@ -422,6 +434,7 @@ static bool parse_persistent_function_attributes(MinicParser *parser,
     context.section_name_length = section_name_length;
     context.has_section = has_section;
     context.is_weak = is_weak;
+    context.is_noreturn = is_noreturn;
     context.alias_target = alias_target;
     context.unsupported_message =
         "unsupported GNU function attribute; ABI/layout-affecting and unknown attributes must be "
@@ -979,9 +992,26 @@ bool minic_parser_parse_parameter_list(MinicParser *parser,
     }
 }
 
+static bool apply_external_object_metadata(MinicParser *parser,
+                                           MinicGlobalObjectId object_id,
+                                           const char *section_name,
+                                           size_t section_name_length,
+                                           bool has_section,
+                                           size_t explicit_alignment,
+                                           MinicSymbolVisibility visibility,
+                                           bool has_visibility);
+
 static bool parse_external_integer_array_definition(MinicParser *parser,
                                                     MinicType element_type,
-                                                    MinicSourceSpan name_span) {
+                                                    MinicSourceSpan name_span,
+                                                    char *section_name,
+                                                    size_t section_name_capacity,
+                                                    size_t *section_name_length,
+                                                    bool *has_section,
+                                                    size_t *explicit_alignment,
+                                                    MinicSymbolVisibility visibility,
+                                                    bool has_visibility,
+                                                    bool *is_weak) {
     MinicGlobalObjectId object_id;
     MinicGlobalObject *object;
     const MinicArrayType *array_type;
@@ -994,7 +1024,8 @@ static bool parse_external_integer_array_definition(MinicParser *parser,
     bool multidimensional;
     bool reused_existing;
 
-    if (parser == NULL ||
+    if (parser == NULL || section_name == NULL || section_name_length == NULL ||
+        has_section == NULL || explicit_alignment == NULL || is_weak == NULL ||
         (!minic_type_is_integer(element_type) && !minic_type_is_pointer(element_type)) ||
         parser->current.kind != MINIC_TOKEN_LBRACKET) {
         minic_parser_error(parser,
@@ -1035,6 +1066,19 @@ static bool parse_external_integer_array_definition(MinicParser *parser,
         }
         declared_element_type = nested_element_type;
         multidimensional = true;
+    }
+
+    if (!minic_parser_parse_gnu_object_attribute_lists_with_symbol_metadata(
+            parser,
+            section_name,
+            section_name_capacity,
+            section_name_length,
+            has_section,
+            explicit_alignment,
+            &visibility,
+            &has_visibility,
+            is_weak)) {
+        return false;
     }
 
     object_id = minic_parser_find_global_object(parser, name_span);
@@ -1084,6 +1128,14 @@ static bool parse_external_integer_array_definition(MinicParser *parser,
 
     object = &parser->program->global_objects[object_id];
     if ((reused_existing && !minic_c0_global_object_begin_definition(parser->program, object_id)) ||
+        !apply_external_object_metadata(parser,
+                                        object_id,
+                                        section_name,
+                                        *section_name_length,
+                                        *has_section,
+                                        *explicit_alignment,
+                                        visibility,
+                                        has_visibility) ||
         !minic_parser_expect(parser, MINIC_TOKEN_EQUAL, "expected '=' after external array")) {
         return false;
     }
@@ -1906,7 +1958,17 @@ static bool parse_visible_external_array(MinicParser *parser,
                                                                    visibility,
                                                                    has_visibility);
         }
-        return parse_external_integer_array_definition(parser, element_type, name_span);
+        return parse_external_integer_array_definition(parser,
+                                                       element_type,
+                                                       name_span,
+                                                       section_name,
+                                                       section_name_capacity,
+                                                       section_name_length,
+                                                       has_section,
+                                                       explicit_alignment,
+                                                       visibility,
+                                                       has_visibility,
+                                                       is_weak);
     }
 
     if (!minic_parser_parse_array_declarator_suffix(
@@ -2126,6 +2188,7 @@ static bool record_function_declaration_entity(MinicParser *parser,
                                                size_t parameter_count,
                                                bool is_variadic,
                                                bool is_internal,
+                                               bool is_noreturn,
                                                bool is_weak,
                                                const char *assembler_name,
                                                size_t assembler_name_length,
@@ -2178,6 +2241,11 @@ static bool record_function_declaration_entity(MinicParser *parser,
             return false;
         }
     }
+    if (is_noreturn &&
+        !minic_c0_program_set_function_noreturn(parser->program, function_id, true)) {
+        minic_parser_error(parser, "cannot persist noreturn function metadata");
+        return false;
+    }
     if (is_weak && !minic_c0_program_set_function_weak(parser->program, function_id, true)) {
         minic_parser_error(parser, "conflicting GNU weak function linkage");
         return false;
@@ -2208,6 +2276,7 @@ static bool finish_function_declaration_entity(MinicParser *parser,
                                                size_t parameter_count,
                                                bool is_variadic,
                                                bool is_internal,
+                                               bool is_noreturn,
                                                bool is_weak,
                                                const char *assembler_name,
                                                size_t assembler_name_length,
@@ -2229,6 +2298,7 @@ static bool finish_function_declaration_entity(MinicParser *parser,
                                             parameter_count,
                                             is_variadic,
                                             is_internal,
+                                            is_noreturn,
                                             is_weak,
                                             assembler_name,
                                             assembler_name_length,
@@ -2536,6 +2606,7 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
                 &section_name_length,
                 &has_section,
                 &is_weak,
+                &is_noreturn,
                 NULL,
                 "unsupported GNU prefix function attribute; semantic and ABI-affecting attributes "
                 "must be implemented explicitly")) {
@@ -2545,6 +2616,7 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
 
         for (;;) {
             bool entity_is_weak;
+            bool entity_is_noreturn;
 
             if (parser->current.kind == MINIC_TOKEN_LPAREN) {
                 minic_parser_error(parser,
@@ -2552,6 +2624,7 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
                 return false;
             }
             entity_is_weak = declaration_is_weak;
+            entity_is_noreturn = is_noreturn;
             assembler_name_length = 0U;
             has_assembler_name = false;
             (void)memset(assembler_name, 0, sizeof(assembler_name));
@@ -2561,7 +2634,15 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
                                               &assembler_name_length,
                                               &has_assembler_name) ||
                 !parse_persistent_function_attributes(
-                    parser, is_internal, NULL, 0U, NULL, NULL, &entity_is_weak, NULL)) {
+                    parser,
+                    is_internal,
+                    NULL,
+                    0U,
+                    NULL,
+                    NULL,
+                    &entity_is_weak,
+                    &entity_is_noreturn,
+                    NULL)) {
                 return false;
             }
             if (parser->current.kind != MINIC_TOKEN_COMMA &&
@@ -2577,6 +2658,7 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
                                                     typed_parameter_count,
                                                     typed_is_variadic,
                                                     is_internal,
+                                                    entity_is_noreturn,
                                                     entity_is_weak,
                                                     assembler_name,
                                                     assembler_name_length,
@@ -2794,6 +2876,7 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
             &section_name_length,
             &has_section,
             &is_weak,
+            &is_noreturn,
             &alias_target,
             "unsupported GNU prefix function attribute; semantic and ABI-affecting attributes must "
             "be implemented explicitly")) {
@@ -2831,6 +2914,7 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
                                               &section_name_length,
                                               &has_section,
                                               &is_weak,
+                                              &is_noreturn,
                                               &alias_target)) {
         return false;
     }
@@ -2855,6 +2939,7 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
                                                   parameter_count,
                                                   is_variadic,
                                                   is_internal,
+                                                  is_noreturn,
                                                   is_weak,
                                                   assembler_name,
                                                   assembler_name_length,
@@ -2980,6 +3065,11 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
     }
     if (!minic_c0_program_set_function_inline(parser->program, function_id, is_inline)) {
         minic_parser_error(parser, "cannot persist inline function metadata");
+        return false;
+    }
+    if (is_noreturn &&
+        !minic_c0_program_set_function_noreturn(parser->program, function_id, true)) {
+        minic_parser_error(parser, "cannot persist noreturn function metadata");
         return false;
     }
     if (is_weak && !minic_c0_program_set_function_weak(parser->program, function_id, true)) {
