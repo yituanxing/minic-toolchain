@@ -5,6 +5,9 @@ on:
     branches:
       - external/busybox-full-driver-v0
       - agent/busybox-21-convergence-v1
+  pull_request:
+    branches:
+      - external/busybox-full-driver-v0
   workflow_dispatch:
 
 permissions:
