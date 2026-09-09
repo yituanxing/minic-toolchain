@@ -127,7 +127,10 @@ typedef enum MinicCoreInstructionKind {
     MINIC_CORE_INSTRUCTION_FLOAT_ADD,
     MINIC_CORE_INSTRUCTION_FLOAT_SUBTRACT,
     MINIC_CORE_INSTRUCTION_FLOAT_MULTIPLY,
-    MINIC_CORE_INSTRUCTION_FLOAT_DIVIDE
+    MINIC_CORE_INSTRUCTION_FLOAT_DIVIDE,
+    /* Runtime stack allocation. The byte-count operand is an unsigned integer;
+       the result is a pointer with lifetime through the containing function. */
+    MINIC_CORE_INSTRUCTION_DYNAMIC_STACK_ALLOC
 } MinicCoreInstructionKind;
 
 /* M91_BUILTIN_UNREACHABLE_TERMINATOR: unreachable is a CFG fact, not a
