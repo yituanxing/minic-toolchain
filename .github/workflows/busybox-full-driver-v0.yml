@@ -178,16 +178,29 @@ jobs:
           : "${BUSYBOX_UAPI_COMPAT:?}"
           : "${BUSYBOX_C_RESULTS:?}"
 
-          # BusyBox probes CC for compiler identity before any target compile.
-          # Keep those build-system queries on the known GNU cross driver; only
-          # real target C producers below are routed through Mini.
+          # BusyBox/Kbuild probes compiler identity and option support before
+          # target compilation. Keep those capability queries on the known GNU
+          # cross driver; only real BusyBox .c producers are routed through Mini.
+          probe_input=0
+          probe_linker_option=0
           for arg in "$@"; do
             case "$arg" in
               -dumpversion|-dumpfullversion|-dumpmachine)
                 exec riscv64-linux-gnu-gcc "$@"
                 ;;
+              /dev/null|-xc|-xassembler)
+                probe_input=1
+                ;;
+              -Wl,*)
+                probe_linker_option=1
+                ;;
             esac
           done
+          if test "$probe_input" -eq 1; then
+            exec riscv64-linux-gnu-gcc \
+              --sysroot="$BUSYBOX_MINI_SYSROOT/.." \
+              -I"$BUSYBOX_UAPI_COMPAT" -fno-pic -fno-pie "$@"
+          fi
 
           compile=0
           relocatable=0
@@ -217,6 +230,21 @@ jobs:
             esac
             previous="$arg"
           done
+
+          # scripts/trylink probes linker features by compiling a temporary
+          # C file with -Wl,... options. Those are build-system capability tests,
+          # not BusyBox target producers, so keep them out of the Mini ownership
+          # and failure accounting path.
+          if test "$probe_linker_option" -eq 1 && test "$compile" -eq 1 &&
+             test -n "$source"; then
+            case "$source" in
+              tmp.*.c|*/tmp.*.c)
+                exec riscv64-linux-gnu-gcc \
+                  --sysroot="$BUSYBOX_MINI_SYSROOT/.." \
+                  -I"$BUSYBOX_UAPI_COMPAT" -fno-pic -fno-pie "$@"
+                ;;
+            esac
+          fi
 
           if test "$relocatable" -eq 1; then
             exec riscv64-linux-gnu-gcc \
