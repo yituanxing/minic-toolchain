@@ -45,6 +45,7 @@ typedef enum MinicExpressionKind {
     MINIC_EXPRESSION_LABEL_ADDRESS,
     MINIC_EXPRESSION_CALL_FRAME_ADDRESS,
     MINIC_EXPRESSION_BUILTIN_UNREACHABLE,
+    MINIC_EXPRESSION_BUILTIN_ALLOCA,
     MINIC_EXPRESSION_SIZEOF,
     MINIC_EXPRESSION_OFFSETOF,
     MINIC_EXPRESSION_ADDRESS_OF,
@@ -220,6 +221,10 @@ typedef struct MinicLocal {
     MinicType type;
     size_t element_count;
     size_t explicit_alignment;
+    /* Runtime-sized local arrays preserve one evaluated bound and one allocated
+       address in ordinary hidden locals. Static arrays leave both invalid. */
+    MinicLocalId dynamic_count_local_id;
+    MinicLocalId dynamic_address_local_id;
     bool is_array;
     bool is_register_storage;
 } MinicLocal;
