@@ -2123,6 +2123,8 @@ static bool materialize_dynamic_local_array(MinicParser *parser,
                                             MinicExpressionId runtime_bound_id) {
     const MinicLocal *local;
     const MinicExpression *bound;
+    MinicLocal local_snapshot;
+    MinicExpression bound_snapshot;
     MinicLocal count_local;
     MinicLocal address_local;
     MinicLocalId count_local_id;
@@ -2146,22 +2148,27 @@ static bool materialize_dynamic_local_array(MinicParser *parser,
     }
     local = minic_c0_program_local(parser->program, local_id);
     bound = minic_c0_program_expression(parser->program, runtime_bound_id);
-    if (local == NULL || bound == NULL || !local->is_array || local->element_count != 0U ||
-        local->dynamic_count_local_id != MINIC_LOCAL_INVALID ||
-        local->dynamic_address_local_id != MINIC_LOCAL_INVALID ||
-        local->is_register_storage || local->explicit_alignment != 0U ||
-        !minic_type_is_integer(bound->type) ||
+    if (local == NULL || bound == NULL) {
+        return false;
+    }
+    local_snapshot = *local;
+    bound_snapshot = *bound;
+    if (!local_snapshot.is_array || local_snapshot.element_count != 0U ||
+        local_snapshot.dynamic_count_local_id != MINIC_LOCAL_INVALID ||
+        local_snapshot.dynamic_address_local_id != MINIC_LOCAL_INVALID ||
+        local_snapshot.is_register_storage || local_snapshot.explicit_alignment != 0U ||
+        !minic_type_is_integer(bound_snapshot.type) ||
         !minic_target_info_sizeof_type(
-            parser->target_info, parser->program, local->type, &element_size) ||
+            parser->target_info, parser->program, local_snapshot.type, &element_size) ||
         element_size == 0U ||
-        !minic_type_pointer_to(local->type, &pointer_type) ||
+        !minic_type_pointer_to(local_snapshot.type, &pointer_type) ||
         !minic_type_pointer_to(minic_type_void(), &void_pointer_type)) {
         minic_parser_error(parser, "unsupported variable length array declaration");
         return false;
     }
 
     minic_c0_local_initialize(&count_local);
-    count_local.name_span = local->name_span;
+    count_local.name_span = local_snapshot.name_span;
     count_local.type = minic_type_unsigned_long();
     count_local.element_count = 1U;
     count_local.is_array = false;
@@ -2172,7 +2179,7 @@ static bool materialize_dynamic_local_array(MinicParser *parser,
     }
 
     minic_c0_local_initialize(&address_local);
-    address_local.name_span = local->name_span;
+    address_local.name_span = local_snapshot.name_span;
     address_local.type = pointer_type;
     address_local.element_count = 1U;
     address_local.is_array = false;
@@ -2185,10 +2192,10 @@ static bool materialize_dynamic_local_array(MinicParser *parser,
     parser->program->locals[local_id].dynamic_address_local_id = address_local_id;
 
     count_value_id = runtime_bound_id;
-    if (!minic_type_equal(bound->type, minic_type_unsigned_long())) {
+    if (!minic_type_equal(bound_snapshot.type, minic_type_unsigned_long())) {
         (void)memset(&expression, 0, sizeof(expression));
         expression.kind = MINIC_EXPRESSION_CAST;
-        expression.span = bound->span;
+        expression.span = bound_snapshot.span;
         expression.type = minic_type_unsigned_long();
         expression.value_category = MINIC_VALUE_RVALUE;
         expression.value.unary.operand = runtime_bound_id;
@@ -2198,12 +2205,12 @@ static bool materialize_dynamic_local_array(MinicParser *parser,
     }
 
     if (!add_local_lvalue_expression(
-            parser, count_local_id, local->name_span, &count_target_id)) {
+            parser, count_local_id, local_snapshot.name_span, &count_target_id)) {
         return false;
     }
     (void)memset(&statement, 0, sizeof(statement));
     statement.kind = MINIC_STATEMENT_ASSIGN;
-    statement.span = bound->span;
+    statement.span = bound_snapshot.span;
     statement.target_expression = count_target_id;
     statement.expression = count_value_id;
     statement.target_statement = MINIC_STATEMENT_INVALID;
@@ -2217,7 +2224,7 @@ static bool materialize_dynamic_local_array(MinicParser *parser,
 
     (void)memset(&expression, 0, sizeof(expression));
     expression.kind = MINIC_EXPRESSION_LVALUE_READ;
-    expression.span = bound->span;
+    expression.span = bound_snapshot.span;
     expression.type = minic_type_unsigned_long();
     expression.value_category = MINIC_VALUE_RVALUE;
     expression.value.unary.operand = count_target_id;
@@ -2229,7 +2236,7 @@ static bool materialize_dynamic_local_array(MinicParser *parser,
     if (element_size != 1U) {
         (void)memset(&expression, 0, sizeof(expression));
         expression.kind = MINIC_EXPRESSION_INTEGER;
-        expression.span = bound->span;
+        expression.span = bound_snapshot.span;
         expression.type = minic_type_unsigned_long();
         expression.value_category = MINIC_VALUE_RVALUE;
         expression.value.integer_value = (int64_t)element_size;
@@ -2239,7 +2246,7 @@ static bool materialize_dynamic_local_array(MinicParser *parser,
 
         (void)memset(&expression, 0, sizeof(expression));
         expression.kind = MINIC_EXPRESSION_BINARY;
-        expression.span = bound->span;
+        expression.span = bound_snapshot.span;
         expression.type = minic_type_unsigned_long();
         expression.value_category = MINIC_VALUE_RVALUE;
         expression.value.binary.operator_kind = MINIC_BINARY_MULTIPLY;
@@ -2252,7 +2259,7 @@ static bool materialize_dynamic_local_array(MinicParser *parser,
 
     (void)memset(&expression, 0, sizeof(expression));
     expression.kind = MINIC_EXPRESSION_BUILTIN_ALLOCA;
-    expression.span = bound->span;
+    expression.span = bound_snapshot.span;
     expression.type = void_pointer_type;
     expression.value_category = MINIC_VALUE_RVALUE;
     expression.value.unary.operand = byte_count_id;
@@ -2262,19 +2269,19 @@ static bool materialize_dynamic_local_array(MinicParser *parser,
 
     (void)memset(&expression, 0, sizeof(expression));
     expression.kind = MINIC_EXPRESSION_CAST;
-    expression.span = bound->span;
+    expression.span = bound_snapshot.span;
     expression.type = pointer_type;
     expression.value_category = MINIC_VALUE_RVALUE;
     expression.value.unary.operand = alloca_id;
     if (!minic_parser_add_expression(parser, &expression, &pointer_value_id) ||
         !add_local_lvalue_expression(
-            parser, address_local_id, local->name_span, &address_target_id)) {
+            parser, address_local_id, local_snapshot.name_span, &address_target_id)) {
         return false;
     }
 
     (void)memset(&statement, 0, sizeof(statement));
     statement.kind = MINIC_STATEMENT_ASSIGN;
-    statement.span = bound->span;
+    statement.span = bound_snapshot.span;
     statement.target_expression = address_target_id;
     statement.expression = pointer_value_id;
     statement.target_statement = MINIC_STATEMENT_INVALID;
