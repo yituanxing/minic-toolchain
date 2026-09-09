@@ -1907,6 +1907,47 @@ static bool parse_static_scalar_array_transaction(MinicParser *parser,
         return minic_parser_add_bounded_string_literal_initializer(
             parser, object_id, element_count);
     }
+    if (parser != NULL && minic_type_is_char_integer(element_type) &&
+        parser->current.kind == MINIC_TOKEN_LBRACE) {
+        MinicParser probe;
+
+        probe = *parser;
+        if (!minic_parser_advance(&probe)) {
+            return false;
+        }
+        if (static_array_string_element_compatible(
+                &probe, element_type, probe.current.kind)) {
+            size_t string_count;
+
+            if (!minic_parser_advance(parser)) {
+                return false;
+            }
+            if (infer_bound) {
+                const MinicGlobalObject *string_object;
+
+                if (!minic_parser_add_string_literal_initializer(
+                        parser, object_id, &string_count)) {
+                    return false;
+                }
+                string_object = minic_c0_program_global_object(parser->program, object_id);
+                if (string_object == NULL || !minic_type_is_array(string_object->type) ||
+                    !minic_c0_program_complete_array_type(
+                        parser->program, string_object->type, string_count)) {
+                    minic_parser_error(parser, "cannot infer braced string array extent");
+                    return false;
+                }
+            } else if (!minic_parser_add_bounded_string_literal_initializer(
+                           parser, object_id, element_count)) {
+                return false;
+            }
+            if (parser->current.kind == MINIC_TOKEN_COMMA &&
+                !minic_parser_advance(parser)) {
+                return false;
+            }
+            return minic_parser_expect(
+                parser, MINIC_TOKEN_RBRACE, "expected '}' after braced string initializer");
+        }
+    }
 
     minic_array_initializer_plan_initialize(&plan, element_count, infer_bound);
     if (parser == NULL ||
