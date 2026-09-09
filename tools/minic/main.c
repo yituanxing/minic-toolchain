@@ -25,6 +25,16 @@ static void append_rv64_linux_musl_predefines(char **arguments,
                                                bool hosted) {
     arguments[(*count)++] = "-D__STDC__=1";
     arguments[(*count)++] = "-D__STDC_VERSION__=201112L";
+    /*
+     * Product-driver GNU surface level.  Keep this deliberately conservative:
+     * real-world headers use __GNUC_PREREQ(2,7) to decide whether GNU
+     * __attribute__ syntax is available.  MiniC supports that syntax, but does
+     * not claim the later GCC builtin/optimization surface.  Advertising 2.7
+     * preserves attributes such as packed without opening newer feature paths.
+     */
+    arguments[(*count)++] = "-D__GNUC__=2";
+    arguments[(*count)++] = "-D__GNUC_MINOR__=7";
+    arguments[(*count)++] = "-D__GNUC_PATCHLEVEL__=0";
     arguments[(*count)++] =
         hosted ? "-D__STDC_HOSTED__=1" : "-D__STDC_HOSTED__=0";
     arguments[(*count)++] = "-D__linux__=1";
