@@ -274,13 +274,16 @@ jobs:
                 continue
               fi
               case "$arg" in
-                -Wall|-W*|-O|-O0|-O1|-O2|-O3|-Os|-Og|-Ofast|-pipe)
+                -Wall|-W*|-O|-O0|-O1|-O2|-O3|-Os|-Oz|-Og|-Ofast|-pipe)
                   ;;
                 -g|-g0|-g1|-g2|-g3)
                   ;;
                 -fno-builtin*|-fno-strict-aliasing|-fomit-frame-pointer|\
                 -ffunction-sections|-fdata-sections|-fno-asynchronous-unwind-tables|\
-                -fno-unwind-tables|-fno-stack-protector|-fno-pic|-fno-pie|-fno-PIE)
+                -fno-unwind-tables|-fno-stack-protector|-fno-pic|-fno-pie|-fno-PIE|\
+                -finline-limit=*|-fno-guess-branch-probability|-funsigned-char|\
+                -static-libgcc|-falign-functions=*|-falign-jumps=*|-falign-labels=*|\
+                -falign-loops=*)
                   ;;
                 -march=*|-mabi=*|-mcmodel=*|-mno-*)
                   ;;
