@@ -679,7 +679,10 @@ static bool verify_expression(const MinicC0Program *program,
                 !minic_type_equal(expression->type, operand->type)) {
                 return false;
             }
-            if (minic_type_is_integer(operand->type)) {
+            if (minic_type_is_integer(operand->type) ||
+                minic_type_is_float(operand->type) ||
+                minic_type_is_double(operand->type) ||
+                minic_type_is_long_double(operand->type)) {
                 return true;
             }
             return minic_type_is_pointer(operand->type) &&
