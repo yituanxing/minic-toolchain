@@ -1,0 +1,211 @@
+name: Agent Constant If Fix
+
+on:
+  push:
+    branches:
+      - agent/busybox-link-constant-dead-v0
+
+permissions:
+  contents: write
+
+jobs:
+  patch-and-validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/busybox-link-constant-dead-v0
+          fetch-depth: 0
+
+      - name: Apply conservative constant-if pruning
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('src/core/core_lower.c')
+          s = p.read_text()
+          helper = r'''static bool core_block_contains_label(const MinicCoreLowerContext *context,
+                                              const MinicBlock *block) {
+              size_t index;
+
+              if (context == NULL || context->body == NULL || context->body->program == NULL ||
+                  block == NULL) {
+                  return true;
+              }
+              for (index = 0U; index < block->statement_count; ++index) {
+                  const MinicStatement *statement =
+                      minic_c0_program_statement(context->body->program, block->statements[index]);
+                  const MinicBlock *nested;
+
+                  if (statement == NULL) {
+                      return true;
+                  }
+                  if (statement->kind == MINIC_STATEMENT_LABEL) {
+                      return true;
+                  }
+                  if (statement->then_block != MINIC_BLOCK_INVALID) {
+                      nested = minic_c0_program_block(context->body->program, statement->then_block);
+                      if (nested == NULL || core_block_contains_label(context, nested)) {
+                          return true;
+                      }
+                  }
+                  if (statement->else_block != MINIC_BLOCK_INVALID) {
+                      nested = minic_c0_program_block(context->body->program, statement->else_block);
+                      if (nested == NULL || core_block_contains_label(context, nested)) {
+                          return true;
+                      }
+                  }
+              }
+              return false;
+          }
+
+          static bool core_constant_integer_truth(const MinicCoreLowerContext *context,
+                                                  MinicExpressionId expression_id,
+                                                  bool *is_true) {
+              MinicConstValue value;
+              bool is_zero;
+
+              if (context == NULL || context->body == NULL || context->body->program == NULL ||
+                  context->target == NULL || is_true == NULL ||
+                  expression_id == MINIC_EXPRESSION_INVALID ||
+                  !minic_const_eval_integer(
+                      context->body->program, context->target, expression_id, &value) ||
+                  !minic_const_value_is_zero(
+                      context->body->program, context->target, &value, &is_zero)) {
+                  return false;
+              }
+              *is_true = !is_zero;
+              return true;
+          }
+
+          '''
+          marker = '''static MinicCoreLowerStatus
+          lower_if(MinicCoreLowerContext *context, const MinicStatement *statement, bool *terminated) {'''
+          if 'static bool core_constant_integer_truth(' not in s:
+              if marker not in s:
+                  raise SystemExit('lower_if marker not found')
+              s = s.replace(marker, helper + marker, 1)
+
+          old = '''    if (statement->else_block != MINIC_BLOCK_INVALID) {
+              else_source = minic_c0_program_block(context->body->program, statement->else_block);
+              if (else_source == NULL) {
+                  return MINIC_CORE_LOWER_ERROR;
+              }
+          }
+
+          condition_block = context->block_id;'''
+          new = '''    if (statement->else_block != MINIC_BLOCK_INVALID) {
+              else_source = minic_c0_program_block(context->body->program, statement->else_block);
+              if (else_source == NULL) {
+                  return MINIC_CORE_LOWER_ERROR;
+              }
+          }
+
+          /* BusyBox and other configuration-heavy C relies on the compiler removing
+             compile-time-dead branches even without an optimization pipeline.  Do
+             that at the AST -> Core seam when the existing integer constant evaluator
+             proves the condition.  Keep the historical CFG whenever the discarded
+             subtree contains a label, since a function-level goto or label address can
+             make such source text reachable independently of the if condition. */
+          if (minic_type_is_integer(condition_expression->type)) {
+              bool constant_true;
+
+              if (core_constant_integer_truth(context, statement->expression, &constant_true)) {
+                  const MinicBlock *discarded = constant_true ? else_source : then_source;
+
+                  if (discarded == NULL || !core_block_contains_label(context, discarded)) {
+                      const MinicBlock *selected = constant_true ? then_source : else_source;
+
+                      if (selected == NULL) {
+                          *terminated = false;
+                          return MINIC_CORE_LOWER_OK;
+                      }
+                      return lower_block(context, selected, terminated);
+                  }
+              }
+          }
+
+          condition_block = context->block_id;'''
+          if 'BusyBox and other configuration-heavy C relies' not in s:
+              if old not in s:
+                  raise SystemExit('lower_if insertion point not found')
+              s = s.replace(old, new, 1)
+          p.write_text(s)
+          PY
+          git diff --check
+
+      - name: Build Mini toolchain
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/agent-constant-if all
+
+      - name: Validate dead constant branches and label reentry
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work=build/agent-constant-if/probe
+          mkdir -p "$work"
+          cat >"$work/constant-if.c" <<'EOF'
+          extern int missing_dead_symbol(void);
+          int constant_true_return(void) {
+              if (sizeof(unsigned int) == 4)
+                  return 7;
+              return missing_dead_symbol();
+          }
+          int constant_false_branch(void) {
+              if (sizeof(unsigned int) != 4)
+                  return missing_dead_symbol();
+              return 9;
+          }
+          int constant_else(void) {
+              if (1)
+                  return 11;
+              else
+                  return missing_dead_symbol();
+          }
+          int label_reentry(int x) {
+              if (0) {
+          target:
+                  return x + 1;
+              }
+              if (x)
+                  goto target;
+              return 0;
+          }
+          EOF
+          cc -E -P -x c "$work/constant-if.c" -o "$work/constant-if.i"
+          build/agent-constant-if/bin/minic -S "$work/constant-if.i" -o "$work/constant-if.s"
+          test -s "$work/constant-if.s"
+          if grep -F 'missing_dead_symbol' "$work/constant-if.s"; then
+              echo 'dead constant branch still emits undefined reference' >&2
+              exit 1
+          fi
+          grep -F '.Luser_' "$work/constant-if.s" >/dev/null
+          echo 'CONSTANT_IF_DEAD_BRANCH=PASS label_reentry=PASS'
+
+      - name: Run focused regressions
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          BUILD_DIR=build/agent-constant-if MINIC="$GITHUB_WORKSPACE/build/agent-constant-if/bin/minic" \
+            sh tests/compiler/c0/run-enum-constant-scopes.sh
+          BUILD_DIR=build/agent-constant-if MINIC="$GITHUB_WORKSPACE/build/agent-constant-if/bin/minic" HOST_CC=cc \
+            sh tests/compiler/c0/run-gnu-function-attributes.sh
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/agent-constant-if check-minias-a0
+
+      - name: Commit validated compiler fix
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          if git diff --quiet -- src/core/core_lower.c; then
+            echo 'AGENT_PATCH_ALREADY_COMMITTED=1'
+            exit 0
+          fi
+          git config user.name 'openai-agent'
+          git config user.email 'openai-agent@users.noreply.github.com'
+          git add src/core/core_lower.c
+          git commit -m 'core: prune proven constant if branches'
+          git push origin HEAD:agent/busybox-link-constant-dead-v0
