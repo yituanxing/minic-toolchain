@@ -1,6 +1,7 @@
 #ifndef MINIC_COMPILER_H
 #define MINIC_COMPILER_H
 
+#include <stdbool.h>
 #include <stddef.h>
 
 #ifdef __cplusplus
@@ -14,6 +15,11 @@ typedef struct MinicDiagnostic {
     char message[256];
 } MinicDiagnostic;
 
+typedef struct MinicCompileOptions {
+    bool function_sections;
+    bool data_sections;
+} MinicCompileOptions;
+
 /*
  * Compile one normalized, preprocessed C translation unit to RISC-V assembly.
  * 将一个规范化的预处理后 C 翻译单元编译为 RISC-V 汇编。
@@ -24,6 +30,10 @@ typedef struct MinicDiagnostic {
 int minic_compile_preprocessed_file(const char *input_path,
                                     const char *output_path,
                                     MinicDiagnostic *diagnostic);
+int minic_compile_preprocessed_file_with_options(const char *input_path,
+                                                 const char *output_path,
+                                                 const MinicCompileOptions *options,
+                                                 MinicDiagnostic *diagnostic);
 
 #ifdef __cplusplus
 }
