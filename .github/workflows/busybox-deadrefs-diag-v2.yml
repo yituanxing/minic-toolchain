@@ -46,7 +46,11 @@ jobs:
           git -C "$src" checkout -q --detach FETCH_HEAD
           cat "$fixture"/busybox-v222.config.part0{0,1,2,3,4} >"$work/busybox-v222.config"
           cp "$work/busybox-v222.config" "$out/.config"
+          set +e
           yes "" | make -C "$src" O="$out" oldconfig HOSTCC=/usr/bin/cc >/dev/null
+          oldconfig_rc=${PIPESTATUS[1]}
+          set -e
+          test "$oldconfig_rc" -eq 0
           make -C "$src" O="$out" HOSTCC=/usr/bin/cc prepare applets_dir >/dev/null
           echo '=== CONFIG MACROS ==='
           grep -E '^(#define )?ENABLE_(FEATURE_CLEAN_UP|FEATURE_SH_NOFORK|FEATURE_SGI_LABEL|FEATURE_SUN_LABEL)' "$out/include/autoconf.h" || true
