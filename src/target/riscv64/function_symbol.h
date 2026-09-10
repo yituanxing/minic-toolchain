@@ -53,7 +53,11 @@ minic_riscv64_emit_function_symbol_begin(FILE *file, const MinicRiscv64FunctionS
         if (fprintf(file, ".section %s\n", symbol->section_name) < 0) {
             return false;
         }
-    } else if (fprintf(file, ".text\n") < 0) {
+    } else if (fprintf(file, ".section .text.%s\n", symbol->symbol_name) < 0) {
+        /* Keep every ordinary function in its own input section. This makes
+           linker --gc-sections effective even when a build system's
+           -ffunction-sections flag is consumed outside minic-cc, while an
+           explicit GNU section attribute above still owns the exact section. */
         return false;
     }
     if (!symbol->is_internal) {
