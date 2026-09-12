@@ -1,14 +1,15 @@
 #!/bin/sh
 set -eu
 
-: "${MINIC:?MINIC is required}"
-: "${MINIAS:?MINIAS is required}"
-: "${MINILD:?MINILD is required}"
+BUILD="${BUILD_DIR:-build}"
+MINIC="${MINIC:-$BUILD/bin/minic}"
+MINIAS="${MINIAS:-$BUILD/bin/minic-as}"
+MINILD="${MINILD:-$BUILD/bin/minic-ld}"
 
 QEMU="${QEMU_RISCV64:-qemu-riscv64}"
 READELF="${RISCV_READELF:-riscv64-linux-gnu-readelf}"
 NM="${RISCV_NM:-riscv64-linux-gnu-nm}"
-WORK="${BUILD_DIR:-build}/linker-gc-v0"
+WORK="$BUILD/linker-gc-v0"
 
 rm -rf "$WORK"
 mkdir -p "$WORK"
