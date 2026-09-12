@@ -372,6 +372,169 @@ done:
     return ok;
 }
 
+
+typedef struct MiniLdGcSectionOrder {
+    size_t old_index;
+    size_t order;
+} MiniLdGcSectionOrder;
+
+static int minild_gc_compare_section_order(const void *lhs,
+                                           const void *rhs) {
+    const MiniLdGcSectionOrder *a = lhs;
+    const MiniLdGcSectionOrder *b = rhs;
+
+    if (a->order < b->order) {
+        return -1;
+    }
+    if (a->order > b->order) {
+        return 1;
+    }
+    if (a->old_index < b->old_index) {
+        return -1;
+    }
+    if (a->old_index > b->old_index) {
+        return 1;
+    }
+    return 0;
+}
+
+/*
+ * Splitting a historically merged `.text`/`.data` output section is
+ * not enough: appending every recovered fragment at the end changes
+ * input-section order and can turn a valid R_RISCV_JAL into an
+ * artificial out-of-range jump.  STT_SECTION symbols are appended as
+ * each ET_REL input is consumed, so their state-symbol order retains
+ * the original cross-object input-section ordering.  Restore that
+ * order after fragment reconstruction and remap all section indices
+ * before layout/GC.
+ */
+static bool minild_gc_restore_input_order(MiniLdState *state) {
+    const size_t count = state->section_count;
+    MiniLdGcSectionOrder *entries = NULL;
+    MiniLdSection *ordered_sections = NULL;
+    size_t *orders = NULL;
+    size_t *remap = NULL;
+    size_t index_capacity = 64U;
+    size_t target;
+    size_t ordered_count = 0U;
+    size_t i;
+    bool installed = false;
+    bool ok = false;
+
+    entries = malloc((count == 0U ? 1U : count) * sizeof(*entries));
+    ordered_sections =
+        malloc((count == 0U ? 1U : count) * sizeof(*ordered_sections));
+    orders = malloc((count == 0U ? 1U : count) * sizeof(*orders));
+    remap = malloc((count == 0U ? 1U : count) * sizeof(*remap));
+    if (entries == NULL || ordered_sections == NULL ||
+        orders == NULL || remap == NULL) {
+        fprintf(state->diagnostics,
+                "minic-ld: out-of-memory:gc-input-order\n");
+        goto done;
+    }
+    for (i = 0U; i < count; ++i) {
+        orders[i] = SIZE_MAX;
+    }
+
+    for (i = 0U; i < state->symbol_count; ++i) {
+        const MiniLdSymbol *symbol = &state->symbols[i];
+        size_t section_index;
+
+        if (symbol->section < 0 ||
+            ELF64_ST_TYPE(symbol->info) != STT_SECTION) {
+            continue;
+        }
+        section_index = (size_t)symbol->section;
+        if (section_index >= count) {
+            fprintf(state->diagnostics,
+                    "minic-ld: gc-input-order-symbol-section\n");
+            goto done;
+        }
+        if (orders[section_index] == SIZE_MAX) {
+            orders[section_index] = i;
+            ++ordered_count;
+        }
+    }
+
+    if (count > (SIZE_MAX - 1U) / 2U) {
+        fprintf(state->diagnostics,
+                "minic-ld: gc-input-order-index-overflow\n");
+        goto done;
+    }
+    target = count * 2U + 1U;
+    while (index_capacity < target) {
+        if (index_capacity > SIZE_MAX / 2U) {
+            fprintf(state->diagnostics,
+                    "minic-ld: gc-input-order-index-overflow\n");
+            goto done;
+        }
+        index_capacity *= 2U;
+    }
+
+    for (i = 0U; i < count; ++i) {
+        entries[i].old_index = i;
+        entries[i].order =
+            orders[i] == SIZE_MAX ? state->symbol_count + i : orders[i];
+    }
+    qsort(entries,
+          count,
+          sizeof(*entries),
+          minild_gc_compare_section_order);
+
+    for (i = 0U; i < count; ++i) {
+        const size_t old_index = entries[i].old_index;
+        ordered_sections[i] = state->sections[old_index];
+        remap[old_index] = i;
+    }
+    for (i = 0U; i < state->symbol_count; ++i) {
+        MiniLdSymbol *symbol = &state->symbols[i];
+
+        if (symbol->section < 0) {
+            continue;
+        }
+        if ((size_t)symbol->section >= count) {
+            fprintf(state->diagnostics,
+                    "minic-ld: gc-input-order-symbol-remap\n");
+            goto done;
+        }
+        symbol->section = (int)remap[symbol->section];
+    }
+    for (i = 0U; i < state->reloc_count; ++i) {
+        if (state->relocs[i].section >= count) {
+            fprintf(state->diagnostics,
+                    "minic-ld: gc-input-order-reloc-remap\n");
+            goto done;
+        }
+        state->relocs[i].section = remap[state->relocs[i].section];
+    }
+
+    free(state->sections);
+    state->sections = ordered_sections;
+    state->section_capacity = count;
+    ordered_sections = NULL;
+    installed = true;
+
+    if (!rebuild_section_index(state, index_capacity)) {
+        fprintf(state->diagnostics,
+                "minic-ld: out-of-memory:gc-input-order-index\n");
+        goto done;
+    }
+    fprintf(state->diagnostics,
+            "minic-ld: gc-input-order:sections=%zu:ordered=%zu\n",
+            count,
+            ordered_count);
+    ok = true;
+
+done:
+    if (!installed) {
+        free(ordered_sections);
+    }
+    free(remap);
+    free(orders);
+    free(entries);
+    return ok;
+}
+
 static bool minild_gc_name_has_prefix(const char *name, const char *prefix) {
     size_t length = strlen(prefix);
 
@@ -599,6 +762,7 @@ static int minild_link_static_with_gc_v0(
     if (!process_input_sequence(&state, inputs, input_count) ||
         !state.have_input ||
         !minild_gc_restore_input_sections(&state) ||
+        !minild_gc_restore_input_order(&state) ||
         !static_allocate_common(&state) ||
         !minild_gc_prune_static(&state, entry_symbol) ||
         !static_build_got(&state, &got) ||
