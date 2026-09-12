@@ -33,6 +33,345 @@ void minild_cli_enable_gc_sections_v0(void) {
     minild_gc_sections_enabled = true;
 }
 
+typedef struct MiniLdGcMarker {
+    size_t section;
+    uint64_t offset;
+} MiniLdGcMarker;
+
+typedef struct MiniLdGcFragment {
+    uint64_t start;
+    size_t section;
+} MiniLdGcFragment;
+
+static int minild_gc_compare_marker(const void *lhs, const void *rhs) {
+    const MiniLdGcMarker *a = lhs;
+    const MiniLdGcMarker *b = rhs;
+
+    if (a->section < b->section) {
+        return -1;
+    }
+    if (a->section > b->section) {
+        return 1;
+    }
+    if (a->offset < b->offset) {
+        return -1;
+    }
+    if (a->offset > b->offset) {
+        return 1;
+    }
+    return 0;
+}
+
+static size_t minild_gc_fragment_for(const MiniLdGcFragment *fragments,
+                                     size_t count,
+                                     uint64_t offset) {
+    size_t lo = 0U;
+    size_t hi = count;
+
+    while (lo + 1U < hi) {
+        size_t mid = lo + (hi - lo) / 2U;
+
+        if (fragments[mid].start <= offset) {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    return lo;
+}
+
+/*
+ * The core linker historically concatenates every same-named input section
+ * immediately.  That is fine for ordinary linking, but it destroys the input
+ * section identity required by --gc-sections.  ET_REL symbol tables retain an
+ * STT_SECTION symbol at each original input-section base, so reconstruct the
+ * original GC granularity after archive/group selection and before reachability
+ * analysis.  This keeps the non-GC linker path byte-for-byte on the mature
+ * implementation while giving static GC the semantics it needs for ordinary
+ * `.text`/`.data` sections from musl and libgcc as well as MiniC's
+ * `.text.<function>` sections.
+ */
+static bool minild_gc_restore_input_sections(MiniLdState *state) {
+    const size_t original_section_count = state->section_count;
+    const size_t marker_capacity = original_section_count + state->symbol_count;
+    MiniLdGcMarker *markers = NULL;
+    MiniLdGcFragment *fragments = NULL;
+    size_t *fragment_begin = NULL;
+    size_t *fragment_count = NULL;
+    size_t marker_count = 0U;
+    size_t fragment_used = 0U;
+    size_t split_outputs = 0U;
+    size_t i;
+    bool ok = false;
+
+    markers = malloc((marker_capacity == 0U ? 1U : marker_capacity) *
+                     sizeof(*markers));
+    fragments = malloc((marker_capacity == 0U ? 1U : marker_capacity) *
+                       sizeof(*fragments));
+    fragment_begin = malloc((original_section_count == 0U
+                                 ? 1U
+                                 : original_section_count) *
+                            sizeof(*fragment_begin));
+    fragment_count = calloc(original_section_count == 0U
+                                ? 1U
+                                : original_section_count,
+                            sizeof(*fragment_count));
+    if (markers == NULL || fragments == NULL || fragment_begin == NULL ||
+        fragment_count == NULL) {
+        fprintf(state->diagnostics,
+                "minic-ld: out-of-memory:gc-input-sections\n");
+        goto done;
+    }
+    for (i = 0U; i < original_section_count; ++i) {
+        fragment_begin[i] = SIZE_MAX;
+        if ((state->sections[i].flags & SHF_ALLOC) != 0U &&
+            state->sections[i].size != 0U) {
+            markers[marker_count].section = i;
+            markers[marker_count].offset = 0U;
+            ++marker_count;
+        }
+    }
+    for (i = 0U; i < state->symbol_count; ++i) {
+        const MiniLdSymbol *symbol = &state->symbols[i];
+        size_t section_index;
+
+        if (symbol->section < 0 ||
+            ELF64_ST_TYPE(symbol->info) != STT_SECTION) {
+            continue;
+        }
+        section_index = (size_t)symbol->section;
+        if (section_index >= original_section_count ||
+            (state->sections[section_index].flags & SHF_ALLOC) == 0U ||
+            state->sections[section_index].size == 0U ||
+            symbol->value >= state->sections[section_index].size) {
+            continue;
+        }
+        if (marker_count >= marker_capacity) {
+            fprintf(state->diagnostics,
+                    "minic-ld: gc-input-section-marker-overflow\n");
+            goto done;
+        }
+        markers[marker_count].section = section_index;
+        markers[marker_count].offset = symbol->value;
+        ++marker_count;
+    }
+
+    qsort(markers,
+          marker_count,
+          sizeof(*markers),
+          minild_gc_compare_marker);
+
+    i = 0U;
+    while (i < marker_count) {
+        const size_t old_index = markers[i].section;
+        size_t group_end = i;
+        size_t unique_count = 0U;
+        uint64_t previous = UINT64_MAX;
+        size_t j;
+
+        while (group_end < marker_count &&
+               markers[group_end].section == old_index) {
+            if (markers[group_end].offset != previous) {
+                markers[i + unique_count] = markers[group_end];
+                previous = markers[group_end].offset;
+                ++unique_count;
+            }
+            ++group_end;
+        }
+
+        if (unique_count > 1U) {
+            const uint32_t type = state->sections[old_index].type;
+            const uint64_t flags = state->sections[old_index].flags;
+            const uint64_t align = state->sections[old_index].align;
+            const uint64_t entsize = state->sections[old_index].entsize;
+            const size_t old_size = state->sections[old_index].size;
+            const unsigned char *old_data = state->sections[old_index].data;
+            const char *old_name = state->sections[old_index].name;
+
+            fragment_begin[old_index] = fragment_used;
+            fragment_count[old_index] = unique_count;
+            ++split_outputs;
+
+            for (j = 0U; j < unique_count; ++j) {
+                const uint64_t start = markers[i + j].offset;
+                const uint64_t end =
+                    j + 1U < unique_count ? markers[i + j + 1U].offset
+                                         : (uint64_t)old_size;
+                size_t new_index;
+                MiniLdSection *fragment;
+                char *name;
+                int needed;
+
+                if (end < start || end > old_size ||
+                    start > SIZE_MAX || end - start > SIZE_MAX) {
+                    fprintf(state->diagnostics,
+                            "minic-ld: gc-input-section-range:%s\n",
+                            old_name);
+                    goto done;
+                }
+                if (!ensure_section_capacity(state)) {
+                    fprintf(state->diagnostics,
+                            "minic-ld: out-of-memory:gc-input-section-state\n");
+                    goto done;
+                }
+                needed = snprintf(NULL,
+                                  0,
+                                  "%s.__minild_gc_%zu_%zu",
+                                  old_name,
+                                  old_index,
+                                  j);
+                if (needed < 0) {
+                    fprintf(state->diagnostics,
+                            "minic-ld: gc-input-section-name:%s\n",
+                            old_name);
+                    goto done;
+                }
+                name = malloc((size_t)needed + 1U);
+                if (name == NULL) {
+                    fprintf(state->diagnostics,
+                            "minic-ld: out-of-memory:gc-input-section-name\n");
+                    goto done;
+                }
+                (void)snprintf(name,
+                               (size_t)needed + 1U,
+                               "%s.__minild_gc_%zu_%zu",
+                               old_name,
+                               old_index,
+                               j);
+
+                new_index = state->section_count++;
+                fragment = &state->sections[new_index];
+                memset(fragment, 0, sizeof(*fragment));
+                fragment->name = name;
+                fragment->type = type;
+                fragment->flags = flags;
+                fragment->align = align;
+                fragment->entsize = entsize;
+
+                if (type == SHT_NOBITS) {
+                    if (!section_append_zero(fragment, (size_t)(end - start))) {
+                        fprintf(state->diagnostics,
+                                "minic-ld: gc-input-section-copy:%s\n",
+                                old_name);
+                        goto done;
+                    }
+                } else if (!section_append_data(fragment,
+                                                old_data + (size_t)start,
+                                                (size_t)(end - start))) {
+                    fprintf(state->diagnostics,
+                            "minic-ld: gc-input-section-copy:%s\n",
+                            old_name);
+                    goto done;
+                }
+                fragments[fragment_used].start = start;
+                fragments[fragment_used].section = new_index;
+                ++fragment_used;
+            }
+        }
+        i = group_end;
+    }
+
+    if (split_outputs != 0U) {
+        for (i = 0U; i < state->symbol_count; ++i) {
+            MiniLdSymbol *symbol = &state->symbols[i];
+            size_t old_index;
+            size_t local;
+            const MiniLdGcFragment *map;
+
+            if (symbol->section < 0) {
+                continue;
+            }
+            old_index = (size_t)symbol->section;
+            if (old_index >= original_section_count ||
+                fragment_count[old_index] == 0U) {
+                continue;
+            }
+            map = fragments + fragment_begin[old_index];
+            local = minild_gc_fragment_for(map,
+                                           fragment_count[old_index],
+                                           symbol->value);
+            if (symbol->value < map[local].start) {
+                fprintf(state->diagnostics,
+                        "minic-ld: gc-symbol-before-input-section:%s\n",
+                        symbol->name);
+                goto done;
+            }
+            symbol->section = (int)map[local].section;
+            symbol->value -= map[local].start;
+        }
+
+        for (i = 0U; i < state->reloc_count; ++i) {
+            MiniLdReloc *reloc = &state->relocs[i];
+            size_t old_index = reloc->section;
+            size_t local;
+            const MiniLdGcFragment *map;
+
+            if (old_index >= original_section_count ||
+                fragment_count[old_index] == 0U) {
+                continue;
+            }
+            map = fragments + fragment_begin[old_index];
+            local = minild_gc_fragment_for(map,
+                                           fragment_count[old_index],
+                                           reloc->offset);
+            if (reloc->offset < map[local].start) {
+                fprintf(state->diagnostics,
+                        "minic-ld: gc-relocation-before-input-section\n");
+                goto done;
+            }
+            --state->sections[old_index].relocation_count;
+            reloc->section = map[local].section;
+            reloc->offset -= map[local].start;
+            ++state->sections[reloc->section].relocation_count;
+        }
+
+        for (i = 0U; i < original_section_count; ++i) {
+            if (fragment_count[i] != 0U) {
+                state->sections[i].size = 0U;
+                state->sections[i].relocation_count = 0U;
+            }
+        }
+
+        {
+            size_t index_capacity = 64U;
+            size_t target;
+
+            if (state->section_count > (SIZE_MAX - 1U) / 2U) {
+                fprintf(state->diagnostics,
+                        "minic-ld: gc-section-index-overflow\n");
+                goto done;
+            }
+            target = state->section_count * 2U + 1U;
+            while (index_capacity < target) {
+                if (index_capacity > SIZE_MAX / 2U) {
+                    fprintf(state->diagnostics,
+                            "minic-ld: gc-section-index-overflow\n");
+                    goto done;
+                }
+                index_capacity *= 2U;
+            }
+            if (!rebuild_section_index(state, index_capacity)) {
+                fprintf(state->diagnostics,
+                        "minic-ld: out-of-memory:gc-section-index\n");
+                goto done;
+            }
+        }
+    }
+
+    fprintf(state->diagnostics,
+            "minic-ld: gc-input-sections:split=%zu:fragments=%zu\n",
+            split_outputs,
+            fragment_used);
+    ok = true;
+
+done:
+    free(fragment_count);
+    free(fragment_begin);
+    free(fragments);
+    free(markers);
+    return ok;
+}
+
 static bool minild_gc_name_has_prefix(const char *name, const char *prefix) {
     size_t length = strlen(prefix);
 
@@ -259,6 +598,7 @@ static int minild_link_static_with_gc_v0(
 
     if (!process_input_sequence(&state, inputs, input_count) ||
         !state.have_input ||
+        !minild_gc_restore_input_sections(&state) ||
         !static_allocate_common(&state) ||
         !minild_gc_prune_static(&state, entry_symbol) ||
         !static_build_got(&state, &got) ||
