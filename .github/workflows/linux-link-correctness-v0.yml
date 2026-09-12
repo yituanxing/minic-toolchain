@@ -1,0 +1,180 @@
+name: Linux Link Correctness V0
+
+on:
+  push:
+    branches:
+      - "agent/linux-link-correctness-v0"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: linux-link-correctness-v0-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pi-symbol-diff:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Install RV64 Linux prerequisites
+        run: |
+          sudo apt-get -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            build-essential gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
+            bc bison flex libssl-dev libelf-dev make curl xz-utils python3
+
+      - name: Build current Mini toolchain
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          build="$GITHUB_WORKSPACE/build/linux-link-correctness-v0/toolchain"
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$build" all
+          test -x "$build/bin/minic"
+          echo "LINUX_LINK_TOOLCHAIN=PASS head=${GITHUB_SHA}"
+
+      - name: Prepare pinned Linux 6.6.143 trees
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-link-correctness-v0"
+          archive="$work/linux-6.6.143.tar.xz"
+          src="$work/linux-6.6.143"
+          cfg="$work/config-out"
+          mkdir -p "$work"
+          curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors \
+            https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.6.143.tar.xz \
+            -o "$archive"
+          printf '%s  %s\n' \
+            dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932 \
+            "$archive" | sha256sum -c -
+          tar -xJf "$archive" -C "$work"
+
+          make -C "$src" O="$cfg" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- defconfig
+          "$src/scripts/config" --file "$cfg/.config" \
+            -e BLK_DEV_INITRD -e DEVTMPFS -e DEVTMPFS_MOUNT \
+            -e SERIAL_8250 -e SERIAL_8250_CONSOLE
+          make -C "$src" O="$cfg" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- olddefconfig
+
+          mkdir -p "$work/out-gcc" "$work/out-mini" "$work/evidence"
+          cp "$cfg/.config" "$work/out-gcc/.config"
+          cp "$cfg/.config" "$work/out-mini/.config"
+          sha256sum "$cfg/.config" | tee "$work/evidence/config.sha256"
+          sed -n '1,220p' "$src/arch/riscv/kernel/pi/Makefile" >"$work/evidence/pi-Makefile.txt"
+          echo "LINUX_LINK_SOURCE=PASS release=6.6.143"
+
+      - name: Build GCC PI reference objects
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-link-correctness-v0"
+          src="$work/linux-6.6.143"
+          out="$work/out-gcc"
+          make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- -j4 prepare
+          make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
+            -j1 V=1 \
+            arch/riscv/kernel/pi/string.pi.o \
+            arch/riscv/kernel/pi/lib-fdt.pi.o \
+            >"$work/evidence/gcc-kbuild.log" 2>&1
+          test -s "$out/arch/riscv/kernel/pi/string.pi.o"
+          test -s "$out/arch/riscv/kernel/pi/lib-fdt.pi.o"
+          echo "LINUX_PI_GCC=PASS objects=2"
+
+      - name: Build MiniC PI focused objects
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-link-correctness-v0"
+          src="$work/linux-6.6.143"
+          out="$work/out-mini"
+          wrapper="$GITHUB_WORKSPACE/tests/external/linux/stage2_kbuild_cc.sh"
+          minic="$work/toolchain/bin/minic"
+          trace="$work/evidence/minic-kbuild.trace"
+
+          make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- -j4 prepare
+          export MINIC="$minic"
+          export REAL_CC=/usr/bin/riscv64-linux-gnu-gcc
+          export MINIC_KEEP_INTERMEDIATES=1
+          export MINIC_KBUILD_TRACE="$trace"
+          export CORE_FAST_TRACE=1
+
+          set +e
+          make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
+            CC="$wrapper" -j1 V=1 \
+            arch/riscv/kernel/pi/string.pi.o \
+            arch/riscv/kernel/pi/lib-fdt.pi.o \
+            >"$work/evidence/mini-kbuild.log" 2>&1
+          rc=$?
+          set -e
+          echo "LINUX_PI_MINI_BUILD_RC=$rc"
+          if test "$rc" -ne 0; then
+            tail -n 200 "$work/evidence/mini-kbuild.log"
+            exit "$rc"
+          fi
+          test -s "$out/arch/riscv/kernel/pi/string.pi.o"
+          test -s "$out/arch/riscv/kernel/pi/lib-fdt.pi.o"
+          echo "LINUX_PI_MINI=PASS objects=2"
+
+      - name: Compare PI symbols and relocations
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-link-correctness-v0"
+          ev="$work/evidence"
+          for lane in gcc mini; do
+            out="$work/out-$lane"
+            for base in string lib-fdt; do
+              obj="$out/arch/riscv/kernel/pi/$base.pi.o"
+              riscv64-linux-gnu-nm -u "$obj" | sed 's/^[[:space:]]*//' | sort -u >"$ev/$lane-$base.undefined"
+              riscv64-linux-gnu-nm -n "$obj" >"$ev/$lane-$base.nm"
+              riscv64-linux-gnu-readelf -Wr "$obj" >"$ev/$lane-$base.relocs"
+              riscv64-linux-gnu-objdump -dr "$obj" >"$ev/$lane-$base.objdump"
+              plain="$out/arch/riscv/kernel/pi/$base.o"
+              if test -s "$plain"; then
+                riscv64-linux-gnu-nm -u "$plain" | sed 's/^[[:space:]]*//' | sort -u >"$ev/$lane-$base.preprefix.undefined"
+              fi
+            done
+          done
+
+          EV="$ev" python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          ev=Path(os.environ['EV'])
+          cats=(
+              '__pi_', '__efistub_', '__compiletime_assert_',
+              '__bad_size_call_parameter', '__minic_deferred_asm_immediate_'
+          )
+          report={}
+          for base in ('string','lib-fdt'):
+              def load(lane):
+                  p=ev/f'{lane}-{base}.undefined'
+                  return set(x.strip() for x in p.read_text().splitlines() if x.strip())
+              gcc=load('gcc'); mini=load('mini')
+              only_mini=sorted(mini-gcc)
+              only_gcc=sorted(gcc-mini)
+              common=sorted(gcc&mini)
+              report[base]={
+                  'gcc_undefined':len(gcc), 'mini_undefined':len(mini),
+                  'common':len(common), 'only_mini':only_mini, 'only_gcc':only_gcc,
+                  'only_mini_categories':{c:sum(s.startswith(c) for s in only_mini) for c in cats},
+              }
+              (ev/f'{base}.only-mini.txt').write_text('\n'.join(only_mini)+('\n' if only_mini else ''))
+              (ev/f'{base}.only-gcc.txt').write_text('\n'.join(only_gcc)+('\n' if only_gcc else ''))
+          (ev/'pi-symbol-diff.json').write_text(json.dumps(report,indent=2)+'\n')
+          print(json.dumps(report,indent=2))
+          PY
+          echo "LINUX_PI_SYMBOL_DIFF=PASS evidence=$ev/pi-symbol-diff.json"
+
+      - name: Preserve focused Linux evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-link-correctness-v0
+          path: build/linux-link-correctness-v0/evidence/
+          if-no-files-found: ignore
+          retention-days: 7
