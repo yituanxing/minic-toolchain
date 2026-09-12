@@ -85,4 +85,64 @@ fi
 grep -Eq ' [Tt] minic_live_function$' "$WORK/gc.symbols"
 grep -Eq ' [Tt] minic_live_helper$' "$WORK/gc.symbols"
 
-echo "MINILD_GC_V0=PASS dead=discarded transitive=retained qemu_rc=23"
+echo "MINILD_GC_FUNCTION_SECTIONS=PASS dead=discarded transitive=retained qemu_rc=23"
+
+# Real static archives (musl/libgcc) commonly use the same plain `.text` name
+# in many different input objects.  GC semantics are defined over input
+# sections, not over an output section produced by eagerly concatenating every
+# same-named input section.  Freeze that distinction explicitly.
+cat >"$WORK/plain-start.s" <<'S'
+.text
+.globl _start
+.type _start, @function
+_start:
+    call plain_live
+    li a7, 93
+    ecall
+.size _start, .-_start
+S
+
+cat >"$WORK/plain-live.s" <<'S'
+.text
+.globl plain_live
+.type plain_live, @function
+plain_live:
+    li a0, 31
+    ret
+.size plain_live, .-plain_live
+S
+
+cat >"$WORK/plain-dead.s" <<'S'
+.text
+.globl plain_dead
+.type plain_dead, @function
+plain_dead:
+    call plain_dead_missing_symbol
+    ret
+.size plain_dead, .-plain_dead
+S
+
+"$MINIAS" -march=rv64gc -mabi=lp64d -o "$WORK/plain-start.o" "$WORK/plain-start.s"
+"$MINIAS" -march=rv64gc -mabi=lp64d -o "$WORK/plain-live.o" "$WORK/plain-live.s"
+"$MINIAS" -march=rv64gc -mabi=lp64d -o "$WORK/plain-dead.o" "$WORK/plain-dead.s"
+
+"$MINILD" -melf64lriscv -static --gc-sections -e _start \
+  -o "$WORK/plain-gc.elf" \
+  "$WORK/plain-start.o" "$WORK/plain-live.o" "$WORK/plain-dead.o" \
+  >"$WORK/plain-gc.stdout" 2>"$WORK/plain-gc.stderr"
+
+test -s "$WORK/plain-gc.elf"
+set +e
+"$QEMU" "$WORK/plain-gc.elf"
+plain_rc=$?
+set -e
+test "$plain_rc" -eq 31
+"$NM" "$WORK/plain-gc.elf" >"$WORK/plain-gc.symbols"
+if grep -Eq ' [Tt] plain_dead$' "$WORK/plain-gc.symbols"; then
+  echo "MINILD_GC_ERROR duplicate-name dead input section survived" >&2
+  exit 1
+fi
+grep -Eq ' [Tt] plain_live$' "$WORK/plain-gc.symbols"
+
+echo "MINILD_GC_INPUT_IDENTITY=PASS duplicate_name=.text qemu_rc=31"
+echo "MINILD_GC_V0=PASS function_sections=PASS input_identity=PASS"
