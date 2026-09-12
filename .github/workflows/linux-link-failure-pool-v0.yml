@@ -1,0 +1,184 @@
+name: Linux Link Failure Pool V0
+
+on:
+  push:
+    branches:
+      - "agent/linux-link-correctness-v0"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: linux-link-failure-pool-v0-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  failure-pool:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Install RV64 Linux prerequisites
+        run: |
+          sudo apt-get -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            build-essential gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
+            bc bison flex libssl-dev libelf-dev make curl xz-utils python3
+
+      - name: Build current Mini toolchain
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          build="$GITHUB_WORKSPACE/build/linux-link-failure-pool-v0/toolchain"
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$build" all
+          test -x "$build/bin/minic"
+          echo "LINUX_FAILURE_POOL_TOOLCHAIN=PASS head=${GITHUB_SHA}"
+
+      - name: Prepare pinned Linux 6.6.143 trees
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-link-failure-pool-v0"
+          archive="$work/linux-6.6.143.tar.xz"
+          src="$work/linux-6.6.143"
+          cfg="$work/config-out"
+          mkdir -p "$work"
+          curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors \
+            https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.6.143.tar.xz \
+            -o "$archive"
+          printf '%s  %s\n' \
+            dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932 \
+            "$archive" | sha256sum -c -
+          tar -xJf "$archive" -C "$work"
+          make -C "$src" O="$cfg" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- defconfig
+          "$src/scripts/config" --file "$cfg/.config" \
+            -e BLK_DEV_INITRD -e DEVTMPFS -e DEVTMPFS_MOUNT \
+            -e SERIAL_8250 -e SERIAL_8250_CONSOLE
+          make -C "$src" O="$cfg" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- olddefconfig
+          mkdir -p "$work/out-gcc" "$work/out-mini" "$work/evidence"
+          cp "$cfg/.config" "$work/out-gcc/.config"
+          cp "$cfg/.config" "$work/out-mini/.config"
+          sha256sum "$cfg/.config" >"$work/evidence/config.sha256"
+
+      - name: Build GCC failure-pool reference objects
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-link-failure-pool-v0"
+          src="$work/linux-6.6.143"
+          out="$work/out-gcc"
+          targets=(
+            init/main.o
+            net/core/filter.o
+            kernel/events/core.o
+            net/core/dev.o
+            kernel/bpf/syscall.o
+            mm/memcontrol.o
+            arch/riscv/kernel/cpufeature.o
+            drivers/usb/core/devio.o
+            fs/readdir.o
+            net/ipv4/tcp_output.o
+            kernel/sched/core.o
+            drivers/pci/proc.o
+          )
+          make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- -j4 prepare
+          make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
+            -j1 V=1 "${targets[@]}" >"$work/evidence/gcc-kbuild.log" 2>&1
+          for target in "${targets[@]}"; do test -s "$out/$target"; done
+          echo "LINUX_FAILURE_POOL_GCC=PASS objects=${#targets[@]}"
+
+      - name: Build MiniC failure-pool objects
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-link-failure-pool-v0"
+          src="$work/linux-6.6.143"
+          out="$work/out-mini"
+          wrapper="$GITHUB_WORKSPACE/tests/external/linux/stage2_kbuild_cc.sh"
+          targets=(
+            init/main.o
+            net/core/filter.o
+            kernel/events/core.o
+            net/core/dev.o
+            kernel/bpf/syscall.o
+            mm/memcontrol.o
+            arch/riscv/kernel/cpufeature.o
+            drivers/usb/core/devio.o
+            fs/readdir.o
+            net/ipv4/tcp_output.o
+            kernel/sched/core.o
+            drivers/pci/proc.o
+          )
+          make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- -j4 prepare
+          MINIC="$work/toolchain/bin/minic" \
+          REAL_CC=/usr/bin/riscv64-linux-gnu-gcc \
+          MINIC_KEEP_INTERMEDIATES=1 \
+          MINIC_KBUILD_TRACE="$work/evidence/minic-kbuild.trace" \
+          CORE_FAST_TRACE=1 \
+            make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
+              CC="$wrapper" -j1 V=1 "${targets[@]}" \
+              >"$work/evidence/mini-kbuild.log" 2>&1
+          for target in "${targets[@]}"; do test -s "$out/$target"; done
+          echo "LINUX_FAILURE_POOL_MINI=PASS objects=${#targets[@]}"
+
+      - name: Classify GCC versus Mini undefined symbols
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-link-failure-pool-v0"
+          ev="$work/evidence"
+          targets=(
+            init/main.o
+            net/core/filter.o
+            kernel/events/core.o
+            net/core/dev.o
+            kernel/bpf/syscall.o
+            mm/memcontrol.o
+            arch/riscv/kernel/cpufeature.o
+            drivers/usb/core/devio.o
+            fs/readdir.o
+            net/ipv4/tcp_output.o
+            kernel/sched/core.o
+            drivers/pci/proc.o
+          )
+          bad=0
+          total_mini_only=0
+          suspicious=0
+          for target in "${targets[@]}"; do
+            key=${target//\//__}
+            key=${key%.o}
+            for lane in gcc mini; do
+              obj="$work/out-$lane/$target"
+              riscv64-linux-gnu-nm -u "$obj" \
+                | sed -E 's/^[[:space:]]*[A-Za-z]?[[:space:]]*//' \
+                | sed '/^$/d' | sort -u >"$ev/$lane-$key.undefined"
+            done
+            comm -13 "$ev/gcc-$key.undefined" "$ev/mini-$key.undefined" >"$ev/$key.only-mini"
+            comm -23 "$ev/gcc-$key.undefined" "$ev/mini-$key.undefined" >"$ev/$key.only-gcc"
+            mini_only_n=$(wc -l < "$ev/$key.only-mini")
+            total_mini_only=$((total_mini_only + mini_only_n))
+            suspicious_n=$(grep -Ec '^(__compiletime_assert_|__minic_deferred_asm_immediate_|__bad_size_call_parameter$|__pi_|__efistub_)' "$ev/$key.only-mini" || true)
+            suspicious=$((suspicious + suspicious_n))
+            echo "FAILURE_POOL target=$target mini_only=$mini_only_n suspicious=$suspicious_n"
+            if test "$suspicious_n" -ne 0; then
+              echo "--- suspicious Mini-only: $target ---"
+              grep -E '^(__compiletime_assert_|__minic_deferred_asm_immediate_|__bad_size_call_parameter$|__pi_|__efistub_)' "$ev/$key.only-mini" || true
+              bad=$((bad + 1))
+            fi
+          done
+          echo "LINUX_FAILURE_POOL_SUMMARY objects=${#targets[@]} mini_only=$total_mini_only suspicious=$suspicious"
+          test "$bad" -eq 0
+          echo "LINUX_FAILURE_POOL_V0=PASS suspicious=0 objects=${#targets[@]}"
+
+      - name: Preserve failure-pool evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-link-failure-pool-v0
+          path: build/linux-link-failure-pool-v0/evidence/
+          if-no-files-found: ignore
+          retention-days: 7
