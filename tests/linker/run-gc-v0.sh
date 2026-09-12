@@ -1,7 +1,13 @@
 #!/bin/sh
 set -eu
 
-BUILD="${BUILD_DIR:-build}"
+if [ -n "${BUILD_DIR:-}" ]; then
+  BUILD="$BUILD_DIR"
+elif [ -n "${MINILD:-}" ]; then
+  BUILD="$(dirname "$(dirname "$MINILD")")"
+else
+  BUILD=build
+fi
 MINIC="${MINIC:-$BUILD/bin/minic}"
 MINIAS="${MINIAS:-$BUILD/bin/minic-as}"
 MINILD="${MINILD:-$BUILD/bin/minic-ld}"
