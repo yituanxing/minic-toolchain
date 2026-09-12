@@ -40,7 +40,8 @@ jobs:
           git diff -- \
             src/frontend/ast.h src/frontend/ast_function.c \
             src/frontend/parser_function.c src/frontend/function_body.h \
-            src/frontend/function_body.c src/compiler/compiler.c
+            src/frontend/function_body.c src/compiler/compiler.c \
+            src/target/riscv64/codegen_function.c
 
       - name: Build and run focused compiler regression
         shell: bash
@@ -110,10 +111,8 @@ jobs:
                 | sed -E 's/^[[:space:]]*[A-Za-z]?[[:space:]]*//' | sed '/^$/d' | sort -u \
                 >"$ev/$lane-$base.undefined"
             done
-            comm -13 "$ev/gcc-$base.undefined" "$ev/mini-$base.undefined" \
-              >"$ev/$base.only-mini"
-            comm -23 "$ev/gcc-$base.undefined" "$ev/mini-$base.undefined" \
-              >"$ev/$base.only-gcc"
+            comm -13 "$ev/gcc-$base.undefined" "$ev/mini-$base.undefined" >"$ev/$base.only-mini"
+            comm -23 "$ev/gcc-$base.undefined" "$ev/mini-$base.undefined" >"$ev/$base.only-gcc"
             echo "--- $base GCC undefined ---"
             cat "$ev/gcc-$base.undefined"
             echo "--- $base Mini-only ---"
@@ -134,7 +133,8 @@ jobs:
           git add \
             src/frontend/ast.h src/frontend/ast_function.c \
             src/frontend/parser_function.c src/frontend/function_body.h \
-            src/frontend/function_body.c src/compiler/compiler.c
+            src/frontend/function_body.c src/compiler/compiler.c \
+            src/target/riscv64/codegen_function.c
           if git diff --cached --quiet; then
             echo "LINUX_FUNCTION_REACHABILITY_PRODUCT_COMMIT=NOOP"
             exit 0
