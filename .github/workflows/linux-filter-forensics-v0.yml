@@ -1,0 +1,133 @@
+name: Linux Filter Forensics V0
+
+on:
+  push:
+    branches:
+      - "agent/linux-link-correctness-v0"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: linux-filter-forensics-v0-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  filter-forensics:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Install RV64 Linux prerequisites
+        run: |
+          sudo apt-get -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            build-essential gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
+            bc bison flex libssl-dev libelf-dev make curl xz-utils python3
+
+      - name: Build current Mini toolchain
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          build="$GITHUB_WORKSPACE/build/linux-filter-forensics-v0/toolchain"
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$build" all
+          test -x "$build/bin/minic"
+
+      - name: Prepare pinned Linux and build filter.o
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-filter-forensics-v0"
+          archive="$work/linux-6.6.143.tar.xz"
+          src="$work/linux-6.6.143"
+          out="$work/out-mini"
+          mkdir -p "$work/evidence"
+          curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors \
+            https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.6.143.tar.xz \
+            -o "$archive"
+          printf '%s  %s\n' \
+            dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932 \
+            "$archive" | sha256sum -c -
+          tar -xJf "$archive" -C "$work"
+          make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- defconfig
+          "$src/scripts/config" --file "$out/.config" \
+            -e BLK_DEV_INITRD -e DEVTMPFS -e DEVTMPFS_MOUNT \
+            -e SERIAL_8250 -e SERIAL_8250_CONSOLE
+          make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- olddefconfig
+          make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- -j4 prepare
+          MINIC="$work/toolchain/bin/minic" \
+          REAL_CC=/usr/bin/riscv64-linux-gnu-gcc \
+          MINIC_KEEP_INTERMEDIATES=1 \
+          MINIC_KBUILD_TRACE="$work/evidence/minic-kbuild.trace" \
+          CORE_FAST_TRACE=1 \
+            make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
+              CC="$GITHUB_WORKSPACE/tests/external/linux/stage2_kbuild_cc.sh" \
+              -j1 V=1 net/core/filter.o >"$work/evidence/mini-kbuild.log" 2>&1
+          test -s "$out/net/core/filter.o"
+          test -s "$out/net/core/filter.minic-stage2.i"
+          test -s "$out/net/core/filter.minic-stage2.s"
+          riscv64-linux-gnu-nm -u "$out/net/core/filter.o" | sort -u >"$work/evidence/filter.undefined"
+          riscv64-linux-gnu-nm -n "$out/net/core/filter.o" >"$work/evidence/filter.nm"
+          riscv64-linux-gnu-objdump -dr "$out/net/core/filter.o" >"$work/evidence/filter.objdump"
+
+          cp "$out/net/core/filter.minic-stage2.i" "$work/evidence/filter.i"
+          cp "$out/net/core/filter.minic-stage2.s" "$work/evidence/filter.s"
+
+      - name: Map suspicious references to generated functions
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-filter-forensics-v0"
+          ev="$work/evidence"
+          I="$ev/filter.i"
+          S="$ev/filter.s"
+          python3 - "$I" "$S" "$ev" <<'PY'
+          import re, sys
+          from pathlib import Path
+          ip, sp, ev = Path(sys.argv[1]), Path(sys.argv[2]), Path(sys.argv[3])
+          it = ip.read_text(errors='replace').splitlines()
+          st = sp.read_text(errors='replace').splitlines()
+          pats = [
+              r'__compiletime_assert_1001', r'__compiletime_assert_1100',
+              r'__compiletime_assert_1200', r'__compiletime_assert_1300',
+              r'__bad_size_call_parameter',
+              r'__minic_deferred_asm_immediate_141_0',
+              r'__minic_deferred_asm_immediate_142_0',
+          ]
+          out=[]
+          for pat in pats:
+              rx=re.compile(pat)
+              out.append(f'===== {pat} PREPROCESSED =====')
+              hits=[i for i,x in enumerate(it) if rx.search(x)]
+              for i in hits[:8]:
+                  lo=max(0,i-8); hi=min(len(it),i+9)
+                  out.append(f'--- lines {lo+1}-{hi} hit={i+1} ---')
+                  out.extend(f'{j+1}: {it[j]}' for j in range(lo,hi))
+              out.append(f'===== {pat} ASSEMBLY =====')
+              hits=[i for i,x in enumerate(st) if rx.search(x)]
+              for i in hits[:16]:
+                  lo=max(0,i-18); hi=min(len(st),i+8)
+                  label='?'
+                  for j in range(i,-1,-1):
+                      m=re.match(r'^([A-Za-z_.$][\w.$]*):\s*$',st[j])
+                      if m:
+                          label=m.group(1); break
+                  out.append(f'--- asm lines {lo+1}-{hi} hit={i+1} nearest_label={label} ---')
+                  out.extend(f'{j+1}: {st[j]}' for j in range(lo,hi))
+          (ev/'suspicious-context.txt').write_text('\n'.join(out)+'\n')
+          print('\n'.join(out[-220:]))
+          PY
+          echo "LINUX_FILTER_FORENSICS_V0=PASS"
+
+      - name: Preserve filter forensics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-filter-forensics-v0
+          path: build/linux-filter-forensics-v0/evidence/
+          if-no-files-found: ignore
+          retention-days: 7
