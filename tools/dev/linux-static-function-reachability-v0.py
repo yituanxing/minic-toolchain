@@ -117,11 +117,11 @@ sub(
     r"    if \(function_id == MINIC_FUNCTION_INVALID\) \{\n"
     r"        return false;\n"
     r"    \}\n)(    if \(alias_target != MINIC_FUNCTION_INVALID\))",
-    r"\1    if (force_emit &&\n"
-    r"        !minic_c0_program_set_function_force_emit(parser->program, function_id, true)) {\n"
-    r"        minic_parser_error(parser, \"cannot persist GNU used function metadata\");\n"
-    r"        return false;\n"
-    r"    }\n\2",
+    r'\1    if (force_emit &&\n'
+    r'        !minic_c0_program_set_function_force_emit(parser->program, function_id, true)) {\n'
+    r'        minic_parser_error(parser, "cannot persist GNU used function metadata");\n'
+    r'        return false;\n'
+    r'    }\n\2',
 )
 
 # parse_function owns the declaration-wide bit. Prefix/declarator lists are
@@ -169,14 +169,14 @@ sub(
     r"                                                    has_section\)\) \{\n"
     r"                return false;\n"
     r"            \}\n)(            if \(parser->current.kind == MINIC_TOKEN_SEMICOLON\))",
-    r"\1            function_id = minic_parser_find_function(parser, name_span);\n"
-    r"            if (function_id == MINIC_FUNCTION_INVALID ||\n"
-    r"                (entity_force_emit &&\n"
-    r"                 !minic_c0_program_set_function_force_emit(\n"
-    r"                     parser->program, function_id, true))) {\n"
-    r"                minic_parser_error(parser, \"cannot persist GNU used function metadata\");\n"
-    r"                return false;\n"
-    r"            }\n\2",
+    r'\1            function_id = minic_parser_find_function(parser, name_span);\n'
+    r'            if (function_id == MINIC_FUNCTION_INVALID ||\n'
+    r'                (entity_force_emit &&\n'
+    r'                 !minic_c0_program_set_function_force_emit(\n'
+    r'                     parser->program, function_id, true))) {\n'
+    r'                minic_parser_error(parser, "cannot persist GNU used function metadata");\n'
+    r'                return false;\n'
+    r'            }\n\2',
 )
 
 # Ordinary function persistent attributes and semicolon declaration.
@@ -195,11 +195,11 @@ sub(
 sub(
     "src/frontend/parser_function.c",
     r"(    if \(!minic_c0_program_set_function_inline\(parser->program, function_id, is_inline\)\) \{.*?\n    \}\n)(    if \(is_noreturn &&)",
-    r"\1    if (force_emit &&\n"
-    r"        !minic_c0_program_set_function_force_emit(parser->program, function_id, true)) {\n"
-    r"        minic_parser_error(parser, \"cannot persist GNU used function metadata\");\n"
-    r"        return false;\n"
-    r"    }\n\2",
+    r'\1    if (force_emit &&\n'
+    r'        !minic_c0_program_set_function_force_emit(parser->program, function_id, true)) {\n'
+    r'        minic_parser_error(parser, "cannot persist GNU used function metadata");\n'
+    r'        return false;\n'
+    r'    }\n\2',
 )
 
 # Broaden semantic reachability from internal-inline-only to all internal
