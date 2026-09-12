@@ -23,6 +23,10 @@ static inline int dead_parent(int x) {
     return dead_leaf(x) + 1;
 }
 
+static int dead_static_noninline(int x) {
+    return minic_dead_missing_symbol() + x + 11;
+}
+
 static inline int live_leaf(int x) {
     return x + 1;
 }
@@ -31,14 +35,22 @@ static inline int live_parent(int x) {
     return live_leaf(x) + 1;
 }
 
+static int live_static_noninline(int x) {
+    return live_parent(x);
+}
+
 static inline int address_root(int x) {
     return x + 3;
+}
+
+static __attribute__((used)) int kept_used(int x) {
+    return x + 9;
 }
 
 int (*address_root_ptr)(int) = address_root;
 
 int live_entry(int x) {
-    return live_parent(x);
+    return live_static_noninline(x);
 }
 C
 
@@ -52,14 +64,14 @@ if grep -F 'minic_dead_missing_symbol' "$work/reach.undefined" >/dev/null; then
     cat "$work/reach.undefined" >&2
     exit 1
 fi
-for symbol in live_leaf live_parent live_entry address_root address_root_ptr; do
+for symbol in live_leaf live_parent live_static_noninline live_entry address_root address_root_ptr kept_used; do
     if ! awk -v s="$symbol" '$3==s { found=1 } END { exit found ? 0 : 1 }' "$work/reach.nm"; then
         echo "INLINE_EMISSION_REACHABILITY_FAIL missing-live-symbol=$symbol" >&2
         cat "$work/reach.nm" >&2
         exit 1
     fi
 done
-for symbol in dead_leaf dead_parent; do
+for symbol in dead_leaf dead_parent dead_static_noninline; do
     if awk -v s="$symbol" '$3==s { found=1 } END { exit found ? 0 : 1 }' "$work/reach.nm"; then
         echo "INLINE_EMISSION_REACHABILITY_FAIL dead-symbol-emitted=$symbol" >&2
         cat "$work/reach.nm" >&2
@@ -85,4 +97,4 @@ rc=$?
 set -e
 test "$rc" -eq 0
 
-echo "INLINE_EMISSION_REACHABILITY_RV64=PASS dead=discarded transitive=retained global_address=retained qemu_rc=$rc"
+echo "INLINE_EMISSION_REACHABILITY_RV64=PASS dead_inline=discarded dead_static=discarded transitive=retained global_address=retained used=retained qemu_rc=$rc"
