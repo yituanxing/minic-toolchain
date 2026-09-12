@@ -43,6 +43,7 @@ jobs:
           MINILD="$GITHUB_WORKSPACE/build/minild-gc-v0/bin/minic-ld" \
           BUILD_DIR="$GITHUB_WORKSPACE/build/minild-gc-v0" \
           RISCV_READELF=riscv64-linux-gnu-readelf \
+          RISCV_NM=riscv64-linux-gnu-nm \
           QEMU_RISCV64=qemu-riscv64 \
             sh tests/linker/run-gc-v0.sh
 
