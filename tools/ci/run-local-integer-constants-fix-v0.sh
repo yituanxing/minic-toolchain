@@ -11,6 +11,7 @@ mkdir -p "$testdir" "$ev"
 
 python3 tools/ci/apply-local-integer-constants-v0.py | tee "$work/patch.log"
 python3 tools/ci/patch-local-read-lvalue-v0.py | tee -a "$work/patch.log"
+python3 tools/ci/patch-local-assignment-source-constant-v0.py | tee -a "$work/patch.log"
 git diff --check
 
 make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$toolchain" all
