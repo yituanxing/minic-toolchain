@@ -1,0 +1,101 @@
+name: BusyBox Deadrefs Diag V2
+
+on:
+  pull_request:
+    branches:
+      - external/busybox-full-driver-v0
+
+permissions:
+  contents: read
+
+concurrency:
+  group: busybox-deadrefs-diag-v2-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  deadrefs-diag:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Install prerequisites
+        run: |
+          sudo apt-get -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            build-essential gcc-riscv64-linux-gnu libc6-dev-riscv64-cross \
+            linux-libc-dev-riscv64-cross git
+
+      - name: Build Mini toolchain
+        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/deadrefs-diag all
+
+      - name: Fetch BusyBox and prepare frozen profile
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/deadrefs-diag"
+          src="$work/busybox-1.38.0"
+          out="$work/busybox-out"
+          fixture="$GITHUB_WORKSPACE/tests/linker/fixtures"
+          mkdir -p "$work" "$out"
+          git init -q "$src"
+          git -C "$src" remote add origin https://github.com/vda-linux/busybox_mirror.git
+          git -C "$src" fetch -q --depth=1 origin fc71374dfccd46448c62947269a35f1420d7ee28
+          git -C "$src" checkout -q --detach FETCH_HEAD
+          cat "$fixture"/busybox-v222.config.part0{0,1,2,3,4} >"$work/busybox-v222.config"
+          cp "$work/busybox-v222.config" "$out/.config"
+          set +e
+          yes "" | make -C "$src" O="$out" oldconfig HOSTCC=/usr/bin/cc >/dev/null
+          oldconfig_rc=${PIPESTATUS[1]}
+          set -e
+          test "$oldconfig_rc" -eq 0
+          make -C "$src" O="$out" HOSTCC=/usr/bin/cc prepare applets_dir >/dev/null
+          echo '=== CONFIG MACROS ==='
+          grep -E '^(#define )?ENABLE_(FEATURE_CLEAN_UP|FEATURE_SH_NOFORK|FEATURE_SGI_LABEL|FEATURE_SUN_LABEL)' "$out/include/autoconf.h" || true
+          grep -E '^(CONFIG_FEATURE_CLEAN_UP|CONFIG_FEATURE_SH_NOFORK|CONFIG_FEATURE_SGI_LABEL|CONFIG_FEATURE_SUN_LABEL)=' "$out/.config" || true
+
+      - name: Compare MiniPP and GNU preprocessed dead-reference sites
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/deadrefs-diag"
+          src="$work/busybox-1.38.0"
+          out="$work/busybox-out"
+          minipp="$work/bin/minic-cpp"
+          mkdir -p "$work/pp" "$out/include2"
+          ln -fsn "$src/include/asm-x86_64" "$out/include2/asm"
+
+          preprocess_one() {
+            rel="$1"
+            tag="$2"
+            dir="${rel%/*}"
+            common=(
+              -E -P -I"$out/include" -I"$src/include" -I"$src/libbb" -I"$out/include2"
+              -I"$src/$dir" -I"$out/$dir" -I/usr/riscv64-linux-gnu/include
+              -include "$out/include/autoconf.h"
+              -D_GNU_SOURCE -DNDEBUG -D_LARGEFILE_SOURCE -D_LARGEFILE64_SOURCE
+              -D_FILE_OFFSET_BITS=64 -D_TIME_BITS=64 '-DBB_VER="1.38.0"'
+            )
+            "$minipp" "${common[@]}" "$src/$rel" -o "$work/pp/$tag.mini.i"
+            riscv64-linux-gnu-gcc "${common[@]}" "$src/$rel" -o "$work/pp/$tag.gnu.i"
+          }
+
+          preprocess_one networking/nameif.c nameif
+          preprocess_one shell/hush.c hush
+          preprocess_one util-linux/fdisk.c fdisk
+
+          echo '=== MINIPP DEADREF CONTEXT ==='
+          grep -n -C 4 -E 'delete_eth_table|run_nofork_applet|sgi_get_num_sectors|sun_write_table' "$work"/pp/*.mini.i || true
+          echo '=== GNU DEADREF CONTEXT ==='
+          grep -n -C 4 -E 'delete_eth_table|run_nofork_applet|sgi_get_num_sectors|sun_write_table' "$work"/pp/*.gnu.i || true
+
+      - name: Preserve diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: busybox-deadrefs-diag-v2
+          path: build/deadrefs-diag/pp
+          if-no-files-found: ignore
+          retention-days: 3
