@@ -9012,8 +9012,28 @@ static MinicCoreLowerStatus lower_condition_branch(MinicCoreLowerContext *contex
     }
     if (expression->kind == MINIC_EXPRESSION_BINARY &&
         expression->value.binary.operator_kind == MINIC_BINARY_LOGICAL_AND) {
+        const MinicExpression *left_expression;
+        MinicConstValue left_constant;
+        bool left_is_zero;
         MinicCoreBlockId right_block;
 
+        left_expression = minic_c0_program_expression(
+            context->body->program, expression->value.binary.left);
+        if (left_expression != NULL && minic_type_is_integer(left_expression->type) &&
+            minic_const_eval_integer(context->body->program,
+                                     context->target,
+                                     expression->value.binary.left,
+                                     &left_constant) &&
+            minic_const_value_is_zero(context->body->program,
+                                      context->target,
+                                      &left_constant,
+                                      &left_is_zero)) {
+            if (left_is_zero) {
+                return set_branch(context, context->block_id, span, when_false);
+            }
+            return lower_condition_branch(
+                context, expression->value.binary.right, span, when_true, when_false);
+        }
         if (!minic_core_function_add_block(context->function, &right_block)) {
             return MINIC_CORE_LOWER_ERROR;
         }
@@ -9028,8 +9048,28 @@ static MinicCoreLowerStatus lower_condition_branch(MinicCoreLowerContext *contex
     }
     if (expression->kind == MINIC_EXPRESSION_BINARY &&
         expression->value.binary.operator_kind == MINIC_BINARY_LOGICAL_OR) {
+        const MinicExpression *left_expression;
+        MinicConstValue left_constant;
+        bool left_is_zero;
         MinicCoreBlockId right_block;
 
+        left_expression = minic_c0_program_expression(
+            context->body->program, expression->value.binary.left);
+        if (left_expression != NULL && minic_type_is_integer(left_expression->type) &&
+            minic_const_eval_integer(context->body->program,
+                                     context->target,
+                                     expression->value.binary.left,
+                                     &left_constant) &&
+            minic_const_value_is_zero(context->body->program,
+                                      context->target,
+                                      &left_constant,
+                                      &left_is_zero)) {
+            if (!left_is_zero) {
+                return set_branch(context, context->block_id, span, when_true);
+            }
+            return lower_condition_branch(
+                context, expression->value.binary.right, span, when_true, when_false);
+        }
         if (!minic_core_function_add_block(context->function, &right_block)) {
             return MINIC_CORE_LOWER_ERROR;
         }
@@ -9086,6 +9126,9 @@ static MinicCoreLowerStatus lower_condition_branch(MinicCoreLowerContext *contex
                : MINIC_CORE_LOWER_ERROR;
 }
 
+static bool core_switch_label_has_function_reentry(
+    const MinicCoreLowerContext *context, MinicStatementId label_id);
+
 static bool core_block_contains_reentry_label_impl(const MinicCoreLowerContext *context,
                                                    const MinicBlock *block,
                                                    bool *visited_blocks) {
@@ -9103,9 +9146,13 @@ static bool core_block_contains_reentry_label_impl(const MinicCoreLowerContext *
         if (nested == NULL) {
             return true;
         }
-        if (nested->kind == MINIC_STATEMENT_LABEL ||
-            nested->kind == MINIC_STATEMENT_CASE ||
+        if (nested->kind == MINIC_STATEMENT_CASE ||
             nested->kind == MINIC_STATEMENT_DEFAULT) {
+            return true;
+        }
+        if (nested->kind == MINIC_STATEMENT_LABEL &&
+            core_switch_label_has_function_reentry(
+                context, block->statements[index])) {
             return true;
         }
         if (nested->then_block != MINIC_BLOCK_INVALID) {
