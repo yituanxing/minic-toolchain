@@ -130,7 +130,11 @@ jobs:
             done
             comm -13 "$ev/gcc-$base.undefined" "$ev/mini-$base.undefined" >"$ev/$base.only-mini"
             comm -23 "$ev/gcc-$base.undefined" "$ev/mini-$base.undefined" >"$ev/$base.only-gcc"
-            echo "PI_DIFF base=$base gcc=$(wc -l <\"$ev/gcc-$base.undefined\") mini=$(wc -l <\"$ev/mini-$base.undefined\") mini_only=$(wc -l <\"$ev/$base.only-mini\") gcc_only=$(wc -l <\"$ev/$base.only-gcc\")"
+            gcc_n=$(wc -l < "$ev/gcc-$base.undefined")
+            mini_n=$(wc -l < "$ev/mini-$base.undefined")
+            mini_only_n=$(wc -l < "$ev/$base.only-mini")
+            gcc_only_n=$(wc -l < "$ev/$base.only-gcc")
+            echo "PI_DIFF base=$base gcc=$gcc_n mini=$mini_n mini_only=$mini_only_n gcc_only=$gcc_only_n"
             if test -s "$ev/$base.only-mini" || test -s "$ev/$base.only-gcc"; then
               echo "--- $base Mini-only ---"
               cat "$ev/$base.only-mini"
