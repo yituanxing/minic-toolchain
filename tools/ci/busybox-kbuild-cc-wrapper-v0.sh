@@ -178,50 +178,53 @@ link_rc=$?
 set -e
 
 # Keep this diagnostic deliberately narrow: the current MiniLD final-link
-# blocker is an R_RISCV_JAL to __syscall_ret.  Print the exact archive member
+# blocker is an R_RISCV_JAL to __syscall_ret. Print the exact archive member
 # and caller functions that carry such relocations, then show where GNU placed
-# those calls in the accepted BusyBox ELF.  This gives a real-workload layout
-# oracle without perturbing the product objects or link result.
+# those calls in the accepted BusyBox ELF. trylink redirects this wrapper's
+# stdout into busybox_unstripped.out, so also append directly to the build log
+# that the workflow already preserves as an artifact.
 if test "$link_rc" -eq 0 && test -n "$output" && test -s "$output"; then
   tool_prefix="${BUSYBOX_REAL_GCC%gcc}"
   objdump="${tool_prefix}objdump"
   nm="${tool_prefix}nm"
   libc="$BUSYBOX_MUSL_BUILD/lib/libc.a"
+  diag_log="$(dirname -- "$BUSYBOX_C_RESULTS")/busybox-mini-build.log"
 
-  echo "BUSYBOX_SYSCALL_RET_DIFF_BEGIN output=$output"
-  "$nm" -A "$libc" 2>/dev/null | awk '/[[:space:]]__syscall_ret$/ {print "BUSYBOX_SYSCALL_RET_DEF " $0}'
-  "$objdump" -dr "$libc" 2>/dev/null | awk '
-    /\):[[:space:]]+file format/ {
-      member=$0
-      sub(/^.*\(/, "", member)
-      sub(/\):[[:space:]].*$/, "", member)
-      next
-    }
-    /^[[:xdigit:]]+[[:space:]]+<[^>]+>:/ {
-      caller=$0
-      sub(/^[[:xdigit:]]+[[:space:]]+</, "", caller)
-      sub(/>:.*/, "", caller)
-      next
-    }
-    /R_RISCV_JAL[[:space:]]+__syscall_ret/ {
-      printf "BUSYBOX_SYSCALL_RET_ARCHIVE_JAL member=%s caller=%s reloc=%s\n", member, caller, $0
-    }
-  '
-  "$nm" -an "$output" 2>/dev/null | awk '/[[:space:]]__syscall_ret$/ {print "BUSYBOX_SYSCALL_RET_GNU_DEF " $0}'
-  "$objdump" -d "$output" 2>/dev/null | awk '
-    /^[[:xdigit:]]+[[:space:]]+<[^>]+>:/ {
-      header=$0
-      addr=$1
-      caller=$0
-      sub(/^[[:xdigit:]]+[[:space:]]+</, "", caller)
-      sub(/>:.*/, "", caller)
-      next
-    }
-    /jal[^<]*<__syscall_ret>/ {
-      printf "BUSYBOX_SYSCALL_RET_GNU_JAL caller=%s caller_addr=0x%s insn=%s\n", caller, addr, $0
-    }
-  '
-  echo "BUSYBOX_SYSCALL_RET_DIFF_END"
+  {
+    echo "BUSYBOX_SYSCALL_RET_DIFF_BEGIN output=$output"
+    "$nm" -A "$libc" 2>/dev/null | awk '/[[:space:]]__syscall_ret$/ {print "BUSYBOX_SYSCALL_RET_DEF " $0}'
+    "$objdump" -dr "$libc" 2>/dev/null | awk '
+      /\):[[:space:]]+file format/ {
+        member=$0
+        sub(/^.*\(/, "", member)
+        sub(/\):[[:space:]].*$/, "", member)
+        next
+      }
+      /^[[:xdigit:]]+[[:space:]]+<[^>]+>:/ {
+        caller=$0
+        sub(/^[[:xdigit:]]+[[:space:]]+</, "", caller)
+        sub(/>:.*/, "", caller)
+        next
+      }
+      /R_RISCV_JAL[[:space:]]+__syscall_ret/ {
+        printf "BUSYBOX_SYSCALL_RET_ARCHIVE_JAL member=%s caller=%s reloc=%s\n", member, caller, $0
+      }
+    '
+    "$nm" -an "$output" 2>/dev/null | awk '/[[:space:]]__syscall_ret$/ {print "BUSYBOX_SYSCALL_RET_GNU_DEF " $0}'
+    "$objdump" -d "$output" 2>/dev/null | awk '
+      /^[[:xdigit:]]+[[:space:]]+<[^>]+>:/ {
+        addr=$1
+        caller=$0
+        sub(/^[[:xdigit:]]+[[:space:]]+</, "", caller)
+        sub(/>:.*/, "", caller)
+        next
+      }
+      /jal[^<]*<__syscall_ret>/ {
+        printf "BUSYBOX_SYSCALL_RET_GNU_JAL caller=%s caller_addr=0x%s insn=%s\n", caller, addr, $0
+      }
+    '
+    echo "BUSYBOX_SYSCALL_RET_DIFF_END"
+  } | tee -a "$diag_log"
 fi
 
 exit "$link_rc"
