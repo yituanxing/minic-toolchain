@@ -303,7 +303,7 @@ jobs:
           MINILD="$build/bin/minic-ld" \
           RISCV_AS=riscv64-linux-gnu-as \
           QEMU_RISCV64=qemu-riscv64 \
-            sh tests/linker/run-gc-input-order-v0.sh
+            bash tests/linker/run-gc-input-order-v0.sh
 
       - name: Commit proven product change
         shell: bash
