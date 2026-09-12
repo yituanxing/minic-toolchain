@@ -1,0 +1,217 @@
+name: BusyBox MiniAR Ownership V0
+
+on:
+  push:
+    branches:
+      - "agent/busybox-kbuild-routing-v0"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: busybox-miniar-ownership-v0-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  miniar-ownership:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Install RV64 build and runtime prerequisites
+        run: |
+          timeout 240s sudo apt-get -o Acquire::Retries=3 update
+          timeout 240s sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            build-essential gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
+            linux-libc-dev-riscv64-cross qemu-user bzip2 curl ca-certificates
+
+      - name: Build current Mini toolchain
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/busybox-miniar-ownership-v0 all
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/busybox-miniar-ownership-v0 check-miniar-a0
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/busybox-miniar-ownership-v0 check-miniar-a1
+          echo "BUSYBOX_MINIAR_CORE=PASS"
+
+      - name: Prepare pinned BusyBox and static musl
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/busybox-miniar-ownership-v0"
+          busybox_sha=fc71374dfccd46448c62947269a35f1420d7ee28
+          src="$work/busybox-1.38.0"
+          musl_src="$work/musl-1.2.5"
+          musl_out="$work/musl-build"
+          sysroot="$work/musl-sysroot"
+          mkdir -p "$work" "$sysroot/usr/include"
+
+          git init -q "$src"
+          git -C "$src" remote add origin https://github.com/vda-linux/busybox_mirror.git
+          git -C "$src" fetch -q --depth=1 origin "$busybox_sha"
+          git -C "$src" checkout -q --detach FETCH_HEAD
+          test "$(git -C "$src" rev-parse HEAD)" = "$busybox_sha"
+          rm -rf "$src/.git"
+
+          curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors \
+            https://musl.libc.org/releases/musl-1.2.5.tar.gz \
+            -o "$work/musl-1.2.5.tar.gz"
+          printf '%s  %s\n' \
+            a9a118bbe84d8764da0ea0d28b3ab3fae8477fc7e4085d90102b8596fc7c75e4 \
+            "$work/musl-1.2.5.tar.gz" | sha256sum -c -
+          tar -xzf "$work/musl-1.2.5.tar.gz" -C "$work"
+
+          cp -a /usr/riscv64-linux-gnu/include/linux "$sysroot/usr/include/"
+          cp -a /usr/riscv64-linux-gnu/include/asm "$sysroot/usr/include/"
+          cp -a /usr/riscv64-linux-gnu/include/asm-generic "$sysroot/usr/include/"
+          cp -a /usr/riscv64-linux-gnu/include/mtd "$sysroot/usr/include/"
+
+          mkdir -p "$musl_out"
+          cd "$musl_out"
+          CFLAGS="-O2 -fno-pic -fno-pie" \
+          CC=riscv64-linux-gnu-gcc AR=riscv64-linux-gnu-ar RANLIB=riscv64-linux-gnu-ranlib \
+            "$musl_src/configure" --target=riscv64-linux-gnu --disable-shared --prefix=/usr \
+            >"$work/musl-configure.log" 2>&1
+          make -j4 lib/libc.a obj/crt/crt1.o obj/crt/crti.o obj/crt/crtn.o \
+            >"$work/musl-make.log" 2>&1
+          make DESTDIR="$sysroot" install-headers >"$work/musl-install-headers.log" 2>&1
+          test -s lib/libc.a
+          echo "BUSYBOX_MINIAR_SOURCE=PASS"
+
+      - name: Prepare frozen V222 408-applet profile
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/busybox-miniar-ownership-v0"
+          fixture="$GITHUB_WORKSPACE/tests/linker/fixtures"
+          src="$work/busybox-1.38.0"
+          out="$work/busybox-out"
+          cat \
+            "$fixture/busybox-v222.config.part00" \
+            "$fixture/busybox-v222.config.part01" \
+            "$fixture/busybox-v222.config.part02" \
+            "$fixture/busybox-v222.config.part03" \
+            "$fixture/busybox-v222.config.part04" \
+            >"$work/busybox-v222.config"
+          test "$(sha256sum "$work/busybox-v222.config" | awk '{print $1}')" = \
+            "5977f8e325530d35a9ee4a332b2531e85705f2216279b79090baaebd3cbaf809"
+          test "$(wc -l <"$fixture/busybox-v222.applet-list.txt")" -eq 408
+          mkdir -p "$out"
+          cp "$work/busybox-v222.config" "$out/.config"
+          yes "" | make -C "$src" O="$out" oldconfig HOSTCC=/usr/bin/cc \
+            >"$work/busybox-oldconfig.log" 2>&1 || test "${PIPESTATUS[1]}" -eq 0
+          grep -q '^CONFIG_STATIC=y$' "$out/.config"
+          grep -q '^CONFIG_ASH=y$' "$out/.config"
+          echo "BUSYBOX_MINIAR_PROFILE=PASS applets=408"
+
+      - name: Build BusyBox with MiniAR only
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/busybox-miniar-ownership-v0"
+          src="$work/busybox-1.38.0"
+          out="$work/busybox-out"
+          sysroot="$work/musl-sysroot"
+          musl="$work/musl-build"
+          cc_wrapper="$GITHUB_WORKSPACE/tools/ci/busybox-kbuild-cc-wrapper-v0.sh"
+          ar_wrapper="$work/miniar-kbuild-wrapper.sh"
+          ar_trace="$work/miniar-kbuild.trace"
+          results="$work/busybox-c-results.tsv"
+          libgcc="$(riscv64-linux-gnu-gcc -print-libgcc-file-name)"
+          uapi="$GITHUB_WORKSPACE/tests/linker/fixtures/busybox-uapi"
+          : >"$results"
+          : >"$ar_trace"
+          chmod +x "$cc_wrapper"
+
+          cat >"$ar_wrapper" <<'SH'
+          #!/usr/bin/env bash
+          set -Eeuo pipefail
+          : "${BUSYBOX_MINI_AR:?}"
+          : "${BUSYBOX_MINI_AR_TRACE:?}"
+          {
+            flock 9
+            printf 'ar'
+            printf ' %q' "$@"
+            printf '\n'
+          } 9>>"$BUSYBOX_MINI_AR_TRACE"
+          exec "$BUSYBOX_MINI_AR" "$@"
+          SH
+          chmod +x "$ar_wrapper"
+
+          export BUSYBOX_REAL_GCC=riscv64-linux-gnu-gcc
+          export BUSYBOX_MINIC="$work/bin/minic"
+          export BUSYBOX_MINI_SYSROOT="$sysroot/usr"
+          export BUSYBOX_MUSL_BUILD="$musl"
+          export BUSYBOX_LIBGCC="$libgcc"
+          export BUSYBOX_UAPI_COMPAT="$uapi"
+          export BUSYBOX_C_RESULTS="$results"
+          export BUSYBOX_MINI_AR="$work/bin/minic-ar"
+          export BUSYBOX_MINI_AR_TRACE="$ar_trace"
+          export MINIC_KEEP_FAILED_TEMPS=1
+          export CORE_FAST_TRACE=1
+
+          started=$(date +%s)
+          set +e
+          make -C "$src" O="$out" -k -j4 V=1 \
+            HOSTCC=/usr/bin/cc \
+            CC="$cc_wrapper" \
+            AR="$ar_wrapper" \
+            NM=riscv64-linux-gnu-nm \
+            STRIP=riscv64-linux-gnu-strip \
+            OBJCOPY=riscv64-linux-gnu-objcopy \
+            OBJDUMP=riscv64-linux-gnu-objdump \
+            busybox_unstripped >"$work/busybox-mini-build.log" 2>&1
+          build_rc=$?
+          set -e
+          elapsed=$(( $(date +%s) - started ))
+
+          total=$(wc -l <"$results")
+          passed=$(awk -F '\t' '$2=="PASS"{n++} END{print n+0}' "$results")
+          failed=$(awk -F '\t' '$2=="FAIL"{n++} END{print n+0}' "$results")
+          ar_calls=$(wc -l <"$ar_trace")
+          log_bytes=$(wc -c <"$work/busybox-mini-build.log")
+          echo "BUSYBOX_MINIAR_FRONTIER selected=$total pass=$passed fail=$failed ar_calls=$ar_calls make_rc=$build_rc elapsed_s=$elapsed log_bytes=$log_bytes"
+
+          test "$build_rc" -eq 0
+          test "$failed" -eq 0
+          test "$passed" -eq 586
+          test "$ar_calls" -gt 0
+          test -s "$out/busybox_unstripped"
+          # The old broken route emitted multi-gigabyte diagnostics before any
+          # archive call. Treat even 100 MiB as an integration regression.
+          test "$log_bytes" -lt 104857600
+          echo "BUSYBOX_MINIAR_OWNERSHIP_V0=PASS c_tus=$passed ar_calls=$ar_calls"
+
+      - name: Run 408-applet acceptance
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/busybox-miniar-ownership-v0"
+          out="$work/busybox-out"
+          fixture="$GITHUB_WORKSPACE/tests/linker/fixtures"
+          qemu-riscv64 "$out/busybox_unstripped" --list >"$work/busybox-mini.applets"
+          test "$(wc -l <"$work/busybox-mini.applets")" -eq 408
+          cmp "$fixture/busybox-v222.applet-list.txt" "$work/busybox-mini.applets"
+          qemu-riscv64 "$out/busybox_unstripped" ash -c \
+            'i=1; s=0; while [ "$i" -le 100 ]; do s=$((s+i)); i=$((i+1)); done; echo ASH_OK "$s"' \
+            >"$work/busybox-mini-ash.stdout"
+          grep -q '^ASH_OK 5050$' "$work/busybox-mini-ash.stdout"
+          echo "BUSYBOX_MINIAR_RUNTIME_V0=PASS applets=408 ash=PASS"
+
+      - name: Preserve MiniAR evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: busybox-miniar-ownership-v0
+          path: |
+            build/busybox-miniar-ownership-v0/busybox-c-results.tsv
+            build/busybox-miniar-ownership-v0/miniar-kbuild.trace
+            build/busybox-miniar-ownership-v0/busybox-mini-build.log
+            build/busybox-miniar-ownership-v0/busybox-mini.applets
+            build/busybox-miniar-ownership-v0/busybox-mini-ash.stdout
+          if-no-files-found: ignore
+          retention-days: 7
