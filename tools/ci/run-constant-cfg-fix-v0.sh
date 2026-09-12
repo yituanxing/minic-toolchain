@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
+# Keep this focused proof as the post-product replay trigger for Linux correctness gates.
 root=$(git rev-parse --show-toplevel)
 cd "$root"
 work="$root/build/constant-cfg-v0"
