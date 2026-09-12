@@ -1,0 +1,183 @@
+name: Linux Build Perf V0
+
+on:
+  push:
+    branches:
+      - "agent/linux-build-perf-v0"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: linux-build-perf-v0-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux-build-perf:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Install Linux build prerequisites
+        run: |
+          sudo apt-get -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            build-essential gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
+            bc bison flex libssl-dev libelf-dev make curl xz-utils file time
+
+      - name: Build current Mini toolchain
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/linux-perf-toolchain all
+          test -x build/linux-perf-toolchain/bin/minic
+          test -x build/linux-perf-toolchain/bin/minic-as
+          echo "LINUX_PERF_TOOLCHAIN=PASS"
+
+      - name: Prepare pinned Linux 6.6.143 cold trees
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-perf-v0"
+          archive="$work/linux-6.6.143.tar.xz"
+          src="$work/linux-6.6.143"
+          cfg="$work/config-out"
+          mkdir -p "$work"
+
+          curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors \
+            https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.6.143.tar.xz \
+            -o "$archive"
+          printf '%s  %s\n' \
+            dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932 \
+            "$archive" | sha256sum -c -
+          tar -xJf "$archive" -C "$work"
+
+          make -C "$src" O="$cfg" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- defconfig
+          "$src/scripts/config" --file "$cfg/.config" \
+            -e BLK_DEV_INITRD -e DEVTMPFS -e DEVTMPFS_MOUNT \
+            -e SERIAL_8250 -e SERIAL_8250_CONSOLE
+          make -C "$src" O="$cfg" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- olddefconfig
+
+          mkdir -p "$work/out-gcc" "$work/out-mini" "$work/perf-gcc" "$work/perf-mini"
+          cp "$cfg/.config" "$work/out-gcc/.config"
+          cp "$cfg/.config" "$work/out-mini/.config"
+          sha256sum "$cfg/.config" | tee "$work/config.sha256"
+          echo "LINUX_PERF_SOURCE=PASS release=6.6.143"
+
+      - name: Cold GCC reference Image
+        id: gcc
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-perf-v0"
+          set +e
+          PERF_EVENTS="$work/perf-gcc/tool-events.tsv" \
+            bash tools/ci/linux-build-perf-v0.sh \
+              "$work/linux-6.6.143" "$work/out-gcc" gcc 4 "$work/perf-gcc"
+          rc=$?
+          set -e
+          echo "GCC_RC=$rc" >>"$GITHUB_ENV"
+          test -s "$work/perf-gcc/summary.json"
+          cat "$work/perf-gcc/summary.json"
+          if [[ "$rc" -ne 0 ]]; then
+            echo "GCC reference unexpectedly failed" >&2
+            exit "$rc"
+          fi
+
+      - name: Cold MiniC plus MiniAS Image
+        id: mini
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-perf-v0"
+          set +e
+          PERF_EVENTS="$work/perf-mini/tool-events.tsv" \
+          MINIC_BIN="$GITHUB_WORKSPACE/build/linux-perf-toolchain/bin/minic" \
+          MINIAS_BIN="$GITHUB_WORKSPACE/build/linux-perf-toolchain/bin/minic-as" \
+            bash tools/ci/linux-build-perf-v0.sh \
+              "$work/linux-6.6.143" "$work/out-mini" mini 4 "$work/perf-mini"
+          rc=$?
+          set -e
+          echo "MINI_RC=$rc" >>"$GITHUB_ENV"
+          test -s "$work/perf-mini/summary.json"
+          cat "$work/perf-mini/summary.json"
+          # Preserve and compare a failed frontier instead of losing the timing
+          # evidence. A final step restores the job failure after artifacts.
+          exit 0
+
+      - name: Compare build profiles
+        if: always()
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-perf-v0"
+          GCC_SUMMARY="$work/perf-gcc/summary.json" \
+          MINI_SUMMARY="$work/perf-mini/summary.json" \
+          OUT="$work/comparison.json" \
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+
+          def load(name):
+              p = Path(os.environ[name])
+              return json.loads(p.read_text()) if p.exists() else None
+
+          gcc = load('GCC_SUMMARY')
+          mini = load('MINI_SUMMARY')
+          out = {'schema': 1, 'gcc': gcc, 'mini': mini}
+          if gcc and mini and gcc.get('kbuild_wall_ms'):
+              out['wall_slowdown_vs_gcc'] = round(
+                  mini['kbuild_wall_ms'] / gcc['kbuild_wall_ms'], 3)
+              out['wall_delta_s'] = round(
+                  (mini['kbuild_wall_ms'] - gcc['kbuild_wall_ms']) / 1000, 3)
+          Path(os.environ['OUT']).write_text(json.dumps(out, indent=2) + '\n')
+          print(json.dumps(out, indent=2))
+
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as f:
+              f.write('## Linux Build Perf V0\n\n')
+              f.write('| lane | result | Kbuild wall | image bytes |\n')
+              f.write('|---|---:|---:|---:|\n')
+              for name, value in [('GCC', gcc), ('MiniC+MiniAS', mini)]:
+                  if value:
+                      f.write(f"| {name} | {value['result']} | {value['kbuild_wall_s']} s | {value['image_bytes']} |\n")
+              if 'wall_slowdown_vs_gcc' in out:
+                  f.write(f"\nMini/GCC cold-build wall ratio: **{out['wall_slowdown_vs_gcc']}x**.\n")
+          PY
+
+          echo "--- Mini slowest events ---"
+          sed -n '1,31p' "$work/perf-mini/slowest.tsv" 2>/dev/null || true
+
+      - name: Preserve Linux performance evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-build-perf-v0
+          path: |
+            build/linux-perf-v0/config.sha256
+            build/linux-perf-v0/comparison.json
+            build/linux-perf-v0/perf-gcc/summary.json
+            build/linux-perf-v0/perf-gcc/tool-events.tsv
+            build/linux-perf-v0/perf-gcc/slowest.tsv
+            build/linux-perf-v0/perf-gcc/make.time
+            build/linux-perf-v0/perf-gcc/kbuild.log
+            build/linux-perf-v0/perf-mini/summary.json
+            build/linux-perf-v0/perf-mini/tool-events.tsv
+            build/linux-perf-v0/perf-mini/slowest.tsv
+            build/linux-perf-v0/perf-mini/make.time
+            build/linux-perf-v0/perf-mini/kbuild.log
+            build/linux-perf-v0/perf-mini/minic-kbuild.trace
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Enforce Mini frontier result
+        if: always()
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "${GCC_RC:-1}" -eq 0
+          test "${MINI_RC:-1}" -eq 0
+          echo "LINUX_BUILD_PERF_V0=PASS"
