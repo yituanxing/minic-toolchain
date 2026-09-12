@@ -50,6 +50,9 @@ typedef struct MinicRiscv64CoreFrame {
     size_t value_slot_count;
     size_t *object_offsets;
     size_t *value_offsets;
+    /* M177_CONSTANT_SWITCH_CFG_OWNER: suppress target emission of Core blocks
+       that have no executable predecessor after semantic CFG pruning. */
+    bool *reachable_blocks;
     size_t value_base_offset;
     size_t outgoing_argument_size;
     size_t dynamic_call_area_size;
@@ -356,6 +359,7 @@ static bool core_frame_initialize(const MinicC0Program *program,
     }
     frame->object_offsets = NULL;
     frame->value_offsets = NULL;
+    frame->reachable_blocks = NULL;
     frame->value_slot_count = 0U;
     frame->has_dynamic_stack_alloc = core_function_uses_dynamic_stack_alloc(function);
     frame->saved_frame_base_offset = 0U;
@@ -680,6 +684,8 @@ static void core_frame_destroy(MinicRiscv64CoreFrame *frame) {
     frame->value_offsets = NULL;
     free(frame->object_offsets);
     frame->object_offsets = NULL;
+    free(frame->reachable_blocks);
+    frame->reachable_blocks = NULL;
 }
 
 static bool core_frame_fail(MinicRiscv64CoreFrame *frame) {
@@ -5056,6 +5062,79 @@ static bool emit_terminator(FILE *file,
     return false;
 }
 
+/* M177_CONSTANT_SWITCH_CFG_OWNER: user C labels are valid re-entry
+   roots for goto/asm-goto/computed-goto, so seed them conservatively alongside
+   the function entry and close over explicit Core terminator edges. Synthetic
+   switch blocks with no executable predecessor remain unmarked. */
+static bool core_frame_mark_reachable_blocks(const MinicCoreFunction *function,
+                                             MinicRiscv64CoreFrame *frame) {
+    MinicCoreBlockId *queue;
+    size_t queue_begin;
+    size_t queue_end;
+    size_t block_index;
+
+    if (function == NULL || frame == NULL || function->block_count == 0U ||
+        function->entry_block >= function->block_count ||
+        function->block_count > SIZE_MAX / sizeof(*queue)) {
+        return false;
+    }
+    frame->reachable_blocks =
+        (bool *)calloc(function->block_count, sizeof(*frame->reachable_blocks));
+    queue = (MinicCoreBlockId *)malloc(function->block_count * sizeof(*queue));
+    if (frame->reachable_blocks == NULL || queue == NULL) {
+        free(queue);
+        return false;
+    }
+    queue_begin = 0U;
+    queue_end = 0U;
+#define MINIC_CORE_REACHABLE_ENQUEUE(block_id_)                                      \
+    do {                                                                             \
+        MinicCoreBlockId reach_id_ = (block_id_);                                    \
+        if (reach_id_ >= function->block_count) {                                    \
+            free(queue);                                                              \
+            return false;                                                             \
+        }                                                                             \
+        if (!frame->reachable_blocks[reach_id_]) {                                   \
+            frame->reachable_blocks[reach_id_] = true;                               \
+            queue[queue_end++] = reach_id_;                                           \
+        }                                                                             \
+    } while (0)
+
+    MINIC_CORE_REACHABLE_ENQUEUE(function->entry_block);
+    for (block_index = 0U; block_index < function->block_count; ++block_index) {
+        if (function->blocks[block_index].source_label_id != SIZE_MAX) {
+            MINIC_CORE_REACHABLE_ENQUEUE((MinicCoreBlockId)block_index);
+        }
+    }
+    while (queue_begin < queue_end) {
+        const MinicCoreBlock *block = &function->blocks[queue[queue_begin++]];
+
+        if (!block->has_terminator) {
+            free(queue);
+            return false;
+        }
+        switch (block->terminator.kind) {
+        case MINIC_CORE_TERMINATOR_RETURN:
+        case MINIC_CORE_TERMINATOR_UNREACHABLE:
+        case MINIC_CORE_TERMINATOR_INDIRECT_BRANCH:
+            break;
+        case MINIC_CORE_TERMINATOR_BRANCH:
+            MINIC_CORE_REACHABLE_ENQUEUE(block->terminator.branch_target);
+            break;
+        case MINIC_CORE_TERMINATOR_CONDITIONAL_BRANCH:
+            MINIC_CORE_REACHABLE_ENQUEUE(block->terminator.conditional.when_true);
+            MINIC_CORE_REACHABLE_ENQUEUE(block->terminator.conditional.when_false);
+            break;
+        default:
+            free(queue);
+            return false;
+        }
+    }
+#undef MINIC_CORE_REACHABLE_ENQUEUE
+    free(queue);
+    return true;
+}
+
 static bool emit_core_function_with_symbol(FILE *file,
                                                     const MinicC0Program *program,
                                                     const MinicCoreFunction *function,
@@ -5098,6 +5177,9 @@ static bool emit_core_function_with_symbol(FILE *file,
     }
     if (!core_frame_initialize(program, function, &frame)) {
         return false;
+    }
+    if (!core_frame_mark_reachable_blocks(function, &frame)) {
+        return core_frame_fail(&frame);
     }
     if (bootstrap_trace) {
         (void)fprintf(stderr,
@@ -5183,6 +5265,9 @@ static bool emit_core_function_with_symbol(FILE *file,
             (void)fflush(stderr);
         }
         block = &function->blocks[block_index];
+        if (frame.reachable_blocks != NULL && !frame.reachable_blocks[block_index]) {
+            continue;
+        }
         if (!emit_block_label(file, symbol_name, (MinicCoreBlockId)block_index)) {
             return core_frame_fail(&frame);
         }

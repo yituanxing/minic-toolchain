@@ -10880,6 +10880,61 @@ lower_switch(MinicCoreLowerContext *context, const MinicStatement *statement, bo
     default_target = default_label == SIZE_MAX ? exit_block : labels[default_label].body_block;
     dispatch_target =
         first_case_label == SIZE_MAX ? default_target : labels[first_case_label].test_block;
+
+    /* M177_CONSTANT_SWITCH_CFG_OWNER: an integer constant-expression selector
+       has exactly one switch-entry edge. Keep case-segment fallthrough intact,
+       but bypass the synthetic comparison chain when every case is a simple
+       scalar case. Range cases stay on the established generic dispatch path. */
+    {
+        MinicConstValue selector_constant;
+        MinicConstValue selector_converted;
+
+        if (minic_const_eval_integer(context->body->program,
+                                     context->target,
+                                     statement->expression,
+                                     &selector_constant) &&
+            minic_const_value_convert_integer(context->body->program,
+                                              context->target,
+                                              &selector_constant,
+                                              selector_type,
+                                              &selector_converted)) {
+            size_t constant_target = SIZE_MAX;
+            size_t dispatch_index;
+            bool simple_cases = true;
+
+            for (dispatch_index = 0U; dispatch_index < label_count; ++dispatch_index) {
+                const MinicStatement *case_statement = labels[dispatch_index].statement;
+                MinicConstValue case_constant;
+                MinicConstValue case_converted;
+
+                if (case_statement->kind != MINIC_STATEMENT_CASE) {
+                    continue;
+                }
+                if (case_statement->target_expression != MINIC_EXPRESSION_INVALID ||
+                    !minic_const_eval_integer(context->body->program,
+                                              context->target,
+                                              case_statement->expression,
+                                              &case_constant) ||
+                    !minic_const_value_convert_integer(context->body->program,
+                                                       context->target,
+                                                       &case_constant,
+                                                       selector_type,
+                                                       &case_converted)) {
+                    simple_cases = false;
+                    break;
+                }
+                if (constant_target == SIZE_MAX &&
+                    case_converted.bits == selector_converted.bits) {
+                    constant_target = dispatch_index;
+                }
+            }
+            if (simple_cases) {
+                dispatch_target = constant_target == SIZE_MAX
+                                      ? default_target
+                                      : labels[constant_target].body_block;
+            }
+        }
+    }
     status = set_branch(context, context->block_id, statement->span, dispatch_target);
     if (status != MINIC_CORE_LOWER_OK) {
         return status;
