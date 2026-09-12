@@ -1,0 +1,151 @@
+name: Linux PI All V0
+
+on:
+  push:
+    branches:
+      - "agent/linux-link-correctness-v0"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: linux-pi-all-v0-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pi-all-diff:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Install RV64 Linux prerequisites
+        run: |
+          sudo apt-get -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            build-essential gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
+            bc bison flex libssl-dev libelf-dev make curl xz-utils python3
+
+      - name: Build current Mini toolchain
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          build="$GITHUB_WORKSPACE/build/linux-pi-all-v0/toolchain"
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$build" all
+          test -x "$build/bin/minic"
+          echo "LINUX_PI_ALL_TOOLCHAIN=PASS head=${GITHUB_SHA}"
+
+      - name: Prepare pinned Linux 6.6.143
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-pi-all-v0"
+          archive="$work/linux-6.6.143.tar.xz"
+          src="$work/linux-6.6.143"
+          cfg="$work/config-out"
+          mkdir -p "$work"
+          curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors \
+            https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.6.143.tar.xz \
+            -o "$archive"
+          printf '%s  %s\n' \
+            dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932 \
+            "$archive" | sha256sum -c -
+          tar -xJf "$archive" -C "$work"
+          make -C "$src" O="$cfg" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- defconfig
+          "$src/scripts/config" --file "$cfg/.config" \
+            -e BLK_DEV_INITRD -e DEVTMPFS -e DEVTMPFS_MOUNT \
+            -e SERIAL_8250 -e SERIAL_8250_CONSOLE
+          make -C "$src" O="$cfg" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- olddefconfig
+          mkdir -p "$work/out-gcc" "$work/out-mini" "$work/evidence"
+          cp "$cfg/.config" "$work/out-gcc/.config"
+          cp "$cfg/.config" "$work/out-mini/.config"
+          echo "LINUX_PI_ALL_SOURCE=PASS release=6.6.143 objects=6"
+
+      - name: Build all GCC PI reference objects
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-pi-all-v0"
+          src="$work/linux-6.6.143"
+          out="$work/out-gcc"
+          targets=(
+            arch/riscv/kernel/pi/cmdline_early.pi.o
+            arch/riscv/kernel/pi/fdt_early.pi.o
+            arch/riscv/kernel/pi/string.pi.o
+            arch/riscv/kernel/pi/ctype.pi.o
+            arch/riscv/kernel/pi/lib-fdt.pi.o
+            arch/riscv/kernel/pi/lib-fdt_ro.pi.o
+          )
+          make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- -j4 prepare
+          make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
+            -j1 V=1 "${targets[@]}" >"$work/evidence/gcc-kbuild.log" 2>&1
+          for target in "${targets[@]}"; do test -s "$out/$target"; done
+          echo "LINUX_PI_ALL_GCC=PASS objects=6"
+
+      - name: Build all MiniC PI objects
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-pi-all-v0"
+          src="$work/linux-6.6.143"
+          out="$work/out-mini"
+          wrapper="$GITHUB_WORKSPACE/tests/external/linux/stage2_kbuild_cc.sh"
+          targets=(
+            arch/riscv/kernel/pi/cmdline_early.pi.o
+            arch/riscv/kernel/pi/fdt_early.pi.o
+            arch/riscv/kernel/pi/string.pi.o
+            arch/riscv/kernel/pi/ctype.pi.o
+            arch/riscv/kernel/pi/lib-fdt.pi.o
+            arch/riscv/kernel/pi/lib-fdt_ro.pi.o
+          )
+          make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- -j4 prepare
+          MINIC="$work/toolchain/bin/minic" \
+          REAL_CC=/usr/bin/riscv64-linux-gnu-gcc \
+          MINIC_KEEP_INTERMEDIATES=1 \
+          MINIC_KBUILD_TRACE="$work/evidence/minic-kbuild.trace" \
+          CORE_FAST_TRACE=1 \
+            make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
+              CC="$wrapper" -j1 V=1 "${targets[@]}" \
+              >"$work/evidence/mini-kbuild.log" 2>&1
+          for target in "${targets[@]}"; do test -s "$out/$target"; done
+          echo "LINUX_PI_ALL_MINI=PASS objects=6"
+
+      - name: Require exact GCC undefined-symbol sets
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-pi-all-v0"
+          ev="$work/evidence"
+          bases=(cmdline_early fdt_early string ctype lib-fdt lib-fdt_ro)
+          for base in "${bases[@]}"; do
+            for lane in gcc mini; do
+              obj="$work/out-$lane/arch/riscv/kernel/pi/$base.pi.o"
+              riscv64-linux-gnu-nm -u "$obj" \
+                | sed -E 's/^[[:space:]]*[A-Za-z]?[[:space:]]*//' \
+                | sed '/^$/d' | sort -u >"$ev/$lane-$base.undefined"
+              riscv64-linux-gnu-readelf -Wr "$obj" >"$ev/$lane-$base.relocs"
+            done
+            comm -13 "$ev/gcc-$base.undefined" "$ev/mini-$base.undefined" >"$ev/$base.only-mini"
+            comm -23 "$ev/gcc-$base.undefined" "$ev/mini-$base.undefined" >"$ev/$base.only-gcc"
+            echo "PI_DIFF base=$base gcc=$(wc -l <\"$ev/gcc-$base.undefined\") mini=$(wc -l <\"$ev/mini-$base.undefined\") mini_only=$(wc -l <\"$ev/$base.only-mini\") gcc_only=$(wc -l <\"$ev/$base.only-gcc\")"
+            if test -s "$ev/$base.only-mini" || test -s "$ev/$base.only-gcc"; then
+              echo "--- $base Mini-only ---"
+              cat "$ev/$base.only-mini"
+              echo "--- $base GCC-only ---"
+              cat "$ev/$base.only-gcc"
+              exit 1
+            fi
+          done
+          echo "LINUX_PI_ALL_UNDEFINED_DIFF=PASS exact=6/6"
+
+      - name: Preserve all-PI evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-pi-all-v0
+          path: build/linux-pi-all-v0/evidence/
+          if-no-files-found: ignore
+          retention-days: 7
