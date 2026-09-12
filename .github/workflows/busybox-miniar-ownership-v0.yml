@@ -76,7 +76,7 @@ jobs:
           CC=riscv64-linux-gnu-gcc AR=riscv64-linux-gnu-ar RANLIB=riscv64-linux-gnu-ranlib \
             "$musl_src/configure" --target=riscv64-linux-gnu --disable-shared --prefix=/usr \
             >"$work/musl-configure.log" 2>&1
-          make -j4 lib/libc.a obj/crt/crt1.o obj/crt/crti.o obj/crt/crtn.o \
+          make -j4 lib/libc.a obj/crt/crt1.o obj/crti.o obj/crtn.o \
             >"$work/musl-make.log" 2>&1
           make DESTDIR="$sysroot" install-headers >"$work/musl-install-headers.log" 2>&1
           test -s lib/libc.a
@@ -118,29 +118,14 @@ jobs:
           sysroot="$work/musl-sysroot"
           musl="$work/musl-build"
           cc_wrapper="$GITHUB_WORKSPACE/tools/ci/busybox-kbuild-cc-wrapper-v0.sh"
-          ar_wrapper="$work/miniar-kbuild-wrapper.sh"
+          ar_wrapper="$GITHUB_WORKSPACE/tools/ci/busybox-kbuild-ar-wrapper-v0.sh"
           ar_trace="$work/miniar-kbuild.trace"
           results="$work/busybox-c-results.tsv"
           libgcc="$(riscv64-linux-gnu-gcc -print-libgcc-file-name)"
           uapi="$GITHUB_WORKSPACE/tests/linker/fixtures/busybox-uapi"
           : >"$results"
           : >"$ar_trace"
-          chmod +x "$cc_wrapper"
-
-          cat >"$ar_wrapper" <<'SH'
-          #!/usr/bin/env bash
-          set -Eeuo pipefail
-          : "${BUSYBOX_MINI_AR:?}"
-          : "${BUSYBOX_MINI_AR_TRACE:?}"
-          {
-            flock 9
-            printf 'ar'
-            printf ' %q' "$@"
-            printf '\n'
-          } 9>>"$BUSYBOX_MINI_AR_TRACE"
-          exec "$BUSYBOX_MINI_AR" "$@"
-          SH
-          chmod +x "$ar_wrapper"
+          chmod +x "$cc_wrapper" "$ar_wrapper"
 
           export BUSYBOX_REAL_GCC=riscv64-linux-gnu-gcc
           export BUSYBOX_MINIC="$work/bin/minic"
@@ -181,8 +166,6 @@ jobs:
           test "$passed" -eq 586
           test "$ar_calls" -gt 0
           test -s "$out/busybox_unstripped"
-          # The old broken route emitted multi-gigabyte diagnostics before any
-          # archive call. Treat even 100 MiB as an integration regression.
           test "$log_bytes" -lt 104857600
           echo "BUSYBOX_MINIAR_OWNERSHIP_V0=PASS c_tus=$passed ar_calls=$ar_calls"
 
