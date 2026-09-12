@@ -661,6 +661,136 @@ done:
     return ok;
 }
 
+
+typedef struct MiniLdGcOutputAlignmentOrder {
+    size_t old_index;
+    int output_class;
+    uint64_t align;
+} MiniLdGcOutputAlignmentOrder;
+
+static int minild_gc_compare_output_alignment(const void *lhs_ptr,
+                                              const void *rhs_ptr) {
+    const MiniLdGcOutputAlignmentOrder *lhs = lhs_ptr;
+    const MiniLdGcOutputAlignmentOrder *rhs = rhs_ptr;
+
+    if (lhs->output_class != rhs->output_class) {
+        return lhs->output_class < rhs->output_class ? -1 : 1;
+    }
+    if (lhs->output_class < 2 && lhs->align != rhs->align) {
+        return lhs->align > rhs->align ? -1 : 1;
+    }
+    if (lhs->old_index != rhs->old_index) {
+        return lhs->old_index < rhs->old_index ? -1 : 1;
+    }
+    return 0;
+}
+
+/*
+ * BusyBox's GNU reference link uses --sort-section=alignment.
+ * Preserve the recovered input order for equal-alignment sections,
+ * but sort executable and read-only alloc sections by decreasing
+ * alignment inside their default output classes.  This matches the
+ * range-relevant GNU wildcard ordering without disturbing writable
+ * or metadata section order.
+ */
+static bool minild_gc_sort_default_output_alignment(MiniLdState *state) {
+    const size_t count = state->section_count;
+    MiniLdGcOutputAlignmentOrder *entries = NULL;
+    MiniLdSection *ordered_sections = NULL;
+    size_t *remap = NULL;
+    size_t index_capacity = 64U;
+    size_t target;
+    size_t i;
+    bool installed = false;
+    bool ok = false;
+
+    entries = malloc((count == 0U ? 1U : count) * sizeof(*entries));
+    ordered_sections =
+        malloc((count == 0U ? 1U : count) * sizeof(*ordered_sections));
+    remap = malloc((count == 0U ? 1U : count) * sizeof(*remap));
+    if (entries == NULL || ordered_sections == NULL || remap == NULL) {
+        fprintf(state->diagnostics,
+                "minic-ld: out-of-memory:gc-output-alignment\n");
+        goto done;
+    }
+
+    for (i = 0U; i < count; ++i) {
+        entries[i].old_index = i;
+        entries[i].output_class =
+            minild_gc_default_output_class(&state->sections[i]);
+        entries[i].align = state->sections[i].align;
+    }
+    qsort(entries,
+          count,
+          sizeof(*entries),
+          minild_gc_compare_output_alignment);
+
+    for (i = 0U; i < count; ++i) {
+        size_t old_index = entries[i].old_index;
+        ordered_sections[i] = state->sections[old_index];
+        remap[old_index] = i;
+    }
+    for (i = 0U; i < state->symbol_count; ++i) {
+        MiniLdSymbol *symbol = &state->symbols[i];
+
+        if (symbol->section < 0) {
+            continue;
+        }
+        if ((size_t)symbol->section >= count) {
+            fprintf(state->diagnostics,
+                    "minic-ld: gc-output-alignment-symbol-remap\n");
+            goto done;
+        }
+        symbol->section = (int)remap[symbol->section];
+    }
+    for (i = 0U; i < state->reloc_count; ++i) {
+        if (state->relocs[i].section >= count) {
+            fprintf(state->diagnostics,
+                    "minic-ld: gc-output-alignment-reloc-remap\n");
+            goto done;
+        }
+        state->relocs[i].section = remap[state->relocs[i].section];
+    }
+
+    free(state->sections);
+    state->sections = ordered_sections;
+    state->section_capacity = count;
+    ordered_sections = NULL;
+    installed = true;
+
+    if (count > (SIZE_MAX - 1U) / 2U) {
+        fprintf(state->diagnostics,
+                "minic-ld: gc-output-alignment-index-overflow\n");
+        goto done;
+    }
+    target = count * 2U + 1U;
+    while (index_capacity < target) {
+        if (index_capacity > SIZE_MAX / 2U) {
+            fprintf(state->diagnostics,
+                    "minic-ld: gc-output-alignment-index-overflow\n");
+            goto done;
+        }
+        index_capacity *= 2U;
+    }
+    if (!rebuild_section_index(state, index_capacity)) {
+        fprintf(state->diagnostics,
+                "minic-ld: out-of-memory:gc-output-alignment-index\n");
+        goto done;
+    }
+    fprintf(state->diagnostics,
+            "minic-ld: gc-output-alignment:sections=%zu\n",
+            count);
+    ok = true;
+
+done:
+    if (!installed) {
+        free(ordered_sections);
+    }
+    free(remap);
+    free(entries);
+    return ok;
+}
+
 static bool minild_gc_name_has_prefix(const char *name, const char *prefix) {
     size_t length = strlen(prefix);
 
@@ -892,6 +1022,7 @@ static int minild_link_static_with_gc_v0(
         !static_allocate_common(&state) ||
         !minild_gc_prune_static(&state, entry_symbol) ||
         !minild_gc_group_default_output_classes(&state) ||
+        !minild_gc_sort_default_output_alignment(&state) ||
         !static_build_got(&state, &got) ||
         !static_build_layout(&state, &layout)) {
         goto done;
