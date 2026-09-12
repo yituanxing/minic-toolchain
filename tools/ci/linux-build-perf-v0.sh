@@ -25,9 +25,9 @@ trace="$work/minic-kbuild.trace"
 : >"$trace"
 
 # Every timed wrapper appends one TSV row under flock so parallel Kbuild jobs do
-# not corrupt the performance ledger. Durations are monotonic-enough wall-clock
-# samples for workload comparison; summed durations intentionally represent
-# aggregate tool work and can exceed Kbuild wall time under -jN.
+# not corrupt the performance ledger. Durations are wall-clock samples for
+# workload comparison; summed durations intentionally represent aggregate tool
+# work and can exceed Kbuild wall time under -jN.
 cat >"$work/bin/timed-tool" <<'SH'
 #!/usr/bin/env bash
 set -Eeuo pipefail
@@ -56,7 +56,7 @@ dur_ms=$(( (end - start) / 1000000 ))
 {
   flock 9
   printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-    "$PERF_TOOL" "$start" "$end" "$dur_ms" "$rc" "$source_file" "$output_file"
+    "$PERF_TOOL" "$start" "$end" "$dur_ms" "$rc" "$source_file" "$output_file" >&9
 } 9>>"$PERF_EVENTS"
 exit "$rc"
 SH
@@ -114,7 +114,7 @@ dur_ms=$(( (end - start) / 1000000 ))
 {
   flock 9
   printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-    "$label" "$start" "$end" "$dur_ms" "$rc" "$source_file" "$output_file"
+    "$label" "$start" "$end" "$dur_ms" "$rc" "$source_file" "$output_file" >&9
 } 9>>"$PERF_EVENTS"
 exit "$rc"
 SH
@@ -129,7 +129,6 @@ if [[ "$mode" == mini ]]; then
   : "${MINIC_BIN:?MINIC_BIN is required for mini mode}"
   : "${MINIAS_BIN:?MINIAS_BIN is required for mini mode}"
 
-  # Time MiniC itself.
   make_wrapper "$work/bin/minic-perf" minic "$MINIC_BIN"
 
   # Put MiniAS below GCC's assembler boundary and time the exact assembler
@@ -169,7 +168,7 @@ dur_ms=$(( (end - start) / 1000000 ))
 {
   flock 9
   printf 'minias\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-    "$start" "$end" "$dur_ms" "$rc" "$input" "$out"
+    "$start" "$end" "$dur_ms" "$rc" "$input" "$out" >&9
 } 9>>"$PERF_EVENTS"
 exit "$rc"
 SH
@@ -179,9 +178,6 @@ SH
   # explicitly bounded vDSO/four purgatory C exceptions. All ordinary C bodies
   # run through MiniC; all generated assembly runs through MiniAS.
   export MINIC="$work/bin/minic-perf"
-  export REAL_CC="$cc -B$work/bin/"
-  # stage2_kbuild_cc expects REAL_CC to be one executable path, so provide a
-  # tiny argv-preserving launcher rather than embedding arguments in REAL_CC.
   cat >"$work/bin/real-cc-mini" <<SH
 #!/usr/bin/env bash
 exec $(printf '%q' "$cc") -B$(printf '%q' "$work/bin/") "\$@"
