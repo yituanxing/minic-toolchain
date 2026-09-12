@@ -73,6 +73,27 @@ get_or_create_enum_tag(MinicParser *parser, MinicSourceSpan name_span, MinicEnum
     return *enum_id != MINIC_ENUM_INVALID || create_named_enum(parser, name_span, enum_id);
 }
 
+static MinicEnumeratorId
+find_enum_constant_in_current_scope(const MinicParser *parser, MinicSourceSpan name_span) {
+    size_t begin;
+    size_t index;
+
+    if (parser == NULL) {
+        return MINIC_ENUMERATOR_INVALID;
+    }
+    begin = parser->scope_count == 0U
+                ? 0U
+                : parser->scopes[parser->scope_count - 1U].enum_constant_begin;
+    for (index = parser->enum_constant_count; index > begin; --index) {
+        const MinicParserEnumConstant *constant = &parser->enum_constants[index - 1U];
+
+        if (minic_parser_span_equals(parser, name_span, constant->name_span)) {
+            return constant->enumerator_id;
+        }
+    }
+    return MINIC_ENUMERATOR_INVALID;
+}
+
 MinicEnumeratorId minic_parser_find_enum_constant(const MinicParser *parser,
                                                   MinicSourceSpan name_span) {
     size_t index;
@@ -97,7 +118,9 @@ bool minic_parser_bind_enum_constant(MinicParser *parser,
     size_t new_capacity;
 
     if (parser == NULL || enumerator_id == MINIC_ENUMERATOR_INVALID ||
-        minic_parser_find_enum_constant(parser, name_span) != MINIC_ENUMERATOR_INVALID) {
+        find_enum_constant_in_current_scope(parser, name_span) != MINIC_ENUMERATOR_INVALID ||
+        (parser->scope_count != 0U &&
+         minic_parser_name_bound_in_current_scope(parser, name_span))) {
         if (parser != NULL) {
             minic_parser_error(parser, "duplicate enumerator name");
         }

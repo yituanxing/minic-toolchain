@@ -711,11 +711,13 @@ static bool minipp_handle_conditional_directive(MiniPpState *state,
 
 static bool minipp_process_file(MiniPpState *state,
                                 const char *path,
+                                size_t include_path_index,
                                 MiniPpString *output);
 
 static bool minipp_handle_include(MiniPpState *state,
                                   const char *current_path,
                                   const char *rest,
+                                  bool include_next,
                                   MiniPpString *output) {
     const char *text = minipp_skip_horizontal_space(rest);
     const char *name_start;
@@ -725,6 +727,7 @@ static bool minipp_handle_include(MiniPpState *state,
     char *name = NULL;
     MiniPpString expanded;
     MiniPpString resolved;
+    size_t resolved_include_path_index = SIZE_MAX;
     bool have_expanded = false;
     bool ok = false;
 
@@ -825,18 +828,32 @@ static bool minipp_handle_include(MiniPpState *state,
         goto done;
     }
 
-    if (!minipp_resolve_include(state,
-                                current_path,
-                                name,
-                                angled,
-                                &resolved)) {
+    if (include_next) {
+        if (!minipp_resolve_include_next(state,
+                                         name,
+                                         &resolved,
+                                         &resolved_include_path_index)) {
+            fprintf(state->diagnostics,
+                    "minic-cpp: include-next-not-found:%s\n",
+                    name);
+            goto done;
+        }
+    } else if (!minipp_resolve_include(state,
+                                       current_path,
+                                       name,
+                                       angled,
+                                       &resolved,
+                                       &resolved_include_path_index)) {
         fprintf(state->diagnostics,
                 "minic-cpp: include-not-found:%s\n",
                 name);
         goto done;
     }
 
-    ok = minipp_process_file(state, resolved.data, output);
+    ok = minipp_process_file(state,
+                             resolved.data,
+                             resolved_include_path_index,
+                             output);
     minipp_string_destroy(&resolved);
 
 done:
@@ -964,7 +981,10 @@ static bool minipp_handle_directive(MiniPpState *state,
         return minipp_parse_undef(state, rest);
     }
     if (strcmp(directive, "include") == 0) {
-        return minipp_handle_include(state, current_path, rest, output);
+        return minipp_handle_include(state, current_path, rest, false, output);
+    }
+    if (strcmp(directive, "include_next") == 0) {
+        return minipp_handle_include(state, current_path, rest, true, output);
     }
     if (strcmp(directive, "pragma") == 0) {
         return minipp_emit_pragma(state, rest, output);
@@ -1292,6 +1312,7 @@ static bool minipp_process_source(MiniPpState *state,
 
 static bool minipp_process_file(MiniPpState *state,
                                 const char *path,
+                                size_t include_path_index,
                                 MiniPpString *output) {
     MiniPpString input;
     MiniPpString logical;
@@ -1301,11 +1322,13 @@ static bool minipp_process_file(MiniPpState *state,
     bool previous_comment_state = state->in_block_comment;
     const char *previous_file = state->current_file;
     size_t previous_line = state->current_line;
+    size_t previous_include_path_index = state->current_include_path_index;
     bool ok;
 
     minipp_string_init(&input);
     minipp_string_init(&logical);
     state->in_block_comment = false;
+    state->current_include_path_index = include_path_index;
 
     ok = minipp_read_file(path, &input, state->diagnostics) &&
          minipp_build_logical_line_numbers(&input,
@@ -1338,6 +1361,7 @@ static bool minipp_process_file(MiniPpState *state,
     state->in_block_comment = previous_comment_state;
     state->current_file = previous_file;
     state->current_line = previous_line;
+    state->current_include_path_index = previous_include_path_index;
     free(line_numbers);
     minipp_string_destroy(&logical);
     minipp_string_destroy(&input);
@@ -1374,6 +1398,7 @@ int minipp_preprocess_file(const char *input_path,
     state.active = true;
     state.include_paths = config->include_paths;
     state.include_path_count = config->include_path_count;
+    state.current_include_path_index = SIZE_MAX;
     state.diagnostics = diagnostics;
     minipp_string_init(&output);
     minipp_string_init(&rendered);
@@ -1393,23 +1418,28 @@ int minipp_preprocess_file(const char *input_path,
     ok = true;
     for (index = 0U; index < config->forced_include_count && ok; ++index) {
         MiniPpString resolved;
+        size_t resolved_include_path_index = SIZE_MAX;
 
         if (!minipp_resolve_include(&state,
                                     "",
                                     config->forced_includes[index],
                                     false,
-                                    &resolved)) {
+                                    &resolved,
+                                    &resolved_include_path_index)) {
             fprintf(diagnostics,
                     "minic-cpp: forced-include-not-found:%s\n",
                     config->forced_includes[index]);
             ok = false;
             break;
         }
-        ok = minipp_process_file(&state, resolved.data, &output);
+        ok = minipp_process_file(&state,
+                                 resolved.data,
+                                 resolved_include_path_index,
+                                 &output);
         minipp_string_destroy(&resolved);
     }
 
-    ok = ok && minipp_process_file(&state, input_path, &output);
+    ok = ok && minipp_process_file(&state, input_path, SIZE_MAX, &output);
     if (ok && !minipp_render_gcc_p_output(&output, &rendered)) {
         fprintf(diagnostics, "minic-cpp: out-of-memory\n");
         ok = false;

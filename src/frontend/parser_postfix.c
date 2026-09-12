@@ -234,7 +234,8 @@ static bool parse_indirect_arguments(MinicParser *parser,
                 !minic_parser_parse_expression(parser, &argument_id, 0U)) {
                 return false;
             }
-            if (!minic_parser_apply_array_decay(parser, argument_id, &argument_id)) {
+            if (!minic_parser_apply_array_decay(parser, argument_id, &argument_id) ||
+                !minic_parser_apply_default_argument_promotion(parser, &argument_id)) {
                 if (parser->diagnostic == NULL || parser->diagnostic->message[0] == '\0') {
                     minic_parser_error(parser, "unsupported variadic call argument type");
                 }
@@ -324,8 +325,12 @@ static bool parse_one_postfix_update(MinicParser *parser,
                                "pointer update requires an arithmetic-compatible pointee type");
             return false;
         }
-    } else if (!minic_type_is_integer(operand_type)) {
-        minic_parser_error(parser, "postfix update requires integer or pointer lvalue");
+    } else if (!minic_type_is_integer(operand_type) &&
+               !minic_type_is_float(operand_type) &&
+               !minic_type_is_double(operand_type) &&
+               !minic_type_is_long_double(operand_type)) {
+        minic_parser_error(parser,
+                           "postfix update requires arithmetic or pointer lvalue");
         return false;
     }
 

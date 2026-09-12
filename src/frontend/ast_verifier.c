@@ -347,6 +347,7 @@ static bool verify_call_arguments(const MinicC0Program *program,
         } else if (!minic_type_is_integer(argument->type) &&
                    !minic_type_is_pointer(argument->type) &&
                    !minic_type_is_double(argument->type) &&
+                   !minic_type_is_long_double(argument->type) &&
                    !(minic_type_is_record(argument->type) &&
                      minic_c0_type_is_complete_object(program, argument->type))) {
             return false;
@@ -435,6 +436,13 @@ static bool verify_expression(const MinicC0Program *program,
     case MINIC_EXPRESSION_BUILTIN_UNREACHABLE:
         return expression->value_category == MINIC_VALUE_RVALUE &&
                minic_type_is_void(expression->type);
+    case MINIC_EXPRESSION_BUILTIN_ALLOCA: {
+        MinicType pointee;
+        operand = expression_before(program, expression->value.unary.operand, expression_index);
+        return operand != NULL && minic_type_equal(operand->type, minic_type_unsigned_long()) &&
+               expression->value_category == MINIC_VALUE_RVALUE &&
+               minic_type_pointee(expression->type, &pointee) && minic_type_is_void(pointee);
+    }
     case MINIC_EXPRESSION_CALL_FRAME_ADDRESS: {
         MinicType pointee;
 
@@ -672,7 +680,10 @@ static bool verify_expression(const MinicC0Program *program,
                 !minic_type_equal(expression->type, operand->type)) {
                 return false;
             }
-            if (minic_type_is_integer(operand->type)) {
+            if (minic_type_is_integer(operand->type) ||
+                minic_type_is_float(operand->type) ||
+                minic_type_is_double(operand->type) ||
+                minic_type_is_long_double(operand->type)) {
                 return true;
             }
             return minic_type_is_pointer(operand->type) &&
@@ -1415,10 +1426,31 @@ bool minic_c0_program_verify_target_detailed(const MinicC0Program *program,
     for (index = 0U; index < program->local_count; ++index) {
         const MinicLocal *local;
         size_t explicit_alignment;
+        bool dynamic_vla;
 
         local = &program->locals[index];
         explicit_alignment = local->explicit_alignment;
-        if (local->element_count == 0U ||
+        dynamic_vla = false;
+        if (local->is_array && local->element_count == 0U &&
+            local->dynamic_count_local_id < program->local_count &&
+            local->dynamic_address_local_id < program->local_count &&
+            local->dynamic_count_local_id != index &&
+            local->dynamic_address_local_id != index &&
+            local->dynamic_count_local_id != local->dynamic_address_local_id) {
+            const MinicLocal *count_local =
+                &program->locals[local->dynamic_count_local_id];
+            const MinicLocal *address_local =
+                &program->locals[local->dynamic_address_local_id];
+            MinicType pointee;
+
+            dynamic_vla =
+                !count_local->is_array && count_local->element_count == 1U &&
+                minic_type_equal(count_local->type, minic_type_unsigned_long()) &&
+                !address_local->is_array && address_local->element_count == 1U &&
+                minic_type_pointee(address_local->type, &pointee) &&
+                minic_type_equal(pointee, local->type);
+        }
+        if ((local->element_count == 0U && !dynamic_vla) ||
             !type_is_valid(program, target, local->type) ||
             minic_type_is_function(local->type) ||
             (explicit_alignment != 0U &&

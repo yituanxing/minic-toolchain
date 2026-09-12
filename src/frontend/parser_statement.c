@@ -52,8 +52,13 @@ static bool apply_assignment_conversion(MinicParser *parser,
     if (minic_c0_assignment_compatible(parser->program, target_type, source_id)) {
         return true;
     }
-    if (!minic_type_is_double(target_type) ||
-        (!minic_type_is_integer(source->type) && !minic_type_is_float(source->type))) {
+    /* Statement-level assignment/initializer/return conversion must match
+       the expression-assignment path. When plain assignment compatibility is
+       insufficient, materialize any non-pointer scalar cast that the frontend
+       already accepts explicitly. This covers standard arithmetic conversions
+       such as double -> unsigned without admitting implicit pointer casts. */
+    if (minic_type_is_pointer(target_type) || minic_type_is_pointer(source->type) ||
+        !minic_type_cast_compatible(target_type, source->type)) {
         return true;
     }
 
@@ -2066,6 +2071,227 @@ static bool local_declarator_starts_pointer_to_array(const MinicParser *parser) 
     }
 }
 
+static bool parse_local_array_bound_or_vla(MinicParser *parser,
+                                           size_t *element_count,
+                                           MinicExpressionId *runtime_bound_id) {
+    MinicExpressionId bound_id;
+    const MinicExpression *bound;
+    MinicConstValue constant;
+    int64_t value;
+
+    if (parser == NULL || element_count == NULL || runtime_bound_id == NULL ||
+        !minic_parser_parse_expression(parser, &bound_id, 0U)) {
+        return false;
+    }
+    bound = minic_c0_program_expression(parser->program, bound_id);
+    if (bound == NULL || !minic_type_is_integer(bound->type)) {
+        minic_parser_error(parser, "array bound must have integer type");
+        return false;
+    }
+    if (parser->current.kind != MINIC_TOKEN_RBRACKET) {
+        minic_parser_error(parser, "expected ']'");
+        return false;
+    }
+
+    if (minic_const_eval_integer(parser->program, parser->target_info, bound_id, &constant)) {
+        if (!minic_const_value_as_int64(
+                parser->program, parser->target_info, &constant, &value)) {
+            minic_parser_error(parser, "array bound exceeds target object range");
+            return false;
+        }
+        if (value <= 0) {
+            minic_parser_error(parser, "array bound must be greater than zero");
+            return false;
+        }
+        if ((uint64_t)value > (uint64_t)SIZE_MAX) {
+            minic_parser_error(parser, "array bound exceeds target object range");
+            return false;
+        }
+        *element_count = (size_t)value;
+        *runtime_bound_id = MINIC_EXPRESSION_INVALID;
+    } else {
+        /* A non-ICE local bound is a VLA. Preserve the parsed expression so
+           declaration materialization can evaluate it exactly once. */
+        *element_count = 0U;
+        *runtime_bound_id = bound_id;
+    }
+    return minic_parser_advance(parser);
+}
+
+static bool materialize_dynamic_local_array(MinicParser *parser,
+                                            MinicLocalId local_id,
+                                            MinicExpressionId runtime_bound_id) {
+    const MinicLocal *local;
+    const MinicExpression *bound;
+    MinicLocal local_snapshot;
+    MinicExpression bound_snapshot;
+    MinicLocal count_local;
+    MinicLocal address_local;
+    MinicLocalId count_local_id;
+    MinicLocalId address_local_id;
+    MinicExpression expression;
+    MinicExpressionId count_value_id;
+    MinicExpressionId count_target_id;
+    MinicExpressionId count_read_id;
+    MinicExpressionId size_constant_id;
+    MinicExpressionId byte_count_id;
+    MinicExpressionId alloca_id;
+    MinicExpressionId pointer_value_id;
+    MinicExpressionId address_target_id;
+    MinicStatement statement;
+    MinicType pointer_type;
+    MinicType void_pointer_type;
+    size_t element_size;
+
+    if (parser == NULL || runtime_bound_id == MINIC_EXPRESSION_INVALID) {
+        return false;
+    }
+    local = minic_c0_program_local(parser->program, local_id);
+    bound = minic_c0_program_expression(parser->program, runtime_bound_id);
+    if (local == NULL || bound == NULL) {
+        return false;
+    }
+    local_snapshot = *local;
+    bound_snapshot = *bound;
+    if (!local_snapshot.is_array || local_snapshot.element_count != 0U ||
+        local_snapshot.dynamic_count_local_id != MINIC_LOCAL_INVALID ||
+        local_snapshot.dynamic_address_local_id != MINIC_LOCAL_INVALID ||
+        local_snapshot.is_register_storage || local_snapshot.explicit_alignment != 0U ||
+        !minic_type_is_integer(bound_snapshot.type) ||
+        !minic_target_info_sizeof_type(
+            parser->target_info, parser->program, local_snapshot.type, &element_size) ||
+        element_size == 0U ||
+        !minic_type_pointer_to(local_snapshot.type, &pointer_type) ||
+        !minic_type_pointer_to(minic_type_void(), &void_pointer_type)) {
+        minic_parser_error(parser, "unsupported variable length array declaration");
+        return false;
+    }
+
+    minic_c0_local_initialize(&count_local);
+    count_local.name_span = local_snapshot.name_span;
+    count_local.type = minic_type_unsigned_long();
+    count_local.element_count = 1U;
+    count_local.is_array = false;
+    count_local.is_register_storage = false;
+    if (!minic_c0_program_add_local(parser->program, &count_local, &count_local_id)) {
+        minic_parser_error(parser, "cannot allocate VLA bound storage");
+        return false;
+    }
+
+    minic_c0_local_initialize(&address_local);
+    address_local.name_span = local_snapshot.name_span;
+    address_local.type = pointer_type;
+    address_local.element_count = 1U;
+    address_local.is_array = false;
+    address_local.is_register_storage = false;
+    if (!minic_c0_program_add_local(parser->program, &address_local, &address_local_id)) {
+        minic_parser_error(parser, "cannot allocate VLA address storage");
+        return false;
+    }
+    parser->program->locals[local_id].dynamic_count_local_id = count_local_id;
+    parser->program->locals[local_id].dynamic_address_local_id = address_local_id;
+
+    count_value_id = runtime_bound_id;
+    if (!minic_type_equal(bound_snapshot.type, minic_type_unsigned_long())) {
+        (void)memset(&expression, 0, sizeof(expression));
+        expression.kind = MINIC_EXPRESSION_CAST;
+        expression.span = bound_snapshot.span;
+        expression.type = minic_type_unsigned_long();
+        expression.value_category = MINIC_VALUE_RVALUE;
+        expression.value.unary.operand = runtime_bound_id;
+        if (!minic_parser_add_expression(parser, &expression, &count_value_id)) {
+            return false;
+        }
+    }
+
+    if (!add_local_lvalue_expression(
+            parser, count_local_id, local_snapshot.name_span, &count_target_id)) {
+        return false;
+    }
+    (void)memset(&statement, 0, sizeof(statement));
+    statement.kind = MINIC_STATEMENT_ASSIGN;
+    statement.span = bound_snapshot.span;
+    statement.target_expression = count_target_id;
+    statement.expression = count_value_id;
+    statement.target_statement = MINIC_STATEMENT_INVALID;
+    statement.cleanup_context = parser->cleanup_context;
+    statement.cleanup_stop_context = MINIC_CLEANUP_CONTEXT_ROOT;
+    statement.then_block = MINIC_BLOCK_INVALID;
+    statement.else_block = MINIC_BLOCK_INVALID;
+    if (!minic_parser_add_statement(parser, &statement)) {
+        return false;
+    }
+
+    (void)memset(&expression, 0, sizeof(expression));
+    expression.kind = MINIC_EXPRESSION_LVALUE_READ;
+    expression.span = bound_snapshot.span;
+    expression.type = minic_type_unsigned_long();
+    expression.value_category = MINIC_VALUE_RVALUE;
+    expression.value.unary.operand = count_target_id;
+    if (!minic_parser_add_expression(parser, &expression, &count_read_id)) {
+        return false;
+    }
+    byte_count_id = count_read_id;
+
+    if (element_size != 1U) {
+        (void)memset(&expression, 0, sizeof(expression));
+        expression.kind = MINIC_EXPRESSION_INTEGER;
+        expression.span = bound_snapshot.span;
+        expression.type = minic_type_unsigned_long();
+        expression.value_category = MINIC_VALUE_RVALUE;
+        expression.value.integer_value = (int64_t)element_size;
+        if (!minic_parser_add_expression(parser, &expression, &size_constant_id)) {
+            return false;
+        }
+
+        (void)memset(&expression, 0, sizeof(expression));
+        expression.kind = MINIC_EXPRESSION_BINARY;
+        expression.span = bound_snapshot.span;
+        expression.type = minic_type_unsigned_long();
+        expression.value_category = MINIC_VALUE_RVALUE;
+        expression.value.binary.operator_kind = MINIC_BINARY_MULTIPLY;
+        expression.value.binary.left = count_read_id;
+        expression.value.binary.right = size_constant_id;
+        if (!minic_parser_add_expression(parser, &expression, &byte_count_id)) {
+            return false;
+        }
+    }
+
+    (void)memset(&expression, 0, sizeof(expression));
+    expression.kind = MINIC_EXPRESSION_BUILTIN_ALLOCA;
+    expression.span = bound_snapshot.span;
+    expression.type = void_pointer_type;
+    expression.value_category = MINIC_VALUE_RVALUE;
+    expression.value.unary.operand = byte_count_id;
+    if (!minic_parser_add_expression(parser, &expression, &alloca_id)) {
+        return false;
+    }
+
+    (void)memset(&expression, 0, sizeof(expression));
+    expression.kind = MINIC_EXPRESSION_CAST;
+    expression.span = bound_snapshot.span;
+    expression.type = pointer_type;
+    expression.value_category = MINIC_VALUE_RVALUE;
+    expression.value.unary.operand = alloca_id;
+    if (!minic_parser_add_expression(parser, &expression, &pointer_value_id) ||
+        !add_local_lvalue_expression(
+            parser, address_local_id, local_snapshot.name_span, &address_target_id)) {
+        return false;
+    }
+
+    (void)memset(&statement, 0, sizeof(statement));
+    statement.kind = MINIC_STATEMENT_ASSIGN;
+    statement.span = bound_snapshot.span;
+    statement.target_expression = address_target_id;
+    statement.expression = pointer_value_id;
+    statement.target_statement = MINIC_STATEMENT_INVALID;
+    statement.cleanup_context = parser->cleanup_context;
+    statement.cleanup_stop_context = MINIC_CLEANUP_CONTEXT_ROOT;
+    statement.then_block = MINIC_BLOCK_INVALID;
+    statement.else_block = MINIC_BLOCK_INVALID;
+    return minic_parser_add_statement(parser, &statement);
+}
+
 static bool
 parse_local_declarator(MinicParser *parser,
                        MinicType base_type,
@@ -2082,6 +2308,7 @@ parse_local_declarator(MinicParser *parser,
     bool parenthesized_name_is_array;
     bool parenthesized_name_array_inferred;
     size_t parenthesized_name_array_count;
+    MinicExpressionId runtime_array_bound;
 
     if (declaration_attributes != NULL) {
         attributes = *declaration_attributes;
@@ -2095,6 +2322,7 @@ parse_local_declarator(MinicParser *parser,
     parenthesized_name_is_array = false;
     parenthesized_name_array_inferred = false;
     parenthesized_name_array_count = 0U;
+    runtime_array_bound = MINIC_EXPRESSION_INVALID;
     if (!minic_parser_parse_pointer_declarator(parser, base_type, &declared_type) ||
         !parse_local_object_attributes(parser, &attributes)) {
         return false;
@@ -2198,7 +2426,8 @@ parse_local_declarator(MinicParser *parser,
                 if (!minic_parser_advance(parser)) {
                     return false;
                 }
-            } else if (!minic_parser_parse_fixed_array_bound(parser, &local.element_count)) {
+            } else if (!parse_local_array_bound_or_vla(
+                           parser, &local.element_count, &runtime_array_bound)) {
                 return false;
             }
         }
@@ -2241,6 +2470,21 @@ parse_local_declarator(MinicParser *parser,
         }
         if (!minic_parser_bind_local(parser, local.name_span, local_id)) {
             return false;
+        }
+        if (runtime_array_bound != MINIC_EXPRESSION_INVALID) {
+            if (inferred_array || parenthesized_name_is_array ||
+                parser->current.kind == MINIC_TOKEN_LBRACKET ||
+                !materialize_dynamic_local_array(parser, local_id, runtime_array_bound)) {
+                if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
+                    minic_parser_error(parser, "unsupported variable length array declarator");
+                }
+                return false;
+            }
+            if (parser->current.kind == MINIC_TOKEN_EQUAL) {
+                minic_parser_error(parser, "variable length array cannot be initialized");
+                return false;
+            }
+            return finalize_local_cleanup(parser, &attributes, &local, local_id);
         }
         if (inferred_array && parser->current.kind != MINIC_TOKEN_EQUAL) {
             minic_parser_error(parser, "inferred local array requires an initializer");

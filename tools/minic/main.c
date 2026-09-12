@@ -25,6 +25,16 @@ static void append_rv64_linux_musl_predefines(char **arguments,
                                                bool hosted) {
     arguments[(*count)++] = "-D__STDC__=1";
     arguments[(*count)++] = "-D__STDC_VERSION__=201112L";
+    /*
+     * Product-driver GNU surface level.  Keep this deliberately conservative:
+     * real-world headers use __GNUC_PREREQ(2,7) to decide whether GNU
+     * __attribute__ syntax is available.  MiniC supports that syntax, but does
+     * not claim the later GCC builtin/optimization surface.  Advertising 2.7
+     * preserves attributes such as packed without opening newer feature paths.
+     */
+    arguments[(*count)++] = "-D__GNUC__=2";
+    arguments[(*count)++] = "-D__GNUC_MINOR__=7";
+    arguments[(*count)++] = "-D__GNUC_PATCHLEVEL__=0";
     arguments[(*count)++] =
         hosted ? "-D__STDC_HOSTED__=1" : "-D__STDC_HOSTED__=0";
     arguments[(*count)++] = "-D__linux__=1";
@@ -151,6 +161,11 @@ static int run_tool(char *const arguments[]) {
     return 1;
 }
 
+static bool minic_keep_failed_temps(void) {
+    const char *value = getenv("MINIC_KEEP_FAILED_TEMPS");
+    return value != NULL && value[0] != '\0' && strcmp(value, "0") != 0;
+}
+
 static char *make_temp_path(const char *pattern) {
     char *path = duplicate_text(pattern);
     int descriptor;
@@ -207,6 +222,15 @@ static int preprocess_c_to_file(const char *input,
     arguments[count++] = "-undef";
     arguments[count++] = "-nostdinc";
     append_rv64_linux_musl_predefines(arguments, &count, hosted);
+    /*
+     * User include directories must shadow the driver's default sysroot
+     * headers, matching GCC's -I-before-system search semantics.  MiniPP
+     * currently stores -I and -isystem in one ordered search list, so forward
+     * explicit user paths before appending the implicit sysroot path.
+     */
+    for (index = 0U; index < cpp_forward_count; ++index) {
+        arguments[count++] = (char *)cpp_forward[index];
+    }
     if (!no_stdinc && sysroot != NULL && sysroot[0] != '\0') {
         include_dir = join_path(sysroot, "include");
         if (include_dir == NULL) {
@@ -215,9 +239,6 @@ static int preprocess_c_to_file(const char *input,
         }
         arguments[count++] = "-isystem";
         arguments[count++] = include_dir;
-    }
-    for (index = 0U; index < cpp_forward_count; ++index) {
-        arguments[count++] = (char *)cpp_forward[index];
     }
     arguments[count++] = "-o";
     arguments[count++] = (char *)output;
@@ -259,7 +280,14 @@ static int compile_c_to_assembly(const char *input,
         status = run_tool(arguments);
     }
 
-    (void)unlink(temp_i);
+    if (status != 0 && minic_keep_failed_temps()) {
+        (void)fprintf(stderr,
+                      "MINIC_FAILED_PREPROCESSED=%s source=%s\n",
+                      temp_i,
+                      input);
+    } else {
+        (void)unlink(temp_i);
+    }
     free(temp_i);
     return status;
 }
@@ -302,7 +330,14 @@ static int compile_c_to_object(const char *input,
         status = run_tool(arguments);
     }
 
-    (void)unlink(temp_s);
+    if (status != 0 && minic_keep_failed_temps()) {
+        (void)fprintf(stderr,
+                      "MINIC_FAILED_ASSEMBLY=%s source=%s\n",
+                      temp_s,
+                      input);
+    } else {
+        (void)unlink(temp_s);
+    }
     free(temp_s);
     return status;
 }

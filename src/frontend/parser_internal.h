@@ -43,6 +43,7 @@ typedef struct MinicParserRecordTag {
 typedef struct MinicParserScopeFrame {
     size_t binding_begin;
     size_t record_tag_begin;
+    size_t enum_constant_begin;
     MinicCleanupContextId cleanup_context;
 } MinicParserScopeFrame;
 
@@ -452,6 +453,8 @@ bool minic_parser_parse_direct_member(MinicParser *parser,
 bool minic_parser_apply_fixed_call_argument_conversion(MinicParser *parser,
                                                        MinicType target_type,
                                                        MinicExpressionId *argument_id);
+bool minic_parser_apply_default_argument_promotion(MinicParser *parser,
+                                                    MinicExpressionId *argument_id);
 bool minic_parser_apply_array_decay(MinicParser *parser,
                                     MinicExpressionId input_id,
                                     MinicExpressionId *expression_id);

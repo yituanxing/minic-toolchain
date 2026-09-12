@@ -6,7 +6,7 @@ extern void *memory_copy(void *__restrict destination,
     __attribute__((__access__(__write_only__, 1, 3)));
 
 extern void *allocate_like(unsigned long count)
-    __attribute__((__nothrow__, __malloc__));
+    __attribute__((__nothrow__, malloc));
 
 extern void *allocate_sized(unsigned long count)
     __attribute__((__malloc__, __alloc_size__(1)));

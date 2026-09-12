@@ -7,6 +7,7 @@ int verify_variadic(int tag, ...) {
     long wide;
     int *pointer;
     double precise;
+    double promoted_float;
     int expected;
 
     va_start(arguments, tag);
@@ -15,9 +16,10 @@ int verify_variadic(int tag, ...) {
     wide = va_arg(arguments, long);
     pointer = va_arg(arguments, int *);
     precise = va_arg(arguments, double);
+    promoted_float = va_arg(arguments, double);
 
     if (tag != 5 || first != 11 || promoted_char != 7 || wide != 1234 || pointer == 0 ||
-        *pointer != 29 || precise != 2.5) {
+        *pointer != 29 || precise != 2.5 || promoted_float != 1.25) {
         va_end(arguments);
         return 1;
     }

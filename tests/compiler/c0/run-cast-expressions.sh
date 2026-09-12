@@ -56,6 +56,10 @@ compile_success cast_double_to_integer
 grep -E '^[[:space:]]+fcvt\.w\.d[[:space:]]+[^,]+,[[:space:]]*[^,]+,[[:space:]]*rtz$' "$work/cast_double_to_integer.s" >/dev/null
 printf '%s\n' "PASS compiler/c0/cast_double_to_integer_lowering"
 
+compile_success implicit_arithmetic_assignment
+grep -E '^[[:space:]]+fcvt[.]wu[.]d[[:space:]]+[^,]+,[[:space:]]*[^,]+,[[:space:]]*rtz$' "$work/implicit_arithmetic_assignment.s" >/dev/null
+printf '%s\n' "PASS compiler/c0/implicit_arithmetic_assignment initializer=double-to-unsigned return=double-to-unsigned"
+
 "$host_cc" -E -P -x c \
     "$root/tests/programs/c0/null_pointer_constant.c" \
     -o "$work/null_pointer_constant.i"

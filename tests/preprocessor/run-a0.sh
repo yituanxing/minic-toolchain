@@ -916,4 +916,7 @@ SG_MOD("x %u", SG_VALUE - 1)
 EOF
 run_exact source-generated-head-through-gnu-chain
 
-printf 'MINIPP_A0_EXACT=PASS cases=94 mode=byte-identical\n'
+MINIPP="$MINIPP" BUILD_DIR="$BUILD_DIR" HOST_CPP="$REFERENCE_CPP" \
+  sh tests/preprocessor/run-include-next.sh
+
+printf 'MINIPP_A0_EXACT=PASS cases=95 mode=byte-identical include_next=PASS\n'
