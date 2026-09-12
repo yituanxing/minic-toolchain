@@ -1,0 +1,54 @@
+name: MiniLD GC Alignment V0
+
+on:
+  push:
+    branches:
+      - "agent/minild-gc-alignment-v0"
+  workflow_dispatch:
+
+jobs:
+  gc-alignment:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Install RV64 prerequisites
+        run: |
+          timeout 240s sudo apt-get -o Acquire::Retries=3 update
+          timeout 240s sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            build-essential gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu qemu-user
+
+      - name: Build current Mini toolchain
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          build="$GITHUB_WORKSPACE/build/minild-gc-alignment-v0"
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$build" all
+
+      - name: Run alignment differential
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          build="$GITHUB_WORKSPACE/build/minild-gc-alignment-v0"
+          BUILD_DIR="$build" \
+          MINILD="$build/bin/minic-ld" \
+          RISCV_AS=riscv64-linux-gnu-as \
+          RISCV_LD=riscv64-linux-gnu-ld \
+          RISCV_READELF=riscv64-linux-gnu-readelf \
+          QEMU_RISCV64=qemu-riscv64 \
+            bash tests/linker/run-gc-alignment-v0.sh
+
+      - name: Preserve focused evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: minild-gc-alignment-v0
+          path: |
+            build/minild-gc-alignment-v0/gc-alignment-v0/*.sections
+            build/minild-gc-alignment-v0/gc-alignment-v0/minild.stdout
+            build/minild-gc-alignment-v0/gc-alignment-v0/minild.stderr
+          if-no-files-found: ignore
+          retention-days: 7
