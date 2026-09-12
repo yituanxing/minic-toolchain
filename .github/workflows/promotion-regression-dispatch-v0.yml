@@ -13,28 +13,28 @@ jobs:
   dispatch:
     runs-on: ubuntu-24.04
     steps:
-      - name: Dispatch exact-head promotion regressions
+      - name: Dispatch TinyCC bisection refs
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
-          TARGET_REF: external/busybox-full-toolchain-v0
         shell: bash
         run: |
           set -Eeuo pipefail
-          workflows=(
-            toolchain-regression-ledger-v0.yml
-            sqlite-full-driver-v0.yml
-            lua-full-driver-v0.yml
-            tinycc-full-driver-v0.yml
+          refs=(
+            agent/bisect-pre519-v0
+            agent/bisect-post519-v0
+            agent/bisect-post520-v0
+            agent/bisect-post521-v0
+            agent/bisect-post523-v0
           )
-          for workflow in "${workflows[@]}"; do
-            echo "dispatching $workflow at $TARGET_REF"
+          for ref in "${refs[@]}"; do
+            echo "dispatching tinycc-full-driver-v0.yml at $ref"
             curl --fail-with-body -sS -L \
               -X POST \
               -H "Accept: application/vnd.github+json" \
               -H "Authorization: Bearer $GH_TOKEN" \
               -H "X-GitHub-Api-Version: 2022-11-28" \
-              "https://api.github.com/repos/$REPO/actions/workflows/$workflow/dispatches" \
-              -d "{\"ref\":\"$TARGET_REF\"}"
+              "https://api.github.com/repos/$REPO/actions/workflows/tinycc-full-driver-v0.yml/dispatches" \
+              -d "{\"ref\":\"$ref\"}"
           done
-          echo "PROMOTION_REGRESSION_DISPATCH_V0=PASS ref=$TARGET_REF count=${#workflows[@]}"
+          echo "TINYCC_BISECT_DISPATCH_V0=PASS count=${#refs[@]}"
