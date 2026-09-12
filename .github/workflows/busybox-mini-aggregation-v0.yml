@@ -1,20 +1,20 @@
-name: BusyBox Mini Aggregation V0
+name: BusyBox Full Mini V0
 
 on:
   push:
     branches:
-      - "agent/busybox-kbuild-routing-v0"
+      - "agent/busybox-full-mini-v0"
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: busybox-mini-aggregation-v0-${{ github.ref }}
+  group: busybox-full-mini-v0-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  mini-aggregation:
+  full-mini:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -41,7 +41,7 @@ jobs:
           make MODE=release CFLAGS=-Werror BUILD_DIR="$build" check-minild-a1
           make MODE=release CFLAGS=-Werror BUILD_DIR="$build" check-minild-a2
           make MODE=release CFLAGS=-Werror BUILD_DIR="$build" check-minild-a3
-          echo "BUSYBOX_MINI_AGGREGATION_CORE=PASS"
+          echo "BUSYBOX_FULL_MINI_CORE=PASS"
 
       - name: Prepare pinned BusyBox and static musl
         shell: bash
@@ -85,7 +85,7 @@ jobs:
             >"$work/musl-make.log" 2>&1
           make DESTDIR="$sysroot" install-headers >"$work/musl-install-headers.log" 2>&1
           test -s lib/libc.a
-          echo "BUSYBOX_MINI_AGGREGATION_SOURCE=PASS"
+          echo "BUSYBOX_FULL_MINI_SOURCE=PASS"
 
       - name: Prepare frozen V222 408-applet profile
         shell: bash
@@ -111,7 +111,7 @@ jobs:
             >"$work/busybox-oldconfig.log" 2>&1 || test "${PIPESTATUS[1]}" -eq 0
           grep -q '^CONFIG_STATIC=y$' "$out/.config"
           grep -q '^CONFIG_ASH=y$' "$out/.config"
-          echo "BUSYBOX_MINI_AGGREGATION_PROFILE=PASS applets=408"
+          echo "BUSYBOX_FULL_MINI_PROFILE=PASS applets=408"
 
       - name: Build BusyBox with MiniAR and MiniLD aggregation
         shell: bash
@@ -171,7 +171,7 @@ jobs:
           ar_calls=$(wc -l <"$ar_trace")
           ld_calls=$(wc -l <"$ld_trace")
           log_bytes=$(wc -c <"$work/busybox-mini-build.log")
-          echo "BUSYBOX_MINI_AGGREGATION_FRONTIER selected=$total pass=$passed fail=$failed ar_calls=$ar_calls ld_calls=$ld_calls make_rc=$build_rc elapsed_s=$elapsed log_bytes=$log_bytes"
+          echo "BUSYBOX_FULL_MINI_FRONTIER selected=$total pass=$passed fail=$failed ar_calls=$ar_calls ld_calls=$ld_calls make_rc=$build_rc elapsed_s=$elapsed log_bytes=$log_bytes"
 
           test "$build_rc" -eq 0
           test "$failed" -eq 0
@@ -180,9 +180,9 @@ jobs:
           test "$ld_calls" -eq 1
           test -s "$out/busybox_unstripped"
           test "$log_bytes" -lt 104857600
-          echo "BUSYBOX_MINI_AGGREGATION_V0=PASS c_tus=$passed ar_calls=$ar_calls ld_calls=$ld_calls"
+          echo "BUSYBOX_FULL_MINI_AGGREGATION=PASS c_tus=$passed ar_calls=$ar_calls ld_calls=$ld_calls"
 
-      - name: Run GNU-final 408-applet acceptance
+      - name: Run GNU-final reference acceptance
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -196,13 +196,122 @@ jobs:
             'i=1; s=0; while [ "$i" -le 100 ]; do s=$((s+i)); i=$((i+1)); done; echo ASH_OK "$s"' \
             >"$work/busybox-mini-ash.stdout"
           grep -q '^ASH_OK 5050$' "$work/busybox-mini-ash.stdout"
-          echo "BUSYBOX_MINI_AGGREGATION_RUNTIME_V0=PASS applets=408 ash=PASS final_link=GNU"
+          echo "BUSYBOX_FULL_MINI_GNU_REFERENCE=PASS applets=408 ash=PASS"
 
-      - name: Preserve aggregation evidence
+      - name: Relink exact BusyBox tree with MiniLD
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/busybox-mini-aggregation-v0"
+          out="$work/busybox-out"
+          musl="$work/musl-build"
+          fixture="$GITHUB_WORKSPACE/tests/linker/fixtures"
+          libgcc="$(riscv64-linux-gnu-gcc -print-libgcc-file-name)"
+          minild="$work/bin/minic-ld"
+
+          inputs=(
+            applets/built-in.o
+            archival/lib.a
+            archival/libarchive/lib.a
+            console-tools/lib.a
+            coreutils/lib.a
+            coreutils/libcoreutils/lib.a
+            debianutils/lib.a
+            klibc-utils/lib.a
+            e2fsprogs/lib.a
+            editors/lib.a
+            findutils/lib.a
+            init/lib.a
+            libbb/lib.a
+            libbb/yescrypt/lib.a
+            libpwdgrp/lib.a
+            loginutils/lib.a
+            mailutils/lib.a
+            miscutils/lib.a
+            modutils/lib.a
+            networking/lib.a
+            networking/libiproute/lib.a
+            networking/udhcp/lib.a
+            printutils/lib.a
+            procps/lib.a
+            runit/lib.a
+            selinux/lib.a
+            shell/lib.a
+            sysklogd/lib.a
+            util-linux/lib.a
+            util-linux/volume_id/lib.a
+            archival/built-in.o
+            archival/libarchive/built-in.o
+            console-tools/built-in.o
+            coreutils/built-in.o
+            coreutils/libcoreutils/built-in.o
+            debianutils/built-in.o
+            klibc-utils/built-in.o
+            e2fsprogs/built-in.o
+            editors/built-in.o
+            findutils/built-in.o
+            init/built-in.o
+            libbb/built-in.o
+            libbb/yescrypt/built-in.o
+            libpwdgrp/built-in.o
+            loginutils/built-in.o
+            mailutils/built-in.o
+            miscutils/built-in.o
+            modutils/built-in.o
+            networking/built-in.o
+            networking/libiproute/built-in.o
+            networking/udhcp/built-in.o
+            printutils/built-in.o
+            procps/built-in.o
+            runit/built-in.o
+            selinux/built-in.o
+            shell/built-in.o
+            sysklogd/built-in.o
+            util-linux/built-in.o
+            util-linux/volume_id/built-in.o
+          )
+          abs_inputs=()
+          for p in "${inputs[@]}"; do
+            test -s "$out/$p"
+            abs_inputs+=("$out/$p")
+          done
+
+          started=$(date +%s%N)
+          set +e
+          "$minild" -melf64lriscv -static -e _start \
+            -o "$work/busybox-minild" \
+            "$musl/obj/crt/crt1.o" "$musl/obj/crt/crti.o" \
+            --start-group "${abs_inputs[@]}" --end-group \
+            --start-group "$musl/lib/libc.a" "$libgcc" --end-group \
+            "$musl/obj/crt/crtn.o" \
+            >"$work/minild.stdout" 2>"$work/minild.stderr"
+          rc=$?
+          set -e
+          ended=$(date +%s%N)
+          elapsed_ms=$(( (ended - started) / 1000000 ))
+          echo "BUSYBOX_FINAL_MINILD_LINK rc=$rc elapsed_ms=$elapsed_ms"
+          if test "$rc" -ne 0; then
+            cat "$work/minild.stderr" >&2
+            exit "$rc"
+          fi
+          test -s "$work/busybox-minild"
+
+          qemu-riscv64 "$work/busybox-minild" --list \
+            >"$work/busybox-minild.applets" 2>"$work/busybox-minild-list.stderr"
+          test "$(wc -l <"$work/busybox-minild.applets")" -eq 408
+          cmp "$fixture/busybox-v222.applet-list.txt" "$work/busybox-minild.applets"
+
+          qemu-riscv64 "$work/busybox-minild" ash -c \
+            'i=1; s=0; while [ "$i" -le 100 ]; do s=$((s+i)); i=$((i+1)); done; echo ASH_OK "$s"' \
+            >"$work/busybox-minild-ash.stdout" 2>"$work/busybox-minild-ash.stderr"
+          grep -q '^ASH_OK 5050$' "$work/busybox-minild-ash.stdout"
+          echo "BUSYBOX_FULL_MINI_TOOLCHAIN_V0=PASS applets=408 ash=PASS producer=MiniPP,MiniC,MiniAS archive=MiniAR relocatable=MiniLD final=MiniLD"
+
+      - name: Preserve full Mini evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: busybox-mini-aggregation-v0
+          name: busybox-full-mini-v0
           path: |
             build/busybox-mini-aggregation-v0/musl-configure.log
             build/busybox-mini-aggregation-v0/musl-make.log
@@ -214,5 +323,12 @@ jobs:
             build/busybox-mini-aggregation-v0/busybox-mini-build.log
             build/busybox-mini-aggregation-v0/busybox-mini.applets
             build/busybox-mini-aggregation-v0/busybox-mini-ash.stdout
+            build/busybox-mini-aggregation-v0/minild.stdout
+            build/busybox-mini-aggregation-v0/minild.stderr
+            build/busybox-mini-aggregation-v0/busybox-minild
+            build/busybox-mini-aggregation-v0/busybox-minild.applets
+            build/busybox-mini-aggregation-v0/busybox-minild-list.stderr
+            build/busybox-mini-aggregation-v0/busybox-minild-ash.stdout
+            build/busybox-mini-aggregation-v0/busybox-minild-ash.stderr
           if-no-files-found: ignore
           retention-days: 7
