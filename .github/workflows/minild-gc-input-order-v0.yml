@@ -1,0 +1,321 @@
+name: MiniLD GC Input Order V0
+
+on:
+  push:
+    branches:
+      - "agent/minild-gc-v0"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: minild-gc-input-order-v0-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gc-input-order:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Install RV64 prerequisites
+        run: |
+          timeout 240s sudo apt-get -o Acquire::Retries=3 update
+          timeout 240s sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            build-essential gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu qemu-user
+
+      - name: Apply GC input-order product patch
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("linker/src/linker.c")
+          text = path.read_text()
+          marker = "static bool minild_gc_name_has_prefix"
+          helper = r'''
+          typedef struct MiniLdGcSectionOrder {
+              size_t old_index;
+              size_t order;
+          } MiniLdGcSectionOrder;
+
+          static int minild_gc_compare_section_order(const void *lhs,
+                                                     const void *rhs) {
+              const MiniLdGcSectionOrder *a = lhs;
+              const MiniLdGcSectionOrder *b = rhs;
+
+              if (a->order < b->order) {
+                  return -1;
+              }
+              if (a->order > b->order) {
+                  return 1;
+              }
+              if (a->old_index < b->old_index) {
+                  return -1;
+              }
+              if (a->old_index > b->old_index) {
+                  return 1;
+              }
+              return 0;
+          }
+
+          /*
+           * Splitting a historically merged `.text`/`.data` output section is
+           * not enough: appending every recovered fragment at the end changes
+           * input-section order and can turn a valid R_RISCV_JAL into an
+           * artificial out-of-range jump.  STT_SECTION symbols are appended as
+           * each ET_REL input is consumed, so their state-symbol order retains
+           * the original cross-object input-section ordering.  Restore that
+           * order after fragment reconstruction and remap all section indices
+           * before layout/GC.
+           */
+          static bool minild_gc_restore_input_order(MiniLdState *state) {
+              const size_t count = state->section_count;
+              MiniLdGcSectionOrder *entries = NULL;
+              MiniLdSection *ordered_sections = NULL;
+              size_t *orders = NULL;
+              size_t *remap = NULL;
+              size_t index_capacity = 64U;
+              size_t target;
+              size_t ordered_count = 0U;
+              size_t i;
+              bool installed = false;
+              bool ok = false;
+
+              entries = malloc((count == 0U ? 1U : count) * sizeof(*entries));
+              ordered_sections =
+                  malloc((count == 0U ? 1U : count) * sizeof(*ordered_sections));
+              orders = malloc((count == 0U ? 1U : count) * sizeof(*orders));
+              remap = malloc((count == 0U ? 1U : count) * sizeof(*remap));
+              if (entries == NULL || ordered_sections == NULL ||
+                  orders == NULL || remap == NULL) {
+                  fprintf(state->diagnostics,
+                          "minic-ld: out-of-memory:gc-input-order\n");
+                  goto done;
+              }
+              for (i = 0U; i < count; ++i) {
+                  orders[i] = SIZE_MAX;
+              }
+
+              for (i = 0U; i < state->symbol_count; ++i) {
+                  const MiniLdSymbol *symbol = &state->symbols[i];
+                  size_t section_index;
+
+                  if (symbol->section < 0 ||
+                      ELF64_ST_TYPE(symbol->info) != STT_SECTION) {
+                      continue;
+                  }
+                  section_index = (size_t)symbol->section;
+                  if (section_index >= count) {
+                      fprintf(state->diagnostics,
+                              "minic-ld: gc-input-order-symbol-section\n");
+                      goto done;
+                  }
+                  if (orders[section_index] == SIZE_MAX) {
+                      orders[section_index] = i;
+                      ++ordered_count;
+                  }
+              }
+
+              if (count > (SIZE_MAX - 1U) / 2U) {
+                  fprintf(state->diagnostics,
+                          "minic-ld: gc-input-order-index-overflow\n");
+                  goto done;
+              }
+              target = count * 2U + 1U;
+              while (index_capacity < target) {
+                  if (index_capacity > SIZE_MAX / 2U) {
+                      fprintf(state->diagnostics,
+                              "minic-ld: gc-input-order-index-overflow\n");
+                      goto done;
+                  }
+                  index_capacity *= 2U;
+              }
+
+              for (i = 0U; i < count; ++i) {
+                  entries[i].old_index = i;
+                  entries[i].order =
+                      orders[i] == SIZE_MAX ? state->symbol_count + i : orders[i];
+              }
+              qsort(entries,
+                    count,
+                    sizeof(*entries),
+                    minild_gc_compare_section_order);
+
+              for (i = 0U; i < count; ++i) {
+                  const size_t old_index = entries[i].old_index;
+                  ordered_sections[i] = state->sections[old_index];
+                  remap[old_index] = i;
+              }
+              for (i = 0U; i < state->symbol_count; ++i) {
+                  MiniLdSymbol *symbol = &state->symbols[i];
+
+                  if (symbol->section < 0) {
+                      continue;
+                  }
+                  if ((size_t)symbol->section >= count) {
+                      fprintf(state->diagnostics,
+                              "minic-ld: gc-input-order-symbol-remap\n");
+                      goto done;
+                  }
+                  symbol->section = (int)remap[symbol->section];
+              }
+              for (i = 0U; i < state->reloc_count; ++i) {
+                  if (state->relocs[i].section >= count) {
+                      fprintf(state->diagnostics,
+                              "minic-ld: gc-input-order-reloc-remap\n");
+                      goto done;
+                  }
+                  state->relocs[i].section = remap[state->relocs[i].section];
+              }
+
+              free(state->sections);
+              state->sections = ordered_sections;
+              state->section_capacity = count;
+              ordered_sections = NULL;
+              installed = true;
+
+              if (!rebuild_section_index(state, index_capacity)) {
+                  fprintf(state->diagnostics,
+                          "minic-ld: out-of-memory:gc-input-order-index\n");
+                  goto done;
+              }
+              fprintf(state->diagnostics,
+                      "minic-ld: gc-input-order:sections=%zu:ordered=%zu\n",
+                      count,
+                      ordered_count);
+              ok = true;
+
+          done:
+              if (!installed) {
+                  free(ordered_sections);
+              }
+              free(remap);
+              free(orders);
+              free(entries);
+              return ok;
+          }
+
+          '''
+
+          if "minild_gc_restore_input_order" not in text:
+              if marker not in text:
+                  raise SystemExit("missing insertion marker")
+              text = text.replace(marker, helper + marker, 1)
+
+          old = """        !minild_gc_restore_input_sections(&state) ||\n        !static_allocate_common(&state) ||"""
+          new = """        !minild_gc_restore_input_sections(&state) ||\n        !minild_gc_restore_input_order(&state) ||\n        !static_allocate_common(&state) ||"""
+          if new not in text:
+              if old not in text:
+                  raise SystemExit("missing GC call-site marker")
+              text = text.replace(old, new, 1)
+
+          path.write_text(text)
+          PY
+
+          cat >tests/linker/run-gc-input-order-v0.sh <<'SH'
+          #!/usr/bin/env bash
+          set -Eeuo pipefail
+          root="$(cd "$(dirname "$0")/../.." && pwd)"
+          build="${BUILD_DIR:-$root/build/minild-gc-input-order-v0}"
+          minild="${MINILD:-$build/bin/minic-ld}"
+          as="${RISCV_AS:-riscv64-linux-gnu-as}"
+          qemu="${QEMU_RISCV64:-qemu-riscv64}"
+          work="$build/gc-input-order-v0"
+          mkdir -p "$work"
+
+          cat >"$work/caller.s" <<'S'
+          .text
+          .globl _start
+          .type _start, @function
+          _start:
+              j target
+          .size _start, .-_start
+          S
+
+          cat >"$work/target.s" <<'S'
+          .section .text.target,"ax",@progbits
+          .globl target
+          .type target, @function
+          target:
+              call live_filler
+              li a0, 37
+              li a7, 93
+              ecall
+          .size target, .-target
+          S
+
+          cat >"$work/filler.s" <<'S'
+          .section .text.filler,"ax",@progbits
+          .globl live_filler
+          .type live_filler, @function
+          live_filler:
+              ret
+              .space 2097152, 0
+          .size live_filler, .-live_filler
+          S
+
+          cat >"$work/tail.s" <<'S'
+          .text
+          .globl dead_plain_tail
+          .type dead_plain_tail, @function
+          dead_plain_tail:
+              ret
+          .size dead_plain_tail, .-dead_plain_tail
+          S
+
+          "$as" -march=rv64gc -mabi=lp64d -o "$work/caller.o" "$work/caller.s"
+          "$as" -march=rv64gc -mabi=lp64d -o "$work/target.o" "$work/target.s"
+          "$as" -march=rv64gc -mabi=lp64d -o "$work/filler.o" "$work/filler.s"
+          "$as" -march=rv64gc -mabi=lp64d -o "$work/tail.o" "$work/tail.s"
+
+          "$minild" -melf64lriscv -static --gc-sections -e _start \
+            -o "$work/order.elf" \
+            "$work/caller.o" "$work/target.o" "$work/filler.o" "$work/tail.o" \
+            >"$work/minild.stdout" 2>"$work/minild.stderr"
+          grep -q 'gc-input-order:' "$work/minild.stderr"
+
+          set +e
+          "$qemu" "$work/order.elf"
+          rc=$?
+          set -e
+          test "$rc" -eq 37
+          echo "MINILD_GC_INPUT_ORDER_V0=PASS jal=near-after-restore qemu_rc=37"
+          SH
+          chmod +x tests/linker/run-gc-input-order-v0.sh
+
+      - name: Build and run focused GC gates
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          build="$GITHUB_WORKSPACE/build/minild-gc-input-order-v0"
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$build" all
+          MINILD="$build/bin/minic-ld" \
+          MINIAS="$build/bin/minic-as" \
+          QEMU_RISCV64=qemu-riscv64 \
+            sh tests/linker/run-gc-v0.sh
+          BUILD_DIR="$build" \
+          MINILD="$build/bin/minic-ld" \
+          RISCV_AS=riscv64-linux-gnu-as \
+          QEMU_RISCV64=qemu-riscv64 \
+            sh tests/linker/run-gc-input-order-v0.sh
+
+      - name: Commit proven product change
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          if git diff --quiet -- linker/src/linker.c tests/linker/run-gc-input-order-v0.sh; then
+            echo "MINILD_GC_INPUT_ORDER_PRODUCT=ALREADY_CURRENT"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add linker/src/linker.c tests/linker/run-gc-input-order-v0.sh
+          git commit -m "linker: preserve GC input-section order"
+          git push origin HEAD:agent/minild-gc-v0
+          echo "MINILD_GC_INPUT_ORDER_PRODUCT=COMMITTED"
