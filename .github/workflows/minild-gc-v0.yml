@@ -1,0 +1,57 @@
+name: MiniLD Section GC V0
+
+on:
+  push:
+    branches:
+      - "agent/minild-gc-v0"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: minild-gc-v0-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gc:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Install RV64 runtime prerequisites
+        run: |
+          timeout 240s sudo apt-get -o Acquire::Retries=3 update
+          timeout 240s sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu qemu-user
+
+      - name: Build current Mini toolchain
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/minild-gc-v0 all
+
+      - name: Validate static section reachability GC
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          MINIC="$GITHUB_WORKSPACE/build/minild-gc-v0/bin/minic" \
+          MINIAS="$GITHUB_WORKSPACE/build/minild-gc-v0/bin/minic-as" \
+          MINILD="$GITHUB_WORKSPACE/build/minild-gc-v0/bin/minic-ld" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/minild-gc-v0" \
+          RISCV_READELF=riscv64-linux-gnu-readelf \
+          QEMU_RISCV64=qemu-riscv64 \
+            sh tests/linker/run-gc-v0.sh
+
+      - name: Preserve GC evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: minild-gc-v0
+          path: |
+            build/minild-gc-v0/linker-gc-v0
+          if-no-files-found: ignore
+          retention-days: 7
