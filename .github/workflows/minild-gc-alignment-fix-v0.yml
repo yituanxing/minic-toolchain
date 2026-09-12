@@ -1,0 +1,236 @@
+name: MiniLD GC Alignment Fix V0
+
+on:
+  push:
+    branches:
+      - "agent/minild-gc-alignment-v0"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: minild-gc-alignment-fix-v0-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  prove-fix:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Install RV64 prerequisites
+        run: |
+          timeout 240s sudo apt-get -o Acquire::Retries=3 update
+          timeout 240s sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            build-essential gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu qemu-user
+
+      - name: Apply default output alignment ordering
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("linker/src/linker.c")
+          text = path.read_text()
+          marker = "static bool minild_gc_name_has_prefix"
+          helper = r'''
+          typedef struct MiniLdGcOutputAlignmentOrder {
+              size_t old_index;
+              int output_class;
+              uint64_t align;
+          } MiniLdGcOutputAlignmentOrder;
+
+          static int minild_gc_compare_output_alignment(const void *lhs_ptr,
+                                                        const void *rhs_ptr) {
+              const MiniLdGcOutputAlignmentOrder *lhs = lhs_ptr;
+              const MiniLdGcOutputAlignmentOrder *rhs = rhs_ptr;
+
+              if (lhs->output_class != rhs->output_class) {
+                  return lhs->output_class < rhs->output_class ? -1 : 1;
+              }
+              if (lhs->output_class < 2 && lhs->align != rhs->align) {
+                  return lhs->align > rhs->align ? -1 : 1;
+              }
+              if (lhs->old_index != rhs->old_index) {
+                  return lhs->old_index < rhs->old_index ? -1 : 1;
+              }
+              return 0;
+          }
+
+          /*
+           * BusyBox's GNU reference link uses --sort-section=alignment.
+           * Preserve the recovered input order for equal-alignment sections,
+           * but sort executable and read-only alloc sections by decreasing
+           * alignment inside their default output classes.  This matches the
+           * range-relevant GNU wildcard ordering without disturbing writable
+           * or metadata section order.
+           */
+          static bool minild_gc_sort_default_output_alignment(MiniLdState *state) {
+              const size_t count = state->section_count;
+              MiniLdGcOutputAlignmentOrder *entries = NULL;
+              MiniLdSection *ordered_sections = NULL;
+              size_t *remap = NULL;
+              size_t index_capacity = 64U;
+              size_t target;
+              size_t i;
+              bool installed = false;
+              bool ok = false;
+
+              entries = malloc((count == 0U ? 1U : count) * sizeof(*entries));
+              ordered_sections =
+                  malloc((count == 0U ? 1U : count) * sizeof(*ordered_sections));
+              remap = malloc((count == 0U ? 1U : count) * sizeof(*remap));
+              if (entries == NULL || ordered_sections == NULL || remap == NULL) {
+                  fprintf(state->diagnostics,
+                          "minic-ld: out-of-memory:gc-output-alignment\n");
+                  goto done;
+              }
+
+              for (i = 0U; i < count; ++i) {
+                  entries[i].old_index = i;
+                  entries[i].output_class =
+                      minild_gc_default_output_class(&state->sections[i]);
+                  entries[i].align = state->sections[i].align;
+              }
+              qsort(entries,
+                    count,
+                    sizeof(*entries),
+                    minild_gc_compare_output_alignment);
+
+              for (i = 0U; i < count; ++i) {
+                  size_t old_index = entries[i].old_index;
+                  ordered_sections[i] = state->sections[old_index];
+                  remap[old_index] = i;
+              }
+              for (i = 0U; i < state->symbol_count; ++i) {
+                  MiniLdSymbol *symbol = &state->symbols[i];
+
+                  if (symbol->section < 0) {
+                      continue;
+                  }
+                  if ((size_t)symbol->section >= count) {
+                      fprintf(state->diagnostics,
+                              "minic-ld: gc-output-alignment-symbol-remap\n");
+                      goto done;
+                  }
+                  symbol->section = (int)remap[symbol->section];
+              }
+              for (i = 0U; i < state->reloc_count; ++i) {
+                  if (state->relocs[i].section >= count) {
+                      fprintf(state->diagnostics,
+                              "minic-ld: gc-output-alignment-reloc-remap\n");
+                      goto done;
+                  }
+                  state->relocs[i].section = remap[state->relocs[i].section];
+              }
+
+              free(state->sections);
+              state->sections = ordered_sections;
+              state->section_capacity = count;
+              ordered_sections = NULL;
+              installed = true;
+
+              if (count > (SIZE_MAX - 1U) / 2U) {
+                  fprintf(state->diagnostics,
+                          "minic-ld: gc-output-alignment-index-overflow\n");
+                  goto done;
+              }
+              target = count * 2U + 1U;
+              while (index_capacity < target) {
+                  if (index_capacity > SIZE_MAX / 2U) {
+                      fprintf(state->diagnostics,
+                              "minic-ld: gc-output-alignment-index-overflow\n");
+                      goto done;
+                  }
+                  index_capacity *= 2U;
+              }
+              if (!rebuild_section_index(state, index_capacity)) {
+                  fprintf(state->diagnostics,
+                          "minic-ld: out-of-memory:gc-output-alignment-index\n");
+                  goto done;
+              }
+              fprintf(state->diagnostics,
+                      "minic-ld: gc-output-alignment:sections=%zu\n",
+                      count);
+              ok = true;
+
+          done:
+              if (!installed) {
+                  free(ordered_sections);
+              }
+              free(remap);
+              free(entries);
+              return ok;
+          }
+
+          '''
+
+          if "minild_gc_sort_default_output_alignment" not in text:
+              if marker not in text:
+                  raise SystemExit("missing alignment insertion marker")
+              text = text.replace(marker, helper + marker, 1)
+
+          old = """        !minild_gc_group_default_output_classes(&state) ||\n        !static_build_got(&state, &got) ||"""
+          new = """        !minild_gc_group_default_output_classes(&state) ||\n        !minild_gc_sort_default_output_alignment(&state) ||\n        !static_build_got(&state, &got) ||"""
+          if new not in text:
+              if old not in text:
+                  raise SystemExit("missing alignment call-site marker")
+              text = text.replace(old, new, 1)
+
+          path.write_text(text)
+          PY
+
+      - name: Build and run focused GC gates
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          build="$GITHUB_WORKSPACE/build/minild-gc-alignment-fix-v0"
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$build" all
+
+          BUILD_DIR="$build" \
+          MINILD="$build/bin/minic-ld" \
+          RISCV_AS=riscv64-linux-gnu-as \
+          RISCV_LD=riscv64-linux-gnu-ld \
+          RISCV_READELF=riscv64-linux-gnu-readelf \
+          QEMU_RISCV64=qemu-riscv64 \
+            bash tests/linker/run-gc-alignment-v0.sh
+
+          BUILD_DIR="$build" \
+          MINILD="$build/bin/minic-ld" \
+          RISCV_AS=riscv64-linux-gnu-as \
+          RISCV_LD=riscv64-linux-gnu-ld \
+          QEMU_RISCV64=qemu-riscv64 \
+            bash tests/linker/run-gc-output-class-v0.sh
+
+          BUILD_DIR="$build" \
+          MINIC="$build/bin/minic" \
+          MINIAS="$build/bin/minic-as" \
+          MINILD="$build/bin/minic-ld" \
+          QEMU_RISCV64=qemu-riscv64 \
+            sh tests/linker/run-gc-v0.sh
+
+          BUILD_DIR="$build" \
+          MINILD="$build/bin/minic-ld" \
+          RISCV_AS=riscv64-linux-gnu-as \
+          QEMU_RISCV64=qemu-riscv64 \
+            bash tests/linker/run-gc-input-order-v0.sh
+
+      - name: Commit proven product change
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          if git diff --quiet -- linker/src/linker.c; then
+            echo "MINILD_GC_ALIGNMENT_PRODUCT=ALREADY_CURRENT"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add linker/src/linker.c
+          git commit -m "linker: sort GC output sections by alignment"
+          git push origin HEAD:agent/minild-gc-alignment-v0
+          echo "MINILD_GC_ALIGNMENT_PRODUCT=COMMITTED"
