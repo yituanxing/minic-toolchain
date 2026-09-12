@@ -76,7 +76,7 @@ jobs:
           CC=riscv64-linux-gnu-gcc AR=riscv64-linux-gnu-ar RANLIB=riscv64-linux-gnu-ranlib \
             "$musl_src/configure" --target=riscv64-linux-gnu --disable-shared --prefix=/usr \
             >"$work/musl-configure.log" 2>&1
-          make -j4 lib/libc.a obj/crt/crt1.o obj/crti.o obj/crtn.o \
+          make -j4 lib/libc.a obj/crt/crt1.o obj/crt/crti.o obj/crt/crtn.o \
             >"$work/musl-make.log" 2>&1
           make DESTDIR="$sysroot" install-headers >"$work/musl-install-headers.log" 2>&1
           test -s lib/libc.a
@@ -191,6 +191,10 @@ jobs:
         with:
           name: busybox-miniar-ownership-v0
           path: |
+            build/busybox-miniar-ownership-v0/musl-configure.log
+            build/busybox-miniar-ownership-v0/musl-make.log
+            build/busybox-miniar-ownership-v0/musl-install-headers.log
+            build/busybox-miniar-ownership-v0/busybox-oldconfig.log
             build/busybox-miniar-ownership-v0/busybox-c-results.tsv
             build/busybox-miniar-ownership-v0/miniar-kbuild.trace
             build/busybox-miniar-ownership-v0/busybox-mini-build.log
