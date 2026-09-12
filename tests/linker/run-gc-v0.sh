@@ -7,6 +7,7 @@ set -eu
 
 QEMU="${QEMU_RISCV64:-qemu-riscv64}"
 READELF="${RISCV_READELF:-riscv64-linux-gnu-readelf}"
+NM="${RISCV_NM:-riscv64-linux-gnu-nm}"
 WORK="${BUILD_DIR:-build}/linker-gc-v0"
 
 rm -rf "$WORK"
@@ -69,17 +70,19 @@ grep -q 'minic_dead_missing_symbol' "$WORK/no-gc.stderr"
   >"$WORK/gc.stdout" 2>"$WORK/gc.stderr"
 
 test -s "$WORK/gc.elf"
+grep -q 'gc-sections:live=' "$WORK/gc.stderr"
 set +e
 "$QEMU" "$WORK/gc.elf"
 qemu_rc=$?
 set -e
 test "$qemu_rc" -eq 23
 
-if "$READELF" -Ws "$WORK/gc.elf" | grep -q 'minic_dead_function'; then
+"$NM" "$WORK/gc.elf" >"$WORK/gc.symbols"
+if grep -Eq ' [Tt] minic_dead_function$' "$WORK/gc.symbols"; then
   echo "MINILD_GC_ERROR dead function survived" >&2
   exit 1
 fi
-"$READELF" -Ws "$WORK/gc.elf" | grep -q 'minic_live_function'
-"$READELF" -Ws "$WORK/gc.elf" | grep -q 'minic_live_helper'
+grep -Eq ' [Tt] minic_live_function$' "$WORK/gc.symbols"
+grep -Eq ' [Tt] minic_live_helper$' "$WORK/gc.symbols"
 
 echo "MINILD_GC_V0=PASS dead=discarded transitive=retained qemu_rc=23"
