@@ -29,13 +29,17 @@ jobs:
             build-essential gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu qemu-user \
             bc bison flex libssl-dev libelf-dev make curl xz-utils python3
 
-      - name: Apply inline emission reachability fix
+      - name: Apply semantic function emission reachability fix
         shell: bash
         run: |
           set -Eeuo pipefail
           python3 tools/dev/linux-inline-emission-reachability-v0.py
+          python3 tools/dev/linux-static-function-reachability-v0.py
           git diff --check
-          git diff -- src/frontend/function_body.h src/frontend/function_body.c src/compiler/compiler.c
+          git diff -- \
+            src/frontend/ast.h src/frontend/ast_function.c \
+            src/frontend/parser_function.c src/frontend/function_body.h \
+            src/frontend/function_body.c src/compiler/compiler.c
 
       - name: Build and run focused compiler regression
         shell: bash
@@ -126,14 +130,17 @@ jobs:
           set -Eeuo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add src/frontend/function_body.h src/frontend/function_body.c src/compiler/compiler.c
+          git add \
+            src/frontend/ast.h src/frontend/ast_function.c \
+            src/frontend/parser_function.c src/frontend/function_body.h \
+            src/frontend/function_body.c src/compiler/compiler.c
           if git diff --cached --quiet; then
-            echo "LINUX_INLINE_PRODUCT_COMMIT=NOOP"
+            echo "LINUX_FUNCTION_REACHABILITY_PRODUCT_COMMIT=NOOP"
             exit 0
           fi
-          git commit -m "compiler: compute static inline emission reachability"
+          git commit -m "compiler: compute internal function emission reachability"
           git push origin HEAD:agent/linux-link-correctness-v0
-          echo "LINUX_INLINE_PRODUCT_COMMIT=PASS sha=$(git rev-parse HEAD)"
+          echo "LINUX_FUNCTION_REACHABILITY_PRODUCT_COMMIT=PASS sha=$(git rev-parse HEAD)"
 
       - name: Preserve evidence
         if: always()
