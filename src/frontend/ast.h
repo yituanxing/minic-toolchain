@@ -350,6 +350,7 @@ typedef struct MinicFunction {
     bool is_inline;
     bool is_noreturn;
     bool is_referenced;
+    bool force_emit;
     bool is_variadic;
     bool is_weak;
 } MinicFunction;
@@ -649,6 +650,9 @@ bool minic_c0_program_set_function_noreturn(MinicC0Program *program,
 bool minic_c0_program_set_function_referenced(MinicC0Program *program,
                                               MinicFunctionId function_id,
                                               bool is_referenced);
+bool minic_c0_program_set_function_force_emit(MinicC0Program *program,
+                                              MinicFunctionId function_id,
+                                              bool force_emit);
 bool minic_c0_program_set_function_weak(MinicC0Program *program,
                                         MinicFunctionId function_id,
                                         bool is_weak);

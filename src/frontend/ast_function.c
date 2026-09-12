@@ -51,6 +51,18 @@ bool minic_c0_program_set_function_referenced(MinicC0Program *program,
     return true;
 }
 
+bool minic_c0_program_set_function_force_emit(MinicC0Program *program,
+                                              MinicFunctionId function_id,
+                                              bool force_emit) {
+    if (program == NULL || function_id >= program->function_count) {
+        return false;
+    }
+    if (force_emit) {
+        program->functions[function_id].force_emit = true;
+    }
+    return true;
+}
+
 bool minic_c0_program_set_function_weak(MinicC0Program *program,
                                         MinicFunctionId function_id,
                                         bool is_weak) {

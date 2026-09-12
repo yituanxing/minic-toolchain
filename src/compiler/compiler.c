@@ -137,7 +137,7 @@ static bool minic_prepare_core_function_set(const MinicC0Program *program,
         if (!function->is_defined) {
             continue;
         }
-        if (function->is_internal && function->is_inline && !function->is_referenced) {
+        if (function->is_internal && !function->is_referenced) {
             continue;
         }
         if (!minic_c0_function_body_view(program, function_index, &body)) {
@@ -200,7 +200,7 @@ static bool minic_validate_core_functions(const char *input_path,
         if (!function->is_defined) {
             continue;
         }
-        if (function->is_internal && function->is_inline && !function->is_referenced) {
+        if (function->is_internal && !function->is_referenced) {
             continue;
         }
         status = set->statuses[function_index];
@@ -388,6 +388,14 @@ int minic_compile_preprocessed_file(const char *input_path,
     if (success && !minic_c0_program_validate_function_body_ownership(&program)) {
         minic_set_diagnostic(
             diagnostic, input_path, 1U, 1U, "normalized FunctionBody ownership is invalid");
+        success = false;
+    }
+    if (success && !minic_c0_program_recompute_inline_emission_references(&program)) {
+        minic_set_diagnostic(diagnostic,
+                             input_path,
+                             1U,
+                             1U,
+                             "cannot compute inline emission reachability");
         success = false;
     }
     if (success) {

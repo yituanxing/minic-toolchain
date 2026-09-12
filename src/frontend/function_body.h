@@ -23,4 +23,11 @@ bool minic_c0_function_body_owns_local(const MinicFunctionBodyView *view, MinicL
 /* Verify structural function-body ownership and function-local semantic references. */
 bool minic_c0_program_validate_function_body_ownership(const MinicC0Program *program);
 
+/* Recompute static-inline emission from semantic reachability. Parser-time
+ * references are lexical and may originate in dead header inline bodies;
+ * only references reachable from functions that are emitted independently,
+ * global function-pointer initializers, aliases, or the entry function should
+ * cause an internal inline definition to be emitted. */
+bool minic_c0_program_recompute_inline_emission_references(MinicC0Program *program);
+
 #endif
