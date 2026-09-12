@@ -1,0 +1,147 @@
+name: Linux Inline Emission Fix V0
+
+on:
+  push:
+    branches:
+      - "agent/linux-link-correctness-v0"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: linux-inline-emission-fix-v0-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  prove-fix:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Install RV64 prerequisites
+        run: |
+          sudo apt-get -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            build-essential gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu qemu-user \
+            bc bison flex libssl-dev libelf-dev make curl xz-utils python3
+
+      - name: Apply inline emission reachability fix
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 tools/dev/linux-inline-emission-reachability-v0.py
+          git diff --check
+          git diff -- src/frontend/function_body.h src/frontend/function_body.c src/compiler/compiler.c
+
+      - name: Build and run focused compiler regression
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          build="$GITHUB_WORKSPACE/build/linux-inline-emission-fix-v0/toolchain"
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$build" all
+          MINIC="$build/bin/minic" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/linux-inline-emission-fix-v0" \
+            bash tests/compiler/c0/run-inline-emission-reachability-rv64.sh
+
+      - name: Prepare pinned Linux 6.6.143
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-inline-emission-fix-v0"
+          archive="$work/linux-6.6.143.tar.xz"
+          src="$work/linux-6.6.143"
+          cfg="$work/config-out"
+          curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors \
+            https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.6.143.tar.xz \
+            -o "$archive"
+          printf '%s  %s\n' \
+            dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932 \
+            "$archive" | sha256sum -c -
+          tar -xJf "$archive" -C "$work"
+          make -C "$src" O="$cfg" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- defconfig
+          "$src/scripts/config" --file "$cfg/.config" \
+            -e BLK_DEV_INITRD -e DEVTMPFS -e DEVTMPFS_MOUNT \
+            -e SERIAL_8250 -e SERIAL_8250_CONSOLE
+          make -C "$src" O="$cfg" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- olddefconfig
+          mkdir -p "$work/out-gcc" "$work/out-mini" "$work/evidence"
+          cp "$cfg/.config" "$work/out-gcc/.config"
+          cp "$cfg/.config" "$work/out-mini/.config"
+
+      - name: Build GCC and Mini PI objects
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-inline-emission-fix-v0"
+          src="$work/linux-6.6.143"
+          targets=(arch/riscv/kernel/pi/string.pi.o arch/riscv/kernel/pi/lib-fdt.pi.o)
+
+          make -C "$src" O="$work/out-gcc" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- -j4 prepare
+          make -C "$src" O="$work/out-gcc" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
+            -j1 "${targets[@]}" >"$work/evidence/gcc-kbuild.log" 2>&1
+
+          make -C "$src" O="$work/out-mini" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- -j4 prepare
+          MINIC="$work/toolchain/bin/minic" \
+          REAL_CC=/usr/bin/riscv64-linux-gnu-gcc \
+          MINIC_KEEP_INTERMEDIATES=1 \
+          CORE_FAST_TRACE=1 \
+            make -C "$src" O="$work/out-mini" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
+              CC="$GITHUB_WORKSPACE/tests/external/linux/stage2_kbuild_cc.sh" \
+              -j1 "${targets[@]}" >"$work/evidence/mini-kbuild.log" 2>&1
+          echo "LINUX_INLINE_PI_BUILD=PASS objects=2x2"
+
+      - name: Require GCC-equivalent PI undefined sets
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-inline-emission-fix-v0"
+          ev="$work/evidence"
+          for base in string lib-fdt; do
+            for lane in gcc mini; do
+              riscv64-linux-gnu-nm -u "$work/out-$lane/arch/riscv/kernel/pi/$base.pi.o" \
+                | sed -E 's/^[[:space:]]*[A-Za-z]?[[:space:]]*//' | sed '/^$/d' | sort -u \
+                >"$ev/$lane-$base.undefined"
+            done
+            comm -13 "$ev/gcc-$base.undefined" "$ev/mini-$base.undefined" \
+              >"$ev/$base.only-mini"
+            comm -23 "$ev/gcc-$base.undefined" "$ev/mini-$base.undefined" \
+              >"$ev/$base.only-gcc"
+            echo "--- $base GCC undefined ---"
+            cat "$ev/gcc-$base.undefined"
+            echo "--- $base Mini-only ---"
+            cat "$ev/$base.only-mini"
+            echo "--- $base GCC-only ---"
+            cat "$ev/$base.only-gcc"
+            test ! -s "$ev/$base.only-mini"
+            test ! -s "$ev/$base.only-gcc"
+          done
+          echo "LINUX_INLINE_PI_UNDEFINED_DIFF=PASS string=exact lib-fdt=exact"
+
+      - name: Commit proven product change
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/frontend/function_body.h src/frontend/function_body.c src/compiler/compiler.c
+          if git diff --cached --quiet; then
+            echo "LINUX_INLINE_PRODUCT_COMMIT=NOOP"
+            exit 0
+          fi
+          git commit -m "compiler: compute static inline emission reachability"
+          git push origin HEAD:agent/linux-link-correctness-v0
+          echo "LINUX_INLINE_PRODUCT_COMMIT=PASS sha=$(git rev-parse HEAD)"
+
+      - name: Preserve evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-inline-emission-fix-v0
+          path: |
+            build/linux-inline-emission-fix-v0/inline-emission-reachability/
+            build/linux-inline-emission-fix-v0/evidence/
+          if-no-files-found: ignore
+          retention-days: 7
