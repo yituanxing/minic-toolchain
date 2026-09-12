@@ -10,6 +10,7 @@ ev="$work/evidence"
 mkdir -p "$testdir" "$ev"
 
 python3 tools/ci/apply-local-integer-constants-v0.py | tee "$work/patch.log"
+python3 tools/ci/patch-local-read-lvalue-v0.py | tee -a "$work/patch.log"
 git diff --check
 
 make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$toolchain" all
@@ -108,13 +109,10 @@ if [ "$rc" -ne 0 ]; then
 fi
 echo "MINIC_LOCAL_INTEGER_CONSTANTS_SYNTHETIC=PASS qemu_rc=$rc"
 
-# Re-run the existing internal-emission safety gate with the patched compiler.
 MINIC="$toolchain/bin/minic" \
 BUILD_DIR="$work/regression" \
     bash tests/compiler/c0/run-inline-emission-reachability-rv64.sh
 
-# Real Linux 6.6.143 filter.o proof.  This is deliberately one TU, not a full
-# kernel build; it is the current high-density compiletime-assert failure pool.
 archive="$work/linux-6.6.143.tar.xz"
 src="$work/linux-6.6.143"
 out="$work/out-mini"
@@ -150,9 +148,6 @@ bad_size_count=$(grep -c '__bad_size_call_parameter' "$ev/filter.undefined" || t
 deferred_count=$(grep -c '__minic_deferred_asm_immediate_' "$ev/filter.undefined" || true)
 echo "LINUX_FILTER_LOCAL_CONSTANTS_COUNTS assert=$assert_count bad_size=$bad_size_count deferred=$deferred_count"
 
-# The pre-fix focused frontier is ~208 suspicious references, overwhelmingly
-# compiletime asserts.  Land this semantic step only if it produces a material
-# reduction and does not regress the already-zero bad-size class.
 if [ "$assert_count" -ge 180 ]; then
     echo "LOCAL_INTEGER_CONSTANTS_FAIL insufficient-filter-improvement assert=$assert_count" >&2
     exit 1
@@ -164,7 +159,6 @@ fi
 
 echo "LINUX_FILTER_LOCAL_INTEGER_CONSTANTS=PASS assert=$assert_count bad_size=$bad_size_count deferred=$deferred_count"
 
-# Product files only.  CI/development harness files remain as permanent proof.
 if ! git diff --quiet -- src/core/core_lower_internal.h src/core/core_lower.c; then
     git config user.name "github-actions[bot]"
     git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
