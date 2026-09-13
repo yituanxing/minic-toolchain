@@ -1,4 +1,4 @@
-name: Linux MiniC MiniAS Historical16 Current
+name: Linux Full Image Current MiniC MiniAS
 
 on:
   push:
@@ -9,9 +9,9 @@ permissions:
   contents: read
 
 jobs:
-  historical16-minias:
+  full-image:
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 120
     env:
       DEBIAN_FRONTEND: noninteractive
     steps:
@@ -20,20 +20,20 @@ jobs:
           ref: ${{ github.sha }}
           fetch-depth: 1
 
-      - name: Install RV64 Linux prerequisites
+      - name: Install RISC-V Linux prerequisites
         shell: bash
         run: |
           set -Eeuo pipefail
           sudo apt-get -o Acquire::Retries=3 update
           sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
-            build-essential gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
-            libc6-dev-riscv64-cross bc bison flex libssl-dev libelf-dev make curl xz-utils python3
+            build-essential gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu libc6-dev-riscv64-cross \
+            bc bison flex libssl-dev libelf-dev make curl xz-utils file python3
 
-      - name: Apply current semantic stack and build MiniC plus MiniAS
+      - name: Apply current semantic stack and build toolchain
         shell: bash
         run: |
           set -Eeuo pipefail
-          work="$GITHUB_WORKSPACE/build/linux-minic-minias-historical16"
+          work="$GITHUB_WORKSPACE/build/linux-full-current"
           mkdir -p "$work/evidence"
           patches=(
             apply-local-integer-assignment-v2.py
@@ -65,19 +65,91 @@ jobs:
           done
           git diff --check
           make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$work/toolchain" all
+          make MODE=release CFLAGS=-Werror BUILD_DIR="$work/toolchain" check-minias-a0
           test -x "$work/toolchain/bin/minic"
           test -x "$work/toolchain/bin/minic-as"
-          make MODE=release CFLAGS=-Werror BUILD_DIR="$work/toolchain" check-minias-a0
-          echo 'MINIC_MINIAS_TOOLCHAIN=PASS'
+          echo 'FULL_CURRENT_TOOLCHAIN=PASS'
 
-      - name: Materialize 16 historically difficult Linux TUs
+      - name: Install MiniAS below GCC assembler boundary
         shell: bash
         run: |
           set -Eeuo pipefail
-          work="$GITHUB_WORKSPACE/build/linux-minic-minias-historical16"
+          work="$GITHUB_WORKSPACE/build/linux-full-current"
+          as_bindir="$work/as-override"
+          mkdir -p "$as_bindir" "$work/failure-inputs"
+          cat >"$as_bindir/riscv64-linux-gnu-as" <<'SH'
+          #!/usr/bin/env bash
+          set -Eeuo pipefail
+          minias=${MINIAS:?MINIAS is not set}
+          trace=${MINIAS_AS_TRACE:?MINIAS_AS_TRACE is not set}
+          real_as=${REAL_AS:-/usr/bin/riscv64-linux-gnu-as}
+          args=("$@")
+          minias_opts=()
+          out=
+          input=
+          query=0
+          for ((i=0; i<${#args[@]}; ++i)); do
+            arg=${args[i]}
+            case "$arg" in
+              --version|-v|--help) query=1 ;;
+              -march=*|-mabi=*) minias_opts+=("$arg") ;;
+              -o)
+                if (( i + 1 < ${#args[@]} )); then
+                  out=${args[i+1]}
+                  ((++i))
+                fi
+                ;;
+              -*) ;;
+              *) if [[ -f "$arg" ]]; then input=$arg; fi ;;
+            esac
+          done
+          if (( query )); then
+            printf 'delegate-query' >>"$trace"
+            printf ' %q' "$@" >>"$trace"
+            printf '\n' >>"$trace"
+            exec "$real_as" "$@"
+          fi
+          if [[ -z "$input" || -z "$out" ]]; then
+            echo "MINIAS_AS_WRAPPER_ERROR missing input/output" >&2
+            exit 2
+          fi
+          {
+            printf 'assemble input=%q output=%q argv=' "$input" "$out"
+            printf ' %q' "$@"
+            printf '\n'
+          } >>"$trace"
+          if "$minias" "${minias_opts[@]}" -o "$out" "$input" 2>>"$trace"; then
+            printf 'pass input=%q output=%q\n' "$input" "$out" >>"$trace"
+          else
+            status=$?
+            printf 'fail status=%s input=%q output=%q\n' "$status" "$input" "$out" >>"$trace"
+            if [[ -n "${MINIAS_FAILURE_DIR:-}" && -f "$input" ]]; then
+              mkdir -p "$MINIAS_FAILURE_DIR"
+              cp "$input" "$MINIAS_FAILURE_DIR/$(basename "$out").s"
+            fi
+            exit "$status"
+          fi
+          SH
+          chmod +x "$as_bindir/riscv64-linux-gnu-as"
+
+          cat >"$work/riscv64-linux-gnu-gcc-through-minias" <<SH
+          #!/usr/bin/env bash
+          exec /usr/bin/riscv64-linux-gnu-gcc -B"$as_bindir/" "\$@"
+          SH
+          chmod +x "$work/riscv64-linux-gnu-gcc-through-minias"
+
+      - name: Build Linux 6.6.143 Image through current MiniC and MiniAS
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-full-current"
           archive="$work/linux-6.6.143.tar.xz"
           src="$work/linux-6.6.143"
-          rm -rf "$src" "$work/corpus-builder" "$work/corpus"
+          out="$work/out"
+          gcc_wrapper="$work/riscv64-linux-gnu-gcc-through-minias"
+          : >"$work/minic-kbuild.trace"
+          : >"$work/minias-as.trace"
+
           curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors \
             https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.6.143.tar.xz -o "$archive"
           printf '%s  %s\n' \
@@ -85,134 +157,70 @@ jobs:
             "$archive" | sha256sum -c -
           tar -xJf "$archive" -C "$work"
 
-          LINUX_BATCH_MATERIALIZE_ONLY=1 \
-          BUILD_DIR="$work/corpus-builder" \
-          LINUX_SOURCE_TREE="$src" \
-          CROSS_COMPILE=riscv64-linux-gnu- \
-          LINUX_BATCH_SELECTION='555,591,611,613,749,829,887,899,949,963,965,973,975,978,990,995' \
-          LINUX_BATCH_JOBS=4 \
-            sh tests/external/linux/batch_probe.sh
+          make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- defconfig
+          "$src/scripts/config" --file "$out/.config" \
+            -e BLK_DEV_INITRD -e DEVTMPFS -e DEVTMPFS_MOUNT \
+            -e SERIAL_8250 -e SERIAL_8250_CONSOLE
+          make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- olddefconfig
 
-          mkdir -p "$work/corpus/kbuild"
-          cp "$work/corpus-builder/selected-tus.txt" "$work/corpus/selected-tus.txt"
-          test "$(grep -cve '^[[:space:]]*$' "$work/corpus/selected-tus.txt")" -eq 16
-          while IFS=$'\t' read -r index object rel_i source; do
-            test -n "$rel_i" || continue
-            mkdir -p "$work/corpus/kbuild/$(dirname "$rel_i")"
-            cp "$work/corpus-builder/kbuild/$rel_i" "$work/corpus/kbuild/$rel_i"
-          done < "$work/corpus/selected-tus.txt"
-          cp "$work/corpus-builder/tu-manifest.txt" "$work/corpus/tu-manifest.txt" 2>/dev/null || true
-          echo 'MINIC_MINIAS_CORPUS=PASS selected=16'
+          export MINIC="$work/toolchain/bin/minic"
+          export REAL_CC="$gcc_wrapper"
+          export MINIC_KBUILD_TRACE="$work/minic-kbuild.trace"
+          export MINIC_KEEP_INTERMEDIATES=0
+          export MINIC_KBUILD_GCC_VDSO=1
+          export MINIC_KBUILD_GCC_PURGATORY=1
+          export MINIAS="$work/toolchain/bin/minic-as"
+          export MINIAS_AS_TRACE="$work/minias-as.trace"
+          export MINIAS_FAILURE_DIR="$work/failure-inputs"
+          export REAL_AS=/usr/bin/riscv64-linux-gnu-as
 
-      - name: Generate current MiniC assembly
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          work="$GITHUB_WORKSPACE/build/linux-minic-minias-historical16"
-          compiler="$work/toolchain/bin/minic"
-          replay="$work/replay"
-          CORE_FAST_TRACE=1 python3 tests/external/linux/corpus_replay.py \
-            --minic "$compiler" \
-            --corpus "$work/corpus" \
-            --work "$replay" \
-            --jobs 4 \
-            --offset 0 \
-            --limit 16 \
-            --sample-count 0
-          python3 - "$replay/batch-results.json" <<'PY'
-          import json, sys
-          rows=json.load(open(sys.argv[1]))
-          bad=[r for r in rows if r['status'] != 'PASS']
-          assert len(rows) == 16 and not bad, (len(rows), bad[:3])
-          print('MINIC_MINIAS_INPUT=PASS generated=16')
-          PY
+          started=$(date +%s)
+          set +e
+          make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
+            CC="$GITHUB_WORKSPACE/tests/external/linux/stage2_kbuild_cc.sh" \
+            -j4 Image >"$work/kbuild.log" 2>&1
+          status=$?
+          set -e
+          elapsed=$(( $(date +%s) - started ))
 
-      - name: Dual assemble with GNU and MiniAS
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          work="$GITHUB_WORKSPACE/build/linux-minic-minias-historical16"
-          replay="$work/replay"
-          root="$replay/minic-out"
-          minias="$work/toolchain/bin/minic-as"
-          out="$work/assembly"
-          mkdir -p "$out/gnu" "$out/minias" "$out/errors"
-          : > "$out/results.tsv"
-          bad=0
-          total=0
-          gnu_pass=0
-          minias_pass=0
+          minic_inputs=$(grep -c '^minic input=' "$work/minic-kbuild.trace" || true)
+          minic_passes=$(grep -c '^pass source=' "$work/minic-kbuild.trace" || true)
+          vdso_delegates=$(grep -c '^delegate-vdso ' "$work/minic-kbuild.trace" || true)
+          purgatory_delegates=$(grep -c '^delegate-purgatory ' "$work/minic-kbuild.trace" || true)
+          minias_assembled=$(grep -c '^assemble ' "$work/minias-as.trace" || true)
+          minias_passed=$(grep -c '^pass ' "$work/minias-as.trace" || true)
+          minias_failures=$(grep -c '^fail ' "$work/minias-as.trace" || true)
 
-          while IFS=$'\t' read -r index object preprocessed source; do
-            test -n "$preprocessed" || continue
-            asm="$root/$preprocessed.s"
-            test -s "$asm"
-            total=$((total + 1))
-            gnu_obj="$out/gnu/${index}.o"
-            mini_obj="$out/minias/${index}.o"
-            gnu_err="$out/errors/${index}.gnu.stderr"
-            mini_err="$out/errors/${index}.minias.stderr"
+          echo "FULL_CURRENT_PROGRESS status=$status minic_inputs=$minic_inputs minic_passes=$minic_passes minias_assembled=$minias_assembled minias_passed=$minias_passed minias_failures=$minias_failures vdso_gcc=$vdso_delegates purgatory_gcc=$purgatory_delegates elapsed_s=$elapsed"
+          if test "$status" -ne 0; then
+            echo 'FULL_CURRENT_FIRST_KBUILD_ERRORS'
+            grep -nE 'error:|minic:|minic-as:|undefined reference|Error [0-9]+' "$work/kbuild.log" | tail -n 80 || true
+            echo 'FULL_CURRENT_MINIAS_FAILURE_TAIL'
+            tail -n 120 "$work/minias-as.trace" || true
+            exit "$status"
+          fi
 
-            gnu_status=FAIL
-            mini_status=SKIP
-            if riscv64-linux-gnu-gcc \
-                -march=rv64imac_zicsr_zifencei_zihintpause -mabi=lp64 \
-                -mcmodel=medany -mstrict-align -Wa,-mno-arch-attr \
-                -x assembler -c "$asm" -o "$gnu_obj" 2>"$gnu_err"; then
-              gnu_status=PASS
-              gnu_pass=$((gnu_pass + 1))
-              if "$minias" -o "$mini_obj" "$asm" 2>"$mini_err"; then
-                readelf -h "$mini_obj" | grep -q 'RISC-V'
-                readelf -h "$mini_obj" | grep -q 'REL (Relocatable file)'
-                mini_status=PASS
-                minias_pass=$((minias_pass + 1))
-              else
-                mini_status=FAIL
-                bad=1
-              fi
-            else
-              bad=1
-              : > "$mini_err"
-            fi
+          image="$out/arch/riscv/boot/Image"
+          test -s "$image"
+          test "$minic_inputs" -ge 1000
+          test "$minic_inputs" -eq "$minic_passes"
+          test "$minias_passed" -gt 1000
+          test "$minias_failures" -eq 0
+          sha256sum "$image" >"$work/Image.sha256"
+          echo "FULL_CURRENT_IMAGE=PASS minic_inputs=$minic_inputs minias_passed=$minias_passed elapsed_s=$elapsed bytes=$(stat -c %s "$image") head=$GITHUB_SHA"
 
-            printf '%s\t%s\t%s\t%s\t%s\n' "$index" "$gnu_status" "$mini_status" "$preprocessed" "$source" >> "$out/results.tsv"
-            if test "$gnu_status" != PASS; then
-              echo "MINIC_ASM_BLOCKER index=$index input=$preprocessed source=$source message=$(head -n1 "$gnu_err")"
-            elif test "$mini_status" != PASS; then
-              raw=$(head -n1 "$mini_err")
-              echo "MINIAS_BLOCKER index=$index input=$preprocessed source=$source message=$raw"
-              line=$(printf '%s\n' "$raw" | sed -nE 's/.*:line=([0-9]+)$/\1/p')
-              if [[ "$line" =~ ^[0-9]+$ ]]; then
-                from=$(( line > 4 ? line - 4 : 1 ))
-                to=$(( line + 4 ))
-                {
-                  echo "MINIAS_BLOCKER_CONTEXT index=$index line=$line input=$preprocessed"
-                  nl -ba "$asm" | sed -n "${from},${to}p"
-                } | tee "$out/errors/${index}.context.txt"
-              fi
-            fi
-          done < "$replay/selected-tus.txt"
-
-          echo "MINIC_MINIAS_ASSEMBLY_SUMMARY total=$total gnu_pass=$gnu_pass minias_pass=$minias_pass failures=$((total-minias_pass))"
-          cat "$out/results.tsv"
-          test "$total" -eq 16
-          test "$gnu_pass" -eq 16
-          test "$minias_pass" -eq 16
-          test "$bad" -eq 0
-          echo 'MINIC_MINIAS_HISTORICAL16=PASS total=16'
-
-      - name: Preserve MiniAS evidence
+      - name: Preserve full-build evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: linux-minic-minias-historical16-${{ github.sha }}
+          name: linux-full-current-${{ github.sha }}
           path: |
-            build/linux-minic-minias-historical16/evidence/**
-            build/linux-minic-minias-historical16/corpus/selected-tus.txt
-            build/linux-minic-minias-historical16/replay/batch-results.json
-            build/linux-minic-minias-historical16/replay/selected-tus.txt
-            build/linux-minic-minias-historical16/replay/minic-stderr/**
-            build/linux-minic-minias-historical16/assembly/results.tsv
-            build/linux-minic-minias-historical16/assembly/errors/**
+            build/linux-full-current/evidence/**
+            build/linux-full-current/kbuild.log
+            build/linux-full-current/minic-kbuild.trace
+            build/linux-full-current/minias-as.trace
+            build/linux-full-current/failure-inputs/*.s
+            build/linux-full-current/out/.config
+            build/linux-full-current/Image.sha256
           if-no-files-found: warn
           retention-days: 7
