@@ -9,6 +9,9 @@ ev="$work/evidence"
 mkdir -p "$ev"
 
 python3 tools/ci/apply-local-integer-assignment-v2.py | tee "$work/patch.log"
+python3 tools/ci/apply-inline-integer-specialization-v0.py | tee -a "$work/patch.log"
+python3 tools/ci/apply-inline-specialization-reachability-v0.py | tee -a "$work/patch.log"
+python3 tools/ci/apply-inline-specialization-local-facts-v0.py | tee -a "$work/patch.log"
 git diff --check
 make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$toolchain" all >/dev/null
 
@@ -54,7 +57,9 @@ all_undef=$(wc -l <"$ev/filter.undefined")
 printf 'LINUX_FILTER_LOCAL_INTEGER_V2_COUNTS assert=%s bad_size=%s deferred=%s undef=%s\n' \
   "$assert_count" "$bad_size_count" "$deferred_count" "$all_undef"
 
-# The pre-V2 focused baseline is assert=206, bad_size=0, deferred=2.
+# Preserve a permissive first real-Linux gate while measuring the specialization
+# delta.  The baseline immediately before specialization is assert=1,
+# bad_size=0, deferred=2; once the new counts are proven, tighten this to zero.
 if [ "$assert_count" -ge 180 ]; then
   echo "LINUX_FILTER_LOCAL_INTEGER_V2=FAIL insufficient-improvement assert=$assert_count" >&2
   exit 1
