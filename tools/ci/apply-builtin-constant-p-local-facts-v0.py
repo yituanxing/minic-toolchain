@@ -26,7 +26,7 @@ replace_once(
 replace_once(
     "src/frontend/ast_verifier.c",
     '''        case MINIC_BUILTIN_UNARY_ISDIGIT:\n            expected_operand_type = minic_type_int();\n            break;\n        default:\n''',
-    '''        case MINIC_BUILTIN_UNARY_ISDIGIT:\n            expected_operand_type = minic_type_int();\n            break;\n        case MINIC_BUILTIN_UNARY_CONSTANT_P:\n            if (builtin_operand == NULL || !minic_type_is_integer(builtin_operand->type)) {\n                return false;\n            }\n            expected_operand_type = builtin_operand->type;\n            break;\n        default:\n''',
+    '''        case MINIC_BUILTIN_UNARY_ISDIGIT:\n            expected_operand_type = minic_type_int();\n            break;\n        case MINIC_BUILTIN_UNARY_CONSTANT_P:\n            /* GCC permits __builtin_constant_p on non-integer expressions too.\n             * The operand is unevaluated; its type does not constrain the int\n             * result.  Returning here avoids imposing the ordinary unary-builtin\n             * operand-type equality contract. */\n            return builtin_operand != NULL &&\n                   expression->value_category == MINIC_VALUE_RVALUE &&\n                   minic_type_equal(expression->type, minic_type_int());\n        default:\n''',
 )
 
 p = Path("src/core/core_lower.c")
