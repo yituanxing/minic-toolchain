@@ -28,7 +28,7 @@ helper = r'''static void core_inline_asm_trace_symbolic_expression(
                   depth,
                   (size_t)expression_id,
                   (int)expression->kind,
-                  (int)expression->type.base,
+                  (int)expression->type.base_kind,
                   (unsigned int)expression->type.pointer_depth,
                   (int)expression->value_category);
     switch (expression->kind) {
@@ -102,7 +102,7 @@ old = '''    if (buffer == NULL || capacity == 0U || text_out == NULL || length_
         return false;
     }
 '''
-new = '''    if (buffer == NULL || capacity == 0U || text_out == NULL || length_out == NULL) {
+new = r'''    if (buffer == NULL || capacity == 0U || text_out == NULL || length_out == NULL) {
         return false;
     }
     if (!core_inline_asm_symbolic_address_depth(
