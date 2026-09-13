@@ -14,6 +14,7 @@ python3 tools/ci/apply-inline-integer-specialization-v0.py | tee "$work/speciali
 python3 tools/ci/apply-inline-specialization-local-facts-v0.py | tee "$work/specialization-local-facts-patch.log"
 python3 tools/ci/apply-inline-specialization-stable-parameter-facts-v0.py | tee "$work/specialization-stable-parameter-facts-patch.log"
 python3 tools/ci/apply-inline-specialization-transitive-integer-v0.py | tee "$work/specialization-transitive-integer-patch.log"
+python3 tools/ci/apply-inline-specialization-core-reachability-v0.py | tee "$work/specialization-core-reachability-patch.log"
 python3 tools/ci/apply-inline-specialization-label-alias-v0.py | tee "$work/specialization-label-alias-patch.log"
 git diff --check
 make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$toolchain" all >/dev/null
