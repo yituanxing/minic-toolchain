@@ -1,10 +1,9 @@
-name: MiniLD Linux vmlinux.o
+name: MiniLD Linux vmlinux.o Current
 
 on:
   push:
     branches:
-      - "toolchain/minild-vmlinuxo"
-  workflow_dispatch:
+      - "agent/minild-vmlinuxo-current-v0"
 
 permissions:
   contents: read
@@ -25,7 +24,7 @@ jobs:
             gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
             bc bison flex libssl-dev libelf-dev make curl xz-utils file
 
-      - name: Build MiniLD and keep A0/A1 green
+      - name: Build current MiniLD and keep A0/A1 green
         run: |
           make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/minild-vmlinuxo all
           make MODE=release CFLAGS=-Werror BUILD_DIR=build/minild-vmlinuxo check-minild-a0
@@ -40,7 +39,8 @@ jobs:
           src="$work/linux-6.6.143"
           out="$work/out"
           mkdir -p "$work"
-          curl -fsSL https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.6.143.tar.xz -o "$archive"
+          curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors \
+            https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.6.143.tar.xz -o "$archive"
           printf '%s  %s\n' \
             dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932 \
             "$archive" | sha256sum -c -
@@ -84,7 +84,7 @@ jobs:
           chmod +x "$wrapper"
           : >"$work/minild.trace"
 
-      - name: Build Linux Image with MiniLD vmlinux.o boundary
+      - name: Build Linux Image with current MiniLD vmlinux.o boundary
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -96,9 +96,18 @@ jobs:
           export MINILD_TRACE="$work/minild.trace"
 
           started=$(date +%s)
+          set +e
           make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
             LD="$wrapper" -j4 Image >"$work/kbuild.log" 2>&1
+          status=$?
+          set -e
           elapsed=$(( $(date +%s) - started ))
+          if test "$status" -ne 0; then
+            echo "MINILD_CURRENT_FAIL status=$status elapsed_s=$elapsed"
+            grep -nE 'error:|undefined reference|minic-ld|Error [0-9]+' "$work/kbuild.log" | tail -n 100 || true
+            tail -n 100 "$work/minild.trace" || true
+            exit "$status"
+          fi
 
           test -s "$out/vmlinux.o"
           test -s "$out/arch/riscv/boot/Image"
@@ -106,14 +115,14 @@ jobs:
           riscv64-linux-gnu-readelf -h "$out/vmlinux.o" | grep -q 'REL (Relocatable file)'
           riscv64-linux-gnu-readelf -Ws "$out/vmlinux.o" >"$work/vmlinuxo.symbols"
           riscv64-linux-gnu-readelf -Wr "$out/vmlinux.o" >"$work/vmlinuxo.relocs"
-          printf 'MINILD_LINUX_VMLINUXO=PASS minild_calls=1 elapsed_s=%s bytes=%s head=%s\n' \
+          printf 'MINILD_LINUX_VMLINUXO_CURRENT=PASS minild_calls=1 elapsed_s=%s bytes=%s head=%s\n' \
             "$elapsed" "$(stat -c %s "$out/vmlinux.o")" "$GITHUB_SHA"
 
       - name: Preserve MiniLD vmlinux.o evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: minild-linux-vmlinuxo
+          name: minild-linux-vmlinuxo-current-${{ github.sha }}
           path: |
             build/minild-linux-vmlinuxo/minild.trace
             build/minild-linux-vmlinuxo/kbuild.log
@@ -121,4 +130,4 @@ jobs:
             build/minild-linux-vmlinuxo/vmlinuxo.relocs
             build/minild-linux-vmlinuxo/out/.config
           if-no-files-found: ignore
-          retention-days: 3
+          retention-days: 7
