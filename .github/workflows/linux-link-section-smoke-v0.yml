@@ -1,0 +1,171 @@
+name: Linux Link Section Smoke V0
+
+on:
+  push:
+    branches:
+      - "agent/linux-link-section-fix-v0"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: linux-link-section-smoke-v0-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  section-smoke:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Install focused RV64 prerequisites
+        run: |
+          sudo apt-get -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            build-essential gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
+            bc bison flex libssl-dev libelf-dev make curl xz-utils python3
+
+      - name: Apply current semantic stack and text-section fix
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-link-section-smoke-v0"
+          build="$work/toolchain"
+          mkdir -p "$work/evidence"
+          patches=(
+            apply-local-integer-assignment-v2.py
+            apply-local-integer-logical-conditions-v0.py
+            apply-local-null-pointer-facts-v0.py
+            apply-builtin-constant-p-local-facts-v0.py
+            apply-inline-integer-specialization-v0.py
+            apply-inline-specialization-local-facts-v0.py
+            apply-inline-specialization-stable-parameter-facts-v0.py
+            apply-inline-specialization-transitive-integer-v0.py
+            apply-inline-specialization-base-callee-integer-v0.py
+            apply-inline-specialization-capacity-v0.py
+            apply-inline-specialization-symbolic-address-v0.py
+            apply-inline-specialization-symbolic-nested-array-v0.py
+            apply-inline-specialization-symbolic-integer-closure-v0.py
+            apply-inline-specialization-symbolic-transitive-rewrite-v0.py
+            apply-inline-specialization-symbolic-array-lvalue-v0.py
+            apply-inline-specialization-symbolic-closed-integers-v0.py
+            apply-inline-specialization-base-callee-symbolic-v0.py
+            apply-inline-specialization-resolved-asm-goto-v0.py
+            apply-inline-specialization-core-reachability-v0.py
+            apply-inline-specialization-original-reachability-v0.py
+            apply-inline-asm-local-integer-facts-v0.py
+            apply-inline-specialization-core-empty-function-v0.py
+            apply-inline-specialization-label-alias-v0.py
+            apply-riscv64-default-text-section-v0.py
+          )
+          for patch in "${patches[@]}"; do
+            python3 "tools/ci/$patch" | tee -a "$work/evidence/patch.log"
+          done
+          git diff --check
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$build" all
+
+      - name: Verify ordinary and explicit function sections
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-link-section-smoke-v0"
+          build="$work/toolchain"
+          ev="$work/evidence"
+          cat >"$work/default-text.i" <<'EOF'
+          int helper(int x) { return x + 1; }
+          int main(void) { return helper(4); }
+          EOF
+          "$build/bin/minic-cc" -S "$work/default-text.i" -o "$work/default-text.s"
+          cat "$work/default-text.s" >"$ev/default-text.s"
+          grep -x '\.text' "$work/default-text.s" >/dev/null
+          if grep -E '^\.section \.text\.(helper|main)$' "$work/default-text.s"; then
+            echo 'ordinary function unexpectedly emitted into per-function text section' >&2
+            exit 1
+          fi
+
+          cat >"$work/explicit-text.i" <<'EOF'
+          int __attribute__((section(".text.special"))) special(int x) { return x + 2; }
+          int main(void) { return special(3); }
+          EOF
+          "$build/bin/minic-cc" -S "$work/explicit-text.i" -o "$work/explicit-text.s"
+          cat "$work/explicit-text.s" >"$ev/explicit-text.s"
+          grep -F '.section .text.special' "$work/explicit-text.s" >/dev/null
+          printf 'TEXT_SECTION_SYNTHETIC=PASS\n' | tee "$ev/summary.txt"
+
+      - name: Prepare Linux 6.6.143
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-link-section-smoke-v0"
+          archive="$work/linux-6.6.143.tar.xz"
+          src="$work/linux-6.6.143"
+          out="$work/out"
+          curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors \
+            https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.6.143.tar.xz -o "$archive"
+          printf '%s  %s\n' \
+            dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932 \
+            "$archive" | sha256sum -c -
+          tar -xJf "$archive" -C "$work"
+          make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- defconfig
+          "$src/scripts/config" --file "$out/.config" \
+            -e BLK_DEV_INITRD -e DEVTMPFS -e DEVTMPFS_MOUNT \
+            -e SERIAL_8250 -e SERIAL_8250_CONSOLE
+          make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- olddefconfig
+          make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- -j4 prepare
+
+      - name: Compile representative Linux objects only
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-link-section-smoke-v0"
+          src="$work/linux-6.6.143"
+          out="$work/out"
+          ev="$work/evidence"
+          wrapper="$GITHUB_WORKSPACE/tests/external/linux/stage2_kbuild_cc.sh"
+          : >"$ev/focused.trace"
+          for target in lib/xarray.o arch/riscv/lib/delay.o; do
+            MINIC="$work/toolchain/bin/minic" \
+            REAL_CC=/usr/bin/riscv64-linux-gnu-gcc \
+            MINIC_KEEP_INTERMEDIATES=1 \
+            MINIC_KBUILD_TRACE="$ev/focused.trace" \
+            CORE_FAST_TRACE=1 \
+              make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
+                CC="$wrapper" -j1 V=1 "$target" >>"$ev/focused.log" 2>&1
+          done
+
+          riscv64-linux-gnu-objdump -t "$out/lib/xarray.o" >"$ev/xarray.symtab"
+          riscv64-linux-gnu-objdump -t "$out/arch/riscv/lib/delay.o" >"$ev/delay.symtab"
+          riscv64-linux-gnu-readelf -SW "$out/lib/xarray.o" >"$ev/xarray.sections"
+          riscv64-linux-gnu-readelf -SW "$out/arch/riscv/lib/delay.o" >"$ev/delay.sections"
+          riscv64-linux-gnu-readelf -rW "$out/lib/xarray.o" >"$ev/xarray.relocs"
+          riscv64-linux-gnu-readelf -rW "$out/arch/riscv/lib/delay.o" >"$ev/delay.relocs"
+
+          grep -E '[[:space:]]\.text[[:space:]].*[[:space:]]xa_load$' "$ev/xarray.symtab" >/dev/null
+          grep -E '[[:space:]]\.text[[:space:]].*[[:space:]]__delay$' "$ev/delay.symtab" >/dev/null
+          if grep -E '[[:space:]]\.text\.xa_load[[:space:]].*[[:space:]]xa_load$' "$ev/xarray.symtab"; then
+            echo 'xa_load still lives in .text.xa_load' >&2
+            exit 1
+          fi
+          if grep -E '[[:space:]]\.text\.__delay[[:space:]].*[[:space:]]__delay$' "$ev/delay.symtab"; then
+            echo '__delay still lives in .text.__delay' >&2
+            exit 1
+          fi
+
+          riscv64-linux-gnu-ld -melf64lriscv -r \
+            "$out/lib/xarray.o" "$out/arch/riscv/lib/delay.o" \
+            -o "$work/focused-combined.o" >"$ev/focused-link.log" 2>&1
+          printf 'TEXT_SECTION_LINUX_OBJECTS=PASS targets=2\n' | tee -a "$ev/summary.txt"
+          printf 'TEXT_SECTION_FOCUSED_LINK=PASS\n' | tee -a "$ev/summary.txt"
+
+      - name: Preserve focused evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-link-section-smoke-v0
+          path: build/linux-link-section-smoke-v0/evidence/
+          if-no-files-found: ignore
+          retention-days: 7
