@@ -43,6 +43,7 @@ jobs:
             apply-inline-specialization-local-facts-v0.py
             apply-inline-specialization-stable-parameter-facts-v0.py
             apply-inline-specialization-transitive-integer-v0.py
+            apply-inline-specialization-base-callee-integer-v0.py
             apply-inline-specialization-capacity-v0.py
             apply-inline-specialization-symbolic-address-v0.py
             apply-inline-specialization-symbolic-array-lvalue-v0.py
