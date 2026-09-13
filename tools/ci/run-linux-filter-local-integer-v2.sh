@@ -10,6 +10,7 @@ mkdir -p "$ev"
 
 python3 tools/ci/apply-local-integer-assignment-v2.py | tee "$work/patch.log"
 python3 tools/ci/apply-inline-integer-specialization-v0.py | tee -a "$work/patch.log"
+python3 tools/ci/apply-inline-specialization-capacity-v0.py | tee -a "$work/patch.log"
 python3 tools/ci/apply-inline-specialization-reachability-v0.py | tee -a "$work/patch.log"
 python3 tools/ci/apply-inline-specialization-local-facts-v0.py | tee -a "$work/patch.log"
 git diff --check
