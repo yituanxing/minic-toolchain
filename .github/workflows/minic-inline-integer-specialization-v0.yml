@@ -31,6 +31,7 @@ jobs:
           python3 tools/ci/apply-local-integer-assignment-v2.py | tee "$work/local-integer-patch.log"
           python3 tools/ci/apply-inline-integer-specialization-v0.py | tee "$work/specialization-patch.log"
           python3 tools/ci/apply-inline-specialization-local-facts-v0.py | tee "$work/specialization-local-facts-patch.log"
+          python3 tools/ci/apply-inline-specialization-label-alias-v0.py | tee "$work/specialization-label-alias-patch.log"
           git diff --check
           make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$build" all
 
@@ -42,8 +43,11 @@ jobs:
                       __attribute__((error("specialized dead path survived")));
                   if (!(value < 10))
                       __compiletime_assert_probe();
+                  goto selected;
               }
-              return compile_time ? value : 7;
+              return 7;
+          selected:
+              return value;
           }
 
           int main(void) {
@@ -61,9 +65,12 @@ jobs:
             exit 1
           fi
           grep -F '__minic_inline_spec_' "$work/probe.s"
+          # Two clones share the Semantic label id. Clone emission must rely on
+          # function-scoped Core labels rather than duplicate .Luser_* aliases.
+          test "$(grep -Ec '^\\.Luser_[0-9]+:$' "$work/probe.s" || true)" -le 1
           riscv64-linux-gnu-gcc -static "$work/probe.s" -o "$work/probe"
           qemu-riscv64 "$work/probe"
-          echo 'MINIC_INLINE_INTEGER_SPECIALIZATION_V0=PASS variants=2 runtime=PASS'
+          echo 'MINIC_INLINE_INTEGER_SPECIALIZATION_V0=PASS variants=2 label_alias=PASS runtime=PASS'
       - name: Preserve evidence
         if: always()
         uses: actions/upload-artifact@v4
