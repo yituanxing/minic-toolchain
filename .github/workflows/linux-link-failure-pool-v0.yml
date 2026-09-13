@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - "agent/linux-link-correctness-v0"
+      - "agent/linux-local-integer-isolate-v1"
   workflow_dispatch:
 
 permissions:
@@ -33,7 +34,14 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
-          build="$GITHUB_WORKSPACE/build/linux-link-failure-pool-v0/toolchain"
+          work="$GITHUB_WORKSPACE/build/linux-link-failure-pool-v0"
+          build="$work/toolchain"
+          mkdir -p "$work/evidence"
+          if [ "${GITHUB_REF_NAME}" = "agent/linux-local-integer-isolate-v1" ]; then
+            python3 tools/ci/apply-local-integer-assignment-v2.py \
+              | tee "$work/evidence/local-integer-patch.log"
+            git diff --check
+          fi
           make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$build" all
           test -x "$build/bin/minic"
           echo "LINUX_FAILURE_POOL_TOOLCHAIN=PASS head=${GITHUB_SHA}"
