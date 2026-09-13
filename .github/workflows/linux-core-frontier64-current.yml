@@ -1,4 +1,4 @@
-name: Linux Core Historical16 Current
+name: Linux MiniC MiniAS Historical16 Current
 
 on:
   push:
@@ -9,7 +9,7 @@ permissions:
   contents: read
 
 jobs:
-  historical16:
+  historical16-minias:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
@@ -29,11 +29,11 @@ jobs:
             build-essential gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
             libc6-dev-riscv64-cross bc bison flex libssl-dev libelf-dev make curl xz-utils python3
 
-      - name: Apply current MiniC semantic stack and build
+      - name: Apply current semantic stack and build MiniC plus MiniAS
         shell: bash
         run: |
           set -Eeuo pipefail
-          work="$GITHUB_WORKSPACE/build/linux-historical16-current"
+          work="$GITHUB_WORKSPACE/build/linux-minic-minias-historical16"
           mkdir -p "$work/evidence"
           patches=(
             apply-local-integer-assignment-v2.py
@@ -66,12 +66,15 @@ jobs:
           git diff --check
           make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$work/toolchain" all
           test -x "$work/toolchain/bin/minic"
+          test -x "$work/toolchain/bin/minic-as"
+          make MODE=release CFLAGS=-Werror BUILD_DIR="$work/toolchain" check-minias-a0
+          echo 'MINIC_MINIAS_TOOLCHAIN=PASS'
 
-      - name: Materialize historical new500 blocker TUs
+      - name: Materialize 16 historically difficult Linux TUs
         shell: bash
         run: |
           set -Eeuo pipefail
-          work="$GITHUB_WORKSPACE/build/linux-historical16-current"
+          work="$GITHUB_WORKSPACE/build/linux-minic-minias-historical16"
           archive="$work/linux-6.6.143.tar.xz"
           src="$work/linux-6.6.143"
           rm -rf "$src" "$work/corpus-builder" "$work/corpus"
@@ -99,16 +102,15 @@ jobs:
             cp "$work/corpus-builder/kbuild/$rel_i" "$work/corpus/kbuild/$rel_i"
           done < "$work/corpus/selected-tus.txt"
           cp "$work/corpus-builder/tu-manifest.txt" "$work/corpus/tu-manifest.txt" 2>/dev/null || true
-          echo 'LINUX_HISTORICAL16_CORPUS=PASS selected=16 indices=555,591,611,613,749,829,887,899,949,963,965,973,975,978,990,995'
+          echo 'MINIC_MINIAS_CORPUS=PASS selected=16'
 
-      - name: Replay patched MiniC over historical16
+      - name: Generate current MiniC assembly
         shell: bash
         run: |
           set -Eeuo pipefail
-          work="$GITHUB_WORKSPACE/build/linux-historical16-current"
+          work="$GITHUB_WORKSPACE/build/linux-minic-minias-historical16"
           compiler="$work/toolchain/bin/minic"
           replay="$work/replay"
-          set +e
           CORE_FAST_TRACE=1 python3 tests/external/linux/corpus_replay.py \
             --minic "$compiler" \
             --corpus "$work/corpus" \
@@ -117,49 +119,100 @@ jobs:
             --offset 0 \
             --limit 16 \
             --sample-count 0
-          replay_status=$?
-          set -e
-          echo "LINUX_HISTORICAL16_REPLAY_STATUS=$replay_status"
-
-          python3 tools/ci/classify-core-strict-frontier.py \
-            "$replay/batch-results.json" \
-            --stderr-root "$replay/minic-stderr" \
-            --ast-header "$GITHUB_WORKSPACE/src/frontend/ast.h" \
-            --examples 16 \
-            --json-out "$replay/frontier-summary.json" \
-            --reason-text-out "$replay/reason-summary.txt"
-
-          python3 tools/ci/summarize-core-frontier-progress.py \
-            "$replay/batch-results.json" \
-            --expect-selected 16 \
-            --json-out "$replay/progress-summary.json" \
-            --text-out "$replay/progress-summary.txt"
-
-          echo 'LINUX_HISTORICAL16_FAILURE_CONTEXTS'
-          cat "$replay/failure-contexts.txt" || true
-          cat "$replay/reason-summary.txt" || true
-          python3 - <<'PY'
-          import json
-          from pathlib import Path
-          p = Path('build/linux-historical16-current/replay/frontier-summary.json')
-          s = json.loads(p.read_text())
-          print(f"LINUX_HISTORICAL16_EXACT selected={s['selected']} pass={s['pass']} unsupported={s['unsupported']} error={s['error']} preprocess_missing={s['preprocess_missing']}")
+          python3 - "$replay/batch-results.json" <<'PY'
+          import json, sys
+          rows=json.load(open(sys.argv[1]))
+          bad=[r for r in rows if r['status'] != 'PASS']
+          assert len(rows) == 16 and not bad, (len(rows), bad[:3])
+          print('MINIC_MINIAS_INPUT=PASS generated=16')
           PY
 
-      - name: Preserve historical16 evidence
+      - name: Dual assemble with GNU and MiniAS
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-minic-minias-historical16"
+          replay="$work/replay"
+          root="$replay/minic-out"
+          minias="$work/toolchain/bin/minic-as"
+          out="$work/assembly"
+          mkdir -p "$out/gnu" "$out/minias" "$out/errors"
+          : > "$out/results.tsv"
+          bad=0
+          total=0
+          gnu_pass=0
+          minias_pass=0
+
+          while IFS=$'\t' read -r index object preprocessed source; do
+            test -n "$preprocessed" || continue
+            asm="$root/$preprocessed.s"
+            test -s "$asm"
+            total=$((total + 1))
+            gnu_obj="$out/gnu/${index}.o"
+            mini_obj="$out/minias/${index}.o"
+            gnu_err="$out/errors/${index}.gnu.stderr"
+            mini_err="$out/errors/${index}.minias.stderr"
+
+            gnu_status=FAIL
+            mini_status=SKIP
+            if riscv64-linux-gnu-gcc \
+                -march=rv64imac_zicsr_zifencei_zihintpause -mabi=lp64 \
+                -mcmodel=medany -mstrict-align -Wa,-mno-arch-attr \
+                -x assembler -c "$asm" -o "$gnu_obj" 2>"$gnu_err"; then
+              gnu_status=PASS
+              gnu_pass=$((gnu_pass + 1))
+              if "$minias" -o "$mini_obj" "$asm" 2>"$mini_err"; then
+                readelf -h "$mini_obj" | grep -q 'RISC-V'
+                readelf -h "$mini_obj" | grep -q 'REL (Relocatable file)'
+                mini_status=PASS
+                minias_pass=$((minias_pass + 1))
+              else
+                mini_status=FAIL
+                bad=1
+              fi
+            else
+              bad=1
+              : > "$mini_err"
+            fi
+
+            printf '%s\t%s\t%s\t%s\t%s\n' "$index" "$gnu_status" "$mini_status" "$preprocessed" "$source" >> "$out/results.tsv"
+            if test "$gnu_status" != PASS; then
+              echo "MINIC_ASM_BLOCKER index=$index input=$preprocessed source=$source message=$(head -n1 "$gnu_err")"
+            elif test "$mini_status" != PASS; then
+              raw=$(head -n1 "$mini_err")
+              echo "MINIAS_BLOCKER index=$index input=$preprocessed source=$source message=$raw"
+              line=$(printf '%s\n' "$raw" | sed -nE 's/.*:line=([0-9]+)$/\1/p')
+              if [[ "$line" =~ ^[0-9]+$ ]]; then
+                from=$(( line > 4 ? line - 4 : 1 ))
+                to=$(( line + 4 ))
+                {
+                  echo "MINIAS_BLOCKER_CONTEXT index=$index line=$line input=$preprocessed"
+                  nl -ba "$asm" | sed -n "${from},${to}p"
+                } | tee "$out/errors/${index}.context.txt"
+              fi
+            fi
+          done < "$replay/selected-tus.txt"
+
+          echo "MINIC_MINIAS_ASSEMBLY_SUMMARY total=$total gnu_pass=$gnu_pass minias_pass=$minias_pass failures=$((total-minias_pass))"
+          cat "$out/results.tsv"
+          test "$total" -eq 16
+          test "$gnu_pass" -eq 16
+          test "$minias_pass" -eq 16
+          test "$bad" -eq 0
+          echo 'MINIC_MINIAS_HISTORICAL16=PASS total=16'
+
+      - name: Preserve MiniAS evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: linux-historical16-current-${{ github.sha }}
+          name: linux-minic-minias-historical16-${{ github.sha }}
           path: |
-            build/linux-historical16-current/evidence/**
-            build/linux-historical16-current/corpus/selected-tus.txt
-            build/linux-historical16-current/replay/batch-results.json
-            build/linux-historical16-current/replay/frontier-summary.json
-            build/linux-historical16-current/replay/reason-summary.txt
-            build/linux-historical16-current/replay/progress-summary.json
-            build/linux-historical16-current/replay/progress-summary.txt
-            build/linux-historical16-current/replay/failure-contexts.txt
-            build/linux-historical16-current/replay/minic-stderr/**
+            build/linux-minic-minias-historical16/evidence/**
+            build/linux-minic-minias-historical16/corpus/selected-tus.txt
+            build/linux-minic-minias-historical16/replay/batch-results.json
+            build/linux-minic-minias-historical16/replay/selected-tus.txt
+            build/linux-minic-minias-historical16/replay/minic-stderr/**
+            build/linux-minic-minias-historical16/assembly/results.tsv
+            build/linux-minic-minias-historical16/assembly/errors/**
           if-no-files-found: warn
           retention-days: 7
