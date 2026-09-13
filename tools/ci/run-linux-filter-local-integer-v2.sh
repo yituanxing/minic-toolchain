@@ -31,7 +31,7 @@ MINIC="$toolchain/bin/minic" BUILD_DIR="$work/regression" \
 archive="$work/linux-6.6.143.tar.xz"
 src="$work/linux-6.6.143"
 out="$work/out-mini"
-trap 'test -s "$out/net/core/filter.minic-stage2.s" && cp "$out/net/core/filter.minic-stage2.s" "$ev/filter.failed.s" || true; test -s "$out/net/core/filter.minic-stage2.minic.stderr" && cp "$out/net/core/filter.minic-stage2.minic.stderr" "$ev/filter.minic.stderr" || true' EXIT
+trap 'test -s "$out/net/core/filter.minic-stage2.i" && cp "$out/net/core/filter.minic-stage2.i" "$ev/filter.i" || true; test -s "$out/net/core/filter.minic-stage2.s" && cp "$out/net/core/filter.minic-stage2.s" "$ev/filter.failed.s" || true; test -s "$out/net/core/filter.minic-stage2.minic.stderr" && cp "$out/net/core/filter.minic-stage2.minic.stderr" "$ev/filter.minic.stderr" || true' EXIT
 curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors \
   https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.6.143.tar.xz -o "$archive"
 printf '%s  %s\n' \
