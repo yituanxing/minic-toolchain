@@ -56,6 +56,29 @@ if helper_start < 0 or helper_end < 0 or helper_end <= helper_start:
     raise SystemExit("expected core_value_integer_constant helper before direct-local helper")
 text = text[:helper_start] + text[helper_end:]
 
+# A GNU statement-expression records its final expression before the normal
+# lvalue-to-rvalue conversion.  Thus `({ ...; selected; })` has a direct LOCAL
+# result whose value_category is LVALUE even though the enclosing scalar value
+# context reads it.  The local-aware integer evaluator is itself a value-only
+# path, so a direct LOCAL here is a read regardless of that preserved parser
+# category.  Address-taking remains a distinct ADDRESS_OF expression and still
+# marks the local escaped before any fact may be consumed.
+direct_local_old = '''    if (expression->kind == MINIC_EXPRESSION_LOCAL &&
+        expression->value_category == MINIC_VALUE_RVALUE) {
+        *local_id = expression->value.local_id;
+        return true;
+    }
+'''
+direct_local_new = '''    if (expression->kind == MINIC_EXPRESSION_LOCAL) {
+        *local_id = expression->value.local_id;
+        return true;
+    }
+'''
+count = text.count(direct_local_old)
+if count != 1:
+    raise SystemExit(f"expected one direct-local read gate, found {count}")
+text = text.replace(direct_local_old, direct_local_new, 1)
+
 # GNU statement expressions commonly return a local whose value became known
 # while lowering the selected compile-time branch.  Insert this only inside the
 # local-aware evaluator, immediately after its logical-not case.  The longer
