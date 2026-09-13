@@ -31,6 +31,7 @@ jobs:
           python3 tools/ci/apply-local-integer-assignment-v2.py | tee "$work/local-integer-patch.log"
           python3 tools/ci/apply-inline-integer-specialization-v0.py | tee "$work/specialization-patch.log"
           python3 tools/ci/apply-inline-specialization-reachability-v0.py | tee "$work/reachability-patch.log"
+          python3 tools/ci/apply-inline-specialization-local-facts-v0.py | tee "$work/local-facts-patch.log"
           git diff --check
           make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$build" all
 
