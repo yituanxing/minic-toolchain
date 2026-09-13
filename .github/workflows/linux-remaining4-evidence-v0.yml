@@ -49,6 +49,7 @@ jobs:
             apply-inline-specialization-symbolic-nested-array-v0.py
             apply-inline-specialization-symbolic-array-lvalue-v0.py
             apply-inline-specialization-symbolic-closed-integers-v0.py
+            apply-inline-specialization-base-callee-symbolic-v0.py
             apply-inline-specialization-resolved-asm-goto-v0.py
             apply-inline-specialization-core-reachability-v0.py
             apply-inline-specialization-original-reachability-v0.py
