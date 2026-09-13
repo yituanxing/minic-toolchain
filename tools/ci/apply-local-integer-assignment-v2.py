@@ -36,12 +36,22 @@ if count != 1:
 text = text.replace(old, new, 1)
 
 # GNU statement expressions commonly return a local whose value became known
-# while lowering the selected compile-time branch.  At the outer assignment,
-# preserve that fact by evaluating only the statement-expression result node.
-anchor = '''    if (expression->kind == MINIC_EXPRESSION_BINARY &&
+# while lowering the selected compile-time branch.  Insert this only inside the
+# local-aware evaluator, immediately after its logical-not case.  The longer
+# anchor is deliberate: another binary-expression test exists elsewhere in the
+# lowering file and must not be touched.
+anchor = '''        value->type = expression->type;
+        value->bits = is_zero ? 1U : 0U;
+        return true;
+    }
+    if (expression->kind == MINIC_EXPRESSION_BINARY &&
         (expression->value.binary.operator_kind == MINIC_BINARY_EQUAL ||
 '''
-insert = '''    if (expression->kind == MINIC_EXPRESSION_STATEMENT &&
+insert = '''        value->type = expression->type;
+        value->bits = is_zero ? 1U : 0U;
+        return true;
+    }
+    if (expression->kind == MINIC_EXPRESSION_STATEMENT &&
         expression->value.statement_expression.result != MINIC_EXPRESSION_INVALID) {
         if (!core_const_eval_integer_with_locals(
                 context, expression->value.statement_expression.result, &operand_value)) {
@@ -58,7 +68,7 @@ insert = '''    if (expression->kind == MINIC_EXPRESSION_STATEMENT &&
 '''
 count = text.count(anchor)
 if count != 1:
-    raise SystemExit(f"expected one evaluator binary anchor, found {count}")
+    raise SystemExit(f"expected one evaluator-local anchor, found {count}")
 text = text.replace(anchor, insert, 1)
 
 p.write_text(text)
