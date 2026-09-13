@@ -28,6 +28,7 @@ python3 tools/ci/apply-inline-specialization-resolved-asm-goto-v0.py | tee "$ev/
 python3 tools/ci/apply-inline-specialization-core-reachability-v0.py | tee "$ev/inline-specialization-core-reachability-patch.log"
 python3 tools/ci/apply-inline-specialization-core-empty-function-v0.py | tee "$ev/inline-specialization-core-empty-function-patch.log"
 python3 tools/ci/apply-inline-specialization-label-alias-v0.py | tee "$ev/inline-specialization-label-alias-patch.log"
+python3 tools/ci/apply-inline-specialization-original-source-reachability-v0.py | tee "$ev/inline-specialization-original-source-reachability-patch.log"
 git diff --check
 make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$build" all
 
