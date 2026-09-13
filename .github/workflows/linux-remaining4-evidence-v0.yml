@@ -39,6 +39,7 @@ jobs:
             apply-local-integer-assignment-v2.py
             apply-local-integer-logical-conditions-v0.py
             apply-local-null-pointer-facts-v0.py
+            apply-builtin-constant-p-local-facts-v0.py
             apply-inline-integer-specialization-v0.py
             apply-inline-specialization-local-facts-v0.py
             apply-inline-specialization-stable-parameter-facts-v0.py
@@ -48,6 +49,7 @@ jobs:
             apply-inline-specialization-symbolic-address-v0.py
             apply-inline-specialization-symbolic-nested-array-v0.py
             apply-inline-specialization-symbolic-integer-closure-v0.py
+            apply-inline-specialization-symbolic-transitive-rewrite-v0.py
             apply-inline-specialization-symbolic-array-lvalue-v0.py
             apply-inline-specialization-symbolic-closed-integers-v0.py
             apply-inline-specialization-base-callee-symbolic-v0.py
@@ -64,6 +66,21 @@ jobs:
           git diff --check
           make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$build" all
           test -x "$build/bin/minic"
+
+          cat >"$work/constant-p-local.c" <<'EOF'
+          extern void must_not_be_referenced(void);
+          int probe(void) {
+              long y = 1000000L;
+              if (!__builtin_constant_p((long long)y >= 0))
+                  must_not_be_referenced();
+              return 0;
+          }
+          EOF
+          cc -E -P -std=gnu11 -x c "$work/constant-p-local.c" -o "$work/constant-p-local.i"
+          MINIC_LOCAL_FACT_TRACE=1 "$build/bin/minic" -S "$work/constant-p-local.i" \
+            -o "$work/constant-p-local.s" 2>"$work/evidence/constant-p-local.stderr"
+          ! grep -Eq '[[:space:]]call[[:space:]]+must_not_be_referenced' "$work/constant-p-local.s"
+          echo "MINIC_BUILTIN_CONSTANT_P_LOCAL_FACT_SYNTHETIC=PASS"
 
       - name: Build remaining four Linux objects and preserve stage2 inputs
         shell: bash
@@ -87,12 +104,12 @@ jobs:
             dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932 \
             "$archive" | sha256sum -c -
           tar -xJf "$archive" -C "$work"
-          make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- defconfig
+          make -C "$src" O>"$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- defconfig
           "$src/scripts/config" --file "$out/.config" \
-            -e BLK_DEV_INITRD -e DEVTMPFS -e DEVTMPFS_MOUNT \
+            -e BLK_DEV_INITRD -e DEVTMPS -e DEVTMPS_MOUNT \
             -e SERIAL_8250 -e SERIAL_8250_CONSOLE
           make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- olddefconfig
-          make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- -j4 prepare
+          make -C "$src" O>"$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- -j4 prepare
           MINIC="$work/toolchain/bin/minic" \
           REAL_CC=/usr/bin/riscv64-linux-gnu-gcc \
           MINIC_KEEP_INTERMEDIATES=1 \
@@ -110,11 +127,11 @@ jobs:
               if test -f "$file"; then cp "$file" "$ev/$key.$suffix"; fi
             done
             riscv64-linux-gnu-nm -u "$out/$target" | sort -u >"$ev/$key.undefined"
-            echo "REMAINING4 target=$target"
+            echo "REMAININM4 target=$target"
             grep -E '__compiletime_assert_|__minic_deferred_asm_immediate_|__bad_size_call_parameter' \
               "$ev/$key.undefined" || true
           done
-          echo "LINUX_REMAINING4_EVIDENCE=PASS objects=${#targets[@]}"
+          echo "LINUX_REMAINING4_EVIDENCE=PASS objects=${##targets[@]}"
 
       - name: Upload remaining blocker evidence
         if: always()
