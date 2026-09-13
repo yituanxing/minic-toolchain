@@ -38,36 +38,34 @@ jobs:
           build="$work/toolchain"
           mkdir -p "$work/evidence"
           if [ "${GITHUB_REF_NAME}" = "agent/linux-local-integer-isolate-v1" ]; then
-            python3 tools/ci/apply-local-integer-assignment-v2.py \
-              | tee "$work/evidence/local-integer-patch.log"
-            python3 tools/ci/apply-local-integer-logical-conditions-v0.py \
-              | tee "$work/evidence/local-integer-logical-conditions-patch.log"
-            python3 tools/ci/apply-local-null-pointer-facts-v0.py \
-              | tee "$work/evidence/local-null-pointer-facts-patch.log"
-            python3 tools/ci/apply-inline-integer-specialization-v0.py \
-              | tee "$work/evidence/inline-integer-specialization-patch.log"
-            python3 tools/ci/apply-inline-specialization-local-facts-v0.py \
-              | tee "$work/evidence/inline-specialization-local-facts-patch.log"
-            python3 tools/ci/apply-inline-specialization-stable-parameter-facts-v0.py \
-              | tee "$work/evidence/inline-specialization-stable-parameter-facts-patch.log"
-            python3 tools/ci/apply-inline-specialization-transitive-integer-v0.py \
-              | tee "$work/evidence/inline-specialization-transitive-integer-patch.log"
-            python3 tools/ci/apply-inline-specialization-capacity-v0.py \
-              | tee "$work/evidence/inline-specialization-capacity-patch.log"
-            python3 tools/ci/apply-inline-specialization-symbolic-address-v0.py \
-              | tee "$work/evidence/inline-specialization-symbolic-address-patch.log"
-            python3 tools/ci/apply-inline-specialization-symbolic-array-lvalue-v0.py \
-              | tee "$work/evidence/inline-specialization-symbolic-array-lvalue-patch.log"
-            python3 tools/ci/apply-inline-specialization-symbolic-closed-integers-v0.py \
-              | tee "$work/evidence/inline-specialization-symbolic-closed-integers-patch.log"
-            python3 tools/ci/apply-inline-specialization-resolved-asm-goto-v0.py \
-              | tee "$work/evidence/inline-specialization-resolved-asm-goto-patch.log"
-            python3 tools/ci/apply-inline-specialization-core-reachability-v0.py \
-              | tee "$work/evidence/inline-specialization-core-reachability-patch.log"
-            python3 tools/ci/apply-inline-specialization-core-empty-function-v0.py \
-              | tee "$work/evidence/inline-specialization-core-empty-function-patch.log"
-            python3 tools/ci/apply-inline-specialization-label-alias-v0.py \
-              | tee "$work/evidence/inline-specialization-label-alias-patch.log"
+            patches=(
+              apply-local-integer-assignment-v2.py
+              apply-local-integer-logical-conditions-v0.py
+              apply-local-null-pointer-facts-v0.py
+              apply-builtin-constant-p-local-facts-v0.py
+              apply-inline-integer-specialization-v0.py
+              apply-inline-specialization-local-facts-v0.py
+              apply-inline-specialization-stable-parameter-facts-v0.py
+              apply-inline-specialization-transitive-integer-v0.py
+              apply-inline-specialization-base-callee-integer-v0.py
+              apply-inline-specialization-capacity-v0.py
+              apply-inline-specialization-symbolic-address-v0.py
+              apply-inline-specialization-symbolic-nested-array-v0.py
+              apply-inline-specialization-symbolic-integer-closure-v0.py
+              apply-inline-specialization-symbolic-transitive-rewrite-v0.py
+              apply-inline-specialization-symbolic-array-lvalue-v0.py
+              apply-inline-specialization-symbolic-closed-integers-v0.py
+              apply-inline-specialization-base-callee-symbolic-v0.py
+              apply-inline-specialization-resolved-asm-goto-v0.py
+              apply-inline-specialization-core-reachability-v0.py
+              apply-inline-specialization-original-reachability-v0.py
+              apply-inline-asm-local-integer-facts-v0.py
+              apply-inline-specialization-core-empty-function-v0.py
+              apply-inline-specialization-label-alias-v0.py
+            )
+            for patch in "${patches[@]}"; do
+              python3 "tools/ci/$patch" | tee -a "$work/evidence/patch.log"
+            done
             git diff --check
           fi
           make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$build" all
