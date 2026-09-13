@@ -9,6 +9,7 @@ ev="$work/evidence"
 mkdir -p "$ev"
 
 python3 tools/ci/apply-local-integer-assignment-v2.py | tee "$work/patch.log"
+python3 tools/ci/apply-local-integer-logical-conditions-v0.py | tee "$work/logical-conditions-patch.log"
 python3 tools/ci/apply-inline-integer-specialization-v0.py | tee "$work/specialization-patch.log"
 python3 tools/ci/apply-inline-specialization-local-facts-v0.py | tee "$work/specialization-local-facts-patch.log"
 python3 tools/ci/apply-inline-specialization-stable-parameter-facts-v0.py | tee "$work/specialization-stable-parameter-facts-patch.log"
