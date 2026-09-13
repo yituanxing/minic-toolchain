@@ -25,7 +25,7 @@ src="$work/linux-6.6.143"
 out="$work/out-mini"
 # Preserve generated assembly even when GNU as rejects it; this keeps the
 # focused lane diagnostic rather than forcing another blind rerun.
-trap 'test -s "$out/net/core/filter.minic-stage2.s" && cp "$out/net/core/filter.minic-stage2.s" "$ev/filter.failed.s" || true' EXIT
+trap 'test -s "$out/net/core/filter.minic-stage2.s" && cp "$out/net/core/filter.minic-stage2.s" "$ev/filter.failed.s" || true; test -s "$out/net/core/filter.minic-stage2.minic.stderr" && cp "$out/net/core/filter.minic-stage2.minic.stderr" "$ev/filter.minic.stderr" || true' EXIT
 curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors \
   https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.6.143.tar.xz -o "$archive"
 printf '%s  %s\n' \
@@ -54,6 +54,8 @@ test -s "$out/net/core/filter.o"
 riscv64-linux-gnu-nm -u "$out/net/core/filter.o" | sort -u >"$ev/filter.undefined"
 cp "$out/net/core/filter.minic-stage2.i" "$ev/filter.i"
 cp "$out/net/core/filter.minic-stage2.s" "$ev/filter.s"
+test ! -s "$out/net/core/filter.minic-stage2.minic.stderr" || \
+  cp "$out/net/core/filter.minic-stage2.minic.stderr" "$ev/filter.minic.stderr"
 
 assert_count=$(grep -c '__compiletime_assert_' "$ev/filter.undefined" || true)
 bad_size_count=$(grep -c '__bad_size_call_parameter' "$ev/filter.undefined" || true)
