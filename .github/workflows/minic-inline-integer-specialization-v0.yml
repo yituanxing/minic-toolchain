@@ -33,6 +33,7 @@ jobs:
           python3 tools/ci/apply-inline-integer-specialization-v0.py | tee "$work/specialization-patch.log"
           python3 tools/ci/apply-inline-specialization-local-facts-v0.py | tee "$work/specialization-local-facts-patch.log"
           python3 tools/ci/apply-inline-specialization-stable-parameter-facts-v0.py | tee "$work/specialization-stable-parameter-facts-patch.log"
+          python3 tools/ci/apply-inline-specialization-transitive-integer-v0.py | tee "$work/specialization-transitive-integer-patch.log"
           python3 tools/ci/apply-inline-specialization-label-alias-v0.py | tee "$work/specialization-label-alias-patch.log"
           git diff --check
           make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$build" all
@@ -40,11 +41,6 @@ jobs:
           cat >"$work/probe.c" <<'C'
           static inline __attribute__((always_inline))
           int helper(int dynamic, int value, int compile_time) {
-              /* Reproduce Linux helpers such as __kmalloc_index(): an unknown
-                 parameter drives earlier CFG before a different specialized
-                 parameter controls compile-time reachability.  The final gate
-                 deliberately uses && because Linux's compiletime_assert path
-                 reaches us as a logical expression, not a bare local. */
               if (dynamic == 12345)
                   return 6;
               if (!0 && compile_time) {
@@ -75,12 +71,46 @@ jobs:
             exit 1
           fi
           grep -F '__minic_inline_spec_' "$work/probe.s"
-          # Two clones share the Semantic label id. Clone emission must rely on
-          # function-scoped Core labels rather than duplicate .Luser_* aliases.
           test "$(grep -Ec '^\\.Luser_[0-9]+:$' "$work/probe.s" || true)" -le 1
           riscv64-linux-gnu-gcc -static "$work/probe.s" -o "$work/probe"
           qemu-riscv64 "$work/probe"
-          echo 'MINIC_INLINE_INTEGER_SPECIALIZATION_V0=PASS variants=2 unknown_join=PASS logical_condition=PASS label_alias=PASS runtime=PASS'
+
+          cat >"$work/transitive.c" <<'C'
+          static inline __attribute__((always_inline))
+          int leaf(int value, int compile_time) {
+              if (value <= 10)
+                  return value;
+              if (!0 && compile_time) {
+                  extern void __compiletime_assert_nested(void)
+                      __attribute__((error("nested specialized dead path survived")));
+                  __compiletime_assert_nested();
+              }
+              return 77;
+          }
+
+          static inline __attribute__((always_inline))
+          int outer(int dynamic, int value) {
+              if (dynamic == 12345)
+                  return 6;
+              return leaf(value, 1);
+          }
+
+          int main(int argc, char **argv) {
+              (void)argv;
+              return outer(argc, 3) == 3 ? 0 : 1;
+          }
+          C
+          riscv64-linux-gnu-gcc -E -P -std=gnu11 -x c "$work/transitive.c" -o "$work/transitive.i"
+          MINIC_INLINE_SPEC_TRANSITIVE_TRACE=1 "$build/bin/minic" -S "$work/transitive.i" -o "$work/transitive.s" 2>"$work/transitive.trace"
+          grep -F 'MINIC_INLINE_INTEGER_SPECIALIZATION_TRANSITIVE_V0 refined=' "$work/transitive.trace"
+          grep -F 'INLINE_SPEC_TRANSITIVE_SELECT ' "$work/transitive.trace"
+          if grep -F '__compiletime_assert_nested' "$work/transitive.s"; then
+            echo 'nested specialized dead compile-time error path survived' >&2
+            exit 1
+          fi
+          riscv64-linux-gnu-gcc -static "$work/transitive.s" -o "$work/transitive"
+          qemu-riscv64 "$work/transitive"
+          echo 'MINIC_INLINE_INTEGER_SPECIALIZATION_V0=PASS variants=PASS unknown_join=PASS logical_condition=PASS transitive=PASS label_alias=PASS runtime=PASS'
       - name: Preserve evidence
         if: always()
         uses: actions/upload-artifact@v4
