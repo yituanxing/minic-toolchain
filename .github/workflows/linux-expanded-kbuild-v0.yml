@@ -22,6 +22,13 @@ jobs:
         with:
           ref: ${{ github.sha }}
 
+      - name: Restore Linux Kbuild output cache
+        id: kbuild-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-expanded-kbuild-v0/out
+          key: linux-expanded-kbuild-v0-6.6.143-${{ runner.os }}-${{ hashFiles('src/**', 'include/**', 'tools/ci/apply-*.py', 'tests/external/linux/stage2_kbuild_cc.sh') }}
+
       - name: Install RV64 Linux prerequisites
         run: |
           sudo apt-get -o Acquire::Retries=3 update
@@ -60,6 +67,7 @@ jobs:
             apply-inline-asm-local-integer-facts-v0.py
             apply-inline-specialization-core-empty-function-v0.py
             apply-inline-specialization-label-alias-v0.py
+            apply-riscv64-default-text-section-v0.py
           )
           for patch in "${patches[@]}"; do
             python3 "tools/ci/$patch" | tee -a "$work/evidence/patch.log"
@@ -70,6 +78,7 @@ jobs:
           echo "LINUX_EXPANDED_TOOLCHAIN=PASS head=${GITHUB_SHA}"
 
       - name: Prepare pinned Linux 6.6.143
+        id: prepare
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -77,7 +86,11 @@ jobs:
           archive="$work/linux-6.6.143.tar.xz"
           src="$work/linux-6.6.143"
           out="$work/out"
-          mkdir -p "$work/evidence"
+          ev="$work/evidence"
+          mkdir -p "$ev"
+          cache_hit="${{ steps.kbuild-cache.outputs.cache-hit }}"
+          printf 'KBUILD_CACHE_HIT=%s\n' "${cache_hit:-false}" | tee "$ev/cache.txt"
+
           curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors \
             https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.6.143.tar.xz \
             -o "$archive"
@@ -85,14 +98,22 @@ jobs:
             dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932 \
             "$archive" | sha256sum -c -
           tar -xJf "$archive" -C "$work"
-          make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- defconfig
-          "$src/scripts/config" --file "$out/.config" \
-            -e BLK_DEV_INITRD -e DEVTMPFS -e DEVTMPFS_MOUNT \
-            -e SERIAL_8250 -e SERIAL_8250_CONSOLE
-          make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- olddefconfig
-          make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- -j4 prepare
-          sha256sum "$out/.config" >"$work/evidence/config.sha256"
-          echo "LINUX_EXPANDED_SOURCE=PASS release=6.6.143"
+
+          if test "$cache_hit" = true; then
+            test -s "$out/.config"
+            test -s "$out/include/config/auto.conf"
+            test -s "$out/include/generated/autoconf.h"
+            echo "LINUX_EXPANDED_CACHE_RESTORE=PASS"
+          else
+            make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- defconfig
+            "$src/scripts/config" --file "$out/.config" \
+              -e BLK_DEV_INITRD -e DEVTMPFS -e DEVTMPFS_MOUNT \
+              -e SERIAL_8250 -e SERIAL_8250_CONSOLE
+            make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- olddefconfig
+            make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- -j4 prepare
+          fi
+          sha256sum "$out/.config" >"$ev/config.sha256"
+          echo "LINUX_EXPANDED_SOURCE=PASS release=6.6.143 cache_hit=${cache_hit:-false}"
 
       - name: Build Linux Image through MiniC until next frontier
         id: frontier
@@ -122,9 +143,14 @@ jobs:
           passes=$(grep -c '^pass ' "$trace" || true)
           delegates=$(grep -c '^delegate ' "$trace" || true)
           blockers=$(grep -c 'MINIC_KBUILD_BLOCKER' "$ev/kbuild.log" || true)
-          printf 'LINUX_EXPANDED_FRONTIER rc=%s minic_attempts=%s passes=%s delegates=%s blockers=%s\n' \
-            "$rc" "$attempts" "$passes" "$delegates" "$blockers" | tee "$ev/summary.txt"
+          orphan_text=$(grep -c 'orphan section.*\.text\.' "$ev/kbuild.log" || true)
+          bfd_asserts=$(grep -c 'elfnn-riscv.c:.*Assertion' "$ev/kbuild.log" || true)
+          printf 'LINUX_EXPANDED_FRONTIER rc=%s minic_attempts=%s passes=%s delegates=%s blockers=%s orphan_text=%s bfd_asserts=%s\n' \
+            "$rc" "$attempts" "$passes" "$delegates" "$blockers" "$orphan_text" "$bfd_asserts" | tee "$ev/summary.txt"
+          cat "$ev/cache.txt" >>"$ev/summary.txt" || true
           grep 'MINIC_KBUILD_BLOCKER' "$ev/kbuild.log" | head -n 8 | tee "$ev/blockers.txt" || true
+          grep -E 'riscv64-linux-gnu-ld|orphan section|elfnn-riscv.c:.*Assertion|Segmentation fault|undefined reference|modpost:' \
+            "$ev/kbuild.log" | tail -n 1200 >"$ev/link-frontier.log" || true
           tail -n 300 "$ev/kbuild.log" >"$ev/kbuild-tail.log" || true
 
           if test "$rc" -eq 0; then
@@ -155,6 +181,13 @@ jobs:
             done
           fi
           exit "$rc"
+
+      - name: Save Linux Kbuild output cache
+        if: always() && steps.prepare.outcome == 'success'
+        uses: actions/cache/save@v4
+        with:
+          path: build/linux-expanded-kbuild-v0/out
+          key: linux-expanded-kbuild-v0-6.6.143-${{ runner.os }}-${{ hashFiles('src/**', 'include/**', 'tools/ci/apply-*.py', 'tests/external/linux/stage2_kbuild_cc.sh') }}
 
       - name: Preserve expanded frontier evidence
         if: always()
