@@ -1,0 +1,43 @@
+name: Linux Memcontrol Assert V0
+
+on:
+  push:
+    branches:
+      - "agent/linux-local-integer-isolate-v1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: linux-memcontrol-assert-v0-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  memcontrol:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Install RV64 Linux prerequisites
+        run: |
+          sudo apt-get -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            build-essential gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
+            qemu-user bc bison flex libssl-dev libelf-dev make curl xz-utils python3
+
+      - name: Build real Linux memcontrol.o and classify asserts
+        shell: bash
+        run: bash tools/ci/run-linux-memcontrol-assert-v0.sh
+
+      - name: Preserve focused evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-memcontrol-assert-v0
+          path: build/linux-memcontrol-assert-v0/evidence/
+          if-no-files-found: ignore
+          retention-days: 5
