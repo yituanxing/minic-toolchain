@@ -34,6 +34,7 @@ jobs:
           python3 tools/ci/apply-inline-specialization-local-facts-v0.py | tee "$work/specialization-local-facts-patch.log"
           python3 tools/ci/apply-inline-specialization-stable-parameter-facts-v0.py | tee "$work/specialization-stable-parameter-facts-patch.log"
           python3 tools/ci/apply-inline-specialization-transitive-integer-v0.py | tee "$work/specialization-transitive-integer-patch.log"
+          python3 tools/ci/apply-inline-specialization-core-reachability-v0.py | tee "$work/specialization-core-reachability-patch.log"
           python3 tools/ci/apply-inline-specialization-label-alias-v0.py | tee "$work/specialization-label-alias-patch.log"
           git diff --check
           make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$build" all
@@ -65,6 +66,7 @@ jobs:
           riscv64-linux-gnu-gcc -E -P -std=gnu11 -x c "$work/probe.c" -o "$work/probe.i"
           MINIC_LOCAL_FACT_TRACE=1 "$build/bin/minic" -S "$work/probe.i" -o "$work/probe.s" 2>"$work/probe.trace"
           grep -F 'MINIC_INLINE_INTEGER_SPECIALIZATION_V0 clones=' "$work/probe.trace"
+          grep -F 'MINIC_INLINE_SPECIALIZATION_CORE_REACHABILITY_V0 kept=' "$work/probe.trace"
           grep -F 'INLINE_SPEC_PARAMETER_FACT' "$work/probe.trace"
           if grep -F '__compiletime_assert_probe' "$work/probe.s"; then
             echo 'specialized dead compile-time error path survived after logical condition' >&2
@@ -103,6 +105,7 @@ jobs:
           riscv64-linux-gnu-gcc -E -P -std=gnu11 -x c "$work/transitive.c" -o "$work/transitive.i"
           MINIC_INLINE_SPEC_TRANSITIVE_TRACE=1 "$build/bin/minic" -S "$work/transitive.i" -o "$work/transitive.s" 2>"$work/transitive.trace"
           grep -F 'MINIC_INLINE_INTEGER_SPECIALIZATION_TRANSITIVE_V0 refined=' "$work/transitive.trace"
+          grep -F 'MINIC_INLINE_SPECIALIZATION_CORE_REACHABILITY_V0 kept=' "$work/transitive.trace"
           grep -F 'INLINE_SPEC_TRANSITIVE_SELECT ' "$work/transitive.trace"
           if grep -F '__compiletime_assert_nested' "$work/transitive.s"; then
             echo 'nested specialized dead compile-time error path survived' >&2
@@ -110,7 +113,7 @@ jobs:
           fi
           riscv64-linux-gnu-gcc -static "$work/transitive.s" -o "$work/transitive"
           qemu-riscv64 "$work/transitive"
-          echo 'MINIC_INLINE_INTEGER_SPECIALIZATION_V0=PASS variants=PASS unknown_join=PASS logical_condition=PASS transitive=PASS label_alias=PASS runtime=PASS'
+          echo 'MINIC_INLINE_INTEGER_SPECIALIZATION_V0=PASS variants=PASS unknown_join=PASS logical_condition=PASS transitive=PASS core_reachability=PASS label_alias=PASS runtime=PASS'
       - name: Preserve evidence
         if: always()
         uses: actions/upload-artifact@v4
