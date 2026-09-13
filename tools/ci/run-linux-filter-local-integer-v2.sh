@@ -16,6 +16,7 @@ python3 tools/ci/apply-inline-specialization-stable-parameter-facts-v0.py | tee 
 python3 tools/ci/apply-inline-specialization-transitive-integer-v0.py | tee "$work/specialization-transitive-integer-patch.log"
 python3 tools/ci/apply-inline-specialization-capacity-v0.py | tee "$work/specialization-capacity-patch.log"
 python3 tools/ci/apply-inline-specialization-symbolic-address-v0.py | tee "$work/specialization-symbolic-address-patch.log"
+python3 tools/ci/apply-inline-specialization-symbolic-closed-integers-v0.py | tee "$work/specialization-symbolic-closed-integers-patch.log"
 python3 tools/ci/apply-inline-specialization-core-reachability-v0.py | tee "$work/specialization-core-reachability-patch.log"
 python3 tools/ci/apply-inline-specialization-core-empty-function-v0.py | tee "$work/specialization-core-empty-function-patch.log"
 python3 tools/ci/apply-inline-specialization-label-alias-v0.py | tee "$work/specialization-label-alias-patch.log"
