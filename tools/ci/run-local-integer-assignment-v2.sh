@@ -11,10 +11,15 @@ git diff --check
 make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$build" all >/dev/null
 
 cat >"$work/probe.c" <<'C'
+typedef unsigned char u8;
 typedef unsigned short u16;
+typedef unsigned int u32;
+typedef unsigned long long u64;
 typedef _Bool bool;
 struct S { u16 x; };
+struct TcpLike { u32 snd_cwnd; };
 extern int should_not_exist(void);
+extern int should_not_exist_field(void);
 
 bool probe_bool(const struct S *p) { return p->x != (typeof(p->x))~0U; }
 int probe_int(const struct S *p) { return p->x != (typeof(p->x))~0U; }
@@ -34,6 +39,27 @@ int constant_local_probe(void) {
     });
     if (!(!(size < 0)))
         return should_not_exist();
+    return size;
+}
+
+/* Mirrors the Linux filter.o BPF_SIZEOF-style pattern: sizeof a member
+ * expression, not a primitive type.  This distinguishes source constant
+ * evaluation from local-fact transport through the statement expression. */
+int field_size_probe(void) {
+    const int size = ({
+        int selected = -22;
+        if (sizeof(((struct TcpLike *)0)->snd_cwnd) == sizeof(u8))
+            selected = 16;
+        else if (sizeof(((struct TcpLike *)0)->snd_cwnd) == sizeof(u16))
+            selected = 8;
+        else if (sizeof(((struct TcpLike *)0)->snd_cwnd) == sizeof(u32))
+            selected = 0;
+        else if (sizeof(((struct TcpLike *)0)->snd_cwnd) == sizeof(u64))
+            selected = 24;
+        selected;
+    });
+    if (!(!(size < 0)))
+        return should_not_exist_field();
     return size;
 }
 
@@ -61,7 +87,7 @@ MINIC_LOCAL_FACT_TRACE=1 CORE_FAST_TRACE=1 "$build/bin/minic" -S "$work/probe.i"
 rc=$?
 set -e
 if [ "$rc" -ne 0 ]; then
-    tail -80 "$work/probe.trace" || true
+    tail -120 "$work/probe.trace" || true
     echo "MINIC_LOCAL_INTEGER_ASSIGNMENT_V2=FAIL compile_rc=$rc"
     exit 1
 fi
@@ -78,6 +104,7 @@ fi
 # locals must retain runtime control/data flow rather than being folded away.
 grep -q '^probe_bool:' "$work/probe.s"
 grep -q '^probe_int:' "$work/probe.s"
+grep -q '^field_size_probe:' "$work/probe.s"
 grep -q '^nonconstant_merge:' "$work/probe.s"
 grep -q '^escaped_local:' "$work/probe.s"
-echo 'MINIC_LOCAL_INTEGER_ASSIGNMENT_V2=PASS dead_reference=NO return_member=PASS guards=PASS'
+echo 'MINIC_LOCAL_INTEGER_ASSIGNMENT_V2=PASS dead_reference=NO field_size=PASS return_member=PASS guards=PASS'
