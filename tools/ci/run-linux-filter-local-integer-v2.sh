@@ -13,19 +13,17 @@ python3 tools/ci/apply-local-integer-logical-conditions-v0.py | tee "$work/logic
 python3 tools/ci/apply-inline-integer-specialization-v0.py | tee "$work/specialization-patch.log"
 python3 tools/ci/apply-inline-specialization-local-facts-v0.py | tee "$work/specialization-local-facts-patch.log"
 python3 tools/ci/apply-inline-specialization-stable-parameter-facts-v0.py | tee "$work/specialization-stable-parameter-facts-patch.log"
+python3 tools/ci/apply-inline-specialization-transitive-integer-v0.py | tee "$work/specialization-transitive-integer-patch.log"
 python3 tools/ci/apply-inline-specialization-label-alias-v0.py | tee "$work/specialization-label-alias-patch.log"
 git diff --check
 make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$toolchain" all >/dev/null
 
-# Keep the existing inline-emission/reachability guard beside the Linux TU.
 MINIC="$toolchain/bin/minic" BUILD_DIR="$work/regression" \
   bash tests/compiler/c0/run-inline-emission-reachability-rv64.sh
 
 archive="$work/linux-6.6.143.tar.xz"
 src="$work/linux-6.6.143"
 out="$work/out-mini"
-# Preserve generated assembly even when GNU as rejects it; this keeps the
-# focused lane diagnostic rather than forcing another blind rerun.
 trap 'test -s "$out/net/core/filter.minic-stage2.s" && cp "$out/net/core/filter.minic-stage2.s" "$ev/filter.failed.s" || true; test -s "$out/net/core/filter.minic-stage2.minic.stderr" && cp "$out/net/core/filter.minic-stage2.minic.stderr" "$ev/filter.minic.stderr" || true' EXIT
 curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors \
   https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.6.143.tar.xz -o "$archive"
@@ -46,6 +44,7 @@ REAL_CC=/usr/bin/riscv64-linux-gnu-gcc \
 MINIC_KEEP_INTERMEDIATES=1 \
 MINIC_KBUILD_TRACE="$ev/minic-kbuild.trace" \
 MINIC_INLINE_SPEC_FACT_TRACE_SOURCE=4779 \
+MINIC_INLINE_SPEC_TRANSITIVE_TRACE=1 \
 CORE_FAST_TRACE=1 \
   make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
     CC="$root/tests/external/linux/stage2_kbuild_cc.sh" \
@@ -65,8 +64,6 @@ all_undef=$(wc -l <"$ev/filter.undefined")
 printf 'LINUX_FILTER_INLINE_SPECIALIZATION_V0_COUNTS assert=%s bad_size=%s deferred=%s undef=%s\n' \
   "$assert_count" "$bad_size_count" "$deferred_count" "$all_undef"
 
-# Specialization must now eliminate the final __kmalloc_index compile-time
-# assertion. Deferred asm immediates are a separate pointer/symbolic fact class.
 if [ "$assert_count" -ne 0 ]; then
   echo "LINUX_FILTER_INLINE_SPECIALIZATION_V0=FAIL assert-remains count=$assert_count" >&2
   exit 1
