@@ -24,9 +24,21 @@ old = '''    if (target->kind == MINIC_EXPRESSION_LOCAL) {
 '''
 new = '''    if (target->kind == MINIC_EXPRESSION_LOCAL) {
         MinicConstValue stored_constant;
+        bool fact_known;
         core_local_constant_invalidate(context, target->value.local_id);
-        if (core_const_eval_integer_with_locals(context, source_id, &stored_constant)) {
+        fact_known = core_const_eval_integer_with_locals(context, source_id, &stored_constant);
+        if (fact_known) {
             core_local_constant_set(context, target->value.local_id, &stored_constant);
+        }
+        if (getenv("MINIC_LOCAL_FACT_TRACE") != NULL) {
+            (void)fprintf(stderr,
+                          "LOCAL_FACT_ASSIGN function=%s target=%zu source=%zu source_kind=%d known=%d bits=%" PRIu64 "\\n",
+                          context->source_function != NULL ? context->source_function->name : "?",
+                          (size_t)target->value.local_id,
+                          (size_t)source_id,
+                          source != NULL ? (int)source->kind : -1,
+                          fact_known ? 1 : 0,
+                          fact_known ? stored_constant.bits : UINT64_C(0));
         }
     }
 '''
@@ -62,8 +74,19 @@ insert = '''        value->type = expression->type;
     }
     if (expression->kind == MINIC_EXPRESSION_STATEMENT &&
         expression->value.statement_expression.result != MINIC_EXPRESSION_INVALID) {
-        if (!core_const_eval_integer_with_locals(
-                context, expression->value.statement_expression.result, &operand_value)) {
+        bool statement_known;
+        statement_known = core_const_eval_integer_with_locals(
+            context, expression->value.statement_expression.result, &operand_value);
+        if (getenv("MINIC_LOCAL_FACT_TRACE") != NULL) {
+            (void)fprintf(stderr,
+                          "LOCAL_FACT_STMT function=%s expression=%zu result=%zu known=%d bits=%" PRIu64 "\\n",
+                          context->source_function != NULL ? context->source_function->name : "?",
+                          (size_t)expression_id,
+                          (size_t)expression->value.statement_expression.result,
+                          statement_known ? 1 : 0,
+                          statement_known ? operand_value.bits : UINT64_C(0));
+        }
+        if (!statement_known) {
             return false;
         }
         return minic_const_value_convert_integer(context->body->program,
@@ -79,6 +102,29 @@ count = text.count(anchor)
 if count != 1:
     raise SystemExit(f"expected one evaluator-local anchor, found {count}")
 text = text.replace(anchor, insert, 1)
+
+# Lightweight diagnostics for the focused probe only.  The environment gate
+# keeps the real Linux lane quiet; this traces exactly where facts are killed.
+clear_anchor = '''static void core_local_constants_clear_known(MinicCoreLowerContext *context) {
+    size_t index;
+
+    if (context == NULL || context->source_function == NULL ||
+'''
+clear_insert = '''static void core_local_constants_clear_known(MinicCoreLowerContext *context) {
+    size_t index;
+
+    if (getenv("MINIC_LOCAL_FACT_TRACE") != NULL && context != NULL &&
+        context->source_function != NULL) {
+        (void)fprintf(stderr,
+                      "LOCAL_FACT_CLEAR function=%s\\n",
+                      context->source_function->name != NULL ? context->source_function->name : "?");
+    }
+    if (context == NULL || context->source_function == NULL ||
+'''
+count = text.count(clear_anchor)
+if count != 1:
+    raise SystemExit(f"expected one fact-clear helper anchor, found {count}")
+text = text.replace(clear_anchor, clear_insert, 1)
 
 p.write_text(text)
 print("MINIC_LOCAL_INTEGER_ASSIGNMENT_V2=APPLIED")
