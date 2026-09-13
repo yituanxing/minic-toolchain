@@ -74,15 +74,46 @@ insert = '''        value->type = expression->type;
     }
     if (expression->kind == MINIC_EXPRESSION_STATEMENT &&
         expression->value.statement_expression.result != MINIC_EXPRESSION_INVALID) {
+        const MinicExpression *statement_result_expression;
+        MinicLocalId statement_result_local;
+        MinicConstValue statement_result_local_value;
+        bool statement_result_direct_local;
+        bool statement_result_local_known;
         bool statement_known;
+
+        statement_result_expression = minic_c0_program_expression(
+            context->body->program, expression->value.statement_expression.result);
+        statement_result_local = MINIC_LOCAL_INVALID;
+        statement_result_direct_local = core_direct_local_read(
+            context,
+            expression->value.statement_expression.result,
+            &statement_result_local);
+        statement_result_local_known =
+            statement_result_direct_local &&
+            core_local_constant_get(
+                context, statement_result_local, &statement_result_local_value);
         statement_known = core_const_eval_integer_with_locals(
             context, expression->value.statement_expression.result, &operand_value);
         if (getenv("MINIC_LOCAL_FACT_TRACE") != NULL) {
             (void)fprintf(stderr,
-                          "LOCAL_FACT_STMT function=%s expression=%zu result=%zu known=%d bits=%" PRIu64 "\\n",
+                          "LOCAL_FACT_STMT function=%s expression=%zu result=%zu result_kind=%d result_vcat=%d direct_local=%d local=%zu local_known=%d local_bits=%" PRIu64 " known=%d bits=%" PRIu64 "\\n",
                           context->source_function != NULL ? context->source_function->name : "?",
                           (size_t)expression_id,
                           (size_t)expression->value.statement_expression.result,
+                          statement_result_expression != NULL
+                              ? (int)statement_result_expression->kind
+                              : -1,
+                          statement_result_expression != NULL
+                              ? (int)statement_result_expression->value_category
+                              : -1,
+                          statement_result_direct_local ? 1 : 0,
+                          statement_result_direct_local
+                              ? (size_t)statement_result_local
+                              : (size_t)SIZE_MAX,
+                          statement_result_local_known ? 1 : 0,
+                          statement_result_local_known
+                              ? statement_result_local_value.bits
+                              : UINT64_C(0),
                           statement_known ? 1 : 0,
                           statement_known ? operand_value.bits : UINT64_C(0));
         }
