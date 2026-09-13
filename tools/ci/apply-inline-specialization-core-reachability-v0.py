@@ -33,6 +33,31 @@ static MinicFunctionId minic_core_named_function_id(
     return MINIC_FUNCTION_INVALID;
 }
 
+static bool minic_enqueue_core_named_function(
+    const MinicC0Program *program,
+    const char *name,
+    size_t name_length,
+    bool *reachable,
+    MinicFunctionId *queue,
+    size_t *queue_count) {
+    MinicFunctionId target;
+
+    if (program == NULL || reachable == NULL || queue == NULL || queue_count == NULL) {
+        return false;
+    }
+    target = minic_core_named_function_id(program, name, name_length);
+    if (target == MINIC_FUNCTION_INVALID || target >= program->function_count ||
+        !program->functions[target].is_defined || reachable[target]) {
+        return true;
+    }
+    if (*queue_count >= program->function_count) {
+        return false;
+    }
+    reachable[target] = true;
+    queue[(*queue_count)++] = target;
+    return true;
+}
+
 static bool minic_prune_inline_specializations_from_core(
     MinicC0Program *program, const MinicCoreFunctionSet *set) {
     bool *reachable = NULL;
@@ -60,9 +85,10 @@ static bool minic_prune_inline_specializations_from_core(
         goto done;
     }
 
-    /* The pre-specialization AST reachability result remains the root policy for
-     * ordinary functions. Specialization clones are deliberately not roots: a
-     * clone survives only when an actually-lowered Core function references it. */
+    /* Preserve the established root policy for ordinary functions. Synthetic
+     * specialization clones are never roots: they survive only through an
+     * actual lowered Core call/function-address instruction. This deliberately
+     * ignores unused entries in Core callee/symbol side tables. */
     for (function_index = 0U; function_index < program->function_count; ++function_index) {
         const MinicFunction *function = &program->functions[function_index];
         if (function->is_integer_specialization || !function->is_defined ||
@@ -76,8 +102,7 @@ static bool minic_prune_inline_specializations_from_core(
     while (queue_cursor < queue_count) {
         MinicFunctionId caller_id = queue[queue_cursor++];
         const MinicCoreFunction *core;
-        size_t callee_index;
-        size_t symbol_index;
+        size_t instruction_index;
 
         if (caller_id >= set->function_count || processed[caller_id]) {
             continue;
@@ -87,33 +112,41 @@ static bool minic_prune_inline_specializations_from_core(
             continue;
         }
         core = &set->functions[caller_id];
-        for (callee_index = 0U; callee_index < core->callee_count; ++callee_index) {
-            const MinicCoreCallee *callee = &core->callees[callee_index];
-            MinicFunctionId target = minic_core_named_function_id(
-                program, callee->name, callee->name_length);
-            if (target == MINIC_FUNCTION_INVALID || target >= program->function_count ||
-                !program->functions[target].is_defined || reachable[target]) {
-                continue;
+        for (instruction_index = 0U; instruction_index < core->instruction_count;
+             ++instruction_index) {
+            const MinicCoreInstruction *instruction = &core->instructions[instruction_index];
+
+            if (instruction->kind == MINIC_CORE_INSTRUCTION_CALL) {
+                MinicCoreCalleeId callee_id = instruction->value.call.callee_id;
+                const MinicCoreCallee *callee;
+                if (callee_id >= core->callee_count) {
+                    goto done;
+                }
+                callee = &core->callees[callee_id];
+                if (!minic_enqueue_core_named_function(program,
+                                                       callee->name,
+                                                       callee->name_length,
+                                                       reachable,
+                                                       queue,
+                                                       &queue_count)) {
+                    goto done;
+                }
+            } else if (instruction->kind == MINIC_CORE_INSTRUCTION_FUNCTION_ADDRESS) {
+                MinicCoreFunctionSymbolId symbol_id = instruction->value.function_symbol_id;
+                const MinicCoreFunctionSymbol *symbol;
+                if (symbol_id >= core->function_symbol_count) {
+                    goto done;
+                }
+                symbol = &core->function_symbols[symbol_id];
+                if (!minic_enqueue_core_named_function(program,
+                                                       symbol->name,
+                                                       symbol->name_length,
+                                                       reachable,
+                                                       queue,
+                                                       &queue_count)) {
+                    goto done;
+                }
             }
-            if (queue_count >= program->function_count) {
-                goto done;
-            }
-            reachable[target] = true;
-            queue[queue_count++] = target;
-        }
-        for (symbol_index = 0U; symbol_index < core->function_symbol_count; ++symbol_index) {
-            const MinicCoreFunctionSymbol *symbol = &core->function_symbols[symbol_index];
-            MinicFunctionId target = minic_core_named_function_id(
-                program, symbol->name, symbol->name_length);
-            if (target == MINIC_FUNCTION_INVALID || target >= program->function_count ||
-                !program->functions[target].is_defined || reachable[target]) {
-                continue;
-            }
-            if (queue_count >= program->function_count) {
-                goto done;
-            }
-            reachable[target] = true;
-            queue[queue_count++] = target;
         }
     }
 
