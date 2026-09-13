@@ -29,6 +29,7 @@ jobs:
           mkdir -p "$work"
           python3 tools/ci/apply-local-integer-assignment-v2.py | tee "$work/local-integer-patch.log"
           python3 tools/ci/apply-inline-integer-specialization-v0.py | tee "$work/specialization-patch.log"
+          python3 tools/ci/apply-inline-specialization-local-facts-v0.py | tee "$work/specialization-local-facts-patch.log"
           git diff --check
           make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$build" all
 
@@ -51,8 +52,9 @@ jobs:
           }
           C
           riscv64-linux-gnu-gcc -E -P -std=gnu11 -x c "$work/probe.c" -o "$work/probe.i"
-          "$build/bin/minic" -S "$work/probe.i" -o "$work/probe.s" 2>"$work/probe.trace"
+          MINIC_LOCAL_FACT_TRACE=1 "$build/bin/minic" -S "$work/probe.i" -o "$work/probe.s" 2>"$work/probe.trace"
           grep -F 'MINIC_INLINE_INTEGER_SPECIALIZATION_V0 clones=' "$work/probe.trace"
+          grep -F 'INLINE_SPEC_PARAMETER_FACT' "$work/probe.trace"
           if grep -F '__compiletime_assert_probe' "$work/probe.s"; then
             echo 'specialized dead compile-time error path survived' >&2
             exit 1
