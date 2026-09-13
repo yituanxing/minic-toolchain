@@ -11,6 +11,7 @@ mkdir -p "$ev"
 python3 tools/ci/apply-local-integer-assignment-v2.py | tee "$work/patch.log"
 python3 tools/ci/apply-inline-integer-specialization-v0.py | tee "$work/specialization-patch.log"
 python3 tools/ci/apply-inline-specialization-local-facts-v0.py | tee "$work/specialization-local-facts-patch.log"
+python3 tools/ci/apply-inline-specialization-stable-parameter-facts-v0.py | tee "$work/specialization-stable-parameter-facts-patch.log"
 python3 tools/ci/apply-inline-specialization-label-alias-v0.py | tee "$work/specialization-label-alias-patch.log"
 git diff --check
 make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$toolchain" all >/dev/null
@@ -60,9 +61,10 @@ all_undef=$(wc -l <"$ev/filter.undefined")
 printf 'LINUX_FILTER_INLINE_SPECIALIZATION_V0_COUNTS assert=%s bad_size=%s deferred=%s undef=%s\n' \
   "$assert_count" "$bad_size_count" "$deferred_count" "$all_undef"
 
-# The local-integer-only focused baseline is assert=1, bad_size=0, deferred=2, undef=164.
-if [ "$assert_count" -gt 1 ]; then
-  echo "LINUX_FILTER_INLINE_SPECIALIZATION_V0=FAIL assert-regressed count=$assert_count" >&2
+# Specialization must now eliminate the final __kmalloc_index compile-time
+# assertion. Deferred asm immediates are a separate pointer/symbolic fact class.
+if [ "$assert_count" -ne 0 ]; then
+  echo "LINUX_FILTER_INLINE_SPECIALIZATION_V0=FAIL assert-remains count=$assert_count" >&2
   exit 1
 fi
 if [ "$bad_size_count" -ne 0 ]; then
