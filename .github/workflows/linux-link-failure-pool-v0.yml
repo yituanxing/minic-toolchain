@@ -42,6 +42,8 @@ jobs:
               | tee "$work/evidence/local-integer-patch.log"
             python3 tools/ci/apply-local-integer-logical-conditions-v0.py \
               | tee "$work/evidence/local-integer-logical-conditions-patch.log"
+            python3 tools/ci/apply-local-null-pointer-facts-v0.py \
+              | tee "$work/evidence/local-null-pointer-facts-patch.log"
             python3 tools/ci/apply-inline-integer-specialization-v0.py \
               | tee "$work/evidence/inline-integer-specialization-patch.log"
             python3 tools/ci/apply-inline-specialization-local-facts-v0.py \
