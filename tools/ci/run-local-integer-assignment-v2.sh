@@ -42,9 +42,9 @@ int constant_local_probe(void) {
     return size;
 }
 
-/* Mirrors the Linux filter.o BPF_SIZEOF-style pattern: sizeof a member
- * expression, not a primitive type.  This distinguishes source constant
- * evaluation from local-fact transport through the statement expression. */
+/* Mirrors Linux BPF_SIZEOF + BUILD_BUG_ON: the fact-bearing statement
+ * expression is followed by an assertion inside the canonical do/while(0)
+ * macro wrapper. */
 int field_size_probe(void) {
     const int size = ({
         int selected = -22;
@@ -58,8 +58,10 @@ int field_size_probe(void) {
             selected = 24;
         selected;
     });
-    if (!(!(size < 0)))
-        return should_not_exist_field();
+    do {
+        if (!(!(size < 0)))
+            return should_not_exist_field();
+    } while (0);
     return size;
 }
 
@@ -107,4 +109,4 @@ grep -q '^probe_int:' "$work/probe.s"
 grep -q '^field_size_probe:' "$work/probe.s"
 grep -q '^nonconstant_merge:' "$work/probe.s"
 grep -q '^escaped_local:' "$work/probe.s"
-echo 'MINIC_LOCAL_INTEGER_ASSIGNMENT_V2=PASS dead_reference=NO field_size=PASS return_member=PASS guards=PASS'
+echo 'MINIC_LOCAL_INTEGER_ASSIGNMENT_V2=PASS dead_reference=NO field_size_do_while=PASS return_member=PASS guards=PASS'
