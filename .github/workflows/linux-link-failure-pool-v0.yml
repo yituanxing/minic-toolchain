@@ -5,6 +5,7 @@ on:
     branches:
       - "agent/linux-link-correctness-v0"
       - "agent/linux-local-integer-isolate-v1"
+      - "agent/inline-specialization-reachability-v0"
   workflow_dispatch:
 
 permissions:
@@ -40,6 +41,15 @@ jobs:
           if [ "${GITHUB_REF_NAME}" = "agent/linux-local-integer-isolate-v1" ]; then
             python3 tools/ci/apply-local-integer-assignment-v2.py \
               | tee "$work/evidence/local-integer-patch.log"
+            git diff --check
+          elif [ "${GITHUB_REF_NAME}" = "agent/inline-specialization-reachability-v0" ]; then
+            {
+              python3 tools/ci/apply-local-integer-assignment-v2.py
+              python3 tools/ci/apply-inline-integer-specialization-v0.py
+              python3 tools/ci/apply-inline-specialization-capacity-v0.py
+              python3 tools/ci/apply-inline-specialization-reachability-v0.py
+              python3 tools/ci/apply-inline-specialization-local-facts-v0.py
+            } | tee "$work/evidence/specialization-patch.log"
             git diff --check
           fi
           make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$build" all
