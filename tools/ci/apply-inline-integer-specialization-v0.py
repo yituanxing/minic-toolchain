@@ -11,9 +11,6 @@ def replace_once(path: str, old: str, new: str) -> None:
     p.write_text(text.replace(old, new, 1))
 
 
-# Carry temporary specialization metadata on synthetic MinicFunction clones.
-# This is a CI/product-prototype seam: ordinary parsed functions leave all
-# `known` entries false and specialization_source invalid.
 replace_once(
     "src/frontend/ast.h",
     "    MinicBlockId body_block;\n"
@@ -24,21 +21,10 @@ replace_once(
     "    MinicFunctionId specialization_source;\n"
     "    uint64_t specialization_integer_bits[MINIC_MAX_FUNCTION_PARAMETERS];\n"
     "    bool specialization_integer_known[MINIC_MAX_FUNCTION_PARAMETERS];\n"
+    "    bool is_integer_specialization;\n"
     "    bool is_defined;\n",
 )
-replace_once(
-    "src/frontend/ast.c",
-    "    (void)memset(&function, 0, sizeof(function));\n"
-    "    function.name = minic_copy_name(name, name_length);\n",
-    "    (void)memset(&function, 0, sizeof(function));\n"
-    "    function.specialization_source = MINIC_FUNCTION_INVALID;\n"
-    "    function.name = minic_copy_name(name, name_length);\n",
-)
 
-# At Core ingress a synthetic specialization still has the original ABI
-# signature, but a proven integer parameter is materialized as a constant and
-# stored into the normal parameter-local object.  Everything after ingress can
-# therefore reuse the existing local-fact/CFG machinery unchanged.
 replace_once(
     "src/core/core_lower.c",
     "            (void)memset(&instruction, 0, sizeof(instruction));\n"
@@ -52,7 +38,7 @@ replace_once(
     "                return MINIC_CORE_LOWER_ERROR;\n"
     "            }\n",
     "            (void)memset(&instruction, 0, sizeof(instruction));\n"
-    "            if (context->source_function->specialization_source != MINIC_FUNCTION_INVALID &&\n"
+    "            if (context->source_function->is_integer_specialization &&\n"
     "                context->source_function->specialization_integer_known[parameter_index] &&\n"
     "                minic_type_is_integer(parameter_value_type)) {\n"
     "                uint64_t specialized_bits =\n"
@@ -74,11 +60,6 @@ replace_once(
     "            }\n",
 )
 
-# Compiler-side bounded direct-call multi-versioning.  Reuse the original body
-# and locals only after AST/body verification has completed.  Calls are then
-# redirected to a synthetic internal function carrying the proven integer
-# argument tuple.  The later inline-emission reachability recomputation sees the
-# rewritten function_ids and suppresses an unneeded generic static-inline body.
 replace_once(
     "src/compiler/compiler.c",
     '#include "frontend/cast_normalization.h"\n#include "frontend/function_body.h"\n',
@@ -95,17 +76,15 @@ static bool minic_inline_integer_specialization_matches(
     const bool *known,
     const uint64_t *bits,
     size_t parameter_count) {
-    size_t parameter_index;
-
-    if (candidate == NULL || known == NULL || bits == NULL ||
+    size_t i;
+    if (candidate == NULL || !candidate->is_integer_specialization ||
         candidate->specialization_source != source_id ||
         candidate->parameter_count != parameter_count) {
         return false;
     }
-    for (parameter_index = 0U; parameter_index < parameter_count; ++parameter_index) {
-        if (candidate->specialization_integer_known[parameter_index] != known[parameter_index] ||
-            (known[parameter_index] &&
-             candidate->specialization_integer_bits[parameter_index] != bits[parameter_index])) {
+    for (i = 0U; i < parameter_count; ++i) {
+        if (candidate->specialization_integer_known[i] != known[i] ||
+            (known[i] && candidate->specialization_integer_bits[i] != bits[i])) {
             return false;
         }
     }
@@ -123,33 +102,24 @@ static bool minic_add_inline_integer_specialization(
     MinicFunction *specialized;
     char name[96];
     int name_length;
-    size_t parameter_index;
+    size_t i;
 
-    if (program == NULL || known == NULL || bits == NULL || specialized_id == NULL ||
-        source_id >= program->function_count) {
+    if (program == NULL || source_id >= program->function_count ||
+        specialized_id == NULL) {
         return false;
     }
     source = program->functions[source_id];
-    if (!source.is_defined || !source.is_internal || !source.is_inline || source.is_variadic ||
-        source.alias_target != MINIC_FUNCTION_INVALID ||
-        source.parameter_count > MINIC_MAX_FUNCTION_PARAMETERS) {
+    if (!source.is_defined || !source.is_internal || !source.is_inline ||
+        source.is_variadic || source.alias_target != MINIC_FUNCTION_INVALID) {
         return false;
     }
-    name_length = snprintf(name,
-                           sizeof(name),
-                           "__minic_inline_spec_%zu_%zu",
-                           (size_t)source_id,
-                           ordinal);
+    name_length = snprintf(name, sizeof(name), "__minic_inline_spec_%zu_%zu",
+                           (size_t)source_id, ordinal);
     if (name_length <= 0 || (size_t)name_length >= sizeof(name) ||
-        !minic_c0_program_add_function(program,
-                                       name,
-                                       (size_t)name_length,
-                                       source.local_begin,
-                                       source.local_count,
-                                       source.body_block,
-                                       specialized_id) ||
-        !minic_c0_program_set_function_signature(program,
-                                                 *specialized_id,
+        !minic_c0_program_add_function(program, name, (size_t)name_length,
+                                       source.local_begin, source.local_count,
+                                       source.body_block, specialized_id) ||
+        !minic_c0_program_set_function_signature(program, *specialized_id,
                                                  source.return_type,
                                                  source.parameter_types,
                                                  source.parameter_count) ||
@@ -158,8 +128,7 @@ static bool minic_add_inline_integer_specialization(
         (source.is_noreturn &&
          !minic_c0_program_set_function_noreturn(program, *specialized_id, true)) ||
         (source.section_name != NULL &&
-         !minic_c0_program_set_function_section(program,
-                                                *specialized_id,
+         !minic_c0_program_set_function_section(program, *specialized_id,
                                                 source.section_name,
                                                 source.section_name_length))) {
         return false;
@@ -167,9 +136,10 @@ static bool minic_add_inline_integer_specialization(
     specialized = &program->functions[*specialized_id];
     specialized->visibility = source.visibility;
     specialized->specialization_source = source_id;
-    for (parameter_index = 0U; parameter_index < source.parameter_count; ++parameter_index) {
-        specialized->specialization_integer_known[parameter_index] = known[parameter_index];
-        specialized->specialization_integer_bits[parameter_index] = bits[parameter_index];
+    specialized->is_integer_specialization = true;
+    for (i = 0U; i < source.parameter_count; ++i) {
+        specialized->specialization_integer_known[i] = known[i];
+        specialized->specialization_integer_bits[i] = bits[i];
     }
     return true;
 }
@@ -178,26 +148,24 @@ static bool minic_specialize_inline_integer_calls(MinicC0Program *program,
                                                   const MinicTargetInfo *target) {
     size_t expression_index;
     size_t original_function_count;
-    size_t specialization_count;
+    size_t specialization_count = 0U;
 
     if (program == NULL || target == NULL) {
         return false;
     }
     original_function_count = program->function_count;
-    specialization_count = 0U;
     for (expression_index = 0U; expression_index < program->expression_count;
          ++expression_index) {
-        MinicExpression *expression;
+        MinicExpression *expression = &program->expressions[expression_index];
         MinicFunctionId source_id;
-        MinicFunctionId specialized_id;
-        const MinicFunction *source;
+        MinicFunctionId specialized_id = MINIC_FUNCTION_INVALID;
+        MinicFunction source;
         bool known[MINIC_MAX_FUNCTION_PARAMETERS];
         uint64_t bits[MINIC_MAX_FUNCTION_PARAMETERS];
-        size_t parameter_index;
+        size_t i;
         size_t candidate_index;
-        bool has_integer_constant;
+        bool has_integer_constant = false;
 
-        expression = &program->expressions[expression_index];
         if (expression->kind != MINIC_EXPRESSION_CALL ||
             expression->value.call.function_id == MINIC_FUNCTION_INVALID) {
             continue;
@@ -206,75 +174,58 @@ static bool minic_specialize_inline_integer_calls(MinicC0Program *program,
         if (source_id >= original_function_count) {
             continue;
         }
-        source = &program->functions[source_id];
-        if (!source->is_defined || !source->is_internal || !source->is_inline ||
-            source->is_variadic || source->alias_target != MINIC_FUNCTION_INVALID ||
-            source->parameter_count == 0U ||
-            source->parameter_count != expression->value.call.argument_count ||
-            source->parameter_count > MINIC_MAX_FUNCTION_PARAMETERS) {
+        source = program->functions[source_id];
+        if (!source.is_defined || !source.is_internal || !source.is_inline ||
+            source.is_variadic || source.alias_target != MINIC_FUNCTION_INVALID ||
+            source.parameter_count == 0U ||
+            source.parameter_count != expression->value.call.argument_count) {
             continue;
         }
         (void)memset(known, 0, sizeof(known));
         (void)memset(bits, 0, sizeof(bits));
-        has_integer_constant = false;
-        for (parameter_index = 0U; parameter_index < source->parameter_count;
-             ++parameter_index) {
+        for (i = 0U; i < source.parameter_count; ++i) {
             MinicConstValue argument_value;
             MinicConstValue converted_value;
-
-            if (!minic_type_is_integer(source->parameter_types[parameter_index]) ||
-                !minic_const_eval_integer(program,
-                                          target,
-                                          expression->value.call.arguments[parameter_index],
+            if (!minic_type_is_integer(source.parameter_types[i]) ||
+                !minic_const_eval_integer(program, target,
+                                          expression->value.call.arguments[i],
                                           &argument_value) ||
-                !minic_const_value_convert_integer(program,
-                                                   target,
-                                                   &argument_value,
-                                                   source->parameter_types[parameter_index],
+                !minic_const_value_convert_integer(program, target, &argument_value,
+                                                   source.parameter_types[i],
                                                    &converted_value)) {
                 continue;
             }
-            known[parameter_index] = true;
-            bits[parameter_index] = converted_value.bits;
+            known[i] = true;
+            bits[i] = converted_value.bits;
             has_integer_constant = true;
         }
         if (!has_integer_constant) {
             continue;
         }
-
-        specialized_id = MINIC_FUNCTION_INVALID;
         for (candidate_index = original_function_count;
-             candidate_index < program->function_count;
-             ++candidate_index) {
-            if (minic_inline_integer_specialization_matches(&program->functions[candidate_index],
-                                                            source_id,
-                                                            known,
-                                                            bits,
-                                                            source->parameter_count)) {
+             candidate_index < program->function_count; ++candidate_index) {
+            if (minic_inline_integer_specialization_matches(
+                    &program->functions[candidate_index], source_id, known, bits,
+                    source.parameter_count)) {
                 specialized_id = candidate_index;
                 break;
             }
         }
         if (specialized_id == MINIC_FUNCTION_INVALID) {
             if (specialization_count >= MINIC_INLINE_INTEGER_SPECIALIZATION_LIMIT ||
-                !minic_add_inline_integer_specialization(program,
-                                                         source_id,
-                                                         known,
-                                                         bits,
+                !minic_add_inline_integer_specialization(program, source_id, known, bits,
                                                          specialization_count,
                                                          &specialized_id)) {
                 return false;
             }
             specialization_count += 1U;
         }
-        expression = &program->expressions[expression_index];
-        expression->value.call.function_id = specialized_id;
+        program->expressions[expression_index].value.call.function_id = specialized_id;
     }
     if (specialization_count != 0U) {
         (void)fprintf(stderr,
                       "MINIC_INLINE_INTEGER_SPECIALIZATION_V0 clones=%zu functions=%zu\n",
-                      specialization_count,
-                      program->function_count);
+                      specialization_count, program->function_count);
     }
     return true;
 }
@@ -290,10 +241,7 @@ replace_once(
     "src/compiler/compiler.c",
     "    if (success && !minic_c0_program_recompute_inline_emission_references(&program)) {\n",
     "    if (success && !minic_specialize_inline_integer_calls(&program, target_info)) {\n"
-    "        minic_set_diagnostic(diagnostic,\n"
-    "                             input_path,\n"
-    "                             1U,\n"
-    "                             1U,\n"
+    "        minic_set_diagnostic(diagnostic, input_path, 1U, 1U,\n"
     "                             \"cannot specialize inline integer call sites\");\n"
     "        success = false;\n"
     "    }\n"
