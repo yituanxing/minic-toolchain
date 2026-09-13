@@ -1,4 +1,4 @@
-name: Linux Core Frontier64 Current
+name: Linux Core Historical13 Current
 
 on:
   push:
@@ -9,16 +9,16 @@ permissions:
   contents: read
 
 jobs:
-  frontier64:
+  historical13:
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 30
     env:
       DEBIAN_FRONTEND: noninteractive
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.sha }}
-          fetch-depth: 0
+          fetch-depth: 1
 
       - name: Install RV64 Linux prerequisites
         shell: bash
@@ -27,13 +27,13 @@ jobs:
           sudo apt-get -o Acquire::Retries=3 update
           sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
             build-essential gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
-            libc6-dev-riscv64-cross bc bison flex libssl-dev libelf-dev make git python3
+            libc6-dev-riscv64-cross bc bison flex libssl-dev libelf-dev make curl xz-utils python3
 
       - name: Apply current MiniC semantic stack and build
         shell: bash
         run: |
           set -Eeuo pipefail
-          work="$GITHUB_WORKSPACE/build/linux-frontier64-current"
+          work="$GITHUB_WORKSPACE/build/linux-historical13-current"
           mkdir -p "$work/evidence"
           patches=(
             apply-local-integer-assignment-v2.py
@@ -67,43 +67,45 @@ jobs:
           make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$work/toolchain" all
           test -x "$work/toolchain/bin/minic"
 
-      - name: Fetch pinned Linux and materialize 64 fresh TUs
+      - name: Materialize historical next500 blocker TUs
         shell: bash
         run: |
           set -Eeuo pipefail
-          work="$GITHUB_WORKSPACE/build/linux-frontier64-current"
-          rm -rf "$work/linux-source" "$work/corpus-builder" "$work/corpus"
-          git init -q "$work/linux-source"
-          git -C "$work/linux-source" remote add origin https://github.com/gregkh/linux.git
-          git -C "$work/linux-source" fetch --depth=1 --no-tags origin d1cfde2d5d15be14123bdd1689162bd27f995a90
-          git -C "$work/linux-source" checkout -q --detach FETCH_HEAD
-          test "$(git -C "$work/linux-source" rev-parse HEAD)" = d1cfde2d5d15be14123bdd1689162bd27f995a90
+          work="$GITHUB_WORKSPACE/build/linux-historical13-current"
+          archive="$work/linux-6.6.143.tar.xz"
+          src="$work/linux-6.6.143"
+          rm -rf "$src" "$work/corpus-builder" "$work/corpus"
+          curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors \
+            https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.6.143.tar.xz -o "$archive"
+          printf '%s  %s\n' \
+            dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932 \
+            "$archive" | sha256sum -c -
+          tar -xJf "$archive" -C "$work"
 
           LINUX_BATCH_MATERIALIZE_ONLY=1 \
           BUILD_DIR="$work/corpus-builder" \
-          LINUX_SOURCE_TREE="$work/linux-source" \
+          LINUX_SOURCE_TREE="$src" \
           CROSS_COMPILE=riscv64-linux-gnu- \
-          LINUX_BATCH_OFFSET=1000 \
-          LINUX_BATCH_LIMIT=64 \
+          LINUX_BATCH_SELECTION='1082,1115,1118,1137,1147,1149,1193,1208,1219,1402,1430,1438,1439' \
           LINUX_BATCH_JOBS=4 \
             sh tests/external/linux/batch_probe.sh
 
           mkdir -p "$work/corpus/kbuild"
           cp "$work/corpus-builder/selected-tus.txt" "$work/corpus/selected-tus.txt"
-          test "$(grep -cve '^[[:space:]]*$' "$work/corpus/selected-tus.txt")" -eq 64
-          while IFS=$'\t' read -r index source rel_i rest; do
+          test "$(grep -cve '^[[:space:]]*$' "$work/corpus/selected-tus.txt")" -eq 13
+          while IFS=$'\t' read -r index object rel_i source; do
             test -n "$rel_i" || continue
             mkdir -p "$work/corpus/kbuild/$(dirname "$rel_i")"
             cp "$work/corpus-builder/kbuild/$rel_i" "$work/corpus/kbuild/$rel_i"
           done < "$work/corpus/selected-tus.txt"
           cp "$work/corpus-builder/tu-manifest.txt" "$work/corpus/tu-manifest.txt" 2>/dev/null || true
-          echo 'LINUX_FRONTIER64_CORPUS=PASS offset=1000 selected=64'
+          echo 'LINUX_HISTORICAL13_CORPUS=PASS selected=13 indices=1082,1115,1118,1137,1147,1149,1193,1208,1219,1402,1430,1438,1439'
 
-      - name: Replay patched MiniC over frontier64
+      - name: Replay patched MiniC over historical13
         shell: bash
         run: |
           set -Eeuo pipefail
-          work="$GITHUB_WORKSPACE/build/linux-frontier64-current"
+          work="$GITHUB_WORKSPACE/build/linux-historical13-current"
           compiler="$work/toolchain/bin/minic"
           replay="$work/replay"
           set +e
@@ -113,51 +115,51 @@ jobs:
             --work "$replay" \
             --jobs 4 \
             --offset 0 \
-            --limit 64 \
+            --limit 13 \
             --sample-count 0
           replay_status=$?
           set -e
-          echo "LINUX_FRONTIER64_REPLAY_STATUS=$replay_status"
+          echo "LINUX_HISTORICAL13_REPLAY_STATUS=$replay_status"
 
           python3 tools/ci/classify-core-strict-frontier.py \
             "$replay/batch-results.json" \
             --stderr-root "$replay/minic-stderr" \
             --ast-header "$GITHUB_WORKSPACE/src/frontend/ast.h" \
-            --examples 32 \
+            --examples 13 \
             --json-out "$replay/frontier-summary.json" \
             --reason-text-out "$replay/reason-summary.txt"
 
           python3 tools/ci/summarize-core-frontier-progress.py \
             "$replay/batch-results.json" \
-            --expect-selected 64 \
+            --expect-selected 13 \
             --json-out "$replay/progress-summary.json" \
             --text-out "$replay/progress-summary.txt"
 
-          echo 'LINUX_FRONTIER64_FAILURE_CONTEXTS'
+          echo 'LINUX_HISTORICAL13_FAILURE_CONTEXTS'
           cat "$replay/failure-contexts.txt" || true
           cat "$replay/reason-summary.txt" || true
           python3 - <<'PY'
           import json
           from pathlib import Path
-          p = Path('build/linux-frontier64-current/replay/frontier-summary.json')
+          p = Path('build/linux-historical13-current/replay/frontier-summary.json')
           s = json.loads(p.read_text())
-          print(f"LINUX_FRONTIER64_EXACT selected={s['selected']} pass={s['pass']} unsupported={s['unsupported']} error={s['error']} preprocess_missing={s['preprocess_missing']}")
+          print(f"LINUX_HISTORICAL13_EXACT selected={s['selected']} pass={s['pass']} unsupported={s['unsupported']} error={s['error']} preprocess_missing={s['preprocess_missing']}")
           PY
 
-      - name: Preserve frontier64 evidence
+      - name: Preserve historical13 evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: linux-frontier64-current-${{ github.sha }}
+          name: linux-historical13-current-${{ github.sha }}
           path: |
-            build/linux-frontier64-current/evidence/**
-            build/linux-frontier64-current/corpus/selected-tus.txt
-            build/linux-frontier64-current/replay/batch-results.json
-            build/linux-frontier64-current/replay/frontier-summary.json
-            build/linux-frontier64-current/replay/reason-summary.txt
-            build/linux-frontier64-current/replay/progress-summary.json
-            build/linux-frontier64-current/replay/progress-summary.txt
-            build/linux-frontier64-current/replay/failure-contexts.txt
-            build/linux-frontier64-current/replay/minic-stderr/**
+            build/linux-historical13-current/evidence/**
+            build/linux-historical13-current/corpus/selected-tus.txt
+            build/linux-historical13-current/replay/batch-results.json
+            build/linux-historical13-current/replay/frontier-summary.json
+            build/linux-historical13-current/replay/reason-summary.txt
+            build/linux-historical13-current/replay/progress-summary.json
+            build/linux-historical13-current/replay/progress-summary.txt
+            build/linux-historical13-current/replay/failure-contexts.txt
+            build/linux-historical13-current/replay/minic-stderr/**
           if-no-files-found: warn
           retention-days: 7
