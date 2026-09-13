@@ -44,6 +44,7 @@ MINIC="$toolchain/bin/minic" \
 REAL_CC=/usr/bin/riscv64-linux-gnu-gcc \
 MINIC_KEEP_INTERMEDIATES=1 \
 MINIC_KBUILD_TRACE="$ev/minic-kbuild.trace" \
+MINIC_INLINE_SPEC_FACT_TRACE_SOURCE=4779 \
 CORE_FAST_TRACE=1 \
   make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
     CC="$root/tests/external/linux/stage2_kbuild_cc.sh" \
