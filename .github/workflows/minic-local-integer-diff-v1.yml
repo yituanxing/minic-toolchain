@@ -1,0 +1,18 @@
+name: MiniC Local Integer Diff V1
+
+on:
+  push:
+    branches:
+      - agent/linux-local-integer-isolate-v1
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  dump:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Dump patch diff
+        run: bash tools/ci/dump-local-integer-main-diff-v1.sh
