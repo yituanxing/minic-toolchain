@@ -31,13 +31,19 @@ jobs:
           python3 tools/ci/apply-local-integer-assignment-v2.py | tee "$work/local-integer-patch.log"
           python3 tools/ci/apply-inline-integer-specialization-v0.py | tee "$work/specialization-patch.log"
           python3 tools/ci/apply-inline-specialization-local-facts-v0.py | tee "$work/specialization-local-facts-patch.log"
+          python3 tools/ci/apply-inline-specialization-stable-parameter-facts-v0.py | tee "$work/specialization-stable-parameter-facts-patch.log"
           python3 tools/ci/apply-inline-specialization-label-alias-v0.py | tee "$work/specialization-label-alias-patch.log"
           git diff --check
           make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$build" all
 
           cat >"$work/probe.c" <<'C'
           static inline __attribute__((always_inline))
-          int helper(int value, int compile_time) {
+          int helper(int dynamic, int value, int compile_time) {
+              /* Reproduce Linux helpers such as __kmalloc_index(): an unknown
+                 parameter drives earlier CFG before a different specialized
+                 parameter controls compile-time reachability. */
+              if (dynamic == 12345)
+                  return 6;
               if (compile_time) {
                   extern void __compiletime_assert_probe(void)
                       __attribute__((error("specialized dead path survived")));
@@ -50,9 +56,10 @@ jobs:
               return value;
           }
 
-          int main(void) {
-              int a = helper(3, 1);
-              int b = helper(99, 0);
+          int main(int argc, char **argv) {
+              (void)argv;
+              int a = helper(argc, 3, 1);
+              int b = helper(argc, 99, 0);
               return (a == 3 && b == 7) ? 0 : 1;
           }
           C
@@ -61,7 +68,7 @@ jobs:
           grep -F 'MINIC_INLINE_INTEGER_SPECIALIZATION_V0 clones=' "$work/probe.trace"
           grep -F 'INLINE_SPEC_PARAMETER_FACT' "$work/probe.trace"
           if grep -F '__compiletime_assert_probe' "$work/probe.s"; then
-            echo 'specialized dead compile-time error path survived' >&2
+            echo 'specialized dead compile-time error path survived after unknown CFG join' >&2
             exit 1
           fi
           grep -F '__minic_inline_spec_' "$work/probe.s"
@@ -70,7 +77,7 @@ jobs:
           test "$(grep -Ec '^\\.Luser_[0-9]+:$' "$work/probe.s" || true)" -le 1
           riscv64-linux-gnu-gcc -static "$work/probe.s" -o "$work/probe"
           qemu-riscv64 "$work/probe"
-          echo 'MINIC_INLINE_INTEGER_SPECIALIZATION_V0=PASS variants=2 label_alias=PASS runtime=PASS'
+          echo 'MINIC_INLINE_INTEGER_SPECIALIZATION_V0=PASS variants=2 unknown_join=PASS label_alias=PASS runtime=PASS'
       - name: Preserve evidence
         if: always()
         uses: actions/upload-artifact@v4
