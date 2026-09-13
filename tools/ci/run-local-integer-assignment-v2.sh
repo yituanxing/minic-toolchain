@@ -57,7 +57,7 @@ int escaped_local(void) {
 C
 riscv64-linux-gnu-gcc -E -P -std=gnu11 -x c "$work/probe.c" -o "$work/probe.i"
 set +e
-CORE_FAST_TRACE=1 "$build/bin/minic" -S "$work/probe.i" -o "$work/probe.s" 2>"$work/probe.trace"
+MINIC_LOCAL_FACT_TRACE=1 CORE_FAST_TRACE=1 "$build/bin/minic" -S "$work/probe.i" -o "$work/probe.s" 2>"$work/probe.trace"
 rc=$?
 set -e
 if [ "$rc" -ne 0 ]; then
@@ -69,6 +69,8 @@ riscv64-linux-gnu-gcc -x assembler -c "$work/probe.s" -o "$work/probe.o"
 riscv64-linux-gnu-nm -u "$work/probe.o" >"$work/probe.undefined"
 if grep -q 'should_not_exist' "$work/probe.undefined"; then
     cat "$work/probe.undefined"
+    echo '--- local fact trace ---'
+    cat "$work/probe.trace" || true
     echo 'MINIC_LOCAL_INTEGER_ASSIGNMENT_V2=FAIL dead_reference'
     exit 1
 fi
