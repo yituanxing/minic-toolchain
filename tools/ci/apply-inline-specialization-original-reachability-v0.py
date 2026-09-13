@@ -1,0 +1,126 @@
+#!/usr/bin/env python3
+from pathlib import Path
+
+p = Path("src/compiler/compiler.c")
+text = p.read_text()
+
+anchor = '''static bool minic_prune_inline_specializations_from_core(\n'''
+helper = r'''
+static bool minic_inline_source_has_specialization(
+    const MinicC0Program *program, MinicFunctionId source_id) {
+    size_t function_index;
+
+    if (program == NULL || source_id >= program->function_count) {
+        return false;
+    }
+    for (function_index = 0U; function_index < program->function_count; ++function_index) {
+        const MinicFunction *candidate = &program->functions[function_index];
+        if (candidate->is_integer_specialization &&
+            candidate->specialization_source == source_id) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool minic_inline_source_has_noncore_root(
+    const MinicC0Program *program, MinicFunctionId source_id) {
+    size_t function_index;
+    size_t object_index;
+
+    if (program == NULL || source_id >= program->function_count) {
+        return true;
+    }
+    if (program->entry_function == source_id || program->functions[source_id].force_emit) {
+        return true;
+    }
+    for (function_index = 0U; function_index < program->function_count; ++function_index) {
+        if (program->functions[function_index].alias_target == source_id) {
+            return true;
+        }
+    }
+    for (object_index = 0U; object_index < program->global_object_count; ++object_index) {
+        const MinicGlobalObject *object = &program->global_objects[object_index];
+        size_t relocation_index;
+        for (relocation_index = 0U; relocation_index < object->relocation_count;
+             ++relocation_index) {
+            const MinicGlobalRelocation *relocation = &object->relocations[relocation_index];
+            if (relocation->target_kind == MINIC_GLOBAL_RELOCATION_FUNCTION &&
+                (MinicFunctionId)relocation->target_id == source_id) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+static bool minic_inline_source_is_core_reachable_only(
+    const MinicC0Program *program, MinicFunctionId source_id) {
+    const MinicFunction *source;
+
+    if (program == NULL || source_id >= program->function_count) {
+        return false;
+    }
+    source = &program->functions[source_id];
+    return source->is_defined && source->is_internal && source->is_inline &&
+           minic_inline_source_has_specialization(program, source_id) &&
+           !minic_inline_source_has_noncore_root(program, source_id);
+}
+
+'''
+if text.count(anchor) != 1:
+    raise SystemExit("expected one Core specialization-prune anchor")
+text = text.replace(anchor, helper + anchor, 1)
+
+old_root = '''        if (function->is_integer_specialization || !function->is_defined ||
+            (function->is_internal && !function->is_referenced)) {
+            continue;
+        }
+        reachable[function_index] = true;
+        queue[queue_count++] = function_index;
+'''
+new_root = '''        if (function->is_integer_specialization || !function->is_defined ||
+            (function->is_internal && !function->is_referenced)) {
+            continue;
+        }
+        /* Once an internal inline source has specialization clones, its old
+         * parser-level is_referenced bit is no longer a reliable emission root:
+         * rewritten call sites may have removed every executable edge to the
+         * source.  Non-Core roots (entry/force-emit/alias/global relocation)
+         * remain conservative roots; otherwise let the lowered Core graph pull
+         * the source back in only when a reachable call/address still needs it. */
+        if (minic_inline_source_is_core_reachable_only(
+                program, (MinicFunctionId)function_index)) {
+            continue;
+        }
+        reachable[function_index] = true;
+        queue[queue_count++] = function_index;
+'''
+if text.count(old_root) != 1:
+    raise SystemExit("expected one Core root loop")
+text = text.replace(old_root, new_root, 1)
+
+old_final = '''    for (function_index = 0U; function_index < program->function_count; ++function_index) {
+        MinicFunction *function = &program->functions[function_index];
+        if (!function->is_integer_specialization) {
+            continue;
+        }
+        function->is_referenced = reachable[function_index];
+'''
+new_final = '''    for (function_index = 0U; function_index < program->function_count; ++function_index) {
+        MinicFunction *function = &program->functions[function_index];
+        if (!function->is_integer_specialization) {
+            if (minic_inline_source_is_core_reachable_only(
+                    program, (MinicFunctionId)function_index)) {
+                function->is_referenced = reachable[function_index];
+            }
+            continue;
+        }
+        function->is_referenced = reachable[function_index];
+'''
+if text.count(old_final) != 1:
+    raise SystemExit("expected one Core final reachability loop")
+text = text.replace(old_final, new_final, 1)
+
+p.write_text(text)
+print("MINIC_INLINE_SPECIALIZATION_ORIGINAL_REACHABILITY_V0=APPLIED")
