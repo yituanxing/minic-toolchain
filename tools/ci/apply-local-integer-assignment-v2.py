@@ -35,6 +35,15 @@ if count != 1:
     raise SystemExit(f"expected one assignment fact block, found {count}")
 text = text.replace(old, new, 1)
 
+# V1 removed the broad lower_expression() fold.  After assignment facts switch
+# to source-AST evaluation this old Core-literal helper has no users; remove it
+# rather than weakening -Werror or keeping dead product code.
+helper_start = text.find("static bool core_value_integer_constant(")
+helper_end = text.find("static bool core_direct_local_read(", helper_start)
+if helper_start < 0 or helper_end < 0 or helper_end <= helper_start:
+    raise SystemExit("expected core_value_integer_constant helper before direct-local helper")
+text = text[:helper_start] + text[helper_end:]
+
 # GNU statement expressions commonly return a local whose value became known
 # while lowering the selected compile-time branch.  Insert this only inside the
 # local-aware evaluator, immediately after its logical-not case.  The longer
