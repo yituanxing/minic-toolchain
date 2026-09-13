@@ -14,7 +14,10 @@ python3 tools/ci/apply-inline-integer-specialization-v0.py | tee "$work/speciali
 python3 tools/ci/apply-inline-specialization-local-facts-v0.py | tee "$work/specialization-local-facts-patch.log"
 python3 tools/ci/apply-inline-specialization-stable-parameter-facts-v0.py | tee "$work/specialization-stable-parameter-facts-patch.log"
 python3 tools/ci/apply-inline-specialization-transitive-integer-v0.py | tee "$work/specialization-transitive-integer-patch.log"
+python3 tools/ci/apply-inline-specialization-capacity-v0.py | tee "$work/specialization-capacity-patch.log"
+python3 tools/ci/apply-inline-specialization-symbolic-address-v0.py | tee "$work/specialization-symbolic-address-patch.log"
 python3 tools/ci/apply-inline-specialization-core-reachability-v0.py | tee "$work/specialization-core-reachability-patch.log"
+python3 tools/ci/apply-inline-specialization-core-empty-function-v0.py | tee "$work/specialization-core-empty-function-patch.log"
 python3 tools/ci/apply-inline-specialization-label-alias-v0.py | tee "$work/specialization-label-alias-patch.log"
 git diff --check
 make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$toolchain" all >/dev/null
@@ -46,6 +49,7 @@ MINIC_KEEP_INTERMEDIATES=1 \
 MINIC_KBUILD_TRACE="$ev/minic-kbuild.trace" \
 MINIC_INLINE_SPEC_FACT_TRACE_SOURCE=4779 \
 MINIC_INLINE_SPEC_TRANSITIVE_TRACE=1 \
+MINIC_INLINE_SPEC_SYMBOLIC_TRACE=1 \
 CORE_FAST_TRACE=1 \
   make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
     CC="$root/tests/external/linux/stage2_kbuild_cc.sh" \
@@ -71,6 +75,10 @@ if [ "$assert_count" -ne 0 ]; then
 fi
 if [ "$bad_size_count" -ne 0 ]; then
   echo "LINUX_FILTER_INLINE_SPECIALIZATION_V0=FAIL bad-size-regressed count=$bad_size_count" >&2
+  exit 1
+fi
+if [ "$deferred_count" -ne 0 ]; then
+  echo "LINUX_FILTER_INLINE_SPECIALIZATION_V0=FAIL deferred-remains count=$deferred_count" >&2
   exit 1
 fi
 
