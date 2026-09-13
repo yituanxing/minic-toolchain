@@ -157,6 +157,55 @@ if count != 1:
     raise SystemExit(f"expected one evaluator-local anchor, found {count}")
 text = text.replace(anchor, insert, 1)
 
+# parse_do_while normalizes source `do BODY while (0)` into a synthetic WHILE
+# whose body ends in a continue label plus `if (!0) break`.  Core already has a
+# proven flattening path for the no-control-transfer case.  Such a construct is
+# not an uncertain loop: BODY executes exactly once and has no backedge.  Keep
+# straight-line local facts across that one case only; every real/uncertain loop
+# remains a hard barrier before and after lower_while().
+loop_barrier_old = '''            case MINIC_STATEMENT_WHILE:
+                core_local_constants_clear_known(context);
+                status = lower_while(
+                    context, statement, MINIC_STATEMENT_INVALID, &statement_terminated);
+                core_local_constants_clear_known(context);
+                break;
+'''
+loop_barrier_new = '''            case MINIC_STATEMENT_WHILE: {
+                const MinicBlock *local_fact_loop_body;
+                MinicBlock local_fact_single_iteration_body;
+                MinicStatementId local_fact_continue_label;
+                bool local_fact_single_pass;
+
+                local_fact_loop_body = minic_c0_program_block(
+                    context->body->program, statement->then_block);
+                local_fact_continue_label = MINIC_STATEMENT_INVALID;
+                local_fact_single_pass =
+                    local_fact_loop_body != NULL &&
+                    normalized_do_while_zero_body(context,
+                                                  statement,
+                                                  local_fact_loop_body,
+                                                  &local_fact_single_iteration_body,
+                                                  &local_fact_continue_label) &&
+                    !normalized_do_while_block_needs_exit(context,
+                                                          &local_fact_single_iteration_body,
+                                                          local_fact_continue_label,
+                                                          true);
+                if (!local_fact_single_pass) {
+                    core_local_constants_clear_known(context);
+                }
+                status = lower_while(
+                    context, statement, MINIC_STATEMENT_INVALID, &statement_terminated);
+                if (!local_fact_single_pass) {
+                    core_local_constants_clear_known(context);
+                }
+                break;
+            }
+'''
+count = text.count(loop_barrier_old)
+if count != 1:
+    raise SystemExit(f"expected one generic while fact barrier, found {count}")
+text = text.replace(loop_barrier_old, loop_barrier_new, 1)
+
 # Lightweight diagnostics for the focused probe only.  The environment gate
 # keeps the real Linux lane quiet; this traces exactly where facts are killed.
 clear_anchor = '''static void core_local_constants_clear_known(MinicCoreLowerContext *context) {
