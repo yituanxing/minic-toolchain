@@ -11,6 +11,7 @@ mkdir -p "$ev"
 python3 tools/ci/apply-local-integer-assignment-v2.py | tee "$work/patch.log"
 python3 tools/ci/apply-inline-integer-specialization-v0.py | tee "$work/specialization-patch.log"
 python3 tools/ci/apply-inline-specialization-local-facts-v0.py | tee "$work/specialization-local-facts-patch.log"
+python3 tools/ci/apply-inline-specialization-label-alias-v0.py | tee "$work/specialization-label-alias-patch.log"
 git diff --check
 make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$toolchain" all >/dev/null
 
@@ -21,6 +22,9 @@ MINIC="$toolchain/bin/minic" BUILD_DIR="$work/regression" \
 archive="$work/linux-6.6.143.tar.xz"
 src="$work/linux-6.6.143"
 out="$work/out-mini"
+# Preserve generated assembly even when GNU as rejects it; this keeps the
+# focused lane diagnostic rather than forcing another blind rerun.
+trap 'test -s "$out/net/core/filter.minic-stage2.s" && cp "$out/net/core/filter.minic-stage2.s" "$ev/filter.failed.s" || true' EXIT
 curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors \
   https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.6.143.tar.xz -o "$archive"
 printf '%s  %s\n' \
