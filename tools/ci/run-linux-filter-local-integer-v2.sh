@@ -9,6 +9,8 @@ ev="$work/evidence"
 mkdir -p "$ev"
 
 python3 tools/ci/apply-local-integer-assignment-v2.py | tee "$work/patch.log"
+python3 tools/ci/apply-inline-integer-specialization-v0.py | tee "$work/specialization-patch.log"
+python3 tools/ci/apply-inline-specialization-local-facts-v0.py | tee "$work/specialization-local-facts-patch.log"
 git diff --check
 make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$toolchain" all >/dev/null
 
@@ -51,17 +53,17 @@ assert_count=$(grep -c '__compiletime_assert_' "$ev/filter.undefined" || true)
 bad_size_count=$(grep -c '__bad_size_call_parameter' "$ev/filter.undefined" || true)
 deferred_count=$(grep -c '__minic_deferred_asm_immediate_' "$ev/filter.undefined" || true)
 all_undef=$(wc -l <"$ev/filter.undefined")
-printf 'LINUX_FILTER_LOCAL_INTEGER_V2_COUNTS assert=%s bad_size=%s deferred=%s undef=%s\n' \
+printf 'LINUX_FILTER_INLINE_SPECIALIZATION_V0_COUNTS assert=%s bad_size=%s deferred=%s undef=%s\n' \
   "$assert_count" "$bad_size_count" "$deferred_count" "$all_undef"
 
-# The pre-V2 focused baseline is assert=206, bad_size=0, deferred=2.
-if [ "$assert_count" -ge 180 ]; then
-  echo "LINUX_FILTER_LOCAL_INTEGER_V2=FAIL insufficient-improvement assert=$assert_count" >&2
+# The local-integer-only focused baseline is assert=1, bad_size=0, deferred=2, undef=164.
+if [ "$assert_count" -gt 1 ]; then
+  echo "LINUX_FILTER_INLINE_SPECIALIZATION_V0=FAIL assert-regressed count=$assert_count" >&2
   exit 1
 fi
 if [ "$bad_size_count" -ne 0 ]; then
-  echo "LINUX_FILTER_LOCAL_INTEGER_V2=FAIL bad-size-regressed count=$bad_size_count" >&2
+  echo "LINUX_FILTER_INLINE_SPECIALIZATION_V0=FAIL bad-size-regressed count=$bad_size_count" >&2
   exit 1
 fi
 
-echo "LINUX_FILTER_LOCAL_INTEGER_V2=PASS assert=$assert_count bad_size=$bad_size_count deferred=$deferred_count undef=$all_undef"
+echo "LINUX_FILTER_INLINE_SPECIALIZATION_V0=PASS assert=$assert_count bad_size=$bad_size_count deferred=$deferred_count undef=$all_undef"
