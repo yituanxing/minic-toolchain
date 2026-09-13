@@ -47,6 +47,7 @@ jobs:
             apply-inline-specialization-capacity-v0.py
             apply-inline-specialization-symbolic-address-v0.py
             apply-inline-specialization-symbolic-nested-array-v0.py
+            apply-inline-specialization-symbolic-integer-closure-v0.py
             apply-inline-specialization-symbolic-array-lvalue-v0.py
             apply-inline-specialization-symbolic-closed-integers-v0.py
             apply-inline-specialization-base-callee-symbolic-v0.py
