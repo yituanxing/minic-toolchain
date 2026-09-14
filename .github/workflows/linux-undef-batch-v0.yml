@@ -73,7 +73,8 @@ jobs:
             apply-riscv64-default-text-section-v0.py
             apply-riscv64-explicit-section-flags-v0.py
             apply-inline-asm-symbolic-specialization-v0.py
-            apply-constant-inline-cfg-closure-v0.py
+            apply-constant-inline-call-cfg-v0.py
+            apply-local-integer-arithmetic-closure-v0.py
             apply-constant-cfg-product-v0.py
           )
           for patch in "${patches[@]}"; do
@@ -152,7 +153,7 @@ jobs:
           refs=$(wc -l <"$ev/known-remaining.tsv")
           unique=$(wc -l <"$ev/known-remaining.unique")
           asserts=$(grep -c '^__compiletime_assert_' "$ev/known-remaining.unique" || true)
-          deferred=$(grep -c '^__minic_deferred_asm_immediate_' "$ev/all-undefined.tsv" || true)
+          deferred=$(grep -c '__minic_deferred_asm_immediate_' "$ev/all-undefined.tsv" || true)
           printf 'LINUX_UNDEF_BATCH objects=%s known_refs=%s known_unique=%s asserts_unique=%s deferred_rows=%s\n' \
             "${#targets[@]}" "$refs" "$unique" "$asserts" "$deferred" | tee "$ev/summary.txt"
           cat "$ev/known-remaining.unique"
