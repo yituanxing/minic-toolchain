@@ -6,9 +6,8 @@ text = p.read_text()
 marker = "M178_UNREACHABLE_EXTERNAL_REENTRY"
 if marker in text:
     print("MINIC_CORE_UNREACHABLE_REENTRY_V0=ALREADY")
-    raise SystemExit(0)
-
-old = '''            if (statement->kind != MINIC_STATEMENT_LABEL &&
+else:
+    old = '''            if (statement->kind != MINIC_STATEMENT_LABEL &&
                 statement->kind != MINIC_STATEMENT_CASE &&
                 statement->kind != MINIC_STATEMENT_DEFAULT) {
                 if (core_unreachable_statement_has_external_reentry(
@@ -18,7 +17,7 @@ old = '''            if (statement->kind != MINIC_STATEMENT_LABEL &&
                 continue;
             }
 '''
-new = '''            if (statement->kind != MINIC_STATEMENT_LABEL &&
+    new = '''            if (statement->kind != MINIC_STATEMENT_LABEL &&
                 statement->kind != MINIC_STATEMENT_CASE &&
                 statement->kind != MINIC_STATEMENT_DEFAULT) {
                 if (core_unreachable_statement_has_external_reentry(
@@ -46,8 +45,14 @@ new = '''            if (statement->kind != MINIC_STATEMENT_LABEL &&
                 }
             }
 '''
-count = text.count(old)
-if count != 1:
-    raise SystemExit(f"expected one unreachable external-reentry anchor, found {count}")
-p.write_text(text.replace(old, new, 1))
-print("MINIC_CORE_UNREACHABLE_REENTRY_V0=APPLIED")
+    count = text.count(old)
+    if count != 1:
+        raise SystemExit(f"expected one unreachable external-reentry anchor, found {count}")
+    p.write_text(text.replace(old, new, 1))
+    print("MINIC_CORE_UNREACHABLE_REENTRY_V0=APPLIED")
+
+# Residual constant/CFG closure deliberately runs after the complete focused
+# semantic stack, because it reuses core_cfg_pure_call_argument from the
+# constant-inline pass and validates several remaining Linux BUILD_BUG forms.
+closure = Path("tools/ci/apply-residual-constant-closure-v0.py")
+exec(compile(closure.read_text(), str(closure), "exec"))
