@@ -4,11 +4,9 @@ from pathlib import Path
 # V0's semantic transformation is correct, but its locator assumed a specific
 # spelling for lower_condition_branch(). Earlier stack patches can reformat the
 # function signature, while the validation block inside the function remains
-# unique. Reuse V0 and make that locator signature-independent.  Also allow a
+# unique. Reuse V0 and make that locator signature-independent. Also allow a
 # non-volatile dereference/lvalue read to count as a side-effect-free call
-# argument for CFG-only constant folding.  This is required for helpers such as
-# pmd_trans_huge(*pmd): evaluating the value load has no C-visible side effect,
-# and the called internal inline predicate can still be a constant.
+# argument for CFG-only constant folding.
 path = Path("tools/ci/apply-constant-inline-call-cfg-v0.py")
 source = path.read_text()
 old = '''condition_fn = text.find("static MinicCoreLowerStatus lower_condition_branch(\\n")
@@ -81,11 +79,8 @@ annihilator = r'''    if (expression->kind == MINIC_EXPRESSION_BINARY &&
 '''
 text = text[:pos] + annihilator + text[pos:]
 
-# Keep this fast path in lower_condition_branch itself as well.  The local
-# evaluator intentionally carries data-flow state and has evolved several
-# times; x & 0 is a context-free C identity and should not depend on that
-# machinery.  Folding it here prevents even creating an executable edge to a
-# configuration-disabled call such as arch_sync_kernel_mappings on RISC-V.
+# Keep this fast path in lower_condition_branch itself as well. x & 0 is a
+# context-free C identity and should not depend on local data-flow state.
 condition_fn = text.find("lower_condition_branch(")
 if condition_fn < 0:
     raise SystemExit("lower_condition_branch missing for direct zero-and fold")
@@ -133,8 +128,83 @@ direct_zero_and = r'''    if (expression->kind == MINIC_EXPRESSION_BINARY &&
     }
 '''
 text = text[:condition_pos] + direct_zero_and + text[condition_pos:]
+
+# M182_TERMINATING_GUARD_FACTS: for a pure no-else guard whose taken arm is a
+# goto/break, that arm cannot merge into the following statement. Preserve the
+# incoming straight-line local facts on the only surviving false path instead
+# of clearing them at the generic CFG join.
+if_start = text.find(
+    "static MinicCoreLowerStatus\nlower_if(MinicCoreLowerContext *context, "
+    "const MinicStatement *statement, bool *terminated) {")
+if if_start < 0:
+    raise SystemExit("lower_if definition missing for terminating-guard facts")
+if_end = text.find("\nstatic bool internal_while_label_pair", if_start)
+if if_end < 0:
+    raise SystemExit("lower_if end missing for terminating-guard facts")
+if_body = text[if_start:if_end]
+
+decl_old = '''    bool needs_merge;
+    bool then_terminated;
+'''
+decl_new = '''    bool needs_merge;
+    bool then_terminated;
+    bool preserve_guard_facts;
+'''
+if if_body.count(decl_old) != 1:
+    raise SystemExit(f"terminating-guard declaration anchor count={if_body.count(decl_old)}")
+if_body = if_body.replace(decl_old, decl_new, 1)
+
+setup_anchor = '''    /* BusyBox and ordinary GNU C intentionally leave impossible references in
+'''
+setup = '''    /* M182_TERMINATING_GUARD_FACTS: a pure terminating taken arm does not
+       contribute state to the following statement. */
+    preserve_guard_facts = false;
+    if (else_source == NULL && then_source->statement_count == 1U &&
+        core_cfg_pure_call_argument(context, statement->expression, 0U)) {
+        const MinicStatement *guard_statement = minic_c0_program_statement(
+            context->body->program, then_source->statements[0]);
+        preserve_guard_facts =
+            guard_statement != NULL &&
+            (guard_statement->kind == MINIC_STATEMENT_GOTO ||
+             guard_statement->kind == MINIC_STATEMENT_BREAK);
+    }
+
+    /* BusyBox and ordinary GNU C intentionally leave impossible references in
+'''
+if if_body.count(setup_anchor) != 1:
+    raise SystemExit(f"terminating-guard setup anchor count={if_body.count(setup_anchor)}")
+if_body = if_body.replace(setup_anchor, setup, 1)
+
+pre_clear = '''    core_local_constants_clear_known(context);
+    condition_block = context->block_id;
+'''
+pre_keep = '''    if (!preserve_guard_facts) {
+        core_local_constants_clear_known(context);
+    }
+    condition_block = context->block_id;
+'''
+if if_body.count(pre_clear) != 1:
+    raise SystemExit(f"terminating-guard pre-clear anchor count={if_body.count(pre_clear)}")
+if_body = if_body.replace(pre_clear, pre_keep, 1)
+
+post_clear = '''    context->block_id = continuation_block;
+    core_local_constants_clear_known(context);
+    *terminated = !needs_merge;
+'''
+post_keep = '''    context->block_id = continuation_block;
+    if (!preserve_guard_facts) {
+        core_local_constants_clear_known(context);
+    }
+    *terminated = !needs_merge;
+'''
+if if_body.count(post_clear) != 1:
+    raise SystemExit(f"terminating-guard post-clear anchor count={if_body.count(post_clear)}")
+if_body = if_body.replace(post_clear, post_keep, 1)
+
+text = text[:if_start] + if_body + text[if_end:]
 p.write_text(text)
 print("MINIC_CONSTANT_CFG_ANNIHILATOR_V1=APPLIED")
+print("M182_TERMINATING_GUARD_FACTS=APPLIED")
 
 # Temporary diagnostic on the focused diagnose branch only.
 probe = Path("tools/ci/apply-constant-inline-call-cfg-probe-v0.py")
