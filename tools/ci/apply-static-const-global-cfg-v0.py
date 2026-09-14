@@ -3,11 +3,24 @@ from pathlib import Path
 
 p = Path("src/core/core_lower.c")
 text = p.read_text()
+fn = "static bool core_const_eval_integer_with_locals(const MinicCoreLowerContext *context,\n"
+start = text.find(fn)
+if start < 0:
+    raise SystemExit("static-const: local integer evaluator missing")
 anchor = '''    expression = minic_c0_program_expression(context->body->program, expression_id);
     if (expression == NULL || !minic_type_is_integer(expression->type)) {
         return false;
     }
 '''
+pos = text.find(anchor, start)
+if pos < 0:
+    raise SystemExit("static-const: evaluator expression-validation anchor missing")
+# Keep the search scoped to this evaluator rather than requiring the same
+# validation spelling to occur only once in the entire translation unit. Other
+# CFG helper evaluators legitimately use the same guard.
+next_fn = text.find("\nstatic ", start + len(fn))
+if next_fn >= 0 and pos >= next_fn:
+    raise SystemExit("static-const: anchor escaped local evaluator")
 insert = anchor + r'''    {
         const MinicExpression *object_expression = expression;
         if (expression->kind == MINIC_EXPRESSION_LVALUE_READ) {
@@ -42,8 +55,6 @@ insert = anchor + r'''    {
         }
     }
 '''
-count = text.count(anchor)
-if count != 1:
-    raise SystemExit(f"static-const local evaluator anchor: expected one, found {count}")
-p.write_text(text.replace(anchor, insert, 1))
+text = text[:pos] + insert + text[pos + len(anchor):]
+p.write_text(text)
 print("MINIC_STATIC_CONST_GLOBAL_CFG_V0=APPLIED")
