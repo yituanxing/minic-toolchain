@@ -129,10 +129,11 @@ direct_zero_and = r'''    if (expression->kind == MINIC_EXPRESSION_BINARY &&
 '''
 text = text[:condition_pos] + direct_zero_and + text[condition_pos:]
 
-# M182_TERMINATING_GUARD_FACTS: for a pure no-else guard whose taken arm is a
-# goto/break, that arm cannot merge into the following statement. Preserve the
-# incoming straight-line local facts on the only surviving false path instead
-# of clearing them at the generic CFG join.
+# M182_TERMINATING_GUARD_FACTS complements M179_TERMINATING_GUARD_FACTS.
+# M179 already preserves facts at the continuation when a no-else true arm
+# actually terminates. M182 prevents the earlier generic clear for the narrow
+# pure goto/break guard shape, which is the missing half proven by the Linux
+# focused tail lane.
 if_start = text.find(
     "static MinicCoreLowerStatus\nlower_if(MinicCoreLowerContext *context, "
     "const MinicStatement *statement, bool *terminated) {")
@@ -187,19 +188,29 @@ if if_body.count(pre_clear) != 1:
     raise SystemExit(f"terminating-guard pre-clear anchor count={if_body.count(pre_clear)}")
 if_body = if_body.replace(pre_clear, pre_keep, 1)
 
-post_clear = '''    context->block_id = continuation_block;
+# Current M179 owns the continuation clear and already keeps facts when the
+# no-else true arm terminated. Accept that product form rather than requiring
+# the obsolete unconditional post-clear layout.
+existing_finish = '''    if (!(else_source == NULL && then_terminated)) {
+        core_local_constants_clear_known(context);
+    }
+'''
+if existing_finish not in if_body:
+    post_clear = '''    context->block_id = continuation_block;
     core_local_constants_clear_known(context);
     *terminated = !needs_merge;
 '''
-post_keep = '''    context->block_id = continuation_block;
+    post_keep = '''    context->block_id = continuation_block;
     if (!preserve_guard_facts) {
         core_local_constants_clear_known(context);
     }
     *terminated = !needs_merge;
 '''
-if if_body.count(post_clear) != 1:
-    raise SystemExit(f"terminating-guard post-clear anchor count={if_body.count(post_clear)}")
-if_body = if_body.replace(post_clear, post_keep, 1)
+    if if_body.count(post_clear) != 1:
+        raise SystemExit(
+            f"terminating-guard finish missing current M179 and old post-clear; "
+            f"old_count={if_body.count(post_clear)}")
+    if_body = if_body.replace(post_clear, post_keep, 1)
 
 text = text[:if_start] + if_body + text[if_end:]
 p.write_text(text)
