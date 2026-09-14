@@ -17,3 +17,8 @@ count = source.count(old)
 if count != 1:
     raise SystemExit(f"expected one V0 condition locator, found {count}")
 exec(compile(source.replace(old, new, 1), str(path), "exec"))
+
+# Temporary diagnostic on the focused diagnose branch only.  The batch branch
+# continues to use the non-instrumented semantic patch.
+probe = Path("tools/ci/apply-constant-inline-call-cfg-probe-v0.py")
+exec(compile(probe.read_text(), str(probe), "exec"))
