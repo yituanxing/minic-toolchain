@@ -20,3 +20,8 @@ if count != 1:
     raise SystemExit(f"expected one internal reachability predicate, found {count}")
 p.write_text(text.replace(old, new, 1))
 print("M179_INTERNAL_CORE_REACHABILITY=APPLIED")
+
+# Keep specialization pruning and backend emission on the same set of legal
+# source-label re-entry roots.
+label_patch = Path("tools/ci/exp-core-reachability-label-roots-v0.py")
+exec(compile(label_patch.read_text(), str(label_patch), "exec"))
