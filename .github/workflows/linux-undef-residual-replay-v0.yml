@@ -59,6 +59,7 @@ jobs:
             apply-local-integer-assignment-v2.py
             apply-local-integer-logical-conditions-v0.py
             apply-local-null-pointer-facts-v0.py
+            apply-local-null-pointer-conditions-v0.py
             apply-builtin-constant-p-local-facts-v0.py
             apply-inline-integer-specialization-v0.py
             apply-inline-specialization-local-facts-v0.py
