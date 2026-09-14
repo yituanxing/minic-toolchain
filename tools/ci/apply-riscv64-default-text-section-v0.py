@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 from pathlib import Path
+import runpy
 
 
 def replace_once(path: str, old: str, new: str) -> None:
@@ -32,3 +33,4 @@ replace_once(
 )
 
 print("MINIC_RISCV64_DEFAULT_TEXT_SECTION_V0=APPLIED")
+runpy.run_path("tools/ci/apply-local-integer-guard-facts-v0.py", run_name="__main__")
