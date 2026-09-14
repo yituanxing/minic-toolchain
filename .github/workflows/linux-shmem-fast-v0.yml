@@ -73,6 +73,7 @@ jobs:
             apply-constant-inline-call-cfg-v1.py
             apply-local-integer-arithmetic-closure-v0.py
             apply-constant-cfg-product-v0.py
+            apply-core-unsupported-trace-v0.py
           )
           for patch in "${patches[@]}"; do python3 "tools/ci/$patch"; done
           git diff --check
@@ -106,7 +107,7 @@ jobs:
           if test -s "$out/mm/shmem.o"; then
             riscv64-linux-gnu-nm -u "$out/mm/shmem.o" | awk '{print $NF}' | sort -u >"$ev/shmem.undefined"
           fi
-          grep -aEn -B6 -A14 "shmem_get_folio_gfp|Core IR does not yet support|__compiletime_assert|vma_thp_gfp_mask" "$ev/shmem.i" >"$ev/shmem.excerpts" 2>/dev/null || true
+          grep -aEn -B6 -A14 "shmem_get_folio_gfp|Core IR does not yet support|CORE_UNSUPPORTED_TRACE|__compiletime_assert|vma_thp_gfp_mask" "$ev/kbuild.log" >"$ev/shmem.excerpts" 2>/dev/null || true
           exit "$rc"
 
       - name: Preserve evidence
