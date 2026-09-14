@@ -22,12 +22,20 @@ jobs:
         with:
           ref: ${{ github.sha }}
 
+      - name: Restore prepared Linux baseline
+        id: linux-base
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            build/linux-asm-symbolic-pool-v0/linux-6.6.143
+            build/linux-asm-symbolic-pool-v0/base-out
+          key: linux-asm-symbolic-base-v1-6.6.143-riscv-defconfig-${{ runner.os }}
+
       - name: Install RV64 Linux prerequisites
         run: |
           sudo apt-get -o Acquire::Retries=3 update
           sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
-            build-essential gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
-            bc bison flex libssl-dev libelf-dev make curl xz-utils python3
+            gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu libelf-dev
 
       - name: Apply current semantic stack plus symbolic asm fix
         shell: bash
@@ -36,6 +44,7 @@ jobs:
           work="$GITHUB_WORKSPACE/build/linux-asm-symbolic-pool-v0"
           build="$work/toolchain"
           mkdir -p "$work/evidence"
+          start=$(date +%s)
           patches=(
             apply-local-integer-assignment-v2.py
             apply-local-integer-logical-conditions-v0.py
@@ -70,45 +79,105 @@ jobs:
           git diff --check
           make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$build" all
           test -x "$build/bin/minic"
+          elapsed=$(($(date +%s) - start))
+          echo "TIMING toolchain_s=$elapsed" | tee -a "$work/evidence/timing.txt"
           echo "LINUX_ASM_SYMBOLIC_TOOLCHAIN=PASS head=${GITHUB_SHA}"
 
-      - name: Prepare pinned Linux 6.6.143 trees
+      - name: Prepare pinned Linux 6.6.143 baseline once
         shell: bash
         run: |
           set -Eeuo pipefail
           work="$GITHUB_WORKSPACE/build/linux-asm-symbolic-pool-v0"
           archive="$work/linux-6.6.143.tar.xz"
           src="$work/linux-6.6.143"
-          cfg="$work/config-out"
-          mkdir -p "$work"
-          curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors \
-            https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.6.143.tar.xz \
-            -o "$archive"
-          printf '%s  %s\n' \
-            dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932 \
-            "$archive" | sha256sum -c -
-          tar -xJf "$archive" -C "$work"
-          make -C "$src" O="$cfg" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- defconfig
-          "$src/scripts/config" --file "$cfg/.config" \
-            -e BLK_DEV_INITRD -e DEVTMPFS -e DEVTMPFS_MOUNT \
-            -e SERIAL_8250 -e SERIAL_8250_CONSOLE
-          make -C "$src" O="$cfg" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- olddefconfig
-          mkdir -p "$work/out-gcc" "$work/out-mini" "$work/evidence"
-          cp "$cfg/.config" "$work/out-gcc/.config"
-          cp "$cfg/.config" "$work/out-mini/.config"
+          base="$work/base-out"
+          mkdir -p "$work" "$work/evidence"
+          start=$(date +%s)
+          if test ! -s "$src/Makefile" || test ! -s "$base/.config" || \
+             test ! -s "$base/include/generated/autoconf.h"; then
+            rm -rf "$src" "$base"
+            curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors \
+              https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.6.143.tar.xz \
+              -o "$archive"
+            printf '%s  %s\n' \
+              dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932 \
+              "$archive" | sha256sum -c -
+            tar -xJf "$archive" -C "$work"
+            make -C "$src" O="$base" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- defconfig
+            "$src/scripts/config" --file "$base/.config" \
+              -e BLK_DEV_INITRD -e DEVTMPFS -e DEVTMPFS_MOUNT \
+              -e SERIAL_8250 -e SERIAL_8250_CONSOLE
+            make -C "$src" O="$base" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- olddefconfig
+            make -C "$src" O="$base" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- -j4 prepare
+            echo "LINUX_ASM_BASE_PREPARED=MISS"
+          else
+            echo "LINUX_ASM_BASE_PREPARED=HIT"
+          fi
+          elapsed=$(($(date +%s) - start))
+          echo "TIMING linux_base_s=$elapsed" | tee -a "$work/evidence/timing.txt"
 
-      - name: Build GCC and MiniC deferred-asm pool
+      - name: Save prepared Linux baseline
+        if: steps.linux-base.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            build/linux-asm-symbolic-pool-v0/linux-6.6.143
+            build/linux-asm-symbolic-pool-v0/base-out
+          key: linux-asm-symbolic-base-v1-6.6.143-riscv-defconfig-${{ runner.os }}
+
+      - name: Fast representative deferred-asm gate
         shell: bash
         run: |
           set -Eeuo pipefail
           work="$GITHUB_WORKSPACE/build/linux-asm-symbolic-pool-v0"
           src="$work/linux-6.6.143"
+          base="$work/base-out"
+          out="$work/out-mini"
+          ev="$work/evidence"
+          wrapper="$GITHUB_WORKSPACE/tests/external/linux/stage2_kbuild_cc.sh"
+          target=net/ipv4/ip_forward.o
+          rm -rf "$out"
+          cp -a --reflink=auto "$base" "$out"
+          start=$(date +%s)
+          set +e
+          MINIC="$work/toolchain/bin/minic" \
+          REAL_CC=/usr/bin/riscv64-linux-gnu-gcc \
+          MINIC_KEEP_INTERMEDIATES=1 \
+          MINIC_KBUILD_TRACE="$ev/minic-fast.trace" \
+          CORE_FAST_TRACE=1 \
+            make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
+              CC="$wrapper" -j4 V=1 "$target" >"$ev/mini-fast.log" 2>&1
+          rc=$?
+          set -e
+          elapsed=$(($(date +%s) - start))
+          echo "TIMING representative_s=$elapsed rc=$rc" | tee -a "$ev/timing.txt"
+          cp -f "$out/net/ipv4/ip_forward.minic-stage2.i" "$ev/ip_forward.minic-stage2.i" 2>/dev/null || true
+          cp -f "$out/net/ipv4/ip_forward.minic-stage2.s" "$ev/ip_forward.minic-stage2.s" 2>/dev/null || true
+          cp -f "$out/net/ipv4/ip_forward.minic-stage2.minic.stderr" "$ev/ip_forward.minic.stderr" 2>/dev/null || true
+          test "$rc" -eq 0
+          test -s "$out/$target"
+          riscv64-linux-gnu-nm -u "$out/$target" | sort -u >"$ev/ip_forward.undefined"
+          deferred=$(grep -Ec '__minic_deferred_asm_immediate_' "$ev/ip_forward.undefined" || true)
+          echo "LINUX_ASM_FAST target=$target deferred=$deferred"
+          if test "$deferred" -ne 0; then
+            grep -E '__minic_deferred_asm_immediate_' "$ev/ip_forward.undefined" || true
+            exit 1
+          fi
+          echo "LINUX_ASM_FAST=PASS deferred=0"
+
+      - name: Expand to full deferred-asm pool after fast pass
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-asm-symbolic-pool-v0"
+          src="$work/linux-6.6.143"
+          out="$work/out-mini"
+          ev="$work/evidence"
           wrapper="$GITHUB_WORKSPACE/tests/external/linux/stage2_kbuild_cc.sh"
           targets=(
             arch/riscv/mm/fault.o
             mm/memory.o
             net/ipv4/arp.o
-            net/ipv4/ip_forward.o
             net/ipv4/raw.o
             net/ipv4/xfrm4_input.o
             net/ipv4/xfrm4_output.o
@@ -120,69 +189,31 @@ jobs:
             net/ipv6/xfrm6_output.o
             net/xfrm/xfrm_output.o
           )
-          for lane in gcc mini; do
-            out="$work/out-$lane"
-            make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- -j4 prepare
-            if test "$lane" = gcc; then
-              make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
-                -j4 V=1 "${targets[@]}" >"$work/evidence/$lane-kbuild.log" 2>&1
-            else
-              MINIC="$work/toolchain/bin/minic" \
-              REAL_CC=/usr/bin/riscv64-linux-gnu-gcc \
-              MINIC_KEEP_INTERMEDIATES=1 \
-              MINIC_KBUILD_TRACE="$work/evidence/minic-kbuild.trace" \
-              CORE_FAST_TRACE=1 \
-                make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
-                  CC="$wrapper" -j4 V=1 "${targets[@]}" \
-                  >"$work/evidence/$lane-kbuild.log" 2>&1
-            fi
-            for target in "${targets[@]}"; do test -s "$out/$target"; done
-          done
-          echo "LINUX_ASM_SYMBOLIC_BUILD=PASS objects=${#targets[@]}"
-
-      - name: Compare deferred asm unresolved symbols
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          work="$GITHUB_WORKSPACE/build/linux-asm-symbolic-pool-v0"
-          ev="$work/evidence"
-          targets=(
-            arch/riscv/mm/fault.o
-            mm/memory.o
-            net/ipv4/arp.o
-            net/ipv4/ip_forward.o
-            net/ipv4/raw.o
-            net/ipv4/xfrm4_input.o
-            net/ipv4/xfrm4_output.o
-            net/ipv6/ip6_output.o
-            net/ipv6/mcast.o
-            net/ipv6/ndisc.o
-            net/ipv6/raw.o
-            net/ipv6/xfrm6_input.o
-            net/ipv6/xfrm6_output.o
-            net/xfrm/xfrm_output.o
-          )
+          start=$(date +%s)
+          MINIC="$work/toolchain/bin/minic" \
+          REAL_CC=/usr/bin/riscv64-linux-gnu-gcc \
+          MINIC_KEEP_INTERMEDIATES=0 \
+          MINIC_KBUILD_TRACE="$ev/minic-full.trace" \
+          CORE_FAST_TRACE=1 \
+            make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
+              CC="$wrapper" -j4 V=1 "${targets[@]}" >"$ev/mini-full.log" 2>&1
           bad=0
           deferred=0
-          for target in "${targets[@]}"; do
+          all_targets=(net/ipv4/ip_forward.o "${targets[@]}")
+          for target in "${all_targets[@]}"; do
+            test -s "$out/$target"
             key=${target//\//__}; key=${key%.o}
-            for lane in gcc mini; do
-              riscv64-linux-gnu-nm -u "$work/out-$lane/$target" \
-                | sed -E 's/^[[:space:]]*[A-Za-z]?[[:space:]]*//' \
-                | sed '/^$/d' | sort -u >"$ev/$lane-$key.undefined"
-            done
-            comm -13 "$ev/gcc-$key.undefined" "$ev/mini-$key.undefined" >"$ev/$key.only-mini"
-            n=$(grep -Ec '^__minic_deferred_asm_immediate_' "$ev/$key.only-mini" || true)
+            riscv64-linux-gnu-nm -u "$out/$target" | sort -u >"$ev/$key.undefined"
+            n=$(grep -Ec '__minic_deferred_asm_immediate_' "$ev/$key.undefined" || true)
             deferred=$((deferred + n))
+            if test "$n" -ne 0; then bad=$((bad + 1)); fi
             echo "ASM_SYMBOLIC target=$target deferred=$n"
-            if test "$n" -ne 0; then
-              grep -E '^__minic_deferred_asm_immediate_' "$ev/$key.only-mini" || true
-              bad=$((bad + 1))
-            fi
           done
-          echo "LINUX_ASM_SYMBOLIC_SUMMARY objects=${#targets[@]} deferred=$deferred bad_objects=$bad"
+          elapsed=$(($(date +%s) - start))
+          echo "TIMING full_pool_s=$elapsed" | tee -a "$ev/timing.txt"
+          echo "LINUX_ASM_SYMBOLIC_SUMMARY objects=${#all_targets[@]} deferred=$deferred bad_objects=$bad"
           test "$bad" -eq 0
-          echo "LINUX_ASM_SYMBOLIC_POOL_V0=PASS deferred=0 objects=${#targets[@]}"
+          echo "LINUX_ASM_SYMBOLIC_POOL_V0=PASS deferred=0 objects=${#all_targets[@]}"
 
       - name: Preserve evidence
         if: always()
