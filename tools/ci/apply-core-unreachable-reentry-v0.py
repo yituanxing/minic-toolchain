@@ -57,6 +57,13 @@ else:
 closure = Path("tools/ci/apply-residual-constant-closure-v0.py")
 exec(compile(closure.read_text(), str(closure), "exec"))
 
+# Feature-disabled Linux code also uses non-inline internal helpers whose body
+# is exactly one constant return.  Reuse the existing strict CFG-only helper
+# evaluator for those functions as well; argument purity and single-return
+# requirements remain unchanged.
+internal_call = Path("tools/ci/apply-constant-internal-call-cfg-v0.py")
+exec(compile(internal_call.read_text(), str(internal_call), "exec"))
+
 # Tail closure consumes facts established by M177/M181 plus integer/symbolic
 # specialization, so it must run after both residual constant closure and the
 # complete focused semantic stack.
