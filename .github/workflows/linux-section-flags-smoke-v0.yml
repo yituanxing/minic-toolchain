@@ -1,0 +1,177 @@
+name: Linux Section Flags Smoke V0
+
+on:
+  push:
+    branches:
+      - "agent/linux-section-flags-v0"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: linux-section-flags-smoke-v0-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  section-flags:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Install focused RV64 prerequisites
+        run: |
+          sudo apt-get -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            build-essential gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
+            bc bison flex libssl-dev libelf-dev make curl xz-utils python3
+
+      - name: Apply current semantic stack and section fixes
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-section-flags-smoke-v0"
+          build="$work/toolchain"
+          mkdir -p "$work/evidence"
+          patches=(
+            apply-local-integer-assignment-v2.py
+            apply-local-integer-logical-conditions-v0.py
+            apply-local-null-pointer-facts-v0.py
+            apply-builtin-constant-p-local-facts-v0.py
+            apply-inline-integer-specialization-v0.py
+            apply-inline-specialization-local-facts-v0.py
+            apply-inline-specialization-stable-parameter-facts-v0.py
+            apply-inline-specialization-transitive-integer-v0.py
+            apply-inline-specialization-base-callee-integer-v0.py
+            apply-inline-specialization-capacity-v0.py
+            apply-inline-specialization-symbolic-address-v0.py
+            apply-inline-specialization-symbolic-nested-array-v0.py
+            apply-inline-specialization-symbolic-integer-closure-v0.py
+            apply-inline-specialization-symbolic-transitive-rewrite-v0.py
+            apply-inline-specialization-symbolic-array-lvalue-v0.py
+            apply-inline-specialization-symbolic-closed-integers-v0.py
+            apply-inline-specialization-base-callee-symbolic-v0.py
+            apply-inline-specialization-resolved-asm-goto-v0.py
+            apply-inline-specialization-core-reachability-v0.py
+            apply-inline-specialization-original-reachability-v0.py
+            apply-inline-asm-local-integer-facts-v0.py
+            apply-inline-specialization-core-empty-function-v0.py
+            apply-inline-specialization-label-alias-v0.py
+            apply-riscv64-default-text-section-v0.py
+            apply-riscv64-explicit-section-flags-v0.py
+          )
+          for patch in "${patches[@]}"; do
+            python3 "tools/ci/$patch" | tee -a "$work/evidence/patch.log"
+          done
+          git diff --check
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$build" all
+          test -x "$build/bin/minic"
+
+      - name: Verify synthetic ELF section flags
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-section-flags-smoke-v0"
+          ev="$work/evidence"
+          cat >"$work/section-flags.i" <<'EOF'
+          int writable_value __attribute__((section(".mini.data"))) = 7;
+          const int readonly_value __attribute__((section(".mini.rodata"))) = 9;
+          int __attribute__((section(".mini.text"))) tagged_function(void) { return writable_value; }
+          EOF
+          "$work/toolchain/bin/minic" -S "$work/section-flags.i" -o "$work/section-flags.s"
+          riscv64-linux-gnu-gcc -c -march=rv64gc -mabi=lp64d "$work/section-flags.s" -o "$work/section-flags.o"
+          riscv64-linux-gnu-readelf -SW "$work/section-flags.o" | tee "$ev/synthetic-sections.txt"
+          python3 - "$ev/synthetic-sections.txt" <<'PY'
+          import re, sys
+          text = open(sys.argv[1], encoding='utf-8').read().splitlines()
+          expected = {'.mini.text': {'A','X'}, '.mini.data': {'A','W'}, '.mini.rodata': {'A'}}
+          seen = set()
+          for line in text:
+              for name, flags in expected.items():
+                  if name in line:
+                      seen.add(name)
+                      cols = line.split()
+                      flag_field = cols[-4] if len(cols) >= 4 else ''
+                      if not flags.issubset(set(flag_field)):
+                          raise SystemExit(f'{name}: expected {sorted(flags)} in flags, line={line!r}')
+          missing = set(expected) - seen
+          if missing:
+              raise SystemExit(f'missing sections: {sorted(missing)}')
+          print('SYNTHETIC_SECTION_FLAGS=PASS')
+          PY
+
+      - name: Prepare Linux 6.6.143
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-section-flags-smoke-v0"
+          archive="$work/linux-6.6.143.tar.xz"
+          src="$work/linux-6.6.143"
+          out="$work/out"
+          curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors \
+            https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.6.143.tar.xz \
+            -o "$archive"
+          printf '%s  %s\n' \
+            dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932 \
+            "$archive" | sha256sum -c -
+          tar -xJf "$archive" -C "$work"
+          make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- defconfig
+          "$src/scripts/config" --file "$out/.config" \
+            -e BLK_DEV_INITRD -e DEVTMPFS -e DEVTMPFS_MOUNT \
+            -e SERIAL_8250 -e SERIAL_8250_CONSOLE
+          make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- olddefconfig
+          make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- -j4 prepare
+
+      - name: Compile representative Linux objects and verify alloc flags
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-section-flags-smoke-v0"
+          src="$work/linux-6.6.143"
+          out="$work/out"
+          ev="$work/evidence"
+          wrapper="$GITHUB_WORKSPACE/tests/external/linux/stage2_kbuild_cc.sh"
+          MINIC="$work/toolchain/bin/minic" \
+          REAL_CC=/usr/bin/riscv64-linux-gnu-gcc \
+          MINIC_KEEP_INTERMEDIATES=0 \
+          CORE_FAST_TRACE=1 \
+            make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
+              CC="$wrapper" -j2 V=1 init/main.o drivers/of/fdt.o >"$ev/linux-focused.log" 2>&1
+          for obj in init/main.o drivers/of/fdt.o; do
+            riscv64-linux-gnu-readelf -SW "$out/$obj" >>"$ev/linux-sections.txt"
+          done
+          cat "$ev/linux-sections.txt"
+          python3 - "$ev/linux-sections.txt" <<'PY'
+          import re, sys
+          lines = open(sys.argv[1], encoding='utf-8').read().splitlines()
+          interesting = re.compile(r'(\.init\.|\.exit\.|\.ref\.|\.noinstr|\.sched|\.cpuidle|\.spinlock|\.softirq|__param|__reservedmem)')
+          matched = 0
+          bad = []
+          for line in lines:
+              if not interesting.search(line):
+                  continue
+              matched += 1
+              cols = line.split()
+              flag_field = cols[-4] if len(cols) >= 4 else ''
+              if 'A' not in flag_field:
+                  bad.append(line)
+          if matched == 0:
+              raise SystemExit('no representative explicit Linux sections found')
+          if bad:
+              raise SystemExit('non-allocatable representative sections:\n' + '\n'.join(bad))
+          print(f'LINUX_SECTION_FLAGS=PASS matched={matched}')
+          PY
+          riscv64-linux-gnu-ld -r -o "$work/focused-combined.o" "$out/init/main.o" "$out/drivers/of/fdt.o"
+          echo "LINUX_SECTION_FLAGS_SMOKE=PASS"
+
+      - name: Preserve focused evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-section-flags-smoke-v0
+          path: build/linux-section-flags-smoke-v0/evidence/
+          if-no-files-found: ignore
+          retention-days: 7
