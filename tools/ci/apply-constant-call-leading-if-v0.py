@@ -3,12 +3,17 @@ from pathlib import Path
 
 p = Path("src/core/core_lower.c")
 text = p.read_text()
+fn_anchor = '''static bool core_cfg_constant_inline_call(const MinicCoreLowerContext *context,
+'''
+fn_start = text.find(fn_anchor)
+fn_end = text.find("\nstatic bool core_const_eval_integer_with_locals", fn_start)
+if fn_start < 0 or fn_end < 0:
+    raise SystemExit("constant-call leading-if function boundary missing")
+body_text = text[fn_start:fn_end]
 old = '''    body = minic_c0_program_block(program, callee->body_block);
     if (body == NULL || body->statement_count == 0U) {
         return false;
     }
-    {
-        bool have_return = false;
 '''
 new = '''    body = minic_c0_program_block(program, callee->body_block);
     if (body == NULL || body->statement_count == 0U) {
@@ -64,11 +69,11 @@ new = '''    body = minic_c0_program_block(program, callee->body_block);
             }
         }
     }
-    {
-        bool have_return = false;
 '''
-count = text.count(old)
+count = body_text.count(old)
 if count != 1:
     raise SystemExit(f"constant-call leading-if anchor: expected one, found {count}")
-p.write_text(text.replace(old, new, 1))
+body_text = body_text.replace(old, new, 1)
+text = text[:fn_start] + body_text + text[fn_end:]
+p.write_text(text)
 print("MINIC_CONSTANT_CALL_LEADING_IF_V0=APPLIED")
