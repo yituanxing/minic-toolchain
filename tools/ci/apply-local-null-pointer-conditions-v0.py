@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 from pathlib import Path
 
+# Cache-generation note: this patch participates in the expanded Linux semantic
+# stack hash. Keep the post-tail-promotion frontier separate from any mixed cache
+# saved while the previous 73-object refresh was interrupted.
 p = Path("src/core/core_lower.c")
 text = p.read_text()
 marker = "M180_NULL_POINTER_CONDITION_FACTS"
