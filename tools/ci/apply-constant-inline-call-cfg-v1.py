@@ -34,7 +34,7 @@ multi = Path("tools/ci/apply-constant-inline-multireturn-v0.py")
 exec(compile(multi.read_text(), str(multi), "exec"))
 
 # Algebraic CFG facts where the result is known without knowing the other
-# operand.  Only consume the unknown side when it is side-effect free.
+# operand. Only consume the unknown side when it is side-effect free.
 p = Path("src/core/core_lower.c")
 text = p.read_text()
 fn_anchor = "static bool core_const_eval_integer_with_locals(const MinicCoreLowerContext *context,\n"
@@ -82,8 +82,3 @@ annihilator = r'''    if (expression->kind == MINIC_EXPRESSION_BINARY &&
 text = text[:pos] + annihilator + text[pos:]
 p.write_text(text)
 print("MINIC_CONSTANT_CFG_ANNIHILATOR_V0=APPLIED")
-
-# Keep the focused probe active in batch evidence until this undefined cluster
-# is fully closed; it is stderr-only and does not alter generated code.
-probe = Path("tools/ci/apply-constant-inline-call-cfg-probe-v0.py")
-exec(compile(probe.read_text(), str(probe), "exec"))
