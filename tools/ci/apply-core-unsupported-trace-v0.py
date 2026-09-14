@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
 from pathlib import Path
+import runpy
+
+# Fast-loop semantic candidate: apply the generic detached-preheader fix before
+# tracing any remaining Core unsupported exits.  Keeping this call here lets the
+# cached shmem.i replay validate the compiler change without rebuilding Linux.
+runpy.run_path("tools/ci/apply-core-unreachable-reentry-v0.py", run_name="__main__")
 
 p = Path("src/core/core_lower.c")
 text = p.read_text()
