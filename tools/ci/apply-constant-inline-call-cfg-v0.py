@@ -152,10 +152,6 @@ text = text[:pos] + call_insert + text[pos:]
 condition_fn = text.find("static MinicCoreLowerStatus lower_condition_branch(\n")
 if condition_fn < 0:
     raise SystemExit("lower_condition_branch definition missing")
-# Skip the forward declaration and select the definition after set_branch.
-condition_fn = text.find("static MinicCoreLowerStatus lower_condition_branch(\n", condition_fn + 1)
-if condition_fn < 0:
-    raise SystemExit("lower_condition_branch body missing")
 condition_anchor = '''    expression = minic_c0_program_expression(context->body->program, expression_id);
     if (expression == NULL ||
         (!minic_type_is_integer(expression->type) && !minic_type_is_pointer(expression->type))) {
