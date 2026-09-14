@@ -22,24 +22,9 @@ text = p.read_text()
 
 anchor = '''static bool core_cfg_constant_inline_call(const MinicCoreLowerContext *context,
 '''
-prototype = '''static void core_local_constant_set(MinicCoreLowerContext *context,
-                                    MinicLocalId local_id,
-                                    const MinicConstValue *value);
-static bool core_const_eval_integer_with_locals(const MinicCoreLowerContext *context,
-                                                MinicExpressionId expression_id,
-                                                MinicConstValue *value);
-static bool core_cfg_eval_callee_return_expression(
-    const MinicCoreLowerContext *caller_context,
-    const MinicFunction *callee,
-    const MinicExpression *call_expression,
-    MinicExpressionId return_expression,
-    MinicConstValue *value);
-
-'''
 count = text.count(anchor)
 if count != 1:
     raise SystemExit(f"constant-call helper anchor: expected one, found {count}")
-text = text.replace(anchor, prototype + anchor, 1)
 
 guard_old = '''    if (context == NULL || context->body == NULL || context->body->program == NULL ||
         context->target == NULL || expression == NULL || value == NULL ||
@@ -79,7 +64,18 @@ if pos < 0:
 if pos < 0:
     raise SystemExit("lower_condition_branch anchor missing")
 
-helper = r'''static bool core_cfg_eval_callee_return_expression(
+# The evaluator helper is intentionally inserted very early in core_lower.c so
+# lower_condition_branch and later CFG helpers can use it.  Declare the two
+# local-fact routines it consumes at the same insertion point; declaring them
+# at core_cfg_constant_inline_call is too late on current source ordering.
+helper = r'''static void core_local_constant_set(MinicCoreLowerContext *context,
+                                    MinicLocalId local_id,
+                                    const MinicConstValue *value);
+static bool core_const_eval_integer_with_locals(const MinicCoreLowerContext *context,
+                                                MinicExpressionId expression_id,
+                                                MinicConstValue *value);
+
+static bool core_cfg_eval_callee_return_expression(
     const MinicCoreLowerContext *caller_context,
     const MinicFunction *callee,
     const MinicExpression *call_expression,
