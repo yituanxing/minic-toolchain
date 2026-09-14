@@ -22,7 +22,13 @@ text = p.read_text()
 
 anchor = '''static bool core_cfg_constant_inline_call(const MinicCoreLowerContext *context,
 '''
-prototype = '''static bool core_cfg_eval_callee_return_expression(
+prototype = '''static void core_local_constant_set(MinicCoreLowerContext *context,
+                                    MinicLocalId local_id,
+                                    const MinicConstValue *value);
+static bool core_const_eval_integer_with_locals(const MinicCoreLowerContext *context,
+                                                MinicExpressionId expression_id,
+                                                MinicConstValue *value);
+static bool core_cfg_eval_callee_return_expression(
     const MinicCoreLowerContext *caller_context,
     const MinicFunction *callee,
     const MinicExpression *call_expression,
