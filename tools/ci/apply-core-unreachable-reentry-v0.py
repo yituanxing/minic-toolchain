@@ -90,6 +90,13 @@ exec(compile(static_const.read_text(), str(static_const), "exec"))
 leading_if = Path("tools/ci/apply-constant-call-leading-if-v0.py")
 exec(compile(leading_if.read_text(), str(leading_if), "exec"))
 
+# GNU statement expressions used by min/max-style kernel macros often contain
+# only local constant initializers and one final pure expression. Interpret
+# exactly that straight-line subset for CFG-only constant folding; any other
+# statement shape remains fail-closed.
+statement_expr = Path("tools/ci/apply-statement-expression-constant-cfg-v0.py")
+exec(compile(statement_expr.read_text(), str(statement_expr), "exec"))
+
 # Tail closure consumes facts established by M177/M181 plus integer/symbolic
 # specialization, so it must run after both residual constant closure and the
 # complete focused semantic stack.
