@@ -36,3 +36,6 @@ print("MINIC_RISCV64_DEFAULT_TEXT_SECTION_V0=APPLIED")
 # Batch wiring: exercise the validated generic Core CFG re-entry fix in the
 # existing 49-object pool without adding another workflow-only patch stage.
 runpy.run_path("tools/ci/apply-core-unreachable-reentry-v0.py", run_name="__main__")
+# Preserve straight-line constant facts across common `if (err) return/goto`
+# guards before later CONFIG-dependent branches are lowered.
+runpy.run_path("tools/ci/apply-local-integer-guard-facts-v0.py", run_name="__main__")
