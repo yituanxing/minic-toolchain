@@ -3,6 +3,10 @@ from pathlib import Path
 
 p = Path("src/compiler/compiler.c")
 text = p.read_text()
+if "M180_CORE_LABEL_REENTRY_ROOTS" in text:
+    print("M180_CORE_LABEL_REENTRY_ROOTS=ALREADY_APPLIED")
+    raise SystemExit(0)
+
 old = '''    if (block_reachable == NULL || block_queue == NULL ||
         !minic_enqueue_core_block(core->entry_block,
                                  core->block_count,
