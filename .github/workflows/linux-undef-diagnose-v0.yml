@@ -1,8 +1,6 @@
 name: Linux Undef Diagnose V0
 
 on:
-  push:
-    branches: ["agent/linux-undef-diagnose-v0"]
   workflow_dispatch:
 
 permissions:
@@ -76,6 +74,7 @@ jobs:
             apply-constant-inline-call-cfg-v1.py
             apply-local-integer-arithmetic-closure-v0.py
             apply-constant-cfg-product-v0.py
+            apply-core-unreachable-reentry-v0.py
           )
           for patch in "${patches[@]}"; do
             python3 "tools/ci/$patch" | tee -a "$ev/patch.log"
