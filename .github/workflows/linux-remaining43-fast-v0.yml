@@ -26,7 +26,7 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: build/linux-expanded-kbuild-v0/out
-          key: linux-expanded-mixed-v1-6.6.143-Linux-6cad414ac07ece618c204997354c481ce3bd4acacbfb76a0d38066750e2bd945
+          key: linux-expanded-mixed-v1-6.6.143-Linux-0a7930411dfbac679a90ff3147482e6417b463628690f2b544bf9db8bf8b7db2
           fail-on-cache-miss: true
 
       - name: Install RV64 prerequisites
@@ -101,8 +101,8 @@ jobs:
           ev="$work/evidence-tail"
           wrapper="$GITHUB_WORKSPACE/tests/external/linux/stage2_kbuild_cc.sh"
           targets=(
-            kernel/ptrace.o kernel/bpf/verifier.o kernel/dma/direct.o
-            mm/vmstat.o mm/slab_common.o mm/page_alloc.o mm/swap.o mm/truncate.o mm/gup.o
+            kernel/dma/direct.o
+            mm/truncate.o mm/slab_common.o
             fs/proc/task_mmu.o drivers/acpi/scan.o
             net/core/skbuff.o net/core/bpf_sk_storage.o
           )
@@ -119,7 +119,7 @@ jobs:
             cp -f "$out/$dir/$stem.minic-stage2.s" "$ev/$key.s" 2>/dev/null || true
             cp -f "$out/$dir/$stem.minic-stage2.minic.stderr" "$ev/$key.stderr" 2>/dev/null || true
             printf 'TAIL target=%s undefined=%s\n' "$target" "$(wc -l <"$ev/$key.undefined")" | tee -a "$ev/summary.txt"
-            grep -E '__compiletime_assert_|arch_dma_set_uncached|free_zone_device_page|dax_delete_mapping_entry|dax_invalidate_mapping_entry_sync|migrate_device_coherent_page|dma_dummy_ops' "$ev/$key.undefined" | sed "s#^#RESIDUAL $target #" | tee -a "$ev/summary.txt" || true
+            grep -E '__compiletime_assert_|arch_dma_set_uncached|dax_delete_mapping_entry|dax_invalidate_mapping_entry_sync|dma_dummy_ops' "$ev/$key.undefined" | sed "s#^#RESIDUAL $target #" | tee -a "$ev/summary.txt" || true
           done
 
       - name: Preserve tail evidence
