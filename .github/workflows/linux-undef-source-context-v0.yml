@@ -1,0 +1,80 @@
+name: Linux Undef Source Context V0
+
+on:
+  push:
+    branches: ["agent/linux-undef-diagnose-v0"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: linux-undef-source-context-v0-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  source-context:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Restore frozen residual fixtures
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-undef-residual-replay-v0/fixtures
+          key: linux-undef-residual19-i-v0-6.6.143-riscv-defconfig-${{ runner.os }}
+          fail-on-cache-miss: true
+
+      - name: Print all residual source contexts
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          root="$GITHUB_WORKSPACE/build/linux-undef-residual-replay-v0"
+          f="$root/fixtures"
+          ev="$root/source-context"
+          mkdir -p "$ev"
+          cat >"$ev/map.tsv" <<'EOF'
+          net/core/skbuff.i	__compiletime_assert_1064
+          fs/proc/task_mmu.i	__compiletime_assert_194
+          kernel/jump_label.i	__compiletime_assert_304
+          kernel/jump_label.i	__compiletime_assert_305
+          crypto/skcipher.i	__compiletime_assert_347
+          kernel/ptrace.i	__compiletime_assert_364
+          mm/slab_common.i	__compiletime_assert_375
+          mm/mremap.i	__compiletime_assert_385
+          mm/vmstat.i	__compiletime_assert_388
+          mm/vmstat.i	__compiletime_assert_390
+          mm/page_alloc.i	__compiletime_assert_395
+          mm/percpu.i	__compiletime_assert_400
+          mm/page_alloc.i	__compiletime_assert_499
+          net/ipv6/icmp.i	__compiletime_assert_615
+          net/ipv6/icmp.i	__compiletime_assert_616
+          kernel/bpf/verifier.i	__compiletime_assert_637
+          net/core/bpf_sk_storage.i	__compiletime_assert_645
+          kernel/dma/direct.i	arch_dma_set_uncached
+          mm/truncate.i	dax_delete_mapping_entry
+          mm/truncate.i	dax_invalidate_mapping_entry_sync
+          drivers/acpi/scan.i	dma_dummy_ops
+          mm/swap.i	free_zone_device_page
+          mm/gup.i	migrate_device_coherent_page
+          EOF
+          sed -i 's/^          //' "$ev/map.tsv"
+          : >"$ev/contexts.txt"
+          while IFS=$'\t' read -r rel sym; do
+            src="$f/$rel"
+            printf '\n===== %s :: %s =====\n' "$rel" "$sym" | tee -a "$ev/contexts.txt"
+            grep -n -C 14 -F -- "$sym" "$src" | head -n 160 | tee -a "$ev/contexts.txt" || true
+          done <"$ev/map.tsv"
+          cat "$ev/contexts.txt"
+
+      - name: Preserve source contexts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-undef-source-context-v0
+          path: build/linux-undef-residual-replay-v0/source-context/
+          if-no-files-found: error
+          retention-days: 7

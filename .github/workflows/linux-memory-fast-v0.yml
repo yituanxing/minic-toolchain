@@ -1,0 +1,163 @@
+name: Linux Memory Fast V0
+
+on:
+  push:
+    branches: ["agent/linux-undef-diagnose-v0"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: linux-memory-fast-v0-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  memory:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Restore memory replay fixture
+        id: fixture
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-memory-replay-v0/memory.i
+          key: linux-memory-replay-v0-6.6.143-riscv-defconfig-${{ runner.os }}
+
+      - name: Restore prepared Linux baseline
+        if: steps.fixture.outputs.cache-hit != 'true'
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            build/linux-asm-symbolic-pool-v0/linux-6.6.143
+            build/linux-asm-symbolic-pool-v0/base-out
+          key: linux-undef-diagnose-base-v1-6.6.143-riscv-defconfig-${{ runner.os }}
+          fail-on-cache-miss: true
+
+      - name: Install RV64 prerequisites for fixture generation
+        if: steps.fixture.outputs.cache-hit != 'true'
+        run: |
+          sudo apt-get -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu
+
+      - name: Build patched MiniC
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-asm-symbolic-pool-v0"
+          build="$work/toolchain-memory"
+          ev="$work/evidence-memory"
+          rm -rf "$build" "$ev"
+          mkdir -p "$ev"
+          start=$(date +%s)
+          patches=(
+            apply-local-integer-assignment-v2.py
+            apply-local-integer-logical-conditions-v0.py
+            apply-local-null-pointer-facts-v0.py
+            apply-builtin-constant-p-local-facts-v0.py
+            apply-inline-integer-specialization-v0.py
+            apply-inline-specialization-local-facts-v0.py
+            apply-inline-specialization-stable-parameter-facts-v0.py
+            apply-inline-specialization-transitive-integer-v0.py
+            apply-inline-specialization-base-callee-integer-v0.py
+            apply-inline-specialization-capacity-v0.py
+            apply-inline-specialization-symbolic-address-v0.py
+            apply-inline-specialization-symbolic-nested-array-v0.py
+            apply-inline-specialization-symbolic-integer-closure-v0.py
+            apply-inline-specialization-symbolic-transitive-rewrite-v0.py
+            apply-inline-specialization-symbolic-array-lvalue-v0.py
+            apply-inline-specialization-symbolic-closed-integers-v0.py
+            apply-inline-specialization-base-callee-symbolic-v0.py
+            apply-inline-specialization-resolved-asm-goto-v0.py
+            apply-inline-specialization-core-reachability-v0.py
+            apply-inline-specialization-original-reachability-v0.py
+            apply-inline-asm-local-integer-facts-v0.py
+            apply-inline-specialization-core-empty-function-v0.py
+            apply-inline-specialization-label-alias-v0.py
+            apply-riscv64-default-text-section-v0.py
+            apply-riscv64-explicit-section-flags-v0.py
+            apply-inline-asm-symbolic-specialization-v0.py
+            apply-inline-specialization-boolean-range-v1.py
+            apply-inline-specialization-local-boolean-domain-v0.py
+            apply-constant-inline-call-cfg-v1.py
+            apply-local-integer-arithmetic-closure-v0.py
+            apply-constant-cfg-product-v0.py
+            apply-core-unreachable-reentry-v0.py
+          )
+          for patch in "${patches[@]}"; do python3 "tools/ci/$patch"; done
+          git diff --check
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$build" "$build/bin/minic" "$build/bin/minic-cc"
+          echo "TIMING toolchain_s=$(($(date +%s) - start))" | tee "$ev/timing.txt"
+
+      - name: Generate memory replay fixture once
+        if: steps.fixture.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          set -u
+          work="$GITHUB_WORKSPACE/build/linux-asm-symbolic-pool-v0"
+          src="$work/linux-6.6.143"
+          base="$work/base-out"
+          out="$work/out-memory-fixture"
+          ev="$work/evidence-memory"
+          fixture="$GITHUB_WORKSPACE/build/linux-memory-replay-v0/memory.i"
+          wrapper="$GITHUB_WORKSPACE/tests/external/linux/stage2_kbuild_cc.sh"
+          rm -rf "$out"
+          mkdir -p "$(dirname "$fixture")"
+          cp -a --reflink=auto "$base" "$out"
+          set +e
+          MINIC="$work/toolchain-memory/bin/minic" REAL_CC=/usr/bin/riscv64-linux-gnu-gcc \
+          MINIC_KEEP_INTERMEDIATES=1 MINIC_KBUILD_TRACE="$ev/minic.trace" CORE_FAST_TRACE=1 \
+            make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
+              CC="$wrapper" -j1 V=1 mm/memory.o >"$ev/kbuild-fixture.log" 2>&1
+          kbuild_rc=$?
+          set -e
+          cp -f "$out/mm/memory.minic-stage2.i" "$fixture"
+          test -s "$fixture"
+          echo "MEMORY_FIXTURE=READY bytes=$(wc -c <"$fixture") kbuild_rc=$kbuild_rc"
+
+      - name: Save memory replay fixture
+        if: steps.fixture.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: build/linux-memory-replay-v0/memory.i
+          key: linux-memory-replay-v0-6.6.143-riscv-defconfig-${{ runner.os }}
+
+      - name: Replay memory directly through MiniC
+        shell: bash
+        run: |
+          set -u
+          work="$GITHUB_WORKSPACE/build/linux-asm-symbolic-pool-v0"
+          fixture="$GITHUB_WORKSPACE/build/linux-memory-replay-v0/memory.i"
+          ev="$work/evidence-memory"
+          test -s "$fixture"
+          start=$(date +%s)
+          set +e
+          MINIC_LOCAL_FACT_TRACE=1 MINIC_INLINE_SPEC_BOOLEAN_TRACE=1 CORE_FAST_TRACE=1 "$work/toolchain-memory/bin/minic" -S "$fixture" -o "$ev/memory.s" \
+            >"$ev/memory.stdout" 2>"$ev/memory.stderr"
+          rc=$?
+          set -e
+          echo "TIMING replay_s=$(($(date +%s) - start)) rc=$rc" | tee -a "$ev/timing.txt"
+          grep -aE '__compiletime_assert_164|call arch_sync_kernel_mappings|call encode_page' "$ev/memory.s" >"$ev/targets.txt" || true
+          grep -aE 'LOCAL_FACT_(ASSIGN|CLEAR|STMT).*(__apply_to_page_range|encode_page|__tlb_remove_page|zap_pte_range)|INLINE_SPEC_BOOLEAN_SELECT|MINIC_INLINE_BOOLEAN_RANGE_V[01]' "$ev/memory.stderr" >"$ev/facts.txt" || true
+          assert164=$(grep -c '__compiletime_assert_164' "$ev/memory.s" || true)
+          arch_sync=$(grep -c 'call arch_sync_kernel_mappings' "$ev/memory.s" || true)
+          encode_call=$(grep -c 'call encode_page' "$ev/memory.s" || true)
+          printf 'MEMORY_TARGET_ASSERT164=%s\n' "$assert164" | tee "$ev/summary.txt"
+          printf 'MEMORY_TARGET_ARCH_SYNC=%s\n' "$arch_sync" | tee -a "$ev/summary.txt"
+          printf 'MEMORY_TARGET_ENCODE_CALL=%s\n' "$encode_call" | tee -a "$ev/summary.txt"
+          test "$rc" -eq 0
+          test "$assert164" -eq 0
+          test "$arch_sync" -eq 0
+
+      - name: Preserve evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-memory-fast-v0
+          path: build/linux-asm-symbolic-pool-v0/evidence-memory/
+          if-no-files-found: ignore
+          retention-days: 7

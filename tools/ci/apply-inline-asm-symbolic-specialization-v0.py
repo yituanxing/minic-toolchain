@@ -119,15 +119,3 @@ text = text.replace(old, new, 1)
 
 p.write_text(text)
 print("MINIC_INLINE_ASM_SYMBOLIC_SPECIALIZATION_V0=APPLIED preexisting_integer_clones=1")
-
-# Expanded frontier consumes the newest validated semantic fixes as one batch so
-# a single 73-object refresh exercises the whole family instead of serial reruns.
-for chained_patch in (
-    "apply-constant-inline-call-cfg-v1.py",
-    "apply-local-integer-arithmetic-closure-v0.py",
-    "apply-constant-cfg-product-v0.py",
-    "apply-core-unreachable-reentry-v0.py",
-):
-    chained = Path("tools/ci") / chained_patch
-    exec(compile(chained.read_text(), str(chained), "exec"))
-print("MINIC_LINUX_SEMANTIC_BATCH_V1=APPLIED")
