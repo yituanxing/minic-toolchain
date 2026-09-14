@@ -54,9 +54,6 @@ else:
 closure = Path("tools/ci/apply-residual-constant-closure-v0.py")
 exec(compile(closure.read_text(), str(closure), "exec"))
 
-# Residual8: x & 0 / 0 & x on a pure unknown operand is still constant zero.
-# Run this immediately after the general residual constant closure so higher
-# level logical/helper evaluation can consume the newly proven zero.
 bitwise_zero = Path("tools/ci/apply-residual8-bitwise-annihilator-v0.py")
 exec(compile(bitwise_zero.read_text(), str(bitwise_zero), "exec"))
 
@@ -68,6 +65,9 @@ exec(compile(internal_call.read_text(), str(internal_call), "exec"))
 
 parameter_facts = Path("tools/ci/apply-constant-call-parameter-facts-v0.py")
 exec(compile(parameter_facts.read_text(), str(parameter_facts), "exec"))
+
+trace = Path("tools/ci/apply-residual8-const-call-trace-v0.py")
+exec(compile(trace.read_text(), str(trace), "exec"))
 
 static_const = Path("tools/ci/apply-static-const-global-cfg-v0.py")
 exec(compile(static_const.read_text(), str(static_const), "exec"))
