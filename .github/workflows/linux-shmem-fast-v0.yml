@@ -2,7 +2,7 @@ name: Linux Shmem Fast V0
 
 on:
   push:
-    branches: ["agent/linux-undef-diagnose-v0"]
+    branches: ["agent/linux-shmem-trace-v1"]
   workflow_dispatch:
 
 permissions:
