@@ -1,0 +1,194 @@
+name: Linux ASM Symbolic Pool V0
+
+on:
+  push:
+    branches:
+      - "agent/linux-undef-pool-v0"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: linux-asm-symbolic-pool-v0-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  symbolic-pool:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Install RV64 Linux prerequisites
+        run: |
+          sudo apt-get -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            build-essential gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
+            bc bison flex libssl-dev libelf-dev make curl xz-utils python3
+
+      - name: Apply current semantic stack plus symbolic asm fix
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-asm-symbolic-pool-v0"
+          build="$work/toolchain"
+          mkdir -p "$work/evidence"
+          patches=(
+            apply-local-integer-assignment-v2.py
+            apply-local-integer-logical-conditions-v0.py
+            apply-local-null-pointer-facts-v0.py
+            apply-builtin-constant-p-local-facts-v0.py
+            apply-inline-integer-specialization-v0.py
+            apply-inline-specialization-local-facts-v0.py
+            apply-inline-specialization-stable-parameter-facts-v0.py
+            apply-inline-specialization-transitive-integer-v0.py
+            apply-inline-specialization-base-callee-integer-v0.py
+            apply-inline-specialization-capacity-v0.py
+            apply-inline-specialization-symbolic-address-v0.py
+            apply-inline-specialization-symbolic-nested-array-v0.py
+            apply-inline-specialization-symbolic-integer-closure-v0.py
+            apply-inline-specialization-symbolic-transitive-rewrite-v0.py
+            apply-inline-specialization-symbolic-array-lvalue-v0.py
+            apply-inline-specialization-symbolic-closed-integers-v0.py
+            apply-inline-specialization-base-callee-symbolic-v0.py
+            apply-inline-specialization-resolved-asm-goto-v0.py
+            apply-inline-specialization-core-reachability-v0.py
+            apply-inline-specialization-original-reachability-v0.py
+            apply-inline-asm-local-integer-facts-v0.py
+            apply-inline-specialization-core-empty-function-v0.py
+            apply-inline-specialization-label-alias-v0.py
+            apply-riscv64-default-text-section-v0.py
+            apply-riscv64-explicit-section-flags-v0.py
+            apply-inline-asm-symbolic-specialization-v0.py
+          )
+          for patch in "${patches[@]}"; do
+            python3 "tools/ci/$patch" | tee -a "$work/evidence/patch.log"
+          done
+          git diff --check
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$build" all
+          test -x "$build/bin/minic"
+          echo "LINUX_ASM_SYMBOLIC_TOOLCHAIN=PASS head=${GITHUB_SHA}"
+
+      - name: Prepare pinned Linux 6.6.143 trees
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-asm-symbolic-pool-v0"
+          archive="$work/linux-6.6.143.tar.xz"
+          src="$work/linux-6.6.143"
+          cfg="$work/config-out"
+          mkdir -p "$work"
+          curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors \
+            https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.6.143.tar.xz \
+            -o "$archive"
+          printf '%s  %s\n' \
+            dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932 \
+            "$archive" | sha256sum -c -
+          tar -xJf "$archive" -C "$work"
+          make -C "$src" O="$cfg" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- defconfig
+          "$src/scripts/config" --file "$cfg/.config" \
+            -e BLK_DEV_INITRD -e DEVTMPFS -e DEVTMPFS_MOUNT \
+            -e SERIAL_8250 -e SERIAL_8250_CONSOLE
+          make -C "$src" O="$cfg" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- olddefconfig
+          mkdir -p "$work/out-gcc" "$work/out-mini" "$work/evidence"
+          cp "$cfg/.config" "$work/out-gcc/.config"
+          cp "$cfg/.config" "$work/out-mini/.config"
+
+      - name: Build GCC and MiniC deferred-asm pool
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-asm-symbolic-pool-v0"
+          src="$work/linux-6.6.143"
+          wrapper="$GITHUB_WORKSPACE/tests/external/linux/stage2_kbuild_cc.sh"
+          targets=(
+            arch/riscv/mm/fault.o
+            mm/memory.o
+            net/ipv4/arp.o
+            net/ipv4/ip_forward.o
+            net/ipv4/raw.o
+            net/ipv4/xfrm4_input.o
+            net/ipv4/xfrm4_output.o
+            net/ipv6/ip6_output.o
+            net/ipv6/mcast.o
+            net/ipv6/ndisc.o
+            net/ipv6/raw.o
+            net/ipv6/xfrm6_input.o
+            net/ipv6/xfrm6_output.o
+            net/xfrm/xfrm_output.o
+          )
+          for lane in gcc mini; do
+            out="$work/out-$lane"
+            make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- -j4 prepare
+            if test "$lane" = gcc; then
+              make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
+                -j4 V=1 "${targets[@]}" >"$work/evidence/$lane-kbuild.log" 2>&1
+            else
+              MINIC="$work/toolchain/bin/minic" \
+              REAL_CC=/usr/bin/riscv64-linux-gnu-gcc \
+              MINIC_KEEP_INTERMEDIATES=1 \
+              MINIC_KBUILD_TRACE="$work/evidence/minic-kbuild.trace" \
+              CORE_FAST_TRACE=1 \
+                make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
+                  CC="$wrapper" -j4 V=1 "${targets[@]}" \
+                  >"$work/evidence/$lane-kbuild.log" 2>&1
+            fi
+            for target in "${targets[@]}"; do test -s "$out/$target"; done
+          done
+          echo "LINUX_ASM_SYMBOLIC_BUILD=PASS objects=${#targets[@]}"
+
+      - name: Compare deferred asm unresolved symbols
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-asm-symbolic-pool-v0"
+          ev="$work/evidence"
+          targets=(
+            arch/riscv/mm/fault.o
+            mm/memory.o
+            net/ipv4/arp.o
+            net/ipv4/ip_forward.o
+            net/ipv4/raw.o
+            net/ipv4/xfrm4_input.o
+            net/ipv4/xfrm4_output.o
+            net/ipv6/ip6_output.o
+            net/ipv6/mcast.o
+            net/ipv6/ndisc.o
+            net/ipv6/raw.o
+            net/ipv6/xfrm6_input.o
+            net/ipv6/xfrm6_output.o
+            net/xfrm/xfrm_output.o
+          )
+          bad=0
+          deferred=0
+          for target in "${targets[@]}"; do
+            key=${target//\//__}; key=${key%.o}
+            for lane in gcc mini; do
+              riscv64-linux-gnu-nm -u "$work/out-$lane/$target" \
+                | sed -E 's/^[[:space:]]*[A-Za-z]?[[:space:]]*//' \
+                | sed '/^$/d' | sort -u >"$ev/$lane-$key.undefined"
+            done
+            comm -13 "$ev/gcc-$key.undefined" "$ev/mini-$key.undefined" >"$ev/$key.only-mini"
+            n=$(grep -Ec '^__minic_deferred_asm_immediate_' "$ev/$key.only-mini" || true)
+            deferred=$((deferred + n))
+            echo "ASM_SYMBOLIC target=$target deferred=$n"
+            if test "$n" -ne 0; then
+              grep -E '^__minic_deferred_asm_immediate_' "$ev/$key.only-mini" || true
+              bad=$((bad + 1))
+            fi
+          done
+          echo "LINUX_ASM_SYMBOLIC_SUMMARY objects=${#targets[@]} deferred=$deferred bad_objects=$bad"
+          test "$bad" -eq 0
+          echo "LINUX_ASM_SYMBOLIC_POOL_V0=PASS deferred=0 objects=${#targets[@]}"
+
+      - name: Preserve evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-asm-symbolic-pool-v0
+          path: build/linux-asm-symbolic-pool-v0/evidence/
+          if-no-files-found: ignore
+          retention-days: 7
