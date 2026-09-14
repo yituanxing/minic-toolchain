@@ -35,7 +35,7 @@ jobs:
         run: |
           sudo apt-get -o Acquire::Retries=3 update
           sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
-            gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu libelf-dev
+            gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu
 
       - name: Apply current semantic stack plus symbolic asm fix
         shell: bash
@@ -77,8 +77,10 @@ jobs:
             python3 "tools/ci/$patch" | tee -a "$work/evidence/patch.log"
           done
           git diff --check
-          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$build" all
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$build" \
+            "$build/bin/minic" "$build/bin/minic-cc"
           test -x "$build/bin/minic"
+          test -x "$build/bin/minic-cc"
           elapsed=$(($(date +%s) - start))
           echo "TIMING toolchain_s=$elapsed" | tee -a "$work/evidence/timing.txt"
           echo "LINUX_ASM_SYMBOLIC_TOOLCHAIN=PASS head=${GITHUB_SHA}"
@@ -135,7 +137,8 @@ jobs:
           out="$work/out-mini"
           ev="$work/evidence"
           wrapper="$GITHUB_WORKSPACE/tests/external/linux/stage2_kbuild_cc.sh"
-          target=net/ipv4/ip_forward.o
+          target=net/xfrm/xfrm_output.o
+          key=net__xfrm__xfrm_output
           rm -rf "$out"
           cp -a --reflink=auto "$base" "$out"
           start=$(date +%s)
@@ -151,16 +154,16 @@ jobs:
           set -e
           elapsed=$(($(date +%s) - start))
           echo "TIMING representative_s=$elapsed rc=$rc" | tee -a "$ev/timing.txt"
-          cp -f "$out/net/ipv4/ip_forward.minic-stage2.i" "$ev/ip_forward.minic-stage2.i" 2>/dev/null || true
-          cp -f "$out/net/ipv4/ip_forward.minic-stage2.s" "$ev/ip_forward.minic-stage2.s" 2>/dev/null || true
-          cp -f "$out/net/ipv4/ip_forward.minic-stage2.minic.stderr" "$ev/ip_forward.minic.stderr" 2>/dev/null || true
+          cp -f "$out/net/xfrm/xfrm_output.minic-stage2.i" "$ev/xfrm_output.minic-stage2.i" 2>/dev/null || true
+          cp -f "$out/net/xfrm/xfrm_output.minic-stage2.s" "$ev/xfrm_output.minic-stage2.s" 2>/dev/null || true
+          cp -f "$out/net/xfrm/xfrm_output.minic-stage2.minic.stderr" "$ev/xfrm_output.minic.stderr" 2>/dev/null || true
           test "$rc" -eq 0
           test -s "$out/$target"
-          riscv64-linux-gnu-nm -u "$out/$target" | sort -u >"$ev/ip_forward.undefined"
-          deferred=$(grep -Ec '__minic_deferred_asm_immediate_' "$ev/ip_forward.undefined" || true)
+          riscv64-linux-gnu-nm -u "$out/$target" | sort -u >"$ev/$key.undefined"
+          deferred=$(grep -Ec '__minic_deferred_asm_immediate_' "$ev/$key.undefined" || true)
           echo "LINUX_ASM_FAST target=$target deferred=$deferred"
           if test "$deferred" -ne 0; then
-            grep -E '__minic_deferred_asm_immediate_' "$ev/ip_forward.undefined" || true
+            grep -E '__minic_deferred_asm_immediate_' "$ev/$key.undefined" || true
             exit 1
           fi
           echo "LINUX_ASM_FAST=PASS deferred=0"
@@ -178,6 +181,7 @@ jobs:
             arch/riscv/mm/fault.o
             mm/memory.o
             net/ipv4/arp.o
+            net/ipv4/ip_forward.o
             net/ipv4/raw.o
             net/ipv4/xfrm4_input.o
             net/ipv4/xfrm4_output.o
@@ -187,7 +191,6 @@ jobs:
             net/ipv6/raw.o
             net/ipv6/xfrm6_input.o
             net/ipv6/xfrm6_output.o
-            net/xfrm/xfrm_output.o
           )
           start=$(date +%s)
           MINIC="$work/toolchain/bin/minic" \
@@ -199,7 +202,7 @@ jobs:
               CC="$wrapper" -j4 V=1 "${targets[@]}" >"$ev/mini-full.log" 2>&1
           bad=0
           deferred=0
-          all_targets=(net/ipv4/ip_forward.o "${targets[@]}")
+          all_targets=(net/xfrm/xfrm_output.o "${targets[@]}")
           for target in "${all_targets[@]}"; do
             test -s "$out/$target"
             key=${target//\//__}; key=${key%.o}
