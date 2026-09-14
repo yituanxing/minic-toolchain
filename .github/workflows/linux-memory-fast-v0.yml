@@ -81,7 +81,7 @@ jobs:
             apply-riscv64-default-text-section-v0.py
             apply-riscv64-explicit-section-flags-v0.py
             apply-inline-asm-symbolic-specialization-v0.py
-            apply-inline-specialization-boolean-range-v0.py
+            apply-inline-specialization-boolean-range-v1.py
             apply-constant-inline-call-cfg-v1.py
             apply-local-integer-arithmetic-closure-v0.py
             apply-constant-cfg-product-v0.py
@@ -141,7 +141,7 @@ jobs:
           set -e
           echo "TIMING replay_s=$(($(date +%s) - start)) rc=$rc" | tee -a "$ev/timing.txt"
           grep -aE '__compiletime_assert_164|call arch_sync_kernel_mappings|call encode_page' "$ev/memory.s" >"$ev/targets.txt" || true
-          grep -aE 'LOCAL_FACT_(ASSIGN|CLEAR|STMT).*(__apply_to_page_range|encode_page|__tlb_remove_page|zap_pte_range)|INLINE_SPEC_BOOLEAN_SELECT|MINIC_INLINE_BOOLEAN_RANGE_V0' "$ev/memory.stderr" >"$ev/facts.txt" || true
+          grep -aE 'LOCAL_FACT_(ASSIGN|CLEAR|STMT).*(__apply_to_page_range|encode_page|__tlb_remove_page|zap_pte_range)|INLINE_SPEC_BOOLEAN_SELECT|MINIC_INLINE_BOOLEAN_RANGE_V[01]' "$ev/memory.stderr" >"$ev/facts.txt" || true
           printf 'MEMORY_TARGET_ASSERT164=%s\n' "$(grep -c '__compiletime_assert_164' "$ev/memory.s" || true)" | tee "$ev/summary.txt"
           printf 'MEMORY_TARGET_ARCH_SYNC=%s\n' "$(grep -c 'call arch_sync_kernel_mappings' "$ev/memory.s" || true)" | tee -a "$ev/summary.txt"
           printf 'MEMORY_TARGET_ENCODE_CALL=%s\n' "$(grep -c 'call encode_page' "$ev/memory.s" || true)" | tee -a "$ev/summary.txt"
