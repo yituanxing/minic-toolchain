@@ -119,3 +119,20 @@ text = text.replace(old, new, 1)
 
 p.write_text(text)
 print("MINIC_INLINE_ASM_SYMBOLIC_SPECIALIZATION_V0=APPLIED preexisting_integer_clones=1")
+
+# Keep expanded final-link validation on the exact focused semantic stack.
+# The workflow intentionally invokes this file last, so close the remaining
+# validated CFG families here in their tested order without another long
+# workflow edit. core-unreachable-reentry chains residual-constant-closure.
+for chained_patch in (
+    "apply-local-null-pointer-conditions-v0.py",
+    "apply-inline-specialization-boolean-range-v1.py",
+    "apply-inline-specialization-local-boolean-domain-v0.py",
+    "apply-constant-inline-call-cfg-v1.py",
+    "apply-local-integer-arithmetic-closure-v0.py",
+    "apply-constant-cfg-product-v0.py",
+    "apply-core-unreachable-reentry-v0.py",
+):
+    chained = Path("tools/ci") / chained_patch
+    exec(compile(chained.read_text(), str(chained), "exec"))
+print("MINIC_LINUX_FOCUSED_SEMANTIC_STACK=APPLIED")
