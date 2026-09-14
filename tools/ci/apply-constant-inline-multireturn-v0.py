@@ -34,10 +34,10 @@ new = '''    body = minic_c0_program_block(program, callee->body_block);
     if (statement == NULL || statement->kind != MINIC_STATEMENT_RETURN ||
         statement->expression == MINIC_EXPRESSION_INVALID ||
         statement->cleanup_context != statement->cleanup_stop_context ||
-        !minic_const_eval_integer(program,
-                                  context->target,
-                                  statement->expression,
-                                  &returned)) {
+                !minic_const_eval_integer(program,
+                                          context->target,
+                                          statement->expression,
+                                          &returned)) {
         return false;
     }
     return minic_const_value_convert_integer(program,
