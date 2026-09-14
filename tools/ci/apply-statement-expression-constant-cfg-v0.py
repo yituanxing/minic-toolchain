@@ -3,7 +3,7 @@ from pathlib import Path
 
 # CFG-only constant evaluation for a deliberately tiny GNU statement-expression
 # subset: direct integer-local assignments followed by one final pure integer
-# expression.  Any control flow, non-local write, cleanup, unknown value, or
+# expression. Any control flow, non-local write, cleanup, unknown value, or
 # unsupported statement fails closed. Runtime lowering is unchanged.
 p = Path("src/core/core_lower.c")
 text = p.read_text()
@@ -20,15 +20,13 @@ fn_end = text.find("\nstatic ", fn_start + len(fn))
 if fn_end < 0:
     raise SystemExit("statement-expression local evaluator end missing")
 body = text[fn_start:fn_end]
-anchor = '''    if (expression == NULL || !minic_type_is_integer(expression->type)) {
-        return false;
-    }
+# Later semantic-stack patches may extend the validation prologue. The direct
+# local-read branch is the stable first consumer after expression validation,
+# so insert immediately before it rather than matching the prologue spelling.
+anchor = '''    if (core_direct_local_read(context, expression_id, &local_id) &&
 '''
-insert = r'''    if (expression == NULL || !minic_type_is_integer(expression->type)) {
-        return false;
-    }
-    /* M184_STATEMENT_EXPRESSION_CONSTANT_CFG: interpret only the straight-line
-       local-constant subset of GNU ({ ... }) expressions.  This is intentionally
+insert = r'''    /* M184_STATEMENT_EXPRESSION_CONSTANT_CFG: interpret only the straight-line
+       local-constant subset of GNU ({ ... }) expressions. This is intentionally
        not a general AST interpreter. */
     if (expression->kind == MINIC_EXPRESSION_STATEMENT) {
         const MinicBlock *statement_block;
@@ -114,11 +112,12 @@ statement_expression_done:
         free(nested_facts);
         return success;
     }
+
 '''
 count = body.count(anchor)
 if count != 1:
-    raise SystemExit(f"statement-expression evaluator anchor: expected one, found {count}")
-body = body.replace(anchor, insert, 1)
+    raise SystemExit(f"statement-expression local-read anchor: expected one, found {count}")
+body = body.replace(anchor, insert + anchor, 1)
 text = text[:fn_start] + body + text[fn_end:]
 p.write_text(text)
 print("MINIC_STATEMENT_EXPRESSION_CONSTANT_CFG_V0=APPLIED straight_line_locals=1")
