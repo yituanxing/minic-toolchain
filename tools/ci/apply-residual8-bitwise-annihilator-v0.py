@@ -24,16 +24,16 @@ block = r'''    /* RESIDUAL8_BITWISE_ZERO_ANNIHILATOR_V0: x & 0 and 0 & x are
        This closes CONFIG-disabled predicates such as inode->i_flags & 0. */
     if (expression->kind == MINIC_EXPRESSION_BINARY &&
         expression->value.binary.operator_kind == MINIC_BINARY_BITWISE_AND) {
-        MinicConstValue operand_value;
-        bool operand_is_zero;
+        MinicConstValue annihilator_operand;
+        bool annihilator_is_zero;
 
         if (core_const_eval_integer_with_locals(
-                context, expression->value.binary.left, &operand_value) &&
+                context, expression->value.binary.left, &annihilator_operand) &&
             minic_const_value_is_zero(context->body->program,
                                       context->target,
-                                      &operand_value,
-                                      &operand_is_zero) &&
-            operand_is_zero &&
+                                      &annihilator_operand,
+                                      &annihilator_is_zero) &&
+            annihilator_is_zero &&
             core_cfg_pure_call_argument(
                 context, expression->value.binary.right, 0U)) {
             value->type = expression->type;
@@ -41,12 +41,12 @@ block = r'''    /* RESIDUAL8_BITWISE_ZERO_ANNIHILATOR_V0: x & 0 and 0 & x are
             return true;
         }
         if (core_const_eval_integer_with_locals(
-                context, expression->value.binary.right, &operand_value) &&
+                context, expression->value.binary.right, &annihilator_operand) &&
             minic_const_value_is_zero(context->body->program,
                                       context->target,
-                                      &operand_value,
-                                      &operand_is_zero) &&
-            operand_is_zero &&
+                                      &annihilator_operand,
+                                      &annihilator_is_zero) &&
+            annihilator_is_zero &&
             core_cfg_pure_call_argument(
                 context, expression->value.binary.left, 0U)) {
             value->type = expression->type;
