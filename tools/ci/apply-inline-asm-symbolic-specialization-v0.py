@@ -4,20 +4,21 @@ from pathlib import Path
 # Symbolic specialization runs after integer specialization. Revisit already
 # existing integer-specialized callers too: their closed integer facts can turn
 # expressions such as &global[a][b] into static symbolic addresses for the next
-# always-inline callee. Keep original_function_count for diagnostics/lifetime
-# bookkeeping, but start this caller walk at zero and let is_integer_specialization
-# filter the eligible functions.
+# always-inline callee.
 p = Path("src/compiler/compiler.c")
 text = p.read_text()
+function_anchor = "static bool minic_specialize_inline_symbolic_calls(\n"
+start = text.find(function_anchor)
+if start < 0:
+    raise SystemExit("cannot find symbolic specialization pass")
 old_loop = "        for (caller_index = original_function_count;\n"
-if text.count(old_loop) != 1:
-    raise SystemExit(
-        f"expected one symbolic existing-clone loop anchor, found {text.count(old_loop)}")
-text = text.replace(
-    old_loop,
-    "        (void)original_function_count;\n        for (caller_index = 0U;\n",
-    1,
-)
+pos = text.find(old_loop, start)
+if pos < 0:
+    raise SystemExit("cannot find symbolic transitive caller loop")
+# Keep the variable live because the surrounding pass still records the
+# pre-symbolic boundary; only this traversal needs to start from old integer clones.
+replacement = "        (void)original_function_count;\n        for (caller_index = 0U;\n"
+text = text[:pos] + replacement + text[pos + len(old_loop):]
 p.write_text(text)
 
 # Keep the late asm-boundary fallback as a conservative second line of defense
