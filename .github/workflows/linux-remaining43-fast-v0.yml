@@ -75,6 +75,7 @@ jobs:
             apply-inline-asm-symbolic-specialization-v0.py
           )
           for patch in "${patches[@]}"; do python3 "tools/ci/$patch" | tee -a "$ev/patch.log"; done
+          python3 tools/ci/exp-internal-function-reachability-v0.py | tee -a "$ev/patch.log"
           git diff --check
           make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$build" "$build/bin/minic" "$build/bin/minic-cc"
           echo "TIMING toolchain_s=$(($(date +%s) - start))" | tee "$ev/timing.txt"
