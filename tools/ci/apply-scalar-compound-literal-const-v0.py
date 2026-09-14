@@ -24,15 +24,18 @@ new = '''    if (core_direct_local_read(context, expression_id, &local_id) &&
                                                  value);
     }
     /* Linux uses scalar compound literals such as `(int){0}` in constant
-     * assertions.  Keep the compound literal's ordinary addressable-object
-     * runtime semantics unchanged; this recognizes only the frontend's simple
-     * one-assignment hidden initializer shape while answering a compile-time
-     * integer query. */
-    if (expression->kind == MINIC_EXPRESSION_LVALUE_READ) {
-        const MinicExpression *compound;
+     * assertions. Keep the ordinary addressable-object runtime semantics
+     * unchanged and recognize only the frontend's single-assignment hidden
+     * initializer while answering a compile-time integer query. The semantic
+     * conversion pipeline may present either the compound-literal lvalue
+     * itself or an explicit lvalue-read wrapper, so accept both shapes. */
+    {
+        const MinicExpression *compound = expression;
 
-        compound = minic_c0_program_expression(
-            context->body->program, expression->value.unary.operand);
+        if (expression->kind == MINIC_EXPRESSION_LVALUE_READ) {
+            compound = minic_c0_program_expression(
+                context->body->program, expression->value.unary.operand);
+        }
         if (compound != NULL &&
             compound->kind == MINIC_EXPRESSION_COMPOUND_LITERAL &&
             minic_type_is_integer(compound->type)) {
