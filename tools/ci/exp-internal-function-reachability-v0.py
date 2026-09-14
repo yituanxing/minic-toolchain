@@ -39,25 +39,43 @@ source = lower.read_text()
 
 # M181_CONSTANT_CONDITION_BRANCH
 marker = "M181_CONSTANT_CONDITION_BRANCH"
-if marker in source:
-    raise SystemExit("M181 constant condition branch already present")
-definition_anchor = '''static MinicCoreLowerStatus lower_condition_branch(MinicCoreLowerContext *context,
+existing_condition_fold = '''    if (minic_type_is_integer(expression->type)) {
+        MinicConstValue condition_constant;
+        bool condition_is_zero;
+        if (core_const_eval_integer_with_locals(context, expression_id, &condition_constant) &&
+            minic_const_value_is_zero(context->body->program,
+                                      context->target,
+                                      &condition_constant,
+                                      &condition_is_zero)) {
+            return set_branch(context,
+                              context->block_id,
+                              span,
+                              condition_is_zero ? when_false : when_true);
+        }
+    }
+'''
+if marker in source or existing_condition_fold in source:
+    print("M181_CONSTANT_CONDITION_BRANCH=ALREADY_APPLIED")
+else:
+    definition_anchor = '''static MinicCoreLowerStatus lower_condition_branch(MinicCoreLowerContext *context,
                                                    MinicExpressionId expression_id,
                                                    MinicSourceSpan span,
                                                    MinicCoreBlockId when_true,
                                                    MinicCoreBlockId when_false) {
 '''
-function_start = source.find(definition_anchor)
-if function_start < 0:
-    raise SystemExit("lower_condition_branch definition anchor not found")
-function_end = source.find("\nstatic bool core_switch_label_has_function_reentry", function_start)
-if function_end < 0:
-    raise SystemExit("lower_condition_branch end anchor not found")
-body = source[function_start:function_end]
-anchor = '''    if (expression->kind == MINIC_EXPRESSION_UNARY &&
+    function_start = source.find(definition_anchor)
+    if function_start < 0:
+        function_start = source.find("lower_condition_branch(")
+    if function_start < 0:
+        raise SystemExit("lower_condition_branch definition anchor not found")
+    function_end = source.find("\nstatic bool core_switch_label_has_function_reentry", function_start)
+    if function_end < 0:
+        raise SystemExit("lower_condition_branch end anchor not found")
+    body = source[function_start:function_end]
+    anchor = '''    if (expression->kind == MINIC_EXPRESSION_UNARY &&
         expression->value.unary.operator_kind == MINIC_UNARY_LOGICAL_NOT) {
 '''
-insert = '''    /* M181_CONSTANT_CONDITION_BRANCH: collapse a target/local-aware integer
+    insert = '''    /* M181_CONSTANT_CONDITION_BRANCH: collapse a target/local-aware integer
        condition to one executable edge even when lower_if had to construct the
        cleanup-sensitive general CFG first. */
     if (minic_type_is_integer(expression->type) && context->target != NULL) {
@@ -79,11 +97,12 @@ insert = '''    /* M181_CONSTANT_CONDITION_BRANCH: collapse a target/local-aware
     if (expression->kind == MINIC_EXPRESSION_UNARY &&
         expression->value.unary.operator_kind == MINIC_UNARY_LOGICAL_NOT) {
 '''
-count = body.count(anchor)
-if count != 1:
-    raise SystemExit(f"expected one lower_condition_branch logical-not anchor, found {count}")
-body = body.replace(anchor, insert, 1)
-source = source[:function_start] + body + source[function_end:]
+    count = body.count(anchor)
+    if count != 1:
+        raise SystemExit(f"expected one lower_condition_branch logical-not anchor, found {count}")
+    body = body.replace(anchor, insert, 1)
+    source = source[:function_start] + body + source[function_end:]
+    print("M181_CONSTANT_CONDITION_BRANCH=APPLIED")
 
 # M182_TERMINATING_GUARD_FACTS
 if "M182_TERMINATING_GUARD_FACTS" in source:
@@ -158,5 +177,4 @@ if_body = if_body.replace(post_clear, post_keep, 1)
 source = source[:if_start] + if_body + source[if_end:]
 
 lower.write_text(source)
-print("M181_CONSTANT_CONDITION_BRANCH=APPLIED")
 print("M182_TERMINATING_GUARD_FACTS=APPLIED")
