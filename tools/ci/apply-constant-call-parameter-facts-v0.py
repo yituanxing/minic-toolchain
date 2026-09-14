@@ -40,21 +40,28 @@ if count != 1:
     raise SystemExit(f"constant-call recursion guard anchor: expected one, found {count}")
 text = text.replace(guard_old, guard_new, 1)
 
+# Keep this locator independent of whether the surrounding condition continues
+# with `||` or closes immediately.  The semantic operation being replaced is
+# the evaluator call itself, not its enclosing punctuation.
+fn_start = text.find(anchor)
+fn_end = text.find("\nstatic bool core_const_eval_integer_with_locals", fn_start)
+if fn_end < 0:
+    raise SystemExit("constant-call helper end anchor missing")
+fn_body = text[fn_start:fn_end]
 eval_old = '''                !minic_const_eval_integer(program,
                                           context->target,
                                           statement->expression,
-                                          &returned) ||
-'''
+                                          &returned)'''
 eval_new = '''                !core_cfg_eval_callee_return_expression(context,
                                                         callee,
                                                         expression,
                                                         statement->expression,
-                                                        &returned) ||
-'''
-count = text.count(eval_old)
+                                                        &returned)'''
+count = fn_body.count(eval_old)
 if count != 1:
     raise SystemExit(f"constant-call return evaluator anchor: expected one, found {count}")
-text = text.replace(eval_old, eval_new, 1)
+fn_body = fn_body.replace(eval_old, eval_new, 1)
+text = text[:fn_start] + fn_body + text[fn_end:]
 
 insert_anchor = "static MinicCoreLowerStatus lower_condition_branch("
 pos = text.find(insert_anchor)
