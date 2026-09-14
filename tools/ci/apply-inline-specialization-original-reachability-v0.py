@@ -45,12 +45,14 @@ static bool minic_inline_source_is_core_reachable_only(
         return false;
     }
     source = &program->functions[source_id];
-    /* Internal inline bodies are implementation details, not emission roots.
+    /* Internal function bodies are implementation details, not emission roots.
      * Parser-level is_referenced can stay set after every executable call was
      * rewritten, specialized, or folded away.  Let the lowered Core graph pull
      * the body back in when a reachable CALL or FUNCTION_ADDRESS still needs
-     * it; preserve only roots that live outside that graph. */
-    return source->is_defined && source->is_internal && source->is_inline &&
+     * it; preserve only entry/force-emit/alias/global-relocation roots that live
+     * outside that graph.  This applies to ordinary static functions as well as
+     * static inline helpers so dead CONFIG-disabled helper subgraphs disappear. */
+    return source->is_defined && source->is_internal &&
            !minic_inline_source_has_noncore_root(program, source_id);
 }
 
@@ -70,9 +72,9 @@ new_root = '''        if (function->is_integer_specialization || !function->is_d
             (function->is_internal && !function->is_referenced)) {
             continue;
         }
-        /* Parser-level references are only a discovery hint for internal inline
-         * bodies.  The final lowered Core graph is the authoritative executable
-         * reachability source; non-Core roots remain conservative roots. */
+        /* Parser-level references are only a discovery hint for internal
+         * functions.  The final lowered Core graph is the authoritative
+         * executable reachability source; non-Core roots stay conservative. */
         if (minic_inline_source_is_core_reachable_only(
                 program, (MinicFunctionId)function_index)) {
             continue;
@@ -107,4 +109,4 @@ if text.count(old_final) != 1:
 text = text.replace(old_final, new_final, 1)
 
 p.write_text(text)
-print("MINIC_INLINE_SPECIALIZATION_ORIGINAL_REACHABILITY_V0=APPLIED all_internal_inline=1")
+print("MINIC_INLINE_SPECIALIZATION_ORIGINAL_REACHABILITY_V0=APPLIED all_internal=1")
