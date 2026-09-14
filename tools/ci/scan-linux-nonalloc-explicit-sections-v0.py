@@ -24,6 +24,16 @@ BAD_SECTIONS = {
     '__timer_of_table', '__timer_of_table_end',
 }
 
+# These objects were outside the historical final-link failure pool and can be
+# restored from a mixed cache produced before all-internal Core reachability was
+# fixed. Rebuild this tiny known set alongside section refreshes so final-link
+# validation never measures stale lockdep_is_held references.
+STALE_SEMANTIC_OBJECTS = (
+    'net/ipv4/tcp_output.o',
+    'net/ipv4/tcp_timer.o',
+    'net/ipv4/tcp_ipv4.o',
+)
+
 
 def bad_sections(path: Path) -> list[str]:
     try:
@@ -91,9 +101,14 @@ def main() -> int:
         results = pool.map(lambda path: inspect(out, path), paths)
         found = [result for result in results if result is not None]
 
-    for target, bad in sorted(found):
+    refresh = {target: ','.join(bad) for target, bad in found}
+    for target in STALE_SEMANTIC_OBJECTS:
+        if (out / target).is_file():
+            refresh.setdefault(target, 'semantic-cache-stale')
+
+    for target in sorted(refresh):
         print(target)
-        print(f"DETAIL {target}: {','.join(bad)}", file=os.sys.stderr)
+        print(f"DETAIL {target}: {refresh[target]}", file=os.sys.stderr)
     return 0
 
 
