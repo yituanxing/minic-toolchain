@@ -15,10 +15,20 @@ new = '''    /* M179_INTERNAL_CORE_REACHABILITY: parser-level is_referenced is n
     return source->is_defined && source->is_internal &&
            !minic_inline_source_has_noncore_root(program, source_id);
 '''
+already = '''    return source->is_defined && source->is_internal &&
+           !minic_inline_source_has_noncore_root(program, source_id);
+'''
 count = text.count(old)
-if count != 1:
-    raise SystemExit(f"expected one internal reachability predicate, found {count}")
-p.write_text(text.replace(old, new, 1))
+if count == 1:
+    text = text.replace(old, new, 1)
+elif count == 0 and text.count(already) == 1:
+    print("M179_INTERNAL_CORE_REACHABILITY=ALREADY_APPLIED")
+else:
+    raise SystemExit(
+        f"expected one internal reachability predicate or one already-applied form, "
+        f"found old={count} new={text.count(already)}"
+    )
+p.write_text(text)
 print("M179_INTERNAL_CORE_REACHABILITY=APPLIED")
 
 label_patch = Path("tools/ci/exp-core-reachability-label-roots-v0.py")
