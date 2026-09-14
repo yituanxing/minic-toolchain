@@ -51,47 +51,29 @@ else:
     p.write_text(text.replace(old, new, 1))
     print("MINIC_CORE_UNREACHABLE_REENTRY_V0=APPLIED")
 
-# Residual constant/CFG closure deliberately runs after the complete focused
-# semantic stack, because it reuses core_cfg_pure_call_argument from the
-# constant-inline pass and validates several remaining Linux BUILD_BUG forms.
 closure = Path("tools/ci/apply-residual-constant-closure-v0.py")
 exec(compile(closure.read_text(), str(closure), "exec"))
 
-# Normalized pointer-to-integer casts can be represented as BITCAST as well as
-# CAST/CONVERSION. M181 already proves the pointer bits; admit the missing
-# outer spelling so poisoned-pointer BUILD_BUG checks fold identically.
+# Residual8: x & 0 / 0 & x on a pure unknown operand is still constant zero.
+# Run this immediately after the general residual constant closure so higher
+# level logical/helper evaluation can consume the newly proven zero.
+bitwise_zero = Path("tools/ci/apply-residual8-bitwise-annihilator-v0.py")
+exec(compile(bitwise_zero.read_text(), str(bitwise_zero), "exec"))
+
 bitcast = Path("tools/ci/apply-pointer-bitcast-integer-cfg-v0.py")
 exec(compile(bitcast.read_text(), str(bitcast), "exec"))
 
-# Feature-disabled Linux code also uses non-inline internal helpers whose body
-# is exactly one constant return.  Reuse the existing strict CFG-only helper
-# evaluator for those functions as well; argument purity and single-return
-# requirements remain unchanged.
 internal_call = Path("tools/ci/apply-constant-internal-call-cfg-v0.py")
 exec(compile(internal_call.read_text(), str(internal_call), "exec"))
 
-# Evaluate CFG-only constant helpers in a temporary callee fact environment so
-# constant call arguments become parameter-local facts. This lets the existing
-# arithmetic/boolean closure prove helpers such as is_power_of_2(8) without
-# changing runtime call lowering. Recursion remains depth-limited and fail-closed.
 parameter_facts = Path("tools/ci/apply-constant-call-parameter-facts-v0.py")
 exec(compile(parameter_facts.read_text(), str(parameter_facts), "exec"))
 
-# File-scope internal const integer objects are immutable under defined C
-# behavior. Expose their scalar initializer to the same CFG-only evaluator;
-# this covers guard metadata emitted as static const bool without changing
-# ordinary global-object lowering.
 static_const = Path("tools/ci/apply-static-const-global-cfg-v0.py")
 exec(compile(static_const.read_text(), str(static_const), "exec"))
 
-# A CONFIG-disabled helper often begins with a constant if-return and then has
-# runtime-dependent fallback code. Follow only a proven one-return selected arm;
-# otherwise retain the existing fail-closed direct-return behavior.
 leading_if = Path("tools/ci/apply-constant-call-leading-if-v0.py")
 exec(compile(leading_if.read_text(), str(leading_if), "exec"))
 
-# Tail closure consumes facts established by M177/M181 plus integer/symbolic
-# specialization, so it must run after both residual constant closure and the
-# complete focused semantic stack.
 tail = Path("tools/ci/apply-tail-cfg-closure-v0.py")
 exec(compile(tail.read_text(), str(tail), "exec"))
