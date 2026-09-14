@@ -74,7 +74,7 @@ jobs:
             apply-riscv64-default-text-section-v0.py
             apply-riscv64-explicit-section-flags-v0.py
             apply-inline-asm-symbolic-specialization-v0.py
-            apply-constant-inline-call-cfg-v0.py
+            apply-constant-inline-call-cfg-v1.py
             apply-local-integer-arithmetic-closure-v0.py
             apply-constant-cfg-product-v0.py
           )
