@@ -22,30 +22,42 @@ new = '''    program = context->body->program;
         const MinicBlock *probe_body = callee->body_block == MINIC_BLOCK_INVALID
                                            ? NULL
                                            : minic_c0_program_block(program, callee->body_block);
-        const MinicStatement *probe_statement =
-            probe_body != NULL && probe_body->statement_count == 1U
-                ? minic_c0_program_statement(program, probe_body->statements[0])
-                : NULL;
-        MinicConstValue probe_value;
-        bool probe_eval = probe_statement != NULL &&
-                          probe_statement->kind == MINIC_STATEMENT_RETURN &&
-                          probe_statement->expression != MINIC_EXPRESSION_INVALID &&
-                          minic_const_eval_integer(program,
-                                                   context->target,
-                                                   probe_statement->expression,
-                                                   &probe_value);
+        size_t probe_index;
         (void)fprintf(stderr,
-                      "CFG_CONST_PROBE name=%s defined=%d internal=%d inline=%d body=%zu stmt=%d eval=%d retint=%d exprint=%d argc=%zu\\n",
+                      "CFG_CONST_PROBE name=%s defined=%d internal=%d inline=%d body=%zu retint=%d exprint=%d argc=%zu",
                       callee->name,
                       callee->is_defined ? 1 : 0,
                       callee->is_internal ? 1 : 0,
                       callee->is_inline ? 1 : 0,
                       probe_body == NULL ? 0U : probe_body->statement_count,
-                      probe_statement == NULL ? -1 : (int)probe_statement->kind,
-                      probe_eval ? 1 : 0,
                       minic_type_is_integer(callee->return_type) ? 1 : 0,
                       minic_type_is_integer(expression->type) ? 1 : 0,
                       expression->value.call.argument_count);
+        if (probe_body != NULL) {
+            for (probe_index = 0U; probe_index < probe_body->statement_count; ++probe_index) {
+                const MinicStatement *probe_statement = minic_c0_program_statement(
+                    program, probe_body->statements[probe_index]);
+                MinicConstValue probe_value;
+                bool probe_eval = probe_statement != NULL &&
+                                  probe_statement->expression != MINIC_EXPRESSION_INVALID &&
+                                  minic_const_eval_integer(program,
+                                                           context->target,
+                                                           probe_statement->expression,
+                                                           &probe_value);
+                (void)fprintf(stderr,
+                              " s%zu_kind=%d s%zu_expr=%d s%zu_eval=%d s%zu_clean=%zu/%zu",
+                              probe_index,
+                              probe_statement == NULL ? -1 : (int)probe_statement->kind,
+                              probe_index,
+                              probe_statement != NULL && probe_statement->expression != MINIC_EXPRESSION_INVALID ? 1 : 0,
+                              probe_index,
+                              probe_eval ? 1 : 0,
+                              probe_index,
+                              probe_statement == NULL ? (size_t)0 : (size_t)probe_statement->cleanup_context,
+                              probe_statement == NULL ? (size_t)0 : (size_t)probe_statement->cleanup_stop_context);
+            }
+        }
+        (void)fprintf(stderr, "\\n");
     }
     if (callee == NULL || !callee->is_defined || !callee->is_internal || !callee->is_inline ||
 '''
