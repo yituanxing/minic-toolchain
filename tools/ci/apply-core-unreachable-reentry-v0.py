@@ -56,3 +56,9 @@ else:
 # constant-inline pass and validates several remaining Linux BUILD_BUG forms.
 closure = Path("tools/ci/apply-residual-constant-closure-v0.py")
 exec(compile(closure.read_text(), str(closure), "exec"))
+
+# Tail closure consumes facts established by M177/M181 plus integer/symbolic
+# specialization, so it must run after both residual constant closure and the
+# complete focused semantic stack.
+tail = Path("tools/ci/apply-tail-cfg-closure-v0.py")
+exec(compile(tail.read_text(), str(tail), "exec"))
