@@ -13,7 +13,10 @@ site = 0
 out = []
 manifest = []
 for line_no, line in enumerate(lines, 1):
-    while needle in line:
+    occurrences = line.count(needle)
+    if occurrences > 1:
+        raise SystemExit(f"multiple unsupported returns on source line {line_no}")
+    if occurrences == 1:
         site += 1
         indent = line[: len(line) - len(line.lstrip())]
         replacement = (
@@ -29,6 +32,8 @@ for line_no, line in enumerate(lines, 1):
         manifest.append(f"SITE {site} SOURCE_LINE {line_no}\n{context}\n---\n")
     out.append(line)
 
+if site != count:
+    raise SystemExit(f"trace site mismatch: expected {count}, wrote {site}")
 p.write_text("".join(out))
 Path("/tmp/core-unsupported-sites-v0.txt").write_text("".join(manifest))
 print(f"MINIC_CORE_UNSUPPORTED_TRACE_V0=APPLIED returns={site}")
