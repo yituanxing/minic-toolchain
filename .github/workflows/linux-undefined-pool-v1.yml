@@ -62,6 +62,7 @@ jobs:
             apply-inline-specialization-label-alias-v0.py
             apply-riscv64-default-text-section-v0.py
             apply-riscv64-explicit-section-flags-v0.py
+            apply-scalar-compound-literal-const-v0.py
           )
           for patch in "${patches[@]}"; do
             python3 "tools/ci/$patch" | tee -a "$work/evidence/patch.log"
