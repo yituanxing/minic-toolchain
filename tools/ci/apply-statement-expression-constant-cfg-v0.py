@@ -12,17 +12,27 @@ if marker in text:
     print("MINIC_STATEMENT_EXPRESSION_CONSTANT_CFG_V0=ALREADY")
     raise SystemExit(0)
 
-fn = "static bool core_const_eval_integer_with_locals(const MinicCoreLowerContext *context,\n"
-fn_start = text.find(fn)
+# Parameter-fact support adds a forward declaration of this helper near the top
+# of the file. Locate the actual definition by requiring `{` before `;`.
+name = "static bool core_const_eval_integer_with_locals("
+search = 0
+fn_start = -1
+while True:
+    candidate = text.find(name, search)
+    if candidate < 0:
+        break
+    brace = text.find("{", candidate)
+    semicolon = text.find(";", candidate)
+    if brace >= 0 and (semicolon < 0 or brace < semicolon):
+        fn_start = candidate
+        break
+    search = candidate + len(name)
 if fn_start < 0:
-    raise SystemExit("statement-expression local evaluator missing")
-fn_end = text.find("\nstatic ", fn_start + len(fn))
+    raise SystemExit("statement-expression evaluator definition missing")
+fn_end = text.find("\nstatic ", text.find("\n}", fn_start) + 2)
 if fn_end < 0:
-    raise SystemExit("statement-expression local evaluator end missing")
+    raise SystemExit("statement-expression evaluator end missing")
 body = text[fn_start:fn_end]
-# Later semantic-stack patches may extend the validation prologue. The direct
-# local-read branch is the stable first consumer after expression validation,
-# so insert immediately before it rather than matching the prologue spelling.
 anchor = '''    if (core_direct_local_read(context, expression_id, &local_id) &&
 '''
 insert = r'''    /* M184_STATEMENT_EXPRESSION_CONSTANT_CFG: interpret only the straight-line
