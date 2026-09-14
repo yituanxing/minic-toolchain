@@ -77,6 +77,19 @@ exec(compile(internal_call.read_text(), str(internal_call), "exec"))
 parameter_facts = Path("tools/ci/apply-constant-call-parameter-facts-v0.py")
 exec(compile(parameter_facts.read_text(), str(parameter_facts), "exec"))
 
+# File-scope internal const integer objects are immutable under defined C
+# behavior. Expose their scalar initializer to the same CFG-only evaluator;
+# this covers guard metadata emitted as static const bool without changing
+# ordinary global-object lowering.
+static_const = Path("tools/ci/apply-static-const-global-cfg-v0.py")
+exec(compile(static_const.read_text(), str(static_const), "exec"))
+
+# A CONFIG-disabled helper often begins with a constant if-return and then has
+# runtime-dependent fallback code. Follow only a proven one-return selected arm;
+# otherwise retain the existing fail-closed direct-return behavior.
+leading_if = Path("tools/ci/apply-constant-call-leading-if-v0.py")
+exec(compile(leading_if.read_text(), str(leading_if), "exec"))
+
 # Tail closure consumes facts established by M177/M181 plus integer/symbolic
 # specialization, so it must run after both residual constant closure and the
 # complete focused semantic stack.
