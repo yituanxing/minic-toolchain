@@ -105,8 +105,6 @@ else:
     print("M181_CONSTANT_CONDITION_BRANCH=APPLIED")
 
 # M182_TERMINATING_GUARD_FACTS
-if "M182_TERMINATING_GUARD_FACTS" in source:
-    raise SystemExit("M182 terminating guard facts already present")
 if_anchor = '''static MinicCoreLowerStatus
 lower_if(MinicCoreLowerContext *context, const MinicStatement *statement, bool *terminated) {
 '''
@@ -117,19 +115,23 @@ if_end = source.find("\nstatic bool internal_while_label_pair", if_start)
 if if_end < 0:
     raise SystemExit("lower_if end not found")
 if_body = source[if_start:if_end]
-old_decl = '''    bool needs_merge;
+
+if "M182_TERMINATING_GUARD_FACTS" not in if_body:
+    old_decl = '''    bool needs_merge;
     bool then_terminated;
 '''
-new_decl = '''    bool needs_merge;
+    new_decl = '''    bool needs_merge;
     bool then_terminated;
     bool preserve_guard_facts;
 '''
-if if_body.count(old_decl) != 1:
-    raise SystemExit(f"lower_if declaration anchor count={if_body.count(old_decl)}")
-if_body = if_body.replace(old_decl, new_decl, 1)
-setup_anchor = '''    /* BusyBox and ordinary GNU C intentionally leave impossible references in
+    if "bool preserve_guard_facts;" not in if_body:
+        if old_decl not in if_body:
+            raise SystemExit("lower_if terminating-guard declaration anchor missing")
+        if_body = if_body.replace(old_decl, new_decl, 1)
+
+    setup_anchor = '''    /* BusyBox and ordinary GNU C intentionally leave impossible references in
 '''
-setup_insert = '''    /* M182_TERMINATING_GUARD_FACTS: a pure, no-else guard whose sole taken-arm
+    setup_insert = '''    /* M182_TERMINATING_GUARD_FACTS: a pure, no-else guard whose sole taken-arm
        statement is goto/break cannot merge that arm back into the following
        statement.  Preserve incoming unescaped-local facts on the only surviving
        (condition-false) path.  `continue` is represented as a targeted GOTO in
@@ -147,34 +149,42 @@ setup_insert = '''    /* M182_TERMINATING_GUARD_FACTS: a pure, no-else guard who
 
     /* BusyBox and ordinary GNU C intentionally leave impossible references in
 '''
-if if_body.count(setup_anchor) != 1:
-    raise SystemExit(f"lower_if setup anchor count={if_body.count(setup_anchor)}")
-if_body = if_body.replace(setup_anchor, setup_insert, 1)
-pre_clear = '''    core_local_constants_clear_known(context);
+    if setup_anchor not in if_body:
+        raise SystemExit("lower_if terminating-guard setup anchor missing")
+    if_body = if_body.replace(setup_anchor, setup_insert, 1)
+
+    pre_clear = '''    core_local_constants_clear_known(context);
     condition_block = context->block_id;
 '''
-pre_keep = '''    if (!preserve_guard_facts) {
+    pre_keep = '''    if (!preserve_guard_facts) {
         core_local_constants_clear_known(context);
     }
     condition_block = context->block_id;
 '''
-if if_body.count(pre_clear) != 1:
-    raise SystemExit(f"lower_if pre-clear anchor count={if_body.count(pre_clear)}")
-if_body = if_body.replace(pre_clear, pre_keep, 1)
-post_clear = '''    context->block_id = continuation_block;
+    if pre_clear in if_body:
+        if_body = if_body.replace(pre_clear, pre_keep, 1)
+    elif pre_keep not in if_body:
+        # A newer fact stack may already have removed this barrier entirely.
+        print("M182_PRE_GUARD_BARRIER=ALREADY_ABSENT")
+
+    post_clear = '''    context->block_id = continuation_block;
     core_local_constants_clear_known(context);
     *terminated = !needs_merge;
 '''
-post_keep = '''    context->block_id = continuation_block;
+    post_keep = '''    context->block_id = continuation_block;
     if (!preserve_guard_facts) {
         core_local_constants_clear_known(context);
     }
     *terminated = !needs_merge;
 '''
-if if_body.count(post_clear) != 1:
-    raise SystemExit(f"lower_if post-clear anchor count={if_body.count(post_clear)}")
-if_body = if_body.replace(post_clear, post_keep, 1)
-source = source[:if_start] + if_body + source[if_end:]
+    if post_clear in if_body:
+        if_body = if_body.replace(post_clear, post_keep, 1)
+    elif post_keep not in if_body:
+        print("M182_POST_GUARD_BARRIER=ALREADY_ABSENT")
+
+    source = source[:if_start] + if_body + source[if_end:]
+    print("M182_TERMINATING_GUARD_FACTS=APPLIED")
+else:
+    print("M182_TERMINATING_GUARD_FACTS=ALREADY_APPLIED")
 
 lower.write_text(source)
-print("M182_TERMINATING_GUARD_FACTS=APPLIED")
