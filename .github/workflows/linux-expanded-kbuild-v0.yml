@@ -21,12 +21,12 @@ jobs:
         with:
           ref: ${{ github.sha }}
 
-      - name: Restore Linux Kbuild output cache
+      - name: Restore Linux Kbuild frontier cache
         id: kbuild-cache
         uses: actions/cache/restore@v4
         with:
           path: build/linux-expanded-kbuild-v0/out
-          key: linux-expanded-kbuild-v0-6.6.143-${{ runner.os }}-${{ hashFiles('src/**', 'include/**', 'tools/ci/apply-*.py', 'tests/external/linux/stage2_kbuild_cc.sh') }}-sectionflags-v0
+          key: linux-expanded-mixed-v1-6.6.143-${{ runner.os }}-${{ hashFiles('src/**', 'include/**', 'tools/ci/apply-*.py', 'tests/external/linux/stage2_kbuild_cc.sh') }}
           restore-keys: |
             linux-expanded-kbuild-v0-6.6.143-${{ runner.os }}-
 
@@ -44,6 +44,7 @@ jobs:
           work="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0"
           build="$work/toolchain"
           mkdir -p "$work/evidence"
+          start=$(date +%s)
           patches=(
             apply-local-integer-assignment-v2.py
             apply-local-integer-logical-conditions-v0.py
@@ -70,13 +71,18 @@ jobs:
             apply-inline-specialization-label-alias-v0.py
             apply-riscv64-default-text-section-v0.py
             apply-riscv64-explicit-section-flags-v0.py
+            apply-inline-asm-symbolic-specialization-v0.py
           )
           for patch in "${patches[@]}"; do
             python3 "tools/ci/$patch" | tee -a "$work/evidence/patch.log"
           done
           git diff --check
-          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$build" all
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$build" \
+            "$build/bin/minic" "$build/bin/minic-cc"
           test -x "$build/bin/minic"
+          test -x "$build/bin/minic-cc"
+          elapsed=$(($(date +%s) - start))
+          echo "TIMING toolchain_s=$elapsed" | tee -a "$work/evidence/timing.txt"
           echo "LINUX_EXPANDED_TOOLCHAIN=PASS head=${GITHUB_SHA}"
 
       - name: Prepare pinned Linux 6.6.143
@@ -141,6 +147,108 @@ jobs:
           python3 tools/ci/scan-linux-nonalloc-explicit-sections-v0.py "$out" \
             --verify --targets-file "$ev/section-refresh-targets.txt"
 
+      - name: Refresh cached final-link failure pool
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0"
+          src="$work/linux-6.6.143"
+          out="$work/out"
+          ev="$work/evidence"
+          wrapper="$GITHUB_WORKSPACE/tests/external/linux/stage2_kbuild_cc.sh"
+          targets=(
+            arch/riscv/mm/init.o
+            arch/riscv/mm/fault.o
+            kernel/ptrace.o
+            kernel/sched/fair.o
+            kernel/dma/direct.o
+            kernel/dma/pool.o
+            kernel/bpf/verifier.o
+            kernel/jump_label.o
+            mm/swap.o
+            mm/truncate.o
+            mm/shmem.o
+            mm/vmstat.o
+            mm/percpu.o
+            mm/slab_common.o
+            mm/gup.o
+            mm/memory.o
+            mm/mprotect.o
+            mm/mremap.o
+            mm/page_vma_mapped.o
+            mm/rmap.o
+            mm/vmalloc.o
+            mm/page_alloc.o
+            mm/madvise.o
+            mm/memcontrol.o
+            mm/memfd.o
+            fs/remap_range.o
+            fs/proc/task_mmu.o
+            fs/ext4/inode.o
+            fs/hugetlbfs/inode.o
+            crypto/skcipher.o
+            crypto/rsa-pkcs1pad.o
+            block/bio.o
+            block/blk-core.o
+            block/blk-map.o
+            block/blk-merge.o
+            block/blk-mq.o
+            drivers/acpi/scan.o
+            drivers/nvdimm/bus.o
+            drivers/nvdimm/region_devs.o
+            drivers/nvdimm/namespace_devs.o
+            drivers/nvdimm/claim.o
+            drivers/nvdimm/pmem.o
+            drivers/spi/spi.o
+            drivers/net/phy/phy_device.o
+            net/core/sock.o
+            net/core/skbuff.o
+            net/core/filter.o
+            net/core/bpf_sk_storage.o
+            net/sched/cls_api.o
+            net/ipv4/ip_forward.o
+            net/ipv4/ip_sockglue.o
+            net/ipv4/tcp.o
+            net/ipv4/tcp_input.o
+            net/ipv4/raw.o
+            net/ipv4/arp.o
+            net/ipv4/xfrm4_input.o
+            net/ipv4/xfrm4_output.o
+            net/ipv4/af_inet.o
+            net/xfrm/xfrm_output.o
+            net/xfrm/xfrm_state.o
+            net/ipv6/ip6_output.o
+            net/ipv6/ndisc.o
+            net/ipv6/raw.o
+            net/ipv6/mcast.o
+            net/ipv6/xfrm6_input.o
+            net/ipv6/xfrm6_output.o
+            net/ipv6/addrconf.o
+            net/ipv6/route.o
+            net/ipv6/ipv6_sockglue.o
+            net/ipv6/icmp.o
+            net/ipv6/tcp_ipv6.o
+            net/ipv6/datagram.o
+            lib/maple_tree.o
+          )
+          echo "LINUX_UNDEF_REFRESH_TARGETS=${#targets[@]}" | tee "$ev/undef-refresh-summary.txt"
+          if test "${{ steps.kbuild-cache.outputs.cache-hit }}" = "true"; then
+            echo "LINUX_UNDEF_REFRESH=SKIP_EXACT_MIXED_CACHE" | tee -a "$ev/undef-refresh-summary.txt"
+          else
+            start=$(date +%s)
+            for target in "${targets[@]}"; do rm -f "$out/$target"; done
+            MINIC="$work/toolchain/bin/minic" \
+            REAL_CC=/usr/bin/riscv64-linux-gnu-gcc \
+            MINIC_KEEP_INTERMEDIATES=0 \
+            MINIC_KBUILD_TRACE="$ev/undef-refresh.trace" \
+            CORE_FAST_TRACE=1 \
+              make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
+                CC="$wrapper" -j4 V=1 "${targets[@]}" >"$ev/undef-refresh.log" 2>&1
+            elapsed=$(($(date +%s) - start))
+            echo "TIMING undef_refresh_s=$elapsed" | tee -a "$ev/timing.txt"
+            echo "LINUX_UNDEF_REFRESH=PASS" | tee -a "$ev/undef-refresh-summary.txt"
+          fi
+
       - name: Build Linux Image through MiniC until next frontier
         id: frontier
         shell: bash
@@ -153,6 +261,7 @@ jobs:
           wrapper="$GITHUB_WORKSPACE/tests/external/linux/stage2_kbuild_cc.sh"
           trace="$ev/minic-kbuild.trace"
           : >"$trace"
+          start=$(date +%s)
           set +e
           MINIC="$work/toolchain/bin/minic" \
           REAL_CC=/usr/bin/riscv64-linux-gnu-gcc \
@@ -163,6 +272,8 @@ jobs:
               CC="$wrapper" -j4 V=1 Image >"$ev/kbuild.log" 2>&1
           rc=$?
           set -e
+          elapsed=$(($(date +%s) - start))
+          echo "TIMING image_frontier_s=$elapsed rc=$rc" | tee -a "$ev/timing.txt"
           attempts=$(grep -c '^minic ' "$trace" || true)
           passes=$(grep -c '^pass ' "$trace" || true)
           delegates=$(grep -c '^delegate ' "$trace" || true)
@@ -170,10 +281,19 @@ jobs:
           orphan_text=$(grep -a -c 'orphan section.*\.text\.' "$ev/kbuild.log" || true)
           nonalloc=$(grep -a -c 'unexpected non-allocatable section' "$ev/kbuild.log" || true)
           bfd_asserts=$(grep -a -c 'elfnn-riscv.c:.*Assertion' "$ev/kbuild.log" || true)
-          printf 'LINUX_EXPANDED_FRONTIER rc=%s minic_attempts=%s passes=%s delegates=%s blockers=%s orphan_text=%s nonalloc=%s bfd_asserts=%s\n' \
-            "$rc" "$attempts" "$passes" "$delegates" "$blockers" "$orphan_text" "$nonalloc" "$bfd_asserts" | tee "$ev/summary.txt"
+          read undefined_refs undefined_unique < <(python3 - "$ev/kbuild.log" <<'PY'
+import re
+import sys
+text = open(sys.argv[1], encoding="utf-8", errors="replace").read()
+names = re.findall(r"undefined reference to [`'‘]([^'’`]+)", text)
+print(len(names), len(set(names)))
+PY
+          )
+          printf 'LINUX_EXPANDED_FRONTIER rc=%s minic_attempts=%s passes=%s delegates=%s blockers=%s orphan_text=%s nonalloc=%s bfd_asserts=%s undefined_refs=%s undefined_unique=%s\n' \
+            "$rc" "$attempts" "$passes" "$delegates" "$blockers" "$orphan_text" "$nonalloc" "$bfd_asserts" "$undefined_refs" "$undefined_unique" | tee "$ev/summary.txt"
           cat "$ev/cache.txt" >>"$ev/summary.txt" || true
           cat "$ev/section-refresh-summary.txt" >>"$ev/summary.txt" || true
+          cat "$ev/undef-refresh-summary.txt" >>"$ev/summary.txt" || true
           grep -a -E 'riscv64-linux-gnu-ld|orphan section|unexpected non-allocatable section|elfnn-riscv.c:.*Assertion|Segmentation fault|undefined reference|modpost:' \
             "$ev/kbuild.log" | tail -n 1200 >"$ev/link-frontier.log" || true
           tail -n 300 "$ev/kbuild.log" >"$ev/kbuild-tail.log" || true
@@ -183,12 +303,12 @@ jobs:
           fi
           exit "$rc"
 
-      - name: Save Linux Kbuild output cache
-        if: always() && steps.prepare.outcome == 'success'
+      - name: Save mixed Linux frontier cache
+        if: always() && steps.prepare.outcome == 'success' && steps.kbuild-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           path: build/linux-expanded-kbuild-v0/out
-          key: linux-expanded-kbuild-v0-6.6.143-${{ runner.os }}-${{ hashFiles('src/**', 'include/**', 'tools/ci/apply-*.py', 'tests/external/linux/stage2_kbuild_cc.sh') }}-sectionflags-v0
+          key: linux-expanded-mixed-v1-6.6.143-${{ runner.os }}-${{ hashFiles('src/**', 'include/**', 'tools/ci/apply-*.py', 'tests/external/linux/stage2_kbuild_cc.sh') }}
 
       - name: Preserve expanded frontier evidence
         if: always()
