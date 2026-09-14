@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 import argparse
 import os
-import re
 import subprocess
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 BAD_SECTIONS = {
@@ -36,19 +36,24 @@ def bad_sections(path: Path) -> list[str]:
         return []
     bad = []
     for line in text.splitlines():
-        for name in BAD_SECTIONS:
-            if not re.search(r'\s' + re.escape(name) + r'\s', line):
-                continue
-            cols = line.split()
-            try:
-                idx = cols.index(name)
-            except ValueError:
-                continue
+        cols = line.split()
+        names = BAD_SECTIONS.intersection(cols)
+        if not names:
+            continue
+        for name in names:
+            idx = cols.index(name)
             rest = cols[idx:]
             flags = rest[6] if len(rest) >= 9 else ''
             if 'A' not in flags:
                 bad.append(name)
     return sorted(set(bad))
+
+
+def inspect(out: Path, path: Path):
+    bad = bad_sections(path)
+    if not bad:
+        return None
+    return path.relative_to(out).as_posix(), bad
 
 
 def main() -> int:
@@ -63,29 +68,29 @@ def main() -> int:
         if not args.targets_file:
             parser.error('--verify requires --targets-file')
         failures = []
-        for raw in Path(args.targets_file).read_text().splitlines():
-            target = raw.strip()
-            if not target:
-                continue
-            bad = bad_sections(out / target)
+        targets = [x.strip() for x in Path(args.targets_file).read_text().splitlines() if x.strip()]
+        with ThreadPoolExecutor(max_workers=16) as pool:
+            results = list(pool.map(lambda target: (target, bad_sections(out / target)), targets))
+        for target, bad in results:
             if bad:
                 failures.append(f"{target}: {','.join(bad)}")
         if failures:
             print('\n'.join(failures))
             return 1
-        print('LINUX_SECTION_REFRESH_VERIFY=PASS')
+        print(f'LINUX_SECTION_REFRESH_VERIFY=PASS targets={len(targets)}')
         return 0
 
-    found = []
+    paths = []
     for root, _, files in os.walk(out):
         for filename in files:
-            if not filename.endswith('.o') or filename == 'vmlinux.o':
-                continue
-            path = Path(root) / filename
-            bad = bad_sections(path)
-            if bad:
-                target = path.relative_to(out).as_posix()
-                found.append((target, bad))
+            if filename.endswith('.o') and filename != 'vmlinux.o':
+                paths.append(Path(root) / filename)
+
+    workers = min(24, max(8, (os.cpu_count() or 4) * 4))
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        results = pool.map(lambda path: inspect(out, path), paths)
+        found = [result for result in results if result is not None]
+
     for target, bad in sorted(found):
         print(target)
         print(f"DETAIL {target}: {','.join(bad)}", file=os.sys.stderr)
