@@ -40,10 +40,14 @@ if marker in source:
     raise SystemExit("M181 constant condition branch already present")
 function_anchor = '''static MinicCoreLowerStatus lower_condition_branch(MinicCoreLowerContext *context,
 '''
-function_pos = source.find(function_anchor)
-if function_pos < 0:
+function_start = source.find(function_anchor)
+if function_start < 0:
     raise SystemExit("lower_condition_branch anchor not found")
-prefix, tail = source[:function_pos], source[function_pos:]
+function_end = source.find(
+    "\nstatic bool core_switch_label_has_function_reentry", function_start)
+if function_end < 0:
+    raise SystemExit("lower_condition_branch end anchor not found")
+body = source[function_start:function_end]
 anchor = '''    if (expression->kind == MINIC_EXPRESSION_UNARY &&
         expression->value.unary.operator_kind == MINIC_UNARY_LOGICAL_NOT) {
 '''
@@ -70,9 +74,10 @@ insert = '''    /* M181_CONSTANT_CONDITION_BRANCH: collapse a target/local-aware
     if (expression->kind == MINIC_EXPRESSION_UNARY &&
         expression->value.unary.operator_kind == MINIC_UNARY_LOGICAL_NOT) {
 '''
-count = tail.count(anchor)
+count = body.count(anchor)
 if count != 1:
     raise SystemExit(f"expected one lower_condition_branch logical-not anchor, found {count}")
-tail = tail.replace(anchor, insert, 1)
-lower.write_text(prefix + tail)
+body = body.replace(anchor, insert, 1)
+source = source[:function_start] + body + source[function_end:]
+lower.write_text(source)
 print("M181_CONSTANT_CONDITION_BRANCH=APPLIED")
