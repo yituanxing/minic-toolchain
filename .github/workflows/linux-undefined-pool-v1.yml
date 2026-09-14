@@ -86,16 +86,16 @@ jobs:
             dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932 \
             "$archive" | sha256sum -c -
           tar -xJf "$archive" -C "$work"
-          make -C "$src" O="$cfg" ARCH=risc CROSS_COMPILE=riscv64-linux-gnu- defconfig
+          make -C "$src" O="$cfg" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- defconfig
           "$src/scripts/config" --file "$cfg/.config" \
             -e BLK_DEV_INITRD -e DEVTMPFS -e DEVTMPFS_MOUNT \
             -e SERIAL_8250 -e SERIAL_8250_CONSOLE
-          make -C "$src" O="$cfg" ARCH=risc CROSS_COMPILE=riscv64-linux-gnu- olddefconfig
+          make -C "$src" O="$cfg" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- olddefconfig
           mkdir -p "$work/out-gcc" "$work/out-mini" "$work/evidence"
           cp "$cfg/.config" "$work/out-gcc/.config"
           cp "$cfg/.config" "$work/out-mini/.config"
-          make -C "$src" O="$work/out-gcc" ARCH=risc CROSS_COMPILE=riscv64-linux-gnu- -j4 prepare
-          make -C "$src" O="$work/out-mini" ARCH=risc CROSS_COMPILE=riscv64-linux-gnu- -j4 prepare
+          make -C "$src" O="$work/out-gcc" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- -j4 prepare
+          make -C "$src" O="$work/out-mini" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- -j4 prepare
           echo "LINUX_UNDEFINED_POOL_SOURCE=PASS"
 
       - name: Build representative GCC and MiniC objects
@@ -115,14 +115,14 @@ jobs:
             net/ipv6/icmp.o
             net/core/skbuff.o
           )
-          make -C "$src" O="$work/out-gcc" ARCH=risc CROSS_COMPILE=riscv64-linux-gnu- \
+          make -C "$src" O="$work/out-gcc" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
             -j4 V=1 "${targets[@]}" >"$work/evidence/gcc-kbuild.log" 2>&1
           MINIC="$work/toolchain/bin/minic" \
           REAL_CC=/usr/bin/riscv64-linux-gnu-gcc \
           MINIC_KEEP_INTERMEDIATES=1 \
           MINIC_KBUILD_TRACE="$work/evidence/minic-kbuild.trace" \
           CORE_FAST_TRACE=1 \
-            make -C "$src" O="$work/out-mini" ARCH=risc CROSS_COMPILE=riscv64-linux-gnu- \
+            make -C "$src" O="$work/out-mini" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
               CC="$wrapper" -j1 V=1 "${targets[@]}" >"$work/evidence/mini-kbuild.log" 2>&1
           for target in "${targets[@]}"; do
             test -s "$work/out-gcc/$target"
