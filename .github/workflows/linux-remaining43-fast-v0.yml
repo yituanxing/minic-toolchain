@@ -1,15 +1,15 @@
-name: Linux Remaining43 Fast V0
+name: Linux Tail Focused V1
 
 on:
   push:
-    branches: ["agent/linux-expanded-kbuild-v0"]
+    branches: ["agent/linux-tail-focused-v1"]
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: linux-remaining43-fast-v0-${{ github.ref }}
+  group: linux-tail-focused-v1-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -41,8 +41,8 @@ jobs:
         run: |
           set -Eeuo pipefail
           work="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0"
-          build="$work/toolchain-fast43"
-          ev="$work/evidence-fast43"
+          build="$work/toolchain-tail"
+          ev="$work/evidence-tail"
           rm -rf "$build" "$ev"
           mkdir -p "$ev"
           start=$(date +%s)
@@ -75,7 +75,6 @@ jobs:
             apply-inline-asm-symbolic-specialization-v0.py
           )
           for patch in "${patches[@]}"; do python3 "tools/ci/$patch" | tee -a "$ev/patch.log"; done
-          python3 tools/ci/exp-internal-function-reachability-v0.py | tee -a "$ev/patch.log"
           git diff --check
           make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$build" "$build/bin/minic" "$build/bin/minic-cc"
           echo "TIMING toolchain_s=$(($(date +%s) - start))" | tee "$ev/timing.txt"
@@ -92,19 +91,24 @@ jobs:
           tar -xJf "$archive" -C "$work"
           test -s "$work/out/.config" && test -s "$work/out/include/config/auto.conf"
 
-      - name: Rebuild four representative objects with intermediates
+      - name: Rebuild current tail objects with intermediates
         shell: bash
         run: |
           set -Eeuo pipefail
           work="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0"
           src="$work/linux-6.6.143"
           out="$work/out"
-          ev="$work/evidence-fast43"
+          ev="$work/evidence-tail"
           wrapper="$GITHUB_WORKSPACE/tests/external/linux/stage2_kbuild_cc.sh"
-          targets=(net/ipv4/tcp_output.o mm/shmem.o mm/vmalloc.o drivers/nvdimm/region_devs.o)
+          targets=(
+            kernel/ptrace.o kernel/bpf/verifier.o kernel/dma/direct.o
+            mm/vmstat.o mm/slab_common.o mm/page_alloc.o mm/swap.o mm/truncate.o mm/gup.o
+            fs/proc/task_mmu.o drivers/acpi/scan.o
+            net/core/skbuff.o net/core/bpf_sk_storage.o
+          )
           for target in "${targets[@]}"; do rm -f "$out/$target"; done
           start=$(date +%s)
-          MINIC="$work/toolchain-fast43/bin/minic" REAL_CC=/usr/bin/riscv64-linux-gnu-gcc \
+          MINIC="$work/toolchain-tail/bin/minic" REAL_CC=/usr/bin/riscv64-linux-gnu-gcc \
           MINIC_KEEP_INTERMEDIATES=1 MINIC_KBUILD_TRACE="$ev/minic.trace" CORE_FAST_TRACE=1 \
             make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- CC="$wrapper" -j4 V=1 "${targets[@]}" >"$ev/kbuild.log" 2>&1
           echo "TIMING focused_s=$(($(date +%s) - start)) objects=${#targets[@]}" | tee -a "$ev/timing.txt"
@@ -114,15 +118,15 @@ jobs:
             cp -f "$out/$dir/$stem.minic-stage2.i" "$ev/$key.i" 2>/dev/null || true
             cp -f "$out/$dir/$stem.minic-stage2.s" "$ev/$key.s" 2>/dev/null || true
             cp -f "$out/$dir/$stem.minic-stage2.minic.stderr" "$ev/$key.stderr" 2>/dev/null || true
-            printf 'FAST43 target=%s undefined=%s\n' "$target" "$(wc -l <"$ev/$key.undefined")" | tee -a "$ev/summary.txt"
-            grep -E '__compiletime_assert_|lockdep_is_held|arch_sync_kernel_mappings|__minic_inline_spec_' "$ev/$key.undefined" | sed "s#^#FOCUS $target #" | tee -a "$ev/summary.txt" || true
+            printf 'TAIL target=%s undefined=%s\n' "$target" "$(wc -l <"$ev/$key.undefined")" | tee -a "$ev/summary.txt"
+            grep -E '__compiletime_assert_|arch_dma_set_uncached|free_zone_device_page|dax_delete_mapping_entry|dax_invalidate_mapping_entry_sync|migrate_device_coherent_page|dma_dummy_ops' "$ev/$key.undefined" | sed "s#^#RESIDUAL $target #" | tee -a "$ev/summary.txt" || true
           done
 
-      - name: Preserve focused evidence
+      - name: Preserve tail evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: linux-remaining43-fast-v0
-          path: build/linux-expanded-kbuild-v0/evidence-fast43/
+          name: linux-tail-focused-v1
+          path: build/linux-expanded-kbuild-v0/evidence-tail/
           if-no-files-found: ignore
           retention-days: 7
