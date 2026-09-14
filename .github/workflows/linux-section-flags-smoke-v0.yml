@@ -84,24 +84,10 @@ jobs:
           "$work/toolchain/bin/minic" -S "$work/section-flags.i" -o "$work/section-flags.s"
           riscv64-linux-gnu-gcc -c -march=rv64gc -mabi=lp64d "$work/section-flags.s" -o "$work/section-flags.o"
           riscv64-linux-gnu-readelf -SW "$work/section-flags.o" | tee "$ev/synthetic-sections.txt"
-          python3 - "$ev/synthetic-sections.txt" <<'PY'
-          import re, sys
-          text = open(sys.argv[1], encoding='utf-8').read().splitlines()
-          expected = {'.mini.text': {'A','X'}, '.mini.data': {'A','W'}, '.mini.rodata': {'A'}}
-          seen = set()
-          for line in text:
-              for name, flags in expected.items():
-                  if name in line:
-                      seen.add(name)
-                      cols = line.split()
-                      flag_field = cols[-4] if len(cols) >= 4 else ''
-                      if not flags.issubset(set(flag_field)):
-                          raise SystemExit(f'{name}: expected {sorted(flags)} in flags, line={line!r}')
-          missing = set(expected) - seen
-          if missing:
-              raise SystemExit(f'missing sections: {sorted(missing)}')
-          print('SYNTHETIC_SECTION_FLAGS=PASS')
-          PY
+          grep -E '[[:space:]]\.mini\.text[[:space:]]+PROGBITS.*[[:space:]]AX[[:space:]]' "$ev/synthetic-sections.txt"
+          grep -E '[[:space:]]\.mini\.data[[:space:]]+PROGBITS.*[[:space:]]WA[[:space:]]' "$ev/synthetic-sections.txt"
+          grep -E '[[:space:]]\.mini\.rodata[[:space:]]+PROGBITS.*[[:space:]]A[[:space:]]' "$ev/synthetic-sections.txt"
+          echo "SYNTHETIC_SECTION_FLAGS=PASS"
 
       - name: Prepare Linux 6.6.143
         shell: bash
@@ -140,7 +126,9 @@ jobs:
           CORE_FAST_TRACE=1 \
             make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
               CC="$wrapper" -j2 V=1 init/main.o drivers/of/fdt.o >"$ev/linux-focused.log" 2>&1
+          : >"$ev/linux-sections.txt"
           for obj in init/main.o drivers/of/fdt.o; do
+            echo "### $obj" >>"$ev/linux-sections.txt"
             riscv64-linux-gnu-readelf -SW "$out/$obj" >>"$ev/linux-sections.txt"
           done
           cat "$ev/linux-sections.txt"
@@ -151,13 +139,18 @@ jobs:
           matched = 0
           bad = []
           for line in lines:
-              if not interesting.search(line):
+              if ']' not in line:
                   continue
+              rest = line.split(']', 1)[1].split()
+              if len(rest) not in (9, 10):
+                  continue
+              name = rest[0]
+              if name.startswith(('.rel', '.rela')) or not interesting.search(name):
+                  continue
+              flags = rest[6] if len(rest) == 10 else ''
               matched += 1
-              cols = line.split()
-              flag_field = cols[-4] if len(cols) >= 4 else ''
-              if 'A' not in flag_field:
-                  bad.append(line)
+              if 'A' not in flags:
+                  bad.append(f'{name}: flags={flags!r}: {line}')
           if matched == 0:
               raise SystemExit('no representative explicit Linux sections found')
           if bad:
