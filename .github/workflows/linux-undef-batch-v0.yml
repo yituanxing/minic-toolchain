@@ -34,7 +34,8 @@ jobs:
         run: |
           sudo apt-get -o Acquire::Retries=3 update
           sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
-            gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu
+            build-essential gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
+            bc bison flex libssl-dev libelf-dev make curl xz-utils python3
 
       - name: Apply semantic stack and batch CFG closure
         shell: bash
@@ -86,18 +87,44 @@ jobs:
           test -x "$build/bin/minic" && test -x "$build/bin/minic-cc"
           echo "TIMING toolchain_s=$(($(date +%s) - start))" | tee "$ev/timing.txt"
 
-      - name: Verify prepared baseline
+      - name: Prepare pinned Linux baseline
+        id: prepare-base
         shell: bash
         run: |
           set -Eeuo pipefail
           work="$GITHUB_WORKSPACE/build/linux-asm-symbolic-pool-v0"
           src="$work/linux-6.6.143"
           base="$work/base-out"
-          test -s "$src/Makefile"
-          test -s "$base/.config"
-          test -s "$base/include/config/auto.conf"
-          test -s "$base/include/generated/autoconf.h"
-          echo "LINUX_UNDEF_BATCH_BASE=PASS"
+          archive="$work/linux-6.6.143.tar.xz"
+          if test -s "$src/Makefile" && test -s "$base/.config" && \
+             test -s "$base/include/config/auto.conf" && test -s "$base/include/generated/autoconf.h"; then
+            echo "LINUX_UNDEF_BATCH_BASE=HIT"
+          else
+            rm -rf "$src" "$base"
+            mkdir -p "$work"
+            curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors \
+              https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.6.143.tar.xz -o "$archive"
+            printf '%s  %s\n' \
+              dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932 \
+              "$archive" | sha256sum -c -
+            tar -xJf "$archive" -C "$work"
+            make -C "$src" O="$base" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- defconfig
+            "$src/scripts/config" --file "$base/.config" \
+              -e BLK_DEV_INITRD -e DEVTMPFS -e DEVTMPFS_MOUNT \
+              -e SERIAL_8250 -e SERIAL_8250_CONSOLE
+            make -C "$src" O="$base" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- olddefconfig
+            make -C "$src" O="$base" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- -j4 prepare
+            echo "LINUX_UNDEF_BATCH_BASE=MISS_PREPARED"
+          fi
+
+      - name: Save prepared Linux baseline
+        if: steps.linux-base.outputs.cache-hit != 'true' && steps.prepare-base.outcome == 'success'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            build/linux-asm-symbolic-pool-v0/linux-6.6.143
+            build/linux-asm-symbolic-pool-v0/base-out
+          key: linux-asm-symbolic-base-v1-6.6.143-riscv-defconfig-${{ runner.os }}
 
       - name: Compile all current final-link failure objects once
         shell: bash
