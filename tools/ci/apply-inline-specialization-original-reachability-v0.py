@@ -6,23 +6,6 @@ text = p.read_text()
 
 anchor = '''static bool minic_prune_inline_specializations_from_core(\n'''
 helper = r'''
-static bool minic_inline_source_has_specialization(
-    const MinicC0Program *program, MinicFunctionId source_id) {
-    size_t function_index;
-
-    if (program == NULL || source_id >= program->function_count) {
-        return false;
-    }
-    for (function_index = 0U; function_index < program->function_count; ++function_index) {
-        const MinicFunction *candidate = &program->functions[function_index];
-        if (candidate->is_integer_specialization &&
-            candidate->specialization_source == source_id) {
-            return true;
-        }
-    }
-    return false;
-}
-
 static bool minic_inline_source_has_noncore_root(
     const MinicC0Program *program, MinicFunctionId source_id) {
     size_t function_index;
@@ -62,8 +45,12 @@ static bool minic_inline_source_is_core_reachable_only(
         return false;
     }
     source = &program->functions[source_id];
+    /* Internal inline bodies are implementation details, not emission roots.
+     * Parser-level is_referenced can stay set after every executable call was
+     * rewritten, specialized, or folded away.  Let the lowered Core graph pull
+     * the body back in when a reachable CALL or FUNCTION_ADDRESS still needs
+     * it; preserve only roots that live outside that graph. */
     return source->is_defined && source->is_internal && source->is_inline &&
-           minic_inline_source_has_specialization(program, source_id) &&
            !minic_inline_source_has_noncore_root(program, source_id);
 }
 
@@ -83,12 +70,9 @@ new_root = '''        if (function->is_integer_specialization || !function->is_d
             (function->is_internal && !function->is_referenced)) {
             continue;
         }
-        /* Once an internal inline source has specialization clones, its old
-         * parser-level is_referenced bit is no longer a reliable emission root:
-         * rewritten call sites may have removed every executable edge to the
-         * source.  Non-Core roots (entry/force-emit/alias/global relocation)
-         * remain conservative roots; otherwise let the lowered Core graph pull
-         * the source back in only when a reachable call/address still needs it. */
+        /* Parser-level references are only a discovery hint for internal inline
+         * bodies.  The final lowered Core graph is the authoritative executable
+         * reachability source; non-Core roots remain conservative roots. */
         if (minic_inline_source_is_core_reachable_only(
                 program, (MinicFunctionId)function_index)) {
             continue;
@@ -123,4 +107,4 @@ if text.count(old_final) != 1:
 text = text.replace(old_final, new_final, 1)
 
 p.write_text(text)
-print("MINIC_INLINE_SPECIALIZATION_ORIGINAL_REACHABILITY_V0=APPLIED")
+print("MINIC_INLINE_SPECIALIZATION_ORIGINAL_REACHABILITY_V0=APPLIED all_internal_inline=1")
