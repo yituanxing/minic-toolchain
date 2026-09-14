@@ -1,0 +1,157 @@
+name: Linux Shmem Fast V1
+
+on:
+  push:
+    branches: ["agent/linux-undef-diagnose-v0"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: linux-shmem-fast-v1-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  shmem:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Restore shmem replay fixture
+        id: fixture
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-shmem-replay-v0/shmem.i
+          key: linux-shmem-replay-v0-6.6.143-riscv-defconfig-${{ runner.os }}
+
+      - name: Restore prepared Linux baseline
+        if: steps.fixture.outputs.cache-hit != 'true'
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            build/linux-asm-symbolic-pool-v0/linux-6.6.143
+            build/linux-asm-symbolic-pool-v0/base-out
+          key: linux-undef-diagnose-base-v1-6.6.143-riscv-defconfig-${{ runner.os }}
+
+      - name: Install RV64 prerequisites for fixture generation
+        if: steps.fixture.outputs.cache-hit != 'true'
+        run: |
+          sudo apt-get -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu
+
+      - name: Build patched MiniC
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-asm-symbolic-pool-v0"
+          build="$work/toolchain-shmem"
+          ev="$work/evidence-shmem"
+          rm -rf "$build" "$ev"
+          mkdir -p "$ev"
+          start=$(date +%s)
+          patches=(
+            apply-local-integer-assignment-v2.py
+            apply-local-integer-logical-conditions-v0.py
+            apply-local-null-pointer-facts-v0.py
+            apply-builtin-constant-p-local-facts-v0.py
+            apply-inline-integer-specialization-v0.py
+            apply-inline-specialization-local-facts-v0.py
+            apply-inline-specialization-stable-parameter-facts-v0.py
+            apply-inline-specialization-transitive-integer-v0.py
+            apply-inline-specialization-base-callee-integer-v0.py
+            apply-inline-specialization-capacity-v0.py
+            apply-inline-specialization-symbolic-address-v0.py
+            apply-inline-specialization-symbolic-nested-array-v0.py
+            apply-inline-specialization-symbolic-integer-closure-v0.py
+            apply-inline-specialization-symbolic-transitive-rewrite-v0.py
+            apply-inline-specialization-symbolic-array-lvalue-v0.py
+            apply-inline-specialization-symbolic-closed-integers-v0.py
+            apply-inline-specialization-base-callee-symbolic-v0.py
+            apply-inline-specialization-resolved-asm-goto-v0.py
+            apply-inline-specialization-core-reachability-v0.py
+            apply-inline-specialization-original-reachability-v0.py
+            apply-inline-asm-local-integer-facts-v0.py
+            apply-inline-specialization-core-empty-function-v0.py
+            apply-inline-specialization-label-alias-v0.py
+            apply-riscv64-default-text-section-v0.py
+            apply-riscv64-explicit-section-flags-v0.py
+            apply-inline-asm-symbolic-specialization-v0.py
+            apply-constant-inline-call-cfg-v1.py
+            apply-local-integer-arithmetic-closure-v0.py
+            apply-constant-cfg-product-v0.py
+            apply-core-unsupported-trace-v0.py
+          )
+          for patch in "${patches[@]}"; do python3 "tools/ci/$patch"; done
+          cp -f /tmp/core-unsupported-sites-v0.txt "$ev/core-unsupported-sites.txt"
+          git diff --check
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$build" "$build/bin/minic" "$build/bin/minic-cc"
+          echo "TIMING toolchain_s=$(($(date +%s) - start))" | tee "$ev/timing.txt"
+
+      - name: Generate shmem replay fixture once
+        if: steps.fixture.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          set -u
+          work="$GITHUB_WORKSPACE/build/linux-asm-symbolic-pool-v0"
+          src="$work/linux-6.6.143"
+          base="$work/base-out"
+          out="$work/out-shmem-fixture"
+          ev="$work/evidence-shmem"
+          fixture="$GITHUB_WORKSPACE/build/linux-shmem-replay-v0/shmem.i"
+          wrapper="$GITHUB_WORKSPACE/tests/external/linux/stage2_kbuild_cc.sh"
+          rm -rf "$out"
+          mkdir -p "$(dirname "$fixture")"
+          cp -a --reflink=auto "$base" "$out"
+          set +e
+          MINIC="$work/toolchain-shmem/bin/minic" \
+          REAL_CC=/usr/bin/riscv64-linux-gnu-gcc \
+          MINIC_KEEP_INTERMEDIATES=1 \
+          MINIC_KBUILD_TRACE="$ev/minic.trace" \
+          CORE_FAST_TRACE=1 \
+            make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
+              CC="$wrapper" -j1 V=1 mm/shmem.o >"$ev/kbuild-fixture.log" 2>&1
+          kbuild_rc=$?
+          set -e
+          cp -f "$out/mm/shmem.minic-stage2.i" "$fixture"
+          test -s "$fixture"
+          echo "SHMEM_FIXTURE=READY bytes=$(wc -c <"$fixture") kbuild_rc=$kbuild_rc"
+
+      - name: Save shmem replay fixture
+        if: steps.fixture.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: build/linux-shmem-replay-v0/shmem.i
+          key: linux-shmem-replay-v0-6.6.143-riscv-defconfig-${{ runner.os }}
+
+      - name: Replay shmem directly through MiniC
+        shell: bash
+        run: |
+          set -u
+          work="$GITHUB_WORKSPACE/build/linux-asm-symbolic-pool-v0"
+          fixture="$GITHUB_WORKSPACE/build/linux-shmem-replay-v0/shmem.i"
+          ev="$work/evidence-shmem"
+          test -s "$fixture"
+          start=$(date +%s)
+          set +e
+          CORE_FAST_TRACE=1 "$work/toolchain-shmem/bin/minic" -S "$fixture" -o "$ev/shmem.s" \
+            >"$ev/shmem.stdout" 2>"$ev/shmem.stderr"
+          rc=$?
+          set -e
+          echo "TIMING replay_s=$(($(date +%s) - start)) rc=$rc" | tee -a "$ev/timing.txt"
+          grep -aEn -B8 -A20 "CORE_UNSUPPORTED_TRACE|Core IR does not yet support|shmem_get_folio_gfp|__compiletime_assert|vma_thp_gfp_mask" \
+            "$ev/shmem.stderr" >"$ev/shmem.excerpts" 2>/dev/null || true
+          cat "$ev/shmem.excerpts" || true
+          exit "$rc"
+
+      - name: Preserve evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-shmem-fast-v1
+          path: build/linux-asm-symbolic-pool-v0/evidence-shmem/
+          if-no-files-found: ignore
+          retention-days: 7
