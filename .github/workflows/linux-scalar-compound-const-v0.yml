@@ -1,0 +1,127 @@
+name: Linux Scalar Compound Const V0
+
+on:
+  push:
+    branches:
+      - "agent/linux-scalar-compound-const-v0"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: linux-scalar-compound-const-v0-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  jump-label:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Install RV64 prerequisites
+        run: |
+          sudo apt-get -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            build-essential gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
+            bc bison flex libssl-dev libelf-dev make curl xz-utils python3
+
+      - name: Build patched MiniC
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-scalar-compound-const-v0"
+          build="$work/toolchain"
+          mkdir -p "$work/evidence"
+          patches=(
+            apply-local-integer-assignment-v2.py
+            apply-local-integer-logical-conditions-v0.py
+            apply-local-null-pointer-facts-v0.py
+            apply-builtin-constant-p-local-facts-v0.py
+            apply-inline-integer-specialization-v0.py
+            apply-inline-specialization-local-facts-v0.py
+            apply-inline-specialization-stable-parameter-facts-v0.py
+            apply-inline-specialization-transitive-integer-v0.py
+            apply-inline-specialization-base-callee-integer-v0.py
+            apply-inline-specialization-capacity-v0.py
+            apply-inline-specialization-symbolic-address-v0.py
+            apply-inline-specialization-symbolic-nested-array-v0.py
+            apply-inline-specialization-symbolic-integer-closure-v0.py
+            apply-inline-specialization-symbolic-transitive-rewrite-v0.py
+            apply-inline-specialization-symbolic-array-lvalue-v0.py
+            apply-inline-specialization-symbolic-closed-integers-v0.py
+            apply-inline-specialization-base-callee-symbolic-v0.py
+            apply-inline-specialization-resolved-asm-goto-v0.py
+            apply-inline-specialization-core-reachability-v0.py
+            apply-inline-specialization-original-reachability-v0.py
+            apply-inline-asm-local-integer-facts-v0.py
+            apply-inline-specialization-core-empty-function-v0.py
+            apply-inline-specialization-label-alias-v0.py
+            apply-riscv64-default-text-section-v0.py
+            apply-riscv64-explicit-section-flags-v0.py
+            apply-scalar-compound-literal-const-v0.py
+          )
+          for patch in "${patches[@]}"; do
+            python3 "tools/ci/$patch" | tee -a "$work/evidence/patch.log"
+          done
+          git diff --check
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$build" all
+          test -x "$build/bin/minic"
+          echo "SCALAR_COMPOUND_TOOLCHAIN=PASS"
+
+      - name: Prepare Linux 6.6.143
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-scalar-compound-const-v0"
+          src="$work/linux-6.6.143"
+          out="$work/out"
+          archive="$work/linux-6.6.143.tar.xz"
+          curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors \
+            https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.6.143.tar.xz -o "$archive"
+          printf '%s  %s\n' \
+            dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932 \
+            "$archive" | sha256sum -c -
+          tar -xJf "$archive" -C "$work"
+          make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- defconfig
+          "$src/scripts/config" --file "$out/.config" \
+            -e BLK_DEV_INITRD -e DEVTMPFS -e DEVTMPFS_MOUNT \
+            -e SERIAL_8250 -e SERIAL_8250_CONSOLE
+          make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- olddefconfig
+          make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- -j4 prepare
+
+      - name: Build jump_label through MiniC and verify
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-scalar-compound-const-v0"
+          src="$work/linux-6.6.143"
+          out="$work/out"
+          ev="$work/evidence"
+          wrapper="$GITHUB_WORKSPACE/tests/external/linux/stage2_kbuild_cc.sh"
+          MINIC="$work/toolchain/bin/minic" \
+          REAL_CC=/usr/bin/riscv64-linux-gnu-gcc \
+          MINIC_KEEP_INTERMEDIATES=1 \
+          MINIC_KBUILD_TRACE="$ev/minic-kbuild.trace" \
+          CORE_FAST_TRACE=1 \
+            make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
+              CC="$wrapper" -j1 V=1 kernel/jump_label.o >"$ev/kbuild.log" 2>&1
+          test -s "$out/kernel/jump_label.o"
+          riscv64-linux-gnu-nm -u "$out/kernel/jump_label.o" | tee "$ev/undefined.txt"
+          if grep -E '__compiletime_assert_304|__compiletime_assert_305' "$ev/undefined.txt"; then
+            echo "SCALAR_COMPOUND_CONST=FAIL"
+            exit 1
+          fi
+          echo "SCALAR_COMPOUND_CONST=PASS target=kernel/jump_label.o" | tee "$ev/summary.txt"
+
+      - name: Preserve evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-scalar-compound-const-v0
+          path: build/linux-scalar-compound-const-v0/evidence/
+          if-no-files-found: ignore
+          retention-days: 7
