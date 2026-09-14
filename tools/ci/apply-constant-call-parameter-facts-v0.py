@@ -112,14 +112,23 @@ static bool core_cfg_eval_callee_return_expression(
         MinicConstValue argument;
         MinicLocalId local_id;
 
-        if (!minic_type_is_integer(callee->parameter_types[parameter_index]) ||
-            !core_const_eval_integer_with_locals(
+        if (!minic_type_is_integer(callee->parameter_types[parameter_index])) {
+            continue;
+        }
+        local_id = callee->local_begin + parameter_index;
+        if (callee->is_integer_specialization &&
+            callee->specialization_integer_known[parameter_index]) {
+            argument.type = callee->parameter_types[parameter_index];
+            argument.bits = callee->specialization_integer_bits[parameter_index];
+            core_local_constant_set(&callee_context, local_id, &argument);
+            continue;
+        }
+        if (!core_const_eval_integer_with_locals(
                 caller_context,
                 call_expression->value.call.arguments[parameter_index],
                 &argument)) {
             continue;
         }
-        local_id = callee->local_begin + parameter_index;
         core_local_constant_set(&callee_context, local_id, &argument);
     }
 
@@ -132,4 +141,4 @@ static bool core_cfg_eval_callee_return_expression(
 '''
 text = text[:pos] + helper + text[pos:]
 p.write_text(text)
-print("MINIC_CONSTANT_CALL_PARAMETER_FACTS_V0=APPLIED depth_limit=16")
+print("MINIC_CONSTANT_CALL_PARAMETER_FACTS_V0=APPLIED depth_limit=16 specialization_seed=1")
