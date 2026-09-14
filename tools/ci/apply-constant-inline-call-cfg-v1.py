@@ -17,3 +17,6 @@ count = source.count(old)
 if count != 1:
     raise SystemExit(f"expected one V0 condition locator, found {count}")
 exec(compile(source.replace(old, new, 1), str(path), "exec"))
+
+multi = Path("tools/ci/apply-constant-inline-multireturn-v0.py")
+exec(compile(multi.read_text(), str(multi), "exec"))
