@@ -70,6 +70,13 @@ exec(compile(bitcast.read_text(), str(bitcast), "exec"))
 internal_call = Path("tools/ci/apply-constant-internal-call-cfg-v0.py")
 exec(compile(internal_call.read_text(), str(internal_call), "exec"))
 
+# Evaluate CFG-only constant helpers in a temporary callee fact environment so
+# constant call arguments become parameter-local facts. This lets the existing
+# arithmetic/boolean closure prove helpers such as is_power_of_2(8) without
+# changing runtime call lowering. Recursion remains depth-limited and fail-closed.
+parameter_facts = Path("tools/ci/apply-constant-call-parameter-facts-v0.py")
+exec(compile(parameter_facts.read_text(), str(parameter_facts), "exec"))
+
 # Tail closure consumes facts established by M177/M181 plus integer/symbolic
 # specialization, so it must run after both residual constant closure and the
 # complete focused semantic stack.
