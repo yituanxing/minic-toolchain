@@ -86,6 +86,49 @@ if text.count(old_root) != 1:
     raise SystemExit("expected one Core root loop")
 text = text.replace(old_root, new_root, 1)
 
+old_entry = '''    if (block_reachable == NULL || block_queue == NULL ||
+        !minic_enqueue_core_block(core->entry_block,
+                                 core->block_count,
+                                 block_reachable,
+                                 block_queue,
+                                 &block_queue_count)) {
+        goto done;
+    }
+
+    while (block_queue_cursor < block_queue_count) {
+'''
+new_entry = '''    if (block_reachable == NULL || block_queue == NULL ||
+        !minic_enqueue_core_block(core->entry_block,
+                                 core->block_count,
+                                 block_reachable,
+                                 block_queue,
+                                 &block_queue_count)) {
+        goto done;
+    }
+    /* M180_CORE_LABEL_REENTRY_ROOTS: a source C label is a legal re-entry root
+     * for goto/asm-goto. Backend emission preserves such blocks, so final Core
+     * reachability must start from them as well or it can prune a specialization
+     * clone that is still called after label re-entry. */
+    {
+        size_t root_block;
+        for (root_block = 0U; root_block < core->block_count; ++root_block) {
+            if (core->blocks[root_block].source_label_id != SIZE_MAX &&
+                !minic_enqueue_core_block((MinicCoreBlockId)root_block,
+                                         core->block_count,
+                                         block_reachable,
+                                         block_queue,
+                                         &block_queue_count)) {
+                goto done;
+            }
+        }
+    }
+
+    while (block_queue_cursor < block_queue_count) {
+'''
+if text.count(old_entry) != 1:
+    raise SystemExit("expected one Core entry-root block")
+text = text.replace(old_entry, new_entry, 1)
+
 old_final = '''    for (function_index = 0U; function_index < program->function_count; ++function_index) {
         MinicFunction *function = &program->functions[function_index];
         if (!function->is_integer_specialization) {
@@ -109,4 +152,4 @@ if text.count(old_final) != 1:
 text = text.replace(old_final, new_final, 1)
 
 p.write_text(text)
-print("MINIC_INLINE_SPECIALIZATION_ORIGINAL_REACHABILITY_V0=APPLIED all_internal=1")
+print("MINIC_INLINE_SPECIALIZATION_ORIGINAL_REACHABILITY_V0=APPLIED all_internal=1 label_roots=1")
