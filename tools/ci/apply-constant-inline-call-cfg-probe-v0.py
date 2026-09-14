@@ -18,7 +18,9 @@ new = '''    program = context->body->program;
          strcmp(callee->name, "pmd_devmap") == 0 ||
          strcmp(callee->name, "pud_trans_huge") == 0 ||
          strcmp(callee->name, "pud_devmap") == 0 ||
-         strcmp(callee->name, "pfn_t_devmap") == 0)) {
+         strcmp(callee->name, "pfn_t_devmap") == 0 ||
+         strcmp(callee->name, "dax_mapping") == 0 ||
+         strcmp(callee->name, "is_power_of_2") == 0)) {
         const MinicBlock *probe_body = callee->body_block == MINIC_BLOCK_INVALID
                                            ? NULL
                                            : minic_c0_program_block(program, callee->body_block);
