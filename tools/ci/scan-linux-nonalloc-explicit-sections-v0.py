@@ -34,6 +34,7 @@ STALE_SEMANTIC_OBJECTS = (
     'net/ipv4/tcp_ipv4.o',
     'net/ipv4/tcp_metrics.o',
     'net/ipv4/tcp_fastopen.o',
+    'net/ipv4/datagram.o',
     'net/ipv6/datagram.o',
 )
 
