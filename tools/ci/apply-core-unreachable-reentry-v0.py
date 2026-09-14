@@ -57,6 +57,12 @@ else:
 closure = Path("tools/ci/apply-residual-constant-closure-v0.py")
 exec(compile(closure.read_text(), str(closure), "exec"))
 
+# Normalized pointer-to-integer casts can be represented as BITCAST as well as
+# CAST/CONVERSION. M181 already proves the pointer bits; admit the missing
+# outer spelling so poisoned-pointer BUILD_BUG checks fold identically.
+bitcast = Path("tools/ci/apply-pointer-bitcast-integer-cfg-v0.py")
+exec(compile(bitcast.read_text(), str(bitcast), "exec"))
+
 # Feature-disabled Linux code also uses non-inline internal helpers whose body
 # is exactly one constant return.  Reuse the existing strict CFG-only helper
 # evaluator for those functions as well; argument purity and single-return
