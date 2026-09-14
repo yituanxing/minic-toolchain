@@ -1,4 +1,4 @@
-name: Linux Residual17 Focus V0
+name: Linux Residual8 Focus V0
 
 on:
   push:
@@ -9,7 +9,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: linux-residual17-focus-v0-${{ github.ref }}
+  group: linux-residual8-focus-v0-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -92,7 +92,7 @@ jobs:
           make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- -j4 prepare
           echo "TIMING prepare_s=$(($(date +%s) - start))" | tee -a "$work/evidence-fast43/timing.txt"
 
-      - name: Rebuild residual17 objects with intermediates
+      - name: Rebuild residual8 objects and trace task null facts
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -101,36 +101,40 @@ jobs:
           out="$work/out"
           ev="$work/evidence-fast43"
           wrapper="$GITHUB_WORKSPACE/tests/external/linux/stage2_kbuild_cc.sh"
+          task_target=fs/proc/task_mmu.o
           targets=(
-            kernel/ptrace.o kernel/dma/direct.o kernel/bpf/verifier.o
-            mm/swap.o mm/truncate.o mm/vmstat.o mm/slab_common.o mm/gup.o mm/page_alloc.o
-            fs/proc/task_mmu.o drivers/acpi/scan.o
-            net/core/skbuff.o net/core/bpf_sk_storage.o net/ipv4/datagram.o
+            kernel/dma/direct.o mm/truncate.o mm/slab_common.o
+            drivers/acpi/scan.o net/core/skbuff.o net/core/bpf_sk_storage.o
           )
           start=$(date +%s)
           MINIC="$work/toolchain-fast43/bin/minic" REAL_CC=/usr/bin/riscv64-linux-gnu-gcc \
           MINIC_KEEP_INTERMEDIATES=1 MINIC_KBUILD_TRACE="$ev/minic.trace" CORE_FAST_TRACE=1 \
+          MINIC_LOCAL_FACT_TRACE=1 \
+            make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- CC="$wrapper" -j1 V=1 "$task_target" >"$ev/task-trace-kbuild.log" 2>&1
+          MINIC="$work/toolchain-fast43/bin/minic" REAL_CC=/usr/bin/riscv64-linux-gnu-gcc \
+          MINIC_KEEP_INTERMEDIATES=1 MINIC_KBUILD_TRACE="$ev/minic.trace" CORE_FAST_TRACE=1 \
             make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- CC="$wrapper" -j4 V=1 "${targets[@]}" >"$ev/kbuild.log" 2>&1
-          echo "TIMING focused_s=$(($(date +%s) - start)) objects=${#targets[@]}" | tee -a "$ev/timing.txt"
-          : >"$ev/residual17.txt"
-          for target in "${targets[@]}"; do
+          echo "TIMING focused_s=$(($(date +%s) - start)) objects=7" | tee -a "$ev/timing.txt"
+          all_targets=("$task_target" "${targets[@]}")
+          : >"$ev/residual8.txt"
+          for target in "${all_targets[@]}"; do
             dir=$(dirname "$target"); stem=$(basename "$target" .o); key=${target//\//__}; key=${key%.o}
             riscv64-linux-gnu-nm -u "$out/$target" | awk '{print $NF}' | sort -u >"$ev/$key.undefined"
             cp -f "$out/$dir/$stem.minic-stage2.i" "$ev/$key.i" 2>/dev/null || true
             cp -f "$out/$dir/$stem.minic-stage2.s" "$ev/$key.s" 2>/dev/null || true
             cp -f "$out/$dir/$stem.minic-stage2.minic.stderr" "$ev/$key.stderr" 2>/dev/null || true
-            printf 'FOCUS17 target=%s undefined=%s\n' "$target" "$(wc -l <"$ev/$key.undefined")" | tee -a "$ev/summary.txt"
-            grep -E '__compiletime_assert_|arch_dma_set_uncached|free_zone_device_page|dax_delete_mapping_entry|dax_invalidate_mapping_entry_sync|migrate_device_coherent_page|dma_dummy_ops|lockdep_is_held' "$ev/$key.undefined" | sed "s#^#RESIDUAL $target #" | tee -a "$ev/residual17.txt" "$ev/summary.txt" || true
+            printf 'FOCUS8 target=%s undefined=%s\n' "$target" "$(wc -l <"$ev/$key.undefined")" | tee -a "$ev/summary.txt"
+            grep -E '__compiletime_assert_1064|__compiletime_assert_194|__compiletime_assert_375|__compiletime_assert_645|arch_dma_set_uncached|dax_delete_mapping_entry|dax_invalidate_mapping_entry_sync|dma_dummy_ops' "$ev/$key.undefined" | sed "s#^#RESIDUAL $target #" | tee -a "$ev/residual8.txt" "$ev/summary.txt" || true
           done
-          printf 'FOCUS17_RESIDUAL_REFS=%s\n' "$(wc -l <"$ev/residual17.txt")" | tee -a "$ev/summary.txt"
-          awk '{print $NF}' "$ev/residual17.txt" | sort -u >"$ev/residual17.unique"
-          printf 'FOCUS17_RESIDUAL_UNIQUE=%s\n' "$(wc -l <"$ev/residual17.unique")" | tee -a "$ev/summary.txt"
+          printf 'FOCUS8_RESIDUAL_REFS=%s\n' "$(wc -l <"$ev/residual8.txt")" | tee -a "$ev/summary.txt"
+          awk '{print $NF}' "$ev/residual8.txt" | sort -u >"$ev/residual8.unique"
+          printf 'FOCUS8_RESIDUAL_UNIQUE=%s\n' "$(wc -l <"$ev/residual8.unique")" | tee -a "$ev/summary.txt"
 
       - name: Preserve focused evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: linux-residual17-focus-v0
+          name: linux-residual8-focus-v0
           path: build/linux-expanded-kbuild-v0/evidence-fast43/
           if-no-files-found: ignore
           retention-days: 7
