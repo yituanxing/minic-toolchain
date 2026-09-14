@@ -76,6 +76,7 @@ jobs:
             apply-core-unsupported-trace-v0.py
           )
           for patch in "${patches[@]}"; do python3 "tools/ci/$patch"; done
+          cp -f /tmp/core-unsupported-sites-v0.txt "$ev/core-unsupported-sites.txt"
           git diff --check
           make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$build" "$build/bin/minic" "$build/bin/minic-cc"
 
