@@ -21,14 +21,6 @@ jobs:
         with:
           ref: ${{ github.sha }}
 
-      - name: Restore latest mixed Linux frontier
-        id: mixed-cache
-        uses: actions/cache/restore@v4
-        with:
-          path: build/linux-expanded-kbuild-v0/out
-          key: linux-expanded-mixed-v1-6.6.143-Linux-6cad414ac07ece618c204997354c481ce3bd4acacbfb76a0d38066750e2bd945
-          fail-on-cache-miss: true
-
       - name: Install RV64 prerequisites
         run: |
           sudo apt-get -o Acquire::Retries=3 update
@@ -43,7 +35,7 @@ jobs:
           work="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0"
           build="$work/toolchain-fast43"
           ev="$work/evidence-fast43"
-          rm -rf "$build" "$ev"
+          rm -rf "$work"
           mkdir -p "$ev"
           start=$(date +%s)
           patches=(
@@ -80,17 +72,25 @@ jobs:
           make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$build" "$build/bin/minic" "$build/bin/minic-cc"
           echo "TIMING toolchain_s=$(($(date +%s) - start))" | tee "$ev/timing.txt"
 
-      - name: Prepare Linux source only
+      - name: Prepare pinned Linux 6.6.143 from scratch
         shell: bash
         run: |
           set -Eeuo pipefail
           work="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0"
           src="$work/linux-6.6.143"
+          out="$work/out"
           archive="$work/linux-6.6.143.tar.xz"
+          start=$(date +%s)
           curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.6.143.tar.xz -o "$archive"
           printf '%s  %s\n' dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932 "$archive" | sha256sum -c -
           tar -xJf "$archive" -C "$work"
-          test -s "$work/out/.config" && test -s "$work/out/include/config/auto.conf"
+          make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- defconfig
+          "$src/scripts/config" --file "$out/.config" \
+            -e BLK_DEV_INITRD -e DEVTMPFS -e DEVTMPFS_MOUNT \
+            -e SERIAL_8250 -e SERIAL_8250_CONSOLE
+          make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- olddefconfig
+          make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- -j4 prepare
+          echo "TIMING prepare_s=$(($(date +%s) - start))" | tee -a "$work/evidence-fast43/timing.txt"
 
       - name: Rebuild residual17 objects with intermediates
         shell: bash
@@ -107,7 +107,6 @@ jobs:
             fs/proc/task_mmu.o drivers/acpi/scan.o
             net/core/skbuff.o net/core/bpf_sk_storage.o net/ipv4/datagram.o
           )
-          for target in "${targets[@]}"; do rm -f "$out/$target"; done
           start=$(date +%s)
           MINIC="$work/toolchain-fast43/bin/minic" REAL_CC=/usr/bin/riscv64-linux-gnu-gcc \
           MINIC_KEEP_INTERMEDIATES=1 MINIC_KBUILD_TRACE="$ev/minic.trace" CORE_FAST_TRACE=1 \
