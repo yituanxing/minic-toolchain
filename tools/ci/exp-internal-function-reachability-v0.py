@@ -38,11 +38,15 @@ source = lower.read_text()
 marker = "M181_CONSTANT_CONDITION_BRANCH"
 if marker in source:
     raise SystemExit("M181 constant condition branch already present")
-function_anchor = '''static MinicCoreLowerStatus lower_condition_branch(MinicCoreLowerContext *context,
+definition_anchor = '''static MinicCoreLowerStatus lower_condition_branch(MinicCoreLowerContext *context,
+                                                   MinicExpressionId expression_id,
+                                                   MinicSourceSpan span,
+                                                   MinicCoreBlockId when_true,
+                                                   MinicCoreBlockId when_false) {
 '''
-function_start = source.find(function_anchor)
+function_start = source.find(definition_anchor)
 if function_start < 0:
-    raise SystemExit("lower_condition_branch anchor not found")
+    raise SystemExit("lower_condition_branch definition anchor not found")
 function_end = source.find(
     "\nstatic bool core_switch_label_has_function_reentry", function_start)
 if function_end < 0:
