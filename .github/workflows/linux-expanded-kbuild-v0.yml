@@ -2,8 +2,7 @@ name: Linux Expanded Kbuild V0
 
 on:
   push:
-    branches:
-      - "agent/linux-expanded-kbuild-v0"
+    branches: ["agent/linux-expanded-kbuild-v0"]
   workflow_dispatch:
 
 permissions:
@@ -27,7 +26,9 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: build/linux-expanded-kbuild-v0/out
-          key: linux-expanded-kbuild-v0-6.6.143-${{ runner.os }}-${{ hashFiles('src/**', 'include/**', 'tools/ci/apply-*.py', 'tests/external/linux/stage2_kbuild_cc.sh') }}
+          key: linux-expanded-kbuild-v0-6.6.143-${{ runner.os }}-${{ hashFiles('src/**', 'include/**', 'tools/ci/apply-*.py', 'tests/external/linux/stage2_kbuild_cc.sh') }}-sectionflags-v0
+          restore-keys: |
+            linux-expanded-kbuild-v0-6.6.143-${{ runner.os }}-
 
       - name: Install RV64 Linux prerequisites
         run: |
@@ -36,7 +37,7 @@ jobs:
             build-essential gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
             bc bison flex libssl-dev libelf-dev make curl xz-utils python3
 
-      - name: Apply current MiniC Linux semantic stack and build
+      - name: Apply MiniC Linux semantic stack and build
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -68,6 +69,7 @@ jobs:
             apply-inline-specialization-core-empty-function-v0.py
             apply-inline-specialization-label-alias-v0.py
             apply-riscv64-default-text-section-v0.py
+            apply-riscv64-explicit-section-flags-v0.py
           )
           for patch in "${patches[@]}"; do
             python3 "tools/ci/$patch" | tee -a "$work/evidence/patch.log"
@@ -89,20 +91,17 @@ jobs:
           ev="$work/evidence"
           mkdir -p "$ev"
           cache_hit="${{ steps.kbuild-cache.outputs.cache-hit }}"
-          printf 'KBUILD_CACHE_HIT=%s\n' "${cache_hit:-false}" | tee "$ev/cache.txt"
-
+          cache_key="${{ steps.kbuild-cache.outputs.cache-matched-key }}"
+          printf 'KBUILD_CACHE_HIT=%s\nKBUILD_CACHE_MATCHED_KEY=%s\n' \
+            "${cache_hit:-false}" "${cache_key:-none}" | tee "$ev/cache.txt"
           curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors \
-            https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.6.143.tar.xz \
-            -o "$archive"
+            https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.6.143.tar.xz -o "$archive"
           printf '%s  %s\n' \
             dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932 \
             "$archive" | sha256sum -c -
           tar -xJf "$archive" -C "$work"
-
-          if test "$cache_hit" = true; then
-            test -s "$out/.config"
-            test -s "$out/include/config/auto.conf"
-            test -s "$out/include/generated/autoconf.h"
+          if test -s "$out/.config" && test -s "$out/include/config/auto.conf" && \
+             test -s "$out/include/generated/autoconf.h"; then
             echo "LINUX_EXPANDED_CACHE_RESTORE=PASS"
           else
             make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- defconfig
@@ -113,7 +112,34 @@ jobs:
             make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- -j4 prepare
           fi
           sha256sum "$out/.config" >"$ev/config.sha256"
-          echo "LINUX_EXPANDED_SOURCE=PASS release=6.6.143 cache_hit=${cache_hit:-false}"
+
+      - name: Refresh only cached objects with bad explicit sections
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0"
+          src="$work/linux-6.6.143"
+          out="$work/out"
+          ev="$work/evidence"
+          wrapper="$GITHUB_WORKSPACE/tests/external/linux/stage2_kbuild_cc.sh"
+          python3 tools/ci/scan-linux-nonalloc-explicit-sections-v0.py "$out" \
+            >"$ev/section-refresh-targets.txt" 2>"$ev/section-refresh-detail.txt"
+          count=$(grep -c . "$ev/section-refresh-targets.txt" || true)
+          echo "LINUX_SECTION_REFRESH_TARGETS=$count" | tee "$ev/section-refresh-summary.txt"
+          head -n 200 "$ev/section-refresh-detail.txt" || true
+          if test "$count" -gt 0; then
+            mapfile -t targets <"$ev/section-refresh-targets.txt"
+            for target in "${targets[@]}"; do rm -f "$out/$target"; done
+            MINIC="$work/toolchain/bin/minic" \
+            REAL_CC=/usr/bin/riscv64-linux-gnu-gcc \
+            MINIC_KEEP_INTERMEDIATES=0 \
+            MINIC_KBUILD_TRACE="$ev/section-refresh.trace" \
+            CORE_FAST_TRACE=1 \
+              make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
+                CC="$wrapper" -j4 V=1 "${targets[@]}" >"$ev/section-refresh.log" 2>&1
+          fi
+          python3 tools/ci/scan-linux-nonalloc-explicit-sections-v0.py "$out" \
+            --verify --targets-file "$ev/section-refresh-targets.txt"
 
       - name: Build Linux Image through MiniC until next frontier
         id: frontier
@@ -127,7 +153,6 @@ jobs:
           wrapper="$GITHUB_WORKSPACE/tests/external/linux/stage2_kbuild_cc.sh"
           trace="$ev/minic-kbuild.trace"
           : >"$trace"
-
           set +e
           MINIC="$work/toolchain/bin/minic" \
           REAL_CC=/usr/bin/riscv64-linux-gnu-gcc \
@@ -138,47 +163,23 @@ jobs:
               CC="$wrapper" -j4 V=1 Image >"$ev/kbuild.log" 2>&1
           rc=$?
           set -e
-
           attempts=$(grep -c '^minic ' "$trace" || true)
           passes=$(grep -c '^pass ' "$trace" || true)
           delegates=$(grep -c '^delegate ' "$trace" || true)
-          blockers=$(grep -c 'MINIC_KBUILD_BLOCKER' "$ev/kbuild.log" || true)
-          orphan_text=$(grep -c 'orphan section.*\.text\.' "$ev/kbuild.log" || true)
-          bfd_asserts=$(grep -c 'elfnn-riscv.c:.*Assertion' "$ev/kbuild.log" || true)
-          printf 'LINUX_EXPANDED_FRONTIER rc=%s minic_attempts=%s passes=%s delegates=%s blockers=%s orphan_text=%s bfd_asserts=%s\n' \
-            "$rc" "$attempts" "$passes" "$delegates" "$blockers" "$orphan_text" "$bfd_asserts" | tee "$ev/summary.txt"
+          blockers=$(grep -a -c 'MINIC_KBUILD_BLOCKER' "$ev/kbuild.log" || true)
+          orphan_text=$(grep -a -c 'orphan section.*\.text\.' "$ev/kbuild.log" || true)
+          nonalloc=$(grep -a -c 'unexpected non-allocatable section' "$ev/kbuild.log" || true)
+          bfd_asserts=$(grep -a -c 'elfnn-riscv.c:.*Assertion' "$ev/kbuild.log" || true)
+          printf 'LINUX_EXPANDED_FRONTIER rc=%s minic_attempts=%s passes=%s delegates=%s blockers=%s orphan_text=%s nonalloc=%s bfd_asserts=%s\n' \
+            "$rc" "$attempts" "$passes" "$delegates" "$blockers" "$orphan_text" "$nonalloc" "$bfd_asserts" | tee "$ev/summary.txt"
           cat "$ev/cache.txt" >>"$ev/summary.txt" || true
-          grep 'MINIC_KBUILD_BLOCKER' "$ev/kbuild.log" | head -n 8 | tee "$ev/blockers.txt" || true
-          grep -E 'riscv64-linux-gnu-ld|orphan section|elfnn-riscv.c:.*Assertion|Segmentation fault|undefined reference|modpost:' \
+          cat "$ev/section-refresh-summary.txt" >>"$ev/summary.txt" || true
+          grep -a -E 'riscv64-linux-gnu-ld|orphan section|unexpected non-allocatable section|elfnn-riscv.c:.*Assertion|Segmentation fault|undefined reference|modpost:' \
             "$ev/kbuild.log" | tail -n 1200 >"$ev/link-frontier.log" || true
           tail -n 300 "$ev/kbuild.log" >"$ev/kbuild-tail.log" || true
-
           if test "$rc" -eq 0; then
             test -s "$out/arch/riscv/boot/Image"
             printf 'LINUX_EXPANDED_IMAGE=PASS image_bytes=%s\n' "$(stat -c %s "$out/arch/riscv/boot/Image")" | tee -a "$ev/summary.txt"
-            exit 0
-          fi
-
-          first_output=$(sed -n 's/.*MINIC_KBUILD_BLOCKER .* output=\([^ ]*\) status=.*/\1/p' "$ev/kbuild.log" | head -n 1)
-          if test -n "$first_output"; then
-            printf 'LINUX_EXPANDED_FIRST_OUTPUT=%s\n' "$first_output" | tee -a "$ev/summary.txt"
-            rm -f "$out/$first_output"
-            set +e
-            MINIC="$work/toolchain/bin/minic" \
-            REAL_CC=/usr/bin/riscv64-linux-gnu-gcc \
-            MINIC_KEEP_INTERMEDIATES=1 \
-            MINIC_KBUILD_TRACE="$ev/focused.trace" \
-            CORE_FAST_TRACE=1 \
-              make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
-                CC="$wrapper" -j1 V=1 "$first_output" >"$ev/focused.log" 2>&1
-            focused_rc=$?
-            set -e
-            printf 'LINUX_EXPANDED_FOCUSED rc=%s target=%s\n' "$focused_rc" "$first_output" | tee -a "$ev/summary.txt"
-            tail -n 240 "$ev/focused.log" >"$ev/focused-tail.log" || true
-            base="$out/${first_output%.*}.minic-stage2"
-            for suffix in i s minic.stdout minic.stderr; do
-              test ! -f "$base.$suffix" || cp "$base.$suffix" "$ev/first-blocker.$suffix"
-            done
           fi
           exit "$rc"
 
@@ -187,7 +188,7 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: build/linux-expanded-kbuild-v0/out
-          key: linux-expanded-kbuild-v0-6.6.143-${{ runner.os }}-${{ hashFiles('src/**', 'include/**', 'tools/ci/apply-*.py', 'tests/external/linux/stage2_kbuild_cc.sh') }}
+          key: linux-expanded-kbuild-v0-6.6.143-${{ runner.os }}-${{ hashFiles('src/**', 'include/**', 'tools/ci/apply-*.py', 'tests/external/linux/stage2_kbuild_cc.sh') }}-sectionflags-v0
 
       - name: Preserve expanded frontier evidence
         if: always()
