@@ -1,0 +1,186 @@
+name: Linux PI Real Init Gate V0
+
+on:
+  push:
+    branches: ["agent/linux-expanded-kbuild-v0"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: linux-pi-real-init-gate-v0-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  real-init-gate:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[linux-pi-real-init]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Restore known-good Linux object cache
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-expanded-kbuild-v0/out
+          key: linux-expanded-mixed-v1-6.6.143-Linux-d30569a4c675f6ac72d9f63c28f0b8745317f7a15c0799d10768f916d74b3a88
+          fail-on-cache-miss: true
+
+      - name: Install focused prerequisites
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get -o Acquire::Retries=3 update >/dev/null
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            build-essential gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu libc6-dev-riscv64-cross \
+            bc bison flex libssl-dev libelf-dev make curl xz-utils python3 >/dev/null
+
+      - name: Build current patched MiniC
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0"
+          ev="$GITHUB_WORKSPACE/build/linux-pi-real-init-gate/evidence"
+          mkdir -p "$ev"
+          patches=(
+            apply-local-integer-assignment-v2.py
+            apply-local-integer-logical-conditions-v0.py
+            apply-local-null-pointer-facts-v0.py
+            apply-builtin-constant-p-local-facts-v0.py
+            apply-inline-integer-specialization-v0.py
+            apply-inline-specialization-local-facts-v0.py
+            apply-inline-specialization-stable-parameter-facts-v0.py
+            apply-inline-specialization-transitive-integer-v0.py
+            apply-inline-specialization-base-callee-integer-v0.py
+            apply-inline-specialization-capacity-v0.py
+            apply-inline-specialization-symbolic-address-v0.py
+            apply-inline-specialization-symbolic-nested-array-v0.py
+            apply-inline-specialization-symbolic-integer-closure-v0.py
+            apply-inline-specialization-symbolic-transitive-rewrite-v0.py
+            apply-inline-specialization-symbolic-array-lvalue-v0.py
+            apply-inline-specialization-symbolic-closed-integers-v0.py
+            apply-inline-specialization-base-callee-symbolic-v0.py
+            apply-inline-specialization-resolved-asm-goto-v0.py
+            apply-inline-specialization-core-reachability-v0.py
+            apply-inline-specialization-original-reachability-v0.py
+            apply-inline-asm-local-integer-facts-v0.py
+            apply-inline-asm-rk-early-v0.py
+            apply-inline-asm-rk-early-hotfix-v0.py
+            apply-inline-asm-rk-tail-rollback-v0.py
+            apply-inline-specialization-core-empty-function-v0.py
+            apply-inline-specialization-label-alias-v0.py
+            apply-riscv64-default-text-section-v0.py
+            apply-riscv64-explicit-section-flags-v0.py
+            apply-inline-asm-symbolic-specialization-v0.py
+          )
+          start=$(date +%s%N)
+          for p in "${patches[@]}"; do python3 "tools/ci/$p" >>"$ev/patch.log"; done
+          git diff --check
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$work/toolchain" \
+            "$work/toolchain/bin/minic" "$work/toolchain/bin/minic-cc" >/dev/null
+          end=$(date +%s%N)
+          python3 - "$start" "$end" <<'PY' | tee "$ev/timing.txt"
+          import sys
+          a,b=map(int,sys.argv[1:])
+          print(f"TIMING toolchain_ms={(b-a)//1_000_000}")
+          PY
+
+      - name: Prepare pinned Linux source
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0"
+          src="$work/linux-6.6.143"
+          archive="$work/linux-6.6.143.tar.xz"
+          out="$work/out"
+          ev="$GITHUB_WORKSPACE/build/linux-pi-real-init-gate/evidence"
+          test -s "$out/.config"
+          start=$(date +%s%N)
+          curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors \
+            https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.6.143.tar.xz -o "$archive"
+          printf '%s  %s\n' dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932 "$archive" | sha256sum -c -
+          rm -rf "$src"
+          tar -xJf "$archive" -C "$work"
+          end=$(date +%s%N)
+          python3 - "$start" "$end" <<'PY' | tee -a "$ev/timing.txt"
+          import sys
+          a,b=map(int,sys.argv[1:])
+          print(f"TIMING linux_prepare_ms={(b-a)//1_000_000}")
+          PY
+
+      - name: Rebuild only real Linux init.o through MiniC
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0"
+          src="$work/linux-6.6.143"
+          out="$work/out"
+          ev="$GITHUB_WORKSPACE/build/linux-pi-real-init-gate/evidence"
+          wrapper="$GITHUB_WORKSPACE/tests/external/linux/stage2_kbuild_cc.sh"
+          rm -f "$out/arch/riscv/mm/init.o" "$out/arch/riscv/mm/.init.o.cmd"
+          start=$(date +%s%N)
+          MINIC="$work/toolchain/bin/minic" REAL_CC=/usr/bin/riscv64-linux-gnu-gcc \
+          MINIC_KEEP_INTERMEDIATES=1 MINIC_KBUILD_TRACE="$ev/refresh.trace" \
+          CORE_FAST_TRACE=1 MINIC_LOCAL_FACT_TRACE=1 \
+            make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
+              CC="$wrapper" -j2 V=1 arch/riscv/mm/init.o >"$ev/refresh.log" 2>&1
+          end=$(date +%s%N)
+          python3 - "$start" "$end" <<'PY' | tee -a "$ev/timing.txt"
+          import sys
+          a,b=map(int,sys.argv[1:])
+          print(f"TIMING init_refresh_ms={(b-a)//1_000_000}")
+          PY
+          base="$out/arch/riscv/mm/init.minic-stage2"
+          cp "$base.i" "$ev/init.i"
+          cp "$base.s" "$ev/init.s"
+          cp "$base.minic.stderr" "$ev/init.minic.stderr"
+          cp "$base.minic.stdout" "$ev/init.minic.stdout"
+          riscv64-linux-gnu-objdump -dr "$out/arch/riscv/mm/init.o" >"$ev/init.disasm.txt"
+          grep -n -A140 -B30 '<set_satp_mode>' "$ev/init.disasm.txt" >"$ev/set_satp_mode.disasm.txt" || true
+          grep -n -E 'RK_EARLY|LOCAL_FACT' "$ev/init.minic.stderr" >"$ev/init.rk-trace.txt" || true
+
+      - name: Check real init.o SATP window before relink
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ev="$GITHUB_WORKSPACE/build/linux-pi-real-init-gate/evidence"
+          python3 - "$ev/init.s" <<'PY' | tee "$ev/satp-real-window.txt"
+          import re, sys
+          from pathlib import Path
+          lines = Path(sys.argv[1]).read_text(errors='replace').splitlines()
+          windows=[]
+          for i,line in enumerate(lines):
+              if not re.search(r'\bcsrw\s+satp\s*,', line):
+                  continue
+              end=None
+              for j in range(i+1, min(len(lines), i+160)):
+                  if re.search(r'\bcsrrw(?:i)?\s+[^,]+\s*,\s*satp\s*,', lines[j]):
+                      end=j
+                      break
+              if end is None:
+                  continue
+              unsafe=[]
+              for k in range(i+1,end):
+                  if re.search(r'\bsp\b', lines[k]): unsafe.append((k+1,lines[k]))
+              windows.append((i+1,end+1,unsafe))
+          print(f'REAL_SATP_WINDOWS={len(windows)}')
+          total=sum(len(x[2]) for x in windows)
+          print(f'REAL_SATP_STACK_TOUCHES={total}')
+          for n,(a,b,unsafe) in enumerate(windows):
+              print(f'REAL_SATP_WINDOW index={n} begin={a} end={b} stack_touches={len(unsafe)}')
+              for ln,text in unsafe[:32]: print(f'REAL_SATP_STACK_TOUCH line={ln} text={text.strip()}')
+          if not windows: raise SystemExit(2)
+          if total: raise SystemExit(1)
+          PY
+
+      - name: Preserve real init evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-pi-real-init-gate-v0
+          path: build/linux-pi-real-init-gate/evidence/
+          if-no-files-found: ignore
+          retention-days: 5
