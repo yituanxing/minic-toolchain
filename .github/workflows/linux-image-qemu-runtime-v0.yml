@@ -28,7 +28,6 @@ jobs:
           path: build/linux-expanded-kbuild-v0/out
           key: linux-expanded-mixed-v1-6.6.143-${{ runner.os }}-${{ hashFiles('src/**', 'include/**', 'tools/ci/apply-*.py', 'tests/external/linux/stage2_kbuild_cc.sh') }}
           restore-keys: |
-            linux-expanded-kbuild-v0-6.6.143-${{ runner.os }}-
             linux-expanded-mixed-v1-6.6.143-${{ runner.os }}-
 
       - name: Install RV64 QEMU runtime prerequisites
