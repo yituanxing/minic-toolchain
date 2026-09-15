@@ -1,0 +1,97 @@
+name: Linux PI SATP Micro V0
+
+on:
+  push:
+    branches: ["agent/linux-expanded-kbuild-v0"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: linux-pi-satp-micro-v0-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  satp-micro:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[linux-pi-micro]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Apply current semantic stack and build MiniC
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          build="$GITHUB_WORKSPACE/build/linux-pi-satp-micro/toolchain"
+          patches=(
+            apply-local-integer-assignment-v2.py
+            apply-local-integer-logical-conditions-v0.py
+            apply-local-null-pointer-facts-v0.py
+            apply-builtin-constant-p-local-facts-v0.py
+            apply-inline-integer-specialization-v0.py
+            apply-inline-specialization-local-facts-v0.py
+            apply-inline-specialization-stable-parameter-facts-v0.py
+            apply-inline-specialization-transitive-integer-v0.py
+            apply-inline-specialization-base-callee-integer-v0.py
+            apply-inline-specialization-capacity-v0.py
+            apply-inline-specialization-symbolic-address-v0.py
+            apply-inline-specialization-symbolic-nested-array-v0.py
+            apply-inline-specialization-symbolic-integer-closure-v0.py
+            apply-inline-specialization-symbolic-transitive-rewrite-v0.py
+            apply-inline-specialization-symbolic-array-lvalue-v0.py
+            apply-inline-specialization-symbolic-closed-integers-v0.py
+            apply-inline-specialization-base-callee-symbolic-v0.py
+            apply-inline-specialization-resolved-asm-goto-v0.py
+            apply-inline-specialization-core-reachability-v0.py
+            apply-inline-specialization-original-reachability-v0.py
+            apply-inline-asm-local-integer-facts-v0.py
+            apply-inline-specialization-core-empty-function-v0.py
+            apply-inline-specialization-label-alias-v0.py
+            apply-riscv64-default-text-section-v0.py
+            apply-riscv64-explicit-section-flags-v0.py
+            apply-inline-asm-symbolic-specialization-v0.py
+          )
+          start=$(date +%s%N)
+          for patch in "${patches[@]}"; do
+            python3 "tools/ci/$patch"
+          done
+          git diff --check
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$build" "$build/bin/minic"
+          end=$(date +%s%N)
+          python3 - "$start" "$end" <<'PY'
+          import sys
+          start, end = map(int, sys.argv[1:])
+          print(f"SATP_MICRO_BUILD_MS={(end-start)//1_000_000}")
+          PY
+
+      - name: Check stack-free SATP transition
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          build="$GITHUB_WORKSPACE/build/linux-pi-satp-micro"
+          start=$(date +%s%N)
+          MINIC="$build/toolchain/bin/minic" \
+          BUILD_DIR="$build" \
+          SATP_SKIP_GCC=1 \
+            bash tests/compiler/c0/run-gnu-inline-asm-satp-window-rv64.sh | tee "$build/satp-window.log"
+          end=$(date +%s%N)
+          python3 - "$start" "$end" <<'PY'
+          import sys
+          start, end = map(int, sys.argv[1:])
+          print(f"SATP_MICRO_TEST_MS={(end-start)//1_000_000}")
+          PY
+
+      - name: Preserve failing assembly
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-pi-satp-micro-v0
+          path: |
+            build/linux-pi-satp-micro/satp-window.log
+            build/linux-pi-satp-micro/tests/compiler-c0-gnu-inline-asm-satp-window/minic.s
+          if-no-files-found: ignore
+          retention-days: 3
