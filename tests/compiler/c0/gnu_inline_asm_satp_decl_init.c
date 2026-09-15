@@ -16,7 +16,7 @@ static unsigned long satp_decl_transition(unsigned long identity_satp) {
                          : "rK"(identity_satp)
                          : "memory");
 
-    old_satp = satp_swap_like(0UL);
+    old_satp = satp_swap_like(0ULL);
     return old_satp;
 }
 
