@@ -158,5 +158,75 @@ if text.count(batch_add_old) != 1:
     raise SystemExit("expected one specialized register-output asm add")
 text = text.replace(batch_add_old, batch_add_new, 1)
 
+# The generic one-output/one-input structured path appears before BATCH_I and
+# accepts both "r" and "rK".  Without this fast path it eagerly lowers an rK
+# constant/local into Core SSA (and therefore a frame slot) before the immediate
+# specialization below can ever see it.  Prefer the immediate alternative when
+# it is legal; preserve the old register lowering as the fallback for rK values
+# that cannot be encoded as a CSR immediate.
+generic_anchor = '''            if (!local->is_array &&
+                minic_c0_program_local_fixed_register_binding(
+                    context->body->program, output_expression->value.local_id) == NULL &&
+                minic_type_equal(local->type, output_expression->type)) {
+                status = lower_expression(context, input->expression, &input_value);
+'''
+generic_replacement = '''            if (!local->is_array &&
+                minic_c0_program_local_fixed_register_binding(
+                    context->body->program, output_expression->value.local_id) == NULL &&
+                minic_type_equal(local->type, output_expression->type)) {
+                if (core_inline_asm_constraint_is(input, "rK")) {
+                    char *specialized_template = NULL;
+                    size_t specialized_length = 0U;
+                    if (core_inline_asm_specialize_register_output_immediates(
+                            context, source, &specialized_template, &specialized_length)) {
+                        bool added = minic_core_function_add_opaque_inline_asm(
+                            context->function,
+                            specialized_template,
+                            specialized_length,
+                            source->is_volatile,
+                            source->has_memory_clobber,
+                            &inline_asm_id);
+                        free(specialized_template);
+                        if (!added) {
+                            return MINIC_CORE_LOWER_ERROR;
+                        }
+                        (void)memset(&instruction, 0, sizeof(instruction));
+                        instruction.kind = MINIC_CORE_INSTRUCTION_REGISTER_OUTPUT_INLINE_ASM;
+                        instruction.span = statement->span;
+                        instruction.type = output_type;
+                        instruction.result = MINIC_CORE_VALUE_INVALID;
+                        instruction.value.inline_asm_id = inline_asm_id;
+                        if (!minic_core_function_append_value_instruction(
+                                context->function,
+                                context->block_id,
+                                &instruction,
+                                &output_value)) {
+                            return MINIC_CORE_LOWER_ERROR;
+                        }
+                        if (lower_address(context, output->expression, &address_id) !=
+                            MINIC_CORE_LOWER_OK) {
+                            return MINIC_CORE_LOWER_ERROR;
+                        }
+                        (void)memset(&instruction, 0, sizeof(instruction));
+                        instruction.kind = MINIC_CORE_INSTRUCTION_STORE;
+                        instruction.span = statement->span;
+                        instruction.type = minic_type_void();
+                        instruction.result = MINIC_CORE_VALUE_INVALID;
+                        instruction.value.store.address = address_id;
+                        instruction.value.store.stored_value = output_value;
+                        instruction.value.store.is_volatile = false;
+                        return minic_core_function_append_effect_instruction(
+                                   context->function, context->block_id, &instruction)
+                                   ? MINIC_CORE_LOWER_OK
+                                   : MINIC_CORE_LOWER_ERROR;
+                    }
+                    free(specialized_template);
+                }
+                status = lower_expression(context, input->expression, &input_value);
+'''
+if text.count(generic_anchor) != 1:
+    raise SystemExit("expected one generic register-output/input lowering anchor")
+text = text.replace(generic_anchor, generic_replacement, 1)
+
 p.write_text(text)
 print("MINIC_INLINE_ASM_LOCAL_INTEGER_FACTS_V0=APPLIED")
