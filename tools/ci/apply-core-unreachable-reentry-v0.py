@@ -54,6 +54,7 @@ for script in (
     "apply-pure-dereference-cfg-v0.py",
     "apply-cfg-annihilator-priority-v0.py",
     "apply-statement-expression-postlower-fact-v0.py",
+    "apply-loop-invariant-local-facts-v0.py",
     "apply-tail-cfg-closure-v0.py",
 ):
     path = Path("tools/ci") / script
