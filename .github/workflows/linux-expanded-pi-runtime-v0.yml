@@ -37,7 +37,7 @@ jobs:
           set -Eeuo pipefail
           sudo apt-get -o Acquire::Retries=3 update
           sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
-            build-essential gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
+            build-essential gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu libc6-dev-riscv64-cross \
             bc bison flex libssl-dev libelf-dev make curl xz-utils python3 \
             qemu-system-misc opensbi cpio gzip file device-tree-compiler
 
@@ -102,7 +102,7 @@ jobs:
           rm -rf "$src"
           tar -xJf "$archive" -C "$work"
 
-      - name: Force-rebuild six RISC-V PI startup objects through fixed MiniC
+      - name: Force-rebuild MMU init and six RISC-V PI startup objects through fixed MiniC
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -111,8 +111,9 @@ jobs:
           out="$work/out"
           ev="$GITHUB_WORKSPACE/build/linux-expanded-pi-runtime/evidence"
           wrapper="$GITHUB_WORKSPACE/tests/external/linux/stage2_kbuild_cc.sh"
+          rm -f "$out/arch/riscv/mm/init.o" "$out/arch/riscv/mm/.init.o.cmd"
+          targets=("arch/riscv/mm/init.o")
           bases=(cmdline_early fdt_early string ctype lib-fdt lib-fdt_ro)
-          targets=()
           for base in "${bases[@]}"; do
             rm -f "$out/arch/riscv/kernel/pi/${base}.o" "$out/arch/riscv/kernel/pi/${base}.pi.o"
             rm -f "$out/arch/riscv/kernel/pi/.${base}.o.cmd" "$out/arch/riscv/kernel/pi/.${base}.pi.o.cmd"
@@ -123,13 +124,17 @@ jobs:
           MINIC_KEEP_INTERMEDIATES=1 MINIC_KBUILD_TRACE="$ev/pi-refresh.trace" CORE_FAST_TRACE=1 \
             make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
               CC="$wrapper" -j4 V=1 "${targets[@]}" >"$ev/pi-refresh.log" 2>&1
-          printf 'TIMING pi_refresh_s=%s objects=%s\n' "$(( $(date +%s) - start ))" "${#targets[@]}" | tee -a "$ev/timing.txt"
+          printf 'TIMING early_refresh_s=%s objects=%s\n' "$(( $(date +%s) - start ))" "${#targets[@]}" | tee -a "$ev/timing.txt"
           for target in "${targets[@]}"; do test -s "$out/$target"; done
+          riscv64-linux-gnu-objdump -dr "$out/arch/riscv/mm/init.o" >"$ev/init.disasm.txt"
           riscv64-linux-gnu-objdump -dr "$out/arch/riscv/kernel/pi/cmdline_early.pi.o" >"$ev/cmdline_early.pi.disasm.txt"
           riscv64-linux-gnu-objdump -dr "$out/arch/riscv/kernel/pi/string.pi.o" >"$ev/string.pi.disasm.txt"
-          grep -E 'R_RISCV_(GOT_HI20|PCREL_HI20|PCREL_LO12)' "$ev/cmdline_early.pi.disasm.txt" | tee "$ev/cmdline_early.pi.relocs.txt" || true
+          grep -E 'R_RISCV_(GOT_HI20|PCREL_HI20|PCREL_LO12)' "$ev/init.disasm.txt" >"$ev/init.relocs.txt" || true
+          grep -E 'R_RISCV_(GOT_HI20|PCREL_HI20|PCREL_LO12)' "$ev/cmdline_early.pi.disasm.txt" >"$ev/cmdline_early.pi.relocs.txt" || true
+          grep -n -A35 -B20 '<set_satp_mode>' "$ev/init.disasm.txt" >"$ev/set_satp_mode.disasm.txt" || true
+          cat "$ev/set_satp_mode.disasm.txt" || true
 
-      - name: Relink focused PI-refreshed Linux Image
+      - name: Relink focused early-refreshed Linux Image
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -146,9 +151,9 @@ jobs:
           printf 'TIMING relink_s=%s\n' "$(( $(date +%s) - start ))" | tee -a "$ev/timing.txt"
           test -s "$out/arch/riscv/boot/Image"
           sha256sum "$out/arch/riscv/boot/Image" | tee "$ev/Image.sha256"
-          stat -c 'PI_REFRESH_IMAGE bytes=%s' "$out/arch/riscv/boot/Image" | tee "$ev/summary.txt"
+          stat -c 'EARLY_REFRESH_IMAGE bytes=%s' "$out/arch/riscv/boot/Image" | tee "$ev/summary.txt"
 
-      - name: Trace PI-refreshed early boot exception frontier
+      - name: Trace early-refreshed boot exception frontier
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -162,7 +167,8 @@ jobs:
             -d int,in_asm -D "$ev/qemu-trace.log" >"$ev/qemu-console-noinitrd.log" 2>&1
           rc=$?
           set -e
-          printf 'PI_TRACE_QEMU_RC=%s\n' "$rc" | tee -a "$ev/summary.txt"
+          printf 'EARLY_TRACE_QEMU_RC=%s\n' "$rc" | tee -a "$ev/summary.txt"
+          grep -a 'riscv_cpu_do_interrupt' "$ev/qemu-trace.log" | head -n 12 | tee "$ev/qemu-interrupts-first.txt" || true
           grep -a 'riscv_cpu_do_interrupt' "$ev/qemu-trace.log" | tail -n 80 | tee "$ev/qemu-interrupts.txt" || true
           tail -n 300 "$ev/qemu-trace.log" >"$ev/qemu-trace-tail.txt" || true
           tail -n 160 "$ev/qemu-console-noinitrd.log" >"$ev/qemu-console-tail.txt" || true
@@ -199,7 +205,7 @@ jobs:
           rc=$?
           set -e
           elapsed=$(( $(date +%s) - start ))
-          printf 'PI_RUNTIME_P1_RC=%s elapsed_s=%s\n' "$rc" "$elapsed" | tee -a "$work/evidence/summary.txt"
+          printf 'EARLY_RUNTIME_P1_RC=%s elapsed_s=%s\n' "$rc" "$elapsed" | tee -a "$work/evidence/summary.txt"
           if test -s "$work/qemu/rdinit-init.log"; then
             cp "$work/qemu/rdinit-init.log" "$work/evidence/rdinit-init.log"
             python3 tests/external/linux/runtime_v2_log_check.py --profile p1 --log "$work/qemu/rdinit-init.log" \
