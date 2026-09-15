@@ -56,16 +56,19 @@ PY
 
 compile_probe direct "$root/tests/compiler/c0/gnu_inline_asm_satp_direct.c"
 compile_probe local "$root/tests/compiler/c0/gnu_inline_asm_satp_window.c"
+compile_probe decl "$root/tests/compiler/c0/gnu_inline_asm_satp_decl_init.c"
 
 failed=0
 if test "${SATP_SKIP_GCC:-0}" != 1; then
     check_window "$work/direct.gcc.s" GCC_DIRECT || failed=1
     check_window "$work/local.gcc.s" GCC_LOCAL || failed=1
+    check_window "$work/decl.gcc.s" GCC_DECL || failed=1
 fi
 check_window "$work/direct.minic.s" MINIC_DIRECT || failed=1
 check_window "$work/local.minic.s" MINIC_LOCAL || failed=1
+check_window "$work/decl.minic.s" MINIC_DECL || failed=1
 
 if test "$failed" -ne 0; then
     exit 1
 fi
-printf '%s\n' 'PASS compiler/c0/gnu_inline_asm_satp_window_rv64 direct=1 macro_local=1 stack_free=1'
+printf '%s\n' 'PASS compiler/c0/gnu_inline_asm_satp_window_rv64 direct=1 assignment_local=1 decl_init=1 stack_free=1'
