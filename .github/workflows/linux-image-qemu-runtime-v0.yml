@@ -1,0 +1,129 @@
+name: Linux Image QEMU Runtime V0
+
+on:
+  push:
+    branches: ["agent/linux-expanded-kbuild-v0"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: linux-image-qemu-runtime-v0-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  qemu-runtime:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Restore latest Linux Image cache
+        id: kbuild-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-expanded-kbuild-v0/out
+          key: linux-expanded-mixed-v1-6.6.143-${{ runner.os }}-${{ hashFiles('src/**', 'include/**', 'tools/ci/apply-*.py', 'tests/external/linux/stage2_kbuild_cc.sh') }}
+          restore-keys: |
+            linux-expanded-kbuild-v0-6.6.143-${{ runner.os }}-
+            linux-expanded-mixed-v1-6.6.143-${{ runner.os }}-
+
+      - name: Install RV64 QEMU runtime prerequisites
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            qemu-system-misc opensbi cpio gzip gcc-riscv64-linux-gnu libc6-dev-riscv64-cross
+          qemu-system-riscv64 --version
+          riscv64-linux-gnu-gcc --version | head -n1
+
+      - name: Verify cached Linux Image exists
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0"
+          image="$work/out/arch/riscv/boot/Image"
+          mkdir -p "$work/runtime-evidence"
+          printf 'QEMU_CACHE_HIT=%s\nQEMU_CACHE_MATCHED_KEY=%s\n' \
+            "${{ steps.kbuild-cache.outputs.cache-hit }}" \
+            "${{ steps.kbuild-cache.outputs.cache-matched-key }}" \
+            | tee "$work/runtime-evidence/cache.txt"
+          test -s "$image"
+          stat -c 'LINUX_RUNTIME_IMAGE bytes=%s path=%n' "$image" \
+            | tee "$work/runtime-evidence/image.txt"
+          sha256sum "$image" | tee "$work/runtime-evidence/image.sha256"
+
+      - name: Build minimal RV64 initramfs
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0"
+          root="$work/runtime-root"
+          ev="$work/runtime-evidence"
+          rm -rf "$root"
+          mkdir -p "$root"/{dev,proc,sys,tmp}
+          cat >"$work/init.c" <<'EOF'
+          #include <unistd.h>
+          #include <sys/reboot.h>
+          #include <linux/reboot.h>
+          #include <string.h>
+
+          int main(void) {
+              static const char marker[] = "MINIC_LINUX_RUNTIME_PASS\n";
+              (void)write(STDOUT_FILENO, marker, sizeof(marker) - 1U);
+              sync();
+              (void)reboot(LINUX_REBOOT_CMD_POWER_OFF);
+              for (;;) pause();
+          }
+          EOF
+          riscv64-linux-gnu-gcc -static -Os -s "$work/init.c" -o "$root/init"
+          file "$root/init" | tee "$ev/init-file.txt"
+          (cd "$root" && find . -print0 | cpio --null -ov --format=newc 2>"$ev/cpio.log" | gzip -9 >"$work/initramfs.cpio.gz")
+          test -s "$work/initramfs.cpio.gz"
+          stat -c 'LINUX_RUNTIME_INITRAMFS bytes=%s' "$work/initramfs.cpio.gz" | tee "$ev/initramfs.txt"
+
+      - name: Boot MiniC-built Linux Image in QEMU
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0"
+          image="$work/out/arch/riscv/boot/Image"
+          initrd="$work/initramfs.cpio.gz"
+          ev="$work/runtime-evidence"
+          log="$ev/qemu.log"
+          start=$(date +%s)
+          set +e
+          timeout 90s qemu-system-riscv64 \
+            -machine virt \
+            -m 512M \
+            -smp 1 \
+            -nographic \
+            -bios default \
+            -kernel "$image" \
+            -initrd "$initrd" \
+            -append 'console=ttyS0 earlycon=sbi rdinit=/init panic=-1' \
+            >"$log" 2>&1
+          rc=$?
+          set -e
+          elapsed=$(($(date +%s) - start))
+          printf 'QEMU_EXIT_RC=%s\nQEMU_ELAPSED_S=%s\n' "$rc" "$elapsed" | tee "$ev/runtime.txt"
+          tail -n 160 "$log" | tee "$ev/qemu-tail.log"
+          grep -a -F 'MINIC_LINUX_RUNTIME_PASS' "$log"
+          if grep -a -E 'Kernel panic|Oops:|BUG:|Unable to handle kernel|unhandled signal' "$log"; then
+            echo 'LINUX_QEMU_RUNTIME=FAIL_FATAL_KERNEL_PATTERN' | tee -a "$ev/runtime.txt"
+            exit 1
+          fi
+          echo 'LINUX_QEMU_RUNTIME=PASS' | tee -a "$ev/runtime.txt"
+
+      - name: Preserve QEMU runtime evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-image-qemu-runtime-v0
+          path: build/linux-expanded-kbuild-v0/runtime-evidence/
+          if-no-files-found: ignore
+          retention-days: 7
