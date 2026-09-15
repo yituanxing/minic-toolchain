@@ -60,7 +60,8 @@ jobs:
             python3 "tools/ci/$patch"
           done
           git diff --check
-          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$build" "$build/bin/minic"
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$build" \
+            "$build/bin/minic" "$build/bin/minic-cc"
           end=$(date +%s%N)
           python3 - "$start" "$end" <<'PY'
           import sys
@@ -92,6 +93,6 @@ jobs:
           name: linux-pi-satp-micro-v0
           path: |
             build/linux-pi-satp-micro/satp-window.log
-            build/linux-pi-satp-micro/tests/compiler-c0-gnu-inline-asm-satp-window/minic.s
+            build/linux-pi-satp-micro/tests/compiler-c0-gnu-inline-asm-satp-window/*.s
           if-no-files-found: ignore
           retention-days: 3
