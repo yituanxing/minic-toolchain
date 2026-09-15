@@ -104,7 +104,7 @@ jobs:
             https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.6.143.tar.xz -o "$archive"
           printf '%s  %s\n' dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932 "$archive" | sha256sum -c -
           rm -rf "$src" && tar -xJf "$archive" -C "$work"
-          for obj in arch/riscv/kernel/traps.o kernel/softirq.o kernel/locking/spinlock.o; do
+          for obj in arch/riscv/kernel/traps.o kernel/softirq.o kernel/locking/spinlock.o kernel/locking/spinlock_debug.o; do
             test -s "$out/$obj"
             tag=${obj//\//_}; tag=${tag%.o}
             riscv64-linux-gnu-objdump -dr "$out/$obj" >"$ev/baseline-${tag}.disasm.txt"
@@ -119,7 +119,7 @@ jobs:
           out="$work/out"
           ev="$GITHUB_WORKSPACE/build/linux-irq-frame-pack-v0/evidence"
           wrapper="$GITHUB_WORKSPACE/tests/external/linux/stage2_kbuild_cc.sh"
-          targets=(arch/riscv/kernel/traps.o kernel/softirq.o kernel/locking/spinlock.o)
+          targets=(arch/riscv/kernel/traps.o kernel/softirq.o kernel/locking/spinlock.o kernel/locking/spinlock_debug.o)
           for obj in "${targets[@]}"; do
             rm -f "$out/$obj" "$out/$(dirname "$obj")/.$(basename "$obj" .o).o.cmd"
           done
@@ -130,7 +130,7 @@ jobs:
           MINIC_KEEP_INTERMEDIATES=1 MINIC_KBUILD_TRACE="$ev/refresh.trace" \
           MINIC_CORE_FRAME_TRACE=1 CORE_FAST_TRACE=1 MINIC_LOCAL_FACT_TRACE=1 \
             make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
-              CC="$wrapper" -j3 V=1 "${targets[@]}" >"$ev/refresh.log" 2>&1
+              CC="$wrapper" -j4 V=1 "${targets[@]}" >"$ev/refresh.log" 2>&1
           end=$(date +%s%N)
           python3 - "$start" "$end" <<'PY' | tee -a "$ev/timing.txt"
           import sys
@@ -188,6 +188,8 @@ jobs:
                   print(f'FRAME_DELTA function={name} before={base[name]} after={packed[name]} delta={delta} shrink_pct={pct:.2f}')
           if not any(name in packed for name in ('do_irq','handle_riscv_irq','irq_enter_rcu')):
               raise SystemExit('focused IRQ functions not found in packed disassembly')
+          if 'arch_spin_lock' not in packed or 'do_raw_spin_lock' not in packed:
+              raise SystemExit('spinlock debug fault-path functions not found in packed disassembly')
           PY
 
       - name: Preserve IRQ frame evidence
