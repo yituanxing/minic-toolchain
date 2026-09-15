@@ -79,7 +79,8 @@ jobs:
           MINIC="$build/toolchain/bin/minic" \
           BUILD_DIR="$build" \
           SATP_SKIP_GCC=1 \
-            bash tests/compiler/c0/run-gnu-inline-asm-satp-window-rv64.sh | tee "$build/satp-window.log"
+          MINIC_LOCAL_FACT_TRACE=1 \
+            bash tests/compiler/c0/run-gnu-inline-asm-satp-window-rv64.sh 2>&1 | tee "$build/satp-window.log"
           end=$(date +%s%N)
           python3 - "$start" "$end" <<'PY'
           import sys
