@@ -18,9 +18,9 @@ if region.count(old) != 1:
     raise SystemExit(f"rv64 pcrel global: expected one la emitter, found {region.count(old)}")
 region = region.replace(
     "    case MINIC_CORE_INSTRUCTION_GLOBAL_ADDRESS:",
-    "    /* M196_LINUX_STATIC_PCREL_GLOBAL_ADDRESS: the Linux kernel is statically\\n"
-    "       linked and executes early global accesses before the MMU is enabled.\\n"
-    "       Use the explicit PC-relative pseudo-op so GAS cannot choose GOT form. */\\n"
+    "    /* M196_LINUX_STATIC_PCREL_GLOBAL_ADDRESS: the Linux kernel is statically\n"
+    "       linked and executes early global accesses before the MMU is enabled.\n"
+    "       Use the explicit PC-relative pseudo-op so GAS cannot choose GOT form. */\n"
     "    case MINIC_CORE_INSTRUCTION_GLOBAL_ADDRESS:",
     1,
 )
