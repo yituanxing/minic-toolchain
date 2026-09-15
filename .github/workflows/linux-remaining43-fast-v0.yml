@@ -108,6 +108,7 @@ jobs:
             mm/truncate.o
             fs/proc/task_mmu.o
             net/core/skbuff.o
+            net/core/filter.o
           )
           for target in "${targets[@]}"; do rm -f "$out/$target"; done
           start=$(date +%s)
