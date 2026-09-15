@@ -1,0 +1,118 @@
+name: Linux Expanded Entry Trace V0
+
+on:
+  push:
+    branches: ["agent/linux-expanded-kbuild-v0"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: linux-expanded-entry-trace-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  trace:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[linux-expanded-entry-trace]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Restore successful Expanded Linux out cache
+        id: expanded-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-expanded-kbuild-v0/out
+          key: linux-expanded-mixed-v1-6.6.143-${{ runner.os }}-${{ hashFiles('src/**', 'include/**', 'tools/ci/apply-*.py', 'tests/external/linux/stage2_kbuild_cc.sh') }}
+          restore-keys: |
+            linux-expanded-mixed-v1-6.6.143-${{ runner.os }}-
+
+      - name: Install trace prerequisites
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            qemu-system-misc opensbi binutils-riscv64-linux-gnu python3
+
+      - name: Trace first translated kernel blocks
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          out="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0/out"
+          work="$GITHUB_WORKSPACE/build/linux-expanded-entry-trace"
+          image="$out/arch/riscv/boot/Image"
+          vmlinux="$out/vmlinux"
+          mkdir -p "$work"
+          test -s "$image"
+          test -s "$vmlinux"
+          sha256sum "$image" | tee "$work/Image.sha256"
+          stat -c 'IMAGE_BYTES=%s' "$image" | tee "$work/summary.txt"
+          riscv64-linux-gnu-readelf -h "$vmlinux" | grep -E 'Entry point|Machine:' | tee "$work/elf-entry.txt"
+          riscv64-linux-gnu-objdump -d --start-address=0xffffffff80000000 --stop-address=0xffffffff80000400 "$vmlinux" \
+            >"$work/vmlinux-entry-disasm.txt" || true
+
+          set +e
+          timeout --signal=TERM 4s qemu-system-riscv64 \
+            -M virt -cpu max -m 512M -smp 1 -nographic -no-reboot \
+            -bios default -kernel "$image" \
+            -append 'console=ttyS0 earlycon=sbi loglevel=8 panic=-1' \
+            -d in_asm -D "$work/qemu-in-asm.log" \
+            >"$work/qemu-console.log" 2>&1
+          rc=$?
+          set -e
+          echo "QEMU_RC=$rc" | tee -a "$work/summary.txt"
+
+          python3 - "$work/qemu-in-asm.log" "$work/kernel-blocks.txt" <<'PY'
+          import re, sys
+          src, dst = sys.argv[1:]
+          text = open(src, 'r', errors='replace').read().splitlines()
+          blocks=[]
+          cur=[]
+          keep=False
+          for line in text:
+              if line.startswith('IN:'):
+                  if cur and keep: blocks.extend(cur)
+                  cur=[line]
+                  keep=False
+                  continue
+              if cur:
+                  cur.append(line)
+                  m=re.match(r'0x([0-9a-fA-F]+):', line.strip())
+                  if m and int(m.group(1),16) >= 0x80200000:
+                      keep=True
+          if cur and keep: blocks.extend(cur)
+          open(dst,'w').write('\n'.join(blocks[-1200:])+'\n')
+          addrs=[]
+          for line in blocks:
+              m=re.match(r'\s*0x([0-9a-fA-F]+):', line)
+              if m:
+                  a=int(m.group(1),16)
+                  if 0x80200000 <= a < 0xa0000000:
+                      addrs.append(a)
+          from collections import Counter
+          c=Counter(addrs)
+          with open(dst+'.summary','w') as f:
+              f.write(f'KERNEL_TRANSLATED_INSNS={len(addrs)}\n')
+              f.write(f'KERNEL_UNIQUE_ADDRS={len(c)}\n')
+              if addrs:
+                  f.write(f'FIRST_PC=0x{addrs[0]:x}\nLAST_PC=0x{addrs[-1]:x}\n')
+              for a,n in c.most_common(40):
+                  f.write(f'PC 0x{a:x} count={n}\n')
+          PY
+          cat "$work/kernel-blocks.txt.summary" | tee -a "$work/summary.txt"
+          tail -n 240 "$work/kernel-blocks.txt" | tee "$work/kernel-blocks-tail.txt"
+          tail -n 120 "$work/qemu-console.log" | tee "$work/qemu-console-tail.txt"
+
+      - name: Preserve entry trace
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-expanded-entry-trace-v0
+          path: build/linux-expanded-entry-trace/
+          if-no-files-found: ignore
+          retention-days: 7
