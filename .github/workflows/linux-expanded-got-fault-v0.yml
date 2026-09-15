@@ -1,0 +1,95 @@
+name: Linux Expanded GOT Fault V0
+
+on:
+  push:
+    branches: ["agent/linux-expanded-kbuild-v0"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[linux-expanded-got-fault]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+      - name: Restore Expanded Linux out cache
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-expanded-kbuild-v0/out
+          key: linux-expanded-mixed-v1-6.6.143-${{ runner.os }}-${{ hashFiles('src/**', 'include/**', 'tools/ci/apply-*.py', 'tests/external/linux/stage2_kbuild_cc.sh') }}
+          restore-keys: |
+            linux-expanded-mixed-v1-6.6.143-${{ runner.os }}-
+      - name: Install tools
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends qemu-system-misc opensbi binutils-riscv64-linux-gnu
+      - name: Inspect exact GOT slot and fault address
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          out="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0/out"
+          v="$out/vmlinux"
+          image="$out/arch/riscv/boot/Image"
+          w="$GITHUB_WORKSPACE/build/linux-expanded-got-fault"
+          mkdir -p "$w"
+          test -s "$v"; test -s "$image"
+          slot=0xffffffff8fbcb538
+          printf 'GOT_SLOT=%s\n' "$slot" | tee "$w/summary.txt"
+          riscv64-linux-gnu-readelf -SW "$v" | tee "$w/sections.txt"
+          riscv64-linux-gnu-readelf -rW "$v" | tee "$w/relocs.txt"
+          riscv64-linux-gnu-objdump -s --start-address=0xffffffff8fbcb500 --stop-address=0xffffffff8fbcb580 "$v" | tee "$w/got-bytes.txt"
+          riscv64-linux-gnu-objdump -d -r --start-address=0xffffffff89e44e60 --stop-address=0xffffffff89e44f70 "$v" | tee "$w/fault-disasm.txt"
+          python3 - "$v" "$slot" <<'PY' | tee "$w/slot-decode.txt"
+          import struct, subprocess, sys
+          v=sys.argv[1]; target=int(sys.argv[2],16)
+          txt=subprocess.check_output(['riscv64-linux-gnu-readelf','-SW',v], text=True)
+          sec=None
+          import re
+          for line in txt.splitlines():
+              m=re.match(r'\s*\[\s*\d+\]\s+(\S+)\s+\S+\s+([0-9a-fA-F]+)\s+([0-9a-fA-F]+)\s+([0-9a-fA-F]+)', line)
+              if not m: continue
+              name,addr,off,size=m.group(1),*(int(x,16) for x in m.groups()[1:])
+              if addr <= target < addr+size:
+                  sec=(name,addr,off,size); break
+          print('SECTION',sec)
+          if sec:
+              name,addr,off,size=sec
+              pos=off+(target-addr)
+              with open(v,'rb') as f:
+                  f.seek(pos); raw=f.read(8)
+              val=struct.unpack('<Q',raw)[0]
+              print('SLOT_RAW',raw.hex(),'VALUE',hex(val))
+              nm=subprocess.check_output(['riscv64-linux-gnu-nm','-n',v], text=True, errors='replace').splitlines()
+              rows=[]
+              for line in nm:
+                  p=line.split()
+                  if len(p)>=3:
+                      try:a=int(p[0],16)
+                      except:continue
+                      rows.append((abs(a-val),a,' '.join(p[1:])))
+              for _,a,n in sorted(rows)[:10]: print('VALUE_NEAREST',hex(a),n,'delta',hex(a-val))
+          PY
+          set +e
+          timeout --signal=TERM 4s qemu-system-riscv64 -M virt -cpu max -m 512M -smp 1 -nographic -no-reboot \
+            -bios default -kernel "$image" -append 'console=ttyS0 earlycon=sbi loglevel=8 panic=-1' \
+            -d int -D "$w/qemu-int.log" >"$w/qemu-console.log" 2>&1
+          echo "QEMU_RC=$?" | tee -a "$w/summary.txt"
+          set -e
+          grep -a -E 'fault|exception|badaddr|cause|epc|deleg|riscv|0x8a044eb4|8a044eb4' "$w/qemu-int.log" | tail -n 120 | tee "$w/qemu-int-tail.txt" || true
+          tail -n 160 "$w/qemu-int.log" | tee "$w/qemu-int-raw-tail.txt"
+          cat "$w/slot-decode.txt" "$w/qemu-int-tail.txt" | tee -a "$w/summary.txt"
+      - name: Preserve evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-expanded-got-fault-v0
+          path: build/linux-expanded-got-fault/
+          if-no-files-found: ignore
+          retention-days: 7
