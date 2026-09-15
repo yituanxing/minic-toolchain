@@ -55,7 +55,18 @@ for script in (
     "apply-cfg-annihilator-priority-v0.py",
     "apply-statement-expression-postlower-fact-v0.py",
     "apply-loop-invariant-local-facts-v0.py",
-    "apply-tail-cfg-closure-v0.py",
 ):
     path = Path("tools/ci") / script
     exec(compile(path.read_text(), str(path), "exec"))
+
+# The if-meet script predates being nested into this stack and exits cleanly on
+# an already-present marker. Guard it here so an idempotent re-application can
+# never terminate the parent semantic stack early.
+if "M192_IF_LOCAL_FACT_MEET" not in Path("src/core/core_lower.c").read_text():
+    path = Path("tools/ci/apply-if-local-fact-meet-v0.py")
+    exec(compile(path.read_text(), str(path), "exec"))
+else:
+    print("MINIC_IF_LOCAL_FACT_MEET_V0=ALREADY")
+
+path = Path("tools/ci/apply-tail-cfg-closure-v0.py")
+exec(compile(path.read_text(), str(path), "exec"))
