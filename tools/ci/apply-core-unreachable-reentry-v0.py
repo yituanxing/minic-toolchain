@@ -31,9 +31,7 @@ else:
                        structured subtree from an orphan preheader: this keeps
                        its internal CFG available without inventing fallthrough
                        from the already-terminated path.  User-label Core blocks
-                       remain the real externally rooted entry points.  This is
-                       the generic form of the established unreachable-while
-                       detached-preheader handling above. */
+                       remain the real externally rooted entry points. */
                     if (!minic_core_function_add_block(
                             context->function, &detached_preheader)) {
                         return MINIC_CORE_LOWER_ERROR;
@@ -78,10 +76,14 @@ exec(compile(null_first_return.read_text(), str(null_first_return), "exec"))
 empty_void_call = Path("tools/ci/apply-empty-internal-void-call-elision-v0.py")
 exec(compile(empty_void_call.read_text(), str(empty_void_call), "exec"))
 
-# Constant branches may own labels used only from inside the discarded branch.
-# Keep only genuine external re-entry as a pruning barrier.
 constant_if_reentry = Path("tools/ci/apply-constant-if-external-reentry-v0.py")
 exec(compile(constant_if_reentry.read_text(), str(constant_if_reentry), "exec"))
+
+# Nonvolatile dereference/lvalue formation is side-effect-free for CFG-only
+# annihilator reasoning; actual volatile reads remain excluded by the purity
+# helper's existing type gate.
+pure_deref = Path("tools/ci/apply-pure-dereference-cfg-v0.py")
+exec(compile(pure_deref.read_text(), str(pure_deref), "exec"))
 
 tail = Path("tools/ci/apply-tail-cfg-closure-v0.py")
 exec(compile(tail.read_text(), str(tail), "exec"))
