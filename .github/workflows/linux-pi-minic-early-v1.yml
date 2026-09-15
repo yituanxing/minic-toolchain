@@ -161,6 +161,55 @@ jobs:
           printf 'IMAGE_BYTES=%s\n' "$(stat -c %s "$out/arch/riscv/boot/Image")" | tee "$ev/summary.txt"
           sha256sum "$out/arch/riscv/boot/Image" >"$ev/Image.sha256"
 
+      - name: Symbolize post-MMU runtime frontier
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          out="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0/out"
+          ev="$GITHUB_WORKSPACE/build/linux-pi-minic-early-v1/evidence"
+          vmlinux="$out/vmlinux"
+          riscv64-linux-gnu-nm -n "$vmlinux" >"$ev/vmlinux.nm.txt"
+          python3 - "$ev/vmlinux.nm.txt" >"$ev/runtime-symbolize.txt" <<'PY'
+          import bisect, sys
+          path=sys.argv[1]
+          syms=[]
+          with open(path, errors='replace') as f:
+              for line in f:
+                  p=line.split()
+                  if len(p) >= 3:
+                      try: a=int(p[0],16)
+                      except ValueError: continue
+                      syms.append((a,p[1],p[2]))
+          addrs=[a for a,_,_ in syms]
+          targets=[
+              0xffffffff80001048,
+              0xffffffff8009bd92,
+              0xffffffff800a1168,
+              0xffffffff800a12f0,
+              0xffffffff89e3d3ae,
+          ]
+          for t in targets:
+              i=bisect.bisect_right(addrs,t)-1
+              print(f'TARGET 0x{t:016x}')
+              for j in range(max(0,i-2), min(len(syms),i+4)):
+                  a,ty,n=syms[j]
+                  mark='*' if j==i else ' '
+                  off=t-a if j==i else 0
+                  print(f'{mark} 0x{a:016x} {ty} {n}' + (f' +0x{off:x}' if j==i else ''))
+          PY
+          {
+            echo '=== named shutdown/SBI symbols ==='
+            grep -E ' (sbi_ecall|sbi_system_reset|machine_power_off|machine_restart|kernel_power_off|kernel_restart|kernel_halt|panic|start_kernel|setup_arch|do_exit|emergency_restart|sys_off_handler_power_off|__do_sys_reboot)$' "$ev/vmlinux.nm.txt" || true
+            echo '=== addr2line ==='
+            for a in ffffffff80001048 ffffffff8009bd92 ffffffff800a1168 ffffffff800a12f0 ffffffff89e3d3ae; do
+              printf '%s ' "$a"
+              riscv64-linux-gnu-addr2line -f -e "$vmlinux" "0x$a" | tr '\n' ' '; echo
+            done
+          } >>"$ev/runtime-symbolize.txt"
+          riscv64-linux-gnu-objdump -d --start-address=0xffffffff8009bb00 --stop-address=0xffffffff800a1400 "$vmlinux" >"$ev/runtime-low-frontier.disasm.txt" || true
+          riscv64-linux-gnu-objdump -d --start-address=0xffffffff89e3d200 --stop-address=0xffffffff89e3d500 "$vmlinux" >"$ev/runtime-init-frontier.disasm.txt" || true
+          cat "$ev/runtime-symbolize.txt"
+
       - name: Fast all-MiniC QEMU early gate
         shell: bash
         run: |
