@@ -71,6 +71,12 @@ if "M193_SMALL_CONSTANT_ARRAY_LOOP_CFG" not in Path("src/core/core_lower.c").rea
 else:
     print("MINIC_SMALL_CONSTANT_ARRAY_LOOP_CFG_V0=ALREADY")
 
+if "M195_SMALL_LOOP_FOR_INIT_EXPRESSION" not in Path("src/core/core_lower.c").read_text():
+    path = Path("tools/ci/apply-small-loop-for-init-expression-v0.py")
+    exec(compile(path.read_text(), str(path), "exec"))
+else:
+    print("MINIC_SMALL_LOOP_FOR_INIT_EXPRESSION_V0=ALREADY")
+
 if "M194_SMALL_LOOP_PROBE" not in Path("src/core/core_lower.c").read_text():
     path = Path("tools/ci/apply-small-constant-loop-probe-v0.py")
     exec(compile(path.read_text(), str(path), "exec"))
