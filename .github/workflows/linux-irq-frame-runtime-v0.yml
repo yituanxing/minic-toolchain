@@ -120,6 +120,7 @@ jobs:
             kernel/locking/spinlock.o
             kernel/locking/spinlock_debug.o
             kernel/time/timekeeping.o
+            kernel/time/vsyscall.o
           )
           for obj in "${focused[@]}"; do
             rm -f "$out/$obj" "$out/$(dirname "$obj")/.$(basename "$obj" .o).o.cmd"
@@ -138,11 +139,11 @@ jobs:
           python3 - "$start" "$end" <<'PY' | tee -a "$ev/timing.txt"
           import sys
           a,b=map(int,sys.argv[1:])
-          print(f"TIMING refresh_ms={(b-a)//1_000_000} objects=12")
+          print(f"TIMING refresh_ms={(b-a)//1_000_000} objects=13")
           PY
 
           find "$out" -type f -name '*.minic.stderr' -newer "$stamp" -print0 | xargs -0 -r cat >"$ev/minic-frame-trace.txt"
-          grep -E 'CORE_FRAME function=(do_irq|handle_riscv_irq|irq_enter_rcu|arch_spin_lock|do_raw_spin_lock|timekeeping_advance|logarithmic_accumulation|accumulate_nsecs_to_secs)' \
+          grep -E 'CORE_FRAME function=(do_irq|handle_riscv_irq|irq_enter_rcu|arch_spin_lock|do_raw_spin_lock|timekeeping_advance|logarithmic_accumulation|accumulate_nsecs_to_secs|update_vsyscall)' \
             "$ev/minic-frame-trace.txt" | tee "$ev/focused-core-frames.txt" || true
 
           riscv64-linux-gnu-objdump -dr --disassemble=set_satp_mode "$out/arch/riscv/mm/init.o" >"$ev/set_satp_mode.full.txt"
