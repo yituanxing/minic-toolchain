@@ -77,20 +77,86 @@ if text.count(anchor) != 1:
     raise SystemExit("expected one immediate resolver anchor")
 text = text.replace(anchor, helper + anchor, 1)
 
-old = '''    if (minic_const_eval_integer(
+old = '''    if (context == NULL || context->body == NULL || context->body->program == NULL ||
+        context->target == NULL || operand == NULL || integer_text == NULL ||
+        integer_capacity == 0U || text_out == NULL || length_out == NULL ||
+        operand->access != MINIC_INLINE_ASM_OPERAND_READ_ONLY ||
+        (!core_inline_asm_constraint_is(operand, "i") &&
+         !core_inline_asm_constraint_is(operand, "I"))) {
+        return false;
+    }
+    if (minic_const_eval_integer(
             context->body->program, context->target, operand->expression, &constant) &&
         minic_const_value_as_int64(
             context->body->program, context->target, &constant, &value)) {
 '''
-new = '''    if ((minic_const_eval_integer(
+new = '''    if (context == NULL || context->body == NULL || context->body->program == NULL ||
+        context->target == NULL || operand == NULL || integer_text == NULL ||
+        integer_capacity == 0U || text_out == NULL || length_out == NULL ||
+        operand->access != MINIC_INLINE_ASM_OPERAND_READ_ONLY ||
+        (!core_inline_asm_constraint_is(operand, "i") &&
+         !core_inline_asm_constraint_is(operand, "I") &&
+         !core_inline_asm_constraint_is(operand, "rK"))) {
+        return false;
+    }
+    if ((minic_const_eval_integer(
              context->body->program, context->target, operand->expression, &constant) ||
          core_inline_asm_local_integer_fact(context, operand->expression, &constant)) &&
         minic_const_value_as_int64(
-            context->body->program, context->target, &constant, &value)) {
+            context->body->program, context->target, &constant, &value) &&
+        (!core_inline_asm_constraint_is(operand, "rK") ||
+         (value >= 0 && value <= 31))) {
 '''
 if text.count(old) != 1:
     raise SystemExit("expected one immediate integer const-eval block")
 text = text.replace(old, new, 1)
+
+symbol_old = '''    symbol = core_inline_asm_symbolic_immediate_name(
+        context->body->program, context->target, operand->expression);
+'''
+symbol_new = '''    if (core_inline_asm_constraint_is(operand, "rK")) {
+        return false;
+    }
+    symbol = core_inline_asm_symbolic_immediate_name(
+        context->body->program, context->target, operand->expression);
+'''
+if text.count(symbol_old) != 1:
+    raise SystemExit("expected one symbolic immediate fallback")
+text = text.replace(symbol_old, symbol_new, 1)
+
+batch_old = '''    if (!source->is_goto && source->template_text != NULL &&
+        source->template_length != 0U && source->outputs != NULL && source->inputs != NULL &&
+        source->output_count == 1U && source->input_count != 0U &&
+        source->label_count == 0U && source->register_clobber_count == 0U &&
+        source->clobber_count == 0U && !source->has_memory_clobber) {
+'''
+batch_new = '''    if (!source->is_goto && source->template_text != NULL &&
+        source->template_length != 0U && source->outputs != NULL && source->inputs != NULL &&
+        source->output_count == 1U && source->input_count != 0U &&
+        source->label_count == 0U && source->register_clobber_count == 0U &&
+        source->clobber_count == (source->has_memory_clobber ? 1U : 0U)) {
+'''
+if text.count(batch_old) != 1:
+    raise SystemExit("expected one register-output immediate specialization gate")
+text = text.replace(batch_old, batch_new, 1)
+
+batch_add_old = '''                if (!minic_core_function_add_opaque_inline_asm(context->function,
+                                                               specialized_template,
+                                                               specialized_length,
+                                                               true,
+                                                               false,
+                                                               &inline_asm_id)) {
+'''
+batch_add_new = '''                if (!minic_core_function_add_opaque_inline_asm(context->function,
+                                                               specialized_template,
+                                                               specialized_length,
+                                                               true,
+                                                               source->has_memory_clobber,
+                                                               &inline_asm_id)) {
+'''
+if text.count(batch_add_old) != 1:
+    raise SystemExit("expected one specialized register-output asm add")
+text = text.replace(batch_add_old, batch_add_new, 1)
 
 p.write_text(text)
 print("MINIC_INLINE_ASM_LOCAL_INTEGER_FACTS_V0=APPLIED")
