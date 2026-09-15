@@ -1,0 +1,249 @@
+name: Linux IRQ Frame Runtime V0
+
+on:
+  push:
+    branches: ["agent/linux-expanded-kbuild-v0"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: linux-irq-frame-runtime-v0-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  irq-runtime:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[linux-irq-frame-runtime-v0]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Restore known-good linked Linux cache
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-expanded-kbuild-v0/out
+          key: linux-expanded-mixed-v1-6.6.143-Linux-d30569a4c675f6ac72d9f63c28f0b8745317f7a15c0799d10768f916d74b3a88
+          fail-on-cache-miss: true
+
+      - name: Install focused prerequisites
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get -o Acquire::Retries=3 update >/dev/null
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            build-essential gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu libc6-dev-riscv64-cross \
+            bc bison flex libssl-dev libelf-dev make curl xz-utils python3 \
+            qemu-system-misc opensbi file >/dev/null
+
+      - name: Build MiniC with SATP and packed-spill fixes
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0"
+          ev="$GITHUB_WORKSPACE/build/linux-irq-frame-runtime-v0/evidence"
+          mkdir -p "$ev"
+          patches=(
+            apply-local-integer-assignment-v2.py
+            apply-local-integer-logical-conditions-v0.py
+            apply-local-null-pointer-facts-v0.py
+            apply-builtin-constant-p-local-facts-v0.py
+            apply-inline-integer-specialization-v0.py
+            apply-inline-specialization-local-facts-v0.py
+            apply-inline-specialization-stable-parameter-facts-v0.py
+            apply-inline-specialization-transitive-integer-v0.py
+            apply-inline-specialization-base-callee-integer-v0.py
+            apply-inline-specialization-capacity-v0.py
+            apply-inline-specialization-symbolic-address-v0.py
+            apply-inline-specialization-symbolic-nested-array-v0.py
+            apply-inline-specialization-symbolic-integer-closure-v0.py
+            apply-inline-specialization-symbolic-transitive-rewrite-v0.py
+            apply-inline-specialization-symbolic-array-lvalue-v0.py
+            apply-inline-specialization-symbolic-closed-integers-v0.py
+            apply-inline-specialization-base-callee-symbolic-v0.py
+            apply-inline-specialization-resolved-asm-goto-v0.py
+            apply-inline-specialization-core-reachability-v0.py
+            apply-inline-specialization-original-reachability-v0.py
+            apply-inline-asm-local-integer-facts-v0.py
+            apply-inline-asm-rk-early-v0.py
+            apply-inline-asm-rk-early-hotfix-v0.py
+            apply-inline-asm-rk-tail-rollback-v0.py
+            apply-inline-asm-rk-cast-tail-v0.py
+            apply-inline-specialization-core-empty-function-v0.py
+            apply-inline-specialization-label-alias-v0.py
+            apply-riscv64-default-text-section-v0.py
+            apply-riscv64-explicit-section-flags-v0.py
+            apply-inline-asm-symbolic-specialization-v0.py
+            apply-riscv64-core-value-slot-pack-v0.py
+          )
+          start=$(date +%s%N)
+          for p in "${patches[@]}"; do python3 "tools/ci/$p" >>"$ev/patch.log"; done
+          git diff --check
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$work/toolchain" \
+            "$work/toolchain/bin/minic" "$work/toolchain/bin/minic-cc" >/dev/null
+          end=$(date +%s%N)
+          python3 - "$start" "$end" <<'PY' | tee "$ev/timing.txt"
+          import sys
+          a,b=map(int,sys.argv[1:])
+          print(f"TIMING toolchain_ms={(b-a)//1_000_000}")
+          PY
+          MINIC="$work/toolchain/bin/minic" BUILD_DIR="$GITHUB_WORKSPACE/build/linux-irq-frame-runtime-v0/micro" \
+          SATP_SKIP_GCC=1 MINIC_LOCAL_FACT_TRACE=1 \
+            bash tests/compiler/c0/run-gnu-inline-asm-satp-window-rv64.sh \
+            >"$ev/satp-window.log" 2>&1
+          grep -q 'SATP_WINDOW_MINIC_DECL_STACK_TOUCHES=0' "$ev/satp-window.log"
+          cat "$ev/satp-window.log"
+
+      - name: Prepare pinned Linux source
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0"
+          src="$work/linux-6.6.143"
+          archive="$work/linux-6.6.143.tar.xz"
+          out="$work/out"
+          ev="$GITHUB_WORKSPACE/build/linux-irq-frame-runtime-v0/evidence"
+          test -s "$out/.config"
+          test -s "$out/vmlinux"
+          test -s "$out/arch/riscv/boot/Image"
+          start=$(date +%s%N)
+          curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors \
+            https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.6.143.tar.xz -o "$archive"
+          printf '%s  %s\n' dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932 "$archive" | sha256sum -c -
+          rm -rf "$src" && tar -xJf "$archive" -C "$work"
+          end=$(date +%s%N)
+          python3 - "$start" "$end" <<'PY' | tee -a "$ev/timing.txt"
+          import sys
+          a,b=map(int,sys.argv[1:])
+          print(f"TIMING linux_prepare_ms={(b-a)//1_000_000}")
+          PY
+
+      - name: Refresh startup and IRQ fault-path objects through packed MiniC
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0"
+          src="$work/linux-6.6.143"
+          out="$work/out"
+          ev="$GITHUB_WORKSPACE/build/linux-irq-frame-runtime-v0/evidence"
+          wrapper="$GITHUB_WORKSPACE/tests/external/linux/stage2_kbuild_cc.sh"
+          targets=(arch/riscv/mm/init.o)
+          rm -f "$out/arch/riscv/mm/init.o" "$out/arch/riscv/mm/.init.o.cmd"
+          for base in cmdline_early fdt_early string ctype lib-fdt lib-fdt_ro; do
+            rm -f "$out/arch/riscv/kernel/pi/${base}.o" "$out/arch/riscv/kernel/pi/${base}.pi.o" \
+                  "$out/arch/riscv/kernel/pi/.${base}.o.cmd" "$out/arch/riscv/kernel/pi/.${base}.pi.o.cmd"
+            targets+=("arch/riscv/kernel/pi/${base}.pi.o")
+          done
+          irq_targets=(arch/riscv/kernel/traps.o kernel/softirq.o kernel/locking/spinlock.o kernel/locking/spinlock_debug.o)
+          for obj in "${irq_targets[@]}"; do
+            rm -f "$out/$obj" "$out/$(dirname "$obj")/.$(basename "$obj" .o).o.cmd"
+            targets+=("$obj")
+          done
+          stamp="$ev/rebuild-start.stamp"
+          touch "$stamp"
+          start=$(date +%s%N)
+          MINIC="$work/toolchain/bin/minic" REAL_CC=/usr/bin/riscv64-linux-gnu-gcc \
+          MINIC_KEEP_INTERMEDIATES=1 MINIC_KBUILD_TRACE="$ev/refresh.trace" \
+          MINIC_CORE_FRAME_TRACE=1 CORE_FAST_TRACE=1 MINIC_LOCAL_FACT_TRACE=1 \
+            make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
+              CC="$wrapper" -j4 V=1 "${targets[@]}" >"$ev/refresh.log" 2>&1
+          end=$(date +%s%N)
+          python3 - "$start" "$end" <<'PY' | tee -a "$ev/timing.txt"
+          import sys
+          a,b=map(int,sys.argv[1:])
+          print(f"TIMING refresh_ms={(b-a)//1_000_000} objects=11")
+          PY
+          find "$out" -type f -name '*.minic.stderr' -newer "$stamp" -print0 | xargs -0 -r cat >"$ev/minic-frame-trace.txt"
+          grep -E 'CORE_FRAME function=(do_irq|handle_riscv_irq|irq_enter_rcu|arch_spin_lock|do_raw_spin_lock)' \
+            "$ev/minic-frame-trace.txt" | tee "$ev/irq-core-frames.txt" || true
+          riscv64-linux-gnu-objdump -dr "$out/arch/riscv/mm/init.o" >"$ev/init.minic.disasm.txt"
+          python3 - "$ev/init.minic.disasm.txt" <<'PY' | tee "$ev/real-satp-gate.txt"
+          import re,sys
+          lines=open(sys.argv[1],errors='replace').read().splitlines()
+          start=next((i for i,x in enumerate(lines) if '<set_satp_mode>:' in x),None)
+          if start is None: raise SystemExit('set_satp_mode missing')
+          body=lines[start:start+220]
+          satp=[i for i,x in enumerate(body) if re.search(r'\bcsrw?\s+satp\b|\bcsrw?\s+0x180\b|\bcsrrw\b.*\b0x180\b',x)]
+          touches=0
+          if len(satp)>=2:
+              lo,hi=satp[0],satp[1]
+              touches=sum(1 for x in body[lo+1:hi] if re.search(r'\bsp\b',x))
+          print(f'REAL_SATP_WINDOWS={1 if len(satp)>=2 else 0}')
+          print(f'REAL_SATP_STACK_TOUCHES={touches}')
+          if len(satp)<2 or touches: raise SystemExit(1)
+          PY
+
+      - name: Relink packed all-MiniC Image
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0"
+          src="$work/linux-6.6.143"
+          out="$work/out"
+          ev="$GITHUB_WORKSPACE/build/linux-irq-frame-runtime-v0/evidence"
+          wrapper="$GITHUB_WORKSPACE/tests/external/linux/stage2_kbuild_cc.sh"
+          start=$(date +%s%N)
+          MINIC="$work/toolchain/bin/minic" REAL_CC=/usr/bin/riscv64-linux-gnu-gcc \
+          MINIC_KEEP_INTERMEDIATES=0 MINIC_KBUILD_TRACE="$ev/relink.trace" CORE_FAST_TRACE=1 \
+            make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
+              CC="$wrapper" -j4 V=1 Image >"$ev/relink.log" 2>&1
+          end=$(date +%s%N)
+          python3 - "$start" "$end" <<'PY' | tee -a "$ev/timing.txt"
+          import sys
+          a,b=map(int,sys.argv[1:])
+          print(f"TIMING relink_ms={(b-a)//1_000_000}")
+          PY
+          test -s "$out/arch/riscv/boot/Image"
+          printf 'IMAGE_BYTES=%s\n' "$(stat -c %s "$out/arch/riscv/boot/Image")" | tee "$ev/summary.txt"
+          riscv64-linux-gnu-nm -n "$out/vmlinux" >"$ev/vmlinux.nm.txt"
+
+      - name: Fast packed QEMU IRQ runtime gate
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          out="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0/out"
+          ev="$GITHUB_WORKSPACE/build/linux-irq-frame-runtime-v0/evidence"
+          start=$(date +%s%N)
+          set +e
+          timeout --signal=TERM 8s qemu-system-riscv64 \
+            -M virt -cpu max -m 512M -smp 1 -nographic -no-reboot \
+            -bios default -kernel "$out/arch/riscv/boot/Image" \
+            -append 'console=ttyS0 earlycon=sbi loglevel=8 panic=-1' \
+            -d int,in_asm -D "$ev/qemu.trace.log" \
+            >"$ev/qemu.console.log" 2>&1
+          rc=$?
+          set -e
+          banner=0
+          grep -a -q 'Linux version 6\.6\.143' "$ev/qemu.console.log" && banner=1 || true
+          old_satp=0
+          old_irq_guard=0
+          grep -a -q 'epc:0x000000008a06907a' "$ev/qemu.trace.log" && old_satp=1 || true
+          grep -a -q 'tval:0xff1fffffffffff58' "$ev/qemu.trace.log" && old_irq_guard=1 || true
+          printf 'EARLY_QEMU_RC=%s\nLINUX_BANNER=%s\nOLD_SATP_FAULT=%s\nOLD_IRQ_GUARD_FAULT=%s\n' \
+            "$rc" "$banner" "$old_satp" "$old_irq_guard" | tee -a "$ev/summary.txt"
+          end=$(date +%s%N)
+          python3 - "$start" "$end" <<'PY' | tee -a "$ev/timing.txt"
+          import sys
+          a,b=map(int,sys.argv[1:])
+          print(f"TIMING qemu_ms={(b-a)//1_000_000}")
+          PY
+          grep -a 'riscv_cpu_do_interrupt' "$ev/qemu.trace.log" | head -n 60 >"$ev/qemu.interrupts.first.txt" || true
+          grep -a 'riscv_cpu_do_interrupt' "$ev/qemu.trace.log" | tail -n 160 >"$ev/qemu.interrupts.tail.txt" || true
+          grep -a -n -E 'store_page_fault|load_page_fault|exec_page_fault|illegal_instruction|breakpoint' "$ev/qemu.trace.log" \
+            | tail -n 120 >"$ev/qemu.faults.tail.txt" || true
+          tail -n 1000 "$ev/qemu.trace.log" >"$ev/qemu.trace.tail.txt" || true
+          tail -n 300 "$ev/qemu.console.log" >"$ev/qemu.console.tail.txt" || true
+          cat "$ev/summary.txt"
+          cat "$ev/qemu.faults.tail.txt" || true
+
+      - name: Preserve packed runtime evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-irq-frame-runtime-v0
+          path: build/linux-irq-frame-runtime-v0/evidence/
+          if-no-files-found: ignore
+          retention-days: 7
