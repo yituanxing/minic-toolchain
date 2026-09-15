@@ -50,6 +50,7 @@ jobs:
             apply-inline-specialization-original-reachability-v0.py
             apply-inline-asm-local-integer-facts-v0.py
             apply-inline-asm-rk-early-v0.py
+            apply-inline-asm-rk-early-hotfix-v0.py
             apply-inline-specialization-core-empty-function-v0.py
             apply-inline-specialization-label-alias-v0.py
             apply-riscv64-default-text-section-v0.py
