@@ -5,15 +5,18 @@ minic=${MINIC:-"$root/build/debug/bin/minic"}
 host_cc=${HOST_CC:-${CC:-cc}}
 rv_cc=${RV_CC:-riscv64-linux-gnu-gcc}
 work=${BUILD_DIR:-"$root/build/debug"}/tests/compiler-c0-gnu-inline-asm-satp-window
-source="$root/tests/compiler/c0/gnu_inline_asm_satp_window.c"
 rm -rf "$work"
 mkdir -p "$work"
 
-"$host_cc" -E -P -x c "$source" -o "$work/probe.i"
-"$minic" -S "$work/probe.i" -o "$work/minic.s"
-if test "${SATP_SKIP_GCC:-0}" != 1; then
-    "$rv_cc" -O2 -fno-pic -fno-pie -S "$source" -o "$work/gcc.s"
-fi
+compile_probe() {
+    name=$1
+    source=$2
+    "$host_cc" -E -P -x c "$source" -o "$work/$name.i"
+    "$minic" -S "$work/$name.i" -o "$work/$name.minic.s"
+    if test "${SATP_SKIP_GCC:-0}" != 1; then
+        "$rv_cc" -O2 -fno-pic -fno-pie -S "$source" -o "$work/$name.gcc.s"
+    fi
+}
 
 check_window() {
     asm=$1
@@ -44,15 +47,25 @@ unsafe = [(start + j + 1, line) for j, line in enumerate(window[1:-1], 1)
 print(f"SATP_WINDOW_{tag}_BEGIN={start + 1}")
 print(f"SATP_WINDOW_{tag}_END={end + 1}")
 print(f"SATP_WINDOW_{tag}_STACK_TOUCHES={len(unsafe)}")
-for lineno, line in unsafe[:24]:
+for lineno, line in unsafe[:32]:
     print(f"SATP_WINDOW_{tag}_STACK_TOUCH line={lineno} text={line.strip()}")
 if unsafe:
     raise SystemExit(1)
 PY
 }
 
+compile_probe direct "$root/tests/compiler/c0/gnu_inline_asm_satp_direct.c"
+compile_probe local "$root/tests/compiler/c0/gnu_inline_asm_satp_window.c"
+
+failed=0
 if test "${SATP_SKIP_GCC:-0}" != 1; then
-    check_window "$work/gcc.s" GCC
+    check_window "$work/direct.gcc.s" GCC_DIRECT || failed=1
+    check_window "$work/local.gcc.s" GCC_LOCAL || failed=1
 fi
-check_window "$work/minic.s" MINIC
-printf '%s\n' 'PASS compiler/c0/gnu_inline_asm_satp_window_rv64 stack_free_between_csrw_csrrw=1'
+check_window "$work/direct.minic.s" MINIC_DIRECT || failed=1
+check_window "$work/local.minic.s" MINIC_LOCAL || failed=1
+
+if test "$failed" -ne 0; then
+    exit 1
+fi
+printf '%s\n' 'PASS compiler/c0/gnu_inline_asm_satp_window_rv64 direct=1 macro_local=1 stack_free=1'
