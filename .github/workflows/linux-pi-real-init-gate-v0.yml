@@ -70,6 +70,7 @@ jobs:
             apply-inline-asm-rk-early-v0.py
             apply-inline-asm-rk-early-hotfix-v0.py
             apply-inline-asm-rk-tail-rollback-v0.py
+            apply-inline-asm-rk-cast-tail-v0.py
             apply-inline-specialization-core-empty-function-v0.py
             apply-inline-specialization-label-alias-v0.py
             apply-riscv64-default-text-section-v0.py
@@ -151,13 +152,14 @@ jobs:
           import re, sys
           from pathlib import Path
           lines = Path(sys.argv[1]).read_text(errors='replace').splitlines()
+          csr = r'(?:satp|0x180)'
           windows=[]
           for i,line in enumerate(lines):
-              if not re.search(r'\bcsrw\s+satp\s*,', line):
+              if not re.search(r'\bcsrw\s+' + csr + r'\s*,', line):
                   continue
               end=None
               for j in range(i+1, min(len(lines), i+160)):
-                  if re.search(r'\bcsrrw(?:i)?\s+[^,]+\s*,\s*satp\s*,', lines[j]):
+                  if re.search(r'\bcsrrw(?:i)?\s+[^,]+\s*,\s*' + csr + r'\s*,', lines[j]):
                       end=j
                       break
               if end is None:
