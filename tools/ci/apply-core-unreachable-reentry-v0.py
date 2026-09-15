@@ -65,14 +65,17 @@ if "M192_IF_LOCAL_FACT_MEET" not in Path("src/core/core_lower.c").read_text():
 else:
     print("MINIC_IF_LOCAL_FACT_MEET_V0=ALREADY")
 
-# Both scripts predate nested-stack use and use a clean SystemExit for direct
-# idempotent invocation. Guard them here so they can never terminate the parent
-# semantic stack on re-application.
 if "M193_SMALL_CONSTANT_ARRAY_LOOP_CFG" not in Path("src/core/core_lower.c").read_text():
     path = Path("tools/ci/apply-small-constant-array-loop-cfg-v0.py")
     exec(compile(path.read_text(), str(path), "exec"))
 else:
     print("MINIC_SMALL_CONSTANT_ARRAY_LOOP_CFG_V0=ALREADY")
+
+if "M194_SMALL_LOOP_PROBE" not in Path("src/core/core_lower.c").read_text():
+    path = Path("tools/ci/apply-small-constant-loop-probe-v0.py")
+    exec(compile(path.read_text(), str(path), "exec"))
+else:
+    print("MINIC_SMALL_LOOP_PROBE_V0=ALREADY")
 
 path = Path("tools/ci/apply-tail-cfg-closure-v0.py")
 exec(compile(path.read_text(), str(path), "exec"))
