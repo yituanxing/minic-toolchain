@@ -160,20 +160,32 @@ jobs:
           grep -E 'CORE_FRAME function=(do_irq|handle_riscv_irq|irq_enter_rcu|arch_spin_lock|do_raw_spin_lock)' \
             "$ev/minic-frame-trace.txt" | tee "$ev/irq-core-frames.txt" || true
           riscv64-linux-gnu-objdump -dr "$out/arch/riscv/mm/init.o" >"$ev/init.minic.disasm.txt"
-          python3 - "$ev/init.minic.disasm.txt" <<'PY' | tee "$ev/real-satp-gate.txt"
+          riscv64-linux-gnu-objdump -dr --disassemble=set_satp_mode "$out/arch/riscv/mm/init.o" >"$ev/set_satp_mode.full.txt"
+          python3 - "$ev/set_satp_mode.full.txt" <<'PY' | tee "$ev/real-satp-gate.txt"
           import re,sys
-          lines=open(sys.argv[1],errors='replace').read().splitlines()
-          start=next((i for i,x in enumerate(lines) if '<set_satp_mode>:' in x),None)
-          if start is None: raise SystemExit('set_satp_mode missing')
-          body=lines[start:start+220]
-          satp=[i for i,x in enumerate(body) if re.search(r'\bcsrw?\s+satp\b|\bcsrw?\s+0x180\b|\bcsrrw\b.*\b0x180\b',x)]
+          body=open(sys.argv[1],errors='replace').read().splitlines()
+          write=None
+          swap=None
+          swap_kind='missing'
+          for i,x in enumerate(body):
+              if write is None and re.search(r'\bcsrw\s+(?:satp|0x180)\s*,',x):
+                  write=i
+                  continue
+              if write is not None:
+                  m=re.search(r'\b(csrrw|csrrwi)\s+[^,]+,\s*(?:satp|0x180)\s*,',x)
+                  if m:
+                      swap=i
+                      swap_kind=m.group(1)
+                      break
           touches=0
-          if len(satp)>=2:
-              lo,hi=satp[0],satp[1]
-              touches=sum(1 for x in body[lo+1:hi] if re.search(r'\bsp\b',x))
-          print(f'REAL_SATP_WINDOWS={1 if len(satp)>=2 else 0}')
+          if write is not None and swap is not None:
+              touches=sum(1 for x in body[write+1:swap] if re.search(r'\bsp\b',x))
+          window=1 if write is not None and swap is not None else 0
+          print(f'REAL_SATP_WINDOWS={window}')
           print(f'REAL_SATP_STACK_TOUCHES={touches}')
-          if len(satp)<2 or touches: raise SystemExit(1)
+          print(f'REAL_SATP_SWAP_KIND={swap_kind}')
+          if not window or touches:
+              raise SystemExit(1)
           PY
 
       - name: Relink packed all-MiniC Image
