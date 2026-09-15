@@ -68,6 +68,65 @@ jobs:
             "$ev/vmlinux-program-headers.txt" "$ev/vmlinux-sections.txt" \
             | tail -n 160 | tee -a "$ev/layout-summary.txt" || true
 
+      - name: Rank code and rodata inflation by symbol and object
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          out="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0/out"
+          ev="$GITHUB_WORKSPACE/build/linux-expanded-runtime-p1/evidence"
+          riscv64-linux-gnu-nm -S --size-sort --radix=d "$out/vmlinux" \
+            | tail -n 300 >"$ev/vmlinux-top-symbols.txt"
+          python3 - "$out" "$ev/object-section-ranking.txt" <<'PY'
+          import pathlib, re, subprocess, sys
+          out = pathlib.Path(sys.argv[1])
+          report = pathlib.Path(sys.argv[2])
+          objs = sorted(out.rglob('*.o'))
+          rows = []
+          for base in range(0, len(objs), 96):
+              batch = objs[base:base+96]
+              p = subprocess.run(
+                  ['riscv64-linux-gnu-size', '-A', '-d', *map(str, batch)],
+                  text=True, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+              current = None
+              text = ro = data = bss = 0
+              def flush():
+                  if current is not None:
+                      rows.append((text, ro, data, bss, current))
+              for line in p.stdout.splitlines():
+                  if line.endswith(':') and not line.lstrip().startswith('section'):
+                      flush()
+                      current = line[:-1]
+                      text = ro = data = bss = 0
+                      continue
+                  m = re.match(r'^\s*(\S+)\s+(\d+)\s+', line)
+                  if current is None or not m:
+                      continue
+                  sec, n = m.group(1), int(m.group(2))
+                  if sec.startswith('.text') or sec in ('.init.text', '.exit.text'):
+                      text += n
+                  elif sec.startswith('.rodata'):
+                      ro += n
+                  elif sec.startswith('.data') or sec in ('.sdata', '.init.data'):
+                      data += n
+                  elif sec.startswith('.bss') or sec == '.sbss':
+                      bss += n
+              flush()
+          with report.open('w') as f:
+              f.write(f'OBJECT_COUNT={len(rows)}\n')
+              for key, idx in [('TEXT',0),('RODATA',1),('DATA',2)]:
+                  f.write(f'--- TOP_{key} ---\n')
+                  for row in sorted(rows, key=lambda r:r[idx], reverse=True)[:120]:
+                      f.write(f'{row[idx]:12d} text={row[0]:12d} rodata={row[1]:12d} data={row[2]:12d} bss={row[3]:12d} {row[4]}\n')
+          PY
+          {
+            echo '--- TOP SYMBOLS ---'
+            tail -n 80 "$ev/vmlinux-top-symbols.txt"
+            echo '--- TOP OBJECT TEXT ---'
+            sed -n '/--- TOP_TEXT ---/,/--- TOP_RODATA ---/p' "$ev/object-section-ranking.txt" | head -n 45
+            echo '--- TOP OBJECT RODATA ---'
+            sed -n '/--- TOP_RODATA ---/,/--- TOP_DATA ---/p' "$ev/object-section-ranking.txt" | head -n 45
+          } | tee "$ev/inflation-summary.txt"
+
       - name: Build deterministic P1 initramfs
         shell: bash
         run: |
