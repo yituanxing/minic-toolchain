@@ -83,5 +83,8 @@ if "M194_SMALL_LOOP_PROBE" not in Path("src/core/core_lower.c").read_text():
 else:
     print("MINIC_SMALL_LOOP_PROBE_V0=ALREADY")
 
+path = Path("tools/ci/apply-rv64-static-pcrel-global-address-v0.py")
+exec(compile(path.read_text(), str(path), "exec"))
+
 path = Path("tools/ci/apply-tail-cfg-closure-v0.py")
 exec(compile(path.read_text(), str(path), "exec"))
