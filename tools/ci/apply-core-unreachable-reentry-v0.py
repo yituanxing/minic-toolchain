@@ -97,6 +97,18 @@ exec(compile(leading_if.read_text(), str(leading_if), "exec"))
 statement_expr = Path("tools/ci/apply-statement-expression-constant-cfg-v0.py")
 exec(compile(statement_expr.read_text(), str(statement_expr), "exec"))
 
+# The frontend may append a fallback return after a source-level unconditional
+# `return NULL;`.  Null-pointer helper propagation must follow the first
+# top-level return exactly as the integer helper closure already does.
+null_first_return = Path("tools/ci/apply-null-helper-first-return-v0.py")
+exec(compile(null_first_return.read_text(), str(null_first_return), "exec"))
+
+# CONFIG-off headers also expose empty internal inline void helpers.  When every
+# argument is proven pure, elide the no-op call before argument materialization
+# so unused global addresses do not survive as link-time dependencies.
+empty_void_call = Path("tools/ci/apply-empty-internal-void-call-elision-v0.py")
+exec(compile(empty_void_call.read_text(), str(empty_void_call), "exec"))
+
 # Tail closure consumes facts established by M177/M181 plus integer/symbolic
 # specialization, so it must run after both residual constant closure and the
 # complete focused semantic stack.
