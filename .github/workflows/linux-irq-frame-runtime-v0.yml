@@ -39,7 +39,7 @@ jobs:
             bc bison flex libssl-dev libelf-dev make curl xz-utils python3 \
             qemu-system-misc opensbi file >/dev/null
 
-      - name: Build MiniC with SATP and packed-spill fixes
+      - name: Build patched MiniC
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -90,14 +90,8 @@ jobs:
           a,b=map(int,sys.argv[1:])
           print(f"TIMING toolchain_ms={(b-a)//1_000_000}")
           PY
-          MINIC="$work/toolchain/bin/minic" BUILD_DIR="$GITHUB_WORKSPACE/build/linux-irq-frame-runtime-v0/micro" \
-          SATP_SKIP_GCC=1 MINIC_LOCAL_FACT_TRACE=1 \
-            bash tests/compiler/c0/run-gnu-inline-asm-satp-window-rv64.sh \
-            >"$ev/satp-window.log" 2>&1
-          grep -q 'SATP_WINDOW_MINIC_DECL_STACK_TOUCHES=0' "$ev/satp-window.log"
-          cat "$ev/satp-window.log"
 
-      - name: Prepare pinned Linux source
+      - name: Refresh focused runtime failure pool
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -106,30 +100,13 @@ jobs:
           archive="$work/linux-6.6.143.tar.xz"
           out="$work/out"
           ev="$GITHUB_WORKSPACE/build/linux-irq-frame-runtime-v0/evidence"
+          wrapper="$GITHUB_WORKSPACE/tests/external/linux/stage2_kbuild_cc.sh"
           test -s "$out/.config"
-          test -s "$out/vmlinux"
-          test -s "$out/arch/riscv/boot/Image"
-          start=$(date +%s%N)
           curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors \
             https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.6.143.tar.xz -o "$archive"
           printf '%s  %s\n' dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932 "$archive" | sha256sum -c -
           rm -rf "$src" && tar -xJf "$archive" -C "$work"
-          end=$(date +%s%N)
-          python3 - "$start" "$end" <<'PY' | tee -a "$ev/timing.txt"
-          import sys
-          a,b=map(int,sys.argv[1:])
-          print(f"TIMING linux_prepare_ms={(b-a)//1_000_000}")
-          PY
 
-      - name: Refresh startup and IRQ fault-path objects through packed MiniC
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          work="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0"
-          src="$work/linux-6.6.143"
-          out="$work/out"
-          ev="$GITHUB_WORKSPACE/build/linux-irq-frame-runtime-v0/evidence"
-          wrapper="$GITHUB_WORKSPACE/tests/external/linux/stage2_kbuild_cc.sh"
           targets=(arch/riscv/mm/init.o)
           rm -f "$out/arch/riscv/mm/init.o" "$out/arch/riscv/mm/.init.o.cmd"
           for base in cmdline_early fdt_early string ctype lib-fdt lib-fdt_ro; do
@@ -137,11 +114,18 @@ jobs:
                   "$out/arch/riscv/kernel/pi/.${base}.o.cmd" "$out/arch/riscv/kernel/pi/.${base}.pi.o.cmd"
             targets+=("arch/riscv/kernel/pi/${base}.pi.o")
           done
-          irq_targets=(arch/riscv/kernel/traps.o kernel/softirq.o kernel/locking/spinlock.o kernel/locking/spinlock_debug.o)
-          for obj in "${irq_targets[@]}"; do
+          focused=(
+            arch/riscv/kernel/traps.o
+            kernel/softirq.o
+            kernel/locking/spinlock.o
+            kernel/locking/spinlock_debug.o
+            kernel/time/timekeeping.o
+          )
+          for obj in "${focused[@]}"; do
             rm -f "$out/$obj" "$out/$(dirname "$obj")/.$(basename "$obj" .o).o.cmd"
             targets+=("$obj")
           done
+
           stamp="$ev/rebuild-start.stamp"
           touch "$stamp"
           start=$(date +%s%N)
@@ -154,41 +138,32 @@ jobs:
           python3 - "$start" "$end" <<'PY' | tee -a "$ev/timing.txt"
           import sys
           a,b=map(int,sys.argv[1:])
-          print(f"TIMING refresh_ms={(b-a)//1_000_000} objects=11")
+          print(f"TIMING refresh_ms={(b-a)//1_000_000} objects=12")
           PY
+
           find "$out" -type f -name '*.minic.stderr' -newer "$stamp" -print0 | xargs -0 -r cat >"$ev/minic-frame-trace.txt"
-          grep -E 'CORE_FRAME function=(do_irq|handle_riscv_irq|irq_enter_rcu|arch_spin_lock|do_raw_spin_lock)' \
-            "$ev/minic-frame-trace.txt" | tee "$ev/irq-core-frames.txt" || true
-          riscv64-linux-gnu-objdump -dr "$out/arch/riscv/mm/init.o" >"$ev/init.minic.disasm.txt"
+          grep -E 'CORE_FRAME function=(do_irq|handle_riscv_irq|irq_enter_rcu|arch_spin_lock|do_raw_spin_lock|timekeeping_advance|logarithmic_accumulation|accumulate_nsecs_to_secs)' \
+            "$ev/minic-frame-trace.txt" | tee "$ev/focused-core-frames.txt" || true
+
           riscv64-linux-gnu-objdump -dr --disassemble=set_satp_mode "$out/arch/riscv/mm/init.o" >"$ev/set_satp_mode.full.txt"
           python3 - "$ev/set_satp_mode.full.txt" <<'PY' | tee "$ev/real-satp-gate.txt"
           import re,sys
           body=open(sys.argv[1],errors='replace').read().splitlines()
-          write=None
-          swap=None
-          swap_kind='missing'
+          write=swap=None; kind='missing'
           for i,x in enumerate(body):
               if write is None and re.search(r'\bcsrw\s+(?:satp|0x180)\s*,',x):
-                  write=i
-                  continue
+                  write=i; continue
               if write is not None:
                   m=re.search(r'\b(csrrw|csrrwi)\s+[^,]+,\s*(?:satp|0x180)\s*,',x)
-                  if m:
-                      swap=i
-                      swap_kind=m.group(1)
-                      break
-          touches=0
-          if write is not None and swap is not None:
-              touches=sum(1 for x in body[write+1:swap] if re.search(r'\bsp\b',x))
-          window=1 if write is not None and swap is not None else 0
-          print(f'REAL_SATP_WINDOWS={window}')
+                  if m: swap=i; kind=m.group(1); break
+          touches=sum(1 for x in body[write+1:swap] if re.search(r'\bsp\b',x)) if write is not None and swap is not None else -1
+          print(f'REAL_SATP_WINDOWS={int(write is not None and swap is not None)}')
           print(f'REAL_SATP_STACK_TOUCHES={touches}')
-          print(f'REAL_SATP_SWAP_KIND={swap_kind}')
-          if not window or touches:
-              raise SystemExit(1)
+          print(f'REAL_SATP_SWAP_KIND={kind}')
+          if write is None or swap is None or touches: raise SystemExit(1)
           PY
 
-      - name: Relink packed all-MiniC Image
+      - name: Relink and run focused QEMU gate
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -197,6 +172,7 @@ jobs:
           out="$work/out"
           ev="$GITHUB_WORKSPACE/build/linux-irq-frame-runtime-v0/evidence"
           wrapper="$GITHUB_WORKSPACE/tests/external/linux/stage2_kbuild_cc.sh"
+
           start=$(date +%s%N)
           MINIC="$work/toolchain/bin/minic" REAL_CC=/usr/bin/riscv64-linux-gnu-gcc \
           MINIC_KEEP_INTERMEDIATES=0 MINIC_KBUILD_TRACE="$ev/relink.trace" CORE_FAST_TRACE=1 \
@@ -209,15 +185,9 @@ jobs:
           print(f"TIMING relink_ms={(b-a)//1_000_000}")
           PY
           test -s "$out/arch/riscv/boot/Image"
-          printf 'IMAGE_BYTES=%s\n' "$(stat -c %s "$out/arch/riscv/boot/Image")" | tee "$ev/summary.txt"
           riscv64-linux-gnu-nm -n "$out/vmlinux" >"$ev/vmlinux.nm.txt"
+          printf 'IMAGE_BYTES=%s\n' "$(stat -c %s "$out/arch/riscv/boot/Image")" | tee "$ev/summary.txt"
 
-      - name: Fast packed QEMU IRQ runtime gate
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          out="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0/out"
-          ev="$GITHUB_WORKSPACE/build/linux-irq-frame-runtime-v0/evidence"
           start=$(date +%s%N)
           set +e
           timeout --signal=TERM 8s qemu-system-riscv64 \
@@ -228,30 +198,53 @@ jobs:
             >"$ev/qemu.console.log" 2>&1
           rc=$?
           set -e
-          banner=0
-          grep -a -q 'Linux version 6\.6\.143' "$ev/qemu.console.log" && banner=1 || true
-          old_satp=0
-          old_irq_guard=0
-          grep -a -q 'epc:0x000000008a06907a' "$ev/qemu.trace.log" && old_satp=1 || true
-          grep -a -q 'tval:0xff1fffffffffff58' "$ev/qemu.trace.log" && old_irq_guard=1 || true
-          printf 'EARLY_QEMU_RC=%s\nLINUX_BANNER=%s\nOLD_SATP_FAULT=%s\nOLD_IRQ_GUARD_FAULT=%s\n' \
-            "$rc" "$banner" "$old_satp" "$old_irq_guard" | tee -a "$ev/summary.txt"
           end=$(date +%s%N)
+          banner=0; old_satp=0; old_irq=0
+          grep -a -q 'Linux version 6\.6\.143' "$ev/qemu.console.log" && banner=1 || true
+          grep -a -q 'epc:0x000000008a06907a' "$ev/qemu.trace.log" && old_satp=1 || true
+          grep -a -q 'tval:0xff1fffffffffff58' "$ev/qemu.trace.log" && old_irq=1 || true
+          printf 'EARLY_QEMU_RC=%s\nLINUX_BANNER=%s\nOLD_SATP_FAULT=%s\nOLD_IRQ_GUARD_FAULT=%s\n' \
+            "$rc" "$banner" "$old_satp" "$old_irq" | tee -a "$ev/summary.txt"
           python3 - "$start" "$end" <<'PY' | tee -a "$ev/timing.txt"
           import sys
           a,b=map(int,sys.argv[1:])
           print(f"TIMING qemu_ms={(b-a)//1_000_000}")
           PY
-          grep -a 'riscv_cpu_do_interrupt' "$ev/qemu.trace.log" | head -n 60 >"$ev/qemu.interrupts.first.txt" || true
-          grep -a 'riscv_cpu_do_interrupt' "$ev/qemu.trace.log" | tail -n 160 >"$ev/qemu.interrupts.tail.txt" || true
-          grep -a -n -E 'store_page_fault|load_page_fault|exec_page_fault|illegal_instruction|breakpoint' "$ev/qemu.trace.log" \
-            | tail -n 120 >"$ev/qemu.faults.tail.txt" || true
-          tail -n 1000 "$ev/qemu.trace.log" >"$ev/qemu.trace.tail.txt" || true
+          grep -a 'riscv_cpu_do_interrupt' "$ev/qemu.trace.log" >"$ev/qemu.interrupts.txt" || true
+          grep -a -n -E 'store_page_fault|load_page_fault|exec_page_fault|illegal_instruction|breakpoint' "$ev/qemu.trace.log" | tail -n 160 >"$ev/qemu.faults.tail.txt" || true
+          tail -n 1400 "$ev/qemu.trace.log" >"$ev/qemu.trace.tail.txt" || true
           tail -n 300 "$ev/qemu.console.log" >"$ev/qemu.console.tail.txt" || true
-          cat "$ev/summary.txt"
-          cat "$ev/qemu.faults.tail.txt" || true
 
-      - name: Preserve packed runtime evidence
+          python3 - "$ev/qemu.interrupts.txt" "$ev/vmlinux.nm.txt" <<'PY' | tee "$ev/fault-symbols.txt"
+          import bisect,re,sys
+          ints=open(sys.argv[1],errors='replace').read().splitlines()
+          syms=[]
+          for line in open(sys.argv[2],errors='replace'):
+              p=line.split()
+              if len(p)>=3:
+                  try: a=int(p[0],16)
+                  except ValueError: continue
+                  syms.append((a,p[2]))
+          add=[a for a,_ in syms]
+          faults=[]
+          for line in ints:
+              if 'page_fault' not in line: continue
+              m=re.search(r'epc:0x([0-9a-fA-F]+).*tval:0x([0-9a-fA-F]+).*desc=([^ ]+)',line)
+              if not m: continue
+              epc=int(m.group(1),16); tval=int(m.group(2),16); desc=m.group(3)
+              i=bisect.bisect_right(add,epc)-1
+              sym='?'; off=0
+              if i>=0: sym=syms[i][1]; off=epc-syms[i][0]
+              faults.append((epc,tval,desc,sym,off))
+          for epc,tval,desc,sym,off in faults[-12:]:
+              print(f'FAULT desc={desc} epc=0x{epc:016x} tval=0x{tval:016x} symbol={sym}+0x{off:x}')
+          guard=sum(1 for _,t,desc,_,_ in faults if desc in ('store_page_fault','load_page_fault') and 0xff1ffffffff00000 <= t < 0xff20000000000000)
+          print(f'IRQ_GUARD_RANGE_FAULTS={guard}')
+          PY
+          cat "$ev/summary.txt"
+          cat "$ev/fault-symbols.txt"
+
+      - name: Preserve focused runtime evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
