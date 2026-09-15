@@ -11,7 +11,9 @@ mkdir -p "$work"
 
 "$host_cc" -E -P -x c "$source" -o "$work/probe.i"
 "$minic" -S "$work/probe.i" -o "$work/minic.s"
-"$rv_cc" -O2 -fno-pic -fno-pie -S "$source" -o "$work/gcc.s"
+if test "${SATP_SKIP_GCC:-0}" != 1; then
+    "$rv_cc" -O2 -fno-pic -fno-pie -S "$source" -o "$work/gcc.s"
+fi
 
 check_window() {
     asm=$1
@@ -49,6 +51,8 @@ if unsafe:
 PY
 }
 
-check_window "$work/gcc.s" GCC
+if test "${SATP_SKIP_GCC:-0}" != 1; then
+    check_window "$work/gcc.s" GCC
+fi
 check_window "$work/minic.s" MINIC
 printf '%s\n' 'PASS compiler/c0/gnu_inline_asm_satp_window_rv64 stack_free_between_csrw_csrrw=1'
