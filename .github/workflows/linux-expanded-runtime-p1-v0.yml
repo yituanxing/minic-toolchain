@@ -48,8 +48,25 @@ jobs:
         run: |
           sudo apt-get -o Acquire::Retries=3 update
           sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
-            gcc-riscv64-linux-gnu libc6-dev-riscv64-cross \
+            gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu libc6-dev-riscv64-cross \
             cpio gzip qemu-system-misc opensbi file python3
+
+      - name: Diagnose restored vmlinux physical layout
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          out="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0/out"
+          ev="$GITHUB_WORKSPACE/build/linux-expanded-runtime-p1/evidence"
+          vmlinux="$out/vmlinux"
+          image="$out/arch/riscv/boot/Image"
+          test -s "$vmlinux"
+          riscv64-linux-gnu-readelf -lW "$vmlinux" >"$ev/vmlinux-program-headers.txt"
+          riscv64-linux-gnu-objdump -h "$vmlinux" >"$ev/vmlinux-sections.txt"
+          riscv64-linux-gnu-size -A -x "$vmlinux" >"$ev/vmlinux-size.txt"
+          stat -c 'IMAGE_BYTES=%s' "$image" | tee "$ev/layout-summary.txt"
+          grep -E ' LOAD |\.text|\.rodata|\.data|\.bss|\.init|\.sdata|\.sbss|\.percpu' \
+            "$ev/vmlinux-program-headers.txt" "$ev/vmlinux-sections.txt" \
+            | tail -n 160 | tee -a "$ev/layout-summary.txt" || true
 
       - name: Build deterministic P1 initramfs
         shell: bash
