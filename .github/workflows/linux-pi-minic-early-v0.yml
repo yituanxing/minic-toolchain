@@ -109,8 +109,8 @@ jobs:
           archive="$work/linux-6.6.143.tar.xz"
           src="$work/linux-6.6.143"
           ev="$GITHUB_WORKSPACE/build/linux-pi-minic-early/evidence"
+          echo "CACHE_CONFIG_BYTES=$(stat -c %s "$out/.config" 2>/dev/null || echo 0)" | tee -a "$ev/timing.txt"
           test -s "$out/.config"
-          test -s "$out/arch/riscv/boot/Image"
           start=$(date +%s)
           if ! test -s "$archive"; then
             curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors \
