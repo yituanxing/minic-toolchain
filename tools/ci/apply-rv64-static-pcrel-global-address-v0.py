@@ -13,9 +13,12 @@ end = text.find("    case MINIC_CORE_INSTRUCTION_FUNCTION_ADDRESS:", start)
 if start < 0 or end < 0:
     raise SystemExit("rv64 pcrel global: cannot locate global-address case")
 region = text[start:end]
-old = 'fprintf(file, "  la t0, %s\\n", function->globals[instruction->value.global_id].name)'
-if region.count(old) != 1:
-    raise SystemExit(f"rv64 pcrel global: expected one la emitter, found {region.count(old)}")
+old_literal = '"  la t0, %s\\n"'
+new_literal = '"  lla t0, %s\\n"'
+if region.count(old_literal) != 1:
+    raise SystemExit(
+        f"rv64 pcrel global: expected one la format literal, found {region.count(old_literal)}"
+    )
 region = region.replace(
     "    case MINIC_CORE_INSTRUCTION_GLOBAL_ADDRESS:",
     "    /* M196_LINUX_STATIC_PCREL_GLOBAL_ADDRESS: the Linux kernel is statically\n"
@@ -24,6 +27,6 @@ region = region.replace(
     "    case MINIC_CORE_INSTRUCTION_GLOBAL_ADDRESS:",
     1,
 )
-region = region.replace(old, 'fprintf(file, "  lla t0, %s\\n", function->globals[instruction->value.global_id].name)', 1)
+region = region.replace(old_literal, new_literal, 1)
 p.write_text(text[:start] + region + text[end:])
 print("MINIC_RV64_STATIC_PCREL_GLOBAL_ADDRESS_V0=APPLIED")
