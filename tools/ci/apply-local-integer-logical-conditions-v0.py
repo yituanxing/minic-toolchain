@@ -138,5 +138,47 @@ logical = '''    if (expression->kind == MINIC_EXPRESSION_BINARY &&
 count = text.count(anchor)
 if count != 1:
     raise SystemExit(f"expected one local-aware comparison anchor, found {count}")
-p.write_text(text.replace(anchor, logical + anchor, 1))
+text = text.replace(anchor, logical + anchor, 1)
+
+# A compound assignment writes its destination even though it is not represented
+# by the ordinary assignment-pair fact update.  A previously-known local value
+# is therefore stale as soon as `x op= rhs` begins.  Kill only a direct-local
+# fact here; do not speculate about the new value.  This is deliberately
+# conservative and keeps member/dereference/bit-field destinations unchanged.
+compound_anchor = '''    expression = minic_c0_program_expression(context->body->program, expression_id);
+    if (expression == NULL) {
+        return MINIC_CORE_LOWER_ERROR;
+    }
+    /* Runtime allocation is a pointer-producing rvalue. Its target-neutral
+'''
+compound_replacement = '''    expression = minic_c0_program_expression(context->body->program, expression_id);
+    if (expression == NULL) {
+        return MINIC_CORE_LOWER_ERROR;
+    }
+    if (expression->kind == MINIC_EXPRESSION_COMPOUND_ASSIGNMENT) {
+        const MinicExpression *fact_target;
+
+        fact_target = minic_c0_program_expression(
+            context->body->program, expression->value.binary.left);
+        if (fact_target != NULL && fact_target->kind == MINIC_EXPRESSION_LOCAL) {
+            if (getenv("MINIC_LOCAL_FACT_TRACE") != NULL) {
+                (void)fprintf(stderr,
+                              "LOCAL_FACT_COMPOUND_INVALIDATE function=%s local=%zu expression=%zu\\n",
+                              context->source_function != NULL
+                                  ? context->source_function->name
+                                  : "?",
+                              (size_t)fact_target->value.local_id,
+                              (size_t)expression_id);
+            }
+            core_local_constant_invalidate(context, fact_target->value.local_id);
+        }
+    }
+    /* Runtime allocation is a pointer-producing rvalue. Its target-neutral
+'''
+count = text.count(compound_anchor)
+if count != 1:
+    raise SystemExit(f"expected one lower_expression compound-fact anchor, found {count}")
+text = text.replace(compound_anchor, compound_replacement, 1)
+
+p.write_text(text)
 print("MINIC_LOCAL_INTEGER_LOGICAL_CONDITIONS_V0=APPLIED")
