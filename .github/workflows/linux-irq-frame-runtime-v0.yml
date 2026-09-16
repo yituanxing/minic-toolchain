@@ -103,6 +103,15 @@ jobs:
           ev="$GITHUB_WORKSPACE/build/linux-irq-frame-runtime-v0/evidence"
           wrapper="$GITHUB_WORKSPACE/tests/external/linux/stage2_kbuild_cc.sh"
           test -s "$out/.config"
+          test -s "$out/kernel/sched/core.o"
+
+          # Preserve the known-good cache's scheduler owner before replacing it.
+          riscv64-linux-gnu-objdump -dr --disassemble=sched_init "$out/kernel/sched/core.o" \
+            >"$ev/sched_init.baseline.disasm.txt"
+          riscv64-linux-gnu-nm -n "$out/kernel/sched/core.o" >"$ev/sched_core.baseline.nm.txt" || true
+          grep -n -E -C 4 'root_task_group|nr_cpu_ids|kzalloc' "$ev/sched_init.baseline.disasm.txt" \
+            >"$ev/sched_init.baseline.owner.txt" || true
+
           curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors \
             https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.6.143.tar.xz -o "$archive"
           printf '%s  %s\n' dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932 "$archive" | sha256sum -c -
@@ -149,6 +158,29 @@ jobs:
           find "$out" -type f -name '*.minic.stderr' -newer "$stamp" -print0 | xargs -0 -r cat >"$ev/minic-frame-trace.txt"
           grep -E 'CORE_FRAME_REUSE function=(do_irq|handle_riscv_irq|irq_enter_rcu|arch_spin_lock|do_raw_spin_lock|timekeeping_advance|logarithmic_accumulation|accumulate_nsecs_to_secs|update_vsyscall|task_group_account_field|account_system_index_time|account_group_system_time|hrtimer_update_base|hrtimer_run_queues|hrtimer_interrupt|__hrtimer_run_queues|update_rq_clock_pelt|update_rq_clock_task|update_rq_clock)' \
             "$ev/minic-frame-trace.txt" | tee "$ev/focused-core-frames.txt" || true
+
+          # Capture the exact NULL-store owner and the initializer that should seed it.
+          riscv64-linux-gnu-objdump -dr --disassemble=sched_init "$out/kernel/sched/core.o" \
+            >"$ev/sched_init.minic.disasm.txt"
+          riscv64-linux-gnu-objdump -dr --disassemble=init_tg_cfs_entry "$out/kernel/sched/build_policy.o" \
+            >"$ev/init_tg_cfs_entry.minic.disasm.txt"
+          riscv64-linux-gnu-nm -n "$out/kernel/sched/core.o" >"$ev/sched_core.minic.nm.txt" || true
+          riscv64-linux-gnu-nm -n "$out/kernel/sched/build_policy.o" >"$ev/sched_policy.minic.nm.txt" || true
+          grep -n -E -C 6 'root_task_group|nr_cpu_ids|kzalloc' "$ev/sched_init.minic.disasm.txt" \
+            >"$ev/sched_init.minic.owner.txt" || true
+          grep -n -E -C 6 'root_task_group|cfs_rq|init_tg_cfs_entry' "$ev/init_tg_cfs_entry.minic.disasm.txt" \
+            >"$ev/init_tg_cfs_entry.minic.owner.txt" || true
+          {
+            echo '=== baseline sched_init owner relocations ==='
+            cat "$ev/sched_init.baseline.owner.txt"
+            echo '=== MiniC sched_init owner relocations ==='
+            cat "$ev/sched_init.minic.owner.txt"
+            echo '=== MiniC init_tg_cfs_entry ==='
+            cat "$ev/init_tg_cfs_entry.minic.owner.txt"
+          } | tee "$ev/sched-null-owner-summary.txt"
+          find "$out/kernel/sched" -maxdepth 1 -type f \
+            \( -name 'core*.minic.*' -o -name 'build_policy*.minic.*' -o -name '*.minic.stderr' \) \
+            -printf '%f %s bytes\n' | sort >"$ev/sched-intermediates.txt" || true
 
           riscv64-linux-gnu-objdump -dr --disassemble=set_satp_mode "$out/arch/riscv/mm/init.o" >"$ev/set_satp_mode.full.txt"
           python3 - "$ev/set_satp_mode.full.txt" <<'PY' | tee "$ev/real-satp-gate.txt"
