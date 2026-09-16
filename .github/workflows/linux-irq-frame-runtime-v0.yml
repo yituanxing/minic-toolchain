@@ -122,7 +122,7 @@ jobs:
             kernel/locking/spinlock_debug.o
             kernel/time/timekeeping.o
             kernel/time/vsyscall.o
-            kernel/sched/cputime.o
+            kernel/sched/build_policy.o
           )
           for obj in "${focused[@]}"; do
             rm -f "$out/$obj" "$out/$(dirname "$obj")/.$(basename "$obj" .o).o.cmd"
