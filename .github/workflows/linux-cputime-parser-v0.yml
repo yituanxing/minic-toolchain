@@ -98,6 +98,19 @@ jobs:
             https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.6.143.tar.xz -o "$archive"
           printf '%s  %s\n' dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932 "$archive" | sha256sum -c -
           rm -rf "$src" && tar -xJf "$archive" -C "$work"
+
+          python3 - "$wrapper" <<'PY'
+          import sys
+          from pathlib import Path
+          p=Path(sys.argv[1])
+          s=p.read_text()
+          anchor='[[ -z "$trace" ]] || printf \'minic input=%q output=%q\\n\' "$preprocessed" "$assembly" >>"$trace"\n'
+          if s.count(anchor) != 1:
+              raise SystemExit(f'wrapper snapshot anchor count={s.count(anchor)}')
+          inject='cp "$preprocessed" "${preprocessed%.i}.before-minic.i"\n' + anchor
+          p.write_text(s.replace(anchor, inject, 1))
+          PY
+
           rm -f "$out/kernel/sched/cputime.o" "$out/kernel/sched/.cputime.o.cmd"
           set +e
           MINIC="$work/toolchain/bin/minic" REAL_CC=/usr/bin/riscv64-linux-gnu-gcc \
@@ -107,11 +120,16 @@ jobs:
           rc=$?
           set -e
           printf 'CPUTIME_BUILD_RC=%s\n' "$rc" | tee "$ev/summary.txt"
-          cp "$out/kernel/sched/cputime.minic-stage2.i" "$ev/" 2>/dev/null || true
+          cp "$out/kernel/sched/cputime.minic-stage2.i" "$ev/after-minic.i" 2>/dev/null || true
+          cp "$out/kernel/sched/cputime.minic-stage2.before-minic.i" "$ev/before-minic.i" 2>/dev/null || true
           cp "$out/kernel/sched/cputime.minic.stderr" "$ev/" 2>/dev/null || true
           cp "$out/kernel/sched/cputime.minic-stage2.s" "$ev/" 2>/dev/null || true
-          if test -s "$out/kernel/sched/cputime.minic-stage2.i"; then
-            nl -ba "$out/kernel/sched/cputime.minic-stage2.i" | sed -n '1,80p' | tee "$ev/cputime-i-head.txt"
+          if test -s "$ev/before-minic.i"; then
+            sha256sum "$ev/before-minic.i" "$ev/after-minic.i" | tee "$ev/preprocess-sha256.txt"
+            cmp -s "$ev/before-minic.i" "$ev/after-minic.i"; cmp_rc=$?
+            printf 'PREPROCESS_BEFORE_AFTER_EQUAL=%s\n' "$(( cmp_rc == 0 ? 1 : 0 ))" | tee -a "$ev/summary.txt"
+            nl -ba "$ev/before-minic.i" | sed -n '1,80p' | tee "$ev/cputime-i-head.txt"
+            grep -nE 'typedef[^;]*(u64|__u64)|\bu64\b' "$ev/before-minic.i" | head -n 40 | tee "$ev/u64-evidence.txt" || true
           fi
           grep -n -C 5 -E 'error:|expected type name|MINIC_KBUILD_BLOCKER' "$ev/cputime-build.log" | tee "$ev/cputime-error.txt" || true
           cat "$ev/summary.txt"
