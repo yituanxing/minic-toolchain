@@ -1,0 +1,207 @@
+name: Linux Runtime Fast V1
+
+on:
+  push:
+    branches: ["agent/linux-runtime-fast-v1"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: linux-runtime-fast-v1-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-feedback-profile:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Install RV64 Linux prerequisites
+        run: |
+          sudo apt-get -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            build-essential gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
+            bc bison flex libssl-dev libelf-dev make curl xz-utils python3 time
+
+      - name: Apply current Linux semantic stack and build MiniC
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-runtime-fast-v1"
+          build="$work/toolchain"
+          ev="$work/evidence"
+          mkdir -p "$ev"
+          jobs=$(nproc)
+          echo "JOBS=$jobs" | tee "$ev/jobs.txt"
+          patches=(
+            apply-local-integer-assignment-v2.py
+            apply-local-integer-logical-conditions-v0.py
+            apply-local-null-pointer-facts-v0.py
+            apply-builtin-constant-p-local-facts-v0.py
+            apply-inline-integer-specialization-v0.py
+            apply-inline-specialization-local-facts-v0.py
+            apply-inline-specialization-stable-parameter-facts-v0.py
+            apply-inline-specialization-transitive-integer-v0.py
+            apply-inline-specialization-base-callee-integer-v0.py
+            apply-inline-specialization-capacity-v0.py
+            apply-inline-specialization-symbolic-address-v0.py
+            apply-inline-specialization-symbolic-nested-array-v0.py
+            apply-inline-specialization-symbolic-integer-closure-v0.py
+            apply-inline-specialization-symbolic-transitive-rewrite-v0.py
+            apply-inline-specialization-symbolic-array-lvalue-v0.py
+            apply-inline-specialization-symbolic-closed-integers-v0.py
+            apply-inline-specialization-base-callee-symbolic-v0.py
+            apply-inline-specialization-resolved-asm-goto-v0.py
+            apply-inline-specialization-core-reachability-v0.py
+            apply-inline-specialization-original-reachability-v0.py
+            apply-inline-asm-local-integer-facts-v0.py
+            apply-inline-specialization-core-empty-function-v0.py
+            apply-inline-specialization-label-alias-v0.py
+            apply-riscv64-default-text-section-v0.py
+            apply-riscv64-explicit-section-flags-v0.py
+            apply-inline-asm-symbolic-specialization-v0.py
+          )
+          start=$(date +%s%N)
+          for patch in "${patches[@]}"; do
+            python3 "tools/ci/$patch" >>"$ev/patch.log"
+          done
+          git diff --check
+          make -j"$jobs" MODE=release CFLAGS=-Werror BUILD_DIR="$build" \
+            "$build/bin/minic" "$build/bin/minic-cc"
+          end=$(date +%s%N)
+          echo "TOOLCHAIN_WALL_MS=$(( (end-start)/1000000 ))" | tee "$ev/toolchain-time.txt"
+          test -x "$build/bin/minic"
+
+      - name: Prepare pinned Linux 6.6.143 cold tree
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-runtime-fast-v1"
+          archive="$work/linux-6.6.143.tar.xz"
+          src="$work/linux-6.6.143"
+          out="$work/out"
+          ev="$work/evidence"
+          mkdir -p "$out" "$ev"
+          curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors \
+            https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.6.143.tar.xz -o "$archive"
+          printf '%s  %s\n' dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932 "$archive" | sha256sum -c -
+          tar -xJf "$archive" -C "$work"
+          make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- defconfig
+          "$src/scripts/config" --file "$out/.config" \
+            -e BLK_DEV_INITRD -e DEVTMPFS -e DEVTMPFS_MOUNT \
+            -e SERIAL_8250 -e SERIAL_8250_CONSOLE
+          make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- olddefconfig
+          sha256sum "$out/.config" | tee "$ev/config.sha256"
+
+      - name: Cold full current-path Image profile
+        id: cold
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-runtime-fast-v1"
+          jobs=$(nproc)
+          set +e
+          MINIC_BIN="$work/toolchain/bin/minic" \
+            bash tools/ci/linux-runtime-build-profiler-v1.sh \
+              "$work/linux-6.6.143" "$work/out" "$jobs" "$work/perf-cold"
+          rc=$?
+          set -e
+          echo "COLD_RC=$rc" >>"$GITHUB_ENV"
+          test -s "$work/perf-cold/summary.json"
+          cat "$work/perf-cold/summary.json"
+          exit 0
+
+      - name: Warm no-change Image profile
+        if: always() && steps.cold.outcome == 'success'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-runtime-fast-v1"
+          jobs=$(nproc)
+          set +e
+          MINIC_BIN="$work/toolchain/bin/minic" \
+            bash tools/ci/linux-runtime-build-profiler-v1.sh \
+              "$work/linux-6.6.143" "$work/out" "$jobs" "$work/perf-warm"
+          rc=$?
+          set -e
+          echo "WARM_RC=$rc" >>"$GITHUB_ENV"
+          test -s "$work/perf-warm/summary.json"
+          cat "$work/perf-warm/summary.json"
+          exit 0
+
+      - name: Focused kernel/fork.o rebuild plus relink profile
+        if: always() && steps.cold.outcome == 'success'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-runtime-fast-v1"
+          out="$work/out"
+          jobs=$(nproc)
+          rm -f "$out/kernel/fork.o"
+          set +e
+          MINIC_BIN="$work/toolchain/bin/minic" \
+            bash tools/ci/linux-runtime-build-profiler-v1.sh \
+              "$work/linux-6.6.143" "$out" "$jobs" "$work/perf-focused-fork"
+          rc=$?
+          set -e
+          echo "FOCUSED_RC=$rc" >>"$GITHUB_ENV"
+          test -s "$work/perf-focused-fork/summary.json"
+          cat "$work/perf-focused-fork/summary.json"
+          grep -E 'kernel/fork(\.c|\.minic-stage2\.i)' "$work/perf-focused-fork/tool-events.tsv" | head -n 20 || true
+          exit 0
+
+      - name: Summarize feedback loop
+        if: always()
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-runtime-fast-v1"
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          root = Path('build/linux-runtime-fast-v1')
+          result = {'schema': 1}
+          for key, sub in [('cold','perf-cold'), ('warm','perf-warm'), ('focused_fork','perf-focused-fork')]:
+              p = root / sub / 'summary.json'
+              if p.exists():
+                  result[key] = json.loads(p.read_text())
+          out = root / 'evidence' / 'feedback-summary.json'
+          out.write_text(json.dumps(result, indent=2) + '\n')
+          print(json.dumps(result, indent=2))
+          PY
+
+      - name: Preserve feedback evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-runtime-fast-v1
+          path: |
+            build/linux-runtime-fast-v1/evidence/
+            build/linux-runtime-fast-v1/perf-cold/summary.json
+            build/linux-runtime-fast-v1/perf-cold/slowest.tsv
+            build/linux-runtime-fast-v1/perf-cold/tool-events.tsv
+            build/linux-runtime-fast-v1/perf-cold/make.time
+            build/linux-runtime-fast-v1/perf-cold/kbuild.log
+            build/linux-runtime-fast-v1/perf-warm/summary.json
+            build/linux-runtime-fast-v1/perf-warm/slowest.tsv
+            build/linux-runtime-fast-v1/perf-warm/tool-events.tsv
+            build/linux-runtime-fast-v1/perf-warm/make.time
+            build/linux-runtime-fast-v1/perf-focused-fork/summary.json
+            build/linux-runtime-fast-v1/perf-focused-fork/slowest.tsv
+            build/linux-runtime-fast-v1/perf-focused-fork/tool-events.tsv
+            build/linux-runtime-fast-v1/perf-focused-fork/make.time
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Enforce cold baseline
+        if: always()
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "${COLD_RC:-1}" -eq 0
+          echo "LINUX_RUNTIME_FAST_V1_COLD=PASS"
