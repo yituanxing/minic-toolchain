@@ -17,6 +17,11 @@ jobs:
     if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[linux-fork-stack-runtime-v0]')
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [cache, baseline, pack, reuse]
+
     steps:
       - uses: actions/checkout@v4
         with:
@@ -39,12 +44,14 @@ jobs:
             bc bison flex libssl-dev libelf-dev make curl xz-utils python3 \
             qemu-system-misc opensbi file >/dev/null
 
-      - name: Build current patched MiniC
+      - name: Build selected MiniC backend variant
+        if: matrix.variant != 'cache'
         shell: bash
         run: |
           set -Eeuo pipefail
+          variant='${{ matrix.variant }}'
           work="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0"
-          ev="$GITHUB_WORKSPACE/build/linux-fork-stack-runtime-v0/evidence"
+          ev="$GITHUB_WORKSPACE/build/linux-fork-stack-runtime-v0/$variant"
           mkdir -p "$ev"
           patches=(
             apply-local-integer-assignment-v2.py
@@ -77,14 +84,18 @@ jobs:
             apply-riscv64-default-text-section-v0.py
             apply-riscv64-explicit-section-flags-v0.py
             apply-inline-asm-symbolic-specialization-v0.py
-            apply-riscv64-core-value-slot-pack-v0.py
-            apply-riscv64-core-value-slot-reuse-v0.py
           )
+          if [[ "$variant" == pack || "$variant" == reuse ]]; then
+            patches+=(apply-riscv64-core-value-slot-pack-v0.py)
+          fi
+          if [[ "$variant" == reuse ]]; then
+            patches+=(apply-riscv64-core-value-slot-reuse-v0.py)
+          fi
           start=$(date +%s%N)
           for p in "${patches[@]}"; do python3 "tools/ci/$p" >>"$ev/patch.log"; done
           git diff --check
-          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$work/toolchain" \
-            "$work/toolchain/bin/minic" "$work/toolchain/bin/minic-cc" >/dev/null
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$work/toolchain-$variant" \
+            "$work/toolchain-$variant/bin/minic" "$work/toolchain-$variant/bin/minic-cc" >/dev/null
           end=$(date +%s%N)
           python3 - "$start" "$end" <<'PY' | tee "$ev/timing.txt"
           import sys
@@ -92,18 +103,19 @@ jobs:
           print(f"TIMING toolchain_ms={(b-a)//1_000_000}")
           PY
 
-      - name: Rebuild current runtime failure pool plus kernel fork owner
+      - name: Rebuild identical runtime failure pool
+        if: matrix.variant != 'cache'
         shell: bash
         run: |
           set -Eeuo pipefail
+          variant='${{ matrix.variant }}'
           work="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0"
           src="$work/linux-6.6.143"
           archive="$work/linux-6.6.143.tar.xz"
           out="$work/out"
-          ev="$GITHUB_WORKSPACE/build/linux-fork-stack-runtime-v0/evidence"
+          ev="$GITHUB_WORKSPACE/build/linux-fork-stack-runtime-v0/$variant"
           wrapper="$GITHUB_WORKSPACE/tests/external/linux/stage2_kbuild_cc.sh"
           test -s "$out/.config"
-
           curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors \
             https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.6.143.tar.xz -o "$archive"
           printf '%s  %s\n' dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932 "$archive" | sha256sum -c -
@@ -137,7 +149,7 @@ jobs:
           stamp="$ev/rebuild-start.stamp"
           touch "$stamp"
           start=$(date +%s%N)
-          MINIC="$work/toolchain/bin/minic" REAL_CC=/usr/bin/riscv64-linux-gnu-gcc \
+          MINIC="$work/toolchain-$variant/bin/minic" REAL_CC=/usr/bin/riscv64-linux-gnu-gcc \
           MINIC_KEEP_INTERMEDIATES=1 MINIC_KBUILD_TRACE="$ev/refresh.trace" \
           MINIC_CORE_FRAME_TRACE=1 CORE_FAST_TRACE=1 MINIC_LOCAL_FACT_TRACE=1 \
             make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
@@ -148,26 +160,23 @@ jobs:
           a,b=map(int,sys.argv[1:])
           print(f"TIMING refresh_ms={(b-a)//1_000_000} objects=18")
           PY
-
           find "$out" -type f -name '*.minic.stderr' -newer "$stamp" -print0 | xargs -0 -r cat >"$ev/minic-frame-trace.txt"
-          grep -E 'CORE_FRAME_REUSE function=(do_irq|handle_riscv_irq|irq_enter_rcu|check_cpu_stall|hrtimer_interrupt|update_rq_clock_pelt|update_rq_clock_task|update_rq_clock|fork_init|proc_caches_init)' \
+          grep -E 'CORE_FRAME(_REUSE)? function=(do_irq|handle_riscv_irq|irq_enter_rcu|check_cpu_stall|hrtimer_interrupt|update_rq_clock_pelt|update_rq_clock_task|update_rq_clock|fork_init|proc_caches_init)' \
             "$ev/minic-frame-trace.txt" | tee "$ev/focused-core-frames.txt" || true
-          riscv64-linux-gnu-objdump -dr --disassemble=fork_init "$out/kernel/fork.o" >"$ev/fork_init.disasm.txt"
-          riscv64-linux-gnu-objdump -dr --disassemble=proc_caches_init "$out/kernel/fork.o" >"$ev/proc_caches_init.disasm.txt"
-          riscv64-linux-gnu-nm -n "$out/kernel/fork.o" >"$ev/fork.nm.txt"
 
-      - name: Relink and run QEMU
+      - name: Relink selected variant
+        if: matrix.variant != 'cache'
         shell: bash
         run: |
           set -Eeuo pipefail
+          variant='${{ matrix.variant }}'
           work="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0"
           src="$work/linux-6.6.143"
           out="$work/out"
-          ev="$GITHUB_WORKSPACE/build/linux-fork-stack-runtime-v0/evidence"
+          ev="$GITHUB_WORKSPACE/build/linux-fork-stack-runtime-v0/$variant"
           wrapper="$GITHUB_WORKSPACE/tests/external/linux/stage2_kbuild_cc.sh"
-
           start=$(date +%s%N)
-          MINIC="$work/toolchain/bin/minic" REAL_CC=/usr/bin/riscv64-linux-gnu-gcc \
+          MINIC="$work/toolchain-$variant/bin/minic" REAL_CC=/usr/bin/riscv64-linux-gnu-gcc \
           MINIC_KEEP_INTERMEDIATES=0 MINIC_KBUILD_TRACE="$ev/relink.trace" CORE_FAST_TRACE=1 \
             make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
               CC="$wrapper" -j4 V=1 Image >"$ev/relink.log" 2>&1
@@ -178,8 +187,22 @@ jobs:
           print(f"TIMING relink_ms={(b-a)//1_000_000}")
           PY
           test -s "$out/arch/riscv/boot/Image"
-          riscv64-linux-gnu-nm -n "$out/vmlinux" >"$ev/vmlinux.nm.txt"
 
+      - name: Run relocation-aware first-fault oracle
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          variant='${{ matrix.variant }}'
+          out="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0/out"
+          ev="$GITHUB_WORKSPACE/build/linux-fork-stack-runtime-v0/$variant"
+          mkdir -p "$ev"
+          test -s "$out/arch/riscv/boot/Image"
+          test -s "$out/vmlinux"
+          riscv64-linux-gnu-nm -n "$out/vmlinux" >"$ev/vmlinux.nm.txt"
+          for fn in _start setup_vm relocate_enable_mmu setup_vm_final start_kernel; do
+            riscv64-linux-gnu-objdump -dr --disassemble="$fn" "$out/vmlinux" >"$ev/$fn.disasm.txt" 2>/dev/null || true
+          done
+          start=$(date +%s%N)
           set +e
           timeout --signal=TERM 8s qemu-system-riscv64 \
             -M virt -cpu max -m 512M -smp 1 -nographic -no-reboot \
@@ -189,58 +212,32 @@ jobs:
             >"$ev/qemu.console.log" 2>&1
           qemu_rc=$?
           set -e
+          end=$(date +%s%N)
+          python3 - "$start" "$end" <<'PY' | tee -a "$ev/timing.txt"
+          import sys
+          a,b=map(int,sys.argv[1:])
+          print(f"TIMING qemu_ms={(b-a)//1_000_000}")
+          PY
           grep -a 'riscv_cpu_do_interrupt' "$ev/qemu.trace.log" >"$ev/qemu.interrupts.txt" || true
           tail -n 300 "$ev/qemu.console.log" >"$ev/qemu.console.tail.txt" || true
-
-          python3 - "$ev/qemu.interrupts.txt" "$ev/vmlinux.nm.txt" "$ev/qemu.trace.log" "$qemu_rc" <<'PY' | tee "$ev/runtime-summary.txt"
-          import bisect,re,sys
-          ints=open(sys.argv[1],errors='replace').read().splitlines()
-          syms=[]
-          for line in open(sys.argv[2],errors='replace'):
-              p=line.split()
-              if len(p) < 3: continue
-              try: a=int(p[0],16)
-              except ValueError: continue
-              syms.append((a,p[2]))
-          add=[a for a,_ in syms]
-          by_name={n:a for a,n in syms}
-          trace=open(sys.argv[3],errors='replace').read()
-          faults=[]
-          for line in ints:
-              if 'page_fault' not in line: continue
-              m=re.search(r'epc:0x([0-9a-fA-F]+).*tval:0x([0-9a-fA-F]+).*desc=([^ ]+)',line)
-              if not m: continue
-              epc=int(m.group(1),16); tval=int(m.group(2),16); desc=m.group(3)
-              i=bisect.bisect_right(add,epc)-1
-              sym='?'; off=0
-              if i>=0: sym=syms[i][1]; off=epc-syms[i][0]
-              faults.append((epc,tval,desc,sym,off))
-          guard=[f for f in faults if f[2] in ('store_page_fault','load_page_fault') and 0xff1ffffffff00000 <= f[1] < 0xff20000000000000]
-          nulls=[f for f in faults if f[1] == 0]
-          def executed(name):
-              a=by_name.get(name)
-              return bool(a is not None and f'0x{a:016x}:' in trace)
-          bad_stack=executed('handle_kernel_stack_overflow') or executed('handle_bad_stack')
-          panic=executed('panic')
-          banner='Linux version' in open(sys.argv[3].replace('qemu.trace.log','qemu.console.log'),errors='replace').read()
-          print(f'QEMU_RC={sys.argv[4]}')
-          print(f'PAGE_FAULTS={len(faults)}')
-          print(f'IRQ_GUARD_RANGE_FAULTS={len(guard)}')
-          print(f'NULL_PAGE_FAULTS={len(nulls)}')
-          print(f'BAD_STACK_PATH={1 if bad_stack else 0}')
-          print(f'PANIC_PATH={1 if panic else 0}')
-          print(f'LINUX_BANNER={1 if banner else 0}')
-          for epc,tval,desc,sym,off in faults[-12:]:
-              print(f'FAULT desc={desc} epc=0x{epc:016x} tval=0x{tval:016x} symbol={sym}+0x{off:x}')
-          if guard or bad_stack or panic:
-              raise SystemExit(1)
-          PY
+          set +e
+          python3 tools/ci/linux-first-fault-analyzer-v1.py \
+            --interrupts "$ev/qemu.interrupts.txt" \
+            --nm "$ev/vmlinux.nm.txt" \
+            --trace "$ev/qemu.trace.log" \
+            --console "$ev/qemu.console.log" \
+            --qemu-rc "$qemu_rc" | tee "$ev/runtime-summary.txt"
+          analyzer_rc=${PIPESTATUS[0]}
+          set -e
+          echo "VARIANT=$variant" | tee -a "$ev/runtime-summary.txt"
+          echo "ANALYZER_RC=$analyzer_rc" | tee -a "$ev/runtime-summary.txt"
+          exit "$analyzer_rc"
 
       - name: Preserve runtime evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: linux-fork-stack-runtime-v0
-          path: build/linux-fork-stack-runtime-v0/evidence/
+          name: linux-fork-stack-runtime-v0-${{ matrix.variant }}
+          path: build/linux-fork-stack-runtime-v0/${{ matrix.variant }}/
           if-no-files-found: ignore
           retention-days: 7
