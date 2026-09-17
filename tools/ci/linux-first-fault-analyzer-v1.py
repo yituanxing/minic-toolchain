@@ -79,21 +79,34 @@ def main() -> int:
         r"epc:0x([0-9a-fA-F]+).*tval:0x([0-9a-fA-F]+).*desc=([^ ]+)"
     )
     for line in interrupt_lines:
-        if "page_fault" not in line:
-            continue
         match = pattern.search(line)
         if not match:
             continue
+        desc = match.group(3)
+        # QEMU names RISC-V access faults fault_load/fault_store/fault_fetch,
+        # while translation faults use *_page_fault.  The previous oracle only
+        # accepted the latter and therefore reported false green on a real
+        # pre-MMU kernel load access fault.
+        if "fault" not in desc:
+            continue
         epc = int(match.group(1), 16)
         tval = int(match.group(2), 16)
-        desc = match.group(3)
         lookup = epc
         relocated = False
-        if relocation_delta is not None and epc < anchor_address:
+        if (
+            relocation_delta is not None
+            and anchor_address is not None
+            and args.phys_entry <= epc < anchor_address
+        ):
             lookup = epc + relocation_delta
             relocated = True
         symbol, offset = resolve(symbols, addresses, lookup)
         faults.append((epc, tval, desc, lookup, relocated, symbol, offset))
+
+    # OpenSBI may deliberately probe unsupported instructions below the Linux
+    # physical entry.  Keep those outside the kernel first-fault verdict while
+    # still treating every fault at/after the Linux entry as evidence.
+    kernel_faults = [fault for fault in faults if fault[0] >= args.phys_entry]
 
     def executed(name: str) -> bool:
         address = by_name.get(name)
@@ -104,26 +117,41 @@ def main() -> int:
             candidates.append(address - relocation_delta)
         return any(f"0x{candidate:016x}:" in trace for candidate in candidates)
 
-    expected_mmu = [fault for fault in faults if is_expected_mmu_transition_fault(fault)]
+    expected_mmu = [
+        fault for fault in kernel_faults if is_expected_mmu_transition_fault(fault)
+    ]
+    unexpected_kernel = [
+        fault for fault in kernel_faults if not is_expected_mmu_transition_fault(fault)
+    ]
+    page_faults = [fault for fault in kernel_faults if "page_fault" in fault[2]]
+    access_faults = [
+        fault
+        for fault in kernel_faults
+        if fault[2] in ("fault_load", "fault_store", "fault_fetch")
+    ]
     unexpected_exec = [
         fault
-        for fault in faults
+        for fault in kernel_faults
         if fault[2] == "exec_page_fault" and not is_expected_mmu_transition_fault(fault)
     ]
     guard_faults = [
         fault
-        for fault in faults
-        if fault[2] in ("store_page_fault", "load_page_fault")
+        for fault in kernel_faults
+        if fault[2] in ("store_page_fault", "load_page_fault", "fault_store", "fault_load")
         and 0xFF1FFFFFFFF00000 <= fault[1] < 0xFF20000000000000
     ]
-    null_faults = [fault for fault in faults if fault[1] == 0]
+    null_faults = [fault for fault in kernel_faults if fault[1] == 0]
     bad_stack = executed("handle_kernel_stack_overflow") or executed("handle_bad_stack")
     panic = executed("panic") or "Kernel panic" in console
     banner = "Linux version" in console
 
     print(f"QEMU_RC={args.qemu_rc}")
-    print(f"PAGE_FAULTS={len(faults)}")
+    print(f"FAULTS={len(faults)}")
+    print(f"KERNEL_FAULTS={len(kernel_faults)}")
+    print(f"PAGE_FAULTS={len(page_faults)}")
+    print(f"ACCESS_FAULTS={len(access_faults)}")
     print(f"EXPECTED_MMU_EXEC_FAULTS={len(expected_mmu)}")
+    print(f"UNEXPECTED_KERNEL_FAULTS={len(unexpected_kernel)}")
     print(f"UNEXPECTED_EXEC_PAGE_FAULTS={len(unexpected_exec)}")
     print(f"IRQ_GUARD_RANGE_FAULTS={len(guard_faults)}")
     print(f"NULL_PAGE_FAULTS={len(null_faults)}")
@@ -135,7 +163,7 @@ def main() -> int:
     if relocation_delta is not None:
         print(f"EARLY_PHYS_TO_LINK_DELTA=0x{relocation_delta:x}")
 
-    for index, fault in enumerate(faults[:12]):
+    for index, fault in enumerate(kernel_faults[:12]):
         epc, tval, desc, lookup, relocated, symbol, offset = fault
         classification = "expected-mmu" if is_expected_mmu_transition_fault(fault) else "unexpected"
         print(
@@ -146,7 +174,7 @@ def main() -> int:
             f" symbol={symbol}+0x{offset:x}"
         )
 
-    if guard_faults or bad_stack or panic or unexpected_exec:
+    if unexpected_kernel or guard_faults or bad_stack or panic or unexpected_exec:
         return 1
     return 0
 
