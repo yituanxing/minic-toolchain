@@ -1,0 +1,216 @@
+name: Linux IDR XArray Runtime V0
+
+on:
+  push:
+    branches: ["agent/linux-expanded-kbuild-v0"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: linux-idr-xarray-runtime-v0-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  runtime:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[linux-idr-xarray-runtime-v0]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    strategy:
+      fail-fast: false
+      matrix:
+        case: [baseline-idr-xarray, reuse-idr-xarray]
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Restore known linked Linux cache
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-expanded-kbuild-v0/out
+          key: linux-expanded-mixed-v1-6.6.143-Linux-d30569a4c675f6ac72d9f63c28f0b8745317f7a15c0799d10768f916d74b3a88
+          fail-on-cache-miss: true
+
+      - name: Install focused prerequisites
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get -o Acquire::Retries=3 update >/dev/null
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            build-essential gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu libc6-dev-riscv64-cross \
+            bc bison flex libssl-dev libelf-dev make curl xz-utils python3 \
+            qemu-system-misc opensbi file >/dev/null
+
+      - name: Build selected MiniC mode
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          case_name='${{ matrix.case }}'
+          if [[ "$case_name" == reuse-* ]]; then mode=reuse; else mode=baseline; fi
+          work="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0"
+          ev="$GITHUB_WORKSPACE/build/linux-idr-xarray-runtime-v0/$case_name"
+          mkdir -p "$ev"
+          patches=(
+            apply-local-integer-assignment-v2.py
+            apply-local-integer-logical-conditions-v0.py
+            apply-local-null-pointer-facts-v0.py
+            apply-builtin-constant-p-local-facts-v0.py
+            apply-inline-integer-specialization-v0.py
+            apply-inline-specialization-local-facts-v0.py
+            apply-inline-specialization-stable-parameter-facts-v0.py
+            apply-inline-specialization-transitive-integer-v0.py
+            apply-inline-specialization-base-callee-integer-v0.py
+            apply-inline-specialization-capacity-v0.py
+            apply-inline-specialization-symbolic-address-v0.py
+            apply-inline-specialization-symbolic-nested-array-v0.py
+            apply-inline-specialization-symbolic-integer-closure-v0.py
+            apply-inline-specialization-symbolic-transitive-rewrite-v0.py
+            apply-inline-specialization-symbolic-array-lvalue-v0.py
+            apply-inline-specialization-symbolic-closed-integers-v0.py
+            apply-inline-specialization-base-callee-symbolic-v0.py
+            apply-inline-specialization-resolved-asm-goto-v0.py
+            apply-inline-specialization-core-reachability-v0.py
+            apply-inline-specialization-original-reachability-v0.py
+            apply-inline-asm-local-integer-facts-v0.py
+            apply-inline-asm-rk-early-v0.py
+            apply-inline-asm-rk-early-hotfix-v0.py
+            apply-inline-asm-rk-tail-rollback-v0.py
+            apply-inline-asm-rk-cast-tail-v0.py
+            apply-inline-specialization-core-empty-function-v0.py
+            apply-inline-specialization-label-alias-v0.py
+            apply-riscv64-default-text-section-v0.py
+            apply-riscv64-explicit-section-flags-v0.py
+            apply-inline-asm-symbolic-specialization-v0.py
+          )
+          if [[ "$mode" == reuse ]]; then
+            patches+=(apply-riscv64-core-value-slot-pack-v0.py apply-riscv64-core-value-slot-reuse-v0.py)
+          fi
+          start=$(date +%s%N)
+          for p in "${patches[@]}"; do python3 "tools/ci/$p" >>"$ev/patch.log"; done
+          git diff --check
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$work/toolchain-$mode" \
+            "$work/toolchain-$mode/bin/minic" "$work/toolchain-$mode/bin/minic-cc" >/dev/null
+          end=$(date +%s%N)
+          python3 - "$start" "$end" <<'PY' | tee "$ev/timing.txt"
+          import sys
+          a,b=map(int,sys.argv[1:])
+          print(f"TIMING toolchain_ms={(b-a)//1_000_000}")
+          PY
+          echo "MODE=$mode" | tee "$ev/mode.txt"
+
+      - name: Rebuild only IDR and XArray owners
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          case_name='${{ matrix.case }}'
+          if [[ "$case_name" == reuse-* ]]; then mode=reuse; else mode=baseline; fi
+          work="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0"
+          src="$work/linux-6.6.143"
+          archive="$work/linux-6.6.143.tar.xz"
+          out="$work/out"
+          ev="$GITHUB_WORKSPACE/build/linux-idr-xarray-runtime-v0/$case_name"
+          wrapper="$GITHUB_WORKSPACE/tests/external/linux/stage2_kbuild_cc.sh"
+          test -s "$out/.config"
+
+          curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors \
+            https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.6.143.tar.xz -o "$archive"
+          printf '%s  %s\n' dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932 "$archive" | sha256sum -c -
+          rm -rf "$src" && tar -xJf "$archive" -C "$work"
+
+          targets=(lib/idr.o lib/xarray.o)
+          : >"$ev/targets.txt"
+          touch "$ev/rebuild-start.stamp"
+          for obj in "${targets[@]}"; do
+            echo "$obj" >>"$ev/targets.txt"
+            rm -f "$out/$obj" "$out/$(dirname "$obj")/.$(basename "$obj" .o).o.cmd"
+          done
+
+          start=$(date +%s%N)
+          MINIC="$work/toolchain-$mode/bin/minic" REAL_CC=/usr/bin/riscv64-linux-gnu-gcc \
+          MINIC_KEEP_INTERMEDIATES=1 MINIC_KBUILD_TRACE="$ev/refresh.trace" \
+          MINIC_CORE_FRAME_TRACE=1 CORE_FAST_TRACE=1 MINIC_LOCAL_FACT_TRACE=1 \
+            make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
+              CC="$wrapper" -j4 V=1 "${targets[@]}" >"$ev/refresh.log" 2>&1
+          end=$(date +%s%N)
+          python3 - "$start" "$end" <<'PY' | tee -a "$ev/timing.txt"
+          import sys
+          a,b=map(int,sys.argv[1:])
+          print(f"TIMING refresh_ms={(b-a)//1_000_000} objects=2")
+          PY
+
+          find "$out" -type f -name '*.minic.stderr' -newer "$ev/rebuild-start.stamp" -print0 2>/dev/null \
+            | xargs -0 -r cat >"$ev/minic-frame-trace.txt" || true
+          grep -E 'CORE_FRAME_REUSE function=(ida_alloc_range|xas_[^ ]+)' \
+            "$ev/minic-frame-trace.txt" | tee "$ev/idr-xarray-frames.txt" || true
+          riscv64-linux-gnu-nm -n "$out/lib/idr.o" >"$ev/idr.nm.txt" || true
+          riscv64-linux-gnu-nm -n "$out/lib/xarray.o" >"$ev/xarray.nm.txt" || true
+
+      - name: Relink and run first-fault oracle
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          case_name='${{ matrix.case }}'
+          if [[ "$case_name" == reuse-* ]]; then mode=reuse; else mode=baseline; fi
+          work="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0"
+          src="$work/linux-6.6.143"
+          out="$work/out"
+          ev="$GITHUB_WORKSPACE/build/linux-idr-xarray-runtime-v0/$case_name"
+          wrapper="$GITHUB_WORKSPACE/tests/external/linux/stage2_kbuild_cc.sh"
+
+          start=$(date +%s%N)
+          MINIC="$work/toolchain-$mode/bin/minic" REAL_CC=/usr/bin/riscv64-linux-gnu-gcc \
+          MINIC_KEEP_INTERMEDIATES=0 MINIC_KBUILD_TRACE="$ev/relink.trace" CORE_FAST_TRACE=1 \
+            make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
+              CC="$wrapper" -j4 V=1 Image >"$ev/relink.log" 2>&1
+          end=$(date +%s%N)
+          python3 - "$start" "$end" <<'PY' | tee -a "$ev/timing.txt"
+          import sys
+          a,b=map(int,sys.argv[1:])
+          print(f"TIMING relink_ms={(b-a)//1_000_000}")
+          PY
+          test -s "$out/arch/riscv/boot/Image"
+          riscv64-linux-gnu-nm -n "$out/vmlinux" >"$ev/vmlinux.nm.txt"
+
+          start=$(date +%s%N)
+          set +e
+          timeout --signal=TERM 8s qemu-system-riscv64 \
+            -M virt -cpu max -m 512M -smp 1 -nographic -no-reboot \
+            -bios default -kernel "$out/arch/riscv/boot/Image" \
+            -append 'console=ttyS0 earlycon=sbi loglevel=8 panic=-1' \
+            -d int,in_asm -D "$ev/qemu.trace.log" \
+            >"$ev/qemu.console.log" 2>&1
+          qemu_rc=$?
+          set -e
+          end=$(date +%s%N)
+          python3 - "$start" "$end" <<'PY' | tee -a "$ev/timing.txt"
+          import sys
+          a,b=map(int,sys.argv[1:])
+          print(f"TIMING qemu_ms={(b-a)//1_000_000}")
+          PY
+
+          grep -a 'riscv_cpu_do_interrupt' "$ev/qemu.trace.log" >"$ev/qemu.interrupts.txt" || true
+          tail -n 300 "$ev/qemu.console.log" >"$ev/qemu.console.tail.txt" || true
+          set +e
+          python3 tools/ci/linux-first-fault-analyzer-v1.py \
+            --interrupts "$ev/qemu.interrupts.txt" \
+            --nm "$ev/vmlinux.nm.txt" \
+            --trace "$ev/qemu.trace.log" \
+            --console "$ev/qemu.console.log" \
+            --qemu-rc "$qemu_rc" | tee "$ev/runtime-summary.txt"
+          analyzer_rc=${PIPESTATUS[0]}
+          set -e
+          echo "CASE=$case_name" | tee -a "$ev/runtime-summary.txt"
+          echo "ANALYZER_RC=$analyzer_rc" | tee -a "$ev/runtime-summary.txt"
+          exit "$analyzer_rc"
+
+      - name: Preserve runtime evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-idr-xarray-runtime-v0-${{ matrix.case }}
+          path: build/linux-idr-xarray-runtime-v0/${{ matrix.case }}/
+          if-no-files-found: ignore
+          retention-days: 7
