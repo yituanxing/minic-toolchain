@@ -32,9 +32,20 @@ def resolve(symbols, addresses, address):
     return name, address - base
 
 
+def is_expected_mmu_transition_fault(fault):
+    epc, tval, desc, _lookup, relocated, symbol, offset = fault
+    return (
+        desc == "exec_page_fault"
+        and relocated
+        and tval == epc
+        and symbol == "relocate_enable_mmu"
+        and offset == 0x48
+    )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Summarize the first RISC-V Linux runtime fault with early-boot relocation-aware symbols."
+        description="Summarize RISC-V Linux runtime faults with early-boot relocation-aware symbols."
     )
     parser.add_argument("--interrupts", required=True, type=Path)
     parser.add_argument("--nm", required=True, type=Path)
@@ -93,6 +104,12 @@ def main() -> int:
             candidates.append(address - relocation_delta)
         return any(f"0x{candidate:016x}:" in trace for candidate in candidates)
 
+    expected_mmu = [fault for fault in faults if is_expected_mmu_transition_fault(fault)]
+    unexpected_exec = [
+        fault
+        for fault in faults
+        if fault[2] == "exec_page_fault" and not is_expected_mmu_transition_fault(fault)
+    ]
     guard_faults = [
         fault
         for fault in faults
@@ -100,14 +117,14 @@ def main() -> int:
         and 0xFF1FFFFFFFF00000 <= fault[1] < 0xFF20000000000000
     ]
     null_faults = [fault for fault in faults if fault[1] == 0]
-    exec_faults = [fault for fault in faults if fault[2] == "exec_page_fault"]
     bad_stack = executed("handle_kernel_stack_overflow") or executed("handle_bad_stack")
     panic = executed("panic") or "Kernel panic" in console
     banner = "Linux version" in console
 
     print(f"QEMU_RC={args.qemu_rc}")
     print(f"PAGE_FAULTS={len(faults)}")
-    print(f"EXEC_PAGE_FAULTS={len(exec_faults)}")
+    print(f"EXPECTED_MMU_EXEC_FAULTS={len(expected_mmu)}")
+    print(f"UNEXPECTED_EXEC_PAGE_FAULTS={len(unexpected_exec)}")
     print(f"IRQ_GUARD_RANGE_FAULTS={len(guard_faults)}")
     print(f"NULL_PAGE_FAULTS={len(null_faults)}")
     print(f"BAD_STACK_PATH={1 if bad_stack else 0}")
@@ -120,15 +137,16 @@ def main() -> int:
 
     for index, fault in enumerate(faults[:12]):
         epc, tval, desc, lookup, relocated, symbol, offset = fault
+        classification = "expected-mmu" if is_expected_mmu_transition_fault(fault) else "unexpected"
         print(
             "FAULT"
-            f" index={index} desc={desc}"
+            f" index={index} class={classification} desc={desc}"
             f" epc=0x{epc:016x} tval=0x{tval:016x}"
             f" lookup=0x{lookup:016x} relocated={1 if relocated else 0}"
             f" symbol={symbol}+0x{offset:x}"
         )
 
-    if guard_faults or bad_stack or panic or (exec_faults and not banner):
+    if guard_faults or bad_stack or panic or unexpected_exec:
         return 1
     return 0
 
