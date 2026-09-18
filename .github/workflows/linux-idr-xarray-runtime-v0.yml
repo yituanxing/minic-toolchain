@@ -5,6 +5,7 @@ on:
     branches: ["agent/linux-expanded-kbuild-v0"]
   workflow_dispatch:
 
+# Focused gate is intentionally runnable from a marker push as well as manual dispatch.
 permissions:
   contents: read
 
