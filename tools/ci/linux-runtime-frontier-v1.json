@@ -1,0 +1,34 @@
+{
+  "schema": 1,
+  "name": "linux-6.6.143-early-runtime-strlen-frontier",
+  "phys_entry": "0x80200000",
+  "baseline": {
+    "fault": {
+      "desc": "fault_load",
+      "symbol": "strlen",
+      "offset": "0x6"
+    },
+    "progress_marker": "fdt-path",
+    "certified_by": {
+      "workflow_run": 35320118231,
+      "job": "runtime (baseline-idr-xarray)",
+      "commit": "190ec23c5f5822b67d83284a4092dc474338f05c"
+    }
+  },
+  "progress_markers": [
+    {"name": "kernel-entry", "symbol": "_start"},
+    {"name": "start-kernel-entry", "symbol": "_start_kernel"},
+    {"name": "clear-bss", "symbol": "clear_bss"},
+    {"name": "setup-vm", "symbol": "setup_vm"},
+    {"name": "satp-mode", "symbol": "set_satp_mode"},
+    {"name": "pi-cmdline", "symbol": "__pi_set_satp_mode_from_cmdline"},
+    {"name": "early-cmdline", "symbol": "__pi_get_early_cmdline"},
+    {"name": "fdt-path", "symbol": "__pi_fdt_path_offset"},
+    {"name": "trap-vector", "symbol": "setup_trap_vector"},
+    {"name": "start-kernel", "symbol": "start_kernel"}
+  ],
+  "pass_markers": {
+    "console_any": ["Linux version"],
+    "symbol_any": ["start_kernel"]
+  }
+}
