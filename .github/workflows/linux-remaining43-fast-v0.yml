@@ -14,6 +14,7 @@ concurrency:
 
 jobs:
   focused:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[linux-remaining43-fast-v0]')
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
