@@ -1,0 +1,130 @@
+name: Linux Runtime Fault Context V1
+
+on:
+  push:
+    branches: ["agent/linux-expanded-kbuild-v0"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: linux-runtime-fault-context-v1-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  fault-context:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[linux-runtime-fault-context-v1]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Restore certified compact linked fixture
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-runtime-link-v1/out
+          key: linux-runtime-link-v1-6.6.143-e538a6ad42ec49c5a667cab5de9bb943f82ca702ff2b7749a020e38ff7ddaea7
+          fail-on-cache-miss: true
+
+      - name: Restore certified frozen frontier inputs
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-runtime-frozen-v1
+          key: linux-runtime-frozen-v1-6.6.143-e538a6ad42ec49c5a667cab5de9bb943f82ca702ff2b7749a020e38ff7ddaea7
+          fail-on-cache-miss: true
+
+      - name: Install focused prerequisites without update
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-fault-context-v1"
+          mkdir -p "$ev"
+          mode=no-update
+          if ! sudo apt-get -o Acquire::Retries=2 install -y --no-install-recommends \
+              gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu qemu-system-misc opensbi python3 \
+              >"$ev/apt.stdout.txt" 2>"$ev/apt.stderr.txt"; then
+            mode=fallback-update
+            sudo apt-get -o Acquire::Retries=3 update >>"$ev/apt.stdout.txt" 2>>"$ev/apt.stderr.txt"
+            sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+              gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu qemu-system-misc opensbi python3 \
+              >>"$ev/apt.stdout.txt" 2>>"$ev/apt.stderr.txt"
+          fi
+          echo "INSTALL_MODE=$mode"
+
+      - name: Build current MiniC profile and replay current owners
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          out="$GITHUB_WORKSPACE/build/linux-runtime-link-v1/out"
+          frozen="$GITHUB_WORKSPACE/build/linux-runtime-frozen-v1"
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-fault-context-v1"
+          build="$GITHUB_WORKSPACE/build/toolchain-runtime-fault-context-v1"
+          wrapper="$GITHUB_WORKSPACE/tests/external/linux/stage2_kbuild_cc.sh"
+          bash tools/ci/linux-runtime-build-minic-profile-v1.sh "$build" "$ev/profile"
+          mapfile -t asm_args <"$frozen/asm-args.txt"
+          MINIC="$build/bin/minic" REAL_CC=/usr/bin/riscv64-linux-gnu-gcc \
+          MINIC_KEEP_INTERMEDIATES=1 MINIC_KBUILD_TRACE="$ev/replay.trace" \
+            "$wrapper" "${asm_args[@]}" -c -o "$out/lib/idr.o" "$frozen/lib__idr.i"
+          MINIC="$build/bin/minic" REAL_CC=/usr/bin/riscv64-linux-gnu-gcc \
+          MINIC_KEEP_INTERMEDIATES=1 MINIC_KBUILD_TRACE="$ev/replay.trace" \
+            "$wrapper" "${asm_args[@]}" -c -o "$out/lib/xarray.o" "$frozen/lib__xarray.i"
+          sha256sum "$out/lib/idr.o" "$out/lib/xarray.o" | tee "$ev/objects.sha256"
+
+      - name: Build exact current early image
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          out="$GITHUB_WORKSPACE/build/linux-runtime-link-v1/out"
+          frozen="$GITHUB_WORKSPACE/build/linux-runtime-frozen-v1"
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-fault-context-v1"
+          bash tools/ci/linux-early-runtime-link-v2.sh "$frozen/src" "$out" "$ev/early"
+
+      - name: Capture first fault and dynamic caller context
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-fault-context-v1"
+          set +e
+          python3 tools/ci/linux-runtime-qemu-watch-v1.py \
+            --config tools/ci/linux-runtime-frontier-v1.json \
+            --nm "$ev/early/nm.txt" --image "$ev/early/Image.early" \
+            --evidence-dir "$ev/watch" --timeout-ms 8000 --poll-ms 100 \
+            | tee "$ev/watch.stdout.txt"
+          watch_rc=${PIPESTATUS[0]}
+          set -e
+          test "$watch_rc" -eq 1
+          python3 tools/ci/linux-runtime-fault-context-v1.py \
+            --nm "$ev/early/nm.txt" \
+            --trace "$ev/watch/qemu.trace.log" \
+            --frontier-json "$ev/watch/frontier-result.json" \
+            --vmlinux "$ev/early/vmlinux.early" \
+            --out "$ev/fault-context.json" \
+            | tee "$ev/fault-context.txt"
+          {
+            echo '## Linux Runtime Fault Context V1'
+            echo
+            echo '```text'
+            cat "$ev/watch/frontier-summary.txt"
+            cat "$ev/fault-context.txt"
+            echo '```'
+          } >>"$GITHUB_STEP_SUMMARY"
+
+      - name: Preserve focused evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-runtime-fault-context-v1-${{ github.sha }}
+          path: |
+            build/linux-runtime-fault-context-v1/fault-context.json
+            build/linux-runtime-fault-context-v1/fault-context.txt
+            build/linux-runtime-fault-context-v1/watch/frontier-result.json
+            build/linux-runtime-fault-context-v1/watch/frontier-summary.txt
+            build/linux-runtime-fault-context-v1/watch/watch-result.json
+            build/linux-runtime-fault-context-v1/watch/qemu.interrupts.txt
+            build/linux-runtime-fault-context-v1/objects.sha256
+            build/linux-runtime-fault-context-v1/replay.trace
+          if-no-files-found: warn
+          retention-days: 7
