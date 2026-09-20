@@ -1,0 +1,159 @@
+name: Linux Runtime PI Local Symbol V0
+
+on:
+  push:
+    branches: ["agent/linux-expanded-kbuild-v0"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: linux-runtime-pi-local-symbol-v0-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pi-local-symbol:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[linux-runtime-pi-local-symbol-v0]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Restore certified compact linked fixture
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-runtime-link-v1/out
+          key: linux-runtime-link-v1-6.6.143-e538a6ad42ec49c5a667cab5de9bb943f82ca702ff2b7749a020e38ff7ddaea7
+          fail-on-cache-miss: true
+
+      - name: Restore certified frozen frontier inputs
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-runtime-frozen-v1
+          key: linux-runtime-frozen-v1-6.6.143-e538a6ad42ec49c5a667cab5de9bb943f82ca702ff2b7749a020e38ff7ddaea7
+          fail-on-cache-miss: true
+
+      - name: Install focused prerequisites without update
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-pi-local-symbol-v0"
+          mkdir -p "$ev"
+          mode=no-update
+          if ! sudo apt-get -o Acquire::Retries=2 install -y --no-install-recommends \
+              gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu qemu-system-misc opensbi python3 \
+              >"$ev/apt.stdout.txt" 2>"$ev/apt.stderr.txt"; then
+            mode=fallback-update
+            sudo apt-get -o Acquire::Retries=3 update >>"$ev/apt.stdout.txt" 2>>"$ev/apt.stderr.txt"
+            sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+              gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu qemu-system-misc opensbi python3 \
+              >>"$ev/apt.stdout.txt" 2>>"$ev/apt.stderr.txt"
+          fi
+          echo "INSTALL_MODE=$mode"
+
+      - name: Build MiniC profile with PI-local-symbol fix
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-pi-local-symbol-v0"
+          build="$GITHUB_WORKSPACE/build/toolchain-runtime-pi-local-symbol-v0"
+          bash tools/ci/linux-runtime-build-minic-profile-v1.sh "$build" "$ev/profile"
+          grep -F 'MINIC_RISCV64_PI_LOCAL_SYMBOL_ADDRESS_V0=APPLIED' "$ev/profile/patch.log"
+
+      - name: Prove local symbols use lla and extern symbols keep la
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-pi-local-symbol-v0"
+          build="$GITHUB_WORKSPACE/build/toolchain-runtime-pi-local-symbol-v0"
+          cat >"$ev/pi-local-symbol.i" <<'EOF'
+          extern int ext_symbol;
+          const char *local_string_addr(void) { return "minic-pi-local"; }
+          int *external_object_addr(void) { return &ext_symbol; }
+          EOF
+          "$build/bin/minic" -S "$ev/pi-local-symbol.i" -o "$ev/pi-local-symbol.s"
+          grep -E '^[[:space:]]+lla[[:space:]]+t0,[[:space:]]*\.Lminic_string_[0-9]+' "$ev/pi-local-symbol.s"
+          grep -E '^[[:space:]]+la[[:space:]]+t0,[[:space:]]*ext_symbol$' "$ev/pi-local-symbol.s"
+          if grep -E '^[[:space:]]+lla[[:space:]]+t0,[[:space:]]*ext_symbol$' "$ev/pi-local-symbol.s"; then
+            echo 'PI_LOCAL_SYMBOL_SYNTHETIC=FAIL extern unexpectedly lowered with lla' >&2
+            exit 1
+          fi
+          echo 'PI_LOCAL_SYMBOL_SYNTHETIC=PASS local=lla extern=la'
+
+      - name: Replay only current frontier owners from frozen inputs
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          out="$GITHUB_WORKSPACE/build/linux-runtime-link-v1/out"
+          frozen="$GITHUB_WORKSPACE/build/linux-runtime-frozen-v1"
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-pi-local-symbol-v0"
+          build="$GITHUB_WORKSPACE/build/toolchain-runtime-pi-local-symbol-v0"
+          wrapper="$GITHUB_WORKSPACE/tests/external/linux/stage2_kbuild_cc.sh"
+          mapfile -t asm_args <"$frozen/asm-args.txt"
+          start=$(date +%s%N)
+          MINIC="$build/bin/minic" REAL_CC=/usr/bin/riscv64-linux-gnu-gcc \
+          MINIC_KEEP_INTERMEDIATES=1 MINIC_KBUILD_TRACE="$ev/replay.trace" \
+            "$wrapper" "${asm_args[@]}" -c -o "$out/lib/idr.o" "$frozen/lib__idr.i"
+          MINIC="$build/bin/minic" REAL_CC=/usr/bin/riscv64-linux-gnu-gcc \
+          MINIC_KEEP_INTERMEDIATES=1 MINIC_KBUILD_TRACE="$ev/replay.trace" \
+            "$wrapper" "${asm_args[@]}" -c -o "$out/lib/xarray.o" "$frozen/lib__xarray.i"
+          end=$(date +%s%N)
+          echo "TIMING replay_ms=$(((end-start)/1000000)) objects=2" | tee "$ev/timing.txt"
+          sha256sum "$out/lib/idr.o" "$out/lib/xarray.o" | tee "$ev/objects.sha256"
+
+      - name: Build exact early image with certified compact linker
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          out="$GITHUB_WORKSPACE/build/linux-runtime-link-v1/out"
+          frozen="$GITHUB_WORKSPACE/build/linux-runtime-frozen-v1"
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-pi-local-symbol-v0"
+          bash tools/ci/linux-early-runtime-link-v2.sh "$frozen/src" "$out" "$ev/early"
+          cat "$ev/early/timing.txt" >>"$ev/timing.txt"
+
+      - name: Execute until runtime oracle decides
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-pi-local-symbol-v0"
+          set +e
+          python3 tools/ci/linux-runtime-qemu-watch-v1.py \
+            --config tools/ci/linux-runtime-frontier-v1.json \
+            --nm "$ev/early/nm.txt" --image "$ev/early/Image.early" \
+            --evidence-dir "$ev/watch" --timeout-ms 8000 --poll-ms 100 \
+            | tee "$ev/watch.stdout.txt"
+          watch_rc=${PIPESTATUS[0]}
+          set -e
+          {
+            echo '## Linux Runtime PI Local Symbol V0'
+            echo
+            echo '```text'
+            cat "$ev/watch/frontier-summary.txt" || true
+            cat "$ev/timing.txt" || true
+            echo "WATCH_RC=$watch_rc"
+            echo '```'
+          } >>"$GITHUB_STEP_SUMMARY"
+          exit "$watch_rc"
+
+      - name: Preserve focused evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-runtime-pi-local-symbol-v0-${{ github.sha }}
+          path: |
+            build/linux-runtime-pi-local-symbol-v0/profile/patch.log
+            build/linux-runtime-pi-local-symbol-v0/profile/minic-profile.txt
+            build/linux-runtime-pi-local-symbol-v0/pi-local-symbol.i
+            build/linux-runtime-pi-local-symbol-v0/pi-local-symbol.s
+            build/linux-runtime-pi-local-symbol-v0/objects.sha256
+            build/linux-runtime-pi-local-symbol-v0/replay.trace
+            build/linux-runtime-pi-local-symbol-v0/timing.txt
+            build/linux-runtime-pi-local-symbol-v0/watch/frontier-result.json
+            build/linux-runtime-pi-local-symbol-v0/watch/frontier-summary.txt
+            build/linux-runtime-pi-local-symbol-v0/watch/watch-result.json
+            build/linux-runtime-pi-local-symbol-v0/watch/qemu.interrupts.txt
+          if-no-files-found: warn
+          retention-days: 7
