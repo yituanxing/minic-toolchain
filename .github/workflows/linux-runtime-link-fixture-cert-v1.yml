@@ -1,0 +1,185 @@
+name: Linux Runtime Link Fixture Cert V1
+
+on:
+  push:
+    branches: ["agent/linux-expanded-kbuild-v0"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: linux-runtime-link-fixture-cert-v1-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  compact-cert:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[linux-runtime-link-fixture-cert-v1]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Restore full certified linked fixture for certification only
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-expanded-kbuild-v0/out
+          key: linux-expanded-mixed-v1-6.6.143-Linux-d30569a4c675f6ac72d9f63c28f0b8745317f7a15c0799d10768f916d74b3a88
+          fail-on-cache-miss: true
+
+      - name: Restore certified frozen source/link inputs
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-runtime-frozen-v1
+          key: linux-runtime-frozen-v1-6.6.143-e538a6ad42ec49c5a667cab5de9bb943f82ca702ff2b7749a020e38ff7ddaea7
+          fail-on-cache-miss: true
+
+      - name: Verify frozen fixture and oracle contracts
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 tools/ci/linux-runtime-frontier-v1.py --self-test
+          bash tools/ci/linux-runtime-frozen-verify-v1.sh build/linux-runtime-frozen-v1
+
+      - name: Install minimal terminal-link prerequisites without update
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-link-fixture-cert-v1"
+          mkdir -p "$ev"
+          start=$(date +%s%N)
+          mode=no-update
+          if ! sudo apt-get -o Acquire::Retries=2 install -y --no-install-recommends \
+              binutils-riscv64-linux-gnu qemu-system-misc opensbi python3 \
+              >"$ev/apt.stdout.txt" 2>"$ev/apt.stderr.txt"; then
+            mode=fallback-update
+            sudo apt-get -o Acquire::Retries=3 update >>"$ev/apt.stdout.txt" 2>>"$ev/apt.stderr.txt"
+            sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+              binutils-riscv64-linux-gnu qemu-system-misc opensbi python3 \
+              >>"$ev/apt.stdout.txt" 2>>"$ev/apt.stderr.txt"
+          fi
+          end=$(date +%s%N)
+          echo "TIMING install_ms=$(((end-start)/1000000)) mode=$mode" | tee "$ev/timing.txt"
+
+      - name: Construct compact fixture from exact thin-archive graph
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          full="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0/out"
+          root="$GITHUB_WORKSPACE/build/linux-runtime-link-fixture-cert-v1"
+          compact="$GITHUB_WORKSPACE/build/linux-runtime-link-v1/out"
+          start=$(date +%s%N)
+          bash tools/ci/linux-runtime-link-fixture-v1.sh "$full" "$compact" \
+            | tee "$root/fixture-build.txt"
+          end=$(date +%s%N)
+          echo "TIMING fixture_build_ms=$(((end-start)/1000000))" | tee -a "$root/timing.txt"
+          du -sb "$full" "$compact" | tee "$root/fixture-size.txt"
+          wc -l "$compact/link-files.txt" | tee "$root/fixture-files.txt"
+
+      - name: Link compact fixture first
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          root="$GITHUB_WORKSPACE/build/linux-runtime-link-fixture-cert-v1"
+          compact="$GITHUB_WORKSPACE/build/linux-runtime-link-v1/out"
+          frozen="$GITHUB_WORKSPACE/build/linux-runtime-frozen-v1"
+          bash tools/ci/linux-early-runtime-link-v2.sh "$frozen/src" "$compact" "$root/compact"
+          cat "$root/compact/timing.txt" >>"$root/timing.txt"
+
+      - name: Link full reference fixture
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          root="$GITHUB_WORKSPACE/build/linux-runtime-link-fixture-cert-v1"
+          full="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0/out"
+          frozen="$GITHUB_WORKSPACE/build/linux-runtime-frozen-v1"
+          bash tools/ci/linux-early-runtime-link-v2.sh "$frozen/src" "$full" "$root/full"
+          cat "$root/full/timing.txt" >>"$root/timing.txt"
+
+      - name: Prove exact compact/full binary equivalence
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          root="$GITHUB_WORKSPACE/build/linux-runtime-link-fixture-cert-v1"
+          cmp -s "$root/full/vmlinux.early" "$root/compact/vmlinux.early"
+          cmp -s "$root/full/Image.early" "$root/compact/Image.early"
+          diff -u "$root/full/nm.txt" "$root/compact/nm.txt" >"$root/nm.diff" || {
+            cat "$root/nm.diff"
+            exit 1
+          }
+          echo 'COMPACT_LINK_BINARY_EQUIVALENCE=PASS' | tee -a "$root/timing.txt"
+
+      - name: Execute compact fixture and classify frontier
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          root="$GITHUB_WORKSPACE/build/linux-runtime-link-fixture-cert-v1"
+          start=$(date +%s%N)
+          set +e
+          timeout --signal=TERM 8s qemu-system-riscv64 \
+            -M virt -cpu max -m 512M -smp 1 -nographic -no-reboot \
+            -bios default -kernel "$root/compact/Image.early" \
+            -append 'console=ttyS0 earlycon=sbi loglevel=8 panic=-1' \
+            -d int,in_asm -D "$root/qemu.trace.log" \
+            >"$root/qemu.console.log" 2>&1
+          qemu_rc=$?
+          set -e
+          end=$(date +%s%N)
+          echo "TIMING qemu_ms=$(((end-start)/1000000)) rc=$qemu_rc" | tee -a "$root/timing.txt"
+          grep -a 'riscv_cpu_do_interrupt' "$root/qemu.trace.log" >"$root/qemu.interrupts.txt" || true
+          set +e
+          python3 tools/ci/linux-runtime-frontier-v1.py \
+            --config tools/ci/linux-runtime-frontier-v1.json \
+            --interrupts "$root/qemu.interrupts.txt" --nm "$root/compact/nm.txt" \
+            --trace "$root/qemu.trace.log" --console "$root/qemu.console.log" \
+            --qemu-rc "$qemu_rc" --json-out "$root/frontier-result.json" \
+            --text-out "$root/frontier-summary.txt"
+          classifier_rc=$?
+          set -e
+          verdict=$(python3 -c 'import json; print(json.load(open("build/linux-runtime-link-fixture-cert-v1/frontier-result.json"))["verdict"])')
+          test "$verdict" = SAME_FAULT
+          echo "COMPACT_LINK_RUNTIME_ORACLE=PASS verdict=$verdict classifier_rc=$classifier_rc" | tee -a "$root/timing.txt"
+
+      - name: Save certified compact link fixture
+        uses: actions/cache/save@v4
+        with:
+          path: build/linux-runtime-link-v1/out
+          key: linux-runtime-link-v1-6.6.143-e538a6ad42ec49c5a667cab5de9bb943f82ca702ff2b7749a020e38ff7ddaea7
+
+      - name: Write certification summary
+        if: always()
+        shell: bash
+        run: |
+          root="$GITHUB_WORKSPACE/build/linux-runtime-link-fixture-cert-v1"
+          {
+            echo '## Linux Runtime Link Fixture Cert V1'
+            echo
+            echo '```text'
+            cat "$root/frontier-summary.txt" 2>/dev/null || true
+            cat "$root/fixture-build.txt" 2>/dev/null || true
+            cat "$root/fixture-size.txt" 2>/dev/null || true
+            cat "$root/timing.txt" 2>/dev/null || true
+            echo '```'
+          } >>"$GITHUB_STEP_SUMMARY"
+
+      - name: Preserve compact certification evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-runtime-link-fixture-cert-v1-${{ github.sha }}
+          path: |
+            build/linux-runtime-link-fixture-cert-v1/frontier-result.json
+            build/linux-runtime-link-fixture-cert-v1/frontier-summary.txt
+            build/linux-runtime-link-fixture-cert-v1/timing.txt
+            build/linux-runtime-link-fixture-cert-v1/fixture-build.txt
+            build/linux-runtime-link-fixture-cert-v1/fixture-size.txt
+            build/linux-runtime-link-fixture-cert-v1/fixture-files.txt
+            build/linux-runtime-link-fixture-cert-v1/nm.diff
+            build/linux-runtime-link-fixture-cert-v1/full/sha256.txt
+            build/linux-runtime-link-fixture-cert-v1/compact/sha256.txt
+            build/linux-runtime-link-v1/out/link-files.txt
+            build/linux-runtime-link-v1/out/link-files.sha256
+          if-no-files-found: warn
+          retention-days: 7
