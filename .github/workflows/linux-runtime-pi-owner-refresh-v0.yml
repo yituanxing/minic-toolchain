@@ -70,6 +70,7 @@ jobs:
           bash tools/ci/linux-runtime-build-minic-profile-v1.sh "$build" "$ev/profile"
           grep -F 'MINIC_RV64_STATIC_PCREL_GLOBAL_ADDRESS_V0=' "$ev/profile/patch.log"
           grep -F 'MINIC_RV64_STATIC_PCREL_FUNCTION_ADDRESS_V0=' "$ev/profile/patch.log"
+          grep -F 'MINIC_RISCV64_PI_LOCAL_SYMBOL_ADDRESS_V0=APPLIED' "$ev/profile/patch.log"
 
       - name: Rebuild true PI string owner only
         shell: bash
@@ -126,7 +127,7 @@ jobs:
           bash tools/ci/linux-early-runtime-link-v2.sh "$frozen/src" "$work/out" "$ev/early"
           cat "$ev/early/timing.txt" >>"$ev/timing.txt"
 
-      - name: Execute until runtime oracle decides
+      - name: Execute until runtime oracle decides and capture fault context
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -139,13 +140,30 @@ jobs:
             | tee "$ev/watch.stdout.txt"
           watch_rc=${PIPESTATUS[0]}
           set -e
+
+          context_rc=0
+          if test -s "$ev/watch/frontier-result.json" && test -s "$ev/watch/qemu.trace.log"; then
+            set +e
+            python3 tools/ci/linux-runtime-fault-context-v1.py \
+              --nm "$ev/early/nm.txt" \
+              --trace "$ev/watch/qemu.trace.log" \
+              --frontier-json "$ev/watch/frontier-result.json" \
+              --vmlinux "$ev/early/vmlinux.early" \
+              --out "$ev/fault-context.json" \
+              | tee "$ev/fault-context.txt"
+            context_rc=${PIPESTATUS[0]}
+            set -e
+          fi
+
           {
             echo '## Linux Runtime PI Owner Refresh V0'
             echo
             echo '```text'
             cat "$ev/watch/frontier-summary.txt" || true
+            cat "$ev/fault-context.txt" || true
             cat "$ev/timing.txt" || true
             echo "WATCH_RC=$watch_rc"
+            echo "FAULT_CONTEXT_RC=$context_rc"
             echo '```'
           } >>"$GITHUB_STEP_SUMMARY"
           exit "$watch_rc"
@@ -165,6 +183,8 @@ jobs:
             build/linux-runtime-pi-owner-refresh-v0/address-lines.txt
             build/linux-runtime-pi-owner-refresh-v0/cmdline_early.minic-stage2.s
             build/linux-runtime-pi-owner-refresh-v0/timing.txt
+            build/linux-runtime-pi-owner-refresh-v0/fault-context.json
+            build/linux-runtime-pi-owner-refresh-v0/fault-context.txt
             build/linux-runtime-pi-owner-refresh-v0/watch/frontier-result.json
             build/linux-runtime-pi-owner-refresh-v0/watch/frontier-summary.txt
             build/linux-runtime-pi-owner-refresh-v0/watch/watch-result.json
