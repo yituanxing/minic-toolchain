@@ -46,6 +46,21 @@ def classify(repo: Path, config: Path, nm: Path, trace: Path, console: Path,
     return result, proc.returncode
 
 
+def probe_decisive(result):
+    if not result:
+        return False
+    verdict = result.get("verdict")
+    if verdict in TERMINAL:
+        return True
+    # Once the classifier has identified a concrete unexpected first fault,
+    # continuing execution cannot make that first fault more trustworthy.  In
+    # particular, a broken early trap path can otherwise spin in millions of
+    # secondary faults and turn an 8s oracle into a much longer trace storm.
+    # Keep no-fault INCONCLUSIVE probes running so later progress/pass evidence
+    # can still arrive before the hard timeout.
+    return verdict == "INCONCLUSIVE" and result.get("fault") is not None
+
+
 def stop_process(proc: subprocess.Popen):
     if proc.poll() is not None:
         return proc.returncode
@@ -117,16 +132,19 @@ def main():
                 stop_reason = "hard-timeout"
                 break
 
-            # The classifier ignores the known relocate_enable_mmu transition fault,
-            # so a terminal verdict here is already sufficient evidence to stop.
+            # The classifier ignores the known relocate_enable_mmu transition fault.
+            # A terminal verdict, or an INCONCLUSIVE verdict backed by a concrete
+            # unexpected first fault, is sufficient evidence to stop immediately.
             result, _ = classify(
                 repo, args.config.resolve(), args.nm.resolve(), trace, console,
                 interrupts, 124, probe_json, probe_text,
             )
             polls += 1
-            if result and result.get("verdict") in TERMINAL:
+            if probe_decisive(result):
                 terminal_probe = result
-                stop_reason = f'oracle:{result["verdict"]}'
+                verdict = result.get("verdict", "unknown")
+                suffix = ":fault" if verdict == "INCONCLUSIVE" else ""
+                stop_reason = f"oracle:{verdict}{suffix}"
                 qemu_rc = stop_process(proc)
                 break
             time.sleep(max(args.poll_ms, 10) / 1000.0)
