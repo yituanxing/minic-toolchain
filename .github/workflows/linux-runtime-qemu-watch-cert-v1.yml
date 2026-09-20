@@ -1,0 +1,177 @@
+name: Linux Runtime QEMU Watch Cert V1
+
+on:
+  push:
+    branches: ["agent/linux-expanded-kbuild-v0"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: linux-runtime-qemu-watch-cert-v1-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  qemu-watch-cert:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[linux-runtime-qemu-watch-cert-v1]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Restore certified compact linked fixture
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-runtime-link-v1/out
+          key: linux-runtime-link-v1-6.6.143-e538a6ad42ec49c5a667cab5de9bb943f82ca702ff2b7749a020e38ff7ddaea7
+          fail-on-cache-miss: true
+
+      - name: Restore certified frozen frontier inputs
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-runtime-frozen-v1
+          key: linux-runtime-frozen-v1-6.6.143-e538a6ad42ec49c5a667cab5de9bb943f82ca702ff2b7749a020e38ff7ddaea7
+          fail-on-cache-miss: true
+
+      - name: Verify oracle and fixture contracts
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 tools/ci/linux-runtime-frontier-v1.py --self-test
+          bash tools/ci/linux-runtime-frozen-verify-v1.sh build/linux-runtime-frozen-v1
+          out="$GITHUB_WORKSPACE/build/linux-runtime-link-v1/out"
+          (cd "$out" && sha256sum -c link-files.sha256 >/dev/null)
+          echo 'QEMU_WATCH_FIXTURE=PASS'
+
+      - name: Install minimal runtime prerequisites without update
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-qemu-watch-cert-v1"
+          mkdir -p "$ev"
+          start=$(date +%s%N)
+          mode=no-update
+          if ! sudo apt-get -o Acquire::Retries=2 install -y --no-install-recommends \
+              binutils-riscv64-linux-gnu qemu-system-misc opensbi python3 \
+              >"$ev/apt.stdout.txt" 2>"$ev/apt.stderr.txt"; then
+            mode=fallback-update
+            sudo apt-get -o Acquire::Retries=3 update >>"$ev/apt.stdout.txt" 2>>"$ev/apt.stderr.txt"
+            sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+              binutils-riscv64-linux-gnu qemu-system-misc opensbi python3 \
+              >>"$ev/apt.stdout.txt" 2>>"$ev/apt.stderr.txt"
+          fi
+          end=$(date +%s%N)
+          echo "TIMING install_ms=$(((end-start)/1000000)) mode=$mode" | tee "$ev/timing.txt"
+
+      - name: Build certified early image
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          out="$GITHUB_WORKSPACE/build/linux-runtime-link-v1/out"
+          frozen="$GITHUB_WORKSPACE/build/linux-runtime-frozen-v1"
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-qemu-watch-cert-v1"
+          bash tools/ci/linux-early-runtime-link-v2.sh "$frozen/src" "$out" "$ev/early"
+          cat "$ev/early/timing.txt" >>"$ev/timing.txt"
+
+      - name: Run fixed 8 second reference oracle
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-qemu-watch-cert-v1"
+          ref="$ev/reference"
+          mkdir -p "$ref"
+          start=$(date +%s%N)
+          set +e
+          timeout --signal=TERM 8s qemu-system-riscv64 \
+            -M virt -cpu max -m 512M -smp 1 -nographic -no-reboot \
+            -bios default -kernel "$ev/early/Image.early" \
+            -append 'console=ttyS0 earlycon=sbi loglevel=8 panic=-1' \
+            -d int,in_asm -D "$ref/qemu.trace.log" \
+            >"$ref/qemu.console.log" 2>&1
+          qemu_rc=$?
+          set -e
+          end=$(date +%s%N)
+          echo "TIMING qemu_reference_ms=$(((end-start)/1000000)) rc=$qemu_rc" | tee -a "$ev/timing.txt"
+          grep -a 'riscv_cpu_do_interrupt' "$ref/qemu.trace.log" >"$ref/qemu.interrupts.txt" || true
+          set +e
+          python3 tools/ci/linux-runtime-frontier-v1.py \
+            --config tools/ci/linux-runtime-frontier-v1.json \
+            --interrupts "$ref/qemu.interrupts.txt" --nm "$ev/early/nm.txt" \
+            --trace "$ref/qemu.trace.log" --console "$ref/qemu.console.log" \
+            --qemu-rc "$qemu_rc" --json-out "$ref/frontier-result.json" \
+            --text-out "$ref/frontier-summary.txt"
+          ref_rc=$?
+          set -e
+          echo "REFERENCE_CLASSIFIER_RC=$ref_rc" | tee -a "$ev/timing.txt"
+
+      - name: Run event-driven frontier watcher
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-qemu-watch-cert-v1"
+          set +e
+          python3 tools/ci/linux-runtime-qemu-watch-v1.py \
+            --config tools/ci/linux-runtime-frontier-v1.json \
+            --nm "$ev/early/nm.txt" --image "$ev/early/Image.early" \
+            --evidence-dir "$ev/watch" --timeout-ms 8000 --poll-ms 100 \
+            | tee "$ev/watch.stdout.txt"
+          watch_rc=${PIPESTATUS[0]}
+          set -e
+          echo "WATCH_CLASSIFIER_RC=$watch_rc" | tee -a "$ev/timing.txt"
+
+      - name: Prove reference/watch oracle equivalence and early stop
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-qemu-watch-cert-v1"
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          root=Path('build/linux-runtime-qemu-watch-cert-v1')
+          ref=json.loads((root/'reference/frontier-result.json').read_text())
+          watch=json.loads((root/'watch/frontier-result.json').read_text())
+          meta=json.loads((root/'watch/watch-result.json').read_text())
+          fields=('verdict','fault','highest_progress','progress_rank','pass_markers')
+          diffs={k:(ref.get(k),watch.get(k)) for k in fields if ref.get(k)!=watch.get(k)}
+          if diffs:
+              raise SystemExit(f'QEMU_WATCH_EQUIVALENCE=FAIL diffs={diffs}')
+          if ref['verdict'] != 'SAME_FAULT':
+              raise SystemExit(f'QEMU_WATCH_EQUIVALENCE=FAIL reference={ref["verdict"]}')
+          if meta['stop_reason'] != 'oracle:SAME_FAULT':
+              raise SystemExit(f'QEMU_WATCH_STOP=FAIL reason={meta["stop_reason"]}')
+          if meta['elapsed_ms'] >= 8000:
+              raise SystemExit(f'QEMU_WATCH_STOP=FAIL elapsed_ms={meta["elapsed_ms"]}')
+          print('QEMU_WATCH_EQUIVALENCE=PASS verdict=SAME_FAULT fault=fault_load:strlen+0x6 progress=fdt-path')
+          print(f'QEMU_WATCH_EARLY_STOP=PASS elapsed_ms={meta["elapsed_ms"]} polls={meta["polls"]}')
+          PY
+          cat "$ev/reference/frontier-summary.txt"
+          cat "$ev/watch/frontier-summary.txt"
+          cat "$ev/watch/watch-result.json"
+          {
+            echo '## Linux Runtime QEMU Watch Cert V1'
+            echo
+            echo '```text'
+            cat "$ev/watch.stdout.txt"
+            cat "$ev/timing.txt"
+            echo '```'
+          } >>"$GITHUB_STEP_SUMMARY"
+
+      - name: Preserve watcher certification evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-runtime-qemu-watch-cert-v1-${{ github.sha }}
+          path: |
+            build/linux-runtime-qemu-watch-cert-v1/timing.txt
+            build/linux-runtime-qemu-watch-cert-v1/watch.stdout.txt
+            build/linux-runtime-qemu-watch-cert-v1/reference/frontier-result.json
+            build/linux-runtime-qemu-watch-cert-v1/reference/frontier-summary.txt
+            build/linux-runtime-qemu-watch-cert-v1/watch/frontier-result.json
+            build/linux-runtime-qemu-watch-cert-v1/watch/frontier-summary.txt
+            build/linux-runtime-qemu-watch-cert-v1/watch/watch-result.json
+            build/linux-runtime-qemu-watch-cert-v1/watch/qemu.interrupts.txt
+          if-no-files-found: warn
+          retention-days: 7
