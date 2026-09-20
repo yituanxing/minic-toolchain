@@ -1,0 +1,154 @@
+name: Linux Early Runtime Link Shadow V1
+
+on:
+  push:
+    branches: ["agent/linux-expanded-kbuild-v0"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: linux-early-runtime-link-shadow-v1-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  early-shadow:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[linux-early-link-shadow-v1]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Restore certified linked Linux fixture
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-expanded-kbuild-v0/out
+          key: linux-expanded-mixed-v1-6.6.143-Linux-d30569a4c675f6ac72d9f63c28f0b8745317f7a15c0799d10768f916d74b3a88
+          fail-on-cache-miss: true
+
+      - name: Restore pinned Linux source tree
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-expanded-kbuild-v0/linux-6.6.143
+          key: linux-source-6.6.143-dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932-v1
+          fail-on-cache-miss: true
+
+      - name: Install runtime prerequisites
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get -o Acquire::Retries=3 update >/dev/null
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
+            qemu-system-misc opensbi python3 >/dev/null
+
+      - name: Certify full reference runtime observation
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          out="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0/out"
+          ev="$GITHUB_WORKSPACE/build/linux-early-runtime-link-shadow-v1/reference"
+          mkdir -p "$ev"
+          riscv64-linux-gnu-nm -n "$out/vmlinux" >"$ev/nm.txt"
+          set +e
+          timeout --signal=TERM 8s qemu-system-riscv64 \
+            -M virt -cpu max -m 512M -smp 1 -nographic -no-reboot \
+            -bios default -kernel "$out/arch/riscv/boot/Image" \
+            -append 'console=ttyS0 earlycon=sbi loglevel=8 panic=-1' \
+            -d int,in_asm -D "$ev/qemu.trace.log" \
+            >"$ev/qemu.console.log" 2>&1
+          qemu_rc=$?
+          set -e
+          grep -a 'riscv_cpu_do_interrupt' "$ev/qemu.trace.log" >"$ev/qemu.interrupts.txt" || true
+          set +e
+          python3 tools/ci/linux-runtime-frontier-v1.py \
+            --config tools/ci/linux-runtime-frontier-v1.json \
+            --interrupts "$ev/qemu.interrupts.txt" --nm "$ev/nm.txt" \
+            --trace "$ev/qemu.trace.log" --console "$ev/qemu.console.log" \
+            --qemu-rc "$qemu_rc" --json-out "$ev/frontier-result.json" \
+            --text-out "$ev/frontier-summary.txt"
+          classifier_rc=$?
+          set -e
+          echo "$classifier_rc" >"$ev/classifier.rc"
+          test "$(python3 -c 'import json; print(json.load(open("build/linux-early-runtime-link-shadow-v1/reference/frontier-result.json"))["verdict"])')" = SAME_FAULT
+
+      - name: Build one-pass early runtime Image
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0"
+          ev="$GITHUB_WORKSPACE/build/linux-early-runtime-link-shadow-v1/early"
+          bash tools/ci/linux-early-runtime-link-v1.sh "$work/linux-6.6.143" "$work/out" "$ev"
+
+      - name: Classify early runtime Image
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ev="$GITHUB_WORKSPACE/build/linux-early-runtime-link-shadow-v1/early"
+          set +e
+          timeout --signal=TERM 8s qemu-system-riscv64 \
+            -M virt -cpu max -m 512M -smp 1 -nographic -no-reboot \
+            -bios default -kernel "$ev/Image.early" \
+            -append 'console=ttyS0 earlycon=sbi loglevel=8 panic=-1' \
+            -d int,in_asm -D "$ev/qemu.trace.log" \
+            >"$ev/qemu.console.log" 2>&1
+          qemu_rc=$?
+          set -e
+          grep -a 'riscv_cpu_do_interrupt' "$ev/qemu.trace.log" >"$ev/qemu.interrupts.txt" || true
+          set +e
+          python3 tools/ci/linux-runtime-frontier-v1.py \
+            --config tools/ci/linux-runtime-frontier-v1.json \
+            --interrupts "$ev/qemu.interrupts.txt" --nm "$ev/nm.txt" \
+            --trace "$ev/qemu.trace.log" --console "$ev/qemu.console.log" \
+            --qemu-rc "$qemu_rc" --json-out "$ev/frontier-result.json" \
+            --text-out "$ev/frontier-summary.txt"
+          classifier_rc=$?
+          set -e
+          echo "$classifier_rc" >"$ev/classifier.rc"
+
+      - name: Prove early-runtime observational equivalence
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          root="$GITHUB_WORKSPACE/build/linux-early-runtime-link-shadow-v1"
+          python3 - "$root/reference/frontier-result.json" "$root/early/frontier-result.json" <<'PY'
+          import json, sys
+          ref=json.load(open(sys.argv[1]))
+          early=json.load(open(sys.argv[2]))
+          keys=("verdict","fault","highest_progress","progress_reached","pass_markers")
+          diff={k:(ref.get(k),early.get(k)) for k in keys if ref.get(k)!=early.get(k)}
+          if diff:
+              raise SystemExit(f"EARLY_RUNTIME_ORACLE=FAIL diff={diff}")
+          if ref.get("verdict") != "SAME_FAULT":
+              raise SystemExit(f"EARLY_RUNTIME_ORACLE=BAD_REFERENCE verdict={ref.get('verdict')}")
+          print("EARLY_RUNTIME_ORACLE=PASS observation=exact verdict=SAME_FAULT")
+          PY
+          {
+            echo '## Linux Early Runtime Link Shadow V1'
+            echo
+            echo '```text'
+            echo 'EARLY_RUNTIME_ORACLE=PASS observation=exact verdict=SAME_FAULT'
+            cat "$root/early/timing.txt"
+            cat "$root/early/frontier-summary.txt"
+            echo '```'
+          } >>"$GITHUB_STEP_SUMMARY"
+
+      - name: Preserve compact evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-early-runtime-link-shadow-v1-${{ github.sha }}
+          path: |
+            build/linux-early-runtime-link-shadow-v1/reference/frontier-result.json
+            build/linux-early-runtime-link-shadow-v1/reference/frontier-summary.txt
+            build/linux-early-runtime-link-shadow-v1/early/frontier-result.json
+            build/linux-early-runtime-link-shadow-v1/early/frontier-summary.txt
+            build/linux-early-runtime-link-shadow-v1/early/timing.txt
+            build/linux-early-runtime-link-shadow-v1/early/fixture.txt
+            build/linux-early-runtime-link-shadow-v1/early/ld.stderr.txt
+            build/linux-early-runtime-link-shadow-v1/early/sha256.txt
+          if-no-files-found: warn
+          retention-days: 7
