@@ -22,56 +22,14 @@ jobs:
         with:
           ref: ${{ github.sha }}
 
-      - name: Apply current semantic stack and build MiniC
+      - name: Build exact Linux runtime MiniC profile
         shell: bash
         run: |
           set -Eeuo pipefail
           build="$GITHUB_WORKSPACE/build/linux-pi-satp-micro/toolchain"
-          patches=(
-            apply-local-integer-assignment-v2.py
-            apply-local-integer-logical-conditions-v0.py
-            apply-local-null-pointer-facts-v0.py
-            apply-builtin-constant-p-local-facts-v0.py
-            apply-inline-integer-specialization-v0.py
-            apply-inline-specialization-local-facts-v0.py
-            apply-inline-specialization-stable-parameter-facts-v0.py
-            apply-inline-specialization-transitive-integer-v0.py
-            apply-inline-specialization-base-callee-integer-v0.py
-            apply-inline-specialization-capacity-v0.py
-            apply-inline-specialization-symbolic-address-v0.py
-            apply-inline-specialization-symbolic-nested-array-v0.py
-            apply-inline-specialization-symbolic-integer-closure-v0.py
-            apply-inline-specialization-symbolic-transitive-rewrite-v0.py
-            apply-inline-specialization-symbolic-array-lvalue-v0.py
-            apply-inline-specialization-symbolic-closed-integers-v0.py
-            apply-inline-specialization-base-callee-symbolic-v0.py
-            apply-inline-specialization-resolved-asm-goto-v0.py
-            apply-inline-specialization-core-reachability-v0.py
-            apply-inline-specialization-original-reachability-v0.py
-            apply-inline-asm-local-integer-facts-v0.py
-            apply-inline-asm-rk-early-v0.py
-            apply-inline-asm-rk-early-hotfix-v0.py
-            apply-inline-asm-rk-tail-rollback-v0.py
-            apply-inline-asm-rk-cast-tail-v0.py
-            apply-inline-specialization-core-empty-function-v0.py
-            apply-inline-specialization-label-alias-v0.py
-            apply-riscv64-default-text-section-v0.py
-            apply-riscv64-explicit-section-flags-v0.py
-            apply-inline-asm-symbolic-specialization-v0.py
-          )
-          start=$(date +%s%N)
-          for patch in "${patches[@]}"; do
-            python3 "tools/ci/$patch"
-          done
-          git diff --check
-          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$build" \
-            "$build/bin/minic" "$build/bin/minic-cc"
-          end=$(date +%s%N)
-          python3 - "$start" "$end" <<'PY'
-          import sys
-          start, end = map(int, sys.argv[1:])
-          print(f"SATP_MICRO_BUILD_MS={(end-start)//1_000_000}")
-          PY
+          ev="$GITHUB_WORKSPACE/build/linux-pi-satp-micro/profile"
+          bash tools/ci/linux-runtime-build-minic-profile-v1.sh "$build" "$ev"
+          cat "$ev/toolchain-timing.txt"
 
       - name: Check stack-free SATP transition
         shell: bash
@@ -97,6 +55,8 @@ jobs:
         with:
           name: linux-pi-satp-micro-v0
           path: |
+            build/linux-pi-satp-micro/profile/patch.log
+            build/linux-pi-satp-micro/profile/minic-profile.txt
             build/linux-pi-satp-micro/satp-window.log
             build/linux-pi-satp-micro/tests/compiler-c0-gnu-inline-asm-satp-window/*.s
           if-no-files-found: ignore
