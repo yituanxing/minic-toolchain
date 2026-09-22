@@ -24,6 +24,7 @@
     {"name": "pi-cmdline", "symbol": "__pi_set_satp_mode_from_cmdline"},
     {"name": "early-cmdline", "symbol": "__pi_get_early_cmdline"},
     {"name": "fdt-path", "symbol": "__pi_fdt_path_offset"},
+    {"name": "satp-probe-flush", "symbol": "local_flush_tlb_all"},
     {"name": "trap-vector", "symbol": "setup_trap_vector"},
     {"name": "start-kernel", "symbol": "start_kernel"}
   ],
