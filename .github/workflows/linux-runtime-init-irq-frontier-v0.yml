@@ -1,0 +1,204 @@
+name: Linux Runtime Init IRQ Frontier V0
+
+on:
+  push:
+    branches: ["agent/linux-expanded-kbuild-v0"]
+    paths:
+      - "tools/ci/runtime-init-irq-trigger.txt"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: linux-runtime-init-irq-frontier-v0-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  init-irq-frontier:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Restore certified full linked fixture
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-expanded-kbuild-v0/out
+          key: linux-expanded-mixed-v1-6.6.143-Linux-d30569a4c675f6ac72d9f63c28f0b8745317f7a15c0799d10768f916d74b3a88
+          fail-on-cache-miss: true
+
+      - name: Restore pinned Linux source
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-expanded-kbuild-v0/linux-6.6.143
+          key: linux-source-6.6.143-dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932-v1
+          fail-on-cache-miss: true
+
+      - name: Restore certified frozen linker source subset
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-runtime-frozen-v1
+          key: linux-runtime-frozen-v1-6.6.143-e538a6ad42ec49c5a667cab5de9bb943f82ca702ff2b7749a020e38ff7ddaea7
+          fail-on-cache-miss: true
+
+      - name: Install focused prerequisites
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get -o Acquire::Retries=2 install -y --no-install-recommends \
+            gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu qemu-system-misc opensbi python3 make \
+            || { sudo apt-get -o Acquire::Retries=3 update; sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu qemu-system-misc opensbi python3 make; }
+
+      - name: Build exact Linux runtime MiniC profile
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-init-irq-frontier-v0"
+          build="$GITHUB_WORKSPACE/build/toolchain-runtime-init-irq-frontier-v0"
+          mkdir -p "$ev"
+          bash tools/ci/linux-runtime-build-minic-profile-v1.sh "$build" "$ev/profile"
+          grep -F 'MINIC_INLINE_ASM_LOCAL_INTEGER_FACTS_V0=APPLIED' "$ev/profile/patch.log"
+          grep -F 'MINIC_INLINE_ASM_RK_CAST_TAIL_V0=APPLIED' "$ev/profile/patch.log"
+          grep -F 'MINIC_RISCV64_PI_LOCAL_SYMBOL_ADDRESS_V0=APPLIED' "$ev/profile/patch.log"
+
+      - name: Refresh certified and next-frontier owners with current MiniC
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0"
+          src="$work/linux-6.6.143"
+          out="$work/out"
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-init-irq-frontier-v0"
+          build="$GITHUB_WORKSPACE/build/toolchain-runtime-init-irq-frontier-v0"
+          wrapper="$GITHUB_WORKSPACE/tests/external/linux/stage2_kbuild_cc.sh"
+
+          pi_target=arch/riscv/kernel/pi/cmdline_early.pi.o
+          pi_base=arch/riscv/kernel/pi/cmdline_early
+          rm -f "$out/$pi_base.o" "$out/$pi_target" \
+            "$out/arch/riscv/kernel/pi/.cmdline_early.o.cmd" \
+            "$out/arch/riscv/kernel/pi/.cmdline_early.pi.o.cmd" \
+            "$out/$pi_base.minic-stage2.i" "$out/$pi_base.minic-stage2.s"
+          MINIC="$build/bin/minic" REAL_CC=/usr/bin/riscv64-linux-gnu-gcc MINIC_KEEP_INTERMEDIATES=1 \
+            make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- CC="$wrapper" -j2 V=1 "$pi_target" \
+            >"$ev/pi-owner-refresh.log" 2>&1
+          test -s "$out/$pi_target"
+          test -s "$out/$pi_base.minic-stage2.s"
+          cp "$out/$pi_base.minic-stage2.s" "$ev/cmdline_early.minic-stage2.s"
+          grep -E '^[[:space:]]+lla[[:space:]]+[^,]+,[[:space:]]*\.Lminic_string_' "$ev/cmdline_early.minic-stage2.s" >/dev/null
+          echo 'PI_OWNER_REFRESH=PASS local_string=lla'
+
+          init_target=arch/riscv/mm/init.o
+          init_base=arch/riscv/mm/init
+          rm -f "$out/$init_target" "$out/arch/riscv/mm/.init.o.cmd" \
+            "$out/$init_base.minic-stage2.i" "$out/$init_base.minic-stage2.s"
+          MINIC="$build/bin/minic" REAL_CC=/usr/bin/riscv64-linux-gnu-gcc MINIC_KEEP_INTERMEDIATES=1 MINIC_LOCAL_FACT_TRACE=1 \
+            make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- CC="$wrapper" -j2 V=1 "$init_target" \
+            >"$ev/init-refresh.log" 2>&1
+          test -s "$out/$init_target"
+          riscv64-linux-gnu-objdump -dr "$out/$init_target" >"$ev/init.objdump.txt"
+          echo 'SATP_OWNER_REFRESH=PASS target=arch/riscv/mm/init.o'
+
+          setup_target=arch/riscv/kernel/setup.o
+          setup_base=arch/riscv/kernel/setup
+          rm -f "$out/$setup_target" "$out/arch/riscv/kernel/.setup.o.cmd" \
+            "$out/$setup_base.minic-stage2.i" "$out/$setup_base.minic-stage2.s"
+          MINIC="$build/bin/minic" REAL_CC=/usr/bin/riscv64-linux-gnu-gcc MINIC_KEEP_INTERMEDIATES=1 \
+            make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- CC="$wrapper" -j2 V=1 "$setup_target" \
+            >"$ev/setup-refresh.log" 2>&1
+          test -s "$out/$setup_target"
+          echo 'SETUP_OWNER_REFRESH=PASS target=arch/riscv/kernel/setup.o'
+
+          sched_target=kernel/sched/core.o
+          sched_base=kernel/sched/core
+          rm -f "$out/$sched_target" "$out/kernel/sched/.core.o.cmd" \
+            "$out/$sched_base.minic-stage2.i" "$out/$sched_base.minic-stage2.s"
+          MINIC="$build/bin/minic" REAL_CC=/usr/bin/riscv64-linux-gnu-gcc MINIC_KEEP_INTERMEDIATES=1 \
+            make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- CC="$wrapper" -j2 V=1 "$sched_target" \
+            >"$ev/sched-core-refresh.log" 2>&1
+          test -s "$out/$sched_target"
+          echo 'SCHED_OWNER_REFRESH=PASS target=kernel/sched/core.o'
+
+          irq_target=arch/riscv/kernel/irq.o
+          irq_base=arch/riscv/kernel/irq
+          rm -f "$out/$irq_target" "$out/arch/riscv/kernel/.irq.o.cmd" \
+            "$out/$irq_base.minic-stage2.i" "$out/$irq_base.minic-stage2.s"
+          MINIC="$build/bin/minic" REAL_CC=/usr/bin/riscv64-linux-gnu-gcc MINIC_KEEP_INTERMEDIATES=1 \
+            make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- CC="$wrapper" -j2 V=1 "$irq_target" \
+            >"$ev/irq-refresh.log" 2>&1
+          test -s "$out/$irq_target"
+          echo 'IRQ_OWNER_REFRESH=PASS target=arch/riscv/kernel/irq.o'
+
+      - name: Verify SATP critical CSR window
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          import re
+          from pathlib import Path
+          p = Path('build/linux-runtime-init-irq-frontier-v0/init.objdump.txt')
+          text = p.read_text(errors='replace').splitlines()
+          start = next(i for i,l in enumerate(text) if '<set_satp_mode>:' in l)
+          end = len(text)
+          for i in range(start + 1, len(text)):
+              m = re.match(r'^([0-9a-f]+) <([^>]+)>:$', text[i].strip())
+              if m and not m.group(2).startswith('.L'):
+                  end = i
+                  break
+          body = text[start:end]
+          first = next(i for i,l in enumerate(body) if re.search(r'\bcsrw\s+satp\b', l))
+          second = next(i for i,l in enumerate(body[first+1:], first+1) if re.search(r'\bcsrrwi?\b.*\bsatp\b', l))
+          window = body[first+1:second]
+          stack_mem = [l for l in window if re.search(r'\b(?:lb|lbu|lh|lhu|lw|lwu|ld|sb|sh|sw|sd)\b[^\n]*\(sp\)', l)]
+          print(f'SATP_INTER_CSR_STACK_MEM={len(stack_mem)}')
+          if stack_mem:
+              print('\n'.join(stack_mem))
+              raise SystemExit(1)
+          print('SATP_WINDOW=PASS')
+          PY
+
+      - name: Relink early image
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0"
+          frozen="$GITHUB_WORKSPACE/build/linux-runtime-frozen-v1"
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-init-irq-frontier-v0"
+          bash tools/ci/linux-early-runtime-link-v2.sh "$frozen/src" "$work/out" "$ev/early"
+
+      - name: Execute QEMU init_IRQ frontier
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-init-irq-frontier-v0"
+          set +e
+          python3 tools/ci/linux-runtime-qemu-watch-v1.py \
+            --config tools/ci/linux-runtime-init-irq-frontier-v0.json \
+            --nm "$ev/early/nm.txt" --image "$ev/early/Image.early" \
+            --evidence-dir "$ev/watch" --timeout-ms 8000 --poll-ms 100 | tee "$ev/watch.stdout.txt"
+          rc=${PIPESTATUS[0]}
+          set -e
+          cat "$ev/watch/frontier-summary.txt" || true
+          exit "$rc"
+
+      - name: Preserve focused evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-runtime-init-irq-frontier-v0-${{ github.sha }}
+          path: |
+            build/linux-runtime-init-irq-frontier-v0/profile/patch.log
+            build/linux-runtime-init-irq-frontier-v0/pi-owner-refresh.log
+            build/linux-runtime-init-irq-frontier-v0/init-refresh.log
+            build/linux-runtime-init-irq-frontier-v0/setup-refresh.log
+            build/linux-runtime-init-irq-frontier-v0/sched-core-refresh.log
+            build/linux-runtime-init-irq-frontier-v0/irq-refresh.log
+            build/linux-runtime-init-irq-frontier-v0/init.objdump.txt
+            build/linux-runtime-init-irq-frontier-v0/watch/frontier-result.json
+            build/linux-runtime-init-irq-frontier-v0/watch/frontier-summary.txt
+            build/linux-runtime-init-irq-frontier-v0/watch/watch-result.json
+            build/linux-runtime-init-irq-frontier-v0/watch/qemu.interrupts.txt
+          if-no-files-found: warn
+          retention-days: 7
