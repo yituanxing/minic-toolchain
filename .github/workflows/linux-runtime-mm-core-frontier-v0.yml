@@ -64,7 +64,7 @@ jobs:
           grep -F 'MINIC_INLINE_ASM_RK_CAST_TAIL_V0=APPLIED' "$ev/profile/patch.log"
           grep -F 'MINIC_RISCV64_PI_LOCAL_SYMBOL_ADDRESS_V0=APPLIED' "$ev/profile/patch.log"
 
-      - name: Refresh certified and init IRQ owners with current MiniC
+      - name: Refresh certified and current frontier owners with current MiniC
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -131,6 +131,32 @@ jobs:
           test -s "$out/$irq_target"
           echo 'IRQ_OWNER_REFRESH=PASS target=arch/riscv/kernel/irq.o'
 
+          # The current runtime frontier is arch_spin_lock+0x16.  The older
+          # IRQ-frame focused gate identified kernel/locking/spinlock*.o as
+          # the relevant instantiation owners.  Force both through the exact
+          # current runtime MiniC profile so no cached pre-pack object can
+          # masquerade as a live compiler failure.
+          for stem in spinlock spinlock_debug; do
+            target="kernel/locking/${stem}.o"
+            base="kernel/locking/${stem}"
+            rm -f "$out/$target" "$out/kernel/locking/.${stem}.o.cmd" \
+              "$out/$base.minic-stage2.i" "$out/$base.minic-stage2.s"
+            MINIC="$build/bin/minic" REAL_CC=/usr/bin/riscv64-linux-gnu-gcc MINIC_KEEP_INTERMEDIATES=1 \
+              make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- CC="$wrapper" -j2 V=1 "$target" \
+              >"$ev/${stem}-refresh.log" 2>&1
+            test -s "$out/$target"
+            riscv64-linux-gnu-objdump -dr "$out/$target" >"$ev/${stem}.objdump.txt"
+            riscv64-linux-gnu-nm -an "$out/$target" >"$ev/${stem}.nm.txt"
+            echo "SPINLOCK_OWNER_REFRESH=PASS target=$target"
+          done
+
+          {
+            echo '=== spinlock.o ==='
+            grep -E '[[:space:]]arch_spin_lock$|<arch_spin_lock>:' "$ev/spinlock.nm.txt" "$ev/spinlock.objdump.txt" || true
+            echo '=== spinlock_debug.o ==='
+            grep -E '[[:space:]]arch_spin_lock$|<arch_spin_lock>:' "$ev/spinlock_debug.nm.txt" "$ev/spinlock_debug.objdump.txt" || true
+          } | tee "$ev/spinlock-owner.txt"
+
       - name: Verify SATP critical CSR window
         shell: bash
         run: |
@@ -168,7 +194,7 @@ jobs:
           ev="$GITHUB_WORKSPACE/build/linux-runtime-init-irq-bridge-v0"
           bash tools/ci/linux-early-runtime-link-v2.sh "$frozen/src" "$work/out" "$ev/early"
 
-      - name: Execute QEMU init_IRQ frontier
+      - name: Execute QEMU current frontier
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -195,6 +221,13 @@ jobs:
             build/linux-runtime-init-irq-bridge-v0/setup-refresh.log
             build/linux-runtime-init-irq-bridge-v0/sched-core-refresh.log
             build/linux-runtime-init-irq-bridge-v0/irq-refresh.log
+            build/linux-runtime-init-irq-bridge-v0/spinlock-refresh.log
+            build/linux-runtime-init-irq-bridge-v0/spinlock_debug-refresh.log
+            build/linux-runtime-init-irq-bridge-v0/spinlock.objdump.txt
+            build/linux-runtime-init-irq-bridge-v0/spinlock_debug.objdump.txt
+            build/linux-runtime-init-irq-bridge-v0/spinlock.nm.txt
+            build/linux-runtime-init-irq-bridge-v0/spinlock_debug.nm.txt
+            build/linux-runtime-init-irq-bridge-v0/spinlock-owner.txt
             build/linux-runtime-init-irq-bridge-v0/init.objdump.txt
             build/linux-runtime-init-irq-bridge-v0/watch/frontier-result.json
             build/linux-runtime-init-irq-bridge-v0/watch/frontier-summary.txt
