@@ -1,0 +1,3 @@
+Trigger Linux Runtime MM Core Frontier V0.
+Target: mm_core_init.
+Certified baseline: paging_init via run 35877266177.
