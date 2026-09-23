@@ -1,3 +1,4 @@
-Trigger Linux Runtime MM Core Frontier V0.
-Target: mm_core_init.
-Certified baseline: paging_init via run 35877266177.
+Trigger Linux Runtime Init IRQ Bridge V0 through the registered MM Core workflow path.
+Target: init_IRQ.
+Certified baseline: mm_core_init passed; sched_init observed.
+Bridge workflow commit: 940add464fb48f1e240a400c98765727f6a5888e.
