@@ -1,0 +1,218 @@
+name: Linux Runtime SATP Refresh V0
+
+on:
+  push:
+    branches: ["agent/linux-expanded-kbuild-v0"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: linux-runtime-satp-refresh-v0-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  satp-refresh:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[linux-runtime-satp-refresh-v0]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Restore certified full linked fixture
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-expanded-kbuild-v0/out
+          key: linux-expanded-mixed-v1-6.6.143-Linux-d30569a4c675f6ac72d9f63c28f0b8745317f7a15c0799d10768f916d74b3a88
+          fail-on-cache-miss: true
+
+      - name: Restore pinned Linux source
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-expanded-kbuild-v0/linux-6.6.143
+          key: linux-source-6.6.143-dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932-v1
+          fail-on-cache-miss: true
+
+      - name: Restore certified frozen linker source subset
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-runtime-frozen-v1
+          key: linux-runtime-frozen-v1-6.6.143-e538a6ad42ec49c5a667cab5de9bb943f82ca702ff2b7749a020e38ff7ddaea7
+          fail-on-cache-miss: true
+
+      - name: Install focused prerequisites without update
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-satp-refresh-v0"
+          mkdir -p "$ev"
+          mode=no-update
+          if ! sudo apt-get -o Acquire::Retries=2 install -y --no-install-recommends \
+              gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu qemu-system-misc opensbi python3 make \
+              >"$ev/apt.stdout.txt" 2>"$ev/apt.stderr.txt"; then
+            mode=fallback-update
+            sudo apt-get -o Acquire::Retries=3 update >>"$ev/apt.stdout.txt" 2>>"$ev/apt.stderr.txt"
+            sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+              gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu qemu-system-misc opensbi python3 make \
+              >>"$ev/apt.stdout.txt" 2>>"$ev/apt.stderr.txt"
+          fi
+          echo "INSTALL_MODE=$mode"
+
+      - name: Build exact Linux runtime MiniC profile
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-satp-refresh-v0"
+          build="$GITHUB_WORKSPACE/build/toolchain-runtime-satp-refresh-v0"
+          bash tools/ci/linux-runtime-build-minic-profile-v1.sh "$build" "$ev/profile"
+          grep -F 'MINIC_INLINE_ASM_LOCAL_INTEGER_FACTS_V0=APPLIED' "$ev/profile/patch.log"
+          grep -F 'MINIC_INLINE_ASM_RK_CAST_TAIL_V0=APPLIED' "$ev/profile/patch.log"
+
+      - name: Rebuild real SATP owner with current MiniC
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0"
+          src="$work/linux-6.6.143"
+          out="$work/out"
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-satp-refresh-v0"
+          build="$GITHUB_WORKSPACE/build/toolchain-runtime-satp-refresh-v0"
+          wrapper="$GITHUB_WORKSPACE/tests/external/linux/stage2_kbuild_cc.sh"
+          target=arch/riscv/mm/init.o
+          base=arch/riscv/mm/init
+          mkdir -p "$ev"
+          sha256sum "$out/$target" >"$ev/init.before.sha256"
+          rm -f \
+            "$out/$target" "$out/arch/riscv/mm/.init.o.cmd" \
+            "$out/$base.minic-stage2.i" "$out/$base.minic-stage2.s" \
+            "$out/$base.minic-stage2.minic.stdout" "$out/$base.minic-stage2.minic.stderr"
+          start=$(date +%s%N)
+          MINIC="$build/bin/minic" REAL_CC=/usr/bin/riscv64-linux-gnu-gcc \
+          MINIC_KEEP_INTERMEDIATES=1 MINIC_LOCAL_FACT_TRACE=1 \
+          MINIC_KBUILD_TRACE="$ev/init-refresh.trace" \
+            make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
+              CC="$wrapper" -j2 V=1 "$target" >"$ev/init-refresh.log" 2>&1
+          end=$(date +%s%N)
+          echo "TIMING init_refresh_ms=$(((end-start)/1000000)) target=$target" | tee "$ev/timing.txt"
+          test -s "$out/$target"
+          test -s "$out/$base.minic-stage2.i"
+          test -s "$out/$base.minic-stage2.s"
+          sha256sum "$out/$target" >"$ev/init.after.sha256"
+          cp "$out/$base.minic-stage2.s" "$ev/init.minic-stage2.s"
+          cp "$out/$base.minic-stage2.i" "$ev/init.minic-stage2.i"
+          riscv64-linux-gnu-objdump -dr "$out/$target" >"$ev/init.objdump.txt"
+          grep -n -E 'RK_EARLY_(TAIL|REWIND|GLOBAL_ROLLBACK)' "$ev/init-refresh.log" \
+            >"$ev/rk-early-trace.txt" || true
+
+      - name: Inspect set_satp_mode CSR window
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-satp-refresh-v0"
+          python3 - <<'PY' | tee "$ev/satp-window.txt"
+          import re
+          from pathlib import Path
+          text = Path("build/linux-runtime-satp-refresh-v0/init.objdump.txt").read_text(errors="replace").splitlines()
+          start = next((i for i,l in enumerate(text) if re.search(r'<set_satp_mode>:', l)), None)
+          if start is None:
+              raise SystemExit("SATP_WINDOW=FAIL no set_satp_mode symbol")
+          end = len(text)
+          for i in range(start + 1, len(text)):
+              if re.search(r'^[0-9a-f]+\s+<[^>]+>:$', text[i].strip()):
+                  end = i
+                  break
+          body = text[start:end]
+          first = next((i for i,l in enumerate(body) if re.search(r'\bcsrw\s+satp\b', l)), None)
+          second = None if first is None else next((i for i,l in enumerate(body[first+1:], first+1) if re.search(r'\bcsrrw\b.*\bsatp\b', l)), None)
+          print(f"SET_SATP_MODE_LINES={len(body)} FIRST_CSRW={first} NEXT_CSRRW={second}")
+          if first is None:
+              raise SystemExit("SATP_WINDOW=FAIL no csrw satp")
+          lo=max(0, first-8); hi=min(len(body), (second+9 if second is not None else first+30))
+          for line in body[lo:hi]:
+              print(line)
+          window = body[first+1:second] if second is not None else body[first+1:]
+          stack_mem=[l for l in window if re.search(r'\b(?:lb|lbu|lh|lhu|lw|lwu|ld|sb|sh|sw|sd)\b[^\n]*\(sp\)', l)]
+          print(f"SATP_INTER_CSR_STACK_MEM={len(stack_mem)}")
+          for line in stack_mem:
+              print("SATP_STACK_MEM", line)
+          print("SATP_WINDOW=PASS" if second is not None and not stack_mem else "SATP_WINDOW=NEEDS_RUNTIME")
+          PY
+
+      - name: Build early image after SATP owner refresh
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0"
+          frozen="$GITHUB_WORKSPACE/build/linux-runtime-frozen-v1"
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-satp-refresh-v0"
+          bash tools/ci/linux-early-runtime-link-v2.sh "$frozen/src" "$work/out" "$ev/early"
+          cat "$ev/early/timing.txt" >>"$ev/timing.txt"
+
+      - name: Execute QEMU frontier and capture fault context
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-satp-refresh-v0"
+          set +e
+          python3 tools/ci/linux-runtime-qemu-watch-v1.py \
+            --config tools/ci/linux-runtime-frontier-v1.json \
+            --nm "$ev/early/nm.txt" --image "$ev/early/Image.early" \
+            --evidence-dir "$ev/watch" --timeout-ms 8000 --poll-ms 100 \
+            | tee "$ev/watch.stdout.txt"
+          watch_rc=${PIPESTATUS[0]}
+          set -e
+          context_rc=0
+          if test -s "$ev/watch/frontier-result.json" && test -s "$ev/watch/qemu.trace.log"; then
+            set +e
+            python3 tools/ci/linux-runtime-fault-context-v1.py \
+              --nm "$ev/early/nm.txt" \
+              --trace "$ev/watch/qemu.trace.log" \
+              --frontier-json "$ev/watch/frontier-result.json" \
+              --vmlinux "$ev/early/vmlinux.early" \
+              --out "$ev/fault-context.json" \
+              | tee "$ev/fault-context.txt"
+            context_rc=${PIPESTATUS[0]}
+            set -e
+          fi
+          {
+            echo '## Linux Runtime SATP Refresh V0'
+            echo
+            echo '```text'
+            cat "$ev/satp-window.txt" || true
+            cat "$ev/watch/frontier-summary.txt" || true
+            cat "$ev/fault-context.txt" || true
+            cat "$ev/timing.txt" || true
+            echo "WATCH_RC=$watch_rc"
+            echo "FAULT_CONTEXT_RC=$context_rc"
+            echo '```'
+          } >>"$GITHUB_STEP_SUMMARY"
+          exit "$watch_rc"
+
+      - name: Preserve focused evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-runtime-satp-refresh-v0-${{ github.sha }}
+          path: |
+            build/linux-runtime-satp-refresh-v0/profile/patch.log
+            build/linux-runtime-satp-refresh-v0/profile/minic-profile.txt
+            build/linux-runtime-satp-refresh-v0/init.before.sha256
+            build/linux-runtime-satp-refresh-v0/init.after.sha256
+            build/linux-runtime-satp-refresh-v0/init-refresh.trace
+            build/linux-runtime-satp-refresh-v0/init-refresh.log
+            build/linux-runtime-satp-refresh-v0/rk-early-trace.txt
+            build/linux-runtime-satp-refresh-v0/init.minic-stage2.s
+            build/linux-runtime-satp-refresh-v0/init.objdump.txt
+            build/linux-runtime-satp-refresh-v0/satp-window.txt
+            build/linux-runtime-satp-refresh-v0/timing.txt
+            build/linux-runtime-satp-refresh-v0/fault-context.json
+            build/linux-runtime-satp-refresh-v0/fault-context.txt
+            build/linux-runtime-satp-refresh-v0/watch/frontier-result.json
+            build/linux-runtime-satp-refresh-v0/watch/frontier-summary.txt
+            build/linux-runtime-satp-refresh-v0/watch/watch-result.json
+            build/linux-runtime-satp-refresh-v0/watch/qemu.interrupts.txt
+          if-no-files-found: warn
+          retention-days: 7
