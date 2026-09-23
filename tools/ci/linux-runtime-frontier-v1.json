@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "name": "linux-6.6.143-early-runtime-strlen-frontier",
+  "name": "linux-6.6.143-start-kernel-to-setup-arch-frontier",
   "phys_entry": "0x80200000",
   "baseline": {
     "fault": {
@@ -27,10 +27,16 @@
     {"name": "satp-probe-mapping", "symbol": "create_pgd_mapping"},
     {"name": "satp-probe-flush", "symbol": "local_flush_tlb_all"},
     {"name": "trap-vector", "symbol": "setup_trap_vector"},
-    {"name": "start-kernel", "symbol": "start_kernel"}
+    {"name": "start-kernel", "symbol": "start_kernel"},
+    {"name": "setup-arch", "symbol": "setup_arch"},
+    {"name": "mm-core-init", "symbol": "mm_core_init"},
+    {"name": "sched-init", "symbol": "sched_init"},
+    {"name": "init-irq", "symbol": "init_IRQ"},
+    {"name": "console-init", "symbol": "console_init"},
+    {"name": "rest-init", "symbol": "arch_call_rest_init"}
   ],
   "pass_markers": {
-    "console_any": ["Linux version"],
-    "symbol_any": ["start_kernel"]
+    "console_any": [],
+    "symbol_any": ["setup_arch"]
   }
 }
