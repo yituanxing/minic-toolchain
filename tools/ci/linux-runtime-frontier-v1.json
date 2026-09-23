@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "name": "linux-6.6.143-setup-arch-to-paging-init-frontier",
+  "name": "linux-6.6.143-paging-to-mm-core-init-frontier",
   "phys_entry": "0x80200000",
   "baseline": {
     "fault": {
@@ -8,11 +8,11 @@
       "symbol": "strlen",
       "offset": "0x6"
     },
-    "progress_marker": "setup-arch",
+    "progress_marker": "paging-init",
     "certified_by": {
-      "workflow_run": 35876811192,
+      "workflow_run": 35877266177,
       "job": "satp-refresh",
-      "commit": "b36c88117740153329643fb11c97cfb918a585fa"
+      "commit": "e857fc7f3a32564b0162bbfaa3fe56f39ff8d4d7"
     }
   },
   "progress_markers": [
@@ -37,6 +37,13 @@
     {"name": "parse-early-param", "symbol": "parse_early_param"},
     {"name": "efi-init", "symbol": "efi_init"},
     {"name": "paging-init", "symbol": "paging_init"},
+    {"name": "setup-command-line", "symbol": "setup_command_line"},
+    {"name": "setup-per-cpu-areas", "symbol": "setup_per_cpu_areas"},
+    {"name": "smp-prepare-boot-cpu", "symbol": "smp_prepare_boot_cpu"},
+    {"name": "random-init-early", "symbol": "random_init_early"},
+    {"name": "setup-log-buf", "symbol": "setup_log_buf"},
+    {"name": "vfs-caches-init-early", "symbol": "vfs_caches_init_early"},
+    {"name": "trap-init", "symbol": "trap_init"},
     {"name": "mm-core-init", "symbol": "mm_core_init"},
     {"name": "sched-init", "symbol": "sched_init"},
     {"name": "init-irq", "symbol": "init_IRQ"},
@@ -45,6 +52,6 @@
   ],
   "pass_markers": {
     "console_any": [],
-    "symbol_any": ["paging_init"]
+    "symbol_any": ["mm_core_init"]
   }
 }
