@@ -1,0 +1,5 @@
+Trigger Linux Runtime Init IRQ Frontier V0.
+Target: init_IRQ.
+Observed baseline: sched_init via run 35878345771.
+Certified pass marker: mm_core_init via run 35878345771.
+Refresh: PI + SATP + setup + kernel/sched/core.o + arch/riscv/kernel/irq.o.
