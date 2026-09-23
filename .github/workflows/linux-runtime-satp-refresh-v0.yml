@@ -67,6 +67,46 @@ jobs:
           bash tools/ci/linux-runtime-build-minic-profile-v1.sh "$build" "$ev/profile"
           grep -F 'MINIC_INLINE_ASM_LOCAL_INTEGER_FACTS_V0=APPLIED' "$ev/profile/patch.log"
           grep -F 'MINIC_INLINE_ASM_RK_CAST_TAIL_V0=APPLIED' "$ev/profile/patch.log"
+          grep -F 'MINIC_RISCV64_PI_LOCAL_SYMBOL_ADDRESS_V0=APPLIED' "$ev/profile/patch.log"
+
+      - name: Rebuild real PI string owner with current MiniC
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0"
+          src="$work/linux-6.6.143"
+          out="$work/out"
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-satp-refresh-v0"
+          build="$GITHUB_WORKSPACE/build/toolchain-runtime-satp-refresh-v0"
+          wrapper="$GITHUB_WORKSPACE/tests/external/linux/stage2_kbuild_cc.sh"
+          target=arch/riscv/kernel/pi/cmdline_early.pi.o
+          base=arch/riscv/kernel/pi/cmdline_early
+          mkdir -p "$ev"
+          sha256sum "$out/$target" >"$ev/pi-owner.before.sha256"
+          rm -f \
+            "$out/$base.o" "$out/$target" \
+            "$out/arch/riscv/kernel/pi/.cmdline_early.o.cmd" \
+            "$out/arch/riscv/kernel/pi/.cmdline_early.pi.o.cmd" \
+            "$out/$base.minic-stage2.i" "$out/$base.minic-stage2.s" \
+            "$out/$base.minic-stage2.minic.stdout" "$out/$base.minic-stage2.minic.stderr"
+          start=$(date +%s%N)
+          MINIC="$build/bin/minic" REAL_CC=/usr/bin/riscv64-linux-gnu-gcc \
+          MINIC_KEEP_INTERMEDIATES=1 MINIC_KBUILD_TRACE="$ev/pi-owner-refresh.trace" \
+            make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
+              CC="$wrapper" -j2 V=1 "$target" >"$ev/pi-owner-refresh.log" 2>&1
+          end=$(date +%s%N)
+          echo "TIMING pi_owner_refresh_ms=$(((end-start)/1000000)) target=$target" | tee "$ev/timing.txt"
+          test -s "$out/$base.o"
+          test -s "$out/$target"
+          test -s "$out/$base.minic-stage2.s"
+          sha256sum "$out/$target" >"$ev/pi-owner.after.sha256"
+          cp "$out/$base.minic-stage2.s" "$ev/cmdline_early.minic-stage2.s"
+          grep -E '^[[:space:]]+lla[[:space:]]+[^,]+,[[:space:]]*\.Lminic_string_' \
+            "$ev/cmdline_early.minic-stage2.s" >/dev/null || {
+              echo 'PI_OWNER_ASM=FAIL no PC-relative local string address' >&2
+              exit 71
+            }
+          echo 'PI_OWNER_ASM=PASS local_string=lla'
 
       - name: Rebuild real SATP owner with current MiniC
         shell: bash
@@ -92,7 +132,7 @@ jobs:
             make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
               CC="$wrapper" -j2 V=1 "$target" >"$ev/init-refresh.log" 2>&1
           end=$(date +%s%N)
-          echo "TIMING init_refresh_ms=$(((end-start)/1000000)) target=$target" | tee "$ev/timing.txt"
+          echo "TIMING init_refresh_ms=$(((end-start)/1000000)) target=$target" | tee -a "$ev/timing.txt"
           test -s "$out/$target"
           test -s "$out/$base.minic-stage2.i"
           test -s "$out/$base.minic-stage2.s"
@@ -137,7 +177,7 @@ jobs:
           print("SATP_WINDOW=PASS")
           PY
 
-      - name: Build early image after SATP owner refresh
+      - name: Build early image after PI and SATP owner refresh
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -183,6 +223,11 @@ jobs:
           path: |
             build/linux-runtime-satp-refresh-v0/profile/patch.log
             build/linux-runtime-satp-refresh-v0/profile/minic-profile.txt
+            build/linux-runtime-satp-refresh-v0/pi-owner.before.sha256
+            build/linux-runtime-satp-refresh-v0/pi-owner.after.sha256
+            build/linux-runtime-satp-refresh-v0/pi-owner-refresh.trace
+            build/linux-runtime-satp-refresh-v0/pi-owner-refresh.log
+            build/linux-runtime-satp-refresh-v0/cmdline_early.minic-stage2.s
             build/linux-runtime-satp-refresh-v0/init.before.sha256
             build/linux-runtime-satp-refresh-v0/init.after.sha256
             build/linux-runtime-satp-refresh-v0/init-refresh.trace
