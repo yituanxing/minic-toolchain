@@ -64,7 +64,7 @@ jobs:
           grep -F 'MINIC_INLINE_ASM_RK_CAST_TAIL_V0=APPLIED' "$ev/profile/patch.log"
           grep -F 'MINIC_RISCV64_PI_LOCAL_SYMBOL_ADDRESS_V0=APPLIED' "$ev/profile/patch.log"
 
-      - name: Refresh certified and spinlock owners with current MiniC
+      - name: Refresh certified and current frontier owners with current MiniC
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -112,17 +112,22 @@ jobs:
           refresh_obj arch/riscv/kernel/irq.o irq-refresh.log
           refresh_obj kernel/locking/spinlock.o spinlock-refresh.log
           refresh_obj kernel/locking/spinlock_debug.o spinlock_debug-refresh.log
+          refresh_obj kernel/sched/build_utility.o build_utility-refresh.log
 
           for stem in spinlock spinlock_debug; do
             riscv64-linux-gnu-objdump -dr "$out/kernel/locking/${stem}.o" >"$ev/${stem}.objdump.txt"
             riscv64-linux-gnu-nm -an "$out/kernel/locking/${stem}.o" >"$ev/${stem}.nm.txt"
           done
+          riscv64-linux-gnu-objdump -dr "$out/kernel/sched/build_utility.o" >"$ev/build_utility.objdump.txt"
+          riscv64-linux-gnu-nm -an "$out/kernel/sched/build_utility.o" >"$ev/build_utility.nm.txt"
           {
             echo '=== spinlock.o ==='
             grep -E '[[:space:]]arch_spin_lock$|<arch_spin_lock>:' "$ev/spinlock.nm.txt" "$ev/spinlock.objdump.txt" || true
             echo '=== spinlock_debug.o ==='
             grep -E '[[:space:]]arch_spin_lock$|<arch_spin_lock>:' "$ev/spinlock_debug.nm.txt" "$ev/spinlock_debug.objdump.txt" || true
-          } | tee "$ev/spinlock-owner.txt"
+            echo '=== build_utility.o ==='
+            grep -E '[[:space:]]calc_global_load$|<calc_global_load>:' "$ev/build_utility.nm.txt" "$ev/build_utility.objdump.txt" || true
+          } | tee "$ev/frontier-owner.txt"
 
       - name: Verify SATP critical CSR window
         shell: bash
@@ -186,7 +191,7 @@ jobs:
             build/linux-runtime-spinlock-registered-v0/*-refresh.log
             build/linux-runtime-spinlock-registered-v0/*.objdump.txt
             build/linux-runtime-spinlock-registered-v0/*.nm.txt
-            build/linux-runtime-spinlock-registered-v0/spinlock-owner.txt
+            build/linux-runtime-spinlock-registered-v0/frontier-owner.txt
             build/linux-runtime-spinlock-registered-v0/watch/frontier-result.json
             build/linux-runtime-spinlock-registered-v0/watch/frontier-summary.txt
             build/linux-runtime-spinlock-registered-v0/watch/watch-result.json
