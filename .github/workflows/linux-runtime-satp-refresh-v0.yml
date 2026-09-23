@@ -141,6 +141,39 @@ jobs:
           riscv64-linux-gnu-objdump -dr "$out/$target" >"$ev/init.objdump.txt"
           grep -n -E 'RK_EARLY_(TAIL|REWIND|GLOBAL_ROLLBACK)' "$ev/init-refresh.log" >"$ev/rk-early-trace.txt" || true
 
+      - name: Rebuild setup_arch owner with current MiniC
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0"
+          src="$work/linux-6.6.143"
+          out="$work/out"
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-satp-refresh-v0"
+          build="$GITHUB_WORKSPACE/build/toolchain-runtime-satp-refresh-v0"
+          wrapper="$GITHUB_WORKSPACE/tests/external/linux/stage2_kbuild_cc.sh"
+          target=arch/riscv/kernel/setup.o
+          base=arch/riscv/kernel/setup
+          mkdir -p "$ev"
+          test -s "$out/$target"
+          sha256sum "$out/$target" >"$ev/setup.before.sha256"
+          rm -f "$out/$target" "$out/arch/riscv/kernel/.setup.o.cmd" \
+            "$out/$base.minic-stage2.i" "$out/$base.minic-stage2.s" \
+            "$out/$base.minic-stage2.minic.stdout" "$out/$base.minic-stage2.minic.stderr"
+          start=$(date +%s%N)
+          MINIC="$build/bin/minic" REAL_CC=/usr/bin/riscv64-linux-gnu-gcc \
+          MINIC_KEEP_INTERMEDIATES=1 MINIC_KBUILD_TRACE="$ev/setup-refresh.trace" \
+            make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
+              CC="$wrapper" -j2 V=1 "$target" >"$ev/setup-refresh.log" 2>&1
+          end=$(date +%s%N)
+          echo "TIMING setup_refresh_ms=$(((end-start)/1000000)) target=$target" | tee -a "$ev/timing.txt"
+          test -s "$out/$target"
+          test -s "$out/$base.minic-stage2.i"
+          test -s "$out/$base.minic-stage2.s"
+          sha256sum "$out/$target" >"$ev/setup.after.sha256"
+          cp "$out/$base.minic-stage2.s" "$ev/setup.minic-stage2.s"
+          riscv64-linux-gnu-objdump -dr "$out/$target" >"$ev/setup.objdump.txt"
+          echo 'SETUP_OWNER_REFRESH=PASS target=arch/riscv/kernel/setup.o'
+
       - name: Inspect set_satp_mode CSR window
         shell: bash
         run: |
@@ -177,7 +210,7 @@ jobs:
           print("SATP_WINDOW=PASS")
           PY
 
-      - name: Build early image after PI and SATP owner refresh
+      - name: Build early image after PI SATP and setup owner refresh
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -235,6 +268,12 @@ jobs:
             build/linux-runtime-satp-refresh-v0/rk-early-trace.txt
             build/linux-runtime-satp-refresh-v0/init.minic-stage2.s
             build/linux-runtime-satp-refresh-v0/init.objdump.txt
+            build/linux-runtime-satp-refresh-v0/setup.before.sha256
+            build/linux-runtime-satp-refresh-v0/setup.after.sha256
+            build/linux-runtime-satp-refresh-v0/setup-refresh.trace
+            build/linux-runtime-satp-refresh-v0/setup-refresh.log
+            build/linux-runtime-satp-refresh-v0/setup.minic-stage2.s
+            build/linux-runtime-satp-refresh-v0/setup.objdump.txt
             build/linux-runtime-satp-refresh-v0/satp-window.txt
             build/linux-runtime-satp-refresh-v0/timing.txt
             build/linux-runtime-satp-refresh-v0/fault-context.json
