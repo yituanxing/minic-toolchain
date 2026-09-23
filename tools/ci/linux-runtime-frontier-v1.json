@@ -8,11 +8,11 @@
       "symbol": "strlen",
       "offset": "0x6"
     },
-    "progress_marker": "fdt-path",
+    "progress_marker": "start-kernel",
     "certified_by": {
-      "workflow_run": 35320118231,
-      "job": "runtime (baseline-idr-xarray)",
-      "commit": "190ec23c5f5822b67d83284a4092dc474338f05c"
+      "workflow_run": 35875727245,
+      "job": "satp-refresh",
+      "commit": "c4ea98adfa3d1df83fa03b2e7eff62d23239ae66"
     }
   },
   "progress_markers": [
