@@ -1,0 +1,3 @@
+Trigger the certified Linux Runtime PI Owner Refresh V0 workflow against the SATP-aligned MiniC runtime profile at/after 0196ab7e.
+
+Purpose: obtain a fresh real Linux/QEMU frontier result after the SATP micro workflow was aligned with the runtime MiniC profile.
