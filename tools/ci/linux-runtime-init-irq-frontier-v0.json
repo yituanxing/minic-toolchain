@@ -1,0 +1,57 @@
+{
+  "schema": 1,
+  "name": "linux-6.6.143-sched-to-init-irq-frontier",
+  "phys_entry": "0x80200000",
+  "baseline": {
+    "fault": {
+      "desc": "fault_load",
+      "symbol": "strlen",
+      "offset": "0x6"
+    },
+    "progress_marker": "sched-init",
+    "certified_by": {
+      "workflow_run": 35878345771,
+      "job": "mm-core-frontier",
+      "commit": "5a40cf4f9cef311c98f4172b1330ceb483863b6d"
+    }
+  },
+  "progress_markers": [
+    {"name": "kernel-entry", "symbol": "_start"},
+    {"name": "start-kernel-entry", "symbol": "_start_kernel"},
+    {"name": "clear-bss", "symbol": "clear_bss"},
+    {"name": "setup-vm", "symbol": "setup_vm"},
+    {"name": "satp-mode", "symbol": "set_satp_mode"},
+    {"name": "pi-cmdline", "symbol": "__pi_set_satp_mode_from_cmdline"},
+    {"name": "early-cmdline", "symbol": "__pi_get_early_cmdline"},
+    {"name": "fdt-path", "symbol": "__pi_fdt_path_offset"},
+    {"name": "satp-probe-mapping", "symbol": "create_pgd_mapping"},
+    {"name": "satp-probe-flush", "symbol": "local_flush_tlb_all"},
+    {"name": "trap-vector", "symbol": "setup_trap_vector"},
+    {"name": "start-kernel", "symbol": "start_kernel"},
+    {"name": "setup-arch", "symbol": "setup_arch"},
+    {"name": "early-dtb-scan", "symbol": "early_init_dt_scan"},
+    {"name": "initial-init-mm", "symbol": "setup_initial_init_mm"},
+    {"name": "early-ioremap", "symbol": "early_ioremap_setup"},
+    {"name": "sbi-init", "symbol": "sbi_init"},
+    {"name": "jump-label-init", "symbol": "jump_label_init"},
+    {"name": "parse-early-param", "symbol": "parse_early_param"},
+    {"name": "efi-init", "symbol": "efi_init"},
+    {"name": "paging-init", "symbol": "paging_init"},
+    {"name": "setup-command-line", "symbol": "setup_command_line"},
+    {"name": "setup-per-cpu-areas", "symbol": "setup_per_cpu_areas"},
+    {"name": "smp-prepare-boot-cpu", "symbol": "smp_prepare_boot_cpu"},
+    {"name": "random-init-early", "symbol": "random_init_early"},
+    {"name": "setup-log-buf", "symbol": "setup_log_buf"},
+    {"name": "vfs-caches-init-early", "symbol": "vfs_caches_init_early"},
+    {"name": "trap-init", "symbol": "trap_init"},
+    {"name": "mm-core-init", "symbol": "mm_core_init"},
+    {"name": "sched-init", "symbol": "sched_init"},
+    {"name": "init-irq", "symbol": "init_IRQ"},
+    {"name": "console-init", "symbol": "console_init"},
+    {"name": "rest-init", "symbol": "arch_call_rest_init"}
+  ],
+  "pass_markers": {
+    "console_any": [],
+    "symbol_any": ["init_IRQ"]
+  }
+}
