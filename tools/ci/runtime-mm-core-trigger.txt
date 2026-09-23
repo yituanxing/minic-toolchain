@@ -1,5 +1,5 @@
-Trigger Linux Runtime Init IRQ Bridge V0 through the registered MM Core workflow path.
-Target: move beyond arch_spin_lock+0x16.
-Certified baseline: init_IRQ passed; current fault store_page_fault:arch_spin_lock+0x16.
-Bridge spinlock-owner refresh commit: f925b87b9252937a592b978848c792cc3df4efe4.
-Registered-path bridge commit: 82fb7a1cb431f53d42d8255277983e6aca876916.
+Trigger registered Linux runtime frontier bridge.
+Certified baseline: init_IRQ passed; arch_spin_lock stale-owner fault retired after current MiniC refresh.
+Current fault: store_page_fault:calc_global_load+0x2a.
+Current owner: kernel/sched/build_utility.o (loadavg.c is included by build_utility.c).
+Owner-refresh workflow commit: 5d8bbf780bccc4c9eef1cb02a6cb4ff2779218a5.
