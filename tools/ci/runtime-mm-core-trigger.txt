@@ -2,3 +2,4 @@ Trigger Linux Runtime Init IRQ Bridge V0 through the registered MM Core workflow
 Target: move beyond arch_spin_lock+0x16.
 Certified baseline: init_IRQ passed; current fault store_page_fault:arch_spin_lock+0x16.
 Bridge spinlock-owner refresh commit: f925b87b9252937a592b978848c792cc3df4efe4.
+Retry after workflow index settlement.
