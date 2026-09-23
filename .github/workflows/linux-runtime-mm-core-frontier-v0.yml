@@ -1,4 +1,4 @@
-name: Linux Runtime MM Core Frontier V0
+name: Linux Runtime Init IRQ Bridge V0
 
 on:
   push:
@@ -15,7 +15,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  mm-core-frontier:
+  init-irq-bridge:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -56,23 +56,23 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
-          ev="$GITHUB_WORKSPACE/build/linux-runtime-mm-core-frontier-v0"
-          build="$GITHUB_WORKSPACE/build/toolchain-runtime-mm-core-frontier-v0"
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-init-irq-bridge-v0"
+          build="$GITHUB_WORKSPACE/build/toolchain-runtime-init-irq-bridge-v0"
           mkdir -p "$ev"
           bash tools/ci/linux-runtime-build-minic-profile-v1.sh "$build" "$ev/profile"
           grep -F 'MINIC_INLINE_ASM_LOCAL_INTEGER_FACTS_V0=APPLIED' "$ev/profile/patch.log"
           grep -F 'MINIC_INLINE_ASM_RK_CAST_TAIL_V0=APPLIED' "$ev/profile/patch.log"
           grep -F 'MINIC_RISCV64_PI_LOCAL_SYMBOL_ADDRESS_V0=APPLIED' "$ev/profile/patch.log"
 
-      - name: Refresh PI SATP and setup owners with current MiniC
+      - name: Refresh certified and init IRQ owners with current MiniC
         shell: bash
         run: |
           set -Eeuo pipefail
           work="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0"
           src="$work/linux-6.6.143"
           out="$work/out"
-          ev="$GITHUB_WORKSPACE/build/linux-runtime-mm-core-frontier-v0"
-          build="$GITHUB_WORKSPACE/build/toolchain-runtime-mm-core-frontier-v0"
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-init-irq-bridge-v0"
+          build="$GITHUB_WORKSPACE/build/toolchain-runtime-init-irq-bridge-v0"
           wrapper="$GITHUB_WORKSPACE/tests/external/linux/stage2_kbuild_cc.sh"
 
           pi_target=arch/riscv/kernel/pi/cmdline_early.pi.o
@@ -111,6 +111,26 @@ jobs:
           test -s "$out/$setup_target"
           echo 'SETUP_OWNER_REFRESH=PASS target=arch/riscv/kernel/setup.o'
 
+          sched_target=kernel/sched/core.o
+          sched_base=kernel/sched/core
+          rm -f "$out/$sched_target" "$out/kernel/sched/.core.o.cmd" \
+            "$out/$sched_base.minic-stage2.i" "$out/$sched_base.minic-stage2.s"
+          MINIC="$build/bin/minic" REAL_CC=/usr/bin/riscv64-linux-gnu-gcc MINIC_KEEP_INTERMEDIATES=1 \
+            make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- CC="$wrapper" -j2 V=1 "$sched_target" \
+            >"$ev/sched-core-refresh.log" 2>&1
+          test -s "$out/$sched_target"
+          echo 'SCHED_OWNER_REFRESH=PASS target=kernel/sched/core.o'
+
+          irq_target=arch/riscv/kernel/irq.o
+          irq_base=arch/riscv/kernel/irq
+          rm -f "$out/$irq_target" "$out/arch/riscv/kernel/.irq.o.cmd" \
+            "$out/$irq_base.minic-stage2.i" "$out/$irq_base.minic-stage2.s"
+          MINIC="$build/bin/minic" REAL_CC=/usr/bin/riscv64-linux-gnu-gcc MINIC_KEEP_INTERMEDIATES=1 \
+            make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- CC="$wrapper" -j2 V=1 "$irq_target" \
+            >"$ev/irq-refresh.log" 2>&1
+          test -s "$out/$irq_target"
+          echo 'IRQ_OWNER_REFRESH=PASS target=arch/riscv/kernel/irq.o'
+
       - name: Verify SATP critical CSR window
         shell: bash
         run: |
@@ -118,7 +138,7 @@ jobs:
           python3 - <<'PY'
           import re
           from pathlib import Path
-          p = Path('build/linux-runtime-mm-core-frontier-v0/init.objdump.txt')
+          p = Path('build/linux-runtime-init-irq-bridge-v0/init.objdump.txt')
           text = p.read_text(errors='replace').splitlines()
           start = next(i for i,l in enumerate(text) if '<set_satp_mode>:' in l)
           end = len(text)
@@ -145,17 +165,17 @@ jobs:
           set -Eeuo pipefail
           work="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0"
           frozen="$GITHUB_WORKSPACE/build/linux-runtime-frozen-v1"
-          ev="$GITHUB_WORKSPACE/build/linux-runtime-mm-core-frontier-v0"
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-init-irq-bridge-v0"
           bash tools/ci/linux-early-runtime-link-v2.sh "$frozen/src" "$work/out" "$ev/early"
 
-      - name: Execute QEMU mm_core_init frontier
+      - name: Execute QEMU init_IRQ frontier
         shell: bash
         run: |
           set -Eeuo pipefail
-          ev="$GITHUB_WORKSPACE/build/linux-runtime-mm-core-frontier-v0"
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-init-irq-bridge-v0"
           set +e
           python3 tools/ci/linux-runtime-qemu-watch-v1.py \
-            --config tools/ci/linux-runtime-frontier-v1.json \
+            --config tools/ci/linux-runtime-init-irq-frontier-v0.json \
             --nm "$ev/early/nm.txt" --image "$ev/early/Image.early" \
             --evidence-dir "$ev/watch" --timeout-ms 8000 --poll-ms 100 | tee "$ev/watch.stdout.txt"
           rc=${PIPESTATUS[0]}
@@ -167,16 +187,18 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: linux-runtime-mm-core-frontier-v0-${{ github.sha }}
+          name: linux-runtime-init-irq-bridge-v0-${{ github.sha }}
           path: |
-            build/linux-runtime-mm-core-frontier-v0/profile/patch.log
-            build/linux-runtime-mm-core-frontier-v0/pi-owner-refresh.log
-            build/linux-runtime-mm-core-frontier-v0/init-refresh.log
-            build/linux-runtime-mm-core-frontier-v0/setup-refresh.log
-            build/linux-runtime-mm-core-frontier-v0/init.objdump.txt
-            build/linux-runtime-mm-core-frontier-v0/watch/frontier-result.json
-            build/linux-runtime-mm-core-frontier-v0/watch/frontier-summary.txt
-            build/linux-runtime-mm-core-frontier-v0/watch/watch-result.json
-            build/linux-runtime-mm-core-frontier-v0/watch/qemu.interrupts.txt
+            build/linux-runtime-init-irq-bridge-v0/profile/patch.log
+            build/linux-runtime-init-irq-bridge-v0/pi-owner-refresh.log
+            build/linux-runtime-init-irq-bridge-v0/init-refresh.log
+            build/linux-runtime-init-irq-bridge-v0/setup-refresh.log
+            build/linux-runtime-init-irq-bridge-v0/sched-core-refresh.log
+            build/linux-runtime-init-irq-bridge-v0/irq-refresh.log
+            build/linux-runtime-init-irq-bridge-v0/init.objdump.txt
+            build/linux-runtime-init-irq-bridge-v0/watch/frontier-result.json
+            build/linux-runtime-init-irq-bridge-v0/watch/frontier-summary.txt
+            build/linux-runtime-init-irq-bridge-v0/watch/watch-result.json
+            build/linux-runtime-init-irq-bridge-v0/watch/qemu.interrupts.txt
           if-no-files-found: warn
           retention-days: 7
