@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "name": "linux-6.6.143-start-kernel-to-setup-arch-frontier",
+  "name": "linux-6.6.143-setup-arch-to-paging-init-frontier",
   "phys_entry": "0x80200000",
   "baseline": {
     "fault": {
@@ -8,11 +8,11 @@
       "symbol": "strlen",
       "offset": "0x6"
     },
-    "progress_marker": "start-kernel",
+    "progress_marker": "setup-arch",
     "certified_by": {
-      "workflow_run": 35875727245,
+      "workflow_run": 35876811192,
       "job": "satp-refresh",
-      "commit": "c4ea98adfa3d1df83fa03b2e7eff62d23239ae66"
+      "commit": "b36c88117740153329643fb11c97cfb918a585fa"
     }
   },
   "progress_markers": [
@@ -29,6 +29,14 @@
     {"name": "trap-vector", "symbol": "setup_trap_vector"},
     {"name": "start-kernel", "symbol": "start_kernel"},
     {"name": "setup-arch", "symbol": "setup_arch"},
+    {"name": "early-dtb-scan", "symbol": "early_init_dt_scan"},
+    {"name": "initial-init-mm", "symbol": "setup_initial_init_mm"},
+    {"name": "early-ioremap", "symbol": "early_ioremap_setup"},
+    {"name": "sbi-init", "symbol": "sbi_init"},
+    {"name": "jump-label-init", "symbol": "jump_label_init"},
+    {"name": "parse-early-param", "symbol": "parse_early_param"},
+    {"name": "efi-init", "symbol": "efi_init"},
+    {"name": "paging-init", "symbol": "paging_init"},
     {"name": "mm-core-init", "symbol": "mm_core_init"},
     {"name": "sched-init", "symbol": "sched_init"},
     {"name": "init-irq", "symbol": "init_IRQ"},
@@ -37,6 +45,6 @@
   ],
   "pass_markers": {
     "console_any": [],
-    "symbol_any": ["setup_arch"]
+    "symbol_any": ["paging_init"]
   }
 }
