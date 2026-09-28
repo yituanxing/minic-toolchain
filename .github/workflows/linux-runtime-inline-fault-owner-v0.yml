@@ -11,10 +11,14 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: linux-runtime-inline-fault-owner-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   inline-owner:
     runs-on: ubuntu-24.04
-    timeout-minutes: 6
+    timeout-minutes: 4
     steps:
       - uses: actions/checkout@v4
 
@@ -31,7 +35,7 @@ jobs:
           set -Eeuo pipefail
           sudo apt-get -o Acquire::Retries=2 install -y --no-install-recommends binutils-riscv64-linux-gnu
 
-      - name: Resolve inline clone owner
+      - name: Resolve inline clone owner fast
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -41,32 +45,24 @@ jobs:
           mkdir -p "$ev/objects"
           : > "$ev/owner-candidates.txt"
 
-          while IFS= read -r -d '' obj; do
-            if grep -a -q -F "$sym" "$obj"; then
-              rel="${obj#$out/}"
-              echo "OWNER_CANDIDATE=$rel" | tee -a "$ev/owner-candidates.txt"
-              safe="${rel//\//__}"
-              riscv64-linux-gnu-nm -an "$obj" > "$ev/objects/$safe.nm.txt" || true
-              riscv64-linux-gnu-objdump -dr "$obj" > "$ev/objects/$safe.objdump.txt" || true
-              grep -n -F "$sym" "$ev/objects/$safe.nm.txt" || true
-              grep -n -A40 -B12 "<$sym>:" "$ev/objects/$safe.objdump.txt" || true
-              asm="${obj%.o}.minic-stage2.s"
-              if test -s "$asm"; then
-                cp "$asm" "$ev/objects/$safe.minic-stage2.s"
-              fi
+          mapfile -t owners < <(find "$out" -type f -name '*.o' -print0 | xargs -0 -r grep -a -l -F "$sym" || true)
+          echo "OWNER_CANDIDATE_COUNT=${#owners[@]}"
+          for obj in "${owners[@]}"; do
+            rel="${obj#$out/}"
+            echo "OWNER_CANDIDATE=$rel" | tee -a "$ev/owner-candidates.txt"
+            safe="${rel//\//__}"
+            riscv64-linux-gnu-nm -an "$obj" > "$ev/objects/$safe.nm.txt" || true
+            riscv64-linux-gnu-objdump -dr "$obj" > "$ev/objects/$safe.objdump.txt" || true
+            echo "--- $rel symbol ---"
+            grep -n -F "$sym" "$ev/objects/$safe.nm.txt" || true
+            echo "--- $rel disassembly ---"
+            grep -n -A48 -B16 "<$sym>:" "$ev/objects/$safe.objdump.txt" || true
+            asm="${obj%.o}.minic-stage2.s"
+            if test -s "$asm"; then
+              cp "$asm" "$ev/objects/$safe.minic-stage2.s"
             fi
-          done < <(find "$out" -type f -name '*.o' -print0)
-
-          echo '--- archive symbol candidates ---' | tee "$ev/archive-candidates.txt"
-          while IFS= read -r -d '' ar; do
-            if riscv64-linux-gnu-nm -A -an "$ar" 2>/dev/null | grep -F "$sym" >> "$ev/archive-candidates.txt"; then
-              echo "ARCHIVE_CANDIDATE=${ar#$out/}"
-            fi
-          done < <(find "$out" -type f -name '*.a' -print0)
-
-          count=$(grep -c '^OWNER_CANDIDATE=' "$ev/owner-candidates.txt" || true)
-          echo "OWNER_CANDIDATE_COUNT=$count"
-          test "$count" -gt 0
+          done
+          test "${#owners[@]}" -gt 0
 
       - name: Preserve owner evidence
         if: always()
