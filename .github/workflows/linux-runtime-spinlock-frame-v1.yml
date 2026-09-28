@@ -33,7 +33,7 @@ jobs:
           fail-on-cache-miss: true
       - name: Install prerequisites
         run: sudo apt-get -o Acquire::Retries=2 install -y --no-install-recommends gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu python3 make
-      - name: Build runtime MiniC and refresh spinlock_debug
+      - name: Build runtime MiniC and inspect debug_spin_lock_before
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -52,23 +52,33 @@ jobs:
             make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- CC="$wrapper" -j2 V=1 "$target" >"$ev/refresh.log" 2>&1
           cp "$out/$base.minic-stage2.s" "$ev/spinlock_debug.s"
           riscv64-linux-gnu-objdump -dr "$out/$target" > "$ev/spinlock_debug.objdump.txt"
+          riscv64-linux-gnu-nm -an "$out/$target" > "$ev/spinlock_debug.nm.txt"
           python3 - <<'PY'
           import re
           from pathlib import Path
           p=Path('build/linux-runtime-spinlock-frame-v1/spinlock_debug.objdump.txt')
           lines=p.read_text(errors='replace').splitlines()
-          sym='__minic_inline_spec_720_39'
+          sym='debug_spin_lock_before'
           i=next(i for i,l in enumerate(lines) if f'<{sym}>:' in l)
-          j=next((k for k in range(i+1,len(lines)) if re.match(r'^\s*[0-9a-f]+ <[^>]+>:$',lines[k]) and '<.L' not in lines[k]), min(len(lines),i+120))
+          head=re.search(r'^\s*([0-9a-f]+)', lines[i])
+          base=int(head.group(1),16)
+          j=next((k for k in range(i+1,len(lines)) if re.match(r'^\s*[0-9a-f]+ <[^>]+>:$',lines[k]) and '<.L' not in lines[k]), min(len(lines),i+160))
           body=lines[i:j]
-          print('CLONE_OBJDUMP_BEGIN')
-          print('\n'.join(body[:120]))
-          print('CLONE_OBJDUMP_END')
-          regs=sorted(set(re.findall(r'\b(s(?:[0-9]|10|11))\b','\n'.join(body))), key=lambda x:int(x[1:]))
-          print('CLONE_S_REGS=' + ','.join(regs))
-          print('CLONE_S_REG_COUNT=' + str(len(regs)))
-          m=re.search(r'addi\s+sp,sp,-(\d+)', '\n'.join(body[:8]))
-          print('CLONE_FRAME=' + (m.group(1) if m else 'unknown'))
+          print('DEBUG_SPIN_OBJDUMP_BEGIN')
+          print('\n'.join(body[:160]))
+          print('DEBUG_SPIN_OBJDUMP_END')
+          m=re.search(r'addi\s+sp,sp,-(\d+)', '\n'.join(body[:12]))
+          print('DEBUG_SPIN_FRAME=' + (m.group(1) if m else 'unknown'))
+          target=base+0x1c
+          print(f'DEBUG_SPIN_BASE=0x{base:x}')
+          print(f'DEBUG_SPIN_FAULT_PC=0x{target:x}')
+          for l in body:
+              mm=re.match(r'^\s*([0-9a-f]+):', l)
+              if mm and int(mm.group(1),16)==target:
+                  print('DEBUG_SPIN_PLUS_1C=' + l.strip())
+          print('DEBUG_SPIN_PROLOGUE_BEGIN')
+          print('\n'.join(body[:24]))
+          print('DEBUG_SPIN_PROLOGUE_END')
           PY
       - name: Upload evidence
         if: always()
