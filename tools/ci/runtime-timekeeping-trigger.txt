@@ -1,1 +1,1 @@
-trigger timekeeping owner refresh with record snapshot frame reuse
+trigger timekeeping owner refresh with debug_spin_lock_before frontier probe
