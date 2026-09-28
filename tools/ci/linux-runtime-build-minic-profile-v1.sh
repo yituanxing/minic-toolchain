@@ -43,6 +43,7 @@ patches=(
   apply-inline-asm-symbolic-specialization-v0.py
   apply-riscv64-core-value-slot-pack-v0.py
   apply-riscv64-core-value-slot-reuse-v0.py
+  apply-riscv64-record-call-result-snapshot-reuse-v0.py
   apply-riscv64-structured-asm-used-callee-save-v0.py
   apply-riscv64-pi-local-symbol-address-v0.py
 )
