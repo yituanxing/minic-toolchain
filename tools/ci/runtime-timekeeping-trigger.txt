@@ -1,1 +1,1 @@
-trigger timekeeping owner refresh with debug_spin_lock_before frontier probe
+trigger conservative scalar Core object slot reuse frontier validation
