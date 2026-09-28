@@ -1,1 +1,1 @@
-trigger timekeeping owner refresh with used callee-save runtime profile
+trigger timekeeping owner refresh with record snapshot frame reuse
