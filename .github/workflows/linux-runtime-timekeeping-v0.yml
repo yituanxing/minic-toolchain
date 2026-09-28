@@ -112,6 +112,38 @@ jobs:
           refresh_obj arch/riscv/kernel/irq.o irq-refresh.log
           refresh_obj kernel/locking/spinlock.o spinlock-refresh.log
           refresh_obj kernel/locking/spinlock_debug.o spinlock_debug-refresh.log
+
+          test -s "$out/kernel/locking/spinlock_debug.minic-stage2.s"
+          cp "$out/kernel/locking/spinlock_debug.minic-stage2.s" "$ev/timekeeping.spinlock_debug.s"
+          riscv64-linux-gnu-objdump -dr "$out/kernel/locking/spinlock_debug.o" >"$ev/timekeeping.spinlock_debug.objdump.txt"
+          riscv64-linux-gnu-nm -an "$out/kernel/locking/spinlock_debug.o" >"$ev/timekeeping.spinlock_debug.nm.txt"
+          python3 - <<'PY'
+          import re
+          from pathlib import Path
+          p=Path('build/linux-runtime-timekeeping-v0/timekeeping.spinlock_debug.objdump.txt')
+          lines=p.read_text(errors='replace').splitlines()
+          sym='debug_spin_lock_before'
+          i=next(i for i,l in enumerate(lines) if f'<{sym}>:' in l)
+          head=re.search(r'^\s*([0-9a-f]+)', lines[i])
+          base=int(head.group(1),16)
+          j=next((k for k in range(i+1,len(lines)) if re.match(r'^\s*[0-9a-f]+ <[^>]+>:$',lines[k]) and '<.L' not in lines[k]), min(len(lines),i+200))
+          body=lines[i:j]
+          print('DEBUG_SPIN_OBJDUMP_BEGIN')
+          print('\n'.join(body[:160]))
+          print('DEBUG_SPIN_OBJDUMP_END')
+          m=re.search(r'addi\s+sp,sp,-(\d+)', '\n'.join(body[:16]))
+          print('DEBUG_SPIN_FRAME=' + (m.group(1) if m else 'unknown'))
+          print(f'DEBUG_SPIN_BASE=0x{base:x}')
+          target=base+0x1c
+          for l in body:
+              mm=re.match(r'^\s*([0-9a-f]+):',l)
+              if mm and int(mm.group(1),16)==target:
+                  print('DEBUG_SPIN_PLUS_1C=' + l.strip())
+          print('DEBUG_SPIN_PROLOGUE_BEGIN')
+          print('\n'.join(body[:28]))
+          print('DEBUG_SPIN_PROLOGUE_END')
+          PY
+
           refresh_obj kernel/sched/build_utility.o build_utility-refresh.log
 
           cp "$out/kernel/time/timekeeping.o" "$ev/timekeeping.before.o"
