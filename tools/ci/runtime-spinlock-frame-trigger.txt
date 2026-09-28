@@ -1,1 +1,1 @@
-trigger used callee-save spinlock frame validation
+trigger debug_spin_lock_before frame validation v2
