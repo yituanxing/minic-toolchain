@@ -1,1 +1,1 @@
-trigger spinlock debug frame inspection
+trigger used callee-save spinlock frame validation
