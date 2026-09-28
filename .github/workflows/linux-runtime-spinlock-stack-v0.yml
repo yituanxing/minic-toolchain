@@ -21,27 +21,23 @@ jobs:
     timeout-minutes: 6
     steps:
       - uses: actions/checkout@v4
-
       - name: Restore full fixture
         uses: actions/cache/restore@v4
         with:
           path: build/linux-expanded-kbuild-v0/out
           key: linux-expanded-mixed-v1-6.6.143-Linux-d30569a4c675f6ac72d9f63c28f0b8745317f7a15c0799d10768f916d74b3a88
           fail-on-cache-miss: true
-
       - name: Restore Linux source
         uses: actions/cache/restore@v4
         with:
           path: build/linux-expanded-kbuild-v0/linux-6.6.143
           key: linux-source-6.6.143-dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932-v1
           fail-on-cache-miss: true
-
       - name: Install focused prerequisites
         shell: bash
         run: |
           set -Eeuo pipefail
           sudo apt-get -o Acquire::Retries=2 install -y --no-install-recommends gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu make bc
-
       - name: Build current MiniC and refresh spinlock_debug
         shell: bash
         run: |
@@ -53,52 +49,74 @@ jobs:
           build="$GITHUB_WORKSPACE/build/toolchain-runtime-spinlock-stack-v0"
           wrapper="$GITHUB_WORKSPACE/tests/external/linux/stage2_kbuild_cc.sh"
           mkdir -p "$ev"
-
           bash tools/ci/linux-runtime-build-minic-profile-v1.sh "$build" "$ev/profile"
           target=kernel/locking/spinlock_debug.o
           base=${target%.o}
-          rm -f "$out/$target" "$out/kernel/locking/.spinlock_debug.o.cmd" \
-            "$out/$base.minic-stage2.i" "$out/$base.minic-stage2.s"
+          rm -f "$out/$target" "$out/kernel/locking/.spinlock_debug.o.cmd" "$out/$base.minic-stage2.i" "$out/$base.minic-stage2.s"
           MINIC="$build/bin/minic" REAL_CC=/usr/bin/riscv64-linux-gnu-gcc MINIC_KEEP_INTERMEDIATES=1 \
-            make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- CC="$wrapper" -j2 V=1 "$target" \
-            >"$ev/refresh.log" 2>&1
-          test -s "$out/$target"
+            make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- CC="$wrapper" -j2 V=1 "$target" >"$ev/refresh.log" 2>&1
           test -s "$out/$base.minic-stage2.s"
           cp "$out/$base.minic-stage2.s" "$ev/spinlock_debug.s"
-          cp "$out/$base.minic-stage2.i" "$ev/spinlock_debug.i"
-          riscv64-linux-gnu-nm -an "$out/$target" > "$ev/spinlock_debug.nm.txt"
-          riscv64-linux-gnu-objdump -dr "$out/$target" > "$ev/spinlock_debug.objdump.txt"
-
-      - name: Trace clone callers and stack writes
+      - name: Unwind reverse call chain and frame sizes
         shell: bash
         run: |
           set -Eeuo pipefail
-          ev="$GITHUB_WORKSPACE/build/linux-runtime-spinlock-stack-v0"
-          sym='__minic_inline_spec_720_39'
           python3 - <<'PY'
           import re
           from pathlib import Path
-          ev=Path('build/linux-runtime-spinlock-stack-v0')
-          lines=(ev/'spinlock_debug.objdump.txt').read_text(errors='replace').splitlines()
-          hits=[i for i,l in enumerate(lines) if '__minic_inline_spec_720_39' in l]
+          p=Path('build/linux-runtime-spinlock-stack-v0/spinlock_debug.s')
+          lines=p.read_text(errors='replace').splitlines()
+          funcs={}
+          order=[]
+          cur=None
+          for line in lines:
+              m=re.match(r'^\.type\s+([^,]+),\s*@function', line.strip())
+              if m:
+                  cur=m.group(1); funcs.setdefault(cur,[]); order.append(cur); continue
+              if cur is not None:
+                  funcs[cur].append(line)
+                  if line.strip().startswith('.size '+cur+','):
+                      cur=None
+          calls={f:[] for f in funcs}
+          frame={}
+          restores={}
+          for f,b in funcs.items():
+              for line in b:
+                  m=re.search(r'\bcall\s+([^\s#]+)', line)
+                  if m: calls[f].append(m.group(1))
+              neg=[]; pos=[]
+              for line in b:
+                  m=re.search(r'\baddi\s+sp,\s*sp,\s*(-?\d+)', line)
+                  if m:
+                      v=int(m.group(1)); (neg if v<0 else pos).append(v)
+              frame[f]=-neg[0] if neg else 0
+              restores[f]=pos[-1] if pos else 0
+          rev={}
+          for caller, tgts in calls.items():
+              for t in tgts: rev.setdefault(t,[]).append(caller)
+          target='__minic_inline_spec_720_39'
           out=[]
-          out.append(f'OBJDUMP_SYMBOL_HITS={len(hits)}')
-          for n,i in enumerate(hits):
-              out.append(f'--- HIT {n} line={i+1} ---')
-              out.extend(lines[max(0,i-24):min(len(lines),i+30)])
-          (ev/'clone-objdump-excerpts.txt').write_text('\n'.join(out)+'\n')
-          print('\n'.join(out))
-
-          asm=(ev/'spinlock_debug.s').read_text(errors='replace').splitlines()
-          ah=[i for i,l in enumerate(asm) if '__minic_inline_spec_720_39' in l]
-          aout=[f'ASM_SYMBOL_HITS={len(ah)}']
-          for n,i in enumerate(ah):
-              aout.append(f'--- ASM HIT {n} line={i+1} ---')
-              aout.extend(asm[max(0,i-35):min(len(asm),i+55)])
-          (ev/'clone-asm-excerpts.txt').write_text('\n'.join(aout)+'\n')
-          print('\n'.join(aout))
+          seen=set()
+          frontier=[(target,0)]
+          while frontier:
+              f,d=frontier.pop(0)
+              if (f,d) in seen or d>12: continue
+              seen.add((f,d))
+              cs=sorted(set(rev.get(f,[])))
+              out.append(f'DEPTH={d} FUNC={f} FRAME={frame.get(f,"?")} RESTORE={restores.get(f,"?")} CALLERS={";".join(cs) if cs else "<none-in-TU>"}')
+              for c in cs: frontier.append((c,d+1))
+          out.append('--- CHAIN FUNCTION STACK MUTATIONS ---')
+          chain={x.split(' FUNC=')[1].split(' FRAME=')[0] for x in out if ' FUNC=' in x}
+          for f in order:
+              if f not in chain: continue
+              out.append(f'## {f}')
+              for line in funcs[f]:
+                  s=line.strip()
+                  if re.search(r'\b(addi\s+sp,\s*sp|call\s+|ret\b)', s): out.append(s)
+          text='\n'.join(out)+'\n'
+          Path('build/linux-runtime-spinlock-stack-v0/call-chain.txt').write_text(text)
+          print(text)
           PY
-
       - name: Preserve small evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -107,7 +125,6 @@ jobs:
           path: |
             build/linux-runtime-spinlock-stack-v0/profile/patch.log
             build/linux-runtime-spinlock-stack-v0/refresh.log
-            build/linux-runtime-spinlock-stack-v0/clone-objdump-excerpts.txt
-            build/linux-runtime-spinlock-stack-v0/clone-asm-excerpts.txt
+            build/linux-runtime-spinlock-stack-v0/call-chain.txt
           if-no-files-found: warn
           retention-days: 7
