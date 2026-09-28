@@ -1,0 +1,78 @@
+name: Linux Runtime Inline Fault Owner V0
+
+on:
+  push:
+    branches: ["agent/linux-expanded-kbuild-v0"]
+    paths:
+      - ".github/workflows/linux-runtime-inline-fault-owner-v0.yml"
+      - "tools/ci/runtime-inline-fault-owner-trigger.txt"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  inline-owner:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Restore certified full linked fixture
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-expanded-kbuild-v0/out
+          key: linux-expanded-mixed-v1-6.6.143-Linux-d30569a4c675f6ac72d9f63c28f0b8745317f7a15c0799d10768f916d74b3a88
+          fail-on-cache-miss: true
+
+      - name: Install RISC-V binutils
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get -o Acquire::Retries=2 install -y --no-install-recommends binutils-riscv64-linux-gnu
+
+      - name: Resolve inline clone owner
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          out="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0/out"
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-inline-fault-owner-v0"
+          sym='__minic_inline_spec_720_39'
+          mkdir -p "$ev/objects"
+          : > "$ev/owner-candidates.txt"
+
+          while IFS= read -r -d '' obj; do
+            if grep -a -q -F "$sym" "$obj"; then
+              rel="${obj#$out/}"
+              echo "OWNER_CANDIDATE=$rel" | tee -a "$ev/owner-candidates.txt"
+              safe="${rel//\//__}"
+              riscv64-linux-gnu-nm -an "$obj" > "$ev/objects/$safe.nm.txt" || true
+              riscv64-linux-gnu-objdump -dr "$obj" > "$ev/objects/$safe.objdump.txt" || true
+              grep -n -F "$sym" "$ev/objects/$safe.nm.txt" || true
+              grep -n -A40 -B12 "<$sym>:" "$ev/objects/$safe.objdump.txt" || true
+              asm="${obj%.o}.minic-stage2.s"
+              if test -s "$asm"; then
+                cp "$asm" "$ev/objects/$safe.minic-stage2.s"
+              fi
+            fi
+          done < <(find "$out" -type f -name '*.o' -print0)
+
+          echo '--- archive symbol candidates ---' | tee "$ev/archive-candidates.txt"
+          while IFS= read -r -d '' ar; do
+            if riscv64-linux-gnu-nm -A -an "$ar" 2>/dev/null | grep -F "$sym" >> "$ev/archive-candidates.txt"; then
+              echo "ARCHIVE_CANDIDATE=${ar#$out/}"
+            fi
+          done < <(find "$out" -type f -name '*.a' -print0)
+
+          count=$(grep -c '^OWNER_CANDIDATE=' "$ev/owner-candidates.txt" || true)
+          echo "OWNER_CANDIDATE_COUNT=$count"
+          test "$count" -gt 0
+
+      - name: Preserve owner evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-runtime-inline-fault-owner-v0-${{ github.sha }}
+          path: build/linux-runtime-inline-fault-owner-v0/
+          if-no-files-found: warn
+          retention-days: 7
