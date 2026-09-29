@@ -18,6 +18,7 @@ LD=${cross}ld
 NM=${cross}nm
 OBJCOPY=${cross}objcopy
 OBJDUMP=${cross}objdump
+READELF=${cross}readelf
 
 # Keep the certified V2 construction as the base.  V2 intentionally omits
 # generated kallsyms data; V3 adds only the normal kallsyms multi-pass phase.
@@ -69,7 +70,11 @@ gen_kallsyms_obj() {
     NM="$NM" /bin/sh "$full_src/scripts/mksysmap" "$input" "$syms" >/dev/null 2>&1
   fi
   "$out/scripts/kallsyms" "${ksymopt[@]}" "$syms" >"$asm"
-  "$CC" -D__ASSEMBLY__ \
+  # The RISC-V kernel uses the LP64 soft-float ABI even when the toolchain's
+  # user-space default is LP64D.  Kallsyms output is data-only assembly, so
+  # preserving the kernel ABI here is sufficient to avoid an ELF float-ABI
+  # mismatch without guessing extra ISA extensions.
+  "$CC" -mabi=lp64 -D__ASSEMBLY__ \
     -I"$full_src/arch/riscv/include" \
     -I"$out/arch/riscv/include/generated" \
     -I"$full_src/arch/riscv/include/uapi" \
@@ -80,6 +85,8 @@ gen_kallsyms_obj() {
     -I"$out/include/generated/uapi" \
     -c -o "$obj" "$asm"
   test -s "$obj"
+  "$READELF" -h "$obj" | grep -q 'soft-float ABI'
+  echo "KALLSYMS_OBJ_ABI=PASS tag=$tag abi=lp64" >&2
   printf '%s\n' "$obj"
 }
 
