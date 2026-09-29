@@ -1,0 +1,32 @@
+{
+  "schema": 1,
+  "name": "linux-6.6.143-console-to-rest-init-frontier",
+  "phys_entry": "0x80200000",
+  "baseline": {
+    "fault": {
+      "desc": "store_page_fault",
+      "symbol": "raise_softirq_irqoff",
+      "offset": "0x1c"
+    },
+    "progress_marker": "console-init",
+    "certified_by": {
+      "progress_workflow_run": 36529018338,
+      "progress_job": 109278258436,
+      "progress_commit": "36c5570b5ce3d0db361e14003848157c0b594cba",
+      "prior_fault_workflow_run": 36528477122,
+      "prior_fault_job": 109276608830
+    }
+  },
+  "progress_markers": [
+    {"name": "kernel-entry", "symbol": "_start"},
+    {"name": "start-kernel", "symbol": "start_kernel"},
+    {"name": "sched-init", "symbol": "sched_init"},
+    {"name": "init-irq", "symbol": "init_IRQ"},
+    {"name": "console-init", "symbol": "console_init"},
+    {"name": "rest-init", "symbol": "arch_call_rest_init"}
+  ],
+  "pass_markers": {
+    "console_any": [],
+    "symbol_any": ["arch_call_rest_init"]
+  }
+}
