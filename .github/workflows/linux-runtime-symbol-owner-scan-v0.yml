@@ -10,6 +10,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: linux-runtime-symbol-owner-scan-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   locate-owner:
     runs-on: ubuntu-24.04
@@ -31,18 +35,25 @@ jobs:
           set -Eeuo pipefail
           out="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0/out"
           sym='__minic_inline_spec_932_103'
-          hits=0
-          while IFS= read -r -d '' obj; do
-            if riscv64-linux-gnu-nm -an "$obj" 2>/dev/null | grep -F " $sym" >/dev/null; then
-              echo "SYMBOL_OWNER=${obj#$out/}"
-              riscv64-linux-gnu-nm -an "$obj" | grep -F " $sym"
-              riscv64-linux-gnu-objdump -dr "$obj" | awk -v s="$sym" '
-                $0 ~ "<" s ">:" {p=1; n=0}
-                p {print; n++}
-                p && n>=80 {exit}
-              '
-              hits=$((hits+1))
-            fi
-          done < <(find "$out" -type f -name '*.o' -print0)
+          hitfile="$RUNNER_TEMP/symbol-hits.txt"
+          : > "$hitfile"
+
+          find "$out" -type f -name '*.o' -print0 \
+            | xargs -0 -r -n 200 riscv64-linux-gnu-nm -A -an 2>/dev/null \
+            | grep -F " $sym" > "$hitfile" || true
+
+          cat "$hitfile"
+          hits=$(wc -l < "$hitfile")
           echo "SYMBOL_OWNER_HITS=$hits"
           test "$hits" -gt 0
+
+          cut -d: -f1 "$hitfile" | sort -u | while IFS= read -r obj; do
+            echo "SYMBOL_OWNER=${obj#$out/}"
+            echo 'SYMBOL_DISASSEMBLY_BEGIN'
+            riscv64-linux-gnu-objdump -dr "$obj" | awk -v s="$sym" '
+              $0 ~ "<" s ">:" {p=1; n=0}
+              p {print; n++}
+              p && n>=80 {exit}
+            '
+            echo 'SYMBOL_DISASSEMBLY_END'
+          done
