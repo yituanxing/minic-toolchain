@@ -1,4 +1,4 @@
-name: Linux Runtime RCU Softirq Rest Init V2
+name: Linux Runtime RCU Softirq Rest Init V3
 
 on:
   push:
@@ -64,7 +64,7 @@ jobs:
           grep -Fx 'apply-riscv64-core-object-slot-reuse-v0.py' "$ev/profile/minic-profile.txt"
           echo 'RUNTIME_OWNER_PROFILE=PASS slot_reuse=current'
 
-      - name: Refresh certified owners through RCU then inspect softirq owner
+      - name: Refresh certified runtime owners
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -84,48 +84,6 @@ jobs:
               >"$ev/$log" 2>&1
             test -s "$out/$target"
             echo "OWNER_REFRESH=PASS target=$target"
-          }
-
-          inspect_pair() {
-            prefix="$1"; sym="$2"; offset_hex="$3"
-            python3 - "$ev" "$prefix" "$sym" "$offset_hex" <<'PY'
-          import re, sys
-          from pathlib import Path
-          ev=Path(sys.argv[1]); prefix=sys.argv[2]; name=sys.argv[3]; off=int(sys.argv[4],16)
-          def frame_size(body):
-              text='\n'.join(body[:40])
-              m=re.search(r'addi\s+sp,sp,-(\d+)', text)
-              if m: return int(m.group(1))
-              for i,line in enumerate(body[:24]):
-                  m1=re.search(r'lui\s+t2,0x([0-9a-f]+)', line)
-                  if m1:
-                      for line2 in body[i+1:i+7]:
-                          m2=re.search(r'addiw\s+t2,t2,(-?\d+)', line2)
-                          if m2: return (int(m1.group(1),16)<<12)+int(m2.group(1))
-              return None
-          for tag in ('before','after'):
-              path=ev/f'{prefix}.{tag}.objdump.txt'
-              lines=path.read_text(errors='replace').splitlines()
-              start=next((i for i,l in enumerate(lines) if f'<{name}>:' in l),None)
-              key=prefix.upper().replace('-','_')
-              print(f'{key}_{tag.upper()}_FOUND={int(start is not None)}')
-              if start is None: continue
-              end=next((i for i in range(start+1,len(lines)) if re.match(r'^\s*[0-9a-f]+ <[^>]+>:$', lines[i]) and '<.L' not in lines[i]), min(len(lines),start+260))
-              body=lines[start:end]
-              base=int(re.search(r'^\s*([0-9a-f]+)', lines[start]).group(1),16)
-              frame=frame_size(body)
-              print(f'{key}_{tag.upper()}_BASE=0x{base:x}')
-              print(f'{key}_{tag.upper()}_FRAME={frame if frame is not None else "unknown"}')
-              print(f'{key}_{tag.upper()}_AROUND_PLUS_{off:X}_BEGIN')
-              target=base+off
-              for line in body:
-                  mm=re.match(r'^\s*([0-9a-f]+):', line)
-                  if mm and abs(int(mm.group(1),16)-target)<=28: print(line)
-              print(f'{key}_{tag.upper()}_AROUND_PLUS_{off:X}_END')
-              print(f'{key}_{tag.upper()}_PROLOGUE_BEGIN')
-              print('\n'.join(body[:80]))
-              print(f'{key}_{tag.upper()}_PROLOGUE_END')
-          PY
           }
 
           pi_target=arch/riscv/kernel/pi/cmdline_early.pi.o
@@ -151,40 +109,8 @@ jobs:
           refresh_obj kernel/time/timer.o timer-refresh.log
           refresh_obj kernel/time/hrtimer.o hrtimer-refresh.log
           refresh_obj kernel/time/tick-sched.o tick-sched-refresh.log
-
-          rcu_target=kernel/rcu/tree.o
-          rcu_sym=rcu_sched_clock_irq
-          test -s "$out/$rcu_target"
-          cp "$out/$rcu_target" "$ev/rcu-tree.before.o"
-          riscv64-linux-gnu-objdump -dr "$ev/rcu-tree.before.o" >"$ev/rcu-tree.before.objdump.txt"
-          riscv64-linux-gnu-nm -an "$ev/rcu-tree.before.o" >"$ev/rcu-tree.before.nm.txt"
-          grep -E " [Tt] ${rcu_sym}$" "$ev/rcu-tree.before.nm.txt"
-          refresh_obj "$rcu_target" rcu-tree-refresh.log
-          cp "$out/kernel/rcu/tree.minic-stage2.s" "$ev/rcu-tree.minic-stage2.s"
-          cp "$out/$rcu_target" "$ev/rcu-tree.after.o"
-          riscv64-linux-gnu-objdump -dr "$ev/rcu-tree.after.o" >"$ev/rcu-tree.after.objdump.txt"
-          riscv64-linux-gnu-nm -an "$ev/rcu-tree.after.o" >"$ev/rcu-tree.after.nm.txt"
-          grep -E " [Tt] ${rcu_sym}$" "$ev/rcu-tree.after.nm.txt"
-          inspect_pair rcu-tree "$rcu_sym" 0x2a
-
-          soft_target=kernel/softirq.o
-          soft_sym=raise_softirq_irqoff
-          test -s "$out/$soft_target"
-          cp "$out/$soft_target" "$ev/softirq.before.o"
-          riscv64-linux-gnu-objdump -dr "$ev/softirq.before.o" >"$ev/softirq.before.objdump.txt"
-          riscv64-linux-gnu-nm -an "$ev/softirq.before.o" >"$ev/softirq.before.nm.txt"
-          grep -E " [Tt] ${soft_sym}$" "$ev/softirq.before.nm.txt"
-          echo 'SOFTIRQ_OWNER_BEFORE=kernel/softirq.o'
-
-          refresh_obj "$soft_target" softirq-refresh.log
-          test -s "$out/kernel/softirq.minic-stage2.s"
-          cp "$out/kernel/softirq.minic-stage2.s" "$ev/softirq.minic-stage2.s"
-          cp "$out/$soft_target" "$ev/softirq.after.o"
-          riscv64-linux-gnu-objdump -dr "$ev/softirq.after.o" >"$ev/softirq.after.objdump.txt"
-          riscv64-linux-gnu-nm -an "$ev/softirq.after.o" >"$ev/softirq.after.nm.txt"
-          grep -E " [Tt] ${soft_sym}$" "$ev/softirq.after.nm.txt"
-          echo 'SOFTIRQ_OWNER_AFTER=kernel/softirq.o'
-          inspect_pair softirq "$soft_sym" 0x1c
+          refresh_obj kernel/rcu/tree.o rcu-tree-refresh.log
+          refresh_obj kernel/softirq.o softirq-refresh.log
 
       - name: Relink early image
         shell: bash
@@ -194,6 +120,9 @@ jobs:
           frozen="$GITHUB_WORKSPACE/build/linux-runtime-frozen-v1"
           ev="$GITHUB_WORKSPACE/build/linux-runtime-rcu-owner-v0"
           bash tools/ci/linux-early-runtime-link-v2.sh "$frozen/src" "$work/out" "$ev/early"
+          echo 'FRONTIER_SYMBOLS_BEGIN'
+          grep -E '[[:space:]][Tt][[:space:]]+(console_init|fork_init|arch_call_rest_init)$' "$ev/early/nm.txt" || true
+          echo 'FRONTIER_SYMBOLS_END'
 
       - name: Execute QEMU current init-IRQ frontier
         shell: bash
@@ -208,12 +137,9 @@ jobs:
           rc=${PIPESTATUS[0]}
           set -e
           cat "$ev/watch/frontier-summary.txt" || true
-          echo 'QEMU_INTERRUPTS_BEGIN'
-          cat "$ev/watch/qemu.interrupts.txt" || true
-          echo 'QEMU_INTERRUPTS_END'
           exit "$rc"
 
-      - name: Execute QEMU rest-init frontier
+      - name: Execute and diagnose QEMU fork-init frontier
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -222,26 +148,73 @@ jobs:
           python3 tools/ci/linux-runtime-qemu-watch-v1.py \
             --config tools/ci/linux-runtime-rest-init-frontier-v0.json \
             --nm "$ev/early/nm.txt" --image "$ev/early/Image.early" \
-            --evidence-dir "$ev/watch-rest" --timeout-ms 12000 --poll-ms 100 | tee "$ev/watch-rest.stdout.txt"
+            --evidence-dir "$ev/watch-rest" --timeout-ms 30000 --poll-ms 100 | tee "$ev/watch-rest.stdout.txt"
           rc=${PIPESTATUS[0]}
           set -e
+
           cat "$ev/watch-rest/frontier-summary.txt" || true
-          echo 'QEMU_REST_INTERRUPTS_BEGIN'
-          cat "$ev/watch-rest/qemu.interrupts.txt" || true
-          echo 'QEMU_REST_INTERRUPTS_END'
+          echo 'QEMU_REST_CONSOLE_TAIL_BEGIN'
+          tail -n 160 "$ev/watch-rest/qemu.console.log" || true
+          echo 'QEMU_REST_CONSOLE_TAIL_END'
+
+          echo 'QEMU_REST_INTERRUPT_MAP_BEGIN'
+          python3 - "$ev/early/nm.txt" "$ev/watch-rest/qemu.interrupts.txt" <<'PY'
+          import bisect, re, sys
+          from pathlib import Path
+
+          nm_path = Path(sys.argv[1])
+          int_path = Path(sys.argv[2])
+          symbols = []
+          for line in nm_path.read_text(errors='replace').splitlines():
+              p = line.split()
+              if len(p) < 3:
+                  continue
+              try:
+                  addr = int(p[0], 16)
+              except ValueError:
+                  continue
+              symbols.append((addr, p[2]))
+          symbols.sort()
+          addrs = [x[0] for x in symbols]
+
+          def resolve(addr):
+              i = bisect.bisect_right(addrs, addr) - 1
+              if i < 0:
+                  return '?', 0
+              base, name = symbols[i]
+              return name, addr - base
+
+          events = []
+          rx = re.compile(r'epc:0x([0-9a-fA-F]+).*desc=(\S+)')
+          for line in int_path.read_text(errors='replace').splitlines():
+              m = rx.search(line)
+              if m:
+                  events.append((int(m.group(1), 16), m.group(2)))
+
+          for epc, desc in events[-48:]:
+              name, off = resolve(epc)
+              print(f'INTERRUPT_MAP desc={desc} epc=0x{epc:x} symbol={name}+0x{off:x}')
+
+          seen = set()
+          for epc, desc in events:
+              if desc != 'breakpoint' or epc in seen:
+                  continue
+              seen.add(epc)
+              name, off = resolve(epc)
+              print(f'BREAKPOINT_MAP epc=0x{epc:x} symbol={name}+0x{off:x}')
+          PY
+          echo 'QEMU_REST_INTERRUPT_MAP_END'
           exit "$rc"
 
       - name: Preserve focused evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: linux-runtime-rcu-softirq-rest-init-v2-${{ github.sha }}
+          name: linux-runtime-rcu-softirq-rest-init-v3-${{ github.sha }}
           path: |
             build/linux-runtime-rcu-owner-v0/profile/patch.log
             build/linux-runtime-rcu-owner-v0/profile/minic-profile.txt
             build/linux-runtime-rcu-owner-v0/*-refresh.log
-            build/linux-runtime-rcu-owner-v0/rcu-tree.*
-            build/linux-runtime-rcu-owner-v0/softirq.*
             build/linux-runtime-rcu-owner-v0/early/nm.txt
             build/linux-runtime-rcu-owner-v0/watch/frontier-result.json
             build/linux-runtime-rcu-owner-v0/watch/frontier-summary.txt
@@ -250,6 +223,7 @@ jobs:
             build/linux-runtime-rcu-owner-v0/watch-rest/frontier-result.json
             build/linux-runtime-rcu-owner-v0/watch-rest/frontier-summary.txt
             build/linux-runtime-rcu-owner-v0/watch-rest/watch-result.json
+            build/linux-runtime-rcu-owner-v0/watch-rest/qemu.console.log
             build/linux-runtime-rcu-owner-v0/watch-rest/qemu.interrupts.txt
           if-no-files-found: warn
           retention-days: 7
