@@ -1,4 +1,4 @@
-name: Linux Runtime RCU Owner V0
+name: Linux Runtime RCU Softirq Owner V1
 
 on:
   push:
@@ -11,11 +11,11 @@ permissions:
   contents: read
 
 concurrency:
-  group: linux-runtime-rcu-owner-${{ github.ref }}
+  group: linux-runtime-rcu-softirq-owner-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  rcu-owner-frontier:
+  rcu-softirq-owner-frontier:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -61,9 +61,9 @@ jobs:
           mkdir -p "$ev"
           bash tools/ci/linux-runtime-build-minic-profile-v1.sh "$build" "$ev/profile"
           grep -Fx 'apply-riscv64-core-object-slot-reuse-v0.py' "$ev/profile/minic-profile.txt"
-          echo 'RCU_OWNER_PROFILE=PASS slot_reuse=current'
+          echo 'RUNTIME_OWNER_PROFILE=PASS slot_reuse=current'
 
-      - name: Refresh certified owners then RCU owner
+      - name: Refresh certified owners through RCU then inspect softirq owner
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -83,6 +83,48 @@ jobs:
               >"$ev/$log" 2>&1
             test -s "$out/$target"
             echo "OWNER_REFRESH=PASS target=$target"
+          }
+
+          inspect_pair() {
+            prefix="$1"; sym="$2"; offset_hex="$3"
+            python3 - "$ev" "$prefix" "$sym" "$offset_hex" <<'PY'
+          import re, sys
+          from pathlib import Path
+          ev=Path(sys.argv[1]); prefix=sys.argv[2]; name=sys.argv[3]; off=int(sys.argv[4],16)
+          def frame_size(body):
+              text='\n'.join(body[:40])
+              m=re.search(r'addi\s+sp,sp,-(\d+)', text)
+              if m: return int(m.group(1))
+              for i,line in enumerate(body[:24]):
+                  m1=re.search(r'lui\s+t2,0x([0-9a-f]+)', line)
+                  if m1:
+                      for line2 in body[i+1:i+7]:
+                          m2=re.search(r'addiw\s+t2,t2,(-?\d+)', line2)
+                          if m2: return (int(m1.group(1),16)<<12)+int(m2.group(1))
+              return None
+          for tag in ('before','after'):
+              path=ev/f'{prefix}.{tag}.objdump.txt'
+              lines=path.read_text(errors='replace').splitlines()
+              start=next((i for i,l in enumerate(lines) if f'<{name}>:' in l),None)
+              key=prefix.upper().replace('-','_')
+              print(f'{key}_{tag.upper()}_FOUND={int(start is not None)}')
+              if start is None: continue
+              end=next((i for i in range(start+1,len(lines)) if re.match(r'^\s*[0-9a-f]+ <[^>]+>:$', lines[i]) and '<.L' not in lines[i]), min(len(lines),start+260))
+              body=lines[start:end]
+              base=int(re.search(r'^\s*([0-9a-f]+)', lines[start]).group(1),16)
+              frame=frame_size(body)
+              print(f'{key}_{tag.upper()}_BASE=0x{base:x}')
+              print(f'{key}_{tag.upper()}_FRAME={frame if frame is not None else "unknown"}')
+              print(f'{key}_{tag.upper()}_AROUND_PLUS_{off:X}_BEGIN')
+              target=base+off
+              for line in body:
+                  mm=re.match(r'^\s*([0-9a-f]+):', line)
+                  if mm and abs(int(mm.group(1),16)-target)<=28: print(line)
+              print(f'{key}_{tag.upper()}_AROUND_PLUS_{off:X}_END')
+              print(f'{key}_{tag.upper()}_PROLOGUE_BEGIN')
+              print('\n'.join(body[:80]))
+              print(f'{key}_{tag.upper()}_PROLOGUE_END')
+          PY
           }
 
           pi_target=arch/riscv/kernel/pi/cmdline_early.pi.o
@@ -109,61 +151,39 @@ jobs:
           refresh_obj kernel/time/hrtimer.o hrtimer-refresh.log
           refresh_obj kernel/time/tick-sched.o tick-sched-refresh.log
 
-          target=kernel/rcu/tree.o
-          sym=rcu_sched_clock_irq
-          test -s "$out/$target"
-          cp "$out/$target" "$ev/rcu-tree.before.o"
+          rcu_target=kernel/rcu/tree.o
+          rcu_sym=rcu_sched_clock_irq
+          test -s "$out/$rcu_target"
+          cp "$out/$rcu_target" "$ev/rcu-tree.before.o"
           riscv64-linux-gnu-objdump -dr "$ev/rcu-tree.before.o" >"$ev/rcu-tree.before.objdump.txt"
           riscv64-linux-gnu-nm -an "$ev/rcu-tree.before.o" >"$ev/rcu-tree.before.nm.txt"
-          grep -E " [Tt] ${sym}$" "$ev/rcu-tree.before.nm.txt"
-          echo 'RCU_OWNER_BEFORE=kernel/rcu/tree.o'
-
-          refresh_obj "$target" rcu-tree-refresh.log
-          test -s "$out/kernel/rcu/tree.minic-stage2.s"
+          grep -E " [Tt] ${rcu_sym}$" "$ev/rcu-tree.before.nm.txt"
+          refresh_obj "$rcu_target" rcu-tree-refresh.log
           cp "$out/kernel/rcu/tree.minic-stage2.s" "$ev/rcu-tree.minic-stage2.s"
-          cp "$out/$target" "$ev/rcu-tree.after.o"
+          cp "$out/$rcu_target" "$ev/rcu-tree.after.o"
           riscv64-linux-gnu-objdump -dr "$ev/rcu-tree.after.o" >"$ev/rcu-tree.after.objdump.txt"
           riscv64-linux-gnu-nm -an "$ev/rcu-tree.after.o" >"$ev/rcu-tree.after.nm.txt"
-          grep -E " [Tt] ${sym}$" "$ev/rcu-tree.after.nm.txt"
-          echo 'RCU_OWNER_AFTER=kernel/rcu/tree.o'
+          grep -E " [Tt] ${rcu_sym}$" "$ev/rcu-tree.after.nm.txt"
+          inspect_pair rcu-tree "$rcu_sym" 0x2a
 
-          python3 - <<'PY'
-          import re
-          from pathlib import Path
-          ev=Path('build/linux-runtime-rcu-owner-v0')
-          name='rcu_sched_clock_irq'
-          def frame_size(body):
-              text='\n'.join(body[:40])
-              m=re.search(r'addi\s+sp,sp,-(\d+)', text)
-              if m: return int(m.group(1))
-              for i,line in enumerate(body[:24]):
-                  m1=re.search(r'lui\s+t2,0x([0-9a-f]+)', line)
-                  if m1:
-                      for line2 in body[i+1:i+7]:
-                          m2=re.search(r'addiw\s+t2,t2,(-?\d+)', line2)
-                          if m2: return (int(m1.group(1),16)<<12)+int(m2.group(1))
-              return None
-          for tag in ('before','after'):
-              lines=(ev/f'rcu-tree.{tag}.objdump.txt').read_text(errors='replace').splitlines()
-              start=next((i for i,l in enumerate(lines) if f'<{name}>:' in l),None)
-              print(f'RCU_{tag.upper()}_FOUND={int(start is not None)}')
-              if start is None: continue
-              end=next((i for i in range(start+1,len(lines)) if re.match(r'^\s*[0-9a-f]+ <[^>]+>:$', lines[i]) and '<.L' not in lines[i]), min(len(lines),start+260))
-              body=lines[start:end]
-              base=int(re.search(r'^\s*([0-9a-f]+)', lines[start]).group(1),16)
-              frame=frame_size(body)
-              print(f'RCU_{tag.upper()}_BASE=0x{base:x}')
-              print(f'RCU_{tag.upper()}_FRAME={frame if frame is not None else "unknown"}')
-              print(f'RCU_{tag.upper()}_AROUND_PLUS_2A_BEGIN')
-              target=base+0x2a
-              for line in body:
-                  mm=re.match(r'^\s*([0-9a-f]+):', line)
-                  if mm and abs(int(mm.group(1),16)-target)<=28: print(line)
-              print(f'RCU_{tag.upper()}_AROUND_PLUS_2A_END')
-              print(f'RCU_{tag.upper()}_PROLOGUE_BEGIN')
-              print('\n'.join(body[:80]))
-              print(f'RCU_{tag.upper()}_PROLOGUE_END')
-          PY
+          soft_target=kernel/softirq.o
+          soft_sym=raise_softirq_irqoff
+          test -s "$out/$soft_target"
+          cp "$out/$soft_target" "$ev/softirq.before.o"
+          riscv64-linux-gnu-objdump -dr "$ev/softirq.before.o" >"$ev/softirq.before.objdump.txt"
+          riscv64-linux-gnu-nm -an "$ev/softirq.before.o" >"$ev/softirq.before.nm.txt"
+          grep -E " [Tt] ${soft_sym}$" "$ev/softirq.before.nm.txt"
+          echo 'SOFTIRQ_OWNER_BEFORE=kernel/softirq.o'
+
+          refresh_obj "$soft_target" softirq-refresh.log
+          test -s "$out/kernel/softirq.minic-stage2.s"
+          cp "$out/kernel/softirq.minic-stage2.s" "$ev/softirq.minic-stage2.s"
+          cp "$out/$soft_target" "$ev/softirq.after.o"
+          riscv64-linux-gnu-objdump -dr "$ev/softirq.after.o" >"$ev/softirq.after.objdump.txt"
+          riscv64-linux-gnu-nm -an "$ev/softirq.after.o" >"$ev/softirq.after.nm.txt"
+          grep -E " [Tt] ${soft_sym}$" "$ev/softirq.after.nm.txt"
+          echo 'SOFTIRQ_OWNER_AFTER=kernel/softirq.o'
+          inspect_pair softirq "$soft_sym" 0x1c
 
       - name: Relink early image
         shell: bash
@@ -196,12 +216,13 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: linux-runtime-rcu-owner-v0-${{ github.sha }}
+          name: linux-runtime-rcu-softirq-owner-v1-${{ github.sha }}
           path: |
             build/linux-runtime-rcu-owner-v0/profile/patch.log
             build/linux-runtime-rcu-owner-v0/profile/minic-profile.txt
             build/linux-runtime-rcu-owner-v0/*-refresh.log
             build/linux-runtime-rcu-owner-v0/rcu-tree.*
+            build/linux-runtime-rcu-owner-v0/softirq.*
             build/linux-runtime-rcu-owner-v0/early/nm.txt
             build/linux-runtime-rcu-owner-v0/watch/frontier-result.json
             build/linux-runtime-rcu-owner-v0/watch/frontier-summary.txt
