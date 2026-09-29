@@ -1,0 +1,48 @@
+name: Linux Runtime Symbol Owner Scan V0
+
+on:
+  push:
+    branches: ["agent/linux-expanded-kbuild-v0"]
+    paths:
+      - ".github/workflows/linux-runtime-symbol-owner-scan-v0.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  locate-owner:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Restore certified full linked fixture
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-expanded-kbuild-v0/out
+          key: linux-expanded-mixed-v1-6.6.143-Linux-d30569a4c675f6ac72d9f63c28f0b8745317f7a15c0799d10768f916d74b3a88
+          fail-on-cache-miss: true
+      - name: Install binutils
+        shell: bash
+        run: sudo apt-get -o Acquire::Retries=2 install -y --no-install-recommends binutils-riscv64-linux-gnu
+      - name: Locate exact specialization owner
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          out="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0/out"
+          sym='__minic_inline_spec_932_103'
+          hits=0
+          while IFS= read -r -d '' obj; do
+            if riscv64-linux-gnu-nm -an "$obj" 2>/dev/null | grep -F " $sym" >/dev/null; then
+              echo "SYMBOL_OWNER=${obj#$out/}"
+              riscv64-linux-gnu-nm -an "$obj" | grep -F " $sym"
+              riscv64-linux-gnu-objdump -dr "$obj" | awk -v s="$sym" '
+                $0 ~ "<" s ">:" {p=1; n=0}
+                p {print; n++}
+                p && n>=80 {exit}
+              '
+              hits=$((hits+1))
+            fi
+          done < <(find "$out" -type f -name '*.o' -print0)
+          echo "SYMBOL_OWNER_HITS=$hits"
+          test "$hits" -gt 0
