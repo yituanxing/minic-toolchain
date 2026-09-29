@@ -114,18 +114,26 @@ jobs:
           refresh_obj kernel/rcu/tree.o rcu-tree-refresh.log
           refresh_obj kernel/softirq.o softirq-refresh.log
 
-          test -s "$out/lib/crc32.o"
-          riscv64-linux-gnu-ar t "$out/lib/lib.a" | grep -Fxq 'lib/crc32.o'
-          sha256sum "$out/lib/crc32.o" | tee "$ev/crc32-old.sha256"
-          riscv64-linux-gnu-nm -S "$out/lib/crc32.o" | grep -E '[[:space:]]crc32_body$' | tee "$ev/crc32-old.symbol.txt"
-          riscv64-linux-gnu-objdump -dr "$out/lib/crc32.o" | sed -n '/<crc32_body>:/,/^$/p' >"$ev/crc32-old.disasm.txt"
+          echo 'CRC32_BASELINE_PROBE_BEGIN'
+          riscv64-linux-gnu-ar t "$out/lib/lib.a" | grep -E '(^|/)crc32[^/]*\.o$|crc32' | tee "$ev/crc32-archive-members.txt" || true
+          if [[ -s "$out/lib/crc32.o" ]]; then
+            echo 'CRC32_BASE_OBJECT=present path=lib/crc32.o'
+            sha256sum "$out/lib/crc32.o" | tee "$ev/crc32-old.sha256"
+            riscv64-linux-gnu-nm -S "$out/lib/crc32.o" | grep -E '[[:space:]]crc32_body$' | tee "$ev/crc32-old.symbol.txt" || true
+            riscv64-linux-gnu-objdump -dr "$out/lib/crc32.o" | sed -n '/<crc32_body>:/,/^$/p' >"$ev/crc32-old.disasm.txt"
+          else
+            echo 'CRC32_BASE_OBJECT=missing path=lib/crc32.o'
+          fi
+          echo 'CRC32_BASELINE_PROBE_END'
 
           refresh_obj lib/crc32.o crc32-refresh.log
           sha256sum "$out/lib/crc32.o" | tee "$ev/crc32-new.sha256"
           riscv64-linux-gnu-nm -S "$out/lib/crc32.o" | grep -E '[[:space:]]crc32_body$' | tee "$ev/crc32-new.symbol.txt"
           riscv64-linux-gnu-objdump -dr "$out/lib/crc32.o" | sed -n '/<crc32_body>:/,/^$/p' >"$ev/crc32-new.disasm.txt"
           echo 'CRC32_OWNER_COMPARE_BEGIN'
-          cat "$ev/crc32-old.sha256" "$ev/crc32-old.symbol.txt" "$ev/crc32-new.sha256" "$ev/crc32-new.symbol.txt"
+          [[ ! -s "$ev/crc32-old.sha256" ]] || cat "$ev/crc32-old.sha256"
+          [[ ! -s "$ev/crc32-old.symbol.txt" ]] || cat "$ev/crc32-old.symbol.txt"
+          cat "$ev/crc32-new.sha256" "$ev/crc32-new.symbol.txt"
           echo 'CRC32_OWNER_COMPARE_END'
 
           refresh_obj kernel/kallsyms.o kallsyms-refresh.log
@@ -218,6 +226,7 @@ jobs:
             build/linux-runtime-kallsyms-rest-init-v0/profile/patch.log
             build/linux-runtime-kallsyms-rest-init-v0/profile/minic-profile.txt
             build/linux-runtime-kallsyms-rest-init-v0/*-refresh.log
+            build/linux-runtime-kallsyms-rest-init-v0/crc32-archive-members.txt
             build/linux-runtime-kallsyms-rest-init-v0/crc32-*.sha256
             build/linux-runtime-kallsyms-rest-init-v0/crc32-*.symbol.txt
             build/linux-runtime-kallsyms-rest-init-v0/crc32-*.disasm.txt
