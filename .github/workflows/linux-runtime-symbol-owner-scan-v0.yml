@@ -35,12 +35,23 @@ jobs:
           set -Eeuo pipefail
           out="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0/out"
           sym='__minic_inline_spec_932_103'
+          candidates="$RUNNER_TEMP/symbol-candidates.txt"
           hitfile="$RUNNER_TEMP/symbol-hits.txt"
+          : > "$candidates"
           : > "$hitfile"
 
-          find "$out" -type f -name '*.o' -print0 \
-            | xargs -0 -r -n 200 riscv64-linux-gnu-nm -A -an 2>/dev/null \
-            | grep -F " $sym" > "$hitfile" || true
+          while IFS= read -r -d '' obj; do
+            if LC_ALL=C grep -aFq "$sym" "$obj"; then
+              printf '%s\n' "$obj" >> "$candidates"
+            fi
+          done < <(find "$out" -type f -name '*.o' -print0)
+
+          echo "SYMBOL_CANDIDATES=$(wc -l < "$candidates")"
+          sed "s#^$out/#SYMBOL_CANDIDATE=#" "$candidates"
+
+          while IFS= read -r obj; do
+            riscv64-linux-gnu-nm -A -an "$obj" 2>/dev/null | grep -F " $sym" >> "$hitfile" || true
+          done < "$candidates"
 
           cat "$hitfile"
           hits=$(wc -l < "$hitfile")
