@@ -113,6 +113,7 @@ jobs:
           refresh_obj kernel/time/tick-sched.o tick-sched-refresh.log
           refresh_obj kernel/rcu/tree.o rcu-tree-refresh.log
           refresh_obj kernel/softirq.o softirq-refresh.log
+          refresh_obj drivers/of/fdt.o fdt-refresh.log
 
           test -s "$out/lib/crc32.o"
           cp "$out/lib/crc32.o" "$ev/crc32.baseline.o"
