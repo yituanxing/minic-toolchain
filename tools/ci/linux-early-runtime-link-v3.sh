@@ -69,7 +69,16 @@ gen_kallsyms_obj() {
     NM="$NM" /bin/sh "$full_src/scripts/mksysmap" "$input" "$syms" >/dev/null 2>&1
   fi
   "$out/scripts/kallsyms" "${ksymopt[@]}" "$syms" >"$asm"
-  "$CC" -c -o "$obj" "$asm"
+  "$CC" -D__ASSEMBLY__ \
+    -I"$full_src/arch/riscv/include" \
+    -I"$out/arch/riscv/include/generated" \
+    -I"$full_src/arch/riscv/include/uapi" \
+    -I"$out/arch/riscv/include/generated/uapi" \
+    -I"$full_src/include" \
+    -I"$out/include" \
+    -I"$full_src/include/uapi" \
+    -I"$out/include/generated/uapi" \
+    -c -o "$obj" "$asm"
   test -s "$obj"
   printf '%s\n' "$obj"
 }
