@@ -1,0 +1,27 @@
+{
+  "schema": 1,
+  "name": "linux-6.6.143-fork-to-arch-rest-init-frontier",
+  "phys_entry": "0x80200000",
+  "baseline": {
+    "fault": null,
+    "progress_marker": "fork-init",
+    "certified_by": {
+      "progress_workflow_run": 36534763912,
+      "progress_job": 109296167708,
+      "progress_commit": "a48198fc35ce930ed9f2852ba2375e4639cdc068"
+    }
+  },
+  "progress_markers": [
+    {"name": "kernel-entry", "symbol": "_start"},
+    {"name": "start-kernel", "symbol": "start_kernel"},
+    {"name": "sched-init", "symbol": "sched_init"},
+    {"name": "init-irq", "symbol": "init_IRQ"},
+    {"name": "console-init", "symbol": "console_init"},
+    {"name": "fork-init", "symbol": "fork_init"},
+    {"name": "rest-init", "symbol": "arch_call_rest_init"}
+  ],
+  "pass_markers": {
+    "console_any": [],
+    "symbol_any": ["arch_call_rest_init"]
+  }
+}
