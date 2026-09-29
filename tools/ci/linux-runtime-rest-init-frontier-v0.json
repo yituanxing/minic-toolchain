@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "name": "linux-6.6.143-console-to-rest-init-frontier",
+  "name": "linux-6.6.143-console-to-fork-init-frontier",
   "phys_entry": "0x80200000",
   "baseline": {
     "fault": {
@@ -23,10 +23,11 @@
     {"name": "sched-init", "symbol": "sched_init"},
     {"name": "init-irq", "symbol": "init_IRQ"},
     {"name": "console-init", "symbol": "console_init"},
+    {"name": "fork-init", "symbol": "fork_init"},
     {"name": "rest-init", "symbol": "arch_call_rest_init"}
   ],
   "pass_markers": {
     "console_any": [],
-    "symbol_any": ["arch_call_rest_init"]
+    "symbol_any": ["fork_init"]
   }
 }
