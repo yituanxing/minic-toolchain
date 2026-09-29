@@ -1,10 +1,11 @@
-name: Linux Runtime RCU Softirq Owner V1
+name: Linux Runtime RCU Softirq Rest Init V2
 
 on:
   push:
     branches: ["agent/linux-expanded-kbuild-v0"]
     paths:
       - ".github/workflows/linux-runtime-rcu-owner-v0.yml"
+      - "tools/ci/linux-runtime-rest-init-frontier-v0.json"
   workflow_dispatch:
 
 permissions:
@@ -194,7 +195,7 @@ jobs:
           ev="$GITHUB_WORKSPACE/build/linux-runtime-rcu-owner-v0"
           bash tools/ci/linux-early-runtime-link-v2.sh "$frozen/src" "$work/out" "$ev/early"
 
-      - name: Execute QEMU current frontier
+      - name: Execute QEMU current init-IRQ frontier
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -212,11 +213,29 @@ jobs:
           echo 'QEMU_INTERRUPTS_END'
           exit "$rc"
 
+      - name: Execute QEMU rest-init frontier
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-rcu-owner-v0"
+          set +e
+          python3 tools/ci/linux-runtime-qemu-watch-v1.py \
+            --config tools/ci/linux-runtime-rest-init-frontier-v0.json \
+            --nm "$ev/early/nm.txt" --image "$ev/early/Image.early" \
+            --evidence-dir "$ev/watch-rest" --timeout-ms 12000 --poll-ms 100 | tee "$ev/watch-rest.stdout.txt"
+          rc=${PIPESTATUS[0]}
+          set -e
+          cat "$ev/watch-rest/frontier-summary.txt" || true
+          echo 'QEMU_REST_INTERRUPTS_BEGIN'
+          cat "$ev/watch-rest/qemu.interrupts.txt" || true
+          echo 'QEMU_REST_INTERRUPTS_END'
+          exit "$rc"
+
       - name: Preserve focused evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: linux-runtime-rcu-softirq-owner-v1-${{ github.sha }}
+          name: linux-runtime-rcu-softirq-rest-init-v2-${{ github.sha }}
           path: |
             build/linux-runtime-rcu-owner-v0/profile/patch.log
             build/linux-runtime-rcu-owner-v0/profile/minic-profile.txt
@@ -228,5 +247,9 @@ jobs:
             build/linux-runtime-rcu-owner-v0/watch/frontier-summary.txt
             build/linux-runtime-rcu-owner-v0/watch/watch-result.json
             build/linux-runtime-rcu-owner-v0/watch/qemu.interrupts.txt
+            build/linux-runtime-rcu-owner-v0/watch-rest/frontier-result.json
+            build/linux-runtime-rcu-owner-v0/watch-rest/frontier-summary.txt
+            build/linux-runtime-rcu-owner-v0/watch-rest/watch-result.json
+            build/linux-runtime-rcu-owner-v0/watch-rest/qemu.interrupts.txt
           if-no-files-found: warn
           retention-days: 7
