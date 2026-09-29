@@ -1,1 +1,1 @@
-trigger debug_spin_lock_before frame validation v2
+trigger debug_spin_lock_before frame validation v3
