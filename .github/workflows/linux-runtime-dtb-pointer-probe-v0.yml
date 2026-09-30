@@ -1,4 +1,4 @@
-# Reproduce the certified full-owner early runtime image and trace the DTB pointer chain.
+# Reproduce the certified full-owner early runtime image and inspect crc32_body at the exact fault PC.
 name: Linux Runtime DTB Pointer Probe V0
 
 on:
@@ -64,7 +64,7 @@ jobs:
           mkdir -p "$ev"
           bash tools/ci/linux-runtime-build-minic-profile-v1.sh "$build" "$ev/profile"
           grep -Fx 'apply-riscv64-core-object-slot-reuse-v0.py' "$ev/profile/minic-profile.txt"
-          echo 'DTB_POINTER_PROFILE=PASS slot_reuse=current'
+          echo 'CRC32_FAULT_PROFILE=PASS slot_reuse=current'
 
       - name: Refresh certified full runtime owners
         shell: bash
@@ -121,6 +121,7 @@ jobs:
           cp "$out/arch/riscv/mm/init.minic-stage2.s" "$ev/arch_riscv_mm_init.o.s"
           cp "$out/lib/crc32.minic-stage2.s" "$ev/lib_crc32.o.s"
           cp "$out/$pi_base.minic-stage2.s" "$ev/arch_riscv_kernel_pi_cmdline_early.pi.o.s"
+          riscv64-linux-gnu-objdump -dr "$out/lib/crc32.o" > "$ev/lib_crc32.objdump.txt"
 
       - name: Link full-owner V3 image
         shell: bash
@@ -130,9 +131,9 @@ jobs:
           frozen="$GITHUB_WORKSPACE/build/linux-runtime-frozen-v1"
           ev="$GITHUB_WORKSPACE/build/linux-runtime-dtb-pointer-probe-v0"
           bash tools/ci/linux-early-runtime-link-v3.sh "$frozen/src" "$work/out" "$ev/current" "$work/linux-6.6.143"
-          grep -E '[[:space:]](early_init_dt_scan|early_init_dt_verify|crc32_be|crc32_body|_dtb_early_va|_dtb_early_pa|initial_boot_params|initial_boot_params_pa|setup_vm)$' "$ev/current/nm.txt" | tee "$ev/current-symbols.txt"
+          grep -E '[[:space:]](early_init_dt_scan|early_init_dt_verify|crc32_be|crc32_body|crc32table_be|_dtb_early_va|_dtb_early_pa|initial_boot_params|initial_boot_params_pa|_end)$' "$ev/current/nm.txt" | tee "$ev/current-symbols.txt"
 
-      - name: Probe full-owner DTB pointer chain with GDB
+      - name: Capture crc32 exact fault frame with GDB
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -140,40 +141,31 @@ jobs:
           nm="$ev/current/nm.txt"
           sym() { awk -v s="$1" '$3 == s { print "0x" $1; exit }' "$nm"; }
 
-          scan=$(sym early_init_dt_scan)
-          verify=$(sym early_init_dt_verify)
           crc=$(sym crc32_be)
-          dtb_va=$(sym _dtb_early_va)
-          dtb_pa=$(sym _dtb_early_pa)
-          ibp=$(sym initial_boot_params)
-          ibp_pa=$(sym initial_boot_params_pa)
-          test -n "$scan"; test -n "$verify"; test -n "$crc"
-          test -n "$dtb_va"; test -n "$dtb_pa"; test -n "$ibp"; test -n "$ibp_pa"
+          body=$(sym crc32_body)
+          tab=$(sym crc32table_be)
+          kend=$(sym _end)
+          test -n "$crc"; test -n "$body"; test -n "$tab"; test -n "$kend"
 
-          cat >"$ev/dtb-pointer.gdb" <<EOF
+          cat >"$ev/crc32-fault.gdb" <<EOF
           set pagination off
           set confirm off
           set architecture riscv:rv64
           target remote :1234
-          hbreak *$scan
-          commands
-            silent
-            printf "DTB_SCAN_ENTRY dt_virt=0x%lx dt_phys=0x%lx pc=0x%lx sp=0x%lx\\n", \$a0, \$a1, \$pc, \$sp
-            printf "DTB_GLOBALS_AT_SCAN dtb_early_va=0x%lx dtb_early_pa=0x%lx initial_boot_params=0x%lx initial_boot_params_pa=0x%lx\\n", *(unsigned long *)$dtb_va, *(unsigned long *)$dtb_pa, *(unsigned long *)$ibp, *(unsigned long *)$ibp_pa
-            continue
-          end
-          hbreak *$verify
-          commands
-            silent
-            printf "DTB_VERIFY_ENTRY dt_virt=0x%lx dt_phys=0x%lx pc=0x%lx sp=0x%lx\\n", \$a0, \$a1, \$pc, \$sp
-            printf "DTB_GLOBALS_AT_VERIFY dtb_early_va=0x%lx dtb_early_pa=0x%lx initial_boot_params=0x%lx initial_boot_params_pa=0x%lx\\n", *(unsigned long *)$dtb_va, *(unsigned long *)$dtb_pa, *(unsigned long *)$ibp, *(unsigned long *)$ibp_pa
-            continue
-          end
           hbreak *$crc
           commands
             silent
-            printf "DTB_CRC_ENTRY seed=0x%lx buf=0x%lx len=0x%lx a3=0x%lx pc=0x%lx sp=0x%lx\\n", \$a0, \$a1, \$a2, \$a3, \$pc, \$sp
-            printf "DTB_GLOBALS_AT_CRC dtb_early_va=0x%lx dtb_early_pa=0x%lx initial_boot_params=0x%lx initial_boot_params_pa=0x%lx\\n", *(unsigned long *)$dtb_va, *(unsigned long *)$dtb_pa, *(unsigned long *)$ibp, *(unsigned long *)$ibp_pa
+            printf "CRC32_ENTRY seed=0x%lx buf=0x%lx len=0x%lx a3=0x%lx table_symbol=$tab kernel_end=$kend pc=0x%lx sp=0x%lx\\n", \$a0, \$a1, \$a2, \$a3, \$pc, \$sp
+            continue
+          end
+          hbreak *($body + 0xdd4)
+          commands
+            silent
+            printf "CRC32_FAULT_SITE pc=0x%lx sp=0x%lx\\n", \$pc, \$sp
+            x/8i \$pc-8
+            info registers ra sp gp tp t0 t1 t2 t3 t4 t5 t6 a0 a1 a2 a3 a4 a5 a6 a7 s0 s1 s2 s3 s4 s5 s6 s7 s8 s9 s10 s11
+            printf "CRC32_OBJECTS crc=0x%lx buf=0x%lx len=0x%lx t0p=0x%lx t1p=0x%lx t2p=0x%lx t3p=0x%lx t4p=0x%lx t5p=0x%lx t6p=0x%lx t7p=0x%lx rem=0x%lx b=0x%lx p=0x%lx tabtmp=0x%lx\\n", *(unsigned int *)(\$sp+0), *(unsigned long *)(\$sp+8), *(unsigned long *)(\$sp+16), *(unsigned long *)(\$sp+24), *(unsigned long *)(\$sp+32), *(unsigned long *)(\$sp+40), *(unsigned long *)(\$sp+48), *(unsigned long *)(\$sp+56), *(unsigned long *)(\$sp+64), *(unsigned long *)(\$sp+72), *(unsigned long *)(\$sp+80), *(unsigned long *)(\$sp+88), *(unsigned long *)(\$sp+96), *(unsigned long *)(\$sp+104), *(unsigned long *)(\$sp+112)
+            printf "CRC32_SCRATCH s120=0x%lx s128=0x%lx s136=0x%lx s144=0x%lx s152=0x%lx s160=0x%lx s168=0x%lx s176=0x%lx s184=0x%lx\\n", *(unsigned long *)(\$sp+120), *(unsigned long *)(\$sp+128), *(unsigned long *)(\$sp+136), *(unsigned long *)(\$sp+144), *(unsigned long *)(\$sp+152), *(unsigned long *)(\$sp+160), *(unsigned long *)(\$sp+168), *(unsigned long *)(\$sp+176), *(unsigned long *)(\$sp+184)
             detach
             quit
           end
@@ -183,16 +175,16 @@ jobs:
           qemu-system-riscv64 -M virt -cpu max -m 512M -smp 1 -nographic -no-reboot \
             -bios default -kernel "$ev/current/Image.early" \
             -append "console=ttyS0 earlycon=sbi loglevel=8 panic=-1" \
-            -S -gdb tcp::1234 >"$ev/dtb-pointer-qemu.log" 2>&1 &
+            -S -gdb tcp::1234 >"$ev/crc32-fault-qemu.log" 2>&1 &
           qpid=$!
           cleanup() { kill "$qpid" 2>/dev/null || true; wait "$qpid" 2>/dev/null || true; }
           trap cleanup EXIT
           sleep 1
           set +e
-          timeout 30s gdb-multiarch -q -batch -x "$ev/dtb-pointer.gdb" "$ev/current/vmlinux.early" | tee "$ev/dtb-pointer-gdb.txt"
+          timeout 30s gdb-multiarch -q -batch -x "$ev/crc32-fault.gdb" "$ev/current/vmlinux.early" | tee "$ev/crc32-fault-gdb.txt"
           grc=${PIPESTATUS[0]}
           set -e
-          echo "DTB_POINTER_GDB_RC=$grc" | tee -a "$ev/dtb-pointer-gdb.txt"
+          echo "CRC32_FAULT_GDB_RC=$grc" | tee -a "$ev/crc32-fault-gdb.txt"
           cleanup
           trap - EXIT
 
@@ -208,24 +200,25 @@ jobs:
             --evidence-dir "$ev/current-watch" --timeout-ms 30000 --poll-ms 100 | tee "$ev/current-watch.stdout.txt"
           rc=${PIPESTATUS[0]}
           set -e
-          echo "DTB_POINTER_CLASSIFIER_RC=$rc"
+          echo "CRC32_FAULT_CLASSIFIER_RC=$rc"
           cat "$ev/current-watch/frontier-summary.txt" || true
           exit 0
 
-      - name: Preserve DTB pointer evidence
+      - name: Preserve crc32 fault evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: linux-runtime-dtb-pointer-probe-v0-${{ github.sha }}
+          name: linux-runtime-crc32-fault-frame-v0-${{ github.sha }}
           path: |
             build/linux-runtime-dtb-pointer-probe-v0/profile/patch.log
             build/linux-runtime-dtb-pointer-probe-v0/profile/minic-profile.txt
             build/linux-runtime-dtb-pointer-probe-v0/*-refresh.log
             build/linux-runtime-dtb-pointer-probe-v0/*.s
+            build/linux-runtime-dtb-pointer-probe-v0/lib_crc32.objdump.txt
             build/linux-runtime-dtb-pointer-probe-v0/current/nm.txt
             build/linux-runtime-dtb-pointer-probe-v0/current-symbols.txt
-            build/linux-runtime-dtb-pointer-probe-v0/dtb-pointer-gdb.txt
-            build/linux-runtime-dtb-pointer-probe-v0/dtb-pointer-qemu.log
+            build/linux-runtime-dtb-pointer-probe-v0/crc32-fault-gdb.txt
+            build/linux-runtime-dtb-pointer-probe-v0/crc32-fault-qemu.log
             build/linux-runtime-dtb-pointer-probe-v0/current-watch/frontier-result.json
             build/linux-runtime-dtb-pointer-probe-v0/current-watch/frontier-summary.txt
             build/linux-runtime-dtb-pointer-probe-v0/current-watch/qemu.interrupts.txt
