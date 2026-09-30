@@ -66,7 +66,7 @@ jobs:
           grep -Fx 'apply-riscv64-core-object-slot-reuse-v0.py' "$ev/profile/minic-profile.txt"
           echo 'RUNTIME_OWNER_PROFILE=PASS slot_reuse=current'
 
-      - name: Refresh certified runtime owners through crc32 and kallsyms
+      - name: Refresh certified runtime owners through libfdt, crc32 and kallsyms
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -113,6 +113,8 @@ jobs:
           refresh_obj kernel/time/tick-sched.o tick-sched-refresh.log
           refresh_obj kernel/rcu/tree.o rcu-tree-refresh.log
           refresh_obj kernel/softirq.o softirq-refresh.log
+          refresh_obj drivers/of/fdt.o fdt-refresh.log
+          refresh_obj lib/fdt_ro.o fdt-ro-refresh.log
 
           echo 'CRC32_BASELINE_PROBE_BEGIN'
           riscv64-linux-gnu-ar t "$out/lib/lib.a" | grep -E '(^|/)crc32[^/]*\.o$|crc32' | tee "$ev/crc32-archive-members.txt" || true
@@ -148,7 +150,7 @@ jobs:
           bash tools/ci/linux-early-runtime-link-v3.sh "$frozen/src" "$work/out" "$ev/early" "$work/linux-6.6.143"
           grep -E '[[:space:]](kallsyms_offsets|kallsyms_num_syms|kallsyms_relative_base)$' "$ev/early/nm.txt"
           echo 'FRONTIER_SYMBOLS_BEGIN'
-          grep -E '[[:space:]][TtWw][[:space:]]+(fork_init|arch_call_rest_init|get_symbol_pos|crc32_body)$' "$ev/early/nm.txt" || true
+          grep -E '[[:space:]][TtWw][[:space:]]+(fork_init|arch_call_rest_init|get_symbol_pos|crc32_body|fdt32_ld)$' "$ev/early/nm.txt" || true
           echo 'FRONTIER_SYMBOLS_END'
           riscv64-linux-gnu-objdump -dr "$ev/early/vmlinux.early" \
             | sed -n '/<get_symbol_pos>:/,/^$/p' >"$ev/early/get-symbol-pos.linked.txt"
