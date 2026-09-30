@@ -114,6 +114,7 @@ jobs:
           refresh_obj kernel/rcu/tree.o rcu-tree-refresh.log
           refresh_obj kernel/softirq.o softirq-refresh.log
           refresh_obj drivers/of/fdt.o fdt-refresh.log
+          refresh_obj lib/fdt_ro.o fdt-ro-refresh.log
 
           test -s "$out/lib/crc32.o"
           cp "$out/lib/crc32.o" "$ev/crc32.baseline.o"
@@ -153,29 +154,39 @@ jobs:
           cat "$ev/current-watch/frontier-summary.txt" || true
           exit 0
 
-      - name: Capture crc32 runtime entry arguments with GDB
+      - name: Capture crc32 runtime entry and body state with GDB
         shell: bash
         run: |
           set -Eeuo pipefail
           ev="$GITHUB_WORKSPACE/build/linux-runtime-crc32-differential-v0"
           crc_be=$(awk '$3 == "crc32_be" { print "0x" $1; exit }' "$ev/current/nm.txt")
+          crc_body=$(awk '$3 == "crc32_body" { print "0x" $1; exit }' "$ev/current/nm.txt")
           test -n "$crc_be"
+          test -n "$crc_body"
           cat >"$ev/crc32.gdb" <<EOF
           set pagination off
           set confirm off
           set architecture riscv:rv64
           target remote :1234
-          set \$hits = 0
           hbreak *$crc_be
           commands
             silent
-            set \$hits = \$hits + 1
-            printf "CRC32_GDB_HIT=%d a0=0x%lx a1=0x%lx a2=0x%lx a3=0x%lx pc=0x%lx sp=0x%lx\\n", \$hits, \$a0, \$a1, \$a2, \$a3, \$pc, \$sp
-            if \$hits >= 2
-              detach
-              quit
-            end
+            printf "CRC32_BE_ENTRY a0=0x%lx a1=0x%lx a2=0x%lx a3=0x%lx pc=0x%lx sp=0x%lx\\n", \$a0, \$a1, \$a2, \$a3, \$pc, \$sp
             continue
+          end
+          hbreak *$crc_body
+          commands
+            silent
+            printf "CRC32_BODY_ENTRY a0=0x%lx a1=0x%lx a2=0x%lx a3=0x%lx pc=0x%lx sp=0x%lx\\n", \$a0, \$a1, \$a2, \$a3, \$pc, \$sp
+            continue
+          end
+          hbreak *($crc_body + 0xdd4)
+          commands
+            silent
+            printf "CRC32_BODY_DD4 pc=0x%lx sp=0x%lx t0=0x%lx t1=0x%lx a0=0x%lx a1=0x%lx a2=0x%lx a3=0x%lx\\n", \$pc, \$sp, \$t0, \$t1, \$a0, \$a1, \$a2, \$a3
+            printf "CRC32_BODY_LOCALS orig_buf=0x%lx orig_len=0x%lx b=0x%lx\\n", *(unsigned long *)(\$sp+8), *(unsigned long *)(\$sp+16), *(unsigned long *)(\$sp+96)
+            detach
+            quit
           end
           continue
           EOF
@@ -232,7 +243,7 @@ jobs:
           cat "$ev/crc32-current.sha256" "$ev/crc32-current.symbol.txt"
           echo 'CURRENT_FRONTIER'
           cat "$ev/current-watch/frontier-summary.txt" || true
-          echo 'GDB_ARGUMENTS'
+          echo 'GDB_ARGUMENTS_AND_BODY_STATE'
           cat "$ev/crc32-gdb.txt" || true
           echo 'BASELINE_FRONTIER'
           cat "$ev/baseline-watch/frontier-summary.txt" || true
