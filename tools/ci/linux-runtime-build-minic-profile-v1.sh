@@ -45,6 +45,7 @@ patches=(
   apply-riscv64-core-value-slot-reuse-v0.py
   apply-riscv64-record-call-result-snapshot-reuse-v0.py
   apply-riscv64-core-object-slot-reuse-v0.py
+  apply-riscv64-core-object-slot-reuse-cfg-hotfix-v0.py
   apply-riscv64-structured-asm-used-callee-save-v0.py
   apply-riscv64-pi-local-symbol-address-v0.py
 )
