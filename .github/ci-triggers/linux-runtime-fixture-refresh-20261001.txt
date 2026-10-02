@@ -1,2 +1,3 @@
 Refresh the certified Linux runtime frozen/link fixtures after exact cache eviction.
 Order: frozen-cert -> link-fixture-cert -> frontier-fast-v4.
+Retrigger link fixture certification on 2026-10-02 after confirming the producer push gate requires its exact commit-message tag.
