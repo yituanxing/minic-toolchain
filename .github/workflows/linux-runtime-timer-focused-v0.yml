@@ -64,7 +64,7 @@ jobs:
           grep -F 'MINIC_INLINE_ASM_RK_CAST_TAIL_V0=APPLIED' "$ev/profile/patch.log"
           grep -F 'MINIC_RISCV64_PI_LOCAL_SYMBOL_ADDRESS_V0=APPLIED' "$ev/profile/patch.log"
 
-      - name: Refresh frontier owners plus timer with current MiniC
+      - name: Refresh frontier owners plus timer/hrtimer with current MiniC
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -104,11 +104,17 @@ jobs:
           refresh_obj kernel/notifier.o notifier-refresh.log
           refresh_obj kernel/sched/build_policy.o build_policy-refresh.log
           refresh_obj kernel/time/timer.o timer-refresh.log
+          refresh_obj kernel/time/hrtimer.o hrtimer-refresh.log
 
           riscv64-linux-gnu-nm -an "$out/kernel/time/timer.o" >"$ev/timer.nm.txt"
           riscv64-linux-gnu-objdump -dr "$out/kernel/time/timer.o" >"$ev/timer.objdump.txt"
           cp "$out/kernel/time/timer.minic-stage2.s" "$ev/timer.minic-stage2.s"
           grep -n -A30 -B4 '<get_current>:' "$ev/timer.objdump.txt" >"$ev/get_current.objdump.txt" || true
+
+          riscv64-linux-gnu-nm -an "$out/kernel/time/hrtimer.o" >"$ev/hrtimer.nm.txt"
+          riscv64-linux-gnu-objdump -dr "$out/kernel/time/hrtimer.o" >"$ev/hrtimer.objdump.txt"
+          cp "$out/kernel/time/hrtimer.minic-stage2.s" "$ev/hrtimer.minic-stage2.s"
+          grep -n -A90 -B8 '<hrtimer_run_queues>:' "$ev/hrtimer.objdump.txt" >"$ev/hrtimer_run_queues.objdump.txt" || true
 
       - name: Relink early image
         shell: bash
@@ -143,6 +149,10 @@ jobs:
             build/linux-runtime-timer-focused-v0/timer.objdump.txt
             build/linux-runtime-timer-focused-v0/timer.minic-stage2.s
             build/linux-runtime-timer-focused-v0/get_current.objdump.txt
+            build/linux-runtime-timer-focused-v0/hrtimer.nm.txt
+            build/linux-runtime-timer-focused-v0/hrtimer.objdump.txt
+            build/linux-runtime-timer-focused-v0/hrtimer.minic-stage2.s
+            build/linux-runtime-timer-focused-v0/hrtimer_run_queues.objdump.txt
             build/linux-runtime-timer-focused-v0/watch/frontier-result.json
             build/linux-runtime-timer-focused-v0/watch/frontier-summary.txt
             build/linux-runtime-timer-focused-v0/watch/watch-result.json
