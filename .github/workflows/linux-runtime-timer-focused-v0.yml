@@ -163,10 +163,10 @@ jobs:
           : >"$ev/inline-fault.objdump.txt"
           test -s "$result" || exit 0
           sym=$(python3 - "$result" <<'PY'
-import json,sys
-j=json.load(open(sys.argv[1]))
-print((j.get('fault') or {}).get('symbol') or '')
-PY
+          import json,sys
+          j=json.load(open(sys.argv[1]))
+          print((j.get('fault') or {}).get('symbol') or '')
+          PY
           )
           [[ -n "$sym" ]] || exit 0
           printf 'FAULT_SYMBOL=%s\n' "$sym" | tee "$ev/inline-fault.symbol.txt"
