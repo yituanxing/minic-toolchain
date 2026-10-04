@@ -149,6 +149,38 @@ jobs:
           cat "$ev/watch/frontier-summary.txt" || true
           exit "$rc"
 
+      - name: Diagnose linked first-fault symbol
+        if: always()
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0"
+          out="$work/out"
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-timer-focused-v0"
+          result="$ev/watch/frontier-result.json"
+          : >"$ev/inline-fault.owner-scan.txt"
+          : >"$ev/inline-fault.nm-context.txt"
+          : >"$ev/inline-fault.objdump.txt"
+          test -s "$result" || exit 0
+          sym=$(python3 - "$result" <<'PY'
+import json,sys
+j=json.load(open(sys.argv[1]))
+print((j.get('fault') or {}).get('symbol') or '')
+PY
+          )
+          [[ -n "$sym" ]] || exit 0
+          printf 'FAULT_SYMBOL=%s\n' "$sym" | tee "$ev/inline-fault.symbol.txt"
+          grep -n -F -B8 -A8 " $sym" "$ev/early/nm.txt" >"$ev/inline-fault.nm-context.txt" || true
+          riscv64-linux-gnu-objdump -dr --disassemble="$sym" "$ev/early/vmlinux.early" >"$ev/inline-fault.objdump.txt" 2>&1 || true
+          for archive in "$out/vmlinux.a" "$out/built-in.a" "$out/lib/lib.a" "$out/arch/riscv/lib/lib.a"; do
+            [[ -e "$archive" ]] || continue
+            echo "=== $archive ===" >>"$ev/inline-fault.owner-scan.txt"
+            riscv64-linux-gnu-nm -A -an "$archive" 2>/dev/null | grep -F "$sym" >>"$ev/inline-fault.owner-scan.txt" || true
+          done
+          cat "$ev/inline-fault.nm-context.txt" || true
+          cat "$ev/inline-fault.owner-scan.txt" || true
+          cat "$ev/inline-fault.objdump.txt" || true
+
       - name: Preserve focused evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -173,6 +205,11 @@ jobs:
             build/linux-runtime-timer-focused-v0/rcu-tree.objdump.txt
             build/linux-runtime-timer-focused-v0/rcu-tree.minic-stage2.s
             build/linux-runtime-timer-focused-v0/rcu_sched_clock_irq.objdump.txt
+            build/linux-runtime-timer-focused-v0/early/nm.txt
+            build/linux-runtime-timer-focused-v0/inline-fault.symbol.txt
+            build/linux-runtime-timer-focused-v0/inline-fault.nm-context.txt
+            build/linux-runtime-timer-focused-v0/inline-fault.owner-scan.txt
+            build/linux-runtime-timer-focused-v0/inline-fault.objdump.txt
             build/linux-runtime-timer-focused-v0/watch/frontier-result.json
             build/linux-runtime-timer-focused-v0/watch/frontier-summary.txt
             build/linux-runtime-timer-focused-v0/watch/watch-result.json
