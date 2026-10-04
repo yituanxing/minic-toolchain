@@ -120,21 +120,47 @@ kallsyms_step() {
   if is_enabled CONFIG_LTO_CLANG; then opts+=(--lto-clang); fi
 
   if [[ -n "$prev" ]]; then
-    link_one "$tmp" "$prev" >"${tmp}.ld.stdout.txt" 2>"${tmp}.ld.stderr.txt"
-    NM="$NM" /bin/sh "$kallsyms_src/scripts/mksysmap" "$tmp" "$syms" "$prev" \
-      >"${tmp}.mksysmap.stdout.txt" 2>"${tmp}.mksysmap.stderr.txt"
+    if ! link_one "$tmp" "$prev" >"${tmp}.ld.stdout.txt" 2>"${tmp}.ld.stderr.txt"; then
+      echo "EARLY_LINK_KALLSYMS_PASS_LINK_FAILED=$step" >&2
+      cat "${tmp}.ld.stderr.txt" >&2 || true
+      return 76
+    fi
+    if ! NM="$NM" /bin/sh "$kallsyms_src/scripts/mksysmap" "$tmp" "$syms" "$prev" \
+      >"${tmp}.mksysmap.stdout.txt" 2>"${tmp}.mksysmap.stderr.txt"; then
+      echo "EARLY_LINK_KALLSYMS_PASS_MKSYSMAP_FAILED=$step" >&2
+      cat "${tmp}.mksysmap.stderr.txt" >&2 || true
+      return 77
+    fi
   else
-    link_one "$tmp" >"${tmp}.ld.stdout.txt" 2>"${tmp}.ld.stderr.txt"
-    NM="$NM" /bin/sh "$kallsyms_src/scripts/mksysmap" "$tmp" "$syms" \
-      >"${tmp}.mksysmap.stdout.txt" 2>"${tmp}.mksysmap.stderr.txt"
+    if ! link_one "$tmp" >"${tmp}.ld.stdout.txt" 2>"${tmp}.ld.stderr.txt"; then
+      echo "EARLY_LINK_KALLSYMS_PASS_LINK_FAILED=$step" >&2
+      cat "${tmp}.ld.stderr.txt" >&2 || true
+      return 76
+    fi
+    if ! NM="$NM" /bin/sh "$kallsyms_src/scripts/mksysmap" "$tmp" "$syms" \
+      >"${tmp}.mksysmap.stdout.txt" 2>"${tmp}.mksysmap.stderr.txt"; then
+      echo "EARLY_LINK_KALLSYMS_PASS_MKSYSMAP_FAILED=$step" >&2
+      cat "${tmp}.mksysmap.stderr.txt" >&2 || true
+      return 77
+    fi
   fi
 
-  "$out/scripts/kallsyms" "${opts[@]}" "$syms" >"$asm"
+  if ! "$out/scripts/kallsyms" "${opts[@]}" "$syms" >"$asm"; then
+    echo "EARLY_LINK_KALLSYMS_PASS_GENERATE_FAILED=$step" >&2
+    return 78
+  fi
   # scripts/kallsyms emits only data directives plus PTR/ALGN macros selected
   # from BITS_PER_LONG. The certified fixture is RV64; make that preprocessing
   # fact explicit and assemble the generated data object.
   sed -i 's@^#include <asm/bitsperlong.h>@#define BITS_PER_LONG 64@' "$asm"
-  "$CC" -c -x assembler-with-cpp -o "$obj" "$asm"
+  # Ubuntu's riscv64-linux-gnu-gcc defaults to the LP64D ABI, which sets the
+  # generated object's ELF float ABI to double-float. The kernel fixture is
+  # built with the LP64 soft-float ABI, and GNU ld rejects mixing those flags.
+  # This generated source is data-only, so explicitly select the kernel ABI.
+  if ! "$CC" -c -x assembler-with-cpp -mabi=lp64 -o "$obj" "$asm"; then
+    echo "EARLY_LINK_KALLSYMS_PASS_ASSEMBLE_FAILED=$step" >&2
+    return 79
+  fi
   test -s "$obj"
   echo "$obj"
 }
