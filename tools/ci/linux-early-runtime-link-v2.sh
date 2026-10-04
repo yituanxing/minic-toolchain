@@ -81,6 +81,7 @@ link_start=$(date +%s%N)
   -melf64lriscv -z noexecstack --no-warn-rwx-segments \
   -z norelro --build-id=sha1 --orphan-handling=warn \
   --script=arch/riscv/kernel/vmlinux.lds --strip-debug \
+  -Map="$ev/vmlinux.early.map" \
   -o "$ev/vmlinux.early" \
   --whole-archive vmlinux.a init/version-timestamp.o --no-whole-archive \
   --start-group ./drivers/firmware/efi/libstub/lib.a --end-group \
@@ -104,6 +105,7 @@ echo "TIMING early_postlink_ms=$(((post_end-post_start)/1000000))" | tee -a "$ev
 
 test -s "$ev/vmlinux.early"
 test -s "$ev/Image.early"
+test -s "$ev/vmlinux.early.map"
 "$NM" -n "$ev/vmlinux.early" >"$ev/nm.txt"
 sha256sum "$ev/vmlinux.early" "$ev/Image.early" | tee "$ev/sha256.txt"
 total_ms=$(((post_end-verify_start)/1000000))
