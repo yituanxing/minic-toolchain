@@ -1,0 +1,133 @@
+name: Linux Runtime RISC-V Init Codegen V0
+
+on:
+  push:
+    branches: ["agent/linux-expanded-kbuild-v0"]
+    paths:
+      - ".github/workflows/linux-runtime-riscv-init-codegen-v0.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: linux-runtime-riscv-init-codegen-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  riscv-init-codegen:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Restore certified full linked fixture
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-expanded-kbuild-v0/out
+          key: linux-expanded-mixed-v1-6.6.143-Linux-d30569a4c675f6ac72d9f63c28f0b8745317f7a15c0799d10768f916d74b3a88
+          fail-on-cache-miss: true
+
+      - name: Restore pinned Linux source
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-expanded-kbuild-v0/linux-6.6.143
+          key: linux-source-6.6.143-dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932-v1
+          fail-on-cache-miss: true
+
+      - name: Install RISC-V toolchain
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get -o Acquire::Retries=2 install -y --no-install-recommends gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu make \
+            || { sudo apt-get -o Acquire::Retries=3 update; sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu make; }
+
+      - name: Build exact Linux runtime MiniC profile
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-riscv-init-codegen-v0"
+          build="$GITHUB_WORKSPACE/build/toolchain-runtime-riscv-init-codegen-v0"
+          mkdir -p "$ev"
+          bash tools/ci/linux-runtime-build-minic-profile-v1.sh "$build" "$ev/profile"
+
+      - name: Build MiniC and GCC init objects with identical Kbuild context
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0"
+          src="$work/linux-6.6.143"
+          out="$work/out"
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-riscv-init-codegen-v0"
+          build="$GITHUB_WORKSPACE/build/toolchain-runtime-riscv-init-codegen-v0"
+          wrapper="$GITHUB_WORKSPACE/tests/external/linux/stage2_kbuild_cc.sh"
+          target=arch/riscv/mm/init.o
+          base=arch/riscv/mm/init
+
+          rm -f "$out/$target" "$out/arch/riscv/mm/.init.o.cmd" "$out/$base.minic-stage2.i" "$out/$base.minic-stage2.s" \
+                "$out/$base.minic-stage2.minic.stdout" "$out/$base.minic-stage2.minic.stderr"
+          MINIC="$build/bin/minic" REAL_CC=/usr/bin/riscv64-linux-gnu-gcc MINIC_KEEP_INTERMEDIATES=1 \
+            make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- CC="$wrapper" -j2 V=1 "$target" \
+            >"$ev/minic-kbuild.log" 2>&1
+          test -s "$out/$target"
+          test -s "$out/$base.minic-stage2.i"
+          test -s "$out/$base.minic-stage2.s"
+          cp "$out/$target" "$ev/init.minic.o"
+          cp "$out/$base.minic-stage2.i" "$ev/init.minic.i"
+          cp "$out/$base.minic-stage2.s" "$ev/init.minic.s"
+          cp "$out/arch/riscv/mm/.init.o.cmd" "$ev/init.minic.cmd" || true
+          riscv64-linux-gnu-nm -an "$ev/init.minic.o" >"$ev/init.minic.nm"
+          riscv64-linux-gnu-objdump -drwC "$ev/init.minic.o" >"$ev/init.minic.objdump"
+          riscv64-linux-gnu-readelf -rW -sW "$ev/init.minic.o" >"$ev/init.minic.readelf"
+
+          rm -f "$out/$target" "$out/arch/riscv/mm/.init.o.cmd"
+          make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- CC=/usr/bin/riscv64-linux-gnu-gcc -j2 V=1 "$target" \
+            >"$ev/gcc-kbuild.log" 2>&1
+          test -s "$out/$target"
+          cp "$out/$target" "$ev/init.gcc.o"
+          cp "$out/arch/riscv/mm/.init.o.cmd" "$ev/init.gcc.cmd" || true
+          riscv64-linux-gnu-nm -an "$ev/init.gcc.o" >"$ev/init.gcc.nm"
+          riscv64-linux-gnu-objdump -drwC "$ev/init.gcc.o" >"$ev/init.gcc.objdump"
+          riscv64-linux-gnu-readelf -rW -sW "$ev/init.gcc.o" >"$ev/init.gcc.readelf"
+
+          cp "$ev/init.minic.o" "$out/$target"
+
+          {
+            echo '=== MiniC key symbols/relocations ==='
+            grep -E '(_dtb_early_va|_dtb_early_pa|create_fdt_early_page_table|setup_vm)$' "$ev/init.minic.nm" || true
+            grep -E '_dtb_early_va|_dtb_early_pa' "$ev/init.minic.readelf" || true
+            echo '=== GCC key symbols/relocations ==='
+            grep -E '(_dtb_early_va|_dtb_early_pa|create_fdt_early_page_table|setup_vm)$' "$ev/init.gcc.nm" || true
+            grep -E '_dtb_early_va|_dtb_early_pa' "$ev/init.gcc.readelf" || true
+            echo '=== MiniC source-level references ==='
+            grep -n -C 12 '_dtb_early_va\|dtb_early_va\|create_fdt_early_page_table' "$ev/init.minic.i" | head -320 || true
+            echo '=== MiniC assembly references ==='
+            grep -n -C 20 '_dtb_early_va\|_dtb_early_pa' "$ev/init.minic.s" | head -480 || true
+          } | tee "$ev/focused.txt"
+
+      - name: Preserve init codegen evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-runtime-riscv-init-codegen-v0-${{ github.sha }}
+          path: |
+            build/linux-runtime-riscv-init-codegen-v0/profile/patch.log
+            build/linux-runtime-riscv-init-codegen-v0/minic-kbuild.log
+            build/linux-runtime-riscv-init-codegen-v0/gcc-kbuild.log
+            build/linux-runtime-riscv-init-codegen-v0/init.minic.i
+            build/linux-runtime-riscv-init-codegen-v0/init.minic.s
+            build/linux-runtime-riscv-init-codegen-v0/init.minic.o
+            build/linux-runtime-riscv-init-codegen-v0/init.gcc.o
+            build/linux-runtime-riscv-init-codegen-v0/init.minic.nm
+            build/linux-runtime-riscv-init-codegen-v0/init.gcc.nm
+            build/linux-runtime-riscv-init-codegen-v0/init.minic.objdump
+            build/linux-runtime-riscv-init-codegen-v0/init.gcc.objdump
+            build/linux-runtime-riscv-init-codegen-v0/init.minic.readelf
+            build/linux-runtime-riscv-init-codegen-v0/init.gcc.readelf
+            build/linux-runtime-riscv-init-codegen-v0/init.minic.cmd
+            build/linux-runtime-riscv-init-codegen-v0/init.gcc.cmd
+            build/linux-runtime-riscv-init-codegen-v0/focused.txt
+          if-no-files-found: warn
+          retention-days: 7
