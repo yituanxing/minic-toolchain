@@ -64,7 +64,7 @@ jobs:
           grep -F 'MINIC_INLINE_ASM_RK_CAST_TAIL_V0=APPLIED' "$ev/profile/patch.log"
           grep -F 'MINIC_RISCV64_PI_LOCAL_SYMBOL_ADDRESS_V0=APPLIED' "$ev/profile/patch.log"
 
-      - name: Refresh frontier owners plus timer/hrtimer/tick-sched/RCU/init-main with current MiniC
+      - name: Refresh frontier owners plus timer/hrtimer/tick-sched/RCU/init-main/softirq with current MiniC
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -109,6 +109,7 @@ jobs:
           refresh_obj kernel/rcu/tree.o rcu-tree-refresh.log
           refresh_obj kernel/rcu/rcu_segcblist.o rcu-segcblist-refresh.log
           refresh_obj init/main.o init-main-refresh.log
+          refresh_obj kernel/softirq.o softirq-refresh.log
 
           riscv64-linux-gnu-nm -an "$out/kernel/time/timer.o" >"$ev/timer.nm.txt"
           riscv64-linux-gnu-objdump -dr "$out/kernel/time/timer.o" >"$ev/timer.objdump.txt"
@@ -139,6 +140,11 @@ jobs:
           riscv64-linux-gnu-objdump -dr "$out/init/main.o" >"$ev/init-main.objdump.txt"
           cp "$out/init/main.minic-stage2.s" "$ev/init-main.minic-stage2.s"
           grep -n -A100 -B10 '<arch_local_irq_save>:' "$ev/init-main.objdump.txt" >"$ev/init-main-arch_local_irq_save.objdump.txt" || true
+
+          riscv64-linux-gnu-nm -an "$out/kernel/softirq.o" >"$ev/softirq.nm.txt"
+          riscv64-linux-gnu-objdump -dr "$out/kernel/softirq.o" >"$ev/softirq.objdump.txt"
+          cp "$out/kernel/softirq.minic-stage2.s" "$ev/softirq.minic-stage2.s"
+          grep -n -A100 -B10 '<arch_local_irq_save>:' "$ev/softirq.objdump.txt" >"$ev/softirq-arch_local_irq_save.objdump.txt" || true
 
       - name: Relink early image
         shell: bash
@@ -174,21 +180,61 @@ jobs:
           : >"$ev/inline-fault.nm-context.txt"
           : >"$ev/inline-fault.objdump.txt"
           test -s "$result" || exit 0
-          sym=$(python3 - "$result" <<'PY'
+          readarray -t fault_fields < <(python3 - "$result" <<'PY'
           import json,sys
           j=json.load(open(sys.argv[1]))
-          print((j.get('fault') or {}).get('symbol') or '')
+          d=j.get('fault_detail') or {}
+          f=j.get('fault') or {}
+          lookup=d.get('lookup')
+          vals=[
+              f.get('symbol') or '',
+              d.get('epc'), d.get('tval'), lookup,
+              d.get('match_start'), d.get('offset'), d.get('relocated'),
+              (lookup - 0x20) if isinstance(lookup, int) else None,
+              (lookup + 0x40) if isinstance(lookup, int) else None
+          ]
+          for v in vals:
+              if isinstance(v, bool):
+                  print('true' if v else 'false')
+              elif isinstance(v, int):
+                  print(f'0x{v:x}')
+              elif v is None:
+                  print('')
+              else:
+                  print(v)
           PY
           )
+          sym="${fault_fields[0]:-}"
+          epc="${fault_fields[1]:-}"
+          tval="${fault_fields[2]:-}"
+          lookup="${fault_fields[3]:-}"
+          match_start="${fault_fields[4]:-}"
+          offset="${fault_fields[5]:-}"
+          relocated="${fault_fields[6]:-}"
+          dis_start="${fault_fields[7]:-}"
+          dis_stop="${fault_fields[8]:-}"
           [[ -n "$sym" ]] || exit 0
-          printf 'FAULT_SYMBOL=%s\n' "$sym" | tee "$ev/inline-fault.symbol.txt"
+          {
+            printf 'FAULT_SYMBOL=%s\n' "$sym"
+            printf 'FAULT_EPC=%s\n' "$epc"
+            printf 'FAULT_TVAL=%s\n' "$tval"
+            printf 'FAULT_LOOKUP=%s\n' "$lookup"
+            printf 'FAULT_MATCH_START=%s\n' "$match_start"
+            printf 'FAULT_OFFSET=%s\n' "$offset"
+            printf 'FAULT_RELOCATED=%s\n' "$relocated"
+          } | tee "$ev/inline-fault.symbol.txt"
           grep -n -F -B8 -A8 " $sym" "$ev/early/nm.txt" >"$ev/inline-fault.nm-context.txt" || true
-          riscv64-linux-gnu-objdump -dr --disassemble="$sym" "$ev/early/vmlinux.early" >"$ev/inline-fault.objdump.txt" 2>&1 || true
+          if [[ -n "$dis_start" && -n "$dis_stop" ]]; then
+            riscv64-linux-gnu-objdump -dr --start-address="$dis_start" --stop-address="$dis_stop" "$ev/early/vmlinux.early" >"$ev/inline-fault.objdump.txt" 2>&1 || true
+          else
+            riscv64-linux-gnu-objdump -dr --disassemble="$sym" "$ev/early/vmlinux.early" >"$ev/inline-fault.objdump.txt" 2>&1 || true
+          fi
           for archive in "$out/vmlinux.a" "$out/built-in.a" "$out/lib/lib.a" "$out/arch/riscv/lib/lib.a"; do
             [[ -e "$archive" ]] || continue
             echo "=== $archive ===" >>"$ev/inline-fault.owner-scan.txt"
             riscv64-linux-gnu-nm -A -an "$archive" 2>/dev/null | grep -F "$sym" >>"$ev/inline-fault.owner-scan.txt" || true
           done
+          cat "$ev/inline-fault.symbol.txt" || true
           cat "$ev/inline-fault.nm-context.txt" || true
           cat "$ev/inline-fault.owner-scan.txt" || true
           cat "$ev/inline-fault.objdump.txt" || true
@@ -225,6 +271,10 @@ jobs:
             build/linux-runtime-timer-focused-v0/init-main.objdump.txt
             build/linux-runtime-timer-focused-v0/init-main.minic-stage2.s
             build/linux-runtime-timer-focused-v0/init-main-arch_local_irq_save.objdump.txt
+            build/linux-runtime-timer-focused-v0/softirq.nm.txt
+            build/linux-runtime-timer-focused-v0/softirq.objdump.txt
+            build/linux-runtime-timer-focused-v0/softirq.minic-stage2.s
+            build/linux-runtime-timer-focused-v0/softirq-arch_local_irq_save.objdump.txt
             build/linux-runtime-timer-focused-v0/early/nm.txt
             build/linux-runtime-timer-focused-v0/inline-fault.symbol.txt
             build/linux-runtime-timer-focused-v0/inline-fault.nm-context.txt
