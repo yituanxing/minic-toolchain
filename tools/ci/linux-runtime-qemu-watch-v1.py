@@ -190,6 +190,20 @@ def trace_stall_context(trace: Path, nm: Path, tail_symbols, phys_entry=0x802000
     }
 
 
+def console_hints(console: Path, limit=80):
+    if not console.exists():
+        return []
+    needles = (
+        "BUG:", "Oops", "spinlock", "lockup", "Unable to handle",
+        "Kernel panic", "Call Trace", "epc :", "ra :", "status:",
+    )
+    hints = []
+    for line in console.read_text(errors="replace").splitlines():
+        if any(needle in line for needle in needles):
+            hints.append(line)
+    return hints[-limit:]
+
+
 def main():
     parser = argparse.ArgumentParser(description="Run QEMU until the frontier oracle becomes decisive.")
     parser.add_argument("--config", type=Path, required=True)
@@ -280,6 +294,7 @@ def main():
     probe_verdict = terminal_probe.get("verdict") if terminal_probe else "none"
     tail_symbols = trace_tail_symbols(trace, args.nm.resolve())
     stall = trace_stall_context(trace, args.nm.resolve(), tail_symbols)
+    hints = console_hints(console)
     last = tail_symbols[-1] if tail_symbols else None
     print(f"QEMU_WATCH=PASS stop={stop_reason} elapsed_ms={elapsed_ms} polls={polls} qemu_rc={qemu_rc}")
     print(f"QEMU_WATCH_PROBE_VERDICT={probe_verdict}")
@@ -292,6 +307,11 @@ def main():
         print(f'QEMU_WATCH_STALL_LOOP={",".join(stall["loop_symbols"])}')
         print(f'QEMU_WATCH_STALL_SUFFIX_ENTRIES={stall["suffix_entries"]}')
         print(f'QEMU_WATCH_STALL_CONTEXT={" -> ".join(context_names[-12:])}')
+    if hints:
+        print("QEMU_WATCH_CONSOLE_HINTS_BEGIN")
+        for line in hints:
+            print(line)
+        print("QEMU_WATCH_CONSOLE_HINTS_END")
     print(final_text.read_text(), end="")
 
     (ev / "watch-result.json").write_text(json.dumps({
@@ -305,6 +325,7 @@ def main():
         "classifier_rc": classifier_rc,
         "trace_tail_symbols": tail_symbols,
         "trace_stall": stall,
+        "console_hints": hints,
     }, indent=2, sort_keys=True) + "\n")
 
     return classifier_rc
