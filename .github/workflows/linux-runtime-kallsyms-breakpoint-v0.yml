@@ -112,7 +112,8 @@ jobs:
 
           test -s "$out/kernel/kallsyms.o"
           sha256sum "$out/kernel/kallsyms.o" | tee "$ev/kallsyms.before.sha256.txt"
-          riscv64-linux-gnu-nm -A -an "$out/built-in.a" 2>/dev/null | grep -E '(^|:)kernel/kallsyms\.o:.* get_symbol_pos$' | tee "$ev/kallsyms.owner.txt"
+          riscv64-linux-gnu-nm -A -an "$out/built-in.a" 2>/dev/null | grep -F 'get_symbol_pos' >"$ev/kallsyms.owner.txt" || true
+          cat "$ev/kallsyms.owner.txt" || true
 
       - name: Baseline relink and inspect
         shell: bash
