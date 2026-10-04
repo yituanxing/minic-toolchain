@@ -125,9 +125,44 @@ jobs:
           out="$work/out"
           frozen="$GITHUB_WORKSPACE/build/linux-runtime-frozen-v1"
           ev="$GITHUB_WORKSPACE/build/linux-runtime-generated-kallsyms-first-die-v0"
+          diag="$ev/kallsyms-pass-diagnostics.txt"
 
+          set +e
           EARLY_LINK_WITH_KALLSYMS=1 EARLY_LINK_KALLSYMS_SRC="$src" \
-            bash tools/ci/linux-early-runtime-link-v2.sh "$frozen/src" "$out" "$ev/early" | tee "$ev/link.log"
+            bash tools/ci/linux-early-runtime-link-v2.sh "$frozen/src" "$out" "$ev/early" 2>&1 | tee "$ev/link.log"
+          relink_rc=${PIPESTATUS[0]}
+          set -e
+
+          : >"$diag"
+          shopt -s nullglob
+          syms_files=("$ev"/early/.tmp_vmlinux.kallsyms*.syms)
+          if ((${#syms_files[@]} == 0)); then
+            echo 'KALLSYMS_DIAG_SYMS=NONE' | tee -a "$diag"
+          fi
+          for syms in "${syms_files[@]}"; do
+            lines=$(wc -l <"$syms")
+            valid=$(awk 'NF >= 3 && $1 ~ /^[0-9A-Fa-f]+$/ { n++ } END { print n+0 }' "$syms")
+            printf 'KALLSYMS_DIAG file=%s lines=%s valid_addr_lines=%s\n' "$(basename "$syms")" "$lines" "$valid" | tee -a "$diag"
+            echo '--- head ---' >>"$diag"
+            sed -n '1,8p' "$syms" >>"$diag"
+            echo '--- tail ---' >>"$diag"
+            tail -n 8 "$syms" >>"$diag"
+          done
+          stderr_files=("$ev"/early/.tmp_vmlinux.kallsyms*.ld.stderr.txt "$ev"/early/.tmp_vmlinux.kallsyms*.mksysmap.stderr.txt)
+          for f in "${stderr_files[@]}"; do
+            printf 'KALLSYMS_DIAG_STDERR file=%s bytes=%s\n' "$(basename "$f")" "$(wc -c <"$f")" | tee -a "$diag"
+            if [[ -s "$f" ]]; then
+              sed -n '1,40p' "$f" >>"$diag"
+            fi
+          done
+          shopt -u nullglob
+          cat "$diag"
+
+          if [[ "$relink_rc" -ne 0 ]]; then
+            echo "EARLY_LINK_DIAGNOSTIC_RC=$relink_rc"
+            exit "$relink_rc"
+          fi
+
           grep -F 'EARLY_LINK_KALLSYMS_CONSISTENT=PASS' "$ev/early/kallsyms-status.txt"
           grep -F 'EARLY_LINK_KALLSYMS_SYMBOL=PASS' "$ev/early/kallsyms-status.txt"
           grep -E ' [Tt] (die|get_symbol_pos)$| (kallsyms_offsets|kallsyms_addresses|kallsyms_relative_base|kallsyms_num_syms)$' "$ev/early/nm.txt" | tee "$ev/key-symbols.txt" || true
@@ -262,6 +297,7 @@ jobs:
             build/linux-runtime-generated-kallsyms-first-die-v0/*refresh.log
             build/linux-runtime-generated-kallsyms-first-die-v0/link.log
             build/linux-runtime-generated-kallsyms-first-die-v0/key-symbols.txt
+            build/linux-runtime-generated-kallsyms-first-die-v0/kallsyms-pass-diagnostics.txt
             build/linux-runtime-generated-kallsyms-first-die-v0/gdb-first-die.txt
             build/linux-runtime-generated-kallsyms-first-die-v0/gdb-rc.txt
             build/linux-runtime-generated-kallsyms-first-die-v0/result.txt
@@ -271,5 +307,9 @@ jobs:
             build/linux-runtime-generated-kallsyms-first-die-v0/early/kallsyms-symbols.txt
             build/linux-runtime-generated-kallsyms-first-die-v0/early/System.map.early
             build/linux-runtime-generated-kallsyms-first-die-v0/early/nm.txt
+            build/linux-runtime-generated-kallsyms-first-die-v0/early/.tmp_vmlinux.kallsyms*.syms
+            build/linux-runtime-generated-kallsyms-first-die-v0/early/.tmp_vmlinux.kallsyms*.ld.stderr.txt
+            build/linux-runtime-generated-kallsyms-first-die-v0/early/.tmp_vmlinux.kallsyms*.mksysmap.stderr.txt
           if-no-files-found: warn
+          include-hidden-files: true
           retention-days: 7
