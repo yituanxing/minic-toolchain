@@ -57,14 +57,8 @@ def probe_decisive(result):
     fault = result.get("fault")
     if verdict in ("SAME_FAULT", "REGRESSED", "FRONTIER_PASS"):
         return True
-    # MOVED_LATER without a fault is only intermediate progress when a later
-    # explicit pass marker is configured. Keep QEMU alive so the watcher can
-    # reach that pass marker. A moved-later first fault is decisive and should
-    # still stop immediately.
     if verdict == "MOVED_LATER":
         return fault is not None
-    # Once the classifier has identified a concrete unexpected first fault,
-    # continuing execution cannot make that first fault more trustworthy.
     return verdict == "INCONCLUSIVE" and fault is not None
 
 
@@ -105,11 +99,32 @@ def resolve_pc(symbols, addresses, pc):
     return name, pc - base
 
 
-def trace_tail_symbols(trace: Path, nm: Path, phys_entry=0x80200000, limit=32):
-    symbols, addresses, by_name = load_nm(nm)
+def relocation_state(by_name, phys_entry):
     anchor = by_name.get("_start") or by_name.get("_text") or by_name.get("_stext")
     relocation_delta = anchor - phys_entry if anchor is not None and anchor > phys_entry else None
     linked_floor = phys_entry + relocation_delta if relocation_delta is not None else None
+    return relocation_delta, linked_floor
+
+
+def resolved_trace_entry(symbols, addresses, relocation_delta, linked_floor, pc, phys_entry):
+    lookup = pc
+    relocated = False
+    if relocation_delta is not None and pc >= phys_entry and pc < linked_floor:
+        lookup = pc + relocation_delta
+        relocated = True
+    symbol, offset = resolve_pc(symbols, addresses, lookup)
+    return {
+        "pc": pc,
+        "lookup": lookup,
+        "relocated": relocated,
+        "symbol": symbol,
+        "offset": offset,
+    }
+
+
+def trace_tail_symbols(trace: Path, nm: Path, phys_entry=0x80200000, limit=32):
+    symbols, addresses, by_name = load_nm(nm)
+    relocation_delta, linked_floor = relocation_state(by_name, phys_entry)
     tail = deque(maxlen=limit)
     last_key = None
     if not trace.exists():
@@ -120,24 +135,59 @@ def trace_tail_symbols(trace: Path, nm: Path, phys_entry=0x80200000, limit=32):
             if not match:
                 continue
             pc = int(match.group(1), 16)
-            lookup = pc
-            relocated = False
-            if relocation_delta is not None and pc >= phys_entry and pc < linked_floor:
-                lookup = pc + relocation_delta
-                relocated = True
-            symbol, offset = resolve_pc(symbols, addresses, lookup)
-            key = (symbol, offset)
+            entry = resolved_trace_entry(
+                symbols, addresses, relocation_delta, linked_floor, pc, phys_entry)
+            key = (entry["symbol"], entry["offset"])
             if key == last_key:
                 continue
             last_key = key
-            tail.append({
-                "pc": pc,
-                "lookup": lookup,
-                "relocated": relocated,
-                "symbol": symbol,
-                "offset": offset,
-            })
+            tail.append(entry)
     return list(tail)
+
+
+def trace_stall_context(trace: Path, nm: Path, tail_symbols, phys_entry=0x80200000,
+                        context_limit=24, min_suffix_entries=64):
+    if not trace.exists() or not tail_symbols:
+        return None
+    loop_symbols = {entry.get("symbol") for entry in tail_symbols if entry.get("symbol")}
+    loop_symbols.discard("?")
+    if not loop_symbols or len(loop_symbols) > 4:
+        return None
+
+    symbols, addresses, by_name = load_nm(nm)
+    relocation_delta, linked_floor = relocation_state(by_name, phys_entry)
+    history = deque(maxlen=context_limit)
+    candidate_context = []
+    suffix_entries = 0
+    last_symbol = None
+
+    with trace.open("r", errors="replace") as src:
+        for line in src:
+            match = TRACE_PC_RE.search(line)
+            if not match:
+                continue
+            pc = int(match.group(1), 16)
+            entry = resolved_trace_entry(
+                symbols, addresses, relocation_delta, linked_floor, pc, phys_entry)
+            symbol = entry["symbol"]
+            if symbol in loop_symbols:
+                if suffix_entries == 0:
+                    candidate_context = list(history)
+                suffix_entries += 1
+                continue
+
+            suffix_entries = 0
+            if symbol != last_symbol:
+                history.append(entry)
+                last_symbol = symbol
+
+    if suffix_entries < min_suffix_entries:
+        return None
+    return {
+        "loop_symbols": sorted(loop_symbols),
+        "suffix_entries": suffix_entries,
+        "context": candidate_context,
+    }
 
 
 def main():
@@ -200,10 +250,6 @@ def main():
                 stop_reason = "hard-timeout"
                 break
 
-            # The classifier ignores the known relocate_enable_mmu transition fault.
-            # Stop on an explicit pass or a decisive first fault. No-fault
-            # MOVED_LATER is intermediate progress and must not preempt a later
-            # configured pass marker.
             result, _ = classify(
                 repo, args.config.resolve(), args.nm.resolve(), trace, console,
                 interrupts, 124, probe_json, probe_text,
@@ -233,6 +279,7 @@ def main():
     verdict = final_result["verdict"]
     probe_verdict = terminal_probe.get("verdict") if terminal_probe else "none"
     tail_symbols = trace_tail_symbols(trace, args.nm.resolve())
+    stall = trace_stall_context(trace, args.nm.resolve(), tail_symbols)
     last = tail_symbols[-1] if tail_symbols else None
     print(f"QEMU_WATCH=PASS stop={stop_reason} elapsed_ms={elapsed_ms} polls={polls} qemu_rc={qemu_rc}")
     print(f"QEMU_WATCH_PROBE_VERDICT={probe_verdict}")
@@ -240,6 +287,11 @@ def main():
         print(f'QEMU_WATCH_LAST_PC=0x{last["pc"]:x}')
         print(f'QEMU_WATCH_LAST_LOOKUP=0x{last["lookup"]:x}')
         print(f'QEMU_WATCH_LAST_SYMBOL={last["symbol"]}+0x{last["offset"]:x}')
+    if stall:
+        context_names = [entry["symbol"] for entry in stall["context"]]
+        print(f'QEMU_WATCH_STALL_LOOP={",".join(stall["loop_symbols"])}')
+        print(f'QEMU_WATCH_STALL_SUFFIX_ENTRIES={stall["suffix_entries"]}')
+        print(f'QEMU_WATCH_STALL_CONTEXT={" -> ".join(context_names[-12:])}')
     print(final_text.read_text(), end="")
 
     (ev / "watch-result.json").write_text(json.dumps({
@@ -252,6 +304,7 @@ def main():
         "final_verdict": verdict,
         "classifier_rc": classifier_rc,
         "trace_tail_symbols": tail_symbols,
+        "trace_stall": stall,
     }, indent=2, sort_keys=True) + "\n")
 
     return classifier_rc
