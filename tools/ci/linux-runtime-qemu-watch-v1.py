@@ -50,15 +50,22 @@ def probe_decisive(result):
     if not result:
         return False
     verdict = result.get("verdict")
-    if verdict in TERMINAL:
+    fault = result.get("fault")
+    if verdict in ("SAME_FAULT", "REGRESSED", "FRONTIER_PASS"):
         return True
+    # MOVED_LATER without a fault is only intermediate progress when a later
+    # explicit pass marker is configured.  Keep QEMU alive so the watcher can
+    # reach that pass marker.  A moved-later first fault is decisive and should
+    # still stop immediately.
+    if verdict == "MOVED_LATER":
+        return fault is not None
     # Once the classifier has identified a concrete unexpected first fault,
     # continuing execution cannot make that first fault more trustworthy.  In
     # particular, a broken early trap path can otherwise spin in millions of
     # secondary faults and turn an 8s oracle into a much longer trace storm.
-    # Keep no-fault INCONCLUSIVE probes running so later progress/pass evidence
-    # can still arrive before the hard timeout.
-    return verdict == "INCONCLUSIVE" and result.get("fault") is not None
+    # Keep no-fault probes running so later progress/pass evidence can still
+    # arrive before the hard timeout.
+    return verdict == "INCONCLUSIVE" and fault is not None
 
 
 def stop_process(proc: subprocess.Popen):
@@ -133,8 +140,9 @@ def main():
                 break
 
             # The classifier ignores the known relocate_enable_mmu transition fault.
-            # A terminal verdict, or an INCONCLUSIVE verdict backed by a concrete
-            # unexpected first fault, is sufficient evidence to stop immediately.
+            # Stop on an explicit pass or a decisive first fault.  No-fault
+            # MOVED_LATER is intermediate progress and must not preempt a later
+            # configured pass marker.
             result, _ = classify(
                 repo, args.config.resolve(), args.nm.resolve(), trace, console,
                 interrupts, 124, probe_json, probe_text,
