@@ -3,3 +3,4 @@ rest-init gate enabled after softirq owner refresh
 watcher continues across no-fault MOVED_LATER
 post-console markers and trace-tail diagnosis enabled
 terminal spin-stall caller context enabled
+console spinlock/oops hints enabled
