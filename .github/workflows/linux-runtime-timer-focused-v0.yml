@@ -64,7 +64,7 @@ jobs:
           grep -F 'MINIC_INLINE_ASM_RK_CAST_TAIL_V0=APPLIED' "$ev/profile/patch.log"
           grep -F 'MINIC_RISCV64_PI_LOCAL_SYMBOL_ADDRESS_V0=APPLIED' "$ev/profile/patch.log"
 
-      - name: Refresh frontier owners plus timer/hrtimer/tick-sched with current MiniC
+      - name: Refresh frontier owners plus timer/hrtimer/tick-sched/rcu-tree with current MiniC
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -106,6 +106,7 @@ jobs:
           refresh_obj kernel/time/timer.o timer-refresh.log
           refresh_obj kernel/time/hrtimer.o hrtimer-refresh.log
           refresh_obj kernel/time/tick-sched.o tick-sched-refresh.log
+          refresh_obj kernel/rcu/tree.o rcu-tree-refresh.log
 
           riscv64-linux-gnu-nm -an "$out/kernel/time/timer.o" >"$ev/timer.nm.txt"
           riscv64-linux-gnu-objdump -dr "$out/kernel/time/timer.o" >"$ev/timer.objdump.txt"
@@ -121,6 +122,11 @@ jobs:
           riscv64-linux-gnu-objdump -dr "$out/kernel/time/tick-sched.o" >"$ev/tick-sched.objdump.txt"
           cp "$out/kernel/time/tick-sched.minic-stage2.s" "$ev/tick-sched.minic-stage2.s"
           grep -n -A90 -B8 '<tick_check_oneshot_change>:' "$ev/tick-sched.objdump.txt" >"$ev/tick_check_oneshot_change.objdump.txt" || true
+
+          riscv64-linux-gnu-nm -an "$out/kernel/rcu/tree.o" >"$ev/rcu-tree.nm.txt"
+          riscv64-linux-gnu-objdump -dr "$out/kernel/rcu/tree.o" >"$ev/rcu-tree.objdump.txt"
+          cp "$out/kernel/rcu/tree.minic-stage2.s" "$ev/rcu-tree.minic-stage2.s"
+          grep -n -A120 -B12 '<rcu_sched_clock_irq>:' "$ev/rcu-tree.objdump.txt" >"$ev/rcu_sched_clock_irq.objdump.txt" || true
 
       - name: Relink early image
         shell: bash
@@ -163,6 +169,10 @@ jobs:
             build/linux-runtime-timer-focused-v0/tick-sched.objdump.txt
             build/linux-runtime-timer-focused-v0/tick-sched.minic-stage2.s
             build/linux-runtime-timer-focused-v0/tick_check_oneshot_change.objdump.txt
+            build/linux-runtime-timer-focused-v0/rcu-tree.nm.txt
+            build/linux-runtime-timer-focused-v0/rcu-tree.objdump.txt
+            build/linux-runtime-timer-focused-v0/rcu-tree.minic-stage2.s
+            build/linux-runtime-timer-focused-v0/rcu_sched_clock_irq.objdump.txt
             build/linux-runtime-timer-focused-v0/watch/frontier-result.json
             build/linux-runtime-timer-focused-v0/watch/frontier-summary.txt
             build/linux-runtime-timer-focused-v0/watch/watch-result.json
