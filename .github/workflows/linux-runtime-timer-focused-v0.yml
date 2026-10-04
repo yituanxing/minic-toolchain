@@ -64,7 +64,7 @@ jobs:
           grep -F 'MINIC_INLINE_ASM_RK_CAST_TAIL_V0=APPLIED' "$ev/profile/patch.log"
           grep -F 'MINIC_RISCV64_PI_LOCAL_SYMBOL_ADDRESS_V0=APPLIED' "$ev/profile/patch.log"
 
-      - name: Refresh frontier owners plus timer/hrtimer/tick-sched/rcu-tree with current MiniC
+      - name: Refresh frontier owners plus timer/hrtimer/tick-sched/RCU with current MiniC
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -107,6 +107,7 @@ jobs:
           refresh_obj kernel/time/hrtimer.o hrtimer-refresh.log
           refresh_obj kernel/time/tick-sched.o tick-sched-refresh.log
           refresh_obj kernel/rcu/tree.o rcu-tree-refresh.log
+          refresh_obj kernel/rcu/rcu_segcblist.o rcu-segcblist-refresh.log
 
           riscv64-linux-gnu-nm -an "$out/kernel/time/timer.o" >"$ev/timer.nm.txt"
           riscv64-linux-gnu-objdump -dr "$out/kernel/time/timer.o" >"$ev/timer.objdump.txt"
@@ -127,6 +128,11 @@ jobs:
           riscv64-linux-gnu-objdump -dr "$out/kernel/rcu/tree.o" >"$ev/rcu-tree.objdump.txt"
           cp "$out/kernel/rcu/tree.minic-stage2.s" "$ev/rcu-tree.minic-stage2.s"
           grep -n -A120 -B12 '<rcu_sched_clock_irq>:' "$ev/rcu-tree.objdump.txt" >"$ev/rcu_sched_clock_irq.objdump.txt" || true
+
+          riscv64-linux-gnu-nm -an "$out/kernel/rcu/rcu_segcblist.o" >"$ev/rcu-segcblist.nm.txt"
+          riscv64-linux-gnu-objdump -dr "$out/kernel/rcu/rcu_segcblist.o" >"$ev/rcu-segcblist.objdump.txt"
+          cp "$out/kernel/rcu/rcu_segcblist.minic-stage2.s" "$ev/rcu-segcblist.minic-stage2.s"
+          grep -n -A80 -B8 '<__minic_inline_spec_7545_0>:' "$ev/rcu-segcblist.objdump.txt" >"$ev/rcu-segcblist-inline-7545.objdump.txt" || true
 
       - name: Relink early image
         shell: bash
@@ -205,6 +211,10 @@ jobs:
             build/linux-runtime-timer-focused-v0/rcu-tree.objdump.txt
             build/linux-runtime-timer-focused-v0/rcu-tree.minic-stage2.s
             build/linux-runtime-timer-focused-v0/rcu_sched_clock_irq.objdump.txt
+            build/linux-runtime-timer-focused-v0/rcu-segcblist.nm.txt
+            build/linux-runtime-timer-focused-v0/rcu-segcblist.objdump.txt
+            build/linux-runtime-timer-focused-v0/rcu-segcblist.minic-stage2.s
+            build/linux-runtime-timer-focused-v0/rcu-segcblist-inline-7545.objdump.txt
             build/linux-runtime-timer-focused-v0/early/nm.txt
             build/linux-runtime-timer-focused-v0/inline-fault.symbol.txt
             build/linux-runtime-timer-focused-v0/inline-fault.nm-context.txt
