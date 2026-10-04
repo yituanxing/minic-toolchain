@@ -1,12 +1,16 @@
 #!/usr/bin/env python3
 import argparse
+import bisect
 import json
+import re
 import subprocess
 import sys
 import time
+from collections import deque
 from pathlib import Path
 
 TERMINAL = {"SAME_FAULT", "REGRESSED", "MOVED_LATER", "FRONTIER_PASS"}
+TRACE_PC_RE = re.compile(r"0x([0-9a-fA-F]+):")
 
 
 def snapshot_interrupts(trace: Path, interrupts: Path):
@@ -54,17 +58,13 @@ def probe_decisive(result):
     if verdict in ("SAME_FAULT", "REGRESSED", "FRONTIER_PASS"):
         return True
     # MOVED_LATER without a fault is only intermediate progress when a later
-    # explicit pass marker is configured.  Keep QEMU alive so the watcher can
-    # reach that pass marker.  A moved-later first fault is decisive and should
+    # explicit pass marker is configured. Keep QEMU alive so the watcher can
+    # reach that pass marker. A moved-later first fault is decisive and should
     # still stop immediately.
     if verdict == "MOVED_LATER":
         return fault is not None
     # Once the classifier has identified a concrete unexpected first fault,
-    # continuing execution cannot make that first fault more trustworthy.  In
-    # particular, a broken early trap path can otherwise spin in millions of
-    # secondary faults and turn an 8s oracle into a much longer trace storm.
-    # Keep no-fault probes running so later progress/pass evidence can still
-    # arrive before the hard timeout.
+    # continuing execution cannot make that first fault more trustworthy.
     return verdict == "INCONCLUSIVE" and fault is not None
 
 
@@ -77,6 +77,67 @@ def stop_process(proc: subprocess.Popen):
     except subprocess.TimeoutExpired:
         proc.kill()
         return proc.wait(timeout=1.0)
+
+
+def load_nm(path: Path):
+    symbols = []
+    by_name = {}
+    for line in path.read_text(errors="replace").splitlines():
+        parts = line.split()
+        if len(parts) < 3:
+            continue
+        try:
+            address = int(parts[0], 16)
+        except ValueError:
+            continue
+        name = parts[2]
+        symbols.append((address, name))
+        by_name.setdefault(name, address)
+    symbols.sort()
+    return symbols, [address for address, _ in symbols], by_name
+
+
+def resolve_pc(symbols, addresses, pc):
+    index = bisect.bisect_right(addresses, pc) - 1
+    if index < 0:
+        return "?", 0
+    base, name = symbols[index]
+    return name, pc - base
+
+
+def trace_tail_symbols(trace: Path, nm: Path, phys_entry=0x80200000, limit=32):
+    symbols, addresses, by_name = load_nm(nm)
+    anchor = by_name.get("_start") or by_name.get("_text") or by_name.get("_stext")
+    relocation_delta = anchor - phys_entry if anchor is not None and anchor > phys_entry else None
+    linked_floor = phys_entry + relocation_delta if relocation_delta is not None else None
+    tail = deque(maxlen=limit)
+    last_key = None
+    if not trace.exists():
+        return []
+    with trace.open("r", errors="replace") as src:
+        for line in src:
+            match = TRACE_PC_RE.search(line)
+            if not match:
+                continue
+            pc = int(match.group(1), 16)
+            lookup = pc
+            relocated = False
+            if relocation_delta is not None and pc >= phys_entry and pc < linked_floor:
+                lookup = pc + relocation_delta
+                relocated = True
+            symbol, offset = resolve_pc(symbols, addresses, lookup)
+            key = (symbol, offset)
+            if key == last_key:
+                continue
+            last_key = key
+            tail.append({
+                "pc": pc,
+                "lookup": lookup,
+                "relocated": relocated,
+                "symbol": symbol,
+                "offset": offset,
+            })
+    return list(tail)
 
 
 def main():
@@ -140,7 +201,7 @@ def main():
                 break
 
             # The classifier ignores the known relocate_enable_mmu transition fault.
-            # Stop on an explicit pass or a decisive first fault.  No-fault
+            # Stop on an explicit pass or a decisive first fault. No-fault
             # MOVED_LATER is intermediate progress and must not preempt a later
             # configured pass marker.
             result, _ = classify(
@@ -171,8 +232,14 @@ def main():
 
     verdict = final_result["verdict"]
     probe_verdict = terminal_probe.get("verdict") if terminal_probe else "none"
+    tail_symbols = trace_tail_symbols(trace, args.nm.resolve())
+    last = tail_symbols[-1] if tail_symbols else None
     print(f"QEMU_WATCH=PASS stop={stop_reason} elapsed_ms={elapsed_ms} polls={polls} qemu_rc={qemu_rc}")
     print(f"QEMU_WATCH_PROBE_VERDICT={probe_verdict}")
+    if last:
+        print(f'QEMU_WATCH_LAST_PC=0x{last["pc"]:x}')
+        print(f'QEMU_WATCH_LAST_LOOKUP=0x{last["lookup"]:x}')
+        print(f'QEMU_WATCH_LAST_SYMBOL={last["symbol"]}+0x{last["offset"]:x}')
     print(final_text.read_text(), end="")
 
     (ev / "watch-result.json").write_text(json.dumps({
@@ -184,6 +251,7 @@ def main():
         "probe_verdict": probe_verdict,
         "final_verdict": verdict,
         "classifier_rc": classifier_rc,
+        "trace_tail_symbols": tail_symbols,
     }, indent=2, sort_keys=True) + "\n")
 
     return classifier_rc
