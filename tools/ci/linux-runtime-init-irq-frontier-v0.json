@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "name": "linux-6.6.143-sched-to-init-irq-frontier",
+  "name": "linux-6.6.143-sched-to-rest-init-frontier",
   "phys_entry": "0x80200000",
   "baseline": {
     "fault": {
@@ -52,6 +52,6 @@
   ],
   "pass_markers": {
     "console_any": [],
-    "symbol_any": ["init_IRQ"]
+    "symbol_any": ["arch_call_rest_init"]
   }
 }
