@@ -11,6 +11,12 @@ from pathlib import Path
 
 TERMINAL = {"SAME_FAULT", "REGRESSED", "MOVED_LATER", "FRONTIER_PASS"}
 TRACE_PC_RE = re.compile(r"0x([0-9a-fA-F]+):")
+FIRST_TARGET_SYMBOLS = (
+    "spin_bug",
+    "minic_spin_diag_bad_magic",
+    "minic_spin_diag_recursion",
+    "minic_spin_diag_cpu_recursion",
+)
 
 
 def snapshot_interrupts(trace: Path, interrupts: Path):
@@ -143,6 +149,38 @@ def trace_tail_symbols(trace: Path, nm: Path, phys_entry=0x80200000, limit=32):
             last_key = key
             tail.append(entry)
     return list(tail)
+
+
+def trace_first_symbol_context(trace: Path, nm: Path, target_names=FIRST_TARGET_SYMBOLS,
+                               phys_entry=0x80200000, context_limit=64):
+    if not trace.exists():
+        return None
+    symbols, addresses, by_name = load_nm(nm)
+    present_targets = {name for name in target_names if name in by_name}
+    if not present_targets:
+        return None
+    relocation_delta, linked_floor = relocation_state(by_name, phys_entry)
+    history = deque(maxlen=context_limit)
+    last_symbol = None
+    with trace.open("r", errors="replace") as src:
+        for line in src:
+            match = TRACE_PC_RE.search(line)
+            if not match:
+                continue
+            pc = int(match.group(1), 16)
+            entry = resolved_trace_entry(
+                symbols, addresses, relocation_delta, linked_floor, pc, phys_entry)
+            symbol = entry["symbol"]
+            if symbol in present_targets:
+                return {
+                    "target": symbol,
+                    "entry": entry,
+                    "context": list(history),
+                }
+            if symbol != last_symbol:
+                history.append(entry)
+                last_symbol = symbol
+    return None
 
 
 def trace_stall_context(trace: Path, nm: Path, tail_symbols, phys_entry=0x80200000,
@@ -293,6 +331,7 @@ def main():
     verdict = final_result["verdict"]
     probe_verdict = terminal_probe.get("verdict") if terminal_probe else "none"
     tail_symbols = trace_tail_symbols(trace, args.nm.resolve())
+    first_target = trace_first_symbol_context(trace, args.nm.resolve())
     stall = trace_stall_context(trace, args.nm.resolve(), tail_symbols)
     hints = console_hints(console)
     last = tail_symbols[-1] if tail_symbols else None
@@ -302,6 +341,12 @@ def main():
         print(f'QEMU_WATCH_LAST_PC=0x{last["pc"]:x}')
         print(f'QEMU_WATCH_LAST_LOOKUP=0x{last["lookup"]:x}')
         print(f'QEMU_WATCH_LAST_SYMBOL={last["symbol"]}+0x{last["offset"]:x}')
+    if first_target:
+        context_names = [entry["symbol"] for entry in first_target["context"]]
+        entry = first_target["entry"]
+        print(f'QEMU_WATCH_FIRST_TARGET={first_target["target"]}+0x{entry["offset"]:x}')
+        print(f'QEMU_WATCH_FIRST_TARGET_PC=0x{entry["pc"]:x}')
+        print(f'QEMU_WATCH_FIRST_TARGET_CONTEXT={" -> ".join(context_names[-24:])}')
     if stall:
         context_names = [entry["symbol"] for entry in stall["context"]]
         print(f'QEMU_WATCH_STALL_LOOP={",".join(stall["loop_symbols"])}')
@@ -324,6 +369,7 @@ def main():
         "final_verdict": verdict,
         "classifier_rc": classifier_rc,
         "trace_tail_symbols": tail_symbols,
+        "trace_first_target": first_target,
         "trace_stall": stall,
         "console_hints": hints,
     }, indent=2, sort_keys=True) + "\n")
