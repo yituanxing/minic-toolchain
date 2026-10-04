@@ -5,6 +5,7 @@ on:
     branches: ["agent/linux-expanded-kbuild-v0"]
     paths:
       - ".github/workflows/linux-runtime-generated-kallsyms-first-die-v0.yml"
+      - "tools/ci/linux-early-runtime-link-v2.sh"
   workflow_dispatch:
 
 permissions:
