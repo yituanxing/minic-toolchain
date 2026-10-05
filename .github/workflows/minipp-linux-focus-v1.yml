@@ -27,7 +27,7 @@ jobs:
   cached-focus:
     if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[minipp-focus]')
     runs-on: ubuntu-24.04
-    timeout-minutes: 25
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
@@ -35,6 +35,9 @@ jobs:
           - id: second500
             range: 500-999
             build_id: focus500b
+            offset: 500
+            limit: 500
+            expected_contract_sha: 202aaedea66c38df0c121ec50b8862335f8f0f0fac11d96e5167f76280cf1fc0
             cache_path: build/minipp-linux-ref500b-corpus
             cache_key: minipp-linux-ref500b-v1-linux-6.6.143-dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932-202aaedea66c38df0c121ec50b8862335f8f0f0fac11d96e5167f76280cf1fc0-7e7ca7019abb49f159d641d0f620be44e874536c422bbd21d79bb661980d3dd1-a4ddb411938926d3e95625a210030a14317e4bc20b881416269e4698576a8e8e
             indices: tests/preprocessor/linux-second500-focus-indices.txt
@@ -44,6 +47,9 @@ jobs:
           - id: third500
             range: 1000-1499
             build_id: focus500c
+            offset: 1000
+            limit: 500
+            expected_contract_sha: b3487f3cf001d085a4a5ba55124fa0ec2c3929ab162bc780a5848ddd3934cbf7
             cache_path: build/minipp-linux-ref500c-corpus
             cache_key: minipp-linux-ref500c-v1-linux-6.6.143-dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932-b3487f3cf001d085a4a5ba55124fa0ec2c3929ab162bc780a5848ddd3934cbf7-7e7ca7019abb49f159d641d0f620be44e874536c422bbd21d79bb661980d3dd1-a4ddb411938926d3e95625a210030a14317e4bc20b881416269e4698576a8e8e
             indices: tests/preprocessor/linux-third500-focus-indices.txt
@@ -53,6 +59,9 @@ jobs:
           - id: fourth500
             range: 1500-1999
             build_id: focus500d
+            offset: 1500
+            limit: 500
+            expected_contract_sha: ed1b980a38c94e9fa9423fd7d1caf990edd3e32700d843bd2bf59efb3bf53781
             cache_path: build/minipp-linux-ref500d-corpus
             cache_key: minipp-linux-ref500d-v1-linux-6.6.143-dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932-ed1b980a38c94e9fa9423fd7d1caf990edd3e32700d843bd2bf59efb3bf53781-7e7ca7019abb49f159d641d0f620be44e874536c422bbd21d79bb661980d3dd1-102f50b8cf781eb2c6def994961ae9b082aefc09b8660776e56ae748c34a8839
             indices: tests/preprocessor/linux-fourth500-focus-indices.txt
@@ -62,6 +71,9 @@ jobs:
           - id: mega1000
             range: 2000-2999
             build_id: focus1000e
+            offset: 2000
+            limit: 1000
+            expected_contract_sha: be2cea1f0b44afa0cc8ea7087ef0d2fa910c799333064e2d695d15e63ccba773
             cache_path: build/minipp-linux-ref1000e-corpus
             cache_key: minipp-linux-ref1000e-v1-linux-6.6.143-dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932-be2cea1f0b44afa0cc8ea7087ef0d2fa910c799333064e2d695d15e63ccba773-7e7ca7019abb49f159d641d0f620be44e874536c422bbd21d79bb661980d3dd1-102f50b8cf781eb2c6def994961ae9b082aefc09b8660776e56ae748c34a8839
             indices: tests/preprocessor/linux-mega1000-focus-indices.txt
@@ -71,6 +83,9 @@ jobs:
           - id: final352
             range: 3000-3351
             build_id: focus352f
+            offset: 3000
+            limit: 352
+            expected_contract_sha: 8c205c3e5a1662b0d3c07bc8495eef7384681ff698a23ef9b3a3147df17cfb4b
             cache_path: build/minipp-linux-ref352f-corpus
             cache_key: minipp-linux-ref352f-v1-linux-6.6.143-dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932-8c205c3e5a1662b0d3c07bc8495eef7384681ff698a23ef9b3a3147df17cfb4b-7e7ca7019abb49f159d641d0f620be44e874536c422bbd21d79bb661980d3dd1-102f50b8cf781eb2c6def994961ae9b082aefc09b8660776e56ae748c34a8839
             indices: tests/preprocessor/linux-final352-focus-indices.txt
@@ -82,12 +97,13 @@ jobs:
         with:
           ref: ${{ github.sha }}
 
-      - name: Install focused replay prerequisites
+      - name: Install focused replay and reference prerequisites
         run: |
           set -Eeuo pipefail
-          sudo apt-get -o Acquire::Retries=3 update
-          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
-            gcc-riscv64-linux-gnu libc6-dev-riscv64-cross make curl xz-utils
+          timeout 240s sudo apt-get -o Acquire::Retries=3 update
+          timeout 240s sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            gcc gcc-riscv64-linux-gnu libc6-dev-riscv64-cross \
+            bc bison flex libssl-dev libelf-dev make curl xz-utils
 
       - name: Build independent MiniPP
         shell: bash
@@ -98,25 +114,82 @@ jobs:
           make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$build" all
           test -x "$build/bin/minic-cpp"
 
-      - name: Prepare immutable Linux source tree
+      - name: Prepare Linux and reproduce frozen contract
         shell: bash
         run: |
           set -Eeuo pipefail
           work="$GITHUB_WORKSPACE/build/minipp-linux-${{ matrix.build_id }}-work"
           archive="$work/linux-6.6.143.tar.xz"
+          src="$work/linux-6.6.143"
+          out="$work/out"
           mkdir -p "$work"
           curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors \
             https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.6.143.tar.xz \
             -o "$archive"
           printf '%s  %s\n' "$MINIPP_LINUX_ARCHIVE_SHA256" "$archive" | sha256sum -c -
           tar -xJf "$archive" -C "$work"
+          make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- defconfig
+          make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- -j4 prepare scripts
+          set +e
+          make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- -n -j1 V=1 \
+            >"$work/kbuild-plan.raw" 2>"$work/kbuild-plan.stderr"
+          plan_status=$?
+          set -e
+          echo "MINIPP_FOCUS_PLAN_STATUS=$plan_status range=${{ matrix.range }}"
+          python3 tests/preprocessor/freeze_linux_kbuild_manifest.py \
+            --plan "$work/kbuild-plan.raw" \
+            --src "$src" \
+            --out "$out" \
+            --offset ${{ matrix.offset }} \
+            --limit ${{ matrix.limit }} \
+            --tsv "$work/focus.tsv" \
+            --sources "$work/focus-sources.txt" \
+            --contract "$work/focus-contract.jsonl"
+          actual=$(sha256sum "$work/focus-contract.jsonl" | cut -d' ' -f1)
+          test "$actual" = "${{ matrix.expected_contract_sha }}"
+          echo "MINIPP_FOCUS_CONTRACT=PASS range=${{ matrix.range }} sha=$actual"
 
       - name: Restore frozen GCC corpus
+        id: ref-cache
         uses: actions/cache/restore@v4
         with:
           path: ${{ matrix.cache_path }}
           key: ${{ matrix.cache_key }}
-          fail-on-cache-miss: true
+
+      - name: Build GCC reference corpus on cache miss
+        if: steps.ref-cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/minipp-linux-${{ matrix.build_id }}-work"
+          python3 tests/preprocessor/build_linux_reference_corpus.py \
+            --contract "$work/focus-contract.jsonl" \
+            --src "$work/linux-6.6.143" \
+            --out "$work/out" \
+            --corpus "$GITHUB_WORKSPACE/${{ matrix.cache_path }}" \
+            --gcc riscv64-linux-gnu-gcc \
+            --jobs ${{ matrix.jobs }} \
+            --linux-id "linux-6.6.143-$MINIPP_LINUX_ARCHIVE_SHA256-rv64-defconfig-${{ matrix.range }}"
+          echo "MINIPP_FOCUS_REFERENCE_CACHE=MISS built=${{ matrix.limit }} range=${{ matrix.range }}"
+
+      - name: Verify frozen GCC corpus identity
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          corpus="$GITHUB_WORKSPACE/${{ matrix.cache_path }}"
+          test -s "$corpus/meta.json"
+          test -s "$corpus/contract.jsonl"
+          test "$(find "$corpus/refs" -maxdepth 1 -type f -name '*.gcc.i' | wc -l)" -eq ${{ matrix.limit }}
+          actual=$(sha256sum "$corpus/contract.jsonl" | cut -d' ' -f1)
+          test "$actual" = "${{ matrix.expected_contract_sha }}"
+          echo "MINIPP_FOCUS_REFERENCE=PASS range=${{ matrix.range }} selected=${{ matrix.limit }} contract=$actual"
+
+      - name: Save frozen GCC corpus on cache miss
+        if: steps.ref-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ matrix.cache_path }}
+          key: ${{ matrix.cache_key }}
 
       - name: Replay focused cached pool
         shell: bash
@@ -142,6 +215,9 @@ jobs:
         with:
           name: ${{ matrix.artifact }}
           path: |
+            build/minipp-linux-${{ matrix.build_id }}-work/focus.tsv
+            build/minipp-linux-${{ matrix.build_id }}-work/focus-sources.txt
+            build/minipp-linux-${{ matrix.build_id }}-work/focus-contract.jsonl
             build/minipp-linux-${{ matrix.build_id }}-work/replay/headline.txt
             build/minipp-linux-${{ matrix.build_id }}-work/replay/results.tsv
             build/minipp-linux-${{ matrix.build_id }}-work/replay/results.json
