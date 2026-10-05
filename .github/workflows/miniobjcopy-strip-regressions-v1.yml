@@ -4,7 +4,6 @@ on:
   push:
     branches:
       - "agent/linux-expanded-kbuild-v0"
-      - "agent/ci-runtime-cleanup-v1"
   workflow_dispatch:
 
 permissions:
@@ -16,7 +15,7 @@ concurrency:
 
 jobs:
   regressions:
-    if: github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/agent/ci-runtime-cleanup-v1' || contains(github.event.head_commit.message, '[miniobjcopy-strip-regressions]')
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[miniobjcopy-strip-regressions]')
     runs-on: ubuntu-24.04
     timeout-minutes: 35
     steps:
