@@ -62,5 +62,18 @@ jobs:
           make MODE=release CFLAGS=-Werror BUILD_DIR=build/minild-regressions-v1 check-minild-a5
           make MODE=release CFLAGS=-Werror BUILD_DIR=build/minild-regressions-v1 check-minild-a6
 
+      - name: Validate MiniLD section GC contract
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          MINIC="$GITHUB_WORKSPACE/build/minild-regressions-v1/bin/minic" \
+          MINIAS="$GITHUB_WORKSPACE/build/minild-regressions-v1/bin/minic-as" \
+          MINILD="$GITHUB_WORKSPACE/build/minild-regressions-v1/bin/minic-ld" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/minild-regressions-v1" \
+          RISCV_READELF=riscv64-linux-gnu-readelf \
+          RISCV_NM=riscv64-linux-gnu-nm \
+          QEMU_RISCV64=qemu-riscv64 \
+            sh tests/linker/run-gc-v0.sh
+
       - name: Publish canonical verdict
-        run: echo "MINILD_REGRESSIONS_V1=PASS elf-reader=PASS scripts=A0-A1 static=A0-A3 dynamic=A4-A6"
+        run: echo "MINILD_REGRESSIONS_V1=PASS elf-reader=PASS scripts=A0-A1 static=A0-A3 dynamic=A4-A6 gc=PASS"

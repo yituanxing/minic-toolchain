@@ -16,7 +16,12 @@ mkdir -p "$WORK"
 cat >"$WORK/gc.c" <<'C'
 extern void minic_dead_missing_symbol(void);
 
-static void minic_dead_function(void)
+/*
+ * Force this unreachable function to survive MiniC's compile-time reachability
+ * pruning. This probe is specifically for MiniLD --gc-sections: the dead input
+ * section and its undefined relocation must exist before the linker sees them.
+ */
+static __attribute__((used)) void minic_dead_function(void)
 {
     minic_dead_missing_symbol();
 }
