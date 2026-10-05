@@ -19,6 +19,15 @@ jobs:
           python3 tools/ci/test_linux_runtime_object_set_v1.py
           python3 tools/ci/test_linux_runtime_prefix_bisect_v1.py
 
+      - name: Validate active Linux Kbuild wrapper contract
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          bash -n tests/external/linux/stage2_kbuild_cc.sh
+          bash -n tests/external/linux/stage2_kbuild_cc_test.sh
+          bash tests/external/linux/stage2_kbuild_cc_test.sh
+          echo "M0_KBUILD_WRAPPER_CONTRACT=PASS"
+
       - name: Build frozen compiler boundary
         if: github.ref != 'refs/heads/agent/ci-runtime-cleanup-v1'
         run: make clean && make -j2
