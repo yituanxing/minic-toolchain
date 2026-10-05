@@ -1,0 +1,80 @@
+name: MiniC RV64 Focused Regressions V1
+
+on:
+  push:
+    branches:
+      - "agent/linux-expanded-kbuild-v0"
+      - "agent/ci-runtime-cleanup-v1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: minic-rv64-focused-regressions-v1-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  regressions:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Install RV64 link and runtime prerequisites
+        run: |
+          timeout 240s sudo apt-get -o Acquire::Retries=3 update
+          timeout 240s sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            build-essential gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu qemu-user
+
+      - name: Build current Mini toolchain once
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/rv64-focused-v1-toolchain all
+          test -x build/rv64-focused-v1-toolchain/bin/minic
+          test -x build/rv64-focused-v1-toolchain/bin/minic-as
+
+      - name: Run focused current-product regressions
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          minic="$GITHUB_WORKSPACE/build/rv64-focused-v1-toolchain/bin/minic"
+          minias="$GITHUB_WORKSPACE/build/rv64-focused-v1-toolchain/bin/minic-as"
+          work="$GITHUB_WORKSPACE/build/rv64-focused-v1"
+
+          MINIC="$minic" \
+          BUILD_DIR="$work" \
+          RISCV_CC=riscv64-linux-gnu-gcc \
+          RISCV_LD=riscv64-linux-gnu-ld \
+          RISCV_NM=riscv64-linux-gnu-nm \
+          QEMU_RISCV64=qemu-riscv64 \
+            bash tests/compiler/c0/run-inline-emission-reachability-rv64.sh
+
+          MINIC="$minic" \
+          MINIAS="$minias" \
+          BUILD_DIR="$work" \
+          RISCV_LD=riscv64-linux-gnu-ld \
+          QEMU_RISCV64=qemu-riscv64 \
+            sh tests/driver/run-constant-if-link-v0.sh
+
+          MINIC="$minic" \
+          MINIAS="$minias" \
+          BUILD_DIR="$work" \
+          RISCV_LD=riscv64-linux-gnu-ld \
+          RISCV_READELF=riscv64-linux-gnu-readelf \
+          QEMU_RISCV64=qemu-riscv64 \
+            sh tests/driver/run-section-gc-v0.sh
+
+          echo "MINIC_RV64_FOCUSED_REGRESSIONS_V1=PASS inline-emission=PASS constant-if=PASS section-gc=PASS"
+
+      - name: Preserve focused regression evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: minic-rv64-focused-regressions-v1
+          path: build/rv64-focused-v1/
+          if-no-files-found: ignore
+          retention-days: 5
