@@ -3,7 +3,7 @@ name: MiniAR Linux Kbuild Integration
 on:
   push:
     branches:
-      - "toolchain/miniar-linux"
+      - "agent/linux-expanded-kbuild-v0"
   workflow_dispatch:
 
 permissions:
