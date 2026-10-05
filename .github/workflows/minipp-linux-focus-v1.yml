@@ -14,6 +14,7 @@ on:
       - 'tools/minic-cpp/**'
       - 'tests/preprocessor/**'
       - '.github/workflows/minipp-linux-focus-v1.yml'
+      - '.github/workflows-disabled/minipp-linux-focus-*.yml'
       - 'Makefile'
   workflow_dispatch:
 
