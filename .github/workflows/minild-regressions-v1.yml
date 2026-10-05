@@ -37,11 +37,12 @@ jobs:
           make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/minild-regressions-v1 all
           test -x build/minild-regressions-v1/bin/minic-ld
 
-      - name: Validate shared ELF and linker-script contracts
+      - name: Validate shared ELF writer reader and linker-script contracts
         shell: bash
         run: |
           set -Eeuo pipefail
           make MODE=release CFLAGS=-Werror BUILD_DIR=build/minild-regressions-v1 check-minielf-reader-a0
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/minild-regressions-v1 check-minias-a0
           make MODE=release CFLAGS=-Werror BUILD_DIR=build/minild-regressions-v1 check-minild-script-a0
           make MODE=release CFLAGS=-Werror BUILD_DIR=build/minild-regressions-v1 check-minild-script-a1
 
@@ -76,4 +77,4 @@ jobs:
             sh tests/linker/run-gc-v0.sh
 
       - name: Publish canonical verdict
-        run: echo "MINILD_REGRESSIONS_V1=PASS elf-reader=PASS scripts=A0-A1 static=A0-A3 dynamic=A4-A6 gc=PASS"
+        run: echo "MINILD_REGRESSIONS_V1=PASS elf-reader=PASS et-rel-writer=PASS minias=A0 scripts=A0-A1 static=A0-A3 dynamic=A4-A6 gc=PASS"
