@@ -1,0 +1,165 @@
+name: MiniLD Linux Relocatable Boundaries V1
+
+on:
+  push:
+    branches:
+      - "agent/linux-expanded-kbuild-v0"
+      - "agent/ci-runtime-cleanup-v1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: minild-linux-rel-boundaries-v1-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux-rel-boundaries:
+    if: github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/agent/ci-runtime-cleanup-v1' || contains(github.event.head_commit.message, '[minild-linux-rel-boundaries]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Install Linux build prerequisites
+        run: |
+          timeout 240s sudo apt-get -o Acquire::Retries=3 update
+          timeout 240s sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
+            bc bison flex libssl-dev libelf-dev make curl xz-utils file
+
+      - name: Build current MiniLD once
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/minild-linux-rel-v1-toolchain all
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/minild-linux-rel-v1-toolchain check-minild-a0
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/minild-linux-rel-v1-toolchain check-minild-a1
+          test -x build/minild-linux-rel-v1-toolchain/bin/minic-ld
+
+      - name: Prepare Linux 6.6.143 once
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/minild-linux-rel-v1"
+          archive="$work/linux-6.6.143.tar.xz"
+          src="$work/linux-6.6.143"
+          out="$work/out"
+          mkdir -p "$work"
+          curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors \
+            https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.6.143.tar.xz \
+            -o "$archive"
+          printf '%s  %s\n' \
+            dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932 \
+            "$archive" | sha256sum -c -
+          tar -xJf "$archive" -C "$work"
+          make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- defconfig
+
+      - name: Install two-boundary MiniLD wrapper
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/minild-linux-rel-v1"
+          wrapper="$work/riscv64-linux-gnu-ld-minild-rel-boundaries"
+          cat >"$wrapper" <<'SH'
+          #!/usr/bin/env bash
+          set -Eeuo pipefail
+          : "${MINILD:?MINILD is not set}"
+          : "${MINILD_TRACE:?MINILD_TRACE is not set}"
+
+          args=("$@")
+          output=
+          for ((i=0; i<${#args[@]}; ++i)); do
+            if [[ "${args[i]}" == "-o" && $((i+1)) -lt ${#args[@]} ]]; then
+              output="${args[i+1]}"
+              break
+            fi
+          done
+
+          case "$output" in
+            arch/riscv/purgatory/purgatory.ro)
+              {
+                printf 'minild-purgatory'
+                printf ' %q' "$@"
+                printf '\n'
+              } >>"$MINILD_TRACE"
+              exec "$MINILD" "$@"
+              ;;
+            vmlinux.o)
+              {
+                printf 'minild-vmlinuxo'
+                printf ' %q' "$@"
+                printf '\n'
+              } >>"$MINILD_TRACE"
+              exec "$MINILD" "$@"
+              ;;
+            *)
+              {
+                printf 'gnu-ld'
+                printf ' %q' "$@"
+                printf '\n'
+              } >>"$MINILD_TRACE"
+              exec /usr/bin/riscv64-linux-gnu-ld "$@"
+              ;;
+          esac
+          SH
+          chmod +x "$wrapper"
+          : >"$work/minild.trace"
+
+      - name: Build one Linux Image through both MiniLD boundaries
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/minild-linux-rel-v1"
+          src="$work/linux-6.6.143"
+          out="$work/out"
+          wrapper="$work/riscv64-linux-gnu-ld-minild-rel-boundaries"
+          export MINILD="$GITHUB_WORKSPACE/build/minild-linux-rel-v1-toolchain/bin/minic-ld"
+          export MINILD_TRACE="$work/minild.trace"
+
+          started=$(date +%s)
+          make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
+            LD="$wrapper" -j4 Image >"$work/kbuild.log" 2>&1
+          elapsed=$(( $(date +%s) - started ))
+
+          purgatory="$out/arch/riscv/purgatory/purgatory.ro"
+          vmlinuxo="$out/vmlinux.o"
+          image="$out/arch/riscv/boot/Image"
+
+          test -s "$purgatory"
+          test -s "$out/arch/riscv/purgatory/purgatory.chk"
+          test -s "$vmlinuxo"
+          test -s "$image"
+
+          test "$(grep -c '^minild-purgatory ' "$work/minild.trace")" -eq 1
+          test "$(grep -c '^minild-vmlinuxo ' "$work/minild.trace")" -eq 1
+          test "$(grep -Ec '^minild-(purgatory|vmlinuxo) ' "$work/minild.trace")" -eq 2
+
+          riscv64-linux-gnu-readelf -h "$purgatory" | grep -q 'REL (Relocatable file)'
+          riscv64-linux-gnu-readelf -h "$vmlinuxo" | grep -q 'REL (Relocatable file)'
+          riscv64-linux-gnu-readelf -Wr "$purgatory" >"$work/purgatory.relocs"
+          riscv64-linux-gnu-readelf -Ws "$vmlinuxo" >"$work/vmlinuxo.symbols"
+          riscv64-linux-gnu-readelf -Wr "$vmlinuxo" >"$work/vmlinuxo.relocs"
+          sha256sum "$image" >"$work/Image.sha256"
+
+          printf 'MINILD_LINUX_REL_BOUNDARIES_V1=PASS purgatory=PASS vmlinuxo=PASS minild_calls=2 elapsed_s=%s vmlinuxo_bytes=%s head=%s\n' \
+            "$elapsed" "$(stat -c %s "$vmlinuxo")" "$GITHUB_SHA"
+
+      - name: Preserve Linux boundary evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: minild-linux-rel-boundaries-v1
+          path: |
+            build/minild-linux-rel-v1/minild.trace
+            build/minild-linux-rel-v1/kbuild.log
+            build/minild-linux-rel-v1/purgatory.relocs
+            build/minild-linux-rel-v1/vmlinuxo.symbols
+            build/minild-linux-rel-v1/vmlinuxo.relocs
+            build/minild-linux-rel-v1/Image.sha256
+            build/minild-linux-rel-v1/out/.config
+          if-no-files-found: ignore
+          retention-days: 3
