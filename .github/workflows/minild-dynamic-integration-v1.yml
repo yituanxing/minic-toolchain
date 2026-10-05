@@ -1,0 +1,280 @@
+name: MiniLD Dynamic Integration V1
+
+on:
+  push:
+    branches:
+      - "agent/linux-expanded-kbuild-v0"
+      - "agent/ci-runtime-cleanup-v1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: minild-dynamic-integration-v1-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  dynamic-integration:
+    if: github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/agent/ci-runtime-cleanup-v1' || contains(github.event.head_commit.message, '[minild-dynamic-integration]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Install RV64 musl prerequisites
+        run: |
+          timeout 240s sudo apt-get -o Acquire::Retries=3 update
+          timeout 240s sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            build-essential gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
+            libc6-riscv64-cross libc6-dev-riscv64-cross qemu-user \
+            curl ca-certificates python3
+
+      - name: Build current MiniLD once
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/minild-dynamic-integration-v1-toolchain all
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/minild-dynamic-integration-v1-toolchain check-minild-a6
+          test -x build/minild-dynamic-integration-v1-toolchain/bin/minic-ld
+
+      - name: Build pristine musl and MiniLD loader once
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/minild-dynamic-integration-v1"
+          toolchain="$GITHUB_WORKSPACE/build/minild-dynamic-integration-v1-toolchain"
+          mkdir -p "$work"
+
+          curl -fsSL https://musl.libc.org/releases/musl-1.2.5.tar.gz \
+            -o "$work/musl-1.2.5.tar.gz"
+          printf '%s  %s\n' \
+            a9a118bbe84d8764da0ea0d28b3ab3fae8477fc7e4085d90102b8596fc7c75e4 \
+            "$work/musl-1.2.5.tar.gz" | sha256sum -c -
+          tar -xzf "$work/musl-1.2.5.tar.gz" -C "$work"
+
+          src="$work/musl-1.2.5"
+          out="$work/musl-build"
+          mkdir -p "$out"
+          cd "$out"
+          CC=riscv64-linux-gnu-gcc \
+          AR=riscv64-linux-gnu-ar \
+          RANLIB=riscv64-linux-gnu-ranlib \
+            "$src/configure" \
+              --target=riscv64-linux-gnu \
+              --enable-shared \
+              --prefix=/usr \
+            >"$work/configure.log" 2>&1
+
+          make -j4 V=1 lib/libc.so lib/Scrt1.o lib/crti.o lib/crtn.o \
+            >"$work/make.log" 2>&1
+
+          python3 - "$work/make.log" "$work/input-list.txt" <<'PY'
+          import shlex, sys
+          lines = open(sys.argv[1], encoding="utf-8", errors="replace").read().splitlines()
+          for i, line in enumerate(lines):
+              if " -nostdlib -shared " not in line:
+                  continue
+              full = line.rstrip()
+              j = i + 1
+              while full.endswith("\\") and j < len(lines):
+                  full = full[:-1] + " " + lines[j].strip()
+                  j += 1
+              words = shlex.split(full)
+              objs = [w for w in words if w.endswith(".lo")]
+              if len(objs) >= 1000:
+                  open(sys.argv[2], "w").write("\n".join(objs) + "\n")
+                  print("MINILD_DYNAMIC_MUSL_LINK_OBJECTS=%d" % len(objs))
+                  break
+          else:
+              raise SystemExit("shared musl link command not found")
+          PY
+
+          minild="$toolchain/bin/minic-ld"
+          dynamic_list="$src/dynamic.list"
+          libgcc="$(riscv64-linux-gnu-gcc -print-libgcc-file-name)"
+          libgcc_eh="$(riscv64-linux-gnu-gcc -print-file-name=libgcc_eh.a)"
+          mapfile -t rel_inputs <"$work/input-list.txt"
+          inputs=()
+          for p in "${rel_inputs[@]}"; do
+            test -s "$out/$p"
+            inputs+=("$out/$p")
+          done
+          test "${#inputs[@]}" -ge 1000
+
+          "$minild" -melf64lriscv -shared -e _dlstart \
+            --dynamic-list="$dynamic_list" \
+            -o "$work/libc-minild.so" \
+            "${inputs[@]}" "$libgcc" "$libgcc_eh" \
+            >"$work/loader-link.stdout" 2>"$work/loader-link.stderr"
+
+          chmod +x "$work/libc-minild.so"
+          set +e
+          qemu-riscv64 "$work/libc-minild.so" \
+            >"$work/loader.stdout" 2>"$work/loader.stderr"
+          loader_rc=$?
+          set -e
+          test "$loader_rc" -eq 1
+          echo "MINILD_DYNAMIC_LOADER=PASS rc=$loader_rc"
+
+      - name: Build shared PIE input and runtime root
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/minild-dynamic-integration-v1"
+
+          cat >"$work/app.c" <<'C'
+          extern void *malloc(unsigned long);
+          extern void free(void *);
+          extern long write(int, const void *, unsigned long);
+
+          int main(void)
+          {
+              static const char msg[] = "MINILD_DYNAMIC_EXEC_OK\n";
+              unsigned long n = sizeof(msg) - 1;
+              char *p = malloc(n);
+              unsigned long i;
+
+              if (!p) return 2;
+              for (i = 0; i < n; ++i) p[i] = msg[i];
+              if (write(1, p, n) != (long)n) {
+                  free(p);
+                  return 3;
+              }
+              free(p);
+              return 0;
+          }
+          C
+
+          riscv64-linux-gnu-gcc -O0 -fPIE -fno-stack-protector -fno-builtin \
+            -c "$work/app.c" -o "$work/app.o"
+
+          root="$work/root"
+          mkdir -p "$root/lib"
+          cp "$work/libc-minild.so" "$root/lib/ld-musl-riscv64.so.1"
+          cp "$work/libc-minild.so" "$root/lib/libc.so"
+          chmod +x "$root/lib/ld-musl-riscv64.so.1" "$root/lib/libc.so"
+
+      - name: Validate explicit DT_NEEDED MiniLD PIE
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/minild-dynamic-integration-v1"
+          out="$work/musl-build"
+          minild="$GITHUB_WORKSPACE/build/minild-dynamic-integration-v1-toolchain/bin/minic-ld"
+          app="$work/app-explicit"
+
+          "$minild" -melf64lriscv -pie -e _start \
+            --needed=libc.so \
+            --dynamic-linker=/lib/ld-musl-riscv64.so.1 \
+            -o "$app" \
+            "$out/lib/Scrt1.o" "$out/lib/crti.o" \
+            "$work/app.o" "$out/lib/crtn.o" \
+            >"$work/explicit-link.stdout" 2>"$work/explicit-link.stderr"
+
+          riscv64-linux-gnu-readelf -h "$app" >"$work/explicit.header"
+          riscv64-linux-gnu-readelf -lW "$app" >"$work/explicit.programs"
+          riscv64-linux-gnu-readelf -d "$app" >"$work/explicit.dynamic"
+          riscv64-linux-gnu-readelf -Wr "$app" >"$work/explicit.relocations"
+          riscv64-linux-gnu-readelf -Ws "$app" >"$work/explicit.symbols"
+
+          grep -q 'DYN (Position-Independent Executable file)' "$work/explicit.header"
+          grep -q '^[[:space:]]*PHDR[[:space:]]' "$work/explicit.programs"
+          grep -q 'Requesting program interpreter: /lib/ld-musl-riscv64.so.1' "$work/explicit.programs"
+          grep -q '(NEEDED).*\[libc.so\]' "$work/explicit.dynamic"
+          grep -q '(FLAGS_1).*PIE' "$work/explicit.dynamic"
+          grep -q '_start' "$work/explicit.symbols"
+          grep -q '__libc_start_main' "$work/explicit.symbols"
+          grep -q 'malloc' "$work/explicit.symbols"
+          grep -q 'write' "$work/explicit.symbols"
+          grep -q 'free' "$work/explicit.symbols"
+
+          set +e
+          timeout 5s qemu-riscv64 "$work/libc-minild.so" "$app" \
+            >"$work/explicit-loader.stdout" 2>"$work/explicit-loader.stderr"
+          loader_rc=$?
+          timeout 5s qemu-riscv64 -L "$work/root" "$app" \
+            >"$work/explicit-direct.stdout" 2>"$work/explicit-direct.stderr"
+          direct_rc=$?
+          set -e
+
+          test "$loader_rc" -eq 0
+          test "$direct_rc" -eq 0
+          grep -qx 'MINILD_DYNAMIC_EXEC_OK' "$work/explicit-loader.stdout"
+          cmp "$work/explicit-loader.stdout" "$work/explicit-direct.stdout"
+          echo "MINILD_DYNAMIC_EXPLICIT_NEEDED=PASS loader_rc=$loader_rc direct_rc=$direct_rc"
+
+      - name: Validate DSO input and automatic DT_NEEDED MiniLD PIE
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/minild-dynamic-integration-v1"
+          out="$work/musl-build"
+          minild="$GITHUB_WORKSPACE/build/minild-dynamic-integration-v1-toolchain/bin/minic-ld"
+          app="$work/app-dso"
+
+          "$minild" -melf64lriscv -pie -e _start \
+            --dynamic-linker=/lib/ld-musl-riscv64.so.1 \
+            -o "$app" \
+            "$out/lib/Scrt1.o" "$out/lib/crti.o" \
+            "$work/app.o" "$out/lib/crtn.o" \
+            -L"$out/lib" -lc \
+            >"$work/dso-link.stdout" 2>"$work/dso-link.stderr"
+
+          riscv64-linux-gnu-readelf -h "$app" >"$work/dso.header"
+          riscv64-linux-gnu-readelf -lW "$app" >"$work/dso.programs"
+          riscv64-linux-gnu-readelf -d "$app" >"$work/dso.dynamic"
+          riscv64-linux-gnu-readelf -Wr "$app" >"$work/dso.relocations"
+          riscv64-linux-gnu-readelf -Ws "$app" >"$work/dso.symbols"
+
+          grep -q 'DYN (Position-Independent Executable file)' "$work/dso.header"
+          grep -q '^[[:space:]]*PHDR[[:space:]]' "$work/dso.programs"
+          grep -q 'Requesting program interpreter: /lib/ld-musl-riscv64.so.1' "$work/dso.programs"
+          grep -q '(NEEDED).*\[libc.so\]' "$work/dso.dynamic"
+          grep -q '(FLAGS_1).*PIE' "$work/dso.dynamic"
+          grep -q '_start' "$work/dso.symbols"
+          grep -q '__libc_start_main' "$work/dso.symbols"
+          grep -q 'malloc' "$work/dso.symbols"
+          grep -q 'write' "$work/dso.symbols"
+          grep -q 'free' "$work/dso.symbols"
+
+          set +e
+          timeout 5s qemu-riscv64 "$work/libc-minild.so" "$app" \
+            >"$work/dso-loader.stdout" 2>"$work/dso-loader.stderr"
+          loader_rc=$?
+          timeout 5s qemu-riscv64 -L "$work/root" "$app" \
+            >"$work/dso-direct.stdout" 2>"$work/dso-direct.stderr"
+          direct_rc=$?
+          set -e
+
+          test "$loader_rc" -eq 0
+          test "$direct_rc" -eq 0
+          grep -qx 'MINILD_DYNAMIC_EXEC_OK' "$work/dso-loader.stdout"
+          cmp "$work/dso-loader.stdout" "$work/dso-direct.stdout"
+          echo "MINILD_DYNAMIC_DSO_INPUT=PASS library_search=-L,-l automatic_needed=PASS loader_rc=$loader_rc direct_rc=$direct_rc"
+
+      - name: Publish combined dynamic verdict
+        run: echo "MINILD_DYNAMIC_INTEGRATION_V1=PASS explicit-needed=PASS dso-input=PASS library-search=PASS automatic-needed=PASS direct-qemu=PASS"
+
+      - name: Preserve dynamic integration evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: minild-dynamic-integration-v1
+          path: |
+            build/minild-dynamic-integration-v1/configure.log
+            build/minild-dynamic-integration-v1/make.log
+            build/minild-dynamic-integration-v1/input-list.txt
+            build/minild-dynamic-integration-v1/loader-link.stdout
+            build/minild-dynamic-integration-v1/loader-link.stderr
+            build/minild-dynamic-integration-v1/loader.stdout
+            build/minild-dynamic-integration-v1/loader.stderr
+            build/minild-dynamic-integration-v1/app.c
+            build/minild-dynamic-integration-v1/explicit-*
+            build/minild-dynamic-integration-v1/explicit.*
+            build/minild-dynamic-integration-v1/dso-*
+            build/minild-dynamic-integration-v1/dso.*
+          if-no-files-found: ignore
+          retention-days: 3
