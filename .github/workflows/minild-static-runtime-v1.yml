@@ -4,7 +4,6 @@ on:
   push:
     branches:
       - "agent/linux-expanded-kbuild-v0"
-      - "agent/ci-runtime-cleanup-v1"
   workflow_dispatch:
 
 permissions:
@@ -16,6 +15,7 @@ concurrency:
 
 jobs:
   musl-lua-static:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[static-runtime]')
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
