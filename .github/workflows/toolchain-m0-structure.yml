@@ -28,6 +28,14 @@ jobs:
           bash tests/external/linux/stage2_kbuild_cc_test.sh
           echo "M0_KBUILD_WRAPPER_CONTRACT=PASS"
 
+      - name: Validate BusyBox Kbuild ownership routing contract
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          BUILD_DIR="$GITHUB_WORKSPACE/build/m0-busybox-kbuild-routing-v0" \
+            bash tests/driver/run-busybox-kbuild-routing-v0.sh
+          echo "M0_BUSYBOX_KBUILD_ROUTING=PASS"
+
       - name: Build frozen compiler boundary
         if: github.ref != 'refs/heads/agent/ci-runtime-cleanup-v1'
         run: make clean && make -j2
