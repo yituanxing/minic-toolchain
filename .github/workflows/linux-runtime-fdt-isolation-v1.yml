@@ -150,24 +150,78 @@ jobs:
           qemu_log="$ev/qemu.console.log"
           gdb_cmd="$ev/capture.gdb"
           gdb_out="$ev/gdb.txt"
+          phys_gdb="$ev/physical-symbols.gdb"
+          phys_txt="$ev/physical-symbols.txt"
+
+          python3 - "$ev/early/nm.txt" "$phys_gdb" "$phys_txt" <<'PY'
+          from pathlib import Path
+          import sys
+
+          nm_path, gdb_path, txt_path = map(Path, sys.argv[1:4])
+          wanted = {
+              '_start': 'start',
+              'create_fdt_early_page_table': 'create_fdt',
+              'kernel_map': 'kernel_map',
+              'satp_mode': 'satp_mode',
+              'pgtable_l4_enabled': 'pgtable_l4',
+              'pgtable_l5_enabled': 'pgtable_l5',
+          }
+          found = {}
+          for line in nm_path.read_text(errors='replace').splitlines():
+              p = line.split(None, 2)
+              if len(p) != 3 or p[2] not in wanted:
+                  continue
+              found[p[2]] = int(p[0], 16)
+          missing = [name for name in wanted if name not in found]
+          if missing:
+              raise SystemExit('missing symbols: ' + ','.join(missing))
+
+          # QEMU virt + OpenSBI boots the Linux Image at 0x80200000.  Before
+          # setup_vm enables address translation, the CPU executes physical
+          # aliases rather than the high linked kernel virtual addresses.
+          load_pa = 0x80200000
+          link_start = found['_start']
+          if any(found[name] < link_start for name in wanted):
+              raise SystemExit('unexpected symbol below _start')
+
+          rows = []
+          commands = []
+          for sym, short in wanted.items():
+              linked = found[sym]
+              physical = load_pa + (linked - link_start)
+              rows.append(f'{sym} linked=0x{linked:x} physical=0x{physical:x}')
+              commands.append(f'set $phys_{short} = 0x{physical:x}')
+          rows.insert(0, f'KERNEL_LOAD_PA=0x{load_pa:x}')
+          gdb_path.write_text('\n'.join(commands) + '\n')
+          txt_path.write_text('\n'.join(rows) + '\n')
+          print(txt_path.read_text(), end='')
+          PY
 
           cat >"$gdb_cmd" <<GDB
           set pagination off
           set confirm off
           file $ev/early/vmlinux.early
           target remote 127.0.0.1:1234
-          hbreak create_fdt_early_page_table
+          source $phys_gdb
+
+          hbreak *0x80200000
           continue
-          printf "CREATE_FDT_HIT=PASS\\n"
+          printf "KERNEL_ENTRY_HIT=PASS PC=0x%lx\\n", \$pc
+          disable 1
+
+          hbreak *\$phys_create_fdt
+          continue
+          printf "CREATE_FDT_HIT=PASS PC=0x%lx\\n", \$pc
           printf "FIX_FDT_VA_ARG=0x%lx\\n", \$a0
           printf "DTB_PA_ARG=0x%lx\\n", \$a1
-          printf "PGTABLE_L5=%u\\n", *(unsigned char *)&pgtable_l5_enabled
-          printf "PGTABLE_L4=%u\\n", *(unsigned char *)&pgtable_l4_enabled
-          printf "SATP_MODE=0x%lx\\n", *(unsigned long *)&satp_mode
+          printf "PGTABLE_L5=%u\\n", *(unsigned char *)\$phys_pgtable_l5
+          printf "PGTABLE_L4=%u\\n", *(unsigned char *)\$phys_pgtable_l4
+          printf "SATP_MODE=0x%lx\\n", *(unsigned long *)\$phys_satp_mode
           printf "KERNEL_MAP_WORDS_BEGIN\\n"
-          x/8gx &kernel_map
+          x/8gx \$phys_kernel_map
           printf "KERNEL_MAP_WORDS_END\\n"
-          disable 1
+          disable 2
+
           hbreak die
           continue
           printf "FIRST_DIE_HIT=PASS\\n"
@@ -194,11 +248,16 @@ jobs:
           trap 'kill "$qpid" 2>/dev/null || true; wait "$qpid" 2>/dev/null || true' EXIT
           sleep 1
           set +e
-          timeout 45s gdb-multiarch -q -batch -x "$gdb_cmd" >"$gdb_out" 2>&1
+          timeout 55s gdb-multiarch -q -batch -x "$gdb_cmd" >"$gdb_out" 2>&1
           grc=$?
           set -e
           echo "GDB_RC=$grc" | tee "$ev/gdb-rc.txt"
           cat "$gdb_out"
+
+          # A green job must prove that the early physical breakpoint strategy
+          # actually reached the Linux image and the FDT setup function.
+          grep -Fq 'KERNEL_ENTRY_HIT=PASS' "$gdb_out"
+          grep -Fq 'CREATE_FDT_HIT=PASS' "$gdb_out"
 
           python3 - "$gdb_out" "$ev/early/nm.txt" "$ev/swap-status.txt" "$ev/result.txt" <<'PY'
           from bisect import bisect_right
@@ -220,6 +279,8 @@ jobs:
               if i<0:return 'none'
               a,n=syms[i]; return f'{n}+0x{v-a:x} @0x{a:x}'
           out=[swap]
+          out.append('KERNEL_ENTRY_HIT=' + ('YES' if 'KERNEL_ENTRY_HIT=PASS' in gdb else 'NO'))
+          out.append('CREATE_FDT_HIT=' + ('YES' if 'CREATE_FDT_HIT=PASS' in gdb else 'NO'))
           for k in ('FIX_FDT_VA_ARG','DTB_PA_ARG','SATP_MODE'):
               m=re.search(rf'^{k}=(0x[0-9a-fA-F]+)$',gdb,re.M)
               out.append(f'{k}={m.group(1) if m else "MISSING"}')
@@ -234,7 +295,7 @@ jobs:
                   vals[k]=int(m.group(1),16)
               out += [f"EPC=0x{vals['EPC']:x}",f"EPC_NEAREST={resolve(vals['EPC'])}",f"RA=0x{vals['SAVED_RA']:x}",f"RA_NEAREST={resolve(vals['SAVED_RA'])}",f"BADADDR=0x{vals['BADADDR']:x}",f"CAUSE=0x{vals['CAUSE']:x}"]
           else:
-              out.append('FIRST_DIE_HIT=NO_WITHIN_45S')
+              out.append('FIRST_DIE_HIT=NO_WITHIN_55S')
           Path(sys.argv[4]).write_text('\n'.join(out)+'\n')
           print('\n'.join(out))
           PY
@@ -250,6 +311,7 @@ jobs:
             build/linux-runtime-fdt-isolation-v1/*.txt
             build/linux-runtime-fdt-isolation-v1/*.sha256
             build/linux-runtime-fdt-isolation-v1/gdb*
+            build/linux-runtime-fdt-isolation-v1/physical-symbols.gdb
             build/linux-runtime-fdt-isolation-v1/result.txt
             build/linux-runtime-fdt-isolation-v1/qemu.console.log
             build/linux-runtime-fdt-isolation-v1/early/kallsyms-status.txt
