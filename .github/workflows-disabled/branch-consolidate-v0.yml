@@ -1,0 +1,125 @@
+name: Branch Consolidate V0
+
+on:
+  push:
+    branches: ["agent/linux-expanded-kbuild-v0"]
+    paths:
+      - ".github/workflows/branch-consolidate-v0.yml"
+      - "tools/ci/branch-consolidate-trigger.txt"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: branch-consolidate-v0
+  cancel-in-progress: false
+
+jobs:
+  consolidate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: Snapshot current branch tips
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          active='agent/linux-expanded-kbuild-v0'
+          archive='archive/all-progress-2026-10-04'
+          ev="$GITHUB_WORKSPACE/build/branch-consolidate-v0"
+          mkdir -p "$ev"
+
+          git fetch --prune origin '+refs/heads/*:refs/remotes/origin/*'
+          git for-each-ref refs/remotes/origin \
+            --format='%(refname:strip=3)%09%(objectname)' \
+            | grep -v $'^HEAD\t' \
+            | sort > "$ev/branches-before.tsv"
+
+          test -s "$ev/branches-before.tsv"
+          grep -F $'main\t' "$ev/branches-before.tsv"
+          grep -F "$active"$'\t' "$ev/branches-before.tsv"
+          grep -F "$archive"$'\t' "$ev/branches-before.tsv"
+          wc -l "$ev/branches-before.tsv" | tee "$ev/branch-count-before.txt"
+
+      - name: Verify every superseded tip is reachable from archive
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          active='agent/linux-expanded-kbuild-v0'
+          archive='archive/all-progress-2026-10-04'
+          ev="$GITHUB_WORKSPACE/build/branch-consolidate-v0"
+
+          archive_head="$(git rev-parse "refs/remotes/origin/$archive")"
+          printf '%s\n' "$archive_head" | tee "$ev/archive-head.txt"
+          : > "$ev/archive-verify.txt"
+          : > "$ev/delete-list.txt"
+
+          pass=0
+          while IFS=$'\t' read -r branch sha; do
+            case "$branch" in
+              main|"$active"|"$archive")
+                printf 'KEEP\t%s\t%s\n' "$branch" "$sha" >> "$ev/archive-verify.txt"
+                continue
+                ;;
+            esac
+
+            git cat-file -e "$sha^{commit}"
+            if git merge-base --is-ancestor "$sha" "$archive_head"; then
+              printf 'ARCHIVE_REACHABLE=PASS\t%s\t%s\n' "$branch" "$sha" >> "$ev/archive-verify.txt"
+              printf '%s\n' "$branch" >> "$ev/delete-list.txt"
+              pass=$((pass + 1))
+            else
+              printf 'ARCHIVE_REACHABLE=FAIL\t%s\t%s\n' "$branch" "$sha" | tee -a "$ev/archive-verify.txt"
+              exit 1
+            fi
+          done < "$ev/branches-before.tsv"
+
+          expected=$(( $(wc -l < "$ev/branches-before.tsv") - 3 ))
+          test "$pass" -eq "$expected"
+          test "$(wc -l < "$ev/delete-list.txt")" -eq "$expected"
+          printf 'ARCHIVE_VERIFY_COUNT=%d\n' "$pass" | tee "$ev/archive-verify-count.txt"
+          echo 'ARCHIVE_REACHABILITY=PASS'
+
+      - name: Delete superseded branch refs
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ev="$GITHUB_WORKSPACE/build/branch-consolidate-v0"
+          mapfile -t doomed < "$ev/delete-list.txt"
+          printf 'DELETE_COUNT=%s\n' "${#doomed[@]}" | tee "$ev/delete-count.txt"
+
+          for ((i=0; i<${#doomed[@]}; i+=20)); do
+            chunk=("${doomed[@]:i:20}")
+            printf 'Deleting batch starting at %d (%d refs)\n' "$i" "${#chunk[@]}"
+            git push origin --delete "${chunk[@]}"
+          done
+
+      - name: Verify only canonical branches remain
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          active='agent/linux-expanded-kbuild-v0'
+          archive='archive/all-progress-2026-10-04'
+          ev="$GITHUB_WORKSPACE/build/branch-consolidate-v0"
+
+          git ls-remote --heads origin \
+            | awk '{sub("refs/heads/", "", $2); print $2}' \
+            | sort > "$ev/branches-after.txt"
+          printf '%s\n' "$active" "$archive" main | sort > "$ev/branches-expected.txt"
+          diff -u "$ev/branches-expected.txt" "$ev/branches-after.txt"
+          test "$(wc -l < "$ev/branches-after.txt")" -eq 3
+          cat "$ev/branches-after.txt"
+          echo 'BRANCH_CONSOLIDATE=PASS'
+
+      - name: Preserve consolidation evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: branch-consolidate-v1-${{ github.sha }}
+          path: build/branch-consolidate-v0
+          if-no-files-found: warn
