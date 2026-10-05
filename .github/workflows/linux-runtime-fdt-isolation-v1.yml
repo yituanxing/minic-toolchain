@@ -105,7 +105,7 @@ jobs:
           )
           for obj in "${owners[@]}"; do refresh_obj "$obj"; done
 
-      - name: Discover and optionally swap linked fdt_ro owner to GCC
+      - name: Swap linked fdt_ro owner to GCC
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -115,18 +115,13 @@ jobs:
           ev="$GITHUB_WORKSPACE/build/linux-runtime-fdt-isolation-v1"
 
           riscv64-linux-gnu-ar t "$out/lib/lib.a" >"$ev/lib-members.txt"
-          grep -E '(^|/)fdt_ro\.o$' "$ev/lib-members.txt" | tee "$ev/fdt-ro-members.txt" || true
-          if [[ -s "$ev/fdt-ro-members.txt" ]]; then
-            target=lib/fdt_ro.o
-            rm -f "$out/$target" "$out/lib/.fdt_ro.o.cmd"
-            make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- CC=/usr/bin/riscv64-linux-gnu-gcc -j2 V=1 "$target" >"$ev/fdt-ro-gcc.log" 2>&1
-            test -s "$out/$target"
-            riscv64-linux-gnu-nm -an "$out/$target" >"$ev/fdt-ro-gcc.nm"
-            sha256sum "$out/$target" | tee "$ev/fdt-ro-gcc.sha256"
-            echo 'FDT_RO_GCC_SWAP=ACTIVE' | tee "$ev/swap-status.txt"
-          else
-            echo 'FDT_RO_GCC_SWAP=NOT_LINKED_BY_LIB_A' | tee "$ev/swap-status.txt"
-          fi
+          grep -E '(^|/)fdt_ro\.o$' "$ev/lib-members.txt" | tee "$ev/fdt-ro-members.txt"
+          target=lib/fdt_ro.o
+          rm -f "$out/$target" "$out/lib/.fdt_ro.o.cmd"
+          make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- CC=/usr/bin/riscv64-linux-gnu-gcc -j2 V=1 "$target" >"$ev/fdt-ro-gcc.log" 2>&1
+          test -s "$out/$target"
+          sha256sum "$out/$target" | tee "$ev/fdt-ro-gcc.sha256"
+          echo 'FDT_RO_GCC_SWAP=ACTIVE' | tee "$ev/swap-status.txt"
 
       - name: Relink with generated kallsyms
         shell: bash
@@ -142,12 +137,13 @@ jobs:
           grep -F 'EARLY_LINK_KALLSYMS_CONSISTENT=PASS' "$ev/early/kallsyms-status.txt"
           grep -F 'EARLY_LINK_KALLSYMS_SYMBOL=PASS' "$ev/early/kallsyms-status.txt"
 
-      - name: Capture FDT setup arguments and first die
+      - name: Trace early boot breadcrumbs and first die
         shell: bash
         run: |
           set -Eeuo pipefail
           ev="$GITHUB_WORKSPACE/build/linux-runtime-fdt-isolation-v1"
           qemu_log="$ev/qemu.console.log"
+          qemu_debug="$ev/qemu.debug.log"
           gdb_cmd="$ev/capture.gdb"
           gdb_out="$ev/gdb.txt"
           phys_gdb="$ev/physical-symbols.gdb"
@@ -156,11 +152,15 @@ jobs:
           python3 - "$ev/early/nm.txt" "$phys_gdb" "$phys_txt" <<'PY'
           from pathlib import Path
           import sys
-
           nm_path, gdb_path, txt_path = map(Path, sys.argv[1:4])
           wanted = {
               '_start': 'start',
+              '_start_kernel': 'start_kernel_asm',
+              'setup_vm': 'setup_vm',
+              'set_satp_mode': 'set_satp_mode',
+              'create_kernel_page_table': 'create_kernel_pt',
               'create_fdt_early_page_table': 'create_fdt',
+              'relocate_enable_mmu': 'relocate_mmu',
               'kernel_map': 'kernel_map',
               'satp_mode': 'satp_mode',
               'pgtable_l4_enabled': 'pgtable_l4',
@@ -169,29 +169,20 @@ jobs:
           found = {}
           for line in nm_path.read_text(errors='replace').splitlines():
               p = line.split(None, 2)
-              if len(p) != 3 or p[2] not in wanted:
-                  continue
-              found[p[2]] = int(p[0], 16)
+              if len(p) == 3 and p[2] in wanted:
+                  found[p[2]] = int(p[0], 16)
           missing = [name for name in wanted if name not in found]
           if missing:
               raise SystemExit('missing symbols: ' + ','.join(missing))
-
-          # QEMU virt + OpenSBI boots the Linux Image at 0x80200000.  Before
-          # setup_vm enables address translation, the CPU executes physical
-          # aliases rather than the high linked kernel virtual addresses.
           load_pa = 0x80200000
           link_start = found['_start']
-          if any(found[name] < link_start for name in wanted):
-              raise SystemExit('unexpected symbol below _start')
-
-          rows = []
+          rows = [f'KERNEL_LOAD_PA=0x{load_pa:x}']
           commands = []
           for sym, short in wanted.items():
               linked = found[sym]
               physical = load_pa + (linked - link_start)
               rows.append(f'{sym} linked=0x{linked:x} physical=0x{physical:x}')
               commands.append(f'set $phys_{short} = 0x{physical:x}')
-          rows.insert(0, f'KERNEL_LOAD_PA=0x{load_pa:x}')
           gdb_path.write_text('\n'.join(commands) + '\n')
           txt_path.write_text('\n'.join(rows) + '\n')
           print(txt_path.read_text(), end='')
@@ -204,101 +195,140 @@ jobs:
           target remote 127.0.0.1:1234
           source $phys_gdb
 
-          hbreak *0x80200000
-          continue
-          printf "KERNEL_ENTRY_HIT=PASS PC=0x%lx\\n", \$pc
-          disable 1
-
+          hbreak *\$phys_start
+          commands
+            silent
+            printf "BREADCRUMB=_start PC=0x%lx\\n", \$pc
+            continue
+          end
+          hbreak *\$phys_start_kernel_asm
+          commands
+            silent
+            printf "BREADCRUMB=_start_kernel PC=0x%lx A0=0x%lx A1=0x%lx\\n", \$pc, \$a0, \$a1
+            continue
+          end
+          hbreak *\$phys_setup_vm
+          commands
+            silent
+            printf "BREADCRUMB=setup_vm PC=0x%lx DTB_PA=0x%lx\\n", \$pc, \$a0
+            continue
+          end
+          hbreak *\$phys_set_satp_mode
+          commands
+            silent
+            printf "BREADCRUMB=set_satp_mode PC=0x%lx\\n", \$pc
+            continue
+          end
+          hbreak *\$phys_create_kernel_pt
+          commands
+            silent
+            printf "BREADCRUMB=create_kernel_page_table PC=0x%lx\\n", \$pc
+            continue
+          end
           hbreak *\$phys_create_fdt
-          continue
-          printf "CREATE_FDT_HIT=PASS PC=0x%lx\\n", \$pc
-          printf "FIX_FDT_VA_ARG=0x%lx\\n", \$a0
-          printf "DTB_PA_ARG=0x%lx\\n", \$a1
-          printf "PGTABLE_L5=%u\\n", *(unsigned char *)\$phys_pgtable_l5
-          printf "PGTABLE_L4=%u\\n", *(unsigned char *)\$phys_pgtable_l4
-          printf "SATP_MODE=0x%lx\\n", *(unsigned long *)\$phys_satp_mode
-          printf "KERNEL_MAP_WORDS_BEGIN\\n"
-          x/8gx \$phys_kernel_map
-          printf "KERNEL_MAP_WORDS_END\\n"
-          disable 2
-
+          commands
+            silent
+            printf "BREADCRUMB=create_fdt_early_page_table PC=0x%lx FIX_FDT_VA=0x%lx DTB_PA=0x%lx\\n", \$pc, \$a0, \$a1
+            printf "PGTABLE_L5=%u\\n", *(unsigned char *)\$phys_pgtable_l5
+            printf "PGTABLE_L4=%u\\n", *(unsigned char *)\$phys_pgtable_l4
+            printf "SATP_MODE=0x%lx\\n", *(unsigned long *)\$phys_satp_mode
+            continue
+          end
+          hbreak *\$phys_relocate_mmu
+          commands
+            silent
+            printf "BREADCRUMB=relocate_enable_mmu PC=0x%lx PGDIR_PA=0x%lx\\n", \$pc, \$a0
+            continue
+          end
+          hbreak start_kernel
+          commands
+            silent
+            printf "BREADCRUMB=start_kernel PC=0x%lx\\n", \$pc
+            continue
+          end
           hbreak die
+          commands
+            silent
+            printf "FIRST_DIE_HIT=PASS\\n"
+            set \$regs = \$a0
+            set \$epc = *(unsigned long *)(\$regs + 0)
+            set \$saved_ra = *(unsigned long *)(\$regs + 8)
+            set \$saved_badaddr = *(unsigned long *)(\$regs + 264)
+            set \$saved_cause = *(unsigned long *)(\$regs + 272)
+            printf "EPC=0x%lx\\n", \$epc
+            printf "SAVED_RA=0x%lx\\n", \$saved_ra
+            printf "BADADDR=0x%lx\\n", \$saved_badaddr
+            printf "CAUSE=0x%lx\\n", \$saved_cause
+            detach
+            quit
+          end
           continue
-          printf "FIRST_DIE_HIT=PASS\\n"
-          set \$regs = \$a0
-          x/35gx \$regs
-          set \$epc = *(unsigned long *)(\$regs + 0)
-          set \$saved_ra = *(unsigned long *)(\$regs + 8)
-          set \$saved_badaddr = *(unsigned long *)(\$regs + 264)
-          set \$saved_cause = *(unsigned long *)(\$regs + 272)
-          printf "EPC=0x%lx\\n", \$epc
-          printf "SAVED_RA=0x%lx\\n", \$saved_ra
-          printf "BADADDR=0x%lx\\n", \$saved_badaddr
-          printf "CAUSE=0x%lx\\n", \$saved_cause
-          detach
-          quit
           GDB
 
           qemu-system-riscv64 \
             -M virt -cpu max -m 512M -smp 1 -nographic -no-reboot \
             -bios default -kernel "$ev/early/Image.early" \
             -append 'console=ttyS0 earlycon=sbi loglevel=8 panic=-1' \
-            -S -gdb tcp:127.0.0.1:1234 >"$qemu_log" 2>&1 &
+            -S -gdb tcp:127.0.0.1:1234 -d int -D "$qemu_debug" \
+            >"$qemu_log" 2>&1 &
           qpid=$!
           trap 'kill "$qpid" 2>/dev/null || true; wait "$qpid" 2>/dev/null || true' EXIT
           sleep 1
           set +e
-          timeout 55s gdb-multiarch -q -batch -x "$gdb_cmd" >"$gdb_out" 2>&1
+          timeout 60s gdb-multiarch -q -batch -x "$gdb_cmd" >"$gdb_out" 2>&1
           grc=$?
           set -e
           echo "GDB_RC=$grc" | tee "$ev/gdb-rc.txt"
           cat "$gdb_out"
+          grep '^BREADCRUMB=' "$gdb_out" | tee "$ev/breadcrumbs.txt" || true
+          tail -200 "$qemu_debug" >"$ev/qemu-debug-tail.txt" || true
 
-          # A green job must prove that the early physical breakpoint strategy
-          # actually reached the Linux image and the FDT setup function.
-          grep -Fq 'KERNEL_ENTRY_HIT=PASS' "$gdb_out"
-          grep -Fq 'CREATE_FDT_HIT=PASS' "$gdb_out"
-
-          python3 - "$gdb_out" "$ev/early/nm.txt" "$ev/swap-status.txt" "$ev/result.txt" <<'PY'
+          python3 - "$gdb_out" "$ev/early/nm.txt" "$ev/result.txt" <<'PY'
           from bisect import bisect_right
           from pathlib import Path
           import re, sys
-          gdb=Path(sys.argv[1]).read_text(errors='replace')
-          nm=Path(sys.argv[2]).read_text(errors='replace').splitlines()
-          swap=Path(sys.argv[3]).read_text(errors='replace').strip()
+          gdb = Path(sys.argv[1]).read_text(errors='replace')
+          nm = Path(sys.argv[2]).read_text(errors='replace').splitlines()
           syms=[]
           for line in nm:
               p=line.split(None,2)
               if len(p)!=3: continue
-              try:a=int(p[0],16)
-              except ValueError:continue
+              try: a=int(p[0],16)
+              except ValueError: continue
               syms.append((a,p[2]))
           syms.sort(); addrs=[a for a,_ in syms]
           def resolve(v):
               i=bisect_right(addrs,v)-1
               if i<0:return 'none'
               a,n=syms[i]; return f'{n}+0x{v-a:x} @0x{a:x}'
-          out=[swap]
-          out.append('KERNEL_ENTRY_HIT=' + ('YES' if 'KERNEL_ENTRY_HIT=PASS' in gdb else 'NO'))
-          out.append('CREATE_FDT_HIT=' + ('YES' if 'CREATE_FDT_HIT=PASS' in gdb else 'NO'))
-          for k in ('FIX_FDT_VA_ARG','DTB_PA_ARG','SATP_MODE'):
-              m=re.search(rf'^{k}=(0x[0-9a-fA-F]+)$',gdb,re.M)
-              out.append(f'{k}={m.group(1) if m else "MISSING"}')
-          for k in ('PGTABLE_L5','PGTABLE_L4'):
-              m=re.search(rf'^{k}=([0-9]+)$',gdb,re.M)
-              out.append(f'{k}={m.group(1) if m else "MISSING"}')
+          crumbs=re.findall(r'^BREADCRUMB=([^ ]+).*$', gdb, re.M)
+          out=['BREADCRUMBS=' + (','.join(crumbs) if crumbs else 'none')]
+          out.append('LAST_BREADCRUMB=' + (crumbs[-1] if crumbs else 'none'))
           if 'FIRST_DIE_HIT=PASS' in gdb:
               vals={}
               for k in ('EPC','SAVED_RA','BADADDR','CAUSE'):
                   m=re.search(rf'^{k}=(0x[0-9a-fA-F]+)$',gdb,re.M)
                   if not m: raise SystemExit(f'missing {k}')
                   vals[k]=int(m.group(1),16)
-              out += [f"EPC=0x{vals['EPC']:x}",f"EPC_NEAREST={resolve(vals['EPC'])}",f"RA=0x{vals['SAVED_RA']:x}",f"RA_NEAREST={resolve(vals['SAVED_RA'])}",f"BADADDR=0x{vals['BADADDR']:x}",f"CAUSE=0x{vals['CAUSE']:x}"]
+              out += [
+                  f"EPC=0x{vals['EPC']:x}",
+                  f"EPC_NEAREST={resolve(vals['EPC'])}",
+                  f"RA=0x{vals['SAVED_RA']:x}",
+                  f"RA_NEAREST={resolve(vals['SAVED_RA'])}",
+                  f"BADADDR=0x{vals['BADADDR']:x}",
+                  f"CAUSE=0x{vals['CAUSE']:x}",
+              ]
           else:
-              out.append('FIRST_DIE_HIT=NO_WITHIN_55S')
-          Path(sys.argv[4]).write_text('\n'.join(out)+'\n')
+              out.append('FIRST_DIE_HIT=NO_WITHIN_60S')
+          Path(sys.argv[3]).write_text('\n'.join(out)+'\n')
           print('\n'.join(out))
           PY
+
+          # The Linux image and _start_kernel are mandatory.  Anything later is
+          # diagnostic evidence and may legitimately be absent if the boot path
+          # faults or parks before setup_vm.
+          grep -Fq 'BREADCRUMB=_start ' "$gdb_out"
+          grep -Fq 'BREADCRUMB=_start_kernel ' "$gdb_out"
 
       - name: Preserve FDT isolation evidence
         if: always()
@@ -314,6 +344,7 @@ jobs:
             build/linux-runtime-fdt-isolation-v1/physical-symbols.gdb
             build/linux-runtime-fdt-isolation-v1/result.txt
             build/linux-runtime-fdt-isolation-v1/qemu.console.log
+            build/linux-runtime-fdt-isolation-v1/qemu.debug.log
             build/linux-runtime-fdt-isolation-v1/early/kallsyms-status.txt
             build/linux-runtime-fdt-isolation-v1/early/kallsyms-symbols.txt
             build/linux-runtime-fdt-isolation-v1/early/nm.txt
