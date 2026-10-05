@@ -15,7 +15,12 @@ mkdir -p "$WORK"
 cat >"$WORK/gc.c" <<'C'
 extern void minic_dead_missing_symbol(void);
 
-static void minic_dead_function(void)
+/*
+ * Force the compiler to emit this otherwise-unreachable static function.
+ * Reachability pruning is validated separately; this probe specifically needs
+ * a dead input section to survive compilation so --gc-sections can discard it.
+ */
+static __attribute__((used)) void minic_dead_function(void)
 {
     minic_dead_missing_symbol();
 }
@@ -46,8 +51,9 @@ S
 grep -q '\.text\.minic_dead_function' "$WORK/gc.sections"
 grep -q '\.text\.minic_live_function' "$WORK/gc.sections"
 
-# The dead function deliberately references an undefined symbol.  This link
-# succeeds only if the dead function is a separately collectable input section.
+# The forced-emitted dead function deliberately references an undefined symbol.
+# This link succeeds only if the dead function is a separately collectable input
+# section and --gc-sections discards that entire unreachable section.
 "$LD" -melf64lriscv -static --gc-sections -e _start \
   -o "$WORK/gc.elf" "$WORK/start.o" "$WORK/gc.o"
 
