@@ -1,0 +1,284 @@
+name: MiniPP Linux Exact V1
+
+concurrency:
+  group: minipp-linux-exact-v1-${{ github.ref }}
+  cancel-in-progress: false
+
+on:
+  push:
+    branches:
+      - "agent/linux-expanded-kbuild-v0"
+      - "agent/ci-runtime-cleanup-v1"
+    paths:
+      - 'preprocessor/**'
+      - 'tools/minic-cpp/**'
+      - 'tests/preprocessor/**'
+      - '.github/workflows/minipp-linux-exact-v1.yml'
+      - 'Makefile'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  MINIPP_LINUX_ARCHIVE_SHA256: dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932
+
+jobs:
+  exact-shard:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[minipp-exact]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - id: first500
+            range: 0-499
+            offset: 0
+            limit: 500
+            expected_contract_sha: bb1c8f75f3319ff8210f74b88d8da6717b01aec34836fee0153e556df5654f25
+            sample_indices: tests/preprocessor/linux-first500-sample16-indices.txt
+            sample_label: sample16-0-499
+            sample_kind: sample16
+            ref_jobs: 8
+            replay_jobs: 8
+          - id: second500
+            range: 500-999
+            offset: 500
+            limit: 500
+            expected_contract_sha: 202aaedea66c38df0c121ec50b8862335f8f0f0fac11d96e5167f76280cf1fc0
+            sample_indices: tests/preprocessor/linux-second500-sample16-indices.txt
+            sample_label: sample16-500-999
+            sample_kind: sample16
+            ref_jobs: 8
+            replay_jobs: 8
+          - id: third500
+            range: 1000-1499
+            offset: 1000
+            limit: 500
+            expected_contract_sha: b3487f3cf001d085a4a5ba55124fa0ec2c3929ab162bc780a5848ddd3934cbf7
+            sample_indices: tests/preprocessor/linux-third500-sample16-indices.txt
+            sample_label: sample16-1000-1499
+            sample_kind: sample16
+            ref_jobs: 8
+            replay_jobs: 8
+          - id: fourth500
+            range: 1500-1999
+            offset: 1500
+            limit: 500
+            expected_contract_sha: ed1b980a38c94e9fa9423fd7d1caf990edd3e32700d843bd2bf59efb3bf53781
+            sample_indices: tests/preprocessor/linux-fourth500-sample16-indices.txt
+            sample_label: sample16-1500-1999
+            sample_kind: sample16
+            ref_jobs: 8
+            replay_jobs: 8
+          - id: mega1000
+            range: 2000-2999
+            offset: 2000
+            limit: 1000
+            expected_contract_sha: be2cea1f0b44afa0cc8ea7087ef0d2fa910c799333064e2d695d15e63ccba773
+            sample_indices: tests/preprocessor/linux-mega1000-sample32-indices.txt
+            sample_label: sample32-2000-2999
+            sample_kind: sample32
+            ref_jobs: 12
+            replay_jobs: 8
+          - id: final352
+            range: 3000-3351
+            offset: 3000
+            limit: 352
+            expected_contract_sha: 8c205c3e5a1662b0d3c07bc8495eef7384681ff698a23ef9b3a3147df17cfb4b
+            sample_indices: tests/preprocessor/linux-final352-sample16-indices.txt
+            sample_label: sample16-3000-3351
+            sample_kind: sample16
+            ref_jobs: 12
+            replay_jobs: 8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Install exact replay and frozen-oracle prerequisites
+        run: |
+          set -Eeuo pipefail
+          timeout 240s sudo apt-get -o Acquire::Retries=3 update
+          timeout 240s sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            gcc gcc-riscv64-linux-gnu libc6-dev-riscv64-cross \
+            bc bison flex libssl-dev libelf-dev make curl xz-utils
+
+      - name: Build independent MiniPP once
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          build="$GITHUB_WORKSPACE/build/minipp-linux-exact-v1-${{ matrix.id }}"
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$build" toolchain 2>/dev/null || \
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$build" all
+          test -x "$build/bin/minic-cpp"
+
+      - name: Prepare Linux and reproduce frozen shard contract
+        id: identity
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/minipp-linux-exact-v1-${{ matrix.id }}-work"
+          archive="$work/linux-6.6.143.tar.xz"
+          src="$work/linux-6.6.143"
+          out="$work/out"
+          mkdir -p "$work"
+
+          curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors \
+            https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.6.143.tar.xz \
+            -o "$archive"
+          printf '%s  %s\n' "$MINIPP_LINUX_ARCHIVE_SHA256" "$archive" | sha256sum -c -
+          tar -xJf "$archive" -C "$work"
+          make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- defconfig
+          make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- -j4 prepare scripts
+
+          set +e
+          make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- -n -j1 V=1 \
+            >"$work/kbuild-plan.raw" 2>"$work/kbuild-plan.stderr"
+          plan_status=$?
+          set -e
+          echo "MINIPP_EXACT_PLAN_STATUS=$plan_status range=${{ matrix.range }}"
+
+          python3 tests/preprocessor/freeze_linux_kbuild_manifest.py \
+            --plan "$work/kbuild-plan.raw" \
+            --src "$src" \
+            --out "$out" \
+            --offset ${{ matrix.offset }} \
+            --limit ${{ matrix.limit }} \
+            --tsv "$work/shard.tsv" \
+            --sources "$work/shard-sources.txt" \
+            --contract "$work/shard-contract.jsonl"
+
+          contract_sha=$(sha256sum "$work/shard-contract.jsonl" | cut -d' ' -f1)
+          test "$contract_sha" = "${{ matrix.expected_contract_sha }}"
+
+          gcc_fullversion=$(riscv64-linux-gnu-gcc -dumpfullversion)
+          gcc_machine=$(riscv64-linux-gnu-gcc -dumpmachine)
+          gcc_pkg=$(dpkg-query -W -f='${Version}' gcc-riscv64-linux-gnu 2>/dev/null || true)
+          gcc_sig=$(printf '%s\n%s\n%s\n' "$gcc_fullversion" "$gcc_machine" "$gcc_pkg" | sha256sum | cut -d' ' -f1)
+          logic_sig=$(sha256sum \
+            tests/preprocessor/freeze_linux_kbuild_manifest.py \
+            tests/preprocessor/build_reference_predefines.sh \
+            tests/preprocessor/build_linux_reference_corpus.py \
+            tests/preprocessor/run_linux_cached_exact.py | sha256sum | cut -d' ' -f1)
+          cache_key="minipp-linux-exact-v1-${{ matrix.id }}-linux-6.6.143-$MINIPP_LINUX_ARCHIVE_SHA256-$contract_sha-$gcc_sig-$logic_sig"
+          echo "cache_key=$cache_key" >>"$GITHUB_OUTPUT"
+          echo "MINIPP_EXACT_CONTRACT=PASS range=${{ matrix.range }} sha=$contract_sha gcc=$gcc_fullversion machine=$gcc_machine"
+
+      - name: Restore frozen GCC shard corpus
+        id: ref-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: build/minipp-linux-exact-v1-${{ matrix.id }}-corpus
+          key: ${{ steps.identity.outputs.cache_key }}
+
+      - name: Build GCC shard reference corpus on cache miss
+        if: steps.ref-cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/minipp-linux-exact-v1-${{ matrix.id }}-work"
+          corpus="$GITHUB_WORKSPACE/build/minipp-linux-exact-v1-${{ matrix.id }}-corpus"
+          python3 tests/preprocessor/build_linux_reference_corpus.py \
+            --contract "$work/shard-contract.jsonl" \
+            --src "$work/linux-6.6.143" \
+            --out "$work/out" \
+            --corpus "$corpus" \
+            --gcc riscv64-linux-gnu-gcc \
+            --jobs ${{ matrix.ref_jobs }} \
+            --linux-id "linux-6.6.143-$MINIPP_LINUX_ARCHIVE_SHA256-rv64-defconfig-${{ matrix.range }}"
+          echo "MINIPP_EXACT_REFERENCE_CACHE=MISS built=${{ matrix.limit }} range=${{ matrix.range }}"
+
+      - name: Verify frozen GCC shard corpus identity
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          corpus="$GITHUB_WORKSPACE/build/minipp-linux-exact-v1-${{ matrix.id }}-corpus"
+          test -s "$corpus/meta.json"
+          test -s "$corpus/contract.jsonl"
+          test "$(find "$corpus/refs" -maxdepth 1 -type f -name '*.gcc.i' | wc -l)" -eq ${{ matrix.limit }}
+          actual=$(sha256sum "$corpus/contract.jsonl" | cut -d' ' -f1)
+          test "$actual" = "${{ matrix.expected_contract_sha }}"
+          python3 - "$corpus/meta.json" "${{ matrix.limit }}" "${{ matrix.expected_contract_sha }}" <<'PY'
+          import json
+          import sys
+          meta = json.load(open(sys.argv[1]))
+          assert meta["selected"] == int(sys.argv[2]), meta
+          assert meta["contract_sha256"] == sys.argv[3], meta
+          print(
+              "MINIPP_EXACT_REFERENCE=PASS "
+              f"selected={meta['selected']} predef_contexts={meta['predef_contexts']} "
+              f"bytes={meta['total_reference_bytes']}"
+          )
+          PY
+
+      - name: Save frozen GCC shard corpus on cache miss
+        if: steps.ref-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: build/minipp-linux-exact-v1-${{ matrix.id }}-corpus
+          key: ${{ steps.identity.outputs.cache_key }}
+
+      - name: Replay frozen coverage sample
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/minipp-linux-exact-v1-${{ matrix.id }}-work"
+          corpus="$GITHUB_WORKSPACE/build/minipp-linux-exact-v1-${{ matrix.id }}-corpus"
+          minipp="$GITHUB_WORKSPACE/build/minipp-linux-exact-v1-${{ matrix.id }}/bin/minic-cpp"
+          python3 tests/preprocessor/run_linux_cached_exact.py \
+            --contract "$work/shard-contract.jsonl" \
+            --corpus "$corpus" \
+            --src "$work/linux-6.6.143" \
+            --out "$work/out" \
+            --minipp "$minipp" \
+            --work "$work/sample-replay" \
+            --indices "$GITHUB_WORKSPACE/${{ matrix.sample_indices }}" \
+            --jobs ${{ matrix.replay_jobs }} \
+            --label "${{ matrix.sample_label }}"
+          echo "MINIPP_EXACT_SAMPLE=PASS range=${{ matrix.range }} kind=${{ matrix.sample_kind }}"
+
+      - name: Replay full frozen product shard
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/minipp-linux-exact-v1-${{ matrix.id }}-work"
+          corpus="$GITHUB_WORKSPACE/build/minipp-linux-exact-v1-${{ matrix.id }}-corpus"
+          minipp="$GITHUB_WORKSPACE/build/minipp-linux-exact-v1-${{ matrix.id }}/bin/minic-cpp"
+          python3 tests/preprocessor/run_linux_cached_exact.py \
+            --contract "$work/shard-contract.jsonl" \
+            --corpus "$corpus" \
+            --src "$work/linux-6.6.143" \
+            --out "$work/out" \
+            --minipp "$minipp" \
+            --work "$work/product-replay" \
+            --jobs ${{ matrix.replay_jobs }} \
+            --label "product-${{ matrix.range }}"
+          echo "MINIPP_EXACT_PRODUCT=PASS range=${{ matrix.range }} selected=${{ matrix.limit }}"
+
+      - name: Preserve exact shard evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: minipp-linux-exact-v1-${{ matrix.id }}
+          path: |
+            build/minipp-linux-exact-v1-${{ matrix.id }}-work/shard.tsv
+            build/minipp-linux-exact-v1-${{ matrix.id }}-work/shard-sources.txt
+            build/minipp-linux-exact-v1-${{ matrix.id }}-work/shard-contract.jsonl
+            build/minipp-linux-exact-v1-${{ matrix.id }}-corpus/meta.json
+            build/minipp-linux-exact-v1-${{ matrix.id }}-corpus/sha256sums.txt
+            build/minipp-linux-exact-v1-${{ matrix.id }}-work/sample-replay/headline.txt
+            build/minipp-linux-exact-v1-${{ matrix.id }}-work/sample-replay/results.tsv
+            build/minipp-linux-exact-v1-${{ matrix.id }}-work/sample-replay/results.json
+            build/minipp-linux-exact-v1-${{ matrix.id }}-work/sample-replay/failure-pool.tsv
+            build/minipp-linux-exact-v1-${{ matrix.id }}-work/sample-replay/diff/**
+            build/minipp-linux-exact-v1-${{ matrix.id }}-work/sample-replay/stderr/**
+            build/minipp-linux-exact-v1-${{ matrix.id }}-work/product-replay/headline.txt
+            build/minipp-linux-exact-v1-${{ matrix.id }}-work/product-replay/results.tsv
+            build/minipp-linux-exact-v1-${{ matrix.id }}-work/product-replay/results.json
+            build/minipp-linux-exact-v1-${{ matrix.id }}-work/product-replay/failure-pool.tsv
+            build/minipp-linux-exact-v1-${{ matrix.id }}-work/product-replay/diff/**
+            build/minipp-linux-exact-v1-${{ matrix.id }}-work/product-replay/stderr/**
+          if-no-files-found: ignore
+          retention-days: 3
