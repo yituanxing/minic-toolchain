@@ -1,0 +1,253 @@
+name: MiniLD Static Runtime V1
+
+on:
+  push:
+    branches:
+      - "agent/linux-expanded-kbuild-v0"
+      - "agent/ci-runtime-cleanup-v1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: minild-static-runtime-v1-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  musl-lua-static:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Install RV64 build/runtime prerequisites
+        run: |
+          timeout 240s sudo apt-get -o Acquire::Retries=3 update
+          timeout 240s sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            build-essential gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
+            qemu-user curl ca-certificates
+
+      - name: Build current MiniLD once
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/minild-static-runtime-v1 all
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/minild-static-runtime-v1 check-minild-a0
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/minild-static-runtime-v1 check-minild-a1
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/minild-static-runtime-v1 check-minild-a2
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/minild-static-runtime-v1 check-minild-a3
+          test -x build/minild-static-runtime-v1/bin/minic-ld
+
+      - name: Build pristine musl 1.2.5 static producer once
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/minild-static-runtime-v1"
+          mkdir -p "$work"
+          curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors \
+            https://musl.libc.org/releases/musl-1.2.5.tar.gz \
+            -o "$work/musl-1.2.5.tar.gz"
+          printf '%s  %s\n' \
+            a9a118bbe84d8764da0ea0d28b3ab3fae8477fc7e4085d90102b8596fc7c75e4 \
+            "$work/musl-1.2.5.tar.gz" | sha256sum -c -
+          tar -xzf "$work/musl-1.2.5.tar.gz" -C "$work"
+
+          src="$work/musl-1.2.5"
+          out="$work/musl-build"
+          sysroot="$work/musl-sysroot"
+          mkdir -p "$out" "$sysroot"
+          cd "$out"
+          CFLAGS="-O2 -fno-pic -fno-pie" \
+          CC=riscv64-linux-gnu-gcc \
+          AR=riscv64-linux-gnu-ar \
+          RANLIB=riscv64-linux-gnu-ranlib \
+            "$src/configure" \
+              --target=riscv64-linux-gnu \
+              --disable-shared \
+              --prefix=/usr
+          make -j4
+          make DESTDIR="$sysroot" install-headers
+
+          test -s lib/libc.a
+          test -s obj/crt/crt1.o
+          test -s obj/crt/crti.o
+          test -s obj/crt/crtn.o
+          test -s "$sysroot/usr/include/stdio.h"
+          riscv64-linux-gnu-readelf -Wr lib/libc.a >"$work/musl-libc.relocations"
+          if grep -q 'R_RISCV_GOT_HI20' "$work/musl-libc.relocations"; then
+            echo "STATIC_RUNTIME_MUSL_ERROR=GOT_HI20_PRESENT" >&2
+            exit 1
+          fi
+          printf 'STATIC_RUNTIME_MUSL=PASS objects=%s libc_bytes=%s\n' \
+            "$(find obj -type f -name '*.o' | wc -l)" \
+            "$(stat -c %s lib/libc.a)"
+
+      - name: Validate explicit musl malloc/free contract with GNU and MiniLD
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/minild-static-runtime-v1"
+          musl="$work/musl-build"
+          libgcc="$(riscv64-linux-gnu-gcc -print-libgcc-file-name)"
+          minild="$GITHUB_WORKSPACE/build/minild-static-runtime-v1/bin/minic-ld"
+
+          cat >"$work/malloc_free_test.c" <<'C'
+          typedef unsigned long size_t;
+          void *malloc(size_t);
+          void free(void *);
+          int main(void) {
+              unsigned long *p = (unsigned long *)malloc(4 * sizeof(unsigned long));
+              unsigned long sum;
+              if (!p) return 11;
+              p[0] = 7;
+              p[1] = 11;
+              p[2] = 13;
+              p[3] = 11;
+              sum = p[0] + p[1] + p[2] + p[3];
+              free(p);
+              return sum == 42 ? 0 : 12;
+          }
+          C
+          riscv64-linux-gnu-gcc -O2 -fno-pie -fno-pic -c \
+            "$work/malloc_free_test.c" -o "$work/malloc_free_test.o"
+
+          riscv64-linux-gnu-ld -melf64lriscv -static -e _start \
+            -o "$work/musl-reference" \
+            "$musl/obj/crt/crt1.o" "$musl/obj/crt/crti.o" "$work/malloc_free_test.o" \
+            --start-group "$musl/lib/libc.a" "$libgcc" --end-group \
+            "$musl/obj/crt/crtn.o"
+          qemu-riscv64 "$work/musl-reference"
+
+          "$minild" -melf64lriscv -static -e _start \
+            -o "$work/musl-product" \
+            "$musl/obj/crt/crt1.o" "$musl/obj/crt/crti.o" "$work/malloc_free_test.o" \
+            --start-group "$musl/lib/libc.a" "$libgcc" --end-group \
+            "$musl/obj/crt/crtn.o" \
+            >"$work/musl-minild.stdout" 2>"$work/musl-minild.stderr"
+          qemu-riscv64 -strace "$work/musl-product" \
+            >"$work/musl-qemu.stdout" 2>"$work/musl-qemu.stderr"
+          echo "MINILD_MUSL_STATIC=PASS malloc=PASS free=PASS"
+
+      - name: Build pristine Lua 5.5.0 into RV64 objects
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/minild-static-runtime-v1"
+          curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors \
+            https://www.lua.org/ftp/lua-5.5.0.tar.gz \
+            -o "$work/lua-5.5.0.tar.gz"
+          printf '%s  %s\n' \
+            57ccc32bbbd005cab75bcc52444052535af691789dba2b9016d5c50640d68b3d \
+            "$work/lua-5.5.0.tar.gz" | sha256sum -c -
+          tar -xzf "$work/lua-5.5.0.tar.gz" -C "$work"
+
+          src="$work/lua-5.5.0/src"
+          obj="$work/lua-obj"
+          sysroot="$work/musl-sysroot"
+          mkdir -p "$obj"
+          sources="lapi.c lcode.c lctype.c ldebug.c ldo.c ldump.c lfunc.c lgc.c llex.c lmem.c lobject.c lopcodes.c lparser.c lstate.c lstring.c ltable.c ltm.c lundump.c lvm.c lzio.c lauxlib.c lbaselib.c lcorolib.c ldblib.c liolib.c lmathlib.c loadlib.c loslib.c lstrlib.c ltablib.c lutf8lib.c linit.c lua.c"
+          count=0
+          for source in $sources; do
+            base=${source%.c}
+            riscv64-linux-gnu-gcc \
+              --sysroot="$sysroot" \
+              -std=c99 -O2 -fno-pic -fno-pie -DLUA_USE_LINUX \
+              -I"$src" \
+              -c "$src/$source" -o "$obj/$base.o"
+            count=$((count + 1))
+          done
+          test "$count" -eq 33
+          (
+            cd "$obj"
+            riscv64-linux-gnu-ar rcsD liblua.a \
+              lapi.o lcode.o lctype.o ldebug.o ldo.o ldump.o lfunc.o lgc.o \
+              llex.o lmem.o lobject.o lopcodes.o lparser.o lstate.o lstring.o \
+              ltable.o ltm.o lundump.o lvm.o lzio.o lauxlib.o lbaselib.o \
+              lcorolib.o ldblib.o liolib.o lmathlib.o loadlib.o loslib.o \
+              lstrlib.o ltablib.o lutf8lib.o linit.o
+          )
+          test "$(riscv64-linux-gnu-ar t "$obj/liblua.a" | wc -l)" -eq 32
+          riscv64-linux-gnu-readelf -Wr "$obj/liblua.a" >"$work/lua-lib.relocations"
+          if grep -q 'R_RISCV_GOT_HI20' "$work/lua-lib.relocations"; then
+            echo "STATIC_RUNTIME_LUA_ERROR=GOT_HI20_PRESENT" >&2
+            exit 1
+          fi
+          echo "LUA_STATIC_PRODUCER=PASS translation_units=33 archive_members=32"
+
+      - name: Validate Lua GNU reference and MiniLD product
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/minild-static-runtime-v1"
+          musl="$work/musl-build"
+          obj="$work/lua-obj"
+          libgcc="$(riscv64-linux-gnu-gcc -print-libgcc-file-name)"
+          minild="$GITHUB_WORKSPACE/build/minild-static-runtime-v1/bin/minic-ld"
+
+          cat >"$work/runtime-smoke.lua" <<'LUA'
+          local sum = 0
+          for i = 1, 10000 do sum = sum + i end
+          assert(sum == 50005000)
+          local t = {alpha = 7, beta = 35}
+          assert(t.alpha + t.beta == 42)
+          assert(string.upper("lua") == "LUA")
+          assert(math.floor(3.9) == 3)
+          local function fib(n)
+            if n < 2 then return n end
+            return fib(n - 1) + fib(n - 2)
+          end
+          assert(fib(10) == 55)
+          collectgarbage("collect")
+          print("LUA_MINILD_STATIC_OK", _VERSION, sum)
+          LUA
+
+          riscv64-linux-gnu-ld -melf64lriscv -static -e _start \
+            -o "$work/lua-reference" \
+            "$musl/obj/crt/crt1.o" "$musl/obj/crt/crti.o" \
+            "$obj/lua.o" "$obj/liblua.a" \
+            --start-group "$musl/lib/libc.a" "$libgcc" --end-group \
+            "$musl/obj/crt/crtn.o"
+          qemu-riscv64 "$work/lua-reference" "$work/runtime-smoke.lua" \
+            >"$work/lua-reference.stdout" 2>"$work/lua-reference.stderr"
+          grep -q 'LUA_MINILD_STATIC_OK' "$work/lua-reference.stdout"
+
+          "$minild" -melf64lriscv -static -e _start \
+            -o "$work/lua-product" \
+            "$musl/obj/crt/crt1.o" "$musl/obj/crt/crti.o" \
+            "$obj/lua.o" "$obj/liblua.a" \
+            --start-group "$musl/lib/libc.a" "$libgcc" --end-group \
+            "$musl/obj/crt/crtn.o" \
+            >"$work/lua-minild.stdout" 2>"$work/lua-minild.stderr"
+          qemu-riscv64 "$work/lua-product" "$work/runtime-smoke.lua" \
+            >"$work/lua-product.stdout" 2>"$work/lua-product.stderr"
+          grep -q 'LUA_MINILD_STATIC_OK' "$work/lua-product.stdout"
+          diff -u "$work/lua-reference.stdout" "$work/lua-product.stdout"
+          echo "MINILD_LUA_STATIC=PASS"
+
+      - name: Publish canonical verdict
+        run: echo "MINILD_STATIC_RUNTIME_V1=PASS musl-malloc-free=PASS lua-5.5=PASS"
+
+      - name: Preserve static runtime evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: minild-static-runtime-v1-evidence
+          path: |
+            build/minild-static-runtime-v1/musl-libc.relocations
+            build/minild-static-runtime-v1/musl-minild.stdout
+            build/minild-static-runtime-v1/musl-minild.stderr
+            build/minild-static-runtime-v1/musl-qemu.stdout
+            build/minild-static-runtime-v1/musl-qemu.stderr
+            build/minild-static-runtime-v1/lua-lib.relocations
+            build/minild-static-runtime-v1/lua-reference.stdout
+            build/minild-static-runtime-v1/lua-reference.stderr
+            build/minild-static-runtime-v1/lua-product.stdout
+            build/minild-static-runtime-v1/lua-product.stderr
+            build/minild-static-runtime-v1/lua-minild.stdout
+            build/minild-static-runtime-v1/lua-minild.stderr
+            build/minild-static-runtime-v1/runtime-smoke.lua
+          if-no-files-found: ignore
+          retention-days: 3
