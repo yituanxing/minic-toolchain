@@ -14,7 +14,7 @@ Legacy triggers remain accepted by their corresponding jobs:
 
 The canonical trigger `[linux-runtime-qemu-watch-contracts-v1]` runs both jobs on the same HEAD.
 
-The historical standalone workflows remain active until both consolidated jobs complete successfully on the canonical `agent/linux-expanded-kbuild-v0` runtime branch.
+Canonical certification run `37469068307` on `agent/linux-expanded-kbuild-v0` completed SUCCESS with both consolidated jobs at the same HEAD. `qemu-watch-cert` passed exact reference/watcher verdict, fault, progress, and early-stop equivalence. `inconclusive-cert` passed the fault-aware same-stage unknown-fault contract: final verdict `INCONCLUSIVE`, stop reason `oracle:INCONCLUSIVE:fault`, early stop before the hard timeout, and classifier return code `2`. Therefore the two historical standalone watcher workflows are superseded and may be archived without deleting their YAML history.
 
 
 ## Historical inconclusive-policy retirement

@@ -259,7 +259,7 @@ jobs:
           print(f'WATCH_MISMATCH_BASELINE progress_marker={progress_marker} probe_verdict={probe.get("verdict")}')
           PY
 
-      - name: Prove unknown same-stage fault does not stop the watcher early
+      - name: Prove unknown same-stage fault stops early without ordering claim
         shell: bash
         run: |
           set -Eeuo pipefail
