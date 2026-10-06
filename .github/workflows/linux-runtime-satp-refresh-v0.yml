@@ -259,6 +259,44 @@ jobs:
           print("SATP_WINDOW=PASS")
           PY
 
+          # Preserve the stricter historical linux-pi-real-init-gate-v0
+          # assertion as well: between the real source-level SATP CSR pair,
+          # no instruction may reference sp at all.
+          python3 - "$ev/init.minic-stage2.s" <<'PY' | tee "$ev/satp-real-window.txt"
+          import re, sys
+          from pathlib import Path
+          lines = Path(sys.argv[1]).read_text(errors='replace').splitlines()
+          csr = r'(?:satp|0x180)'
+          windows=[]
+          for i,line in enumerate(lines):
+              if not re.search(r'\bcsrw\s+' + csr + r'\s*,', line):
+                  continue
+              end=None
+              for j in range(i+1, min(len(lines), i+160)):
+                  if re.search(r'\bcsrrw(?:i)?\s+[^,]+\s*,\s*' + csr + r'\s*,', lines[j]):
+                      end=j
+                      break
+              if end is None:
+                  continue
+              unsafe=[]
+              for k in range(i+1,end):
+                  if re.search(r'\bsp\b', lines[k]):
+                      unsafe.append((k+1,lines[k]))
+              windows.append((i+1,end+1,unsafe))
+          print(f'REAL_SATP_WINDOWS={len(windows)}')
+          total=sum(len(x[2]) for x in windows)
+          print(f'REAL_SATP_STACK_TOUCHES={total}')
+          for n,(a,b,unsafe) in enumerate(windows):
+              print(f'REAL_SATP_WINDOW index={n} begin={a} end={b} stack_touches={len(unsafe)}')
+              for ln,text in unsafe[:32]:
+                  print(f'REAL_SATP_STACK_TOUCH line={ln} text={text.strip()}')
+          if not windows:
+              raise SystemExit(2)
+          if total:
+              raise SystemExit(1)
+          print('REAL_SATP_WINDOW=PASS')
+          PY
+
       - name: Build early image after PI SATP and setup owner refresh
         shell: bash
         run: |
@@ -338,6 +376,7 @@ jobs:
             build/linux-runtime-satp-refresh-v0/setup.minic-stage2.s
             build/linux-runtime-satp-refresh-v0/setup.objdump.txt
             build/linux-runtime-satp-refresh-v0/satp-window.txt
+            build/linux-runtime-satp-refresh-v0/satp-real-window.txt
             build/linux-runtime-satp-refresh-v0/timing.txt
             build/linux-runtime-satp-refresh-v0/fault-context.json
             build/linux-runtime-satp-refresh-v0/fault-context.txt
