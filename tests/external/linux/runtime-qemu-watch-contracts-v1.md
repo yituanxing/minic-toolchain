@@ -5,7 +5,7 @@
 It preserves:
 
 - `qemu-watch-cert`: compare the event-driven watcher with the fixed 8-second reference oracle on the certified runtime fixture, require exact verdict/fault/progress equivalence, require `SAME_FAULT`, and require an oracle-driven stop before the hard timeout.
-- `inconclusive-cert`: dynamically preserve the currently certified baseline progress marker while replacing only the fault identity with an unknown same-stage fault; require the watcher to continue until hard timeout, require final verdict `INCONCLUSIVE`, and require the watcher process return code used for inconclusive classification. This intentionally avoids hard-coding historical frontier stages such as `fdt-path`.
+- `inconclusive-cert`: first probe the exact frozen early image to discover its observed `highest_progress`, then synthesize a baseline at that observed stage with only the fault identity replaced by an unknown fault. The second watcher run must continue until hard timeout, return final verdict `INCONCLUSIVE`, and use the inconclusive process return code. This isolates watcher conservatism from repository-wide frontier movement and avoids hard-coding any historical or current stage.
 
 Legacy triggers remain accepted by their corresponding jobs:
 

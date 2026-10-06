@@ -224,22 +224,39 @@ jobs:
           frozen="$GITHUB_WORKSPACE/build/linux-runtime-frozen-v1"
           ev="$GITHUB_WORKSPACE/build/linux-runtime-qemu-watch-inconclusive-v1"
           bash tools/ci/linux-early-runtime-link-v2.sh "$frozen/src" "$out" "$ev/early"
+
+          # Probe this exact image first.  The repository-wide certified
+          # baseline may be ahead of this frozen compact image, so derive the
+          # same-stage marker from the image under test instead of hard-coding
+          # either a historical or current global frontier stage.
+          set +e
+          python3 tools/ci/linux-runtime-qemu-watch-v1.py \
+            --config tools/ci/linux-runtime-frontier-v1.json \
+            --nm "$ev/early/nm.txt" --image "$ev/early/Image.early" \
+            --evidence-dir "$ev/probe" --timeout-ms 1500 --poll-ms 100 \
+            | tee "$ev/probe.stdout.txt"
+          probe_rc=${PIPESTATUS[0]}
+          set -e
+          echo "WATCH_STAGE_PROBE_RC=$probe_rc"
+
           python3 - <<'PY'
           import json
           from pathlib import Path
           src=Path('tools/ci/linux-runtime-frontier-v1.json')
+          probe_path=Path('build/linux-runtime-qemu-watch-inconclusive-v1/probe/frontier-result.json')
           dst=Path('build/linux-runtime-qemu-watch-inconclusive-v1/mismatch.json')
           c=json.loads(src.read_text())
-          progress_marker=c['baseline'].get('progress_marker')
+          probe=json.loads(probe_path.read_text())
+          progress_marker=probe.get('highest_progress')
           if not progress_marker:
-              raise SystemExit('WATCH_CONSERVATIVE=FAIL missing baseline progress_marker')
+              raise SystemExit('WATCH_CONSERVATIVE=FAIL probe missing highest_progress')
+          known={m['name'] for m in c.get('progress_markers', [])}
+          if progress_marker not in known:
+              raise SystemExit(f'WATCH_CONSERVATIVE=FAIL unknown probe progress_marker={progress_marker}')
+          c['baseline']['progress_marker']=progress_marker
           c['baseline']['fault']={'desc':'fault_load','symbol':'__watch_deliberate_mismatch__','offset':'0x0'}
-          # Preserve whatever stage is currently certified.  The contract is
-          # same-stage unknown fault => INCONCLUSIVE; it must not hard-code a
-          # historical frontier marker such as fdt-path.
-          assert c['baseline']['progress_marker']==progress_marker
           dst.write_text(json.dumps(c, indent=2, sort_keys=True)+'\n')
-          print(f'WATCH_MISMATCH_BASELINE progress_marker={progress_marker}')
+          print(f'WATCH_MISMATCH_BASELINE progress_marker={progress_marker} probe_verdict={probe.get("verdict")}')
           PY
 
       - name: Prove unknown same-stage fault does not stop the watcher early
@@ -279,6 +296,11 @@ jobs:
         with:
           name: linux-runtime-qemu-watch-inconclusive-v1-${{ github.sha }}
           path: |
+            build/linux-runtime-qemu-watch-inconclusive-v1/mismatch.json
+            build/linux-runtime-qemu-watch-inconclusive-v1/probe.stdout.txt
+            build/linux-runtime-qemu-watch-inconclusive-v1/probe/watch-result.json
+            build/linux-runtime-qemu-watch-inconclusive-v1/probe/frontier-result.json
+            build/linux-runtime-qemu-watch-inconclusive-v1/probe/frontier-summary.txt
             build/linux-runtime-qemu-watch-inconclusive-v1/watch.stdout.txt
             build/linux-runtime-qemu-watch-inconclusive-v1/watch/watch-result.json
             build/linux-runtime-qemu-watch-inconclusive-v1/watch/frontier-result.json
