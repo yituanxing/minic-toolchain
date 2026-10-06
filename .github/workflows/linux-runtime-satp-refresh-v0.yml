@@ -100,13 +100,62 @@ jobs:
           test -s "$out/$target"
           test -s "$out/$base.minic-stage2.s"
           sha256sum "$out/$target" >"$ev/pi-owner.after.sha256"
+          cp "$out/$base.minic-stage2.i" "$ev/cmdline_early.minic-stage2.i"
           cp "$out/$base.minic-stage2.s" "$ev/cmdline_early.minic-stage2.s"
+          riscv64-linux-gnu-objdump -dr "$out/$base.o" >"$ev/cmdline_early.objdump.txt"
+          riscv64-linux-gnu-objdump -dr "$out/$target" >"$ev/cmdline_early.pi.objdump.txt"
+          riscv64-linux-gnu-readelf -rW "$out/$base.o" >"$ev/cmdline_early.relocs.txt"
+          riscv64-linux-gnu-nm -an "$out/$base.o" >"$ev/cmdline_early.nm.txt"
+          riscv64-linux-gnu-nm -an "$out/$target" >"$ev/cmdline_early.pi.nm.txt"
+          sha256sum "$out/$base.o" "$out/$target" >"$ev/pi-owner.objects.sha256"
+          grep -nE '\.Lminic_string_|\blla\b|\bla\b' "$ev/cmdline_early.minic-stage2.s" \
+            >"$ev/local-string-address-lines.txt" || true
+          grep -nE 'Lminic_string|PCREL|GOT_HI20|HI20' "$ev/cmdline_early.relocs.txt" \
+            >"$ev/local-string-relocs.txt" || true
           grep -E '^[[:space:]]+lla[[:space:]]+[^,]+,[[:space:]]*\.Lminic_string_' \
             "$ev/cmdline_early.minic-stage2.s" >/dev/null || {
               echo 'PI_OWNER_ASM=FAIL no PC-relative local string address' >&2
               exit 71
             }
+          grep -Fq 'cmdline_early.minic-stage2.s' "$ev/pi-owner-refresh.log" || \
+            grep -Fq 'stage2_kbuild_cc.sh' "$ev/pi-owner-refresh.log"
           echo 'PI_OWNER_ASM=PASS local_string=lla'
+          echo 'PI_FRESH_OWNER=PASS'
+
+      - name: Checkpoint PI-only runtime differential
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0"
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-satp-refresh-v0"
+          frozen="$GITHUB_WORKSPACE/build/linux-runtime-frozen-v1"
+          rm -rf "$ev/pi-only-early" "$ev/pi-only-watch"
+          bash tools/ci/linux-early-runtime-link-v2.sh "$frozen/src" "$work/out" "$ev/pi-only-early"
+          set +e
+          python3 tools/ci/linux-runtime-qemu-watch-v1.py \
+            --config tools/ci/linux-runtime-frontier-v1.json \
+            --nm "$ev/pi-only-early/nm.txt" --image "$ev/pi-only-early/Image.early" \
+            --evidence-dir "$ev/pi-only-watch" --timeout-ms 8000 --poll-ms 100 \
+            | tee "$ev/pi-only-watch.stdout.txt"
+          watch_rc=${PIPESTATUS[0]}
+          set -e
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          p=Path("build/linux-runtime-satp-refresh-v0/pi-only-watch/frontier-result.json")
+          r=json.loads(p.read_text())
+          verdict=r.get("verdict")
+          fault=r.get("fault") or {}
+          symbol=fault.get("symbol")
+          print(f"PI_ONLY_VERDICT={verdict} fault_symbol={symbol}")
+          if verdict != "REGRESSED" or symbol != "set_satp_mode":
+              raise SystemExit(
+                  f"PI_ONLY_DIFFERENTIAL=FAIL expected REGRESSED at set_satp_mode, "
+                  f"got verdict={verdict} symbol={symbol}"
+              )
+          print("PI_ONLY_DIFFERENTIAL=PASS expected_regression=set_satp_mode")
+          PY
+          echo "PI_ONLY_WATCH_RC=$watch_rc" | tee -a "$ev/timing.txt"
 
       - name: Rebuild real SATP owner with current MiniC
         shell: bash
@@ -260,7 +309,21 @@ jobs:
             build/linux-runtime-satp-refresh-v0/pi-owner.after.sha256
             build/linux-runtime-satp-refresh-v0/pi-owner-refresh.trace
             build/linux-runtime-satp-refresh-v0/pi-owner-refresh.log
+            build/linux-runtime-satp-refresh-v0/cmdline_early.minic-stage2.i
             build/linux-runtime-satp-refresh-v0/cmdline_early.minic-stage2.s
+            build/linux-runtime-satp-refresh-v0/cmdline_early.objdump.txt
+            build/linux-runtime-satp-refresh-v0/cmdline_early.pi.objdump.txt
+            build/linux-runtime-satp-refresh-v0/cmdline_early.relocs.txt
+            build/linux-runtime-satp-refresh-v0/cmdline_early.nm.txt
+            build/linux-runtime-satp-refresh-v0/cmdline_early.pi.nm.txt
+            build/linux-runtime-satp-refresh-v0/pi-owner.objects.sha256
+            build/linux-runtime-satp-refresh-v0/local-string-address-lines.txt
+            build/linux-runtime-satp-refresh-v0/local-string-relocs.txt
+            build/linux-runtime-satp-refresh-v0/pi-only-early/sha256.txt
+            build/linux-runtime-satp-refresh-v0/pi-only-watch/frontier-result.json
+            build/linux-runtime-satp-refresh-v0/pi-only-watch/frontier-summary.txt
+            build/linux-runtime-satp-refresh-v0/pi-only-watch/watch-result.json
+            build/linux-runtime-satp-refresh-v0/pi-only-watch/qemu.interrupts.txt
             build/linux-runtime-satp-refresh-v0/init.before.sha256
             build/linux-runtime-satp-refresh-v0/init.after.sha256
             build/linux-runtime-satp-refresh-v0/init-refresh.trace
