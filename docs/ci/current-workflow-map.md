@@ -1,22 +1,22 @@
 # Current CI workflow map
 
-Snapshot: `1bacf23a297b2edc286f068d618fda7fce2c504b`
+Snapshot: `72d632d43ef2fa02ec029f539105533203b5ac50`
 
 This document is the current ownership map for active GitHub Actions after the 2026-10 cleanup and runtime-convergence work. It is intended to prevent historical diagnostic workflows from becoming active CI by accident and to make retirement decisions contract-based rather than name-based.
 
 ## Repository state
 
-- Active workflow YAML files: **88**
-- Disabled historical workflow YAML files: **184**
-- Active `linux-*.yml` workflows: **37**
-- Linux/core workflows including `core-first500-regression.yml`: **38**
+- Active workflow YAML files: **87**
+- Disabled historical workflow YAML files: **185**
+- Active `linux-*.yml` workflows: **36**
+- Linux/core workflows including `core-first500-regression.yml`: **37**
 - `agent/ci-runtime-cleanup-v1` and `agent/linux-expanded-kbuild-v0` point to the same HEAD.
 - Remaining branches:
   - `main`
   - `agent/linux-expanded-kbuild-v0`
   - `agent/ci-runtime-cleanup-v1`
   - `archive/all-progress-2026-10-04`
-- The development/cleanup HEAD is 3855 commits ahead of `main` and 2 commits behind it.
+- The development/cleanup HEAD is 3860 commits ahead of `main` and 2 commits behind it.
 - The two `main`-only commits have no net file diff relative to their merge base, so they are historical ancestry to preserve rather than a competing code state.
 
 GitHub Actions caches used by the Linux runtime certification chain are scoped to the canonical runtime ref. Cache-dependent runtime validation must remain strict and must not turn cache misses into passing evidence.
@@ -38,7 +38,7 @@ A workflow with unresolved failure evidence is not retired merely because it is 
 
 | Domain | Count | Role |
 | --- | ---: | --- |
-| Linux/core/runtime | 38 | frozen Linux corpus, Kbuild, runtime certification and focused Linux diagnostics |
+| Linux/core/runtime | 37 | frozen Linux corpus, Kbuild, runtime certification and focused Linux diagnostics |
 | BusyBox | 4 | integration/failure-pool/full-toolchain coverage |
 | Compiler bootstrap/runtime | 6 | bootstrap and compiler-runtime progression |
 | Toolchain/meta | 3 | stage2 smoke, M0 structure and regression ledger |
@@ -52,7 +52,7 @@ A workflow with unresolved failure evidence is not retired merely because it is 
 | SQLite | 1 | full driver integration |
 | TinyCC | 1 | full driver integration |
 | Static readiness | 4 | bootstrap, core, Linux-final and self-host readiness |
-| **Total** | **88** | |
+| **Total** | **87** | |
 
 # Linux/core ownership map
 
@@ -107,7 +107,6 @@ These are specialized rather than general-purpose canonical gates.
 
 - `linux-check-cpu-stall-runtime-v0.yml` — retained representative packed/reuse IRQ + RCU stall owner lane and generalized IRQ-guard page-fault rejection.
 - `linux-fork-stack-runtime-v0.yml` — retains `kernel/fork.o` owner isolation and bad-stack/first-fault oracle.
-- `linux-idr-xarray-runtime-v0.yml` — IDR/XArray owner isolation. Retirement is blocked by unresolved failure evidence from run `35320118231`.
 - `linux-runtime-rcu-owner-v0.yml` — RCU/softirq/rest-init owner chain with kallsyms-aware runtime evidence.
 - `linux-runtime-timer-focused-v0.yml` — timer/hrtimer/tick/RCU focused owner frontier.
 - `linux-runtime-spinlock-codegen-v0.yml` — MiniC/GCC spinlock code-generation differential.
@@ -116,6 +115,8 @@ These are specialized rather than general-purpose canonical gates.
 - `linux-runtime-spinlock-stack-v0.yml` — canonical static spinlock stack/frame diagnostic.
 
 The old IRQ-frame runtime lane is disabled because its generalized IRQ-guard responsibility is retained by check-cpu-stall and its SATP responsibility is owned by the canonical SATP refresh contract.
+
+The historical `linux-idr-xarray-runtime-v0.yml` A/B lane is also disabled. Re-run `37500833588` reproduced only the old global `strlen+0x6` frontier under its stale patch stack, while current-profile Fast V5 run `37501374567` successfully rebuilt `lib/idr.o` and `lib/xarray.o`, relinked V2, and preserved the authoritative `SAME_FAULT` baseline without an IDR/XArray-specific regression.
 
 ## Full-image and architecture-specific runtime surfaces
 
@@ -222,12 +223,11 @@ Historical census and old Linux input-inventory workflows are disabled.
 - Retired workflow YAML is preserved under `.github/workflows-disabled/`.
 - A disabled-path filename collision discovered during cleanup was repaired so the original Linux discovery workflow and the later registered spinlock bridge are both preserved independently.
 - Historical residual-undef consumers are disabled, and the orphan `linux-undef-diagnose-v0.yml` producer was retired only after a scan of all 89 active workflows at the preceding HEAD found zero active consumers for its cache key.
-- Historical PI fast/minic-early lanes, IRQ frame lane, fast relink shadow, crc32 probes, old kallsyms probes, dead-branch diagnostics and earlier owner-specific duplicates are documented by retirement contracts.
+- Historical PI fast/minic-early lanes, IRQ frame lane, fast relink shadow, stale IDR/XArray A/B lane, crc32 probes, old kallsyms probes, dead-branch diagnostics and earlier owner-specific duplicates are documented by retirement contracts.
 
 # Remaining convergence work
 
 1. Re-certify or explicitly supersede the active workflows still protected by failure evidence:
-   - `linux-idr-xarray-runtime-v0.yml`
    - `linux-expanded-pi-runtime-v0.yml`
    - `linux-expanded-runtime-p1-v0.yml`
    - `linux-image-qemu-runtime-v0.yml`
