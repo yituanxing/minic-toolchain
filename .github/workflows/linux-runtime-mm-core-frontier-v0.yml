@@ -5,6 +5,7 @@ on:
     branches: ["agent/linux-expanded-kbuild-v0"]
     paths:
       - "tools/ci/runtime-mm-core-trigger.txt"
+      - "tools/ci/runtime-init-irq-trigger.txt"
   workflow_dispatch:
 
 permissions:
