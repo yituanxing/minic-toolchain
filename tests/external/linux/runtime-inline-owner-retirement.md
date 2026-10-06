@@ -1,7 +1,11 @@
-# Inline fault owner fast-probe retirement
+# Historical runtime inline-owner probe retirement
 
-`.github/workflows/linux-runtime-inline-fault-owner-v0.yml` is the earlier fast owner probe for the historical `__minic_inline_spec_720_39` runtime fault.
+The active `.github/workflows/linux-runtime-inline-owner-v0.yml` workflow is retired as an incomplete one-off historical localization probe.
 
-Later the same day, `linux-runtime-inline-owner-v0.yml` replaced that probe with a complete object scan: it checks every object with `nm`, records every matching owner, and preserves full nm/objdump evidence for the same symbol.
+It is hard-coded to the September specialization symbol `__minic_inline_spec_720_39`. It does not run a runtime oracle, does not accept a generic symbol input, and does not define a reusable regression contract.
 
-The earlier binary-grep fast probe is therefore archived byte-for-byte under `.github/workflows-disabled/`. The later complete owner scan remains active.
+Repository history shows one workflow-introduction commit, `a53bf512d94970336235e4ae3bbf9af23ec90568` ("ci: locate current inline runtime frontier owner"). Its only recorded Actions run, `36406037865`, was CANCELLED and therefore never became a certified diagnostic gate.
+
+Current runtime owner localization is covered by maintained current-frontier diagnostics such as linked `get_current` owner analysis, timer/RCU first-fault owner scans, fault-context analysis, and QEMU frontier workflows.
+
+The historical YAML is preserved byte-for-byte under `.github/workflows-disabled/`; no successful certification result is claimed for this retired probe.
