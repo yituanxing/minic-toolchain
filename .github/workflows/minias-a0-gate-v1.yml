@@ -469,7 +469,7 @@ jobs:
           sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 install -y --no-install-recommends \
             gcc-riscv64-linux-gnu libc6-dev-riscv64-cross flex bison bc libelf-dev libssl-dev dwarves
 
-      - name: Rebuild only the certified Linux 6.6.143 native35 targets
+      - name: Rebuild native35 from exact targeted Kbuild object commands
         shell: bash
         env:
           LINUX_VERSION: "6.6.143"
@@ -490,58 +490,149 @@ jobs:
           make -s -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- defconfig
           make -s -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- -j4 prepare scripts
 
-          targets=(
-            arch/riscv/errata/sifive/errata_cip_453.s
-            arch/riscv/kernel/compat_vdso/compat_vdso.s
-            arch/riscv/kernel/compat_vdso/flush_icache.s
-            arch/riscv/kernel/compat_vdso/getcpu.s
-            arch/riscv/kernel/compat_vdso/note.s
-            arch/riscv/kernel/compat_vdso/rt_sigreturn.s
-            arch/riscv/kernel/copy-unaligned.s
-            arch/riscv/kernel/entry.s
-            arch/riscv/kernel/fpu.s
-            arch/riscv/kernel/head.s
-            arch/riscv/kernel/suspend_entry.s
-            arch/riscv/kernel/vdso/flush_icache.s
-            arch/riscv/kernel/vdso/getcpu.s
-            arch/riscv/kernel/vdso/note.s
-            arch/riscv/kernel/vdso/rt_sigreturn.s
-            arch/riscv/kernel/vdso/sys_hwprobe.s
-            arch/riscv/kernel/vdso/vdso.s
-            arch/riscv/kvm/vcpu_switch.s
-            arch/riscv/lib/clear_page.s
-            arch/riscv/lib/memcpy.s
-            arch/riscv/lib/memmove.s
-            arch/riscv/lib/memset.s
-            arch/riscv/lib/strcmp.s
-            arch/riscv/lib/strlen.s
-            arch/riscv/lib/strncmp.s
-            arch/riscv/lib/tishift.s
-            arch/riscv/lib/uaccess.s
-            arch/riscv/purgatory/entry.s
-            arch/riscv/purgatory/kexec-purgatory.s
-            arch/riscv/purgatory/memcpy.s
-            arch/riscv/purgatory/memset.s
-            arch/riscv/purgatory/strcmp.s
-            arch/riscv/purgatory/strlen.s
-            arch/riscv/purgatory/strncmp.s
-            usr/initramfs_data.s
-          )
-          test "${#targets[@]}" -eq 35
-          make -s -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- -j4 "${targets[@]}"
+          cat >build/minias-native35-targets.txt <<'EOF'
+          arch/riscv/errata/sifive/errata_cip_453.s
+          arch/riscv/kernel/compat_vdso/compat_vdso.s
+          arch/riscv/kernel/compat_vdso/flush_icache.s
+          arch/riscv/kernel/compat_vdso/getcpu.s
+          arch/riscv/kernel/compat_vdso/note.s
+          arch/riscv/kernel/compat_vdso/rt_sigreturn.s
+          arch/riscv/kernel/copy-unaligned.s
+          arch/riscv/kernel/entry.s
+          arch/riscv/kernel/fpu.s
+          arch/riscv/kernel/head.s
+          arch/riscv/kernel/suspend_entry.s
+          arch/riscv/kernel/vdso/flush_icache.s
+          arch/riscv/kernel/vdso/getcpu.s
+          arch/riscv/kernel/vdso/note.s
+          arch/riscv/kernel/vdso/rt_sigreturn.s
+          arch/riscv/kernel/vdso/sys_hwprobe.s
+          arch/riscv/kernel/vdso/vdso.s
+          arch/riscv/kvm/vcpu_switch.s
+          arch/riscv/lib/clear_page.s
+          arch/riscv/lib/memcpy.s
+          arch/riscv/lib/memmove.s
+          arch/riscv/lib/memset.s
+          arch/riscv/lib/strcmp.s
+          arch/riscv/lib/strlen.s
+          arch/riscv/lib/strncmp.s
+          arch/riscv/lib/tishift.s
+          arch/riscv/lib/uaccess.s
+          arch/riscv/purgatory/entry.s
+          arch/riscv/purgatory/kexec-purgatory.s
+          arch/riscv/purgatory/memcpy.s
+          arch/riscv/purgatory/memset.s
+          arch/riscv/purgatory/strcmp.s
+          arch/riscv/purgatory/strlen.s
+          arch/riscv/purgatory/strncmp.s
+          usr/initramfs_data.s
+          EOF
+          sed -i 's/^[[:space:]]*//' build/minias-native35-targets.txt
+          test "$(wc -l < build/minias-native35-targets.txt)" -eq 35
 
-          : >"$fixture/SHA256SUMS"
-          : >"$fixture/manifest.tsv"
-          for rel in "${targets[@]}"; do
-            test -s "$out/$rel"
-            mkdir -p "$fixture/$(dirname "$rel")"
-            cp "$out/$rel" "$fixture/$rel"
-            digest=$(sha256sum "$fixture/$rel" | cut -d' ' -f1)
-            printf '%s  %s\n' "$digest" "$rel" >>"$fixture/SHA256SUMS"
-            printf '%s\t%s\n' "$rel" "$digest" >>"$fixture/manifest.tsv"
+          mapfile -t asm_targets < build/minias-native35-targets.txt
+          obj_targets=()
+          for rel in "${asm_targets[@]}"; do
+            obj_targets+=("${rel%.s}.o")
           done
-          test "$(find "$fixture" -type f -name '*.s' | wc -l)" -eq 35
-          echo "MINIAS_NATIVE35_FIXTURE=PASS selected=35 source=targeted-linux-6.6.143-riscv-defconfig"
+          make -s -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- -j4 "${obj_targets[@]}"
+
+          python3 - <<'PY'
+          from pathlib import Path, PurePosixPath
+          import hashlib, json, re, shlex, subprocess
+
+          out = Path("build/minias-native35-linux-out").resolve()
+          fixture = Path("build/minias-native35-inputs").resolve()
+          desired = set(Path("build/minias-native35-targets.txt").read_text().splitlines())
+          if len(desired) != 35:
+              raise SystemExit(f"expected 35 desired assembly targets, got {len(desired)}")
+
+          output_re = re.compile(r"(?:^|\s)-o\s+([^\s;]+\.o)(?=\s|;|$)")
+          source_re = re.compile(r"(?:^|\s)([^\s;]+\.S)(?=\s|;|$)")
+          rows = {}
+
+          def normalize_output(token: str) -> str:
+              path = Path(token.strip("'\""))
+              if path.is_absolute():
+                  try:
+                      return path.resolve().relative_to(out).as_posix()
+                  except ValueError:
+                      return ""
+              return PurePosixPath(path.as_posix()).as_posix()
+
+          for cmdfile in out.rglob(".*.cmd"):
+              try:
+                  lines = cmdfile.read_text(errors="replace").splitlines()
+              except OSError:
+                  continue
+              for raw in lines:
+                  if ":=" not in raw or " -c " not in f" {raw} ":
+                      continue
+                  objects = output_re.findall(raw)
+                  sources = source_re.findall(raw)
+                  if not objects or not sources:
+                      continue
+                  obj = normalize_output(objects[-1])
+                  if not obj.endswith(".o"):
+                      continue
+                  rel_s = obj[:-2] + ".s"
+                  if rel_s not in desired:
+                      continue
+                  command = raw.split(":=", 1)[1].strip()
+                  tokens = shlex.split(command, posix=True)
+                  rows[rel_s] = {
+                      "object": obj,
+                      "source": sources[-1].strip("'\""),
+                      "cmdfile": cmdfile.relative_to(out).as_posix(),
+                      "tokens": tokens,
+                  }
+
+          missing = sorted(desired - set(rows))
+          extra = sorted(set(rows) - desired)
+          if missing or extra or len(rows) != 35:
+              raise SystemExit(
+                  f"native35 Kbuild command mismatch rows={len(rows)} missing={missing} extra={extra}"
+              )
+
+          manifest = []
+          for index, rel_s in enumerate(sorted(desired)):
+              meta = rows[rel_s]
+              tokens = list(meta["tokens"])
+              compile_index = tokens.index("-c")
+              output_index = tokens.index("-o")
+              target = fixture / rel_s
+              target.parent.mkdir(parents=True, exist_ok=True)
+              tokens[compile_index] = "-E"
+              tokens[output_index + 1] = str(target)
+              proc = subprocess.run(
+                  tokens,
+                  cwd=out,
+                  stdout=subprocess.DEVNULL,
+                  stderr=subprocess.PIPE,
+                  text=True,
+                  errors="replace",
+              )
+              if proc.returncode != 0 or not target.is_file() or target.stat().st_size == 0:
+                  raise RuntimeError(
+                      f"native preprocess failed target={rel_s} rc={proc.returncode}: "
+                      + proc.stderr[-2000:]
+                  )
+              digest = hashlib.sha256(target.read_bytes()).hexdigest()
+              manifest.append({
+                  "index": index,
+                  "assembly": rel_s,
+                  "object": meta["object"],
+                  "source": meta["source"],
+                  "cmdfile": meta["cmdfile"],
+                  "sha256": digest,
+              })
+
+          (fixture / "manifest.json").write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
+          (fixture / "SHA256SUMS").write_text(
+              "".join(f"{row['sha256']}  {row['assembly']}\n" for row in manifest)
+          )
+          print("MINIAS_NATIVE35_FIXTURE=PASS selected=35 source=targeted-kbuild-object-commands")
+          PY
 
       - name: Build exact MiniAS
         run: |
@@ -628,7 +719,7 @@ jobs:
         with:
           name: minias-a0-gate-v1-native35
           path: |
-            build/minias-native35-inputs/manifest.tsv
+            build/minias-native35-inputs/manifest.json
             build/minias-native35-inputs/SHA256SUMS
             build/minias-native35-results/results.tsv
             build/minias-native35-results/summary.txt
