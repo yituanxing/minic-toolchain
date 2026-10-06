@@ -130,6 +130,8 @@ jobs:
             rm -f "$out/$target" "$out/$dir/.${stem}.o.cmd" \
               "$out/$base.minic-stage2.i" "$out/$base.minic-stage2.s"
             MINIC="$TOOLCHAIN/bin/minic" REAL_CC=/usr/bin/riscv64-linux-gnu-gcc MINIC_KEEP_INTERMEDIATES=1 \
+            MINIC_CORE_FRAME_TRACE="${MINIC_CORE_FRAME_TRACE:-0}" CORE_FAST_TRACE="${CORE_FAST_TRACE:-0}" \
+            MINIC_LOCAL_FACT_TRACE="${MINIC_LOCAL_FACT_TRACE:-0}" \
               make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- CC="$wrapper" -j2 V=1 "$target" \
               >"$EV/$log" 2>&1
             test -s "$out/$target"
@@ -162,7 +164,20 @@ jobs:
           case "$MODE" in
             timekeeping) ;;
             vsyscall)
-              refresh_obj kernel/time/vsyscall.o vsyscall-refresh.log
+              stamp="$EV/vsyscall-frame-start.stamp"
+              touch "$stamp"
+              MINIC_CORE_FRAME_TRACE=1 CORE_FAST_TRACE=1 MINIC_LOCAL_FACT_TRACE=1 \
+                refresh_obj kernel/time/vsyscall.o vsyscall-refresh.log
+              find "$out/kernel/time" -type f -name '*.minic.stderr' -newer "$stamp" -print0 \
+                | xargs -0 -r cat >"$EV/vsyscall-frame-trace.txt"
+              grep -E 'CORE_FRAME_REUSE function=update_vsyscall([[:space:]]|$)' \
+                "$EV/vsyscall-frame-trace.txt" | tee "$EV/vsyscall-frame-lines.txt"
+              frame=$(sed -n 's/.*CORE_FRAME_REUSE function=update_vsyscall frame=\([0-9][0-9]*\).*/\1/p' \
+                "$EV/vsyscall-frame-lines.txt" | head -1)
+              test -n "$frame"
+              printf 'UPDATE_VSYSCALL_FRAME=%s\n' "$frame" | tee "$EV/vsyscall-frame-contract.txt"
+              test "$frame" -lt 2256
+              echo 'VSYSCALL_FRAME_CONTRACT=PASS limit=2256' | tee -a "$EV/vsyscall-frame-contract.txt"
               ;;
             notifier)
               refresh_obj kernel/time/vsyscall.o vsyscall-refresh.log
@@ -231,6 +246,9 @@ jobs:
             build/linux-runtime-owner-focused-v1-${{ matrix.mode }}/target.nm.txt
             build/linux-runtime-owner-focused-v1-${{ matrix.mode }}/target.minic-stage2.s
             build/linux-runtime-owner-focused-v1-${{ matrix.mode }}/target-function.objdump.txt
+            build/linux-runtime-owner-focused-v1-${{ matrix.mode }}/vsyscall-frame-trace.txt
+            build/linux-runtime-owner-focused-v1-${{ matrix.mode }}/vsyscall-frame-lines.txt
+            build/linux-runtime-owner-focused-v1-${{ matrix.mode }}/vsyscall-frame-contract.txt
             build/linux-runtime-owner-focused-v1-${{ matrix.mode }}/watch/frontier-result.json
             build/linux-runtime-owner-focused-v1-${{ matrix.mode }}/watch/frontier-summary.txt
             build/linux-runtime-owner-focused-v1-${{ matrix.mode }}/watch/watch-result.json
