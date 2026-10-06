@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - "toolchain/minias-m0-boundary-freeze"
+      - "agent/ci-runtime-cleanup-v1"
   workflow_dispatch:
     inputs:
       window:
@@ -11,6 +12,7 @@ on:
         required: true
         type: choice
         options:
+          - first500
           - new500
           - next500
           - next500b
@@ -29,7 +31,7 @@ env:
 
 jobs:
   resolve:
-    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[minias-new500]') || contains(github.event.head_commit.message, '[minias-next500]') || contains(github.event.head_commit.message, '[minias-next500b]') || contains(github.event.head_commit.message, '[minias-next500c]') || contains(github.event.head_commit.message, '[minias-next500d]') || contains(github.event.head_commit.message, '[minias-final352]')
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[minias-first500]') || contains(github.event.head_commit.message, '[minias-new500]') || contains(github.event.head_commit.message, '[minias-next500]') || contains(github.event.head_commit.message, '[minias-next500b]') || contains(github.event.head_commit.message, '[minias-next500c]') || contains(github.event.head_commit.message, '[minias-next500d]') || contains(github.event.head_commit.message, '[minias-final352]')
     runs-on: ubuntu-24.04
     outputs:
       label: ${{ steps.pick.outputs.label }}
@@ -48,6 +50,7 @@ jobs:
           label="${REQUESTED:-}"
           if test -z "$label"; then
             case "$COMMIT_MESSAGE" in
+              *"[minias-first500]"*) label=first500 ;;
               *"[minias-final352]"*) label=final352 ;;
               *"[minias-next500d]"*) label=next500d ;;
               *"[minias-next500c]"*) label=next500c ;;
@@ -58,6 +61,11 @@ jobs:
             esac
           fi
           case "$label" in
+            first500)
+              artifact=frozen-linux-corpus-first500
+              corpus_dir=linux-focus-corpus
+              total=500
+              ;;
             new500)
               artifact=frozen-linux-corpus-new500
               corpus_dir=linux-new500-corpus
@@ -293,6 +301,10 @@ jobs:
             echo "MINIAS_WINDOW_SUMMARY label=$label pass=$pass fail=$fail total=$total"
             echo "MINIAS_WINDOW_TOP_BLOCKERS"
             if test -s "$out/blockers.txt"; then LC_ALL=C sort "$out/blockers.txt" | uniq -c | sort -nr | head -n 40; else echo "  none"; fi
+            if test "$label" = first500; then
+              echo "MINIAS_FIRST500_FIRST_PASSES"
+              awk -F '\t' '$1=="PASS" && shown < 30 {print $2; shown++}' "$out/results.tsv"
+            fi
             echo "MINIAS_WINDOW_CANDIDATE_ACTIVE_SAMPLE"
             cat "$out/candidate-active-sample.txt"
             echo "MINIAS_WINDOW_ERROR_POOL"
