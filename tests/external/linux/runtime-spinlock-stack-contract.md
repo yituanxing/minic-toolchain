@@ -12,4 +12,4 @@ It now additionally preserves the complete historical `linux-runtime-spinlock-fr
 - base address and `+0x1c` instruction;
 - the first 24 prologue instructions.
 
-The historical frame workflow remains active until this augmented stack workflow completes successfully on the canonical `agent/linux-expanded-kbuild-v0` runtime branch.
+Canonical certification run `37467194575` on `agent/linux-expanded-kbuild-v0` completed SUCCESS after the repaired augmented workflow was installed. It passed certified fixture restores, exact runtime MiniC rebuild of `spinlock_debug.o`, the full legacy `debug_spin_lock_before` frame evidence extraction, reverse call-chain/frame/restore analysis, and evidence upload. Therefore `linux-runtime-spinlock-frame-v1.yml` is superseded and may be archived without deleting its YAML history.
