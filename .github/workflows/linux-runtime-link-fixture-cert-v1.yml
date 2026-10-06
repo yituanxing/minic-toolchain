@@ -111,6 +111,29 @@ jobs:
           }
           echo 'COMPACT_LINK_BINARY_EQUIVALENCE=PASS' | tee -a "$root/timing.txt"
 
+      - name: Link legacy V1 reference after V2
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          root="$GITHUB_WORKSPACE/build/linux-runtime-link-fixture-cert-v1"
+          full="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0/out"
+          frozen="$GITHUB_WORKSPACE/build/linux-runtime-frozen-v1"
+          bash tools/ci/linux-early-runtime-link-v1.sh "$frozen/src" "$full" "$root/legacy-v1"
+          cat "$root/legacy-v1/timing.txt" >>"$root/timing.txt"
+
+      - name: Prove exact V2 legacy-V1 equivalence
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          root="$GITHUB_WORKSPACE/build/linux-runtime-link-fixture-cert-v1"
+          cmp -s "$root/full/vmlinux.early" "$root/legacy-v1/vmlinux.early"
+          cmp -s "$root/full/Image.early" "$root/legacy-v1/Image.early"
+          diff -u "$root/legacy-v1/nm.txt" "$root/full/nm.txt" >"$root/legacy-v1-v2-nm.diff" || {
+            cat "$root/legacy-v1-v2-nm.diff"
+            exit 1
+          }
+          echo 'EARLY_LINK_V2_LEGACY_V1_EQUIVALENCE=PASS' | tee -a "$root/timing.txt"
+
       - name: Execute compact fixture and classify frontier
         shell: bash
         run: |
@@ -179,6 +202,9 @@ jobs:
             build/linux-runtime-link-fixture-cert-v1/nm.diff
             build/linux-runtime-link-fixture-cert-v1/full/sha256.txt
             build/linux-runtime-link-fixture-cert-v1/compact/sha256.txt
+            build/linux-runtime-link-fixture-cert-v1/legacy-v1/sha256.txt
+            build/linux-runtime-link-fixture-cert-v1/legacy-v1/timing.txt
+            build/linux-runtime-link-fixture-cert-v1/legacy-v1-v2-nm.diff
             build/linux-runtime-link-v1/out/link-files.txt
             build/linux-runtime-link-v1/out/link-files.sha256
           if-no-files-found: warn
