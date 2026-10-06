@@ -29,3 +29,22 @@ The older non-focused owner-differential workflows are governed separately by `r
 ## Cache-scope note
 
 The certified full linked fixture, pinned Linux source, and frozen linker subset are GitHub Actions caches scoped to the canonical runtime ref. The cleanup branch cannot independently restore those caches, so a cache miss there is not accepted as a runtime result and `fail-on-cache-miss` remains strict.
+
+## Vsyscall frame regression contract
+
+Commit `367e4d84102a7400f561a80256ff322edb303f91` extends the canonical `vsyscall` matrix lane with the durable frame-size requirement previously carried by `linux-core-slot-reuse-frame-v0.yml`.
+
+For the focused `kernel/time/vsyscall.o` rebuild only, the workflow enables MiniC Core frame tracing, extracts the `update_vsyscall` frame size, and requires:
+
+`UPDATE_VSYSCALL_FRAME < 2256`
+
+Canonical run `37497141242` completed SUCCESS. Its vsyscall job recorded:
+
+- `CORE_FRAME_REUSE function=update_vsyscall frame=128 value_bytes=32 values=275 objects=43`
+- `UPDATE_VSYSCALL_FRAME=128`
+- `VSYSCALL_FRAME_CONTRACT=PASS limit=2256`
+- `QEMU_WATCH=PASS`
+- `FRONTIER_VERDICT=MOVED_LATER`
+
+The canonical owner-focused lane therefore now guards both the owner/runtime frontier and the historical vsyscall frame bound. The separate static frame-measurement workflow is governed by `runtime-core-frame-retirement.md`.
+
