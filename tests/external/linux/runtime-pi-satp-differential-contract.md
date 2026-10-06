@@ -35,4 +35,4 @@ The upgraded chain therefore supersedes these standalone historical workflows, w
 
 The historical `linux-pi-real-init-gate-v0.yml` rebuilds the same real `arch/riscv/mm/init.o` owner and rejects any `sp` reference between the SATP CSR transition operations. That stricter source-level assertion is now preserved verbatim inside the canonical SATP refresh workflow in addition to its existing object-level stack-memory check.
 
-After the upgraded SATP refresh is certified on `agent/linux-expanded-kbuild-v0`, the standalone real-init gate may be archived without losing its diagnostic invariant.
+Canonical certification run `37463405710` on `agent/linux-expanded-kbuild-v0` completed SUCCESS after the stricter assertion was folded in. It passed the real PI owner rebuild, PI-only differential, real `init.o` and setup owner rebuilds, both SATP-window assertions, early relink, final QEMU frontier oracle, and evidence upload. Therefore the standalone `linux-pi-real-init-gate-v0.yml` is superseded and may be archived without losing its diagnostic invariant.
