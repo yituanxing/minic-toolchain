@@ -6,7 +6,7 @@ It preserves three historical diagnostic responsibilities in one ordered run:
 
 1. Rebuild the true `arch/riscv/kernel/pi/cmdline_early.pi.o` owner through the current centralized MiniC runtime profile, retain preprocessed/assembly/ELF relocation/symbol evidence, and prove the Kbuild wrapper actually regenerated the MiniC stage-2 assembly.
 2. Relink and run the PI-only image before touching the SATP owner. The current isolation contract requires this checkpoint to classify as `REGRESSED` with first fault owned by `set_satp_mode`; this preserves the historical PI-owner-only differential rather than hiding it.
-3. Rebuild `arch/riscv/mm/init.o` and `arch/riscv/kernel/setup.o`, verify the critical SATP CSR window has no stack-memory access between the transition CSR operations, relink, and run the final runtime frontier oracle.
+3. Rebuild `arch/riscv/mm/init.o` and `arch/riscv/kernel/setup.o`, verify the critical SATP CSR window has no stack-memory access between the transition CSR operations, and additionally preserve the historical real-init assertion that no instruction in the source-level CSR window references `sp` at all; then relink and run the final runtime frontier oracle.
 
 ## Canonical certification
 
@@ -29,3 +29,10 @@ The upgraded chain therefore supersedes these standalone historical workflows, w
 - `linux-runtime-pi-owner-refresh-v0.yml`
 
 `linux-pi-minic-early-v1.yml` remains separate because it refreshes seven PI startup objects and runs a raw all-MiniC early-QEMU gate rather than this owner-isolation contract.
+
+
+## Real-init gate consolidation
+
+The historical `linux-pi-real-init-gate-v0.yml` rebuilds the same real `arch/riscv/mm/init.o` owner and rejects any `sp` reference between the SATP CSR transition operations. That stricter source-level assertion is now preserved verbatim inside the canonical SATP refresh workflow in addition to its existing object-level stack-memory check.
+
+After the upgraded SATP refresh is certified on `agent/linux-expanded-kbuild-v0`, the standalone real-init gate may be archived without losing its diagnostic invariant.
