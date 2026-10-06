@@ -12,4 +12,4 @@ It preserves the complete historical `linux-runtime-spinlock-first-fail-v0.yml` 
 
 It additionally extracts the first reached diagnostic target and its resolved execution context into `first-target.json` and `first-target.txt`.
 
-The historical `linux-runtime-spinlock-first-fail-v0.yml` must remain active until this augmented first-context workflow completes successfully on the canonical `agent/linux-expanded-kbuild-v0` runtime branch.
+Canonical certification run `37464112725` on `agent/linux-expanded-kbuild-v0` completed SUCCESS. The augmented first-context workflow passed certified fixture restores, exact runtime MiniC profile construction, all instrumentation-presence checks, the full 18-owner refresh chain with retained `spinlock_debug` static evidence, early relink, QEMU recursion probe, first-target context extraction, and evidence upload. Therefore `linux-runtime-spinlock-first-fail-v0.yml` is superseded and may be archived without deleting its YAML history.
