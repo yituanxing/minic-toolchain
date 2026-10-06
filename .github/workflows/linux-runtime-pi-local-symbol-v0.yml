@@ -76,12 +76,242 @@ jobs:
           EOF
           "$build/bin/minic" -S "$ev/pi-local-symbol.i" -o "$ev/pi-local-symbol.s"
           grep -E '^[[:space:]]+lla[[:space:]]+t0,[[:space:]]*\.Lminic_string_[0-9]+' "$ev/pi-local-symbol.s"
-          grep -E '^[[:space:]]+la[[:space:]]+t0,[[:space:]]*ext_symbol$' "$ev/pi-local-symbol.s"
-          if grep -E '^[[:space:]]+lla[[:space:]]+t0,[[:space:]]*ext_symbol$' "$ev/pi-local-symbol.s"; then
-            echo 'PI_LOCAL_SYMBOL_SYNTHETIC=FAIL extern unexpectedly lowered with lla' >&2
-            exit 1
+          if grep -Fq 'MINIC_RISCV64_PI_LOCAL_SYMBOL_ADDRESS_V0=APPLIED mode=static-pcrel-preserved' "$ev/profile/patch.log"; then
+            grep -E '^[[:space:]]+lla[[:space:]]+t0,[[:space:]]*ext_symbol
+      - name: Replay only current frontier owners from frozen inputs
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          out="$GITHUB_WORKSPACE/build/linux-runtime-link-v1/out"
+          frozen="$GITHUB_WORKSPACE/build/linux-runtime-frozen-v1"
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-pi-local-symbol-v0"
+          build="$GITHUB_WORKSPACE/build/toolchain-runtime-pi-local-symbol-v0"
+          wrapper="$GITHUB_WORKSPACE/tests/external/linux/stage2_kbuild_cc.sh"
+          mapfile -t asm_args <"$frozen/asm-args.txt"
+          start=$(date +%s%N)
+          MINIC="$build/bin/minic" REAL_CC=/usr/bin/riscv64-linux-gnu-gcc \
+          MINIC_KEEP_INTERMEDIATES=1 MINIC_KBUILD_TRACE="$ev/replay.trace" \
+            "$wrapper" "${asm_args[@]}" -c -o "$out/lib/idr.o" "$frozen/lib__idr.i"
+          MINIC="$build/bin/minic" REAL_CC=/usr/bin/riscv64-linux-gnu-gcc \
+          MINIC_KEEP_INTERMEDIATES=1 MINIC_KBUILD_TRACE="$ev/replay.trace" \
+            "$wrapper" "${asm_args[@]}" -c -o "$out/lib/xarray.o" "$frozen/lib__xarray.i"
+          end=$(date +%s%N)
+          echo "TIMING replay_ms=$(((end-start)/1000000)) objects=2" | tee "$ev/timing.txt"
+          sha256sum "$out/lib/idr.o" "$out/lib/xarray.o" | tee "$ev/objects.sha256"
+
+      - name: Build exact early image with certified compact linker
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          out="$GITHUB_WORKSPACE/build/linux-runtime-link-v1/out"
+          frozen="$GITHUB_WORKSPACE/build/linux-runtime-frozen-v1"
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-pi-local-symbol-v0"
+          bash tools/ci/linux-early-runtime-link-v2.sh "$frozen/src" "$out" "$ev/early"
+          cat "$ev/early/timing.txt" >>"$ev/timing.txt"
+
+      - name: Execute until runtime oracle decides
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-pi-local-symbol-v0"
+          set +e
+          python3 tools/ci/linux-runtime-qemu-watch-v1.py \
+            --config tools/ci/linux-runtime-frontier-v1.json \
+            --nm "$ev/early/nm.txt" --image "$ev/early/Image.early" \
+            --evidence-dir "$ev/watch" --timeout-ms 8000 --poll-ms 100 \
+            | tee "$ev/watch.stdout.txt"
+          watch_rc=${PIPESTATUS[0]}
+          set -e
+          {
+            echo '## Linux Runtime PI Local Symbol V0'
+            echo
+            echo '```text'
+            cat "$ev/watch/frontier-summary.txt" || true
+            cat "$ev/timing.txt" || true
+            echo "WATCH_RC=$watch_rc"
+            echo '```'
+          } >>"$GITHUB_STEP_SUMMARY"
+          exit "$watch_rc"
+
+      - name: Preserve focused evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-runtime-pi-local-symbol-v0-${{ github.sha }}
+          path: |
+            build/linux-runtime-pi-local-symbol-v0/profile/patch.log
+            build/linux-runtime-pi-local-symbol-v0/profile/minic-profile.txt
+            build/linux-runtime-pi-local-symbol-v0/pi-local-symbol.i
+            build/linux-runtime-pi-local-symbol-v0/pi-local-symbol.s
+            build/linux-runtime-pi-local-symbol-v0/objects.sha256
+            build/linux-runtime-pi-local-symbol-v0/replay.trace
+            build/linux-runtime-pi-local-symbol-v0/timing.txt
+            build/linux-runtime-pi-local-symbol-v0/watch/frontier-result.json
+            build/linux-runtime-pi-local-symbol-v0/watch/frontier-summary.txt
+            build/linux-runtime-pi-local-symbol-v0/watch/watch-result.json
+            build/linux-runtime-pi-local-symbol-v0/watch/qemu.interrupts.txt
+          if-no-files-found: warn
+          retention-days: 7
+ "$ev/pi-local-symbol.s"
+            echo 'PI_LOCAL_SYMBOL_SYNTHETIC=PASS local=lla extern=lla policy=static-pcrel'
+          else
+            grep -E '^[[:space:]]+la[[:space:]]+t0,[[:space:]]*ext_symbol
+      - name: Replay only current frontier owners from frozen inputs
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          out="$GITHUB_WORKSPACE/build/linux-runtime-link-v1/out"
+          frozen="$GITHUB_WORKSPACE/build/linux-runtime-frozen-v1"
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-pi-local-symbol-v0"
+          build="$GITHUB_WORKSPACE/build/toolchain-runtime-pi-local-symbol-v0"
+          wrapper="$GITHUB_WORKSPACE/tests/external/linux/stage2_kbuild_cc.sh"
+          mapfile -t asm_args <"$frozen/asm-args.txt"
+          start=$(date +%s%N)
+          MINIC="$build/bin/minic" REAL_CC=/usr/bin/riscv64-linux-gnu-gcc \
+          MINIC_KEEP_INTERMEDIATES=1 MINIC_KBUILD_TRACE="$ev/replay.trace" \
+            "$wrapper" "${asm_args[@]}" -c -o "$out/lib/idr.o" "$frozen/lib__idr.i"
+          MINIC="$build/bin/minic" REAL_CC=/usr/bin/riscv64-linux-gnu-gcc \
+          MINIC_KEEP_INTERMEDIATES=1 MINIC_KBUILD_TRACE="$ev/replay.trace" \
+            "$wrapper" "${asm_args[@]}" -c -o "$out/lib/xarray.o" "$frozen/lib__xarray.i"
+          end=$(date +%s%N)
+          echo "TIMING replay_ms=$(((end-start)/1000000)) objects=2" | tee "$ev/timing.txt"
+          sha256sum "$out/lib/idr.o" "$out/lib/xarray.o" | tee "$ev/objects.sha256"
+
+      - name: Build exact early image with certified compact linker
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          out="$GITHUB_WORKSPACE/build/linux-runtime-link-v1/out"
+          frozen="$GITHUB_WORKSPACE/build/linux-runtime-frozen-v1"
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-pi-local-symbol-v0"
+          bash tools/ci/linux-early-runtime-link-v2.sh "$frozen/src" "$out" "$ev/early"
+          cat "$ev/early/timing.txt" >>"$ev/timing.txt"
+
+      - name: Execute until runtime oracle decides
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-pi-local-symbol-v0"
+          set +e
+          python3 tools/ci/linux-runtime-qemu-watch-v1.py \
+            --config tools/ci/linux-runtime-frontier-v1.json \
+            --nm "$ev/early/nm.txt" --image "$ev/early/Image.early" \
+            --evidence-dir "$ev/watch" --timeout-ms 8000 --poll-ms 100 \
+            | tee "$ev/watch.stdout.txt"
+          watch_rc=${PIPESTATUS[0]}
+          set -e
+          {
+            echo '## Linux Runtime PI Local Symbol V0'
+            echo
+            echo '```text'
+            cat "$ev/watch/frontier-summary.txt" || true
+            cat "$ev/timing.txt" || true
+            echo "WATCH_RC=$watch_rc"
+            echo '```'
+          } >>"$GITHUB_STEP_SUMMARY"
+          exit "$watch_rc"
+
+      - name: Preserve focused evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-runtime-pi-local-symbol-v0-${{ github.sha }}
+          path: |
+            build/linux-runtime-pi-local-symbol-v0/profile/patch.log
+            build/linux-runtime-pi-local-symbol-v0/profile/minic-profile.txt
+            build/linux-runtime-pi-local-symbol-v0/pi-local-symbol.i
+            build/linux-runtime-pi-local-symbol-v0/pi-local-symbol.s
+            build/linux-runtime-pi-local-symbol-v0/objects.sha256
+            build/linux-runtime-pi-local-symbol-v0/replay.trace
+            build/linux-runtime-pi-local-symbol-v0/timing.txt
+            build/linux-runtime-pi-local-symbol-v0/watch/frontier-result.json
+            build/linux-runtime-pi-local-symbol-v0/watch/frontier-summary.txt
+            build/linux-runtime-pi-local-symbol-v0/watch/watch-result.json
+            build/linux-runtime-pi-local-symbol-v0/watch/qemu.interrupts.txt
+          if-no-files-found: warn
+          retention-days: 7
+ "$ev/pi-local-symbol.s"
+            if grep -E '^[[:space:]]+lla[[:space:]]+t0,[[:space:]]*ext_symbol
+      - name: Replay only current frontier owners from frozen inputs
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          out="$GITHUB_WORKSPACE/build/linux-runtime-link-v1/out"
+          frozen="$GITHUB_WORKSPACE/build/linux-runtime-frozen-v1"
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-pi-local-symbol-v0"
+          build="$GITHUB_WORKSPACE/build/toolchain-runtime-pi-local-symbol-v0"
+          wrapper="$GITHUB_WORKSPACE/tests/external/linux/stage2_kbuild_cc.sh"
+          mapfile -t asm_args <"$frozen/asm-args.txt"
+          start=$(date +%s%N)
+          MINIC="$build/bin/minic" REAL_CC=/usr/bin/riscv64-linux-gnu-gcc \
+          MINIC_KEEP_INTERMEDIATES=1 MINIC_KBUILD_TRACE="$ev/replay.trace" \
+            "$wrapper" "${asm_args[@]}" -c -o "$out/lib/idr.o" "$frozen/lib__idr.i"
+          MINIC="$build/bin/minic" REAL_CC=/usr/bin/riscv64-linux-gnu-gcc \
+          MINIC_KEEP_INTERMEDIATES=1 MINIC_KBUILD_TRACE="$ev/replay.trace" \
+            "$wrapper" "${asm_args[@]}" -c -o "$out/lib/xarray.o" "$frozen/lib__xarray.i"
+          end=$(date +%s%N)
+          echo "TIMING replay_ms=$(((end-start)/1000000)) objects=2" | tee "$ev/timing.txt"
+          sha256sum "$out/lib/idr.o" "$out/lib/xarray.o" | tee "$ev/objects.sha256"
+
+      - name: Build exact early image with certified compact linker
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          out="$GITHUB_WORKSPACE/build/linux-runtime-link-v1/out"
+          frozen="$GITHUB_WORKSPACE/build/linux-runtime-frozen-v1"
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-pi-local-symbol-v0"
+          bash tools/ci/linux-early-runtime-link-v2.sh "$frozen/src" "$out" "$ev/early"
+          cat "$ev/early/timing.txt" >>"$ev/timing.txt"
+
+      - name: Execute until runtime oracle decides
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-pi-local-symbol-v0"
+          set +e
+          python3 tools/ci/linux-runtime-qemu-watch-v1.py \
+            --config tools/ci/linux-runtime-frontier-v1.json \
+            --nm "$ev/early/nm.txt" --image "$ev/early/Image.early" \
+            --evidence-dir "$ev/watch" --timeout-ms 8000 --poll-ms 100 \
+            | tee "$ev/watch.stdout.txt"
+          watch_rc=${PIPESTATUS[0]}
+          set -e
+          {
+            echo '## Linux Runtime PI Local Symbol V0'
+            echo
+            echo '```text'
+            cat "$ev/watch/frontier-summary.txt" || true
+            cat "$ev/timing.txt" || true
+            echo "WATCH_RC=$watch_rc"
+            echo '```'
+          } >>"$GITHUB_STEP_SUMMARY"
+          exit "$watch_rc"
+
+      - name: Preserve focused evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-runtime-pi-local-symbol-v0-${{ github.sha }}
+          path: |
+            build/linux-runtime-pi-local-symbol-v0/profile/patch.log
+            build/linux-runtime-pi-local-symbol-v0/profile/minic-profile.txt
+            build/linux-runtime-pi-local-symbol-v0/pi-local-symbol.i
+            build/linux-runtime-pi-local-symbol-v0/pi-local-symbol.s
+            build/linux-runtime-pi-local-symbol-v0/objects.sha256
+            build/linux-runtime-pi-local-symbol-v0/replay.trace
+            build/linux-runtime-pi-local-symbol-v0/timing.txt
+            build/linux-runtime-pi-local-symbol-v0/watch/frontier-result.json
+            build/linux-runtime-pi-local-symbol-v0/watch/frontier-summary.txt
+            build/linux-runtime-pi-local-symbol-v0/watch/watch-result.json
+            build/linux-runtime-pi-local-symbol-v0/watch/qemu.interrupts.txt
+          if-no-files-found: warn
+          retention-days: 7
+ "$ev/pi-local-symbol.s"; then
+              echo 'PI_LOCAL_SYMBOL_SYNTHETIC=FAIL extern unexpectedly lowered with lla under selective policy' >&2
+              exit 1
+            fi
+            echo 'PI_LOCAL_SYMBOL_SYNTHETIC=PASS local=lla extern=la policy=selective'
           fi
-          echo 'PI_LOCAL_SYMBOL_SYNTHETIC=PASS local=lla extern=la'
 
       - name: Replay only current frontier owners from frozen inputs
         shell: bash
