@@ -49,13 +49,30 @@ jobs:
           python3 - <<'PY'
           import json
           c=json.load(open('tools/ci/linux-runtime-frontier-v1.json'))
-          names=[m['name'] for m in c['progress_markers']]
+          markers=c['progress_markers']
+          names=[m['name'] for m in markers]
+          symbols={m['symbol']: i for i,m in enumerate(markers)}
           baseline=c['baseline']['progress_marker']
-          if baseline != 'fdt-path':
-              raise SystemExit(f'FAST_V5_CONTRACT=FAIL baseline={baseline}')
-          if names.index(baseline) >= names.index('start-kernel'):
-              raise SystemExit('FAST_V5_CONTRACT=FAIL frontier_not_early')
-          print('FAST_V5_CONTRACT=PASS baseline=fdt-path limit=start-kernel')
+          fault=c['baseline'].get('fault') or {}
+          cert=c['baseline'].get('certified_by') or {}
+          if baseline not in names:
+              raise SystemExit(f'FAST_V5_CONTRACT=FAIL baseline_missing={baseline}')
+          if not all(fault.get(k) for k in ('desc','symbol','offset')):
+              raise SystemExit('FAST_V5_CONTRACT=FAIL baseline_fault_incomplete')
+          if not cert.get('workflow_run') or not cert.get('commit'):
+              raise SystemExit('FAST_V5_CONTRACT=FAIL baseline_certification_incomplete')
+          base_i=names.index(baseline)
+          pass_symbols=c.get('pass_markers',{}).get('symbol_any',[])
+          later=[s for s in pass_symbols if s in symbols and symbols[s] > base_i]
+          if not later:
+              raise SystemExit(
+                  f'FAST_V5_CONTRACT=FAIL no_pass_marker_after_baseline baseline={baseline} '
+                  f'pass_symbols={pass_symbols}'
+              )
+          print(
+              f'FAST_V5_CONTRACT=PASS baseline={baseline} '
+              f'pass_after={",".join(later)}'
+          )
           PY
 
       - name: Install minimal cross and runtime prerequisites
