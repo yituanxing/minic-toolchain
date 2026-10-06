@@ -16,10 +16,6 @@ env:
   FROZEN_SIDECARS_RUN: "33237304382"
   FROZEN_CONFIG_GZ_SHA256: "8511a666382dda596a9ddba313113f77182d3156fed890a2ea9f2e86223226ff"
   C149_EXPORT_RUN: "33248985705"
-  FROZEN_NATIVE26_RUN: "33245348705"
-  FROZEN_NATIVE26_FILES_SHA256: "fdbdf1f8fbf4ddcb1af4ff689225780f12e0e243dec3b9540fc493e766b429f6"
-  FROZEN_NATIVE35_EXTRA9_RUN: "33247303056"
-  FROZEN_NATIVE35_SIDECARS_RUN: "33247303056"
 
 jobs:
   shard:
@@ -455,140 +451,181 @@ jobs:
 
   native35:
     if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[minias-gate-v1]')
-    concurrency:
-      group: minias-native35-${{ github.ref }}
-      cancel-in-progress: true
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 50
     steps:
       - uses: actions/checkout@v4
-
-      - name: Build MiniAS
-        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/minias-native35-toolchain all
-
-      - name: Run MiniAS micro gate
-        run: make MODE=release CFLAGS=-Werror BUILD_DIR=build/minias-native35-toolchain check-minias-a0
-
-      - name: Download frozen native26 inputs
-        uses: actions/download-artifact@v4
         with:
-          name: minias-a0-native26-progress
-          path: build/import-native26
-          repository: ${{ github.repository }}
-          run-id: ${{ env.FROZEN_NATIVE26_RUN }}
-          github-token: ${{ github.token }}
+          ref: ${{ github.sha }}
 
-      - name: Verify and materialize frozen native26 inputs
+      - name: Install exact Linux RISC-V build dependencies
         shell: bash
         run: |
           set -Eeuo pipefail
-          import=build/import-native26
-          root=build/minias-native35-inputs
-          rm -rf "$root" build/linux-native35-out
-          mkdir -p "$root" build/linux-native35-out
-          test -d "$import/minias-native26-inputs"
-          cp -a "$import/minias-native26-inputs/." "$root/"
-          count=$(find "$root" -type f -name '*.s' | wc -l)
-          test "$count" -eq 26
+          sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 update
+          sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 install -y --no-install-recommends \
+            gcc-riscv64-linux-gnu libc6-dev-riscv64-cross flex bison bc libelf-dev libssl-dev dwarves
 
-          (
-            cd "$root"
-            find . -type f -name '*.s' -print0 |
-              LC_ALL=C sort -z |
-              xargs -0 sha256sum > ../native26-files.sha256
-          )
-          actual=$(sha256sum build/native26-files.sha256 | cut -d' ' -f1)
-          test "$actual" = "$FROZEN_NATIVE26_FILES_SHA256"
-          echo "MINIAS_NATIVE35_BASE26=PASS selected=26 files_sha256=$actual"
-
-      - name: Download ground-truth native35 extra9
-        uses: actions/download-artifact@v4
-        with:
-          name: minias-native35-extra9-v1
-          path: build/import-native35-extra9
-          repository: ${{ github.repository }}
-          run-id: ${{ env.FROZEN_NATIVE35_EXTRA9_RUN }}
-          github-token: ${{ github.token }}
-
-      - name: Verify and merge ground-truth extra9
+      - name: Rebuild deterministic Linux 6.6.143 native35 fixture
         shell: bash
+        env:
+          LINUX_VERSION: "6.6.143"
+          LINUX_ARCHIVE_SHA256: "dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932"
         run: |
           set -Eeuo pipefail
-          import=build/import-native35-extra9
-          root=build/minias-native35-inputs
-          test "$(find "$import" -type f -name '*.s' | wc -l)" -eq 9
-          while IFS= read -r -d '' src; do
-            rel=${src#"$import"/}
-            test ! -e "$root/$rel"
-            mkdir -p "$root/$(dirname "$rel")"
-            cp "$src" "$root/$rel"
-          done < <(find "$import" -type f -name '*.s' -print0 | LC_ALL=C sort -z)
-          test "$(find "$root" -type f -name '*.s' | wc -l)" -eq 35
-          (
-            cd "$import"
-            find . -type f -name '*.s' -print0 |
-              LC_ALL=C sort -z |
-              xargs -0 sha256sum > ../native35-extra9-files.sha256
+          src="$GITHUB_WORKSPACE/build/minias-native35-linux-src"
+          out="$GITHUB_WORKSPACE/build/minias-native35-linux-out"
+          archive="$GITHUB_WORKSPACE/build/linux-${LINUX_VERSION}.tar.xz"
+          mkdir -p build
+          curl --http1.1 --retry 5 --retry-all-errors --retry-delay 2 -fsSL \
+            "https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-${LINUX_VERSION}.tar.xz" -o "$archive"
+          echo "${LINUX_ARCHIVE_SHA256}  $archive" | sha256sum -c -
+          rm -rf "$src" "$out" build/minias-native35-inputs
+          mkdir -p "$src" "$out" build/minias-native35-inputs
+          tar -xJf "$archive" -C "$src" --strip-components=1
+          make -s -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- defconfig
+          make -s -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- -j4
+          test -s "$out/vmlinux"
+
+          python3 - <<'PY'
+          from pathlib import Path, PurePosixPath
+          import hashlib, json, re, shlex, subprocess
+
+          out = Path("build/minias-native35-linux-out").resolve()
+          fixture = Path("build/minias-native35-inputs").resolve()
+          fixture.mkdir(parents=True, exist_ok=True)
+          output_re = re.compile(r"(?:^|\s)-o\s+([^\s;]+\.o)(?=\s|;|$)")
+          source_re = re.compile(r"(?:^|\s)([^\s;]+\.S)(?=\s|;|$)")
+
+          rows = {}
+          for cmdfile in out.rglob(".*.cmd"):
+              try:
+                  lines = cmdfile.read_text(errors="replace").splitlines()
+              except OSError:
+                  continue
+              for raw in lines:
+                  if ":=" not in raw or " -c " not in f" {raw} ":
+                      continue
+                  objects = output_re.findall(raw)
+                  sources = source_re.findall(raw)
+                  if not objects or not sources:
+                      continue
+                  raw_obj = objects[-1].strip("'\"")
+                  obj = Path(raw_obj)
+                  if obj.is_absolute():
+                      try:
+                          rel_obj = obj.resolve().relative_to(out)
+                      except ValueError:
+                          continue
+                  else:
+                      rel_obj = obj
+                  rel = PurePosixPath(rel_obj.as_posix()).as_posix()
+                  if rel.startswith(("scripts/", "tools/")) or "/scripts/" in rel:
+                      continue
+                  rows[rel] = {
+                      "source": sources[-1].strip("'\""),
+                      "cmdfile": cmdfile.relative_to(out).as_posix(),
+                  }
+
+          if len(rows) != 35:
+              raise SystemExit(f"expected 35 native .S compile rules, got {len(rows)}")
+
+          def normalize_output(token: str) -> str:
+              path = Path(token.strip("'\""))
+              if path.is_absolute():
+                  try:
+                      return path.resolve().relative_to(out).as_posix()
+                  except ValueError:
+                      return ""
+              return path.as_posix()
+
+          def exact_command(obj: str, cmdfile: str) -> list[str]:
+              path = out / cmdfile
+              matches = []
+              for raw in path.read_text(errors="replace").splitlines():
+                  if ":=" not in raw or " -c " not in f" {raw} ":
+                      continue
+                  command = raw.split(":=", 1)[1].strip()
+                  try:
+                      tokens = shlex.split(command, posix=True)
+                  except ValueError:
+                      continue
+                  for i, token in enumerate(tokens[:-1]):
+                      if token == "-o" and normalize_output(tokens[i + 1]) == obj:
+                          matches.append(tokens)
+                          break
+              if len(matches) != 1:
+                  raise RuntimeError(f"expected one exact compile command for {obj}, got {len(matches)}")
+              return matches[0]
+
+          manifest = []
+          for index, (obj, meta) in enumerate(sorted(rows.items())):
+              tokens = exact_command(obj, meta["cmdfile"])
+              compile_index = tokens.index("-c")
+              output_index = tokens.index("-o")
+              rel_s = obj[:-2] + ".s"
+              target = fixture / rel_s
+              target.parent.mkdir(parents=True, exist_ok=True)
+              tokens[compile_index] = "-E"
+              tokens[output_index + 1] = str(target)
+              proc = subprocess.run(
+                  tokens,
+                  cwd=out,
+                  stdout=subprocess.DEVNULL,
+                  stderr=subprocess.PIPE,
+                  text=True,
+                  errors="replace",
+              )
+              if proc.returncode != 0 or not target.is_file() or target.stat().st_size == 0:
+                  raise RuntimeError(
+                      f"native preprocess failed obj={obj} rc={proc.returncode}: " + proc.stderr[-2000:]
+                  )
+              digest = hashlib.sha256(target.read_bytes()).hexdigest()
+              manifest.append({
+                  "index": index,
+                  "object": obj,
+                  "source": meta["source"],
+                  "assembly": rel_s,
+                  "sha256": digest,
+              })
+
+          (fixture / "manifest.json").write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
+          (fixture / "SHA256SUMS").write_text(
+              "".join(f"{row['sha256']}  {row['assembly']}\n" for row in manifest)
           )
-          echo "MINIAS_NATIVE35_EXTRA9=PASS selected=9 digest=$(sha256sum build/native35-extra9-files.sha256 | cut -d' ' -f1)"
-          echo "MINIAS_NATIVE35_INPUTS=PASS selected=35"
+          print(f"MINIAS_NATIVE35_FIXTURE=PASS selected={len(manifest)} source=linux-6.6.143-riscv-defconfig")
+          PY
 
-      - name: Download frozen native35 incbin sidecars
-        uses: actions/download-artifact@v4
-        with:
-          name: minias-native26-sidecars-v1
-          path: build/import-native35-sidecars
-          repository: ${{ github.repository }}
-          run-id: ${{ env.FROZEN_NATIVE35_SIDECARS_RUN }}
-          github-token: ${{ github.token }}
-
-      - name: Verify and materialize native35 incbin sidecars
-        shell: bash
+      - name: Build exact MiniAS
         run: |
-          set -Eeuo pipefail
-          import=build/import-native35-sidecars
-          target=build/linux-native35-out
-          test -s "$import/SHA256SUMS"
-          (
-            cd "$import"
-            sha256sum -c SHA256SUMS
-          )
-          sidecars=(
-            arch/riscv/kernel/vdso/vdso.so
-            arch/riscv/kernel/compat_vdso/compat_vdso.so
-            arch/riscv/purgatory/purgatory.ro
-            usr/initramfs_inc_data
-          )
-          for rel in "${sidecars[@]}"; do
-            test -s "$import/$rel"
-            mkdir -p "$target/$(dirname "$rel")"
-            cp "$import/$rel" "$target/$rel"
-          done
-          echo "MINIAS_NATIVE35_SIDECARS=PASS count=4"
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/minias-native35-toolchain all
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/minias-native35-toolchain check-minias-a0
 
-      - name: Assemble native35 and classify
+      - name: Assemble regenerated native35 and require 35 of 35
         shell: bash
         run: |
           set -Eeuo pipefail
           python3 - <<'PY'
           from pathlib import Path
           from collections import Counter
-          import re, subprocess
+          import json, re, subprocess
 
           workspace = Path.cwd().resolve()
           minias = workspace / "build/minias-native35-toolchain/bin/minic-as"
           input_root = workspace / "build/minias-native35-inputs"
-          linux_out = workspace / "build/linux-native35-out"
+          linux_out = workspace / "build/minias-native35-linux-out"
           result_root = workspace / "build/minias-native35-results"
           result_root.mkdir(parents=True, exist_ok=True)
-          files = sorted(input_root.rglob("*.s"))
-          if len(files) != 35:
-              raise SystemExit(f"expected 35 native inputs, got {len(files)}")
+
+          manifest = json.loads((input_root / "manifest.json").read_text())
+          if len(manifest) != 35:
+              raise SystemExit(f"expected 35 native inputs, got {len(manifest)}")
 
           results = []
           blockers = Counter()
-          for inp in files:
-              rel = inp.relative_to(input_root).as_posix()
+          for row in manifest:
+              rel = row["assembly"]
+              inp = input_root / rel
               obj = result_root / (rel[:-2] + ".o")
               err = result_root / (rel[:-2] + ".err")
               obj.parent.mkdir(parents=True, exist_ok=True)
@@ -614,47 +651,45 @@ jobs:
                   ok = check.returncode == 0 and "RISC-V" in check.stdout and "REL (Relocatable file)" in check.stdout
               if ok:
                   results.append(("PASS", rel, "-"))
-                  continue
-              raw = next((line.strip() for line in proc.stderr.splitlines() if line.strip()), "internal:no-diagnostic")
-              blocker = re.sub(r"^minic-as:\s*", "", raw)
-              blocker = re.sub(r":line=[0-9]+$", "", blocker)
-              blockers[blocker] += 1
-              results.append(("FAIL", rel, blocker))
+              else:
+                  raw = next((line.strip() for line in proc.stderr.splitlines() if line.strip()), "internal:no-diagnostic")
+                  blocker = re.sub(r"^minic-as:\s*", "", raw)
+                  blocker = re.sub(r":line=[0-9]+$", "", blocker)
+                  blockers[blocker] += 1
+                  results.append(("FAIL", rel, blocker))
 
           (result_root / "results.tsv").write_text(
               "".join(f"{status}\t{path}\t{blocker}\n" for status, path, blocker in results)
           )
           pass_count = sum(status == "PASS" for status, _, _ in results)
           fail_count = len(results) - pass_count
-          lines = [
+          summary = [
               f"MINIAS_NATIVE35_SUMMARY pass={pass_count} fail={fail_count} total={len(results)}",
               "MINIAS_NATIVE35_TOP_BLOCKERS",
           ]
-          lines.extend(
+          summary.extend(
               [f"  {count:5d} {blocker}" for blocker, count in blockers.most_common()]
               or ["  none"]
           )
-          lines.append("MINIAS_NATIVE35_FILES")
-          lines.extend(f"{status}\t{path}\t{blocker}" for status, path, blocker in results)
-          summary = "\n".join(lines) + "\n"
-          (result_root / "summary.txt").write_text(summary)
-          print(summary, end="")
-          if pass_count != 35:
+          text = "\n".join(summary) + "\n"
+          (result_root / "summary.txt").write_text(text)
+          print(text, end="")
+          if pass_count != 35 or fail_count != 0:
               raise SystemExit(1)
           PY
 
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: minias-a0-native35-progress
+          name: minias-a0-gate-v1-native35
           path: |
-            build/minias-native35-inputs/**/*.s
+            build/minias-native35-inputs/manifest.json
+            build/minias-native35-inputs/SHA256SUMS
             build/minias-native35-results/results.tsv
             build/minias-native35-results/summary.txt
             build/minias-native35-results/**/*.err
           retention-days: 30
           if-no-files-found: warn
-
 
   gate3536:
     if: always() && (github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[minias-gate-v1]'))
