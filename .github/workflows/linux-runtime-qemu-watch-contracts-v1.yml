@@ -230,11 +230,16 @@ jobs:
           src=Path('tools/ci/linux-runtime-frontier-v1.json')
           dst=Path('build/linux-runtime-qemu-watch-inconclusive-v1/mismatch.json')
           c=json.loads(src.read_text())
+          progress_marker=c['baseline'].get('progress_marker')
+          if not progress_marker:
+              raise SystemExit('WATCH_CONSERVATIVE=FAIL missing baseline progress_marker')
           c['baseline']['fault']={'desc':'fault_load','symbol':'__watch_deliberate_mismatch__','offset':'0x0'}
-          # Keep the same fdt-path rank so the real strlen fault is deliberately
-          # inconclusive rather than classified as moved-later or regressed.
-          assert c['baseline']['progress_marker']=='fdt-path'
+          # Preserve whatever stage is currently certified.  The contract is
+          # same-stage unknown fault => INCONCLUSIVE; it must not hard-code a
+          # historical frontier marker such as fdt-path.
+          assert c['baseline']['progress_marker']==progress_marker
           dst.write_text(json.dumps(c, indent=2, sort_keys=True)+'\n')
+          print(f'WATCH_MISMATCH_BASELINE progress_marker={progress_marker}')
           PY
 
       - name: Prove unknown same-stage fault does not stop the watcher early
