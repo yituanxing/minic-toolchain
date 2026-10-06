@@ -9,4 +9,4 @@ It now certifies two independent equivalence contracts in one run:
 
 The V1 comparison intentionally runs after V2 because V1 rebuilds the thin `lib/lib.a` archive while V2 proves it can link without mutating that archive.
 
-The historical `linux-early-runtime-link-shadow-v2.yml` remains active until this augmented fixture certification completes successfully in the canonical `agent/linux-expanded-kbuild-v0` cache scope.
+Canonical certification run `37466316241` on `agent/linux-expanded-kbuild-v0` completed SUCCESS. It independently passed frozen/oracle verification, compact fixture construction, compact V2 link, full V2 link, exact compact/full equivalence, legacy V1 link after V2, exact V2/V1 equivalence, compact runtime frontier classification, cache save, and evidence upload. Therefore `linux-early-runtime-link-shadow-v2.yml` is superseded and may be archived without deleting its YAML history.
