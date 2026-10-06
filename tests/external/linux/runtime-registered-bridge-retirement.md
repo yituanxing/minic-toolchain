@@ -1,10 +1,10 @@
 # Registered spinlock bridge retirement
 
-This cleanup retires the historical registered-path runtime bridge stored under the stale filename `.github/workflows/linux-6.6.143-discovery.yml`.
+This cleanup retires the historical registered-path runtime bridge that, before retirement, was stored under the stale active filename `.github/workflows/linux-6.6.143-discovery.yml`.
 
-## Why the filename no longer describes the workflow
+## Why the active filename no longer described the workflow
 
-The file originally served Linux discovery work, but on 2026-09-23 it was repurposed as a temporary GitHub Actions registration bridge. Its current workflow name is `Linux Runtime Spinlock Registered Bridge V0`, and its only push path is `tools/ci/runtime-mm-core-trigger.txt`.
+The active file originally served Linux discovery work, but on 2026-09-23 it was repurposed as a temporary GitHub Actions registration bridge. Its workflow name at retirement time was `Linux Runtime Spinlock Registered Bridge V0`, and its only push path was `tools/ci/runtime-mm-core-trigger.txt`.
 
 The bridge rebuilds the runtime MiniC profile, refreshes the PI/SATP/setup/scheduler/IRQ/spinlock owner set, verifies the SATP CSR window, relinks the early image, and executes the current runtime frontier. A later revision also refreshes `kernel/sched/build_utility.o` to diagnose the historical `calc_global_load` frontier.
 
@@ -48,12 +48,20 @@ The registered bridge's additional `kernel/sched/build_utility.o` refresh is not
 - `linux-runtime-first-die-context-v0.yml`
 - `linux-runtime-owner-focused-v1.yml`
 - `linux-runtime-spinlock-first-context-v0.yml`
-- `linux-runtime-get-current-owner-v0.yml`
+
+## Archive-path collision correction
+
+Before this retirement, `.github/workflows-disabled/linux-6.6.143-discovery.yml` already contained the original historical `Linux 6.6.143 Discovery` workflow. Reusing that disabled path for the registered bridge would overwrite the current-tree archive copy of the discovery workflow.
+
+The retirement therefore preserves the two historical YAML blobs separately:
+
+- original discovery workflow: `.github/workflows-disabled/linux-6.6.143-discovery.yml`
+- repurposed registered bridge: `.github/workflows-disabled/linux-runtime-spinlock-registered-bridge-v0.yml`
+
+Both files are preserved byte-for-byte from their respective pre-retirement versions. The active stale-path bridge remains removed from `.github/workflows/`.
 
 ## Retirement decision
 
-`.github/workflows/linux-6.6.143-discovery.yml` is preserved byte-for-byte under `.github/workflows-disabled/linux-6.6.143-discovery.yml` and removed from the active Actions set.
-
-The maintained `.github/workflows/linux-runtime-mm-core-frontier-v0.yml` remains active as the registered init-IRQ/mm-core runtime bridge.
+The registered bridge is retired from the active Actions set and preserved under the unique disabled filename above. The maintained `.github/workflows/linux-runtime-mm-core-frontier-v0.yml` remains active as the init-IRQ/mm-core runtime bridge.
 
 No compiler source, runtime implementation, historical YAML, commits, workflow runs, or uploaded evidence are deleted by this change.

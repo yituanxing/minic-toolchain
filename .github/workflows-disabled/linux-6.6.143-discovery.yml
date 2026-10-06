@@ -1,200 +1,123 @@
-name: Linux Runtime Spinlock Registered Bridge V0
+name: Linux 6.6.143 Discovery
 
 on:
   push:
-    branches: ["agent/linux-expanded-kbuild-v0"]
-    paths:
-      - "tools/ci/runtime-mm-core-trigger.txt"
+    branches: [external/linux-6.6.143-discovery-v2]
+  pull_request:
+    branches: [external/lua-discovery, main]
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: linux-runtime-spinlock-registered-${{ github.ref }}
+  group: linux-6.6.143-discovery-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
-  spinlock-frontier:
+  linux-frontier:
+    name: riscv-defconfig-init-main
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    env:
+      DEBIAN_FRONTEND: noninteractive
     steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.sha }}
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - name: Restore certified full linked fixture
+      - name: Restore pinned Linux source archive
+        id: linux-source-cache
         uses: actions/cache/restore@v4
         with:
-          path: build/linux-expanded-kbuild-v0/out
-          key: linux-expanded-mixed-v1-6.6.143-Linux-d30569a4c675f6ac72d9f63c28f0b8745317f7a15c0799d10768f916d74b3a88
-          fail-on-cache-miss: true
+          path: build/linux-cache/linux-6.6.143.tar.xz
+          key: linux-source-6.6.143-dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932
 
-      - name: Restore pinned Linux source
-        uses: actions/cache/restore@v4
-        with:
-          path: build/linux-expanded-kbuild-v0/linux-6.6.143
-          key: linux-source-6.6.143-dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932-v1
-          fail-on-cache-miss: true
-
-      - name: Restore certified frozen linker source subset
-        uses: actions/cache/restore@v4
-        with:
-          path: build/linux-runtime-frozen-v1
-          key: linux-runtime-frozen-v1-6.6.143-e538a6ad42ec49c5a667cab5de9bb943f82ca702ff2b7749a020e38ff7ddaea7
-          fail-on-cache-miss: true
-
-      - name: Install focused prerequisites
+      - name: Build committed MiniC source
         shell: bash
         run: |
           set -Eeuo pipefail
-          sudo apt-get -o Acquire::Retries=2 install -y --no-install-recommends \
-            gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu qemu-system-misc opensbi python3 make \
-            || { sudo apt-get -o Acquire::Retries=3 update; sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu qemu-system-misc opensbi python3 make; }
+          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh check
+          git diff --exit-code -- include src tools/minic
+          make -j4 MODE=release BUILD_DIR=build/linux-compiler
 
-      - name: Build exact Linux runtime MiniC profile
+      - name: Verify Linux-specific focused semantics
         shell: bash
         run: |
           set -Eeuo pipefail
-          ev="$GITHUB_WORKSPACE/build/linux-runtime-spinlock-registered-v0"
-          build="$GITHUB_WORKSPACE/build/toolchain-runtime-spinlock-registered-v0"
-          mkdir -p "$ev"
-          bash tools/ci/linux-runtime-build-minic-profile-v1.sh "$build" "$ev/profile"
-          grep -F 'MINIC_INLINE_ASM_LOCAL_INTEGER_FACTS_V0=APPLIED' "$ev/profile/patch.log"
-          grep -F 'MINIC_INLINE_ASM_RK_CAST_TAIL_V0=APPLIED' "$ev/profile/patch.log"
-          grep -F 'MINIC_RISCV64_PI_LOCAL_SYMBOL_ADDRESS_V0=APPLIED' "$ev/profile/patch.log"
+          MINIC="$GITHUB_WORKSPACE/build/linux-compiler/bin/minic" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/linux-focused" \
+          HOST_CC=cc \
+            sh tests/compiler/c0/run-foundation-focused.sh
 
-      - name: Refresh certified and current frontier owners with current MiniC
+      - name: Install RISC-V Linux Kbuild dependencies
         shell: bash
         run: |
           set -Eeuo pipefail
-          work="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0"
-          src="$work/linux-6.6.143"
-          out="$work/out"
-          ev="$GITHUB_WORKSPACE/build/linux-runtime-spinlock-registered-v0"
-          build="$GITHUB_WORKSPACE/build/toolchain-runtime-spinlock-registered-v0"
-          wrapper="$GITHUB_WORKSPACE/tests/external/linux/stage2_kbuild_cc.sh"
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
+            flex bison bc libelf-dev libssl-dev
 
-          pi_target=arch/riscv/kernel/pi/cmdline_early.pi.o
-          pi_base=arch/riscv/kernel/pi/cmdline_early
-          rm -f "$out/$pi_base.o" "$out/$pi_target" \
-            "$out/arch/riscv/kernel/pi/.cmdline_early.o.cmd" \
-            "$out/arch/riscv/kernel/pi/.cmdline_early.pi.o.cmd" \
-            "$out/$pi_base.minic-stage2.i" "$out/$pi_base.minic-stage2.s"
-          MINIC="$build/bin/minic" REAL_CC=/usr/bin/riscv64-linux-gnu-gcc MINIC_KEEP_INTERMEDIATES=1 \
-            make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- CC="$wrapper" -j2 V=1 "$pi_target" \
-            >"$ev/pi-owner-refresh.log" 2>&1
-          test -s "$out/$pi_target"
-          test -s "$out/$pi_base.minic-stage2.s"
-          grep -E '^[[:space:]]+lla[[:space:]]+[^,]+,[[:space:]]*\.Lminic_string_' "$out/$pi_base.minic-stage2.s" >/dev/null
-          echo 'PI_OWNER_REFRESH=PASS local_string=lla'
-
-          refresh_obj() {
-            target="$1"
-            base="${target%.o}"
-            dir="${target%/*}"
-            stem="${target##*/}"
-            stem="${stem%.o}"
-            log="$2"
-            rm -f "$out/$target" "$out/$dir/.${stem}.o.cmd" \
-              "$out/$base.minic-stage2.i" "$out/$base.minic-stage2.s"
-            MINIC="$build/bin/minic" REAL_CC=/usr/bin/riscv64-linux-gnu-gcc MINIC_KEEP_INTERMEDIATES=1 \
-              make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- CC="$wrapper" -j2 V=1 "$target" \
-              >"$ev/$log" 2>&1
-            test -s "$out/$target"
-            echo "OWNER_REFRESH=PASS target=$target"
-          }
-
-          refresh_obj arch/riscv/mm/init.o init-refresh.log
-          riscv64-linux-gnu-objdump -dr "$out/arch/riscv/mm/init.o" >"$ev/init.objdump.txt"
-          refresh_obj arch/riscv/kernel/setup.o setup-refresh.log
-          refresh_obj kernel/sched/core.o sched-core-refresh.log
-          refresh_obj arch/riscv/kernel/irq.o irq-refresh.log
-          refresh_obj kernel/locking/spinlock.o spinlock-refresh.log
-          refresh_obj kernel/locking/spinlock_debug.o spinlock_debug-refresh.log
-          refresh_obj kernel/sched/build_utility.o build_utility-refresh.log
-
-          for stem in spinlock spinlock_debug; do
-            riscv64-linux-gnu-objdump -dr "$out/kernel/locking/${stem}.o" >"$ev/${stem}.objdump.txt"
-            riscv64-linux-gnu-nm -an "$out/kernel/locking/${stem}.o" >"$ev/${stem}.nm.txt"
-          done
-          riscv64-linux-gnu-objdump -dr "$out/kernel/sched/build_utility.o" >"$ev/build_utility.objdump.txt"
-          riscv64-linux-gnu-nm -an "$out/kernel/sched/build_utility.o" >"$ev/build_utility.nm.txt"
-          {
-            echo '=== spinlock.o ==='
-            grep -E '[[:space:]]arch_spin_lock$|<arch_spin_lock>:' "$ev/spinlock.nm.txt" "$ev/spinlock.objdump.txt" || true
-            echo '=== spinlock_debug.o ==='
-            grep -E '[[:space:]]arch_spin_lock$|<arch_spin_lock>:' "$ev/spinlock_debug.nm.txt" "$ev/spinlock_debug.objdump.txt" || true
-            echo '=== build_utility.o ==='
-            grep -E '[[:space:]]calc_global_load$|<calc_global_load>:' "$ev/build_utility.nm.txt" "$ev/build_utility.objdump.txt" || true
-          } | tee "$ev/frontier-owner.txt"
-
-      - name: Verify SATP critical CSR window
+      - name: Drive MiniC with Linux 6.6.143 RISC-V defconfig
         shell: bash
         run: |
-          set -Eeuo pipefail
-          python3 - <<'PY'
-          import re
-          from pathlib import Path
-          p = Path('build/linux-runtime-spinlock-registered-v0/init.objdump.txt')
-          text = p.read_text(errors='replace').splitlines()
-          start = next(i for i,l in enumerate(text) if '<set_satp_mode>:' in l)
-          end = len(text)
-          for i in range(start + 1, len(text)):
-              m = re.match(r'^([0-9a-f]+) <([^>]+)>:$', text[i].strip())
-              if m and not m.group(2).startswith('.L'):
-                  end = i
-                  break
-          body = text[start:end]
-          first = next(i for i,l in enumerate(body) if re.search(r'\bcsrw\s+satp\b', l))
-          second = next(i for i,l in enumerate(body[first+1:], first+1) if re.search(r'\bcsrrwi?\b.*\bsatp\b', l))
-          window = body[first+1:second]
-          stack_mem = [l for l in window if re.search(r'\b(?:lb|lbu|lh|lhu|lw|lwu|ld|sb|sh|sw|sd)\b[^\n]*\(sp\)', l)]
-          print(f'SATP_INTER_CSR_STACK_MEM={len(stack_mem)}')
-          if stack_mem:
-              print('\n'.join(stack_mem))
-              raise SystemExit(1)
-          print('SATP_WINDOW=PASS')
-          PY
-
-      - name: Relink early image
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          work="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0"
-          frozen="$GITHUB_WORKSPACE/build/linux-runtime-frozen-v1"
-          ev="$GITHUB_WORKSPACE/build/linux-runtime-spinlock-registered-v0"
-          bash tools/ci/linux-early-runtime-link-v2.sh "$frozen/src" "$work/out" "$ev/early"
-
-      - name: Execute QEMU current frontier
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          ev="$GITHUB_WORKSPACE/build/linux-runtime-spinlock-registered-v0"
           set +e
-          python3 tools/ci/linux-runtime-qemu-watch-v1.py \
-            --config tools/ci/linux-runtime-init-irq-frontier-v0.json \
-            --nm "$ev/early/nm.txt" --image "$ev/early/Image.early" \
-            --evidence-dir "$ev/watch" --timeout-ms 8000 --poll-ms 100 | tee "$ev/watch.stdout.txt"
-          rc=${PIPESTATUS[0]}
+          MINIC="$GITHUB_WORKSPACE/build/linux-compiler/bin/minic" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/linux-discovery" \
+          LINUX_ARCHIVE_CACHE="$GITHUB_WORKSPACE/build/linux-cache/linux-6.6.143.tar.xz" \
+          CROSS_COMPILE=riscv64-linux-gnu- \
+            sh tests/external/linux/probe.sh
+          status=$?
           set -e
-          cat "$ev/watch/frontier-summary.txt" || true
-          exit "$rc"
+          exit "$status"
 
-      - name: Preserve focused evidence
+      - name: Prepare compact Linux frontier diagnostics
+        if: always()
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-discovery"
+          summary="$work/frontier-summary.txt"
+          mkdir -p "$work"
+          : > "$summary"
+          if test -s "$work/kbuild/init/main.i"; then
+            printf '%s\n' "total_lines=$(wc -l < "$work/kbuild/init/main.i" | tr -d ' ')" >> "$summary"
+            printf '%s\n' "total_bytes=$(wc -c < "$work/kbuild/init/main.i" | tr -d ' ')" >> "$summary"
+          fi
+          if test -s "$work/minic.stderr"; then
+            frontier_line=$(sed -n 's/.*init\/main\.i:\([0-9][0-9]*\):.*/\1/p' "$work/minic.stderr" | head -n 1)
+            printf '%s\n' "frontier_line=${frontier_line:-unknown}" >> "$summary"
+            printf '%s\n' 'MiniC diagnostic:' >> "$summary"
+            sed -n '1,80p' "$work/minic.stderr" >> "$summary"
+            if test -n "${frontier_line:-}" && test -s "$work/kbuild/init/main.i"; then
+              start=$((frontier_line > 10 ? frontier_line - 10 : 1))
+              end=$((frontier_line + 10))
+              printf '\n%s\n' "init/main.i lines=$start-$end:" >> "$summary"
+              nl -ba "$work/kbuild/init/main.i" | sed -n "${start},${end}p" >> "$summary"
+            fi
+          else
+            printf '%s\n' 'No MiniC diagnostic; Linux probe may have passed or failed before MiniC.' >> "$summary"
+          fi
+          if test -s "$work/main-i-inventory.txt"; then
+            printf '\n%s\n' 'Full-TU feature inventory:' >> "$summary"
+            cat "$work/main-i-inventory.txt" >> "$summary"
+          fi
+          cat "$summary"
+
+      - name: Upload Linux frontier and full translation unit
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: linux-runtime-spinlock-registered-v0-${{ github.sha }}
+          name: linux-frontier-${{ github.run_id }}
           path: |
-            build/linux-runtime-spinlock-registered-v0/profile/patch.log
-            build/linux-runtime-spinlock-registered-v0/*-refresh.log
-            build/linux-runtime-spinlock-registered-v0/*.objdump.txt
-            build/linux-runtime-spinlock-registered-v0/*.nm.txt
-            build/linux-runtime-spinlock-registered-v0/frontier-owner.txt
-            build/linux-runtime-spinlock-registered-v0/watch/frontier-result.json
-            build/linux-runtime-spinlock-registered-v0/watch/frontier-summary.txt
-            build/linux-runtime-spinlock-registered-v0/watch/watch-result.json
-            build/linux-runtime-spinlock-registered-v0/watch/qemu.interrupts.txt
-          if-no-files-found: warn
+            build/linux-discovery/frontier-summary.txt
+            build/linux-discovery/main-i-inventory.txt
+            build/linux-discovery/kbuild/init/main.i
+          if-no-files-found: ignore
           retention-days: 7
+
+      - name: Save pinned Linux source archive
+        if: always() && steps.linux-source-cache.outputs.cache-hit != 'true' && hashFiles('build/linux-cache/linux-6.6.143.tar.xz') != ''
+        uses: actions/cache/save@v4
+        with:
+          path: build/linux-cache/linux-6.6.143.tar.xz
+          key: linux-source-6.6.143-dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932
