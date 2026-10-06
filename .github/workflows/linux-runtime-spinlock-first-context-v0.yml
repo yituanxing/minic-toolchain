@@ -127,6 +127,9 @@ jobs:
           evidence.write_text(text)
           print("SPINLOCK_FIRST_CONTEXT_INSTRUMENT=APPLIED")
           PY
+          grep -F 'minic_spin_diag_bad_magic' "$src/kernel/locking/spinlock_debug.c"
+          grep -F 'minic_spin_diag_recursion' "$src/kernel/locking/spinlock_debug.c"
+          grep -F 'minic_spin_diag_cpu_recursion' "$src/kernel/locking/spinlock_debug.c"
 
       - name: Refresh runtime owners with current MiniC
         shell: bash
@@ -162,6 +165,11 @@ jobs:
           refresh_obj arch/riscv/kernel/irq.o irq-refresh.log
           refresh_obj kernel/locking/spinlock.o spinlock-refresh.log
           refresh_obj kernel/locking/spinlock_debug.o spinlock_debug-refresh.log
+          riscv64-linux-gnu-nm -an "$out/kernel/locking/spinlock_debug.o" >"$ev/spinlock_debug.nm.txt"
+          riscv64-linux-gnu-objdump -dr "$out/kernel/locking/spinlock_debug.o" >"$ev/spinlock_debug.objdump.txt"
+          cp "$out/kernel/locking/spinlock_debug.minic-stage2.s" "$ev/spinlock_debug.minic-stage2.s"
+          grep -n -E 'minic_spin_diag_(bad_magic|recursion|cpu_recursion)|debug_spin_lock_before|do_raw_spin_lock' "$ev/spinlock_debug.nm.txt" "$ev/spinlock_debug.objdump.txt" >"$ev/spinlock_diag.symbols.txt" || true
+          cat "$ev/spinlock_diag.symbols.txt" || true
           refresh_obj kernel/sched/build_utility.o build_utility-refresh.log
           refresh_obj kernel/time/timekeeping.o timekeeping-refresh.log
           refresh_obj kernel/time/vsyscall.o vsyscall-refresh.log
@@ -292,6 +300,10 @@ jobs:
             build/linux-runtime-spinlock-first-context-v0/profile/patch.log
             build/linux-runtime-spinlock-first-context-v0/spinlock_debug.diag.c
             build/linux-runtime-spinlock-first-context-v0/*-refresh.log
+            build/linux-runtime-spinlock-first-context-v0/spinlock_debug.nm.txt
+            build/linux-runtime-spinlock-first-context-v0/spinlock_debug.objdump.txt
+            build/linux-runtime-spinlock-first-context-v0/spinlock_debug.minic-stage2.s
+            build/linux-runtime-spinlock-first-context-v0/spinlock_diag.symbols.txt
             build/linux-runtime-spinlock-first-context-v0/early/nm.txt
             build/linux-runtime-spinlock-first-context-v0/watch.stdout.txt
             build/linux-runtime-spinlock-first-context-v0/watch/frontier-result.json
