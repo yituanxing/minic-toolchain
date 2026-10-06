@@ -278,13 +278,15 @@ jobs:
           root=Path('build/linux-runtime-qemu-watch-inconclusive-v1/watch')
           meta=json.loads((root/'watch-result.json').read_text())
           result=json.loads((root/'frontier-result.json').read_text())
-          if meta['stop_reason'] != 'hard-timeout':
+          if meta['stop_reason'] != 'oracle:INCONCLUSIVE:fault':
               raise SystemExit(f'WATCH_CONSERVATIVE=FAIL stop={meta["stop_reason"]}')
           if result['verdict'] != 'INCONCLUSIVE':
               raise SystemExit(f'WATCH_CONSERVATIVE=FAIL verdict={result["verdict"]}')
-          if meta['elapsed_ms'] < 1450:
-              raise SystemExit(f'WATCH_CONSERVATIVE=FAIL elapsed_ms={meta["elapsed_ms"]}')
-          print(f'WATCH_CONSERVATIVE=PASS stop=hard-timeout verdict=INCONCLUSIVE elapsed_ms={meta["elapsed_ms"]} polls={meta["polls"]}')
+          if meta.get('probe_verdict') != 'INCONCLUSIVE':
+              raise SystemExit(f'WATCH_CONSERVATIVE=FAIL probe_verdict={meta.get("probe_verdict")}')
+          if meta['elapsed_ms'] >= 1500:
+              raise SystemExit(f'WATCH_CONSERVATIVE=FAIL expected fault-aware early stop elapsed_ms={meta["elapsed_ms"]}')
+          print(f'WATCH_CONSERVATIVE=PASS stop=oracle:INCONCLUSIVE:fault verdict=INCONCLUSIVE elapsed_ms={meta["elapsed_ms"]} polls={meta["polls"]}')
           print(f'OBSERVED_FAULT={result["fault"]["desc"]}:{result["fault"]["symbol"]}+0x{result["fault"]["offset"]:x}')
           print(f'HIGHEST_PROGRESS={result["highest_progress"]}')
           PY
