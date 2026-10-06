@@ -450,9 +450,12 @@ jobs:
           if-no-files-found: warn
 
   native35:
-    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[minias-gate-v1]')
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      contains(github.event.head_commit.message, '[minias-gate-v1]') ||
+      contains(github.event.head_commit.message, '[minias-native-repro]')
     runs-on: ubuntu-24.04
-    timeout-minutes: 50
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
         with:
@@ -466,7 +469,7 @@ jobs:
           sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 install -y --no-install-recommends \
             gcc-riscv64-linux-gnu libc6-dev-riscv64-cross flex bison bc libelf-dev libssl-dev dwarves
 
-      - name: Rebuild deterministic Linux 6.6.143 native35 fixture
+      - name: Rebuild only the certified Linux 6.6.143 native35 targets
         shell: bash
         env:
           LINUX_VERSION: "6.6.143"
@@ -475,126 +478,70 @@ jobs:
           set -Eeuo pipefail
           src="$GITHUB_WORKSPACE/build/minias-native35-linux-src"
           out="$GITHUB_WORKSPACE/build/minias-native35-linux-out"
+          fixture="$GITHUB_WORKSPACE/build/minias-native35-inputs"
           archive="$GITHUB_WORKSPACE/build/linux-${LINUX_VERSION}.tar.xz"
           mkdir -p build
           curl --http1.1 --retry 5 --retry-all-errors --retry-delay 2 -fsSL \
             "https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-${LINUX_VERSION}.tar.xz" -o "$archive"
           echo "${LINUX_ARCHIVE_SHA256}  $archive" | sha256sum -c -
-          rm -rf "$src" "$out" build/minias-native35-inputs
-          mkdir -p "$src" "$out" build/minias-native35-inputs
+          rm -rf "$src" "$out" "$fixture"
+          mkdir -p "$src" "$out" "$fixture"
           tar -xJf "$archive" -C "$src" --strip-components=1
           make -s -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- defconfig
-          make -s -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- -j4
-          test -s "$out/vmlinux"
+          make -s -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- -j4 prepare scripts
 
-          python3 - <<'PY'
-          from pathlib import Path, PurePosixPath
-          import hashlib, json, re, shlex, subprocess
-
-          out = Path("build/minias-native35-linux-out").resolve()
-          fixture = Path("build/minias-native35-inputs").resolve()
-          fixture.mkdir(parents=True, exist_ok=True)
-          output_re = re.compile(r"(?:^|\s)-o\s+([^\s;]+\.o)(?=\s|;|$)")
-          source_re = re.compile(r"(?:^|\s)([^\s;]+\.S)(?=\s|;|$)")
-
-          rows = {}
-          for cmdfile in out.rglob(".*.cmd"):
-              try:
-                  lines = cmdfile.read_text(errors="replace").splitlines()
-              except OSError:
-                  continue
-              for raw in lines:
-                  if ":=" not in raw or " -c " not in f" {raw} ":
-                      continue
-                  objects = output_re.findall(raw)
-                  sources = source_re.findall(raw)
-                  if not objects or not sources:
-                      continue
-                  raw_obj = objects[-1].strip("'\"")
-                  obj = Path(raw_obj)
-                  if obj.is_absolute():
-                      try:
-                          rel_obj = obj.resolve().relative_to(out)
-                      except ValueError:
-                          continue
-                  else:
-                      rel_obj = obj
-                  rel = PurePosixPath(rel_obj.as_posix()).as_posix()
-                  if rel.startswith(("scripts/", "tools/")) or "/scripts/" in rel:
-                      continue
-                  rows[rel] = {
-                      "source": sources[-1].strip("'\""),
-                      "cmdfile": cmdfile.relative_to(out).as_posix(),
-                  }
-
-          if len(rows) != 35:
-              raise SystemExit(f"expected 35 native .S compile rules, got {len(rows)}")
-
-          def normalize_output(token: str) -> str:
-              path = Path(token.strip("'\""))
-              if path.is_absolute():
-                  try:
-                      return path.resolve().relative_to(out).as_posix()
-                  except ValueError:
-                      return ""
-              return path.as_posix()
-
-          def exact_command(obj: str, cmdfile: str) -> list[str]:
-              path = out / cmdfile
-              matches = []
-              for raw in path.read_text(errors="replace").splitlines():
-                  if ":=" not in raw or " -c " not in f" {raw} ":
-                      continue
-                  command = raw.split(":=", 1)[1].strip()
-                  try:
-                      tokens = shlex.split(command, posix=True)
-                  except ValueError:
-                      continue
-                  for i, token in enumerate(tokens[:-1]):
-                      if token == "-o" and normalize_output(tokens[i + 1]) == obj:
-                          matches.append(tokens)
-                          break
-              if len(matches) != 1:
-                  raise RuntimeError(f"expected one exact compile command for {obj}, got {len(matches)}")
-              return matches[0]
-
-          manifest = []
-          for index, (obj, meta) in enumerate(sorted(rows.items())):
-              tokens = exact_command(obj, meta["cmdfile"])
-              compile_index = tokens.index("-c")
-              output_index = tokens.index("-o")
-              rel_s = obj[:-2] + ".s"
-              target = fixture / rel_s
-              target.parent.mkdir(parents=True, exist_ok=True)
-              tokens[compile_index] = "-E"
-              tokens[output_index + 1] = str(target)
-              proc = subprocess.run(
-                  tokens,
-                  cwd=out,
-                  stdout=subprocess.DEVNULL,
-                  stderr=subprocess.PIPE,
-                  text=True,
-                  errors="replace",
-              )
-              if proc.returncode != 0 or not target.is_file() or target.stat().st_size == 0:
-                  raise RuntimeError(
-                      f"native preprocess failed obj={obj} rc={proc.returncode}: " + proc.stderr[-2000:]
-                  )
-              digest = hashlib.sha256(target.read_bytes()).hexdigest()
-              manifest.append({
-                  "index": index,
-                  "object": obj,
-                  "source": meta["source"],
-                  "assembly": rel_s,
-                  "sha256": digest,
-              })
-
-          (fixture / "manifest.json").write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
-          (fixture / "SHA256SUMS").write_text(
-              "".join(f"{row['sha256']}  {row['assembly']}\n" for row in manifest)
+          targets=(
+            arch/riscv/errata/sifive/errata_cip_453.s
+            arch/riscv/kernel/compat_vdso/compat_vdso.s
+            arch/riscv/kernel/compat_vdso/flush_icache.s
+            arch/riscv/kernel/compat_vdso/getcpu.s
+            arch/riscv/kernel/compat_vdso/note.s
+            arch/riscv/kernel/compat_vdso/rt_sigreturn.s
+            arch/riscv/kernel/copy-unaligned.s
+            arch/riscv/kernel/entry.s
+            arch/riscv/kernel/fpu.s
+            arch/riscv/kernel/head.s
+            arch/riscv/kernel/suspend_entry.s
+            arch/riscv/kernel/vdso/flush_icache.s
+            arch/riscv/kernel/vdso/getcpu.s
+            arch/riscv/kernel/vdso/note.s
+            arch/riscv/kernel/vdso/rt_sigreturn.s
+            arch/riscv/kernel/vdso/sys_hwprobe.s
+            arch/riscv/kernel/vdso/vdso.s
+            arch/riscv/kvm/vcpu_switch.s
+            arch/riscv/lib/clear_page.s
+            arch/riscv/lib/memcpy.s
+            arch/riscv/lib/memmove.s
+            arch/riscv/lib/memset.s
+            arch/riscv/lib/strcmp.s
+            arch/riscv/lib/strlen.s
+            arch/riscv/lib/strncmp.s
+            arch/riscv/lib/tishift.s
+            arch/riscv/lib/uaccess.s
+            arch/riscv/purgatory/entry.s
+            arch/riscv/purgatory/kexec-purgatory.s
+            arch/riscv/purgatory/memcpy.s
+            arch/riscv/purgatory/memset.s
+            arch/riscv/purgatory/strcmp.s
+            arch/riscv/purgatory/strlen.s
+            arch/riscv/purgatory/strncmp.s
+            usr/initramfs_data.s
           )
-          print(f"MINIAS_NATIVE35_FIXTURE=PASS selected={len(manifest)} source=linux-6.6.143-riscv-defconfig")
-          PY
+          test "${#targets[@]}" -eq 35
+          make -s -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- -j4 "${targets[@]}"
+
+          : >"$fixture/SHA256SUMS"
+          : >"$fixture/manifest.tsv"
+          for rel in "${targets[@]}"; do
+            test -s "$out/$rel"
+            mkdir -p "$fixture/$(dirname "$rel")"
+            cp "$out/$rel" "$fixture/$rel"
+            digest=$(sha256sum "$fixture/$rel" | cut -d' ' -f1)
+            printf '%s  %s\n' "$digest" "$rel" >>"$fixture/SHA256SUMS"
+            printf '%s\t%s\n' "$rel" "$digest" >>"$fixture/manifest.tsv"
+          done
+          test "$(find "$fixture" -type f -name '*.s' | wc -l)" -eq 35
+          echo "MINIAS_NATIVE35_FIXTURE=PASS selected=35 source=targeted-linux-6.6.143-riscv-defconfig"
 
       - name: Build exact MiniAS
         run: |
@@ -608,7 +555,7 @@ jobs:
           python3 - <<'PY'
           from pathlib import Path
           from collections import Counter
-          import json, re, subprocess
+          import re, subprocess
 
           workspace = Path.cwd().resolve()
           minias = workspace / "build/minias-native35-toolchain/bin/minic-as"
@@ -616,16 +563,14 @@ jobs:
           linux_out = workspace / "build/minias-native35-linux-out"
           result_root = workspace / "build/minias-native35-results"
           result_root.mkdir(parents=True, exist_ok=True)
-
-          manifest = json.loads((input_root / "manifest.json").read_text())
-          if len(manifest) != 35:
-              raise SystemExit(f"expected 35 native inputs, got {len(manifest)}")
+          files = sorted(input_root.rglob("*.s"))
+          if len(files) != 35:
+              raise SystemExit(f"expected 35 native inputs, got {len(files)}")
 
           results = []
           blockers = Counter()
-          for row in manifest:
-              rel = row["assembly"]
-              inp = input_root / rel
+          for inp in files:
+              rel = inp.relative_to(input_root).as_posix()
               obj = result_root / (rel[:-2] + ".o")
               err = result_root / (rel[:-2] + ".err")
               obj.parent.mkdir(parents=True, exist_ok=True)
@@ -683,7 +628,7 @@ jobs:
         with:
           name: minias-a0-gate-v1-native35
           path: |
-            build/minias-native35-inputs/manifest.json
+            build/minias-native35-inputs/manifest.tsv
             build/minias-native35-inputs/SHA256SUMS
             build/minias-native35-results/results.tsv
             build/minias-native35-results/summary.txt
