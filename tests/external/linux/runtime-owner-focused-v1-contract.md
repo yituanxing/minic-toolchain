@@ -11,4 +11,8 @@ The matrix contains four ordered owner-chain modes:
 
 Every mode restores the same certified full linked fixture, pinned Linux 6.6.143 source, frozen linker source subset, builds the exact centralized MiniC runtime profile, refreshes the PI owner and the same cumulative frontier-owner chain used by the historical focused workflow, relinks the early image, and runs the same event-driven frontier watcher against \`linux-runtime-init-irq-frontier-v0.json\`.
 
-The historical focused workflows remain active until all four matrix modes are independently green on the cleanup branch. Their older non-focused owner-differential workflows are not covered by this contract because those retain before/after owner evidence and require a separate retirement decision.
+The historical focused workflows remain active until all four matrix modes are independently green on the canonical `agent/linux-expanded-kbuild-v0` runtime branch. Their older non-focused owner-differential workflows are not covered by this contract because those retain before/after owner evidence and require a separate retirement decision.
+
+## Cache-scope note
+
+The certified full linked fixture, pinned Linux source, and frozen linker subset are GitHub Actions caches scoped to the canonical runtime ref. The cleanup branch cannot independently restore those caches, so a cache miss there is not accepted as a runtime result and `fail-on-cache-miss` remains strict.

@@ -4,7 +4,6 @@ on:
   push:
     branches:
       - "agent/linux-expanded-kbuild-v0"
-      - "agent/ci-runtime-cleanup-v1"
     paths:
       - ".github/workflows/linux-runtime-owner-focused-v1.yml"
       - "tools/ci/runtime-timekeeping-trigger.txt"
