@@ -57,6 +57,113 @@ jobs:
             make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- CC="$wrapper" -j2 V=1 "$target" >"$ev/refresh.log" 2>&1
           test -s "$out/$base.minic-stage2.s"
           cp "$out/$base.minic-stage2.s" "$ev/spinlock_debug.s"
+          riscv64-linux-gnu-objdump -dr "$out/$target" >"$ev/spinlock_debug.objdump.txt"
+          riscv64-linux-gnu-nm -an "$out/$target" >"$ev/spinlock_debug.nm.txt"
+      - name: Preserve legacy debug_spin_lock_before frame evidence
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY' | tee build/linux-runtime-spinlock-stack-v0/debug-spin-frame.txt
+          import re
+          from pathlib import Path
+          p=Path('build/linux-runtime-spinlock-stack-v0/spinlock_debug.objdump.txt')
+          lines=p.read_text(errors='replace').splitlines()
+          sym='debug_spin_lock_before'
+          i=next(i for i,l in enumerate(lines) if f'<{sym}>:' in l)
+          head=re.search(r'^\s*([0-9a-f]+)', lines[i])
+          base=int(head.group(1),16)
+          j=next((k for k in range(i+1,len(lines)) if re.match(r'^\s*[0-9a-f]+ <[^>]+>:        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          import re
+          from pathlib import Path
+          p=Path('build/linux-runtime-spinlock-stack-v0/spinlock_debug.s')
+          lines=p.read_text(errors='replace').splitlines()
+          funcs={}
+          order=[]
+          cur=None
+          for line in lines:
+              m=re.match(r'^\.type\s+([^,]+),\s*@function', line.strip())
+              if m:
+                  cur=m.group(1); funcs.setdefault(cur,[]); order.append(cur); continue
+              if cur is not None:
+                  funcs[cur].append(line)
+                  if line.strip().startswith('.size '+cur+','):
+                      cur=None
+          calls={f:[] for f in funcs}
+          frame={}
+          restores={}
+          for f,b in funcs.items():
+              for line in b:
+                  m=re.search(r'\bcall\s+([^\s#]+)', line)
+                  if m: calls[f].append(m.group(1))
+              neg=[]; pos=[]
+              for line in b:
+                  m=re.search(r'\baddi\s+sp,\s*sp,\s*(-?\d+)', line)
+                  if m:
+                      v=int(m.group(1)); (neg if v<0 else pos).append(v)
+              frame[f]=-neg[0] if neg else 0
+              restores[f]=pos[-1] if pos else 0
+          rev={}
+          for caller, tgts in calls.items():
+              for t in tgts: rev.setdefault(t,[]).append(caller)
+          target='__minic_inline_spec_720_39'
+          out=[]
+          seen=set()
+          frontier=[(target,0)]
+          while frontier:
+              f,d=frontier.pop(0)
+              if (f,d) in seen or d>12: continue
+              seen.add((f,d))
+              cs=sorted(set(rev.get(f,[])))
+              out.append(f'DEPTH={d} FUNC={f} FRAME={frame.get(f,"?")} RESTORE={restores.get(f,"?")} CALLERS={";".join(cs) if cs else "<none-in-TU>"}')
+              for c in cs: frontier.append((c,d+1))
+          out.append('--- CHAIN FUNCTION STACK MUTATIONS ---')
+          chain={x.split(' FUNC=')[1].split(' FRAME=')[0] for x in out if ' FUNC=' in x}
+          for f in order:
+              if f not in chain: continue
+              out.append(f'## {f}')
+              for line in funcs[f]:
+                  s=line.strip()
+                  if re.search(r'\b(addi\s+sp,\s*sp|call\s+|ret\b)', s): out.append(s)
+          text='\n'.join(out)+'\n'
+          Path('build/linux-runtime-spinlock-stack-v0/call-chain.txt').write_text(text)
+          print(text)
+          PY
+      - name: Preserve small evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-runtime-spinlock-stack-v0-${{ github.sha }}
+          path: |
+            build/linux-runtime-spinlock-stack-v0/profile/patch.log
+            build/linux-runtime-spinlock-stack-v0/refresh.log
+            build/linux-runtime-spinlock-stack-v0/spinlock_debug.s
+            build/linux-runtime-spinlock-stack-v0/spinlock_debug.objdump.txt
+            build/linux-runtime-spinlock-stack-v0/spinlock_debug.nm.txt
+            build/linux-runtime-spinlock-stack-v0/debug-spin-frame.txt
+            build/linux-runtime-spinlock-stack-v0/call-chain.txt
+          if-no-files-found: warn
+          retention-days: 7
+,lines[k]) and '<.L' not in lines[k]), min(len(lines),i+160))
+          body=lines[i:j]
+          print('DEBUG_SPIN_OBJDUMP_BEGIN')
+          print('\n'.join(body[:160]))
+          print('DEBUG_SPIN_OBJDUMP_END')
+          m=re.search(r'addi\s+sp,sp,-(\d+)', '\n'.join(body[:12]))
+          print('DEBUG_SPIN_FRAME=' + (m.group(1) if m else 'unknown'))
+          target=base+0x1c
+          print(f'DEBUG_SPIN_BASE=0x{base:x}')
+          print(f'DEBUG_SPIN_FAULT_PC=0x{target:x}')
+          for l in body:
+              mm=re.match(r'^\s*([0-9a-f]+):', l)
+              if mm and int(mm.group(1),16)==target:
+                  print('DEBUG_SPIN_PLUS_1C=' + l.strip())
+          print('DEBUG_SPIN_PROLOGUE_BEGIN')
+          print('\n'.join(body[:24]))
+          print('DEBUG_SPIN_PROLOGUE_END')
+          PY
       - name: Unwind reverse call chain and frame sizes
         shell: bash
         run: |
