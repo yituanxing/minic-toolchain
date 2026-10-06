@@ -4,3 +4,4 @@ Current fault: store_page_fault:calc_global_load+0x2a.
 Current owner: kernel/sched/build_utility.o (loadavg.c is included by build_utility.c).
 Owner-refresh workflow commit: 5d8bbf780bccc4c9eef1cb02a6cb4ff2779218a5.
 Rerun 2026-10-02 on current branch HEAD after restoring certified runtime fixtures and retiring stale Fast V4/V5 gates.
+Recertify 2026-10-06 after cleanup/runtime convergence and init-IRQ bridge consolidation.
