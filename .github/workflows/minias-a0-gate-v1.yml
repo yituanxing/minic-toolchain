@@ -1,0 +1,671 @@
+name: MiniAS A0 Gate V1
+
+on:
+  push:
+    branches:
+      - "agent/linux-expanded-kbuild-v0"
+      - "agent/ci-runtime-cleanup-v1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  FROZEN_CORPUS_EXPORT_RUN: "33186855250"
+  FROZEN_SIDECARS_RUN: "33237304382"
+  FROZEN_CONFIG_GZ_SHA256: "8511a666382dda596a9ddba313113f77182d3156fed890a2ea9f2e86223226ff"
+  C149_EXPORT_RUN: "33248985705"
+  FROZEN_NATIVE26_RUN: "33245348705"
+  FROZEN_NATIVE26_FILES_SHA256: "fdbdf1f8fbf4ddcb1af4ff689225780f12e0e243dec3b9540fc493e766b429f6"
+  FROZEN_NATIVE35_EXTRA9_RUN: "33247303056"
+  FROZEN_NATIVE35_SIDECARS_RUN: "33247303056"
+
+jobs:
+  shard:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[minias-gate-v1]')
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: first500
+            artifact: frozen-linux-corpus-first500
+            corpus_dir: linux-focus-corpus
+            total: 500
+          - label: new500
+            artifact: frozen-linux-corpus-new500
+            corpus_dir: linux-new500-corpus
+            total: 500
+          - label: next500
+            artifact: frozen-linux-corpus-next500
+            corpus_dir: linux-next500-corpus
+            total: 500
+          - label: next500b
+            artifact: frozen-linux-corpus-next500b
+            corpus_dir: linux-next500b-corpus
+            total: 500
+          - label: next500c
+            artifact: frozen-linux-corpus-next500c
+            corpus_dir: linux-next500c-corpus
+            total: 500
+          - label: next500d
+            artifact: frozen-linux-corpus-next500d
+            corpus_dir: linux-next500d-corpus
+            total: 500
+          - label: final352
+            artifact: frozen-linux-corpus-final352
+            corpus_dir: linux-final352-corpus
+            total: 352
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Download frozen Linux corpus
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: build/import-${{ matrix.label }}
+          repository: ${{ github.repository }}
+          run-id: ${{ env.FROZEN_CORPUS_EXPORT_RUN }}
+          github-token: ${{ github.token }}
+
+      - name: Verify frozen Linux corpus
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          import="build/import-${{ matrix.label }}"
+          expected=$(cut -d' ' -f1 "$import/corpus.tar.gz.sha256")
+          actual=$(sha256sum "$import/corpus.tar.gz" | cut -d' ' -f1)
+          test "$actual" = "$expected"
+          tar -C build -xzf "$import/corpus.tar.gz"
+          (cd build && sha256sum -c "import-${{ matrix.label }}/files.sha256" >/dev/null)
+          manifest="build/${{ matrix.corpus_dir }}/selected-tus.txt"
+          test -s "$manifest"
+          test "$(grep -cve '^[[:space:]]*$' "$manifest")" -eq ${{ matrix.total }}
+          echo "MINIAS_ALL3352_CORPUS label=${{ matrix.label }} selected=${{ matrix.total }} sha=$actual"
+
+      - name: Restore frozen MiniAS Linux sidecars
+        uses: actions/download-artifact@v4
+        with:
+          name: minias-linux-sidecars-v1
+          path: build/import-minias-sidecars
+          repository: ${{ github.repository }}
+          run-id: ${{ env.FROZEN_SIDECARS_RUN }}
+          github-token: ${{ github.token }}
+
+      - name: Verify and install frozen incbin sidecar
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          payload=build/import-minias-sidecars/kernel/config_data.gz
+          test -s "$payload"
+          actual=$(sha256sum "$payload" | cut -d' ' -f1)
+          test "$actual" = "$FROZEN_CONFIG_GZ_SHA256"
+          mkdir -p kernel
+          cp "$payload" kernel/config_data.gz
+          echo "MINIAS_ALL3352_SIDECAR=PASS sha256=$actual"
+
+      - name: Build exact compiler and MiniAS
+        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/minias-all3352-toolchain all
+
+      - name: Run MiniAS micro gate
+        run: make MODE=release CFLAGS=-Werror BUILD_DIR=build/minias-all3352-toolchain check-minias-a0
+
+      - name: Generate exact assembly window
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          compiler="$GITHUB_WORKSPACE/build/minias-all3352-toolchain/bin/minic-cc"
+          corpus="$GITHUB_WORKSPACE/build/${{ matrix.corpus_dir }}"
+          work="$GITHUB_WORKSPACE/build/minias-all3352-${{ matrix.label }}"
+          CORE_FAST_TRACE=1 python3 tests/external/linux/corpus_replay.py \
+            --minic "$compiler" \
+            --corpus "$corpus" \
+            --work "$work" \
+            --jobs 4 \
+            --offset 0 \
+            --limit ${{ matrix.total }} \
+            --sample-count 0
+          python3 - "$work/batch-results.json" ${{ matrix.total }} <<'PY'
+          import json, sys
+          rows=json.load(open(sys.argv[1]))
+          expected=int(sys.argv[2])
+          bad=[r for r in rows if r["status"]!="PASS"]
+          assert len(rows)==expected and not bad, (len(rows), expected, bad[:5])
+          print(f"MINIAS_ALL3352_INPUT=PASS generated={expected}")
+          PY
+
+      - name: Assemble exact window and classify
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          minias="$GITHUB_WORKSPACE/build/minias-all3352-toolchain/bin/minic-as"
+          root="$GITHUB_WORKSPACE/build/minias-all3352-${{ matrix.label }}/minic-out"
+          out="$GITHUB_WORKSPACE/build/minias-all3352-${{ matrix.label }}/minias-out"
+          expected=${{ matrix.total }}
+          mkdir -p "$out"
+          worker="$out/assemble-one.sh"
+          cat >"$worker" <<'SH'
+          #!/usr/bin/env bash
+          set -Eeuo pipefail
+          minias=$1
+          root=$2
+          out=$3
+          asm=$4
+          rel="${asm#"$root"/}"
+          stem="$out/${rel%.s}"
+          obj="$stem.o"
+          err="$stem.err"
+          result="$stem.result"
+          blocker="$stem.blocker"
+          mkdir -p "$(dirname "$obj")"
+          if "$minias" -o "$obj" "$asm" 2>"$err"; then
+            readelf -h "$obj" | grep -q 'RISC-V'
+            readelf -h "$obj" | grep -q 'REL (Relocatable file)'
+            printf 'PASS\t%s\t-\n' "$rel" >"$result"
+          else
+            raw=$(head -n 1 "$err" || true)
+            first=$(printf '%s\n' "$raw" | sed -E 's/^minic-as: //; s/:line=[0-9]+$//')
+            if test -z "$first"; then first="internal:no-diagnostic"; fi
+            printf '%s\n' "$first" >"$blocker"
+            printf 'FAIL\t%s\t%s\n' "$rel" "$first" >"$result"
+          fi
+          SH
+          chmod +x "$worker"
+
+          mapfile -t files < <(find "$root" -type f -name '*.s' | LC_ALL=C sort)
+          test "${#files[@]}" -eq "$expected"
+          printf '%s\0' "${files[@]}" |
+            xargs -0 -n1 -P"${MINIAS_ASSEMBLY_JOBS:-4}" "$worker" "$minias" "$root" "$out"
+
+          mapfile -d '' -t results < <(find "$out" -type f -name '*.result' -print0 | LC_ALL=C sort -z)
+          test "${#results[@]}" -eq "$expected"
+          for f in "${results[@]}"; do cat "$f"; done | LC_ALL=C sort -t $'\t' -k2,2 >"$out/results.tsv"
+          find "$out" -type f -name '*.blocker' -print0 | LC_ALL=C sort -z | xargs -0 -r cat >"$out/blockers.txt"
+
+          pass=$(awk -F '\t' '$1=="PASS" {n++} END {print n+0}' "$out/results.tsv")
+          fail=$(awk -F '\t' '$1=="FAIL" {n++} END {print n+0}' "$out/results.tsv")
+          printf 'MINIAS_ALL3352_SHARD label=%s pass=%s fail=%s total=%s\n' \
+            "${{ matrix.label }}" "$pass" "$fail" "$expected"
+          test $((pass + fail)) -eq "$expected"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: minias-all3352-${{ matrix.label }}
+          path: |
+            build/minias-all3352-${{ matrix.label }}/minias-out/results.tsv
+            build/minias-all3352-${{ matrix.label }}/minias-out/blockers.txt
+          retention-days: 30
+          if-no-files-found: error
+
+  all3352:
+    if: always() && (github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[minias-gate-v1]'))
+    needs: shard
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Require matrix completion
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "${{ needs.shard.result }}" = success
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: minias-all3352-*
+          path: build/minias-all3352-results
+
+      - name: Aggregate exact all3352
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          out=build/minias-all3352-aggregate
+          mkdir -p "$out"
+          mapfile -t results < <(find build/minias-all3352-results -type f -name results.tsv | LC_ALL=C sort)
+          mapfile -t blockers < <(find build/minias-all3352-results -type f -name blockers.txt | LC_ALL=C sort)
+          test "${#results[@]}" -eq 7
+          for f in "${results[@]}"; do cat "$f"; done >"$out/results.tsv"
+          : >"$out/blockers.txt"
+          for f in "${blockers[@]}"; do cat "$f"; done >"$out/blockers.txt"
+          test "$(wc -l < "$out/results.tsv")" -eq 3352
+
+          pass=$(awk -F '\t' '$1=="PASS" {n++} END {print n+0}' "$out/results.tsv")
+          fail=$(awk -F '\t' '$1=="FAIL" {n++} END {print n+0}' "$out/results.tsv")
+          error=$(awk -F '\t' '$1=="FAIL" && ($3 ~ /^internal:/ || $3 ~ /^out-of-memory:/) {n++} END {print n+0}' "$out/results.tsv")
+          echo "MINIAS_ALL3352_EXACT head=$GITHUB_SHA selected=3352 pass=$pass fail=$fail error=$error"
+          if test -s "$out/blockers.txt"; then
+            echo "MINIAS_ALL3352_TOP_BLOCKERS"
+            LC_ALL=C sort "$out/blockers.txt" | uniq -c | sort -nr | head -40
+          fi
+          test "$pass" -eq 3352
+          test "$fail" -eq 0
+          test "$error" -eq 0
+
+  c149:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[minias-gate-v1]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download frozen ground-truth C149 corpus
+        uses: actions/download-artifact@v4
+        with:
+          name: minias-ground-truth-c149-corpus
+          path: build/import-c149
+          repository: ${{ github.repository }}
+          run-id: ${{ env.C149_EXPORT_RUN }}
+          github-token: ${{ github.token }}
+
+      - name: Verify and extract frozen C149 corpus
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          expected=$(cut -d' ' -f1 build/import-c149/minias-ground-truth-c149-corpus.tar.gz.sha256)
+          actual=$(sha256sum build/import-c149/minias-ground-truth-c149-corpus.tar.gz | cut -d' ' -f1)
+          test "$actual" = "$expected"
+          cd build
+          tar -xzf import-c149/minias-ground-truth-c149-corpus.tar.gz
+          corpus="$GITHUB_WORKSPACE/build/minias-ground-truth-c149-corpus"
+          test -s "$corpus/selected-tus.txt"
+          test "$(grep -cve '^[[:space:]]*$' "$corpus/selected-tus.txt")" -eq 149
+          (cd "$corpus" && sha256sum -c files.sha256 >/dev/null)
+          echo "MINIAS_C149_CORPUS=PASS selected=149"
+
+      - name: Build MiniC and MiniAS
+        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/minias-c149-toolchain all
+
+      - name: Run MiniAS micro gate
+        run: make MODE=release CFLAGS=-Werror BUILD_DIR=build/minias-c149-toolchain check-minias-a0
+
+      - name: Replay C149 through MiniC
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          set +e
+          CORE_FAST_TRACE=1 python3 tests/external/linux/corpus_replay.py \
+            --minic "$GITHUB_WORKSPACE/build/minias-c149-toolchain/bin/minic-cc" \
+            --corpus "$GITHUB_WORKSPACE/build/minias-ground-truth-c149-corpus" \
+            --work "$GITHUB_WORKSPACE/build/minias-c149-replay" \
+            --jobs 4 \
+            --offset 0 \
+            --limit 149 \
+            --sample-count 0
+          rc=$?
+          set -e
+          echo "MINIAS_C149_MINIC_REPLAY_RC=$rc"
+          test -s build/minias-c149-replay/batch-results.json
+
+      - name: Assemble MiniC outputs and build failure pool
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          from collections import Counter, defaultdict
+          from pathlib import Path
+          import json, re, subprocess
+
+          root = Path.cwd()
+          replay = root / "build/minias-c149-replay"
+          minias = root / "build/minias-c149-toolchain/bin/minic-as"
+          out = root / "build/minias-c149-results"
+          out.mkdir(parents=True, exist_ok=True)
+
+          rows = json.loads((replay / "batch-results.json").read_text())
+          if len(rows) != 149:
+              raise SystemExit(f"expected 149 MiniC replay rows, got {len(rows)}")
+
+          results = []
+          pool = []
+          for row in rows:
+              index = int(row["index"])
+              rel_i = str(row["input"])
+              source = str(row["source"])
+              if row["status"] != "PASS":
+                  blocker = str(row.get("message") or "compiler:no-diagnostic")
+                  results.append(("COMPILE_FAIL", index, rel_i, source, blocker))
+                  pool.append(("compiler", index, rel_i, source, blocker))
+                  continue
+
+              asm = replay / "minic-out" / f"{rel_i}.s"
+              obj = out / f"{rel_i}.o"
+              err = out / f"{rel_i}.err"
+              obj.parent.mkdir(parents=True, exist_ok=True)
+              err.parent.mkdir(parents=True, exist_ok=True)
+              proc = subprocess.run(
+                  [str(minias), "-o", str(obj), str(asm)],
+                  stdout=subprocess.DEVNULL,
+                  stderr=subprocess.PIPE,
+                  text=True,
+                  errors="replace",
+              )
+              err.write_text(proc.stderr)
+              ok = False
+              if proc.returncode == 0 and obj.is_file() and obj.stat().st_size:
+                  check = subprocess.run(
+                      ["readelf", "-h", str(obj)],
+                      stdout=subprocess.PIPE,
+                      stderr=subprocess.PIPE,
+                      text=True,
+                      errors="replace",
+                  )
+                  ok = (
+                      check.returncode == 0
+                      and "RISC-V" in check.stdout
+                      and "REL (Relocatable file)" in check.stdout
+                  )
+              if ok:
+                  results.append(("PASS", index, rel_i, source, "-"))
+              else:
+                  raw = next(
+                      (line.strip() for line in proc.stderr.splitlines() if line.strip()),
+                      f"assembler:returncode={proc.returncode}",
+                  )
+                  blocker = re.sub(r"^minic-as:\\s*", "", raw)
+                  blocker = re.sub(r":line=[0-9]+$", "", blocker)
+                  results.append(("ASSEMBLE_FAIL", index, rel_i, source, blocker))
+                  pool.append(("assembler", index, rel_i, source, blocker))
+
+          results.sort(key=lambda row: row[1])
+          pool.sort(key=lambda row: row[1])
+          (out / "results.tsv").write_text(
+              "".join(
+                  f"{status}\t{index}\t{rel_i}\t{source}\t{blocker}\n"
+                  for status, index, rel_i, source, blocker in results
+              )
+          )
+          (out / "failure-pool.tsv").write_text(
+              "".join(
+                  f"{stage}\t{index}\t{rel_i}\t{source}\t{blocker}\n"
+                  for stage, index, rel_i, source, blocker in pool
+              )
+          )
+
+          families = defaultdict(list)
+          for stage, index, rel_i, source, blocker in pool:
+              signature = f"{stage}:{blocker}"
+              families[signature].append((stage, index, rel_i, source, blocker))
+          ordered = sorted(
+              families.items(),
+              key=lambda item: (-len(item[1]), item[0]),
+          )
+          active = []
+          offsets = {signature: 0 for signature, _ in ordered}
+          while len(active) < 16:
+              progressed = False
+              for signature, members in ordered:
+                  pos = offsets[signature]
+                  if pos >= len(members):
+                      continue
+                  active.append(members[pos])
+                  offsets[signature] = pos + 1
+                  progressed = True
+                  if len(active) == 16:
+                      break
+              if not progressed:
+                  break
+          (out / "candidate-active-sample.txt").write_text(
+              "".join(f"{index}\t{rel_i}\n" for _, index, rel_i, _, _ in active)
+          )
+
+          counts = Counter(status for status, *_ in results)
+          blockers = Counter(f"{stage}:{blocker}" for stage, _, _, _, blocker in pool)
+          chain_pass = counts["PASS"]
+          summary = [
+              f"MINIAS_C149_SUMMARY selected=149 chain_pass={chain_pass} "
+              f"compile_fail={counts['COMPILE_FAIL']} assemble_fail={counts['ASSEMBLE_FAIL']}",
+              f"MINIAS_C149_FAILURE_POOL fail={len(pool)} candidate_active={len(active)}",
+              "MINIAS_C149_TOP_BLOCKERS",
+          ]
+          summary.extend(
+              [f"  {count:5d} {blocker}" for blocker, count in blockers.most_common()]
+              or ["  none"]
+          )
+          summary.append("MINIAS_C149_FILES")
+          summary.extend(
+              f"{status}\t{index}\t{rel_i}\t{blocker}"
+              for status, index, rel_i, _, blocker in results
+              if status != "PASS"
+          )
+          text = "\n".join(summary) + "\n"
+          (out / "summary.txt").write_text(text)
+          print(text, end="")
+          if chain_pass != 149:
+              raise SystemExit(1)
+          PY
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: minias-a0-c149-progress
+          path: |
+            build/minias-c149-replay/batch-results.json
+            build/minias-c149-replay/batch-results.tsv
+            build/minias-c149-replay/batch-summary.txt
+            build/minias-c149-replay/failure-contexts.txt
+            build/minias-c149-results/results.tsv
+            build/minias-c149-results/failure-pool.tsv
+            build/minias-c149-results/candidate-active-sample.txt
+            build/minias-c149-results/summary.txt
+            build/minias-c149-results/**/*.err
+          retention-days: 30
+          if-no-files-found: warn
+
+  native35:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[minias-gate-v1]')
+    concurrency:
+      group: minias-native35-${{ github.ref }}
+      cancel-in-progress: true
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build MiniAS
+        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/minias-native35-toolchain all
+
+      - name: Run MiniAS micro gate
+        run: make MODE=release CFLAGS=-Werror BUILD_DIR=build/minias-native35-toolchain check-minias-a0
+
+      - name: Download frozen native26 inputs
+        uses: actions/download-artifact@v4
+        with:
+          name: minias-a0-native26-progress
+          path: build/import-native26
+          repository: ${{ github.repository }}
+          run-id: ${{ env.FROZEN_NATIVE26_RUN }}
+          github-token: ${{ github.token }}
+
+      - name: Verify and materialize frozen native26 inputs
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          import=build/import-native26
+          root=build/minias-native35-inputs
+          rm -rf "$root" build/linux-native35-out
+          mkdir -p "$root" build/linux-native35-out
+          test -d "$import/minias-native26-inputs"
+          cp -a "$import/minias-native26-inputs/." "$root/"
+          count=$(find "$root" -type f -name '*.s' | wc -l)
+          test "$count" -eq 26
+
+          (
+            cd "$root"
+            find . -type f -name '*.s' -print0 |
+              LC_ALL=C sort -z |
+              xargs -0 sha256sum > ../native26-files.sha256
+          )
+          actual=$(sha256sum build/native26-files.sha256 | cut -d' ' -f1)
+          test "$actual" = "$FROZEN_NATIVE26_FILES_SHA256"
+          echo "MINIAS_NATIVE35_BASE26=PASS selected=26 files_sha256=$actual"
+
+      - name: Download ground-truth native35 extra9
+        uses: actions/download-artifact@v4
+        with:
+          name: minias-native35-extra9-v1
+          path: build/import-native35-extra9
+          repository: ${{ github.repository }}
+          run-id: ${{ env.FROZEN_NATIVE35_EXTRA9_RUN }}
+          github-token: ${{ github.token }}
+
+      - name: Verify and merge ground-truth extra9
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          import=build/import-native35-extra9
+          root=build/minias-native35-inputs
+          test "$(find "$import" -type f -name '*.s' | wc -l)" -eq 9
+          while IFS= read -r -d '' src; do
+            rel=${src#"$import"/}
+            test ! -e "$root/$rel"
+            mkdir -p "$root/$(dirname "$rel")"
+            cp "$src" "$root/$rel"
+          done < <(find "$import" -type f -name '*.s' -print0 | LC_ALL=C sort -z)
+          test "$(find "$root" -type f -name '*.s' | wc -l)" -eq 35
+          (
+            cd "$import"
+            find . -type f -name '*.s' -print0 |
+              LC_ALL=C sort -z |
+              xargs -0 sha256sum > ../native35-extra9-files.sha256
+          )
+          echo "MINIAS_NATIVE35_EXTRA9=PASS selected=9 digest=$(sha256sum build/native35-extra9-files.sha256 | cut -d' ' -f1)"
+          echo "MINIAS_NATIVE35_INPUTS=PASS selected=35"
+
+      - name: Download frozen native35 incbin sidecars
+        uses: actions/download-artifact@v4
+        with:
+          name: minias-native26-sidecars-v1
+          path: build/import-native35-sidecars
+          repository: ${{ github.repository }}
+          run-id: ${{ env.FROZEN_NATIVE35_SIDECARS_RUN }}
+          github-token: ${{ github.token }}
+
+      - name: Verify and materialize native35 incbin sidecars
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          import=build/import-native35-sidecars
+          target=build/linux-native35-out
+          test -s "$import/SHA256SUMS"
+          (
+            cd "$import"
+            sha256sum -c SHA256SUMS
+          )
+          sidecars=(
+            arch/riscv/kernel/vdso/vdso.so
+            arch/riscv/kernel/compat_vdso/compat_vdso.so
+            arch/riscv/purgatory/purgatory.ro
+            usr/initramfs_inc_data
+          )
+          for rel in "${sidecars[@]}"; do
+            test -s "$import/$rel"
+            mkdir -p "$target/$(dirname "$rel")"
+            cp "$import/$rel" "$target/$rel"
+          done
+          echo "MINIAS_NATIVE35_SIDECARS=PASS count=4"
+
+      - name: Assemble native35 and classify
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          from collections import Counter
+          import re, subprocess
+
+          workspace = Path.cwd().resolve()
+          minias = workspace / "build/minias-native35-toolchain/bin/minic-as"
+          input_root = workspace / "build/minias-native35-inputs"
+          linux_out = workspace / "build/linux-native35-out"
+          result_root = workspace / "build/minias-native35-results"
+          result_root.mkdir(parents=True, exist_ok=True)
+          files = sorted(input_root.rglob("*.s"))
+          if len(files) != 35:
+              raise SystemExit(f"expected 35 native inputs, got {len(files)}")
+
+          results = []
+          blockers = Counter()
+          for inp in files:
+              rel = inp.relative_to(input_root).as_posix()
+              obj = result_root / (rel[:-2] + ".o")
+              err = result_root / (rel[:-2] + ".err")
+              obj.parent.mkdir(parents=True, exist_ok=True)
+              err.parent.mkdir(parents=True, exist_ok=True)
+              proc = subprocess.run(
+                  [str(minias), "-o", str(obj), str(inp)],
+                  cwd=linux_out,
+                  stdout=subprocess.DEVNULL,
+                  stderr=subprocess.PIPE,
+                  text=True,
+                  errors="replace",
+              )
+              err.write_text(proc.stderr)
+              ok = False
+              if proc.returncode == 0 and obj.is_file() and obj.stat().st_size:
+                  check = subprocess.run(
+                      ["readelf", "-h", str(obj)],
+                      stdout=subprocess.PIPE,
+                      stderr=subprocess.PIPE,
+                      text=True,
+                      errors="replace",
+                  )
+                  ok = check.returncode == 0 and "RISC-V" in check.stdout and "REL (Relocatable file)" in check.stdout
+              if ok:
+                  results.append(("PASS", rel, "-"))
+                  continue
+              raw = next((line.strip() for line in proc.stderr.splitlines() if line.strip()), "internal:no-diagnostic")
+              blocker = re.sub(r"^minic-as:\s*", "", raw)
+              blocker = re.sub(r":line=[0-9]+$", "", blocker)
+              blockers[blocker] += 1
+              results.append(("FAIL", rel, blocker))
+
+          (result_root / "results.tsv").write_text(
+              "".join(f"{status}\t{path}\t{blocker}\n" for status, path, blocker in results)
+          )
+          pass_count = sum(status == "PASS" for status, _, _ in results)
+          fail_count = len(results) - pass_count
+          lines = [
+              f"MINIAS_NATIVE35_SUMMARY pass={pass_count} fail={fail_count} total={len(results)}",
+              "MINIAS_NATIVE35_TOP_BLOCKERS",
+          ]
+          lines.extend(
+              [f"  {count:5d} {blocker}" for blocker, count in blockers.most_common()]
+              or ["  none"]
+          )
+          lines.append("MINIAS_NATIVE35_FILES")
+          lines.extend(f"{status}\t{path}\t{blocker}" for status, path, blocker in results)
+          summary = "\n".join(lines) + "\n"
+          (result_root / "summary.txt").write_text(summary)
+          print(summary, end="")
+          if pass_count != 35:
+              raise SystemExit(1)
+          PY
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: minias-a0-native35-progress
+          path: |
+            build/minias-native35-inputs/**/*.s
+            build/minias-native35-results/results.tsv
+            build/minias-native35-results/summary.txt
+            build/minias-native35-results/**/*.err
+          retention-days: 30
+          if-no-files-found: warn
+
+
+  gate3536:
+    if: always() && (github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[minias-gate-v1]'))
+    needs: [all3352, c149, native35]
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Require complete 3536 hard gate
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "${{ needs.all3352.result }}" = success
+          test "${{ needs.c149.result }}" = success
+          test "${{ needs.native35.result }}" = success
+          echo "MINIAS_A0_GATE_V1=PASS c_frozen=3352 c149=149 native=35 selected=3536 pass=3536 fail=0"
