@@ -17,7 +17,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: linux-runtime-owner-focused-v1-\${{ github.ref }}
+  group: linux-runtime-owner-focused-v1-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -31,7 +31,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: \${{ github.sha }}
+          ref: ${{ github.sha }}
 
       - name: Restore certified full linked fixture
         uses: actions/cache/restore@v4
@@ -65,7 +65,7 @@ jobs:
       - name: Resolve focused owner mode
         shell: bash
         env:
-          MODE: \${{ matrix.mode }}
+          MODE: ${{ matrix.mode }}
         run: |
           set -Eeuo pipefail
           case "$MODE" in
@@ -124,11 +124,11 @@ jobs:
           refresh_obj() {
             target="$1"
             log="$2"
-            base="\${target%.o}"
-            dir="\${target%/*}"
-            stem="\${target##*/}"
-            stem="\${stem%.o}"
-            rm -f "$out/$target" "$out/$dir/.\${stem}.o.cmd" \
+            base="${target%.o}"
+            dir="${target%/*}"
+            stem="${target##*/}"
+            stem="${stem%.o}"
+            rm -f "$out/$target" "$out/$dir/.${stem}.o.cmd" \
               "$out/$base.minic-stage2.i" "$out/$base.minic-stage2.s"
             MINIC="$TOOLCHAIN/bin/minic" REAL_CC=/usr/bin/riscv64-linux-gnu-gcc MINIC_KEEP_INTERMEDIATES=1 \
               make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- CC="$wrapper" -j2 V=1 "$target" \
@@ -215,7 +215,7 @@ jobs:
             --config tools/ci/linux-runtime-init-irq-frontier-v0.json \
             --nm "$EV/early/nm.txt" --image "$EV/early/Image.early" \
             --evidence-dir "$EV/watch" --timeout-ms 8000 --poll-ms 100 | tee "$EV/watch.stdout.txt"
-          rc=\${PIPESTATUS[0]}
+          rc=${PIPESTATUS[0]}
           set -e
           cat "$EV/watch/frontier-summary.txt" || true
           exit "$rc"
@@ -224,17 +224,17 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: linux-runtime-owner-focused-v1-\${{ matrix.mode }}-\${{ github.sha }}
+          name: linux-runtime-owner-focused-v1-${{ matrix.mode }}-${{ github.sha }}
           path: |
-            build/linux-runtime-owner-focused-v1-\${{ matrix.mode }}/profile/patch.log
-            build/linux-runtime-owner-focused-v1-\${{ matrix.mode }}/*-refresh.log
-            build/linux-runtime-owner-focused-v1-\${{ matrix.mode }}/target.objdump.txt
-            build/linux-runtime-owner-focused-v1-\${{ matrix.mode }}/target.nm.txt
-            build/linux-runtime-owner-focused-v1-\${{ matrix.mode }}/target.minic-stage2.s
-            build/linux-runtime-owner-focused-v1-\${{ matrix.mode }}/target-function.objdump.txt
-            build/linux-runtime-owner-focused-v1-\${{ matrix.mode }}/watch/frontier-result.json
-            build/linux-runtime-owner-focused-v1-\${{ matrix.mode }}/watch/frontier-summary.txt
-            build/linux-runtime-owner-focused-v1-\${{ matrix.mode }}/watch/watch-result.json
-            build/linux-runtime-owner-focused-v1-\${{ matrix.mode }}/watch/qemu.interrupts.txt
+            build/linux-runtime-owner-focused-v1-${{ matrix.mode }}/profile/patch.log
+            build/linux-runtime-owner-focused-v1-${{ matrix.mode }}/*-refresh.log
+            build/linux-runtime-owner-focused-v1-${{ matrix.mode }}/target.objdump.txt
+            build/linux-runtime-owner-focused-v1-${{ matrix.mode }}/target.nm.txt
+            build/linux-runtime-owner-focused-v1-${{ matrix.mode }}/target.minic-stage2.s
+            build/linux-runtime-owner-focused-v1-${{ matrix.mode }}/target-function.objdump.txt
+            build/linux-runtime-owner-focused-v1-${{ matrix.mode }}/watch/frontier-result.json
+            build/linux-runtime-owner-focused-v1-${{ matrix.mode }}/watch/frontier-summary.txt
+            build/linux-runtime-owner-focused-v1-${{ matrix.mode }}/watch/watch-result.json
+            build/linux-runtime-owner-focused-v1-${{ matrix.mode }}/watch/qemu.interrupts.txt
           if-no-files-found: warn
           retention-days: 7
