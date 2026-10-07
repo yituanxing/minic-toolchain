@@ -38,13 +38,14 @@ MinicGlobalObjectId minic_parser_find_global_object_entity(const MinicParser *pa
         return MINIC_GLOBAL_OBJECT_INVALID;
     }
     name_length = minic_parser_span_length(name_span);
-    for (index = 0U; index < parser->program->global_object_count; ++index) {
+    for (index = parser->program->global_object_count; index > 0U; --index) {
+        size_t object_index = index - 1U;
         const MinicGlobalObject *object;
 
-        object = minic_c0_program_global_object(parser->program, index);
+        object = minic_c0_program_global_object(parser->program, object_index);
         if (object != NULL && object->name_length == name_length &&
             memcmp(object->name, parser->source + name_span.begin.offset, name_length) == 0) {
-            return index;
+            return object_index;
         }
     }
     return MINIC_GLOBAL_OBJECT_INVALID;
