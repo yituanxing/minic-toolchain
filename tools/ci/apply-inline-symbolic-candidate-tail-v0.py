@@ -4,9 +4,9 @@ from pathlib import Path
 p = Path("src/compiler/compiler.c")
 text = p.read_text()
 start = text.find("static bool minic_specialize_inline_symbolic_calls(\n")
-end = text.find("\nstatic bool minic_inline_integer_source_has_residual_reference(", start)
+end = text.find("    if (initial_clone_count != 0U || transitive_clone_count != 0U) {", start)
 if start < 0 or end < 0:
-    raise SystemExit("cannot locate symbolic specialization function")
+    raise SystemExit("cannot locate symbolic specialization lookup body")
 body = text[start:end]
 
 decl = "    size_t original_function_count;\n"
