@@ -22,14 +22,23 @@ jobs:
         with:
           ref: ${{ github.sha }}
 
-      - name: Restore successful Expanded Linux out cache
+      - name: Compute stable current-profile cache identity
+        id: profile-cache
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          digest=$(python3 tools/ci/linux-runtime-profile-cache-id-v1.py)
+          test -n "$digest"
+          printf 'digest=%s\n' "$digest" >>"$GITHUB_OUTPUT"
+          printf 'LINUX_RUNTIME_PROFILE_CACHE_ID=%s\n' "$digest"
+
+      - name: Restore exact certified Expanded Linux Image
         id: expanded-cache
         uses: actions/cache/restore@v4
         with:
           path: build/linux-expanded-kbuild-v0/out
-          key: linux-expanded-mixed-v1-6.6.143-${{ runner.os }}-${{ hashFiles('src/**', 'include/**', 'tools/ci/apply-*.py', 'tests/external/linux/stage2_kbuild_cc.sh') }}
-          restore-keys: |
-            linux-expanded-mixed-v1-6.6.143-${{ runner.os }}-
+          key: linux-expanded-image-v3-6.6.143-${{ runner.os }}-${{ steps.profile-cache.outputs.digest }}-${{ hashFiles('tools/ci/linux-expanded-owner-targets-v1.txt', 'tools/ci/linux-expanded-owner-refresh-v1.sh') }}
+          fail-on-cache-miss: true
 
       - name: Install trace prerequisites
         shell: bash
@@ -48,10 +57,16 @@ jobs:
           image="$out/arch/riscv/boot/Image"
           vmlinux="$out/vmlinux"
           mkdir -p "$work"
+          test "${{ steps.expanded-cache.outputs.cache-hit }}" = "true"
           test -s "$image"
           test -s "$vmlinux"
+          printf 'CACHE_HIT=%s\nCACHE_MATCHED_KEY=%s\n' \
+            "${{ steps.expanded-cache.outputs.cache-hit }}" \
+            "${{ steps.expanded-cache.outputs.cache-matched-key }}" \
+            | tee "$work/cache.txt"
           sha256sum "$image" | tee "$work/Image.sha256"
           stat -c 'IMAGE_BYTES=%s' "$image" | tee "$work/summary.txt"
+          cat "$work/cache.txt" >>"$work/summary.txt"
           riscv64-linux-gnu-readelf -h "$vmlinux" | grep -E 'Entry point|Machine:' | tee "$work/elf-entry.txt"
           riscv64-linux-gnu-objdump -d --start-address=0xffffffff80000000 --stop-address=0xffffffff80000400 "$vmlinux" \
             >"$work/vmlinux-entry-disasm.txt" || true
@@ -83,8 +98,10 @@ jobs:
               if cur:
                   cur.append(line)
                   m=re.match(r'0x([0-9a-fA-F]+):', line.strip())
-                  if m and int(m.group(1),16) >= 0x80200000:
-                      keep=True
+                  if m:
+                      a=int(m.group(1),16)
+                      if (0x80200000 <= a < 0xa0000000) or a >= 0xffffffff80000000:
+                          keep=True
           if cur and keep: blocks.extend(cur)
           open(dst,'w').write('\n'.join(blocks[-1200:])+'\n')
           addrs=[]
@@ -92,7 +109,7 @@ jobs:
               m=re.match(r'\s*0x([0-9a-fA-F]+):', line)
               if m:
                   a=int(m.group(1),16)
-                  if 0x80200000 <= a < 0xa0000000:
+                  if (0x80200000 <= a < 0xa0000000) or a >= 0xffffffff80000000:
                       addrs.append(a)
           from collections import Counter
           c=Counter(addrs)
@@ -104,6 +121,48 @@ jobs:
               for a,n in c.most_common(40):
                   f.write(f'PC 0x{a:x} count={n}\n')
           PY
+          riscv64-linux-gnu-nm -n "$vmlinux" >"$work/vmlinux.nm"
+          python3 - "$work/kernel-blocks.txt" "$work/vmlinux.nm" "$work/virtual-pc-symbols.txt" <<'PY'
+          import bisect, re, sys
+          blocks_path, nm_path, out_path = sys.argv[1:]
+          pcs=[]
+          for line in open(blocks_path, errors='replace'):
+              m=re.match(r'\s*0x([0-9a-fA-F]+):', line)
+              if not m:
+                  continue
+              pc=int(m.group(1),16)
+              if pc >= 0xffffffff80000000:
+                  pcs.append(pc)
+          uniq=[]
+          seen=set()
+          for pc in reversed(pcs):
+              if pc not in seen:
+                  seen.add(pc); uniq.append(pc)
+              if len(uniq) >= 128:
+                  break
+          uniq.reverse()
+          syms=[]
+          for line in open(nm_path, errors='replace'):
+              parts=line.split()
+              if len(parts) < 3:
+                  continue
+              try:
+                  addr=int(parts[0],16)
+              except ValueError:
+                  continue
+              syms.append((addr, parts[-1]))
+          syms.sort()
+          addrs=[a for a,_ in syms]
+          with open(out_path,'w') as out:
+              for pc in uniq:
+                  i=bisect.bisect_right(addrs, pc)-1
+                  if i < 0:
+                      out.write(f'0x{pc:x} ?\n')
+                  else:
+                      base,name=syms[i]
+                      out.write(f'0x{pc:x} {name}+0x{pc-base:x} base=0x{base:x}\n')
+          PY
+          tail -n 80 "$work/virtual-pc-symbols.txt" | tee "$work/virtual-pc-symbols-tail.txt"
           cat "$work/kernel-blocks.txt.summary" | tee -a "$work/summary.txt"
           tail -n 240 "$work/kernel-blocks.txt" | tee "$work/kernel-blocks-tail.txt"
           tail -n 120 "$work/qemu-console.log" | tee "$work/qemu-console-tail.txt"
