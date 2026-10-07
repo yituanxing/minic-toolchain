@@ -22,6 +22,7 @@ patches=(
   apply-inline-specialization-base-callee-integer-v0.py
   apply-inline-specialization-capacity-v0.py
   apply-inline-specialization-symbolic-address-v0.py
+  apply-inline-specialization-symbolic-candidate-range-v0.py
   apply-inline-specialization-symbolic-nested-array-v0.py
   apply-inline-specialization-symbolic-integer-closure-v0.py
   apply-inline-specialization-symbolic-transitive-rewrite-v0.py
