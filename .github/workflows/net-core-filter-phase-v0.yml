@@ -55,6 +55,18 @@ jobs:
           make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- olddefconfig
           make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- -j4 prepare
 
+      - name: Warm filter Kbuild prerequisites with GCC
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/filter-phase"
+          src="$work/linux-6.6.143"
+          out="$work/out"
+          make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
+            CC=/usr/bin/riscv64-linux-gnu-gcc -j4 net/core/filter.o
+          test -s "$out/net/core/filter.o"
+          rm -f "$out/net/core/filter.o"
+
       - name: Phase trace net/core/filter.o
         shell: bash
         run: |
