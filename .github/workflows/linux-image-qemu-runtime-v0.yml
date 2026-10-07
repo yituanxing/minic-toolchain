@@ -22,12 +22,22 @@ jobs:
         with:
           ref: ${{ github.sha }}
 
+      - name: Compute stable current-profile cache identity
+        id: profile-cache
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          digest=$(python3 tools/ci/linux-runtime-profile-cache-id-v1.py)
+          test -n "$digest"
+          printf 'digest=%s\n' "$digest" >>"$GITHUB_OUTPUT"
+          printf 'LINUX_RUNTIME_PROFILE_CACHE_ID=%s\n' "$digest"
+
       - name: Restore latest Linux Image cache
         id: kbuild-cache
         uses: actions/cache/restore@v4
         with:
           path: build/linux-expanded-kbuild-v0/out
-          key: linux-expanded-image-v1-6.6.143-${{ runner.os }}-${{ hashFiles('src/**', 'include/**', 'tools/ci/apply-*.py', 'tests/external/linux/stage2_kbuild_cc.sh') }}
+          key: linux-expanded-image-v2-6.6.143-${{ runner.os }}-${{ steps.profile-cache.outputs.digest }}
           fail-on-cache-miss: true
 
       - name: Install RV64 QEMU runtime prerequisites

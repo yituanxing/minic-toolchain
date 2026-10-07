@@ -22,12 +22,24 @@ jobs:
         with:
           ref: ${{ github.sha }}
 
+      - name: Compute stable current-profile cache identity
+        id: profile-cache
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          digest=$(python3 tools/ci/linux-runtime-profile-cache-id-v1.py)
+          test -n "$digest"
+          printf 'digest=%s\n' "$digest" >>"$GITHUB_OUTPUT"
+          printf 'LINUX_RUNTIME_PROFILE_CACHE_ID=%s\n' "$digest"
+
       - name: Restore Linux Kbuild frontier cache
         id: kbuild-cache
         uses: actions/cache/restore@v4
         with:
           path: build/linux-expanded-kbuild-v0/out
-          key: linux-expanded-mixed-v1-6.6.143-${{ runner.os }}-${{ hashFiles('src/**', 'include/**', 'tools/ci/apply-*.py', 'tests/external/linux/stage2_kbuild_cc.sh') }}
+          key: linux-expanded-mixed-v2-6.6.143-${{ runner.os }}-${{ steps.profile-cache.outputs.digest }}
+          restore-keys: |
+            linux-expanded-mixed-v1-6.6.143-${{ runner.os }}-225077842dbe99b9c583654b7892ee2c9b7ac96fc53e0cbb9faa892f63eb4ad8
 
       - name: Install RV64 Linux prerequisites
         run: |
@@ -135,7 +147,14 @@ jobs:
             echo "LINUX_UNDEF_REFRESH=SKIP_EXACT_MIXED_CACHE" | tee -a "$ev/undef-refresh-summary.txt"
           else
             start=$(date +%s)
-            for target in "${targets[@]}"; do rm -f "$out/$target"; done
+            matched="${{ steps.kbuild-cache.outputs.cache-matched-key }}"
+            legacy_seed="linux-expanded-mixed-v1-6.6.143-${{ runner.os }}-225077842dbe99b9c583654b7892ee2c9b7ac96fc53e0cbb9faa892f63eb4ad8"
+            if test "$matched" = "$legacy_seed"; then
+              echo "LINUX_UNDEF_REFRESH=RESUME_CERTIFIED_PARTIAL_SEED key=$matched" | tee -a "$ev/undef-refresh-summary.txt"
+            else
+              for target in "${targets[@]}"; do rm -f "$out/$target"; done
+              echo "LINUX_UNDEF_REFRESH=FORCE_CURRENT_PROFILE_REBUILD" | tee -a "$ev/undef-refresh-summary.txt"
+            fi
             MINIC="$work/toolchain/bin/minic" REAL_CC=/usr/bin/riscv64-linux-gnu-gcc \
             MINIC_KEEP_INTERMEDIATES=0 MINIC_KBUILD_TRACE="$ev/undef-refresh.trace" CORE_FAST_TRACE=1 \
               make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
@@ -193,14 +212,14 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: build/linux-expanded-kbuild-v0/out
-          key: linux-expanded-mixed-v1-6.6.143-${{ runner.os }}-${{ hashFiles('src/**', 'include/**', 'tools/ci/apply-*.py', 'tests/external/linux/stage2_kbuild_cc.sh') }}
+          key: linux-expanded-mixed-v2-6.6.143-${{ runner.os }}-${{ steps.profile-cache.outputs.digest }}
 
       - name: Save certified successful Linux Image cache
         if: success() && steps.frontier.outcome == 'success'
         uses: actions/cache/save@v4
         with:
           path: build/linux-expanded-kbuild-v0/out
-          key: linux-expanded-image-v1-6.6.143-${{ runner.os }}-${{ hashFiles('src/**', 'include/**', 'tools/ci/apply-*.py', 'tests/external/linux/stage2_kbuild_cc.sh') }}
+          key: linux-expanded-image-v2-6.6.143-${{ runner.os }}-${{ steps.profile-cache.outputs.digest }}
 
       - name: Preserve expanded frontier evidence
         if: always()
