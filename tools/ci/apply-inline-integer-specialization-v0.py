@@ -275,6 +275,11 @@ static bool minic_inline_integer_source_has_residual_reference(
 static bool minic_finalize_inline_integer_specialization_references(MinicC0Program *program) {
     size_t function_index;
 
+    if (getenv("MINIC_DISABLE_SPECIALIZATION_FINALIZE") != NULL) {
+        (void)fprintf(stderr, "MINIC_SPECIALIZATION_FINALIZE=DISABLED\n");
+        (void)fflush(stderr);
+        return program != NULL;
+    }
     if (program == NULL) {
         return false;
     }
