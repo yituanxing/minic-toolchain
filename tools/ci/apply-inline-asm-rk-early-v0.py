@@ -165,7 +165,8 @@ replacement = '''    if (source == NULL) {
        original register fallback semantics. */
     if (!source->is_goto && source->template_text != NULL &&
         source->template_length != 0U && source->outputs != NULL && source->inputs != NULL &&
-        source->output_count == 1U && source->input_count != 0U &&
+        source->output_count == 1U && source->input_count == 1U &&
+        core_inline_asm_constraint_is(&source->inputs[0], "rK") &&
         source->label_count == 0U && source->register_clobber_count == 0U &&
         source->clobber_count == (source->has_memory_clobber ? 1U : 0U)) {
         const MinicInlineAsmOperand *output = &source->outputs[0];
