@@ -119,6 +119,34 @@ jobs:
           python3 tools/ci/scan-linux-nonalloc-explicit-sections-v0.py "$out" \
             --verify --targets-file "$ev/section-refresh-targets.txt"
 
+      - name: Preflight shared inline-asm blocker pair
+        id: blocker-pair
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0"
+          src="$work/linux-6.6.143"
+          out="$work/out"
+          ev="$work/evidence"
+          wrapper="$GITHUB_WORKSPACE/tests/external/linux/stage2_kbuild_cc.sh"
+          targets=(kernel/dma/pool.o mm/mprotect.o)
+          for target in "${targets[@]}"; do rm -f "$out/$target"; done
+          start=$(date +%s)
+          set +e
+          MINIC="$work/toolchain/bin/minic" REAL_CC=/usr/bin/riscv64-linux-gnu-gcc \
+          MINIC_KEEP_INTERMEDIATES=0 MINIC_KBUILD_TRACE="$ev/blocker-pair.trace" \
+          MINIC_ASM_BATCH_TRACE=1 MINIC_LOCAL_FACT_TRACE=1 CORE_FAST_TRACE=1 \
+            make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
+              CC="$wrapper" -j2 V=1 "${targets[@]}" >"$ev/blocker-pair.log" 2>&1
+          rc=$?
+          set -e
+          printf 'LINUX_BLOCKER_PAIR rc=%s elapsed_s=%s\n' "$rc" "$(($(date +%s) - start))" \
+            | tee "$ev/blocker-pair-summary.txt"
+          grep -a -E 'ASM_BATCH_(PROBE|INPUT)|CORE_FAST_TRACE|MINIC_KBUILD_BLOCKER|error:' \
+            "$ev/blocker-pair.log" >"$ev/blocker-pair-diagnostic.txt" || true
+          tail -n 240 "$ev/blocker-pair.log" >"$ev/blocker-pair-tail.txt" || true
+          exit "$rc"
+
       - name: Refresh cached final-link failure pool
         shell: bash
         run: |
