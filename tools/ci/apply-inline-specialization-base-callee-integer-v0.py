@@ -20,6 +20,8 @@ replace_once(
     '''                current_callee = program->functions[current_callee_id];
                 if (!current_callee.is_integer_specialization ||
                     current_callee.specialization_source >= original_function_count) {
+                    nested_expression_index =
+                        transitive_call_next[nested_expression_index];
                     continue;
                 }
                 nested_source_id = current_callee.specialization_source;
@@ -28,11 +30,15 @@ replace_once(
     '''                current_callee = program->functions[current_callee_id];
                 if (current_callee.is_integer_specialization) {
                     if (current_callee.specialization_source >= original_function_count) {
+                        nested_expression_index =
+                            transitive_call_next[nested_expression_index];
                         continue;
                     }
                     nested_source_id = current_callee.specialization_source;
                 } else {
                     if (current_callee_id >= original_function_count) {
+                        nested_expression_index =
+                            transitive_call_next[nested_expression_index];
                         continue;
                     }
                     nested_source_id = current_callee_id;
