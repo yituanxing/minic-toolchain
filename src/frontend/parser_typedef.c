@@ -23,13 +23,14 @@ MinicTypeAliasId minic_parser_find_type_alias(const MinicParser *parser,
     }
 
     name_length = minic_parser_span_length(name_span);
-    for (index = 0U; index < parser->program->type_alias_count; ++index) {
+    for (index = parser->program->type_alias_count; index > 0U; --index) {
+        size_t alias_index = index - 1U;
         const MinicTypeAlias *alias;
 
-        alias = minic_c0_program_type_alias(parser->program, index);
+        alias = minic_c0_program_type_alias(parser->program, alias_index);
         if (alias != NULL && !alias->is_block_scope && alias->name_length == name_length &&
             memcmp(alias->name, parser->source + name_span.begin.offset, name_length) == 0) {
-            return index;
+            return alias_index;
         }
     }
     return MINIC_TYPE_ALIAS_INVALID;
