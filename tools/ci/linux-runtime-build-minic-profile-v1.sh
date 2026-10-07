@@ -37,6 +37,7 @@ patches=(
   apply-inline-asm-rk-tail-rollback-v0.py
   apply-inline-asm-rk-cast-tail-v0.py
   apply-inline-asm-immediate-batch-trace-v0.py
+  apply-inline-asm-write-output-trace-v0.py
   apply-inline-specialization-core-empty-function-v0.py
   apply-inline-specialization-label-alias-v0.py
   apply-riscv64-default-text-section-v0.py

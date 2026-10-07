@@ -142,7 +142,7 @@ jobs:
           set -e
           printf 'LINUX_BLOCKER_PAIR rc=%s elapsed_s=%s\n' "$rc" "$(($(date +%s) - start))" \
             | tee "$ev/blocker-pair-summary.txt"
-          grep -a -E 'ASM_BATCH_(PROBE|INPUT)|CORE_FAST_TRACE|MINIC_KBUILD_BLOCKER|error:' \
+          grep -a -E 'ASM_BATCH_(PROBE|INPUT)|ASM_OUTPUT_STAGE|CORE_FAST_TRACE|MINIC_KBUILD_BLOCKER|error:' \
             "$ev/blocker-pair.log" >"$ev/blocker-pair-diagnostic.txt" || true
           tail -n 240 "$ev/blocker-pair.log" >"$ev/blocker-pair-tail.txt" || true
           exit "$rc"
