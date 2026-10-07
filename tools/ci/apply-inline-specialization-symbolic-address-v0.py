@@ -320,7 +320,8 @@ static bool minic_specialize_inline_symbolic_calls(
         if (!adds_symbol) {
             continue;
         }
-        for (candidate_index = original_function_count; candidate_index < program->function_count;
+        for (candidate_index = original_function_count;
+             candidate_index < program->function_count;
              ++candidate_index) {
             if (minic_inline_symbolic_variant_matches(
                     &program->functions[candidate_index],
@@ -445,7 +446,7 @@ static bool minic_specialize_inline_symbolic_calls(
                 if (!used_caller_fact || !adds_symbol) {
                     continue;
                 }
-                for (candidate_index = 0U;
+                for (candidate_index = original_function_count;
                      candidate_index < program->function_count;
                      ++candidate_index) {
                     if (minic_inline_symbolic_variant_matches(
@@ -609,7 +610,7 @@ static const MinicFunction *core_select_transitive_symbolic_specialization(
             best_symbol_count += 1U;
         }
     }
-    for (candidate_index = original_function_count; candidate_index < program->function_count;
+    for (candidate_index = 0U; candidate_index < program->function_count;
          ++candidate_index) {
         const MinicFunction *candidate = &program->functions[candidate_index];
         size_t symbol_count = 0U;
