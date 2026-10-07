@@ -28,8 +28,6 @@ jobs:
         with:
           path: build/linux-expanded-kbuild-v0/out
           key: linux-expanded-mixed-v1-6.6.143-${{ runner.os }}-${{ hashFiles('src/**', 'include/**', 'tools/ci/apply-*.py', 'tests/external/linux/stage2_kbuild_cc.sh') }}
-          restore-keys: |
-            linux-expanded-kbuild-v0-6.6.143-${{ runner.os }}-
 
       - name: Install RV64 Linux prerequisites
         run: |
@@ -38,51 +36,22 @@ jobs:
             build-essential gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
             bc bison flex libssl-dev libelf-dev make curl xz-utils python3
 
-      - name: Apply MiniC Linux semantic stack and build
+      - name: Build exact centralized Linux runtime MiniC profile
         shell: bash
         run: |
           set -Eeuo pipefail
           work="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0"
           build="$work/toolchain"
-          mkdir -p "$work/evidence"
-          start=$(date +%s)
-          patches=(
-            apply-local-integer-assignment-v2.py
-            apply-local-integer-logical-conditions-v0.py
-            apply-local-null-pointer-facts-v0.py
-            apply-builtin-constant-p-local-facts-v0.py
-            apply-inline-integer-specialization-v0.py
-            apply-inline-specialization-local-facts-v0.py
-            apply-inline-specialization-stable-parameter-facts-v0.py
-            apply-inline-specialization-transitive-integer-v0.py
-            apply-inline-specialization-base-callee-integer-v0.py
-            apply-inline-specialization-capacity-v0.py
-            apply-inline-specialization-symbolic-address-v0.py
-            apply-inline-specialization-symbolic-nested-array-v0.py
-            apply-inline-specialization-symbolic-integer-closure-v0.py
-            apply-inline-specialization-symbolic-transitive-rewrite-v0.py
-            apply-inline-specialization-symbolic-array-lvalue-v0.py
-            apply-inline-specialization-symbolic-closed-integers-v0.py
-            apply-inline-specialization-base-callee-symbolic-v0.py
-            apply-inline-specialization-resolved-asm-goto-v0.py
-            apply-inline-specialization-core-reachability-v0.py
-            apply-inline-specialization-original-reachability-v0.py
-            apply-inline-asm-local-integer-facts-v0.py
-            apply-inline-specialization-core-empty-function-v0.py
-            apply-inline-specialization-label-alias-v0.py
-            apply-riscv64-default-text-section-v0.py
-            apply-riscv64-explicit-section-flags-v0.py
-            apply-inline-asm-symbolic-specialization-v0.py
-          )
-          for patch in "${patches[@]}"; do
-            python3 "tools/ci/$patch" | tee -a "$work/evidence/patch.log"
-          done
-          git diff --check
-          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$build" \
-            "$build/bin/minic" "$build/bin/minic-cc"
-          test -x "$build/bin/minic" && test -x "$build/bin/minic-cc"
-          echo "TIMING toolchain_s=$(($(date +%s) - start))" | tee -a "$work/evidence/timing.txt"
-          echo "LINUX_EXPANDED_TOOLCHAIN=PASS head=${GITHUB_SHA}"
+          ev="$work/evidence"
+          mkdir -p "$ev"
+          bash tools/ci/linux-runtime-build-minic-profile-v1.sh "$build" "$ev/profile"
+          cp "$ev/profile/toolchain-timing.txt" "$ev/timing.txt"
+          grep -F 'apply-riscv64-core-value-slot-pack-v0.py' "$ev/profile/minic-profile.txt"
+          grep -F 'apply-riscv64-core-value-slot-reuse-v0.py' "$ev/profile/minic-profile.txt"
+          grep -F 'apply-riscv64-core-object-slot-reuse-cfg-hotfix-v0.py' "$ev/profile/minic-profile.txt"
+          grep -F 'apply-riscv64-structured-asm-used-callee-save-v0.py' "$ev/profile/minic-profile.txt"
+          grep -F 'apply-riscv64-pi-local-symbol-address-v0.py' "$ev/profile/minic-profile.txt"
+          echo "LINUX_EXPANDED_TOOLCHAIN=PASS head=$GITHUB_SHA"
 
       - name: Prepare pinned Linux 6.6.143
         id: prepare
@@ -225,6 +194,13 @@ jobs:
         with:
           path: build/linux-expanded-kbuild-v0/out
           key: linux-expanded-mixed-v1-6.6.143-${{ runner.os }}-${{ hashFiles('src/**', 'include/**', 'tools/ci/apply-*.py', 'tests/external/linux/stage2_kbuild_cc.sh') }}
+
+      - name: Save certified successful Linux Image cache
+        if: success() && steps.frontier.outcome == 'success'
+        uses: actions/cache/save@v4
+        with:
+          path: build/linux-expanded-kbuild-v0/out
+          key: linux-expanded-image-v1-6.6.143-${{ runner.os }}-${{ hashFiles('src/**', 'include/**', 'tools/ci/apply-*.py', 'tests/external/linux/stage2_kbuild_cc.sh') }}
 
       - name: Preserve expanded frontier evidence
         if: always()
