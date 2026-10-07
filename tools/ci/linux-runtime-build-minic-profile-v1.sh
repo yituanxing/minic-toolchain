@@ -44,6 +44,7 @@ patches=(
   apply-riscv64-explicit-section-flags-v0.py
   apply-inline-asm-symbolic-specialization-v0.py
   apply-inline-symbolic-candidate-tail-v0.py
+  apply-perf-symbolic-direct-transitive-trace-v0.py
   apply-perf-specialization-phase-trace-v0.py
   apply-riscv64-core-value-slot-pack-v0.py
   apply-riscv64-core-value-slot-reuse-v0.py
