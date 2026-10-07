@@ -69,7 +69,7 @@ jobs:
           start=$(date +%s)
           set +e
           /usr/bin/time -v -o "$ev/filter-phase.time.txt" \
-            timeout --signal=TERM --kill-after=20s 2m \
+            timeout --signal=TERM --kill-after=20s 30s \
             env MINIC="$minic" REAL_CC=/usr/bin/riscv64-linux-gnu-gcc \
               MINIC_KEEP_INTERMEDIATES=1 MINIC_KBUILD_TRACE="$ev/filter-phase.kbuild.trace" \
               MINIC_BOOTSTRAP_TRACE=1 MINIC_SPECIALIZATION_PERF_TRACE=1 CORE_FAST_TRACE=1 \
