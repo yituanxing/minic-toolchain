@@ -321,12 +321,24 @@ jobs:
           start=$(date +%s)
           set +e
           MINIC="$work/toolchain/bin/minic" REAL_CC=/usr/bin/riscv64-linux-gnu-gcc \
-          MINIC_KEEP_INTERMEDIATES=0 MINIC_KBUILD_TRACE="$trace" CORE_FAST_TRACE=1 \
+          MINIC_KEEP_INTERMEDIATES=1 MINIC_KBUILD_TRACE="$trace" CORE_FAST_TRACE=1 \
+            timeout --signal=TERM --kill-after=15s 12m \
             make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
               CC="$wrapper" -j4 V=1 Image >"$ev/kbuild.log" 2>&1
           rc=$?
           set -e
-          echo "TIMING image_frontier_s=$(($(date +%s) - start)) rc=$rc" | tee -a "$ev/timing.txt"
+          elapsed=$(($(date +%s) - start))
+          echo "TIMING image_frontier_s=$elapsed rc=$rc" | tee -a "$ev/timing.txt"
+          tail -n 120 "$trace" >"$ev/minic-kbuild-tail.trace" || true
+          last_stderr=$(find "$out" -type f -name '*.minic.stderr' -printf '%T@ %p\n' 2>/dev/null \
+            | sort -nr | head -n 1 | cut -d' ' -f2- || true)
+          if [[ -n "$last_stderr" && -f "$last_stderr" ]]; then
+            cp "$last_stderr" "$ev/last-minic.stderr"
+          fi
+          if (( rc == 124 || rc == 137 )); then
+            printf 'LINUX_EXPANDED_FRONTIER_TIMEOUT rc=%s elapsed_s=%s\n' "$rc" "$elapsed" \
+              | tee "$ev/frontier-timeout-summary.txt"
+          fi
           attempts=$(grep -c '^minic ' "$trace" || true)
           passes=$(grep -c '^pass ' "$trace" || true)
           delegates=$(grep -c '^delegate ' "$trace" || true)
