@@ -4,6 +4,9 @@ from pathlib import Path
 p = Path("src/compiler/compiler.c")
 s = p.read_text()
 
+if not s.startswith("#define _POSIX_C_SOURCE 200809L\\n"):
+    s = "#define _POSIX_C_SOURCE 200809L\\n" + s
+
 if '#include <time.h>' not in s:
     anchor = '#include <string.h>\n'
     if anchor not in s:
