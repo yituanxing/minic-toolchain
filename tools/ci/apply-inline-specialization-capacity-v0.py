@@ -58,6 +58,8 @@ old = '''                if (refined_id == MINIC_FUNCTION_INVALID) {
                             nested_bits,
                             specialization_count,
                             &refined_id)) {
+                        free(transitive_call_next);
+                        free(transitive_call_heads);
                         return false;
                     }
                     specialization_count += 1U;
@@ -72,6 +74,8 @@ new = '''                if (refined_id == MINIC_FUNCTION_INVALID) {
                                       (unsigned int)MINIC_INLINE_INTEGER_SPECIALIZATION_LIMIT,
                                       program->function_count,
                                       (size_t)nested_source_id);
+                        free(transitive_call_next);
+                        free(transitive_call_heads);
                         return false;
                     }
                     if (!minic_add_inline_integer_specialization(
@@ -86,6 +90,8 @@ new = '''                if (refined_id == MINIC_FUNCTION_INVALID) {
                                       specialization_count,
                                       program->function_count,
                                       (size_t)nested_source_id);
+                        free(transitive_call_next);
+                        free(transitive_call_heads);
                         return false;
                     }
                     specialization_count += 1U;
