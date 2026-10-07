@@ -8,19 +8,19 @@ MiniC 是一套由真实软件驱动、使用 ISO C11 重写的编译器工具�
 
 ## 当前编译边界
 
-当前主线只替换 C 编译阶段：
+Compiler V1 仍冻结在当前 Linux runtime 收敛所使用的 C 编译边界：
 
 ```text
 C 源码
   -> 外部 RISC-V GCC 预处理
   -> MiniC 编译器：预处理 C（.i）生成 RV64 汇编（.s）
   -> 外部 GNU 汇编和链接
-  -> QEMU RISC-V 用户态执行
+  -> QEMU RISC-V 执行
 ```
 
-外部 GCC 是明确记录的辅助工具。它可以负责预处理、汇编、链接和提供 CRT/libc，但不得替 MiniC 编译任何 C 函数。
+在这条主线上，外部 GCC/GNU 工具仍是明确记录的差分与集成辅助工具，但不得替 MiniC 编译任何 C 函数。
 
-原生预处理器、汇编器、链接器、libc 替换和完整自举属于后续独立里程碑。
+仓库目前已经同时包含可独立执行的 MiniPP、MiniAS、MiniAR、MiniLD、ELF/对象工具以及分阶段 `minic` driver，并分别具有自己的验证门禁。它们已经存在并不意味着 full-Linux 路径会自动切换工具边界；预处理、汇编、归档/链接、driver 和对象工具都应在独立认证后再成为对应边界的 canonical 实现。
 
 ## 当前实现
 

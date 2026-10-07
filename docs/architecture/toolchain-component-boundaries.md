@@ -2,6 +2,14 @@
 
 Status: M0 boundary freeze for the native C toolchain.
 
+> **2026-10-07 status update:** this document preserves the original replacement-order
+> contract, but implementation has advanced beyond the early M0/T1 wording below.
+> MiniPP, MiniAS, MiniAR, MiniLD and multiple ELF/object utilities now exist as
+> independently executable tools with dedicated regression/integration gates.
+> The current Linux runtime-convergence line still intentionally isolates the
+> compiler boundary with external surrounding tools until each native boundary is
+> separately certified for the full-Linux path.
+
 ## 1. One repository, independent tool owners
 
 MiniC is a monorepo with one release/CI history, but each tool owns a distinct

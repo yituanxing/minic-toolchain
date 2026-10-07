@@ -79,6 +79,27 @@ Each entry must contain:
 - Target milestone / 目标里程碑: Target integer model + TypeContext consolidation before multi-target GNU enum claims / 多 target GNU enum 完整声明前的 Target integer model + TypeContext 收敛。
 - Related evidence / 相关证据: Linux `init/main.i` requires forward incomplete enum identity before completion and reaches `enum mm_cid_state { MM_CID_UNSET = -1U, MM_CID_LAZY_PUT = 1U << 31 }` at line 16618; the same TU later contains 64-bit positive enum values such as `0xffffffffULL << 32`. Linux `init/main.i` 既要求 incomplete enum 在后续 completion 前保持身份，又在 16618 出现 unsigned-range enum，并在后文出现 `0xffffffffULL << 32` 等 64-bit 正值。
 
+
+## DEV-0005: CI-applied Linux runtime compiler overlay / CI 动态叠加的 Linux runtime 编译器
+
+- Status / 状态: Active, high priority / 活跃，高优先级
+- Rule / 规则: Production/compiler acceptance should describe the checked-in implementation, temporary architectural debt must be visible and bounded, and the frozen Stage2 acceptance chain must remain connected to the compiler used for Linux runtime certification. 生产/编译器验收应描述仓库中实际提交的实现；临时架构债务必须可见且受控；frozen Stage2 验收链必须与 Linux runtime 认证实际使用的编译器保持连接。
+- Scope / 范围: `tools/ci/linux-runtime-build-minic-profile-v1.sh`, the 37 ordered `tools/ci/apply-*.py` scripts in that profile, the source files mutated by those scripts (especially frontend/Core/RV64 backend files), Linux runtime owner/full-Image workflows, and Stage2 bootstrap certification. 涉及 runtime profile builder、其中顺序执行的 37 个 apply 脚本、被动态修改的正式源码、Linux runtime owner/full-Image workflow 与 Stage2 自举认证。
+- Reason / 原因: Linux integration exposed correctness and frame/code-generation defects faster than each fix was productized into the frozen compiler source. Reversible CI patches made fault isolation and A/B validation practical while the runtime frontier was moving quickly. Linux 集成阶段连续暴露正确性、栈帧和代码生成问题；为了快速做 fault isolation 与 A/B 验证，部分修复先以可逆 CI patch 形式叠加，而没有同步产品化进 frozen compiler source。
+- Risk / 风险:
+  1. A clean checkout followed by `make` does not build the same MiniC binary used by the deepest Linux runtime gates. 干净 checkout 直接 `make` 得到的 MiniC 与最深 Linux runtime 门禁使用的 MiniC 不是同一个实现状态。
+  2. Patch ordering is part of compiler semantics but is encoded procedurally in CI rather than in the source history. patch 顺序事实上成为编译器语义的一部分，却没有体现在正式源码历史中。
+  3. The Compiler V1 B1/B2 Stage2 fixed-point evidence certifies the checked-in/frozen compiler, not the dynamically patched current runtime profile. Compiler V1 的 B1/B2 Stage2 fixed-point 证据没有覆盖当前动态 patch 后的 runtime profile。
+  4. Runtime regressions may be reproducible only through a specific CI profile instead of a releaseable compiler binary. runtime 回归可能只能依赖某个 CI profile 复现，而不能由可发布的编译器二进制直接复现。
+- Exit criteria / 退出条件:
+  1. Productize every patch still present in `linux-runtime-build-minic-profile-v1.sh` into the intended checked-in compiler boundary, with focused tests and no Linux-file special casing. 将 current profile 中仍然有效的每个 patch 产品化进入正确的正式源码边界，并建立 focused gate，不保留 Linux 文件名特判。
+  2. Convert `linux-runtime-build-minic-profile-v1.sh` from a source mutator into a verifier/builder: a clean checkout must already contain the required semantics. 将 runtime profile builder 从“修改源码”改成“验证/构建源码”；干净 checkout 本身必须已包含所需语义。
+  3. Re-run `make check-fast`, sanitizer/target regressions, B1 fixed-point bootstrap and B2 Stage2 real-program runtime on the productized source. 产品化后重新通过 fast/sanitize/target、B1 fixed-point 与 B2 Stage2 real-program runtime。
+  4. Rebuild the Linux owner/full-Image runtime chain from that productized Stage2/current release compiler without any semantic `apply-*.py` overlay and establish a new authoritative runtime frontier. 使用产品化后的 Stage2/当前 release 编译器、不再叠加语义 apply 脚本，重新建立 owner/full-Image runtime 链和新的权威 frontier。
+  5. Retire or archive profile-only patch scripts that no longer serve an independent migration/differential purpose. 对失去独立迁移/差分价值的 profile-only patch 脚本进行归档。
+- Target milestone / 目标里程碑: Before final `main` convergence and before claiming a current full-Linux runtime baseline / 最终合入 `main` 与声明 current full-Linux runtime baseline 之前。
+- Related evidence / 相关证据: At cleanup HEAD `63aec401297f365d78e441ea22e07411023b7b7e`, `tools/ci/` contains 142 `apply-*.py` scripts in total and the centralized runtime profile executes 37 of them. The checked-in RV64 `MINIC_CORE_INSTRUCTION_GLOBAL_ADDRESS` path still emits `la`, while `apply-riscv64-pi-local-symbol-address-v0.py` changes the runtime profile behavior for assembler-local symbols. 在当前 cleanup HEAD 上，正式 RV64 global-address emitter 与 runtime profile 叠加后的行为已可直接证明不同。
+
 ## Resolved deviations / 已解决偏离
 
 ## DEV-0001: C0 parser performs direct lexical matching / C0 Parser 直接匹配源码字符

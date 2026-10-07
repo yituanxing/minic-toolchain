@@ -691,10 +691,15 @@ sanitize:
 	@$(MAKE) MODE=sanitize check
 
 bootstrap: $(MINIC_BINARY)
-	@printf '%s\n' "bootstrap: deferred until the compiler capability ladder reaches its source profile"
+	@printf '%s\n' \
+		"bootstrap: self-hosting is certified by .github/workflows/compiler-bootstrap-b1-sharded.yml" \
+		"bootstrap: Stage0 -> Stage1 -> sharded Stage2 fixed-point; see docs/milestones/compiler-v1-frozen.md" \
+		"bootstrap: this local target is informational until the CI bootstrap pipeline is extracted into a reusable local script"
 
 bootstrap-compare: bootstrap
-	@printf '%s\n' "bootstrap-compare: no bootstrap stages exist yet"
+	@printf '%s\n' \
+		"bootstrap-compare: canonical B1 requires Stage1/Stage2 loadable-image fixed point plus Stage2 runtime gates" \
+		"bootstrap-compare: run the B1 workflow or extract its pipeline before treating this target as an executable bootstrap gate"
 
 format:
 	CLANG_FORMAT="$${CLANG_FORMAT:-clang-format-18}" \
