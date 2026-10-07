@@ -12,25 +12,18 @@ permissions:
 jobs:
   perf500:
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 40
+    env:
+      DEBIAN_FRONTEND: noninteractive
     steps:
       - uses: actions/checkout@v4
 
-      - name: Restore frozen first500 corpus
-        id: corpus
-        uses: actions/cache/restore@v4
-        with:
-          path: build/linux-focus-corpus
-          key: linux-focus-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-${{ hashFiles('tests/external/linux/replay-indices.txt') }}
-
-      - name: Require frozen corpus cache
-        shell: bash
+      - name: Install exact Linux corpus prerequisites
         run: |
           set -Eeuo pipefail
-          echo "CORPUS_CACHE_HIT=${{ steps.corpus.outputs.cache-hit }}"
-          test "${{ steps.corpus.outputs.cache-hit }}" = true
-          test -s build/linux-focus-corpus/selected-tus.txt
-          test "$(grep -cve '^[[:space:]]*$' build/linux-focus-corpus/selected-tus.txt)" -eq 500
+          sudo apt-get -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends             build-essential gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu             libc6-dev-riscv64-cross bc bison flex libssl-dev libelf-dev             make curl xz-utils python3
+          riscv64-linux-gnu-gcc --version | head -n1
 
       - name: Build exact current runtime MiniC profile
         shell: bash
@@ -41,14 +34,57 @@ jobs:
           bash tools/ci/linux-runtime-build-minic-profile-v1.sh             "$work/toolchain" "$work/evidence/profile"
           cat "$work/evidence/profile/toolchain-timing.txt"
 
-      - name: Replay exact frozen first500 with current C MiniC
+      - name: Materialize exact historical first500 inputs
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-perf-audit-v1"
+          mkdir -p "$GITHUB_WORKSPACE/build/linux-cache"
+          archive="$GITHUB_WORKSPACE/build/linux-cache/linux-6.6.143.tar.xz"
+          curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors             https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.6.143.tar.xz -o "$archive"
+          printf '%s  %s
+' dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932 "$archive" | sha256sum -c -
+          selection=$(grep -Ev '^[[:space:]]*(#|$)' tests/external/linux/replay-indices.txt | paste -sd, -)
+          start_ns=$(date +%s%N)
+          set +e
+          MINIC="$work/toolchain/bin/minic"           BUILD_DIR="$GITHUB_WORKSPACE/build/linux-perf-materialize"           LINUX_ARCHIVE_CACHE="$archive"           CROSS_COMPILE=riscv64-linux-gnu-           LINUX_BATCH_OFFSET=0           LINUX_BATCH_LIMIT=500           LINUX_BATCH_JOBS=4           LINUX_BATCH_SELECTION="$selection"             sh tests/external/linux/batch_probe.sh
+          materialize_rc=$?
+          set -e
+          end_ns=$(date +%s%N)
+          echo "MATERIALIZE_RC=$materialize_rc MATERIALIZE_WALL_MS=$(((end_ns-start_ns)/1000000))"             | tee "$work/evidence/materialize.txt"
+          test -s "$GITHUB_WORKSPACE/build/linux-perf-materialize/selected-tus.txt"
+          test "$(grep -cve '^[[:space:]]*$' "$GITHUB_WORKSPACE/build/linux-perf-materialize/selected-tus.txt")" -eq 500
+          python3 - <<'PY'
+          from pathlib import Path
+          import shutil
+          src=Path("build/linux-perf-materialize")
+          dst=Path("build/linux-perf-corpus")
+          shutil.rmtree(dst,ignore_errors=True)
+          (dst/"kbuild").mkdir(parents=True)
+          selected=src/"selected-tus.txt"
+          shutil.copy2(selected,dst/"selected-tus.txt")
+          manifest=src/"tu-manifest.txt"
+          if manifest.is_file():
+              shutil.copy2(manifest,dst/"tu-manifest.txt")
+          for row in selected.read_text().splitlines():
+              _,_,rel_i,_=row.split("\t",3)
+              s=src/"kbuild"/rel_i
+              d=dst/"kbuild"/rel_i
+              if not s.is_file() or s.stat().st_size==0:
+                  raise SystemExit(f"missing frozen input: {s}")
+              d.parent.mkdir(parents=True,exist_ok=True)
+              shutil.copy2(s,d)
+          print("PERF_CORPUS_FROZEN selected=500")
+          PY
+
+      - name: Replay frozen first500 with current C MiniC
         shell: bash
         run: |
           set -Eeuo pipefail
           work="$GITHUB_WORKSPACE/build/linux-perf-audit-v1"
           out="$work/first500"
           start_ns=$(date +%s%N)
-          CORE_FAST_TRACE=0 python3 tests/external/linux/corpus_replay.py             --minic "$work/toolchain/bin/minic"             --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus"             --work "$out"             --jobs 4             --offset 0             --limit 500             --sample-count 0
+          CORE_FAST_TRACE=0 python3 tests/external/linux/corpus_replay.py             --minic "$work/toolchain/bin/minic"             --corpus "$GITHUB_WORKSPACE/build/linux-perf-corpus"             --work "$out"             --jobs 4             --offset 0             --limit 500             --sample-count 0
           end_ns=$(date +%s%N)
           wall_ms=$(((end_ns-start_ns)/1000000))
           echo "PERF500_WALL_MS=$wall_ms" | tee "$work/evidence/perf500-wall.txt"
@@ -69,7 +105,9 @@ jobs:
           print(f"sum_tu_seconds={sum(secs):.3f}")
           print(f"mean_tu_seconds={statistics.fmean(secs):.6f}")
           print(f"median_tu_seconds={statistics.median(secs):.6f}")
-          print(f"p95_tu_seconds={sorted(secs)[max(0,int(len(secs)*0.95)-1)]:.6f}")
+          s=sorted(secs)
+          print(f"p95_tu_seconds={s[max(0,int(len(s)*0.95)-1)]:.6f}")
+          print(f"p99_tu_seconds={s[max(0,int(len(s)*0.99)-1)]:.6f}")
           print(f"max_tu_seconds={max(secs):.6f}")
           print("TOP30")
           for r in sorted(rows,key=lambda x:float(x["seconds"]),reverse=True)[:30]:
@@ -81,5 +119,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: linux-current-profile-first500-perf-v1
-          path: build/linux-perf-audit-v1/evidence
+          path: |
+            build/linux-perf-audit-v1/evidence
+            build/linux-perf-materialize/batch-summary.txt
           retention-days: 7
