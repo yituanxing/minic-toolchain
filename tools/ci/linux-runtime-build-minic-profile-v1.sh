@@ -50,6 +50,7 @@ patches=(
   apply-perf-parser-enum-hash-v0.py
   apply-perf-symbolic-loop-trace-v0.py
   apply-perf-specialization-phase-trace-v0.py
+  apply-perf-core-lower-statement-workspace-v1.py
   apply-riscv64-core-value-slot-pack-v0.py
   apply-riscv64-core-value-slot-reuse-v0.py
   apply-riscv64-record-call-result-snapshot-reuse-v0.py
