@@ -3,7 +3,7 @@ name: Linux Top5 Phase Profile V1
 on:
   push:
     branches:
-      - agent/linux-phase-profile-v1
+      - agent/linux-phase-profile-v2
   workflow_dispatch:
 
 permissions:
@@ -94,7 +94,7 @@ jobs:
               for t,stage,state in events:
                   first.setdefault((stage,state),t)
               def end_time(stage):
-                  vals=[v for (s,st),v in first.items() if s==stage and st.startswith("end-")]
+                  vals=[v for (s,st),v in first.items() if s==stage and (st=="end" or st.startswith("end-"))]
                   return min(vals) if vals else None
               def dur(stage):
                   b=first.get((stage,"begin")); e=end_time(stage)
