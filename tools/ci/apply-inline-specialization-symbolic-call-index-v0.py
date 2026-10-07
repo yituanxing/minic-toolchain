@@ -190,8 +190,12 @@ new = '''            for (nested_expression_index =
                  nested_expression_index =
                      symbolic_call_next[nested_expression_index]) {
 '''
+function_anchor = "static bool minic_specialize_inline_symbolic_calls(\n"
+function_start = text.find(function_anchor)
+if function_start < 0:
+    raise SystemExit("symbolic specialization function not found")
 scope_anchor = "        for (caller_index = original_function_count;\n"
-scope_start = text.find(scope_anchor)
+scope_start = text.find(scope_anchor, function_start)
 if scope_start < 0:
     raise SystemExit("symbolic transitive caller loop not found")
 loop_start = text.find(old, scope_start)
