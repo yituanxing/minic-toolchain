@@ -35,6 +35,8 @@ jobs:
           work="$GITHUB_WORKSPACE/build/filter-phase"
           mkdir -p "$work/evidence"
           bash tools/ci/linux-runtime-build-minic-profile-v1.sh "$work/toolchain" "$work/evidence/profile"
+          cp src/compiler/compiler.c "$work/evidence/compiler-profile.c"
+          cp src/core/core_lower.c "$work/evidence/core-lower-profile.c"
 
       - name: Prepare Linux 6.6.143
         shell: bash
