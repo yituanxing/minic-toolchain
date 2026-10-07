@@ -637,13 +637,14 @@ MinicFunctionId minic_parser_find_function(const MinicParser *parser, MinicSourc
     size_t index;
 
     name_length = minic_parser_span_length(name_span);
-    for (index = 0U; index < parser->program->function_count; ++index) {
+    for (index = parser->program->function_count; index > 0U; --index) {
+        size_t function_index = index - 1U;
         const MinicFunction *function;
 
-        function = minic_c0_program_function(parser->program, index);
+        function = minic_c0_program_function(parser->program, function_index);
         if (function != NULL && function->name_length == name_length &&
             memcmp(function->name, parser->source + name_span.begin.offset, name_length) == 0) {
-            return index;
+            return function_index;
         }
     }
     return MINIC_FUNCTION_INVALID;
