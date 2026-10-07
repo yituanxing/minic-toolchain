@@ -125,7 +125,8 @@ text = p.read_text()
 
 block_anchor = '''    {
         size_t caller_index;
-        for (caller_index = original_function_count;
+        (void)original_function_count;
+        for (caller_index = 0U;
 '''
 block_repl = '''    {
         size_t caller_index;
