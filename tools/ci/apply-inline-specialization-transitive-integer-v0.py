@@ -353,7 +353,7 @@ refinement = r'''
                         }
                     }
                     if (refined_id == MINIC_FUNCTION_INVALID) {
-                        if (specialization_count >= 1024U ||
+                        if (specialization_count >= MINIC_INLINE_INTEGER_SPECIALIZATION_LIMIT ||
                             !minic_add_inline_integer_specialization(
                                 program,
                                 nested_source_id,
