@@ -104,7 +104,7 @@ jobs:
               normalize_end=end_time("normalize")
               core_begin=first.get(("core-set","begin"))
               print(path)
-              for stage in ["parse","normalize","core-set","core-validate","layout","codegen"]:
+              for stage in ["parse","normalize","spec-integer","spec-symbolic","spec-boolean","spec-finalize","core-set","core-validate","layout","codegen"]:
                   d=dur(stage)
                   if d is not None:
                       print(f"  {stage:14s} {d/1000:.6f}s")
