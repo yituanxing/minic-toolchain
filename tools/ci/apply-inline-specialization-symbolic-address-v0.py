@@ -320,8 +320,7 @@ static bool minic_specialize_inline_symbolic_calls(
         if (!adds_symbol) {
             continue;
         }
-        for (candidate_index = original_function_count;
-             candidate_index < program->function_count;
+        for (candidate_index = 0U; candidate_index < program->function_count;
              ++candidate_index) {
             if (minic_inline_symbolic_variant_matches(
                     &program->functions[candidate_index],
@@ -446,7 +445,7 @@ static bool minic_specialize_inline_symbolic_calls(
                 if (!used_caller_fact || !adds_symbol) {
                     continue;
                 }
-                for (candidate_index = original_function_count;
+                for (candidate_index = 0U;
                      candidate_index < program->function_count;
                      ++candidate_index) {
                     if (minic_inline_symbolic_variant_matches(
