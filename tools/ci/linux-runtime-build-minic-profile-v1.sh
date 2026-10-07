@@ -44,6 +44,7 @@ patches=(
   apply-riscv64-explicit-section-flags-v0.py
   apply-inline-asm-symbolic-specialization-v0.py
   apply-perf-symbolic-function-body-owner-filter-v0.py
+  apply-perf-parser-lookup-counters-v0.py
   apply-perf-symbolic-loop-trace-v0.py
   apply-perf-specialization-phase-trace-v0.py
   apply-riscv64-core-value-slot-pack-v0.py
