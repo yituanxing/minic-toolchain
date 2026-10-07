@@ -49,55 +49,8 @@ if count != 1:
     raise SystemExit(f"expected one initial specialization capacity guard, found {count}")
 text = text.replace(old, new, 1)
 
-old = '''                if (refined_id == MINIC_FUNCTION_INVALID) {
-                    if (specialization_count >= 1024U ||
-                        !minic_add_inline_integer_specialization(
-                            program,
-                            nested_source_id,
-                            nested_known,
-                            nested_bits,
-                            specialization_count,
-                            &refined_id)) {
-                        free(transitive_call_next);
-                        free(transitive_call_heads);
-                        return false;
-                    }
-                    specialization_count += 1U;
-                    refinement_count += 1U;
-                }
-'''
-new = '''                if (refined_id == MINIC_FUNCTION_INVALID) {
-                    if (specialization_count >= MINIC_INLINE_INTEGER_SPECIALIZATION_LIMIT) {
-                        (void)fprintf(stderr,
-                                      "MINIC_INLINE_INTEGER_SPECIALIZATION_TRANSITIVE_LIMIT_HIT count=%zu limit=%u functions=%zu source=%zu\\n",
-                                      specialization_count,
-                                      (unsigned int)MINIC_INLINE_INTEGER_SPECIALIZATION_LIMIT,
-                                      program->function_count,
-                                      (size_t)nested_source_id);
-                        free(transitive_call_next);
-                        free(transitive_call_heads);
-                        return false;
-                    }
-                    if (!minic_add_inline_integer_specialization(
-                            program,
-                            nested_source_id,
-                            nested_known,
-                            nested_bits,
-                            specialization_count,
-                            &refined_id)) {
-                        (void)fprintf(stderr,
-                                      "MINIC_INLINE_INTEGER_SPECIALIZATION_TRANSITIVE_ADD_FAILED count=%zu functions=%zu source=%zu\\n",
-                                      specialization_count,
-                                      program->function_count,
-                                      (size_t)nested_source_id);
-                        free(transitive_call_next);
-                        free(transitive_call_heads);
-                        return false;
-                    }
-                    specialization_count += 1U;
-                    refinement_count += 1U;
-                }
-'''
+old = "specialization_count >= 1024U ||\n"
+new = "specialization_count >= MINIC_INLINE_INTEGER_SPECIALIZATION_LIMIT ||\n"
 count = text.count(old)
 if count != 1:
     raise SystemExit(f"expected one transitive specialization capacity guard, found {count}")
