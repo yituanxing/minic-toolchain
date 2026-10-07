@@ -353,16 +353,6 @@ static bool minic_specialize_inline_symbolic_calls(
 
     {
         size_t caller_index;
-        size_t *symbolic_call_heads = NULL;
-        size_t *symbolic_call_next = NULL;
-
-        if (!minic_inline_specialization_build_call_index(
-                program,
-                original_function_count,
-                &symbolic_call_heads,
-                &symbolic_call_next)) {
-            return false;
-        }
         for (caller_index = original_function_count;
              caller_index < program->function_count;
              ++caller_index) {
@@ -370,14 +360,12 @@ static bool minic_specialize_inline_symbolic_calls(
             size_t nested_expression_index;
 
             if (!caller.is_integer_specialization ||
-                caller.specialization_source >= original_function_count) {
+                caller.specialization_source >= program->function_count) {
                 continue;
             }
-            nested_expression_index =
-                symbolic_call_heads[caller.specialization_source];
-            while (nested_expression_index != SIZE_MAX) {
-                size_t next_nested_expression_index =
-                    symbolic_call_next[nested_expression_index];
+            for (nested_expression_index = 0U;
+                 nested_expression_index < program->expression_count;
+                 ++nested_expression_index) {
                 const MinicExpression *nested =
                     &program->expressions[nested_expression_index];
                 MinicFunctionId current_id;
@@ -396,12 +384,10 @@ static bool minic_specialize_inline_symbolic_calls(
 
                 if (nested->kind != MINIC_EXPRESSION_CALL ||
                     nested->value.call.function_id == MINIC_FUNCTION_INVALID) {
-                    nested_expression_index = next_nested_expression_index;
                     continue;
                 }
                 current_id = nested->value.call.function_id;
                 if (current_id >= program->function_count) {
-                    nested_expression_index = next_nested_expression_index;
                     continue;
                 }
                 current = program->functions[current_id];
@@ -409,7 +395,6 @@ static bool minic_specialize_inline_symbolic_calls(
                                 ? current.specialization_source
                                 : current_id;
                 if (source_id >= program->function_count) {
-                    nested_expression_index = next_nested_expression_index;
                     continue;
                 }
                 source = program->functions[source_id];
@@ -417,7 +402,6 @@ static bool minic_specialize_inline_symbolic_calls(
                     source.is_variadic || source.alias_target != MINIC_FUNCTION_INVALID ||
                     source.parameter_count == 0U ||
                     source.parameter_count != nested->value.call.argument_count) {
-                    nested_expression_index = next_nested_expression_index;
                     continue;
                 }
                 (void)memset(integer_known, 0, sizeof(integer_known));
@@ -459,7 +443,6 @@ static bool minic_specialize_inline_symbolic_calls(
                     }
                 }
                 if (!used_caller_fact || !adds_symbol) {
-                    nested_expression_index = next_nested_expression_index;
                     continue;
                 }
                 for (candidate_index = 0U;
@@ -486,17 +469,12 @@ static bool minic_specialize_inline_symbolic_calls(
                             symbolic_known,
                             symbolic_expression,
                             &variant_id)) {
-                        free(symbolic_call_next);
-                        free(symbolic_call_heads);
                         return false;
                     }
                     transitive_clone_count += 1U;
                 }
-                nested_expression_index = next_nested_expression_index;
             }
         }
-        free(symbolic_call_next);
-        free(symbolic_call_heads);
     }
 
     if (initial_clone_count != 0U || transitive_clone_count != 0U) {
