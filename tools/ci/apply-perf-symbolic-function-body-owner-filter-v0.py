@@ -148,7 +148,8 @@ block_repl = '''    {
             free(symbolic_expression_owners);
             return false;
         }
-        for (caller_index = original_function_count;
+        (void)original_function_count;
+        for (caller_index = 0U;
 '''
 if text.count(block_anchor) != 1:
     raise SystemExit(f"symbolic owner block anchor count={text.count(block_anchor)}")
