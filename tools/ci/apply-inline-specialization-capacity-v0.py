@@ -52,9 +52,18 @@ text = text.replace(old, new, 1)
 old = "specialization_count >= 1024U ||\n"
 new = "specialization_count >= MINIC_INLINE_INTEGER_SPECIALIZATION_LIMIT ||\n"
 count = text.count(old)
-if count != 1:
+if count == 1:
+    text = text.replace(old, new, 1)
+elif (
+    "if (refined_id == MINIC_FUNCTION_INVALID) {\n"
+    "                    if (specialization_count >= MINIC_INLINE_INTEGER_SPECIALIZATION_LIMIT ||\n"
+    "                        !minic_add_inline_integer_specialization(" in text
+):
+    # The indexed transitive pass already uses the shared capacity macro.
+    # Keep that structurally stable form instead of requiring an exact legacy block.
+    pass
+else:
     raise SystemExit(f"expected one transitive specialization capacity guard, found {count}")
-text = text.replace(old, new, 1)
 
 p.write_text(text)
 print("MINIC_INLINE_SPECIALIZATION_CAPACITY_V0=APPLIED limit=2048")
