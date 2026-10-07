@@ -4,17 +4,6 @@ from pathlib import Path
 p = Path("src/compiler/compiler.c")
 text = p.read_text()
 
-is_parameter_anchor = "static bool minic_inline_local_is_parameter(\n"
-is_parameter_start = text.find(is_parameter_anchor)
-if is_parameter_start >= 0:
-    is_parameter_end = text.find(
-        "\n}\n\nstatic bool minic_inline_local_boolean_domain(",
-        is_parameter_start,
-    )
-    if is_parameter_end < 0:
-        raise SystemExit("cannot find end of obsolete local parameter helper")
-    text = text[:is_parameter_start] + text[is_parameter_end + 3:]
-
 anchor = "static bool minic_inline_local_boolean_domain(\n"
 if text.count(anchor) != 1:
     raise SystemExit(f"expected one local boolean domain helper, found {text.count(anchor)}")
@@ -40,6 +29,7 @@ static bool minic_inline_build_local_boolean_domain_cache(
     size_t asm_index;
     size_t local_index;
 
+    (void)minic_inline_local_is_parameter;
     if (program == NULL ||
         program->local_count > SIZE_MAX / sizeof(bool)) {
         return false;
