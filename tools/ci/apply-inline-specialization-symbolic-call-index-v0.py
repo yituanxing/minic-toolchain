@@ -190,9 +190,14 @@ new = '''            for (nested_expression_index =
                  nested_expression_index =
                      symbolic_call_next[nested_expression_index]) {
 '''
-if text.count(old) != 1:
-    raise SystemExit(f"expected one symbolic full expression rescan, found {text.count(old)}")
-text = text.replace(old, new, 1)
+scope_anchor = "        for (caller_index = original_function_count;\n"
+scope_start = text.find(scope_anchor)
+if scope_start < 0:
+    raise SystemExit("symbolic transitive caller loop not found")
+loop_start = text.find(old, scope_start)
+if loop_start < 0:
+    raise SystemExit("symbolic transitive full expression rescan not found")
+text = text[:loop_start] + new + text[loop_start + len(old):]
 
 old = '''                if (variant_id == MINIC_FUNCTION_INVALID) {
                     if (!minic_add_inline_symbolic_specialization(
