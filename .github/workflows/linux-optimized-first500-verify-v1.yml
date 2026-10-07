@@ -3,7 +3,7 @@ name: Linux Optimized First500 Verify V1
 on:
   push:
     branches:
-      - agent/linux-perf-verify-v1
+      - agent/linux-perf-core-workspace-v1
   workflow_dispatch:
 
 permissions:
@@ -34,7 +34,34 @@ jobs:
           bash tools/ci/linux-runtime-build-minic-profile-v1.sh             "$work/toolchain" "$work/evidence/profile"
           cat "$work/evidence/profile/toolchain-timing.txt"
 
+      - name: Restore certified first500 inputs
+        id: corpus-restore
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-perf-corpus
+          key: linux-6.6.143-first500-rv64-v1-${{ hashFiles('tests/external/linux/batch_probe.sh', 'tests/external/linux/probe.sh', 'tests/external/linux/replay-indices.txt') }}
+
+      - name: Verify restored first500 inputs
+        id: corpus-verify
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          corpus=build/linux-perf-corpus
+          if test -s "$corpus/selected-tus.txt" &&
+             test "$(grep -cve '^[[:space:]]*$' "$corpus/selected-tus.txt")" -eq 500 &&
+             test -s "$corpus/inputs.sha256" &&
+             test "$(wc -l < "$corpus/inputs.sha256")" -eq 500 &&
+             sha256sum --status --check "$corpus/inputs.sha256"; then
+            echo "valid=true" >> "$GITHUB_OUTPUT"
+            echo "PERF_CORPUS_CACHE=VERIFIED selected=500"
+          else
+            echo "valid=false" >> "$GITHUB_OUTPUT"
+            echo "PERF_CORPUS_CACHE=MISS_OR_INVALID"
+            rm -rf "$corpus"
+          fi
+
       - name: Materialize exact historical first500 inputs
+        if: steps.corpus-verify.outputs.valid != 'true'
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -75,6 +102,15 @@ jobs:
               shutil.copy2(s,d)
           print("PERF_CORPUS_FROZEN selected=500")
           PY
+          find build/linux-perf-corpus/kbuild -type f -name '*.i' -print0 | LC_ALL=C sort -z | xargs -0 sha256sum > build/linux-perf-corpus/inputs.sha256
+          test "$(wc -l < build/linux-perf-corpus/inputs.sha256)" -eq 500
+
+      - name: Save verified first500 corpus
+        if: steps.corpus-verify.outputs.valid != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: build/linux-perf-corpus
+          key: linux-6.6.143-first500-rv64-v1-${{ hashFiles('tests/external/linux/batch_probe.sh', 'tests/external/linux/probe.sh', 'tests/external/linux/replay-indices.txt') }}
 
       - name: Replay frozen first500 with current C MiniC
         shell: bash
