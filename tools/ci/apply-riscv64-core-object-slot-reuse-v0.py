@@ -272,6 +272,12 @@ static bool core_scalar_object_reuse_layout(const MinicC0Program *program,
         (target != MINIC_CORE_OBJECT_INVALID && target >= function->object_count)) {
         return false;
     }
+    if (getenv("MINIC_DISABLE_CORE_OBJECT_SLOT_REUSE") != NULL) {
+        *peak_slots = 0U;
+        if (target_reusable != NULL) *target_reusable = false;
+        if (target_slot != NULL) *target_slot = SIZE_MAX;
+        return true;
+    }
     if (function->object_count == 0U) {
         *peak_slots = 0U;
         if (target_reusable != NULL) *target_reusable = false;
