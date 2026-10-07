@@ -1,0 +1,137 @@
+name: Linux MiniC Phase Profiler V0
+
+on:
+  push:
+    branches:
+      - agent/linux-performance-profiler-v0
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  profile:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    env:
+      DEBIAN_FRONTEND: noninteractive
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Record runner hardware baseline
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mkdir -p build/linux-performance-profiler-v0/evidence
+          {
+            echo "=== uname ==="
+            uname -a
+            echo "=== nproc ==="
+            nproc
+            echo "=== lscpu ==="
+            lscpu
+            echo "=== cpu.max ==="
+            cat /sys/fs/cgroup/cpu.max 2>/dev/null || true
+            echo "=== memory.max ==="
+            cat /sys/fs/cgroup/memory.max 2>/dev/null || true
+            echo "=== cpu.stat ==="
+            cat /sys/fs/cgroup/cpu.stat 2>/dev/null || true
+          } | tee build/linux-performance-profiler-v0/evidence/hardware-before.txt
+
+      - name: Install Linux profiling prerequisites
+        run: |
+          sudo apt-get -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            build-essential gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
+            bc bison flex libssl-dev libelf-dev make curl xz-utils python3 time
+
+      - name: Build exact current runtime MiniC profile
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          compiler="$GITHUB_WORKSPACE/build/linux-performance-compiler"
+          ev="$GITHUB_WORKSPACE/build/linux-performance-profiler-v0/evidence"
+          bash tools/ci/linux-runtime-build-minic-profile-v1.sh "$compiler" "$ev/runtime-profile"
+
+      - name: Add low-overhead phase timestamps and rebuild
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          compiler="$GITHUB_WORKSPACE/build/linux-performance-compiler"
+          ev="$GITHUB_WORKSPACE/build/linux-performance-profiler-v0/evidence"
+          python3 tools/ci/apply-minic-phase-profiler-v0.py | tee "$ev/profiler-apply.txt"
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$compiler" \
+            "$compiler/bin/minic" "$compiler/bin/minic-cc"
+          sha256sum "$compiler/bin/minic" "$compiler/bin/minic-cc" >"$ev/profiled-minic.sha256"
+
+      - name: Profile 64 real Linux translation units
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          compiler="$GITHUB_WORKSPACE/build/linux-performance-compiler/bin/minic"
+          work="$GITHUB_WORKSPACE/build/linux-performance-sample64"
+          start=$(date +%s)
+          MINIC_BOOTSTRAP_TRACE=1 \
+          MINIC="$compiler" \
+          BUILD_DIR="$work" \
+          CROSS_COMPILE=riscv64-linux-gnu- \
+          LINUX_BATCH_OFFSET=0 \
+          LINUX_BATCH_LIMIT=64 \
+          LINUX_BATCH_JOBS=4 \
+          LINUX_BATCH_MATERIALIZE_MAKE_JOBS=4 \
+            sh tests/external/linux/batch_probe.sh
+          elapsed=$(($(date +%s) - start))
+          echo "PROFILE_SAMPLE64_WALL_S=$elapsed" | tee \
+            "$GITHUB_WORKSPACE/build/linux-performance-profiler-v0/evidence/sample64-wall.txt"
+          python3 tools/ci/analyze-minic-phase-profile-v0.py \
+            --work "$work" \
+            --out "$GITHUB_WORKSPACE/build/linux-performance-profiler-v0/evidence/sample64"
+          cat "$GITHUB_WORKSPACE/build/linux-performance-profiler-v0/evidence/sample64/phase-summary.json" \
+            >>"$GITHUB_STEP_SUMMARY"
+
+      - name: Profile large net/core/filter.o through current wrapper
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          compiler="$GITHUB_WORKSPACE/build/linux-performance-compiler/bin/minic"
+          work="$GITHUB_WORKSPACE/build/linux-performance-sample64"
+          src="$work/linux-6.6.143"
+          out="$work/kbuild"
+          ev="$GITHUB_WORKSPACE/build/linux-performance-profiler-v0/evidence/filter"
+          wrapper="$GITHUB_WORKSPACE/tests/external/linux/stage2_kbuild_cc.sh"
+          mkdir -p "$ev"
+          rm -f "$out/net/core/filter.o"
+          start=$(date +%s)
+          MINIC="$compiler" REAL_CC=/usr/bin/riscv64-linux-gnu-gcc \
+          MINIC_KEEP_INTERMEDIATES=1 MINIC_BOOTSTRAP_TRACE=1 CORE_FAST_TRACE=1 \
+          MINIC_KBUILD_TRACE="$ev/kbuild.trace" \
+            timeout --signal=TERM --kill-after=15s 5m \
+            make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
+              CC="$wrapper" -j1 V=1 net/core/filter.o >"$ev/kbuild.log" 2>&1
+          elapsed=$(($(date +%s) - start))
+          echo "PROFILE_FILTER_WALL_S=$elapsed" | tee "$ev/wall.txt"
+          stderr_file=$(find "$out" -type f -name 'filter.minic-stage2.minic.stderr' -print -quit)
+          test -s "$stderr_file"
+          cp "$stderr_file" "$ev/filter.minic.stderr"
+          grep -a 'MINIC_BOOTSTRAP_TRACE' "$stderr_file" >"$ev/filter.phase.trace"
+          tail -n 80 "$ev/filter.phase.trace" | tee "$ev/filter.phase.tail.txt"
+
+      - name: Record runner hardware after profiling
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "=== cpu.stat ==="
+            cat /sys/fs/cgroup/cpu.stat 2>/dev/null || true
+            echo "=== memory.events ==="
+            cat /sys/fs/cgroup/memory.events 2>/dev/null || true
+          } | tee build/linux-performance-profiler-v0/evidence/hardware-after.txt
+
+      - name: Upload profiler evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-minic-phase-profiler-v0
+          path: build/linux-performance-profiler-v0/evidence/
+          if-no-files-found: error
+          retention-days: 7
