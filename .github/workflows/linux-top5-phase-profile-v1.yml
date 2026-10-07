@@ -94,7 +94,7 @@ jobs:
               for t,stage,state in events:
                   first.setdefault((stage,state),t)
               def end_time(stage):
-                  vals=[v for (s,st),v in first.items() if s==stage and st.startswith("end-")]
+                  vals=[v for (s,st),v in first.items() if s==stage and (st == "end" or st.startswith("end-"))]
                   return min(vals) if vals else None
               def dur(stage):
                   b=first.get((stage,"begin")); e=end_time(stage)
@@ -104,7 +104,7 @@ jobs:
               normalize_end=end_time("normalize")
               core_begin=first.get(("core-set","begin"))
               print(path)
-              for stage in ["parse","normalize","spec-integer","spec-symbolic","spec-boolean","spec-finalize","core-set","core-validate","layout","codegen"]:
+              for stage in ["parse","normalize","spec-integer","spec-symbolic","spec-symbolic-direct","spec-symbolic-transitive","spec-boolean","spec-finalize","core-set","core-validate","layout","codegen"]:
                   d=dur(stage)
                   if d is not None:
                       print(f"  {stage:14s} {d/1000:.6f}s")
