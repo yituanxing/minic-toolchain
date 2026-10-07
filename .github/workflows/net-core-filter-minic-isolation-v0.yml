@@ -1,0 +1,108 @@
+name: Net Core Filter MiniC Isolation V0
+
+on:
+  push:
+    branches: ["agent/net-core-filter-isolation-v0"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: net-core-filter-minic-isolation-v0-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  filter-owner:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Install RV64 Linux prerequisites
+        run: |
+          sudo apt-get -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            build-essential gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
+            bc bison flex libssl-dev libelf-dev make curl xz-utils python3 time
+
+      - name: Build exact centralized Linux runtime MiniC profile
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/net-core-filter-isolation-v0"
+          mkdir -p "$work/evidence"
+          bash tools/ci/linux-runtime-build-minic-profile-v1.sh "$work/toolchain" "$work/evidence/profile"
+          sha256sum "$work/toolchain/bin/minic" | tee "$work/evidence/minic.sha256"
+
+      - name: Prepare pinned Linux 6.6.143
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/net-core-filter-isolation-v0"
+          archive="$work/linux-6.6.143.tar.xz"
+          src="$work/linux-6.6.143"
+          out="$work/out"
+          curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors \
+            https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.6.143.tar.xz -o "$archive"
+          printf '%s  %s\n' dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932 "$archive" | sha256sum -c -
+          tar -xJf "$archive" -C "$work"
+          make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- defconfig
+          "$src/scripts/config" --file "$out/.config" \
+            -e BLK_DEV_INITRD -e DEVTMPFS -e DEVTMPFS_MOUNT \
+            -e SERIAL_8250 -e SERIAL_8250_CONSOLE
+          make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- olddefconfig
+          make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- -j4 prepare
+          sha256sum "$out/.config" >"$work/evidence/config.sha256"
+
+      - name: Compile only net/core/filter.o through MiniC with diagnostics
+        id: filter
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/net-core-filter-isolation-v0"
+          src="$work/linux-6.6.143"
+          out="$work/out"
+          ev="$work/evidence"
+          wrapper="$GITHUB_WORKSPACE/tests/external/linux/stage2_kbuild_cc.sh"
+          minic="$work/toolchain/bin/minic"
+          rm -f "$out/net/core/filter.o"
+          : >"$ev/filter.trace"
+          start=$(date +%s)
+          set +e
+          /usr/bin/time -v -o "$ev/filter.time.txt" \
+            timeout --signal=TERM --kill-after=30s 45m \
+            env MINIC="$minic" REAL_CC=/usr/bin/riscv64-linux-gnu-gcc \
+              MINIC_KEEP_INTERMEDIATES=1 MINIC_KBUILD_TRACE="$ev/filter.trace" \
+              MINIC_ASM_BATCH_TRACE=1 MINIC_LOCAL_FACT_TRACE=1 CORE_FAST_TRACE=1 \
+              make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
+                CC="$wrapper" -j1 V=1 net/core/filter.o >"$ev/filter.log" 2>&1
+          rc=$?
+          set -e
+          elapsed=$(($(date +%s) - start))
+          printf 'FILTER_OWNER_RC=%s\nFILTER_OWNER_ELAPSED_S=%s\n' "$rc" "$elapsed" | tee "$ev/filter-summary.txt"
+          grep -a -E '^(minic|pass|delegate) |ASM_BATCH_(PROBE|INPUT)|ASM_OUTPUT_STAGE|CORE_FAST_TRACE|MINIC_KBUILD_BLOCKER|error:|fatal:|Killed|Terminated' \
+            "$ev/filter.trace" "$ev/filter.log" >"$ev/filter-diagnostic.txt" || true
+          tail -n 500 "$ev/filter.log" >"$ev/filter-tail.txt" || true
+          find "$out/net/core" -maxdepth 1 -type f \( -name 'filter*' -o -name '.filter*' \) \
+            -printf '%f %s bytes\n' | sort >"$ev/filter-files.txt" || true
+          if test "$rc" -eq 0; then
+            test -s "$out/net/core/filter.o"
+            echo "FILTER_OWNER=PASS" | tee -a "$ev/filter-summary.txt"
+          elif test "$rc" -eq 124; then
+            echo "FILTER_OWNER=TIMEOUT" | tee -a "$ev/filter-summary.txt"
+          else
+            echo "FILTER_OWNER=FAIL" | tee -a "$ev/filter-summary.txt"
+          fi
+          exit "$rc"
+
+      - name: Preserve filter isolation evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: net-core-filter-minic-isolation-v0
+          path: build/net-core-filter-isolation-v0/evidence/
+          if-no-files-found: error
+          retention-days: 7
