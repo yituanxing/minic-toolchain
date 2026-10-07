@@ -43,7 +43,6 @@ patches=(
   apply-riscv64-default-text-section-v0.py
   apply-riscv64-explicit-section-flags-v0.py
   apply-inline-asm-symbolic-specialization-v0.py
-  apply-inline-specialization-local-boolean-domain-index-v0.py
   apply-riscv64-core-value-slot-pack-v0.py
   apply-riscv64-core-value-slot-reuse-v0.py
   apply-riscv64-record-call-result-snapshot-reuse-v0.py
