@@ -173,9 +173,11 @@ nested_repl = '''                const MinicExpression *nested =
                     }
                 }
 '''
-if text.count(nested_anchor) != 1:
-    raise SystemExit(f"symbolic owner nested anchor count={text.count(nested_anchor)}")
-text = text.replace(nested_anchor, nested_repl, 1)
+owner_pos = text.find("size_t symbolic_owned_expression_count")
+nested_pos = text.find(nested_anchor, owner_pos)
+if nested_pos < 0:
+    raise SystemExit("cannot find transitive symbolic nested site")
+text = text[:nested_pos] + text[nested_pos:].replace(nested_anchor, nested_repl, 1)
 
 failure_anchor = '''                    if (!minic_add_inline_symbolic_specialization(
                             program,
