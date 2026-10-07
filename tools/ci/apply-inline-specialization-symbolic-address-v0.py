@@ -505,6 +505,159 @@ replace_once(
     "    if (success && !minic_finalize_inline_integer_specialization_references(&program)) {\n",
 )
 
+finalize_opt = r'''
+static bool minic_finalize_inline_integer_specialization_references(MinicC0Program *program) {
+    bool *residual;
+    size_t function_index;
+    size_t object_index;
+    size_t expression_index;
+
+    if (program == NULL) {
+        return false;
+    }
+    residual = (bool *)calloc(program->function_count == 0U ? 1U : program->function_count,
+                              sizeof(*residual));
+    if (residual == NULL) {
+        /* Preserve the original exact semantics as an OOM fallback. */
+        for (function_index = 0U; function_index < program->function_count; ++function_index) {
+            MinicFunction *function = &program->functions[function_index];
+            if (function->is_integer_specialization) {
+                MinicFunctionId source_id = function->specialization_source;
+                if (source_id >= program->function_count ||
+                    program->functions[source_id].is_integer_specialization) {
+                    return false;
+                }
+                function->is_referenced = program->functions[source_id].is_referenced;
+            }
+        }
+        for (function_index = 0U; function_index < program->function_count; ++function_index) {
+            MinicFunction *function = &program->functions[function_index];
+            if (function->is_integer_specialization) {
+                MinicFunctionId source_id = function->specialization_source;
+                MinicFunction *source = &program->functions[source_id];
+                if (source->is_internal && source->is_inline && source->is_referenced &&
+                    !minic_inline_integer_source_has_residual_reference(program, source_id)) {
+                    source->is_referenced = false;
+                }
+            }
+        }
+        return true;
+    }
+
+    if (program->entry_function < program->function_count) {
+        residual[program->entry_function] = true;
+    }
+    for (function_index = 0U; function_index < program->function_count; ++function_index) {
+        const MinicFunction *function = &program->functions[function_index];
+        if (function->force_emit) {
+            residual[function_index] = true;
+        }
+        if (function->alias_target < program->function_count) {
+            residual[function->alias_target] = true;
+        }
+    }
+    for (object_index = 0U; object_index < program->global_object_count; ++object_index) {
+        const MinicGlobalObject *object = &program->global_objects[object_index];
+        size_t relocation_index;
+        for (relocation_index = 0U; relocation_index < object->relocation_count;
+             ++relocation_index) {
+            const MinicGlobalRelocation *relocation = &object->relocations[relocation_index];
+            if (relocation->target_kind == MINIC_GLOBAL_RELOCATION_FUNCTION &&
+                relocation->target_id < program->function_count) {
+                residual[(MinicFunctionId)relocation->target_id] = true;
+            }
+        }
+    }
+    for (expression_index = 0U; expression_index < program->expression_count;
+         ++expression_index) {
+        const MinicExpression *expression = &program->expressions[expression_index];
+        MinicFunctionId target = MINIC_FUNCTION_INVALID;
+        if (expression->kind == MINIC_EXPRESSION_FUNCTION) {
+            target = expression->value.function_id;
+        } else if (expression->kind == MINIC_EXPRESSION_CALL) {
+            target = expression->value.call.function_id;
+        }
+        if (target < program->function_count) {
+            residual[target] = true;
+        }
+    }
+
+    for (function_index = 0U; function_index < program->function_count; ++function_index) {
+        MinicFunction *function = &program->functions[function_index];
+        if (function->is_integer_specialization) {
+            MinicFunctionId source_id = function->specialization_source;
+            if (source_id >= program->function_count ||
+                program->functions[source_id].is_integer_specialization) {
+                free(residual);
+                return false;
+            }
+            function->is_referenced = program->functions[source_id].is_referenced;
+        }
+    }
+    for (function_index = 0U; function_index < program->function_count; ++function_index) {
+        MinicFunction *function = &program->functions[function_index];
+        if (function->is_integer_specialization) {
+            MinicFunctionId source_id = function->specialization_source;
+            MinicFunction *source = &program->functions[source_id];
+            if (source->is_internal && source->is_inline && source->is_referenced &&
+                !residual[source_id]) {
+                source->is_referenced = false;
+            }
+        }
+    }
+    if (getenv("MINIC_SPECIALIZATION_PERF_TRACE") != NULL) {
+        (void)fprintf(stderr,
+                      "MINIC_SPECIALIZATION_PERF phase=finalize-residual-once functions=%zu expressions=%zu\n",
+                      program->function_count,
+                      program->expression_count);
+        (void)fflush(stderr);
+    }
+    free(residual);
+    return true;
+}
+'''
+
+finalize_old = r'''static bool minic_finalize_inline_integer_specialization_references(MinicC0Program *program) {
+    size_t function_index;
+
+    if (program == NULL) {
+        return false;
+    }
+    /* Generic reachability ran before cloning, while FunctionBody ownership was still
+     * one-to-one. Preserve that result for clones first, then retire a source only when
+     * specialization rewrote every syntactic/function-address reference to it. */
+    for (function_index = 0U; function_index < program->function_count; ++function_index) {
+        MinicFunction *function = &program->functions[function_index];
+        if (function->is_integer_specialization) {
+            MinicFunctionId source_id = function->specialization_source;
+            if (source_id >= program->function_count ||
+                program->functions[source_id].is_integer_specialization) {
+                return false;
+            }
+            function->is_referenced = program->functions[source_id].is_referenced;
+        }
+    }
+    for (function_index = 0U; function_index < program->function_count; ++function_index) {
+        MinicFunction *function = &program->functions[function_index];
+        if (function->is_integer_specialization) {
+            MinicFunctionId source_id = function->specialization_source;
+            MinicFunction *source = &program->functions[source_id];
+            if (source->is_internal && source->is_inline && source->is_referenced &&
+                !minic_inline_integer_source_has_residual_reference(program, source_id)) {
+                source->is_referenced = false;
+            }
+        }
+    }
+    return true;
+}
+'''
+
+replace_once(
+    "src/compiler/compiler.c",
+    finalize_old,
+    finalize_opt,
+)
+
 core_selector = r'''
 
 static bool core_inline_symbolic_argument_expression(
