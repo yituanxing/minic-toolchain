@@ -1,0 +1,89 @@
+name: Filter Layout Model V0
+
+on:
+  push:
+    branches:
+      - agent/filter-layout-model-v0
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  model:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install prerequisites
+        run: |
+          sudo apt-get -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            build-essential gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
+            bc bison flex libssl-dev libelf-dev make curl xz-utils python3
+
+      - name: Instrument cached layout model
+        run: python3 tools/ci/filter-layout-model-instrument.py
+
+      - name: Build MiniC profile
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/filter-layout-model-v0"
+          mkdir -p "$work/evidence"
+          bash tools/ci/linux-runtime-build-minic-profile-v1.sh \
+            "$work/toolchain" "$work/evidence/profile"
+
+      - name: Prepare Linux 6.6.143
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/filter-layout-model-v0"
+          archive="$work/linux-6.6.143.tar.xz"
+          src="$work/linux-6.6.143"
+          out="$work/out"
+          curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors \
+            https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.6.143.tar.xz -o "$archive"
+          printf '%s  %s\n' dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932 "$archive" | sha256sum -c -
+          tar -xJf "$archive" -C "$work"
+          make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- defconfig
+          "$src/scripts/config" --file "$out/.config" \
+            -e BLK_DEV_INITRD -e DEVTMPFS -e DEVTMPFS_MOUNT \
+            -e SERIAL_8250 -e SERIAL_8250_CONSOLE
+          make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- olddefconfig
+          make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- -j4 prepare
+
+      - name: Compile filter with one-layout timing
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/filter-layout-model-v0"
+          src="$work/linux-6.6.143"
+          out="$work/out"
+          ev="$work/evidence"
+          wrapper="$GITHUB_WORKSPACE/tests/external/linux/stage2_kbuild_cc.sh"
+          rm -f "$out/net/core/filter.o"
+          start=$(date +%s)
+          MINIC="$work/toolchain/bin/minic" REAL_CC=/usr/bin/riscv64-linux-gnu-gcc \
+          MINIC_KEEP_INTERMEDIATES=1 MINIC_BOOTSTRAP_TRACE=1 \
+          MINIC_KBUILD_TRACE="$ev/filter.trace" CORE_FAST_TRACE=1 \
+            timeout --signal=TERM --kill-after=15s 5m \
+            make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
+              CC="$wrapper" -j1 V=1 net/core/filter.o >"$ev/filter.log" 2>&1
+          elapsed=$(($(date +%s) - start))
+          printf 'FILTER_LAYOUT_MODEL wall_elapsed_s=%s\n' "$elapsed" | tee "$ev/summary.txt"
+          stderr_file=$(find "$out" -type f -name 'filter.minic-stage2.minic.stderr' -print -quit 2>/dev/null || true)
+          test -n "$stderr_file"
+          cp "$stderr_file" "$ev/filter.minic.stderr"
+          grep -a 'LAYOUT_MODEL' "$stderr_file" >"$ev/layout-model.txt"
+          grep -a 'objects=1008 instructions=9966 values=8292' "$ev/layout-model.txt" >"$ev/target-layout.txt"
+          cat "$ev/target-layout.txt"
+
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: filter-layout-model-v0
+          path: build/filter-layout-model-v0/evidence
+          retention-days: 7
