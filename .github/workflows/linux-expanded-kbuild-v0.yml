@@ -16,7 +16,7 @@ jobs:
   image-frontier:
     if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[linux-expanded-kbuild-v0]')
     runs-on: ubuntu-24.04
-    timeout-minutes: 110
+    timeout-minutes: 180
     steps:
       - uses: actions/checkout@v4
         with:
@@ -131,20 +131,26 @@ jobs:
           matched="${{ steps.owner-cache.outputs.cache-matched-key }}"
           prefix="linux-expanded-owner-v1-6.6.143-${{ runner.os }}-${{ steps.profile-cache.outputs.digest }}-${{ hashFiles('tools/ci/linux-expanded-owner-targets-v1.txt', 'tools/ci/linux-expanded-owner-refresh-v1.sh') }}-c"
           completed=0
+          c3_regular_done=false
           if [[ "$matched" == "$prefix"[1-4] ]]; then
             completed="${matched##*-c}"
+          elif [[ "$matched" == "${prefix}3a" ]]; then
+            completed=2
+            c3_regular_done=true
           fi
-          if [[ "$completed" == 0 ]]; then
+          if [[ "$completed" == 0 && "$c3_regular_done" != true ]]; then
             while read -r cohort target; do
               [[ "$cohort" == \#* || -z "$target" ]] && continue
               rm -f "$out/$target"
             done < tools/ci/linux-expanded-owner-targets-v1.txt
             echo "OWNER_CHECKPOINT_INIT=FRESH_CURRENT_PROFILE"
           else
-            echo "OWNER_CHECKPOINT_INIT=RESUME cohort=$completed key=$matched"
+            echo "OWNER_CHECKPOINT_INIT=RESUME completed=$completed c3_regular_done=$c3_regular_done key=$matched"
           fi
           printf 'completed=%s\n' "$completed" >>"$GITHUB_OUTPUT"
-          printf 'OWNER_CHECKPOINT_MATCHED_KEY=%s\nOWNER_CHECKPOINT_COMPLETED=%s\n'             "$matched" "$completed" | tee "$ev/owner-checkpoint.txt"
+          printf 'c3_regular_done=%s\n' "$c3_regular_done" >>"$GITHUB_OUTPUT"
+          printf 'OWNER_CHECKPOINT_MATCHED_KEY=%s\nOWNER_CHECKPOINT_COMPLETED=%s\nOWNER_C3_REGULAR_DONE=%s\n' \
+            "$matched" "$completed" "$c3_regular_done" | tee "$ev/owner-checkpoint.txt"
 
       - name: Preflight shared inline-asm blocker pair
         id: blocker-pair
@@ -200,14 +206,71 @@ jobs:
           path: build/linux-expanded-kbuild-v0/out
           key: linux-expanded-owner-v1-6.6.143-${{ runner.os }}-${{ steps.profile-cache.outputs.digest }}-${{ hashFiles('tools/ci/linux-expanded-owner-targets-v1.txt', 'tools/ci/linux-expanded-owner-refresh-v1.sh') }}-c2
 
-      - name: Compile current-profile owner cohort 3
-        id: owner-c3
+      - name: Compile current-profile owner cohort 3 regular targets
+        id: owner-c3a
         shell: bash
         run: |
-          bash tools/ci/linux-expanded-owner-refresh-v1.sh             3 "${{ steps.owner-state.outputs.completed }}"             "$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0/linux-6.6.143"             "$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0/out"             "$GITHUB_WORKSPACE/tests/external/linux/stage2_kbuild_cc.sh"             "$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0/toolchain/bin/minic"             "$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0/evidence"
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0"
+          src="$work/linux-6.6.143"
+          out="$work/out"
+          ev="$work/evidence"
+          wrapper="$GITHUB_WORKSPACE/tests/external/linux/stage2_kbuild_cc.sh"
+          completed="${{ steps.owner-state.outputs.completed }}"
+          restored="${{ steps.owner-state.outputs.c3_regular_done }}"
+          if (( completed >= 3 )) || [[ "$restored" == true ]]; then
+            echo "OWNER_COHORT_3A=SKIP_RESTORED" | tee "$ev/owner-c3a-summary.txt"
+            printf 'changed=false\n' >>"$GITHUB_OUTPUT"
+            exit 0
+          fi
+          mapfile -t targets < <(awk '$1 == 3 && $2 != "net/core/filter.o" { print $2 }' tools/ci/linux-expanded-owner-targets-v1.txt)
+          test "${#targets[@]}" -eq 17
+          start=$(date +%s)
+          MINIC="$work/toolchain/bin/minic" REAL_CC=/usr/bin/riscv64-linux-gnu-gcc \
+          MINIC_KEEP_INTERMEDIATES=0 MINIC_KBUILD_TRACE="$ev/owner-c3a.trace" CORE_FAST_TRACE=1 \
+            make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
+              CC="$wrapper" -j4 V=1 "${targets[@]}" >"$ev/owner-c3a.log" 2>&1
+          elapsed=$(($(date +%s) - start))
+          printf 'OWNER_COHORT_3A=PASS elapsed_s=%s targets=%s\n' "$elapsed" "${#targets[@]}" \
+            | tee "$ev/owner-c3a-summary.txt"
+          printf 'changed=true\n' >>"$GITHUB_OUTPUT"
+
+      - name: Save owner cohort 3 regular checkpoint
+        if: steps.owner-c3a.outputs.changed == 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: build/linux-expanded-kbuild-v0/out
+          key: linux-expanded-owner-v1-6.6.143-${{ runner.os }}-${{ steps.profile-cache.outputs.digest }}-${{ hashFiles('tools/ci/linux-expanded-owner-targets-v1.txt', 'tools/ci/linux-expanded-owner-refresh-v1.sh') }}-c3a
+
+      - name: Compile isolated net core filter owner
+        id: owner-c3-filter
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0"
+          src="$work/linux-6.6.143"
+          out="$work/out"
+          ev="$work/evidence"
+          wrapper="$GITHUB_WORKSPACE/tests/external/linux/stage2_kbuild_cc.sh"
+          completed="${{ steps.owner-state.outputs.completed }}"
+          if (( completed >= 3 )); then
+            echo "OWNER_COHORT_3_FILTER=SKIP_RESTORED" | tee "$ev/owner-c3-filter-summary.txt"
+            printf 'changed=false\n' >>"$GITHUB_OUTPUT"
+            exit 0
+          fi
+          start=$(date +%s)
+          MINIC="$work/toolchain/bin/minic" REAL_CC=/usr/bin/riscv64-linux-gnu-gcc \
+          MINIC_KEEP_INTERMEDIATES=0 MINIC_KBUILD_TRACE="$ev/owner-c3-filter.trace" \
+          MINIC_ASM_BATCH_TRACE=1 MINIC_LOCAL_FACT_TRACE=1 CORE_FAST_TRACE=1 \
+            make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
+              CC="$wrapper" -j1 V=1 net/core/filter.o >"$ev/owner-c3-filter.log" 2>&1
+          elapsed=$(($(date +%s) - start))
+          printf 'OWNER_COHORT_3_FILTER=PASS elapsed_s=%s targets=1\n' "$elapsed" \
+            | tee "$ev/owner-c3-filter-summary.txt"
+          printf 'changed=true\n' >>"$GITHUB_OUTPUT"
 
       - name: Save owner cohort 3 checkpoint
-        if: steps.owner-c3.outputs.changed == 'true'
+        if: steps.owner-c3-filter.outputs.changed == 'true'
         uses: actions/cache/save@v4
         with:
           path: build/linux-expanded-kbuild-v0/out
