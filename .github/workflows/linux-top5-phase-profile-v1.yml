@@ -1,0 +1,123 @@
+name: Linux Top5 Phase Profile V1
+
+on:
+  push:
+    branches:
+      - agent/linux-phase-profile-v1
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  profile:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install prerequisites
+        run: |
+          sudo apt-get -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            build-essential gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
+            libc6-dev-riscv64-cross bc bison flex libssl-dev libelf-dev make curl xz-utils python3
+
+      - name: Build current runtime profile
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-phase-profile-v1"
+          mkdir -p "$work/evidence"
+          bash tools/ci/linux-runtime-build-minic-profile-v1.sh "$work/toolchain" "$work/evidence/profile"
+
+      - name: Materialize five slowest first500 TUs
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-phase-profile-v1"
+          mkdir -p "$GITHUB_WORKSPACE/build/linux-cache"
+          archive="$GITHUB_WORKSPACE/build/linux-cache/linux-6.6.143.tar.xz"
+          if ! test -s "$archive"; then
+            curl --http1.1 --retry 5 --retry-all-errors --retry-delay 2 -fsSL \
+              https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.6.143.tar.xz -o "$archive"
+          fi
+          echo "dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932  $archive" | sha256sum -c -
+          MINIC="$work/toolchain/bin/minic" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/linux-phase-materialize" \
+          LINUX_ARCHIVE_CACHE="$archive" \
+          CROSS_COMPILE=riscv64-linux-gnu- \
+          LINUX_BATCH_SELECTION="195,357,232,194,219" \
+          LINUX_BATCH_MATERIALIZE_ONLY=1 \
+          LINUX_BATCH_MATERIALIZE_MAKE_JOBS=4 \
+            sh tests/external/linux/batch_probe.sh
+
+      - name: Profile compiler phases on top five
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-phase-profile-v1"
+          mat="$GITHUB_WORKSPACE/build/linux-phase-materialize"
+          mkdir -p "$work/evidence/traces"
+          while IFS=$'\t' read -r index object rel_i source; do
+            input="$mat/kbuild/$rel_i"
+            safe=$(printf '%s' "$rel_i" | tr '/.' '__')
+            trace="$work/evidence/traces/${index}-${safe}.trace"
+            out="$work/evidence/traces/${index}-${safe}.s"
+            echo "PROFILE_BEGIN index=$index input=$rel_i"
+            start_ns=$(date +%s%N)
+            set +e
+            MINIC_BOOTSTRAP_TRACE=1 CORE_FAST_TRACE=0 \
+              "$work/toolchain/bin/minic-cc" -S "$input" -o "$out" \
+              2>&1 >/dev/null | python3 tools/ci/timestamp-stderr.py >"$trace"
+            rc=${PIPESTATUS[0]}
+            set -e
+            end_ns=$(date +%s%N)
+            wall_ms=$(((end_ns-start_ns)/1000000))
+            echo "PROFILE_END index=$index input=$rel_i rc=$rc wall_ms=$wall_ms" | tee -a "$work/evidence/summary.txt"
+            test "$rc" -eq 0
+          done <"$mat/selected-tus.txt"
+
+      - name: Summarize phase buckets
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY' | tee build/linux-phase-profile-v1/evidence/phase-summary.txt
+          import glob,re
+          for path in sorted(glob.glob("build/linux-phase-profile-v1/evidence/traces/*.trace")):
+              events=[]
+              for line in open(path,errors="replace"):
+                  m=re.match(r"\s*([0-9.]+) ms \| .*stage=([^ ]+) state=([^ ]+)",line)
+                  if m:
+                      events.append((float(m.group(1)),m.group(2),m.group(3)))
+              first={}
+              for t,stage,state in events:
+                  first.setdefault((stage,state),t)
+              def end_time(stage):
+                  vals=[v for (s,st),v in first.items() if s==stage and st.startswith("end-")]
+                  return min(vals) if vals else None
+              def dur(stage):
+                  b=first.get((stage,"begin")); e=end_time(stage)
+                  return None if b is None or e is None else e-b
+              parse_end=end_time("parse")
+              normalize_begin=first.get(("normalize","begin"))
+              normalize_end=end_time("normalize")
+              core_begin=first.get(("core-set","begin"))
+              print(path)
+              for stage in ["parse","normalize","core-set","core-validate","layout","codegen"]:
+                  d=dur(stage)
+                  if d is not None:
+                      print(f"  {stage:14s} {d/1000:.6f}s")
+              if parse_end is not None and normalize_begin is not None:
+                  print(f"  parsed_verify_ownership_gap {(normalize_begin-parse_end)/1000:.6f}s")
+              if normalize_end is not None and core_begin is not None:
+                  print(f"  post_normalize_specialization_gap {(core_begin-normalize_end)/1000:.6f}s")
+          PY
+
+      - name: Upload phase profile
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-top5-phase-profile-v1
+          path: build/linux-phase-profile-v1/evidence
+          retention-days: 7
