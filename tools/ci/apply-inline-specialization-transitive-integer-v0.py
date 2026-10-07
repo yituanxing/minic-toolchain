@@ -101,6 +101,9 @@ refinement = r'''
         size_t caller_index;
         size_t refinement_count = 0U;
 
+        if (getenv("MINIC_DISABLE_TRANSITIVE_REFINEMENT") != NULL) {
+            (void)fprintf(stderr, "MINIC_TRANSITIVE_REFINEMENT=DISABLED\n");
+        } else {
         for (caller_index = original_function_count;
              caller_index < program->function_count;
              ++caller_index) {
@@ -208,6 +211,7 @@ refinement = r'''
                     refinement_count += 1U;
                 }
             }
+        }
         }
         if (refinement_count != 0U) {
             (void)fprintf(stderr,
