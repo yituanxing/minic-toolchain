@@ -2,7 +2,8 @@ name: Filter Old Layout Bench V0
 
 on:
   push:
-    branches: ["agent/filter-layout-bench-v0"]
+    branches:
+      - agent/filter-layout-bench-v0
   workflow_dispatch:
 
 permissions:
@@ -15,94 +16,24 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install RV64 Linux prerequisites
+      - name: Install prerequisites
         run: |
           sudo apt-get -o Acquire::Retries=3 update
           sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
             build-essential gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
             bc bison flex libssl-dev libelf-dev make curl xz-utils python3
 
-      - name: Instrument old uncached object reuse layout
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          python3 - <<'PY'
-          from pathlib import Path
-          p = Path("tools/ci/apply-riscv64-core-object-slot-reuse-v0.py")
-          s = p.read_text()
+      - name: Instrument old layout
+        run: python3 tools/ci/filter-old-layout-bench-instrument.py
 
-          old = """    bool ok = false;
-
-    if (program == NULL || function == NULL || peak_slots == NULL ||"""
-          new = """    bool ok = false;
-    clock_t bench_start = 0;
-    static size_t bench_call_count = 0U;
-    size_t bench_call = 0U;
-
-    if (function != NULL && function->object_count >= 1000U) {
-        bench_call = ++bench_call_count;
-        bench_start = clock();
-    }
-
-    if (program == NULL || function == NULL || peak_slots == NULL ||"""
-          if old not in s:
-              raise SystemExit("bench start anchor missing")
-          s = s.replace(old, new, 1)
-
-          old = """done:
-    free(slots);
-    free(intervals);
-    return ok;
-}"""
-          new = """done:
-    free(slots);
-    free(intervals);
-    if (bench_start != 0) {
-        clock_t bench_end = clock();
-        double bench_seconds =
-            (double)(bench_end - bench_start) / (double)CLOCKS_PER_SEC;
-        (void)fprintf(stderr,
-                      "OLD_LAYOUT_BENCH call=%zu objects=%zu instructions=%zu "
-                      "values=%zu cpu_ticks=%lld cpu_seconds=%.9f\\n",
-                      bench_call,
-                      function->object_count,
-                      function->instruction_count,
-                      function->value_count,
-                      (long long)(bench_end - bench_start),
-                      bench_seconds);
-        (void)fflush(stderr);
-    }
-    return ok;
-}"""
-          if old not in s:
-              raise SystemExit("bench end anchor missing")
-          s = s.replace(old, new, 1)
-
-          old = """p.write_text(text)
-print("MINIC_RISCV64_CORE_OBJECT_SLOT_REUSE_V0=APPLIED")"""
-          new = """if '#include <time.h>' not in text:
-    include_anchor = '#include <string.h>\\n'
-    if include_anchor not in text:
-        raise SystemExit("time include anchor missing")
-    text = text.replace(include_anchor, include_anchor + '#include <time.h>\\n', 1)
-
-p.write_text(text)
-print("MINIC_RISCV64_CORE_OBJECT_SLOT_REUSE_V0=APPLIED")"""
-          if old not in s:
-              raise SystemExit("write anchor missing")
-          s = s.replace(old, new, 1)
-          p.write_text(s)
-          PY
-
-      - name: Build old MiniC runtime profile
+      - name: Build old MiniC profile
         shell: bash
         run: |
           set -Eeuo pipefail
           work="$GITHUB_WORKSPACE/build/filter-layout-bench-v0"
-          build="$work/toolchain"
-          ev="$work/evidence"
-          mkdir -p "$ev"
-          bash tools/ci/linux-runtime-build-minic-profile-v1.sh "$build" "$ev/profile"
+          mkdir -p "$work/evidence"
+          bash tools/ci/linux-runtime-build-minic-profile-v1.sh \
+            "$work/toolchain" "$work/evidence/profile"
 
       - name: Prepare Linux 6.6.143
         shell: bash
@@ -112,7 +43,6 @@ print("MINIC_RISCV64_CORE_OBJECT_SLOT_REUSE_V0=APPLIED")"""
           archive="$work/linux-6.6.143.tar.xz"
           src="$work/linux-6.6.143"
           out="$work/out"
-          mkdir -p "$work"
           curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors \
             https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.6.143.tar.xz -o "$archive"
           printf '%s  %s\n' dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932 "$archive" | sha256sum -c -
@@ -124,7 +54,7 @@ print("MINIC_RISCV64_CORE_OBJECT_SLOT_REUSE_V0=APPLIED")"""
           make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- olddefconfig
           make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- -j4 prepare
 
-      - name: Run bounded old filter layout benchmark
+      - name: Run bounded old filter benchmark
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -133,7 +63,6 @@ print("MINIC_RISCV64_CORE_OBJECT_SLOT_REUSE_V0=APPLIED")"""
           out="$work/out"
           ev="$work/evidence"
           wrapper="$GITHUB_WORKSPACE/tests/external/linux/stage2_kbuild_cc.sh"
-          mkdir -p "$ev"
           rm -f "$out/net/core/filter.o"
           start=$(date +%s)
           set +e
@@ -150,33 +79,11 @@ print("MINIC_RISCV64_CORE_OBJECT_SLOT_REUSE_V0=APPLIED")"""
           stderr_file=$(find "$out" -type f -name 'filter.minic-stage2.minic.stderr' -print -quit 2>/dev/null || true)
           if [[ -n "$stderr_file" ]]; then
             cp "$stderr_file" "$ev/filter.minic.stderr"
+            grep -a 'OLD_LAYOUT_BENCH' "$stderr_file" >"$ev/layout-samples.txt" || true
           fi
-          python3 - "$ev/filter.minic.stderr" "$ev/estimate.txt" <<'PY'
-          import re, statistics, sys
-          p, out = sys.argv[1], sys.argv[2]
-          text = open(p, errors="replace").read() if __import__("os").path.exists(p) else ""
-          vals = [float(x) for x in re.findall(
-              r"OLD_LAYOUT_BENCH call=\d+ objects=1008 instructions=9966 values=8292 "
-              r"cpu_ticks=\d+ cpu_seconds=([0-9.]+)", text)]
-          if not vals:
-              raise SystemExit("no bpf_convert_ctx_access layout samples captured")
-          med = statistics.median(vals)
-          mean = statistics.fmean(vals)
-          predicted_layout_only = 2017 * med
-          with open(out, "w") as f:
-              f.write(f"samples={len(vals)}\n")
-              f.write(f"min_s={min(vals):.9f}\n")
-              f.write(f"median_s={med:.9f}\n")
-              f.write(f"mean_s={mean:.9f}\n")
-              f.write(f"max_s={max(vals):.9f}\n")
-              f.write(f"old_layout_calls=2017\n")
-              f.write(f"predicted_layout_only_s={predicted_layout_only:.3f}\n")
-              f.write(f"predicted_layout_only_h={predicted_layout_only/3600:.4f}\n")
-          print(open(out).read())
-          PY
-          cat "$ev/estimate.txt" >>"$GITHUB_STEP_SUMMARY"
+          cat "$ev/layout-samples.txt" 2>/dev/null || true
 
-      - name: Upload benchmark evidence
+      - name: Upload evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
