@@ -1,0 +1,71 @@
+name: Net Core Filter Finalize Skip V0
+on:
+  push:
+    branches: ["agent/net-core-filter-finalize-skip-v0"]
+permissions:
+  contents: read
+jobs:
+  filter-skip:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+      - name: Install prerequisites
+        run: |
+          sudo apt-get -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            build-essential gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
+            bc bison flex libssl-dev libelf-dev make curl xz-utils python3 time
+      - name: Build current runtime MiniC profile
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/filter-skip"
+          mkdir -p "$work/evidence"
+          bash tools/ci/linux-runtime-build-minic-profile-v1.sh "$work/toolchain" "$work/evidence/profile"
+      - name: Prepare Linux
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/filter-skip"
+          archive="$work/linux-6.6.143.tar.xz"; src="$work/linux-6.6.143"; out="$work/out"
+          curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.6.143.tar.xz -o "$archive"
+          printf '%s  %s\n' dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932 "$archive" | sha256sum -c -
+          tar -xJf "$archive" -C "$work"
+          make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- defconfig
+          "$src/scripts/config" --file "$out/.config" -e BLK_DEV_INITRD -e DEVTMPFS -e DEVTMPFS_MOUNT -e SERIAL_8250 -e SERIAL_8250_CONSOLE
+          make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- olddefconfig
+          make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- -j4 prepare
+      - name: Warm filter with GCC
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/filter-skip"; src="$work/linux-6.6.143"; out="$work/out"
+          make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- CC=/usr/bin/riscv64-linux-gnu-gcc -j4 net/core/filter.o
+          rm -f "$out/net/core/filter.o"
+      - name: Sample filter with finalization bypassed
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/filter-skip"; src="$work/linux-6.6.143"; out="$work/out"; ev="$work/evidence"
+          wrapper="$GITHUB_WORKSPACE/tests/external/linux/stage2_kbuild_cc.sh"
+          set +e
+          timeout --signal=TERM --kill-after=20s 30s \
+            env MINIC="$work/toolchain/bin/minic" REAL_CC=/usr/bin/riscv64-linux-gnu-gcc \
+              MINIC_KEEP_INTERMEDIATES=1 MINIC_BOOTSTRAP_TRACE=1 MINIC_DISABLE_SPECIALIZATION_FINALIZE=1 \
+              MINIC_KBUILD_TRACE="$ev/filter-skip.kbuild.trace" CORE_FAST_TRACE=1 \
+              make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- CC="$wrapper" -j1 V=1 net/core/filter.o >"$ev/filter-skip.log" 2>&1
+          rc=$?
+          set -e
+          printf 'FILTER_SKIP_RC=%s\n' "$rc" | tee "$ev/filter-skip-summary.txt"
+          side="$out/net/core/filter.minic-stage2.minic.stderr"
+          test ! -f "$side" || cp "$side" "$ev/filter-minic.stderr"
+          grep -a -E 'MINIC_BOOTSTRAP_TRACE|MINIC_SPECIALIZATION_FINALIZE|MINIC_INLINE_' "$ev/filter-minic.stderr" >"$ev/filter-skip-diagnostic.txt" 2>/dev/null || true
+          exit "$rc"
+      - name: Preserve evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: net-core-filter-finalize-skip-v0
+          path: build/filter-skip/evidence/
+          if-no-files-found: error
+          retention-days: 7
