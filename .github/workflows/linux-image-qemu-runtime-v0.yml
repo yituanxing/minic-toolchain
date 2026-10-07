@@ -27,9 +27,8 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: build/linux-expanded-kbuild-v0/out
-          key: linux-expanded-mixed-v1-6.6.143-${{ runner.os }}-${{ hashFiles('src/**', 'include/**', 'tools/ci/apply-*.py', 'tests/external/linux/stage2_kbuild_cc.sh') }}
-          restore-keys: |
-            linux-expanded-mixed-v1-6.6.143-${{ runner.os }}-
+          key: linux-expanded-image-v1-6.6.143-${{ runner.os }}-${{ hashFiles('src/**', 'include/**', 'tools/ci/apply-*.py', 'tests/external/linux/stage2_kbuild_cc.sh') }}
+          fail-on-cache-miss: true
 
       - name: Install RV64 QEMU runtime prerequisites
         shell: bash
@@ -49,6 +48,7 @@ jobs:
           work="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0"
           image="$work/out/arch/riscv/boot/Image"
           mkdir -p "$work/runtime-evidence"
+          test "${{ steps.kbuild-cache.outputs.cache-hit }}" = "true"
           printf 'QEMU_CACHE_HIT=%s\nQEMU_CACHE_MATCHED_KEY=%s\n' \
             "${{ steps.kbuild-cache.outputs.cache-hit }}" \
             "${{ steps.kbuild-cache.outputs.cache-matched-key }}" \

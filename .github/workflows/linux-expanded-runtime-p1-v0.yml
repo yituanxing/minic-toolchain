@@ -23,9 +23,8 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: build/linux-expanded-kbuild-v0/out
-          key: linux-expanded-mixed-v1-6.6.143-${{ runner.os }}-${{ hashFiles('src/**', 'include/**', 'tools/ci/apply-*.py', 'tests/external/linux/stage2_kbuild_cc.sh') }}
-          restore-keys: |
-            linux-expanded-mixed-v1-6.6.143-${{ runner.os }}-
+          key: linux-expanded-image-v1-6.6.143-${{ runner.os }}-${{ hashFiles('src/**', 'include/**', 'tools/ci/apply-*.py', 'tests/external/linux/stage2_kbuild_cc.sh') }}
+          fail-on-cache-miss: true
 
       - name: Verify restored MiniC Image
         shell: bash
@@ -33,6 +32,7 @@ jobs:
           set -Eeuo pipefail
           image="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0/out/arch/riscv/boot/Image"
           config="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0/out/.config"
+          test "${{ steps.expanded-cache.outputs.cache-hit }}" = "true"
           test -s "$image"
           test -s "$config"
           mkdir -p build/linux-expanded-runtime-p1/evidence

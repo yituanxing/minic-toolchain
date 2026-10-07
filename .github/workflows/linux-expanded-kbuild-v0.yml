@@ -16,7 +16,7 @@ jobs:
   image-frontier:
     if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[linux-expanded-kbuild-v0]')
     runs-on: ubuntu-24.04
-    timeout-minutes: 55
+    timeout-minutes: 110
     steps:
       - uses: actions/checkout@v4
         with:
