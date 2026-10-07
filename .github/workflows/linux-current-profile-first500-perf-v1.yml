@@ -1,0 +1,85 @@
+name: Linux Current Profile First500 Perf V1
+
+on:
+  push:
+    branches:
+      - agent/linux-perf-audit-v1
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  perf500:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Restore frozen first500 corpus
+        id: corpus
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-focus-corpus
+          key: linux-focus-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-${{ hashFiles('tests/external/linux/replay-indices.txt') }}
+
+      - name: Require frozen corpus cache
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          echo "CORPUS_CACHE_HIT=${{ steps.corpus.outputs.cache-hit }}"
+          test "${{ steps.corpus.outputs.cache-hit }}" = true
+          test -s build/linux-focus-corpus/selected-tus.txt
+          test "$(grep -cve '^[[:space:]]*$' build/linux-focus-corpus/selected-tus.txt)" -eq 500
+
+      - name: Build exact current runtime MiniC profile
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-perf-audit-v1"
+          mkdir -p "$work/evidence"
+          bash tools/ci/linux-runtime-build-minic-profile-v1.sh             "$work/toolchain" "$work/evidence/profile"
+          cat "$work/evidence/profile/toolchain-timing.txt"
+
+      - name: Replay exact frozen first500 with current C MiniC
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-perf-audit-v1"
+          out="$work/first500"
+          start_ns=$(date +%s%N)
+          CORE_FAST_TRACE=0 python3 tests/external/linux/corpus_replay.py             --minic "$work/toolchain/bin/minic"             --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus"             --work "$out"             --jobs 4             --offset 0             --limit 500             --sample-count 0
+          end_ns=$(date +%s%N)
+          wall_ms=$(((end_ns-start_ns)/1000000))
+          echo "PERF500_WALL_MS=$wall_ms" | tee "$work/evidence/perf500-wall.txt"
+          cp "$out/batch-summary.txt" "$work/evidence/"
+          cp "$out/batch-results.json" "$work/evidence/"
+
+      - name: Analyze TU timing distribution
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-perf-audit-v1"
+          python3 - <<'PY' | tee "$work/evidence/perf500-analysis.txt"
+          import json, statistics
+          from pathlib import Path
+          rows=json.loads(Path("build/linux-perf-audit-v1/first500/batch-results.json").read_text())
+          secs=[float(r["seconds"]) for r in rows if r["status"]=="PASS"]
+          print(f"selected={len(rows)} pass={sum(r['status']=='PASS' for r in rows)}")
+          print(f"sum_tu_seconds={sum(secs):.3f}")
+          print(f"mean_tu_seconds={statistics.fmean(secs):.6f}")
+          print(f"median_tu_seconds={statistics.median(secs):.6f}")
+          print(f"p95_tu_seconds={sorted(secs)[max(0,int(len(secs)*0.95)-1)]:.6f}")
+          print(f"max_tu_seconds={max(secs):.6f}")
+          print("TOP30")
+          for r in sorted(rows,key=lambda x:float(x["seconds"]),reverse=True)[:30]:
+              print(f'{float(r["seconds"]):9.3f} index={r["index"]} input={r["input"]} source={r["source"]}')
+          PY
+
+      - name: Upload performance evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-current-profile-first500-perf-v1
+          path: build/linux-perf-audit-v1/evidence
+          retention-days: 7
