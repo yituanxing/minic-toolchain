@@ -100,12 +100,34 @@ refinement = r'''
     {
         size_t caller_index;
         size_t refinement_count = 0U;
+        const bool perf_trace = getenv("MINIC_SPECIALIZATION_PERF_TRACE") != NULL;
+
+        if (perf_trace) {
+            (void)fprintf(stderr,
+                          "MINIC_SPECIALIZATION_PERF phase=transitive-begin original_functions=%zu functions=%zu expressions=%zu clones=%zu\n",
+                          original_function_count,
+                          program->function_count,
+                          program->expression_count,
+                          specialization_count);
+            (void)fflush(stderr);
+        }
 
         for (caller_index = original_function_count;
              caller_index < program->function_count;
              ++caller_index) {
             const MinicFunction caller = program->functions[caller_index];
             size_t nested_expression_index;
+
+            if (perf_trace && ((caller_index - original_function_count) % 16U) == 0U) {
+                (void)fprintf(stderr,
+                              "MINIC_SPECIALIZATION_PERF phase=transitive-progress caller=%zu functions=%zu expressions=%zu clones=%zu refined=%zu\n",
+                              caller_index,
+                              program->function_count,
+                              program->expression_count,
+                              specialization_count,
+                              refinement_count);
+                (void)fflush(stderr);
+            }
 
             if (!caller.is_integer_specialization ||
                 caller.specialization_source >= original_function_count) {
