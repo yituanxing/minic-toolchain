@@ -20,18 +20,22 @@ old = '''    (void)fprintf(stderr,
 new = '''    {
         struct timespec ts;
         uint64_t mono_ns = 0U;
-        clock_t cpu_ticks = clock();
+        struct timespec cpu_ts;
+        uint64_t cpu_ns = 0U;
         if (clock_gettime(CLOCK_MONOTONIC, &ts) == 0) {
             mono_ns = (uint64_t)ts.tv_sec * UINT64_C(1000000000) + (uint64_t)ts.tv_nsec;
         }
+        if (clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &cpu_ts) == 0) {
+            cpu_ns = (uint64_t)cpu_ts.tv_sec * UINT64_C(1000000000) + (uint64_t)cpu_ts.tv_nsec;
+        }
         (void)fprintf(stderr,
                       "MINIC_BOOTSTRAP_TRACE stage=%s state=%s functions=%zu mono_ns=%" PRIu64
-                      " cpu_ticks=%lld input=%s\\n",
+                      " cpu_ns=%" PRIu64 " input=%s\\n",
                       stage != NULL ? stage : "?",
                       state != NULL ? state : "?",
                       function_count,
                       mono_ns,
-                      (long long)cpu_ticks,
+                      cpu_ns,
                       input_path != NULL ? input_path : "?");
         (void)fflush(stderr);
     }'''
