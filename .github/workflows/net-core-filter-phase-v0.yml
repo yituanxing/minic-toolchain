@@ -79,9 +79,16 @@ jobs:
           set -e
           elapsed=$(($(date +%s) - start))
           printf 'FILTER_PHASE_RC=%s\nFILTER_PHASE_ELAPSED_S=%s\n' "$rc" "$elapsed" | tee "$ev/filter-phase-summary.txt"
-          grep -a 'MINIC_BOOTSTRAP_TRACE' "$ev/filter-phase.log" >"$ev/bootstrap-trace.txt" || true
+          side="$out/net/core/filter.minic-stage2.minic.stderr"
+          if test -f "$side"; then
+            cp "$side" "$ev/filter-minic.stderr"
+          fi
+          if test -f "$out/net/core/filter.minic-stage2.i"; then
+            wc -c "$out/net/core/filter.minic-stage2.i" >"$ev/filter-i-bytes.txt"
+          fi
+          grep -a 'MINIC_BOOTSTRAP_TRACE' "$ev/filter-minic.stderr" >"$ev/bootstrap-trace.txt" 2>/dev/null || true
           grep -a -E 'MINIC_BOOTSTRAP_TRACE|MINIC_SPECIALIZATION_PERF|MINIC_KBUILD_BLOCKER|error:|fatal:|Killed|Terminated' \
-            "$ev/filter-phase.log" | tail -n 3000 >"$ev/filter-phase-diagnostic.txt" || true
+            "$ev/filter-minic.stderr" "$ev/filter-phase.log" | tail -n 3000 >"$ev/filter-phase-diagnostic.txt" 2>/dev/null || true
           tail -n 500 "$ev/filter-phase.log" >"$ev/filter-phase-tail.txt" || true
           exit "$rc"
 
