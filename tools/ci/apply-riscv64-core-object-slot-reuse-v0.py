@@ -256,94 +256,153 @@ static bool core_scalar_object_intervals_overlap(const CoreScalarObjectInterval 
              right->last_position < left->first_position);
 }
 
+typedef struct CoreScalarObjectReuseCache {
+    const MinicC0Program *program;
+    const MinicCoreFunction *function;
+    CoreScalarObjectInterval *intervals;
+    size_t *slots;
+    size_t peak_slots;
+} CoreScalarObjectReuseCache;
+
+static CoreScalarObjectReuseCache core_scalar_object_reuse_cache;
+
+static void core_scalar_object_reuse_cache_clear(void) {
+    free(core_scalar_object_reuse_cache.slots);
+    free(core_scalar_object_reuse_cache.intervals);
+    core_scalar_object_reuse_cache.program = NULL;
+    core_scalar_object_reuse_cache.function = NULL;
+    core_scalar_object_reuse_cache.intervals = NULL;
+    core_scalar_object_reuse_cache.slots = NULL;
+    core_scalar_object_reuse_cache.peak_slots = 0U;
+}
+
 static bool core_scalar_object_reuse_layout(const MinicC0Program *program,
                                             const MinicCoreFunction *function,
                                             MinicCoreObjectId target,
                                             bool *target_reusable,
                                             size_t *target_slot,
                                             size_t *peak_slots) {
-    CoreScalarObjectInterval *intervals = NULL;
-    size_t *slots = NULL;
     size_t object_index;
-    size_t peak = 0U;
-    bool ok = false;
 
     if (program == NULL || function == NULL || peak_slots == NULL ||
         (target != MINIC_CORE_OBJECT_INVALID && target >= function->object_count)) {
         return false;
     }
-    if (function->object_count == 0U) {
-        *peak_slots = 0U;
-        if (target_reusable != NULL) *target_reusable = false;
-        if (target_slot != NULL) *target_slot = SIZE_MAX;
-        return true;
-    }
-    if (function->object_count > SIZE_MAX / sizeof(*intervals) ||
-        function->object_count > SIZE_MAX / sizeof(*slots)) {
-        return false;
-    }
-    intervals = (CoreScalarObjectInterval *)malloc(function->object_count * sizeof(*intervals));
-    slots = (size_t *)malloc(function->object_count * sizeof(*slots));
-    if (intervals == NULL || slots == NULL) {
-        goto done;
-    }
-    for (object_index = 0U; object_index < function->object_count; ++object_index) {
-        slots[object_index] = SIZE_MAX;
-        if (object_index > UINT32_MAX ||
-            !core_scalar_object_interval(program,
-                                         function,
-                                         (MinicCoreObjectId)object_index,
-                                         &intervals[object_index])) {
-            goto done;
+
+    if (core_scalar_object_reuse_cache.program != program ||
+        core_scalar_object_reuse_cache.function != function) {
+        size_t peak = 0U;
+
+        core_scalar_object_reuse_cache_clear();
+        core_scalar_object_reuse_cache.program = program;
+        core_scalar_object_reuse_cache.function = function;
+
+        if (getenv("MINIC_BOOTSTRAP_TRACE") != NULL) {
+            (void)fprintf(stderr,
+                          "MINIC_BOOTSTRAP_TRACE stage=core-object-reuse-cache state=begin "
+                          "objects=%zu instructions=%zu values=%zu\n",
+                          function->object_count,
+                          function->instruction_count,
+                          function->value_count);
+            (void)fflush(stderr);
         }
-    }
-    for (object_index = 0U; object_index < function->object_count; ++object_index) {
-        size_t slot;
-        if (!intervals[object_index].reusable) {
-            continue;
-        }
-        for (slot = 0U;; ++slot) {
-            size_t prior;
-            bool occupied = false;
-            for (prior = 0U; prior < object_index; ++prior) {
-                if (slots[prior] == slot &&
-                    core_scalar_object_intervals_overlap(&intervals[object_index],
-                                                         &intervals[prior])) {
-                    occupied = true;
-                    break;
+
+        if (function->object_count != 0U) {
+            if (function->object_count > SIZE_MAX / sizeof(*core_scalar_object_reuse_cache.intervals) ||
+                function->object_count > SIZE_MAX / sizeof(*core_scalar_object_reuse_cache.slots)) {
+                core_scalar_object_reuse_cache_clear();
+                return false;
+            }
+            core_scalar_object_reuse_cache.intervals =
+                (CoreScalarObjectInterval *)malloc(
+                    function->object_count * sizeof(*core_scalar_object_reuse_cache.intervals));
+            core_scalar_object_reuse_cache.slots =
+                (size_t *)malloc(function->object_count *
+                                 sizeof(*core_scalar_object_reuse_cache.slots));
+            if (core_scalar_object_reuse_cache.intervals == NULL ||
+                core_scalar_object_reuse_cache.slots == NULL) {
+                core_scalar_object_reuse_cache_clear();
+                return false;
+            }
+
+            for (object_index = 0U; object_index < function->object_count; ++object_index) {
+                core_scalar_object_reuse_cache.slots[object_index] = SIZE_MAX;
+                if (object_index > UINT32_MAX ||
+                    !core_scalar_object_interval(
+                        program,
+                        function,
+                        (MinicCoreObjectId)object_index,
+                        &core_scalar_object_reuse_cache.intervals[object_index])) {
+                    core_scalar_object_reuse_cache_clear();
+                    return false;
                 }
             }
-            if (!occupied) {
-                slots[object_index] = slot;
-                if (slot == SIZE_MAX) {
-                    goto done;
+
+            for (object_index = 0U; object_index < function->object_count; ++object_index) {
+                size_t slot;
+                if (!core_scalar_object_reuse_cache.intervals[object_index].reusable) {
+                    continue;
                 }
-                if (slot + 1U > peak) {
-                    peak = slot + 1U;
+                for (slot = 0U;; ++slot) {
+                    size_t prior;
+                    bool occupied = false;
+                    for (prior = 0U; prior < object_index; ++prior) {
+                        if (core_scalar_object_reuse_cache.slots[prior] == slot &&
+                            core_scalar_object_intervals_overlap(
+                                &core_scalar_object_reuse_cache.intervals[object_index],
+                                &core_scalar_object_reuse_cache.intervals[prior])) {
+                            occupied = true;
+                            break;
+                        }
+                    }
+                    if (!occupied) {
+                        core_scalar_object_reuse_cache.slots[object_index] = slot;
+                        if (slot == SIZE_MAX) {
+                            core_scalar_object_reuse_cache_clear();
+                            return false;
+                        }
+                        if (slot + 1U > peak) {
+                            peak = slot + 1U;
+                        }
+                        break;
+                    }
                 }
-                break;
             }
         }
+
+        core_scalar_object_reuse_cache.peak_slots = peak;
+        if (getenv("MINIC_BOOTSTRAP_TRACE") != NULL) {
+            (void)fprintf(stderr,
+                          "MINIC_BOOTSTRAP_TRACE stage=core-object-reuse-cache state=end "
+                          "objects=%zu peak_slots=%zu\n",
+                          function->object_count,
+                          peak);
+            (void)fflush(stderr);
+        }
     }
-    *peak_slots = peak;
+
+    *peak_slots = core_scalar_object_reuse_cache.peak_slots;
     if (target != MINIC_CORE_OBJECT_INVALID) {
         if (target_reusable != NULL) {
-            *target_reusable = intervals[target].reusable;
+            *target_reusable =
+                core_scalar_object_reuse_cache.intervals != NULL &&
+                core_scalar_object_reuse_cache.intervals[target].reusable;
         }
         if (target_slot != NULL) {
-            *target_slot = slots[target];
+            *target_slot = core_scalar_object_reuse_cache.slots != NULL
+                               ? core_scalar_object_reuse_cache.slots[target]
+                               : SIZE_MAX;
         }
     } else {
-        if (target_reusable != NULL) *target_reusable = false;
-        if (target_slot != NULL) *target_slot = SIZE_MAX;
+        if (target_reusable != NULL) {
+            *target_reusable = false;
+        }
+        if (target_slot != NULL) {
+            *target_slot = SIZE_MAX;
+        }
     }
-    ok = true;
-done:
-    free(slots);
-    free(intervals);
-    return ok;
+    return true;
 }
-
 '''
 text = text.replace(frame_marker, helper + frame_marker, 1)
 
