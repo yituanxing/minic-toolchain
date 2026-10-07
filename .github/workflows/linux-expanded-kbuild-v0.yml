@@ -136,7 +136,7 @@ jobs:
           fi
           if [[ "$completed" == 0 ]]; then
             while read -r cohort target; do
-              [[ "$cohort" == #* || -z "$target" ]] && continue
+              [[ "$cohort" == \#* || -z "$target" ]] && continue
               rm -f "$out/$target"
             done < tools/ci/linux-expanded-owner-targets-v1.txt
             echo "OWNER_CHECKPOINT_INIT=FRESH_CURRENT_PROFILE"
