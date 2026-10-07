@@ -33,7 +33,7 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: build/linux-expanded-kbuild-v0/out
-          key: linux-expanded-image-v2-6.6.143-${{ runner.os }}-${{ steps.profile-cache.outputs.digest }}
+          key: linux-expanded-image-v3-6.6.143-${{ runner.os }}-${{ steps.profile-cache.outputs.digest }}-${{ hashFiles('tools/ci/linux-expanded-owner-targets-v1.txt', 'tools/ci/linux-expanded-owner-refresh-v1.sh') }}
           fail-on-cache-miss: true
 
       - name: Verify restored MiniC Image
