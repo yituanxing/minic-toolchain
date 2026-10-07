@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - agent/linux-phase-profile-v1
+      - agent/linux-symbolic-candidate-v1
   workflow_dispatch:
 
 permissions:
