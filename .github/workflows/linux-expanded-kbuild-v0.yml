@@ -259,12 +259,29 @@ jobs:
             exit 0
           fi
           start=$(date +%s)
+          set +e
           MINIC="$work/toolchain/bin/minic" REAL_CC=/usr/bin/riscv64-linux-gnu-gcc \
-          MINIC_KEEP_INTERMEDIATES=0 MINIC_KBUILD_TRACE="$ev/owner-c3-filter.trace" \
-          MINIC_ASM_BATCH_TRACE=1 MINIC_LOCAL_FACT_TRACE=1 CORE_FAST_TRACE=1 \
+          MINIC_KEEP_INTERMEDIATES=1 MINIC_KBUILD_TRACE="$ev/owner-c3-filter.trace" \
+          MINIC_BOOTSTRAP_TRACE=1 MINIC_ASM_BATCH_TRACE=1 MINIC_LOCAL_FACT_TRACE=1 CORE_FAST_TRACE=1 \
+            timeout --signal=TERM --kill-after=15s 10m \
             make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
               CC="$wrapper" -j1 V=1 net/core/filter.o >"$ev/owner-c3-filter.log" 2>&1
+          rc=$?
+          set -e
           elapsed=$(($(date +%s) - start))
+          stderr_file=$(find "$work" -type f -name 'filter.minic-stage2.minic.stderr' -print -quit 2>/dev/null || true)
+          stdout_file=$(find "$work" -type f -name 'filter.minic-stage2.minic.stdout' -print -quit 2>/dev/null || true)
+          input_file=$(find "$work" -type f -name 'filter.minic-stage2.i' -print -quit 2>/dev/null || true)
+          [[ -z "$stderr_file" ]] || cp "$stderr_file" "$ev/owner-c3-filter.minic.stderr"
+          [[ -z "$stdout_file" ]] || cp "$stdout_file" "$ev/owner-c3-filter.minic.stdout"
+          if [[ -n "$input_file" ]]; then
+            wc -lc "$input_file" | tee "$ev/owner-c3-filter-input-size.txt"
+          fi
+          if (( rc != 0 )); then
+            printf 'OWNER_COHORT_3_FILTER=DIAGNOSTIC_STOP rc=%s elapsed_s=%s targets=1\n' "$rc" "$elapsed" \
+              | tee "$ev/owner-c3-filter-summary.txt"
+            exit "$rc"
+          fi
           printf 'OWNER_COHORT_3_FILTER=PASS elapsed_s=%s targets=1\n' "$elapsed" \
             | tee "$ev/owner-c3-filter-summary.txt"
           printf 'changed=true\n' >>"$GITHUB_OUTPUT"
