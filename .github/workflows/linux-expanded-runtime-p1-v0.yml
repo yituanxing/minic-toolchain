@@ -143,9 +143,12 @@ jobs:
           set -Eeuo pipefail
           work="$GITHUB_WORKSPACE/build/linux-expanded-runtime-p1"
           image="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0/out/arch/riscv/boot/Image"
+          initrd="$work/runtime-initramfs.cpio.gz"
           start=$(date +%s)
+
+          set +e
           LINUX_IMAGE="$image" \
-          INITRAMFS="$work/runtime-initramfs.cpio.gz" \
+          INITRAMFS="$initrd" \
           BUILD_DIR="$work/qemu" \
           LINUX_RELEASE=6.6.143 \
           LINUX_RUNTIME_PROFILE=p1 \
@@ -154,13 +157,40 @@ jobs:
           QEMU_EXPLICIT_DTB_DIR="$work/dtb" \
           QEMU_TIMEOUT_SECONDS=90 \
             bash tests/external/linux/runtime_boot.sh
+          boot_rc=$?
+          set -e
+
+          if test -s "$work/qemu/rdinit-init.log"; then
+            cp "$work/qemu/rdinit-init.log" "$work/evidence/rdinit-init.log"
+          fi
+
+          if test "$boot_rc" -ne 0; then
+            trace="$work/early-trace.full.txt"
+            set +e
+            QEMU_REAL_SYSTEM_RISCV64=qemu-system-riscv64 \
+            QEMU_EXPLICIT_DTB_DIR="$work/dtb-trace" \
+            timeout 3s python3 tests/external/linux/qemu_explicit_initrd_wrapper.py \
+              -M virt -cpu max -m 512M -smp 1 -nographic -no-reboot \
+              -bios default -kernel "$image" -initrd "$initrd" \
+              -append 'console=ttyS0 earlycon=sbi loglevel=8 panic=-1 rdinit=/init minic_runtime=p1' \
+              -d in_asm,int -D "$trace" \
+              >"$work/evidence/early-trace-console.txt" 2>&1
+            trace_rc=$?
+            set -e
+            printf 'P1_BOOT_RC=%s\nP1_TRACE_RC=%s\n' "$boot_rc" "$trace_rc" \
+              | tee "$work/evidence/early-trace-summary.txt"
+            if test -s "$trace"; then
+              tail -n 5000 "$trace" >"$work/evidence/early-trace.tail.txt"
+              rm -f "$trace"
+            fi
+            exit "$boot_rc"
+          fi
 
           python3 tests/external/linux/runtime_v2_log_check.py \
             --profile p1 \
             --log "$work/qemu/rdinit-init.log"
 
           elapsed=$(( $(date +%s) - start ))
-          cp "$work/qemu/rdinit-init.log" "$work/evidence/rdinit-init.log"
           printf 'LINUX_EXPANDED_RUNTIME_P1=PASS syscalls=12 elapsed_s=%s head=%s\n' \
             "$elapsed" "$GITHUB_SHA" | tee -a "$work/evidence/summary.txt"
 
