@@ -55,9 +55,8 @@ count = text.count(old)
 if count == 1:
     text = text.replace(old, new, 1)
 elif (
-    "if (refined_id == MINIC_FUNCTION_INVALID) {\n"
-    "                    if (specialization_count >= MINIC_INLINE_INTEGER_SPECIALIZATION_LIMIT ||\n"
-    "                        !minic_add_inline_integer_specialization(" in text
+    "refined_id == MINIC_FUNCTION_INVALID" in text
+    and "specialization_count >= MINIC_INLINE_INTEGER_SPECIALIZATION_LIMIT ||" in text
 ):
     # The indexed transitive pass already uses the shared capacity macro.
     # Keep that structurally stable form instead of requiring an exact legacy block.
