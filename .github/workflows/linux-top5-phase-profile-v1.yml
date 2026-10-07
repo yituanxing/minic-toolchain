@@ -67,7 +67,7 @@ jobs:
             echo "PROFILE_BEGIN index=$index input=$rel_i"
             start_ns=$(date +%s%N)
             set +e
-            MINIC_BOOTSTRAP_TRACE=1 CORE_FAST_TRACE=0 \
+            MINIC_BOOTSTRAP_TRACE=1 MINIC_PARSER_PERF_TRACE=1 CORE_FAST_TRACE=0 \
               "$work/toolchain/bin/minic-cc" -S "$input" -o "$out" \
               2>&1 >/dev/null | python3 tools/ci/timestamp-stderr.py >"$trace"
             rc=${PIPESTATUS[0]}
