@@ -1,0 +1,68 @@
+name: Linux GNU Choose Eager Condition Targeted V1
+on:
+  push:
+    branches: [agent/linux-full3352-compile-fixes-v1]
+    paths: [.github/workflows/linux-gnu-choose-eager-targeted-v1.yml, tools/ci/apply-correctness-choose-eager-condition-v1.py]
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+jobs:
+  targeted:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build exact Canonical baseline and eager ConstEval candidate
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work=build/choose-eager-target
+          mkdir -p "$work"
+          bash tools/ci/linux-runtime-build-minic-profile-v1.sh "$work/baseline" "$work/profile"
+          python3 tools/ci/apply-correctness-choose-eager-condition-v1.py
+          git diff --check
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$work/candidate" \
+            "$work/candidate/bin/minic" "$work/candidate/bin/minic-cc" >/dev/null
+          echo CHOOSE_EAGER_BUILD=PASS
+      - name: Restore exact reproducible failing Linux preprocessed files
+        uses: actions/download-artifact@v4
+        with:
+          name: linux-nouveau-serio-failure-inputs
+          run-id: 37738944070
+          github-token: ${{ github.token }}
+          path: build/choose-eager-target/sources
+      - name: Check 45-Nouveau-cluster representative pair and GCC compatibility
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work=build/choose-eager-target
+          find "$work/sources" -name '*.i' -printf '%P %s\\n'
+          for name in nouveau_drm.i nouveau_bo0039.i; do
+            input="$work/sources/corpus/kbuild/drivers/gpu/drm/nouveau/$name"
+            if test ! -s "$input"; then
+              input=$(find "$work/sources" -name "$name" -print -quit)
+            fi
+            test -s "$input"
+            set +e
+            "$work/baseline/bin/minic" -S "$input" -o "$work/baseline-$name.s" >"$work/baseline-$name.log" 2>&1
+            old_rc=$?
+            "$work/candidate/bin/minic" -S "$input" -o "$work/candidate-$name.s" >"$work/candidate-$name.log" 2>&1
+            new_rc=$?
+            set -e
+            echo "CHOOSE_EAGER_CASE name=$name baseline_rc=$old_rc candidate_rc=$new_rc"
+            head -n 4 "$work/baseline-$name.log"
+            head -n 8 "$work/candidate-$name.log"
+            test "$old_rc" -ne 0
+            test "$new_rc" -eq 0
+          done
+          echo CHOOSE_EAGER_NOUVEAU_REPRESENTATIVES=PASS
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-choose-eager-targeted-evidence
+          path: |
+            build/choose-eager-target/*.log
+            build/choose-eager-target/profile/
+          retention-days: 7
