@@ -57,6 +57,35 @@ jobs:
             tail -n 20 "$work/evidence/minic-shadow.log"
           fi
 
+      - name: Fix nearest local binding and prove shadowing regression
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/independent-verify-audit-v1"
+          python3 tools/ci/apply-perf-parser-local-shadow-fix-v1.py \
+            | tee "$work/evidence/local-shadow-patch.txt"
+          git diff --check
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$work/toolchain" \
+            "$work/toolchain/bin/minic" "$work/toolchain/bin/minic-cc" \
+            >"$work/evidence/shadow-rebuild.log" 2>&1
+          MINIC_CORE_VERIFY_AUDIT=1 "$work/toolchain/bin/minic" \
+            -S "$work/typedef-shadow.i" -o "$work/minic-shadow-fixed.s" \
+            >"$work/evidence/minic-shadow-fixed.log" 2>&1
+          test -s "$work/minic-shadow-fixed.s"
+          echo "MINIC_SCOPED_TYPEDEF_SHADOW_FIXED=PASS"
+          cat > "$work/typedef-local-reverse.i" <<'EOF'
+          typedef int number_t;
+          int local_hides_typedef(void) {
+              int number_t = 4;
+              return number_t;
+          }
+          EOF
+          gcc -S "$work/typedef-local-reverse.i" -o "$work/gcc-reverse-shadow.s"
+          "$work/toolchain/bin/minic" -S "$work/typedef-local-reverse.i" \
+            -o "$work/minic-reverse-shadow.s" >"$work/evidence/minic-reverse-shadow.log" 2>&1
+          test -s "$work/minic-reverse-shadow.s"
+          echo "MINIC_LOCAL_HIDES_GLOBAL_TYPEDEF=PASS"
+
       - name: Measure Core verifier on generated block-heavy C
         shell: bash
         run: |
