@@ -140,6 +140,42 @@ jobs:
           done
           test "$(grep -c '^ASSERT_FIVE_CONFIRMED=' "$diag/results.txt")" -eq 5
           echo 'ASSERT_FIVE_DIFFERENTIAL=PASS matched=5 gcc_undefined=0 minic_undefined=5'
+      - name: Check whether restored object timestamps cause Kbuild rebuilds
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-distributed-full-image-v1"
+          src="$work/linux-6.6.143"
+          out="$work/out"
+          diag="$work/assert-five"
+          obj=init/main.o
+          mapfile -t src_objects < <(find "$work/incoming" -type f -path "*/out/$obj")
+          mapfile -t src_cmds < <(find "$work/incoming" -type f -path "*/out/init/.main.o.cmd")
+          test "${#src_objects[@]}" -eq 1
+          test "${#src_cmds[@]}" -eq 1
+          src_obj="${src_objects[0]}"
+          src_cmd="${src_cmds[0]}"
+          for mode in original touched; do
+            cp -p "$src_obj" "$out/$obj"
+            cp -p "$src_cmd" "$out/init/.main.o.cmd"
+            (cd "$out"; sha256sum "$obj") > "$diag/$mode-before.sha256"
+            if [[ "$mode" == touched ]]; then
+              # Content is unchanged. Only make the restored object newer than
+              # local generated headers to test Kbuild's mtime behavior.
+              touch "$out/$obj"
+            fi
+            : >"$diag/$mode.trace"
+            MINIC="$work/toolchain/bin/minic" REAL_CC=/usr/bin/riscv64-linux-gnu-gcc \
+              MINIC_KBUILD_TRACE="$diag/$mode.trace" CORE_FAST_TRACE=0 \
+              make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
+              CC="$GITHUB_WORKSPACE/tests/external/linux/stage2_kbuild_cc.sh" \
+              -j1 V=1 "$obj" > "$diag/$mode.kbuild.log" 2>&1 || {
+                tail -n 80 "$diag/$mode.kbuild.log"; exit 1;
+              }
+            calls=$(grep -c '^minic input=' "$diag/$mode.trace" || true)
+            echo "DIST_IMAGE_MTIME_PROBE=$mode object=$obj minic_calls=$calls" | tee -a "$diag/results.txt"
+          done
+          echo 'DIST_IMAGE_MTIME_DIAG=COMPLETE no_Image_certification'
       - name: Mark self-path push as focused diagnosis, not Image certification
         if: github.event_name == 'push'
         run: echo 'ASSERT_FIVE_DIAGNOSTIC_ONLY=PASS Image_and_QEMU_not_executed'
