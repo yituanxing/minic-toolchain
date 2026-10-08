@@ -1,7 +1,10 @@
 name: Linux Runtime Opt-in Perf All3352 V1
 # Rerun after importing Boolean Domain index dependency; GCC/RV64 QEMU semantic test PASS.
 on:
-  # Expensive 7-shard profile verification is manual until known failures are fixed.
+  # One-shot proof of serial GCC .i fixture integrity; disable push after check.
+  push:
+    branches: [agent/linux-expanded-kbuild-v0]
+    paths: [.github/workflows/linux-runtime-optin-perf-all3352-v1.yml]
   workflow_dispatch:
 permissions:
   contents: read
@@ -57,7 +60,7 @@ jobs:
           LINUX_ARCHIVE_CACHE="$GITHUB_WORKSPACE/build/linux-6.6.143.tar.xz" \
           CROSS_COMPILE=riscv64-linux-gnu- \
           LINUX_BATCH_OFFSET="$OFFSET" LINUX_BATCH_LIMIT="$COUNT" \
-          LINUX_BATCH_MATERIALIZE_ONLY=1 LINUX_BATCH_MATERIALIZE_MAKE_JOBS=4 \
+          LINUX_BATCH_MATERIALIZE_ONLY=1 LINUX_BATCH_MATERIALIZE_MAKE_JOBS=1 \
             sh tests/external/linux/batch_probe.sh
           echo "MATERIALIZE_SECONDS=$(($(date +%s)-begin))" | tee "$root/evidence/materialize-time.txt"
           test "$(wc -l < "$root/input/tu-manifest.txt")" -eq 3352
@@ -73,6 +76,23 @@ jobs:
           print(f"ALL3352_MATERIALIZED off={off} count={n} verified=yes")
           PY
           df -h "$GITHUB_WORKSPACE"
+      - name: Verify both historically damaged preprocessed inputs with GCC
+        if: matrix.label == 'f'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          root="$GITHUB_WORKSPACE/build/all3352-wall"
+          for unit in serio.i libps2.i; do
+            input="$root/input/kbuild/drivers/input/serio/$unit"
+            test -s "$input"
+            if riscv64-linux-gnu-gcc -x cpp-output -fsyntax-only -w "$input" >"$root/evidence/$unit.gcc-cpp-output.txt" 2>&1; then
+              echo "GCC_PREPROCESSED_VALID input=$unit"
+            else
+              echo "GCC_PREPROCESSED_INVALID input=$unit"
+              tail -n 35 "$root/evidence/$unit.gcc-cpp-output.txt"
+              exit 1
+            fi
+          done
       - name: Measure MiniC -S only, using four parallel workers
         run: |
           set -Eeuo pipefail
@@ -90,19 +110,6 @@ jobs:
           cp "$root/replay/batch-results.json" "$root/evidence/"
           cp "$root/replay/batch-summary.txt" "$root/evidence/"
           test "$rc" -eq 0 # Never treat failed compiler subprocesses as a green shard
-      - name: Validate serio preprocessed input against the cross GCC parser
-        if: matrix.label == 'f'
-        run: |
-          set -Eeuo pipefail
-          root="$GITHUB_WORKSPACE/build/all3352-wall"
-          input="$root/input/kbuild/drivers/input/serio/serio.i"
-          test -s "$input"
-          set +e
-          riscv64-linux-gnu-gcc -x cpp-output -fsyntax-only -w "$input" >"$root/evidence/serio-gcc-cpp-output.txt" 2>&1
-          rc=$?
-          set -e
-          echo "SERIO_GCC_CPP_OUTPUT_RC=$rc"
-          head -n 14 "$root/evidence/serio-gcc-cpp-output.txt"
       - name: Export exact per-TU timing, slowest objects and status
         if: always()
         run: |
