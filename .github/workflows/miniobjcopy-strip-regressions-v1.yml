@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - "agent/linux-expanded-kbuild-v0"
+      - "agent/linux-perf-boolean-domain-v1"
   workflow_dispatch:
     inputs:
       mode:
@@ -70,7 +71,7 @@ jobs:
 
   # Historical full Kbuild MiniObjcopy/MiniLD boundary; manual-only.
   linux-tool:
-    if: github.event_name == 'workflow_dispatch' && (inputs.mode == 'linux-tool' || inputs.mode == 'all')
+    if: (github.event_name == 'workflow_dispatch' && (inputs.mode == 'linux-tool' || inputs.mode == 'all')) || (github.event_name == 'push' && contains(github.event.head_commit.message, '[miniobjcopy-linux-tool]'))
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     steps:
@@ -238,7 +239,7 @@ jobs:
   # Exact frozen GNU-vs-MiniObjcopy Image oracle; artifact run 33623125809
   # may expire; failure to restore is not a correctness regression.
   linux-image:
-    if: github.event_name == 'workflow_dispatch' && (inputs.mode == 'linux-image' || inputs.mode == 'all')
+    if: (github.event_name == 'workflow_dispatch' && (inputs.mode == 'linux-image' || inputs.mode == 'all')) || (github.event_name == 'push' && contains(github.event.head_commit.message, '[miniobjcopy-linux-image]'))
     runs-on: ubuntu-24.04
     timeout-minutes: 35
     steps:
