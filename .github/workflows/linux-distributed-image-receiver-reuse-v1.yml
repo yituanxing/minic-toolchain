@@ -58,10 +58,97 @@ jobs:
           grep -qx 'e538a6ad42ec49c5a667cab5de9bb943f82ca702ff2b7749a020e38ff7ddaea7' build/linux-distributed-full-image-v1/config.sha256
           grep -qx 'c1333f97fb2139de7d5272525a384b9c59f87b1dc981c42c4ac18e1a9778c71a' build/linux-distributed-full-image-v1/compiler.sha256
 
+      # The first receiver run already reached vmlinux and failed on five
+      # residual __compiletime_assert_* relocations.  On a self-path push, run
+      # this bounded differential instead of repeating the known 50-minute link.
+      # Manual dispatch keeps the full strict receiver Image/QEMU path available.
+      - name: Differential diagnosis of five residual compiletime assertions
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-distributed-full-image-v1"
+          src="$work/linux-6.6.143"
+          out="$work/out"
+          diag="$work/assert-five"
+          mkdir -p "$diag"
+          targets=(
+            kernel/bpf/bpf_lru_list.o
+            fs/nfs/dir.o
+            drivers/scsi/sr_ioctl.o
+            net/core/page_pool.o
+            net/ipv4/tcp_output.o
+          )
+          symbols=(
+            __compiletime_assert_76
+            __compiletime_assert_638
+            __compiletime_assert_363
+            __compiletime_assert_489
+            __compiletime_assert_879
+          )
+          for i in "${!targets[@]}"; do
+            obj="${targets[$i]}"
+            sym="${symbols[$i]}"
+            tag="${obj//\//_}"
+            printf 'ASSERT_FIVE_TARGET=%s expected=%s\n' "$obj" "$sym" | tee -a "$diag/results.txt"
+            mapfile -t matches < <(find "$work/incoming" -type f -path "*/out/$obj")
+            test "${#matches[@]}" -eq 1
+            riscv64-linux-gnu-nm -u "${matches[0]}" > "$diag/$tag.producer.undefined"
+            grep -F "$sym" "$diag/$tag.producer.undefined" > "$diag/$tag.producer.assert" || {
+              echo "ASSERT_FIVE_PRODUCER_MISSING_EXPECTED=$obj" >&2; exit 1;
+            }
+            # Build the same target with the reference GCC, preserving its ELF.
+            make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
+              CC=riscv64-linux-gnu-gcc -j1 V=1 "$obj" \
+              > "$diag/$tag.gcc.log" 2>&1 || {
+                tail -n 65 "$diag/$tag.gcc.log"; exit 1;
+              }
+            test -s "$out/$obj"
+            riscv64-linux-gnu-nm -u "$out/$obj" > "$diag/$tag.gcc.undefined"
+            if grep -F '__compiletime_assert_' "$diag/$tag.gcc.undefined"; then
+              echo "ASSERT_FIVE_GCC_UNEXPECTED_UNDEF=$obj" >&2
+              exit 1
+            fi
+            # Remove only this GCC object and its cmd metadata; rebuild as MiniC
+            # using the *exact same* 39+ICE compiler identity as seven producers.
+            rm -f "$out/$obj" "$out/$(dirname "$obj")/.$(basename "$obj").cmd"
+            MINIC="$work/toolchain/bin/minic" REAL_CC=/usr/bin/riscv64-linux-gnu-gcc \
+              MINIC_KEEP_INTERMEDIATES=1 CORE_FAST_TRACE=0 \
+              make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
+                CC="$GITHUB_WORKSPACE/tests/external/linux/stage2_kbuild_cc.sh" \
+                -j1 V=1 "$obj" >"$diag/$tag.minic.log" 2>&1 || {
+                  tail -n 65 "$diag/$tag.minic.log"; exit 1;
+                }
+            test -s "$out/$obj"
+            riscv64-linux-gnu-nm -u "$out/$obj" > "$diag/$tag.minic.undefined"
+            if grep -F "$sym" "$diag/$tag.minic.undefined" > "$diag/$tag.minic.assert"; then
+              echo "ASSERT_FIVE_CONFIRMED=$obj symbol=$sym gcc=absent minic=present" | tee -a "$diag/results.txt"
+            else
+              echo "ASSERT_FIVE_REPLAY_DIVERGED=$obj expected=$sym" >&2
+              exit 1
+            fi
+            input="$out/${obj%.o}.minic-stage2.i"
+            asm="$out/${obj%.o}.minic-stage2.s"
+            if test -s "$input"; then
+              grep -n -C 5 -F "$sym" "$input" | head -n 160 > "$diag/$tag.input-context" || true
+            fi
+            if test -s "$asm"; then
+              grep -n -C 5 -F "$sym" "$asm" | head -n 160 > "$diag/$tag.asm-context" || true
+            fi
+            riscv64-linux-gnu-objdump -dr "$out/$obj" \
+              | grep -B 16 -A 4 -F "$sym" | head -n 160 \
+              > "$diag/$tag.relocation-context" || true
+          done
+          test "$(grep -c '^ASSERT_FIVE_CONFIRMED=' "$diag/results.txt")" -eq 5
+          echo 'ASSERT_FIVE_DIFFERENTIAL=PASS matched=5 gcc_undefined=0 minic_undefined=5'
+      - name: Mark self-path push as focused diagnosis, not Image certification
+        if: github.event_name == 'push'
+        run: echo 'ASSERT_FIVE_DIAGNOSTIC_ONLY=PASS Image_and_QEMU_not_executed'
       - name: Verify and restore all 3352 real Kbuild objects, then build Image
+        if: github.event_name == 'workflow_dispatch'
         run: bash tools/ci/linux-distributed-full-image-v1.sh image
 
       - name: Install QEMU after config and Image are finalized
+        if: github.event_name == 'workflow_dispatch'
         run: |
           set -Eeuo pipefail
           sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
@@ -69,6 +156,7 @@ jobs:
           qemu-system-riscv64 --version | head -n 1
 
       - name: Validate real Image in RISC-V QEMU
+        if: github.event_name == 'workflow_dispatch'
         run: bash tools/ci/linux-distributed-full-image-v1.sh qemu
 
       - name: Preserve exact receiver evidence, including any failure stage
@@ -79,6 +167,7 @@ jobs:
           path: |
             build/linux-distributed-full-image-v1/config.sha256
             build/linux-distributed-full-image-v1/compiler.sha256
+            build/linux-distributed-full-image-v1/assert-five/
             build/linux-distributed-full-image-v1/image.log
             build/linux-distributed-full-image-v1/image.trace
             build/linux-distributed-full-image-v1/image-summary.txt
