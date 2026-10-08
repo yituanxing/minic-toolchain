@@ -1,5 +1,7 @@
 # Pre-runtime CI / branch readiness audit — 2026-10-08
 
+> **Retirement follow-up (same date):** Four old distributed experiment/receiver workflow definitions have now been archived with exact SHA verification. The inventory is **64 active / 264 disabled**, still four remote branches. The original **68/260** figures below are the pre-retirement audit snapshot. Retired workflow paths, original blob SHA, underlying proof and retained contracts are documented in [the retirement ledger](distributed-workflow-retirement-2026-10-08.md). The full-Image integrated workflow still awaits its own full current-head CI verification; QEMU has not booted successfully.
+
 This ledger is a *pre-runtime stabilization checkpoint*, not a new QEMU or
 compiler correctness claim. Do not use the latest OpenSBI-only output to
 overwrite the older certified mixed-GCC/MiniC `fork-init` frontier.
@@ -94,8 +96,11 @@ recording original blob SHA and supersession run ID.
       SUCCESS; 8 object-set + 8 prefix-bisect tests, Kbuild wrapper,
       BusyBox routing and `M0_DISTRIBUTED_IMAGE_CONTRACT=PASS`.
       Re-run after any changes to the checker itself.
-- [ ] Retire identified redundant workflows only after independently
-      checking ownership, active consumers, and supersession evidence.
+- [x] Retire **four** evidence-backed redundant distributed workflows after
+      scanning all 68 active workflow files for historical producer/artifact
+      references; preserve original blobs byte-for-byte and record SHAs in
+      [retirement ledger](distributed-workflow-retirement-2026-10-08.md).
+      Remaining 64 workflows still require individual contract review.
 - [ ] Freeze a current-head baseline, record exact configs/compilers/artifact
       identities and separate previous mixed-kernel runtime frontier from
       current full-MiniC Image runtime evidence.
