@@ -1,0 +1,73 @@
+name: Linux All3352 Failure Cluster Diagnosis V1
+on:
+  push:
+    branches: [agent/linux-full3352-compile-fixes-v1]
+    paths: [.github/workflows/linux-all3352-failure-diagnosis-v1.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  diagnose:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      DEBIAN_FRONTEND: noninteractive
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install GNU RISC-V build prerequisites
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends build-essential gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu libc6-dev-riscv64-cross bc bison flex libssl-dev make curl xz-utils python3 >/dev/null
+      - name: Build exact Canonical MiniC
+        run: |
+          set -Eeuo pipefail
+          mkdir -p build/fail-diagnose
+          bash tools/ci/linux-runtime-build-minic-profile-v1.sh build/fail-diagnose/toolchain build/fail-diagnose/evidence
+      - name: Materialize representative Nouveau and serio TUs
+        run: |
+          set -Eeuo pipefail
+          MINIC="$GITHUB_WORKSPACE/build/fail-diagnose/toolchain/bin/minic" \
+            BUILD_DIR="$GITHUB_WORKSPACE/build/fail-diagnose/corpus" \
+            LINUX_ARCHIVE_CACHE="$GITHUB_WORKSPACE/build/fail-diagnose/linux-6.6.143.tar.xz" \
+            CROSS_COMPILE=riscv64-linux-gnu- LINUX_BATCH_SELECTION=2298,2305,2768 \
+            LINUX_BATCH_MATERIALIZE_ONLY=1 sh tests/external/linux/batch_probe.sh
+      - name: Print source-level failure context with exact compiler diagnostics
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          import pathlib,subprocess,json,re
+          work=pathlib.Path('build/fail-diagnose')
+          rows=[s.split('\t',3) for s in (work/'corpus/selected-tus.txt').read_text().splitlines()]
+          cases=[]
+          for idx,_,rel,_ in rows:
+              f=work/'corpus/kbuild'/rel
+              out=work/f'{idx}.s'
+              cmd=[str(work/'toolchain/bin/minic'),'-S',str(f),'-o',str(out)]
+              p=subprocess.run(cmd,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
+              print(f'CASE index={idx} input={rel} returncode={p.returncode}')
+              print('MINIC_DIAGNOSTIC_BEGIN');print(p.stderr[-2400:]);print('MINIC_DIAGNOSTIC_END')
+              lines=f.read_text(errors='replace').splitlines()
+              err=re.search(r':(\d+):(\d+):',p.stderr)
+              line=int(err.group(1)) if err else 0
+              for radius in (16,120):
+                  lo=max(0,line-radius-1); hi=min(len(lines),line+radius)
+                  print(f'CONTEXT index={idx} begin={lo+1} end={hi}')
+                  for i in range(lo,hi):
+                      s=lines[i]
+                      if len(s)>650: s=s[:650]+'...<truncated>'
+                      print(f'{i+1:7}: {s}')
+              cases.append(dict(index=int(idx),input=rel,returncode=p.returncode,line=line,diagnostic=p.stderr))
+          (work/'failure-excerpts.json').write_text(json.dumps(cases,indent=2))
+          PY
+      - name: Upload both preprocessed source inputs and diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-nouveau-serio-failure-inputs
+          path: |
+            build/fail-diagnose/corpus/kbuild/drivers/gpu/drm/nouveau/nouveau_drm.i
+            build/fail-diagnose/corpus/kbuild/drivers/gpu/drm/nouveau/nouveau_bo0039.i
+            build/fail-diagnose/corpus/kbuild/drivers/input/serio/serio.i
+            build/fail-diagnose/failure-excerpts.json
+          retention-days: 3
