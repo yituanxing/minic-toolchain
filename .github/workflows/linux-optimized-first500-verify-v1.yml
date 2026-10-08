@@ -1,4 +1,4 @@
-name: Linux Core Reachability Name Index Paired First500 V1
+name: Linux Parser Typedef Hash Paired First500 V1
 
 on:
   push:
@@ -18,7 +18,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Build Boolean Domain baseline and Core name index candidate
+      - name: Build Boolean Domain baseline and typedef-index candidate
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -31,8 +31,8 @@ jobs:
           make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$work/baseline-toolchain" \
             "$work/baseline-toolchain/bin/minic" "$work/baseline-toolchain/bin/minic-cc" >/dev/null
           cp -a "$work/baseline-toolchain" "$work/toolchain"
-          python3 tools/ci/apply-perf-core-reachability-name-index-v1.py \
-            | tee "$work/evidence/core-name-index-patch.txt"
+          python3 tools/ci/apply-perf-parser-typedef-index-v1.py \
+            | tee "$work/evidence/typedef-index-patch.txt"
           git diff --check
           make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$work/toolchain" \
             "$work/toolchain/bin/minic" "$work/toolchain/bin/minic-cc" >/dev/null
@@ -126,12 +126,12 @@ jobs:
           path: build/linux-perf-corpus
           key: linux-6.6.143-first500-rv64-v1-${{ hashFiles('tests/external/linux/batch_probe.sh', 'tests/external/linux/probe.sh', 'tests/external/linux/replay-indices.txt') }}
 
-      - name: Paired Core name index A/B with exactly four workers
+      - name: Paired typedef index A/B with exactly four workers
         shell: bash
         run: |
           set -Eeuo pipefail
           work="$GITHUB_WORKSPACE/build/linux-perf-audit-v1"
-          MINIC_CORE_NAME_INDEX_PERF=1 CORE_FAST_TRACE=0 python3 tools/ci/linux-perf-core-name-paired-ab-v1.py \
+          MINIC_TYPEDEF_INDEX_PERF=1 CORE_FAST_TRACE=0 python3 tools/ci/linux-perf-typedef-paired-ab-v1.py \
             --baseline "$work/baseline-toolchain/bin/minic" \
             --candidate "$work/toolchain/bin/minic" \
             --corpus "$GITHUB_WORKSPACE/build/linux-perf-corpus" \
