@@ -58,12 +58,21 @@ patches=(
   apply-riscv64-core-object-slot-reuse-cfg-hotfix-v0.py
   apply-riscv64-structured-asm-used-callee-save-v0.py
   apply-riscv64-pi-local-symbol-address-v0.py
+  apply-inline-specialization-local-boolean-domain-scoped-v1.py
+  apply-perf-parser-typedef-index-v1.py
 )
 
 start=$(date +%s%N)
 : >"$ev/patch.log"
 applied_patches=()
 for p in "${patches[@]}"; do
+  if [[ "${MINIC_PERF_SKIP_VERIFIED_OPTIMIZATIONS:-0}" == 1 && (
+        "$p" == apply-inline-specialization-local-boolean-domain-scoped-v1.py ||
+        "$p" == apply-perf-parser-typedef-index-v1.py
+      ) ]]; then
+    echo "SKIPPED_VERIFIED_PERF_PATCH=$p" >>"$ev/patch.log"
+    continue
+  fi
   if [[ "${MINIC_PERF_SKIP_CORE_WORKSPACE:-0}" == 1 && "$p" == apply-perf-core-lower-statement-workspace-v1.py ]]; then
     echo "SKIPPED_CORE_WORKSPACE_PATCH=$p" >>"$ev/patch.log"
     continue
