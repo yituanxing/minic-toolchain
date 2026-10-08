@@ -268,16 +268,18 @@ jobs:
           diag="$work/assert-five"
           perfsource="$work/perf-clean-worktree"
           candidate="$work/perf-toolchain/bin/minic"
-          before=$(sha256sum "$candidate" | cut -d' ' -f1)
+          before=$(sha256sum "$work/perf-toolchain/bin/minic-cc" | cut -d' ' -f1)
           (
             cd "$perfsource"
             python3 tools/ci/apply-correctness-constant-p-core-local-facts-v1.py
+            python3 tools/ci/apply-correctness-constant-p-nested-core-v2.py
             git diff --check
             make -B -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$work/perf-toolchain" \
               "$candidate" "$work/perf-toolchain/bin/minic-cc" >/dev/null
           )
-          after=$(sha256sum "$candidate" | cut -d' ' -f1)
-          echo "CORE_CONSTANT_P_CANDIDATE_BEFORE=$before AFTER=$after"
+          after=$(sha256sum "$work/perf-toolchain/bin/minic-cc" | cut -d' ' -f1)
+          echo "CORE_CONSTANT_P_CC_SHA_BEFORE=$before AFTER=$after"
+          test "$before" != "$after" || { echo "CORE_CONSTANT_P_CC_UNCHANGED=FAIL"; exit 1; }
           echo "CORE_CONSTANT_P_CANDIDATE_SHA=$after" | tee -a "$diag/results.txt"
           targets=(
             kernel/bpf/bpf_lru_list.o
