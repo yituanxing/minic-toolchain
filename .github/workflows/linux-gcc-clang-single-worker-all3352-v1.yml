@@ -1,0 +1,125 @@
+name: Linux MiniC GCC Clang Serial All3352 V1
+on:
+  push:
+    branches: [agent/linux-gcc-clang-serial-benchmark-v1]
+    paths: [.github/workflows/linux-gcc-clang-single-worker-all3352-v1.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  shard:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 110
+    strategy:
+      fail-fast: false
+      max-parallel: 7
+      matrix:
+        include:
+          - {label: a, offset: 0, count: 500}
+          - {label: b, offset: 500, count: 500}
+          - {label: c, offset: 1000, count: 500}
+          - {label: d, offset: 1500, count: 500}
+          - {label: e, offset: 2000, count: 500}
+          - {label: f, offset: 2500, count: 500}
+          - {label: g, offset: 3000, count: 352}
+    env:
+      DEBIAN_FRONTEND: noninteractive
+      OFFSET: ${{ matrix.offset }}
+      COUNT: ${{ matrix.count }}
+      LABEL: ${{ matrix.label }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install GCC Clang and RISC-V kernel build prerequisites
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            build-essential gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu clang \
+            libc6-dev-riscv64-cross bc bison flex libssl-dev make curl xz-utils python3 >/dev/null
+          gcc --version | head -n 1
+          riscv64-linux-gnu-gcc --version | head -n 1
+          clang --version | head -n 1
+      - name: Build current Canonical MiniC
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/threeway-serial"
+          mkdir -p "$work"
+          bash tools/ci/linux-runtime-build-minic-profile-v1.sh "$work/toolchain" "$work/profile"
+          grep -qx 'apply-perf-core-object-interval-onepass-v1.py' "$work/profile/minic-profile.txt"
+          grep -qx 'apply-builtin-constant-p-local-facts-v0.py' "$work/profile/minic-profile.txt"
+      - name: Materialize exact Linux 6.6.143 RISC-V C preprocessed inputs
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/threeway-serial"
+          MINIC="$work/toolchain/bin/minic" \
+          BUILD_DIR="$work/corpus" \
+          LINUX_ARCHIVE_CACHE="$work/linux-6.6.143.tar.xz" \
+          CROSS_COMPILE=riscv64-linux-gnu- \
+          LINUX_BATCH_OFFSET="$OFFSET" LINUX_BATCH_LIMIT="$COUNT" \
+          LINUX_BATCH_MATERIALIZE_ONLY=1 LINUX_BATCH_MATERIALIZE_MAKE_JOBS=4 \
+            sh tests/external/linux/batch_probe.sh
+          test "$(wc -l < "$work/corpus/tu-manifest.txt")" -eq 3352
+          test "$(wc -l < "$work/corpus/selected-tus.txt")" -eq "$COUNT"
+      - name: Measure strictly serial compiler process wall for all five modes
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/threeway-serial"
+          python3 tools/ci/linux-gcc-clang-serial-benchmark-v1.py \
+            --minic "$work/toolchain/bin/minic" \
+            --corpus "$work/corpus" --out "$work/evidence" \
+            --expected-offset "$OFFSET" --expected-count "$COUNT" \
+            | tee "$work/serial-benchmark.log"
+          test -s "$work/evidence/summary.json"
+          cp "$work/serial-benchmark.log" "$work/evidence/benchmark.log"
+      - name: Upload exact serial benchmark evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: serial3352-shard-${{ matrix.label }}
+          path: build/threeway-serial/evidence/
+          retention-days: 14
+  aggregate:
+    needs: shard
+    if: always()
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: serial3352-shard-*
+          path: evidence
+      - name: Aggregate actual one-worker MiniC GCC and Clang results
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY' | tee serial-all3352-final.txt
+          import json
+          from pathlib import Path
+          files=list(Path("evidence").glob("*/summary.json"))
+          if len(files)!=7:
+            raise SystemExit(f"COMPARE_SERIAL_INCOMPLETE_SHARDS found={len(files)} expected=7")
+          blocks=sorted((json.loads(f.read_text()) for f in files),key=lambda x:x["offset"])
+          indices=[i for b in blocks for i in range(b["offset"],b["offset"]+b["count"])]
+          if indices!=list(range(3352)):
+            raise SystemExit("COMPARE_SERIAL_BAD_COVERAGE")
+          print("COMPARE_SERIAL_COVERAGE=3352/3352")
+          totals={}
+          for mode in ("MiniC","GCC_O0","GCC_O2","Clang_O0","Clang_O2"):
+            total=sum(b["modes"][mode]["sum_tu_seconds"] for b in blocks)
+            passed=sum(b["modes"][mode]["pass_count"] for b in blocks)
+            coverage=sum(b["modes"][mode]["count"] for b in blocks)
+            totals[mode]={"sum_tu_seconds":round(total,3),"pass":passed,"attempted":coverage}
+            print(f"COMPARE_SERIAL_TOTAL mode={mode} sum_tu_seconds={total:.3f}"
+                  f" pass={passed} attempted={coverage}")
+          minic=totals["MiniC"]["sum_tu_seconds"]
+          for mode in ("GCC_O0","GCC_O2","Clang_O0","Clang_O2"):
+            other=totals[mode]["sum_tu_seconds"]
+            print(f"COMPARE_SERIAL_RATIO minic_over_{mode}={minic/other:.4f}")
+          print("COMPARE_SERIAL_3352=RESULTS_RECORDED")
+          PY
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: serial3352-total
+          path: serial-all3352-final.txt
+          retention-days: 14
