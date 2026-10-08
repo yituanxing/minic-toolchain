@@ -24,7 +24,7 @@ on:
         options:
           - smoke
           - batch
-          - 72
+          - '72'
           - all
 
 permissions:
