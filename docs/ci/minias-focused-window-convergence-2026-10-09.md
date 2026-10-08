@@ -40,3 +40,17 @@ six preserved jobs and identical original window job bodies after
 removing only the modified `resolve.if` condition, and verify SHA of the
 retired original YAML (on Runtime). Heavy MiniAS corpus rerun,
 QEMU and Linux runtime work are not part of this consolidation.
+
+## Post-consolidation verification
+
+- Both dev branches have the same merged canonical MiniAS blob
+  `93330555c3913fb78ac1c67d180f2a70dabe951f`.
+- The full three original focused job bodies and original window
+  shard/aggregate job bodies remain unchanged in the merged definition.
+- [M0 #37860392307](https://github.com/yituanxing/minic-toolchain/actions/runs/37860392307)
+  verified YAML validity, six jobs, old archive SHA, and the original
+  window execution body without running a Linux build or QEMU.
+- Intermediate M0 runs were red due to defects introduced into the
+  temporary checker; the checker was reconstructed from the preceding
+  green `5bafdaa7...` Git blob before minimal MiniAS assertions were
+  added. The final green M0 is the authoritative structural proof.
