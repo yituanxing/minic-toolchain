@@ -62,13 +62,19 @@ patches=(
 
 start=$(date +%s%N)
 : >"$ev/patch.log"
+applied_patches=()
 for p in "${patches[@]}"; do
+  if [[ "${MINIC_PERF_SKIP_CORE_WORKSPACE:-0}" == 1 && "$p" == apply-perf-core-lower-statement-workspace-v1.py ]]; then
+    echo "SKIPPED_CORE_WORKSPACE_PATCH=$p" >>"$ev/patch.log"
+    continue
+  fi
   python3 "tools/ci/$p" >>"$ev/patch.log"
+  applied_patches+=("$p")
 done
 git diff --check
 make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$build_dir" \
   "$build_dir/bin/minic" "$build_dir/bin/minic-cc" >/dev/null
 end=$(date +%s%N)
 echo "TIMING toolchain_ms=$(((end-start)/1000000))" | tee "$ev/toolchain-timing.txt"
-printf '%s\n' "${patches[@]}" >"$ev/minic-profile.txt"
+printf '%s\n' "${applied_patches[@]}" >"$ev/minic-profile.txt"
 sha256sum "$build_dir/bin/minic" "$build_dir/bin/minic-cc" >"$ev/minic.sha256"

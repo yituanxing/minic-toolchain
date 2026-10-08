@@ -18,14 +18,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Build exact current runtime MiniC profile
+      - name: Build identical baseline and Core-workspace candidate
         shell: bash
         run: |
           set -Eeuo pipefail
           work="$GITHUB_WORKSPACE/build/linux-perf-audit-v1"
           mkdir -p "$work/evidence"
-          bash tools/ci/linux-runtime-build-minic-profile-v1.sh             "$work/toolchain" "$work/evidence/profile"
-          cat "$work/evidence/profile/toolchain-timing.txt"
+          MINIC_PERF_SKIP_CORE_WORKSPACE=1 bash tools/ci/linux-runtime-build-minic-profile-v1.sh \
+            "$work/baseline-toolchain" "$work/evidence/baseline-profile"
+          python3 tools/ci/apply-perf-core-lower-statement-workspace-v1.py \
+            | tee "$work/evidence/core-workspace-patch.txt"
+          git diff --check
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$work/toolchain" \
+            "$work/toolchain/bin/minic" "$work/toolchain/bin/minic-cc" >/dev/null
+          sha256sum "$work/baseline-toolchain/bin/minic" "$work/toolchain/bin/minic" \
+            | tee "$work/evidence/paired-binary.sha256"
 
       - name: Restore certified first500 inputs
         id: corpus-restore
@@ -113,64 +120,36 @@ jobs:
           path: build/linux-perf-corpus
           key: linux-6.6.143-first500-rv64-v1-${{ hashFiles('tests/external/linux/batch_probe.sh', 'tests/external/linux/probe.sh', 'tests/external/linux/replay-indices.txt') }}
 
-      - name: Replay frozen first500 with current C MiniC
+      - name: Paired first500 A/B with exactly four workers
         shell: bash
         run: |
           set -Eeuo pipefail
           work="$GITHUB_WORKSPACE/build/linux-perf-audit-v1"
-          out="$work/first500"
-          start_ns=$(date +%s%N)
-          CORE_FAST_TRACE=0 python3 tests/external/linux/corpus_replay.py             --minic "$work/toolchain/bin/minic"             --corpus "$GITHUB_WORKSPACE/build/linux-perf-corpus"             --work "$out"             --jobs 4             --offset 0             --limit 500             --sample-count 0
-          end_ns=$(date +%s%N)
-          wall_ms=$(((end_ns-start_ns)/1000000))
-          echo "PERF500_WALL_MS=$wall_ms" | tee "$work/evidence/perf500-wall.txt"
-          cp "$out/batch-summary.txt" "$work/evidence/"
-          cp "$out/batch-results.json" "$work/evidence/"
+          CORE_FAST_TRACE=0 python3 tools/ci/linux-perf-core-paired-ab-v1.py \
+            --baseline "$work/baseline-toolchain/bin/minic" \
+            --candidate "$work/toolchain/bin/minic" \
+            --corpus "$GITHUB_WORKSPACE/build/linux-perf-corpus" \
+            --work "$work/paired" \
+            --jobs 4 | tee "$work/evidence/paired-ab.txt"
+          cp "$work/paired/paired-results.json" "$work/evidence/"
+          cp "$work/paired/output-fingerprints.tsv" "$work/evidence/"
 
-      - name: Analyze TU timing distribution
+      - name: Analyze A/B time distribution
         shell: bash
         run: |
           set -Eeuo pipefail
-          work="$GITHUB_WORKSPACE/build/linux-perf-audit-v1"
-          python3 - <<'PY' | tee "$work/evidence/perf500-analysis.txt"
+          python3 - <<'PY' | tee build/linux-perf-audit-v1/evidence/paired-ab-analysis.txt
           import json, statistics
           from pathlib import Path
-          rows=json.loads(Path("build/linux-perf-audit-v1/first500/batch-results.json").read_text())
-          secs=[float(r["seconds"]) for r in rows if r["status"]=="PASS"]
-          print(f"selected={len(rows)} pass={sum(r['status']=='PASS' for r in rows)}")
-          print(f"sum_tu_seconds={sum(secs):.3f}")
-          print(f"mean_tu_seconds={statistics.fmean(secs):.6f}")
-          print(f"median_tu_seconds={statistics.median(secs):.6f}")
-          s=sorted(secs)
-          print(f"p95_tu_seconds={s[max(0,int(len(s)*0.95)-1)]:.6f}")
-          print(f"p99_tu_seconds={s[max(0,int(len(s)*0.99)-1)]:.6f}")
-          print(f"max_tu_seconds={max(secs):.6f}")
-          print("TOP30")
-          for r in sorted(rows,key=lambda x:float(x["seconds"]),reverse=True)[:30]:
-              print(f'{float(r["seconds"]):9.3f} index={r["index"]} input={r["input"]} source={r["source"]}')
-          PY
-
-      - name: Fingerprint exact assembly outputs
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          python3 - <<'PY'
-          from pathlib import Path
-          import hashlib, json
-          root = Path("build/linux-perf-audit-v1/first500/minic-out")
-          evidence = Path("build/linux-perf-audit-v1/evidence")
-          rows = json.loads(Path("build/linux-perf-audit-v1/first500/batch-results.json").read_text())
-          if len(rows) != 500 or any(r["status"] != "PASS" for r in rows):
-              raise SystemExit("cannot fingerprint incomplete first500")
-          lines = []
-          for r in sorted(rows, key=lambda r: int(r["index"])):
-              asm = root / (r["input"] + ".s")
-              if not asm.is_file() or asm.stat().st_size == 0:
-                  raise SystemExit(f"missing assembly: {asm}")
-              lines.append(f'{r["index"]}\t{r["input"]}\t{hashlib.sha256(asm.read_bytes()).hexdigest()}')
-          manifest = "\n".join(lines) + "\n"
-          (evidence / "first500-assembly.sha256").write_text(manifest)
-          print(f"PERF500_OUTPUT_DIGEST={hashlib.sha256(manifest.encode()).hexdigest()} count={len(lines)}")
+          rows=json.loads(Path("build/linux-perf-audit-v1/paired/paired-results.json").read_text())
+          for kind in ("baseline","candidate"):
+              secs=sorted(float(row[kind]["seconds"]) for row in rows)
+              print(f"{kind}: sum={sum(secs):.3f}s median={statistics.median(secs):.4f}s "
+                    f"p95={secs[474]:.4f}s p99={secs[494]:.4f}s max={secs[-1]:.4f}s")
+          print("TOP30_CANDIDATE")
+          for row in sorted(rows,key=lambda r:r["candidate"]["seconds"],reverse=True)[:30]:
+              print(f'{row["candidate"]["seconds"]:8.3f}s before={row["baseline"]["seconds"]:8.3f}s '
+                    f'index={row["index"]} input={row["input"]}')
           PY
 
       - name: Upload performance evidence
