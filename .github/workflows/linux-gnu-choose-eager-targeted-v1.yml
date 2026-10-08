@@ -2,7 +2,7 @@ name: Linux GNU Constant P ICE Targeted V1
 on:
   push:
     branches: [agent/linux-full3352-compile-fixes-v1]
-    paths: [.github/workflows/linux-gnu-choose-eager-targeted-v1.yml, tools/ci/apply-correctness-choose-eager-condition-v1.py]
+    paths: [.github/workflows/linux-gnu-choose-eager-targeted-v1.yml, tools/ci/apply-correctness-constant-p-ice-v1.py]
   workflow_dispatch:
 permissions:
   contents: read
@@ -13,7 +13,7 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
-      - name: Build exact Canonical baseline and eager ConstEval candidate
+      - name: Build exact Canonical baseline and constant-p ICE candidate
         shell: bash
         run: |
           set -Eeuo pipefail
