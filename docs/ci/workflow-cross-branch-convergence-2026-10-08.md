@@ -4,17 +4,17 @@
 
 | Branch | Active workflows now | Disabled workflow files (incl. nested) | Count at start of this cleanup sequence |
 | --- | ---: | ---: | ---: |
-| `agent/linux-expanded-kbuild-v0` | **54** | **274** (231 root + 38 + 5 nested) | 68 |
-| `agent/linux-perf-boolean-domain-v1` | **53** | **274** (231 root + 38 + 5 nested) | 91 |
+| `agent/linux-expanded-kbuild-v0` | **53** | **275** (232 root + 38 + 5 nested) | 68 |
+| `agent/linux-perf-boolean-domain-v1` | **52** | **275** (232 root + 38 + 5 nested) | 91 |
 | `main` | 11 | untouched | 11 |
 | `archive/all-progress-2026-10-04` | no active workflow directory | passive archival history | unchanged |
 
-Runtime and perf now share **49** active workflow filenames, plus **5**
+Runtime and perf now share **48** active workflow filenames, plus **5**
 Runtime-only (distributor + graph preflight + 3 opt-in performance checks)
 and **4** perf-only (top5 object interval, GNU constant-p ICE,
 canonical optimized first500, parser scope first500).
-**58 distinct active names** across the two development branches,
-down from **100**. The sum of active definitions falls 159 → 107.
+**57 distinct active names** across the two development branches,
+down from **100**. The sum of active definitions falls 159 → 105.
 
 Four branch refs remain; no source merge and no perf branch deletion.
 
@@ -58,7 +58,19 @@ certification for heavyweight specialized paths.
    original executable job bodies were also byte-compared as unchanged.
    See [focused runtime convergence](runtime-focused-workflow-convergence-2026-10-09.md).
 
+6. MiniAS focused/window manual diagnostics: **2 → 1** on both development
+   branches. All six jobs preserved; distinct full 3536 exact and
+   semantic oracles remain active. Archived Runtime and performance
+   historical YAMLs have distinct original Git SHA because only perf
+   previously listened on deleted branches.
+   See [MiniAS focused/window ledger](minias-focused-window-convergence-2026-10-09.md).
+
 ## Verifications
+- [M0 37860392307](https://github.com/yituanxing/minic-toolchain/actions/runs/37860392307):
+  MiniAS YAML parse, archived Git SHA, and unchanged window job bodies
+  **PASS** on the restored valid structural M0 source. Intermediate M0
+  iterations exposed and repaired mistakes in the *checker implementation*,
+  not in the compiler/assembler or restored MiniAS job bodies.
 - [M0 37807388796](https://github.com/yituanxing/minic-toolchain/actions/runs/37807388796):
   final Linux focused YAML parse, six archived Git SHA identities and
   six original job-body equivalence checks **PASS**. First checker
