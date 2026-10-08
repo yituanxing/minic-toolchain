@@ -14,6 +14,18 @@ def patch(path, old, new):
         raise SystemExit(f"P10 expected one anchor in {path}, found {n}: {old[:100]!r}")
     p.write_text(text.replace(old, new, 1))
 
+def patch_tail(path, begin, following, old, new):
+    p = Path(path)
+    text = p.read_text()
+    start = text.find(begin)
+    end = text.find(following, start + len(begin))
+    if start < 0 or end <= start:
+        raise SystemExit(f"P10 cannot isolate {begin} in {path}")
+    original = text[start:end]
+    if original.count(old) != 1:
+        raise SystemExit(f"P10 tail anchor count={original.count(old)} in {path}")
+    p.write_text(text[:start] + original.replace(old, new, 1) + text[end:])
+
 function_fallback = r'''static MinicFunctionId minic_parser_find_function_linear_fallback(
     const MinicParser *parser, MinicSourceSpan span) {
     size_t index, length = minic_parser_span_length(span);
@@ -48,15 +60,11 @@ patch("src/frontend/parser_core.c",
         parser->perf_function_name_slot_capacity == 0U) {
         return minic_parser_find_function_linear_fallback(parser, name_span);
     }""")
-patch("src/frontend/parser_core.c",
-      """    return MINIC_FUNCTION_INVALID;
-}
-
-MinicRecordId minic_parser_find_record(""",
-      """    return minic_parser_find_function_linear_fallback(parser, name_span);
-}
-
-MinicRecordId minic_parser_find_record(""")
+patch_tail("src/frontend/parser_core.c",
+           "MinicFunctionId minic_parser_find_function(const MinicParser *parser_const,",
+           "MinicRecordId minic_parser_find_record(",
+           "    return MINIC_FUNCTION_INVALID;\n}",
+           "    return minic_parser_find_function_linear_fallback(parser, name_span);\n}")
 global_fallback = r'''static MinicGlobalObjectId minic_parser_find_global_object_linear_fallback(
     const MinicParser *parser, MinicSourceSpan span) {
     size_t index, length = minic_parser_span_length(span);
@@ -91,15 +99,11 @@ patch("src/frontend/parser_global.c",
         parser->perf_global_name_slot_capacity == 0U) {
         return minic_parser_find_global_object_linear_fallback(parser, name_span);
     }""")
-patch("src/frontend/parser_global.c",
-      """    return MINIC_GLOBAL_OBJECT_INVALID;
-}
-
-MinicGlobalObjectId minic_parser_find_global_object(""",
-      """    return minic_parser_find_global_object_linear_fallback(parser, name_span);
-}
-
-MinicGlobalObjectId minic_parser_find_global_object(""")
+patch_tail("src/frontend/parser_global.c",
+           "MinicGlobalObjectId minic_parser_find_global_object_entity(",
+           "MinicGlobalObjectId minic_parser_find_global_object(",
+           "    return MINIC_GLOBAL_OBJECT_INVALID;\n}",
+           "    return minic_parser_find_global_object_linear_fallback(parser, name_span);\n}")
 # The hash code already scanned the local suffix in reverse. On hash-sync
 # failure, only the remaining global prefix must be searched, still reverse.
 enum_fallback = r'''static MinicEnumeratorId minic_parser_enum_global_linear_fallback(
@@ -142,14 +146,10 @@ patch("src/frontend/parser_enum.c",
         return minic_parser_enum_global_linear_fallback(
             parser, name_span, global_count);
     }""")
-patch("src/frontend/parser_enum.c",
-      """    return MINIC_ENUMERATOR_INVALID;
-}
-
-bool minic_parser_bind_enum_constant(""",
-      """    return minic_parser_enum_global_linear_fallback(
-        parser, name_span, global_count);
-}
-
-bool minic_parser_bind_enum_constant(""")
+patch_tail("src/frontend/parser_enum.c",
+           "MinicEnumeratorId minic_parser_find_enum_constant(",
+           "bool minic_parser_bind_enum_constant(",
+           "    return MINIC_ENUMERATOR_INVALID;\n}",
+           "    return minic_parser_enum_global_linear_fallback(\n"
+           "        parser, name_span, global_count);\n}")
 print("MINIC_PERF_PARSER_HASH_FALLBACK_V1=APPLIED")
