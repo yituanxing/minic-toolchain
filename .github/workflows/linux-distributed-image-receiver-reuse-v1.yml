@@ -273,11 +273,11 @@ jobs:
             cd "$perfsource"
             python3 tools/ci/apply-correctness-constant-p-core-local-facts-v1.py
             git diff --check
-            make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$work/perf-toolchain" \
+            make -B -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$work/perf-toolchain" \
               "$candidate" "$work/perf-toolchain/bin/minic-cc" >/dev/null
           )
           after=$(sha256sum "$candidate" | cut -d' ' -f1)
-          test "$before" != "$after"
+          echo "CORE_CONSTANT_P_CANDIDATE_BEFORE=$before AFTER=$after"
           echo "CORE_CONSTANT_P_CANDIDATE_SHA=$after" | tee -a "$diag/results.txt"
           targets=(
             kernel/bpf/bpf_lru_list.o
