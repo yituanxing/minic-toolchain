@@ -182,6 +182,10 @@ case "$mode" in
       # that do not exist at receiver prepare time. Those dependencies can
       # legitimately invalidate restored objects despite a pre-link restamp.
       # Never certify the resulting mixed-object Image as an exact replay.
+      if [[ "${MINIC_DISTRIBUTED_CANONICALIZE_DELAY_CMD:-0}" == 1 ]]; then
+        cp "$out/arch/riscv/lib/.delay.o.cmd" "$work/canonical-delay.o.cmd"
+        sha256sum "$out/arch/riscv/lib/delay.o" | awk '{print $1}' >"$work/warmup-delay.sha256"
+      fi
       mv "$trace" "$work/image-warmup.trace"
       mv "$work/image.log" "$work/image-warmup.log"
       sed -n -E 's/^pass source=.* output=([^ ]+).*$/\1/p' \
@@ -207,6 +211,16 @@ case "$mode" in
       ( cd "$out"; sha256sum --status -c "$work/reuse.sha256" ) || exit 1
       echo "DIST_IMAGE_STRICT_RESTORE=PASS objects=$total checked_files=$((total*2))" \
         | tee -a "$work/image-summary.txt"
+      if [[ "${MINIC_DISTRIBUTED_CANONICALIZE_DELAY_CMD:-0}" == 1 ]]; then
+        python3 "$root/tools/ci/linux-distributed-canonical-delay-v1.py" \
+          "$src" "$out" "$work/reuse.sha256" \
+          "$work/incoming/distributed-full-image-shard-3/out/arch/riscv/lib/.delay.o.cmd" \
+          "$work/canonical-delay.o.cmd" "$work/warmup-delay.sha256" \
+          "$work/image-warmup.trace" "$work/reuse-producer.sha256" \
+          | tee -a "$work/image-summary.txt"
+        ( cd "$out"; sha256sum --status -c "$work/reuse.sha256" ) || exit 1
+      fi
+
       # Newer original .o files must cause Kbuild archives, vmlinux and
       # Image to be relinked from the authenticated producer objects.
       : >"$trace"
@@ -246,7 +260,7 @@ case "$mode" in
         echo "DIST_IMAGE_STRICT_REUSE=FAIL transferred_target_recompiled=$rebuilt" >&2
         exit 1
       fi
-      echo "DIST_IMAGE_STRICT_REUSE=PASS target_recompiles=0 identical_files=$((total*2))" \
+      echo "DIST_IMAGE_STRICT_REUSE=PASS target_recompiles=0 verified_files=$((total*2)) canonicalized_cmds=${MINIC_DISTRIBUTED_CANONICALIZE_DELAY_CMD:-0}" \
         | tee -a "$work/image-summary.txt"
     elif [[ "${MINIC_DISTRIBUTED_TRACED_REBUILD_LIMIT:-0}" =~ ^[1-9][0-9]*$ ]]; then
       # All 6704 producer hashes were checked before make. After linking,
