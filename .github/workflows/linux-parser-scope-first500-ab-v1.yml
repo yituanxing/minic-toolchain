@@ -18,30 +18,35 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Build canonical baseline and scope-corrected candidate cleanly
+      - name: Build full Canonical profile with and without the scope fix
         shell: bash
         run: |
           set -Eeuo pipefail
           work="$GITHUB_WORKSPACE/build/linux-perf-audit-v1"
           mkdir -p "$work/evidence"
-          # The canonical 49/50-patch Linux profile, including Boolean Domain,
-          # typedef hash and safe fallback, is the unmodified control.
-          bash tools/ci/linux-runtime-build-minic-profile-v1.sh \
-            "$work/baseline-toolchain" "$work/evidence/canonical-profile"
+          # Compare identical Canonical profiles; only the two validated
+          # ordinary-namespace fixes differ between control and candidate.
+          MINIC_PERF_SKIP_PARSER_SCOPE_FIX=1 \
+            bash tools/ci/linux-runtime-build-minic-profile-v1.sh \
+            "$work/baseline-toolchain" "$work/evidence/scope-control-profile"
+          grep -qx 'SKIPPED_PARSER_SCOPE_FIX=apply-perf-parser-local-shadow-fix-v1.py' \
+            "$work/evidence/scope-control-profile/patch.log"
+          grep -qx 'SKIPPED_PARSER_SCOPE_FIX=apply-perf-parser-nearest-ordinary-scope-v1.py' \
+            "$work/evidence/scope-control-profile/patch.log"
           grep -qx 'apply-inline-specialization-local-boolean-domain-scoped-v1.py' \
-            "$work/evidence/canonical-profile/minic-profile.txt"
+            "$work/evidence/scope-control-profile/minic-profile.txt"
           grep -qx 'apply-perf-parser-typedef-index-v1.py' \
-            "$work/evidence/canonical-profile/minic-profile.txt"
+            "$work/evidence/scope-control-profile/minic-profile.txt"
+          git reset --hard HEAD
+          bash tools/ci/linux-runtime-build-minic-profile-v1.sh \
+            "$work/toolchain" "$work/evidence/scope-fixed-profile"
+          grep -qx 'apply-perf-parser-local-shadow-fix-v1.py' \
+            "$work/evidence/scope-fixed-profile/minic-profile.txt"
+          grep -qx 'apply-perf-parser-nearest-ordinary-scope-v1.py' \
+            "$work/evidence/scope-fixed-profile/minic-profile.txt"
           grep -qx 'apply-perf-parser-hash-fallback-v1.py' \
-            "$work/evidence/canonical-profile/minic-profile.txt"
-          python3 tools/ci/apply-perf-parser-local-shadow-fix-v1.py \
-            | tee "$work/evidence/local-shadow-patch.txt"
-          python3 tools/ci/apply-perf-parser-nearest-ordinary-scope-v1.py \
-            | tee "$work/evidence/nearest-ordinary-scope-patch.txt"
+            "$work/evidence/scope-fixed-profile/minic-profile.txt"
           git diff --check
-          # All objects rebuilt from scratch; parser_internal.h changes ABI.
-          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$work/toolchain" \
-            "$work/toolchain/bin/minic" "$work/toolchain/bin/minic-cc" >/dev/null
           sha256sum "$work/baseline-toolchain/bin/minic" "$work/baseline-toolchain/bin/minic-cc" \
             "$work/toolchain/bin/minic" "$work/toolchain/bin/minic-cc" \
             | tee "$work/evidence/paired-binary.sha256"

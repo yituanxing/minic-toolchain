@@ -61,6 +61,8 @@ patches=(
   apply-riscv64-pi-local-symbol-address-v0.py
   apply-inline-specialization-local-boolean-domain-scoped-v1.py
   apply-perf-parser-typedef-index-v1.py
+  apply-perf-parser-local-shadow-fix-v1.py
+  apply-perf-parser-nearest-ordinary-scope-v1.py
 )
 
 start=$(date +%s%N)
@@ -72,6 +74,13 @@ for p in "${patches[@]}"; do
         "$p" == apply-perf-parser-typedef-index-v1.py
       ) ]]; then
     echo "SKIPPED_VERIFIED_PERF_PATCH=$p" >>"$ev/patch.log"
+    continue
+  fi
+  if [[ "${MINIC_PERF_SKIP_PARSER_SCOPE_FIX:-0}" == 1 && (
+        "$p" == apply-perf-parser-local-shadow-fix-v1.py ||
+        "$p" == apply-perf-parser-nearest-ordinary-scope-v1.py
+      ) ]]; then
+    echo "SKIPPED_PARSER_SCOPE_FIX=$p" >>"$ev/patch.log"
     continue
   fi
   if [[ "${MINIC_PERF_SKIP_CORE_WORKSPACE:-0}" == 1 && "$p" == apply-perf-core-lower-statement-workspace-v1.py ]]; then
