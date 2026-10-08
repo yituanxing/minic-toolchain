@@ -89,8 +89,11 @@ recording original blob SHA and supersession run ID.
       failure evidence; do not label QEMU a success.
 - [ ] Run the updated integrated workflow and confirm its own 3352-target
       final-link identity checks; this edit has **not** yet been CI-certified.
-- [ ] Obtain a passing relevant M0/workflow-structure gate on the converged
-      HEAD after remaining cleanup changes.
+- [x] Obtain a passing M0/workflow-structure gate on cleanup commit
+      `46b4efcb`: [run 37801576684](https://github.com/yituanxing/minic-toolchain/actions/runs/37801576684)
+      SUCCESS; 8 object-set + 8 prefix-bisect tests, Kbuild wrapper,
+      BusyBox routing and `M0_DISTRIBUTED_IMAGE_CONTRACT=PASS`.
+      Re-run after any changes to the checker itself.
 - [ ] Retire identified redundant workflows only after independently
       checking ownership, active consumers, and supersession evidence.
 - [ ] Freeze a current-head baseline, record exact configs/compilers/artifact
