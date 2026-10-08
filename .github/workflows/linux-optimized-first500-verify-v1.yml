@@ -1,9 +1,9 @@
-name: Linux Optimized First500 Verify V1
+name: Linux Boolean Domain Paired First500 V1
 
 on:
   push:
     branches:
-      - agent/linux-perf-core-workspace-v1
+      - agent/linux-perf-boolean-domain-v1
   workflow_dispatch:
 
 permissions:
@@ -18,20 +18,22 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Build identical baseline and Core-workspace candidate
+      - name: Build identical baseline and Boolean Domain candidate
         shell: bash
         run: |
           set -Eeuo pipefail
           work="$GITHUB_WORKSPACE/build/linux-perf-audit-v1"
           mkdir -p "$work/evidence"
-          MINIC_PERF_SKIP_CORE_WORKSPACE=1 bash tools/ci/linux-runtime-build-minic-profile-v1.sh \
+          bash tools/ci/linux-runtime-build-minic-profile-v1.sh \
             "$work/baseline-toolchain" "$work/evidence/baseline-profile"
-          python3 tools/ci/apply-perf-core-lower-statement-workspace-v1.py \
-            | tee "$work/evidence/core-workspace-patch.txt"
+          cp -a "$work/baseline-toolchain" "$work/toolchain"
+          python3 tools/ci/apply-inline-specialization-local-boolean-domain-scoped-v1.py \
+            | tee "$work/evidence/boolean-domain-patch.txt"
           git diff --check
           make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$work/toolchain" \
             "$work/toolchain/bin/minic" "$work/toolchain/bin/minic-cc" >/dev/null
-          sha256sum "$work/baseline-toolchain/bin/minic" "$work/toolchain/bin/minic" \
+          sha256sum "$work/baseline-toolchain/bin/minic" "$work/baseline-toolchain/bin/minic-cc" \
+            "$work/toolchain/bin/minic" "$work/toolchain/bin/minic-cc" \
             | tee "$work/evidence/paired-binary.sha256"
 
       - name: Restore certified first500 inputs
@@ -120,12 +122,12 @@ jobs:
           path: build/linux-perf-corpus
           key: linux-6.6.143-first500-rv64-v1-${{ hashFiles('tests/external/linux/batch_probe.sh', 'tests/external/linux/probe.sh', 'tests/external/linux/replay-indices.txt') }}
 
-      - name: Paired first500 A/B with exactly four workers
+      - name: Paired Boolean Domain A/B with exactly four workers
         shell: bash
         run: |
           set -Eeuo pipefail
           work="$GITHUB_WORKSPACE/build/linux-perf-audit-v1"
-          CORE_FAST_TRACE=0 python3 tools/ci/linux-perf-core-paired-ab-v1.py \
+          MINIC_BOOLEAN_DOMAIN_PERF=1 CORE_FAST_TRACE=0 python3 tools/ci/linux-perf-boolean-paired-ab-v1.py \
             --baseline "$work/baseline-toolchain/bin/minic" \
             --candidate "$work/toolchain/bin/minic" \
             --corpus "$GITHUB_WORKSPACE/build/linux-perf-corpus" \
