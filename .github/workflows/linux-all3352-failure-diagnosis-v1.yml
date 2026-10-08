@@ -85,7 +85,7 @@ jobs:
           start=s.index("parse_builtin_choose_expr(MinicParser *parser,")
           stop=s.index("static bool object_extent_direct_object(",start)
           old=s[start:stop]
-          needle='        minic_parser_error(\\n            parser, "__builtin_choose_expr condition must be an integer constant expression");'
+          needle='        minic_parser_error(' + chr(10) + '            parser, "__builtin_choose_expr condition must be an integer constant expression");'
           probe='''        {
             const MinicExpression *dbg = minic_c0_program_expression(parser->program,condition_id);
             fprintf(stderr,"CHOOSE_CONDITION_DIAG id=%u kind=%d is_integer=%d value=%lld\\\\n",
