@@ -18,27 +18,29 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Independently build Canonical and address-index compilers
+      - name: Build canonical 53-patch profile with address-use index opt-out control
         shell: bash
         run: |
           set -Eeuo pipefail
           work="$GITHUB_WORKSPACE/build/core-address-index-500-v1"
           mkdir -p "$work/evidence"
-          bash tools/ci/linux-runtime-build-minic-profile-v1.sh \
-            "$work/baseline-toolchain" "$work/evidence/canonical-profile"
+          MINIC_PERF_SKIP_CORE_ADDRESS_USE_INDEX=1 \
+            bash tools/ci/linux-runtime-build-minic-profile-v1.sh \
+            "$work/baseline-toolchain" "$work/evidence/index-off-profile"
+          grep -qx 'SKIPPED_CORE_ADDRESS_USE_INDEX=apply-perf-core-object-address-use-index-v1.py' \
+            "$work/evidence/index-off-profile/patch.log"
           grep -qx 'apply-perf-parser-nearest-ordinary-scope-v1.py' \
-            "$work/evidence/canonical-profile/minic-profile.txt"
+            "$work/evidence/index-off-profile/minic-profile.txt"
           grep -qx 'apply-perf-parser-typedef-index-v1.py' \
-            "$work/evidence/canonical-profile/minic-profile.txt"
+            "$work/evidence/index-off-profile/minic-profile.txt"
           grep -qx 'apply-inline-specialization-local-boolean-domain-scoped-v1.py' \
-            "$work/evidence/canonical-profile/minic-profile.txt"
-          python3 tools/ci/apply-perf-core-object-address-use-index-v1.py \
-            | tee "$work/evidence/object-address-index-patch.txt"
+            "$work/evidence/index-off-profile/minic-profile.txt"
+          git reset --hard HEAD
+          bash tools/ci/linux-runtime-build-minic-profile-v1.sh \
+            "$work/candidate-toolchain" "$work/evidence/index-on-profile"
+          grep -qx 'apply-perf-core-object-address-use-index-v1.py' \
+            "$work/evidence/index-on-profile/minic-profile.txt"
           git diff --check
-          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$work/candidate-toolchain" \
-            "$work/candidate-toolchain/bin/minic" \
-            "$work/candidate-toolchain/bin/minic-cc" \
-            >"$work/evidence/candidate-build.log" 2>&1
           sha256sum "$work/baseline-toolchain/bin/minic" \
             "$work/candidate-toolchain/bin/minic" \
             >"$work/evidence/toolchain.sha256"

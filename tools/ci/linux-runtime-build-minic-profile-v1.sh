@@ -57,6 +57,7 @@ patches=(
   apply-riscv64-record-call-result-snapshot-reuse-v0.py
   apply-riscv64-core-object-slot-reuse-v0.py
   apply-riscv64-core-object-slot-reuse-cfg-hotfix-v0.py
+  apply-perf-core-object-address-use-index-v1.py
   apply-riscv64-structured-asm-used-callee-save-v0.py
   apply-riscv64-pi-local-symbol-address-v0.py
   apply-inline-specialization-local-boolean-domain-scoped-v1.py
@@ -74,6 +75,11 @@ for p in "${patches[@]}"; do
         "$p" == apply-perf-parser-typedef-index-v1.py
       ) ]]; then
     echo "SKIPPED_VERIFIED_PERF_PATCH=$p" >>"$ev/patch.log"
+    continue
+  fi
+  if [[ "${MINIC_PERF_SKIP_CORE_ADDRESS_USE_INDEX:-0}" == 1 &&
+        "$p" == apply-perf-core-object-address-use-index-v1.py ]]; then
+    echo "SKIPPED_CORE_ADDRESS_USE_INDEX=$p" >>"$ev/patch.log"
     continue
   fi
   if [[ "${MINIC_PERF_SKIP_PARSER_SCOPE_FIX:-0}" == 1 && (
