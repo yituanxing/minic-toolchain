@@ -1,4 +1,4 @@
-name: Linux Parser Typedef Hash Paired First500 V1
+name: Linux Parser Typedef Hash ASan Diagnostic V1
 
 on:
   push:
@@ -125,6 +125,21 @@ jobs:
         with:
           path: build/linux-perf-corpus
           key: linux-6.6.143-first500-rv64-v1-${{ hashFiles('tests/external/linux/batch_probe.sh', 'tests/external/linux/probe.sh', 'tests/external/linux/replay-indices.txt') }}
+
+      - name: Diagnose typedef candidate with ASan on known-failing TU
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-perf-audit-v1"
+          make -j4 MODE=sanitize CFLAGS=-Werror BUILD_DIR="$work/asan-toolchain" \
+            "$work/asan-toolchain/bin/minic" "$work/asan-toolchain/bin/minic-cc" >/dev/null
+          input=build/linux-perf-corpus/kbuild/init/version.i
+          test -s "$input"
+          ASAN_OPTIONS=detect_leaks=0:abort_on_error=1:fast_unwind_on_malloc=0 \
+          UBSAN_OPTIONS=print_stacktrace=1 \
+          "$work/asan-toolchain/bin/minic-cc" -S "$input" -o "$work/asan-smoke.s" \
+            2>&1 | tee "$work/evidence/typedef-asan-smoke.txt"
+          echo "TYPEDEF_ASAN_SMOKE=PASS"
 
       - name: Paired typedef index A/B with exactly four workers
         shell: bash
