@@ -29,6 +29,8 @@ jobs:
           git diff --check
           make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$work/toolchain" \
             "$work/toolchain/bin/minic" "$work/toolchain/bin/minic-cc" >"$work/evidence/instrument-build.log" 2>&1
+          mkdir -p "$work/baseline-bin"
+          cp "$work/toolchain/bin/minic" "$work/toolchain/bin/minic-cc" "$work/baseline-bin/"
           echo "AUDIT_INSTRUMENTED_BUILD=PASS"
 
       - name: Regression oracle for scoped typedef shadowing
@@ -170,6 +172,26 @@ jobs:
             riscv64-linux-gnu-gcc -static -o "$work/ordinary-shadow/$test_case.rv64" "$asm"
             qemu-riscv64 "$work/ordinary-shadow/$test_case.rv64"
             echo "MINIC_RV64_RUNTIME=$test_case PASS"
+          done
+          # Independently run the original optimized profile to distinguish
+          # confirmed old runtime miscompilations from theoretical risks.
+          for test_case in enum-global enum-local enum-typedef; do
+            input="$work/ordinary-shadow/$test_case.i"
+            if "$work/baseline-bin/minic" -S "$input" \
+                 -o "$work/ordinary-shadow/$test_case.original.s" \
+                 >"$work/evidence/$test_case-original.log" 2>&1 &&
+               riscv64-linux-gnu-gcc -static \
+                 -o "$work/ordinary-shadow/$test_case.original.rv64" \
+                 "$work/ordinary-shadow/$test_case.original.s" \
+                 >>"$work/evidence/$test_case-original.log" 2>&1; then
+              if qemu-riscv64 "$work/ordinary-shadow/$test_case.original.rv64"; then
+                echo "ORIGINAL_MINIC_RV64_RUNTIME=$test_case PASS"
+              else
+                echo "ORIGINAL_MINIC_RV64_RUNTIME=$test_case WRONG_RESULT"
+              fi
+            else
+              echo "ORIGINAL_MINIC_RV64_RUNTIME=$test_case COMPILE_OR_LINK_FAIL"
+            fi
           done
           cat > "$work/ordinary-shadow/enum-hides-function.i" <<'EOF'
           int Token(void) { return 50; }
