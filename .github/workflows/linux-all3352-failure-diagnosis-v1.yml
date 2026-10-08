@@ -60,6 +60,64 @@ jobs:
               cases.append(dict(index=int(idx),input=rel,returncode=p.returncode,line=line,diagnostic=p.stderr))
           (work/'failure-excerpts.json').write_text(json.dumps(cases,indent=2))
           PY
+      - name: Run GCC syntax check on the same generated preprocessed inputs
+        run: |
+          set -Eeuo pipefail
+          for name in serio.i nouveau_drm.i; do
+            case "$name" in
+              serio.i) rel=drivers/input/serio/serio.i ;;
+              *) rel=drivers/gpu/drm/nouveau/nouveau_drm.i ;;
+            esac
+            set +e
+            riscv64-linux-gnu-gcc -fsyntax-only -x c -w "build/fail-diagnose/corpus/kbuild/$rel" > "build/fail-diagnose/gcc-$name.txt" 2>&1
+            rc=$?
+            set -e
+            echo "GCC_INPUT_CHECK name=$name rc=$rc"
+            head -n 18 "build/fail-diagnose/gcc-$name.txt"
+          done
+      - name: Instrument failed choose_expr constant-eval decision
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          f=Path("src/frontend/parser_expression.c")
+          s=f.read_text()
+          start=s.index("parse_builtin_choose_expr(MinicParser *parser,")
+          stop=s.index("static bool object_extent_direct_object(",start)
+          old=s[start:stop]
+          needle='''        minic_parser_error(
+            parser, "__builtin_choose_expr condition must be an integer constant expression");'''
+          diagnostic='''        {
+            const MinicExpression *dbg = minic_c0_program_expression(parser->program, condition_id);
+            const MinicExpression *l = NULL;
+            const MinicExpression *r = NULL;
+            if (dbg != NULL && dbg->kind == MINIC_EXPRESSION_BINARY) {
+                l = minic_c0_program_expression(parser->program,dbg->value.binary.left);
+                r = minic_c0_program_expression(parser->program,dbg->value.binary.right);
+            }
+            fprintf(stderr,
+                    "CHOOSE_CONDITION_DIAG id=%u kind=%d is_int=%d literal=%lld left_kind=%d right_kind=%d\\n",
+                    (unsigned)condition_id,dbg != NULL ? (int)dbg->kind : -1,
+                    dbg != NULL ? (int)minic_type_is_integer(dbg->type) : 0,
+                    dbg != NULL && dbg->kind == MINIC_EXPRESSION_INTEGER
+                      ? (long long)dbg->value.integer_value : 0LL,
+                    l != NULL ? (int)l->kind : -1,r != NULL ? (int)r->kind : -1);
+        }
+''' + needle
+          assert old.count(needle)==1,old.count(needle)
+          s=s[:start]+old.replace(needle,diagnostic)+s[stop:]
+          f.write_text(s)
+          PY
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/fail-diagnose/instrumented build/fail-diagnose/instrumented/bin/minic >build/fail-diagnose/instrumented-build.log 2>&1
+          for name in nouveau_drm.i nouveau_bo0039.i; do
+            file=build/fail-diagnose/corpus/kbuild/drivers/gpu/drm/nouveau/$name
+            set +e
+            build/fail-diagnose/instrumented/bin/minic -S "$file" -o build/fail-diagnose/debug.s >build/fail-diagnose/debug-$name.txt 2>&1
+            rc=$?
+            set -e
+            echo "CHOOSE_DEBUG_CASE=$name rc=$rc"
+            head -n 10 build/fail-diagnose/debug-$name.txt
+          done
       - name: Upload both preprocessed source inputs and diagnostics
         if: always()
         uses: actions/upload-artifact@v4
