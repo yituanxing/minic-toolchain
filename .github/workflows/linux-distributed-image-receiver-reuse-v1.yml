@@ -249,8 +249,10 @@ jobs:
               -j1 V=1 net/core/page_pool.o > "$diag/page_pool.local-facts.log" 2>&1 || {
                 tail -n 65 "$diag/page_pool.local-facts.log"; exit 1;
               }
-          grep '^LOCAL_FACT_' "$diag/page_pool.local-facts.log" | grep 'function=page_pool_init' \
+          cp "$out/net/core/page_pool.minic-stage2.minic.stderr" "$diag/page_pool.minic.stderr"
+          grep '^LOCAL_FACT_' "$diag/page_pool.minic.stderr" | grep 'function=page_pool_init' \
             | tail -n 140 > "$diag/page_pool_init.facts" || true
+          grep -c '^LOCAL_FACT_' "$diag/page_pool.minic.stderr" || true
           wc -l "$diag/page_pool_init.facts"
           riscv64-linux-gnu-nm -u "$out/net/core/page_pool.o" \
             | grep __compiletime_assert_489
