@@ -1,10 +1,17 @@
 name: Toolchain M0 Structure Gate
+# Runtime push: always test isolation / Kbuild wrapper routing; preserve
+# historical frozen compiler boundary only for manual non-runtime dispatch.
 
 on:
   push:
     branches:
-      - "toolchain/**"
-      - "agent/ci-runtime-cleanup-v1"
+      - "agent/linux-expanded-kbuild-v0"
+    paths:
+      - 'tools/ci/test_linux_runtime_object_set_v1.py'
+      - 'tools/ci/test_linux_runtime_prefix_bisect_v1.py'
+      - 'tests/external/linux/stage2_kbuild_cc*.sh'
+      - 'tests/driver/run-busybox-kbuild-routing-v0.sh'
+      - '.github/workflows/toolchain-m0-structure.yml'
   workflow_dispatch:
 
 jobs:
@@ -37,11 +44,11 @@ jobs:
           echo "M0_BUSYBOX_KBUILD_ROUTING=PASS"
 
       - name: Build frozen compiler boundary
-        if: github.ref != 'refs/heads/agent/ci-runtime-cleanup-v1'
+        if: github.ref != 'refs/heads/agent/linux-expanded-kbuild-v0'
         run: make clean && make -j2
 
       - name: Verify minic-cc and independent driver entrypoint
-        if: github.ref != 'refs/heads/agent/ci-runtime-cleanup-v1'
+        if: github.ref != 'refs/heads/agent/linux-expanded-kbuild-v0'
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -54,14 +61,14 @@ jobs:
           echo "M0_BINARY_BOUNDARY=PASS compiler=minic-cc driver=minic"
 
       - name: Run focused ownership gates
-        if: github.ref != 'refs/heads/agent/ci-runtime-cleanup-v1'
+        if: github.ref != 'refs/heads/agent/linux-expanded-kbuild-v0'
         run: |
           make check-token-model check-lexer check-type check-record check-type-alias
           make check-ast-contract check-layout check-rv64-abi
           make check-static-functions check-cast-expressions check-pointer-members
 
       - name: Verify compiler CLI output identity
-        if: github.ref != 'refs/heads/agent/ci-runtime-cleanup-v1'
+        if: github.ref != 'refs/heads/agent/linux-expanded-kbuild-v0'
         shell: bash
         run: |
           set -Eeuo pipefail
