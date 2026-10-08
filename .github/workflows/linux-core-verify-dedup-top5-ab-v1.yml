@@ -1,0 +1,129 @@
+name: Independent Core Verify Dedup Top5 A-B V1
+
+on:
+  push:
+    branches:
+      - agent/independent-symbolic-call-worklist-audit-v1
+    paths:
+      - .github/workflows/linux-core-verify-dedup-top5-ab-v1.yml
+      - tools/ci/apply-perf-core-verify-dedup-audit-v1.py
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  top5:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux and RISC-V build prerequisites
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get -o Acquire::Retries=3 update -qq
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            build-essential gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
+            libc6-dev-riscv64-cross bc bison flex libssl-dev make curl xz-utils python3
+
+      - name: Independently build canonical baseline and verify-dedup candidate
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/independent-core-verify-v1"
+          mkdir -p "$work/evidence"
+          bash tools/ci/linux-runtime-build-minic-profile-v1.sh \
+            "$work/baseline" "$work/evidence/baseline-profile"
+          grep -qx 'apply-perf-symbolic-function-body-owner-filter-v0.py' \
+            "$work/evidence/baseline-profile/minic-profile.txt"
+          python3 tools/ci/apply-perf-core-verify-dedup-audit-v1.py \
+            | tee "$work/evidence/verify-dedup-patch.log"
+          git diff --check
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$work/candidate" \
+            "$work/candidate/bin/minic" "$work/candidate/bin/minic-cc" \
+            >"$work/evidence/candidate-build.log" 2>&1
+          echo 'CORE_VERIFY_DEDUP_BUILD=PASS'
+
+      - name: Materialize frozen Linux historical Top5
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/independent-core-verify-v1"
+          mkdir -p "$GITHUB_WORKSPACE/build/linux-cache"
+          archive="$GITHUB_WORKSPACE/build/linux-cache/linux-6.6.143.tar.xz"
+          curl --http1.1 --retry 5 --retry-all-errors --retry-delay 2 -fsSL \
+            https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.6.143.tar.xz -o "$archive"
+          echo "dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932  $archive" | sha256sum -c -
+          MINIC="$work/baseline/bin/minic" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/core-verify-materialize" \
+          LINUX_ARCHIVE_CACHE="$archive" CROSS_COMPILE=riscv64-linux-gnu- \
+          LINUX_BATCH_SELECTION="195,357,232,194,219" \
+          LINUX_BATCH_MATERIALIZE_ONLY=1 \
+          LINUX_BATCH_MATERIALIZE_MAKE_JOBS=4 \
+            sh tests/external/linux/batch_probe.sh
+          test "$(grep -cve '^[[:space:]]*$' build/core-verify-materialize/selected-tus.txt)" -eq 5
+
+      - name: Paired Top5 compiler A-B with exact assembly oracle
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY' | tee build/independent-core-verify-v1/evidence/paired-ab.txt
+          import hashlib, pathlib, statistics, subprocess, time
+          work=pathlib.Path('build/independent-core-verify-v1')
+          corpus=pathlib.Path('build/core-verify-materialize')
+          rows={}
+          for row in (corpus/'selected-tus.txt').read_text().splitlines():
+              if row.strip():
+                  index,obj,rel,source=row.split('\t',3)
+                  rows[int(index)]=rel
+          need=[195,357,232,194,219]
+          assert all(i in rows for i in need),(rows,need)
+          bins={'baseline':work/'baseline/bin/minic',
+                'candidate':work/'candidate/bin/minic'}
+          sums={'baseline':[],'candidate':[]}
+          for index in need:
+              path=corpus/'kbuild'/rows[index]
+              if not path.is_file() or path.stat().st_size==0:
+                  raise SystemExit(f'FROZEN_INPUT_MISSING index={index} path={path}')
+              times={'baseline':[],'candidate':[]}
+              for repeat in range(3):
+                  kinds=['baseline','candidate']
+                  if repeat%2:kinds.reverse()
+                  digests={}
+                  for kind in kinds:
+                      output=work/'evidence'/f'{index}-{repeat}-{kind}.s'
+                      start=time.monotonic()
+                      p=subprocess.run([str(bins[kind]),'-S',str(path),'-o',str(output)],
+                                       stdout=subprocess.DEVNULL,stderr=subprocess.PIPE,
+                                       text=True,errors='replace')
+                      sec=time.monotonic()-start
+                      if p.returncode or not output.is_file() or output.stat().st_size==0:
+                          raise SystemExit(f'COMPILER_FAILURE index={index} rep={repeat} '
+                                           f'kind={kind} rc={p.returncode} stderr={p.stderr[-1500:]}')
+                      digests[kind]=hashlib.sha256(output.read_bytes()).hexdigest()
+                      times[kind].append(sec)
+                  if digests['baseline']!=digests['candidate']:
+                      raise SystemExit(f'ASSEMBLY_MISMATCH index={index} rep={repeat}')
+              base=statistics.median(times['baseline'])
+              cand=statistics.median(times['candidate'])
+              sums['baseline'].append(base)
+              sums['candidate'].append(cand)
+              print(f'CORE_VERIFY_DEDUP_TOP5 index={index} input={rows[index]} '
+                    f'baseline_median={base:.6f} candidate_median={cand:.6f} '
+                    f'speedup={base/cand:.4f}',flush=True)
+          base=sum(sums['baseline']); cand=sum(sums['candidate'])
+          print(f'CORE_VERIFY_DEDUP_TOTAL baseline={base:.6f} candidate={cand:.6f} '
+                f'speedup={base/cand:.4f} sha_matched=15/15',flush=True)
+          print('CORE_VERIFY_DEDUP_TOP5=PASS',flush=True)
+          PY
+          find build/independent-core-verify-v1/evidence -name '*.s' -delete
+
+      - name: Upload audit evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: independent-core-verify-dedup-top5-ab-v1
+          path: build/independent-core-verify-v1/evidence
+          retention-days: 7
