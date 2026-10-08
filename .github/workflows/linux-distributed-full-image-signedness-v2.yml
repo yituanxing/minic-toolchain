@@ -1,4 +1,4 @@
-name: Linux Distributed Full Image Signedness V2
+name: Linux Distributed Full Image Strict Replay
 on:
   push:
     branches: [agent/linux-expanded-kbuild-v0]
@@ -10,6 +10,8 @@ permissions:
   contents: read
 env:
   MINIC_DISTRIBUTED_FIX_NESTED_CONSTANT_P: '1'
+  MINIC_DISTRIBUTED_STRICT_REPLAY: '1'
+  MINIC_DISTRIBUTED_CANONICALIZE_DELAY_CMD: '1'
 concurrency:
   group: linux-distributed-full-image-signedness-v2-${{ github.ref }}
   cancel-in-progress: false
@@ -24,6 +26,7 @@ jobs:
         run: |
           set -Eeuo pipefail
           bash -n tools/ci/linux-distributed-full-image-v1.sh
+          python3 -m py_compile tools/ci/linux-distributed-canonical-delay-v1.py tools/ci/linux-distributed-provenance-audit-v2.py
           python3 -m py_compile tools/ci/apply-correctness-constant-p-core-local-facts-v1.py tools/ci/apply-correctness-constant-p-nested-core-v2.py
       - name: Install Linux Kbuild manifest prerequisites
         run: |
@@ -185,7 +188,7 @@ jobs:
           pattern: distributed-full-image-shard-*
           path: build/linux-distributed-full-image-v1/incoming/
           merge-multiple: false
-      - name: Verify all transferred objects then build complete Kbuild Image
+      - name: Restore original 3352 objects after generated-dependency warmup; prove strict Image reuse
         run: bash tools/ci/linux-distributed-full-image-v1.sh image
       - name: Install QEMU and static-init dependencies only after Image is finished
         run: |
@@ -194,12 +197,19 @@ jobs:
             qemu-system-misc opensbi cpio gzip libc6-dev-riscv64-cross device-tree-compiler
       - name: Boot generated Image with independently compiled initramfs
         run: bash tools/ci/linux-distributed-full-image-v1.sh qemu
-      - name: Preserve link, verification and QEMU evidence
+      - name: Preserve warmup, strict replay, link and QEMU evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: distributed-full-image-receiver-evidence
+          name: distributed-full-image-strict-receiver-evidence
           path: |
+            build/linux-distributed-full-image-v1/image-warmup.log
+            build/linux-distributed-full-image-v1/image-warmup.trace
+            build/linux-distributed-full-image-v1/warmup-compiled.txt
+            build/linux-distributed-full-image-v1/canonical-delay.o.cmd
+            build/linux-distributed-full-image-v1/reuse-producer.sha256
+            build/linux-distributed-full-image-v1/reuse-final-check.txt
+            build/linux-distributed-full-image-v1/final-compiled.txt
             build/linux-distributed-full-image-v1/image.log
             build/linux-distributed-full-image-v1/image.trace
             build/linux-distributed-full-image-v1/image-summary.txt
