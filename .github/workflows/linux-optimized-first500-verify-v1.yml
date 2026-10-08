@@ -4,6 +4,15 @@ on:
   push:
     branches:
       - agent/linux-perf-boolean-domain-v1
+    paths:
+      - 'src/**'
+      - 'include/**'
+      - 'tools/ci/**'
+      - 'tools/minic-cc/**'
+      - 'tools/minic/**'
+      - 'Makefile'
+      - 'tests/compiler/**'
+      - '.github/workflows/linux-optimized-first500-verify-v1.yml'
   workflow_dispatch:
 
 permissions:

@@ -4,6 +4,14 @@ on:
   push:
     branches:
       - agent/linux-perf-boolean-domain-v1
+    paths:
+      - 'src/frontend/**'
+      - 'include/**'
+      - 'tools/ci/apply-perf-parser-*'
+      - 'tools/ci/apply-inline-specialization-local-boolean-domain-scoped-v1.py'
+      - 'tools/ci/linux-runtime-build-minic-profile-v1.sh'
+      - 'tests/compiler/c0/**'
+      - '.github/workflows/linux-parser-scope-first500-ab-v1.yml'
   workflow_dispatch:
 
 permissions:
