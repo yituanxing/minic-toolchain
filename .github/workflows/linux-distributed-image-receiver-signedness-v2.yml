@@ -1,4 +1,4 @@
-name: Linux Distributed Image Receiver Strict Replay V3
+name: Linux Distributed Image Receiver Strict Replay V4
 on:
   push:
     branches: [agent/linux-expanded-kbuild-v0]
@@ -18,6 +18,7 @@ env:
   MINIC_DISTRIBUTED_FIX_NESTED_CONSTANT_P: '1'
   MINIC_DISTRIBUTED_TRACED_REBUILD_LIMIT: '60'
   MINIC_DISTRIBUTED_STRICT_REPLAY: '1'
+  MINIC_DISTRIBUTED_CANONICALIZE_DELAY_CMD: '1'
 
 jobs:
   receiver:
@@ -29,7 +30,7 @@ jobs:
         run: |
           set -Eeuo pipefail
           bash -n tools/ci/linux-distributed-full-image-v1.sh
-          python3 -m py_compile tools/ci/linux-distributed-provenance-audit-v2.py tools/ci/apply-correctness-constant-p-core-local-facts-v1.py tools/ci/apply-correctness-constant-p-nested-core-v2.py
+          python3 -m py_compile tools/ci/linux-distributed-canonical-delay-v1.py tools/ci/linux-distributed-provenance-audit-v2.py tools/ci/apply-correctness-constant-p-core-local-facts-v1.py tools/ci/apply-correctness-constant-p-nested-core-v2.py
       - name: Restore pinned V2 producer manifest
         uses: actions/download-artifact@v4
         with:
@@ -71,12 +72,14 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: linux-image-strict-replay-v3-receiver-evidence
+          name: linux-image-strict-replay-v4-receiver-evidence
           path: |
             build/linux-distributed-full-image-v1/image-warmup.log
             build/linux-distributed-full-image-v1/image-warmup.trace
             build/linux-distributed-full-image-v1/warmup-compiled.txt
             build/linux-distributed-full-image-v1/reuse-final-check.txt
+            build/linux-distributed-full-image-v1/reuse-producer.sha256
+            build/linux-distributed-full-image-v1/canonical-delay.o.cmd
             build/linux-distributed-full-image-v1/image.log
             build/linux-distributed-full-image-v1/image.trace
             build/linux-distributed-full-image-v1/image-summary.txt
