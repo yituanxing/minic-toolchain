@@ -198,8 +198,8 @@ jobs:
           assert "inputs.mode == 'window'" in as_merged
           assert 'default: first500' in as_merged
           assert '          - final352' in as_merged
-          assert 'minias-a0-\${{ needs.resolve.outputs.label }}-progress' in as_merged
-          assert 'minias-a0-\${{ needs.resolve.outputs.label }}-shard-\${{ matrix.shard }}' in as_merged
+          assert 'minias-a0-${{ needs.resolve.outputs.label }}-progress' in as_merged
+          assert 'minias-a0-${{ needs.resolve.outputs.label }}-shard-${{ matrix.shard }}' in as_merged
           as_old = as_archived_bytes.decode()
           old_jobs = as_old.split('\njobs:\n', 1)[1]
           old_tail = '\n  window-shard:' + old_jobs.split('\n  window-shard:', 1)[1]
