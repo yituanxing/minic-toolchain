@@ -18,29 +18,27 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Build P14 Canonical baseline and P15 one-pass candidate
+      - name: Build integrated Canonical with P15 off and P15 on
         shell: bash
         run: |
           set -Eeuo pipefail
           work="$GITHUB_WORKSPACE/build/core-object-interval-500-v1"
           mkdir -p "$work/evidence"
-          bash tools/ci/linux-runtime-build-minic-profile-v1.sh \
-            "$work/baseline-toolchain" "$work/evidence/canonical-p14-profile"
+          MINIC_PERF_SKIP_CORE_INTERVAL_ONEPASS=1 \
+            bash tools/ci/linux-runtime-build-minic-profile-v1.sh \
+            "$work/baseline-toolchain" "$work/evidence/p15-off-profile"
           grep -qx 'apply-perf-core-object-address-use-index-v1.py' \
-            "$work/evidence/canonical-p14-profile/minic-profile.txt"
+            "$work/evidence/p15-off-profile/minic-profile.txt"
+          grep -qx 'SKIPPED_CORE_INTERVAL_ONEPASS=apply-perf-core-object-interval-onepass-v1.py' \
+            "$work/evidence/p15-off-profile/patch.log"
+          git reset --hard HEAD
+          bash tools/ci/linux-runtime-build-minic-profile-v1.sh \
+            "$work/candidate-toolchain" "$work/evidence/p15-on-profile"
+          grep -qx 'apply-perf-core-object-interval-onepass-v1.py' \
+            "$work/evidence/p15-on-profile/minic-profile.txt"
           grep -qx 'apply-perf-parser-nearest-ordinary-scope-v1.py' \
-            "$work/evidence/canonical-p14-profile/minic-profile.txt"
-          grep -qx 'apply-inline-specialization-local-boolean-domain-scoped-v1.py' \
-            "$work/evidence/canonical-p14-profile/minic-profile.txt"
-          grep -qx 'apply-perf-parser-typedef-index-v1.py' \
-            "$work/evidence/canonical-p14-profile/minic-profile.txt"
-          python3 tools/ci/apply-perf-core-object-interval-onepass-v1.py \
-            | tee "$work/evidence/object-interval-onepass-patch.log"
+            "$work/evidence/p15-on-profile/minic-profile.txt"
           git diff --check
-          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$work/candidate-toolchain" \
-            "$work/candidate-toolchain/bin/minic" \
-            "$work/candidate-toolchain/bin/minic-cc" \
-            >"$work/evidence/candidate-build.log" 2>&1
           sha256sum "$work/baseline-toolchain/bin/minic" \
             "$work/candidate-toolchain/bin/minic" >"$work/evidence/toolchain.sha256"
           echo "CORE_OBJECT_INTERVAL_ONEPASS_BUILT=PASS"
