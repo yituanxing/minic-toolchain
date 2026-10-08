@@ -106,3 +106,27 @@ runtime correctness gates. A five-GCC-object swap may serve as a labeled
 - Complete `vmlinux`, `System.map`, `Image` and real QEMU marker all pass.
 - Report real end-to-end wall time separately from aggregate per-TU CPU time
   and from one-time artifact downloads/setup.
+
+
+## Follow-up profile differential: 55-patch candidate also fails 5/5
+
+[Run 37779305823](https://github.com/yituanxing/minic-toolchain/actions/runs/37779305823)
+completed **SUCCESS as a diagnostic workflow** at 2026-10-08 12:49 UTC,
+but the result for the compiler feature is negative:
+
+```text
+PERF_FIVE_ASSERT=REMAINS target=kernel/bpf/bpf_lru_list.o
+PERF_FIVE_ASSERT=REMAINS target=fs/nfs/dir.o
+PERF_FIVE_ASSERT=REMAINS target=drivers/scsi/sr_ioctl.o
+PERF_FIVE_ASSERT=REMAINS target=net/core/page_pool.o
+PERF_FIVE_ASSERT=REMAINS target=net/ipv4/tcp_output.o
+PERF_FIVE_SUMMARY objects=5 unresolved=5 compiler=55-patch
+```
+
+Thus switching the Linux Image producer from the canonical runtime profile
+to the 55-patch performance candidate would **not resolve** the five linker
+blockers. The underlying `min/clamp` signedness/constant-p semantics need a
+focused compiler fix. The same diagnostic reran the controlled mtime probe and
+reconfirmed `original=4`, `touched=0` MiniC calls on `init/main.o`.
+This workflow deliberately did **not** run full Image or QEMU; its green status
+must not be interpreted as a green Linux kernel.
