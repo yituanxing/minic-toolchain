@@ -172,13 +172,13 @@ jobs:
                   data = b'blob ' + str(len(contents)).encode() + bytes([0]) + contents
                   assert hashlib.sha1(data).hexdigest() == sha, f'Lost historical Git blob: {fname}'
                   original = contents.decode('utf-8')
-                  assert '\\njobs:\\n' in original, f'No source jobs section: {fname}'
-                  source_section = original.split('\\njobs:\\n', 1)[1]
-                  mark = '  ' + job + ':\\n'
+                  assert '\njobs:\n' in original, f'No source jobs section: {fname}'
+                  source_section = original.split('\njobs:\n', 1)[1]
+                  mark = '  ' + job + ':\n'
                   assert mark in source_section, f'Original job absent: {fname}'
                   old_body = source_section.split(mark, 1)[1].rstrip()
                   assert old_body in merged, f'Legacy job executable body altered: {fname}'
-                  assert ("  " + job + ":\\n") in merged, f'Legacy job selector absent: {fname}'
+                  assert ("  " + job + ":\n") in merged, f'Legacy job selector absent: {fname}'
                   retained_jobs += 1
                   archived_jobs += 1
           assert retained_jobs == 9 and archived_jobs == 6
