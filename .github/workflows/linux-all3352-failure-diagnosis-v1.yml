@@ -93,7 +93,7 @@ jobs:
                 dbg != NULL ? (int)minic_type_is_integer(dbg->type) : 0,
                 dbg != NULL && dbg->kind == MINIC_EXPRESSION_INTEGER
                     ? (long long)dbg->value.integer_value : 0LL);
-        }
+          }
           '''
           diagnostic=probe+needle
           assert old.count(needle)==1,old.count(needle)
