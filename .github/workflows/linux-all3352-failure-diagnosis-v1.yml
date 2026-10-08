@@ -100,7 +100,7 @@ jobs:
           s=s[:start]+old.replace(needle,diagnostic)+s[stop:]
           f.write_text(s)
           PY
-          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/fail-diagnose/instrumented build/fail-diagnose/instrumented/bin/minic >build/fail-diagnose/instrumented-build.log 2>&1
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/fail-diagnose/instrumented build/fail-diagnose/instrumented/bin/minic build/fail-diagnose/instrumented/bin/minic-cc >build/fail-diagnose/instrumented-build.log 2>&1
           for name in nouveau_drm.i nouveau_bo0039.i; do
             file=build/fail-diagnose/corpus/kbuild/drivers/gpu/drm/nouveau/$name
             set +e
