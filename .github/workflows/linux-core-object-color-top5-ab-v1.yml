@@ -1,0 +1,108 @@
+name: Linux Core Object Slot Coloring Linked List Top5 A-B V1
+
+on:
+  push:
+    branches:
+      - agent/linux-perf-boolean-domain-v1
+    paths:
+      - tools/ci/apply-perf-core-object-slot-color-list-v1.py
+      - .github/workflows/linux-core-object-color-top5-ab-v1.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  top5:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build exact Canonical baseline and coloring-only experiment
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/core-object-color-ab-v1"
+          mkdir -p "$work/evidence"
+          bash tools/ci/linux-runtime-build-minic-profile-v1.sh \
+            "$work/baseline" "$work/evidence/baseline-profile"
+          grep -qx 'apply-perf-parser-nearest-ordinary-scope-v1.py' \
+            "$work/evidence/baseline-profile/minic-profile.txt"
+          python3 tools/ci/apply-perf-core-object-slot-color-list-v1.py \
+            | tee "$work/evidence/color-list-patch.log"
+          git diff --check
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$work/candidate" \
+            "$work/candidate/bin/minic" "$work/candidate/bin/minic-cc" \
+            >"$work/evidence/candidate-build.log" 2>&1
+          echo "OBJECT_COLOR_LIST_BUILD=PASS"
+
+      - name: Restore verified first500 corpus
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-perf-corpus
+          key: linux-6.6.143-first500-rv64-v1-${{ hashFiles('tests/external/linux/batch_probe.sh', 'tests/external/linux/probe.sh', 'tests/external/linux/replay-indices.txt') }}
+
+      - name: Execute 5 x 3 paired A-B and compare assembly SHA256
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/core-object-color-ab-v1"
+          corpus=build/linux-perf-corpus
+          test -s "$corpus/selected-tus.txt"
+          test "$(grep -cve '^[[:space:]]*$' "$corpus/selected-tus.txt")" -eq 500
+          test "$(wc -l < "$corpus/inputs.sha256")" -eq 500
+          sha256sum --status --check "$corpus/inputs.sha256"
+          python3 - <<'PY' | tee "$work/evidence/color-top5-ab.txt"
+          import hashlib,os,pathlib,statistics,subprocess,time
+          work=pathlib.Path("build/core-object-color-ab-v1")
+          corpus=pathlib.Path("build/linux-perf-corpus")
+          rows={}
+          for line in (corpus/"selected-tus.txt").read_text().splitlines():
+              if line.strip():
+                  n,obj,rel,source=line.split("\t",3);rows[int(n)]=rel
+          dirs={"baseline":work/"baseline/bin/minic","candidate":work/"candidate/bin/minic"}
+          overall={"baseline":[],"candidate":[]}
+          for idx in [195,357,232,194,219]:
+              if idx not in rows:raise SystemExit(f"MISSING_HISTORICAL_TOP5={idx}")
+              inp=corpus/"kbuild"/rows[idx]
+              if not inp.is_file() or not inp.stat().st_size:
+                  raise SystemExit(f"MISSING_INPUT={inp}")
+              times={"baseline":[],"candidate":[]}
+              for rep in range(3):
+                  order=["baseline","candidate"]
+                  if rep%2:order.reverse()
+                  hashes={}
+                  for kind in order:
+                      dest=work/"evidence"/f"{idx}-{rep}-{kind}.s"
+                      start=time.monotonic_ns()
+                      p=subprocess.run([str(dirs[kind]),"-S",str(inp),"-o",str(dest)],
+                          capture_output=True,text=True)
+                      elapsed=(time.monotonic_ns()-start)/1e9
+                      if p.returncode!=0 or not dest.is_file() or dest.stat().st_size==0:
+                          raise SystemExit(f"OBJECT_COLOR_COMPILE_FAILED index={idx} kind={kind} stderr={p.stderr[-2000:]}")
+                      hashes[kind]=hashlib.sha256(dest.read_bytes()).hexdigest()
+                      times[kind].append(elapsed)
+                  if hashes["baseline"]!=hashes["candidate"]:
+                      raise SystemExit(f"OBJECT_COLOR_ASM_MISMATCH index={idx} repeat={rep}")
+              for kind in ("baseline","candidate"):
+                  overall[kind].append(statistics.median(times[kind]))
+              before,after=map(statistics.median,[times["baseline"],times["candidate"]])
+              print(f"COLOR_LIST_TOP5 index={idx} input={rows[idx]} "
+                    f"baseline_median_s={before:.6f} candidate_median_s={after:.6f} "
+                    f"speedup={before/after:.4f}",flush=True)
+          before=sum(overall["baseline"]);after=sum(overall["candidate"])
+          print(f"COLOR_LIST_TOP5_TOTAL baseline_sum_s={before:.6f} "
+                f"candidate_sum_s={after:.6f} speedup={before/after:.4f} "
+                "sha_matched=15/15",flush=True)
+          print("COLOR_LIST_TOP5_STATUS=PASS",flush=True)
+          PY
+          find "$work/evidence" -name '*.s' -delete
+
+      - name: Upload coloring A-B evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-core-object-color-top5-ab-v1
+          path: build/core-object-color-ab-v1/evidence
+          retention-days: 7
