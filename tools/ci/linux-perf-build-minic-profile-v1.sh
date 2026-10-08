@@ -1,0 +1,125 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+if [[ $# -ne 2 ]]; then
+  echo "usage: $0 <build-dir> <evidence-dir>" >&2
+  exit 64
+fi
+
+build_dir=$1
+ev=$2
+mkdir -p "$ev"
+
+patches=(
+  apply-local-integer-assignment-v2.py
+  apply-local-integer-logical-conditions-v0.py
+  apply-local-null-pointer-facts-v0.py
+  apply-builtin-constant-p-local-facts-v0.py
+  apply-inline-integer-specialization-v0.py
+  apply-inline-specialization-local-facts-v0.py
+  apply-inline-specialization-stable-parameter-facts-v0.py
+  apply-inline-specialization-transitive-integer-v0.py
+  apply-inline-specialization-base-callee-integer-v0.py
+  apply-inline-specialization-capacity-v0.py
+  apply-inline-specialization-symbolic-address-v0.py
+  apply-inline-specialization-symbolic-nested-array-v0.py
+  apply-inline-specialization-symbolic-integer-closure-v0.py
+  apply-inline-specialization-symbolic-transitive-rewrite-v0.py
+  apply-inline-specialization-symbolic-array-lvalue-v0.py
+  apply-inline-specialization-symbolic-closed-integers-v0.py
+  apply-inline-specialization-base-callee-symbolic-v0.py
+  apply-inline-specialization-resolved-asm-goto-v0.py
+  apply-inline-specialization-core-reachability-v0.py
+  apply-inline-specialization-original-reachability-v0.py
+  apply-inline-asm-local-integer-facts-v0.py
+  apply-inline-asm-rk-early-v0.py
+  apply-inline-asm-rk-early-hotfix-v0.py
+  apply-inline-asm-rk-tail-rollback-v0.py
+  apply-inline-asm-rk-cast-tail-v0.py
+  apply-inline-asm-immediate-batch-trace-v0.py
+  apply-inline-asm-write-output-trace-v0.py
+  apply-inline-specialization-core-empty-function-v0.py
+  apply-inline-specialization-label-alias-v0.py
+  apply-riscv64-default-text-section-v0.py
+  apply-riscv64-explicit-section-flags-v0.py
+  apply-inline-asm-symbolic-specialization-v0.py
+  apply-perf-symbolic-function-body-owner-filter-v0.py
+  apply-perf-parser-lookup-counters-v0.py
+  apply-perf-parser-function-hash-v0.py
+  apply-perf-parser-global-hash-v0.py
+  apply-perf-parser-enum-hash-v0.py
+  apply-perf-parser-hash-fallback-v1.py
+  apply-perf-symbolic-loop-trace-v0.py
+  apply-perf-specialization-phase-trace-v0.py
+  apply-perf-core-lower-statement-workspace-v1.py
+  apply-riscv64-core-value-slot-pack-v0.py
+  apply-riscv64-core-value-slot-reuse-v0.py
+  apply-riscv64-record-call-result-snapshot-reuse-v0.py
+  apply-riscv64-core-object-slot-reuse-v0.py
+  apply-riscv64-core-object-slot-reuse-cfg-hotfix-v0.py
+  apply-perf-core-object-address-use-index-v1.py
+  apply-perf-core-object-interval-onepass-v1.py
+  apply-riscv64-structured-asm-used-callee-save-v0.py
+  apply-riscv64-pi-local-symbol-address-v0.py
+  apply-inline-specialization-local-boolean-domain-scoped-v1.py
+  apply-perf-parser-typedef-index-v1.py
+  apply-perf-parser-local-shadow-fix-v1.py
+  apply-perf-parser-nearest-ordinary-scope-v1.py
+  apply-correctness-constant-p-ice-v1.py
+)
+
+# Opt-in performance integration only. Run this script in a disposable
+# Git checkout/worktree, never on a dirty canonical runtime source tree.
+# Production canonical runtime profile is unchanged by this repository commit.
+start=$(date +%s%N)
+python3 tools/ci/apply-perf-parser-source-deltas-v1.py >"$ev/source-overlay.log"
+: >"$ev/patch.log"
+applied_patches=()
+for p in "${patches[@]}"; do
+  if [[ "${MINIC_PERF_SKIP_VERIFIED_OPTIMIZATIONS:-0}" == 1 && (
+        "$p" == apply-inline-specialization-local-boolean-domain-scoped-v1.py ||
+        "$p" == apply-perf-parser-typedef-index-v1.py
+      ) ]]; then
+    echo "SKIPPED_VERIFIED_PERF_PATCH=$p" >>"$ev/patch.log"
+    continue
+  fi
+  if [[ "${MINIC_CORRECTNESS_SKIP_CONSTANT_P_ICE:-0}" == 1 &&
+        "$p" == apply-correctness-constant-p-ice-v1.py ]]; then
+    echo "SKIPPED_CONSTANT_P_ICE=$p" >>"$ev/patch.log"
+    continue
+  fi
+  if [[ "${MINIC_PERF_SKIP_CORE_INTERVAL_ONEPASS:-0}" == 1 &&
+        "$p" == apply-perf-core-object-interval-onepass-v1.py ]]; then
+    echo "SKIPPED_CORE_INTERVAL_ONEPASS=$p" >>"$ev/patch.log"
+    continue
+  fi
+  if [[ "${MINIC_PERF_SKIP_CORE_ADDRESS_USE_INDEX:-0}" == 1 &&
+        "$p" == apply-perf-core-object-address-use-index-v1.py ]]; then
+    echo "SKIPPED_CORE_ADDRESS_USE_INDEX=$p" >>"$ev/patch.log"
+    continue
+  fi
+  if [[ "${MINIC_PERF_SKIP_PARSER_SCOPE_FIX:-0}" == 1 && (
+        "$p" == apply-perf-parser-local-shadow-fix-v1.py ||
+        "$p" == apply-perf-parser-nearest-ordinary-scope-v1.py
+      ) ]]; then
+    echo "SKIPPED_PARSER_SCOPE_FIX=$p" >>"$ev/patch.log"
+    continue
+  fi
+  if [[ "${MINIC_PERF_SKIP_CORE_WORKSPACE:-0}" == 1 && "$p" == apply-perf-core-lower-statement-workspace-v1.py ]]; then
+    echo "SKIPPED_CORE_WORKSPACE_PATCH=$p" >>"$ev/patch.log"
+    continue
+  fi
+  patch_path="tools/ci/$p"
+  if [[ -f "tools/ci/perf-v1-overrides/$p" ]]; then
+    patch_path="tools/ci/perf-v1-overrides/$p"
+  fi
+  python3 "$patch_path" >>"$ev/patch.log"
+  applied_patches+=("$p")
+done
+git diff --check
+make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$build_dir" \
+  "$build_dir/bin/minic" "$build_dir/bin/minic-cc" >/dev/null
+end=$(date +%s%N)
+echo "TIMING toolchain_ms=$(((end-start)/1000000))" | tee "$ev/toolchain-timing.txt"
+printf '%s\n' "${applied_patches[@]}" >"$ev/minic-profile.txt"
+sha256sum "$build_dir/bin/minic" "$build_dir/bin/minic-cc" >"$ev/minic.sha256"
