@@ -1,0 +1,153 @@
+name: Linux Core Object Slot Reuse Top5 Audit V1
+
+on:
+  push:
+    branches:
+      - agent/linux-perf-boolean-domain-v1
+    paths:
+      - tools/ci/apply-perf-core-object-slot-profile-v1.py
+      - .github/workflows/linux-core-object-slot-top5-audit-v1.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  top5:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build Canonical and isolated instrumented compiler
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/core-object-slot-top5-v1"
+          mkdir -p "$work/evidence"
+          bash tools/ci/linux-runtime-build-minic-profile-v1.sh \
+            "$work/baseline-toolchain" "$work/evidence/canonical-profile"
+          grep -qx 'apply-perf-parser-nearest-ordinary-scope-v1.py' \
+            "$work/evidence/canonical-profile/minic-profile.txt"
+          grep -qx 'apply-perf-parser-typedef-index-v1.py' \
+            "$work/evidence/canonical-profile/minic-profile.txt"
+          grep -qx 'apply-inline-specialization-local-boolean-domain-scoped-v1.py' \
+            "$work/evidence/canonical-profile/minic-profile.txt"
+          python3 tools/ci/apply-perf-core-object-slot-profile-v1.py \
+            | tee "$work/evidence/instrumentation-patch.log"
+          git diff --check
+          # Rebuild all instrumented sources independently from original binary;
+          # no object-file ABI or stale dependency contamination.
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$work/instrumented-toolchain" \
+            "$work/instrumented-toolchain/bin/minic" \
+            "$work/instrumented-toolchain/bin/minic-cc" \
+            >"$work/evidence/instrumented-build.log" 2>&1
+          echo "CORE_OBJECT_AUDIT_TOOLCHAIN=PASS"
+
+      - name: Restore frozen first500 corpus
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-perf-corpus
+          key: linux-6.6.143-first500-rv64-v1-${{ hashFiles('tests/external/linux/batch_probe.sh', 'tests/external/linux/probe.sh', 'tests/external/linux/replay-indices.txt') }}
+
+      - name: Validate cached inputs and identify five historical hotspots
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/core-object-slot-top5-v1"
+          corpus=build/linux-perf-corpus
+          test -s "$corpus/selected-tus.txt"
+          test "$(grep -cve '^[[:space:]]*$' "$corpus/selected-tus.txt")" -eq 500
+          test "$(wc -l < "$corpus/inputs.sha256")" -eq 500
+          sha256sum --status --check "$corpus/inputs.sha256"
+          python3 - <<'PY' | tee "$work/evidence/top5-manifest.txt"
+          from pathlib import Path
+          want=[195,357,232,194,219]
+          corpus=Path("build/linux-perf-corpus")
+          rows={}
+          for line in (corpus/"selected-tus.txt").read_text().splitlines():
+              if not line.strip(): continue
+              index,obj,rel,source=line.split("\t",3)
+              rows[int(index)]=(obj,rel,source)
+          for index in want:
+              if index not in rows:
+                  raise SystemExit(f"MISSING_HISTORICAL_TOP5_INDEX={index}")
+              obj,rel,source=rows[index]
+              p=corpus/"kbuild"/rel
+              if not p.is_file() or not p.stat().st_size:
+                  raise SystemExit(f"MISSING_TOP5_INPUT={p}")
+              print(f"TOP5_FROZEN_INPUT index={index} bytes={p.stat().st_size} input={rel} object={obj} source={source}")
+          PY
+          echo "CORE_OBJECT_AUDIT_CACHE=VERIFIED selected=500 top5=5"
+
+      - name: Measure object lifetime, address scans, slot coloring on Top5
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/core-object-slot-top5-v1"
+          python3 - <<'PY' | tee "$work/evidence/object-profile-summary.txt"
+          import hashlib, os, pathlib, re, statistics, subprocess, time
+          corpus=pathlib.Path("build/linux-perf-corpus")
+          work=pathlib.Path("build/core-object-slot-top5-v1")
+          rows={}
+          for line in (corpus/"selected-tus.txt").read_text().splitlines():
+              if line.strip():
+                  n,obj,rel,source=line.split("\t",3);rows[int(n)]=(obj,rel,source)
+          baseline=work/"baseline-toolchain/bin/minic"
+          candidate=work/"instrumented-toolchain/bin/minic"
+          pat=re.compile(r"CORE_OBJECT_SLOT_AUDIT (.+)")
+          chosen=[195,357,232,194,219]
+          totals={}
+          for index in chosen:
+              _,rel,_=rows[index]
+              source=corpus/"kbuild"/rel
+              times={"baseline":[],"instrumented":[]}
+              counters=None
+              for repeat in range(3):
+                  # Alternate A/B order to avoid warm-cache ordering bias.
+                  pairs=[("baseline",baseline),("instrumented",candidate)]
+                  if repeat % 2:
+                      pairs.reverse()
+                  hashes={}
+                  for kind,binary in pairs:
+                      out=work/"evidence"/f"top5-{index}-{repeat}-{kind}.s"
+                      env=os.environ.copy()
+                      if kind=="instrumented":
+                          env["MINIC_CORE_OBJECT_SLOT_AUDIT"]="1"
+                      start=time.monotonic_ns()
+                      p=subprocess.run([str(binary),"-S",str(source),"-o",str(out)],
+                          capture_output=True,text=True,env=env)
+                      seconds=(time.monotonic_ns()-start)/1e9
+                      if p.returncode or not out.is_file() or not out.stat().st_size:
+                          raise SystemExit(f"COMPILE_FAIL index={index} repeat={repeat} kind={kind} rc={p.returncode} stderr={p.stderr[-2000:]}")
+                      times[kind].append(seconds)
+                      hashes[kind]=hashlib.sha256(out.read_bytes()).hexdigest()
+                      if kind=="instrumented":
+                          matches=pat.findall(p.stderr)
+                          if len(matches)!=1:
+                              raise SystemExit(f"COUNTERS_MISSING index={index}: {p.stderr[-1800:]}")
+                          row=dict((k,int(v)) for k,v in re.findall(r"(\w+)=(\d+)",matches[0]))
+                          if repeat==0: counters=row
+                          else:
+                              assert row==counters,(index,repeat,row,counters)
+                  if hashes["baseline"]!=hashes["instrumented"]:
+                      raise SystemExit(f"INSTRUMENTED_ASM_MISMATCH index={index} repeat={repeat}")
+              for key,value in counters.items():
+                  totals[key]=totals.get(key,0)+value
+              print(f"TOP5_OBJECT_AUDIT index={index} input={rel} "
+                  f"baseline_median_s={statistics.median(times['baseline']):.6f} "
+                  f"instrumented_median_s={statistics.median(times['instrumented']):.6f} "
+                  + " ".join(f"{k}={v}" for k,v in counters.items()),flush=True)
+          print("TOP5_OBJECT_TOTAL "+" ".join(f"{k}={v}" for k,v in totals.items()),flush=True)
+          print("TOP5_OBJECT_AUDIT_STATUS=PASS exact_asm=15/15",flush=True)
+          PY
+          # Keep the profile summary and manifest only, not 30 large .s files.
+          find "$work/evidence" -type f -name 'top5-*.s' -delete
+
+      - name: Upload Core object reuse evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-core-object-slot-top5-audit-v1
+          path: build/core-object-slot-top5-v1/evidence
+          retention-days: 7
