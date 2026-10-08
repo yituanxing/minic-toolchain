@@ -1,0 +1,91 @@
+name: Linux Serio Preprocessed Input Rematerialization V1
+on:
+  push:
+    branches: [agent/linux-full3352-compile-fixes-v1]
+    paths: [.github/workflows/linux-serio-rematerialize-v1.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install RISC-V prerequisites
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            build-essential gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
+            libc6-dev-riscv64-cross bc bison flex libssl-dev make curl xz-utils python3 >/dev/null
+      - name: Build fixed compiler profile
+        run: |
+          set -Eeuo pipefail
+          mkdir -p build/serio-diagnosis/evidence
+          bash tools/ci/linux-runtime-build-minic-profile-v1.sh build/serio-diagnosis/toolchain build/serio-diagnosis/evidence/profile
+      - name: Materialize exact serio TU through Kbuild
+        run: |
+          set -Eeuo pipefail
+          MINIC="$GITHUB_WORKSPACE/build/serio-diagnosis/toolchain/bin/minic" \
+            BUILD_DIR="$GITHUB_WORKSPACE/build/serio-diagnosis/corpus" \
+            LINUX_ARCHIVE_CACHE="$GITHUB_WORKSPACE/build/serio-diagnosis/linux-6.6.143.tar.xz" \
+            CROSS_COMPILE=riscv64-linux-gnu- LINUX_BATCH_SELECTION=2768 \
+            LINUX_BATCH_MATERIALIZE_ONLY=1 sh tests/external/linux/batch_probe.sh
+      - name: Check raw GCC syntax then rebuild only the suspect TU serially
+        run: |
+          set -Eeuo pipefail
+          root="$GITHUB_WORKSPACE/build/serio-diagnosis"
+          src="$root/corpus/linux-6.6.143"
+          out="$root/corpus/kbuild"
+          input="$out/drivers/input/serio/serio.i"
+          test -s "$input"
+          cp "$input" "$root/evidence/serio-initial.i"
+          sha256sum "$input" | tee "$root/evidence/initial.sha256"
+          set +e
+          riscv64-linux-gnu-gcc -x cpp-output -fsyntax-only -w -fmax-errors=3 "$input" >"$root/evidence/initial-gcc.txt" 2>&1
+          gcc_initial=$?
+          "$root/toolchain/bin/minic" -S "$input" -o "$root/initial.s" >"$root/evidence/initial-minic.txt" 2>&1
+          minic_initial=$?
+          set -e
+          echo "SERIO_INPUT_INITIAL gcc_rc=$gcc_initial minic_rc=$minic_initial"
+          head -n 8 "$root/evidence/initial-gcc.txt"
+          head -n 3 "$root/evidence/initial-minic.txt"
+          touch "$src/drivers/input/serio/serio.c"
+          set +e
+          make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
+            KCFLAGS=-save-temps=obj -j1 drivers/input/serio/serio.o \
+            >"$root/evidence/serial-make.log" 2>&1
+          make_rc=$?
+          riscv64-linux-gnu-gcc -x cpp-output -fsyntax-only -w -fmax-errors=3 "$input" >"$root/evidence/rebuilt-gcc.txt" 2>&1
+          gcc_rebuilt=$?
+          "$root/toolchain/bin/minic" -S "$input" -o "$root/rebuilt.s" >"$root/evidence/rebuilt-minic.txt" 2>&1
+          minic_rebuilt=$?
+          set -e
+          sha256sum "$input" | tee "$root/evidence/rebuilt.sha256"
+          echo "SERIO_INPUT_REBUILT make_rc=$make_rc gcc_rc=$gcc_rebuilt minic_rc=$minic_rebuilt"
+          tail -n 7 "$root/evidence/serial-make.log"
+          head -n 10 "$root/evidence/rebuilt-gcc.txt"
+          head -n 5 "$root/evidence/rebuilt-minic.txt"
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path("build/serio-diagnosis/corpus/kbuild/drivers/input/serio/serio.i")
+          s=p.read_text(errors="replace")
+          for line in s.splitlines():
+              if line.startswith("static int serio_match_port("):
+                  print("SERIO_MATCH_PORT_DECL="+line[:220])
+                  break
+          PY
+      - name: Upload exact before-after diagnostic artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: serio-rematerialization-diagnostics
+          path: |
+            build/serio-diagnosis/evidence/initial-gcc.txt
+            build/serio-diagnosis/evidence/initial-minic.txt
+            build/serio-diagnosis/evidence/rebuilt-gcc.txt
+            build/serio-diagnosis/evidence/rebuilt-minic.txt
+            build/serio-diagnosis/evidence/serial-make.log
+            build/serio-diagnosis/evidence/*.sha256
+          retention-days: 7
