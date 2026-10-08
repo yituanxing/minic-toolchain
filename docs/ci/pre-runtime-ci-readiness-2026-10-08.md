@@ -1,5 +1,7 @@
 # Pre-runtime CI / branch readiness audit — 2026-10-08
 
+> **Cross-branch cleanup update:** The performance branch now has **63** active workflows (down from 91) after [one atomic exact-blob move of 28 already-retired historical definitions](https://github.com/yituanxing/minic-toolchain/commit/bf41acfc34e14cddafd9686d069076a25c2c5e44). Runtime remains at **64** active. **68** workflow names are active across both branches combined, down from **100**. Four live perf-only tests are preserved. No source integration, perf measurement or runtime boot is claimed by this workflow-only maintenance.
+
 > **Retirement follow-up (same date):** Four old distributed experiment/receiver workflow definitions have now been archived with exact SHA verification. The inventory is **64 active / 264 disabled**, still four remote branches. The original **68/260** figures below are the pre-retirement audit snapshot. Retired workflow paths, original blob SHA, underlying proof and retained contracts are documented in [the retirement ledger](distributed-workflow-retirement-2026-10-08.md). The full-Image integrated workflow still awaits its own full current-head CI verification; QEMU has not booted successfully.
 
 This ledger is a *pre-runtime stabilization checkpoint*, not a new QEMU or
