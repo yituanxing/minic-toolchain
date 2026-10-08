@@ -21,6 +21,7 @@ jobs:
           mkdir -p "$work"
           bash tools/ci/linux-runtime-build-minic-profile-v1.sh "$work/baseline" "$work/profile"
           python3 tools/ci/apply-correctness-choose-eager-condition-v1.py
+          python3 tools/ci/apply-debug-choose-ast-v1.py
           git diff --check
           make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$work/candidate" \
             "$work/candidate/bin/minic" "$work/candidate/bin/minic-cc" >/dev/null
