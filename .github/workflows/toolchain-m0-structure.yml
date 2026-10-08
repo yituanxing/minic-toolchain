@@ -21,6 +21,11 @@ on:
       - '.github/workflows/minias-a0-focused-diagnostics-v1.yml'
       - '.github/workflows/linux-core-all3352.yml'
       - '.github/workflows/core-first500-regression.yml'
+      - '.github/workflows/linux-runtime-gcc-baseline.yml'
+      - '.github/workflows/linux-vdso-focused.yml'
+      - '.github/workflows/linux-efistub-diff-v0.yml'
+      - '.github/workflows/minic-driver-v0.yml'
+      - '.github/workflows/minipp-a0.yml'
       - 'tools/ci/linux-distributed-full-image-v1.sh'
       - 'tools/ci/linux-distributed-canonical-delay-v1.py'
       - 'tools/ci/linux-distributed-provenance-audit-v2.py'
@@ -74,6 +79,10 @@ jobs:
           ruby -e 'require "yaml"; YAML.parse_file(ARGV.fetch(0)); puts "M0_MINIAS_FOCUSED_YAML=PASS"' .github/workflows/minias-a0-focused-diagnostics-v1.yml
           ruby -e 'require "yaml"; YAML.parse_file(ARGV.fetch(0)); puts "M0_LINUX_CORE_3352_YAML=PASS"' .github/workflows/linux-core-all3352.yml
           ruby -e 'require "yaml"; YAML.parse_file(ARGV.fetch(0)); puts "M0_CORE_FOCUSED_YAML=PASS"' .github/workflows/core-first500-regression.yml
+          for f in linux-runtime-gcc-baseline.yml linux-vdso-focused.yml linux-efistub-diff-v0.yml minic-driver-v0.yml minipp-a0.yml; do
+            ruby -e 'require "yaml"; YAML.parse_file(ARGV.fetch(0))' ".github/workflows/$f"
+          done
+          echo "M0_LIVE_TRIGGER_YAML=PASS workflows=5"
           python3 - <<'PY_CI'
           from pathlib import Path
           yaml = Path('.github/workflows/linux-distributed-full-image-signedness-v2.yml').read_text()
@@ -252,6 +261,23 @@ jobs:
           new_steps = core_focused.split('\n  focused-five:\n', 1)[1].split('    steps:\n', 1)[1].rstrip()
           assert old_steps == new_steps, 'Historical Core focused-five steps changed'
           print('M0_CORE_FOCUSED=PASS jobs=2 old_five_steps_exact=1 archived_sha=PASS')
+
+          live_specs = {
+              'linux-runtime-gcc-baseline.yml': ('[linux-runtime-gcc]', 'refactor/declaration-sema-v1'),
+              'linux-vdso-focused.yml': ('[linux-vdso-focused]', 'refactor/declaration-sema-v1'),
+              'linux-efistub-diff-v0.yml': ('[linux-efistub-diff]', 'agent/linux-link-correctness-v0'),
+              'minic-driver-v0.yml': ('[minic-driver-v0]', 'toolchain/minic-driver-v0'),
+              'minipp-a0.yml': ('', 'toolchain/minipp-*'),
+          }
+          for file, (tag, stale) in live_specs.items():
+              wf = (Path('.github/workflows') / file).read_text()
+              assert 'agent/linux-expanded-kbuild-v0' in wf
+              assert 'agent/linux-perf-boolean-domain-v1' in wf
+              assert stale not in wf, f'Obsolete trigger branch: {file}'
+              assert 'workflow_dispatch:' in wf
+              if tag:
+                  assert tag in wf and 'github.event_name' in wf, f'Missing heavy opt-in: {file}'
+          print('M0_LIVE_TRIGGERS=PASS current_dev_branches=2 fixed_workflows=5')
           PY_CI
 
       - name: Build frozen compiler boundary

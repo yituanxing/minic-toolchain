@@ -3,7 +3,8 @@ name: MiniPP A0 Exact
 on:
   push:
     branches:
-      - 'toolchain/minipp-*'
+      - "agent/linux-expanded-kbuild-v0"
+      - "agent/linux-perf-boolean-domain-v1"
     paths:
       - 'preprocessor/**'
       - 'tools/minic-cpp/**'
