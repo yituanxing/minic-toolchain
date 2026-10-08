@@ -15,6 +15,9 @@ on:
       - '.github/workflows/linux-distributed-full-image-signedness-v2.yml'
       - '.github/workflows/miniobjcopy-strip-regressions-v1.yml'
       - '.github/workflows/minipp-linux-exact-smoke.yml'
+      - '.github/workflows/linux-runtime-spinlock-context-v0.yml'
+      - '.github/workflows/linux-runtime-fdt-isolation-v1.yml'
+      - '.github/workflows/linux-runtime-generated-kallsyms-first-die-v0.yml'
       - 'tools/ci/linux-distributed-full-image-v1.sh'
       - 'tools/ci/linux-distributed-canonical-delay-v1.py'
       - 'tools/ci/linux-distributed-provenance-audit-v2.py'
@@ -61,6 +64,10 @@ jobs:
             tools/ci/linux-distributed-image-plan-v1.py
           ruby -e 'require "yaml"; YAML.parse_file(ARGV.fetch(0)); puts "M0_MINIOBJCOPY_YAML=PASS"' .github/workflows/miniobjcopy-strip-regressions-v1.yml
           ruby -e 'require "yaml"; YAML.parse_file(ARGV.fetch(0)); puts "M0_MINIPP_LIVE_YAML=PASS"' .github/workflows/minipp-linux-exact-smoke.yml
+          for f in linux-runtime-spinlock-context-v0.yml linux-runtime-fdt-isolation-v1.yml linux-runtime-generated-kallsyms-first-die-v0.yml; do
+            ruby -e 'require "yaml"; YAML.parse_file(ARGV.fetch(0))' ".github/workflows/$f"
+          done
+          echo "M0_RUNTIME_FOCUSED_YAML=PASS owners=3"
           python3 - <<'PY_CI'
           from pathlib import Path
           yaml = Path('.github/workflows/linux-distributed-full-image-signedness-v2.yml').read_text()
@@ -134,6 +141,48 @@ jobs:
               git_blob = b'blob ' + str(len(data)).encode() + bytes([0]) + data
               assert hashlib.sha1(git_blob).hexdigest() == sha, f'MiniPP archival blob mismatch: {fname}'
           print('M0_MINIPP_LIVE_EXACT=PASS jobs=3 archived=2 blobs_identical=2')
+
+          # Every legacy QEMU/compilation job must remain byte-identical
+          # (except the new job-level opt-in selector) and recoverable.
+          runtime_groups = (
+              ('linux-runtime-spinlock-context-v0.yml', 'context', {
+                  'linux-runtime-spinlock-codegen-v0.yml': ('spinlock-codegen', 'dbd4e9cf8be3aca8e0b23359a8daf4283649bd9f'),
+                  'linux-runtime-spinlock-first-context-v0.yml': ('spinlock-first-context', '83d77ea7dfaff4eb204b902363df42c428063292'),
+                  'linux-runtime-spinlock-stack-v0.yml': ('spinlock-stack', 'a9e55e5f74309e090b78fe3dc4d141502d5866c2'),
+              }),
+              ('linux-runtime-fdt-isolation-v1.yml', 'isolation', {
+                  'linux-runtime-fdt-ro-codegen-v0.yml': ('fdt-ro-codegen', 'bbac9494c79603df4146fb08118ee1007a6b66c9'),
+              }),
+              ('linux-runtime-generated-kallsyms-first-die-v0.yml', 'generated', {
+                  'linux-runtime-first-die-context-v0.yml': ('kallsyms-first-fault-abc', '90e6d9e2244bb4a602321617c661a8a33c5faa65'),
+                  'linux-runtime-kallsyms-object-diagnose-v0.yml': ('kallsyms-object-diagnose', 'b0321f094495926553191f8d5ba85566ce3a6a62'),
+              }),
+          )
+          retained_jobs = 3
+          archived_jobs = 0
+          for owner, default_mode, archived_files in runtime_groups:
+              merged = (Path('.github/workflows') / owner).read_text()
+              assert ("default: '" + default_mode + "'") in merged, f'Wrong focused selector: {owner}'
+              assert "          - 'all'" in merged, f'No exhaustive mode: {owner}'
+              assert "github.event_name == 'workflow_dispatch'" in merged
+              assert "github.event_name == 'push'" in merged
+              for fname, (job, sha) in archived_files.items():
+                  assert not (Path('.github/workflows') / fname).exists(), f'Old focused workflow active: {fname}'
+                  contents = (Path('.github/workflows-disabled') / fname).read_bytes()
+                  data = b'blob ' + str(len(contents)).encode() + bytes([0]) + contents
+                  assert hashlib.sha1(data).hexdigest() == sha, f'Lost historical Git blob: {fname}'
+                  original = contents.decode('utf-8')
+                  assert '\\njobs:\\n' in original, f'No source jobs section: {fname}'
+                  source_section = original.split('\\njobs:\\n', 1)[1]
+                  mark = '  ' + job + ':\\n'
+                  assert mark in source_section, f'Original job absent: {fname}'
+                  old_body = source_section.split(mark, 1)[1].rstrip()
+                  assert old_body in merged, f'Legacy job executable body altered: {fname}'
+                  assert ("  " + job + ":\\n") in merged, f'Legacy job selector absent: {fname}'
+                  retained_jobs += 1
+                  archived_jobs += 1
+          assert retained_jobs == 9 and archived_jobs == 6
+          print('M0_RUNTIME_FOCUSED=PASS owners=3 jobs=9 archived=6 original_job_bodies_exact=6')
           PY_CI
 
       - name: Build frozen compiler boundary
