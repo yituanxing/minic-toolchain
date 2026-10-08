@@ -13,6 +13,7 @@ on:
       - 'tests/driver/run-busybox-kbuild-routing-v0.sh'
       - '.github/workflows/toolchain-m0-structure.yml'
       - '.github/workflows/linux-distributed-full-image-signedness-v2.yml'
+      - '.github/workflows/miniobjcopy-strip-regressions-v1.yml'
       - 'tools/ci/linux-distributed-full-image-v1.sh'
       - 'tools/ci/linux-distributed-canonical-delay-v1.py'
       - 'tools/ci/linux-distributed-provenance-audit-v2.py'
@@ -57,6 +58,7 @@ jobs:
             tools/ci/linux-distributed-canonical-delay-v1.py \
             tools/ci/linux-distributed-provenance-audit-v2.py \
             tools/ci/linux-distributed-image-plan-v1.py
+          ruby -e 'require "yaml"; YAML.parse_file(ARGV.fetch(0)); puts "M0_MINIOBJCOPY_YAML=PASS"' .github/workflows/miniobjcopy-strip-regressions-v1.yml
           python3 - <<'PY_CI'
           from pathlib import Path
           yaml = Path('.github/workflows/linux-distributed-full-image-signedness-v2.yml').read_text()
@@ -88,6 +90,29 @@ jobs:
               assert actual == original_sha, f'Altered archived workflow {fname}: {actual}'
           print('M0_DISTRIBUTED_RETIREMENT=PASS archived=4 identical_git_blobs=4')
           print('M0_DISTRIBUTED_IMAGE_CONTRACT=PASS self_contained=1 strict_replay=1')
+
+          # Combined MiniObjcopy workflow retains 3 independent contracts,
+          # while historical YAMLs stay bit-identical in disabled archives.
+          mini = Path('.github/workflows/miniobjcopy-strip-regressions-v1.yml')
+          mini_text = mini.read_text()
+          expected_modes = ('regressions', 'linux-tool', 'linux-image')
+          for job in expected_modes:
+              assert '\n  ' + job + ':\n' in mini_text, f'Missing MiniObjcopy job: {job}'
+          assert "default: regressions" in mini_text
+          assert "inputs.mode == 'linux-tool'" in mini_text
+          assert "inputs.mode == 'linux-image'" in mini_text
+          assert "github.event_name == 'push'" in mini_text
+          assert "run-id: 33623125809" in mini_text, 'Historical frozen reference must not silently change'
+          mini_retirements = {
+              'miniobjcopy-linux-tool-gate.yml': '60ee9e904a535bc599339def2efeed3f9b6c8c72',
+              'miniobjcopy-linux-image-gate.yml': '69d74b896da76e99364c31291b98fbc9067905b1',
+          }
+          for fname, sha in mini_retirements.items():
+              assert not (Path('.github/workflows') / fname).exists(), f'Old MiniObjcopy workflow active: {fname}'
+              data = (Path('.github/workflows-disabled') / fname).read_bytes()
+              git_blob = b'blob ' + str(len(data)).encode() + bytes([0]) + data
+              assert hashlib.sha1(git_blob).hexdigest() == sha, f'Old MiniObjcopy YAML modified: {fname}'
+          print('M0_MINIOBJCOPY_CONVERGENCE=PASS jobs=3 archived=2 blobs_identical=2')
           PY_CI
 
       - name: Build frozen compiler boundary
