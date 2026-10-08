@@ -12,6 +12,11 @@ on:
       - 'tests/external/linux/stage2_kbuild_cc*.sh'
       - 'tests/driver/run-busybox-kbuild-routing-v0.sh'
       - '.github/workflows/toolchain-m0-structure.yml'
+      - '.github/workflows/linux-distributed-full-image-signedness-v2.yml'
+      - 'tools/ci/linux-distributed-full-image-v1.sh'
+      - 'tools/ci/linux-distributed-canonical-delay-v1.py'
+      - 'tools/ci/linux-distributed-provenance-audit-v2.py'
+      - 'tools/ci/linux-distributed-image-plan-v1.py'
   workflow_dispatch:
 
 jobs:
@@ -42,6 +47,32 @@ jobs:
           BUILD_DIR="$GITHUB_WORKSPACE/build/m0-busybox-kbuild-routing-v0" \
             bash tests/driver/run-busybox-kbuild-routing-v0.sh
           echo "M0_BUSYBOX_KBUILD_ROUTING=PASS"
+
+      - name: Validate distributed Image canonical CI contracts (no Linux build)
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          bash -n tools/ci/linux-distributed-full-image-v1.sh
+          python3 -m py_compile \
+            tools/ci/linux-distributed-canonical-delay-v1.py \
+            tools/ci/linux-distributed-provenance-audit-v2.py \
+            tools/ci/linux-distributed-image-plan-v1.py
+          python3 - <<'PY_CI'
+          from pathlib import Path
+          yaml = Path('.github/workflows/linux-distributed-full-image-signedness-v2.yml').read_text()
+          expected = (
+              'MINIC_DISTRIBUTED_STRICT_REPLAY:',
+              'MINIC_DISTRIBUTED_CANONICALIZE_DELAY_CMD:',
+              'needs: shards',
+              'bash tools/ci/linux-distributed-full-image-v1.sh image',
+              'bash tools/ci/linux-distributed-full-image-v1.sh qemu',
+              'reuse-final-check.txt',
+          )
+          missing = [x for x in expected if x not in yaml]
+          assert not missing, 'Missing distributed Image contract: ' + ', '.join(missing)
+          assert 'run-id:' not in yaml, 'Canonical Image workflow must create its own shards'
+          print('M0_DISTRIBUTED_IMAGE_CONTRACT=PASS self_contained=1 strict_replay=1')
+          PY_CI
 
       - name: Build frozen compiler boundary
         if: github.ref != 'refs/heads/agent/linux-expanded-kbuild-v0'
