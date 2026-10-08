@@ -1,4 +1,4 @@
-name: Linux GNU Choose Eager Condition Targeted V1
+name: Linux GNU Constant P ICE Targeted V1
 on:
   push:
     branches: [agent/linux-full3352-compile-fixes-v1]
@@ -20,12 +20,11 @@ jobs:
           work=build/choose-eager-target
           mkdir -p "$work"
           bash tools/ci/linux-runtime-build-minic-profile-v1.sh "$work/baseline" "$work/profile"
-          python3 tools/ci/apply-correctness-choose-eager-condition-v1.py
-          python3 tools/ci/apply-debug-choose-ast-v1.py
+          python3 tools/ci/apply-correctness-constant-p-ice-v1.py
           git diff --check
           make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$work/candidate" \
             "$work/candidate/bin/minic" "$work/candidate/bin/minic-cc" >/dev/null
-          echo CHOOSE_EAGER_BUILD=PASS
+          echo CONSTANT_P_ICE_BUILD=PASS
       - name: Restore exact reproducible failing Linux preprocessed files
         uses: actions/download-artifact@v4
         with:
@@ -51,13 +50,13 @@ jobs:
             "$work/candidate/bin/minic" -S "$input" -o "$work/candidate-$name.s" >"$work/candidate-$name.log" 2>&1
             new_rc=$?
             set -e
-            echo "CHOOSE_EAGER_CASE name=$name baseline_rc=$old_rc candidate_rc=$new_rc"
+            echo "CONSTANT_P_ICE_CASE name=$name baseline_rc=$old_rc candidate_rc=$new_rc"
             head -n 4 "$work/baseline-$name.log"
             head -n 8 "$work/candidate-$name.log"
             test "$old_rc" -ne 0
             test "$new_rc" -eq 0
           done
-          echo CHOOSE_EAGER_NOUVEAU_REPRESENTATIVES=PASS
+          echo CONSTANT_P_ICE_NOUVEAU_REPRESENTATIVES=PASS
       - name: Upload results
         if: always()
         uses: actions/upload-artifact@v4
