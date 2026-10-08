@@ -1,0 +1,90 @@
+name: Linux Distributed Image Receiver Reuse V1
+# Reuse the seven independently certified 3352 real Kbuild object shards from
+# run 37767282927; do NOT spend another 7x full compile while debugging receiver.
+on:
+  push:
+    branches: [agent/linux-expanded-kbuild-v0]
+    paths:
+      - '.github/workflows/linux-distributed-image-receiver-reuse-v1.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: linux-distributed-image-receiver-reuse-v1
+  cancel-in-progress: false
+
+jobs:
+  receiver:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 160
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Restore pinned manifest and exact config identity from successful graph
+        uses: actions/download-artifact@v4
+        with:
+          name: distributed-full-image-plan-v1
+          run-id: 37767282927
+          github-token: ${{ github.token }}
+          path: build/linux-distributed-full-image-v1/plan
+
+      - name: Restore seven true MiniC Kbuild object+cmd producer artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: distributed-full-image-shard-*
+          run-id: 37767282927
+          github-token: ${{ github.token }}
+          path: build/linux-distributed-full-image-v1/incoming
+          merge-multiple: false
+
+      - name: Install *exact producer* RISC-V build prerequisites, no QEMU additions
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get -o Acquire::Retries=3 update -qq
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu build-essential \
+            bc bison flex libssl-dev libelf-dev make curl xz-utils python3
+
+      - name: Prepare independent identically configured RISC-V Linux and MiniC
+        run: |
+          set -Eeuo pipefail
+          printf 'DIST_IMAGE_REUSED_RUN=37767282927\n'
+          bash tools/ci/linux-distributed-full-image-v1.sh prepare
+          grep -qx 'e538a6ad42ec49c5a667cab5de9bb943f82ca702ff2b7749a020e38ff7ddaea7' build/linux-distributed-full-image-v1/config.sha256
+          grep -qx 'c1333f97fb2139de7d5272525a384b9c59f87b1dc981c42c4ac18e1a9778c71a' build/linux-distributed-full-image-v1/compiler.sha256
+
+      - name: Verify and restore all 3352 real Kbuild objects, then build Image
+        run: bash tools/ci/linux-distributed-full-image-v1.sh image
+
+      - name: Install QEMU after config and Image are finalized
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            qemu-system-misc opensbi cpio gzip libc6-dev-riscv64-cross device-tree-compiler
+          qemu-system-riscv64 --version | head -n 1
+
+      - name: Validate real Image in RISC-V QEMU
+        run: bash tools/ci/linux-distributed-full-image-v1.sh qemu
+
+      - name: Preserve exact receiver evidence, including any failure stage
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: distributed-full-image-receiver-reuse-v1
+          path: |
+            build/linux-distributed-full-image-v1/config.sha256
+            build/linux-distributed-full-image-v1/compiler.sha256
+            build/linux-distributed-full-image-v1/image.log
+            build/linux-distributed-full-image-v1/image.trace
+            build/linux-distributed-full-image-v1/image-summary.txt
+            build/linux-distributed-full-image-v1/reuse.sha256
+            build/linux-distributed-full-image-v1/final-compiled.txt
+            build/linux-distributed-full-image-v1/qemu.log
+            build/linux-distributed-full-image-v1/qemu-summary.txt
+          if-no-files-found: warn
+          retention-days: 7
