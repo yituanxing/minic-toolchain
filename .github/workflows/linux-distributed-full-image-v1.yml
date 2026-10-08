@@ -62,6 +62,29 @@ jobs:
             "$work/plan.raw" "$out" "$work/manifest.tsv" 7 | tee "$work/summary.txt"
           head -n 3 "$work/manifest.tsv"
           tail -n 3 "$work/manifest.tsv"
+      - name: Prove GNU constant-p ICE on a previously failing real Nouveau target
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-distributed-image-graph-v1"
+          src="$work/linux-6.6.143"
+          out="$work/out"
+          bash tools/ci/linux-runtime-build-minic-profile-v1.sh "$work/toolchain" "$work/profile"
+          python3 tools/ci/apply-correctness-constant-p-ice-v1.py | tee "$work/ice-patch.txt"
+          git diff --check
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$work/toolchain" \
+            "$work/toolchain/bin/minic" "$work/toolchain/bin/minic-cc" >/dev/null
+          : >"$work/nouveau.trace"
+          MINIC="$work/toolchain/bin/minic" REAL_CC=/usr/bin/riscv64-linux-gnu-gcc \
+            MINIC_KBUILD_TRACE="$work/nouveau.trace" CORE_FAST_TRACE=0 \
+            make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
+            CC="$GITHUB_WORKSPACE/tests/external/linux/stage2_kbuild_cc.sh" \
+            -j1 V=1 drivers/gpu/drm/nouveau/nouveau_drm.o \
+              >"$work/nouveau.log" 2>&1 || { tail -n 85 "$work/nouveau.log"; exit 1; }
+          test -s "$out/drivers/gpu/drm/nouveau/nouveau_drm.o"
+          grep -Fq 'pass source=' "$work/nouveau.trace"
+          riscv64-linux-gnu-readelf -h "$out/drivers/gpu/drm/nouveau/nouveau_drm.o" \
+            | grep -q 'Machine:.*RISC-V'
+          echo 'DIST_IMAGE_NOUVEAU_ICE=PASS targeted_real_kbuild=1' | tee "$work/nouveau-result.txt"
       - name: Preserve reproducible full Image plan and exact config
         if: always()
         uses: actions/upload-artifact@v4
@@ -73,6 +96,10 @@ jobs:
             build/linux-distributed-image-graph-v1/manifest.sha256
             build/linux-distributed-image-graph-v1/summary.txt
             build/linux-distributed-image-graph-v1/plan.stderr
+            build/linux-distributed-image-graph-v1/nouveau.log
+            build/linux-distributed-image-graph-v1/nouveau.trace
+            build/linux-distributed-image-graph-v1/nouveau-result.txt
+            build/linux-distributed-image-graph-v1/ice-patch.txt
           if-no-files-found: warn
           retention-days: 7
 

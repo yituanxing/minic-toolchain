@@ -34,6 +34,15 @@ case "$mode" in
     sha256sum "$out/.config" | awk '{print $1}' >"$work/config.sha256"
     cmp "$work/config.sha256" <(awk '{print $1}' "$work/plan/config.sha256")
     bash "$root/tools/ci/linux-runtime-build-minic-profile-v1.sh" "$work/toolchain" "$work/profile"
+    # The certified 39-patch profile alone cannot parse Nouveau's
+    # __builtin_choose_expr(__builtin_constant_p(...)) ICE constructs.
+    # Isolate this tested single correctness patch to the *experiment*,
+    # never silently change the canonical Linux Image profile.
+    python3 "$root/tools/ci/apply-correctness-constant-p-ice-v1.py" >"$work/profile/constant-p-ice.log"
+    git diff --check
+    make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$work/toolchain" \
+      "$work/toolchain/bin/minic" "$work/toolchain/bin/minic-cc" >/dev/null
+    printf '%s\n' 'apply-correctness-constant-p-ice-v1.py' >>"$work/profile/minic-profile.txt"
     sha256sum "$compiler" | awk '{print $1}' >"$work/compiler.sha256"
     echo "DIST_IMAGE_PREPARE=PASS objects=$total config=$(cat "$work/config.sha256") compiler=$(cat "$work/compiler.sha256")"
     ;;

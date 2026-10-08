@@ -26,3 +26,9 @@ Stop and inspect evidence if: manifest differs, shard compilation fails, transfe
 identity mismatches, any requested object is recompiled on the receiver, the
 Image is missing/invalid, or QEMU fails. The first phase is a full graph gate,
 not a claim that Linux now boots.
+
+## First full 7-shard trial and follow-up
+
+[Run 37764394522](https://github.com/yituanxing/minic-toolchain/actions/runs/37764394522) completed with **failure** at the compiler shard phase; the receiver did not execute. Examining all seven preserved full Kbuild logs revealed **45 failing Nouveau objects**, across shards 0–6 (6, 5, 10, 7, 4, 5, 8); **every reported C error** is `__builtin_choose_expr condition must be an integer constant expression`. The 39-patch canonical runtime compiler lacks the separately tested `apply-correctness-constant-p-ice-v1.py` patch present in opt-in performance and GCC/QEMU regression runs. This is a real compiler ICE-correctness issue, not a failed transfer, cache miss or Linux linker failure.
+
+New gated experiment: first compile one of the failing Nouveau `.o` with the **39-patch + single correctness ICE patch** combination. Seven complete C-object shards only start when this bounded regression passes. Producer and receiver use the identical 39+ICE compiler and compare its binary SHA256; the existing certified production 39-patch compiler is never changed. This does **not** silently upgrade the canonical compiler or certify the final Image/QEMU.
