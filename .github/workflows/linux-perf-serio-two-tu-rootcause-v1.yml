@@ -32,8 +32,9 @@ jobs:
             LINUX_ARCHIVE_CACHE="$work/linux-6.6.143.tar.xz" \
             CROSS_COMPILE=riscv64-linux-gnu- \
             LINUX_BATCH_SELECTION='2768,2770' LINUX_BATCH_MATERIALIZE_ONLY=1 \
-            LINUX_BATCH_MATERIALIZE_CHUNK=2 \
+            LINUX_BATCH_MATERIALIZE_CHUNK=2 LINUX_BATCH_MATERIALIZE_MAKE_JOBS=1 \
             sh tests/external/linux/batch_probe.sh | tee "$work/evidence/materialize.log"
+          cp "$work/materialize/preprocess.log" "$work/evidence/preprocess.log"
           test "$(wc -l < "$work/materialize/selected-tus.txt")" -eq 2
           cut -f1,3 "$work/materialize/selected-tus.txt" | tee "$work/evidence/targets.tsv"
           grep -qx $'2768\tdrivers/input/serio/serio.i' "$work/evidence/targets.tsv"
@@ -48,6 +49,9 @@ jobs:
             gcc_rc=$?
             set -e
             echo "GCC_SYNTAX input=$p rc=$gcc_rc"
+            if test "$gcc_rc" -ne 0; then
+              echo "GCC_INVALID_INPUT=$p; compiler comparison will not treat this corpus as valid"
+            fi
             test "$gcc_rc" -eq 0
           done
       - name: Build old Runtime and five exact candidate variants
