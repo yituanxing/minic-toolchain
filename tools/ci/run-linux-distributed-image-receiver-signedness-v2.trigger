@@ -8,3 +8,4 @@
 source_run=37787452745
 corrected_minic_sha=e41c4becdfb614ea736621ee0a449522a18a3ad2309258e9eeeff7bce317bd40
 strict-replay-v3: replay pinned 3352 MiniC object shards after generated-dependency Kbuild warmup; require 6704 exact hashes and zero final producer recompiles
+strict-replay-v4: validate canonical arch/riscv/lib/delay.o flags and byte identity, retain original hashes, then zero recompiles with one justified Kbuild .cmd reconciliation
