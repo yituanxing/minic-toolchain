@@ -16,7 +16,7 @@ def patch_once(path, edits):
         if n != 1:
             for needle in ("body->program->statement_count >", "statement_blocks =", "statement_index ="):
                 pos = text.find(needle)
-                print(f"PATCH_ANCHOR_CONTEXT needle={needle!r} offset={pos} text={text[max(0, pos - 120):pos + 550]!r}", flush=True)
+                print(f"PATCH_ANCHOR_CONTEXT needle={needle!r} offset={pos} text={text[max(0, pos - 120):pos + 550]!r}", file=__import__("sys").stderr, flush=True)
             raise SystemExit(f"{path}: expected one anchor, found {n}: {old[:100]!r}")
         text = text.replace(old, new, 1)
     p.write_text(text)
