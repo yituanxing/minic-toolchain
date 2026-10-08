@@ -19,25 +19,24 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Build canonical with and without CoreObject address-use indexing
+      - name: Build full Canonical P14 control and P15-only candidate
         shell: bash
         run: |
           set -Eeuo pipefail
           work="$GITHUB_WORKSPACE/build/core-object-interval-ab-v1"
           mkdir -p "$work/evidence"
-          MINIC_PERF_SKIP_CORE_ADDRESS_USE_INDEX=1 \
-            bash tools/ci/linux-runtime-build-minic-profile-v1.sh \
-            "$work/baseline" "$work/evidence/index-off-profile"
-          grep -qx 'SKIPPED_CORE_ADDRESS_USE_INDEX=apply-perf-core-object-interval-onepass-v1.py' \
-            "$work/evidence/index-off-profile/patch.log"
-          grep -qx 'apply-perf-parser-nearest-ordinary-scope-v1.py' \
-            "$work/evidence/index-off-profile/minic-profile.txt"
-          git reset --hard HEAD
           bash tools/ci/linux-runtime-build-minic-profile-v1.sh \
-            "$work/candidate" "$work/evidence/index-on-profile"
-          grep -qx 'apply-perf-core-object-interval-onepass-v1.py' \
-            "$work/evidence/index-on-profile/minic-profile.txt"
+            "$work/baseline" "$work/evidence/canonical-p14-profile"
+          grep -qx 'apply-perf-core-object-address-use-index-v1.py' \
+            "$work/evidence/canonical-p14-profile/minic-profile.txt"
+          grep -qx 'apply-perf-parser-nearest-ordinary-scope-v1.py' \
+            "$work/evidence/canonical-p14-profile/minic-profile.txt"
+          python3 tools/ci/apply-perf-core-object-interval-onepass-v1.py \
+            | tee "$work/evidence/onepass-p15-patch.txt"
           git diff --check
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$work/candidate" \
+            "$work/candidate/bin/minic" "$work/candidate/bin/minic-cc" \
+            >"$work/evidence/candidate-build.log" 2>&1
           echo "OBJECT_INTERVAL_ONEPASS_BUILD=PASS"
 
       - name: Restore verified first500 corpus
