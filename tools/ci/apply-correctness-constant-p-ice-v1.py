@@ -11,30 +11,25 @@ turning every query into literal 0, Core-local fact optimizations remain intact.
 from pathlib import Path
 p=Path("src/frontend/const_eval.c")
 s=p.read_text()
-anchor="""    switch (expression->kind) {
-    case MINIC_EXPRESSION_INTEGER:
-        value->type = expression->type;"""
-replace="""    switch (expression->kind) {
-    case MINIC_EXPRESSION_BUILTIN_UNARY: {
-        MinicConstValue ignored_operand;
-        bool known_constant;
-        if (expression->value.builtin_unary.operator_kind !=
+anchor="""    case MINIC_EXPRESSION_BUILTIN_UNARY:
+        return eval_builtin_unary(program, target, expression, depth, value);"""
+replace="""    case MINIC_EXPRESSION_BUILTIN_UNARY: {
+        if (expression->value.builtin_unary.operator_kind ==
             MINIC_BUILTIN_UNARY_CONSTANT_P) {
-            return false;
+            MinicConstValue ignored_operand;
+            bool known_constant;
+            /* In an ICE, GCC permits __builtin_constant_p(dynamic_x) with
+             * constant result 0.  Elsewhere Core may still use local facts
+             * to prove the operand constant, so do not erase the AST query. */
+            known_constant = eval_expression(
+                program, target, expression->value.builtin_unary.operand,
+                depth + 1U, &ignored_operand);
+            value->type = minic_type_int();
+            value->bits = known_constant ? 1U : 0U;
+            return true;
         }
-        /* GCC accepts __builtin_constant_p(variable) as an integer
-         * constant expression with result 0. Preserve the unresolved
-         * query for Core lowering elsewhere, but answer it here in ICE
-         * contexts without ever evaluating its operand at runtime. */
-        known_constant = eval_expression(
-            program, target, expression->value.builtin_unary.operand,
-            depth + 1U, &ignored_operand);
-        value->type = minic_type_int();
-        value->bits = known_constant ? 1U : 0U;
-        return true;
-    }
-    case MINIC_EXPRESSION_INTEGER:
-        value->type = expression->type;"""
+        return eval_builtin_unary(program, target, expression, depth, value);
+    }"""
 n=s.count(anchor)
 if n!=1:raise SystemExit(f"constant_p ICE anchor count={n}")
 p.write_text(s.replace(anchor,replace,1))
