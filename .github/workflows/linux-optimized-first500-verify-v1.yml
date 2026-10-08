@@ -156,7 +156,6 @@ jobs:
           echo "TYPEDEF_ASAN_SMOKE=PASS"
 
       - name: Paired typedef index A/B with exactly four workers
-        if: false # disabled until same-binary ASan smoke passes and root cause is fixed
         shell: bash
         run: |
           set -Eeuo pipefail
