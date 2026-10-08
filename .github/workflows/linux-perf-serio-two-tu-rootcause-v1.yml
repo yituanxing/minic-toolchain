@@ -1,0 +1,137 @@
+name: Linux Perf Serio Two-TU Root Cause V1
+on:
+  push:
+    branches: [agent/linux-expanded-kbuild-v0]
+    paths: [.github/workflows/linux-perf-serio-two-tu-rootcause-v1.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  focused-compiler-differential:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Install pinned RISC-V prerequisites
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get -o Acquire::Retries=3 update -qq
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            build-essential gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
+            libc6-dev-riscv64-cross bc bison flex libssl-dev libelf-dev \
+            make curl xz-utils python3 >/dev/null
+      - name: Materialize only failed kernel objects 2768 and 2770
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/perf-serio-two-tu"
+          mkdir -p "$work/evidence"
+          MINIC=/bin/true BUILD_DIR="$work/materialize" \
+            LINUX_ARCHIVE_CACHE="$work/linux-6.6.143.tar.xz" \
+            CROSS_COMPILE=riscv64-linux-gnu- \
+            LINUX_BATCH_SELECTION='2768,2770' LINUX_BATCH_MATERIALIZE_ONLY=1 \
+            LINUX_BATCH_MATERIALIZE_CHUNK=2 \
+            sh tests/external/linux/batch_probe.sh | tee "$work/evidence/materialize.log"
+          test "$(wc -l < "$work/materialize/selected-tus.txt")" -eq 2
+          cut -f1,3 "$work/materialize/selected-tus.txt" | tee "$work/evidence/targets.tsv"
+          grep -qx $'2768\tdrivers/input/serio/serio.i' "$work/evidence/targets.tsv"
+          grep -qx $'2770\tdrivers/input/serio/libps2.i' "$work/evidence/targets.tsv"
+          for p in drivers/input/serio/serio.i drivers/input/serio/libps2.i; do
+            test -s "$work/materialize/kbuild/$p"
+            sha256sum "$work/materialize/kbuild/$p" >> "$work/evidence/inputs.sha256"
+            tail -n 35 "$work/materialize/kbuild/$p" > "$work/evidence/${p##*/}.tail"
+            set +e
+            riscv64-linux-gnu-gcc -x cpp-output -fsyntax-only -w \
+              "$work/materialize/kbuild/$p" > "$work/evidence/${p##*/}.gcc.txt" 2>&1
+            gcc_rc=$?
+            set -e
+            echo "GCC_SYNTAX input=$p rc=$gcc_rc"
+            test "$gcc_rc" -eq 0
+          done
+      - name: Build old Runtime and five exact candidate variants
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/perf-serio-two-tu"
+          while read -r mode skip; do
+            git reset --hard HEAD
+            case "$mode" in
+              legacy39)
+                bash tools/ci/linux-runtime-build-minic-profile-v1.sh \
+                  "$work/bin-$mode" "$work/evidence/profile-$mode" ;;
+              full55)
+                bash tools/ci/linux-perf-build-minic-profile-v1.sh \
+                  "$work/bin-$mode" "$work/evidence/profile-$mode" ;;
+              no-scope-fix)
+                MINIC_PERF_SKIP_PARSER_SCOPE_FIX=1 \
+                bash tools/ci/linux-perf-build-minic-profile-v1.sh \
+                  "$work/bin-$mode" "$work/evidence/profile-$mode" ;;
+              no-verified-pair)
+                MINIC_PERF_SKIP_VERIFIED_OPTIMIZATIONS=1 \
+                bash tools/ci/linux-perf-build-minic-profile-v1.sh \
+                  "$work/bin-$mode" "$work/evidence/profile-$mode" ;;
+              no-constant-p-fix)
+                MINIC_CORRECTNESS_SKIP_CONSTANT_P_ICE=1 \
+                bash tools/ci/linux-perf-build-minic-profile-v1.sh \
+                  "$work/bin-$mode" "$work/evidence/profile-$mode" ;;
+              *) exit 2 ;;
+            esac
+            test -x "$work/bin-$mode/bin/minic"
+          done <<'MODES'
+          legacy39 0
+          full55 0
+          no-scope-fix 0
+          no-verified-pair 0
+          no-constant-p-fix 0
+          MODES
+          git reset --hard HEAD
+      - name: Differential compile for two real failing Linux TUs
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/perf-serio-two-tu"
+          export WORK="$work"
+          python3 - <<'PY'
+          import csv, os, subprocess
+          from pathlib import Path
+          work=Path(os.environ["WORK"])
+          inputs=["drivers/input/serio/serio.i","drivers/input/serio/libps2.i"]
+          modes=["legacy39","full55","no-scope-fix","no-verified-pair","no-constant-p-fix"]
+          dest=work/"evidence"/"differential.tsv"
+          with dest.open("w") as f:
+              writer=csv.writer(f,delimiter="\t")
+              writer.writerow(["mode","input","rc","asm_bytes","diagnostic"])
+              for mode in modes:
+                  exe=work/f"bin-{mode}"/"bin"/"minic"
+                  for inp in inputs:
+                      path=work/"materialize"/"kbuild"/inp
+                      out=work/"evidence"/f"{mode}-{path.stem}.s"
+                      cmd=[str(exe),"-S",str(path),"-o",str(out)]
+                      try:
+                          p=subprocess.run(cmd,text=True,capture_output=True,timeout=120)
+                          diagnosis=(p.stderr+"\n"+p.stdout).strip()
+                          rc=p.returncode
+                      except subprocess.TimeoutExpired:
+                          rc=124
+                          diagnosis="TIMEOUT"
+                      (work/"evidence"/f"{mode}-{path.stem}.log").write_text(diagnosis)
+                      n=out.stat().st_size if out.exists() else 0
+                      writer.writerow([mode,inp,rc,n,diagnosis[-1500:].replace("\n"," || ")])
+                      print(f"DIAGNOSTIC mode={mode} input={inp} rc={rc} bytes={n} message={diagnosis[-220:]!r}",flush=True)
+          failed=(work/"evidence"/"differential.tsv").read_text().splitlines()
+          assert len(failed)==11
+          print("SERIO_DIAGNOSTIC_CAPTURE=PASS cases=10",flush=True)
+          PY
+      - name: Retain exact inputs and profiles for focused repair
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-perf-serio-two-tu-differential-v1
+          path: |
+            build/perf-serio-two-tu/evidence/
+            build/perf-serio-two-tu/materialize/kbuild/drivers/input/serio/serio.i
+            build/perf-serio-two-tu/materialize/kbuild/drivers/input/serio/libps2.i
+          retention-days: 14
+          if-no-files-found: warn
