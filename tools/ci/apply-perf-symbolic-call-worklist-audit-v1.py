@@ -95,13 +95,13 @@ once(
     """        free(symbolic_expression_owners);
     }
 
-    if (initial_clone_count != 0U || transitive_clone_count != 0U) {
+    minic_bootstrap_trace_stage(NULL, "spec-symbolic-transitive", "end-success",
 """,
     """        free(symbolic_call_work);
         free(symbolic_expression_owners);
     }
 
-    if (initial_clone_count != 0U || transitive_clone_count != 0U) {
+    minic_bootstrap_trace_stage(NULL, "spec-symbolic-transitive", "end-success",
 """
 )
 p.write_text(source)
