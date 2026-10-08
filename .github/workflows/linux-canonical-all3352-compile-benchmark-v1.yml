@@ -1,0 +1,165 @@
+name: Linux Canonical All3352 C Compile Benchmark V1
+on:
+  push:
+    branches: [agent/linux-perf-all3352-benchmark-v1]
+    paths: [.github/workflows/linux-canonical-all3352-compile-benchmark-v1.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  shard:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 110
+    strategy:
+      fail-fast: false
+      max-parallel: 7
+      matrix:
+        include:
+          - {label: a, offset: 0, count: 500}
+          - {label: b, offset: 500, count: 500}
+          - {label: c, offset: 1000, count: 500}
+          - {label: d, offset: 1500, count: 500}
+          - {label: e, offset: 2000, count: 500}
+          - {label: f, offset: 2500, count: 500}
+          - {label: g, offset: 3000, count: 352}
+    env:
+      DEBIAN_FRONTEND: noninteractive
+      OFFSET: ${{ matrix.offset }}
+      COUNT: ${{ matrix.count }}
+      LABEL: ${{ matrix.label }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install RISC-V prerequisites
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get -o Acquire::Retries=3 update -qq
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            build-essential gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
+            libc6-dev-riscv64-cross bc bison flex libssl-dev make curl xz-utils python3 >/dev/null
+          riscv64-linux-gnu-gcc --version | head -n1
+          df -h "$GITHUB_WORKSPACE"
+      - name: Build latest Canonical MiniC
+        run: |
+          set -Eeuo pipefail
+          root="$GITHUB_WORKSPACE/build/all3352-wall"
+          mkdir -p "$root/evidence"
+          bash tools/ci/linux-runtime-build-minic-profile-v1.sh "$root/toolchain" "$root/evidence/profile"
+          grep -qx 'apply-perf-core-object-interval-onepass-v1.py' "$root/evidence/profile/minic-profile.txt"
+          grep -qx 'apply-perf-parser-nearest-ordinary-scope-v1.py' "$root/evidence/profile/minic-profile.txt"
+          sha256sum "$root/toolchain/bin/minic" | tee "$root/evidence/minic.sha256"
+      - name: Materialize this Kbuild C TU range (not part of MiniC time)
+        run: |
+          set -Eeuo pipefail
+          root="$GITHUB_WORKSPACE/build/all3352-wall"
+          begin=$(date +%s)
+          MINIC="$root/toolchain/bin/minic" \
+          BUILD_DIR="$root/input" \
+          LINUX_ARCHIVE_CACHE="$GITHUB_WORKSPACE/build/linux-6.6.143.tar.xz" \
+          CROSS_COMPILE=riscv64-linux-gnu- \
+          LINUX_BATCH_OFFSET="$OFFSET" LINUX_BATCH_LIMIT="$COUNT" \
+          LINUX_BATCH_MATERIALIZE_ONLY=1 LINUX_BATCH_MATERIALIZE_MAKE_JOBS=4 \
+            sh tests/external/linux/batch_probe.sh
+          echo "MATERIALIZE_SECONDS=$(($(date +%s)-begin))" | tee "$root/evidence/materialize-time.txt"
+          test "$(wc -l < "$root/input/tu-manifest.txt")" -eq 3352
+          test "$(wc -l < "$root/input/selected-tus.txt")" -eq "$COUNT"
+          ROOT="$root" python3 - <<'PY'
+          import os
+          from pathlib import Path
+          root=Path(os.environ["ROOT"])
+          rows=[s.split("\t",3) for s in (root/"input/selected-tus.txt").read_text().splitlines()]
+          off=int(os.environ["OFFSET"]); n=int(os.environ["COUNT"])
+          assert [int(r[0]) for r in rows]==list(range(off,off+n))
+          assert all((root/"input/kbuild"/r[2]).stat().st_size>0 for r in rows)
+          print(f"ALL3352_MATERIALIZED off={off} count={n} verified=yes")
+          PY
+          df -h "$GITHUB_WORKSPACE"
+      - name: Measure MiniC -S only, using four parallel workers
+        run: |
+          set -Eeuo pipefail
+          root="$GITHUB_WORKSPACE/build/all3352-wall"
+          set +e
+          CORE_FAST_TRACE=0 python3 tests/external/linux/corpus_replay.py \
+            --minic "$root/toolchain/bin/minic" --corpus "$root/input" \
+            --work "$root/replay" --jobs 4 --offset 0 --limit 0 --sample-count 0 \
+              >"$root/evidence/replay.log" 2>&1
+          rc=$?
+          set -e
+          echo "REPLAY_RC=$rc" | tee "$root/evidence/returncode.txt"
+          tail -n 15 "$root/evidence/replay.log"
+          test -s "$root/replay/batch-results.json"
+          cp "$root/replay/batch-results.json" "$root/evidence/"
+          cp "$root/replay/batch-summary.txt" "$root/evidence/"
+      - name: Export exact per-TU timing, slowest objects and status
+        if: always()
+        run: |
+          set -Eeuo pipefail
+          ROOT="$GITHUB_WORKSPACE/build/all3352-wall/evidence" python3 - <<'PY'
+          import json,os,re
+          from collections import Counter
+          from pathlib import Path
+          root=Path(os.environ["ROOT"])
+          if not (root/"batch-results.json").is_file():
+              print("ALL3352_SHARD_FAILED before MiniC replay")
+              raise SystemExit(1)
+          rows=json.loads((root/"batch-results.json").read_text())
+          off=int(os.environ["OFFSET"]); n=int(os.environ["COUNT"])
+          assert len(rows)==n
+          assert sorted(int(r["index"]) for r in rows)==list(range(off,off+n))
+          cnt=Counter(x["status"] for x in rows)
+          m=re.search(r"^replay_seconds=([0-9.]+)$",(root/"batch-summary.txt").read_text(),re.M)
+          assert m is not None
+          result={"offset":off,"count":n,"pass":cnt["PASS"],"fail":cnt["FAIL"],
+                  "missing":cnt["PREPROCESS_MISSING"],"compile_sum_s":sum(float(r["seconds"]) for r in rows),
+                  "four_worker_replay_s":float(m.group(1))}
+          (root/"shard.json").write_text(json.dumps(result,indent=2))
+          print("ALL3352_SHARD_RESULT "+json.dumps(result,sort_keys=True))
+          for row in sorted(rows,key=lambda x:float(x["seconds"]),reverse=True)[:10]:
+              print(f"ALL3352_SLOW index={row['index']} input={row['input']} seconds={row['seconds']:.3f} status={row['status']}")
+          PY
+      - name: Upload shard evidence only
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: all3352-shard-${{ matrix.label }}
+          path: build/all3352-wall/evidence/
+          retention-days: 14
+  aggregate:
+    needs: shard
+    if: always()
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: all3352-shard-*
+          path: evidence
+      - name: Aggregate 3352 unique TU results
+        run: |
+          python3 - <<'PY' | tee all3352-final.txt
+          import json
+          from pathlib import Path
+          data=sorted((json.loads(f.read_text()) for f in Path("evidence").glob("*/shard.json")),key=lambda d:d["offset"])
+          for d in data:
+              print("ALL3352_SHARD "+json.dumps(d,sort_keys=True))
+          total=sum(d["compile_sum_s"] for d in data)
+          wall=sum(d["four_worker_replay_s"] for d in data)
+          passed=sum(d["pass"] for d in data)
+          failed=sum(d["fail"] for d in data)
+          missing=sum(d["missing"] for d in data)
+          print(f"ALL3352_SUM_TU_SECONDS={total:.3f}")
+          print(f"ALL3352_FOUR_WORKER_SEQUENTIAL_SHARDS_SECONDS={wall:.3f}")
+          print(f"ALL3352_FOUR_WORKER_LOWER_BOUND_SECONDS={total/4:.3f}")
+          print(f"ALL3352_COUNTS pass={passed} fail={failed} missing={missing}")
+          indexes=[i for d in data for i in range(d["offset"],d["offset"]+d["count"])]
+          if len(data)!=7 or indexes!=list(range(3352)):
+              raise SystemExit("ALL3352_INVALID_COVERAGE")
+          print("ALL3352_COVERAGE=3352/3352")
+          if failed or missing:
+              raise SystemExit("ALL3352_COMPILE_FAILURES")
+          print("ALL3352_COMPILE_STATUS=PASS")
+          PY
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: all3352-final-report
+          path: all3352-final.txt
+          retention-days: 14
