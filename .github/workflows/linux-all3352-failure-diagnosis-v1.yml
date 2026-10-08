@@ -102,8 +102,8 @@ jobs:
                     dbg != NULL && dbg->kind == MINIC_EXPRESSION_INTEGER
                       ? (long long)dbg->value.integer_value : 0LL,
                     l != NULL ? (int)l->kind : -1,r != NULL ? (int)r->kind : -1);
-        }
-''' + needle
+          }
+          ''' + needle
           assert old.count(needle)==1,old.count(needle)
           s=s[:start]+old.replace(needle,diagnostic)+s[stop:]
           f.write_text(s)
