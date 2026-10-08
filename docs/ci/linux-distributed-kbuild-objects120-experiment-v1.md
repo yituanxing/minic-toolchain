@@ -20,3 +20,16 @@ or the original 20-object CI.
 
 The small run 37760885838 was successful: 20 objects transferred with matching `.cmd`, 0 target recompilations, and a valid RISC-V partial link. This is the next scale experiment.
 After a green 120-object run, decide whether to expand to a dependency-complete Kbuild object/archives producer and full Image linker using strict current-profile identity. Do not call a partial link proof full Linux boot.
+
+
+## Certified 120-object result — 2026-10-08
+
+- **SUCCESS:** [Linux Distributed Kbuild Objects 120 Experiment V1, run 37762351340](https://github.com/yituanxing/minic-toolchain/actions/runs/37762351340), at commit `b42f858e5fa2cfe01806cd61b62b0e486911a3da`. Runtime start 10:16:10 UTC, final result 10:19:05 UTC (~175 s including setup, preparation, independent receiver and upload).
+- Six **real Kbuild producer** jobs each compiled 20 selected `.o` files, all success. Their isolated object-target Kbuild stages took 74, 73, 48, 66, 77, 62 seconds respectively (not complete job wall times). Each had exactly the same `.config` digest `e538a6ad42ec49c5a667cab5de9bb943f82ca702ff2b7749a020e38ff7ddaea7` and MiniC binary SHA256 `c1333f97fb2139de7d5272525a384b9c59f87b1dc981c42c4ac18e1a9778c71a`.
+- All six compressed object+command artifact bundles were uploaded and restored into a new runner (individual compressed bundles ~1.8–2.7 MB). Receiver verified **240 files**: 120 real RISC-V `.o` and 120 hidden Kbuild `.<name>.o.cmd` files.
+- After restoration, a real `make -j4` on the 120 requested targets returned `DIST_O120_REUSE=PASS objects=120 target_recompiles=0 ancillary_minic_calls=3 seconds=3`. The only ancillary compile targets were `scripts/mod/empty.o` and two native RISC-V vDSO source objects; none of the transferred 120 object/command hashes changed.
+- RISC-V partial link succeeded: `DIST_O120_PARTIAL_LINK=PASS objects=120 bytes=77224760` (~73.6 MiB).
+- The first attempt [37762144585](https://github.com/yituanxing/minic-toolchain/actions/runs/37762144585) failed during prepare due to malformed experimental shell generated in the initial expansion, not MiniC or Linux source errors; repaired in commit `b42f858e5fa2cfe01806cd61b62b0e486911a3da`. Preserve both outcomes as reproducible evidence.
+- The earlier [20-object proof](https://github.com/yituanxing/minic-toolchain/actions/runs/37760885838) is a strict subset of these exact 120 explicit targets. Its earlier workflow can be retired byte-for-byte into `.github/workflows-disabled/` while preserving source, runtime evidence and Git history.
+
+**Boundary:** Partial `ld -r` success does not establish final Kbuild archive membership, complete Linux Image linking, modpost, Kallsyms, or QEMU boot. The next step should expand Kbuild-driven object discovery and validate `built-in.a`/generated dependencies before attempting to replace the certified full Image producer.
