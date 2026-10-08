@@ -45,14 +45,14 @@ jobs:
           make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- -j4 prepare scripts
           sha256sum "$out/.config" >"$work/config.sha256"
           echo "DIST_IMAGE_PREPARE=PASS config_sha=$(cut -d' ' -f1 "$work/config.sha256")"
-      - name: Discover real full Image C object graph
+      - name: Discover Kbuild default-build C object candidates
         run: |
           set -Eeuo pipefail
           work="$GITHUB_WORKSPACE/build/linux-distributed-image-graph-v1"
           src="$work/linux-6.6.143"
           out="$work/out"
           set +e
-          make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- -n -j1 V=1 Image \
+          make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- -n -j1 V=1 \
             >"$work/plan.raw" 2>"$work/plan.stderr"
           rc=$?
           set -e
