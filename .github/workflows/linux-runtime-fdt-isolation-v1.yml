@@ -7,6 +7,16 @@ on:
       - ".github/workflows/linux-runtime-fdt-isolation-v1.yml"
       - "tools/ci/linux-early-runtime-link-v2.sh"
   workflow_dispatch:
+    inputs:
+      mode:
+        description: 'Select historical focused runtime probe; all runs independent jobs'
+        required: true
+        type: choice
+        default: 'isolation'
+        options:
+          - 'isolation'
+          - 'codegen'
+          - 'all'
 
 permissions:
   contents: read
@@ -17,6 +27,7 @@ concurrency:
 
 jobs:
   fdt-isolation:
+    if: (github.event_name == 'workflow_dispatch' && (inputs.mode == 'isolation' || inputs.mode == 'all')) || (github.event_name == 'push' && contains(github.event.head_commit.message, '[linux-fdt-isolation]'))
     runs-on: ubuntu-24.04
     timeout-minutes: 18
     steps:
@@ -348,5 +359,130 @@ jobs:
             build/linux-runtime-fdt-isolation-v1/early/kallsyms-status.txt
             build/linux-runtime-fdt-isolation-v1/early/kallsyms-symbols.txt
             build/linux-runtime-fdt-isolation-v1/early/nm.txt
+          if-no-files-found: warn
+          retention-days: 7
+
+  # Retained exact specialized job from linux-runtime-fdt-ro-codegen-v0.yml.
+  fdt-ro-codegen:
+    if: (github.event_name == 'workflow_dispatch' && (inputs.mode == 'codegen' || inputs.mode == 'all')) || (github.event_name == 'push' && contains(github.event.head_commit.message, '[linux-fdt-codegen]'))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Restore certified full linked fixture
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-expanded-kbuild-v0/out
+          key: linux-expanded-mixed-v1-6.6.143-Linux-d30569a4c675f6ac72d9f63c28f0b8745317f7a15c0799d10768f916d74b3a88
+          fail-on-cache-miss: true
+
+      - name: Restore pinned Linux source
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-expanded-kbuild-v0/linux-6.6.143
+          key: linux-source-6.6.143-dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932-v1
+          fail-on-cache-miss: true
+
+      - name: Install RISC-V toolchain
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get -o Acquire::Retries=2 install -y --no-install-recommends gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu make \
+            || { sudo apt-get -o Acquire::Retries=3 update; sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu make; }
+
+      - name: Build exact Linux runtime MiniC profile
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-fdt-ro-codegen-v0"
+          build="$GITHUB_WORKSPACE/build/toolchain-runtime-fdt-ro-codegen-v0"
+          mkdir -p "$ev"
+          bash tools/ci/linux-runtime-build-minic-profile-v1.sh "$build" "$ev/profile"
+          grep -F 'MINIC_INLINE_ASM_LOCAL_INTEGER_FACTS_V0=APPLIED' "$ev/profile/patch.log"
+          grep -F 'MINIC_INLINE_ASM_RK_CAST_TAIL_V0=APPLIED' "$ev/profile/patch.log"
+          grep -F 'MINIC_RISCV64_PI_LOCAL_SYMBOL_ADDRESS_V0=APPLIED' "$ev/profile/patch.log"
+
+      - name: Build MiniC and GCC fdt_ro objects with identical Kbuild context
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0"
+          src="$work/linux-6.6.143"
+          out="$work/out"
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-fdt-ro-codegen-v0"
+          build="$GITHUB_WORKSPACE/build/toolchain-runtime-fdt-ro-codegen-v0"
+          wrapper="$GITHUB_WORKSPACE/tests/external/linux/stage2_kbuild_cc.sh"
+          target=lib/fdt_ro.o
+          base=lib/fdt_ro
+
+          rm -f "$out/$target" "$out/lib/.fdt_ro.o.cmd" "$out/$base.minic-stage2.i" "$out/$base.minic-stage2.s" \
+                "$out/$base.minic-stage2.minic.stdout" "$out/$base.minic-stage2.minic.stderr"
+          MINIC="$build/bin/minic" REAL_CC=/usr/bin/riscv64-linux-gnu-gcc MINIC_KEEP_INTERMEDIATES=1 \
+            make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- CC="$wrapper" -j2 V=1 "$target" \
+            >"$ev/minic-kbuild.log" 2>&1
+          test -s "$out/$target"
+          test -s "$out/$base.minic-stage2.i"
+          test -s "$out/$base.minic-stage2.s"
+          cp "$out/$target" "$ev/fdt_ro.minic.o"
+          cp "$out/$base.minic-stage2.i" "$ev/fdt_ro.minic.i"
+          cp "$out/$base.minic-stage2.s" "$ev/fdt_ro.minic.s"
+          cp "$out/lib/.fdt_ro.o.cmd" "$ev/fdt_ro.minic.cmd" || true
+
+          riscv64-linux-gnu-nm -an "$ev/fdt_ro.minic.o" >"$ev/fdt_ro.minic.nm"
+          riscv64-linux-gnu-objdump -drwC "$ev/fdt_ro.minic.o" >"$ev/fdt_ro.minic.objdump"
+          riscv64-linux-gnu-readelf -h -A -sW "$ev/fdt_ro.minic.o" >"$ev/fdt_ro.minic.readelf"
+
+          # Rebuild the same Kbuild target with GCC to obtain an exact-context reference.
+          rm -f "$out/$target" "$out/lib/.fdt_ro.o.cmd"
+          make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- CC=/usr/bin/riscv64-linux-gnu-gcc -j2 V=1 "$target" \
+            >"$ev/gcc-kbuild.log" 2>&1
+          test -s "$out/$target"
+          cp "$out/$target" "$ev/fdt_ro.gcc.o"
+          cp "$out/lib/.fdt_ro.o.cmd" "$ev/fdt_ro.gcc.cmd" || true
+          riscv64-linux-gnu-nm -an "$ev/fdt_ro.gcc.o" >"$ev/fdt_ro.gcc.nm"
+          riscv64-linux-gnu-objdump -drwC "$ev/fdt_ro.gcc.o" >"$ev/fdt_ro.gcc.objdump"
+          riscv64-linux-gnu-readelf -h -A -sW "$ev/fdt_ro.gcc.o" >"$ev/fdt_ro.gcc.readelf"
+
+          # Put the MiniC object back so this diagnostic never leaves a GCC owner in the fixture.
+          cp "$ev/fdt_ro.minic.o" "$out/$target"
+
+          {
+            echo '=== MiniC fdt32_ld symbols ==='
+            grep -E ' fdt32_ld$| fdt_get_property_namelen$| fdt_get_property_namelen_$|__minic_inline_spec_' "$ev/fdt_ro.minic.nm" || true
+            echo '=== GCC fdt32_ld symbols ==='
+            grep -E ' fdt32_ld$| fdt_get_property_namelen$| fdt_get_property_namelen_$' "$ev/fdt_ro.gcc.nm" || true
+            echo '=== MiniC fdt32_ld disassembly ==='
+            sed -n '/<fdt32_ld>:/,/^$/p' "$ev/fdt_ro.minic.objdump" | head -220
+            echo '=== MiniC fdt_get_property_namelen disassembly ==='
+            sed -n '/<fdt_get_property_namelen>:/,/^$/p' "$ev/fdt_ro.minic.objdump" | head -360
+            echo '=== GCC fdt_get_property_namelen disassembly ==='
+            sed -n '/<fdt_get_property_namelen>:/,/^$/p' "$ev/fdt_ro.gcc.objdump" | head -360
+          } | tee "$ev/focused.txt"
+
+      - name: Preserve FDT codegen evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-runtime-fdt-ro-codegen-v0-${{ github.sha }}
+          path: |
+            build/linux-runtime-fdt-ro-codegen-v0/profile/patch.log
+            build/linux-runtime-fdt-ro-codegen-v0/minic-kbuild.log
+            build/linux-runtime-fdt-ro-codegen-v0/gcc-kbuild.log
+            build/linux-runtime-fdt-ro-codegen-v0/fdt_ro.minic.i
+            build/linux-runtime-fdt-ro-codegen-v0/fdt_ro.minic.s
+            build/linux-runtime-fdt-ro-codegen-v0/fdt_ro.minic.o
+            build/linux-runtime-fdt-ro-codegen-v0/fdt_ro.gcc.o
+            build/linux-runtime-fdt-ro-codegen-v0/fdt_ro.minic.nm
+            build/linux-runtime-fdt-ro-codegen-v0/fdt_ro.gcc.nm
+            build/linux-runtime-fdt-ro-codegen-v0/fdt_ro.minic.objdump
+            build/linux-runtime-fdt-ro-codegen-v0/fdt_ro.gcc.objdump
+            build/linux-runtime-fdt-ro-codegen-v0/fdt_ro.minic.readelf
+            build/linux-runtime-fdt-ro-codegen-v0/fdt_ro.gcc.readelf
+            build/linux-runtime-fdt-ro-codegen-v0/fdt_ro.minic.cmd
+            build/linux-runtime-fdt-ro-codegen-v0/fdt_ro.gcc.cmd
+            build/linux-runtime-fdt-ro-codegen-v0/focused.txt
           if-no-files-found: warn
           retention-days: 7
