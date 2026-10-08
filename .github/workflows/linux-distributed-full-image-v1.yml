@@ -1,11 +1,5 @@
 name: Linux Distributed Full Image Experiment V1
 on:
-  push:
-    branches: [agent/linux-expanded-kbuild-v0]
-    paths:
-      - '.github/workflows/linux-distributed-full-image-v1.yml'
-      - 'tools/ci/linux-distributed-image-plan-v1.py'
-      - 'tools/ci/linux-distributed-full-image-v1.sh'
   workflow_dispatch:
 
 permissions:
