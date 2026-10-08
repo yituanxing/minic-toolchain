@@ -86,6 +86,60 @@ jobs:
           test -s "$work/minic-reverse-shadow.s"
           echo "MINIC_LOCAL_HIDES_GLOBAL_TYPEDEF=PASS"
 
+      - name: Probe enum and typedef ordinary-identifier shadow cases
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/independent-verify-audit-v1"
+          mkdir -p "$work/ordinary-shadow"
+          cat > "$work/ordinary-shadow/enum-global.i" <<'EOF'
+          int G = 20;
+          int test1(void) { enum { G = 7 }; return G; }
+          int main(void) { return test1() == 7 ? 0 : 1; }
+          EOF
+          cat > "$work/ordinary-shadow/enum-local.i" <<'EOF'
+          int test2(void) {
+              int G = 1;
+              { enum { G = 7 }; return G; }
+          }
+          int main(void) { return test2() == 7 ? 0 : 1; }
+          EOF
+          cat > "$work/ordinary-shadow/enum-typedef.i" <<'EOF'
+          typedef int Alias;
+          int test3(void) { enum { Alias = 7 }; return (Alias) + 1; }
+          int main(void) { return test3() == 8 ? 0 : 1; }
+          EOF
+          cat > "$work/ordinary-shadow/invalid-typedef-expr.i" <<'EOF'
+          int x = 9;
+          int invalid(void) { typedef int x; return x; }
+          EOF
+          for case in enum-global enum-local enum-typedef; do
+            input="$work/ordinary-shadow/$case.i"
+            gcc "$input" -x c -o "$work/ordinary-shadow/$case.gcc.bin"
+            "$work/ordinary-shadow/$case.gcc.bin"
+            echo "GCC_SEMANTIC_RUNTIME=$case PASS"
+            if "$work/toolchain/bin/minic" -S "$input" -o "$work/ordinary-shadow/$case.s" \
+              >"$work/evidence/$case-minic.log" 2>&1; then
+              echo "MINIC_SHADOW_COMPILE=$case PASS"
+            else
+              echo "MINIC_SHADOW_COMPILE=$case FAIL"
+              tail -n 4 "$work/evidence/$case-minic.log"
+            fi
+          done
+          input="$work/ordinary-shadow/invalid-typedef-expr.i"
+          if gcc -S "$input" -o "$work/ordinary-shadow/invalid-gcc.s" \
+              >"$work/evidence/invalid-gcc.log" 2>&1; then
+            echo "GCC_INVALID_TYPEDEF_EXPRESSION=UNEXPECTED_PASS"
+            exit 1
+          fi
+          echo "GCC_INVALID_TYPEDEF_EXPRESSION=REJECT"
+          if "$work/toolchain/bin/minic" -S "$input" -o "$work/ordinary-shadow/invalid-minic.s" \
+              >"$work/evidence/invalid-minic.log" 2>&1; then
+            echo "MINIC_INVALID_TYPEDEF_EXPRESSION=UNEXPECTED_PASS"
+          else
+            echo "MINIC_INVALID_TYPEDEF_EXPRESSION=REJECT"
+          fi
+
       - name: Measure Core verifier on generated block-heavy C
         shell: bash
         run: |
