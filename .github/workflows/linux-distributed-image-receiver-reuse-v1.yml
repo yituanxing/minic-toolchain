@@ -273,6 +273,7 @@ jobs:
             cd "$perfsource"
             python3 tools/ci/apply-correctness-constant-p-core-local-facts-v1.py
             python3 tools/ci/apply-correctness-constant-p-nested-core-v2.py
+            grep -q 'V2_NESTED_CONSTANT_P' src/core/core_lower.c
             git diff --check
             make -B -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$work/perf-toolchain" \
               "$candidate" "$work/perf-toolchain/bin/minic-cc" >/dev/null
