@@ -1,23 +1,22 @@
 # Current CI workflow map
 
-Snapshot: `72d632d43ef2fa02ec029f539105533203b5ac50`
+Snapshot: workflow ownership map established at `72d632d43ef2fa02ec029f539105533203b5ac50`, status refreshed on **2026-10-08** after branch consolidation run `37751577519`. The historical role map below has not been re-certified on a new Linux Image; branch inventory and counts here reflect the current runtime HEAD.
 
 This document is the current ownership map for active GitHub Actions after the 2026-10 cleanup and runtime-convergence work. It is intended to prevent historical diagnostic workflows from becoming active CI by accident and to make retirement decisions contract-based rather than name-based.
 
 ## Repository state
 
 - Active workflow YAML files: **87**
-- Disabled historical workflow YAML files: **185**
+- Disabled historical workflow YAML files: **186** (including the retired one-shot branch consolidation workflow).
 - Active `linux-*.yml` workflows: **36**
 - Linux/core workflows including `core-first500-regression.yml`: **37**
-- `agent/ci-runtime-cleanup-v1` and `agent/linux-expanded-kbuild-v0` point to the same HEAD.
-- Remaining branches:
-  - `main`
-  - `agent/linux-expanded-kbuild-v0`
-  - `agent/ci-runtime-cleanup-v1`
-  - `archive/all-progress-2026-10-04`
-- The development/cleanup HEAD is 3860 commits ahead of `main` and 2 commits behind it.
-- The two `main`-only commits have no net file diff relative to their merge base, so they are historical ancestry to preserve rather than a competing code state.
+- Remote branch refs remaining after verified deletion: **4** (previously 29):
+  - `main` — historical default/stable branch, not yet promoted to the current runtime head.
+  - `agent/linux-expanded-kbuild-v0` — canonical Linux Runtime development/ref/cache owner.
+  - `agent/linux-perf-boolean-domain-v1` — separate MiniC performance/correctness workstream, with 91 active workflow YAML files at its 2026-10-08 cleanup tip.
+  - `archive/all-progress-2026-10-04` — passive archive containing all 27 captured experiment tips (zero active workflows in its HEAD worktree).
+- `agent/ci-runtime-cleanup-v1` was fast-forwarded to the runtime HEAD and subsequently deleted as a redundant branch ref; both the commit history and earlier CI evidence remain in the archive.
+- Do not confuse the archive *ancestry* with a production source merge. Recent performance fixes and Linux Runtime changes remain on separate development branches.
 
 GitHub Actions caches used by the Linux runtime certification chain are scoped to the canonical runtime ref. Cache-dependent runtime validation must remain strict and must not turn cache misses into passing evidence.
 
@@ -218,8 +217,8 @@ Historical census and old Linux input-inventory workflows are disabled.
 
 # Cleanup invariants already established
 
-- No active workflow references a deleted branch.
-- Cleanup and canonical runtime branches are kept at the same HEAD during the convergence phase.
+- **Follow-up required:** some active workflow YAMLs still mention deleted branch names in historical `push.branches` filters or old cleanup-specific conditions. The branch refs are gone, but the stale strings must be audited and cleaned without broadening test triggers. Do not assume the old no-stale-reference claim still holds.
+- The cleanup branch is now retired; its last tip was equal to runtime commit `1e0d5cb4e9c9671eb1e3034d17be183169752874`.
 - Retired workflow YAML is preserved under `.github/workflows-disabled/`.
 - A disabled-path filename collision discovered during cleanup was repaired so the original Linux discovery workflow and the later registered spinlock bridge are both preserved independently.
 - Historical residual-undef consumers are disabled, and the orphan `linux-undef-diagnose-v0.yml` producer was retired only after a scan of all 89 active workflows at the preceding HEAD found zero active consumers for its cache key.
@@ -235,11 +234,21 @@ Historical census and old Linux input-inventory workflows are disabled.
 3. Re-run the final required toolchain/Linux certification set on the converged HEAD.
 4. Merge the two `main`-only ancestry commits without replacing the converged tree.
 5. Update `main` only after that merge and final certification are green.
-6. Delete `agent/ci-runtime-cleanup-v1` after `main` and `agent/linux-expanded-kbuild-v0` contain the validated result.
-7. Keep `archive/all-progress-2026-10-04` as the historical branch umbrella.
+6. **Completed 2026-10-08:** delete `agent/ci-runtime-cleanup-v1` together with 24 other exact-SHA-verified experiment refs, without promoting `main`.
+7. Keep `archive/all-progress-2026-10-04` as a passive historical branch umbrella.
+8. Retain `agent/linux-perf-boolean-domain-v1` until its current performance and correctness work is consciously integrated and re-certified; do not delete it just to reach three refs.
+9. Audit stale references to removed branch names and remaining dormant workflow contracts before further CI retirement.
 
-The intended final branch set is therefore:
+The current **four-branch** set is therefore:
 
 - `main`
 - `agent/linux-expanded-kbuild-v0`
+- `agent/linux-perf-boolean-domain-v1`
 - `archive/all-progress-2026-10-04`
+
+## Verified branch convergence evidence, 2026-10-08
+
+- One-shot run [`37751577519`](https://github.com/yituanxing/minic-toolchain/actions/runs/37751577519) finished **SUCCESS**: 25/25 SHA-leased deletion targets passed archival-ancestry checks, Git pushed 25 exact leases, and remote branch inventory checked exactly four refs.
+- Historical tip-to-SHA mapping remains in `tools/ci/branch-consolidation-20261008.tsv`; the exact successful one-shot YAML was retired byte-for-byte to `.github/workflows-disabled/branch-consolidation-one-shot-v1.yml` after completion.
+- The active runtime code and Linux Image/QEMU certification workflows were not modified by this retirement. Routine focused checks on the consolidation commit include MiniC RV64, MiniAR and MiniLD; a full current-head Image/QEMU certificate is still outstanding.
+
