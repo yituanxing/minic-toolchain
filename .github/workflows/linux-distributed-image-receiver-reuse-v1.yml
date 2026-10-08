@@ -63,6 +63,7 @@ jobs:
       # this bounded differential instead of repeating the known 50-minute link.
       # Manual dispatch keeps the full strict receiver Image/QEMU path available.
       - name: Differential diagnosis of five residual compiletime assertions
+        if: github.event_name == 'workflow_dispatch'
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -148,6 +149,7 @@ jobs:
           src="$work/linux-6.6.143"
           out="$work/out"
           diag="$work/assert-five"
+          mkdir -p "$diag" "$out/init"
           obj=init/main.o
           mapfile -t src_objects < <(find "$work/incoming" -type f -path "*/out/$obj")
           mapfile -t src_cmds < <(find "$work/incoming" -type f -path "*/out/init/.main.o.cmd")
