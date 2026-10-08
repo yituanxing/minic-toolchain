@@ -116,7 +116,16 @@ case "$mode" in
     # and all 6704 content hashes may we update the object metadata. Do not
     # modify source, configuration, .cmd, or a single content byte.
     restamped=0
-    while IFS=
+    mapfile -t restored_objects < <(cut -f3 "$plan")
+    for obj in "${restored_objects[@]}"; do
+      test -s "$out/$obj" || exit 70
+      touch -- "$out/$obj"
+      restamped=$((restamped+1))
+    done
+    [[ "$restamped" -eq "$total" ]] || exit 70
+    ( cd "$out"; sha256sum --status -c "$work/reuse.sha256" )
+    echo "DIST_IMAGE_RESTAMP=PASS objects=$restamped preserved_sha256=$((n*2))"
+    trace="$work/image.trace"
     : >"$trace"
     start=$(date +%s)
     set +e
