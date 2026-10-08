@@ -3,10 +3,6 @@ name: MiniAS Semantic Oracle 3536
 # Canonical C lane rerun after disabling RVC/relaxation variance.
 
 on:
-  push:
-    branches:
-      - "toolchain/minias-m0-boundary-freeze"
-      - "agent/ci-runtime-cleanup-v1"
   workflow_dispatch:
 
 permissions:

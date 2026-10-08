@@ -1,5 +1,7 @@
 # Current CI workflow map
 
+> **Current update (2026-10-08):** After the 7-workflow dead-owner retirement, this runtime branch has **84 active / 194 disabled** workflow YAMLs (source before cleanup 91 / 187). The historical 87-workflow role breakdown below is NOT the current inventory. See [2026-10-08 deadref/verdict audit](workflow-deadrefs-and-verdict-2026-10-08.md) for exact SHA, retirement reason, two currently failing Linux TUs and outstanding gates. Full Linux Image/QEMU certification has not been refreshed for the candidate profile.
+
 Snapshot: initial workflow ownership map established at `72d632d43ef2fa02ec029f539105533203b5ac50`, refreshed on **2026-10-08** after verified four-branch consolidation and verified [120-object cross-Runner proof](https://github.com/yituanxing/minic-toolchain/actions/runs/37762351340). Current active/disabled inventory reflects the post-retirement runtime branch; the historical runtime roles below have not been re-certified on a new full Linux Image.
 
 This document is the current ownership map for active GitHub Actions after the 2026-10 cleanup and runtime-convergence work. It is intended to prevent historical diagnostic workflows from becoming active CI by accident and to make retirement decisions contract-based rather than name-based.

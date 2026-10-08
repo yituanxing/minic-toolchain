@@ -1,10 +1,6 @@
 name: MiniAS A0 Focused Diagnostics V1
 
 on:
-  push:
-    branches:
-      - "toolchain/minias-m0-boundary-freeze"
-      - "agent/ci-runtime-cleanup-v1"
   workflow_dispatch:
     inputs:
       mode:
