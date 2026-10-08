@@ -19,6 +19,7 @@ on:
       - '.github/workflows/linux-runtime-fdt-isolation-v1.yml'
       - '.github/workflows/linux-runtime-generated-kallsyms-first-die-v0.yml'
       - '.github/workflows/minias-a0-focused-diagnostics-v1.yml'
+      - '.github/workflows/linux-core-all3352.yml'
       - 'tools/ci/linux-distributed-full-image-v1.sh'
       - 'tools/ci/linux-distributed-canonical-delay-v1.py'
       - 'tools/ci/linux-distributed-provenance-audit-v2.py'
@@ -70,6 +71,7 @@ jobs:
           done
           echo "M0_RUNTIME_FOCUSED_YAML=PASS owners=3"
           ruby -e 'require "yaml"; YAML.parse_file(ARGV.fetch(0)); puts "M0_MINIAS_FOCUSED_YAML=PASS"' .github/workflows/minias-a0-focused-diagnostics-v1.yml
+          ruby -e 'require "yaml"; YAML.parse_file(ARGV.fetch(0)); puts "M0_LINUX_CORE_3352_YAML=PASS"' .github/workflows/linux-core-all3352.yml
           python3 - <<'PY_CI'
           from pathlib import Path
           yaml = Path('.github/workflows/linux-distributed-full-image-signedness-v2.yml').read_text()
@@ -206,6 +208,33 @@ jobs:
           old_resolve = old_jobs.split('\n    runs-on:', 1)[1].split('\n  window-shard:', 1)[0]
           assert old_resolve in as_text, 'MiniAS window resolver executable body altered'
           print('M0_MINIAS_FOCUSED=PASS jobs=6 archived=1 unchanged_job_bodies=3')
+
+          # The two distinct Core 3352 acceptance predicates are retained.
+          core_file = Path('.github/workflows/linux-core-all3352.yml').read_text()
+          core_archive_path = Path('.github/workflows-disabled/linux-core-assemble-all3352.yml')
+          assert not Path('.github/workflows/linux-core-assemble-all3352.yml').exists()
+          core_bytes = core_archive_path.read_bytes()
+          git_object = b'blob ' + str(len(core_bytes)).encode() + bytes([0]) + core_bytes
+          assert hashlib.sha1(git_object).hexdigest() == '6a0ce243dd6cf16e038588fb1c81e5ca993e77fb'
+          for mode in ('compile', 'assemble', 'all'):
+              assert '          - ' + mode in core_file, f'Missing Core mode {mode}'
+          assert 'default: compile' in core_file
+          for job in ('first500', 'shards', 'all3352', 'asm-first500', 'asm-shards', 'asm-all3352'):
+              assert '\n  ' + job + ':\n' in core_file, f'Missing Core job: {job}'
+          assert 'needs.asm-first500.result' in core_file
+          assert 'needs.asm-shards.result' in core_file
+          assert 'ALL3352_EXACT' in core_file and 'LINUX_ASSEMBLE_ALL3352=PASS' in core_file
+          core_old = core_bytes.decode()
+          def job_steps(yaml_text, job_name):
+              block = yaml_text.split('\n  ' + job_name + ':\n', 1)[1]
+              block = block.split('\n  ', 1)[0]
+              return block.split('    steps:\n', 1)[1].rstrip()
+          for original, current in (('first500','asm-first500'), ('shards','asm-shards'), ('all3352','asm-all3352')):
+              old_steps = job_steps(core_old, original)
+              old_steps = old_steps.replace('needs.first500.result','needs.asm-first500.result')
+              old_steps = old_steps.replace('needs.shards.result','needs.asm-shards.result')
+              assert old_steps == job_steps(core_file, current), f'Core assembly executable body changed: {original}'
+          print('M0_CORE_3352_CONVERGENCE=PASS six_jobs=6 old_assemble_jobs=3 archived_blob=PASS')
           PY_CI
 
       - name: Build frozen compiler boundary
