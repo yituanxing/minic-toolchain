@@ -132,8 +132,10 @@ jobs:
         with:
           pattern: all3352-shard-*
           path: evidence
-      - name: Aggregate 3352 unique TU results
+      - name: Aggregate 3352 unique TU results (fail closed)
+        shell: bash
         run: |
+          set -Eeuo pipefail
           python3 - <<'PY' | tee all3352-final.txt
           import json
           from pathlib import Path
@@ -154,6 +156,7 @@ jobs:
               raise SystemExit("ALL3352_INVALID_COVERAGE")
           print("ALL3352_COVERAGE=3352/3352")
           if failed or missing:
+              print(f"ALL3352_COMPILE_STATUS=FAIL failed={failed} missing={missing}", flush=True)
               raise SystemExit("ALL3352_COMPILE_FAILURES")
           print("ALL3352_COMPILE_STATUS=PASS")
           PY
