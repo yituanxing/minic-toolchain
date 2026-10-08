@@ -177,10 +177,78 @@ case "$mode" in
       tail -n 120 "$work/image.log" >&2
       exit "$rc"
     fi
+    if [[ "${MINIC_DISTRIBUTED_STRICT_REPLAY:-0}" == 1 ]]; then
+      # The first full Kbuild descent materializes generated headers/sources
+      # that do not exist at receiver prepare time. Those dependencies can
+      # legitimately invalidate restored objects despite a pre-link restamp.
+      # Never certify the resulting mixed-object Image as an exact replay.
+      mv "$trace" "$work/image-warmup.trace"
+      mv "$work/image.log" "$work/image-warmup.log"
+      sed -n -E 's/^pass source=.* output=([^ ]+).*$/\1/p' \
+        "$work/image-warmup.trace" >"$work/warmup-compiled.txt"
+      awk -F '\t' '{print $3}' "$plan" >"$work/planned-targets.txt"
+      warmup_rebuilt=$(grep -Fxf "$work/planned-targets.txt" "$work/warmup-compiled.txt" | sort -u || true)
+      warmup_count=$(printf '%s\n' "$warmup_rebuilt" | sed '/^$/d' | wc -l)
+      echo "DIST_IMAGE_WARMUP=PASS generated_deps_ready=1 producer_targets_recompiled=$warmup_count" \
+        | tee -a "$work/image-summary.txt"
+      # The first pass is diagnostic, not the certified result. Recover
+      # the original bytes of every single shard object AND hidden .cmd;
+      # authenticate 6704 hashes again before allowing the final relink.
+      for replay_shard in 0 1 2 3 4 5 6; do
+        cp -a "$work/incoming/distributed-full-image-shard-$replay_shard/out/." "$out/"
+      done
+      ( cd "$out"; sha256sum --status -c "$work/reuse.sha256" ) || {
+        echo "DIST_IMAGE_STRICT_RESTORE=FAIL producer_hash_mismatch" >&2
+        exit 1
+      }
+      for obj in "${restored_objects[@]}"; do
+        touch -- "$out/$obj"
+      done
+      ( cd "$out"; sha256sum --status -c "$work/reuse.sha256" ) || exit 1
+      echo "DIST_IMAGE_STRICT_RESTORE=PASS objects=$total checked_files=$((total*2))" \
+        | tee -a "$work/image-summary.txt"
+      # Newer original .o files must cause Kbuild archives, vmlinux and
+      # Image to be relinked from the authenticated producer objects.
+      : >"$trace"
+      start=$(date +%s)
+      set +e
+      MINIC="$compiler" REAL_CC=/usr/bin/riscv64-linux-gnu-gcc MINIC_KEEP_INTERMEDIATES=0 \
+        MINIC_KBUILD_TRACE="$trace" CORE_FAST_TRACE=0 \
+        make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
+        CC="$wrapper" -j4 V=1 Image >"$work/image.log" 2>&1
+      rc=$?
+      set -e
+      echo "DIST_IMAGE_FINAL_KBUILD_RC=$rc elapsed_s=$(($(date +%s)-start))" \
+        | tee -a "$work/image-summary.txt"
+      if [[ $rc -ne 0 ]]; then
+        tail -n 120 "$work/image.log" >&2
+        exit "$rc"
+      fi
+      if ! grep -aEq '(^  LD +vmlinux$| -o vmlinux )' "$work/image.log"; then
+        echo "DIST_IMAGE_STRICT_RELINK=FAIL no_vmlinux_relink" >&2
+        exit 1
+      fi
+      echo "DIST_IMAGE_STRICT_RELINK=PASS" | tee -a "$work/image-summary.txt"
+    fi
     sed -n -E 's/^pass source=.* output=([^ ]+).*$/\1/p' "$trace" >"$work/final-compiled.txt"
     awk -F '\t' '{print $3}' "$plan" >"$work/planned-targets.txt"
     rebuilt=$(grep -Fxf "$work/planned-targets.txt" "$work/final-compiled.txt" || true)
-    if [[ "${MINIC_DISTRIBUTED_TRACED_REBUILD_LIMIT:-0}" =~ ^[1-9][0-9]*$ ]]; then
+    if [[ "${MINIC_DISTRIBUTED_STRICT_REPLAY:-0}" == 1 ]]; then
+      # Zero producer recompiles and byte-exact 6704-file identity, even
+      # after the full graph generated all of its auxiliary dependencies.
+      if ! ( cd "$out"; sha256sum -c "$work/reuse.sha256" ) \
+          >"$work/reuse-final-check.txt" 2>&1; then
+        echo "DIST_IMAGE_STRICT_REUSE=FAIL producer_sha256_changed" >&2
+        grep -E 'FAILED|ERROR' "$work/reuse-final-check.txt" | head -n 80 >&2 || true
+        exit 1
+      fi
+      if [[ -n "$rebuilt" ]]; then
+        echo "DIST_IMAGE_STRICT_REUSE=FAIL transferred_target_recompiled=$rebuilt" >&2
+        exit 1
+      fi
+      echo "DIST_IMAGE_STRICT_REUSE=PASS target_recompiles=0 identical_files=$((total*2))" \
+        | tee -a "$work/image-summary.txt"
+    elif [[ "${MINIC_DISTRIBUTED_TRACED_REBUILD_LIMIT:-0}" =~ ^[1-9][0-9]*$ ]]; then
       # All 6704 producer hashes were checked before make. After linking,
       # allow changes only for exact manifest objects with proven MiniC passes.
       python3 "$root/tools/ci/linux-distributed-provenance-audit-v2.py" \
