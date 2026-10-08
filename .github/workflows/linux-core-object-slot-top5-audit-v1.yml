@@ -127,11 +127,20 @@ jobs:
                           if len(matches)!=1:
                               raise SystemExit(f"COUNTERS_MISSING index={index}: {p.stderr[-1800:]}")
                           row=dict((k,int(v)) for k,v in re.findall(r"(\w+)=(\d+)",matches[0]))
-                          if repeat==0: counters=row
+                          if repeat==0:
+                              counters=row.copy()
+                              timings={"analysis_ns":[row["analysis_ns"]],
+                                       "coloring_ns":[row["coloring_ns"]]}
                           else:
-                              assert row==counters,(index,repeat,row,counters)
+                              stable_keys=[k for k in row if not k.endswith("_ns")]
+                              assert all(row[k]==counters[k] for k in stable_keys), (
+                                  index,repeat,row,counters)
+                              timings["analysis_ns"].append(row["analysis_ns"])
+                              timings["coloring_ns"].append(row["coloring_ns"])
                   if hashes["baseline"]!=hashes["instrumented"]:
                       raise SystemExit(f"INSTRUMENTED_ASM_MISMATCH index={index} repeat={repeat}")
+              for key in ("analysis_ns","coloring_ns"):
+                  counters[key]=int(statistics.median(timings[key]))
               for key,value in counters.items():
                   totals[key]=totals.get(key,0)+value
               print(f"TOP5_OBJECT_AUDIT index={index} input={rel} "
