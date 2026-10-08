@@ -1,0 +1,93 @@
+name: Isolated Core Verify and Parser Shadow Audit V1
+
+on:
+  push:
+    branches:
+      - agent/linux-perf-independent-verify-audit-v1
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build current canonical compiler and enable verifier counters
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/independent-verify-audit-v1"
+          mkdir -p "$work/evidence"
+          bash tools/ci/linux-runtime-build-minic-profile-v1.sh \
+            "$work/toolchain" "$work/evidence/canonical-build"
+          python3 tools/ci/apply-perf-core-verify-counters-v1.py \
+            | tee "$work/evidence/verifier-counter-patch.txt"
+          git diff --check
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$work/toolchain" \
+            "$work/toolchain/bin/minic" "$work/toolchain/bin/minic-cc" >"$work/evidence/instrument-build.log" 2>&1
+          echo "AUDIT_INSTRUMENTED_BUILD=PASS"
+
+      - name: Regression oracle for scoped typedef shadowing
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/independent-verify-audit-v1"
+          cat > "$work/typedef-shadow.i" <<'EOF'
+          int shadow_test(void) {
+              int T = 1;
+              {
+                  typedef int T;
+                  T x = 3;
+                  return x;
+              }
+          }
+          EOF
+          gcc -S "$work/typedef-shadow.i" -o "$work/gcc-shadow.s"
+          echo "GCC_SCOPED_TYPEDEF_SHADOW=PASS"
+          if MINIC_CORE_VERIFY_AUDIT=1 \
+               "$work/toolchain/bin/minic" -S "$work/typedef-shadow.i" \
+               -o "$work/minic-shadow.s" >"$work/evidence/minic-shadow.log" 2>&1; then
+            echo "MINIC_SCOPED_TYPEDEF_SHADOW=PASS" | tee -a "$work/evidence/minic-shadow.log"
+          else
+            echo "MINIC_SCOPED_TYPEDEF_SHADOW=FAIL" | tee -a "$work/evidence/minic-shadow.log"
+            tail -n 20 "$work/evidence/minic-shadow.log"
+          fi
+
+      - name: Measure Core verifier on generated block-heavy C
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/independent-verify-audit-v1"
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path("build/independent-verify-audit-v1/block-heavy.i")
+          with p.open("w") as f:
+              for function_idx in range(30):
+                  f.write(f"int block_heavy_{function_idx}(int x) {{\n")
+                  f.write("    int y = x;\n")
+                  for block_idx in range(50):
+                      mask = 1 << (block_idx % 16)
+                      f.write(f"    if ((x & {mask}) != 0) y += {block_idx + 1}; else y -= {block_idx + 1};\n")
+                  f.write("    return y;\n}\n")
+          print("CORE_VERIFY_AUDIT_SYNTHETIC_FUNCTIONS=30 BRANCHES_PER_FUNCTION=50")
+          PY
+          gcc -S "$work/block-heavy.i" -o "$work/gcc-block-heavy.s"
+          MINIC_CORE_VERIFY_AUDIT=1 \
+            "$work/toolchain/bin/minic" -S "$work/block-heavy.i" \
+            -o "$work/minic-block-heavy.s" \
+            > "$work/evidence/core-verify-metrics.log" 2>&1
+          grep '^CORE_VERIFY_AUDIT ' "$work/evidence/core-verify-metrics.log" | tee "$work/evidence/verifier-summary.txt"
+          test -s "$work/minic-block-heavy.s"
+          echo "CORE_VERIFY_AUDIT_STRESS=PASS"
+
+      - name: Upload independent audit evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: core-verifier-and-scope-audit-v1
+          path: build/independent-verify-audit-v1/evidence
+          retention-days: 7
