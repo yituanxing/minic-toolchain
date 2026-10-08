@@ -1,4 +1,5 @@
 name: Linux Runtime Opt-in Perf All3352 V1
+# Rerun after importing Boolean Domain index dependency; GCC/RV64 QEMU semantic test PASS.
 on:
   push:
     branches: [agent/linux-expanded-kbuild-v0]
