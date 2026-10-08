@@ -1,4 +1,5 @@
 name: Linux Runtime Opt-in Perf First500 A-B V1
+# Recheck: import transitive Boolean Domain index helper from proven perf source.
 
 on:
   push:
