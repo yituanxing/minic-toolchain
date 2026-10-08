@@ -86,6 +86,19 @@ jobs:
           test -s "$work/minic-reverse-shadow.s"
           echo "MINIC_LOCAL_HIDES_GLOBAL_TYPEDEF=PASS"
 
+      - name: Resolve nearest ordinary binding across all local categories
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/independent-verify-audit-v1"
+          python3 tools/ci/apply-perf-parser-nearest-ordinary-scope-v1.py \
+            | tee "$work/evidence/nearest-ordinary-scope.txt"
+          git diff --check
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$work/toolchain" \
+            "$work/toolchain/bin/minic" "$work/toolchain/bin/minic-cc" \
+            >"$work/evidence/ordinary-scope-rebuild.log" 2>&1
+          echo "MINIC_NEAREST_ORDINARY_SCOPE_BUILD=PASS"
+
       - name: Probe enum and typedef ordinary-identifier shadow cases
         shell: bash
         run: |
@@ -124,6 +137,7 @@ jobs:
             else
               echo "MINIC_SHADOW_COMPILE=$case FAIL"
               tail -n 4 "$work/evidence/$case-minic.log"
+              exit 1
             fi
           done
           input="$work/ordinary-shadow/invalid-typedef-expr.i"
@@ -136,6 +150,7 @@ jobs:
           if "$work/toolchain/bin/minic" -S "$input" -o "$work/ordinary-shadow/invalid-minic.s" \
               >"$work/evidence/invalid-minic.log" 2>&1; then
             echo "MINIC_INVALID_TYPEDEF_EXPRESSION=UNEXPECTED_PASS"
+            exit 1
           else
             echo "MINIC_INVALID_TYPEDEF_EXPRESSION=REJECT"
           fi
