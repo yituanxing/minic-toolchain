@@ -4,17 +4,17 @@
 
 | Branch | Active workflows now | Disabled workflow files (incl. nested) | Count at start of this cleanup sequence |
 | --- | ---: | ---: | ---: |
-| `agent/linux-expanded-kbuild-v0` | **60** | **268** (225 root + 38 + 5 nested) | 68 |
-| `agent/linux-perf-boolean-domain-v1` | **59** | **268** (225 root + 38 + 5 nested) | 91 |
+| `agent/linux-expanded-kbuild-v0` | **54** | **274** (231 root + 38 + 5 nested) | 68 |
+| `agent/linux-perf-boolean-domain-v1` | **53** | **274** (231 root + 38 + 5 nested) | 91 |
 | `main` | 11 | untouched | 11 |
 | `archive/all-progress-2026-10-04` | no active workflow directory | passive archival history | unchanged |
 
-Runtime and perf now share **55** active workflow filenames, plus **5**
+Runtime and perf now share **49** active workflow filenames, plus **5**
 Runtime-only (distributor + graph preflight + 3 opt-in performance checks)
 and **4** perf-only (top5 object interval, GNU constant-p ICE,
 canonical optimized first500, parser scope first500).
-**64 distinct active names** across the two development branches,
-down from **100**. The sum of active definitions falls 159 → 119.
+**58 distinct active names** across the two development branches,
+down from **100**. The sum of active definitions falls 159 → 107.
 
 Four branch refs remain; no source merge and no perf branch deletion.
 
@@ -50,7 +50,21 @@ between runtime/performance after the `72` input was quoted as a YAML
 string. These are workflow-only changes, **not** semantic coverage
 certification for heavyweight specialized paths.
 
+5. Runtime focused diagnostics: **spinlock 4→1**, **FDT 2→1**,
+   **kallsyms 3→1** on both development branches. All 9 original jobs
+   remain independent; six retired workflow YAMLs have exact matching
+   archived blob SHA. New job-level manual-mode and explicit commit-tag
+   selectors prevent accidental heavy Runtime execution. The six
+   original executable job bodies were also byte-compared as unchanged.
+   See [focused runtime convergence](runtime-focused-workflow-convergence-2026-10-09.md).
+
 ## Verifications
+- [M0 37807388796](https://github.com/yituanxing/minic-toolchain/actions/runs/37807388796):
+  final Linux focused YAML parse, six archived Git SHA identities and
+  six original job-body equivalence checks **PASS**. First checker
+  attempt 37807336727 failed due to over-escaped newline literals in
+  the checker (not runtime compiler); the follow-up fixed those literals
+  and passed.
 
 - [M0 37802876581](https://github.com/yituanxing/minic-toolchain/actions/runs/37802876581):
   first four distributed retirement SHA checks and independent Image
