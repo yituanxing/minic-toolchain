@@ -93,9 +93,19 @@ case "$mode" in
     (cd "$out" && sha256sum --status -c "$work/object-sha-before.txt") || {
       echo 'DIST_O20_REUSE=FAIL object/cmd changed' >&2; exit 1;
     }
+    # A fresh Kbuild prepare can regenerate *unrelated* support objects
+    # (e.g. scripts/mod/empty.o and native vDSO). The invariant is that none
+    # of the 20 transferred requested objects was rebuilt, even to identical bytes.
     count=$(grep -c '^minic ' "$trace" || true)
-    [[ "$count" -eq 0 ]] || { echo "DIST_O20_REUSE=FAIL minic_calls=$count (Kbuild rebuilt transferred objects)"; exit 1; }
-    echo "DIST_O20_REUSE=PASS objects=20 minic_calls=0 seconds=$(($(date +%s)-start))"
+    sed -n -E 's/^pass source=.* output=([^ ]+).*$/\1/p' "$trace" >"$work/compiled-targets.txt"
+    awk '{ print $2 }' "$targets_file" >"$work/requested-targets.txt"
+    unexpected=$(grep -Fxf "$work/requested-targets.txt" "$work/compiled-targets.txt" || true)
+    if [[ -n "$unexpected" ]]; then
+      printf 'DIST_O20_REUSE=FAIL transferred_target_recompiled=%s\n' "$unexpected" >&2
+      exit 1
+    fi
+    echo "DIST_O20_REUSE=PASS objects=20 target_recompiles=0 ancillary_minic_calls=$count seconds=$(($(date +%s)-start))"
+    printf 'DIST_O20_ANCILLARY_COMPILED=%s\n' "$(paste -sd, "$work/compiled-targets.txt")"
     # This is a *relocatable partial link*, NOT a full Image/runtime test.
     riscv64-linux-gnu-ld -r -o "$work/distributed20.o" "${objects[@]}"
     riscv64-linux-gnu-readelf -h "$work/distributed20.o" | grep -q 'Machine:.*RISC-V'
