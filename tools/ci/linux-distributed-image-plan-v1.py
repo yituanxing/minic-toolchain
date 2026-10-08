@@ -24,11 +24,14 @@ for line in plan.read_text(errors="replace").splitlines():
     if not sources or not objects:
         continue
     obj = pathlib.Path(objects[-1].strip("'\""))
-    if obj.is_absolute():
-        try:
-            obj = obj.resolve().relative_to(out)
-        except ValueError:
-            continue
+    # Linux Kbuild deliberately spells some shared source objects through paths
+    # like arch/riscv/kvm/../../../virt/kvm/kvm_main.o. Canonicalize *inside*
+    # out-tree before duplicate detection rather than rejecting valid .. paths.
+    target = obj.resolve() if obj.is_absolute() else (out / obj).resolve()
+    try:
+        obj = target.relative_to(out)
+    except ValueError:
+        raise SystemExit(f"DIST_IMAGE_OBJECT_ESCAPE {target}")
     rel = obj.as_posix().removeprefix("./")
     if not rel.endswith(".o") or rel.startswith(("scripts/", "tools/")) or "/scripts/" in rel:
         continue
