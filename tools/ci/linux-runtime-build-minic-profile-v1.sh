@@ -65,6 +65,7 @@ patches=(
   apply-perf-parser-typedef-index-v1.py
   apply-perf-parser-local-shadow-fix-v1.py
   apply-perf-parser-nearest-ordinary-scope-v1.py
+  apply-correctness-constant-p-ice-v1.py
 )
 
 start=$(date +%s%N)
@@ -76,6 +77,11 @@ for p in "${patches[@]}"; do
         "$p" == apply-perf-parser-typedef-index-v1.py
       ) ]]; then
     echo "SKIPPED_VERIFIED_PERF_PATCH=$p" >>"$ev/patch.log"
+    continue
+  fi
+  if [[ "${MINIC_CORRECTNESS_SKIP_CONSTANT_P_ICE:-0}" == 1 &&
+        "$p" == apply-correctness-constant-p-ice-v1.py ]]; then
+    echo "SKIPPED_CONSTANT_P_ICE=$p" >>"$ev/patch.log"
     continue
   fi
   if [[ "${MINIC_PERF_SKIP_CORE_INTERVAL_ONEPASS:-0}" == 1 &&
