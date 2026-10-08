@@ -178,6 +178,54 @@ jobs:
             echo "DIST_IMAGE_MTIME_PROBE=$mode object=$obj minic_calls=$calls" | tee -a "$diag/results.txt"
           done
           echo 'DIST_IMAGE_MTIME_DIAG=COMPLETE no_Image_certification'
+      - name: Check the 55-patch performance compiler on the same five objects
+        if: github.event_name == 'push'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          root="$GITHUB_WORKSPACE"
+          work="$root/build/linux-distributed-full-image-v1"
+          src="$work/linux-6.6.143"
+          out="$work/out"
+          diag="$work/assert-five"
+          perfsource="$work/perf-clean-worktree"
+          mkdir -p "$diag"
+          git worktree add --detach "$perfsource" "$GITHUB_SHA"
+          (
+            cd "$perfsource"
+            bash tools/ci/linux-perf-build-minic-profile-v1.sh "$work/perf-toolchain" "$diag/perf-profile"
+          )
+          perf="$work/perf-toolchain/bin/minic"
+          test -s "$perf"
+          sha256sum "$perf" | tee "$diag/perf-compiler.sha256"
+          targets=(
+            kernel/bpf/bpf_lru_list.o
+            fs/nfs/dir.o
+            drivers/scsi/sr_ioctl.o
+            net/core/page_pool.o
+            net/ipv4/tcp_output.o
+          )
+          unresolved=0
+          for obj in "${targets[@]}"; do
+            rm -f "$out/$obj" "$out/$(dirname "$obj")/.$(basename "$obj").cmd"
+            MINIC="$perf" REAL_CC=/usr/bin/riscv64-linux-gnu-gcc CORE_FAST_TRACE=0 \
+              MINIC_KEEP_INTERMEDIATES=0 \
+              make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
+                CC="$root/tests/external/linux/stage2_kbuild_cc.sh" \
+                -j1 V=1 "$obj" > "$diag/${obj//\//_}.perf.log" 2>&1 || {
+                  echo "PERF_FIVE_COMPILE=FAIL target=$obj"
+                  tail -n 65 "$diag/${obj//\//_}.perf.log"
+                  exit 1
+                }
+            riscv64-linux-gnu-nm -u "$out/$obj" > "$diag/${obj//\//_}.perf.undefined"
+            if grep -F '__compiletime_assert_' "$diag/${obj//\//_}.perf.undefined"; then
+              unresolved=$((unresolved+1))
+              echo "PERF_FIVE_ASSERT=REMAINS target=$obj" | tee -a "$diag/results.txt"
+            else
+              echo "PERF_FIVE_ASSERT=ELIMINATED target=$obj" | tee -a "$diag/results.txt"
+            fi
+          done
+          echo "PERF_FIVE_SUMMARY objects=5 unresolved=$unresolved compiler=55-patch" | tee -a "$diag/results.txt"
       - name: Mark self-path push as focused diagnosis, not Image certification
         if: github.event_name == 'push'
         run: echo 'ASSERT_FIVE_DIAGNOSTIC_ONLY=PASS Image_and_QEMU_not_executed'
