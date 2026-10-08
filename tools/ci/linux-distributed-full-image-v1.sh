@@ -87,7 +87,7 @@ case "$mode" in
     [[ $(wc -l <"$bundle/SHA256SUMS") -eq $((${#targets[@]} * 2)) ]] || exit 70
     echo "DIST_IMAGE_PRODUCE=PASS shard=$shard objects=${#targets[@]} seconds=$(($(date +%s)-start)) mini_calls=$(grep -c '^minic ' "$trace" || true)"
     ;;
-  image)
+  image|preflight)
     : >"$work/reuse.sha256"
     n=0
     for shard in 0 1 2 3 4 5 6; do
@@ -125,6 +125,30 @@ case "$mode" in
     [[ "$restamped" -eq "$total" ]] || exit 70
     ( cd "$out"; sha256sum --status -c "$work/reuse.sha256" )
     echo "DIST_IMAGE_RESTAMP=PASS objects=$restamped preserved_sha256=$((n*2))"
+    if [[ "$mode" == preflight ]]; then
+      # Cheap proof of reuse after fresh Kbuild header generation. Preserve the
+      # full no-recompilation + SHA gates in the subsequent Image run.
+      samples=(init/main.o arch/riscv/kernel/alternative.o kernel/bpf/bpf_lru_list.o fs/nfs/dir.o net/core/page_pool.o)
+      : >"$work/preflight.trace"
+      for sample in "${samples[@]}"; do
+        MINIC="$compiler" REAL_CC=/usr/bin/riscv64-linux-gnu-gcc MINIC_KEEP_INTERMEDIATES=0 \
+          MINIC_KBUILD_TRACE="$work/preflight.trace" CORE_FAST_TRACE=0 \
+          make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
+            CC="$wrapper" -j1 V=1 "$sample" >>"$work/preflight.log" 2>&1 || {
+              tail -n 80 "$work/preflight.log" >&2; exit 1;
+            }
+      done
+      ( cd "$out"; sha256sum --status -c "$work/reuse.sha256" ) || {
+        echo "DIST_IMAGE_PREFLIGHT=FAIL hashes_changed" >&2; exit 1;
+      }
+      if grep -q "^minic input=" "$work/preflight.trace"; then
+        echo "DIST_IMAGE_PREFLIGHT=FAIL MiniC_recompiled_sample" >&2
+        grep "^minic input=" "$work/preflight.trace" | head -n 20 >&2
+        exit 1
+      fi
+      echo "DIST_IMAGE_PREFLIGHT=PASS objects=$total samples=${#samples[@]} no_minic_recompile=1"
+      exit 0
+    fi
     trace="$work/image.trace"
     : >"$trace"
     start=$(date +%s)
