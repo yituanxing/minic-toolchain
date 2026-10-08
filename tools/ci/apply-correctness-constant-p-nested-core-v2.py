@@ -13,7 +13,7 @@ from pathlib import Path
 
 p = Path("src/core/core_lower.c")
 s = p.read_text()
-fn = "static bool core_const_eval_integer_with_locals(const MinicCoreLowerContext *context,\n"
+fn = ("static bool core_const_eval_integer_with_locals(const MinicCoreLowerContext *context,\n"\n      "                                                MinicExpressionId expression_id,\n"\n      "                                                MinicConstValue *value) {\n")
 helper = r'''
 /* V2_NESTED_CONSTANT_P: identify deferred constant queries without
  * executing an operand.  Bounded traversal, no AST changes or side effects. */
