@@ -198,7 +198,240 @@ jobs:
           assert "inputs.mode == 'window'" in as_merged
           assert 'default: first500' in as_merged
           assert '          - final352' in as_merged
-          assert 'minias-a0-${{ needs.resolve.outputs.label }}-progress' in as_merged
+          assert ('minias-a0-' + '
+          assert ('minias-a0-' + '
+          as_old = as_archived_bytes.decode()
+          old_jobs = as_old.split('\njobs:\n', 1)[1]
+          old_tail = '\n  window-shard:' + old_jobs.split('\n  window-shard:', 1)[1]
+          assert old_tail.rstrip() in as_merged, 'Window shard/aggregate bodies differ from archived original'
+          resolve_tail = old_jobs.split('\n    runs-on:', 1)[1].split('\n  window-shard:', 1)[0]
+          assert resolve_tail in as_merged, 'Window resolver executable body differs from archived original'
+          print('M0_MINIAS_FOCUSED=PASS owners=1 jobs=6 archive_sha=PASS original_window_execution=PASS')
+          PY_CI
+
+      - name: Build frozen compiler boundary
+        if: github.ref != 'refs/heads/agent/linux-expanded-kbuild-v0'
+        run: make clean && make -j2
+
+      - name: Verify minic-cc and independent driver entrypoint
+        if: github.ref != 'refs/heads/agent/linux-expanded-kbuild-v0'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -x build/debug/bin/minic-cc
+          test -x build/debug/bin/minic
+          if cmp -s build/debug/bin/minic-cc build/debug/bin/minic; then
+            echo "minic driver unexpectedly aliases minic-cc" >&2
+            exit 1
+          fi
+          echo "M0_BINARY_BOUNDARY=PASS compiler=minic-cc driver=minic"
+
+      - name: Run focused ownership gates
+        if: github.ref != 'refs/heads/agent/linux-expanded-kbuild-v0'
+        run: |
+          make check-token-model check-lexer check-type check-record check-type-alias
+          make check-ast-contract check-layout check-rv64-abi
+          make check-static-functions check-cast-expressions check-pointer-members
+
+      - name: Verify compiler CLI output identity
+        if: github.ref != 'refs/heads/agent/linux-expanded-kbuild-v0'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work=build/m0-cli-identity
+          mkdir -p "$work"
+          cc -E -P -x c tests/compiler/c0/empty_main.c -o "$work/input.i"
+          build/debug/bin/minic-cc -S "$work/input.i" -o "$work/minic-cc.s"
+          build/debug/bin/minic -S "$work/input.i" -o "$work/minic-compat.s"
+          cmp "$work/minic-cc.s" "$work/minic-compat.s"
+          echo "M0_COMPILER_CLI_IDENTITY=PASS boundary=.i-to-.s driver_compat=PASS"
+ + '{{ needs.resolve.outputs.label }}-progress') in as_merged
+          assert 'minias-a0-${{ needs.resolve.outputs.label }}-shard-${{ matrix.shard }}' in as_merged
+          as_old = as_archived_bytes.decode()
+          old_jobs = as_old.split('\njobs:\n', 1)[1]
+          old_tail = '\n  window-shard:' + old_jobs.split('\n  window-shard:', 1)[1]
+          assert old_tail.rstrip() in as_merged, 'Window shard/aggregate bodies differ from archived original'
+          resolve_tail = old_jobs.split('\n    runs-on:', 1)[1].split('\n  window-shard:', 1)[0]
+          assert resolve_tail in as_merged, 'Window resolver executable body differs from archived original'
+          print('M0_MINIAS_FOCUSED=PASS owners=1 jobs=6 archive_sha=PASS original_window_execution=PASS')
+          PY_CI
+
+      - name: Build frozen compiler boundary
+        if: github.ref != 'refs/heads/agent/linux-expanded-kbuild-v0'
+        run: make clean && make -j2
+
+      - name: Verify minic-cc and independent driver entrypoint
+        if: github.ref != 'refs/heads/agent/linux-expanded-kbuild-v0'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -x build/debug/bin/minic-cc
+          test -x build/debug/bin/minic
+          if cmp -s build/debug/bin/minic-cc build/debug/bin/minic; then
+            echo "minic driver unexpectedly aliases minic-cc" >&2
+            exit 1
+          fi
+          echo "M0_BINARY_BOUNDARY=PASS compiler=minic-cc driver=minic"
+
+      - name: Run focused ownership gates
+        if: github.ref != 'refs/heads/agent/linux-expanded-kbuild-v0'
+        run: |
+          make check-token-model check-lexer check-type check-record check-type-alias
+          make check-ast-contract check-layout check-rv64-abi
+          make check-static-functions check-cast-expressions check-pointer-members
+
+      - name: Verify compiler CLI output identity
+        if: github.ref != 'refs/heads/agent/linux-expanded-kbuild-v0'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work=build/m0-cli-identity
+          mkdir -p "$work"
+          cc -E -P -x c tests/compiler/c0/empty_main.c -o "$work/input.i"
+          build/debug/bin/minic-cc -S "$work/input.i" -o "$work/minic-cc.s"
+          build/debug/bin/minic -S "$work/input.i" -o "$work/minic-compat.s"
+          cmp "$work/minic-cc.s" "$work/minic-compat.s"
+          echo "M0_COMPILER_CLI_IDENTITY=PASS boundary=.i-to-.s driver_compat=PASS"
+ + '{{ needs.resolve.outputs.label }}-shard-' + '
+          as_old = as_archived_bytes.decode()
+          old_jobs = as_old.split('\njobs:\n', 1)[1]
+          old_tail = '\n  window-shard:' + old_jobs.split('\n  window-shard:', 1)[1]
+          assert old_tail.rstrip() in as_merged, 'Window shard/aggregate bodies differ from archived original'
+          resolve_tail = old_jobs.split('\n    runs-on:', 1)[1].split('\n  window-shard:', 1)[0]
+          assert resolve_tail in as_merged, 'Window resolver executable body differs from archived original'
+          print('M0_MINIAS_FOCUSED=PASS owners=1 jobs=6 archive_sha=PASS original_window_execution=PASS')
+          PY_CI
+
+      - name: Build frozen compiler boundary
+        if: github.ref != 'refs/heads/agent/linux-expanded-kbuild-v0'
+        run: make clean && make -j2
+
+      - name: Verify minic-cc and independent driver entrypoint
+        if: github.ref != 'refs/heads/agent/linux-expanded-kbuild-v0'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -x build/debug/bin/minic-cc
+          test -x build/debug/bin/minic
+          if cmp -s build/debug/bin/minic-cc build/debug/bin/minic; then
+            echo "minic driver unexpectedly aliases minic-cc" >&2
+            exit 1
+          fi
+          echo "M0_BINARY_BOUNDARY=PASS compiler=minic-cc driver=minic"
+
+      - name: Run focused ownership gates
+        if: github.ref != 'refs/heads/agent/linux-expanded-kbuild-v0'
+        run: |
+          make check-token-model check-lexer check-type check-record check-type-alias
+          make check-ast-contract check-layout check-rv64-abi
+          make check-static-functions check-cast-expressions check-pointer-members
+
+      - name: Verify compiler CLI output identity
+        if: github.ref != 'refs/heads/agent/linux-expanded-kbuild-v0'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work=build/m0-cli-identity
+          mkdir -p "$work"
+          cc -E -P -x c tests/compiler/c0/empty_main.c -o "$work/input.i"
+          build/debug/bin/minic-cc -S "$work/input.i" -o "$work/minic-cc.s"
+          build/debug/bin/minic -S "$work/input.i" -o "$work/minic-compat.s"
+          cmp "$work/minic-cc.s" "$work/minic-compat.s"
+          echo "M0_COMPILER_CLI_IDENTITY=PASS boundary=.i-to-.s driver_compat=PASS"
+ + '{{ needs.resolve.outputs.label }}-progress') in as_merged
+          assert 'minias-a0-${{ needs.resolve.outputs.label }}-shard-${{ matrix.shard }}' in as_merged
+          as_old = as_archived_bytes.decode()
+          old_jobs = as_old.split('\njobs:\n', 1)[1]
+          old_tail = '\n  window-shard:' + old_jobs.split('\n  window-shard:', 1)[1]
+          assert old_tail.rstrip() in as_merged, 'Window shard/aggregate bodies differ from archived original'
+          resolve_tail = old_jobs.split('\n    runs-on:', 1)[1].split('\n  window-shard:', 1)[0]
+          assert resolve_tail in as_merged, 'Window resolver executable body differs from archived original'
+          print('M0_MINIAS_FOCUSED=PASS owners=1 jobs=6 archive_sha=PASS original_window_execution=PASS')
+          PY_CI
+
+      - name: Build frozen compiler boundary
+        if: github.ref != 'refs/heads/agent/linux-expanded-kbuild-v0'
+        run: make clean && make -j2
+
+      - name: Verify minic-cc and independent driver entrypoint
+        if: github.ref != 'refs/heads/agent/linux-expanded-kbuild-v0'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -x build/debug/bin/minic-cc
+          test -x build/debug/bin/minic
+          if cmp -s build/debug/bin/minic-cc build/debug/bin/minic; then
+            echo "minic driver unexpectedly aliases minic-cc" >&2
+            exit 1
+          fi
+          echo "M0_BINARY_BOUNDARY=PASS compiler=minic-cc driver=minic"
+
+      - name: Run focused ownership gates
+        if: github.ref != 'refs/heads/agent/linux-expanded-kbuild-v0'
+        run: |
+          make check-token-model check-lexer check-type check-record check-type-alias
+          make check-ast-contract check-layout check-rv64-abi
+          make check-static-functions check-cast-expressions check-pointer-members
+
+      - name: Verify compiler CLI output identity
+        if: github.ref != 'refs/heads/agent/linux-expanded-kbuild-v0'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work=build/m0-cli-identity
+          mkdir -p "$work"
+          cc -E -P -x c tests/compiler/c0/empty_main.c -o "$work/input.i"
+          build/debug/bin/minic-cc -S "$work/input.i" -o "$work/minic-cc.s"
+          build/debug/bin/minic -S "$work/input.i" -o "$work/minic-compat.s"
+          cmp "$work/minic-cc.s" "$work/minic-compat.s"
+          echo "M0_COMPILER_CLI_IDENTITY=PASS boundary=.i-to-.s driver_compat=PASS"
+ + '{{ matrix.shard }}') in as_merged
+          as_old = as_archived_bytes.decode()
+          old_jobs = as_old.split('\njobs:\n', 1)[1]
+          old_tail = '\n  window-shard:' + old_jobs.split('\n  window-shard:', 1)[1]
+          assert old_tail.rstrip() in as_merged, 'Window shard/aggregate bodies differ from archived original'
+          resolve_tail = old_jobs.split('\n    runs-on:', 1)[1].split('\n  window-shard:', 1)[0]
+          assert resolve_tail in as_merged, 'Window resolver executable body differs from archived original'
+          print('M0_MINIAS_FOCUSED=PASS owners=1 jobs=6 archive_sha=PASS original_window_execution=PASS')
+          PY_CI
+
+      - name: Build frozen compiler boundary
+        if: github.ref != 'refs/heads/agent/linux-expanded-kbuild-v0'
+        run: make clean && make -j2
+
+      - name: Verify minic-cc and independent driver entrypoint
+        if: github.ref != 'refs/heads/agent/linux-expanded-kbuild-v0'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -x build/debug/bin/minic-cc
+          test -x build/debug/bin/minic
+          if cmp -s build/debug/bin/minic-cc build/debug/bin/minic; then
+            echo "minic driver unexpectedly aliases minic-cc" >&2
+            exit 1
+          fi
+          echo "M0_BINARY_BOUNDARY=PASS compiler=minic-cc driver=minic"
+
+      - name: Run focused ownership gates
+        if: github.ref != 'refs/heads/agent/linux-expanded-kbuild-v0'
+        run: |
+          make check-token-model check-lexer check-type check-record check-type-alias
+          make check-ast-contract check-layout check-rv64-abi
+          make check-static-functions check-cast-expressions check-pointer-members
+
+      - name: Verify compiler CLI output identity
+        if: github.ref != 'refs/heads/agent/linux-expanded-kbuild-v0'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work=build/m0-cli-identity
+          mkdir -p "$work"
+          cc -E -P -x c tests/compiler/c0/empty_main.c -o "$work/input.i"
+          build/debug/bin/minic-cc -S "$work/input.i" -o "$work/minic-cc.s"
+          build/debug/bin/minic -S "$work/input.i" -o "$work/minic-compat.s"
+          cmp "$work/minic-cc.s" "$work/minic-compat.s"
+          echo "M0_COMPILER_CLI_IDENTITY=PASS boundary=.i-to-.s driver_compat=PASS"
+ + '{{ needs.resolve.outputs.label }}-progress') in as_merged
           assert 'minias-a0-${{ needs.resolve.outputs.label }}-shard-${{ matrix.shard }}' in as_merged
           as_old = as_archived_bytes.decode()
           old_jobs = as_old.split('\njobs:\n', 1)[1]
