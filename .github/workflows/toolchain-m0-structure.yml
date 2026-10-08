@@ -14,6 +14,7 @@ on:
       - '.github/workflows/toolchain-m0-structure.yml'
       - '.github/workflows/linux-distributed-full-image-signedness-v2.yml'
       - '.github/workflows/miniobjcopy-strip-regressions-v1.yml'
+      - '.github/workflows/minipp-linux-exact-smoke.yml'
       - 'tools/ci/linux-distributed-full-image-v1.sh'
       - 'tools/ci/linux-distributed-canonical-delay-v1.py'
       - 'tools/ci/linux-distributed-provenance-audit-v2.py'
@@ -59,6 +60,7 @@ jobs:
             tools/ci/linux-distributed-provenance-audit-v2.py \
             tools/ci/linux-distributed-image-plan-v1.py
           ruby -e 'require "yaml"; YAML.parse_file(ARGV.fetch(0)); puts "M0_MINIOBJCOPY_YAML=PASS"' .github/workflows/miniobjcopy-strip-regressions-v1.yml
+          ruby -e 'require "yaml"; YAML.parse_file(ARGV.fetch(0)); puts "M0_MINIPP_LIVE_YAML=PASS"' .github/workflows/minipp-linux-exact-smoke.yml
           python3 - <<'PY_CI'
           from pathlib import Path
           yaml = Path('.github/workflows/linux-distributed-full-image-signedness-v2.yml').read_text()
@@ -113,6 +115,25 @@ jobs:
               git_blob = b'blob ' + str(len(data)).encode() + bytes([0]) + data
               assert hashlib.sha1(git_blob).hexdigest() == sha, f'Old MiniObjcopy YAML modified: {fname}'
           print('M0_MINIOBJCOPY_CONVERGENCE=PASS jobs=3 archived=2 blobs_identical=2')
+
+          exact = Path('.github/workflows/minipp-linux-exact-smoke.yml').read_text()
+          assert 'default: smoke' in exact
+          for mode in ('smoke', 'batch', '72'):
+              assert '\n  linux-exact-' + mode + ':\n' in exact, f'Missing MiniPP exact job: {mode}'
+              assert "inputs.mode == '" + mode + "'" in exact, f'Missing MiniPP mode selector: {mode}'
+          assert 'name: minipp-linux-exact-smoke' in exact
+          assert 'name: minipp-linux-exact-batch18' in exact
+          assert 'name: minipp-linux-exact-72' in exact
+          exact_archives = {
+              'minipp-linux-exact-batch.yml': 'fbd14271a9ffcb45350a3ada76a65b8c26345fc6',
+              'minipp-linux-exact-72.yml': 'dcf0399404d1c7d671cbeb8ef00a6dab816ffe30',
+          }
+          for fname, sha in exact_archives.items():
+              assert not (Path('.github/workflows') / fname).exists(), f'Old MiniPP workflow unexpectedly active: {fname}'
+              data = (Path('.github/workflows-disabled') / fname).read_bytes()
+              git_blob = b'blob ' + str(len(data)).encode() + bytes([0]) + data
+              assert hashlib.sha1(git_blob).hexdigest() == sha, f'MiniPP archival blob mismatch: {fname}'
+          print('M0_MINIPP_LIVE_EXACT=PASS jobs=3 archived=2 blobs_identical=2')
           PY_CI
 
       - name: Build frozen compiler boundary
