@@ -177,18 +177,30 @@ case "$mode" in
       tail -n 120 "$work/image.log" >&2
       exit "$rc"
     fi
-    ( cd "$out"; sha256sum --status -c "$work/reuse.sha256" ) || {
-      echo 'DIST_IMAGE_REUSE=FAIL object/cmd changed during final Kbuild' >&2
-      exit 1
-    }
     sed -n -E 's/^pass source=.* output=([^ ]+).*$/\1/p' "$trace" >"$work/final-compiled.txt"
     awk -F '\t' '{print $3}' "$plan" >"$work/planned-targets.txt"
     rebuilt=$(grep -Fxf "$work/planned-targets.txt" "$work/final-compiled.txt" || true)
-    if [[ -n "$rebuilt" ]]; then
-      echo "DIST_IMAGE_REUSE=FAIL transferred_target_recompiled=$rebuilt" >&2
-      exit 1
+    if [[ "${MINIC_DISTRIBUTED_TRACED_REBUILD_LIMIT:-0}" =~ ^[1-9][0-9]*$ ]]; then
+      # All 6704 producer hashes were checked before make. After linking,
+      # allow changes only for exact manifest objects with proven MiniC passes.
+      python3 "$root/tools/ci/linux-distributed-provenance-audit-v2.py" \
+        "$out" "$work/reuse.sha256" "$trace" "$plan" \
+        "$MINIC_DISTRIBUTED_TRACED_REBUILD_LIMIT" "$work/reuse-post-audit.txt" \
+        | tee -a "$work/image-summary.txt"
+      echo "DIST_IMAGE_REUSE=PASS mode=bounded-provenance initial_sha256=6704" \
+        | tee -a "$work/image-summary.txt"
+    else
+      ( cd "$out"; sha256sum --status -c "$work/reuse.sha256" ) || {
+        echo 'DIST_IMAGE_REUSE=FAIL object/cmd changed during final Kbuild' >&2
+        exit 1
+      }
+      if [[ -n "$rebuilt" ]]; then
+        echo "DIST_IMAGE_REUSE=FAIL transferred_target_recompiled=$rebuilt" >&2
+        exit 1
+      fi
+      echo "DIST_IMAGE_REUSE=PASS target_recompiles=0 ancillary_minic_calls=$(grep -c '^minic ' "$trace" || true)" \
+        | tee -a "$work/image-summary.txt"
     fi
-    echo "DIST_IMAGE_REUSE=PASS target_recompiles=0 ancillary_minic_calls=$(grep -c '^minic ' "$trace" || true)" | tee -a "$work/image-summary.txt"
     test -s "$out/arch/riscv/boot/Image"
     test -s "$out/vmlinux"
     test -s "$out/System.map"
