@@ -61,3 +61,15 @@ require scrutiny before calling them current runnable fixtures.
 
 Keep old source run identities intact and do not reactivate arbitrary
 noncanonical workflow versions just to make an artifact downloadable.
+
+## Structural proof on current Runtime head
+
+- [M0 run 37861656075](https://github.com/yituanxing/minic-toolchain/actions/runs/37861656075)
+  **SUCCESS**: `M0_LIVE_TRIGGER_YAML=PASS`,
+  `M0_LIVE_TRIGGERS=PASS current_dev_branches=2 fixed_workflows=5`,
+  plus preserved Core 3352 and focused-five archive SHA/job body checks.
+- The same repaired five workflow Git blob SHAs are mirrored in the
+  performance branch; no compiler/runtime/test implementation changed.
+- Artifact expiration dates remain external and time-sensitive.
+  This report describes the 2026-10-09 check, not an everlasting
+  artifact guarantee.

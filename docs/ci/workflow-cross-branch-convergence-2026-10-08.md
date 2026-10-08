@@ -1,20 +1,22 @@
 # Cross-branch CI convergence — October 8, 2026
 
+> **Latest 2026-10-09 supplemental checkpoint:** **51 Runtime / 50 performance** active YAMLs, **55 distinct active names**, **277 byte-preserved disabled files per branch**, four remote branches. Tables below originated before the two latest Core consolidations; use these current figures instead. [M0 37861656075](https://github.com/yituanxing/minic-toolchain/actions/runs/37861656075) SUCCESS. See [Core full3352](linux-core-full3352-workflow-convergence-2026-10-09.md), [Core focused](core-strict500-focused-five-convergence-2026-10-09.md) and [workflow liveness/artifact audit](workflow-liveness-artifact-audit-2026-10-09.md).
+
 ## Current verified exact inventories
 
 | Branch | Active workflows now | Disabled workflow files (incl. nested) | Count at start of this cleanup sequence |
 | --- | ---: | ---: | ---: |
-| `agent/linux-expanded-kbuild-v0` | **53** | **275** (232 root + 38 + 5 nested) | 68 |
-| `agent/linux-perf-boolean-domain-v1` | **52** | **275** (232 root + 38 + 5 nested) | 91 |
+| `agent/linux-expanded-kbuild-v0` | **51** | **277** (234 root + 38 + 5 nested) | 68 |
+| `agent/linux-perf-boolean-domain-v1` | **50** | **277** (234 root + 38 + 5 nested) | 91 |
 | `main` | 11 | untouched | 11 |
 | `archive/all-progress-2026-10-04` | no active workflow directory | passive archival history | unchanged |
 
-Runtime and perf now share **48** active workflow filenames, plus **5**
+Runtime and perf now share **46** active workflow filenames, plus **5**
 Runtime-only (distributor + graph preflight + 3 opt-in performance checks)
 and **4** perf-only (top5 object interval, GNU constant-p ICE,
 canonical optimized first500, parser scope first500).
-**57 distinct active names** across the two development branches,
-down from **100**. The sum of active definitions falls 159 → 105.
+**55 distinct active names** across the two development branches,
+down from **100**. The sum of active definitions falls 159 → 101.
 
 Four branch refs remain; no source merge and no perf branch deletion.
 
@@ -65,7 +67,24 @@ certification for heavyweight specialized paths.
    previously listened on deleted branches.
    See [MiniAS focused/window ledger](minias-focused-window-convergence-2026-10-09.md).
 
+7. Two frozen Core suites converged without discarding distinct
+   predicates: full3352 compile and GNU assembly 2→1 (6 jobs); strict500
+   and focused-five 2→1 (2 jobs). Exact legacy blobs preserved; old
+   compile/assembly bodies compared; opt-in trigger tags moved from
+   the deleted refactor branch to the two current development refs.
+8. Five obsolete-only push triggers were repaired without changing
+   job shell commands. Four heavy jobs remain opt-in; MiniPP A0
+   runs for relevant preprocessor changes. All changes mirrored on both
+   dev branches. The frozen MiniAS run sources still have nine
+   unexpired artifacts in aggregate; historical MiniObjcopy exact Image
+   source run 33623125809 currently has zero artifacts.
+
 ## Verifications
+- [M0 37861656075](https://github.com/yituanxing/minic-toolchain/actions/runs/37861656075):
+  YAML structure, exact Core archive SHAs/job executable bodies,
+  five repaired trigger liveness checks, previous MiniAS/Runtime
+  provenance all **PASS**. Heavy 3352/3536/Linux-QEMU jobs were not
+  executed by this gate.
 - [M0 37860392307](https://github.com/yituanxing/minic-toolchain/actions/runs/37860392307):
   MiniAS YAML parse, archived Git SHA, and unchanged window job bodies
   **PASS** on the restored valid structural M0 source. Intermediate M0
