@@ -1,5 +1,7 @@
 # Current CI workflow map
 
+> **Verified current state — 2026-10-09:** **53 performance / 54 Runtime** active workflows, **58 distinct active names** across both branches and **274 archived Git-identical historical workflow files on each**. Runtime spinlock, FDT and kallsyms focused workflows were converged 9→3 while keeping all nine independent job bodies. [Shared convergence ledger](workflow-cross-branch-convergence-2026-10-08.md), [focused Runtime scope ledger](runtime-focused-workflow-convergence-2026-10-09.md), and [M0 37807388796](https://github.com/yituanxing/minic-toolchain/actions/runs/37807388796). Earlier 59/60 and 87 counts below are dated snapshots. This change does not merge compiler sources or certify Linux boot.
+
 > **Current cross-branch status, 2026-10-08:** this performance branch has **59** active workflow definitions, and the Runtime branch has **60**, with **64 unique active workflow names** across both. The performance branch has **268** exact-archived YAML files (including 43 nested historical). The earlier 87/185 figures below are from a much older snapshot; do not use them for current cleanup. Details and safe preservation checks: [cross-branch convergence ledger](workflow-cross-branch-convergence-2026-10-08.md). Unique current performance tests (object-interval Top5, GNU constant-p ICE, optimized first500, parser ordinary namespace first500) remain active; compiler source is unchanged.
 
 Snapshot: `72d632d43ef2fa02ec029f539105533203b5ac50`
