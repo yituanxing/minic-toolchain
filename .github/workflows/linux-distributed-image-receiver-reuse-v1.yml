@@ -255,6 +255,12 @@ jobs:
           riscv64-linux-gnu-nm -u "$out/net/core/page_pool.o" \
             | grep __compiletime_assert_489
           echo 'ASSERT_FIVE_CORE_FACT_TRACE=CAPTURED'
+      - name: Verify 3352-object transfer SHA and Kbuild reuse without full Image
+        if: github.event_name == 'push'
+        run: |
+          set -Eeuo pipefail
+          bash -n tools/ci/linux-distributed-full-image-v1.sh
+          bash tools/ci/linux-distributed-full-image-v1.sh preflight
       - name: Mark self-path push as focused diagnosis, not Image certification
         if: github.event_name == 'push'
         run: echo 'ASSERT_FIVE_DIAGNOSTIC_ONLY=PASS Image_and_QEMU_not_executed'
@@ -287,6 +293,8 @@ jobs:
             build/linux-distributed-full-image-v1/image.trace
             build/linux-distributed-full-image-v1/image-summary.txt
             build/linux-distributed-full-image-v1/reuse.sha256
+            build/linux-distributed-full-image-v1/preflight.log
+            build/linux-distributed-full-image-v1/preflight.trace
             build/linux-distributed-full-image-v1/final-compiled.txt
             build/linux-distributed-full-image-v1/qemu.log
             build/linux-distributed-full-image-v1/qemu-summary.txt
