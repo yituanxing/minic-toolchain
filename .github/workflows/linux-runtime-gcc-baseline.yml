@@ -3,7 +3,12 @@ name: Linux Runtime GCC Baseline
 on:
   push:
     branches:
-      - refactor/declaration-sema-v1
+      - "agent/linux-expanded-kbuild-v0"
+      - "agent/linux-perf-boolean-domain-v1"
+    paths:
+      - '.github/workflows/linux-runtime-gcc-baseline.yml'
+      - 'tests/external/linux/**'
+      - 'tools/ci/**'
   workflow_dispatch:
 
 permissions:

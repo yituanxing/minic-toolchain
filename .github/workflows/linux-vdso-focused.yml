@@ -3,7 +3,14 @@ name: Linux vDSO Focused
 on:
   push:
     branches:
-      - refactor/declaration-sema-v1
+      - "agent/linux-expanded-kbuild-v0"
+      - "agent/linux-perf-boolean-domain-v1"
+    paths:
+      - '.github/workflows/linux-vdso-focused.yml'
+      - 'src/**'
+      - 'include/**'
+      - 'tests/external/linux/**'
+      - 'tools/ci/**'
   workflow_dispatch:
 
 permissions:

@@ -3,7 +3,14 @@ name: Linux EFI Stub Diff V0
 on:
   push:
     branches:
-      - "agent/linux-link-correctness-v0"
+      - "agent/linux-expanded-kbuild-v0"
+      - "agent/linux-perf-boolean-domain-v1"
+    paths:
+      - '.github/workflows/linux-efistub-diff-v0.yml'
+      - 'src/**'
+      - 'include/**'
+      - 'tests/external/linux/**'
+      - 'tools/ci/**'
   workflow_dispatch:
 
 permissions:
@@ -15,6 +22,7 @@ concurrency:
 
 jobs:
   efistub-diff:
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && contains(github.event.head_commit.message, '[linux-efistub-diff]'))
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:

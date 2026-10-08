@@ -3,7 +3,15 @@ name: MiniC Driver V0
 on:
   push:
     branches:
-      - "toolchain/minic-driver-v0"
+      - "agent/linux-expanded-kbuild-v0"
+      - "agent/linux-perf-boolean-domain-v1"
+    paths:
+      - '.github/workflows/minic-driver-v0.yml'
+      - 'src/**'
+      - 'include/**'
+      - 'tests/driver/**'
+      - 'tools/**'
+      - 'Makefile'
   workflow_dispatch:
 
 permissions:
@@ -11,6 +19,7 @@ permissions:
 
 jobs:
   driver-v0:
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && contains(github.event.head_commit.message, '[minic-driver-v0]'))
     runs-on: ubuntu-24.04
     timeout-minutes: 35
     steps:
