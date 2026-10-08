@@ -1,4 +1,4 @@
-name: Linux Parser Typedef Hash ASan Diagnostic V1
+name: Linux Canonical Optimizations First500 A-B V1
 
 on:
   push:
@@ -18,29 +18,37 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Build Boolean Domain baseline and typedef-index candidate
+      - name: Build baseline and integrated optimization from clean sources
         shell: bash
         run: |
           set -Eeuo pipefail
           work="$GITHUB_WORKSPACE/build/linux-perf-audit-v1"
           mkdir -p "$work/evidence"
-          bash tools/ci/linux-runtime-build-minic-profile-v1.sh \
+          # Both profiles are rebuilt independently: headers such as
+          # parser_internal.h change MinicParser layout (ABI).
+          MINIC_PERF_SKIP_VERIFIED_OPTIMIZATIONS=1 \
+            bash tools/ci/linux-runtime-build-minic-profile-v1.sh \
             "$work/baseline-toolchain" "$work/evidence/baseline-profile"
-          python3 tools/ci/apply-inline-specialization-local-boolean-domain-scoped-v1.py \
-            | tee "$work/evidence/boolean-domain-patch.txt"
-          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$work/baseline-toolchain" \
-            "$work/baseline-toolchain/bin/minic" "$work/baseline-toolchain/bin/minic-cc" >/dev/null
-          # Build every candidate object afresh: parser_internal.h changes struct ABI.
-          # Copying baseline objects can silently retain stale parser layouts.
-          mkdir -p "$work/toolchain"
-          python3 tools/ci/apply-perf-parser-typedef-index-v1.py \
-            | tee "$work/evidence/typedef-index-patch.txt"
+          grep -qx 'apply-perf-core-lower-statement-workspace-v1.py' \
+            "$work/evidence/baseline-profile/minic-profile.txt"
+          grep -qx 'SKIPPED_VERIFIED_PERF_PATCH=apply-inline-specialization-local-boolean-domain-scoped-v1.py' \
+            "$work/evidence/baseline-profile/patch.log"
+          grep -qx 'SKIPPED_VERIFIED_PERF_PATCH=apply-perf-parser-typedef-index-v1.py' \
+            "$work/evidence/baseline-profile/patch.log"
+          # This resets only the disposable Actions checkout; cached build/linux
+          # input artifacts are untracked and not touched.
+          git reset --hard HEAD
+          bash tools/ci/linux-runtime-build-minic-profile-v1.sh \
+            "$work/toolchain" "$work/evidence/integrated-profile"
+          grep -qx 'apply-inline-specialization-local-boolean-domain-scoped-v1.py' \
+            "$work/evidence/integrated-profile/minic-profile.txt"
+          grep -qx 'apply-perf-parser-typedef-index-v1.py' \
+            "$work/evidence/integrated-profile/minic-profile.txt"
           git diff --check
-          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$work/toolchain" \
-            "$work/toolchain/bin/minic" "$work/toolchain/bin/minic-cc" >/dev/null
           sha256sum "$work/baseline-toolchain/bin/minic" "$work/baseline-toolchain/bin/minic-cc" \
             "$work/toolchain/bin/minic" "$work/toolchain/bin/minic-cc" \
             | tee "$work/evidence/paired-binary.sha256"
+          ! cmp -s "$work/baseline-toolchain/bin/minic-cc" "$work/toolchain/bin/minic-cc"
 
       - name: Restore certified first500 inputs
         id: corpus-restore
@@ -155,7 +163,7 @@ jobs:
             2>&1 | tee "$work/evidence/typedef-asan-smoke.txt"
           echo "TYPEDEF_ASAN_SMOKE=PASS"
 
-      - name: Paired typedef index A/B with exactly four workers
+      - name: Paired integrated optimization A/B with exactly four workers
         shell: bash
         run: |
           set -Eeuo pipefail
