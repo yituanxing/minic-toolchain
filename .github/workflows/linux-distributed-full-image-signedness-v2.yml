@@ -1,5 +1,9 @@
 name: Linux Distributed Full Image Signedness V2
 on:
+  push:
+    branches: [agent/linux-expanded-kbuild-v0]
+    paths:
+      - 'tools/ci/run-linux-distributed-image-signedness-v2.trigger'
   workflow_dispatch:
 
 permissions:
