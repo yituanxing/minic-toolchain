@@ -30,7 +30,9 @@ jobs:
             | tee "$work/evidence/boolean-domain-patch.txt"
           make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$work/baseline-toolchain" \
             "$work/baseline-toolchain/bin/minic" "$work/baseline-toolchain/bin/minic-cc" >/dev/null
-          cp -a "$work/baseline-toolchain" "$work/toolchain"
+          # Build every candidate object afresh: parser_internal.h changes struct ABI.
+          # Copying baseline objects can silently retain stale parser layouts.
+          mkdir -p "$work/toolchain"
           python3 tools/ci/apply-perf-parser-typedef-index-v1.py \
             | tee "$work/evidence/typedef-index-patch.txt"
           git diff --check
@@ -125,6 +127,18 @@ jobs:
         with:
           path: build/linux-perf-corpus
           key: linux-6.6.143-first500-rv64-v1-${{ hashFiles('tests/external/linux/batch_probe.sh', 'tests/external/linux/probe.sh', 'tests/external/linux/replay-indices.txt') }}
+
+      - name: Release direct minic smoke on previously crashing TU
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-perf-audit-v1"
+          input=build/linux-perf-corpus/kbuild/init/version.i
+          MINIC_TYPEDEF_INDEX_PERF=1 \
+            "$work/toolchain/bin/minic" -S "$input" -o "$work/release-smoke.s" \
+            2>&1 | tee "$work/evidence/typedef-release-smoke.txt"
+          test -s "$work/release-smoke.s"
+          echo "TYPEDEF_RELEASE_SMOKE=PASS"
 
       - name: Diagnose typedef candidate with ASan on known-failing TU
         shell: bash
