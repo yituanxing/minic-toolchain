@@ -307,6 +307,50 @@ jobs:
             echo "CORE_CONSTANT_P_CANDIDATE=PASS target=$obj" | tee -a "$diag/results.txt"
           done
           echo 'CORE_CONSTANT_P_FIVE=PASS no_residual_asserts=5'
+      - name: Verify nested constant-p fix on exact Runtime 39+ICE five blockers
+        if: github.event_name == 'push'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-distributed-full-image-v1"
+          src="$work/linux-6.6.143"
+          out="$work/out"
+          diag="$work/assert-five"
+          runtime="$work/toolchain/bin/minic"
+          old_sha=$(sha256sum "$work/toolchain/bin/minic-cc" | cut -d " " -f1)
+          python3 tools/ci/apply-correctness-constant-p-core-local-facts-v1.py
+          python3 tools/ci/apply-correctness-constant-p-nested-core-v2.py
+          git diff --check
+          make -B -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$work/toolchain" \
+            "$runtime" "$work/toolchain/bin/minic-cc" >/dev/null
+          new_sha=$(sha256sum "$work/toolchain/bin/minic-cc" | cut -d " " -f1)
+          test "$new_sha" != "$old_sha"
+          echo "RUNTIME39_NESTED_CONSTANT_P_CC_SHA old=$old_sha new=$new_sha"
+          targets=(
+            kernel/bpf/bpf_lru_list.o
+            fs/nfs/dir.o
+            drivers/scsi/sr_ioctl.o
+            net/core/page_pool.o
+            net/ipv4/tcp_output.o
+          )
+          for obj in "${targets[@]}"; do
+            tag=$(echo "$obj" | tr / _)
+            rm -f "$out/$obj" "$out/$(dirname "$obj")/.$(basename "$obj").cmd"
+            MINIC="$runtime" REAL_CC=/usr/bin/riscv64-linux-gnu-gcc \
+              MINIC_KEEP_INTERMEDIATES=0 CORE_FAST_TRACE=0 \
+              make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
+                CC="$GITHUB_WORKSPACE/tests/external/linux/stage2_kbuild_cc.sh" \
+                -j1 V=1 "$obj" > "$diag/$tag.runtime-fixed.log" 2>&1 || {
+                  tail -n 90 "$diag/$tag.runtime-fixed.log"; exit 1;
+                }
+            riscv64-linux-gnu-nm -u "$out/$obj" > "$diag/$tag.runtime-fixed.undefined"
+            if grep -F "__compiletime_assert_" "$diag/$tag.runtime-fixed.undefined"; then
+              echo "RUNTIME39_NESTED_ASSERT=FAIL object=$obj" >&2
+              exit 1
+            fi
+            echo "RUNTIME39_NESTED_ASSERT=PASS object=$obj" | tee -a "$diag/results.txt"
+          done
+          echo 'RUNTIME39_NESTED_ASSERT_FIVE=PASS objects=5 unresolved_asserts=0'
       - name: Verify 3352-object transfer SHA and Kbuild reuse without full Image
         if: github.event_name == 'push'
         run: |
