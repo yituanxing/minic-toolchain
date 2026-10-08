@@ -71,6 +71,22 @@ jobs:
           missing = [x for x in expected if x not in yaml]
           assert not missing, 'Missing distributed Image contract: ' + ', '.join(missing)
           assert 'run-id:' not in yaml, 'Canonical Image workflow must create its own shards'
+          import hashlib
+          retirements = {
+              'linux-distributed-kbuild-objects120-v1.yml': '9185bee34ba0f4391561f6a22e294e1a32675efd',
+              'linux-distributed-image-receiver-reuse-v1.yml': 'fcff21d5ee82841c4c94c72a16009e8d5b2165aa',
+              'linux-distributed-image-receiver-signedness-v2.yml': '7de981f45db79ef58e8e45caf65b3fa4f015f0ef',
+              'linux-distributed-full-image-v1.yml': '3a91435760197edacddc277395332c9023b808da',
+          }
+          for fname, original_sha in retirements.items():
+              active = Path('.github/workflows') / fname
+              archived = Path('.github/workflows-disabled') / fname
+              assert not active.exists(), f'Historical workflow reactivated: {active}'
+              data = archived.read_bytes()
+              git_blob = b'blob ' + str(len(data)).encode() + bytes([0]) + data
+              actual = hashlib.sha1(git_blob).hexdigest()
+              assert actual == original_sha, f'Altered archived workflow {fname}: {actual}'
+          print('M0_DISTRIBUTED_RETIREMENT=PASS archived=4 identical_git_blobs=4')
           print('M0_DISTRIBUTED_IMAGE_CONTRACT=PASS self_contained=1 strict_replay=1')
           PY_CI
 
