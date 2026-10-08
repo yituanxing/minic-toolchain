@@ -155,6 +155,48 @@ jobs:
             echo "MINIC_INVALID_TYPEDEF_EXPRESSION=REJECT"
           fi
 
+      - name: Prove runtime scope semantics on RISC-V QEMU
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/independent-verify-audit-v1"
+          sudo apt-get -o Acquire::Retries=3 update -qq
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            gcc-riscv64-linux-gnu qemu-user >"$work/evidence/qemu-install.log" 2>&1
+          for test_case in enum-global enum-local enum-typedef; do
+            asm="$work/ordinary-shadow/$test_case.s"
+            test -s "$asm"
+            riscv64-linux-gnu-gcc -static -o "$work/ordinary-shadow/$test_case.rv64" "$asm"
+            qemu-riscv64 "$work/ordinary-shadow/$test_case.rv64"
+            echo "MINIC_RV64_RUNTIME=$test_case PASS"
+          done
+          cat > "$work/ordinary-shadow/enum-hides-function.i" <<'EOF'
+          int Token(void) { return 50; }
+          int test(void) { enum { Token = 7 }; return Token; }
+          int main(void) { return test() == 7 ? 0 : 1; }
+          EOF
+          cat > "$work/ordinary-shadow/extern-hides-local.i" <<'EOF'
+          int G = 9;
+          int test(void) {
+              int G = 4;
+              { extern int G; return G; }
+          }
+          int main(void) { return test() == 9 ? 0 : 1; }
+          EOF
+          for test_case in enum-hides-function extern-hides-local; do
+            input="$work/ordinary-shadow/$test_case.i"
+            gcc "$input" -o "$work/ordinary-shadow/$test_case.host"
+            "$work/ordinary-shadow/$test_case.host"
+            "$work/toolchain/bin/minic" -S "$input" \
+              -o "$work/ordinary-shadow/$test_case.s" \
+              >"$work/evidence/$test_case-minic.log" 2>&1
+            riscv64-linux-gnu-gcc -static \
+              -o "$work/ordinary-shadow/$test_case.rv64" \
+              "$work/ordinary-shadow/$test_case.s"
+            qemu-riscv64 "$work/ordinary-shadow/$test_case.rv64"
+            echo "MINIC_RV64_RUNTIME=$test_case PASS"
+          done
+
       - name: Measure Core verifier on generated block-heavy C
         shell: bash
         run: |
