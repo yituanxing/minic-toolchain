@@ -1,0 +1,152 @@
+name: P15 Canonical Symbolic CALL Worklist First500 A-B V1
+
+on:
+  push:
+    branches:
+      - agent/perf-symbolic-worklist-p15-ab-v1
+    paths:
+      - .github/workflows/linux-symbolic-p15-call-worklist-first500-ab-v1.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ab500:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 50
+    env:
+      DEBIAN_FRONTEND: noninteractive
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build Canonical and isolated Symbolic CALL worklist candidate
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/symbolic-p15-call-v1"
+          mkdir -p "$work/evidence"
+          bash tools/ci/linux-runtime-build-minic-profile-v1.sh \
+            "$work/baseline" "$work/evidence/baseline-profile"
+          grep -qx 'apply-perf-symbolic-function-body-owner-filter-v0.py' \
+            "$work/evidence/baseline-profile/minic-profile.txt"
+          grep -qx 'apply-perf-core-object-interval-onepass-v1.py' \
+            "$work/evidence/baseline-profile/minic-profile.txt"
+          python3 tools/ci/apply-perf-symbolic-call-worklist-audit-v1.py \
+            | tee "$work/evidence/worklist-patch.log"
+          git diff --check
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$work/candidate" \
+            "$work/candidate/bin/minic" "$work/candidate/bin/minic-cc" \
+            >"$work/evidence/candidate-build.log" 2>&1
+          echo "SYMBOLIC_WORKLIST_AB500_BUILD=PASS"
+
+      - name: Restore certified first500 inputs
+        id: corpus-restore
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-perf-corpus
+          key: linux-6.6.143-first500-rv64-v1-${{ hashFiles('tests/external/linux/batch_probe.sh', 'tests/external/linux/probe.sh', 'tests/external/linux/replay-indices.txt') }}
+
+      - name: Verify restored first500 inputs
+        id: corpus-verify
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          corpus=build/linux-perf-corpus
+          if test -s "$corpus/selected-tus.txt" &&
+             test "$(grep -cve '^[[:space:]]*$' "$corpus/selected-tus.txt")" -eq 500 &&
+             test -s "$corpus/inputs.sha256" &&
+             test "$(wc -l < "$corpus/inputs.sha256")" -eq 500 &&
+             sha256sum --status --check "$corpus/inputs.sha256"; then
+            echo "valid=true" >> "$GITHUB_OUTPUT"
+            echo "PERF_CORPUS_CACHE=VERIFIED selected=500"
+          else
+            echo "valid=false" >> "$GITHUB_OUTPUT"
+            echo "PERF_CORPUS_CACHE=MISS_OR_INVALID"
+            rm -rf "$corpus"
+          fi
+
+      - name: Install Linux prerequisites only on cache miss
+        if: steps.corpus-verify.outputs.valid != 'true'
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends             build-essential gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu             libc6-dev-riscv64-cross bc bison flex libssl-dev libelf-dev             make curl xz-utils python3
+          riscv64-linux-gnu-gcc --version | head -n1
+
+      - name: Materialize exact historical first500 inputs
+        if: steps.corpus-verify.outputs.valid != 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/symbolic-p15-call-v1"
+          mkdir -p "$GITHUB_WORKSPACE/build/linux-cache"
+          archive="$GITHUB_WORKSPACE/build/linux-cache/linux-6.6.143.tar.xz"
+          curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors             https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.6.143.tar.xz -o "$archive"
+          echo "dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932  $archive" | sha256sum -c -
+          selection=$(grep -Ev '^[[:space:]]*(#|$)' tests/external/linux/replay-indices.txt | paste -sd, - || true)
+          start_ns=$(date +%s%N)
+          set +e
+          MINIC="$work/baseline/bin/minic"           BUILD_DIR="$GITHUB_WORKSPACE/build/linux-perf-materialize"           LINUX_ARCHIVE_CACHE="$archive"           CROSS_COMPILE=riscv64-linux-gnu-           LINUX_BATCH_OFFSET=0           LINUX_BATCH_LIMIT=500           LINUX_BATCH_JOBS=4           LINUX_BATCH_SELECTION="$selection"           LINUX_BATCH_MATERIALIZE_ONLY=1             sh tests/external/linux/batch_probe.sh
+          materialize_rc=$?
+          set -e
+          end_ns=$(date +%s%N)
+          echo "MATERIALIZE_ONLY=1 MATERIALIZE_RC=$materialize_rc MATERIALIZE_WALL_MS=$(((end_ns-start_ns)/1000000))"             | tee "$work/evidence/materialize.txt"
+          test -s "$GITHUB_WORKSPACE/build/linux-perf-materialize/selected-tus.txt"
+          test "$(grep -cve '^[[:space:]]*$' "$GITHUB_WORKSPACE/build/linux-perf-materialize/selected-tus.txt")" -eq 500
+          python3 - <<'PY'
+          from pathlib import Path
+          import shutil
+          src=Path("build/linux-perf-materialize")
+          dst=Path("build/linux-perf-corpus")
+          shutil.rmtree(dst,ignore_errors=True)
+          (dst/"kbuild").mkdir(parents=True)
+          selected=src/"selected-tus.txt"
+          shutil.copy2(selected,dst/"selected-tus.txt")
+          manifest=src/"tu-manifest.txt"
+          if manifest.is_file():
+              shutil.copy2(manifest,dst/"tu-manifest.txt")
+          for row in selected.read_text().splitlines():
+              _,_,rel_i,_=row.split("\t",3)
+              s=src/"kbuild"/rel_i
+              d=dst/"kbuild"/rel_i
+              if not s.is_file() or s.stat().st_size==0:
+                  raise SystemExit(f"missing frozen input: {s}")
+              d.parent.mkdir(parents=True,exist_ok=True)
+              shutil.copy2(s,d)
+          print("PERF_CORPUS_FROZEN selected=500")
+          PY
+          find build/linux-perf-corpus/kbuild -type f -name '*.i' -print0 | LC_ALL=C sort -z | xargs -0 sha256sum > build/linux-perf-corpus/inputs.sha256
+          test "$(wc -l < build/linux-perf-corpus/inputs.sha256)" -eq 500
+
+      - name: Save verified first500 corpus
+        if: steps.corpus-verify.outputs.valid != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: build/linux-perf-corpus
+          key: linux-6.6.143-first500-rv64-v1-${{ hashFiles('tests/external/linux/batch_probe.sh', 'tests/external/linux/probe.sh', 'tests/external/linux/replay-indices.txt') }}
+
+
+      - name: 500 TU exact assembly and performance paired A-B
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/symbolic-p15-call-v1"
+          MINIC_TYPEDEF_INDEX_PERF=1 CORE_FAST_TRACE=0 \
+            python3 tools/ci/linux-perf-typedef-paired-ab-v1.py \
+              --baseline "$work/baseline/bin/minic" \
+              --candidate "$work/candidate/bin/minic" \
+              --corpus "$GITHUB_WORKSPACE/build/linux-perf-corpus" \
+              --work "$work/paired" \
+              --jobs 4 | tee "$work/evidence/paired-ab-500.txt"
+          cp "$work/paired/paired-results.json" "$work/evidence/"
+          cp "$work/paired/output-fingerprints.tsv" "$work/evidence/"
+          echo "SYMBOLIC_CALL_WORKLIST_FIRST500=PASS"
+
+      - name: Upload independent 500 TU evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: symbolic-p15-call-worklist-first500-ab-v1
+          path: build/symbolic-p15-call-v1/evidence
+          retention-days: 7
