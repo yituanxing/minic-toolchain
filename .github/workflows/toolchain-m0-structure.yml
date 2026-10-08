@@ -20,6 +20,7 @@ on:
       - '.github/workflows/linux-runtime-generated-kallsyms-first-die-v0.yml'
       - '.github/workflows/minias-a0-focused-diagnostics-v1.yml'
       - '.github/workflows/linux-core-all3352.yml'
+      - '.github/workflows/core-first500-regression.yml'
       - 'tools/ci/linux-distributed-full-image-v1.sh'
       - 'tools/ci/linux-distributed-canonical-delay-v1.py'
       - 'tools/ci/linux-distributed-provenance-audit-v2.py'
@@ -72,6 +73,7 @@ jobs:
           echo "M0_RUNTIME_FOCUSED_YAML=PASS owners=3"
           ruby -e 'require "yaml"; YAML.parse_file(ARGV.fetch(0)); puts "M0_MINIAS_FOCUSED_YAML=PASS"' .github/workflows/minias-a0-focused-diagnostics-v1.yml
           ruby -e 'require "yaml"; YAML.parse_file(ARGV.fetch(0)); puts "M0_LINUX_CORE_3352_YAML=PASS"' .github/workflows/linux-core-all3352.yml
+          ruby -e 'require "yaml"; YAML.parse_file(ARGV.fetch(0)); puts "M0_CORE_FOCUSED_YAML=PASS"' .github/workflows/core-first500-regression.yml
           python3 - <<'PY_CI'
           from pathlib import Path
           yaml = Path('.github/workflows/linux-distributed-full-image-signedness-v2.yml').read_text()
@@ -236,6 +238,20 @@ jobs:
               old_steps = old_steps.replace('needs.shards.result','needs.asm-shards.result')
               assert old_steps == job_steps(core_file, current), f'Core assembly executable body changed: {original}'
           print('M0_CORE_3352_CONVERGENCE=PASS six_jobs=6 old_assemble_jobs=3 archived_blob=PASS')
+
+          core_focused = Path('.github/workflows/core-first500-regression.yml').read_text()
+          focused_path = Path('.github/workflows-disabled/linux-core-focused-five.yml')
+          assert not Path('.github/workflows/linux-core-focused-five.yml').exists()
+          focused_bytes = focused_path.read_bytes()
+          focused_blob = b'blob ' + str(len(focused_bytes)).encode() + bytes([0]) + focused_bytes
+          assert hashlib.sha1(focused_blob).hexdigest() == 'df5828d4035d41ee178da5ba5ada05a8abb59a09'
+          assert '\n  strict500:\n' in core_focused and '\n  focused-five:\n' in core_focused
+          assert 'default: strict500' in core_focused and 'inputs.mode' in core_focused
+          focused_old = focused_bytes.decode().split('\n  focused-five:\n', 1)[1]
+          old_steps = focused_old.split('    steps:\n', 1)[1].rstrip()
+          new_steps = core_focused.split('\n  focused-five:\n', 1)[1].split('    steps:\n', 1)[1].rstrip()
+          assert old_steps == new_steps, 'Historical Core focused-five steps changed'
+          print('M0_CORE_FOCUSED=PASS jobs=2 old_five_steps_exact=1 archived_sha=PASS')
           PY_CI
 
       - name: Build frozen compiler boundary
