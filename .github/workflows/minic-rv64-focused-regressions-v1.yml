@@ -4,6 +4,20 @@ on:
   push:
     branches:
       - "agent/linux-expanded-kbuild-v0"
+    paths:
+      - 'src/**'
+      - 'include/**'
+      - 'compiler/**'
+      - 'preprocessor/**'
+      - 'assembler/**'
+      - 'archiver/**'
+      - 'linker/**'
+      - 'tools/**'
+      - 'tests/**'
+      - 'scripts/**'
+      - 'Makefile'
+      - '.github/actions/**'
+      - '.github/workflows/minic-rv64-focused-regressions-v1.yml'
   workflow_dispatch:
 
 permissions:
