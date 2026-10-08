@@ -48,6 +48,7 @@ patches=(
   apply-perf-parser-function-hash-v0.py
   apply-perf-parser-global-hash-v0.py
   apply-perf-parser-enum-hash-v0.py
+  apply-perf-parser-hash-fallback-v1.py
   apply-perf-symbolic-loop-trace-v0.py
   apply-perf-specialization-phase-trace-v0.py
   apply-perf-core-lower-statement-workspace-v1.py

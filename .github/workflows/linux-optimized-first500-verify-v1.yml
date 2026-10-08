@@ -136,6 +136,38 @@ jobs:
           path: build/linux-perf-corpus
           key: linux-6.6.143-first500-rv64-v1-${{ hashFiles('tests/external/linux/batch_probe.sh', 'tests/external/linux/probe.sh', 'tests/external/linux/replay-indices.txt') }}
 
+      - name: Parser index fallback, scope, and zero-expression smokes
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-perf-audit-v1"
+          # Only the tiny smokes use the build-time injection. Normal benchmarks
+          # do not define this macro and pay no fallback-test branch cost.
+          make -j4 MODE=release \
+            CFLAGS="-Werror -DMINIC_TEST_FORCE_PARSER_HASH_FALLBACK" \
+            BUILD_DIR="$work/forced-fallback" \
+            "$work/forced-fallback/bin/minic" \
+            "$work/forced-fallback/bin/minic-cc" >/dev/null
+          cat > "$work/parser-fallback-smoke.i" <<'EOF'
+          typedef int number_t;
+          enum sample_mode { MODE_ONE = 1, MODE_TWO = 2 };
+          int shared_value;
+          number_t add_mode(number_t x) { return x + MODE_ONE; }
+          number_t use_global(number_t x) {
+              return add_mode(x) + shared_value;
+          }
+          EOF
+          printf 'int declaration_only;\n' > "$work/zero-expression-smoke.i"
+          for test_case in parser-fallback-smoke zero-expression-smoke; do
+            source="$work/$test_case.i"
+            "$work/toolchain/bin/minic" -S "$source" \
+              -o "$work/$test_case-indexed.s"
+            "$work/forced-fallback/bin/minic" -S "$source" \
+              -o "$work/$test_case-fallback.s"
+            cmp "$work/$test_case-indexed.s" "$work/$test_case-fallback.s"
+            echo "PARSER_HASH_FALLBACK_TEST=PASS case=$test_case"
+          done
+
       - name: Release direct minic smoke on previously crashing TU
         shell: bash
         run: |

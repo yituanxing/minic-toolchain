@@ -37,7 +37,7 @@ bool minic_perf_program_build_expression_source_owners(
     size_t expression_index;
     bool success = false;
 
-    if (program == NULL || owners == NULL ||
+    if (program == NULL || (owner_count != 0U && owners == NULL) ||
         owner_count != program->expression_count ||
         function_limit > program->function_count) {
         return false;
