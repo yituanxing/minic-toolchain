@@ -18,6 +18,7 @@ on:
       - '.github/workflows/linux-runtime-spinlock-context-v0.yml'
       - '.github/workflows/linux-runtime-fdt-isolation-v1.yml'
       - '.github/workflows/linux-runtime-generated-kallsyms-first-die-v0.yml'
+      - '.github/workflows/minias-a0-focused-diagnostics-v1.yml'
       - 'tools/ci/linux-distributed-full-image-v1.sh'
       - 'tools/ci/linux-distributed-canonical-delay-v1.py'
       - 'tools/ci/linux-distributed-provenance-audit-v2.py'
@@ -68,6 +69,7 @@ jobs:
             ruby -e 'require "yaml"; YAML.parse_file(ARGV.fetch(0))' ".github/workflows/$f"
           done
           echo "M0_RUNTIME_FOCUSED_YAML=PASS owners=3"
+          ruby -e 'require "yaml"; YAML.parse_file(ARGV.fetch(0)); puts "M0_MINIAS_FOCUSED_YAML=PASS"' .github/workflows/minias-a0-focused-diagnostics-v1.yml
           python3 - <<'PY_CI'
           from pathlib import Path
           yaml = Path('.github/workflows/linux-distributed-full-image-signedness-v2.yml').read_text()
@@ -183,6 +185,28 @@ jobs:
                   archived_jobs += 1
           assert retained_jobs == 9 and archived_jobs == 6
           print('M0_RUNTIME_FOCUSED=PASS owners=3 jobs=9 archived=6 original_job_bodies_exact=6')
+
+          # MiniAS focused/window suite must preserve original executable jobs.
+          as_merged = Path('.github/workflows/minias-a0-focused-diagnostics-v1.yml').read_text()
+          as_archive = Path('.github/workflows-disabled/minias-a0-window.yml')
+          assert not Path('.github/workflows/minias-a0-window.yml').exists()
+          as_archived_bytes = as_archive.read_bytes()
+          as_blob = b'blob ' + str(len(as_archived_bytes)).encode() + bytes([0]) + as_archived_bytes
+          assert hashlib.sha1(as_blob).hexdigest() == 'e7763f8faa294d08b341e0b079b32477b54e9cc6'
+          for job in ('real16', 'frontier', 'vector33', 'resolve', 'window-shard', 'window'):
+              assert '\n  ' + job + ':\n' in as_merged, f'Missing MiniAS job: {job}'
+          assert "inputs.mode == 'window'" in as_merged
+          assert 'default: first500' in as_merged
+          assert '          - final352' in as_merged
+          assert 'minias-a0-\${{ needs.resolve.outputs.label }}-progress' in as_merged
+          assert 'minias-a0-\${{ needs.resolve.outputs.label }}-shard-\${{ matrix.shard }}' in as_merged
+          as_old = as_archived_bytes.decode()
+          old_jobs = as_old.split('\njobs:\n', 1)[1]
+          old_tail = '\n  window-shard:' + old_jobs.split('\n  window-shard:', 1)[1]
+          assert old_tail.rstrip() in as_merged, 'Window shard/aggregate bodies differ from archived original'
+          resolve_tail = old_jobs.split('\n    runs-on:', 1)[1].split('\n  window-shard:', 1)[0]
+          assert resolve_tail in as_merged, 'Window resolver executable body differs from archived original'
+          print('M0_MINIAS_FOCUSED=PASS owners=1 jobs=6 archive_sha=PASS original_window_execution=PASS')
           PY_CI
 
       - name: Build frozen compiler boundary
