@@ -25,6 +25,11 @@ jobs:
         with:
           ref: ${{ github.sha }}
 
+      - name: Validate receiver shell syntax before installing tools
+        run: |
+          set -Eeuo pipefail
+          bash -n tools/ci/linux-distributed-full-image-v1.sh
+          echo 'DIST_IMAGE_SCRIPT_SYNTAX=PASS'
       - name: Restore pinned manifest and exact config identity from successful graph
         uses: actions/download-artifact@v4
         with:
