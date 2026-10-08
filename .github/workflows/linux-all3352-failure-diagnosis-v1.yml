@@ -85,25 +85,17 @@ jobs:
           start=s.index("parse_builtin_choose_expr(MinicParser *parser,")
           stop=s.index("static bool object_extent_direct_object(",start)
           old=s[start:stop]
-          needle='''        minic_parser_error(
-            parser, "__builtin_choose_expr condition must be an integer constant expression");'''
-          diagnostic='''        {
-            const MinicExpression *dbg = minic_c0_program_expression(parser->program, condition_id);
-            const MinicExpression *l = NULL;
-            const MinicExpression *r = NULL;
-            if (dbg != NULL && dbg->kind == MINIC_EXPRESSION_BINARY) {
-                l = minic_c0_program_expression(parser->program,dbg->value.binary.left);
-                r = minic_c0_program_expression(parser->program,dbg->value.binary.right);
-            }
-            fprintf(stderr,
-                    "CHOOSE_CONDITION_DIAG id=%u kind=%d is_int=%d literal=%lld left_kind=%d right_kind=%d\\n",
-                    (unsigned)condition_id,dbg != NULL ? (int)dbg->kind : -1,
-                    dbg != NULL ? (int)minic_type_is_integer(dbg->type) : 0,
-                    dbg != NULL && dbg->kind == MINIC_EXPRESSION_INTEGER
-                      ? (long long)dbg->value.integer_value : 0LL,
-                    l != NULL ? (int)l->kind : -1,r != NULL ? (int)r->kind : -1);
-          }
-          ''' + needle
+          needle='        minic_parser_error(\\n            parser, "__builtin_choose_expr condition must be an integer constant expression");'
+          probe='''        {
+            const MinicExpression *dbg = minic_c0_program_expression(parser->program,condition_id);
+            fprintf(stderr,"CHOOSE_CONDITION_DIAG id=%u kind=%d is_integer=%d value=%lld\\\\n",
+                (unsigned)condition_id,dbg != NULL ? (int)dbg->kind : -1,
+                dbg != NULL ? (int)minic_type_is_integer(dbg->type) : 0,
+                dbg != NULL && dbg->kind == MINIC_EXPRESSION_INTEGER
+                    ? (long long)dbg->value.integer_value : 0LL);
+        }
+          '''
+          diagnostic=probe+needle
           assert old.count(needle)==1,old.count(needle)
           s=s[:start]+old.replace(needle,diagnostic)+s[stop:]
           f.write_text(s)
