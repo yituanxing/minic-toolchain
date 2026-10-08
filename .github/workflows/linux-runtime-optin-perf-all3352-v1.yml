@@ -1,9 +1,7 @@
 name: Linux Runtime Opt-in Perf All3352 V1
 # Rerun after importing Boolean Domain index dependency; GCC/RV64 QEMU semantic test PASS.
 on:
-  push:
-    branches: [agent/linux-expanded-kbuild-v0]
-    paths: [.github/workflows/linux-runtime-optin-perf-all3352-v1.yml]
+  # Expensive 7-shard profile verification is manual until known failures are fixed.
   workflow_dispatch:
 permissions:
   contents: read
@@ -91,6 +89,7 @@ jobs:
           test -s "$root/replay/batch-results.json"
           cp "$root/replay/batch-results.json" "$root/evidence/"
           cp "$root/replay/batch-summary.txt" "$root/evidence/"
+          test "$rc" -eq 0 # Never treat failed compiler subprocesses as a green shard
       - name: Validate serio preprocessed input against the cross GCC parser
         if: matrix.label == 'f'
         run: |
@@ -128,6 +127,9 @@ jobs:
                   "four_worker_replay_s":float(m.group(1))}
           (root/"shard.json").write_text(json.dumps(result,indent=2))
           print("ALL3352_SHARD_RESULT "+json.dumps(result,sort_keys=True))
+          for row in rows:
+              if row["status"] != "PASS":
+                  print("ALL3352_FAILED_TU "+json.dumps(row,sort_keys=True))
           for row in sorted(rows,key=lambda x:float(x["seconds"]),reverse=True)[:10]:
               print(f"ALL3352_SLOW index={row['index']} input={row['input']} seconds={row['seconds']:.3f} status={row['status']}")
           PY
@@ -149,6 +151,7 @@ jobs:
           path: evidence
       - name: Aggregate 3352 unique TU results
         run: |
+          set -Eeuo pipefail
           python3 - <<'PY' | tee all3352-final.txt
           import json
           from pathlib import Path
@@ -168,7 +171,7 @@ jobs:
           if len(data)!=7 or indexes!=list(range(3352)):
               raise SystemExit("ALL3352_INVALID_COVERAGE")
           print("ALL3352_COVERAGE=3352/3352")
-          if failed or missing:
+          if passed != 3352 or failed or missing:
               raise SystemExit("ALL3352_COMPILE_FAILURES")
           print("ALL3352_COMPILE_STATUS=PASS")
           PY
