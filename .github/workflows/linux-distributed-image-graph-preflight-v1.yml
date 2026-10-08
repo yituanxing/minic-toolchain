@@ -1,0 +1,76 @@
+name: Linux Distributed Image Graph Preflight V1
+on:
+  push:
+    branches: [agent/linux-expanded-kbuild-v0]
+    paths:
+      - '.github/workflows/linux-distributed-image-graph-preflight-v1.yml'
+      - 'tools/ci/linux-distributed-image-plan-v1.py'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+concurrency:
+  group: linux-distributed-image-graph-preflight-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  graph:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Linux Kbuild manifest prerequisites
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get -o Acquire::Retries=3 update -qq
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu bc bison flex \
+            libssl-dev libelf-dev make curl xz-utils python3
+      - name: Prepare exact expanded Image config
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-distributed-image-graph-v1"
+          mkdir -p "$work"
+          curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors \
+            https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.6.143.tar.xz -o "$work/linux-6.6.143.tar.xz"
+          printf '%s  %s\n' dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932 "$work/linux-6.6.143.tar.xz" | sha256sum -c -
+          tar -xJf "$work/linux-6.6.143.tar.xz" -C "$work"
+          src="$work/linux-6.6.143"
+          out="$work/out"
+          make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- defconfig
+          "$src/scripts/config" --file "$out/.config" \
+            -e BLK_DEV_INITRD -e DEVTMPFS -e DEVTMPFS_MOUNT \
+            -e SERIAL_8250 -e SERIAL_8250_CONSOLE
+          make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- olddefconfig
+          make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- -j4 prepare scripts
+          sha256sum "$out/.config" >"$work/config.sha256"
+          echo "DIST_IMAGE_PREPARE=PASS config_sha=$(cut -d' ' -f1 "$work/config.sha256")"
+      - name: Discover real full Image C object graph
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-distributed-image-graph-v1"
+          src="$work/linux-6.6.143"
+          out="$work/out"
+          set +e
+          make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- -n -j1 V=1 Image \
+            >"$work/plan.raw" 2>"$work/plan.stderr"
+          rc=$?
+          set -e
+          echo "DIST_IMAGE_PLAN_DRY_RUN_RC=$rc"
+          python3 tools/ci/linux-distributed-image-plan-v1.py \
+            "$work/plan.raw" "$out" "$work/manifest.tsv" 7 | tee "$work/summary.txt"
+          head -n 3 "$work/manifest.tsv"
+          tail -n 3 "$work/manifest.tsv"
+      - name: Preserve reproducible full Image plan and exact config
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-distributed-image-graph-v1
+          path: |
+            build/linux-distributed-image-graph-v1/config.sha256
+            build/linux-distributed-image-graph-v1/manifest.tsv
+            build/linux-distributed-image-graph-v1/manifest.sha256
+            build/linux-distributed-image-graph-v1/summary.txt
+            build/linux-distributed-image-graph-v1/plan.stderr
+          if-no-files-found: warn
+          retention-days: 7
