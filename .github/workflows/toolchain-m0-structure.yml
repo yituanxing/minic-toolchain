@@ -226,8 +226,9 @@ jobs:
           assert 'ALL3352_EXACT' in core_file and 'LINUX_ASSEMBLE_ALL3352=PASS' in core_file
           core_old = core_bytes.decode()
           def job_steps(yaml_text, job_name):
+              import re
               block = yaml_text.split('\n  ' + job_name + ':\n', 1)[1]
-              block = block.split('\n  ', 1)[0]
+              block = re.split(r'\n  [a-z][a-z0-9-]*:\n', block, maxsplit=1)[0]
               return block.split('    steps:\n', 1)[1].rstrip()
           for original, current in (('first500','asm-first500'), ('shards','asm-shards'), ('all3352','asm-all3352')):
               old_steps = job_steps(core_old, original)
