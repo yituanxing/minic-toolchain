@@ -70,6 +70,29 @@ certification for heavyweight specialized paths.
   **QEMU boot timeout after OpenSBI**. Its result cannot be promoted
   to an all-green Linux runtime certificate.
 
+
+## Opt-in execution of relocated specialty tests
+
+The original mode-selectable jobs remain accessible by GitHub's
+`workflow_dispatch` where that event is enabled for the target ref.
+Because these files live on non-default development branches, the
+same jobs now also support **explicit push commit-message tags**:
+
+- `[miniobjcopy-strip-regressions]` → canonical basic regressions.
+- `[miniobjcopy-linux-tool]` → heavy Linux Kbuild MiniObjcopy/MiniLD boundary.
+- `[miniobjcopy-linux-image]` → legacy exact frozen GNU/MiniObjcopy Image comparison
+  (still needs historical artifact run 33623125809; may fail to restore).
+- `[minipp-linux-smoke]`, `[minipp-linux-batch]`,
+  `[minipp-linux-72]` → independent live-Kbuild cohorts.
+
+MiniObjcopy tags are gated by a push on the active runtime/perf refs.
+MiniPP tags require a push touching one of the workflow's scoped
+preprocessor/test/workflow paths. Untagged pushes skip the expensive
+specialty jobs; they may still appear as skipped Actions runs.
+These dispatch routes have **not** been end-to-end tested; the structural
+[M0 #37806035979](https://github.com/yituanxing/minic-toolchain/actions/runs/37806035979)
+passed YAML parsing and exact archive checks after the change.
+
 ## Deliberate non-retirements
 
 Remaining workflow groups have test contracts **not shown redundant**:
