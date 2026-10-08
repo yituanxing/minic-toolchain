@@ -1,0 +1,87 @@
+name: Linux Core Object Interval One Pass First500 A-B V1
+
+on:
+  push:
+    branches:
+      - agent/linux-perf-boolean-domain-v1
+    paths:
+      - .github/workflows/linux-core-object-interval-first500-ab-v1.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ab500:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build P14 Canonical baseline and P15 one-pass candidate
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/core-object-interval-500-v1"
+          mkdir -p "$work/evidence"
+          bash tools/ci/linux-runtime-build-minic-profile-v1.sh \
+            "$work/baseline-toolchain" "$work/evidence/canonical-p14-profile"
+          grep -qx 'apply-perf-core-object-address-use-index-v1.py' \
+            "$work/evidence/canonical-p14-profile/minic-profile.txt"
+          grep -qx 'apply-perf-parser-nearest-ordinary-scope-v1.py' \
+            "$work/evidence/canonical-p14-profile/minic-profile.txt"
+          grep -qx 'apply-inline-specialization-local-boolean-domain-scoped-v1.py' \
+            "$work/evidence/canonical-p14-profile/minic-profile.txt"
+          grep -qx 'apply-perf-parser-typedef-index-v1.py' \
+            "$work/evidence/canonical-p14-profile/minic-profile.txt"
+          python3 tools/ci/apply-perf-core-object-interval-onepass-v1.py \
+            | tee "$work/evidence/object-interval-onepass-patch.log"
+          git diff --check
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$work/candidate-toolchain" \
+            "$work/candidate-toolchain/bin/minic" \
+            "$work/candidate-toolchain/bin/minic-cc" \
+            >"$work/evidence/candidate-build.log" 2>&1
+          sha256sum "$work/baseline-toolchain/bin/minic" \
+            "$work/candidate-toolchain/bin/minic" >"$work/evidence/toolchain.sha256"
+          echo "CORE_OBJECT_INTERVAL_ONEPASS_BUILT=PASS"
+
+      - name: Restore certified first500 Linux corpus
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-perf-corpus
+          key: linux-6.6.143-first500-rv64-v1-${{ hashFiles('tests/external/linux/batch_probe.sh', 'tests/external/linux/probe.sh', 'tests/external/linux/replay-indices.txt') }}
+
+      - name: Verify SHA256-frozen 500 preprocessed inputs
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          corpus=build/linux-perf-corpus
+          test -s "$corpus/selected-tus.txt"
+          test "$(grep -cve '^[[:space:]]*$' "$corpus/selected-tus.txt")" -eq 500
+          test "$(wc -l < "$corpus/inputs.sha256")" -eq 500
+          sha256sum --status --check "$corpus/inputs.sha256"
+          echo "CORE_OBJECT_INTERVAL_CORPUS=VERIFIED selected=500"
+
+      - name: Core object address use index 500 TU A-B four workers
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/core-object-interval-500-v1"
+          MINIC_TYPEDEF_INDEX_PERF=1 CORE_FAST_TRACE=0 \
+            python3 tools/ci/linux-perf-typedef-paired-ab-v1.py \
+            --baseline "$work/baseline-toolchain/bin/minic" \
+            --candidate "$work/candidate-toolchain/bin/minic" \
+            --corpus "$GITHUB_WORKSPACE/build/linux-perf-corpus" \
+            --work "$work/paired" \
+            --jobs 4 | tee "$work/evidence/paired-ab.txt"
+          cp "$work/paired/paired-results.json" "$work/evidence/"
+          cp "$work/paired/output-fingerprints.tsv" "$work/evidence/"
+          echo "CORE_OBJECT_INTERVAL_ONEPASS_500=PASS"
+
+      - name: Upload full A-B evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-core-object-interval-first500-ab-v1
+          path: build/core-object-interval-500-v1/evidence
+          retention-days: 7
