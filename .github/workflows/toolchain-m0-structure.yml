@@ -29,6 +29,12 @@ on:
       - ".github/workflows-disabled/linux-expanded-kbuild-v0.yml"
       - ".github/workflows-disabled/miniar-linux-kbuild.yml"
       - ".github/workflows-disabled/linux-runtime-spinlock-context-v0.yml"
+      - ".github/workflows-disabled/linux-core-shards-v1.yml"
+      - ".github/workflows-disabled/linux-runtime-fdt-isolation-v1.yml"
+      - ".github/workflows-disabled/linux-runtime-fixture-producers-v1.yml"
+      - ".github/workflows-disabled/linux-runtime-focused-faults-v1.yml"
+      - ".github/workflows-disabled/linux-runtime-focused-owners-v1.yml"
+      - ".github/workflows-disabled/linux-runtime-owner-focused-v1.yml"
       - "docs/ci/ci-push-skip-audit-2026-10-09.md"
       - "tools/ci/select_runtime_focused_owners_v1.py"
       - "tools/ci/check_runtime_focused_owner_convergence_v1.py"
@@ -85,6 +91,21 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+
+      # Source oracles below still check the historically identical Runtime YAML.
+      # Materialize copies only in this ephemeral runner; not GitHub active sources.
+      - name: Materialize SHA-pinned archived Runtime sources for T0 only
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          for name in linux-core-shards-v1.yml linux-runtime-fdt-isolation-v1.yml linux-runtime-fixture-producers-v1.yml linux-runtime-focused-faults-v1.yml linux-runtime-focused-owners-v1.yml linux-runtime-owner-focused-v1.yml; do
+            test ! -e ".github/workflows/$name"
+            test -f ".github/workflows-disabled/$name"
+            cp ".github/workflows-disabled/$name" ".github/workflows/$name"
+            cmp ".github/workflows-disabled/$name" ".github/workflows/$name"
+          done
+          echo "M0_PERF_ARCHIVED_RUNTIME_SOURCE_MATERIALIZE=PASS copies=6"
+
 
       - name: Verify First500 performance opt-in contract
         run: |
@@ -204,6 +225,17 @@ jobs:
           for f in toolchain-focused-regressions-v1.yml minic-driver-v0.yml minipp-a0.yml; do
             ruby -e 'require "yaml"; YAML.parse_file(ARGV.fetch(0))' ".github/workflows/$f"
           done
+
+      - name: Remove temporary Runtime YAML copies before true active inventory checks
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          for name in linux-core-shards-v1.yml linux-runtime-fdt-isolation-v1.yml linux-runtime-fixture-producers-v1.yml linux-runtime-focused-faults-v1.yml linux-runtime-focused-owners-v1.yml linux-runtime-owner-focused-v1.yml; do
+            cmp ".github/workflows-disabled/$name" ".github/workflows/$name"
+            rm ".github/workflows/$name"
+            test ! -e ".github/workflows/$name"
+          done
+          echo "M0_PERF_ACTIVE_ENTRYPOINT_SOURCE_RESTORE=PASS removed=6"
 
       - name: Audit all maintained workflow trigger/job contracts and MiniObjcopy ELF route
         run: |
