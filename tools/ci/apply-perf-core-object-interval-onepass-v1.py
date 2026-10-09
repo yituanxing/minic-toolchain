@@ -219,3 +219,4 @@ p.write_text(s)
 print("CORE_OBJECT_INTERVAL_INDEX_V1=APPLIED")
 
 # CI 2026-10-09: non-executable routing probe; the P15 transform above is unchanged.
+# CI 2026-10-09: check that P-only source edits no longer launch generic RV64/AR/LD T1.
