@@ -305,28 +305,29 @@ jobs:
           print('M0_DISTRIBUTED_RETIREMENT=PASS archived=4 identical_git_blobs=4')
           print('M0_DISTRIBUTED_IMAGE_CONTRACT=PASS self_contained=1 strict_replay=1')
 
-          # Combined MiniObjcopy workflow retains 3 independent contracts,
-          # while historical YAMLs stay bit-identical in disabled archives.
+          # Current source has two runnable MiniObjcopy oracles plus one route.
+          # The old full-Image mode is SHA-archived: its pinned input artifacts
+          # are gone. Re-enable only with a current self-generating producer.
           mini = Path('.github/workflows/miniobjcopy-strip-regressions-v1.yml')
           mini_text = mini.read_text()
-          expected_modes = ('regressions', 'linux-tool', 'linux-image')
-          for job in expected_modes:
+          for job in ('route', 'regressions', 'linux-tool'):
               assert '\n  ' + job + ':\n' in mini_text, f'Missing MiniObjcopy job: {job}'
           assert "default: regressions" in mini_text
           assert "inputs.mode == 'linux-tool'" in mini_text
-          assert "inputs.mode == 'linux-image'" in mini_text
           assert "github.event_name == 'push'" in mini_text
-          assert "run-id: 33623125809" in mini_text, 'Historical frozen reference must not silently change'
+          assert '\n  linux-image:\n' not in mini_text
+          assert "run-id: 33623125809" not in mini_text
           mini_retirements = {
               'miniobjcopy-linux-tool-gate.yml': '60ee9e904a535bc599339def2efeed3f9b6c8c72',
               'miniobjcopy-linux-image-gate.yml': '69d74b896da76e99364c31291b98fbc9067905b1',
+              'miniobjcopy-strip-regressions-legacy-image-2026-10-09.yml': '851459610d6dd5ca4a528409638a5b840dbd7a46',
           }
           for fname, sha in mini_retirements.items():
               assert not (Path('.github/workflows') / fname).exists(), f'Old MiniObjcopy workflow active: {fname}'
               data = (Path('.github/workflows-disabled') / fname).read_bytes()
               git_blob = b'blob ' + str(len(data)).encode() + bytes([0]) + data
               assert hashlib.sha1(git_blob).hexdigest() == sha, f'Old MiniObjcopy YAML modified: {fname}'
-          print('M0_MINIOBJCOPY_CONVERGENCE=PASS jobs=3 archived=2 blobs_identical=2')
+          print('M0_MINIOBJCOPY_CONVERGENCE=PASS runnable_jobs=3 archived=3 blobs_identical=3')
 
           exact = Path('.github/workflows/minipp-linux-frozen-v1.yml').read_text()
           assert 'default: exact' in exact
