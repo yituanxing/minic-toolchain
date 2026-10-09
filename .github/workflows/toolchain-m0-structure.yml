@@ -3,8 +3,11 @@ name: Toolchain M0 Structure Gate
 on:
   push:
     branches:
-      - "toolchain/**"
-      - "agent/ci-runtime-cleanup-v1"
+      - "agent/linux-perf-boolean-domain-v1"
+    paths:
+      - ".github/workflows/toolchain-m0-structure.yml"
+      - ".github/workflows/minild-integration-v1.yml"
+      - "tools/ci/check_minild_integration_convergence_v1.py"
   workflow_dispatch:
 
 jobs:
@@ -13,6 +16,11 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+
+      - name: Verify MiniLD consolidated integration contracts
+        run: |
+          python3 tools/ci/check_minild_integration_convergence_v1.py
+          ruby -e 'require "yaml"; YAML.parse_file(ARGV.fetch(0)); puts "M0_MINILD_INTEGRATION_YAML=PASS"' .github/workflows/minild-integration-v1.yml
 
       - name: Run Linux runtime isolation selftests
         run: |
