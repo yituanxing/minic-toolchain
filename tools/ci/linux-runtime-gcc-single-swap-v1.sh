@@ -25,6 +25,7 @@ test -s "$out/arch/riscv/boot/Image"
 test -x "$minic"
 test -d "$src"
 mkdir -p "$ev"
+trial_started=$(date +%s%N)
 expected_object=$(awk -v t="$target" '$2 == t { print $1; exit }' "$provenance/gcc-objects.sha256")
 gcc_sha=$(sha256sum "$out/$target" | cut -d' ' -f1)
 [[ -n "$expected_object" && "$gcc_sha" == "$expected_object" ]] || {
@@ -117,6 +118,8 @@ test -s "$out/$target"
 cp -a "$out/$target" "$ev/minic.o"
 minic_sha=$(sha256sum "$ev/minic.o" | cut -d' ' -f1)
 echo "GNU_SINGLE_MINIC=PASS target=$target gcc_sha=$gcc_sha minic_sha=$minic_sha"
+compile_finished=$(date +%s%N)
+echo "GNU_SINGLE_TIMING compile_ms=$(((compile_finished-trial_started)/1000000))" | tee "$ev/timing.txt"
 printf 'minic_object_sha256=%s\ninput_sha256=%s\n' "$minic_sha" "$(sha256sum "$ev/idr.i" | cut -d' ' -f1)" >>"$ev/identity.txt"
 # The Kbuild wrapper's .cmd is for MiniC; restore the GNU .cmd so a normal
 # GNU incremental link can consume the MiniC object without recompiling it.
@@ -141,6 +144,8 @@ new_image_sha=$(sha256sum "$out/arch/riscv/boot/Image" | cut -d' ' -f1)
 }
 printf 'mixed_image_sha256=%s\n' "$new_image_sha" >>"$ev/identity.txt"
 echo "GNU_SINGLE_RELINK=PASS original=$baseline_image_sha mixed=$new_image_sha"
+link_finished=$(date +%s%N)
+echo "GNU_SINGLE_TIMING relink_ms=$(((link_finished-compile_finished)/1000000))" | tee -a "$ev/timing.txt"
 cp -a "$out/arch/riscv/boot/Image" "$ev/mixed.Image"
 BUILD_DIR="$ev/initramfs" \
   OUTPUT_INITRAMFS="$ev/runtime-initramfs.cpio.gz" RISCV_CC=riscv64-linux-gnu-gcc \
@@ -153,3 +158,5 @@ LINUX_IMAGE="$ev/mixed.Image" INITRAMFS="$ev/runtime-initramfs.cpio.gz" \
     exit 8
   }
 echo "GNU_SINGLE_RUNTIME=PASS target=$target"
+trial_finished=$(date +%s%N)
+echo "GNU_SINGLE_TIMING runtime_ms=$(((trial_finished-link_finished)/1000000)) total_ms=$(((trial_finished-trial_started)/1000000))" | tee -a "$ev/timing.txt"
