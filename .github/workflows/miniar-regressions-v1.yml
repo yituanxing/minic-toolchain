@@ -12,6 +12,7 @@ on:
       - 'assembler/**'
       - 'archiver/**'
       - 'linker/**'
+      - 'elf/**'
       - 'tools/**'
       - 'tests/**'
       - 'scripts/**'

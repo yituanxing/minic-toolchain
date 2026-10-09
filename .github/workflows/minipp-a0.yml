@@ -7,6 +7,7 @@ on:
       - "agent/linux-perf-boolean-domain-v1"
     paths:
       - 'preprocessor/**'
+      - 'elf/**'
       - 'tools/minic-cpp/**'
       - 'tests/preprocessor/**'
       - 'Makefile'
