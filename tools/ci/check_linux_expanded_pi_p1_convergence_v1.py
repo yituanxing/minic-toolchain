@@ -52,5 +52,6 @@ def main():
   raise AssertionError("Trace concurrency changed")
  if "          - trace" not in s or "inputs.mode == 'trace'" not in s:
   raise AssertionError("Trace manual dispatch mode absent")
- print(f"M0_LINUX_EXPANDED_PI_P1_TRACE=PASS branch={REF} archived_blobs=3 job_bodies=3 tags=3")
+ scope="source_archive_only" if REF==PERF else "active_runtime"
+ print(f"M0_LINUX_EXPANDED_PI_P1_TRACE=PASS branch={REF} scope={scope} archived_blobs=3 job_bodies=3 tags=3")
 if __name__=="__main__":main()
