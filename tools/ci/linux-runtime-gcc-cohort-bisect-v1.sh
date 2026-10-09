@@ -11,6 +11,7 @@ prov=$(realpath "$4"); objects_file=$(realpath "$5"); ev=$(realpath -m "$6")
 repo=$(cd "$(dirname "$0")/../.." && pwd)
 mkdir -p "$ev/gcc" "$ev/minic" "$ev/trials"
 exec > >(tee "$ev/cohort.log") 2>&1
+trap 'rc=$?; echo "COHORT_UNHANDLED=FAIL rc=$rc line=$LINENO cmd=$BASH_COMMAND" >&2' ERR
 mapfile -t objects < <(grep -vE '^[[:space:]]*(#|$)' "$objects_file")
 n=${#objects[@]}
 (( n>=1000 && n<=3000 )) || { echo "COHORT_ERROR full_C_objects=$n; refuse partial-kernel verdict"; exit 2; }
@@ -40,7 +41,14 @@ targets=(); commands=()
 for target in "${objects[@]}"; do
   stem=${target%.o}; leaf=${stem##*/}
   cmd="$out/$(dirname "$target")/.$leaf.o.cmd"
-  test -s "$out/$target"; test -s "$cmd"; test -s "$src/$stem.c"
+  test -s "$out/$target" || { echo "COHORT_GOLDEN=ERROR missing object=$target"; exit 3; }
+  test -s "$cmd" || { echo "COHORT_GOLDEN=ERROR missing Kbuild cmd=$cmd"; exit 3; }
+  # Not all C objects map to source-tree <target>.c. Generated and renamed
+  # C TUs are accepted only because the full-C manifest was derived from
+  # the certified GCC target's actual source_ / savedcmd_ metadata.
+  if [[ ! -s "$src/$stem.c" ]]; then
+    echo "COHORT_SOURCE=NONCANONICAL target=$target use_pinned_kbuild_cmd=true"
+  fi
   reference=$(awk -v t="$target" '$2==t {print $1;exit}' "$prov/gcc-objects.sha256")
   observed=$(sha256sum "$out/$target" | cut -d' ' -f1)
   [[ -n "$reference" && "$reference" == "$observed" ]] || {
@@ -223,9 +231,15 @@ excluded={x.strip() for x in universe.read_text().splitlines()
 # Kbuild legitimately regenerates these *link-created* kallsyms objects
 # whenever linked code/layout changes. They are not standalone GCC C owners.
 # Do NOT broaden this exception to ordinary arch/, kernel/, lib/, fs/ objects.
-generated_links={"init/version-timestamp.o"}
+generated_links={
+    "init/version-timestamp.o",
+    "vmlinux.o",                 # GNU ld -r aggregate, NOT a standalone C TU
+    ".vmlinux.export.o",        # generated symbol export object for relink
+}
 def link_generated(name):
-    return name in generated_links or re.fullmatch(r"\.tmp_vmlinux\.kallsyms[1-3]\.o", name) is not None
+    return (name in generated_links or
+            re.fullmatch(r"\.tmp_vmlinux\.kallsyms[1-3]\.o", name) is not None or
+            name == ".tmp_vmlinux.btf.o")
 for line in manifest.read_text().splitlines():
     digest, name=line.strip().split(None,1)
     if name in excluded or link_generated(name): continue
