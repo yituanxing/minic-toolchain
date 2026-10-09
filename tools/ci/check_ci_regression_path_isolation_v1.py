@@ -73,8 +73,8 @@ def main():
   if not accepted(paths,source):raise AssertionError("real source no longer triggers T1 "+source)
  for bad in ("tools/ci/runtime-init-irq-trigger.txt","tools/ci/check_ci_trigger_coverage_v1.py","tools/ci/apply-perf-core-object-interval-onepass-v1.py"):
   if accepted(paths,bad):raise AssertionError("non-source CI helper triggers T1 "+bad)
- for branch in BRANCHES:
-  if '"'+branch+'"' not in h:raise AssertionError("lost T1 branch "+branch)
+ for dev_branch in BRANCHES:
+  if '"'+dev_branch+'"' not in h:raise AssertionError("lost T1 branch "+dev_branch)
  for mode in ("all","minic-rv64","miniar","minild"):
   if "          - "+mode not in h:raise AssertionError("manual mode lost "+mode)
  if txt.count("make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="+BUILD_DIR+" all")!=1:
