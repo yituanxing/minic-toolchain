@@ -266,7 +266,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: linux-gnu-cohort-128-${{ github.sha }}
+          name: linux-gnu-cohort-384-${{ github.sha }}
           path: |
             build/linux-runtime-gcc-cohort-v1/identity.txt
             build/linux-runtime-gcc-cohort-v1/cohort.log
