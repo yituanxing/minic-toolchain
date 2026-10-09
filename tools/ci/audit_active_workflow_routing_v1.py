@@ -185,9 +185,15 @@ def main():
         raise AssertionError(f"unsupported branch {branch}")
     rows = [analyze(f.name, f.read_text(), branch)
             for f in sorted(ACTIVE.glob("*.yml"))]
-    expected = 26 if branch == BRANCHES[0] else 13
-    if len(rows) != expected:
-        raise AssertionError(f"inventory drift: branch {branch} YAML count {len(rows)} != {expected}")
+    # The source-controlled manifest defines active owner identities. No
+    # duplicated 26/13 magic counts are needed in independent audits.
+    inventory = ROOT / "docs/ci/active-workflow-inventory-2026-10-09.tsv"
+    with inventory.open(newline="") as f:
+        owned = {Path(v["path"]).name for v in csv.DictReader(f, delimiter="\t")
+                 if v["branch"] == branch}
+    actual_names = {v["workflow"] for v in rows}
+    if not owned or actual_names != owned:
+        raise AssertionError(f"active owner drift from single manifest: missing={owned-actual_names} extra={actual_names-owned}")
     names = {r["workflow"]: r for r in rows}
     # This is an executable guardrail, not merely a report. Never allow a new
     # broad push listener that silently creates hundreds of empty run cards.
