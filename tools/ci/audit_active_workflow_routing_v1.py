@@ -32,6 +32,12 @@ PERFORMANCE_ARCHIVED = {
     "linux-expanded-kbuild-v0.yml": "35500d29ab940d0033832d50b17e33e0d9c2f9db",
     "miniar-linux-kbuild.yml": "9fdb2ff5e44e2a46b137ea7e0d5e11afc4b51310",
     "linux-runtime-spinlock-context-v0.yml": "5dde74694e43401ab95f93bf3fcc5d8120b322f5",
+    "linux-core-shards-v1.yml": "cd18cb3b43541ef7d825045743b2e0e752e62763",
+    "linux-runtime-fdt-isolation-v1.yml": "b9c56ef805cb78b711ef1f9059f69fc276838893",
+    "linux-runtime-fixture-producers-v1.yml": "1bdabc68a2c8fb60e86b79ed6757fc6157e8914c",
+    "linux-runtime-focused-faults-v1.yml": "589b2f5e5c1d9d89b4e52c6e42faf1383e616f79",
+    "linux-runtime-focused-owners-v1.yml": "6ad661f9e8614d2740477640cb2fe0de905d6c40",
+    "linux-runtime-owner-focused-v1.yml": "f751fe83c49947302201e9cd09d313a865735372",
 }
 
 BRANCHES = ("agent/linux-expanded-kbuild-v0", "agent/linux-perf-boolean-domain-v1")
@@ -158,7 +164,7 @@ def main():
         raise AssertionError(f"unsupported branch {branch}")
     rows = [analyze(f.name, f.read_text(), branch)
             for f in sorted(ACTIVE.glob("*.yml"))]
-    expected = 25 if branch == BRANCHES[0] else 20
+    expected = 25 if branch == BRANCHES[0] else 14
     if len(rows) != expected:
         raise AssertionError(f"inventory drift: branch {branch} YAML count {len(rows)} != {expected}")
     # Hard-coded high-risk names are only a diagnosis: their contract is frozen.
