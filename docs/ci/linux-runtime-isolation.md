@@ -427,3 +427,66 @@ entire 2141-object MiniC Linux kernel boots. If a failure first
 appears after expansion, run single-object and GCC-exclusion
 confirmation before naming a compiler root cause. The true first
 Runtime bug fix remains separate from infrastructure/test success.
+
+
+## QEMU oracle reuse audit: Python-era contracts vs current GNU-locked cohorts
+
+Current QEMU runner: \`tests/external/linux/runtime_boot.sh\` on
+\`qemu-system-riscv64 -M virt -cpu max -m 512M -smp 1 -nographic
+-no-reboot -bios default\`, loading the actual linked Image with the
+GCC-built runtime initramfs. This is **not** equivalent to QEMU simply
+printing the Linux version. It checks the runtime markers emitted by
+\`tests/external/linux/runtime_initramfs/{init.c,minish.c,probe.c}\`.
+
+- **P0 already reused:** Linux 6.6.143 identity, initramfs/rootfs,
+  PID1, proc/sysfs/devtmpfs, cmdline and tmpfs RW, shell marker and
+  completed userspace. The current \`fast\` mode uses one \`rdinit=/init\`
+  lane; \`full\` adds a \`rdinit=/bin/sh\` lane (real shell commands).
+- **P1 available and newly wired:** current \`p1\` mode requires 12
+  syscalls: eventfd, epoll, timerfd, signalfd, inotify, socketpair,
+  IPv6 TCP loopback, memfd, pidfd, futex, io_uring and mmap/mprotect.
+  After the combined cohort's \`full\` PASS, the cohort runner now
+  invokes \`p1\` **on the identical Image and initramfs without a new
+  linker invocation**. Await a real CI certification of the new link.
+  The independent Python contract checker
+  \`tests/external/linux/runtime_v2_log_check.py\` and canonical checks
+  \`runtime_v2_checks.tsv\` also exist and should be reused as a
+  second oracle once the full log's shutdown markers are verified.
+- **P2/P3 not equivalent and not currently run:** the historical
+  \`runtime_v2_checks.tsv\` also defines P2 block/overlay filesystems,
+  netfilter/conntrack, bridge/veth, crypto, Btrfs, KVM, device-mapper,
+  virtio-GPU, NVMe, and P3's 145-module/203-function completion
+  markers. The tiny independent GCC runtime initramfs **does not
+  supply the P2/P3 workload**; claiming those passed from a P0/P1
+  boot would be incorrect. Reuse these only with their corresponding
+  certified config, rootfs, modules, device topology and evidence.
+- **Fault diagnosis tools present, not yet integrated in the new
+  cohort:** \`tools/ci/linux-runtime-qemu-watch-v1.py\`,
+  \`tools/ci/linux-runtime-frontier-v1.py\` and
+  \`tools/ci/linux-first-fault-analyzer-v1.py\`. Their
+  SAME_FAULT/REGRESSED/MOVED_LATER/FRONTIER_PASS progress oracle
+  depends on the **old** mixed-kernel frontier config and PC-symbol
+  identity. To reuse with this GNU config, capture QEMU \`-d int,in_asm\`
+  and this exact Image's \`nm\` plus rederive a correct baseline; never
+  silently load the old frontier JSON.
+- **Other reusable primitives:** \`linux-runtime-object-set-v1.py\`
+  already implements \`baseline\`, \`single\`, \`all\`,
+  \`prefix\`, \`subset\`, \`all-except\`, and validates per-object
+  provenance. \`linux-runtime-prefix-bisect-v1.py\` handles observed
+  prefix verdict planning. \`qemu_explicit_initrd_wrapper.py\`
+  isolates FDT/initrd-placement faults, but should only be invoked as
+  an explicit **differential** against normal QEMU initrd handling.
+
+### Fail-closed 384-object fix (run 37945012953)
+
+The 384-object compilation/ELF/ABI gate all passed, but the first
+known-good \`128\` prefix's identity check correctly failed when an
+*unselected GCC* \`arch/riscv/kernel/alternative.o\` had changed during
+Kbuild incremental linking. The previous cohort script had touched
+**all 384** restored objects before building that 128 prefix,
+allowing Kbuild to rebuild a GNU reference owner. Now its archive
+refresh touches **only the union of actually changed prefix members**,
+preserves untouched GNU object timestamps and identities, and skips
+linking when only the runtime oracle changes (\`fast\` to \`full\`).
+This is a proposed causal fix pending a real 384 rerun; it is not
+yet a certified 384-cohort QEMU PASS.
