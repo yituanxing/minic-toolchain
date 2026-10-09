@@ -1,8 +1,7 @@
 name: Linux Expanded Kbuild V0
 
 on:
-  push:
-    branches: ["agent/linux-expanded-kbuild-v0"]
+  workflow_call:
   workflow_dispatch:
 
 permissions:

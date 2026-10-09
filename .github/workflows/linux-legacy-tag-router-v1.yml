@@ -1,0 +1,20 @@
+name: Linux Historical Opt-in Push Tag Router V1
+
+# One event-level push listener replaces the separate legacy Kbuild/MiniAR
+# empty-run cards. The original exact job bodies live in reusable workflows.
+on:
+  push:
+    branches: ["agent/linux-expanded-kbuild-v0"]
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  linux-kbuild:
+    if: contains(github.event.head_commit.message, '[linux-expanded-kbuild-v0]')
+    uses: ./.github/workflows/linux-expanded-kbuild-v0.yml
+
+  miniar-kbuild:
+    if: contains(github.event.head_commit.message, '[miniar-linux-kbuild]')
+    uses: ./.github/workflows/miniar-linux-kbuild.yml
