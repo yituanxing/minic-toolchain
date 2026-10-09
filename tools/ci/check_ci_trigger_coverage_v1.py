@@ -64,7 +64,9 @@ def main():
             if not accepts(p,source): raise AssertionError(f"MISS {owner} {source}")
         for excluded in ("tools/ci/runtime-timekeeping-trigger.txt",
                          "tools/ci/select_miniobjcopy_elf_route_v1.py",
-                         "tools/ci/check_ci_trigger_coverage_v1.py"):
+                         "tools/ci/check_ci_trigger_coverage_v1.py",
+                         "tools/ci/linux-runtime-build-minic-profile-v1.sh",
+                         "tools/ci/select_runtime_focused_owners_v1.py"):
             if accepts(p,excluded):
                 raise AssertionError(f"OVERTRIGGER {owner} maintenance-only source: {excluded}")
     mini=(ROOT/".github/workflows/miniobjcopy-strip-regressions-v1.yml").read_text()
