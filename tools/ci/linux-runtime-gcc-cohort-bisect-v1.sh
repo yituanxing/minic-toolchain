@@ -214,14 +214,19 @@ trial() {
   # Generated init/version-timestamp.o is allowed to vary per link.
   python3 - "$out" "$prov/gcc-objects.sha256" "$objects_file" <<'PY_GNU_NONSELECTED'
 from pathlib import Path
-import hashlib, sys
+import hashlib, re, sys
 out,manifest,universe=map(Path,sys.argv[1:])
 excluded={x.strip() for x in universe.read_text().splitlines()
           if x.strip() and not x.lstrip().startswith("#")}
-excluded.add("init/version-timestamp.o")
+# Kbuild legitimately regenerates these *link-created* kallsyms objects
+# whenever linked code/layout changes. They are not standalone GCC C owners.
+# Do NOT broaden this exception to ordinary arch/, kernel/, lib/, fs/ objects.
+generated_links={"init/version-timestamp.o"}
+def link_generated(name):
+    return name in generated_links or re.fullmatch(r"\.tmp_vmlinux\.kallsyms[1-3]\.o", name) is not None
 for line in manifest.read_text().splitlines():
     digest, name=line.strip().split(None,1)
-    if name in excluded: continue
+    if name in excluded or link_generated(name): continue
     p=out/name
     if not p.is_file() or hashlib.sha256(p.read_bytes()).hexdigest()!=digest:
         raise SystemExit("COHORT_GNU_CONTAMINATION=FAIL object="+name)
