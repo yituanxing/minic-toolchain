@@ -51,6 +51,7 @@ on:
       - "tools/ci/select_miniobjcopy_elf_route_v1.py"
       - "tools/ci/check_ci_miniobjcopy_elf_route_v1.py"
       - ".github/workflows/miniobjcopy-strip-regressions-v1.yml"
+      - ".github/workflows-disabled/miniobjcopy-strip-regressions-legacy-image-2026-10-09.yml"
       - "docs/ci/active-workflow-inventory-2026-10-09.tsv"
       - ".github/workflows/minic-driver-v0.yml"
       - ".github/workflows/minipp-a0.yml"

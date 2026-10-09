@@ -83,8 +83,12 @@ def main():
         raise AssertionError("MiniObjcopy T1 is not ELF push routed")
     if "contains(github.event.head_commit.message, '[miniobjcopy-linux-tool]')" not in mini:
         raise AssertionError("MiniObjcopy Linux integration tag lost")
-    if "contains(github.event.head_commit.message, '[miniobjcopy-linux-image]')" not in mini:
-        raise AssertionError("MiniObjcopy Image integration tag lost")
+    # The legacy Image branch depended on an expired 2026-09-02 artifact,
+    # so keep it in an immutable archive, never as a live certification mode.
+    if "[miniobjcopy-linux-image]" in mini or "run-id: 33623125809" in mini:
+        raise AssertionError("expired legacy MiniObjcopy Image mode returned to active CI")
+    if not (ROOT/".github/workflows-disabled/miniobjcopy-strip-regressions-legacy-image-2026-10-09.yml").is_file():
+        raise AssertionError("missing archival source for expired MiniObjcopy Image owner")
     cpp=(ROOT/".github/workflows/minipp-a0.yml").read_text()
     if not accepts(push_patterns(cpp),"elf/src/reader.c"):
         raise AssertionError("MiniPP A0 shared ELF dependency skipped")
