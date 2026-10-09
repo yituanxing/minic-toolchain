@@ -18,6 +18,7 @@ SOURCES={
  "miniar-regressions-v1.yml":("930653a2f96a8b042ede339582c0a3ae053b70f1","979969bb5231cabf878050936bdee51c9e8c6398"),
  "minild-regressions-v1.yml":("cea2cc16a25d9163142c2ddbbc67e73e3f7120c8","63bd80cc92382437d7588abca29e01a94285cc50"),
 }
+SHARED_ELF_PATH="      - 'elf/**'\n"
 NEGATIVE=(
  "      - '!tools/ci/runtime-*-trigger.txt'\n"
  "      - '!tools/ci/linux-runtime-rest-init-frontier-v0.json'\n"
@@ -67,6 +68,7 @@ def main():
  for name,(rt,pf) in SOURCES.items():
   c=(ROOT/".github/workflows"/name).read_text()
   if c.count(NEGATIVE)!=1: raise AssertionError(f"three Runtime-only exclusions missing: {name}")
+  if c.count(SHARED_ELF_PATH)!=1: raise AssertionError(f"shared ELF source path missing or repeated: {name}")
   patterns=paths(c)
   if patterns[-3:]!=["!tools/ci/runtime-*-trigger.txt","!tools/ci/linux-runtime-rest-init-frontier-v0.json","!tools/ci/select_runtime_owner_modes_v1.py"]:
    raise AssertionError(f"negation path ordering changed: {name}")
@@ -80,6 +82,7 @@ def main():
   ):
    if accepted(patterns,[forbidden]):raise AssertionError(f"unrelated Runtime change runs {name}: {forbidden}")
   for included in (
+      "elf/src/reader.c", "elf/src/relocatable_writer.c", "elf/src/rewrite.c",
       "src/frontend/parse.c", "archiver/miniar.c", "tools/ci/linux-runtime-build-minic-profile-v1.sh",
       "tests/compiler/c0/check.c", ".github/workflows/"+name,
   ):
@@ -87,12 +90,12 @@ def main():
   if not accepted(patterns,["tools/ci/runtime-timekeeping-trigger.txt","src/frontend/parse.c"]):
    raise AssertionError(f"one excluded path wrongly masks real source change: {name}")
   if branch==BRANCHES[0]:
-   previous=c.replace(NEGATIVE,"")
+   previous=c.replace(SHARED_ELF_PATH,"").replace(NEGATIVE,"")
   else:
    original_paths=SOURCE_PATHS+"      - '.github/workflows/"+name+"'\n"+NEGATIVE
    if c.count(original_paths)!=1:
     raise AssertionError(f"old Performance branch path insertion shape differs: {name}")
-   previous=c.replace(original_paths,"")
+   previous=c.replace(SHARED_ELF_PATH,"").replace(original_paths,"")
   expected=rt if branch==BRANCHES[0] else pf
   if gitblob(previous)!=expected:
    raise AssertionError(f"reconstructed historical job/branch/full YAML changed: {name}")

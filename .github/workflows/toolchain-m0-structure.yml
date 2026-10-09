@@ -18,6 +18,12 @@ on:
       - "tools/ci/check_runtime_owner_routing_v1.py"
       - "tools/ci/check_early_runtime_dispatch_v1.py"
       - "tools/ci/check_ci_regression_path_isolation_v1.py"
+      - "tools/ci/check_ci_shared_elf_coverage_v1.py"
+      - ".github/workflows/minic-rv64-focused-regressions-v1.yml"
+      - ".github/workflows/miniar-regressions-v1.yml"
+      - ".github/workflows/minild-regressions-v1.yml"
+      - ".github/workflows/minic-driver-v0.yml"
+      - ".github/workflows/minipp-a0.yml"
       - ".github/workflows/minic-rv64-focused-regressions-v1.yml"
       - ".github/workflows/miniar-regressions-v1.yml"
       - ".github/workflows/minild-regressions-v1.yml"
@@ -154,6 +160,13 @@ jobs:
         run: |
           python3 tools/ci/check_ci_regression_path_isolation_v1.py
           for f in minic-rv64-focused-regressions-v1.yml miniar-regressions-v1.yml minild-regressions-v1.yml; do
+            ruby -e 'require "yaml"; YAML.parse_file(ARGV.fetch(0))' ".github/workflows/$f"
+          done
+
+      - name: Verify shared ELF build source path coverage
+        run: |
+          python3 tools/ci/check_ci_shared_elf_coverage_v1.py
+          for f in minic-rv64-focused-regressions-v1.yml miniar-regressions-v1.yml minild-regressions-v1.yml minic-driver-v0.yml minipp-a0.yml; do
             ruby -e 'require "yaml"; YAML.parse_file(ARGV.fetch(0))' ".github/workflows/$f"
           done
 

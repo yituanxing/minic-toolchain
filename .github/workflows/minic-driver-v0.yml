@@ -9,6 +9,7 @@ on:
       - '.github/workflows/minic-driver-v0.yml'
       - 'src/**'
       - 'include/**'
+      - 'elf/**'
       - 'tests/driver/**'
       - 'tools/**'
       - 'Makefile'
