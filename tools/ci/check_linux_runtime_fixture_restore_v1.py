@@ -78,7 +78,12 @@ def main():
     check_action()
     replaced_source = replaced_frozen = 0
     for filename, (sha, uses_frozen) in WORKFLOWS.items():
-        path = ROOT / ".github/workflows" / filename
+        # Retired owners are immutable archives; their exact fixture-source
+        # equivalence remains an active M0 obligation after 4->1 consolidation.
+        # The canonical job-body guard independently compares archived bodies
+        # to every new Runtime focused owner Job.
+        folder = ".github/workflows" if filename == "linux-runtime-owner-focused-v1.yml" else ".github/workflows-disabled"
+        path = ROOT / folder / filename
         text = path.read_text()
         if filename == "linux-runtime-owner-focused-v1.yml":
             text = restore_owner_text(text)
