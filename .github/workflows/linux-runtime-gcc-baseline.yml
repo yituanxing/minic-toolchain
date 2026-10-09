@@ -271,6 +271,8 @@ jobs:
             build/linux-runtime-gcc-cohort-v1/identity.txt
             build/linux-runtime-gcc-cohort-v1/cohort.log
             build/linux-runtime-gcc-cohort-v1/compile.log
+            build/linux-runtime-gcc-cohort-v1/gcc-preflight.log
+            build/linux-runtime-gcc-cohort-v1/gcc-objects-stable.sha256
             build/linux-runtime-gcc-cohort-v1/results.tsv
             build/linux-runtime-gcc-cohort-v1/frontier.txt
             build/linux-runtime-gcc-cohort-v1/trials/*/link.log

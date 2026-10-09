@@ -59,6 +59,36 @@ restore_gcc() {
 }
 trap restore_gcc EXIT
 echo "COHORT_GOLDEN=PASS objects=$n"
+# Preserve a COMPLETE immutable GCC output tree, not only the selected .o
+# files. Linux Kbuild mutates generated headers, vDSO offsets, .cmd metadata,
+# built-in archives and kallsyms during intermediate target builds. Restoring
+# only 384 .o files leaves those generated dependencies contaminated.
+gold_snapshot="$ev/gnu-out-pristine"
+test ! -e "$gold_snapshot"
+cp -a --reflink=auto "$out" "$gold_snapshot"
+echo "COHORT_GOLDEN_SNAPSHOT=PASS bytes=$(du -sb "$gold_snapshot" | cut -f1)"
+# Cheap fail-fast before expensive MiniC compilation: verify that restoring
+# the fixture into the current runner can make its own GCC Image without
+# recompiling any certified reference object.
+echo "COHORT_GNU_PREFLIGHT=START"
+make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
+  -j4 Image >"$ev/gcc-preflight.log" 2>&1 || {
+    echo "COHORT_GNU_PREFLIGHT=FAIL stage=kbuild"
+    tail -n 80 "$ev/gcc-preflight.log"
+    exit 5
+  }
+awk '$2 != "init/version-timestamp.o" {print}' \
+  "$prov/gcc-objects.sha256" >"$ev/gcc-objects-stable.sha256"
+if ! (cd "$out"; sha256sum --quiet -c "$ev/gcc-objects-stable.sha256"); then
+  echo "COHORT_GNU_PREFLIGHT=FAIL stage=reference_objects_changed"
+  grep -E '(^|[[:space:]])(CC|AS|SYNC|VDSOSYM)[[:space:]]+' "$ev/gcc-preflight.log" | tail -n 36 || true
+  exit 6
+fi
+echo "COHORT_GNU_PREFLIGHT=PASS objects=$n"
+# Return to the exact certified Image/.cmd/generated-header state before
+# touching MiniC compilation inputs. This also avoids inherited timestamps.
+rm -rf -- "$out"
+cp -a --reflink=auto "$gold_snapshot" "$out"
 # Remove just the selected objects and let ONE parallel Kbuild invocation
 # reproduce the exact GCC preprocessing flags and GNU assembler semantics.
 for ((i=0;i<n;i++)); do
@@ -103,18 +133,16 @@ trial() {
   name="$1"; count="$2"; profile="$3"
   d="$ev/trials/$name"; mkdir -p "$d"
   if (( count != last_count )); then
-    # Important: do NOT touch every GCC object. If a prefix contains only
-    # 128 MiniC candidates out of 384, the remaining 256 must retain the
-    # exact GCC .o AND mtime. Touching them can trigger a Kbuild recompilation
-    # and create false object-identity failures (observed in run 37945012953).
-    restore_gcc
+    # Kbuild candidate compilation may have regenerated headers, scripts,
+    # vdso metadata and .cmd inputs. Restoring just the selected .o is NOT
+    # sufficient (384-object logs prove a GCC alternative.o recompile).
+    # Restart each distinct QEMU experiment from the WHOLE certified GNU
+    # output tree. 412 MiB source fixture, copied locally using reflinks
+    # when available; no GitHub cache/network round trip here.
+    rm -rf -- "$out"
+    cp -a --reflink=auto "$gold_snapshot" "$out"
     for ((i=0;i<count;i++)); do
       cp -a "$ev/minic/${objects[i]}" "$out/${objects[i]}"
-    done
-    # The changed archive members are precisely the union of the previous
-    # and current prefixes. This handles expanding AND shrinking overlays.
-    limit=$((count > last_count ? count : last_count))
-    for ((i=0;i<limit;i++)); do
       touch "$out/${objects[i]}"
     done
     make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
@@ -136,6 +164,23 @@ trial() {
       echo "COHORT_IDENTITY=FAIL trial=$name target=$target"; exit 6;
     }
   done
+  # Every object OUTSIDE the candidate universe must remain GCC-identical.
+  # Generated init/version-timestamp.o is allowed to vary per link.
+  python3 - "$out" "$prov/gcc-objects.sha256" "$objects_file" <<'PY_GNU_NONSELECTED'
+from pathlib import Path
+import hashlib, sys
+out,manifest,universe=map(Path,sys.argv[1:])
+excluded={x.strip() for x in universe.read_text().splitlines()
+          if x.strip() and not x.lstrip().startswith("#")}
+excluded.add("init/version-timestamp.o")
+for line in manifest.read_text().splitlines():
+    digest, name=line.strip().split(None,1)
+    if name in excluded: continue
+    p=out/name
+    if not p.is_file() or hashlib.sha256(p.read_bytes()).hexdigest()!=digest:
+        raise SystemExit("COHORT_GNU_CONTAMINATION=FAIL object="+name)
+print("COHORT_GNU_UNSELECTED=PASS")
+PY_GNU_NONSELECTED
   image_sha=$(sha256sum "$out/arch/riscv/boot/Image" | cut -d' ' -f1)
   cp -a "$out/arch/riscv/boot/Image" "$d/Image"
   verdict=INCONCLUSIVE
