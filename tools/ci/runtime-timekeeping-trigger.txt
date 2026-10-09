@@ -1,1 +1,2 @@
 trigger focused timekeeping runtime frontier d7b4af10
+trigger owner-mode-router-v1 single-lane acceptance (2026-10-09)
