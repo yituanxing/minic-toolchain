@@ -80,10 +80,11 @@ def main():
     # Runtime-only tag-gated regressions are not a Performance correctness gate.
     if branch==BRANCHES[1]:
         rv=(ROOT/".github/workflows/minic-rv64-focused-regressions-v1.yml").read_text()
-        if "agent/linux-perf-boolean-domain-v1" in header(rv):
-            print("M0_PERF_RV64_PUSH=IN_SCOPE (independent T1 run still required)")
-        else:
-            print("M0_PERF_AUTO_T1=OPEN_GAP (no automatic RV64 job on Performance ref)")
+        if "      - \"agent/linux-perf-boolean-domain-v1\"" not in header(rv):
+            raise AssertionError("Performance source changes do not trigger MiniC RV64 T1")
+        if re.search(r"(?m)^  regressions:\n    if:",rv):
+            raise AssertionError("Performance RV64 T1 can silently skip after push")
+        print("M0_PERF_RV64_PUSH=IN_SCOPE (real Performance T1 run still required)")
     print(f"M0_CI_TRIGGER_LEDGER=PASS branch={branch} maintained={len(local)} total=61 unique=34 route_checks=4 tier=T0")
 
 if __name__=="__main__":

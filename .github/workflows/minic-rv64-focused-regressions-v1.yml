@@ -5,6 +5,7 @@ on:
     branches:
       - "agent/linux-expanded-kbuild-v0"
       - "agent/ci-runtime-cleanup-v1"
+      - "agent/linux-perf-boolean-domain-v1"
     paths:
       - 'src/**'
       - 'include/**'

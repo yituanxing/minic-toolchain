@@ -28,6 +28,7 @@ EXTRA_NEGATIVE=(
  "      - '!tools/ci/select_miniobjcopy_elf_route_v1.py'\n"
  "      - '!tools/ci/check_ci_*'\n"
 )
+PERF_RV64_BRANCH="      - \"agent/linux-perf-boolean-domain-v1\"\n"
 SOURCE_PATHS=(
  "    paths:\n"
  "      - 'src/**'\n"
@@ -101,7 +102,12 @@ def main():
    previous=c.replace(EXTRA_NEGATIVE,"").replace(SHARED_ELF_PATH,"").replace(NEGATIVE,"")
   else:
    original_paths=SOURCE_PATHS+"      - '.github/workflows/"+name+"'\n"+NEGATIVE
-   previous_elf_free=c.replace(EXTRA_NEGATIVE,"").replace(SHARED_ELF_PATH,"")
+   original_branch_text=c
+   if name=="minic-rv64-focused-regressions-v1.yml":
+    if c.count(PERF_RV64_BRANCH)!=1:
+     raise AssertionError("Performance compiler T1 automatic branch missing")
+    original_branch_text=c.replace(PERF_RV64_BRANCH,"")
+   previous_elf_free=original_branch_text.replace(EXTRA_NEGATIVE,"").replace(SHARED_ELF_PATH,"")
    if previous_elf_free.count(original_paths)!=1:
     raise AssertionError(f"old Performance branch path insertion shape differs: {name}")
    previous=previous_elf_free.replace(original_paths,"")
