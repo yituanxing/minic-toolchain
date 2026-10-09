@@ -56,8 +56,25 @@ def main():
         raise AssertionError("old job identities do not match frozen list")
     if set(cur) != set(FOCUSED + SEMANTIC):
         raise AssertionError("lost semantic or focused independent jobs")
+    # This workflow has no push event. Exactly four dead push-tag job predicates
+    # were replaced by equivalent explicit workflow_dispatch mode predicates.
+    # Preserve the whole historical executable body and all other focused jobs.
+    manual_modes = {
+        "real16": "real16",
+        "frontier": "frontier",
+        "vector33": "vector33",
+        "resolve": "window",
+    }
     for name in FOCUSED:
-        if cur[name] != old_f[name]:
+        if name in manual_modes:
+            if executable(cur[name]) != executable(old_f[name]):
+                raise AssertionError(f"modified original MiniAS focused execution body: {name}")
+            expected = ("    if: github.event_name == 'workflow_dispatch' "
+                        f"&& inputs.mode == '{manual_modes[name]}'")
+            actual_predicates = re.findall(r"(?m)^    if:.*$", cur[name])
+            if actual_predicates != [expected]:
+                raise AssertionError(f"changed MiniAS manual-only routing: {name}")
+        elif cur[name] != old_f[name]:
             raise AssertionError(f"modified preexisting MiniAS focused job: {name}")
     for name in SEMANTIC:
         if executable(cur[name]) != executable(old_s[name]):
