@@ -1,8 +1,8 @@
 # CI operations — quick start (authoritative as of 2026-10-09)
 
-**Canonical reference:** [Active ownership and trigger topology](current-workflow-map.md). [Exact 39-row two-development-ref ledger](active-workflow-inventory-2026-10-09.tsv). [Archived original execution/body and trigger audit](ci-push-skip-audit-2026-10-09.md).
+**Canonical reference:** [Active ownership and trigger topology](current-workflow-map.md). [Exact 38-row two-development-ref ledger](active-workflow-inventory-2026-10-09.tsv). [Archived original execution/body and trigger audit](ci-push-skip-audit-2026-10-09.md).
 
-Our repository has four live refs: `main` (historical release), `agent/linux-expanded-kbuild-v0` (**Runtime/certification owner**), `agent/linux-perf-boolean-domain-v1` (**separate Performance candidate**), and `archive/all-progress-2026-10-04` (**passive recoverable history**). Only the two development refs are counted in the governed CI inventory: **Runtime 26, Performance 12, 38 branch-local YAML copies / 27 unique names**, 135 declared jobs (not 143 allocated runners).
+Our repository has four live refs: `main` (historical release), `agent/linux-expanded-kbuild-v0` (**Runtime/certification owner**), `agent/linux-perf-boolean-domain-v1` (**separate Performance candidate**), and `archive/all-progress-2026-10-04` (**passive recoverable history**). Only the two development refs are counted in the governed CI inventory: **Runtime 26, Performance 12, 38 branch-local YAML copies / 27 unique names**, 137 declared jobs (not 137 allocated runners).
 
 **Recommended workflow:** Push a focused change. Allow path-scoped T0/T1 gates to establish source/semantic regressions. For historical heavy diagnostics, use the precise `[tag]` documented in the canonical owner; the Runtime unified router preserves tag selection and independent job oracles. Run full 3352 compile, Linux Image and QEMU only for certified profile changes or focused runtime hypotheses; preserve cache/fixture provenance, GCC reference objects, exact error frontier and explicit PASS/FAIL/INCONCLUSIVE. Do not claim boot on an OpenSBI-only timeout.
 
