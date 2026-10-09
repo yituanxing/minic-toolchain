@@ -27,6 +27,21 @@ This removes **8 repeated inlined restore implementations** across five owners w
 
 Runtime and Performance M0 structural gates run the checker and Ruby YAML parsing. No YAML-copy archive is needed: the historical original workflow SHA remains in Git history and is checked by reconstruction.
 
+## Actual current migration test evidence
+
+The shared composite was exercised by five current Runtime owner workflows after the migration:
+
+| Workflow run | Result | What the result establishes |
+| --- | --- | --- |
+| [Timer Focused #37872681398](https://github.com/yituanxing/minic-toolchain/actions/runs/37872681398) | SUCCESS | source and frozen fixture restores, plus its own focused diagnostic contract |
+| [RISC-V Init Codegen #37872681417](https://github.com/yituanxing/minic-toolchain/actions/runs/37872681417) | SUCCESS | pinned source restore and GCC/MiniC object-generation comparison |
+| [Owner Focused #37872681214](https://github.com/yituanxing/minic-toolchain/actions/runs/37872681214) | 4/4 matrix jobs SUCCESS | source/frozen fixture restores and each owner's focused gates |
+| [RCU Softirq #37872681285](https://github.com/yituanxing/minic-toolchain/actions/runs/37872681285) | FAILURE at QEMU fork-init progress assertion | cache restore and object refresh passed; first QEMU probe reached `console-init`, second probe was `INCONCLUSIVE` with no explicit PASS marker |
+| [Runtime M0 #37872841930](https://github.com/yituanxing/minic-toolchain/actions/runs/37872841930) | SUCCESS | exact action YAML/blob, five original complete workflow SHA reconstruction and Ruby parsing |
+| [Performance M0 #37872857343](https://github.com/yituanxing/minic-toolchain/actions/runs/37872857343) | SUCCESS | same structural check on independent branch |
+
+**RCU last real classifier:** `FRONTIER_VERDICT=INCONCLUSIVE`, `FRONTIER_FAULT=none`, `FRONTIER_HIGHEST_PROGRESS=console-init`, `FRONTIER_PASS_MARKERS=none`, `QEMU_RC=0`. Here `QEMU_RC=0` is the controlled watcher lifecycle, **not** a successful Linux boot. Whether this is an older known runtime frontier or a semantic regression requires separate GCC/MiniC fixture/HEAD comparison. Keep that investigation for the runtime-debugging stage; do not alter certified fixture keys to force green.
+
 ## Execution caveat
 
 A successful M0 proves exact source-equivalent configuration, **not** that GitHub Actions has restored these caches or that QEMU has booted. A composite-action invocation adds a GitHub Actions indirection boundary; require a real cache-hit selected mode before marking T3/T4 migration accepted. Treat a missing branch-scoped cache as BLOCKED, not as a compiler regression or a PASS.
