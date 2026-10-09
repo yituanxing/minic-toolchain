@@ -217,3 +217,5 @@ f=f.replace(old,new,1)
 s=s[:begin]+f+s[end:]
 p.write_text(s)
 print("CORE_OBJECT_INTERVAL_INDEX_V1=APPLIED")
+
+# CI 2026-10-09: non-executable routing probe; the P15 transform above is unchanged.
