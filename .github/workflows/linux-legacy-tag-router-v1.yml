@@ -18,3 +18,9 @@ jobs:
   miniar-kbuild:
     if: contains(github.event.head_commit.message, '[miniar-linux-kbuild]')
     uses: ./.github/workflows/miniar-linux-kbuild.yml
+
+  # Temporary end-to-end probe. This runs only for an explicit special tag,
+  # calls M0 as a real reusable workflow, and never starts a Linux build.
+  route-smoke:
+    if: contains(github.event.head_commit.message, '[ci-legacy-router-smoke-v1]')
+    uses: ./.github/workflows/toolchain-m0-structure.yml

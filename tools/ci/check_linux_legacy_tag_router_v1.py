@@ -45,7 +45,11 @@ def main():
     if "  workflow_dispatch:" in route:
         raise AssertionError("router must not advertise an unverified default-branch manual entrypoint")
     observed = set(re.findall(r"(?m)^  ([a-z][\w-]*):\s*$", route.split("\njobs:\n", 1)[1]))
-    if observed != set(owner[3] for owner in OWNERS.values()):
+    # Special-tag-only probe is temporary and must be removed after a real green run.
+    assert "route-smoke" in observed
+    assert "    if: contains(github.event.head_commit.message, '[ci-legacy-router-smoke-v1]')" in route
+    assert "    uses: ./.github/workflows/toolchain-m0-structure.yml" in route
+    if observed != set(owner[3] for owner in OWNERS.values()) | {"route-smoke"}:
         raise AssertionError(f"router job coverage drift {observed}")
     for name, (sha, old_push, tag, caller) in OWNERS.items():
         active = (ROOT / ".github/workflows" / name).read_text()

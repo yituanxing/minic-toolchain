@@ -89,6 +89,7 @@ on:
       - 'tools/ci/linux-distributed-provenance-audit-v2.py'
       - 'tools/ci/linux-distributed-image-plan-v1.py'
   workflow_dispatch:
+  workflow_call:
 
 jobs:
   compiler-boundary:
@@ -96,6 +97,20 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+
+      - name: Prove reusable call inherited push event and tag
+        if: contains(github.event.head_commit.message, '[ci-legacy-router-smoke-v1]')
+        shell: bash
+        env:
+          SMOKE_EVENT: ${{ github.event_name }}
+          SMOKE_REF: ${{ github.ref_name }}
+          SMOKE_MESSAGE: ${{ github.event.head_commit.message }}
+        run: |
+          set -Eeuo pipefail
+          test "$SMOKE_EVENT" = push
+          test "$SMOKE_REF" = agent/linux-expanded-kbuild-v0
+          [[ "$SMOKE_MESSAGE" == *'[ci-legacy-router-smoke-v1]'* ]]
+          echo 'LEGACY_ROUTER_REUSABLE_PUSH_SMOKE=PASS push_context=1 special_tag=1'
 
       - name: Verify MiniLD consolidated integration contracts
         run: |
