@@ -14,7 +14,7 @@ repo=$(cd "$(dirname "$0")/../.." && pwd)
 wrapper="$repo/tests/external/linux/stage2_kbuild_cc.sh"
 target=${GNU_SINGLE_TARGET:-lib/idr.o}
 case "$target" in
-  lib/idr.o|lib/xarray.o|kernel/sched/core.o|kernel/fork.o|mm/memory.o|kernel/locking/spinlock.o) ;;
+  lib/idr.o|lib/xarray.o|kernel/sched/core.o|kernel/fork.o|mm/memory.o|kernel/locking/spinlock.o|arch/riscv/mm/init.o|arch/riscv/kernel/setup.o|arch/riscv/kernel/irq.o|kernel/time/timekeeping.o) ;;
   *) echo "GNU_SINGLE=ERROR unreviewed target=$target" >&2; exit 64 ;;
 esac
 stem=${target%.o}

@@ -201,14 +201,14 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - target: lib/xarray.o
-            leaf: xarray
-          - target: kernel/fork.o
-            leaf: fork
-          - target: mm/memory.o
-            leaf: memory
-          - target: kernel/locking/spinlock.o
-            leaf: spinlock
+          - target: arch/riscv/mm/init.o
+            leaf: init
+          - target: arch/riscv/kernel/setup.o
+            leaf: setup
+          - target: arch/riscv/kernel/irq.o
+            leaf: irq
+          - target: kernel/time/timekeeping.o
+            leaf: timekeeping
     runs-on: ubuntu-24.04
     timeout-minutes: 22
     steps:
