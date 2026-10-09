@@ -24,6 +24,13 @@ on:
       - ".github/workflows-disabled/minild-regressions-v1.yml"
       - "tools/ci/check_ci_shared_elf_coverage_v1.py"
       - "tools/ci/check_ci_trigger_coverage_v1.py"
+      - "tools/ci/select_runtime_focused_owners_v1.py"
+      - "tools/ci/check_runtime_focused_owner_convergence_v1.py"
+      - ".github/workflows/linux-runtime-focused-owners-v1.yml"
+      - ".github/workflows-disabled/linux-runtime-mm-core-frontier-v0.yml"
+      - ".github/workflows-disabled/linux-runtime-rcu-owner-v0.yml"
+      - ".github/workflows-disabled/linux-runtime-riscv-init-codegen-v0.yml"
+      - ".github/workflows-disabled/linux-runtime-timer-focused-v0.yml"
       - "tools/ci/export_ci_trigger_matrix_v1.py"
       - "tools/ci/select_miniobjcopy_elf_route_v1.py"
       - "tools/ci/check_ci_miniobjcopy_elf_route_v1.py"
@@ -160,6 +167,12 @@ jobs:
       - name: Verify Core full 3352 and first500/focused-five union
         run: |
           python3 tools/ci/check_linux_core_3352_first500_union_v1.py
+
+      - name: Verify four preserved Runtime diagnostic jobs and selector routing
+        run: |
+          python3 tools/ci/select_runtime_focused_owners_v1.py --self-test
+          python3 tools/ci/check_runtime_focused_owner_convergence_v1.py
+          ruby -e 'require "yaml"; YAML.parse_file(ARGV.fetch(0))' .github/workflows/linux-runtime-focused-owners-v1.yml
 
       - name: Check Runtime Owner focused matrix path routing
         run: |
