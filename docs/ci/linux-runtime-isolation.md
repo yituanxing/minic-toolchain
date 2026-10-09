@@ -378,3 +378,52 @@ continued successful one-file probes are coverage but cannot locate a
 runtime culprit. Once a same-universe FAIL exists, isolate with GNU-object
 reset, prefix bisection and confirmation by one-file swap / GCC exclusion;
 defer complex interactions until ordinary single-owner diagnosis fails.
+
+
+## 2026-10-09 accelerated cohort campaign (one runner, one MiniC build)
+
+The opt-in \`gcc-single\` job in the EXISTING
+\`linux-runtime-gcc-baseline.yml\` now runs a single batched GNU-golden
+cohort script \`tools/ci/linux-runtime-gcc-cohort-bisect-v1.sh\` rather
+than launching a matrix of independent single-object runners. It:
+
+1. Restores the **same** QEMU-booted 2141-object pure GCC kernel/config/source,
+   hashes every explicitly selected GCC object, and builds the production
+   MiniC profile once;
+2. Compiles all selected Linux \`.c\` owners in **one four-way Kbuild call**,
+   still strictly using GNU GCC -E, MiniC -S, GNU assembler and GNU linker;
+3. Saves the candidate MiniC object set in the same runner, checks RISC-V
+   ET_REL/ABI flags, restores original GNU \`.o/.cmd\` before each trial,
+   and GNU-relinks/QEMU-tests ordered prefixes;
+4. Reuses previously verified PASS prefixes, expands coverage, and only if
+   same-config runtime FAIL occurs does it bisect using existing candidate
+   objects with **no recompilation during the search**;
+5. Classifies compilation, link, object-identity, full runtime PASS,
+   runtime FAIL and inconclusive separately. A prefix FAIL boundary
+   **does not prove single-object causality**.
+
+**Measured results:**
+
+- [32-object CI run 37943054353](https://github.com/yituanxing/minic-toolchain/actions/runs/37943054353)
+  passed: MiniC objects compiled in **77,871 ms**, GCC/MiniC ABI
+  32/32, combined first14 FAST QEMU PASS, combined32 FAST PASS,
+  combined32 FULL QEMU PASS. Single runner, no new workflow YAML or
+  extra job declaration.
+- [128-object CI run 37943911172](https://github.com/yituanxing/minic-toolchain/actions/runs/37943911172)
+  passed: 128 MiniC objects compiled in **198,581 ms**, 128/128 ABI,
+  combined first32 FAST QEMU PASS, combined128 FAST PASS,
+  combined128 FULL QEMU PASS. Full job was approximately five and a
+  half minutes. This is **128 MiniC objects together**, not 128
+  independent one-object tests.
+- The 384-object expansion on
+  [CI run 37945012953](https://github.com/yituanxing/minic-toolchain/actions/runs/37945012953)
+  was started; its outcome must be verified from that actual run.
+  The widened objects list remains source-audited and all targets
+  must exist in the exact GCC build universe. No mixed config or
+  GNU-preprocessing-stage substitution is allowed.
+
+Do not confuse increasing runtime-cohort coverage with proving the
+entire 2141-object MiniC Linux kernel boots. If a failure first
+appears after expansion, run single-object and GCC-exclusion
+confirmation before naming a compiler root cause. The true first
+Runtime bug fix remains separate from infrastructure/test success.
