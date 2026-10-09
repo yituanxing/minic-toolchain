@@ -128,4 +128,35 @@ MINIC="$work/bin/fake-minic" REAL_CC="$work/bin/fake-real-cc"   "$wrapper" -marc
 after2=$(wc -l <"$FAKE_MINIC_LOG")
 test "$before" -eq "$after2"
 
+# Reproduce one failed C TU without retaining all successful GCC .i files.
+cat >"$work/bin/fake-minic-fail" <<'SH'
+#!/usr/bin/env bash
+echo 'mock MiniC frontend: synthetic error at compiler stage' >&2
+exit 73
+SH
+chmod +x "$work/bin/fake-minic-fail"
+
+set +e
+MINIC="$work/bin/fake-minic-fail" REAL_CC="$work/bin/fake-real-cc" \
+  MINIC_PRESERVE_FAILURE_INPUTS=1 MINIC_KEEP_INTERMEDIATES=0 \
+  "$wrapper" -c -o "$work/out/failed.o" "$work/input.c" >"$work/failed.stdout" 2>"$work/failed.stderr"
+rc=$?
+set -e
+test "$rc" -eq 73
+test -s "$work/out/failed.minic-stage2.failed.i"
+test -s "$work/out/failed.minic-stage2.failed.stderr"
+grep -F 'int kbuild_wrapper_probe' "$work/out/failed.minic-stage2.failed.i"
+grep -F 'synthetic error' "$work/out/failed.minic-stage2.failed.stderr"
+test ! -e "$work/out/failed.minic-stage2.i"
+test ! -e "$work/out/failed.minic-stage2.minic.stderr"
+# A successful retry must never be reported as a stale failed TU.
+MINIC="$work/bin/fake-minic" REAL_CC="$work/bin/fake-real-cc" \
+  MINIC_PRESERVE_FAILURE_INPUTS=1 MINIC_KEEP_INTERMEDIATES=0 \
+  "$wrapper" -c -o "$work/out/failed.o" "$work/input.c"
+test -s "$work/out/failed.o"
+test ! -e "$work/out/failed.minic-stage2.failed.i"
+test ! -e "$work/out/failed.minic-stage2.failed.stderr"
+test ! -e "$work/out/failed.minic-stage2.i"
+echo "STAGE2_KBUILD_FAILURE_REPRO=PASS"
+
 echo "STAGE2_KBUILD_WRAPPER_TEST=PASS"

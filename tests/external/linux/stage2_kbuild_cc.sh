@@ -97,9 +97,29 @@ preprocessed=${base}.i
 assembly=${base}.s
 minic_stdout=${base}.minic.stdout
 minic_stderr=${base}.minic.stderr
+preserve_failure=${MINIC_PRESERVE_FAILURE_INPUTS:-0}
+failed_i=${base}.failed.i
+failed_stderr=${base}.failed.stderr
+
+# Each invocation owns this target's failure evidence. Never reuse stale
+# failed inputs when a later run succeeds.
+if [[ "$preserve_failure" == 1 ]]; then
+  rm -f "$failed_i" "$failed_stderr"
+fi
 
 cleanup() {
+  local rc=$?
   if [[ "$keep" != 1 ]]; then
+    if [[ "$preserve_failure" == 1 && "$rc" -ne 0 ]]; then
+      # Keep ONLY failed TUs: a 2064-owner sweep must not retain 2064 .i files.
+      # GNU-preprocessed .i and MiniC diagnostics stay paired to this owner.
+      if [[ -s "$preprocessed" ]]; then
+        cp -a -- "$preprocessed" "$failed_i"
+      fi
+      if [[ -s "$minic_stderr" ]]; then
+        cp -a -- "$minic_stderr" "$failed_stderr"
+      fi
+    fi
     [[ "$source_file" == *.i ]] || rm -f "$preprocessed"
     rm -f "$assembly" "$minic_stdout" "$minic_stderr"
   fi

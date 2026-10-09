@@ -141,7 +141,7 @@ else
   # avoid filling runner disk. -k collects independent compile failures.
   compile_rc=0
   MINIC="$minic" REAL_CC=/usr/bin/riscv64-linux-gnu-gcc \
-    MINIC_KEEP_INTERMEDIATES=0 \
+    MINIC_KEEP_INTERMEDIATES=0 MINIC_PRESERVE_FAILURE_INPUTS=1 \
     make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
       CC="$repo/tests/external/linux/stage2_kbuild_cc.sh" -j6 -k "${targets[@]}" \
       >"$ev/compile.log" 2>&1 || compile_rc=$?
