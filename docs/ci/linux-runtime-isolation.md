@@ -177,3 +177,66 @@ paths using the same:
 Cleanup passes only when the canonical path reproduces the old verdict, or
 moves the frontier later with inspectable evidence.  A cache miss, missing log,
 link failure, or timeout without progress evidence is not a runtime pass.
+
+
+## GNU-locked single-TU debugging baseline (2026-10-09)
+
+The first debug campaign fixes **all non-MiniC stages to GNU** rather than
+changing the whole Mini toolchain at once:
+
+```text
+Linux .c + pinned Kbuild flags + pinned GCC builtin environment
+   -> GNU GCC -E -P (ONCE, immutable .i)
+   -> { GCC -S from the same .i | MiniC -S from the same .i }
+   -> same GNU assembler / RISC-V LP64 ABI
+   -> { GNU .o | MiniC .o } -> verified object overlay
+   -> GNU ar / ld / objcopy -> same QEMU and runtime oracle
+```
+
+**Two different GCC references must not be confused.** The existing
+`linux-runtime-gcc-baseline.yml` builds a full GCC kernel after enabling extra
+initramfs/serial options; the older `linux-expanded-mixed-v1` runtime cache
+has a pinned `.config` SHA256
+`e538a6ad42ec49c5a667cab5de9bb943f82ca702ff2b7749a020e38ff7ddaea7`
+and is already mixed MiniC/GCC. Neither reference is automatically a
+**pure-GCC, exact-config** golden object pool compatible with the other.
+Before *any* whole-kernel GCC/MiniC object bisect, materialize and boot-check
+one pure-GCC pool at **exactly the same** Linux version, `.config`, input
+generation, compilation options, ABI and linker context as the candidate.
+If this gate is missing, do not claim the result isolates MiniC.
+
+**Single-object fast loop:**
+1. Materialize a chosen Linux source's exact Kbuild `.i` once with GNU GCC,
+   retain bytes/SHA256, flag vector, predefines, .config hash and compiler IDs.
+   MiniPP exact 3352/3352 is useful independent evidence, but do not change
+   preprocessors during this phase.
+2. For the first A/B trial only, feed that SAME `.i` to GCC's *C compiler*
+   (`-x cpp-output -S`) and to MiniC (`-S`); pass both resulting `.s`
+   through the GNU assembler using the exact recorded RISC-V `-march/-mabi`
+   and Kbuild-relevant flags. Verify ELF machine, ABI and object identity.
+3. Cache the immutable GCC `.i` and GNU `.o`. After a MiniC source fix,
+   rebuild MiniC and **only MiniC's** changed `.s/.o` from frozen `.i`;
+   do not re-run GCC preprocessing or GCC code generation when their
+   inputs/config/options are unchanged.
+4. Restore the complete certified **pure-GCC** object pool on every trial,
+   overlay only the explicitly selected MiniC candidate object(s), authenticate
+   object IDs, and GNU-relink. Linux link inputs, archives and generated
+   kallsyms remain under the pinned fixture contract. QEMU must be classified
+   PASS/FAIL/INCONCLUSIVE with first-fault/progress evidence.
+5. Start from one-file candidates and historical fault pools, use ordered-prefix
+   bisect and the existing `single` / `all-except` object modes. A prefix
+   boundary is not automatically a standalone culprit. Only investigate
+   multi-file interaction if normal single-file experiments cannot explain
+   the failure.
+6. After each real compiler fix, recheck that object's reproducer, related
+   objects, then the full Linux Image/QEMU. A fast early frontier movement is
+   not the same as a complete boot PASS.
+
+**Performance and identity constraints:** The one-time pure-GCC preparation
+and whole-kernel certification are deliberately separate from the fast loop.
+Record separately MiniC rebuild, changed-TU compile, object reset/relink and
+QEMU timing. Avoid new active workflow YAMLs: drive these stages from an
+existing canonical Runtime owner once the equivalent object/link/QEMU
+provenance is demonstrated. Existing `stage2_kbuild_cc.sh` already uses GNU
+GCC -E -P, MiniC -S and the GNU assembler, so this is an isolation of *current
+working stages*, not a speculative toolchain swap.
