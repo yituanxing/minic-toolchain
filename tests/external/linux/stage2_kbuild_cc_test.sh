@@ -93,9 +93,12 @@ cat >"$work/input.S" <<'S'
 .text
 S
 
-MINIC="$work/bin/fake-minic" REAL_CC="$work/bin/fake-real-cc" MINIC_KBUILD_TRACE="$trace" MINIC_KEEP_INTERMEDIATES=1   "$wrapper"     -Wp,-MMD,"$work/out/.probe.o.d"     -nostdinc -Iinclude -include include/linux/kconfig.h     -D__KERNEL__ -std=gnu11 -O2     -mabi=lp64 -march=rv64imac_zicsr_zifencei     -mcmodel=medany -mstrict-align -Wa,-mno-arch-attr     -c -o "$work/out/probe.o" "$work/input.c"
+MINIC="$work/bin/fake-minic" REAL_CC="$work/bin/fake-real-cc" MINIC_KBUILD_TRACE="$trace" MINIC_KEEP_INTERMEDIATES=1 MINIC_KBUILD_SUCCESS_TRACE="$work/success-objects.txt"   "$wrapper"     -Wp,-MMD,"$work/out/.probe.o.d"     -nostdinc -Iinclude -include include/linux/kconfig.h     -D__KERNEL__ -std=gnu11 -O2     -mabi=lp64 -march=rv64imac_zicsr_zifencei     -mcmodel=medany -mstrict-align -Wa,-mno-arch-attr     -c -o "$work/out/probe.o" "$work/input.c"
 
 test -s "$work/out/probe.o"
+# Audit event is emitted only after BOTH MiniC -S and GNU-as succeeded.
+test "$(wc -l <"$work/success-objects.txt")" -eq 1
+grep -Fx "$work/out/probe.o" "$work/success-objects.txt"
 test -s "$work/out/probe.minic-stage2.i"
 test -s "$work/out/probe.minic-stage2.s"
 
@@ -139,10 +142,13 @@ chmod +x "$work/bin/fake-minic-fail"
 set +e
 MINIC="$work/bin/fake-minic-fail" REAL_CC="$work/bin/fake-real-cc" \
   MINIC_PRESERVE_FAILURE_INPUTS=1 MINIC_KEEP_INTERMEDIATES=0 \
+  MINIC_KBUILD_SUCCESS_TRACE="$work/success-objects.txt" \
   "$wrapper" -c -o "$work/out/failed.o" "$work/input.c" >"$work/failed.stdout" 2>"$work/failed.stderr"
 rc=$?
 set -e
 test "$rc" -eq 73
+# The failed compiler path must NEVER issue a successful route/provenance mark.
+test "$(wc -l <"$work/success-objects.txt")" -eq 1
 test -s "$work/out/failed.minic-stage2.failed.i"
 test -s "$work/out/failed.minic-stage2.failed.stderr"
 grep -F 'int kbuild_wrapper_probe' "$work/out/failed.minic-stage2.failed.i"
@@ -152,8 +158,11 @@ test ! -e "$work/out/failed.minic-stage2.minic.stderr"
 # A successful retry must never be reported as a stale failed TU.
 MINIC="$work/bin/fake-minic" REAL_CC="$work/bin/fake-real-cc" \
   MINIC_PRESERVE_FAILURE_INPUTS=1 MINIC_KEEP_INTERMEDIATES=0 \
+  MINIC_KBUILD_SUCCESS_TRACE="$work/success-objects.txt" \
   "$wrapper" -c -o "$work/out/failed.o" "$work/input.c"
 test -s "$work/out/failed.o"
+test "$(wc -l <"$work/success-objects.txt")" -eq 2
+grep -Fx "$work/out/failed.o" "$work/success-objects.txt"
 test ! -e "$work/out/failed.minic-stage2.failed.i"
 test ! -e "$work/out/failed.minic-stage2.failed.stderr"
 test ! -e "$work/out/failed.minic-stage2.i"
