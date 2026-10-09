@@ -197,6 +197,18 @@ jobs:
   gcc-single:
     # Explicit opt-in inside the existing workflow; no full GCC recompilation.
     if: github.event_name == 'push' && contains(github.event.head_commit.message, '[linux-runtime-gcc-single]')
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: lib/xarray.o
+            leaf: xarray
+          - target: kernel/fork.o
+            leaf: fork
+          - target: mm/memory.o
+            leaf: memory
+          - target: kernel/locking/spinlock.o
+            leaf: spinlock
     runs-on: ubuntu-24.04
     timeout-minutes: 22
     steps:
@@ -250,7 +262,7 @@ jobs:
           src="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0/linux-6.6.143"
           # Probe a historically relevant scheduler object rather than repeating
           # the already validated lib/idr.o smoke test.
-          target=kernel/sched/core.o
+          target="${{ matrix.target }}"
           stem=${target%.o}
           leaf=${stem##*/}
           cmd="$out/$(dirname "$target")/.$leaf.o.cmd"
@@ -271,13 +283,13 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: |
-            build/linux-runtime-gcc-single-v1/core.i
+            build/linux-runtime-gcc-single-v1/${{ matrix.leaf }}.i
             build/linux-runtime-gcc-single-v1/asm-args.txt
             build/linux-runtime-gcc-single-v1/pp-contract.txt
             build/linux-runtime-gcc-single-v1/pp-files.sha256
           key: ${{ steps.ppkey.outputs.key }}
 
-      - name: Verify GNU baseline, build MiniC and swap only kernel/sched/core.o
+      - name: Verify GNU baseline, build MiniC and swap one selected object
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -294,7 +306,7 @@ jobs:
           mkdir -p "$ev"
           bash tools/ci/linux-runtime-build-minic-profile-v1.sh \
             "$GITHUB_WORKSPACE/build/linux-runtime-gcc-single-toolchain" "$ev/compiler"
-          GNU_SINGLE_TARGET=kernel/sched/core.o bash tools/ci/linux-runtime-gcc-single-swap-v1.sh \
+          GNU_SINGLE_TARGET="${{ matrix.target }}" bash tools/ci/linux-runtime-gcc-single-swap-v1.sh \
             "$work/linux-6.6.143" "$work/out" \
             "$GITHUB_WORKSPACE/build/linux-runtime-gcc-single-toolchain/bin/minic" \
             "$work/provenance" "$ev"
@@ -306,7 +318,7 @@ jobs:
         run: |
           set -Eeuo pipefail
           ev="$GITHUB_WORKSPACE/build/linux-runtime-gcc-single-v1"
-          if test -s "$ev/core.i" && test -s "$ev/asm-args.txt" && \
+          if test -s "$ev/${{ matrix.leaf }}.i" && test -s "$ev/asm-args.txt" && \
              test -s "$ev/pp-contract.txt" && test -s "$ev/pp-files.sha256"; then
             echo 'ready=true' >>"$GITHUB_OUTPUT"
           else
@@ -318,7 +330,7 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: |
-            build/linux-runtime-gcc-single-v1/idr.i
+            build/linux-runtime-gcc-single-v1/${{ matrix.leaf }}.i
             build/linux-runtime-gcc-single-v1/asm-args.txt
             build/linux-runtime-gcc-single-v1/pp-contract.txt
             build/linux-runtime-gcc-single-v1/pp-files.sha256
@@ -328,14 +340,14 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: linux-runtime-gnu-single-${{ github.sha }}
+          name: linux-runtime-gnu-single-${{ matrix.leaf }}-${{ github.sha }}
           path: |
             build/linux-runtime-gcc-single-v1/identity.txt
             build/linux-runtime-gcc-single-v1/compile.log
             build/linux-runtime-gcc-single-v1/link.log
             build/linux-runtime-gcc-single-v1/one-tu.trace
-            build/linux-runtime-gcc-single-v1/core.minic.s
-            build/linux-runtime-gcc-single-v1/idr.i
+            build/linux-runtime-gcc-single-v1/${{ matrix.leaf }}.minic.s
+            build/linux-runtime-gcc-single-v1/${{ matrix.leaf }}.i
             build/linux-runtime-gcc-single-v1/asm-args.txt
             build/linux-runtime-gcc-single-v1/pp-contract.txt
             build/linux-runtime-gcc-single-v1/pp-files.sha256
