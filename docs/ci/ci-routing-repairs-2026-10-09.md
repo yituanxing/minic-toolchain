@@ -24,6 +24,12 @@ Now a cheap `route` job performs a full-history `git diff` from `github.event.be
 
 `tools/ci/select_runtime_owner_modes_v1.py --self-test` tests the path/manual truth table. `tools/ci/check_runtime_owner_routing_v1.py` reverses exactly the approved YAML-level routing edits and proves byte-exact equality to the immediately previous complete Owner Focused workflow Git SHA `c9b8fff60a2a805ceff68e1d028da69f7485dceb`. Existing shared-cache restore M0 still reverses its earlier cache step extraction against its older whole-workflow SHA, so this improvement has **two independent source-equivalence layers**.
 
+## Actual live routing evidence
+
+- [Timekeeping-only routing run #37879420999](https://github.com/yituanxing/minic-toolchain/actions/runs/37879420999): exactly `route` + `owner (timekeeping)`; both SUCCESS. No other owner matrix cases scheduled.
+- [Post-exclusion timekeeping push 7bf11473](https://github.com/yituanxing/minic-toolchain/commit/7bf11473d97757375de4cdfd7d5789276561ec46): [Owner run #37879734755](https://github.com/yituanxing/minic-toolchain/actions/runs/37879734755) again scheduled one owner job. The 3 unrelated heavyweight MiniC RV64/MiniAR/MiniLD workflows did **not** appear among this HEAD's workflow runs. At the checkpoint the second timekeeping test had reached QEMU and was still in progress.
+- Both [Runtime M0 #37879660134](https://github.com/yituanxing/minic-toolchain/actions/runs/37879660134) and [Performance M0 #37879677311](https://github.com/yituanxing/minic-toolchain/actions/runs/37879677311): SUCCESS with restored-whole-YAML SHA and both route tests. The manual Performance semantics mode is structurally accepted but has **not** had a new actual manual run; it is not a Runtime PASS.
+
 ## Verification tiers and exit conditions
 
 - **T0**: Runtime/Performance M0 YAML parse + full source equivalence + route selftests green.

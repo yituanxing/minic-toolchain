@@ -26,6 +26,6 @@ The Runtime branch originally had broad positive filters; those were retained by
 
 ## Outstanding
 
-- Perform a **second live push** of a dedicated Runtime sentinel after this fix and observe the three irrelevant workflows are not triggered; before/after run IDs must be recorded.
+- **VERIFIED:** A second timekeeping-only push, [7bf11473](https://github.com/yituanxing/minic-toolchain/commit/7bf11473d97757375de4cdfd7d5789276561ec46), created [Owner run #37879734755](https://github.com/yituanxing/minic-toolchain/actions/runs/37879734755) with exactly `route` and `owner (timekeeping)`. Its workflow-run list **contained none** of the MiniC RV64, MiniAR or MiniLD regression workflows. Owner's route step returned SUCCESS; the timekeeping job was still in progress at the checkpoint. The prior [#37879420999](https://github.com/yituanxing/minic-toolchain/actions/runs/37879420999) owner timekeeping-only run returned SUCCESS.
 - Existing Runtime QEMU `RCU` watcher reached `console-init` but returned `INCONCLUSIVE` at its second stage. No Linux runtime correctness/boot certificate follows from successful routing.
 - Review other expensive workflows triggered by broad paths and branch compatibility before merging more YAMLs. The current target is correct dispatch, not reducing the 30/31 active-entrypoint counts.
