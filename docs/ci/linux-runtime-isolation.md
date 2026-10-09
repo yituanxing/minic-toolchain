@@ -254,3 +254,38 @@ Offline contract tests:
 `python3 tools/ci/test_linux_runtime_gcc_minic_ab_v1.py`.
 A real RISC-V TU replay, full same-config GCC baseline, GNU-relink and
 QEMU oracle are **separate, not-yet-performed certification steps**.
+
+
+## 2026-10-09 pure-GNU golden checkpoint and first single-object consumer
+
+Real [GCC golden run 37934420543](https://github.com/yituanxing/minic-toolchain/actions/runs/37934420543)
+completed the original full user-space/P1 QEMU contract, enumerated
+**2141 RISC-V ET_REL objects** (excluding native HOSTCC products), and
+successfully saved the authenticated output tree + manifest in the
+Runtime branch-scoped GitHub Actions cache. Golden \`.config\` SHA256 is
+\`eeb04f304ebfb97a1079c187dc0c2ea3cc61fc50a55aa3cc776237c16ab19bbe\`;
+this differs from the historical mixed-cache \`e538a6...\` and is a
+**new, independently boot-certified build universe**.
+
+The initial candidate TU is \`lib/idr.o\`. The existing GCC baseline workflow
+now has a separate opt-in **gcc-single** job activated by the exact commit tag
+\`[linux-runtime-gcc-single]\`. It restores the certified GCC objects from
+the cache, restores the pinned Linux sources at the original GNU Kbuild
+source-path spelling, builds MiniC, then runs
+\`tools/ci/linux-runtime-gcc-single-swap-v1.sh\`.
+The script saves the reference \`.o/.cmd\`, forces only \`lib/idr.o\`
+through the existing GCC -E / MiniC -S / GNU-as wrapper, preserves the
+resulting \`.i/.s/.o\`, restores the exact original GNU \`.cmd\`, and invokes
+normal GNU Kbuild incremental \`make Image\`. It rejects a GNU rebuild that
+overwrites MiniC's selected object, rejects an unchanged Image, and then runs
+the existing full user-space QEMU oracle. It restores the GCC object and
+command metadata on exit and always uploads diagnosis logs. No permanent
+new workflow YAML was created; the opt-in job is skipped on normal pushes.
+
+**Verification boundaries:** the existing \`gnu-locked-single-tu\` primitive
+has offline mock tests, the new single-object swap script has a shell syntax
+gate, and the golden GCC build/QEMU/cache are real green evidence. The
+one-object swapped Image and QEMU must get their own **real CI run** before
+claiming any MiniC runtime PASS. Once this first run is stable, freeze
+its \`.i\` and exact assembler flags under source/config/GCC/Kbuild-command
+identities so subsequent MiniC-only iterations avoid even repeating GCC -E.

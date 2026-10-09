@@ -193,3 +193,85 @@ jobs:
             build/linux-runtime-gcc/runtime-initramfs.cpio.gz
           if-no-files-found: ignore
           retention-days: 1
+
+  gcc-single:
+    # Explicit opt-in inside the existing workflow; no full GCC recompilation.
+    if: github.event_name == 'push' && contains(github.event.head_commit.message, '[linux-runtime-gcc-single]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 22
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Install GNU RISC-V toolchain and QEMU
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get -o Acquire::Retries=2 install -y --no-install-recommends \
+            gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
+            qemu-system-misc opensbi libc6-dev-riscv64-cross \
+            python3 make cpio gzip || {
+              sudo apt-get -o Acquire::Retries=3 update
+              sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+                gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
+                qemu-system-misc opensbi libc6-dev-riscv64-cross python3 make cpio gzip
+            }
+
+      - name: Pin exact GNU baseline cache identity
+        id: identity
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          config=eeb04f304ebfb97a1079c187dc0c2ea3cc61fc50a55aa3cc776237c16ab19bbe
+          gcc_sig=$(sha256sum "$(command -v riscv64-linux-gnu-gcc)" | cut -c1-16)
+          ld_sig=$(sha256sum "$(command -v riscv64-linux-gnu-ld)" | cut -c1-16)
+          echo "key=linux-gnu-golden-v1-6.6.143-$config-$gcc_sig-$ld_sig" >>"$GITHUB_OUTPUT"
+
+      - name: Restore certified full-GNU Linux objects
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            build/linux-runtime-gcc/out
+            build/linux-runtime-gcc/provenance
+          key: ${{ steps.identity.outputs.key }}
+          fail-on-cache-miss: true
+
+      - name: Restore pinned Linux source and Kbuild path identity
+        uses: ./.github/actions/linux-runtime-restore-fixture
+        with:
+          fixture: source
+
+      - name: Verify GNU baseline, build MiniC and swap only lib/idr.o
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-runtime-gcc"
+          source="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0/linux-6.6.143"
+          test -d "$source"
+          test ! -e "$work/linux-6.6.143"
+          ln -s "$source" "$work/linux-6.6.143"
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-gcc-single-v1"
+          mkdir -p "$ev"
+          bash tools/ci/linux-runtime-build-minic-profile-v1.sh \
+            "$GITHUB_WORKSPACE/build/linux-runtime-gcc-single-toolchain" "$ev/compiler"
+          bash tools/ci/linux-runtime-gcc-single-swap-v1.sh \
+            "$work/linux-6.6.143" "$work/out" \
+            "$GITHUB_WORKSPACE/build/linux-runtime-gcc-single-toolchain/bin/minic" \
+            "$work/provenance" "$ev"
+
+      - name: Preserve single-object GCC/MiniC evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-runtime-gnu-single-${{ github.sha }}
+          path: |
+            build/linux-runtime-gcc-single-v1/identity.txt
+            build/linux-runtime-gcc-single-v1/compile.log
+            build/linux-runtime-gcc-single-v1/link.log
+            build/linux-runtime-gcc-single-v1/one-tu.trace
+            build/linux-runtime-gcc-single-v1/idr.minic.s
+            build/linux-runtime-gcc-single-v1/qemu.result.log
+            build/linux-runtime-gcc-single-v1/qemu/*.log
+            build/linux-runtime-gcc-single-v1/compiler/toolchain-timing.txt
+          if-no-files-found: warn
+          retention-days: 7

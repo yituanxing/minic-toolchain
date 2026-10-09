@@ -52,6 +52,7 @@ on:
       - '.github/actions/linux-runtime-restore-fixture/**'
       - 'tools/ci/test_linux_runtime_prefix_bisect_v1.py'
       - 'tools/ci/test_linux_runtime_gcc_minic_ab_v1.py'
+      - 'tools/ci/linux-runtime-gcc-single-swap-v1.sh'
       - 'tools/ci/check_minild_integration_convergence_v1.py'
       - 'tools/ci/check_minipp_frozen_convergence_v1.py'
       - 'tools/ci/check_minipp_live_frozen_merge_v1.py'
@@ -246,6 +247,7 @@ jobs:
           python3 tools/ci/test_linux_runtime_object_set_v1.py
           python3 tools/ci/test_linux_runtime_prefix_bisect_v1.py
           python3 tools/ci/test_linux_runtime_gcc_minic_ab_v1.py
+          bash -n tools/ci/linux-runtime-gcc-single-swap-v1.sh
 
       - name: Validate active Linux Kbuild wrapper contract
         shell: bash
