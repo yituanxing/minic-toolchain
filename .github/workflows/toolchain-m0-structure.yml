@@ -22,6 +22,8 @@ on:
       - '.github/workflows-disabled/minild-regressions-v1.yml'
       - 'tools/ci/check_ci_shared_elf_coverage_v1.py'
       - 'tools/ci/check_ci_trigger_coverage_v1.py'
+      - 'tools/ci/audit_active_workflow_routing_v1.py'
+      - 'docs/ci/ci-push-skip-audit-2026-10-09.md'
       - 'tools/ci/select_runtime_focused_owners_v1.py'
       - 'tools/ci/check_runtime_focused_owner_convergence_v1.py'
       - '.github/workflows/linux-runtime-focused-owners-v1.yml'
@@ -201,6 +203,8 @@ jobs:
       - name: Audit all maintained workflow trigger/job contracts and MiniObjcopy ELF route
         run: |
           python3 tools/ci/check_ci_trigger_coverage_v1.py
+          python3 tools/ci/audit_active_workflow_routing_v1.py --self-test
+          python3 tools/ci/audit_active_workflow_routing_v1.py --output build/ci-active-entrypoint-audit.tsv
           python3 tools/ci/export_ci_trigger_matrix_v1.py --output build/ci-trigger-matrix.tsv
           python3 tools/ci/select_miniobjcopy_elf_route_v1.py --self-test
           python3 tools/ci/check_ci_miniobjcopy_elf_route_v1.py
@@ -210,7 +214,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ci-trigger-matrix-runtime
-          path: build/ci-trigger-matrix.tsv
+          path: |
+            build/ci-trigger-matrix.tsv
+            build/ci-active-entrypoint-audit.tsv
           if-no-files-found: error
           retention-days: 14
 
