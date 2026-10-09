@@ -93,9 +93,10 @@ def main():
    previous=c.replace(SHARED_ELF_PATH,"").replace(NEGATIVE,"")
   else:
    original_paths=SOURCE_PATHS+"      - '.github/workflows/"+name+"'\n"+NEGATIVE
-   if c.count(original_paths)!=1:
+   previous_elf_free=c.replace(SHARED_ELF_PATH,"")
+   if previous_elf_free.count(original_paths)!=1:
     raise AssertionError(f"old Performance branch path insertion shape differs: {name}")
-   previous=c.replace(SHARED_ELF_PATH,"").replace(original_paths,"")
+   previous=previous_elf_free.replace(original_paths,"")
   expected=rt if branch==BRANCHES[0] else pf
   if gitblob(previous)!=expected:
    raise AssertionError(f"reconstructed historical job/branch/full YAML changed: {name}")
