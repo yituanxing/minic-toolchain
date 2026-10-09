@@ -338,7 +338,7 @@ regression expansion; multi-object interaction is deferred unless a
 single-object explanation becomes impossible.
 
 
-## 2026-10-09 first GNU golden single-object census — 13 actual QEMU passes
+## 2026-10-09 first GNU golden single-object census — 14 actual QEMU passes
 
 Single-object trials on the **same** booted GCC Linux 6.6.143 golden kernel:
 \`config_sha256=eeb04f304ebfb97a1079c187dc0c2ea3cc61fc50a55aa3cc776237c16ab19bbe\`.
@@ -368,8 +368,8 @@ fast future MiniC-only replay.
 \`kernel/sched/core.o\` on the **older mixed-config** kernel is not
 reproduced by the \`core.o\`-only experiment on this **new GCC golden
 config**. This does *not* prove the original fault has been fixed.
-Likewise, 13 independently passing single-object tests do *not* prove
-that 13 MiniC objects work together or that an all-MiniC Image boots.
+Likewise, 14 independently passing single-object tests do *not* prove
+that 14 MiniC objects work together or that an all-MiniC Image boots.
 
 **Next useful gate:** obtain a **verified FAIL** for a sufficiently broad
 MiniC cohort or full MiniC kernel using exactly this golden \`.config\`,
