@@ -47,6 +47,8 @@ RUNTIME_REUSABLE_BLOBS = {
     "miniar-linux-kbuild.yml": "b06aef58b69c0566cefa0a1751298f88926f2529",
     "linux-runtime-fixture-producers-v1.yml": "ef54b8d6551eb84d663f0a5be3d1f1f811dccaf0",
     "linux-runtime-focused-faults-v1.yml": "fde303682a2e14c1697b7daf6017c9144773deac",
+    "linux-runtime-spinlock-context-v0.yml": "6355ccea22ecf495654bf71b8668adb1306eb04f",
+    "linux-runtime-fdt-isolation-v1.yml": "11c03a87850710a055e8080a73f79acb91f14518",
 }
 
 BRANCHES = ("agent/linux-expanded-kbuild-v0", "agent/linux-perf-boolean-domain-v1")
