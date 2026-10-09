@@ -178,11 +178,26 @@ def main():
     # Keep every retired Performance owner as an exact byte-identical archive.
     # These entries must remain intact and branch-ineligible on Performance.
     import hashlib
+    # Two preexisting historical archives share filenames with retired copies.
+    # Both original historical sources remain pinned and must NOT be overwritten.
+    historical = {
+        "linux-runtime-fdt-isolation-v1.yml": "83feffda9150072a849f677c58856f77975968cc",
+        "linux-runtime-focused-faults-v1.yml": "770c2bb3c8831b35d7eabebbc8dba8d09dc32384",
+    }
+    for name, historical_sha in historical.items():
+        original = ROOT / ".github" / "workflows-disabled" / name
+        assert original.is_file(), f"lost historical archive {name}"
+        old_bytes = original.read_bytes()
+        old_hash = hashlib.sha1(b"blob " + str(len(old_bytes)).encode() + b"\0" + old_bytes).hexdigest()
+        assert old_hash == historical_sha, f"altered historical archive {name}"
     for name, expected_sha in PERFORMANCE_ARCHIVED.items():
         live = ACTIVE / name
-        archive = ROOT / ".github" / "workflows-disabled" / name
+        retired_dir = ROOT / ".github" / "workflows-disabled"
+        if name in historical:
+            retired_dir = retired_dir / "performance-retired-2026-10-09"
+        archive = retired_dir / name
         if branch == BRANCHES[0]:
-            assert live.is_file() and not archive.is_file(), name
+            assert live.is_file(), name
             payload = live.read_bytes()
         else:
             assert not live.exists() and archive.is_file(), name

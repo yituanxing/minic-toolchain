@@ -35,6 +35,8 @@ on:
       - ".github/workflows-disabled/linux-runtime-focused-faults-v1.yml"
       - ".github/workflows-disabled/linux-runtime-focused-owners-v1.yml"
       - ".github/workflows-disabled/linux-runtime-owner-focused-v1.yml"
+      - ".github/workflows-disabled/performance-retired-2026-10-09/linux-runtime-fdt-isolation-v1.yml"
+      - ".github/workflows-disabled/performance-retired-2026-10-09/linux-runtime-focused-faults-v1.yml"
       - "docs/ci/ci-push-skip-audit-2026-10-09.md"
       - "tools/ci/select_runtime_focused_owners_v1.py"
       - "tools/ci/check_runtime_focused_owner_convergence_v1.py"
@@ -100,9 +102,15 @@ jobs:
           set -Eeuo pipefail
           for name in linux-core-shards-v1.yml linux-runtime-fdt-isolation-v1.yml linux-runtime-fixture-producers-v1.yml linux-runtime-focused-faults-v1.yml linux-runtime-focused-owners-v1.yml linux-runtime-owner-focused-v1.yml; do
             test ! -e ".github/workflows/$name"
-            test -f ".github/workflows-disabled/$name"
-            cp ".github/workflows-disabled/$name" ".github/workflows/$name"
-            cmp ".github/workflows-disabled/$name" ".github/workflows/$name"
+            src=".github/workflows-disabled/$name"
+            case "$name" in
+              linux-runtime-fdt-isolation-v1.yml|linux-runtime-focused-faults-v1.yml)
+                src=".github/workflows-disabled/performance-retired-2026-10-09/$name"
+                ;;
+            esac
+            test -f "$src"
+            cp "$src" ".github/workflows/$name"
+            cmp "$src" ".github/workflows/$name"
           done
           echo "M0_PERF_ARCHIVED_RUNTIME_SOURCE_MATERIALIZE=PASS copies=6"
 
@@ -231,7 +239,13 @@ jobs:
         run: |
           set -Eeuo pipefail
           for name in linux-core-shards-v1.yml linux-runtime-fdt-isolation-v1.yml linux-runtime-fixture-producers-v1.yml linux-runtime-focused-faults-v1.yml linux-runtime-focused-owners-v1.yml linux-runtime-owner-focused-v1.yml; do
-            cmp ".github/workflows-disabled/$name" ".github/workflows/$name"
+            src=".github/workflows-disabled/$name"
+            case "$name" in
+              linux-runtime-fdt-isolation-v1.yml|linux-runtime-focused-faults-v1.yml)
+                src=".github/workflows-disabled/performance-retired-2026-10-09/$name"
+                ;;
+            esac
+            cmp "$src" ".github/workflows/$name"
             rm ".github/workflows/$name"
             test ! -e ".github/workflows/$name"
           done
