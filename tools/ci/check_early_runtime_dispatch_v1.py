@@ -5,10 +5,13 @@ Manual mode selection must work from either active development ref; only push
 tag routing is Runtime-branch-scoped. Test steps stay byte-identical.
 """
 from pathlib import Path
-import re
+import os, re
 
 ROOT=Path(__file__).resolve().parents[2]
-WORK=ROOT/".github/workflows/linux-expanded-pi-p1-runtime-v1.yml"
+PERF = "agent/linux-perf-boolean-domain-v1"
+PERF_PI_ARCHIVE = ROOT / ".github/workflows-disabled/performance-retired-2026-10-09/linux-expanded-pi-p1-runtime-v1.yml"
+WORK = (PERF_PI_ARCHIVE if os.environ.get("GITHUB_REF_NAME") == PERF else
+           ROOT / ".github/workflows/linux-expanded-pi-p1-runtime-v1.yml")
 BRANCH="agent/linux-expanded-kbuild-v0"
 CONTRACT={
  "pi-local-symbol":("semantics",("[linux-runtime-pi-local-symbol-v0]","[runtime-compiler-semantics-v1]")),

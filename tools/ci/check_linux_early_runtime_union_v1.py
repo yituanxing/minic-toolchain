@@ -11,7 +11,10 @@ import re
 import subprocess
 
 ROOT = Path(__file__).resolve().parents[2]
-CURRENT = ROOT / ".github/workflows/linux-expanded-pi-p1-runtime-v1.yml"
+PERF = "agent/linux-perf-boolean-domain-v1"
+PERF_PI_ARCHIVE = ROOT / ".github/workflows-disabled/performance-retired-2026-10-09/linux-expanded-pi-p1-runtime-v1.yml"
+CURRENT = (PERF_PI_ARCHIVE if os.environ.get("GITHUB_REF_NAME") == PERF else
+           ROOT / ".github/workflows/linux-expanded-pi-p1-runtime-v1.yml")
 HISTORICAL = {
     "linux-expanded-pi-p1-runtime-v1.yml": {
         "agent/linux-expanded-kbuild-v0": "acd84a8de23ebf908f75eb863df285cfb83b79c0",
@@ -75,7 +78,7 @@ def main():
     if branch == "agent/linux-expanded-kbuild-v0":
         if "on:\n  workflow_call:\n  workflow_dispatch:" not in header or "  push:" in header:
             raise AssertionError("Runtime early diagnostics must use canonical tag router")
-    elif '"agent/linux-expanded-kbuild-v0"' not in header:
+    elif CURRENT != PERF_PI_ARCHIVE or '"agent/linux-expanded-kbuild-v0"' not in header:
         raise AssertionError("Performance archived branch eligibility was altered")
     print(f"M0_EARLY_RUNTIME_UNION=PASS branch={branch} archived_canons=2 independent_jobs=7 exact_job_bodies=7")
 

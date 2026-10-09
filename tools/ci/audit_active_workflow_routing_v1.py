@@ -22,6 +22,7 @@ CENTRAL_TAG_ROUTER = "linux-legacy-tag-router-v1.yml"
 # Performance-only dormant entrypoints; original Git blobs are retained verbatim.
 PERFORMANCE_ARCHIVED = {
     "linux-expanded-kbuild-v0.yml": "35500d29ab940d0033832d50b17e33e0d9c2f9db",
+    "linux-expanded-pi-p1-runtime-v1.yml": "2d09b865c9e69ef0266c53f5e2c64cd3fb1b1fd3",
     "miniar-linux-kbuild.yml": "9fdb2ff5e44e2a46b137ea7e0d5e11afc4b51310",
     "linux-runtime-spinlock-context-v0.yml": "5dde74694e43401ab95f93bf3fcc5d8120b322f5",
     "linux-core-shards-v1.yml": "cd18cb3b43541ef7d825045743b2e0e752e62763",
@@ -44,6 +45,7 @@ MINIAS_GATE_VARIANTS = {
 # sources, while their Runtime live counterparts are now reusable workflows.
 RUNTIME_REUSABLE_BLOBS = {
     "linux-expanded-kbuild-v0.yml": "fd613d04769765af9f0047b3f800c2d13a4bc579",
+    "linux-expanded-pi-p1-runtime-v1.yml": "c5ac17f907ac115c20b5e1cb4f547f025118353f",
     "miniar-linux-kbuild.yml": "b06aef58b69c0566cefa0a1751298f88926f2529",
     "linux-runtime-fixture-producers-v1.yml": "ef54b8d6551eb84d663f0a5be3d1f1f811dccaf0",
     "linux-runtime-focused-faults-v1.yml": "fde303682a2e14c1697b7daf6017c9144773deac",
@@ -257,6 +259,7 @@ def main():
     # Both original historical sources remain pinned and must NOT be overwritten.
     historical = {
         "linux-runtime-fdt-isolation-v1.yml": "83feffda9150072a849f677c58856f77975968cc",
+        "linux-expanded-pi-p1-runtime-v1.yml": "0dff72daea890b37972c64a6411caa18b00cf528",
         "linux-runtime-focused-faults-v1.yml": "770c2bb3c8831b35d7eabebbc8dba8d09dc32384",
     }
     for name, historical_sha in historical.items():

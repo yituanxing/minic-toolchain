@@ -8,10 +8,10 @@
 | --- | --- | ---: |
 | `main` | Historical default release/base; 2026-10 development not yet integrated | 11 |
 | `agent/linux-expanded-kbuild-v0` (Runtime) | **canonical Linux/Kbuild/fixture/QEMU certification and MiniC current production profile** | **26** |
-| `agent/linux-perf-boolean-domain-v1` (Performance) | Separate **55-patch candidate / paired speed and correctness** development | **13** |
+| `agent/linux-perf-boolean-domain-v1` (Performance) | Separate **55-patch candidate / paired speed and correctness** development | **12** |
 | `archive/all-progress-2026-10-04` | Passive recovery umbrella (not a source-merge or CI branch) | **0** |
 
-Runtime + Performance maintain **39 branch-local YAMLs, 27 distinct names**; **94 + 49 = 143 declared jobs**, including seven inexpensive conditional reusable calls in the Runtime tag router. This is **not** 143 runners. The branch-owned [39-row inventory](active-workflow-inventory-2026-10-09.tsv) and [trigger audit](ci-push-skip-audit-2026-10-09.md) are the machine-checked source inventory. Main's 11 historical YAMLs are **not** part of that development-branch inventory.
+Runtime + Performance maintain **38 branch-local YAMLs, 27 distinct names**; **94 + 41 = 135 declared jobs**, including seven inexpensive conditional reusable calls in the Runtime tag router. This is **not** 143 runners. The branch-owned [39-row inventory](active-workflow-inventory-2026-10-09.tsv) and [trigger audit](ci-push-skip-audit-2026-10-09.md) are the machine-checked source inventory. Main's 11 historical YAMLs are **not** part of that development-branch inventory.
 
 
 **Architecture audit and open defects:** [2026-10-09 source-level findings and closure criteria](ci-architecture-audit-findings-2026-10-09.md). The global MiniObjcopy cancellation was disabled after a P0 race was discovered. Its historical frozen `linux-image` mode has been **retired from active CI** because the pinned artifact run has zero artifacts; the exact original source remains SHA-archived. This is not proof of a replacement GNU Image comparison. Do not equate green T0 with healthy T3/T4.
@@ -39,9 +39,9 @@ Runtime + Performance maintain **39 branch-local YAMLs, 27 distinct names**; **9
 
 The two distributed graph workflows have **different, disjoint push path filters**: the fast graph owner responds to its own YAML and `linux-distributed-image-plan-v1.py`; the integrated Image owner responds to its dedicated `run-linux-distributed-image-signedness-v2.trigger`. They are **not** two independent 3352-TU builds running on ordinary source pushes. The fast preflight is retained as an independent cheap graph contract.
 
-## Performance 13 owners grouped by purpose
+## Performance 12 owners grouped by purpose
 
-**Actual P owner:** `linux-performance-experiments-v1.yml`. **Shared compiler T0–T2 owners:** `toolchain-m0-structure.yml`, `toolchain-focused-regressions-v1.yml`, `linux-core-all3352.yml`, `minipp-a0.yml`, `minipp-linux-frozen-v1.yml`, `minic-driver-v0.yml`. **Shared integration/diagnostic owners:** `minild-integration-v1.yml`, `miniobjcopy-strip-regressions-v1.yml`, `linux-runtime-gcc-baseline.yml`, `linux-efi-vdso-focused-v1.yml`, `minias-a0-focused-diagnostics-v1.yml`, `linux-expanded-pi-p1-runtime-v1.yml`. The last file is Runtime-push-only on Performance and must **not** be treated as an automatic Performance test. Historical removed Performance Runtime-only YAMLs are SHA-preserved in `.github/workflows-disabled/`.
+**Actual P owner:** `linux-performance-experiments-v1.yml`. **Shared compiler T0–T2 owners:** `toolchain-m0-structure.yml`, `toolchain-focused-regressions-v1.yml`, `linux-core-all3352.yml`, `minipp-a0.yml`, `minipp-linux-frozen-v1.yml`, `minic-driver-v0.yml`. **Shared integration/diagnostic owners:** `minild-integration-v1.yml`, `miniobjcopy-strip-regressions-v1.yml`, `linux-runtime-gcc-baseline.yml`, `linux-efi-vdso-focused-v1.yml`, `minias-a0-focused-diagnostics-v1.yml`. The historically Runtime-branch-only Performance PI/P1 owner was retired to the SHA-preserved Performance archive and is not part of active Performance CI. Historical removed Performance Runtime-only YAMLs are SHA-preserved in `.github/workflows-disabled/`.
 
 ## Trigger ownership; duplicate-run prevention
 
@@ -80,3 +80,11 @@ The Runtime `linux-runtime-optin-perf-suite-v1.yml` was discovered with *self-YA
 
 ### Scoped Runtime diagnostics reachable by intentional labels
 `linux-runtime-spinlock-context-v0.yml` and `linux-runtime-fdt-isolation-v1.yml` preserve their original narrow sentinel-file push triggers, while their four and five originally tag-gated Jobs are now addressable through the **same** Runtime legacy router's two new conditionally delegated calls. No new YAML, Runner-on-housekeeping or permanent branch was created. The spinlock workflow-wide cancellation race was separately disabled. Exact reconstructed original Git Blobs and the complete unchanged diagnostic job bodies are checked in M0.
+
+
+## Performance-only PI/P1 Runtime diagnostic retirement (2026-10-09)
+`linux-expanded-pi-p1-runtime-v1.yml` had seven expensive QEMU/semantics jobs but only a `push` branch filter for **Runtime**, even in the Performance tree. Its only fallback `workflow_dispatch` was development-branch local while the default `main` lacks this definition. This file therefore contributed no reachable Performance push test and no verified manual Performance dispatch. The real Runtime owner is kept **active** on Runtime with the existing tag router.
+
+The complete **Performance-only** definition, Git Blob `2d09b865c9e69ef0266c53f5e2c64cd3fb1b1fd3`, is now stored unchanged under `.github/workflows-disabled/performance-retired-2026-10-09/linux-expanded-pi-p1-runtime-v1.yml`. Its older historical version `0dff72daea890b37972c64a6411caa18b00cf528` remains separately archived under the original disabled path. Existing four source/body convergence gates on Performance now read the archived Performance source; Runtime continues to verify the live source. No QEMU job body was rewritten or deleted from Git history.
+
+This removes one unreachable active YAML and seven declarations from Performance, without adding workflows, test modes, branches or runner cost. Scope: Runtime 26, Performance **12**, total **38 branch-local YAML copies / 27 distinct names / 135 declarations**. Audit success only proves preserved source; future Performance-specific Linux Runtime certification must use a verified owner/input if genuinely needed. 
