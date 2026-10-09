@@ -4,7 +4,7 @@ from pathlib import Path
 import re, subprocess
 
 ROOT=Path(__file__).resolve().parents[2]
-CANONICAL=ROOT/".github/workflows/linux-runtime-frontier-diagnostics-v1.yml"
+CANONICAL=ROOT/".github/workflows/linux-runtime-focused-faults-v1.yml"
 SPECS={
  "candidate":("linux-runtime-frontier-v1.yml","ba568cb98cd92feabf75d45489d74ba003d83baa","full","[linux-runtime-frontier-v1]","linux-runtime-frontier-v1"),
  "frontier-fast-v5":("linux-runtime-frontier-fast-v5.yml","457a53c1cdb01b022a1566c7fe9f0d4b4e438d7b","fast","[linux-runtime-frontier-fast-v5]","linux-runtime-frontier-fast-v5"),
@@ -20,7 +20,7 @@ def clean(job):
 def main():
  text=CANONICAL.read_text()
  merged=jobs(text)
- if set(merged)!=set(SPECS): raise AssertionError(f"job set differs: {sorted(merged)}")
+ if set(merged)!=set(SPECS)|{'cpu-stall','fork-stack','fault-context','satp-refresh'}: raise AssertionError(f"combined focused/frontier job set differs: {sorted(merged)}")
  for name,(filename,sha,mode,tag,group) in SPECS.items():
   path=ROOT/".github/workflows-disabled"/filename
   actual=subprocess.check_output(["git","hash-object",str(path)],text=True).strip()

@@ -24,7 +24,7 @@ def normalized(job):
 def main():
  text=CANONICAL.read_text()
  current=jobs(text)
- if set(current)!=set(SPECS): raise AssertionError(f"job set changed: {sorted(current)}")
+ if set(current)!=set(SPECS)|{'candidate','frontier-fast-v5','qemu-runtime'}: raise AssertionError(f"combined focused/frontier job set changed: {sorted(current)}")
  if '      - "agent/linux-expanded-kbuild-v0"' not in text:
   raise AssertionError("original Runtime push owner not retained")
  for name,(filename,sha,oldname,mode,tag,group,matrix) in SPECS.items():

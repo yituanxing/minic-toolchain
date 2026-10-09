@@ -23,7 +23,8 @@ on:
       - ".github/workflows/linux-expanded-pi-p1-runtime-v1.yml"
       - ".github/actions/linux-runtime-restore-fixture/**"
       - "tools/ci/check_linux_runtime_frontier_diagnostics_convergence_v1.py"
-      - ".github/workflows/linux-runtime-frontier-diagnostics-v1.yml"
+      - "tools/ci/check_linux_runtime_diagnostic_union_v1.py"
+      - ".github/workflows-disabled/linux-runtime-frontier-diagnostics-v1.yml"
       - ".github/workflows/linux-runtime-focused-faults-v1.yml"
       - ".github/workflows/minipp-linux-frozen-v1.yml"
       - ".github/workflows/linux-optimized-first500-verify-v1.yml"
@@ -70,6 +71,10 @@ jobs:
           python3 tools/ci/check_minipp_frozen_convergence_v1.py
           ruby -e 'require "yaml"; YAML.parse_file(ARGV.fetch(0)); puts "M0_MINIPP_FROZEN_YAML=PASS"' .github/workflows/minipp-linux-frozen-v1.yml
 
+      - name: Verify seven-job Runtime diagnostic union and immutable canonical sources
+        run: |
+          python3 tools/ci/check_linux_runtime_diagnostic_union_v1.py
+
       - name: Verify Runtime focused fault diagnostics consolidation
         run: |
           python3 tools/ci/check_linux_runtime_focused_faults_convergence_v1.py
@@ -78,7 +83,7 @@ jobs:
       - name: Verify Runtime frontier and QEMU diagnostics convergence
         run: |
           python3 tools/ci/check_linux_runtime_frontier_diagnostics_convergence_v1.py
-          ruby -e 'require "yaml"; YAML.parse_file(ARGV.fetch(0)); puts "M0_RUNTIME_FRONTIER_DIAGNOSTICS_YAML=PASS"' .github/workflows/linux-runtime-frontier-diagnostics-v1.yml
+          ruby -e 'require "yaml"; YAML.parse_file(ARGV.fetch(0)); puts "M0_RUNTIME_FRONTIER_DIAGNOSTICS_YAML=PASS"' .github/workflows/linux-runtime-focused-faults-v1.yml
 
       - name: Check shared Linux fixture restore action and complete workflow source equivalence
         run: |
