@@ -1,6 +1,17 @@
 name: MiniAS Focused, Frozen Window and 3536 Semantic Oracles
 
 on:
+  workflow_call:
+    inputs:
+      mode:
+        description: "Explicit MiniAS frozen/semantic owner mode"
+        required: true
+        type: string
+      window:
+        description: "Frozen corpus window"
+        required: false
+        type: string
+        default: first500
   workflow_dispatch:
     inputs:
       mode:
@@ -39,7 +50,7 @@ env:
 
 jobs:
   real16:
-    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'real16'
+    if: (github.event_name == 'workflow_dispatch' || github.event_name == 'push') && inputs.mode == 'real16'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -198,7 +209,7 @@ jobs:
           if-no-files-found: error
 
   frontier:
-    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'frontier'
+    if: (github.event_name == 'workflow_dispatch' || github.event_name == 'push') && inputs.mode == 'frontier'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -366,7 +377,7 @@ jobs:
           retention-days: 14
           if-no-files-found: error
   vector33:
-    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'vector33'
+    if: (github.event_name == 'workflow_dispatch' || github.event_name == 'push') && inputs.mode == 'vector33'
     runs-on: ubuntu-24.04
     timeout-minutes: 12
     steps:
@@ -458,7 +469,7 @@ jobs:
 
   # Exact historical frozen window producer and aggregation jobs.
   resolve:
-    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'window'
+    if: (github.event_name == 'workflow_dispatch' || github.event_name == 'push') && inputs.mode == 'window'
     runs-on: ubuntu-24.04
     outputs:
       label: ${{ steps.pick.outputs.label }}
@@ -752,7 +763,7 @@ jobs:
           if-no-files-found: error
 
   c-shards:
-    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'semantic'
+    if: (github.event_name == 'workflow_dispatch' || github.event_name == 'push') && inputs.mode == 'semantic'
     strategy:
       fail-fast: false
       matrix:
@@ -878,7 +889,7 @@ jobs:
           if-no-files-found: error
 
   c149:
-    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'semantic'
+    if: (github.event_name == 'workflow_dispatch' || github.event_name == 'push') && inputs.mode == 'semantic'
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     steps:
@@ -970,7 +981,7 @@ jobs:
           if-no-files-found: error
 
   native35:
-    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'semantic'
+    if: (github.event_name == 'workflow_dispatch' || github.event_name == 'push') && inputs.mode == 'semantic'
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
@@ -1182,7 +1193,7 @@ jobs:
           if-no-files-found: error
 
   aggregate:
-    if: always() && github.event_name == 'workflow_dispatch' && inputs.mode == 'semantic'
+    if: always() && (github.event_name == 'workflow_dispatch' || github.event_name == 'push') && inputs.mode == 'semantic'
     needs: [c-shards, c149, native35]
     runs-on: ubuntu-24.04
     steps:

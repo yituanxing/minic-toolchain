@@ -50,3 +50,12 @@ jobs:
   fdt-kallsyms-probes:
     if: contains(github.event.head_commit.message, '[linux-fdt-isolation]') || contains(github.event.head_commit.message, '[linux-fdt-codegen]') || contains(github.event.head_commit.message, '[linux-kallsyms-generated]') || contains(github.event.head_commit.message, '[linux-kallsyms-three-way]') || contains(github.event.head_commit.message, '[linux-kallsyms-object]')
     uses: ./.github/workflows/linux-runtime-fdt-isolation-v1.yml
+
+  minias-focused:
+    # Exactly one declared reusable call; no route runner on ordinary pushes.
+    # Multi-mode tags use documented precedence; window only matters for mode=window.
+    if: contains(github.event.head_commit.message, '[minias-real16]') || contains(github.event.head_commit.message, '[minias-frontier]') || contains(github.event.head_commit.message, '[minias-vector33]') || contains(github.event.head_commit.message, '[minias-semantic3536]') || contains(github.event.head_commit.message, '[minias-first500]') || contains(github.event.head_commit.message, '[minias-new500]') || contains(github.event.head_commit.message, '[minias-next500]') || contains(github.event.head_commit.message, '[minias-next500b]') || contains(github.event.head_commit.message, '[minias-next500c]') || contains(github.event.head_commit.message, '[minias-next500d]') || contains(github.event.head_commit.message, '[minias-final352]')
+    uses: ./.github/workflows/minias-a0-focused-diagnostics-v1.yml
+    with:
+      mode: ${{ contains(github.event.head_commit.message, '[minias-semantic3536]') && 'semantic' || contains(github.event.head_commit.message, '[minias-frontier]') && 'frontier' || contains(github.event.head_commit.message, '[minias-vector33]') && 'vector33' || contains(github.event.head_commit.message, '[minias-real16]') && 'real16' || 'window' }}
+      window: ${{ contains(github.event.head_commit.message, '[minias-final352]') && 'final352' || contains(github.event.head_commit.message, '[minias-next500d]') && 'next500d' || contains(github.event.head_commit.message, '[minias-next500c]') && 'next500c' || contains(github.event.head_commit.message, '[minias-next500b]') && 'next500b' || contains(github.event.head_commit.message, '[minias-next500]') && 'next500' || contains(github.event.head_commit.message, '[minias-new500]') && 'new500' || 'first500' }}
