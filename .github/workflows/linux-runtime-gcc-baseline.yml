@@ -275,6 +275,8 @@ jobs:
             build/linux-runtime-gcc-cohort-v1/frontier.txt
             build/linux-runtime-gcc-cohort-v1/trials/*/link.log
             build/linux-runtime-gcc-cohort-v1/trials/*/runtime.log
+            build/linux-runtime-gcc-cohort-v1/trials/*/runtime-p1.log
+            build/linux-runtime-gcc-cohort-v1/trials/*/qemu-p1/*.log
             build/linux-runtime-gcc-cohort-v1/trials/*/qemu/*.log
             build/linux-runtime-gcc-cohort-v1/compiler/toolchain-timing.txt
           if-no-files-found: warn

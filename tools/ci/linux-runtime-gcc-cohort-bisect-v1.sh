@@ -98,19 +98,37 @@ echo "COHORT_COMPILE=PASS objects=$n elapsed_ms=$(((cc_ended-cc_started)/1000000
 BUILD_DIR="$ev/initramfs" OUTPUT_INITRAMFS="$ev/runtime-initramfs.cpio.gz" \
   RISCV_CC=riscv64-linux-gnu-gcc \
   bash "$repo/tests/external/linux/build_runtime_initramfs.sh" >"$ev/initramfs.log" 2>&1
+last_count=0
 trial() {
   name="$1"; count="$2"; profile="$3"
   d="$ev/trials/$name"; mkdir -p "$d"
-  restore_gcc
-  for ((i=0;i<count;i++)); do
-    cp -a "$ev/minic/${objects[i]}" "$out/${objects[i]}"
-  done
-  # Force affected thin archives to refresh, without C recompilation.
-  for target in "${objects[@]}"; do touch "$out/$target"; done
-  make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
-    -j4 Image >"$d/link.log" 2>&1 || {
-      echo "COHORT_LINK=FAIL name=$name"; tail -n 70 "$d/link.log"; exit 5;
-    }
+  if (( count != last_count )); then
+    # Important: do NOT touch every GCC object. If a prefix contains only
+    # 128 MiniC candidates out of 384, the remaining 256 must retain the
+    # exact GCC .o AND mtime. Touching them can trigger a Kbuild recompilation
+    # and create false object-identity failures (observed in run 37945012953).
+    restore_gcc
+    for ((i=0;i<count;i++)); do
+      cp -a "$ev/minic/${objects[i]}" "$out/${objects[i]}"
+    done
+    # The changed archive members are precisely the union of the previous
+    # and current prefixes. This handles expanding AND shrinking overlays.
+    limit=$((count > last_count ? count : last_count))
+    for ((i=0;i<limit;i++)); do
+      touch "$out/${objects[i]}"
+    done
+    make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
+      -j4 Image >"$d/link.log" 2>&1 || {
+        echo "COHORT_LINK=FAIL name=$name"
+        tail -n 70 "$d/link.log"
+        exit 5
+      }
+    last_count="$count"
+  else
+    # Same object selection, different runtime oracle (FAST -> FULL):
+    # skip a redundant link. Image bytes and all object IDs stay fixed.
+    echo "COHORT_LINK=REUSED name=$name count=$count" | tee "$d/link.log"
+  fi
   for ((i=0;i<n;i++)); do
     target=${objects[i]}
     if ((i<count)); then gold="$ev/minic/$target"; else gold="$ev/gcc/$target"; fi
@@ -133,6 +151,26 @@ trial() {
     set -e
     if ((rc==0)); then verdict=PASS
     elif grep -REqi 'Linux version 6\.6\.143|Kernel panic|Oops:|Unable to handle|BUG:' "$d/qemu" 2>/dev/null; then verdict=FAIL
+    fi
+    # Reuse the existing Python-era 12-syscall P1 oracle after FULL PASS.
+    # It boots the identical Image and initramfs, without a third link.
+    if [[ "$profile" == full && "$verdict" == PASS ]]; then
+      set +e
+      LINUX_IMAGE="$d/Image" INITRAMFS="$ev/runtime-initramfs.cpio.gz" \
+        BUILD_DIR="$d/qemu-p1" LINUX_RELEASE=6.6.143 \
+        LINUX_RUNTIME_PROFILE=p1 QEMU_TIMEOUT_SECONDS=45 \
+        bash "$repo/tests/external/linux/runtime_boot.sh" >"$d/runtime-p1.log" 2>&1
+      p1_rc=$?
+      set -e
+      if ((p1_rc==0)); then
+        echo "COHORT_P1=PASS name=$name syscalls=12"
+      elif grep -REqi 'Linux version 6\.6\.143|Kernel panic|Oops:|Unable to handle|BUG:' "$d/qemu-p1" 2>/dev/null; then
+        echo "COHORT_P1=FAIL name=$name rc=$p1_rc"
+        verdict=FAIL
+      else
+        echo "COHORT_P1=INCONCLUSIVE name=$name rc=$p1_rc"
+        verdict=INCONCLUSIVE
+      fi
     fi
   fi
   echo "COHORT_TRIAL name=$name count=$count verdict=$verdict image=$image_sha"
