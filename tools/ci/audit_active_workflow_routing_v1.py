@@ -27,6 +27,13 @@ DEBT_NAMES = (
 LEGACY_MANUAL = "minias-a0-focused-diagnostics-v1.yml"
 SELF_YAML_ONLY = "linux-runtime-optin-perf-suite-v1.yml"
 ROUTE_ALL_PUSH = "miniobjcopy-strip-regressions-v1.yml"
+# Performance-only dormant entrypoints; original Git blobs are retained verbatim.
+PERFORMANCE_ARCHIVED = {
+    "linux-expanded-kbuild-v0.yml": "35500d29ab940d0033832d50b17e33e0d9c2f9db",
+    "miniar-linux-kbuild.yml": "9fdb2ff5e44e2a46b137ea7e0d5e11afc4b51310",
+    "linux-runtime-spinlock-context-v0.yml": "5dde74694e43401ab95f93bf3fcc5d8120b322f5",
+}
+
 BRANCHES = ("agent/linux-expanded-kbuild-v0", "agent/linux-perf-boolean-domain-v1")
 HEADER = (
     "branch", "workflow", "push_declared", "push_branch_eligible",
@@ -151,17 +158,33 @@ def main():
         raise AssertionError(f"unsupported branch {branch}")
     rows = [analyze(f.name, f.read_text(), branch)
             for f in sorted(ACTIVE.glob("*.yml"))]
-    expected = 25 if branch == BRANCHES[0] else 23
+    expected = 25 if branch == BRANCHES[0] else 20
     if len(rows) != expected:
         raise AssertionError(f"inventory drift: branch {branch} YAML count {len(rows)} != {expected}")
     # Hard-coded high-risk names are only a diagnosis: their contract is frozen.
     names = {r["workflow"]: r for r in rows}
     for name in DEBT_NAMES:
-        r = names[name]
         if branch == BRANCHES[0]:
+            r = names[name]
             assert r["push_branch_eligible"] == "true", name
             assert r["push_path_policy"] == "unscoped", name
             assert r["commit_tag_guards"], name
+    # Keep every retired Performance owner as an exact byte-identical archive.
+    # These entries must remain intact and branch-ineligible on Performance.
+    import hashlib
+    for name, expected_sha in PERFORMANCE_ARCHIVED.items():
+        live = ACTIVE / name
+        archive = ROOT / ".github" / "workflows-disabled" / name
+        if branch == BRANCHES[0]:
+            assert live.is_file() and not archive.is_file(), name
+            payload = live.read_bytes()
+        else:
+            assert not live.exists() and archive.is_file(), name
+            payload = archive.read_bytes()
+            observed = analyze(name, payload.decode("utf-8"), branch)
+            assert observed["push_branch_eligible"] == "false", name
+        digest = hashlib.sha1(b"blob " + str(len(payload)).encode() + b"\0" + payload).hexdigest()
+        assert digest == expected_sha, f"Performance archive source drift: {name}"
     assert names[ROUTE_ALL_PUSH]["classification"] == "all_push_router_runner"
     assert names[LEGACY_MANUAL]["push_declared"] == "false"
     assert names[LEGACY_MANUAL]["manual_dispatch"] == "true"
