@@ -137,20 +137,31 @@ else
     rm -f "$out/${objects[i]}" "${commands[i]}"
   done
   cc_started=$(date +%s%N)
-  if ! MINIC="$minic" REAL_CC=/usr/bin/riscv64-linux-gnu-gcc \
-    MINIC_KEEP_INTERMEDIATES=1 \
+  # Compile the ENTIRE GCC-built C owner universe. Keep .i/.s ephemeral to
+  # avoid filling runner disk. -k collects independent compile failures.
+  compile_rc=0
+  MINIC="$minic" REAL_CC=/usr/bin/riscv64-linux-gnu-gcc \
+    MINIC_KEEP_INTERMEDIATES=0 \
     make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
-      CC="$repo/tests/external/linux/stage2_kbuild_cc.sh" -j4 "${targets[@]}" \
-      >"$ev/compile.log" 2>&1; then
-    echo "COHORT_COMPILE=FAIL"; tail -n 80 "$ev/compile.log"; exit 4
-  fi
+      CC="$repo/tests/external/linux/stage2_kbuild_cc.sh" -j6 -k "${targets[@]}" \
+      >"$ev/compile.log" 2>&1 || compile_rc=$?
+  : >"$ev/compile-blockers.txt"
+  compiled=0
   for target in "${objects[@]}"; do
-    test -s "$out/$target" || { echo "COHORT_COMPILE=FAIL target=$target"; exit 4; }
-    stem=${target%.o}
-    test -s "$out/$stem.minic-stage2.i" || { echo "COHORT_INPUT=FAIL target=$target"; exit 4; }
-    cp -a "$out/$target" "$ev/minic/$target"
+    if [[ -s "$out/$target" ]]; then
+      cp -a "$out/$target" "$ev/minic/$target"
+      ((compiled+=1))
+    else
+      printf '%s\n' "$target" >>"$ev/compile-blockers.txt"
+    fi
   done
   cc_ended=$(date +%s%N)
+  echo "COHORT_FULL_COMPILE attempted=$n compiled=$compiled failed=$((n-compiled)) rc=$compile_rc elapsed_ms=$(((cc_ended-cc_started)/1000000))"
+  if ((compile_rc != 0 || compiled != n)); then
+    echo "COHORT_FULL_COMPILE=FAIL evidence=compile.log,compile-blockers.txt"
+    tail -n 75 "$ev/compile.log"
+    exit 4
+  fi
   echo "COHORT_COMPILE=PASS objects=$n elapsed_ms=$(((cc_ended-cc_started)/1000000))"
 fi
 python3 - "$ev/gcc" "$ev/minic" "$objects_file" <<'PY_ABI'
@@ -182,11 +193,12 @@ fi
 BUILD_DIR="$ev/initramfs" OUTPUT_INITRAMFS="$ev/runtime-initramfs.cpio.gz" \
   RISCV_CC=riscv64-linux-gnu-gcc \
   bash "$repo/tests/external/linux/build_runtime_initramfs.sh" >"$ev/initramfs.log" 2>&1
-last_count=0
+last_selection="none"
 trial() {
-  name="$1"; count="$2"; profile="$3"
+  name="$1"; count="$2"; profile="$3"; mode="${4:-prefix}"
+  selection="$mode:$count"
   d="$ev/trials/$name"; mkdir -p "$d"
-  if (( count != last_count )); then
+  if [[ "$selection" != "$last_selection" ]]; then
     # Kbuild candidate compilation may have regenerated headers, scripts,
     # vdso metadata and .cmd inputs. Restoring just the selected .o is NOT
     # sufficient (384-object logs prove a GCC alternative.o recompile).
@@ -195,9 +207,18 @@ trial() {
     # when available; no GitHub cache/network round trip here.
     rm -rf -- "$out"
     cp -a --reflink=auto "$gold_snapshot" "$out"
-    for ((i=0;i<count;i++)); do
-      cp -a "$ev/minic/${objects[i]}" "$out/${objects[i]}"
-      touch "$out/${objects[i]}"
+    for ((i=0;i<n;i++)); do
+      selected=0
+      case "$mode" in
+        prefix) if ((i<count)); then selected=1; fi ;;
+        single) if ((i==count)); then selected=1; fi ;;
+        all_except) if ((i!=count)); then selected=1; fi ;;
+        *) echo "COHORT_ERROR unknown_selection=$mode"; exit 2 ;;
+      esac
+      if ((selected)); then
+        cp -a "$ev/minic/${objects[i]}" "$out/${objects[i]}"
+        touch "$out/${objects[i]}"
+      fi
     done
     if ! make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
       -j4 Image >"$d/link.log" 2>&1; then
@@ -207,15 +228,21 @@ trial() {
       TRIAL_VERDICT=LINK_FAIL
       return 0
     fi
-    last_count="$count"
+    last_selection="$selection"
   else
     # Same object selection, different runtime oracle (FAST -> FULL):
     # skip a redundant link. Image bytes and all object IDs stay fixed.
-    echo "COHORT_LINK=REUSED name=$name count=$count" | tee "$d/link.log"
+    echo "COHORT_LINK=REUSED name=$name selection=$selection" | tee "$d/link.log"
   fi
   for ((i=0;i<n;i++)); do
     target=${objects[i]}
-    if ((i<count)); then gold="$ev/minic/$target"; else gold="$ev/gcc/$target"; fi
+    selected=0
+    case "$mode" in
+      prefix) if ((i<count)); then selected=1; fi ;;
+      single) if ((i==count)); then selected=1; fi ;;
+      all_except) if ((i!=count)); then selected=1; fi ;;
+    esac
+    if ((selected)); then gold="$ev/minic/$target"; else gold="$ev/gcc/$target"; fi
     cmp -s "$out/$target" "$gold" || {
       echo "COHORT_IDENTITY=FAIL trial=$name target=$target"; exit 6;
     }
@@ -251,7 +278,7 @@ PY_GNU_NONSELECTED
   image_sha=$(sha256sum "$out/arch/riscv/boot/Image" | cut -d' ' -f1)
   cp -a "$out/arch/riscv/boot/Image" "$d/Image"
   verdict=INCONCLUSIVE
-  if ((count>0)) && [[ "$image_sha" == "$gnu_image_sha" ]]; then
+  if [[ "$mode" != prefix || "$count" -gt 0 ]] && [[ "$image_sha" == "$gnu_image_sha" ]]; then
     echo "COHORT_IMAGE=UNCHANGED name=$name"
   else
     set +e
@@ -339,5 +366,16 @@ while ((hi-lo>1)); do
 done
 candidate=${objects[hi-1]}
 printf 'pass_prefix=%s\nfail_prefix=%s\ncandidate=%s\nfailure_kind=%s\n'   "$lo" "$hi" "$candidate" "$fail_kind" | tee "$ev/frontier.txt"
-echo "COHORT_RESULT=$fail_kind prefix_candidate=$candidate single_causality=UNPROVEN"
+# A failing prefix is a clue, not proof of a single owner. Confirm both
+# directions on the same GCC baseline and existing MiniC object pool.
+trial "candidate_single_$hi" "$((hi-1))" fast single
+single_verdict="$TRIAL_VERDICT"
+trial "candidate_all_except_$hi" "$((hi-1))" fast all_except
+except_verdict="$TRIAL_VERDICT"
+echo "COHORT_CAUSALITY candidate=$candidate prefix_fail_kind=$fail_kind single=$single_verdict all_except=$except_verdict"
+if [[ "$single_verdict" == "$fail_kind" && "$except_verdict" == PASS ]]; then
+  echo "COHORT_RESULT=SINGLE_OBJECT_SUSPECT candidate=$candidate"
+else
+  echo "COHORT_RESULT=INTERACTION_OR_NONMONOTONE candidate=$candidate"
+fi
 exit 9
