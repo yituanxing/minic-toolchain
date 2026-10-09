@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""M0 exact-job and routing audit of consolidated RV64, MiniAR, MiniLD T1 suites."""
+"""M0 exact-job and routing audit of consolidated RV64, MiniAR, MiniLD T1 suites.
+
+Base make-all and local T1 checks do not apply experiment/profile helper scripts
+under tools/ci; changes there are owned by M0, Linux Runtime or Performance.
+Only actual tool implementations, tests, and Makefile changes trigger T1.
+"""
 from pathlib import Path
 import hashlib,os,re,fnmatch,ast
 
