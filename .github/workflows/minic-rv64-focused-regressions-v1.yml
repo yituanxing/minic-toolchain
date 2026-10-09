@@ -22,6 +22,8 @@ on:
       - '!tools/ci/runtime-*-trigger.txt'
       - '!tools/ci/linux-runtime-rest-init-frontier-v0.json'
       - '!tools/ci/select_runtime_owner_modes_v1.py'
+      - '!tools/ci/select_miniobjcopy_elf_route_v1.py'
+      - '!tools/ci/check_ci_*'
   workflow_dispatch:
 
 permissions:
