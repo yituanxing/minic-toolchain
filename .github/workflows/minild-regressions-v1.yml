@@ -5,6 +5,23 @@ on:
     branches:
       - "agent/linux-expanded-kbuild-v0"
       - "agent/ci-runtime-cleanup-v1"
+    paths:
+      - 'src/**'
+      - 'include/**'
+      - 'compiler/**'
+      - 'preprocessor/**'
+      - 'assembler/**'
+      - 'archiver/**'
+      - 'linker/**'
+      - 'tools/**'
+      - 'tests/**'
+      - 'scripts/**'
+      - 'Makefile'
+      - '.github/actions/**'
+      - '.github/workflows/minild-regressions-v1.yml'
+      - '!tools/ci/runtime-*-trigger.txt'
+      - '!tools/ci/linux-runtime-rest-init-frontier-v0.json'
+      - '!tools/ci/select_runtime_owner_modes_v1.py'
   workflow_dispatch:
 
 permissions:
