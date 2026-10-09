@@ -56,9 +56,8 @@ def main():
         raise AssertionError("old job identities do not match frozen list")
     if set(cur) != set(FOCUSED + SEMANTIC):
         raise AssertionError("lost semantic or focused independent jobs")
-    # This workflow has no push event. Exactly four dead push-tag job predicates
-    # were replaced by equivalent explicit workflow_dispatch mode predicates.
-    # Preserve the whole historical executable body and all other focused jobs.
+    # Explicit reusable push inputs now reach the same manual mode selectors.
+    # Preserve every frozen/semantic executable job body byte-for-byte.
     manual_modes = {
         "real16": "real16",
         "frontier": "frontier",
@@ -69,7 +68,8 @@ def main():
         if name in manual_modes:
             if executable(cur[name]) != executable(old_f[name]):
                 raise AssertionError(f"modified original MiniAS focused execution body: {name}")
-            expected = ("    if: github.event_name == 'workflow_dispatch' "
+            expected = ("    if: (github.event_name == 'workflow_dispatch' || "
+                        "github.event_name == 'push') "
                         f"&& inputs.mode == '{manual_modes[name]}'")
             actual_predicates = re.findall(r"(?m)^    if:.*$", cur[name])
             if actual_predicates != [expected]:
@@ -79,11 +79,13 @@ def main():
     for name in SEMANTIC:
         if executable(cur[name]) != executable(old_s[name]):
             raise AssertionError(f"modified original 3536 executable job: {name}")
-        want = ("    if: always() && github.event_name == 'workflow_dispatch' && inputs.mode == 'semantic'"
+        want = ("    if: always() && (github.event_name == 'workflow_dispatch' || github.event_name == 'push') && inputs.mode == 'semantic'"
                 if name == "aggregate" else
-                "    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'semantic'")
+                "    if: (github.event_name == 'workflow_dispatch' || github.event_name == 'push') && inputs.mode == 'semantic'")
         if want not in cur[name]:
             raise AssertionError(f"changed semantic manual routing: {name}")
+    if "on:\n  workflow_call:\n    inputs:" not in current_text or "  workflow_dispatch:\n    inputs:" not in current_text:
+        raise AssertionError("MiniAS reusable/manual entrypoint contract missing")
     if "    needs: [c-shards, c149, native35]" not in cur["aggregate"]:
         raise AssertionError("semantic aggregation dependencies changed")
     if "          - semantic" not in current_text or "          - window" not in current_text:

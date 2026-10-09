@@ -249,13 +249,14 @@ def main():
         and not re.search(r"(?m)^  (?:push|workflow_call):",
                           trim_header((ACTIVE / row["workflow"]).read_text()))
     }
-    if manual_only != {LEGACY_MANUAL}:
-        raise AssertionError(
-            "unreviewed manual-only workflow debt: "
-            + repr(sorted(manual_only ^ {LEGACY_MANUAL}))
-        )
-    print("M0_CI_MANUAL_ONLY_DEBT=1 owner=minias-a0-focused-diagnostics-v1.yml "
-          "default_branch_dispatch_not_certified=1")
+    if manual_only:
+        raise AssertionError("unreviewed pure manual-only owner: " + repr(sorted(manual_only)))
+    focused = (ACTIVE / LEGACY_MANUAL).read_text()
+    if "on:\n  workflow_call:\n    inputs:" not in focused:
+        raise AssertionError("MiniAS focused reusable mode input contract missing")
+    caller = "runtime_tagged" if branch == BRANCHES[0] else "performance_uncalled"
+    print("M0_CI_MANUAL_ONLY_DEBT=0 minias_focused=" + caller
+          + " default_branch_manual_unproven=1")
     # This is an executable guardrail, not merely a report. Never allow a new
     # broad push listener that silently creates hundreds of empty run cards.
     unscoped = {r["workflow"] for r in rows
