@@ -10,6 +10,8 @@ on:
       - "tools/ci/check_minild_integration_convergence_v1.py"
       - "tools/ci/check_minipp_frozen_convergence_v1.py"
       - "tools/ci/check_linux_runtime_focused_faults_convergence_v1.py"
+      - "tools/ci/check_linux_runtime_frontier_diagnostics_convergence_v1.py"
+      - ".github/workflows/linux-runtime-frontier-diagnostics-v1.yml"
       - ".github/workflows/linux-runtime-focused-faults-v1.yml"
       - ".github/workflows/minipp-linux-frozen-v1.yml"
       - ".github/workflows/linux-optimized-first500-verify-v1.yml"
@@ -56,6 +58,11 @@ jobs:
         run: |
           python3 tools/ci/check_linux_runtime_focused_faults_convergence_v1.py
           ruby -e 'require "yaml"; YAML.parse_file(ARGV.fetch(0)); puts "M0_RUNTIME_FOCUSED_FAULTS_YAML=PASS"' .github/workflows/linux-runtime-focused-faults-v1.yml
+
+      - name: Verify Runtime frontier and QEMU diagnostics convergence
+        run: |
+          python3 tools/ci/check_linux_runtime_frontier_diagnostics_convergence_v1.py
+          ruby -e 'require "yaml"; YAML.parse_file(ARGV.fetch(0)); puts "M0_RUNTIME_FRONTIER_DIAGNOSTICS_YAML=PASS"' .github/workflows/linux-runtime-frontier-diagnostics-v1.yml
 
       - name: Run Linux runtime isolation selftests
         run: |
