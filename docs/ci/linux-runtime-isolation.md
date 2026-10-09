@@ -516,3 +516,38 @@ A verified 384-object pool is cached even if a subsequent link or QEMU
 test fails. A compiler, source, target list or GNU-toolchain change must
 cause a cache miss, rebuilding those objects. This cache mechanism is
 pending its first end-to-end hit; do not report a speed gain until measured.
+
+
+## Full-first GNU-locked MiniC campaign (replaces 128 → 384 → ... probing)
+
+We now test the **entire** GNU GCC 6.6.143 \`.config\` C-TU object
+universe first. The certified 2141-object GNU manifest also includes
+assembler-only and linker-generated outputs: these are **not** candidates
+for MiniC C compilation. The exact per-object Kbuild \`*.o.cmd\` source
+metadata determines which GNU objects come from \`.c\`. New manifest
+generator: \`tools/ci/linux-runtime-gcc-full-c-objects-v1.py\`.
+
+The one existing Runtime GCC opt-in job:
+1. Restores the same SHA-certified, QEMU-booted GNU kernel and Linux source.
+2. Enumerates all GNU-compiled C-TU objects from that *exact config*,
+   including the previously verified 384-object prefix, plus all remaining
+   C TUs. Fails closed if the universe is implausibly small or mismatched.
+3. Builds the 39-patch Runtime MiniC once, then compiles the entire
+   C-object universe with **GCC -E → MiniC -S → GNU as**, checks ELF/ABI,
+   and saves immutable candidates for reuse in future harness-only fixes.
+4. GNU relinks/QEMU-tests the **full set first**. If that FAILs, no more
+   candidate TU compilation is needed; the same runner restores a pristine
+   certified GCC fixture, changes only the selected object overlay, and
+   bisects the observed PASS/FAIL prefix.
+5. Separately distinguishes compiler build failure, unresolved-symbol/link
+   failure, runtime failure, ambiguous/QEMU timeout, and changed unrelated
+   GCC objects. An ordered-prefix boundary is only a candidate; separate
+   single-file and exclusion evidence must confirm causality.
+
+No new active Workflow or declared Job added; previous \`gcc-single\`
+job is repurposed. Increase timeout to allow one full-C-corpus compilation
+on one hosted runner. If this baseline exceeds cost/time limits, next
+optimization is to partition that same compile corpus into CI shards,
+while the receiver continues to do all object overlays/QEMU in one
+diagnostic job. Do not claim all-MiniC toolchain equivalence:
+GCC is still used for PP/assembler/other kernel objects and GNU ld.

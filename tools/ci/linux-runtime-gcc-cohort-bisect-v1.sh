@@ -13,7 +13,7 @@ mkdir -p "$ev/gcc" "$ev/minic" "$ev/trials"
 exec > >(tee "$ev/cohort.log") 2>&1
 mapfile -t objects < <(grep -vE '^[[:space:]]*(#|$)' "$objects_file")
 n=${#objects[@]}
-(( n>=128 && n<=512 )) || { echo "COHORT_ERROR objects=$n"; exit 2; }
+(( n>=1000 && n<=3000 )) || { echo "COHORT_ERROR full_C_objects=$n; refuse partial-kernel verdict"; exit 2; }
 expected_cfg=$(sed -n 's/^config_sha256=//p' "$prov/gcc-baseline.txt")
 actual_cfg=$(sha256sum "$out/.config" | cut -d' ' -f1)
 [[ "$expected_cfg" == "$actual_cfg" && -n "$expected_cfg" ]] || {
@@ -191,12 +191,14 @@ trial() {
       cp -a "$ev/minic/${objects[i]}" "$out/${objects[i]}"
       touch "$out/${objects[i]}"
     done
-    make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
-      -j4 Image >"$d/link.log" 2>&1 || {
-        echo "COHORT_LINK=FAIL name=$name"
-        tail -n 70 "$d/link.log"
-        exit 5
-      }
+    if ! make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
+      -j4 Image >"$d/link.log" 2>&1; then
+      echo "COHORT_LINK=FAIL name=$name count=$count"
+      tail -n 70 "$d/link.log"
+      printf '%s\t%s\t%s\t%s\n' "$name" "$count" LINK_FAIL - >>"$ev/results.tsv"
+      TRIAL_VERDICT=LINK_FAIL
+      return 0
+    fi
     last_count="$count"
   else
     # Same object selection, different runtime oracle (FAST -> FULL):
@@ -283,36 +285,45 @@ PY_GNU_NONSELECTED
   printf '%s\t%s\t%s\t%s\n' "$name" "$count" "$verdict" "$image_sha" >>"$ev/results.tsv"
   TRIAL_VERDICT="$verdict"
 }
-trial known128 128 fast
+# FIRST test the entire MiniC-compilable C object universe. This is the
+# user's actual intended failure oracle; do not waste more CI on 128, 384,
+# 512 ... successful intermediate cohorts.
+trial full_all "$n" fast
 case "$TRIAL_VERDICT" in
-  FAIL) lo=0; hi=128;;
   PASS)
-    trial expanded_group "$n" fast
+    trial full_all_verified "$n" full
     case "$TRIAL_VERDICT" in
       PASS)
-        trial expanded_group_full "$n" full
-        [[ "$TRIAL_VERDICT" == PASS ]] || {
-          echo "COHORT_RESULT=$TRIAL_VERDICT at=expanded_group_full"; exit 8;
-        }
-        echo "COHORT_RESULT=PASS combined=$n same_config=true"
+        echo "COHORT_RESULT=PASS all_minic_c_objects=$n same_config=true"
         exit 0 ;;
-      FAIL) lo=128; hi="$n";;
-      *) echo "COHORT_RESULT=INCONCLUSIVE at=expanded_group"; exit 8;;
+      FAIL|LINK_FAIL)
+        echo "COHORT_RESULT=FAIL stage=full_or_p1 no_monotone_prefix_claim"
+        exit 9 ;;
+      *) echo "COHORT_RESULT=INCONCLUSIVE stage=full_or_p1"; exit 8 ;;
     esac ;;
-  *) echo "COHORT_RESULT=INCONCLUSIVE at=known128"; exit 8;;
+  FAIL|LINK_FAIL)
+    fail_kind="$TRIAL_VERDICT"
+    lo=0
+    hi="$n" ;;
+  *) echo "COHORT_RESULT=INCONCLUSIVE at=full"; exit 8 ;;
 esac
-# Bisection only after a proven PASS/FAIL bracket in the SAME fixture.
+# Full FAIL (or LINK_FAIL) vs independently certified pure-GCC baseline PASS.
+# Reuse the exact, already compiled candidate objects: no new C compilation
+# during bisection. Prefix monotonicity must be verified, not assumed.
 while ((hi-lo>1)); do
   mid=$(((lo+hi)/2))
   trial "prefix_$mid" "$mid" fast
   case "$TRIAL_VERDICT" in
     PASS) lo="$mid";;
-    FAIL) hi="$mid";;
-    *) echo "COHORT_RESULT=INCONCLUSIVE at=prefix_$mid"; exit 8;;
+    "$fail_kind") hi="$mid";;
+    INCONCLUSIVE)
+      echo "COHORT_RESULT=INCONCLUSIVE at=prefix_$mid"; exit 8 ;;
+    *)
+      echo "COHORT_RESULT=FAIL_MIXED_CLASSES full=$fail_kind prefix=$TRIAL_VERDICT"
+      exit 8 ;;
   esac
 done
 candidate=${objects[hi-1]}
-printf 'pass_prefix=%s\nfail_prefix=%s\ncandidate=%s\n' "$lo" "$hi" "$candidate" \
-  | tee "$ev/frontier.txt"
-echo "COHORT_RESULT=RUNTIME_FAIL first_boundary=$candidate single_causality=UNPROVEN"
+printf 'pass_prefix=%s\nfail_prefix=%s\ncandidate=%s\nfailure_kind=%s\n'   "$lo" "$hi" "$candidate" "$fail_kind" | tee "$ev/frontier.txt"
+echo "COHORT_RESULT=$fail_kind prefix_candidate=$candidate single_causality=UNPROVEN"
 exit 9
