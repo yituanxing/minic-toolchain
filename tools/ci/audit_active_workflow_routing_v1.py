@@ -240,6 +240,22 @@ def main():
     if not owned or actual_names != owned:
         raise AssertionError(f"active owner drift from single manifest: missing={owned-actual_names} extra={actual_names-owned}")
     names = {r["workflow"]: r for r in rows}
+    # An active YAML with only workflow_dispatch is not a proven executable
+    # entrypoint: GitHub requires a default-branch workflow definition.
+    # MiniAS focused is the SINGLE explicit unresolved legacy exception.
+    manual_only = {
+        row["workflow"] for row in rows
+        if row["manual_dispatch"] == "true"
+        and not re.search(r"(?m)^  (?:push|workflow_call):",
+                          trim_header((ACTIVE / row["workflow"]).read_text()))
+    }
+    if manual_only != {LEGACY_MANUAL}:
+        raise AssertionError(
+            "unreviewed manual-only workflow debt: "
+            + repr(sorted(manual_only ^ {LEGACY_MANUAL}))
+        )
+    print("M0_CI_MANUAL_ONLY_DEBT=1 owner=minias-a0-focused-diagnostics-v1.yml "
+          "default_branch_dispatch_not_certified=1")
     # This is an executable guardrail, not merely a report. Never allow a new
     # broad push listener that silently creates hundreds of empty run cards.
     unscoped = {r["workflow"] for r in rows
