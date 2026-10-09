@@ -19,6 +19,7 @@ on:
       - 'tools/ci/test_linux_runtime_prefix_bisect_v1.py'
       - 'tools/ci/check_minild_integration_convergence_v1.py'
       - 'tools/ci/check_minipp_frozen_convergence_v1.py'
+      - 'tools/ci/check_minipp_live_frozen_merge_v1.py'
       - 'tools/ci/check_linux_perf_optin_convergence_v1.py'
       - 'tools/ci/check_linux_runtime_focused_faults_convergence_v1.py'
       - 'tools/ci/check_linux_runtime_frontier_diagnostics_convergence_v1.py'
@@ -32,7 +33,7 @@ on:
       - '.github/workflows/toolchain-m0-structure.yml'
       - '.github/workflows/linux-distributed-full-image-signedness-v2.yml'
       - '.github/workflows/miniobjcopy-strip-regressions-v1.yml'
-      - '.github/workflows/minipp-linux-exact-smoke.yml'
+      - '.github/workflows-disabled/minipp-linux-exact-smoke.yml'
       - '.github/workflows/linux-runtime-spinlock-context-v0.yml'
       - '.github/workflows/linux-runtime-fdt-isolation-v1.yml'
       - '.github/workflows/linux-runtime-generated-kallsyms-first-die-v0.yml'
@@ -65,6 +66,10 @@ jobs:
         run: |
           python3 tools/ci/check_minild_integration_convergence_v1.py
           ruby -e 'require "yaml"; YAML.parse_file(ARGV.fetch(0)); puts "M0_MINILD_INTEGRATION_YAML=PASS"' .github/workflows/minild-integration-v1.yml
+
+      - name: Verify MiniPP frozen and live-Kbuild canonical sources
+        run: |
+          python3 tools/ci/check_minipp_live_frozen_merge_v1.py
 
       - name: Verify MiniPP frozen oracle workflow convergence
         run: |
@@ -148,7 +153,7 @@ jobs:
             tools/ci/linux-distributed-provenance-audit-v2.py \
             tools/ci/linux-distributed-image-plan-v1.py
           ruby -e 'require "yaml"; YAML.parse_file(ARGV.fetch(0)); puts "M0_MINIOBJCOPY_YAML=PASS"' .github/workflows/miniobjcopy-strip-regressions-v1.yml
-          ruby -e 'require "yaml"; YAML.parse_file(ARGV.fetch(0)); puts "M0_MINIPP_LIVE_YAML=PASS"' .github/workflows/minipp-linux-exact-smoke.yml
+          ruby -e 'require "yaml"; YAML.parse_file(ARGV.fetch(0)); puts "M0_MINIPP_LIVE_YAML=PASS"' .github/workflows/minipp-linux-frozen-v1.yml
           for f in linux-runtime-spinlock-context-v0.yml linux-runtime-fdt-isolation-v1.yml linux-runtime-generated-kallsyms-first-die-v0.yml; do
             ruby -e 'require "yaml"; YAML.parse_file(ARGV.fetch(0))' ".github/workflows/$f"
           done
@@ -215,8 +220,8 @@ jobs:
               assert hashlib.sha1(git_blob).hexdigest() == sha, f'Old MiniObjcopy YAML modified: {fname}'
           print('M0_MINIOBJCOPY_CONVERGENCE=PASS jobs=3 archived=2 blobs_identical=2')
 
-          exact = Path('.github/workflows/minipp-linux-exact-smoke.yml').read_text()
-          assert 'default: smoke' in exact
+          exact = Path('.github/workflows/minipp-linux-frozen-v1.yml').read_text()
+          assert 'default: exact' in exact
           for mode in ('smoke', 'batch', '72'):
               assert '\n  linux-exact-' + mode + ':\n' in exact, f'Missing MiniPP exact job: {mode}'
               assert "inputs.mode == '" + mode + "'" in exact, f'Missing MiniPP mode selector: {mode}'
@@ -232,7 +237,8 @@ jobs:
               data = (Path('.github/workflows-disabled') / fname).read_bytes()
               git_blob = b'blob ' + str(len(data)).encode() + bytes([0]) + data
               assert hashlib.sha1(git_blob).hexdigest() == sha, f'MiniPP archival blob mismatch: {fname}'
-          print('M0_MINIPP_LIVE_EXACT=PASS jobs=3 archived=2 blobs_identical=2')
+          assert not Path('.github/workflows/minipp-linux-exact-smoke.yml').exists(), 'Retired live workflow remains active'
+          print('M0_MINIPP_LIVE_EXACT=PASS three_original_live_jobs_present=1 older_archives=2')
 
           # Every legacy QEMU/compilation job must remain byte-identical
           # (except the new job-level opt-in selector) and recoverable.
