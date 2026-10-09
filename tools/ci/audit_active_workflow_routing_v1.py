@@ -146,6 +146,32 @@ def analyze(name: str, y: str, branch: str) -> dict[str, str]:
     }
 
 
+
+def assert_control_scoped_tag_reachable(name: str, source: str, branch: str) -> None:
+    """Prevent tag-only diagnostic owners hidden by control-file-only push paths.
+
+    GitHub evaluates on.push.paths *before* a job's commit-message if. A file
+    change to src/ plus a matching historical tag cannot reach a workflow whose
+    only paths are sentinel trigger files or its own YAML. Keep the scoped push
+    for historical sentinel probes, but require a separately audited reusable
+    entrypoint for such tag guards.
+    """
+    observed = analyze(name, source, branch)
+    if observed["push_branch_eligible"] != "true" or observed["push_path_policy"] != "scoped":
+        return
+    if not observed["commit_tag_guards"]:
+        return
+    h = trim_header(source)
+    scoped_push = event_push(h)
+    if scoped_push is None:
+        return
+    if "/**" not in scoped_push and not re.search(r"(?m)^  workflow_call:", h):
+        raise AssertionError(
+            f"unreachable push tag: {name} only listens to control-file paths, "
+            "but contains commit-message opt-in guards and lacks workflow_call"
+        )
+
+
 def self_test():
     br = BRANCHES[0]
     r = analyze("sample.yml",
@@ -171,7 +197,22 @@ def self_test():
                 "    if: contains(github.event.head_commit.message, '[legacy]')\n"
                 "    runs-on: ubuntu-24.04\n", br)
     assert r["dead_push_tags"] == "false" and r["classification"] == "reusable_tagged_dispatch"
-    print("M0_CI_ENTRYPOINT_AUDIT_SELFTEST=PASS event_scope=4 branch=1 tagged_reusable=1")
+    self_only = ("on:\n  push:\n    branches: [agent/linux-expanded-kbuild-v0]\n"
+                 "    paths: ['.github/workflows/demo.yml']\n"
+                 "  workflow_dispatch:\njobs:\n  check:\n"
+                 "    if: contains(github.event.head_commit.message, '[demo]')\n"
+                 "    runs-on: ubuntu-24.04\n")
+    try:
+        assert_control_scoped_tag_reachable("demo.yml", self_only, br)
+    except AssertionError:
+        pass
+    else:
+        raise AssertionError("control-only tag without route was accepted")
+    assert_control_scoped_tag_reachable(
+        "demo.yml", self_only.replace("  workflow_dispatch:", "  workflow_call:\n  workflow_dispatch:"), br
+    ) is None
+    print("M0_CI_ENTRYPOINT_AUDIT_SELFTEST=PASS event_scope=4 branch=1 "
+          "tagged_reusable=1 hidden_control_tag_rejected=1")
 
 
 def main():
@@ -207,6 +248,8 @@ def main():
                          else {ROUTE_ALL_PUSH, "minild-integration-v1.yml"})
     if unscoped != expected_unscoped:
         raise AssertionError(f"unreviewed broad push entrypoints: {unscoped ^ expected_unscoped}")
+    for name in names:
+        assert_control_scoped_tag_reachable(name, (ACTIVE / name).read_text(), branch)
     # Keep every retired Performance owner as an exact byte-identical archive.
     # These entries must remain intact and branch-ineligible on Performance.
     import hashlib

@@ -53,3 +53,18 @@ Both scoped diagnostic workflows retained historical submit labels, but their di
 Each workflow now **retains its existing exact scoped push paths and `workflow_dispatch`**, and additionally exposes `workflow_call`; the **existing** `linux-legacy-tag-router-v1.yml` dispatches its exact original four/five label groupings without allocating extra Runners for untagged pushes. The existing source-proof gate reconstructs exact original blobs `5dde74694e43401ab95f93bf3fcc5d8120b322f5` and `b9c56ef805cb78b711ef1f9059f69fc276838893`. All nine independent diagnostic Job bodies remain byte-identical. Spinlock Workflow-wide `cancel-in-progress: true` was changed to `false`: a mere sentinel maintenance push must not cancel running spinlock certification. The legacy SHA-reconstruction test explicitly allows only this policy change plus the added reusable event.
 
 **Qualification:** T0 proves source fidelity and route selection; previous real push-tagged reusable context smoke #37902327902 proves event-payload propagation. This change does **not** certify an actual FDT, Kallsyms, spinlock or QEMU result.
+
+## Automatic prevention of control-path-only legacy tag regressions
+After making FDT/Spinlock tags reachable, `audit_active_workflow_routing_v1.py` now fails closed if a scoped push owner:
+(1) has commit-tagged job guards,
+(2) its only path entries are control files (no recursively scoped `/**` code directory), and
+(3) it lacks any `workflow_call` trigger.
+A real code change plus old `[tag]` would otherwise have been silently discarded by GitHub **before** Job conditions could run. The new T0 selftest verifies an unreachable case is rejected and the source-preserving reusable-call alternative is accepted. Existing router source/body SHA checks separately guarantee the two new owners' tags remain mapped to the correct reusable Job.
+
+## Additional P1: expiring, manual-only MiniAS focused corpus inputs
+The Runtime + Performance active `minias-a0-focused-diagnostics-v1.yml` has **ten** manually selected diagnostic Jobs, but **only `on.workflow_dispatch`**, with no default-branch definition on `main` or independently verified branch-local manual entrypoint. Most modes additionally download frozen corpus/sidecar/C149 evidence from fixed historical Action runs:
+- `33186855250`: 7 frozen corpus artifacts, all **currently available**, expire **2026-11-26T15:47:26Z**.
+- `33237304382`: 1 Linux-sidecar artifact, currently available, expires **2026-11-27T05:56:34Z**.
+- `33248985705`: 1 C149 oracle artifact, currently available, expires **2026-11-27T10:57:21Z**.
+
+These are actual **upcoming** expirations (unlike already-dead MiniObjcopy run 33623125809), so do **not** retire this unique 3536/frozen semantic capability. **OPEN CI-08**: establish a properly reachable, existing canonical trigger for the five focused MiniAS manual modes, and replace pin-only corpus downloads with certified renewable sources / exact artifact provenance before November 26. Do not replace golden data silently, delete semantic oracles, or claim a 3536 PASS from a source-only M0.
