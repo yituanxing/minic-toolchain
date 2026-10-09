@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check all 61 maintained workflow entries against the owned trigger inventory.
+"""Check all 57 maintained workflow entries against the owned trigger inventory.
 
 This is a T0 source/dispatch audit, not proof of T1-T4 execution. In particular
 a push path filter only creates a workflow run; job-level 'if' may skip tests.
@@ -36,8 +36,8 @@ def accepts(patterns,path):
 def main():
     with INV.open(newline="") as f:
         rows=list(csv.DictReader(f,delimiter="\t"))
-    if len(rows)!=61 or len({r["path"] for r in rows})!=34:
-        raise AssertionError("61-row / 34-name owned inventory changed without review")
+    if len(rows)!=57 or len({r["path"] for r in rows})!=32:
+        raise AssertionError("57-row / 32-name owned inventory changed without review")
     branch=os.environ.get("GITHUB_REF_NAME",BRANCHES[0])
     if branch not in BRANCHES:
         raise AssertionError(f"unknown CI branch: {branch}")
@@ -55,7 +55,7 @@ def main():
             raise AssertionError(f"job routing drift in {path}: expected={recorded} actual={jobs}")
         if ("  push:" in header(y)) != ("push" in row["trigger_types"].split(";")):
             raise AssertionError(f"push contract drift in {path}")
-    for owner in ("minic-rv64-focused-regressions-v1.yml","miniar-regressions-v1.yml","minild-regressions-v1.yml"):
+    for owner in ("toolchain-focused-regressions-v1.yml",):
         y=(ROOT/".github/workflows"/owner).read_text()
         p=push_patterns(y)
         if p is None: raise AssertionError(f"missing positive triggers: {owner}")
@@ -79,17 +79,18 @@ def main():
         raise AssertionError("MiniPP A0 shared ELF dependency skipped")
     # Runtime-only tag-gated regressions are not a Performance correctness gate.
     if branch==BRANCHES[1]:
-        rv=(ROOT/".github/workflows/minic-rv64-focused-regressions-v1.yml").read_text()
+        rv=(ROOT/".github/workflows/toolchain-focused-regressions-v1.yml").read_text()
         if "      - \"agent/linux-perf-boolean-domain-v1\"" not in header(rv):
             raise AssertionError("Performance source changes do not trigger MiniC RV64 T1")
-        if re.search(r"(?m)^  regressions:\n    if:",rv):
-            raise AssertionError("Performance RV64 T1 can silently skip after push")
-        for owner in ("miniar-regressions-v1.yml","minild-regressions-v1.yml"):
-            t=(ROOT/".github/workflows"/owner).read_text()
+        for job in ("minic-rv64","miniar","minild"):
+            if "  "+job+":\n    if: github.event_name == 'push' ||" not in rv:
+                raise AssertionError(f"Performance T1 can silently skip: {job}")
+        for owner in ("miniar","minild"):
+            t=rv
             if "      - \"agent/linux-perf-boolean-domain-v1\"" not in header(t):
                 raise AssertionError(f"Performance ELF archive/linker T1 owner missing: {owner}")
         print("M0_PERF_T1=IN_SCOPE owners=3 (real T1 execution separately required)")
-    print(f"M0_CI_TRIGGER_LEDGER=PASS branch={branch} maintained={len(local)} total=61 unique=34 route_checks=4 tier=T0")
+    print(f"M0_CI_TRIGGER_LEDGER=PASS branch={branch} maintained={len(local)} total=57 unique=32 route_checks=4 tier=T0")
 
 if __name__=="__main__":
     main()
