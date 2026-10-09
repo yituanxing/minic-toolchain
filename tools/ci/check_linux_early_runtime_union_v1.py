@@ -56,7 +56,15 @@ def main():
         if set(prior) != JOB_SETS[old_name]:
             raise AssertionError(f"original canonical job set changed: {old_name}")
         for name, body in prior.items():
-            if active[name] != body:
+            # A deliberate routing repair moves the old Runtime-only branch guard
+            # inside the push arm; on manual Performance dispatch the semantic
+            # mode must no longer be silently skipped. All other job text stays
+            # byte-identical and the exact new if expressions are separately gated.
+            if name in {"pi-local-symbol", "satp-micro", "qemu-watch-cert", "inconclusive-cert"}:
+                without_if = lambda s: "\n".join(x for x in s.splitlines() if not x.startswith("    if: "))
+                if without_if(active[name]) != without_if(body):
+                    raise AssertionError(f"historical executable job body changed: {name}")
+            elif active[name] != body:
                 raise AssertionError(f"original executable job/condition changed: {name}")
     for mode in MODES:
         if "          - " + mode not in text:

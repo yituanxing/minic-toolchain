@@ -11,6 +11,10 @@ on:
       - 'tools/ci/check_linux_runtime_fixture_restore_v1.py'
       - 'tools/ci/check_linux_expanded_pi_p1_convergence_v1.py'
       - 'tools/ci/check_linux_early_runtime_union_v1.py'
+      - 'tools/ci/select_runtime_owner_modes_v1.py'
+      - 'tools/ci/check_runtime_owner_routing_v1.py'
+      - 'tools/ci/check_early_runtime_dispatch_v1.py'
+      - '.github/workflows/linux-runtime-owner-focused-v1.yml'
       - 'tools/ci/check_linux_runtime_fdt_kallsyms_union_v1.py'
       - 'tools/ci/check_linux_core_3352_first500_union_v1.py'
       - 'tools/ci/check_linux_efi_vdso_convergence_v1.py'
@@ -141,6 +145,17 @@ jobs:
       - name: Verify Core full 3352 and first500/focused-five union
         run: |
           python3 tools/ci/check_linux_core_3352_first500_union_v1.py
+
+      - name: Check Runtime Owner focused matrix path routing
+        run: |
+          python3 tools/ci/select_runtime_owner_modes_v1.py --self-test
+          python3 tools/ci/check_runtime_owner_routing_v1.py
+          ruby -e 'require "yaml"; YAML.parse_file(ARGV.fetch(0)); puts "M0_OWNER_ROUTING_YAML=PASS"' .github/workflows/linux-runtime-owner-focused-v1.yml
+
+      - name: Check early Runtime manual and push route truth table
+        run: |
+          python3 tools/ci/check_early_runtime_dispatch_v1.py
+          ruby -e 'require "yaml"; YAML.parse_file(ARGV.fetch(0)); puts "M0_EARLY_RUNTIME_ROUTING_YAML=PASS"' .github/workflows/linux-expanded-pi-p1-runtime-v1.yml
 
       - name: Run Linux runtime isolation selftests
         run: |

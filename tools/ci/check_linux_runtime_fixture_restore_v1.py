@@ -6,6 +6,7 @@ body/step/trigger change except an exact cache-restore -> composite invocation.
 """
 from pathlib import Path
 import hashlib, re
+from check_runtime_owner_routing_v1 import restore_owner_text
 
 ROOT = Path(__file__).resolve().parents[2]
 ACTION = ROOT / ".github/actions/linux-runtime-restore-fixture/action.yml"
@@ -79,6 +80,8 @@ def main():
     for filename, (sha, uses_frozen) in WORKFLOWS.items():
         path = ROOT / ".github/workflows" / filename
         text = path.read_text()
+        if filename == "linux-runtime-owner-focused-v1.yml":
+            text = restore_owner_text(text)
         if text.count(SOURCE_REPLACED) != 1:
             raise AssertionError(f"source fixture call missing or repeated: {filename}")
         if text.count(FROZEN_REPLACED) != int(uses_frozen):

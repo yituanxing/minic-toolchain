@@ -10,7 +10,20 @@ on:
       - "tools/ci/runtime-vsyscall-trigger.txt"
       - "tools/ci/runtime-notifier-trigger.txt"
       - "tools/ci/runtime-build-policy-trigger.txt"
+      - "tools/ci/select_runtime_owner_modes_v1.py"
   workflow_dispatch:
+    inputs:
+      mode:
+        description: "Select one owner diagnosis or all four"
+        required: true
+        type: choice
+        default: all
+        options:
+          - all
+          - timekeeping
+          - vsyscall
+          - notifier
+          - build-policy
 
 permissions:
   contents: read
@@ -20,11 +33,36 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  route:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    outputs:
+      modes: ${{ steps.select.outputs.modes }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - name: Resolve changed owner trigger paths and manual mode
+        id: select
+        shell: bash
+        env:
+          EVENT_KIND: ${{ github.event_name }}
+          BEFORE_SHA: ${{ github.event.before }}
+          AFTER_SHA: ${{ github.sha }}
+          REQUESTED_MODE: ${{ inputs.mode || 'all' }}
+        run: |
+          set -Eeuo pipefail
+          python3 tools/ci/select_runtime_owner_modes_v1.py \
+            --event "$EVENT_KIND" --before "$BEFORE_SHA" --after "$AFTER_SHA" \
+            --mode "$REQUESTED_MODE" >>"$GITHUB_OUTPUT"
+
   owner:
+    needs: route
     strategy:
       fail-fast: false
       matrix:
-        mode: [timekeeping, vsyscall, notifier, build-policy]
+        mode: ${{ fromJSON(needs.route.outputs.modes) }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
