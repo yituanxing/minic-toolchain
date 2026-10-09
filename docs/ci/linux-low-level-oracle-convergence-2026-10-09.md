@@ -17,7 +17,7 @@ Each original source YAML is preserved byte-identically under `.github/workflows
 
 `linux-efi-vdso-focused-v1.yml`: manual mode `efi` (default), `vdso` or `all`. Both old explicit push tags remain, on both development branches and the same `src/**`, `include/**`, `tests/external/linux/**`, `tools/ci/**` path filters. EFI's original `cancel-in-progress: true` group is preserved at job scope. vDSO had no concurrency override and still does not.
 
-`linux-runtime-contract-oracles-v1.yml`: manual mode `semantics` (default), `watch` or `all`. On push, both original groups of commit tags and the Runtime branch restriction remain. Four independent jobs retain their distinct assertion and artifact contracts. The old *workflow-level* cancel-in-progress groups are moved to **per-job** groups, including `github.job` to prevent simultaneous named jobs from cancelling one another. This is a deliberate improvement to concurrent execution, not a change to the respective test body.
+`linux-runtime-contract-oracles-v1.yml`: manual mode `semantics` (default), `watch` or `all`. On push, both original groups of commit tags and the Runtime branch restriction remain. Four independent jobs retain their distinct assertion and artifact contracts. The old *workflow-level* cancel-in-progress groups are moved to **per-job** groups, including a literal job ID after the branch/ref to prevent simultaneous named jobs cancelling one another. This is a deliberate improvement to concurrent execution, not a change to the respective test body.
 
 The new shared workflow does **not** reinterpret `QEMU_RC=0` as a Linux boot success, or replace the independently certified GCC baseline, frozen/link fixture producer, watcher pass marker, full Image or QEMU boot path.
 

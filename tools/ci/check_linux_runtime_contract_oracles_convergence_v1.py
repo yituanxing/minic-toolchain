@@ -31,7 +31,7 @@ def main():
    v=current[n]
    if "inputs.mode == '"+mode+"'" not in v or "inputs.mode == 'all'" not in v:raise AssertionError("selection changed: "+n)
    if "github.event_name == 'push'" not in v or "github.event_name == 'workflow_dispatch'" not in v:raise AssertionError("push/dispatch lost: "+n)
-   if "group: "+group+"-" not in v or "github.job" not in v or "cancel-in-progress: true" not in v:
+   if "group: "+group+"-" not in v or "github.ref }}-"+n not in v or "cancel-in-progress: true" not in v:
     raise AssertionError("per-job concurrency was lost: "+n)
  for tag in ("[linux-runtime-pi-local-symbol-v0]","[linux-pi-micro]","[runtime-compiler-semantics-v1]","[linux-runtime-qemu-watch-cert-v1]","[linux-runtime-qemu-watch-inconclusive-v1]","[linux-runtime-qemu-watch-contracts-v1]"):
   if tag not in s:raise AssertionError("old tag missing: "+tag)
