@@ -27,8 +27,30 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  route:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    outputs:
+      elf_changed: ${{ steps.diff.outputs.elf_changed }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - name: Route shared ELF changes to MiniObjcopy/Strip T1 regression
+        id: diff
+        env:
+          EVENT_KIND: ${{ github.event_name }}
+          BEFORE_SHA: ${{ github.event.before }}
+          AFTER_SHA: ${{ github.sha }}
+        run: |
+          set -Eeuo pipefail
+          python3 tools/ci/select_miniobjcopy_elf_route_v1.py \
+            --event "$EVENT_KIND" --before "$BEFORE_SHA" --after "$AFTER_SHA" >> "$GITHUB_OUTPUT"
+
   regressions:
-    if: (github.event_name == 'workflow_dispatch' && (inputs.mode == 'regressions' || inputs.mode == 'all')) || (github.event_name == 'push' && contains(github.event.head_commit.message, '[miniobjcopy-strip-regressions]'))
+    needs: route
+    if: (github.event_name == 'workflow_dispatch' && (inputs.mode == 'regressions' || inputs.mode == 'all')) || (github.event_name == 'push' && (contains(github.event.head_commit.message, '[miniobjcopy-strip-regressions]') || needs.route.outputs.elf_changed == 'true'))
     runs-on: ubuntu-24.04
     timeout-minutes: 35
     steps:
