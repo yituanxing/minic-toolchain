@@ -8,6 +8,8 @@ on:
       - ".github/workflows/toolchain-m0-structure.yml"
       - ".github/workflows/minild-integration-v1.yml"
       - "tools/ci/check_minild_integration_convergence_v1.py"
+      - "tools/ci/check_minipp_frozen_convergence_v1.py"
+      - ".github/workflows/minipp-linux-frozen-v1.yml"
       - ".github/workflows/linux-optimized-first500-verify-v1.yml"
   workflow_dispatch:
     inputs:
@@ -42,6 +44,11 @@ jobs:
         run: |
           python3 tools/ci/check_minild_integration_convergence_v1.py
           ruby -e 'require "yaml"; YAML.parse_file(ARGV.fetch(0)); puts "M0_MINILD_INTEGRATION_YAML=PASS"' .github/workflows/minild-integration-v1.yml
+
+      - name: Verify MiniPP frozen oracle workflow convergence
+        run: |
+          python3 tools/ci/check_minipp_frozen_convergence_v1.py
+          ruby -e 'require "yaml"; YAML.parse_file(ARGV.fetch(0)); puts "M0_MINIPP_FROZEN_YAML=PASS"' .github/workflows/minipp-linux-frozen-v1.yml
 
       - name: Run Linux runtime isolation selftests
         run: |
