@@ -84,14 +84,14 @@ def main():
         rv=(ROOT/".github/workflows/toolchain-focused-regressions-v1.yml").read_text()
         if "      - \"agent/linux-perf-boolean-domain-v1\"" not in header(rv):
             raise AssertionError("Performance source changes do not trigger MiniC RV64 T1")
-        for job in ("minic-rv64","miniar","minild"):
-            if "  "+job+":\n    if: github.event_name == 'push' ||" not in rv:
-                raise AssertionError(f"Performance T1 can silently skip: {job}")
-        for owner in ("miniar","minild"):
-            t=rv
-            if "      - \"agent/linux-perf-boolean-domain-v1\"" not in header(t):
-                raise AssertionError(f"Performance ELF archive/linker T1 owner missing: {owner}")
-        print("M0_PERF_T1=IN_SCOPE owners=3 (real T1 execution separately required)")
+        if set(re.findall(r"(?m)^  ([a-zA-Z][\w-]*):\s*$",rv.split("\njobs:\n",1)[1])) != {"focused-t1"}:
+            raise AssertionError("Performance shared T1 must have exactly one build-and-verdict job")
+        for owner in ("minic-rv64","miniar","minild"):
+            if "inputs.mode == '"+owner+"'" not in rv:
+                raise AssertionError(f"Performance selected T1 mode lost: {owner}")
+        for mark in ("TOOLCHAIN_FOCUSED_T1=PASS","TOOLCHAIN_FOCUSED_T1=FAIL","steps.ld_gc.outcome","steps.ar_nm.outcome","steps.rv64.outcome"):
+            if mark not in rv: raise AssertionError("Performance independent oracles lost: "+mark)
+        print("M0_PERF_T1=IN_SCOPE owners=3 shared_build_jobs=1 (real T1 execution separately required)")
     print(f"M0_CI_TRIGGER_LEDGER=PASS branch={branch} maintained={len(local)} total=48 unique=26 route_checks=4 tier=T0")
 
 if __name__=="__main__":

@@ -61,3 +61,7 @@ Four previously separate Performance trial workflows are now one `linux-performa
 ## Four-to-one Runtime focused diagnostic ownership
 
 `linux-runtime-focused-owners-v1.yml` replaces the separate IRQ, RCU, init-codegen and timer entrypoints. Every original Job command/cache/provenance/artifact is preserved and source-checked. A cheap changed-file selector prevents QEMU on unrelated sources and executes no diagnostic on workflow-only maintenance. Runtime automatic triggers remain Runtime-only; Performance retains manual owner selection. See [contract and exact SHA archive proof](ci-runtime-focused-owners-consolidation-2026-10-09.md). This source/routing check is not a new Runtime QEMU success certificate.
+
+## Single build / eight checks in one T1 job
+
+The prior three-runner MiniC RV64, MiniAR, MiniLD entrypoint has been refactored to one shared-build `focused-t1` job, retaining eight individual test scripts and independent step `outcome` verdicts. Manual `minic-rv64`, `miniar`, `minild`, `all` options and two-branch source automatic coverage remain. `tools/ci/**` changes alone still do not trigger a costly T1 build. See [single-build contract](ci-toolchain-focused-single-build-2026-10-09.md). As before, successful M0 is static proof only; T1 is demonstrated by a real source push.
