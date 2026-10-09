@@ -103,7 +103,7 @@ def main():
   else:
    original_paths=SOURCE_PATHS+"      - '.github/workflows/"+name+"'\n"+NEGATIVE
    original_branch_text=c
-   if name=="minic-rv64-focused-regressions-v1.yml":
+   if name in SOURCES:
     if c.count(PERF_RV64_BRANCH)!=1:
      raise AssertionError("Performance compiler T1 automatic branch missing")
     original_branch_text=c.replace(PERF_RV64_BRANCH,"")
