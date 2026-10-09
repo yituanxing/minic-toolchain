@@ -22,6 +22,7 @@ on:
       - '.github/workflows-disabled/minild-regressions-v1.yml'
       - 'tools/ci/check_ci_shared_elf_coverage_v1.py'
       - 'tools/ci/check_ci_trigger_coverage_v1.py'
+      - 'tools/ci/check_ci_branch_policy_v1.py'
       - 'tools/ci/audit_active_workflow_routing_v1.py'
       - 'tools/ci/check_linux_legacy_tag_router_v1.py'
       - '.github/workflows/linux-legacy-tag-router-v1.yml'
@@ -97,6 +98,11 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+
+      - name: Verify four approved remote branch refs
+        run: |
+          python3 tools/ci/check_ci_branch_policy_v1.py --self-test
+          python3 tools/ci/check_ci_branch_policy_v1.py
 
       - name: Verify MiniLD consolidated integration contracts
         run: |
