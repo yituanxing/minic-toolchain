@@ -1,10 +1,11 @@
-name: Linux Runtime FDT Isolation V1
+name: Linux Runtime FDT and Generated Kallsyms Focused Diagnoses
 
 on:
   push:
     branches: ["agent/linux-expanded-kbuild-v0"]
     paths:
       - ".github/workflows/linux-runtime-fdt-isolation-v1.yml"
+      - ".github/workflows-disabled/linux-runtime-generated-kallsyms-first-die-v0.yml"
       - "tools/ci/linux-early-runtime-link-v2.sh"
   workflow_dispatch:
     inputs:
@@ -16,16 +17,16 @@ on:
         options:
           - 'isolation'
           - 'codegen'
+          - 'generated'
+          - 'three-way'
+          - 'object'
           - 'all'
 
 permissions:
   contents: read
 
-concurrency:
-  group: linux-runtime-fdt-isolation-v1-${{ github.ref }}
-  cancel-in-progress: true
-
 jobs:
+
   fdt-isolation:
     if: (github.event_name == 'workflow_dispatch' && (inputs.mode == 'isolation' || inputs.mode == 'all')) || (github.event_name == 'push' && contains(github.event.head_commit.message, '[linux-fdt-isolation]'))
     runs-on: ubuntu-24.04
@@ -363,6 +364,10 @@ jobs:
           retention-days: 7
 
   # Retained exact specialized job from linux-runtime-fdt-ro-codegen-v0.yml.
+    concurrency:
+      group: linux-runtime-fdt-isolation-v1-${{ github.ref }}-fdt-isolation
+      cancel-in-progress: true
+
   fdt-ro-codegen:
     if: (github.event_name == 'workflow_dispatch' && (inputs.mode == 'codegen' || inputs.mode == 'all')) || (github.event_name == 'push' && contains(github.event.head_commit.message, '[linux-fdt-codegen]'))
     runs-on: ubuntu-24.04
@@ -486,3 +491,791 @@ jobs:
             build/linux-runtime-fdt-ro-codegen-v0/focused.txt
           if-no-files-found: warn
           retention-days: 7
+    concurrency:
+      group: linux-runtime-fdt-isolation-v1-${{ github.ref }}-fdt-ro-codegen
+      cancel-in-progress: true
+
+  generated-kallsyms-first-die:
+    if: (github.event_name == 'workflow_dispatch' && (inputs.mode == 'generated' || inputs.mode == 'all')) || (github.event_name == 'push' && contains(github.event.head_commit.message, '[linux-kallsyms-generated]'))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 18
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Restore certified full linked fixture
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-expanded-kbuild-v0/out
+          key: linux-expanded-mixed-v1-6.6.143-Linux-d30569a4c675f6ac72d9f63c28f0b8745317f7a15c0799d10768f916d74b3a88
+          fail-on-cache-miss: true
+
+      - name: Restore pinned Linux source
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-expanded-kbuild-v0/linux-6.6.143
+          key: linux-source-6.6.143-dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932-v1
+          fail-on-cache-miss: true
+
+      - name: Restore certified frozen linker source subset
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-runtime-frozen-v1
+          key: linux-runtime-frozen-v1-6.6.143-e538a6ad42ec49c5a667cab5de9bb943f82ca702ff2b7749a020e38ff7ddaea7
+          fail-on-cache-miss: true
+
+      - name: Install prerequisites
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get -o Acquire::Retries=2 install -y --no-install-recommends gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu qemu-system-misc opensbi gdb-multiarch python3 make \
+            || { sudo apt-get -o Acquire::Retries=3 update; sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu qemu-system-misc opensbi gdb-multiarch python3 make; }
+
+      - name: Build exact Linux runtime MiniC profile
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-generated-kallsyms-first-die-v0"
+          build="$GITHUB_WORKSPACE/build/toolchain-runtime-generated-kallsyms-first-die-v0"
+          mkdir -p "$ev"
+          bash tools/ci/linux-runtime-build-minic-profile-v1.sh "$build" "$ev/profile"
+          grep -F 'MINIC_INLINE_ASM_LOCAL_INTEGER_FACTS_V0=APPLIED' "$ev/profile/patch.log"
+          grep -F 'MINIC_INLINE_ASM_RK_CAST_TAIL_V0=APPLIED' "$ev/profile/patch.log"
+          grep -F 'MINIC_RISCV64_PI_LOCAL_SYMBOL_ADDRESS_V0=APPLIED' "$ev/profile/patch.log"
+
+      - name: Refresh current MiniC runtime owners including kallsyms
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0"
+          src="$work/linux-6.6.143"
+          out="$work/out"
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-generated-kallsyms-first-die-v0"
+          build="$GITHUB_WORKSPACE/build/toolchain-runtime-generated-kallsyms-first-die-v0"
+          wrapper="$GITHUB_WORKSPACE/tests/external/linux/stage2_kbuild_cc.sh"
+
+          refresh_obj() {
+            target="$1"; log="$2"
+            base="${target%.o}"; dir="${target%/*}"; stem="${target##*/}"; stem="${stem%.o}"
+            rm -f "$out/$target" "$out/$dir/.${stem}.o.cmd" "$out/$base.minic-stage2.i" "$out/$base.minic-stage2.s"
+            MINIC="$build/bin/minic" REAL_CC=/usr/bin/riscv64-linux-gnu-gcc MINIC_KEEP_INTERMEDIATES=1 \
+              make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- CC="$wrapper" -j2 V=1 "$target" >"$ev/$log" 2>&1
+            test -s "$out/$target"
+            echo "OWNER_REFRESH=PASS target=$target"
+          }
+
+          pi_target=arch/riscv/kernel/pi/cmdline_early.pi.o
+          pi_base=arch/riscv/kernel/pi/cmdline_early
+          rm -f "$out/$pi_base.o" "$out/$pi_target" "$out/arch/riscv/kernel/pi/.cmdline_early.o.cmd" "$out/arch/riscv/kernel/pi/.cmdline_early.pi.o.cmd" "$out/$pi_base.minic-stage2.i" "$out/$pi_base.minic-stage2.s"
+          MINIC="$build/bin/minic" REAL_CC=/usr/bin/riscv64-linux-gnu-gcc MINIC_KEEP_INTERMEDIATES=1 \
+            make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- CC="$wrapper" -j2 V=1 "$pi_target" >"$ev/pi-owner-refresh.log" 2>&1
+          test -s "$out/$pi_target"
+          echo "OWNER_REFRESH=PASS target=$pi_target"
+
+          refresh_obj kernel/kallsyms.o kallsyms-refresh.log
+          refresh_obj arch/riscv/mm/init.o init-refresh.log
+          refresh_obj arch/riscv/kernel/setup.o setup-refresh.log
+          refresh_obj kernel/sched/core.o sched-core-refresh.log
+          refresh_obj arch/riscv/kernel/irq.o irq-refresh.log
+          refresh_obj kernel/locking/spinlock.o spinlock-refresh.log
+          refresh_obj kernel/locking/spinlock_debug.o spinlock-debug-refresh.log
+          refresh_obj kernel/sched/build_utility.o build-utility-refresh.log
+          refresh_obj kernel/time/timekeeping.o timekeeping-refresh.log
+          refresh_obj kernel/time/vsyscall.o vsyscall-refresh.log
+          refresh_obj kernel/notifier.o notifier-refresh.log
+          refresh_obj kernel/sched/build_policy.o build-policy-refresh.log
+          refresh_obj kernel/time/timer.o timer-refresh.log
+          refresh_obj kernel/time/hrtimer.o hrtimer-refresh.log
+          refresh_obj kernel/time/tick-sched.o tick-sched-refresh.log
+          refresh_obj kernel/rcu/tree.o rcu-tree-refresh.log
+          refresh_obj kernel/rcu/rcu_segcblist.o rcu-segcblist-refresh.log
+          refresh_obj init/main.o init-main-refresh.log
+          refresh_obj kernel/softirq.o softirq-refresh.log
+
+          sha256sum "$out/kernel/kallsyms.o" | tee "$ev/kallsyms.sha256"
+          riscv64-linux-gnu-readelf -rW "$out/kernel/kallsyms.o" >"$ev/kallsyms.relocs.txt"
+          grep -E 'kallsyms_(offsets|addresses|percpu_absolute)' "$ev/kallsyms.relocs.txt" | tee "$ev/kallsyms-key-relocs.txt" || true
+
+      - name: Relink with generated kallsyms data
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0"
+          src="$work/linux-6.6.143"
+          out="$work/out"
+          frozen="$GITHUB_WORKSPACE/build/linux-runtime-frozen-v1"
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-generated-kallsyms-first-die-v0"
+          diag="$ev/kallsyms-pass-diagnostics.txt"
+
+          set +e
+          EARLY_LINK_WITH_KALLSYMS=1 EARLY_LINK_KALLSYMS_SRC="$src" \
+            bash tools/ci/linux-early-runtime-link-v2.sh "$frozen/src" "$out" "$ev/early" 2>&1 | tee "$ev/link.log"
+          relink_rc=${PIPESTATUS[0]}
+          set -e
+
+          : >"$diag"
+          shopt -s nullglob
+          syms_files=("$ev"/early/.tmp_vmlinux.kallsyms*.syms)
+          if ((${#syms_files[@]} == 0)); then
+            echo 'KALLSYMS_DIAG_SYMS=NONE' | tee -a "$diag"
+          fi
+          for syms in "${syms_files[@]}"; do
+            lines=$(wc -l <"$syms")
+            valid=$(awk 'NF >= 3 && $1 ~ /^[0-9A-Fa-f]+$/ { n++ } END { print n+0 }' "$syms")
+            printf 'KALLSYMS_DIAG file=%s lines=%s valid_addr_lines=%s\n' "$(basename "$syms")" "$lines" "$valid" | tee -a "$diag"
+            echo '--- head ---' >>"$diag"
+            sed -n '1,8p' "$syms" >>"$diag"
+            echo '--- tail ---' >>"$diag"
+            tail -n 8 "$syms" >>"$diag"
+          done
+          stderr_files=("$ev"/early/.tmp_vmlinux.kallsyms*.ld.stderr.txt "$ev"/early/.tmp_vmlinux.kallsyms*.mksysmap.stderr.txt)
+          for f in "${stderr_files[@]}"; do
+            printf 'KALLSYMS_DIAG_STDERR file=%s bytes=%s\n' "$(basename "$f")" "$(wc -c <"$f")" | tee -a "$diag"
+            if [[ -s "$f" ]]; then
+              sed -n '1,40p' "$f" >>"$diag"
+            fi
+          done
+          shopt -u nullglob
+          cat "$diag"
+
+          if [[ "$relink_rc" -ne 0 ]]; then
+            echo "EARLY_LINK_DIAGNOSTIC_RC=$relink_rc"
+            exit "$relink_rc"
+          fi
+
+          grep -F 'EARLY_LINK_KALLSYMS_CONSISTENT=PASS' "$ev/early/kallsyms-status.txt"
+          grep -F 'EARLY_LINK_KALLSYMS_SYMBOL=PASS' "$ev/early/kallsyms-status.txt"
+          grep -E ' [Tt] (die|get_symbol_pos)$| (kallsyms_offsets|kallsyms_addresses|kallsyms_relative_base|kallsyms_num_syms)$' "$ev/early/nm.txt" | tee "$ev/key-symbols.txt" || true
+
+      - name: Capture primary fault after generated kallsyms
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-generated-kallsyms-first-die-v0"
+          qemu_log="$ev/qemu.console.log"
+          qemu_debug="$ev/qemu.debug.log"
+          gdb_cmd="$ev/capture.gdb"
+          gdb_out="$ev/gdb-first-die.txt"
+
+          cat >"$gdb_cmd" <<GDB
+          set pagination off
+          set confirm off
+          file $ev/early/vmlinux.early
+          target remote 127.0.0.1:1234
+          hbreak die
+          continue
+          printf "FIRST_DIE_HIT=PASS\\n"
+          set \$regs = \$a0
+          set \$epc = *(unsigned long *)(\$regs + 0)
+          set \$saved_ra = *(unsigned long *)(\$regs + 8)
+          set \$saved_sp = *(unsigned long *)(\$regs + 16)
+          set \$saved_status = *(unsigned long *)(\$regs + 256)
+          set \$saved_badaddr = *(unsigned long *)(\$regs + 264)
+          set \$saved_cause = *(unsigned long *)(\$regs + 272)
+          printf "EPC=0x%lx\\n", \$epc
+          printf "SAVED_RA=0x%lx\\n", \$saved_ra
+          printf "SAVED_SP=0x%lx\\n", \$saved_sp
+          printf "STATUS=0x%lx\\n", \$saved_status
+          printf "BADADDR=0x%lx\\n", \$saved_badaddr
+          printf "CAUSE=0x%lx\\n", \$saved_cause
+          detach
+          quit
+          GDB
+
+          qemu-system-riscv64 \
+            -M virt -cpu max -m 512M -smp 1 -nographic -no-reboot \
+            -bios default -kernel "$ev/early/Image.early" \
+            -append 'console=ttyS0 earlycon=sbi loglevel=8 panic=-1' \
+            -S -gdb tcp:127.0.0.1:1234 -d int -D "$qemu_debug" \
+            >"$qemu_log" 2>&1 &
+          qpid=$!
+          cleanup() {
+            kill "$qpid" 2>/dev/null || true
+            wait "$qpid" 2>/dev/null || true
+          }
+          trap cleanup EXIT
+          sleep 1
+
+          set +e
+          timeout 45s gdb-multiarch -q -batch -x "$gdb_cmd" >"$gdb_out" 2>&1
+          grc=$?
+          set -e
+          echo "GDB_RC=$grc" | tee "$ev/gdb-rc.txt"
+          cat "$gdb_out"
+
+          python3 - "$gdb_out" "$ev/early/nm.txt" "$ev/qemu.console.log" "$ev/result.txt" <<'PY'
+          from bisect import bisect_right
+          from pathlib import Path
+          import re, sys
+
+          gdb = Path(sys.argv[1]).read_text(errors='replace')
+          nm_lines = Path(sys.argv[2]).read_text(errors='replace').splitlines()
+          console = Path(sys.argv[3]).read_text(errors='replace') if Path(sys.argv[3]).exists() else ''
+          out = Path(sys.argv[4])
+          syms = []
+          for line in nm_lines:
+              parts = line.split(None, 2)
+              if len(parts) != 3:
+                  continue
+              try: addr = int(parts[0], 16)
+              except ValueError: continue
+              syms.append((addr, parts[2]))
+          syms.sort()
+          addrs = [a for a, _ in syms]
+          def resolve(v):
+              i = bisect_right(addrs, v) - 1
+              if i < 0: return 'none'
+              a, n = syms[i]
+              return f'{n}+0x{v-a:x} @0x{a:x}'
+
+          hit = 'FIRST_DIE_HIT=PASS' in gdb
+          lines = [f'FIRST_DIE_HIT={"YES" if hit else "NO_WITHIN_45S"}']
+          if hit:
+              vals = {}
+              for key in ('EPC','SAVED_RA','SAVED_SP','STATUS','BADADDR','CAUSE'):
+                  m = re.search(rf'^{key}=(0x[0-9a-fA-F]+)$', gdb, re.M)
+                  if not m: raise SystemExit(f'missing {key}')
+                  vals[key] = int(m.group(1), 16)
+              cause_names = {0:'instruction-address-misaligned',1:'instruction-access-fault',2:'illegal-instruction',3:'breakpoint',4:'load-address-misaligned',5:'load-access-fault',6:'store-amo-address-misaligned',7:'store-amo-access-fault',8:'ecall-u',9:'ecall-s',11:'ecall-m',12:'instruction-page-fault',13:'load-page-fault',15:'store-amo-page-fault'}
+              cause = vals['CAUSE'] & ((1 << 63) - 1)
+              epc_nearest = resolve(vals['EPC'])
+              lines += [
+                  f"EPC=0x{vals['EPC']:x}",
+                  f"EPC_NEAREST={epc_nearest}",
+                  f"SAVED_RA=0x{vals['SAVED_RA']:x}",
+                  f"SAVED_RA_NEAREST={resolve(vals['SAVED_RA'])}",
+                  f"BADADDR=0x{vals['BADADDR']:x}",
+                  f"CAUSE=0x{vals['CAUSE']:x}",
+                  f"CAUSE_NAME={cause_names.get(cause, 'unknown')}",
+                  f"GET_SYMBOL_POS_FAULT={'YES' if epc_nearest.startswith('get_symbol_pos+') else 'NO'}",
+              ]
+          markers = [
+              ('START_KERNEL', 'start_kernel'), ('VFS_CACHES', 'VFS: Disk quotas'),
+              ('NET', 'NET:'), ('RUN_INIT', 'Run /init as init process'),
+          ]
+          for key, needle in markers:
+              lines.append(f'CONSOLE_{key}={"YES" if needle in console else "NO"}')
+          out.write_text('\n'.join(lines) + '\n')
+          print(out.read_text(), end='')
+          PY
+
+          if grep -Fq 'GET_SYMBOL_POS_FAULT=YES' "$ev/result.txt"; then
+            echo 'GENERATED_KALLSYMS_FIRST_DIE=REGRESSED_GET_SYMBOL_POS'
+            exit 1
+          fi
+          echo 'GENERATED_KALLSYMS_FIRST_DIE=PASS'
+
+      - name: Preserve generated-kallsyms evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-runtime-generated-kallsyms-first-die-v0-${{ github.sha }}
+          path: |
+            build/linux-runtime-generated-kallsyms-first-die-v0/profile/patch.log
+            build/linux-runtime-generated-kallsyms-first-die-v0/kallsyms*.txt
+            build/linux-runtime-generated-kallsyms-first-die-v0/kallsyms*.sha256
+            build/linux-runtime-generated-kallsyms-first-die-v0/*refresh.log
+            build/linux-runtime-generated-kallsyms-first-die-v0/link.log
+            build/linux-runtime-generated-kallsyms-first-die-v0/key-symbols.txt
+            build/linux-runtime-generated-kallsyms-first-die-v0/kallsyms-pass-diagnostics.txt
+            build/linux-runtime-generated-kallsyms-first-die-v0/gdb-first-die.txt
+            build/linux-runtime-generated-kallsyms-first-die-v0/gdb-rc.txt
+            build/linux-runtime-generated-kallsyms-first-die-v0/result.txt
+            build/linux-runtime-generated-kallsyms-first-die-v0/qemu.console.log
+            build/linux-runtime-generated-kallsyms-first-die-v0/qemu.debug.log
+            build/linux-runtime-generated-kallsyms-first-die-v0/early/kallsyms-status.txt
+            build/linux-runtime-generated-kallsyms-first-die-v0/early/kallsyms-symbols.txt
+            build/linux-runtime-generated-kallsyms-first-die-v0/early/System.map.early
+            build/linux-runtime-generated-kallsyms-first-die-v0/early/nm.txt
+            build/linux-runtime-generated-kallsyms-first-die-v0/early/.tmp_vmlinux.kallsyms*.syms
+            build/linux-runtime-generated-kallsyms-first-die-v0/early/.tmp_vmlinux.kallsyms*.ld.stderr.txt
+            build/linux-runtime-generated-kallsyms-first-die-v0/early/.tmp_vmlinux.kallsyms*.mksysmap.stderr.txt
+          if-no-files-found: warn
+          include-hidden-files: true
+          retention-days: 7
+
+  # Retained exact specialized job from linux-runtime-first-die-context-v0.yml.
+    concurrency:
+      group: linux-runtime-generated-kallsyms-first-die-${{ github.ref }}-generated-kallsyms-first-die
+      cancel-in-progress: true
+
+  kallsyms-first-fault-abc:
+    if: (github.event_name == 'workflow_dispatch' && (inputs.mode == 'three-way' || inputs.mode == 'all')) || (github.event_name == 'push' && contains(github.event.head_commit.message, '[linux-kallsyms-three-way]'))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 18
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Restore certified full linked fixture
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-expanded-kbuild-v0/out
+          key: linux-expanded-mixed-v1-6.6.143-Linux-d30569a4c675f6ac72d9f63c28f0b8745317f7a15c0799d10768f916d74b3a88
+          fail-on-cache-miss: true
+
+      - name: Restore pinned Linux source
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-expanded-kbuild-v0/linux-6.6.143
+          key: linux-source-6.6.143-dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932-v1
+          fail-on-cache-miss: true
+
+      - name: Restore certified frozen linker source subset
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-runtime-frozen-v1
+          key: linux-runtime-frozen-v1-6.6.143-e538a6ad42ec49c5a667cab5de9bb943f82ca702ff2b7749a020e38ff7ddaea7
+          fail-on-cache-miss: true
+
+      - name: Install prerequisites
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get -o Acquire::Retries=2 install -y --no-install-recommends gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu qemu-system-misc opensbi gdb-multiarch python3 make \
+            || { sudo apt-get -o Acquire::Retries=3 update; sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu qemu-system-misc opensbi gdb-multiarch python3 make; }
+
+      - name: Freeze cached kallsyms object
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0"
+          out="$work/out"
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-kallsyms-first-fault-abc-v0"
+          mkdir -p "$ev/objects"
+          test -s "$out/kernel/kallsyms.o"
+          cp "$out/kernel/kallsyms.o" "$ev/objects/kallsyms.cached.o"
+          sha256sum "$ev/objects/kallsyms.cached.o" | tee "$ev/cached.sha256"
+          riscv64-linux-gnu-readelf -rW "$ev/objects/kallsyms.cached.o" >"$ev/cached.relocs.txt"
+          grep -E 'kallsyms_(offsets|addresses|percpu_absolute)' "$ev/cached.relocs.txt" | tee "$ev/cached.kallsyms-relocs.txt" || true
+
+      - name: Build exact Linux runtime MiniC profile
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-kallsyms-first-fault-abc-v0"
+          build="$GITHUB_WORKSPACE/build/toolchain-runtime-kallsyms-first-fault-abc-v0"
+          bash tools/ci/linux-runtime-build-minic-profile-v1.sh "$build" "$ev/profile"
+          grep -F 'MINIC_INLINE_ASM_LOCAL_INTEGER_FACTS_V0=APPLIED' "$ev/profile/patch.log"
+          grep -F 'MINIC_INLINE_ASM_RK_CAST_TAIL_V0=APPLIED' "$ev/profile/patch.log"
+          grep -F 'MINIC_RISCV64_PI_LOCAL_SYMBOL_ADDRESS_V0=APPLIED' "$ev/profile/patch.log"
+
+      - name: Build GCC and current MiniC kallsyms variants
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0"
+          src="$work/linux-6.6.143"
+          out="$work/out"
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-kallsyms-first-fault-abc-v0"
+          build="$GITHUB_WORKSPACE/build/toolchain-runtime-kallsyms-first-fault-abc-v0"
+          wrapper="$GITHUB_WORKSPACE/tests/external/linux/stage2_kbuild_cc.sh"
+
+          rm -f "$out/kernel/kallsyms.o" "$out/kernel/.kallsyms.o.cmd"
+          make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- CC=/usr/bin/riscv64-linux-gnu-gcc -j2 V=1 kernel/kallsyms.o >"$ev/gcc-build.log" 2>&1
+          test -s "$out/kernel/kallsyms.o"
+          cp "$out/kernel/kallsyms.o" "$ev/objects/kallsyms.gcc.o"
+          sha256sum "$ev/objects/kallsyms.gcc.o" | tee "$ev/gcc.sha256"
+          riscv64-linux-gnu-readelf -rW "$ev/objects/kallsyms.gcc.o" >"$ev/gcc.relocs.txt"
+          grep -E 'kallsyms_(offsets|addresses|percpu_absolute)' "$ev/gcc.relocs.txt" | tee "$ev/gcc.kallsyms-relocs.txt" || true
+
+          rm -f "$out/kernel/kallsyms.o" "$out/kernel/.kallsyms.o.cmd" "$out/kernel/kallsyms.minic-stage2.i" "$out/kernel/kallsyms.minic-stage2.s"
+          MINIC="$build/bin/minic" REAL_CC=/usr/bin/riscv64-linux-gnu-gcc MINIC_KEEP_INTERMEDIATES=1 \
+            make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- CC="$wrapper" -j2 V=1 kernel/kallsyms.o >"$ev/minic-build.log" 2>&1
+          test -s "$out/kernel/kallsyms.o"
+          cp "$out/kernel/kallsyms.o" "$ev/objects/kallsyms.minic.o"
+          cp "$out/kernel/kallsyms.minic-stage2.i" "$ev/kallsyms.minic-stage2.i" || true
+          cp "$out/kernel/kallsyms.minic-stage2.s" "$ev/kallsyms.minic-stage2.s" || true
+          sha256sum "$ev/objects/kallsyms.minic.o" | tee "$ev/minic.sha256"
+          riscv64-linux-gnu-readelf -rW "$ev/objects/kallsyms.minic.o" >"$ev/minic.relocs.txt"
+          grep -E 'kallsyms_(offsets|addresses|percpu_absolute)' "$ev/minic.relocs.txt" | tee "$ev/minic.kallsyms-relocs.txt" || true
+
+      - name: Refresh all non-kallsyms runtime owners with current MiniC
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0"
+          src="$work/linux-6.6.143"
+          out="$work/out"
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-kallsyms-first-fault-abc-v0"
+          build="$GITHUB_WORKSPACE/build/toolchain-runtime-kallsyms-first-fault-abc-v0"
+          wrapper="$GITHUB_WORKSPACE/tests/external/linux/stage2_kbuild_cc.sh"
+
+          refresh_obj() {
+            target="$1"; log="$2"
+            base="${target%.o}"; dir="${target%/*}"; stem="${target##*/}"; stem="${stem%.o}"
+            rm -f "$out/$target" "$out/$dir/.${stem}.o.cmd" "$out/$base.minic-stage2.i" "$out/$base.minic-stage2.s"
+            MINIC="$build/bin/minic" REAL_CC=/usr/bin/riscv64-linux-gnu-gcc MINIC_KEEP_INTERMEDIATES=1 \
+              make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- CC="$wrapper" -j2 V=1 "$target" >"$ev/$log" 2>&1
+            test -s "$out/$target"
+            echo "OWNER_REFRESH=PASS target=$target"
+          }
+
+          pi_target=arch/riscv/kernel/pi/cmdline_early.pi.o
+          pi_base=arch/riscv/kernel/pi/cmdline_early
+          rm -f "$out/$pi_base.o" "$out/$pi_target" "$out/arch/riscv/kernel/pi/.cmdline_early.o.cmd" "$out/arch/riscv/kernel/pi/.cmdline_early.pi.o.cmd" "$out/$pi_base.minic-stage2.i" "$out/$pi_base.minic-stage2.s"
+          MINIC="$build/bin/minic" REAL_CC=/usr/bin/riscv64-linux-gnu-gcc MINIC_KEEP_INTERMEDIATES=1 \
+            make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- CC="$wrapper" -j2 V=1 "$pi_target" >"$ev/pi-owner-refresh.log" 2>&1
+          test -s "$out/$pi_target"
+
+          refresh_obj arch/riscv/mm/init.o init-refresh.log
+          refresh_obj arch/riscv/kernel/setup.o setup-refresh.log
+          refresh_obj kernel/sched/core.o sched-core-refresh.log
+          refresh_obj arch/riscv/kernel/irq.o irq-refresh.log
+          refresh_obj kernel/locking/spinlock.o spinlock-refresh.log
+          refresh_obj kernel/locking/spinlock_debug.o spinlock_debug-refresh.log
+          refresh_obj kernel/sched/build_utility.o build_utility-refresh.log
+          refresh_obj kernel/time/timekeeping.o timekeeping-refresh.log
+          refresh_obj kernel/time/vsyscall.o vsyscall-refresh.log
+          refresh_obj kernel/notifier.o notifier-refresh.log
+          refresh_obj kernel/sched/build_policy.o build_policy-refresh.log
+          refresh_obj kernel/time/timer.o timer-refresh.log
+          refresh_obj kernel/time/hrtimer.o hrtimer-refresh.log
+          refresh_obj kernel/time/tick-sched.o tick-sched-refresh.log
+          refresh_obj kernel/rcu/tree.o rcu-tree-refresh.log
+          refresh_obj kernel/rcu/rcu_segcblist.o rcu-segcblist-refresh.log
+          refresh_obj init/main.o init-main-refresh.log
+          refresh_obj kernel/softirq.o softirq-refresh.log
+
+      - name: Relink and capture first fault for cached GCC and MiniC variants
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0"
+          out="$work/out"
+          frozen="$GITHUB_WORKSPACE/build/linux-runtime-frozen-v1"
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-kallsyms-first-fault-abc-v0"
+
+          capture_variant() {
+            variant="$1"
+            obj="$ev/objects/kallsyms.${variant}.o"
+            vev="$ev/$variant"
+            mkdir -p "$vev"
+            test -s "$obj"
+            cp "$obj" "$out/kernel/kallsyms.o"
+            sha256sum "$out/kernel/kallsyms.o" | tee "$vev/selected-object.sha256"
+
+            bash tools/ci/linux-early-runtime-link-v2.sh "$frozen/src" "$out" "$vev/early" | tee "$vev/link.log"
+            grep -E ' [Tt] (die|get_symbol_pos)$| die_lock$' "$vev/early/nm.txt" | tee "$vev/key-symbols.txt" || true
+
+            qemu_log="$vev/qemu.console.log"
+            qemu_debug="$vev/qemu.debug.log"
+            gdb_cmd="$vev/capture.gdb"
+            gdb_out="$vev/gdb-first-die.txt"
+
+            cat >"$gdb_cmd" <<GDB
+          set pagination off
+          set confirm off
+          file $vev/early/vmlinux.early
+          target remote 127.0.0.1:1234
+          hbreak die
+          continue
+          printf "FIRST_DIE_HIT=PASS\\n"
+          printf "REGS=0x%lx\\n", \$a0
+          printf "STR=0x%lx\\n", \$a1
+          set \$regs = \$a0
+          set \$epc = *(unsigned long *)(\$regs + 0)
+          set \$saved_ra = *(unsigned long *)(\$regs + 8)
+          set \$saved_sp = *(unsigned long *)(\$regs + 16)
+          set \$saved_status = *(unsigned long *)(\$regs + 256)
+          set \$saved_badaddr = *(unsigned long *)(\$regs + 264)
+          set \$saved_cause = *(unsigned long *)(\$regs + 272)
+          printf "EPC=0x%lx\\n", \$epc
+          printf "SAVED_RA=0x%lx\\n", \$saved_ra
+          printf "SAVED_SP=0x%lx\\n", \$saved_sp
+          printf "STATUS=0x%lx\\n", \$saved_status
+          printf "BADADDR=0x%lx\\n", \$saved_badaddr
+          printf "CAUSE=0x%lx\\n", \$saved_cause
+          detach
+          quit
+          GDB
+
+            qemu-system-riscv64 \
+              -M virt -cpu max -m 512M -smp 1 -nographic -no-reboot \
+              -bios default -kernel "$vev/early/Image.early" \
+              -append 'console=ttyS0 earlycon=sbi loglevel=8 panic=-1' \
+              -S -gdb tcp:127.0.0.1:1234 -d int -D "$qemu_debug" \
+              >"$qemu_log" 2>&1 &
+            qpid=$!
+            sleep 1
+            set +e
+            timeout 35s gdb-multiarch -q -batch -x "$gdb_cmd" >"$gdb_out" 2>&1
+            grc=$?
+            set -e
+            kill "$qpid" 2>/dev/null || true
+            wait "$qpid" 2>/dev/null || true
+            echo "GDB_RC=$grc" | tee "$vev/gdb-rc.txt"
+            cat "$gdb_out"
+
+            if grep -Fq 'FIRST_DIE_HIT=PASS' "$gdb_out"; then
+              python3 - "$gdb_out" "$vev/early/nm.txt" "$vev/resolved-first-die.txt" <<'PY'
+          from bisect import bisect_right
+          from pathlib import Path
+          import re, sys
+
+          gdb = Path(sys.argv[1]).read_text(errors='replace')
+          nm_lines = Path(sys.argv[2]).read_text(errors='replace').splitlines()
+          out = Path(sys.argv[3])
+
+          vals = {}
+          for key in ('EPC', 'SAVED_RA', 'SAVED_SP', 'STATUS', 'BADADDR', 'CAUSE'):
+              m = re.search(rf'^{key}=(0x[0-9a-fA-F]+)$', gdb, re.M)
+              if not m:
+                  raise SystemExit(f'missing {key}')
+              vals[key] = int(m.group(1), 16)
+
+          syms = []
+          for line in nm_lines:
+              parts = line.split(None, 2)
+              if len(parts) != 3:
+                  continue
+              try:
+                  addr = int(parts[0], 16)
+              except ValueError:
+                  continue
+              syms.append((addr, parts[2]))
+          syms.sort()
+          addrs = [x[0] for x in syms]
+
+          def resolve(value):
+              i = bisect_right(addrs, value) - 1
+              if i < 0:
+                  return 'none'
+              addr, name = syms[i]
+              return f'{name}+0x{value-addr:x} @0x{addr:x}'
+
+          cause_names = {
+              0: 'instruction-address-misaligned', 1: 'instruction-access-fault',
+              2: 'illegal-instruction', 3: 'breakpoint', 4: 'load-address-misaligned',
+              5: 'load-access-fault', 6: 'store-amo-address-misaligned',
+              7: 'store-amo-access-fault', 8: 'ecall-u', 9: 'ecall-s', 11: 'ecall-m',
+              12: 'instruction-page-fault', 13: 'load-page-fault', 15: 'store-amo-page-fault',
+          }
+          cause = vals['CAUSE'] & ((1 << 63) - 1)
+          lines = [
+              'FIRST_DIE_HIT=YES',
+              f"EPC=0x{vals['EPC']:x}",
+              f"EPC_NEAREST={resolve(vals['EPC'])}",
+              f"SAVED_RA=0x{vals['SAVED_RA']:x}",
+              f"SAVED_RA_NEAREST={resolve(vals['SAVED_RA'])}",
+              f"SAVED_SP=0x{vals['SAVED_SP']:x}",
+              f"STATUS=0x{vals['STATUS']:x}",
+              f"BADADDR=0x{vals['BADADDR']:x}",
+              f"CAUSE=0x{vals['CAUSE']:x}",
+              f"CAUSE_NAME={cause_names.get(cause, 'unknown')}",
+          ]
+          out.write_text('\n'.join(lines) + '\n')
+          print(out.read_text(), end='')
+          PY
+            else
+              printf 'FIRST_DIE_HIT=NO_WITHIN_35S\nGDB_RC=%s\n' "$grc" | tee "$vev/resolved-first-die.txt"
+            fi
+          }
+
+          capture_variant cached
+          capture_variant gcc
+          capture_variant minic
+
+      - name: Classify three-way first-fault result
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-kallsyms-first-fault-abc-v0"
+          python3 - "$ev" <<'PY'
+          from pathlib import Path
+          import re, sys
+
+          root = Path(sys.argv[1])
+          rows = {}
+          for variant in ('cached', 'gcc', 'minic'):
+              text = (root / variant / 'resolved-first-die.txt').read_text(errors='replace')
+              hit = 'FIRST_DIE_HIT=YES' in text
+              m = re.search(r'^EPC_NEAREST=(.+)$', text, re.M)
+              nearest = m.group(1) if m else 'none-within-window'
+              kallsyms_fault = hit and nearest.startswith('get_symbol_pos+')
+              rows[variant] = (hit, nearest, kallsyms_fault)
+
+          cached_hit, cached_nearest, cached_fault = rows['cached']
+          gcc_hit, gcc_nearest, gcc_fault = rows['gcc']
+          minic_hit, minic_nearest, minic_fault = rows['minic']
+
+          if not cached_fault:
+              verdict = 'INCONCLUSIVE_CACHED_DID_NOT_REPRODUCE'
+          elif gcc_fault:
+              verdict = 'REFERENCE_ALSO_FAULTS_GET_SYMBOL_POS'
+          elif minic_fault:
+              verdict = 'CURRENT_MINIC_STILL_FAULTS_GET_SYMBOL_POS'
+          else:
+              verdict = 'STALE_CACHED_KALLSYMS_CONFIRMED'
+
+          lines = []
+          for variant in ('cached', 'gcc', 'minic'):
+              hit, nearest, kfault = rows[variant]
+              lines.append(f'{variant.upper()}_FIRST_DIE_HIT={"YES" if hit else "NO_WITHIN_WINDOW"}')
+              lines.append(f'{variant.upper()}_EPC_NEAREST={nearest}')
+              lines.append(f'{variant.upper()}_GET_SYMBOL_POS_FAULT={"YES" if kfault else "NO"}')
+          lines.append(f'KALLSYMS_FIRST_FAULT_ABC_VERDICT={verdict}')
+          summary = '\n'.join(lines) + '\n'
+          (root / 'abc-summary.txt').write_text(summary)
+          print(summary, end='')
+
+          if verdict == 'INCONCLUSIVE_CACHED_DID_NOT_REPRODUCE':
+              raise SystemExit(2)
+          PY
+
+      - name: Preserve three-way kallsyms first-fault evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-runtime-kallsyms-first-fault-abc-v0-${{ github.sha }}
+          path: build/linux-runtime-kallsyms-first-fault-abc-v0/
+          if-no-files-found: warn
+          retention-days: 7
+
+  # Retained exact specialized job from linux-runtime-kallsyms-object-diagnose-v0.yml.
+    concurrency:
+      group: linux-runtime-generated-kallsyms-first-die-${{ github.ref }}-kallsyms-first-fault-abc
+      cancel-in-progress: true
+
+  kallsyms-object-diagnose:
+    if: (github.event_name == 'workflow_dispatch' && (inputs.mode == 'object' || inputs.mode == 'all')) || (github.event_name == 'push' && contains(github.event.head_commit.message, '[linux-kallsyms-object]'))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 14
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Restore certified full linked fixture
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-expanded-kbuild-v0/out
+          key: linux-expanded-mixed-v1-6.6.143-Linux-d30569a4c675f6ac72d9f63c28f0b8745317f7a15c0799d10768f916d74b3a88
+          fail-on-cache-miss: true
+
+      - name: Restore pinned Linux source
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-expanded-kbuild-v0/linux-6.6.143
+          key: linux-source-6.6.143-dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932-v1
+          fail-on-cache-miss: true
+
+      - name: Install RISC-V toolchain
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get -o Acquire::Retries=2 install -y --no-install-recommends gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu make python3 \
+            || { sudo apt-get -o Acquire::Retries=3 update; sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu make python3; }
+
+      - name: Record exact kallsyms config and cached object
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0"
+          out="$work/out"
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-kallsyms-object-diagnose-v0"
+          mkdir -p "$ev"
+
+          grep -E '^(CONFIG_KALLSYMS|# CONFIG_KALLSYMS)' "$out/.config" | tee "$ev/kallsyms-config.txt"
+          test -s "$out/kernel/kallsyms.o"
+          cp "$out/kernel/kallsyms.o" "$ev/kallsyms.cached.o"
+          sha256sum "$ev/kallsyms.cached.o" | tee "$ev/cached.sha256"
+          riscv64-linux-gnu-readelf -sW "$ev/kallsyms.cached.o" >"$ev/cached.symbols.txt"
+          riscv64-linux-gnu-readelf -rW "$ev/kallsyms.cached.o" >"$ev/cached.relocs.txt"
+          riscv64-linux-gnu-objdump -dr "$ev/kallsyms.cached.o" >"$ev/cached.objdump.txt"
+          sed -n '/<get_symbol_pos>:/,/^$/p' "$ev/cached.objdump.txt" | tee "$ev/cached.get_symbol_pos.txt"
+          grep -E 'kallsyms_(offsets|addresses|percpu_absolute)' "$ev/cached.relocs.txt" | tee "$ev/cached.kallsyms-relocs.txt" || true
+
+      - name: Rebuild kallsyms.o with GCC reference
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0"
+          src="$work/linux-6.6.143"
+          out="$work/out"
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-kallsyms-object-diagnose-v0"
+
+          rm -f "$out/kernel/kallsyms.o" "$out/kernel/.kallsyms.o.cmd"
+          make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- CC=/usr/bin/riscv64-linux-gnu-gcc -j2 V=1 kernel/kallsyms.o >"$ev/gcc-build.log" 2>&1
+          test -s "$out/kernel/kallsyms.o"
+          cp "$out/kernel/kallsyms.o" "$ev/kallsyms.gcc.o"
+          sha256sum "$ev/kallsyms.gcc.o" | tee "$ev/gcc.sha256"
+          riscv64-linux-gnu-readelf -sW "$ev/kallsyms.gcc.o" >"$ev/gcc.symbols.txt"
+          riscv64-linux-gnu-readelf -rW "$ev/kallsyms.gcc.o" >"$ev/gcc.relocs.txt"
+          riscv64-linux-gnu-objdump -dr "$ev/kallsyms.gcc.o" >"$ev/gcc.objdump.txt"
+          sed -n '/<get_symbol_pos>:/,/^$/p' "$ev/gcc.objdump.txt" | tee "$ev/gcc.get_symbol_pos.txt"
+          grep -E 'kallsyms_(offsets|addresses|percpu_absolute)' "$ev/gcc.relocs.txt" | tee "$ev/gcc.kallsyms-relocs.txt" || true
+
+      - name: Build exact runtime MiniC profile
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-kallsyms-object-diagnose-v0"
+          build="$GITHUB_WORKSPACE/build/toolchain-runtime-kallsyms-object-diagnose-v0"
+          bash tools/ci/linux-runtime-build-minic-profile-v1.sh "$build" "$ev/profile"
+          grep -F 'MINIC_INLINE_ASM_LOCAL_INTEGER_FACTS_V0=APPLIED' "$ev/profile/patch.log"
+          grep -F 'MINIC_INLINE_ASM_RK_CAST_TAIL_V0=APPLIED' "$ev/profile/patch.log"
+          grep -F 'MINIC_RISCV64_PI_LOCAL_SYMBOL_ADDRESS_V0=APPLIED' "$ev/profile/patch.log"
+
+      - name: Rebuild kallsyms.o with current MiniC
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0"
+          src="$work/linux-6.6.143"
+          out="$work/out"
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-kallsyms-object-diagnose-v0"
+          build="$GITHUB_WORKSPACE/build/toolchain-runtime-kallsyms-object-diagnose-v0"
+          wrapper="$GITHUB_WORKSPACE/tests/external/linux/stage2_kbuild_cc.sh"
+
+          rm -f "$out/kernel/kallsyms.o" "$out/kernel/.kallsyms.o.cmd" "$out/kernel/kallsyms.minic-stage2.i" "$out/kernel/kallsyms.minic-stage2.s"
+          MINIC="$build/bin/minic" REAL_CC=/usr/bin/riscv64-linux-gnu-gcc MINIC_KEEP_INTERMEDIATES=1 \
+            make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- CC="$wrapper" -j2 V=1 kernel/kallsyms.o >"$ev/minic-build.log" 2>&1
+          test -s "$out/kernel/kallsyms.o"
+          cp "$out/kernel/kallsyms.o" "$ev/kallsyms.minic.o"
+          cp "$out/kernel/kallsyms.minic-stage2.i" "$ev/kallsyms.minic-stage2.i" || true
+          cp "$out/kernel/kallsyms.minic-stage2.s" "$ev/kallsyms.minic-stage2.s" || true
+          sha256sum "$ev/kallsyms.minic.o" | tee "$ev/minic.sha256"
+          riscv64-linux-gnu-readelf -sW "$ev/kallsyms.minic.o" >"$ev/minic.symbols.txt"
+          riscv64-linux-gnu-readelf -rW "$ev/kallsyms.minic.o" >"$ev/minic.relocs.txt"
+          riscv64-linux-gnu-objdump -dr "$ev/kallsyms.minic.o" >"$ev/minic.objdump.txt"
+          sed -n '/<get_symbol_pos>:/,/^$/p' "$ev/minic.objdump.txt" | tee "$ev/minic.get_symbol_pos.txt"
+          grep -E 'kallsyms_(offsets|addresses|percpu_absolute)' "$ev/minic.relocs.txt" | tee "$ev/minic.kallsyms-relocs.txt" || true
+
+      - name: Summarize object provenance and codegen delta
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-kallsyms-object-diagnose-v0"
+          {
+            echo '=== CONFIG ==='
+            cat "$ev/kallsyms-config.txt"
+            echo '=== SHA256 ==='
+            cat "$ev/cached.sha256" "$ev/gcc.sha256" "$ev/minic.sha256"
+            echo '=== cached vs gcc ==='
+            cmp -s "$ev/kallsyms.cached.o" "$ev/kallsyms.gcc.o" && echo 'CACHED_EQUALS_GCC=YES' || echo 'CACHED_EQUALS_GCC=NO'
+            echo '=== cached vs minic ==='
+            cmp -s "$ev/kallsyms.cached.o" "$ev/kallsyms.minic.o" && echo 'CACHED_EQUALS_MINIC=YES' || echo 'CACHED_EQUALS_MINIC=NO'
+            echo '=== GCC relevant relocs ==='
+            cat "$ev/gcc.kallsyms-relocs.txt"
+            echo '=== MiniC relevant relocs ==='
+            cat "$ev/minic.kallsyms-relocs.txt"
+          } | tee "$ev/summary.txt"
+          diff -u "$ev/gcc.get_symbol_pos.txt" "$ev/minic.get_symbol_pos.txt" >"$ev/get_symbol_pos.diff" || true
+          cat "$ev/get_symbol_pos.diff"
+
+      - name: Preserve kallsyms diagnostic evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-runtime-kallsyms-object-diagnose-v0-${{ github.sha }}
+          path: |
+            build/linux-runtime-kallsyms-object-diagnose-v0/
+          if-no-files-found: warn
+          retention-days: 7
+    concurrency:
+      group: linux-runtime-generated-kallsyms-first-die-${{ github.ref }}-kallsyms-object-diagnose
+      cancel-in-progress: true
+
