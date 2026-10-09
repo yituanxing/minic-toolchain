@@ -84,7 +84,11 @@ def main():
             raise AssertionError("Performance source changes do not trigger MiniC RV64 T1")
         if re.search(r"(?m)^  regressions:\n    if:",rv):
             raise AssertionError("Performance RV64 T1 can silently skip after push")
-        print("M0_PERF_RV64_PUSH=IN_SCOPE (real Performance T1 run still required)")
+        for owner in ("miniar-regressions-v1.yml","minild-regressions-v1.yml"):
+            t=(ROOT/".github/workflows"/owner).read_text()
+            if "      - \"agent/linux-perf-boolean-domain-v1\"" not in header(t):
+                raise AssertionError(f"Performance ELF archive/linker T1 owner missing: {owner}")
+        print("M0_PERF_T1=IN_SCOPE owners=3 (real T1 execution separately required)")
     print(f"M0_CI_TRIGGER_LEDGER=PASS branch={branch} maintained={len(local)} total=61 unique=34 route_checks=4 tier=T0")
 
 if __name__=="__main__":
