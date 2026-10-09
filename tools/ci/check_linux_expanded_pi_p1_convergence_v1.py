@@ -4,7 +4,10 @@ from pathlib import Path
 import os, re, subprocess
 
 ROOT=Path(__file__).resolve().parents[2]
-CANONICAL=ROOT/".github/workflows/linux-expanded-pi-p1-runtime-v1.yml"
+PERF = "agent/linux-perf-boolean-domain-v1"
+PERF_PI_ARCHIVE = ROOT / ".github/workflows-disabled/performance-retired-2026-10-09/linux-expanded-pi-p1-runtime-v1.yml"
+CANONICAL = (PERF_PI_ARCHIVE if os.environ.get("GITHUB_REF_NAME") == PERF else
+           ROOT / ".github/workflows/linux-expanded-pi-p1-runtime-v1.yml")
 TRACE_BLOBS={
  "agent/linux-expanded-kbuild-v0":"7b40efe922e288bb6dadab208f851849867d03b0",
  "agent/linux-perf-boolean-domain-v1":"ff15c0643a93b8025fb32766ad94bb46123ae67e",

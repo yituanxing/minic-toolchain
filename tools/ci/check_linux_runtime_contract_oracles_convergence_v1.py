@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 """Static regression for four original compiler semantics / QEMU watcher jobs."""
 from pathlib import Path
-import re, subprocess
+import os, re, subprocess
 ROOT=Path(__file__).resolve().parents[2]
-TARGET=ROOT/".github/workflows/linux-expanded-pi-p1-runtime-v1.yml"
+PERF = "agent/linux-perf-boolean-domain-v1"
+PERF_PI_ARCHIVE = ROOT / ".github/workflows-disabled/performance-retired-2026-10-09/linux-expanded-pi-p1-runtime-v1.yml"
+TARGET = (PERF_PI_ARCHIVE if os.environ.get("GITHUB_REF_NAME") == PERF else
+           ROOT / ".github/workflows/linux-expanded-pi-p1-runtime-v1.yml")
 ARCHIVES={
  "linux-runtime-compiler-semantics-v1.yml":("8601132b3f798dbfb0d57d3c3bb8eb802ea99c1b","semantics",("pi-local-symbol","satp-micro"),"linux-runtime-compiler-semantics-v1"),
  "linux-runtime-qemu-watch-contracts-v1.yml":("c7f1311975ffd5703d216d1973ff6aa206ca6370","watch",("qemu-watch-cert","inconclusive-cert"),"linux-runtime-qemu-watch-contracts-v1"),

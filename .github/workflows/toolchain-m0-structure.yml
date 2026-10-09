@@ -66,7 +66,7 @@ on:
       - "tools/ci/check_linux_runtime_contract_oracles_convergence_v1.py"
       - ".github/workflows/linux-efi-vdso-focused-v1.yml"
       - ".github/workflows-disabled/linux-runtime-contract-oracles-v1.yml"
-      - ".github/workflows/linux-expanded-pi-p1-runtime-v1.yml"
+      - ".github/workflows-disabled/performance-retired-2026-10-09/linux-expanded-pi-p1-runtime-v1.yml"
       - ".github/actions/linux-runtime-restore-fixture/**"
       - "tools/ci/check_linux_runtime_frontier_diagnostics_convergence_v1.py"
       - "tools/ci/check_linux_runtime_diagnostic_union_v1.py"
@@ -181,7 +181,7 @@ jobs:
       - name: Verify expanded PI/P1 Runtime diagnostic workflow convergence
         run: |
           python3 tools/ci/check_linux_expanded_pi_p1_convergence_v1.py
-          ruby -e 'require "yaml"; YAML.parse_file(ARGV.fetch(0)); puts "M0_LINUX_EXPANDED_PI_P1_YAML=PASS"' .github/workflows/linux-expanded-pi-p1-runtime-v1.yml
+          ruby -e 'require "yaml"; YAML.parse_file(ARGV.fetch(0)); puts "M0_LINUX_EXPANDED_PI_P1_YAML=PASS"' .github/workflows-disabled/performance-retired-2026-10-09/linux-expanded-pi-p1-runtime-v1.yml
 
       - name: Verify Linux EFI and vDSO focused oracle consolidation
         run: |
@@ -191,7 +191,7 @@ jobs:
       - name: Verify Linux compiler semantics and QEMU watch contract consolidation
         run: |
           python3 tools/ci/check_linux_runtime_contract_oracles_convergence_v1.py
-          ruby -e 'require "yaml"; YAML.parse_file(ARGV.fetch(0)); puts "M0_RUNTIME_CONTRACT_ORACLES_YAML=PASS"' .github/workflows/linux-expanded-pi-p1-runtime-v1.yml
+          ruby -e 'require "yaml"; YAML.parse_file(ARGV.fetch(0)); puts "M0_RUNTIME_CONTRACT_ORACLES_YAML=PASS"' .github/workflows-disabled/performance-retired-2026-10-09/linux-expanded-pi-p1-runtime-v1.yml
 
       - name: Check MiniAS focused and 3536 semantic oracle consolidation
         run: |
@@ -227,7 +227,7 @@ jobs:
       - name: Check early Runtime manual and push route truth table
         run: |
           python3 tools/ci/check_early_runtime_dispatch_v1.py
-          ruby -e 'require "yaml"; YAML.parse_file(ARGV.fetch(0)); puts "M0_EARLY_RUNTIME_ROUTING_YAML=PASS"' .github/workflows/linux-expanded-pi-p1-runtime-v1.yml
+          ruby -e 'require "yaml"; YAML.parse_file(ARGV.fetch(0)); puts "M0_EARLY_RUNTIME_ROUTING_YAML=PASS"' .github/workflows-disabled/performance-retired-2026-10-09/linux-expanded-pi-p1-runtime-v1.yml
 
       - name: Verify regression push path isolation from Runtime-only trigger files
         run: |
