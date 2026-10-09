@@ -1,9 +1,7 @@
 name: Linux Runtime Focused Fault and Frontier Diagnostics
 
 on:
-  push:
-    branches:
-      - "agent/linux-expanded-kbuild-v0"
+  workflow_call:
   workflow_dispatch:
     inputs:
       mode:

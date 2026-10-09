@@ -26,3 +26,15 @@ jobs:
   minias-gate:
     if: contains(github.event.head_commit.message, '[minias-gate-v1]') || contains(github.event.head_commit.message, '[minias-native-repro]')
     uses: ./.github/workflows/minias-a0-gate-v1.yml
+
+  runtime-early:
+    if: contains(github.event.head_commit.message, '[linux-expanded-pi-runtime]') || contains(github.event.head_commit.message, '[linux-expanded-runtime-p1]') || contains(github.event.head_commit.message, '[linux-expanded-entry-trace]') || contains(github.event.head_commit.message, '[linux-runtime-pi-local-symbol-v0]') || contains(github.event.head_commit.message, '[runtime-compiler-semantics-v1]') || contains(github.event.head_commit.message, '[linux-pi-micro]') || contains(github.event.head_commit.message, '[linux-runtime-qemu-watch-cert-v1]') || contains(github.event.head_commit.message, '[linux-runtime-qemu-watch-contracts-v1]') || contains(github.event.head_commit.message, '[linux-runtime-qemu-watch-inconclusive-v1]')
+    uses: ./.github/workflows/linux-expanded-pi-p1-runtime-v1.yml
+
+  runtime-faults:
+    if: contains(github.event.head_commit.message, '[linux-check-cpu-stall-runtime-v0]') || contains(github.event.head_commit.message, '[linux-fork-stack-runtime-v0]') || contains(github.event.head_commit.message, '[linux-runtime-fault-context-v1]') || contains(github.event.head_commit.message, '[linux-runtime-satp-refresh-v0]') || contains(github.event.head_commit.message, '[linux-runtime-frontier-v1]') || contains(github.event.head_commit.message, '[linux-runtime-frontier-fast-v5]') || contains(github.event.head_commit.message, '[linux-image-qemu-runtime-v0]')
+    uses: ./.github/workflows/linux-runtime-focused-faults-v1.yml
+
+  minild-integrations:
+    if: contains(github.event.head_commit.message, '[minild-dynamic-integration]') || contains(github.event.head_commit.message, '[minild-linux-rel-boundaries]') || contains(github.event.head_commit.message, '[static-runtime]')
+    uses: ./.github/workflows/minild-integration-v1.yml

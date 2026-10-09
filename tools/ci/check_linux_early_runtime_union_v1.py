@@ -69,8 +69,14 @@ def main():
     for mode in MODES:
         if "          - " + mode not in text:
             raise AssertionError(f"manual mode lost: {mode}")
-    if "default: p1" not in text or '"agent/linux-expanded-kbuild-v0"' not in text:
-        raise AssertionError("original default/Runtime push branch lost")
+    if "default: p1" not in text:
+        raise AssertionError("original manual default was lost")
+    header = text.split("\njobs:\n", 1)[0]
+    if branch == "agent/linux-expanded-kbuild-v0":
+        if "on:\n  workflow_call:\n  workflow_dispatch:" not in header or "  push:" in header:
+            raise AssertionError("Runtime early diagnostics must use canonical tag router")
+    elif '"agent/linux-expanded-kbuild-v0"' not in header:
+        raise AssertionError("Performance archived branch eligibility was altered")
     print(f"M0_EARLY_RUNTIME_UNION=PASS branch={branch} archived_canons=2 independent_jobs=7 exact_job_bodies=7")
 
 if __name__ == "__main__":

@@ -40,6 +40,22 @@ OWNERS = {
         '  push:\n    branches:\n      - "agent/linux-expanded-kbuild-v0"\n',
         ("[minias-gate-v1]", "[minias-native-repro]"), "minias-gate",
     ),
+    "linux-expanded-pi-p1-runtime-v1.yml": (
+        "9566e7d70e5ff0527e870b3b9ca6c06a715c8582",
+        '  push:\n    branches:\n      - "agent/linux-expanded-kbuild-v0"\n',
+        ("[linux-expanded-pi-runtime]", "[linux-expanded-runtime-p1]", "[linux-expanded-entry-trace]", "[linux-runtime-pi-local-symbol-v0]", "[runtime-compiler-semantics-v1]", "[linux-pi-micro]", "[linux-runtime-qemu-watch-cert-v1]", "[linux-runtime-qemu-watch-contracts-v1]", "[linux-runtime-qemu-watch-inconclusive-v1]"), "runtime-early",
+    ),
+    "linux-runtime-focused-faults-v1.yml": (
+        "589b2f5e5c1d9d89b4e52c6e42faf1383e616f79",
+        '  push:\n    branches:\n      - "agent/linux-expanded-kbuild-v0"\n',
+        ("[linux-check-cpu-stall-runtime-v0]", "[linux-fork-stack-runtime-v0]", "[linux-runtime-fault-context-v1]", "[linux-runtime-satp-refresh-v0]", "[linux-runtime-frontier-v1]", "[linux-runtime-frontier-fast-v5]", "[linux-image-qemu-runtime-v0]"), "runtime-faults",
+    ),
+    "minild-integration-v1.yml": (
+        "bb1e7ab8a728917324b652eba1fe1527efc1ee93",
+        '  push:\n    branches:\n      - "agent/linux-expanded-kbuild-v0"\n      - "agent/linux-perf-boolean-domain-v1"\n',
+        ("[minild-dynamic-integration]", "[minild-linux-rel-boundaries]", "[static-runtime]"),
+        "minild-integrations",
+    ),
 }
 
 def git_blob(payload: bytes) -> str:
@@ -68,11 +84,20 @@ def main():
         raise AssertionError(f"unexpected router jobs: {set(actual) ^ expected_ids}")
     for name, (original_sha, push_block, tags, job_id) in OWNERS.items():
         current = (ROOT / ".github/workflows" / name).read_text()
-        new_trigger = "on:\n  workflow_call:\n  workflow_dispatch:\n"
+        if name == "minild-integration-v1.yml":
+            # Performance retains its original unscoped opt-in push; Runtime
+            # must route through the same canonical owner via workflow_call.
+            new_trigger = ("on:\n  push:\n    branches:\n"
+                           '      - "agent/linux-perf-boolean-domain-v1"\n'
+                           "  workflow_call:\n  workflow_dispatch:\n")
+            header = current.split("\njobs:\n", 1)[0]
+            assert new_trigger in header and "agent/linux-expanded-kbuild-v0" not in header
+        else:
+            new_trigger = "on:\n  workflow_call:\n  workflow_dispatch:\n"
+            if "  push:" in current.split("\njobs:\n", 1)[0]:
+                raise AssertionError(f"duplicate direct push listener: {name}")
         if current.count(new_trigger) != 1:
             raise AssertionError(f"reusable / manual events missing: {name}")
-        if "  push:" in current.split("\njobs:\n", 1)[0]:
-            raise AssertionError(f"duplicate direct push listener: {name}")
         reconstructed = current.replace(new_trigger,
                                          "on:\n" + push_block + "  workflow_dispatch:\n", 1)
         if git_blob(reconstructed.encode()) != original_sha:
@@ -84,19 +109,24 @@ def main():
         if job != [expected_cond.strip(), expected_use]:
             raise AssertionError(f"router job has unreviewed conditions or arguments: {job_id}")
     all_tags = tuple(tag for spec in OWNERS.values() for tag in spec[2])
-    checks = 0
-    for count in range(len(all_tags)+1):
-        for subset in combinations(all_tags, count):
-            msg = "normal commit " + " ".join(subset)
-            observed = {spec[3] for spec in OWNERS.values()
-                        if any(tag in msg for tag in spec[2])}
-            expected = {spec[3] for spec in OWNERS.values()
-                        if set(spec[2]).intersection(subset)}
-            if observed != expected:
-                raise AssertionError(f"tag routing mismatch: {subset}")
-            checks += 1
-    print(f"M0_LEGACY_TAG_ROUTER=PASS owners=4 old_push_tags=6 cases={checks} "
-          "original_git_blobs=4 no_test_body_changes=1 source_only=1")
+    # Every individual tag, every pair, all grouped tags, and an empty push.
+    # Exhausting 2^22 combinations would be needless and slow for a T0 gate.
+    subsets = [()] + [(tag,) for tag in all_tags] + list(combinations(all_tags, 2))
+    subsets += [spec[2] for spec in OWNERS.values()] + [all_tags]
+    seen = set()
+    for subset in subsets:
+        if subset in seen:
+            continue
+        seen.add(subset)
+        msg = "normal commit " + " ".join(subset)
+        observed = {spec[3] for spec in OWNERS.values()
+                    if any(tag in msg for tag in spec[2])}
+        expected = {spec[3] for spec in OWNERS.values()
+                    if set(spec[2]).intersection(subset)}
+        if observed != expected:
+            raise AssertionError(f"tag routing mismatch: {subset}")
+    print(f"M0_LEGACY_TAG_ROUTER=PASS owners={len(OWNERS)} old_push_tags={len(all_tags)} cases={len(seen)} "
+          f"original_git_blobs={len(OWNERS)} no_test_body_changes=1 source_only=1")
 
 if __name__ == "__main__":
     main()

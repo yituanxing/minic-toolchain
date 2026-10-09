@@ -47,8 +47,25 @@ def main():
     jobs = split_jobs(current)
     if set(jobs) != set(EXPECTED):
         raise AssertionError(f"MiniLD job set differs: {sorted(jobs)}")
-    if '      - "agent/linux-expanded-kbuild-v0"' not in current or '      - "agent/linux-perf-boolean-domain-v1"' not in current:
-        raise AssertionError("current development branch triggers missing")
+    head = current.split("\njobs:\n", 1)[0]
+    expected_trigger = ('on:\n  push:\n    branches:\n'
+                        '      - "agent/linux-perf-boolean-domain-v1"\n'
+                        '  workflow_call:\n  workflow_dispatch:\n')
+    if expected_trigger not in head or "agent/linux-expanded-kbuild-v0" in head:
+        raise AssertionError("MiniLD must use Runtime router and preserve Performance direct push")
+    # All executable job bodies and the historical full source can be recovered
+    # exactly. In addition, check_linux_legacy_tag_router_v1.py checks this
+    # original Git Blob on the Runtime ref.
+    import hashlib
+    original_trigger = ('on:\n  push:\n    branches:\n'
+                        '      - "agent/linux-expanded-kbuild-v0"\n'
+                        '      - "agent/linux-perf-boolean-domain-v1"\n'
+                        '  workflow_dispatch:\n')
+    recovered = current.replace(expected_trigger, original_trigger, 1).encode()
+    digest = hashlib.sha1(b"blob " + str(len(recovered)).encode()
+                          + b"\0" + recovered).hexdigest()
+    if digest != "bb1e7ab8a728917324b652eba1fe1527efc1ee93":
+        raise AssertionError("MiniLD executable source changed beyond branch routing")
     for name, (filename, sha, mode, tag) in EXPECTED.items():
         old_path = ROOT / ".github/workflows-disabled" / filename
         if not old_path.is_file():

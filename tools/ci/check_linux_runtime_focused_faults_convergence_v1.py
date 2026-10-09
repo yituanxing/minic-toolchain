@@ -3,6 +3,7 @@
 from pathlib import Path
 import re
 import subprocess
+import os
 
 ROOT=Path(__file__).resolve().parents[2]
 CANONICAL=ROOT/".github/workflows/linux-runtime-focused-faults-v1.yml"
@@ -25,8 +26,16 @@ def main():
  text=CANONICAL.read_text()
  current=jobs(text)
  if set(current)!=set(SPECS)|{'candidate','frontier-fast-v5','qemu-runtime'}: raise AssertionError(f"combined focused/frontier job set changed: {sorted(current)}")
- if '      - "agent/linux-expanded-kbuild-v0"' not in text:
-  raise AssertionError("original Runtime push owner not retained")
+ branch = os.environ.get("GITHUB_REF_NAME", "agent/linux-expanded-kbuild-v0")
+ header = text.split("\njobs:\n", 1)[0]
+ if branch == "agent/linux-expanded-kbuild-v0":
+  if "on:\n  workflow_call:\n  workflow_dispatch:" not in header or "  push:" in header:
+   raise AssertionError("Runtime fault owner must be reusable without duplicate push")
+ elif branch == "agent/linux-perf-boolean-domain-v1":
+  if '      - "agent/linux-expanded-kbuild-v0"' not in header:
+   raise AssertionError("Performance archive lost original Runtime push branch scope")
+ else:
+  raise AssertionError(f"unsupported audit ref: {branch}")
  for name,(filename,sha,oldname,mode,tag,group,matrix) in SPECS.items():
   archive=ROOT/".github/workflows-disabled"/filename
   actual=subprocess.check_output(["git","hash-object",str(archive)],text=True).strip()

@@ -1,9 +1,7 @@
 name: Linux Runtime Early PI/P1/Trace, Semantics and QEMU Watch
 
 on:
-  push:
-    branches:
-      - "agent/linux-expanded-kbuild-v0"
+  workflow_call:
   workflow_dispatch:
     inputs:
       mode:

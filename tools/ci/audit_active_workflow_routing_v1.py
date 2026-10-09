@@ -15,11 +15,7 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[2]
 ACTIVE = ROOT / ".github" / "workflows"
-DEBT_NAMES = (
-    "linux-expanded-pi-p1-runtime-v1.yml",
-    "linux-runtime-focused-faults-v1.yml",
-    "minild-integration-v1.yml",
-)
+DEBT_NAMES = ()
 LEGACY_MANUAL = "minias-a0-focused-diagnostics-v1.yml"
 SELF_YAML_ONLY = "linux-runtime-optin-perf-suite-v1.yml"
 ROUTE_ALL_PUSH = "miniobjcopy-strip-regressions-v1.yml"
@@ -51,6 +47,7 @@ RUNTIME_REUSABLE_BLOBS = {
     "linux-expanded-kbuild-v0.yml": "fd613d04769765af9f0047b3f800c2d13a4bc579",
     "miniar-linux-kbuild.yml": "b06aef58b69c0566cefa0a1751298f88926f2529",
     "linux-runtime-fixture-producers-v1.yml": "ef54b8d6551eb84d663f0a5be3d1f1f811dccaf0",
+    "linux-runtime-focused-faults-v1.yml": "fde303682a2e14c1697b7daf6017c9144773deac",
 }
 
 BRANCHES = ("agent/linux-expanded-kbuild-v0", "agent/linux-perf-boolean-domain-v1")
@@ -242,11 +239,16 @@ def main():
     if branch == BRANCHES[0]:
         assert names[CENTRAL_TAG_ROUTER]["classification"] == "centralized_optin_tag_router"
         for called in ("linux-expanded-kbuild-v0.yml", "miniar-linux-kbuild.yml",
-                       "linux-runtime-fixture-producers-v1.yml", "minias-a0-gate-v1.yml"):
+                       "linux-runtime-fixture-producers-v1.yml", "minias-a0-gate-v1.yml",
+                       "linux-expanded-pi-p1-runtime-v1.yml", "linux-runtime-focused-faults-v1.yml"):
             assert names[called]["push_declared"] == "false"
             assert names[called]["manual_dispatch"] == "true"
     else:
         assert CENTRAL_TAG_ROUTER not in names
+    ld = names["minild-integration-v1.yml"]
+    assert ld["manual_dispatch"] == "true"
+    assert ld["push_declared"] == "true"
+    assert ld["push_branch_eligible"] == ("false" if branch == BRANCHES[0] else "true")
     assert names[ROUTE_ALL_PUSH]["classification"] == "all_push_router_runner"
     assert names[LEGACY_MANUAL]["push_declared"] == "false"
     assert names[LEGACY_MANUAL]["manual_dispatch"] == "true"
