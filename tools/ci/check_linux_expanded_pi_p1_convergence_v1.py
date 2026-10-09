@@ -26,7 +26,7 @@ def normalized(s):
 def main():
  s=CANONICAL.read_text()
  merged=jobs(s)
- if set(merged)!=set(SPECS): raise AssertionError(f"job identities changed: {merged.keys()}")
+ if set(merged)!=set(SPECS)|{"pi-local-symbol","satp-micro","qemu-watch-cert","inconclusive-cert"}: raise AssertionError(f"merged early-runtime jobs changed: {merged.keys()}")
  for name,(file,sha,mode,tag) in SPECS.items():
   path=ROOT/".github/workflows-disabled"/file
   origSha=subprocess.check_output(["git","hash-object",str(path)],text=True).strip()
