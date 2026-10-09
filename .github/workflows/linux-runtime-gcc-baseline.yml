@@ -201,14 +201,14 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - target: arch/riscv/mm/init.o
-            leaf: init
-          - target: arch/riscv/kernel/setup.o
-            leaf: setup
-          - target: arch/riscv/kernel/irq.o
-            leaf: irq
-          - target: kernel/time/timekeeping.o
-            leaf: timekeeping
+          - target: lib/string.o
+            leaf: string
+          - target: mm/page_alloc.o
+            leaf: page_alloc
+          - target: kernel/rcu/tree.o
+            leaf: tree
+          - target: arch/riscv/kernel/process.o
+            leaf: process
     runs-on: ubuntu-24.04
     timeout-minutes: 22
     steps:
