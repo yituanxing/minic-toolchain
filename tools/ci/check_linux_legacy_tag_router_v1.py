@@ -62,6 +62,16 @@ OWNERS = {
         ("[linux-perf3352]", "[linux-constant-p]", "[linux-perf500]"),
         "runtime-perf-suite",
     ),
+    "linux-runtime-spinlock-context-v0.yml": (
+        "5dde74694e43401ab95f93bf3fcc5d8120b322f5",
+        "  push:\n    branches: [\"agent/linux-expanded-kbuild-v0\"]\n    paths:\n      - \".github/workflows/linux-runtime-spinlock-context-v0.yml\"\n      - \"tools/ci/runtime-spinlock-trigger.txt\"\n      - \"tools/ci/runtime-spinlock-stack-trigger.txt\"\n",
+        ("[linux-spinlock-context]", "[linux-spinlock-codegen]", "[linux-spinlock-first-context]", "[linux-spinlock-stack]"), "spinlock-probes",
+    ),
+    "linux-runtime-fdt-isolation-v1.yml": (
+        "b9c56ef805cb78b711ef1f9059f69fc276838893",
+        "  push:\n    branches: [\"agent/linux-expanded-kbuild-v0\"]\n    paths:\n      - \".github/workflows/linux-runtime-fdt-isolation-v1.yml\"\n      - \".github/workflows-disabled/linux-runtime-generated-kallsyms-first-die-v0.yml\"\n      - \"tools/ci/linux-early-runtime-link-v2.sh\"\n",
+        ("[linux-fdt-isolation]", "[linux-fdt-codegen]", "[linux-kallsyms-generated]", "[linux-kallsyms-three-way]", "[linux-kallsyms-object]"), "fdt-kallsyms-probes",
+    ),
 }
 
 def git_blob(payload: bytes) -> str:
@@ -98,6 +108,14 @@ def main():
                            "  workflow_call:\n  workflow_dispatch:\n")
             header = current.split("\njobs:\n", 1)[0]
             assert new_trigger in header and "agent/linux-expanded-kbuild-v0" not in header
+        elif name in ("linux-runtime-spinlock-context-v0.yml",
+                           "linux-runtime-fdt-isolation-v1.yml"):
+            # Preserve the historical scoped sentinel-path push. Add a
+            # reusable, tag-addressable route for *normal* source pushes.
+            new_trigger = "on:\n" + push_block + "  workflow_call:\n  workflow_dispatch:\n"
+            header = current.split("\njobs:\n", 1)[0]
+            if new_trigger not in header:
+                raise AssertionError(f"scoped original push path lost: {name}")
         else:
             new_trigger = "on:\n  workflow_call:\n  workflow_dispatch:\n"
             if "  push:" in current.split("\njobs:\n", 1)[0]:
@@ -106,6 +124,13 @@ def main():
             raise AssertionError(f"reusable / manual events missing: {name}")
         reconstructed = current.replace(new_trigger,
                                          "on:\n" + push_block + "  workflow_dispatch:\n", 1)
+        if name == "linux-runtime-spinlock-context-v0.yml":
+            # Historical top-level cancellation was unsafe on untagged
+            # sentinel pushes; this is the ONLY other permitted source edit.
+            assert current.count("  cancel-in-progress: false\n") == 1
+            reconstructed = reconstructed.replace(
+                "  cancel-in-progress: false\n",
+                "  cancel-in-progress: true\n", 1)
         if git_blob(reconstructed.encode()) != original_sha:
             raise AssertionError(f"original job bodies or manual behavior changed: {name}")
         expected_cond = "    if: " + " || ".join(

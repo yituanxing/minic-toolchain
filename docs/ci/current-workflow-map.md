@@ -77,3 +77,6 @@ Performance push
 
 ### Explicit performance qualification entrypoint
 The Runtime `linux-runtime-optin-perf-suite-v1.yml` was discovered with *self-YAML-only push scope*, making its historical [linux-perf3352], [linux-constant-p], and [linux-perf500] source-push labels unreachable. The existing Runtime `linux-legacy-tag-router-v1.yml` now owns those precise tags through an audited reusable call. No new YAML or source-test body was added. Treat M0 success as trigger/archival proof, not as a performed 3352 Linux compile or 500 paired perf benchmark.
+
+### Scoped Runtime diagnostics reachable by intentional labels
+`linux-runtime-spinlock-context-v0.yml` and `linux-runtime-fdt-isolation-v1.yml` preserve their original narrow sentinel-file push triggers, while their four and five originally tag-gated Jobs are now addressable through the **same** Runtime legacy router's two new conditionally delegated calls. No new YAML, Runner-on-housekeeping or permanent branch was created. The spinlock workflow-wide cancellation race was separately disabled. Exact reconstructed original Git Blobs and the complete unchanged diagnostic job bodies are checked in M0.
