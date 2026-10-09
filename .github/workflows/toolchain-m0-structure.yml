@@ -9,6 +9,7 @@ on:
       - ".github/workflows/minild-integration-v1.yml"
       - "tools/ci/check_minild_integration_convergence_v1.py"
       - "tools/ci/check_minipp_frozen_convergence_v1.py"
+      - "tools/ci/check_minipp_live_frozen_merge_v1.py"
       - "tools/ci/check_linux_runtime_focused_faults_convergence_v1.py"
       - "tools/ci/check_linux_runtime_fixture_restore_v1.py"
       - "tools/ci/check_linux_expanded_pi_p1_convergence_v1.py"
@@ -59,6 +60,10 @@ jobs:
         run: |
           python3 tools/ci/check_minild_integration_convergence_v1.py
           ruby -e 'require "yaml"; YAML.parse_file(ARGV.fetch(0)); puts "M0_MINILD_INTEGRATION_YAML=PASS"' .github/workflows/minild-integration-v1.yml
+
+      - name: Verify MiniPP frozen and live-Kbuild canonical sources
+        run: |
+          python3 tools/ci/check_minipp_live_frozen_merge_v1.py
 
       - name: Verify MiniPP frozen oracle workflow convergence
         run: |

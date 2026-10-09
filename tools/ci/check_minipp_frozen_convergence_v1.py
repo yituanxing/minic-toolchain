@@ -23,7 +23,7 @@ def main():
  if branch not in ("agent/linux-expanded-kbuild-v0","agent/linux-perf-boolean-domain-v1"):
   raise AssertionError(f"unsupported branch {branch}")
  current=jobs(CANONICAL.read_text())
- if set(current)!=set(SPECS): raise AssertionError("canonical job ids changed")
+ if set(current)!=set(SPECS)|{'linux-exact-smoke','linux-exact-batch','linux-exact-72'}: raise AssertionError('canonical frozen/live job ids changed')
  for name,(filename,mode,tag,group,cancel,rt_sha,pf_sha) in SPECS.items():
   path=ROOT/".github/workflows-disabled"/filename
   actual=subprocess.check_output(["git","hash-object",str(path)],text=True).strip()
@@ -39,5 +39,5 @@ def main():
    raise AssertionError(f"missing push tag {name}")
   if f"group: {group}-" not in now or f"cancel-in-progress: {cancel}" not in now or "matrix.id" not in now:
    raise AssertionError(f"lost matrix-aware concurrency {name}")
- print(f"M0_MINIPP_FROZEN=PASS branch={branch} jobs=2 archived_blobs=2 unchanged_job_bodies=2")
+ print(f"M0_MINIPP_FROZEN=PASS branch={branch} original_frozen_jobs=2 canonical_total_jobs=5 archived_blobs=2")
 if __name__=="__main__": main()
