@@ -1,6 +1,6 @@
 # CI code → trigger → job coverage review (2026-10-09)
 
-Current source inventory: **28 Runtime / 29 Performance / 32 unique names / 57 branch-path YAMLs**. The existing [57-entry file](active-workflow-inventory-2026-10-09.tsv) records every active entrypoint and its actual job IDs. The new `check_ci_trigger_coverage_v1.py` asserts that inventory and key positive/negative routing contracts on each checked-out branch.
+Current source inventory: **28 Runtime / 26 Performance / 29 unique names / 54 branch-path YAMLs**. The existing [54-entry file](active-workflow-inventory-2026-10-09.tsv) records every active entrypoint and its actual job IDs. The new `check_ci_trigger_coverage_v1.py` asserts that inventory and key positive/negative routing contracts on each checked-out branch.
 
 ## Verified source-level routing contracts
 
@@ -17,11 +17,11 @@ Current source inventory: **28 Runtime / 29 Performance / 32 unique names / 57 b
 
 **Performance automatic T1 gates:** MiniC RV64, MiniAR and MiniLD focused regressions now include Performance in their push branches; their original complete test bodies are unchanged. Relevant source/test/tool edits trigger them via existing source paths. This does not certify an applied Performance profile or optimized First500. The three expensive Runtime regressions now also exclude the MiniObjcopy ELF selector and the pure `tools/ci/check_ci_*` maintenance checks; positive source paths remain unchanged. Other `tools/**` globs still merit dependency review.
 
-**Limitations:** These are T0 static dispatch checks and selector self-tests. Two controlled ELF-documentation-only pushes have now verified the actual GitHub push → job execution path; the proof uses a benign `elf/CI_ROUTING_SCOPE.md` change, not a production ELF code patch. A green route/M0 is not an ELF regression PASS, a full 3352-TU result, a Linux Image certificate, or a QEMU boot PASS. GitHub's server-side path/commit diff limits are not fully solved by a runner-side git diff. The 57-row ledger is now reconciled from the current owner branch's actual YAML source hashes and includes the most recent verified ELF-only run IDs.
+**Limitations:** These are T0 static dispatch checks and selector self-tests. Two controlled ELF-documentation-only pushes have now verified the actual GitHub push → job execution path; the proof uses a benign `elf/CI_ROUTING_SCOPE.md` change, not a production ELF code patch. A green route/M0 is not an ELF regression PASS, a full 3352-TU result, a Linux Image certificate, or a QEMU boot PASS. GitHub's server-side path/commit diff limits are not fully solved by a runner-side git diff. The 54-row ledger is now reconciled from the current owner branch's actual YAML source hashes and includes the most recent verified ELF-only run IDs.
 
 ## Machine-readable full job matrix
 
-Each branch M0 now exports **every active job** (not only workflow names) to an artifact named `ci-trigger-matrix-runtime` or `ci-trigger-matrix-performance`. It records the owner, evidence tier, trigger types, declared branches, complete raw push-path list, raw job `if`, route classification and named test steps. The two branch-specific M0 artifacts together cover all 57 entrypoints. The matrix is descriptive: dynamic conditions and indirect calls are not assumed to PASS simply because they appear in a YAML. Artifacts have a 14-day retention and may be regenerated through M0.
+Each branch M0 now exports **every active job** (not only workflow names) to an artifact named `ci-trigger-matrix-runtime` or `ci-trigger-matrix-performance`. It records the owner, evidence tier, trigger types, declared branches, complete raw push-path list, raw job `if`, route classification and named test steps. The two branch-specific M0 artifacts together cover all 54 entrypoints. The matrix is descriptive: dynamic conditions and indirect calls are not assumed to PASS simply because they appear in a YAML. Artifacts have a 14-day retention and may be regenerated through M0.
 
 ## Real GitHub Actions proof: ELF-only changed paths
 
@@ -53,3 +53,7 @@ both SUCCESS. Machine-readable per-job matrix artifacts are in Runtime M0
 [#37883242165](https://github.com/yituanxing/minic-toolchain/actions/runs/37883242165)
 (**84 across 31**). These are branch-path declarations, not 172 distinct
 executed tests. Source/certification T2–T4 still requires independent proof.
+
+## Four-to-one Performance experiments
+
+Four previously separate Performance trial workflows are now one `linux-performance-experiments-v1.yml` with `route`, `top5`, `ice`, `first500`, `parser` jobs. Original job bodies and commit-tag + push-path limits are pinned by [Performance audit](ci-performance-experiment-consolidation-2026-10-09.md) and Perf M0; the original YAMLs are disabled/archived. The canonical route job is new and cheap. No extra First500 AB or Linux Image execution is implied by the file merge.
