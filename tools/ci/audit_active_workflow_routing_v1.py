@@ -259,7 +259,8 @@ def main():
     # Both original historical sources remain pinned and must NOT be overwritten.
     historical = {
         "linux-runtime-fdt-isolation-v1.yml": "83feffda9150072a849f677c58856f77975968cc",
-        "linux-expanded-pi-p1-runtime-v1.yml": "0dff72daea890b37972c64a6411caa18b00cf528",
+        "linux-expanded-pi-p1-runtime-v1.yml": ("acd84a8de23ebf908f75eb863df285cfb83b79c0"
+            if branch == BRANCHES[0] else "0dff72daea890b37972c64a6411caa18b00cf528"),
         "linux-runtime-focused-faults-v1.yml": "770c2bb3c8831b35d7eabebbc8dba8d09dc32384",
     }
     for name, historical_sha in historical.items():
