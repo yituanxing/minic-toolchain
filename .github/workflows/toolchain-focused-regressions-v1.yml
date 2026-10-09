@@ -25,6 +25,8 @@ on:
       - '!tools/ci/select_runtime_owner_modes_v1.py'
       - '!tools/ci/select_miniobjcopy_elf_route_v1.py'
       - '!tools/ci/check_ci_*'
+      - '!tools/ci/apply-perf-*'
+      - '!tools/ci/linux-perf-*'
   workflow_dispatch:
     inputs:
       mode:
