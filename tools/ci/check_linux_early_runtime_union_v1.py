@@ -80,7 +80,8 @@ def main():
             raise AssertionError("Runtime early diagnostics must use canonical tag router")
     elif CURRENT != PERF_PI_ARCHIVE or '"agent/linux-expanded-kbuild-v0"' not in header:
         raise AssertionError("Performance archived branch eligibility was altered")
-    print(f"M0_EARLY_RUNTIME_UNION=PASS branch={branch} archived_canons=2 independent_jobs=7 exact_job_bodies=7")
+    scope = "source_archive_only" if branch == PERF else "active_runtime"
+    print(f"M0_EARLY_RUNTIME_UNION=PASS branch={branch} scope={scope} archived_canons=2 independent_jobs=7 exact_job_bodies=7")
 
 if __name__ == "__main__":
     main()

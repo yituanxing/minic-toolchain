@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """Truth-table gate for the early Runtime semantic/QEMU watcher dispatch routes.
 
-Manual mode selection must work from either active development ref; only push
-tag routing is Runtime-branch-scoped. Test steps stay byte-identical.
+Preserve historical manual selection truth tables on both source snapshots.
+Only Runtime's *live* owner has a reachable current branch route; the
+Performance snapshot is now archived and is NOT a runnable manual workflow.
+Test steps stay byte-identical.
 """
 from pathlib import Path
 import os, re
@@ -49,5 +51,5 @@ def main():
  for mode in ("p1","pi","trace","semantics","watch","all"):
   if ("          - "+mode+"\n") not in c:
    raise AssertionError(f"manual choice missing: {mode}")
- print("M0_EARLY_RUNTIME_DISPATCH=PASS semantic_manual_perf=2 watch_manual_perf=2 runtime_push_tag_compat=8 independent_jobs=4")
+ print("M0_EARLY_RUNTIME_DISPATCH=PASS historical_selection_truth_table=4 performance_source_archived=1 runtime_push_tag_compat=8")
 if __name__=="__main__":main()
