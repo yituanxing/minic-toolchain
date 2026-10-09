@@ -47,6 +47,13 @@ MINIAS_GATE_VARIANTS = {
 }
 
 
+# Two Performance archival snapshots still pin the original unmodified owner
+# sources, while their Runtime live counterparts are now reusable workflows.
+RUNTIME_REUSABLE_BLOBS = {
+    "linux-expanded-kbuild-v0.yml": "fd613d04769765af9f0047b3f800c2d13a4bc579",
+    "miniar-linux-kbuild.yml": "b06aef58b69c0566cefa0a1751298f88926f2529",
+}
+
 BRANCHES = ("agent/linux-expanded-kbuild-v0", "agent/linux-perf-boolean-domain-v1")
 HEADER = (
     "branch", "workflow", "push_declared", "push_branch_eligible",
@@ -214,7 +221,8 @@ def main():
             observed = analyze(name, payload.decode("utf-8"), branch)
             assert observed["push_branch_eligible"] == "false", name
         digest = hashlib.sha1(b"blob " + str(len(payload)).encode() + b"\0" + payload).hexdigest()
-        assert digest == expected_sha, f"Performance archive source drift: {name}"
+        pinned_sha = RUNTIME_REUSABLE_BLOBS.get(name, expected_sha) if branch == BRANCHES[0] else expected_sha
+        assert digest == pinned_sha, f"Performance/Runtime owner source drift: {name}"
     # MiniAS gate is still live for Runtime. Preserve Performance's historically
     # branch-ineligible variant byte-for-byte, not the newer Runtime variant.
     mini_name = "minias-a0-gate-v1.yml"
