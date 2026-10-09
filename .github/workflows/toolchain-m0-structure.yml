@@ -26,6 +26,7 @@ on:
       - "tools/ci/check_ci_shared_elf_coverage_v1.py"
       - "tools/ci/check_ci_trigger_coverage_v1.py"
       - "tools/ci/audit_active_workflow_routing_v1.py"
+      - ".github/workflows-disabled/performance-retired-2026-10-09/minias-a0-gate-v1.yml"
       - ".github/workflows-disabled/linux-expanded-kbuild-v0.yml"
       - ".github/workflows-disabled/miniar-linux-kbuild.yml"
       - ".github/workflows-disabled/linux-runtime-spinlock-context-v0.yml"
