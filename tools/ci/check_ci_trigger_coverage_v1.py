@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check all 38 maintained workflow entries against the owned trigger inventory.
+"""Check all 39 maintained workflow entries against the owned trigger inventory.
 
 This is a T0 source/dispatch audit, not proof of T1-T4 execution. In particular
 a push path filter only creates a workflow run; job-level 'if' may skip tests.
@@ -36,13 +36,13 @@ def accepts(patterns,path):
 def main():
     with INV.open(newline="") as f:
         rows=list(csv.DictReader(f,delimiter="\t"))
-    if len(rows)!=38 or len({r["path"] for r in rows})!=26:
-        raise AssertionError("38-row / 26-name owned inventory changed without review")
+    if len(rows)!=39 or len({r["path"] for r in rows})!=27:
+        raise AssertionError("39-row / 27-name owned inventory changed without review")
     branch=os.environ.get("GITHUB_REF_NAME",BRANCHES[0])
     if branch not in BRANCHES:
         raise AssertionError(f"unknown CI branch: {branch}")
     local={r["path"]:r for r in rows if r["branch"]==branch}
-    if len(local) != (25 if branch==BRANCHES[0] else 13):
+    if len(local) != (26 if branch==BRANCHES[0] else 13):
         raise AssertionError("incorrect owner workflow count")
     actual={str(p.relative_to(ROOT)) for p in (ROOT/".github/workflows").glob("*.yml")}
     if set(local)!=actual:
@@ -94,7 +94,7 @@ def main():
         for mark in ("TOOLCHAIN_FOCUSED_T1=PASS","TOOLCHAIN_FOCUSED_T1=FAIL","steps.ld_gc.outcome","steps.ar_nm.outcome","steps.rv64.outcome"):
             if mark not in rv: raise AssertionError("Performance independent oracles lost: "+mark)
         print("M0_PERF_T1=IN_SCOPE owners=3 shared_build_jobs=1 (real T1 execution separately required)")
-    print(f"M0_CI_TRIGGER_LEDGER=PASS branch={branch} maintained={len(local)} total=38 unique=26 route_checks=4 tier=T0")
+    print(f"M0_CI_TRIGGER_LEDGER=PASS branch={branch} maintained={len(local)} total=39 unique=27 route_checks=4 tier=T0")
 
 if __name__=="__main__":
     main()

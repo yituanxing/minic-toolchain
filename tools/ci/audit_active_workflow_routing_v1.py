@@ -16,17 +16,16 @@ import sys
 ROOT = Path(__file__).resolve().parents[2]
 ACTIVE = ROOT / ".github" / "workflows"
 DEBT_NAMES = (
-    "linux-expanded-kbuild-v0.yml",
     "linux-expanded-pi-p1-runtime-v1.yml",
     "linux-runtime-fixture-producers-v1.yml",
     "linux-runtime-focused-faults-v1.yml",
-    "miniar-linux-kbuild.yml",
     "minias-a0-gate-v1.yml",
     "minild-integration-v1.yml",
 )
 LEGACY_MANUAL = "minias-a0-focused-diagnostics-v1.yml"
 SELF_YAML_ONLY = "linux-runtime-optin-perf-suite-v1.yml"
 ROUTE_ALL_PUSH = "miniobjcopy-strip-regressions-v1.yml"
+CENTRAL_TAG_ROUTER = "linux-legacy-tag-router-v1.yml"
 # Performance-only dormant entrypoints; original Git blobs are retained verbatim.
 PERFORMANCE_ARCHIVED = {
     "linux-expanded-kbuild-v0.yml": "35500d29ab940d0033832d50b17e33e0d9c2f9db",
@@ -108,6 +107,8 @@ def analyze(name: str, y: str, branch: str) -> dict[str, str]:
         classification = "manual_only_unreachable_legacy_tag_checks"
     elif not eligible:
         classification = "manual_only_this_branch"
+    elif eligible and name == CENTRAL_TAG_ROUTER and path_policy == "unscoped":
+        classification = "centralized_optin_tag_router"
     elif path_policy == "unscoped" and name == ROUTE_ALL_PUSH:
         classification = "all_push_router_runner"
     elif path_policy == "unscoped" and tags and not unguarded:
@@ -172,7 +173,7 @@ def main():
         raise AssertionError(f"unsupported branch {branch}")
     rows = [analyze(f.name, f.read_text(), branch)
             for f in sorted(ACTIVE.glob("*.yml"))]
-    expected = 25 if branch == BRANCHES[0] else 13
+    expected = 26 if branch == BRANCHES[0] else 13
     if len(rows) != expected:
         raise AssertionError(f"inventory drift: branch {branch} YAML count {len(rows)} != {expected}")
     # Hard-coded high-risk names are only a diagnosis: their contract is frozen.
@@ -231,6 +232,13 @@ def main():
         assert "workflow_call:" not in trim_header(mini_bytes.decode("utf-8")), mini_name
     mini_actual = hashlib.sha1(b"blob " + str(len(mini_bytes)).encode() + b"\0" + mini_bytes).hexdigest()
     assert mini_actual == MINIAS_GATE_VARIANTS[branch], f"MiniAS branch-specific gate source drift: {branch}"
+    if branch == BRANCHES[0]:
+        assert names[CENTRAL_TAG_ROUTER]["classification"] == "centralized_optin_tag_router"
+        for called in ("linux-expanded-kbuild-v0.yml", "miniar-linux-kbuild.yml"):
+            assert names[called]["push_declared"] == "false"
+            assert names[called]["manual_dispatch"] == "true"
+    else:
+        assert CENTRAL_TAG_ROUTER not in names
     assert names[ROUTE_ALL_PUSH]["classification"] == "all_push_router_runner"
     assert names[LEGACY_MANUAL]["push_declared"] == "false"
     assert names[LEGACY_MANUAL]["manual_dispatch"] == "true"

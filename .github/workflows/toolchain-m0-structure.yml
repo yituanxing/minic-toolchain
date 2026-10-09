@@ -26,6 +26,7 @@ on:
       - "tools/ci/check_ci_shared_elf_coverage_v1.py"
       - "tools/ci/check_ci_trigger_coverage_v1.py"
       - "tools/ci/audit_active_workflow_routing_v1.py"
+      - "tools/ci/check_linux_legacy_tag_router_v1.py"
       - ".github/workflows-disabled/performance-retired-2026-10-09/minias-a0-gate-v1.yml"
       - ".github/workflows-disabled/linux-expanded-kbuild-v0.yml"
       - ".github/workflows-disabled/miniar-linux-kbuild.yml"
@@ -255,6 +256,10 @@ jobs:
       - name: Audit all maintained workflow trigger/job contracts and MiniObjcopy ELF route
         run: |
           python3 tools/ci/check_ci_trigger_coverage_v1.py
+          python3 tools/ci/check_linux_legacy_tag_router_v1.py
+          if test -f .github/workflows/linux-legacy-tag-router-v1.yml; then
+            ruby -e 'require "yaml"; YAML.parse_file(ARGV.fetch(0)); puts "M0_LINUX_LEGACY_TAG_ROUTER_YAML=PASS"' .github/workflows/linux-legacy-tag-router-v1.yml
+          fi
           python3 tools/ci/audit_active_workflow_routing_v1.py --self-test
           python3 tools/ci/audit_active_workflow_routing_v1.py --output build/ci-active-entrypoint-audit.tsv
           python3 tools/ci/export_ci_trigger_matrix_v1.py --output build/ci-trigger-matrix.tsv

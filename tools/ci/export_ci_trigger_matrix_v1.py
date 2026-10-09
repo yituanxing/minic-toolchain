@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Export a complete per-job CI routing audit from active YAML and 38-entry ledger.
+"""Export a complete per-job CI routing audit from active YAML and 39-entry ledger.
 
 Report is descriptive: GitHub path matching and job expressions are preserved as
 source text, not falsely evaluated. This is not T1/T2/T3/T4 test evidence.
@@ -67,10 +67,10 @@ def main():
     branch=os.environ.get("GITHUB_REF_NAME","agent/linux-expanded-kbuild-v0")
     with LEDGER.open(newline="") as f:
         inventory=list(csv.DictReader(f,delimiter="\t"))
-    if len(inventory)!=38 or len({r["path"] for r in inventory})!=26:
-        raise AssertionError("maintained 38/26 inventory changed")
+    if len(inventory)!=39 or len({r["path"] for r in inventory})!=27:
+        raise AssertionError("maintained 39/27 inventory changed")
     owned=[r for r in inventory if r["branch"]==branch]
-    expected=25 if branch=="agent/linux-expanded-kbuild-v0" else 13 if branch=="agent/linux-perf-boolean-domain-v1" else None
+    expected=26 if branch=="agent/linux-expanded-kbuild-v0" else 13 if branch=="agent/linux-perf-boolean-domain-v1" else None
     if expected is None or len(owned)!=expected:
         raise AssertionError("unexpected branch or incomplete owned inventory")
     records=[]
