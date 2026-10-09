@@ -67,6 +67,7 @@ on:
       - '.github/workflows/toolchain-m0-structure.yml'
       - '.github/workflows/linux-distributed-full-image-signedness-v2.yml'
       - '.github/workflows/miniobjcopy-strip-regressions-v1.yml'
+      - '.github/workflows-disabled/miniobjcopy-strip-regressions-legacy-image-2026-10-09.yml'
       - 'docs/ci/active-workflow-inventory-2026-10-09.tsv'
       - '.github/workflows-disabled/minipp-linux-exact-smoke.yml'
       - '.github/workflows/linux-runtime-spinlock-context-v0.yml'
