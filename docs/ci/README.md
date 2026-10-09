@@ -13,3 +13,5 @@ Our repository has four live refs: `main` (historical release), `agent/linux-exp
 **Verification commands in M0:** `tools/ci/check_ci_trigger_coverage_v1.py`, `tools/ci/audit_active_workflow_routing_v1.py --self-test` and `--output`, `tools/ci/check_linux_legacy_tag_router_v1.py`, `tools/ci/export_ci_trigger_matrix_v1.py`, and all historical owner convergence checks. Archive SHA and Job-body guards fail closed.
 
 Older per-date CI design and convergence documents remain in this folder. Their counts may be historical: **this page and current-workflow-map.md are the only maintained top-level live maps.** The previous verbose README is recoverable unchanged in Git blob `ca6b9e49db10664d19eb759ebc16bcd063d5f0a0`.
+
+**Architecture audit and open defects:** [2026-10-09 source-level findings and closure criteria](ci-architecture-audit-findings-2026-10-09.md). The global MiniObjcopy cancellation was disabled after a P0 race was discovered. Its historical frozen `linux-image` mode is still **not currently reproducible** because the pinned artifact run has zero artifacts; do not count that mode as a functioning certification. Do not equate green T0 with healthy T3/T4.

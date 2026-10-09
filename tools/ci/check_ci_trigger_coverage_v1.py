@@ -7,6 +7,7 @@ a push path filter only creates a workflow run; job-level 'if' may skip tests.
 from pathlib import Path
 import ast
 import csv
+import hashlib
 import fnmatch
 import os
 import re
@@ -48,7 +49,13 @@ def main():
     if set(local)!=actual:
         raise AssertionError(f"inventory/source divergence missing={sorted(actual-set(local))} extra={sorted(set(local)-actual)}")
     for path,row in local.items():
-        y=(ROOT/path).read_text()
+        raw=(ROOT/path).read_bytes()
+        git_blob = hashlib.sha1(b"blob " + str(len(raw)).encode() + b"\0" + raw).hexdigest()
+        if git_blob != row["git_blob_sha"]:
+            raise AssertionError(
+                f"workflow source SHA drift: {path}: {git_blob} != {row['git_blob_sha']}; "
+                "update the canonical manifest after source review")
+        y=raw.decode("utf-8")
         if "\njobs:\n" not in y:
             raise AssertionError(f"missing jobs: {path}")
         jobs=set(re.findall(r"(?m)^  ([a-zA-Z][\w-]*):\s*$",y.split("\njobs:\n",1)[1]))

@@ -13,6 +13,9 @@
 
 Runtime + Performance maintain **39 branch-local YAMLs, 27 distinct names**; **94 + 49 = 143 declared jobs**, including seven inexpensive conditional reusable calls in the Runtime tag router. This is **not** 143 runners. The branch-owned [39-row inventory](active-workflow-inventory-2026-10-09.tsv) and [trigger audit](ci-push-skip-audit-2026-10-09.md) are the machine-checked source inventory. Main's 11 historical YAMLs are **not** part of that development-branch inventory.
 
+
+**Architecture audit and open defects:** [2026-10-09 source-level findings and closure criteria](ci-architecture-audit-findings-2026-10-09.md). The global MiniObjcopy cancellation was disabled after a P0 race was discovered. Its historical frozen `linux-image` mode is still **not currently reproducible** because the pinned artifact run has zero artifacts; do not count that mode as a functioning certification. Do not equate green T0 with healthy T3/T4.
+
 ## Five explicit test tiers
 
 | Tier | Contract | Canonical owners | What success proves |

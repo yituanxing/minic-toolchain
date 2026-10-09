@@ -22,10 +22,11 @@ def main():
     if y.count("  route:\n")!=1: raise AssertionError("expected exactly one route job")
     route=re.search(r"(?ms)^  route:\n.*?(?=^  regressions:\n)",y)
     if route is None: raise AssertionError("route job missing or misplaced")
-    # Keep the original test source byte-identical under SHA reconstruction,
-    # but do not cancel in-flight Linux runs because of unrelated push events.
+    # An untagged housekeeping push must never cancel a long Linux/ELF oracle.
+    # The historic workflow used true; this is intentionally the only permitted
+    # top-level policy change, and the original source still reconstructs exactly.
     if y.count("  cancel-in-progress: false\n") != 1:
-        raise AssertionError("MiniObjcopy concurrency policy must not cancel Linux certifications")
+        raise AssertionError("MiniObjcopy router must not cancel running certifications")
     old=y[:route.start()]+y[route.end():]
     old=old.replace("  cancel-in-progress: false\n", "  cancel-in-progress: true\n", 1)
     old=old.replace("  regressions:\n    needs: route\n"+NEW_IF,
