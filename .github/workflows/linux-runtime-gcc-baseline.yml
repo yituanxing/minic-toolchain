@@ -248,29 +248,36 @@ jobs:
           set -Eeuo pipefail
           out="$GITHUB_WORKSPACE/build/linux-runtime-gcc/out"
           src="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0/linux-6.6.143"
-          test -s "$out/lib/.idr.o.cmd"
-          test -s "$src/lib/idr.c"
+          # Probe a historically relevant scheduler object rather than repeating
+          # the already validated lib/idr.o smoke test.
+          target=kernel/sched/core.o
+          stem=${target%.o}
+          leaf=${stem##*/}
+          cmd="$out/$(dirname "$target")/.$leaf.o.cmd"
+          test -s "$out/$target"
+          test -s "$cmd"
+          test -s "$src/$stem.c"
           contract=$(printf '%s\n' \
             "$(sha256sum "$out/.config" | cut -d' ' -f1)" \
-            "$(sha256sum "$out/lib/idr.o" | cut -d' ' -f1)" \
-            "$(sha256sum "$out/lib/.idr.o.cmd" | cut -d' ' -f1)" \
-            "$(sha256sum "$src/lib/idr.c" | cut -d' ' -f1)" \
+            "$(sha256sum "$out/$target" | cut -d' ' -f1)" \
+            "$(sha256sum "$cmd" | cut -d' ' -f1)" \
+            "$(sha256sum "$src/$stem.c" | cut -d' ' -f1)" \
             "$(sha256sum /usr/bin/riscv64-linux-gnu-gcc | cut -d' ' -f1)" \
             | sha256sum | cut -d' ' -f1)
-          echo "key=linux-gnu-single-idr-i-v1-$contract" >>"$GITHUB_OUTPUT"
+          echo "key=linux-gnu-single-${leaf}-i-v1-$contract" >>"$GITHUB_OUTPUT"
 
       - name: Restore frozen GCC .i and exact GNU assembler flags
         id: pprestore
         uses: actions/cache/restore@v4
         with:
           path: |
-            build/linux-runtime-gcc-single-v1/idr.i
+            build/linux-runtime-gcc-single-v1/core.i
             build/linux-runtime-gcc-single-v1/asm-args.txt
             build/linux-runtime-gcc-single-v1/pp-contract.txt
             build/linux-runtime-gcc-single-v1/pp-files.sha256
           key: ${{ steps.ppkey.outputs.key }}
 
-      - name: Verify GNU baseline, build MiniC and swap only lib/idr.o
+      - name: Verify GNU baseline, build MiniC and swap only kernel/sched/core.o
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -287,7 +294,7 @@ jobs:
           mkdir -p "$ev"
           bash tools/ci/linux-runtime-build-minic-profile-v1.sh \
             "$GITHUB_WORKSPACE/build/linux-runtime-gcc-single-toolchain" "$ev/compiler"
-          bash tools/ci/linux-runtime-gcc-single-swap-v1.sh \
+          GNU_SINGLE_TARGET=kernel/sched/core.o bash tools/ci/linux-runtime-gcc-single-swap-v1.sh \
             "$work/linux-6.6.143" "$work/out" \
             "$GITHUB_WORKSPACE/build/linux-runtime-gcc-single-toolchain/bin/minic" \
             "$work/provenance" "$ev"
@@ -299,7 +306,7 @@ jobs:
         run: |
           set -Eeuo pipefail
           ev="$GITHUB_WORKSPACE/build/linux-runtime-gcc-single-v1"
-          if test -s "$ev/idr.i" && test -s "$ev/asm-args.txt" && \
+          if test -s "$ev/core.i" && test -s "$ev/asm-args.txt" && \
              test -s "$ev/pp-contract.txt" && test -s "$ev/pp-files.sha256"; then
             echo 'ready=true' >>"$GITHUB_OUTPUT"
           else
@@ -327,7 +334,7 @@ jobs:
             build/linux-runtime-gcc-single-v1/compile.log
             build/linux-runtime-gcc-single-v1/link.log
             build/linux-runtime-gcc-single-v1/one-tu.trace
-            build/linux-runtime-gcc-single-v1/idr.minic.s
+            build/linux-runtime-gcc-single-v1/core.minic.s
             build/linux-runtime-gcc-single-v1/idr.i
             build/linux-runtime-gcc-single-v1/asm-args.txt
             build/linux-runtime-gcc-single-v1/pp-contract.txt
