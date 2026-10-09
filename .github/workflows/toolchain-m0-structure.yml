@@ -11,6 +11,8 @@ on:
       - "tools/ci/check_minipp_frozen_convergence_v1.py"
       - "tools/ci/check_linux_runtime_focused_faults_convergence_v1.py"
       - "tools/ci/check_linux_runtime_fixture_restore_v1.py"
+      - "tools/ci/check_linux_expanded_pi_p1_convergence_v1.py"
+      - ".github/workflows/linux-expanded-pi-p1-runtime-v1.yml"
       - ".github/actions/linux-runtime-restore-fixture/**"
       - "tools/ci/check_linux_runtime_frontier_diagnostics_convergence_v1.py"
       - ".github/workflows/linux-runtime-frontier-diagnostics-v1.yml"
@@ -70,6 +72,11 @@ jobs:
         run: |
           python3 tools/ci/check_linux_runtime_fixture_restore_v1.py
           ruby -e 'require "yaml"; YAML.parse_file(ARGV.fetch(0)); puts "M0_RUNTIME_FIXTURE_ACTION_YAML=PASS"' .github/actions/linux-runtime-restore-fixture/action.yml
+
+      - name: Verify expanded PI/P1 Runtime diagnostic workflow convergence
+        run: |
+          python3 tools/ci/check_linux_expanded_pi_p1_convergence_v1.py
+          ruby -e 'require "yaml"; YAML.parse_file(ARGV.fetch(0)); puts "M0_LINUX_EXPANDED_PI_P1_YAML=PASS"' .github/workflows/linux-expanded-pi-p1-runtime-v1.yml
 
       - name: Run Linux runtime isolation selftests
         run: |
