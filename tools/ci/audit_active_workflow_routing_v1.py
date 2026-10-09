@@ -17,9 +17,7 @@ ROOT = Path(__file__).resolve().parents[2]
 ACTIVE = ROOT / ".github" / "workflows"
 DEBT_NAMES = (
     "linux-expanded-pi-p1-runtime-v1.yml",
-    "linux-runtime-fixture-producers-v1.yml",
     "linux-runtime-focused-faults-v1.yml",
-    "minias-a0-gate-v1.yml",
     "minild-integration-v1.yml",
 )
 LEGACY_MANUAL = "minias-a0-focused-diagnostics-v1.yml"
@@ -42,7 +40,7 @@ PERFORMANCE_ARCHIVED = {
 # its old cleanup-only push branch is irrelevant on Performance. Preserve both
 # originals and never substitute the Runtime version silently.
 MINIAS_GATE_VARIANTS = {
-    "agent/linux-expanded-kbuild-v0": "f430ce905fa4c49715ce4cd5ef1dc4cef2054f9c",
+    "agent/linux-expanded-kbuild-v0": "d0256dd6e28be76bc43f8cf2bc3296277748de99",
     "agent/linux-perf-boolean-domain-v1": "be679f45cd1bf81bfefca7fee0cc12aeb95aa802",
 }
 
@@ -52,6 +50,7 @@ MINIAS_GATE_VARIANTS = {
 RUNTIME_REUSABLE_BLOBS = {
     "linux-expanded-kbuild-v0.yml": "fd613d04769765af9f0047b3f800c2d13a4bc579",
     "miniar-linux-kbuild.yml": "b06aef58b69c0566cefa0a1751298f88926f2529",
+    "linux-runtime-fixture-producers-v1.yml": "ef54b8d6551eb84d663f0a5be3d1f1f811dccaf0",
 }
 
 BRANCHES = ("agent/linux-expanded-kbuild-v0", "agent/linux-perf-boolean-domain-v1")
@@ -242,7 +241,8 @@ def main():
     assert mini_actual == MINIAS_GATE_VARIANTS[branch], f"MiniAS branch-specific gate source drift: {branch}"
     if branch == BRANCHES[0]:
         assert names[CENTRAL_TAG_ROUTER]["classification"] == "centralized_optin_tag_router"
-        for called in ("linux-expanded-kbuild-v0.yml", "miniar-linux-kbuild.yml"):
+        for called in ("linux-expanded-kbuild-v0.yml", "miniar-linux-kbuild.yml",
+                       "linux-runtime-fixture-producers-v1.yml", "minias-a0-gate-v1.yml"):
             assert names[called]["push_declared"] == "false"
             assert names[called]["manual_dispatch"] == "true"
     else:

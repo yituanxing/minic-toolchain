@@ -1,8 +1,7 @@
 name: Linux Runtime Certified Frozen and Compact Fixture Producers
 
 on:
-  push:
-    branches: ["agent/linux-expanded-kbuild-v0"]
+  workflow_call:
   workflow_dispatch:
     inputs:
       mode:

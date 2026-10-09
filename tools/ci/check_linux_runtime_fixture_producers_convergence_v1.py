@@ -7,6 +7,7 @@ unchanged. Only the dispatch selector and workflow->job concurrency move differ.
 from pathlib import Path
 import re
 import subprocess
+import os
 
 ROOT = Path(__file__).resolve().parents[2]
 WORK = ROOT / ".github/workflows/linux-runtime-fixture-producers-v1.yml"
@@ -47,8 +48,23 @@ def main():
     active = jobs(current)
     if set(active) != set(SPECS):
         raise AssertionError(f"producer job IDs drifted: {active.keys()}")
-    if '"agent/linux-expanded-kbuild-v0"' not in current:
-        raise AssertionError("original push branch eligibility lost")
+    header = current.split("\njobs:\n", 1)[0]
+    branch = os.environ.get("GITHUB_REF_NAME", "agent/linux-expanded-kbuild-v0")
+    if branch == "agent/linux-expanded-kbuild-v0":
+        if "on:\n  workflow_call:\n  workflow_dispatch:" not in header or "  push:" in header:
+            raise AssertionError("Runtime fixture owners must be reusable and manually selectable")
+        # Original push scope and tags are separately SHA-verified by the router gate.
+    elif branch == "agent/linux-perf-boolean-domain-v1":
+        # Performance M0 intentionally materializes the ORIGINAL archived Runtime
+        # workflow in its ephemeral runner for historical source-contract checks.
+        if 'on:\n  push:\n    branches: ["agent/linux-expanded-kbuild-v0"]' not in header:
+            raise AssertionError("Performance archived fixture lost historical push scope")
+        digest = subprocess.check_output(
+            ["git", "hash-object", str(WORK)], text=True).strip()
+        if digest != "1bdabc68a2c8fb60e86b79ed6757fc6157e8914c":
+            raise AssertionError("Performance archived fixture blob changed")
+    else:
+        raise AssertionError(f"unexpected audit branch {branch}")
     for name, (filename, git_blob, mode, tag, group) in SPECS.items():
         old = ROOT / ".github/workflows-disabled" / filename
         actual = subprocess.check_output(["git", "hash-object", str(old)], text=True).strip()
