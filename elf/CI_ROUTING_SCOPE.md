@@ -23,3 +23,10 @@ not a Linux Image or QEMU boot certificate.
 
 Compare the actual Actions run/job lists against these requirements. Do not
 infer successful routing from a static M0 check alone.
+
+## Performance ELF-only follow-up probe
+
+This second documentation-only `elf/**` edit tests the newly enabled
+Performance MiniAR and MiniLD automatic T1 branch coverage, alongside MiniC
+RV64, MiniPP A0 and MiniObjcopy/Strip. The changed-file set contains no
+workflow YAML and no production C source.
