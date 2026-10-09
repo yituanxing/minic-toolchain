@@ -68,3 +68,14 @@ Do not remove these Workflows just because an unrelated source push records SKIP
 - **Reduce UI cards safely:** either migrate historical tags to explicit operator dispatch (after changing documentation/callers) or consolidate owners with exact archived body/SHA checks and real before/after trigger proof. Avoid a file-count target that loses a unique correctness oracle.
 
 The report is intentionally **auditable evidence and a migration plan**, not a claim that 17 skipped cards can be eliminated without any compatibility trade-off. The automated audit is **source-only T0**, not runner/tier certification.
+
+## Machine-checked census and M0 evidence
+
+Implemented T0 auditor: `tools/ci/audit_active_workflow_routing_v1.py`, run with `--self-test` then `--output build/ci-active-entrypoint-audit.tsv`. Both M0 runs are real green, and each publishes the **new full per-file TSV** in its existing `ci-trigger-matrix-*` artifact alongside the original 48-entry job/trigger matrix:
+
+- [Runtime M0 #37894528031](https://github.com/yituanxing/minic-toolchain/actions/runs/37894528031) **SUCCESS**: `25 workflows / 87 declared jobs`; **7** unscoped tag-gated empty-run candidates, **8** path-scoped tag-gated, **1** always-push router, **1** manual-only with unreachable historical push-tag guards, **1** own-YAML-only/partially unreachable tag regime, **7** source-scoped/manual contracts.
+- [Performance M0 #37894546129](https://github.com/yituanxing/minic-toolchain/actions/runs/37894546129) **SUCCESS**: `23 workflows / 84 declared jobs`; **1** unscoped tag-gated empty-run candidate, **7** path-scoped tag-gated, **1** always-push router, **11** present but *not push-eligible on Performance* (manual runs still possible), **1** manual-only with unreachable historical tag guards, **2** source-scoped/manual contracts.
+
+The **11 Performance branch-ineligible YAMLs** are not automatically executing there. They could be archived *on that branch* only after proving that no needed Performance-specific manual dispatch, historical cache reachability, job source verification or owner contract relies on them. The current audit **does not authorize removing those manual-only entrypoints**.
+
+The file analyzer has specific self-tests for unscoped push/tag-only, purely manual unreachable tag guards, and inline source-path scopes. GitHub's skipped-result UX and route runtime are demonstrated by the real push run IDs in the evidence table above. No expensive Linux Image, 3352-TU, or QEMU test was scheduled by this audit.
