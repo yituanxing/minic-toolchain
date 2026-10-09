@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Export a complete per-job CI routing audit from active YAML and 39-entry ledger.
+"""Export a complete per-job CI routing audit from the canonical active YAML ledger.
 
 Report is descriptive: GitHub path matching and job expressions are preserved as
 source text, not falsely evaluated. This is not T1/T2/T3/T4 test evidence.
@@ -67,12 +67,17 @@ def main():
     branch=os.environ.get("GITHUB_REF_NAME","agent/linux-expanded-kbuild-v0")
     with LEDGER.open(newline="") as f:
         inventory=list(csv.DictReader(f,delimiter="\t"))
-    if len(inventory)!=39 or len({r["path"] for r in inventory})!=27:
-        raise AssertionError("maintained 39/27 inventory changed")
+    allowed={"agent/linux-expanded-kbuild-v0", "agent/linux-perf-boolean-domain-v1"}
+    if not inventory or {r["branch"] for r in inventory} != allowed:
+        raise AssertionError("CI manifest has unexpected or missing development ref")
+    if len({(r["branch"],r["path"]) for r in inventory}) != len(inventory):
+        raise AssertionError("CI manifest has duplicate branch/path declarations")
     owned=[r for r in inventory if r["branch"]==branch]
-    expected=26 if branch=="agent/linux-expanded-kbuild-v0" else 13 if branch=="agent/linux-perf-boolean-domain-v1" else None
-    if expected is None or len(owned)!=expected:
-        raise AssertionError("unexpected branch or incomplete owned inventory")
+    if branch not in allowed or not owned:
+        raise AssertionError("unexpected branch or empty owned inventory")
+    actual={str(p.relative_to(ROOT)) for p in (ROOT/".github/workflows").glob("*.yml")}
+    if {r["path"] for r in owned} != actual:
+        raise AssertionError("CI source/workflow ledger owner set differs")
     records=[]
     for entry in owned:
         rel=entry["path"]
