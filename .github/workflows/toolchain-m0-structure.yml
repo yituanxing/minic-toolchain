@@ -61,6 +61,8 @@ on:
       - "tools/ci/check_linux_core_3352_first500_union_v1.py"
       - "tools/ci/check_linux_efi_vdso_convergence_v1.py"
       - "tools/ci/check_minias_semantic_convergence_v1.py"
+      - "tools/ci/minias_artifact_rescue_v1.py"
+      - "tools/ci/minias-historical-artifacts-v1.json"
       - "tools/ci/check_linux_runtime_fixture_producers_convergence_v1.py"
       - ".github/workflows/linux-runtime-fixture-producers-v1.yml"
       - "tools/ci/check_linux_runtime_contract_oracles_convergence_v1.py"
@@ -192,6 +194,9 @@ jobs:
         run: |
           python3 tools/ci/check_linux_runtime_contract_oracles_convergence_v1.py
           ruby -e 'require "yaml"; YAML.parse_file(ARGV.fetch(0)); puts "M0_RUNTIME_CONTRACT_ORACLES_YAML=PASS"' .github/workflows-disabled/performance-retired-2026-10-09/linux-expanded-pi-p1-runtime-v1.yml
+
+      - name: Validate pinned MiniAS historical artifact rescue contract
+        run: python3 tools/ci/minias_artifact_rescue_v1.py --self-test
 
       - name: Check MiniAS focused and 3536 semantic oracle consolidation
         run: |
