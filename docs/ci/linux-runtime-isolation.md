@@ -336,3 +336,45 @@ It neither replaces nor certifies an entirely MiniC-built Linux Image.
 Continue with single-file failures, controlled object overlays, and
 regression expansion; multi-object interaction is deferred unless a
 single-object explanation becomes impossible.
+
+
+## 2026-10-09 first GNU golden single-object census — 13 actual QEMU passes
+
+Single-object trials on the **same** booted GCC Linux 6.6.143 golden kernel:
+\`config_sha256=eeb04f304ebfb97a1079c187dc0c2ea3cc61fc50a55aa3cc776237c16ab19bbe\`.
+Every trial restored the golden object pool independently, rebuilt just its
+MiniC candidate, GNU-relinked a **changed** Linux Image and passed the
+full initramfs/shell QEMU oracle. These are not generic all-MiniC or joint
+multi-object certificates.
+
+| Workflow run | Individually swapped MiniC object(s) | Actual outcome |
+|---|---|---|
+| [37936800398](https://github.com/yituanxing/minic-toolchain/actions/runs/37936800398) | \`lib/idr.o\` | full QEMU PASS, frozen input cache HIT |
+| [37939800272](https://github.com/yituanxing/minic-toolchain/actions/runs/37939800272) | \`kernel/sched/core.o\` | full QEMU PASS, input captured |
+| [37940288951](https://github.com/yituanxing/minic-toolchain/actions/runs/37940288951) | \`lib/xarray.o\`, \`kernel/fork.o\`, \`mm/memory.o\`, \`kernel/locking/spinlock.o\` | 4/4 independent QEMU PASS |
+| [37940760024](https://github.com/yituanxing/minic-toolchain/actions/runs/37940760024) | \`arch/riscv/mm/init.o\`, \`arch/riscv/kernel/setup.o\`, \`arch/riscv/kernel/irq.o\`, \`kernel/time/timekeeping.o\` | 4/4 independent QEMU PASS |
+| [37941213469](https://github.com/yituanxing/minic-toolchain/actions/runs/37941213469) | \`lib/string.o\`, \`mm/page_alloc.o\`, \`kernel/rcu/tree.o\`, \`arch/riscv/kernel/process.o\` | 4/4 independent QEMU PASS |
+
+Every batch retained the canonical \`linux-runtime-gcc-baseline.yml\`
+opt-in \`gcc-single\` job using a deliberately small four-element matrix:
+each one independently restored the pinned original GCC pool, so a
+previous experiment did not contaminate the next. Runtime M0 on the
+latest batch also [passed](https://github.com/yituanxing/minic-toolchain/actions/runs/37941213205).
+No new active workflow file was created. Every target's frozen GNU \`.i\`
+and assembler flags have distinct cache identities and were prepared for
+fast future MiniC-only replay.
+
+**Crucial interpretation:** a historical prefix boundary around
+\`kernel/sched/core.o\` on the **older mixed-config** kernel is not
+reproduced by the \`core.o\`-only experiment on this **new GCC golden
+config**. This does *not* prove the original fault has been fixed.
+Likewise, 13 independently passing single-object tests do *not* prove
+that 13 MiniC objects work together or that an all-MiniC Image boots.
+
+**Next useful gate:** obtain a **verified FAIL** for a sufficiently broad
+MiniC cohort or full MiniC kernel using exactly this golden \`.config\`,
+GNU preprocessing/assembly/link and the same QEMU oracle. Without that,
+continued successful one-file probes are coverage but cannot locate a
+runtime culprit. Once a same-universe FAIL exists, isolate with GNU-object
+reset, prefix bisection and confirmation by one-file swap / GCC exclusion;
+defer complex interactions until ordinary single-owner diagnosis fails.
