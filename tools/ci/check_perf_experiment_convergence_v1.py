@@ -30,7 +30,9 @@ def paths(y):
     m=re.search(r"(?m)^    paths:\n((?:      - [^\n]*\n)+)",h)
     if m is None:
         raise AssertionError("no path filter")
-    return [ast.literal_eval(row.strip()[2:].strip()) for row in m.group(1).splitlines()]
+    return [ast.literal_eval(v) if v.startswith(("\'", '"')) else v
+            for row in m.group(1).splitlines()
+            for v in [row.strip()[2:].strip()]]
 
 def job_body(y,key):
     text=y.split("\njobs:\n",1)[1]
