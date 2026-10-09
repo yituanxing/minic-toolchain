@@ -39,7 +39,9 @@ def main():
  for src in ("tools/ci/runtime-timekeeping-trigger.txt",
              "tools/ci/select_runtime_owner_modes_v1.py",
              "tools/ci/check_ci_trigger_coverage_v1.py",
-             "tools/ci/select_miniobjcopy_elf_route_v1.py"):
+             "tools/ci/select_miniobjcopy_elf_route_v1.py",
+             "tools/ci/apply-perf-core-object-interval-onepass-v1.py",
+             "tools/ci/linux-perf-typedef-paired-ab-v1.py"):
   if included(globs,src): raise AssertionError("wasted T1 trigger: "+src)
  for i,(name,job) in enumerate(zip(OLD,JOBS)):
   if (ROOT/".github/workflows"/name).exists():
@@ -61,6 +63,6 @@ def main():
    raise AssertionError("original full build/test/upload job body modified: "+job)
  if len(re.findall(r"(?m)^  [a-z][a-z0-9-]*:\s*$",jobs))!=3:
   raise AssertionError("unexpected new canonical job count")
- print(f"M0_FOCUSED_T1=PASS branch={branch} original_full_job_bodies=3 archives_sha_exact=3 independent_jobs=3 source_routes=7 negative_routes=4")
+ print(f"M0_FOCUSED_T1=PASS branch={branch} original_full_job_bodies=3 archives_sha_exact=3 independent_jobs=3 source_routes=7 negative_routes=6")
 
 if __name__=="__main__":main()
