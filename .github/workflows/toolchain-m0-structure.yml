@@ -38,6 +38,8 @@ on:
       - '.github/workflows/linux-runtime-generated-kallsyms-first-die-v0.yml'
       - '.github/workflows/minias-a0-focused-diagnostics-v1.yml'
       - 'tools/ci/check_minias_semantic_convergence_v1.py'
+      - 'tools/ci/check_linux_runtime_fixture_producers_convergence_v1.py'
+      - '.github/workflows/linux-runtime-fixture-producers-v1.yml'
       - '.github/workflows/linux-core-all3352.yml'
       - '.github/workflows/core-first500-regression.yml'
       - '.github/workflows/linux-runtime-gcc-baseline.yml'
@@ -108,6 +110,11 @@ jobs:
         run: |
           python3 tools/ci/check_minias_semantic_convergence_v1.py
           ruby -e 'require "yaml"; YAML.parse_file(ARGV.fetch(0)); puts "M0_MINIAS_SEMANTIC_YAML=PASS"' .github/workflows/minias-a0-focused-diagnostics-v1.yml
+
+      - name: Verify Runtime frozen and compact fixture producer convergence
+        run: |
+          python3 tools/ci/check_linux_runtime_fixture_producers_convergence_v1.py
+          ruby -e 'require "yaml"; YAML.parse_file(ARGV.fetch(0)); puts "M0_RUNTIME_FIXTURE_PRODUCERS_YAML=PASS"' .github/workflows/linux-runtime-fixture-producers-v1.yml
 
       - name: Run Linux runtime isolation selftests
         run: |
