@@ -48,3 +48,16 @@ verifier/explicit downloader are recorded in
 `docs/ci/minias-artifact-rescue-2026-10-09.md` for the fail-closed
 migration contract. M0 validates the rescue verifier, but it does not
 mirror these expiring bytes or certify a heavy Linux/MiniAS run.
+ 
+### Observed current-branch first500 restoration (2026-10-09)
+
+The Runtime commit `544061437dad41010fe8b099fab16c6b38e3a680`
+selected `[minias-real16]` through the reusable MiniAS router.
+[Actions run 37922075990](https://github.com/yituanxing/minic-toolchain/actions/runs/37922075990)
+completed successfully: original first500 tar SHA256
+`49cf8f48faf2696a1892867ced2600a0e592a1978fc3c41d86bc7c251e03ef3f`,
+16 of 16 current MiniC assembly inputs generated successfully,
+and **16 of 16 assembled by MiniAS without a blocker**. This proves
+original first500 artifact access and the focused 16-case owner *at
+this commit*, not all 3536 semantic cases, the remaining six shards,
+or durable retention after artifact expiry.
