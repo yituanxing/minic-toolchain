@@ -56,6 +56,12 @@ OWNERS = {
         ("[minild-dynamic-integration]", "[minild-linux-rel-boundaries]", "[static-runtime]"),
         "minild-integrations",
     ),
+    "linux-runtime-optin-perf-suite-v1.yml": (
+        "3036af0be6310855d6b0319ca5cbe24516ad3a29",
+        '  push:\n    branches: [agent/linux-expanded-kbuild-v0]\n    paths: [\'.github/workflows/linux-runtime-optin-perf-suite-v1.yml\']\n',
+        ("[linux-perf3352]", "[linux-constant-p]", "[linux-perf500]"),
+        "runtime-perf-suite",
+    ),
 }
 
 def git_blob(payload: bytes) -> str:
