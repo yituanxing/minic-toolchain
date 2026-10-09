@@ -1,0 +1,549 @@
+name: Linux Expanded PI, P1 and Entry Trace Diagnoses
+
+on:
+  push:
+    branches:
+      - "agent/linux-expanded-kbuild-v0"
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Choose historical Linux expanded runtime profile"
+        required: true
+        type: choice
+        default: p1
+        options:
+          - p1
+          - pi
+          - trace
+          - all
+
+permissions:
+  contents: read
+
+jobs:
+
+  pi-runtime:
+    if: (github.event_name == 'workflow_dispatch' && (inputs.mode == 'pi' || inputs.mode == 'all')) || (github.event_name == 'push' && contains(github.event.head_commit.message, '[linux-expanded-pi-runtime]'))
+    concurrency:
+      group: linux-expanded-pi-runtime-v0-${{ github.ref }}
+      cancel-in-progress: true
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Restore successful Expanded Linux out cache
+        id: expanded-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-expanded-kbuild-v0/out
+          key: linux-expanded-mixed-v1-6.6.143-${{ runner.os }}-${{ hashFiles('src/**', 'include/**', 'tools/ci/apply-*.py', 'tests/external/linux/stage2_kbuild_cc.sh') }}
+          restore-keys: |
+            linux-expanded-mixed-v1-6.6.143-${{ runner.os }}-
+
+      - name: Install focused runtime prerequisites
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            build-essential gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu libc6-dev-riscv64-cross \
+            bc bison flex libssl-dev libelf-dev make curl xz-utils python3 \
+            qemu-system-misc opensbi cpio gzip file device-tree-compiler
+
+      - name: Apply current MiniC Linux semantic stack and build compiler
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0"
+          build="$work/toolchain"
+          ev="$GITHUB_WORKSPACE/build/linux-expanded-pi-runtime/evidence"
+          mkdir -p "$ev"
+          patches=(
+            apply-local-integer-assignment-v2.py
+            apply-local-integer-logical-conditions-v0.py
+            apply-local-null-pointer-facts-v0.py
+            apply-builtin-constant-p-local-facts-v0.py
+            apply-inline-integer-specialization-v0.py
+            apply-inline-specialization-local-facts-v0.py
+            apply-inline-specialization-stable-parameter-facts-v0.py
+            apply-inline-specialization-transitive-integer-v0.py
+            apply-inline-specialization-base-callee-integer-v0.py
+            apply-inline-specialization-capacity-v0.py
+            apply-inline-specialization-symbolic-address-v0.py
+            apply-inline-specialization-symbolic-nested-array-v0.py
+            apply-inline-specialization-symbolic-integer-closure-v0.py
+            apply-inline-specialization-symbolic-transitive-rewrite-v0.py
+            apply-inline-specialization-symbolic-array-lvalue-v0.py
+            apply-inline-specialization-symbolic-closed-integers-v0.py
+            apply-inline-specialization-base-callee-symbolic-v0.py
+            apply-inline-specialization-resolved-asm-goto-v0.py
+            apply-inline-specialization-core-reachability-v0.py
+            apply-inline-specialization-original-reachability-v0.py
+            apply-inline-asm-local-integer-facts-v0.py
+            apply-inline-specialization-core-empty-function-v0.py
+            apply-inline-specialization-label-alias-v0.py
+            apply-riscv64-default-text-section-v0.py
+            apply-riscv64-explicit-section-flags-v0.py
+            apply-inline-asm-symbolic-specialization-v0.py
+          )
+          start=$(date +%s)
+          for patch in "${patches[@]}"; do
+            python3 "tools/ci/$patch" | tee -a "$ev/patch.log"
+          done
+          git diff --check
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$build" \
+            "$build/bin/minic" "$build/bin/minic-cc"
+          printf 'TIMING toolchain_s=%s\n' "$(( $(date +%s) - start ))" | tee "$ev/timing.txt"
+
+      - name: Prepare pinned Linux source around restored out tree
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0"
+          archive="$work/linux-6.6.143.tar.xz"
+          src="$work/linux-6.6.143"
+          out="$work/out"
+          test -s "$out/.config"
+          test -s "$out/arch/riscv/boot/Image"
+          curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors \
+            https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.6.143.tar.xz -o "$archive"
+          printf '%s  %s\n' dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932 "$archive" | sha256sum -c -
+          rm -rf "$src"
+          tar -xJf "$archive" -C "$work"
+
+      - name: Force-rebuild MMU init and six RISC-V PI startup objects through fixed MiniC
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0"
+          src="$work/linux-6.6.143"
+          out="$work/out"
+          ev="$GITHUB_WORKSPACE/build/linux-expanded-pi-runtime/evidence"
+          wrapper="$GITHUB_WORKSPACE/tests/external/linux/stage2_kbuild_cc.sh"
+          rm -f "$out/arch/riscv/mm/init.o" "$out/arch/riscv/mm/.init.o.cmd"
+          targets=("arch/riscv/mm/init.o")
+          bases=(cmdline_early fdt_early string ctype lib-fdt lib-fdt_ro)
+          for base in "${bases[@]}"; do
+            rm -f "$out/arch/riscv/kernel/pi/${base}.o" "$out/arch/riscv/kernel/pi/${base}.pi.o"
+            rm -f "$out/arch/riscv/kernel/pi/.${base}.o.cmd" "$out/arch/riscv/kernel/pi/.${base}.pi.o.cmd"
+            targets+=("arch/riscv/kernel/pi/${base}.pi.o")
+          done
+          start=$(date +%s)
+          MINIC="$work/toolchain/bin/minic" REAL_CC=/usr/bin/riscv64-linux-gnu-gcc \
+          MINIC_KEEP_INTERMEDIATES=1 MINIC_KBUILD_TRACE="$ev/pi-refresh.trace" CORE_FAST_TRACE=1 \
+            make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
+              CC="$wrapper" -j4 V=1 "${targets[@]}" >"$ev/pi-refresh.log" 2>&1
+          printf 'TIMING early_refresh_s=%s objects=%s\n' "$(( $(date +%s) - start ))" "${#targets[@]}" | tee -a "$ev/timing.txt"
+          for target in "${targets[@]}"; do test -s "$out/$target"; done
+          riscv64-linux-gnu-objdump -dr "$out/arch/riscv/mm/init.o" >"$ev/init.disasm.txt"
+          riscv64-linux-gnu-objdump -dr "$out/arch/riscv/kernel/pi/cmdline_early.pi.o" >"$ev/cmdline_early.pi.disasm.txt"
+          riscv64-linux-gnu-objdump -dr "$out/arch/riscv/kernel/pi/string.pi.o" >"$ev/string.pi.disasm.txt"
+          grep -E 'R_RISCV_(GOT_HI20|PCREL_HI20|PCREL_LO12)' "$ev/init.disasm.txt" >"$ev/init.relocs.txt" || true
+          grep -E 'R_RISCV_(GOT_HI20|PCREL_HI20|PCREL_LO12)' "$ev/cmdline_early.pi.disasm.txt" >"$ev/cmdline_early.pi.relocs.txt" || true
+          grep -n -A35 -B20 '<set_satp_mode>' "$ev/init.disasm.txt" >"$ev/set_satp_mode.disasm.txt" || true
+          cat "$ev/set_satp_mode.disasm.txt" || true
+
+      - name: Relink focused early-refreshed Linux Image
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0"
+          src="$work/linux-6.6.143"
+          out="$work/out"
+          ev="$GITHUB_WORKSPACE/build/linux-expanded-pi-runtime/evidence"
+          wrapper="$GITHUB_WORKSPACE/tests/external/linux/stage2_kbuild_cc.sh"
+          start=$(date +%s)
+          MINIC="$work/toolchain/bin/minic" REAL_CC=/usr/bin/riscv64-linux-gnu-gcc \
+          MINIC_KEEP_INTERMEDIATES=0 MINIC_KBUILD_TRACE="$ev/relink.trace" CORE_FAST_TRACE=1 \
+            make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
+              CC="$wrapper" -j4 V=1 Image >"$ev/relink.log" 2>&1
+          printf 'TIMING relink_s=%s\n' "$(( $(date +%s) - start ))" | tee -a "$ev/timing.txt"
+          test -s "$out/arch/riscv/boot/Image"
+          sha256sum "$out/arch/riscv/boot/Image" | tee "$ev/Image.sha256"
+          stat -c 'EARLY_REFRESH_IMAGE bytes=%s' "$out/arch/riscv/boot/Image" | tee "$ev/summary.txt"
+
+      - name: Trace early-refreshed boot exception frontier
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          out="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0/out"
+          ev="$GITHUB_WORKSPACE/build/linux-expanded-pi-runtime/evidence"
+          set +e
+          timeout --signal=TERM 5s qemu-system-riscv64 \
+            -M virt -cpu max -m 512M -smp 1 -nographic -no-reboot \
+            -bios default -kernel "$out/arch/riscv/boot/Image" \
+            -append 'console=ttyS0 earlycon=sbi loglevel=8 panic=-1' \
+            -d int,in_asm -D "$ev/qemu-trace.log" >"$ev/qemu-console-noinitrd.log" 2>&1
+          rc=$?
+          set -e
+          printf 'EARLY_TRACE_QEMU_RC=%s\n' "$rc" | tee -a "$ev/summary.txt"
+          grep -a 'riscv_cpu_do_interrupt' "$ev/qemu-trace.log" | head -n 12 | tee "$ev/qemu-interrupts-first.txt" || true
+          grep -a 'riscv_cpu_do_interrupt' "$ev/qemu-trace.log" | tail -n 80 | tee "$ev/qemu-interrupts.txt" || true
+          tail -n 300 "$ev/qemu-trace.log" >"$ev/qemu-trace-tail.txt" || true
+          tail -n 160 "$ev/qemu-console-noinitrd.log" >"$ev/qemu-console-tail.txt" || true
+
+      - name: Build Python-era P1 initramfs
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          chmod +x tests/external/linux/qemu_explicit_initrd_wrapper.py
+          work="$GITHUB_WORKSPACE/build/linux-expanded-pi-runtime"
+          BUILD_DIR="$work/initramfs" \
+          OUTPUT_INITRAMFS="$work/runtime-initramfs.cpio.gz" \
+          RISCV_CC=riscv64-linux-gnu-gcc \
+            bash tests/external/linux/build_runtime_initramfs.sh
+
+      - name: Run explicit-initrd Python-era P1 contract
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-expanded-pi-runtime"
+          image="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0/out/arch/riscv/boot/Image"
+          start=$(date +%s)
+          set +e
+          LINUX_IMAGE="$image" \
+          INITRAMFS="$work/runtime-initramfs.cpio.gz" \
+          BUILD_DIR="$work/qemu" \
+          LINUX_RELEASE=6.6.143 \
+          LINUX_RUNTIME_PROFILE=p1 \
+          QEMU_SYSTEM_RISCV64="$GITHUB_WORKSPACE/tests/external/linux/qemu_explicit_initrd_wrapper.py" \
+          QEMU_REAL_SYSTEM_RISCV64=qemu-system-riscv64 \
+          QEMU_EXPLICIT_DTB_DIR="$work/dtb" \
+          QEMU_TIMEOUT_SECONDS=90 \
+            bash tests/external/linux/runtime_boot.sh >"$work/evidence/p1-driver.log" 2>&1
+          rc=$?
+          set -e
+          elapsed=$(( $(date +%s) - start ))
+          printf 'EARLY_RUNTIME_P1_RC=%s elapsed_s=%s\n' "$rc" "$elapsed" | tee -a "$work/evidence/summary.txt"
+          if test -s "$work/qemu/rdinit-init.log"; then
+            cp "$work/qemu/rdinit-init.log" "$work/evidence/rdinit-init.log"
+            python3 tests/external/linux/runtime_v2_log_check.py --profile p1 --log "$work/qemu/rdinit-init.log" \
+              | tee "$work/evidence/p1-check.log" || true
+            tail -n 220 "$work/qemu/rdinit-init.log" >"$work/evidence/rdinit-init-tail.log" || true
+          fi
+          cat "$work/evidence/p1-driver.log"
+          exit "$rc"
+
+      - name: Preserve focused PI runtime evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-expanded-pi-runtime-v0
+          path: build/linux-expanded-pi-runtime/evidence/
+          if-no-files-found: ignore
+          retention-days: 7
+
+
+  p1:
+    if: (github.event_name == 'workflow_dispatch' && (inputs.mode == 'p1' || inputs.mode == 'all')) || (github.event_name == 'push' && contains(github.event.head_commit.message, '[linux-expanded-runtime-p1]'))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Compute stable current-profile cache identity
+        id: profile-cache
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          digest=$(python3 tools/ci/linux-runtime-profile-cache-id-v1.py)
+          test -n "$digest"
+          printf 'digest=%s\n' "$digest" >>"$GITHUB_OUTPUT"
+          printf 'LINUX_RUNTIME_PROFILE_CACHE_ID=%s\n' "$digest"
+
+      - name: Restore latest successful Expanded Linux out cache
+        id: expanded-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-expanded-kbuild-v0/out
+          key: linux-expanded-image-v3-6.6.143-${{ runner.os }}-${{ steps.profile-cache.outputs.digest }}-${{ hashFiles('tools/ci/linux-expanded-owner-targets-v1.txt', 'tools/ci/linux-expanded-owner-refresh-v1.sh') }}
+          fail-on-cache-miss: true
+
+      - name: Verify restored MiniC Image
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          image="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0/out/arch/riscv/boot/Image"
+          config="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0/out/.config"
+          test "${{ steps.expanded-cache.outputs.cache-hit }}" = "true"
+          test -s "$image"
+          test -s "$config"
+          mkdir -p build/linux-expanded-runtime-p1/evidence
+          sha256sum "$image" | tee build/linux-expanded-runtime-p1/evidence/Image.sha256
+          stat -c 'LINUX_EXPANDED_RUNTIME_IMAGE=FOUND bytes=%s' "$image" | tee build/linux-expanded-runtime-p1/evidence/summary.txt
+          printf 'CACHE_HIT=%s\nCACHE_PRIMARY_KEY=%s\nCACHE_MATCHED_KEY=%s\n' \
+            "${{ steps.expanded-cache.outputs.cache-hit }}" \
+            "${{ steps.expanded-cache.outputs.cache-primary-key }}" \
+            "${{ steps.expanded-cache.outputs.cache-matched-key }}" \
+            | tee build/linux-expanded-runtime-p1/evidence/cache.txt
+
+      - name: Install P1 runtime prerequisites
+        run: |
+          sudo apt-get -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu libc6-dev-riscv64-cross \
+            cpio gzip qemu-system-misc opensbi file python3 device-tree-compiler
+          chmod +x tests/external/linux/qemu_explicit_initrd_wrapper.py
+
+      - name: Diagnose restored vmlinux physical layout
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          out="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0/out"
+          ev="$GITHUB_WORKSPACE/build/linux-expanded-runtime-p1/evidence"
+          vmlinux="$out/vmlinux"
+          image="$out/arch/riscv/boot/Image"
+          test -s "$vmlinux"
+          riscv64-linux-gnu-readelf -lW "$vmlinux" >"$ev/vmlinux-program-headers.txt"
+          riscv64-linux-gnu-objdump -h "$vmlinux" >"$ev/vmlinux-sections.txt"
+          riscv64-linux-gnu-size -A -x "$vmlinux" >"$ev/vmlinux-size.txt"
+          stat -c 'IMAGE_BYTES=%s' "$image" | tee "$ev/layout-summary.txt"
+          grep -E ' LOAD |\.text|\.rodata|\.data|\.bss|\.init|\.sdata|\.sbss|\.percpu' \
+            "$ev/vmlinux-program-headers.txt" "$ev/vmlinux-sections.txt" \
+            | tail -n 160 | tee -a "$ev/layout-summary.txt" || true
+
+      - name: Rank code and rodata inflation by symbol and object
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          out="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0/out"
+          ev="$GITHUB_WORKSPACE/build/linux-expanded-runtime-p1/evidence"
+          riscv64-linux-gnu-nm -S --size-sort --radix=d "$out/vmlinux" \
+            | tail -n 300 >"$ev/vmlinux-top-symbols.txt"
+          python3 - "$out" "$ev/object-section-ranking.txt" <<'PY'
+          import pathlib, re, subprocess, sys
+          out = pathlib.Path(sys.argv[1])
+          report = pathlib.Path(sys.argv[2])
+          objs = sorted(out.rglob('*.o'))
+          rows = []
+          for base in range(0, len(objs), 96):
+              batch = objs[base:base+96]
+              p = subprocess.run(
+                  ['riscv64-linux-gnu-size', '-A', '-d', *map(str, batch)],
+                  text=True, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+              current = None
+              text = ro = data = bss = 0
+              def flush():
+                  if current is not None:
+                      rows.append((text, ro, data, bss, current))
+              for line in p.stdout.splitlines():
+                  if line.endswith(':') and not line.lstrip().startswith('section'):
+                      flush()
+                      current = line[:-1]
+                      text = ro = data = bss = 0
+                      continue
+                  m = re.match(r'^\s*(\S+)\s+(\d+)\s+', line)
+                  if current is None or not m:
+                      continue
+                  sec, n = m.group(1), int(m.group(2))
+                  if sec.startswith('.text') or sec in ('.init.text', '.exit.text'):
+                      text += n
+                  elif sec.startswith('.rodata'):
+                      ro += n
+                  elif sec.startswith('.data') or sec in ('.sdata', '.init.data'):
+                      data += n
+                  elif sec.startswith('.bss') or sec == '.sbss':
+                      bss += n
+              flush()
+          with report.open('w') as f:
+              f.write(f'OBJECT_COUNT={len(rows)}\n')
+              for key, idx in [('TEXT',0),('RODATA',1),('DATA',2)]:
+                  f.write(f'--- TOP_{key} ---\n')
+                  for row in sorted(rows, key=lambda r:r[idx], reverse=True)[:120]:
+                      f.write(f'{row[idx]:12d} text={row[0]:12d} rodata={row[1]:12d} data={row[2]:12d} bss={row[3]:12d} {row[4]}\n')
+          PY
+          {
+            echo '--- TOP SYMBOLS ---'
+            tail -n 80 "$ev/vmlinux-top-symbols.txt"
+            echo '--- TOP OBJECT TEXT ---'
+            sed -n '/--- TOP_TEXT ---/,/--- TOP_RODATA ---/p' "$ev/object-section-ranking.txt" | head -n 45 || true
+            echo '--- TOP OBJECT RODATA ---'
+            sed -n '/--- TOP_RODATA ---/,/--- TOP_DATA ---/p' "$ev/object-section-ranking.txt" | head -n 45 || true
+          } | tee "$ev/inflation-summary.txt"
+
+      - name: Build deterministic P1 initramfs
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          BUILD_DIR="$GITHUB_WORKSPACE/build/linux-expanded-runtime-p1/initramfs" \
+          OUTPUT_INITRAMFS="$GITHUB_WORKSPACE/build/linux-expanded-runtime-p1/runtime-initramfs.cpio.gz" \
+          RISCV_CC=riscv64-linux-gnu-gcc \
+            bash tests/external/linux/build_runtime_initramfs.sh
+
+      - name: Boot exact Expanded Image and run P1 syscall contract
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-expanded-runtime-p1"
+          image="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0/out/arch/riscv/boot/Image"
+          initrd="$work/runtime-initramfs.cpio.gz"
+          start=$(date +%s)
+
+          set +e
+          LINUX_IMAGE="$image" \
+          INITRAMFS="$initrd" \
+          BUILD_DIR="$work/qemu" \
+          LINUX_RELEASE=6.6.143 \
+          LINUX_RUNTIME_PROFILE=p1 \
+          QEMU_SYSTEM_RISCV64="$GITHUB_WORKSPACE/tests/external/linux/qemu_explicit_initrd_wrapper.py" \
+          QEMU_REAL_SYSTEM_RISCV64=qemu-system-riscv64 \
+          QEMU_EXPLICIT_DTB_DIR="$work/dtb" \
+          QEMU_TIMEOUT_SECONDS=90 \
+            bash tests/external/linux/runtime_boot.sh
+          boot_rc=$?
+          set -e
+
+          if test -s "$work/qemu/rdinit-init.log"; then
+            cp "$work/qemu/rdinit-init.log" "$work/evidence/rdinit-init.log"
+          fi
+
+          if test "$boot_rc" -ne 0; then
+            trace="$work/early-trace.full.txt"
+            set +e
+            QEMU_REAL_SYSTEM_RISCV64=qemu-system-riscv64 \
+            QEMU_EXPLICIT_DTB_DIR="$work/dtb-trace" \
+            timeout 3s python3 tests/external/linux/qemu_explicit_initrd_wrapper.py \
+              -M virt -cpu max -m 512M -smp 1 -nographic -no-reboot \
+              -bios default -kernel "$image" -initrd "$initrd" \
+              -append 'console=ttyS0 earlycon=sbi loglevel=8 panic=-1 rdinit=/init minic_runtime=p1' \
+              -d in_asm,int -D "$trace" \
+              >"$work/evidence/early-trace-console.txt" 2>&1
+            trace_rc=$?
+            set -e
+            printf 'P1_BOOT_RC=%s\nP1_TRACE_RC=%s\n' "$boot_rc" "$trace_rc" \
+              | tee "$work/evidence/early-trace-summary.txt"
+            if test -s "$trace"; then
+              tail -n 5000 "$trace" >"$work/evidence/early-trace.tail.txt"
+              rm -f "$trace"
+            fi
+            exit "$boot_rc"
+          fi
+
+          python3 tests/external/linux/runtime_v2_log_check.py \
+            --profile p1 \
+            --log "$work/qemu/rdinit-init.log"
+
+          elapsed=$(( $(date +%s) - start ))
+          printf 'LINUX_EXPANDED_RUNTIME_P1=PASS syscalls=12 elapsed_s=%s head=%s\n' \
+            "$elapsed" "$GITHUB_SHA" | tee -a "$work/evidence/summary.txt"
+
+      - name: Preserve P1 runtime evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-expanded-runtime-p1-v0
+          path: build/linux-expanded-runtime-p1/evidence/
+          if-no-files-found: ignore
+          retention-days: 7
+
+  trace:
+    if: (github.event_name == 'workflow_dispatch' && (inputs.mode == 'trace' || inputs.mode == 'all')) || (github.event_name == 'push' && contains(github.event.head_commit.message, '[linux-expanded-entry-trace]'))
+    concurrency:
+      group: linux-expanded-entry-trace-${{ github.ref }}
+      cancel-in-progress: true
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Restore successful Expanded Linux out cache
+        id: expanded-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-expanded-kbuild-v0/out
+          key: linux-expanded-mixed-v1-6.6.143-${{ runner.os }}-${{ hashFiles('src/**', 'include/**', 'tools/ci/apply-*.py', 'tests/external/linux/stage2_kbuild_cc.sh') }}
+          restore-keys: |
+            linux-expanded-mixed-v1-6.6.143-${{ runner.os }}-
+
+      - name: Install trace prerequisites
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            qemu-system-misc opensbi binutils-riscv64-linux-gnu python3
+
+      - name: Trace first translated kernel blocks
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          out="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0/out"
+          work="$GITHUB_WORKSPACE/build/linux-expanded-entry-trace"
+          image="$out/arch/riscv/boot/Image"
+          vmlinux="$out/vmlinux"
+          mkdir -p "$work"
+          test -s "$image"
+          test -s "$vmlinux"
+          sha256sum "$image" | tee "$work/Image.sha256"
+          stat -c 'IMAGE_BYTES=%s' "$image" | tee "$work/summary.txt"
+          riscv64-linux-gnu-readelf -h "$vmlinux" | grep -E 'Entry point|Machine:' | tee "$work/elf-entry.txt"
+          riscv64-linux-gnu-objdump -d --start-address=0xffffffff80000000 --stop-address=0xffffffff80000400 "$vmlinux" \
+            >"$work/vmlinux-entry-disasm.txt" || true
+
+          set +e
+          timeout --signal=TERM 4s qemu-system-riscv64 \
+            -M virt -cpu max -m 512M -smp 1 -nographic -no-reboot \
+            -bios default -kernel "$image" \
+            -append 'console=ttyS0 earlycon=sbi loglevel=8 panic=-1' \
+            -d in_asm -D "$work/qemu-in-asm.log" \
+            >"$work/qemu-console.log" 2>&1
+          rc=$?
+          set -e
+          echo "QEMU_RC=$rc" | tee -a "$work/summary.txt"
+
+          python3 - "$work/qemu-in-asm.log" "$work/kernel-blocks.txt" <<'PY'
+          import re, sys
+          src, dst = sys.argv[1:]
+          text = open(src, 'r', errors='replace').read().splitlines()
+          blocks=[]
+          cur=[]
+          keep=False
+          for line in text:
+              if line.startswith('IN:'):
+                  if cur and keep: blocks.extend(cur)
+                  cur=[line]
+                  keep=False
+                  continue
+              if cur:
+                  cur.append(line)
+                  m=re.match(r'0x([0-9a-fA-F]+):', line.strip())
+                  if m and int(m.group(1),16) >= 0x80200000:
+                      keep=True
+          if cur and keep: blocks.extend(cur)
+          open(dst,'w').write('\n'.join(blocks[-1200:])+'\n')
+          addrs=[]
+          for line in blocks:
+              m=re.match(r'\s*0x([0-9a-fA-F]+):', line)
+              if m:
+                  a=int(m.group(1),16)
+                  if 0x80200000 <= a < 0xa0000000:
+                      addrs.append(a)
+          from collections import Counter
+          c=Counter(addrs)
+          with open(dst+'.summary','w') as f:
+              f.write(f'KERNEL_TRANSLATED_INSNS={len(addrs)}\n')
+              f.write(f'KERNEL_UNIQUE_ADDRS={len(c)}\n')
+              if addrs:
+                  f.write(f'FIRST_PC=0x{addrs[0]:x}\nLAST_PC=0x{addrs[-1]:x}\n')
+              for a,n in c.most_common(40):
+                  f.write(f'PC 0x{a:x} count={n}\n')
+          PY
+          cat "$work/kernel-blocks.txt.summary" | tee -a "$work/summary.txt"
+          tail -n 240 "$work/kernel-blocks.txt" | tee "$work/kernel-blocks-tail.txt"
+          tail -n 120 "$work/qemu-console.log" | tee "$work/qemu-console-tail.txt"
+
+      - name: Preserve entry trace
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-expanded-entry-trace-v0
+          path: build/linux-expanded-entry-trace/
+          if-no-files-found: ignore
+          retention-days: 7

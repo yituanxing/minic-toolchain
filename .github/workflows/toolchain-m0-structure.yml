@@ -13,13 +13,14 @@ on:
       - "tools/ci/check_linux_runtime_focused_faults_convergence_v1.py"
       - "tools/ci/check_linux_runtime_fixture_restore_v1.py"
       - "tools/ci/check_linux_expanded_pi_p1_convergence_v1.py"
+      - "tools/ci/check_linux_early_runtime_union_v1.py"
       - "tools/ci/check_linux_efi_vdso_convergence_v1.py"
       - "tools/ci/check_minias_semantic_convergence_v1.py"
       - "tools/ci/check_linux_runtime_fixture_producers_convergence_v1.py"
       - ".github/workflows/linux-runtime-fixture-producers-v1.yml"
       - "tools/ci/check_linux_runtime_contract_oracles_convergence_v1.py"
       - ".github/workflows/linux-efi-vdso-focused-v1.yml"
-      - ".github/workflows/linux-runtime-contract-oracles-v1.yml"
+      - ".github/workflows-disabled/linux-runtime-contract-oracles-v1.yml"
       - ".github/workflows/linux-expanded-pi-p1-runtime-v1.yml"
       - ".github/actions/linux-runtime-restore-fixture/**"
       - "tools/ci/check_linux_runtime_frontier_diagnostics_convergence_v1.py"
@@ -90,6 +91,10 @@ jobs:
           python3 tools/ci/check_linux_runtime_fixture_restore_v1.py
           ruby -e 'require "yaml"; YAML.parse_file(ARGV.fetch(0)); puts "M0_RUNTIME_FIXTURE_ACTION_YAML=PASS"' .github/actions/linux-runtime-restore-fixture/action.yml
 
+      - name: Prove early Runtime consolidated source canons and seven exact jobs
+        run: |
+          python3 tools/ci/check_linux_early_runtime_union_v1.py
+
       - name: Verify expanded PI/P1 Runtime diagnostic workflow convergence
         run: |
           python3 tools/ci/check_linux_expanded_pi_p1_convergence_v1.py
@@ -103,7 +108,7 @@ jobs:
       - name: Verify Linux compiler semantics and QEMU watch contract consolidation
         run: |
           python3 tools/ci/check_linux_runtime_contract_oracles_convergence_v1.py
-          ruby -e 'require "yaml"; YAML.parse_file(ARGV.fetch(0)); puts "M0_RUNTIME_CONTRACT_ORACLES_YAML=PASS"' .github/workflows/linux-runtime-contract-oracles-v1.yml
+          ruby -e 'require "yaml"; YAML.parse_file(ARGV.fetch(0)); puts "M0_RUNTIME_CONTRACT_ORACLES_YAML=PASS"' .github/workflows/linux-expanded-pi-p1-runtime-v1.yml
 
       - name: Check MiniAS focused and 3536 semantic oracle consolidation
         run: |

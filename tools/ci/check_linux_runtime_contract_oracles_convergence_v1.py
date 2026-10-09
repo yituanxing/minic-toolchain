@@ -3,7 +3,7 @@
 from pathlib import Path
 import re, subprocess
 ROOT=Path(__file__).resolve().parents[2]
-TARGET=ROOT/".github/workflows/linux-runtime-contract-oracles-v1.yml"
+TARGET=ROOT/".github/workflows/linux-expanded-pi-p1-runtime-v1.yml"
 ARCHIVES={
  "linux-runtime-compiler-semantics-v1.yml":("8601132b3f798dbfb0d57d3c3bb8eb802ea99c1b","semantics",("pi-local-symbol","satp-micro"),"linux-runtime-compiler-semantics-v1"),
  "linux-runtime-qemu-watch-contracts-v1.yml":("c7f1311975ffd5703d216d1973ff6aa206ca6370","watch",("qemu-watch-cert","inconclusive-cert"),"linux-runtime-qemu-watch-contracts-v1"),
@@ -18,7 +18,7 @@ def normal(s):
 def main():
  s=TARGET.read_text()
  current=jobs(s)
- if set(current)!={"pi-local-symbol","satp-micro","qemu-watch-cert","inconclusive-cert"}:
+ if set(current)!={"pi-runtime","p1","trace","pi-local-symbol","satp-micro","qemu-watch-cert","inconclusive-cert"}:
   raise AssertionError("independent jobs lost")
  for filename,(sha,mode,ids,group) in ARCHIVES.items():
   p=ROOT/".github/workflows-disabled"/filename
