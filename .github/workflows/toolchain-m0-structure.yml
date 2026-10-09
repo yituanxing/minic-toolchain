@@ -11,6 +11,8 @@ on:
       - 'tools/ci/test_linux_runtime_prefix_bisect_v1.py'
       - 'tools/ci/check_minild_integration_convergence_v1.py'
       - 'tools/ci/check_minipp_frozen_convergence_v1.py'
+      - 'tools/ci/check_linux_perf_optin_convergence_v1.py'
+      - '.github/workflows/linux-runtime-optin-perf-suite-v1.yml'
       - '.github/workflows/minipp-linux-frozen-v1.yml'
       - '.github/workflows/minild-integration-v1.yml'
       - 'tests/external/linux/stage2_kbuild_cc*.sh'
@@ -52,6 +54,11 @@ jobs:
         run: |
           python3 tools/ci/check_minipp_frozen_convergence_v1.py
           ruby -e 'require "yaml"; YAML.parse_file(ARGV.fetch(0)); puts "M0_MINIPP_FROZEN_YAML=PASS"' .github/workflows/minipp-linux-frozen-v1.yml
+
+      - name: Verify Linux performance suite convergence
+        run: |
+          python3 tools/ci/check_linux_perf_optin_convergence_v1.py
+          ruby -e 'require "yaml"; YAML.parse_file(ARGV.fetch(0)); puts "M0_LINUX_PERF_SUITE_YAML=PASS"' .github/workflows/linux-runtime-optin-perf-suite-v1.yml
 
       - name: Run Linux runtime isolation selftests
         run: |
