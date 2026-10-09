@@ -242,6 +242,29 @@ jobs:
         with:
           fixture: source
 
+      - name: Compute pinned MiniC candidate object cache identity
+        id: candidate_id
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          # Must be computed from the CLEAN sources, before 39 MiniC
+          # runtime-profile patches modify src/ in place.
+          profile=$(python3 tools/ci/linux-runtime-profile-cache-id-v1.py)
+          objects=$(sha256sum tools/ci/linux-runtime-gcc-cohort-objects-v1.txt | cut -d' ' -f1)
+          gcc=$(sha256sum "$(command -v riscv64-linux-gnu-gcc)" | cut -d' ' -f1)
+          assembler=$(sha256sum "$(command -v riscv64-linux-gnu-as)" | cut -d' ' -f1)
+          echo "key=gnu-minic-objects-v1-eeb04f304ebfb97a1079c187dc0c2ea3cc61fc50a55aa3cc776237c16ab19bbe-$profile-$objects-$gcc-$assembler" >>"$GITHUB_OUTPUT"
+
+      - name: Restore exact ABI-validated MiniC candidate objects
+        id: candidate_restore
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            build/linux-runtime-gcc-cohort-v1/minic
+            build/linux-runtime-gcc-cohort-v1/minic-manifest.sha256
+            build/linux-runtime-gcc-cohort-v1/minic-identity.txt
+          key: ${{ steps.candidate_id.outputs.key }}
+
       - name: Build MiniC once and execute full batched GNU overlay bisection
         shell: bash
         run: |
@@ -262,6 +285,33 @@ jobs:
             "$work/provenance" \
             tools/ci/linux-runtime-gcc-cohort-objects-v1.txt "$ev"
 
+      - name: Check completed MiniC object pool is cacheable
+        id: candidate_ready
+        if: always()
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-v1"
+          if test -s "$ev/minic-manifest.sha256" && \
+             test -s "$ev/minic-identity.txt" && \
+             test -s "$ev/cohort.log" && \
+             grep -Fq 'COHORT_ABI=PASS objects=384' "$ev/cohort.log" && \
+             (cd "$ev"; sha256sum --quiet -c minic-manifest.sha256); then
+            echo "ready=true" >>"$GITHUB_OUTPUT"
+          else
+            echo "ready=false" >>"$GITHUB_OUTPUT"
+          fi
+
+      - name: Save immutable MiniC objects despite later link or QEMU failure
+        if: always() && steps.candidate_ready.outputs.ready == 'true' && steps.candidate_restore.outputs['cache-hit'] != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            build/linux-runtime-gcc-cohort-v1/minic
+            build/linux-runtime-gcc-cohort-v1/minic-manifest.sha256
+            build/linux-runtime-gcc-cohort-v1/minic-identity.txt
+          key: ${{ steps.candidate_id.outputs.key }}
+
       - name: Preserve compilation, GNU object identities, QEMU verdicts and bisection
         if: always()
         uses: actions/upload-artifact@v4
@@ -274,6 +324,8 @@ jobs:
             build/linux-runtime-gcc-cohort-v1/gcc-preflight.log
             build/linux-runtime-gcc-cohort-v1/gcc-objects-stable.sha256
             build/linux-runtime-gcc-cohort-v1/results.tsv
+            build/linux-runtime-gcc-cohort-v1/minic-manifest.sha256
+            build/linux-runtime-gcc-cohort-v1/minic-identity.txt
             build/linux-runtime-gcc-cohort-v1/frontier.txt
             build/linux-runtime-gcc-cohort-v1/trials/*/link.log
             build/linux-runtime-gcc-cohort-v1/trials/*/runtime.log

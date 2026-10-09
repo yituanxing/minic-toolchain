@@ -89,25 +89,62 @@ echo "COHORT_GNU_PREFLIGHT=PASS objects=$n"
 # touching MiniC compilation inputs. This also avoids inherited timestamps.
 rm -rf -- "$out"
 cp -a --reflink=auto "$gold_snapshot" "$out"
-# Remove just the selected objects and let ONE parallel Kbuild invocation
-# reproduce the exact GCC preprocessing flags and GNU assembler semantics.
-for ((i=0;i<n;i++)); do
-  rm -f "$out/${objects[i]}" "${commands[i]}"
-done
-cc_started=$(date +%s%N)
-if ! MINIC="$minic" REAL_CC=/usr/bin/riscv64-linux-gnu-gcc \
-  MINIC_KEEP_INTERMEDIATES=1 \
-  make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
-    CC="$repo/tests/external/linux/stage2_kbuild_cc.sh" -j4 "${targets[@]}" \
-    >"$ev/compile.log" 2>&1; then
-  echo "COHORT_COMPILE=FAIL"; tail -n 80 "$ev/compile.log"; exit 4
+# Candidate .o cache identity is independent of CI harness-only commits.
+# It depends on exact Linux/GCC golden evidence, target list, the MiniC
+# executable produced by the checked-in profile, and GNU assembler identity.
+# This permits reusing the *same* verified 384 .o after a CI harness fix.
+compiler_sig=$(sha256sum "$minic" | cut -d' ' -f1)
+assembler_sig=$(sha256sum /usr/bin/riscv64-linux-gnu-as | cut -d' ' -f1)
+gold_sig=$(sha256sum "$prov/gcc-objects.sha256" | cut -d' ' -f1)
+list_sig=$(sha256sum "$objects_file" | cut -d' ' -f1)
+cache_contract=$(printf '%s\n' "$actual_cfg" "$gnu_image_sha" \
+  "$compiler_sig" "$assembler_sig" "$gold_sig" "$list_sig" \
+  | sha256sum | cut -d' ' -f1)
+cached=0
+if [[ -e "$ev/minic-manifest.sha256" || -e "$ev/minic-identity.txt" ]]; then
+  test -s "$ev/minic-manifest.sha256" && test -s "$ev/minic-identity.txt" || {
+    echo "COHORT_CANDIDATE_CACHE=ERROR incomplete manifest"; exit 7;
+  }
+  [[ $(cat "$ev/minic-identity.txt") == "$cache_contract" ]] || {
+    echo "COHORT_CANDIDATE_CACHE=ERROR identity mismatch"; exit 7;
+  }
+  # Verify every expected MiniC object and ensure there is no partial pool.
+  test "$(wc -l <"$ev/minic-manifest.sha256")" -eq "$n"
+  (cd "$ev"; sha256sum --quiet -c minic-manifest.sha256) || {
+    echo "COHORT_CANDIDATE_CACHE=ERROR object hash mismatch"; exit 7;
+  }
+  for target in "${objects[@]}"; do
+    test -s "$ev/minic/$target" || { echo "COHORT_CANDIDATE_CACHE=ERROR missing $target"; exit 7; }
+    grep -Fqx "minic/$target" <(awk '{print $2}' "$ev/minic-manifest.sha256") || {
+      echo "COHORT_CANDIDATE_CACHE=ERROR unexpected candidate list"; exit 7;
+    }
+  done
+  cached=1
+  echo "COHORT_CANDIDATE_CACHE=HIT objects=$n"
+else
+  echo "COHORT_CANDIDATE_CACHE=MISS objects=$n"
+  # Only on cache miss: one parallel Kbuild invokes exact GCC -E / MiniC -S
+  # / GNU as. Pinned GNU output snapshot already restored above.
+  for ((i=0;i<n;i++)); do
+    rm -f "$out/${objects[i]}" "${commands[i]}"
+  done
+  cc_started=$(date +%s%N)
+  if ! MINIC="$minic" REAL_CC=/usr/bin/riscv64-linux-gnu-gcc \
+    MINIC_KEEP_INTERMEDIATES=1 \
+    make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
+      CC="$repo/tests/external/linux/stage2_kbuild_cc.sh" -j4 "${targets[@]}" \
+      >"$ev/compile.log" 2>&1; then
+    echo "COHORT_COMPILE=FAIL"; tail -n 80 "$ev/compile.log"; exit 4
+  fi
+  for target in "${objects[@]}"; do
+    test -s "$out/$target" || { echo "COHORT_COMPILE=FAIL target=$target"; exit 4; }
+    stem=${target%.o}
+    test -s "$out/$stem.minic-stage2.i" || { echo "COHORT_INPUT=FAIL target=$target"; exit 4; }
+    cp -a "$out/$target" "$ev/minic/$target"
+  done
+  cc_ended=$(date +%s%N)
+  echo "COHORT_COMPILE=PASS objects=$n elapsed_ms=$(((cc_ended-cc_started)/1000000))"
 fi
-for target in "${objects[@]}"; do
-  test -s "$out/$target" || { echo "COHORT_COMPILE=FAIL target=$target"; exit 4; }
-  stem=${target%.o}
-  test -s "$out/$stem.minic-stage2.i" || { echo "COHORT_INPUT=FAIL target=$target"; exit 4; }
-  cp -a "$out/$target" "$ev/minic/$target"
-done
 python3 - "$ev/gcc" "$ev/minic" "$objects_file" <<'PY_ABI'
 from pathlib import Path
 import struct,sys
@@ -122,8 +159,17 @@ for name in names:
     assert x[48:52]==y[48:52], "RISC-V ABI mismatch: "+name
 print("COHORT_ABI=PASS objects="+str(len(names)))
 PY_ABI
-cc_ended=$(date +%s%N)
-echo "COHORT_COMPILE=PASS objects=$n elapsed_ms=$(((cc_ended-cc_started)/1000000))"
+# Cache data only after *every* candidate passes exact ABI verification.
+# A partial compilation cannot create an apparently usable object pool.
+if ((cached==0)); then
+  (cd "$ev"; for target in "${objects[@]}"; do
+    sha256sum "minic/$target"
+  done) >"$ev/minic-manifest.sha256"
+  printf '%s\n' "$cache_contract" >"$ev/minic-identity.txt"
+  echo "COHORT_CANDIDATE_CACHE=READY objects=$n"
+else
+  echo "COHORT_COMPILE=SKIPPED reason=exact-object-cache-hit objects=$n"
+fi
 # Build the initramfs just once; it stays fixed throughout all QEMU trials.
 BUILD_DIR="$ev/initramfs" OUTPUT_INITRAMFS="$ev/runtime-initramfs.cpio.gz" \
   RISCV_CC=riscv64-linux-gnu-gcc \
