@@ -36,3 +36,15 @@ version rather than silently updating this one.
 The generated `.s` files are downstream products of this frozen `.i` corpus
 and the selected frozen compiler identity. They may be regenerated; they must
 not be hand-edited.
+
+## Pre-expiry original-artifact rescue
+
+The seven inner tar SHA256 values above and the independently pinned original
+Actions **outer ZIP** SHA256 values are different objects. The nine current
+original artifact IDs, their ZIP digests, expiration times, and an offline
+verifier/explicit downloader are recorded in
+`tools/ci/minias-historical-artifacts-v1.json` and
+`tools/ci/minias_artifact_rescue_v1.py`. See
+`docs/ci/minias-artifact-rescue-2026-10-09.md` for the fail-closed
+migration contract. M0 validates the rescue verifier, but it does not
+mirror these expiring bytes or certify a heavy Linux/MiniAS run.
