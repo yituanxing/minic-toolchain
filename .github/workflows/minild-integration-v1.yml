@@ -3,8 +3,8 @@ name: MiniLD Integration - Dynamic, Linux REL and Static
 on:
   push:
     branches:
-      - "agent/linux-expanded-kbuild-v0"
       - "agent/linux-perf-boolean-domain-v1"
+  workflow_call:
   workflow_dispatch:
     inputs:
       mode:

@@ -1,271 +1,73 @@
-# Current CI workflow map
+# CI topology — authoritative active map (2026-10-09)
 
-> **2026-10-09 latest T1 execution consolidation:** MiniC RV64 + MiniAR + MiniLD now run as **one shared-build runner job**, with **eight independently reported regression checks** and manual owner modes retained. Physical declared Jobs **171 total** (Runtime **87**, Performance **84**), previously 175. Active YAML count is unchanged: **25 Runtime / 23 Performance / 26 distinct names / 48 branch-path entries**. New T1 real CI results must be checked separately. See [single-build implementation and source proof](ci-toolchain-focused-single-build-2026-10-09.md). Previous 175-job figures lower on this page are historical.
+> This file supersedes the historical **count snapshots** that used to be prepended repeatedly to this page. Historical text is preserved in Git blob `7cb2cc9aef43238487e4b5074b871255a428d07c` and in the individual owner convergence ledgers. Always distinguish an **active YAML**, a **declared job**, a **real allocated runner**, and **certified test execution**.
 
-> **Latest 2026-10-09 Runtime focused diagnostics consolidation:** **25 Runtime / 23 Performance active workflows, 26 unique names, 48 branch-path YAMLs**. IRQ, RCU, RISC-V init codegen and Timer are now one `linux-runtime-focused-owners-v1.yml` with four **independent original diagnosis jobs** and one cheap selector. No historical fixture, linker, QEMU or output-verdict body was modified; old YAMLs are byte-preserved and M0 checks exact source equality. New actual T4 certification remains independently necessary. See [four-to-one Runtime proof](ci-runtime-focused-owners-consolidation-2026-10-09.md). Older count banners below are snapshots.
+## Repository refs and ownership
 
-> **Latest 2026-10-09 CI snapshot: 28 Runtime / 26 Performance, 29 distinct active YAML names, 54 branch-path YAMLs.** Four Performance experiment workflows are now a single `linux-performance-experiments-v1.yml` with four preserved independent test jobs and one cheap path router. First500 retains its explicit `[perf-first500]` opt-in; expensive P runs must not be inferred from M0. See [Performance consolidation](ci-performance-experiment-consolidation-2026-10-09.md). All lower count banners are historical snapshots.
+| Ref | Role | Active YAML |
+| --- | --- | ---: |
+| `main` | Historical default release/base; 2026-10 development not yet integrated | 11 |
+| `agent/linux-expanded-kbuild-v0` (Runtime) | **canonical Linux/Kbuild/fixture/QEMU certification and MiniC current production profile** | **26** |
+| `agent/linux-perf-boolean-domain-v1` (Performance) | Separate **55-patch candidate / paired speed and correctness** development | **13** |
+| `archive/all-progress-2026-10-04` | Passive recovery umbrella (not a source-merge or CI branch) | **0** |
 
-> **Current 2026-10-09 consolidation: 28 Runtime / 29 Performance, 32 unique active names, 57 branch-path YAMLs.** The three T1 regression entrypoints have been replaced by one canonical YAML and three independent jobs. Original executable contracts and YAMLs remain frozen in disabled archives; dual-branch M0 and real combined T1 runs are SUCCESS. See [consolidation proof](ci-focused-regressions-consolidation-2026-10-09.md) and [cost/overlap audit](ci-active-overlap-cost-audit-2026-10-09.md). Counts and links below this banner are historical unless explicitly dated later.
+Runtime + Performance maintain **39 branch-local YAMLs, 27 distinct names**; **94 + 49 = 143 declared jobs**, including seven inexpensive conditional reusable calls in the Runtime tag router. This is **not** 143 runners. The branch-owned [39-row inventory](active-workflow-inventory-2026-10-09.tsv) and [trigger audit](ci-push-skip-audit-2026-10-09.md) are the machine-checked source inventory. Main's 11 historical YAMLs are **not** part of that development-branch inventory.
 
-> **Current CI ownership and routing audit — 2026-10-09:** **30 Runtime / 31 Performance active workflows, 34 distinct names, 61 branch-path YAMLs.** CI entrypoint count was deliberately not reduced further. A real timekeeping-only push now routes only `route` + `owner (timekeeping)` ([successful run #37879734755](https://github.com/yituanxing/minic-toolchain/actions/runs/37879734755)); irrelevant MiniC RV64 / MiniAR / MiniLD builds no longer run on Runtime-only sentinels. The latest audit also fixed the **opposite, missed-trigger problem:** five `make all`-based regressions now include `elf/**` because the toolchain shares ELF reader/writer/rewrite source. [Runtime M0 #37881147237](https://github.com/yituanxing/minic-toolchain/actions/runs/37881147237) and [Performance M0 #37881158868](https://github.com/yituanxing/minic-toolchain/actions/runs/37881158868) **SUCCESS** with original complete job-body SHA proofs. Real Runtime MiniC RV64, MiniAR, MiniLD, MiniPP A0 and Performance MiniPP A0 checks from the repair also **SUCCESS**; `minic-driver-v0` remained opt-in and was skipped, not a green real run. The maintained [61-entry YAML inventory](active-workflow-inventory-2026-10-09.tsv) is current. [Shared ELF trigger audit](ci-shared-elf-trigger-audit-2026-10-09.md). None of this establishes a new full 3352-TU, Linux Image or QEMU boot certificate. Previous CI snapshots below are historical.
+## Five explicit test tiers
 
-> **Current verified CI inventory — 2026-10-09:** **30 active Runtime**, **31 active Performance**, **34 distinct workflow names**, **61 cross-branch YAMLs**. Runtime early PI/P1/Trace + compiler semantics/QEMU watcher are seven independent jobs in `linux-expanded-pi-p1-runtime-v1.yml`; FDT + generated Kallsyms are five independent jobs in `linux-runtime-fdt-isolation-v1.yml`; Core Strict500/Focused Five + Full3352 Compile/Assemble are eight independent jobs in `linux-core-all3352.yml`. The previous canonical YAMLs are byte-preserved under `.github/workflows-disabled/` and complete test bodies are source-checked by M0. [Runtime M0 #37877686545](https://github.com/yituanxing/minic-toolchain/actions/runs/37877686545) and [Performance M0 #37877704588](https://github.com/yituanxing/minic-toolchain/actions/runs/37877704588) both **SUCCESS**. This is **T0 structural proof only**; no new full 3352-TU proof, strict Image link or full-MiniC QEMU boot PASS was obtained. Current [61-row source inventory](https://github.com/yituanxing/minic-toolchain/blob/agent/linux-expanded-kbuild-v0/docs/ci/active-workflow-inventory-2026-10-09.tsv); owner proof ledgers: [early Runtime](early-runtime-diagnostic-union-2026-10-09.md), [FDT/Kallsyms](runtime-fdt-kallsyms-convergence-2026-10-09.md), [Core 3352](core-first500-full3352-convergence-2026-10-09.md). Older counts in historical sections below are not current.
+| Tier | Contract | Canonical owners | What success proves |
+| --- | --- | --- | --- |
+| **T0** | Structure, history SHA, route selectors, graph manifests and source guardrails | `toolchain-m0-structure.yml`, audit/check scripts | Wiring/source equivalence only. Never label kernel boot PASS. |
+| **T1** | Fast compiler, MiniPP, driver, MiniAR/MiniLD focused checks | `toolchain-focused-regressions-v1.yml` (one build, eight independent oracle steps); `minipp-a0.yml`, `minic-driver-v0.yml` | A specific executed regression/check, not a full Linux image. |
+| **T2** | Frozen/preprocessed and full compile/assemble coverage | `linux-core-all3352.yml`, `linux-core-shards-v1.yml`, `minipp-linux-frozen-v1.yml`, `minias-a0-gate-v1.yml` | Explicit covered TU/assembly corpus at exact compiler profile. |
+| **T3** | Linux object, AR/LD/ELF integration, provenance, Image strict replay | `linux-distributed-full-image-signedness-v2.yml`, `linux-expanded-kbuild-v0.yml`, `miniar-linux-kbuild.yml`, `minild-integration-v1.yml`, `miniobjcopy-strip-regressions-v1.yml` | Link/identity/contract only if all relevant jobs actually executed. |
+| **T4** | Runtime fault isolation and QEMU verdict | `linux-expanded-pi-p1-runtime-v1.yml`, `linux-runtime-focused-faults-v1.yml`, `linux-runtime-focused-owners-v1.yml`, `linux-runtime-owner-focused-v1.yml`, `linux-runtime-fdt-isolation-v1.yml`, `linux-runtime-spinlock-context-v0.yml`, `linux-runtime-gcc-baseline.yml` | Pass only when corresponding init/boot marker and verdict explicitly succeed. |
+| **P** | Independent candidate speed+correctness experiments | Performance `linux-performance-experiments-v1.yml`, Runtime `linux-runtime-optin-perf-suite-v1.yml` | Comparable paired inputs/runners; does not promote runtime profile. |
 
-Snapshot: initial workflow ownership map established at `72d632d43ef2fa02ec029f539105533203b5ac50`, refreshed on **2026-10-08** after verified four-branch consolidation and verified [120-object cross-Runner proof](https://github.com/yituanxing/minic-toolchain/actions/runs/37762351340). Current active/disabled inventory reflects the post-retirement runtime branch; the historical runtime roles below have not been re-certified on a new full Linux Image.
+## Runtime 26 owners grouped by purpose
 
-This document is the current ownership map for active GitHub Actions after the 2026-10 cleanup and runtime-convergence work. It is intended to prevent historical diagnostic workflows from becoming active CI by accident and to make retirement decisions contract-based rather than name-based.
+**Source/compiler regression (7):** `toolchain-m0-structure.yml`, `toolchain-focused-regressions-v1.yml`, `minipp-a0.yml`, `minipp-linux-frozen-v1.yml`, `minic-driver-v0.yml`, `linux-core-all3352.yml`, `linux-core-shards-v1.yml`.
 
-## Repository state
+**Linux Image and integration (7):** `linux-distributed-image-graph-preflight-v1.yml` (standalone fast graph check), `linux-distributed-full-image-signedness-v2.yml` (graph → shards → strict receiver), `linux-expanded-kbuild-v0.yml`, `linux-runtime-fixture-producers-v1.yml`, `miniar-linux-kbuild.yml`, `minild-integration-v1.yml`, `miniobjcopy-strip-regressions-v1.yml`.
 
-- Active workflow YAML files: **91** (includes the 120-object distributed Kbuild experiment and three opt-in performance/correctness workflows).
-- Disabled historical workflow YAML files: **187** (including the retired one-shot branch consolidation and the now superseded 20-object distributed Kbuild experiment).
-- Active `linux-*.yml` workflows: **40**
-- Linux/core workflows including `core-first500-regression.yml`: **41**
-- Remote branch refs remaining after verified deletion: **4** (previously 29):
-  - `main` — historical default/stable branch, not yet promoted to the current runtime head.
-  - `agent/linux-expanded-kbuild-v0` — canonical Linux Runtime development/ref/cache owner.
-  - `agent/linux-perf-boolean-domain-v1` — separate MiniC performance/correctness workstream, with 91 active workflow YAML files at its 2026-10-08 cleanup tip.
-  - `archive/all-progress-2026-10-04` — passive archive containing all 27 captured experiment tips (zero active workflows in its HEAD worktree).
-- `agent/ci-runtime-cleanup-v1` was fast-forwarded to the runtime HEAD and subsequently deleted as a redundant branch ref; both the commit history and earlier CI evidence remain in the archive.
-- Do not confuse the archive *ancestry* with a production source merge. Recent performance fixes and Linux Runtime changes remain on separate development branches.
+**Linux Runtime diagnostics (9):** `linux-expanded-pi-p1-runtime-v1.yml`, `linux-runtime-focused-faults-v1.yml`, `linux-runtime-focused-owners-v1.yml`, `linux-runtime-owner-focused-v1.yml`, `linux-runtime-fdt-isolation-v1.yml`, `linux-runtime-spinlock-context-v0.yml`, `linux-runtime-gcc-baseline.yml`, `linux-efi-vdso-focused-v1.yml`, `minias-a0-gate-v1.yml`. MiniAS gate belongs to assembler-level Linux readiness rather than a standalone QEMU verdict.
 
-GitHub Actions caches used by the Linux runtime certification chain are scoped to the canonical runtime ref. Cache-dependent runtime validation must remain strict and must not turn cache misses into passing evidence.
+**Explicit opt-in/performance/routing (3):** `linux-runtime-optin-perf-suite-v1.yml`, `minias-a0-focused-diagnostics-v1.yml` (manual focused oracle), and `linux-legacy-tag-router-v1.yml` (the one Runtime broad historical-tag push entrypoint).
 
-## Retirement policy
+The two distributed graph workflows have **different, disjoint push path filters**: the fast graph owner responds to its own YAML and `linux-distributed-image-plan-v1.py`; the integrated Image owner responds to its dedicated `run-linux-distributed-image-signedness-v2.trigger`. They are **not** two independent 3352-TU builds running on ordinary source pushes. The fast preflight is retained as an independent cheap graph contract.
 
-An active workflow may be retired only when at least one of the following is true:
+## Performance 13 owners grouped by purpose
 
-1. a newer active workflow carries the same invariant and has a successful certification run;
-2. the workflow is tied only to a deleted branch or a historical fault that the current frontier has passed;
-3. the workflow is an orphan producer with no active cache/fixture consumer;
-4. its unique assertion has first been migrated into a maintained canonical workflow and re-certified.
+**Actual P owner:** `linux-performance-experiments-v1.yml`. **Shared compiler T0–T2 owners:** `toolchain-m0-structure.yml`, `toolchain-focused-regressions-v1.yml`, `linux-core-all3352.yml`, `minipp-a0.yml`, `minipp-linux-frozen-v1.yml`, `minic-driver-v0.yml`. **Shared integration/diagnostic owners:** `minild-integration-v1.yml`, `miniobjcopy-strip-regressions-v1.yml`, `linux-runtime-gcc-baseline.yml`, `linux-efi-vdso-focused-v1.yml`, `minias-a0-focused-diagnostics-v1.yml`, `linux-expanded-pi-p1-runtime-v1.yml`. The last file is Runtime-push-only on Performance and must **not** be treated as an automatic Performance test. Historical removed Performance Runtime-only YAMLs are SHA-preserved in `.github/workflows-disabled/`.
 
-Retirement means a byte-for-byte move into `.github/workflows-disabled/` plus a contract/retirement note. Historical commits, runs, artifacts, caches, and evidence are not deleted.
+## Trigger ownership; duplicate-run prevention
 
-A workflow with unresolved failure evidence is not retired merely because it is old.
+```text
+Runtime push
+ ├─ relevant compiler/CI path -> scoped T0/T1/T2 gate
+ ├─ explicit historical [label] -> one linux-legacy-tag-router-v1
+ │      ├─ Kbuild / MiniAR / certified fixture / MiniAS
+ │      ├─ early PI/P1 semantics & QEMU watch / focused faults & QEMU
+ │      └─ MiniLD (Runtime only)
+ ├─ ELF or MiniObjcopy source -> MiniObjcopy regression router
+ └─ explicit Image trigger path -> self-contained graph -> shards -> receiver -> QEMU
 
-## Active inventory summary
+Performance push
+ ├─ relevant compiler/performance path -> scoped M0/T1/T2/P owner
+ ├─ explicit MiniLD [label] -> minild-integration (Performance direct push only)
+ └─ MiniObjcopy source or legacy tag -> MiniObjcopy router
+```
 
-| Domain | Count | Role |
-| --- | ---: | --- |
-| Linux/core/runtime | 41 | frozen Linux corpus, Kbuild, runtime certification and focused Linux diagnostics |
-| BusyBox | 4 | integration/failure-pool/full-toolchain coverage |
-| Compiler bootstrap/runtime | 6 | bootstrap and compiler-runtime progression |
-| Toolchain/meta | 3 | stage2 smoke, M0 structure and regression ledger |
-| MiniC | 4 | driver, headers, MiniAS/Linux runtime and RV64 focused regressions |
-| MiniPP | 6 | A0, exact and focused Linux preprocessing |
-| MiniAS | 8 | A0, frozen-window, Linux inventories/sidecars and semantic oracle |
-| MiniAR | 2 | regressions and Linux Kbuild integration |
-| MiniLD | 7 | regressions, static/dynamic and workload-specific linker coverage |
-| MiniObjcopy/MiniStrip | 3 | regression and Linux image/tool gates |
-| Lua | 1 | full driver integration |
-| SQLite | 1 | full driver integration |
-| TinyCC | 1 | full driver integration |
-| Static readiness | 4 | bootstrap, core, Linux-final and self-host readiness |
-| **Total** | **91** | |
+**Six Runtime reusable owner YAMLs** (Kbuild, MiniAR, fixture, MiniAS, early Runtime, focused faults) have no direct `on.push`; MiniLD is `workflow_call` for Runtime and retains original tag-gated `on.push` **only on Performance**. On an untagged Runtime CI-maintenance push, the router produces a SKIPPED workflow card with **zero route runners**. The original Job predicates, cache identities, source blobs and watcher verdicts remain under SHA reconstruction tests. A real special-tag smoke proved reusable-call push event inheritance [#37902327902](https://github.com/yituanxing/minic-toolchain/actions/runs/37902327902). The probe was **removed** from active YAML afterward.
 
-# Linux/core ownership map
+**Known residual cost:** `miniobjcopy-strip-regressions-v1.yml` still has an unscoped push with an actual short `route` Runner on both refs, even on non-ELF pushes, to preserve historical commit-message opt-in and fail-open ELF diff discovery. It is the remaining potential low-value runner; do not remove an opt-in tag without equivalent branch-specific routing and T1 rerun proof. Other opt-in gates are path-scoped or manual/disabled as documented.
 
-## Frozen Linux core corpus
+**Manual dispatch caveat:** `main` does not carry these development workflow definitions; an `on.workflow_dispatch` declaration on a development ref is **not** proof that GitHub UI/API can start it. Keep the verified commit-tag route until a default-branch entrypoint is proven.
 
-These are distinct and remain active.
+## Maintenance exit criteria (do not turn CI cleanup into permanent work)
 
-- `core-first500-regression.yml` — frozen first-500 regression surface.
-- `linux-core-shards-v1.yml` — canonical frozen corpus gate for global indices 500-3351; owns the six historical shard ranges and the optional TU 1573 sanitizer replay.
-- `linux-core-all3352.yml` — independent exact replay of the complete 3352-TU frozen corpus.
-- `linux-core-assemble-all3352.yml` — independent compile-and-assemble coverage across the complete corpus.
-- `linux-core-focused-five.yml` — five cross-shard focused regressions and exact failing-source context.
-
-`core-shards-v1-contract.md` explicitly states that the canonical shard matrix does not replace all-3352, assemble-all-3352, focused-five, or first500 coverage.
-
-## Whole-Kbuild frontier
-
-- `linux-expanded-kbuild-v0.yml` — mixed/focused real-Kbuild frontier and current Linux Image producer. This is not replaced by the frozen corpus gates.
-- `linux-distributed-kbuild-objects120-v1.yml` — isolated, path-triggered six-runner true Kbuild .o/.cmd transfer and no-rebuild experiment; [run 37762351340](https://github.com/yituanxing/minic-toolchain/actions/runs/37762351340) proved 120/120 object reuse and RISC-V partial link. It does **not** supersede full Image or QEMU gates. The older 20-object test is an exact target subset and was retired unchanged.
-
-## Opt-in performance profile validations
-
-The opt-in 55-patch performance candidate retains dedicated 500-TU, all3352-TU, and GNU constant-p ICE/QEMU workflows. It does not automatically modify the previously certified 39-patch Linux Image producer. These three newly active workflows are accounted for above.
-
-## Runtime foundation and certification
-
-These are the maintained runtime infrastructure and should be treated as canonical unless their contract is deliberately migrated.
-
-- `linux-runtime-gcc-baseline.yml` — GCC runtime oracle/baseline.
-- `linux-runtime-frozen-cert-v1.yml` — certified frozen runtime input producer.
-- `linux-runtime-link-fixture-cert-v1.yml` — canonical terminal-link fixture certification; owns compact/full equivalence and V2/legacy-V1 link equivalence.
-- `linux-runtime-qemu-watch-contracts-v1.yml` — fault-aware/inconclusive watcher contract.
-- `linux-runtime-frontier-v1.yml` — full frontier refresh/certification path.
-- `linux-runtime-frontier-fast-v5.yml` — compact/frozen fast frontier path.
-- `linux-runtime-mm-core-frontier-v0.yml` — maintained init-IRQ/mm-core bridge.
-- `linux-runtime-owner-focused-v1.yml` — canonical matrix for timekeeping, vsyscall, notifier and build-policy owner chains; also owns the current `update_vsyscall < 2256` frame contract.
-- `linux-runtime-compiler-semantics-v1.yml` — canonical PI-local-symbol and SATP micro compiler-semantics contract.
-- `linux-runtime-satp-refresh-v0.yml` — canonical real PI/SATP/setup owner differential, CSR-window and source-level no-`sp` contract.
-- `linux-runtime-fault-context-v1.yml` — generic focused current-fault context capture.
-
-## Kallsyms, FDT and object-code differentials
-
-These retain separate static or runtime questions and remain active.
-
-- `linux-runtime-first-die-context-v0.yml` — cached/GCC/current-MiniC kallsyms three-way first-fault comparison.
-- `linux-runtime-generated-kallsyms-first-die-v0.yml` — current generated-kallsyms first-die certification.
-- `linux-runtime-kallsyms-object-diagnose-v0.yml` — detailed cached/GCC/MiniC object provenance, relocation and code-generation evidence.
-- `linux-runtime-fdt-isolation-v1.yml` — runtime FDT owner isolation.
-- `linux-runtime-fdt-ro-codegen-v0.yml` — exact-context MiniC/GCC `fdt_ro.o` code-generation comparison.
-- `linux-runtime-riscv-init-codegen-v0.yml` — exact-context MiniC/GCC RISC-V init object comparison.
-
-The current generated-kallsyms/FDT chain has progressed beyond the historical crc32 fault, so the old crc32-specific probes are disabled; the FDT-specific workflows remain relevant.
-
-## Scheduler, locking, RCU and focused runtime diagnostics
-
-These are specialized rather than general-purpose canonical gates.
-
-- `linux-check-cpu-stall-runtime-v0.yml` — retained representative packed/reuse IRQ + RCU stall owner lane and generalized IRQ-guard page-fault rejection.
-- `linux-fork-stack-runtime-v0.yml` — retains `kernel/fork.o` owner isolation and bad-stack/first-fault oracle.
-- `linux-runtime-rcu-owner-v0.yml` — RCU/softirq/rest-init owner chain with kallsyms-aware runtime evidence.
-- `linux-runtime-timer-focused-v0.yml` — timer/hrtimer/tick/RCU focused owner frontier.
-- `linux-runtime-spinlock-codegen-v0.yml` — MiniC/GCC spinlock code-generation differential.
-- `linux-runtime-spinlock-context-v0.yml` — GDB recursion lock/caller/current capture.
-- `linux-runtime-spinlock-first-context-v0.yml` — canonical first spinlock validation target/context diagnostic.
-- `linux-runtime-spinlock-stack-v0.yml` — canonical static spinlock stack/frame diagnostic.
-
-The old IRQ-frame runtime lane is disabled because its generalized IRQ-guard responsibility is retained by check-cpu-stall and its SATP responsibility is owned by the canonical SATP refresh contract.
-
-The historical `linux-idr-xarray-runtime-v0.yml` A/B lane is also disabled. Re-run `37500833588` reproduced only the old global `strlen+0x6` frontier under its stale patch stack, while current-profile Fast V5 run `37501374567` successfully rebuilt `lib/idr.o` and `lib/xarray.o`, relinked V2, and preserved the authoritative `SAME_FAULT` baseline without an IDR/XArray-specific regression.
-
-## Full-image and architecture-specific runtime surfaces
-
-- `linux-expanded-entry-trace-v0.yml` — explicit low-level entry tracing.
-- `linux-expanded-pi-runtime-v0.yml` — historical expanded PI runtime path. Retirement is blocked until the failure evidence associated with run `34950464878` is explicitly superseded or re-certified.
-- `linux-expanded-runtime-p1-v0.yml` — expanded Image P1 runtime with deterministic initramfs, layout diagnostics and 12-syscall contract. The workflow-edit run `34949261781` failed; obtain a clean current re-certification before considering retirement or consolidation.
-- `linux-image-qemu-runtime-v0.yml` — minimal cached-Image QEMU runtime smoke. The workflow-edit run `34948950134` failed; do not retire solely because P1 is nominally stronger until a current P1/smoke supersession proof is recorded.
-- `linux-efistub-diff-v0.yml` — independent EFI-stub differential.
-- `linux-vdso-focused.yml` — independent vDSO-focused coverage.
-
-# Non-Linux active map
-
-## BusyBox
-
-- `busybox-failure-pool-v0.yml`
-- `busybox-full-driver-v0.yml`
-- `busybox-full-toolchain-v0.yml`
-- `busybox-mini-aggregation-v0.yml`
-
-## Compiler bootstrap/runtime
-
-- `compiler-bootstrap-b0.yml`
-- `compiler-bootstrap-b1-sharded.yml`
-- `compiler-bootstrap-b2-runtime.yml`
-- `compiler-bootstrap-b4-linux-all3352.yml`
-- `compiler-runtime-r0.yml`
-- `compiler-runtime-r1-lua.yml`
-
-## Toolchain/meta
-
-- `stage2-linux-kbuild-cc-smoke.yml`
-- `toolchain-m0-structure.yml`
-- `toolchain-regression-ledger-v0.yml`
-
-## MiniC
-
-- `minic-driver-musl-headers-v0.yml`
-- `minic-driver-v0.yml`
-- `minic-minias-linux-runtime.yml`
-- `minic-rv64-focused-regressions-v1.yml`
-
-## MiniPP
-
-- `minipp-a0.yml`
-- `minipp-linux-exact-72.yml`
-- `minipp-linux-exact-batch.yml`
-- `minipp-linux-exact-smoke.yml`
-- `minipp-linux-exact-v1.yml`
-- `minipp-linux-focus-v1.yml`
-
-The old six range workflows and the legacy Linux focus lane are disabled; the exact smoke/batch/72 paths remain separate because they are live-Kbuild diagnostics rather than frozen-range duplicates.
-
-## MiniAS
-
-- `minias-a0-focused-diagnostics-v1.yml`
-- `minias-a0-gate-v1.yml`
-- `minias-a0-window.yml`
-- `minias-linux-ground-truth-inventory.yml`
-- `minias-linux-runtime-gcc-single-variable.yml`
-- `minias-linux-sidecars.yml`
-- `minias-semantic-oracle-smoke.yml`
-- `minias-semantic-oracle3536.yml`
-
-Historical census and old Linux input-inventory workflows are disabled.
-
-## MiniAR
-
-- `miniar-linux-kbuild.yml`
-- `miniar-regressions-v1.yml`
-
-## MiniLD
-
-- `minild-busybox-static.yml`
-- `minild-dynamic-integration-v1.yml`
-- `minild-linux-rel-boundaries-v1.yml`
-- `minild-musl-shared-rebase.yml`
-- `minild-regressions-v1.yml`
-- `minild-sqlite-static.yml`
-- `minild-static-runtime-v1.yml`
-
-## MiniObjcopy / MiniStrip
-
-- `miniobjcopy-linux-image-gate.yml`
-- `miniobjcopy-linux-tool-gate.yml`
-- `miniobjcopy-strip-regressions-v1.yml`
-
-## Workload integration
-
-- `lua-full-driver-v0.yml`
-- `sqlite-full-driver-v0.yml`
-- `tinycc-full-driver-v0.yml`
-
-## Static readiness
-
-- `static-readiness-bootstrap-b1.yml`
-- `static-readiness-core.yml`
-- `static-readiness-linux-final.yml`
-- `static-readiness-toolchain-selfhost.yml`
-
-# Cleanup invariants already established
-
-- **Follow-up required:** some active workflow YAMLs still mention deleted branch names in historical `push.branches` filters or old cleanup-specific conditions. The branch refs are gone, but the stale strings must be audited and cleaned without broadening test triggers. Do not assume the old no-stale-reference claim still holds.
-- The cleanup branch is now retired; its last tip was equal to runtime commit `1e0d5cb4e9c9671eb1e3034d17be183169752874`.
-- Retired workflow YAML is preserved under `.github/workflows-disabled/`.
-- A disabled-path filename collision discovered during cleanup was repaired so the original Linux discovery workflow and the later registered spinlock bridge are both preserved independently.
-- Historical residual-undef consumers are disabled, and the orphan `linux-undef-diagnose-v0.yml` producer was retired only after a scan of all 89 active workflows at the preceding HEAD found zero active consumers for its cache key.
-- Historical PI fast/minic-early lanes, IRQ frame lane, fast relink shadow, stale IDR/XArray A/B lane, crc32 probes, old kallsyms probes, dead-branch diagnostics and earlier owner-specific duplicates are documented by retirement contracts.
-
-# Remaining convergence work
-
-1. Re-certify or explicitly supersede the active workflows still protected by failure evidence:
-   - `linux-expanded-pi-runtime-v0.yml`
-   - `linux-expanded-runtime-p1-v0.yml`
-   - `linux-image-qemu-runtime-v0.yml`
-2. Run one current full-owner runtime baseline after workflow convergence so the project has one authoritative present-day frontier instead of multiple historical focused frontiers.
-3. Re-run the final required toolchain/Linux certification set on the converged HEAD.
-4. Merge the two `main`-only ancestry commits without replacing the converged tree.
-5. Update `main` only after that merge and final certification are green.
-6. **Completed 2026-10-08:** delete `agent/ci-runtime-cleanup-v1` together with 24 other exact-SHA-verified experiment refs, without promoting `main`.
-7. Keep `archive/all-progress-2026-10-04` as a passive historical branch umbrella.
-8. Retain `agent/linux-perf-boolean-domain-v1` until its current performance and correctness work is consciously integrated and re-certified; do not delete it just to reach three refs.
-9. Audit stale references to removed branch names and remaining dormant workflow contracts before further CI retirement.
-
-The current **four-branch** set is therefore:
-
-- `main`
-- `agent/linux-expanded-kbuild-v0`
-- `agent/linux-perf-boolean-domain-v1`
-- `archive/all-progress-2026-10-04`
-
-## Verified branch convergence evidence, 2026-10-08
-
-- One-shot run [`37751577519`](https://github.com/yituanxing/minic-toolchain/actions/runs/37751577519) finished **SUCCESS**: 25/25 SHA-leased deletion targets passed archival-ancestry checks, Git pushed 25 exact leases, and remote branch inventory checked exactly four refs.
-- Historical tip-to-SHA mapping remains in `tools/ci/branch-consolidation-20261008.tsv`; the exact successful one-shot YAML was retired byte-for-byte to `.github/workflows-disabled/branch-consolidation-one-shot-v1.yml` after completion.
-- The active runtime code and Linux Image/QEMU certification workflows were not modified by this retirement. Routine focused checks on the consolidation commit include MiniC RV64, MiniAR and MiniLD; a full current-head Image/QEMU certificate is still outstanding.
-
+1. Both development M0 jobs must be green at their respective latest source heads with exact ledger and executable-contract checks.
+2. Recent untagged Runtime CI change must not trigger costly Linux/Image/T3/T4 or P comparisons. Confirm actual GitHub job conclusions, not only YAML guards.
+3. The old four-owner reusable smoke (#37902327902) establishes push/event inheritance. Do **not** start a full 3352/Linux QEMU rebuild simply to prove the router.
+4. T1 independent oracles and P comparisons require explicit own execution evidence when code changes. M0 cannot replace them.
+5. Freeze the CI topology after these gates; return to **Performance candidate integration** and **Linux Runtime fault isolation**. Full Linux boot certification is still **open**.

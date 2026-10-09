@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Protect the two Runtime diagnostic canons unified into seven jobs."""
 from pathlib import Path
-import re, subprocess
+import re, subprocess, os
 
 ROOT=Path(__file__).resolve().parents[2]
 CURRENT=ROOT/".github/workflows/linux-runtime-focused-faults-v1.yml"
@@ -33,7 +33,17 @@ def main():
  for mode in MODES:
   if ("          - "+mode) not in combined:
    raise AssertionError(f"manual diagnostic mode absent: {mode}")
- if "default: fault-context" not in combined or '- "agent/linux-expanded-kbuild-v0"' not in combined:
-  raise AssertionError("push scope/manual default changed")
+ if "default: fault-context" not in combined:
+  raise AssertionError("manual default changed")
+ branch = os.environ.get("GITHUB_REF_NAME", "agent/linux-expanded-kbuild-v0")
+ header = combined.split("\njobs:\n", 1)[0]
+ if branch == "agent/linux-expanded-kbuild-v0":
+  if "on:\n  workflow_call:\n  workflow_dispatch:" not in header or "  push:" in header:
+   raise AssertionError("Runtime fault diagnostic should use unified push router")
+ elif branch == "agent/linux-perf-boolean-domain-v1":
+  if '- "agent/linux-expanded-kbuild-v0"' not in header:
+   raise AssertionError("Performance historical Runtime push scope drift")
+ else:
+  raise AssertionError(f"unexpected branch {branch}")
  print("M0_RUNTIME_DIAGNOSTIC_UNION=PASS archived_canons=2 all_7_jobs_exact=1 manual_modes=8")
 if __name__=="__main__":main()
