@@ -197,7 +197,7 @@ jobs:
       - name: Publish per-job CI trigger matrix audit
         uses: actions/upload-artifact@v4
         with:
-          name: ci-trigger-matrix-${{ github.ref_name }}
+          name: ci-trigger-matrix-runtime
           path: build/ci-trigger-matrix.tsv
           if-no-files-found: error
           retention-days: 14
