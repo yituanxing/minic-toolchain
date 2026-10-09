@@ -15,6 +15,7 @@ on:
       - "tools/ci/check_linux_expanded_pi_p1_convergence_v1.py"
       - "tools/ci/check_linux_early_runtime_union_v1.py"
       - "tools/ci/check_linux_runtime_fdt_kallsyms_union_v1.py"
+      - "tools/ci/check_linux_core_3352_first500_union_v1.py"
       - "tools/ci/check_linux_efi_vdso_convergence_v1.py"
       - "tools/ci/check_minias_semantic_convergence_v1.py"
       - "tools/ci/check_linux_runtime_fixture_producers_convergence_v1.py"
@@ -125,6 +126,10 @@ jobs:
         run: |
           python3 tools/ci/check_linux_runtime_fdt_kallsyms_union_v1.py
           ruby -e 'require "yaml"; YAML.parse_file(ARGV.fetch(0)); puts "M0_FDT_KALLSYMS_YAML=PASS"' .github/workflows/linux-runtime-fdt-isolation-v1.yml
+
+      - name: Verify Core full 3352 and first500/focused-five union
+        run: |
+          python3 tools/ci/check_linux_core_3352_first500_union_v1.py
 
       - name: Run Linux runtime isolation selftests
         run: |
