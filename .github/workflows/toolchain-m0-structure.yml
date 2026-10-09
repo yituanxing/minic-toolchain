@@ -13,6 +13,7 @@ on:
       - "tools/ci/check_linux_runtime_fixture_restore_v1.py"
       - "tools/ci/check_linux_expanded_pi_p1_convergence_v1.py"
       - "tools/ci/check_linux_efi_vdso_convergence_v1.py"
+      - "tools/ci/check_minias_semantic_convergence_v1.py"
       - "tools/ci/check_linux_runtime_contract_oracles_convergence_v1.py"
       - ".github/workflows/linux-efi-vdso-focused-v1.yml"
       - ".github/workflows/linux-runtime-contract-oracles-v1.yml"
@@ -91,6 +92,11 @@ jobs:
         run: |
           python3 tools/ci/check_linux_runtime_contract_oracles_convergence_v1.py
           ruby -e 'require "yaml"; YAML.parse_file(ARGV.fetch(0)); puts "M0_RUNTIME_CONTRACT_ORACLES_YAML=PASS"' .github/workflows/linux-runtime-contract-oracles-v1.yml
+
+      - name: Check MiniAS focused and 3536 semantic oracle consolidation
+        run: |
+          python3 tools/ci/check_minias_semantic_convergence_v1.py
+          ruby -e 'require "yaml"; YAML.parse_file(ARGV.fetch(0)); puts "M0_MINIAS_SEMANTIC_YAML=PASS"' .github/workflows/minias-a0-focused-diagnostics-v1.yml
 
       - name: Run Linux runtime isolation selftests
         run: |
