@@ -42,11 +42,11 @@ def main():
     if branch not in BRANCHES:
         raise AssertionError(f"unknown CI branch: {branch}")
     local={r["path"]:r for r in rows if r["branch"]==branch}
-    actual={"."+str(p.relative_to(ROOT)) for p in (ROOT/".github/workflows").glob("*.yml")}
+    actual={str(p.relative_to(ROOT)) for p in (ROOT/".github/workflows").glob("*.yml")}
     if set(local)!=actual:
         raise AssertionError(f"inventory/source divergence missing={sorted(actual-set(local))} extra={sorted(set(local)-actual)}")
     for path,row in local.items():
-        y=(ROOT/path[2:]).read_text()
+        y=(ROOT/path).read_text()
         if "\njobs:\n" not in y:
             raise AssertionError(f"missing jobs: {path}")
         jobs=set(re.findall(r"(?m)^  ([a-zA-Z][\w-]*):\s*$",y.split("\njobs:\n",1)[1]))
