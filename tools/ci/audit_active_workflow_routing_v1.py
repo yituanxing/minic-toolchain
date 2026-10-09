@@ -15,7 +15,6 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[2]
 ACTIVE = ROOT / ".github" / "workflows"
-DEBT_NAMES = ()
 LEGACY_MANUAL = "minias-a0-focused-diagnostics-v1.yml"
 SELF_YAML_ONLY = "linux-runtime-optin-perf-suite-v1.yml"
 ROUTE_ALL_PUSH = "miniobjcopy-strip-regressions-v1.yml"
@@ -98,6 +97,7 @@ def analyze(name: str, y: str, branch: str) -> dict[str, str]:
         else:
             path_policy = "unscoped"
     manual = bool(re.search(r"(?m)^  workflow_dispatch:", h))
+    reusable = bool(re.search(r"(?m)^  workflow_call:", h))
     jobs = job_sections(y)
     guards = {key: re.findall(
         r"contains\(github\.event\.head_commit\.message,\s*['\"]([^'\"]+)['\"]\)",
@@ -105,9 +105,13 @@ def analyze(name: str, y: str, branch: str) -> dict[str, str]:
     tags = sorted({t for sub in guards.values() for t in sub})
     unguarded = sorted(key for key, body in jobs.items()
                        if not re.search(r"(?m)^    if:", body))
-    has_dead_tags = bool(tags and not push)
+    # A job guard reading the inherited caller push payload is LIVE under
+    # on.workflow_call. It is dead only when neither push nor call is declared.
+    has_dead_tags = bool(tags and not push and not reusable)
     if has_dead_tags:
         classification = "manual_only_unreachable_legacy_tag_checks"
+    elif reusable and not eligible:
+        classification = "reusable_tagged_dispatch"
     elif not eligible:
         classification = "manual_only_this_branch"
     elif eligible and name == CENTRAL_TAG_ROUTER and path_policy == "unscoped":
@@ -160,7 +164,12 @@ def self_test():
                 "  workflow_dispatch:\njobs:\n  check:\n    runs-on: ubuntu-24.04\n", br)
     assert r["push_path_policy"] == "scoped"
     assert r["unguarded_jobs"] == "check"
-    print("M0_CI_ENTRYPOINT_AUDIT_SELFTEST=PASS event_scope=3 branch=1 tag_guards=2")
+    r = analyze("reusable.yml",
+                "on:\n  workflow_call:\n  workflow_dispatch:\njobs:\n  owner:\n"
+                "    if: contains(github.event.head_commit.message, '[legacy]')\n"
+                "    runs-on: ubuntu-24.04\n", br)
+    assert r["dead_push_tags"] == "false" and r["classification"] == "reusable_tagged_dispatch"
+    print("M0_CI_ENTRYPOINT_AUDIT_SELFTEST=PASS event_scope=4 branch=1 tagged_reusable=1")
 
 
 def main():
@@ -179,14 +188,17 @@ def main():
     expected = 26 if branch == BRANCHES[0] else 13
     if len(rows) != expected:
         raise AssertionError(f"inventory drift: branch {branch} YAML count {len(rows)} != {expected}")
-    # Hard-coded high-risk names are only a diagnosis: their contract is frozen.
     names = {r["workflow"]: r for r in rows}
-    for name in DEBT_NAMES:
-        if branch == BRANCHES[0]:
-            r = names[name]
-            assert r["push_branch_eligible"] == "true", name
-            assert r["push_path_policy"] == "unscoped", name
-            assert r["commit_tag_guards"], name
+    # This is an executable guardrail, not merely a report. Never allow a new
+    # broad push listener that silently creates hundreds of empty run cards.
+    unscoped = {r["workflow"] for r in rows
+                if r["push_branch_eligible"] == "true"
+                and r["push_path_policy"] == "unscoped"}
+    expected_unscoped = ({CENTRAL_TAG_ROUTER, ROUTE_ALL_PUSH}
+                         if branch == BRANCHES[0]
+                         else {ROUTE_ALL_PUSH, "minild-integration-v1.yml"})
+    if unscoped != expected_unscoped:
+        raise AssertionError(f"unreviewed broad push entrypoints: {unscoped ^ expected_unscoped}")
     # Keep every retired Performance owner as an exact byte-identical archive.
     # These entries must remain intact and branch-ineligible on Performance.
     import hashlib
