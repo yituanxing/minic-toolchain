@@ -19,12 +19,12 @@ Early Runtime `semantics` and QEMU Watch mode selectors are independently verifi
 | Question / change | First owner | Evidence type | Next escalation |
 | --- | --- | --- | --- |
 | CI wiring, trigger, archive, shell route | `toolchain-m0-structure.yml` | T0 structural | relevant real regression |
-| Driver, frontend, Core, RV64 code | `minic-driver-v0.yml`, `minic-rv64-focused-regressions-v1.yml` | T1 | `linux-core-all3352.yml` (strict500, focused-five) |
+| Driver, frontend, Core, RV64 code | `minic-driver-v0.yml`, `toolchain-focused-regressions-v1.yml` | T1 | `linux-core-all3352.yml` (strict500, focused-five) |
 | Linux frozen compiler coverage | `linux-core-all3352.yml` (eight independent compile/assembly jobs), `linux-core-shards-v1.yml` | T2 | real Kbuild and Image |
 | Preprocessor semantics | `minipp-a0.yml` | T1 | `minipp-linux-frozen-v1.yml` (frozen exact/focus, live smoke/batch/72) |
 | Assembler byte/semantic correctness | `minias-a0-focused-diagnostics-v1.yml` (real16, frontier, vector33, window, semantic), `minias-a0-gate-v1.yml` | T1/T2 | Full 3536 semantic mode independent of exact A0 Gate |
-| AR and NM archive semantics | `miniar-regressions-v1.yml` | T1 | `miniar-linux-kbuild.yml` (real Linux+QEMU) |
-| Linker ELF and relocation | `minild-regressions-v1.yml` | T1 | `minild-integration-v1.yml` with modes dynamic, linux-rel, static |
+| AR and NM archive semantics | `toolchain-focused-regressions-v1.yml` | T1 | `miniar-linux-kbuild.yml` (real Linux+QEMU) |
+| Linker ELF and relocation | `toolchain-focused-regressions-v1.yml` | T1 | `minild-integration-v1.yml` with modes dynamic, linux-rel, static |
 | ELF binary/section rewriting | `miniobjcopy-strip-regressions-v1.yml` | T1/T3 | historical Image oracle requires fresh trustworthy producer |
 | Full Linux Image without historical fixed run ID | `linux-distributed-image-graph-preflight-v1.yml`, `linux-distributed-full-image-signedness-v2.yml` | T3 | check strict 3352-object identity, final Image, then QEMU |
 | Runtime baseline / certified inputs | `linux-runtime-gcc-baseline.yml` plus `linux-runtime-fixture-producers-v1.yml` (frozen or compact) | T3/T4 producer | verified frozen -> compact chain, distinct certificates |
