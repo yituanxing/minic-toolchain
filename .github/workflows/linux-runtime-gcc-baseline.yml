@@ -344,6 +344,7 @@ jobs:
             build/linux-runtime-gcc-cohort-v1/cohort.log
             build/linux-runtime-gcc-cohort-v1/compile.log
             build/linux-runtime-gcc-cohort-v1/compile-blockers.txt
+            build/linux-runtime-gcc-cohort-v1/failure-pool-index.tsv
             build/linux-runtime-gcc/out/**/*.minic-stage2.failed.i
             build/linux-runtime-gcc/out/**/*.minic-stage2.failed.stderr
             build/linux-runtime-gcc-cohort-v1/source-aliases.txt

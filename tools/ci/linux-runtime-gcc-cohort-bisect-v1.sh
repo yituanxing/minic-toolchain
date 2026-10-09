@@ -158,7 +158,36 @@ else
   cc_ended=$(date +%s%N)
   echo "COHORT_FULL_COMPILE attempted=$n compiled=$compiled failed=$((n-compiled)) rc=$compile_rc elapsed_ms=$(((cc_ended-cc_started)/1000000))"
   if ((compile_rc != 0 || compiled != n)); then
-    echo "COHORT_FULL_COMPILE=FAIL evidence=compile.log,compile-blockers.txt"
+    # Preserve a bounded set of frozen failing .i inputs instead of uploading
+    # potentially thousands of preprocessed Linux files. Keep the COMPLETE
+    # blocker list and compile log regardless of sampling.
+    printf 'object\tstate\tbytes\tsha256\n' >"$ev/failure-pool-index.tsv"
+    kept=0
+    kept_bytes=0
+    max_keep=32
+    max_keep_bytes=$((128 * 1024 * 1024))
+    while IFS= read -r failed_obj; do
+      [[ -n "$failed_obj" ]] || continue
+      stem=${failed_obj%.o}
+      failed_i="$out/$stem.minic-stage2.failed.i"
+      failed_err="$out/$stem.minic-stage2.failed.stderr"
+      if [[ ! -s "$failed_i" ]]; then
+        printf '%s\tNO_I\t0\t-\n' "$failed_obj" >>"$ev/failure-pool-index.tsv"
+        continue
+      fi
+      i_bytes=$(stat -c %s "$failed_i")
+      i_sha=$(sha256sum "$failed_i" | cut -d' ' -f1)
+      if ((kept < max_keep && kept_bytes + i_bytes <= max_keep_bytes)); then
+        printf '%s\tKEPT\t%s\t%s\n' "$failed_obj" "$i_bytes" "$i_sha" >>"$ev/failure-pool-index.tsv"
+        ((kept += 1))
+        kept_bytes=$((kept_bytes + i_bytes))
+      else
+        printf '%s\tOMITTED_CAP\t%s\t%s\n' "$failed_obj" "$i_bytes" "$i_sha" >>"$ev/failure-pool-index.tsv"
+        rm -f -- "$failed_i" "$failed_err"
+      fi
+    done <"$ev/compile-blockers.txt"
+    echo "COHORT_FAILURE_POOL=BOUNDED failed=$((n-compiled)) frozen_i=$kept bytes=$kept_bytes cap_files=$max_keep cap_bytes=$max_keep_bytes index=$ev/failure-pool-index.tsv"
+    echo "COHORT_FULL_COMPILE=FAIL evidence=compile.log,compile-blockers.txt,failure-pool-index.tsv"
     tail -n 75 "$ev/compile.log"
     exit 4
   fi
