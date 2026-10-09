@@ -13,7 +13,7 @@ mkdir -p "$ev/gcc" "$ev/minic" "$ev/trials"
 exec > >(tee "$ev/cohort.log") 2>&1
 mapfile -t objects < <(grep -vE '^[[:space:]]*(#|$)' "$objects_file")
 n=${#objects[@]}
-(( n>=16 && n<=64 )) || { echo "COHORT_ERROR objects=$n"; exit 2; }
+(( n>=32 && n<=256 )) || { echo "COHORT_ERROR objects=$n"; exit 2; }
 expected_cfg=$(sed -n 's/^config_sha256=//p' "$prov/gcc-baseline.txt")
 actual_cfg=$(sha256sum "$out/.config" | cut -d' ' -f1)
 [[ "$expected_cfg" == "$actual_cfg" && -n "$expected_cfg" ]] || {
@@ -139,23 +139,23 @@ trial() {
   printf '%s\t%s\t%s\t%s\n' "$name" "$count" "$verdict" "$image_sha" >>"$ev/results.tsv"
   TRIAL_VERDICT="$verdict"
 }
-trial known14 14 fast
+trial known32 32 fast
 case "$TRIAL_VERDICT" in
-  FAIL) lo=0; hi=14;;
+  FAIL) lo=0; hi=32;;
   PASS)
-    trial expanded32 "$n" fast
+    trial expanded_group "$n" fast
     case "$TRIAL_VERDICT" in
       PASS)
-        trial expanded32_full "$n" full
+        trial expanded_group_full "$n" full
         [[ "$TRIAL_VERDICT" == PASS ]] || {
-          echo "COHORT_RESULT=$TRIAL_VERDICT at=expanded32_full"; exit 8;
+          echo "COHORT_RESULT=$TRIAL_VERDICT at=expanded_group_full"; exit 8;
         }
         echo "COHORT_RESULT=PASS combined=$n same_config=true"
         exit 0 ;;
-      FAIL) lo=14; hi="$n";;
-      *) echo "COHORT_RESULT=INCONCLUSIVE at=expanded32"; exit 8;;
+      FAIL) lo=32; hi="$n";;
+      *) echo "COHORT_RESULT=INCONCLUSIVE at=expanded_group"; exit 8;;
     esac ;;
-  *) echo "COHORT_RESULT=INCONCLUSIVE at=known14"; exit 8;;
+  *) echo "COHORT_RESULT=INCONCLUSIVE at=known32"; exit 8;;
 esac
 # Bisection only after a proven PASS/FAIL bracket in the SAME fixture.
 while ((hi-lo>1)); do
