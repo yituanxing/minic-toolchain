@@ -62,8 +62,11 @@ def main():
         for source in ("elf/src/reader.c","elf/src/relocatable_writer.c","elf/src/rewrite.c",
                        "src/frontend/parse.c","archiver/miniar.c","linker/minild.c"):
             if not accepts(p,source): raise AssertionError(f"MISS {owner} {source}")
-        if accepts(p,"tools/ci/runtime-timekeeping-trigger.txt"):
-            raise AssertionError(f"OVERTRIGGER {owner} runtime-only sentinel")
+        for excluded in ("tools/ci/runtime-timekeeping-trigger.txt",
+                         "tools/ci/select_miniobjcopy_elf_route_v1.py",
+                         "tools/ci/check_ci_trigger_coverage_v1.py"):
+            if accepts(p,excluded):
+                raise AssertionError(f"OVERTRIGGER {owner} maintenance-only source: {excluded}")
     mini=(ROOT/".github/workflows/miniobjcopy-strip-regressions-v1.yml").read_text()
     if "needs.route.outputs.elf_changed == 'true'" not in mini:
         raise AssertionError("MiniObjcopy T1 is not ELF push routed")

@@ -24,6 +24,10 @@ NEGATIVE=(
  "      - '!tools/ci/linux-runtime-rest-init-frontier-v0.json'\n"
  "      - '!tools/ci/select_runtime_owner_modes_v1.py'\n"
 )
+EXTRA_NEGATIVE=(
+ "      - '!tools/ci/select_miniobjcopy_elf_route_v1.py'\n"
+ "      - '!tools/ci/check_ci_*'\n"
+)
 SOURCE_PATHS=(
  "    paths:\n"
  "      - 'src/**'\n"
@@ -68,9 +72,10 @@ def main():
  for name,(rt,pf) in SOURCES.items():
   c=(ROOT/".github/workflows"/name).read_text()
   if c.count(NEGATIVE)!=1: raise AssertionError(f"three Runtime-only exclusions missing: {name}")
+  if c.count(EXTRA_NEGATIVE)!=1: raise AssertionError(f"CI-only exclusions missing: {name}")
   if c.count(SHARED_ELF_PATH)!=1: raise AssertionError(f"shared ELF source path missing or repeated: {name}")
   patterns=paths(c)
-  if patterns[-3:]!=["!tools/ci/runtime-*-trigger.txt","!tools/ci/linux-runtime-rest-init-frontier-v0.json","!tools/ci/select_runtime_owner_modes_v1.py"]:
+  if patterns[-5:]!=["!tools/ci/runtime-*-trigger.txt","!tools/ci/linux-runtime-rest-init-frontier-v0.json","!tools/ci/select_runtime_owner_modes_v1.py","!tools/ci/select_miniobjcopy_elf_route_v1.py","!tools/ci/check_ci_*"]:
    raise AssertionError(f"negation path ordering changed: {name}")
   if "tools/**" not in patterns:raise AssertionError(f"normal tools source changes no longer covered: {name}")
   for forbidden in (
@@ -79,6 +84,9 @@ def main():
       "tools/ci/runtime-init-irq-trigger.txt",
       "tools/ci/linux-runtime-rest-init-frontier-v0.json",
       "tools/ci/select_runtime_owner_modes_v1.py",
+      "tools/ci/check_ci_trigger_coverage_v1.py",
+      "tools/ci/check_ci_regression_path_isolation_v1.py",
+      "tools/ci/select_miniobjcopy_elf_route_v1.py",
   ):
    if accepted(patterns,[forbidden]):raise AssertionError(f"unrelated Runtime change runs {name}: {forbidden}")
   for included in (
@@ -90,17 +98,17 @@ def main():
   if not accepted(patterns,["tools/ci/runtime-timekeeping-trigger.txt","src/frontend/parse.c"]):
    raise AssertionError(f"one excluded path wrongly masks real source change: {name}")
   if branch==BRANCHES[0]:
-   previous=c.replace(SHARED_ELF_PATH,"").replace(NEGATIVE,"")
+   previous=c.replace(EXTRA_NEGATIVE,"").replace(SHARED_ELF_PATH,"").replace(NEGATIVE,"")
   else:
    original_paths=SOURCE_PATHS+"      - '.github/workflows/"+name+"'\n"+NEGATIVE
-   previous_elf_free=c.replace(SHARED_ELF_PATH,"")
+   previous_elf_free=c.replace(EXTRA_NEGATIVE,"").replace(SHARED_ELF_PATH,"")
    if previous_elf_free.count(original_paths)!=1:
     raise AssertionError(f"old Performance branch path insertion shape differs: {name}")
    previous=previous_elf_free.replace(original_paths,"")
   expected=rt if branch==BRANCHES[0] else pf
   if gitblob(previous)!=expected:
    raise AssertionError(f"reconstructed historical job/branch/full YAML changed: {name}")
- print(f"M0_REGRESSION_PATH_ISOLATION=PASS branch={branch} workflows=3 original_job_bodies=3 excluded_runtime_only_paths=3 mixed_source_change_kept=1")
+ print(f"M0_REGRESSION_PATH_ISOLATION=PASS branch={branch} workflows=3 original_job_bodies=3 excluded_runtime_and_maintenance_paths=5 mixed_source_change_kept=1")
 
 if __name__=="__main__":
  main()
