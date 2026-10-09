@@ -120,12 +120,37 @@ jobs:
           test -s "$out/built-in.a"
           test -s "$out/lib/lib.a"
           mkdir -p "$work/provenance"
-          (
-            cd "$out"
-            find . -type f -name '*.o' -print0 | LC_ALL=C sort -z | xargs -0 -r sha256sum
-          ) >"$work/provenance/gcc-objects.sha256"
+          # The default GCC kernel compiles fewer C owners than the 3352
+          # frozen candidate-TU corpus. Only record RISC-V ET_REL objects;
+          # HOSTCC-generated native ELF objects are not Linux swap targets.
+          python3 - "$out" "$work/provenance/gcc-objects.sha256" <<'PY_GCC_POOL'
+          import hashlib
+          from pathlib import Path
+          import struct
+          import sys
+          out, dest = map(Path, sys.argv[1:])
+          total = 0
+          with dest.open("w", encoding="utf-8") as manifest:
+              for obj in sorted(out.rglob("*.o")):
+                  with obj.open("rb") as src:
+                      header = src.read(20)
+                  if (len(header) < 20 or header[:4] != b"\x7fELF"
+                      or header[5] != 1
+                      or struct.unpack_from("<H", header, 16)[0] != 1
+                      or struct.unpack_from("<H", header, 18)[0] != 243):
+                      continue
+                  digest = hashlib.sha256()
+                  with obj.open("rb") as src:
+                      for data in iter(lambda: src.read(1048576), b""):
+                          digest.update(data)
+                  manifest.write(f"{digest.hexdigest()}  {obj.relative_to(out)}\n")
+                  total += 1
+          print(f"GNU_RISCV_OBJECT_POOL objects={total} manifest={dest}")
+          PY_GCC_POOL
           count=$(wc -l <"$work/provenance/gcc-objects.sha256")
-          test "$count" -ge 3000
+          echo "GNU_GOLDEN_OBJECT_COUNT=$count"
+          # Fail if Kbuild produced an implausibly small kernel object pool.
+          test "$count" -ge 1500
           {
             echo "schema=linux-gnu-exact-config-v1"
             echo "linux_release=6.6.143"
