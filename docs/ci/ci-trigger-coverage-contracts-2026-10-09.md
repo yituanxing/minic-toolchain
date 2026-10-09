@@ -15,10 +15,41 @@ Current source inventory: **30 Runtime / 31 Performance / 34 unique names / 61 b
 | Commit tags `[miniobjcopy-linux-tool]`, `[miniobjcopy-linux-image]` | Corresponding T3 job | Preserved; automatic ELF route MUST NOT run costly Linux jobs. |
 | Manual MiniObjcopy mode | Original selected job(s) | Preserved, independent of path router. |
 
-**Performance minimum T1 gate:** the existing MiniC RV64 focused regression now includes the Performance branch in its push branches, preserving the original entire regression job body. It covers normal source/test/tool changes matched by its existing paths. This is not an optimized-profile First500 certificate, and real CI verification is required. The three expensive Runtime regressions now also exclude the MiniObjcopy ELF selector and the pure `tools/ci/check_ci_*` maintenance checks; positive source paths remain unchanged. Other `tools/**` globs still merit dependency review.
+**Performance automatic T1 gates:** MiniC RV64, MiniAR and MiniLD focused regressions now include Performance in their push branches; their original complete test bodies are unchanged. Relevant source/test/tool edits trigger them via existing source paths. This does not certify an applied Performance profile or optimized First500. The three expensive Runtime regressions now also exclude the MiniObjcopy ELF selector and the pure `tools/ci/check_ci_*` maintenance checks; positive source paths remain unchanged. Other `tools/**` globs still merit dependency review.
 
-**Limitations:** These are T0 static dispatch checks and selector self-tests. The newly added ELF-only auto run requires an actual ELF-source-only push to prove the complete GitHub event path. A green route/M0 is not an ELF regression PASS, a full 3352-TU result, a Linux Image certificate, or a QEMU boot PASS. GitHub's server-side path/commit diff limits are not fully solved by a runner-side git diff. The branch-local TSV tracks ownership; all-branch source hashes should be refreshed following the routing change.
+**Limitations:** These are T0 static dispatch checks and selector self-tests. Two controlled ELF-documentation-only pushes have now verified the actual GitHub push → job execution path; the proof uses a benign `elf/CI_ROUTING_SCOPE.md` change, not a production ELF code patch. A green route/M0 is not an ELF regression PASS, a full 3352-TU result, a Linux Image certificate, or a QEMU boot PASS. GitHub's server-side path/commit diff limits are not fully solved by a runner-side git diff. The 61-row ledger is now reconciled from the current owner branch's actual YAML source hashes and includes the most recent verified ELF-only run IDs.
 
 ## Machine-readable full job matrix
 
 Each branch M0 now exports **every active job** (not only workflow names) to an artifact named `ci-trigger-matrix-runtime` or `ci-trigger-matrix-performance`. It records the owner, evidence tier, trigger types, declared branches, complete raw push-path list, raw job `if`, route classification and named test steps. The two branch-specific M0 artifacts together cover all 61 entrypoints. The matrix is descriptive: dynamic conditions and indirect calls are not assumed to PASS simply because they appear in a YAML. Artifacts have a 14-day retention and may be regenerated through M0.
+
+## Real GitHub Actions proof: ELF-only changed paths
+
+The controlled probe modified **only** `elf/CI_ROUTING_SCOPE.md` on each ref.
+Actual runs on the two separate commits produced T1 SUCCESS:
+
+| T1 owner | Runtime push `dfb6ebe8` | Performance push `b6fd6ae0` |
+| --- | --- | --- |
+| MiniC RV64 | [#37883301811](https://github.com/yituanxing/minic-toolchain/actions/runs/37883301811) SUCCESS | [#37883500396](https://github.com/yituanxing/minic-toolchain/actions/runs/37883500396) SUCCESS |
+| MiniPP A0 | [#37883301718](https://github.com/yituanxing/minic-toolchain/actions/runs/37883301718) SUCCESS | [#37883500383](https://github.com/yituanxing/minic-toolchain/actions/runs/37883500383) SUCCESS |
+| MiniAR | [#37883301856](https://github.com/yituanxing/minic-toolchain/actions/runs/37883301856) SUCCESS | [#37883500387](https://github.com/yituanxing/minic-toolchain/actions/runs/37883500387) SUCCESS |
+| MiniLD | [#37883301706](https://github.com/yituanxing/minic-toolchain/actions/runs/37883301706) SUCCESS | [#37883500487](https://github.com/yituanxing/minic-toolchain/actions/runs/37883500487) SUCCESS |
+| MiniObjcopy/Strip T1 | [#37883301722](https://github.com/yituanxing/minic-toolchain/actions/runs/37883301722) SUCCESS | [#37883500452](https://github.com/yituanxing/minic-toolchain/actions/runs/37883500452) SUCCESS |
+
+Both MiniObjcopy runs included `route=success`, `regressions=success`,
+`linux-tool=skipped` and `linux-image=skipped`: no accidental T3/T4
+launch. The Performance branch was initially missing automatic MiniAR and
+MiniLD eligibility; this was corrected **before** the second Perf ELF-only
+push. The original full regression bodies remained source-equivalent as
+verified by dual-branch M0.
+
+The latest structural checks for the changes are Runtime M0
+[#37883457937](https://github.com/yituanxing/minic-toolchain/actions/runs/37883457937)
+and Performance M0
+[#37883428996](https://github.com/yituanxing/minic-toolchain/actions/runs/37883428996),
+both SUCCESS. Machine-readable per-job matrix artifacts are in Runtime M0
+[#37883216458](https://github.com/yituanxing/minic-toolchain/actions/runs/37883216458)
+(**88 job declarations across 30 YAMLs**) and Performance M0
+[#37883242165](https://github.com/yituanxing/minic-toolchain/actions/runs/37883242165)
+(**84 across 31**). These are branch-path declarations, not 172 distinct
+executed tests. Source/certification T2–T4 still requires independent proof.
