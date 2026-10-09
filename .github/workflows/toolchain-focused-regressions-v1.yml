@@ -42,35 +42,41 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  minic-rv64:
-    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && (inputs.mode == 'all' || inputs.mode == 'minic-rv64'))
+  focused-t1:
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 50
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.sha }}
 
-      - name: Install RV64 link and runtime prerequisites
+      - name: Install union of RV64, archive, static and dynamic linker oracle prerequisites
         run: |
+          set -Eeuo pipefail
           timeout 240s sudo apt-get -o Acquire::Retries=3 update
           timeout 240s sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
-            build-essential gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu qemu-user
+            build-essential binutils gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
+            libc6-riscv64-cross libc6-dev-riscv64-cross qemu-user
 
-      - name: Build current Mini toolchain once
-        shell: bash
+      - name: Compile Mini toolchain exactly once for three independent verdicts
+        id: build
         run: |
           set -Eeuo pipefail
-          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/rv64-focused-v1-toolchain all
-          test -x build/rv64-focused-v1-toolchain/bin/minic
-          test -x build/rv64-focused-v1-toolchain/bin/minic-as
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/toolchain-focused-t1-v2 all
+          test -x build/toolchain-focused-t1-v2/bin/minic
+          test -x build/toolchain-focused-t1-v2/bin/minic-as
+          test -x build/toolchain-focused-t1-v2/bin/minic-ar
+          test -x build/toolchain-focused-t1-v2/bin/minic-ld
 
       - name: Run focused current-product regressions
+        id: rv64
+        if: (github.event_name == 'push' || inputs.mode == 'all' || inputs.mode == 'rv64') && steps.build.outcome == 'success'
+        continue-on-error: true
         shell: bash
         run: |
           set -Eeuo pipefail
-          minic="$GITHUB_WORKSPACE/build/rv64-focused-v1-toolchain/bin/minic"
-          minias="$GITHUB_WORKSPACE/build/rv64-focused-v1-toolchain/bin/minic-as"
+          minic="$GITHUB_WORKSPACE/build/toolchain-focused-t1-v2/bin/minic"
+          minias="$GITHUB_WORKSPACE/build/toolchain-focused-t1-v2/bin/minic-as"
           work="$GITHUB_WORKSPACE/build/rv64-focused-v1"
 
           MINIC="$minic" \
@@ -98,119 +104,177 @@ jobs:
 
           echo "MINIC_RV64_FOCUSED_REGRESSIONS_V1=PASS inline-emission=PASS constant-if=PASS section-gc=PASS"
 
-      - name: Preserve focused regression evidence
-        if: always()
+      - name: Validate MiniAR archive contracts
+        id: ar_archive
+        if: (github.event_name == 'push' || inputs.mode == 'all' || inputs.mode == 'miniar') && steps.build.outcome == 'success'
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/toolchain-focused-t1-v2 check-miniar-a0
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/toolchain-focused-t1-v2 check-miniar-a1
+
+      - name: Validate shared ELF reader contract
+        id: ar_reader
+        if: (github.event_name == 'push' || inputs.mode == 'all' || inputs.mode == 'miniar') && steps.build.outcome == 'success'
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/toolchain-focused-t1-v2 check-minielf-reader-a0
+
+      - name: Validate MiniNM archive consumers
+        id: ar_nm
+        if: (github.event_name == 'push' || inputs.mode == 'all' || inputs.mode == 'miniar') && steps.build.outcome == 'success'
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/toolchain-focused-t1-v2 check-mininm-a0
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/toolchain-focused-t1-v2 check-mininm-a1
+
+      - name: Validate shared ELF writer reader and linker-script contracts
+        id: ld_shared
+        if: (github.event_name == 'push' || inputs.mode == 'all' || inputs.mode == 'minild') && steps.build.outcome == 'success'
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/toolchain-focused-t1-v2 check-minielf-reader-a0
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/toolchain-focused-t1-v2 check-minias-a0
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/toolchain-focused-t1-v2 check-minild-script-a0
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/toolchain-focused-t1-v2 check-minild-script-a1
+
+      - name: Validate MiniLD static A0-A3 contracts
+        id: ld_static
+        if: (github.event_name == 'push' || inputs.mode == 'all' || inputs.mode == 'minild') && steps.build.outcome == 'success'
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/toolchain-focused-t1-v2 check-minild-a0
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/toolchain-focused-t1-v2 check-minild-a1
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/toolchain-focused-t1-v2 check-minild-a2
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/toolchain-focused-t1-v2 check-minild-a3
+
+      - name: Validate MiniLD dynamic A4-A6 contracts
+        id: ld_dynamic
+        if: (github.event_name == 'push' || inputs.mode == 'all' || inputs.mode == 'minild') && steps.build.outcome == 'success'
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/toolchain-focused-t1-v2 check-minild-a4
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/toolchain-focused-t1-v2 check-minild-a5
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/toolchain-focused-t1-v2 check-minild-a6
+
+      - name: Validate MiniLD section GC contract
+        id: ld_gc
+        if: (github.event_name == 'push' || inputs.mode == 'all' || inputs.mode == 'minild') && steps.build.outcome == 'success'
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          MINIC="$GITHUB_WORKSPACE/build/toolchain-focused-t1-v2/bin/minic" \
+          MINIAS="$GITHUB_WORKSPACE/build/toolchain-focused-t1-v2/bin/minic-as" \
+          MINILD="$GITHUB_WORKSPACE/build/toolchain-focused-t1-v2/bin/minic-ld" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/toolchain-focused-t1-v2" \
+          RISCV_READELF=riscv64-linux-gnu-readelf \
+          RISCV_NM=riscv64-linux-gnu-nm \
+          QEMU_RISCV64=qemu-riscv64 \
+            sh tests/linker/run-gc-v0.sh
+
+      - name: Preserve independent MiniC RV64 regression evidence
+        if: always() && (github.event_name == 'push' || inputs.mode == 'all' || inputs.mode == 'minic-rv64')
         uses: actions/upload-artifact@v4
         with:
           name: minic-rv64-focused-regressions-v1
           path: build/rv64-focused-v1/
           if-no-files-found: ignore
           retention-days: 5
-  miniar:
-    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && (inputs.mode == 'all' || inputs.mode == 'miniar'))
-    runs-on: ubuntu-24.04
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@v4
+
+      - name: Publish independent RV64, MiniAR and MiniLD test verdicts
+        if: always()
+        id: verdict
+        shell: bash
+        env:
+          MODE: ${{ github.event_name == 'push' && 'all' || inputs.mode }}
+        run: |
+          set -Eeuo pipefail
+          mkdir -p build/toolchain-focused-t1-verdict
+          failures=0
+          echo -e 'owner\tcheck\tresult' > build/toolchain-focused-t1-verdict/outcomes.tsv
+          result="${{ steps.rv64.outcome }}"
+          printf '%s\t%s\t%s\n' 'rv64' 'rv64' "$result" >> build/toolchain-focused-t1-verdict/outcomes.tsv
+          if [[ "$MODE" == all || "$MODE" == "rv64" ]]; then
+            if [[ "$result" != success ]]; then echo "T1_OWNER_CHECK_FAILED owner=rv64 check=rv64 result=$result"; failures=1; fi
+          elif [[ "$result" != skipped ]]; then
+            echo "T1_UNEXPECTED_OWNER_EXECUTION owner=rv64 check=rv64 result=$result"; failures=1
+          fi
+          result="${{ steps.ar_archive.outcome }}"
+          printf '%s\t%s\t%s\n' 'miniar' 'ar_archive' "$result" >> build/toolchain-focused-t1-verdict/outcomes.tsv
+          if [[ "$MODE" == all || "$MODE" == "miniar" ]]; then
+            if [[ "$result" != success ]]; then echo "T1_OWNER_CHECK_FAILED owner=miniar check=ar_archive result=$result"; failures=1; fi
+          elif [[ "$result" != skipped ]]; then
+            echo "T1_UNEXPECTED_OWNER_EXECUTION owner=miniar check=ar_archive result=$result"; failures=1
+          fi
+          result="${{ steps.ar_reader.outcome }}"
+          printf '%s\t%s\t%s\n' 'miniar' 'ar_reader' "$result" >> build/toolchain-focused-t1-verdict/outcomes.tsv
+          if [[ "$MODE" == all || "$MODE" == "miniar" ]]; then
+            if [[ "$result" != success ]]; then echo "T1_OWNER_CHECK_FAILED owner=miniar check=ar_reader result=$result"; failures=1; fi
+          elif [[ "$result" != skipped ]]; then
+            echo "T1_UNEXPECTED_OWNER_EXECUTION owner=miniar check=ar_reader result=$result"; failures=1
+          fi
+          result="${{ steps.ar_nm.outcome }}"
+          printf '%s\t%s\t%s\n' 'miniar' 'ar_nm' "$result" >> build/toolchain-focused-t1-verdict/outcomes.tsv
+          if [[ "$MODE" == all || "$MODE" == "miniar" ]]; then
+            if [[ "$result" != success ]]; then echo "T1_OWNER_CHECK_FAILED owner=miniar check=ar_nm result=$result"; failures=1; fi
+          elif [[ "$result" != skipped ]]; then
+            echo "T1_UNEXPECTED_OWNER_EXECUTION owner=miniar check=ar_nm result=$result"; failures=1
+          fi
+          result="${{ steps.ld_shared.outcome }}"
+          printf '%s\t%s\t%s\n' 'minild' 'ld_shared' "$result" >> build/toolchain-focused-t1-verdict/outcomes.tsv
+          if [[ "$MODE" == all || "$MODE" == "minild" ]]; then
+            if [[ "$result" != success ]]; then echo "T1_OWNER_CHECK_FAILED owner=minild check=ld_shared result=$result"; failures=1; fi
+          elif [[ "$result" != skipped ]]; then
+            echo "T1_UNEXPECTED_OWNER_EXECUTION owner=minild check=ld_shared result=$result"; failures=1
+          fi
+          result="${{ steps.ld_static.outcome }}"
+          printf '%s\t%s\t%s\n' 'minild' 'ld_static' "$result" >> build/toolchain-focused-t1-verdict/outcomes.tsv
+          if [[ "$MODE" == all || "$MODE" == "minild" ]]; then
+            if [[ "$result" != success ]]; then echo "T1_OWNER_CHECK_FAILED owner=minild check=ld_static result=$result"; failures=1; fi
+          elif [[ "$result" != skipped ]]; then
+            echo "T1_UNEXPECTED_OWNER_EXECUTION owner=minild check=ld_static result=$result"; failures=1
+          fi
+          result="${{ steps.ld_dynamic.outcome }}"
+          printf '%s\t%s\t%s\n' 'minild' 'ld_dynamic' "$result" >> build/toolchain-focused-t1-verdict/outcomes.tsv
+          if [[ "$MODE" == all || "$MODE" == "minild" ]]; then
+            if [[ "$result" != success ]]; then echo "T1_OWNER_CHECK_FAILED owner=minild check=ld_dynamic result=$result"; failures=1; fi
+          elif [[ "$result" != skipped ]]; then
+            echo "T1_UNEXPECTED_OWNER_EXECUTION owner=minild check=ld_dynamic result=$result"; failures=1
+          fi
+          result="${{ steps.ld_gc.outcome }}"
+          printf '%s\t%s\t%s\n' 'minild' 'ld_gc' "$result" >> build/toolchain-focused-t1-verdict/outcomes.tsv
+          if [[ "$MODE" == all || "$MODE" == "minild" ]]; then
+            if [[ "$result" != success ]]; then echo "T1_OWNER_CHECK_FAILED owner=minild check=ld_gc result=$result"; failures=1; fi
+          elif [[ "$result" != skipped ]]; then
+            echo "T1_UNEXPECTED_OWNER_EXECUTION owner=minild check=ld_gc result=$result"; failures=1
+          fi
+          echo "T1_SHARED_BUILD_RESULT=${{ steps.build.outcome }}"
+          if [[ "${{ steps.build.outcome }}" != success ]]; then failures=1; fi
+          cat build/toolchain-focused-t1-verdict/outcomes.tsv
+          if [[ "$failures" -eq 0 ]]; then
+            echo "TOOLCHAIN_FOCUSED_T1=PASS mode=$MODE independent_test_checks=8 shared_builds=1"
+          else
+            echo "TOOLCHAIN_FOCUSED_T1=FAIL mode=$MODE independent_test_checks=8 shared_builds=1"
+          fi
+          exit "$failures"
+
+      - name: Upload independent suite verdict manifest
+        if: always()
+        uses: actions/upload-artifact@v4
         with:
-          ref: ${{ github.sha }}
-
-      - name: Install archive and RV64 oracle prerequisites
-        run: |
-          timeout 240s sudo apt-get -o Acquire::Retries=3 update
-          timeout 240s sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
-            build-essential binutils gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu
-
-      - name: Build current Mini toolchain once
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/miniar-regressions-v1 all
-          test -x build/miniar-regressions-v1/bin/minic-ar
-
-      - name: Validate MiniAR archive contracts
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          make MODE=release CFLAGS=-Werror BUILD_DIR=build/miniar-regressions-v1 check-miniar-a0
-          make MODE=release CFLAGS=-Werror BUILD_DIR=build/miniar-regressions-v1 check-miniar-a1
-
-      - name: Validate shared ELF reader contract
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          make MODE=release CFLAGS=-Werror BUILD_DIR=build/miniar-regressions-v1 check-minielf-reader-a0
-
-      - name: Validate MiniNM archive consumers
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          make MODE=release CFLAGS=-Werror BUILD_DIR=build/miniar-regressions-v1 check-mininm-a0
-          make MODE=release CFLAGS=-Werror BUILD_DIR=build/miniar-regressions-v1 check-mininm-a1
-
-      - name: Publish canonical verdict
-        run: echo "MINIAR_REGRESSIONS_V1=PASS archive=A0-A1 elf-reader=PASS mininm=A0-A1"
-  minild:
-    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && (inputs.mode == 'all' || inputs.mode == 'minild'))
-    runs-on: ubuntu-24.04
-    timeout-minutes: 35
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.sha }}
-
-      - name: Install RV64 linker and dynamic runtime oracles
-        run: |
-          timeout 240s sudo apt-get -o Acquire::Retries=3 update
-          timeout 240s sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
-            build-essential gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
-            libc6-riscv64-cross libc6-dev-riscv64-cross qemu-user
-
-      - name: Build current Mini toolchain once
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/minild-regressions-v1 all
-          test -x build/minild-regressions-v1/bin/minic-ld
-
-      - name: Validate shared ELF writer reader and linker-script contracts
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          make MODE=release CFLAGS=-Werror BUILD_DIR=build/minild-regressions-v1 check-minielf-reader-a0
-          make MODE=release CFLAGS=-Werror BUILD_DIR=build/minild-regressions-v1 check-minias-a0
-          make MODE=release CFLAGS=-Werror BUILD_DIR=build/minild-regressions-v1 check-minild-script-a0
-          make MODE=release CFLAGS=-Werror BUILD_DIR=build/minild-regressions-v1 check-minild-script-a1
-
-      - name: Validate MiniLD static A0-A3 contracts
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          make MODE=release CFLAGS=-Werror BUILD_DIR=build/minild-regressions-v1 check-minild-a0
-          make MODE=release CFLAGS=-Werror BUILD_DIR=build/minild-regressions-v1 check-minild-a1
-          make MODE=release CFLAGS=-Werror BUILD_DIR=build/minild-regressions-v1 check-minild-a2
-          make MODE=release CFLAGS=-Werror BUILD_DIR=build/minild-regressions-v1 check-minild-a3
-
-      - name: Validate MiniLD dynamic A4-A6 contracts
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          make MODE=release CFLAGS=-Werror BUILD_DIR=build/minild-regressions-v1 check-minild-a4
-          make MODE=release CFLAGS=-Werror BUILD_DIR=build/minild-regressions-v1 check-minild-a5
-          make MODE=release CFLAGS=-Werror BUILD_DIR=build/minild-regressions-v1 check-minild-a6
-
-      - name: Validate MiniLD section GC contract
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          MINIC="$GITHUB_WORKSPACE/build/minild-regressions-v1/bin/minic" \
-          MINIAS="$GITHUB_WORKSPACE/build/minild-regressions-v1/bin/minic-as" \
-          MINILD="$GITHUB_WORKSPACE/build/minild-regressions-v1/bin/minic-ld" \
-          BUILD_DIR="$GITHUB_WORKSPACE/build/minild-regressions-v1" \
-          RISCV_READELF=riscv64-linux-gnu-readelf \
-          RISCV_NM=riscv64-linux-gnu-nm \
-          QEMU_RISCV64=qemu-riscv64 \
-            sh tests/linker/run-gc-v0.sh
-
-      - name: Publish canonical verdict
-        run: echo "MINILD_REGRESSIONS_V1=PASS elf-reader=PASS et-rel-writer=PASS minias=A0 scripts=A0-A1 static=A0-A3 dynamic=A4-A6 gc=PASS"
+          name: toolchain-focused-t1-suite-verdict
+          path: build/toolchain-focused-t1-verdict/outcomes.tsv
+          if-no-files-found: warn
+          retention-days: 7

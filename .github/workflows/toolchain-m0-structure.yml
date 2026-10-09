@@ -19,6 +19,7 @@ on:
       - "tools/ci/check_early_runtime_dispatch_v1.py"
       - "tools/ci/check_ci_regression_path_isolation_v1.py"
       - ".github/workflows/toolchain-focused-regressions-v1.yml"
+      - ".github/workflows-disabled/toolchain-focused-regressions-three-jobs-2026-10-09.yml"
       - ".github/workflows-disabled/minic-rv64-focused-regressions-v1.yml"
       - ".github/workflows-disabled/miniar-regressions-v1.yml"
       - ".github/workflows-disabled/minild-regressions-v1.yml"

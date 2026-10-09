@@ -1,0 +1,216 @@
+name: Toolchain Focused Regression Suite (RV64, AR, LD)
+
+on:
+  push:
+    branches:
+      - "agent/linux-expanded-kbuild-v0"
+      - "agent/linux-perf-boolean-domain-v1"
+    paths:
+      - 'src/**'
+      - 'include/**'
+      - 'compiler/**'
+      - 'preprocessor/**'
+      - 'assembler/**'
+      - 'archiver/**'
+      - 'linker/**'
+      - 'elf/**'
+      - 'tools/**'
+      - 'tests/**'
+      - 'scripts/**'
+      - 'Makefile'
+      - '.github/actions/**'
+      - '.github/workflows/toolchain-focused-regressions-v1.yml'
+      - '!tools/ci/**'
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Select regression owner
+        required: true
+        type: choice
+        default: all
+        options:
+          - all
+          - minic-rv64
+          - miniar
+          - minild
+
+permissions:
+  contents: read
+
+concurrency:
+  group: toolchain-focused-regressions-${{ github.ref }}-${{ github.event_name == 'workflow_dispatch' && inputs.mode || 'push' }}
+  cancel-in-progress: true
+
+jobs:
+  minic-rv64:
+    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && (inputs.mode == 'all' || inputs.mode == 'minic-rv64'))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Install RV64 link and runtime prerequisites
+        run: |
+          timeout 240s sudo apt-get -o Acquire::Retries=3 update
+          timeout 240s sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            build-essential gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu qemu-user
+
+      - name: Build current Mini toolchain once
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/rv64-focused-v1-toolchain all
+          test -x build/rv64-focused-v1-toolchain/bin/minic
+          test -x build/rv64-focused-v1-toolchain/bin/minic-as
+
+      - name: Run focused current-product regressions
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          minic="$GITHUB_WORKSPACE/build/rv64-focused-v1-toolchain/bin/minic"
+          minias="$GITHUB_WORKSPACE/build/rv64-focused-v1-toolchain/bin/minic-as"
+          work="$GITHUB_WORKSPACE/build/rv64-focused-v1"
+
+          MINIC="$minic" \
+          BUILD_DIR="$work" \
+          RISCV_CC=riscv64-linux-gnu-gcc \
+          RISCV_LD=riscv64-linux-gnu-ld \
+          RISCV_NM=riscv64-linux-gnu-nm \
+          QEMU_RISCV64=qemu-riscv64 \
+            bash tests/compiler/c0/run-inline-emission-reachability-rv64.sh
+
+          MINIC="$minic" \
+          MINIAS="$minias" \
+          BUILD_DIR="$work" \
+          RISCV_LD=riscv64-linux-gnu-ld \
+          QEMU_RISCV64=qemu-riscv64 \
+            sh tests/driver/run-constant-if-link-v0.sh
+
+          MINIC="$minic" \
+          MINIAS="$minias" \
+          BUILD_DIR="$work" \
+          RISCV_LD=riscv64-linux-gnu-ld \
+          RISCV_READELF=riscv64-linux-gnu-readelf \
+          QEMU_RISCV64=qemu-riscv64 \
+            sh tests/driver/run-section-gc-v0.sh
+
+          echo "MINIC_RV64_FOCUSED_REGRESSIONS_V1=PASS inline-emission=PASS constant-if=PASS section-gc=PASS"
+
+      - name: Preserve focused regression evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: minic-rv64-focused-regressions-v1
+          path: build/rv64-focused-v1/
+          if-no-files-found: ignore
+          retention-days: 5
+  miniar:
+    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && (inputs.mode == 'all' || inputs.mode == 'miniar'))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Install archive and RV64 oracle prerequisites
+        run: |
+          timeout 240s sudo apt-get -o Acquire::Retries=3 update
+          timeout 240s sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            build-essential binutils gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu
+
+      - name: Build current Mini toolchain once
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/miniar-regressions-v1 all
+          test -x build/miniar-regressions-v1/bin/minic-ar
+
+      - name: Validate MiniAR archive contracts
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/miniar-regressions-v1 check-miniar-a0
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/miniar-regressions-v1 check-miniar-a1
+
+      - name: Validate shared ELF reader contract
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/miniar-regressions-v1 check-minielf-reader-a0
+
+      - name: Validate MiniNM archive consumers
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/miniar-regressions-v1 check-mininm-a0
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/miniar-regressions-v1 check-mininm-a1
+
+      - name: Publish canonical verdict
+        run: echo "MINIAR_REGRESSIONS_V1=PASS archive=A0-A1 elf-reader=PASS mininm=A0-A1"
+  minild:
+    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && (inputs.mode == 'all' || inputs.mode == 'minild'))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Install RV64 linker and dynamic runtime oracles
+        run: |
+          timeout 240s sudo apt-get -o Acquire::Retries=3 update
+          timeout 240s sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            build-essential gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
+            libc6-riscv64-cross libc6-dev-riscv64-cross qemu-user
+
+      - name: Build current Mini toolchain once
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/minild-regressions-v1 all
+          test -x build/minild-regressions-v1/bin/minic-ld
+
+      - name: Validate shared ELF writer reader and linker-script contracts
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/minild-regressions-v1 check-minielf-reader-a0
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/minild-regressions-v1 check-minias-a0
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/minild-regressions-v1 check-minild-script-a0
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/minild-regressions-v1 check-minild-script-a1
+
+      - name: Validate MiniLD static A0-A3 contracts
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/minild-regressions-v1 check-minild-a0
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/minild-regressions-v1 check-minild-a1
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/minild-regressions-v1 check-minild-a2
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/minild-regressions-v1 check-minild-a3
+
+      - name: Validate MiniLD dynamic A4-A6 contracts
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/minild-regressions-v1 check-minild-a4
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/minild-regressions-v1 check-minild-a5
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/minild-regressions-v1 check-minild-a6
+
+      - name: Validate MiniLD section GC contract
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          MINIC="$GITHUB_WORKSPACE/build/minild-regressions-v1/bin/minic" \
+          MINIAS="$GITHUB_WORKSPACE/build/minild-regressions-v1/bin/minic-as" \
+          MINILD="$GITHUB_WORKSPACE/build/minild-regressions-v1/bin/minic-ld" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/minild-regressions-v1" \
+          RISCV_READELF=riscv64-linux-gnu-readelf \
+          RISCV_NM=riscv64-linux-gnu-nm \
+          QEMU_RISCV64=qemu-riscv64 \
+            sh tests/linker/run-gc-v0.sh
+
+      - name: Publish canonical verdict
+        run: echo "MINILD_REGRESSIONS_V1=PASS elf-reader=PASS et-rel-writer=PASS minias=A0 scripts=A0-A1 static=A0-A3 dynamic=A4-A6 gc=PASS"
