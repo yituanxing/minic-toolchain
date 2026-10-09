@@ -1,3 +1,5 @@
+> **Updated 2026-10-09 status:** Four more Runtime focused diagnostic YAMLs have been consolidated into one exact-source canonical owner on both branches: **25 Runtime / 23 Performance, 48 branch-path YAMLs (26 unique names)**. One new cheap selector Job preserves 4 independent runtime diagnoses. See [detailed contract](ci-runtime-focused-owners-consolidation-2026-10-09.md). The previous cost table below is historical.
+
 > **Subsequent 2026-10-09 Performance consolidation:** One `linux-performance-experiments-v1.yml` replaces four temporary/experimental entries; Runtime remains **28**; Performance **26**; unique YAMLs **29**; branch-path copies **54**. **173 declared jobs** (Runtime 88, Performance 85; extra Performance route job). See [exact archived job and routing proof](ci-performance-experiment-consolidation-2026-10-09.md). The table immediately below documents the *preceding* 57-YAML snapshot.
 
 # Active CI cost, overlap and temporary workflow review — 2026-10-09

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check all 54 maintained workflow entries against the owned trigger inventory.
+"""Check all 48 maintained workflow entries against the owned trigger inventory.
 
 This is a T0 source/dispatch audit, not proof of T1-T4 execution. In particular
 a push path filter only creates a workflow run; job-level 'if' may skip tests.
@@ -36,8 +36,8 @@ def accepts(patterns,path):
 def main():
     with INV.open(newline="") as f:
         rows=list(csv.DictReader(f,delimiter="\t"))
-    if len(rows)!=54 or len({r["path"] for r in rows})!=29:
-        raise AssertionError("54-row / 29-name owned inventory changed without review")
+    if len(rows)!=48 or len({r["path"] for r in rows})!=26:
+        raise AssertionError("48-row / 26-name owned inventory changed without review")
     branch=os.environ.get("GITHUB_REF_NAME",BRANCHES[0])
     if branch not in BRANCHES:
         raise AssertionError(f"unknown CI branch: {branch}")
@@ -90,7 +90,7 @@ def main():
             if "      - \"agent/linux-perf-boolean-domain-v1\"" not in header(t):
                 raise AssertionError(f"Performance ELF archive/linker T1 owner missing: {owner}")
         print("M0_PERF_T1=IN_SCOPE owners=3 (real T1 execution separately required)")
-    print(f"M0_CI_TRIGGER_LEDGER=PASS branch={branch} maintained={len(local)} total=54 unique=29 route_checks=4 tier=T0")
+    print(f"M0_CI_TRIGGER_LEDGER=PASS branch={branch} maintained={len(local)} total=48 unique=26 route_checks=4 tier=T0")
 
 if __name__=="__main__":
     main()
