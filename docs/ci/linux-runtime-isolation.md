@@ -308,3 +308,31 @@ source file, GCC executable). On a matching cache hit the runner
 GNU assembler -> GNU relink -> QEMU. Any incomplete/altered or
 identity-mismatched cache fails closed. Performance timing of this
 optimization must be measured separately from the original real run.
+
+
+### Real immutable .i replay and hot-loop timing (2026-10-09)
+
+- [GNU one-object Kbuild capture / cache producer #37936412382](https://github.com/yituanxing/minic-toolchain/actions/runs/37936412382):
+  \`GNU_SINGLE_PP_CACHE=MISS\`, real \`lib/idr.i\` captured from the
+  source/config/GCC/\`.cmd\`-pinned GNU stage; MiniC object + GNU incremental
+  Image + QEMU all **PASS**; exact input/assembler-flag cache **saved**.
+- [MiniC-only frozen-input replay #37936800398](https://github.com/yituanxing/minic-toolchain/actions/runs/37936800398):
+  independent runner restored both the golden GCC pool and exact \`.i\` cache;
+  \`GNU_SINGLE_PP_CACHE=HIT\`, \`GNU_SINGLE_MINIC=PASS\`,
+  \`GNU_SINGLE_RELINK=PASS\`, \`GNU_SINGLE_RUNTIME=PASS\`.
+  Hot-loop instrumented durations: **compile 933 ms**, **GNU relink
+  18,698 ms**, **initramfs/QEMU runtime 12,861 ms**, **total 32,493 ms**.
+  These are **within-job trial timings** after the compiler/fixture/cache
+  setup, not total GitHub Actions runner wall time. The producer miss spent
+  about 18 s from GNU object verification to MiniC result; timings are not
+  strictly paired/hardware-identical benchmark observations.
+- Runtime [M0 #37936800311](https://github.com/yituanxing/minic-toolchain/actions/runs/37936800311)
+  also passed on the same HEAD; the extra T2 paths were routed to skipped
+  expensive jobs, not unrequested 3352 rebuilds.
+
+This proves the sought **frozen GNU PP -> MiniC-only \`.i\` replay -> GNU
+as/link -> real QEMU** loop for \`lib/idr.o\` on the 2141-object GCC kernel.
+It neither replaces nor certifies an entirely MiniC-built Linux Image.
+Continue with single-file failures, controlled object overlays, and
+regression expansion; multi-object interaction is deferred unless a
+single-object explanation becomes impossible.
