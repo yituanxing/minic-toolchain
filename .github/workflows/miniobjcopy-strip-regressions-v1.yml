@@ -24,7 +24,7 @@ permissions:
 
 concurrency:
   group: miniobjcopy-strip-regressions-v1-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   route:
