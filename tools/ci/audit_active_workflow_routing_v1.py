@@ -39,6 +39,14 @@ PERFORMANCE_ARCHIVED = {
     "linux-runtime-focused-owners-v1.yml": "6ad661f9e8614d2740477640cb2fe0de905d6c40",
     "linux-runtime-owner-focused-v1.yml": "f751fe83c49947302201e9cd09d313a865735372",
 }
+# Performance branch has a historical MiniAS definition with a different blob:
+# its old cleanup-only push branch is irrelevant on Performance. Preserve both
+# originals and never substitute the Runtime version silently.
+MINIAS_GATE_VARIANTS = {
+    "agent/linux-expanded-kbuild-v0": "f430ce905fa4c49715ce4cd5ef1dc4cef2054f9c",
+    "agent/linux-perf-boolean-domain-v1": "be679f45cd1bf81bfefca7fee0cc12aeb95aa802",
+}
+
 
 BRANCHES = ("agent/linux-expanded-kbuild-v0", "agent/linux-perf-boolean-domain-v1")
 HEADER = (
@@ -164,7 +172,7 @@ def main():
         raise AssertionError(f"unsupported branch {branch}")
     rows = [analyze(f.name, f.read_text(), branch)
             for f in sorted(ACTIVE.glob("*.yml"))]
-    expected = 25 if branch == BRANCHES[0] else 14
+    expected = 25 if branch == BRANCHES[0] else 13
     if len(rows) != expected:
         raise AssertionError(f"inventory drift: branch {branch} YAML count {len(rows)} != {expected}")
     # Hard-coded high-risk names are only a diagnosis: their contract is frozen.
@@ -206,6 +214,23 @@ def main():
             assert observed["push_branch_eligible"] == "false", name
         digest = hashlib.sha1(b"blob " + str(len(payload)).encode() + b"\0" + payload).hexdigest()
         assert digest == expected_sha, f"Performance archive source drift: {name}"
+    # MiniAS gate is still live for Runtime. Preserve Performance's historically
+    # branch-ineligible variant byte-for-byte, not the newer Runtime variant.
+    mini_name = "minias-a0-gate-v1.yml"
+    mini_live = ACTIVE / mini_name
+    mini_archive = ROOT / ".github/workflows-disabled/performance-retired-2026-10-09" / mini_name
+    if branch == BRANCHES[0]:
+        assert mini_live.is_file(), mini_name
+        mini_bytes = mini_live.read_bytes()
+    else:
+        assert not mini_live.exists() and mini_archive.is_file(), mini_name
+        mini_bytes = mini_archive.read_bytes()
+        mini_meta = analyze(mini_name, mini_bytes.decode("utf-8"), branch)
+        assert mini_meta["push_branch_eligible"] == "false", mini_name
+        assert mini_meta["jobs_declared"] == "5", mini_name
+        assert "workflow_call:" not in trim_header(mini_bytes.decode("utf-8")), mini_name
+    mini_actual = hashlib.sha1(b"blob " + str(len(mini_bytes)).encode() + b"\0" + mini_bytes).hexdigest()
+    assert mini_actual == MINIAS_GATE_VARIANTS[branch], f"MiniAS branch-specific gate source drift: {branch}"
     assert names[ROUTE_ALL_PUSH]["classification"] == "all_push_router_runner"
     assert names[LEGACY_MANUAL]["push_declared"] == "false"
     assert names[LEGACY_MANUAL]["manual_dispatch"] == "true"
