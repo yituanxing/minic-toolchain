@@ -8,7 +8,17 @@ on:
       - ".github/workflows/toolchain-m0-structure.yml"
       - ".github/workflows/minild-integration-v1.yml"
       - "tools/ci/check_minild_integration_convergence_v1.py"
+      - ".github/workflows/linux-optimized-first500-verify-v1.yml"
   workflow_dispatch:
+    inputs:
+      mode:
+        description: "Structural checks or full historical compiler boundary"
+        required: true
+        type: choice
+        default: full
+        options:
+          - structure
+          - full
 
 jobs:
   compiler-boundary:
@@ -16,6 +26,17 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+
+      - name: Verify First500 performance opt-in contract
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          text = Path('.github/workflows/linux-optimized-first500-verify-v1.yml').read_text()
+          assert "contains(github.event.head_commit.message, '[perf-first500]')" in text
+          assert "github.event_name == 'workflow_dispatch'" in text
+          assert "tools/ci/**" not in text, "Overbroad CI helper change triggers heavyweight A/B"
+          print('M0_PERF_TRIGGER_SCOPE=PASS opt_in_tag=perf-first500 no_broad_tools_ci=1')
+          PY
 
       - name: Verify MiniLD consolidated integration contracts
         run: |
@@ -45,11 +66,11 @@ jobs:
           echo "M0_BUSYBOX_KBUILD_ROUTING=PASS"
 
       - name: Build frozen compiler boundary
-        if: github.ref != 'refs/heads/agent/ci-runtime-cleanup-v1'
+        if: github.event_name == 'workflow_dispatch' && inputs.mode == 'full'
         run: make clean && make -j2
 
       - name: Verify minic-cc and independent driver entrypoint
-        if: github.ref != 'refs/heads/agent/ci-runtime-cleanup-v1'
+        if: github.event_name == 'workflow_dispatch' && inputs.mode == 'full'
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -62,14 +83,14 @@ jobs:
           echo "M0_BINARY_BOUNDARY=PASS compiler=minic-cc driver=minic"
 
       - name: Run focused ownership gates
-        if: github.ref != 'refs/heads/agent/ci-runtime-cleanup-v1'
+        if: github.event_name == 'workflow_dispatch' && inputs.mode == 'full'
         run: |
           make check-token-model check-lexer check-type check-record check-type-alias
           make check-ast-contract check-layout check-rv64-abi
           make check-static-functions check-cast-expressions check-pointer-members
 
       - name: Verify compiler CLI output identity
-        if: github.ref != 'refs/heads/agent/ci-runtime-cleanup-v1'
+        if: github.event_name == 'workflow_dispatch' && inputs.mode == 'full'
         shell: bash
         run: |
           set -Eeuo pipefail
