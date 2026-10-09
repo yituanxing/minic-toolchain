@@ -32,6 +32,10 @@ def main():
  paths=re.search(r"(?m)^    paths:\n((?:      - [^\n]*\n)+)",h)
  if paths is None: raise AssertionError("missing positive/negative paths")
  globs=[ast.literal_eval(s.strip()[2:].strip()) for s in paths.group(1).splitlines()]
+ if globs[-1]!="!tools/ci/**":
+  raise AssertionError("missing broad CI-only negative filter; T1 must not launch on CI helper edits")
+ if globs.count("tools/**")!=1:
+  raise AssertionError("real tools implementation dependency lost")
  for src in ("elf/src/reader.c","elf/src/rewrite.c","src/frontend/parse.c",
              "archiver/miniar.c","linker/minild.c","tests/compiler/c0/check.c",
              ".github/workflows/toolchain-focused-regressions-v1.yml"):
@@ -41,7 +45,9 @@ def main():
              "tools/ci/check_ci_trigger_coverage_v1.py",
              "tools/ci/select_miniobjcopy_elf_route_v1.py",
              "tools/ci/apply-perf-core-object-interval-onepass-v1.py",
-             "tools/ci/linux-perf-typedef-paired-ab-v1.py"):
+             "tools/ci/linux-perf-typedef-paired-ab-v1.py",
+             "tools/ci/linux-runtime-build-minic-profile-v1.sh",
+             "tools/ci/select_runtime_focused_owners_v1.py"):
   if included(globs,src): raise AssertionError("wasted T1 trigger: "+src)
  for i,(name,job) in enumerate(zip(OLD,JOBS)):
   if (ROOT/".github/workflows"/name).exists():
@@ -63,6 +69,6 @@ def main():
    raise AssertionError("original full build/test/upload job body modified: "+job)
  if len(re.findall(r"(?m)^  [a-z][a-z0-9-]*:\s*$",jobs))!=3:
   raise AssertionError("unexpected new canonical job count")
- print(f"M0_FOCUSED_T1=PASS branch={branch} original_full_job_bodies=3 archives_sha_exact=3 independent_jobs=3 source_routes=7 negative_routes=6")
+ print(f"M0_FOCUSED_T1=PASS branch={branch} original_full_job_bodies=3 archives_sha_exact=3 independent_jobs=3 source_routes=7 negative_routes=8")
 
 if __name__=="__main__":main()
