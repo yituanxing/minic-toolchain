@@ -1,3 +1,5 @@
+> **Subsequent 2026-10-09 Performance consolidation:** One `linux-performance-experiments-v1.yml` replaces four temporary/experimental entries; Runtime remains **28**; Performance **26**; unique YAMLs **29**; branch-path copies **54**. **173 declared jobs** (Runtime 88, Performance 85; extra Performance route job). See [exact archived job and routing proof](ci-performance-experiment-consolidation-2026-10-09.md). The table immediately below documents the *preceding* 57-YAML snapshot.
+
 # Active CI cost, overlap and temporary workflow review — 2026-10-09
 
 ## Baseline and measured change
@@ -25,7 +27,7 @@ Runtime M0 [#37887392381](https://github.com/yituanxing/minic-toolchain/actions/
 | Init-IRQ bridge, RCU/softirq, RISC-V init codegen, timer frontier | **4 YAMLs / 4 jobs** per branch | Certified fixture/source restore, MiniC profile build, some Kbuild/QEMU setup | Object cohort, boundary/first fault, output artifact and trigger file differ | Future Runtime owner selector candidate; retain exact original YAMLs until routed QEMU and cache evidence exists. |
 | MiniAS focused semantics vs A0 Gate | **2 YAMLs / 15 declared jobs** on Runtime | Some C149/native semantic support and toolchain builds | A0 exact/3536 target vs independent semantic/native oracle and cohort evidence | **Not proven redundant**. Check identical commands and output provenance before deduplicating. |
 | Compiler Core shards vs full3352+Strict500 suite | **2 YAMLs / 11 jobs** per branch | Frozen corpus/build setup and shard replay | Crash/ASan and independently certified corpora vs strict500/full assembly | Keep independent T2 contracts; audit shared setup only. |
-| Performance-specific experiments | **4 Performance-only YAMLs / 4 jobs** | First500/compiler performance or targeted compiler semantics setup | `top5`, GNU constant-p ICE, optimized first500, parser-scope A/B run different candidate patches and oracles | **Strong temporary-file consolidation candidates**, but source/branch/profile proof and opt-in semantics must be retained. Do not treat their success as optimized source merge. |
+| Performance-specific experiments | **1 canonical Performance YAML / 5 jobs (4 experiments + route)** | First500/compiler performance or targeted compiler semantics setup | `top5`, GNU constant-p ICE, optimized first500, parser-scope A/B run different candidate patches and oracles | **Strong temporary-file consolidation candidates**, but source/branch/profile proof and opt-in semantics must be retained. Do not treat their success as optimized source merge. |
 | MiniLD T1 vs real dynamic/Linux REL/static integration | **2 YAMLs**, distinct job roles | Linker build/test prerequisites | T1 synthetic contracts vs T3 real binary integrations | Keep separate due evidence tier. |
 | MiniPP A0 vs frozen/live exact | **2 YAMLs** | MiniPP builds | Fast T1 unit tests vs expensive immutable T2/T3 corpora | Keep cheap automatic T1 separate. |
 

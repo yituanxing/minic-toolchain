@@ -48,7 +48,13 @@ on:
       - ".github/workflows-disabled/linux-runtime-frontier-diagnostics-v1.yml"
       - ".github/workflows/linux-runtime-focused-faults-v1.yml"
       - ".github/workflows/minipp-linux-frozen-v1.yml"
-      - ".github/workflows/linux-optimized-first500-verify-v1.yml"
+      - ".github/workflows/linux-performance-experiments-v1.yml"
+      - "tools/ci/select_perf_experiment_modes_v1.py"
+      - "tools/ci/check_perf_experiment_convergence_v1.py"
+      - ".github/workflows-disabled/linux-core-object-interval-top5-ab-v1.yml"
+      - ".github/workflows-disabled/linux-gnu-constant-p-ice-regression-v1.yml"
+      - ".github/workflows-disabled/linux-optimized-first500-verify-v1.yml"
+      - ".github/workflows-disabled/linux-parser-scope-first500-ab-v1.yml"
   workflow_dispatch:
     inputs:
       mode:
@@ -71,12 +77,18 @@ jobs:
         run: |
           python3 - <<'PY'
           from pathlib import Path
-          text = Path('.github/workflows/linux-optimized-first500-verify-v1.yml').read_text()
+          text = Path('.github/workflows/linux-performance-experiments-v1.yml').read_text()
           assert "contains(github.event.head_commit.message, '[perf-first500]')" in text
           assert "github.event_name == 'workflow_dispatch'" in text
           assert "tools/ci/**" not in text, "Overbroad CI helper change triggers heavyweight A/B"
           print('M0_PERF_TRIGGER_SCOPE=PASS opt_in_tag=perf-first500 no_broad_tools_ci=1')
           PY
+
+      - name: Verify four preserved Performance experiment owners and exact job bodies
+        run: |
+          python3 tools/ci/select_perf_experiment_modes_v1.py --self-test
+          python3 tools/ci/check_perf_experiment_convergence_v1.py
+          ruby -e 'require "yaml"; YAML.parse_file(ARGV.fetch(0))' .github/workflows/linux-performance-experiments-v1.yml
 
       - name: Verify MiniLD consolidated integration contracts
         run: |

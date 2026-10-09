@@ -1,0 +1,780 @@
+name: Performance Focused Experiments (Top5, ICE, First500, Parser)
+
+on:
+  push:
+    branches:
+      - agent/linux-perf-boolean-domain-v1
+    paths:
+      - 'tools/ci/apply-perf-core-object-interval-onepass-v1.py'
+      - 'tests/compiler/c0/gnu_constant_p_ice_regression.c'
+      - 'tests/compiler/c0/gnu_choose_dynamic_condition_reject.c'
+      - 'tools/ci/apply-correctness-constant-p-ice-v1.py'
+      - 'src/**'
+      - 'include/**'
+      - 'tools/ci/linux-runtime-build-minic-profile-v1.sh'
+      - 'tools/ci/linux-perf-*'
+      - 'tools/ci/apply-perf-*'
+      - 'tools/ci/apply-inline-specialization-*'
+      - 'tools/ci/apply-correctness-*'
+      - 'tools/ci/perf-v1-overrides/**'
+      - 'tools/minic-cc/**'
+      - 'tools/minic/**'
+      - 'Makefile'
+      - 'tests/compiler/**'
+      - 'src/frontend/**'
+      - 'tools/ci/apply-perf-parser-*'
+      - 'tools/ci/apply-inline-specialization-local-boolean-domain-scoped-v1.py'
+      - 'tests/compiler/c0/**'
+      - '.github/workflows/linux-performance-experiments-v1.yml'
+      - 'tools/ci/select_perf_experiment_modes_v1.py'
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Select one experiment or all (expensive)
+        required: true
+        type: choice
+        default: ice
+        options:
+          - ice
+          - top5
+          - first500
+          - parser
+          - all
+
+permissions:
+  contents: read
+
+jobs:
+  route:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    outputs:
+      top5: ${{ steps.route.outputs.top5 }}
+      ice: ${{ steps.route.outputs.ice }}
+      first500: ${{ steps.route.outputs.first500 }}
+      parser: ${{ steps.route.outputs.parser }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - name: Route only changed experiment owners
+        id: route
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BEFORE: ${{ github.event.before }}
+          AFTER: ${{ github.sha }}
+        run: |
+          set -Eeuo pipefail
+          python3 tools/ci/select_perf_experiment_modes_v1.py --event "$EVENT_NAME" --before "$BEFORE" --after "$AFTER" >> "$GITHUB_OUTPUT"
+
+  top5:
+    needs: route
+    if: (github.event_name == 'workflow_dispatch' && (inputs.mode == 'all' || inputs.mode == 'top5')) || (github.event_name == 'push' && needs.route.outputs.top5 == 'true')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build Canonical P14 + P15-on vs P15-off
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/core-object-interval-ab-v1"
+          mkdir -p "$work/evidence"
+          MINIC_PERF_SKIP_CORE_INTERVAL_ONEPASS=1 \
+            bash tools/ci/linux-runtime-build-minic-profile-v1.sh \
+            "$work/baseline" "$work/evidence/p15-off-profile"
+          grep -qx 'apply-perf-core-object-address-use-index-v1.py' \
+            "$work/evidence/p15-off-profile/minic-profile.txt"
+          grep -qx 'SKIPPED_CORE_INTERVAL_ONEPASS=apply-perf-core-object-interval-onepass-v1.py' \
+            "$work/evidence/p15-off-profile/patch.log"
+          git reset --hard HEAD
+          bash tools/ci/linux-runtime-build-minic-profile-v1.sh \
+            "$work/candidate" "$work/evidence/p15-on-profile"
+          grep -qx 'apply-perf-core-object-interval-onepass-v1.py' \
+            "$work/evidence/p15-on-profile/minic-profile.txt"
+          git diff --check
+          echo "OBJECT_INTERVAL_ONEPASS_BUILD=PASS"
+
+      - name: Restore verified first500 corpus
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-perf-corpus
+          key: linux-6.6.143-first500-rv64-v1-${{ hashFiles('tests/external/linux/batch_probe.sh', 'tests/external/linux/probe.sh', 'tests/external/linux/replay-indices.txt') }}
+
+      - name: Execute 5 x 3 paired A-B and compare assembly SHA256
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/core-object-interval-ab-v1"
+          corpus=build/linux-perf-corpus
+          test -s "$corpus/selected-tus.txt"
+          test "$(grep -cve '^[[:space:]]*$' "$corpus/selected-tus.txt")" -eq 500
+          test "$(wc -l < "$corpus/inputs.sha256")" -eq 500
+          sha256sum --status --check "$corpus/inputs.sha256"
+          python3 - <<'PY' | tee "$work/evidence/interval-top5-ab.txt"
+          import hashlib,os,pathlib,statistics,subprocess,time
+          work=pathlib.Path("build/core-object-interval-ab-v1")
+          corpus=pathlib.Path("build/linux-perf-corpus")
+          rows={}
+          for line in (corpus/"selected-tus.txt").read_text().splitlines():
+              if line.strip():
+                  n,obj,rel,source=line.split("\t",3);rows[int(n)]=rel
+          dirs={"baseline":work/"baseline/bin/minic","candidate":work/"candidate/bin/minic"}
+          overall={"baseline":[],"candidate":[]}
+          for idx in [195,357,232,194,219]:
+              if idx not in rows:raise SystemExit(f"MISSING_HISTORICAL_TOP5={idx}")
+              inp=corpus/"kbuild"/rows[idx]
+              if not inp.is_file() or not inp.stat().st_size:
+                  raise SystemExit(f"MISSING_INPUT={inp}")
+              times={"baseline":[],"candidate":[]}
+              for rep in range(3):
+                  order=["baseline","candidate"]
+                  if rep%2:order.reverse()
+                  hashes={}
+                  for kind in order:
+                      dest=work/"evidence"/f"{idx}-{rep}-{kind}.s"
+                      start=time.monotonic_ns()
+                      p=subprocess.run([str(dirs[kind]),"-S",str(inp),"-o",str(dest)],
+                          capture_output=True,text=True)
+                      elapsed=(time.monotonic_ns()-start)/1e9
+                      if p.returncode!=0 or not dest.is_file() or dest.stat().st_size==0:
+                          raise SystemExit(f"OBJECT_INTERVAL_COMPILE_FAILED index={idx} kind={kind} stderr={p.stderr[-2000:]}")
+                      hashes[kind]=hashlib.sha256(dest.read_bytes()).hexdigest()
+                      times[kind].append(elapsed)
+                  if hashes["baseline"]!=hashes["candidate"]:
+                      raise SystemExit(f"OBJECT_INTERVAL_ASM_MISMATCH index={idx} repeat={rep}")
+              for kind in ("baseline","candidate"):
+                  overall[kind].append(statistics.median(times[kind]))
+              before,after=map(statistics.median,[times["baseline"],times["candidate"]])
+              print(f"OBJECT_INTERVAL_TOP5 index={idx} input={rows[idx]} "
+                    f"baseline_median_s={before:.6f} candidate_median_s={after:.6f} "
+                    f"speedup={before/after:.4f}",flush=True)
+          before=sum(overall["baseline"]);after=sum(overall["candidate"])
+          print(f"OBJECT_INTERVAL_TOP5_TOTAL baseline_sum_s={before:.6f} "
+                f"candidate_sum_s={after:.6f} speedup={before/after:.4f} "
+                "sha_matched=15/15",flush=True)
+          print("OBJECT_INTERVAL_TOP5_STATUS=PASS",flush=True)
+          PY
+          find "$work/evidence" -name '*.s' -delete
+
+      - name: Verify forced interval index failure preserves legacy assembly
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/core-object-interval-ab-v1"
+          corpus=build/linux-perf-corpus
+          input=$(awk -F '\t' '$1 == 195 {print $3}' "$corpus/selected-tus.txt")
+          test -n "$input"
+          MINIC_TEST_FORCE_CORE_OBJECT_INTERVAL_FALLBACK=1 \
+            "$work/candidate/bin/minic" -S "$corpus/kbuild/$input" \
+            -o "$work/evidence/forced-fallback.s"
+          "$work/baseline/bin/minic" -S "$corpus/kbuild/$input" \
+            -o "$work/evidence/forced-baseline.s"
+          cmp "$work/evidence/forced-baseline.s" "$work/evidence/forced-fallback.s"
+          echo "OBJECT_INTERVAL_FORCED_FALLBACK=PASS index=195"
+          rm "$work/evidence/forced-fallback.s" "$work/evidence/forced-baseline.s"
+
+      - name: Upload coloring A-B evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-core-object-interval-top5-ab-v1
+          path: build/core-object-interval-ab-v1/evidence
+          retention-days: 7
+  ice:
+    needs: route
+    if: (github.event_name == 'workflow_dispatch' && (inputs.mode == 'all' || inputs.mode == 'ice')) || (github.event_name == 'push' && needs.route.outputs.ice == 'true')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build control and candidate with identical Canonical patches
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/constant-p-regression"
+          mkdir -p "$work"
+          MINIC_CORRECTNESS_SKIP_CONSTANT_P_ICE=1 \
+            bash tools/ci/linux-runtime-build-minic-profile-v1.sh \
+              "$work/baseline" "$work/baseline-profile"
+          grep -qx 'SKIPPED_CONSTANT_P_ICE=apply-correctness-constant-p-ice-v1.py' \
+            "$work/baseline-profile/patch.log"
+          git reset --hard HEAD
+          bash tools/ci/linux-runtime-build-minic-profile-v1.sh \
+            "$work/candidate" "$work/candidate-profile"
+          grep -qx 'apply-correctness-constant-p-ice-v1.py' \
+            "$work/candidate-profile/minic-profile.txt"
+          git diff --check
+      - name: Install RISC-V assembler and emulator
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends gcc-riscv64-linux-gnu libc6-dev-riscv64-cross qemu-user >/dev/null
+      - name: Compare GCC frontend, baseline rejection and fixed QEMU behavior
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/constant-p-regression"
+          valid="$GITHUB_WORKSPACE/tests/compiler/c0/gnu_constant_p_ice_regression.c"
+          invalid="$GITHUB_WORKSPACE/tests/compiler/c0/gnu_choose_dynamic_condition_reject.c"
+          cc -std=gnu11 -fsyntax-only "$valid"
+          cc -std=gnu11 -E -P -x c "$valid" -o "$work/valid.i"
+          set +e
+          "$work/baseline/bin/minic" -S "$work/valid.i" -o "$work/baseline.s" \
+            >"$work/baseline.log" 2>&1
+          baseline_rc=$?
+          set -e
+          echo "CONSTANT_P_ICE_BASELINE_RC=$baseline_rc"
+          "$work/candidate/bin/minic" -S "$work/valid.i" -o "$work/candidate.s" \
+            >"$work/candidate.log" 2>&1
+          test -s "$work/candidate.s"
+          riscv64-linux-gnu-gcc -static "$work/candidate.s" -o "$work/program.rv64"
+          qemu-riscv64 "$work/program.rv64"
+          echo "CONSTANT_P_ICE_RISCV_QEMU=PASS"
+          test "$baseline_rc" -ne 0
+          set +e
+          cc -std=gnu11 -fsyntax-only "$invalid" >"$work/invalid-gcc.log" 2>&1
+          gcc_rc=$?
+          cc -std=gnu11 -E -P -x c "$invalid" -o "$work/invalid.i"
+          "$work/candidate/bin/minic" -S "$work/invalid.i" -o "$work/invalid.s" \
+            >"$work/invalid-minic.log" 2>&1
+          minic_rc=$?
+          set -e
+          echo "CONSTANT_P_ICE_NON_ICE_REJECT gcc_rc=$gcc_rc minic_rc=$minic_rc"
+          test "$gcc_rc" -ne 0
+          test "$minic_rc" -ne 0
+          echo CONSTANT_P_ICE_REGRESSIONS=PASS
+      - name: Upload control and candidate evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: constant-p-ice-semantics-regression
+          path: |
+            build/constant-p-regression/*.log
+            build/constant-p-regression/candidate-profile/minic-profile.txt
+          retention-days: 7
+  first500:
+    needs: route
+    if: (github.event_name == 'workflow_dispatch' && (inputs.mode == 'all' || inputs.mode == 'first500')) || (github.event_name == 'push' && needs.route.outputs.first500 == 'true' && contains(github.event.head_commit.message, '[perf-first500]'))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    env:
+      DEBIAN_FRONTEND: noninteractive
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build baseline and integrated optimization from clean sources
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-perf-audit-v1"
+          mkdir -p "$work/evidence"
+          # Both profiles are rebuilt independently: headers such as
+          # parser_internal.h change MinicParser layout (ABI).
+          MINIC_PERF_SKIP_VERIFIED_OPTIMIZATIONS=1 \
+            bash tools/ci/linux-runtime-build-minic-profile-v1.sh \
+            "$work/baseline-toolchain" "$work/evidence/baseline-profile"
+          grep -qx 'apply-perf-core-lower-statement-workspace-v1.py' \
+            "$work/evidence/baseline-profile/minic-profile.txt"
+          grep -qx 'SKIPPED_VERIFIED_PERF_PATCH=apply-inline-specialization-local-boolean-domain-scoped-v1.py' \
+            "$work/evidence/baseline-profile/patch.log"
+          grep -qx 'SKIPPED_VERIFIED_PERF_PATCH=apply-perf-parser-typedef-index-v1.py' \
+            "$work/evidence/baseline-profile/patch.log"
+          # This resets only the disposable Actions checkout; cached build/linux
+          # input artifacts are untracked and not touched.
+          git reset --hard HEAD
+          bash tools/ci/linux-runtime-build-minic-profile-v1.sh \
+            "$work/toolchain" "$work/evidence/integrated-profile"
+          grep -qx 'apply-inline-specialization-local-boolean-domain-scoped-v1.py' \
+            "$work/evidence/integrated-profile/minic-profile.txt"
+          grep -qx 'apply-perf-parser-typedef-index-v1.py' \
+            "$work/evidence/integrated-profile/minic-profile.txt"
+          git diff --check
+          sha256sum "$work/baseline-toolchain/bin/minic" "$work/baseline-toolchain/bin/minic-cc" \
+            "$work/toolchain/bin/minic" "$work/toolchain/bin/minic-cc" \
+            | tee "$work/evidence/paired-binary.sha256"
+          ! cmp -s "$work/baseline-toolchain/bin/minic-cc" "$work/toolchain/bin/minic-cc"
+
+      - name: Restore certified first500 inputs
+        id: corpus-restore
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-perf-corpus
+          key: linux-6.6.143-first500-rv64-v1-${{ hashFiles('tests/external/linux/batch_probe.sh', 'tests/external/linux/probe.sh', 'tests/external/linux/replay-indices.txt') }}
+
+      - name: Verify restored first500 inputs
+        id: corpus-verify
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          corpus=build/linux-perf-corpus
+          if test -s "$corpus/selected-tus.txt" &&
+             test "$(grep -cve '^[[:space:]]*$' "$corpus/selected-tus.txt")" -eq 500 &&
+             test -s "$corpus/inputs.sha256" &&
+             test "$(wc -l < "$corpus/inputs.sha256")" -eq 500 &&
+             sha256sum --status --check "$corpus/inputs.sha256"; then
+            echo "valid=true" >> "$GITHUB_OUTPUT"
+            echo "PERF_CORPUS_CACHE=VERIFIED selected=500"
+          else
+            echo "valid=false" >> "$GITHUB_OUTPUT"
+            echo "PERF_CORPUS_CACHE=MISS_OR_INVALID"
+            rm -rf "$corpus"
+          fi
+
+      - name: Install Linux prerequisites only on cache miss
+        if: steps.corpus-verify.outputs.valid != 'true'
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends             build-essential gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu             libc6-dev-riscv64-cross bc bison flex libssl-dev libelf-dev             make curl xz-utils python3
+          riscv64-linux-gnu-gcc --version | head -n1
+
+      - name: Materialize exact historical first500 inputs
+        if: steps.corpus-verify.outputs.valid != 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-perf-audit-v1"
+          mkdir -p "$GITHUB_WORKSPACE/build/linux-cache"
+          archive="$GITHUB_WORKSPACE/build/linux-cache/linux-6.6.143.tar.xz"
+          curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors             https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.6.143.tar.xz -o "$archive"
+          echo "dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932  $archive" | sha256sum -c -
+          selection=$(grep -Ev '^[[:space:]]*(#|$)' tests/external/linux/replay-indices.txt | paste -sd, - || true)
+          start_ns=$(date +%s%N)
+          set +e
+          MINIC="$work/toolchain/bin/minic"           BUILD_DIR="$GITHUB_WORKSPACE/build/linux-perf-materialize"           LINUX_ARCHIVE_CACHE="$archive"           CROSS_COMPILE=riscv64-linux-gnu-           LINUX_BATCH_OFFSET=0           LINUX_BATCH_LIMIT=500           LINUX_BATCH_JOBS=4           LINUX_BATCH_SELECTION="$selection"           LINUX_BATCH_MATERIALIZE_ONLY=1             sh tests/external/linux/batch_probe.sh
+          materialize_rc=$?
+          set -e
+          end_ns=$(date +%s%N)
+          echo "MATERIALIZE_ONLY=1 MATERIALIZE_RC=$materialize_rc MATERIALIZE_WALL_MS=$(((end_ns-start_ns)/1000000))"             | tee "$work/evidence/materialize.txt"
+          test -s "$GITHUB_WORKSPACE/build/linux-perf-materialize/selected-tus.txt"
+          test "$(grep -cve '^[[:space:]]*$' "$GITHUB_WORKSPACE/build/linux-perf-materialize/selected-tus.txt")" -eq 500
+          python3 - <<'PY'
+          from pathlib import Path
+          import shutil
+          src=Path("build/linux-perf-materialize")
+          dst=Path("build/linux-perf-corpus")
+          shutil.rmtree(dst,ignore_errors=True)
+          (dst/"kbuild").mkdir(parents=True)
+          selected=src/"selected-tus.txt"
+          shutil.copy2(selected,dst/"selected-tus.txt")
+          manifest=src/"tu-manifest.txt"
+          if manifest.is_file():
+              shutil.copy2(manifest,dst/"tu-manifest.txt")
+          for row in selected.read_text().splitlines():
+              _,_,rel_i,_=row.split("\t",3)
+              s=src/"kbuild"/rel_i
+              d=dst/"kbuild"/rel_i
+              if not s.is_file() or s.stat().st_size==0:
+                  raise SystemExit(f"missing frozen input: {s}")
+              d.parent.mkdir(parents=True,exist_ok=True)
+              shutil.copy2(s,d)
+          print("PERF_CORPUS_FROZEN selected=500")
+          PY
+          find build/linux-perf-corpus/kbuild -type f -name '*.i' -print0 | LC_ALL=C sort -z | xargs -0 sha256sum > build/linux-perf-corpus/inputs.sha256
+          test "$(wc -l < build/linux-perf-corpus/inputs.sha256)" -eq 500
+
+      - name: Save verified first500 corpus
+        if: steps.corpus-verify.outputs.valid != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: build/linux-perf-corpus
+          key: linux-6.6.143-first500-rv64-v1-${{ hashFiles('tests/external/linux/batch_probe.sh', 'tests/external/linux/probe.sh', 'tests/external/linux/replay-indices.txt') }}
+
+      - name: Parser index fallback, scope, and zero-expression smokes
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-perf-audit-v1"
+          # Only the tiny smokes use the build-time injection. Normal benchmarks
+          # do not define this macro and pay no fallback-test branch cost.
+          make -j4 MODE=release \
+            CFLAGS="-Werror -DMINIC_TEST_FORCE_PARSER_HASH_FALLBACK" \
+            BUILD_DIR="$work/forced-fallback" \
+            "$work/forced-fallback/bin/minic" \
+            "$work/forced-fallback/bin/minic-cc" >/dev/null
+          cat > "$work/parser-fallback-smoke.i" <<'EOF'
+          typedef int number_t;
+          enum sample_mode { MODE_ONE = 1, MODE_TWO = 2 };
+          int shared_value;
+          number_t add_mode(number_t x) { return x + MODE_ONE; }
+          number_t use_global(number_t x) {
+              return add_mode(x) + shared_value;
+          }
+          EOF
+          printf 'int declaration_only;\n' > "$work/zero-expression-smoke.i"
+          for test_case in parser-fallback-smoke zero-expression-smoke; do
+            source="$work/$test_case.i"
+            "$work/toolchain/bin/minic" -S "$source" \
+              -o "$work/$test_case-indexed.s"
+            "$work/forced-fallback/bin/minic" -S "$source" \
+              -o "$work/$test_case-fallback.s"
+            cmp "$work/$test_case-indexed.s" "$work/$test_case-fallback.s"
+            echo "PARSER_HASH_FALLBACK_TEST=PASS case=$test_case"
+          done
+
+      - name: Release direct minic smoke on previously crashing TU
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-perf-audit-v1"
+          input=build/linux-perf-corpus/kbuild/init/version.i
+          MINIC_TYPEDEF_INDEX_PERF=1 \
+            "$work/toolchain/bin/minic" -S "$input" -o "$work/release-smoke.s" \
+            2>&1 | tee "$work/evidence/typedef-release-smoke.txt"
+          test -s "$work/release-smoke.s"
+          echo "TYPEDEF_RELEASE_SMOKE=PASS"
+
+      - name: Diagnose typedef candidate with ASan on known-failing TU
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-perf-audit-v1"
+          make -j4 MODE=sanitize CFLAGS=-Werror BUILD_DIR="$work/asan-toolchain" \
+            "$work/asan-toolchain/bin/minic" "$work/asan-toolchain/bin/minic-cc" >/dev/null
+          input=build/linux-perf-corpus/kbuild/init/version.i
+          test -s "$input"
+          ASAN_OPTIONS=detect_leaks=0:abort_on_error=1:fast_unwind_on_malloc=0 \
+          UBSAN_OPTIONS=print_stacktrace=1 \
+          "$work/asan-toolchain/bin/minic" -S "$input" -o "$work/asan-smoke.s" \
+            2>&1 | tee "$work/evidence/typedef-asan-smoke.txt"
+          echo "TYPEDEF_ASAN_SMOKE=PASS"
+
+      - name: Paired integrated optimization A/B with exactly four workers
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-perf-audit-v1"
+          MINIC_TYPEDEF_INDEX_PERF=1 CORE_FAST_TRACE=0 python3 tools/ci/linux-perf-typedef-paired-ab-v1.py \
+            --baseline "$work/baseline-toolchain/bin/minic" \
+            --candidate "$work/toolchain/bin/minic" \
+            --corpus "$GITHUB_WORKSPACE/build/linux-perf-corpus" \
+            --work "$work/paired" \
+            --jobs 4 | tee "$work/evidence/paired-ab.txt"
+          cp "$work/paired/paired-results.json" "$work/evidence/"
+          cp "$work/paired/output-fingerprints.tsv" "$work/evidence/"
+
+      - name: Analyze A/B time distribution
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY' | tee build/linux-perf-audit-v1/evidence/paired-ab-analysis.txt
+          import json, statistics
+          from pathlib import Path
+          rows=json.loads(Path("build/linux-perf-audit-v1/paired/paired-results.json").read_text())
+          for kind in ("baseline","candidate"):
+              secs=sorted(float(row[kind]["seconds"]) for row in rows)
+              print(f"{kind}: sum={sum(secs):.3f}s median={statistics.median(secs):.4f}s "
+                    f"p95={secs[474]:.4f}s p99={secs[494]:.4f}s max={secs[-1]:.4f}s")
+          print("TOP30_CANDIDATE")
+          for row in sorted(rows,key=lambda r:r["candidate"]["seconds"],reverse=True)[:30]:
+              print(f'{row["candidate"]["seconds"]:8.3f}s before={row["baseline"]["seconds"]:8.3f}s '
+                    f'index={row["index"]} input={row["input"]}')
+          PY
+
+      - name: Upload performance evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-current-profile-first500-perf-v1
+          path: |
+            build/linux-perf-audit-v1/evidence
+            build/linux-perf-materialize/batch-summary.txt
+          retention-days: 7
+  parser:
+    needs: route
+    if: (github.event_name == 'workflow_dispatch' && (inputs.mode == 'all' || inputs.mode == 'parser')) || (github.event_name == 'push' && needs.route.outputs.parser == 'true')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    env:
+      DEBIAN_FRONTEND: noninteractive
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build full Canonical profile with and without the scope fix
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-perf-audit-v1"
+          mkdir -p "$work/evidence"
+          # Compare identical Canonical profiles; only the two validated
+          # ordinary-namespace fixes differ between control and candidate.
+          MINIC_PERF_SKIP_PARSER_SCOPE_FIX=1 \
+            bash tools/ci/linux-runtime-build-minic-profile-v1.sh \
+            "$work/baseline-toolchain" "$work/evidence/scope-control-profile"
+          grep -qx 'SKIPPED_PARSER_SCOPE_FIX=apply-perf-parser-local-shadow-fix-v1.py' \
+            "$work/evidence/scope-control-profile/patch.log"
+          grep -qx 'SKIPPED_PARSER_SCOPE_FIX=apply-perf-parser-nearest-ordinary-scope-v1.py' \
+            "$work/evidence/scope-control-profile/patch.log"
+          grep -qx 'apply-inline-specialization-local-boolean-domain-scoped-v1.py' \
+            "$work/evidence/scope-control-profile/minic-profile.txt"
+          grep -qx 'apply-perf-parser-typedef-index-v1.py' \
+            "$work/evidence/scope-control-profile/minic-profile.txt"
+          git reset --hard HEAD
+          bash tools/ci/linux-runtime-build-minic-profile-v1.sh \
+            "$work/toolchain" "$work/evidence/scope-fixed-profile"
+          grep -qx 'apply-perf-parser-local-shadow-fix-v1.py' \
+            "$work/evidence/scope-fixed-profile/minic-profile.txt"
+          grep -qx 'apply-perf-parser-nearest-ordinary-scope-v1.py' \
+            "$work/evidence/scope-fixed-profile/minic-profile.txt"
+          grep -qx 'apply-perf-parser-hash-fallback-v1.py' \
+            "$work/evidence/scope-fixed-profile/minic-profile.txt"
+          git diff --check
+          sha256sum "$work/baseline-toolchain/bin/minic" "$work/baseline-toolchain/bin/minic-cc" \
+            "$work/toolchain/bin/minic" "$work/toolchain/bin/minic-cc" \
+            | tee "$work/evidence/paired-binary.sha256"
+          ! cmp -s "$work/baseline-toolchain/bin/minic-cc" "$work/toolchain/bin/minic-cc"
+
+      - name: Restore certified first500 inputs
+        id: corpus-restore
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-perf-corpus
+          key: linux-6.6.143-first500-rv64-v1-${{ hashFiles('tests/external/linux/batch_probe.sh', 'tests/external/linux/probe.sh', 'tests/external/linux/replay-indices.txt') }}
+
+      - name: Verify restored first500 inputs
+        id: corpus-verify
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          corpus=build/linux-perf-corpus
+          if test -s "$corpus/selected-tus.txt" &&
+             test "$(grep -cve '^[[:space:]]*$' "$corpus/selected-tus.txt")" -eq 500 &&
+             test -s "$corpus/inputs.sha256" &&
+             test "$(wc -l < "$corpus/inputs.sha256")" -eq 500 &&
+             sha256sum --status --check "$corpus/inputs.sha256"; then
+            echo "valid=true" >> "$GITHUB_OUTPUT"
+            echo "PERF_CORPUS_CACHE=VERIFIED selected=500"
+          else
+            echo "valid=false" >> "$GITHUB_OUTPUT"
+            echo "PERF_CORPUS_CACHE=MISS_OR_INVALID"
+            rm -rf "$corpus"
+          fi
+
+      - name: Install Linux prerequisites only on cache miss
+        if: steps.corpus-verify.outputs.valid != 'true'
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends             build-essential gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu             libc6-dev-riscv64-cross bc bison flex libssl-dev libelf-dev             make curl xz-utils python3
+          riscv64-linux-gnu-gcc --version | head -n1
+
+      - name: Materialize exact historical first500 inputs
+        if: steps.corpus-verify.outputs.valid != 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-perf-audit-v1"
+          mkdir -p "$GITHUB_WORKSPACE/build/linux-cache"
+          archive="$GITHUB_WORKSPACE/build/linux-cache/linux-6.6.143.tar.xz"
+          curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors             https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.6.143.tar.xz -o "$archive"
+          echo "dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932  $archive" | sha256sum -c -
+          selection=$(grep -Ev '^[[:space:]]*(#|$)' tests/external/linux/replay-indices.txt | paste -sd, - || true)
+          start_ns=$(date +%s%N)
+          set +e
+          MINIC="$work/toolchain/bin/minic"           BUILD_DIR="$GITHUB_WORKSPACE/build/linux-perf-materialize"           LINUX_ARCHIVE_CACHE="$archive"           CROSS_COMPILE=riscv64-linux-gnu-           LINUX_BATCH_OFFSET=0           LINUX_BATCH_LIMIT=500           LINUX_BATCH_JOBS=4           LINUX_BATCH_SELECTION="$selection"           LINUX_BATCH_MATERIALIZE_ONLY=1             sh tests/external/linux/batch_probe.sh
+          materialize_rc=$?
+          set -e
+          end_ns=$(date +%s%N)
+          echo "MATERIALIZE_ONLY=1 MATERIALIZE_RC=$materialize_rc MATERIALIZE_WALL_MS=$(((end_ns-start_ns)/1000000))"             | tee "$work/evidence/materialize.txt"
+          test -s "$GITHUB_WORKSPACE/build/linux-perf-materialize/selected-tus.txt"
+          test "$(grep -cve '^[[:space:]]*$' "$GITHUB_WORKSPACE/build/linux-perf-materialize/selected-tus.txt")" -eq 500
+          python3 - <<'PY'
+          from pathlib import Path
+          import shutil
+          src=Path("build/linux-perf-materialize")
+          dst=Path("build/linux-perf-corpus")
+          shutil.rmtree(dst,ignore_errors=True)
+          (dst/"kbuild").mkdir(parents=True)
+          selected=src/"selected-tus.txt"
+          shutil.copy2(selected,dst/"selected-tus.txt")
+          manifest=src/"tu-manifest.txt"
+          if manifest.is_file():
+              shutil.copy2(manifest,dst/"tu-manifest.txt")
+          for row in selected.read_text().splitlines():
+              _,_,rel_i,_=row.split("\t",3)
+              s=src/"kbuild"/rel_i
+              d=dst/"kbuild"/rel_i
+              if not s.is_file() or s.stat().st_size==0:
+                  raise SystemExit(f"missing frozen input: {s}")
+              d.parent.mkdir(parents=True,exist_ok=True)
+              shutil.copy2(s,d)
+          print("PERF_CORPUS_FROZEN selected=500")
+          PY
+          find build/linux-perf-corpus/kbuild -type f -name '*.i' -print0 | LC_ALL=C sort -z | xargs -0 sha256sum > build/linux-perf-corpus/inputs.sha256
+          test "$(wc -l < build/linux-perf-corpus/inputs.sha256)" -eq 500
+
+      - name: Save verified first500 corpus
+        if: steps.corpus-verify.outputs.valid != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: build/linux-perf-corpus
+          key: linux-6.6.143-first500-rv64-v1-${{ hashFiles('tests/external/linux/batch_probe.sh', 'tests/external/linux/probe.sh', 'tests/external/linux/replay-indices.txt') }}
+
+      - name: Parser index fallback, scope, and zero-expression smokes
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-perf-audit-v1"
+          # Only the tiny smokes use the build-time injection. Normal benchmarks
+          # do not define this macro and pay no fallback-test branch cost.
+          make -j4 MODE=release \
+            CFLAGS="-Werror -DMINIC_TEST_FORCE_PARSER_HASH_FALLBACK" \
+            BUILD_DIR="$work/forced-fallback" \
+            "$work/forced-fallback/bin/minic" \
+            "$work/forced-fallback/bin/minic-cc" >/dev/null
+          cat > "$work/parser-fallback-smoke.i" <<'EOF'
+          typedef int number_t;
+          enum sample_mode { MODE_ONE = 1, MODE_TWO = 2 };
+          int shared_value;
+          number_t add_mode(number_t x) { return x + MODE_ONE; }
+          number_t use_global(number_t x) {
+              return add_mode(x) + shared_value;
+          }
+          EOF
+          printf 'int declaration_only;\n' > "$work/zero-expression-smoke.i"
+          for test_case in parser-fallback-smoke zero-expression-smoke; do
+            source="$work/$test_case.i"
+            "$work/toolchain/bin/minic" -S "$source" \
+              -o "$work/$test_case-indexed.s"
+            "$work/forced-fallback/bin/minic" -S "$source" \
+              -o "$work/$test_case-fallback.s"
+            cmp "$work/$test_case-indexed.s" "$work/$test_case-fallback.s"
+            echo "PARSER_HASH_FALLBACK_TEST=PASS case=$test_case"
+          done
+
+      - name: GCC and RISC-V QEMU parser scope regression
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-perf-audit-v1"
+          mkdir -p "$work/scopes"
+          sudo apt-get -o Acquire::Retries=3 update -qq
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            gcc-riscv64-linux-gnu libc6-dev-riscv64-cross qemu-user \
+            >"$work/evidence/cross-install.log" 2>&1
+          cat > "$work/scopes/enum-global.i" <<'EOF'
+          int G = 20;
+          int test1(void) { enum { G = 7 }; return G; }
+          int main(void) { return test1() == 7 ? 0 : 1; }
+          EOF
+          cat > "$work/scopes/enum-local.i" <<'EOF'
+          int test2(void) {
+            int G = 1;
+            { enum { G = 7 }; return G; }
+          }
+          int main(void) { return test2() == 7 ? 0 : 1; }
+          EOF
+          cat > "$work/scopes/enum-typedef.i" <<'EOF'
+          typedef int Alias;
+          int test3(void) { enum { Alias = 7 }; return (Alias) + 1; }
+          int main(void) { return test3() == 8 ? 0 : 1; }
+          EOF
+          cat > "$work/scopes/typedef-local.i" <<'EOF'
+          int shadow_test(void) {
+            int T = 1;
+            { typedef int T; T x = 3; return x; }
+          }
+          int main(void) { return shadow_test() == 3 ? 0 : 1; }
+          EOF
+          cat > "$work/scopes/extern-local.i" <<'EOF'
+          int G = 9;
+          int test(void) { int G = 4; { extern int G; return G; } }
+          int main(void) { return test() == 9 ? 0 : 1; }
+          EOF
+          cat > "$work/scopes/enum-function.i" <<'EOF'
+          int Token(void) { return 50; }
+          int test(void) { enum { Token = 7 }; return Token; }
+          int main(void) { return test() == 7 ? 0 : 1; }
+          EOF
+          cat > "$work/scopes/invalid-type-expr.i" <<'EOF'
+          int x = 9;
+          int invalid(void) { typedef int x; return x; }
+          EOF
+          for case in enum-global enum-local enum-typedef typedef-local extern-local enum-function; do
+            input="$work/scopes/$case.i"
+            gcc "$input" -o "$work/scopes/$case.host"
+            "$work/scopes/$case.host"
+            "$work/toolchain/bin/minic" -S "$input" -o "$work/scopes/$case.s" \
+              >"$work/evidence/scope-$case.log" 2>&1
+            riscv64-linux-gnu-gcc -static -o "$work/scopes/$case.rv64" \
+              "$work/scopes/$case.s"
+            qemu-riscv64 "$work/scopes/$case.rv64"
+            echo "SCOPE_QEMU_CASE=$case PASS"
+          done
+          ! gcc -S "$work/scopes/invalid-type-expr.i" \
+            -o "$work/scopes/invalid.gcc.s" >"$work/evidence/invalid-gcc.log" 2>&1
+          ! "$work/toolchain/bin/minic" -S "$work/scopes/invalid-type-expr.i" \
+            -o "$work/scopes/invalid.minic.s" >"$work/evidence/invalid-minic.log" 2>&1
+          echo "SCOPE_REJECT_TYPEDEF_AS_EXPRESSION=PASS"
+
+      - name: Release direct minic smoke on previously crashing TU
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-perf-audit-v1"
+          input=build/linux-perf-corpus/kbuild/init/version.i
+          MINIC_TYPEDEF_INDEX_PERF=1 \
+            "$work/toolchain/bin/minic" -S "$input" -o "$work/release-smoke.s" \
+            2>&1 | tee "$work/evidence/typedef-release-smoke.txt"
+          test -s "$work/release-smoke.s"
+          echo "TYPEDEF_RELEASE_SMOKE=PASS"
+
+      - name: Diagnose typedef candidate with ASan on known-failing TU
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-perf-audit-v1"
+          make -j4 MODE=sanitize CFLAGS=-Werror BUILD_DIR="$work/asan-toolchain" \
+            "$work/asan-toolchain/bin/minic" "$work/asan-toolchain/bin/minic-cc" >/dev/null
+          input=build/linux-perf-corpus/kbuild/init/version.i
+          test -s "$input"
+          ASAN_OPTIONS=detect_leaks=0:abort_on_error=1:fast_unwind_on_malloc=0 \
+          UBSAN_OPTIONS=print_stacktrace=1 \
+          "$work/asan-toolchain/bin/minic" -S "$input" -o "$work/asan-smoke.s" \
+            2>&1 | tee "$work/evidence/typedef-asan-smoke.txt"
+          echo "TYPEDEF_ASAN_SMOKE=PASS"
+
+      - name: Paired canonical versus parser-scope fix 500 TU A/B
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-perf-audit-v1"
+          MINIC_TYPEDEF_INDEX_PERF=1 CORE_FAST_TRACE=0 python3 tools/ci/linux-perf-typedef-paired-ab-v1.py \
+            --baseline "$work/baseline-toolchain/bin/minic" \
+            --candidate "$work/toolchain/bin/minic" \
+            --corpus "$GITHUB_WORKSPACE/build/linux-perf-corpus" \
+            --work "$work/paired" \
+            --jobs 4 | tee "$work/evidence/paired-ab.txt"
+          cp "$work/paired/paired-results.json" "$work/evidence/"
+          cp "$work/paired/output-fingerprints.tsv" "$work/evidence/"
+
+      - name: Analyze A/B time distribution
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY' | tee build/linux-perf-audit-v1/evidence/paired-ab-analysis.txt
+          import json, statistics
+          from pathlib import Path
+          rows=json.loads(Path("build/linux-perf-audit-v1/paired/paired-results.json").read_text())
+          for kind in ("baseline","candidate"):
+              secs=sorted(float(row[kind]["seconds"]) for row in rows)
+              print(f"{kind}: sum={sum(secs):.3f}s median={statistics.median(secs):.4f}s "
+                    f"p95={secs[474]:.4f}s p99={secs[494]:.4f}s max={secs[-1]:.4f}s")
+          print("TOP30_CANDIDATE")
+          for row in sorted(rows,key=lambda r:r["candidate"]["seconds"],reverse=True)[:30]:
+              print(f'{row["candidate"]["seconds"]:8.3f}s before={row["baseline"]["seconds"]:8.3f}s '
+                    f'index={row["index"]} input={row["input"]}')
+          PY
+
+      - name: Upload performance evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-parser-scope-first500-evidence-v1
+          path: |
+            build/linux-perf-audit-v1/evidence
+            build/linux-perf-materialize/batch-summary.txt
+          retention-days: 7
