@@ -42,3 +42,11 @@ jobs:
   runtime-perf-suite:
     if: contains(github.event.head_commit.message, '[linux-perf3352]') || contains(github.event.head_commit.message, '[linux-constant-p]') || contains(github.event.head_commit.message, '[linux-perf500]')
     uses: ./.github/workflows/linux-runtime-optin-perf-suite-v1.yml
+
+  spinlock-probes:
+    if: contains(github.event.head_commit.message, '[linux-spinlock-context]') || contains(github.event.head_commit.message, '[linux-spinlock-codegen]') || contains(github.event.head_commit.message, '[linux-spinlock-first-context]') || contains(github.event.head_commit.message, '[linux-spinlock-stack]')
+    uses: ./.github/workflows/linux-runtime-spinlock-context-v0.yml
+
+  fdt-kallsyms-probes:
+    if: contains(github.event.head_commit.message, '[linux-fdt-isolation]') || contains(github.event.head_commit.message, '[linux-fdt-codegen]') || contains(github.event.head_commit.message, '[linux-kallsyms-generated]') || contains(github.event.head_commit.message, '[linux-kallsyms-three-way]') || contains(github.event.head_commit.message, '[linux-kallsyms-object]')
+    uses: ./.github/workflows/linux-runtime-fdt-isolation-v1.yml

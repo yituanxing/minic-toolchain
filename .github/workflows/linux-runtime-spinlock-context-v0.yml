@@ -7,6 +7,7 @@ on:
       - ".github/workflows/linux-runtime-spinlock-context-v0.yml"
       - "tools/ci/runtime-spinlock-trigger.txt"
       - "tools/ci/runtime-spinlock-stack-trigger.txt"
+  workflow_call:
   workflow_dispatch:
     inputs:
       mode:
@@ -26,7 +27,7 @@ permissions:
 
 concurrency:
   group: linux-runtime-spinlock-context-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   spinlock-context:
