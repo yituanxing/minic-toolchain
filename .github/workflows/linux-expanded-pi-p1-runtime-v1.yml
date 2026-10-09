@@ -552,7 +552,7 @@ jobs:
 
 
   pi-local-symbol:
-    if: (github.event_name == 'workflow_dispatch' && (inputs.mode == 'semantics' || inputs.mode == 'all') || github.event_name == 'push') && (github.ref_name == 'agent/linux-expanded-kbuild-v0' && (github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[linux-runtime-pi-local-symbol-v0]') || contains(github.event.head_commit.message, '[runtime-compiler-semantics-v1]')))
+    if: (github.event_name == 'workflow_dispatch' && (inputs.mode == 'semantics' || inputs.mode == 'all')) || (github.event_name == 'push' && github.ref_name == 'agent/linux-expanded-kbuild-v0' && (contains(github.event.head_commit.message, '[linux-runtime-pi-local-symbol-v0]') || contains(github.event.head_commit.message, '[runtime-compiler-semantics-v1]')))
     concurrency:
       group: linux-runtime-compiler-semantics-v1-${{ github.ref }}-pi-local-symbol
       cancel-in-progress: true
@@ -714,7 +714,7 @@ jobs:
           retention-days: 7
 
   satp-micro:
-    if: (github.event_name == 'workflow_dispatch' && (inputs.mode == 'semantics' || inputs.mode == 'all') || github.event_name == 'push') && (github.ref_name == 'agent/linux-expanded-kbuild-v0' && (github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[linux-pi-micro]') || contains(github.event.head_commit.message, '[runtime-compiler-semantics-v1]')))
+    if: (github.event_name == 'workflow_dispatch' && (inputs.mode == 'semantics' || inputs.mode == 'all')) || (github.event_name == 'push' && github.ref_name == 'agent/linux-expanded-kbuild-v0' && (contains(github.event.head_commit.message, '[linux-pi-micro]') || contains(github.event.head_commit.message, '[runtime-compiler-semantics-v1]')))
     concurrency:
       group: linux-runtime-compiler-semantics-v1-${{ github.ref }}-satp-micro
       cancel-in-progress: true
@@ -767,7 +767,7 @@ jobs:
 
 
   qemu-watch-cert:
-    if: (github.event_name == 'workflow_dispatch' && (inputs.mode == 'watch' || inputs.mode == 'all') || github.event_name == 'push') && (github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[linux-runtime-qemu-watch-cert-v1]') || contains(github.event.head_commit.message, '[linux-runtime-qemu-watch-contracts-v1]'))
+    if: (github.event_name == 'workflow_dispatch' && (inputs.mode == 'watch' || inputs.mode == 'all')) || (github.event_name == 'push' && github.ref_name == 'agent/linux-expanded-kbuild-v0' && (contains(github.event.head_commit.message, '[linux-runtime-qemu-watch-cert-v1]') || contains(github.event.head_commit.message, '[linux-runtime-qemu-watch-contracts-v1]')))
     concurrency:
       group: linux-runtime-qemu-watch-contracts-v1-${{ github.ref }}-qemu-watch-cert
       cancel-in-progress: true
@@ -932,7 +932,7 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
   inconclusive-cert:
-    if: (github.event_name == 'workflow_dispatch' && (inputs.mode == 'watch' || inputs.mode == 'all') || github.event_name == 'push') && (github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[linux-runtime-qemu-watch-inconclusive-v1]') || contains(github.event.head_commit.message, '[linux-runtime-qemu-watch-contracts-v1]'))
+    if: (github.event_name == 'workflow_dispatch' && (inputs.mode == 'watch' || inputs.mode == 'all')) || (github.event_name == 'push' && github.ref_name == 'agent/linux-expanded-kbuild-v0' && (contains(github.event.head_commit.message, '[linux-runtime-qemu-watch-inconclusive-v1]') || contains(github.event.head_commit.message, '[linux-runtime-qemu-watch-contracts-v1]')))
     concurrency:
       group: linux-runtime-qemu-watch-contracts-v1-${{ github.ref }}-inconclusive-cert
       cancel-in-progress: true
