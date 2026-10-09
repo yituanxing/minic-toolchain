@@ -276,6 +276,7 @@ jobs:
             build/linux-runtime-gcc-cohort-v1/trials/*/link.log
             build/linux-runtime-gcc-cohort-v1/trials/*/runtime.log
             build/linux-runtime-gcc-cohort-v1/trials/*/runtime-p1.log
+            build/linux-runtime-gcc-cohort-v1/trials/*/runtime-p1-python.log
             build/linux-runtime-gcc-cohort-v1/trials/*/qemu-p1/*.log
             build/linux-runtime-gcc-cohort-v1/trials/*/qemu/*.log
             build/linux-runtime-gcc-cohort-v1/compiler/toolchain-timing.txt

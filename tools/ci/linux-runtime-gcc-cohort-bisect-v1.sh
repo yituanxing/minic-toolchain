@@ -163,7 +163,17 @@ trial() {
       p1_rc=$?
       set -e
       if ((p1_rc==0)); then
-        echo "COHORT_P1=PASS name=$name syscalls=12"
+        # Independent existing Python-era P0+P1 contract manifest. Distinguish
+        # missing legacy markers (oracle/fixture mismatch) from runtime crashes.
+        if python3 "$repo/tests/external/linux/runtime_v2_log_check.py" \
+             --profile p1 --log "$d/qemu-p1/rdinit-init.log" \
+             >"$d/runtime-p1-python.log" 2>&1; then
+          echo "COHORT_P1=PASS name=$name syscalls=12 python_era_oracle=PASS"
+        else
+          verdict=INCONCLUSIVE
+          echo "COHORT_P1=INCONCLUSIVE name=$name reason=python_era_oracle_disagrees"
+          tail -n 28 "$d/runtime-p1-python.log"
+        fi
       elif grep -REqi 'Linux version 6\.6\.143|Kernel panic|Oops:|Unable to handle|BUG:' "$d/qemu-p1" 2>/dev/null; then
         echo "COHORT_P1=FAIL name=$name rc=$p1_rc"
         verdict=FAIL
