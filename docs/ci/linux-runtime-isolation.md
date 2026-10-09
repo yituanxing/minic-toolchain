@@ -240,3 +240,17 @@ existing canonical Runtime owner once the equivalent object/link/QEMU
 provenance is demonstrated. Existing `stage2_kbuild_cc.sh` already uses GNU
 GCC -E -P, MiniC -S and the GNU assembler, so this is an isolation of *current
 working stages*, not a speculative toolchain swap.
+
+
+**Implemented first-stage primitive (not yet an end-to-end QEMU gate):**
+`tools/ci/linux-runtime-gcc-minic-ab-v1.py` provides `establish`
+(GNU-from-.i reference and MiniC-from-the-same-.i candidate) and `iterate`
+(pin-verification, MiniC-only rebuild). It requires literal GNU compiler
+and assembler flags files extracted from the exact Kbuild command; it does
+not silently guess kernel ABI flags. Outputs include `gnu/reference.o`,
+`minic/candidate.o`, `baseline.json` and `last-experiment.json`.
+The candidate build status is `OBJECTS_BUILT_NOT_RUNTIME_CERTIFIED`.
+Offline contract tests:
+`python3 tools/ci/test_linux_runtime_gcc_minic_ab_v1.py`.
+A real RISC-V TU replay, full same-config GCC baseline, GNU-relink and
+QEMU oracle are **separate, not-yet-performed certification steps**.
