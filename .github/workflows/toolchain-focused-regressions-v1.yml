@@ -20,6 +20,7 @@ on:
       - 'Makefile'
       - '.github/actions/**'
       - '.github/workflows/toolchain-focused-regressions-v1.yml'
+      - '!**/*.md'
       - '!tools/ci/**'
   workflow_dispatch:
     inputs:

@@ -71,8 +71,8 @@ def main():
  if paths[-1]!="!tools/ci/**":raise AssertionError("CI-helper exclusion lost")
  for source in ("src/frontend/parse.c","archiver/miniar.c","linker/minild.c","elf/src/reader.c","tools/minic-cc/driver.c","Makefile"):
   if not accepted(paths,source):raise AssertionError("real source no longer triggers T1 "+source)
- for bad in ("tools/ci/runtime-init-irq-trigger.txt","tools/ci/check_ci_trigger_coverage_v1.py","tools/ci/apply-perf-core-object-interval-onepass-v1.py"):
-  if accepted(paths,bad):raise AssertionError("non-source CI helper triggers T1 "+bad)
+ for bad in ("tools/ci/runtime-init-irq-trigger.txt","tools/ci/check_ci_trigger_coverage_v1.py","tools/ci/apply-perf-core-object-interval-onepass-v1.py","assembler/corpus/linux-6.6.143-rv64-gcc13.3.0-v1.md","tests/assembler/minias-semantic-oracle3536-contract.md"):
+  if accepted(paths,bad):raise AssertionError("non-source documentation/CI helper triggers T1 "+bad)
  for dev_branch in BRANCHES:
   if '"'+dev_branch+'"' not in h:raise AssertionError("lost T1 branch "+dev_branch)
  for mode in ("all","minic-rv64","miniar","minild"):
