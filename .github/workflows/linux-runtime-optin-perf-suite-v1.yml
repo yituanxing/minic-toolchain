@@ -1,9 +1,7 @@
 name: Linux Runtime Opt-in Performance and Semantics Suite
 
 on:
-  push:
-    branches: [agent/linux-expanded-kbuild-v0]
-    paths: ['.github/workflows/linux-runtime-optin-perf-suite-v1.yml']
+  workflow_call:
   workflow_dispatch:
     inputs:
       mode:

@@ -271,7 +271,13 @@ def main():
     assert names[LEGACY_MANUAL]["push_declared"] == "false"
     assert names[LEGACY_MANUAL]["manual_dispatch"] == "true"
     assert names[LEGACY_MANUAL]["commit_tag_guards"] == ""
-    assert names[SELF_YAML_ONLY]["classification"] == "yaml_only_push_with_otherwise_unreachable_tags" if branch == BRANCHES[0] else True
+    # The opt-in performance suite used to be YAML-self-path only and its
+    # expensive [linux-perf*] labels were unreachable on normal source pushes.
+    # It is now a reusable owner behind the same audited Runtime tag router.
+    if branch == BRANCHES[0]:
+        assert names[SELF_YAML_ONLY]["classification"] == "reusable_tagged_dispatch"
+        assert names[SELF_YAML_ONLY]["push_declared"] == "false"
+
     out = ROOT / args.output
     out.parent.mkdir(parents=True, exist_ok=True)
     with out.open("w", newline="") as f:

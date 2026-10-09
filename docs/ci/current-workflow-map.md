@@ -74,3 +74,6 @@ Performance push
 3. The old four-owner reusable smoke (#37902327902) establishes push/event inheritance. Do **not** start a full 3352/Linux QEMU rebuild simply to prove the router.
 4. T1 independent oracles and P comparisons require explicit own execution evidence when code changes. M0 cannot replace them.
 5. Freeze the CI topology after these gates; return to **Performance candidate integration** and **Linux Runtime fault isolation**. Full Linux boot certification is still **open**.
+
+### Explicit performance qualification entrypoint
+The Runtime `linux-runtime-optin-perf-suite-v1.yml` was discovered with *self-YAML-only push scope*, making its historical [linux-perf3352], [linux-constant-p], and [linux-perf500] source-push labels unreachable. The existing Runtime `linux-legacy-tag-router-v1.yml` now owns those precise tags through an audited reusable call. No new YAML or source-test body was added. Treat M0 success as trigger/archival proof, not as a performed 3352 Linux compile or 500 paired perf benchmark.
