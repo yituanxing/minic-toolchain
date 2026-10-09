@@ -14,6 +14,10 @@ on:
       - 'tools/ci/select_runtime_owner_modes_v1.py'
       - 'tools/ci/check_runtime_owner_routing_v1.py'
       - 'tools/ci/check_early_runtime_dispatch_v1.py'
+      - 'tools/ci/check_ci_regression_path_isolation_v1.py'
+      - '.github/workflows/minic-rv64-focused-regressions-v1.yml'
+      - '.github/workflows/miniar-regressions-v1.yml'
+      - '.github/workflows/minild-regressions-v1.yml'
       - '.github/workflows/linux-runtime-owner-focused-v1.yml'
       - 'tools/ci/check_linux_runtime_fdt_kallsyms_union_v1.py'
       - 'tools/ci/check_linux_core_3352_first500_union_v1.py'
@@ -156,6 +160,13 @@ jobs:
         run: |
           python3 tools/ci/check_early_runtime_dispatch_v1.py
           ruby -e 'require "yaml"; YAML.parse_file(ARGV.fetch(0)); puts "M0_EARLY_RUNTIME_ROUTING_YAML=PASS"' .github/workflows/linux-expanded-pi-p1-runtime-v1.yml
+
+      - name: Verify regression push path isolation from Runtime-only trigger files
+        run: |
+          python3 tools/ci/check_ci_regression_path_isolation_v1.py
+          for f in minic-rv64-focused-regressions-v1.yml miniar-regressions-v1.yml minild-regressions-v1.yml; do
+            ruby -e 'require "yaml"; YAML.parse_file(ARGV.fetch(0))' ".github/workflows/$f"
+          done
 
       - name: Run Linux runtime isolation selftests
         run: |
