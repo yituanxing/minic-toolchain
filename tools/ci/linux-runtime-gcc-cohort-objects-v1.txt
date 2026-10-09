@@ -1,0 +1,34 @@
+# GNU GCC Linux 6.6.143, config=eeb04f...; first 14 were singly QEMU-certified.
+lib/idr.o
+lib/xarray.o
+kernel/sched/core.o
+kernel/fork.o
+mm/memory.o
+kernel/locking/spinlock.o
+arch/riscv/mm/init.o
+arch/riscv/kernel/setup.o
+arch/riscv/kernel/irq.o
+kernel/time/timekeeping.o
+lib/string.o
+mm/page_alloc.o
+kernel/rcu/tree.o
+arch/riscv/kernel/process.o
+# Second cohort: 18 real GCC kernel objects (observed in booted GCC run 37934420543).
+arch/riscv/kernel/traps.o
+kernel/softirq.o
+kernel/sched/fair.o
+kernel/time/timer.o
+kernel/time/hrtimer.o
+mm/slub.o
+mm/vmalloc.o
+mm/mmap.o
+fs/open.o
+fs/read_write.o
+fs/namei.o
+kernel/exit.o
+kernel/signal.o
+kernel/printk/printk.o
+arch/riscv/mm/fault.o
+init/main.o
+lib/vsprintf.o
+arch/riscv/kernel/smpboot.o
