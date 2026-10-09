@@ -140,8 +140,10 @@ else
   # Compile the ENTIRE GCC-built C owner universe. Keep .i/.s ephemeral to
   # avoid filling runner disk. -k collects independent compile failures.
   compile_rc=0
+  : >"$ev/mini-success-objects.txt"
   MINIC="$minic" REAL_CC=/usr/bin/riscv64-linux-gnu-gcc \
     MINIC_KEEP_INTERMEDIATES=0 MINIC_PRESERVE_FAILURE_INPUTS=1 \
+    MINIC_KBUILD_SUCCESS_TRACE="$ev/mini-success-objects.txt" \
     make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
       CC="$repo/tests/external/linux/stage2_kbuild_cc.sh" -j6 -k "${targets[@]}" \
       >"$ev/compile.log" 2>&1 || compile_rc=$?
@@ -191,6 +193,15 @@ else
     tail -n 75 "$ev/compile.log"
     exit 4
   fi
+
+  # An existing .o file and matching ABI do NOT prove which C compiler made
+  # it. Require one explicit post-MiniC+GNU-AS success record per selected TU.
+  python3 "$repo/tools/ci/linux-runtime-minic-route-audit-v1.py" \
+    --objects-file "$objects_file" \
+    --success-trace "$ev/mini-success-objects.txt" || {
+      echo "COHORT_COMPILE=FAIL reason=incomplete_minic_compiler_provenance"
+      exit 11
+    }
   echo "COHORT_COMPILE=PASS objects=$n elapsed_ms=$(((cc_ended-cc_started)/1000000))"
 fi
 python3 - "$ev/gcc" "$ev/minic" "$objects_file" <<'PY_ABI'
