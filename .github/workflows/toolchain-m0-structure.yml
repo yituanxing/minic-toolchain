@@ -19,6 +19,12 @@ on:
       - "tools/ci/check_early_runtime_dispatch_v1.py"
       - "tools/ci/check_ci_regression_path_isolation_v1.py"
       - "tools/ci/check_ci_shared_elf_coverage_v1.py"
+      - "tools/ci/check_ci_trigger_coverage_v1.py"
+      - "tools/ci/export_ci_trigger_matrix_v1.py"
+      - "tools/ci/select_miniobjcopy_elf_route_v1.py"
+      - "tools/ci/check_ci_miniobjcopy_elf_route_v1.py"
+      - ".github/workflows/miniobjcopy-strip-regressions-v1.yml"
+      - "docs/ci/active-workflow-inventory-2026-10-09.tsv"
       - ".github/workflows/minic-rv64-focused-regressions-v1.yml"
       - ".github/workflows/miniar-regressions-v1.yml"
       - ".github/workflows/minild-regressions-v1.yml"
@@ -173,9 +179,18 @@ jobs:
       - name: Audit all maintained workflow trigger/job contracts and MiniObjcopy ELF route
         run: |
           python3 tools/ci/check_ci_trigger_coverage_v1.py
+          python3 tools/ci/export_ci_trigger_matrix_v1.py --output build/ci-trigger-matrix.tsv
           python3 tools/ci/select_miniobjcopy_elf_route_v1.py --self-test
           python3 tools/ci/check_ci_miniobjcopy_elf_route_v1.py
           ruby -e 'require "yaml"; YAML.parse_file(ARGV.fetch(0))' .github/workflows/miniobjcopy-strip-regressions-v1.yml
+
+      - name: Publish per-job CI trigger matrix audit
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-trigger-matrix-${{ github.ref_name }}
+          path: build/ci-trigger-matrix.tsv
+          if-no-files-found: error
+          retention-days: 14
 
       - name: Run Linux runtime isolation selftests
         run: |
