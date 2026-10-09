@@ -1,6 +1,6 @@
 # CI entrypoints — maintainers' quick map
 
-> **Audited 2026-10-09, after focused Runtime consolidations.** Active workflow definitions: **41 Runtime**, **42 Performance**, **45 distinct names** across the two development branches. The authoritative [93→83-row updated workflow source inventory](https://github.com/yituanxing/minic-toolchain/blob/agent/linux-expanded-kbuild-v0/docs/ci/active-workflow-inventory-2026-10-09.tsv) captures SHA, job ID, trigger, named steps, artifact declarations and cache reference. These are **entrypoint inventory counts, not successful-test counts**.
+> **Current source-verified CI snapshot — 2026-10-09.** Active workflow definitions: **40 Runtime**, **41 Performance**, **44 distinct names** across the two development branches, with **81 rows** in the [cross-branch source inventory](active-workflow-inventory-2026-10-09.tsv) (canonical current copy on the Runtime branch). The new `linux-expanded-pi-p1-runtime-v1.yml` unifies two legacy runtime probes without dropping their independent job bodies. Five Runtime owners now reuse [one immutable fixture cache-restore action](runtime-fixture-restore-reuse-2026-10-09.md), preserving the exact original source/frozen keys and cache-miss failure behavior. [Runtime M0 #37872841930](https://github.com/yituanxing/minic-toolchain/actions/runs/37872841930) and [Performance M0 #37872857343](https://github.com/yituanxing/minic-toolchain/actions/runs/37872857343) both **SUCCESS**. Real migrated fixture consumer jobs also returned SUCCESS for [Timer #37872681398](https://github.com/yituanxing/minic-toolchain/actions/runs/37872681398), [RISC-V Init Codegen #37872681417](https://github.com/yituanxing/minic-toolchain/actions/runs/37872681417), and four [Owner Focused jobs #37872681214](https://github.com/yituanxing/minic-toolchain/actions/runs/37872681214). These are **component diagnostics**, not a new full-MiniC Linux Image or QEMU boot certificate; RCU was still in progress at this checkpoint.
 
 ## Which CI should I run?
 
@@ -17,6 +17,7 @@
 | Full Linux Image without historical fixed run ID | `linux-distributed-image-graph-preflight-v1.yml`, `linux-distributed-full-image-signedness-v2.yml` | T3 | check strict 3352-object identity, final Image, then QEMU |
 | Runtime baseline / certified inputs | `linux-runtime-gcc-baseline.yml`, `linux-runtime-frozen-cert-v1.yml`, `linux-runtime-link-fixture-cert-v1.yml` | T3/T4 producer | `linux-runtime-qemu-watch-contracts-v1.yml` |
 | Linux first-fault investigation | `linux-runtime-focused-faults-v1.yml` (cpu-stall, fork-stack, fault-context, satp) | T4 diagnosis | `linux-runtime-frontier-diagnostics-v1.yml` (fast, full, qemu) |
+| Legacy expanded PI/P1 runtime profiles | `linux-expanded-pi-p1-runtime-v1.yml` (modes p1, pi, all) | T4 diagnosis | frozen/full runtime frontier proof must remain separate |
 | Performance candidate on Runtime owner | `linux-runtime-optin-perf-suite-v1.yml` | P + T2/T4 | correct A/B + code integration after proof |
 | Performance experimental branch | `linux-optimized-first500-verify-v1.yml`, `linux-parser-scope-first500-ab-v1.yml`, `linux-core-object-interval-top5-ab-v1.yml`, `linux-gnu-constant-p-ice-regression-v1.yml` | P and focused correctness | compare exact profiles and green correctness |
 
@@ -31,6 +32,10 @@
 5. Carry immutable provenance: source/compiler patch profile, Linux archive/config, object list/cache identity, artifact run, checksums and exact first-fault progress. Treat an expired required artifact as **BLOCKED**, never PASS.
 6. Before retiring a workflow: list its unique job assertions and consumers; migrate all; retain exact source YAML in `.github/workflows-disabled/`, pin its original Git blob SHA; run M0 and a tier-matched real test.
 7. Never overwrite or delete the passive `archive/all-progress-2026-10-04` recovery branch. Do not merge the performance branch into Runtime simply because the YAML definitions match.
+
+## Shared Linux fixture restoration
+
+The reusable local action `.github/actions/linux-runtime-restore-fixture/action.yml` owns the immutable Linux 6.6.143 source and frozen linker-subset cache restore contracts. Its exact original key/path/fail-on-miss assertions and original five complete workflow Git blob hashes are checked by `tools/ci/check_linux_runtime_fixture_restore_v1.py`. Do not casually move a compiler-profile-specific **linked Image cache** into this action: those depend on a different producing HEAD/config and branch-scoped cache identity. See [restoration migration ledger](runtime-fixture-restore-reuse-2026-10-09.md).
 
 ## Current truth and known gates
 
