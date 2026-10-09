@@ -1,5 +1,7 @@
 # CI ownership and regression taxonomy (working contract) — 2026-10-09
 
+> This document introduced the initial taxonomy before later reductions. **Latest workflow counts and entrypoints are in [CI operator index](README.md): 41 Runtime / 42 Performance / 45 distinct names on 2026-10-09.** Source count banners below (51/50 etc.) are historical.
+
 Status: **design/audit baseline, not proof of certification or a complete 51-file inventory**. This is the starting point for contract-preserving consolidation. No workflow may be retired solely because its filename appears under the same tool.
 
 ## Current ground truth

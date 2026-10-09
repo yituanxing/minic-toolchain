@@ -1,0 +1,44 @@
+# CI entrypoints — maintainers' quick map
+
+> **Audited 2026-10-09, after focused Runtime consolidations.** Active workflow definitions: **41 Runtime**, **42 Performance**, **45 distinct names** across the two development branches. The authoritative [93→83-row updated workflow source inventory](https://github.com/yituanxing/minic-toolchain/blob/agent/linux-expanded-kbuild-v0/docs/ci/active-workflow-inventory-2026-10-09.tsv) captures SHA, job ID, trigger, named steps, artifact declarations and cache reference. These are **entrypoint inventory counts, not successful-test counts**.
+
+## Which CI should I run?
+
+| Question / change | First owner | Evidence type | Next escalation |
+| --- | --- | --- | --- |
+| CI wiring, trigger, archive, shell route | `toolchain-m0-structure.yml` | T0 structural | relevant real regression |
+| Driver, frontend, Core, RV64 code | `minic-driver-v0.yml`, `minic-rv64-focused-regressions-v1.yml` | T1 | `core-first500-regression.yml` |
+| Linux frozen compiler coverage | `core-first500-regression.yml`, `linux-core-shards-v1.yml`, `linux-core-all3352.yml` | T2 | real Kbuild and Image |
+| Preprocessor semantics | `minipp-a0.yml` | T1 | `minipp-linux-frozen-v1.yml` and `minipp-linux-exact-smoke.yml` |
+| Assembler byte/semantic correctness | `minias-a0-focused-diagnostics-v1.yml`, `minias-a0-gate-v1.yml` | T1/T2 | `minias-semantic-oracle3536.yml` |
+| AR and NM archive semantics | `miniar-regressions-v1.yml` | T1 | `miniar-linux-kbuild.yml` (real Linux+QEMU) |
+| Linker ELF and relocation | `minild-regressions-v1.yml` | T1 | `minild-integration-v1.yml` with modes dynamic, linux-rel, static |
+| ELF binary/section rewriting | `miniobjcopy-strip-regressions-v1.yml` | T1/T3 | historical Image oracle requires fresh trustworthy producer |
+| Full Linux Image without historical fixed run ID | `linux-distributed-image-graph-preflight-v1.yml`, `linux-distributed-full-image-signedness-v2.yml` | T3 | check strict 3352-object identity, final Image, then QEMU |
+| Runtime baseline / certified inputs | `linux-runtime-gcc-baseline.yml`, `linux-runtime-frozen-cert-v1.yml`, `linux-runtime-link-fixture-cert-v1.yml` | T3/T4 producer | `linux-runtime-qemu-watch-contracts-v1.yml` |
+| Linux first-fault investigation | `linux-runtime-focused-faults-v1.yml` (cpu-stall, fork-stack, fault-context, satp) | T4 diagnosis | `linux-runtime-frontier-diagnostics-v1.yml` (fast, full, qemu) |
+| Performance candidate on Runtime owner | `linux-runtime-optin-perf-suite-v1.yml` | P + T2/T4 | correct A/B + code integration after proof |
+| Performance experimental branch | `linux-optimized-first500-verify-v1.yml`, `linux-parser-scope-first500-ab-v1.yml`, `linux-core-object-interval-top5-ab-v1.yml`, `linux-gnu-constant-p-ice-regression-v1.yml` | P and focused correctness | compare exact profiles and green correctness |
+
+**Do not treat these as replacements for all focused owner jobs.** Runtime keeps dedicated `linux-runtime-fdt-isolation-v1.yml`, `linux-runtime-generated-kallsyms-first-die-v0.yml`, `linux-runtime-spinlock-context-v0.yml`, `linux-runtime-owner-focused-v1.yml`, `linux-runtime-compiler-semantics-v1.yml`, `linux-runtime-mm-core-frontier-v0.yml`, `linux-runtime-rcu-owner-v0.yml`, `linux-runtime-timer-focused-v0.yml`, `linux-runtime-riscv-init-codegen-v0.yml`, `linux-expanded-entry-trace-v0.yml`, `linux-expanded-pi-runtime-v0.yml`, `linux-expanded-runtime-p1-v0.yml`, `linux-efistub-diff-v0.yml`, and `linux-vdso-focused.yml` because their exact static or runtime oracles are **not yet proven redundant**. `linux-expanded-kbuild-v0.yml` remains a distinct real Kbuild frontier and must not be confused with frozen TU compilation.
+
+## Rules for a new failure or regression
+
+1. Identify the **tool owner** (MiniC/PP/AS/AR/LD/ELF/Objcopy/Runtime) and **test tier** (T0, T1, T2, T3, T4, P). The [taxonomy](ci-ownership-regression-taxonomy-2026-10-09.md) defines them.
+2. Add a test case or a documented mode in that owner's canonical workflow, preferably in a checked-in script. Creating a permanent workflow is the exception, not the default.
+3. A regression is green only after its real oracle produces a named PASS verdict. A passing M0 proves **structural** correctness, not actual Linux Image assembly, linking or boot.
+4. For high-cost tests use manual `workflow_dispatch` modes or explicit opt-in push tags. Path-filter matching alone must not start full 3352 A/B or QEMU on routine CI maintenance.
+5. Carry immutable provenance: source/compiler patch profile, Linux archive/config, object list/cache identity, artifact run, checksums and exact first-fault progress. Treat an expired required artifact as **BLOCKED**, never PASS.
+6. Before retiring a workflow: list its unique job assertions and consumers; migrate all; retain exact source YAML in `.github/workflows-disabled/`, pin its original Git blob SHA; run M0 and a tier-matched real test.
+7. Never overwrite or delete the passive `archive/all-progress-2026-10-04` recovery branch. Do not merge the performance branch into Runtime simply because the YAML definitions match.
+
+## Current truth and known gates
+
+- Toolchain structure after this convergence: Runtime M0 [#37867583911](https://github.com/yituanxing/minic-toolchain/actions/runs/37867583911) **SUCCESS**; performance M0 [#37867602327](https://github.com/yituanxing/minic-toolchain/actions/runs/37867602327) **SUCCESS**. Both verify the historical SHA-preserved jobs in the new Runtime combined entrypoints.
+- **Not proven after consolidation:** current-head full seven-shard strict Image end-to-end run, newly migrated T2 MiniPP exact/focus reruns, actual three-mode MiniLD dynamic/Linux REL/static integration reruns, or a fresh full-MiniC QEMU boot PASS.
+- MiniObjcopy historical fixed Image input run `33623125809` contains no downloadable artifact. Regenerate a certified input rather than substituting a random recent Image.
+- Performance M0 historically failed on `check-static-functions` before it was separated into manual full-mode; this remains a T1 investigation, not a resolved correctness regression.
+- Work still required before runtime fault repair: audit retained fixture producer/consumer/cache scope, establish current-head strict Image link proof and honest QEMU first-fault result, then integrate only independently verified optimization deltas.
+- Other audit history: [current workflow map](current-workflow-map.md), [focused fault consolidation](linux-runtime-focused-faults-convergence-2026-10-09.md), [frontier consolidation](linux-runtime-frontier-diagnostics-convergence-2026-10-09.md), [liveness/artifact audit](workflow-liveness-artifact-audit-2026-10-09.md).
+
+This is an **operations index**, not a mandate to run every maintained workflow every push. Its counts are as of the audited tips; the `.github/workflows/` directory is the current runnable list.
