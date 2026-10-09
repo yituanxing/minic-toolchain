@@ -11,6 +11,7 @@ on:
       - 'tools/ci/check_linux_runtime_fixture_restore_v1.py'
       - 'tools/ci/check_linux_expanded_pi_p1_convergence_v1.py'
       - 'tools/ci/check_linux_early_runtime_union_v1.py'
+      - 'tools/ci/check_linux_runtime_fdt_kallsyms_union_v1.py'
       - 'tools/ci/check_linux_efi_vdso_convergence_v1.py'
       - 'tools/ci/check_linux_runtime_contract_oracles_convergence_v1.py'
       - '.github/workflows/linux-efi-vdso-focused-v1.yml'
@@ -38,7 +39,7 @@ on:
       - '.github/workflows-disabled/minipp-linux-exact-smoke.yml'
       - '.github/workflows/linux-runtime-spinlock-context-v0.yml'
       - '.github/workflows/linux-runtime-fdt-isolation-v1.yml'
-      - '.github/workflows/linux-runtime-generated-kallsyms-first-die-v0.yml'
+      - '.github/workflows-disabled/linux-runtime-generated-kallsyms-first-die-v0.yml'
       - '.github/workflows/minias-a0-focused-diagnostics-v1.yml'
       - 'tools/ci/check_minias_semantic_convergence_v1.py'
       - 'tools/ci/check_linux_runtime_fixture_producers_convergence_v1.py'
@@ -131,6 +132,11 @@ jobs:
           python3 tools/ci/check_linux_runtime_fixture_producers_convergence_v1.py
           ruby -e 'require "yaml"; YAML.parse_file(ARGV.fetch(0)); puts "M0_RUNTIME_FIXTURE_PRODUCERS_YAML=PASS"' .github/workflows/linux-runtime-fixture-producers-v1.yml
 
+      - name: Verify FDT and generated kallsyms focused owner convergence
+        run: |
+          python3 tools/ci/check_linux_runtime_fdt_kallsyms_union_v1.py
+          ruby -e 'require "yaml"; YAML.parse_file(ARGV.fetch(0)); puts "M0_FDT_KALLSYMS_YAML=PASS"' .github/workflows/linux-runtime-fdt-isolation-v1.yml
+
       - name: Run Linux runtime isolation selftests
         run: |
           python3 tools/ci/test_linux_runtime_object_set_v1.py
@@ -164,7 +170,7 @@ jobs:
             tools/ci/linux-distributed-image-plan-v1.py
           ruby -e 'require "yaml"; YAML.parse_file(ARGV.fetch(0)); puts "M0_MINIOBJCOPY_YAML=PASS"' .github/workflows/miniobjcopy-strip-regressions-v1.yml
           ruby -e 'require "yaml"; YAML.parse_file(ARGV.fetch(0)); puts "M0_MINIPP_LIVE_YAML=PASS"' .github/workflows/minipp-linux-frozen-v1.yml
-          for f in linux-runtime-spinlock-context-v0.yml linux-runtime-fdt-isolation-v1.yml linux-runtime-generated-kallsyms-first-die-v0.yml; do
+          for f in linux-runtime-spinlock-context-v0.yml linux-runtime-fdt-isolation-v1.yml; do
             ruby -e 'require "yaml"; YAML.parse_file(ARGV.fetch(0))' ".github/workflows/$f"
           done
           echo "M0_RUNTIME_FOCUSED_YAML=PASS owners=3"
@@ -261,7 +267,7 @@ jobs:
               ('linux-runtime-fdt-isolation-v1.yml', 'isolation', {
                   'linux-runtime-fdt-ro-codegen-v0.yml': ('fdt-ro-codegen', 'bbac9494c79603df4146fb08118ee1007a6b66c9'),
               }),
-              ('linux-runtime-generated-kallsyms-first-die-v0.yml', 'generated', {
+              ('linux-runtime-fdt-isolation-v1.yml', 'generated', {
                   'linux-runtime-first-die-context-v0.yml': ('kallsyms-first-fault-abc', '90e6d9e2244bb4a602321617c661a8a33c5faa65'),
                   'linux-runtime-kallsyms-object-diagnose-v0.yml': ('kallsyms-object-diagnose', 'b0321f094495926553191f8d5ba85566ce3a6a62'),
               }),
@@ -270,7 +276,10 @@ jobs:
           archived_jobs = 0
           for owner, default_mode, archived_files in runtime_groups:
               merged = (Path('.github/workflows') / owner).read_text()
-              assert ("default: '" + default_mode + "'") in merged, f'Wrong focused selector: {owner}'
+              if default_mode == 'generated':
+                  assert "          - 'generated'" in merged, 'Kallsyms selector lost from FDT owner'
+              else:
+                  assert ("default: '" + default_mode + "'") in merged, f'Wrong focused selector: {owner}'
               assert "          - 'all'" in merged, f'No exhaustive mode: {owner}'
               assert "github.event_name == 'workflow_dispatch'" in merged
               assert "github.event_name == 'push'" in merged
