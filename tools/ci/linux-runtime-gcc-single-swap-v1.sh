@@ -36,31 +36,85 @@ cp -a "$out/lib/.idr.o.cmd" "$ev/gcc.o.cmd"
 baseline_image_sha=$(sha256sum "$out/arch/riscv/boot/Image" | cut -d' ' -f1)
 printf 'baseline_image_sha256=%s\n' "$baseline_image_sha" >"$ev/identity.txt"
 
-# Need GCC's preprocessed .i from the real Kbuild command. It is not safe to
-# invent flags; the repository's real wrapper preserves the exact invocation.
-# Restore the pinned GCC object and .cmd even if MiniC's compilation fails.
+# Reuse GCC preprocessed input iff every producer identity still matches.
+# The first trial obtains the genuine .i and assembler flags from Kbuild;
+# subsequent MiniC fixes need only MiniC -S, GNU as, GNU link and QEMU.
+pp_contract=$(printf '%s\n' \
+  "$actual_cfg" "$gcc_sha" \
+  "$(sha256sum "$ev/gcc.o.cmd" | cut -d' ' -f1)" \
+  "$(sha256sum "$src/lib/idr.c" | cut -d' ' -f1)" \
+  "$(sha256sum /usr/bin/riscv64-linux-gnu-gcc | cut -d' ' -f1)" \
+  | sha256sum | cut -d' ' -f1)
 restore() {
   cp -a "$ev/gcc.o" "$out/$target" || true
   cp -a "$ev/gcc.o.cmd" "$out/lib/.idr.o.cmd" || true
 }
 trap restore EXIT
-rm -f "$out/$target" "$out/lib/.idr.o.cmd" "$out/$stem.minic-stage2.i" "$out/$stem.minic-stage2.s"
-MINIC="$minic" REAL_CC=/usr/bin/riscv64-linux-gnu-gcc MINIC_KEEP_INTERMEDIATES=1 \
-  MINIC_KBUILD_TRACE="$ev/one-tu.trace" \
-  make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
-    CC="$wrapper" -j1 V=1 "$target" >"$ev/compile.log" 2>&1 || {
-    echo "GNU_SINGLE=FAIL stage=minic-kbuild-targe target=$target" >&2
-    tail -n 100 "$ev/compile.log" >&2
-    exit 4
+have_pp=0
+for path in "$ev/idr.i" "$ev/asm-args.txt" "$ev/pp-contract.txt" "$ev/pp-files.sha256"; do
+  if [[ -e "$path" ]]; then have_pp=1; fi
+done
+if (( have_pp )); then
+  for path in "$ev/idr.i" "$ev/asm-args.txt" "$ev/pp-contract.txt" "$ev/pp-files.sha256"; do
+    test -s "$path" || { echo "GNU_SINGLE=ERROR incomplete cached PP: $path" >&2; exit 4; }
+  done
+  [[ $(cat "$ev/pp-contract.txt") == "$pp_contract" ]] || {
+    echo "GNU_SINGLE=ERROR cached .i producer identity differs" >&2; exit 4;
   }
-test -s "$out/$stem.minic-stage2.i"
-test -s "$out/$stem.minic-stage2.s"
+  (cd "$ev"; sha256sum -c pp-files.sha256 >/dev/null)
+  echo "GNU_SINGLE_PP_CACHE=HIT"
+  rm -f "$out/$target"
+  CORE_FAST_TRACE=1 "$minic" -S "$ev/idr.i" -o "$ev/idr.minic.s" \
+    >"$ev/compile.log" 2>&1 || { echo 'GNU_SINGLE=FAIL stage=minic-replay' >&2; exit 4; }
+  asm_args=()
+  while IFS= read -r arg; do
+    case "$arg" in
+      -march=*|-mabi=*|-mcmodel=*|-mstrict-align|-mno-strict-align|-mno-save-restore|-mno-relax|-Wa,*) asm_args+=("$arg");;
+      *) echo "GNU_SINGLE=ERROR invalid cached GNU-as flag=$arg" >&2; exit 4;;
+    esac
+  done <"$ev/asm-args.txt"
+  test "$(wc -l <"$ev/asm-args.txt")" -ge 1
+  /usr/bin/riscv64-linux-gnu-gcc "${asm_args[@]}" -x assembler -c \
+    "$ev/idr.minic.s" -o "$out/$target" >"$ev/assemble.log" 2>&1
+else
+  echo "GNU_SINGLE_PP_CACHE=MISS"
+  rm -f "$out/$target" "$out/lib/.idr.o.cmd" "$out/$stem.minic-stage2.i" "$out/$stem.minic-stage2.s"
+  MINIC="$minic" REAL_CC=/usr/bin/riscv64-linux-gnu-gcc MINIC_KEEP_INTERMEDIATES=1 \
+    MINIC_KBUILD_TRACE="$ev/one-tu.trace" \
+    make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
+      CC="$wrapper" -j1 V=1 "$target" >"$ev/compile.log" 2>&1 || {
+      echo "GNU_SINGLE=FAIL stage=minic-kbuild-target target=$target" >&2
+      tail -n 100 "$ev/compile.log" >&2
+      exit 4
+    }
+  test -s "$out/$stem.minic-stage2.i"
+  test -s "$out/$stem.minic-stage2.s"
+  test -s "$out/$target"
+  cp -a "$out/$stem.minic-stage2.i" "$ev/idr.i"
+  cp -a "$out/$stem.minic-stage2.s" "$ev/idr.minic.s"
+  grep -F 'minic input=' "$ev/one-tu.trace" >/dev/null
+  grep -F 'assemble input=' "$ev/one-tu.trace" >/dev/null
+  python3 - "$ev/one-tu.trace" "$ev/asm-args.txt" <<'PY_FLAGS'
+import shlex, sys
+from pathlib import Path
+calls = [shlex.split(line[5:]) for line in Path(sys.argv[1]).read_text().splitlines()
+         if line.startswith("argv ")]
+if not calls:
+    raise SystemExit("Kbuild wrapper did not record GCC argv")
+result = [a for a in calls[-1] if a in (
+    "-mstrict-align", "-mno-strict-align", "-mno-save-restore", "-mno-relax"
+) or a.startswith(("-march=", "-mabi=", "-mcmodel=", "-Wa,"))]
+if not result:
+    raise SystemExit("Kbuild wrapper recorded no GNU assembler flags")
+Path(sys.argv[2]).write_text("\n".join(result) + "\n")
+print(f"GNU_SINGLE_CAPTURED_ASM_FLAGS={len(result)}")
+PY_FLAGS
+  printf '%s\n' "$pp_contract" >"$ev/pp-contract.txt"
+  (cd "$ev"; sha256sum idr.i asm-args.txt >pp-files.sha256)
+  echo "GNU_SINGLE_PP_CACHE=PREPARED sha=$(sha256sum "$ev/idr.i" | cut -d' ' -f1)"
+fi
 test -s "$out/$target"
-cp -a "$out/$stem.minic-stage2.i" "$ev/idr.i"
-cp -a "$out/$stem.minic-stage2.s" "$ev/idr.minic.s"
 cp -a "$out/$target" "$ev/minic.o"
-grep -F 'minic input=' "$ev/one-tu.trace" >/dev/null
-grep -F 'assemble input=' "$ev/one-tu.trace" >/dev/null
 minic_sha=$(sha256sum "$ev/minic.o" | cut -d' ' -f1)
 echo "GNU_SINGLE_MINIC=PASS target=$target gcc_sha=$gcc_sha minic_sha=$minic_sha"
 printf 'minic_object_sha256=%s\ninput_sha256=%s\n' "$minic_sha" "$(sha256sum "$ev/idr.i" | cut -d' ' -f1)" >>"$ev/identity.txt"

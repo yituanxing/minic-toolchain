@@ -241,6 +241,35 @@ jobs:
         with:
           fixture: source
 
+      - name: Derive immutable single-TU preprocessor cache identity
+        id: ppkey
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          out="$GITHUB_WORKSPACE/build/linux-runtime-gcc/out"
+          src="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0/linux-6.6.143"
+          test -s "$out/lib/.idr.o.cmd"
+          test -s "$src/lib/idr.c"
+          contract=$(printf '%s\n' \
+            "$(sha256sum "$out/.config" | cut -d' ' -f1)" \
+            "$(sha256sum "$out/lib/idr.o" | cut -d' ' -f1)" \
+            "$(sha256sum "$out/lib/.idr.o.cmd" | cut -d' ' -f1)" \
+            "$(sha256sum "$src/lib/idr.c" | cut -d' ' -f1)" \
+            "$(sha256sum /usr/bin/riscv64-linux-gnu-gcc | cut -d' ' -f1)" \
+            | sha256sum | cut -d' ' -f1)
+          echo "key=linux-gnu-single-idr-i-v1-$contract" >>"$GITHUB_OUTPUT"
+
+      - name: Restore frozen GCC .i and exact GNU assembler flags
+        id: pprestore
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            build/linux-runtime-gcc-single-v1/idr.i
+            build/linux-runtime-gcc-single-v1/asm-args.txt
+            build/linux-runtime-gcc-single-v1/pp-contract.txt
+            build/linux-runtime-gcc-single-v1/pp-files.sha256
+          key: ${{ steps.ppkey.outputs.key }}
+
       - name: Verify GNU baseline, build MiniC and swap only lib/idr.o
         shell: bash
         run: |
@@ -263,6 +292,31 @@ jobs:
             "$GITHUB_WORKSPACE/build/linux-runtime-gcc-single-toolchain/bin/minic" \
             "$work/provenance" "$ev"
 
+      - name: Determine if verified GNU-preprocessed input may be cached
+        id: ppready
+        if: always()
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-gcc-single-v1"
+          if test -s "$ev/idr.i" && test -s "$ev/asm-args.txt" && \
+             test -s "$ev/pp-contract.txt" && test -s "$ev/pp-files.sha256"; then
+            echo 'ready=true' >>"$GITHUB_OUTPUT"
+          else
+            echo 'ready=false' >>"$GITHUB_OUTPUT"
+          fi
+
+      - name: Cache immutable .i and GNU assembler flags for MiniC-only iterations
+        if: always() && steps.ppready.outputs.ready == 'true' && steps.pprestore.outputs['cache-hit'] != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            build/linux-runtime-gcc-single-v1/idr.i
+            build/linux-runtime-gcc-single-v1/asm-args.txt
+            build/linux-runtime-gcc-single-v1/pp-contract.txt
+            build/linux-runtime-gcc-single-v1/pp-files.sha256
+          key: ${{ steps.ppkey.outputs.key }}
+
       - name: Preserve single-object GCC/MiniC evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -274,6 +328,10 @@ jobs:
             build/linux-runtime-gcc-single-v1/link.log
             build/linux-runtime-gcc-single-v1/one-tu.trace
             build/linux-runtime-gcc-single-v1/idr.minic.s
+            build/linux-runtime-gcc-single-v1/idr.i
+            build/linux-runtime-gcc-single-v1/asm-args.txt
+            build/linux-runtime-gcc-single-v1/pp-contract.txt
+            build/linux-runtime-gcc-single-v1/pp-files.sha256
             build/linux-runtime-gcc-single-v1/qemu.result.log
             build/linux-runtime-gcc-single-v1/qemu/*.log
             build/linux-runtime-gcc-single-v1/compiler/toolchain-timing.txt

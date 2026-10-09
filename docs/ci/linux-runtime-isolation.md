@@ -289,3 +289,22 @@ one-object swapped Image and QEMU must get their own **real CI run** before
 claiming any MiniC runtime PASS. Once this first run is stable, freeze
 its \`.i\` and exact assembler flags under source/config/GCC/Kbuild-command
 identities so subsequent MiniC-only iterations avoid even repeating GCC -E.
+
+
+### First real one-owner QEMU proof and immutable GNU input reuse
+
+[Run 37935628658](https://github.com/yituanxing/minic-toolchain/actions/runs/37935628658)
+was **SUCCESS** on \`lib/idr.o\`: restored the 2141-object GCC pool,
+built exactly the chosen MiniC object with the existing GCC-PP/MiniC/GNU-AS
+Kbuild wrapper, GNU-relinked Image and passed the full existing runtime
+initramfs + shell QEMU oracle. Logs show a distinct MiniC object SHA and
+changed final Image SHA. This is a **hybrid single-object** certificate,
+not a full-MiniC Linux image boot.
+
+Next opt-in runs cache the exact \`lib/idr.i\` + GNU assembler flags
+under SHA256(config, original GCC \`.o\`, original GCC \`.cmd\`,
+source file, GCC executable). On a matching cache hit the runner
+**skips even GNU GCC -E and single-object Kbuild**: MiniC -S ->
+GNU assembler -> GNU relink -> QEMU. Any incomplete/altered or
+identity-mismatched cache fails closed. Performance timing of this
+optimization must be measured separately from the original real run.
