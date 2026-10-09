@@ -9,6 +9,8 @@ on:
     paths:
       - 'tools/ci/test_linux_runtime_object_set_v1.py'
       - 'tools/ci/test_linux_runtime_prefix_bisect_v1.py'
+      - 'tools/ci/check_minild_integration_convergence_v1.py'
+      - '.github/workflows/minild-integration-v1.yml'
       - 'tests/external/linux/stage2_kbuild_cc*.sh'
       - 'tests/driver/run-busybox-kbuild-routing-v0.sh'
       - '.github/workflows/toolchain-m0-structure.yml'
@@ -38,6 +40,11 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+
+      - name: Verify MiniLD consolidated integration contracts
+        run: |
+          python3 tools/ci/check_minild_integration_convergence_v1.py
+          ruby -e 'require "yaml"; YAML.parse_file(ARGV.fetch(0)); puts "M0_MINILD_INTEGRATION_YAML=PASS"' .github/workflows/minild-integration-v1.yml
 
       - name: Run Linux runtime isolation selftests
         run: |
