@@ -43,7 +43,11 @@ def examine(out: Path, golden: Path):
             raise ValueError(f"golden object hash mismatch: {item}")
         p = PurePosixPath(item)
         cmd = out / p.parent / ("." + p.name + ".cmd")
-        if LINK_TEMP.fullmatch(item) or item.startswith(".tmp_vmlinux."):
+        # Root-level dot objects and vmlinux.o are final linker products.
+        # .vmlinux.export.o has a generated .c and GCC source_ metadata,
+        # but is NOT an independent kernel owner for MiniC C-TU swapping.
+        if (LINK_TEMP.fullmatch(item) or item.startswith(".") or
+                item == "vmlinux.o" or len(p.parts) < 2):
             exclusions.append((item, "link-generated"))
             continue
         if not cmd.is_file():
