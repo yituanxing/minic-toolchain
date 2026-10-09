@@ -163,7 +163,9 @@ def main():
             assert r["push_path_policy"] == "unscoped", name
             assert r["commit_tag_guards"], name
     assert names[ROUTE_ALL_PUSH]["classification"] == "all_push_router_runner"
-    assert names[LEGACY_MANUAL]["dead_push_tags"] == "true"
+    assert names[LEGACY_MANUAL]["push_declared"] == "false"
+    assert names[LEGACY_MANUAL]["manual_dispatch"] == "true"
+    assert names[LEGACY_MANUAL]["commit_tag_guards"] == ""
     assert names[SELF_YAML_ONLY]["classification"] == "yaml_only_push_with_otherwise_unreachable_tags" if branch == BRANCHES[0] else True
     out = ROOT / args.output
     out.parent.mkdir(parents=True, exist_ok=True)
