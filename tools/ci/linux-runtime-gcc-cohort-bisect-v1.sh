@@ -1172,7 +1172,7 @@ if [[ "${COHORT_EARLYCON_HOTFIX:-0}" == 1 ]]; then
       echo "GDB_BOUNDARY=START same_linked_image=true"
       python3 "$repo/tools/ci/linux-runtime-gdb-boundary-v1.py" \
         --image "$d/Image" --vmlinux "$out/vmlinux" \
-        --output-dir "$d/gdb-boundary" --timeout-seconds 34 || {
+        --output-dir "$d/gdb-boundary" --timeout-seconds 55 || {
           echo "GDB_BOUNDARY=INCONCLUSIVE runtime_certificate=false"
         }
       echo "GDB_BOUNDARY=END"
@@ -1180,7 +1180,7 @@ if [[ "${COHORT_EARLYCON_HOTFIX:-0}" == 1 ]]; then
     if [[ "${COHORT_NEXT_GCC_SWAPS:-0}" == 1 ]]; then
       baseline="$ev/trials/earlycon_fixed_only/qemu-uart-earlycon.log"
       [[ -s "$baseline" ]] || { echo "NEXT_OWNER_SWAP=ERROR no_UARТ_baseline"; exit 8; }
-      for swap_target in mm/slab_common.o mm/slub.o; do
+      for swap_target in fs/super.o; do
         swap_index=-1
         for ((swap_k=0;swap_k<n;swap_k++)); do
           if [[ "${objects[swap_k]}" == "$swap_target" ]]; then
@@ -1212,6 +1212,16 @@ if [[ "${COHORT_EARLYCON_HOTFIX:-0}" == 1 ]]; then
         grep -aE '^\[[[:space:]]*[0-9]+\.[0-9]+\]' "$baseline" | tail -n 5 || true
         echo "NEXT_OWNER_SWAP_OBSERVED target=$swap_target"
         grep -aE '^\[[[:space:]]*[0-9]+\.[0-9]+\]' "$d/qemu-uart-earlycon.log" | tail -n 18 || true
+        if [[ "${COHORT_GDB_SWAP:-0}" == 1 ]]; then
+          mkdir -p "$d/gdb-boundary"
+          echo "NEXT_OWNER_GDB=START target=$swap_target same_image=true"
+          python3 "$repo/tools/ci/linux-runtime-gdb-boundary-v1.py" \
+            --image "$d/Image" --vmlinux "$out/vmlinux" \
+            --output-dir "$d/gdb-boundary" --timeout-seconds 55 || {
+              echo "NEXT_OWNER_GDB=INCONCLUSIVE target=$swap_target"
+            }
+          echo "NEXT_OWNER_GDB=END target=$swap_target"
+        fi
         echo "NEXT_OWNER_SWAP=SCREENED target=$swap_target verdict=$TRIAL_VERDICT reboot_certificate=false"
       done
     fi

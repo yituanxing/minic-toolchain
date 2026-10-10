@@ -22,6 +22,7 @@ TARGETS = (
     "kern_mount", "vfs_kern_mount", "fs_context_for_mount",
     "fc_mount", "vfs_get_tree", "shmem_get_tree",
     "shmem_fill_super", "get_tree_nodev", "vfs_create_mount",
+    "vfs_get_super", "sget_fc", "alloc_super", "set_anon_super_fc",
 )
 CMDLINE = ("console=ttyS0 earlycon=uart8250,mmio,0x10000000,115200n8 "
            "loglevel=8 ignore_loglevel panic=-1")
