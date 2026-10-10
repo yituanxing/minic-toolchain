@@ -699,3 +699,120 @@ jobs:
             build/linux-runtime-gcc-cohort-v1/trials/*/runtime-p1.log
           if-no-files-found: warn
           retention-days: 7
+
+  # Opt-in hotfix diagnostic: reuse authenticated 2064 old MiniC objects
+  # but replace only earlycon.o with the current patched MiniC profile.
+  # No new workflow, no rebuilding the 2063 unaffected C translation units.
+  gcc-earlycon-hotfix:
+    if: github.event_name == 'push' && contains(github.event.head_commit.message, '[linux-runtime-earlycon-hotfix]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Install pinned RISC-V GNU tools and QEMU
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get -o Acquire::Retries=2 install -y --no-install-recommends \
+            gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
+            qemu-system-misc opensbi libc6-dev-riscv64-cross python3 make cpio gzip || {
+              sudo apt-get -o Acquire::Retries=3 update
+              sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+                gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
+                qemu-system-misc opensbi libc6-dev-riscv64-cross python3 make cpio gzip
+            }
+
+      - name: Identify exact pure-GNU golden reference
+        id: golden
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          cfg=eeb04f304ebfb97a1079c187dc0c2ea3cc61fc50a55aa3cc776237c16ab19bbe
+          gcc_sig=$(sha256sum "$(command -v riscv64-linux-gnu-gcc)" | cut -c1-16)
+          ld_sig=$(sha256sum "$(command -v riscv64-linux-gnu-ld)" | cut -c1-16)
+          echo "key=linux-gnu-golden-v1-6.6.143-$cfg-$gcc_sig-$ld_sig" >>"$GITHUB_OUTPUT"
+
+      - name: Restore QEMU-certified GCC golden object tree
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            build/linux-runtime-gcc/out
+            build/linux-runtime-gcc/provenance
+          key: ${{ steps.golden.outputs.key }}
+          fail-on-cache-miss: true
+
+      - name: Restore old authenticated 2064 MiniC object pool
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            build/linux-runtime-gcc-cohort-v1/minic
+            build/linux-runtime-gcc-cohort-v1/minic-manifest.sha256
+            build/linux-runtime-gcc-cohort-v1/minic-identity.txt
+          # Exact immutable key from pre-fix CI #38051834014, not restore-keys.
+          key: gnu-minic-objects-v1-eeb04f304ebfb97a1079c187dc0c2ea3cc61fc50a55aa3cc776237c16ab19bbe-d19c855bc2650568f84a73a8a17e2b8be42faee80d0ed22913588bb4d8df7822-1d1c8d09cfffddb37990552ae6392181a42d55332e48232dce27e7305d7e770b-0c2a199ea3ae14d39b008fd4080d4b18d675b07daa17976c7d9755e8ea67310b-d072447ef15a207422bf4874920221c41af7a771d1dbae770855cf3d6220a507
+          fail-on-cache-miss: true
+
+      - name: Restore exact Linux 6.6.143 source
+        uses: ./.github/actions/linux-runtime-restore-fixture
+        with:
+          fixture: source
+
+      - name: Recover certified full-C same-config object order
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-runtime-gcc"
+          source="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0/linux-6.6.143"
+          test -d "$source"
+          test ! -e "$work/linux-6.6.143"
+          cp -a --reflink=auto "$source" "$work/linux-6.6.143"
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-v1"
+          mkdir -p "$ev"
+          python3 tools/ci/linux-runtime-gcc-full-c-objects-v1.py \
+            --out "$work/out" --manifest "$work/provenance/gcc-objects.sha256" \
+            --prefix tools/ci/linux-runtime-gcc-cohort-objects-v1.txt \
+            --output "$ev/full-objects.txt" --excluded "$ev/non-c-objects.tsv" \
+            --min-c-objects 1200
+          test "$(grep -Ec '^[^#[:space:]]+\\.o$' "$ev/full-objects.txt")" = 2064
+
+      - name: Build current patched MiniC compiler only once
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          bash tools/ci/linux-runtime-build-minic-profile-v1.sh \
+            "$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain" \
+            "$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-v1/compiler"
+
+      - name: Recompile earlycon.o only, GNU link and compare QEMU frontier
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-runtime-gcc"
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-v1"
+          export COHORT_ACTION=verify COHORT_EARLYCON_HOTFIX=1
+          bash tools/ci/linux-runtime-gcc-cohort-bisect-v1.sh \
+            "$work/linux-6.6.143" "$work/out" \
+            "$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain/bin/minic" \
+            "$work/provenance" "$ev/full-objects.txt" "$ev"
+
+      - name: Preserve single-object experiment evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-runtime-earlycon-one-object-${{ github.sha }}
+          path: |
+            build/linux-runtime-gcc-cohort-v1/cohort.log
+            build/linux-runtime-gcc-cohort-v1/identity.txt
+            build/linux-runtime-gcc-cohort-v1/results.tsv
+            build/linux-runtime-gcc-cohort-v1/gcc-preflight.log
+            build/linux-runtime-gcc-cohort-v1/earlycon-hotfix/
+            build/linux-runtime-gcc-cohort-v1/trials/earlycon_fixed_only/link*.log
+            build/linux-runtime-gcc-cohort-v1/trials/earlycon_fixed_only/guard.log
+            build/linux-runtime-gcc-cohort-v1/trials/earlycon_fixed_only/qmp*.log
+            build/linux-runtime-gcc-cohort-v1/trials/earlycon_fixed_only/runtime.log
+            build/linux-runtime-gcc-cohort-v1/trials/earlycon_fixed_only/qemu-early-noinitrd.log
+          if-no-files-found: warn
+          retention-days: 7
+

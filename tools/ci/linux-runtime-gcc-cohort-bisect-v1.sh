@@ -413,6 +413,75 @@ if [[ "${COHORT_CAPTURE_ONLY:-0}" == 1 ]]; then
   echo "COHORT_CAPTURE_ONLY=PASS candidates=$n reused=true runtime_oracle=NOT_RUN"
   exit 0
 fi
+# One-object regression isolation: keep 2063 *old* authenticated MiniC
+# candidates, recompile ONLY earlycon.o with the current fixed compiler.
+# This is not a full-current-compiler Linux certification.
+if [[ "${COHORT_EARLYCON_HOTFIX:-0}" == 1 ]]; then
+  [[ "$cohort_scope" == FULL_C_UNIVERSE && "$n" == 2064 && "${COHORT_ACTION:-all}" == verify ]] || {
+    echo "EARLYCON_HOTFIX=ERROR require_frozen_full_2064_and_verify" >&2; exit 8;
+  }
+  hotfix="$ev/earlycon-hotfix"
+  target=drivers/tty/serial/earlycon.o
+  mkdir -p "$hotfix"
+  printf '%s\n' "$target" >"$hotfix/selected.txt"
+  # The cache's immutable 2064-entry SHA manifest was verified above.
+  # Save the old candidate and independently attest the new one.
+  cp -a "$ev/minic/$target" "$hotfix/earlycon-before.o"
+  old_sha=$(sha256sum "$hotfix/earlycon-before.o" | cut -d' ' -f1)
+  cc_sha=$(sha256sum "$(dirname "$minic")/minic-cc" | cut -d' ' -f1)
+  echo "EARLYCON_HOTFIX=START old_2063=frozen previous_earlycon=$old_sha new_minic_cc=$cc_sha"
+  python3 "$repo/tools/ci/linux-runtime-kbuild-regeneration-guard-v1.py" \
+    --mode replay --out "$out" --golden-out "$gold_snapshot" \
+    --evidence "$hotfix/replay.log" --selected "$hotfix/selected.txt" \
+    --wrapper "$repo/tests/external/linux/stage2_kbuild_cc.sh" \
+    --minic "$minic" --success-trace "$hotfix/success.txt" \
+    --digest-trace "$hotfix/digests.txt" | tee "$hotfix/replay.log"
+  python3 "$repo/tools/ci/linux-runtime-minic-route-audit-v1.py" \
+    --objects-file "$hotfix/selected.txt" \
+    --success-trace "$hotfix/success.txt" \
+    --object-digest-trace "$hotfix/digests.txt" \
+    --candidates "$out" | tee "$hotfix/route-audit.log"
+  python3 - "$ev/gcc/$target" "$ev/minic/$target" "$out/$target" <<'PY_HOTFIX_ABI'
+import struct, sys
+from pathlib import Path
+heads=[Path(p).read_bytes()[:52] for p in sys.argv[1:]]
+for h in heads:
+    assert len(h)==52 and h[:6]==b"\x7fELF\x02\x01", "non-RV64 ELF"
+    assert struct.unpack_from("<H",h,16)[0]==1, "not ET_REL"
+    assert struct.unpack_from("<H",h,18)[0]==243, "not RISC-V"
+assert len({h[48:52] for h in heads})==1, "RISC-V ABI flags mismatch"
+print("EARLYCON_HOTFIX_ABI=PASS gcc_old_minic_new_minic")
+PY_HOTFIX_ABI
+  new_sha=$(sha256sum "$out/$target" | cut -d' ' -f1)
+  [[ "$old_sha" != "$new_sha" ]] || {
+    echo "EARLYCON_HOTFIX=FAIL new_object_identical_to_bad_old_candidate" >&2; exit 8;
+  }
+  cp -a "$out/$target" "$ev/minic/$target"
+  printf 'old_earlycon_sha256=%s\nnew_earlycon_sha256=%s\nnew_minic_cc_sha256=%s\n' \
+    "$old_sha" "$new_sha" "$cc_sha" >"$hotfix/provenance.txt"
+  # Verify all 2063 unrelated candidate objects against the frozen manifest.
+  python3 - "$ev/minic-manifest.sha256" "$ev" "$target" "$new_sha" <<'PY_HOTFIX_INTEGRITY'
+import hashlib, sys
+from pathlib import Path
+manifest, root, changed, current = Path(sys.argv[1]),Path(sys.argv[2]),sys.argv[3],sys.argv[4]
+count=0
+for line in manifest.read_text().splitlines():
+    digest, name = line.split(None,1)
+    path=root/name
+    observed=hashlib.sha256(path.read_bytes()).hexdigest()
+    if name == "minic/"+changed:
+        assert observed==current and observed!=digest, "earlycon replacement missing"
+    else:
+        assert observed==digest, "unrelated MiniC candidate mutated: "+name
+        count+=1
+assert count==2063, f"expected 2063 frozen neighbors, found {count}"
+print(f"EARLYCON_HOTFIX_FROZEN_NEIGHBORS=PASS objects={count} new_object=1")
+PY_HOTFIX_INTEGRITY
+  # All subsequent GNU links must start from the immutable exact GNU tree.
+  rm -rf -- "$out"
+  cp -a --reflink=auto "$gold_snapshot" "$out"
+  echo "EARLYCON_HOTFIX=READY scope=2063_old_minic_plus_1_fixed_earlycon no_full_certificate=true"
+fi
 # Build the initramfs just once; it stays fixed throughout all QEMU trials.
 BUILD_DIR="$ev/initramfs" OUTPUT_INITRAMFS="$ev/runtime-initramfs.cpio.gz" \
   RISCV_CC=riscv64-linux-gnu-gcc \
@@ -969,6 +1038,30 @@ PY_EARLY_SYMBOLS
   printf '%s\t%s\t%s\t%s\n' "$name" "$count" "$verdict" "$image_sha" >>"$ev/results.tsv"
   TRIAL_VERDICT="$verdict"
 }
+# One diagnostic only, deliberately no full-universe bisection or GCC-swap loop.
+# Passing here proves just this mixed-image frontier, not a 2064-object
+# recompilation or a complete Linux/P1 boot certificate.
+if [[ "${COHORT_EARLYCON_HOTFIX:-0}" == 1 ]]; then
+  trial earlycon_fixed_only "$n" fast
+  if [[ "$TRIAL_VERDICT" == PASS ]]; then
+    trial earlycon_fixed_full "$n" full
+    if [[ "$TRIAL_VERDICT" == PASS ]]; then
+      echo "EARLYCON_HOTFIX_RESULT=BOOT_PASS mixed_profile=true"
+      exit 0
+    fi
+    echo "EARLYCON_HOTFIX_RESULT=INCONCLUSIVE reason=full_or_p1_failed"
+    exit 8
+  fi
+  diag="$ev/trials/earlycon_fixed_only/qmp-symbols.log"
+  if [[ -s "$diag" ]] && grep -Eq 'COHORT_QMP_SYMBOL at_s=(4|8) reg=pc .* symbol=' "$diag" && \
+     grep -E 'COHORT_QMP_SYMBOL at_s=(4|8) reg=pc .* symbol=' "$diag" | \
+       grep -Ev 'symbol=(setup_earlycon|BELOW_LINKED_TEXT)' >/dev/null; then
+    echo "EARLYCON_HOTFIX_RESULT=FRONTIER_ADVANCED after_earlycon=true p1=NOT_CERTIFIED old_2063_unchanged=true"
+    exit 0
+  fi
+  echo "EARLYCON_HOTFIX_RESULT=INCONCLUSIVE verdict=$TRIAL_VERDICT frontier_evidence=insufficient"
+  exit 8
+fi
 # FIRST test the entire MiniC-compilable C object universe. This is the
 # user's actual intended failure oracle; do not waste more CI on 128, 384,
 # 512 ... successful intermediate cohorts.
