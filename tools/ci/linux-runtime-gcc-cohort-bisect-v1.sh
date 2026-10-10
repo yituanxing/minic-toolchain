@@ -715,7 +715,38 @@ for line in Path(sys.argv[1]).read_text().splitlines():
 for size,name in sorted(rows,reverse=True)[:12]:
     print(f"COHORT_VMLINUX_LARGEST_SECTION name={name} bytes={size}")
 PY_VMLINUX_SIZE
+    # Preserve source symbol names to isolate codegen amplification without
+    # recompiling any C input. Never treat ET_REL file bytes as text size.
+    /usr/bin/riscv64-linux-gnu-nm -S --size-sort "$out/vmlinux" \
+      >"$d/vmlinux-symbol-sizes.txt" 2>&1 || true
+    python3 - "$d/vmlinux-symbol-sizes.txt" <<'PY_LARGEST_SYMBOLS'
+import re,sys
+from pathlib import Path
+rows=[]
+for line in Path(sys.argv[1]).read_text(errors="replace").splitlines():
+    m=re.match(r"^[0-9a-fA-F]+\s+([0-9a-fA-F]+)\s+([A-Za-z])\s+(.+)$",line)
+    if m:
+        rows.append((int(m.group(1),16),m.group(2),m.group(3)))
+for size,kind,name in sorted(rows,reverse=True)[:24]:
+    print(f"COHORT_VMLINUX_LARGEST_SYMBOL bytes={size} kind={kind} name={name}")
+PY_LARGEST_SYMBOLS
   fi
+  python3 - "$ev/gcc" "$ev/minic" "$objects_file" <<'PY_LARGEST_TUS'
+from pathlib import Path
+import sys
+a,b,manifest=map(Path,sys.argv[1:])
+rows=[]
+for n in manifest.read_text().splitlines():
+    n=n.strip()
+    if not n or n.startswith("#"):
+        continue
+    ga=(a/n).stat().st_size
+    mi=(b/n).stat().st_size
+    rows.append((mi-ga,mi,ga,n))
+for delta,mi,ga,name in sorted(rows,reverse=True)[:22]:
+    print(f"COHORT_LARGEST_TU_DELTA name={name} gcc_bytes={ga} minic_bytes={mi} extra_bytes={delta} ratio={mi/max(1,ga):.3f}")
+print(f"COHORT_TU_BYTES_SUM gcc={sum(r[2] for r in rows)} minic={sum(r[1] for r in rows)} count={len(rows)}")
+PY_LARGEST_TUS
   verdict=INCONCLUSIVE
   if [[ "$mode" != prefix || "$count" -gt 0 ]] && [[ "$image_sha" == "$gnu_image_sha" ]]; then
     echo "COHORT_IMAGE=UNCHANGED name=$name"
@@ -759,6 +790,24 @@ PY_VMLINUX_SIZE
       else
         echo "COHORT_KERNEL_EARLY_FRONTIER=NO_FIRMWARE_OR_KERNEL_BANNER trial=$name"
       fi
+      # The golden kernel has already passed the complete initramfs/P1
+      # oracles, but compare it AGAIN under this exact kernel-only QEMU
+      # invocation: absence of a MiniC banner is meaningful only when GNU
+      # reaches the same stage in the same runner and time window.
+      golden_early_rc=0
+      timeout --signal=TERM 15s qemu-system-riscv64 \
+        -M virt -cpu max -m 512M -smp 1 -nographic -no-reboot \
+        -bios default -kernel "$gold_snapshot/arch/riscv/boot/Image" \
+        -append 'console=ttyS0 earlycon=sbi loglevel=8 panic=-1' \
+        </dev/null >"$d/qemu-golden-noinitrd.log" 2>&1 || golden_early_rc=$?
+      if grep -Fq 'Linux version 6.6.143' "$d/qemu-golden-noinitrd.log"; then
+        echo "COHORT_GCC_EARLY_REFERENCE=LINUX_BANNER trial=$name"
+      else
+        echo "COHORT_GCC_EARLY_REFERENCE=NO_LINUX_BANNER trial=$name rc=$golden_early_rc"
+      fi
+      echo "COHORT_GCC_EARLY_LOG_END"
+      tail -n 14 "$d/qemu-golden-noinitrd.log"
+      echo "COHORT_GCC_EARLY_LOG_END"
       echo "COHORT_KERNEL_EARLY_LOG_END"
       tail -n 75 "$d/qemu-early-noinitrd.log"
       echo "COHORT_KERNEL_EARLY_LOG_END"
