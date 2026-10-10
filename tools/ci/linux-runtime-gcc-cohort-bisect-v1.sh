@@ -1169,7 +1169,7 @@ if [[ "${COHORT_EARLYCON_HOTFIX:-0}" == 1 ]]; then
     if [[ "${COHORT_NEXT_GCC_SWAPS:-0}" == 1 ]]; then
       baseline="$ev/trials/earlycon_fixed_only/qemu-uart-earlycon.log"
       [[ -s "$baseline" ]] || { echo "NEXT_OWNER_SWAP=ERROR no_UARТ_baseline"; exit 8; }
-      for swap_target in fs/namespace.o fs/kernfs/mount.o; do
+      for swap_target in mm/slab_common.o mm/slub.o; do
         swap_index=-1
         for ((swap_k=0;swap_k<n;swap_k++)); do
           if [[ "${objects[swap_k]}" == "$swap_target" ]]; then

@@ -822,11 +822,11 @@ jobs:
             build/linux-runtime-gcc-cohort-v1/trials/earlycon_fixed_only/qemu-registers.jsonl
             build/linux-runtime-gcc-cohort-v1/trials/earlycon_fixed_only/qemu-uart-earlycon.log
             build/linux-runtime-gcc-cohort-v1/trials/earlycon_fixed_only/uart-qmp/*
-            build/linux-runtime-gcc-cohort-v1/trials/gcc_only_fs_*/qemu-uart-earlycon.log
-            build/linux-runtime-gcc-cohort-v1/trials/gcc_only_fs_*/uart-qmp/qmp-probe.log
-            build/linux-runtime-gcc-cohort-v1/trials/gcc_only_fs_*/uart-qmp/qemu-registers.jsonl
-            build/linux-runtime-gcc-cohort-v1/trials/gcc_only_fs_*/guard.log
-            build/linux-runtime-gcc-cohort-v1/trials/gcc_only_fs_*/qmp-symbols.log
+            build/linux-runtime-gcc-cohort-v1/trials/gcc_only_mm_*/qemu-uart-earlycon.log
+            build/linux-runtime-gcc-cohort-v1/trials/gcc_only_mm_*/uart-qmp/qmp-probe.log
+            build/linux-runtime-gcc-cohort-v1/trials/gcc_only_mm_*/uart-qmp/qemu-registers.jsonl
+            build/linux-runtime-gcc-cohort-v1/trials/gcc_only_mm_*/guard.log
+            build/linux-runtime-gcc-cohort-v1/trials/gcc_only_mm_*/qmp-symbols.log
             build/linux-runtime-gcc-cohort-v1/trials/earlycon_fixed_only/runtime.log
             build/linux-runtime-gcc-cohort-v1/trials/earlycon_fixed_only/qemu-early-noinitrd.log
             build/linux-runtime-gcc-cohort-v1/trials/earlycon_fixed_only/runtime-explicit-*.log
