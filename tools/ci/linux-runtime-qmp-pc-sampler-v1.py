@@ -17,7 +17,7 @@ import subprocess
 import time
 from pathlib import Path
 
-REGISTER = re.compile(r"(?im)(?:^|[ \t])(?:x[0-9]+/)?(pc|mepc|sepc|satp|mcause|scause|sp|a0|a1|t0|t1)\s+((?:0x)?[0-9a-f]{1,16})(?=\s|$)")
+REGISTER = re.compile(r"(?im)(?:^|[ \t])(?:x[0-9]+/)?(pc|mepc|sepc|satp|mcause|scause|sp|ra|a0|a1|t0|t1)\s+((?:0x)?[0-9a-f]{1,16})(?=\s|$)")
 
 
 def selected_registers(text: str) -> dict[str, str]:
@@ -51,7 +51,8 @@ def qmp_call(reader, writer, cmd: dict) -> object:
             raise RuntimeError(f"QMP command rejected: {msg['error']}")
 
 
-def sample(image: Path, out: Path, timeout_s: int, qemu: str, samples: list[int]) -> int:
+def sample(image: Path, out: Path, timeout_s: int, qemu: str, samples: list[int],
+           cmdline: str, stack_words: int) -> int:
     out.mkdir(parents=True, exist_ok=True)
     # GitHub Actions workspaces regularly exceed Linux's 108-byte AF_UNIX
     # sun_path limit. Use a short, unique per-process path instead of
@@ -65,7 +66,7 @@ def sample(image: Path, out: Path, timeout_s: int, qemu: str, samples: list[int]
     argv = [qemu, "-M", "virt", "-cpu", "max", "-m", "512M",
             "-smp", "1", "-nographic", "-no-reboot", "-bios", "default",
             "-kernel", str(image), "-append",
-            "console=ttyS0 earlycon=sbi loglevel=8 panic=-1",
+            cmdline,
             "-qmp", f"unix:{socket_path},server=on,wait=off"]
     # Three QMP observations suffice to discriminate persistent earlycon
     # execution from post-earlycon progress without 18 seconds per trial.
@@ -117,10 +118,10 @@ def sample(image: Path, out: Path, timeout_s: int, qemu: str, samples: list[int]
                             stack_window = str(qmp_call(reader, writer, {
                                 "execute": "human-monitor-command",
                                 "arguments": {
-                                    "command-line": f"x /4gx 0x{sp_addr+16:x}",
+                                    "command-line": f"x /{stack_words}gx 0x{sp_addr+(16 if stack_words==4 else 0):x}",
                                     "cpu-index": 0
                                 }
-                            }))[:650]
+                            }))[:max(650,stack_words*105)]
                         except (ValueError, RuntimeError, OSError) as exc:
                             stack_window = f"UNAVAILABLE: {exc}"
                         print(f"COHORT_QMP_STACK at_s={second} sp={regs['sp']} "
@@ -163,6 +164,8 @@ def main() -> int:
     p.add_argument("--output-dir", type=Path)
     p.add_argument("--qemu", default="qemu-system-riscv64")
     p.add_argument("--timeout-seconds", type=int, default=25)
+    p.add_argument("--kernel-cmdline", default="console=ttyS0 earlycon=sbi loglevel=8 panic=-1")
+    p.add_argument("--stack-words", type=int, default=4)
     p.add_argument("--sample-seconds", default="1,4,8",
                    help="strictly increasing sampling times in seconds (max 110)")
     args = p.parse_args()
@@ -182,7 +185,12 @@ def main() -> int:
     if (not moments or moments[0] < 1 or moments != sorted(set(moments))
             or moments[-1] > 110 or moments[-1] > args.timeout_seconds - 4):
         p.error("sample-seconds must be increasing, unique and fit timeout")
-    return sample(args.image, args.output_dir, args.timeout_seconds, args.qemu, moments)
+    if not 4 <= args.stack_words <= 96:
+        p.error("stack-words must be 4..96")
+    if len(args.kernel_cmdline)>256 or not args.kernel_cmdline.isascii():
+        p.error("kernel-cmdline must be ASCII and at most 256 characters")
+    return sample(args.image, args.output_dir, args.timeout_seconds, args.qemu,
+                  moments, args.kernel_cmdline, args.stack_words)
 
 
 if __name__ == "__main__":

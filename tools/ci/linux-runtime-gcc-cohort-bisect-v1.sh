@@ -1139,15 +1139,25 @@ if [[ "${COHORT_EARLYCON_HOTFIX:-0}" == 1 ]]; then
       grep -E '^(CONFIG_SERIAL_8250_CONSOLE=|CONFIG_SERIAL_EARLYCON=|CONFIG_SERIAL_EARLYCON_RISCV_SBI=|# CONFIG_SERIAL_EARLYCON_RISCV_SBI)' "$config" || true
       echo "EARLYCON_UART_CONFIG=END"
       uartlog="$d/qemu-uart-earlycon.log"
-      set +e
-      timeout --signal=TERM 25s qemu-system-riscv64 \
-        -M virt -cpu max -m 512M -smp 1 -nographic -no-reboot \
-        -bios default -kernel "$d/Image" \
-        -append 'console=ttyS0 earlycon=uart8250,mmio,0x10000000,115200n8 loglevel=8 ignore_loglevel panic=-1' \
-        </dev/null >"$uartlog" 2>&1
-      urc=$?
-      set -e
-      echo "EARLYCON_UART_QEMU_RC=$urc"
+      qmp_dir="$d/uart-qmp"
+      mkdir -p "$qmp_dir"
+      cmdline='console=ttyS0 earlycon=uart8250,mmio,0x10000000,115200n8 loglevel=8 ignore_loglevel panic=-1'
+      uart_rc=0
+      python3 "$repo/tools/ci/linux-runtime-qmp-pc-sampler-v1.py" \
+        --image "$d/Image" --output-dir "$qmp_dir" \
+        --timeout-seconds 40 --sample-seconds 1,4,8,12,20,32 \
+        --stack-words 48 --kernel-cmdline "$cmdline" \
+        >"$qmp_dir/qmp-probe.log" 2>&1 || uart_rc=$?
+      cp -a "$qmp_dir/qemu-early-noinitrd.log" "$uartlog"
+      echo "EARLYCON_UART_QMP_RC=$uart_rc"
+      grep -E 'COHORT_QMP_EARLY_SAMPLE|COHORT_QMP_EARLY_COMPLETE|COHORT_QMP_EARLY=UNAVAILABLE' "$qmp_dir/qmp-probe.log" || true
+      python3 "$repo/tools/ci/linux-runtime-qmp-stack-symbols-v1.py" \
+        --jsonl "$qmp_dir/qemu-registers.jsonl" \
+        --vmlinux "$out/vmlinux" \
+        --output "$qmp_dir/stack-symbols.txt" || true
+      echo "EARLYCON_UART_STACK_SYMBOLS=BEGIN"
+      head -n 95 "$qmp_dir/stack-symbols.txt" 2>/dev/null || true
+      echo "EARLYCON_UART_STACK_SYMBOLS=END"
       if grep -aq 'Linux version 6.6.143' "$uartlog"; then
         echo "EARLYCON_UART_BANNER=OBSERVED"
       else

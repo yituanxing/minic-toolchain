@@ -814,6 +814,7 @@ jobs:
             build/linux-runtime-gcc-cohort-v1/trials/earlycon_fixed_only/qmp*.log
             build/linux-runtime-gcc-cohort-v1/trials/earlycon_fixed_only/qemu-registers.jsonl
             build/linux-runtime-gcc-cohort-v1/trials/earlycon_fixed_only/qemu-uart-earlycon.log
+            build/linux-runtime-gcc-cohort-v1/trials/earlycon_fixed_only/uart-qmp/*
             build/linux-runtime-gcc-cohort-v1/trials/earlycon_fixed_only/runtime.log
             build/linux-runtime-gcc-cohort-v1/trials/earlycon_fixed_only/qemu-early-noinitrd.log
             build/linux-runtime-gcc-cohort-v1/trials/earlycon_fixed_only/runtime-explicit-*.log
