@@ -472,22 +472,20 @@ trial() {
         >>"$d/guard.log"
       : >"$d/rebuild-success.txt"
       : >"$d/rebuild-hashes.sha256"
-      for target in "${affected[@]}"; do
-        leaf=${target##*/}
-        rm -f -- "$out/$target" "$out/$(dirname "$target")/.$leaf.cmd"
-      done
-      # Kbuild owns the exact recorded per-TU flags and source mapping,
-      # including generated/renamed C files. This invocation is strictly
-      # serial to prevent overlapping explicit-target .o/.o.d races.
-      if ! MINIC="$minic" REAL_CC=/usr/bin/riscv64-linux-gnu-gcc \
-        MINIC_KEEP_INTERMEDIATES=0 MINIC_PRESERVE_FAILURE_INPUTS=1 \
-        MINIC_KBUILD_SUCCESS_TRACE="$d/rebuild-success.txt" \
-        MINIC_KBUILD_OBJECT_HASH_TRACE="$d/rebuild-hashes.sha256" \
-        make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
-          CC="$repo/tests/external/linux/stage2_kbuild_cc.sh" -j1 \
-          "${affected[@]}" >"$d/rebuild.log" 2>&1; then
-        echo "COHORT_RESULT=INCONCLUSIVE stage=dependent_minic_recompile name=$name"
-        tail -n 65 "$d/rebuild.log"
+      # Replay exactly the pinned GCC Kbuild C compilation commands with
+      # current regenerated header bytes, but DO NOT recurse into Kbuild:
+      # a second Kbuild invocation may mutate vDSO producer inputs and
+      # regenerate vdso-offsets.h yet again.
+      if ! python3 "$repo/tools/ci/linux-runtime-kbuild-regeneration-guard-v1.py" \
+        --mode replay --out "$out" --golden-out "$gold_snapshot" \
+        --evidence "$d/generated-after-first-link.json" \
+        --selected "$d/affected-objects.txt" \
+        --wrapper "$repo/tests/external/linux/stage2_kbuild_cc.sh" \
+        --minic "$minic" --success-trace "$d/rebuild-success.txt" \
+        --digest-trace "$d/rebuild-hashes.sha256" \
+        >"$d/rebuild.log" 2>&1; then
+        echo "COHORT_RESULT=INCONCLUSIVE stage=dependent_minic_direct_replay name=$name"
+        tail -n 75 "$d/rebuild.log"
         exit 8
       fi
       python3 "$repo/tools/ci/linux-runtime-minic-route-audit-v1.py" \
@@ -540,6 +538,7 @@ PY_RISCV_DYNAMIC
         --mode stable --out "$out" --evidence "$d/generated-after-first-link.json" \
         >>"$d/guard.log" || {
           echo "COHORT_RESULT=INCONCLUSIVE stage=second_link_header_instability"
+          tail -n 40 "$d/link-reconciled.log"
           exit 8
         }
       second_finished=$(date +%s%N)

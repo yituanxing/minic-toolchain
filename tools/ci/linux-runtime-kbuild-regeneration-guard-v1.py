@@ -17,7 +17,10 @@ import os
 from pathlib import Path, PurePosixPath
 import re
 import shutil
+import shlex
+import subprocess
 import sys
+import time
 
 SCHEMA = "minic-gnu-kbuild-regeneration-guard-v1"
 CC = re.compile(r"^\s+CC\s+(\S+\.o)\s*$", re.M)
@@ -128,6 +131,86 @@ def header_impact(out: Path, evidence: Path, golden: Path,
     return changed, impacted
 
 
+
+def pinned_kbuild_cc_args(golden_out: Path, name: str) -> list[str]:
+    """Read one exact GCC C invocation from frozen Kbuild metadata.
+
+    Do not use shell eval or reconstruct compiler flags from memory: Kbuild
+    may include TU-specific -I, forced includes, ABI options and generated C
+    source spellings. Reject non-plain C compiler commands.
+    """
+    p = PurePosixPath(name)
+    cmdfile = golden_out / p.parent / ("." + p.name + ".cmd")
+    if not cmdfile.is_file() or cmdfile.is_symlink():
+        raise GuardError(f"missing frozen GCC compilation command: {name}")
+    txt = cmdfile.read_text(encoding="utf-8", errors="replace")
+    saved = [x.partition(":=")[2].strip() for x in txt.splitlines()
+             if re.match(r"^(?:savedcmd|cmd)_[^\n]+:=", x)]
+    if len(saved) != 1:
+        raise GuardError(f"non-unique GCC compilation command: {name}")
+    try:
+        args = shlex.split(saved[0])
+    except ValueError as exc:
+        raise GuardError(f"invalid GCC command quoting: {name}: {exc}") from exc
+    if not args or Path(args[0]).name != "riscv64-linux-gnu-gcc":
+        raise GuardError(f"not frozen riscv64 GCC command: {name}")
+    if "-c" not in args or "-E" in args or "-S" in args:
+        raise GuardError(f"not a C-object compilation: {name}")
+    outputs = [args[i + 1] for i, value in enumerate(args[:-1]) if value == "-o"]
+    if outputs != [name]:
+        raise GuardError(f"GCC output differs from frozen target: {name}: {outputs}")
+    sources = [arg for arg in args[1:] if arg.endswith(".c")]
+    if len(sources) != 1:
+        raise GuardError(f"not exactly one C source: {name}: {sources}")
+    if any(arg in (";", "|", "&&", "||", ">", "<") for arg in args):
+        raise GuardError(f"unsupported shell tokens in frozen GCC command: {name}")
+    return args[1:]
+
+
+def replay_affected(out: Path, golden_out: Path, selected: Path,
+                    wrapper: Path, minic: Path, success: Path, hashes: Path) -> None:
+    """Direct wrapper execution avoids Kbuild recompiling unrelated vDSO .o.
+
+    Only previously pinned GCC compile flags are used. GCC preprocessing is
+    refreshed against CURRENT regenerated offsets, then fixed MiniC -S and
+    GNU as produce the new ELF. The separate route audit proves final bytes.
+    """
+    if not wrapper.is_file() or not minic.is_file():
+        raise GuardError("missing MiniC or exact stage2 wrapper")
+    names = object_paths(selected)
+    if not 1 <= len(names) <= 16:
+        raise GuardError(f"replay must target 1..16 C objects: {len(names)}")
+    success.write_text("")
+    hashes.write_text("")
+    env = os.environ.copy()
+    env.update({
+        "MINIC": str(minic.resolve()),
+        "REAL_CC": "/usr/bin/riscv64-linux-gnu-gcc",
+        "MINIC_KEEP_INTERMEDIATES": "0",
+        "MINIC_PRESERVE_FAILURE_INPUTS": "1",
+        "MINIC_KBUILD_SUCCESS_TRACE": str(success.resolve()),
+        "MINIC_KBUILD_OBJECT_HASH_TRACE": str(hashes.resolve()),
+    })
+    for name in names:
+        args = pinned_kbuild_cc_args(golden_out, name)
+        path = out / name
+        if path.is_symlink():
+            raise GuardError(f"unsafe final candidate symlink: {name}")
+        path.unlink(missing_ok=True)
+        started = time.monotonic_ns()
+        cp = subprocess.run([str(wrapper.resolve()), *args], cwd=out, env=env,
+                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                            text=True, errors="replace")
+        elapsed = (time.monotonic_ns() - started) // 1_000_000
+        print(f"COHORT_HEADER_DIRECT_REPLAY target={name} rc={cp.returncode} "
+              f"elapsed_ms={elapsed}", flush=True)
+        if cp.returncode != 0:
+            print(cp.stdout[-12000:], file=sys.stderr)
+            raise GuardError(f"direct GNU-E MiniC-S GNU-AS replay failed: {name}")
+        if not path.is_file() or path.stat().st_size == 0:
+            raise GuardError(f"direct MiniC replay produced no object: {name}")
+
+
 def verify_stable(out: Path, evidence: Path) -> None:
     baseline = json.loads(evidence.read_text())
     if baseline.get("schema") != SCHEMA or baseline.get("headers") != generated(out):
@@ -181,13 +264,16 @@ def repair(out: Path, minic: Path, selected: Path, log: Path, evidence: Path,
 
 def main() -> int:
     p = argparse.ArgumentParser()
-    p.add_argument("--mode", choices=("snapshot", "repair", "impact", "stable"), required=True)
+    p.add_argument("--mode", choices=("snapshot", "repair", "impact", "stable", "replay"), required=True)
     p.add_argument("--out", type=Path, required=True)
     p.add_argument("--evidence", type=Path, required=True)
     p.add_argument("--minic", type=Path)
     p.add_argument("--selected", type=Path)
     p.add_argument("--link-log", type=Path)
     p.add_argument("--affected-file", type=Path)
+    p.add_argument("--wrapper", type=Path)
+    p.add_argument("--success-trace", type=Path)
+    p.add_argument("--digest-trace", type=Path)
     p.add_argument("--golden-out", type=Path,
                    help="immutable GNU Kbuild .cmd dependency reference")
     args = p.parse_args()
@@ -206,6 +292,14 @@ def main() -> int:
         elif args.mode == "stable":
             verify_stable(args.out, args.evidence)
             print("COHORT_KBUILD_HEADERS=STABLE")
+        elif args.mode == "replay":
+            if not all((args.golden_out, args.selected, args.wrapper, args.minic,
+                        args.success_trace, args.digest_trace)):
+                raise GuardError("replay requires frozen gcc commands and all MiniC attestations")
+            replay_affected(args.out, args.golden_out, args.selected,
+                            args.wrapper, args.minic,
+                            args.success_trace, args.digest_trace)
+            print("COHORT_KBUILD_HEADER_DIRECT_REPLAY=PASS")
         else:
             if not all((args.minic, args.selected, args.link_log)):
                 raise GuardError("repair requires --minic, --selected, --link-log")

@@ -39,7 +39,7 @@ class RegenTests(unittest.TestCase):
             p = Path(name)
             dep = self.golden / p.parent / ("." + p.name + ".cmd")
             dep.parent.mkdir(parents=True, exist_ok=True)
-            dep.write_text(f"savedcmd_{name} := riscv64-linux-gnu-gcc -c source.c\n"
+            dep.write_text(f"savedcmd_{name} := riscv64-linux-gnu-gcc -c -o {name} source.c\n"
                            f"source_{name} := source.c\n"
                            f"deps_{name} := include/linux/compiler.h include/generated/vdso-offsets.h\n")
         self.log = self.root / "link.log"
@@ -112,6 +112,23 @@ class RegenTests(unittest.TestCase):
         with self.assertRaisesRegex(mod.GuardError, "unsupported generated-header"):
             mod.header_impact(self.out, self.snap, self.golden, self.selection,
                               self.root / "affected.txt")
+
+    def test_frozen_gcc_compile_invocation_replay_parser(self):
+        one = self.owners[0]
+        args = mod.pinned_kbuild_cc_args(self.golden, one)
+        self.assertEqual(args, ["-c", "-o", one, "source.c"])
+        p = self.golden / "arch/riscv/kernel/.alternative.o.cmd"
+        p.write_text("savedcmd_arch/riscv/kernel/alternative.o := "
+                     "riscv64-linux-gnu-gcc -I ./include -c "
+                     "-o arch/riscv/kernel/alternative.o "
+                     "/frozen/linux/arch/riscv/kernel/alternative.c\n")
+        args = mod.pinned_kbuild_cc_args(self.golden, one)
+        self.assertEqual(args[-4:], ["-c", "-o", one,
+                                     "/frozen/linux/arch/riscv/kernel/alternative.c"])
+        p.write_text("savedcmd_foo := /usr/bin/gcc -c -o "
+                     "arch/riscv/kernel/alternative.o source.c\n")
+        with self.assertRaisesRegex(mod.GuardError, "not frozen"):
+            mod.pinned_kbuild_cc_args(self.golden, one)
 
     def test_unexplained_gcc_or_other_overwrite_is_rejected(self):
         self.log.write_text("  CC      unrelated/source.o\n")
