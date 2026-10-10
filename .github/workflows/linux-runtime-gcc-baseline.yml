@@ -785,6 +785,13 @@ jobs:
             "$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain" \
             "$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-v1/compiler"
 
+      - name: Validate QMP sampler before expensive GNU linking
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 tools/ci/linux-runtime-qmp-pc-sampler-v1.py --self-test
+          python3 -m py_compile tools/ci/linux-runtime-qmp-pc-sampler-v1.py tools/ci/linux-runtime-qmp-stack-symbols-v1.py
+
       - name: Recompile earlycon.o only, GNU link and compare QEMU frontier
         shell: bash
         run: |

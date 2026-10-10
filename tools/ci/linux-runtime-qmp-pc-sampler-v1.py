@@ -31,7 +31,7 @@ def self_test() -> None:
                    "sepc": "0x0000000080201234", "satp": "0"}
     kernel_registers = "x1/ra  ffffffff81234567 x2/sp  ffffffff8799ff00 x10/a0 0000000000000020"
     assert selected_registers(kernel_registers) == {
-        "sp": "ffffffff8799ff00", "a0": "0000000000000020"
+        "ra": "ffffffff81234567", "sp": "ffffffff8799ff00", "a0": "0000000000000020"
     }
     assert "zero" not in selected_registers(kernel_registers)
     print("LINUX_RUNTIME_QMP_SAMPLER_SELFTEST=PASS")
