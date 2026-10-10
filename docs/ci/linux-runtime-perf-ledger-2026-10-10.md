@@ -54,3 +54,17 @@ Interpretation: recompiling only the four affected C owners against the newly ge
 - Keep build correctness, MiniC provenance, ABI validity, generated-header stability, and real QEMU verdict as separate gates. A successful GNU link alone is **not** a kernel boot pass.
 
 Future matched performance comparison: fix MiniC SHA/config/input list and runner class, collect separate GNU-E, MiniC-S, GNU-as, link and QEMU timings on both baseline and candidate, then optimize the profiled hot path while keeping runtime tests green.
+
+## Confirmed early boot regression and oversized candidate Image
+
+Independent real CI evidence:
+
+- [#38034992904](https://github.com/yituanxing/minic-toolchain/actions/runs/38034992904) measured **MiniC Image 215,502,848 bytes** versus **pure-GCC Image 22,033,920 bytes**, exact same Linux 6.6.143 config and golden build context. **9.781x** larger binary.
+- Candidate `vmlinux` allocations: `.text=120,816,528` bytes, `.rodata=85,498,288` bytes; `.init.text=2,996,636` bytes. Not merely padding or debug symbols.
+- The 2,064 C-owner intermediate `.o` bytes sum to **462,856,536 MiniC** versus **66,379,160 GCC** (object-file sizes, not allocated section sizes).
+- QEMU 8.x RISC-V's pinned initramfs at **0x88200000** overlaps a flat MiniC kernel loaded from **0x80200000** to roughly **0x8cf85000**. This is a host ROM-loader rejection, **not itself a kernel crash**.
+- Same MiniC Image booted **without initramfs** for 25 seconds: only OpenSBI firmware output, **no Linux banner**. The **same no-initramfs QEMU command** with golden GNU Image **did reach `Linux version 6.6.143`**, so there is a separate early-boot regression/suspected very slow or stalled guest path beyond the initramfs-address problem. A 25-second no-banner timeout is not a unique-object fault proof.
+- The full GNU/MiniC ABI and 40 known GNU-derived ELF transforms remained authenticated; the failure frontier moved beyond original vDSO header changes and object provenance to **real QEMU early-execution diagnosis**.
+- `#38035372863` top symbol diagnostics show largest text symbol `sock_ops_convert_ctx_access` **1,101,458 bytes**, `hidinput_configure_usage` **359,082 bytes**, `___bpf_prog_run` **288,374 bytes**. Largest object-file deltas: `kernel/bpf/verifier.o` **+4,248,248 bytes**, `net/core/filter.o` **+3,853,768**, `net/core/dev.o` **+2,216,976**, and `lib/zstd/compress/zstd_lazy.o` **+2,176,016**. These are optimization hot spots, **not proven early-boot culprits**.
+
+**Interpretation and priority:** first resolve the MiniC early boot PC/frontier using unchanged candidate bytes and independent GNU comparison. Meanwhile preserve the precise per-stage timing and object/section growth metrics; C-codegen amplification is a real separate issue worth tackling once first-fault isolation identifies the relevant owners. Never mask this by making QEMU ignore overlapping ROM ranges.
