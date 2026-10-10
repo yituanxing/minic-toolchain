@@ -14,7 +14,15 @@ exec > >(tee "$ev/cohort.log") 2>&1
 trap 'rc=$?; echo "COHORT_UNHANDLED=FAIL rc=$rc line=$LINENO cmd=$BASH_COMMAND" >&2' ERR
 mapfile -t objects < <(grep -vE '^[[:space:]]*(#|$)' "$objects_file")
 n=${#objects[@]}
-(( n>=1000 && n<=3000 )) || { echo "COHORT_ERROR full_C_objects=$n; refuse partial-kernel verdict"; exit 2; }
+# The 384-object opt-in is diagnostic only, not a whole-C-universe verdict.
+if ((n==384)) && [[ "${COHORT_ALLOW_DIAGNOSTIC_384:-0}" == 1 ]]; then
+  cohort_scope=DIAGNOSTIC_384
+elif ((n>=1000 && n<=3000)); then
+  cohort_scope=FULL_C_UNIVERSE
+else
+  echo "COHORT_ERROR full_C_objects=$n; refuse unlabelled partial-kernel verdict"; exit 2
+fi
+echo "COHORT_SCOPE=$cohort_scope objects=$n"
 expected_cfg=$(sed -n 's/^config_sha256=//p' "$prov/gcc-baseline.txt")
 actual_cfg=$(sha256sum "$out/.config" | cut -d' ' -f1)
 [[ "$expected_cfg" == "$actual_cfg" && -n "$expected_cfg" ]] || {
@@ -247,6 +255,7 @@ trial() {
     # when available; no GitHub cache/network round trip here.
     rm -rf -- "$out"
     cp -a --reflink=auto "$gold_snapshot" "$out"
+    : >"$d/selected-objects.txt"
     for ((i=0;i<n;i++)); do
       selected=0
       case "$mode" in
@@ -258,8 +267,15 @@ trial() {
       if ((selected)); then
         cp -a "$ev/minic/${objects[i]}" "$out/${objects[i]}"
         touch "$out/${objects[i]}"
+        printf '%s\n' "${objects[i]}" >>"$d/selected-objects.txt"
       fi
     done
+    # Changing a candidate vDSO object may cause GNU Kbuild to regenerate
+    # headers and overwrite a selected MiniC object with GCC. Snapshot
+    # CONTENT identities before linking; timestamps alone are not trusted.
+    python3 "$repo/tools/ci/linux-runtime-kbuild-regeneration-guard-v1.py" \
+      --mode snapshot --out "$out" --evidence "$d/generated-before.json" \
+      >"$d/guard.log"
     if ! make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
       -j4 Image >"$d/link.log" 2>&1; then
       echo "COHORT_LINK=FAIL name=$name count=$count"
@@ -267,6 +283,28 @@ trial() {
       printf '%s\t%s\t%s\t%s\n' "$name" "$count" LINK_FAIL - >>"$ev/results.tsv"
       TRIAL_VERDICT=LINK_FAIL
       return 0
+    fi
+    # A link exit code 0 does not prove all selected objects remained MiniC.
+    # If Kbuild regenerated a selected object, restore it ONLY when the
+    # generated input headers are byte-identical, with an actual Kbuild CC
+    # record proving the overwrite. Relink once, then audit all identities.
+    repair_result=$(python3 "$repo/tools/ci/linux-runtime-kbuild-regeneration-guard-v1.py" \
+      --mode repair --out "$out" --evidence "$d/generated-before.json" \
+      --selected "$d/selected-objects.txt" --minic "$ev/minic" \
+      --link-log "$d/link.log") || {
+        echo "COHORT_RESULT=INCONCLUSIVE stage=generated_header_changed name=$name"
+        exit 8
+      }
+    printf '%s\n' "$repair_result" | tee -a "$d/guard.log"
+    if [[ "$repair_result" == *"COHORT_KBUILD_REPAIR=APPLIED"* ]]; then
+      if ! make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
+        -j4 Image >"$d/link-repaired.log" 2>&1; then
+        echo "COHORT_LINK=FAIL name=$name stage=guarded_second_link"
+        tail -n 70 "$d/link-repaired.log"
+        TRIAL_VERDICT=LINK_FAIL
+        return 0
+      fi
+      echo "COHORT_LINK=GUARDED_RELINK name=$name reason=selected_minic_replaced_by_kbuild"
     fi
     last_selection="$selection"
   else
@@ -375,7 +413,7 @@ case "$TRIAL_VERDICT" in
     trial full_all_verified "$n" full
     case "$TRIAL_VERDICT" in
       PASS)
-        echo "COHORT_RESULT=PASS all_minic_c_objects=$n same_config=true"
+        echo "COHORT_RESULT=PASS candidate_objects=$n scope=$cohort_scope same_config=true"
         exit 0 ;;
       FAIL|LINK_FAIL)
         echo "COHORT_RESULT=FAIL stage=full_or_p1 no_monotone_prefix_claim"

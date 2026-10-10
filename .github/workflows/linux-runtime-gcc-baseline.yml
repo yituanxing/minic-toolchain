@@ -197,7 +197,7 @@ jobs:
   gcc-single:
     # Reuse the EXISTING opt-in isolation job. ONE runner handles the entire
     # batch compile, two cohorts and any QEMU prefix bisection.
-    if: github.event_name == 'push' && contains(github.event.head_commit.message, '[linux-runtime-gcc-cohort]')
+    if: github.event_name == 'push' && (contains(github.event.head_commit.message, '[linux-runtime-gcc-cohort]') || contains(github.event.head_commit.message, '[linux-runtime-gcc-384]'))
     runs-on: ubuntu-24.04
     timeout-minutes: 105
     steps:
@@ -255,6 +255,19 @@ jobs:
             --output "$ev/full-objects.txt" \
             --excluded "$ev/non-c-objects.tsv" \
             --min-c-objects 1200
+          # Rapid diagnostic: exactly 384 objects, not the whole C universe.
+          if [[ "${{ contains(github.event.head_commit.message, '[linux-runtime-gcc-384]') }}" == true ]]; then
+            python3 - "$ev/full-objects.txt" <<'PY_DIAGNOSTIC'
+          from pathlib import Path
+          import sys
+          p=Path(sys.argv[1])
+          objects=[x for x in p.read_text().splitlines() if x and not x.startswith("#")]
+          assert len(objects)>=384
+          p.write_text("# DIAGNOSTIC_384_FROM_PINNED_GNU_FULL_C_UNIVERSE\n"
+                       + "\n".join(objects[:384]) + "\n")
+          print("COHORT_SCOPE=DIAGNOSTIC_384 objects=384")
+          PY_DIAGNOSTIC
+          fi
 
       - name: Compute pinned MiniC candidate object cache identity
         id: candidate_id
@@ -293,6 +306,7 @@ jobs:
           mkdir -p "$ev"
           bash tools/ci/linux-runtime-build-minic-profile-v1.sh \
             "$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain" "$ev/compiler"
+          export COHORT_ALLOW_DIAGNOSTIC_384=${{ contains(github.event.head_commit.message, '[linux-runtime-gcc-384]') && '1' || '0' }}
           bash tools/ci/linux-runtime-gcc-cohort-bisect-v1.sh \
             "$work/linux-6.6.143" "$work/out" \
             "$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain/bin/minic" \
@@ -307,11 +321,12 @@ jobs:
           set -Eeuo pipefail
           ev="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-v1"
           if test -s "$ev/full-objects.txt"; then
-            count=$(grep -cE '^[^#[:space:]]+\\.o$' "$ev/full-objects.txt" || true)
+            count=$(grep -cE '^[^#[:space:]]+\.o$' "$ev/full-objects.txt" || true)
           else
             count=0
           fi
-          if test "$count" -ge 1200 && \
+          if test "$count" -ge 384 && \
+             grep -Fq "COHORT_COMPILE=PASS objects=$count" "$ev/cohort.log" && \
              test -s "$ev/minic-manifest.sha256" && \
              test -s "$ev/minic-identity.txt" && \
              test -s "$ev/cohort.log" && \
@@ -356,6 +371,10 @@ jobs:
             build/linux-runtime-gcc-cohort-v1/minic-identity.txt
             build/linux-runtime-gcc-cohort-v1/frontier.txt
             build/linux-runtime-gcc-cohort-v1/trials/*/link.log
+            build/linux-runtime-gcc-cohort-v1/trials/*/link-repaired.log
+            build/linux-runtime-gcc-cohort-v1/trials/*/guard.log
+            build/linux-runtime-gcc-cohort-v1/trials/*/generated-before.json
+            build/linux-runtime-gcc-cohort-v1/trials/*/selected-objects.txt
             build/linux-runtime-gcc-cohort-v1/trials/*/runtime.log
             build/linux-runtime-gcc-cohort-v1/trials/*/runtime-p1.log
             build/linux-runtime-gcc-cohort-v1/trials/*/runtime-p1-python.log
