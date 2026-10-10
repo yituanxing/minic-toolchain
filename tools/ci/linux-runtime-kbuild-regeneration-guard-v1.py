@@ -211,6 +211,71 @@ def replay_affected(out: Path, golden_out: Path, selected: Path,
             raise GuardError(f"direct MiniC replay produced no object: {name}")
 
 
+
+def capture_exact_earlycon(out: Path, golden_out: Path, minic: Path,
+                           destination: Path) -> None:
+    """Capture the GNU preprocessed Linux TU and same-binary MiniC assembly.
+
+    No object is replaced. Do not run Kbuild, edit the golden snapshot, or
+    mutate any certified MiniC/GCC candidate. This supports identifying which
+    exact preprocessed expression/CFG differs from upstream earlycon.c.
+    """
+    name = "drivers/tty/serial/earlycon.o"
+    args = pinned_kbuild_cc_args(golden_out, name)
+    clean = []
+    index = 0
+    while index < len(args):
+        item = args[index]
+        if item in ("-c", "-MD", "-MMD", "-MP") or item.startswith(
+                ("-Wp,-MMD,", "-Wp,-MD,")):
+            index += 1
+            continue
+        if item in ("-o", "-MF", "-MT", "-MQ"):
+            if index + 1 >= len(args):
+                raise GuardError(f"truncated option in pinned earlycon gcc flags: {item}")
+            index += 2
+            continue
+        clean.append(item)
+        index += 1
+    if not any(x.endswith("earlycon.c") for x in clean):
+        raise GuardError("pinned earlycon command has no earlycon.c input")
+    destination.mkdir(parents=True, exist_ok=True)
+    dest_i = destination / "earlycon-exact.i"
+    dest_s = destination / "earlycon-minic.s"
+    commands = [
+        ["/usr/bin/riscv64-linux-gnu-gcc", "-E", "-P", *clean, "-o", str(dest_i)],
+        [str(minic.resolve()), "-S", str(dest_i), "-o", str(dest_s)],
+    ]
+    for index, cmd in enumerate(commands):
+        begin = time.monotonic_ns()
+        call = subprocess.run(cmd, cwd=out, capture_output=True, text=True,
+                              errors="replace", timeout=120)
+        (destination / ("gcc-E.log" if index == 0 else "minic-S.log")).write_text(
+            call.stdout[-16000:] + call.stderr[-16000:])
+        print(f"COHORT_EARLYCON_CAPTURE_STAGE={'gnu_E' if index==0 else 'minic_S'} "
+              f"elapsed_ms={(time.monotonic_ns()-begin)//1000000} rc={call.returncode}",
+              flush=True)
+        if call.returncode:
+            raise GuardError(f"exact earlycon source capture phase {index} failed: "
+                             + call.stderr[-600:])
+    if not (dest_i.is_file() and dest_s.is_file()):
+        raise GuardError("earlycon preprocessed source or assembly missing")
+    if dest_i.stat().st_size > 48 * 1024 * 1024:
+        raise GuardError("earlycon input too large for bounded artifact")
+    if b"setup_earlycon" not in dest_i.read_bytes():
+        raise GuardError("exact GNU-preprocessed source lacks setup_earlycon")
+    manifest = (f"schema=linux-earlycon-source-capture-v1\n"
+                f"gnu_i_sha256={sha(dest_i)}\n"
+                f"minic_s_sha256={sha(dest_s)}\n"
+                f"gnu_i_bytes={dest_i.stat().st_size}\n"
+                f"minic_s_bytes={dest_s.stat().st_size}\n"
+                f"minic_sha256={sha(minic)}\n")
+    (destination / "source-identity.txt").write_text(manifest)
+    print(f"COHORT_EARLYCON_CAPTURE=PASS gcc_i_bytes={dest_i.stat().st_size} "
+          f"minic_s_bytes={dest_s.stat().st_size} "
+          f"gcc_i_sha256={sha(dest_i)} minic_s_sha256={sha(dest_s)}")
+
+
 def verify_stable(out: Path, evidence: Path) -> None:
     baseline = json.loads(evidence.read_text())
     if baseline.get("schema") != SCHEMA or baseline.get("headers") != generated(out):
@@ -264,7 +329,7 @@ def repair(out: Path, minic: Path, selected: Path, log: Path, evidence: Path,
 
 def main() -> int:
     p = argparse.ArgumentParser()
-    p.add_argument("--mode", choices=("snapshot", "repair", "impact", "stable", "replay"), required=True)
+    p.add_argument("--mode", choices=("snapshot", "repair", "impact", "stable", "replay", "capture"), required=True)
     p.add_argument("--out", type=Path, required=True)
     p.add_argument("--evidence", type=Path, required=True)
     p.add_argument("--minic", type=Path)
@@ -292,6 +357,10 @@ def main() -> int:
         elif args.mode == "stable":
             verify_stable(args.out, args.evidence)
             print("COHORT_KBUILD_HEADERS=STABLE")
+        elif args.mode == "capture":
+            if args.golden_out is None or args.minic is None:
+                raise GuardError("capture requires pinned --golden-out and --minic")
+            capture_exact_earlycon(args.out, args.golden_out, args.minic, args.evidence)
         elif args.mode == "replay":
             if not all((args.golden_out, args.selected, args.wrapper, args.minic,
                         args.success_trace, args.digest_trace)):

@@ -400,6 +400,7 @@ jobs:
             build/linux-runtime-gcc-cohort-v1/trials/*/qemu-registers.jsonl
             build/linux-runtime-gcc-cohort-v1/trials/*/qmp-probe.log
             build/linux-runtime-gcc-cohort-v1/trials/*/qmp-symbols.log
+            build/linux-runtime-gcc-cohort-v1/trials/*/earlycon-source/*
             build/linux-runtime-gcc-cohort-v1/trials/*/runtime-p1.log
             build/linux-runtime-gcc-cohort-v1/trials/*/runtime-p1-python.log
             build/linux-runtime-gcc-cohort-v1/trials/*/qemu-p1/*.log

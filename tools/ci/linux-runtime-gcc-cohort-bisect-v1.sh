@@ -391,6 +391,18 @@ if [[ "${COHORT_ACTION:-all}" == compile ]]; then
   echo "COHORT_PRODUCE_ONLY=PASS objects=$n candidate_identity=$cache_contract"
   exit 0
 fi
+# Before overlaying 2064 objects, capture just the verified GNU
+# preprocessor input for the known earlycon runtime regression and the
+# SAME MiniC binary's assembly. This does not recompile any candidate or
+# change the golden Kbuild fixture. Evidence goes into the EXISTING artifact.
+if [[ "$cohort_scope" == FULL_C_UNIVERSE ]]; then
+  earlycon_capture="$ev/trials/full_all/earlycon-source"
+  if ! python3 "$repo/tools/ci/linux-runtime-kbuild-regeneration-guard-v1.py" \
+       --mode capture --out "$out" --golden-out "$gold_snapshot" \
+       --minic "$minic" --evidence "$earlycon_capture"; then
+    echo "COHORT_EARLYCON_CAPTURE=INCONCLUSIVE no_candidate_or_oracle_changed=true"
+  fi
+fi
 # Build the initramfs just once; it stays fixed throughout all QEMU trials.
 BUILD_DIR="$ev/initramfs" OUTPUT_INITRAMFS="$ev/runtime-initramfs.cpio.gz" \
   RISCV_CC=riscv64-linux-gnu-gcc \
