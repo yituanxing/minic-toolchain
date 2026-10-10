@@ -6,7 +6,7 @@ static int table[3] = {1, 3, 5};
 
 int earlycon_probe_not_found(int wanted)
 {
-    bool second_pass = true;
+    bool second_pass = 1;
     int i;
 again:
     for (i = 0; i < 3; ++i) {
@@ -18,7 +18,7 @@ again:
             return 100 + scan_count;
     }
     if (second_pass) {
-        second_pass = false;
+        second_pass = 0;
         goto again;
     }
     return scan_count;
