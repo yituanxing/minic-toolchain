@@ -13,6 +13,12 @@ cat >"$work/start.s" <<'RISCV_START'
 .section .text.start,"ax",@progbits
 .globl _start
 _start:
+    # Freestanding RISC-V _start must initialize gp: GCC -O0 legitimately
+    # addresses .sdata/.sbss globals through gp-relative relaxation.
+    .option push
+    .option norelax
+    la gp, __global_pointer$
+    .option pop
     call earlycon_probe_entry
     li a7, 93
     ecall
