@@ -14,7 +14,12 @@ import signal
 import subprocess
 import time
 
-TARGETS = ("mnt_init", "alloc_large_system_hash", "kernfs_init", "sysfs_init")
+TARGETS = (
+    "mnt_init", "alloc_large_system_hash", "kernfs_init", "sysfs_init",
+    "kernfs_create_root", "register_filesystem", "kobject_create_and_add",
+    "shmem_init", "init_rootfs", "init_mount_tree", "vfs_caches_init",
+    "rest_init",
+)
 CMDLINE = ("console=ttyS0 earlycon=uart8250,mmio,0x10000000,115200n8 "
            "loglevel=8 ignore_loglevel panic=-1")
 
