@@ -761,13 +761,17 @@ PY_LARGEST_TUS
     echo "COHORT_IMAGE=UNCHANGED name=$name"
   else
     qemu_started=$(date +%s%N)
-    set +e
-    LINUX_IMAGE="$d/Image" INITRAMFS="$ev/runtime-initramfs.cpio.gz" \
-      BUILD_DIR="$d/qemu" LINUX_RELEASE=6.6.143 \
-      LINUX_RUNTIME_PROFILE="$profile" QEMU_TIMEOUT_SECONDS=45 \
-      bash "$repo/tests/external/linux/runtime_boot.sh" >"$d/runtime.log" 2>&1
-    rc=$?
-    set -e
+    # An expected QEMU ROM-overlap diagnostic is nonzero, but it must NOT
+    # fire the top-level ERR trap ("COHORT_UNHANDLED=FAIL"). The verdict is
+    # classified explicitly below, keeping genuine unexpected shell errors.
+    if LINUX_IMAGE="$d/Image" INITRAMFS="$ev/runtime-initramfs.cpio.gz" \
+       BUILD_DIR="$d/qemu" LINUX_RELEASE=6.6.143 \
+       LINUX_RUNTIME_PROFILE="$profile" QEMU_TIMEOUT_SECONDS=45 \
+       bash "$repo/tests/external/linux/runtime_boot.sh" >"$d/runtime.log" 2>&1; then
+      rc=0
+    else
+      rc=$?
+    fi
     qemu_finished=$(date +%s%N)
     echo "COHORT_TIMING trial=$name stage=qemu_$profile elapsed_ms=$(((qemu_finished-qemu_started)/1000000)) rc=$rc"
     printf 'timing_%s_qemu_%s_ms=%s\n' "$name" "$profile" "$(((qemu_finished-qemu_started)/1000000))" >>"$ev/identity.txt"
