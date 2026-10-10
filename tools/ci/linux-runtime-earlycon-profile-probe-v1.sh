@@ -1,0 +1,101 @@
+#!/usr/bin/env bash
+# Opt-in side-by-side regression: does the runtime 39-patch MiniC profile
+# change earlycon CFG compared with the SAME-COMMIT unpatched compiler?
+# Runs in the existing focused T1 job, never a new Workflow or branch.
+set -Eeuo pipefail
+: "${BASELINE_MINIC:?}"
+: "${PROBE_DIR:?}"
+: "${GITHUB_SHA:?}"
+: "${GH_TOKEN:?}"
+repo_root=$(git rev-parse --show-toplevel)
+mkdir -p "$PROBE_DIR"
+abs_probe=$(realpath "$PROBE_DIR")
+temp_worktree="${RUNNER_TEMP:-/tmp}/minic-earlycon-probe-${GITHUB_RUN_ID:-$$}"
+cleanup() {
+  git -C "$repo_root" worktree remove --force "$temp_worktree" 2>/dev/null || true
+}
+trap cleanup EXIT
+git -C "$repo_root" worktree add --detach "$temp_worktree" "$GITHUB_SHA"
+# The Linux runtime candidate profile modifies only the TEMP worktree.
+(
+  cd "$temp_worktree"
+  bash tools/ci/linux-runtime-build-minic-profile-v1.sh \
+    "$abs_probe/profile-build" "$abs_probe/profile-evidence" \
+      >"$abs_probe/profile-build.log" 2>&1
+)
+profile_minic="$abs_probe/profile-build/bin/minic"
+test -x "$profile_minic"
+printf 'EARLYCON_PROFILE_HASH baseline=%s runtime=%s\n' \
+  "$(sha256sum "$BASELINE_MINIC" | cut -d' ' -f1)" \
+  "$(sha256sum "$profile_minic" | cut -d' ' -f1)"
+# These exact two probes used to pass under unpatched MiniC. Run them again
+# under the production runtime patch stack; a failing result localizes the
+# cause to the patch stack without touching any certified 2064 .o inputs.
+profile_test_rc=0
+(
+  cd "$temp_worktree"
+  MINIC="$profile_minic" BUILD_DIR="$abs_probe/rv64" \
+  RISCV_CC=riscv64-linux-gnu-gcc RISCV_LD=riscv64-linux-gnu-ld \
+  QEMU_RISCV64=qemu-riscv64 \
+    bash tests/compiler/c0/run-earlycon-two-pass-rv64.sh
+) >"$abs_probe/profile-two-pass.log" 2>&1 || profile_test_rc=$?
+grep -E 'EARLYCON_(TWO_PASS|TABLE)_' "$abs_probe/profile-two-pass.log" || true
+echo "EARLYCON_PROFILE_MINIMAL_RESULT rc=$profile_test_rc"
+
+# The precise source is already in a certified October 10 receiver artifact.
+# It is read-only, pinned by real GNU-E SHA below, and ONLY used as an input to
+# compare compiler-generated source-level control flow. Never upload or cache
+# it as a golden object or pretend it is a boot oracle.
+artifact_run=38046231186
+artifact_name="sharded-gnu-minic-QEMU-8075e40ce8c5c1da10a63ad44fa92891fafd76e2"
+gh run download "$artifact_run" \
+   -R yituanxing/minic-toolchain -n "$artifact_name" -D "$abs_probe/pinned"
+input="$abs_probe/pinned/trials/full_all/earlycon-source/earlycon-exact.i"
+test -s "$input"
+expected=bd9dd3c9e390690ebb6d0f943b4246f9b25919b7dd4e539adda779d3c84be122
+observed=$(sha256sum "$input" | cut -d' ' -f1)
+[[ "$observed" == "$expected" ]] || {
+  echo "EARLYCON_PROFILE_INPUT=INCONCLUSIVE digest_changed=$observed"; exit 9;
+}
+echo "EARLYCON_PROFILE_INPUT=PINNED sha256=$observed"
+for variant in baseline runtime; do
+  if [[ "$variant" == baseline ]]; then compiler="$BASELINE_MINIC"; else compiler="$profile_minic"; fi
+  started=$(date +%s%N)
+  compile_rc=0
+  "$compiler" -S "$input" -o "$abs_probe/$variant.s" \
+     >"$abs_probe/$variant.out" 2>"$abs_probe/$variant.err" || compile_rc=$?
+  ended=$(date +%s%N)
+  echo "EARLYCON_PROFILE_VARIANT name=$variant rc=$compile_rc elapsed_ms=$(((ended-started)/1000000))"
+  if ((compile_rc)); then
+    tail -n 15 "$abs_probe/$variant.err"
+  fi
+done
+python3 - "$abs_probe" <<'PY_ANALYZE'
+from pathlib import Path
+import hashlib,re,sys
+p=Path(sys.argv[1])
+for kind in ("baseline","runtime"):
+    f=p/(kind+".s")
+    if not f.is_file() or f.stat().st_size==0:
+        print(f"EARLYCON_PROFILE_CROSSCHECK=UNAVAILABLE kind={kind}")
+        continue
+    asm=f.read_text(errors="replace")
+    start=asm.find("\nsetup_earlycon:\n")
+    if start<0:
+        print(f"EARLYCON_PROFILE_CROSSCHECK=NO_SETUP_SYMBOL kind={kind}")
+        continue
+    end=asm.find(".size setup_earlycon,",start)
+    setup=asm[start:end] if end>=0 else asm[start:start+40000]
+    bb=re.search(r"(?m)^\.Lsetup_earlycon_core_bb10:\s*$",setup)
+    branch=setup[bb.end():bb.end()+800] if bb else ""
+    (p/(kind+"-setup-earlycon.s")).write_text(setup)
+    print("EARLYCON_PROFILE_CFG kind=%s setup_bytes=%d bb10=%s "
+          "conditional_branches=%d return_negative_two=%s sha256=%s" %
+          (kind,len(setup),bool(bb),
+           len(re.findall(r"\b(?:beqz|bnez|beq|bne|blt|bge|bltu|bgeu)\b",setup)),
+           "-2" in setup,
+           hashlib.sha256(setup.encode()).hexdigest()))
+    if bb:
+        print(f"EARLYCON_PROFILE_BB10 kind={kind} first_180={branch[:180]!r}")
+PY_ANALYZE
+echo "EARLYCON_PROFILE_PROBE=FINISHED runtime_test_rc=$profile_test_rc exact_i_hash=$observed"

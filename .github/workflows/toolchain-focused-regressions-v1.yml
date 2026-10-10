@@ -37,6 +37,7 @@ on:
 
 permissions:
   contents: read
+  actions: read # only opt-in exact earlycon artifact comparison
 
 concurrency:
   group: toolchain-focused-regressions-${{ github.ref }}-${{ github.event_name == 'workflow_dispatch' && inputs.mode || 'push' }}
@@ -104,6 +105,21 @@ jobs:
             sh tests/driver/run-section-gc-v0.sh
 
           echo "MINIC_RV64_FOCUSED_REGRESSIONS_V1=PASS inline-emission=PASS constant-if=PASS section-gc=PASS"
+
+      # No new workflow or runner: only opt-in, on the exact earlycon
+      # investigation. Keep baseline MiniC, runtime 39-patch MiniC and their
+      # evidence completely separate from 2064 authenticated candidate objects.
+      - name: Profile-only exact earlycon differential against frozen GNU input
+        if: github.event_name == 'push' && contains(github.event.head_commit.message, '[earlycon-profile-probe]')
+        continue-on-error: true
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BASELINE_MINIC: ${{ github.workspace }}/build/toolchain-focused-t1-v2/bin/minic
+          PROBE_DIR: ${{ github.workspace }}/build/rv64-focused-v1/earlycon-profile-diff
+        run: |
+          set -Eeuo pipefail
+          bash tools/ci/linux-runtime-earlycon-profile-probe-v1.sh
 
       - name: Validate MiniAR archive contracts
         id: ar_archive
