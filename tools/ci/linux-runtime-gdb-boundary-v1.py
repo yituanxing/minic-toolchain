@@ -18,7 +18,10 @@ TARGETS = (
     "mnt_init", "alloc_large_system_hash", "kernfs_init", "sysfs_init",
     "kernfs_create_root", "register_filesystem", "kobject_create_and_add",
     "shmem_init", "init_rootfs", "init_mount_tree", "vfs_caches_init",
-    "rest_init",
+    "rest_init", "fs_validate_description", "find_filesystem",
+    "kern_mount", "vfs_kern_mount", "fs_context_for_mount",
+    "fc_mount", "vfs_get_tree", "shmem_get_tree",
+    "shmem_fill_super", "get_tree_nodev", "vfs_create_mount",
 )
 CMDLINE = ("console=ttyS0 earlycon=uart8250,mmio,0x10000000,115200n8 "
            "loglevel=8 ignore_loglevel panic=-1")
@@ -77,7 +80,7 @@ def main():
             f"hbreak *0x{symbols[key]:x}",
             "commands",
             "silent",
-            f'printf "GDB_BOUNDARY_HIT function={key} pc=0x%lx\\n", $pc',
+            f'printf "GDB_BOUNDARY_HIT function={key} pc=0x%lx ra=0x%lx a0=0x%lx\\n", $pc, $ra, $a0',
             "continue",
             "end",
         ])
