@@ -19,6 +19,10 @@ if ((n==384)) && [[ "${COHORT_ALLOW_DIAGNOSTIC_384:-0}" == 1 ]]; then
   cohort_scope=DIAGNOSTIC_384
 elif ((n>=1000 && n<=3000)); then
   cohort_scope=FULL_C_UNIVERSE
+elif [[ "${COHORT_ALLOW_SHARD:-0}" == 1 && "${COHORT_ACTION:-all}" == compile ]] && ((n>=1 && n<1000)); then
+  # Shards are compile-only. They do not claim standalone Linux runtime PASS.
+  # The consumer must prove the exact 7-way union and run normal GNU/QEMU.
+  cohort_scope=SHARD_COMPILE_ONLY
 else
   echo "COHORT_ERROR full_C_objects=$n; refuse unlabelled partial-kernel verdict"; exit 2
 fi

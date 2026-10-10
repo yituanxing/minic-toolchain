@@ -404,3 +404,290 @@ jobs:
             build/linux-runtime-gcc-cohort-v1/compiler/toolchain-timing.txt
           if-no-files-found: warn
           retention-days: 7
+
+  # Explicit, optional 7-runner producer for the same pure-GCC C universe.
+  # Do not use this lane for everyday single-TU debugging.
+  gcc-shards:
+    if: github.event_name == 'push' && contains(github.event.head_commit.message, '[linux-runtime-gcc-sharded]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5, 6]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Install pinned GNU RISC-V build tools
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get -o Acquire::Retries=2 install -y --no-install-recommends \
+            gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
+            libc6-dev-riscv64-cross python3 make cpio gzip || {
+              sudo apt-get -o Acquire::Retries=3 update
+              sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+                gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
+                libc6-dev-riscv64-cross python3 make cpio gzip
+            }
+
+      - name: Identify certified exact-config GNU golden pool
+        id: gnu
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          config=eeb04f304ebfb97a1079c187dc0c2ea3cc61fc50a55aa3cc776237c16ab19bbe
+          gcc_sig=$(sha256sum "$(command -v riscv64-linux-gnu-gcc)" | cut -c1-16)
+          ld_sig=$(sha256sum "$(command -v riscv64-linux-gnu-ld)" | cut -c1-16)
+          echo "key=linux-gnu-golden-v1-6.6.143-$config-$gcc_sig-$ld_sig" >>"$GITHUB_OUTPUT"
+
+      - uses: actions/cache/restore@v4
+        with:
+          path: |
+            build/linux-runtime-gcc/out
+            build/linux-runtime-gcc/provenance
+          key: ${{ steps.gnu.outputs.key }}
+          fail-on-cache-miss: true
+
+      - uses: ./.github/actions/linux-runtime-restore-fixture
+        with:
+          fixture: source
+
+      - name: Derive identical full universe and this shard
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-gcc-shards-v1/shard-${{ matrix.shard }}"
+          mkdir -p "$ev"
+          python3 tools/ci/linux-runtime-gcc-full-c-objects-v1.py \
+            --out "$GITHUB_WORKSPACE/build/linux-runtime-gcc/out" \
+            --manifest "$GITHUB_WORKSPACE/build/linux-runtime-gcc/provenance/gcc-objects.sha256" \
+            --prefix tools/ci/linux-runtime-gcc-cohort-objects-v1.txt \
+            --output "$ev/all-objects.txt" \
+            --excluded "$ev/non-c-objects.tsv" \
+            --min-c-objects 1200
+          python3 tools/ci/linux-runtime-gcc-shards-v1.py split \
+            --full "$ev/all-objects.txt" \
+            --shard ${{ matrix.shard }} --output "$ev/full-objects.txt"
+
+      - name: Identify immutable MiniC shard artifact
+        id: candidate
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          # Profile source identity MUST be obtained before patching src/.
+          profile=$(python3 tools/ci/linux-runtime-profile-cache-id-v1.py)
+          subset=$(sha256sum "build/linux-runtime-gcc-shards-v1/shard-${{ matrix.shard }}/full-objects.txt" | cut -d' ' -f1)
+          gcc=$(sha256sum "$(command -v riscv64-linux-gnu-gcc)" | cut -d' ' -f1)
+          assembler=$(sha256sum "$(command -v riscv64-linux-gnu-as)" | cut -d' ' -f1)
+          echo "key=gnu-minic-shard-v1-eeb04f304ebfb97a1079c187dc0c2ea3cc61fc50a55aa3cc776237c16ab19bbe-$profile-$subset-$gcc-$assembler" >>"$GITHUB_OUTPUT"
+
+      - name: Restore this shard's immutable candidate objects
+        id: shard_cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            build/linux-runtime-gcc-shards-v1/shard-${{ matrix.shard }}/minic
+            build/linux-runtime-gcc-shards-v1/shard-${{ matrix.shard }}/minic-manifest.sha256
+            build/linux-runtime-gcc-shards-v1/shard-${{ matrix.shard }}/minic-identity.txt
+          key: ${{ steps.candidate.outputs.key }}
+
+      - name: Build MiniC and prove this exact shard
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-runtime-gcc"
+          src="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0/linux-6.6.143"
+          test -d "$src"
+          test ! -e "$work/linux-6.6.143"
+          cp -a --reflink=auto "$src" "$work/linux-6.6.143"
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-gcc-shards-v1/shard-${{ matrix.shard }}"
+          bash tools/ci/linux-runtime-build-minic-profile-v1.sh \
+            "$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain" "$ev/compiler"
+          export COHORT_ACTION=compile COHORT_ALLOW_SHARD=1
+          bash tools/ci/linux-runtime-gcc-cohort-bisect-v1.sh \
+            "$work/linux-6.6.143" "$work/out" \
+            "$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain/bin/minic" \
+            "$work/provenance" "$ev/full-objects.txt" "$ev"
+
+      - name: Authenticate shard before cache or export
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ev="build/linux-runtime-gcc-shards-v1/shard-${{ matrix.shard }}"
+          n=$(grep -cE '^[^#[:space:]]+\.o$' "$ev/full-objects.txt")
+          test "$n" -gt 0
+          grep -Fq "COHORT_ABI=PASS objects=$n" "$ev/cohort.log"
+          grep -Fq "COHORT_PRODUCE_ONLY=PASS objects=$n" "$ev/cohort.log"
+          test -s "$ev/minic-identity.txt"
+          (cd "$ev"; sha256sum --quiet -c minic-manifest.sha256)
+          echo "GNU_MINIC_SHARD_READY=PASS shard=${{ matrix.shard }} objects=$n"
+
+      - name: Cache completed shard independently of later link failures
+        if: steps.shard_cache.outputs['cache-hit'] != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            build/linux-runtime-gcc-shards-v1/shard-${{ matrix.shard }}/minic
+            build/linux-runtime-gcc-shards-v1/shard-${{ matrix.shard }}/minic-manifest.sha256
+            build/linux-runtime-gcc-shards-v1/shard-${{ matrix.shard }}/minic-identity.txt
+          key: ${{ steps.candidate.outputs.key }}
+
+      - name: Transfer only candidate objects and attestations
+        uses: actions/upload-artifact@v4
+        with:
+          name: shard-${{ matrix.shard }}
+          path: |
+            build/linux-runtime-gcc-shards-v1/shard-${{ matrix.shard }}/minic
+            build/linux-runtime-gcc-shards-v1/shard-${{ matrix.shard }}/minic-manifest.sha256
+            build/linux-runtime-gcc-shards-v1/shard-${{ matrix.shard }}/minic-identity.txt
+            build/linux-runtime-gcc-shards-v1/shard-${{ matrix.shard }}/full-objects.txt
+            build/linux-runtime-gcc-shards-v1/shard-${{ matrix.shard }}/cohort.log
+          if-no-files-found: error
+          retention-days: 3
+
+      - name: Keep bounded failed-TU evidence
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: debug-shard-${{ matrix.shard }}
+          path: |
+            build/linux-runtime-gcc-shards-v1/shard-${{ matrix.shard }}/compile.log
+            build/linux-runtime-gcc-shards-v1/shard-${{ matrix.shard }}/compile-blockers.txt
+            build/linux-runtime-gcc-shards-v1/shard-${{ matrix.shard }}/failure-pool-index.tsv
+            build/linux-runtime-gcc/out/**/*.minic-stage2.failed.i
+            build/linux-runtime-gcc/out/**/*.minic-stage2.failed.stderr
+          if-no-files-found: ignore
+          retention-days: 3
+
+  gcc-shard-verify:
+    needs: gcc-shards
+    if: github.event_name == 'push' && contains(github.event.head_commit.message, '[linux-runtime-gcc-sharded]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 95
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Install pinned GNU RISC-V tools and QEMU
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get -o Acquire::Retries=2 install -y --no-install-recommends \
+            gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
+            qemu-system-misc opensbi libc6-dev-riscv64-cross \
+            python3 make cpio gzip || {
+              sudo apt-get -o Acquire::Retries=3 update
+              sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+                gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
+                qemu-system-misc opensbi libc6-dev-riscv64-cross python3 make cpio gzip
+            }
+
+      - name: Restore identical certified GNU golden objects
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          config=eeb04f304ebfb97a1079c187dc0c2ea3cc61fc50a55aa3cc776237c16ab19bbe
+          gcc_sig=$(sha256sum "$(command -v riscv64-linux-gnu-gcc)" | cut -c1-16)
+          ld_sig=$(sha256sum "$(command -v riscv64-linux-gnu-ld)" | cut -c1-16)
+          echo "GNU_GOLDEN_KEY=linux-gnu-golden-v1-6.6.143-$config-$gcc_sig-$ld_sig"
+          echo "key=linux-gnu-golden-v1-6.6.143-$config-$gcc_sig-$ld_sig" >>"$GITHUB_ENV"
+
+      - uses: actions/cache/restore@v4
+        with:
+          path: |
+            build/linux-runtime-gcc/out
+            build/linux-runtime-gcc/provenance
+          key: ${{ env.key }}
+          fail-on-cache-miss: true
+
+      - uses: ./.github/actions/linux-runtime-restore-fixture
+        with:
+          fixture: source
+
+      - name: Reconstruct complete GNU C manifest
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-v1"
+          mkdir -p "$ev"
+          python3 tools/ci/linux-runtime-gcc-full-c-objects-v1.py \
+            --out "$GITHUB_WORKSPACE/build/linux-runtime-gcc/out" \
+            --manifest "$GITHUB_WORKSPACE/build/linux-runtime-gcc/provenance/gcc-objects.sha256" \
+            --prefix tools/ci/linux-runtime-gcc-cohort-objects-v1.txt \
+            --output "$ev/full-objects.txt" \
+            --excluded "$ev/non-c-objects.tsv" --min-c-objects 1200
+          # Compute stable profile ID from pristine MiniC sources, BEFORE
+          # applying any of the build-time profile patches.
+          profile=$(python3 tools/ci/linux-runtime-profile-cache-id-v1.py)
+          objects=$(sha256sum "$ev/full-objects.txt" | cut -d' ' -f1)
+          gcc=$(sha256sum "$(command -v riscv64-linux-gnu-gcc)" | cut -d' ' -f1)
+          assembler=$(sha256sum "$(command -v riscv64-linux-gnu-as)" | cut -d' ' -f1)
+          echo "FULL_MINIC_KEY=gnu-minic-objects-v1-eeb04f304ebfb97a1079c187dc0c2ea3cc61fc50a55aa3cc776237c16ab19bbe-$profile-$objects-$gcc-$assembler" >>"$GITHUB_ENV"
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: shard-*
+          path: build/linux-runtime-gcc-shards-v1
+          merge-multiple: false
+
+      - name: Build identical MiniC profile and verify exact shard union
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-runtime-gcc"
+          src="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0/linux-6.6.143"
+          test -d "$src"
+          cp -a --reflink=auto "$src" "$work/linux-6.6.143"
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-v1"
+          bash tools/ci/linux-runtime-build-minic-profile-v1.sh \
+            "$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain" "$ev/compiler"
+          python3 tools/ci/linux-runtime-gcc-shards-v1.py merge \
+            --full "$ev/full-objects.txt" \
+            --shards "$GITHUB_WORKSPACE/build/linux-runtime-gcc-shards-v1" \
+            --evidence "$ev" --out "$work/out" --provenance "$work/provenance" \
+            --minic "$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain/bin/minic" \
+            --assembler /usr/bin/riscv64-linux-gnu-as
+
+      - name: Retain fully verified MiniC objects before link or runtime
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            build/linux-runtime-gcc-cohort-v1/minic
+            build/linux-runtime-gcc-cohort-v1/minic-manifest.sha256
+            build/linux-runtime-gcc-cohort-v1/minic-identity.txt
+          key: ${{ env.FULL_MINIC_KEY }}
+
+      - name: GNU-only link and QEMU with NO MiniC recompilation
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-runtime-gcc"
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-v1"
+          export COHORT_ACTION=verify
+          bash tools/ci/linux-runtime-gcc-cohort-bisect-v1.sh \
+            "$work/linux-6.6.143" "$work/out" \
+            "$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain/bin/minic" \
+            "$work/provenance" "$ev/full-objects.txt" "$ev"
+
+      - name: Preserve aggregate link, QEMU and failure-frontier evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sharded-gnu-minic-QEMU-${{ github.sha }}
+          path: |
+            build/linux-runtime-gcc-cohort-v1/full-objects.txt
+            build/linux-runtime-gcc-cohort-v1/cohort.log
+            build/linux-runtime-gcc-cohort-v1/identity.txt
+            build/linux-runtime-gcc-cohort-v1/minic-identity.txt
+            build/linux-runtime-gcc-cohort-v1/minic-manifest.sha256
+            build/linux-runtime-gcc-cohort-v1/gcc-preflight.log
+            build/linux-runtime-gcc-cohort-v1/results.tsv
+            build/linux-runtime-gcc-cohort-v1/frontier.txt
+            build/linux-runtime-gcc-cohort-v1/trials/*/link.log
+            build/linux-runtime-gcc-cohort-v1/trials/*/guard.log
+            build/linux-runtime-gcc-cohort-v1/trials/*/runtime.log
+            build/linux-runtime-gcc-cohort-v1/trials/*/runtime-p1.log
+          if-no-files-found: warn
+          retention-days: 7

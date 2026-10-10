@@ -57,6 +57,7 @@ on:
       - 'tools/ci/test_linux_runtime_failed_tu_replay_v1.py'
       - 'tools/ci/linux-runtime-gcc-single-swap-v1.sh'
       - 'tools/ci/linux-runtime-gcc-cohort-bisect-v1.sh'
+      - 'tools/ci/linux-runtime-gcc-shards-v1.py'
       - 'tools/ci/linux-runtime-minic-route-audit-v1.py'
       - 'tools/ci/linux-runtime-gcc-full-c-objects-v1.py'
       - 'tools/ci/linux-runtime-gcc-cohort-objects-v1.txt'
@@ -254,6 +255,8 @@ jobs:
           python3 tools/ci/test_linux_runtime_object_set_v1.py
           python3 tools/ci/test_linux_runtime_prefix_bisect_v1.py
           python3 tools/ci/test_linux_runtime_gcc_minic_ab_v1.py
+          python3 tools/ci/linux-runtime-gcc-shards-v1.py self-test
+          ruby -e 'require "yaml"; YAML.parse_file(ARGV.fetch(0)); puts "M0_GNU_MINIC_SHARDS_YAML=PASS"' .github/workflows/linux-runtime-gcc-baseline.yml
           python3 tools/ci/test_linux_runtime_kbuild_regeneration_guard_v1.py
           bash -n tools/ci/linux-runtime-gcc-cohort-bisect-v1.sh
           python3 tools/ci/test_linux_runtime_failed_tu_replay_v1.py
