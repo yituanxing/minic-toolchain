@@ -691,6 +691,31 @@ print(f"COHORT_GNU_UNSELECTED=PASS derived={len(derived_evidence)} "
 PY_GNU_NONSELECTED
   image_sha=$(sha256sum "$out/arch/riscv/boot/Image" | cut -d' ' -f1)
   cp -a "$out/arch/riscv/boot/Image" "$d/Image"
+  candidate_image_bytes=$(stat -c '%s' "$d/Image")
+  golden_image_bytes=$(stat -c '%s' "$gold_snapshot/arch/riscv/boot/Image")
+  echo "COHORT_IMAGE_BYTES trial=$name candidate=$candidate_image_bytes golden=$golden_image_bytes ratio=$(python3 -c 'import sys;print(round(int(sys.argv[1])/max(1,int(sys.argv[2])),3))' "$candidate_image_bytes" "$golden_image_bytes")"
+  # The image may be too large for QEMU's pinned RISC-V -initrd placement
+  # even if the guest has enough total DRAM. Save *measured* ELF section
+  # sizes for later MiniC codegen-bloat analysis; never guess from Image alone.
+  if [[ -s "$out/vmlinux" ]]; then
+    /usr/bin/riscv64-linux-gnu-size -A "$out/vmlinux" >"$d/vmlinux-sections.txt" 2>&1 || true
+    python3 - "$d/vmlinux-sections.txt" <<'PY_VMLINUX_SIZE'
+from pathlib import Path
+import sys
+rows=[]
+for line in Path(sys.argv[1]).read_text().splitlines():
+    fields=line.split()
+    if len(fields)==3:
+        try:
+            size=int(fields[1])
+        except ValueError:
+            continue
+        if size>0:
+            rows.append((size, fields[0]))
+for size,name in sorted(rows,reverse=True)[:12]:
+    print(f"COHORT_VMLINUX_LARGEST_SECTION name={name} bytes={size}")
+PY_VMLINUX_SIZE
+  fi
   verdict=INCONCLUSIVE
   if [[ "$mode" != prefix || "$count" -gt 0 ]] && [[ "$image_sha" == "$gnu_image_sha" ]]; then
     echo "COHORT_IMAGE=UNCHANGED name=$name"
@@ -708,6 +733,39 @@ PY_GNU_NONSELECTED
     printf 'timing_%s_qemu_%s_ms=%s\n' "$name" "$profile" "$(((qemu_finished-qemu_started)/1000000))" >>"$ev/identity.txt"
     if ((rc==0)); then verdict=PASS
     elif grep -REqi 'Linux version 6\.6\.143|Kernel panic|Oops:|Unable to handle|BUG:' "$d/qemu" 2>/dev/null; then verdict=FAIL
+    fi
+    # A very large (but correctly linked) kernel Image can overlap the initrd
+    # at QEMU's ROM loader address BEFORE the guest executes one instruction.
+    # This is neither a compiler runtime FAIL nor proof that boot succeeds.
+    # Probe the *same immutable* Image WITHOUT initrd to expose the earliest
+    # real guest frontier. Keep the normal full initramfs oracle unchanged.
+    if grep -Fq 'Some ROM regions are overlapping' "$d/runtime.log" && \
+       grep -Fq 'runtime-initramfs.cpio.gz' "$d/runtime.log"; then
+      echo "COHORT_QEMU_LOAD_OVERLAP=CONFIRMED trial=$name image_bytes=$candidate_image_bytes initrd_rom_overlap=true"
+      early_started=$(date +%s%N)
+      early_rc=0
+      timeout --signal=TERM 25s qemu-system-riscv64 \
+        -M virt -cpu max -m 512M -smp 1 -nographic -no-reboot \
+        -bios default -kernel "$d/Image" \
+        -append 'console=ttyS0 earlycon=sbi loglevel=8 panic=-1' \
+        </dev/null >"$d/qemu-early-noinitrd.log" 2>&1 || early_rc=$?
+      early_finished=$(date +%s%N)
+      echo "COHORT_TIMING trial=$name stage=qemu_early_noinitrd elapsed_ms=$(((early_finished-early_started)/1000000)) rc=$early_rc"
+      printf 'timing_%s_qemu_early_noinitrd_ms=%s\n' "$name" "$(((early_finished-early_started)/1000000))" >>"$ev/identity.txt"
+      if grep -Eq 'Linux version 6\.6\.143|Kernel panic|Oops:|Unable to handle|BUG:' "$d/qemu-early-noinitrd.log"; then
+        echo "COHORT_KERNEL_EARLY_FRONTIER=GUEST_REACHED trial=$name"
+      elif grep -Eqi 'OpenSBI|Platform Name|Firmware Base' "$d/qemu-early-noinitrd.log"; then
+        echo "COHORT_KERNEL_EARLY_FRONTIER=FIRMWARE_ONLY trial=$name"
+      else
+        echo "COHORT_KERNEL_EARLY_FRONTIER=NO_FIRMWARE_OR_KERNEL_BANNER trial=$name"
+      fi
+      echo "COHORT_KERNEL_EARLY_LOG_END"
+      tail -n 75 "$d/qemu-early-noinitrd.log"
+      echo "COHORT_KERNEL_EARLY_LOG_END"
+      # Persist evidence within an existing uploaded artifact path. Retain
+      # INCONCLUSIVE: a kernel-only probe cannot satisfy the PID1/P1 oracle.
+      cat "$d/qemu-early-noinitrd.log" >>"$d/runtime.log"
+      verdict=INCONCLUSIVE
     fi
     # Reuse the existing Python-era 12-syscall P1 oracle after FULL PASS.
     # It boots the identical Image and initramfs, without a third link.
