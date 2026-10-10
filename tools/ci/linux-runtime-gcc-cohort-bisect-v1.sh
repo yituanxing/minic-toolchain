@@ -403,6 +403,16 @@ if [[ "$cohort_scope" == FULL_C_UNIVERSE ]]; then
     echo "COHORT_EARLYCON_CAPTURE=INCONCLUSIVE no_candidate_or_oracle_changed=true"
   fi
 fi
+# Keep the source capture itself independently testable and fast: a
+# developer-tagged receiver may authenticate cached 2064 objects and collect
+# the ONE exact GCC .i / MiniC .s without a new GNU Image or QEMU run.
+# This is diagnostic-only; it is NOT a Linux boot / P1 certificate.
+if [[ "${COHORT_CAPTURE_ONLY:-0}" == 1 ]]; then
+  test -s "$ev/trials/full_all/earlycon-source/earlycon-exact.i"
+  test -s "$ev/trials/full_all/earlycon-source/earlycon-minic.s"
+  echo "COHORT_CAPTURE_ONLY=PASS candidates=$n reused=true runtime_oracle=NOT_RUN"
+  exit 0
+fi
 # Build the initramfs just once; it stays fixed throughout all QEMU trials.
 BUILD_DIR="$ev/initramfs" OUTPUT_INITRAMFS="$ev/runtime-initramfs.cpio.gz" \
   RISCV_CC=riscv64-linux-gnu-gcc \
