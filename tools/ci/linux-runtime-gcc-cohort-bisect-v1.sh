@@ -396,6 +396,7 @@ BUILD_DIR="$ev/initramfs" OUTPUT_INITRAMFS="$ev/runtime-initramfs.cpio.gz" \
   RISCV_CC=riscv64-linux-gnu-gcc \
   bash "$repo/tests/external/linux/build_runtime_initramfs.sh" >"$ev/initramfs.log" 2>&1
 last_selection="none"
+last_candidate_delta=""
 trial() {
   name="$1"; count="$2"; profile="$3"; mode="${4:-prefix}"
   selection="$mode:$count"
@@ -430,6 +431,7 @@ trial() {
     python3 "$repo/tools/ci/linux-runtime-kbuild-regeneration-guard-v1.py" \
       --mode snapshot --out "$out" --evidence "$d/generated-before.json" \
       >"$d/guard.log"
+    link_started=$(date +%s%N)
     if ! make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
       -j4 Image >"$d/link.log" 2>&1; then
       echo "COHORT_LINK=FAIL name=$name count=$count"
@@ -438,27 +440,137 @@ trial() {
       TRIAL_VERDICT=LINK_FAIL
       return 0
     fi
-    # A link exit code 0 does not prove all selected objects remained MiniC.
-    # If Kbuild regenerated a selected object, restore it ONLY when the
-    # generated input headers are byte-identical, with an actual Kbuild CC
-    # record proving the overwrite. Relink once, then audit all identities.
-    repair_result=$(python3 "$repo/tools/ci/linux-runtime-kbuild-regeneration-guard-v1.py" \
-      --mode repair --out "$out" --evidence "$d/generated-before.json" \
-      --selected "$d/selected-objects.txt" --minic "$ev/minic" \
-      --link-log "$d/link.log" --golden-out "$gold_snapshot") || {
-        echo "COHORT_RESULT=INCONCLUSIVE stage=generated_header_changed name=$name"
-        exit 8
+    link_finished=$(date +%s%N)
+    echo "COHORT_TIMING trial=$name stage=gnu_first_link elapsed_ms=$(((link_finished-link_started)/1000000))" 
+    printf 'timing_%s_first_link_ms=%s\n' "$name" "$(((link_finished-link_started)/1000000))" >>"$ev/identity.txt"
+    # The vDSO linker may produce a NEW vdso-offsets.h. The exact dependent
+    # C TUs must be re-preprocessed with GNU GCC, recompiled with the SAME
+    # MiniC binary and reassembled by GNU as. Never transplant an old object
+    # compiled against stale offsets or loosen the generated-input guard.
+    python3 "$repo/tools/ci/linux-runtime-kbuild-regeneration-guard-v1.py" \
+      --mode impact --out "$out" --evidence "$d/generated-before.json" \
+      --golden-out "$gold_snapshot" --selected "$d/selected-objects.txt" \
+      --affected-file "$d/affected-objects.txt" | tee -a "$d/guard.log" || {
+        echo "COHORT_RESULT=INCONCLUSIVE stage=header_impact name=$name"; exit 8;
       }
-    printf '%s\n' "$repair_result" | tee -a "$d/guard.log"
-    if [[ "$repair_result" == *"COHORT_KBUILD_REPAIR=APPLIED"* ]]; then
+    last_candidate_delta=""
+    if [[ -s "$d/affected-objects.txt" ]]; then
+      # Start with the complete 2064-member selection only. A partially
+      # selected prefix may require *GCC* rebuilds under the new headers,
+      # whose hashes differ from the pristine GCC object reference. Such
+      # mixed selections require their own paired dynamic baseline, and
+      # must never inherit this full-selection repair.
+      if [[ "$mode" != prefix || "$count" != "$n" ]]; then
+        echo "COHORT_RESULT=INCONCLUSIVE stage=dynamic_header_requires_full_selection name=$name"
+        exit 8
+      fi
+      mapfile -t affected <"$d/affected-objects.txt"
+      echo "COHORT_HEADER_RECONCILE=START name=$name owners=${#affected[@]}"
+      regen_started=$(date +%s%N)
+      python3 "$repo/tools/ci/linux-runtime-kbuild-regeneration-guard-v1.py" \
+        --mode snapshot --out "$out" --evidence "$d/generated-after-first-link.json" \
+        >>"$d/guard.log"
+      : >"$d/rebuild-success.txt"
+      : >"$d/rebuild-hashes.sha256"
+      for target in "${affected[@]}"; do
+        leaf=${target##*/}
+        rm -f -- "$out/$target" "$out/$(dirname "$target")/.$leaf.cmd"
+      done
+      # Kbuild owns the exact recorded per-TU flags and source mapping,
+      # including generated/renamed C files. This invocation is strictly
+      # serial to prevent overlapping explicit-target .o/.o.d races.
+      if ! MINIC="$minic" REAL_CC=/usr/bin/riscv64-linux-gnu-gcc \
+        MINIC_KEEP_INTERMEDIATES=0 MINIC_PRESERVE_FAILURE_INPUTS=1 \
+        MINIC_KBUILD_SUCCESS_TRACE="$d/rebuild-success.txt" \
+        MINIC_KBUILD_OBJECT_HASH_TRACE="$d/rebuild-hashes.sha256" \
+        make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
+          CC="$repo/tests/external/linux/stage2_kbuild_cc.sh" -j1 \
+          "${affected[@]}" >"$d/rebuild.log" 2>&1; then
+        echo "COHORT_RESULT=INCONCLUSIVE stage=dependent_minic_recompile name=$name"
+        tail -n 65 "$d/rebuild.log"
+        exit 8
+      fi
+      python3 "$repo/tools/ci/linux-runtime-minic-route-audit-v1.py" \
+        --objects-file "$d/affected-objects.txt" \
+        --success-trace "$d/rebuild-success.txt" \
+        --object-digest-trace "$d/rebuild-hashes.sha256" \
+        --candidates "$out" | tee -a "$d/guard.log" || {
+          echo "COHORT_RESULT=INCONCLUSIVE stage=dependent_minic_provenance name=$name"
+          exit 8
+        }
+      # Rebuilding dependents must not shift the generated vDSO header again.
+      python3 "$repo/tools/ci/linux-runtime-kbuild-regeneration-guard-v1.py" \
+        --mode stable --out "$out" --evidence "$d/generated-after-first-link.json" \
+        >>"$d/guard.log" || {
+          echo "COHORT_RESULT=INCONCLUSIVE stage=dependent_minic_header_instability"
+          exit 8
+        }
+      mkdir -p "$d/reconciled"
+      for target in "${affected[@]}"; do
+        mkdir -p "$d/reconciled/$(dirname "$target")"
+        cp -a -- "$out/$target" "$d/reconciled/$target"
+        # Verify RISC-V architecture, ET_REL and ABI flags without assuming
+        # GCC and MiniC object bytes or section layout are interchangeable.
+        python3 - "$ev/gcc/$target" "$d/reconciled/$target" <<'PY_RISCV_DYNAMIC'
+import struct,sys
+from pathlib import Path
+a,b=[Path(x).read_bytes()[:52] for x in sys.argv[1:]]
+for h in (a,b):
+    assert len(h)==52 and h[:6]==b"\x7fELF\x02\x01"
+    assert struct.unpack_from("<H",h,16)[0]==1
+    assert struct.unpack_from("<H",h,18)[0]==243
+assert a[48:52]==b[48:52], "reconciled MiniC RISC-V ABI differs from GCC"
+PY_RISCV_DYNAMIC
+        cp -a -- "$ev/gcc/$target.cmd" "$out/$(dirname "$target")/.${target##*/}.cmd"
+        touch -- "$out/$target"
+      done
+      last_candidate_delta="$d/reconciled"
+      regen_finished=$(date +%s%N)
+      echo "COHORT_TIMING trial=$name stage=minic_header_reconcile elapsed_ms=$(((regen_finished-regen_started)/1000000)) owners=${#affected[@]}"
+      printf 'timing_%s_header_reconcile_ms=%s\n' "$name" "$(((regen_finished-regen_started)/1000000))" >>"$ev/identity.txt"
+      second_started=$(date +%s%N)
       if ! make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
-        -j4 Image >"$d/link-repaired.log" 2>&1; then
-        echo "COHORT_LINK=FAIL name=$name stage=guarded_second_link"
-        tail -n 70 "$d/link-repaired.log"
+          -j4 Image >"$d/link-reconciled.log" 2>&1; then
+        echo "COHORT_LINK=FAIL name=$name stage=gnu_link_after_header_reconcile"
+        tail -n 65 "$d/link-reconciled.log"
         TRIAL_VERDICT=LINK_FAIL
         return 0
       fi
-      echo "COHORT_LINK=GUARDED_RELINK name=$name reason=selected_minic_replaced_by_kbuild"
+      python3 "$repo/tools/ci/linux-runtime-kbuild-regeneration-guard-v1.py" \
+        --mode stable --out "$out" --evidence "$d/generated-after-first-link.json" \
+        >>"$d/guard.log" || {
+          echo "COHORT_RESULT=INCONCLUSIVE stage=second_link_header_instability"
+          exit 8
+        }
+      second_finished=$(date +%s%N)
+      echo "COHORT_TIMING trial=$name stage=gnu_reconciled_link elapsed_ms=$(((second_finished-second_started)/1000000))"
+      printf 'timing_%s_reconciled_link_ms=%s\n' "$name" "$(((second_finished-second_started)/1000000))" >>"$ev/identity.txt"
+      echo "COHORT_HEADER_RECONCILE=PASS name=$name owners=${#affected[@]} immutable_full_candidate_cache=true"
+    else
+      # Stable generated headers: permit replacing only the MiniC owners
+      # demonstrably overwritten by a logged GNU CC step. A second link
+      # then rechecks identities below.
+      repair_result=$(python3 "$repo/tools/ci/linux-runtime-kbuild-regeneration-guard-v1.py" \
+        --mode repair --out "$out" --evidence "$d/generated-before.json" \
+        --selected "$d/selected-objects.txt" --minic "$ev/minic" \
+        --link-log "$d/link.log" --golden-out "$gold_snapshot") || {
+          echo "COHORT_RESULT=INCONCLUSIVE stage=stable_header_guard name=$name"
+          exit 8
+        }
+      printf '%s\n' "$repair_result" | tee -a "$d/guard.log"
+      if [[ "$repair_result" == *"COHORT_KBUILD_REPAIR=APPLIED"* ]]; then
+        second_started=$(date +%s%N)
+        if ! make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
+          -j4 Image >"$d/link-repaired.log" 2>&1; then
+          echo "COHORT_LINK=FAIL name=$name stage=guarded_second_link"
+          tail -n 70 "$d/link-repaired.log"
+          TRIAL_VERDICT=LINK_FAIL
+          return 0
+        fi
+        second_finished=$(date +%s%N)
+        echo "COHORT_TIMING trial=$name stage=gnu_guarded_relink elapsed_ms=$(((second_finished-second_started)/1000000))"
+        echo "COHORT_LINK=GUARDED_RELINK name=$name reason=selected_minic_replaced_by_kbuild"
+      fi
     fi
     last_selection="$selection"
   else
@@ -474,7 +586,14 @@ trial() {
       single) if ((i==count)); then selected=1; fi ;;
       all_except) if ((i!=count)); then selected=1; fi ;;
     esac
-    if ((selected)); then gold="$ev/minic/$target"; else gold="$ev/gcc/$target"; fi
+    if ((selected)); then
+      gold="$ev/minic/$target"
+      if [[ -n "$last_candidate_delta" && -f "$last_candidate_delta/$target" ]]; then
+        gold="$last_candidate_delta/$target"
+      fi
+    else
+      gold="$ev/gcc/$target"
+    fi
     cmp -s "$out/$target" "$gold" || {
       echo "COHORT_IDENTITY=FAIL trial=$name target=$target"; exit 6;
     }
@@ -513,6 +632,7 @@ PY_GNU_NONSELECTED
   if [[ "$mode" != prefix || "$count" -gt 0 ]] && [[ "$image_sha" == "$gnu_image_sha" ]]; then
     echo "COHORT_IMAGE=UNCHANGED name=$name"
   else
+    qemu_started=$(date +%s%N)
     set +e
     LINUX_IMAGE="$d/Image" INITRAMFS="$ev/runtime-initramfs.cpio.gz" \
       BUILD_DIR="$d/qemu" LINUX_RELEASE=6.6.143 \
@@ -520,6 +640,9 @@ PY_GNU_NONSELECTED
       bash "$repo/tests/external/linux/runtime_boot.sh" >"$d/runtime.log" 2>&1
     rc=$?
     set -e
+    qemu_finished=$(date +%s%N)
+    echo "COHORT_TIMING trial=$name stage=qemu_$profile elapsed_ms=$(((qemu_finished-qemu_started)/1000000)) rc=$rc"
+    printf 'timing_%s_qemu_%s_ms=%s\n' "$name" "$profile" "$(((qemu_finished-qemu_started)/1000000))" >>"$ev/identity.txt"
     if ((rc==0)); then verdict=PASS
     elif grep -REqi 'Linux version 6\.6\.143|Kernel panic|Oops:|Unable to handle|BUG:' "$d/qemu" 2>/dev/null; then verdict=FAIL
     fi

@@ -100,6 +100,40 @@ def selected_generated_header_dependents(
     return affected
 
 
+
+def header_impact(out: Path, evidence: Path, golden: Path,
+                  selected: Path, affected_file: Path) -> tuple[list[str], list[str]]:
+    """Determine affected selected TUs before any compiler is invoked.
+
+    Only vDSO offset changes are currently supported for auto-recompilation;
+    all other generated-input drift remains a hard stop. The baseline header
+    digest and the GOLDEN .cmd dependency closure are independently checked.
+    """
+    baseline = json.loads(evidence.read_text())
+    if baseline.get("schema") != SCHEMA:
+        raise GuardError("invalid generated-header snapshot")
+    now = generated(out)
+    previous = baseline.get("headers")
+    if not isinstance(previous, dict):
+        raise GuardError("missing golden generated-header identities")
+    changed = sorted(k for k in set(now) | set(previous) if now.get(k) != previous.get(k))
+    if set(changed) - {"include/generated/vdso-offsets.h"}:
+        raise GuardError("unsupported generated-header changes: " + ",".join(changed))
+    impacted = selected_generated_header_dependents(
+        golden, object_paths(selected), changed) if changed else []
+    if len(impacted) > 16:
+        raise GuardError(f"changed generated-header fanout too large: {len(impacted)}")
+    affected_file.parent.mkdir(parents=True, exist_ok=True)
+    affected_file.write_text("".join(x + "\n" for x in impacted))
+    return changed, impacted
+
+
+def verify_stable(out: Path, evidence: Path) -> None:
+    baseline = json.loads(evidence.read_text())
+    if baseline.get("schema") != SCHEMA or baseline.get("headers") != generated(out):
+        raise GuardError("generated headers changed after MiniC dependent TU recompilation")
+
+
 def repair(out: Path, minic: Path, selected: Path, log: Path, evidence: Path,
            golden_out: Path | None = None) -> list[str]:
     baseline = json.loads(evidence.read_text())
@@ -147,12 +181,13 @@ def repair(out: Path, minic: Path, selected: Path, log: Path, evidence: Path,
 
 def main() -> int:
     p = argparse.ArgumentParser()
-    p.add_argument("--mode", choices=("snapshot", "repair"), required=True)
+    p.add_argument("--mode", choices=("snapshot", "repair", "impact", "stable"), required=True)
     p.add_argument("--out", type=Path, required=True)
     p.add_argument("--evidence", type=Path, required=True)
     p.add_argument("--minic", type=Path)
     p.add_argument("--selected", type=Path)
     p.add_argument("--link-log", type=Path)
+    p.add_argument("--affected-file", type=Path)
     p.add_argument("--golden-out", type=Path,
                    help="immutable GNU Kbuild .cmd dependency reference")
     args = p.parse_args()
@@ -160,6 +195,17 @@ def main() -> int:
         if args.mode == "snapshot":
             snapshot(args.out, args.evidence)
             print(f"COHORT_KBUILD_HEADERS=SNAPSHOT entries={len(generated(args.out))}")
+        elif args.mode == "impact":
+            if not all((args.golden_out, args.selected, args.affected_file)):
+                raise GuardError("impact requires --golden-out, --selected, --affected-file")
+            changed, impacted = header_impact(
+                args.out, args.evidence, args.golden_out,
+                args.selected, args.affected_file)
+            print(f"COHORT_KBUILD_HEADER_IMPACT=PASS changed={','.join(changed)} "
+                  f"selected_affected={len(impacted)} objects={','.join(impacted)}")
+        elif args.mode == "stable":
+            verify_stable(args.out, args.evidence)
+            print("COHORT_KBUILD_HEADERS=STABLE")
         else:
             if not all((args.minic, args.selected, args.link_log)):
                 raise GuardError("repair requires --minic, --selected, --link-log")

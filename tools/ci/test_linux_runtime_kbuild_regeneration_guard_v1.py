@@ -91,6 +91,28 @@ class RegenTests(unittest.TestCase):
             mod.repair(self.out, self.minic, self.selection, self.log, self.snap,
                        self.golden)
 
+    def test_header_impact_exactly_selected_owners_and_frozen_snapshot(self):
+        impact = self.root / "affected.txt"
+        changed, affected = mod.header_impact(
+            self.out, self.snap, self.golden, self.selection, impact)
+        self.assertEqual((changed, affected), ([], []))
+        (self.headers / "vdso-offsets.h").write_text("#define VDSO_FOO 32\n")
+        changed, affected = mod.header_impact(
+            self.out, self.snap, self.golden, self.selection, impact)
+        self.assertEqual(changed, ["include/generated/vdso-offsets.h"])
+        self.assertEqual(affected, self.owners)
+        self.assertEqual(impact.read_text().splitlines(), self.owners)
+        with self.assertRaisesRegex(mod.GuardError, "changed after MiniC"):
+            mod.verify_stable(self.out, self.snap)
+        mod.snapshot(self.out, self.snap)
+        mod.verify_stable(self.out, self.snap)
+
+    def test_header_impact_rejects_unknown_generation_changes(self):
+        (self.headers / "unexpected.h").write_text("modified\n")
+        with self.assertRaisesRegex(mod.GuardError, "unsupported generated-header"):
+            mod.header_impact(self.out, self.snap, self.golden, self.selection,
+                              self.root / "affected.txt")
+
     def test_unexplained_gcc_or_other_overwrite_is_rejected(self):
         self.log.write_text("  CC      unrelated/source.o\n")
         with self.assertRaisesRegex(mod.GuardError, "without Kbuild CC proof"):
