@@ -173,7 +173,85 @@ def self_test() -> None:
     else:
         raise AssertionError("accepted invalid shard index")
     print("GNU_MINIC_SHARD_SELFTEST=PASS partition=2064 members=7 unsafe=4")
+    merge_self_test()
 
+
+
+def merge_self_test() -> None:
+    """Exercise the real merge code with 1,200 synthetic RISC-V ET_REL objects."""
+    from tempfile import TemporaryDirectory
+    from types import SimpleNamespace
+    with TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        out = root / "out"
+        prov = root / "provenance"
+        shards = root / "shards"
+        ev = root / "merged"
+        out.mkdir()
+        prov.mkdir()
+        shards.mkdir()
+        (out / "arch/riscv/boot").mkdir(parents=True)
+        (out / ".config").write_bytes(b"CONFIG_RISCV=y\n")
+        (out / "arch/riscv/boot/Image").write_bytes(b"gold image")
+        (prov / "gcc-baseline.txt").write_text(
+            f"config_sha256={sha(out / '.config')}\n")
+        minic = root / "minic"
+        assembler = root / "assembler"
+        minic.write_bytes(b"deterministic minic")
+        assembler.write_bytes(b"deterministic GNU assembler")
+        hdr = bytearray(52)
+        hdr[:6] = b"\x7fELF\x02\x01"
+        struct.pack_into("<H", hdr, 16, 1)
+        struct.pack_into("<H", hdr, 18, 243)
+        hdr[48:52] = b"\x05\x00\x00\x00"
+        names = [f"lib/t{i:04d}.o" for i in range(1200)]
+        full = root / "full.txt"
+        full.write_text("# self-test\n" + "\n".join(names) + "\n")
+        golden_entries = []
+        for i, name in enumerate(names):
+            dest = out / name
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_bytes(bytes(hdr) + f"GCC{i}".encode())
+            golden_entries.append(f"{sha(dest)}  {name}")
+        (prov / "gcc-objects.sha256").write_text("\n".join(golden_entries) + "\n")
+        for index in range(7):
+            directory = shards / f"shard-{index}"
+            directory.mkdir()
+            subset = directory / "full-objects.txt"
+            split(SimpleNamespace(full=full, shard=index, count=7, output=subset))
+            part = members(names, index, 7)
+            manifest = []
+            for name in part:
+                dest = directory / "minic" / name
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                dest.write_bytes(bytes(hdr) + b"MINIC" + name.encode())
+                manifest.append(f"{sha(dest)}  minic/{name}")
+            (directory / "minic-manifest.sha256").write_text("\n".join(manifest) + "\n")
+            identity = contract(sha(out / ".config"),
+                                sha(out / "arch/riscv/boot/Image"),
+                                sha(minic), sha(assembler),
+                                sha(prov / "gcc-objects.sha256"), sha(subset))
+            (directory / "minic-identity.txt").write_text(identity + "\n")
+            (directory / "cohort.log").write_text(
+                f"COHORT_COMPILE=PASS objects={len(part)}\n"
+                f"COHORT_ABI=PASS objects={len(part)}\n"
+                f"COHORT_PRODUCE_ONLY=PASS objects={len(part)}\n")
+        arguments = SimpleNamespace(full=full, shards=shards, evidence=ev,
+                                    provenance=prov, out=out, minic=minic,
+                                    assembler=assembler)
+        merge(arguments)
+        assert len((ev / "minic-manifest.sha256").read_text().splitlines()) == 1200
+        tampered = shards / "shard-0/minic" / names[0]
+        tampered.write_bytes(tampered.read_bytes() + b"TAMPER")
+        arguments.evidence = root / "rejected"
+        try:
+            merge(arguments)
+        except ValueError as exc:
+            assert "hash mismatch" in str(exc), str(exc)
+        else:
+            raise AssertionError("merge accepted corrupted candidate object")
+        assert not arguments.evidence.exists(), "failed merge created authenticated output"
+    print("GNU_MINIC_SHARD_MERGE_SELFTEST=PASS full=1200 shards=7 tamper=rejected")
 
 def main() -> int:
     p = argparse.ArgumentParser(description=__doc__)
