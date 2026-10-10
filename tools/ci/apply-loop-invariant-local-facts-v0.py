@@ -362,5 +362,32 @@ static void core_restore_loop_invariant_facts(
         raise SystemExit(f"while fact barrier anchor: expected one, found {text.count(old)}")
     text = text.replace(old, new, 1)
 
+    # A user C label can have incoming edges from a later backward goto.
+    # The facts at lexical fallthrough are NOT a sound meet over those edges.
+    # In Linux earlycon, bool empty_compatible is initially true, set false
+    # after an unsuccessful scan, and goto again re-enters the for preheader.
+    # Retaining the old true fact turns if (empty_compatible) into an
+    # unconditional second-pass goto and creates an infinite scan.
+    # Kill speculative local facts at *all non-parser-internal user labels*.
+    # This is a cheap correctness barrier; internal structured loop labels
+    # are handled by the paired lower_while path rather than this branch.
+    label_old = '''                context->block_id = label_block;
+            }
+        } else {
+            switch (statement->kind) {
+'''
+    label_new = '''                context->block_id = label_block;
+                /* M190_USER_LABEL_FACT_BARRIER: a goto target is a CFG join,
+                   not a straight-line transfer from its lexical predecessor. */
+                core_local_constants_clear_known(context);
+            }
+        } else {
+            switch (statement->kind) {
+'''
+    if text.count(label_old) != 1:
+        raise SystemExit(
+            f"user-label local-fact barrier anchor: expected one, found {text.count(label_old)}")
+    text = text.replace(label_old, label_new, 1)
+
     p.write_text(text)
     print("MINIC_LOOP_INVARIANT_LOCAL_FACTS_V0=APPLIED conservative_ast=1")

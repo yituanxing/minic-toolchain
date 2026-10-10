@@ -4,7 +4,9 @@
  * profile FAIL. The first bad buildable prefix is #32, an inline-asm
  * symbolic specialization wrapper invokes seven follow-on patches;
  * the last, unreachable-reentry, expands to another twenty CFG patches.
- * The focused regression now isolates them incrementally on ONE runner. */
+ * The focused regression isolates them incrementally on ONE runner.
+ * A backward goto into a user label must invalidate cached local facts:
+ * first-pass true is not a valid constant at a second-pass label entry. */
 typedef _Bool bool;
 static int scan_count;
 static int table[3] = {1, 3, 5};
