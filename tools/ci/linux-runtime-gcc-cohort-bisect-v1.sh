@@ -168,8 +168,75 @@ else
   # Try the fast parallel build first; a Kbuild .o.d race must not force
   # 18-minute serial compiles on every future CI run.
   compile_jobs=6
+  # Profile the REAL compiler phases, not merely overall CI wall time. The
+  # existing linux-runtime-build-profiler-v1.sh is whole-Image oriented and
+  # would rebuild unrelated Kbuild targets; here we intercept ONLY the exact
+  # already-selected C-object candidate path. Probes are disposable and never
+  # alter MiniC binary, input flags, cache key, or certified object bytes.
+  probe_minic="$minic"
+  probe_gcc=/usr/bin/riscv64-linux-gnu-gcc
+  if [[ "$cohort_scope" == SHARD_COMPILE_ONLY && "${COHORT_PROFILE_STAGES:-1}" == 1 ]]; then
+    probe_dir="$ev/stage-probe"
+    mkdir -p "$probe_dir"
+    : >"$probe_dir/stages.tsv"
+    cat >"$probe_dir/measure" <<'SH_STAGE_MEASURE'
+#!/usr/bin/env bash
+set -uo pipefail
+kind=${PERF_KIND:?}
+executable=${PERF_REAL:?}
+log=${PERF_LOG:?}
+input="-"
+output="-"
+args=("$@")
+for ((i=0;i<${#args[@]};i++)); do
+  case "${args[i]}" in
+    -E) [[ "$kind" != minic ]] && kind=gcc_E ;;
+    -x)
+      if ((i+1<${#args[@]})) && [[ "${args[i+1]}" == assembler* ]]; then
+        kind=gnu_as
+      fi ;;
+    -o)
+      if ((i+1<${#args[@]})); then
+        output=${args[i+1]}
+        ((i+=1))
+      fi ;;
+    *.c|*.i|*.s|*.S) input=${args[i]} ;;
+  esac
+done
+bytes=0
+[[ "$input" == "-" ]] || bytes=$(stat -c '%s' -- "$input" 2>/dev/null || printf 0)
+started=$(date +%s%N)
+"$executable" "$@"
+rc=$?
+ended=$(date +%s%N)
+{
+  flock 9
+  printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$kind" "$(((ended-started)/1000000))" "$rc" "$bytes" "$input" "$output" >&9
+} 9>>"$log"
+exit "$rc"
+SH_STAGE_MEASURE
+    chmod +x "$probe_dir/measure"
+    for label in minic gcc; do
+      if [[ "$label" == minic ]]; then
+        real_tool="$minic"
+        probe_minic="$probe_dir/minic"
+      else
+        real_tool=/usr/bin/riscv64-linux-gnu-gcc
+        probe_gcc="$probe_dir/gcc"
+      fi
+      cat >"$probe_dir/$label" <<SH_STAGE_LAUNCHER
+#!/usr/bin/env bash
+export PERF_KIND=$(printf '%q' "$label")
+export PERF_REAL=$(printf '%q' "$real_tool")
+export PERF_LOG=$(printf '%q' "$probe_dir/stages.tsv")
+exec $(printf '%q' "$probe_dir/measure") "\$@"
+SH_STAGE_LAUNCHER
+      chmod +x "$probe_dir/$label"
+    done
+    echo "COHORT_STAGE_PROFILE=ENABLED minic=$minic gcc=/usr/bin/riscv64-linux-gnu-gcc"
+  fi
   echo "COHORT_KBUILD_PARALLELISM jobs=$compile_jobs scope=$cohort_scope"
-  MINIC="$minic" REAL_CC=/usr/bin/riscv64-linux-gnu-gcc \
+  MINIC="$probe_minic" REAL_CC="$probe_gcc" \
     MINIC_KEEP_INTERMEDIATES=0 MINIC_PRESERVE_FAILURE_INPUTS=1 \
     MINIC_KBUILD_SUCCESS_TRACE="$ev/mini-success-objects.txt" \
     MINIC_KBUILD_OBJECT_HASH_TRACE="$ev/mini-object-hashes.sha256" \
@@ -187,7 +254,7 @@ else
         rm -f -- "$out/$target" "$out/$(dirname "$target")/.${target##*/}.cmd"
       done
       retry_rc=0
-      MINIC="$minic" REAL_CC=/usr/bin/riscv64-linux-gnu-gcc \
+      MINIC="$probe_minic" REAL_CC="$probe_gcc" \
         MINIC_KEEP_INTERMEDIATES=0 MINIC_PRESERVE_FAILURE_INPUTS=1 \
         MINIC_KBUILD_SUCCESS_TRACE="$ev/mini-success-objects.txt" \
         MINIC_KBUILD_OBJECT_HASH_TRACE="$ev/mini-object-hashes.sha256" \
@@ -202,6 +269,30 @@ else
         tail -n 35 "$ev/retry.log"
       fi
     fi
+  fi
+  if [[ -s "$ev/stage-probe/stages.tsv" ]]; then
+    python3 - "$ev/stage-probe/stages.tsv" <<'PY_STAGE_TOTALS'
+from pathlib import Path
+import sys
+from collections import defaultdict
+rows = defaultdict(list)
+for line in Path(sys.argv[1]).read_text().splitlines():
+    fields = line.split("\t")
+    if len(fields) != 6:
+        raise SystemExit("COHORT_STAGE_PROFILE=FAIL malformed probe evidence")
+    stage, elapsed, rc, nbytes, inp, outp = fields
+    rows[stage].append((int(elapsed), int(rc), int(nbytes), inp))
+for stage, samples in sorted(rows.items()):
+    durations = sorted(x[0] for x in samples)
+    n = len(durations)
+    total = sum(durations)
+    slowest = max(samples, key=lambda x: x[0])
+    print(f"COHORT_STAGE_TIME stage={stage} count={n} "
+          f"total_ms={total} p50_ms={durations[(n-1)//2]} "
+          f"p95_ms={durations[(95*n+99)//100-1]} "
+          f"max_ms={slowest[0]} failed={sum(x[1]!=0 for x in samples)} "
+          f"max_input_bytes={slowest[2]} slowest_input={slowest[3]}")
+PY_STAGE_TOTALS
   fi
   : >"$ev/compile-blockers.txt"
   compiled=0
