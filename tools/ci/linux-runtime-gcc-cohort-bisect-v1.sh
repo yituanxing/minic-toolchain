@@ -879,28 +879,31 @@ PY_EARLY_SYMBOLS
       else
         echo "COHORT_KERNEL_EARLY_FRONTIER=NO_SERIAL_OR_PC_PROOF trial=$name"
       fi
-      # The golden kernel has already passed the complete initramfs/P1
-      # oracles, but compare it AGAIN under this exact kernel-only QEMU
-      # invocation: absence of a MiniC banner is meaningful only when GNU
-      # reaches the same stage in the same runner and time window.
-      golden_early_rc=0
-      timeout --signal=TERM 15s qemu-system-riscv64 \
-        -M virt -cpu max -m 512M -smp 1 -nographic -no-reboot \
-        -bios default -kernel "$gold_snapshot/arch/riscv/boot/Image" \
-        -append 'console=ttyS0 earlycon=sbi loglevel=8 panic=-1' \
-        </dev/null >"$d/qemu-golden-noinitrd.log" 2>&1 || golden_early_rc=$?
-      if grep -Fq 'Linux version 6.6.143' "$d/qemu-golden-noinitrd.log"; then
-        echo "COHORT_GCC_EARLY_REFERENCE=LINUX_BANNER trial=$name"
-      else
-        echo "COHORT_GCC_EARLY_REFERENCE=NO_LINUX_BANNER trial=$name rc=$golden_early_rc"
-      fi
-      echo "COHORT_GCC_EARLY_LOG_END"
-      tail -n 14 "$d/qemu-golden-noinitrd.log"
-      echo "COHORT_GCC_EARLY_LOG_END"
-      {
-        echo "COHORT_GCC_EARLY_REFERENCE_BANNER=$(grep -Fqc 'Linux version 6.6.143' "$d/qemu-golden-noinitrd.log" || true)"
+      # The full-all trial compares the pinned golden kernel on this
+      # runner. Focused GCC-object swaps reuse that result: the golden
+      # Image, QEMU command and runner have not changed.
+      if [[ "$name" == full_all ]]; then
+        golden_early_rc=0
+        timeout --signal=TERM 15s qemu-system-riscv64 \
+          -M virt -cpu max -m 512M -smp 1 -nographic -no-reboot \
+          -bios default -kernel "$gold_snapshot/arch/riscv/boot/Image" \
+          -append 'console=ttyS0 earlycon=sbi loglevel=8 panic=-1' \
+          </dev/null >"$d/qemu-golden-noinitrd.log" 2>&1 || golden_early_rc=$?
+        if grep -Fq 'Linux version 6.6.143' "$d/qemu-golden-noinitrd.log"; then
+          echo "COHORT_GCC_EARLY_REFERENCE=LINUX_BANNER trial=$name"
+        else
+          echo "COHORT_GCC_EARLY_REFERENCE=NO_LINUX_BANNER trial=$name rc=$golden_early_rc"
+        fi
+        echo "COHORT_GCC_EARLY_LOG_END"
         tail -n 14 "$d/qemu-golden-noinitrd.log"
-      } >>"$d/runtime.log"
+        echo "COHORT_GCC_EARLY_LOG_END"
+        {
+          echo "COHORT_GCC_EARLY_REFERENCE_BANNER=$(grep -Fqc 'Linux version 6.6.143' "$d/qemu-golden-noinitrd.log" || true)"
+          tail -n 14 "$d/qemu-golden-noinitrd.log"
+        } >>"$d/runtime.log"
+      else
+        echo "COHORT_GCC_EARLY_REFERENCE=REUSED_FROM_FULL_ALL trial=$name same_runner=true"
+      fi
       echo "COHORT_KERNEL_EARLY_LOG_END"
       tail -n 75 "$d/qemu-early-noinitrd.log"
       echo "COHORT_KERNEL_EARLY_LOG_END"

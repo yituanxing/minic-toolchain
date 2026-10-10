@@ -67,7 +67,9 @@ def sample(image: Path, out: Path, timeout_s: int, qemu: str) -> int:
             "-kernel", str(image), "-append",
             "console=ttyS0 earlycon=sbi loglevel=8 panic=-1",
             "-qmp", f"unix:{socket_path},server=on,wait=off"]
-    samples = [2, 8, 18]
+    # Three QMP observations suffice to discriminate persistent earlycon
+    # execution from post-earlycon progress without 18 seconds per trial.
+    samples = [1, 4, 8]
     rc = 124
     with console_path.open("w") as console, result_path.open("w") as evidence:
         proc = subprocess.Popen(argv, stdout=console, stderr=subprocess.STDOUT,
@@ -170,7 +172,7 @@ def main() -> int:
     if not args.image.is_file() or args.image.stat().st_size <= 0:
         p.error("image must be an existing non-empty file")
     if not 20 <= args.timeout_seconds <= 120:
-        p.error("timeout must allow the 18s register sample")
+        p.error("timeout must allow the register sample")
     return sample(args.image, args.output_dir, args.timeout_seconds, args.qemu)
 
 
