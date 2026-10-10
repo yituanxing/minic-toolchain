@@ -68,3 +68,19 @@ Independent real CI evidence:
 - `#38035372863` top symbol diagnostics show largest text symbol `sock_ops_convert_ctx_access` **1,101,458 bytes**, `hidinput_configure_usage` **359,082 bytes**, `___bpf_prog_run` **288,374 bytes**. Largest object-file deltas: `kernel/bpf/verifier.o` **+4,248,248 bytes**, `net/core/filter.o` **+3,853,768**, `net/core/dev.o` **+2,216,976**, and `lib/zstd/compress/zstd_lazy.o` **+2,176,016**. These are optimization hot spots, **not proven early-boot culprits**.
 
 **Interpretation and priority:** first resolve the MiniC early boot PC/frontier using unchanged candidate bytes and independent GNU comparison. Meanwhile preserve the precise per-stage timing and object/section growth metrics; C-codegen amplification is a real separate issue worth tackling once first-fault isolation identifies the relevant owners. Never mask this by making QEMU ignore overlapping ROM ranges.
+
+## First real RISC-V guest instruction frontier (QMP, same Image)
+
+Actions [#38036149306](https://github.com/yituanxing/minic-toolchain/actions/runs/38036149306) proved a reproducible diagnostic after removing ONLY the overlapping initrd from the emulator command: RISC-V guest MMU is active (`satp=a000000000087a02`), and guest PC changes inside high-kernel addresses. The original QEMU initrd/P1 oracle still correctly fails closed; **no full kernel boot PASS is claimed**.
+
+Actions [#38036511646](https://github.com/yituanxing/minic-toolchain/actions/runs/38036511646) resolved three QMP snapshots against the *exact same trial's MiniC-linked `vmlinux`*, not GCC symbol offsets:
+
+| Guest sample | Kernel PC | Closest MiniC vmlinux code symbol | Trap CSR evidence |
+| --- | --- | --- | --- |
+| 2 seconds | `ffffffff87305260` | `strlen+0x0` | `mepc=ffffffff80073da6` → `sbi_ecall+0x2e2` |
+| 8 seconds | `ffffffff8759d430` | `setup_earlycon+0x2f2` | same `mepc`, `sepc=80201048` |
+| 18 seconds | `ffffffff873052e0` | `strncmp+0x0` | same CSRs |
+
+The PC **is not stable**, and the 25-second previous kernel-only trial emitted only an OpenSBI *serial* banner. These two facts must not be conflated: the guest is executing Linux kernel code, but there is **no Linux version/banner yet**. Golden GCC Image under the identical kernel-only QEMU command does print a Linux banner. This demonstrates a material pre-banner runtime regression or drastic early-path slowdown, but neither a single faulty function nor the exact cause is proven by these three samples. The highest-value next experiment is a **GCC substitution/paired replay of early boot and string/earlycon C owners**, authenticated against the same GNU golden fixture; avoid changing all MiniC compiler optimizations at once.
+
+The reusable QMP collector `tools/ci/linux-runtime-qmp-pc-sampler-v1.py` is read-only and collects registers using a short per-process Unix-domain QMP socket (to respect Linux AF_UNIX path length limits). It does not modify the emulator, kernel, objects or caches. The collector's smoke test and full M0 structure gate passed on the implementation SHA. QMP HMP output is a diagnostic, not a boot oracle.
