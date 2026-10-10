@@ -114,3 +114,21 @@ These outcomes are causal **diagnostics** for a specific component, not a single
 
 - Preserve single-owner GCC-swap checks as the primary runtime diagnostic; 2,064-object clean rebuild is **not** necessary per hypothesis.
 - Focused QMP sampling changed from `2,8,18s` to `1,4,8s` and pinned GCC early comparison is now run only once per receiver instead of again for each single-object swap. These are diagnostic-wall-time optimizations, **not compiler throughput improvement**, and the canonical full initrd/P1 runtime contract remains unchanged.
+
+## Validated QMP loop variable / faster iteration (Actions #38043910784)
+
+The next real GitHub Actions run compiled no new C owners (seven shard caches still authenticated); the receiver successfully GNU-linked the same candidate configuration and collected read-only guest memory:
+
+| MiniC-only, kernel-only QEMU timestamp | `sp+0x10` (exact `match` local) | Relative to `__earlycon_table` | `sp+0x18` length |
+| --- | --- | --- | --- |
+| 1 s | `0xffffffff878cefc0` | entry 0 | 5 |
+| 4 s | `0xffffffff878cf058` | entry 1 (152 bytes) | 8 |
+| 8 s | `0xffffffff878cf6e0` | entry 12 (12 × 152 bytes) | 5 |
+
+All are inside the true `__earlycon_table` range `[0xffffffff878cefc0,0xffffffff878cf940)`, whose length is 16 × 152 bytes. This proves that the actual MiniC kernel is **still scanning earlycon entries across multiple seconds**, long after the finite source loop and one allowed retry should finish. The independent disassembly shows its loop exhaustion path unconditionally restarts the scan without testing `empty_compatible`, with no `-ENOENT` return. **This is now a targeted, independently supported MiniC control-flow miscompile hypothesis, not a string-library diagnosis.**
+
+The GCC-only `drivers/tty/serial/earlycon.o` replacement, reusing the other 2,063 MiniC C candidates, has the CPU in `__minic_inline_spec_676_114` after 1 s, `__minic_inline_spec_586_127` after 4 s, and `pcpu_block_update_hint_alloc` after 8 s. It does not produce a full serial Linux banner or PID1 handoff under the kernel-only probe, so do not claim runtime PASS.
+
+Measured receiver stage wall times for that run: full-all first GNU link **47.172 s**, four generated-header-dependent C replays **9.145 s**, second GNU link **37.823 s**; focused single-GCC-owner first link **39.298 s**, header replay **9.302 s**, second link **37.700 s**. The 1/4/8-second QMP series saves ~10 seconds per experiment over the old 2/8/18-second window, and the pure-GCC early boot control is now reused rather than rerun on the focused experiment. Full original QEMU/initrd remains INCONCLUSIVE due Image/ROM overlap.
+
+**Next highest-leverage activity:** reproduce the missing false edge/negative-ENOENT return using a tiny standalone mutable-`_Bool`, `goto again`, `for` program and isolate exactly which front-end/Core pass removes the false edge; only then edit MiniC's compiler implementation. No increase in workflow count or branch count is necessary.
