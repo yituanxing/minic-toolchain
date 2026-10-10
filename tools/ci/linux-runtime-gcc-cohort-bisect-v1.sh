@@ -817,6 +817,22 @@ for line in nm.stdout.splitlines():
             continue
 pairs.sort()
 addresses=[x[0] for x in pairs]
+layout={}
+for line in nm.stdout.splitlines():
+    cols=line.split(None,2)
+    if len(cols)==3 and cols[2] in ("__earlycon_table","__earlycon_table_end"):
+        try:
+            layout[cols[2]]=int(cols[0],16)
+        except ValueError:
+            pass
+if len(layout)==2:
+    span=layout["__earlycon_table_end"]-layout["__earlycon_table"]
+    print("COHORT_EARLYCON_TABLE_LAYOUT begin=0x%x end=0x%x span_bytes=%d "
+          "struct_earlycon_id_size_expected=152 remainder=%d" %
+          (layout["__earlycon_table"],layout["__earlycon_table_end"],
+           span,span%152))
+else:
+    print("COHORT_EARLYCON_TABLE_LAYOUT=INCOMPLETE names="+",".join(sorted(layout)))
 last_pcs=[]
 for line in samples.read_text().splitlines():
     sample=json.loads(line)
@@ -884,6 +900,29 @@ PY_EARLY_SYMBOLS
       echo "COHORT_KERNEL_EARLY_LOG_END"
       tail -n 75 "$d/qemu-early-noinitrd.log"
       echo "COHORT_KERNEL_EARLY_LOG_END"
+      # Diagnostic RAM-only experiment: QEMU 8.x may pin the initrd at
+      # 128 MiB, while newer QEMU scales its placement with guest RAM.
+      # The normal 512 MiB contract above is never changed or bypassed.
+      if [[ "$name" == full_all || "$name" == gcc_only_drivers_tty_serial_earlycon_o ]]; then
+        high_rc=0
+        high_started=$(date +%s%N)
+        LINUX_IMAGE="$d/Image" INITRAMFS="$ev/runtime-initramfs.cpio.gz" \
+          BUILD_DIR="$d/qemu-highram" LINUX_RELEASE=6.6.143 \
+          LINUX_RUNTIME_PROFILE=fast QEMU_RAM_MB=1024 QEMU_TIMEOUT_SECONDS=25 \
+          bash "$repo/tests/external/linux/runtime_boot.sh" \
+            >"$d/runtime-highram.log" 2>&1 || high_rc=$?
+        high_ended=$(date +%s%N)
+        echo "COHORT_TIMING trial=$name stage=qemu_1024mb elapsed_ms=$(((high_ended-high_started)/1000000)) rc=$high_rc"
+        if grep -Fq 'Some ROM regions are overlapping' "$d/runtime-highram.log"; then
+          echo "COHORT_QEMU_1024MB=LOAD_OVERLAP trial=$name"
+        elif grep -Rq 'Linux version 6.6.143' "$d/qemu-highram" 2>/dev/null; then
+          echo "COHORT_QEMU_1024MB=LINUX_BANNER trial=$name rc=$high_rc"
+        else
+          echo "COHORT_QEMU_1024MB=NO_BANNER trial=$name rc=$high_rc"
+        fi
+        tail -n 18 "$d/runtime-highram.log"
+        cat "$d/runtime-highram.log" >>"$d/runtime.log"
+      fi
       # Persist evidence within an existing uploaded artifact path. Retain
       # INCONCLUSIVE: a kernel-only probe cannot satisfy the PID1/P1 oracle.
       cat "$d/qemu-early-noinitrd.log" >>"$d/runtime.log"

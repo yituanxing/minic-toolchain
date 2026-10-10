@@ -17,7 +17,7 @@ import subprocess
 import time
 from pathlib import Path
 
-REGISTER = re.compile(r"(?im)^\s*(pc|mepc|sepc|satp|mcause|scause)\s+((?:0x)?[0-9a-f]+)\b")
+REGISTER = re.compile(r"(?im)^\s*(pc|mepc|sepc|satp|mcause|scause|sp|a0|a1)\s+((?:0x)?[0-9a-f]+)\b")
 
 
 def selected_registers(text: str) -> dict[str, str]:
@@ -100,8 +100,27 @@ def sample(image: Path, out: Path, timeout_s: int, qemu: str) -> int:
                         "arguments": {"command-line": "info registers", "cpu-index": 0}
                     }))
                     regs = selected_registers(raw)
+                    # Read-only view of the kernel stack. In the reproducible
+                    # earlycon.o assembly, match is stored at sp+0x10. Do not
+                    # assume the value is a valid pointer or modify guest RAM.
+                    stack_window = ""
+                    if "sp" in regs:
+                        try:
+                            sp_addr = int(regs["sp"], 16)
+                            stack_window = str(qmp_call(reader, writer, {
+                                "execute": "human-monitor-command",
+                                "arguments": {
+                                    "command-line": f"x /4gx 0x{sp_addr+16:x}",
+                                    "cpu-index": 0
+                                }
+                            }))[:650]
+                        except (ValueError, RuntimeError, OSError) as exc:
+                            stack_window = f"UNAVAILABLE: {exc}"
+                        print(f"COHORT_QMP_STACK at_s={second} sp={regs['sp']} "
+                              f"sp_plus_0x10={stack_window!r}", flush=True)
                     evidence.write(json.dumps({
                         "at_seconds": second, "registers": regs,
+                        "stack_window": stack_window,
                         "raw": raw
                     }, sort_keys=True) + "\n")
                     evidence.flush()
