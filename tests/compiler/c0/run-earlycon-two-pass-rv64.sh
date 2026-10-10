@@ -42,3 +42,26 @@ else
     echo "EARLYCON_TWO_PASS_MINIC=FAIL rc=$rc gcc_control=PASS" >&2
     exit 1
 fi
+
+# Second case preserves the actual Linux earlycon descriptor loop, including
+# pointer induction, continues, nested conditionals and a two-pass goto.
+"$cc" -E -P -x c "$root/tests/compiler/c0/earlycon_table_goto_runtime.c" -o "$work/table.i"
+"$cc" -O0 -c "$work/table.i" -o "$work/table-gcc.o"
+sed 's/earlycon_probe_entry/earlycon_table_probe_entry/' "$work/start.s" >"$work/table-start.s"
+"$cc" -c -x assembler "$work/table-start.s" -o "$work/table-start.o"
+"$ld" -static -e _start -o "$work/table-gcc" "$work/table-start.o" "$work/table-gcc.o"
+if ! timeout 8s "$qemu" "$work/table-gcc"; then
+    echo "EARLYCON_TABLE_GCC_CONTROL=FAIL" >&2
+    exit 1
+fi
+echo "EARLYCON_TABLE_GCC_CONTROL=PASS"
+"$MINIC" -S "$work/table.i" -o "$work/table-minic.s"
+"$cc" -c -x assembler "$work/table-minic.s" -o "$work/table-minic.o"
+"$ld" -static -e _start -o "$work/table-minic" "$work/table-start.o" "$work/table-minic.o"
+if timeout 8s "$qemu" "$work/table-minic"; then
+    echo "EARLYCON_TABLE_MINIC=PASS cases=2"
+else
+    rc=$?
+    echo "EARLYCON_TABLE_MINIC=FAIL rc=$rc gcc_control=PASS" >&2
+    exit 1
+fi
