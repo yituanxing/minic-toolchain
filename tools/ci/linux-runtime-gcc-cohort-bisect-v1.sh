@@ -1129,6 +1129,33 @@ if [[ "${COHORT_EARLYCON_HOTFIX:-0}" == 1 ]]; then
         tail -n 35 "$d/runtime-explicit-fast.log" || true
       fi
     fi
+    if [[ "${COHORT_UART_EARLYCON:-0}" == 1 ]]; then
+      # Same already-linked mixed kernel Image; change ONLY the boot args.
+      # Linux 6.6.143 defconfig does not enable SBI earlycon but selects
+      # SERIAL_EARLYCON through SERIAL_8250_CONSOLE.
+      d="$ev/trials/earlycon_fixed_only"
+      config="$out/.config"
+      echo "EARLYCON_UART_CONFIG=BEGIN"
+      grep -E '^(CONFIG_SERIAL_8250_CONSOLE=|CONFIG_SERIAL_EARLYCON=|CONFIG_SERIAL_EARLYCON_RISCV_SBI=|# CONFIG_SERIAL_EARLYCON_RISCV_SBI)' "$config" || true
+      echo "EARLYCON_UART_CONFIG=END"
+      uartlog="$d/qemu-uart-earlycon.log"
+      set +e
+      timeout --signal=TERM 25s qemu-system-riscv64 \
+        -M virt -cpu max -m 512M -smp 1 -nographic -no-reboot \
+        -bios default -kernel "$d/Image" \
+        -append 'console=ttyS0 earlycon=uart8250,mmio,0x10000000,115200n8 loglevel=8 ignore_loglevel panic=-1' \
+        </dev/null >"$uartlog" 2>&1
+      urc=$?
+      set -e
+      echo "EARLYCON_UART_QEMU_RC=$urc"
+      if grep -aq 'Linux version 6.6.143' "$uartlog"; then
+        echo "EARLYCON_UART_BANNER=OBSERVED"
+      else
+        echo "EARLYCON_UART_BANNER=NOT_OBSERVED"
+      fi
+      grep -aE 'Linux version 6\.6\.143|Kernel command line|earlycon:|printk:|Kernel panic|Oops:|BUG:|soft lockup|devtmpfs:|Run /init|Starting init:' \
+        "$uartlog" | tail -n 80 || true
+    fi
     exit 0
   fi
   echo "EARLYCON_HOTFIX_RESULT=INCONCLUSIVE verdict=$TRIAL_VERDICT frontier_evidence=insufficient"
