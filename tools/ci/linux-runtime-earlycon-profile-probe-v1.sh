@@ -114,6 +114,79 @@ PY_UNPACK_PATCH
            apply-core-unreachable-reentry-v0.py)
     for ((sub=-1;sub<${#chain[@]};sub++)); do
       if ((sub>=0)); then
+        if [[ "${chain[sub]}" == "apply-core-unreachable-reentry-v0.py" ]]; then
+          # This apparent single patch invokes 20 more CFG patches by exec().
+          # Isolate its prologue and nested sequence without 20 CI runs.
+          (
+            cd "$first_tree"
+            python3 - <<'PY_CORE_REENTRY_MAIN'
+from pathlib import Path
+p=Path("tools/ci/apply-core-unreachable-reentry-v0.py")
+source=p.read_text()
+anchor="for script in ("
+assert source.count(anchor)==1
+exec(compile(source.split(anchor,1)[0], str(p)+" [main only]", "exec"))
+PY_CORE_REENTRY_MAIN
+          ) >>"$abs_probe/prefix-patches.log" 2>&1
+          nested=(
+            apply-residual-constant-closure-v0.py
+            apply-pointer-bitcast-integer-cfg-v0.py
+            apply-constant-internal-call-cfg-v0.py
+            apply-constant-call-parameter-facts-v0.py
+            apply-static-const-global-cfg-v0.py
+            apply-constant-call-leading-if-v0.py
+            apply-statement-expression-constant-cfg-v0.py
+            apply-null-helper-first-return-v0.py
+            apply-empty-internal-void-call-elision-v0.py
+            apply-constant-if-external-reentry-v0.py
+            apply-pure-dereference-cfg-v0.py
+            apply-cfg-annihilator-priority-v0.py
+            apply-statement-expression-postlower-fact-v0.py
+            apply-loop-invariant-local-facts-v0.py
+            apply-if-local-fact-meet-v0.py
+            apply-small-constant-array-loop-cfg-v0.py
+            apply-small-loop-for-init-expression-v0.py
+            apply-small-constant-loop-probe-v0.py
+            apply-rv64-static-pcrel-global-address-v0.py
+            apply-tail-cfg-closure-v0.py
+          )
+          for ((inner=-1;inner<${#nested[@]};inner++)); do
+            if ((inner>=0)); then
+              (cd "$first_tree" && python3 "tools/ci/${nested[inner]}") \
+                  >>"$abs_probe/prefix-patches.log" 2>&1
+            fi
+            inn_name=core_reentry_main
+            if ((inner>=0)); then inn_name=${nested[inner]}; fi
+            if (
+              cd "$first_tree"
+              make -j4 MODE=release CFLAGS=-Werror \
+                BUILD_DIR="$abs_probe/first-patch-build" \
+                "$abs_probe/first-patch-build/bin/minic" \
+                "$abs_probe/first-patch-build/bin/minic-cc"
+            ) >"$abs_probe/nested-build-$inner.log" 2>&1; then
+              inn_rc=0
+              (
+                cd "$first_tree"
+                MINIC="$abs_probe/first-patch-build/bin/minic" \
+                  BUILD_DIR="$abs_probe/nested-rv64-$inner" \
+                  RISCV_CC=riscv64-linux-gnu-gcc RISCV_LD=riscv64-linux-gnu-ld \
+                  QEMU_RISCV64=qemu-riscv64 \
+                  bash tests/compiler/c0/run-earlycon-two-pass-rv64.sh
+              ) >"$abs_probe/nested-test-$inner.log" 2>&1 || inn_rc=$?
+              echo "EARLYCON_PATCH_NESTED step=$inner name=$inn_name build=PASS rv64_rc=$inn_rc"
+              grep -E 'EARLYCON_(TWO_PASS|TABLE)_' "$abs_probe/nested-test-$inner.log" || true
+              if ((inn_rc!=0)); then
+                first_bad=32
+                echo "EARLYCON_PATCH_FIRST_BAD_NESTED step=$inner name=$inn_name"
+                break
+              fi
+            else
+              echo "EARLYCON_PATCH_NESTED step=$inner name=$inn_name build=UNAVAILABLE"
+              tail -n 2 "$abs_probe/nested-build-$inner.log"
+            fi
+          done
+          break
+        fi
         (
           cd "$first_tree"
           python3 "tools/ci/${chain[sub]}"

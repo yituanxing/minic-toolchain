@@ -2,8 +2,9 @@
  * through a for-loop reached through a backward goto. No Linux dependency.
  * Regression witness: pristine MiniC PASS, production 39-patch runtime
  * profile FAIL. The first bad buildable prefix is #32, an inline-asm
- * symbolic specialization wrapper that also applies seven hidden follow-on
- * CFG/boolean patches; the same-run differential isolates those seven. */
+ * symbolic specialization wrapper invokes seven follow-on patches;
+ * the last, unreachable-reentry, expands to another twenty CFG patches.
+ * The focused regression now isolates them incrementally on ONE runner. */
 typedef _Bool bool;
 static int scan_count;
 static int table[3] = {1, 3, 5};
