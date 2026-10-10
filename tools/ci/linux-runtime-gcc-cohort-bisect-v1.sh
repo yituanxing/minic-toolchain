@@ -450,22 +450,31 @@ trial() {
     # compiled against stale offsets or loosen the generated-input guard.
     python3 "$repo/tools/ci/linux-runtime-kbuild-regeneration-guard-v1.py" \
       --mode impact --out "$out" --evidence "$d/generated-before.json" \
-      --golden-out "$gold_snapshot" --selected "$d/selected-objects.txt" \
+      --golden-out "$gold_snapshot" --selected "$objects_file" \
       --affected-file "$d/affected-objects.txt" | tee -a "$d/guard.log" || {
         echo "COHORT_RESULT=INCONCLUSIVE stage=header_impact name=$name"; exit 8;
       }
     last_candidate_delta=""
     if [[ -s "$d/affected-objects.txt" ]]; then
-      # Start with the complete 2064-member selection only. A partially
-      # selected prefix may require *GCC* rebuilds under the new headers,
-      # whose hashes differ from the pristine GCC object reference. Such
-      # mixed selections require their own paired dynamic baseline, and
-      # must never inherit this full-selection repair.
-      if [[ "$mode" != prefix || "$count" != "$n" ]]; then
-        echo "COHORT_RESULT=INCONCLUSIVE stage=dynamic_header_requires_full_selection name=$name"
+      # Replay is permitted for a mixed GCC/MiniC selection ONLY if every
+      # TU that depends on changed generated headers is selected for MiniC
+      # refresh. Check the FULL frozen GCC dependency set, not a subset.
+      mapfile -t affected <"$d/affected-objects.txt"
+      if ! python3 - "$d/affected-objects.txt" "$d/selected-objects.txt" <<'PY_HEADER_CLOSURE'
+from pathlib import Path
+import sys
+affected={x.strip() for x in Path(sys.argv[1]).read_text().splitlines() if x.strip()}
+selected={x.strip() for x in Path(sys.argv[2]).read_text().splitlines() if x.strip()}
+missing=sorted(affected-selected)
+if missing:
+    print("COHORT_HEADER_MIXED=INCONCLUSIVE stale_GCC_dependents="+",".join(missing))
+    raise SystemExit(8)
+print(f"COHORT_HEADER_MIXED=PASS affected={len(affected)} all_selected=true")
+PY_HEADER_CLOSURE
+      then
+        echo "COHORT_RESULT=INCONCLUSIVE stage=dynamic_header_requires_all_dependents_selected name=$name"
         exit 8
       fi
-      mapfile -t affected <"$d/affected-objects.txt"
       echo "COHORT_HEADER_RECONCILE=START name=$name owners=${#affected[@]}"
       regen_started=$(date +%s%N)
       python3 "$repo/tools/ci/linux-runtime-kbuild-regeneration-guard-v1.py" \
@@ -935,7 +944,33 @@ case "$TRIAL_VERDICT" in
     fail_kind="$TRIAL_VERDICT"
     lo=0
     hi="$n" ;;
-  *) echo "COHORT_RESULT=INCONCLUSIVE at=full"; exit 8 ;;
+  *)
+    # A too-large Image triggers a host QEMU initrd ROM overlap before the
+    # kernel can run. Reuse authenticated MiniC objects and fixed GCC objects
+    # to probe specific Linux early-init dependencies without rebuilding C.
+    # These probes NEVER claim to satisfy the full runtime/initramfs oracle.
+    if [[ "$cohort_scope" == FULL_C_UNIVERSE ]] && \
+       grep -Fq "COHORT_QEMU_LOAD_OVERLAP=CONFIRMED trial=full_all" "$ev/cohort.log"; then
+      for focused_target in lib/string.o drivers/tty/serial/earlycon.o; do
+        focused_idx=-1
+        for ((k=0;k<n;k++)); do
+          if [[ "${objects[k]}" == "$focused_target" ]]; then
+            focused_idx=$k
+            break
+          fi
+        done
+        if ((focused_idx<0)); then
+          echo "COHORT_FOCUSED_GCC_SWAP=SKIPPED target=$focused_target reason=outside_golden_C_universe"
+          continue
+        fi
+        probe_name=$(printf '%s' "$focused_target" | tr '/.' '__')
+        echo "COHORT_FOCUSED_GCC_SWAP=START target=$focused_target index=$focused_idx other_minic=$((n-1))"
+        trial "gcc_only_${probe_name}" "$focused_idx" fast all_except
+        echo "COHORT_FOCUSED_GCC_SWAP=RESULT target=$focused_target verdict=$TRIAL_VERDICT"
+      done
+    fi
+    echo "COHORT_RESULT=INCONCLUSIVE at=full"
+    exit 8 ;;
 esac
 # Full FAIL (or LINK_FAIL) vs independently certified pure-GCC baseline PASS.
 # Reuse the exact, already compiled candidate objects: no new C compilation
