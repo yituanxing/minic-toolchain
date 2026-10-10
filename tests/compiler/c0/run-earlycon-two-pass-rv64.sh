@@ -46,7 +46,7 @@ fi
 # Second case preserves the actual Linux earlycon descriptor loop, including
 # pointer induction, continues, nested conditionals and a two-pass goto.
 "$cc" -E -P -x c "$root/tests/compiler/c0/earlycon_table_goto_runtime.c" -o "$work/table.i"
-"$cc" -O0 -c "$work/table.i" -o "$work/table-gcc.o"
+"$cc" -O0 -fno-stack-protector -c "$work/table.i" -o "$work/table-gcc.o"
 sed 's/earlycon_probe_entry/earlycon_table_probe_entry/' "$work/start.s" >"$work/table-start.s"
 "$cc" -c -x assembler "$work/table-start.s" -o "$work/table-start.o"
 "$ld" -static -e _start -o "$work/table-gcc" "$work/table-start.o" "$work/table-gcc.o"
