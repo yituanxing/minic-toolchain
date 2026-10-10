@@ -88,6 +88,69 @@ fi
 for ((pn=1;pn<${#patch_sequence[@]};pn++)); do
   patch=${patch_sequence[pn]}
   ((prefix_n += 1))
+  if [[ "$patch" == "apply-inline-asm-symbolic-specialization-v0.py" ]]; then
+    # The nominal 32nd patch RUNS SEVEN hidden follow-up patches inside
+    # exec(). Isolate those seven one by one; the earlier 31 prefixes have
+    # passed real QEMU. No full-kernel rebuild is ever needed here.
+    echo "EARLYCON_PATCH_STACK_UNPACK=START at_profile_index=$prefix_n"
+    (
+      cd "$first_tree"
+      python3 - <<'PY_UNPACK_PATCH'
+from pathlib import Path
+path = Path("tools/ci/apply-inline-asm-symbolic-specialization-v0.py")
+src = path.read_text()
+anchor = "# Keep expanded final-link validation on the exact focused semantic stack."
+assert src.count(anchor) == 1
+main = src.split(anchor, 1)[0]
+exec(compile(main, str(path)+" [main only]", "exec"))
+PY_UNPACK_PATCH
+    ) >>"$abs_probe/prefix-patches.log" 2>&1
+    chain=(apply-local-null-pointer-conditions-v0.py
+           apply-inline-specialization-boolean-range-v1.py
+           apply-inline-specialization-local-boolean-domain-v0.py
+           apply-constant-inline-call-cfg-v1.py
+           apply-local-integer-arithmetic-closure-v0.py
+           apply-constant-cfg-product-v0.py
+           apply-core-unreachable-reentry-v0.py)
+    for ((sub=-1;sub<${#chain[@]};sub++)); do
+      if ((sub>=0)); then
+        (
+          cd "$first_tree"
+          python3 "tools/ci/${chain[sub]}"
+        ) >>"$abs_probe/prefix-patches.log" 2>&1
+      fi
+      phase=main_only
+      if ((sub>=0)); then phase=${chain[sub]}; fi
+      if (
+        cd "$first_tree"
+        make -j4 MODE=release CFLAGS=-Werror \
+          BUILD_DIR="$abs_probe/first-patch-build" \
+          "$abs_probe/first-patch-build/bin/minic" \
+          "$abs_probe/first-patch-build/bin/minic-cc"
+      ) >"$abs_probe/chain-build-${sub}.log" 2>&1; then
+        sub_rc=0
+        (
+          cd "$first_tree"
+          MINIC="$abs_probe/first-patch-build/bin/minic" \
+            BUILD_DIR="$abs_probe/chain-rv64-${sub}" \
+            RISCV_CC=riscv64-linux-gnu-gcc RISCV_LD=riscv64-linux-gnu-ld \
+            QEMU_RISCV64=qemu-riscv64 \
+            bash tests/compiler/c0/run-earlycon-two-pass-rv64.sh
+        ) >"$abs_probe/chain-test-${sub}.log" 2>&1 || sub_rc=$?
+        echo "EARLYCON_PATCH_CHAIN stage=${sub} name=$phase build=PASS rv64_rc=$sub_rc"
+        grep -E 'EARLYCON_(TWO_PASS|TABLE)_' "$abs_probe/chain-test-${sub}.log" || true
+        if ((sub_rc!=0)); then
+          first_bad=32
+          echo "EARLYCON_PATCH_FIRST_BAD_SUBPATCH stage=$sub name=$phase"
+          break
+        fi
+      else
+        echo "EARLYCON_PATCH_CHAIN stage=$sub name=$phase build=UNAVAILABLE"
+        tail -n 3 "$abs_probe/chain-build-${sub}.log"
+      fi
+    done
+    break
+  fi
   ( cd "$first_tree" && python3 "tools/ci/$patch" ) >>"$abs_probe/prefix-patches.log" 2>&1
   if (
     cd "$first_tree"

@@ -1,7 +1,9 @@
 /* Minimum earlycon-style scan: a mutable _Bool gates a second pass
  * through a for-loop reached through a backward goto. No Linux dependency.
  * Regression witness: pristine MiniC PASS, production 39-patch runtime
- * profile FAIL. See opt-in prefix isolation for the first bad patch. */
+ * profile FAIL. The first bad buildable prefix is #32, an inline-asm
+ * symbolic specialization wrapper that also applies seven hidden follow-on
+ * CFG/boolean patches; the same-run differential isolates those seven. */
 typedef _Bool bool;
 static int scan_count;
 static int table[3] = {1, 3, 5};
