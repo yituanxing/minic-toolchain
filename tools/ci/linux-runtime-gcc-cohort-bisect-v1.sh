@@ -784,6 +784,57 @@ PY_LARGEST_TUS
         >"$d/qmp-probe.log" 2>&1 || early_rc=$?
       cat "$d/qmp-probe.log" >>"$d/runtime.log"
       grep -E 'COHORT_QMP_EARLY' "$d/qmp-probe.log" || true
+      # Resolve the actual repeatedly observed guest PC using the linked
+      # SAME-TRIAL vmlinux symbols (not guessed GCC offsets). The 2064
+      # object cache remains byte-identical throughout this diagnostic.
+      if [[ -s "$d/qemu-registers.jsonl" && -s "$out/vmlinux" ]]; then
+        python3 - "$d/qemu-registers.jsonl" "$out/vmlinux" <<'PY_EARLY_SYMBOLS' | tee "$d/qmp-symbols.log"
+import bisect,json,subprocess,sys
+from pathlib import Path
+samples=Path(sys.argv[1])
+vmlinux=Path(sys.argv[2])
+nm=subprocess.run(["/usr/bin/riscv64-linux-gnu-nm","-n","--defined-only",str(vmlinux)],
+                  text=True,capture_output=True,check=False)
+if nm.returncode:
+    print(f"COHORT_QMP_SYMBOL=INCONCLUSIVE nm_rc={nm.returncode}")
+    raise SystemExit(0)
+pairs=[]
+for line in nm.stdout.splitlines():
+    fields=line.split(None,2)
+    if len(fields)==3 and fields[1] in {"t","T","w","W"}:
+        try:
+            pairs.append((int(fields[0],16),fields[2]))
+        except ValueError:
+            continue
+pairs.sort()
+addresses=[x[0] for x in pairs]
+last_pcs=[]
+for line in samples.read_text().splitlines():
+    sample=json.loads(line)
+    at=sample["at_seconds"]
+    regs=sample.get("registers",{})
+    for register in ("pc","mepc","sepc"):
+        raw=regs.get(register)
+        if not raw or not addresses:
+            continue
+        try:
+            addr=int(raw,16)
+        except ValueError:
+            continue
+        if register=="pc":
+            last_pcs.append(addr)
+        pos=bisect.bisect_right(addresses,addr)-1
+        if pos<0:
+            print(f"COHORT_QMP_SYMBOL at_s={at} reg={register} addr=0x{addr:x} symbol=BELOW_LINKED_TEXT")
+        else:
+            base,symbol=pairs[pos]
+            print(f"COHORT_QMP_SYMBOL at_s={at} reg={register} addr=0x{addr:x} "
+                  f"symbol={symbol} offset=0x{addr-base:x}")
+if len(last_pcs)>=2 and last_pcs[-1]==last_pcs[-2]:
+    print(f"COHORT_QMP_STABLE_PC=OBSERVED samples={len(last_pcs)} addr=0x{last_pcs[-1]:x}")
+PY_EARLY_SYMBOLS
+        cat "$d/qmp-symbols.log" >>"$d/runtime.log"
+      fi
       early_finished=$(date +%s%N)
       echo "COHORT_TIMING trial=$name stage=qemu_early_noinitrd elapsed_ms=$(((early_finished-early_started)/1000000)) rc=$early_rc"
       printf 'timing_%s_qemu_early_noinitrd_ms=%s\n' "$name" "$(((early_finished-early_started)/1000000))" >>"$ev/identity.txt"
