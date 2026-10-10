@@ -15,6 +15,16 @@ static const struct early_id ids[3] = {
     {"test", "vendor,test", 3}
 };
 static int iterations;
+static int registration_busy;
+static int console_registered(void)
+{
+    return registration_busy;
+}
+static int register_earlycon(char *options, const struct early_id *match)
+{
+    (void)options;
+    return (int)match->payload;
+}
 static size_t mini_len(const char *s)
 {
     size_t n = 0;
@@ -37,6 +47,8 @@ static int earlycon_table_probe(char *buf)
     bool empty_compatible = 1;
     if (!buf || !buf[0])
         return -22;
+    if (console_registered())
+        return -114;
 again:
     for (match = ids; match < ids + 3; match++) {
         size_t len = mini_len(match->name);
@@ -53,7 +65,7 @@ again:
             buf += len + 1;
         } else
             buf = 0;
-        return (int)match->payload;
+        return register_earlycon(buf, match);
     }
     if (empty_compatible) {
         empty_compatible = 0;
@@ -66,6 +78,7 @@ int earlycon_table_probe_entry(void)
     char no_match[] = "absent";
     char delayed[] = "uart";
     int result;
+    registration_busy = 0;
     iterations = 0;
     result = earlycon_table_probe(no_match);
     if (result != -2 || iterations != 6)
