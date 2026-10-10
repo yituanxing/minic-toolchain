@@ -34,6 +34,14 @@ class RegenTests(unittest.TestCase):
             (self.minic / name).write_bytes(b"MINIC")
         self.selection = self.root / "selected.txt"
         self.selection.write_text("\n".join(self.owners) + "\n")
+        self.golden = self.root / "golden"
+        for name in self.owners:
+            p = Path(name)
+            dep = self.golden / p.parent / ("." + p.name + ".cmd")
+            dep.parent.mkdir(parents=True, exist_ok=True)
+            dep.write_text(f"savedcmd_{name} := riscv64-linux-gnu-gcc -c source.c\n"
+                           f"source_{name} := source.c\n"
+                           f"deps_{name} := include/linux/compiler.h include/generated/vdso-offsets.h\n")
         self.log = self.root / "link.log"
         self.log.write_text("  CC      arch/riscv/kernel/alternative.o\n"
                             "  CC      arch/riscv/kernel/signal.o\n")
@@ -58,6 +66,30 @@ class RegenTests(unittest.TestCase):
             mod.repair(self.out, self.minic, self.selection, self.log, self.snap)
         for name in self.owners:
             self.assertEqual((self.out / name).read_bytes(), b"GCC")
+
+    def test_changed_header_pinpoint_selected_dependent(self):
+        (self.headers / "vdso-offsets.h").write_text("#define VDSO_FOO 32\\n")
+        with self.assertRaisesRegex(mod.GuardError, "affected_count=2"):
+            mod.repair(self.out, self.minic, self.selection, self.log, self.snap,
+                       self.golden)
+
+    def test_changed_header_without_selected_dependencies_safe(self):
+        for name in self.owners:
+            p = Path(name)
+            dep = self.golden / p.parent / ("." + p.name + ".cmd")
+            body = dep.read_text().replace(
+                "include/generated/vdso-offsets.h", "include/generated/other.h")
+            dep.write_text(body)
+        (self.headers / "vdso-offsets.h").write_text("#define VDSO_FOO 32\\n")
+        assert mod.repair(self.out, self.minic, self.selection, self.log,
+                          self.snap, self.golden) == self.owners
+
+    def test_missing_golden_dependency_closure_rejected(self):
+        (self.headers / "vdso-offsets.h").write_text("#define VDSO_FOO 32\\n")
+        (self.golden / "arch/riscv/kernel/.signal.o.cmd").unlink()
+        with self.assertRaisesRegex(mod.GuardError, "missing pinned Kbuild"):
+            mod.repair(self.out, self.minic, self.selection, self.log, self.snap,
+                       self.golden)
 
     def test_unexplained_gcc_or_other_overwrite_is_rejected(self):
         self.log.write_text("  CC      unrelated/source.o\n")

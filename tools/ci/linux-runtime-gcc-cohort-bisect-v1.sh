@@ -445,7 +445,7 @@ trial() {
     repair_result=$(python3 "$repo/tools/ci/linux-runtime-kbuild-regeneration-guard-v1.py" \
       --mode repair --out "$out" --evidence "$d/generated-before.json" \
       --selected "$d/selected-objects.txt" --minic "$ev/minic" \
-      --link-log "$d/link.log") || {
+      --link-log "$d/link.log" --golden-out "$gold_snapshot") || {
         echo "COHORT_RESULT=INCONCLUSIVE stage=generated_header_changed name=$name"
         exit 8
       }

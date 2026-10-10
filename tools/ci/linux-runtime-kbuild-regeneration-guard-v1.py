@@ -76,17 +76,52 @@ def snapshot(out: Path, dest: Path) -> None:
     dest.write_text(json.dumps(obj, indent=2, sort_keys=True) + "\n")
 
 
-def repair(out: Path, minic: Path, selected: Path, log: Path, evidence: Path) -> list[str]:
+def selected_generated_header_dependents(
+    golden_out: Path, names: list[str], changed: list[str]
+) -> list[str]:
+    """Inspect pinned GNU Kbuild .cmd dependency closures, fail closed.
+
+    A generated-header change is relevant to MiniC source only when the
+    header is actually a recorded compile dependency of a selected C TU.
+    Unknown/missing .cmd dependency metadata is never silently accepted.
+    """
+    affected = []
+    for name in names:
+        p = PurePosixPath(name)
+        depfile = golden_out / p.parent / ("." + p.name + ".cmd")
+        if not depfile.is_file() or depfile.is_symlink():
+            raise GuardError(f"missing pinned Kbuild dependency closure: {name}")
+        body = depfile.read_text(encoding="utf-8", errors="replace")
+        if not re.search(r"(?m)^deps_[^\n]+\s*:=", body):
+            raise GuardError(f"no pinned Kbuild dependency closure: {name}")
+        if any(re.search(r"(?<![A-Za-z0-9_./-])" + re.escape(header) +
+                         r"(?![A-Za-z0-9_./-])", body) for header in changed):
+            affected.append(name)
+    return affected
+
+
+def repair(out: Path, minic: Path, selected: Path, log: Path, evidence: Path,
+           golden_out: Path | None = None) -> list[str]:
     baseline = json.loads(evidence.read_text())
     if baseline.get("schema") != SCHEMA:
         raise GuardError("invalid generated-header baseline schema")
     after = generated(out)
+    selected_names = object_paths(selected)
     if after != baseline.get("headers"):
         changed = sorted(k for k in set(after) | set(baseline.get("headers", {}))
                          if after.get(k) != baseline.get("headers", {}).get(k))
-        raise GuardError("generated header content changed, MUST re-preprocess MiniC candidates: "
-                         + ",".join(changed[:25]))
-    selected_names = object_paths(selected)
+        if golden_out is None:
+            raise GuardError("generated header content changed without pinned dependency evidence: "
+                             + ",".join(changed[:25]))
+        affected = selected_generated_header_dependents(golden_out, selected_names, changed)
+        if affected:
+            raise GuardError("generated header content changed; only affected MiniC TUs must "
+                             "re-preprocess: headers=" + ",".join(changed[:25])
+                             + " affected=" + ",".join(affected[:40])
+                             + f" affected_count={len(affected)}")
+        print("COHORT_KBUILD_HEADER_CHANGE=SAFE_NONDEPENDENT "
+              f"changed={','.join(changed)} mini_tus={len(selected_names)}")
+    
     log_text = log.read_text()
     recompiled = set(CC.findall(log_text))
     # Never repair an .o just because it has the wrong digest. Prove Kbuild
@@ -118,6 +153,8 @@ def main() -> int:
     p.add_argument("--minic", type=Path)
     p.add_argument("--selected", type=Path)
     p.add_argument("--link-log", type=Path)
+    p.add_argument("--golden-out", type=Path,
+                   help="immutable GNU Kbuild .cmd dependency reference")
     args = p.parse_args()
     try:
         if args.mode == "snapshot":
@@ -126,7 +163,8 @@ def main() -> int:
         else:
             if not all((args.minic, args.selected, args.link_log)):
                 raise GuardError("repair requires --minic, --selected, --link-log")
-            fixed = repair(args.out, args.minic, args.selected, args.link_log, args.evidence)
+            fixed = repair(args.out, args.minic, args.selected, args.link_log,
+                           args.evidence, args.golden_out)
             print(f"COHORT_KBUILD_REPAIR={'APPLIED' if fixed else 'NOT_NEEDED'} count={len(fixed)} objects={','.join(fixed)}")
     except (GuardError, OSError, ValueError, json.JSONDecodeError) as exc:
         print(f"COHORT_KBUILD_REPAIR=INCONCLUSIVE reason={exc}", file=sys.stderr)
