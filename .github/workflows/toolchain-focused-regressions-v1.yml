@@ -106,9 +106,6 @@ jobs:
 
           echo "MINIC_RV64_FOCUSED_REGRESSIONS_V1=PASS inline-emission=PASS constant-if=PASS section-gc=PASS"
 
-      # No new workflow or runner: only opt-in, on the exact earlycon
-      # investigation. Keep baseline MiniC, runtime 39-patch MiniC and their
-      # evidence completely separate from 2064 authenticated candidate objects.
       - name: Profile-only exact earlycon differential against frozen GNU input
         if: github.event_name == 'push' && contains(github.event.head_commit.message, '[earlycon-profile-probe]')
         continue-on-error: true

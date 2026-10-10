@@ -25,9 +25,14 @@ git -C "$repo_root" worktree add --detach "$temp_worktree" "$GITHUB_SHA"
 )
 profile_minic="$abs_probe/profile-build/bin/minic"
 test -x "$profile_minic"
-printf 'EARLYCON_PROFILE_HASH baseline=%s runtime=%s\n' \
+printf 'EARLYCON_PROFILE_DRIVER_HASH baseline=%s runtime=%s\n' \
   "$(sha256sum "$BASELINE_MINIC" | cut -d' ' -f1)" \
   "$(sha256sum "$profile_minic" | cut -d' ' -f1)"
+# minic is only the lightweight driver, the semantically relevant binary is
+# adjacent minic-cc. Driver SHA equality says nothing about Core Lowering.
+printf 'EARLYCON_PROFILE_COMPILER_HASH baseline=%s runtime=%s\n' \
+  "$(sha256sum "$(dirname "$BASELINE_MINIC")/minic-cc" | cut -d' ' -f1)" \
+  "$(sha256sum "$(dirname "$profile_minic")/minic-cc" | cut -d' ' -f1)"
 # These exact two probes used to pass under unpatched MiniC. Run them again
 # under the production runtime patch stack; a failing result localizes the
 # cause to the patch stack without touching any certified 2064 .o inputs.
@@ -41,6 +46,34 @@ profile_test_rc=0
 ) >"$abs_probe/profile-two-pass.log" 2>&1 || profile_test_rc=$?
 grep -E 'EARLYCON_(TWO_PASS|TABLE)_' "$abs_probe/profile-two-pass.log" || true
 echo "EARLYCON_PROFILE_MINIMAL_RESULT rc=$profile_test_rc"
+# Isolate the first semantic patch in a SEPARATE temporary detached worktree.
+# Its compiler identity and proof are independent from both baseline and the
+# full 39-patch profile. If this first patch reproduces the bug we can fix a
+# single small local-constant propagation transfer rule immediately.
+first_tree="${RUNNER_TEMP:-/tmp}/minic-earlycon-first-${GITHUB_RUN_ID:-$}"
+git -C "$repo_root" worktree add --detach "$first_tree" "$GITHUB_SHA"
+(
+  cd "$first_tree"
+  python3 tools/ci/apply-local-integer-assignment-v2.py
+  make -j4 MODE=release CFLAGS=-Werror \
+     BUILD_DIR="$abs_probe/first-patch-build" \
+     "$abs_probe/first-patch-build/bin/minic" \
+     "$abs_probe/first-patch-build/bin/minic-cc"
+) >"$abs_probe/first-patch-build.log" 2>&1
+first_test_rc=0
+(
+  cd "$first_tree"
+  MINIC="$abs_probe/first-patch-build/bin/minic" \
+   BUILD_DIR="$abs_probe/first-patch-rv64" \
+   RISCV_CC=riscv64-linux-gnu-gcc RISCV_LD=riscv64-linux-gnu-ld \
+   QEMU_RISCV64=qemu-riscv64 \
+   bash tests/compiler/c0/run-earlycon-two-pass-rv64.sh
+) >"$abs_probe/first-patch-two-pass.log" 2>&1 || first_test_rc=$?
+echo "EARLYCON_FIRST_PATCH_TEST rc=$first_test_rc patch=apply-local-integer-assignment-v2"
+grep -E 'EARLYCON_(TWO_PASS|TABLE)_' "$abs_probe/first-patch-two-pass.log" || true
+echo "EARLYCON_FIRST_PATCH_CC_SHA256=$(sha256sum "$abs_probe/first-patch-build/bin/minic-cc" | cut -d' ' -f1)"
+git -C "$repo_root" worktree remove --force "$first_tree"
+
 
 # The precise source is already in a certified October 10 receiver artifact.
 # It is read-only, pinned by real GNU-E SHA below, and ONLY used as an input to
