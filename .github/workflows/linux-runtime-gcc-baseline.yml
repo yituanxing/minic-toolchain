@@ -397,6 +397,9 @@ jobs:
             build/linux-runtime-gcc-cohort-v1/trials/*/generated-before.json
             build/linux-runtime-gcc-cohort-v1/trials/*/selected-objects.txt
             build/linux-runtime-gcc-cohort-v1/trials/*/runtime.log
+            build/linux-runtime-gcc-cohort-v1/trials/*/qemu-registers.jsonl
+            build/linux-runtime-gcc-cohort-v1/trials/*/qmp-probe.log
+            build/linux-runtime-gcc-cohort-v1/trials/*/qmp-symbols.log
             build/linux-runtime-gcc-cohort-v1/trials/*/runtime-p1.log
             build/linux-runtime-gcc-cohort-v1/trials/*/runtime-p1-python.log
             build/linux-runtime-gcc-cohort-v1/trials/*/qemu-p1/*.log
@@ -688,6 +691,9 @@ jobs:
             build/linux-runtime-gcc-cohort-v1/trials/*/link.log
             build/linux-runtime-gcc-cohort-v1/trials/*/guard.log
             build/linux-runtime-gcc-cohort-v1/trials/*/runtime.log
+            build/linux-runtime-gcc-cohort-v1/trials/*/qemu-registers.jsonl
+            build/linux-runtime-gcc-cohort-v1/trials/*/qmp-probe.log
+            build/linux-runtime-gcc-cohort-v1/trials/*/qmp-symbols.log
             build/linux-runtime-gcc-cohort-v1/trials/*/runtime-p1.log
           if-no-files-found: warn
           retention-days: 7

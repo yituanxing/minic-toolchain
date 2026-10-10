@@ -900,29 +900,6 @@ PY_EARLY_SYMBOLS
       echo "COHORT_KERNEL_EARLY_LOG_END"
       tail -n 75 "$d/qemu-early-noinitrd.log"
       echo "COHORT_KERNEL_EARLY_LOG_END"
-      # Diagnostic RAM-only experiment: QEMU 8.x may pin the initrd at
-      # 128 MiB, while newer QEMU scales its placement with guest RAM.
-      # The normal 512 MiB contract above is never changed or bypassed.
-      if [[ "$name" == full_all || "$name" == gcc_only_drivers_tty_serial_earlycon_o ]]; then
-        high_rc=0
-        high_started=$(date +%s%N)
-        LINUX_IMAGE="$d/Image" INITRAMFS="$ev/runtime-initramfs.cpio.gz" \
-          BUILD_DIR="$d/qemu-highram" LINUX_RELEASE=6.6.143 \
-          LINUX_RUNTIME_PROFILE=fast QEMU_RAM_MB=1024 QEMU_TIMEOUT_SECONDS=25 \
-          bash "$repo/tests/external/linux/runtime_boot.sh" \
-            >"$d/runtime-highram.log" 2>&1 || high_rc=$?
-        high_ended=$(date +%s%N)
-        echo "COHORT_TIMING trial=$name stage=qemu_1024mb elapsed_ms=$(((high_ended-high_started)/1000000)) rc=$high_rc"
-        if grep -Fq 'Some ROM regions are overlapping' "$d/runtime-highram.log"; then
-          echo "COHORT_QEMU_1024MB=LOAD_OVERLAP trial=$name"
-        elif grep -Rq 'Linux version 6.6.143' "$d/qemu-highram" 2>/dev/null; then
-          echo "COHORT_QEMU_1024MB=LINUX_BANNER trial=$name rc=$high_rc"
-        else
-          echo "COHORT_QEMU_1024MB=NO_BANNER trial=$name rc=$high_rc"
-        fi
-        tail -n 18 "$d/runtime-highram.log"
-        cat "$d/runtime-highram.log" >>"$d/runtime.log"
-      fi
       # Persist evidence within an existing uploaded artifact path. Retain
       # INCONCLUSIVE: a kernel-only probe cannot satisfy the PID1/P1 oracle.
       cat "$d/qemu-early-noinitrd.log" >>"$d/runtime.log"
@@ -990,7 +967,7 @@ case "$TRIAL_VERDICT" in
     # These probes NEVER claim to satisfy the full runtime/initramfs oracle.
     if [[ "$cohort_scope" == FULL_C_UNIVERSE ]] && \
        grep -Fq "COHORT_QEMU_LOAD_OVERLAP=CONFIRMED trial=full_all" "$ev/cohort.log"; then
-      for focused_target in lib/string.o drivers/tty/serial/earlycon.o; do
+      for focused_target in drivers/tty/serial/earlycon.o; do
         focused_idx=-1
         for ((k=0;k<n;k++)); do
           if [[ "${objects[k]}" == "$focused_target" ]]; then

@@ -11,11 +11,6 @@ initramfs=${INITRAMFS:-}
 work=${BUILD_DIR:-"$root/build/linux-runtime"}
 timeout_seconds=${QEMU_TIMEOUT_SECONDS:-90}
 shell_input_delay=${QEMU_SHELL_INPUT_DELAY_SECONDS:-8}
-qemu_ram_mb=${QEMU_RAM_MB:-512}
-case "$qemu_ram_mb" in
-    512|1024) ;;
-    *) printf '%s\n' "LINUX_RUNTIME_ERROR unsupported diagnostic RAM size: $qemu_ram_mb" >&2; exit 2 ;;
-esac
 expected_release=${LINUX_RELEASE:-6.6.143}
 profile=${LINUX_RUNTIME_PROFILE:-full}
 
@@ -58,7 +53,7 @@ run_boot() {
         ) | timeout --signal=TERM "$timeout_seconds" "$qemu" \
             -M virt \
             -cpu max \
-            -m "${qemu_ram_mb}M" \
+            -m 512M \
             -smp 1 \
             -nographic \
             -no-reboot \
@@ -72,7 +67,7 @@ run_boot() {
         timeout --signal=TERM "$timeout_seconds" "$qemu" \
             -M virt \
             -cpu max \
-            -m "${qemu_ram_mb}M" \
+            -m 512M \
             -smp 1 \
             -nographic \
             -no-reboot \
