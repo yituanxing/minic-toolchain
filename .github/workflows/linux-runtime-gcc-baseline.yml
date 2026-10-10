@@ -363,7 +363,6 @@ jobs:
           ev="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-v1"
           export COHORT_ALLOW_DIAGNOSTIC_384=${{ contains(github.event.head_commit.message, '[linux-runtime-gcc-384]') && '1' || '0' }}
           export COHORT_ACTION=verify
-          export COHORT_CAPTURE_ONLY=${{ contains(github.event.head_commit.message, '[linux-runtime-earlycon-capture]') && '1' || '0' }}
           bash tools/ci/linux-runtime-gcc-cohort-bisect-v1.sh \
             "$work/linux-6.6.143" "$work/out" \
             "$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain/bin/minic" \
@@ -670,6 +669,7 @@ jobs:
           work="$GITHUB_WORKSPACE/build/linux-runtime-gcc"
           ev="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-v1"
           export COHORT_ACTION=verify
+          export COHORT_CAPTURE_ONLY=${{ contains(github.event.head_commit.message, '[linux-runtime-earlycon-capture]') && '1' || '0' }}
           bash tools/ci/linux-runtime-gcc-cohort-bisect-v1.sh \
             "$work/linux-6.6.143" "$work/out" \
             "$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain/bin/minic" \
