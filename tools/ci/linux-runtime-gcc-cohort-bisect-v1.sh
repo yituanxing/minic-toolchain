@@ -161,11 +161,23 @@ else
   # avoid filling runner disk. -k collects independent compile failures.
   compile_rc=0
   : >"$ev/mini-success-objects.txt"
+  # Multiple explicit Kbuild goals can recurse through the same directory.
+  # With -j6 their independent submakes race over .o/.o.d and append the
+  # same target to the MiniC success trace more than once. This has already
+  # caused a real fixdep missing-.o.d failure (serport.o, shard 1).
+  # Serialize each shard's Kbuild goal list while retaining SEVEN independent
+  # runner producers. Keep the previous -j6 only for the legacy full job,
+  # whose behavior must not change as part of the sharding fix.
+  compile_jobs=6
+  if [[ "$cohort_scope" == SHARD_COMPILE_ONLY ]]; then
+    compile_jobs=1
+  fi
+  echo "COHORT_KBUILD_PARALLELISM jobs=$compile_jobs scope=$cohort_scope"
   MINIC="$minic" REAL_CC=/usr/bin/riscv64-linux-gnu-gcc \
     MINIC_KEEP_INTERMEDIATES=0 MINIC_PRESERVE_FAILURE_INPUTS=1 \
     MINIC_KBUILD_SUCCESS_TRACE="$ev/mini-success-objects.txt" \
     make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
-      CC="$repo/tests/external/linux/stage2_kbuild_cc.sh" -j6 -k "${targets[@]}" \
+      CC="$repo/tests/external/linux/stage2_kbuild_cc.sh" -j"$compile_jobs" -k "${targets[@]}" \
       >"$ev/compile.log" 2>&1 || compile_rc=$?
   : >"$ev/compile-blockers.txt"
   compiled=0
