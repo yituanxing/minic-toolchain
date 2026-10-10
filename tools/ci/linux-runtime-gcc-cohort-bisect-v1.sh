@@ -993,7 +993,14 @@ PY_EARLY_SYMBOLS
           tail -n 14 "$d/qemu-golden-noinitrd.log"
         } >>"$d/runtime.log"
       else
-        echo "COHORT_GCC_EARLY_REFERENCE=REUSED_FROM_FULL_ALL trial=$name same_runner=true"
+        if [[ "${COHORT_EARLYCON_HOTFIX:-0}" == 1 ]]; then
+          # Unlike the normal full_all sequence, this shortcut never runs a
+          # same-runner GNU reference. Its reference is the pinned prior
+          # QEMU-certified golden pool restored and hash-checked above.
+          echo "COHORT_GCC_EARLY_REFERENCE=PINNED_PRIOR_CERTIFICATE trial=$name same_runner=false"
+        else
+          echo "COHORT_GCC_EARLY_REFERENCE=REUSED_FROM_FULL_ALL trial=$name same_runner=true"
+        fi
       fi
       echo "COHORT_KERNEL_EARLY_LOG_END"
       tail -n 75 "$d/qemu-early-noinitrd.log"
@@ -1056,7 +1063,58 @@ if [[ "${COHORT_EARLYCON_HOTFIX:-0}" == 1 ]]; then
   if [[ -s "$diag" ]] && grep -Eq 'COHORT_QMP_SYMBOL at_s=(4|8) reg=pc .* symbol=' "$diag" && \
      grep -E 'COHORT_QMP_SYMBOL at_s=(4|8) reg=pc .* symbol=' "$diag" | \
        grep -Ev 'symbol=(setup_earlycon|BELOW_LINKED_TEXT)' >/dev/null; then
-    echo "EARLYCON_HOTFIX_RESULT=FRONTIER_ADVANCED after_earlycon=true p1=NOT_CERTIFIED old_2063_unchanged=true"
+    echo "EARLYCON_HOTFIX_RESULT=FRONTIER_ADVANCED after_earlycon=true p1=NOT_CERTIFIED before_link_2063_frozen=true regenerated_header_dependents=4"
+    if [[ "${COHORT_EARLYCON_EXPLICIT_INITRD:-0}" == 1 ]]; then
+      # Run the already-existing large-Image initrd loader against the SAME
+      # linked Image; no second Kbuild link or MiniC compilation.
+      d="$ev/trials/earlycon_fixed_only"
+      wrapper="$repo/tests/external/linux/qemu_explicit_initrd_wrapper.py"
+      test -s "$d/Image" && test -s "$ev/runtime-initramfs.cpio.gz"
+      test -x "$wrapper"
+      echo "EARLYCON_EXPLICIT_INITRD=START image_bytes=$(stat -c %s "$d/Image") same_linked_image=true"
+      rc=0
+      LINUX_IMAGE="$d/Image" INITRAMFS="$ev/runtime-initramfs.cpio.gz" \
+        BUILD_DIR="$d/qemu-explicit-fast" LINUX_RELEASE=6.6.143 \
+        LINUX_RUNTIME_PROFILE=fast QEMU_TIMEOUT_SECONDS=30 \
+        QEMU_SYSTEM_RISCV64="$wrapper" \
+        QEMU_REAL_SYSTEM_RISCV64=qemu-system-riscv64 \
+        QEMU_EXPLICIT_DTB_DIR="$d/dtb-explicit-fast" \
+          bash "$repo/tests/external/linux/runtime_boot.sh" \
+          >"$d/runtime-explicit-fast.log" 2>&1 || rc=$?
+      echo "EARLYCON_EXPLICIT_FAST_RC=$rc"
+      if [[ -s "$d/qemu-explicit-fast/rdinit-init.log" ]]; then
+        if grep -aq 'Linux version 6.6.143' "$d/qemu-explicit-fast/rdinit-init.log"; then
+          echo "EARLYCON_EXPLICIT_FAST_BANNER=OBSERVED"
+        else
+          echo "EARLYCON_EXPLICIT_FAST_BANNER=NOT_OBSERVED"
+        fi
+        grep -aE 'Linux version 6.6.143|Kernel panic|Oops:|BUG:|soft lockup|devtmpfs:|Run /init|Starting init:' \
+          "$d/qemu-explicit-fast/rdinit-init.log" | tail -n 45 || true
+      fi
+      if ((rc==0)); then
+        echo "EARLYCON_EXPLICIT_FAST=PASS"
+        p1_rc=0
+        LINUX_IMAGE="$d/Image" INITRAMFS="$ev/runtime-initramfs.cpio.gz" \
+          BUILD_DIR="$d/qemu-explicit-p1" LINUX_RELEASE=6.6.143 \
+          LINUX_RUNTIME_PROFILE=p1 QEMU_TIMEOUT_SECONDS=45 \
+          QEMU_SYSTEM_RISCV64="$wrapper" \
+          QEMU_REAL_SYSTEM_RISCV64=qemu-system-riscv64 \
+          QEMU_EXPLICIT_DTB_DIR="$d/dtb-explicit-p1" \
+            bash "$repo/tests/external/linux/runtime_boot.sh" \
+            >"$d/runtime-explicit-p1.log" 2>&1 || p1_rc=$?
+        if ((p1_rc==0)) && python3 "$repo/tests/external/linux/runtime_v2_log_check.py" \
+             --profile p1 --log "$d/qemu-explicit-p1/rdinit-init.log" \
+             >"$d/runtime-explicit-p1-oracle.log" 2>&1; then
+          echo "EARLYCON_EXPLICIT_P1=PASS syscalls=12 mixed_profile=true"
+        else
+          echo "EARLYCON_EXPLICIT_P1=NOT_CERTIFIED rc=$p1_rc"
+          tail -n 35 "$d/runtime-explicit-p1.log" || true
+        fi
+      else
+        echo "EARLYCON_EXPLICIT_FAST=NOT_CERTIFIED rc=$rc"
+        tail -n 35 "$d/runtime-explicit-fast.log" || true
+      fi
+    fi
     exit 0
   fi
   echo "EARLYCON_HOTFIX_RESULT=INCONCLUSIVE verdict=$TRIAL_VERDICT frontier_evidence=insufficient"
