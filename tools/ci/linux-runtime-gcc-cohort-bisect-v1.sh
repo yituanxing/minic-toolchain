@@ -397,6 +397,7 @@ BUILD_DIR="$ev/initramfs" OUTPUT_INITRAMFS="$ev/runtime-initramfs.cpio.gz" \
   bash "$repo/tests/external/linux/build_runtime_initramfs.sh" >"$ev/initramfs.log" 2>&1
 last_selection="none"
 last_candidate_delta=""
+last_link_source_dir=""
 trial() {
   name="$1"; count="$2"; profile="$3"; mode="${4:-prefix}"
   selection="$mode:$count"
@@ -571,6 +572,7 @@ PY_RISCV_DYNAMIC
         echo "COHORT_LINK=GUARDED_RELINK name=$name reason=selected_minic_replaced_by_kbuild"
       fi
     fi
+    last_link_source_dir="$d"
     last_selection="$selection"
   else
     # Same object selection, different runtime oracle (FAST -> FULL):
@@ -597,33 +599,85 @@ PY_RISCV_DYNAMIC
       echo "COHORT_IDENTITY=FAIL trial=$name target=$target"; exit 6;
     }
   done
-  # Every object OUTSIDE the candidate universe must remain GCC-identical.
-  # Generated init/version-timestamp.o is allowed to vary per link.
-  python3 - "$out" "$prov/gcc-objects.sha256" "$objects_file" <<'PY_GNU_NONSELECTED'
+  # Non-C objects cannot all be compared byte-for-byte with the GNU
+  # golden reference: changing a verified MiniC .o legitimately changes its
+  # GNU-objcopy .pi.o / EFI .stub.o derivatives and native vDSO envelope.
+  # Accept ONLY a derived RISC-V ELF with matching ABI, an explicit GNU
+  # transform record, and a verified selected C owner as its input. Nothing
+  # else in the GCC object universe is allowed to drift.
+  python3 - "$out" "$prov/gcc-objects.sha256" "$objects_file" \
+    "$d/selected-objects.txt" "$last_link_source_dir" "$gold_snapshot" <<'PY_GNU_NONSELECTED'
 from pathlib import Path
-import hashlib, re, sys
-out,manifest,universe=map(Path,sys.argv[1:])
-excluded={x.strip() for x in universe.read_text().splitlines()
-          if x.strip() and not x.lstrip().startswith("#")}
-# Kbuild legitimately regenerates these *link-created* kallsyms objects
-# whenever linked code/layout changes. They are not standalone GCC C owners.
-# Do NOT broaden this exception to ordinary arch/, kernel/, lib/, fs/ objects.
+import hashlib, re, struct, sys
+
+out,manifest,universe,selected,link_dir,golden=map(Path,sys.argv[1:])
+all_c={x.strip() for x in universe.read_text().splitlines()
+       if x.strip() and not x.lstrip().startswith("#")}
+chosen={x.strip() for x in selected.read_text().splitlines()
+        if x.strip() and not x.lstrip().startswith("#")}
+if not chosen <= all_c:
+    raise SystemExit("COHORT_GNU_CONTAMINATION=FAIL selected_not_subset_of_full_C")
+linked="\n".join((link_dir/name).read_text()
+                 for name in ("link.log","link-reconciled.log","link-repaired.log")
+                 if (link_dir/name).is_file())
 generated_links={
     "init/version-timestamp.o",
-    "vmlinux.o",                 # GNU ld -r aggregate, NOT a standalone C TU
-    ".vmlinux.export.o",        # generated symbol export object for relink
+    "vmlinux.o",
+    ".vmlinux.export.o",
 }
-def link_generated(name):
+def transient_link(name):
     return (name in generated_links or
-            re.fullmatch(r"\.tmp_vmlinux\.kallsyms[1-3]\.o", name) is not None or
-            name == ".tmp_vmlinux.btf.o")
+            re.fullmatch(r"\.tmp_vmlinux\.kallsyms[1-3]\.o",name) is not None or
+            name==".tmp_vmlinux.btf.o")
+def emitted(step,name):
+    return re.search(r"(?m)^\s+"+step+r"\s+"+re.escape(name)+r"\s*$",linked) is not None
+def abi_same(name):
+    original=(golden/name).read_bytes()[:52]
+    derived=(out/name).read_bytes()[:52]
+    for head in (original,derived):
+        if (len(head)!=52 or head[:6]!=b"\x7fELF\x02\x01" or
+            struct.unpack_from("<H",head,16)[0]!=1 or
+            struct.unpack_from("<H",head,18)[0]!=243):
+            raise SystemExit("COHORT_GNU_DERIVED_ABI=FAIL object="+name)
+    if original[48:52]!=derived[48:52]:
+        raise SystemExit("COHORT_GNU_DERIVED_ABI=FAIL object="+name)
+def derivation(name):
+    if name.startswith("arch/riscv/kernel/pi/") and name.endswith(".pi.o"):
+        owner=name[:-5]+".o"
+        if owner in chosen and emitted("OBJCOPY",name):
+            return owner
+    if name.startswith("drivers/firmware/efi/libstub/") and name.endswith(".stub.o"):
+        owner=name[:-7]+".o"
+        if owner in chosen and emitted("STUBCPY",name):
+            return owner
+    if name=="arch/riscv/kernel/vdso/vdso.o":
+        owners={"arch/riscv/kernel/vdso/hwprobe.o",
+                "arch/riscv/kernel/vdso/vgettimeofday.o"}
+        if (owners <= chosen and
+            emitted("VDSOLD","arch/riscv/kernel/vdso/vdso.so.dbg") and
+            emitted("OBJCOPY","arch/riscv/kernel/vdso/vdso.so") and
+            emitted("AS",name)):
+            return "native-vdso:" + ",".join(sorted(owners))
+    return None
+derived_evidence=[]
 for line in manifest.read_text().splitlines():
-    digest, name=line.strip().split(None,1)
-    if name in excluded or link_generated(name): continue
+    digest,name=line.strip().split(None,1)
+    if name in all_c or transient_link(name):
+        continue
     p=out/name
-    if not p.is_file() or hashlib.sha256(p.read_bytes()).hexdigest()!=digest:
+    if p.is_file() and hashlib.sha256(p.read_bytes()).hexdigest()==digest:
+        continue
+    owner=derivation(name)
+    if owner is None or not p.is_file():
         raise SystemExit("COHORT_GNU_CONTAMINATION=FAIL object="+name)
-print("COHORT_GNU_UNSELECTED=PASS")
+    # All leaf C owners have already passed exact MiniC SHA256 validation.
+    # Check that the generated object is still a valid RISC-V ET_REL with
+    # golden-compatible ABI flags; record which explicit owner explains it.
+    abi_same(name)
+    derived_evidence.append((name,owner))
+    print(f"COHORT_GNU_DERIVED=PASS object={name} owner={owner}")
+print(f"COHORT_GNU_UNSELECTED=PASS derived={len(derived_evidence)} "
+      f"pinned_elf_and_transform_identity=true")
 PY_GNU_NONSELECTED
   image_sha=$(sha256sum "$out/arch/riscv/boot/Image" | cut -d' ' -f1)
   cp -a "$out/arch/riscv/boot/Image" "$d/Image"
