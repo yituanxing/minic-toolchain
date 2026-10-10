@@ -98,3 +98,10 @@ set -e
 test "$rc" -eq 0
 
 echo "INLINE_EMISSION_REACHABILITY_RV64=PASS dead_inline=discarded dead_static=discarded transitive=retained global_address=retained used=retained qemu_rc=$rc"
+
+# Existing focused RV64 runner also proves earlycon-style mutable bool,
+# second-pass goto and finite loop termination. This is a small test, not
+# another heavyweight Linux/2064-object workflow.
+MINIC="$MINIC" BUILD_DIR="$BUILD_DIR" RISCV_CC="$RISCV_CC" \
+RISCV_LD="$RISCV_LD" QEMU_RISCV64="$QEMU_RISCV64" \
+  bash "$(dirname "$0")/run-earlycon-two-pass-rv64.sh"
