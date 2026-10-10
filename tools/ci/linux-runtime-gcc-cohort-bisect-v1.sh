@@ -839,11 +839,16 @@ PY_EARLY_SYMBOLS
       echo "COHORT_TIMING trial=$name stage=qemu_early_noinitrd elapsed_ms=$(((early_finished-early_started)/1000000)) rc=$early_rc"
       printf 'timing_%s_qemu_early_noinitrd_ms=%s\n' "$name" "$(((early_finished-early_started)/1000000))" >>"$ev/identity.txt"
       if grep -Eq 'Linux version 6\.6\.143|Kernel panic|Oops:|Unable to handle|BUG:' "$d/qemu-early-noinitrd.log"; then
-        echo "COHORT_KERNEL_EARLY_FRONTIER=GUEST_REACHED trial=$name"
+        echo "COHORT_KERNEL_EARLY_FRONTIER=LINUX_SERIAL_BANNER trial=$name"
+      elif [[ -s "$d/qmp-symbols.log" ]] && \
+           grep -Eq 'COHORT_QMP_SYMBOL at_s=[0-9]+ reg=pc .* symbol=' "$d/qmp-symbols.log"; then
+        # OpenSBI may be the only SERIAL output, while QMP proves the guest
+        # PC has already reached a concrete linked Linux kernel function.
+        echo "COHORT_KERNEL_EARLY_FRONTIER=LINUX_EXECUTING_PRE_BANNER trial=$name"
       elif grep -Eqi 'OpenSBI|Platform Name|Firmware Base' "$d/qemu-early-noinitrd.log"; then
-        echo "COHORT_KERNEL_EARLY_FRONTIER=FIRMWARE_ONLY trial=$name"
+        echo "COHORT_KERNEL_EARLY_FRONTIER=FIRMWARE_SERIAL_ONLY_NO_PC_PROOF trial=$name"
       else
-        echo "COHORT_KERNEL_EARLY_FRONTIER=NO_FIRMWARE_OR_KERNEL_BANNER trial=$name"
+        echo "COHORT_KERNEL_EARLY_FRONTIER=NO_SERIAL_OR_PC_PROOF trial=$name"
       fi
       # The golden kernel has already passed the complete initramfs/P1
       # oracles, but compare it AGAIN under this exact kernel-only QEMU
