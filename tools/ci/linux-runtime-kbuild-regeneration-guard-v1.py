@@ -111,7 +111,7 @@ def repair(out: Path, minic: Path, selected: Path, log: Path, evidence: Path,
         changed = sorted(k for k in set(after) | set(baseline.get("headers", {}))
                          if after.get(k) != baseline.get("headers", {}).get(k))
         if golden_out is None:
-            raise GuardError("generated header content changed without pinned dependency evidence: "
+            raise GuardError("generated header content changed, MUST re-preprocess without pinned dependency evidence: "
                              + ",".join(changed[:25]))
         affected = selected_generated_header_dependents(golden_out, selected_names, changed)
         if affected:
