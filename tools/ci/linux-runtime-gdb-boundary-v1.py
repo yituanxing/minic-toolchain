@@ -81,7 +81,9 @@ def main():
     state="INCONCLUSIVE"
     with qlog.open("w") as qfile:
         qemu=subprocess.Popen([
-            "qemu-system-riscv64","-S","-gdb",f"unix:{sock}",
+            "qemu-system-riscv64","-S",
+            "-chardev",f"socket,path={sock},server=on,wait=off,id=gdb0",
+            "-gdb","chardev:gdb0",
             "-M","virt","-cpu","max","-m","512M","-smp","1",
             "-nographic","-no-reboot","-bios","default",
             "-kernel",str(a.image.resolve()),"-append",CMDLINE,

@@ -791,6 +791,28 @@ jobs:
           set -Eeuo pipefail
           python3 tools/ci/linux-runtime-qmp-pc-sampler-v1.py --self-test
           python3 -m py_compile tools/ci/linux-runtime-qmp-pc-sampler-v1.py tools/ci/linux-runtime-qmp-stack-symbols-v1.py tools/ci/linux-runtime-gdb-boundary-v1.py
+          sock="/tmp/minic-gdb-preflight-$.sock"
+          qemu-system-riscv64 -M virt -cpu max -m 512M -nographic -no-reboot -bios none -S \
+            -chardev "socket,path=$sock,server=on,wait=off,id=gdb0" \
+            -gdb chardev:gdb0 </dev/null > /tmp/minic-gdb-stub-preflight.log 2>&1 &
+          qpid=$!
+          trap 'kill "$qpid" 2>/dev/null || :; wait "$qpid" 2>/dev/null || :; rm -f -- "$sock"' EXIT
+          ready=0
+          for i in $(seq 1 50); do
+            if test -S "$sock"; then ready=1; break; fi
+            if ! kill -0 "$qpid" 2>/dev/null; then break; fi
+            sleep .1
+          done
+          if ((ready==0)); then
+            cat /tmp/minic-gdb-stub-preflight.log
+            echo "GDB_STUB_PREFLIGHT=FAIL"
+            exit 1
+          fi
+          echo "GDB_STUB_PREFLIGHT=PASS unix_socket=true"
+          kill "$qpid" 2>/dev/null || :
+          wait "$qpid" 2>/dev/null || :
+          rm -f -- "$sock"
+          trap - EXIT
 
       - name: Recompile earlycon.o only, GNU link and compare QEMU frontier
         shell: bash
