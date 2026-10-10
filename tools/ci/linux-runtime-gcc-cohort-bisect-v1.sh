@@ -1166,6 +1166,44 @@ if [[ "${COHORT_EARLYCON_HOTFIX:-0}" == 1 ]]; then
       grep -aE 'Linux version 6\.6\.143|Kernel command line|earlycon:|printk:|Kernel panic|Oops:|BUG:|soft lockup|devtmpfs:|Run /init|Starting init:' \
         "$uartlog" | tail -n 80 || true
     fi
+    if [[ "${COHORT_NEXT_GCC_SWAPS:-0}" == 1 ]]; then
+      baseline="$ev/trials/earlycon_fixed_only/qemu-uart-earlycon.log"
+      [[ -s "$baseline" ]] || { echo "NEXT_OWNER_SWAP=ERROR no_UARТ_baseline"; exit 8; }
+      for swap_target in fs/namespace.o fs/kernfs/mount.o; do
+        swap_index=-1
+        for ((swap_k=0;swap_k<n;swap_k++)); do
+          if [[ "${objects[swap_k]}" == "$swap_target" ]]; then
+            swap_index=$swap_k; break
+          fi
+        done
+        if ((swap_index<0)); then
+          echo "NEXT_OWNER_SWAP=INCONCLUSIVE target=$swap_target reason=outside_frozen_2064"
+          exit 8
+        fi
+        swap_name="gcc_only_$(printf '%s' "$swap_target" | tr '/.' '__')"
+        echo "NEXT_OWNER_SWAP=START target=$swap_target index=$swap_index fixed_earlycon=true"
+        trial "$swap_name" "$swap_index" fast all_except
+        test "$TRIAL_VERDICT" != LINK_FAIL
+        d="$ev/trials/$swap_name"
+        cmp -s "$out/$swap_target" "$ev/gcc/$swap_target" || {
+          echo "NEXT_OWNER_SWAP=FAIL target=$swap_target reason=not_real_GCC"; exit 8;
+        }
+        mkdir -p "$d/uart-qmp"
+        python3 "$repo/tools/ci/linux-runtime-qmp-pc-sampler-v1.py" \
+          --image "$d/Image" --output-dir "$d/uart-qmp" \
+          --timeout-seconds 24 --sample-seconds 1,4,8,16 \
+          --kernel-cmdline 'console=ttyS0 earlycon=uart8250,mmio,0x10000000,115200n8 loglevel=8 ignore_loglevel panic=-1' \
+          >"$d/uart-qmp/qmp-probe.log" 2>&1 || {
+            echo "NEXT_OWNER_SWAP=INCONCLUSIVE target=$swap_target reason=qmp_error"; exit 8;
+          }
+        cp -a "$d/uart-qmp/qemu-early-noinitrd.log" "$d/qemu-uart-earlycon.log"
+        echo "NEXT_OWNER_SWAP_BASELINE target=$swap_target"
+        grep -aE '^\[[[:space:]]*[0-9]+\.[0-9]+\]' "$baseline" | tail -n 5 || true
+        echo "NEXT_OWNER_SWAP_OBSERVED target=$swap_target"
+        grep -aE '^\[[[:space:]]*[0-9]+\.[0-9]+\]' "$d/qemu-uart-earlycon.log" | tail -n 18 || true
+        echo "NEXT_OWNER_SWAP=SCREENED target=$swap_target verdict=$TRIAL_VERDICT reboot_certificate=false"
+      done
+    fi
     exit 0
   fi
   echo "EARLYCON_HOTFIX_RESULT=INCONCLUSIVE verdict=$TRIAL_VERDICT frontier_evidence=insufficient"
