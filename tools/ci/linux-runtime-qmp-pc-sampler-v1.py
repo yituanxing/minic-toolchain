@@ -51,7 +51,7 @@ def qmp_call(reader, writer, cmd: dict) -> object:
             raise RuntimeError(f"QMP command rejected: {msg['error']}")
 
 
-def sample(image: Path, out: Path, timeout_s: int, qemu: str) -> int:
+def sample(image: Path, out: Path, timeout_s: int, qemu: str, samples: list[int]) -> int:
     out.mkdir(parents=True, exist_ok=True)
     # GitHub Actions workspaces regularly exceed Linux's 108-byte AF_UNIX
     # sun_path limit. Use a short, unique per-process path instead of
@@ -69,7 +69,7 @@ def sample(image: Path, out: Path, timeout_s: int, qemu: str) -> int:
             "-qmp", f"unix:{socket_path},server=on,wait=off"]
     # Three QMP observations suffice to discriminate persistent earlycon
     # execution from post-earlycon progress without 18 seconds per trial.
-    samples = [1, 4, 8]
+    # Bound all sample points through the CLI; default is still the fast 1/4/8 probe.
     rc = 124
     with console_path.open("w") as console, result_path.open("w") as evidence:
         proc = subprocess.Popen(argv, stdout=console, stderr=subprocess.STDOUT,
@@ -163,6 +163,8 @@ def main() -> int:
     p.add_argument("--output-dir", type=Path)
     p.add_argument("--qemu", default="qemu-system-riscv64")
     p.add_argument("--timeout-seconds", type=int, default=25)
+    p.add_argument("--sample-seconds", default="1,4,8",
+                   help="strictly increasing sampling times in seconds (max 110)")
     args = p.parse_args()
     if args.self_test:
         self_test()
@@ -173,7 +175,14 @@ def main() -> int:
         p.error("image must be an existing non-empty file")
     if not 20 <= args.timeout_seconds <= 120:
         p.error("timeout must allow the register sample")
-    return sample(args.image, args.output_dir, args.timeout_seconds, args.qemu)
+    try:
+        moments = [int(v) for v in args.sample_seconds.split(",")]
+    except ValueError:
+        p.error("sample-seconds must be comma-separated integers")
+    if (not moments or moments[0] < 1 or moments != sorted(set(moments))
+            or moments[-1] > 110 or moments[-1] > args.timeout_seconds - 4):
+        p.error("sample-seconds must be increasing, unique and fit timeout")
+    return sample(args.image, args.output_dir, args.timeout_seconds, args.qemu, moments)
 
 
 if __name__ == "__main__":

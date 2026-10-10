@@ -883,8 +883,13 @@ PY_LARGEST_TUS
         echo "COHORT_QMP_EARLY=FAIL sampler_selftest"
         exit 8
       }
+      sample_args=(--timeout-seconds 25)
+      if [[ "${COHORT_NEXT_FAULT_DIAG:-0}" == 1 && "$name" == earlycon_fixed_only ]]; then
+        sample_args=(--timeout-seconds 100 --sample-seconds 1,4,8,12,16,20,25,30,35,40,45,50,55,60,70,80)
+        echo "COHORT_NEXT_FAULT=QMP_EXTENDED samples=16 until_s=80 no_new_link=true"
+      fi
       python3 "$repo/tools/ci/linux-runtime-qmp-pc-sampler-v1.py" \
-        --image "$d/Image" --output-dir "$d" --timeout-seconds 25 \
+        --image "$d/Image" --output-dir "$d" "${sample_args[@]}" \
         >"$d/qmp-probe.log" 2>&1 || early_rc=$?
       cat "$d/qmp-probe.log" >>"$d/runtime.log"
       grep -E 'COHORT_QMP_EARLY' "$d/qmp-probe.log" || true
@@ -929,6 +934,7 @@ if len(layout)==2:
 else:
     print("COHORT_EARLYCON_TABLE_LAYOUT=INCOMPLETE names="+",".join(sorted(layout)))
 last_pcs=[]
+pc_symbols=[]
 for line in samples.read_text().splitlines():
     sample=json.loads(line)
     at=sample["at_seconds"]
@@ -948,10 +954,18 @@ for line in samples.read_text().splitlines():
             print(f"COHORT_QMP_SYMBOL at_s={at} reg={register} addr=0x{addr:x} symbol=BELOW_LINKED_TEXT")
         else:
             base,symbol=pairs[pos]
+            if register == "pc":
+                pc_symbols.append((at, symbol))
             print(f"COHORT_QMP_SYMBOL at_s={at} reg={register} addr=0x{addr:x} "
                   f"symbol={symbol} offset=0x{addr-base:x}")
 if len(last_pcs)>=2 and last_pcs[-1]==last_pcs[-2]:
     print(f"COHORT_QMP_STABLE_PC=OBSERVED samples={len(last_pcs)} addr=0x{last_pcs[-1]:x}")
+from collections import Counter
+frequency = Counter(s for _,s in pc_symbols)
+print(f"COHORT_QMP_PC_DIVERSITY samples={len(last_pcs)} unique_pcs={len(set(last_pcs))} "
+      f"unique_functions={len(frequency)} last_symbol={pc_symbols[-1][1] if pc_symbols else 'UNAVAILABLE'}")
+for symbol,count in frequency.most_common(12):
+    print(f"COHORT_QMP_HOTSPOT samples={count} symbol={symbol}")
 PY_EARLY_SYMBOLS
         cat "$d/qmp-symbols.log" >>"$d/runtime.log"
       fi
