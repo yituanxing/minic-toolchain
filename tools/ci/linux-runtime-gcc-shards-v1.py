@@ -2,7 +2,8 @@
 """Deterministic seven-runner MiniC object partition and fail-closed reassembly.
 
 Shards never certify runtime. Only the full, provenance-checked union may be
-fed to the existing GNU golden relink / QEMU verifier.
+fed to the existing GNU golden relink / QEMU verifier. Cached objects must
+match the rebuilt MiniC executable as well as the pinned GNU environment.
 """
 from __future__ import annotations
 
