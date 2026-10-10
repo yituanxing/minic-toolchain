@@ -775,11 +775,15 @@ PY_LARGEST_TUS
       echo "COHORT_QEMU_LOAD_OVERLAP=CONFIRMED trial=$name image_bytes=$candidate_image_bytes initrd_rom_overlap=true"
       early_started=$(date +%s%N)
       early_rc=0
-      timeout --signal=TERM 25s qemu-system-riscv64 \
-        -M virt -cpu max -m 512M -smp 1 -nographic -no-reboot \
-        -bios default -kernel "$d/Image" \
-        -append 'console=ttyS0 earlycon=sbi loglevel=8 panic=-1' \
-        </dev/null >"$d/qemu-early-noinitrd.log" 2>&1 || early_rc=$?
+      python3 "$repo/tools/ci/linux-runtime-qmp-pc-sampler-v1.py" --self-test || {
+        echo "COHORT_QMP_EARLY=FAIL sampler_selftest"
+        exit 8
+      }
+      python3 "$repo/tools/ci/linux-runtime-qmp-pc-sampler-v1.py" \
+        --image "$d/Image" --output-dir "$d" --timeout-seconds 25 \
+        >"$d/qmp-probe.log" 2>&1 || early_rc=$?
+      cat "$d/qmp-probe.log" >>"$d/runtime.log"
+      grep -E 'COHORT_QMP_EARLY' "$d/qmp-probe.log" || true
       early_finished=$(date +%s%N)
       echo "COHORT_TIMING trial=$name stage=qemu_early_noinitrd elapsed_ms=$(((early_finished-early_started)/1000000)) rc=$early_rc"
       printf 'timing_%s_qemu_early_noinitrd_ms=%s\n' "$name" "$(((early_finished-early_started)/1000000))" >>"$ev/identity.txt"
@@ -808,6 +812,10 @@ PY_LARGEST_TUS
       echo "COHORT_GCC_EARLY_LOG_END"
       tail -n 14 "$d/qemu-golden-noinitrd.log"
       echo "COHORT_GCC_EARLY_LOG_END"
+      {
+        echo "COHORT_GCC_EARLY_REFERENCE_BANNER=$(grep -Fqc 'Linux version 6.6.143' "$d/qemu-golden-noinitrd.log" || true)"
+        tail -n 14 "$d/qemu-golden-noinitrd.log"
+      } >>"$d/runtime.log"
       echo "COHORT_KERNEL_EARLY_LOG_END"
       tail -n 75 "$d/qemu-early-noinitrd.log"
       echo "COHORT_KERNEL_EARLY_LOG_END"

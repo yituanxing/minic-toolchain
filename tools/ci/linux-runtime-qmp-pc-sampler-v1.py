@@ -1,0 +1,150 @@
+#!/usr/bin/env python3
+"""Read-only QMP register snapshots from an unchanged oversized RISC-V Image.
+
+The complete initramfs/P1 oracle is deliberately NOT bypassed: this is a
+kernel-only early-frontier diagnostic used solely after ROM/initrd overlap.
+No gdb, custom QEMU binary, extra runner or unpinned compiler is required.
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import re
+import signal
+import socket
+import subprocess
+import time
+from pathlib import Path
+
+REGISTER = re.compile(r"(?im)^\s*(pc|mepc|sepc|satp|mcause|scause)\s+((?:0x)?[0-9a-f]+)\b")
+
+
+def selected_registers(text: str) -> dict[str, str]:
+    return {name.lower(): value.lower() for name, value in REGISTER.findall(text)}
+
+
+def self_test() -> None:
+    sample = "pc       0000000080200000\nsepc 0x0000000080201234\nsatp 0"
+    got = selected_registers(sample)
+    assert got == {"pc": "0000000080200000",
+                   "sepc": "0x0000000080201234", "satp": "0"}
+    print("LINUX_RUNTIME_QMP_SAMPLER_SELFTEST=PASS")
+
+
+def qmp_call(reader, writer, cmd: dict) -> object:
+    writer.write((json.dumps(cmd, separators=(",", ":")) + "\r\n").encode())
+    writer.flush()
+    while True:
+        raw = reader.readline()
+        if not raw:
+            raise RuntimeError("QMP closed without a command result")
+        msg = json.loads(raw)
+        if "return" in msg:
+            return msg["return"]
+        if "error" in msg:
+            raise RuntimeError(f"QMP command rejected: {msg['error']}")
+
+
+def sample(image: Path, out: Path, timeout_s: int, qemu: str) -> int:
+    out.mkdir(parents=True, exist_ok=True)
+    socket_path = out / "qmp.sock"
+    if socket_path.exists() or socket_path.is_symlink():
+        socket_path.unlink()
+    console_path = out / "qemu-early-noinitrd.log"
+    result_path = out / "qemu-registers.jsonl"
+    started = time.monotonic()
+    argv = [qemu, "-M", "virt", "-cpu", "max", "-m", "512M",
+            "-smp", "1", "-nographic", "-no-reboot", "-bios", "default",
+            "-kernel", str(image), "-append",
+            "console=ttyS0 earlycon=sbi loglevel=8 panic=-1",
+            "-qmp", f"unix:{socket_path},server=on,wait=off"]
+    samples = [2, 8, 18]
+    rc = 124
+    with console_path.open("w") as console, result_path.open("w") as evidence:
+        proc = subprocess.Popen(argv, stdout=console, stderr=subprocess.STDOUT,
+                                stdin=subprocess.DEVNULL, start_new_session=True)
+        try:
+            conn = socket.socket(socket.AF_UNIX)
+            conn.settimeout(4)
+            for _ in range(100):
+                if socket_path.exists():
+                    try:
+                        conn.connect(str(socket_path))
+                        break
+                    except (ConnectionRefusedError, FileNotFoundError):
+                        pass
+                if proc.poll() is not None:
+                    raise RuntimeError(f"QEMU exited before QMP: rc={proc.returncode}")
+                time.sleep(.05)
+            else:
+                raise RuntimeError("QMP UNIX socket not available")
+            with conn, conn.makefile("rb") as reader, conn.makefile("wb") as writer:
+                greeting = json.loads(reader.readline())
+                if "QMP" not in greeting:
+                    raise RuntimeError("invalid QMP greeting")
+                qmp_call(reader, writer, {"execute": "qmp_capabilities"})
+                for second in samples:
+                    remaining = second - (time.monotonic() - started)
+                    if remaining > 0:
+                        time.sleep(remaining)
+                    if proc.poll() is not None:
+                        print(f"COHORT_QMP_EARLY=QEMU_EXITED rc={proc.returncode} at_s={second}",
+                              flush=True)
+                        break
+                    raw = str(qmp_call(reader, writer, {
+                        "execute": "human-monitor-command",
+                        "arguments": {"command-line": "info registers", "cpu-index": 0}
+                    }))
+                    regs = selected_registers(raw)
+                    evidence.write(json.dumps({
+                        "at_seconds": second, "registers": regs,
+                        "raw": raw
+                    }, sort_keys=True) + "\n")
+                    evidence.flush()
+                    print(f"COHORT_QMP_EARLY_SAMPLE at_s={second} "
+                          f"pc={regs.get('pc', 'UNKNOWN')} "
+                          f"sepc={regs.get('sepc', 'UNKNOWN')} "
+                          f"mepc={regs.get('mepc', 'UNKNOWN')} "
+                          f"satp={regs.get('satp', 'UNKNOWN')}", flush=True)
+        except (OSError, ValueError, RuntimeError) as exc:
+            print(f"COHORT_QMP_EARLY=UNAVAILABLE error={exc}", flush=True)
+        finally:
+            if proc.poll() is None:
+                proc.terminate()
+                try:
+                    proc.wait(timeout=4)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    proc.wait(timeout=4)
+            rc = proc.returncode or rc
+    if socket_path.exists():
+        socket_path.unlink()
+    print(f"COHORT_QMP_EARLY_COMPLETE wall_ms={int((time.monotonic()-started)*1000)} "
+          f"qemu_rc={rc} samples={len(result_path.read_text().splitlines())}", flush=True)
+    # The diagnostic must never claim a kernel-only boot passed the initramfs
+    # runtime oracle. The caller interprets guest progress independently.
+    return 0
+
+
+def main() -> int:
+    p = argparse.ArgumentParser()
+    p.add_argument("--self-test", action="store_true")
+    p.add_argument("--image", type=Path)
+    p.add_argument("--output-dir", type=Path)
+    p.add_argument("--qemu", default="qemu-system-riscv64")
+    p.add_argument("--timeout-seconds", type=int, default=25)
+    args = p.parse_args()
+    if args.self_test:
+        self_test()
+        return 0
+    if args.image is None or args.output_dir is None:
+        p.error("--image and --output-dir are required")
+    if not args.image.is_file() or args.image.stat().st_size <= 0:
+        p.error("image must be an existing non-empty file")
+    if not 20 <= args.timeout_seconds <= 120:
+        p.error("timeout must allow the 18s register sample")
+    return sample(args.image, args.output_dir, args.timeout_seconds, args.qemu)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
