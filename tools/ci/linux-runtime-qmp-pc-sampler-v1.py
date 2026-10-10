@@ -17,7 +17,7 @@ import subprocess
 import time
 from pathlib import Path
 
-REGISTER = re.compile(r"(?im)^\s*(?:x[0-9]+/)?(pc|mepc|sepc|satp|mcause|scause|sp|a0|a1)\s+((?:0x)?[0-9a-f]+)\b")
+REGISTER = re.compile(r"(?im)(?:^|[ \t])(?:x[0-9]+/)?(pc|mepc|sepc|satp|mcause|scause|sp|a0|a1|t0|t1)\s+((?:0x)?[0-9a-f]{1,16})(?=\s|$)")
 
 
 def selected_registers(text: str) -> dict[str, str]:
@@ -29,10 +29,11 @@ def self_test() -> None:
     got = selected_registers(sample)
     assert got == {"pc": "0000000080200000",
                    "sepc": "0x0000000080201234", "satp": "0"}
-    kernel_registers = "x2/sp  ffffffff8799ff00\nx10/a0 0000000000000020"
+    kernel_registers = "x1/ra  ffffffff81234567 x2/sp  ffffffff8799ff00 x10/a0 0000000000000020"
     assert selected_registers(kernel_registers) == {
         "sp": "ffffffff8799ff00", "a0": "0000000000000020"
     }
+    assert "zero" not in selected_registers(kernel_registers)
     print("LINUX_RUNTIME_QMP_SAMPLER_SELFTEST=PASS")
 
 
