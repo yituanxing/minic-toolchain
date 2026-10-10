@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import signal
 import socket
@@ -47,7 +48,10 @@ def qmp_call(reader, writer, cmd: dict) -> object:
 
 def sample(image: Path, out: Path, timeout_s: int, qemu: str) -> int:
     out.mkdir(parents=True, exist_ok=True)
-    socket_path = out / "qmp.sock"
+    # GitHub Actions workspaces regularly exceed Linux's 108-byte AF_UNIX
+    # sun_path limit. Use a short, unique per-process path instead of
+    # nesting the QMP socket under build/linux-runtime-.../trials/full_all.
+    socket_path = Path(f"/tmp/minic-qmp-{os.getpid()}.sock")
     if socket_path.exists() or socket_path.is_symlink():
         socket_path.unlink()
     console_path = out / "qemu-early-noinitrd.log"
