@@ -23,6 +23,10 @@ else
   echo "COHORT_ERROR full_C_objects=$n; refuse unlabelled partial-kernel verdict"; exit 2
 fi
 echo "COHORT_SCOPE=$cohort_scope objects=$n"
+case "${COHORT_ACTION:-all}" in
+  all|compile|verify) ;;
+  *) echo "COHORT_ACTION=ERROR unknown_action=${COHORT_ACTION}" >&2; exit 64 ;;
+esac
 expected_cfg=$(sed -n 's/^config_sha256=//p' "$prov/gcc-baseline.txt")
 actual_cfg=$(sha256sum "$out/.config" | cut -d' ' -f1)
 [[ "$expected_cfg" == "$actual_cfg" && -n "$expected_cfg" ]] || {
@@ -138,6 +142,10 @@ if [[ -e "$ev/minic-manifest.sha256" || -e "$ev/minic-identity.txt" ]]; then
   cached=1
   echo "COHORT_CANDIDATE_CACHE=HIT objects=$n"
 else
+  if [[ "${COHORT_ACTION:-all}" == verify ]]; then
+    echo "COHORT_CANDIDATE_CACHE=ERROR verify_requires_prior_checked_candidates" >&2
+    exit 7
+  fi
   echo "COHORT_CANDIDATE_CACHE=MISS objects=$n"
   # Only on cache miss: one parallel Kbuild invokes exact GCC -E / MiniC -S
   # / GNU as. Pinned GNU output snapshot already restored above.
@@ -236,6 +244,19 @@ if ((cached==0)); then
   echo "COHORT_CANDIDATE_CACHE=READY objects=$n"
 else
   echo "COHORT_COMPILE=SKIPPED reason=exact-object-cache-hit objects=$n"
+fi
+# Split candidate production from relink/QEMU. The CI workflow can save
+# immutable verified MiniC objects BEFORE any link/harness failure occurs.
+# A second invocation with COHORT_ACTION=verify must reuse exactly these
+# candidate bytes and cannot silently recompile.
+if [[ "${COHORT_ACTION:-all}" == compile ]]; then
+  test -s "$ev/minic-manifest.sha256" && test -s "$ev/minic-identity.txt"
+  (cd "$ev"; sha256sum --quiet -c minic-manifest.sha256)
+  # Restore pristine GOLDEN Kbuild state on disk for the verify-only step.
+  rm -rf -- "$out"
+  cp -a --reflink=auto "$gold_snapshot" "$out"
+  echo "COHORT_PRODUCE_ONLY=PASS objects=$n candidate_identity=$cache_contract"
+  exit 0
 fi
 # Build the initramfs just once; it stays fixed throughout all QEMU trials.
 BUILD_DIR="$ev/initramfs" OUTPUT_INITRAMFS="$ev/runtime-initramfs.cpio.gz" \

@@ -292,7 +292,7 @@ jobs:
             build/linux-runtime-gcc-cohort-v1/minic-identity.txt
           key: ${{ steps.candidate_id.outputs.key }}
 
-      - name: Build MiniC once and execute full batched GNU overlay bisection
+      - name: Build MiniC once and produce authenticated C candidates
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -307,6 +307,7 @@ jobs:
           bash tools/ci/linux-runtime-build-minic-profile-v1.sh \
             "$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain" "$ev/compiler"
           export COHORT_ALLOW_DIAGNOSTIC_384=${{ contains(github.event.head_commit.message, '[linux-runtime-gcc-384]') && '1' || '0' }}
+          export COHORT_ACTION=compile
           bash tools/ci/linux-runtime-gcc-cohort-bisect-v1.sh \
             "$work/linux-6.6.143" "$work/out" \
             "$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain/bin/minic" \
@@ -333,6 +334,7 @@ jobs:
              grep -Fq "COHORT_ABI=PASS objects=$count" "$ev/cohort.log" && \
              (cd "$ev"; sha256sum --quiet -c minic-manifest.sha256); then
             echo "ready=true" >>"$GITHUB_OUTPUT"
+            echo "COHORT_CANDIDATE_READY=PASS objects=$count"
           else
             echo "ready=false" >>"$GITHUB_OUTPUT"
           fi
@@ -346,6 +348,22 @@ jobs:
             build/linux-runtime-gcc-cohort-v1/minic-manifest.sha256
             build/linux-runtime-gcc-cohort-v1/minic-identity.txt
           key: ${{ steps.candidate_id.outputs.key }}
+
+      # This boundary is essential: a subsequent GNU relink/QEMU failure
+      # must NEVER waste the expensive, already-verified candidate objects.
+      - name: GNU relink and QEMU from authenticated MiniC objects
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "${{ steps.candidate_ready.outputs.ready }}" = true
+          work="$GITHUB_WORKSPACE/build/linux-runtime-gcc"
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-v1"
+          export COHORT_ALLOW_DIAGNOSTIC_384=${{ contains(github.event.head_commit.message, '[linux-runtime-gcc-384]') && '1' || '0' }}
+          export COHORT_ACTION=verify
+          bash tools/ci/linux-runtime-gcc-cohort-bisect-v1.sh \
+            "$work/linux-6.6.143" "$work/out" \
+            "$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain/bin/minic" \
+            "$work/provenance" "$ev/full-objects.txt" "$ev"
 
       - name: Preserve compilation, GNU object identities, QEMU verdicts and bisection
         if: always()
