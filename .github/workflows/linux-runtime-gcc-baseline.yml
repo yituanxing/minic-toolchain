@@ -327,16 +327,19 @@ jobs:
             count=0
           fi
           if test "$count" -ge 384 && \
-             grep -Fq "COHORT_COMPILE=PASS objects=$count" "$ev/cohort.log" && \
+             test -s "$ev/cohort.log" && \
+             { grep -Fq "COHORT_COMPILE=PASS objects=$count" "$ev/cohort.log" || \
+               grep -Fq "COHORT_CANDIDATE_CACHE=HIT objects=$count" "$ev/cohort.log"; } && \
              test -s "$ev/minic-manifest.sha256" && \
              test -s "$ev/minic-identity.txt" && \
-             test -s "$ev/cohort.log" && \
              grep -Fq "COHORT_ABI=PASS objects=$count" "$ev/cohort.log" && \
              (cd "$ev"; sha256sum --quiet -c minic-manifest.sha256); then
             echo "ready=true" >>"$GITHUB_OUTPUT"
             echo "COHORT_CANDIDATE_READY=PASS objects=$count"
           else
             echo "ready=false" >>"$GITHUB_OUTPUT"
+            echo "COHORT_CANDIDATE_READY=FAIL count=$count (check MiniC trace, ABI and candidate hashes)" >&2
+            exit 1
           fi
 
       - name: Save immutable MiniC objects despite later link or QEMU failure
