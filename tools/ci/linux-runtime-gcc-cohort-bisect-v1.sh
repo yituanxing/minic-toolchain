@@ -161,24 +161,48 @@ else
   # avoid filling runner disk. -k collects independent compile failures.
   compile_rc=0
   : >"$ev/mini-success-objects.txt"
-  # Multiple explicit Kbuild goals can recurse through the same directory.
-  # With -j6 their independent submakes race over .o/.o.d and append the
-  # same target to the MiniC success trace more than once. This has already
-  # caused a real fixdep missing-.o.d failure (serport.o, shard 1).
-  # Serialize each shard's Kbuild goal list while retaining SEVEN independent
-  # runner producers. Keep the previous -j6 only for the legacy full job,
-  # whose behavior must not change as part of the sharding fix.
+  : >"$ev/mini-object-hashes.sha256"
+  # Kbuild can legitimately rebuild an explicit target, even with -j1.
+  # Post-assembler digest attestations prove that the FINAL candidate object
+  # is a byte-for-byte MiniC output, without falsely rejecting such rebuilds.
+  # Try the fast parallel build first; a Kbuild .o.d race must not force
+  # 18-minute serial compiles on every future CI run.
   compile_jobs=6
-  if [[ "$cohort_scope" == SHARD_COMPILE_ONLY ]]; then
-    compile_jobs=1
-  fi
   echo "COHORT_KBUILD_PARALLELISM jobs=$compile_jobs scope=$cohort_scope"
   MINIC="$minic" REAL_CC=/usr/bin/riscv64-linux-gnu-gcc \
     MINIC_KEEP_INTERMEDIATES=0 MINIC_PRESERVE_FAILURE_INPUTS=1 \
     MINIC_KBUILD_SUCCESS_TRACE="$ev/mini-success-objects.txt" \
+    MINIC_KBUILD_OBJECT_HASH_TRACE="$ev/mini-object-hashes.sha256" \
     make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
       CC="$repo/tests/external/linux/stage2_kbuild_cc.sh" -j"$compile_jobs" -k "${targets[@]}" \
       >"$ev/compile.log" 2>&1 || compile_rc=$?
+  if ((compile_rc != 0)) && [[ "$cohort_scope" == SHARD_COMPILE_ONLY ]]; then
+    missing_targets=()
+    for target in "${objects[@]}"; do
+      [[ -s "$out/$target" ]] || missing_targets+=("$target")
+    done
+    if (("${#missing_targets[@]}" > 0)); then
+      echo "COHORT_KBUILD_RETRY=START failed_parallel_rc=$compile_rc missing=${#missing_targets[@]} jobs=1"
+      for target in "${missing_targets[@]}"; do
+        rm -f -- "$out/$target" "$out/$(dirname "$target")/.${target##*/}.cmd"
+      done
+      retry_rc=0
+      MINIC="$minic" REAL_CC=/usr/bin/riscv64-linux-gnu-gcc \
+        MINIC_KEEP_INTERMEDIATES=0 MINIC_PRESERVE_FAILURE_INPUTS=1 \
+        MINIC_KBUILD_SUCCESS_TRACE="$ev/mini-success-objects.txt" \
+        MINIC_KBUILD_OBJECT_HASH_TRACE="$ev/mini-object-hashes.sha256" \
+        make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
+          CC="$repo/tests/external/linux/stage2_kbuild_cc.sh" -j1 -k "${missing_targets[@]}" \
+          >"$ev/retry.log" 2>&1 || retry_rc=$?
+      if ((retry_rc == 0)); then
+        compile_rc=0
+        echo "COHORT_KBUILD_RETRY=PASS restored=${#missing_targets[@]} original_rc_preserved_in_compile_log"
+      else
+        echo "COHORT_KBUILD_RETRY=FAIL rc=$retry_rc"
+        tail -n 35 "$ev/retry.log"
+      fi
+    fi
+  fi
   : >"$ev/compile-blockers.txt"
   compiled=0
   for target in "${objects[@]}"; do
@@ -230,7 +254,9 @@ else
   # it. Require one explicit post-MiniC+GNU-AS success record per selected TU.
   python3 "$repo/tools/ci/linux-runtime-minic-route-audit-v1.py" \
     --objects-file "$objects_file" \
-    --success-trace "$ev/mini-success-objects.txt" || {
+    --success-trace "$ev/mini-success-objects.txt" \
+    --object-digest-trace "$ev/mini-object-hashes.sha256" \
+    --candidates "$ev/minic" || {
       echo "COHORT_COMPILE=FAIL reason=incomplete_minic_compiler_provenance"
       exit 11
     }

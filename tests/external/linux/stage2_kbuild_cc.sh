@@ -174,9 +174,14 @@ done
 "$real_cc" "${asm_args[@]}" -x assembler -c "$assembly" -o "$output_file"
 
 
-# Dedicated one-line append is safe under parallel Kbuild and cannot be
-# confused with GCC-produced objects. This marker is emitted ONLY after
-# MiniC -S and GNU assembler have both succeeded for this exact target.
+# A route record alone cannot prove that the final object was not replaced
+# after compilation. Record the EXACT object bytes produced through MiniC
+# and GNU as, before emitting the legacy success marker. Both writes are
+# single-line O_APPEND operations, safe for different concurrently built TUs.
+if [[ -n "${MINIC_KBUILD_OBJECT_HASH_TRACE:-}" ]]; then
+  object_hash=$(sha256sum -- "$output_file" | cut -d' ' -f1)
+  printf '%s  %s\n' "$object_hash" "$output_file" >>"$MINIC_KBUILD_OBJECT_HASH_TRACE"
+fi
 if [[ -n "${MINIC_KBUILD_SUCCESS_TRACE:-}" ]]; then
   printf '%s\n' "$output_file" >>"$MINIC_KBUILD_SUCCESS_TRACE"
 fi
