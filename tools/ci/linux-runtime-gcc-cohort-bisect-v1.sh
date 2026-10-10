@@ -1166,6 +1166,17 @@ if [[ "${COHORT_EARLYCON_HOTFIX:-0}" == 1 ]]; then
       grep -aE 'Linux version 6\.6\.143|Kernel command line|earlycon:|printk:|Kernel panic|Oops:|BUG:|soft lockup|devtmpfs:|Run /init|Starting init:' \
         "$uartlog" | tail -n 80 || true
     fi
+    if [[ "${COHORT_GDB_BOUNDARY:-0}" == 1 ]]; then
+      d="$ev/trials/earlycon_fixed_only"
+      mkdir -p "$d/gdb-boundary"
+      echo "GDB_BOUNDARY=START same_linked_image=true"
+      python3 "$repo/tools/ci/linux-runtime-gdb-boundary-v1.py" \
+        --image "$d/Image" --vmlinux "$out/vmlinux" \
+        --output-dir "$d/gdb-boundary" --timeout-seconds 34 || {
+          echo "GDB_BOUNDARY=INCONCLUSIVE runtime_certificate=false"
+        }
+      echo "GDB_BOUNDARY=END"
+    fi
     if [[ "${COHORT_NEXT_GCC_SWAPS:-0}" == 1 ]]; then
       baseline="$ev/trials/earlycon_fixed_only/qemu-uart-earlycon.log"
       [[ -s "$baseline" ]] || { echo "NEXT_OWNER_SWAP=ERROR no_UARТ_baseline"; exit 8; }

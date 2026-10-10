@@ -215,7 +215,7 @@ jobs:
               sudo apt-get -o Acquire::Retries=3 update
               sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
                 gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
-                qemu-system-misc opensbi libc6-dev-riscv64-cross python3 make cpio gzip device-tree-compiler
+                qemu-system-misc opensbi libc6-dev-riscv64-cross python3 make cpio gzip device-tree-compiler gdb-multiarch
             }
 
       - name: Derive exact certified GNU golden cache key
@@ -584,7 +584,7 @@ jobs:
               sudo apt-get -o Acquire::Retries=3 update
               sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
                 gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
-                qemu-system-misc opensbi libc6-dev-riscv64-cross python3 make cpio gzip device-tree-compiler
+                qemu-system-misc opensbi libc6-dev-riscv64-cross python3 make cpio gzip device-tree-compiler gdb-multiarch
             }
 
       - name: Restore identical certified GNU golden objects
@@ -717,11 +717,11 @@ jobs:
           set -Eeuo pipefail
           sudo apt-get -o Acquire::Retries=2 install -y --no-install-recommends \
             gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
-            qemu-system-misc opensbi libc6-dev-riscv64-cross python3 make cpio gzip device-tree-compiler || {
+            qemu-system-misc opensbi libc6-dev-riscv64-cross python3 make cpio gzip device-tree-compiler gdb-multiarch || {
               sudo apt-get -o Acquire::Retries=3 update
               sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
                 gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
-                qemu-system-misc opensbi libc6-dev-riscv64-cross python3 make cpio gzip device-tree-compiler
+                qemu-system-misc opensbi libc6-dev-riscv64-cross python3 make cpio gzip device-tree-compiler gdb-multiarch
             }
 
       - name: Identify exact pure-GNU golden reference
@@ -790,7 +790,7 @@ jobs:
         run: |
           set -Eeuo pipefail
           python3 tools/ci/linux-runtime-qmp-pc-sampler-v1.py --self-test
-          python3 -m py_compile tools/ci/linux-runtime-qmp-pc-sampler-v1.py tools/ci/linux-runtime-qmp-stack-symbols-v1.py
+          python3 -m py_compile tools/ci/linux-runtime-qmp-pc-sampler-v1.py tools/ci/linux-runtime-qmp-stack-symbols-v1.py tools/ci/linux-runtime-gdb-boundary-v1.py
 
       - name: Recompile earlycon.o only, GNU link and compare QEMU frontier
         shell: bash
@@ -799,7 +799,7 @@ jobs:
           work="$GITHUB_WORKSPACE/build/linux-runtime-gcc"
           ev="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-v1"
           chmod +x tests/external/linux/qemu_explicit_initrd_wrapper.py
-          export COHORT_ACTION=verify COHORT_EARLYCON_HOTFIX=1 COHORT_EARLYCON_EXPLICIT_INITRD=0 COHORT_NEXT_FAULT_DIAG=0 COHORT_UART_EARLYCON=1 COHORT_NEXT_GCC_SWAPS=1
+          export COHORT_ACTION=verify COHORT_EARLYCON_HOTFIX=1 COHORT_EARLYCON_EXPLICIT_INITRD=0 COHORT_NEXT_FAULT_DIAG=0 COHORT_UART_EARLYCON=1 COHORT_NEXT_GCC_SWAPS=0 COHORT_GDB_BOUNDARY=1
           bash tools/ci/linux-runtime-gcc-cohort-bisect-v1.sh \
             "$work/linux-6.6.143" "$work/out" \
             "$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain/bin/minic" \
@@ -822,6 +822,7 @@ jobs:
             build/linux-runtime-gcc-cohort-v1/trials/earlycon_fixed_only/qemu-registers.jsonl
             build/linux-runtime-gcc-cohort-v1/trials/earlycon_fixed_only/qemu-uart-earlycon.log
             build/linux-runtime-gcc-cohort-v1/trials/earlycon_fixed_only/uart-qmp/*
+            build/linux-runtime-gcc-cohort-v1/trials/earlycon_fixed_only/gdb-boundary/*
             build/linux-runtime-gcc-cohort-v1/trials/gcc_only_mm_*/qemu-uart-earlycon.log
             build/linux-runtime-gcc-cohort-v1/trials/gcc_only_mm_*/uart-qmp/qmp-probe.log
             build/linux-runtime-gcc-cohort-v1/trials/gcc_only_mm_*/uart-qmp/qemu-registers.jsonl
