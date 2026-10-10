@@ -650,6 +650,16 @@ def derivation(name):
         owner=name[:-7]+".o"
         if owner in chosen and emitted("STUBCPY",name):
             return owner
+    if name=="arch/riscv/purgatory/kexec-purgatory.o":
+        owners={"arch/riscv/purgatory/purgatory.o",
+                "arch/riscv/purgatory/ctype.o",
+                "arch/riscv/purgatory/sha256.o",
+                "arch/riscv/purgatory/string.o"}
+        if (owners <= chosen and
+            emitted("LD","arch/riscv/purgatory/purgatory.ro") and
+            emitted("LD","arch/riscv/purgatory/purgatory.chk") and
+            emitted("AS",name)):
+            return "purgatory:" + ",".join(sorted(owners))
     if name=="arch/riscv/kernel/vdso/vdso.o":
         owners={"arch/riscv/kernel/vdso/hwprobe.o",
                 "arch/riscv/kernel/vdso/vgettimeofday.o"}
