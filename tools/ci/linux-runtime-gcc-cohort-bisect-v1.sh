@@ -481,6 +481,62 @@ PY_HOTFIX_INTEGRITY
   rm -rf -- "$out"
   cp -a --reflink=auto "$gold_snapshot" "$out"
   echo "EARLYCON_HOTFIX=READY scope=2063_old_minic_plus_1_fixed_earlycon no_full_certificate=true"
+  if [[ "${COHORT_PATCH_SUPER_V1:-0}" == 1 ]]; then
+    # Follow the GCC-only sget_fc/alloc_super positive control with a true
+    # MiniC owner repair. The other 2062 C TUs are untouched and hash checked.
+    super_target=fs/super.o
+    super_dir="$hotfix/super-repaired"
+    mkdir -p "$super_dir"
+    printf '%s\n' "$super_target" >"$super_dir/selected.txt"
+    old_super_sha=$(sha256sum "$ev/minic/$super_target" | cut -d' ' -f1)
+    echo "MINIC_SUPER_REPAIR=START target=$super_target old_sha=$old_super_sha same_compiler=true"
+    python3 "$repo/tools/ci/linux-runtime-kbuild-regeneration-guard-v1.py" \
+      --mode replay --out "$out" --golden-out "$gold_snapshot" \
+      --evidence "$super_dir/replay.log" --selected "$super_dir/selected.txt" \
+      --wrapper "$repo/tests/external/linux/stage2_kbuild_cc.sh" \
+      --minic "$minic" --success-trace "$super_dir/success.txt" \
+      --digest-trace "$super_dir/digests.txt" | tee "$super_dir/replay.log"
+    python3 "$repo/tools/ci/linux-runtime-minic-route-audit-v1.py" \
+      --objects-file "$super_dir/selected.txt" \
+      --success-trace "$super_dir/success.txt" \
+      --object-digest-trace "$super_dir/digests.txt" \
+      --candidates "$out" | tee "$super_dir/route-audit.log"
+    python3 - "$ev/gcc/$super_target" "$ev/minic/$super_target" "$out/$super_target" <<'PY_SUPER_ABI'
+import struct,sys
+from pathlib import Path
+headers=[Path(p).read_bytes()[:52] for p in sys.argv[1:]]
+for h in headers:
+    assert len(h)==52 and h[:6]==b"\x7fELF\x02\x01"
+    assert struct.unpack_from("<H",h,16)[0]==1
+    assert struct.unpack_from("<H",h,18)[0]==243
+assert len({h[48:52] for h in headers})==1, "fs/super.o ABI flags differ"
+print("MINIC_SUPER_REPAIR_ABI=PASS gcc_old_new")
+PY_SUPER_ABI
+    new_super_sha=$(sha256sum "$out/$super_target" | cut -d' ' -f1)
+    cp -a "$out/$super_target" "$ev/minic/$super_target"
+    printf 'owner=%s\nold_sha256=%s\nnew_sha256=%s\ncompiler_sha256=%s\n' \
+      "$super_target" "$old_super_sha" "$new_super_sha" "$cc_sha" >"$super_dir/provenance.txt"
+    python3 - "$ev/minic-manifest.sha256" "$ev" "$target" "$new_sha" "$super_target" "$new_super_sha" <<'PY_PAIR_INTEGRITY'
+from pathlib import Path
+import hashlib,sys
+manifest,root=map(Path,sys.argv[1:3])
+new={"minic/"+sys.argv[3]:sys.argv[4],"minic/"+sys.argv[5]:sys.argv[6]}
+unchanged=0
+for line in manifest.read_text().splitlines():
+    digest,name=line.split(None,1)
+    observed=hashlib.sha256((root/name).read_bytes()).hexdigest()
+    if name in new:
+        assert observed==new[name], "repaired object missing "+name
+    else:
+        assert observed==digest, "frozen C owner modified "+name
+        unchanged+=1
+assert unchanged==2062, f"expected 2062 frozen neighbors, got {unchanged}"
+print(f"MINIC_SUPER_REPAIR_FROZEN_NEIGHBORS=PASS objects={unchanged} current_compiler_owners=2")
+PY_PAIR_INTEGRITY
+    rm -rf -- "$out"
+    cp -a --reflink=auto "$gold_snapshot" "$out"
+    echo "MINIC_SUPER_REPAIR=READY old_sha=$old_super_sha new_sha=$new_super_sha changed=$([[ "$old_super_sha" != "$new_super_sha" ]] && echo true || echo false) exact_golden_restored=true"
+  fi
 fi
 # Build the initramfs just once; it stays fixed throughout all QEMU trials.
 BUILD_DIR="$ev/initramfs" OUTPUT_INITRAMFS="$ev/runtime-initramfs.cpio.gz" \
@@ -1077,7 +1133,11 @@ if [[ "${COHORT_EARLYCON_HOTFIX:-0}" == 1 ]]; then
   if [[ -s "$diag" ]] && grep -Eq 'COHORT_QMP_SYMBOL at_s=(4|8) reg=pc .* symbol=' "$diag" && \
      grep -E 'COHORT_QMP_SYMBOL at_s=(4|8) reg=pc .* symbol=' "$diag" | \
        grep -Ev 'symbol=(setup_earlycon|BELOW_LINKED_TEXT)' >/dev/null; then
+    if [[ "${COHORT_PATCH_SUPER_V1:-0}" == 1 ]]; then
+      echo "MINIC_REPAIRED_PAIR_FRONTIER=ADVANCED earlycon_and_super_current_minic=true frozen_neighbors=2062 boot_certificate=NOT_CERTIFIED"
+    else
     echo "EARLYCON_HOTFIX_RESULT=FRONTIER_ADVANCED after_earlycon=true p1=NOT_CERTIFIED before_link_2063_frozen=true regenerated_header_dependents=4"
+    fi
     if [[ "${COHORT_EARLYCON_EXPLICIT_INITRD:-0}" == 1 ]]; then
       # Run the already-existing large-Image initrd loader against the SAME
       # linked Image; no second Kbuild link or MiniC compilation.

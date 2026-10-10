@@ -102,7 +102,14 @@ require_log() {
     fi
 }
 
-common="console=ttyS0 earlycon=sbi loglevel=8 panic=-1"
+# A diagnostic lane may override only the early-console transport, without
+# changing the pinned runtime contract or any normal/default CI invocation.
+earlycon_arg=${LINUX_RUNTIME_EARLYCON_ARG:-earlycon=sbi}
+case "$earlycon_arg" in
+    earlycon=sbi|earlycon=uart8250,mmio,0x10000000,115200n8) ;;
+    *) printf '%s\n' "LINUX_RUNTIME_ERROR unsupported_earlycon=$earlycon_arg" >&2; exit 2 ;;
+esac
+common="console=ttyS0 $earlycon_arg loglevel=8 panic=-1"
 init_append="$common rdinit=/init"
 if test "$profile" = p1; then
     init_append="$init_append minic_runtime=p1"
