@@ -72,6 +72,54 @@ first_test_rc=0
 echo "EARLYCON_FIRST_PATCH_TEST rc=$first_test_rc patch=apply-local-integer-assignment-v2"
 grep -E 'EARLYCON_(TWO_PASS|TABLE)_' "$abs_probe/first-patch-two-pass.log" || true
 echo "EARLYCON_FIRST_PATCH_CC_SHA256=$(sha256sum "$abs_probe/first-patch-build/bin/minic-cc" | cut -d' ' -f1)"
+# Find the earliest runnable bad prefix in ONE CI job. The exact
+# production patch order is read from the canonical runtime profile.
+# Reuse one checkout and incremental objects; do not launch 39 workflows.
+prefix_n=1
+first_bad=0
+mapfile -t patch_sequence < <(
+  sed -n '/^patches=(/,/^)/p' "$first_tree/tools/ci/linux-runtime-build-minic-profile-v1.sh" |
+    awk '/^[[:space:]]+apply-/ {print $1}'
+)
+if ((${#patch_sequence[@]}<30)) || [[ "${patch_sequence[0]}" != "apply-local-integer-assignment-v2.py" ]]; then
+  echo "EARLYCON_PATCH_PREFIX=ERROR bad_manifest count=${#patch_sequence[@]}"
+  exit 9
+fi
+for ((pn=1;pn<${#patch_sequence[@]};pn++)); do
+  patch=${patch_sequence[pn]}
+  ((prefix_n += 1))
+  ( cd "$first_tree" && python3 "tools/ci/$patch" ) >>"$abs_probe/prefix-patches.log" 2>&1
+  if (
+    cd "$first_tree"
+    make -j4 MODE=release CFLAGS=-Werror \
+      BUILD_DIR="$abs_probe/first-patch-build" \
+      "$abs_probe/first-patch-build/bin/minic" \
+      "$abs_probe/first-patch-build/bin/minic-cc"
+  ) >"$abs_probe/prefix-build-$prefix_n.log" 2>&1; then
+    prefix_rc=0
+    (
+      cd "$first_tree"
+      MINIC="$abs_probe/first-patch-build/bin/minic" \
+        BUILD_DIR="$abs_probe/prefix-rv64-$prefix_n" \
+        RISCV_CC=riscv64-linux-gnu-gcc RISCV_LD=riscv64-linux-gnu-ld \
+        QEMU_RISCV64=qemu-riscv64 \
+        bash tests/compiler/c0/run-earlycon-two-pass-rv64.sh
+    ) >"$abs_probe/prefix-test-$prefix_n.log" 2>&1 || prefix_rc=$?
+    echo "EARLYCON_PATCH_PREFIX index=$prefix_n patch=$patch build=PASS rv64_rc=$prefix_rc"
+    grep -E 'EARLYCON_(TWO_PASS|TABLE)_' "$abs_probe/prefix-test-$prefix_n.log" || true
+    if ((prefix_rc!=0)); then
+      first_bad=$prefix_n
+      echo "EARLYCON_PATCH_FIRST_BAD buildable_prefix=$prefix_n patch=$patch"
+      break
+    fi
+  else
+    echo "EARLYCON_PATCH_PREFIX index=$prefix_n patch=$patch build=UNAVAILABLE"
+    tail -n 3 "$abs_probe/prefix-build-$prefix_n.log"
+  fi
+done
+if ((first_bad==0)); then
+  echo "EARLYCON_PATCH_FIRST_BAD=NOT_FOUND_IN_PREFIX_TEST last_prefix=$prefix_n"
+fi
 git -C "$repo_root" worktree remove --force "$first_tree"
 
 

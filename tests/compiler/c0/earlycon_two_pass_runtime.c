@@ -1,5 +1,7 @@
 /* Minimum earlycon-style scan: a mutable _Bool gates a second pass
- * through a for-loop reached through a backward goto. No Linux dependency. */
+ * through a for-loop reached through a backward goto. No Linux dependency.
+ * Regression witness: pristine MiniC PASS, production 39-patch runtime
+ * profile FAIL. See opt-in prefix isolation for the first bad patch. */
 typedef _Bool bool;
 static int scan_count;
 static int table[3] = {1, 3, 5};
