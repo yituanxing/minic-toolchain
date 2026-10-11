@@ -89,18 +89,20 @@ static bool core_block_contains_inline_asm(
 if s.count(anchor) != 1:
     raise SystemExit(f"asm if helper anchor count={s.count(anchor)}")
 s = s.replace(anchor, helper + anchor, 1)
-old = """        if (core_const_eval_integer_with_locals(
-                context, statement->expression, &condition_value) &&"""
-new = """        if ((minic_const_eval_integer(context->body->program,
-                                      context->target,
-                                      statement->expression, &condition_value) ||
-             (!core_block_contains_inline_asm(context, then_source) &&
-              (else_source == NULL ||
-               !core_block_contains_inline_asm(context, else_source)) &&
-              core_const_eval_integer_with_locals(
-                  context, statement->expression, &condition_value))) &&"""
+old = """            if (core_const_eval_integer_with_locals(
+                    context, statement->expression, &condition_value) &&
+                minic_const_value_is_zero("""
+new = """            if ((minic_const_eval_integer(context->body->program,
+                                          context->target,
+                                          statement->expression, &condition_value) ||
+                 (!core_block_contains_inline_asm(context, then_source) &&
+                  (else_source == NULL ||
+                   !core_block_contains_inline_asm(context, else_source)) &&
+                  core_const_eval_integer_with_locals(
+                      context, statement->expression, &condition_value))) &&
+                minic_const_value_is_zero("""
 if s.count(old) != 1:
-    raise SystemExit(f"asm if fact predicate anchor count={s.count(old)}")
+    raise SystemExit(f"asm if fact predicate final-profile anchor count={s.count(old)}")
 s = s.replace(old, new, 1)
 p.write_text(s)
 print("MINIC_LOCAL_ASM_IF_FACT_BARRIER=APPLIED dynamic_asm_guard=true")
