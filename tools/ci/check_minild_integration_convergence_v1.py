@@ -49,12 +49,17 @@ def normalized(job):
 # bodies and archived Git blobs remain byte-exact.
 OLD_REL_SELECTOR = "            */purgatory.ro|*/vmlinux.o)"
 NEW_REL_SELECTOR = "            */purgatory.ro|purgatory.ro|*/vmlinux.o|vmlinux.o)"
+OLD_REL_TRACE_ASSERT = "          grep -q '/vmlinux.o$' \"$trace\""
+NEW_REL_TRACE_ASSERT = "          grep -Eq '(^|/)vmlinux[.]o$' \"$trace\""
 
 
 def reverse_rel_selector_fix(text):
     if text.count(NEW_REL_SELECTOR) != 1 or OLD_REL_SELECTOR in text:
         raise AssertionError("MiniLD Linux REL selector repair missing or altered")
-    return text.replace(NEW_REL_SELECTOR, OLD_REL_SELECTOR, 1)
+    if text.count(NEW_REL_TRACE_ASSERT) != 1 or OLD_REL_TRACE_ASSERT in text:
+        raise AssertionError("MiniLD Linux REL trace assertion repair missing or altered")
+    return (text.replace(NEW_REL_SELECTOR, OLD_REL_SELECTOR, 1)
+                .replace(NEW_REL_TRACE_ASSERT, OLD_REL_TRACE_ASSERT, 1))
 
 
 def main():
