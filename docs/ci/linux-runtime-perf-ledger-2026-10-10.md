@@ -180,3 +180,8 @@ From authenticated run `38112013620`, artifact `11691822360`, parse the relocati
 | Load/store fraction of disassembled instructions | 26.8% | 65.4% |
 
 The MiniC object also contains 22 named `__minic_inline_spec_*` functions. These measurements identify a **~15.5× static instruction count** within one object, not a 15.5× wall-clock slowdown or an isolated runtime defect. It justifies prioritizing redundant value spills/reloads, call boundary handling, and specialization code-size accounting *after* correctness. Do not assume all 2064 objects have the same ratio.
+
+
+### P1 image size is also a loader-placement acceptance constraint
+
+The frozen QEMU setup places the kernel Image at physical `0x80200000` and the initrd at `0x88200000`, an interval of `0x08000000` (128 MiB). The measured 215,502,848-byte MiniC flat Image extends into that region; consequently, **even after fixing a kernel execution defect**, the original pinned initrd/P1 oracle cannot pass without either substantially reducing/relocating the load footprint or validating a supported non-overlapping guest load layout. This is independent of the repeated post-8250 CPU PC. The no-initrd QMP mode is only a diagnostic, never a P1 PASS.
