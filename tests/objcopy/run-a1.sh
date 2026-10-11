@@ -156,4 +156,70 @@ run_case() {
 run_case 64 rv64imac lp64 elf64lriscv
 run_case 32 rv32imac ilp32 elf32lriscv
 
+
+# Regression from a *real* RISC-V Linux 6.6.143 single-MiniObjcopy build:
+# arch/riscv/kernel/pi/Makefile uses these three options together on ET_REL.
+# In particular the relocation section name follows the renamed alloc section.
+cat >"$work/pi-prefix.s" <<'EOF'
+.file "pi-prefix.s"
+.section .text,"ax",@progbits
+.globl pi_call
+.type pi_call, @function
+pi_call:
+  call undefined_pi_target
+  ret
+.size pi_call, .-pi_call
+.section .rodata,"a",@progbits
+.globl pi_data
+pi_data:
+  .word 0x11223344
+.section .note.gnu.property,"a",@note
+.byte 1,2,3,4
+EOF
+
+run_prefix_case() {
+  bits="$1"
+  march="$2"
+  abi="$3"
+  emulation="$4"
+  dest="$work/pi-prefix-rv$bits"
+  mkdir -p "$dest"
+  "$AS" -march="$march" -mabi="$abi" -o "$dest/input.o" "$work/pi-prefix.s"
+  "$OBJCOPY" --prefix-symbols=__pi_ \
+    --remove-section=.note.gnu.property \
+    --prefix-alloc-sections=.init.pi \
+    "$dest/input.o" "$dest/reference.o"
+  "$MINIOBJCOPY" --prefix-symbols=__pi_ \
+    --remove-section=.note.gnu.property \
+    --prefix-alloc-sections=.init.pi \
+    "$dest/input.o" "$dest/product.o"
+  for file in "$dest/reference.o" "$dest/product.o"; do
+    "$READELF" -SW "$file" >"$file.sections"
+    "$READELF" -Ws "$file" >"$file.symbols"
+    "$READELF" -Wr "$file" >"$file.relocs"
+    grep -Fq '.init.pi.text' "$file.sections"
+    grep -Fq '.rela.init.pi.text' "$file.sections"
+    grep -Fq '.init.pi.rodata' "$file.sections"
+    grep -Fq '__pi_pi_call' "$file.symbols"
+    grep -Fq '__pi_pi_data' "$file.symbols"
+    grep -Fq '__pi_undefined_pi_target' "$file.relocs"
+    if grep -Fq '.note.gnu.property' "$file.sections"; then
+      echo "MINIOBJCOPY_PI_PREFIX=FAIL removed-section-remains file=$file" >&2
+      exit 1
+    fi
+    "$LD" -m "$emulation" -r -o "$file.relinked.o" "$file"
+  done
+  "$NM" -a "$dest/reference.o" >"$dest/reference.nm"
+  "$NM" -a "$dest/product.o" >"$dest/product.nm"
+  if ! cmp "$dest/reference.nm" "$dest/product.nm"; then
+    echo "MINIOBJCOPY_PI_PREFIX=FAIL bits=$bits symbols-differ" >&2
+    diff -u "$dest/reference.nm" "$dest/product.nm" >&2 || true
+    exit 1
+  fi
+  echo "MINIOBJCOPY_PI_PREFIX_CASE=PASS bits=$bits reloc=PASS symbols=GNU-exact gnu-ld-consumer=PASS"
+}
+run_prefix_case 64 rv64imac lp64 elf64lriscv
+run_prefix_case 32 rv32imac ilp32 elf32lriscv
+echo "MINIOBJCOPY_PI_PREFIX=PASS formats=ELF32,ELF64 linux_pi_options=3"
+
 echo "MINIOBJCOPY_A1=PASS oracle=GNU-objcopy formats=ELF64-RISCV,ELF32-RISCV types=ET_DYN options=-G,-S,--strip-debug,-R"
