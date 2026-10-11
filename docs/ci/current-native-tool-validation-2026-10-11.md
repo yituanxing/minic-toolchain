@@ -656,3 +656,23 @@ and keeps output bounds validation. The new GNU differential
 regression expands 128 symbols under the actual EFI STUBCPY triple
 options for both RV32/64 and checks GNU-exact symbol inventory,
 rewritten relocation and GNU-LD ET_REL consumption.
+
+## MiniObjcopy cross-tool ELF regression — verified
+
+The source fix in `elf/src/rewrite.c` preserves the original ELF input
+range guards for unchanged sections but validates rewritten string table
+buffers against their own enlarged allocated byte lengths, not against
+the original ELF input EOF. This directly addresses the three archived
+MiniAS-produced EFI `invalid-section` witnesses.
+
+Real RV32/RV64 GNU difference tests in
+[#38184224857](https://github.com/yituanxing/minic-toolchain/actions/runs/38184224857)
+passed:
+`MINIOBJCOPY_EFI_STRTAB_CASE=PASS bits=64 names=128 ...`,
+`MINIOBJCOPY_EFI_STRTAB_CASE=PASS bits=32 names=128 ...`,
+`MINIOBJCOPY_EFI_STRTAB=PASS` and the complete
+`MINIOBJCOPY_STRIP_REGRESSIONS_V1=PASS`. Both native outputs remained
+GNU-linker consumable, with GNU-exact `nm` symbol inventory.
+This is the unit/differential gate; the actual Linux MiniAS+MiniAR+
+MiniObjcopy integrated boot is only certified after its separately
+triggered `[minias-linux-integrated]` complete Image/QEMU P0+P1 run.
