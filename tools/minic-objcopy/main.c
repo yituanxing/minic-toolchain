@@ -266,13 +266,16 @@ static int convert_binary(const ObjcopyOptions *options,
                     input_path);
             goto done;
         }
-        if (section.type == SHT_NOBITS ||
+        /* GNU objcopy -O binary exports only SHF_ALLOC sections;
+         * -j selects a subset but does not make non-allocated sections
+         * loadable.  In particular a non-allocated .modinfo produces
+         * an empty output, not its raw ELF section bytes. */
+        if ((section.flags & SHF_ALLOC) == 0U ||
+            section.type == SHT_NOBITS ||
             section.size == 0U ||
             is_removed(options, name) ||
             (options->only_count != 0U &&
-             !is_only_section(options, name)) ||
-            (options->only_count == 0U &&
-             (section.flags & SHF_ALLOC) == 0U)) {
+             !is_only_section(options, name))) {
             continue;
         }
         include_sections[i] = true;
@@ -284,6 +287,14 @@ static int convert_binary(const ObjcopyOptions *options,
                               &image_size,
                               &base_address,
                               &error)) {
+        if (error == MINIELF_BINARY_NO_LOADABLE_SECTIONS &&
+            options->only_count != 0U) {
+            /* GNU -j on a present, non-allocated section writes a
+             * legitimate empty flat binary. */
+            result = write_file(output_path, (const unsigned char *)"", 0U)
+                         ? 0 : 1;
+            goto done;
+        }
         fprintf(stderr,
                 "minic-objcopy: %s: binary export failed: %s\n",
                 input_path,
