@@ -818,6 +818,23 @@ jobs:
           riscv64-linux-gnu-objdump -dr --disassemble=nf_hook_entries_grow \
             "$d/core.current-minic.o" >"$d/core.current-minic-grows.disasm"
           echo "NETFILTER_EXACT_SOURCE_CAPTURE=PASS original_minic_hash=$(sha256sum "$minic" | cut -d' ' -f1) current_minic_hash=$(sha256sum "$d/core.current-minic.o" | cut -d' ' -f1)"
+          # While the repaired core.o is under full 145/203 QEMU replay, map
+          # the *next* historical crash RA to its actual original MiniC .o.
+          # This reads authenticated cached objects; no extra kernel link.
+          echo "SECOND_FAULT_OWNER_SCAN=START symbol=__minic_inline_spec_9309_155"
+          find "$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-v1/minic" \
+            -type f -name '*.o' -print0 \
+            | xargs -0 -r -n 16 -P 4 riscv64-linux-gnu-nm -A --defined-only \
+              >"$d/cached-minic-defined-symbols.txt"
+          grep -F ' __minic_inline_spec_9309_155' \
+            "$d/cached-minic-defined-symbols.txt" \
+            >"$d/compound-head-ra-owner.txt" || true
+          if [[ -s "$d/compound-head-ra-owner.txt" ]]; then
+            echo "SECOND_FAULT_OWNER_SCAN=FOUND"
+            cat "$d/compound-head-ra-owner.txt"
+          else
+            echo "SECOND_FAULT_OWNER_SCAN=NO_MATCH"
+          fi
           echo "NETFILTER_EXACT_OWNER_CAPTURE=PASS"
       - uses: actions/upload-artifact@v4
         if: contains(github.event.head_commit.message, '[linux-runtime-core-capture]')
