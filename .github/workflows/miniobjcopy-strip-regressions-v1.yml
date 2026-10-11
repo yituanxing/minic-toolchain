@@ -16,6 +16,7 @@ on:
           - regressions
           - linux-tool
           - linux-single
+          - linux-replay
           - all
 
 permissions:
@@ -96,7 +97,8 @@ jobs:
   linux-tool:
     env:
       MINIOBJCOPY_SINGLE_MODE: ${{ (github.event_name == 'workflow_dispatch' && inputs.mode == 'linux-single') || contains(github.event.head_commit.message, '[miniobjcopy-linux-single]') }}
-    if: (github.event_name == 'workflow_dispatch' && (inputs.mode == 'linux-tool' || inputs.mode == 'linux-single' || inputs.mode == 'all')) || (github.event_name == 'push' && (contains(github.event.head_commit.message, '[miniobjcopy-linux-tool]') || contains(github.event.head_commit.message, '[miniobjcopy-linux-single]')))
+      MINIOBJCOPY_REPLAY_MODE: ${{ (github.event_name == 'workflow_dispatch' && inputs.mode == 'linux-replay') || contains(github.event.head_commit.message, '[miniobjcopy-linux-replay]') }}
+    if: (github.event_name == 'workflow_dispatch' && (inputs.mode == 'linux-tool' || inputs.mode == 'linux-single' || inputs.mode == 'linux-replay' || inputs.mode == 'all')) || (github.event_name == 'push' && (contains(github.event.head_commit.message, '[miniobjcopy-linux-tool]') || contains(github.event.head_commit.message, '[miniobjcopy-linux-single]') || contains(github.event.head_commit.message, '[miniobjcopy-linux-replay]')))
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     steps:
@@ -112,6 +114,7 @@ jobs:
             qemu-user qemu-system-misc opensbi cpio gzip bc bison flex libssl-dev libelf-dev make curl xz-utils file
 
       - name: Build toolchain and focused gates
+        if: env.MINIOBJCOPY_REPLAY_MODE != 'true'
         run: |
           set -Eeuo pipefail
           make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/miniobjcopy-linux-tool all
@@ -123,6 +126,7 @@ jobs:
           make MODE=release CFLAGS=-Werror BUILD_DIR=build/miniobjcopy-linux-tool check-minild-a3
 
       - name: Prepare Linux 6.6.143
+        if: env.MINIOBJCOPY_REPLAY_MODE != 'true'
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -147,6 +151,7 @@ jobs:
           fi
 
       - name: Install MiniLD and MiniObjcopy wrappers
+        if: env.MINIOBJCOPY_REPLAY_MODE != 'true'
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -206,6 +211,7 @@ jobs:
           : >"$work/miniobjcopy.trace"
 
       - name: Build Linux Image with exactly one MiniObjcopy replacement
+        if: env.MINIOBJCOPY_REPLAY_MODE != 'true'
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -269,8 +275,34 @@ jobs:
               "$calls" "$image_bytes" "$image_sha"
           fi
 
+      - name: Restore exact MiniLD-final MiniObjcopy Linux Image without recompilation
+        if: env.MINIOBJCOPY_REPLAY_MODE == 'true'
+        uses: actions/download-artifact@v4
+        with:
+          name: miniobjcopy-linux-tool-frontier
+          path: build/miniobjcopy-linux-tool-work
+          repository: ${{ github.repository }}
+          run-id: '38160503540'
+          github-token: ${{ github.token }}
+
+      - name: Attest restored native-final-linked Linux artifact
+        if: env.MINIOBJCOPY_REPLAY_MODE == 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/miniobjcopy-linux-tool-work"
+          image="$work/out/arch/riscv/boot/Image"
+          test -s "$image"
+          test -s "$work/out/vmlinux"
+          test "$(grep -c '^minild ' "$work/minild.trace")" -eq 3
+          test "$(grep -c '^miniobjcopy ' "$work/miniobjcopy.trace")" -eq 44
+          printf '%s  %s\n' \
+            db7bb695bb9dcd5985a726e0ea3b5d54b32f01c195b6c91ee117bd146d999693 \
+            "$image" | sha256sum -c -
+          echo "MINILD_FINAL_IMAGE_REPLAY=PASS origin=38160503540 native_ld=3 native_objcopy=44 reused_full_image=1"
+
       - name: Boot only-MiniObjcopy Linux via existing QEMU runtime oracle
-        if: env.MINIOBJCOPY_SINGLE_MODE == 'true'
+        if: env.MINIOBJCOPY_SINGLE_MODE == 'true' || env.MINIOBJCOPY_REPLAY_MODE == 'true'
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -279,15 +311,36 @@ jobs:
           OUTPUT_INITRAMFS="$work/runtime-initramfs.cpio.gz" \
           RISCV_CC=riscv64-linux-gnu-gcc \
             bash tests/external/linux/build_runtime_initramfs.sh
-          LINUX_IMAGE="$work/out/arch/riscv/boot/Image" \
-          INITRAMFS="$work/runtime-initramfs.cpio.gz" \
-          BUILD_DIR="$work/qemu-runtime" \
-          LINUX_RELEASE=6.6.143 \
-          LINUX_RUNTIME_PROFILE=fast \
-          QEMU_SYSTEM_RISCV64=qemu-system-riscv64 \
-          QEMU_TIMEOUT_SECONDS=90 \
-            bash tests/external/linux/runtime_boot.sh
-          echo "MINIOBJCOPY_LINUX_SINGLE_RUNTIME=PASS profile=fast head=$GITHUB_SHA"
+          if [[ "$MINIOBJCOPY_REPLAY_MODE" == true ]]; then
+            LINUX_IMAGE="$work/out/arch/riscv/boot/Image" \
+            INITRAMFS="$work/runtime-initramfs.cpio.gz" \
+            BUILD_DIR="$work/qemu-runtime" \
+            LINUX_RELEASE=6.6.143 \
+            QEMU_SYSTEM_RISCV64=qemu-system-riscv64 \
+            QEMU_TIMEOUT_SECONDS=90 \
+              bash tests/external/linux/runtime_boot.sh
+            LINUX_IMAGE="$work/out/arch/riscv/boot/Image" \
+            INITRAMFS="$work/runtime-initramfs.cpio.gz" \
+            BUILD_DIR="$work/qemu-p1" \
+            LINUX_RELEASE=6.6.143 \
+            LINUX_RUNTIME_PROFILE=p1 \
+            QEMU_SYSTEM_RISCV64=qemu-system-riscv64 \
+            QEMU_TIMEOUT_SECONDS=90 \
+              bash tests/external/linux/runtime_boot.sh
+            python3 tests/external/linux/runtime_v2_log_check.py \
+              --profile p1 --log "$work/qemu-p1/rdinit-init.log"
+            echo "MINILD_FINAL_MINIOBJCOPY_LINUX_RUNTIME=PASS p0=2/2 p1=12/12 origin=38160503540"
+          else
+            LINUX_IMAGE="$work/out/arch/riscv/boot/Image" \
+            INITRAMFS="$work/runtime-initramfs.cpio.gz" \
+            BUILD_DIR="$work/qemu-runtime" \
+            LINUX_RELEASE=6.6.143 \
+            LINUX_RUNTIME_PROFILE=fast \
+            QEMU_SYSTEM_RISCV64=qemu-system-riscv64 \
+            QEMU_TIMEOUT_SECONDS=90 \
+              bash tests/external/linux/runtime_boot.sh
+            echo "MINIOBJCOPY_LINUX_SINGLE_RUNTIME=PASS profile=fast head=$GITHUB_SHA"
+          fi
 
       - name: Preserve Linux MiniObjcopy frontier
         if: always()
@@ -299,6 +352,7 @@ jobs:
             build/miniobjcopy-linux-tool-work/minild.trace
             build/miniobjcopy-linux-tool-work/kbuild.log
             build/miniobjcopy-linux-tool-work/qemu-runtime/*.log
+            build/miniobjcopy-linux-tool-work/qemu-p1/*.log
             build/miniobjcopy-linux-tool-work/out/arch/riscv/kernel/vdso/vdso.so
             build/miniobjcopy-linux-tool-work/out/arch/riscv/kernel/vdso/vdso.so.dbg
             build/miniobjcopy-linux-tool-work/out/arch/riscv/boot/Image
