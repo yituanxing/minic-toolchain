@@ -1395,6 +1395,7 @@ if [[ "${COHORT_EARLYCON_HOTFIX:-0}" == 1 ]]; then
       echo "EARLYCON_UART_STACK_SYMBOLS=BEGIN"
       head -n 95 "$qmp_dir/stack-symbols.txt" 2>/dev/null || true
       echo "EARLYCON_UART_STACK_SYMBOLS=END"
+      grep -E 'REGISTER_LATE_DIVERSITY|REGISTER_CODE' "$qmp_dir/stack-symbols.txt" || true
       if grep -aq 'Linux version 6.6.143' "$uartlog"; then
         echo "EARLYCON_UART_BANNER=OBSERVED"
       else
@@ -1511,6 +1512,12 @@ PY_FAULT_OWNER
         grep -E 'COHORT_QMP_EARLY_SAMPLE|COHORT_QMP_EARLY_COMPLETE' "$d/uart-qmp/qmp-probe.log" || true
         echo "NEXT_OWNER_SWAP_BASELINE_QMP_SAMPLES target=$swap_target"
         grep -E 'COHORT_QMP_EARLY_SAMPLE|COHORT_QMP_EARLY_COMPLETE' "$ev/trials/earlycon_fixed_only/uart-qmp/qmp-probe.log" || true
+        python3 "$repo/tools/ci/linux-runtime-qmp-stack-symbols-v1.py" \
+          --jsonl "$d/uart-qmp/qemu-registers.jsonl" \
+          --vmlinux "$out/vmlinux" \
+          --output "$d/uart-qmp/stack-symbols.txt" || true
+        echo "NEXT_OWNER_SWAP_REGISTER_SYMBOLS target=$swap_target"
+        grep -E 'REGISTER_LATE_DIVERSITY|REGISTER_CODE' "$d/uart-qmp/stack-symbols.txt" || true
         echo "NEXT_OWNER_SWAP_BASELINE target=$swap_target"
         grep -aE '^\[[[:space:]]*[0-9]+\.[0-9]+\]' "$baseline" | tail -n 5 || true
         echo "NEXT_OWNER_SWAP_OBSERVED target=$swap_target"
