@@ -1574,6 +1574,28 @@ if [[ "${COHORT_EARLYCON_HOTFIX:-0}" == 1 ]]; then
       fi
       if ((rc==0)); then
         echo "EARLYCON_EXPLICIT_FAST=PASS"
+        if [[ "${COHORT_EARLYCON_EXPLICIT_SHELL:-0}" == 1 ]]; then
+          echo "EARLYCON_EXPLICIT_SHELL=START same_linked_image=true independent_of_P1=true"
+          shell_rc=0
+          LINUX_IMAGE="$d/Image" INITRAMFS="$ev/runtime-initramfs.cpio.gz" \
+            BUILD_DIR="$d/qemu-explicit-shell" LINUX_RELEASE=6.6.143 \
+            LINUX_RUNTIME_PROFILE=shell QEMU_TIMEOUT_SECONDS=55 \
+            QEMU_SHELL_INPUT_DELAY_SECONDS=22 \
+            LINUX_RUNTIME_EARLYCON_ARG=earlycon=uart8250,mmio,0x10000000,115200n8 \
+            QEMU_SYSTEM_RISCV64="$wrapper" \
+            QEMU_REAL_SYSTEM_RISCV64=qemu-system-riscv64 \
+            QEMU_EXPLICIT_DTB_DIR="$d/dtb-explicit-shell" \
+            bash "$repo/tests/external/linux/runtime_boot.sh" \
+            >"$d/runtime-explicit-shell.log" 2>&1 || shell_rc=$?
+          if ((shell_rc==0)); then
+            echo "EARLYCON_EXPLICIT_SHELL=PASS verified_commands=true"
+          else
+            echo "EARLYCON_EXPLICIT_SHELL=NOT_CERTIFIED rc=$shell_rc"
+            grep -aE 'Run /bin/sh|SH_READY|PROC_CMDLINE|RDINIT_SH|DONE_RDINIT|Kernel panic|soft lockup|LINUX_RUNTIME_' \
+              "$d/qemu-explicit-shell/rdinit-sh.log" | tail -n 45 || true
+            tail -n 16 "$d/runtime-explicit-shell.log" || true
+          fi
+        fi
         p1_rc=0
         LINUX_IMAGE="$d/Image" INITRAMFS="$ev/runtime-initramfs.cpio.gz" \
           BUILD_DIR="$d/qemu-explicit-p1" LINUX_RELEASE=6.6.143 \
