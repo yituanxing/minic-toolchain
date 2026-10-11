@@ -563,3 +563,27 @@ The direct MiniAS Image before the second relink still passed P0/P1;
 do not relabel this stage as integrated success. Exact failing objects
 and ELF sections must be collected and compared against GNU objects
 before touching code or proposing a GNU fallback.
+
+## Cross-tool EFI STUBCPY compatibility evidence capture
+
+The first MiniAS+MiniAR+MiniObjcopy same-tree relink
+[#38160817819](https://github.com/yituanxing/minic-toolchain/actions/runs/38160817819)
+is **FAIL** only after MiniAS alone built Linux and passed P0/P1.
+The native combination completed hundreds of MiniAR re-archives, then
+MiniObjcopy rejected three native MiniAS ET_REL objects from
+`drivers/firmware/efi/libstub` with `invalid-section`. This is not
+an assertion that MiniAS Linux runtime fails in isolation: its QEMU
+result remains green at the identical source SHA.
+
+The integrated relink harness now saves the exact 3 failed
+`.o` files, ELF headers, section table and relocations on failure,
+plus GNU-as same-source `.o` objects and the original temporary
+assembly source, captured during initial GCC assembly. This is a
+bounded diagnostic extension (still one canonical MiniAS workflow/job);
+its source identities and archival first ten jobs passed M0
+[#38161541049](https://github.com/yituanxing/minic-toolchain/actions/runs/38161541049).
+The tagged replay `[minias-linux-integrated]` will classify the
+MiniAS->MiniObjcopy interoperation failure from exact ELF evidence
+before selecting the responsible native implementation. The separate
+MiniLD-final QEMU archived-Image run is independent and does not
+require a new kernel compilation.
