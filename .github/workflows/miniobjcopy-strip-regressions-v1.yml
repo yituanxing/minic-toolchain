@@ -15,6 +15,7 @@ on:
         options:
           - regressions
           - linux-tool
+          - linux-single
           - all
 
 permissions:
@@ -90,9 +91,12 @@ jobs:
       - name: Publish canonical verdict
         run: echo "MINIOBJCOPY_STRIP_REGRESSIONS_V1=PASS shared-reader=PASS objcopy-a0=PASS objcopy-a1=PASS strip-a0=PASS head=$GITHUB_SHA"
 
-  # Historical full Kbuild MiniObjcopy/MiniLD boundary; manual-only.
+  # Historical mixed MiniObjcopy/MiniLD boundary stays available.
+  # The opt-in linux-single mode changes ONLY objcopy, with GNU GCC/as/ar/ld.
   linux-tool:
-    if: (github.event_name == 'workflow_dispatch' && (inputs.mode == 'linux-tool' || inputs.mode == 'all')) || (github.event_name == 'push' && contains(github.event.head_commit.message, '[miniobjcopy-linux-tool]'))
+    env:
+      MINIOBJCOPY_SINGLE_MODE: ${{ (github.event_name == 'workflow_dispatch' && inputs.mode == 'linux-single') || contains(github.event.head_commit.message, '[miniobjcopy-linux-single]') }}
+    if: (github.event_name == 'workflow_dispatch' && (inputs.mode == 'linux-tool' || inputs.mode == 'linux-single' || inputs.mode == 'all')) || (github.event_name == 'push' && (contains(github.event.head_commit.message, '[miniobjcopy-linux-tool]') || contains(github.event.head_commit.message, '[miniobjcopy-linux-single]')))
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     steps:
@@ -105,7 +109,7 @@ jobs:
           sudo apt-get -o Acquire::Retries=3 update
           sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
             build-essential gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
-            qemu-user bc bison flex libssl-dev libelf-dev make curl xz-utils file
+            qemu-user qemu-system-misc opensbi cpio gzip bc bison flex libssl-dev libelf-dev make curl xz-utils file
 
       - name: Build toolchain and focused gates
         run: |
@@ -135,6 +139,12 @@ jobs:
             "$archive" | sha256sum -c -
           tar -xJf "$archive" -C "$work"
           make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- defconfig
+          if [[ "$MINIOBJCOPY_SINGLE_MODE" == true ]]; then
+            "$src/scripts/config" --file "$out/.config" \
+              -e BLK_DEV_INITRD -e DEVTMPFS -e DEVTMPFS_MOUNT \
+              -e SERIAL_8250 -e SERIAL_8250_CONSOLE
+            make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- olddefconfig
+          fi
 
       - name: Install MiniLD and MiniObjcopy wrappers
         shell: bash
@@ -195,7 +205,7 @@ jobs:
           : >"$work/minild.trace"
           : >"$work/miniobjcopy.trace"
 
-      - name: Build Linux Image with MiniObjcopy everywhere
+      - name: Build Linux Image with exactly one MiniObjcopy replacement
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -211,10 +221,19 @@ jobs:
           export MINIOBJCOPY_TRACE="$work/miniobjcopy.trace"
 
           set +e
-          make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
-            LD="$ld_wrapper" OBJCOPY="$objcopy_wrapper" -j4 Image \
-            >"$work/kbuild.log" 2>&1
-          status=$?
+          if [[ "$MINIOBJCOPY_SINGLE_MODE" == true ]]; then
+            # Keep GNU compilation, assembler, archiver and *all* ld boundaries.
+            make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
+              LD=riscv64-linux-gnu-ld OBJCOPY="$objcopy_wrapper" -j4 Image \
+              >"$work/kbuild.log" 2>&1
+            status=$?
+          else
+            # Preserve the historical mixed MiniLD + MiniObjcopy fixture.
+            make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
+              LD="$ld_wrapper" OBJCOPY="$objcopy_wrapper" -j4 Image \
+              >"$work/kbuild.log" 2>&1
+            status=$?
+          fi
           set -e
 
           if test "$status" -ne 0; then
@@ -228,7 +247,11 @@ jobs:
 
           test -s "$out/vmlinux"
           test -s "$out/arch/riscv/boot/Image"
-          test "$(grep -c '^minild ' "$work/minild.trace")" -eq 3
+          if [[ "$MINIOBJCOPY_SINGLE_MODE" == true ]]; then
+            test ! -s "$work/minild.trace" # no MiniLD invoked, not even once
+          else
+            test "$(grep -c '^minild ' "$work/minild.trace")" -eq 3
+          fi
 
           calls=$(grep -c '^miniobjcopy ' "$work/miniobjcopy.trace")
           test "$calls" -gt 0
@@ -238,8 +261,33 @@ jobs:
 
           image_bytes=$(stat -c %s "$out/arch/riscv/boot/Image")
           image_sha=$(sha256sum "$out/arch/riscv/boot/Image" | awk '{print $1}')
-          printf 'MINIOBJCOPY_LINUX_TOOL=PASS kernel=6.6.143 objcopy_calls=%s minild_final_calls=3 image_bytes=%s image_sha256=%s\n' \
-            "$calls" "$image_bytes" "$image_sha"
+          if [[ "$MINIOBJCOPY_SINGLE_MODE" == true ]]; then
+            printf 'MINIOBJCOPY_LINUX_SINGLE=PASS kernel=6.6.143 objcopy_calls=%s gnu_ld=all minild_calls=0 image_bytes=%s image_sha256=%s\n' \
+              "$calls" "$image_bytes" "$image_sha"
+          else
+            printf 'MINIOBJCOPY_LINUX_TOOL=PASS kernel=6.6.143 objcopy_calls=%s minild_final_calls=3 image_bytes=%s image_sha256=%s\n' \
+              "$calls" "$image_bytes" "$image_sha"
+          fi
+
+      - name: Boot only-MiniObjcopy Linux via existing QEMU runtime oracle
+        if: env.MINIOBJCOPY_SINGLE_MODE == 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/miniobjcopy-linux-tool-work"
+          BUILD_DIR="$work/initramfs" \
+          OUTPUT_INITRAMFS="$work/runtime-initramfs.cpio.gz" \
+          RISCV_CC=riscv64-linux-gnu-gcc \
+            bash tests/external/linux/build_runtime_initramfs.sh
+          LINUX_IMAGE="$work/out/arch/riscv/boot/Image" \
+          INITRAMFS="$work/runtime-initramfs.cpio.gz" \
+          BUILD_DIR="$work/qemu-runtime" \
+          LINUX_RELEASE=6.6.143 \
+          LINUX_RUNTIME_PROFILE=fast \
+          QEMU_SYSTEM_RISCV64=qemu-system-riscv64 \
+          QEMU_TIMEOUT_SECONDS=90 \
+            bash tests/external/linux/runtime_boot.sh
+          echo "MINIOBJCOPY_LINUX_SINGLE_RUNTIME=PASS profile=fast head=$GITHUB_SHA"
 
       - name: Preserve Linux MiniObjcopy frontier
         if: always()
@@ -250,6 +298,7 @@ jobs:
             build/miniobjcopy-linux-tool-work/miniobjcopy.trace
             build/miniobjcopy-linux-tool-work/minild.trace
             build/miniobjcopy-linux-tool-work/kbuild.log
+            build/miniobjcopy-linux-tool-work/qemu-runtime/*.log
             build/miniobjcopy-linux-tool-work/out/arch/riscv/kernel/vdso/vdso.so
             build/miniobjcopy-linux-tool-work/out/arch/riscv/kernel/vdso/vdso.so.dbg
             build/miniobjcopy-linux-tool-work/out/arch/riscv/boot/Image
