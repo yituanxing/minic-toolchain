@@ -689,7 +689,7 @@ import struct,sys
 from pathlib import Path
 headers=[Path(arg).read_bytes()[:52] for arg in sys.argv[1:]]
 for h in headers:
-    assert len(h)==52 and h[:6]==b"\\x7fELF\\x02\\x01"
+    assert len(h)==52 and h[:6]==b"\x7fELF\x02\x01"
     assert struct.unpack_from("<H",h,16)[0]==1
     assert struct.unpack_from("<H",h,18)[0]==243
 assert len({h[48:52] for h in headers})==1, "runtime.o GNU/MiniC ABI mismatch"
