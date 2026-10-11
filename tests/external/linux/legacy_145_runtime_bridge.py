@@ -18,6 +18,14 @@ import sys
 ORIGINAL_SHA256 = "88c81f1b9eaa3377fbed3f99f29d34c60491eede6ccd57966a609b16b619a51b"
 ENDPOINT = "M38_FINAL145_V028_END pass=203 fail=0"
 POWERDOWN = "reboot: Power down"
+# Authenticated from the original V024 145/203 QEMU log. Each ID occurs
+# exactly once; compare sorted IDs, not just counts or success phrases.
+REFERENCE_MODULE_IDS_SHA256 = "a0bf40902063254aec9203600f7b75c54bbacb5106a14dcaca3d31454e6c3b59"
+REFERENCE_FUNCTION_IDS_SHA256 = "c1105105a3280ab0d4bbec09e08f57dccc870318791b0fd14b3e6cad86a04a19"
+
+def ids_digest(markers):
+    identifiers = [line.split(None, 1)[0] for line in markers]
+    return sha256(("\n".join(sorted(identifiers)) + "\n").encode()), len(set(identifiers))
 BAD_KERNEL = re.compile(
     r"Kernel panic|Oops:|BUG:|soft lockup|hard LOCKUP|workqueue lockup|"
     r"Unable to handle kernel|Kernel stack overflow", re.I
@@ -104,12 +112,24 @@ def classify_log(content, returncode=None, timeout=False):
     functions = FUNCTION_PASS.findall(log)
     module_failures = MODULE_FAIL.findall(log)
     function_failures = FUNCTION_FAIL.findall(log)
+    module_ids_hash, unique_modules = ids_digest(modules)
+    function_ids_hash, unique_functions = ids_digest(functions)
+    module_id_set_match = (
+        unique_modules == 145
+        and module_ids_hash == REFERENCE_MODULE_IDS_SHA256
+    )
+    function_id_set_match = (
+        unique_functions == 203
+        and function_ids_hash == REFERENCE_FUNCTION_IDS_SHA256
+    )
     kernel_faults = [line for line in log.splitlines() if BAD_KERNEL.search(line)]
     compatibility = [line for line in log.splitlines() if MODULE_COMPAT.search(line)]
     endpoint = ENDPOINT in log
     powerdown = POWERDOWN in log
     passed = (endpoint and powerdown and len(modules) == 145
-              and len(functions) == 203 and not module_failures
+              and len(functions) == 203
+              and module_id_set_match and function_id_set_match
+              and not module_failures
               and not function_failures and not kernel_faults
               and not compatibility and not timeout
               and returncode in (None, 0))
@@ -125,6 +145,12 @@ def classify_log(content, returncode=None, timeout=False):
         "verdict": verdict,
         "module_pass": len(modules),
         "function_pass": len(functions),
+        "distinct_module_ids": unique_modules,
+        "distinct_function_ids": unique_functions,
+        "module_id_set_match": module_id_set_match,
+        "function_id_set_match": function_id_set_match,
+        "module_id_set_sha256": module_ids_hash,
+        "function_id_set_sha256": function_ids_hash,
         "module_fail": len(module_failures),
         "function_fail": len(function_failures),
         "endpoint": endpoint,
