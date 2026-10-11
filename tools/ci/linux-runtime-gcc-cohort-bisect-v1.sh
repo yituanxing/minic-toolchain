@@ -1591,6 +1591,12 @@ PY_EARLY_SYMBOLS
 # recompilation or a complete Linux/P1 boot certificate.
 if [[ "${COHORT_EARLYCON_HOTFIX:-0}" == 1 ]]; then
   trial earlycon_fixed_only "$n" fast
+  if [[ "${COHORT_NETFILTER_EXPERIMENT_ONLY:-0}" == 1 ]]; then
+    test "${COHORT_REPAIR_NETFILTER_CORE:-0}" == 1 || exit 8
+    test -s "$ev/trials/earlycon_fixed_only/Image" || exit 8
+    echo "NETFILTER_CURRENT_IMAGE=READY preliminary_verdict=$TRIAL_VERDICT single_current_minic_core=true original_python_oracle=NOT_YET_RUN"
+    exit 0
+  fi
   if [[ "$TRIAL_VERDICT" == PASS ]]; then
     trial earlycon_fixed_full "$n" full
     if [[ "$TRIAL_VERDICT" == PASS ]]; then
