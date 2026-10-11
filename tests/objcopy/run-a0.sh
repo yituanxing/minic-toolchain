@@ -109,8 +109,18 @@ EOF
 "$OBJCOPY" -j .modinfo -O binary "$work/modinfo.o" "$work/modinfo-gnu.bin"
 "$MINIOBJCOPY" -j .modinfo -O binary "$work/modinfo.o" "$work/modinfo-mini.bin"
 cmp "$work/modinfo-gnu.bin" "$work/modinfo-mini.bin"
-test "$(stat -c%s "$work/modinfo-mini.bin")" -gt 0
-printf 'MINIOBJCOPY_MODINFO=PASS bits=64 reference=GNU-objcopy only_section=.modinfo nonalloc=1 bytes=%s\n' \
-  "$(stat -c%s "$work/modinfo-mini.bin")"
+test "$(stat -c%s "$work/modinfo-mini.bin")" -eq 0
+
+# Kbuild can also aggregate ALLOC metadata into relocatable vmlinux.o.
+# In this case both implementations must emit real .modinfo bytes.
+sed 's/\.section \.modinfo,"",@progbits/.section .modinfo,"a",@progbits/' \
+  "$work/modinfo.s" >"$work/modinfo-alloc.s"
+"$AS" -march=rv64imac -mabi=lp64 -o "$work/modinfo-alloc.o" "$work/modinfo-alloc.s"
+"$OBJCOPY" -j .modinfo -O binary "$work/modinfo-alloc.o" "$work/modinfo-alloc-gnu.bin"
+"$MINIOBJCOPY" -j .modinfo -O binary "$work/modinfo-alloc.o" "$work/modinfo-alloc-mini.bin"
+cmp "$work/modinfo-alloc-gnu.bin" "$work/modinfo-alloc-mini.bin"
+test "$(stat -c%s "$work/modinfo-alloc-mini.bin")" -gt 0
+printf 'MINIOBJCOPY_MODINFO=PASS bits=64 only_section=.modinfo gnu_exact=1 nonalloc_bytes=0 alloc_bytes=%s\n' \
+  "$(stat -c%s "$work/modinfo-alloc-mini.bin")"
 
 printf 'MINIOBJCOPY_A0=PASS oracle=GNU-objcopy format=ELF64-RISCV output=binary lma=PT_LOAD remove=2 strip=all bytes=%s sha256=%s\n'   "$product_size" "$product_hash"
