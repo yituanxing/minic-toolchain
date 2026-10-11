@@ -90,8 +90,7 @@ if s.count(anchor) != 1:
     raise SystemExit(f"asm if helper anchor count={s.count(anchor)}")
 s = s.replace(anchor, helper + anchor, 1)
 old = """        if (core_const_eval_integer_with_locals(
-                context, statement->expression, &condition_value) &&
-            minic_const_value_is_zero("""
+                context, statement->expression, &condition_value) &&"""
 new = """        if ((minic_const_eval_integer(context->body->program,
                                       context->target,
                                       statement->expression, &condition_value) ||
@@ -99,8 +98,7 @@ new = """        if ((minic_const_eval_integer(context->body->program,
               (else_source == NULL ||
                !core_block_contains_inline_asm(context, else_source)) &&
               core_const_eval_integer_with_locals(
-                  context, statement->expression, &condition_value))) &&
-            minic_const_value_is_zero("""
+                  context, statement->expression, &condition_value))) &&"""
 if s.count(old) != 1:
     raise SystemExit(f"asm if fact predicate anchor count={s.count(old)}")
 s = s.replace(old, new, 1)
