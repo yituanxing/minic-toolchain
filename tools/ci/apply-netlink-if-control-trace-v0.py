@@ -64,8 +64,20 @@ hook=r'''    if (context->source_function != NULL &&
     }
     if (expression->kind == MINIC_EXPRESSION_UNARY &&
         expression->value.unary.operator_kind == MINIC_UNARY_LOGICAL_NOT) {'''
-if s.count(probe)!=1:
-    raise SystemExit(f"genl branch recurse anchor count={s.count(probe)}")
-s=s.replace(probe,hook,1)
+# Limit the match to the implementation of lower_condition_branch(), not
+# unrelated unary-expression paths elsewhere in this large Core module.
+function_head='''static MinicCoreLowerStatus lower_condition_branch(MinicCoreLowerContext *context,
+                                                   MinicExpressionId expression_id,
+                                                   MinicSourceSpan span,
+                                                   MinicCoreBlockId when_true,
+                                                   MinicCoreBlockId when_false) {'''
+if s.count(function_head)!=1:
+    raise SystemExit(f"genl branch function anchor count={s.count(function_head)}")
+start=s.index(function_head)
+end=s.index("    status = lower_expression(context, expression_id, &condition);",start)
+fragment=s[start:end]
+if fragment.count(probe)!=1:
+    raise SystemExit(f"genl branch recurse scoped anchor count={fragment.count(probe)}")
+s=s[:start]+fragment.replace(probe,hook,1)+s[end:]
 p.write_text(s)
 print("MINIC_NETLINK_IF_CONTROL_TRACE=APPLIED")
