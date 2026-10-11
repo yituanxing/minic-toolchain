@@ -15,8 +15,8 @@ Original asset (user-owned archival Library; **not** stored in GitHub):
 - /init: static RISC-V ELF, 187,520 bytes.
 - Original V218 result: 145 MODULE_PASS, 203 FUNCTION_PASS, 0 FAIL,
   endpoint `M38_FINAL145_V028_END pass=203 fail=0`, normal guest powerdown.
-- Historical QEMU suite was run with `-m 1024M` and took approximately 447
-  guest log seconds. Do not use a 30–45-second syscall timeout for this gate.
+- Historical QEMU suite was run with `-m 1024M` and took roughly 300–1345
+  guest/host elapsed seconds across reported runner conditions. Do not use a 30–45-second syscall timeout for this gate.
 
 The recovered V218 Python source archive is separate from this guest asset.
 Do not confuse it with the modules/functional test executable.
@@ -54,12 +54,12 @@ constant. Do not infer module compatibility solely from Linux version:
 python3 tests/external/linux/legacy_145_runtime_bridge.py \
   --archive /path/to/natural145-v024-cold-overlay.cpio \
   --image /path/to/certified-gnu/arch/riscv/boot/Image \
-  --label gcc --output-dir build/legacy145 --timeout 600
+  --label gcc --output-dir build/legacy145 --timeout 1800
 
 python3 tests/external/linux/legacy_145_runtime_bridge.py \
   --archive /path/to/natural145-v024-cold-overlay.cpio \
   --image /path/to/repaired-minic/arch/riscv/boot/Image \
-  --label minic --output-dir build/legacy145 --timeout 600
+  --label minic --output-dir build/legacy145 --timeout 1800
 ```
 
 The helper invokes the existing `qemu_explicit_initrd_wrapper.py`, with
@@ -93,6 +93,15 @@ is **not available to ordinary public GitHub-hosted runners**. Do not add a
 workflow that claims to execute this gate until the artifact is transported
 to the runner by an approved, verified mechanism. Do not publish the
 historical user-owned binary/module archive without explicit approval.
+
+The exact original V024 Image plus unchanged cpio has now been independently
+replayed under QEMU 8.2.2 with 145/145 module and 203/203 functional PASS,
+matching the historical unique-ID fingerprints; QEMU rc=0 and clean shutdown.
+The current 215,502,848-byte MiniC Image (SHA256
+`791e2ec22f9f6a5cf02eb7f437c6cf25e5e8e89e6fa8230ce6573f0749beb056`)
+has also entered this unchanged suite, with 142/145 modules reached before
+full certification. Distinguish slow heavy module relocation from true stalling;
+the suite deliberately has no fixed small QEMU timeout.
 
 The historical V218 M37 profile consists of five independent tests
 (boot, smoke, ipv6tcp, ext4 rootfs, more2). Its original gate logs and
