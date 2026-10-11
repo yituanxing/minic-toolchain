@@ -1,0 +1,46 @@
+#!/usr/bin/env python3
+"""Temporary C0 control-flow decision trace for genl_op_from_split only.
+
+No semantic change. Emits exactly which IFs were fact-pruned and whether a
+Core conditional terminator was created, before deciding any further repair.
+"""
+from pathlib import Path
+
+p=Path("src/core/core_lower.c")
+s=p.read_text()
+marker="        if (condition_known) {\n            const MinicBlock *discarded_source;"
+prefix=r'''        if (context->source_function != NULL &&
+            context->source_function->name != NULL &&
+            strcmp(context->source_function->name, "genl_op_from_split") == 0) {
+            (void)fprintf(stderr,
+                          "GENL_IF_DECISION expression=%zu kind=%d known=%d zero=%d block=%u\n",
+                          (size_t)statement->expression,
+                          (int)condition_expression->kind,
+                          condition_known ? 1 : 0,
+                          condition_is_zero ? 1 : 0,
+                          (unsigned int)context->block_id);
+        }
+'''
+if s.count(marker)!=1:
+    raise SystemExit(f"genl decision anchor count={s.count(marker)}")
+s=s.replace(marker,prefix+marker,1)
+anchor='''    status = lower_expression(context, expression_id, &condition);
+    if (status != MINIC_CORE_LOWER_OK) {
+'''
+prefix2=r'''    if (context->source_function != NULL &&
+        context->source_function->name != NULL &&
+        strcmp(context->source_function->name, "genl_op_from_split") == 0) {
+        (void)fprintf(stderr,
+                      "GENL_COND_EMIT expression=%zu kind=%d block=%u true=%u false=%u\n",
+                      (size_t)expression_id,
+                      (int)expression->kind,
+                      (unsigned int)context->block_id,
+                      (unsigned int)when_true,
+                      (unsigned int)when_false);
+    }
+'''
+if s.count(anchor)!=1:
+    raise SystemExit(f"genl emit anchor count={s.count(anchor)}")
+s=s.replace(anchor,prefix2+anchor,1)
+p.write_text(s)
+print("MINIC_NETLINK_IF_CONTROL_TRACE=APPLIED")
