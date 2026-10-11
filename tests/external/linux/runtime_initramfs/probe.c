@@ -204,7 +204,7 @@ static int bring_loopback_up(void) {
 /* Keep P1's syscall assertions unchanged; expose the exact stalled step.
  * Stderr is unbuffered even when the runtime probe is killed by QEMU timeout. */
 static void ipv6_stage(const char *step) {
-    (void)fprintf(stderr, "RUNTIME_V2_IPV6_STAGE pid=%ld step=%s\\n",
+    (void)fprintf(stderr, "RUNTIME_V2_IPV6_STAGE pid=%ld step=%s\n",
                   (long)getpid(), step);
 }
 #define IPV6_STAGE_CALL(step, expression) (ipv6_stage(step), (expression))
