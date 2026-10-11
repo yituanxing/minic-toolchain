@@ -359,7 +359,7 @@ jobs:
           done
 
           case "$output" in
-            */purgatory.ro|*/vmlinux.o)
+            */purgatory.ro|purgatory.ro|*/vmlinux.o|vmlinux.o)
               printf '%s\n' "$output" >>"$MINILD_TRACE"
               exec "$MINILD" "${args[@]}"
               ;;
