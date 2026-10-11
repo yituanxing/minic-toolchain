@@ -11,11 +11,11 @@ Original asset (user-owned archival Library; **not** stored in GitHub):
 - SHA256: 88c81f1b9eaa3377fbed3f99f29d34c60491eede6ccd57966a609b16b619a51b
 - 67,667,456 bytes (uncompressed newc cpio).
 - 145 ELF64 RISC-V .ko modules.
-- All 145 modules contain vermagic: \`6.6.143 SMP mod_unload riscv\`.
+- All 145 modules contain vermagic: `6.6.143 SMP mod_unload riscv`.
 - /init: static RISC-V ELF, 187,520 bytes.
 - Original V218 result: 145 MODULE_PASS, 203 FUNCTION_PASS, 0 FAIL,
-  endpoint \`M38_FINAL145_V028_END pass=203 fail=0\`, normal guest powerdown.
-- Historical QEMU suite was run with \`-m 1024M\` and took approximately 447
+  endpoint `M38_FINAL145_V028_END pass=203 fail=0`, normal guest powerdown.
+- Historical QEMU suite was run with `-m 1024M` and took approximately 447
   guest log seconds. Do not use a 30–45-second syscall timeout for this gate.
 
 The recovered V218 Python source archive is separate from this guest asset.
@@ -23,12 +23,12 @@ Do not confuse it with the modules/functional test executable.
 
 ## Preflight before real QEMU
 
-\`\`\`bash
+```bash
 python3 tests/external/linux/legacy_145_runtime_bridge.py \
   --archive /path/to/natural145-v024-cold-overlay.cpio \
   --output-dir build/legacy145 \
   --label inspect
-\`\`\`
+```
 
 The preflight verifies the archive hash, confirms precisely 145 modules,
 checks their vermagic, validates the static RISC-V /init and checks the
@@ -36,12 +36,12 @@ historical test endpoint. It does not claim a Linux runtime PASS.
 
 Optional replay of a preserved *actual* Python-era QEMU log:
 
-\`\`\`bash
+```bash
 python3 tests/external/linux/legacy_145_runtime_bridge.py \
   --archive /path/to/natural145-v024-cold-overlay.cpio \
   --historical-log /path/to/qemu-v218-final145.log \
   --output-dir build/legacy145 --label historical
-\`\`\`
+```
 
 ## Real paired runtime validation
 
@@ -50,7 +50,7 @@ pure-GCC 6.6.143 Linux Image. **Then** reuse the same cpio with the candidate
 MiniC Image, keeping Linux .config, toolchain-supported ABI, QEMU and cmdline
 constant. Do not infer module compatibility solely from Linux version:
 
-\`\`\`bash
+```bash
 python3 tests/external/linux/legacy_145_runtime_bridge.py \
   --archive /path/to/natural145-v024-cold-overlay.cpio \
   --image /path/to/certified-gnu/arch/riscv/boot/Image \
@@ -60,10 +60,10 @@ python3 tests/external/linux/legacy_145_runtime_bridge.py \
   --archive /path/to/natural145-v024-cold-overlay.cpio \
   --image /path/to/repaired-minic/arch/riscv/boot/Image \
   --label minic --output-dir build/legacy145 --timeout 600
-\`\`\`
+```
 
-The helper invokes the existing \`qemu_explicit_initrd_wrapper.py\`, with
-\`-m 1024M\`, an explicit initramfs relocation away from the oversized
+The helper invokes the existing `qemu_explicit_initrd_wrapper.py`, with
+`-m 1024M`, an explicit initramfs relocation away from the oversized
 current MiniC Image, unchanged historical /init, and the current RV64 UART
 early console (which works with this configuration). The wrapper now derives
 DTB memory size and initrd bounds from the requested QEMU memory rather than
@@ -77,13 +77,13 @@ symbols/module compatibility error, QEMU exit 0, and normal powerdown.
 
 Possible results:
 
-- \`PASS\`: full historical oracle satisfied.
-- \`ENVIRONMENT_OR_MODULE_ABI_MISMATCH\`: unknown symbol, bad module
+- `PASS`: full historical oracle satisfied.
+- `ENVIRONMENT_OR_MODULE_ABI_MISMATCH`: unknown symbol, bad module
   version, etc.; first fix the fixture/config, not the MiniC compiler.
-- \`FAIL_RUNTIME\`: kernel BUG/Oops/lockup or a functional assertion.
-- \`INCONCLUSIVE\`: missing markers, timeout, load error not yet classified.
+- `FAIL_RUNTIME`: kernel BUG/Oops/lockup or a functional assertion.
+- `INCONCLUSIVE`: missing markers, timeout, load error not yet classified.
 
-Each run preserves \`qemu.log\` and a structured \`<label>-legacy145.json\`
+Each run preserves `qemu.log` and a structured `<label>-legacy145.json`
 with the last module/function marker and first failure.
 
 ## Limitation and promotion
