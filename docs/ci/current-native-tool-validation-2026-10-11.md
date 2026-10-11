@@ -762,3 +762,53 @@ than all native live-Kbuild replacement, and current MiniC still has
 known full-link deficiencies. Proceed with isolated MiniLD final-layout
 fix, then staged native compiler/PP composition; do not dilute this
 certification's boundaries.
+
+## MiniLD final-link follow-up: coalesced PT_LOAD, runtime blocker remains
+
+The GNU-GCC/LD + three-native-tools certification remains the frozen
+[#38185012989](https://github.com/yituanxing/minic-toolchain/actions/runs/38185012989).
+**No MiniLD full-kernel QEMU promotion follows from this section.**
+
+The genuine MiniLD-final vmlinux/Image artifact from
+[#38160503540](https://github.com/yituanxing/minic-toolchain/actions/runs/38160503540)
+was compared with the GNU-LD passing vmlinux/Image from
+[#38156029304](https://github.com/yituanxing/minic-toolchain/actions/runs/38156029304).
+Old MiniLD vmlinux: 10,279 individual PT_LOADs. GNU-LD: 7 PT_LOADs.
+A standalone, no-rebuild ELF simulation merged only equal-permission,
+adjacent file/VMA/LMA intervals, never crossing a NOBITS tail. The
+10,279 segments became **40**, without changing any section contents,
+section address, or relocation.
+
+**Negative control:** converting the coalesced *old* vmlinux to a raw
+Image yielded a **byte-identical** 22,033,608-byte Image, SHA-256
+db7bb695bb9dcd5985a726e0ea3b5d54b32f01c195b6c91ee117bd146d999693,
+relative to the original failing MiniLD image. Therefore segment-count
+reduction *alone* cannot fix the previously observed raw Image QEMU
+pre-banner failure. It is an ELF correctness/scalability repair,
+**not yet a Linux runtime fix**.
+
+MiniLD static_write_executable now coalesces segments only across
+contiguous file/VMA/LMA intervals of equal ELF permissions with no
+NOBITS tail, preserving each section's address, data and relocations:
+[code 5dd28e9b](https://github.com/yituanxing/minic-toolchain/commit/5dd28e9b04d40efa44abcc8ebf9fd33fa6839197).
+Existing script fixture now checks three PT_LOADs, joining adjacent
+text inputs while keeping page-separated init text/data distinct:
+[test f305a668](https://github.com/yituanxing/minic-toolchain/commit/f305a6680433a046b45065d8c28744b29fc79d39).
+Existing one-job T1
+[#38186085433](https://github.com/yituanxing/minic-toolchain/actions/runs/38186085433)
+passed all eight owner checks including
+MINILD_SCRIPT_A1=PASS ... loads=3. Existing MiniObjcopy canonical
+[#38186085415](https://github.com/yituanxing/minic-toolchain/actions/runs/38186085415)
+also passed. No workflow or job was added.
+
+**Separate semantic gap:** GNU-LD emits allocated
+.pecoff_edata_padding PROGBITS (0x120 bytes at 0xffffffff815034e0),
+while MiniLD has no such section. Script output BYTE(0) and advancing
+dot by ALIGN are not materialized in MiniLD's output section data.
+Actual GNU Image ends at 0x1503600, MiniLD at 0x15034c8 (312 bytes
+earlier). This is a reproducible ELF/script-output difference,
+but **has not been shown to cause the pre-banner boot hang**.
+The next gate is an isolated GNU-differential test for script-generated
+output bytes and a targeted source fix, *before* another full Linux
+rebuild or claiming QEMU success. Preserve the existing triple-native
+certificate.
