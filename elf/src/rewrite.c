@@ -910,17 +910,28 @@ bool minielf_rewrite(const MiniElfView *view,
             states[i].new_offset = section->offset;
             continue;
         }
-        if (section->offset > SIZE_MAX ||
-            section->size > SIZE_MAX ||
-            !add_size((size_t)section->offset,
-                      (size_t)section->size,
-                      &end) ||
-            end > view->size) {
+        /*
+         * Prefixing symbol/section names enlarges synthetic .strtab or
+         * .shstrtab. Their new section.size describes modified_data, not
+         * bytes resident at the original input section.offset. Linux EFI
+         * STUBCPY frequently increases .strtab past the original EOF.
+         * Only unmodified input sections must pass the input-range check;
+         * synthetic buffers are size/range-checked when emitted below.
+         */
+        if ((states[i].modified_data != NULL &&
+             states[i].modified_size != (size_t)section->size) ||
+            (states[i].modified_data == NULL &&
+             (section->offset > SIZE_MAX ||
+              section->size > SIZE_MAX ||
+              !add_size((size_t)section->offset,
+                        (size_t)section->size,
+                        &end) ||
+              end > view->size))) {
             set_error(error_out, MINIELF_REWRITE_INVALID_SECTION);
             goto done;
         }
 
-        if (end <= prefix_end) {
+        if (states[i].modified_data == NULL && end <= prefix_end) {
             states[i].new_offset = section->offset;
             continue;
         }
