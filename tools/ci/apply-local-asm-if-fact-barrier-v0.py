@@ -35,7 +35,12 @@ static bool core_block_contains_inline_asm_impl(
         if (statement == NULL) {
             return true;
         }
-        if (statement->kind == MINIC_STATEMENT_INLINE_ASM) {
+        /* The parser normalizes do { asm } while (0) to a synthetic
+           WHILE. Its inline effects can be hidden behind an internal
+           one-pass form, so treat any dynamic structured loop as an
+           optimization barrier, not as an unsafe constant-fold witness. */
+        if (statement->kind == MINIC_STATEMENT_INLINE_ASM ||
+            statement->kind == MINIC_STATEMENT_WHILE) {
             return true;
         }
         if (statement->then_block != MINIC_BLOCK_INVALID) {
