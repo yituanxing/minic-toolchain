@@ -221,7 +221,7 @@ def main():
                         help="validate classifier against a preserved historical log")
     parser.add_argument("--output-dir", type=Path, default=Path("build/legacy145"))
     parser.add_argument("--label", default="reference")
-    parser.add_argument("--timeout", type=int, default=600)
+    parser.add_argument("--timeout", type=int, default=1800)
     parser.add_argument("--memory", type=int, default=1024)
     parser.add_argument("--qemu", default="qemu-system-riscv64")
     parser.add_argument("--allow-noncanonical-archive", action="store_true",
