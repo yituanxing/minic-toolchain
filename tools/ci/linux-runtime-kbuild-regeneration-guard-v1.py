@@ -205,6 +205,14 @@ def replay_affected(out: Path, golden_out: Path, selected: Path,
         elapsed = (time.monotonic_ns() - started) // 1_000_000
         print(f"COHORT_HEADER_DIRECT_REPLAY target={name} rc={cp.returncode} "
               f"elapsed_ms={elapsed}", flush=True)
+        # Preserve only explicit Netlink Core control-flow diagnostics,
+        # previously lost because success stdout from subprocess.run was held.
+        if name == "net/netlink/genetlink.o" and env.get("COHORT_NETWORK_CAPTURE_ONLY") == "1":
+            matches = [line for line in cp.stdout.splitlines()
+                       if line.startswith(("GENL_IF_DECISION", "GENL_COND_EMIT"))]
+            print(f"GENL_TRACE_PRESERVED entries={len(matches)}", flush=True)
+            for line in matches[:160]:
+                print(line, flush=True)
         if cp.returncode != 0:
             print(cp.stdout[-12000:], file=sys.stderr)
             raise GuardError(f"direct GNU-E MiniC-S GNU-AS replay failed: {name}")
