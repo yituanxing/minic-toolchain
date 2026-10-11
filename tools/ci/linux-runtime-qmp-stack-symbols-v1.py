@@ -37,8 +37,23 @@ def main():
     hits=collections.Counter()
     evidence=[]
     n=0
+    late_registers=[]
     for ln in args.jsonl.read_text().splitlines():
         x=json.loads(ln);t=x["at_seconds"];n+=1
+        regs=x.get("registers",{})
+        if t>=12:
+            late_registers.append(regs)
+        for register in ("pc", "ra", "sepc"):
+            raw=regs.get(register)
+            if not raw: continue
+            try: addr=int(raw,16)
+            except ValueError: continue
+            j=bisect.bisect_right(starts,addr)-1
+            if j>=0 and syms[j][0]<=addr<syms[j][1]:
+                base,_,name=syms[j]
+                evidence.append(f"REGISTER_CODE t={t} reg={register} symbol={name}+0x{addr-base:x}")
+            else:
+                evidence.append(f"REGISTER_CODE t={t} reg={register} symbol=UNRESOLVED addr=0x{addr:x}")
         rs=[]
         if x.get("registers",{}).get("ra"):
             rs.append(("ra",int(x["registers"]["ra"],16)))
@@ -52,6 +67,13 @@ def main():
         for name in found:hits[name]+=1
         evidence.append(f"STACK_SAMPLE t={t} plausible_code_functions={len(found)}")
     lines=[f"STACK_ANALYSIS=READ_ONLY_NOT_UNWIND samples={n} unique_functions={len(hits)}"]
+    if late_registers:
+        def unique(key):
+            return len({r.get(key) for r in late_registers if r.get(key)})
+        lines.append(f"REGISTER_LATE_DIVERSITY samples={len(late_registers)} "
+                     f"unique_pc={unique('pc')} unique_ra={unique('ra')} "
+                     f"unique_sepc={unique('sepc')} unique_sp={unique('sp')} "
+                     f"unique_a1={unique('a1')}")
     lines.extend(f"STACK_FREQUENCY count={v} symbol={k}" for k,v in hits.most_common(35))
     args.output.parent.mkdir(parents=True,exist_ok=True)
     args.output.write_text("\n".join(lines+evidence)+"\n")
