@@ -10,6 +10,7 @@ bindir="$work/as-override"
 gold="$work/golden-as"
 backup="$work/mini-originals"
 mkdir -p "$backup" "$work/bisect"
+cp "$out/arch/riscv/boot/Image" "$work/bisect/native-original-Image"
 export MINIAS=${MINIAS:?}
 export MINIAS_AS_TRACE=${MINIAS_AS_TRACE:?}
 export REAL_AS=/usr/bin/riscv64-linux-gnu-as
@@ -33,6 +34,18 @@ for obj in "${owners[@]}"; do
     cp "$out/$obj" "$backup/$obj"
     present+=("$obj")
     sha256sum "$out/$obj" "$gold/$obj" >>"$work/bisect/initial-hashes.txt"
+    if [[ "$obj" == arch/riscv/kernel/head.o ]]; then
+      riscv64-linux-gnu-objdump -dr "$out/$obj" >"$work/bisect/mini-head-disassembly.txt"
+      riscv64-linux-gnu-objdump -dr "$gold/$obj" >"$work/bisect/gnu-head-disassembly.txt"
+      readelf -WS "$out/$obj" >"$work/bisect/mini-head-sections.txt"
+      readelf -WS "$gold/$obj" >"$work/bisect/gnu-head-sections.txt"
+      diff -u "$work/bisect/gnu-head-disassembly.txt" \
+        "$work/bisect/mini-head-disassembly.txt" \
+        >"$work/bisect/head-disassembly.diff" || true
+      diff -u "$work/bisect/gnu-head-sections.txt" \
+        "$work/bisect/mini-head-sections.txt" \
+        >"$work/bisect/head-sections.diff" || true
+    fi
   fi
 done
 printf 'MINIAS_BISECT_CAPTURE=PASS available=%s requested=%s no_full_recompile=1\n' \
@@ -120,4 +133,7 @@ else
   fi
 fi
 reset_native
+# Restore the exact original MiniAS Image for artifact identity.
+cp "$work/bisect/native-original-Image" "$out/arch/riscv/boot/Image"
+rm "$work/bisect/native-original-Image"
 echo 'MINIAS_BISECT_DONE=PASS baseline_restored=1 exact_originals_preserved=1'
