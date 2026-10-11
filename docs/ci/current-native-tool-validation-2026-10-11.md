@@ -626,3 +626,33 @@ This narrows the remaining native full-link acceptance gate to the
 **linker-script output class and PT_LOAD layout + relocation** path.
 Repair against paired GNU output sections/addresses, and rerun this
 same short QEMU artifact proof before declaring full-tool replacement.
+
+## MiniAS → MiniObjcopy EFI STUBCPY invalid-section: isolated fix
+
+The CI capture [#38161595104](https://github.com/yituanxing/minic-toolchain/actions/runs/38161595104)
+yielded three real MiniAS-vs-GNU same-source ELF object pairs for Linux
+EFI stub `efi-stub.o`, `efi-stub-helper.o`, and `fdt.o`.
+Native MiniAS ET_REL objects were structurally readable by GNU
+`readelf`. Real STUBCPY arguments include `--prefix-symbols=__efistub_`,
+`--prefix-alloc-sections=.init`, and
+`--remove-section=.note.gnu.property`.
+
+**Root cause proved from ELF section offsets and code:** MiniObjcopy
+`elf/src/rewrite.c` `minielf_rewrite()` increases the in-memory
+`.strtab` section size while prefixing symbols. A later input-range
+check erroneously asserts `old_section.offset + new_section.size <=
+original_input_ELF_file_size`. This is impossible for sufficiently
+large prefixed symbol tables, even though the enlarged section bytes
+reside in the separately allocated `modified_data` buffer. For the
+three actual objects the synthetic `.strtab` old file offsets +
+expanded sizes were 5,897 > 5,584 bytes; 15,545 > 13,608 bytes;
+and 11,681 > 10,376 bytes respectively. **GNU and MiniAS inputs
+should not be conflated with invalid ELF**; the error is in native
+MiniObjcopy's handling of synthetic buffers.
+
+The fix checks original byte ranges only for unchanged sections,
+validates synthetic buffer length against the rewritten section size,
+and keeps output bounds validation. The new GNU differential
+regression expands 128 symbols under the actual EFI STUBCPY triple
+options for both RV32/64 and checks GNU-exact symbol inventory,
+rewritten relocation and GNU-LD ET_REL consumption.
