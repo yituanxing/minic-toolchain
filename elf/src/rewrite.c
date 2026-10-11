@@ -489,6 +489,206 @@ const char *minielf_rewrite_error_string(MiniElfRewriteError error) {
     return "unknown";
 }
 
+
+/*
+ * objcopy --prefix-symbols/--prefix-alloc-sections on ET_REL is a string
+ * table rewrite, not a code/data transformation.  Preserve every section
+ * index and relocation symbol index; only the name offsets and relevant
+ * string tables change.  In particular GNU as .rela.text uses the renamed
+ * target section's new name.
+ */
+static bool append_prefixed_string(unsigned char **buffer,
+                                   size_t *used,
+                                   size_t *capacity,
+                                   const char *part1,
+                                   const char *part2,
+                                   const char *part3,
+                                   uint32_t *offset_out) {
+    size_t first = strlen(part1);
+    size_t second = strlen(part2);
+    size_t third = strlen(part3);
+    size_t needed;
+    size_t capacity_next;
+    unsigned char *next;
+
+    if (first > SIZE_MAX - second ||
+        first + second > SIZE_MAX - third - 1U) {
+        return false;
+    }
+    needed = first + second + third + 1U;
+    if (*used > UINT32_MAX || needed > UINT32_MAX - *used ||
+        needed > SIZE_MAX - *used) {
+        return false;
+    }
+    if (*used + needed > *capacity) {
+        capacity_next = *capacity == 0U ? 64U : *capacity;
+        while (capacity_next < *used + needed) {
+            if (capacity_next > SIZE_MAX / 2U) {
+                capacity_next = *used + needed;
+                break;
+            }
+            capacity_next *= 2U;
+        }
+        next = realloc(*buffer, capacity_next);
+        if (next == NULL) {
+            return false;
+        }
+        *buffer = next;
+        *capacity = capacity_next;
+    }
+    *offset_out = (uint32_t)*used;
+    memcpy(*buffer + *used, part1, first);
+    memcpy(*buffer + *used + first, part2, second);
+    memcpy(*buffer + *used + first + second, part3, third);
+    (*buffer)[*used + needed - 1U] = '\\0';
+    *used += needed;
+    return true;
+}
+
+static bool prefix_section_names(const MiniElfView *view,
+                                  MiniElfRewriteSectionState *states,
+                                  const char *prefix) {
+    size_t shstr = view->section_name_table_index;
+    const unsigned char *original;
+    size_t original_size;
+    size_t used;
+    size_t capacity;
+    unsigned char *data;
+    size_t i;
+
+    if (!minielf_section_data(view, shstr, &original, &original_size)) {
+        return false;
+    }
+    used = original_size;
+    capacity = original_size;
+    data = malloc(capacity == 0U ? 1U : capacity);
+    if (data == NULL) {
+        return false;
+    }
+    memcpy(data, original, used);
+
+    for (i = 1U; i < view->section_count; ++i) {
+        const char *name;
+        const char *rel_kind = NULL;
+        uint32_t new_name;
+        if (states[i].remove ||
+            !minielf_section_name(view, i, &name)) {
+            if (!states[i].remove) {
+                free(data);
+                return false;
+            }
+            continue;
+        }
+        if ((states[i].section.flags & SHF_ALLOC) != 0U) {
+            if (!append_prefixed_string(&data, &used, &capacity,
+                                        prefix, name, "", &new_name)) {
+                free(data);
+                return false;
+            }
+        } else if ((states[i].section.type == SHT_RELA ||
+                    states[i].section.type == SHT_REL) &&
+                   states[i].section.info < view->section_count &&
+                   (states[states[i].section.info].section.flags & SHF_ALLOC) != 0U &&
+                   !states[states[i].section.info].remove) {
+            const char *target_name;
+            rel_kind = states[i].section.type == SHT_RELA ? ".rela" : ".rel";
+            if (!minielf_section_name(view,
+                                      states[i].section.info,
+                                      &target_name) ||
+                !append_prefixed_string(&data, &used, &capacity,
+                                        rel_kind, prefix, target_name,
+                                        &new_name)) {
+                free(data);
+                return false;
+            }
+        } else {
+            continue;
+        }
+        states[i].section.name = new_name;
+    }
+    states[shstr].section.size = used;
+    states[shstr].modified_data = data;
+    states[shstr].modified_size = used;
+    return true;
+}
+
+static bool prefix_symbol_names(const MiniElfView *view,
+                                 MiniElfRewriteSectionState *states,
+                                 size_t symtab_index,
+                                 const char *prefix) {
+    MiniElfSection *symtab;
+    size_t strtab_index;
+    const unsigned char *original_strtab;
+    const unsigned char *original_symtab;
+    size_t original_size;
+    size_t symtab_size;
+    size_t entry_size;
+    size_t count;
+    size_t used;
+    size_t capacity;
+    unsigned char *strtab;
+    unsigned char *symdata;
+    size_t i;
+
+    if (symtab_index == SIZE_MAX || states[symtab_index].remove) {
+        return false;
+    }
+    symtab = &states[symtab_index].section;
+    strtab_index = symtab->link;
+    if (strtab_index >= view->section_count ||
+        states[strtab_index].remove ||
+        !minielf_section_data(view, strtab_index,
+                              &original_strtab, &original_size) ||
+        !minielf_section_data(view, symtab_index,
+                              &original_symtab, &symtab_size)) {
+        return false;
+    }
+    entry_size = (size_t)symtab->entry_size;
+    if (entry_size < (view->elf_class == ELFCLASS64 ? 24U : 16U) ||
+        entry_size == 0U || symtab_size % entry_size != 0U) {
+        return false;
+    }
+    count = symtab_size / entry_size;
+    used = original_size;
+    capacity = original_size;
+    strtab = malloc(capacity == 0U ? 1U : capacity);
+    symdata = malloc(symtab_size == 0U ? 1U : symtab_size);
+    if (strtab == NULL || symdata == NULL) {
+        free(strtab);
+        free(symdata);
+        return false;
+    }
+    memcpy(strtab, original_strtab, used);
+    memcpy(symdata, original_symtab, symtab_size);
+    for (i = 1U; i < count; ++i) {
+        MiniElfSymbol sym;
+        const char *name;
+        uint32_t offset;
+        if (!minielf_symbol(view, symtab_index, i, &sym) ||
+            !minielf_string(view, strtab_index, sym.name, &name)) {
+            free(strtab);
+            free(symdata);
+            return false;
+        }
+        if (sym.name == 0U || name[0] == '\\0') {
+            continue;
+        }
+        if (!append_prefixed_string(&strtab, &used, &capacity,
+                                    prefix, name, "", &offset)) {
+            free(strtab);
+            free(symdata);
+            return false;
+        }
+        store_u32(symdata + i * entry_size, view->data_encoding, offset);
+    }
+    states[strtab_index].section.size = used;
+    states[strtab_index].modified_data = strtab;
+    states[strtab_index].modified_size = used;
+    states[symtab_index].modified_data = symdata;
+    states[symtab_index].modified_size = symtab_size;
+    return true;
+}
+
 bool minielf_rewrite(const MiniElfView *view,
                      const MiniElfRewriteOptions *options,
                      unsigned char **image_out,
@@ -513,7 +713,8 @@ bool minielf_rewrite(const MiniElfView *view,
     }
     if (view == NULL || options == NULL ||
         image_out == NULL || size_out == NULL ||
-        (view->type != ET_EXEC && view->type != ET_DYN) ||
+        (view->type != ET_EXEC && view->type != ET_DYN &&
+         view->type != ET_REL) ||
         view->section_count == 0U ||
         view->section_name_table_index == SHN_UNDEF) {
         set_error(error_out,
@@ -635,6 +836,25 @@ bool minielf_rewrite(const MiniElfView *view,
         }
     }
 
+    if ((options->prefix_symbols != NULL ||
+         options->prefix_alloc_sections != NULL) &&
+        (view->type != ET_REL || options->keep_global_count != 0U ||
+         options->strip_all)) {
+        set_error(error_out, MINIELF_REWRITE_UNSUPPORTED_FILE);
+        goto done;
+    }
+    if (options->prefix_alloc_sections != NULL &&
+        !prefix_section_names(view, states, options->prefix_alloc_sections)) {
+        set_error(error_out, MINIELF_REWRITE_INVALID_SECTION);
+        goto done;
+    }
+    if (options->prefix_symbols != NULL &&
+        !prefix_symbol_names(view, states, symtab_index,
+                             options->prefix_symbols)) {
+        set_error(error_out, MINIELF_REWRITE_INVALID_SYMBOL_TABLE);
+        goto done;
+    }
+
     prefix_end = header_size;
     if (view->program_header_count != 0U) {
         size_t ph_end;
@@ -704,7 +924,8 @@ bool minielf_rewrite(const MiniElfView *view,
             states[i].new_offset = section->offset;
             continue;
         }
-        if ((section->flags & SHF_ALLOC) != 0U) {
+        if (view->type != ET_REL &&
+            (section->flags & SHF_ALLOC) != 0U) {
             set_error(error_out, MINIELF_REWRITE_UNSUPPORTED_FILE);
             goto done;
         }
