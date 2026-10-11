@@ -17,7 +17,10 @@ import subprocess
 import time
 from pathlib import Path
 
-REGISTER = re.compile(r"(?im)(?:^|[ \t])(?:x[0-9]+/)?(pc|mepc|sepc|satp|mcause|scause|sp|ra|a[0-7]|t[0-6]|s(?:1[01]|[0-9]))\s+((?:0x)?[0-9a-f]{1,16})(?=\s|$)")
+REGISTER = re.compile(r"(?im)(?:^|[ \\t])(?:x[0-9]+/)?(pc|mepc|sepc|satp|mcause|scause|sp|ra|a[0-7]|t[0-6]|s(?:1[01]|[0-9]))\\s+((?:0x)?[0-9a-f]{1,16})(?=\\s|$)")
+STACK_FIRST_WORD = re.compile(r"(?m)^[0-9a-fA-F]{8,16}:\\s*0x([0-9a-fA-F]{1,16})\\b")
+MONITOR_WORD = re.compile(r"0x([0-9a-fA-F]{1,16})\\b")
+
 
 
 def selected_registers(text: str) -> dict[str, str]:
@@ -55,7 +58,8 @@ def qmp_call(reader, writer, cmd: dict) -> object:
 
 
 def sample(image: Path, out: Path, timeout_s: int, qemu: str, samples: list[int],
-           cmdline: str, stack_words: int, stop_during_snapshot: bool = False) -> int:
+           cmdline: str, stack_words: int, stop_during_snapshot: bool = False,
+           probe_lock_at_pc: int | None = None) -> int:
     out.mkdir(parents=True, exist_ok=True)
     # GitHub Actions workspaces regularly exceed Linux's 108-byte AF_UNIX
     # sun_path limit. Use a short, unique per-process path instead of
@@ -135,6 +139,49 @@ def sample(image: Path, out: Path, timeout_s: int, qemu: str, samples: list[int]
                             stack_window = f"UNAVAILABLE: {exc}"
                         print(f"COHORT_QMP_STACK at_s={second} sp={regs['sp']} "
                               f"sp_plus_0x10={stack_window!r}", flush=True)
+                    lock_probe = None
+                    # Diagnostic for the *exact* MiniC do_raw_spin_unlock+0x30
+                    # call site. A linked vmlinux address must be supplied by
+                    # the caller; no lock offset is inferred from ET_REL code.
+                    # Stack word 0 is the saved raw_spinlock_t* at this site.
+                    if probe_lock_at_pc is not None and regs.get("pc") and (
+                        int(regs["pc"], 16) == probe_lock_at_pc
+                    ):
+                        lock_probe = {"site_pc": hex(probe_lock_at_pc)}
+                        stack_match = STACK_FIRST_WORD.search(stack_window)
+                        if stack_match is None:
+                            lock_probe["status"] = "STACK_WORD_UNAVAILABLE"
+                        else:
+                            lock_ptr = int(stack_match.group(1), 16)
+                            lock_probe["lock_pointer"] = hex(lock_ptr)
+                            if lock_ptr < 0xff00000000000000 or lock_ptr & 3:
+                                lock_probe["status"] = "INVALID_KERNEL_LOCK_POINTER"
+                            else:
+                                try:
+                                    data = str(qmp_call(reader, writer, {
+                                        "execute": "human-monitor-command",
+                                        "arguments": {
+                                            "command-line": f"x /4gx 0x{lock_ptr:x}",
+                                            "cpu-index": 0
+                                        }
+                                    }))
+                                    lock_probe["raw_memory"] = data
+                                    words = [int(x, 16) for x in MONITOR_WORD.findall(data)]
+                                    if len(words) >= 3:
+                                        lock_probe.update({
+                                            "status": "MEMORY_READ",
+                                            "raw_lock_u32": f"0x{words[0] & 0xffffffff:08x}",
+                                            "magic_u32": f"0x{words[0] >> 32:08x}",
+                                            "owner_cpu_s32": ((words[1] & 0xffffffff) ^ 0x80000000) - 0x80000000,
+                                            "owner_pointer": f"0x{words[2]:016x}"
+                                        })
+                                    else:
+                                        lock_probe["status"] = "MEMORY_UNPARSEABLE"
+                                except (ValueError, RuntimeError, OSError) as exc:
+                                    lock_probe["status"] = "MEMORY_UNAVAILABLE"
+                                    lock_probe["error"] = str(exc)
+                        print("COHORT_QMP_LOCK_PROBE at_s=" + str(second) +
+                              " data=" + json.dumps(lock_probe, sort_keys=True), flush=True)
                     pause_duration_ms = 0
                     if stop_during_snapshot:
                         qmp_call(reader, writer, {"execute": "cont"})
@@ -145,6 +192,7 @@ def sample(image: Path, out: Path, timeout_s: int, qemu: str, samples: list[int]
                         "stack_window": stack_window,
                         "stop_during_snapshot": stop_during_snapshot,
                         "pause_duration_ms": pause_duration_ms,
+                        "lock_probe": lock_probe,
                         "raw": raw
                     }, sort_keys=True) + "\n")
                     evidence.flush()
@@ -184,6 +232,8 @@ def main() -> int:
     p.add_argument("--stack-words", type=int, default=4)
     p.add_argument("--stop-during-snapshot", action="store_true",
                    help="QMP stop/read registers and stack/cont for consistent diagnostic snapshots")
+    p.add_argument("--probe-lock-at-pc", type=lambda value: int(value, 0),
+                   help="exact linked MiniC do_raw_spin_unlock+0x30 PC; read saved lock object at this site")
     p.add_argument("--sample-seconds", default="1,4,8",
                    help="strictly increasing sampling times in seconds (max 110)")
     args = p.parse_args()
@@ -205,11 +255,13 @@ def main() -> int:
         p.error("sample-seconds must be increasing, unique and fit timeout")
     if not 4 <= args.stack_words <= 96:
         p.error("stack-words must be 4..96")
+    if args.probe_lock_at_pc is not None and not args.stop_during_snapshot:
+        p.error("--probe-lock-at-pc requires --stop-during-snapshot")
     if len(args.kernel_cmdline)>256 or not args.kernel_cmdline.isascii():
         p.error("kernel-cmdline must be ASCII and at most 256 characters")
     return sample(args.image, args.output_dir, args.timeout_seconds, args.qemu,
                   moments, args.kernel_cmdline, args.stack_words,
-                  args.stop_during_snapshot)
+                  args.stop_during_snapshot, args.probe_lock_at_pc)
 
 
 if __name__ == "__main__":
