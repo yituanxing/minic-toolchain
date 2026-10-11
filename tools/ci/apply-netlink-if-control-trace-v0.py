@@ -81,3 +81,60 @@ if fragment.count(probe)!=1:
 s=s[:start]+fragment.replace(probe,hook,1)+s[end:]
 p.write_text(s)
 print("MINIC_NETLINK_IF_CONTROL_TRACE=APPLIED")
+
+# Instrument the exact lower_if() seam rather than guessing from a successful
+# end-to-end compile. For each dynamic GENL IF, record which exits exist and
+# whether Core ever emits the guard after constructing the then/else bodies.
+# Before the expensive Linux replay this script asserts each anchor exactly once.
+checks = [
+  ("pre_then",
+   '''    context->block_id = then_block;
+    status = lower_block(context, then_source, &then_terminated);
+''',
+   '''    if (context->source_function && context->source_function->name &&
+        strcmp(context->source_function->name, "genl_op_from_split") == 0)
+        (void)fprintf(stderr, "GENL_IF_PATH stage=pre_then expr=%zu current=%u then=%u condition=%u\n",
+            (size_t)statement->expression, (unsigned int)context->block_id,
+            (unsigned int)then_block, (unsigned int)condition_block);
+'''),
+  ("post_then",
+   '''    then_continuation_block = context->block_id;
+''',
+   '''    if (context->source_function && context->source_function->name &&
+        strcmp(context->source_function->name, "genl_op_from_split") == 0)
+        (void)fprintf(stderr, "GENL_IF_PATH stage=post_then expr=%zu status=%d terminated=%d continuation=%u\n",
+            (size_t)statement->expression, (int)status,
+            then_terminated ? 1 : 0, (unsigned int)context->block_id);
+'''),
+  ("before_guard",
+   '''    continuation_block = context->block_id;
+    context->block_id = condition_block;
+    status = lower_condition_branch(
+        context, statement->expression, statement->span, then_block, false_target);
+''',
+   '''    if (context->source_function && context->source_function->name &&
+        strcmp(context->source_function->name, "genl_op_from_split") == 0)
+        (void)fprintf(stderr, "GENL_IF_PATH stage=pre_guard expr=%zu condition=%u then=%u else=%u merge=%u need_merge=%d\n",
+            (size_t)statement->expression, (unsigned int)condition_block,
+            (unsigned int)then_block, (unsigned int)false_target,
+            (unsigned int)merge_block, needs_merge ? 1 : 0);
+'''),
+  ("after_guard",
+   '''    context->block_id = continuation_block;
+    *terminated = !needs_merge;
+    return MINIC_CORE_LOWER_OK;
+''',
+   '''    if (context->source_function && context->source_function->name &&
+        strcmp(context->source_function->name, "genl_op_from_split") == 0)
+        (void)fprintf(stderr, "GENL_IF_PATH stage=post_guard expr=%zu status=%d block=%u\n",
+            (size_t)statement->expression, (int)status,
+            (unsigned int)context->block_id);
+''')
+]
+for label, anchor, insertion in checks:
+    n = s.count(anchor)
+    if n != 1:
+        raise SystemExit(f"genl seam anchor {label} count={n}")
+    s = s.replace(anchor, insertion+anchor, 1)
+p.write_text(s)
+print("MINIC_NETLINK_IF_SEAM_TRACE=APPLIED guards=4")
