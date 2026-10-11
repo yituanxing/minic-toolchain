@@ -128,7 +128,7 @@ if test "$profile" = shell; then
     require_log rdinit-sh "PROC_CMDLINE_END"
     require_log rdinit-sh "RDINIT_SH_OK"
     require_log rdinit-sh "DONE_RDINIT"
-    printf '%s\\n' "LINUX_RUNTIME_RDINIT_SH=PASS release=$expected_release profile=shell"
+    printf '%s\n' "LINUX_RUNTIME_RDINIT_SH=PASS release=$expected_release profile=shell"
     exit 0
 fi
 
