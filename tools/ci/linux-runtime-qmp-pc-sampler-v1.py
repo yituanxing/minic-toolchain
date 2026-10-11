@@ -106,6 +106,7 @@ def sample(image: Path, out: Path, timeout_s: int, qemu: str, samples: list[int]
                         print(f"COHORT_QMP_EARLY=QEMU_EXITED rc={proc.returncode} at_s={second}",
                               flush=True)
                         break
+                    pause_started = time.monotonic() if stop_during_snapshot else None
                     if stop_during_snapshot:
                         qmp_call(reader, writer, {"execute": "stop"})
                         state = qmp_call(reader, writer, {"execute": "query-status"})
@@ -134,12 +135,16 @@ def sample(image: Path, out: Path, timeout_s: int, qemu: str, samples: list[int]
                             stack_window = f"UNAVAILABLE: {exc}"
                         print(f"COHORT_QMP_STACK at_s={second} sp={regs['sp']} "
                               f"sp_plus_0x10={stack_window!r}", flush=True)
+                    pause_duration_ms = 0
                     if stop_during_snapshot:
                         qmp_call(reader, writer, {"execute": "cont"})
+                        pause_duration_ms = int((time.monotonic() - pause_started) * 1000)
+                        print(f"COHORT_QMP_PAUSED_SNAPSHOT at_s={second} duration_ms={pause_duration_ms}", flush=True)
                     evidence.write(json.dumps({
                         "at_seconds": second, "registers": regs,
                         "stack_window": stack_window,
                         "stop_during_snapshot": stop_during_snapshot,
+                        "pause_duration_ms": pause_duration_ms,
                         "raw": raw
                     }, sort_keys=True) + "\n")
                     evidence.flush()
