@@ -1562,6 +1562,36 @@ PY_FAULT_OWNER
           echo "NEXT_FAULT_DELTA target=$swap_target pattern=$pattern baseline=$old_count gcc_swap=$new_count"
         done
         echo "NEXT_OWNER_SWAP=SCREENED target=$swap_target verdict=$TRIAL_VERDICT reboot_certificate=false"
+        if [[ "${COHORT_NEXT_GCC_EXPLICIT_INITRD:-0}" == 1 ]]; then
+          # Reuse the ALREADY linked one-GCC-owner Image. The wrapper only
+          # relocates initrd into free guest RAM and updates chosen/ DTB.
+          # Unlike kernel-only QMP, this executes the real /init contract.
+          wrapper="$repo/tests/external/linux/qemu_explicit_initrd_wrapper.py"
+          test -x "$wrapper"
+          for boot_profile in fast p1; do
+            boot_dir="$d/qemu-explicit-$boot_profile"
+            boot_log="$d/runtime-explicit-$boot_profile.log"
+            boot_rc=0
+            echo "NEXT_OWNER_EXPLICIT_INITRD=START target=$swap_target profile=$boot_profile"
+            LINUX_IMAGE="$d/Image" INITRAMFS="$ev/runtime-initramfs.cpio.gz" \
+              BUILD_DIR="$boot_dir" LINUX_RELEASE=6.6.143 \
+              LINUX_RUNTIME_PROFILE="$boot_profile" QEMU_TIMEOUT_SECONDS=65 \
+              LINUX_RUNTIME_EARLYCON_ARG=earlycon=uart8250,mmio,0x10000000,115200n8 \
+              QEMU_SYSTEM_RISCV64="$wrapper" \
+              QEMU_REAL_SYSTEM_RISCV64=qemu-system-riscv64 \
+              QEMU_EXPLICIT_DTB_DIR="$d/dtb-explicit-$boot_profile" \
+              bash "$repo/tests/external/linux/runtime_boot.sh" \
+              >"$boot_log" 2>&1 || boot_rc=$?
+            if ((boot_rc == 0)); then
+              echo "NEXT_OWNER_EXPLICIT_INITRD=PASS target=$swap_target profile=$boot_profile"
+            else
+              echo "NEXT_OWNER_EXPLICIT_INITRD=NOT_CERTIFIED target=$swap_target profile=$boot_profile rc=$boot_rc"
+              grep -aE 'Linux version|devtmpfs:|Run /init|Starting init:|INIT_|RUNTIME_V2|Kernel panic|VFS:' \
+                "$boot_dir/rdinit-init.log" | tail -n 35 || true
+              break
+            fi
+          done
+        fi
       done
     fi
     exit 0
