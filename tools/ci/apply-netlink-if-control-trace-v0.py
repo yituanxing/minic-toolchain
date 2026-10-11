@@ -87,43 +87,29 @@ print("MINIC_NETLINK_IF_CONTROL_TRACE=APPLIED")
 # whether Core ever emits the guard after constructing the then/else bodies.
 # Before the expensive Linux replay this script asserts each anchor exactly once.
 checks = [
-  ("pre_then",
-   '''    context->block_id = then_block;
-    status = lower_block(context, then_source, &then_terminated);
-''',
+  ("pre_then", "    status = lower_block(context, then_source, &then_terminated);\n",
    '''    if (context->source_function && context->source_function->name &&
         strcmp(context->source_function->name, "genl_op_from_split") == 0)
         (void)fprintf(stderr, "GENL_IF_PATH stage=pre_then expr=%zu current=%u then=%u condition=%u\n",
             (size_t)statement->expression, (unsigned int)context->block_id,
             (unsigned int)then_block, (unsigned int)condition_block);
 '''),
-  ("post_then",
-   '''    then_continuation_block = context->block_id;
-''',
+  ("post_then", "    then_continuation_block = context->block_id;\n",
    '''    if (context->source_function && context->source_function->name &&
         strcmp(context->source_function->name, "genl_op_from_split") == 0)
         (void)fprintf(stderr, "GENL_IF_PATH stage=post_then expr=%zu status=%d terminated=%d continuation=%u\n",
             (size_t)statement->expression, (int)status,
             then_terminated ? 1 : 0, (unsigned int)context->block_id);
 '''),
-  ("before_guard",
-   '''    continuation_block = context->block_id;
-    context->block_id = condition_block;
-    status = lower_condition_branch(
-        context, statement->expression, statement->span, then_block, false_target);
-''',
+  ("pre_guard", "    status = lower_condition_branch(\n",
    '''    if (context->source_function && context->source_function->name &&
         strcmp(context->source_function->name, "genl_op_from_split") == 0)
-        (void)fprintf(stderr, "GENL_IF_PATH stage=pre_guard expr=%zu condition=%u then=%u else=%u merge=%u need_merge=%d\n",
+        (void)fprintf(stderr, "GENL_IF_PATH stage=pre_guard expr=%zu condition=%u then=%u else=%u need_merge=%d\n",
             (size_t)statement->expression, (unsigned int)condition_block,
             (unsigned int)then_block, (unsigned int)false_target,
-            (unsigned int)merge_block, needs_merge ? 1 : 0);
+            needs_merge ? 1 : 0);
 '''),
-  ("after_guard",
-   '''    context->block_id = continuation_block;
-    *terminated = !needs_merge;
-    return MINIC_CORE_LOWER_OK;
-''',
+  ("post_guard", "    *terminated = !needs_merge;\n",
    '''    if (context->source_function && context->source_function->name &&
         strcmp(context->source_function->name, "genl_op_from_split") == 0)
         (void)fprintf(stderr, "GENL_IF_PATH stage=post_guard expr=%zu status=%d block=%u\n",
@@ -131,10 +117,23 @@ checks = [
             (unsigned int)context->block_id);
 ''')
 ]
-for label, anchor, insertion in checks:
-    n = s.count(anchor)
-    if n != 1:
-        raise SystemExit(f"genl seam anchor {label} count={n}")
-    s = s.replace(anchor, insertion+anchor, 1)
+# Scope all lookups to the one lower_if implementation. Other Core functions
+# contain equivalent generic statements, so global text replacement is unsafe.
+if_head="static MinicCoreLowerStatus\nlower_if(MinicCoreLowerContext *context,"
+if s.count(if_head) != 1:
+    raise SystemExit("GENL_TRACE_INFRA_ERROR missing or ambiguous lower_if")
+a=s.index(if_head)
+b=s.index("static bool internal_while_label_pair(",a)
+piece=s[a:b]
+for label, needle, insertion in checks:
+    n=piece.count(needle)
+    if n == 1:
+        piece=piece.replace(needle,insertion+needle,1)
+        print(f"GENL_SEAM_HOOK={label} status=INSTALLED")
+    else:
+        # Observability only. Do not turn a valid MiniC build into a failure
+        # because previous profile scripts rewrote a debug-only anchor.
+        print(f"GENL_SEAM_HOOK={label} status=SKIPPED count={n}")
+s=s[:a]+piece+s[b:]
 p.write_text(s)
-print("MINIC_NETLINK_IF_SEAM_TRACE=APPLIED guards=4")
+print("MINIC_NETLINK_IF_SEAM_TRACE=APPLIED")
