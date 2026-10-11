@@ -255,3 +255,54 @@ the ultimate source of the malformed `struct page *` pointer.
 Investigate its exact current-profile translation and data flow before
 changing memory-manager internals. Re-test the original P3 oracle after
 every proven compiler repair rather than stockpiling object swaps.
+
+
+## Ninth-owner MiniC repair: complete original Python 145/203 QEMU PASS (11 October 2026)
+
+**Exact real offline QEMU replay**, using the authenticated original, unchanged
+Python V024 guest test archive and the latest **nine repaired MiniC owners**
+Image exported by GitHub CI
+[#38135950731](https://github.com/yituanxing/minic-toolchain/actions/runs/38135950731),
+artifact `11700219984`. Runtime validated in the local portable QEMU 8.2.2
+(recovered from CI's host bundle), RISC-V virt, one CPU, 1024 MiB RAM,
+explicit non-overlapping initrd placement via DTB, original
+`rdinit=/init` plus the legacy no-watchdog kernel parameters.
+
+- **Linux Image:** SHA256
+  `8e2a6b39a2b90107dd1c4093bea88d229806812ffb344cea03d2dd855910e0f5`.
+- **Unchanged Python-era initramfs:** SHA256
+  `88c81f1b9eaa3377fbed3f99f29d34c60491eede6ccd57966a609b16b619a51b`.
+- **145 MODULE_PASS / 145 expected**, distinct IDs 145, entire ID order
+  byte-for-byte identical to the preserved original successful QEMU log.
+- **203 FUNCTION_PASS / 203 expected**, distinct IDs 203, entire ID order
+  byte-for-byte identical to the preserved original successful QEMU log.
+- The final `MODULE_PASS nouveau` and `FUNCTION_PASS bridge-links-up`
+  are observed.
+- **Terminal assertion:** `M38_FINAL145_V028_END pass=203 fail=0`.
+- **Normal guest poweroff:** `reboot: Power down`, last guest timestamp
+  approximately 543.33 seconds.
+- **0 observed** kernel Oops, BUG, paging faults, soft lockups, kernel panics,
+  unknown module symbols, module/functional FAIL markers.
+- The `nf_hook_entries_grow` (#111) and `_compound_head` (#187)
+  prior failure frontiers are both crossed in the new **MiniC-only**
+  repaired owner set; no one-off GCC object swap was retained in this Image.
+- CI confirmed the ninth owner `mm/gup.o` was rebuilt via the current MiniC
+  profile and preserved **2055 immutable frozen MiniC neighbors**:
+  `GUP_CURRENT_FROZEN_NEIGHBORS=PASS count=2055`.
+
+**Evidence boundary:** this proves the precise mixed-generation MiniC
+2064-C-object Linux Image passes the *original Python V024 historical*
+145-module / 203-function runtime oracle. It does not yet certify a
+fresh full-current-MiniC compiler build of every object, the P1 syscall
+profile, native MiniAS/MiniLD image linkage, or QEMU host exit-code
+capture (the separate offline replay observed guest normal shutdown).
+Preserve this exact Image SHA and historical cpio SHA as a runtime regression
+baseline; subsequent general compiler changes must re-test the unchanged
+oracle before claiming equal or greater coverage.
+
+The repeated old `_compound_head` fault was eliminated after recompiling
+`mm/gup.o` with the current MiniC, consistent with correcting loop-mutable
+specialization facts. A separate compiler regression source was checked into
+the existing RV64 differential suite. Do not mistake this image-level result
+for a proof that every other future combination of MiniC optimizations is
+correct.
