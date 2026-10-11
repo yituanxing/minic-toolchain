@@ -87,8 +87,56 @@ def main():
         "            build/minias-linux-runtime/qemu-p1/*.log",
         "            build/minias-linux-runtime/qemu-p1/*.log\n"
         "            build/minias-linux-runtime/out/arch/riscv/boot/Image", 1)
-    if cur["linux-single"] != expected:
-        raise AssertionError("GNU-only MiniAS Linux runtime job diverges from reviewed archive")
+    linux_body = cur["linux-single"]
+    if sha(ROOT / "tests/assembler/minias_linux_incremental_bisect.sh") != (
+        "097525d57a63d0d1b720230625e6499fcc53c7c3"
+    ):
+        raise AssertionError("MiniAS incremental diagnostic script differs from reviewed source")
+    if linux_body.count("# Capture a small genuine GNU oracle") != 1:
+        raise AssertionError("MiniAS dual-reference capture hook missing or duplicated")
+    # Only the reviewed 7-owner shadow-GNU reference block may be removed;
+    # the actual production artifact is still built with MiniAS alone.
+    begin = linux_body.index("            # Capture a small genuine GNU oracle")
+    end = linux_body.index("            esac\n", begin) + len("            esac\n")
+    golden_capture = linux_body[begin:end]
+    for marker in (
+        "arch/riscv/kernel/head.o",
+        "arch/riscv/kernel/entry.o",
+        "arch/riscv/mm/init.o",
+        "drivers/of/fdt.o",
+        '"$real_as" "${gnu_args[@]}"',
+        "test -s \"$golden\"",
+    ):
+        if marker not in golden_capture:
+            raise AssertionError(f"MiniAS GNU reference collection lost: {marker}")
+    reverted = linux_body[:begin] + linux_body[end:]
+    reverted = reverted.replace(
+        '          export MINIAS_GNU_ROOT="$work/golden-as"\n', "", 1)
+    diag_begin = "      - name: Diagnose early-boot with cached GNU early objects and incremental relink\n"
+    diag_end = "      - name: Preserve MiniAS-only Linux build and guest evidence\n"
+    if reverted.count(diag_begin) != 1 or reverted.count(diag_end) != 1:
+        raise AssertionError("MiniAS early-boot incremental diagnostic missing")
+    diagnostic = reverted.split(diag_begin, 1)[1].split(diag_end, 1)[0]
+    for token in (
+        "        if: failure()",
+        "tests/assembler/minias_linux_incremental_bisect.sh",
+        'MINIAS_GNU_ROOT="$work/golden-as"',
+    ):
+        if token not in diagnostic:
+            raise AssertionError(f"early-boot diagnostic contract lost: {token}")
+    reverted = reverted.split(diag_begin, 1)[0] + diag_end + reverted.split(diag_end, 1)[1]
+    additions = (
+        "            build/minias-linux-runtime/bisect/**/*.log\n"
+        "            build/minias-linux-runtime/bisect/*.txt\n"
+        "            build/minias-linux-runtime/bisect/*.log\n"
+        "            build/minias-linux-runtime/golden-as/arch/riscv/kernel/head.o\n"
+    )
+    if reverted.count(additions) != 1:
+        raise AssertionError("MiniAS bisection evidence is missing or altered")
+    reverted = reverted.replace(additions, "", 1)
+    if reverted != expected:
+        raise AssertionError("GNU-only MiniAS runtime job diverges from the approved archived A0->QEMU chain")
+
     if current_text.count("          - linux-single") != 1:
         raise AssertionError("MiniAS linux-single manual mode missing")
     # Explicit reusable push inputs now reach the same manual mode selectors.
