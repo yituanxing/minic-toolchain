@@ -1385,14 +1385,28 @@ if [[ "${COHORT_EARLYCON_HOTFIX:-0}" == 1 ]]; then
       mkdir -p "$qmp_dir"
       cmdline='console=ttyS0 earlycon=uart8250,mmio,0x10000000,115200n8 loglevel=8 ignore_loglevel panic=-1'
       uart_rc=0
+      lock_probe_args=()
+      if [[ "${COHORT_PROBE_SPINLOCK_MEMORY:-0}" == 1 ]]; then
+        # Resolve the PC against the linked MiniC vmlinux for this *trial*.
+        # The saved lock argument lives in stack word 0 at offset +0x30.
+        lock_symbol_hex=$(/usr/bin/riscv64-linux-gnu-nm -n --defined-only "$out/vmlinux" |
+          awk '$3=="do_raw_spin_unlock" {print $1}')
+        if [[ ! "$lock_symbol_hex" =~ ^[0-9a-fA-F]{16}$ ]]; then
+          echo "COHORT_QMP_LOCK_PROBE=INCONCLUSIVE reason=owner_symbol_missing"
+          exit 8
+        fi
+        lock_site_pc=$(python3 -c 'import sys; print(hex(int(sys.argv[1], 16) + 0x30))' "$lock_symbol_hex")
+        lock_probe_args=(--probe-lock-at-pc "$lock_site_pc")
+        echo "COHORT_QMP_LOCK_PROBE_SITE=$lock_site_pc stack_word=0 owner=do_raw_spin_unlock"
+      fi
       python3 "$repo/tools/ci/linux-runtime-qmp-pc-sampler-v1.py" \
         --image "$d/Image" --output-dir "$qmp_dir" \
         --timeout-seconds 40 --sample-seconds 1,4,8,12,20,32 \
-        --stack-words 48 "${qmp_snapshot_args[@]}" --kernel-cmdline "$cmdline" \
+        --stack-words 48 "${qmp_snapshot_args[@]}" "${lock_probe_args[@]}" --kernel-cmdline "$cmdline" \
         >"$qmp_dir/qmp-probe.log" 2>&1 || uart_rc=$?
       cp -a "$qmp_dir/qemu-early-noinitrd.log" "$uartlog"
       echo "EARLYCON_UART_QMP_RC=$uart_rc"
-      grep -E 'COHORT_QMP_EARLY_SAMPLE|COHORT_QMP_EARLY_COMPLETE|COHORT_QMP_EARLY=UNAVAILABLE' "$qmp_dir/qmp-probe.log" || true
+      grep -E 'COHORT_QMP_EARLY_SAMPLE|COHORT_QMP_EARLY_COMPLETE|COHORT_QMP_LOCK_PROBE|COHORT_QMP_EARLY=UNAVAILABLE' "$qmp_dir/qmp-probe.log" || true
       python3 "$repo/tools/ci/linux-runtime-qmp-stack-symbols-v1.py" \
         --jsonl "$qmp_dir/qemu-registers.jsonl" \
         --vmlinux "$out/vmlinux" \
