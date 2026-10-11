@@ -54,6 +54,7 @@ patches=(
   apply-local-asm-if-fact-barrier-v0.py
   apply-core-if-condition-dominance-barrier-v0.py
   apply-netlink-if-control-trace-v0.py
+  apply-core-goto-label-fact-barrier-v0.py
 )
 
 start=$(date +%s%N)
