@@ -18,7 +18,7 @@ ORIGINAL_SHA = "5776fe8d2bd51fb485596274f44e8c9af5da7a5c"
 # Reviewed existing three-job extension: a GNU-only MiniObjcopy Linux mode.
 # The historical combined MiniLD+MiniObjcopy path stays intact and the
 # forbidden expired Image-oracle source remains exclusively archived.
-APPROVED_SINGLE_SHA = "b770675a092a7b57872195ae98d581f6ea1dcbb5"
+APPROVED_SINGLE_SHA = "a5b35da4860b669582563e3152a0599dc8e0a7a9"
 OLD_IF = "    if: (github.event_name == 'workflow_dispatch' && (inputs.mode == 'regressions' || inputs.mode == 'all')) || (github.event_name == 'push' && contains(github.event.head_commit.message, '[miniobjcopy-strip-regressions]'))"
 NEW_IF = "    if: (github.event_name == 'workflow_dispatch' && (inputs.mode == 'regressions' || inputs.mode == 'all')) || (github.event_name == 'push' && (contains(github.event.head_commit.message, '[miniobjcopy-strip-regressions]') || needs.route.outputs.elf_changed == 'true'))"
 MARKER = "\n  # Exact frozen GNU-vs-MiniObjcopy Image oracle; artifact run 33623125809"
