@@ -17,7 +17,7 @@ import subprocess
 import time
 from pathlib import Path
 
-REGISTER = re.compile(r"(?im)(?:^|[ \t])(?:x[0-9]+/)?(pc|mepc|sepc|satp|mcause|scause|sp|ra|a0|a1|t0|t1)\s+((?:0x)?[0-9a-f]{1,16})(?=\s|$)")
+REGISTER = re.compile(r"(?im)(?:^|[ \t])(?:x[0-9]+/)?(pc|mepc|sepc|satp|mcause|scause|sp|ra|a[0-7]|t[0-6]|s(?:1[01]|[0-9]))\s+((?:0x)?[0-9a-f]{1,16})(?=\s|$)")
 
 
 def selected_registers(text: str) -> dict[str, str]:
@@ -34,6 +34,9 @@ def self_test() -> None:
         "ra": "ffffffff81234567", "sp": "ffffffff8799ff00", "a0": "0000000000000020"
     }
     assert "zero" not in selected_registers(kernel_registers)
+    assert selected_registers("x12/a2 0000000000000001 x31/t6 0000000000000002 x27/s11 0000000000000003") == {
+        "a2": "0000000000000001", "t6": "0000000000000002",
+        "s11": "0000000000000003"}
     print("LINUX_RUNTIME_QMP_SAMPLER_SELFTEST=PASS")
 
 
@@ -52,7 +55,7 @@ def qmp_call(reader, writer, cmd: dict) -> object:
 
 
 def sample(image: Path, out: Path, timeout_s: int, qemu: str, samples: list[int],
-           cmdline: str, stack_words: int) -> int:
+           cmdline: str, stack_words: int, stop_during_snapshot: bool = False) -> int:
     out.mkdir(parents=True, exist_ok=True)
     # GitHub Actions workspaces regularly exceed Linux's 108-byte AF_UNIX
     # sun_path limit. Use a short, unique per-process path instead of
@@ -103,6 +106,11 @@ def sample(image: Path, out: Path, timeout_s: int, qemu: str, samples: list[int]
                         print(f"COHORT_QMP_EARLY=QEMU_EXITED rc={proc.returncode} at_s={second}",
                               flush=True)
                         break
+                    if stop_during_snapshot:
+                        qmp_call(reader, writer, {"execute": "stop"})
+                        state = qmp_call(reader, writer, {"execute": "query-status"})
+                        if not isinstance(state, dict) or state.get("status") != "paused":
+                            raise RuntimeError(f"QMP stop did not pause guest: {state!r}")
                     raw = str(qmp_call(reader, writer, {
                         "execute": "human-monitor-command",
                         "arguments": {"command-line": "info registers", "cpu-index": 0}
@@ -126,9 +134,12 @@ def sample(image: Path, out: Path, timeout_s: int, qemu: str, samples: list[int]
                             stack_window = f"UNAVAILABLE: {exc}"
                         print(f"COHORT_QMP_STACK at_s={second} sp={regs['sp']} "
                               f"sp_plus_0x10={stack_window!r}", flush=True)
+                    if stop_during_snapshot:
+                        qmp_call(reader, writer, {"execute": "cont"})
                     evidence.write(json.dumps({
                         "at_seconds": second, "registers": regs,
                         "stack_window": stack_window,
+                        "stop_during_snapshot": stop_during_snapshot,
                         "raw": raw
                     }, sort_keys=True) + "\n")
                     evidence.flush()
@@ -166,6 +177,8 @@ def main() -> int:
     p.add_argument("--timeout-seconds", type=int, default=25)
     p.add_argument("--kernel-cmdline", default="console=ttyS0 earlycon=sbi loglevel=8 panic=-1")
     p.add_argument("--stack-words", type=int, default=4)
+    p.add_argument("--stop-during-snapshot", action="store_true",
+                   help="QMP stop/read registers and stack/cont for consistent diagnostic snapshots")
     p.add_argument("--sample-seconds", default="1,4,8",
                    help="strictly increasing sampling times in seconds (max 110)")
     args = p.parse_args()
@@ -190,7 +203,8 @@ def main() -> int:
     if len(args.kernel_cmdline)>256 or not args.kernel_cmdline.isascii():
         p.error("kernel-cmdline must be ASCII and at most 256 characters")
     return sample(args.image, args.output_dir, args.timeout_seconds, args.qemu,
-                  moments, args.kernel_cmdline, args.stack_words)
+                  moments, args.kernel_cmdline, args.stack_words,
+                  args.stop_during_snapshot)
 
 
 if __name__ == "__main__":
