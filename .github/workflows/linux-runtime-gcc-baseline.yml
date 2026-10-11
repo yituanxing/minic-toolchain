@@ -891,3 +891,29 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
+
+  netfilter-probe-userland-export-once:
+    # One-time GNU userland build only. Never rebuild or alter the Linux Image.
+    if: github.event_name == 'push' && contains(github.event.head_commit.message, '[linux-runtime-netfilter-user-probe]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build static RISC-V userland reproducer, unchanged historical modules
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get -o Acquire::Retries=2 update
+          sudo apt-get -o Acquire::Retries=2 install -y --no-install-recommends \
+            gcc-riscv64-linux-gnu libc6-dev-riscv64-cross
+          mkdir -p build/netfilter-userland
+          riscv64-linux-gnu-gcc -O2 -static -Wall -Wextra -Werror \
+            tests/external/linux/netfilter_getinfo_runtime_probe.c \
+            -o build/netfilter-userland/init
+          file build/netfilter-userland/init
+          sha256sum build/netfilter-userland/init
+      - uses: actions/upload-artifact@v4
+        with:
+          name: netfilter-getsockopt-static-init-once
+          path: build/netfilter-userland/init
+          retention-days: 2
