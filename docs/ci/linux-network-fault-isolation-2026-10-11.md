@@ -19,3 +19,7 @@ The experimental local-fact barrier for integer compound assignments and ++/-- c
 ## Next diagnostic
 
 Archive GNU-pinned `.i`, current MiniC `.s`, and side-by-side GCC/MiniC object disassembly for only these two translation units, without a GNU kernel relink. Identify the exact bad loop condition/operation lowering before modifying the compiler again.
+
+## Exact assembly root cause, 11 October 2026
+
+The GNU-preprocessed jhash code in tcp_cong.o compiled into __minic_inline_spec_6515_19. Original MiniC assembly initializes specialized length to 16 and performs length -= 12 in the loop body, but the generated function has zero conditional branches: its backedge is unconditional. It can read indefinitely past the key until faulting in __get_unaligned_cpu32. The new candidate barrier invalidates only specialized parameters that this loop body may modify, before lowering the condition. Confirm against exact TU before any full kernel relink.
