@@ -141,6 +141,11 @@ def main():
             if reconstructed.count(new) != 1 or old in reconstructed:
                 raise AssertionError("MiniLD bare-output correction is missing or altered")
             reconstructed = reconstructed.replace(new, old, 1)
+            old_assert = "          grep -q '/vmlinux.o$' \"$trace\""
+            new_assert = "          grep -Eq '(^|/)vmlinux[.]o$' \"$trace\""
+            if reconstructed.count(new_assert) != 1 or old_assert in reconstructed:
+                raise AssertionError("MiniLD bare-output trace assertion missing")
+            reconstructed = reconstructed.replace(new_assert, old_assert, 1)
         if git_blob(reconstructed.encode()) != original_sha:
             raise AssertionError(f"original job bodies or manual behavior changed: {name}")
         expected_cond = "    if: " + " || ".join(
