@@ -1366,6 +1366,11 @@ if [[ "${COHORT_EARLYCON_HOTFIX:-0}" == 1 ]]; then
         tail -n 35 "$d/runtime-explicit-fast.log" || true
       fi
     fi
+    qmp_snapshot_args=()
+    if [[ "${COHORT_QMP_STOP_SNAPSHOT:-0}" == 1 ]]; then
+      qmp_snapshot_args=(--stop-during-snapshot)
+      echo "COHORT_QMP_SNAPSHOT_MODE=PAUSED"
+    fi
     if [[ "${COHORT_UART_EARLYCON:-0}" == 1 ]]; then
       # Same already-linked mixed kernel Image; change ONLY the boot args.
       # Linux 6.6.143 defconfig does not enable SBI earlycon but selects
@@ -1383,7 +1388,7 @@ if [[ "${COHORT_EARLYCON_HOTFIX:-0}" == 1 ]]; then
       python3 "$repo/tools/ci/linux-runtime-qmp-pc-sampler-v1.py" \
         --image "$d/Image" --output-dir "$qmp_dir" \
         --timeout-seconds 40 --sample-seconds 1,4,8,12,20,32 \
-        --stack-words 48 --kernel-cmdline "$cmdline" \
+        --stack-words 48 "${qmp_snapshot_args[@]}" --kernel-cmdline "$cmdline" \
         >"$qmp_dir/qmp-probe.log" 2>&1 || uart_rc=$?
       cp -a "$qmp_dir/qemu-early-noinitrd.log" "$uartlog"
       echo "EARLYCON_UART_QMP_RC=$uart_rc"
@@ -1503,7 +1508,7 @@ PY_FAULT_OWNER
         mkdir -p "$d/uart-qmp"
         python3 "$repo/tools/ci/linux-runtime-qmp-pc-sampler-v1.py" \
           --image "$d/Image" --output-dir "$d/uart-qmp" \
-          --timeout-seconds 39 --sample-seconds 1,4,8,12,20,32 --stack-words 48 \
+          --timeout-seconds 39 --sample-seconds 1,4,8,12,20,32 --stack-words 48 "${qmp_snapshot_args[@]}" \
           --kernel-cmdline 'console=ttyS0 earlycon=uart8250,mmio,0x10000000,115200n8 loglevel=8 ignore_loglevel panic=-1' \
           >"$d/uart-qmp/qmp-probe.log" 2>&1 || {
             echo "NEXT_OWNER_SWAP=INCONCLUSIVE target=$swap_target reason=qmp_error"; exit 8;
