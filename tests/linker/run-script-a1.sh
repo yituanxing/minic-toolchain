@@ -73,6 +73,11 @@ EOF
 
 "$NM" -n "$work/product" >"$work/product.nm"
 "$READELF" -h "$work/product" >"$work/product.header"
+"$READELF" -lW "$work/product" >"$work/product.programs"
+load_count=$(awk '$1 == "LOAD" { count++ } END { print count+0 }' "$work/product.programs")
+# .text.start and .text.foo are adjacent inputs in one output class.
+# The page-separated init text and data must remain separate PT_LOADs.
+test "$load_count" -eq 3
 
 symbol_type() {
   awk -v symbol="$1" '$3 == symbol { print $2; exit }' "$work/product.nm"
@@ -85,4 +90,4 @@ test "$(symbol_type _einittext)" = T
 test "$(symbol_type _data)" = D
 grep -q 'Entry point address:.*0x10000' "$work/product.header"
 
-echo "MINILD_SCRIPT_A1=PASS output-symbol-section=PASS nm-types=T/T/T/T,D entry=0x10000 consumers=nm,readelf"
+echo "MINILD_SCRIPT_A1=PASS output-symbol-section=PASS nm-types=T/T/T/T,D entry=0x10000 loads=$load_count consumers=nm,readelf"
