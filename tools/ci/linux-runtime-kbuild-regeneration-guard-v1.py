@@ -186,7 +186,9 @@ def replay_affected(out: Path, golden_out: Path, selected: Path,
     env.update({
         "MINIC": str(minic.resolve()),
         "REAL_CC": "/usr/bin/riscv64-linux-gnu-gcc",
-        "MINIC_KEEP_INTERMEDIATES": "0",
+        "MINIC_KEEP_INTERMEDIATES": ("1" if os.environ.get("COHORT_NETWORK_CAPTURE_ONLY") == "1"
+                                     and name in ("net/ipv4/tcp_cong.o", "net/netlink/genetlink.o")
+                                     else "0"),
         "MINIC_PRESERVE_FAILURE_INPUTS": "1",
         "MINIC_KBUILD_SUCCESS_TRACE": str(success.resolve()),
         "MINIC_KBUILD_OBJECT_HASH_TRACE": str(hashes.resolve()),

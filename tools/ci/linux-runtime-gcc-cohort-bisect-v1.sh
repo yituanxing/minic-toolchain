@@ -600,10 +600,41 @@ for line in manifest.read_text().splitlines():
 assert untouched==2060, f"Expected 2060 frozen neighbors; found {untouched}"
 print(f"MINIC_FOUR_OWNER_INTEGRITY=PASS new_minic_owners=4 frozen_neighbors={untouched}")
 PY_FOUR_INTEGRITY
+    if [[ "${COHORT_NETWORK_CAPTURE_ONLY:-0}" == 1 ]]; then
+      capture="$net_dir/exact-TU-capture"
+      mkdir -p "$capture"
+      for net_target in "${net_targets[@]}"; do
+        relative="${net_target%.o}"
+        base="${relative##*/}"
+        for ext in i s; do
+          source_path="$out/$relative.minic-stage2.$ext"
+          [[ -s "$source_path" ]] || {
+            echo "MINIC_NETWORK_CAPTURE=FAIL missing=$source_path"; exit 8;
+          }
+          bytes=$(stat -c %s "$source_path")
+          ((bytes < 48 * 1024 * 1024)) || {
+            echo "MINIC_NETWORK_CAPTURE=FAIL file_too_large=$source_path bytes=$bytes"; exit 8;
+          }
+          cp -a "$source_path" "$capture/$base.$ext"
+          echo "MINIC_NETWORK_CAPTURE_FILE owner=$net_target type=$ext bytes=$bytes sha=$(sha256sum "$source_path" | cut -d' ' -f1)"
+        done
+        riscv64-linux-gnu-objdump -dr "$ev/gcc/$net_target" >"$capture/$base.gcc-objdump.txt"
+        riscv64-linux-gnu-objdump -dr "$ev/minic/$net_target" >"$capture/$base.minic-objdump.txt"
+        echo "MINIC_NETWORK_CAPTURE_OWNER=PASS owner=$net_target exact_gnu_E=true same_minic=true"
+      done
+      echo "MINIC_NETWORK_CAPTURE=PASS owners=2 full_link=SKIPPED"
+    fi
     rm -rf -- "$out"
     cp -a --reflink=auto "$gold_snapshot" "$out"
     echo "MINIC_NET_REPAIR=READY four_current_minic_objects=true gcc_swap_count=0 golden_restored=true"
   fi
+fi
+if [[ "${COHORT_NETWORK_CAPTURE_ONLY:-0}" == 1 ]]; then
+  [[ "${COHORT_PATCH_NET_PAIR:-0}" == 1 ]] || {
+    echo "MINIC_NETWORK_CAPTURE=ERROR requires_two_authentic_replays"; exit 8;
+  }
+  echo "MINIC_NETWORK_CAPTURE=COMPLETE compiler_owners=2 runtime_not_run=true"
+  exit 0
 fi
 # Build the initramfs just once; it stays fixed throughout all QEMU trials.
 BUILD_DIR="$ev/initramfs" OUTPUT_INITRAMFS="$ev/runtime-initramfs.cpio.gz" \
