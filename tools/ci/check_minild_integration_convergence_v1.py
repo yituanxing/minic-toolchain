@@ -42,6 +42,21 @@ def normalized(job):
         if not any(re.search(pattern, line) for pattern in drop)
     ).strip()
 
+# The original Linux REL wrapper matched only slash-prefixed output paths.
+# Real Kbuild passes bare 'vmlinux.o', so the historical workflow was silently
+# delegating that second boundary to GNU ld while the image still linked.
+# Exactly this reviewed one-line execution repair is allowed; all other job
+# bodies and archived Git blobs remain byte-exact.
+OLD_REL_SELECTOR = "            */purgatory.ro|*/vmlinux.o)"
+NEW_REL_SELECTOR = "            */purgatory.ro|purgatory.ro|*/vmlinux.o|vmlinux.o)"
+
+
+def reverse_rel_selector_fix(text):
+    if text.count(NEW_REL_SELECTOR) != 1 or OLD_REL_SELECTOR in text:
+        raise AssertionError("MiniLD Linux REL selector repair missing or altered")
+    return text.replace(NEW_REL_SELECTOR, OLD_REL_SELECTOR, 1)
+
+
 def main():
     current = WORK.read_text()
     jobs = split_jobs(current)
@@ -61,7 +76,7 @@ def main():
                         '      - "agent/linux-expanded-kbuild-v0"\n'
                         '      - "agent/linux-perf-boolean-domain-v1"\n'
                         '  workflow_dispatch:\n')
-    recovered = current.replace(expected_trigger, original_trigger, 1).encode()
+    recovered = reverse_rel_selector_fix(current).replace(expected_trigger, original_trigger, 1).encode()
     digest = hashlib.sha1(b"blob " + str(len(recovered)).encode()
                           + b"\0" + recovered).hexdigest()
     if digest != "bb1e7ab8a728917324b652eba1fe1527efc1ee93":
@@ -76,7 +91,10 @@ def main():
         original_jobs = split_jobs(old_path.read_text())
         if set(original_jobs) != {name}:
             raise AssertionError(f"old job identity differs: {filename}")
-        if normalized(original_jobs[name]) != normalized(jobs[name]):
+        normalized_current = normalized(jobs[name])
+        if name == "linux-rel-boundaries":
+            normalized_current = reverse_rel_selector_fix(normalized_current)
+        if normalized(original_jobs[name]) != normalized_current:
             raise AssertionError(f"changed test body: {name}")
         if f"inputs.mode == '{mode}'" not in jobs[name] or f"inputs.mode == 'all'" not in jobs[name]:
             raise AssertionError(f"dispatch selection absent: {name}")
@@ -84,7 +102,7 @@ def main():
             raise AssertionError(f"original push tag absent: {name}")
         if f"group: {filename.removesuffix('.yml')}-" not in jobs[name]:
             raise AssertionError(f"job concurrency identity changed: {name}")
-    print("M0_MINILD_INTEGRATION=PASS jobs=3 preserved_test_bodies=3 archived_blobs=3 current_branches=2")
+    print("M0_MINILD_INTEGRATION=PASS jobs=3 preserved_test_bodies=3 archived_blobs=3 current_branches=2 approved_rel_selector_fix=1")
 
 if __name__ == "__main__":
     main()
