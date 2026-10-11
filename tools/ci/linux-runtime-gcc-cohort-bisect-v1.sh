@@ -666,7 +666,9 @@ PY_GENL_SOURCE
   # Replay exactly one additional MiniC owner using the pinned GNU
   # preprocessing inputs. Do not modify the immutable frozen 2064 pool.
   if [[ "${COHORT_SPINLOCK_CAPTURE_ONLY:-0}" == 1 ]]; then
-    spin_target=kernel/locking/spinlock_debug.o
+    spin_target="${COHORT_CAPTURE_TARGET:-kernel/locking/spinlock_debug.o}"
+    spin_base="${spin_target##*/}"
+    spin_base="${spin_base%.o}"
     spin_dir="$hotfix/spinlock-debug-capture"
     mkdir -p "$spin_dir"
     printf '%s\n' "$spin_target" >"$spin_dir/selected.txt"
@@ -685,18 +687,18 @@ PY_GENL_SOURCE
       | tee "$spin_dir/route-audit.log"
     new_spin_sha=$(sha256sum "$out/$spin_target" | cut -d' ' -f1)
     for ext in i s; do
-      source_path="$out/kernel/locking/spinlock_debug.minic-stage2.$ext"
+      source_path="$out/${spin_target%.o}.minic-stage2.$ext"
       [[ -s "$source_path" ]] || {
         echo "SPINLOCK_CAPTURE=INCONCLUSIVE missing=$source_path"; exit 8;
       }
-      cp -a "$source_path" "$spin_dir/spinlock_debug.$ext"
+      cp -a "$source_path" "$spin_dir/$spin_base.$ext"
     done
     riscv64-linux-gnu-objdump -dr "$ev/gcc/$spin_target" \
-      >"$spin_dir/spinlock_debug.gcc-objdump.txt"
+      >"$spin_dir/$spin_base.gcc-objdump.txt"
     riscv64-linux-gnu-objdump -dr "$ev/minic/$spin_target" \
-      >"$spin_dir/spinlock_debug.old-minic-objdump.txt"
+      >"$spin_dir/$spin_base.old-minic-objdump.txt"
     riscv64-linux-gnu-objdump -dr "$out/$spin_target" \
-      >"$spin_dir/spinlock_debug.new-minic-objdump.txt"
+      >"$spin_dir/$spin_base.new-minic-objdump.txt"
     printf 'owner=%s\nold_sha256=%s\nnew_sha256=%s\n' \
       "$spin_target" "$old_spin_sha" "$new_spin_sha" \
       >"$spin_dir/provenance.txt"
