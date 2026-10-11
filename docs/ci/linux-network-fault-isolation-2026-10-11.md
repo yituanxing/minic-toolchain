@@ -208,3 +208,50 @@ only `core.o` against the pinned .i. For the second fault, resolve the
 `__minic_inline_spec_9309_155` caller owner by its actual vmlinux symbol map
 and test an independent exact-config GCC swap. Retain the full unmodified
 Python-era 145/203 cpio as the final runtime oracle.
+
+
+## Authentic eighth-owner Netfilter MiniC repair: QEMU 145/186, second fault isolated
+
+The first Netfilter fault is now fixed by **recompiling the exact GNU-preprocessed
+`net/netfilter/core.o` with the current patched MiniC**, NOT by borrowing GCC
+code. Candidate Linux Image SHA256:
+`a7e28c5512e83a3323158c0aa2933a8820934bbf1411954e4149dcfe8dfc5cb1`
+(215,502,848 bytes). CI run
+[#38132238084](https://github.com/yituanxing/minic-toolchain/actions/runs/38132238084)
+certified `NETFILTER_CORE_ABI=PASS`,
+`NETFILTER_CORE_FROZEN_NEIGHBORS=PASS count=2056` and
+`NETFILTER_CORE_CURRENT=READY old=a3da93e956e5... new=5329664f102245...`.
+The current-profile MiniC assembly for `nf_hook_entries_grow`
+reinstates a runtime read of the mutable `inserted` local and a `beqz`
+guard where the previously frozen bad object had a direct unconditional edge.
+This is consistent with the previously added compiler-wide
+`apply-core-if-condition-dominance-barrier-v0.py` repair.
+
+**Independent offline QEMU full historical oracle**, using the **unchanged**
+Python V024 145/203 cpio and exact same QEMU boot parameters:
+
+- 145/145 original module PASS, including Nouveau.
+- 186/203 original function PASS, **including** all the Netfilter
+  `iptables-get-info` gates that crashed at function #111 previously.
+- The former `nf_hook_entries_grow+0xd86` store page fault no longer occurs.
+- The following previously observed `_compound_head+0x40` load fault at
+  `badaddr=0x9` **still occurs**, after function #186. The fully intact
+  historical acceptance gate remains FAIL / not complete, regardless of the
+  direct QEMU host exit status.
+
+The sequential source identity assures **2056 untouched neighboring MiniC
+C objects**, and a newly compiled MiniC `core.o`. This is not a GNU
+substitution. The same before/after behavior as the GCC-only swap
+(145/110 -> 145/186) independently supports the generic condition-join
+semantics repair.
+
+**Second bug owner discovery while QEMU ran**: a complete
+`riscv64-linux-gnu-nm -A --defined-only` scan of the authenticated frozen
+2064 MiniC objects in CI run #38133195948 found exactly
+`mm/gup.o:0000000000021ca2 t __minic_inline_spec_9309_155`,
+which is the return-address function shown at the second fault.
+This is a verified *call-site object identity*, not yet proof the object is
+the ultimate source of the malformed `struct page *` pointer.
+Investigate its exact current-profile translation and data flow before
+changing memory-manager internals. Re-test the original P3 oracle after
+every proven compiler repair rather than stockpiling object swaps.
