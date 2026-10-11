@@ -1507,6 +1507,10 @@ PY_FAULT_OWNER
             echo "NEXT_OWNER_SWAP=INCONCLUSIVE target=$swap_target reason=qmp_error"; exit 8;
           }
         cp -a "$d/uart-qmp/qemu-early-noinitrd.log" "$d/qemu-uart-earlycon.log"
+        echo "NEXT_OWNER_SWAP_QMP_SAMPLES target=$swap_target"
+        grep -E 'COHORT_QMP_EARLY_SAMPLE|COHORT_QMP_EARLY_COMPLETE' "$d/uart-qmp/qmp-probe.log" || true
+        echo "NEXT_OWNER_SWAP_BASELINE_QMP_SAMPLES target=$swap_target"
+        grep -E 'COHORT_QMP_EARLY_SAMPLE|COHORT_QMP_EARLY_COMPLETE' "$ev/trials/earlycon_fixed_only/uart-qmp/qmp-probe.log" || true
         echo "NEXT_OWNER_SWAP_BASELINE target=$swap_target"
         grep -aE '^\[[[:space:]]*[0-9]+\.[0-9]+\]' "$baseline" | tail -n 5 || true
         echo "NEXT_OWNER_SWAP_OBSERVED target=$swap_target"
