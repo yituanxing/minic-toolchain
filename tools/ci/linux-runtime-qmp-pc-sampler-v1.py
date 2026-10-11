@@ -17,9 +17,9 @@ import subprocess
 import time
 from pathlib import Path
 
-REGISTER = re.compile(r"(?im)(?:^|[ \\t])(?:x[0-9]+/)?(pc|mepc|sepc|satp|mcause|scause|sp|ra|a[0-7]|t[0-6]|s(?:1[01]|[0-9]))\\s+((?:0x)?[0-9a-f]{1,16})(?=\\s|$)")
-STACK_FIRST_WORD = re.compile(r"(?m)^[0-9a-fA-F]{8,16}:\\s*0x([0-9a-fA-F]{1,16})\\b")
-MONITOR_WORD = re.compile(r"0x([0-9a-fA-F]{1,16})\\b")
+REGISTER = re.compile(r"(?im)(?:^|[ \t])(?:x[0-9]+/)?(pc|mepc|sepc|satp|mcause|scause|sp|ra|a[0-7]|t[0-6]|s(?:1[01]|[0-9]))\s+((?:0x)?[0-9a-f]{1,16})(?=\s|$)")
+STACK_FIRST_WORD = re.compile(r"(?m)^[0-9a-fA-F]{8,16}:\s*0x([0-9a-fA-F]{1,16})\b")
+MONITOR_WORD = re.compile(r"0x([0-9a-fA-F]{1,16})\b")
 
 
 
@@ -40,6 +40,11 @@ def self_test() -> None:
     assert selected_registers("x12/a2 0000000000000001 x31/t6 0000000000000002 x27/s11 0000000000000003") == {
         "a2": "0000000000000001", "t6": "0000000000000002",
         "s11": "0000000000000003"}
+    captured_stack = "ff2000000000b010: 0xff6000000d9f1128 0x0000000000000000"
+    candidate = STACK_FIRST_WORD.search(captured_stack)
+    assert candidate and int(candidate.group(1), 16) == 0xff6000000d9f1128
+    assert MONITOR_WORD.findall("ff6000000d9f1128: 0xdead4ead00010001 0xffffffff 0xdeadbeef") == [
+        "dead4ead00010001", "ffffffff", "deadbeef"]
     print("LINUX_RUNTIME_QMP_SAMPLER_SELFTEST=PASS")
 
 
