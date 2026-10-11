@@ -646,6 +646,7 @@ static bool add_stmt(MiniAs *as,
     }
     st->size = size;
     st->align = align;
+    st->pic_enabled = as->pic_enabled;
     if (st->op == NULL || st->args == NULL) {
         minias_set_error(as, "out-of-memory:stmt-text");
         return false;
@@ -3090,7 +3091,42 @@ static bool process_statement(MiniAs *as, char *text, size_t line) {
         if (strcmp(op, ".popsection") == 0) {
             return pop_section(as, line);
         }
-        if (strcmp(op, ".option") == 0 || strcmp(op, ".file") == 0 ||
+        if (strcmp(op, ".option") == 0) {
+            /*
+             * RISC-V GNU as starts in NOPIC mode. Its 'la' pseudo op is
+             * PC-relative unless the effective source explicitly enables
+             * .option pic. Discarding this mode silently turned Linux's
+             * early-boot address calculations into GOT loads before a GOT
+             * can be initialized. Capture state when each stmt is parsed,
+             * not at final emission.
+             */
+            if (strcmp(args, "pic") == 0) {
+                as->pic_enabled = true;
+            } else if (strcmp(args, "nopic") == 0) {
+                as->pic_enabled = false;
+            } else if (strcmp(args, "push") == 0) {
+                if (as->pic_option_depth >=
+                    sizeof(as->pic_option_stack) /
+                        sizeof(as->pic_option_stack[0])) {
+                    minias_set_error(as, "option-stack-overflow:line=%zu", line);
+                    return false;
+                }
+                as->pic_option_stack[as->pic_option_depth++] =
+                    as->pic_enabled;
+            } else if (strcmp(args, "pop") == 0) {
+                if (as->pic_option_depth == 0U) {
+                    minias_set_error(as, "option-stack-underflow:line=%zu", line);
+                    return false;
+                }
+                as->pic_enabled =
+                    as->pic_option_stack[--as->pic_option_depth];
+            }
+            /* Existing benign options (rvc, relax, arch, etc.) retain
+             * their prior behavior; do not incorrectly advertise that
+             * full GNU option-mode semantics have been implemented. */
+            return true;
+        }
+        if (strcmp(op, ".file") == 0 ||
             strcmp(op, ".ident") == 0 || strcmp(op, ".altmacro") == 0 ||
             strcmp(op, ".noaltmacro") == 0 || strcmp(op, ".end") == 0) {
             return true;
