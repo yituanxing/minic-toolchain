@@ -620,6 +620,20 @@ PY_FOUR_INTEGRITY
         done
         riscv64-linux-gnu-objdump -dr "$ev/gcc/$net_target" >"$capture/$base.gcc-objdump.txt"
         riscv64-linux-gnu-objdump -dr "$ev/minic/$net_target" >"$capture/$base.minic-objdump.txt"
+        if [[ "$net_target" == net/netlink/genetlink.o ]]; then
+          # MiniC stderr is deliberately separate from wrapper stdout, and is
+          # otherwise deleted after successful C compilation. Capture *before*
+          # restoring the frozen GNU output tree.
+          stderr_path="$out/$relative.minic-stage2.minic.stderr"
+          [[ -s "$stderr_path" ]] || {
+            echo "GENL_TRACE_CAPTURE=FAIL missing_minic_stderr=$stderr_path"; exit 8;
+          }
+          grep -E 'GENL_IF_DECISION|GENL_COND_EMIT' "$stderr_path" \
+            >"$capture/genetlink.if-control-trace.log" || true
+          head -c 65536 "$stderr_path" >"$capture/genetlink.compiler-stderr-head.log"
+          echo "GENL_TRACE_CAPTURE=PASS lines=$(wc -l <"$capture/genetlink.if-control-trace.log") raw_bytes=$(stat -c %s "$stderr_path")"
+          head -n 75 "$capture/genetlink.if-control-trace.log" || true
+        fi
         echo "MINIC_NETWORK_CAPTURE_OWNER=PASS owner=$net_target exact_gnu_E=true same_minic=true"
       done
       echo "MINIC_NETWORK_CAPTURE=PASS owners=2 full_link=SKIPPED"
