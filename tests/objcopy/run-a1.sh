@@ -222,4 +222,59 @@ run_prefix_case 64 rv64imac lp64 elf64lriscv
 run_prefix_case 32 rv32imac ilp32 elf32lriscv
 echo "MINIOBJCOPY_PI_PREFIX=PASS formats=ELF32,ELF64 linux_pi_options=3"
 
+# Linux 6.6.143 MiniAS + MiniObjcopy integration regression:
+# EFI STUBCPY --prefix-symbols adds more bytes to ET_REL .strtab than
+# the old ELF input has space after the original .strtab offset.
+# Previously the rewrite incorrectly validated NEW synthetic section.size
+# against OLD input EOF and rejected valid native ELF as invalid-section.
+cat >"$work/efi-long-strtab.s" <<'EOF'
+.section .text,"ax",@progbits
+.globl efi_entry
+efi_entry:
+  call efi_undefined_function
+  ret
+.section .rodata,"a",@progbits
+.globl efi_data
+efi_data:
+  .word 42
+.section .note.gnu.property,"a",@note
+.byte 1,2,3,4
+EOF
+count=0
+while test "$count" -lt 128; do
+  printf '.globl efi_native_symbol_%03d\nefi_native_symbol_%03d:\n  nop\n' \
+    "$count" "$count" >>"$work/efi-long-strtab.s"
+  count=$((count + 1))
+done
+
+for bits in 64 32; do
+  case "$bits" in
+    64) march=rv64imac; abi=lp64; emul=elf64lriscv ;;
+    32) march=rv32imac; abi=ilp32; emul=elf32lriscv ;;
+  esac
+  dir="$work/efi-long-strtab-rv$bits"
+  mkdir -p "$dir"
+  "$AS" -march="$march" -mabi="$abi" -o "$dir/input.o" "$work/efi-long-strtab.s"
+  for kind in gnu mini; do
+    if test "$kind" = gnu; then tool="$OBJCOPY"; else tool="$MINIOBJCOPY"; fi
+    "$tool" --remove-section=.note.gnu.property \
+      --prefix-alloc-sections=.init --prefix-symbols=__efistub_ \
+      "$dir/input.o" "$dir/$kind.o"
+    "$READELF" -SW "$dir/$kind.o" >"$dir/$kind.sections"
+    "$READELF" -Wr "$dir/$kind.o" >"$dir/$kind.relocs"
+    "$NM" -a "$dir/$kind.o" >"$dir/$kind.nm"
+    grep -q '.init.text' "$dir/$kind.sections"
+    grep -q '.rela.init.text' "$dir/$kind.sections"
+    grep -q '__efistub_efi_undefined_function' "$dir/$kind.relocs"
+    grep -q '__efistub_efi_native_symbol_127' "$dir/$kind.nm"
+    "$LD" -m "$emul" -r -o "$dir/$kind.relinked.o" "$dir/$kind.o"
+    assert_readelf_clean "$dir/$kind.o"
+  done
+  cmp "$dir/gnu.nm" "$dir/mini.nm"
+  # Inspect actual section sizes; the prefix expansion exceeds the old
+  # original file's trailing room. No hidden GNU fallback is possible.
+  echo "MINIOBJCOPY_EFI_STRTAB_CASE=PASS bits=$bits names=128 relocated=PASS gnu_symbols=exact"
+done
+echo "MINIOBJCOPY_EFI_STRTAB=PASS RV64=PASS RV32=PASS synthetic_elf_sections=expanded"
+
 echo "MINIOBJCOPY_A1=PASS oracle=GNU-objcopy formats=ELF64-RISCV,ELF32-RISCV types=ET_DYN options=-G,-S,--strip-debug,-R"
