@@ -821,11 +821,30 @@ jobs:
           work="$GITHUB_WORKSPACE/build/linux-runtime-gcc"
           ev="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-v1"
           chmod +x tests/external/linux/qemu_explicit_initrd_wrapper.py
-          export COHORT_ACTION=verify COHORT_EARLYCON_HOTFIX=1 COHORT_PATCH_SUPER_V1=1 COHORT_PATCH_NET_PAIR=1 COHORT_NETWORK_CAPTURE_ONLY=0 COHORT_FAULT_OWNER_MAP=1 COHORT_FAULT_OWNER_SYMBOL=__minic_inline_spec_999_52 COHORT_FAULT_OWNER_COMPANION=__minic_inline_spec_10691_62 COHORT_FAULT_OWNER_EXTRA_NETLINK=0 COHORT_EARLYCON_EXPLICIT_INITRD=0 COHORT_EARLYCON_EXPLICIT_SHELL=0 COHORT_NEXT_FAULT_DIAG=0 COHORT_UART_EARLYCON=1 COHORT_NEXT_GCC_SWAPS=1 COHORT_NEXT_GCC_TARGET= COHORT_QMP_STOP_SNAPSHOT=1 COHORT_SPINLOCK_CAPTURE_ONLY=0 COHORT_REPAIR_RUNTIME_OWNER=1 COHORT_REPAIR_INET_CSK_OWNER=1 COHORT_REPAIR_INET_HASHTABLES_OWNER=1 COHORT_NEXT_GCC_EXPLICIT_INITRD=1 COHORT_GDB_SWAP=0 COHORT_GDB_BOUNDARY=0 LINUX_RUNTIME_EARLYCON_ARG=earlycon=uart8250,mmio,0x10000000,115200n8
+          export COHORT_ACTION=verify COHORT_EARLYCON_HOTFIX=1 COHORT_PATCH_SUPER_V1=1 COHORT_PATCH_NET_PAIR=1 COHORT_NETWORK_CAPTURE_ONLY=0 COHORT_FAULT_OWNER_MAP=0 COHORT_FAULT_OWNER_EXTRA_NETLINK=0 COHORT_EARLYCON_EXPLICIT_INITRD=0 COHORT_EARLYCON_EXPLICIT_SHELL=0 COHORT_NEXT_FAULT_DIAG=0 COHORT_UART_EARLYCON=1 COHORT_NEXT_GCC_SWAPS=0 COHORT_NEXT_GCC_TARGET= COHORT_QMP_STOP_SNAPSHOT=1 COHORT_SPINLOCK_CAPTURE_ONLY=0 COHORT_REPAIR_RUNTIME_OWNER=1 COHORT_REPAIR_INET_CSK_OWNER=1 COHORT_REPAIR_INET_HASHTABLES_OWNER=1 COHORT_NEXT_GCC_EXPLICIT_INITRD=0 COHORT_GDB_SWAP=0 COHORT_GDB_BOUNDARY=0 LINUX_RUNTIME_EARLYCON_ARG=earlycon=uart8250,mmio,0x10000000,115200n8
           bash tools/ci/linux-runtime-gcc-cohort-bisect-v1.sh \
             "$work/linux-6.6.143" "$work/out" \
             "$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain/bin/minic" \
             "$work/provenance" "$ev/full-objects.txt" "$ev"
+
+      - name: Export same-config seven-owner MiniC Image for local historical 145/203 oracle
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          d="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-v1/trials/earlycon_fixed_only"
+          test -s "$d/Image"
+          image_bytes=$(stat -c %s "$d/Image")
+          test "$image_bytes" -gt 100000000
+          sha256sum "$d/Image" >"$d/Image.sha256"
+          gzip -1 -c "$d/Image" >"$d/Image.gz"
+          echo "LEGACY145_MINIC_IMAGE_EXPORT=PASS sha256=$(sha256sum "$d/Image" | cut -d' ' -f1) bytes=$image_bytes"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: legacy145-minic-image-${{ github.sha }}
+          path: |
+            build/linux-runtime-gcc-cohort-v1/trials/earlycon_fixed_only/Image.gz
+            build/linux-runtime-gcc-cohort-v1/trials/earlycon_fixed_only/Image.sha256
+          retention-days: 2
 
       - name: Preserve single-object experiment evidence
         if: always()
