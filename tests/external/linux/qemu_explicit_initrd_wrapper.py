@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 import os
 import pathlib
+import re
 import shutil
 import subprocess
 import sys
 
 REAL_QEMU = os.environ.get("QEMU_REAL_SYSTEM_RISCV64", "qemu-system-riscv64")
 RAM_BASE = 0x80000000
-RAM_SIZE = 512 * 1024 * 1024
 KERNEL_LOAD = 0x80200000
 ALIGN = 2 * 1024 * 1024
 GUARD = 2 * 1024 * 1024
@@ -25,8 +25,19 @@ def align_up(value, alignment):
     return (value + alignment - 1) & ~(alignment - 1)
 
 
+def memory_size_bytes(value):
+    match = re.fullmatch(r"([0-9]+)([kKmMgGtT]?)", value)
+    if match is None:
+        raise SystemExit(f"QEMU_EXPLICIT_INITRD_ERROR unsupported memory size: {value}")
+    # QEMU's suffix-free -m value is in MiB.
+    exponent = {"": 2, "k": 1, "m": 2, "g": 3, "t": 4}[match.group(2).lower()]
+    return int(match.group(1)) * (1024 ** exponent)
+
+
 def main():
     args = sys.argv[1:]
+    memory_arg = value_after(args, "-m") or "512M"
+    ram_size = memory_size_bytes(memory_arg)
     initrd = value_after(args, "-initrd")
     kernel = value_after(args, "-kernel")
     if not initrd or not kernel:
@@ -38,7 +49,7 @@ def main():
     initrd_size = initrd_path.stat().st_size
     initrd_addr = align_up(KERNEL_LOAD + image_size + GUARD, ALIGN)
     initrd_end = initrd_addr + initrd_size
-    ram_end = RAM_BASE + RAM_SIZE
+    ram_end = RAM_BASE + ram_size
     if initrd_end >= ram_end:
         raise SystemExit(
             f"QEMU_EXPLICIT_INITRD_ERROR image={image_size} initrd={initrd_size} "
@@ -58,7 +69,7 @@ def main():
             REAL_QEMU,
             "-M", f"virt,dumpdtb={dtb}",
             "-cpu", "max",
-            "-m", "512M",
+            "-m", memory_arg,
             "-smp", "1",
             "-nographic",
         ],
