@@ -663,6 +663,82 @@ PY_GENL_SOURCE
     cp -a --reflink=auto "$gold_snapshot" "$out"
     echo "MINIC_NET_REPAIR=READY four_current_minic_objects=true gcc_swap_count=0 golden_restored=true"
   fi
+  # Fifth-owner *candidate repair*: replay only runtime.o with the current
+  # MiniC label-entry fact barrier, leaving 2059 frozen C objects untouched.
+  if [[ "${COHORT_REPAIR_RUNTIME_OWNER:-0}" == 1 ]]; then
+    runtime_target=drivers/base/power/runtime.o
+    runtime_dir="$hotfix/runtime-repaired"
+    mkdir -p "$runtime_dir"
+    printf '%s\n' "$runtime_target" >"$runtime_dir/selected.txt"
+    old_runtime_sha=$(sha256sum "$ev/minic/$runtime_target" | cut -d' ' -f1)
+    echo "MINIC_RUNTIME_REPAIR=START owner=$runtime_target old=$old_runtime_sha"
+    python3 "$repo/tools/ci/linux-runtime-kbuild-regeneration-guard-v1.py" \
+      --mode replay --out "$out" --golden-out "$gold_snapshot" \
+      --evidence "$runtime_dir/replay.log" --selected "$runtime_dir/selected.txt" \
+      --wrapper "$repo/tests/external/linux/stage2_kbuild_cc.sh" \
+      --minic "$minic" --success-trace "$runtime_dir/success.txt" \
+      --digest-trace "$runtime_dir/digests.txt" | tee "$runtime_dir/replay.log"
+    python3 "$repo/tools/ci/linux-runtime-minic-route-audit-v1.py" \
+      --objects-file "$runtime_dir/selected.txt" \
+      --success-trace "$runtime_dir/success.txt" \
+      --object-digest-trace "$runtime_dir/digests.txt" \
+      --candidates "$out" | tee "$runtime_dir/route-audit.log"
+    new_runtime_sha=$(sha256sum "$out/$runtime_target" | cut -d' ' -f1)
+    python3 - "$ev/gcc/$runtime_target" "$ev/minic/$runtime_target" "$out/$runtime_target" <<'PY_RUNTIME_ABI'
+import struct,sys
+from pathlib import Path
+headers=[Path(arg).read_bytes()[:52] for arg in sys.argv[1:]]
+for h in headers:
+    assert len(h)==52 and h[:6]==b"\\x7fELF\\x02\\x01"
+    assert struct.unpack_from("<H",h,16)[0]==1
+    assert struct.unpack_from("<H",h,18)[0]==243
+assert len({h[48:52] for h in headers})==1, "runtime.o GNU/MiniC ABI mismatch"
+print("MINIC_RUNTIME_REPAIR_ABI=PASS gcc_old_new")
+PY_RUNTIME_ABI
+    for ext in i s; do
+      intermediate="$out/drivers/base/power/runtime.minic-stage2.$ext"
+      [[ -s "$intermediate" ]] || {
+        echo "MINIC_RUNTIME_REPAIR=INCONCLUSIVE missing=$intermediate"; exit 8;
+      }
+      cp -a "$intermediate" "$runtime_dir/runtime.$ext"
+    done
+    riscv64-linux-gnu-objdump -dr "$ev/gcc/$runtime_target" \
+      >"$runtime_dir/runtime.gcc-objdump.txt"
+    riscv64-linux-gnu-objdump -dr "$ev/minic/$runtime_target" \
+      >"$runtime_dir/runtime.old-minic-objdump.txt"
+    riscv64-linux-gnu-objdump -dr "$out/$runtime_target" \
+      >"$runtime_dir/runtime.new-minic-objdump.txt"
+    printf 'owner=%s\nold_sha256=%s\nnew_sha256=%s\ncompiler_sha256=%s\n' \
+      "$runtime_target" "$old_runtime_sha" "$new_runtime_sha" "$cc_sha" \
+      >"$runtime_dir/provenance.txt"
+    [[ "$old_runtime_sha" != "$new_runtime_sha" ]] || {
+      echo "MINIC_RUNTIME_REPAIR=INCONCLUSIVE reason=identical_object label_barrier_did_not_change_runtime"; exit 8;
+    }
+    cp -a "$out/$runtime_target" "$ev/minic/$runtime_target"
+    python3 - "$ev/minic-manifest.sha256" "$ev" "$runtime_target" "$new_runtime_sha" <<'PY_RUNTIME_FREEZE'
+import hashlib,sys
+from pathlib import Path
+manifest,root=map(Path,sys.argv[1:3])
+target="minic/"+sys.argv[3]
+changes={"minic/drivers/tty/serial/earlycon.o","minic/fs/super.o",
+         "minic/net/ipv4/tcp_cong.o","minic/net/netlink/genetlink.o",target}
+assert len(changes)==5
+frozen=0
+for row in manifest.read_text().splitlines():
+    digest,name=row.split(None,1)
+    observed=hashlib.sha256((root/name).read_bytes()).hexdigest()
+    if name==target:
+        assert observed==sys.argv[4], "fifth MiniC candidate SHA mismatch"
+    elif name not in changes:
+        assert observed==digest, "frozen MiniC object modified: "+name
+        frozen+=1
+assert frozen==2059, "expected exactly 2059 immutable neighbor C owners"
+print("MINIC_FIFTH_OWNER_FROZEN_NEIGHBORS=PASS count=2059")
+PY_RUNTIME_FREEZE
+    rm -rf -- "$out"
+    cp -a --reflink=auto "$gold_snapshot" "$out"
+    echo "MINIC_RUNTIME_REPAIR=READY old=$old_runtime_sha new=$new_runtime_sha changed=true golden_restored=true"
+  fi
   # Replay exactly one additional MiniC owner using the pinned GNU
   # preprocessing inputs. Do not modify the immutable frozen 2064 pool.
   if [[ "${COHORT_SPINLOCK_CAPTURE_ONLY:-0}" == 1 ]]; then
