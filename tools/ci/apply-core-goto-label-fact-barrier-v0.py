@@ -12,9 +12,11 @@ path = Path("src/core/core_lower.c")
 src = path.read_text()
 old = """        } else if (statement->kind == MINIC_STATEMENT_LABEL) {
             const MinicStatement *loop = NULL;
+            bool internal_loop_label = false;
 """
 new = """        } else if (statement->kind == MINIC_STATEMENT_LABEL) {
             const MinicStatement *loop = NULL;
+            bool internal_loop_label = false;
             /* C labels are control-flow join points. A backward goto can
                invalidate all local facts learned on the first arrival.
                Keep the IR branches; only drop speculative local facts. */
