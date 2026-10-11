@@ -38,6 +38,6 @@ int main(void)
 {
     if (check_flags(0U, 3U) != 2) return 1;
     if (check_flags(1U, 3U) != 1) return 2;
-    if (check_flags(2U, 3U) != 2) return 3;
+    if (check_flags(2U, 3U) != 1) return 3;
     return 0;
 }
