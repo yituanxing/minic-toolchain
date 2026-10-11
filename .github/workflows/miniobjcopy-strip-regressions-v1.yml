@@ -17,6 +17,7 @@ on:
           - linux-tool
           - linux-single
           - linux-replay
+          - linux-native-triple-replay
           - all
 
 permissions:
@@ -98,7 +99,8 @@ jobs:
     env:
       MINIOBJCOPY_SINGLE_MODE: ${{ (github.event_name == 'workflow_dispatch' && inputs.mode == 'linux-single') || contains(github.event.head_commit.message, '[miniobjcopy-linux-single]') }}
       MINIOBJCOPY_REPLAY_MODE: ${{ (github.event_name == 'workflow_dispatch' && inputs.mode == 'linux-replay') || contains(github.event.head_commit.message, '[miniobjcopy-linux-replay]') }}
-    if: (github.event_name == 'workflow_dispatch' && (inputs.mode == 'linux-tool' || inputs.mode == 'linux-single' || inputs.mode == 'linux-replay' || inputs.mode == 'all')) || (github.event_name == 'push' && (contains(github.event.head_commit.message, '[miniobjcopy-linux-tool]') || contains(github.event.head_commit.message, '[miniobjcopy-linux-single]') || contains(github.event.head_commit.message, '[miniobjcopy-linux-replay]')))
+      MINIOBJCOPY_TRIPLE_REPLAY_MODE: ${{ (github.event_name == 'workflow_dispatch' && inputs.mode == 'linux-native-triple-replay') || contains(github.event.head_commit.message, '[miniobjcopy-native-triple-replay]') }}
+    if: (github.event_name == 'workflow_dispatch' && (inputs.mode == 'linux-tool' || inputs.mode == 'linux-single' || inputs.mode == 'linux-replay' || inputs.mode == 'linux-native-triple-replay' || inputs.mode == 'all')) || (github.event_name == 'push' && (contains(github.event.head_commit.message, '[miniobjcopy-linux-tool]') || contains(github.event.head_commit.message, '[miniobjcopy-linux-single]') || contains(github.event.head_commit.message, '[miniobjcopy-linux-replay]') || contains(github.event.head_commit.message, '[miniobjcopy-native-triple-replay]')))
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     steps:
@@ -114,7 +116,7 @@ jobs:
             qemu-user qemu-system-misc opensbi cpio gzip bc bison flex libssl-dev libelf-dev make curl xz-utils file
 
       - name: Build toolchain and focused gates
-        if: env.MINIOBJCOPY_REPLAY_MODE != 'true'
+        if: env.MINIOBJCOPY_REPLAY_MODE != 'true' && env.MINIOBJCOPY_TRIPLE_REPLAY_MODE != 'true'
         run: |
           set -Eeuo pipefail
           make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/miniobjcopy-linux-tool all
@@ -126,7 +128,7 @@ jobs:
           make MODE=release CFLAGS=-Werror BUILD_DIR=build/miniobjcopy-linux-tool check-minild-a3
 
       - name: Prepare Linux 6.6.143
-        if: env.MINIOBJCOPY_REPLAY_MODE != 'true'
+        if: env.MINIOBJCOPY_REPLAY_MODE != 'true' && env.MINIOBJCOPY_TRIPLE_REPLAY_MODE != 'true'
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -151,7 +153,7 @@ jobs:
           fi
 
       - name: Install MiniLD and MiniObjcopy wrappers
-        if: env.MINIOBJCOPY_REPLAY_MODE != 'true'
+        if: env.MINIOBJCOPY_REPLAY_MODE != 'true' && env.MINIOBJCOPY_TRIPLE_REPLAY_MODE != 'true'
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -211,7 +213,7 @@ jobs:
           : >"$work/miniobjcopy.trace"
 
       - name: Build Linux Image with exactly one MiniObjcopy replacement
-        if: env.MINIOBJCOPY_REPLAY_MODE != 'true'
+        if: env.MINIOBJCOPY_REPLAY_MODE != 'true' && env.MINIOBJCOPY_TRIPLE_REPLAY_MODE != 'true'
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -301,8 +303,37 @@ jobs:
             "$image" | sha256sum -c -
           echo "MINILD_FINAL_IMAGE_REPLAY=PASS origin=38160503540 native_ld=3 native_objcopy=44 reused_full_image=1"
 
+      - name: Restore exact MiniAS MiniAR MiniObjcopy Linux Image without rebuilding
+        if: env.MINIOBJCOPY_TRIPLE_REPLAY_MODE == 'true'
+        uses: actions/download-artifact@v4
+        with:
+          name: minias-linux-gcc-single-cert
+          path: build/miniobjcopy-linux-tool-work
+          repository: ${{ github.repository }}
+          run-id: '38184298699'
+          github-token: ${{ github.token }}
+
+      - name: Attest three-native-tool Image and bounded object replay
+        if: env.MINIOBJCOPY_TRIPLE_REPLAY_MODE == 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/miniobjcopy-linux-tool-work"
+          img="$work/out/arch/riscv/boot/Image"
+          test -s "$img"
+          printf '%s  %s\n' \
+            6b8ec7591c1e8270b4e1bdb301fccbec0352447c9c895df7e07156eed6a674d1 \
+            "$img" | sha256sum -c -
+          test "$(wc -l < "$work/native-integration/miniar.trace")" -eq 633
+          test "$(wc -l < "$work/native-integration/miniobjcopy.trace")" -eq 44
+          test "$(grep -c '^pass ' "$work/minias-as.trace")" -ge 2197
+          test -s "$work/native-integration/kbuild.log"
+          grep -q 'Linux version 6.6.143' "$work/qemu-p0/rdinit-init.log"
+          grep -q 'USER_SHELL_OK' "$work/qemu-p0/rdinit-init.log"
+          echo "MINIAS_MINIAR_MINIOBJCOPY_IMAGE_REPLAY=PASS source_run=38184298699 ar=633 objcopy=44 extra_native_as=88 kernel=6.6.143"
+
       - name: Boot only-MiniObjcopy Linux via existing QEMU runtime oracle
-        if: env.MINIOBJCOPY_SINGLE_MODE == 'true' || env.MINIOBJCOPY_REPLAY_MODE == 'true'
+        if: env.MINIOBJCOPY_SINGLE_MODE == 'true' || env.MINIOBJCOPY_REPLAY_MODE == 'true' || env.MINIOBJCOPY_TRIPLE_REPLAY_MODE == 'true'
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -311,7 +342,7 @@ jobs:
           OUTPUT_INITRAMFS="$work/runtime-initramfs.cpio.gz" \
           RISCV_CC=riscv64-linux-gnu-gcc \
             bash tests/external/linux/build_runtime_initramfs.sh
-          if [[ "$MINIOBJCOPY_REPLAY_MODE" == true ]]; then
+          if [[ "$MINIOBJCOPY_REPLAY_MODE" == true || "$MINIOBJCOPY_TRIPLE_REPLAY_MODE" == true ]]; then
             LINUX_IMAGE="$work/out/arch/riscv/boot/Image" \
             INITRAMFS="$work/runtime-initramfs.cpio.gz" \
             BUILD_DIR="$work/qemu-runtime" \
@@ -329,7 +360,11 @@ jobs:
               bash tests/external/linux/runtime_boot.sh
             python3 tests/external/linux/runtime_v2_log_check.py \
               --profile p1 --log "$work/qemu-p1/rdinit-init.log"
-            echo "MINILD_FINAL_MINIOBJCOPY_LINUX_RUNTIME=PASS p0=2/2 p1=12/12 origin=38160503540"
+            if [[ "$MINIOBJCOPY_TRIPLE_REPLAY_MODE" == true ]]; then
+              echo "MINIAS_MINIAR_MINIOBJCOPY_LINUX_RUNTIME=PASS p0=2/2 p1=12/12 source_run=38184298699"
+            else
+              echo "MINILD_FINAL_MINIOBJCOPY_LINUX_RUNTIME=PASS p0=2/2 p1=12/12 origin=38160503540"
+            fi
           else
             LINUX_IMAGE="$work/out/arch/riscv/boot/Image" \
             INITRAMFS="$work/runtime-initramfs.cpio.gz" \
@@ -353,6 +388,8 @@ jobs:
             build/miniobjcopy-linux-tool-work/kbuild.log
             build/miniobjcopy-linux-tool-work/qemu-runtime/*.log
             build/miniobjcopy-linux-tool-work/qemu-p1/*.log
+            build/miniobjcopy-linux-tool-work/native-integration/*.trace
+            build/miniobjcopy-linux-tool-work/native-integration/kbuild.log
             build/miniobjcopy-linux-tool-work/out/arch/riscv/kernel/vdso/vdso.so
             build/miniobjcopy-linux-tool-work/out/arch/riscv/kernel/vdso/vdso.so.dbg
             build/miniobjcopy-linux-tool-work/out/arch/riscv/boot/Image
