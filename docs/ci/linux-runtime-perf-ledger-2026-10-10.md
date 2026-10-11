@@ -142,3 +142,28 @@ Source `setup_earlycon()` has `if (empty_compatible) { empty_compatible = false;
 **Important counter-evidence:** deliberately reduced two-pass `_Bool`/goto test and a more realistic 152-byte table/continue/strcmp-style probe **both pass** with the same MiniC profile and real QEMU-RV64 execution, as shown by [Actions #38045275922](https://github.com/yituanxing/minic-toolchain/actions/runs/38045275922) and [Actions #38045489140](https://github.com/yituanxing/minic-toolchain/actions/runs/38045489140). Therefore the defect is **not** a general failure of `if(bool)` or backedges; some additional exact preprocessed statement shape, reachability/cold function attribute, or optimization path is necessary to reproduce. These two tests remain regression guards but are not a failing minimal reproducer.
 
 The prior source-only snapshot uploaded the exact bytes after a full QEMU run because the workflow's capture-only tag was accidentally attached to the other `gcc-single` job rather than the `gcc-shard-verify` receiver; the receiver always ran the regular complete experiment. Fix the tag placement in the existing canonical YAML, not by introducing a new workflow or untrusted cache. The tag should make the **next** receiver execute only exact provenance+capture, returning diagnostic PASS while explicitly not certifying boot.
+
+
+## Cross-module idle-time audit — 2026-10-11 (pre-certificate findings)
+
+This is a source-level review performed while the one-object QEMU comparison is running. It is **not** a matched runtime or performance benchmark.
+
+### Correctness promotion barrier: profile mismatch
+
+- Canonical Runtime branch `tools/ci/linux-runtime-build-minic-profile-v1.sh` currently applies **43** named transforms. Runtime branch's opt-in Performance builder applies **55**. The actual Performance branch has a 55-patch `linux-runtime-build-minic-profile-v1.sh`.
+- All three relevant 55-patch variants reviewed are missing these Runtime-only **correctness** barriers: `apply-loop-mutated-specialization-fact-barrier-v0.py`, `apply-local-asm-if-fact-barrier-v0.py`, `apply-core-if-condition-dominance-barrier-v0.py`. The Runtime-only `apply-netlink-if-control-trace-v0.py` is primarily diagnostic, not itself a semantic fix.
+- The Performance branch does not have the three patch scripts as files, and its checked-in `src/core/core_lower.c` does not contain the resulting `DOMINANCE_IF_GUARD_FACT_BARRIER` or `core_local_constants_clear_known` guard insertion. This is a **proven profile feature/repair parity gap**, not proof of an independently demonstrated Performance kernel runtime regression.
+- **Do not promote the Performance candidate to canonical Runtime** until all Runtime semantic repairs are incorporated with order/anchor verification, focused regressions, and an authenticated same-config Linux owner replay. Treat optimization-only passes separately from semantic gates.
+
+### Compiler throughput and generated-code hot paths
+
+- `src/frontend/parser_core.c:minic_parser_find_function` scans `program->function_count` linearly for each query. The opt-in Performance profile offers a function-name hash index, global/enum name indexes, and a typedef index. A large-TU matched A/B must prove actual lookup savings, correctness for lexical scope/shadowing, and graceful fallback.
+- `src/core/core_lower.c` operates over TU-wide statement IDs. The opt-in Performance workspace patch replaces repeated whole-statement map setup with a reusable touched-ID map. This is a plausible source of superlinear work on multi-function input; do not claim a benchmark speedup without measured per-phase timings.
+- `src/target/riscv64/core_codegen.c` conservatively assigns frame storage to Core values, and emitted blocks load/store intermediate Core values around most operations. Runtime already includes value-slot and object-slot reuse patches, but observed `do_raw_spin_unlock` MiniC disassembly still performs many redundant memory transfers/calls. P14 address-use indexing and P15 one-pass object-interval analysis are **only opt-in Performance** optimizations. These address compiler analysis cost; they do not alone eliminate emitted spill code.
+- Existing same-config Image metrics (`215,502,848` MiniC vs `22,033,920` GCC bytes) establish actual code/data amplification. Disaggregate `Core IR instructions / emitted RV64 instructions / per-symbol text / frame bytes` before deciding whether inline specialization, helper calls, or spill/move elimination provides the largest benefit.
+
+### Run-time diagnostic integrity
+
+- Original QMP collector read `info registers` and the guest stack in separate HMP calls while the guest continued running; those two values could represent different instants. An opt-in `stop → query-status(paused) → registers + stack → cont` mode was added on Runtime branch; it must first pass the existing focused QEMU A/B to validate availability and low perturbation. An HMP stack preview is **not** a verified unwind.
+- Repeated `do_raw_spin_unlock+0x30` snapshots with varying `a1` suggest a recurrent hot site, not proof of a stuck instruction. Always symbolize against the corresponding trial's `vmlinux`; never map a linked PC offset to an unrelaxed ET_REL disassembly as if the offsets were invariant.
+- Full Linux P1 init remains **NOT_CERTIFIED**; do not conflate diagnostics, qemu process success, or link PASS with `/init` handoff.
