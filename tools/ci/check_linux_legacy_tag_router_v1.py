@@ -156,12 +156,13 @@ def main():
             raise AssertionError(f"router job has unreviewed conditions or arguments: {job_id}")
     # A single additional caller feeds exact selected inputs to the
     # formerly manual-only 10-job MiniAS owner. No extra route runner.
-    mini_tags = ("[minias-real16]", "[minias-frontier]", "[minias-vector33]",
+    mini_tags = ("[minias-linux-single]", "[minias-real16]", "[minias-frontier]", "[minias-vector33]",
                  "[minias-semantic3536]", "[minias-first500]", "[minias-new500]",
                  "[minias-next500]", "[minias-next500b]", "[minias-next500c]",
                  "[minias-next500d]", "[minias-final352]")
     has = lambda tag: "contains(github.event.head_commit.message, '" + tag + "')"
-    mode_priority = (("[minias-semantic3536]", "semantic"),
+    mode_priority = (("[minias-linux-single]", "linux-single"),
+                     ("[minias-semantic3536]", "semantic"),
                      ("[minias-frontier]", "frontier"),
                      ("[minias-vector33]", "vector33"),
                      ("[minias-real16]", "real16"))
@@ -198,23 +199,27 @@ def main():
         "        default: first500\n  workflow_dispatch:\n"
     )
     assert source.count(call_header) == 1, "MiniAS shared mode input contract lost"
-    original = source.replace(call_header, "on:\n  workflow_dispatch:\n", 1)
+    if source.count("\n\n  linux-single:\n") != 1 or source.count("          - linux-single\n") != 1:
+        raise AssertionError("MiniAS Linux mode insertion has unexpected shape")
+    original = source.split("\n\n  linux-single:\n", 1)[0] + "\n"
+    original = original.replace("          - linux-single\n", "", 1)
+    original = original.replace(call_header, "on:\n  workflow_dispatch:\n", 1)
     original = original.replace(
         "(github.event_name == 'workflow_dispatch' || github.event_name == 'push') && inputs.mode",
         "github.event_name == 'workflow_dispatch' && inputs.mode",
     )
     if git_blob(original.encode()) != "10a4fed7bd5cb1e111d773efc9edba9533e4c9fb":
         raise AssertionError("MiniAS original full source, frozen inputs, or job bodies altered")
-    # All 11 single-tag routes resolve to exactly one mode/window; document
+    # All 12 single-tag routes resolve to exactly one mode/window; document
     # priority when several deliberate tags share the same commit message.
     for tag in mini_tags:
         chosen_mode = next((value for label, value in mode_priority if label == tag), "window")
         chosen_window = next((value for label, value in window_priority if label == tag), "first500")
-        assert chosen_mode in ("semantic", "frontier", "vector33", "real16", "window")
+        assert chosen_mode in ("linux-single", "semantic", "frontier", "vector33", "real16", "window")
         assert chosen_window in ("final352", "next500d", "next500c", "next500b",
                                  "next500", "new500", "first500")
-    print("M0_MINIAS_TAG_ROUTER=PASS reusable_calls=1 modes=5 window_choices=7 "
-          "unique_labels=11 original_full_blob=1 executable_jobs=10 "
+    print("M0_MINIAS_TAG_ROUTER=PASS reusable_calls=1 modes=6 window_choices=7 "
+          "unique_labels=12 original_full_blob=1 executable_jobs=11 "
           "real_tagged_execution_not_claimed=1")
 
     all_tags = tuple(tag for spec in OWNERS.values() for tag in spec[2])
