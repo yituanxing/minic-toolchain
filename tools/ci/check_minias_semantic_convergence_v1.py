@@ -107,14 +107,14 @@ def main():
             raise AssertionError(f"integrated native relink contract lost: {token}")
     linux_body = linux_body.split(approved_integrated, 1)[0] + diag_begin + linux_body.split(diag_begin, 1)[1]
     integrated_header = (
-        "  linux-single:\n"
+        "linux-single:\n"
         "    env:\n"
         "      MINIAS_INTEGRATED_MODE: ${{ inputs.mode == 'linux-integrated' }}\n"
         "    if: (github.event_name == 'workflow_dispatch' || github.event_name == 'push') "
         "&& (inputs.mode == 'linux-single' || inputs.mode == 'linux-integrated')"
     )
     original_header = (
-        "  linux-single:\n"
+        "linux-single:\n"
         "    if: (github.event_name == 'workflow_dispatch' || github.event_name == 'push') "
         "&& inputs.mode == 'linux-single'"
     )
