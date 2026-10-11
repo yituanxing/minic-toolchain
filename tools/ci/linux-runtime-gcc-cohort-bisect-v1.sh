@@ -537,6 +537,73 @@ PY_PAIR_INTEGRITY
     cp -a --reflink=auto "$gold_snapshot" "$out"
     echo "MINIC_SUPER_REPAIR=READY old_sha=$old_super_sha new_sha=$new_super_sha changed=$([[ "$old_super_sha" != "$new_super_sha" ]] && echo true || echo false) exact_golden_restored=true"
   fi
+  if [[ "${COHORT_PATCH_NET_PAIR:-0}" == 1 ]]; then
+    [[ "${COHORT_PATCH_SUPER_V1:-0}" == 1 ]] || {
+      echo "MINIC_NET_REPAIR=ERROR requires_current_minic_super"; exit 8;
+    }
+    net_dir="$hotfix/network-repaired"
+    mkdir -p "$net_dir"
+    printf '%s\n' net/ipv4/tcp_cong.o net/netlink/genetlink.o >"$net_dir/selected.txt"
+    mapfile -t net_targets <"$net_dir/selected.txt"
+    printf 'owner\told_sha256\tnew_sha256\tcompiler_sha256\n' >"$net_dir/provenance.tsv"
+    echo "MINIC_NET_REPAIR=START owners=2 minic_cc=$cc_sha gcc_swaps=0"
+    python3 "$repo/tools/ci/linux-runtime-kbuild-regeneration-guard-v1.py" \
+      --mode replay --out "$out" --golden-out "$gold_snapshot" \
+      --evidence "$net_dir/replay.log" --selected "$net_dir/selected.txt" \
+      --wrapper "$repo/tests/external/linux/stage2_kbuild_cc.sh" \
+      --minic "$minic" --success-trace "$net_dir/success.txt" \
+      --digest-trace "$net_dir/digests.txt" | tee "$net_dir/replay.log"
+    python3 "$repo/tools/ci/linux-runtime-minic-route-audit-v1.py" \
+      --objects-file "$net_dir/selected.txt" \
+      --success-trace "$net_dir/success.txt" \
+      --object-digest-trace "$net_dir/digests.txt" \
+      --candidates "$out" | tee "$net_dir/route-audit.log"
+    python3 - "$ev/gcc" "$ev/minic" "$out" "$net_dir/selected.txt" <<'PY_NET_ABI'
+from pathlib import Path
+import struct,sys
+gold,old,new,sel=map(Path,sys.argv[1:])
+for obj in sel.read_text().splitlines():
+    headers=[(base/obj).read_bytes()[:52] for base in (gold,old,new)]
+    for h in headers:
+        assert len(h)==52 and h[:6]==b"\x7fELF\x02\x01", obj
+        assert struct.unpack_from("<H",h,16)[0]==1, obj
+        assert struct.unpack_from("<H",h,18)[0]==243, obj
+    assert len({h[48:52] for h in headers})==1, obj
+    print(f"MINIC_NET_REPAIR_ABI=PASS owner={obj}")
+PY_NET_ABI
+    for net_target in "${net_targets[@]}"; do
+      old_net_sha=$(sha256sum "$ev/minic/$net_target" | cut -d' ' -f1)
+      new_net_sha=$(sha256sum "$out/$net_target" | cut -d' ' -f1)
+      cp -a "$out/$net_target" "$ev/minic/$net_target"
+      printf '%s\t%s\t%s\t%s\n' "$net_target" "$old_net_sha" "$new_net_sha" "$cc_sha" >>"$net_dir/provenance.tsv"
+      echo "MINIC_NET_REPAIR_OBJECT target=$net_target old=$old_net_sha new=$new_net_sha changed=$([[ "$old_net_sha" != "$new_net_sha" ]] && echo true || echo false)"
+    done
+    python3 - "$ev/minic-manifest.sha256" "$ev" "$net_dir/provenance.tsv" "$target" "$new_sha" "$super_target" "$new_super_sha" <<'PY_FOUR_INTEGRITY'
+import hashlib,sys
+from pathlib import Path
+manifest,root,changes=map(Path,sys.argv[1:4])
+expected={"minic/"+sys.argv[4]:sys.argv[5],"minic/"+sys.argv[6]:sys.argv[7]}
+for line in changes.read_text().splitlines()[1:]:
+    path,old,new,cc=line.split("\t")
+    assert path and new and cc
+    expected["minic/"+path]=new
+assert len(expected)==4, f"Expected 4 freshly compiled MiniC objects: {expected}"
+untouched=0
+for line in manifest.read_text().splitlines():
+    digest,relative=line.split(None,1)
+    observed=hashlib.sha256((root/relative).read_bytes()).hexdigest()
+    if relative in expected:
+        assert observed==expected[relative], "new MiniC owner digest mismatch: "+relative
+    else:
+        assert observed==digest, "old MiniC owner changed unexpectedly: "+relative
+        untouched+=1
+assert untouched==2060, f"Expected 2060 frozen neighbors; found {untouched}"
+print(f"MINIC_FOUR_OWNER_INTEGRITY=PASS new_minic_owners=4 frozen_neighbors={untouched}")
+PY_FOUR_INTEGRITY
+    rm -rf -- "$out"
+    cp -a --reflink=auto "$gold_snapshot" "$out"
+    echo "MINIC_NET_REPAIR=READY four_current_minic_objects=true gcc_swap_count=0 golden_restored=true"
+  fi
 fi
 # Build the initramfs just once; it stays fixed throughout all QEMU trials.
 BUILD_DIR="$ev/initramfs" OUTPUT_INITRAMFS="$ev/runtime-initramfs.cpio.gz" \
@@ -1134,7 +1201,11 @@ if [[ "${COHORT_EARLYCON_HOTFIX:-0}" == 1 ]]; then
      grep -E 'COHORT_QMP_SYMBOL at_s=(4|8) reg=pc .* symbol=' "$diag" | \
        grep -Ev 'symbol=(setup_earlycon|BELOW_LINKED_TEXT)' >/dev/null; then
     if [[ "${COHORT_PATCH_SUPER_V1:-0}" == 1 ]]; then
+      if [[ "${COHORT_PATCH_NET_PAIR:-0}" == 1 ]]; then
+        echo "MINIC_REPAIRED_FOUR_FRONTIER=ADVANCED earlycon_super_tcp_cong_genetlink_current_minic=true frozen_neighbors=2060 boot_certificate=NOT_CERTIFIED"
+      else
       echo "MINIC_REPAIRED_PAIR_FRONTIER=ADVANCED earlycon_and_super_current_minic=true frozen_neighbors=2062 boot_certificate=NOT_CERTIFIED"
+      fi
     else
     echo "EARLYCON_HOTFIX_RESULT=FRONTIER_ADVANCED after_earlycon=true p1=NOT_CERTIFIED before_link_2063_frozen=true regenerated_header_dependents=4"
     fi
