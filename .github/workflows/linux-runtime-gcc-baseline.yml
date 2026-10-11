@@ -793,6 +793,28 @@ jobs:
           riscv64-linux-gnu-objdump -dr --disassemble=nf_hook_entries_grow "$gcc" >"$d/gcc.nf_hook_entries_grow.disasm"
           riscv64-linux-gnu-objdump -dr --disassemble=nf_hook_entries_grow "$minic" >"$d/minic.nf_hook_entries_grow.disasm"
           riscv64-linux-gnu-nm --defined-only "$minic" >"$d/minic.symbols"
+          # Recover the next fault's exact mm/gup.c owner without linking a
+          # kernel; test whether generic MiniC corrections alter its code.
+          work="$GITHUB_WORKSPACE/build/linux-runtime-gcc"
+          gup_gcc="$work/out/mm/gup.o"
+          gup_old="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-v1/minic/mm/gup.o"
+          test -s "$gup_gcc" && test -s "$gup_old"
+          sha256sum "$gup_old" >"$d/gup.old-object.sha256"
+          riscv64-linux-gnu-objdump -dr --disassemble=__minic_inline_spec_9309_155 \
+            "$gup_old" >"$d/gup.old-fault-inline.disasm"
+          make -C "$work/linux-6.6.143" O="$work/out" ARCH=riscv \
+            CROSS_COMPILE=riscv64-linux-gnu- mm/gup.i >"$d/gup.preprocess.log" 2>&1
+          cp "$work/out/mm/gup.i" "$d/gup.exact.i"
+          bash tools/ci/linux-runtime-build-minic-profile-v1.sh \
+            "$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain" "$d/gup-compiler"
+          "$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain/bin/minic" \
+            -S "$d/gup.exact.i" -o "$d/gup.current-minic.s" \
+            >"$d/gup.current.stdout" 2>"$d/gup.current.stderr"
+          riscv64-linux-gnu-gcc -c "$d/gup.current-minic.s" -o "$d/gup.current-minic.o"
+          riscv64-linux-gnu-objdump -dr --disassemble=__minic_inline_spec_9309_155 \
+            "$d/gup.current-minic.o" >"$d/gup.current-fault-inline.disasm"
+          sha256sum "$d/gup.current-minic.o" >"$d/gup.current-object.sha256"
+          echo "GUP_EXACT_CAPTURE=PASS old=$(sha256sum "$gup_old" | cut -d' ' -f1) current=$(sha256sum "$d/gup.current-minic.o" | cut -d' ' -f1)"
           echo "NETFILTER_EXACT_OWNER_CAPTURE=PASS"
       - uses: actions/upload-artifact@v4
         if: contains(github.event.head_commit.message, '[linux-runtime-core-capture]')
