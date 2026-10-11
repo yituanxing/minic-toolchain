@@ -1521,9 +1521,10 @@ if [[ "${COHORT_EARLYCON_HOTFIX:-0}" == 1 ]]; then
       python3 - "$ev/minic" "$objects_file" "$owner_dir" <<'PY_FAULT_OWNER'
 from collections import defaultdict
 from pathlib import Path
-import subprocess,sys
+import os,subprocess,sys
 pool,manifest,ev=map(Path,sys.argv[1:])
-markers=("__minic_inline_spec_6515_19","__get_unaligned_cpu32")
+markers=(os.environ.get("COHORT_FAULT_OWNER_SYMBOL","__minic_inline_spec_6515_19"),
+         os.environ.get("COHORT_FAULT_OWNER_COMPANION","__get_unaligned_cpu32"))
 names=[x.strip() for x in manifest.read_text().splitlines() if x.strip() and not x.startswith("#")]
 result=defaultdict(set)
 for start in range(0,len(names),64):
@@ -1566,8 +1567,17 @@ PY_FAULT_OWNER
         if [[ -s "$ev/fault-owner/candidate.txt" ]]; then
           candidate=$(cat "$ev/fault-owner/candidate.txt")
           swap_targets+=("$candidate")
+        elif [[ "${COHORT_FAULT_OWNER_FALLBACK:-}" != "" ]]; then
+          echo "FAULT_OWNER=FALLBACK target=$COHORT_FAULT_OWNER_FALLBACK exact_owner_unresolved=true"
+          swap_targets+=("$COHORT_FAULT_OWNER_FALLBACK")
         fi
-        swap_targets+=(net/netlink/genetlink.o)
+        if [[ "${COHORT_FAULT_OWNER_EXTRA_NETLINK:-1}" == 1 ]]; then
+          swap_targets+=(net/netlink/genetlink.o)
+        fi
+        if (("${#swap_targets[@]}"==0)); then
+          echo "NEXT_OWNER_SWAP=INCONCLUSIVE reason=no_unique_fault_owner_or_fallback"
+          exit 8
+        fi
       else
         swap_targets+=("${COHORT_NEXT_GCC_TARGET:-fs/super.o}")
       fi
@@ -1583,7 +1593,8 @@ PY_FAULT_OWNER
           exit 8
         fi
         swap_name="gcc_only_$(printf '%s' "$swap_target" | tr '/.' '__')"
-        if [[ -n "${COHORT_NEXT_GCC_TARGET:-}" ]]; then
+        if [[ -n "${COHORT_NEXT_GCC_TARGET:-}" &&
+              "$swap_target" == "$COHORT_NEXT_GCC_TARGET" ]]; then
           expected_symbol="${COHORT_NEXT_GCC_EXPECT_SYMBOL:-do_raw_spin_unlock}"
           riscv64-linux-gnu-nm --defined-only "$ev/minic/$swap_target" | awk -v symbol="$expected_symbol" '$NF == symbol {seen=1} END {exit !seen}' || {
             echo "NEXT_OWNER_SWAP=INCONCLUSIVE target=$swap_target reason=not_symbol_owner symbol=$expected_symbol"
