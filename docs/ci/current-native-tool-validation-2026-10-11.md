@@ -225,3 +225,28 @@ is also **SUCCESS**.
 Now rerun the **same** real Linux single-MiniObjcopy Kbuild + fast-QEMU
 gate on the corrected product. Do not classify as full historical 145/203
 runtime until that complete oracle has independently been executed.
+
+## Second MiniObjcopy-only Linux frontier — .modinfo extraction
+
+[#38154031817](https://github.com/yituanxing/minic-toolchain/actions/runs/38154031817)
+completed **FAIL** after all RISC-V PI and EFI-stub relocatable
+`--prefix-symbols`/`--prefix-alloc-sections` processing succeeded.
+The exact next operation, with MiniLD trace **empty**, was:
+`miniobjcopy -j .modinfo -O binary vmlinux.o modules.builtin.modinfo`.
+The missing `-j` option, **not** MiniLD or MiniC, blocked the GNU-only
+Image producer.
+
+MiniObjcopy now accepts `-j SECTION`/`--only-section=SECTION` for flat
+binary output, selecting only the named loadable ELF sections. The
+first test confirmed an important real GNU compatibility subtlety:
+`-j .modinfo -O binary` from an ET_REL object with *non-ALLOC* `.modinfo`
+produces an **empty** file in GNU objcopy, despite non-empty ELF section
+contents. The implementation now preserves the `SHF_ALLOC` requirement
+even for explicitly selected sections, and emits the valid empty binary
+when none is eligible. A second regression verifies non-empty `SHF_ALLOC`
+metadata against GNU objcopy byte-for-byte.
+
+[MiniObjcopy A0/A1 regression #38155181414](https://github.com/yituanxing/minic-toolchain/actions/runs/38155181414):
+**SUCCESS**, including the new allocated/nonallocated `.modinfo`
+differential cases. The third real GNU-only Linux build is the next test;
+its separate Image/QEMU outcome must not be predeclared as PASS.
