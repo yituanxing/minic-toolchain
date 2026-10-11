@@ -51,6 +51,7 @@ patches=(
   apply-riscv64-structured-asm-used-callee-save-v0.py
   apply-riscv64-pi-local-symbol-address-v0.py
   apply-loop-mutated-specialization-fact-barrier-v0.py
+  apply-local-asm-if-fact-barrier-v0.py
 )
 
 start=$(date +%s%N)
