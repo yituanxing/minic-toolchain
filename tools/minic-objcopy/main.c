@@ -19,6 +19,9 @@ typedef struct ObjcopyOptions {
     bool binary_output;
     const char *prefix_symbols;
     const char *prefix_alloc_sections;
+    const char **only_sections;
+    size_t only_count;
+    size_t only_capacity;
 } ObjcopyOptions;
 
 static void usage(FILE *stream, const char *program) {
@@ -26,6 +29,7 @@ static void usage(FILE *stream, const char *program) {
             "usage: %s [options] INPUT OUTPUT\n"
             "  -O binary                 write a flat binary image\n"
             "  -R SECTION                remove SECTION\n"
+            "  -j SECTION                extract only SECTION (-O binary)\n"
             "  -S, --strip-all           strip the static symbol/debug tables\n"
             "      --strip-debug         remove debug sections\n"
             "  -G SYMBOL                 keep SYMBOL global, localize other definitions\n"
@@ -64,6 +68,24 @@ static bool append_remove(ObjcopyOptions *options, const char *name) {
                          &options->remove_count,
                          &options->remove_capacity,
                          name);
+}
+
+static bool append_only(ObjcopyOptions *options, const char *name) {
+    return append_string(&options->only_sections,
+                         &options->only_count,
+                         &options->only_capacity,
+                         name);
+}
+
+static bool is_only_section(const ObjcopyOptions *options,
+                            const char *name) {
+    size_t i;
+    for (i = 0U; i < options->only_count; ++i) {
+        if (strcmp(options->only_sections[i], name) == 0) {
+            return true;
+        }
+    }
+    return false;
 }
 
 static bool append_keep_global(ObjcopyOptions *options,
@@ -244,10 +266,13 @@ static int convert_binary(const ObjcopyOptions *options,
                     input_path);
             goto done;
         }
-        if ((section.flags & SHF_ALLOC) == 0U ||
-            section.type == SHT_NOBITS ||
+        if (section.type == SHT_NOBITS ||
             section.size == 0U ||
-            is_removed(options, name)) {
+            is_removed(options, name) ||
+            (options->only_count != 0U &&
+             !is_only_section(options, name)) ||
+            (options->only_count == 0U &&
+             (section.flags & SHF_ALLOC) == 0U)) {
             continue;
         }
         include_sections[i] = true;
@@ -403,6 +428,26 @@ int main(int argc, char **argv) {
             options.binary_output = true;
             continue;
         }
+        if (strcmp(argument, "-j") == 0 ||
+            strcmp(argument, "--only-section") == 0) {
+            if (++i >= argc || !append_only(&options, argv[i])) {
+                fprintf(stderr,
+                        "minic-objcopy: invalid only-section option\n");
+                result = 2;
+                goto done;
+            }
+            continue;
+        }
+        if (strncmp(argument, "--only-section=", 15U) == 0) {
+            if (argument[15U] == '\0' ||
+                !append_only(&options, argument + 15U)) {
+                fprintf(stderr,
+                        "minic-objcopy: invalid only-section option\n");
+                result = 2;
+                goto done;
+            }
+            continue;
+        }
         if (strcmp(argument, "-R") == 0 ||
             strcmp(argument, "--remove-section") == 0) {
             const char *value;
@@ -491,6 +536,11 @@ int main(int argc, char **argv) {
         goto done;
     }
 
+    if (options.only_count != 0U && !options.binary_output) {
+        fprintf(stderr, "minic-objcopy: -j currently requires -O binary\n");
+        result = 2;
+        goto done;
+    }
     if (options.binary_output &&
         (options.prefix_symbols != NULL ||
          options.prefix_alloc_sections != NULL)) {
@@ -504,6 +554,7 @@ int main(int argc, char **argv) {
 
 done:
     free(options.keep_globals);
+    free(options.only_sections);
     free(options.remove_sections);
     return result;
 }
