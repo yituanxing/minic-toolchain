@@ -505,3 +505,26 @@ The GNU baseline remains the reference for every stage, and only a real
 Image + QEMU oracle can promote a combination to runtime-certified.
 The current run requests this previously defined mixed owner
 `[miniobjcopy-linux-tool]`; no workflow or job is added.
+
+## Same-tree three-native-tool integration: explicit opt-in real acceptance
+
+The existing MiniAS focused owner now has `mode=linux-integrated`.
+After its fully certified MiniAS-only Image and QEMU P0/P1, the **same
+runner and same compiled native-MiniAS .o tree** switches only the Kbuild
+`AR` and `OBJCOPY` command identities to MiniAR/MiniObjcopy, retains
+GNU GCC+GNU LD, and re-archives/relinks. It forbids any further MiniAS
+production assembler invocations in that phase, requires >50 native AR
+calls and at least one native objcopy call, and executes the same full P0
+two-lane and P1 12-syscall guest oracles. First-difference build/QEMU
+logs and trace files are persisted with original Image SHA. The independent
+single-tool paths remain unchanged, and this adds **zero** workflows
+and **zero** jobs. The M0 invariant checker reconstructs the archived
+GNU-only MiniAS job and checks the dedicated integration script by pinned
+Git blob, rather than weakening or skipping the source audit.
+
+[Structural M0 #38160776213](https://github.com/yituanxing/minic-toolchain/actions/runs/38160776213)
+is **SUCCESS**. The next push triggers exactly one integrated mode
+`[minias-linux-integrated]`. If any native component fails together,
+report the first actual failing stage and do not call the combination
+runtime-certified. MiniPP and MiniLD are still separately staged; neither
+is silently claimed as part of this three-native-tool run.
