@@ -854,8 +854,7 @@ jobs:
             "$work/provenance" "$ev/full-objects.txt" "$ev"
 
       - name: Preserve single-object experiment evidence
-        if: "!contains(github.event.head_commit.message, '[linux-runtime-core-capture]')"
-        if: always()
+        if: "always() && !contains(github.event.head_commit.message, '[linux-runtime-core-capture]')"
         uses: actions/upload-artifact@v4
         with:
           name: linux-runtime-earlycon-one-object-${{ github.sha }}
