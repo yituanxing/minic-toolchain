@@ -540,7 +540,7 @@ static bool append_prefixed_string(unsigned char **buffer,
     memcpy(*buffer + *used, part1, first);
     memcpy(*buffer + *used + first, part2, second);
     memcpy(*buffer + *used + first + second, part3, third);
-    (*buffer)[*used + needed - 1U] = '\\0';
+    (*buffer)[*used + needed - 1U] = '\0';
     *used += needed;
     return true;
 }
@@ -670,7 +670,7 @@ static bool prefix_symbol_names(const MiniElfView *view,
             free(symdata);
             return false;
         }
-        if (sym.name == 0U || name[0] == '\\0') {
+        if (sym.name == 0U || name[0] == '\0') {
             continue;
         }
         if (!append_prefixed_string(&strtab, &used, &capacity,
