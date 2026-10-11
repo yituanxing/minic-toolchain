@@ -821,7 +821,7 @@ jobs:
           work="$GITHUB_WORKSPACE/build/linux-runtime-gcc"
           ev="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-v1"
           chmod +x tests/external/linux/qemu_explicit_initrd_wrapper.py
-          export COHORT_ACTION=verify COHORT_EARLYCON_HOTFIX=1 COHORT_PATCH_SUPER_V1=1 COHORT_PATCH_NET_PAIR=1 COHORT_NETWORK_CAPTURE_ONLY=0 COHORT_FAULT_OWNER_MAP=0 COHORT_FAULT_OWNER_SYMBOL=__minic_inline_spec_999_101 COHORT_FAULT_OWNER_COMPANION=__minic_inline_spec_5619_149 COHORT_FAULT_OWNER_EXTRA_NETLINK=0 COHORT_FAULT_OWNER_FALLBACK=net/ipv6/af_inet6.o COHORT_EARLYCON_EXPLICIT_INITRD=1 COHORT_NEXT_FAULT_DIAG=0 COHORT_UART_EARLYCON=1 COHORT_NEXT_GCC_SWAPS=0 COHORT_NEXT_GCC_TARGET=net/ipv6/af_inet6.o COHORT_NEXT_GCC_EXPECT_SYMBOL=inet6_bind COHORT_QMP_STOP_SNAPSHOT=1 COHORT_SPINLOCK_CAPTURE_ONLY=0 COHORT_REPAIR_RUNTIME_OWNER=1 COHORT_REPAIR_INET_CSK_OWNER=1 COHORT_NEXT_GCC_EXPLICIT_INITRD=0 COHORT_GDB_SWAP=0 COHORT_GDB_BOUNDARY=0 LINUX_RUNTIME_EARLYCON_ARG=earlycon=uart8250,mmio,0x10000000,115200n8
+          export COHORT_ACTION=verify COHORT_EARLYCON_HOTFIX=1 COHORT_PATCH_SUPER_V1=1 COHORT_PATCH_NET_PAIR=1 COHORT_NETWORK_CAPTURE_ONLY=0 COHORT_FAULT_OWNER_MAP=1 COHORT_FAULT_OWNER_SYMBOL=__minic_inline_spec_999_114 COHORT_FAULT_OWNER_COMPANION=__minic_inline_spec_10760_128 COHORT_FAULT_OWNER_EXTRA_NETLINK=0 COHORT_FAULT_OWNER_FALLBACK=net/ipv4/af_inet.o COHORT_EARLYCON_EXPLICIT_INITRD=1 COHORT_NEXT_FAULT_DIAG=0 COHORT_UART_EARLYCON=1 COHORT_NEXT_GCC_SWAPS=1 COHORT_NEXT_GCC_TARGET=net/ipv4/af_inet.o COHORT_NEXT_GCC_EXPECT_SYMBOL=inet_listen COHORT_QMP_STOP_SNAPSHOT=1 COHORT_SPINLOCK_CAPTURE_ONLY=0 COHORT_REPAIR_RUNTIME_OWNER=1 COHORT_REPAIR_INET_CSK_OWNER=1 COHORT_NEXT_GCC_EXPLICIT_INITRD=1 COHORT_GDB_SWAP=0 COHORT_GDB_BOUNDARY=0 LINUX_RUNTIME_EARLYCON_ARG=earlycon=uart8250,mmio,0x10000000,115200n8
           bash tools/ci/linux-runtime-gcc-cohort-bisect-v1.sh \
             "$work/linux-6.6.143" "$work/out" \
             "$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain/bin/minic" \
@@ -852,6 +852,8 @@ jobs:
             build/linux-runtime-gcc-cohort-v1/trials/gcc_only_*/uart-qmp/stack-symbols.txt
             build/linux-runtime-gcc-cohort-v1/trials/gcc_only_*/guard.log
             build/linux-runtime-gcc-cohort-v1/trials/gcc_only_*/qmp-symbols.log
+            build/linux-runtime-gcc-cohort-v1/trials/gcc_only_*/runtime-explicit-*.log
+            build/linux-runtime-gcc-cohort-v1/trials/gcc_only_*/qemu-explicit-*/rdinit-init.log
             build/linux-runtime-gcc-cohort-v1/trials/gcc_only_fs_*/gdb-boundary/*
             build/linux-runtime-gcc-cohort-v1/trials/earlycon_fixed_only/runtime.log
             build/linux-runtime-gcc-cohort-v1/trials/earlycon_fixed_only/qemu-early-noinitrd.log
