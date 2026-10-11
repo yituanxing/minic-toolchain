@@ -8,8 +8,8 @@
 #define _GNU_SOURCE
 #include <errno.h>
 #include <fcntl.h>
-#include <linux/netfilter_ipv4/ip_tables.h>
 #include <netinet/in.h>
+#include <linux/netfilter_ipv4/ip_tables.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
