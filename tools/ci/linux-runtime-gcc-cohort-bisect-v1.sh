@@ -1445,8 +1445,13 @@ PY_FAULT_OWNER
         fi
         swap_name="gcc_only_$(printf '%s' "$swap_target" | tr '/.' '__')"
         if [[ -n "${COHORT_NEXT_GCC_TARGET:-}" ]]; then
-          if ! riscv64-linux-gnu-nm --defined-only "$ev/minic/$swap_target" |
-               grep -Eq '[[:space:]][tT][[:space:]]do_raw_spin_unlock
+          if ! riscv64-linux-gnu-nm --defined-only "$ev/minic/$swap_target" | grep -Fq " do_raw_spin_unlock"; then
+            echo "NEXT_OWNER_SWAP=INCONCLUSIVE target=$swap_target reason=not_symbol_owner"
+            exit 8
+          fi
+          echo "NEXT_OWNER_SYMBOL=CONFIRMED symbol=do_raw_spin_unlock owner=$swap_target"
+        fi
+        echo "NEXT_OWNER_SWAP=START target=$swap_target index=$swap_index fixed_earlycon=true"
         trial "$swap_name" "$swap_index" fast all_except
         test "$TRIAL_VERDICT" != LINK_FAIL
         d="$ev/trials/$swap_name"
