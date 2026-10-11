@@ -1386,7 +1386,8 @@ if [[ "${COHORT_EARLYCON_HOTFIX:-0}" == 1 ]]; then
       cmdline='console=ttyS0 earlycon=uart8250,mmio,0x10000000,115200n8 loglevel=8 ignore_loglevel panic=-1'
       uart_rc=0
       lock_probe_args=()
-      if [[ "${COHORT_PROBE_SPINLOCK_MEMORY:-0}" == 1 ]]; then
+      if [[ "${COHORT_QMP_STOP_SNAPSHOT:-0}" == 1 &&
+            "${COHORT_NEXT_GCC_TARGET:-}" == "kernel/locking/spinlock_debug.o" ]]; then
         # Resolve the PC against the linked MiniC vmlinux for this *trial*.
         # The saved lock argument lives in stack word 0 at offset +0x30.
         lock_symbol_hex=$(/usr/bin/riscv64-linux-gnu-nm -n --defined-only "$out/vmlinux" |
