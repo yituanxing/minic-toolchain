@@ -146,3 +146,46 @@ The next opt-in MiniAS 3536 run uses the corrected executable-section
 alignment and its existing 3352/C149/native35 aggregation. New/changed test
 owners: **zero**. Existing toolchain functionality, not self-hosting or
 new tool implementation, remains the only acceptance scope.
+
+## Updated final exact-oracle gates and MiniLD evidence correction
+
+- **MiniPP 3352/3352 exact**:
+  [run #38150944470](https://github.com/yituanxing/minic-toolchain/actions/runs/38150944470)
+  completed **SUCCESS**, six independent product shards (4×500 + 1×1000 + 352),
+  all report `MINIPP_EXACT_PRODUCT=PASS`; total=3352. Tested product SHA
+  `d9b9ee25cae7bda2fda7cace588e6424d16624e4`. This proves exact
+  GCC 13.3.0 preprocessing over the frozen Linux 3352 corpus, **not** an
+  end-to-end Linux Image produced by substituting only MiniPP.
+- **MiniAS corrected 3536**:
+  [run #38151040863](https://github.com/yituanxing/minic-toolchain/actions/runs/38151040863)
+  completed **SUCCESS** across seven 3352 shards + C149 + native35 +
+  hard aggregates. Tested commit
+  `eeb896b49ee0878350a3bbc36a6577d783dd7995`
+  includes the executable `.section` alignment repair and the independent
+  odd-length-rodata / function-section fixture.
+- **MiniLD two-boundary Linux proof**:
+  [run #38150659369](https://github.com/yituanxing/minic-toolchain/actions/runs/38150659369)
+  created a **real** `arch/riscv/boot/Image` after running both selected
+  relocatable link stages through MiniLD. Its artifact
+  `minild-boundaries.log` contains exactly:
+  `arch/riscv/purgatory/purgatory.ro` and bare `vmlinux.o`.
+  Nevertheless the run is **FAIL** due solely to a stale trace assertion
+  that still required a slash before `vmlinux.o`.
+  The original GNU fallback selector had already been fixed; now the
+  assertion is corrected to `(^|/)vmlinux[.]o$`, retaining the exact-two
+  requirement, without bypassing either link.
+  During this patch, an unsafe string-replacement expansion was caught by
+  M0 because it duplicated the third canonical job; the complete file
+  was immediately reconstructed byte-for-byte from the pinned pre-edit
+  workflow, with **only** the reviewed trace assertion changed. The two
+  source-equivalence checkers explicitly undo exactly two reviewed one-line
+  changes, and the canonical workflow inventory pins the final blob
+  `e84b6032871161e16a12ed2394c2a072a9f28038`.
+  The restored 648-line YAML contains exactly one copy of each three jobs;
+  [M0 #38151764689](https://github.com/yituanxing/minic-toolchain/actions/runs/38151764689)
+  completed **SUCCESS**. Genuine MiniLD two-stage final-link retest is
+  [#38151764635](https://github.com/yituanxing/minic-toolchain/actions/runs/38151764635),
+  still running at the time this paragraph was recorded.
+
+All historical fixed-profile Linux Python 145/203 certificates remain
+separate from the new-current-MiniC full 2064-object link failure.
