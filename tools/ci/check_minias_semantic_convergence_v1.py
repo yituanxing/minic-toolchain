@@ -88,6 +88,49 @@ def main():
         "            build/minias-linux-runtime/qemu-p1/*.log\n"
         "            build/minias-linux-runtime/out/arch/riscv/boot/Image", 1)
     linux_body = cur["linux-single"]
+    integrated_path = ROOT / "tests/external/linux/mini_tools_integrated_relink.sh"
+    if sha(integrated_path) != "8f4eb58bfa477d4d689b5d819d9dffdcc8afdcf3":
+        raise AssertionError("integrated GNU-link MiniAS+MiniAR+MiniObjcopy replay changed")
+    approved_integrated = (
+        "      - name: Reuse MiniAS Linux objects with MiniAR and MiniObjcopy and run QEMU P0 P1\n"
+    )
+    diag_begin = "      - name: Diagnose early-boot with cached GNU early objects and incremental relink\n"
+    if linux_body.count(approved_integrated) != 1:
+        raise AssertionError("integrated native-tool replay step missing")
+    integrated_step = linux_body.split(approved_integrated, 1)[1].split(diag_begin, 1)[0]
+    for token in (
+        "        if: success() && env.MINIAS_INTEGRATED_MODE == 'true'",
+        "tests/external/linux/mini_tools_integrated_relink.sh",
+        'MINI_TOOLS_WORK="$work"',
+    ):
+        if token not in integrated_step:
+            raise AssertionError(f"integrated native relink contract lost: {token}")
+    linux_body = linux_body.split(approved_integrated, 1)[0] + diag_begin + linux_body.split(diag_begin, 1)[1]
+    integrated_header = (
+        "  linux-single:\n"
+        "    env:\n"
+        "      MINIAS_INTEGRATED_MODE: ${{ inputs.mode == 'linux-integrated' }}\n"
+        "    if: (github.event_name == 'workflow_dispatch' || github.event_name == 'push') "
+        "&& (inputs.mode == 'linux-single' || inputs.mode == 'linux-integrated')"
+    )
+    original_header = (
+        "  linux-single:\n"
+        "    if: (github.event_name == 'workflow_dispatch' || github.event_name == 'push') "
+        "&& inputs.mode == 'linux-single'"
+    )
+    if linux_body.count(integrated_header) != 1:
+        raise AssertionError("MiniAS integrated mode header changed")
+    linux_body = linux_body.replace(integrated_header, original_header, 1)
+    integrated_evidence = (
+        "            build/minias-linux-runtime/native-integration/*.trace\n"
+        "            build/minias-linux-runtime/native-integration/*.log\n"
+        "            build/minias-linux-runtime/native-integration/Image.sha256\n"
+        "            build/minias-linux-runtime/native-integration/qemu-p0/*.log\n"
+        "            build/minias-linux-runtime/native-integration/qemu-p1/*.log\n"
+    )
+    if linux_body.count(integrated_evidence) != 1:
+        raise AssertionError("native-integrated relink evidence archive modified")
+    linux_body = linux_body.replace(integrated_evidence, "", 1)
     if sha(ROOT / "tests/assembler/minias_linux_incremental_bisect.sh") != (
         "fdf3a07786c2f9500183bc5753cc6a5bb38cb1b3"
     ):
@@ -113,7 +156,6 @@ def main():
     reverted = linux_body[:begin] + linux_body[end:]
     reverted = reverted.replace(
         '          export MINIAS_GNU_ROOT="$work/golden-as"\n', "", 1)
-    diag_begin = "      - name: Diagnose early-boot with cached GNU early objects and incremental relink\n"
     diag_end = "      - name: Preserve MiniAS-only Linux build and guest evidence\n"
     if reverted.count(diag_begin) != 1 or reverted.count(diag_end) != 1:
         raise AssertionError("MiniAS early-boot incremental diagnostic missing")
@@ -139,8 +181,8 @@ def main():
     if reverted != expected:
         raise AssertionError("GNU-only MiniAS runtime job diverges from the approved archived A0->QEMU chain")
 
-    if current_text.count("          - linux-single") != 1:
-        raise AssertionError("MiniAS linux-single manual mode missing")
+    if current_text.count("          - linux-single") != 1 or current_text.count("          - linux-integrated") != 1:
+        raise AssertionError("MiniAS opt-in single and integrated modes missing")
     # Explicit reusable push inputs now reach the same manual mode selectors.
     # Preserve every frozen/semantic executable job body byte-for-byte.
     manual_modes = {
@@ -183,7 +225,7 @@ def main():
     for token in ("  actions: read", "  contents: read"):
         if token not in current_text:
             raise AssertionError(f"missing GitHub Action permission {token}")
-    print(f"M0_MINIAS_SEMANTIC_CONVERGENCE=PASS branch={branch} jobs=11 original_focused=6 original_semantic=4 original_blob_shas=3 linux_single_archived_body=1")
+    print(f"M0_MINIAS_SEMANTIC_CONVERGENCE=PASS branch={branch} jobs=11 original_focused=6 original_semantic=4 original_blob_shas=3 linux_single_archived_body=1 integrated_same_tree_relink=1")
 
 if __name__ == "__main__":
     main()
