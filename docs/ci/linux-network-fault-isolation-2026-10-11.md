@@ -162,3 +162,49 @@ This is a verified GCC-owner causal experiment and a strong direction for
 isolating the MiniC miscompile. **A compiler semantic fix has not yet been
 validated**. Promote neither the GCC swap nor the 186/203 truncated result as
 a MiniC P3 PASS.
+
+## Completed exact-config GCC core.o swap, original Python 145/203 suite
+
+The single-GCC-owner swap was **executed** in GitHub Actions
+[#38129015401](https://github.com/yituanxing/minic-toolchain/actions/runs/38129015401).
+CI recorded `NEXT_OWNER_SYMBOL=CONFIRMED symbol=nf_hook_entries_grow
+owner=net/netfilter/core.o`, index **1931** in the fixed 2064-item universe,
+and verified unchanged/non-selected ELF derivations.
+One-GCC swap Image SHA256:
+`5c612e95e3aa0de047eceb1856f7273f9c11a82185b9afdba0419a130bb475c4`,
+size 217,600,880 bytes. CI artifact 11698147847 contains the exact linked
+Image and identities. This was re-run with the **unmodified** original V024
+natural145 `cpio` in the same portable QEMU environment as the seven-repair
+MiniC-only Image.
+
+| Oracle | Seven-repair MiniC | GCC only net/netfilter/core.o |
+| --- | --- | --- |
+| MODULE_PASS | 145 / 145 | 145 / 145 |
+| FUNCTION_PASS | 110 / 203 | **186 / 203** |
+| Last function | iptables-module-chain | crypto-concrete-algorithms-registered |
+| First fault | nf_hook_entries_grow+0xd86 | **_compound_head+0x40** |
+| Complete terminal endpoint | No | No |
+
+In the GCC-owner variant, the original Netfilter page fault **did not recur**,
+and the old `iptables-get-info` check and subsequent tests succeeded. The
+second fault is a load page fault (`cause=0xd`), `badaddr=0x9`,
+`epc=_compound_head+0x40/0x160`, and
+`ra=__minic_inline_spec_9309_155+0xbc/0x4f6`, PID 1.
+It follows immediately after `FUNCTION_PASS crypto-concrete-algorithms-registered`
+and before the historical expected `FUNCTION_PASS afalg-sha256-abc`.
+The kernel panics after PID1 dies.
+
+**Inference level:** causal role of the MiniC-built `net/netfilter/core.o` in
+the earlier Netfilter failure is strongly established by exact-config one-object
+differential. The lower-level compiler miscompile inside this object is not yet
+fixed. The later `_compound_head` fault is a distinct observed runtime
+regression; it is *not* proven to be an `mm/` object miscompile by the faulting
+PC alone. A bad pointer may be passed from the caller and must be traced.
+
+**Next work:** inspect `nf_hook_entries_grow` MiniC IR and the precise store
+at fault PC, which corresponds to hook-array pointer/indexing; establish a
+focused GCC/MiniC semantic differential and fix the compiler, then regenerate
+only `core.o` against the pinned .i. For the second fault, resolve the
+`__minic_inline_spec_9309_155` caller owner by its actual vmlinux symbol map
+and test an independent exact-config GCC swap. Retain the full unmodified
+Python-era 145/203 cpio as the final runtime oracle.
