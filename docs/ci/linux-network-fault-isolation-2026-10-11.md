@@ -112,3 +112,53 @@ same-config control; use the pinned exact-config GCC golden pool for attribution
 This is a **confirmed post-145 runtime regression**, not P3 PASS, and neither
 the crashing image nor the original historical binary archive should be
 silently promoted to a release fixture.
+
+
+## Original Python 145/203 oracle: exact one-GCC-object causal replay (run 38129015401)
+
+The original 67,667,456-byte V024 cpio stays byte-identical across this paired
+test. The seven-owner-repaired MiniC 2064-object candidate was rebuilt and
+linked by GNU Kbuild, then a second independent trial replaced **only**
+`net/netfilter/core.o` (universe zero-based index 1931) with its certified
+same-config GCC object. The trial verifier checked 2063 remaining MiniC C
+owners and the 40 derived/conditional GNU transformations.
+
+- MiniC-only linked Image SHA256 `a06b11fa47c284ccfc1441e8509015d5e2878d9dc945b0235953e3170d56581c` (215,502,848 bytes, current replay). Its historical first fault on the unchanged cpio had 145 module passes, **110 function passes**, then `nf_hook_entries_grow+0xd86` store page fault at `0xff60000011790000`.
+- One-GCC `core.o` Image SHA256 `5c612e95e3aa0de047eceb1856f7273f9c11a82185b9afdba0419a130bb475c4` (217,600,880 bytes). In genuine offline QEMU with the **same** original cpio, 145/145 MODULE_PASS plus **186 FUNCTION_PASS**. In particular `iptables-get-info` (#111) and downstream networking tests progressed past the original fault.
+- A **different** kernel fault occurred next, immediately after
+  `FUNCTION_PASS crypto-concrete-algorithms-registered` (#186):
+  `_compound_head+0x40/0x160`, `ra=__minic_inline_spec_9309_155+0xbc/0x4f6`,
+  invalid virtual address `0x9`, `cause=0xd` (load page fault), followed by
+  `Kernel panic: Attempted to kill init`. Keep separate from the Netfilter
+  crash; do not conflate with 145/203 PASS.
+- A focused static GNU userland reproducer,
+  `tests/external/linux/netfilter_getinfo_runtime_probe.c`, has also been
+  built and tested with the **exact historical** `x_tables.ko`,
+  `ip_tables.ko`, `iptable_filter.ko`. On Python V024 Image, MiniC Image
+  and the one-GCC-core Image, basic `IPT_SO_GET_INFO` passes.
+- The focused probe now accepts `netfilter_upto=N` on the kernel command line
+  to reproduce the first 39 old module registrations (and selected later
+  Netfilter owners) in authentic historical order without changing the original
+  final-acceptance cpio. GNU-reference prefix39 and MiniC prefix39 each
+  return `GETINFO_PASS hooks=0xe entries=4 size=632`.
+  **Therefore the first fault is state-dependent and is not reproduced by
+  just loading the first 39 modules.**
+
+### Direct machine-code evidence for the original first fault
+
+The currently exported 215,502,848-byte MiniC Image was disassembled as
+RISC-V RV64 from the exact panic PC. At
+`ffffffff8613d51a` inside `nf_hook_entries_grow`, the faulting opcode
+`0062b023` is `sd t1,0(t0)`: a write to the pointer calculated from
+a hook array base plus `nhooks * 16 + 8` (the hook's `priv` field).
+The in-function RV64 loop guard at `ffffffff8613d030` genuinely performs
+unsigned `i < old_entries`; do **not** assume an unconditional-backedge
+bug without inspecting the full data flow.
+The exact invalid `t0=ff60000011790000` shows the destination address is
+outside mapped memory, but does not by itself prove whether hook counts,
+allocation length, or earlier state was wrong.
+
+This is a verified GCC-owner causal experiment and a strong direction for
+isolating the MiniC miscompile. **A compiler semantic fix has not yet been
+validated**. Promote neither the GCC swap nor the 186/203 truncated result as
+a MiniC P3 PASS.
