@@ -20,6 +20,7 @@ on:
         type: choice
         options:
           - linux-single
+          - linux-integrated
           - real16
           - frontier
           - vector33
@@ -1257,7 +1258,9 @@ jobs:
           PY
 
   linux-single:
-    if: (github.event_name == 'workflow_dispatch' || github.event_name == 'push') && inputs.mode == 'linux-single'
+    env:
+      MINIAS_INTEGRATED_MODE: ${{ inputs.mode == 'linux-integrated' }}
+    if: (github.event_name == 'workflow_dispatch' || github.event_name == 'push') && (inputs.mode == 'linux-single' || inputs.mode == 'linux-integrated')
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     steps:
@@ -1481,6 +1484,19 @@ jobs:
 
           echo "MINIAS_LINUX_GCC_RUNTIME=PASS p0=PASS p1=12/12 head=$GITHUB_SHA"
 
+      - name: Reuse MiniAS Linux objects with MiniAR and MiniObjcopy and run QEMU P0 P1
+        if: success() && env.MINIAS_INTEGRATED_MODE == 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/minias-linux-runtime"
+          MINI_TOOLS_WORK="$work" \
+          MINI_TOOLS_BIN="$GITHUB_WORKSPACE/build/minias-linux-runtime-toolchain/bin" \
+          MINIAS="$GITHUB_WORKSPACE/build/minias-linux-runtime-toolchain/bin/minic-as" \
+          MINIAS_AS_TRACE="$work/minias-as.trace" \
+          REAL_AS=/usr/bin/riscv64-linux-gnu-as \
+            bash tests/external/linux/mini_tools_integrated_relink.sh
+
       - name: Diagnose early-boot with cached GNU early objects and incremental relink
         if: failure()
         shell: bash
@@ -1512,6 +1528,11 @@ jobs:
             build/minias-linux-runtime/bisect/*.log
             build/minias-linux-runtime/golden-as/arch/riscv/kernel/head.o
             build/minias-linux-runtime/golden-as/arch/riscv/kernel/head.s
+            build/minias-linux-runtime/native-integration/*.trace
+            build/minias-linux-runtime/native-integration/*.log
+            build/minias-linux-runtime/native-integration/Image.sha256
+            build/minias-linux-runtime/native-integration/qemu-p0/*.log
+            build/minias-linux-runtime/native-integration/qemu-p1/*.log
             build/minias-linux-runtime/qemu-p0/*.log
             build/minias-linux-runtime/qemu-p1/*.log
             build/minias-linux-runtime/out/arch/riscv/boot/Image
