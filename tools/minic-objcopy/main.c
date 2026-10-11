@@ -17,6 +17,8 @@ typedef struct ObjcopyOptions {
     bool strip_all;
     bool strip_debug;
     bool binary_output;
+    const char *prefix_symbols;
+    const char *prefix_alloc_sections;
 } ObjcopyOptions;
 
 static void usage(FILE *stream, const char *program) {
@@ -26,7 +28,9 @@ static void usage(FILE *stream, const char *program) {
             "  -R SECTION                remove SECTION\n"
             "  -S, --strip-all           strip the static symbol/debug tables\n"
             "      --strip-debug         remove debug sections\n"
-            "  -G SYMBOL                 keep SYMBOL global, localize other definitions\n",
+            "  -G SYMBOL                 keep SYMBOL global, localize other definitions\n"
+            "      --prefix-symbols=PRE   prefix ET_REL symbol names\n"
+            "      --prefix-alloc-sections=PRE   prefix allocatable sections\n",
             program);
 }
 
@@ -291,9 +295,11 @@ static int rewrite_elf(const ObjcopyOptions *options,
     if (open_elf(input_path, &input, &input_size, &elf) != 0) {
         goto done;
     }
-    if (elf.type == ET_REL) {
+    if (elf.type == ET_REL &&
+        options->prefix_symbols == NULL &&
+        options->prefix_alloc_sections == NULL) {
         fprintf(stderr,
-                "minic-objcopy: %s: ELF-to-ELF ET_REL rewrite is not in A1\n",
+                "minic-objcopy: %s: ET_REL requires explicit prefix mode\n",
                 input_path);
         goto done;
     }
@@ -310,6 +316,8 @@ static int rewrite_elf(const ObjcopyOptions *options,
     rewrite_options.strip_debug = options->strip_debug;
     rewrite_options.keep_global_symbols = options->keep_globals;
     rewrite_options.keep_global_count = options->keep_global_count;
+    rewrite_options.prefix_symbols = options->prefix_symbols;
+    rewrite_options.prefix_alloc_sections = options->prefix_alloc_sections;
 
     if (!minielf_rewrite(&elf,
                          &rewrite_options,
@@ -449,6 +457,16 @@ int main(int argc, char **argv) {
             options.strip_debug = true;
             continue;
         }
+        if (strncmp(argument, "--prefix-symbols=", 17U) == 0 &&
+            argument[17U] != '\0') {
+            options.prefix_symbols = argument + 17U;
+            continue;
+        }
+        if (strncmp(argument, "--prefix-alloc-sections=", 24U) == 0 &&
+            argument[24U] != '\0') {
+            options.prefix_alloc_sections = argument + 24U;
+            continue;
+        }
         if (argument[0] == '-') {
             fprintf(stderr,
                     "minic-objcopy: unsupported option: %s\n",
@@ -473,6 +491,13 @@ int main(int argc, char **argv) {
         goto done;
     }
 
+    if (options.binary_output &&
+        (options.prefix_symbols != NULL ||
+         options.prefix_alloc_sections != NULL)) {
+        fprintf(stderr, "minic-objcopy: prefix options require ELF-to-ELF\n");
+        result = 2;
+        goto done;
+    }
     result = options.binary_output
                  ? convert_binary(&options, input_path, output_path)
                  : rewrite_elf(&options, input_path, output_path);
