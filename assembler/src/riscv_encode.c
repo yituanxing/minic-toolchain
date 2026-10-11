@@ -2000,12 +2000,14 @@ bool minias_riscv_encode(MiniAs *as, const MiniAsStmt *stmt) {
             return false;
         }
         target_symbol = minias_get_symbol(as, expr.name, false);
-        /* GNU PIC 'la symbol' is a GOT load for an undefined external
-           symbol.  Preserve the historical symbol+addend form as PC-relative:
-           a GOT_HI20 relocation cannot carry a nonzero addend in the RISC-V
-           psABI, and expanding that form correctly would require a third
-           arithmetic instruction. */
-        use_got = strcmp(stmt->op, "la") == 0 && expr.addend == 0 &&
+        /* GNU as defaults to NOPIC. The .option pic/nopic directive is
+         * scoped and saved per statement. A bare 'la external_symbol' in
+         * the Linux kernel must use PCREL_HI20 + ADDI, not GOT_HI20 + LD:
+         * the GOT is unavailable during RISC-V early boot. In explicit
+         * PIC mode an undefined external can use GOT_HI20, but only when
+         * no nonzero addend is requested by the source. */
+        use_got = stmt->pic_enabled &&
+                  strcmp(stmt->op, "la") == 0 && expr.addend == 0 &&
                   (target_symbol == NULL || !target_symbol->defined);
 
         (void)snprintf(anchor_name,
