@@ -793,6 +793,31 @@ jobs:
           riscv64-linux-gnu-objdump -dr --disassemble=nf_hook_entries_grow "$gcc" >"$d/gcc.nf_hook_entries_grow.disasm"
           riscv64-linux-gnu-objdump -dr --disassemble=nf_hook_entries_grow "$minic" >"$d/minic.nf_hook_entries_grow.disasm"
           riscv64-linux-gnu-nm --defined-only "$minic" >"$d/minic.symbols"
+          # Reconstruct the actual Kbuild translation unit against the certified
+          # same-config GNU output, then compile it with the *current* MiniC
+          # runtime profile. This branch deliberately does NOT link an Image.
+          work="$GITHUB_WORKSPACE/build/linux-runtime-gcc"
+          source="$work/linux-6.6.143"
+          test -d "$source"
+          make -C "$source" O="$work/out" ARCH=riscv \
+            CROSS_COMPILE=riscv64-linux-gnu- net/netfilter/core.i \
+            >"$d/exact-core-preprocess.log" 2>&1
+          test -s "$work/out/net/netfilter/core.i"
+          cp "$work/out/net/netfilter/core.i" "$d/core.exact.i"
+          bash tools/ci/linux-runtime-build-minic-profile-v1.sh \
+            "$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain" \
+            "$d/compiler"
+          current="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain/bin/minic"
+          "$current" -S "$d/core.exact.i" -o "$d/core.current-minic.s" \
+            >"$d/core.current-minic.stdout" 2>"$d/core.current-minic.stderr"
+          test -s "$d/core.current-minic.s"
+          # Do not confuse a new profile output with the frozen failing .o.
+          riscv64-linux-gnu-gcc -c "$d/core.current-minic.s" -o "$d/core.current-minic.o"
+          sha256sum "$d/core.exact.i" "$d/core.current-minic.s" "$d/core.current-minic.o" \
+            >"$d/current-profile.sha256"
+          riscv64-linux-gnu-objdump -dr --disassemble=nf_hook_entries_grow \
+            "$d/core.current-minic.o" >"$d/core.current-minic-grows.disasm"
+          echo "NETFILTER_EXACT_SOURCE_CAPTURE=PASS original_minic_hash=$(sha256sum "$minic" | cut -d' ' -f1) current_minic_hash=$(sha256sum "$d/core.current-minic.o" | cut -d' ' -f1)"
           echo "NETFILTER_EXACT_OWNER_CAPTURE=PASS"
       - uses: actions/upload-artifact@v4
         if: contains(github.event.head_commit.message, '[linux-runtime-core-capture]')
