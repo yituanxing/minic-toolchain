@@ -676,3 +676,35 @@ GNU-linker consumable, with GNU-exact `nm` symbol inventory.
 This is the unit/differential gate; the actual Linux MiniAS+MiniAR+
 MiniObjcopy integrated boot is only certified after its separately
 triggered `[minias-linux-integrated]` complete Image/QEMU P0+P1 run.
+
+## MiniAS + MiniAR + MiniObjcopy: native joint Image achieved; exact QEMU pending
+
+The post-ELF-rewrite fix run
+[#38184298699](https://github.com/yituanxing/minic-toolchain/actions/runs/38184298699)
+reused the Linux tree previously built with native MiniAS. Its first
+Image and QEMU P0/P1 **PASSED** MiniAS-only before promotion. In the
+second Kbuild phase, **all 633 native MiniAR** operations and **all 44
+native MiniObjcopy** operations completed, and the exact integrated
+Image was emitted: **26,228,224 bytes**, SHA-256
+`6b8ec7591c1e8270b4e1bdb301fccbec0352447c9c895df7e07156eed6a674d1`.
+This conclusively removes the previously reproducible 3-file EFI
+`invalid-section` failure.
+
+The run's *job* is still marked FAILURE, because an overly strict
+speed/incrementality assertion forbade **any** additional MiniAS
+invocation. Changing the native AR/OBJCOPY Kbuild command identities
+actually caused **88 extra native assembly invocations** (2,197 ->
+2,285), not a 2,197-object full recompile. The complete linked Image
+is preserved by the failure evidence uploader. Do not misreport this
+as a native runtime PASS: the speed assertion aborted before integrated
+QEMU. A subsequent failure diagnostic caused another temporary trace
+increase, which is not part of the integrated Image.
+
+The original three-job MiniObjcopy owner now has a **no-Linux-rebuild**
+artifact replay: `[miniobjcopy-native-triple-replay]`. It downloads
+this exact retained 3-tool Image, validates the Image SHA, native AR
+and objcopy trace counts and genuine prior MiniAS QEMU evidence, builds
+only a fresh GNU initramfs, then runs QEMU P0 (two lanes) and P1 (12
+syscalls). The path has no native/GNU fallback into relinking and adds
+no workflow and no job. [M0 #38184967137](https://github.com/yituanxing/minic-toolchain/actions/runs/38184967137)
+passed. Only successful *guest output* promotes triple native use.
