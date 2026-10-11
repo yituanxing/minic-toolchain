@@ -239,6 +239,7 @@ efi_data:
   .word 42
 .section .note.gnu.property,"a",@note
 .byte 1,2,3,4
+.text
 EOF
 count=0
 while test "$count" -lt 128; do
