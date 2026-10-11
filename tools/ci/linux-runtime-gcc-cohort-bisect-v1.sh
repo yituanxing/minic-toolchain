@@ -631,6 +631,27 @@ PY_FOUR_INTEGRITY
           grep -E 'GENL_IF_DECISION|GENL_COND_EMIT' "$stderr_path" \
             >"$capture/genetlink.if-control-trace.log" || true
           head -c 65536 "$stderr_path" >"$capture/genetlink.compiler-stderr-head.log"
+          # Capture exactly the effective Core branch implementation after all
+          # runtime-profile patches, not the pristine repository source.
+          python3 - "$capture/genetlink.core-branch-impl.c" <<'PY_GENL_SOURCE'
+from pathlib import Path
+import sys
+s = Path("src/core/core_lower.c").read_text()
+prefix = "static MinicCoreLowerStatus lower_condition_branch("
+start = s.find(prefix)
+if start < 0:
+    raise SystemExit("GENL_BRANCH_SOURCE=FAIL no_function")
+# Ignore the early declaration. The implementation uniquely has a body.
+start = s.find(prefix, start + len(prefix))
+if start < 0:
+    raise SystemExit("GENL_BRANCH_SOURCE=FAIL no_definition")
+finish = s.find("\n}\n", start)
+if finish < 0:
+    raise SystemExit("GENL_BRANCH_SOURCE=FAIL no_closing_brace")
+out = Path(sys.argv[1])
+out.write_text(s[start:finish+3])
+print("GENL_BRANCH_SOURCE=CAPTURED bytes=" + str(out.stat().st_size))
+PY_GENL_SOURCE
           echo "GENL_TRACE_CAPTURE=PASS lines=$(wc -l <"$capture/genetlink.if-control-trace.log") raw_bytes=$(stat -c %s "$stderr_path")"
           head -n 75 "$capture/genetlink.if-control-trace.log" || true
         fi
