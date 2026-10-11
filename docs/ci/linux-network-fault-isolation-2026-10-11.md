@@ -61,3 +61,54 @@ The GNU-preprocessed jhash code in tcp_cong.o compiled into __minic_inline_spec_
 ### Next frontier
 
 Focus only on the first post-8250 stall/slow-init boundary: extend existing QMP/GDB function+PC sampling around and after guest `Serial: 8250/16550 driver`, distinguish forward progress from a loop, then isolate one owner at a time with same-cache GCC swaps. Do not expand workflows or perform another 2064-object rebuild.
+
+
+## Recovered Python 145/203 runtime test: first real post-module C Image fault
+
+The original Python V024 Linux 6.6.143 `Image` (SHA256
+`7c868f2479c1c14c40f442236bb3c62cc530196b581104d0eaa2ef8401b8bb30`)
+with the authenticated original natural145-v024-cold-overlay.cpio achieved 145/145
+`MODULE_PASS` plus 203/203 `FUNCTION_PASS`, QEMU exit 0, normal guest shutdown,
+and complete exact unique-ID matching.
+
+The 7-owner-repaired current MiniC Linux Image SHA256
+`791e2ec22f9f6a5cf02eb7f437c6cf25e5e8e89e6fa8230ce6573f0749beb056`,
+built by the current GNU-locked Kbuild pool and independently exported from
+run `38126738736`, was run against that **same unmodified old cpio**, with
+the same QEMU host, 1 GiB RAM, explicit initrd, `rdinit=/init` and the
+historical no-watchdog kernel arguments.
+
+Actual results (two QEMU reproductions):
+
+- **145/145 module loads PASS**, including Btrfs, KVM, Radeon, BLAKE2b, Nouveau.
+- **110/203 functional PASS**, matching the first 110 historical functional IDs.
+- The last successful assertion is `FUNCTION_PASS iptables-module-chain`.
+- Historical assertion #111, `iptables-get-info`, fails before emitting PASS.
+- First exception: `Unable to handle kernel paging request` with
+  `epc: nf_hook_entries_grow+0xd86/0x1096`, `ra: nf_hook_entries_grow+0x7b4/0x1096`,
+  `badaddr: ff60000011790000`, `cause: 0xf` (store page fault).
+- Call chain: `iptable_filter_table_init` -> `xt_find_table_lock` ->
+  `xt_request_find_table_lock` -> `get_info` -> `do_ipt_get_ctl` ->
+  `nf_getsockopt` -> `nf_hook_entries_grow`.
+- The first oops is followed by a secondary IRQ/timer oops and kernel panic.
+- Same faulting function and PC offset reproduced on the second QEMU run,
+  ruling out a mere timeout or Nouveau slowdown.
+
+Upstream `nf_hook_entries_grow` is implemented in
+`net/netfilter/core.c` -> `net/netfilter/core.o` (candidate owner, not yet
+causally certified). It counts and copies/extends Netfilter hook arrays, and
+the bad instruction attempts a store to an invalid address.
+
+**Next deterministic isolator**: hold the entire current repaired MiniC Image
+object set and linker context fixed; restore the pure-GCC version of precisely
+`net/netfilter/core.o`, relink and rerun the historical unchanged cpio.
+If the failure frontier advances past `iptables-get-info`, regenerate this
+one source from the identical pinned `.i` and inspect GCC vs MiniC
+IR/assembly for hook count, pointer indexing, and loop join behavior. If it
+does not, search interacting owners before asserting an isolated compiler
+fault. The historical Python reference Image is not itself a strict
+same-config control; use the pinned exact-config GCC golden pool for attribution.
+
+This is a **confirmed post-145 runtime regression**, not P3 PASS, and neither
+the crashing image nor the original historical binary archive should be
+silently promoted to a release fixture.
