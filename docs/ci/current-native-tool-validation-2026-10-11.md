@@ -189,3 +189,39 @@ new tool implementation, remains the only acceptance scope.
 
 All historical fixed-profile Linux Python 145/203 certificates remain
 separate from the new-current-MiniC full 2064-object link failure.
+
+## MiniObjcopy-only Linux Kbuild frontier — 2026-10-11
+
+The existing `miniobjcopy-strip-regressions-v1.yml` `linux-tool` job
+now has an **opt-in** `linux-single` mode. It keeps GCC C compilation,
+GNU assembler, GNU ar and **GNU ld in *all* Linux link stages**, while
+overriding `OBJCOPY` alone with a traced MiniObjcopy wrapper. The
+historical mixed MiniLD/MiniObjcopy mode is preserved; there are still
+exactly three jobs and one canonical workflow. The source blob is pinned in
+the active-workflow inventory and independently checked by the extended M0
+archive-integrity gate.
+
+The first true single-replacement Linux trial was
+[#38153376846](https://github.com/yituanxing/minic-toolchain/actions/runs/38153376846).
+It reached the native RISC-V Linux PI object rewrite and failed *correctly*
+with `minic-objcopy: unsupported option: --prefix-symbols=__pi_`.
+The `miniobjcopy.trace` confirms exactly five initial call sites, while
+`minild.trace` is empty. This failure is native-tool feature coverage,
+not an unrelated GCC failure or combined MiniLD interaction.
+
+A narrow ET_REL rewrite implementation now supports the actual three
+Linux PI options together: `--prefix-symbols`,
+`--prefix-alloc-sections`, `--remove-section`. It preserves ELF section
+indices and relocation symbol indices, while updating ELF section names,
+allocatable relocation-section names, static symbol strings and string
+offsets; relocation data remains unchanged. Fresh RV64/RV32 GNU comparisons
+verify renamed symbols, sections, relocation targets and GNU-ld consumption:
+[#38153921004](https://github.com/yituanxing/minic-toolchain/actions/runs/38153921004)
+**SUCCESS**; both `MINIOBJCOPY_PI_PREFIX_CASE=PASS`.
+The shared toolchain focused regression
+[#38153920910](https://github.com/yituanxing/minic-toolchain/actions/runs/38153920910)
+is also **SUCCESS**.
+
+Now rerun the **same** real Linux single-MiniObjcopy Kbuild + fast-QEMU
+gate on the corrected product. Do not classify as full historical 145/203
+runtime until that complete oracle has independently been executed.
