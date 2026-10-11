@@ -18,7 +18,7 @@ ORIGINAL_SHA = "5776fe8d2bd51fb485596274f44e8c9af5da7a5c"
 # Reviewed existing three-job extension: a GNU-only MiniObjcopy Linux mode.
 # The historical combined MiniLD+MiniObjcopy path stays intact and the
 # forbidden expired Image-oracle source remains exclusively archived.
-APPROVED_SINGLE_SHA = "797aa0f58771480645b739d14e20231be20d256a"
+APPROVED_SINGLE_SHA = "b3f1dafca566b3e103ab2b4d5aa0ae5f12be41fa"
 OLD_IF = "    if: (github.event_name == 'workflow_dispatch' && (inputs.mode == 'regressions' || inputs.mode == 'all')) || (github.event_name == 'push' && contains(github.event.head_commit.message, '[miniobjcopy-strip-regressions]'))"
 NEW_IF = "    if: (github.event_name == 'workflow_dispatch' && (inputs.mode == 'regressions' || inputs.mode == 'all')) || (github.event_name == 'push' && (contains(github.event.head_commit.message, '[miniobjcopy-strip-regressions]') || needs.route.outputs.elf_changed == 'true'))"
 MARKER = "\n  # Exact frozen GNU-vs-MiniObjcopy Image oracle; artifact run 33623125809"
@@ -65,6 +65,13 @@ def main() -> None:
             "MINIOBJCOPY_REPLAY_MODE",
             "MINILD_FINAL_IMAGE_REPLAY=PASS",
             "MINILD_FINAL_MINIOBJCOPY_LINUX_RUNTIME=PASS",
+            "linux-native-triple-replay",
+            "[miniobjcopy-native-triple-replay]",
+            "MINIOBJCOPY_TRIPLE_REPLAY_MODE",
+            "38184298699",
+            "6b8ec7591c1e8270b4e1bdb301fccbec0352447c9c895df7e07156eed6a674d1",
+            "MINIAS_MINIAR_MINIOBJCOPY_IMAGE_REPLAY=PASS",
+            "MINIAS_MINIAR_MINIOBJCOPY_LINUX_RUNTIME=PASS",
             "run-id: '38160503540'",
             "db7bb695bb9dcd5985a726e0ea3b5d54b32f01c195b6c91ee117bd146d999693",
         ):
