@@ -528,3 +528,38 @@ is **SUCCESS**. The next push triggers exactly one integrated mode
 report the first actual failing stage and do not call the combination
 runtime-certified. MiniPP and MiniLD are still separately staged; neither
 is silently claimed as part of this three-native-tool run.
+
+## Stage III: reproducible native-final-link + MiniObjcopy Image
+
+[#38160503540](https://github.com/yituanxing/minic-toolchain/actions/runs/38160503540)
+**SUCCESS**: unchanged GNU GCC/as/ar, native MiniLD on **all three
+late Linux vmlinux/kallsyms link outputs**, and native MiniObjcopy on
+**44** real Kbuild calls. The full Linux 6.6.143 Image was generated
+(22,033,608 bytes, SHA-256
+`db7bb695bb9dcd5985a726e0ea3b5d54b32f01c195b6c91ee117bd146d999693`).
+This is a **combined tool Image proof**, *not yet QEMU*.
+
+To avoid a second large kernel compilation, the existing three-job
+MiniObjcopy owner gained exact stored-artifact `linux-replay` mode.
+It downloads the immutable original artifact by source run ID,
+checks the original Image hash plus precisely 3 native MiniLD and 44
+native MiniObjcopy trace entries, builds only the GNU runtime initramfs,
+and boots that **exact restored kernel** through QEMU P0 (2 lanes) and
+P1 (12 syscall tests). It never invokes Kbuild/compilation in replay
+mode. The original single-tool and original mixed build modes remain
+available; M0 source gate [#38161317571](https://github.com/yituanxing/minic-toolchain/actions/runs/38161317571)
+confirmed the workflow still contains exactly the same three jobs.
+The next tagged push `[miniobjcopy-linux-replay]` executes the cached
+Image runtime check; it must not be assumed green before QEMU output.
+
+A separate all-native stage of MiniAS+MiniAR+MiniObjcopy reused the
+same MiniAS object tree; it **failed fast in ~6 s during EFI STUBCPY**,
+not during GNU-only MiniAS boot: native MiniObjcopy rejected
+`drivers/firmware/efi/libstub/efi-stub-helper.o`,
+`efi-stub.o`, and `fdt.o` as `ELF rewrite failed: invalid-section`.
+See [#38160817819](https://github.com/yituanxing/minic-toolchain/actions/runs/38160817819).
+This is a concrete **cross-tool object-format compatibility frontier**.
+The direct MiniAS Image before the second relink still passed P0/P1;
+do not relabel this stage as integrated success. Exact failing objects
+and ELF sections must be collected and compared against GNU objects
+before touching code or proposing a GNU fallback.
