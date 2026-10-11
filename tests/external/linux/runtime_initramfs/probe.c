@@ -201,6 +201,14 @@ static int bring_loopback_up(void) {
     return 0;
 }
 
+/* Keep P1's syscall assertions unchanged; expose the exact stalled step.
+ * Stderr is unbuffered even when the runtime probe is killed by QEMU timeout. */
+static void ipv6_stage(const char *step) {
+    (void)fprintf(stderr, "RUNTIME_V2_IPV6_STAGE pid=%ld step=%s\\n",
+                  (long)getpid(), step);
+}
+#define IPV6_STAGE_CALL(step, expression) (ipv6_stage(step), (expression))
+
 static void test_ipv6_tcp(void) {
     int listener;
     int client;
@@ -216,6 +224,7 @@ static void test_ipv6_tcp(void) {
         fail("ipv6-tcp-loopback");
         return;
     }
+    ipv6_stage("listener-socket");
     listener = socket(AF_INET6, SOCK_STREAM | SOCK_CLOEXEC, 0);
     memset(&address, 0, sizeof(address));
     address.sin6_family = AF_INET6;
@@ -224,9 +233,9 @@ static void test_ipv6_tcp(void) {
     address_length = sizeof(address);
 
     if (listener < 0 ||
-        bind(listener, (struct sockaddr *)&address, sizeof(address)) != 0 ||
-        getsockname(listener, (struct sockaddr *)&address, &address_length) != 0 ||
-        listen(listener, 1) != 0) {
+        IPV6_STAGE_CALL("bind", bind(listener, (struct sockaddr *)&address, sizeof(address))) != 0 ||
+        IPV6_STAGE_CALL("getsockname", getsockname(listener, (struct sockaddr *)&address, &address_length)) != 0 ||
+        IPV6_STAGE_CALL("listen", listen(listener, 1)) != 0) {
         fail("ipv6-tcp-loopback");
         if (listener >= 0) {
             (void)close(listener);
@@ -234,13 +243,15 @@ static void test_ipv6_tcp(void) {
         return;
     }
 
+    ipv6_stage("fork");
     child = fork();
     if (child == 0) {
+        ipv6_stage("child-socket");
         client = socket(AF_INET6, SOCK_STREAM | SOCK_CLOEXEC, 0);
         if (client < 0 ||
-            connect(client, (struct sockaddr *)&address, sizeof(address)) != 0 ||
-            write(client, "V", 1U) != 1 ||
-            read(client, &value, 1U) != 1 || value != '6') {
+            IPV6_STAGE_CALL("child-connect", connect(client, (struct sockaddr *)&address, sizeof(address))) != 0 ||
+            IPV6_STAGE_CALL("child-write", write(client, "V", 1U)) != 1 ||
+            IPV6_STAGE_CALL("child-read", read(client, &value, 1U)) != 1 || value != '6') {
             _exit(1);
         }
         (void)close(client);
@@ -252,11 +263,13 @@ static void test_ipv6_tcp(void) {
         return;
     }
 
+    ipv6_stage("parent-accept");
     accepted = accept4(listener, NULL, NULL, SOCK_CLOEXEC);
     value = 0;
-    if (accepted < 0 || read(accepted, &value, 1U) != 1 || value != 'V' ||
-        write(accepted, "6", 1U) != 1 ||
-        waitpid(child, &status, 0) != child ||
+    if (accepted < 0 ||
+        IPV6_STAGE_CALL("parent-read", read(accepted, &value, 1U)) != 1 || value != 'V' ||
+        IPV6_STAGE_CALL("parent-write", write(accepted, "6", 1U)) != 1 ||
+        IPV6_STAGE_CALL("parent-waitpid", waitpid(child, &status, 0)) != child ||
         !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
         fail("ipv6-tcp-loopback");
     } else {
