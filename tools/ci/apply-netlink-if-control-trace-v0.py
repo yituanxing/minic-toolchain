@@ -42,5 +42,35 @@ prefix2=r'''    if (context->source_function != NULL &&
 if s.count(anchor)!=1:
     raise SystemExit(f"genl emit anchor count={s.count(anchor)}")
 s=s.replace(anchor,prefix2+anchor,1)
+# Trace all expression-unwrapping entries, not only the final generic
+# conditional-terminator emitter. This exposes early "set_branch" cases.
+probe='''    if (expression == NULL ||
+        (!minic_type_is_integer(expression->type) && !minic_type_is_pointer(expression->type))) {
+        return MINIC_CORE_LOWER_UNSUPPORTED;
+    }
+    if (expression->kind == MINIC_EXPRESSION_UNARY &&'''
+hook=r'''    if (expression == NULL ||
+        (!minic_type_is_integer(expression->type) && !minic_type_is_pointer(expression->type))) {
+        return MINIC_CORE_LOWER_UNSUPPORTED;
+    }
+    if (context->source_function != NULL &&
+        context->source_function->name != NULL &&
+        strcmp(context->source_function->name, "genl_op_from_split") == 0) {
+        (void)fprintf(stderr,
+                      "GENL_COND_ENTER expression=%zu kind=%d block=%u true=%u false=%u op=%d\n",
+                      (size_t)expression_id,
+                      (int)expression->kind,
+                      (unsigned int)context->block_id,
+                      (unsigned int)when_true,
+                      (unsigned int)when_false,
+                      expression->kind == MINIC_EXPRESSION_BINARY
+                          ? (int)expression->value.binary.operator_kind
+                          : expression->kind == MINIC_EXPRESSION_UNARY
+                          ? (int)expression->value.unary.operator_kind : -1);
+    }
+    if (expression->kind == MINIC_EXPRESSION_UNARY &&'''
+if s.count(probe) != 1:
+    raise SystemExit(f"genl branch recurse anchor count={s.count(probe)}")
+s=s.replace(probe,hook,1)
 p.write_text(s)
 print("MINIC_NETLINK_IF_CONTROL_TRACE=APPLIED")
