@@ -14,11 +14,11 @@ old = """        } else if (statement->kind == MINIC_STATEMENT_LABEL) {
             const MinicStatement *loop = NULL;
 """
 new = """        } else if (statement->kind == MINIC_STATEMENT_LABEL) {
+            const MinicStatement *loop = NULL;
             /* C labels are control-flow join points. A backward goto can
                invalidate all local facts learned on the first arrival.
                Keep the IR branches; only drop speculative local facts. */
             core_local_constants_clear_known(context);
-            const MinicStatement *loop = NULL;
 """
 if src.count(old) != 1:
     raise SystemExit(f"GOTO_LABEL_FACT_BARRIER=ERROR anchor_count={src.count(old)}")
