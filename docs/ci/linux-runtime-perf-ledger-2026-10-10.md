@@ -167,3 +167,16 @@ This is a source-level review performed while the one-object QEMU comparison is 
 - Original QMP collector read `info registers` and the guest stack in separate HMP calls while the guest continued running; those two values could represent different instants. An opt-in `stop → query-status(paused) → registers + stack → cont` mode was added on Runtime branch; it must first pass the existing focused QEMU A/B to validate availability and low perturbation. An HMP stack preview is **not** a verified unwind.
 - Repeated `do_raw_spin_unlock+0x30` snapshots with varying `a1` suggest a recurrent hot site, not proof of a stuck instruction. Always symbolize against the corresponding trial's `vmlinux`; never map a linked PC offset to an unrelaxed ET_REL disassembly as if the offsets were invariant.
 - Full Linux P1 init remains **NOT_CERTIFIED**; do not conflate diagnostics, qemu process success, or link PASS with `/init` handoff.
+
+
+### Reproducible RV64 code amplification in one real Linux object
+
+From authenticated run `38112013620`, artifact `11691822360`, parse the relocation-aware `spinlock_debug.gcc-objdump.txt` and `spinlock_debug.new-minic-objdump.txt` instruction lines (not assembly directives or relocation-only lines):
+
+| Same C owner: `kernel/locking/spinlock_debug.o` | GCC | current MiniC |
+| --- | ---: | ---: |
+| Disassembled instructions | 530 | 8,206 |
+| Explicit scalar load/store instructions | 142 | 5,370 |
+| Load/store fraction of disassembled instructions | 26.8% | 65.4% |
+
+The MiniC object also contains 22 named `__minic_inline_spec_*` functions. These measurements identify a **~15.5× static instruction count** within one object, not a 15.5× wall-clock slowdown or an isolated runtime defect. It justifies prioritizing redundant value spills/reloads, call boundary handling, and specialization code-size accounting *after* correctness. Do not assume all 2064 objects have the same ratio.
