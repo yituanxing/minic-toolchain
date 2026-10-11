@@ -347,3 +347,50 @@ passed** before this live opt-in trigger.
 **Current-head live proof:** request `[minias-linux-single]` now. Do not
 call the assembly component Linux runtime-certified until the real Kbuild
 and QEMU reports pass. No Stage0->Stage2 self-hosting or new MiniObjdump work.
+
+## MiniAS runtime counterexample and bounded incremental Linux re-link
+
+The first actual GNU-only single-MiniAS run
+[#38157216367](https://github.com/yituanxing/minic-toolchain/actions/runs/38157216367)
+finished **FAIL** (real guest, not a compiler/build failure).
+
+- Linux 6.6.143 `Image` successfully linked with genuine GCC + MiniAS,
+  GNU ar/ld/objcopy unchanged. **2,198 native MiniAS passes** and
+  41 expected/diagnostic assembly probe failures; production output generated
+  in **386 s using `make -j4` on ONE GitHub Runner**, not 7 cross-runner shards.
+- QEMU reached **OpenSBI v1.3**, then hung before **any Linux kernel banner**
+  and the 90-second limit returned `qemu_status=124`. No P0/P1 PASS is
+  claimed; no proof of a particular MiniAS instruction bug yet.
+- The first run preserved actual MiniAS Image, exact wrapper argv trace,
+  failed native probes and the guest OpenSBI-only log. Its successful
+  *build* and failed *boot* must be tracked as independent observations.
+
+**Diagnostic modification:** preserve the existing one-Runner, one-Image
+GNU-only MiniAS test and add an *in-run conditional* differential step
+after P0 fails; no new Workflow and no new Job. While GCC's ephemeral
+`.s` is still available, the wrapper now additionally saves **GNU as
+reference objects** for seven named early-boot owners (head, entry,
+mm/init, setup, sbi, FDT, init/main), without replacing the native product
+or delegating production compilation. The diagnostic preserves original
+MiniAS `.o` and Image, then tests:
+
+1. Replace **only `arch/riscv/kernel/head.o`** by its GNU reference.
+2. If necessary, replace the seven-owner early-init cohort; if this boots,
+   attempt an in-run binary split over this limited cohort.
+3. Every probe reuses the **same compiled Linux object tree** and reruns
+   *only necessary downstream archives/links* with the identical Kbuild
+   command, followed by a 25-second bounded fast QEMU test.
+4. Capture GNU/MiniAS disassembly, ELF section-header diffs, QEMU logs,
+   links and exact owner fingerprints; restore native objects and original
+   Image for archival integrity.
+
+The diagnostic is **conditional on the original runtime step failing**,
+thus cannot manufacture a green Linux runtime certificate. The canonical
+MiniAS owner retains its original ten jobs byte-identical; the archival
+Linux job reconstruction, exact script Git SHA, manifest SHA and M0 checks
+all passed [#38158542756](https://github.com/yituanxing/minic-toolchain/actions/runs/38158542756).
+
+This is a first **bounded differential probe**, not a proof that early
+startup must live in the seven selected objects. If the early owner cohort
+does not explain the failure, broaden isolation using the same cached-GNU
+object-set approach rather than making repeated, blind full Linux builds.
