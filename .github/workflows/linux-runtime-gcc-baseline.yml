@@ -821,40 +821,11 @@ jobs:
           work="$GITHUB_WORKSPACE/build/linux-runtime-gcc"
           ev="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-v1"
           chmod +x tests/external/linux/qemu_explicit_initrd_wrapper.py
-          export COHORT_ACTION=verify COHORT_EARLYCON_HOTFIX=1 COHORT_PATCH_SUPER_V1=1 COHORT_PATCH_NET_PAIR=1 COHORT_NETWORK_CAPTURE_ONLY=0 COHORT_FAULT_OWNER_MAP=0 COHORT_FAULT_OWNER_EXTRA_NETLINK=0 COHORT_EARLYCON_EXPLICIT_INITRD=0 COHORT_EARLYCON_EXPLICIT_SHELL=0 COHORT_NEXT_FAULT_DIAG=0 COHORT_UART_EARLYCON=1 COHORT_NEXT_GCC_SWAPS=1 COHORT_NEXT_GCC_TARGET=net/netfilter/core.o COHORT_NEXT_GCC_EXPECT_SYMBOL=nf_hook_entries_grow COHORT_QMP_STOP_SNAPSHOT=1 COHORT_SPINLOCK_CAPTURE_ONLY=0 COHORT_REPAIR_RUNTIME_OWNER=1 COHORT_REPAIR_INET_CSK_OWNER=1 COHORT_REPAIR_INET_HASHTABLES_OWNER=1 COHORT_NEXT_GCC_EXPLICIT_INITRD=0 COHORT_GDB_SWAP=0 COHORT_GDB_BOUNDARY=0 LINUX_RUNTIME_EARLYCON_ARG=earlycon=uart8250,mmio,0x10000000,115200n8
+          export COHORT_ACTION=verify COHORT_EARLYCON_HOTFIX=1 COHORT_PATCH_SUPER_V1=1 COHORT_PATCH_NET_PAIR=1 COHORT_NETWORK_CAPTURE_ONLY=0 COHORT_FAULT_OWNER_MAP=1 COHORT_FAULT_OWNER_SYMBOL=__minic_inline_spec_999_52 COHORT_FAULT_OWNER_COMPANION=__minic_inline_spec_10691_62 COHORT_FAULT_OWNER_EXTRA_NETLINK=0 COHORT_EARLYCON_EXPLICIT_INITRD=0 COHORT_EARLYCON_EXPLICIT_SHELL=0 COHORT_NEXT_FAULT_DIAG=0 COHORT_UART_EARLYCON=1 COHORT_NEXT_GCC_SWAPS=1 COHORT_NEXT_GCC_TARGET= COHORT_QMP_STOP_SNAPSHOT=1 COHORT_SPINLOCK_CAPTURE_ONLY=0 COHORT_REPAIR_RUNTIME_OWNER=1 COHORT_REPAIR_INET_CSK_OWNER=1 COHORT_REPAIR_INET_HASHTABLES_OWNER=1 COHORT_NEXT_GCC_EXPLICIT_INITRD=1 COHORT_GDB_SWAP=0 COHORT_GDB_BOUNDARY=0 LINUX_RUNTIME_EARLYCON_ARG=earlycon=uart8250,mmio,0x10000000,115200n8
           bash tools/ci/linux-runtime-gcc-cohort-bisect-v1.sh \
             "$work/linux-6.6.143" "$work/out" \
             "$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain/bin/minic" \
             "$work/provenance" "$ev/full-objects.txt" "$ev"
-
-      - name: Export one-GCC Netfilter owner swap Image for original Python 145/203 oracle
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          ev="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-v1"
-          swapped="$ev/trials/gcc_only_net_netfilter_core_o"
-          baseline="$ev/trials/earlycon_fixed_only"
-          test -s "$swapped/Image"
-          test -s "$baseline/Image"
-          python3 - "$swapped" "$baseline" <<'PY'
-          import hashlib, pathlib, sys
-          candidate, baseline = (pathlib.Path(x) for x in sys.argv[1:])
-          for name, folder in [("gcc_core_only",candidate),("minic_baseline",baseline)]:
-              blob=(folder/"Image").read_bytes()
-              print("NETFILTER_SWAP_IMAGE name=%s sha256=%s bytes=%d" %
-                    (name,hashlib.sha256(blob).hexdigest(),len(blob)))
-          PY
-          gzip -1 -c "$swapped/Image" >"$swapped/Image.gz"
-          sha256sum "$swapped/Image" >"$swapped/Image.sha256"
-      - uses: actions/upload-artifact@v4
-        with:
-          name: netfilter-core-single-gcc-swap-${{ github.sha }}
-          path: |
-            build/linux-runtime-gcc-cohort-v1/trials/gcc_only_net_netfilter_core_o/Image.gz
-            build/linux-runtime-gcc-cohort-v1/trials/gcc_only_net_netfilter_core_o/Image.sha256
-            build/linux-runtime-gcc-cohort-v1/trials/gcc_only_net_netfilter_core_o/selected-objects.txt
-            build/linux-runtime-gcc-cohort-v1/trials/gcc_only_net_netfilter_core_o/vmlinux-sections.txt
-          retention-days: 3
 
       - name: Preserve single-object experiment evidence
         if: always()
@@ -891,44 +862,3 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
-
-
-
-  riscv-objdump-binary-export-once:
-    if: github.event_name == 'push' && contains(github.event.head_commit.message, '[linux-runtime-portable-objdump]')
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    steps:
-      - name: Bundle cross objdump and its runtime ELF libraries
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          sudo apt-get -o Acquire::Retries=2 install -y --no-install-recommends binutils-riscv64-linux-gnu || {
-            sudo apt-get -o Acquire::Retries=2 update
-            sudo apt-get -o Acquire::Retries=2 install -y --no-install-recommends binutils-riscv64-linux-gnu
-          }
-          root="$GITHUB_WORKSPACE/build/objdump-portable"
-          mkdir -p "$root/bin" "$root/lib"
-          for program in riscv64-linux-gnu-objdump riscv64-linux-gnu-nm riscv64-linux-gnu-readelf; do
-            src=$(command -v "$program")
-            cp -L "$src" "$root/bin/$program"
-            while read -r lib; do
-              if [[ -f "$lib" ]]; then cp -L "$lib" "$root/lib/$(basename "$lib")"; fi
-            done < <(ldd "$src" | awk '$2=="=>" && $3 ~ /^\// {print $3} $1 ~ /^\// {print $1}' | sort -u)
-          done
-          cat >"$root/bin/riscv-objdump-portable" <<'SH'
-          #!/usr/bin/env bash
-          set -e
-          root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-          export LD_LIBRARY_PATH="$root/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-          exec "$root/bin/riscv64-linux-gnu-objdump" "$@"
-          SH
-          chmod +x "$root/bin/riscv-objdump-portable"
-          "$root/bin/riscv-objdump-portable" --version | head -2
-          tar -czf "$GITHUB_WORKSPACE/riscv-objdump-portable.tgz" -C "$GITHUB_WORKSPACE/build" objdump-portable
-          ls -lh "$GITHUB_WORKSPACE/riscv-objdump-portable.tgz"
-      - uses: actions/upload-artifact@v4
-        with:
-          name: riscv-objdump-portable-once
-          path: riscv-objdump-portable.tgz
-          retention-days: 2
