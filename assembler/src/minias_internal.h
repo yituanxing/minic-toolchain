@@ -133,6 +133,8 @@ typedef struct MiniAsStmt {
     uint64_t offset;
     uint32_t size;
     uint64_t align;
+    /* Effective .option pic/nopic at the precise instruction site. */
+    bool pic_enabled;
 } MiniAsStmt;
 
 typedef struct MiniAs {
@@ -169,6 +171,9 @@ typedef struct MiniAs {
     size_t macro_expansion_counter;
     size_t macro_expansion_depth;
     bool conditional_active;
+    bool pic_enabled;
+    bool pic_option_stack[64];
+    size_t pic_option_depth;
     bool cfi_active;
     bool cfi_signal_frame;
     uint32_t elf_flags;
