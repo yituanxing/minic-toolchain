@@ -689,6 +689,7 @@ jobs:
             build/linux-runtime-gcc-cohort-v1/gcc-preflight.log
             build/linux-runtime-gcc-cohort-v1/results.tsv
             build/linux-runtime-gcc-cohort-v1/frontier.txt
+            build/linux-runtime-gcc-cohort-v1/trials/full_all/Image
             build/linux-runtime-gcc-cohort-v1/trials/*/link.log
             build/linux-runtime-gcc-cohort-v1/trials/*/guard.log
             build/linux-runtime-gcc-cohort-v1/trials/*/runtime.log
