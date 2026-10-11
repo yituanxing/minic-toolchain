@@ -1486,11 +1486,12 @@ PY_FAULT_OWNER
         fi
         swap_name="gcc_only_$(printf '%s' "$swap_target" | tr '/.' '__')"
         if [[ -n "${COHORT_NEXT_GCC_TARGET:-}" ]]; then
-          riscv64-linux-gnu-nm --defined-only "$ev/minic/$swap_target" | grep -Fq " do_raw_spin_unlock" || {
-            echo "NEXT_OWNER_SWAP=INCONCLUSIVE target=$swap_target reason=not_symbol_owner"
+          expected_symbol="${COHORT_NEXT_GCC_EXPECT_SYMBOL:-do_raw_spin_unlock}"
+          riscv64-linux-gnu-nm --defined-only "$ev/minic/$swap_target" | awk -v symbol="$expected_symbol" '$NF == symbol {seen=1} END {exit !seen}' || {
+            echo "NEXT_OWNER_SWAP=INCONCLUSIVE target=$swap_target reason=not_symbol_owner symbol=$expected_symbol"
             exit 8
           }
-          echo "NEXT_OWNER_SYMBOL=CONFIRMED symbol=do_raw_spin_unlock owner=$swap_target"
+          echo "NEXT_OWNER_SYMBOL=CONFIRMED symbol=$expected_symbol owner=$swap_target"
         fi
         echo "NEXT_OWNER_SWAP=START target=$swap_target index=$swap_index fixed_earlycon=true"
         trial "$swap_name" "$swap_index" fast all_except
