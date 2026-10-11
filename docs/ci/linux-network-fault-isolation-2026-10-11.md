@@ -306,3 +306,36 @@ specialization facts. A separate compiler regression source was checked into
 the existing RV64 differential suite. Do not mistake this image-level result
 for a proof that every other future combination of MiniC optimizations is
 correct.
+
+
+## Independent second private QEMU replay of nine-MiniC-owner Image
+
+An independent QEMU 8.2.2 guest launch of the **identical, authenticated**
+Linux Image `8e2a6b39a2b90107dd1c4093bea88d229806812ffb344cea03d2dd855910e0f5`
+and the unmodified Python V024 archive
+`88c81f1b9eaa3377fbed3f99f29d34c60491eede6ccd57966a609b16b619a51b`
+again completed successfully. The test used the original 145/203 guest
+`/init`, the same QEMU 1 GiB/RV64 virt environment and explicit DTB
+initrd relocation. This is **not** an additional GitHub CI job, and the
+user-owned original historical cpio has not been published to GitHub.
+
+- `MODULE_PASS=145`, 145 unique module IDs, final `nouveau`.
+- `FUNCTION_PASS=203`, 203 unique function IDs, final `bridge-links-up`.
+- Every one of the 348 PASS markers **exactly matched the original Python
+  success log in the same sequence**, not just as a set.
+- SHA256 of the sorted module-ID canonicalization:
+  `a0bf40902063254aec9203600f7b75c54bbacb5106a14dcaca3d31454e6c3b59`.
+- SHA256 of the sorted function-ID canonicalization:
+  `c1105105a3280ab0d4bbec09e08f57dccc870318791b0fd14b3e6cad86a04a19`.
+- Terminal `M38_FINAL145_V028_END pass=203 fail=0`; guest normal
+  `reboot: Power down`.
+- QEMU process exited `0` (this second replay captured the host status,
+  closing the explicit host-exit-evidence gap of the earlier replay).
+- No `Kernel panic`, `Oops`, `BUG`, `MODULE_FAIL`, or `FUNCTION_FAIL`.
+- Guest final timestamp approximately 631 seconds; independently measured
+  host wall 637 seconds.
+
+The previously confirmed Netfilter #111 and GUP/AF_ALG #187 crashes do not
+recur in the nine-owner MiniC-only Image. Full-current-object recompilation,
+all-new toolchain linking and P1's separate syscall profile remain **outside**
+this narrow authenticated Image certificate.
