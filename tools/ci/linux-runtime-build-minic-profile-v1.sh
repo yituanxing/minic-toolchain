@@ -52,6 +52,7 @@ patches=(
   apply-riscv64-pi-local-symbol-address-v0.py
   apply-loop-mutated-specialization-fact-barrier-v0.py
   apply-local-asm-if-fact-barrier-v0.py
+  apply-core-if-condition-dominance-barrier-v0.py
   apply-netlink-if-control-trace-v0.py
 )
 
