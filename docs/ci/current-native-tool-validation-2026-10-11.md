@@ -71,3 +71,30 @@ before promoting a gate.
 4. Only after independent acceptance, start two-tool integration followed by
    complete existing-toolchain integration. Postpone MiniObjdump work and
    current-compiler Stage0->Stage1->Stage2 self-host re-certification.
+
+## Independent revalidation results — current product
+
+- [#38149742508](https://github.com/yituanxing/minic-toolchain/actions/runs/38149742508):
+  MiniAS real16 **PASS 16/16**, source generated from pinned real Linux inputs;
+  MiniAR-only Kbuild and MiniLD-only two-REL-boundary Linux builds were still
+  executing when this entry was written. Their final verdicts must be checked.
+- [#38149742328](https://github.com/yituanxing/minic-toolchain/actions/runs/38149742328):
+  **SUCCESS**. Exact GNU differential assertions observed:
+  MiniNM A0 (ELF32/ELF64 REL/EXEC/DYN), MiniAR A0, MiniObjcopy A0/A1,
+  MiniStrip A0. This is a format/option gate, not a Linux boot certificate.
+- [#38150034665](https://github.com/yituanxing/minic-toolchain/actions/runs/38150034665):
+  MiniPP A0 exact GCC-E comparison **SUCCESS**.
+- [#38150034676](https://github.com/yituanxing/minic-toolchain/actions/runs/38150034676):
+  MiniPP live Linux smoke and product18/batch tests both **SUCCESS**;
+  pinned GCC predefines produced (378 macros, 22 attributes, 4 builtins).
+  The 3352-item frozen exact check and independent Linux-only MiniPP build
+  remain separate, stronger targets.
+- [#38150108182](https://github.com/yituanxing/minic-toolchain/actions/runs/38150108182):
+  unified driver integration started; final verification still pending.
+
+## Next current-head opt-in proof
+
+Run the **existing** MiniAS 3352 matrix + aggregate/C149/native35 gates,
+MiniLD dynamic musl and static musl/Lua contracts. Keep distinct individual
+job verdicts; never label the whole tool as certified solely by green router,
+structural M0 or a partial Linux-only substitution. Do not add workflows.
