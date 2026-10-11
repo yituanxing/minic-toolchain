@@ -394,3 +394,50 @@ This is a first **bounded differential probe**, not a proof that early
 startup must live in the seven selected objects. If the early owner cohort
 does not explain the failure, broaden isolation using the same cached-GNU
 object-set approach rather than making repeated, blind full Linux builds.
+
+## MiniAS boot blocker — ISOLATED to one object, root cause patched
+
+[GNU-only MiniAS differential run #38158617826](https://github.com/yituanxing/minic-toolchain/actions/runs/38158617826)
+delivered a decisive same-build object-swap result. It independently
+compiled Linux with MiniAS: **2,197 production assembly passes** in 448 s,
+then QEMU hung at OpenSBI before the Linux banner. From the **exact same
+object tree**, the incremental diagnostic replaced only
+`arch/riscv/kernel/head.o` with its captured GNU as reference.
+Downstream re-link and fast QEMU **BOOT PASSED**:
+`MINIAS_BISECT_PROBE=BOOT_PASS label=head_gnu gnu_count=1`.
+No extra Linux TU compilation or new GNU full build was necessary; the
+relocation+QEMU probe took **about 11 s**. Original MiniAS Image was restored
+for artifact archival. Its diagnostic archive retains both disassemblies,
+ELF section inventories, the original `head.s`, GNU `head.o`, and both
+QEMU logs.
+
+**Exact code-level defect:** the preprocessed real Linux
+`arch/riscv/kernel/head.S` contains `la reg, global_symbol` during
+early boot, where PIC/GOT is not initialized. GNU as correctly emits
+`R_RISCV_PCREL_HI20` and an `auipc + addi` pair. MiniAS emitted
+`R_RISCV_GOT_HI20` and `auipc + ld` instead, even though the source
+did *not* enable PIC. The reason was in
+`assembler/src/riscv_encode.c`: old `use_got` was based solely on
+whether the symbol was externally undefined. The parser had silently
+discarded all `.option` state. This is a concrete semantic bug, not
+a missing assembler opcode or a speculative alignment issue. GNU/MiniAS
+`head.o` also differ in `R_RISCV_ALIGN` and section sizes;
+those differences have **not** been independently cleared yet.
+
+**Patch landed:** capture effective `.option pic`/`.option nopic` and
+scoped `.option push/pop` per instruction; default GNU-compatible
+NOPIC, and permit GOT for external-symbol `la` only if PIC is enabled.
+The original PIC/GOT fixture is now **explicit PIC**, and an additional
+GNU differential test asserts default NOPIC `la` -> PCREL twice and
+scoped PIC `la` -> GOT once, with **GNU-exact code bytes**.
+[Focused regression #38159624380](https://github.com/yituanxing/minic-toolchain/actions/runs/38159624380)
+is **SUCCESS**, with
+`MINIAS_A0_NOPIC_LA_GNU_DIFF=PASS`,
+`MINIAS_A0_PIC_LA_GNU_DIFF=PASS`, and
+`TOOLCHAIN_FOCUSED_T1=PASS`.
+
+**Next live acceptance:** rebuild the same GNU-only MiniAS Linux Image,
+test QEMU P0 and P1, and only then promote this particular source fix as
+Linux-runtime proven. A green *single GNU head swap* establishes the
+failing-owner boundary but alone cannot establish that the semantic
+change repaired every other native assembly input.
