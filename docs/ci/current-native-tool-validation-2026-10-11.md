@@ -491,3 +491,17 @@ syscall checks**. This is a stronger runtime oracle than the MiniObjcopy
 one-lane FAST certificate, but **not** the separate private external
 Python-era 145-module/203-function archive, which was not executed here.
 No all-native multi-tool integrated build or self-hosting is implied.
+
+## Linux multi-tool promotion: pending staged real executions
+
+The completed independent certificates for MiniAS, MiniAR, MiniObjcopy and
+MiniPP's frozen GCC-exact preprocessor inputs support a **staged production
+matrix**, not an assertion that all tools have passed together. Before
+running all native tools at once, exercise the previously archived
+**three-final-link MiniLD + MiniObjcopy boundary** under GNU GCC/as/ar.
+Retain the GNU reference path, capture the first failing native MiniLD
+argv/output, and repair MiniLD before expanding replacements.
+The GNU baseline remains the reference for every stage, and only a real
+Image + QEMU oracle can promote a combination to runtime-certified.
+The current run requests this previously defined mixed owner
+`[miniobjcopy-linux-tool]`; no workflow or job is added.
