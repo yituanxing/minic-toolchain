@@ -131,6 +131,16 @@ def main():
             reconstructed = reconstructed.replace(
                 "  cancel-in-progress: false\n",
                 "  cancel-in-progress: true\n", 1)
+        if name == "minild-integration-v1.yml":
+            # The original wrapper missed Kbuild's bare 'vmlinux.o'.
+            # Permit precisely this reviewed selector correction and
+            # compare the remaining executable job body to its original
+            # immutable Git blob.
+            old = "            */purgatory.ro|*/vmlinux.o)"
+            new = "            */purgatory.ro|purgatory.ro|*/vmlinux.o|vmlinux.o)"
+            if reconstructed.count(new) != 1 or old in reconstructed:
+                raise AssertionError("MiniLD bare-output correction is missing or altered")
+            reconstructed = reconstructed.replace(new, old, 1)
         if git_blob(reconstructed.encode()) != original_sha:
             raise AssertionError(f"original job bodies or manual behavior changed: {name}")
         expected_cond = "    if: " + " || ".join(
