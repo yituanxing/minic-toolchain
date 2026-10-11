@@ -89,7 +89,7 @@ def main():
         "            build/minias-linux-runtime/out/arch/riscv/boot/Image", 1)
     linux_body = cur["linux-single"]
     if sha(ROOT / "tests/assembler/minias_linux_incremental_bisect.sh") != (
-        "097525d57a63d0d1b720230625e6499fcc53c7c3"
+        "fdf3a07786c2f9500183bc5753cc6a5bb38cb1b3"
     ):
         raise AssertionError("MiniAS incremental diagnostic script differs from reviewed source")
     if linux_body.count("# Capture a small genuine GNU oracle") != 1:
@@ -105,6 +105,7 @@ def main():
         "arch/riscv/mm/init.o",
         "drivers/of/fdt.o",
         '"$real_as" "${gnu_args[@]}"',
+        'cp "$input" "${golden%.o}.s"',
         "test -s \"$golden\"",
     ):
         if marker not in golden_capture:
@@ -130,6 +131,7 @@ def main():
         "            build/minias-linux-runtime/bisect/*.txt\n"
         "            build/minias-linux-runtime/bisect/*.log\n"
         "            build/minias-linux-runtime/golden-as/arch/riscv/kernel/head.o\n"
+        "            build/minias-linux-runtime/golden-as/arch/riscv/kernel/head.s\n"
     )
     if reverted.count(additions) != 1:
         raise AssertionError("MiniAS bisection evidence is missing or altered")
