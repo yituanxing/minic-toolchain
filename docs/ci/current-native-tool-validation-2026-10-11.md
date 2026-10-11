@@ -270,3 +270,51 @@ with corresponding exact workflow-identity attestations and no new jobs
 or workflows. Repeat the same GNU-only MiniObjcopy build and existing
 `LINUX_RUNTIME_PROFILE=fast` QEMU oracle. Do not call runtime green
 until real guest output proves all required initramfs markers.
+
+## MiniObjcopy GNU-only Linux 6.6.143 QEMU fast runtime — CERTIFIED
+
+The current-head [#38156029304](https://github.com/yituanxing/minic-toolchain/actions/runs/38156029304),
+commit `97147b799088399611be52ee3be9c0ed1e9ed894`,
+completed **SUCCESS** including the actual guest execution. The job log and
+downloaded artifact `miniobjcopy-linux-tool-frontier` were independently
+inspected (not merely the GitHub Actions green indicator):
+
+- **Exact substitution**: GCC + GNU as + GNU ar + GNU ld remained
+  unchanged; **only** MiniObjcopy replaced GNU objcopy.
+  `minild.trace` was exactly 0 bytes.
+- **44 native objcopy invocations**, traced with exact argv.
+  Among these: 38 RISC-V PI/EFI ET_REL three-option prefix transforms,
+  one `-j .modinfo -O binary` extraction, one final
+  `-O binary -R ... -S` kernel Image conversion, two VDSO
+  `-G` globalization filters. Counts of option appearances are not
+  mutually exclusive.
+- **Image generated**: 22,033,920 bytes, SHA-256
+  `e019402f4bbc8bd44f55e40d4277a3cb53de2bc95bea7eda0ce91a55152e3d56`.
+  Artifact image bytes were independently hashed to confirm the CI marker.
+- **Real QEMU boot**, `qemu-system-riscv64`, RISC-V Linux 6.6.143,
+  `rdinit=/init`: `LINUX_RUNTIME_BOOT lane=rdinit-init qemu_status=0`.
+  Original guest log `qemu-runtime/rdinit-init.log`, 14,570 bytes,
+  contains exact expected `devtmpfs` initialization, PID1 handoff,
+  `INIT_PROC_MOUNT=PASS`, `INIT_SYSFS_MOUNT=PASS`,
+  `INIT_DEVTMPFS_MOUNT=PASS`, `INIT_CMDLINE_READ=PASS`,
+  `INIT_TMPFS_MOUNT=PASS`, `INIT_TMPFS_RW=PASS`,
+  `USER_SHELL_OK`, `DONE_COMMANDS`,
+  `MINIC_LINUX_RUNTIME_INIT_END fail=0`, and
+  `reboot: Power down`. No Oops/panic/BUG was found in that guest log.
+- **Runtime oracle**: `LINUX_RUNTIME_RDINIT_INIT=PASS` and
+  `LINUX_RUNTIME_EXACT=PASS release=6.6.143 profile=fast lanes=1/1`;
+  `MINIOBJCOPY_LINUX_SINGLE_RUNTIME=PASS` emitted only after
+  real guest assertions succeeded.
+- The earlier failure [#38155265274](https://github.com/yituanxing/minic-toolchain/actions/runs/38155265274)
+  was **environmental**, not a tool semantic failure: missing cross-target
+  libc headers during initramfs preparation. The previously approved
+  cross-header fix `libc6-dev-riscv64-cross` unblocked this replay;
+  M0 source integrity remained green.
+
+**Promotion**: MiniObjcopy is certified for **the complete Linux 6.6.143
+GNU-only single-tool build and the Python-derived FAST one-lane guest
+runtime** at that exact SHA. This is *not* a claim that the external,
+private archival 145-module/203-function suite was executed; that separate
+historical asset is not part of a public runner fixture. It is also not a
+full MiniLD / MiniAS / MiniPP combination or current-MiniC self-host
+certificate.
