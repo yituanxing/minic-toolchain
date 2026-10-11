@@ -891,6 +891,74 @@ PY_HASH_FREEZE
     cp -a --reflink=auto "$gold_snapshot" "$out"
     echo "MINIC_INET_HASHTABLES_REPAIR=READY old=$old_hash_sha new=$new_hash_sha changed=true golden_restored=true"
   fi
+  # Eighth owner: replay the authentic current MiniC netfilter/core.o, not a
+  # GCC substitution. Prior compiler-wide semantic repairs may already
+  # correct the frozen object's runtime bug. Reuse the exact Kbuild .i.
+  if [[ "${COHORT_REPAIR_NETFILTER_CORE:-0}" == 1 ]]; then
+    core_target=net/netfilter/core.o
+    core_dir="$hotfix/netfilter-core-current"
+    mkdir -p "$core_dir"
+    printf '%s\n' "$core_target" >"$core_dir/selected.txt"
+    core_old_sha=$(sha256sum "$ev/minic/$core_target" | cut -d' ' -f1)
+    python3 "$repo/tools/ci/linux-runtime-kbuild-regeneration-guard-v1.py" \
+      --mode replay --out "$out" --golden-out "$gold_snapshot" \
+      --evidence "$core_dir/replay.log" --selected "$core_dir/selected.txt" \
+      --wrapper "$repo/tests/external/linux/stage2_kbuild_cc.sh" \
+      --minic "$minic" --success-trace "$core_dir/success.txt" \
+      --digest-trace "$core_dir/digests.txt" | tee "$core_dir/replay.log"
+    python3 "$repo/tools/ci/linux-runtime-minic-route-audit-v1.py" \
+      --objects-file "$core_dir/selected.txt" \
+      --success-trace "$core_dir/success.txt" \
+      --object-digest-trace "$core_dir/digests.txt" --candidates "$out" \
+      | tee "$core_dir/route-audit.log"
+    core_new_sha=$(sha256sum "$out/$core_target" | cut -d' ' -f1)
+    [[ "$core_old_sha" != "$core_new_sha" ]] || {
+      echo "NETFILTER_CORE_CURRENT=INCONCLUSIVE unchanged_frozen_object"
+      exit 8
+    }
+    for ext in i s; do
+      source_path="$out/net/netfilter/core.minic-stage2.$ext"
+      test -s "$source_path" || { echo "NETFILTER_CORE_CURRENT=ERROR missing=$source_path"; exit 8; }
+      cp -a "$source_path" "$core_dir/core.$ext"
+    done
+    python3 - "$ev/gcc/$core_target" "$ev/minic/$core_target" "$out/$core_target" <<'PY_CORE_ABI'
+import pathlib,struct,sys
+headers=[pathlib.Path(p).read_bytes()[:52] for p in sys.argv[1:]]
+assert all(len(h)==52 and h[:6]==b"\x7fELF\x02\x01" for h in headers)
+assert all(struct.unpack_from("<H",h,16)[0]==1 and
+           struct.unpack_from("<H",h,18)[0]==243 for h in headers)
+assert len({h[48:52] for h in headers})==1
+print("NETFILTER_CORE_ABI=PASS same_RV64_identity")
+PY_CORE_ABI
+    cp -a "$out/$core_target" "$ev/minic/$core_target"
+    python3 - "$ev/minic-manifest.sha256" "$ev" "$core_target" "$core_new_sha" <<'PY_CORE_FREEZE'
+from pathlib import Path
+import hashlib,sys
+manifest,root=map(Path,sys.argv[1:3])
+target="minic/"+sys.argv[3]
+allow={"minic/drivers/tty/serial/earlycon.o","minic/fs/super.o",
+       "minic/net/ipv4/tcp_cong.o","minic/net/netlink/genetlink.o",
+       "minic/drivers/base/power/runtime.o","minic/net/ipv4/inet_connection_sock.o",
+       "minic/net/ipv4/inet_hashtables.o",target}
+assert len(allow)==8
+frozen=0
+for row in manifest.read_text().splitlines():
+    digest,name=row.split(None,1)
+    observed=hashlib.sha256((root/name).read_bytes()).hexdigest()
+    if name==target:
+        assert observed==sys.argv[4], "new Netfilter core object mismatch"
+    elif name not in allow:
+        assert observed==digest, "unrelated MiniC object changed: "+name
+        frozen+=1
+assert frozen==2056, f"expected 2056 frozen neighbors, found {frozen}"
+print("NETFILTER_CORE_FROZEN_NEIGHBORS=PASS count=2056")
+PY_CORE_FREEZE
+    printf 'owner=%s\nold_sha256=%s\nnew_sha256=%s\n' \
+      "$core_target" "$core_old_sha" "$core_new_sha" >"$core_dir/provenance.txt"
+    rm -rf -- "$out"
+    cp -a --reflink=auto "$gold_snapshot" "$out"
+    echo "NETFILTER_CORE_CURRENT=READY old=$core_old_sha new=$core_new_sha gcc_swap=NONE"
+  fi
   # Replay exactly one additional MiniC owner using the pinned GNU
   # preprocessing inputs. Do not modify the immutable frozen 2064 pool.
   if [[ "${COHORT_SPINLOCK_CAPTURE_ONLY:-0}" == 1 ]]; then
