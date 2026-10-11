@@ -930,7 +930,17 @@ static bool parse_section_directive(MiniAs *as, char *args, size_t line) {
             flags = MINIAS_SHF_ALLOC | MINIAS_SHF_WRITE;
         }
     }
-    return switch_section(as, name, type, flags, 1U);
+    /*
+     * RISC-V instructions in executable input subsections must not be
+     * placed at byte alignment.  In particular .text.main may follow
+     * odd-length .rodata when MiniLD links section-per-function inputs.
+     * The .text directive already uses four-byte instruction alignment.
+     */
+    return switch_section(as,
+                          name,
+                          type,
+                          flags,
+                          (flags & MINIAS_SHF_EXECINSTR) != 0U ? 4U : 1U);
 }
 
 static bool handle_symbol_list(MiniAs *as,
