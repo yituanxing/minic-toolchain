@@ -250,3 +250,23 @@ metadata against GNU objcopy byte-for-byte.
 **SUCCESS**, including the new allocated/nonallocated `.modinfo`
 differential cases. The third real GNU-only Linux build is the next test;
 its separate Image/QEMU outcome must not be predeclared as PASS.
+
+## Third MiniObjcopy-only real Linux Image result and runtime prerequisite
+
+[#38155265274](https://github.com/yituanxing/minic-toolchain/actions/runs/38155265274)
+built Linux 6.6.143 `Image` **successfully** with GNU GCC/GNU as/GNU
+ar/**GNU ld at all link stages**, and **MiniObjcopy only** replacing GNU
+objcopy. The trace confirmed **44 actual MiniObjcopy invocations**,
+`minild.trace` empty, final `Image` 22,033,920 bytes,
+SHA-256 `baca0fe12c4a3c4237c4d2e91ce97561cb7a96d8d747d98d8632a7cf84c51de4`.
+The single-tool *build* gate is thus **PASS**; the workflow overall was
+**FAIL** before QEMU was started because the CI initramfs cross-compile
+environment lacked `libc6-dev-riscv64-cross`
+(`bits/wordsize.h` missing). This is a **CI prerequisite issue**,
+not yet evidence for or against the guest running correctly.
+
+Added the missing cross libc development headers to the existing job,
+with corresponding exact workflow-identity attestations and no new jobs
+or workflows. Repeat the same GNU-only MiniObjcopy build and existing
+`LINUX_RUNTIME_PROFILE=fast` QEMU oracle. Do not call runtime green
+until real guest output proves all required initramfs markers.
