@@ -4481,6 +4481,28 @@ static bool static_entry_address(MiniLdState *state,
     return static_resolve_symbol(state, layout, index, entry_out);
 }
 
+/* Coalesce adjacent scripted PT_LOADs without moving sections or relocations.
+ * A vmlinux linker script can place >10,000 individual input sections. */
+typedef struct MiniLdStaticLoadSegment {
+    uint64_t file_offset, vaddr, laddr, file_size, mem_size;
+    uint32_t flags;
+} MiniLdStaticLoadSegment;
+
+static int static_load_segment_compare(const void *lhs, const void *rhs) {
+    const MiniLdStaticLoadSegment *a = lhs, *b = rhs;
+
+    if (a->laddr != b->laddr) {
+        return a->laddr < b->laddr ? -1 : 1;
+    }
+    if (a->vaddr != b->vaddr) {
+        return a->vaddr < b->vaddr ? -1 : 1;
+    }
+    if (a->file_offset != b->file_offset) {
+        return a->file_offset < b->file_offset ? -1 : 1;
+    }
+    return 0;
+}
+
 static bool static_write_executable(MiniLdState *state,
                                     const MiniLdStaticLayout *layout,
                                     const char *path,
@@ -4505,21 +4527,81 @@ static bool static_write_executable(MiniLdState *state,
     unsigned char *image = NULL;
     Elf64_Ehdr header;
     Elf64_Phdr *programs;
+    MiniLdStaticLoadSegment *load_segments = NULL;
     size_t i;
     size_t program_index = 0U;
     FILE *file = NULL;
     bool ok = false;
 
     if (layout->scripted) {
+        size_t count = 0U;
+
+        load_segments = calloc(state->section_count == 0U ? 1U :
+                               state->section_count, sizeof(*load_segments));
+        if (load_segments == NULL) {
+            goto oom;
+        }
         for (i = 0U; i < state->section_count; ++i) {
-            MiniLdSection *section = &state->sections[i];
+            const MiniLdSection *section = &state->sections[i];
+            MiniLdStaticLoadSegment *segment;
 
             if (layout->section_discarded[i] ||
                 (section->flags & SHF_ALLOC) == 0U ||
                 section->size == 0U) {
                 continue;
             }
-            ++phnum;
+            if (layout->section_file_offset[i] == SIZE_MAX ||
+                (uint64_t)section->size >
+                    UINT64_MAX - layout->section_vaddr[i] ||
+                (uint64_t)section->size >
+                    UINT64_MAX - layout->section_laddr[i]) {
+                fprintf(state->diagnostics,
+                        "minic-ld: invalid-script-load-range:%s\n",
+                        section->name);
+                goto done;
+            }
+            segment = &load_segments[count++];
+            segment->file_offset = layout->section_file_offset[i];
+            segment->vaddr = layout->section_vaddr[i];
+            segment->laddr = layout->section_laddr[i];
+            segment->file_size =
+                section->type == SHT_NOBITS ? 0U : section->size;
+            segment->mem_size = section->size;
+            segment->flags = PF_R;
+            if ((section->flags & SHF_WRITE) != 0U) {
+                segment->flags |= PF_W;
+            }
+            if ((section->flags & SHF_EXECINSTR) != 0U) {
+                segment->flags |= PF_X;
+            }
+        }
+        qsort(load_segments, count, sizeof(*load_segments),
+              static_load_segment_compare);
+        for (i = 0U; i < count; ++i) {
+            const MiniLdStaticLoadSegment *next = &load_segments[i];
+
+            if (phnum != 0U) {
+                MiniLdStaticLoadSegment *prev = &load_segments[phnum - 1U];
+
+                /*
+                 * Never merge across a hole, permission change or NOBITS
+                 * tail. All file, load and virtual ranges must be adjacent.
+                 */
+                if (prev->flags == next->flags &&
+                    prev->file_size == prev->mem_size &&
+                    prev->laddr <= UINT64_MAX - prev->mem_size &&
+                    prev->vaddr <= UINT64_MAX - prev->mem_size &&
+                    prev->file_offset <= UINT64_MAX - prev->file_size &&
+                    prev->laddr + prev->mem_size == next->laddr &&
+                    prev->vaddr + prev->mem_size == next->vaddr &&
+                    prev->file_offset + prev->file_size ==
+                        next->file_offset) {
+                    prev->mem_size += next->mem_size;
+                    prev->file_size += next->file_size;
+                    continue;
+                }
+            }
+            load_segments[phnum++] = *next;
         }
     } else {
         phnum = (layout->have_rx ? 1U : 0U) +
@@ -4823,30 +4905,19 @@ static bool static_write_executable(MiniLdState *state,
     programs =
         (Elf64_Phdr *)(void *)(image + sizeof(Elf64_Ehdr));
     if (layout->scripted) {
-        for (i = 0U; i < state->section_count; ++i) {
-            MiniLdSection *section = &state->sections[i];
-            Elf64_Phdr *ph;
+        for (i = 0U; i < phnum; ++i) {
+            const MiniLdStaticLoadSegment *segment = &load_segments[i];
+            Elf64_Phdr *ph = &programs[program_index++];
 
-            if (layout->section_discarded[i] ||
-                (section->flags & SHF_ALLOC) == 0U ||
-                section->size == 0U) {
-                continue;
-            }
-            ph = &programs[program_index++];
             memset(ph, 0, sizeof(*ph));
             ph->p_type = PT_LOAD;
-            ph->p_flags = PF_R;
-            if ((section->flags & SHF_WRITE) != 0U) {
-                ph->p_flags |= PF_W;
-            }
-            if ((section->flags & SHF_EXECINSTR) != 0U) {
-                ph->p_flags |= PF_X;
-            }
-            ph->p_offset = layout->section_file_offset[i];
-            ph->p_vaddr = layout->section_vaddr[i];
-            ph->p_paddr = layout->section_laddr[i];
-            ph->p_filesz = section->type == SHT_NOBITS ? 0U : section->size;
-            ph->p_memsz = section->size;
+            ph->p_flags = segment->flags;
+            ph->p_offset = segment->file_offset;
+            ph->p_vaddr = segment->vaddr;
+            ph->p_paddr = segment->laddr;
+            ph->p_filesz = segment->file_size;
+            ph->p_memsz = segment->mem_size;
+            /* Scripted offsets are not yet guaranteed page-congruent. */
             ph->p_align = 1U;
         }
     } else {
@@ -4951,6 +5022,7 @@ done:
     free(image);
     free(symbols);
     free(headers);
+    free(load_segments);
     free(symbol_name_offsets);
     free(section_name_offsets);
     free(section_file_offsets);
