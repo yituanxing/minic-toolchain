@@ -1350,6 +1350,31 @@ jobs:
 
           if "$minias" "${minias_opts[@]}" -o "$out" "$input"; then
             printf 'pass input=%q output=%q\n' "$input" "$out" >>"$trace"
+            # Capture a small genuine GNU oracle alongside selected *native*
+            # early-boot objects while GCC temporary .s files still exist.
+            # The real Kbuild output above stays MiniAS, no fallback.
+            case "$out" in
+              arch/riscv/kernel/head.o|arch/riscv/kernel/entry.o|\
+              arch/riscv/mm/init.o|arch/riscv/kernel/setup.o|\
+              arch/riscv/kernel/sbi.o|drivers/of/fdt.o|init/main.o)
+                golden="${MINIAS_GNU_ROOT:?}/$out"
+                mkdir -p "$(dirname "$golden")"
+                gnu_args=("${args[@]}")
+                found_output=0
+                for ((k=0; k<${#gnu_args[@]}; ++k)); do
+                  if [[ "${gnu_args[k]}" == -o ]] && (( k + 1 < ${#gnu_args[@]} )); then
+                    gnu_args[k+1]="$golden"
+                    found_output=1
+                    break
+                  fi
+                done
+                test "$found_output" -eq 1
+                "$real_as" "${gnu_args[@]}"
+                test -s "$golden"
+                printf 'gnu-reference input=%q output=%q reference=%q\n' \
+                  "$input" "$out" "$golden" >>"$trace"
+                ;;
+            esac
           else
             status=$?
             printf 'fail status=%s input=%q output=%q\n' "$status" "$input" "$out" >>"$trace"
@@ -1391,6 +1416,7 @@ jobs:
           export MINIAS="$GITHUB_WORKSPACE/build/minias-linux-runtime-toolchain/bin/minic-as"
           export MINIAS_AS_TRACE="$work/minias-as.trace"
           export MINIAS_FAILURE_DIR="$work/failure-inputs"
+          export MINIAS_GNU_ROOT="$work/golden-as"
           export REAL_AS=/usr/bin/riscv64-linux-gnu-as
 
           started=$(date +%s)
@@ -1454,6 +1480,21 @@ jobs:
 
           echo "MINIAS_LINUX_GCC_RUNTIME=PASS p0=PASS p1=12/12 head=$GITHUB_SHA"
 
+      - name: Diagnose early-boot with cached GNU early objects and incremental relink
+        if: failure()
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/minias-linux-runtime"
+          if ! test -s "$work/out/arch/riscv/boot/Image"; then
+            echo "MINIAS_BISECT=SKIP no_complete_image"
+            exit 0
+          fi
+          MINIAS_LINUX_WORK="$work" \
+          MINIAS="$GITHUB_WORKSPACE/build/minias-linux-runtime-toolchain/bin/minic-as" \
+          MINIAS_AS_TRACE="$work/minias-as.trace" \
+          MINIAS_GNU_ROOT="$work/golden-as" \
+            bash tests/assembler/minias_linux_incremental_bisect.sh
       - name: Preserve MiniAS-only Linux build and guest evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -1465,6 +1506,10 @@ jobs:
             build/minias-linux-runtime/failure-inputs/*.s
             build/minias-linux-runtime/out/.config
             build/minias-linux-runtime/Image.sha256
+            build/minias-linux-runtime/bisect/**/*.log
+            build/minias-linux-runtime/bisect/*.txt
+            build/minias-linux-runtime/bisect/*.log
+            build/minias-linux-runtime/golden-as/arch/riscv/kernel/head.o
             build/minias-linux-runtime/qemu-p0/*.log
             build/minias-linux-runtime/qemu-p1/*.log
             build/minias-linux-runtime/out/arch/riscv/boot/Image
