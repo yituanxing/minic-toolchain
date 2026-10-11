@@ -91,4 +91,26 @@ product_hash=$(sha256sum "$work/product.bin" | awk '{print $1}')
 test "$reference_size" = "$product_size"
 test "$reference_hash" = "$product_hash"
 
+
+# Real Linux 6.6.143 uses 'objcopy -j .modinfo -O binary vmlinux.o'
+# after its GNU ld -r stage.  This section need not have SHF_ALLOC.
+cat >"$work/modinfo.s" <<'EOF'
+.section .text,"ax",@progbits
+.globl objcopy_modinfo_probe
+objcopy_modinfo_probe:
+  ret
+.section .modinfo,"",@progbits
+.asciz "license=GPL"
+.asciz "depends=virtio"
+.section .rodata,"a",@progbits
+.asciz "must-not-be-exported"
+EOF
+"$AS" -march=rv64imac -mabi=lp64 -o "$work/modinfo.o" "$work/modinfo.s"
+"$OBJCOPY" -j .modinfo -O binary "$work/modinfo.o" "$work/modinfo-gnu.bin"
+"$MINIOBJCOPY" -j .modinfo -O binary "$work/modinfo.o" "$work/modinfo-mini.bin"
+cmp "$work/modinfo-gnu.bin" "$work/modinfo-mini.bin"
+test "$(stat -c%s "$work/modinfo-mini.bin")" -gt 0
+printf 'MINIOBJCOPY_MODINFO=PASS bits=64 reference=GNU-objcopy only_section=.modinfo nonalloc=1 bytes=%s\n' \
+  "$(stat -c%s "$work/modinfo-mini.bin")"
+
 printf 'MINIOBJCOPY_A0=PASS oracle=GNU-objcopy format=ELF64-RISCV output=binary lma=PT_LOAD remove=2 strip=all bytes=%s sha256=%s\n'   "$product_size" "$product_hash"
