@@ -98,3 +98,51 @@ Run the **existing** MiniAS 3352 matrix + aggregate/C149/native35 gates,
 MiniLD dynamic musl and static musl/Lua contracts. Keep distinct individual
 job verdicts; never label the whole tool as certified solely by green router,
 structural M0 or a partial Linux-only substitution. Do not add workflows.
+
+## Current-head repair attestations and independent green proofs
+
+- [MiniAR GNU-base Linux #38149742508](https://github.com/yituanxing/minic-toolchain/actions/runs/38149742508):
+  `MINIAR_LINUX_KBUILD=PASS` with **633 MiniAR calls**, 629 archives,
+  then `LINUX_RUNTIME_EXACT=PASS profile=fast lanes=1/1`. This is the
+  **fast** Python-derived smoke, not the original full 145/203 suite.
+- [MiniAS native 3536 #38150189463](https://github.com/yituanxing/minic-toolchain/actions/runs/38150189463):
+  all seven 3352 shards, C149, native35, all3352 and gate3536 **SUCCESS**.
+  This is the pre-executable-alignment-fix SHA; rerun after the one-line
+  correctness fix below to certify the new assembler binary.
+- [MiniLD dynamic + static #38150189463](https://github.com/yituanxing/minic-toolchain/actions/runs/38150189463):
+  both **SUCCESS**. Dynamic MiniLD-linked musl loader plus automatic-needed
+  DSO/PIE programs ran under QEMU; static musl malloc/free and Lua 5.5
+  passed. These remain distinct from the full Linux-Image MiniLD gate.
+- [Driver initial #38150108182](https://github.com/yituanxing/minic-toolchain/actions/runs/38150108182):
+  reproducible RV64 SIGILL / 132, with `main=0x1059` in the PIE ELF
+  symbol table, an impossible odd RISC-V instruction address.
+- [MiniAS pre-fix regression #38150580702](https://github.com/yituanxing/minic-toolchain/actions/runs/38150580702):
+  independent ELF fixture `MINIAS_EXEC_SUBSECTION_ALIGN=FAIL actual=1
+  expected=4`; `assembler/src/assembler.c:parse_section_directive`
+  was defaulting executable `.section` to byte alignment rather than
+  the existing four-byte `.text` alignment.
+- [MiniAS fixed #38150684714](https://github.com/yituanxing/minic-toolchain/actions/runs/38150684714):
+  focused real16 plus `MINIAS_EXEC_SUBSECTION_ALIGN=PASS`.
+- [Driver fixed #38150792607](https://github.com/yituanxing/minic-toolchain/actions/runs/38150792607):
+  the **unchanged** dynamic musl+driver QEMU program passes twice,
+  loader and direct launch: `MINIC_DRIVER_V0=PASS`, rc=0,
+  expected `MINIC_DRIVER_OK` stdout. Its corresponding ELF artifact
+  now has `main=0x105c`, restoring valid instruction alignment.
+  The bug is fixed in **MiniAS**, not masked in the test.
+- [MiniLD first Linux REL #38149742508](https://github.com/yituanxing/minic-toolchain/actions/runs/38149742508):
+  linked Linux `Image` but correctly **FAILED** its two-call boundary
+  assertion: only `arch/riscv/purgatory/purgatory.ro` appeared in the
+  MiniLD trace. The wrapper matched `*/vmlinux.o`, but actual Kbuild passed
+  bare `vmlinux.o` and silently used GNU ld. Fixed the **existing**
+  workflow's selector (both absolute and bare paths), and updated both
+  structural equivalence checkers with an exact reversible one-line
+  exception; original historical source blobs remain pinned.
+  [M0 #38150727475](https://github.com/yituanxing/minic-toolchain/actions/runs/38150727475)
+  **SUCCESS**. A genuine two-boundary MiniLD Linux replay is executing at
+  [#38150659369](https://github.com/yituanxing/minic-toolchain/actions/runs/38150659369);
+  do not prematurely call it PASS.
+
+The next opt-in MiniAS 3536 run uses the corrected executable-section
+alignment and its existing 3352/C149/native35 aggregation. New/changed test
+owners: **zero**. Existing toolchain functionality, not self-hosting or
+new tool implementation, remains the only acceptance scope.
