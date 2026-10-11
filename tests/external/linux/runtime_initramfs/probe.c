@@ -206,6 +206,7 @@ static int bring_loopback_up(void) {
 static void ipv6_stage(const char *step) {
     (void)fprintf(stderr, "RUNTIME_V2_IPV6_STAGE pid=%ld step=%s\n",
                   (long)getpid(), step);
+    (void)fflush(stderr);
 }
 #define IPV6_STAGE_CALL(step, expression) (ipv6_stage(step), (expression))
 
