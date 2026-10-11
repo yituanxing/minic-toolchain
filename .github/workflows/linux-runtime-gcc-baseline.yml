@@ -893,68 +893,42 @@ jobs:
 
 
 
-  netfilter-object-capture-once:
-    # One-shot diagnostic of the original 2064-object cache: no full Kbuild.
-    if: github.event_name == 'push' && contains(github.event.head_commit.message, '[linux-runtime-netfilter-objdump]')
+
+  riscv-objdump-binary-export-once:
+    if: github.event_name == 'push' && contains(github.event.head_commit.message, '[linux-runtime-portable-objdump]')
     runs-on: ubuntu-24.04
-    timeout-minutes: 14
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
-      - name: Install exact GNU reference binutils
+      - name: Bundle cross objdump and its runtime ELF libraries
         shell: bash
         run: |
           set -Eeuo pipefail
-          sudo apt-get -o Acquire::Retries=2 install -y --no-install-recommends gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu || {
+          sudo apt-get -o Acquire::Retries=2 install -y --no-install-recommends binutils-riscv64-linux-gnu || {
             sudo apt-get -o Acquire::Retries=2 update
-            sudo apt-get -o Acquire::Retries=2 install -y --no-install-recommends gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu
+            sudo apt-get -o Acquire::Retries=2 install -y --no-install-recommends binutils-riscv64-linux-gnu
           }
-      - name: Identify certified golden cache
-        id: golden
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          cfg=eeb04f304ebfb97a1079c187dc0c2ea3cc776237c16ab19bbe
-          gcc_sig=$(sha256sum "$(command -v riscv64-linux-gnu-gcc)" | cut -c1-16)
-          ld_sig=$(sha256sum "$(command -v riscv64-linux-gnu-ld)" | cut -c1-16)
-          echo "key=linux-gnu-golden-v1-6.6.143-$cfg-$gcc_sig-$ld_sig" >>"$GITHUB_OUTPUT"
-      - uses: actions/cache/restore@v4
-        with:
-          path: |
-            build/linux-runtime-gcc/out
-            build/linux-runtime-gcc/provenance
-          key: ${{ steps.golden.outputs.key }}
-          fail-on-cache-miss: true
-      - uses: actions/cache/restore@v4
-        with:
-          path: |
-            build/linux-runtime-gcc-cohort-v1/minic
-            build/linux-runtime-gcc-cohort-v1/minic-manifest.sha256
-            build/linux-runtime-gcc-cohort-v1/minic-identity.txt
-          key: gnu-minic-objects-v1-eeb04f304ebfb97a1079c187dc0c2ea3cc61fc50a55aa3cc776237c16ab19bbe-d19c855bc2650568f84a73a8a17e2b8be42faee80d0ed22913588bb4d8df7822-1d1c8d09cfffddb37990552ae6392181a42d55332e48232dce27e7305d7e770b-0c2a199ea3ae14d39b008fd4080d4b18d675b07daa17976c7d9755e8ea67310b-d072447ef15a207422bf4874920221c41af7a771d1dbae770855cf3d6220a507
-          fail-on-cache-miss: true
-      - name: Diff exact netfilter/core.o GNU/MiniC machine code
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          target=net/netfilter/core.o
-          gcc="$GITHUB_WORKSPACE/build/linux-runtime-gcc/out/$target"
-          minic="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-v1/minic/$target"
-          test -s "$gcc" && test -s "$minic"
-          mkdir -p build/netfilter-asm-evidence
-          d=build/netfilter-asm-evidence
-          sha256sum "$gcc" "$minic" | tee "$d/identities.sha256"
-          riscv64-linux-gnu-nm --defined-only "$gcc" >"$d/gcc.symbols"
-          riscv64-linux-gnu-nm --defined-only "$minic" >"$d/minic.symbols"
-          riscv64-linux-gnu-nm --defined-only "$minic" | grep -w nf_hook_entries_grow
-          riscv64-linux-gnu-objdump -dr --disassemble=nf_hook_entries_grow "$gcc" >"$d/gcc.nf_hook_entries_grow.disasm"
-          riscv64-linux-gnu-objdump -dr --disassemble=nf_hook_entries_grow "$minic" >"$d/minic.nf_hook_entries_grow.disasm"
-          riscv64-linux-gnu-objdump -dr "$minic" >"$d/minic.full.disasm"
-          cp "$gcc" "$d/gcc-core.o"
-          cp "$minic" "$d/minic-core.o"
-          wc -l "$d"/*.disasm
-          printf '%s\n' "NETFILTER_OBJECT_CAPTURE=PASS same_config=true original_cache=true"
+          root="$GITHUB_WORKSPACE/build/objdump-portable"
+          mkdir -p "$root/bin" "$root/lib"
+          for program in riscv64-linux-gnu-objdump riscv64-linux-gnu-nm riscv64-linux-gnu-readelf; do
+            src=$(command -v "$program")
+            cp -L "$src" "$root/bin/$program"
+            while read -r lib; do
+              if [[ -f "$lib" ]]; then cp -L "$lib" "$root/lib/$(basename "$lib")"; fi
+            done < <(ldd "$src" | awk '$2=="=>" && $3 ~ /^\// {print $3} $1 ~ /^\// {print $1}' | sort -u)
+          done
+          cat >"$root/bin/riscv-objdump-portable" <<'SH'
+          #!/usr/bin/env bash
+          set -e
+          root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+          export LD_LIBRARY_PATH="$root/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+          exec "$root/bin/riscv64-linux-gnu-objdump" "$@"
+          SH
+          chmod +x "$root/bin/riscv-objdump-portable"
+          "$root/bin/riscv-objdump-portable" --version | head -2
+          tar -czf "$GITHUB_WORKSPACE/riscv-objdump-portable.tgz" -C "$GITHUB_WORKSPACE/build" objdump-portable
+          ls -lh "$GITHUB_WORKSPACE/riscv-objdump-portable.tgz"
       - uses: actions/upload-artifact@v4
         with:
-          name: netfilter-core-exact-two-object-assembly
-          path: build/netfilter-asm-evidence/
+          name: riscv-objdump-portable-once
+          path: riscv-objdump-portable.tgz
           retention-days: 2
