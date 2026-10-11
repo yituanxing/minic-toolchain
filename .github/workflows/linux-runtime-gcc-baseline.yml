@@ -704,7 +704,7 @@ jobs:
   # but replace only earlycon.o with the current patched MiniC profile.
   # No new workflow, no rebuilding the 2063 unaffected C translation units.
   gcc-earlycon-hotfix:
-    if: github.event_name == 'push' && contains(github.event.head_commit.message, '[linux-runtime-earlycon-hotfix]')
+    if: github.event_name == 'push' && (contains(github.event.head_commit.message, '[linux-runtime-earlycon-hotfix]') || contains(github.event.head_commit.message, '[linux-runtime-core-capture]'))
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -777,7 +777,31 @@ jobs:
             --min-c-objects 1200
           test "$(grep -Ec '^[^#[:space:]]+\.o$' "$ev/full-objects.txt")" = 2064
 
+      - name: Capture exact Netfilter GNU and MiniC cached objects only
+        if: contains(github.event.head_commit.message, '[linux-runtime-core-capture]')
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mkdir -p build/core-capture
+          d=build/core-capture
+          gcc="$GITHUB_WORKSPACE/build/linux-runtime-gcc/out/net/netfilter/core.o"
+          minic="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-v1/minic/net/netfilter/core.o"
+          test -s "$gcc" && test -s "$minic"
+          cp "$gcc" "$d/gcc-core.o"
+          cp "$minic" "$d/minic-core.o"
+          sha256sum "$gcc" "$minic" >"$d/identities.sha256"
+          riscv64-linux-gnu-objdump -dr --disassemble=nf_hook_entries_grow "$gcc" >"$d/gcc.nf_hook_entries_grow.disasm"
+          riscv64-linux-gnu-objdump -dr --disassemble=nf_hook_entries_grow "$minic" >"$d/minic.nf_hook_entries_grow.disasm"
+          riscv64-linux-gnu-nm --defined-only "$minic" >"$d/minic.symbols"
+          echo "NETFILTER_EXACT_OWNER_CAPTURE=PASS"
+      - uses: actions/upload-artifact@v4
+        if: contains(github.event.head_commit.message, '[linux-runtime-core-capture]')
+        with:
+          name: netfilter-core-gnu-minic-cache-exact
+          path: build/core-capture/
+          retention-days: 2
       - name: Build current patched MiniC compiler only once
+        if: "!contains(github.event.head_commit.message, '[linux-runtime-core-capture]')"
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -786,6 +810,7 @@ jobs:
             "$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-v1/compiler"
 
       - name: Validate QMP sampler before expensive GNU linking
+        if: "!contains(github.event.head_commit.message, '[linux-runtime-core-capture]')"
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -815,6 +840,7 @@ jobs:
           trap - EXIT
 
       - name: Recompile earlycon.o only, GNU link and compare QEMU frontier
+        if: "!contains(github.event.head_commit.message, '[linux-runtime-core-capture]')"
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -828,6 +854,7 @@ jobs:
             "$work/provenance" "$ev/full-objects.txt" "$ev"
 
       - name: Preserve single-object experiment evidence
+        if: "!contains(github.event.head_commit.message, '[linux-runtime-core-capture]')"
         if: always()
         uses: actions/upload-artifact@v4
         with:
