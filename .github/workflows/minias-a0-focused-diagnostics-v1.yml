@@ -1371,6 +1371,7 @@ jobs:
                 test "$found_output" -eq 1
                 "$real_as" "${gnu_args[@]}"
                 test -s "$golden"
+                cp "$input" "${golden%.o}.s"
                 printf 'gnu-reference input=%q output=%q reference=%q\n' \
                   "$input" "$out" "$golden" >>"$trace"
                 ;;
@@ -1510,6 +1511,7 @@ jobs:
             build/minias-linux-runtime/bisect/*.txt
             build/minias-linux-runtime/bisect/*.log
             build/minias-linux-runtime/golden-as/arch/riscv/kernel/head.o
+            build/minias-linux-runtime/golden-as/arch/riscv/kernel/head.s
             build/minias-linux-runtime/qemu-p0/*.log
             build/minias-linux-runtime/qemu-p1/*.log
             build/minias-linux-runtime/out/arch/riscv/boot/Image
