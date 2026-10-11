@@ -1301,7 +1301,7 @@ exec_subsection_align:
 EOF
 "$MINIAS" -o "$work/exec-subsection-align.o" "$work/exec-subsection-align.s"
 readelf -SW "$work/exec-subsection-align.o" >"$work/exec-subsection-align.sections"
-exec_alignment=$(awk '/\\.text\\.main[[:space:]]/ { print $NF; exit }' "$work/exec-subsection-align.sections")
+exec_alignment=$(awk 'index($0, ".text.main") { print $NF; exit }' "$work/exec-subsection-align.sections")
 if test "$exec_alignment" != 4; then
     echo "MINIAS_EXEC_SUBSECTION_ALIGN=FAIL section=.text.main actual=$exec_alignment expected=4" >&2
     exit 1
