@@ -1023,6 +1023,7 @@ native_divided_data="$(
 test "$native_divided_data" = "02000000"
 
 cat >"$work/pic-la-got.s" <<'EOF'
+.option pic
 .text
 .extern minias_external_data
 .globl pic_la_got
@@ -1063,6 +1064,46 @@ EOF
     test "$pic_la_got_hex" = "$pic_la_gnu_hex"
     readelf -Wr "$work/pic-la-got.gnu.o" | grep -Eq 'R_RISCV_GOT_HI20[[:space:]]+.*minias_external_data'
     echo "MINIAS_A0_PIC_LA_GNU_DIFF=PASS relocation=GOT_HI20 sequence=auipc+ld"
+fi
+
+# Genuine GNU default-NOPIC regression from Linux head.S:
+# prior MiniAS used GOT_HI20 for undefined names even though GNU as uses
+# PCREL_HI20 by default, causing OpenSBI->Linux pre-banner stalls.
+cat >"$work/nopic-la-head.s" <<'EOF'
+.option norvc
+.text
+.extern minias_early_boot_external
+.extern minias_pic_external
+.globl minias_nopic_entry
+minias_nopic_entry:
+  la a0, minias_early_boot_external
+  .option push
+  .option pic
+  la a1, minias_pic_external
+  .option pop
+  la a2, minias_early_boot_external
+  ret
+EOF
+"$MINIAS" -o "$work/nopic-la-head.o" "$work/nopic-la-head.s"
+nopic_relocs="$(readelf -Wr "$work/nopic-la-head.o")"
+test "$(printf '%s\n' "$nopic_relocs" |
+  grep -c 'R_RISCV_PCREL_HI20.*minias_early_boot_external')" -eq 2
+test "$(printf '%s\n' "$nopic_relocs" |
+  grep -c 'R_RISCV_GOT_HI20.*minias_pic_external')" -eq 1
+test "$(printf '%s\n' "$nopic_relocs" | grep -c 'R_RISCV_PCREL_LO12_I')" -eq 3
+if command -v riscv64-linux-gnu-as >/dev/null 2>&1; then
+    riscv64-linux-gnu-as -march=rv64gc -o "$work/nopic-la-head.gnu.o" "$work/nopic-la-head.s"
+    gnu_nopic_relocs="$(readelf -Wr "$work/nopic-la-head.gnu.o")"
+    test "$(printf '%s\n' "$gnu_nopic_relocs" |
+      grep -c 'R_RISCV_PCREL_HI20.*minias_early_boot_external')" -eq 2
+    test "$(printf '%s\n' "$gnu_nopic_relocs" |
+      grep -c 'R_RISCV_GOT_HI20.*minias_pic_external')" -eq 1
+    mini_nopic_hex="$(readelf -x .text "$work/nopic-la-head.o" |
+      awk '/0x[0-9a-f]+/ {for (i=2; i<=NF; ++i) if ($i ~ /^[0-9a-f]{8}$/) printf "%s", $i}')"
+    gnu_nopic_hex="$(readelf -x .text "$work/nopic-la-head.gnu.o" |
+      awk '/0x[0-9a-f]+/ {for (i=2; i<=NF; ++i) if ($i ~ /^[0-9a-f]{8}$/) printf "%s", $i}')"
+    test "$mini_nopic_hex" = "$gnu_nopic_hex"
+    echo "MINIAS_A0_NOPIC_LA_GNU_DIFF=PASS pcrel_external=2 pic_got=1 scoped_push_pop=1 code=GNU-exact"
 fi
 
 cat >"$work/native-symbol-addend-expr.s" <<'EOF'
