@@ -20,6 +20,7 @@ SEMANTIC_SHA = {
     "agent/linux-perf-boolean-domain-v1": "96bb3bf93fac928613f944b0042ddbac1c4c0280",
 }
 FOCUSED = ("real16", "frontier", "vector33", "resolve", "window-shard", "window")
+LINUX_SINGLE_ARCHIVE_SHA = "9e2d0a7fa5e1d8cc853c1df33c49cc4030b6a133"
 SEMANTIC = ("c-shards", "c149", "native35", "aggregate")
 
 def sha(path):
@@ -54,8 +55,42 @@ def main():
     cur = jobs(current_text)
     if set(old_f) != set(FOCUSED) or set(old_s) != set(SEMANTIC):
         raise AssertionError("old job identities do not match frozen list")
-    if set(cur) != set(FOCUSED + SEMANTIC):
-        raise AssertionError("lost semantic or focused independent jobs")
+    if set(cur) != set(FOCUSED + SEMANTIC + ("linux-single",)):
+        raise AssertionError("lost semantic/focused jobs or introduced unrelated new job")
+    old_linux = ARCH / "minias-linux-runtime-gcc-single-variable.yml"
+    if sha(old_linux) != LINUX_SINGLE_ARCHIVE_SHA:
+        raise AssertionError("historic GNU-only MiniAS runtime source changed")
+    expected = jobs(old_linux.read_text())["gcc-minias-linux-runtime"]
+    # Independent Linux acceptance reuses its archived A0->Kbuild->QEMU
+    # body, with only an explicit canonical mode, both GCC assembler names,
+    # and always-preserved success/failure evidence. No GNU as fallback.
+    expected = expected.replace("gcc-minias-linux-runtime:", "linux-single:", 1)
+    expected = expected.replace(
+        "    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[minias-linux-runtime]')",
+        "    if: (github.event_name == 'workflow_dispatch' || github.event_name == 'push') && inputs.mode == 'linux-single'", 1)
+    expected = expected.replace(
+        '          chmod +x "$bindir/riscv64-linux-gnu-as"',
+        '          chmod +x "$bindir/riscv64-linux-gnu-as"\n'
+        '          # GCC -B resolves the basename \'as\'; Kbuild AS resolves the prefixed name.\n'
+        '          ln -s riscv64-linux-gnu-as "$bindir/as"', 1)
+    expected = expected.replace(
+        "      - name: Preserve blocker evidence\n        if: failure()",
+        "      - name: Preserve MiniAS-only Linux build and guest evidence\n        if: always()", 1)
+    expected = expected.replace(
+        "          name: minias-linux-gcc-runtime-blocker",
+        "          name: minias-linux-gcc-single-cert", 1)
+    expected = expected.replace(
+        "            build/minias-linux-runtime/out/.config",
+        "            build/minias-linux-runtime/out/.config\n"
+        "            build/minias-linux-runtime/Image.sha256", 1)
+    expected = expected.replace(
+        "            build/minias-linux-runtime/qemu-p1/*.log",
+        "            build/minias-linux-runtime/qemu-p1/*.log\n"
+        "            build/minias-linux-runtime/out/arch/riscv/boot/Image", 1)
+    if cur["linux-single"] != expected:
+        raise AssertionError("GNU-only MiniAS Linux runtime job diverges from reviewed archive")
+    if current_text.count("          - linux-single") != 1:
+        raise AssertionError("MiniAS linux-single manual mode missing")
     # Explicit reusable push inputs now reach the same manual mode selectors.
     # Preserve every frozen/semantic executable job body byte-for-byte.
     manual_modes = {
@@ -98,7 +133,7 @@ def main():
     for token in ("  actions: read", "  contents: read"):
         if token not in current_text:
             raise AssertionError(f"missing GitHub Action permission {token}")
-    print(f"M0_MINIAS_SEMANTIC_CONVERGENCE=PASS branch={branch} jobs=10 original_focused=6 original_semantic=4 original_blob_shas=2")
+    print(f"M0_MINIAS_SEMANTIC_CONVERGENCE=PASS branch={branch} jobs=11 original_focused=6 original_semantic=4 original_blob_shas=3 linux_single_archived_body=1")
 
 if __name__ == "__main__":
     main()
