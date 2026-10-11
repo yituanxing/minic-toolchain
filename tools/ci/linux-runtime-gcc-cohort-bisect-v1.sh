@@ -1237,10 +1237,65 @@ if [[ "${COHORT_EARLYCON_HOTFIX:-0}" == 1 ]]; then
         }
       echo "GDB_BOUNDARY=END"
     fi
+    if [[ "${COHORT_FAULT_OWNER_MAP:-0}" == 1 ]]; then
+      # Determine the provenance of the linked panic-frame symbols from the
+      # already authenticated C object cache, without rebuilding any owner.
+      owner_dir="$ev/fault-owner"
+      mkdir -p "$owner_dir"
+      python3 - "$ev/minic" "$objects_file" "$owner_dir" <<'PY_FAULT_OWNER'
+from collections import defaultdict
+from pathlib import Path
+import subprocess,sys
+pool,manifest,ev=map(Path,sys.argv[1:])
+markers=("__minic_inline_spec_6515_19","__get_unaligned_cpu32")
+names=[x.strip() for x in manifest.read_text().splitlines() if x.strip() and not x.startswith("#")]
+result=defaultdict(set)
+for start in range(0,len(names),64):
+    owners=names[start:start+64]
+    argv=["riscv64-linux-gnu-nm","-A","--defined-only"]+[str(pool/x) for x in owners]
+    nm=subprocess.run(argv,capture_output=True,text=True,errors="replace")
+    if nm.returncode:
+        raise SystemExit("FAULT_OWNER=ERROR nm_failed="+nm.stderr[:350])
+    for line in nm.stdout.splitlines():
+        if ":" not in line: continue
+        path,_,row=line.partition(":")
+        fields=row.split()
+        if not fields or fields[-1] not in markers: continue
+        owner=Path(path).relative_to(pool).as_posix()
+        result[fields[-1]].add(owner)
+for symbol in markers:
+    owners=sorted(result[symbol])
+    print(f"FAULT_SYMBOL symbol={symbol} candidates={len(owners)}",flush=True)
+    for owner in owners[:100]:
+        print(f"FAULT_SYMBOL_OWNER symbol={symbol} owner={owner}",flush=True)
+    (ev/(symbol+".txt")).write_text("\n".join(owners)+"\n")
+spec=sorted(result[markers[0]])
+companion=sorted(result[markers[1]])
+paired=sorted(set(spec)&set(companion))
+# One unique specialization owner is strong evidence. Otherwise do not guess:
+# requiring the SAME TU to define the faulting helper is a conservative fallback.
+selected=spec if len(spec)==1 else paired if len(paired)==1 else []
+if selected:
+    print(f"FAULT_OWNER=RESOLVED owner={selected[0]} unique_spec={len(spec)==1} paired_helper={selected[0] in companion}",flush=True)
+    (ev/"candidate.txt").write_text(selected[0]+"\n")
+else:
+    print(f"FAULT_OWNER=INCONCLUSIVE spec_candidates={len(spec)} shared_helper={len(paired)}",flush=True)
+PY_FAULT_OWNER
+    fi
     if [[ "${COHORT_NEXT_GCC_SWAPS:-0}" == 1 ]]; then
       baseline="$ev/trials/earlycon_fixed_only/qemu-uart-earlycon.log"
       [[ -s "$baseline" ]] || { echo "NEXT_OWNER_SWAP=ERROR no_UARТ_baseline"; exit 8; }
-      for swap_target in fs/super.o; do
+      swap_targets=()
+      if [[ "${COHORT_FAULT_OWNER_MAP:-0}" == 1 ]]; then
+        if [[ -s "$ev/fault-owner/candidate.txt" ]]; then
+          candidate=$(cat "$ev/fault-owner/candidate.txt")
+          swap_targets+=("$candidate")
+        fi
+        swap_targets+=(net/netlink/genetlink.o)
+      else
+        swap_targets+=(fs/super.o)
+      fi
+      for swap_target in "${swap_targets[@]}"; do
         swap_index=-1
         for ((swap_k=0;swap_k<n;swap_k++)); do
           if [[ "${objects[swap_k]}" == "$swap_target" ]]; then
@@ -1282,6 +1337,12 @@ if [[ "${COHORT_EARLYCON_HOTFIX:-0}" == 1 ]]; then
             }
           echo "NEXT_OWNER_GDB=END target=$swap_target"
         fi
+        candidate_uart="$d/qemu-uart-earlycon.log"
+        for pattern in 'genl_op_from_split' 'Unable to handle kernel paging request' 'Kernel panic' 'Run /init as init process'; do
+          old_count=$(grep -Fca "$pattern" "$baseline" || true)
+          new_count=$(grep -Fca "$pattern" "$candidate_uart" || true)
+          echo "NEXT_FAULT_DELTA target=$swap_target pattern=$pattern baseline=$old_count gcc_swap=$new_count"
+        done
         echo "NEXT_OWNER_SWAP=SCREENED target=$swap_target verdict=$TRIAL_VERDICT reboot_certificate=false"
       done
     fi
