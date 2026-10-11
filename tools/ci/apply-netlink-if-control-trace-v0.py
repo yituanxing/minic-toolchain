@@ -88,21 +88,21 @@ print("MINIC_NETLINK_IF_CONTROL_TRACE=APPLIED")
 # Before the expensive Linux replay this script asserts each anchor exactly once.
 checks = [
   ("pre_then", "    status = lower_block(context, then_source, &then_terminated);\n",
-   '''    if (context->source_function && context->source_function->name &&
+   r'''    if (context->source_function && context->source_function->name &&
         strcmp(context->source_function->name, "genl_op_from_split") == 0)
         (void)fprintf(stderr, "GENL_IF_PATH stage=pre_then expr=%zu current=%u then=%u condition=%u\n",
             (size_t)statement->expression, (unsigned int)context->block_id,
             (unsigned int)then_block, (unsigned int)condition_block);
 '''),
   ("post_then", "    then_continuation_block = context->block_id;\n",
-   '''    if (context->source_function && context->source_function->name &&
+   r'''    if (context->source_function && context->source_function->name &&
         strcmp(context->source_function->name, "genl_op_from_split") == 0)
         (void)fprintf(stderr, "GENL_IF_PATH stage=post_then expr=%zu status=%d terminated=%d continuation=%u\n",
             (size_t)statement->expression, (int)status,
             then_terminated ? 1 : 0, (unsigned int)context->block_id);
 '''),
   ("pre_guard", "    status = lower_condition_branch(\n",
-   '''    if (context->source_function && context->source_function->name &&
+   r'''    if (context->source_function && context->source_function->name &&
         strcmp(context->source_function->name, "genl_op_from_split") == 0)
         (void)fprintf(stderr, "GENL_IF_PATH stage=pre_guard expr=%zu condition=%u then=%u else=%u need_merge=%d\n",
             (size_t)statement->expression, (unsigned int)condition_block,
@@ -110,7 +110,7 @@ checks = [
             needs_merge ? 1 : 0);
 '''),
   ("post_guard", "    *terminated = !needs_merge;\n",
-   '''    if (context->source_function && context->source_function->name &&
+   r'''    if (context->source_function && context->source_function->name &&
         strcmp(context->source_function->name, "genl_op_from_split") == 0)
         (void)fprintf(stderr, "GENL_IF_PATH stage=post_guard expr=%zu status=%d block=%u\n",
             (size_t)statement->expression, (int)status,
