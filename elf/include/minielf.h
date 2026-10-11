@@ -192,6 +192,9 @@ typedef struct MiniElfRewriteOptions {
     bool strip_debug;
     const char *const *keep_global_symbols;
     size_t keep_global_count;
+    /* Objcopy's RISC-V PI relocation/section namespace transformation. */
+    const char *prefix_symbols;
+    const char *prefix_alloc_sections;
 } MiniElfRewriteOptions;
 
 bool minielf_rewrite(const MiniElfView *view,
