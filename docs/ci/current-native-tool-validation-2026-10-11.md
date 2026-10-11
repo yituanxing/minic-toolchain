@@ -708,3 +708,57 @@ only a fresh GNU initramfs, then runs QEMU P0 (two lanes) and P1 (12
 syscalls). The path has no native/GNU fallback into relinking and adds
 no workflow and no job. [M0 #38184967137](https://github.com/yituanxing/minic-toolchain/actions/runs/38184967137)
 passed. Only successful *guest output* promotes triple native use.
+
+## CERTIFIED: GNU GCC/LD + MiniAS/MiniAR/MiniObjcopy triple-native Linux QEMU P0/P1
+
+The **first full native 3-tool combination has passed actual guest runtime**.
+The exact non-recompiled Image originated in the full Kbuild
+[#38184298699](https://github.com/yituanxing/minic-toolchain/actions/runs/38184298699),
+which executed MiniAS, MiniAR and MiniObjcopy while GNU GCC and GNU LD
+were unchanged. It was recovered from the original signed CI artifact
+and verified by SHA-256 before guest execution.
+
+**Definitive QEMU replay:** [#38185012989](https://github.com/yituanxing/minic-toolchain/actions/runs/38185012989)
+**SUCCESS**, run `MINIAS_MINIAR_MINIOBJCOPY_IMAGE_REPLAY=PASS`,
+`MINIAS_MINIAR_MINIOBJCOPY_LINUX_RUNTIME=PASS p0=2/2 p1=12/12`.
+
+Evidence and precise bounds:
+
+- Genuine 6.6.143 production tool invocations:
+  **2,197** native MiniAS initial passes + **88** incremental native
+  MiniAS passes during command-identity change; **633** MiniAR AR calls
+  and **44** MiniObjcopy calls. GNU GCC preprocessing/compilation and
+  GNU LD linking were unchanged. Note: the artifact's MiniAS trace
+  additionally records the later failed-job *diagnostic* replay;
+  those later invocations are NOT the source of the certified Image.
+- Image: **26,228,224 bytes**, SHA-256
+  `6b8ec7591c1e8270b4e1bdb301fccbec0352447c9c895df7e07156eed6a674d1`,
+  verified independently against the uploaded QEMU replay artifact.
+- Genuine QEMU P0: `rdinit=/init` and `rdinit=/bin/sh`
+  **2/2**, `LINUX_RUNTIME_EXACT=PASS profile=full lanes=2/2`.
+- Genuine QEMU P1: **12/12** syscall probes,
+  `LINUX_RUNTIME_V2_PROFILE=PASS profile=p1 checks=22 fatal=0`,
+  `LINUX_RUNTIME_EXACT=PASS profile=p1 lanes=1/1`.
+- Raw P0/P1 guest logs inspected independently: Linux version string,
+  USER_SHELL_OK on init lanes, normal powerdown on all three,
+  no kernel panic or Oops.
+- The initial complete build job was marked **failure solely because
+  an overly strict Kbuild-incrementality assertion disallowed even
+  88 additional native assembly calls**. The Image and all three
+  actual native tool stages completed successfully. The exact artifact
+  replay, *not* a reinterpretation of the first job's red status,
+  certifies the runtime. The incremental harness is now tightened to
+  require `added_native_as <= 128` rather than zero, still rejecting
+  a full kernel recompile. Source guard pins the script identity.
+- No new CI workflow or job; existing original 3-job MiniObjcopy owner
+  performed the artifact replay.
+
+**Promotion:** native MiniAS + MiniAR + MiniObjcopy are jointly
+certified to build and run Linux 6.6.143 in GNU GCC + GNU LD boundaries.
+This is *not yet* GNU-independent full native toolchain, since MiniLD
+final kernel linking still exhibits an independent pre-banner QEMU
+failure, current MiniPP has only frozen GCC input exactness rather
+than all native live-Kbuild replacement, and current MiniC still has
+known full-link deficiencies. Proceed with isolated MiniLD final-layout
+fix, then staged native compiler/PP composition; do not dilute this
+certification's boundaries.
