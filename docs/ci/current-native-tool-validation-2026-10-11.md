@@ -587,3 +587,42 @@ MiniAS->MiniObjcopy interoperation failure from exact ELF evidence
 before selecting the responsible native implementation. The separate
 MiniLD-final QEMU archived-Image run is independent and does not
 require a new kernel compilation.
+
+## MiniLD final-link 3/3 — Image PASS but QEMU FAIL, actual ELF defect
+
+The exact stored Image from the 3-MiniLD-final + 44-MiniObjcopy
+full build was replayed **without any kernel recompilation** in
+[#38161443134](https://github.com/yituanxing/minic-toolchain/actions/runs/38161443134).
+Artifact identity and call provenance passed:
+`MINILD_FINAL_IMAGE_REPLAY=PASS origin=38160503540
+native_ld=3 native_objcopy=44 reused_full_image=1`.
+**QEMU did not boot Linux**: only OpenSBI printed, no Linux banner,
+`qemu_status=124` after 90 s, P1 not reached. This is a genuine final
+link/runtime compatibility failure, not a GCC/MiniAS compile failure.
+Do not promote this mixed native linker to runtime-certified.
+
+The raw CI artifacts were downloaded and the actual ELF `vmlinux`
+compared against the earlier GNU-LD + native-MiniObjcopy real
+FAST-passing Image (both Linux 6.6.143):
+
+- GNU linker `vmlinux`: **9 program headers**, including **7 PT_LOAD**;
+  `Image` **22,033,920** bytes, QEMU PASS.
+- MiniLD linker `vmlinux`: **10,279 program headers**, almost all
+  independent `PT_LOAD`, many with `p_align=1`;
+  `Image` **22,033,608** bytes, QEMU pre-banner FAIL.
+- Both ELF entry addresses are `0xffffffff80000000` and ELF
+  `.head.text` virtual placement is present; this alone does not
+  establish correctness of the actual binary or relocations.
+- MiniLD's own `linker/src/linker_core.inc`,
+  `static_write_executable()` scripted branch, counts **one PT_LOAD
+  per allocated input section** and then emits each verbatim with
+  `p_align=1`; this is a concrete non-GNU executable layout defect
+  at full-kernel scale. The GNU/Image binary bytes also differ over
+  much of `.text`. Simply reducing `e_phnum` to 9 without
+  reconstructing proper section/file/LMA grouping and relocation
+  semantics is **not** a valid fix.
+
+This narrows the remaining native full-link acceptance gate to the
+**linker-script output class and PT_LOAD layout + relocation** path.
+Repair against paired GNU output sections/addresses, and rerun this
+same short QEMU artifact proof before declaring full-tool replacement.
