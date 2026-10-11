@@ -959,6 +959,80 @@ PY_CORE_FREEZE
     cp -a --reflink=auto "$gold_snapshot" "$out"
     echo "NETFILTER_CORE_CURRENT=READY old=$core_old_sha new=$core_new_sha gcc_swap=NONE"
   fi
+  # Ninth owner: prior 145/186 Python oracle showed a page-list overrun
+  # with call RA inside mm/gup.o. The old specialized loop has no runtime
+  # zero check for the decremented page count. Rebuild ONLY this owner using
+  # the already-fixed current MiniC profile, retaining eight earlier repairs.
+  if [[ "${COHORT_REPAIR_GUP_OWNER:-0}" == 1 ]]; then
+    [[ "${COHORT_REPAIR_NETFILTER_CORE:-0}" == 1 ]] || {
+      echo "GUP_CURRENT=ERROR requires_previous_eight_minic_owner_repairs"; exit 8;
+    }
+    gup_target=mm/gup.o
+    gup_dir="$hotfix/gup-current"
+    mkdir -p "$gup_dir"
+    printf '%s\n' "$gup_target" >"$gup_dir/selected.txt"
+    gup_old_sha=$(sha256sum "$ev/minic/$gup_target" | cut -d' ' -f1)
+    python3 "$repo/tools/ci/linux-runtime-kbuild-regeneration-guard-v1.py" \
+      --mode replay --out "$out" --golden-out "$gold_snapshot" \
+      --evidence "$gup_dir/replay.log" --selected "$gup_dir/selected.txt" \
+      --wrapper "$repo/tests/external/linux/stage2_kbuild_cc.sh" \
+      --minic "$minic" --success-trace "$gup_dir/success.txt" \
+      --digest-trace "$gup_dir/digests.txt" | tee "$gup_dir/replay.log"
+    python3 "$repo/tools/ci/linux-runtime-minic-route-audit-v1.py" \
+      --objects-file "$gup_dir/selected.txt" --success-trace "$gup_dir/success.txt" \
+      --object-digest-trace "$gup_dir/digests.txt" --candidates "$out" \
+      | tee "$gup_dir/route-audit.log"
+    gup_new_sha=$(sha256sum "$out/$gup_target" | cut -d' ' -f1)
+    [[ "$gup_old_sha" != "$gup_new_sha" ]] || {
+      echo "GUP_CURRENT=INCONCLUSIVE unchanged_frozen_object"; exit 8;
+    }
+    for ext in i s; do
+      test -s "$out/mm/gup.minic-stage2.$ext" || {
+        echo "GUP_CURRENT=ERROR missing_preprocessed_or_assembly=$ext"; exit 8;
+      }
+      cp -a "$out/mm/gup.minic-stage2.$ext" "$gup_dir/gup.$ext"
+    done
+    riscv64-linux-gnu-objdump -dr --disassemble=__minic_inline_spec_9309_155 \
+      "$ev/minic/$gup_target" >"$gup_dir/gup-old-specialization.disasm"
+    riscv64-linux-gnu-objdump -dr --disassemble=__minic_inline_spec_9309_155 \
+      "$out/$gup_target" >"$gup_dir/gup-new-specialization.disasm"
+    python3 - "$ev/gcc/$gup_target" "$ev/minic/$gup_target" "$out/$gup_target" <<'PY_GUP_ABI'
+import pathlib,struct,sys
+h=[pathlib.Path(p).read_bytes()[:52] for p in sys.argv[1:]]
+assert all(len(x)==52 and x[:6]==b"\x7fELF\x02\x01" for x in h)
+assert all(struct.unpack_from("<H",x,16)[0]==1 and struct.unpack_from("<H",x,18)[0]==243 for x in h)
+assert len({x[48:52] for x in h})==1
+print("GUP_CURRENT_ABI=PASS same_RV64_identity")
+PY_GUP_ABI
+    cp -a "$out/$gup_target" "$ev/minic/$gup_target"
+    python3 - "$ev/minic-manifest.sha256" "$ev" "$gup_target" "$gup_new_sha" <<'PY_GUP_FREEZE'
+import hashlib,sys
+from pathlib import Path
+manifest,root=map(Path,sys.argv[1:3])
+target="minic/"+sys.argv[3]
+allow={"minic/drivers/tty/serial/earlycon.o","minic/fs/super.o",
+       "minic/net/ipv4/tcp_cong.o","minic/net/netlink/genetlink.o",
+       "minic/drivers/base/power/runtime.o","minic/net/ipv4/inet_connection_sock.o",
+       "minic/net/ipv4/inet_hashtables.o","minic/net/netfilter/core.o",target}
+assert len(allow)==9
+untouched=0
+for line in manifest.read_text().splitlines():
+    digest,name=line.split(None,1)
+    got=hashlib.sha256((root/name).read_bytes()).hexdigest()
+    if name==target:
+        assert got==sys.argv[4], "new GUP object mismatch"
+    elif name not in allow:
+        assert got==digest, "unrelated object changed: "+name
+        untouched+=1
+assert untouched==2055, f"expected 2055 frozen MiniC objects, got {untouched}"
+print("GUP_CURRENT_FROZEN_NEIGHBORS=PASS count=2055")
+PY_GUP_FREEZE
+    printf 'owner=%s\nold_sha256=%s\nnew_sha256=%s\n' \
+      "$gup_target" "$gup_old_sha" "$gup_new_sha" >"$gup_dir/provenance.txt"
+    rm -rf -- "$out"
+    cp -a --reflink=auto "$gold_snapshot" "$out"
+    echo "GUP_CURRENT=READY old=$gup_old_sha new=$gup_new_sha gcc_swap=NONE"
+  fi
   # Replay exactly one additional MiniC owner using the pinned GNU
   # preprocessing inputs. Do not modify the immutable frozen 2064 pool.
   if [[ "${COHORT_SPINLOCK_CAPTURE_ONLY:-0}" == 1 ]]; then
