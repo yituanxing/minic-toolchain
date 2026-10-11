@@ -663,6 +663,46 @@ PY_GENL_SOURCE
     cp -a --reflink=auto "$gold_snapshot" "$out"
     echo "MINIC_NET_REPAIR=READY four_current_minic_objects=true gcc_swap_count=0 golden_restored=true"
   fi
+  # Replay exactly one additional MiniC owner using the pinned GNU
+  # preprocessing inputs. Do not modify the immutable frozen 2064 pool.
+  if [[ "${COHORT_SPINLOCK_CAPTURE_ONLY:-0}" == 1 ]]; then
+    spin_target=kernel/locking/spinlock_debug.o
+    spin_dir="$hotfix/spinlock-debug-capture"
+    mkdir -p "$spin_dir"
+    printf '%s\n' "$spin_target" >"$spin_dir/selected.txt"
+    old_spin_sha=$(sha256sum "$ev/minic/$spin_target" | cut -d' ' -f1)
+    echo "SPINLOCK_CAPTURE=START owner=$spin_target old_sha=$old_spin_sha"
+    python3 "$repo/tools/ci/linux-runtime-kbuild-regeneration-guard-v1.py" \
+      --mode replay --out "$out" --golden-out "$gold_snapshot" \
+      --evidence "$spin_dir/replay.log" --selected "$spin_dir/selected.txt" \
+      --wrapper "$repo/tests/external/linux/stage2_kbuild_cc.sh" \
+      --minic "$minic" --success-trace "$spin_dir/success.txt" \
+      --digest-trace "$spin_dir/digests.txt" | tee "$spin_dir/replay.log"
+    python3 "$repo/tools/ci/linux-runtime-minic-route-audit-v1.py" \
+      --objects-file "$spin_dir/selected.txt" \
+      --success-trace "$spin_dir/success.txt" \
+      --object-digest-trace "$spin_dir/digests.txt" --candidates "$out" \
+      | tee "$spin_dir/route-audit.log"
+    new_spin_sha=$(sha256sum "$out/$spin_target" | cut -d' ' -f1)
+    for ext in i s; do
+      source_path="$out/kernel/locking/spinlock_debug.minic-stage2.$ext"
+      [[ -s "$source_path" ]] || {
+        echo "SPINLOCK_CAPTURE=INCONCLUSIVE missing=$source_path"; exit 8;
+      }
+      cp -a "$source_path" "$spin_dir/spinlock_debug.$ext"
+    done
+    riscv64-linux-gnu-objdump -dr "$ev/gcc/$spin_target" \
+      >"$spin_dir/spinlock_debug.gcc-objdump.txt"
+    riscv64-linux-gnu-objdump -dr "$ev/minic/$spin_target" \
+      >"$spin_dir/spinlock_debug.old-minic-objdump.txt"
+    riscv64-linux-gnu-objdump -dr "$out/$spin_target" \
+      >"$spin_dir/spinlock_debug.new-minic-objdump.txt"
+    printf 'owner=%s\nold_sha256=%s\nnew_sha256=%s\n' \
+      "$spin_target" "$old_spin_sha" "$new_spin_sha" \
+      >"$spin_dir/provenance.txt"
+    echo "SPINLOCK_CAPTURE=PASS owner=$spin_target old=$old_spin_sha new=$new_spin_sha changed=$([[ "$old_spin_sha" != "$new_spin_sha" ]] && echo true || echo false) full_link=SKIPPED frozen_pool_unchanged=true"
+    exit 0
+  fi
 fi
 if [[ "${COHORT_NETWORK_CAPTURE_ONLY:-0}" == 1 ]]; then
   [[ "${COHORT_PATCH_NET_PAIR:-0}" == 1 ]] || {
