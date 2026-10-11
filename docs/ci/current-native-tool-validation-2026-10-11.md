@@ -441,3 +441,53 @@ test QEMU P0 and P1, and only then promote this particular source fix as
 Linux-runtime proven. A green *single GNU head swap* establishes the
 failing-owner boundary but alone cannot establish that the semantic
 change repaired every other native assembly input.
+
+## MiniAS-only Linux + QEMU P0/P1 runtime — CERTIFIED after NOPIC fix
+
+The corrected MiniAS build, GNU differential micro oracles, complete Linux
+6.6.143 Image and genuine guest P0/P1 **all passed at the same commit**:
+[#38159723042](https://github.com/yituanxing/minic-toolchain/actions/runs/38159723042),
+head `40f86d913d4bac2f96d6db5664058b48839f0b54`,
+job **SUCCESS**.
+
+- Single-substitution contract: **GNU GCC front end, GNU ar, GNU ld, GNU
+  objcopy retained; only production GNU as replaced with native MiniAS**.
+  The traced wrapper recorded 2,226 real assembler invocations,
+  **2,197 native PASS**, 41 expected/probe FAIL records (these include
+  exploratory Kbuild capability invocations), one delegated non-production
+  assembler query. Seven additional **GNU shadow references** were generated
+  for independent early-boot comparison without replacing any native
+  production object.
+- `Image`: **26,228,224 bytes**, SHA-256
+  `9e14ff79eef744cc154eb6a3f46cf9d0351af5294abb30015f17803469ae5d59`,
+  independently verified by hashing the downloaded CI artifact.
+  Linux build reported **243 s** on one GitHub runner with `make -j4`;
+  this runtime is runner-dependent and is not proof of a MiniAS performance
+  optimization compared with earlier 386 s / 448 s builds.
+- **QEMU P0 full: PASS** — `rdinit=/init` guest boot,
+  `LINUX_RUNTIME_RDINIT_INIT=PASS`, real process/proc/sysfs/devtmpfs/tmpfs
+  operations and shell markers; independent `rdinit=/bin/sh` second
+  QEMU lane `LINUX_RUNTIME_RDINIT_SH=PASS`.
+  `LINUX_RUNTIME_EXACT=PASS profile=full lanes=2/2`.
+- **QEMU P1: PASS** — independent syscall lane
+  `RUNTIME_V2_SYSCALL_END pass=12 fail=0` and
+  `LINUX_RUNTIME_EXACT=PASS profile=p1 lanes=1/1`.
+  `LINUX_RUNTIME_V2_PROFILE=PASS profile=p1 checks=22 fatal=0`.
+  Final `MINIAS_LINUX_GCC_RUNTIME=PASS p0=PASS p1=12/12`.
+- Actual QEMU logs for all three lanes contain `Linux version 6.6.143`,
+  no Kernel panic/Oops/BUG, and clean guest powerdown.
+- The early-boot incident now has a full closed proof chain:
+  **unpatched MiniAS fails QEMU** ->
+  **only GNU `arch/riscv/kernel/head.o` swap boots (~11 s; one GCC
+  compile, eight AR and four LD messages)** ->
+  **ELF comparison identifies incorrectly emitted GOT relocations**
+  -> **fix GNU default NOPIC + scoped `.option`** ->
+  **GNU-exact dedicated micro test and full Toolchain T1 PASS**
+  -> **all-native MiniAS Image now boots and passes P0/P1**.
+
+**Promotion boundary:** MiniAS is certified for **one-tool replacement on
+full Linux 6.6.143 and independent genuine QEMU P0 two lanes + P1 12
+syscall checks**. This is a stronger runtime oracle than the MiniObjcopy
+one-lane FAST certificate, but **not** the separate private external
+Python-era 145-module/203-function archive, which was not executed here.
+No all-native multi-tool integrated build or self-hosting is implied.
