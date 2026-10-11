@@ -89,7 +89,7 @@ def main():
         "            build/minias-linux-runtime/out/arch/riscv/boot/Image", 1)
     linux_body = cur["linux-single"]
     integrated_path = ROOT / "tests/external/linux/mini_tools_integrated_relink.sh"
-    if sha(integrated_path) != "8f4eb58bfa477d4d689b5d819d9dffdcc8afdcf3":
+    if sha(integrated_path) != "6b712c725e366cdde22f5f7bcb44e139c9419883":
         raise AssertionError("integrated GNU-link MiniAS+MiniAR+MiniObjcopy replay changed")
     approved_integrated = (
         "      - name: Reuse MiniAS Linux objects with MiniAR and MiniObjcopy and run QEMU P0 P1\n"
@@ -124,6 +124,7 @@ def main():
     integrated_evidence = (
         "            build/minias-linux-runtime/native-integration/*.trace\n"
         "            build/minias-linux-runtime/native-integration/*.log\n"
+        "            build/minias-linux-runtime/native-integration/failures/*\n"
         "            build/minias-linux-runtime/native-integration/Image.sha256\n"
         "            build/minias-linux-runtime/native-integration/qemu-p0/*.log\n"
         "            build/minias-linux-runtime/native-integration/qemu-p1/*.log\n"
@@ -147,6 +148,7 @@ def main():
         "arch/riscv/kernel/entry.o",
         "arch/riscv/mm/init.o",
         "drivers/of/fdt.o",
+        "drivers/firmware/efi/libstub/efi-stub-helper.o",
         '"$real_as" "${gnu_args[@]}"',
         'cp "$input" "${golden%.o}.s"',
         "test -s \"$golden\"",
