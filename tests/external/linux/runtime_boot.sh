@@ -114,6 +114,24 @@ init_append="$common rdinit=/init"
 if test "$profile" = p1; then
     init_append="$init_append minic_runtime=p1"
 fi
+# Targeted shell-only proof: skip the P1 syscall lane and boot directly
+# into the existing initramfs minish with the same Linux Image and cmdline.
+# Full and FAST profiles retain their existing behavior.
+if test "$profile" = shell; then
+    run_boot rdinit-sh "$common rdinit=/bin/sh" shell
+    require_log rdinit-sh "Linux version $expected_release"
+    require_log rdinit-sh "Kernel command line:.*rdinit=/bin/sh"
+    require_log rdinit-sh "(Run /bin/sh as init process|Starting init: /bin/sh)"
+    require_log rdinit-sh "MINIC_LINUX_RUNTIME_SH_READY"
+    require_log rdinit-sh "PROC_CMDLINE_BEGIN"
+    require_log rdinit-sh "console=ttyS0.*rdinit=/bin/sh"
+    require_log rdinit-sh "PROC_CMDLINE_END"
+    require_log rdinit-sh "RDINIT_SH_OK"
+    require_log rdinit-sh "DONE_RDINIT"
+    printf '%s\\n' "LINUX_RUNTIME_RDINIT_SH=PASS release=$expected_release profile=shell"
+    exit 0
+fi
+
 run_boot rdinit-init "$init_append" none
 
 # Preserve the Python-era runtime contract: this is not just a banner test.
