@@ -1359,7 +1359,10 @@ jobs:
             case "$out" in
               arch/riscv/kernel/head.o|arch/riscv/kernel/entry.o|\
               arch/riscv/mm/init.o|arch/riscv/kernel/setup.o|\
-              arch/riscv/kernel/sbi.o|drivers/of/fdt.o|init/main.o)
+              arch/riscv/kernel/sbi.o|drivers/of/fdt.o|init/main.o|\
+              drivers/firmware/efi/libstub/efi-stub-helper.o|\
+              drivers/firmware/efi/libstub/efi-stub.o|\
+              drivers/firmware/efi/libstub/fdt.o)
                 golden="${MINIAS_GNU_ROOT:?}/$out"
                 mkdir -p "$(dirname "$golden")"
                 gnu_args=("${args[@]}")
@@ -1530,6 +1533,7 @@ jobs:
             build/minias-linux-runtime/golden-as/arch/riscv/kernel/head.s
             build/minias-linux-runtime/native-integration/*.trace
             build/minias-linux-runtime/native-integration/*.log
+            build/minias-linux-runtime/native-integration/failures/*
             build/minias-linux-runtime/native-integration/Image.sha256
             build/minias-linux-runtime/native-integration/qemu-p0/*.log
             build/minias-linux-runtime/native-integration/qemu-p1/*.log
