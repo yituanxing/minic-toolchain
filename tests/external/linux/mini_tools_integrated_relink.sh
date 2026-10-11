@@ -64,6 +64,31 @@ if ! make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
   -j4 Image >"$stage/kbuild.log" 2>&1; then
   echo "NATIVE_INTEGRATED_RELINK=FAIL reason=kbuild"
   tail -n 100 "$stage/kbuild.log"
+  # On a genuine cross-tool ELF incompatibility capture the actual
+  # MiniAS ET_REL input and GNU-as same-source oracle, not a screenshot or
+  # hypothetical pseudo reproducer. The runner is still in this object tree.
+  failures="$stage/failures"
+  mkdir -p "$failures"
+  for stem in efi-stub-helper efi-stub fdt; do
+    obj="drivers/firmware/efi/libstub/$stem.o"
+    native="$out/$obj"
+    gnu="$work/golden-as/$obj"
+    if test -s "$native"; then
+      cp "$native" "$failures/$stem.mini.o"
+      readelf -Wh "$native" >"$failures/$stem.mini.header.txt" || true
+      readelf -WS "$native" >"$failures/$stem.mini.sections.txt" || true
+      readelf -Wr "$native" >"$failures/$stem.mini.relocs.txt" || true
+    fi
+    if test -s "$gnu"; then
+      cp "$gnu" "$failures/$stem.gnu.o"
+      readelf -WS "$gnu" >"$failures/$stem.gnu.sections.txt" || true
+      readelf -Wr "$gnu" >"$failures/$stem.gnu.relocs.txt" || true
+    fi
+    if test -s "$work/golden-as/${obj%.o}.s"; then
+      cp "$work/golden-as/${obj%.o}.s" "$failures/$stem.s"
+    fi
+  done
+  echo "NATIVE_INTEGRATED_FRONTIER=CAPTURED native_elf=$(find "$failures" -name '*.mini.o' | wc -l) gnu_elf=$(find "$failures" -name '*.gnu.o' | wc -l)"
   exit 1
 fi
 elapsed=$(( $(date +%s) - start ))
