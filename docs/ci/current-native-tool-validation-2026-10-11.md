@@ -318,3 +318,32 @@ private archival 145-module/203-function suite was executed; that separate
 historical asset is not part of a public runner fixture. It is also not a
 full MiniLD / MiniAS / MiniPP combination or current-MiniC self-host
 certificate.
+
+## GNU-only MiniAS full Linux/Image/QEMU independent validation
+
+The legacy independent A0-green MiniAS GCC-subprocess boundary was archived
+during CI consolidation. It is now explicitly restored as a **single opt-in
+job inside the existing MiniAS focused workflow** (not a new workflow),
+exposing `mode=linux-single` under the canonical push-tag router.
+
+GNU gcc, GNU ar, GNU ld and GNU objcopy remain pinned; **only the assembler
+subprocess** invoked by GCC's `-B` tool search and Kbuild's explicit
+`AS` variable are redirected to MiniAS. Both executable names
+`as` and `riscv64-linux-gnu-as` resolve to the same traced wrapper;
+only non-production capability queries may delegate to GNU as.
+The post-build gate asserts more than 1,000 actual MiniAS-assembled
+production inputs, a nonempty Linux 6.6.143 Image, and QEMU P0/P1 guest
+oracle markers (12 syscall probes). A build failure preserves exact
+`.s` input and first-error evidence for iterative fix-and-replay.
+A success preserves Kbuild trace, Image SHA and guest logs.
+
+The new job body is checked for exact correspondence with its archived
+historical original, with only reviewed routing, wrapper coverage and
+evidence changes. Every one of the original 10 MiniAS jobs remains
+byte-identical to its archived oracle; **M0 structure gate
+[#38157161551](https://github.com/yituanxing/minic-toolchain/actions/runs/38157161551)
+passed** before this live opt-in trigger.
+
+**Current-head live proof:** request `[minias-linux-single]` now. Do not
+call the assembly component Linux runtime-certified until the real Kbuild
+and QEMU reports pass. No Stage0->Stage2 self-hosting or new MiniObjdump work.
