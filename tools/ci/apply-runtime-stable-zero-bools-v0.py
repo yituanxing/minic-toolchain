@@ -93,6 +93,13 @@ static bool core_program_bool_has_entry_zero_initializer(
     return false;
 }
 
+/* Core lower_block owns the canonical external goto/asm-goto reentry
+   oracle.  It is defined later in this translation unit. */
+static bool core_unreachable_statement_has_external_reentry(
+    const MinicCoreLowerContext *context,
+    const MinicStatement *root_statement,
+    MinicStatementId extra_statement_id);
+
 /* The frontend still retains syntactic stores following a guaranteed
    return.  Core lower_block skips exactly these unreachable tails.  Discount
    such stores from a whole-function invariant proof, but only if there is
