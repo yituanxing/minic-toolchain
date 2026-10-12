@@ -35,6 +35,18 @@ wanted = (
     "tcp_connect",
     "tcp_v6_syn_recv_sock",
     "tcp_v6_rcv",
+    # Concrete faulting PCs / caller chain from P1 run #38215452818.
+    "ip6_finish_output2",
+    "__ip6_finish_output",
+    "ip6_finish_output",
+    "ip6_output",
+    "ip6_xmit",
+    "__dev_queue_xmit",
+    "dev_queue_xmit",
+    "arch_local_irq_save",
+    "__raw_spin_lock_irqsave",
+    "tcp_transmit_skb",
+    "__tcp_transmit_skb",
 )
 records = []
 for pool, directory in (("minic", mini), ("gnu", gold)):
@@ -78,7 +90,7 @@ for target in ("__list_add_valid_or_report", "__minic_inline_spec_163_16339"):
 # the Actions log.
 disasm_rows = []
 for symbol, pool, rel, _, _, _ in records:
-    if symbol not in ("__list_add_valid_or_report", "__minic_inline_spec_163_16339", "tcp_v6_connect"):
+    if symbol not in wanted:
         continue
     p = (mini if pool == "minic" else gold) / rel
     out = subprocess.run(["riscv64-linux-gnu-objdump", "-dr", str(p)], text=True, capture_output=True)
