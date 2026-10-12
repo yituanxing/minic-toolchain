@@ -2200,24 +2200,24 @@ PY_FRAME_PROLOGUE
   # The panic's exact return-address symbol was resolved by 38212502667
   # to net/core/dev.o (NOT tcp_ipv4.o). Probe known owners first.
   targets_string="${COHORT_P1_SWAP_OWNERS:-lib/list_debug.o net/core/dev.o net/ipv6/tcp_ipv6.o}"
-  for target in $targets_string; do
+  for p1_probe_owner in $p1_probe_owners_string; do
     owner_idx=-1
     for ((i=0;i<n;i++)); do
-      if [[ "${objects[i]}" == "$target" ]]; then owner_idx=$i; break; fi
+      if [[ "${objects[i]}" == "$p1_probe_owner" ]]; then owner_idx=$i; break; fi
     done
     if ((owner_idx<0)); then
-      echo "COHORT_P1_OWNER=SKIPPED missing_owner=$target"
-      printf '%s\t%s\t%s\n' "$target" ABSENT - >>"$ev/p1-owner-verdicts.tsv"
+      echo "COHORT_P1_OWNER=SKIPPED missing_owner=$p1_probe_owner"
+      printf '%s\t%s\t%s\n' "$p1_probe_owner" ABSENT - >>"$ev/p1-owner-verdicts.tsv"
       continue
     fi
-    name=$(printf '%s' "$target" | tr '/.' '__')
-    echo "COHORT_P1_OWNER_SWAP=START owner=$target index=$owner_idx others_minic=$((n-1))"
+    name=$(printf '%s' "$p1_probe_owner" | tr '/.' '__')
+    echo "COHORT_P1_OWNER_SWAP=START owner=$p1_probe_owner index=$owner_idx others_minic=$((n-1))"
     trial "p1_gcc_$name" "$owner_idx" p1 all_except
-    printf '%s\t%s\t%s\n' "$target" "$TRIAL_VERDICT" "$image_sha" \
+    printf '%s\t%s\t%s\n' "$p1_probe_owner" "$TRIAL_VERDICT" "$image_sha" \
       >>"$ev/p1-owner-verdicts.tsv"
-    echo "COHORT_P1_OWNER_SWAP=RESULT owner=$target verdict=$TRIAL_VERDICT"
+    echo "COHORT_P1_OWNER_SWAP=RESULT owner=$p1_probe_owner verdict=$TRIAL_VERDICT"
     if [[ "$TRIAL_VERDICT" == PASS ]]; then
-      echo "COHORT_P1_OWNER=ONE_GCC_SWAP_P1_PASS owner=$target original_all_minic=FAIL"
+      echo "COHORT_P1_OWNER=ONE_GCC_SWAP_P1_PASS owner=$p1_probe_owner original_all_minic=FAIL"
       exit 0
     fi
   done
