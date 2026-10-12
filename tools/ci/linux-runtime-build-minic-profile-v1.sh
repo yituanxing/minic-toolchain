@@ -189,6 +189,43 @@ int dma_real_remap_guard(int coherent)
         return missing_dma_remap_const_one();
     return 23;
 }
+
+/* Regression for shmem_alloc_and_acct_folio(): the false edge of a
+   terminating "if (err) goto failed" must retain huge=0 from the
+   compile-time-true feature-disabled assignment. */
+extern int missing_shmem_after_terminating_goto(void);
+int shmem_disabled_huge_guard(int err)
+{
+    _Bool huge = 1;
+    int nr;
+    if (1)
+        huge = 0;
+    nr = huge ? 512 : 1;
+    if (err)
+        goto failed;
+    if (huge)
+        return missing_shmem_after_terminating_goto();
+    return nr;
+failed:
+    return -2;
+}
+
+/* Negative oracle: the same CFG MUST retain the external reference when
+   the local can really be set by a continuing dynamic true edge. */
+extern int must_retain_after_conditional_goto(void);
+int shmem_dynamic_huge_guard(int cond, int err)
+{
+    _Bool huge = 0;
+    if (cond)
+        huge = 1;
+    if (err)
+        goto failed;
+    if (huge)
+        return must_retain_after_conditional_goto();
+    return 0;
+failed:
+    return -3;
+}
 C
 # Same path as Kbuild stage2: GNU preprocessing -> MiniC -S -> GNU AS.
 # This runtime profile intentionally builds only minic and minic-cc (no minic-cpp).
@@ -210,6 +247,15 @@ if ! grep -Fq must_retain_mutating_call "$probe_dir/undefined.txt"; then
     echo "RUNTIME_DMA_BOOL_LINK_REFS=FAIL erased_mutating_call" >&2
     exit 1
 fi
+if grep -Fq missing_shmem_after_terminating_goto "$probe_dir/undefined.txt"; then
+    echo "RUNTIME_SHMEM_CFG_GOTO=FAIL dead_call_retained" >&2
+    exit 1
+fi
+if ! grep -Fq must_retain_after_conditional_goto "$probe_dir/undefined.txt"; then
+    echo "RUNTIME_SHMEM_CFG_GOTO=FAIL live_call_erased" >&2
+    exit 1
+fi
+echo "RUNTIME_SHMEM_CFG_GOTO=PASS dead_call_absent=1 live_call_present=1"
 echo "RUNTIME_DMA_BOOL_LINK_REFS=PASS dead_call_absent=1 live_call_present=1" | \
   tee "$probe_dir/verdict.txt"
 for symbol in missing_dma_call_guard missing_dma_label_guard missing_dma_after_const_return missing_dma_remap_const_one; do
