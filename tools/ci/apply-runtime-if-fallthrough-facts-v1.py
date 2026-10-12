@@ -283,28 +283,28 @@ replace_one(
 # "if (!(else_source == NULL && then_terminated))".  That skipped our
 # restoration precisely when the true branch terminated, leaking the
 # snapshots as well as losing the known huge=false fact in Linux shmem.
-exit_anchor = "    free(incoming_facts);\\n    *terminated = !needs_merge;\\n"
+exit_anchor = "    free(incoming_facts);\n    *terminated = !needs_merge;\n"
 if part.count(exit_anchor) != 1:
     raise SystemExit(f"IF_FACTS=ERROR continuation_count={part.count(exit_anchor)}")
 exit_merge = (
-    "    if (else_source == NULL) {\\n"
-    "        core_runtime_if_merge_false_fallthrough(\\n"
-    "            context, fallthrough_facts, then_exit_facts, then_terminated);\\n"
-    "    }\\n"
-    "    free(then_exit_facts);\\n"
-    "    free(fallthrough_facts);\\n"
-    "    if (getenv(\\\"MINIC_SHMEM_IF_TRACE\\\") != NULL &&\\n"
-    "        context->source_function != NULL &&\\n"
-    "        strcmp(context->source_function->name, \\\"shmem_alloc_and_acct_folio\\\") == 0) {\\n"
-    "        size_t dbg_idx;\\n"
-    "        if (core_local_constant_index(context, (MinicLocalId)10022U, &dbg_idx)) {\\n"
-    "            (void)fprintf(stderr, \\\"SHMEM_IF_FLOW line=%zu edge=merge huge_known=%d val=%llu terminated=%d\\\\n\\\",\\n"
-    "                statement->span.begin.line,\\n"
-    "                context->local_integer_constants[dbg_idx].known ? 1 : 0,\\n"
-    "                (unsigned long long)context->local_integer_constants[dbg_idx].value.bits,\\n"
-    "                then_terminated ? 1 : 0);\\n"
-    "        }\\n"
-    "    }\\n"
+    "    if (else_source == NULL) {\n"
+    "        core_runtime_if_merge_false_fallthrough(\n"
+    "            context, fallthrough_facts, then_exit_facts, then_terminated);\n"
+    "    }\n"
+    "    free(then_exit_facts);\n"
+    "    free(fallthrough_facts);\n"
+    "    if (getenv(\"MINIC_SHMEM_IF_TRACE\") != NULL &&\n"
+    "        context->source_function != NULL &&\n"
+    "        strcmp(context->source_function->name, \"shmem_alloc_and_acct_folio\") == 0) {\n"
+    "        size_t dbg_idx;\n"
+    "        if (core_local_constant_index(context, (MinicLocalId)10022U, &dbg_idx)) {\n"
+    "            (void)fprintf(stderr, \"SHMEM_IF_FLOW line=%zu edge=merge huge_known=%d val=%llu terminated=%d\\n\",\n"
+    "                statement->span.begin.line,\n"
+    "                context->local_integer_constants[dbg_idx].known ? 1 : 0,\n"
+    "                (unsigned long long)context->local_integer_constants[dbg_idx].value.bits,\n"
+    "                then_terminated ? 1 : 0);\n"
+    "        }\n"
+    "    }\n"
 )
 part = part.replace(exit_anchor, exit_merge + exit_anchor, 1)
 text = text[:start] + part + text[stop:]
