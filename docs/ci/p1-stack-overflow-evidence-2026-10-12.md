@@ -272,3 +272,18 @@ A single opt-in experiment changed **only** the CoreObject cross-block allocatio
 Thus **even a single function's 1840-byte frame reduction is not a certified fix**; do not promote the experimental cross-block allocator into the default compiler. Earlier whole-`ip6_output.o` experiment changed both `ip6_finish_output2` and `ip6_xmit` and produced 1/3 PASS. This makes additional stack contributors or a separate code-generation defect plausible, but not proven.
 
 The next priority is to attribute the **259 permanent/nonreusable scalar CoreObjects** occupying ~2 KiB of the 4064-byte `ip6_finish_output2` frame, and to compare a pinned no-experiment GCC-`tcp_ipv6.o` control with experimental frames. Only then consider a proof-backed improvement to the lowering rules.
+
+## Why 259 scalar stack objects cannot be reused — CI #38253905548
+
+The observational, SHA-verified compiler audit recompiled exactly `ip6_output.o`, `tcp_ipv6.o`, and `tcp_output.o`; **all three emitted ELF objects were byte-identical to the frozen originals**. It classified every one of 2340 relevant CoreObjects, with complete parser coverage. This CI did **not** link or run a Linux image.
+
+| Function | CoreObjects | Already reusable | Permanently allocated | Address derived / other uses | Address invalid or accessed in multiple blocks |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `ip6_finish_output2` | 1101 | 842 | **259** | **224** | 35 |
+| `ip6_xmit` | 592 | 463 | **129** | **96** | 33 |
+| `__tcp_transmit_skb` | 373 | 311 | 62 | 17 | 44 (plus 1 shape) |
+| `tcp_v6_connect` | 229 | 208 | 21 | 0 | 16 (plus 5 shape) |
+
+**Key insight:** The 4064-byte `ip6_finish_output2` frame is dominated by scalar CoreObjects rather than SSA spills or large C aggregates. Of its 259 nonreusable scalar objects, **224 are denied by the strict rule that an `OBJECT_ADDRESS` SSA result may be consumed only by direct LOAD/STORE**. This category conflates harmless address derivation (`POINTER_OFFSET`, `FIELD_ADDRESS`) with genuine address escapes or unproven uses. It would be unsound to free these objects without distinguishing the cases. We therefore added a read-only consumer-type audit that can identify which instruction kinds consume these 224 address values before changing any lowering or allocator rule.
+
+Artifact provenance: CI #38253905548; all 3 selected `.o` SHA-identical; `nonreuse-reasons.tsv` reports all six audited functions. The follow-up derived-use breakdown is an observational audit only; no P1 fix is claimed.
