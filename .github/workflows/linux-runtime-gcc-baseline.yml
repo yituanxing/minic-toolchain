@@ -642,7 +642,7 @@ jobs:
     # Use the SAME receiver job for exact immutable Image reboots. When the
     # seven producer jobs are skipped, always() prevents needs' implicit skip;
     # the ordinary full-shard path still requires a successful producer.
-    if: always() && github.event_name == 'push' && ((contains(github.event.head_commit.message, '[linux-runtime-gcc-sharded]') && needs.gcc-shards.result == 'success') || contains(github.event.head_commit.message, '[linux-runtime-large-image-qemu]') || contains(github.event.head_commit.message, '[linux-runtime-p1-frame-audit]'))
+    if: always() && github.event_name == 'push' && ((contains(github.event.head_commit.message, '[linux-runtime-gcc-sharded]') && needs.gcc-shards.result == 'success') || contains(github.event.head_commit.message, '[linux-runtime-large-image-qemu]') || contains(github.event.head_commit.message, '[linux-runtime-p1-frame-audit]') || contains(github.event.head_commit.message, '[linux-runtime-stack-owners]'))
     runs-on: ubuntu-24.04
     timeout-minutes: 95
     steps:
@@ -744,8 +744,8 @@ jobs:
       # The exact 2064 MiniC .o cache was already SHA/ABI-certified in
       # full CI #38204602644. This lane only resolves P1 crash symbol owners
       # and compares stack prologues with the certified pure-GNU .o pool.
-      - name: Restore immutable 2064-object MiniC cache for P1 frame audit
-        if: contains(github.event.head_commit.message, '[linux-runtime-p1-frame-audit]')
+      - name: Restore immutable 2064-object MiniC cache for P1 diagnosis
+        if: contains(github.event.head_commit.message, '[linux-runtime-p1-frame-audit]') || contains(github.event.head_commit.message, '[linux-runtime-stack-owners]')
         uses: actions/cache/restore@v4
         with:
           path: |
@@ -778,14 +778,14 @@ jobs:
           if-no-files-found: warn
 
       - uses: actions/download-artifact@v4
-        if: "!contains(github.event.head_commit.message, '[linux-runtime-large-image-qemu]') && !contains(github.event.head_commit.message, '[linux-runtime-p1-frame-audit]')"
+        if: "!contains(github.event.head_commit.message, '[linux-runtime-large-image-qemu]') && !contains(github.event.head_commit.message, '[linux-runtime-p1-frame-audit]') && !contains(github.event.head_commit.message, '[linux-runtime-stack-owners]')"
         with:
           pattern: shard-*
           path: build/linux-runtime-gcc-shards-v1
           merge-multiple: false
 
       - name: Build identical MiniC profile and verify exact shard union
-        if: "!contains(github.event.head_commit.message, '[linux-runtime-large-image-qemu]') && !contains(github.event.head_commit.message, '[linux-runtime-p1-frame-audit]')"
+        if: "!contains(github.event.head_commit.message, '[linux-runtime-large-image-qemu]') && !contains(github.event.head_commit.message, '[linux-runtime-p1-frame-audit]') && !contains(github.event.head_commit.message, '[linux-runtime-stack-owners]')"
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -804,7 +804,7 @@ jobs:
             --assembler /usr/bin/riscv64-linux-gnu-as
 
       - name: Retain fully verified MiniC objects before link or runtime
-        if: "!contains(github.event.head_commit.message, '[linux-runtime-large-image-qemu]') && !contains(github.event.head_commit.message, '[linux-runtime-p1-frame-audit]')"
+        if: "!contains(github.event.head_commit.message, '[linux-runtime-large-image-qemu]') && !contains(github.event.head_commit.message, '[linux-runtime-p1-frame-audit]') && !contains(github.event.head_commit.message, '[linux-runtime-stack-owners]')"
         uses: actions/cache/save@v4
         with:
           path: |
@@ -812,6 +812,21 @@ jobs:
             build/linux-runtime-gcc-cohort-v1/minic-manifest.sha256
             build/linux-runtime-gcc-cohort-v1/minic-identity.txt
           key: ${{ env.FULL_MINIC_KEY }}
+
+      - name: Restore pristine Linux source and MiniC profile for frozen P1 swaps
+        if: contains(github.event.head_commit.message, '[linux-runtime-stack-owners]')
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          src="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0/linux-6.6.143"
+          test -d "$src"
+          work="$GITHUB_WORKSPACE/build/linux-runtime-gcc"
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-v1"
+          cp -a --reflink=auto "$src" "$work/linux-6.6.143"
+          bash tools/ci/linux-runtime-build-minic-profile-v1.sh \
+            "$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain" "$ev/compiler"
+          (cd "$ev" && sha256sum --quiet -c minic-manifest.sha256)
+          echo "COHORT_P1_OWNER_POOL=PASS objects=$(wc -l <"$ev/minic-manifest.sha256") frozen=true"
 
       - name: GNU-only link and QEMU with NO MiniC recompilation
         if: "!contains(github.event.head_commit.message, '[linux-runtime-large-image-qemu]') && !contains(github.event.head_commit.message, '[linux-runtime-p1-frame-audit]')"
@@ -821,6 +836,7 @@ jobs:
           work="$GITHUB_WORKSPACE/build/linux-runtime-gcc"
           ev="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-v1"
           export COHORT_ACTION=verify
+          export COHORT_P1_STACK_OWNER_SWAPS=${{ contains(github.event.head_commit.message, '[linux-runtime-stack-owners]') && '1' || '0' }}
           export COHORT_CAPTURE_ONLY=${{ contains(github.event.head_commit.message, '[linux-runtime-earlycon-capture]') && '1' || '0' }}
           bash tools/ci/linux-runtime-gcc-cohort-bisect-v1.sh \
             "$work/linux-6.6.143" "$work/out" \
@@ -841,6 +857,9 @@ jobs:
             build/linux-runtime-gcc-cohort-v1/gcc-preflight.log
             build/linux-runtime-gcc-cohort-v1/results.tsv
             build/linux-runtime-gcc-cohort-v1/frontier.txt
+            build/linux-runtime-gcc-cohort-v1/p1-owner-verdicts.tsv
+            build/linux-runtime-gcc-cohort-v1/p1-owner-hit.txt
+            build/linux-runtime-gcc-cohort-v1/p1-list-debug-disasm.txt
             build/linux-runtime-gcc-cohort-v1/trials/full_all/Image
             build/linux-runtime-gcc-cohort-v1/trials/*/link.log
             build/linux-runtime-gcc-cohort-v1/trials/*/guard.log
