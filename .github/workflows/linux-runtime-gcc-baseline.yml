@@ -892,6 +892,7 @@ jobs:
           export COHORT_P1_GDB_STACK=${{ contains(github.event.head_commit.message, '[linux-runtime-gdb-stack]') && '1' || '0' }}
           export COHORT_P1_MULTI_RESCUE=${{ contains(github.event.head_commit.message, '[linux-runtime-multi-rescue]') && '1' || '0' }}
           export COHORT_P1_MINIMIZE_RESCUE=${{ contains(github.event.head_commit.message, '[linux-runtime-rescue-minimize]') && '1' || '0' }}
+          export COHORT_P1_PAIR_RESCUE=${{ contains(github.event.head_commit.message, '[linux-runtime-rescue-pairs]') && '1' || '0' }}
           export COHORT_FRAME_CAPTURE_ONLY=${{ contains(github.event.head_commit.message, '[linux-runtime-frame-components]') && '1' || '0' }}
           # #38219062394 identified 4064B and 2288B MiniC stack frames in
           # ip6_finish_output2 and ip6_xmit. Test the containing C owner,
@@ -926,6 +927,8 @@ jobs:
             build/linux-runtime-gcc-cohort-v1/p1-multi-rescue-repeats.tsv
             build/linux-runtime-gcc-cohort-v1/p1-rescue-minimize.tsv
             build/linux-runtime-gcc-cohort-v1/p1-rescue-minimize-repeats.tsv
+            build/linux-runtime-gcc-cohort-v1/p1-rescue-pairs.tsv
+            build/linux-runtime-gcc-cohort-v1/p1-rescue-pairs-repeats.tsv
             build/linux-runtime-gcc-cohort-v1/p1_gcc_rescue_set.txt
             build/linux-runtime-gcc-cohort-v1/p1-identical-image-repeats.tsv
             build/linux-runtime-gcc-cohort-v1/p1-gdb-stack/*.log
