@@ -642,7 +642,7 @@ jobs:
     # Use the SAME receiver job for exact immutable Image reboots. When the
     # seven producer jobs are skipped, always() prevents needs' implicit skip;
     # the ordinary full-shard path still requires a successful producer.
-    if: always() && github.event_name == 'push' && ((contains(github.event.head_commit.message, '[linux-runtime-gcc-sharded]') && needs.gcc-shards.result == 'success') || contains(github.event.head_commit.message, '[linux-runtime-large-image-qemu]'))
+    if: always() && github.event_name == 'push' && ((contains(github.event.head_commit.message, '[linux-runtime-gcc-sharded]') && needs.gcc-shards.result == 'success') || contains(github.event.head_commit.message, '[linux-runtime-large-image-qemu]') || contains(github.event.head_commit.message, '[linux-runtime-p1-frame-audit]'))
     runs-on: ubuntu-24.04
     timeout-minutes: 95
     steps:
@@ -716,7 +716,7 @@ jobs:
           fail-on-cache-miss: true
 
       - uses: ./.github/actions/linux-runtime-restore-fixture
-        if: "!contains(github.event.head_commit.message, '[linux-runtime-large-image-qemu]')"
+        if: "!contains(github.event.head_commit.message, '[linux-runtime-large-image-qemu]') && !contains(github.event.head_commit.message, '[linux-runtime-p1-frame-audit]')"
         with:
           fixture: source
 
@@ -741,15 +741,51 @@ jobs:
           assembler=$(sha256sum "$(command -v riscv64-linux-gnu-as)" | cut -d' ' -f1)
           echo "FULL_MINIC_KEY=gnu-minic-objects-v1-eeb04f304ebfb97a1079c187dc0c2ea3cc61fc50a55aa3cc776237c16ab19bbe-$profile-$objects-$gcc-$assembler" >>"$GITHUB_ENV"
 
+      # The exact 2064 MiniC .o cache was already SHA/ABI-certified in
+      # full CI #38204602644. This lane only resolves P1 crash symbol owners
+      # and compares stack prologues with the certified pure-GNU .o pool.
+      - name: Restore immutable 2064-object MiniC cache for P1 frame audit
+        if: contains(github.event.head_commit.message, '[linux-runtime-p1-frame-audit]')
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            build/linux-runtime-gcc-cohort-v1/minic
+            build/linux-runtime-gcc-cohort-v1/minic-manifest.sha256
+            build/linux-runtime-gcc-cohort-v1/minic-identity.txt
+          key: ${{ env.FULL_MINIC_KEY }}
+          fail-on-cache-miss: true
+
+      - name: Locate real P1 crash owners and compare RV64 stack prologues
+        if: contains(github.event.head_commit.message, '[linux-runtime-p1-frame-audit]')
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-v1"
+          (cd "$ev" && sha256sum --status -c minic-manifest.sha256)
+          python3 tools/ci/linux-runtime-p1-frame-audit-v1.py \
+            "$ev/minic" "$GITHUB_WORKSPACE/build/linux-runtime-gcc/out" \
+            "$ev/p1-frame-audit"
+
+      - name: Preserve P1 crash owner and stack audit
+        if: always() && contains(github.event.head_commit.message, '[linux-runtime-p1-frame-audit]')
+        uses: actions/upload-artifact@v4
+        with:
+          name: minic-p1-stack-owners-${{ github.sha }}
+          path: |
+            build/linux-runtime-gcc-cohort-v1/p1-frame-audit/*.tsv
+            build/linux-runtime-gcc-cohort-v1/p1-frame-audit/*.txt
+          retention-days: 7
+          if-no-files-found: warn
+
       - uses: actions/download-artifact@v4
-        if: "!contains(github.event.head_commit.message, '[linux-runtime-large-image-qemu]')"
+        if: "!contains(github.event.head_commit.message, '[linux-runtime-large-image-qemu]') && !contains(github.event.head_commit.message, '[linux-runtime-p1-frame-audit]')"
         with:
           pattern: shard-*
           path: build/linux-runtime-gcc-shards-v1
           merge-multiple: false
 
       - name: Build identical MiniC profile and verify exact shard union
-        if: "!contains(github.event.head_commit.message, '[linux-runtime-large-image-qemu]')"
+        if: "!contains(github.event.head_commit.message, '[linux-runtime-large-image-qemu]') && !contains(github.event.head_commit.message, '[linux-runtime-p1-frame-audit]')"
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -768,7 +804,7 @@ jobs:
             --assembler /usr/bin/riscv64-linux-gnu-as
 
       - name: Retain fully verified MiniC objects before link or runtime
-        if: "!contains(github.event.head_commit.message, '[linux-runtime-large-image-qemu]')"
+        if: "!contains(github.event.head_commit.message, '[linux-runtime-large-image-qemu]') && !contains(github.event.head_commit.message, '[linux-runtime-p1-frame-audit]')"
         uses: actions/cache/save@v4
         with:
           path: |
@@ -778,7 +814,7 @@ jobs:
           key: ${{ env.FULL_MINIC_KEY }}
 
       - name: GNU-only link and QEMU with NO MiniC recompilation
-        if: "!contains(github.event.head_commit.message, '[linux-runtime-large-image-qemu]')"
+        if: "!contains(github.event.head_commit.message, '[linux-runtime-large-image-qemu]') && !contains(github.event.head_commit.message, '[linux-runtime-p1-frame-audit]')"
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -792,7 +828,7 @@ jobs:
             "$work/provenance" "$ev/full-objects.txt" "$ev"
 
       - name: Preserve aggregate link, QEMU and failure-frontier evidence
-        if: always() && !contains(github.event.head_commit.message, '[linux-runtime-large-image-qemu]')
+        if: always() && !contains(github.event.head_commit.message, '[linux-runtime-large-image-qemu]') && !contains(github.event.head_commit.message, '[linux-runtime-p1-frame-audit]')
         uses: actions/upload-artifact@v4
         with:
           name: sharded-gnu-minic-QEMU-${{ github.sha }}
