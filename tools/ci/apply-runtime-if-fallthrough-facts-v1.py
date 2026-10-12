@@ -283,9 +283,12 @@ replace_one(
 # "if (!(else_source == NULL && then_terminated))".  That skipped our
 # restoration precisely when the true branch terminated, leaking the
 # snapshots as well as losing the known huge=false fact in Linux shmem.
-exit_anchor = "    free(incoming_facts);\n    *terminated = !needs_merge;\n"
-if part.count(exit_anchor) != 1:
-    raise SystemExit(f"IF_FACTS=ERROR continuation_count={part.count(exit_anchor)}")
+# Netlink tracing may inject diagnostics between this free() and
+# *terminated; anchor the LAST free in lower_if (earlier frees are errors).
+exit_anchor = "    free(incoming_facts);\n"
+exit_pos = part.rfind(exit_anchor)
+if exit_pos < 0 or "*terminated = !needs_merge;" not in part[exit_pos:]:
+    raise SystemExit("IF_FACTS=ERROR continuation_missing")
 exit_merge = (
     "    if (else_source == NULL) {\n"
     "        core_runtime_if_merge_false_fallthrough(\n"
@@ -306,7 +309,7 @@ exit_merge = (
     "        }\n"
     "    }\n"
 )
-part = part.replace(exit_anchor, exit_merge + exit_anchor, 1)
+part = part[:exit_pos] + exit_merge + part[exit_pos:]
 text = text[:start] + part + text[stop:]
 path.write_text(text)
 print("MINIC_RUNTIME_IF_FALLTHROUGH_FACTS_V1=APPLIED strict_pure_guard=1")
