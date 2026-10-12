@@ -792,8 +792,7 @@ jobs:
             "$work/provenance" "$ev/full-objects.txt" "$ev"
 
       - name: Preserve aggregate link, QEMU and failure-frontier evidence
-        if: "!contains(github.event.head_commit.message, '[linux-runtime-large-image-qemu]')"
-        if: always()
+        if: always() && !contains(github.event.head_commit.message, '[linux-runtime-large-image-qemu]')
         uses: actions/upload-artifact@v4
         with:
           name: sharded-gnu-minic-QEMU-${{ github.sha }}
