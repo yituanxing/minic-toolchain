@@ -2358,7 +2358,9 @@ PY_FRAME_PROLOGUE
     done
   fi
   TRIAL_VERDICT="$baseline_verdict"
-  if [[ "${COHORT_P1_GDB_STACK:-0}" == 1 ]]; then
+  if [[ "${COHORT_P1_GDB_STACK:-0}" == 1 && "${COHORT_P1_DEFINED_CROSSBLOCK:-0}" != 1 ]]; then
+    # For an opt-in single-owner experiment, trace that experimental Image
+    # after its three exact-image reboots, not the baseline twice.
     echo "COHORT_GDB_STACK=START frozen_image_sha=$baseline_image_sha"
     # The trace attaches to the SAME exact linked Image and vmlinux whose
     # P1 failure just reproduced. Never edit any compiler object.
