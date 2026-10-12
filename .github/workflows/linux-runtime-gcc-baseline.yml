@@ -209,7 +209,7 @@ jobs:
       - name: Install GNU RISC-V toolchain and QEMU once
         run: |
           set -Eeuo pipefail
-          sudo apt-get -o Acquire::Retries=2 install -y --no-install-recommends \
+          sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 install -y --no-install-recommends \
             gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
             qemu-system-misc opensbi libc6-dev-riscv64-cross \
             python3 make cpio gzip || {
@@ -658,6 +658,8 @@ jobs:
             gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu python3
 
       - name: Install pinned GNU RISC-V tools and QEMU
+        # The immutable P1 object A/B lane must fail fast if apt mirrors stall.
+        timeout-minutes: 5
         if: "!contains(github.event.head_commit.message, '[linux-runtime-p1-frame-audit]')"
         run: |
           set -Eeuo pipefail
