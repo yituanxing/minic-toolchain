@@ -2294,6 +2294,17 @@ PY_FRAME_PROLOGUE
     done
   fi
   TRIAL_VERDICT="$baseline_verdict"
+  if [[ "${COHORT_P1_GDB_STACK:-0}" == 1 ]]; then
+    echo "COHORT_GDB_STACK=START frozen_image_sha=$baseline_image_sha"
+    # The trace attaches to the SAME exact linked Image and vmlinux whose
+    # P1 failure just reproduced. Never edit any compiler object.
+    bash "$repo/tools/ci/linux-runtime-p1-gdb-stack-v1.sh" \
+      "$ev/trials/p1_full_minic/Image" "$out/vmlinux" \
+      "$ev/runtime-initramfs.cpio.gz" "$LINUX_RUNTIME_CUSTOM_DTB" \
+      "$ev/p1-gdb-stack" 65 || echo "COHORT_GDB_STACK=INCONCLUSIVE debugger_probe_non_certifying=true"
+    echo "COHORT_GDB_STACK=CAPTURED evidence_only=true no_new_link=true"
+    exit 0
+  fi
   if [[ "$TRIAL_VERDICT" != FAIL ]]; then
     echo "COHORT_P1_OWNER=INCONCLUSIVE baseline=$TRIAL_VERDICT"
     exit 8

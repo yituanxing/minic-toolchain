@@ -705,6 +705,12 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
+      - name: Install P1 RISC-V GDB debugger
+        if: contains(github.event.head_commit.message, '[linux-runtime-gdb-stack]')
+        timeout-minutes: 5
+        run: |
+          sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 install -y --no-install-recommends gdb-multiarch
+
       - name: Restore identical certified GNU golden objects
         if: "!contains(github.event.head_commit.message, '[linux-runtime-large-image-qemu]')"
         shell: bash
@@ -883,6 +889,7 @@ jobs:
           export COHORT_ACTION=verify
           export COHORT_P1_STACK_OWNER_SWAPS=${{ contains(github.event.head_commit.message, '[linux-runtime-stack-owners]') && '1' || '0' }}
           export COHORT_P1_IDENTICAL_IMAGE_REPEAT=${{ contains(github.event.head_commit.message, '[linux-runtime-repeat-image]') && '1' || '0' }}
+          export COHORT_P1_GDB_STACK=${{ contains(github.event.head_commit.message, '[linux-runtime-gdb-stack]') && '1' || '0' }}
           export COHORT_FRAME_CAPTURE_ONLY=${{ contains(github.event.head_commit.message, '[linux-runtime-frame-components]') && '1' || '0' }}
           # #38219062394 identified 4064B and 2288B MiniC stack frames in
           # ip6_finish_output2 and ip6_xmit. Test the containing C owner,
@@ -915,6 +922,9 @@ jobs:
             build/linux-runtime-gcc-cohort-v1/frontier.txt
             build/linux-runtime-gcc-cohort-v1/p1-owner-verdicts.tsv
             build/linux-runtime-gcc-cohort-v1/p1-identical-image-repeats.tsv
+            build/linux-runtime-gcc-cohort-v1/p1-gdb-stack/*.log
+            build/linux-runtime-gcc-cohort-v1/p1-gdb-stack/*.txt
+            build/linux-runtime-gcc-cohort-v1/p1-gdb-stack/*.gdb
             build/linux-runtime-gcc-cohort-v1/trials/*/qemu/rdinit-init.log
             build/linux-runtime-gcc-cohort-v1/p1-frame-components/*.tsv
             build/linux-runtime-gcc-cohort-v1/p1-frame-components/*.log
