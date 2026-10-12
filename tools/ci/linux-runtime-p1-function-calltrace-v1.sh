@@ -83,9 +83,9 @@ for ((idx=1;idx<${#names[@]};idx++)); do
     if [[ "$name" == handle_bad_stack ]]; then
       # RISC-V enters the emergency overflow stack: its SP cannot be
       # interpreted relative to the original task's 16 KiB stack.
-      printf '%s\\n' 'printf "P1_CALLTRACE_OVERFLOW_HANDLER pc=%#lx emergency_sp=%#lx original_task_stack_lo=%#lx\\n", (unsigned long)$pc, (unsigned long)$sp, (unsigned long)$p1_stack_lo'
+      printf '%s\n' 'printf "P1_CALLTRACE_OVERFLOW_HANDLER pc=%#lx emergency_sp=%#lx original_task_stack_lo=%#lx\n", (unsigned long)$pc, (unsigned long)$sp, (unsigned long)$p1_stack_lo'
     else
-      printf 'printf "P1_CALLTRACE_FRAME name=%s pc=%%#lx sp=%%#lx remaining=%%ld ra=%%#lx\\n", (unsigned long)$pc, (unsigned long)$sp, (long)((unsigned long)$sp-(unsigned long)$p1_stack_lo), (unsigned long)$ra\\n' "$name"
+      printf 'printf "P1_CALLTRACE_FRAME name=%s pc=%%#lx sp=%%#lx remaining=%%ld ra=%%#lx\n", (unsigned long)$pc, (unsigned long)$sp, (long)((unsigned long)$sp-(unsigned long)$p1_stack_lo), (unsigned long)$ra\n' "$name"
     fi
     if [[ "$name" == __list_add_valid_or_report ]]; then printf '%s\n' 'end'; fi
     printf '%s\n' 'continue' 'end'
