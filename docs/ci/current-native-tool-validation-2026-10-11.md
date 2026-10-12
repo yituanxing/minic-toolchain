@@ -957,3 +957,56 @@ replay is pinned to this exact newly generated Image, with the full
 90-second per-lane timeout and retained on-failure QMP snapshots.
 The separately certified triple MiniAS+MiniAR+MiniObjcopy GNU-LD
 baseline remains unchanged.
+
+## CERTIFIED: Native MiniLD three-final + MiniObjcopy Linux 6.6.143 QEMU P0/P1
+
+The previously blocking native MiniLD final kernel link is now **actually
+runtime-certified** in its exact GNU GCC/as/ar + MiniLD + MiniObjcopy
+boundary. This is a distinct two-native-tool certificate, not the
+still-untried four-native combination.
+
+- Full Linux Image producer:
+  [#38189325106](https://github.com/yituanxing/minic-toolchain/actions/runs/38189325106)
+  SUCCESS, exactly **3 MiniLD late Linux final-link calls** and
+  **44 MiniObjcopy calls**; Image 22,033,920 bytes,
+  SHA-256
+  `9707487fe26d2050b6eff442377c73a2439f78268c143f5e2afd8e96d27a518d`.
+  GNU GCC, GNU AS, and GNU AR remained unchanged at all other
+  Kbuild call sites.
+- Immutable, zero-kernel-recompile exact Image QEMU replay:
+  [#38189858163](https://github.com/yituanxing/minic-toolchain/actions/runs/38189858163)
+  SUCCESS. `MINILD_FINAL_IMAGE_REPLAY=PASS origin=38189325106 native_ld=3 native_objcopy=44 reused_full_image=1`.
+- Genuine P0 userspace and shell: `LINUX_RUNTIME_RDINIT_INIT=PASS`,
+  `LINUX_RUNTIME_RDINIT_SH=PASS`,
+  `LINUX_RUNTIME_EXACT=PASS profile=full lanes=2/2`.
+- Genuine P1: `LINUX_RUNTIME_EXACT=PASS profile=p1 lanes=1/1`,
+  `LINUX_RUNTIME_V2_PROFILE=PASS profile=p1 checks=22 fatal=0`,
+  final
+  `MINILD_FINAL_MINIOBJCOPY_LINUX_RUNTIME=PASS p0=2/2 p1=12/12 origin=38189325106`.
+- Independently extracted all three QEMU guest logs from artifact
+  `11721581149`; each has a genuine `Linux version 6.6.143`
+  banner and normal `reboot: Power down`, without Kernel panic or
+  Oops; P1 includes the syscall PASS markers.
+  The guest-executed Image was SHA-256-checked against the producer.
+- The successful M0 structural gate
+  [#38189858120](https://github.com/yituanxing/minic-toolchain/actions/runs/38189858120)
+  proves the source-trigger manifest is consistent; no new
+  Workflow or Job was introduced.
+
+**Root-cause closure:** The old MiniLD Linux linked
+`__start___param=ffffffff810d645e` even though the `__param`
+array began at `ffffffff810d6460`. That two-byte misalignment
+assembled a malformed first pointer `ffff80e000600000`, matching
+the exact QMP-observed load page fault
+`parse_args+0xd0; scause=0xd; stval=ffff80e000600000`,
+then entered `panic()/udelay`. The output-section prealignment fix
+made `__start___param == __param == ffffffff810d6460`,
+fixed the actual first pointer and now booted the exact same Linux
+6.6.143 test profile successfully.
+
+**Next (not certified yet):** combine the separately passing
+MiniAS+MiniAR+MiniObjcopy native triple (GNU LD) with the newly passing
+MiniLD-final (GNU AS/AR), using native 4-tool same-tree relink and
+the identical QEMU P0/P1 oracle. MiniPP and MiniC remain distinct
+uncompleted frontiers; do not represent this certificate as a
+fully GNU-independent toolchain.
