@@ -284,7 +284,7 @@ jobs:
           name: miniobjcopy-linux-tool-frontier
           path: build/miniobjcopy-linux-tool-work
           repository: ${{ github.repository }}
-          run-id: '38160503540'
+          run-id: '38186542705'
           github-token: ${{ github.token }}
 
       - name: Attest restored native-final-linked Linux artifact
@@ -299,9 +299,9 @@ jobs:
           test "$(grep -c '^minild ' "$work/minild.trace")" -eq 3
           test "$(grep -c '^miniobjcopy ' "$work/miniobjcopy.trace")" -eq 44
           printf '%s  %s\n' \
-            db7bb695bb9dcd5985a726e0ea3b5d54b32f01c195b6c91ee117bd146d999693 \
+            c2d9e69d00d93ab1938dc306390b15109cfb4c11d168585bc282fef24b767681 \
             "$image" | sha256sum -c -
-          echo "MINILD_FINAL_IMAGE_REPLAY=PASS origin=38160503540 native_ld=3 native_objcopy=44 reused_full_image=1"
+          echo "MINILD_FINAL_IMAGE_REPLAY=PASS origin=38186542705 native_ld=3 native_objcopy=44 reused_full_image=1"
 
       - name: Restore exact MiniAS MiniAR MiniObjcopy Linux Image without rebuilding
         if: env.MINIOBJCOPY_TRIPLE_REPLAY_MODE == 'true'
@@ -363,7 +363,7 @@ jobs:
             if [[ "$MINIOBJCOPY_TRIPLE_REPLAY_MODE" == true ]]; then
               echo "MINIAS_MINIAR_MINIOBJCOPY_LINUX_RUNTIME=PASS p0=2/2 p1=12/12 source_run=38184298699"
             else
-              echo "MINILD_FINAL_MINIOBJCOPY_LINUX_RUNTIME=PASS p0=2/2 p1=12/12 origin=38160503540"
+              echo "MINILD_FINAL_MINIOBJCOPY_LINUX_RUNTIME=PASS p0=2/2 p1=12/12 origin=38186542705"
             fi
           else
             LINUX_IMAGE="$work/out/arch/riscv/boot/Image" \
