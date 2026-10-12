@@ -29,33 +29,71 @@ stop = text.index(end, start)
 part = text[start:stop]
 
 helper = r'''
-/* RUNTIME_IF_FALLTHROUGH_FACTS_V1: a local read cannot update other local
-   objects. Restrict to a simple guard, rather than guessing that a call,
-   volatile load, assignment expression or inline asm is side-effect-free. */
-static bool core_runtime_if_pure_local_guard(
-    const MinicCoreLowerContext *context, MinicExpressionId id) {
+/* RUNTIME_IF_FALLTHROUGH_FACTS_V1: preserve unescaped locals through a
+   precisely constrained read-only-local guard or direct call whose arguments
+   cannot provide an address of a local being propagated. */
+/* A direct function call can mutate global memory, but cannot write a
+   currently unescaped automatic local unless its address is supplied.
+   Accept only direct function calls whose arguments contain no address-of,
+   assignments, increments, volatile reads, or arbitrary expressions.
+   The Core fact table independently tracks local address escapes. */
+static bool core_runtime_if_guard_preserves_locals_depth(
+    const MinicCoreLowerContext *context, MinicExpressionId id,
+    unsigned int depth) {
+    const MinicC0Program *program;
     const MinicExpression *expression;
     const MinicLocal *local;
+    size_t i;
 
     if (context == NULL || context->body == NULL ||
-        context->body->program == NULL) {
+        context->body->program == NULL || depth > 24U) {
         return false;
     }
-    expression = minic_c0_program_expression(context->body->program, id);
+    program = context->body->program;
+    expression = minic_c0_program_expression(program, id);
     if (expression == NULL) {
         return false;
     }
     if (expression->kind == MINIC_EXPRESSION_UNARY &&
         expression->value.unary.operator_kind == MINIC_UNARY_LOGICAL_NOT) {
-        return core_runtime_if_pure_local_guard(
-            context, expression->value.unary.operand);
+        return core_runtime_if_guard_preserves_locals_depth(
+            context, expression->value.unary.operand, depth + 1U);
     }
-    if (expression->kind != MINIC_EXPRESSION_LOCAL) {
-        return false;
+    if (expression->kind == MINIC_EXPRESSION_CAST ||
+        expression->kind == MINIC_EXPRESSION_CONVERSION ||
+        expression->kind == MINIC_EXPRESSION_BITCAST ||
+        expression->kind == MINIC_EXPRESSION_LVALUE_READ) {
+        return core_runtime_if_guard_preserves_locals_depth(
+            context, expression->value.unary.operand, depth + 1U);
     }
-    local = minic_c0_program_local(
-        context->body->program, expression->value.local_id);
-    return local != NULL && !minic_type_is_volatile(local->type);
+    if (expression->kind == MINIC_EXPRESSION_LOCAL) {
+        local = minic_c0_program_local(program, expression->value.local_id);
+        return local != NULL && !minic_type_is_volatile(local->type);
+    }
+    if (expression->kind == MINIC_EXPRESSION_INTEGER) {
+        return true;
+    }
+    if (expression->kind == MINIC_EXPRESSION_CALL) {
+        const MinicExpression *callee =
+            minic_c0_program_expression(program, expression->value.call.callee);
+        /* Never bless an indirect callback with unknown argument handling. */
+        if (callee == NULL || callee->kind != MINIC_EXPRESSION_FUNCTION) {
+            return false;
+        }
+        for (i = 0U; i < expression->value.call.argument_count; ++i) {
+            if (!core_runtime_if_guard_preserves_locals_depth(
+                    context, expression->value.call.arguments[i], depth + 1U)) {
+                return false;
+            }
+        }
+        return true;
+    }
+    return false;
+}
+
+static bool core_runtime_if_pure_local_guard(
+    const MinicCoreLowerContext *context, MinicExpressionId id) {
+    return core_runtime_if_guard_preserves_locals_depth(context, id, 0U);
 }
 
 static MinicCoreLocalIntegerConstant *core_runtime_if_copy_facts(
