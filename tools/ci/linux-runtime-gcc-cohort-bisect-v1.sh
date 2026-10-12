@@ -1299,6 +1299,9 @@ PY_FRAME_SUMMARY
     python3 "$repo/tools/ci/linux-runtime-p1-derived-use-parse-v1.py" \
       "$frame_dir/replay.log" "$frame_dir/nonreuse-reasons.tsv" \
       "$frame_dir/derived-uses.tsv"
+    python3 "$repo/tools/ci/linux-runtime-p1-use-span-parse-v1.py" \
+      "$frame_dir/replay.log" "$frame_dir/objects.tsv" \
+      "$frame_dir/derived-per-use.tsv" "$frame_dir/derived-hotspots.tsv"
     echo "COHORT_FRAME_NONREUSE=CLASSIFIED pinned_objects_unmodified=true"
   fi
   echo "COHORT_FRAME_CAPTURE=ACCOUNTED functions=$(($(wc -l <"$frame_dir/components.tsv")-1)) objects=$(($(wc -l <"$frame_dir/objects.tsv")-1)) image_linked=false"
