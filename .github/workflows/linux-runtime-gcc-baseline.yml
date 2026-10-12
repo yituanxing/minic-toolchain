@@ -781,6 +781,7 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
+          LARGE_IMAGE_HISTORICAL_NINE_P1=${{ contains(github.event.head_commit.message, '[linux-runtime-historical-nine-p1]') && '1' || '0' }} \
           bash tools/ci/linux-runtime-large-image-qemu-v0.sh \
             "$GITHUB_WORKSPACE/build/linux-runtime-large-image-qemu-v0/source-artifact"
 
@@ -791,6 +792,7 @@ jobs:
           name: minic-large-image-qemu-${{ github.sha }}
           path: |
             build/linux-runtime-large-image-qemu-v0/provenance.txt
+            build/linux-runtime-large-image-qemu-v0/historical-p1-verdicts.tsv
             build/linux-runtime-large-image-qemu-v0/initramfs.log
             build/linux-runtime-large-image-qemu-v0/*.stdout.log
             build/linux-runtime-large-image-qemu-v0/qemu-*/*.log
