@@ -84,3 +84,9 @@ owner_ab_previous_run=38212394883
 owner_ab_previous_state=CI_SCRIPT_SYNTAX_FAIL_BEFORE_RELINK
 owner_ab_repair=5d3390257bfe6277fa08024695ede85c0f2f7093
 owner_ab_next=RESTORE_FROZEN_POOLS_AND_RETRY_SINGLE_GNU_OWNER_AB
+# Previous attempt 38212394883 restored and hash-verified all 2064
+# original MiniC objects and all 2064 original GNU references.
+# It halted on a malformed shell grep inserted during concurrent edits,
+# BEFORE differential linking/QEMU; syntax repaired in current branch.
+first_p1_owner_attempt=38212394883
+first_p1_owner_attempt_stage=FROZEN_CACHE_PASS_SHELL_SYNTAX_BLOCKER
