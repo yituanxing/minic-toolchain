@@ -53,3 +53,11 @@ full_P0=PASS
 full_shell=PASS
 full_P1=FAIL_2X_KERNEL_STACK_OVERFLOW_AT_IPV6_CHILD_CONNECT
 next_target=KERNEL_STACK_ABI_AND_FRAME_SIZE_CAUSAL_PROOF
+
+# P1 stack forensic: consume exact full 2064 cached MiniC ET_REL objects
+# and independent GCC objects to resolve original object owners of
+# __list_add_valid_or_report and __minic_inline_spec_163_16339, then
+# compare authentic RISC-V prologues with zero source rebuild.
+owner_audit=RUNNING_SYMBOL_OWNERS_AND_STACK_PROLOGUES
+original_image=SHA256_UNCHANGED
+p1_repro=KERNEL_STACK_OVERFLOW_IPV6_CHILD_CONNECT_2_OF_2
