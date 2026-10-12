@@ -130,11 +130,10 @@ def replace_one(old, new, why):
     part = part.replace(old, new, 1)
 
 replace_one(
-    "    MinicCoreLowerStatus status;\n    bool else_terminated;\n",
+    "    MinicCoreLowerStatus status;\n",
     "    MinicCoreLowerStatus status;\n"
     "    MinicCoreLocalIntegerConstant *fallthrough_facts;\n"
-    "    MinicCoreLocalIntegerConstant *then_exit_facts;\n"
-    "    bool else_terminated;\n",
+    "    MinicCoreLocalIntegerConstant *then_exit_facts;\n",
     "locals")
 replace_one(
     "    core_local_constants_clear_known(context);\n"
@@ -158,8 +157,7 @@ replace_one(
     "then_exit")
 replace_one(
     "    context->block_id = continuation_block;\n"
-    "    core_local_constants_clear_known(context);\n"
-    "    *terminated = !needs_merge;\n",
+    "    core_local_constants_clear_known(context);\n",
     "    context->block_id = continuation_block;\n"
     "    core_local_constants_clear_known(context);\n"
     "    if (else_source == NULL) {\n"
@@ -167,8 +165,7 @@ replace_one(
     "            context, fallthrough_facts, then_exit_facts, then_terminated);\n"
     "    }\n"
     "    free(then_exit_facts);\n"
-    "    free(fallthrough_facts);\n"
-    "    *terminated = !needs_merge;\n",
+    "    free(fallthrough_facts);\n",
     "merge")
 text = text[:start] + part + text[stop:]
 path.write_text(text)
