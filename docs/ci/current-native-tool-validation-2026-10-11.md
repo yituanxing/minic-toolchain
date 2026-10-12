@@ -1337,3 +1337,66 @@ and search-path option values are excluded. It retains strict rejection
 of genuinely ambiguous multiple C source arguments. The affected
 `-include ...gettimeofday.c` is still preprocessed inside the actual
 source TU, not silently skipped.
+
+## All-current MiniC first full GNU-locked 2064 TU run: compiler-origin link failures
+
+Actual seven-runner full-current Runtime MiniC CI
+[#38194675625](https://github.com/yituanxing/minic-toolchain/actions/runs/38194675625)
+completed all seven `gcc-shards` successfully, each with the actual
+pinned **44-transform Runtime correctness profile**. The receiver
+authenticated/merged all **2,064** C object candidates and attempted
+GNU-only linkage. **The full kernel did NOT link; no QEMU runtime
+certificate** follows. The actual `gcc-shard-verify` job failed;
+artifact `11722822896` contains complete bisection and linker logs,
+and exact source-identity records. Seven producer artifacts contain the
+*current MiniC ET_REL* objects; they remain recoverable for analysis.
+
+**Actual unresolved externals from the full-all link:**
+
+- `kernel/dma/direct.o:dma_direct_alloc` ->
+  `arch_dma_set_uncached`.
+- `mm/truncate.o:truncate_folio_batch_exceptionals` ->
+  `dax_delete_mapping_entry`.
+- `mm/shmem.o:shmem_pseudo_vma_init` ->
+  `__compiletime_assert_395`.
+- `mm/shmem.o:shmem_swapin` ->
+  `__compiletime_assert_396`, `397`, `398`.
+
+The target `kernel/dma/direct.o` is object 148 in the pinned C
+ordering. A fresh **prefix147 GNU relink and 4.7s QEMU P0 passed**;
+prefix148 linked with **undefined `arch_dma_set_uncached`**. An
+independent *single* MiniC `kernel/dma/direct.o` replacement against
+other GCC objects reproduced that same missing symbol. This is a
+**direct, genuine object-level reproducible MiniC link defect**,
+not an inferred guest crash. The all-except-direct trial still fails
+on the separately listed shmem/dax references, so the automatic
+bisection honestly reports **INTERACTION_OR_NONMONOTONE**: more than
+one independent fault, not a universal single bad object.
+
+Independent download/disassembly of original shard-0 artifact
+`11723205509` inspected exact candidate
+`minic/kernel/dma/direct.o` and confirmed live
+`R_RISCV_CALL_PLT arch_dma_set_uncached` at offset `0x58e4`
+in `dma_direct_alloc`. Shard-1 artifact `11722813867`
+similarly confirms
+`R_RISCV_CALL_PLT dax_delete_mapping_entry` at
+`mm/truncate.o+0xc466`. The GNU reference Linux Image links on
+the same configuration, which proves the missing-symbol problem is
+specific to the MiniC-generated object graph.
+
+**Hypothesis needing exact TU/IR verification:** mandatory dead-code
+elimination/constant-conditional reachability is incomplete in some
+kernel-specific local boolean/config paths, and compile-time asserts
+that GNU proves unreachable remain emitted. Do not patch Linux source
+or provide artificial undefined-symbol stubs; do not weaken the
+all-MiniC object proof. Extend the existing RV64 conditional-link
+regression with a Linux-shaped `_Bool set_uncached=0` producer
+and collect current Runtime MiniC `.i`/Core/`.s` side-by-side with
+the same input under GNU before editing any Core pass. Then fix the
+compiler's semantic/CFG preservation, recompile only the demonstrated
+affected objects for an early linker re-test; require the complete
+2,064-object rebuild before final certification.
+
+The observed full-all Image stayed unbuilt; no optimization and no
+self-hosting advancement is claimed. Subsequent performance work
+must be gated on fixed full-current linker and runtime correctness.
