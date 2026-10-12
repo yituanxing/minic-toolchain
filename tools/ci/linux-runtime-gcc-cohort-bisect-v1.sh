@@ -417,7 +417,7 @@ import re,sys
 pre=Path(sys.argv[1]).read_text(errors="replace").splitlines()
 asm=Path(sys.argv[2]).read_text(errors="replace").splitlines()
 out=[]
-regex=re.compile(r"__compiletime_assert_\\d+")
+regex=re.compile(r"__compiletime_assert_\d+")
 for title,lines in (("GNU_PREPROCESSED",pre),("MINIC_ASSEMBLY",asm)):
     match_indices=[i for i,s in enumerate(lines) if regex.search(s)]
     out.append(f"SHMEM_CAPTURE stage={title} matches={len(match_indices)}")
@@ -425,8 +425,8 @@ for title,lines in (("GNU_PREPROCESSED",pre),("MINIC_ASSEMBLY",asm)):
         out.append(f"SHMEM_CAPTURE stage={title} center={n+1}")
         for k in range(max(0,n-7),min(len(lines),n+6)):
             out.append(f" {k+1}: {lines[k][:700]}")
-Path(sys.argv[3]).write_text("\\n".join(out)+"\\n")
-print("\\n".join(out)[:20000])
+Path(sys.argv[3]).write_text("\n".join(out)+"\n")
+print("\n".join(out)[:20000])
 PY_SHMEM_ASSERT
   fi
 fi
