@@ -167,6 +167,9 @@ else
     exit 7
   fi
   echo "COHORT_CANDIDATE_CACHE=MISS objects=$n"
+  if ((n==1)) && [[ "${objects[0]}" == kernel/dma/direct.o ]]; then
+    export MINIC_DMA_ZERO_TRACE=1
+  fi
   # Only on cache miss: one parallel Kbuild invokes exact GCC -E / MiniC -S
   # / GNU as. Pinned GNU output snapshot already restored above.
   for ((i=0;i<n;i++)); do
@@ -368,6 +371,13 @@ PY_STAGE_TOTALS
       exit 11
     }
   echo "COHORT_COMPILE=PASS objects=$n elapsed_ms=$(((cc_ended-cc_started)/1000000))"
+  if ((n==1)) && [[ "${objects[0]}" == kernel/dma/direct.o ]]; then
+    zero_trace="$out/kernel/dma/direct.minic-stage2.minic.stderr"
+    if [[ -s "$zero_trace" ]]; then
+      cp -a "$zero_trace" "$ev/dma-zero-facts.log"
+      grep 'DMA_ZERO_PROOF' "$zero_trace" | tail -n 64 || true
+    fi
+  fi
 fi
 python3 - "$ev/gcc" "$ev/minic" "$objects_file" <<'PY_ABI'
 from pathlib import Path
