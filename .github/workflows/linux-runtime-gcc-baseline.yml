@@ -18,6 +18,86 @@ permissions:
 # P1 calibration rerun after loopback bring-up.
 
 jobs:
+  # Opt-in causal control: reconfigure BOTH Linux RISC-V task and IRQ stacks
+  # to 32KiB, rebuild the exact 2064 MiniC C-owner universe under that
+  # configuration, and execute three ordinary QEMU P1 boots. No compiler
+  # optimization changes. Reuse the canonical runtime workflow.
+  p1-stack-size-control:
+    if: github.event_name == 'push' && contains(github.event.head_commit.message, '[linux-runtime-p1-stack-size]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 155
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Install pinned Linux GNU cross-toolchain and QEMU
+        timeout-minutes: 12
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 install -y --no-install-recommends \
+            gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu libc6-dev-riscv64-cross \
+            qemu-system-misc opensbi device-tree-compiler \
+            bc bison flex libssl-dev libelf-dev make cpio gzip python3 xz-utils || {
+              sudo apt-get -o Acquire::Retries=3 update
+              sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+                gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu libc6-dev-riscv64-cross \
+                qemu-system-misc opensbi device-tree-compiler \
+                bc bison flex libssl-dev libelf-dev make cpio gzip python3 xz-utils
+            }
+
+      - name: Compute exact certified 16KiB reference key
+        id: reference
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          config=eeb04f304ebfb97a1079c187dc0c2ea3cc61fc50a55aa3cc776237c16ab19bbe
+          gcc_sig=$(sha256sum "$(command -v riscv64-linux-gnu-gcc)" | cut -c1-16)
+          ld_sig=$(sha256sum "$(command -v riscv64-linux-gnu-ld)" | cut -c1-16)
+          echo "key=linux-gnu-golden-v1-6.6.143-$config-$gcc_sig-$ld_sig" >>"$GITHUB_OUTPUT"
+
+      - uses: actions/cache/restore@v4
+        with:
+          path: |
+            build/linux-runtime-gcc/out
+            build/linux-runtime-gcc/provenance
+          key: ${{ steps.reference.outputs.key }}
+          fail-on-cache-miss: true
+
+      - uses: ./.github/actions/linux-runtime-restore-fixture
+        with:
+          fixture: source
+
+      - name: Rebuild same 2064 C owners for real 32KiB task and IRQ stacks
+        shell: bash
+        timeout-minutes: 140
+        run: |
+          set -Eeuo pipefail
+          bash tools/ci/linux-runtime-p1-stack-size-control-v1.sh \
+            "$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0/linux-6.6.143" \
+            "$GITHUB_WORKSPACE/build/linux-runtime-gcc/out" \
+            "$GITHUB_WORKSPACE/build/linux-runtime-gcc/provenance" \
+            "$GITHUB_WORKSPACE/build/linux-p1-stack32-v1"
+
+      - name: Preserve isolated 32KiB config, GNU control and MiniC P1 evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: minic-p1-stack32-${{ github.sha }}
+          path: |
+            build/linux-p1-stack32-v1/evidence/*.log
+            build/linux-p1-stack32-v1/evidence/*.tsv
+            build/linux-p1-stack32-v1/evidence/*.txt
+            build/linux-p1-stack32-v1/evidence/*.sha256
+            build/linux-p1-stack32-v1/evidence/provenance/*.txt
+            build/linux-p1-stack32-v1/evidence/gnu-p1/*.log
+            build/linux-p1-stack32-v1/evidence/trials/*/*.log
+            build/linux-p1-stack32-v1/evidence/trials/*/qemu/*.log
+            build/linux-p1-stack32-v1/evidence/trials/*/qemu/rdinit-init.log
+            build/linux-p1-stack32-v1/evidence/p1-stack32-repeats.tsv
+          if-no-files-found: warn
+          retention-days: 7
+
   gcc-runtime:
     if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[linux-runtime-gcc]')
     runs-on: ubuntu-24.04
