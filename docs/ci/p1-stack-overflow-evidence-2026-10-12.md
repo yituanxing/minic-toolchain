@@ -158,3 +158,72 @@ CoreObject types and location in the P1 call chain. Compare failing
 all-MiniC vs stable two-GCC pair, then construct a source-level
 minimized compiler regression. Reject unproven cross-block stack-slot
 sharing.
+
+
+## Controlled GDB call-entry evidence — CI 38241421894
+
+The CI run **SUCCEEDED** as a diagnostic job. It generated the exact
+all-MiniC P1 FAIL, then three P1 boots of each two-GCC replacement,
+and additionally ran observational GDB on two already-linked Images.
+The GDB sessions are **not** certifications of P1 behavior.
+
+All-MiniC GDB entry SP: `tcp_v6_connect = 0xff200000001cb870`.
+The 16 KiB task stack low address was
+`0xff200000001c8000`. With `ip6_output.o` and
+`tcp_ipv6.o` replaced by GCC, entry SP in `tcp_v6_connect`
+was **identical**. Later common-function entry SPs differed:
+
+| Function entry (same P1 TCP path) | All MiniC remaining stack | 2 GCC remaining stack | GCC-pair advantage |
+| --- | ---: | ---: | ---: |
+| `tcp_v6_connect` | 14,448 B | 14,448 B | 0 |
+| `__tcp_transmit_skb` | 12,928 B | 13,568 B | 640 B |
+| `ip6_xmit` | 11,184 B | 11,824 B | 640 B |
+| `ip6_output` | 8,608 B | 11,520 B | 2,912 B |
+| `ip6_finish_output2` | 7,088 B | 11,312 B | 4,224 B |
+| `__neigh_create` | 3,024 B | 11,152 B | **8,128 B** |
+| `neigh_resolve_output` | 2,896 B | 11,152 B | 8,256 B |
+| `__dev_queue_xmit` | 2,592 B | 10,848 B | **8,256 B** |
+
+This directly shows that the MiniC-generated frames in the
+`tcp_v6_connect → ip6_xmit → ip6_output → ip6_finish_output2`
+chain cumulatively consume roughly **8 KiB more task stack**
+*before* reaching downstream neighbor/device routines.
+
+In the all-MiniC GDB run, the second call to
+`__list_add_valid_or_report` began with **only 224 bytes**
+remaining and the kernel subsequently panicked with stack SP
+`0xff200000001c7f70` (144 B below task-stack base).
+
+**Important confounder:** The independently tested 2-GCC Image
+PASSED the normal P1 test 3/3 on run 38241421894,
+but **the same 2-GCC Image panicked when run under repeated GDB
+breakpoints**, later in `decay_load`, with anomalous SP
+`0xff1fffffffffffd0`. Thus this GDB run must NOT be
+called a successful debug-guest control. Breakpoints change
+timing/interleaving, and/or expose a still-latent bug.
+The pre-crash frame-entry comparison is useful evidence about stack
+footprint but cannot by itself prove that the 8 KiB difference is the
+*only* runtime correctness issue. No compiler core fix is validated yet.
+
+Repeat two-GCC results under ordinary no-debug QEMU in this run:
+
+- `ip6_output.o + tcp_ipv6.o`: **PASS/PASS/PASS** (new linked Image
+  SHA `15de4cfd2a821b652b6c9d11a2586ab581cf19fcddedb123a86cef99707ed142`).
+- `ip6_output.o + tcp_output.o`: PASS/FAIL/FAIL.
+- `ip6_output.o + dev.o`: PASS/PASS/PASS this time,
+  versus PASS/FAIL/PASS in CI 38239111412. **Do not interpret a
+  single 3/3 as a statistical guarantee of long-term stability.**
+
+Implementation detail: the initial GDB script emitted a literal
+`\\n` in its first record and accidentally interpreted an
+emergency overflow-stack SP as a task-stack offset; its summary
+was incomplete. Follow-up fixes `faf37daf` and `ad79d93f`
+correct future logging, but the raw `gdb.log` and QEMU serial
+from CI 38241421894 remain authoritative.
+
+Next: use an exact function-local codegen/IR frame-component audit
+with fixed MiniC compiler and identical .i preprocessing input;
+isolate the growth of CoreObjects from source/header inline
+expansion. Test the resulting safe lowering improvement with one
+TU recompile and same P1 oracle, not with a wholesale unsound
+cross-block slot reuse.
