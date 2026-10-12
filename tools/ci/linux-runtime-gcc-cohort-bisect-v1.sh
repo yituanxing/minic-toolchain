@@ -169,6 +169,7 @@ else
   echo "COHORT_CANDIDATE_CACHE=MISS objects=$n"
   if ((n==1)) && [[ "${objects[0]}" == kernel/dma/direct.o ]]; then
     export MINIC_DMA_ZERO_TRACE=1
+    export MINIC_DMA_IF_TRACE=1
   fi
   # Only on cache miss: one parallel Kbuild invokes exact GCC -E / MiniC -S
   # / GNU as. Pinned GNU output snapshot already restored above.
@@ -380,6 +381,7 @@ PY_STAGE_TOTALS
     if [[ -s "$zero_trace" ]]; then
       cp -a "$zero_trace" "$ev/dma-zero-facts.log"
       grep 'DMA_ZERO_PROOF' "$zero_trace" | tail -n 64 || true
+      grep 'DMA_IF_TRACE' "$zero_trace" | tail -n 160 || true
     fi
     dma_input="$out/kernel/dma/direct.minic-stage2.i"
     if [[ -s "$dma_input" ]]; then
