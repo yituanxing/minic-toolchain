@@ -1,0 +1,15 @@
+# Full-current MiniC Linux 6.6.143 C-object acceptance invocation.
+# This tools/ci path matches the existing linux-runtime-gcc-baseline.yml
+# push paths. The opt-in tag launches existing seven runners and receiver.
+# No workflow, job or separate development branch is added.
+profile=Runtime-44-correctness
+candidate_scope=entire-GNU-certified-C-object-universe
+compiler=MiniC
+preprocessor=GNU-GCC
+assembler=GNU-AS
+archiver=GNU-AR
+linker=GNU-LD
+linux=6.6.143
+first_gate=full-current-MiniC-correctness
+second_gate=existing-Python-145-module-203-function-QEMU
+prohibited=performance-optimization-or-bootstrap-until-green
