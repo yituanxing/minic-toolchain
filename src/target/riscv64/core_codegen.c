@@ -48,6 +48,7 @@ typedef struct MinicRiscv64CoreFrame {
     size_t object_count;
     size_t value_count;
     size_t value_slot_count;
+    size_t value_slot_bytes;
     size_t *object_offsets;
     size_t *value_offsets;
     /* M177_CONSTANT_SWITCH_CFG_OWNER: suppress target emission of Core blocks
@@ -345,6 +346,23 @@ static bool core_call_outgoing_stack_size(const MinicC0Program *program,
     return true;
 }
 
+/* Opt-in correctness probe for Linux P1: 64-bit SSA results only need one
+ * 8-byte stack slot; 128-bit and unknown values retain the historical 16.
+ * No liveness/coalescing assumption is introduced by this packing pass. */
+static size_t core_value_slot_width(const MinicC0Program *program,
+                                    const MinicCoreFunction *function,
+                                    MinicCoreValueId value_id) {
+    size_t width;
+    size_t alignment;
+    if (program != NULL && function != NULL && value_id < function->value_count &&
+        minic_data_layout_type(minic_default_data_layout(), program,
+                               function->values[value_id].type, &width, &alignment) &&
+        width != 0U && width <= 8U) {
+        return 8U;
+    }
+    return 16U;
+}
+
 static bool core_frame_initialize(const MinicC0Program *program,
                                   const MinicCoreFunction *function,
                                   MinicRiscv64CoreFrame *frame) {
@@ -353,6 +371,7 @@ static bool core_frame_initialize(const MinicC0Program *program,
     size_t required_size;
     size_t outgoing_argument_size;
     size_t maximum_object_alignment;
+    bool pack_small_values;
 
     if (function == NULL || frame == NULL) {
         return false;
@@ -361,6 +380,9 @@ static bool core_frame_initialize(const MinicC0Program *program,
     frame->value_offsets = NULL;
     frame->reachable_blocks = NULL;
     frame->value_slot_count = 0U;
+    frame->value_slot_bytes = 0U;
+    pack_small_values = getenv("MINIC_RV64_PACK_SMALL_VALUES") != NULL &&
+                        strcmp(getenv("MINIC_RV64_PACK_SMALL_VALUES"), "1") == 0;
     frame->has_dynamic_stack_alloc = core_function_uses_dynamic_stack_alloc(function);
     frame->saved_frame_base_offset = 0U;
     if (!core_call_outgoing_stack_size(program, function, &outgoing_argument_size)) {
@@ -429,10 +451,12 @@ static bool core_frame_initialize(const MinicC0Program *program,
     {
         size_t block_index;
         size_t maximum_block_values = 0U;
+        size_t maximum_block_bytes = 0U;
 
         for (block_index = 0U; block_index < function->block_count; ++block_index) {
             const MinicCoreBlock *block = &function->blocks[block_index];
             size_t local_values = 0U;
+            size_t local_bytes = 0U;
             size_t instruction_index;
 
             for (instruction_index = 0U; instruction_index < block->instruction_count;
@@ -442,21 +466,30 @@ static bool core_frame_initialize(const MinicC0Program *program,
                     return false;
                 }
                 if (function->instructions[instruction_id].result != MINIC_CORE_VALUE_INVALID) {
-                    if (local_values == SIZE_MAX) {
+                    size_t stride = pack_small_values
+                        ? core_value_slot_width(program, function,
+                                                function->instructions[instruction_id].result)
+                        : 16U;
+                    if (local_values == SIZE_MAX || local_bytes > SIZE_MAX - stride) {
                         return false;
                     }
                     ++local_values;
+                    local_bytes += stride;
                 }
             }
             if (local_values > maximum_block_values) {
                 maximum_block_values = local_values;
             }
+            if (local_bytes > maximum_block_bytes) {
+                maximum_block_bytes = local_bytes;
+            }
         }
-        if (maximum_block_values > (SIZE_MAX - frame->value_base_offset) / 16U) {
+        if (maximum_block_bytes > SIZE_MAX - frame->value_base_offset) {
             return false;
         }
         frame->value_slot_count = maximum_block_values;
-        storage_size = frame->value_base_offset + maximum_block_values * 16U;
+        frame->value_slot_bytes = maximum_block_bytes;
+        storage_size = frame->value_base_offset + maximum_block_bytes;
     }
     frame->saves_return_address = core_function_needs_saved_return_address(function);
     frame->return_address_offset = 0U;
@@ -630,6 +663,7 @@ static bool core_frame_initialize(const MinicC0Program *program,
         for (block_index = 0U; block_index < function->block_count; ++block_index) {
             const MinicCoreBlock *block = &function->blocks[block_index];
             size_t local_slot = 0U;
+            size_t local_bytes = 0U;
             size_t instruction_index;
 
             for (instruction_index = 0U; instruction_index < block->instruction_count;
@@ -648,9 +682,14 @@ static bool core_frame_initialize(const MinicC0Program *program,
                 if (instruction->result == MINIC_CORE_VALUE_INVALID) {
                     continue;
                 }
+                size_t stride = pack_small_values
+                    ? core_value_slot_width(program, function, instruction->result)
+                    : 16U;
                 if (instruction->result >= function->value_count ||
                     local_slot >= frame->value_slot_count ||
-                    local_slot > (SIZE_MAX - frame->value_base_offset) / 16U ||
+                    local_bytes > frame->value_slot_bytes ||
+                    stride > frame->value_slot_bytes - local_bytes ||
+                    local_bytes > SIZE_MAX - frame->value_base_offset ||
                     frame->value_offsets[instruction->result] != SIZE_MAX) {
                     free(frame->value_offsets);
                     frame->value_offsets = NULL;
@@ -659,8 +698,9 @@ static bool core_frame_initialize(const MinicC0Program *program,
                     return false;
                 }
                 frame->value_offsets[instruction->result] =
-                    frame->value_base_offset + local_slot * 16U;
+                    frame->value_base_offset + local_bytes;
                 ++local_slot;
+                local_bytes += stride;
             }
         }
         for (value_index = 0U; value_index < function->value_count; ++value_index) {
