@@ -774,6 +774,41 @@ jobs:
             "$ev/minic" "$GITHUB_WORKSPACE/build/linux-runtime-gcc/out" \
             "$ev/p1-frame-audit"
 
+      - name: Restore unchanged P1 panic call trace from certified full Image
+        if: contains(github.event.head_commit.message, '[linux-runtime-p1-frame-audit]')
+        uses: actions/download-artifact@v4
+        with:
+          run-id: 38207896965
+          github-token: ${{ github.token }}
+          name: minic-large-image-qemu-3e73328c2182f9cebb713e4595d2bf85067ac5b1
+          path: build/linux-runtime-gcc-cohort-v1/p1-crash-artifact
+
+      - name: Extract full original P1 kernel call trace from unchanged Image
+        if: contains(github.event.head_commit.message, '[linux-runtime-p1-frame-audit]')
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-v1"
+          source="$ev/p1-crash-artifact/qemu-p1/rdinit-init.log"
+          test -s "$source"
+          python3 - "$source" "$ev/p1-frame-audit/panic-calltrace.txt" <<'PY_PANIC'
+          from pathlib import Path
+          import sys
+          src,out=map(Path,sys.argv[1:])
+          lines=src.read_text(errors="replace").splitlines()
+          triggers=[i for i,l in enumerate(lines) if "Insufficient stack space to handle exception!" in l]
+          if not triggers:
+              raise SystemExit("P1_PANIC_TRACE=FAIL stack_overflow_marker_missing")
+          evidence=[]
+          for i in triggers:
+              evidence.extend(lines[max(0,i-24):min(len(lines),i+180)])
+          out.parent.mkdir(parents=True,exist_ok=True)
+          out.write_text("\\n".join(evidence)+"\\n")
+          print(f"P1_PANIC_TRACE=PASS repeats={len(triggers)} lines={len(evidence)}")
+          for line in evidence[-150:]:
+              print(line)
+          PY_PANIC
+
       - name: Preserve P1 crash owner and stack audit
         if: always() && contains(github.event.head_commit.message, '[linux-runtime-p1-frame-audit]')
         uses: actions/upload-artifact@v4
