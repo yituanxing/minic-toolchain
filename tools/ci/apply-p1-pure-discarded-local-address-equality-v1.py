@@ -52,11 +52,18 @@ static bool core_p1_discarded_pure_local_address_equality(
     /* A single-function opt-in isolates this from all other kernel owners. */
     {
         const char *only = getenv("MINIC_P1_DISCARD_EQ_FUNCTION");
-        if (only != NULL && only[0] != 0 &&
-            (context->source_function == NULL ||
-             context->source_function->name == NULL ||
-             strcmp(context->source_function->name, only) != 0)) {
-            return false;
+        if (only != NULL && only[0] != 0) {
+            const char *name =
+                context->source_function != NULL
+                    ? context->source_function->name : NULL;
+            const bool exact = name != NULL && strcmp(name, only) == 0;
+            const bool ipv6_pair = name != NULL &&
+                strcmp(only, "ip6_pair") == 0 &&
+                (strcmp(name, "ip6_finish_output2") == 0 ||
+                 strcmp(name, "ip6_xmit") == 0);
+            if (!exact && !ipv6_pair) {
+                return false;
+            }
         }
     }
     cmp = minic_c0_program_expression(
