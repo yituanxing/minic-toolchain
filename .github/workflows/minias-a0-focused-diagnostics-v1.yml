@@ -1494,7 +1494,6 @@ jobs:
           set -Eeuo pipefail
           work="$GITHUB_WORKSPACE/build/minias-linux-runtime"
           MINI_TOOLS_WORK="$work" \
-          MINI_TOOLS_NATIVE_LD="${{ contains(github.event.head_commit.message, '[minias-linux-four]') && 'true' || 'false' }}" \
           MINI_TOOLS_BIN="$GITHUB_WORKSPACE/build/minias-linux-runtime-toolchain/bin" \
           MINIAS="$GITHUB_WORKSPACE/build/minias-linux-runtime-toolchain/bin/minic-as" \
           MINIAS_AS_TRACE="$work/minias-as.trace" \

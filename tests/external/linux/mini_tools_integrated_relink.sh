@@ -136,11 +136,11 @@ python3 tests/external/linux/runtime_v2_log_check.py \
   --profile p1 --log "$stage/qemu-p1/rdinit-init.log"
 echo "NATIVE_INTEGRATED_LINUX_RUNTIME=PASS components=MiniAS,MiniAR,MiniObjcopy gcc=GNU ld=GNU p0=2/2 p1=12/12"
 
-# Stage III (explicit opt-in only): keep the *same* MiniAS .o / MiniAR .a /
+# Stage III (the existing explicitly selected linux-integrated mode): keep the *same* MiniAS .o / MiniAR .a /
 # MiniObjcopy tree just certified by QEMU above. Replace GNU LD only at the
 # three late final vmlinux/kallsyms boundaries; all other LD invocations
 # remain GNU. No tool failure is silently delegated at native boundaries.
-if [[ "${MINI_TOOLS_NATIVE_LD:-false}" == "true" ]]; then
+if [[ "${MINI_TOOLS_NATIVE_LD:-true}" == "true" ]]; then
   four="$work/native-four"
   mkdir -p "$four"
   test -x "$bins/minic-ld"

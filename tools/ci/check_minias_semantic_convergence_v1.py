@@ -89,7 +89,7 @@ def main():
         "            build/minias-linux-runtime/out/arch/riscv/boot/Image", 1)
     linux_body = cur["linux-single"]
     integrated_path = ROOT / "tests/external/linux/mini_tools_integrated_relink.sh"
-    if sha(integrated_path) != "928bba7af8c991cc7e996d57ee5e3101b72809c9":
+    if sha(integrated_path) != "954500dca376fae0f53f5a8b9800a858366f5e88":
         raise AssertionError("integrated GNU-link MiniAS+MiniAR+MiniObjcopy replay changed")
     approved_integrated = (
         "      - name: Reuse MiniAS Linux objects with MiniAR and MiniObjcopy and run QEMU P0 P1\n"
@@ -102,7 +102,6 @@ def main():
         "        if: success() && env.MINIAS_INTEGRATED_MODE == 'true'",
         "tests/external/linux/mini_tools_integrated_relink.sh",
         'MINI_TOOLS_WORK="$work"',
-        "MINI_TOOLS_NATIVE_LD=",
     ):
         if token not in integrated_step:
             raise AssertionError(f"integrated native relink contract lost: {token}")

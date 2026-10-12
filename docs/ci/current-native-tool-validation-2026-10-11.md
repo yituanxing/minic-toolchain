@@ -1032,3 +1032,17 @@ add-on via the extra tag; no extra router/job/mode was created.
 Both workflow source SHA and approved same-tree linker script SHA
 are guarded by existing structural CI. Runtime is not certified until
 this particular new producer/test completes successfully.
+
+### Four-native M0 routing correction
+
+The original MiniAS reusable workflow is a pure input-selected owner.
+The M0 routing audit correctly forbids it from inspecting push commit
+tags directly. The additional four-native substage is therefore gated
+only by its existing `linux-integrated` mode (which already requires an
+explicit historical opt-in push or manual action). Inside this mode the
+first triple-native P0/P1 certificate is mandatory, then MiniLD final-3
+is added in the same job. No head-commit tag logic remains in the
+reusable workflow, the existing tag router is unmodified, no new mode,
+job, or workflow was introduced, and the original linux-single path
+is unaffected. The integrated script retains an explicit optional
+`MINI_TOOLS_NATIVE_LD=false` override for standalone diagnostics.
