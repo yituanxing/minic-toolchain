@@ -170,3 +170,51 @@ profiles, not why the active call-chain has that depth.
 sizes from accidental recursion or register corruption. Do not turn
 the successful GitHub workflow status for this *diagnostic* into a false
 Linux P1 PASS.
+
+
+## Frozen all-MiniC first-fault capture — CI #38269165512
+
+A **new all-MiniC** 2064-object Image
+`2fe1f432e2e80b3189acb1f4955c413c7e24364ca2264f7d0a329c12a5610645`
+failed normal no-GDB P1 with saved `arch_local_irq_restore` EPC and SP only
+96 bytes **above** the task stack base. A subsequent GDB run under the
+**same immutable Image** reached `handle_bad_stack` and captured raw
+RISC-V `pt_regs` *at the emergency handler entry* (rather than
+interpreting the handler's own SP as the original fault).
+
+Its first fault was:
+```text
+epc     = do_irq+0x20
+ra      = _save_context+0x86
+cause   = 0xf (store/page fault)
+badaddr = ff200000001c7fd0
+sp      = ff200000001c7fd0
+task_lo = ff200000001c8000   (48 B below lower bound)
+irq_lo  = ff20000000000000
+irq_hi  = ff20000000004000
+```
+
+This is **task-stack exhaustion during an interrupt/exception**, before
+the IRQ handler can safely finish transitioning to its separate IRQ stack.
+The immediate failing instruction/trigger varies with interleaving:
+previous runs failed during the list-add path; this time task stack
+was sufficiently exhausted that saving/handling an interrupt crossed
+its vmalloc guard. Both scenarios are consistent with the measured
+excessive nested MiniC stack budget, but **not** enough to establish
+which compiler lifetime rule is responsible.
+
+New CI artifact saves exact `pt_regs`, both 16 KiB stack snapshots,
+a 13 MiB linked `nm` symbol map, and a symbolized **candidate-only**
+stack-word table, under `p1-gdb-stack/`. Recovered candidate words
+near task-stack floor reference `get_freepointer_safe`,
+`__slab_alloc_node`, `__kmalloc`, `neigh_alloc`, and
+`___neigh_create`; farther up are IPv6 output and connect frames.
+Candidate text pointers can also be locals/constants: **not a proof of
+the exact call sequence or recursion**.
+
+The next no-codegen-change focused GDB run adds selective low-stack
+breakpoints on neighbor allocation and slab allocators, to measure
+true **function-entry SP** near the fault without treating stale stack
+words as a call trace.
+
+Do not infer Linux P1 PASS from success of the diagnostic CI workflow.
