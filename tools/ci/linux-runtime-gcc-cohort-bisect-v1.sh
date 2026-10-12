@@ -170,6 +170,8 @@ else
   if ((n==1)) && [[ "${objects[0]}" == kernel/dma/direct.o ]]; then
     export MINIC_DMA_ZERO_TRACE=1
     export MINIC_DMA_IF_TRACE=1
+  elif ((n==1)) && [[ "${objects[0]}" == mm/shmem.o ]]; then
+    export MINIC_SHMEM_IF_TRACE=1
   fi
   # Only on cache miss: one parallel Kbuild invokes exact GCC -E / MiniC -S
   # / GNU as. Pinned GNU output snapshot already restored above.
@@ -433,6 +435,10 @@ if ((n == 1)) && [[ "${objects[0]}" == mm/shmem.o ]]; then
       exit 4
     fi
     echo "SHMEM_SOURCE_REPLAY=PASS exact_candidate_bytes_unchanged=1"
+  fi
+  shmem_stderr="$out/mm/shmem.minic-stage2.minic.stderr"
+  if [[ -s "$shmem_stderr" ]]; then
+    grep 'SHMEM_IF_TRACE' "$shmem_stderr" | tail -n 120 || true
   fi
   test -s "$shmem_i" && test -s "$shmem_s"
   python3 - "$shmem_i" "$shmem_s" "$ev/shmem-assert-context.txt" <<'PY_SHMEM_ASSERT'
