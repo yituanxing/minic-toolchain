@@ -3,6 +3,7 @@
 # Record the CPU0 per-CPU IRQ-stack allocation independently of current->stack.
 # Breakpoints are armed only after tcp_v6_connect to avoid boot-time storms.
 # GDB changes execution timing; this is never a P1 PASS certificate.
+# Evidence contract: docs/ci/linux-p1-task-irq-stack-diagnosis-2026-10-12.md
 set -Eeuo pipefail
 if (( $# != 6 )); then
   echo "usage: $0 <Image> <vmlinux> <initramfs> <dtb> <out-dir> <qemu-seconds>" >&2
