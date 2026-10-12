@@ -99,4 +99,50 @@ test "$(symbol_type _einittext)" = T
 test "$(symbol_type _data)" = D
 grep -q 'Entry point address:.*0x10000' "$work/product.header"
 
-echo "MINILD_SCRIPT_A1=PASS output-symbol-section=PASS nm-types=T/T/T/T,D entry=0x10000 loads=$load_count generated=gnu-exact-504-bytes consumers=nm,readelf,objcopy"
+# GNU ld aligns a script-directed output section before evaluating its
+# leading __start___param symbol. Linux boot dereferences this address as
+# an array of 40-byte kernel_param records. A two-byte early boundary
+# yields a bogus pointer and an early page fault in parse_args().
+cat >"$work/param.s" <<'EOF'
+.section .text,"ax",@progbits
+.globl _start
+_start:
+  ret
+.section __param,"a",@progbits
+.balign 8
+.dword _start
+.dword 0x1122334455667788
+EOF
+cat >"$work/param.lds" <<'EOF'
+OUTPUT_ARCH(riscv)
+ENTRY(_start)
+SECTIONS {
+  . = 0x10000;
+  .text : { *(.text) }
+  . = 0x11002;
+  __param : {
+    __start___param = .;
+    KEEP(*(__param))
+    __stop___param = .;
+  }
+}
+EOF
+"$AS" -march=rv64imac -mabi=lp64 -o "$work/param.o" "$work/param.s"
+"$LD" -melf64lriscv -static -T "$work/param.lds" -o "$work/param-gnu" "$work/param.o"
+"$MINILD" -melf64lriscv -static -T "$work/param.lds" -o "$work/param-mini" "$work/param.o"
+"$NM" "$work/param-gnu" >"$work/param-gnu.nm"
+"$NM" "$work/param-mini" >"$work/param-mini.nm"
+for sym in __start___param __stop___param; do
+  gnu_addr=$(awk -v sym="$sym" '$3==sym {print $1; exit}' "$work/param-gnu.nm")
+  mini_addr=$(awk -v sym="$sym" '$3==sym {print $1; exit}' "$work/param-mini.nm")
+  test -n "$gnu_addr"
+  test "$mini_addr" = "$gnu_addr"
+done
+start_addr=$(awk '$3=="__start___param" {print $1; exit}' "$work/param-mini.nm")
+test "$start_addr" = 0000000000011008
+"$OBJCOPY" --dump-section __param="$work/param-gnu.bin" "$work/param-gnu"
+"$OBJCOPY" --dump-section __param="$work/param-mini.bin" "$work/param-mini"
+cmp "$work/param-gnu.bin" "$work/param-mini.bin"
+test "$(wc -c < "$work/param-mini.bin")" -eq 16
+
+echo "MINILD_SCRIPT_A1=PASS output-symbol-section=PASS nm-types=T/T/T/T,D entry=0x10000 loads=$load_count generated=gnu-exact-504-bytes param-start=gnu-exact-0x11008 consumers=nm,readelf,objcopy"
