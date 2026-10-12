@@ -338,6 +338,12 @@ jobs:
         run: |
           set -Eeuo pipefail
           work="$GITHUB_WORKSPACE/build/miniobjcopy-linux-tool-work"
+          # Diagnostic replay of an Image that already failed after 90s.
+          # Keep the original 90-second budget for every certified lane.
+          boot_timeout=90
+          if [[ "$MINIOBJCOPY_REPLAY_MODE" == true ]]; then
+            boot_timeout=20
+          fi
           BUILD_DIR="$work/initramfs" \
           OUTPUT_INITRAMFS="$work/runtime-initramfs.cpio.gz" \
           RISCV_CC=riscv64-linux-gnu-gcc \
@@ -348,7 +354,7 @@ jobs:
             BUILD_DIR="$work/qemu-runtime" \
             LINUX_RELEASE=6.6.143 \
             QEMU_SYSTEM_RISCV64=qemu-system-riscv64 \
-            QEMU_TIMEOUT_SECONDS=90 \
+            QEMU_TIMEOUT_SECONDS="$boot_timeout" \
               bash tests/external/linux/runtime_boot.sh
             LINUX_IMAGE="$work/out/arch/riscv/boot/Image" \
             INITRAMFS="$work/runtime-initramfs.cpio.gz" \
@@ -356,7 +362,7 @@ jobs:
             LINUX_RELEASE=6.6.143 \
             LINUX_RUNTIME_PROFILE=p1 \
             QEMU_SYSTEM_RISCV64=qemu-system-riscv64 \
-            QEMU_TIMEOUT_SECONDS=90 \
+            QEMU_TIMEOUT_SECONDS="$boot_timeout" \
               bash tests/external/linux/runtime_boot.sh
             python3 tests/external/linux/runtime_v2_log_check.py \
               --profile p1 --log "$work/qemu-p1/rdinit-init.log"
@@ -372,7 +378,7 @@ jobs:
             LINUX_RELEASE=6.6.143 \
             LINUX_RUNTIME_PROFILE=fast \
             QEMU_SYSTEM_RISCV64=qemu-system-riscv64 \
-            QEMU_TIMEOUT_SECONDS=90 \
+            QEMU_TIMEOUT_SECONDS="$boot_timeout" \
               bash tests/external/linux/runtime_boot.sh
             echo "MINIOBJCOPY_LINUX_SINGLE_RUNTIME=PASS profile=fast head=$GITHUB_SHA"
           fi
@@ -398,7 +404,9 @@ jobs:
               -M virt -cpu max -m 512M -smp 1 -nographic -no-reboot \
               -bios default -kernel "$image" -initrd "$initramfs" \
               -append "console=ttyS0 earlycon=sbi loglevel=8 panic=-1 rdinit=/init" \
-              -d in_asm,cpu,guest_errors -D "$log" \
+              -d in_asm,cpu,guest_errors \
+              -dfilter '0x80200000+0x2000000,0xffffffff80000000+0x2000000' \
+              -D "$log" \
               </dev/null >"$work/qemu-debug/uart.log" 2>&1
           )
           rc=$?
