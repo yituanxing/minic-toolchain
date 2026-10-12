@@ -2317,6 +2317,12 @@ PY_FRAME_PROLOGUE
     exit 8
   fi
   echo "COHORT_P1_OWNER_BASELINE=REPRODUCED verdict=$TRIAL_VERDICT"
+  if [[ "${COHORT_P1_PAIR_RESCUE:-0}" == 1 ]]; then
+    # 3/3 on three 3-GCC cohorts in 38237171824; run the three 2-GCC
+    # descendants only, without repeating any already certified cohort.
+    source "$repo/tools/ci/linux-runtime-p1-minimize-pairs-v1.sh"
+    exit 0
+  fi
   if [[ "${COHORT_P1_MINIMIZE_RESCUE:-0}" == 1 ]]; then
     # Each 3-GCC subgroup gets its own correctly keyed link + three boots.
     source "$repo/tools/ci/linux-runtime-p1-minimize-rescue-v1.sh"
