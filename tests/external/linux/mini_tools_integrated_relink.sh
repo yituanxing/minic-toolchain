@@ -135,3 +135,92 @@ QEMU_TIMEOUT_SECONDS=90 \
 python3 tests/external/linux/runtime_v2_log_check.py \
   --profile p1 --log "$stage/qemu-p1/rdinit-init.log"
 echo "NATIVE_INTEGRATED_LINUX_RUNTIME=PASS components=MiniAS,MiniAR,MiniObjcopy gcc=GNU ld=GNU p0=2/2 p1=12/12"
+
+# Stage III (explicit opt-in only): keep the *same* MiniAS .o / MiniAR .a /
+# MiniObjcopy tree just certified by QEMU above. Replace GNU LD only at the
+# three late final vmlinux/kallsyms boundaries; all other LD invocations
+# remain GNU. No tool failure is silently delegated at native boundaries.
+if [[ "${MINI_TOOLS_NATIVE_LD:-false}" == "true" ]]; then
+  four="$work/native-four"
+  mkdir -p "$four"
+  test -x "$bins/minic-ld"
+  cp "$stage/Image.sha256" "$four/triple-native.Image.sha256"
+  : >"$four/minild.trace"
+  cat >"$four/ld-final" <<'SH'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+: "${MINILD:?}"
+: "${MINILD_TRACE:?}"
+args=("$@")
+output=
+for ((i=0; i<${#args[@]}; ++i)); do
+  if [[ "${args[i]}" == -o && $((i+1)) -lt ${#args[@]} ]]; then
+    output="${args[i+1]}"
+    break
+  fi
+done
+case "$output" in
+  .tmp_vmlinux.kallsyms1|.tmp_vmlinux.kallsyms2|vmlinux)
+    { printf 'minild'; printf ' %q' "$@"; printf '\n'; } >>"$MINILD_TRACE"
+    exec "$MINILD" "$@"
+    ;;
+  *)
+    { printf 'gnu-ld'; printf ' %q' "$@"; printf '\n'; } >>"$MINILD_TRACE"
+    exec /usr/bin/riscv64-linux-gnu-ld "$@"
+    ;;
+esac
+SH
+  chmod +x "$four/ld-final"
+  export MINILD="$bins/minic-ld"
+  export MINILD_TRACE="$four/minild.trace"
+  before_four_as=$(grep -c '^pass ' "$MINIAS_AS_TRACE" || true)
+  before_four_ar=$(wc -l <"$stage/miniar.trace")
+  before_four_oc=$(wc -l <"$stage/miniobjcopy.trace")
+  echo "NATIVE_FOUR_RELINK_BEGIN=PASS triple=QEMU-P0P1 gcc=GNU native_as=$before_four_as native_ar=$before_four_ar native_objcopy=$before_four_oc"
+  start_four=$(date +%s)
+  if ! make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
+    CC="riscv64-linux-gnu-gcc -B$bindir/" \
+    AS="$bindir/riscv64-linux-gnu-as" \
+    AR="$stage/native-ar" \
+    OBJCOPY="$stage/native-objcopy" \
+    LD="$four/ld-final" \
+    -j4 Image >"$four/kbuild.log" 2>&1; then
+    echo "NATIVE_FOUR_RELINK=FAIL reason=kbuild"
+    tail -n 140 "$four/kbuild.log" >&2
+    tail -n 20 "$four/minild.trace" >&2
+    exit 1
+  fi
+  elapsed_four=$(( $(date +%s) - start_four ))
+  native_ld=$(grep -c '^minild ' "$four/minild.trace" || true)
+  native_as_added=$(( $(grep -c '^pass ' "$MINIAS_AS_TRACE" || true) - before_four_as ))
+  native_ar_added=$(( $(wc -l <"$stage/miniar.trace") - before_four_ar ))
+  native_oc_added=$(( $(wc -l <"$stage/miniobjcopy.trace") - before_four_oc ))
+  test "$native_ld" -eq 3 || {
+    echo "NATIVE_FOUR_RELINK=FAIL native_ld=$native_ld expected=3" >&2
+    exit 1
+  }
+  test -s "$out/vmlinux"
+  test -s "$out/arch/riscv/boot/Image"
+  sha256sum "$out/arch/riscv/boot/Image" >"$four/Image.sha256"
+  printf 'NATIVE_FOUR_IMAGE=PASS native_as_added=%s native_ar_added=%s native_objcopy_added=%s native_ld=3 elapsed_s=%s sha256=%s\n' \
+    "$native_as_added" "$native_ar_added" "$native_oc_added" "$elapsed_four" "$(cut -d' ' -f1 "$four/Image.sha256")"
+
+  LINUX_IMAGE="$out/arch/riscv/boot/Image" \
+  INITRAMFS="$work/runtime-initramfs.cpio.gz" \
+  BUILD_DIR="$four/qemu-p0" \
+  LINUX_RELEASE=6.6.143 \
+  QEMU_SYSTEM_RISCV64=qemu-system-riscv64 \
+  QEMU_TIMEOUT_SECONDS=90 \
+    bash tests/external/linux/runtime_boot.sh
+  LINUX_IMAGE="$out/arch/riscv/boot/Image" \
+  INITRAMFS="$work/runtime-initramfs.cpio.gz" \
+  BUILD_DIR="$four/qemu-p1" \
+  LINUX_RELEASE=6.6.143 \
+  LINUX_RUNTIME_PROFILE=p1 \
+  QEMU_SYSTEM_RISCV64=qemu-system-riscv64 \
+  QEMU_TIMEOUT_SECONDS=90 \
+    bash tests/external/linux/runtime_boot.sh
+  python3 tests/external/linux/runtime_v2_log_check.py \
+    --profile p1 --log "$four/qemu-p1/rdinit-init.log"
+  echo "NATIVE_FOUR_LINUX_RUNTIME=PASS components=MiniAS,MiniAR,MiniLD-final,MiniObjcopy gcc=GNU p0=2/2 p1=12/12"
+fi
