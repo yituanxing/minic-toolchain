@@ -26,6 +26,19 @@ if [[ "$historical" == 1 ]]; then
       break
     fi
   done < <(find "$archive" -type f -name Image -print0)
+  if [[ -z "$image" ]]; then
+    # Historical CI #38135950731 preserved Image.gz to keep its artifact
+    # below the GitHub upload limit. Decompress ONLY this verified Image;
+    # no source, compiler, linker, or .o files are touched.
+    compressed=$(find "$archive" -type f -path '*/trials/earlycon_fixed_only/Image.gz' -print -quit)
+    if [[ -n "$compressed" && -s "$compressed" ]]; then
+      mkdir -p "$ev/historical-extracted"
+      gzip -t "$compressed"
+      gzip -dc "$compressed" >"$ev/historical-extracted/Image"
+      image="$ev/historical-extracted/Image"
+      echo "HISTORICAL_NINE_IMAGE=DECOMPRESSED from=$(basename "$compressed") compressed_bytes=$(stat -c %s "$compressed") actual_sha=$(sha256sum "$image" | cut -d' ' -f1)"
+    fi
+  fi
 else
   expected_sha=dba3295a111b861be13dade671184918635662a82df8ad7997deb2da5c7d147f
   expected_bytes=215511040
