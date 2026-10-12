@@ -227,3 +227,40 @@ isolate the growth of CoreObjects from source/header inline
 expansion. Test the resulting safe lowering improvement with one
 TU recompile and same P1 oracle, not with a wholesale unsound
 cross-block slot reuse.
+
+
+## Byte-identical MiniC frame accounting — CI 38245948250 (PASS)
+
+The original frame-capture attempt (#38223005780) failed with zero_frame_traces
+because the compiler did not implement the exported diagnostic environment variable.
+A new post-profile **stderr-only** compiler instrument has now PASSed the SHA
+equality test: all three replayed objects (ip6_output.o, tcp_ipv6.o,
+tcp_output.o) are **byte-identical** to their original certified MiniC objects.
+The diagnostic compiler emitted no modified C object bytes or assembly;
+no Linux Image was linked or booted in this capture-only test.
+
+| Function | frame B | CoreObject region B | SSA spills B | other B | objects | unique starts | shared starts |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| ip6_finish_output2 | **4064** | **3976** | 72 | 16 | 1101 | 497 | 604 |
+| ip6_xmit | **2288** | **2208** | 72 | 8 | 592 | 279 | 313 |
+| tcp_v6_connect | 864 | 808 | 40 | 16 | 229 | 88 | 141 |
+| __tcp_transmit_skb | 1440 | 1376 | 56 | 8 | 373 | 181 | 192 |
+
+Every one of ip6_finish_output2's 1101 CoreObjects is scalar:
+1079 are 8 bytes, 19 are 4 bytes, and 3 are 1 byte. Its 497
+distinct physical stack-slot start offsets exactly fill 3976 bytes
+(in 8-byte increments); 604 objects already reuse other starts.
+For ip6_xmit, all 592 objects are scalar: 503 x 8 B, 74 x 4 B,
+11 x 1 B, 4 x 2 B. Large C aggregate storage and SSA spill
+allocation have been ruled out as primary causes of these frames.
+
+The remaining investigation is WHY so many scalar CoreObject slots
+are reserved in those few kernel functions. Cross-basic-block slot
+sharing must prove full value lifetime; the earlier unconditional
+cross-block trial #38227315248 was unsafe. Merely proving that all
+accesses are in one block does not prove the value is dead at exit.
+
+Provenance: CI #38245948250; diagnostic artifact files:
+p1-frame-components/components.tsv, objects.tsv, summary.tsv;
+per-function frame accounting and parser self-test PASS.
+No compiler runtime fix has yet been certified.
