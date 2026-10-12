@@ -383,38 +383,78 @@ jobs:
             echo "MINIOBJCOPY_LINUX_SINGLE_RUNTIME=PASS profile=fast head=$GITHUB_SHA"
           fi
 
-      - name: Diagnose MiniLD pre-banner failure with bounded QEMU CPU trace
+
+      - name: Snapshot live MiniLD CPU PC without instruction-logging slowdown
         if: failure() && env.MINIOBJCOPY_REPLAY_MODE == 'true'
         shell: bash
         run: |
           set -Eeuo pipefail
           work="$GITHUB_WORKSPACE/build/miniobjcopy-linux-tool-work"
-          image="$work/out/arch/riscv/boot/Image"
-          initramfs="$work/runtime-initramfs.cpio.gz"
-          log="$work/qemu-debug/minild-cpu.log"
           mkdir -p "$work/qemu-debug"
-          test -s "$image"
-          test -s "$initramfs"
-          # A full 90s boot already failed. Capture early instruction/CPU
-          # state without another kernel rebuild or a large unbounded trace.
-          set +e
-          (
-            ulimit -f 16384 || true
-            timeout --signal=TERM 6s qemu-system-riscv64 \
-              -M virt -cpu max -m 512M -smp 1 -nographic -no-reboot \
-              -bios default -kernel "$image" -initrd "$initramfs" \
-              -append "console=ttyS0 earlycon=sbi loglevel=8 panic=-1 rdinit=/init" \
-              -d in_asm,cpu,guest_errors \
-              -dfilter '0x80200000+0x2000000,0xffffffff80000000+0x2000000' \
-              -D "$log" \
-              </dev/null >"$work/qemu-debug/uart.log" 2>&1
-          )
-          rc=$?
-          set -e
-          printf 'MINILD_QEMU_TRACE rc=%s size=%s\n' "$rc" "$(stat -c '%s' "$log" 2>/dev/null || echo 0)"
-          echo "--- last CPU/instruction blocks ---"
-          tail -n 100 "$log" || true
+          python3 - "$work" <<'PY'
+          import pathlib
+          import socket
+          import subprocess
+          import sys
+          import time
 
+          work = pathlib.Path(sys.argv[1])
+          image = work / "out/arch/riscv/boot/Image"
+          initrd = work / "runtime-initramfs.cpio.gz"
+          sockpath = work / "qemu-debug/monitor.sock"
+          logpath = work / "qemu-debug/minild-live-pc.log"
+          if sockpath.exists():
+              sockpath.unlink()
+          args = [
+              "qemu-system-riscv64", "-M", "virt", "-cpu", "max",
+              "-m", "512M", "-smp", "1", "-nographic", "-no-reboot",
+              "-bios", "default", "-kernel", str(image),
+              "-initrd", str(initrd),
+              "-append", "console=ttyS0 earlycon=sbi loglevel=8 panic=-1 rdinit=/init",
+              "-monitor", "unix:" + str(sockpath) + ",server=on,wait=off",
+          ]
+          def query_monitor(sock, command):
+              sock.sendall((command + "\n").encode())
+              parts = []
+              until = time.monotonic() + 2.0
+              while time.monotonic() < until:
+                  try:
+                      chunk = sock.recv(65536)
+                  except socket.timeout:
+                      continue
+                  if not chunk:
+                      break
+                  parts.append(chunk)
+                  if b"(qemu)" in chunk:
+                      break
+              return b"".join(parts).decode("utf-8", "replace")
+
+          with open(work / "qemu-debug/uart.log", "wb") as uart, \
+               open(logpath, "w", encoding="utf-8") as out:
+              proc = subprocess.Popen(args, stdin=subprocess.DEVNULL,
+                                      stdout=uart, stderr=subprocess.STDOUT)
+              try:
+                  for delay in [2, 2, 2]:
+                      time.sleep(delay)
+                      if proc.poll() is not None:
+                          out.write("QEMU_EXIT=" + str(proc.returncode) + "\n")
+                          break
+                      with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as mon:
+                          mon.settimeout(0.5)
+                          mon.connect(str(sockpath))
+                          greeting = query_monitor(mon, "info registers")
+                          out.write("=== CPU SAMPLE ===\n" + greeting + "\n")
+                  out.flush()
+              finally:
+                  proc.terminate()
+                  try:
+                      proc.wait(timeout=3)
+                  except subprocess.TimeoutExpired:
+                      proc.kill()
+                      proc.wait()
+          print("MINILD_QEMU_CPU_SNAPSHOTS=CAPTURED bytes=" + str(logpath.stat().st_size))
+          print(logpath.read_text(errors="replace")[-9500:])
+          PY
       - name: Preserve Linux MiniObjcopy frontier
         if: always()
         uses: actions/upload-artifact@v4
