@@ -158,18 +158,23 @@ replace_one(
     "        then_exit_facts = core_runtime_if_copy_facts(context);\n"
     "    }\n",
     "then_exit")
-replace_one(
-    "    context->block_id = continuation_block;\n"
-    "    core_local_constants_clear_known(context);\n",
-    "    context->block_id = continuation_block;\n"
-    "    core_local_constants_clear_known(context);\n"
-    "    if (else_source == NULL) {\n"
-    "        core_runtime_if_merge_false_fallthrough(\n"
-    "            context, fallthrough_facts, then_exit_facts, then_terminated);\n"
-    "    }\n"
-    "    free(then_exit_facts);\n"
-    "    free(fallthrough_facts);\n",
-    "merge")
+# The final clear is the last such boundary in lower_if; earlier clears
+# belong to dynamic-branch preparation, other path selection, or guard
+# dominance. Preserve only facts proved on BOTH continuing paths after it.
+final_clear = "    core_local_constants_clear_known(context);\n"
+pos = part.rfind(final_clear)
+if pos < 0 or "*terminated = !needs_merge;" not in part[pos:]:
+    raise SystemExit("IF_FACTS=ERROR final_clear_missing")
+part = (
+    part[:pos + len(final_clear)]
+    + "    if (else_source == NULL) {\n"
+      "        core_runtime_if_merge_false_fallthrough(\n"
+      "            context, fallthrough_facts, then_exit_facts, then_terminated);\n"
+      "    }\n"
+      "    free(then_exit_facts);\n"
+      "    free(fallthrough_facts);\n"
+    + part[pos + len(final_clear):]
+)
 text = text[:start] + part + text[stop:]
 path.write_text(text)
 print("MINIC_RUNTIME_IF_FALLTHROUGH_FACTS_V1=APPLIED strict_pure_guard=1")
