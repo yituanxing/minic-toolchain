@@ -445,6 +445,21 @@ regex=re.compile(r"__compiletime_assert_(?:395|396|397|398)\b")
 for title,lines in (("GNU_PREPROCESSED",pre),("MINIC_ASSEMBLY",asm)):
     match_indices=[i for i,s in enumerate(lines) if regex.search(s)]
     out.append(f"SHMEM_TARGET_CAPTURE stage={title} matches={len(match_indices)}")
+    if title == "MINIC_ASSEMBLY":
+        # Locate the containing emitted function, not merely the reloc target.
+        for n in match_indices[:10]:
+            prev_types=[
+                (k,lines[k][:250]) for k in range(max(0,n-3000),n)
+                if re.search(r"\\.type\\s+[^,]+,\\s*@function|^[_a-zA-Z][\\w.]*:",lines[k])
+            ]
+            out.append(f"SHMEM_ASM_OWNER assert_line={n+1} preceding_labels={prev_types[-7:]}")
+    else:
+        for n in match_indices[:4]:
+            owners=[(k+1,lines[k][:250]) for k in range(max(0,n-300),n)
+                    if "shmem_alloc_hugefolio" in lines[k] or
+                       "shmem_alloc_and_acct_folio" in lines[k] or
+                       "shmem_alloc_folio(" in lines[k]]
+            out.append(f"SHMEM_SOURCE_OWNER assert_line={n+1} nearby={owners[-12:]}")
     for n in match_indices[:18]:
         symbols=sorted(set(regex.findall(lines[n])))
         out.append(f"SHMEM_TARGET_CAPTURE stage={title} center={n+1} symbols={','.join(symbols)}")
