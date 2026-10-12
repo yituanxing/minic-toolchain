@@ -27,3 +27,31 @@ Run 38227315248 reenabled **cross-basic-block CoreObject stack-slot reuse** for 
 **Confirmed mixed rescue:** CI **#38228441365** restored the authenticated frozen 2064-object universe, replaced only `net/ipv6/ip6_output.o`, `net/ipv6/tcp_ipv6.o`, `net/ipv4/tcp_output.o`, and `net/core/dev.o` with GCC objects, then GNU linked a single Image of SHA-256 `c6c3456b59fcd4ce3dde6ff0e44e0fe98a5670b657500a8ad1564760537f23d0`. The same Image passed the full P1 Python-era 12-syscall contract on **three consecutive independent QEMU boots** (PASS/PASS/PASS). The all-2064-MiniC control Image failed P1 in that job. This establishes a reproducible **2060-MiniC + 4-GCC object workaround**, **not** a fully MiniC-certified compiler.
 
 Next reduce the 4-GCC rescue set by controlled A/B before deciding where to optimize safe CoreObject lifetime/stack allocation. An unverified or unsafe cross-block stack-coloring shortcut must never be promoted merely because it makes one P1 run pass.
+
+## Exact four-way 3-GCC minimization — completed
+
+CI **#38237171824**: every row below uses one unique SHA-pinned Image
+booted independently three times. The all-MiniC (2064) control also FAILed
+in the same run. Every other C owner outside the three GCC replacements
+remained an attested, frozen MiniC object.
+
+| Restored MiniC object | 3 remaining GCC owners | P1 results |
+| --- | --- | --- |
+| `net/ipv6/ip6_output.o` | `tcp_ipv6.o`, `tcp_output.o`, `dev.o` | **FAIL / FAIL / FAIL** |
+| `net/ipv6/tcp_ipv6.o` | `ip6_output.o`, `tcp_output.o`, `dev.o` | PASS / PASS / PASS |
+| `net/ipv4/tcp_output.o` | `ip6_output.o`, `tcp_ipv6.o`, `dev.o` | PASS / PASS / PASS |
+| `net/core/dev.o` | `ip6_output.o`, `tcp_ipv6.o`, `tcp_output.o` | PASS / PASS / PASS |
+
+The failed three-GCC Image, when MiniC compiled `ip6_output.o`, sometimes
+panicked with SP around `0xff1fffffffffffe0`, far below the expected task
+stack. **The evidence shows `ip6_output.o` is necessary to keep as GCC in
+these tested three-GCC configurations, not that it necessarily contains the
+sole compiler bug.** The other three owner swaps are each individually
+unnecessary within the original four-object workaround, and may still
+interact with each other.
+
+The next exact experiment tests the three *two*-GCC subsets, each retaining
+`net/ipv6/ip6_output.o` and one of
+`tcp_ipv6.o`, `tcp_output.o`, `dev.o`. Each distinct Image must PASS
+P1 three times, with object/assembly/link provenance unchanged, before it
+can be treated as the smaller workaround.
