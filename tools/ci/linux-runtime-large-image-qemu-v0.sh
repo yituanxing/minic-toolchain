@@ -37,6 +37,42 @@ BUILD_DIR="$ev/initramfs" OUTPUT_INITRAMFS="$ev/runtime-initramfs.cpio.gz" \
 test -s "$ev/runtime-initramfs.cpio.gz"
 echo "LARGE_IMAGE_INITRAMFS=PASS gcc_generated=true"
 
+# QEMU 8.2 places -initrd at kernel_entry+128MiB regardless of -m.
+# Generate the identical QEMU virt DTB and move only the ramdisk to a
+# separate physical RAM page; the guest still receives real /chosen
+# linux,initrd-start/end, the original Image and original initramfs bytes.
+# This is a QEMU loader workaround, not a kernel/Minic code transformation.
+command -v fdtput >/dev/null || {
+  echo "LARGE_IMAGE_DTB=FAIL reason=fdtput_missing" >&2
+  exit 2
+}
+dtb="$ev/virt-large-image.dtb"
+qemu-system-riscv64 -M "virt,dumpdtb=$dtb" -cpu max \
+  -m 2G -smp 1 -nographic -no-reboot -bios default \
+  -kernel "$image" >"$ev/virt-dumpdtb.log" 2>&1
+test -s "$dtb"
+fdtget -p "$dtb" /chosen >/dev/null 2>&1 || fdtput -c "$dtb" /chosen
+load_addr=0xa0000000
+initrd_bytes=$(stat -c '%s' "$ev/runtime-initramfs.cpio.gz")
+load_end=$((0xa0000000+initrd_bytes))
+image_end=$((0x80200000+image_bytes))
+((0xa0000000 >= image_end && load_end < 0x100000000)) || {
+  echo "LARGE_IMAGE_DTB=FAIL reason=memory_layout_overlap" >&2
+  exit 2
+}
+printf -v initrd_end_hex '%x' "$load_end"
+fdtput -t x "$dtb" /chosen linux,initrd-start 0 a0000000
+fdtput -t x "$dtb" /chosen linux,initrd-end 0 "$initrd_end_hex"
+start_cells=$(fdtget -t x "$dtb" /chosen linux,initrd-start)
+end_cells=$(fdtget -t x "$dtb" /chosen linux,initrd-end)
+[[ "$start_cells" == "0 a0000000" && "$end_cells" == "0 $initrd_end_hex" ]] || {
+  echo "LARGE_IMAGE_DTB=FAIL reason=dtb_property_mismatch start=$start_cells end=$end_cells" >&2
+  exit 2
+}
+echo "LARGE_IMAGE_DTB=PASS image_end=$(printf '%x' "$image_end") initrd_start=a0000000 initrd_end=$initrd_end_hex qemu_8_2_loader_workaround=1"
+export LINUX_RUNTIME_CUSTOM_DTB="$dtb"
+export LINUX_RUNTIME_INITRD_LOAD_ADDR="$load_addr"
+
 # The original 512M QEMU guest has a ROM-loading conflict with a 215MB
 # MiniC Image plus initramfs. Change only the *host* QEMU memory map, not
 # the Linux image, initramfs, source config, flags, or runtime oracles.
