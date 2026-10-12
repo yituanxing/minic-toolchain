@@ -132,6 +132,9 @@ rc=0
 timeout --signal=TERM "$seconds"s gdb-multiarch -nx -q -batch \
   -x "$dest/commands.gdb" >"$dest/gdb.log" 2>&1 || rc=$?
 echo "P1_GDB=DONE debugger_rc=$rc image_sha=$(sha256sum "$image" | cut -d' ' -f1)"
+if ! python3 "$PWD/tools/ci/linux-runtime-p1-stack-postmortem-v1.py" --dir "$dest"; then
+  echo "P1_POSTMORTEM=INCONCLUSIVE parse_failed_not_runtime_certificate"
+fi
 grep -aE 'P1_(GDB_(IRQ_LAYOUT|FRAME|OVERFLOW_HANDLER)|FIRSTFAULT)' "$dest/gdb.log" | tail -n 100 || :
 grep -aE 'Insufficient stack space|Kernel panic|BUG:|Oops:' "$dest/qemu-serial.log" | tail -n 10 || :
 if ! grep -aFq 'P1_GDB_IRQ_LAYOUT irq_base=' "$dest/gdb.log"; then
