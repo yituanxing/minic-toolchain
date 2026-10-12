@@ -1154,3 +1154,17 @@ silently overwrites it with GCC/GNU-preprocessed output.
 The new replay remains a fresh same-tree 4-native baseline followed
 by exactly-two MiniPP replacement objects and bounded QEMU P0/P1.
 The known-good four-native certificate remains unchanged.
+
+### Native MiniPP selector correction: fail closed
+
+The first attempt on run 38191495016 preserved four-native P0/P1
+but never actually selected MiniPP. Kbuild's saved GCC source path was
+absolute, whereas the preprocessor wrapper normalizes source names to
+Linux-relative paths BEFORE checking its selection list. That run's
+preserved artifact 11720884498 contains an **empty** MiniPP trace.
+Its MiniAS failure therefore did not establish any MiniPP correctness
+conclusion. The GNU shadow reference root is now explicitly exported
+and the selector lists exactly normalized paths `init/main.c` and
+`kernel/configs.c`. Two `SUBSTITUTE` traces are mandatory;
+silent fallback is forbidden. Pre/post-Kbuild object bytes and
+mtime_ns are compared to prevent a shadow GNU replacement.
