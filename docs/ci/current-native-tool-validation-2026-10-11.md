@@ -922,3 +922,19 @@ start=0x11008 and emitted section bytes.
 runtime-certified fixed until a new real native-linked Image is built
 and its SHA-pinned P0/P1 replay succeeds. Retain the separate
 GNU-bound three-native Linux certification as before.
+
+### 2026-10-12 __param GNU-differential gate: green; exact fresh Image required
+
+The existing eight-owner single-job T1
+[#38189242216](https://github.com/yituanxing/minic-toolchain/actions/runs/38189242216)
+reported `TOOLCHAIN_FOCUSED_T1=PASS` with all 8 checks and the new
+`MINILD_SCRIPT_A1=PASS ... param-start=gnu-exact-0x11008`.
+Both symbol boundaries and all section bytes agree with GNU ld.
+This proves the intentionally misaligned stand-alone ELF fixture,
+not yet the full Linux image.
+
+Next run the unchanged historical combined native MiniLD-final
+(3 actual linker invocations) plus MiniObjcopy (44) Linux build as
+an opt-in production oracle. Save SHA of the **fresh** Image and
+require the real guest P0/P1 oracle on that new exact artifact.
+No GNU fallback or preemptive runtime promotion.
