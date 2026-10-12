@@ -234,14 +234,14 @@ replace_one(
     "    MinicCoreLocalIntegerConstant *fallthrough_facts = NULL;\n"
     "    MinicCoreLocalIntegerConstant *then_exit_facts = NULL;\n",
     "locals")
-# The older Runtime transforms are allowed to insert extra guards between
-# this fact invalidation and condition_block. The FIRST invalidation in the
-# dynamic lower_if body is the reachability boundary.
-entry_anchor = "    core_local_constants_clear_known(context);\n"
-if entry_anchor not in part:
-    raise SystemExit("IF_FACTS=ERROR entry_clear_missing")
-part = part.replace(
-    entry_anchor,
+# Snapshot at the shared dynamic-if entry, BEFORE the legacy incoming-facts
+# snapshot and its eager invalidation. Matching the first arbitrary
+# clear_known() was wrong: a synthetic predicate branch could skip it, as in
+# Linux shmem_alloc_and_acct_folio's if(err) goto failed.
+entry_anchor = "    incoming_facts = core_local_constants_snapshot(context);\n"
+if part.count(entry_anchor) != 1:
+    raise SystemExit(f"IF_FACTS=ERROR incoming_entry_count={part.count(entry_anchor)}")
+entry_code = (
     "    fallthrough_facts = NULL;\n"
     "    then_exit_facts = NULL;\n"
     "    if (else_source == NULL &&\n"
@@ -263,7 +263,8 @@ part = part.replace(
     "               core_block_contains_reentry_label(context, then_source) ? 1 : 0);\n"
     "        }\n"
     "    }\n"
-    + entry_anchor, 1)
+)
+part = part.replace(entry_anchor, entry_code + entry_anchor, 1)
 replace_one(
     "    then_continuation_block = context->block_id;\n",
     "    then_continuation_block = context->block_id;\n"
