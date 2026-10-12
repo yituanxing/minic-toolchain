@@ -1319,3 +1319,21 @@ constraints; classify any loader collision or missing historical
 archive as BLOCKED rather than a MiniC semantic failure.
 This tagged commit starts the independent all-current MiniC
 compilation while full MiniPP replay is checked separately.
+
+### Full MiniPP second real CI: VDSO forced .c include is NOT a TU
+
+Run [#38194199162](https://github.com/yituanxing/minic-toolchain/actions/runs/38194199162)
+again passed existing four-native QEMU P0/P1 before stopping during
+C-source discovery. `arch/riscv/kernel/vdso/vgettimeofday.o` uses GCC
+`-include .../lib/vdso/gettimeofday.c` plus the actual positional
+`arch/riscv/kernel/vdso/vgettimeofday.c`. The discovery initially
+treated both `.c` command arguments as positional C inputs.
+That is a **harness classification error**, not a MiniPP semantic
+difference or product recompilation result.
+
+The repaired full producer now parses source arguments with positional
+GCC option consumption: `-include`, `-imacros`, output/dependency,
+and search-path option values are excluded. It retains strict rejection
+of genuinely ambiguous multiple C source arguments. The affected
+`-include ...gettimeofday.c` is still preprocessed inside the actual
+source TU, not silently skipped.
