@@ -72,3 +72,15 @@ p1_swap_ownership=NO_COMPILER_REBUILD_NO_SHARD_RECOMPILE
 # P1 owner audit re-run on trimmed runner: no QEMU install, 2064-object
 # pool SHA guard, symbol provenance and frame disassembly only.
 owner_audit_runner=GNU_BINUTILS_GCC_ONLY
+
+# Frozen pool P1 owner A/B run 38212394883:
+# cached 2064 candidate objects, GNU preflight, ABI all PASS.
+# Diagnostic script failed before first test due to a duplicate full-trial
+# snippet spliced into symbol grep around line 2200.
+# Repaired in commit 5d3390257bfe6277fa08024695ede85c0f2f7093.
+# Trigger new owner differential ONLY: keep 2064 MiniC .o immutable;
+# no 7-shard full compile; restore exact GCC golden and full MiniC pool.
+owner_ab_previous_run=38212394883
+owner_ab_previous_state=CI_SCRIPT_SYNTAX_FAIL_BEFORE_RELINK
+owner_ab_repair=5d3390257bfe6277fa08024695ede85c0f2f7093
+owner_ab_next=RESTORE_FROZEN_POOLS_AND_RETRY_SINGLE_GNU_OWNER_AB
