@@ -71,7 +71,9 @@ for obj, source in specs:
     commands.append((obj, argv[1:], sources[0]))
 
 selector = stage / "selected-command-sources.txt"
-selector.write_text("".join(source + "\n" for _, _, source in commands))
+# Wrapper normalizes absolute Linux source paths to src-relative names.
+# A raw absolute selector would silently delegate straight to GNU GCC.
+selector.write_text("".join(source + "\n" for _, source in specs))
 assert len(set(x[2] for x in commands)) == 2
 for obj, args, source in commands:
     print(f"MINIPP_PRODUCTION_TU_BEGIN object={obj} source={source}", flush=True)
