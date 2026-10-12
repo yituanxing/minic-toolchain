@@ -90,3 +90,14 @@ owner_ab_next=RESTORE_FROZEN_POOLS_AND_RETRY_SINGLE_GNU_OWNER_AB
 # BEFORE differential linking/QEMU; syntax repaired in current branch.
 first_p1_owner_attempt=38212394883
 first_p1_owner_attempt_stage=FROZEN_CACHE_PASS_SHELL_SYNTAX_BLOCKER
+
+# 2026-10-12 targeted P1 ownership:
+# Proved concrete panic function owners via GNU nm frame audit run 38212502667:
+# __list_add_valid_or_report=lib/list_debug.o (MiniC 368B frame, GNU 16B)
+# __minic_inline_spec_163_16339=net/core/dev.o (MiniC 96B frame)
+# tcp_v6_connect=net/ipv6/tcp_ipv6.o (MiniC 864B, GNU 224B)
+# Owner-swap attempt 38212684137 P1 all-MiniC reproducibly failed, but
+# log owner labels were contaminated by trial() global variable changes.
+# New invocation uses distinct p1_probe_owner and corrected shell owner
+# list variable; pin full .o and relink exactly one GCC object per trial.
+next_verify=REPAIRED_P1_GCC_ONE_OWNER_CAUSAL_SWAPS
