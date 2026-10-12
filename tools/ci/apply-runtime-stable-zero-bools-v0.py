@@ -93,6 +93,80 @@ static bool core_program_bool_has_entry_zero_initializer(
     return false;
 }
 
+/* The frontend still retains syntactic stores following a guaranteed
+   return.  Core lower_block skips exactly these unreachable tails.  Discount
+   such stores from a whole-function invariant proof, but only if there is
+   no label/case/default reentry between the terminator and that store. */
+static bool core_program_statement_must_return(
+    const MinicCoreLowerContext *context,
+    const MinicStatement *statement) {
+    const MinicC0Program *program;
+    const MinicBlock *then_block;
+    const MinicStatement *first;
+    MinicConstValue constant;
+    bool zero;
+
+    if (context == NULL || context->body == NULL ||
+        context->body->program == NULL || statement == NULL) {
+        return false;
+    }
+    if (statement->kind == MINIC_STATEMENT_RETURN) {
+        return true;
+    }
+    if (statement->kind != MINIC_STATEMENT_IF ||
+        statement->then_block == MINIC_BLOCK_INVALID) {
+        return false;
+    }
+    program = context->body->program;
+    if (!minic_const_eval_integer(program, context->target,
+                                  statement->expression, &constant) ||
+        !minic_const_value_is_zero(program, context->target,
+                                   &constant, &zero) || zero) {
+        return false;
+    }
+    then_block = minic_c0_program_block(program, statement->then_block);
+    if (then_block == NULL || then_block->statement_count == 0U) {
+        return false;
+    }
+    first = minic_c0_program_statement(program, then_block->statements[0]);
+    return first != NULL && first->kind == MINIC_STATEMENT_RETURN;
+}
+
+static bool core_program_stmt_is_dead_after_return(
+    const MinicCoreLowerContext *context, MinicStatementId statement_id) {
+    const MinicC0Program *program;
+    size_t block_index;
+    if (context == NULL || context->body == NULL ||
+        (program = context->body->program) == NULL) {
+        return false;
+    }
+    for (block_index = 0U; block_index < program->block_count; ++block_index) {
+        const MinicBlock *block = &program->blocks[block_index];
+        size_t i;
+        bool must_return = false;
+        for (i = 0U; i < block->statement_count; ++i) {
+            const MinicStatement *statement =
+                minic_c0_program_statement(program, block->statements[i]);
+            if (statement == NULL) {
+                return false;
+            }
+            if (block->statements[i] == statement_id) {
+                return must_return &&
+                    !core_unreachable_statement_has_external_reentry(
+                        context, statement, MINIC_STATEMENT_INVALID);
+            }
+            if (statement->kind == MINIC_STATEMENT_LABEL ||
+                statement->kind == MINIC_STATEMENT_CASE ||
+                statement->kind == MINIC_STATEMENT_DEFAULT) {
+                must_return = false;
+            } else if (core_program_statement_must_return(context, statement)) {
+                must_return = true;
+            }
+        }
+    }
+    return false;
+}
+
 static bool core_program_bool_is_provably_zero(
     const MinicCoreLowerContext *context, MinicLocalId local_id) {
     const MinicC0Program *program;
@@ -119,7 +193,9 @@ static bool core_program_bool_is_provably_zero(
             continue;
         }
         if (stmt->kind != MINIC_STATEMENT_ASSIGN ||
-            !core_program_expr_is_literal_zero(context, stmt->expression)) {
+            (!core_program_expr_is_literal_zero(context, stmt->expression) &&
+             !core_program_stmt_is_dead_after_return(
+                 context, (MinicStatementId)i))) {
             return false;
         }
     }
