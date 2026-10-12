@@ -1010,3 +1010,25 @@ MiniLD-final (GNU AS/AR), using native 4-tool same-tree relink and
 the identical QEMU P0/P1 oracle. MiniPP and MiniC remain distinct
 uncompleted frontiers; do not represent this certificate as a
 fully GNU-independent toolchain.
+
+### Native-four isolated opt-in, preserving the two independently certified paths
+
+The next stage reuses the already-QEMU-certified MiniAS+MiniAR+
+MiniObjcopy same-tree Linux object graph. Only after *triple* P0/P1
+has passed, a new optional **third phase inside the same existing
+linux-single job** reruns Kbuild with MiniLD replacing **exactly the
+three final vmlinux/kallsyms links**. GNU GCC stays pinned and all
+other GNU LD link stages remain GNU. The wrapper records every
+GNU/native linker invocation, requires precisely three native final
+links, snapshots both triple- and four-native Image SHA-256s, and
+runs the same P0/P1 guest oracle on the resulting four-native Image.
+The preexisting MiniAS triple-native test remains unchanged when the
+opt-in is absent. No Workflow or Job is added.
+
+Trigger is the existing MiniAS focused historical tag route:
+`[minias-linux-integrated] [minias-linux-four]`, which selects its
+existing `linux-integrated` reusable workflow mode and activates the
+add-on via the extra tag; no extra router/job/mode was created.
+Both workflow source SHA and approved same-tree linker script SHA
+are guarded by existing structural CI. Runtime is not certified until
+this particular new producer/test completes successfully.

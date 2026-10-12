@@ -89,7 +89,7 @@ def main():
         "            build/minias-linux-runtime/out/arch/riscv/boot/Image", 1)
     linux_body = cur["linux-single"]
     integrated_path = ROOT / "tests/external/linux/mini_tools_integrated_relink.sh"
-    if sha(integrated_path) != "0265be5cdf2ef4863cf07ddec955c657e9cb0a45":
+    if sha(integrated_path) != "928bba7af8c991cc7e996d57ee5e3101b72809c9":
         raise AssertionError("integrated GNU-link MiniAS+MiniAR+MiniObjcopy replay changed")
     approved_integrated = (
         "      - name: Reuse MiniAS Linux objects with MiniAR and MiniObjcopy and run QEMU P0 P1\n"
@@ -102,6 +102,7 @@ def main():
         "        if: success() && env.MINIAS_INTEGRATED_MODE == 'true'",
         "tests/external/linux/mini_tools_integrated_relink.sh",
         'MINI_TOOLS_WORK="$work"',
+        "MINI_TOOLS_NATIVE_LD=",
     ):
         if token not in integrated_step:
             raise AssertionError(f"integrated native relink contract lost: {token}")
@@ -128,6 +129,12 @@ def main():
         "            build/minias-linux-runtime/native-integration/Image.sha256\n"
         "            build/minias-linux-runtime/native-integration/qemu-p0/*.log\n"
         "            build/minias-linux-runtime/native-integration/qemu-p1/*.log\n"
+        "            build/minias-linux-runtime/native-four/*.trace\n"
+        "            build/minias-linux-runtime/native-four/*.log\n"
+        "            build/minias-linux-runtime/native-four/Image.sha256\n"
+        "            build/minias-linux-runtime/native-four/triple-native.Image.sha256\n"
+        "            build/minias-linux-runtime/native-four/qemu-p0/*.log\n"
+        "            build/minias-linux-runtime/native-four/qemu-p1/*.log\n"
     )
     if linux_body.count(integrated_evidence) != 1:
         raise AssertionError("native-integrated relink evidence archive modified")

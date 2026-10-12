@@ -1494,6 +1494,7 @@ jobs:
           set -Eeuo pipefail
           work="$GITHUB_WORKSPACE/build/minias-linux-runtime"
           MINI_TOOLS_WORK="$work" \
+          MINI_TOOLS_NATIVE_LD="${{ contains(github.event.head_commit.message, '[minias-linux-four]') && 'true' || 'false' }}" \
           MINI_TOOLS_BIN="$GITHUB_WORKSPACE/build/minias-linux-runtime-toolchain/bin" \
           MINIAS="$GITHUB_WORKSPACE/build/minias-linux-runtime-toolchain/bin/minic-as" \
           MINIAS_AS_TRACE="$work/minias-as.trace" \
@@ -1537,6 +1538,12 @@ jobs:
             build/minias-linux-runtime/native-integration/Image.sha256
             build/minias-linux-runtime/native-integration/qemu-p0/*.log
             build/minias-linux-runtime/native-integration/qemu-p1/*.log
+            build/minias-linux-runtime/native-four/*.trace
+            build/minias-linux-runtime/native-four/*.log
+            build/minias-linux-runtime/native-four/Image.sha256
+            build/minias-linux-runtime/native-four/triple-native.Image.sha256
+            build/minias-linux-runtime/native-four/qemu-p0/*.log
+            build/minias-linux-runtime/native-four/qemu-p1/*.log
             build/minias-linux-runtime/qemu-p0/*.log
             build/minias-linux-runtime/qemu-p1/*.log
             build/minias-linux-runtime/out/arch/riscv/boot/Image
