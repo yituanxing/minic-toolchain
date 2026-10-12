@@ -131,6 +131,37 @@ BUILD_DIR="$ev/initramfs" OUTPUT_INITRAMFS="$ev/runtime-initramfs.cpio.gz" \
   echo "P1_STACK32_GNU=INITRAMFS_BUILD_FAIL"; tail -n 60 "$ev/initramfs-build.log"; exit 8;
 }
 test -s "$ev/runtime-initramfs.cpio.gz"
+# QEMU 8.2 virt's default -initrd physical placement overlaps ~215MB
+# Linux Images even with -m 2G. Use the EXACT already-certified large
+# Image DTB relocation contract for the 32KiB GNU positive control.
+# Leaving this unset makes the otherwise complete experiment fail for a
+# QEMU fixture reason before testing MiniC.
+dtb="$ev/gnu-p1-virt.dtb"
+qemu-system-riscv64 -M "virt,dumpdtb=$dtb" -cpu max \
+  -m 2G -smp 1 -nographic -no-reboot -bios default \
+  -kernel "$out/arch/riscv/boot/Image" \
+  >"$ev/gnu-p1-dumpdtb.log" 2>&1
+test -s "$dtb"
+command -v fdtput >/dev/null
+command -v fdtget >/dev/null
+fdtget -p "$dtb" /chosen >/dev/null 2>&1 || fdtput -c "$dtb" /chosen
+image_size=$(stat -c %s "$out/arch/riscv/boot/Image")
+initrd_size=$(stat -c %s "$ev/runtime-initramfs.cpio.gz")
+load_address=$((0xa0000000))
+load_end=$((load_address+initrd_size))
+kernel_end=$((0x80200000+image_size))
+((load_address>=kernel_end && load_end < 0x100000000)) || {
+  echo "P1_STACK32_GNU=BAD_DTB_GUEST_ADDRESS kernel_end=$kernel_end initrd_start=$load_address" >&2
+  exit 8
+}
+printf -v load_end_hex '%x' "$load_end"
+fdtput -t x "$dtb" /chosen linux,initrd-start 0 a0000000
+fdtput -t x "$dtb" /chosen linux,initrd-end 0 "$load_end_hex"
+[[ "$(fdtget -t x "$dtb" /chosen linux,initrd-start)" == "0 a0000000" ]] || exit 8
+[[ "$(fdtget -t x "$dtb" /chosen linux,initrd-end)" == "0 $load_end_hex" ]] || exit 8
+export LINUX_RUNTIME_CUSTOM_DTB="$dtb"
+export LINUX_RUNTIME_INITRD_LOAD_ADDR=0xa0000000
+echo "P1_STACK32_GNU_DTB=PASS initrd_at=0xa0000000 image_size=$image_size qemu_8_2_loader_workaround=true"
 gnu_rc=0
 LINUX_IMAGE="$out/arch/riscv/boot/Image" INITRAMFS="$ev/runtime-initramfs.cpio.gz" \
   BUILD_DIR="$ev/gnu-p1" LINUX_RELEASE=6.6.143 LINUX_RUNTIME_PROFILE=p1 \
