@@ -878,3 +878,47 @@ the existing replay diagnostic now uses QMP capabilities plus
 human-monitor-command(info registers) and captures the returned
 machine-readable QMP response. The exact Linux Image and full
 P0/P1 oracle remain unaffected.
+
+### Decisive Linux runtime root-cause witness: two-byte __param misalignment
+
+The QMP CPU snapshots in
+[#38188937061](https://github.com/yituanxing/minic-toolchain/actions/runs/38188937061)
+reached `panic()`/udelay: three CPU samples had PCs
+ffffffff80942a70, ffffffff80942a70, ffffffff80942a6a.
+Guest trap registers preserved `sepc=ffffffff80032de6`
+(parse_args, instruction `lbu a4,0(a3)`),
+`scause=0xd` (load page fault) and
+`stval=ffff80e000600000`.
+Therefore the earlier missing banner conceals an actual kernel
+page fault, not an OpenSBI non-entry.
+
+**Source/data/ELF three-way proof** on the immutable failing build
+[#38186542705](https://github.com/yituanxing/minic-toolchain/actions/runs/38186542705):
+
+- MiniLD's `__param` section begins at VMA ffffffff810d6460, but
+  `__start___param` had VMA ffffffff810d645e (two bytes EARLIER).
+- The *exact 8 bytes* read at that erroneous symbol location in the
+  MiniLD vmlinux are **00 00 60 00 e0 80 ff ff**, yielding precisely
+  the faulting pointer `ffff80e000600000`. Two bytes later the
+  valid first pointer is `ffffffff80e00060`.
+- The independently QEMU-passing GNU-linked vmlinux's
+  `__start___param` equals its `__param` section VMA
+  ffffffff810ba760, so it begins on the correct input record.
+- `script_layout_process_output()` originally recorded output-section
+  `dot` (and evaluated `__start___param = .`) BEFORE
+  `script_layout_place_section()` aligned the actual input to 8 bytes.
+  GNU ld aligns the output section before evaluating its initial symbol
+  assignment. This accounts for the exact 2-byte discrepancy.
+
+Repair [9b322b64](https://github.com/yituanxing/minic-toolchain/commit/9b322b64de32e0c60ad66155dccfd4de6b8df5c7)
+performs the maximal participating-input alignment (when output VMA
+is implicit) before evaluating script output symbols. A
+[GNU differential fixture 6b87390](https://github.com/yituanxing/minic-toolchain/commit/6b87390facd0f5f49aa50241fff56caad65c6fb9)
+constructs intentionally unaligned dot=0x11002 and an 8-byte-aligned
+`__param`, asserting GNU-exact `__start___param`/stop addresses,
+start=0x11008 and emitted section bytes.
+
+**Classification**: deterministic linker source/ELF fault, not yet
+runtime-certified fixed until a new real native-linked Image is built
+and its SHA-pinned P0/P1 replay succeeds. Retain the separate
+GNU-bound three-native Linux certification as before.
