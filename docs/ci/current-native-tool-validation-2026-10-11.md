@@ -1046,3 +1046,62 @@ reusable workflow, the existing tag router is unmodified, no new mode,
 job, or workflow was introduced, and the original linux-single path
 is unaffected. The integrated script retains an explicit optional
 `MINI_TOOLS_NATIVE_LD=false` override for standalone diagnostics.
+
+## CERTIFIED: four native tools in one Linux 6.6.143 Kbuild tree
+
+**State: genuine Linux/QEMU P0 + P1 runtime PASS.**
+
+Historical opt-in run
+[#38190157006](https://github.com/yituanxing/minic-toolchain/actions/runs/38190157006)
+on commit `d6e393f402fb725da49b3a98be5700a8379cc33f` completed SUCCESS.
+The single existing MiniAS `linux-single` job first compiled Linux with
+GNU GCC frontend + native MiniAS, then incrementally rebuilt in the
+same tree with native MiniAR and MiniObjcopy while holding GNU LD,
+and finally added native MiniLD **only for the three final
+vmlinux/kallsyms links**. This was real code execution, not a
+manifest-only or image-existence claim.
+
+| Stage | Production calls / result | QEMU |
+|---|---|---|
+| GNU GCC + MiniAS, GNU AR/LD/objcopy | 2,198 native assemble passes; full Image in 322s | P0 and P1 12/12 PASS |
+| + MiniAR + MiniObjcopy, GNU LD | 88 extra native assemble passes; 615 native AR, 42 native Objcopy; 10s incremental relink | P0 and P1 12/12 PASS |
+| + MiniLD final three, other GNU LD stages retained | 89 additional native assemble passes, 11 additional MiniAR, 6 additional MiniObjcopy, exactly 3 MiniLD final links; 15s incremental relink | **P0 and P1 12/12 PASS** |
+
+The final four-native Linux Image is **26,228,224 bytes** with
+SHA-256 `407310df63a604c18a30dc5c483fecfa93ec72ea29a5aaa76845dd6fd63bc05d`.
+Its SHA was recomputed independently on the preserved artifact
+`minias-linux-gcc-single-cert` (artifact ID `11720693250`)
+and exactly matches `native-four/Image.sha256`.
+
+All **three** final-image QEMU guest logs were separately inspected
+from that artifact: `native-four/qemu-p0/rdinit-init.log`,
+`native-four/qemu-p0/rdinit-sh.log`, and
+`native-four/qemu-p1/rdinit-init.log`. All report
+`Linux version 6.6.143` and `reboot: Power down` without
+Kernel panic or Oops. The /init lane contains `USER_SHELL_OK`,
+`DONE_COMMANDS`, and `MINIC_LINUX_RUNTIME_INIT_END fail=0`;
+the /bin/sh lane includes `RDINIT_SH_OK`; P1 explicitly contains
+`RUNTIME_V2_SYSCALL_END pass=12 fail=0` and
+`INIT_RUNTIME_PROBE=PASS`.
+
+The run's final acceptance output is exact:
+`NATIVE_FOUR_LINUX_RUNTIME=PASS components=MiniAS,MiniAR,MiniLD-final,MiniObjcopy gcc=GNU p0=2/2 p1=12/12`.
+The original producer mode is intentionally still GNU GCC and retains
+GNU LD in non-final link steps; it is **not** full native MiniC,
+MiniPP or all-GNU-LD replacement. This is a legitimate **four native
+tools together in one real Linux runtime** certificate, but not a
+fully-native compiler toolchain or a bootstrap certificate.
+
+Subsequent source-matching/routing follow-up commit
+`9a32341e7c3b82b6bae605dbd0397416e346bbf3`
+passed the existing M0 structural check
+[#38190275151](https://github.com/yituanxing/minic-toolchain/actions/runs/38190275151);
+no new workflow/job was created. The runtime-certified run uses the
+slightly earlier tagged commit above, and the later change avoids a
+commit-tag check inside the reusable workflow; it does not retroactively
+change the certified producer evidence.
+
+**Next separate gates**: verify MiniPP as a direct preprocessor
+replacement with fixed GNU compilation and these native tools; finish
+the MiniC compiler full-object runtime frontier; then a fully native
+combined build and compiler/tool self-hosting/bootstrap tests.
