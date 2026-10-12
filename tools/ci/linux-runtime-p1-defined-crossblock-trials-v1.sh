@@ -5,7 +5,12 @@
 set -Eeuo pipefail
 [[ -n "$minic" && -n "$gold_snapshot" && -n "$ev" && -n "$out" ]] || exit 8
 [[ "$n" -eq 2064 ]] || { echo "P1_DEFINED_CROSSBLOCK=ERROR object_count"; exit 8; }
-dest="$ev/p1-defined-crossblock"
+single_owner="${COHORT_P1_SINGLE_OWNER:-0}"
+if [[ "$single_owner" == 1 ]]; then
+  dest="$ev/p1-defined-ip6-only"
+else
+  dest="$ev/p1-defined-crossblock"
+fi
 mkdir -p "$dest"
 cat >"$dest/selected.txt" <<'OWNERS'
 net/ipv6/ip6_output.o
@@ -13,19 +18,25 @@ net/ipv6/tcp_ipv6.o
 net/ipv4/tcp_output.o
 net/core/dev.o
 OWNERS
+if [[ "$single_owner" == 1 ]]; then
+  # Retain every other certified MiniC object and use GCC only for
+  # tcp_ipv6.o. Recompile ip6_output.o with the opt-in compiler.
+  printf '%s\n' net/ipv6/ip6_output.o >"$dest/selected.txt"
+fi
 python3 - "$dest/selected.txt" "$objects_file" <<'PY_SET'
 from pathlib import Path
 import sys
 a,b=map(Path,sys.argv[1:])
 names=a.read_text().splitlines()
-assert len(names)==4 and len(set(names))==4
+assert len(names) in (1,4) and len(set(names))==len(names)
 assert set(names)<=set(b.read_text().splitlines())
-print("P1_DEFINED_CROSSBLOCK=SELECTED owners=4")
+print(f"P1_DEFINED_CROSSBLOCK=SELECTED owners={len(names)}")
 PY_SET
 (cd "$ev" && sha256sum --quiet -c minic-manifest.sha256)
 printf 'compiler_sha256=%s\n' "$(sha256sum "$minic"|cut -d' ' -f1)" >"$dest/provenance.txt"
 rm -rf -- "$out"
 cp -a --reflink=auto "$gold_snapshot" "$out"
+MINIC_CORE_FRAME_TRACE=1 MINIC_CORE_FRAME_TRACE_FILTER="ip6_finish_output2,ip6_xmit" \
 python3 "$repo/tools/ci/linux-runtime-kbuild-regeneration-guard-v1.py" \
   --mode replay --out "$out" --golden-out "$gold_snapshot" \
   --evidence "$dest/replay-evidence.json" --selected "$dest/selected.txt" \
@@ -39,6 +50,22 @@ python3 "$repo/tools/ci/linux-runtime-minic-route-audit-v1.py" \
   --success-trace "$dest/success.txt" \
   --object-digest-trace "$dest/candidates.sha256" \
   --candidates "$out" >"$dest/route-audit.log"
+if [[ "$single_owner" == 1 ]]; then
+  # The instrumentation prints to a per-TU stderr file, not replay.log.
+  stderr="$out/net/ipv6/ip6_output.minic-stage2.minic.stderr"
+  [[ -s "$stderr" ]] || { echo "P1_DEFINED_CROSSBLOCK=ERROR no_minic_stderr"; exit 8; }
+  grep -E '^CORE_FRAME' "$stderr" >"$dest/frame-audit.log" || {
+    echo "P1_DEFINED_CROSSBLOCK=ERROR missing_frame_trace"; exit 8;
+  }
+  python3 "$repo/tools/ci/linux-runtime-p1-frame-component-parse-v1.py" \
+    "$dest/frame-audit.log" "$dest/frame-components.tsv" "$dest/frame-objects.tsv"
+  awk -F '\t' '$1=="ip6_finish_output2" || $1=="ip6_xmit" {
+    print "P1_DEFINED_CROSSBLOCK=FRAME function="$1" bytes="$2" objects="$10
+    seen++
+  } END {exit seen!=2}' "$dest/frame-components.tsv" || {
+    echo "P1_DEFINED_CROSSBLOCK=ERROR missing_both_ipv6_frames"; exit 8;
+  }
+fi
 (cd "$ev" && sha256sum --quiet -c minic-manifest.sha256) || {
   echo "P1_DEFINED_CROSSBLOCK=ERROR original_pool_mutated"; exit 8;
 }
@@ -88,8 +115,8 @@ for line in (ev/"minic-manifest.sha256").read_text().splitlines():
     else:
         assert actual==digest, "unrelated MiniC owner changed: "+target
         untouched += 1
-assert matched==4 and untouched==2060
-print("P1_DEFINED_CROSSBLOCK=POOL_ISOLATED changed_targets=4 original_neighbors=2060")
+assert matched in (1,4) and untouched==2064-matched
+print(f"P1_DEFINED_CROSSBLOCK=POOL_ISOLATED changed_targets={matched} original_neighbors={untouched}")
 PY_VERIFY
 export COHORT_P1_EXPERIMENTAL_POOL="$dest/pool/minic"
 last_selection="none"
@@ -98,8 +125,14 @@ last_candidate_delta=""
 printf 'trial\timage_sha256\tverdict\n' >"$dest/p1-repeats.tsv"
 pinned=""
 passes=0
+mode=prefix
+if [[ "$single_owner" == 1 ]]; then
+  mode=exclude_list
+  printf '%s\n' net/ipv6/tcp_ipv6.o >"$ev/p1_gcc_rescue_set.txt"
+  echo "P1_DEFINED_CROSSBLOCK=SINGLE_OWNER_ONLY minic_modified=net/ipv6/ip6_output.o gcc_owner=net/ipv6/tcp_ipv6.o"
+fi
 for attempt in 1 2 3; do
-  trial "p1_defined_crossblock_$attempt" "$n" p1
+  trial "p1_defined_crossblock_$attempt" "$n" p1 "$mode"
   [[ -n "$pinned" ]] || pinned="$image_sha"
   [[ "$image_sha" == "$pinned" ]] || {
     echo "P1_DEFINED_CROSSBLOCK=ERROR image_sha_drift"; exit 8;
@@ -107,5 +140,9 @@ for attempt in 1 2 3; do
   printf '%s\t%s\t%s\n' "$attempt" "$image_sha" "$TRIAL_VERDICT" >>"$dest/p1-repeats.tsv"
   if [[ "$TRIAL_VERDICT" == PASS ]]; then passes=$((passes+1)); fi
 done
-echo "P1_DEFINED_CROSSBLOCK=COMPLETE candidate_owners=4 gcc_owners=0 minic_owners=2064 passes=$passes failures=$((3-passes)) image=$pinned experimental=true not_promoted=true"
+if [[ "$single_owner" == 1 ]]; then
+  echo "P1_DEFINED_CROSSBLOCK=COMPLETE modified_minic=1 gcc_owners=1 minic_owners=2063 passes=$passes failures=$((3-passes)) image=$pinned experimental=true not_promoted=true"
+else
+  echo "P1_DEFINED_CROSSBLOCK=COMPLETE modified_minic=4 gcc_owners=0 minic_owners=2064 passes=$passes failures=$((3-passes)) image=$pinned experimental=true not_promoted=true"
+fi
 exit 0
