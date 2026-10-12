@@ -132,8 +132,8 @@ def replace_one(old, new, why):
 replace_one(
     "    MinicCoreLowerStatus status;\n",
     "    MinicCoreLowerStatus status;\n"
-    "    MinicCoreLocalIntegerConstant *fallthrough_facts;\n"
-    "    MinicCoreLocalIntegerConstant *then_exit_facts;\n",
+    "    MinicCoreLocalIntegerConstant *fallthrough_facts = NULL;\n"
+    "    MinicCoreLocalIntegerConstant *then_exit_facts = NULL;\n",
     "locals")
 # The older Runtime transforms are allowed to insert extra guards between
 # this fact invalidation and condition_block. The FIRST invalidation in the
