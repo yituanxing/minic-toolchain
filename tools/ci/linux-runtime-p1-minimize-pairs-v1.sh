@@ -30,6 +30,17 @@ for partner in "${partners[@]}"; do
   for attempt in 1 2 3; do
     trial "p1_pair_${tag}_$attempt" "$n" p1 exclude_list
     [[ -z "$image_pin" ]] && image_pin="$image_sha"
+    if [[ "${COHORT_P1_PAIR_DEBUG:-0}" == 1 && "$partner" == net/ipv6/tcp_ipv6.o && "$attempt" == 1 ]]; then
+      # Compare the proven successful TWO-GCC image with the failing
+      # all-MiniC kernel, both already linked and provenance-verified.
+      echo "COHORT_P1_PAIR_GDB=START case=ip6_output_and_tcp_ipv6_gcc image=$image_sha"
+      bash "$repo/tools/ci/linux-runtime-p1-function-calltrace-v1.sh" \
+        "$ev/trials/p1_pair_${tag}_$attempt/Image" "$out/vmlinux" \
+        "$ev/runtime-initramfs.cpio.gz" "$LINUX_RUNTIME_CUSTOM_DTB" \
+        "$ev/p1-pair-calltrace/two-gcc" 65 || {
+        echo "COHORT_P1_PAIR_GDB=INCONCLUSIVE case=two_gcc"
+      }
+    fi
     [[ "$image_sha" == "$image_pin" ]] || {
       echo "COHORT_P1_PAIR=ERROR image_digest_changed candidate=$candidate"; exit 8;
     }
