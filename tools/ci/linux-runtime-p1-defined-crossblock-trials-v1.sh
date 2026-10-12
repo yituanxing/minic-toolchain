@@ -36,7 +36,8 @@ PY_SET
 printf 'compiler_sha256=%s\n' "$(sha256sum "$minic"|cut -d' ' -f1)" >"$dest/provenance.txt"
 rm -rf -- "$out"
 cp -a --reflink=auto "$gold_snapshot" "$out"
-MINIC_CORE_FRAME_TRACE=1 MINIC_CORE_FRAME_TRACE_FILTER="ip6_finish_output2,ip6_xmit" \
+COHORT_FRAME_CAPTURE_ONLY="$single_owner" MINIC_CORE_FRAME_TRACE=1 \
+MINIC_CORE_FRAME_TRACE_FILTER="ip6_finish_output2,ip6_xmit" \
 python3 "$repo/tools/ci/linux-runtime-kbuild-regeneration-guard-v1.py" \
   --mode replay --out "$out" --golden-out "$gold_snapshot" \
   --evidence "$dest/replay-evidence.json" --selected "$dest/selected.txt" \
