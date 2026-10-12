@@ -61,8 +61,21 @@ def extract(out: Path, src: Path) -> list[dict]:
         if not argv or "riscv64-linux-gnu-gcc" not in argv[0] or "-c" not in argv:
             continue
         sources = [a for a in argv[1:] if a.endswith(".c") and not a.startswith("-")]
+        if not sources:
+            # GCC is also the driver for RISC-V preprocessed assembler
+            # inputs (.S) in Kbuild. These are not C translation units,
+            # even though their saved command contains GCC and "-c".
+            asm_source = any(a.endswith((".S", ".s", ".asm"))
+                             for a in argv[1:] if not a.startswith("-"))
+            assembler_mode = any(
+                a in ("assembler", "assembler-with-cpp")
+                for a in argv[1:]
+            )
+            if asm_source or assembler_mode:
+                continue
+            raise RuntimeError(f"GCC -c unknown non-C producer: {obj} argv={argv!r}")
         if len(sources) != 1:
-            raise RuntimeError(f"ambiguous or missing C input: {obj} {sources!r}")
+            raise RuntimeError(f"ambiguous C inputs: {obj} {sources!r}")
         if "-o" not in argv:
             raise RuntimeError(f"missing -o: {obj}")
         source = sources[0]
