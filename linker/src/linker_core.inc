@@ -3387,6 +3387,13 @@ static bool script_layout_process_output(MiniLdScriptLayoutState *script_state,
                                          size_t command_index) {
     uint64_t output_start;
     uint64_t lma_start;
+    /* Remember script-only BYTE values without allocating every output. */
+    struct {
+        uint64_t address;
+        unsigned char value;
+    } emitted[64];
+    size_t emitted_count = 0U;
+    bool emitted_overflow = false;
     size_t i;
 
     if (output->discard) {
@@ -3474,17 +3481,83 @@ static bool script_layout_process_output(MiniLdScriptLayoutState *script_state,
                                         &value)) {
                 return false;
             }
-            (void)value;
             if (script_state->dot == UINT64_MAX) {
                 fprintf(script_state->state->diagnostics,
                         "minic-ld: linker-script-BYTE-overflow:%s\n",
                         output->name);
                 return false;
             }
+            if (emitted_count < sizeof(emitted) / sizeof(emitted[0])) {
+                emitted[emitted_count].address = script_state->dot;
+                emitted[emitted_count].value = (unsigned char)value;
+                ++emitted_count;
+            } else {
+                emitted_overflow = true;
+            }
             ++script_state->dot;
             break;
         case MINILD_SCRIPT_SECTION_CONSTRUCTORS:
             break;
+        }
+    }
+
+    /* A script-only BYTE output section must actually occupy file
+     * bytes: Linux's .pecoff_edata_padding ends with ALIGN(0x200).
+     * This deliberately leaves mixed input/BYTE outputs unchanged. */
+    if (emitted_count != 0U || emitted_overflow) {
+        bool has_input = false;
+
+        for (i = 0U; i < script_state->state->section_count; ++i) {
+            if (script_state->section_owner[i] == command_index &&
+                !script_state->layout->section_discarded[i]) {
+                has_input = true;
+                break;
+            }
+        }
+        if (!has_input) {
+            MiniLdState *state = script_state->state;
+            MiniLdSection *section;
+            size_t synthetic_index;
+            size_t length;
+
+            if (emitted_overflow ||
+                script_state->dot < output_start ||
+                script_state->dot - output_start > SIZE_MAX ||
+                find_section_index(state, output->name,
+                                   hash_text(output->name)) != SIZE_MAX) {
+                fprintf(state->diagnostics,
+                        "minic-ld: unsupported-script-generated-section:%s\n",
+                        output->name);
+                return false;
+            }
+            length = (size_t)(script_state->dot - output_start);
+            if (!find_or_add_section(state, output->name,
+                                     SHT_PROGBITS, SHF_ALLOC, 1U, 0U,
+                                     &synthetic_index)) {
+                return false;
+            }
+            section = &state->sections[synthetic_index];
+            if (!section_append_zero(section, length)) {
+                fprintf(state->diagnostics,
+                        "minic-ld: script-generated-section-overflow:%s\n",
+                        output->name);
+                return false;
+            }
+            for (i = 0U; i < emitted_count; ++i) {
+                uint64_t off = emitted[i].address - output_start;
+
+                if (off >= length) {
+                    fprintf(state->diagnostics,
+                            "minic-ld: invalid-script-BYTE-address:%s\n",
+                            output->name);
+                    return false;
+                }
+                section->data[(size_t)off] = emitted[i].value;
+            }
+            script_state->layout->section_vaddr[synthetic_index] =
+                output_start;
+            script_state->section_owner[synthetic_index] = command_index;
+            script_state->section_placed[synthetic_index] = true;
         }
     }
 
@@ -3522,30 +3595,41 @@ static bool static_build_script_layout(MiniLdState *state,
     bool *command_deferred = NULL;
     size_t i;
     size_t alloc_count = 0U;
+    size_t storage_count;
     size_t file_cursor;
     size_t header_size;
     bool ok = false;
 
     memset(layout, 0, sizeof(*layout));
     memset(&script_state, 0, sizeof(script_state));
+    /* Reserve one additional generated section per script command. */
+    if (script->command_count > SIZE_MAX - state->section_count) {
+        fprintf(state->diagnostics,
+                "minic-ld: script-section-count-overflow\n");
+        return false;
+    }
+    storage_count = state->section_count + script->command_count;
+    if (storage_count == 0U) {
+        storage_count = 1U;
+    }
 
     layout->section_vaddr =
-        calloc(state->section_count == 0U ? 1U : state->section_count,
+        calloc(storage_count,
                sizeof(*layout->section_vaddr));
     layout->section_laddr =
-        calloc(state->section_count == 0U ? 1U : state->section_count,
+        calloc(storage_count,
                sizeof(*layout->section_laddr));
     layout->section_file_offset =
-        malloc((state->section_count == 0U ? 1U : state->section_count) *
+        malloc((storage_count) *
                sizeof(*layout->section_file_offset));
     layout->section_discarded =
-        calloc(state->section_count == 0U ? 1U : state->section_count,
+        calloc(storage_count,
                sizeof(*layout->section_discarded));
     script_state.section_placed =
-        calloc(state->section_count == 0U ? 1U : state->section_count,
+        calloc(storage_count,
                sizeof(*script_state.section_placed));
     script_state.section_owner =
-        malloc((state->section_count == 0U ? 1U : state->section_count) *
+        malloc((storage_count) *
                sizeof(*script_state.section_owner));
     script_state.output_vaddr =
         calloc(script->command_count == 0U ? 1U : script->command_count,
@@ -3688,7 +3772,7 @@ static bool static_build_script_layout(MiniLdState *state,
     }
     file_cursor = header_size;
     file_assigned =
-        calloc(state->section_count == 0U ? 1U : state->section_count,
+        calloc(storage_count,
                sizeof(*file_assigned));
     if (file_assigned == NULL) {
         fprintf(state->diagnostics,
