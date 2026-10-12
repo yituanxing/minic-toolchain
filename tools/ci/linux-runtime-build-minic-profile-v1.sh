@@ -167,6 +167,28 @@ int dma_const_return_guard(int coherent)
         return missing_dma_after_const_return();
     return 23;
 }
+
+/* Exact relevant 6.6.143 shape: remap becomes 1 in a dynamic outer if,
+   so the else assigning set_uncached must be unreachable. */
+extern int missing_dma_remap_const_one(void);
+int dma_real_remap_guard(int coherent)
+{
+    _Bool remap = 0, set_uncached = 0;
+    if (!coherent) {
+        remap = 1;
+        if (remap) {
+            if (!coherent)
+                return 17;
+        } else {
+            if (!0)
+                return 0;
+            set_uncached = 1;
+        }
+    }
+    if (set_uncached)
+        return missing_dma_remap_const_one();
+    return 23;
+}
 C
 # Same path as Kbuild stage2: GNU preprocessing -> MiniC -S -> GNU AS.
 # This runtime profile intentionally builds only minic and minic-cc (no minic-cpp).
@@ -190,7 +212,7 @@ if ! grep -Fq must_retain_mutating_call "$probe_dir/undefined.txt"; then
 fi
 echo "RUNTIME_DMA_BOOL_LINK_REFS=PASS dead_call_absent=1 live_call_present=1" | \
   tee "$probe_dir/verdict.txt"
-for symbol in missing_dma_call_guard missing_dma_label_guard missing_dma_after_const_return; do
+for symbol in missing_dma_call_guard missing_dma_label_guard missing_dma_after_const_return missing_dma_remap_const_one; do
   if grep -Fq "$symbol" "$probe_dir/undefined.txt"; then
     echo "RUNTIME_DMA_PROBE=RED symbol=$symbol class=needs_more_cfg_proof" | \
       tee -a "$probe_dir/verdict.txt"
