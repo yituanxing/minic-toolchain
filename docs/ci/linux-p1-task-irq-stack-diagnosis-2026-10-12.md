@@ -61,3 +61,64 @@ candidate label for the opt-in crashes.
 
 No new whole-Linux rebuild and no speculative MiniC codegen optimization
 are justified before the stack identity is established.
+
+
+## Verified after opt-in GDB run #38265238942 (actual CI, 2026-10-12)
+
+The new **all-MiniC failed control** was reproduced, without codegen changes:
+`p1_full_minic` 2064/2064 MiniC, `FAIL`, Image SHA
+`3f372cca352329df66eab389365874a0fb72244377027d245d30d41c6ac6657d`.
+The GDB run used that **same Image**, with the same matched `vmlinux`;
+`P1_GDB=CAPTURED`.
+
+Directly read at the `tcp_v6_connect` breakpoint from CPU0's relocated
+per-CPU `irq_stack_ptr`:
+
+```text
+irq_base = ff20000000000000
+irq_top  = ff20000000004000
+task_lo  = ff200000001c8000   (this run's PID 40 task)
+```
+
+The real stack switch was observed: `do_irq` entered on the **task**
+stack (`SP=ff200000001cada0`), then `handle_riscv_irq` entered on
+the **IRQ** stack (`SP=ff20000000004000`). Subsequent IRQ entries:
+`hrtimer_interrupt` entered at `irq_base+15680`,
+`rb_erase` at `irq_base+14544`. The same `__list_add_valid_or_report`
+was seen running on both task and IRQ stacks: a function name alone
+does not tell us which stack is in use.
+
+Last original failing **task**-stack path in the instrumented run:
+
+| Function entry | Task-stack bytes left |
+| --- | ---: |
+| `tcp_v6_connect` | 14,448 |
+| `ip6_xmit` | 11,184 |
+| `ip6_finish_output2` | 7,088 |
+| `__list_add_valid_or_report` (earlier call) | 2,080 |
+| `__list_add_valid_or_report` (last call) | **224** |
+
+The last function's checked MiniC prologue subtracts 368 bytes,
+so the resulting saved exception SP is **144 bytes below task stack
+base**. The GDB run caught the actual `handle_bad_stack` handler on
+the emergency stack, while the separate **ordinary** (no GDB)
+run independently failed at the same `__list_add_valid_or_report`
+boundary with task SP `ff200000001c7f70`.
+
+**Conclusion supported now:** the original all-MiniC P1 failure is
+an actual 16 KiB **task-stack underflow** along IPv6 connect; task-SP
+corruption is not needed to explain this immediate fault. This does
+**not** yet rule out an upstream miscompile, recursion, or an
+independent IRQ-stack failure. The previously seen three SPs
+`96/32/176` bytes below `vmalloc_start` exactly match the
+**IRQ-stack base observed in this control image**, but those SPs came
+from a **different experimental Image**. To promote that inference
+to proof, run equivalent read-only GDB on the experimental image,
+or independently certify that image's IRQ-stack allocation.
+
+Do not conflate original (all-MiniC, task stack) and experimental
+(2063 MiniC + 1 GCC, vmalloc boundary) failure mechanisms. Do not
+promote the GDB-observed image as P1 PASS. The next most targeted
+investigation is the exact task-call-chain prologues causing the drop
+from 7,088 to 224 bytes, then, separately, the modified image's IRQ
+stack allocation and call-chain.
