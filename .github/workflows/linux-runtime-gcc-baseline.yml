@@ -746,6 +746,11 @@ jobs:
           # Compute stable profile ID from pristine MiniC sources, BEFORE
           # applying any of the build-time profile patches.
           profile=$(python3 tools/ci/linux-runtime-profile-cache-id-v1.py)
+          if [[ "${{ contains(github.event.head_commit.message, '[linux-runtime-stack-pack]') && '1' || '0' }}" == 1 ]]; then
+            # Historic SHA-verified 2064-object base, NOT current compiler certification.
+            profile=1f48b327074ab6ed1356fbb8bd5fe0e4097da6529c205507916d52d70cf5d4c8
+            echo "COHORT_STACK_PACK_CACHE=HISTORIC_FROZEN_2064"
+          fi
           objects=$(sha256sum "$ev/full-objects.txt" | cut -d' ' -f1)
           gcc=$(sha256sum "$(command -v riscv64-linux-gnu-gcc)" | cut -d' ' -f1)
           assembler=$(sha256sum "$(command -v riscv64-linux-gnu-as)" | cut -d' ' -f1)
@@ -882,6 +887,7 @@ jobs:
           ev="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-v1"
           export COHORT_ACTION=verify
           export COHORT_P1_STACK_OWNER_SWAPS=${{ contains(github.event.head_commit.message, '[linux-runtime-stack-owners]') && '1' || '0' }}
+          export COHORT_P1_STACK_PACK=${{ contains(github.event.head_commit.message, '[linux-runtime-stack-pack]') && '1' || '0' }}
           # #38219062394 identified 4064B and 2288B MiniC stack frames in
           # ip6_finish_output2 and ip6_xmit. Test the containing C owner,
           # then tcp_output, with all other 2063 objects pinned unchanged.
