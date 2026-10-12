@@ -68,3 +68,7 @@ p1_repro=KERNEL_STACK_OVERFLOW_IPV6_CHILD_CONNECT_2_OF_2
 # Original 2G QEMU/P1 oracle and exact Kbuild header reconciliation.
 p1_swap_lane=EXACT_IMMUTABLE_2064_OBJECTS_THREE_CANDIDATES
 p1_swap_ownership=NO_COMPILER_REBUILD_NO_SHARD_RECOMPILE
+
+# P1 owner audit re-run on trimmed runner: no QEMU install, 2064-object
+# pool SHA guard, symbol provenance and frame disassembly only.
+owner_audit_runner=GNU_BINUTILS_GCC_ONLY
