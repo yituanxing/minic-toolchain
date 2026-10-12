@@ -7,6 +7,9 @@ set -Eeuo pipefail
 [[ "$n" -eq 2064 ]] || { echo "P1_DEFINED_CROSSBLOCK=ERROR object_count"; exit 8; }
 single_owner="${COHORT_P1_SINGLE_OWNER:-0}"
 if [[ "$single_owner" == 1 ]]; then
+  # Preserve old codegen in every function except one suspect frame;
+  # only ip6_finish_output2 is permitted to use the experimental allocator.
+  export MINIC_P1_CROSSBLOCK_FUNCTION=ip6_finish_output2
   dest="$ev/p1-defined-ip6-only"
 else
   dest="$ev/p1-defined-crossblock"
@@ -66,6 +69,16 @@ if [[ "$single_owner" == 1 ]]; then
   } END {exit seen!=2}' "$dest/frame-components.tsv" || {
     echo "P1_DEFINED_CROSSBLOCK=ERROR missing_both_ipv6_frames"; exit 8;
   }
+  python3 - "$dest/frame-components.tsv" <<'P1_FOCUS_BOUNDS'
+import csv,sys
+with open(sys.argv[1]) as f:
+    rows={r["function"]:r for r in csv.DictReader(f,delimiter="\t")}
+finish=int(rows["ip6_finish_output2"]["frame_bytes"])
+xmit=int(rows["ip6_xmit"]["frame_bytes"])
+assert 0<finish<4064, f"selected frame did not shrink: {finish}"
+assert xmit==2288, f"unselected ip6_xmit unexpectedly changed: {xmit}"
+print(f"P1_DEFINED_CROSSBLOCK=FRAME_ISOLATED selected=ip6_finish_output2 new={finish} old=4064 unaffected=ip6_xmit frame={xmit}")
+P1_FOCUS_BOUNDS
 fi
 (cd "$ev" && sha256sum --quiet -c minic-manifest.sha256) || {
   echo "P1_DEFINED_CROSSBLOCK=ERROR original_pool_mutated"; exit 8;
