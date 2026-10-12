@@ -187,13 +187,18 @@ text = text[:position] + helper + "\n" + text[position:]
 start = text.index("static void core_local_constants_clear_known(")
 stop = text.index("\nstatic ", start + 10)
 part = text[start:stop]
-needle = "        context->local_integer_constants[index].known = false;\n"
+needle = (
+    "        } else {\n"
+    "            fact->known = false;\n"
+    "        }\n"
+)
 if part.count(needle) != 1:
-    raise SystemExit("STABLE_ZERO=ERROR clear_join_ambiguous")
+    raise SystemExit(f"STABLE_ZERO=ERROR clear_join_count={part.count(needle)}")
 part = part.replace(needle,
-    "        if (!context->local_integer_constants[index].program_zero_stable ||\n"
-    "            context->local_integer_constants[index].escaped) {\n"
-    "            context->local_integer_constants[index].known = false;\n"
+    "        } else if (fact->program_zero_stable && !fact->escaped) {\n"
+    "            fact->known = true;\n"
+    "        } else {\n"
+    "            fact->known = false;\n"
     "        }\n", 1)
 text = text[:start] + part + text[stop:]
 
