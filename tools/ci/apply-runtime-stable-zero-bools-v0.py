@@ -174,6 +174,30 @@ static bool core_program_stmt_is_dead_after_return(
     return false;
 }
 
+/* Parser may encode an ordinary "x = 1;" as a statement-expression
+   containing MINIC_EXPRESSION_ASSIGNMENT rather than MINIC_STATEMENT_ASSIGN.
+   The same proven unreachable-tail rule must apply to that exact statement.
+   Do not generalize to assignments nested in potentially live expressions. */
+static bool core_program_expr_is_dead_after_return(
+    const MinicCoreLowerContext *context, MinicExpressionId expression_id) {
+    const MinicC0Program *program;
+    size_t i;
+    if (context == NULL || context->body == NULL ||
+        (program = context->body->program) == NULL) {
+        return false;
+    }
+    for (i = 0U; i < program->statement_count; ++i) {
+        const MinicStatement *stmt = &program->statements[i];
+        if (stmt->kind != MINIC_STATEMENT_EXPRESSION ||
+            stmt->expression != expression_id) {
+            continue;
+        }
+        return core_program_stmt_is_dead_after_return(
+            context, (MinicStatementId)i);
+    }
+    return false;
+}
+
 static bool core_program_bool_is_provably_zero(
     const MinicCoreLowerContext *context, MinicLocalId local_id) {
     const MinicC0Program *program;
@@ -246,8 +270,10 @@ static bool core_program_bool_is_provably_zero(
                     break;
                 }
                 if (expr->kind == MINIC_EXPRESSION_COMPOUND_ASSIGNMENT ||
-                    !core_program_expr_is_literal_zero(
-                        context, expr->value.binary.right)) {
+                    (!core_program_expr_is_literal_zero(
+                         context, expr->value.binary.right) &&
+                     !core_program_expr_is_dead_after_return(
+                         context, (MinicExpressionId)i))) {
                     if (trace) (void)fprintf(stderr, "DMA_ZERO_REJECT local=%zu reason=expression expr=%zu line=%zu kind=%d\\n", (size_t)local_id, i, expr->span.begin.line, (int)expr->kind);
                     return false;
                 }
