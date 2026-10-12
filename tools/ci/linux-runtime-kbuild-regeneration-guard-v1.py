@@ -209,6 +209,10 @@ def replay_affected(out: Path, golden_out: Path, selected: Path,
         elapsed = (time.monotonic_ns() - started) // 1_000_000
         print(f"COHORT_HEADER_DIRECT_REPLAY target={name} rc={cp.returncode} "
               f"elapsed_ms={elapsed}", flush=True)
+        if os.environ.get("COHORT_FRAME_CAPTURE_ONLY") == "1":
+            for line in cp.stdout.splitlines():
+                if line.startswith("CORE_FRAME"):
+                    print(line, flush=True)
         if cp.returncode != 0:
             print(cp.stdout[-12000:], file=sys.stderr)
             raise GuardError(f"direct GNU-E MiniC-S GNU-AS replay failed: {name}")

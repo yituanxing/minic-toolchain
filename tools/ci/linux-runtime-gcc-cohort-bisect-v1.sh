@@ -145,19 +145,9 @@ if [[ -e "$ev/minic-manifest.sha256" || -e "$ev/minic-identity.txt" ]]; then
   test -s "$ev/minic-manifest.sha256" && test -s "$ev/minic-identity.txt" || {
     echo "COHORT_CANDIDATE_CACHE=ERROR incomplete manifest"; exit 7;
   }
-  if [[ "${COHORT_P1_STACK_PACK:-0}" == 1 ]]; then
-    # These are deliberately historic, certified 2064 objects. The single
-    # replay owner uses the current compiler; NEVER relabel the cached pool as
-    # though it was built by the current compiler profile.
-    [[ $(cat "$ev/minic-identity.txt") == fbaa9f91cf5bfb80df7864a0ec42a56a365c06e2c02aa4add8fe09f6f0097488 ]] || {
-      echo "COHORT_STACK_PACK=ERROR frozen_2064_pool_provenance_mismatch"; exit 7;
-    }
-    echo "COHORT_STACK_PACK_FROZEN_BASELINE=PASS historic_identity_verified=true"
-  else
-    [[ $(cat "$ev/minic-identity.txt") == "$cache_contract" ]] || {
-      echo "COHORT_CANDIDATE_CACHE=ERROR identity mismatch"; exit 7;
-    }
-  fi
+  [[ $(cat "$ev/minic-identity.txt") == "$cache_contract" ]] || {
+    echo "COHORT_CANDIDATE_CACHE=ERROR identity mismatch"; exit 7;
+  }
   # Verify every expected MiniC object and ensure there is no partial pool.
   test "$(wc -l <"$ev/minic-manifest.sha256")" -eq "$n"
   (cd "$ev"; sha256sum --quiet -c minic-manifest.sha256) || {
@@ -1216,81 +1206,81 @@ if [[ "${COHORT_NETWORK_CAPTURE_ONLY:-0}" == 1 ]]; then
   echo "MINIC_NETWORK_CAPTURE=COMPLETE compiler_owners=2 runtime_not_run=true"
   exit 0
 fi
+# Focused stack-frame attribution without relinking a 220MB Image.
+# Rebuild only the three P1-path TUs against frozen GCC preprocessing flags.
+# A SHA match against the immutable candidate cache proves this is the SAME
+# compiler / SAME object bytes; the trace is observational, not a new fix.
+if [[ "${COHORT_FRAME_CAPTURE_ONLY:-0}" == 1 ]]; then
+  [[ "$cohort_scope" == FULL_C_UNIVERSE && "$n" == 2064 &&
+     "${COHORT_ACTION:-all}" == verify ]] || {
+    echo "COHORT_FRAME_CAPTURE=ERROR invalid_frozen_pool_scope"; exit 8;
+  }
+  frame_dir="$ev/p1-frame-components"
+  mkdir -p "$frame_dir"
+  printf '%s\n' net/ipv6/ip6_output.o net/ipv6/tcp_ipv6.o net/ipv4/tcp_output.o \
+    >"$frame_dir/selected.txt"
+  rm -rf -- "$out"
+  cp -a --reflink=auto "$gold_snapshot" "$out"
+  MINIC_CORE_FRAME_TRACE=1 COHORT_FRAME_CAPTURE_ONLY=1 python3 \
+    "$repo/tools/ci/linux-runtime-kbuild-regeneration-guard-v1.py" \
+    --mode replay --out "$out" --golden-out "$gold_snapshot" \
+    --evidence "$frame_dir/replay-evidence.txt" \
+    --selected "$frame_dir/selected.txt" \
+    --wrapper "$repo/tests/external/linux/stage2_kbuild_cc.sh" \
+    --minic "$minic" --success-trace "$frame_dir/success.txt" \
+    --digest-trace "$frame_dir/digests.sha256" \
+    >"$frame_dir/replay.log" 2>&1 || {
+      tail -n 60 "$frame_dir/replay.log"; exit 8;
+    }
+  python3 "$repo/tools/ci/linux-runtime-minic-route-audit-v1.py" \
+    --objects-file "$frame_dir/selected.txt" \
+    --success-trace "$frame_dir/success.txt" \
+    --object-digest-trace "$frame_dir/digests.sha256" \
+    --candidates "$out" >"$frame_dir/route-audit.log"
+  while IFS= read -r target; do
+    cmp -s "$ev/minic/$target" "$out/$target" || {
+      echo "COHORT_FRAME_CAPTURE=NONIDENTICAL owner=$target current_profile_not_frozen_baseline"
+      exit 8
+    }
+    echo "COHORT_FRAME_CAPTURE=SHA_IDENTICAL owner=$target"
+  done <"$frame_dir/selected.txt"
+  python3 - "$frame_dir/replay.log" "$frame_dir/summary.tsv" <<'PY_FRAME_SUMMARY'
+from pathlib import Path
+import re,sys
+log,out=map(Path,sys.argv[1:])
+pattern=re.compile(r"CORE_FRAME(?:_REUSE)? function=(\S+) frame=(\d+) value_bytes=(\d+) values=(\d+) objects=(\d+)")
+rows=[]
+for line in log.read_text(errors="replace").splitlines():
+    m=pattern.search(line)
+    if not m: continue
+    name=m.group(1)
+    frame,value,values,objects=map(int,m.groups()[1:])
+    rows.append((frame,name,value,frame-value,values,objects))
+if not rows:
+    raise SystemExit("COHORT_FRAME_CAPTURE=ERROR zero_frame_traces")
+rows.sort(reverse=True)
+lines=["frame_bytes\tfunction\tvalue_bytes\tnon_value_bytes\tvalue_count\tobject_count"]
+for frame,name,value,nonvalue,values,objects in rows:
+    lines.append(f"{frame}\t{name}\t{value}\t{nonvalue}\t{values}\t{objects}")
+out.write_text("\n".join(lines)+"\n")
+print(f"COHORT_FRAME_CAPTURE=PASS traced_functions={len(rows)}")
+for frame,name,value,nonvalue,values,objects in rows[:32]:
+    print(f"COHORT_FRAME_TOP function={name} frame={frame} value_bytes={value} "
+          f"non_value_bytes={nonvalue} values={values} objects={objects}")
+PY_FRAME_SUMMARY
+  echo "COHORT_FRAME_CAPTURE=COMPLETE relink=SKIPPED P1_oracle=NOT_RUN"
+  exit 0
+fi
 # Build the initramfs just once; it stays fixed throughout all QEMU trials.
 BUILD_DIR="$ev/initramfs" OUTPUT_INITRAMFS="$ev/runtime-initramfs.cpio.gz" \
   RISCV_CC=riscv64-linux-gnu-gcc \
   bash "$repo/tests/external/linux/build_runtime_initramfs.sh" >"$ev/initramfs.log" 2>&1
-# Compile only one fresh MiniC TU, twice, using exactly the same current
-# compiler and frozen GCC flags; vary ONLY its SSA-slot-size opt-in.
-# The original 2064-object cache is never written to or rebranded.
-stack_pack_target="net/ipv6/ip6_output.o"
-if [[ "${COHORT_P1_STACK_PACK:-0}" == 1 ]]; then
-  [[ "$cohort_scope" == FULL_C_UNIVERSE && "$n" == 2064 &&
-     "${COHORT_ACTION:-all}" == verify && "${COHORT_P1_STACK_OWNER_SWAPS:-0}" == 1 ]] || {
-    echo "COHORT_STACK_PACK=ERROR requires_frozen_2064_verify_P1"; exit 8;
-  }
-  pack_dir="$ev/stack-pack-ip6"
-  mkdir -p "$pack_dir"
-  printf '%s\n' "$stack_pack_target" >"$pack_dir/selected.txt"
-  for flag in 0 1; do
-    rm -rf -- "$out"
-    cp -a --reflink=auto "$gold_snapshot" "$out"
-    : >"$pack_dir/route-$flag.log"
-    : >"$pack_dir/sha-$flag.txt"
-    MINIC_RV64_PACK_SMALL_VALUES="$flag" python3 \
-      "$repo/tools/ci/linux-runtime-kbuild-regeneration-guard-v1.py" \
-      --mode replay --out "$out" --golden-out "$gold_snapshot" \
-      --evidence "$pack_dir/replay-$flag.log" \
-      --selected "$pack_dir/selected.txt" \
-      --wrapper "$repo/tests/external/linux/stage2_kbuild_cc.sh" \
-      --minic "$minic" --success-trace "$pack_dir/route-$flag.log" \
-      --digest-trace "$pack_dir/sha-$flag.txt" \
-      >"$pack_dir/replay-$flag.log" 2>&1 || {
-        echo "COHORT_STACK_PACK=ERROR replay_failed flag=$flag"
-        tail -n 70 "$pack_dir/replay-$flag.log"
-        exit 8
-      }
-    python3 "$repo/tools/ci/linux-runtime-minic-route-audit-v1.py" \
-      --objects-file "$pack_dir/selected.txt" \
-      --success-trace "$pack_dir/route-$flag.log" \
-      --object-digest-trace "$pack_dir/sha-$flag.txt" \
-      --candidates "$out" >"$pack_dir/audit-$flag.log"
-    cp -a "$out/$stack_pack_target" "$pack_dir/variant-$flag.o"
-    riscv64-linux-gnu-readelf -h "$pack_dir/variant-$flag.o" \
-      >"$pack_dir/elf-$flag.txt"
-    riscv64-linux-gnu-objdump -dr "$pack_dir/variant-$flag.o" \
-      >"$pack_dir/objdump-$flag.txt"
-    echo "COHORT_STACK_PACK=COMPILED flag=$flag sha=$(sha256sum "$pack_dir/variant-$flag.o" | cut -d' ' -f1) bytes=$(stat -c %s "$pack_dir/variant-$flag.o")"
-  done
-  python3 - "$pack_dir" "$ev/gcc/$stack_pack_target" <<'PY_STACK_ABI'
-from pathlib import Path
-import struct,sys
-directory=Path(sys.argv[1]); refs=[Path(sys.argv[2]),directory/"variant-0.o",directory/"variant-1.o"]
-headers=[p.read_bytes()[:52] for p in refs]
-assert all(len(h)==52 and h[:6]==b"\x7fELF\x02\x01" for h in headers)
-assert all(struct.unpack_from("<H",h,16)[0]==1 and
-           struct.unpack_from("<H",h,18)[0]==243 for h in headers)
-assert len(set(h[48:52] for h in headers))==1,"RISC-V ABI drift"
-print("COHORT_STACK_PACK_ABI=PASS gcc_reference=current_off=current_on")
-PY_STACK_ABI
-  cmp -s "$pack_dir/variant-0.o" "$pack_dir/variant-1.o" && {
-    echo "COHORT_STACK_PACK=ERROR toggle_did_not_change_object"; exit 8;
-  }
-  echo "COHORT_STACK_PACK=READY frozen_neighbors=2063 gcc_references=PINNED"
-fi
 last_selection="none"
 last_candidate_delta=""
 last_link_source_dir=""
 trial() {
   name="$1"; count="$2"; profile="$3"; mode="${4:-prefix}"
-  pack_variant="${5:-none}"
-  selection="$mode:$count:$pack_variant"
-  if [[ "$pack_variant" != none ]]; then
-    [[ "${COHORT_P1_STACK_PACK:-0}" == 1 && "$mode" == prefix && "$count" == "$n" &&
-       ( "$pack_variant" == 0 || "$pack_variant" == 1 ) ]] || {
-      echo "COHORT_STACK_PACK=ERROR invalid_trial_variant"; exit 8;
-    }
-  fi
+  selection="$mode:$count"
   d="$ev/trials/$name"; mkdir -p "$d"
   if [[ "$selection" != "$last_selection" ]]; then
     # Kbuild candidate compilation may have regenerated headers, scripts,
@@ -1311,11 +1301,7 @@ trial() {
         *) echo "COHORT_ERROR unknown_selection=$mode"; exit 2 ;;
       esac
       if ((selected)); then
-        if [[ "$pack_variant" != none && "${objects[i]}" == "$stack_pack_target" ]]; then
-          cp -a "$pack_dir/variant-$pack_variant.o" "$out/${objects[i]}"
-        else
-          cp -a "$ev/minic/${objects[i]}" "$out/${objects[i]}"
-        fi
+        cp -a "$ev/minic/${objects[i]}" "$out/${objects[i]}"
         touch "$out/${objects[i]}"
         printf '%s\n' "${objects[i]}" >>"$d/selected-objects.txt"
       fi
@@ -1492,9 +1478,7 @@ PY_RISCV_DYNAMIC
     esac
     if ((selected)); then
       gold="$ev/minic/$target"
-      if [[ "$pack_variant" != none && "$target" == "$stack_pack_target" ]]; then
-        gold="$pack_dir/variant-$pack_variant.o"
-      elif [[ -n "$last_candidate_delta" && -f "$last_candidate_delta/$target" ]]; then
+      if [[ -n "$last_candidate_delta" && -f "$last_candidate_delta/$target" ]]; then
         gold="$last_candidate_delta/$target"
       fi
     else
@@ -2284,23 +2268,6 @@ PY_FRAME_PROLOGUE
     exit 8
   fi
   echo "COHORT_P1_OWNER_BASELINE=REPRODUCED verdict=$TRIAL_VERDICT"
-  if [[ "${COHORT_P1_STACK_PACK:-0}" == 1 ]]; then
-    trial p1_stack_pack_current_off "$n" p1 prefix 0
-    off_verdict="$TRIAL_VERDICT"
-    trial p1_stack_pack_current_on "$n" p1 prefix 1
-    on_verdict="$TRIAL_VERDICT"
-    # Same linked Image, independent QEMU process. Do not call a single
-    # random scheduling pass a fix.
-    trial p1_stack_pack_current_on_repeat "$n" p1 prefix 1
-    on_repeat_verdict="$TRIAL_VERDICT"
-    echo "COHORT_STACK_PACK_VERDICTS old_frozen=FAIL current_off=$off_verdict current_on=$on_verdict current_on_repeat=$on_repeat_verdict"
-    if [[ "$on_verdict" == PASS && "$on_repeat_verdict" == PASS ]]; then
-      echo "COHORT_STACK_PACK_RESULT=REPRODUCED_PASS twice_same_Image=true next=full_current_2064_certification"
-      exit 0
-    fi
-    echo "COHORT_STACK_PACK_RESULT=NOT_CERTIFIED origin=old_frozen_2063 experiment_only=true"
-    exit 9
-  fi
   # The panic's exact return-address symbol was resolved by 38212502667
   # to net/core/dev.o (NOT tcp_ipv4.o). Probe known owners first.
   p1_probe_owners_string="${COHORT_P1_SWAP_OWNERS:-lib/list_debug.o net/core/dev.o net/ipv6/tcp_ipv6.o}"
