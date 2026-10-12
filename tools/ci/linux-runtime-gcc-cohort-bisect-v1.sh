@@ -1244,6 +1244,14 @@ if [[ "${COHORT_FRAME_CAPTURE_ONLY:-0}" == 1 ]]; then
     }
     echo "COHORT_FRAME_CAPTURE=SHA_IDENTICAL owner=$target"
   done <"$frame_dir/selected.txt"
+  # stage2_kbuild_cc redirects MiniC stderr to per-TU *.minic.stderr;
+  # read those exact captured streams, not the Python replay stdout.
+  while IFS= read -r target; do
+    stderr="$out/${target%.o}.minic-stage2.minic.stderr"
+    if [[ -s "$stderr" ]]; then
+      grep -E '^CORE_FRAME' "$stderr" >>"$frame_dir/replay.log" || true
+    fi
+  done <"$frame_dir/selected.txt"
   python3 - "$frame_dir/replay.log" "$frame_dir/summary.tsv" <<'PY_FRAME_SUMMARY'
 from pathlib import Path
 import re,sys

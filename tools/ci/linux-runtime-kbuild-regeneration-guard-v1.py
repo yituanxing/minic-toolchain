@@ -186,7 +186,8 @@ def replay_affected(out: Path, golden_out: Path, selected: Path,
     env.update({
         "MINIC": str(minic.resolve()),
         "REAL_CC": "/usr/bin/riscv64-linux-gnu-gcc",
-        "MINIC_KEEP_INTERMEDIATES": ("1" if (os.environ.get("COHORT_NETWORK_CAPTURE_ONLY") == "1" or
+        "MINIC_KEEP_INTERMEDIATES": ("1" if (os.environ.get("COHORT_FRAME_CAPTURE_ONLY") == "1" or
+                         os.environ.get("COHORT_NETWORK_CAPTURE_ONLY") == "1" or
                          os.environ.get("COHORT_SPINLOCK_CAPTURE_ONLY") == "1" or
                          os.environ.get("COHORT_REPAIR_RUNTIME_OWNER") == "1" or
                          os.environ.get("COHORT_REPAIR_INET_CSK_OWNER") == "1" or
