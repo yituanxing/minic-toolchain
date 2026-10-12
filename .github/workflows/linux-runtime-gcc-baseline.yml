@@ -765,6 +765,17 @@ jobs:
           name: sharded-gnu-minic-QEMU-d5dde03594665842f2bb3b8556f842f511a5dfa4
           path: build/linux-runtime-large-image-qemu-v0/source-artifact
 
+      # Historical 145/203-PASS Image from the exact nine-repaired MiniC pool.
+      # The existing receiver already handles 2GiB DTB relocation and P1.
+      - name: Restore 145+203 PASS historical MiniC Image without recompiling
+        if: contains(github.event.head_commit.message, '[linux-runtime-historical-nine-p1]')
+        uses: actions/download-artifact@v4
+        with:
+          run-id: 38135950731
+          github-token: ${{ github.token }}
+          name: linux-runtime-nine-minic-owners-b4ca2dd65a3213c6c5e430c678d406392033ac1e
+          path: build/linux-runtime-large-image-qemu-v0/source-artifact
+
       - name: Run original Image in 2G QEMU against P0 P1 and shell oracles
         if: contains(github.event.head_commit.message, '[linux-runtime-large-image-qemu]')
         shell: bash
