@@ -136,6 +136,20 @@ setup_page:
         return missing_dma_label_guard();
     return 23;
 }
+
+/* MUST remain unresolved: a direct call that receives &local can mutate
+   it even when the if body's control flow is trivial. */
+extern int mutates_local_bool(_Bool *);
+extern int must_retain_mutating_call(void);
+int direct_call_escape_guard(void)
+{
+    _Bool set_uncached = 0;
+    if (mutates_local_bool(&set_uncached))
+        return 0;
+    if (set_uncached)
+        return must_retain_mutating_call();
+    return 23;
+}
 C
 # Same path as Kbuild stage2: GNU preprocessing -> MiniC -S -> GNU AS.
 # This runtime profile intentionally builds only minic and minic-cc (no minic-cpp).
@@ -151,6 +165,10 @@ if grep -Fq missing_arch_dma_set_uncached "$probe_dir/undefined.txt"; then
 fi
 if ! grep -Fq must_retain_dynamic_call "$probe_dir/undefined.txt"; then
     echo "RUNTIME_DMA_BOOL_LINK_REFS=FAIL erased_live_call" >&2
+    exit 1
+fi
+if ! grep -Fq must_retain_mutating_call "$probe_dir/undefined.txt"; then
+    echo "RUNTIME_DMA_BOOL_LINK_REFS=FAIL erased_mutating_call" >&2
     exit 1
 fi
 echo "RUNTIME_DMA_BOOL_LINK_REFS=PASS dead_call_absent=1 live_call_present=1" | \
