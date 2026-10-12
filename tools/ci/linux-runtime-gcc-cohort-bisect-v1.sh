@@ -1518,6 +1518,35 @@ PY_GNU_NONSELECTED
   candidate_image_bytes=$(stat -c '%s' "$d/Image")
   golden_image_bytes=$(stat -c '%s' "$gold_snapshot/arch/riscv/boot/Image")
   echo "COHORT_IMAGE_BYTES trial=$name candidate=$candidate_image_bytes golden=$golden_image_bytes ratio=$(python3 -c 'import sys;print(round(int(sys.argv[1])/max(1,int(sys.argv[2])),3))' "$candidate_image_bytes" "$golden_image_bytes")"
+  # A diagnostic P1 owner rescue must boot the SAME GNU-linked candidate
+  # even when MiniC's 215MB Image exceeds QEMU 8.2's fixed -initrd offset.
+  # QEMU-generated virt DTB and loader point to an unchanged GCC-built initrd;
+  # never change production/default 512M/P0/P1 behavior.
+  if [[ "${COHORT_P1_OWNER_RESCUE:-0}" == 1 && "$name" == p1_rescue_* ]]; then
+    dts="$d/virt-owner-rescue.dtb"
+    qemu-system-riscv64 -M "virt,dumpdtb=$dts" -cpu max \
+      -m 2G -smp 1 -nographic -no-reboot -bios default -kernel "$d/Image" \
+      >"$d/virt-dtb.log" 2>&1
+    [[ -s "$dts" ]] || { echo "COHORT_P1_DTB=FAIL trial=$name"; exit 8; }
+    fdtget -p "$dts" /chosen >/dev/null 2>&1 || fdtput -c "$dts" /chosen
+    ramdisk_bytes=$(stat -c '%s' "$ev/runtime-initramfs.cpio.gz")
+    ramdisk_start=0xa0000000
+    ramdisk_end=$((ramdisk_start+ramdisk_bytes))
+    image_end=$((0x80200000+candidate_image_bytes))
+    ((ramdisk_start>=image_end && ramdisk_end<=0x100000000)) || {
+      echo "COHORT_P1_DTB=INCONCLUSIVE trial=$name image_end=$image_end"; exit 8;
+    }
+    printf -v ramdisk_end_hex '%x' "$ramdisk_end"
+    fdtput -t x "$dts" /chosen linux,initrd-start 0 a0000000
+    fdtput -t x "$dts" /chosen linux,initrd-end 0 "$ramdisk_end_hex"
+    [[ "$(fdtget -t x "$dts" /chosen linux,initrd-end)" == "0 $ramdisk_end_hex" ]] || {
+      echo "COHORT_P1_DTB=FAIL trial=$name reason=property_mismatch"; exit 8;
+    }
+    export LINUX_RUNTIME_CUSTOM_DTB="$dts"
+    export LINUX_RUNTIME_INITRD_LOAD_ADDR="$ramdisk_start"
+    export LINUX_RUNTIME_QEMU_MEMORY=2G
+    echo "COHORT_P1_DTB=PASS trial=$name unchanged_image=true initrd_at=a0000000"
+  fi
   # The image may be too large for QEMU's pinned RISC-V -initrd placement
   # even if the guest has enough total DRAM. Save *measured* ELF section
   # sizes for later MiniC codegen-bloat analysis; never guess from Image alone.
@@ -2298,6 +2327,39 @@ PY_FRAME_PROLOGUE
     fi
   done
   echo "COHORT_P1_OWNER=UNRESOLVED baseline=FAIL attempts=$(($(wc -l <"$ev/p1-owner-verdicts.tsv")-1))"
+  exit 9
+fi
+# P1 stack-overflow owner causality: replace only one exact C object in
+# the independently authenticated 2064-MiniC pool with its pinned pure-GNU
+# counterpart. Preserve all Kbuild generated-header/ABI guards. This is a
+# separate opt-in, NEVER a P0/P1 full-PASS claim for the unmodified Image.
+if [[ "${COHORT_P1_OWNER_RESCUE:-0}" == 1 ]]; then
+  [[ "$cohort_scope" == FULL_C_UNIVERSE && "$n" == 2064 &&
+     "${COHORT_ACTION:-all}" == verify ]] || {
+    echo "COHORT_P1_RESCUE=ERROR non-full-or-unverified-pool" >&2; exit 8;
+  }
+  owners_csv=${COHORT_P1_RESCUE_OBJECTS:-lib/list_debug.o}
+  IFS=, read -r -a rescue_owners <<<"$owners_csv"
+  failures=0
+  for target in "${rescue_owners[@]}"; do
+    idx=-1
+    for ((k=0;k<n;k++)); do
+      if [[ "${objects[k]}" == "$target" ]]; then idx=$k; break; fi
+    done
+    ((idx>=0)) || { echo "COHORT_P1_RESCUE=ERROR target_not_in_2064 $target" >&2; exit 8; }
+    trial_name="p1_rescue_$(printf '%s' "$target" | tr '/.' '__')"
+    echo "COHORT_P1_RESCUE=START owner=$target index=$idx mini_others=$((n-1)) gcc_owners=1"
+    trial "$trial_name" "$idx" p1 all_except
+    echo "COHORT_P1_RESCUE=RESULT owner=$target verdict=$TRIAL_VERDICT"
+    case "$TRIAL_VERDICT" in
+      PASS)
+        echo "COHORT_P1_RESCUE=CAUSAL_CANDIDATE owner=$target verdict=P1_PASS rest_minic=$((n-1))"
+        exit 0 ;;
+      FAIL|LINK_FAIL) failures=$((failures+1)) ;;
+      *) echo "COHORT_P1_RESCUE=INCONCLUSIVE owner=$target verdict=$TRIAL_VERDICT"; exit 8 ;;
+    esac
+  done
+  echo "COHORT_P1_RESCUE=NO_SINGLE_OBJECT_RESCUE tested=$failures targets=$owners_csv"
   exit 9
 fi
 # FIRST test the entire MiniC-compilable C object universe. This is the
