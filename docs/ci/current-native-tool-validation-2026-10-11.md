@@ -840,3 +840,28 @@ Image boot test. Since Linux's own script has the observed omitted
 MiniLD-final + MiniObjcopy production Image test next. Full P0/P1 QEMU
 promotion still requires replay of *that new exact Image*, with a
 recorded origin run ID and SHA rather than the old failed Image.
+
+### Latest repaired MiniLD Linux image: real QEMU FAIL and early CPU trace
+
+Repaired native MiniLD final-3 + MiniObjcopy-44 Image build
+[#38186542705](https://github.com/yituanxing/minic-toolchain/actions/runs/38186542705)
+completed: 22,033,920 bytes, SHA-256
+c2d9e69d00d93ab1938dc306390b15109cfb4c11d168585bc282fef24b767681.
+It matches GNU Image *length*, not bytes. Exact retained-Image
+QEMU replay [#38187952222](https://github.com/yituanxing/minic-toolchain/actions/runs/38187952222)
+failed: only OpenSBI, 90s timeout, no Linux banner or P1.
+
+The CPU trace
+[#38188236424](https://github.com/yituanxing/minic-toolchain/actions/runs/38188236424)
+confirmed entry into *actual* Linux S-mode:
+pc=0x80200000 -> 0x802010d8 (_start_kernel) -> 0x80c05fec
+(setup_vm) -> 0x80e18cfc (__pi_fdt32_ld).
+The FDT walk had offsets progressing 0 to 1754; its reported total
+size was 5799. CPU-instruction logging hit the 16-MiB cap after 6s
+before reaching the failure: this is NOT proof of an infinite FDT loop.
+
+The next targeted probe is a QEMU HMP monitor live PC/register snapshot
+with no slow CPU instruction logging. This reuses the identical Image,
+adds no workflow or job, and keeps the GNU-reference and
+triple-native certification unchanged. Linux runtime remains FAIL
+until genuine P0/P1 guest evidence exists.

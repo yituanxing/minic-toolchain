@@ -442,6 +442,8 @@ jobs:
                       with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as mon:
                           mon.settimeout(0.5)
                           mon.connect(str(sockpath))
+                          # Drain initial HMP greeting/prompt before querying.
+                          query_monitor(mon, "")
                           greeting = query_monitor(mon, "info registers")
                           out.write("=== CPU SAMPLE ===\n" + greeting + "\n")
                   out.flush()
