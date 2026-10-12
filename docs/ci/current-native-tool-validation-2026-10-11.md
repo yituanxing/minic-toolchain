@@ -1264,3 +1264,24 @@ The certified two-object cohort remains available with
 `MINIPP_NATIVE_SCOPE=two`; `none` permits isolated four-native
 diagnosis. This full workload is **not yet certified** until the
 specific full-production CI and guest logs report PASS.
+
+### Full-production first real CI: assembler inputs correctly excluded
+
+The first full replacement run [#38193433903](https://github.com/yituanxing/minic-toolchain/actions/runs/38193433903)
+**failed in the full-C inventory phase**, after the existing
+GNU GCC + four-native MiniAS/MiniAR/MiniLD-final/MiniObjcopy
+Linux P0/P1 had again passed. The first saved Kbuild owner,
+`arch/riscv/errata/sifive/errata_cip_453.o`, uses GNU GCC as
+the **driver for a .S assembler source**, not a C translation unit.
+The new full-inventory program mistakenly treated every
+`gcc -c` command as a mandatory C owner and rejected its lack
+of a `.c` filename. This is a **harness classification bug**,
+not a demonstrated MiniPP preprocessor failure.
+
+The repaired inventory excludes explicit assembler input
+`.S/.s/.asm` and `-x assembler[-with-cpp]` commands, while
+retaining fail-closed classification for other unrecognized
+GNU-GCC `-c` producer patterns. The exact count will come
+from actual C-only `.o.cmd` entries, not a guessed fixed 3352.
+Run `38193433903` does not certify full MiniPP. The patched
+end-to-end stage needs a new CI result.
