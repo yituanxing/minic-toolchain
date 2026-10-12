@@ -97,6 +97,45 @@ int dynamic_branch_preserved(int cond)
         return must_retain_dynamic_call();
     return 0;
 }
+
+/* Diagnostic only: a call in the outer guard may invalidate speculative
+   local facts, but cannot change an unescaped automatic zero value. */
+extern int unknown_dma_coherent(void);
+extern int missing_dma_call_guard(void);
+int dma_call_guard(void)
+{
+    _Bool set_uncached = 0, remap = 0;
+    if (!unknown_dma_coherent()) {
+        set_uncached = 0;
+        remap = 0;
+        if (!set_uncached && !remap)
+            return 17;
+    }
+    if (set_uncached)
+        return missing_dma_call_guard();
+    return 23;
+}
+
+/* Diagnostic only: an explicit label can have multiple predecessor edges.
+   Preserving zero must be justified at the join, not guessed by lexical
+   fallthrough. */
+extern int missing_dma_label_guard(void);
+int dma_label_guard(int coherent, int must_jump)
+{
+    _Bool set_uncached = 0, remap = 0;
+    if (!coherent) {
+        set_uncached = 0;
+        remap = 0;
+        if (!set_uncached && !remap)
+            return 17;
+    }
+    if (must_jump)
+        goto setup_page;
+setup_page:
+    if (set_uncached)
+        return missing_dma_label_guard();
+    return 23;
+}
 C
 # Same path as Kbuild stage2: GNU preprocessing -> MiniC -S -> GNU AS.
 # This runtime profile intentionally builds only minic and minic-cc (no minic-cpp).
@@ -116,6 +155,16 @@ if ! grep -Fq must_retain_dynamic_call "$probe_dir/undefined.txt"; then
 fi
 echo "RUNTIME_DMA_BOOL_LINK_REFS=PASS dead_call_absent=1 live_call_present=1" | \
   tee "$probe_dir/verdict.txt"
+for symbol in missing_dma_call_guard missing_dma_label_guard; do
+  if grep -Fq "$symbol" "$probe_dir/undefined.txt"; then
+    echo "RUNTIME_DMA_PROBE=RED symbol=$symbol class=needs_more_cfg_proof" | \
+      tee -a "$probe_dir/verdict.txt"
+  else
+    echo "RUNTIME_DMA_PROBE=GREEN symbol=$symbol class=proven_eliminated" | \
+      tee -a "$probe_dir/verdict.txt"
+  fi
+done
+
 end=$(date +%s%N)
 echo "TIMING toolchain_ms=$(((end-start)/1000000))" | tee "$ev/toolchain-timing.txt"
 printf '%s\n' "${patches[@]}" >"$ev/minic-profile.txt"
