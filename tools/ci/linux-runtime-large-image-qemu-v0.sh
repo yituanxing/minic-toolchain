@@ -84,6 +84,7 @@ run_profile() {
      BUILD_DIR="$ev/qemu-$profile" LINUX_RELEASE=6.6.143 \
      LINUX_RUNTIME_QEMU_MEMORY=2G \
      LINUX_RUNTIME_PROFILE="$profile" QEMU_TIMEOUT_SECONDS="$timeout" \
+     QEMU_SHELL_INPUT_DELAY_SECONDS=22 \
      bash "$repo/tests/external/linux/runtime_boot.sh" \
        >"$ev/$profile.stdout.log" 2>&1; then
     rc=0
@@ -100,8 +101,10 @@ run_profile() {
   fi
   echo "LARGE_IMAGE_QEMU=PASS profile=$profile guest_memory=2G image_unchanged=true"
 }
+# Shell is independent of the IPv6 P1 syscall path and must be proved
+# before a genuine runtime panic stops the failing P1 lane.
 run_profile fast 75
-run_profile p1 90
 run_profile shell 90
+run_profile p1 90
 test "$(sha256sum "$image" | cut -d' ' -f1)" = "$expected_sha"
 echo "LARGE_IMAGE_RUNTIME=PASS fast=1 p1=12_syscalls shell=1 same_original_image=true"
