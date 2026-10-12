@@ -23,10 +23,24 @@ compiler_rebuild=PROHIBITED
 gnu_relink=PROHIBITED
 oracle=original-P0-P1-and-shell
 full_link=PASS
-runtime=PENDING_2G_QEMU_REPLAY
+runtime=P0_PASS_P1_FAIL_IPV6_CONNECT_KSTACK_OVERFLOW
 workflow_parser=FIXED_DUPLICATE_IF_KEY
 receiver=REUSE_EXISTING_gcc-shard-verify
 qemu8_2_loader_issue=INITRD_FIXED_AT_0x88200000
 large_image_end=0x8cf87000
 replay_strategy=EXACT_ORIGINAL_215511040_BYTES_PLUS_GENERATED_STOCK_DTB
 relocated_initrd=0xa0000000
+# Exact artifact QEMU 8.2 virtual-DTB relocation run 38207723736:
+# P0=PASS: real Linux version 6.6.143 banner, /init, proc/sys/devtmpfs/
+# tmpfs, user shell marker, DONE_COMMANDS. SHA of Image unchanged.
+# P1=FAIL after six passed syscall groups, during IPv6 child-connect.
+# Guest panic: "Insufficient stack space to handle exception!"
+#   epc=__list_add_valid_or_report+0x1c/0xd8a
+#   ra=__minic_inline_spec_163_16339+0x136/0x19a
+#   task stack [0xff200000001c8000..0xff200000001cc000]
+#   sp=0xff200000001c7f70 (144 bytes below stack base)
+# This is REAL GUEST correctness failure, not QEMU ROM overlap or link.
+full_P0_run=38207723736
+full_P0=PASS
+full_P1=FAIL_IPV6_CONNECT_KERNEL_STACK_OVERFLOW
+next=INDEPENDENT_SHELL_CERTIFICATION_AND_TCP_STACK_OWNER_ANALYSIS
