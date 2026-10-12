@@ -216,6 +216,18 @@ part = part.replace(needle,
     "            core_program_bool_is_provably_zero(context, local_id)) {\n"
     "            context->local_integer_constants[index].program_zero_stable = true;\n"
     "        }\n"
+    "        if (getenv(\"MINIC_DMA_ZERO_TRACE\") != NULL &&\n"
+    "            context->source_function != NULL &&\n"
+    "            context->source_function->name != NULL &&\n"
+    "            strcmp(context->source_function->name, \"dma_direct_alloc\") == 0) {\n"
+    "            (void)fprintf(stderr,\n"
+    "                          \"DMA_ZERO_PROOF local=%zu line=%zu bits=%llu entry=%d stable=%d\\n\",\n"
+    "                          (size_t)local_id,\n"
+    "                          (size_t)local->name_span.begin.line,\n"
+    "                          (unsigned long long)converted.bits,\n"
+    "                          core_program_bool_has_entry_zero_initializer(context, local_id) ? 1 : 0,\n"
+    "                          context->local_integer_constants[index].program_zero_stable ? 1 : 0);\n"
+    "        }\n"
     "    }\n", 1)
 text = text[:start] + part + text[stop:]
 path.write_text(text)
