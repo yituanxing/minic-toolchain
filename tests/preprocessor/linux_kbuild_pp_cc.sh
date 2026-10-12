@@ -44,6 +44,10 @@ if [[ -n "$select_file" ]]; then
     exit 2
   fi
   if ! grep -Fxq -- "$rel_source" "$select_file"; then
+    if [[ "${MINIPP_LINUX_SELECT_MODE:-}" == strict ]]; then
+      printf 'MINIPP_NATIVE_FULL_SELECTION=FAIL source=%q normalized=%q\n' "$source_file" "$rel_source" >&2
+      exit 2
+    fi
     exec "$real_cc" "$@"
   fi
 else
@@ -59,6 +63,11 @@ fi
 mkdir -p "$work" "$(dirname "$trace")"
 key=${source_file//\//__}
 key=${key//./_}
+# Full-cohort parallel replay hashes each actual .o identity into a
+# bounded, collision-free input key; avoid >255-byte filename components.
+if [[ -n "${MINIPP_LINUX_INPUT_KEY:-}" ]]; then
+  key=$MINIPP_LINUX_INPUT_KEY
+fi
 ref_i="$work/$key.gcc.i"
 mini_i="$work/$key.mini.i"
 mini_err="$work/$key.mini.err"
@@ -97,6 +106,16 @@ predefines="$work/riscv64-gcc-predefines.h"
 # per TU, rather than racing on the observation-mode shared tmp file.
 if [[ "${MINIPP_LINUX_SUBSTITUTE:-false}" == "true" ]]; then
   predefines="$work/$key.riscv64-gcc-predefines.h"
+fi
+# Prebuild GNU predefined-macro contexts once per distinct GCC target
+# flags across the full Linux TU cohort; no per-file capability grep
+# or concurrent races on a shared GCC predefines file.
+if [[ -n "${MINIPP_LINUX_PREDEFINES_FILE:-}" ]]; then
+  predefines=$MINIPP_LINUX_PREDEFINES_FILE
+  if [[ ! -s "$predefines" ]]; then
+    printf 'MINIPP_NATIVE_FULL_PREDEFINES=FAIL file=%q\n' "$predefines" >&2
+    exit 2
+  fi
 fi
 if [[ ! -s "$predefines" ]]; then
   tmp_predefines="$predefines.tmp"
