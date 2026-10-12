@@ -2131,6 +2131,175 @@ PY_FAULT_OWNER
   echo "EARLYCON_HOTFIX_RESULT=INCONCLUSIVE verdict=$TRIAL_VERDICT frontier_evidence=insufficient"
   exit 8
 fi
+# Exact immutable 2064-owner P1 differential: reuse certified MiniC .o pool
+# and pinned GCC reference (no C compilation), overlay one *GCC* .o per
+# trial, allow Kbuild to regenerate only derived link artifacts, then run the
+# original P1 syscall oracle. This is a causal diagnostic, NOT a MiniC PASS.
+if [[ "${COHORT_P1_STACK_OWNER_SWAPS:-0}" == 1 ]]; then
+  [[ "$cohort_scope" == FULL_C_UNIVERSE && "$n" == 2064 && "${COHORT_ACTION:-all}" == verify ]] || {
+    echo "COHORT_P1_OWNER=ERROR require_frozen_full_2064_verify" >&2
+    exit 8
+  }
+  # The QEMU 8.2 -initrd placement is hard-coded at entry+128MiB and
+  # overlaps this 215MB image. The stock QEMU virt DTB with explicit
+  # /chosen initrd location allows exactly the same P1 guest oracle.
+  p1dtb="$ev/p1-owner-virt.dtb"
+  command -v fdtget >/dev/null
+  command -v fdtput >/dev/null
+  qemu-system-riscv64 -M "virt,dumpdtb=$p1dtb" -cpu max \
+    -m 2G -smp 1 -nographic -no-reboot -bios default \
+    -kernel "$gold_snapshot/arch/riscv/boot/Image" \
+    >"$ev/p1-owner-dtb.log" 2>&1
+  test -s "$p1dtb"
+  fdtget -p "$p1dtb" /chosen >/dev/null 2>&1 || fdtput -c "$p1dtb" /chosen
+  initrd_bytes=$(stat -c '%s' "$ev/runtime-initramfs.cpio.gz")
+  printf -v p1_end '%x' "$((0xa0000000+initrd_bytes))"
+  fdtput -t x "$p1dtb" /chosen linux,initrd-start 0 a0000000
+  fdtput -t x "$p1dtb" /chosen linux,initrd-end 0 "$p1_end"
+  [[ "$(fdtget -t x "$p1dtb" /chosen linux,initrd-start)" == "0 a0000000" ]] || exit 8
+  export LINUX_RUNTIME_CUSTOM_DTB="$p1dtb"
+  export LINUX_RUNTIME_INITRD_LOAD_ADDR=0xa0000000
+  export LINUX_RUNTIME_QEMU_MEMORY=2G
+  echo "COHORT_P1_OWNER_DTB=PASS guest_mem=2G initrd_start=a0000000 initrd_end=$p1_end"
+
+  # Identify source object(s) for the precise panic symbols from the
+  # previous 2/2 reproductions before interpreting individual swaps.
+  symbol_map="$ev/p1-owner-symbols.txt"
+  find "$ev/minic" -name '*.o' -type f -print0 \
+    | xargs -0 -r riscv64-linux-gnu-nm -A --defined-only \
+      >"$symbol_map" 2>"$ev/p1-owner-nm.log" || true
+  grep -E ' (__list_add_valid_or_report|__minic_inline_spec_163_16339)# user's actual intended failure oracle; do not waste more CI on 128, 384,
+# 512 ... successful intermediate cohorts.
+trial full_all "$n" fast
+case "$TRIAL_VERDICT" in
+  PASS)
+    trial full_all_verified "$n" full
+    case "$TRIAL_VERDICT" in
+      PASS)
+        echo "COHORT_RESULT=PASS candidate_objects=$n scope=$cohort_scope same_config=true"
+        exit 0 ;;
+      FAIL|LINK_FAIL)
+        echo "COHORT_RESULT=FAIL stage=full_or_p1 no_monotone_prefix_claim"
+        exit 9 ;;
+      *) echo "COHORT_RESULT=INCONCLUSIVE stage=full_or_p1"; exit 8 ;;
+    esac ;;
+  FAIL|LINK_FAIL)
+    fail_kind="$TRIAL_VERDICT"
+    lo=0
+    hi="$n" ;;
+  *)
+    # A too-large Image triggers a host QEMU initrd ROM overlap before the
+    # kernel can run. Reuse authenticated MiniC objects and fixed GCC objects
+    # to probe specific Linux early-init dependencies without rebuilding C.
+    # These probes NEVER claim to satisfy the full runtime/initramfs oracle.
+    if [[ "$cohort_scope" == FULL_C_UNIVERSE ]] && \
+       grep -Fq "COHORT_QEMU_LOAD_OVERLAP=CONFIRMED trial=full_all" "$ev/cohort.log"; then
+      for focused_target in drivers/tty/serial/earlycon.o; do
+        focused_idx=-1
+        for ((k=0;k<n;k++)); do
+          if [[ "${objects[k]}" == "$focused_target" ]]; then
+            focused_idx=$k
+            break
+          fi
+        done
+        if ((focused_idx<0)); then
+          echo "COHORT_FOCUSED_GCC_SWAP=SKIPPED target=$focused_target reason=outside_golden_C_universe"
+          continue
+        fi
+        probe_name=$(printf '%s' "$focused_target" | tr '/.' '__')
+        echo "COHORT_FOCUSED_GCC_SWAP=START target=$focused_target index=$focused_idx other_minic=$((n-1))"
+        trial "gcc_only_${probe_name}" "$focused_idx" fast all_except
+        echo "COHORT_FOCUSED_GCC_SWAP=RESULT target=$focused_target verdict=$TRIAL_VERDICT"
+      done
+    fi
+    echo "COHORT_RESULT=INCONCLUSIVE at=full"
+    exit 8 ;;
+esac
+# Full FAIL (or LINK_FAIL) vs independently certified pure-GCC baseline PASS.
+# Reuse the exact, already compiled candidate objects: no new C compilation
+# during bisection. Prefix monotonicity must be verified, not assumed.
+while ((hi-lo>1)); do
+  mid=$(((lo+hi)/2))
+  trial "prefix_$mid" "$mid" fast
+  case "$TRIAL_VERDICT" in
+    PASS) lo="$mid";;
+    "$fail_kind") hi="$mid";;
+    INCONCLUSIVE)
+      echo "COHORT_RESULT=INCONCLUSIVE at=prefix_$mid"; exit 8 ;;
+    *)
+      echo "COHORT_RESULT=FAIL_MIXED_CLASSES full=$fail_kind prefix=$TRIAL_VERDICT"
+      exit 8 ;;
+  esac
+done
+candidate=${objects[hi-1]}
+printf 'pass_prefix=%s\nfail_prefix=%s\ncandidate=%s\nfailure_kind=%s\n'   "$lo" "$hi" "$candidate" "$fail_kind" | tee "$ev/frontier.txt"
+# A failing prefix is a clue, not proof of a single owner. Confirm both
+# directions on the same GCC baseline and existing MiniC object pool.
+trial "candidate_single_$hi" "$((hi-1))" fast single
+single_verdict="$TRIAL_VERDICT"
+trial "candidate_all_except_$hi" "$((hi-1))" fast all_except
+except_verdict="$TRIAL_VERDICT"
+echo "COHORT_CAUSALITY candidate=$candidate prefix_fail_kind=$fail_kind single=$single_verdict all_except=$except_verdict"
+if [[ "$single_verdict" == "$fail_kind" && "$except_verdict" == PASS ]]; then
+  echo "COHORT_RESULT=SINGLE_OBJECT_SUSPECT candidate=$candidate"
+else
+  echo "COHORT_RESULT=INTERACTION_OR_NONMONOTONE candidate=$candidate"
+fi
+exit 9
+ \
+    "$symbol_map" | tee "$ev/p1-owner-hit.txt" || true
+  if [[ -s "$ev/minic/lib/list_debug.o" ]]; then
+    riscv64-linux-gnu-objdump -dr "$ev/minic/lib/list_debug.o" \
+      >"$ev/p1-list-debug-disasm.txt"
+    python3 - "$ev/p1-list-debug-disasm.txt" <<'PY_FRAME_PROLOGUE'
+from pathlib import Path
+import sys
+lines=Path(sys.argv[1]).read_text().splitlines()
+for name in ("__list_add_valid_or_report",):
+    for idx,line in enumerate(lines):
+        if line.strip().endswith("<"+name+">:"):
+            print("COHORT_P1_OWNER_PROLOGUE symbol="+name)
+            for row in lines[idx:idx+55]:
+                print(row)
+            break
+PY_FRAME_PROLOGUE
+  fi
+
+  : >"$ev/p1-owner-verdicts.tsv"
+  printf 'owner\tverdict\timage_sha\n' >"$ev/p1-owner-verdicts.tsv"
+  # Frozen full-MiniC kernel must reproduce the observed P1 failure
+  # in the same job and guest configuration before making causal claims.
+  trial p1_full_minic "$n" p1
+  if [[ "$TRIAL_VERDICT" != FAIL ]]; then
+    echo "COHORT_P1_OWNER=INCONCLUSIVE baseline=$TRIAL_VERDICT"
+    exit 8
+  fi
+  echo "COHORT_P1_OWNER_BASELINE=REPRODUCED verdict=$TRIAL_VERDICT"
+  targets_string="${COHORT_P1_SWAP_OWNERS:-lib/list_debug.o net/ipv6/tcp_ipv6.o net/ipv4/tcp_ipv4.o}"
+  for target in $targets_string; do
+    owner_idx=-1
+    for ((i=0;i<n;i++)); do
+      if [[ "${objects[i]}" == "$target" ]]; then owner_idx=$i; break; fi
+    done
+    if ((owner_idx<0)); then
+      echo "COHORT_P1_OWNER=SKIPPED missing_owner=$target"
+      printf '%s\t%s\t%s\n' "$target" ABSENT - >>"$ev/p1-owner-verdicts.tsv"
+      continue
+    fi
+    name=$(printf '%s' "$target" | tr '/.' '__')
+    echo "COHORT_P1_OWNER_SWAP=START owner=$target index=$owner_idx others_minic=$((n-1))"
+    trial "p1_gcc_$name" "$owner_idx" p1 all_except
+    printf '%s\t%s\t%s\n' "$target" "$TRIAL_VERDICT" "$image_sha" \
+      >>"$ev/p1-owner-verdicts.tsv"
+    echo "COHORT_P1_OWNER_SWAP=RESULT owner=$target verdict=$TRIAL_VERDICT"
+    if [[ "$TRIAL_VERDICT" == PASS ]]; then
+      echo "COHORT_P1_OWNER=ONE_GCC_SWAP_P1_PASS owner=$target original_all_minic=FAIL"
+      exit 0
+    fi
+  done
+  echo "COHORT_P1_OWNER=UNRESOLVED baseline=FAIL attempts=$(($(wc -l <"$ev/p1-owner-verdicts.tsv")-1))"
+  exit 9
+fi
 # FIRST test the entire MiniC-compilable C object universe. This is the
 # user's actual intended failure oracle; do not waste more CI on 128, 384,
 # 512 ... successful intermediate cohorts.
