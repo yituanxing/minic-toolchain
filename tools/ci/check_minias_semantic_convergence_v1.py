@@ -91,7 +91,7 @@ def main():
     integrated_path = ROOT / "tests/external/linux/mini_tools_integrated_relink.sh"
     if sha(ROOT / "tests/external/linux/minipp_native_targeted_relink.sh") != "3ecdd7a3db9d8648da463bc7110976c29cabe5e0":
         raise AssertionError("native MiniPP exact producer substitute changed")
-    if sha(ROOT / "tests/preprocessor/run_linux_native_full_production.py") != "e7fb9abf889d01685fce9ec3b60ad04aacade125":
+    if sha(ROOT / "tests/preprocessor/run_linux_native_full_production.py") != "0d8892e1528c5ff4908adcdd5b84d52538e3b1a7":
         raise AssertionError("native full MiniPP TU inventory or production trace changed")
     if sha(ROOT / "tests/external/linux/minipp_native_full_relink.sh") != "51858d1d76368840690a773391cb4f6e0f24bc2e":
         raise AssertionError("native full MiniPP runtime relink harness changed")
