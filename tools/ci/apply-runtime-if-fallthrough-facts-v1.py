@@ -138,18 +138,18 @@ replace_one(
 # The older Runtime transforms are allowed to insert extra guards between
 # this fact invalidation and condition_block. The FIRST invalidation in the
 # dynamic lower_if body is the reachability boundary.
-entry_anchor = "    core_local_constants_clear_known(context);\\n"
+entry_anchor = "    core_local_constants_clear_known(context);\n"
 if entry_anchor not in part:
     raise SystemExit("IF_FACTS=ERROR entry_clear_missing")
 part = part.replace(
     entry_anchor,
-    "    fallthrough_facts = NULL;\\n"
-    "    then_exit_facts = NULL;\\n"
-    "    if (else_source == NULL &&\\n"
-    "        core_runtime_if_pure_local_guard(context, statement->expression) &&\\n"
-    "        !core_block_contains_reentry_label(context, then_source)) {\\n"
-    "        fallthrough_facts = core_runtime_if_copy_facts(context);\\n"
-    "    }\\n"
+    "    fallthrough_facts = NULL;\n"
+    "    then_exit_facts = NULL;\n"
+    "    if (else_source == NULL &&\n"
+    "        core_runtime_if_pure_local_guard(context, statement->expression) &&\n"
+    "        !core_block_contains_reentry_label(context, then_source)) {\n"
+    "        fallthrough_facts = core_runtime_if_copy_facts(context);\n"
+    "    }\n"
     + entry_anchor, 1)
 replace_one(
     "    then_continuation_block = context->block_id;\n",
