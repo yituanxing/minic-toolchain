@@ -169,6 +169,29 @@ for attempt in 1 2 3; do
   printf '%s\t%s\t%s\n' "$attempt" "$image_sha" "$TRIAL_VERDICT" >>"$dest/p1-repeats.tsv"
   if [[ "$TRIAL_VERDICT" == PASS ]]; then passes=$((passes+1)); fi
 done
+# Diagnose the actual experimental Image, not the all-MiniC control.
+# The three boots above used the exact same pinned Image SHA. The last
+# linked vmlinux is from that same object selection.
+if [[ "${COHORT_P1_GDB_STACK:-0}" == 1 ]]; then
+  experimental_image="$ev/trials/p1_defined_crossblock_1/Image"
+  [[ -s "$experimental_image" && -s "$out/vmlinux" ]] || {
+    echo "P1_DEFINED_CROSSBLOCK_GDB=INCONCLUSIVE missing_same_selection_image_or_vmlinux"
+    exit 8
+  }
+  [[ "$(sha256sum "$experimental_image" | cut -d' ' -f1)" == "$pinned" ]] || {
+    echo "P1_DEFINED_CROSSBLOCK_GDB=ERROR experimental_image_sha_mismatch"
+    exit 8
+  }
+  echo "P1_DEFINED_CROSSBLOCK_GDB=START image_sha=$pinned experimental_only=true"
+  if bash "$repo/tools/ci/linux-runtime-p1-gdb-stack-v1.sh" \
+       "$experimental_image" "$out/vmlinux" \
+       "$ev/runtime-initramfs.cpio.gz" "$LINUX_RUNTIME_CUSTOM_DTB" \
+       "$ev/p1-gdb-stack-experiment" 65; then
+    echo "P1_DEFINED_CROSSBLOCK_GDB=CAPTURED no_P1_pass_inference=true"
+  else
+    echo "P1_DEFINED_CROSSBLOCK_GDB=INCONCLUSIVE no_P1_pass_inference=true"
+  fi
+fi
 if [[ "$single_owner" == 1 ]]; then
   echo "P1_DEFINED_CROSSBLOCK=COMPLETE modified_minic=1 gcc_owners=1 minic_owners=2063 passes=$passes failures=$((3-passes)) image=$pinned experimental=true not_promoted=true"
 else
