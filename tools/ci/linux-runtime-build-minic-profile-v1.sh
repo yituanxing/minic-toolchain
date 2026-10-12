@@ -98,8 +98,13 @@ int dynamic_branch_preserved(int cond)
     return 0;
 }
 C
-"$build_dir/bin/minic" -ffreestanding -fno-builtin -nostdinc \
-  -c "$probe_dir/probe.c" -o "$probe_dir/probe.o"
+# Same path as Kbuild stage2: GNU preprocessing -> MiniC -S -> GNU AS.
+# This runtime profile intentionally builds only minic and minic-cc (no minic-cpp).
+riscv64-linux-gnu-gcc -E -P -x c "$probe_dir/probe.c" \
+  -o "$probe_dir/probe.i"
+"$build_dir/bin/minic" -S "$probe_dir/probe.i" -o "$probe_dir/probe.s"
+riscv64-linux-gnu-gcc -x assembler -c "$probe_dir/probe.s" \
+  -o "$probe_dir/probe.o"
 riscv64-linux-gnu-nm -u "$probe_dir/probe.o" >"$probe_dir/undefined.txt"
 if grep -Fq missing_arch_dma_set_uncached "$probe_dir/undefined.txt"; then
     echo "RUNTIME_DMA_BOOL_LINK_REFS=FAIL unresolved_dead_call" >&2
