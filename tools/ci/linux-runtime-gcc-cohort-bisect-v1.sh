@@ -1289,6 +1289,11 @@ last_link_source_dir=""
 trial() {
   name="$1"; count="$2"; profile="$3"; mode="${4:-prefix}"
   selection="$mode:$count"
+  if [[ "$mode" == exclude_list ]]; then
+    # Never reuse an Image after the GCC owner subset changes.
+    [[ -s "$ev/p1_gcc_rescue_set.txt" ]] || { echo "COHORT_EXCLUDE_SET=ERROR"; exit 8; }
+    selection+=":$(sha256sum "$ev/p1_gcc_rescue_set.txt" | cut -d' ' -f1)"
+  fi
   d="$ev/trials/$name"; mkdir -p "$d"
   if [[ "$selection" != "$last_selection" ]]; then
     # Kbuild candidate compilation may have regenerated headers, scripts,
@@ -2312,6 +2317,11 @@ PY_FRAME_PROLOGUE
     exit 8
   fi
   echo "COHORT_P1_OWNER_BASELINE=REPRODUCED verdict=$TRIAL_VERDICT"
+  if [[ "${COHORT_P1_MINIMIZE_RESCUE:-0}" == 1 ]]; then
+    # Each 3-GCC subgroup gets its own correctly keyed link + three boots.
+    source "$repo/tools/ci/linux-runtime-p1-minimize-rescue-v1.sh"
+    exit 0
+  fi
   if [[ "${COHORT_P1_MULTI_RESCUE:-0}" == 1 ]]; then
     cat >"$ev/p1_gcc_rescue_set.txt" <<'GCC_RESCUE_OWNERS'
 net/ipv6/ip6_output.o
