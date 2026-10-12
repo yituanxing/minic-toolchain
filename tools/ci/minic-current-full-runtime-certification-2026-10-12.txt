@@ -61,3 +61,10 @@ next_target=KERNEL_STACK_ABI_AND_FRAME_SIZE_CAUSAL_PROOF
 owner_audit=RUNNING_SYMBOL_OWNERS_AND_STACK_PROLOGUES
 original_image=SHA256_UNCHANGED
 p1_repro=KERNEL_STACK_OVERFLOW_IPV6_CHILD_CONNECT_2_OF_2
+
+# Frozen P1 differential next lane (same receiver, old 2064 .o cache):
+# Probe linked all-MiniC P1 baseline then replace only one GCC object
+# from lib/list_debug.o, net/ipv6/tcp_ipv6.o, net/ipv4/tcp_ipv4.o.
+# Original 2G QEMU/P1 oracle and exact Kbuild header reconciliation.
+p1_swap_lane=EXACT_IMMUTABLE_2064_OBJECTS_THREE_CANDIDATES
+p1_swap_ownership=NO_COMPILER_REBUILD_NO_SHARD_RECOMPILE
