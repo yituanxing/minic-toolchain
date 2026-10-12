@@ -218,3 +218,63 @@ true **function-entry SP** near the fault without treating stale stack
 words as a call trace.
 
 Do not infer Linux P1 PASS from success of the diagnostic CI workflow.
+
+
+## Focused first-fault call path — CI #38270171284 (no MiniC codegen edits)
+
+**Decisive improvement:** selective post-TCP breakpoints showed the
+normal task-stack path down through IPv6 neighbor allocation into
+SLUB and the exact last offending list-debug call. The all-MiniC
+2064-object normal P1 run **failed**; the separate GDB run on the
+identical image `f792c891ce4e565299c81100129dbab710327f377546ad9b2645a06ed71a07df`
+also failed at the same `__list_add_valid_or_report+0x1c` with
+SP **144 bytes below that run's task-stack base**.
+
+The following are *actual breakpoint entry SPs on the same TCP task*
+in time order, not symbols merely guessed from saved stack words:
+
+| Observed function entry | Task stack remaining (bytes) | Drop since prior sampled entry |
+| --- | ---: | ---: |
+| `__tcp_transmit_skb` | 12,928 | — |
+| `ip6_xmit` | 11,184 | 1,744 |
+| `ip6_output` | 8,608 | 2,576 |
+| `ip6_finish_output2` | 7,088 | 1,520 |
+| `__neigh_create` | **3,024** | **4,064** |
+| `___neigh_create` | 2,912 | 112 |
+| `neigh_alloc` | 2,336 | 576 |
+| `__kmalloc` | 1,456 | 880 |
+| `__slab_alloc_node` | 752 | 704 |
+| `get_freepointer_safe` | **480** | 272 |
+| `__list_add_valid_or_report` (later sampled entry) | 224 | not necessarily directly nested |
+| Fault after this last list-add entry | **−144** | 368 |
+
+**Precisely established critical allocation:** `7088 − 3024 =
+4064 bytes`, exactly the measured MiniC frame size of
+`ip6_finish_output2`. This is the single largest known direct stack
+drop on the captured path, and happens in a normal IPv6 neighbor
+creation route, not in demonstrated accidental recursion. The last
+`__list_add_valid_or_report` entry has 224 B left but the MiniC
+prologue needs 368 B, which matches the exact 144 B underflow.
+The earlier `get_freepointer_safe` event and later list-add event
+must not be described as an uninterrupted nested call chain just
+because their breakpoints appear consecutively.
+
+Prior paired-GCC GDB evidence in
+`docs/ci/p1-stack-overflow-evidence-2026-10-12.md` shows roughly
+8 KiB less cumulative task-stack use when `ip6_output.o` and
+`tcp_ipv6.o` are GCC. Their original plain P1 run passed 3/3
+(whereas GDB perturbation itself can still induce failure).
+
+**Causal assessment:** 16 KiB VMAP task-stack budget runs out during
+a legitimate-looking IPv6 `connect()`/neighbour/SLUB path. The
+immediate fault is real stack exhaustion. A major contributor is
+verified **MiniC frame inflation** in `ip6_finish_output2`, not an
+unexplained 1.9 MiB register jump. This does *not* prove the remaining
+compiler objects have no semantic bug or certify Linux P1 PASS.
+
+**Next fix selection:** target proven-safe elimination/physical-slot
+reuse of otherwise nonescaping dead CoreObjects across this call
+path; include IPv6 sender, TCP and hot SLUB/neighbor functions.
+Do **not** promote an unsound cross-block allocator just because it
+shrinks one function. Keep unchanged frozen objects and prove the
+exact emitted object diffs before P1 regression.
