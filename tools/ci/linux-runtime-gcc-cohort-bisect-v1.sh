@@ -1779,6 +1779,12 @@ PY_EARLY_SYMBOLS
       fi
     fi
   fi
+  # A FAIL can advance to a different faulting function. Preserve the
+  # exact P1 EPC/RA/SP fingerprint, not only the final PASS/FAIL bit.
+  if [[ "$profile" == p1 && -s "$d/qemu/rdinit-init.log" ]]; then
+    python3 "$repo/tools/ci/linux-runtime-p1-crash-fingerprint-v1.py" \
+      --trial "$name" --log "$d/qemu/rdinit-init.log"
+  fi
   echo "COHORT_TRIAL name=$name count=$count verdict=$verdict image=$image_sha"
   printf '%s\t%s\t%s\t%s\n' "$name" "$count" "$verdict" "$image_sha" >>"$ev/results.tsv"
   TRIAL_VERDICT="$verdict"
