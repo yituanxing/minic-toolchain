@@ -2325,7 +2325,8 @@ GCC_RESCUE_OWNERS
 from pathlib import Path
 import sys
 bad=set(Path(sys.argv[1]).read_text().splitlines())
-allc=set(Path(sys.argv[2]).read_text().splitlines())
+allc={x for x in Path(sys.argv[2]).read_text().splitlines()
+      if x.strip() and not x.lstrip().startswith("#")}
 assert len(bad)==4 and bad<=allc, "unknown/duplicate GCC rescue owners"
 print(f"COHORT_P1_MULTI_RESCUE=OWNERS_VERIFIED gcc={len(bad)} minic={len(allc-bad)}")
 PY_RESCUE_SET

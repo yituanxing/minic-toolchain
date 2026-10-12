@@ -24,4 +24,6 @@ Run 38227315248 reenabled **cross-basic-block CoreObject stack-slot reuse** for 
 
 ## Next controlled step
 
-Try a mixed exact four-owner GCC rescue on the certified frozen 2064-object pool: `net/ipv6/ip6_output.o`, `net/ipv6/tcp_ipv6.o`, `net/ipv4/tcp_output.o`, `net/core/dev.o`. Hash-verify every object, relink once, run the **same exact Image** 3x. This tests cumulative stack budget while keeping the 2060 MiniC owners fixed; if it passes, **it does not certify all-MiniC correctness**. Then use minimal safe CoreObject lifetime analysis and repeat P1 with a newly generated MiniC owner, not the unsafe cross-block shortcut.
+**Confirmed mixed rescue:** CI **#38228441365** restored the authenticated frozen 2064-object universe, replaced only `net/ipv6/ip6_output.o`, `net/ipv6/tcp_ipv6.o`, `net/ipv4/tcp_output.o`, and `net/core/dev.o` with GCC objects, then GNU linked a single Image of SHA-256 `c6c3456b59fcd4ce3dde6ff0e44e0fe98a5670b657500a8ad1564760537f23d0`. The same Image passed the full P1 Python-era 12-syscall contract on **three consecutive independent QEMU boots** (PASS/PASS/PASS). The all-2064-MiniC control Image failed P1 in that job. This establishes a reproducible **2060-MiniC + 4-GCC object workaround**, **not** a fully MiniC-certified compiler.
+
+Next reduce the 4-GCC rescue set by controlled A/B before deciding where to optimize safe CoreObject lifetime/stack allocation. An unverified or unsafe cross-block stack-coloring shortcut must never be promoted merely because it makes one P1 run pass.
