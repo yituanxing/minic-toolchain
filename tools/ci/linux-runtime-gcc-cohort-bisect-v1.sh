@@ -1292,6 +1292,12 @@ PY_FRAME_SUMMARY
       exit 8
     }
   done
+  if [[ "${COHORT_NONREUSE_REASON_CAPTURE:-0}" == 1 ]]; then
+    python3 "$repo/tools/ci/linux-runtime-p1-nonreuse-reason-parse-v1.py" \
+      "$frame_dir/replay.log" "$frame_dir/objects.tsv" \
+      "$frame_dir/intervals.tsv" "$frame_dir/nonreuse-reasons.tsv"
+    echo "COHORT_FRAME_NONREUSE=CLASSIFIED pinned_objects_unmodified=true"
+  fi
   echo "COHORT_FRAME_CAPTURE=ACCOUNTED functions=$(($(wc -l <"$frame_dir/components.tsv")-1)) objects=$(($(wc -l <"$frame_dir/objects.tsv")-1)) image_linked=false"
   echo "COHORT_FRAME_CAPTURE=COMPLETE relink=SKIPPED P1_oracle=NOT_RUN"
   exit 0
