@@ -132,5 +132,34 @@ one(
     "    }\n",
     "cross_block_interference",
 )
+# Function scope is mandatory for the next isolated experiment. Default
+# preserves the historical all-functions opt-in behaviour.
+one(
+    "static bool core_scalar_object_intervals_overlap(",
+    "static bool p1_crossblock_current_function_enabled = true;\n\n"
+    "static bool core_scalar_object_intervals_overlap(",
+    "function_select_declaration",
+)
+one(
+    "        return !(left->can_share_across_blocks &&\n"
+    "                 right->can_share_across_blocks);",
+    "        return !(p1_crossblock_current_function_enabled &&\n"
+    "                 left->can_share_across_blocks &&\n"
+    "                 right->can_share_across_blocks);",
+    "function_select_guard",
+)
+one(
+    "    if (!core_frame_initialize(program, function, &frame)) {",
+    "    /* Opt-in P1 test changes only the selected function's frame. */\n"
+    "    {\n"
+    "        const char *focus = getenv(\"MINIC_P1_CROSSBLOCK_FUNCTION\");\n"
+    "        p1_crossblock_current_function_enabled =\n"
+    "            focus == NULL || focus[0] == '\0' ||\n"
+    "            strcmp(focus, symbol_name) == 0;\n"
+    "    }\n"
+    "    if (!core_frame_initialize(program, function, &frame)) {",
+    "function_scope_set_before_frame",
+)
+
 path.write_text(s)
 print("P1_DEFINED_BEFORE_USE_CROSSBLOCK_V1=APPLIED opt_in=true")
