@@ -264,3 +264,11 @@ Provenance: CI #38245948250; diagnostic artifact files:
 p1-frame-components/components.tsv, objects.tsv, summary.tsv;
 per-function frame accounting and parser self-test PASS.
 No compiler runtime fix has yet been certified.
+
+## Function-scoped single-owner runtime experiment — CI #38252791263
+
+A single opt-in experiment changed **only** the CoreObject cross-block allocation for `ip6_finish_output2` within `ip6_output.o`, with `ip6_xmit` explicitly retaining the prior **2288-byte** frame. The selected function dropped **4064 → 2224 bytes**; 2062 other MiniC objects were frozen, and only `tcp_ipv6.o` came from GCC. The exact same linked Image SHA `25fb4a49e59f3a72fab549ee7ada7ca44e94080c9413d7cc4de0afeff274d64f` failed normal P1 **FAIL / FAIL / FAIL**, with overflow fingerprints in `timekeeping_get_delta` and `arch_local_irq_save` and abnormally distant SP near `0xff1fffffffffffe0`.
+
+Thus **even a single function's 1840-byte frame reduction is not a certified fix**; do not promote the experimental cross-block allocator into the default compiler. Earlier whole-`ip6_output.o` experiment changed both `ip6_finish_output2` and `ip6_xmit` and produced 1/3 PASS. This makes additional stack contributors or a separate code-generation defect plausible, but not proven.
+
+The next priority is to attribute the **259 permanent/nonreusable scalar CoreObjects** occupying ~2 KiB of the 4064-byte `ip6_finish_output2` frame, and to compare a pinned no-experiment GCC-`tcp_ipv6.o` control with experimental frames. Only then consider a proof-backed improvement to the lowering rules.
