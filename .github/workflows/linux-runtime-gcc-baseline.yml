@@ -752,10 +752,6 @@ jobs:
           # Compute stable profile ID from pristine MiniC sources, BEFORE
           # applying any of the build-time profile patches.
           profile=$(python3 tools/ci/linux-runtime-profile-cache-id-v1.py)
-          if [[ "${{ contains(github.event.head_commit.message, '[linux-runtime-reuse-objects]') && '1' || '0' }}" == 1 ]]; then
-            profile=1f48b327074ab6ed1356fbb8bd5fe0e4097da6529c205507916d52d70cf5d4c8
-            echo "COHORT_P1_REUSE_CACHE=PINNED_FROZEN_2064_PRIOR_COMPILER"
-          fi
           objects=$(sha256sum "$ev/full-objects.txt" | cut -d' ' -f1)
           gcc=$(sha256sum "$(command -v riscv64-linux-gnu-gcc)" | cut -d' ' -f1)
           assembler=$(sha256sum "$(command -v riscv64-linux-gnu-as)" | cut -d' ' -f1)
@@ -894,7 +890,7 @@ jobs:
           export COHORT_P1_STACK_OWNER_SWAPS=${{ contains(github.event.head_commit.message, '[linux-runtime-stack-owners]') && '1' || '0' }}
           export COHORT_P1_IDENTICAL_IMAGE_REPEAT=${{ contains(github.event.head_commit.message, '[linux-runtime-repeat-image]') && '1' || '0' }}
           export COHORT_P1_GDB_STACK=${{ contains(github.event.head_commit.message, '[linux-runtime-gdb-stack]') && '1' || '0' }}
-          export COHORT_P1_REUSE_CROSSBLOCK=${{ contains(github.event.head_commit.message, '[linux-runtime-reuse-objects]') && '1' || '0' }}
+          export COHORT_P1_MULTI_RESCUE=${{ contains(github.event.head_commit.message, '[linux-runtime-multi-rescue]') && '1' || '0' }}
           export COHORT_FRAME_CAPTURE_ONLY=${{ contains(github.event.head_commit.message, '[linux-runtime-frame-components]') && '1' || '0' }}
           # #38219062394 identified 4064B and 2288B MiniC stack frames in
           # ip6_finish_output2 and ip6_xmit. Test the containing C owner,
@@ -926,10 +922,9 @@ jobs:
             build/linux-runtime-gcc-cohort-v1/results.tsv
             build/linux-runtime-gcc-cohort-v1/frontier.txt
             build/linux-runtime-gcc-cohort-v1/p1-owner-verdicts.tsv
+            build/linux-runtime-gcc-cohort-v1/p1-multi-rescue-repeats.tsv
+            build/linux-runtime-gcc-cohort-v1/p1_gcc_rescue_set.txt
             build/linux-runtime-gcc-cohort-v1/p1-identical-image-repeats.tsv
-            build/linux-runtime-gcc-cohort-v1/p1-crossblock-reuse/*.txt
-            build/linux-runtime-gcc-cohort-v1/p1-crossblock-reuse/*.tsv
-            build/linux-runtime-gcc-cohort-v1/p1-crossblock-reuse/*.log
             build/linux-runtime-gcc-cohort-v1/p1-gdb-stack/*.log
             build/linux-runtime-gcc-cohort-v1/p1-gdb-stack/*.txt
             build/linux-runtime-gcc-cohort-v1/p1-gdb-stack/*.gdb
