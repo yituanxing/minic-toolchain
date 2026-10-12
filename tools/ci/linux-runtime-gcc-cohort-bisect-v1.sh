@@ -2283,6 +2283,17 @@ PY_FRAME_PROLOGUE
   trial p1_full_minic "$n" p1
   baseline_verdict="$TRIAL_VERDICT"
   baseline_image_sha="$image_sha"
+  if [[ "${COHORT_P1_PAIR_DEBUG:-0}" == 1 ]]; then
+    # GDB observes the exact already-linked all-MiniC FAILED control.
+    # No new compiler invocation, no new Image link, no object changes.
+    echo "COHORT_P1_PAIR_GDB=START case=all_minic image=$baseline_image_sha"
+    bash "$repo/tools/ci/linux-runtime-p1-function-calltrace-v1.sh" \
+      "$ev/trials/p1_full_minic/Image" "$out/vmlinux" \
+      "$ev/runtime-initramfs.cpio.gz" "$LINUX_RUNTIME_CUSTOM_DTB" \
+      "$ev/p1-pair-calltrace/all-minic" 65 || {
+      echo "COHORT_P1_PAIR_GDB=INCONCLUSIVE case=all_minic"
+    }
+  fi
   if [[ "${COHORT_P1_IDENTICAL_IMAGE_REPEAT:-0}" == 1 ]]; then
     # Fresh QEMU process each time; no relink, no source changes.
     # Repeated success/failure on ONE IMAGE distinguishes runtime scheduling
