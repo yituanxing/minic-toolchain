@@ -99,7 +99,7 @@ injection = r'''    /* P1_FRAME_DIAGNOSTIC_ONLY_V1: inspect the *final* patched 
                     (void)fprintf(
                         stderr,
                         "CORE_FRAME_INTERVAL function=%s id=%zu reusable=%u "
-                        "block=%zu first=%zu last=%zu\\n",
+                        "block=%zu first=%zu last=%zu\n",
                         symbol_name, i, life->reusable ? 1U : 0U,
                         life->block_index, life->first_position,
                         life->last_position);
