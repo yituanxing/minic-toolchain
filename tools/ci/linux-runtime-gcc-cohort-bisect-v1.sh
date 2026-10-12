@@ -255,8 +255,12 @@ SH_STAGE_LAUNCHER
     echo "COHORT_STAGE_PROFILE=ENABLED minic=$minic gcc=/usr/bin/riscv64-linux-gnu-gcc"
   fi
   echo "COHORT_KBUILD_PARALLELISM jobs=$compile_jobs scope=$cohort_scope"
+  keep_dma_inputs=0
+  if ((n == 1)) && [[ "${objects[0]}" == kernel/dma/direct.o ]]; then
+    keep_dma_inputs=1
+  fi
   MINIC="$probe_minic" REAL_CC="$probe_gcc" \
-    MINIC_KEEP_INTERMEDIATES=0 MINIC_PRESERVE_FAILURE_INPUTS=1 \
+    MINIC_KEEP_INTERMEDIATES="$keep_dma_inputs" MINIC_PRESERVE_FAILURE_INPUTS=1 \
     MINIC_KBUILD_SUCCESS_TRACE="$ev/mini-success-objects.txt" \
     MINIC_KBUILD_OBJECT_HASH_TRACE="$ev/mini-object-hashes.sha256" \
     make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
@@ -274,7 +278,7 @@ SH_STAGE_LAUNCHER
       done
       retry_rc=0
       MINIC="$probe_minic" REAL_CC="$probe_gcc" \
-        MINIC_KEEP_INTERMEDIATES=0 MINIC_PRESERVE_FAILURE_INPUTS=1 \
+        MINIC_KEEP_INTERMEDIATES="$keep_dma_inputs" MINIC_PRESERVE_FAILURE_INPUTS=1 \
         MINIC_KBUILD_SUCCESS_TRACE="$ev/mini-success-objects.txt" \
         MINIC_KBUILD_OBJECT_HASH_TRACE="$ev/mini-object-hashes.sha256" \
         make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
@@ -376,6 +380,28 @@ PY_STAGE_TOTALS
     if [[ -s "$zero_trace" ]]; then
       cp -a "$zero_trace" "$ev/dma-zero-facts.log"
       grep 'DMA_ZERO_PROOF' "$zero_trace" | tail -n 64 || true
+    fi
+    dma_input="$out/kernel/dma/direct.minic-stage2.i"
+    if [[ -s "$dma_input" ]]; then
+      # Human-readable exact preprocessed context around the DMA branch,
+      # without uploading the large source to every normal run.
+      python3 - "$dma_input" "$ev/dma-kernel-source.txt" <<'PY_DMA_CONTEXT'
+from pathlib import Path
+import sys
+lines=Path(sys.argv[1]).read_text(errors="replace").splitlines()
+needle="arch_dma_set_uncached("
+positions=[i for i,x in enumerate(lines) if needle in x]
+regions=set()
+for k in positions:
+    for i in range(max(0,k-100),min(len(lines),k+25)):
+        regions.add(i)
+with Path(sys.argv[2]).open("w") as out:
+    for i in sorted(regions):
+        out.write(f"{i+1}: {lines[i]}\\n")
+print("DMA_PREPROCESSED_REF_CONTEXT=" + str(len(positions)) +
+      " lines=" + str(len(regions)))
+PY_DMA_CONTEXT
+      tail -n 130 "$ev/dma-kernel-source.txt"
     fi
   fi
 fi
