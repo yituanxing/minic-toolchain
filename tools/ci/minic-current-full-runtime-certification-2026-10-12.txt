@@ -24,3 +24,5 @@ gnu_relink=PROHIBITED
 oracle=original-P0-P1-and-shell
 full_link=PASS
 runtime=PENDING_2G_QEMU_REPLAY
+workflow_parser=FIXED_DUPLICATE_IF_KEY
+receiver=REUSE_EXISTING_gcc-shard-verify
