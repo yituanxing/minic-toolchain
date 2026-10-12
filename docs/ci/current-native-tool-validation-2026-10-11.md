@@ -865,3 +865,16 @@ with no slow CPU instruction logging. This reuses the identical Image,
 adds no workflow or job, and keeps the GNU-reference and
 triple-native certification unchanged. Linux runtime remains FAIL
 until genuine P0/P1 guest evidence exists.
+
+### QEMU real-speed snapshot harness correction
+
+[#38188821115](https://github.com/yituanxing/minic-toolchain/actions/runs/38188821115)
+correctly kept the repaired Image source fixed, but its initial
+HMP monitor command probe returned only the interactive '(qemu)'
+prompt rather than CPU registers. That is a **diagnostic harness
+defect**, not evidence of a new linker semantic failure.
+To obtain unambiguous registers without slowing the guest,
+the existing replay diagnostic now uses QMP capabilities plus
+human-monitor-command(info registers) and captures the returned
+machine-readable QMP response. The exact Linux Image and full
+P0/P1 oracle remain unaffected.

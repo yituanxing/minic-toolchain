@@ -411,23 +411,32 @@ jobs:
               "-bios", "default", "-kernel", str(image),
               "-initrd", str(initrd),
               "-append", "console=ttyS0 earlycon=sbi loglevel=8 panic=-1 rdinit=/init",
-              "-monitor", "unix:" + str(sockpath) + ",server=on,wait=off",
+              "-qmp", "unix:" + str(sockpath) + ",server=on,wait=off",
           ]
-          def query_monitor(sock, command):
-              sock.sendall((command + "\n").encode())
-              parts = []
-              until = time.monotonic() + 2.0
-              while time.monotonic() < until:
-                  try:
-                      chunk = sock.recv(65536)
-                  except socket.timeout:
-                      continue
-                  if not chunk:
-                      break
-                  parts.append(chunk)
-                  if b"(qemu)" in chunk:
-                      break
-              return b"".join(parts).decode("utf-8", "replace")
+          def query_qmp(sockpath):
+              import json
+              with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
+                  sock.settimeout(3)
+                  sock.connect(str(sockpath))
+                  stream = sock.makefile("rwb", buffering=0)
+                  hello = json.loads(stream.readline())
+                  if "QMP" not in hello:
+                      raise RuntimeError("QMP greeting missing")
+                  def execute(command, arguments=None):
+                      obj = {"execute": command}
+                      if arguments is not None:
+                          obj["arguments"] = arguments
+                      stream.write(json.dumps(obj).encode() + b"\n")
+                      for _ in range(20):
+                          reply = json.loads(stream.readline())
+                          if "return" in reply:
+                              return reply["return"]
+                          if "error" in reply:
+                              raise RuntimeError(str(reply["error"]))
+                      raise RuntimeError("QMP reply missing")
+                  execute("qmp_capabilities")
+                  return execute("human-monitor-command",
+                                 {"command-line": "info registers"})
 
           with open(work / "qemu-debug/uart.log", "wb") as uart, \
                open(logpath, "w", encoding="utf-8") as out:
@@ -439,13 +448,8 @@ jobs:
                       if proc.poll() is not None:
                           out.write("QEMU_EXIT=" + str(proc.returncode) + "\n")
                           break
-                      with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as mon:
-                          mon.settimeout(0.5)
-                          mon.connect(str(sockpath))
-                          # Drain initial HMP greeting/prompt before querying.
-                          query_monitor(mon, "")
-                          greeting = query_monitor(mon, "info registers")
-                          out.write("=== CPU SAMPLE ===\n" + greeting + "\n")
+                      greeting = query_qmp(sockpath)
+                      out.write("=== CPU SAMPLE ===\n" + str(greeting) + "\n")
                   out.flush()
               finally:
                   proc.terminate()
