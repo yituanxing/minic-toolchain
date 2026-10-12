@@ -757,7 +757,7 @@ jobs:
       # Reuse the exact 215511040-byte Image from the previous 2064-object
       # successful GNU link. This opt-in path never rebuilds or relinks C.
       - name: Restore immutable full MiniC Linux Image from earlier CI
-        if: contains(github.event.head_commit.message, '[linux-runtime-large-image-qemu]')
+        if: contains(github.event.head_commit.message, '[linux-runtime-large-image-qemu]') && !contains(github.event.head_commit.message, '[linux-runtime-historical-nine-p1]')
         uses: actions/download-artifact@v4
         with:
           run-id: 38204602644
