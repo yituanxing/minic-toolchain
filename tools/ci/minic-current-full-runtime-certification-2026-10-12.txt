@@ -43,4 +43,13 @@ relocated_initrd=0xa0000000
 full_P0_run=38207723736
 full_P0=PASS
 full_P1=FAIL_IPV6_CONNECT_KERNEL_STACK_OVERFLOW
-next=INDEPENDENT_SHELL_CERTIFICATION_AND_TCP_STACK_OWNER_ANALYSIS
+next=TCP_IPV6_KERNEL_STACK_OWNER_AND_FRAME_PROLOGUE_CAUSAL_ANALYSIS
+# Immutable Image QEMU 2G DTB load run 38207896965 is now the formal
+# first complete single-image runtime frontier.  Original SHA-256 unchanged.
+# Existing Python-era P0=PASS and shell=PASS (independent dedicated boots).
+# IPv6 TCP P1=FAIL after six preceding syscall groups green. Repro 2/2.
+latest_run=38207896965
+full_P0=PASS
+full_shell=PASS
+full_P1=FAIL_2X_KERNEL_STACK_OVERFLOW_AT_IPV6_CHILD_CONNECT
+next_target=KERNEL_STACK_ABI_AND_FRAME_SIZE_CAUSAL_PROOF
