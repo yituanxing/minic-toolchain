@@ -56,6 +56,7 @@ patches=(
   apply-netlink-if-control-trace-v0.py
   apply-core-goto-label-fact-barrier-v0.py
   apply-runtime-if-fallthrough-facts-v1.py
+  apply-runtime-stable-zero-bools-v0.py
 )
 
 start=$(date +%s%N)
