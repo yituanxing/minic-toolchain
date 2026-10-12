@@ -27,6 +27,9 @@ export MINIPP="$bins/minic-cpp"
 export MINIPP_LINUX_TRACE="$stage/minipp.trace"
 export MINIPP_LINUX_WORK="$stage/inputs"
 export MINIPP_LINUX_SRC="$src"
+# MiniAS wrapper also builds shadow GNU early-boot object references for
+# selected owner paths, even when producing actual MiniAS .o files.
+export MINIAS_GNU_ROOT="$work/golden-as"
 export MINIPP_LINUX_SELECT_FILE="$stage/selected-command-sources.txt"
 export MINIPP_LINUX_SUBSTITUTE=true
 export REAL_CC=riscv64-linux-gnu-gcc
@@ -78,6 +81,23 @@ for obj, args, source in commands:
 print("MINIPP_NATIVE_OBJECTS=PASS exact=2 fallback=0", flush=True)
 PY
 
+# Snapshot exact production objects before calling Kbuild again.
+# This prevents a false PASS if Kbuild silently recompiles our MiniPP .o
+# with the original GNU preprocessing command.
+python3 - "$out" "$stage/production-object-identity.json" <<'PY'
+import hashlib, json, pathlib, sys
+out=pathlib.Path(sys.argv[1])
+targets=["init/main.o", "kernel/configs.o"]
+obj={}
+for name in targets:
+    path=out/name
+    st=path.stat()
+    obj[name]={"size":st.st_size, "mtime_ns":st.st_mtime_ns,
+               "sha256":hashlib.sha256(path.read_bytes()).hexdigest()}
+pathlib.Path(sys.argv[2]).write_text(json.dumps(obj,sort_keys=True,indent=2)+"\n")
+print("MINIPP_NATIVE_OBJECT_IDENTITY=RECORDED objects=2")
+PY
+
 test "$(grep -c '^SUBSTITUTE ' "$stage/minipp.trace")" -eq 2
 test "$(grep -c 'status=EXACT' "$stage/minipp.trace")" -eq 2
 test "$(grep -Ec 'status=DIFF|status=MINIPP_FAIL' "$stage/minipp.trace" || true)" -eq 0
@@ -96,6 +116,19 @@ if ! make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
   tail -n 100 "$stage/kbuild.log" >&2
   exit 1
 fi
+python3 - "$out" "$stage/production-object-identity.json" <<'PY'
+import hashlib, json, pathlib, sys
+out=pathlib.Path(sys.argv[1])
+before=json.loads(pathlib.Path(sys.argv[2]).read_text())
+for name,want in before.items():
+    path=out/name
+    st=path.stat()
+    observed={"size":st.st_size, "mtime_ns":st.st_mtime_ns,
+              "sha256":hashlib.sha256(path.read_bytes()).hexdigest()}
+    if observed != want:
+        raise SystemExit(f"MINIPP_NATIVE_OBJECT_IDENTITY=FAIL reverted_or_rebuilt={name} before={want} after={observed}")
+print("MINIPP_NATIVE_OBJECT_IDENTITY=PASS objects=2 no_kbuild_reversion=1")
+PY
 elapsed=$(( $(date +%s) - start ))
 native_ld=$(grep -c '^minild ' "$stage/minild.trace" || true)
 test "$native_ld" -eq 3 || {
