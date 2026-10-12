@@ -377,6 +377,36 @@ jobs:
             echo "MINIOBJCOPY_LINUX_SINGLE_RUNTIME=PASS profile=fast head=$GITHUB_SHA"
           fi
 
+      - name: Diagnose MiniLD pre-banner failure with bounded QEMU CPU trace
+        if: failure() && env.MINIOBJCOPY_REPLAY_MODE == 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/miniobjcopy-linux-tool-work"
+          image="$work/out/arch/riscv/boot/Image"
+          initramfs="$work/runtime-initramfs.cpio.gz"
+          log="$work/qemu-debug/minild-cpu.log"
+          mkdir -p "$work/qemu-debug"
+          test -s "$image"
+          test -s "$initramfs"
+          # A full 90s boot already failed. Capture early instruction/CPU
+          # state without another kernel rebuild or a large unbounded trace.
+          set +e
+          (
+            ulimit -f 16384 || true
+            timeout --signal=TERM 6s qemu-system-riscv64 \
+              -M virt -cpu max -m 512M -smp 1 -nographic -no-reboot \
+              -bios default -kernel "$image" -initrd "$initramfs" \
+              -append "console=ttyS0 earlycon=sbi loglevel=8 panic=-1 rdinit=/init" \
+              -d in_asm,cpu,guest_errors -D "$log" \
+              </dev/null >"$work/qemu-debug/uart.log" 2>&1
+          )
+          rc=$?
+          set -e
+          printf 'MINILD_QEMU_TRACE rc=%s size=%s\n' "$rc" "$(stat -c '%s' "$log" 2>/dev/null || echo 0)"
+          echo "--- last CPU/instruction blocks ---"
+          tail -n 100 "$log" || true
+
       - name: Preserve Linux MiniObjcopy frontier
         if: always()
         uses: actions/upload-artifact@v4
@@ -386,6 +416,7 @@ jobs:
             build/miniobjcopy-linux-tool-work/miniobjcopy.trace
             build/miniobjcopy-linux-tool-work/minild.trace
             build/miniobjcopy-linux-tool-work/kbuild.log
+            build/miniobjcopy-linux-tool-work/qemu-debug/*.log
             build/miniobjcopy-linux-tool-work/qemu-runtime/*.log
             build/miniobjcopy-linux-tool-work/qemu-p1/*.log
             build/miniobjcopy-linux-tool-work/native-integration/*.trace
