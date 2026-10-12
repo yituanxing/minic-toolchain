@@ -17,6 +17,7 @@ out="$work/out32"
 toolchain="$work/minic-profile"
 mkdir -p "$ev"
 exec > >(tee "$ev/stack-size-control.log") 2>&1
+echo "P1_STACK32_GOAL=CAPACITY_CAUSAL_CONTROL no_compiler_codegen_edits=true desired_task_stack=32768 desired_irq_stack=32768 same_2064_owners_required=true"
 trap 'rc=$?; echo "P1_STACK32_UNHANDLED rc=$rc line=$LINENO cmd=$BASH_COMMAND" >&2' ERR
 
 test -s "$old/.config" && test -s "$old/arch/riscv/boot/Image"
