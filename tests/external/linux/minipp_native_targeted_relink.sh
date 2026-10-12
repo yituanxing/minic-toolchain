@@ -2,8 +2,8 @@
 # Certify two MiniPP-produced translation units, preserving the same
 # 4-native GNU-GCC object tree and its original Kbuild commands.
 set -Eeuo pipefail
-work=\${MINI_TOOLS_WORK:?}
-bins=\${MINI_TOOLS_BIN:?}
+work=${MINI_TOOLS_WORK:?}
+bins=${MINI_TOOLS_BIN:?}
 src="$work/linux-6.6.143"
 out="$work/out"
 stage="$work/native-pp-two"
@@ -16,12 +16,12 @@ test -x "$bins/minic-cpp"
 test -x "$four/ld-final"
 test -s "$out/arch/riscv/boot/Image"
 test -s "$work/runtime-initramfs.cpio.gz"
-: "\${MINIAS_AS_TRACE:?}"
-: "\${MINILD_TRACE:?}"
-: "\${MINILD:?}"
-: "\${MINIAR:?}"
-: "\${MINIOBJCOPY:?}"
-: "\${REAL_AS:?}"
+: "${MINIAS_AS_TRACE:?}"
+: "${MINILD_TRACE:?}"
+: "${MINILD:?}"
+: "${MINIAR:?}"
+: "${MINIOBJCOPY:?}"
+: "${REAL_AS:?}"
 : >"$stage/minipp.trace"
 export MINIPP="$bins/minic-cpp"
 export MINIPP_LINUX_TRACE="$stage/minipp.trace"
