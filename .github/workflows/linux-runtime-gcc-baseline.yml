@@ -13,6 +13,7 @@ on:
 
 permissions:
   contents: read
+  actions: read  # Same-repository exact historical Image artifact download
 
 # P1 calibration rerun after loopback bring-up.
 
@@ -638,7 +639,10 @@ jobs:
 
   gcc-shard-verify:
     needs: gcc-shards
-    if: github.event_name == 'push' && contains(github.event.head_commit.message, '[linux-runtime-gcc-sharded]')
+    # Use the SAME receiver job for exact immutable Image reboots. When the
+    # seven producer jobs are skipped, always() prevents needs' implicit skip;
+    # the ordinary full-shard path still requires a successful producer.
+    if: always() && github.event_name == 'push' && ((contains(github.event.head_commit.message, '[linux-runtime-gcc-sharded]') && needs.gcc-shards.result == 'success') || contains(github.event.head_commit.message, '[linux-runtime-large-image-qemu]'))
     runs-on: ubuntu-24.04
     timeout-minutes: 95
     steps:
@@ -659,7 +663,40 @@ jobs:
                 qemu-system-misc opensbi libc6-dev-riscv64-cross python3 make cpio gzip device-tree-compiler gdb-multiarch
             }
 
+      # Reuse the exact 215511040-byte Image from the previous 2064-object
+      # successful GNU link. This opt-in path never rebuilds or relinks C.
+      - name: Restore immutable full MiniC Linux Image from earlier CI
+        if: contains(github.event.head_commit.message, '[linux-runtime-large-image-qemu]')
+        uses: actions/download-artifact@v4
+        with:
+          run-id: 38204602644
+          github-token: ${{ github.token }}
+          name: sharded-gnu-minic-QEMU-d5dde03594665842f2bb3b8556f842f511a5dfa4
+          path: build/linux-runtime-large-image-qemu-v0/source-artifact
+
+      - name: Run original Image in 2G QEMU against P0 P1 and shell oracles
+        if: contains(github.event.head_commit.message, '[linux-runtime-large-image-qemu]')
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          bash tools/ci/linux-runtime-large-image-qemu-v0.sh \
+            "$GITHUB_WORKSPACE/build/linux-runtime-large-image-qemu-v0/source-artifact"
+
+      - name: Preserve exact large Image boot and failure evidence
+        if: always() && contains(github.event.head_commit.message, '[linux-runtime-large-image-qemu]')
+        uses: actions/upload-artifact@v4
+        with:
+          name: minic-large-image-qemu-${{ github.sha }}
+          path: |
+            build/linux-runtime-large-image-qemu-v0/provenance.txt
+            build/linux-runtime-large-image-qemu-v0/initramfs.log
+            build/linux-runtime-large-image-qemu-v0/*.stdout.log
+            build/linux-runtime-large-image-qemu-v0/qemu-*/*.log
+          if-no-files-found: warn
+          retention-days: 7
+
       - name: Restore identical certified GNU golden objects
+        if: "!contains(github.event.head_commit.message, '[linux-runtime-large-image-qemu]')"
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -670,6 +707,7 @@ jobs:
           echo "key=linux-gnu-golden-v1-6.6.143-$config-$gcc_sig-$ld_sig" >>"$GITHUB_ENV"
 
       - uses: actions/cache/restore@v4
+        if: "!contains(github.event.head_commit.message, '[linux-runtime-large-image-qemu]')"
         with:
           path: |
             build/linux-runtime-gcc/out
@@ -678,10 +716,12 @@ jobs:
           fail-on-cache-miss: true
 
       - uses: ./.github/actions/linux-runtime-restore-fixture
+        if: "!contains(github.event.head_commit.message, '[linux-runtime-large-image-qemu]')"
         with:
           fixture: source
 
       - name: Reconstruct complete GNU C manifest
+        if: "!contains(github.event.head_commit.message, '[linux-runtime-large-image-qemu]')"
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -702,12 +742,14 @@ jobs:
           echo "FULL_MINIC_KEY=gnu-minic-objects-v1-eeb04f304ebfb97a1079c187dc0c2ea3cc61fc50a55aa3cc776237c16ab19bbe-$profile-$objects-$gcc-$assembler" >>"$GITHUB_ENV"
 
       - uses: actions/download-artifact@v4
+        if: "!contains(github.event.head_commit.message, '[linux-runtime-large-image-qemu]')"
         with:
           pattern: shard-*
           path: build/linux-runtime-gcc-shards-v1
           merge-multiple: false
 
       - name: Build identical MiniC profile and verify exact shard union
+        if: "!contains(github.event.head_commit.message, '[linux-runtime-large-image-qemu]')"
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -726,6 +768,7 @@ jobs:
             --assembler /usr/bin/riscv64-linux-gnu-as
 
       - name: Retain fully verified MiniC objects before link or runtime
+        if: "!contains(github.event.head_commit.message, '[linux-runtime-large-image-qemu]')"
         uses: actions/cache/save@v4
         with:
           path: |
@@ -735,6 +778,7 @@ jobs:
           key: ${{ env.FULL_MINIC_KEY }}
 
       - name: GNU-only link and QEMU with NO MiniC recompilation
+        if: "!contains(github.event.head_commit.message, '[linux-runtime-large-image-qemu]')"
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -748,6 +792,7 @@ jobs:
             "$work/provenance" "$ev/full-objects.txt" "$ev"
 
       - name: Preserve aggregate link, QEMU and failure-frontier evidence
+        if: "!contains(github.event.head_commit.message, '[linux-runtime-large-image-qemu]')"
         if: always()
         uses: actions/upload-artifact@v4
         with:
