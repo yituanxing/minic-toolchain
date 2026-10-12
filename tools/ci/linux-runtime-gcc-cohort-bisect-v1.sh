@@ -1252,6 +1252,21 @@ if [[ "${COHORT_FRAME_CAPTURE_ONLY:-0}" == 1 ]]; then
       grep -E '^CORE_FRAME' "$stderr" >>"$frame_dir/replay.log" || true
     fi
   done <"$frame_dir/selected.txt"
+  if [[ "${COHORT_NONREUSE_REASON_CAPTURE:-0}" == 1 ]]; then
+    # Preserve the exact -E -P input for mapping emitted CoreObject spans
+    # back to the GNU-preprocessed Linux C TU. Retain only the targeted
+    # IPv6 .i, not the 2064-object universe or a new kernel Image.
+    source_i="$out/net/ipv6/ip6_output.minic-stage2.i"
+    [[ -s "$source_i" ]] || {
+      echo "COHORT_FRAME_SOURCE=ERROR missing_ip6_output_preprocessed_i"; exit 8;
+    }
+    sha256sum "$source_i" >"$frame_dir/ip6_output.source.sha256"
+    gzip -n -9 -c "$source_i" >"$frame_dir/ip6_output.i.gz"
+    [[ -s "$frame_dir/ip6_output.i.gz" ]] || {
+      echo "COHORT_FRAME_SOURCE=ERROR failed_to_compress_i"; exit 8;
+    }
+    echo "COHORT_FRAME_SOURCE=CAPTURED file=ip6_output.i.gz sha=$(sha256sum "$source_i" | cut -d' ' -f1)"
+  fi
   python3 - "$frame_dir/replay.log" "$frame_dir/summary.tsv" <<'PY_FRAME_SUMMARY'
 from pathlib import Path
 import re,sys
