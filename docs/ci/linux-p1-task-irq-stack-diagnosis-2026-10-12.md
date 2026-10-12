@@ -122,3 +122,51 @@ promote the GDB-observed image as P1 PASS. The next most targeted
 investigation is the exact task-call-chain prologues causing the drop
 from 7,088 to 224 bytes, then, separately, the modified image's IRQ
 stack allocation and call-chain.
+
+
+## Second CI confirmation: the experimental Image has a **real IRQ-stack underflow**
+
+Diagnostic run **#38266372041**, commit `32a2008c5feb...`,
+reconstructed the same opt-in experimental profile as the earlier
+IPv6 trial: exactly one newly compiled MiniC `ip6_output.o`, one GCC
+`tcp_ipv6.o`, and the other 2062 unchanged MiniC objects.
+
+- P1 normal reboots: `FAIL` **0/3**; the **same** SHA256 Image
+  `7453a45063bb7d608ec40abc3b5cf0573159b5ee65b6f84990432d71f206f949`
+  was used for all three.
+- Under that **same experimental Image**, a separate GDB reboot read
+  `irq_stack_ptr` through `__per_cpu_offset[0]` and verified the actual
+  IRQ-stack range:
+  `[ff20000000000000 .. ff20000000004000)` (16 KiB).
+  GDB also observed the IRQ-handler's entry SP within this range.
+- The 3 uninstrumented P1 failures saved trapped SPs below the **verified
+  IRQ base by exactly 128, 32, and 32 bytes**. The independent correlation
+  produces `P1_DEFINED_CROSSBLOCK_IRQ=VERIFIED` and a dedicated
+  `p1-defined-ip6-only/p1-irq-attribution.tsv` in the uploaded CI artifact.
+- A GDB-sampled IRQ call path shows `hrtimer_interrupt` entering
+  with 9,200 bytes remaining, `rb_erase` with 8,064,
+  `ip6_xmit` with 7,936 and `ip6_finish_output2` with 4,608.
+  Those values are **entry SPs** observed in a perturbed GDB run;
+  they do not alone identify the lowest SP or an erroneous codegen rule.
+- The opt-in IPv6 frame sizes were confirmed as
+  `ip6_xmit=1520 B` and `ip6_finish_output2=2272 B`.
+  Reducing both was **insufficient** to pass the original P1 oracle.
+
+**What is now established:** the all-MiniC 2064 control can exhaust a
+16 KiB **task** stack, and the modified IPv6/GCC one-owner experimental
+configuration can exhaust the real 16 KiB **IRQ** stack. Both are backed
+by Linux's saved exception SP and direct per-CPU GDB stack-base
+measurement. The two observed overflow mechanisms should no longer
+be confused with an arbitrary 1.9 MB SP corruption.
+
+**What remains unproven:** these two exceptions by themselves do not
+prove every upstream instruction is correct, that no spurious recursion
+exists, or that the only solution is stack-slot optimization. They prove
+that stack capacity is the immediate fatal boundary in both tested
+profiles, not why the active call-chain has that depth.
+
+**Next diagnostic priority:** capture the immediate call/prologue chain
+*before* the low SP for the task/IRQ contexts, distinguishing true frame
+sizes from accidental recursion or register corruption. Do not turn
+the successful GitHub workflow status for this *diagnostic* into a false
+Linux P1 PASS.
