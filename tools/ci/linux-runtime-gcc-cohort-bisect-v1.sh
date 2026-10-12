@@ -257,7 +257,7 @@ SH_STAGE_LAUNCHER
   fi
   echo "COHORT_KBUILD_PARALLELISM jobs=$compile_jobs scope=$cohort_scope"
   keep_dma_inputs=0
-  if ((n == 1)) && [[ "${objects[0]}" == kernel/dma/direct.o ]]; then
+  if ((n == 1)) && [[ "${objects[0]}" == kernel/dma/direct.o || "${objects[0]}" == mm/shmem.o ]]; then
     keep_dma_inputs=1
   fi
   MINIC="$probe_minic" REAL_CC="$probe_gcc" \
@@ -405,6 +405,29 @@ print("DMA_PREPROCESSED_REF_CONTEXT=" + str(len(positions)) +
 PY_DMA_CONTEXT
       tail -n 130 "$ev/dma-kernel-source.txt"
     fi
+  fi
+  if ((n == 1)) && [[ "${objects[0]}" == mm/shmem.o ]]; then
+    shmem_i="$out/mm/shmem.minic-stage2.i"
+    shmem_s="$out/mm/shmem.minic-stage2.s"
+    test -s "$shmem_i"
+    test -s "$shmem_s"
+    python3 - "$shmem_i" "$shmem_s" "$ev/shmem-assert-context.txt" <<'PY_SHMEM_ASSERT'
+from pathlib import Path
+import re,sys
+pre=Path(sys.argv[1]).read_text(errors="replace").splitlines()
+asm=Path(sys.argv[2]).read_text(errors="replace").splitlines()
+out=[]
+regex=re.compile(r"__compiletime_assert_\\d+")
+for title,lines in (("GNU_PREPROCESSED",pre),("MINIC_ASSEMBLY",asm)):
+    match_indices=[i for i,s in enumerate(lines) if regex.search(s)]
+    out.append(f"SHMEM_CAPTURE stage={title} matches={len(match_indices)}")
+    for n in match_indices[:40]:
+        out.append(f"SHMEM_CAPTURE stage={title} center={n+1}")
+        for k in range(max(0,n-7),min(len(lines),n+6)):
+            out.append(f" {k+1}: {lines[k][:700]}")
+Path(sys.argv[3]).write_text("\\n".join(out)+"\\n")
+print("\\n".join(out)[:20000])
+PY_SHMEM_ASSERT
   fi
 fi
 python3 - "$ev/gcc" "$ev/minic" "$objects_file" <<'PY_ABI'
