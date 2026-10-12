@@ -74,10 +74,11 @@ static bool core_runtime_if_guard_preserves_locals_depth(
         return true;
     }
     if (expression->kind == MINIC_EXPRESSION_CALL) {
-        const MinicExpression *callee =
-            minic_c0_program_expression(program, expression->value.call.callee);
-        /* Never bless an indirect callback with unknown argument handling. */
-        if (callee == NULL || callee->kind != MINIC_EXPRESSION_FUNCTION) {
+        /* Direct calls store the function_id, not a source callee expr.
+           Indirect calls have function_id == MINIC_FUNCTION_INVALID. */
+        if (expression->value.call.function_id == MINIC_FUNCTION_INVALID ||
+            minic_c0_program_function(
+                program, expression->value.call.function_id) == NULL) {
             return false;
         }
         for (i = 0U; i < expression->value.call.argument_count; ++i) {
