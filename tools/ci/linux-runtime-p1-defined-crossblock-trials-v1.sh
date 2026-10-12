@@ -9,7 +9,14 @@ single_owner="${COHORT_P1_SINGLE_OWNER:-0}"
 if [[ "$single_owner" == 1 ]]; then
   # Preserve old codegen in every function except one suspect frame;
   # only ip6_finish_output2 is permitted to use the experimental allocator.
-  export MINIC_P1_CROSSBLOCK_FUNCTION=ip6_finish_output2
+  if [[ "${COHORT_P1_DISCARD_EQ:-0}" == 1 ]]; then
+    # Test semantic removal of genuinely discarded (&a == &b) with two
+    # local variables; do not touch stack slot reuse in this experiment.
+    export MINIC_P1_DISCARD_EQ_FUNCTION=ip6_finish_output2
+    echo "P1_DISCARD_EQ=FUNCTION_RESTRICTED name=ip6_finish_output2"
+  else
+    export MINIC_P1_CROSSBLOCK_FUNCTION=ip6_finish_output2
+  fi
   dest="$ev/p1-defined-ip6-only"
 else
   dest="$ev/p1-defined-crossblock"
