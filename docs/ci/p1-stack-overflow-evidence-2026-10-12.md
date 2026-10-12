@@ -287,3 +287,27 @@ The observational, SHA-verified compiler audit recompiled exactly `ip6_output.o`
 **Key insight:** The 4064-byte `ip6_finish_output2` frame is dominated by scalar CoreObjects rather than SSA spills or large C aggregates. Of its 259 nonreusable scalar objects, **224 are denied by the strict rule that an `OBJECT_ADDRESS` SSA result may be consumed only by direct LOAD/STORE**. This category conflates harmless address derivation (`POINTER_OFFSET`, `FIELD_ADDRESS`) with genuine address escapes or unproven uses. It would be unsound to free these objects without distinguishing the cases. We therefore added a read-only consumer-type audit that can identify which instruction kinds consume these 224 address values before changing any lowering or allocator rule.
 
 Artifact provenance: CI #38253905548; all 3 selected `.o` SHA-identical; `nonreuse-reasons.tsv` reports all six audited functions. The follow-up derived-use breakdown is an observational audit only; no P1 fix is claimed.
+
+
+## Derived-address consumers resolved — CI 38254659162
+
+Important correction to our prior hypothesis: the 224 disqualified objects in
+`ip6_finish_output2` are **NOT predominantly pointer arithmetic**. The
+SHA-identical Core diagnostic observed their actual use instruction kinds.
+
+| Function | Objects disqualified by non-direct address uses | Consumer instructions |
+| --- | ---: | --- |
+| `ip6_finish_output2` | **224** | **112 stored-pointer `STORE` instructions (kind 35), 112 `SCALAR_EQUAL` instructions (kind 14)** |
+| `ip6_xmit` | **96** | 48 stored-pointer `STORE`, 48 `SCALAR_EQUAL` |
+| `__tcp_transmit_skb` | **17** | 10 stored-pointer `STORE`, 8 `SCALAR_EQUAL` |
+
+No direct `POINTER_OFFSET` or `FIELD_ADDRESS` consumption was observed in
+this audited subset. In these cases address identity and escape semantics are
+real, so blind stack-slot reuse can change the result of pointer comparison
+or leave a dangling pointer. The previous pointer-arithmetic theory was wrong
+for this subset. **Do not relax the existing 224-object restriction.**
+
+Next: identify the source spans and lowering sites generating the 112 paired
+pointer comparisons / stored pointer values. Prove whether these are redundant
+compiler-introduced temporaries before touching codegen. Full-MiniC P1 is
+still unverified/FAIL, and this remains a diagnostics-only result.
