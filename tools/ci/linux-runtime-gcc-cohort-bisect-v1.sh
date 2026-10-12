@@ -145,9 +145,16 @@ if [[ -e "$ev/minic-manifest.sha256" || -e "$ev/minic-identity.txt" ]]; then
   test -s "$ev/minic-manifest.sha256" && test -s "$ev/minic-identity.txt" || {
     echo "COHORT_CANDIDATE_CACHE=ERROR incomplete manifest"; exit 7;
   }
+  if [[ "${COHORT_P1_REUSE_CROSSBLOCK:-0}" == 1 ]]; then
+    [[ $(cat "$ev/minic-identity.txt") == fbaa9f91cf5bfb80df7864a0ec42a56a365c06e2c02aa4add8fe09f6f0097488 ]] || {
+      echo "COHORT_P1_REUSE=ERROR frozen_2064_identity_untrusted"; exit 7;
+    }
+    echo "COHORT_P1_REUSE=FROZEN_BASE_VERIFIED historic_compiler=true"
+  else
   [[ $(cat "$ev/minic-identity.txt") == "$cache_contract" ]] || {
     echo "COHORT_CANDIDATE_CACHE=ERROR identity mismatch"; exit 7;
   }
+  fi
   # Verify every expected MiniC object and ensure there is no partial pool.
   test "$(wc -l <"$ev/minic-manifest.sha256")" -eq "$n"
   (cd "$ev"; sha256sum --quiet -c minic-manifest.sha256) || {
@@ -1283,12 +1290,64 @@ fi
 BUILD_DIR="$ev/initramfs" OUTPUT_INITRAMFS="$ev/runtime-initramfs.cpio.gz" \
   RISCV_CC=riscv64-linux-gnu-gcc \
   bash "$repo/tests/external/linux/build_runtime_initramfs.sh" >"$ev/initramfs.log" 2>&1
+p1_reuse_target=net/ipv6/ip6_output.o
+if [[ "${COHORT_P1_REUSE_CROSSBLOCK:-0}" == 1 ]]; then
+  [[ "$cohort_scope" == FULL_C_UNIVERSE && "$n" == 2064 &&
+     "${COHORT_ACTION:-all}" == verify && "${COHORT_P1_STACK_OWNER_SWAPS:-0}" == 1 ]] || {
+    echo "COHORT_P1_REUSE=ERROR requires_frozen_P1_2064"; exit 8;
+  }
+  rdir="$ev/p1-crossblock-reuse"
+  mkdir -p "$rdir"
+  printf '%s\n' "$p1_reuse_target" >"$rdir/selected.txt"
+  rm -rf -- "$out"
+  cp -a --reflink=auto "$gold_snapshot" "$out"
+  MINIC_RV64_EXPERIMENT_CROSSBLOCK_REUSE=1 python3 \
+    "$repo/tools/ci/linux-runtime-kbuild-regeneration-guard-v1.py" \
+    --mode replay --out "$out" --golden-out "$gold_snapshot" \
+    --evidence "$rdir/experiment.log" \
+    --selected "$rdir/selected.txt" \
+    --wrapper "$repo/tests/external/linux/stage2_kbuild_cc.sh" \
+    --minic "$minic" --success-trace "$rdir/success.txt" \
+    --digest-trace "$rdir/digests.sha256" \
+    >"$rdir/replay.log" 2>&1 || {
+      echo "COHORT_P1_REUSE=ERROR current_owner_compile_failed"
+      tail -n 70 "$rdir/replay.log"
+      exit 8
+    }
+  python3 "$repo/tools/ci/linux-runtime-minic-route-audit-v1.py" \
+    --objects-file "$rdir/selected.txt" \
+    --success-trace "$rdir/success.txt" \
+    --object-digest-trace "$rdir/digests.sha256" \
+    --candidates "$out" >"$rdir/route-audit.log"
+  cp -a "$out/$p1_reuse_target" "$rdir/experimental.o"
+  cmp -s "$rdir/experimental.o" "$ev/minic/$p1_reuse_target" && {
+    echo "COHORT_P1_REUSE=NO_EFFECT object_sha_unchanged=true"; exit 8;
+  }
+  python3 - "$rdir/experimental.o" "$ev/minic/$p1_reuse_target" \
+    "$ev/gcc/$p1_reuse_target" <<'PY_REUSE_ABI'
+from pathlib import Path
+import sys,struct
+heads=[Path(p).read_bytes()[:52] for p in sys.argv[1:]]
+assert all(len(x)==52 and x[:6]==b"\x7fELF\x02\x01" for x in heads)
+assert all(struct.unpack_from("<H",x,16)[0]==1 and
+           struct.unpack_from("<H",x,18)[0]==243 for x in heads)
+assert len({x[48:52] for x in heads})==1,"RISC-V flags/ABI drift"
+print("COHORT_P1_REUSE_ABI=PASS experimental_vs_frozen_vs_gcc")
+PY_REUSE_ABI
+  riscv64-linux-gnu-objdump -dr "$ev/minic/$p1_reuse_target" >"$rdir/baseline-disasm.txt"
+  riscv64-linux-gnu-objdump -dr "$rdir/experimental.o" >"$rdir/experimental-disasm.txt"
+  echo "COHORT_P1_REUSE=OWNER_RECOMPILED target=$p1_reuse_target old_sha=$(sha256sum "$ev/minic/$p1_reuse_target" | cut -d' ' -f1) new_sha=$(sha256sum "$rdir/experimental.o" | cut -d' ' -f1)"
+fi
 last_selection="none"
 last_candidate_delta=""
 last_link_source_dir=""
 trial() {
   name="$1"; count="$2"; profile="$3"; mode="${4:-prefix}"
-  selection="$mode:$count"
+  variant="${5:-frozen}"
+  selection="$mode:$count:$variant"
+  if [[ "$variant" != frozen && ( "$variant" != crossblock || "$mode" != prefix || "$count" != "$n" || "${COHORT_P1_REUSE_CROSSBLOCK:-0}" != 1 ) ]]; then
+    echo "COHORT_P1_REUSE=ERROR unsupported_trial_variant"; exit 8;
+  fi
   d="$ev/trials/$name"; mkdir -p "$d"
   if [[ "$selection" != "$last_selection" ]]; then
     # Kbuild candidate compilation may have regenerated headers, scripts,
@@ -1309,7 +1368,11 @@ trial() {
         *) echo "COHORT_ERROR unknown_selection=$mode"; exit 2 ;;
       esac
       if ((selected)); then
-        cp -a "$ev/minic/${objects[i]}" "$out/${objects[i]}"
+        if [[ "$variant" == crossblock && "${objects[i]}" == "$p1_reuse_target" ]]; then
+          cp -a "$rdir/experimental.o" "$out/${objects[i]}"
+        else
+          cp -a "$ev/minic/${objects[i]}" "$out/${objects[i]}"
+        fi
         touch "$out/${objects[i]}"
         printf '%s\n' "${objects[i]}" >>"$d/selected-objects.txt"
       fi
@@ -1489,7 +1552,9 @@ PY_RISCV_DYNAMIC
     esac
     if ((selected)); then
       gold="$ev/minic/$target"
-      if [[ -n "$last_candidate_delta" && -f "$last_candidate_delta/$target" ]]; then
+      if [[ "$variant" == crossblock && "$target" == "$p1_reuse_target" ]]; then
+        gold="$rdir/experimental.o"
+      elif [[ -n "$last_candidate_delta" && -f "$last_candidate_delta/$target" ]]; then
         gold="$last_candidate_delta/$target"
       fi
     else
@@ -2310,6 +2375,28 @@ PY_FRAME_PROLOGUE
     exit 8
   fi
   echo "COHORT_P1_OWNER_BASELINE=REPRODUCED verdict=$TRIAL_VERDICT"
+  if [[ "${COHORT_P1_REUSE_CROSSBLOCK:-0}" == 1 ]]; then
+    printf 'trial\timage_sha\tverdict\n' >"$rdir/repeat-verdicts.tsv"
+    expected_image_sha=""
+    passed=0
+    for iteration in 1 2 3; do
+      trial "p1_experimental_crossblock_$iteration" "$n" p1 prefix crossblock
+      if [[ -z "$expected_image_sha" ]]; then
+        expected_image_sha="$image_sha"
+      fi
+      [[ "$image_sha" == "$expected_image_sha" ]] || {
+        echo "COHORT_P1_REUSE=ERROR image_sha_changed_across_repeats"; exit 8;
+      }
+      printf '%s\t%s\t%s\n' "$iteration" "$image_sha" "$TRIAL_VERDICT" >>"$rdir/repeat-verdicts.tsv"
+      if [[ "$TRIAL_VERDICT" == PASS ]]; then ((++passed)); fi
+    done
+    if ((passed == 3)); then
+      echo "COHORT_P1_REUSE=THREE_IDENTICAL_IMAGE_PASSES candidate_fix_not_yet_certified=true"
+      exit 0
+    fi
+    echo "COHORT_P1_REUSE=NOT_CERTIFIED passes=$passed attempts=3 no_full_recompile=true"
+    exit 9
+  fi
   # The panic's exact return-address symbol was resolved by 38212502667
   # to net/core/dev.o (NOT tcp_ipv4.o). Probe known owners first.
   p1_probe_owners_string="${COHORT_P1_SWAP_OWNERS:-lib/list_debug.o net/core/dev.o net/ipv6/tcp_ipv6.o}"
