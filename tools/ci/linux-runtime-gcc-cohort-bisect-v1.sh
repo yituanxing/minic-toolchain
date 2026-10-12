@@ -1279,6 +1279,9 @@ PY_FRAME_SUMMARY
   python3 "$repo/tools/ci/linux-runtime-p1-frame-component-parse-v1.py" --self-test
   python3 "$repo/tools/ci/linux-runtime-p1-frame-component-parse-v1.py" \
     "$frame_dir/replay.log" "$frame_dir/components.tsv" "$frame_dir/objects.tsv"
+  python3 "$repo/tools/ci/linux-runtime-p1-frame-interval-parse-v1.py" --self-test
+  python3 "$repo/tools/ci/linux-runtime-p1-frame-interval-parse-v1.py" \
+    "$frame_dir/replay.log" "$frame_dir/objects.tsv" "$frame_dir/intervals.tsv"
   for focus in ip6_finish_output2 ip6_xmit tcp_v6_connect __tcp_transmit_skb; do
     awk -F '\t' -v target="$focus" '$1==target {found=1} END {exit !found}' \
       "$frame_dir/components.tsv" || {
