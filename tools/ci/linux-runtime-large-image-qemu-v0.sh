@@ -130,6 +130,7 @@ run_profile() {
 # before a genuine runtime panic stops the failing P1 lane.
 if [[ "$historical" == 1 ]]; then
   # Historical MiniC 145/203-PASS image, not an all-current 2064 compile.
+  # Explicit opt-in: this rerun is A/B of the historical certified kernel.
   # Test exactly the modern P1 with three fresh QEMU processes and SAME Image.
   # Failures are real negative evidence; preserve all raw logs, do not abort
   # before collecting the repeated guest outcome.
