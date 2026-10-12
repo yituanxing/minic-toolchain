@@ -3434,6 +3434,57 @@ static bool script_layout_process_output(MiniLdScriptLayoutState *script_state,
         }
     }
 
+    /*
+     * GNU ld aligns an output section to the strictest participating
+     * input-section alignment BEFORE evaluating leading symbol
+     * assignments. Without this, __start___param may precede the first
+     * aligned __param input by two bytes, causing parse_args() to read
+     * a shifted pointer and page-fault during Linux boot.
+     *
+     * Respect an explicit output VMA; no implicit VMA alignment may
+     * override the address selected by the linker script.
+     */
+    if (output->address == MINILD_SCRIPT_EXPR_NONE) {
+        uint64_t input_alignment = 1U;
+        size_t item_index;
+
+        for (item_index = 0U; item_index < output->item_count;
+             ++item_index) {
+            const MiniLdScriptSectionItem *item = &output->items[item_index];
+            size_t section_index;
+
+            if (item->kind != MINILD_SCRIPT_SECTION_PATTERN ||
+                item->value.pattern.common) {
+                continue;
+            }
+            for (section_index = 0U;
+                 section_index < script_state->state->section_count;
+                 ++section_index) {
+                const MiniLdSection *section =
+                    &script_state->state->sections[section_index];
+                uint64_t align = section->align == 0U ? 1U : section->align;
+
+                if (script_state->section_placed[section_index] ||
+                    script_state->layout->section_discarded[section_index] ||
+                    (section->flags & SHF_ALLOC) == 0U ||
+                    !minild_script_pattern_matches(&item->value.pattern,
+                                                   section->name)) {
+                    continue;
+                }
+                if (align > input_alignment) {
+                    input_alignment = align;
+                }
+            }
+        }
+        if (!static_align_up_u64(script_state->dot, input_alignment,
+                                 &script_state->dot)) {
+            fprintf(script_state->state->diagnostics,
+                    "minic-ld: linker-script-input-alignment:%s\n",
+                    output->name);
+            return false;
+        }
+    }
+
     output_start = script_state->dot;
     script_state->output_vaddr[command_index] = output_start;
     script_state->output_defined[command_index] = true;
