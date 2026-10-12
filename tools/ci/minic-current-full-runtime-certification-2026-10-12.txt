@@ -26,3 +26,7 @@ full_link=PASS
 runtime=PENDING_2G_QEMU_REPLAY
 workflow_parser=FIXED_DUPLICATE_IF_KEY
 receiver=REUSE_EXISTING_gcc-shard-verify
+qemu8_2_loader_issue=INITRD_FIXED_AT_0x88200000
+large_image_end=0x8cf87000
+replay_strategy=EXACT_ORIGINAL_215511040_BYTES_PLUS_GENERATED_STOCK_DTB
+relocated_initrd=0xa0000000
