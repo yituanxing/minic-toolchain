@@ -901,14 +901,18 @@ jobs:
       # The default 2064-object Runtime profile and cache remain untouched.
       # This experiment is fail-closed and never updates the canonical compiler.
       - name: Build opt-in write-before-read cross-block MiniC experiment
-        if: contains(github.event.head_commit.message, '[linux-runtime-p1-defined-crossblock]') || contains(github.event.head_commit.message, '[linux-runtime-p1-ip6-single]')
+        if: contains(github.event.head_commit.message, '[linux-runtime-p1-defined-crossblock]') || contains(github.event.head_commit.message, '[linux-runtime-p1-ip6-single]') || contains(github.event.head_commit.message, '[linux-runtime-p1-discard-eq]')
         shell: bash
         run: |
           set -Eeuo pipefail
           build="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain"
           sha256sum "$build/bin/minic" >"$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-v1/p1-pre-crossblock-compiler.sha256"
-          python3 tools/ci/apply-riscv64-p1-defined-before-use-crossblock-v1.py
-          if [[ "${{ contains(github.event.head_commit.message, '[linux-runtime-p1-ip6-single]') && '1' || '0' }}" == 1 ]]; then
+          if [[ "${{ contains(github.event.head_commit.message, '[linux-runtime-p1-discard-eq]') && '1' || '0' }}" == 1 ]]; then
+            python3 tools/ci/apply-p1-pure-discarded-local-address-equality-v1.py
+          else
+            python3 tools/ci/apply-riscv64-p1-defined-before-use-crossblock-v1.py
+          fi
+          if [[ "${{ (contains(github.event.head_commit.message, '[linux-runtime-p1-ip6-single]') || contains(github.event.head_commit.message, '[linux-runtime-p1-discard-eq]')) && '1' || '0' }}" == 1 ]]; then
             python3 tools/ci/apply-riscv64-p1-frame-diagnostic-v1.py
           fi
           make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$build" "$build/bin/minic" "$build/bin/minic-cc"
@@ -930,8 +934,9 @@ jobs:
           export COHORT_P1_MINIMIZE_RESCUE=${{ contains(github.event.head_commit.message, '[linux-runtime-rescue-minimize]') && '1' || '0' }}
           export COHORT_P1_PAIR_RESCUE=${{ contains(github.event.head_commit.message, '[linux-runtime-rescue-pairs]') && '1' || '0' }}
           export COHORT_P1_PAIR_DEBUG=${{ contains(github.event.head_commit.message, '[linux-runtime-p1-pair-debug]') && '1' || '0' }}
-          export COHORT_P1_DEFINED_CROSSBLOCK=${{ (contains(github.event.head_commit.message, '[linux-runtime-p1-defined-crossblock]') || contains(github.event.head_commit.message, '[linux-runtime-p1-ip6-single]')) && '1' || '0' }}
-          export COHORT_P1_SINGLE_OWNER=${{ contains(github.event.head_commit.message, '[linux-runtime-p1-ip6-single]') && '1' || '0' }}
+          export COHORT_P1_DEFINED_CROSSBLOCK=${{ (contains(github.event.head_commit.message, '[linux-runtime-p1-defined-crossblock]') || contains(github.event.head_commit.message, '[linux-runtime-p1-ip6-single]') || contains(github.event.head_commit.message, '[linux-runtime-p1-discard-eq]')) && '1' || '0' }}
+          export COHORT_P1_DISCARD_EQ=${{ contains(github.event.head_commit.message, '[linux-runtime-p1-discard-eq]') && '1' || '0' }}
+          export COHORT_P1_SINGLE_OWNER=${{ (contains(github.event.head_commit.message, '[linux-runtime-p1-ip6-single]') || contains(github.event.head_commit.message, '[linux-runtime-p1-discard-eq]')) && '1' || '0' }}
           if [[ "$COHORT_P1_SINGLE_OWNER" == 1 ]]; then
             [[ "$COHORT_P1_DEFINED_CROSSBLOCK" == 1 && "$COHORT_P1_PAIR_RESCUE" == 0 ]] || {
               echo "P1_IP6_SINGLE=INVALID conflicting_experiment_flags"; exit 8;
