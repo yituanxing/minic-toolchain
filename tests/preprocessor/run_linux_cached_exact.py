@@ -220,6 +220,20 @@ def main():
                 f"status={row['status']}"
             )
 
+    # Do not let GitHub Actions report a green "product" run merely
+    # because the batch driver completed: every selected TU must match
+    # the pinned GNU reference byte-for-byte.
+    if diff or fail:
+        raise SystemExit(
+            f"MINIPP_CACHED_REPLAY=FAIL label={args.label} "
+            f"selected={len(results)} exact={exact} diff={diff} "
+            f"minipp_fail={fail}"
+        )
+    print(
+        f"MINIPP_CACHED_REPLAY=PASS label={args.label} "
+        f"selected={len(results)} exact={exact} diff=0 minipp_fail=0"
+    )
+
 
 if __name__ == "__main__":
     main()
