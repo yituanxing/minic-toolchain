@@ -13,6 +13,13 @@ timeout_seconds=${QEMU_TIMEOUT_SECONDS:-90}
 shell_input_delay=${QEMU_SHELL_INPUT_DELAY_SECONDS:-8}
 expected_release=${LINUX_RELEASE:-6.6.143}
 profile=${LINUX_RUNTIME_PROFILE:-full}
+# Preserve the established 512M reference unless an explicit large-Image
+# verification selects more guest RAM. Never vary kernel bytes or initramfs.
+qemu_memory=${LINUX_RUNTIME_QEMU_MEMORY:-512M}
+case "$qemu_memory" in
+    512M|1G|2G) ;;
+    *) printf '%s\n' "LINUX_RUNTIME_ERROR unsupported_qemu_memory=$qemu_memory" >&2; exit 2 ;;
+esac
 
 if test -z "$image" || test ! -s "$image"; then
     printf '%s\n' "LINUX_RUNTIME_ERROR missing LINUX_IMAGE=$image" >&2
@@ -53,7 +60,7 @@ run_boot() {
         ) | timeout --signal=TERM "$timeout_seconds" "$qemu" \
             -M virt \
             -cpu max \
-            -m 512M \
+            -m "$qemu_memory" \
             -smp 1 \
             -nographic \
             -no-reboot \
@@ -67,7 +74,7 @@ run_boot() {
         timeout --signal=TERM "$timeout_seconds" "$qemu" \
             -M virt \
             -cpu max \
-            -m 512M \
+            -m "$qemu_memory" \
             -smp 1 \
             -nographic \
             -no-reboot \
