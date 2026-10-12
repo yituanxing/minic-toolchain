@@ -26,11 +26,11 @@ with socket.socket() as s:
     print(s.getsockname()[1])
 PY_PORT
 )
-python3 - "$dest/linked-symbols.nm" "$dest/commands.gdb" "$dest/symbols.txt" "$vmlinux" "$port" <<'PY_GDB'
+python3 - "$dest/linked-symbols.nm" "$dest/commands.gdb" "$dest/symbols.txt" "$vmlinux" "$port" "$dest" <<'PY_GDB'
 from pathlib import Path
 import sys
 
-nm, commands_path, symbols_path, vmlinux, port = sys.argv[1:]
+nm, commands_path, symbols_path, vmlinux, port, evidence_dir = sys.argv[1:]
 symbols = {}
 for line in Path(nm).read_text(errors="replace").splitlines():
     parts = line.split()
@@ -88,6 +88,18 @@ for idx, (name, _) in enumerate(bound[1:], 2):
         # Handler SP is the EMERGENCY stack and cannot identify the
         # original faulting SP. The serial pt_regs print holds the latter.
         emit('printf "P1_GDB_OVERFLOW_HANDLER emergency_sp=%#lx irq_base=%#lx irq_top=%#lx task_lo=%#lx\\n", (unsigned long)$sp, (unsigned long)$p1_irq_base, (unsigned long)$p1_irq_top, (unsigned long)$p1_task_lo')
+        # At handler entry a0 points to a raw pt_regs on the EMERGENCY stack.
+        # Linux 6.6 RV64: epc=0 ra=8 sp=16 status=256 badaddr=264 cause=272.
+        emit("set $p1_regs = (unsigned long)$a0")
+        for reg, offset in (("epc", 0), ("ra", 8), ("sp", 16),
+                            ("status", 256), ("badaddr", 264), ("cause", 272)):
+            emit(f"set $p1_fault_{reg} = *(unsigned long*)($p1_regs + {offset})")
+        emit('printf "P1_FIRSTFAULT epc=%#lx ra=%#lx sp=%#lx status=%#lx badaddr=%#lx cause=%#lx irq_base=%#lx irq_top=%#lx task_lo=%#lx\\n", (unsigned long)$p1_fault_epc, (unsigned long)$p1_fault_ra, (unsigned long)$p1_fault_sp, (unsigned long)$p1_fault_status, (unsigned long)$p1_fault_badaddr, (unsigned long)$p1_fault_cause, (unsigned long)$p1_irq_base, (unsigned long)$p1_irq_top, (unsigned long)$p1_task_lo')
+        emit("bt 32")
+        emit("x/36gx $p1_regs")
+        emit(f"dump binary memory {evidence_dir}/irq-stack.bin $p1_irq_base $p1_irq_top")
+        emit(f"dump binary memory {evidence_dir}/task-stack.bin $p1_task_lo ($p1_task_lo + 16384)")
+        emit(f"disable {idx}")
     else:
         emit(f'printf "P1_GDB_FRAME name={name} pc=%#lx sp=%#lx ra=%#lx irq_remaining=%ld task_remaining=%ld\\n", (unsigned long)$pc, (unsigned long)$sp, (unsigned long)$ra, (long)((unsigned long)$sp-(unsigned long)$p1_irq_base), (long)((unsigned long)$sp-(unsigned long)$p1_task_lo)')
         # Keep the record of the first post-TCP transition to IRQ stack,
@@ -120,7 +132,7 @@ rc=0
 timeout --signal=TERM "$seconds"s gdb-multiarch -nx -q -batch \
   -x "$dest/commands.gdb" >"$dest/gdb.log" 2>&1 || rc=$?
 echo "P1_GDB=DONE debugger_rc=$rc image_sha=$(sha256sum "$image" | cut -d' ' -f1)"
-grep -aE 'P1_GDB_(IRQ_LAYOUT|FRAME|OVERFLOW_HANDLER)' "$dest/gdb.log" | tail -n 100 || :
+grep -aE 'P1_(GDB_(IRQ_LAYOUT|FRAME|OVERFLOW_HANDLER)|FIRSTFAULT)' "$dest/gdb.log" | tail -n 100 || :
 grep -aE 'Insufficient stack space|Kernel panic|BUG:|Oops:' "$dest/qemu-serial.log" | tail -n 10 || :
 if ! grep -aFq 'P1_GDB_IRQ_LAYOUT irq_base=' "$dest/gdb.log"; then
   echo "P1_GDB=INCONCLUSIVE no_percpu_irq_layout_observed"
