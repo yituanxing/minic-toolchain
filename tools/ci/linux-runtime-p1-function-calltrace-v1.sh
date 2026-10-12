@@ -62,7 +62,7 @@ done
 {
   printf '%s\n' 'commands 1' 'silent'
   printf '%s\n' 'set $p1_stack_lo = ((unsigned long)$sp & ~(unsigned long)16383)'
-  printf '%s\n' 'printf "P1_CALLTRACE_ENTRY name=tcp_v6_connect pc=%#lx sp=%#lx task_stack_lo=%#lx ra=%#lx\\n", (unsigned long)$pc, (unsigned long)$sp, (unsigned long)$p1_stack_lo, (unsigned long)$ra'
+  printf '%s\n' 'printf "P1_CALLTRACE_ENTRY name=tcp_v6_connect pc=%#lx sp=%#lx task_stack_lo=%#lx ra=%#lx\n", (unsigned long)$pc, (unsigned long)$sp, (unsigned long)$p1_stack_lo, (unsigned long)$ra'
   printf 'enable'
   for ((idx=1;idx<${#names[@]};idx++)); do
     printf ' %s' "$((idx+1))"
@@ -80,7 +80,13 @@ for ((idx=1;idx<${#names[@]};idx++)); do
       # critically low SP entries; still costs debugger breakpoints.
       printf '%s\n' 'if ((unsigned long)$sp >= $p1_stack_lo - 512 && (unsigned long)$sp < $p1_stack_lo + 4096)'
     fi
-    printf 'printf "P1_CALLTRACE_FRAME name=%s pc=%%#lx sp=%%#lx remaining=%%ld ra=%%#lx\\n", (unsigned long)$pc, (unsigned long)$sp, (long)((unsigned long)$sp-(unsigned long)$p1_stack_lo), (unsigned long)$ra\n' "$name"
+    if [[ "$name" == handle_bad_stack ]]; then
+      # RISC-V enters the emergency overflow stack: its SP cannot be
+      # interpreted relative to the original task's 16 KiB stack.
+      printf '%s\\n' 'printf "P1_CALLTRACE_OVERFLOW_HANDLER pc=%#lx emergency_sp=%#lx original_task_stack_lo=%#lx\\n", (unsigned long)$pc, (unsigned long)$sp, (unsigned long)$p1_stack_lo'
+    else
+      printf 'printf "P1_CALLTRACE_FRAME name=%s pc=%%#lx sp=%%#lx remaining=%%ld ra=%%#lx\\n", (unsigned long)$pc, (unsigned long)$sp, (long)((unsigned long)$sp-(unsigned long)$p1_stack_lo), (unsigned long)$ra\\n' "$name"
+    fi
     if [[ "$name" == __list_add_valid_or_report ]]; then printf '%s\n' 'end'; fi
     printf '%s\n' 'continue' 'end'
   } >>"$dest/commands.gdb"
@@ -111,9 +117,17 @@ with open(sys.argv[2],"w") as f:
         f.write(f"{name}\t{len(entries)}\t{min(int(x[3]) for x in entries)}\t{entries[-1][4]}\n")
 print(f"P1_CALLTRACE_SUMMARY=CAPTURED rows={len(matches)} unique_functions={len({x[0] for x in matches})}")
 PY_SUMMARY
+# GDB observation itself is NOT a P1 runtime certificate. Interrupt
+# timing is perturbed by breakpoints; even 3/3 normally PASSING Images
+# can hit a kernel panic while the guest is debugged. Detect this.
+if grep -aEqi 'Insufficient stack space to handle exception|Kernel panic|Oops:|Unable to handle' "$dest/qemu-serial.log"; then
+  echo "P1_CALLTRACE_DEBUG_GUEST=CRASHED no_P1_pass_inference=true"
+else
+  echo "P1_CALLTRACE_DEBUG_GUEST=NO_CRASH_MARKER no_P1_pass_inference=true"
+fi
 echo "P1_CALLTRACE=RESULT debugger_rc=$rc image_sha=$(sha256sum "$image" | cut -d' ' -f1)"
-grep -E 'P1_CALLTRACE_(ENTRY|FRAME)' "$dest/gdb.log" | tail -n 60 || :
-grep -E 'Insufficient stack space|Kernel panic|BUG:|Oops:' "$dest/qemu-serial.log" | tail -n 8 || :
+grep -E 'P1_CALLTRACE_(ENTRY|FRAME|OVERFLOW_HANDLER)' "$dest/gdb.log" | tail -n 60 || :
+grep -aE 'Insufficient stack space|Kernel panic|BUG:|Oops:' "$dest/qemu-serial.log" | tail -n 8 || :
 if ! grep -Fq 'P1_CALLTRACE_ENTRY name=tcp_v6_connect' "$dest/gdb.log"; then
   echo "P1_CALLTRACE=INCONCLUSIVE TCP entry never reached"
   exit 8
