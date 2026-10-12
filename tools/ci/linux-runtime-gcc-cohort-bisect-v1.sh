@@ -450,7 +450,7 @@ for title,lines in (("GNU_PREPROCESSED",pre),("MINIC_ASSEMBLY",asm)):
         for n in match_indices[:10]:
             prev_types=[
                 (k,lines[k][:250]) for k in range(max(0,n-3000),n)
-                if re.search(r"\\.type\\s+[^,]+,\\s*@function|^[_a-zA-Z][\\w.]*:",lines[k])
+                if (".type" in lines[k] and "@function" in lines[k]) or (lines[k].endswith(":") and lines[k][:1].isalpha())
             ]
             out.append(f"SHMEM_ASM_OWNER assert_line={n+1} preceding_labels={prev_types[-7:]}")
     else:
