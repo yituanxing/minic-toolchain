@@ -154,7 +154,7 @@ one(
     "    {\n"
     "        const char *focus = getenv(\"MINIC_P1_CROSSBLOCK_FUNCTION\");\n"
     "        p1_crossblock_current_function_enabled =\n"
-    "            focus == NULL || focus[0] == '\0' ||\n"
+    "            focus == NULL || focus[0] == 0 ||\n"
     "            strcmp(focus, symbol_name) == 0;\n"
     "    }\n"
     "    if (!core_frame_initialize(program, function, &frame)) {",
