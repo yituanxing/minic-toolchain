@@ -6,6 +6,10 @@
 # common ip6_output.o. Leave all 2064 candidate objects SHA immutable.
 set -Eeuo pipefail
 anchor=net/ipv6/ip6_output.o
+[[ "$n" -eq 2064 ]] || {
+  echo "COHORT_P1_PAIR=ERROR expected_frozen_2064_objects got=$n"
+  exit 8
+}
 partners=(
   net/ipv6/tcp_ipv6.o
   net/ipv4/tcp_output.o
