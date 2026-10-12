@@ -93,6 +93,11 @@ for ((i=0; i<${#args[@]}; ++i)); do
 done
 
 predefines="$work/riscv64-gcc-predefines.h"
+# Native-substitution mode requires one independent GCC macro context
+# per TU, rather than racing on the observation-mode shared tmp file.
+if [[ "${MINIPP_LINUX_SUBSTITUTE:-false}" == "true" ]]; then
+  predefines="$work/$key.riscv64-gcc-predefines.h"
+fi
 if [[ ! -s "$predefines" ]]; then
   tmp_predefines="$predefines.tmp"
   "$real_cc" "${predef_args[@]}" -dM -E -x c /dev/null >"$tmp_predefines"
@@ -159,6 +164,40 @@ else
   diff -u "$ref_i" "$mini_i" >"$diff_file" || true
   first=$(sed -n '1,8p' "$diff_file" | tr '\n' ' ')
   printf 'RESULT source=%q status=DIFF reason=%q\n'     "$source_file" "$first" >>"$trace"
+fi
+
+
+# Fail-closed native MiniPP production substitution; the observational
+# historical oracle remains the default when this mode is unset.
+if [[ "${MINIPP_LINUX_SUBSTITUTE:-false}" == "true" ]]; then
+  if (( mini_status != 0 )) || ! cmp -s "$ref_i" "$mini_i"; then
+    printf 'MINIPP_NATIVE_REPLACEMENT=FAIL source=%q reason=non-exact-or-error\n' "$source_file" >&2
+    exit 1
+  fi
+  dep_args=("${args[@]}")
+  object_args=("${args[@]}")
+  saw_c=0
+  saw_input=0
+  for ((i=0; i<${#args[@]}; ++i)); do
+    if [[ "${dep_args[i]}" == -c ]]; then
+      dep_args[i]=-E
+      saw_c=1
+    elif [[ "${dep_args[i]}" == -o && $((i+1)) -lt ${#args[@]} ]]; then
+      dep_args[i+1]=/dev/null
+    fi
+    if [[ "${object_args[i]}" == "$source_file" ]]; then
+      object_args[i]="$mini_i"
+      saw_input=1
+    fi
+  done
+  test "$saw_c" -eq 1 && test "$saw_input" -eq 1
+  # GCC only creates Kbuild dependency metadata; do not use its
+  # preprocessed translation unit as the native production input.
+  "$real_cc" "${dep_args[@]}" >/dev/null
+  "$real_cc" -x cpp-output -fpreprocessed "${object_args[@]}"
+  test -n "$output_file" && test -s "$output_file"
+  printf 'SUBSTITUTE source=%q output=%q pp=MiniPP compiler=GNU-cc1 exact=1\n' "$source_file" "$output_file" >>"$trace"
+  exit 0
 fi
 
 exec "$real_cc" "$@"
