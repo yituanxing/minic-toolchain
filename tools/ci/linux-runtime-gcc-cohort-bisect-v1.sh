@@ -1276,6 +1276,10 @@ for frame,name,value,nonvalue,values,objects in rows[:32]:
     print(f"COHORT_FRAME_TOP function={name} frame={frame} value_bytes={value} "
           f"non_value_bytes={nonvalue} values={values} objects={objects}")
 PY_FRAME_SUMMARY
+  python3 "$repo/tools/ci/linux-runtime-p1-frame-component-parse-v1.py" --self-test
+  python3 "$repo/tools/ci/linux-runtime-p1-frame-component-parse-v1.py" \
+    "$frame_dir/replay.log" "$frame_dir/components.tsv" "$frame_dir/objects.tsv"
+  echo "COHORT_FRAME_CAPTURE=ACCOUNTED functions=$(($(wc -l <"$frame_dir/components.tsv")-1)) objects=$(($(wc -l <"$frame_dir/objects.tsv")-1)) image_linked=false"
   echo "COHORT_FRAME_CAPTURE=COMPLETE relink=SKIPPED P1_oracle=NOT_RUN"
   exit 0
 fi
