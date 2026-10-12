@@ -439,6 +439,7 @@ if ((n == 1)) && [[ "${objects[0]}" == mm/shmem.o ]]; then
   shmem_stderr="$out/mm/shmem.minic-stage2.minic.stderr"
   if [[ -s "$shmem_stderr" ]]; then
     grep 'SHMEM_IF_TRACE' "$shmem_stderr" | tail -n 120 || true
+    grep 'SHMEM_FACT_EVENT' "$shmem_stderr" | tail -n 160 || true
   fi
   test -s "$shmem_i" && test -s "$shmem_s"
   python3 - "$shmem_i" "$shmem_s" "$ev/shmem-assert-context.txt" <<'PY_SHMEM_ASSERT'
