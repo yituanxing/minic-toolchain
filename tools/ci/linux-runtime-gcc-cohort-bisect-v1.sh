@@ -1279,6 +1279,13 @@ PY_FRAME_SUMMARY
   python3 "$repo/tools/ci/linux-runtime-p1-frame-component-parse-v1.py" --self-test
   python3 "$repo/tools/ci/linux-runtime-p1-frame-component-parse-v1.py" \
     "$frame_dir/replay.log" "$frame_dir/components.tsv" "$frame_dir/objects.tsv"
+  for focus in ip6_finish_output2 ip6_xmit tcp_v6_connect __tcp_transmit_skb; do
+    awk -F '\t' -v target="$focus" '$1==target {found=1} END {exit !found}' \
+      "$frame_dir/components.tsv" || {
+      echo "COHORT_FRAME_CAPTURE=ERROR missing_exact_focus=$focus"
+      exit 8
+    }
+  done
   echo "COHORT_FRAME_CAPTURE=ACCOUNTED functions=$(($(wc -l <"$frame_dir/components.tsv")-1)) objects=$(($(wc -l <"$frame_dir/objects.tsv")-1)) image_linked=false"
   echo "COHORT_FRAME_CAPTURE=COMPLETE relink=SKIPPED P1_oracle=NOT_RUN"
   exit 0
