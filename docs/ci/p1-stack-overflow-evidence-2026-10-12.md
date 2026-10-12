@@ -55,3 +55,67 @@ The next exact experiment tests the three *two*-GCC subsets, each retaining
 `tcp_ipv6.o`, `tcp_output.o`, `dev.o`. Each distinct Image must PASS
 P1 three times, with object/assembly/link provenance unchanged, before it
 can be treated as the smaller workaround.
+
+
+## Source-level analysis while two-GCC experiment runs
+
+Exact Linux 6.6.143 source inspected:
+`net/ipv6/ip6_output.c` in `gregkh/linux`, tag `v6.6.143`.
+This is **source inspection**, not proof that the C source is wrong.
+The failing `ip6_output.o` contains a number of C functions, including:
+
+- `ip6_finish_output2` (source lines 60–144): early header expansion
+  (72–82), multicast/loopback with an `NF_HOOK` call (84–115),
+  light-weight tunnel diversion (117–122), and neighbor lookup/output
+  (126–143); its deepest outgoing edge is the `neigh_output` path
+  at line 141. The routine itself declares only a handful of C locals,
+  yet the compiler IR frame trace counted **1101 CoreObjects** and a
+  **4064-byte frame** (of which 72 bytes are SSA value slots). It is
+  consistent with expansion of header inline helpers/macros, but
+  individual object provenance has not yet been verified.
+- `ip6_xmit` (source lines 261–381): IPv6 header preparation (279–346)
+  and an `NF_HOOK` invoking `dst_output` (360–366). Runtime Core
+  trace reports **592 CoreObjects** and a **2288-byte frame** (72 bytes
+  SSA). Together with `ip6_finish_output2` this is a large, nested
+  stack demand on the measured TCP child-connect path.
+- `ip6_output` (lines 226–245): delegates through
+  `NF_HOOK_COND(..., ip6_finish_output)`. Changing the entire
+  `ip6_output.o` swaps several functions simultaneously; object-level
+  A/B alone **cannot attribute the failure to `ip6_finish_output2`**
+  without narrower function-level evidence.
+
+Observed QEMU GDB entry SP values on the failing MiniC Image:
+`tcp_v6_connect` 14448 B available →
+`__tcp_transmit_skb` 12928 →
+`ip6_xmit` 11184 →
+`ip6_output` 8608 →
+`ip6_finish_output2` **7088 B available upon entry**.
+Its 4064-byte frame may leave only about 3024 B before child
+calls/interrupt stack demands; this is a *budget calculation*, not
+proof that a particular later callee is erroneous. The exception
+reported about 96 B remaining, so the exact first crossing still needs
+to be sampled.
+
+MiniC implementation inspection:
+
+- Original `src/target/riscv64/core_codegen.c::core_frame_initialize`
+  lays out CoreObjects in object order, then SSA values, saved registers
+  and call/variadic areas.
+- Runtime `apply-riscv64-core-object-slot-reuse-v0.py` pools some
+  scalar CoreObjects in 8-byte slots, but excludes objects with
+  escaping/derived addresses, aggregate objects, cross-block uses etc.
+- `apply-riscv64-core-object-slot-reuse-cfg-hotfix-v0.py` conservatively
+  *disallows* sharing slots between reusable objects in different
+  basic blocks. The earlier trial removing this restriction cut frame
+  size but produced worse out-of-stack SP failures (CI 38227315248).
+  It cannot be adopted without a real CFG-aware lifetime proof.
+
+Priority after P1 two-GCC reduction:
+(1) reconstruct exact nested call path beyond `ip6_finish_output2`
+to the first stack-boundary crossing; (2) emit per-function frame
+component totals **including permanent CoreObjects, reusable slots,
+call/record return space, padding**, and map large objects to
+their originating inline function and address uses; (3) add a
+small C regression for whichever lifetime/call-boundary issue
+is actually demonstrated. Do not equate smaller stack frames
+with compiler correctness.
