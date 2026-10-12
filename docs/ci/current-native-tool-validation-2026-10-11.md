@@ -1227,3 +1227,40 @@ Linux TUs retain GNU preprocessing. It is **not yet** all-Linux
 MiniPP substitution, full MiniC runtime, full native linking, or
 self-hosting/bootstrap certification. The prior four-native
 certificate remains independently valid.
+
+## MiniPP full real Linux C-object replacement — requested 2026-10-12
+
+Following the certified 2-TU MiniPP producer runtime, the same
+**existing** MiniAS linux-integrated job now defaults to
+`MINIPP_NATIVE_SCOPE=full`, with a strict full-object producer.
+There is **no new Workflow or Job** and no global Kbuild
+`CC=` replacement that would require recompiling the whole tree.
+
+The new full producer enumerates all actual RISC-V GCC C-object
+compilations in the finished Linux 6.6.143 `out/**/*.o.cmd`
+tree. This count, independently checked for distinct live
+`.o` outputs, is the precise production denominator; the old
+3352 freeze-plan count is a **separate** manifest and is not
+misreported as the number of actually built Image objects.
+All objects must have a real saved Kbuild GNU GCC command
+and an existing output. Each saved command is reinvoked once
+with `MINIPP_LINUX_SUBSTITUTE=true`, selected by a strict
+normalized source list, which produces MiniPP `.i` bytes,
+byte-compares them with a GNU-GCC `.i` oracle, preserves
+GNU-generated depfiles, and feeds **only MiniPP output into GNU
+cc1**. The producer reports a full summary, failed input pool,
+strict 1:1 `RESULT EXACT` / `SUBSTITUTE` counts, and rejects
+all silent GNU substitution or uncompiled source owners.
+Macro contexts are deduplicated by actual GCC target flags
+instead of repeating capability-greps per object.
+
+Only after all real C objects are exactly replaced does Kbuild
+incrementally rearchive/relink with MiniAS/MiniAR/MiniObjcopy and
+exactly three native MiniLD final links, verify SHA-256, size
+and nanosecond mtime of **every** MiniPP-produced `.o`
+before/after Kbuild, and run real Linux P0/P1 QEMU runtime.
+
+The certified two-object cohort remains available with
+`MINIPP_NATIVE_SCOPE=two`; `none` permits isolated four-native
+diagnosis. This full workload is **not yet certified** until the
+specific full-production CI and guest logs report PASS.

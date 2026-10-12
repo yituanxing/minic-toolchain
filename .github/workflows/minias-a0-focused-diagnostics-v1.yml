@@ -1552,6 +1552,14 @@ jobs:
             build/minias-linux-runtime/native-pp-two/inputs/*.gcc.i
             build/minias-linux-runtime/native-pp-two/qemu-p0/*.log
             build/minias-linux-runtime/native-pp-two/qemu-p1/*.log
+            build/minias-linux-runtime/native-pp-full/*.trace
+            build/minias-linux-runtime/native-pp-full/*.log
+            build/minias-linux-runtime/native-pp-full/*.tsv
+            build/minias-linux-runtime/native-pp-full/*.json
+            build/minias-linux-runtime/native-pp-full/Image.sha256
+            build/minias-linux-runtime/native-pp-full/stderr/*.txt
+            build/minias-linux-runtime/native-pp-full/qemu-p0/*.log
+            build/minias-linux-runtime/native-pp-full/qemu-p1/*.log
             build/minias-linux-runtime/qemu-p0/*.log
             build/minias-linux-runtime/qemu-p1/*.log
             build/minias-linux-runtime/out/arch/riscv/boot/Image

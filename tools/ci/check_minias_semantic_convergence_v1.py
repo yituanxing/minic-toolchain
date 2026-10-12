@@ -91,7 +91,11 @@ def main():
     integrated_path = ROOT / "tests/external/linux/mini_tools_integrated_relink.sh"
     if sha(ROOT / "tests/external/linux/minipp_native_targeted_relink.sh") != "3ecdd7a3db9d8648da463bc7110976c29cabe5e0":
         raise AssertionError("native MiniPP exact producer substitute changed")
-    if sha(integrated_path) != "6d04a5934e8b5fce74a3b39dede98649213dd2f1":
+    if sha(ROOT / "tests/preprocessor/run_linux_native_full_production.py") != "9349b67047aa874465037a0df437f2106c7076ae":
+        raise AssertionError("native full MiniPP TU inventory or production trace changed")
+    if sha(ROOT / "tests/external/linux/minipp_native_full_relink.sh") != "51858d1d76368840690a773391cb4f6e0f24bc2e":
+        raise AssertionError("native full MiniPP runtime relink harness changed")
+    if sha(integrated_path) != "c89ce99b4d78963d88fde600b651865e36182e1d":
         raise AssertionError("integrated GNU-link MiniAS+MiniAR+MiniObjcopy replay changed")
     approved_integrated = (
         "      - name: Reuse MiniAS Linux objects with MiniAR and MiniObjcopy and run QEMU P0 P1\n"
@@ -145,6 +149,14 @@ def main():
         "            build/minias-linux-runtime/native-pp-two/inputs/*.gcc.i\n"
         "            build/minias-linux-runtime/native-pp-two/qemu-p0/*.log\n"
         "            build/minias-linux-runtime/native-pp-two/qemu-p1/*.log\n"
+        "            build/minias-linux-runtime/native-pp-full/*.trace\n"
+        "            build/minias-linux-runtime/native-pp-full/*.log\n"
+        "            build/minias-linux-runtime/native-pp-full/*.tsv\n"
+        "            build/minias-linux-runtime/native-pp-full/*.json\n"
+        "            build/minias-linux-runtime/native-pp-full/Image.sha256\n"
+        "            build/minias-linux-runtime/native-pp-full/stderr/*.txt\n"
+        "            build/minias-linux-runtime/native-pp-full/qemu-p0/*.log\n"
+        "            build/minias-linux-runtime/native-pp-full/qemu-p1/*.log\n"
     )
     if linux_body.count(integrated_evidence) != 1:
         raise AssertionError("native-integrated relink evidence archive modified")

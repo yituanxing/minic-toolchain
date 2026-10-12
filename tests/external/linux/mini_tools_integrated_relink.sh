@@ -225,7 +225,21 @@ SH
   echo "NATIVE_FOUR_LINUX_RUNTIME=PASS components=MiniAS,MiniAR,MiniLD-final,MiniObjcopy gcc=GNU p0=2/2 p1=12/12"
   # Fifth tool boundary: two exact MiniPP producer TUs, never a shadow
   # comparison whose GCC output silently reaches production Kbuild.
-  if [[ "${MINIPP_NATIVE_TWO:-true}" == "true" ]]; then
-    bash "$(dirname "$0")/minipp_native_targeted_relink.sh"
-  fi
+  # Production scope: ALL current Image C TUs by default.
+  # Historical two-object certificate stays executable for fast diagnosis.
+  case "${MINIPP_NATIVE_SCOPE:-full}" in
+    full)
+      bash "$(dirname "$0")/minipp_native_full_relink.sh"
+      ;;
+    two)
+      bash "$(dirname "$0")/minipp_native_targeted_relink.sh"
+      ;;
+    none)
+      echo "MINIPP_NATIVE_SCOPE=SKIP explicitly_disabled"
+      ;;
+    *)
+      echo "MINIPP_NATIVE_SCOPE=FAIL invalid_scope" >&2
+      exit 2
+      ;;
+  esac
 fi
