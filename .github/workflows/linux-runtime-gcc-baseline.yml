@@ -992,6 +992,15 @@ jobs:
             build/linux-runtime-gcc-cohort-v1/p1-gdb-stack/*.log
             build/linux-runtime-gcc-cohort-v1/p1-gdb-stack/*.txt
             build/linux-runtime-gcc-cohort-v1/p1-gdb-stack/*.gdb
+            build/linux-runtime-gcc-cohort-v1/p1-gdb-stack/*.nm
+            build/linux-runtime-gcc-cohort-v1/p1-gdb-stack/*.bin
+            build/linux-runtime-gcc-cohort-v1/p1-gdb-stack/*.tsv
+            build/linux-runtime-gcc-cohort-v1/p1-gdb-stack-experiment/*.log
+            build/linux-runtime-gcc-cohort-v1/p1-gdb-stack-experiment/*.txt
+            build/linux-runtime-gcc-cohort-v1/p1-gdb-stack-experiment/*.gdb
+            build/linux-runtime-gcc-cohort-v1/p1-gdb-stack-experiment/*.nm
+            build/linux-runtime-gcc-cohort-v1/p1-gdb-stack-experiment/*.bin
+            build/linux-runtime-gcc-cohort-v1/p1-gdb-stack-experiment/*.tsv
             build/linux-runtime-gcc-cohort-v1/trials/*/qemu/rdinit-init.log
             build/linux-runtime-gcc-cohort-v1/p1-frame-components/*.tsv
             build/linux-runtime-gcc-cohort-v1/p1-frame-components/*.log
