@@ -127,5 +127,103 @@ s=replace_once(s,mark,
     '                          ? life->nonreuse_reason : "unset");\n'
     '                    if (life->reusable && life->block_index < function->block_count) {',
     "observer")
+# Disambiguate "address derived" (often ordinary pointer arithmetic from
+# GNU macro expansion) from real escapes to callees, inline asm or return.
+# This is READ-ONLY, and does not expand the accepted stack-slot set.
+begin = "                    if (life->reusable && life->block_index < function->block_count) {"
+assert s.count(begin)==1
+extra = r'''                    if (life->nonreuse_reason != NULL &&
+                        strcmp(life->nonreuse_reason, "address_derived_or_escaped") == 0) {
+                        size_t definition_block;
+                        for (definition_block = 0U; definition_block < function->block_count;
+                             ++definition_block) {
+                            const MinicCoreBlock *origin =
+                                &function->blocks[definition_block];
+                            size_t definition_position;
+                            for (definition_position = 0U;
+                                 definition_position < origin->instruction_count;
+                                 ++definition_position) {
+                                const MinicCoreInstruction *producer =
+                                    &function->instructions[
+                                        origin->instructions[definition_position]];
+                                size_t use_block;
+                                MinicCoreValueId address_value = producer->result;
+                                if (producer->kind != MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS ||
+                                    producer->value.object_id != i ||
+                                    address_value == MINIC_CORE_VALUE_INVALID) {
+                                    continue;
+                                }
+                                for (use_block = 0U; use_block < function->block_count;
+                                     ++use_block) {
+                                    const MinicCoreBlock *consumer_block =
+                                        &function->blocks[use_block];
+                                    size_t pos;
+                                    for (pos = 0U; pos < consumer_block->instruction_count;
+                                         ++pos) {
+                                        const MinicCoreInstruction *consumer =
+                                            &function->instructions[
+                                                consumer_block->instructions[pos]];
+                                        CoreTargetValueUseCount hits;
+                                        const char *category = "other_instruction";
+                                        hits.target = address_value;
+                                        hits.count = 0U;
+                                        if (!core_visit_instruction_value_uses(
+                                                function, consumer,
+                                                core_count_target_value_use, &hits) ||
+                                            hits.count == 0U) {
+                                            continue;
+                                        }
+                                        if (consumer->kind == MINIC_CORE_INSTRUCTION_POINTER_OFFSET) {
+                                            category = "pointer_offset";
+                                        } else if (consumer->kind == MINIC_CORE_INSTRUCTION_FIELD_ADDRESS) {
+                                            category = "field_address";
+                                        } else if (consumer->kind == MINIC_CORE_INSTRUCTION_LOAD &&
+                                                   consumer->value.load.address == address_value) {
+                                            category = "direct_load";
+                                        } else if (consumer->kind == MINIC_CORE_INSTRUCTION_STORE &&
+                                                   consumer->value.store.address == address_value) {
+                                            category = "direct_store";
+                                        } else if (consumer->kind == MINIC_CORE_INSTRUCTION_STORE &&
+                                                   consumer->value.store.stored_value == address_value) {
+                                            category = "stored_pointer_escape";
+                                        } else if (consumer->kind == MINIC_CORE_INSTRUCTION_CALL ||
+                                                   consumer->kind == MINIC_CORE_INSTRUCTION_INDIRECT_CALL) {
+                                            category = "call_argument";
+                                        } else if (consumer->kind == MINIC_CORE_INSTRUCTION_SCALAR_BITCAST ||
+                                                   consumer->kind == MINIC_CORE_INSTRUCTION_INTEGER_CONVERSION) {
+                                            category = "cast";
+                                        } else if (consumer->kind ==
+                                                       MINIC_CORE_INSTRUCTION_REGISTER_OUTPUT_INPUT_INLINE_ASM ||
+                                                   consumer->kind ==
+                                                       MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM) {
+                                            category = "inline_asm";
+                                        }
+                                        (void)fprintf(stderr,
+                                            "CORE_FRAME_DERIVED_USE function=%s id=%zu "
+                                            "category=%s kind=%u n=%zu\n",
+                                            symbol_name, i, category,
+                                            (unsigned int)consumer->kind, hits.count);
+                                    }
+                                    if (consumer_block->has_terminator) {
+                                        CoreTargetValueUseCount hits;
+                                        hits.target = address_value;
+                                        hits.count = 0U;
+                                        if (core_visit_terminator_value_uses(
+                                                &consumer_block->terminator,
+                                                core_count_target_value_use, &hits) &&
+                                            hits.count != 0U) {
+                                            (void)fprintf(stderr,
+                                                "CORE_FRAME_DERIVED_USE function=%s id=%zu "
+                                                "category=terminator kind=0 n=%zu\n",
+                                                symbol_name, i, hits.count);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+'''
+s=s.replace(begin,extra+begin,1)
+
 p.write_text(s)
 print("P1_NONREUSABLE_REASON_AUDIT_V1=APPLIED observational_only=true")
