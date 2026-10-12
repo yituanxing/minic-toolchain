@@ -1168,3 +1168,62 @@ and the selector lists exactly normalized paths `init/main.c` and
 `kernel/configs.c`. Two `SUBSTITUTE` traces are mandatory;
 silent fallback is forbidden. Pre/post-Kbuild object bytes and
 mtime_ns are compared to prevent a shadow GNU replacement.
+
+## CERTIFIED: MiniPP native production for two Linux 6.6.143 TUs + four native tools
+
+**Real Linux QEMU P0/P1 PASS; fifth native tool boundary reached for an explicitly selected two-TU subset.**
+
+Historical opt-in run
+[#38192265904](https://github.com/yituanxing/minic-toolchain/actions/runs/38192265904)
+at exact Git head `5551a7a0480963388ad5d0aa02c17dd735352f11`
+completed **SUCCESS**. The existing MiniAS `linux-single` job
+first re-certified same-tree MiniAS+MiniAR+MiniObjcopy with GNU LD,
+then added MiniLD to exactly three final vmlinux/kallsyms links.
+Each stage passed the genuine Linux/QEMU P0 and P1 test profile.
+
+The new final stage substituted **MiniPP as the real source of C
+preprocessed bytes** into GNU cc1 (`-x cpp-output -fpreprocessed`)
+for exactly two Kbuild source/object pairs:
+`init/main.c` → `init/main.o` and
+`kernel/configs.c` → `kernel/configs.o`.
+Both MiniPP outputs were byte-identical to the matching GCC
+reference (2 `RESULT status=EXACT`) and, more importantly,
+the production trace contains **exactly 2** `SUBSTITUTE` records,
+showing GNU-cc1 consumed MiniPP's `.i` files. No GNU preprocessing
+fallback was permitted on the selected objects.
+GNU GCC still supplied the predefine oracle, dependency metadata,
+and C frontend.
+
+The preserved SHA-256 + size + `mtime_ns` identity of both resulting
+`.o` files was checked across the subsequent Kbuild incremental
+re-archive/relink (2/2 untouched). The follow-up build added 52
+MiniAS assembly passes, used native MiniAR/MiniObjcopy, and had
+exactly 3 final `minild` calls; the three non-final GNU LD calls
+were separately traced. Incremental stage duration was **18s**.
+The final real Linux Image is **26,228,224 bytes**, SHA-256
+`20094fbca72522b9e3122278c819f12c5027048cdd2595d67c26e0c3e2cb8cc8`.
+
+Independent artifact audit:
+`minias-linux-gcc-single-cert`, ID `11721244957`
+([original workflow artifact](https://github.com/yituanxing/minic-toolchain/actions/runs/38192265904/artifacts/11721244957)).
+The Linux `out/arch/riscv/boot/Image` was actually extracted and hashed,
+matching `native-pp-two/Image.sha256`. All three actual native-PP
+QEMU logs were independently opened and checked:
+`native-pp-two/qemu-p0/rdinit-init.log`,
+`native-pp-two/qemu-p0/rdinit-sh.log`, and
+`native-pp-two/qemu-p1/rdinit-init.log`.
+Each has `Linux version 6.6.143`, an orderly
+`reboot: Power down`, no kernel panic or Oops.
+P0 contains `USER_SHELL_OK`, `RDINIT_SH_OK`, and
+`MINIC_LINUX_RUNTIME_INIT_END fail=0` across the two lanes;
+P1 contains `RUNTIME_V2_SYSCALL_END pass=12 fail=0`.
+The job acceptance marker is
+`MINIPP_NATIVE_TWO_LINUX_RUNTIME=PASS pp=MiniPP-exact-two gcc=GNU as=MiniAS ar=MiniAR ld=MiniLD-final objcopy=MiniObjcopy p0=2/2 p1=12/12`.
+
+**Scope limit:** this is a five-tool combination with MiniPP replacing
+**exactly two** production translation units; GNU GCC remains the C
+compiler, GNU LD remains for non-final link stages, and the other
+Linux TUs retain GNU preprocessing. It is **not yet** all-Linux
+MiniPP substitution, full MiniC runtime, full native linking, or
+self-hosting/bootstrap certification. The prior four-native
+certificate remains independently valid.
