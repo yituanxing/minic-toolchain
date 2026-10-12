@@ -883,13 +883,16 @@ jobs:
       # profile first, then inject stderr-only instrumentation. The cohort
       # lane SHA-compares each replayed object with its immutable MiniC .o.
       - name: Instrument original MiniC profile for exact P1 frame audit
-        if: contains(github.event.head_commit.message, '[linux-runtime-frame-components]')
+        if: contains(github.event.head_commit.message, '[linux-runtime-frame-components]') || contains(github.event.head_commit.message, '[linux-runtime-p1-nonreuse-reasons]')
         shell: bash
         run: |
           set -Eeuo pipefail
           work="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain"
           sha256sum "$work/bin/minic" >"$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-v1/p1-pre-audit-compiler.sha256"
           python3 tools/ci/apply-riscv64-p1-frame-diagnostic-v1.py
+          if [[ "${{ contains(github.event.head_commit.message, '[linux-runtime-p1-nonreuse-reasons]') && '1' || '0' }}" == 1 ]]; then
+            python3 tools/ci/apply-riscv64-p1-nonreuse-reasons-v1.py
+          fi
           make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$work" "$work/bin/minic" "$work/bin/minic-cc"
           sha256sum "$work/bin/minic" >"$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-v1/p1-diagnostic-compiler.sha256"
           echo "P1_FRAME_DIAG=COMPILER_REBUILT same_codegen_only_extra_stderr=true"
@@ -934,7 +937,8 @@ jobs:
             }
             echo "P1_IP6_SINGLE=ENABLED replay=ip6_output.o gcc=tcp_ipv6.o unchanged_others=2062"
           fi
-          export COHORT_FRAME_CAPTURE_ONLY=${{ contains(github.event.head_commit.message, '[linux-runtime-frame-components]') && '1' || '0' }}
+          export COHORT_FRAME_CAPTURE_ONLY=${{ (contains(github.event.head_commit.message, '[linux-runtime-frame-components]') || contains(github.event.head_commit.message, '[linux-runtime-p1-nonreuse-reasons]')) && '1' || '0' }}
+          export COHORT_NONREUSE_REASON_CAPTURE=${{ contains(github.event.head_commit.message, '[linux-runtime-p1-nonreuse-reasons]') && '1' || '0' }}
           export MINIC_CORE_FRAME_TRACE_FILTER=ip6_finish_output2,ip6_xmit,tcp_v6_connect,__tcp_transmit_skb
           # #38219062394 identified 4064B and 2288B MiniC stack frames in
           # ip6_finish_output2 and ip6_xmit. Test the containing C owner,
