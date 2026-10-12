@@ -194,6 +194,33 @@ if "MINIC_DMA_IF_TRACE_V0" not in part:
         raise SystemExit(f"IF_FACTS=ERROR dma_trace_anchor_count={part.count(marker)}")
     part = part.replace(marker, dma_trace + marker, 1)
 
+    shmem_trace = r'''    /* MINIC_SHMEM_IF_TRACE_V0 */
+    if (getenv("MINIC_SHMEM_IF_TRACE") != NULL &&
+        context->source_function != NULL &&
+        context->source_function->name != NULL &&
+        strcmp(context->source_function->name, "shmem_alloc_and_acct_folio") == 0) {
+        MinicConstValue traced;
+        MinicLocalId traced_local = MINIC_LOCAL_INVALID;
+        size_t fact_idx = 0U;
+        bool local_read = core_direct_local_read(
+            context, statement->expression, &traced_local);
+        bool fact_local = local_read &&
+            core_local_constant_index(context, traced_local, &fact_idx);
+        bool known = core_const_eval_integer_with_locals(
+            context, statement->expression, &traced);
+        (void)fprintf(stderr,
+            "SHMEM_IF_TRACE line=%zu expr_kind=%d read_local=%d local=%zu known=%d bits=%llu fact_known=%d escaped=%d stable=%d\n",
+            statement->span.begin.line,
+            (int)condition_expression->kind, local_read ? 1 : 0,
+            (size_t)traced_local, known ? 1 : 0,
+            known ? (unsigned long long)traced.bits : 0ULL,
+            fact_local && context->local_integer_constants[fact_idx].known ? 1 : 0,
+            fact_local && context->local_integer_constants[fact_idx].escaped ? 1 : 0,
+            fact_local && context->local_integer_constants[fact_idx].program_zero_stable ? 1 : 0);
+    }
+'''
+    part = part.replace(marker, shmem_trace + marker, 1)
+
 def replace_one(old, new, why):
     global part
     n = part.count(old)
