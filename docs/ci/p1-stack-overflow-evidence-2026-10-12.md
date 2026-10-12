@@ -119,3 +119,42 @@ their originating inline function and address uses; (3) add a
 small C regression for whichever lifetime/call-boundary issue
 is actually demonstrated. Do not equate smaller stack frames
 with compiler correctness.
+
+
+## Two-GCC pair matrix — completed, CI 38239111412
+
+Each unique linked Image was booted three times under the original Linux
+6.6.143 P1 QEMU syscall oracle. The immutable 2064 MiniC object pool and
+independent GCC reference were SHA-validated. The 2064/2064 all-MiniC
+control continued to FAIL in the same job.
+
+| GCC owners (other 2062 from MiniC) | Exact Image SHA-256 | P1 results |
+| --- | --- | --- |
+| `net/ipv6/ip6_output.o` + `net/ipv6/tcp_ipv6.o` | `8ac20597070cc51046ef4d50a008297196daebfa36caf86af65a897331e11130` | **PASS / PASS / PASS** |
+| `net/ipv6/ip6_output.o` + `net/ipv4/tcp_output.o` | `05fae5803b4f348efdc4e753526c9bdb816da43b75a5c5c841e8d29e81c09b15` | FAIL / FAIL / FAIL |
+| `net/ipv6/ip6_output.o` + `net/core/dev.o` | `3528055285cde87b7e26b8b7abbdc0cd98e3c8c2beee243b2517d4a2d9cde030` | PASS / FAIL / PASS |
+
+**Current smallest triple-PASS GCC replacement** contains only
+`ip6_output.o` and `tcp_ipv6.o` (2062 MiniC objects). This is a
+reproducible mixed-toolchain **workaround**, NOT a proof that precisely
+two compiler bugs exist; the second GCC object can merely change
+stack-depth/call behavior or binary layout.
+
+Earlier one-GCC `ip6_output.o` replacement gave PASS/PASS/FAIL on
+the same pinned image (38224538679), so it is not a certified
+reduction. The current three pair tests all include `ip6_output.o`;
+therefore the matrix does not establish a globally minimal subset
+without additional monotonicity proof or exhaustive combinatorial tests.
+
+On the failing `ip6_output.o`+`tcp_output.o` pair, guest SP
+frequently escaped far below the task stack (e.g.
+`0xff1fffffffffffe0`), a fact that makes a separate ABI/stack-pointer
+corruption hypothesis worth preserving alongside ordinary stack-frame
+budget exhaustion. Debugger evidence must distinguish first improper
+SP change from legitimate nested stack use before modifying codegen.
+
+Next diagnostic: inspect `ip6_output.o` and `tcp_ipv6.o` per-function
+CoreObject types and location in the P1 call chain. Compare failing
+all-MiniC vs stable two-GCC pair, then construct a source-level
+minimized compiler regression. Reject unproven cross-block stack-slot
+sharing.
