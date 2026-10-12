@@ -60,7 +60,27 @@ def extract(out: Path, src: Path) -> list[dict]:
             continue
         if not argv or "riscv64-linux-gnu-gcc" not in argv[0] or "-c" not in argv:
             continue
-        sources = [a for a in argv[1:] if a.endswith(".c") and not a.startswith("-")]
+        # GCC can use a *C file itself* as a forced -include, e.g.
+        # arch/riscv/kernel/vdso/vgettimeofday.o includes the shared
+        # lib/vdso/gettimeofday.c. The final .c positional argument
+        # remains the *only* input translation unit. Do not count forced
+        # inclusions as independently compiled source files.
+        value_options = {
+            "-include", "-imacros", "-I", "-isystem", "-iquote",
+            "-idirafter", "-iprefix", "-iwithprefix", "-iwithprefixbefore",
+            "-x", "-o", "-MF", "-MT", "-MQ", "-isysroot",
+        }
+        sources = []
+        consumed = False
+        for arg in argv[1:]:
+            if consumed:
+                consumed = False
+                continue
+            if arg in value_options:
+                consumed = True
+                continue
+            if arg.endswith(".c") and not arg.startswith("-"):
+                sources.append(arg)
         if not sources:
             # GCC is also the driver for RISC-V preprocessed assembler
             # inputs (.S) in Kbuild. These are not C translation units,
