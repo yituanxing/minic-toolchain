@@ -938,3 +938,22 @@ Next run the unchanged historical combined native MiniLD-final
 an opt-in production oracle. Save SHA of the **fresh** Image and
 require the real guest P0/P1 oracle on that new exact artifact.
 No GNU fallback or preemptive runtime promotion.
+
+### Full Linux relink after __start___param alignment fix: exact Image
+
+[#38189325106](https://github.com/yituanxing/minic-toolchain/actions/runs/38189325106)
+built Linux 6.6.143 with GNU GCC/as/ar and native MiniLD on
+three final links, plus native MiniObjcopy on 44 Kbuild operations.
+Image: 22,033,920 bytes, SHA-256
+9707487fe26d2050b6eff442377c73a2439f78268c143f5e2afd8e96d27a518d.
+Downloaded vmlinux verifies __param section VMA ==
+__start___param == ffffffff810d6460, both start/end symbols
+now section-relative (not ABS), and the first 64-bit table entry is
+ffffffff80e00060. This is the direct corrected Linux witness for
+the previously observed 2-byte offset and parse_args page fault.
+
+This is not yet a QEMU boot PASS. The existing no-rebuild QEMU P0/P1
+replay is pinned to this exact newly generated Image, with the full
+90-second per-lane timeout and retained on-failure QMP snapshots.
+The separately certified triple MiniAS+MiniAR+MiniObjcopy GNU-LD
+baseline remains unchanged.

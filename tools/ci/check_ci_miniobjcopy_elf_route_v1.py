@@ -18,7 +18,7 @@ ORIGINAL_SHA = "5776fe8d2bd51fb485596274f44e8c9af5da7a5c"
 # Reviewed existing three-job extension: a GNU-only MiniObjcopy Linux mode.
 # The historical combined MiniLD+MiniObjcopy path stays intact and the
 # forbidden expired Image-oracle source remains exclusively archived.
-APPROVED_SINGLE_SHA = "161f378877b06ea107a7182268a414edf1063cff"
+APPROVED_SINGLE_SHA = "724dbbeefa2040c5a4232f28c9b901beb98a3911"
 OLD_IF = "    if: (github.event_name == 'workflow_dispatch' && (inputs.mode == 'regressions' || inputs.mode == 'all')) || (github.event_name == 'push' && contains(github.event.head_commit.message, '[miniobjcopy-strip-regressions]'))"
 NEW_IF = "    if: (github.event_name == 'workflow_dispatch' && (inputs.mode == 'regressions' || inputs.mode == 'all')) || (github.event_name == 'push' && (contains(github.event.head_commit.message, '[miniobjcopy-strip-regressions]') || needs.route.outputs.elf_changed == 'true'))"
 MARKER = "\n  # Exact frozen GNU-vs-MiniObjcopy Image oracle; artifact run 33623125809"
@@ -72,8 +72,8 @@ def main() -> None:
             "6b8ec7591c1e8270b4e1bdb301fccbec0352447c9c895df7e07156eed6a674d1",
             "MINIAS_MINIAR_MINIOBJCOPY_IMAGE_REPLAY=PASS",
             "MINIAS_MINIAR_MINIOBJCOPY_LINUX_RUNTIME=PASS",
-            "run-id: '38186542705'",
-            "c2d9e69d00d93ab1938dc306390b15109cfb4c11d168585bc282fef24b767681",
+            "run-id: '38189325106'",
+            "9707487fe26d2050b6eff442377c73a2439f78268c143f5e2afd8e96d27a518d",
         ):
             if token not in active:
                 raise AssertionError(f"approved MiniObjcopy single-tool gate missing: {token}")

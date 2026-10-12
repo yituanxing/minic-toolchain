@@ -284,7 +284,7 @@ jobs:
           name: miniobjcopy-linux-tool-frontier
           path: build/miniobjcopy-linux-tool-work
           repository: ${{ github.repository }}
-          run-id: '38186542705'
+          run-id: '38189325106'
           github-token: ${{ github.token }}
 
       - name: Attest restored native-final-linked Linux artifact
@@ -299,9 +299,9 @@ jobs:
           test "$(grep -c '^minild ' "$work/minild.trace")" -eq 3
           test "$(grep -c '^miniobjcopy ' "$work/miniobjcopy.trace")" -eq 44
           printf '%s  %s\n' \
-            c2d9e69d00d93ab1938dc306390b15109cfb4c11d168585bc282fef24b767681 \
+            9707487fe26d2050b6eff442377c73a2439f78268c143f5e2afd8e96d27a518d \
             "$image" | sha256sum -c -
-          echo "MINILD_FINAL_IMAGE_REPLAY=PASS origin=38186542705 native_ld=3 native_objcopy=44 reused_full_image=1"
+          echo "MINILD_FINAL_IMAGE_REPLAY=PASS origin=38189325106 native_ld=3 native_objcopy=44 reused_full_image=1"
 
       - name: Restore exact MiniAS MiniAR MiniObjcopy Linux Image without rebuilding
         if: env.MINIOBJCOPY_TRIPLE_REPLAY_MODE == 'true'
@@ -338,12 +338,8 @@ jobs:
         run: |
           set -Eeuo pipefail
           work="$GITHUB_WORKSPACE/build/miniobjcopy-linux-tool-work"
-          # Diagnostic replay of an Image that already failed after 90s.
-          # Keep the original 90-second budget for every certified lane.
+          # Runtime acceptance retains the full bounded lane budget.
           boot_timeout=90
-          if [[ "$MINIOBJCOPY_REPLAY_MODE" == true ]]; then
-            boot_timeout=20
-          fi
           BUILD_DIR="$work/initramfs" \
           OUTPUT_INITRAMFS="$work/runtime-initramfs.cpio.gz" \
           RISCV_CC=riscv64-linux-gnu-gcc \
@@ -369,7 +365,7 @@ jobs:
             if [[ "$MINIOBJCOPY_TRIPLE_REPLAY_MODE" == true ]]; then
               echo "MINIAS_MINIAR_MINIOBJCOPY_LINUX_RUNTIME=PASS p0=2/2 p1=12/12 source_run=38184298699"
             else
-              echo "MINILD_FINAL_MINIOBJCOPY_LINUX_RUNTIME=PASS p0=2/2 p1=12/12 origin=38186542705"
+              echo "MINILD_FINAL_MINIOBJCOPY_LINUX_RUNTIME=PASS p0=2/2 p1=12/12 origin=38189325106"
             fi
           else
             LINUX_IMAGE="$work/out/arch/riscv/boot/Image" \
