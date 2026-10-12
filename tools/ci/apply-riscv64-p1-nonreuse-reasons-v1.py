@@ -203,6 +203,12 @@ extra = r'''                    if (life->nonreuse_reason != NULL &&
                                             "category=%s kind=%u n=%zu\n",
                                             symbol_name, i, category,
                                             (unsigned int)consumer->kind, hits.count);
+                                        (void)fprintf(stderr,
+                                            "CORE_FRAME_USE_SPAN function=%s id=%zu "
+                                            "kind=%u line=%zu offset=%zu\n",
+                                            symbol_name, i, (unsigned int)consumer->kind,
+                                            consumer->span.begin.line,
+                                            consumer->span.begin.offset);
                                     }
                                     if (consumer_block->has_terminator) {
                                         CoreTargetValueUseCount hits;
@@ -224,6 +230,23 @@ extra = r'''                    if (life->nonreuse_reason != NULL &&
                     }
 '''
 s=s.replace(begin,extra+begin,1)
+
+# Add source provenance for all CoreObjects; the preprocessed source uses
+# generated .i line numbers because GNU -E -P removes #line markers.
+object_source_marker = (
+    '                    if (life->reusable && life->block_index < function->block_count) {'
+)
+assert s.count(object_source_marker) == 1
+s=s.replace(
+    object_source_marker,
+    '                    (void)fprintf(stderr,\n'
+    '                        "CORE_FRAME_OBJ_SPAN function=%s id=%zu "\n'
+    '                        "line=%zu offset=%zu\\n",\n'
+    '                        symbol_name, i, function->objects[i].span.begin.line,\n'
+    '                        function->objects[i].span.begin.offset);\n'
+    +object_source_marker,
+    1
+)
 
 p.write_text(s)
 print("P1_NONREUSABLE_REASON_AUDIT_V1=APPLIED observational_only=true")
