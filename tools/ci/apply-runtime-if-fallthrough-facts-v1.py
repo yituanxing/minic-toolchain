@@ -249,6 +249,20 @@ part = part.replace(
     "        !core_block_contains_reentry_label(context, then_source)) {\n"
     "        fallthrough_facts = core_runtime_if_copy_facts(context);\n"
     "    }\n"
+    "    if (getenv(\"MINIC_SHMEM_IF_TRACE\") != NULL &&\n"
+    "        context->source_function != NULL &&\n"
+    "        strcmp(context->source_function->name, \"shmem_alloc_and_acct_folio\") == 0) {\n"
+    "        size_t dbg_idx;\n"
+    "        if (core_local_constant_index(context, (MinicLocalId)10022U, &dbg_idx)) {\n"
+    "            (void)fprintf(stderr, \"SHMEM_IF_FLOW line=%zu edge=entry huge_known=%d val=%llu snap=%d pure=%d reentry=%d\\n\",\n"
+    "               statement->span.begin.line,\n"
+    "               context->local_integer_constants[dbg_idx].known ? 1 : 0,\n"
+    "               (unsigned long long)context->local_integer_constants[dbg_idx].value.bits,\n"
+    "               fallthrough_facts != NULL ? 1 : 0,\n"
+    "               core_runtime_if_pure_local_guard(context, statement->expression) ? 1 : 0,\n"
+    "               core_block_contains_reentry_label(context, then_source) ? 1 : 0);\n"
+    "        }\n"
+    "    }\n"
     + entry_anchor, 1)
 replace_one(
     "    then_continuation_block = context->block_id;\n",
@@ -272,6 +286,18 @@ part = (
       "    }\n"
       "    free(then_exit_facts);\n"
       "    free(fallthrough_facts);\n"
+    + "    if (getenv(\"MINIC_SHMEM_IF_TRACE\") != NULL &&\n"
+      "        context->source_function != NULL &&\n"
+      "        strcmp(context->source_function->name, \"shmem_alloc_and_acct_folio\") == 0) {\n"
+      "        size_t dbg_idx;\n"
+      "        if (core_local_constant_index(context, (MinicLocalId)10022U, &dbg_idx)) {\n"
+      "            (void)fprintf(stderr, \"SHMEM_IF_FLOW line=%zu edge=merge huge_known=%d val=%llu terminated=%d\\n\",\n"
+      "                statement->span.begin.line,\n"
+      "                context->local_integer_constants[dbg_idx].known ? 1 : 0,\n"
+      "                (unsigned long long)context->local_integer_constants[dbg_idx].value.bits,\n"
+      "                then_terminated ? 1 : 0);\n"
+      "        }\n"
+      "    }\n"
     + part[pos + len(final_clear):]
 )
 text = text[:start] + part + text[stop:]
