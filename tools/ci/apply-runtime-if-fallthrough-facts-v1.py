@@ -271,35 +271,42 @@ replace_one(
     "        then_exit_facts = core_runtime_if_copy_facts(context);\n"
     "    }\n",
     "then_exit")
-# The final clear is the last such boundary in lower_if; earlier clears
-# belong to dynamic-branch preparation, other path selection, or guard
-# dominance. Preserve only facts proved on BOTH continuing paths after it.
-final_clear = "    core_local_constants_clear_known(context);\n"
-pos = part.rfind(final_clear)
-if pos < 0 or "*terminated = !needs_merge;" not in part[pos:]:
-    raise SystemExit("IF_FACTS=ERROR final_clear_missing")
-part = (
-    part[:pos + len(final_clear)]
-    + "    if (else_source == NULL) {\n"
-      "        core_runtime_if_merge_false_fallthrough(\n"
-      "            context, fallthrough_facts, then_exit_facts, then_terminated);\n"
-      "    }\n"
-      "    free(then_exit_facts);\n"
-      "    free(fallthrough_facts);\n"
-    + "    if (getenv(\"MINIC_SHMEM_IF_TRACE\") != NULL &&\n"
-      "        context->source_function != NULL &&\n"
-      "        strcmp(context->source_function->name, \"shmem_alloc_and_acct_folio\") == 0) {\n"
-      "        size_t dbg_idx;\n"
-      "        if (core_local_constant_index(context, (MinicLocalId)10022U, &dbg_idx)) {\n"
-      "            (void)fprintf(stderr, \"SHMEM_IF_FLOW line=%zu edge=merge huge_known=%d val=%llu terminated=%d\\n\",\n"
-      "                statement->span.begin.line,\n"
-      "                context->local_integer_constants[dbg_idx].known ? 1 : 0,\n"
-      "                (unsigned long long)context->local_integer_constants[dbg_idx].value.bits,\n"
-      "                then_terminated ? 1 : 0);\n"
-      "        }\n"
-      "    }\n"
-    + part[pos + len(final_clear):]
+# At the dynamic if exit, there are two *different* sources of facts:
+# 1. the pre-branch incoming snapshot, which reaches the false successor;
+# 2. the then-body exit snapshot, which reaches the join only if it did not
+#    terminate.  Meet at the unconditional continuation after the legacy
+#    dominance barrier, NOT inside its conditional clear branch.
+#
+# In particular "if (err) goto failed;" has no continuing true edge.
+# The old rfind("    core_local_constants_clear_known") matched the LAST
+# four spaces of an eight-space indented call inside
+# "if (!(else_source == NULL && then_terminated))".  That skipped our
+# restoration precisely when the true branch terminated, leaking the
+# snapshots as well as losing the known huge=false fact in Linux shmem.
+exit_anchor = "    free(incoming_facts);\\n    *terminated = !needs_merge;\\n"
+if part.count(exit_anchor) != 1:
+    raise SystemExit(f"IF_FACTS=ERROR continuation_count={part.count(exit_anchor)}")
+exit_merge = (
+    "    if (else_source == NULL) {\\n"
+    "        core_runtime_if_merge_false_fallthrough(\\n"
+    "            context, fallthrough_facts, then_exit_facts, then_terminated);\\n"
+    "    }\\n"
+    "    free(then_exit_facts);\\n"
+    "    free(fallthrough_facts);\\n"
+    "    if (getenv(\\\"MINIC_SHMEM_IF_TRACE\\\") != NULL &&\\n"
+    "        context->source_function != NULL &&\\n"
+    "        strcmp(context->source_function->name, \\\"shmem_alloc_and_acct_folio\\\") == 0) {\\n"
+    "        size_t dbg_idx;\\n"
+    "        if (core_local_constant_index(context, (MinicLocalId)10022U, &dbg_idx)) {\\n"
+    "            (void)fprintf(stderr, \\\"SHMEM_IF_FLOW line=%zu edge=merge huge_known=%d val=%llu terminated=%d\\\\n\\\",\\n"
+    "                statement->span.begin.line,\\n"
+    "                context->local_integer_constants[dbg_idx].known ? 1 : 0,\\n"
+    "                (unsigned long long)context->local_integer_constants[dbg_idx].value.bits,\\n"
+    "                then_terminated ? 1 : 0);\\n"
+    "        }\\n"
+    "    }\\n"
 )
+part = part.replace(exit_anchor, exit_merge + exit_anchor, 1)
 text = text[:start] + part + text[stop:]
 path.write_text(text)
 print("MINIC_RUNTIME_IF_FALLTHROUGH_FACTS_V1=APPLIED strict_pure_guard=1")
