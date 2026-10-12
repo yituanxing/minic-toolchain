@@ -1129,3 +1129,28 @@ outputs, three native final links, and P0/P1 12/12. This is
 not a full 3352-TU MiniPP replacement and is not certified
 until a real run returns PASS. Existing four-native and
 GNU-GCC runtime certificates stay immutable.
+
+### 2026-10-12 first MiniPP producer frontier: REAL failure isolated
+
+The initial integration run
+[#38191495016](https://github.com/yituanxing/minic-toolchain/actions/runs/38191495016)
+re-proved the four-native Linux chain P0 2/2 and P1 12/12
+in the same full build and entered the selected
+`init/main.c` MiniPP production compilation.
+It did **not** pass native MiniPP production: the MiniAS wrapper
+required the existing `MINIAS_GNU_ROOT` early-object shadow
+reference directory, but this new script step had not exported it
+into the later stage's shell environment. This was a diagnostic
+harness omission, **not evidence of a MiniPP textual difference**.
+
+The repair explicitly exports the existing shadow reference root
+and tightens provenance: before the MiniPP-produced objects are
+re-archived and re-linked, record their full SHA-256, size and
+nanosecond modification times; after Kbuild finishes, demand
+all three properties of both objects remain identical.
+That prevents falsely certifying a MiniPP-sourced object if Kbuild
+silently overwrites it with GCC/GNU-preprocessed output.
+
+The new replay remains a fresh same-tree 4-native baseline followed
+by exactly-two MiniPP replacement objects and bounded QEMU P0/P1.
+The known-good four-native certificate remains unchanged.

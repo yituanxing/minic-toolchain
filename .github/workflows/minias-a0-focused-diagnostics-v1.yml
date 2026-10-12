@@ -1547,6 +1547,7 @@ jobs:
             build/minias-linux-runtime/native-pp-two/*.log
             build/minias-linux-runtime/native-pp-two/Image.sha256
             build/minias-linux-runtime/native-pp-two/selected-command-sources.txt
+            build/minias-linux-runtime/native-pp-two/production-object-identity.json
             build/minias-linux-runtime/native-pp-two/inputs/*.mini.i
             build/minias-linux-runtime/native-pp-two/inputs/*.gcc.i
             build/minias-linux-runtime/native-pp-two/qemu-p0/*.log
