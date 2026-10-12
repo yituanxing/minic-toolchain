@@ -406,29 +406,53 @@ PY_DMA_CONTEXT
       tail -n 130 "$ev/dma-kernel-source.txt"
     fi
   fi
-  if ((n == 1)) && [[ "${objects[0]}" == mm/shmem.o ]]; then
-    shmem_i="$out/mm/shmem.minic-stage2.i"
-    shmem_s="$out/mm/shmem.minic-stage2.s"
-    test -s "$shmem_i"
-    test -s "$shmem_s"
-    python3 - "$shmem_i" "$shmem_s" "$ev/shmem-assert-context.txt" <<'PY_SHMEM_ASSERT'
+fi
+# One authenticated Linux shmem diagnostic, not a second owner producer.
+# Preserve GNU -E input and current MiniC -S for exact failing assertion
+# names, even when an immutable .o was restored from the candidate cache.
+if ((n == 1)) && [[ "${objects[0]}" == mm/shmem.o ]]; then
+  shmem_i="$out/mm/shmem.minic-stage2.i"
+  shmem_s="$out/mm/shmem.minic-stage2.s"
+  if ((cached == 1)); then
+    # No full cohort recompilation: explicitly rebuild ONLY this source.
+    rm -f "$out/mm/shmem.o" "$out/mm/.shmem.o.cmd"
+    MINIC="$minic" REAL_CC=/usr/bin/riscv64-linux-gnu-gcc \
+      MINIC_KEEP_INTERMEDIATES=1 MINIC_PRESERVE_FAILURE_INPUTS=1 \
+      make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
+        CC="$repo/tests/external/linux/stage2_kbuild_cc.sh" -j1 mm/shmem.o \
+        >"$ev/shmem-diagnostic-replay.log" 2>&1 || {
+          echo "SHMEM_SOURCE_REPLAY=FAIL compile_error"
+          tail -n 70 "$ev/shmem-diagnostic-replay.log"
+          exit 4
+        }
+    test -s "$out/mm/shmem.o" || {
+      echo "SHMEM_SOURCE_REPLAY=FAIL empty_object"; exit 4;
+    }
+    if ! cmp -s "$out/mm/shmem.o" "$ev/minic/mm/shmem.o"; then
+      echo "SHMEM_SOURCE_REPLAY=FAIL candidate_object_bytes_mismatch"
+      exit 4
+    fi
+    echo "SHMEM_SOURCE_REPLAY=PASS exact_candidate_bytes_unchanged=1"
+  fi
+  test -s "$shmem_i" && test -s "$shmem_s"
+  python3 - "$shmem_i" "$shmem_s" "$ev/shmem-assert-context.txt" <<'PY_SHMEM_ASSERT'
 from pathlib import Path
 import re,sys
 pre=Path(sys.argv[1]).read_text(errors="replace").splitlines()
 asm=Path(sys.argv[2]).read_text(errors="replace").splitlines()
 out=[]
-regex=re.compile(r"__compiletime_assert_\d+")
+regex=re.compile(r"__compiletime_assert_(?:395|396|397|398)\b")
 for title,lines in (("GNU_PREPROCESSED",pre),("MINIC_ASSEMBLY",asm)):
     match_indices=[i for i,s in enumerate(lines) if regex.search(s)]
-    out.append(f"SHMEM_CAPTURE stage={title} matches={len(match_indices)}")
-    for n in match_indices[:40]:
-        out.append(f"SHMEM_CAPTURE stage={title} center={n+1}")
-        for k in range(max(0,n-7),min(len(lines),n+6)):
-            out.append(f" {k+1}: {lines[k][:700]}")
+    out.append(f"SHMEM_TARGET_CAPTURE stage={title} matches={len(match_indices)}")
+    for n in match_indices[:18]:
+        symbols=sorted(set(regex.findall(lines[n])))
+        out.append(f"SHMEM_TARGET_CAPTURE stage={title} center={n+1} symbols={','.join(symbols)}")
+        for k in range(max(0,n-4),min(len(lines),n+5)):
+            out.append(f" {k+1}: {lines[k][:1200]}")
 Path(sys.argv[3]).write_text("\n".join(out)+"\n")
-print("\n".join(out)[:20000])
+print("\n".join(out)[:36000])
 PY_SHMEM_ASSERT
-  fi
 fi
 python3 - "$ev/gcc" "$ev/minic" "$objects_file" <<'PY_ABI'
 from pathlib import Path
