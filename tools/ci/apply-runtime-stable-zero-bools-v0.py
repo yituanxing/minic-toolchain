@@ -179,6 +179,7 @@ static bool core_program_bool_is_provably_zero(
     const MinicC0Program *program;
     const MinicLocal *local;
     size_t i;
+    bool trace;
 
     if (context == NULL || context->source_function == NULL ||
         context->body == NULL || context->body->program == NULL ||
@@ -186,6 +187,9 @@ static bool core_program_bool_is_provably_zero(
         return false;
     }
     program = context->body->program;
+    trace = getenv("MINIC_DMA_ZERO_TRACE") != NULL &&
+            context->source_function->name != NULL &&
+            strcmp(context->source_function->name, "dma_direct_alloc") == 0;
     local = minic_c0_program_local(program, local_id);
     if (local == NULL || local->is_array || local->is_register_storage ||
         !minic_type_is_bool_integer(local->type) ||
@@ -203,6 +207,11 @@ static bool core_program_bool_is_provably_zero(
             (!core_program_expr_is_literal_zero(context, stmt->expression) &&
              !core_program_stmt_is_dead_after_return(
                  context, (MinicStatementId)i))) {
+            if (trace) (void)fprintf(stderr,
+                "DMA_ZERO_REJECT local=%zu reason=stmt index=%zu line=%zu kind=%d zero=%d dead=%d\\n",
+                (size_t)local_id, i, stmt->span.begin.line, (int)stmt->kind,
+                core_program_expr_is_literal_zero(context, stmt->expression) ? 1 : 0,
+                core_program_stmt_is_dead_after_return(context, (MinicStatementId)i) ? 1 : 0);
             return false;
         }
     }
@@ -213,6 +222,7 @@ static bool core_program_bool_is_provably_zero(
             case MINIC_EXPRESSION_ADDRESS_OF:
                 if (core_program_expr_is_local(
                         program, expr->value.unary.operand, local_id)) {
+                    if (trace) (void)fprintf(stderr, "DMA_ZERO_REJECT local=%zu reason=address expr=%zu line=%zu\\n", (size_t)local_id, i, expr->span.begin.line);
                     return false;
                 }
                 break;
@@ -223,6 +233,7 @@ static bool core_program_bool_is_provably_zero(
                      expr->value.unary.operator_kind == MINIC_UNARY_POST_DECREMENT) &&
                     core_program_expr_is_local(
                         program, expr->value.unary.operand, local_id)) {
+                    if (trace) (void)fprintf(stderr, "DMA_ZERO_REJECT local=%zu reason=update expr=%zu line=%zu\\n", (size_t)local_id, i, expr->span.begin.line);
                     return false;
                 }
                 break;
@@ -237,6 +248,7 @@ static bool core_program_bool_is_provably_zero(
                 if (expr->kind == MINIC_EXPRESSION_COMPOUND_ASSIGNMENT ||
                     !core_program_expr_is_literal_zero(
                         context, expr->value.binary.right)) {
+                    if (trace) (void)fprintf(stderr, "DMA_ZERO_REJECT local=%zu reason=expression expr=%zu line=%zu kind=%d\\n", (size_t)local_id, i, expr->span.begin.line, (int)expr->kind);
                     return false;
                 }
                 break;
@@ -250,6 +262,7 @@ static bool core_program_bool_is_provably_zero(
         for (j = 0U; j < asm_stmt->output_count; ++j) {
             if (core_program_expr_is_local(
                     program, asm_stmt->outputs[j].expression, local_id)) {
+                if (trace) (void)fprintf(stderr, "DMA_ZERO_REJECT local=%zu reason=asm idx=%zu\\n", (size_t)local_id, i);
                 return false;
             }
         }
