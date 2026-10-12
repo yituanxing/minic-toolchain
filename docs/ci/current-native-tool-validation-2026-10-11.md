@@ -1105,3 +1105,27 @@ change the certified producer evidence.
 replacement with fixed GNU compilation and these native tools; finish
 the MiniC compiler full-object runtime frontier; then a fully native
 combined build and compiler/tool self-hosting/bootstrap tests.
+
+### MiniPP true production-substitution frontier (two Linux TUs)
+
+After the four-native Linux P0/P1 certificate, the same existing
+MiniAS integrated job now attempts a *separate, fail-closed*
+MiniPP producer step on `init/main.c` and `kernel/configs.c`.
+These were exact in the previous live-GCC textual oracle, but
+that historical wrapper delegated the actual GCC C compilation.
+The new explicit `MINIPP_LINUX_SUBSTITUTE=true` mode changes this:
+MiniPP produces the exact `.i`, GCC independently checks byte
+equality and generates dependency metadata, and **only the
+MiniPP-generated `.i` reaches GNU cc1 through
+`-x cpp-output -fpreprocessed`**. Any PP error/diff fails;
+no fallthrough to GNU preprocessing.
+
+The producer commands come from the existing GNU-GCC Kbuild
+`.o.cmd` files and modify only two objects, not the global
+Kbuild CC identity; existing MiniAS/MiniAR/MiniLD-final/MiniObjcopy
+then rearchive and relink incrementally before QEMU P0/P1.
+Trace requires exactly two `SUBSTITUTE` markers, two GNU-exact
+outputs, three native final links, and P0/P1 12/12. This is
+not a full 3352-TU MiniPP replacement and is not certified
+until a real run returns PASS. Existing four-native and
+GNU-GCC runtime certificates stay immutable.

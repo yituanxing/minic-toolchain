@@ -89,7 +89,9 @@ def main():
         "            build/minias-linux-runtime/out/arch/riscv/boot/Image", 1)
     linux_body = cur["linux-single"]
     integrated_path = ROOT / "tests/external/linux/mini_tools_integrated_relink.sh"
-    if sha(integrated_path) != "954500dca376fae0f53f5a8b9800a858366f5e88":
+    if sha(ROOT / "tests/external/linux/minipp_native_targeted_relink.sh") != "d3b072998d05d924be4921a30bedae4846910f02":
+        raise AssertionError("native MiniPP exact producer substitute changed")
+    if sha(integrated_path) != "6d04a5934e8b5fce74a3b39dede98649213dd2f1":
         raise AssertionError("integrated GNU-link MiniAS+MiniAR+MiniObjcopy replay changed")
     approved_integrated = (
         "      - name: Reuse MiniAS Linux objects with MiniAR and MiniObjcopy and run QEMU P0 P1\n"
@@ -134,6 +136,14 @@ def main():
         "            build/minias-linux-runtime/native-four/triple-native.Image.sha256\n"
         "            build/minias-linux-runtime/native-four/qemu-p0/*.log\n"
         "            build/minias-linux-runtime/native-four/qemu-p1/*.log\n"
+        "            build/minias-linux-runtime/native-pp-two/*.trace\n"
+        "            build/minias-linux-runtime/native-pp-two/*.log\n"
+        "            build/minias-linux-runtime/native-pp-two/Image.sha256\n"
+        "            build/minias-linux-runtime/native-pp-two/selected-command-sources.txt\n"
+        "            build/minias-linux-runtime/native-pp-two/inputs/*.mini.i\n"
+        "            build/minias-linux-runtime/native-pp-two/inputs/*.gcc.i\n"
+        "            build/minias-linux-runtime/native-pp-two/qemu-p0/*.log\n"
+        "            build/minias-linux-runtime/native-pp-two/qemu-p1/*.log\n"
     )
     if linux_body.count(integrated_evidence) != 1:
         raise AssertionError("native-integrated relink evidence archive modified")

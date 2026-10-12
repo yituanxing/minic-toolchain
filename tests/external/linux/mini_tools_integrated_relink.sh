@@ -223,4 +223,9 @@ SH
   python3 tests/external/linux/runtime_v2_log_check.py \
     --profile p1 --log "$four/qemu-p1/rdinit-init.log"
   echo "NATIVE_FOUR_LINUX_RUNTIME=PASS components=MiniAS,MiniAR,MiniLD-final,MiniObjcopy gcc=GNU p0=2/2 p1=12/12"
+  # Fifth tool boundary: two exact MiniPP producer TUs, never a shadow
+  # comparison whose GCC output silently reaches production Kbuild.
+  if [[ "${MINIPP_NATIVE_TWO:-true}" == "true" ]]; then
+    bash "$(dirname "$0")/minipp_native_targeted_relink.sh"
+  fi
 fi

@@ -1543,6 +1543,14 @@ jobs:
             build/minias-linux-runtime/native-four/triple-native.Image.sha256
             build/minias-linux-runtime/native-four/qemu-p0/*.log
             build/minias-linux-runtime/native-four/qemu-p1/*.log
+            build/minias-linux-runtime/native-pp-two/*.trace
+            build/minias-linux-runtime/native-pp-two/*.log
+            build/minias-linux-runtime/native-pp-two/Image.sha256
+            build/minias-linux-runtime/native-pp-two/selected-command-sources.txt
+            build/minias-linux-runtime/native-pp-two/inputs/*.mini.i
+            build/minias-linux-runtime/native-pp-two/inputs/*.gcc.i
+            build/minias-linux-runtime/native-pp-two/qemu-p0/*.log
+            build/minias-linux-runtime/native-pp-two/qemu-p1/*.log
             build/minias-linux-runtime/qemu-p0/*.log
             build/minias-linux-runtime/qemu-p1/*.log
             build/minias-linux-runtime/out/arch/riscv/boot/Image
