@@ -188,6 +188,47 @@ if [[ "${COHORT_P1_GDB_STACK:-0}" == 1 ]]; then
        "$ev/runtime-initramfs.cpio.gz" "$LINUX_RUNTIME_CUSTOM_DTB" \
        "$ev/p1-gdb-stack-experiment" 65; then
     echo "P1_DEFINED_CROSSBLOCK_GDB=CAPTURED no_P1_pass_inference=true"
+    # Correlate the OBSERVED per-CPU IRQ base with the saved trapped SP
+    # from the three normal (non-GDB) executions of the EXACT same Image.
+    python3 - "$ev" "$dest/p1-irq-attribution.tsv" "$pinned" <<'PY_IRQ_ATTRIBUTION'
+from pathlib import Path
+import re, sys
+ev, report, expected_sha = Path(sys.argv[1]), Path(sys.argv[2]), sys.argv[3]
+gdb = (ev / "p1-gdb-stack-experiment/gdb.log").read_text(errors="replace")
+m = re.search(r"P1_GDB_IRQ_LAYOUT irq_base=0x([0-9a-fA-F]+) irq_top=0x([0-9a-fA-F]+)", gdb)
+irq = re.search(r"P1_GDB_FRAME name=handle_riscv_irq [^\n]*sp=0x([0-9a-fA-F]+)", gdb)
+if not m or not irq:
+    print("P1_DEFINED_CROSSBLOCK_IRQ=INCONCLUSIVE missing_layout_or_irq_entry")
+    raise SystemExit(0)
+base, top = (int(m.group(i), 16) for i in (1, 2))
+entry = int(irq.group(1), 16)
+if top - base != 16384 or entry != top:
+    print("P1_DEFINED_CROSSBLOCK_IRQ=INCONCLUSIVE invalid_irq_stack_boundary_or_entry")
+    raise SystemExit(0)
+rows = []
+for index in (1, 2, 3):
+    log = (ev / f"trials/p1_defined_crossblock_{index}/qemu/rdinit-init.log").read_text(errors="replace")
+    crash = log.split("Insufficient stack space to handle exception!", 1)
+    mm = re.search(r"\bsp\s*:\s*(?:0x)?([0-9a-fA-F]{16})", crash[-1])
+    if len(crash) != 2 or not mm:
+        print(f"P1_DEFINED_CROSSBLOCK_IRQ=INCONCLUSIVE trial={index} no_captured_fault_sp")
+        raise SystemExit(0)
+    fault_sp = int(mm.group(1), 16)
+    delta = base - fault_sp
+    rows.append((index, f"0x{fault_sp:x}", delta))
+report.write_text(
+    "trial\ttrapped_sp\tbytes_below_irq_stack_base\n" +
+    "".join(f"{i}\t{sp}\t{delta}\n" for i, sp, delta in rows)
+)
+if all(0 < row[2] <= 4096 for row in rows):
+    print("P1_DEFINED_CROSSBLOCK_IRQ=VERIFIED irq_base=0x%x irq_top=0x%x "
+          "trapped_sp_below_base_bytes=%s trials=3 same_image_sha=%s "
+          "debugger_not_a_P1_oracle=true" %
+          (base, top, ",".join(str(row[2]) for row in rows), expected_sha))
+else:
+    print("P1_DEFINED_CROSSBLOCK_IRQ=INCONCLUSIVE irq_base=0x%x deltas=%s" %
+          (base, ",".join(str(row[2]) for row in rows)))
+PY_IRQ_ATTRIBUTION
   else
     echo "P1_DEFINED_CROSSBLOCK_GDB=INCONCLUSIVE no_P1_pass_inference=true"
   fi
