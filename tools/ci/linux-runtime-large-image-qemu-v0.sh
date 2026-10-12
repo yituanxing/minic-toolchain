@@ -8,65 +8,27 @@ repo=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
 archive="${1:?usage: linux-runtime-large-image-qemu-v0.sh artifact-extraction-dir}"
 ev="$repo/build/linux-runtime-large-image-qemu-v0"
 mkdir -p "$ev"
-# The historical 145/203-PASS MiniC Image and the current all-2064
-# MiniC Image must not be mixed or silently substituted. Pin source run,
-# kernel bytes, and the reference historical file size for a causal A/B.
-historical=${LARGE_IMAGE_HISTORICAL_NINE_P1:-0}
-if [[ "$historical" == 1 ]]; then
-  expected_sha=8e2a6b39a2b90107dd1c4093bea88d229806812ffb344cea03d2dd855910e0f5
-  expected_bytes=215502848
-  source_run=38135950731
-  source_commit=b4ca2dd65a3213c6c5e430c678d406392033ac1e
-  image=
-  # The historical nine-MiniC-owner bundle has a different layout from
-  # sharded-gnu-minic-QEMU. Accept ONLY the byte-identical known-good Image.
-  while IFS= read -r -d '' candidate; do
-    if [[ $(sha256sum "$candidate" | cut -d' ' -f1) == "$expected_sha" ]]; then
-      image="$candidate"
-      break
-    fi
-  done < <(find "$archive" -type f -name Image -print0)
-  if [[ -z "$image" ]]; then
-    # Historical CI #38135950731 preserved Image.gz to keep its artifact
-    # below the GitHub upload limit. Decompress ONLY this verified Image;
-    # no source, compiler, linker, or .o files are touched.
-    compressed=$(find "$archive" -type f -path '*/trials/earlycon_fixed_only/Image.gz' -print -quit)
-    if [[ -n "$compressed" && -s "$compressed" ]]; then
-      mkdir -p "$ev/historical-extracted"
-      gzip -t "$compressed"
-      gzip -dc "$compressed" >"$ev/historical-extracted/Image"
-      image="$ev/historical-extracted/Image"
-      echo "HISTORICAL_NINE_IMAGE=DECOMPRESSED from=$(basename "$compressed") compressed_bytes=$(stat -c %s "$compressed") actual_sha=$(sha256sum "$image" | cut -d' ' -f1)"
-    fi
-  fi
-else
-  expected_sha=dba3295a111b861be13dade671184918635662a82df8ad7997deb2da5c7d147f
-  expected_bytes=215511040
-  source_run=38204602644
-  source_commit=d5dde03594665842f2bb3b8556f842f511a5dfa4
-  image=$(find "$archive" -type f -path '*/trials/full_all/Image' -print -quit)
-fi
+image=$(find "$archive" -type f -path '*/trials/full_all/Image' -print -quit)
 if [[ -z "$image" || ! -s "$image" ]]; then
-  echo "LARGE_IMAGE_REUSE=FAIL reason=certified_image_missing artifact=$archive historical=$historical" >&2
-  find "$archive" -type f -printf '%P (%s bytes)\n' | head -n 65 || true
+  echo "LARGE_IMAGE_REUSE=FAIL reason=original_image_missing artifact=$archive" >&2
   exit 2
 fi
+expected_sha=dba3295a111b861be13dade671184918635662a82df8ad7997deb2da5c7d147f
 actual_sha=$(sha256sum "$image" | cut -d' ' -f1)
 if [[ "$actual_sha" != "$expected_sha" ]]; then
   echo "LARGE_IMAGE_REUSE=FAIL reason=image_digest_mismatch expected=$expected_sha actual=$actual_sha" >&2
   exit 2
 fi
 image_bytes=$(stat -c '%s' "$image")
-[[ "$image_bytes" == "$expected_bytes" ]] || {
-  echo "LARGE_IMAGE_REUSE=FAIL reason=image_size expected=$expected_bytes observed=$image_bytes" >&2
+[[ "$image_bytes" == 215511040 ]] || {
+  echo "LARGE_IMAGE_REUSE=FAIL reason=image_size bytes=$image_bytes" >&2
   exit 2
 }
-printf '%s\n' "source_run=$source_run" "source_commit=$source_commit" \
+printf '%s\n' "source_run=38204602644" "source_commit=d5dde03594665842f2bb3b8556f842f511a5dfa4" \
   "image_sha256=$actual_sha" "image_bytes=$image_bytes" "compiler=MiniC" \
   "assembler=GNU-AS" "linker=GNU-LD" "qemu_memory=2G" \
-  "original_145_203_pass_historical=$historical" \
   >"$ev/provenance.txt"
-echo "LARGE_IMAGE_REUSE=PASS sha256=$actual_sha bytes=$image_bytes source_run=$source_run historical=$historical"
+echo "LARGE_IMAGE_REUSE=PASS sha256=$actual_sha bytes=$image_bytes source_run=38204602644"
 
 BUILD_DIR="$ev/initramfs" OUTPUT_INITRAMFS="$ev/runtime-initramfs.cpio.gz" \
   RISCV_CC=riscv64-linux-gnu-gcc \
@@ -116,67 +78,31 @@ export LINUX_RUNTIME_INITRD_LOAD_ADDR="$load_addr"
 # the Linux image, initramfs, source config, flags, or runtime oracles.
 # Leave the reference QEMU runner's default 512M entirely unchanged.
 run_profile() {
-  local profile="$1" timeout="$2" label="${3:-$1}" rc=0
-  echo "LARGE_IMAGE_QEMU=START profile=$profile sample=$label guest_memory=2G timeout=$timeout"
+  local profile="$1" timeout="$2" rc=0
+  echo "LARGE_IMAGE_QEMU=START profile=$profile guest_memory=2G timeout=$timeout"
   if LINUX_IMAGE="$image" INITRAMFS="$ev/runtime-initramfs.cpio.gz" \
-     BUILD_DIR="$ev/qemu-$label" LINUX_RELEASE=6.6.143 \
+     BUILD_DIR="$ev/qemu-$profile" LINUX_RELEASE=6.6.143 \
      LINUX_RUNTIME_QEMU_MEMORY=2G \
      LINUX_RUNTIME_PROFILE="$profile" QEMU_TIMEOUT_SECONDS="$timeout" \
      QEMU_SHELL_INPUT_DELAY_SECONDS=22 \
      bash "$repo/tests/external/linux/runtime_boot.sh" \
-       >"$ev/$label.stdout.log" 2>&1; then
+       >"$ev/$profile.stdout.log" 2>&1; then
     rc=0
   else
     rc=$?
   fi
-  echo "LARGE_IMAGE_QEMU_PROFILE profile=$profile label=$label rc=$rc"
+  echo "LARGE_IMAGE_QEMU_PROFILE profile=$profile rc=$rc"
   grep -aE 'Linux version|Kernel command line|devtmpfs:|Run /init|Run /bin/sh|INIT_|USER_SHELL_OK|DONE_COMMANDS|RUNTIME_V2|Kernel panic|Oops:|BUG:|Unable to handle|ROM regions are overlapping' \
-    "$ev/qemu-$label"/*.log 2>/dev/null | tail -n 65 || true
+    "$ev/qemu-$profile"/*.log 2>/dev/null | tail -n 65 || true
   if ((rc != 0)); then
-    echo "LARGE_IMAGE_QEMU=FAIL profile=$profile label=$label rc=$rc"
-    tail -n 85 "$ev/$label.stdout.log" || true
+    echo "LARGE_IMAGE_QEMU=FAIL profile=$profile rc=$rc"
+    tail -n 85 "$ev/$profile.stdout.log" || true
     return "$rc"
   fi
-  echo "LARGE_IMAGE_QEMU=PASS profile=$profile label=$label guest_memory=2G image_unchanged=true"
+  echo "LARGE_IMAGE_QEMU=PASS profile=$profile guest_memory=2G image_unchanged=true"
 }
 # Shell is independent of the IPv6 P1 syscall path and must be proved
 # before a genuine runtime panic stops the failing P1 lane.
-if [[ "$historical" == 1 ]]; then
-  # Historical MiniC 145/203-PASS image, not an all-current 2064 compile.
-  # Explicit opt-in: this rerun is A/B of the historical certified kernel.
-  # Test exactly the modern P1 with three fresh QEMU processes and SAME Image.
-  # Failures are real negative evidence; preserve all raw logs, do not abort
-  # before collecting the repeated guest outcome.
-  run_profile fast 75
-  printf 'attempt\timage_sha256\tp1_verdict\tqemu_rc\n' >"$ev/historical-p1-verdicts.tsv"
-  passes=0
-  fails=0
-  for attempt in 1 2 3; do
-    result=FAIL
-    rc=0
-    run_profile p1 95 "p1-historical-$attempt" || rc=$?
-    if ((rc==0)); then
-      result=PASS
-      ((++passes))
-    else
-      ((++fails))
-    fi
-    [[ $(sha256sum "$image" | cut -d' ' -f1) == "$expected_sha" ]] || {
-      echo "HISTORICAL_NINE_P1=ERROR source_image_mutated"; exit 8;
-    }
-    printf '%s\t%s\t%s\t%s\n' "$attempt" "$expected_sha" "$result" "$rc" >>"$ev/historical-p1-verdicts.tsv"
-    echo "HISTORICAL_NINE_P1_ATTEMPT=$attempt verdict=$result original_145_203_pass_image=true"
-  done
-  if ((passes==3)); then
-    verdict=PASS
-  elif ((fails==3)); then
-    verdict=FAIL
-  else
-    verdict=VARIABLE
-  fi
-  echo "HISTORICAL_NINE_P1=RESULT verdict=$verdict passes=$passes fails=$fails boots=3 original_image_sha=$expected_sha image_unchanged=true"
-  exit 0
-fi
 run_profile fast 75
 run_profile shell 90
 run_profile p1 90
