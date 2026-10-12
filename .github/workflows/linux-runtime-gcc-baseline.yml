@@ -658,8 +658,9 @@ jobs:
             gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu python3
 
       - name: Install pinned GNU RISC-V tools and QEMU
-        # The immutable P1 object A/B lane must fail fast if apt mirrors stall.
-        timeout-minutes: 5
+        # Azure apt mirror transiently exceeded 5m (run 38256038299); allow
+        # package downloads without mistaking environment for compiler failure.
+        timeout-minutes: 12
         if: "!contains(github.event.head_commit.message, '[linux-runtime-p1-frame-audit]')"
         run: |
           set -Eeuo pipefail
@@ -989,6 +990,7 @@ jobs:
             build/linux-runtime-gcc-cohort-v1/p1-frame-components/*.tsv
             build/linux-runtime-gcc-cohort-v1/p1-frame-components/*.log
             build/linux-runtime-gcc-cohort-v1/p1-frame-components/*.sha256
+            build/linux-runtime-gcc-cohort-v1/p1-frame-components/*.i.gz
             build/linux-runtime-gcc-cohort-v1/p1-*-audit-compiler.sha256
             build/linux-runtime-gcc-cohort-v1/p1-diagnostic-compiler.sha256
             build/linux-runtime-gcc-cohort-v1/p1-pre-crossblock-compiler.sha256
