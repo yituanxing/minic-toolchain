@@ -352,5 +352,43 @@ part = part.replace(needle,
     "        }\n"
     "    }\n", 1)
 text = text[:start] + part + text[stop:]
+
+# Strictly diagnostic: trace whether a local bool is set before an unrelated
+# CFG boundary clears it in shmem_alloc_and_acct_folio. Never change IR here.
+clear_head = "static void core_local_constants_clear_known("
+clear_start = text.index(clear_head)
+clear_end = text.index("\nstatic ", clear_start + 10)
+piece = text[clear_start:clear_end]
+probe = "        if (fact->specialization_known && !fact->specialization_modified &&"
+if piece.count(probe) != 1:
+    raise SystemExit(f"SHMEM_FACT_TRACE=ERROR clear_anchor={piece.count(probe)}")
+piece = piece.replace(probe, r'''        if (getenv("MINIC_SHMEM_IF_TRACE") != NULL &&
+            context->source_function->name != NULL &&
+            strcmp(context->source_function->name, "shmem_alloc_and_acct_folio") == 0 &&
+            fact->known) {
+            (void)fprintf(stderr, "SHMEM_FACT_EVENT event=clear local=%zu bits=%llu escaped=%d\n",
+                (size_t)(context->source_function->local_begin + index),
+                (unsigned long long)fact->value.bits, fact->escaped ? 1 : 0);
+        }
+''' + probe, 1)
+text = text[:clear_start] + piece + text[clear_end:]
+set_head = "static void core_local_constant_set("
+set_start = text.rfind(set_head)
+set_end = text.index("\nstatic ", set_start + 10)
+piece = text[set_start:set_end]
+probe = "    context->local_integer_constants[index].known = true;\n"
+if piece.count(probe) != 1:
+    raise SystemExit(f"SHMEM_FACT_TRACE=ERROR set_anchor={piece.count(probe)}")
+piece = piece.replace(probe, probe + r'''    if (getenv("MINIC_SHMEM_IF_TRACE") != NULL &&
+        context->source_function != NULL &&
+        context->source_function->name != NULL &&
+        strcmp(context->source_function->name, "shmem_alloc_and_acct_folio") == 0) {
+        (void)fprintf(stderr, "SHMEM_FACT_EVENT event=set local=%zu bits=%llu escaped=%d\n",
+            (size_t)local_id,
+            (unsigned long long)converted.bits,
+            context->local_integer_constants[index].escaped ? 1 : 0);
+    }
+''', 1)
+text = text[:set_start] + piece + text[set_end:]
 path.write_text(text)
 print("MINIC_RUNTIME_STABLE_ZERO_BOOLS_V0=APPLIED proof=entry_and_all_writes escaped=deny")
