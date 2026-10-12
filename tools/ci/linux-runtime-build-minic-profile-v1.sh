@@ -151,6 +151,22 @@ int direct_call_escape_guard(void)
         return must_retain_mutating_call();
     return 23;
 }
+
+/* Real kernel/dma/direct.c pattern: the only assignment of 1
+   is unreachable because the feature-off guard must return first. */
+extern int missing_dma_after_const_return(void);
+int dma_const_return_guard(int coherent)
+{
+    _Bool set_uncached = 0;
+    if (!coherent) {
+        if (1)
+            return 0;
+        set_uncached = 1;
+    }
+    if (set_uncached)
+        return missing_dma_after_const_return();
+    return 23;
+}
 C
 # Same path as Kbuild stage2: GNU preprocessing -> MiniC -S -> GNU AS.
 # This runtime profile intentionally builds only minic and minic-cc (no minic-cpp).
@@ -174,7 +190,7 @@ if ! grep -Fq must_retain_mutating_call "$probe_dir/undefined.txt"; then
 fi
 echo "RUNTIME_DMA_BOOL_LINK_REFS=PASS dead_call_absent=1 live_call_present=1" | \
   tee "$probe_dir/verdict.txt"
-for symbol in missing_dma_call_guard missing_dma_label_guard; do
+for symbol in missing_dma_call_guard missing_dma_label_guard missing_dma_after_const_return; do
   if grep -Fq "$symbol" "$probe_dir/undefined.txt"; then
     echo "RUNTIME_DMA_PROBE=RED symbol=$symbol class=needs_more_cfg_proof" | \
       tee -a "$probe_dir/verdict.txt"
