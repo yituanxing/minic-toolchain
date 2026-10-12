@@ -2226,7 +2226,9 @@ PY_FRAME_PROLOGUE
     exit 8
   fi
   echo "COHORT_P1_OWNER_BASELINE=REPRODUCED verdict=$TRIAL_VERDICT"
-  targets_string="${COHORT_P1_SWAP_OWNERS:-lib/list_debug.o net/ipv6/tcp_ipv6.o net/ipv4/tcp_ipv4.o}"
+  # The panic's exact return-address symbol was resolved by 38212502667
+  # to net/core/dev.o (NOT tcp_ipv4.o). Probe known owners first.
+  targets_string="${COHORT_P1_SWAP_OWNERS:-lib/list_debug.o net/core/dev.o net/ipv6/tcp_ipv6.o}"
   for target in $targets_string; do
     owner_idx=-1
     for ((i=0;i<n;i++)); do
