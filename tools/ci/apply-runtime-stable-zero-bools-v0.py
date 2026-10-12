@@ -175,9 +175,12 @@ static bool core_program_bool_is_provably_zero(
 }
 '''
 anchor = "static void core_local_constant_set(MinicCoreLowerContext *context,"
-if text.count(anchor) != 1:
-    raise SystemExit(f"STABLE_ZERO=ERROR set_anchor_count={text.count(anchor)}")
-text = text.replace(anchor, helper + "\n" + anchor, 1)
+if text.count(anchor) < 1:
+    raise SystemExit("STABLE_ZERO=ERROR no_set_anchor")
+# Earlier Runtime patches may inject a forward declaration of the setter.
+# Target the LAST definition, never that declaration.
+position = text.rfind(anchor)
+text = text[:position] + helper + "\n" + text[position:]
 
 # Preserve only proven immutable zero; the existing normal local fact
 # invalidation and escaping remain in full force for every other local.
@@ -194,7 +197,7 @@ part = part.replace(needle,
     "        }\n", 1)
 text = text[:start] + part + text[stop:]
 
-start = text.index("static void core_local_constant_set(")
+start = text.rfind("static void core_local_constant_set(")
 stop = text.index("\nstatic ", start + 10)
 part = text[start:stop]
 needle = "    context->local_integer_constants[index].known = true;\n"
