@@ -1475,6 +1475,9 @@ PY_RISCV_DYNAMIC
     # Same object selection, different runtime oracle (FAST -> FULL):
     # skip a redundant link. Image bytes and all object IDs stay fixed.
     echo "COHORT_LINK=REUSED name=$name selection=$selection" | tee "$d/link.log"
+    # Same linked build directory, different guest run: keep the selection
+    # manifest identical for the non-C Kbuild provenance verifier.
+    cp -a "$last_link_source_dir/selected-objects.txt" "$d/selected-objects.txt"
   fi
   for ((i=0;i<n;i++)); do
     target=${objects[i]}
@@ -2271,6 +2274,26 @@ PY_FRAME_PROLOGUE
   # Frozen full-MiniC kernel must reproduce the observed P1 failure
   # in the same job and guest configuration before making causal claims.
   trial p1_full_minic "$n" p1
+  baseline_verdict="$TRIAL_VERDICT"
+  baseline_image_sha="$image_sha"
+  if [[ "${COHORT_P1_IDENTICAL_IMAGE_REPEAT:-0}" == 1 ]]; then
+    # Fresh QEMU process each time; no relink, no source changes.
+    # Repeated success/failure on ONE IMAGE distinguishes runtime scheduling
+    # sensitivity from invalid across-run source/object comparisons.
+    printf 'trial\tprofile\timage_sha\tverdict\n' >"$ev/p1-identical-image-repeats.tsv"
+    printf 'p1_full_minic\tbaseline\t%s\t%s\n' "$image_sha" "$TRIAL_VERDICT" >>"$ev/p1-identical-image-repeats.tsv"
+    for attempt in 2 3; do
+      trial "p1_full_minic_repeat_$attempt" "$n" p1
+      [[ "$image_sha" == "$baseline_image_sha" ]] || {
+        echo "COHORT_REPEAT_IMAGE=FAIL class=baseline_sha_changed attempt=$attempt"; exit 8;
+      }
+      printf 'p1_full_minic_repeat_%s\tbaseline\t%s\t%s\n' "$attempt" "$image_sha" "$TRIAL_VERDICT" >>"$ev/p1-identical-image-repeats.tsv"
+      if [[ "$TRIAL_VERDICT" != "$baseline_verdict" ]]; then
+        echo "COHORT_REPEAT_IMAGE=VARIABLE profile=baseline image=$image_sha attempt=$attempt"
+      fi
+    done
+  fi
+  TRIAL_VERDICT="$baseline_verdict"
   if [[ "$TRIAL_VERDICT" != FAIL ]]; then
     echo "COHORT_P1_OWNER=INCONCLUSIVE baseline=$TRIAL_VERDICT"
     exit 8
@@ -2292,6 +2315,28 @@ PY_FRAME_PROLOGUE
     name=$(printf '%s' "$p1_probe_owner" | tr '/.' '__')
     echo "COHORT_P1_OWNER_SWAP=START owner=$p1_probe_owner index=$owner_idx others_minic=$((n-1))"
     trial "p1_gcc_$name" "$owner_idx" p1 all_except
+    first_swap_verdict="$TRIAL_VERDICT"
+    swap_image_sha="$image_sha"
+    if [[ "${COHORT_P1_IDENTICAL_IMAGE_REPEAT:-0}" == 1 ]]; then
+      printf 'p1_gcc_%s\tswap\t%s\t%s\n' "$name" "$image_sha" "$TRIAL_VERDICT" >>"$ev/p1-identical-image-repeats.tsv"
+      swap_variable=0
+      for attempt in 2 3; do
+        trial "p1_gcc_${name}_repeat_$attempt" "$owner_idx" p1 all_except
+        [[ "$image_sha" == "$swap_image_sha" ]] || {
+          echo "COHORT_REPEAT_IMAGE=FAIL class=swap_sha_changed attempt=$attempt"; exit 8;
+        }
+        printf 'p1_gcc_%s_repeat_%s\tswap\t%s\t%s\n' "$name" "$attempt" "$image_sha" "$TRIAL_VERDICT" >>"$ev/p1-identical-image-repeats.tsv"
+        if [[ "$TRIAL_VERDICT" != "$first_swap_verdict" ]]; then
+          swap_variable=1
+          echo "COHORT_REPEAT_IMAGE=VARIABLE profile=swap owner=$p1_probe_owner image=$image_sha attempt=$attempt"
+        fi
+      done
+      if [[ "$swap_variable" == 1 ]]; then
+        TRIAL_VERDICT=VARIABLE
+      else
+        TRIAL_VERDICT="$first_swap_verdict"
+      fi
+    fi
     printf '%s\t%s\t%s\n' "$p1_probe_owner" "$TRIAL_VERDICT" "$image_sha" \
       >>"$ev/p1-owner-verdicts.tsv"
     echo "COHORT_P1_OWNER_SWAP=RESULT owner=$p1_probe_owner verdict=$TRIAL_VERDICT"
