@@ -10,10 +10,10 @@ import argparse
 from pathlib import Path
 import re
 
-STACK = re.compile(r"Task stack:\\s*\\[(?:0x)?([0-9a-fA-F]+)\\.\\.(?:0x)?([0-9a-fA-F]+)\\]")
-SP = re.compile(r"\\bsp\\s*:\\s*(?:0x)?([0-9a-fA-F]{8,16})\\b")
-EPC = re.compile(r"\\bepc\\s*:\\s*([\\w.$]+)\\+0x([0-9a-fA-F]+)/0x([0-9a-fA-F]+)")
-RA = re.compile(r"\\bra\\s*:\\s*([\\w.$]+)\\+0x([0-9a-fA-F]+)/0x([0-9a-fA-F]+)")
+STACK = re.compile(r"Task stack:\s*\[(?:0x)?([0-9a-fA-F]+)\.\.(?:0x)?([0-9a-fA-F]+)\]")
+SP = re.compile(r"\bsp\s*:\s*(?:0x)?([0-9a-fA-F]{8,16})\b")
+EPC = re.compile(r"\bepc\s*:\s*([\w.$]+)\+0x([0-9a-fA-F]+)/0x([0-9a-fA-F]+)")
+RA = re.compile(r"\bra\s*:\s*([\w.$]+)\+0x([0-9a-fA-F]+)/0x([0-9a-fA-F]+)")
 
 
 def classify(log: str) -> dict[str, str]:
