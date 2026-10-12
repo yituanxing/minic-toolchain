@@ -12,8 +12,13 @@ if [[ "$single_owner" == 1 ]]; then
   if [[ "${COHORT_P1_DISCARD_EQ:-0}" == 1 ]]; then
     # Test semantic removal of genuinely discarded (&a == &b) with two
     # local variables; do not touch stack slot reuse in this experiment.
-    export MINIC_P1_DISCARD_EQ_FUNCTION=ip6_finish_output2
-    echo "P1_DISCARD_EQ=FUNCTION_RESTRICTED name=ip6_finish_output2"
+    if [[ "${COHORT_P1_DISCARD_EQ_BOTH:-0}" == 1 ]]; then
+      export MINIC_P1_DISCARD_EQ_FUNCTION=ip6_pair
+      echo "P1_DISCARD_EQ=FUNCTION_RESTRICTED names=ip6_finish_output2,ip6_xmit"
+    else
+      export MINIC_P1_DISCARD_EQ_FUNCTION=ip6_finish_output2
+      echo "P1_DISCARD_EQ=FUNCTION_RESTRICTED name=ip6_finish_output2"
+    fi
   else
     export MINIC_P1_CROSSBLOCK_FUNCTION=ip6_finish_output2
   fi
@@ -83,7 +88,10 @@ with open(sys.argv[1]) as f:
 finish=int(rows["ip6_finish_output2"]["frame_bytes"])
 xmit=int(rows["ip6_xmit"]["frame_bytes"])
 assert 0<finish<4064, f"selected frame did not shrink: {finish}"
-assert xmit==2288, f"unselected ip6_xmit unexpectedly changed: {xmit}"
+if __import__("os").environ.get("COHORT_P1_DISCARD_EQ_BOTH") == "1":
+    assert 0<xmit<2288, f"selected ip6_xmit did not shrink: {xmit}"
+else:
+    assert xmit==2288, f"unselected ip6_xmit unexpectedly changed: {xmit}"
 print(f"P1_DEFINED_CROSSBLOCK=FRAME_ISOLATED selected=ip6_finish_output2 new={finish} old=4064 unaffected=ip6_xmit frame={xmit}")
 P1_FOCUS_BOUNDS
 fi
