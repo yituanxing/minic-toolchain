@@ -1285,3 +1285,37 @@ GNU-GCC `-c` producer patterns. The exact count will come
 from actual C-only `.o.cmd` entries, not a guessed fixed 3352.
 Run `38193433903` does not certify full MiniPP. The patched
 end-to-end stage needs a new CI result.
+
+## Full-current MiniC correctness re-certification — 2026-10-12 launch
+
+The previously authenticated *nine repaired plus 2055 frozen MiniC*
+Linux 6.6.143 Image passed the unchanged historical Python 145-module /
+203-function test (twice). This is a specific mixed-generation candidate,
+not proof of a fresh all-current compilation. **The next mandatory gate
+is full-current, non-optimized MiniC correctness before any performance
+profile promotion or self-hosting.**
+
+Launched through the *existing* `linux-runtime-gcc-baseline.yml`
+`gcc-shards` seven-runner opt-in plus the *existing*
+`gcc-shard-verify` receiver, with tag
+`[linux-runtime-gcc-sharded]`. No workflows, declared jobs, or
+development branches are added. The immutable exact-config pure GNU
+golden pool and GNU preprocessing/assembler/linker remain fixed, so
+any new runtime defect isolates MiniC's C code generation. The seven
+shards each compile the exact selected C-object subset using today's
+44-transform Runtime correctness profile; the receiver authenticates
+each ABI/ELF object and manifest, reconstitutes the whole C universe,
+then links and exercises real QEMU. The previous nine-owner proof is
+retained independently and will not be overwritten.
+
+Acceptance is intentionally **not** a plain compile/link PASS: require
+exact full-current candidate identity, 100% real C object provenance,
+a guest runtime PASS with meaningful Linux boot/functional markers,
+and the original Python 145/203 sequence on unchanged historical
+initramfs as a separate final regression where accessible.
+The old approximately 215.5 MB Image / 22 MB GCC size discrepancy
+and pinned-QEMU initrd overlap remain genuine independent acceptance
+constraints; classify any loader collision or missing historical
+archive as BLOCKED rather than a MiniC semantic failure.
+This tagged commit starts the independent all-current MiniC
+compilation while full MiniPP replay is checked separately.
