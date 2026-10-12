@@ -103,6 +103,51 @@ injection = r'''    /* P1_FRAME_DIAGNOSTIC_ONLY_V1: inspect the *final* patched 
                         symbol_name, i, life->reusable ? 1U : 0U,
                         life->block_index, life->first_position,
                         life->last_position);
+                    if (life->reusable && life->block_index < function->block_count) {
+                        const MinicCoreBlock *owner_block =
+                            &function->blocks[life->block_index];
+                        const char *first_access = "NONE";
+                        size_t pos;
+                        for (pos = 0U; pos < owner_block->instruction_count; ++pos) {
+                            const MinicCoreInstruction *inst =
+                                &function->instructions[owner_block->instructions[pos]];
+                            if (inst->kind == MINIC_CORE_INSTRUCTION_PARAMETER_OBJECT &&
+                                inst->value.parameter_object.object_id == i) {
+                                first_access = "WRITE";
+                                break;
+                            }
+                            if (inst->kind == MINIC_CORE_INSTRUCTION_LOAD ||
+                                inst->kind == MINIC_CORE_INSTRUCTION_STORE) {
+                                MinicCoreValueId address =
+                                    inst->kind == MINIC_CORE_INSTRUCTION_LOAD
+                                      ? inst->value.load.address
+                                      : inst->value.store.address;
+                                size_t producer_position;
+                                for (producer_position = 0U;
+                                     producer_position < owner_block->instruction_count;
+                                     ++producer_position) {
+                                    const MinicCoreInstruction *producer =
+                                        &function->instructions[
+                                            owner_block->instructions[producer_position]];
+                                    if (producer->kind ==
+                                            MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS &&
+                                        producer->value.object_id == i &&
+                                        producer->result == address) {
+                                        first_access =
+                                            inst->kind == MINIC_CORE_INSTRUCTION_STORE
+                                                ? "WRITE" : "READ";
+                                        break;
+                                    }
+                                }
+                                if (strcmp(first_access, "NONE") != 0) {
+                                    break;
+                                }
+                            }
+                        }
+                        (void)fprintf(stderr,
+                                      "CORE_FRAME_ACCESS function=%s id=%zu first=%s\n",
+                                      symbol_name, i, first_access);
+                    }
                 }
             }
             (void)fprintf(stderr,
