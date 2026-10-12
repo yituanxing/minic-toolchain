@@ -1305,6 +1305,8 @@ last_candidate_delta=""
 last_link_source_dir=""
 trial() {
   name="$1"; count="$2"; profile="$3"; mode="${4:-prefix}"
+  # Experimental overlays never modify the authenticated 2064-object pool.
+  minic_trial_pool="${COHORT_P1_EXPERIMENTAL_POOL:-$ev/minic}"
   selection="$mode:$count"
   if [[ "$mode" == exclude_list ]]; then
     # Never reuse an Image after the GCC owner subset changes.
@@ -1332,7 +1334,7 @@ trial() {
         *) echo "COHORT_ERROR unknown_selection=$mode"; exit 2 ;;
       esac
       if ((selected)); then
-        cp -a "$ev/minic/${objects[i]}" "$out/${objects[i]}"
+        cp -a "$minic_trial_pool/${objects[i]}" "$out/${objects[i]}"
         touch "$out/${objects[i]}"
         printf '%s\n' "${objects[i]}" >>"$d/selected-objects.txt"
       fi
@@ -1472,7 +1474,7 @@ PY_RISCV_DYNAMIC
       # then rechecks identities below.
       repair_result=$(python3 "$repo/tools/ci/linux-runtime-kbuild-regeneration-guard-v1.py" \
         --mode repair --out "$out" --evidence "$d/generated-before.json" \
-        --selected "$d/selected-objects.txt" --minic "$ev/minic" \
+        --selected "$d/selected-objects.txt" --minic "$minic_trial_pool" \
         --link-log "$d/link.log" --golden-out "$gold_snapshot") || {
           echo "COHORT_RESULT=INCONCLUSIVE stage=stable_header_guard name=$name"
           exit 8
@@ -1512,7 +1514,7 @@ PY_RISCV_DYNAMIC
       exclude_list) if ! grep -Fqx "${objects[i]}" "$ev/p1_gcc_rescue_set.txt"; then selected=1; fi ;;
     esac
     if ((selected)); then
-      gold="$ev/minic/$target"
+      gold="$minic_trial_pool/$target"
       if [[ -n "$last_candidate_delta" && -f "$last_candidate_delta/$target" ]]; then
         gold="$last_candidate_delta/$target"
       fi
