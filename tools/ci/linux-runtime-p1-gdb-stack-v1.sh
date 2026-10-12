@@ -32,7 +32,7 @@ PY_PORT
 )
 declare -a symbols=(
   tcp_v6_connect ip6_xmit ip6_finish_output2 ip6_output
-  __dev_queue_xmit __tcp_transmit_skb __list_add_valid_or_report
+  __dev_queue_xmit __tcp_transmit_skb
   handle_bad_stack
 )
 {
@@ -82,8 +82,8 @@ echo "P1_GDB=DONE debugger_rc=$rc image_sha=$(sha256sum "$image" | cut -d' ' -f1
 grep -E 'P1_GDB_FRAME' "$dest/gdb.log" | tail -n 150 || :
 grep -E 'Insufficient stack space|Kernel panic|BUG:|Oops:' "$dest/qemu-serial.log" | tail -n 15 || :
 # Non-zero from timeout is expected; absence of frame hits is INCONCLUSIVE.
-if ! grep -q 'P1_GDB_FRAME' "$dest/gdb.log"; then
-  echo "P1_GDB=INCONCLUSIVE no_guest_frame_hits"
+if ! grep -Eq 'P1_GDB_FRAME name=(ip6_xmit|ip6_finish_output2|tcp_v6_connect|handle_bad_stack) ' "$dest/gdb.log"; then
+  echo "P1_GDB=INCONCLUSIVE no_ipv6_or_crash_frame_hits"
   exit 8
 fi
 echo "P1_GDB=CAPTURED diagnostic_only=true same_image=true"
