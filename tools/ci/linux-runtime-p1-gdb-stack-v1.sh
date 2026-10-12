@@ -49,6 +49,9 @@ targets = (
     "tcp_v6_connect", "ip6_xmit", "ip6_finish_output2",
     "do_irq", "handle_riscv_irq", "riscv_timer_interrupt",
     "hrtimer_interrupt", "rb_erase", "__rb_change_child",
+    "__tcp_transmit_skb", "ip6_output", "__neigh_create",
+    "___neigh_create", "neigh_alloc", "__kmalloc",
+    "__slab_alloc_node", "get_freepointer_safe",
     "__list_add_valid_or_report", "handle_bad_stack",
 )
 bound = [(name, symbols[name][0]) for name in targets if name in symbols]
@@ -101,7 +104,17 @@ for idx, (name, _) in enumerate(bound[1:], 2):
         emit(f"dump binary memory {evidence_dir}/task-stack.bin $p1_task_lo ($p1_task_lo + 16384)")
         emit(f"disable {idx}")
     else:
+        # For frequently called slab/neighbor functions, only record
+        # entries close to the stack bottom of the diagnosed task/IRQ.
+        low_stack_target = name in ("__neigh_create", "___neigh_create",
+            "neigh_alloc", "__kmalloc", "__slab_alloc_node",
+            "get_freepointer_safe", "__list_add_valid_or_report")
+        if low_stack_target:
+            emit("if (($sp >= $p1_task_lo && $sp < $p1_task_lo + 8192) || "
+                 "($sp >= $p1_irq_base && $sp < $p1_irq_base + 8192))")
         emit(f'printf "P1_GDB_FRAME name={name} pc=%#lx sp=%#lx ra=%#lx irq_remaining=%ld task_remaining=%ld\\n", (unsigned long)$pc, (unsigned long)$sp, (unsigned long)$ra, (long)((unsigned long)$sp-(unsigned long)$p1_irq_base), (long)((unsigned long)$sp-(unsigned long)$p1_task_lo)')
+        if low_stack_target:
+            emit("end")
         # Keep the record of the first post-TCP transition to IRQ stack,
         # but avoid GDB spending its whole budget at frequent IRQ entry.
         if name in ("do_irq", "handle_riscv_irq"):
