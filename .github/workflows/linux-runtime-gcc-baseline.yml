@@ -197,7 +197,7 @@ jobs:
   gcc-single:
     # Reuse the EXISTING opt-in isolation job. ONE runner handles the entire
     # batch compile, two cohorts and any QEMU prefix bisection.
-    if: github.event_name == 'push' && (contains(github.event.head_commit.message, '[linux-runtime-gcc-cohort]') || contains(github.event.head_commit.message, '[linux-runtime-gcc-384]') || contains(github.event.head_commit.message, '[linux-runtime-gcc-dma-only]'))
+    if: github.event_name == 'push' && (contains(github.event.head_commit.message, '[linux-runtime-gcc-cohort]') || contains(github.event.head_commit.message, '[linux-runtime-gcc-384]') || contains(github.event.head_commit.message, '[linux-runtime-gcc-dma-only]') || contains(github.event.head_commit.message, '[linux-runtime-gcc-link-triad]'))
     runs-on: ubuntu-24.04
     timeout-minutes: 105
     steps:
@@ -275,6 +275,13 @@ jobs:
             printf '%s\n' kernel/dma/direct.o > "$ev/full-objects.txt"
             echo "COHORT_SCOPE=DMA_SINGLE_COMPILE_ONLY objects=1"
           fi
+          if [[ "${{ contains(github.event.head_commit.message, '[linux-runtime-gcc-link-triad]') }}" == true ]]; then
+            for owner in kernel/dma/direct.o mm/truncate.o mm/shmem.o; do
+              grep -Fxq "$owner" "$ev/full-objects.txt"
+            done
+            printf '%s\n' kernel/dma/direct.o mm/truncate.o mm/shmem.o > "$ev/full-objects.txt"
+            echo "COHORT_SCOPE=LINK_TRIAD_COMPILE_ONLY objects=3"
+          fi
 
       - name: Compute pinned MiniC candidate object cache identity
         id: candidate_id
@@ -314,7 +321,7 @@ jobs:
           bash tools/ci/linux-runtime-build-minic-profile-v1.sh \
             "$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain" "$ev/compiler"
           export COHORT_ALLOW_DIAGNOSTIC_384=${{ contains(github.event.head_commit.message, '[linux-runtime-gcc-384]') && '1' || '0' }}
-          export COHORT_ALLOW_SHARD=${{ contains(github.event.head_commit.message, '[linux-runtime-gcc-dma-only]') && '1' || '0' }}
+          export COHORT_ALLOW_SHARD=${{ (contains(github.event.head_commit.message, '[linux-runtime-gcc-dma-only]') || contains(github.event.head_commit.message, '[linux-runtime-gcc-link-triad]')) && '1' || '0' }}
           export COHORT_ACTION=compile
           bash tools/ci/linux-runtime-gcc-cohort-bisect-v1.sh \
             "$work/linux-6.6.143" "$work/out" \
@@ -338,6 +345,9 @@ jobs:
           if [[ "${{ contains(github.event.head_commit.message, '[linux-runtime-gcc-dma-only]') }}" == true ]]; then
             min_count=1
             test "$count" -eq 1
+          elif [[ "${{ contains(github.event.head_commit.message, '[linux-runtime-gcc-link-triad]') }}" == true ]]; then
+            min_count=3
+            test "$count" -eq 3
           fi
           if test "$count" -ge "$min_count" && \
              test -s "$ev/cohort.log" && \
@@ -368,7 +378,7 @@ jobs:
       # This boundary is essential: a subsequent GNU relink/QEMU failure
       # must NEVER waste the expensive, already-verified candidate objects.
       - name: Prove DMA undefined external symbol is gone from genuine kernel TU
-        if: contains(github.event.head_commit.message, '[linux-runtime-gcc-dma-only]') && steps.candidate_ready.outputs.ready == 'true'
+        if: (contains(github.event.head_commit.message, '[linux-runtime-gcc-dma-only]') || contains(github.event.head_commit.message, '[linux-runtime-gcc-link-triad]')) && steps.candidate_ready.outputs.ready == 'true'
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -381,9 +391,25 @@ jobs:
             exit 1
           fi
           echo 'GNU_MINIC_DMA_SINGLE=PASS missing_symbol_absent=1 exact_kernel_tu=1 abi=PASS'
+          if [[ "${{ contains(github.event.head_commit.message, '[linux-runtime-gcc-link-triad]') }}" == true ]]; then
+            for pair in 'mm/truncate.o:dax_delete_mapping_entry' 'mm/shmem.o:__compiletime_assert_'; do
+              target=${pair%%:*}
+              bad=${pair#*:}
+              obj="$ev/minic/$target"
+              test -s "$obj"
+              name=${target##*/}
+              riscv64-linux-gnu-nm -u "$obj" >"$ev/$name.undefined.txt"
+              if grep -F "$bad" "$ev/$name.undefined.txt"; then
+                echo "GNU_MINIC_LINK_TRIAD=FAIL owner=$target symbol=$bad"
+                exit 1
+              fi
+              echo "GNU_MINIC_LINK_TRIAD_OWNER=PASS owner=$target symbol=$bad"
+            done
+            echo 'GNU_MINIC_LINK_TRIAD=PASS objects=3 gcc_E=1 minic_S=1 gnu_AS=1'
+          fi
 
       - name: GNU relink and QEMU from authenticated MiniC objects
-        if: "!contains(github.event.head_commit.message, '[linux-runtime-gcc-dma-only]')"
+        if: "!(contains(github.event.head_commit.message, '[linux-runtime-gcc-dma-only]') || contains(github.event.head_commit.message, '[linux-runtime-gcc-link-triad]'))"
         shell: bash
         run: |
           set -Eeuo pipefail
