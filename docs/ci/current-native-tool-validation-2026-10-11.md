@@ -1400,3 +1400,36 @@ affected objects for an early linker re-test; require the complete
 The observed full-all Image stayed unbuilt; no optimization and no
 self-hosting advancement is claimed. Subsequent performance work
 must be gated on fixed full-current linker and runtime correctness.
+
+### MiniC DMA disabled-config link regression reproduced on actual RV64
+
+Extended the **existing** focused RV64 conditional-link regression
+(`tests/driver/run-constant-if-link-v0.sh`) with a deliberately
+Linux-shaped initialized-`_Bool set_uncached` and dynamic
+coherence guard. The local is initialized to zero and is only ever
+assigned zero; the impossible `if (set_uncached)` invokes a
+deliberately undefined `missing_arch_dma_set_uncached` target.
+A genuine GNU-LD link must discard that unreachable call; a real
+QEMU process returns the same expected 23.
+
+The updated existing focused-T1 CI
+[#38196246334](https://github.com/yituanxing/minic-toolchain/actions/runs/38196246334)
+produced the **expected RED regression** against base MiniC:
+`probe.o:linux_dma_set_uncached_disabled+0x27c:
+undefined reference to missing_arch_dma_set_uncached`.
+The earlier direct `if(0)` and `sizeof` conditional regressions
+were already present and previously passed, so this narrows the
+missing compiler capability to **control-flow-sensitive local
+constant propagation**, rather than ordinary literal-if elimination.
+The 44-transform Runtime profile *independently* generated the
+authentic `arch_dma_set_uncached` unresolved relocation, so both
+observations are consistent with the same required compiler
+capability, although the reduced C shape is not the exact kernel TU.
+
+**Failing regression deliberately preserved** until a proven general
+Core fact/CFG repair makes it green. Do not neuter the test or
+stub out the undefined symbol. No MiniC Core code change has been
+made yet because the existing fact-barrier patches protect
+previously proven earlycon, GUP and Netfilter correctness; editing
+them without exact same-config differential risks reintroducing those
+runtime faults.
