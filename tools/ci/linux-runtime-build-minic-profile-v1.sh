@@ -55,6 +55,7 @@ patches=(
   apply-core-if-condition-dominance-barrier-v0.py
   apply-netlink-if-control-trace-v0.py
   apply-core-goto-label-fact-barrier-v0.py
+  apply-runtime-if-fallthrough-facts-v1.py
 )
 
 start=$(date +%s%N)
@@ -65,6 +66,51 @@ done
 git diff --check
 make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$build_dir" \
   "$build_dir/bin/minic" "$build_dir/bin/minic-cc" >/dev/null
+# Probe the exact Runtime-profile compiler before spending time producing
+# hundreds of Linux objects. The old unpatched C0 MiniC is NOT the tested
+# product here; this checks that a dead reference disappears while a dynamic
+# reference is still retained (against unsound CFG fact propagation).
+probe_dir="$ev/dma-constant-if-probe"
+mkdir -p "$probe_dir"
+cat >"$probe_dir/probe.c" <<'C'
+extern int missing_arch_dma_set_uncached(void);
+extern int must_retain_dynamic_call(void);
+int dma_disabled_cfg(int coherent)
+{
+    _Bool set_uncached = 0, remap = 0;
+    if (!coherent) {
+        set_uncached = 0;
+        remap = 0;
+        if (!set_uncached && !remap)
+            return 17;
+    }
+    if (set_uncached)
+        return missing_arch_dma_set_uncached();
+    return 23;
+}
+int dynamic_branch_preserved(int cond)
+{
+    _Bool x = 0;
+    if (cond)
+        x = 1;
+    if (x)
+        return must_retain_dynamic_call();
+    return 0;
+}
+C
+"$build_dir/bin/minic" -ffreestanding -fno-builtin -nostdinc \
+  -c "$probe_dir/probe.c" -o "$probe_dir/probe.o"
+riscv64-linux-gnu-nm -u "$probe_dir/probe.o" >"$probe_dir/undefined.txt"
+if grep -Fq missing_arch_dma_set_uncached "$probe_dir/undefined.txt"; then
+    echo "RUNTIME_DMA_BOOL_LINK_REFS=FAIL unresolved_dead_call" >&2
+    exit 1
+fi
+if ! grep -Fq must_retain_dynamic_call "$probe_dir/undefined.txt"; then
+    echo "RUNTIME_DMA_BOOL_LINK_REFS=FAIL erased_live_call" >&2
+    exit 1
+fi
+echo "RUNTIME_DMA_BOOL_LINK_REFS=PASS dead_call_absent=1 live_call_present=1" | \
+  tee "$probe_dir/verdict.txt"
 end=$(date +%s%N)
 echo "TIMING toolchain_ms=$(((end-start)/1000000))" | tee "$ev/toolchain-timing.txt"
 printf '%s\n' "${patches[@]}" >"$ev/minic-profile.txt"
