@@ -88,7 +88,23 @@ echo "COHORT_GOLDEN=PASS objects=$n"
 # built-in archives and kallsyms during intermediate target builds. Restoring
 # only 384 .o files leaves those generated dependencies contaminated.
 gold_snapshot="$ev/gnu-out-pristine"
-test ! -e "$gold_snapshot"
+if [[ -e "$gold_snapshot" ]]; then
+  # A compile-only invocation deliberately keeps its immutable golden copy
+  # for the next verify-only invocation on the SAME CI runner. Reconstruct
+  # the snapshot from the restored, identity-checked GCC output instead of
+  # treating that legitimate reuse as a second producer collision.
+  if [[ "${COHORT_ACTION:-all}" != verify ]]; then
+    echo "COHORT_GOLDEN=ERROR stale_snapshot_during_nonverify" >&2
+    exit 3
+  fi
+  test -s "$out/arch/riscv/boot/Image"
+  [[ $(sha256sum "$out/arch/riscv/boot/Image" | cut -d' ' -f1) == "$gnu_image_sha" ]] || {
+    echo "COHORT_GOLDEN=ERROR verify_image_not_certified_reference" >&2
+    exit 3
+  }
+  rm -rf -- "$gold_snapshot"
+  echo "COHORT_GOLDEN_SNAPSHOT_RECONSTRUCT=PASS verify_only=1"
+fi
 cp -a --reflink=auto "$out" "$gold_snapshot"
 echo "COHORT_GOLDEN_SNAPSHOT=PASS bytes=$(du -sb "$gold_snapshot" | cut -f1)"
 # Cheap fail-fast before expensive MiniC compilation: verify that restoring
