@@ -1,8 +1,8 @@
 # Full-current MiniC Linux 6.6.143 C-object acceptance invocation.
-# This tools/ci path matches the existing linux-runtime-gcc-baseline.yml
-# push paths. The opt-in tag launches existing seven runners and receiver.
-# No workflow, job or separate development branch is added.
-profile=Runtime-44-correctness
+# Reuse the existing seven-runner producer and GNU-locked receiver only.
+# Purpose: link the complete 2064-C-object current Runtime-profile pool,
+# then QEMU-check exact same-config runtime, not declare success on 3 objects.
+profile=Runtime-CFG-if-fallthrough-current
 candidate_scope=entire-GNU-certified-C-object-universe
 compiler=MiniC
 preprocessor=GNU-GCC
@@ -10,6 +10,18 @@ assembler=GNU-AS
 archiver=GNU-AR
 linker=GNU-LD
 linux=6.6.143
-first_gate=full-current-MiniC-correctness
-second_gate=existing-Python-145-module-203-function-QEMU
+first_gate=complete-MiniC-object-pool-and-GNU-full-Image-link
+second_gate=QEMU-P0-P1-and-Python-era-contract
 prohibited=performance-optimization-or-bootstrap-until-green
+
+# Accepted only as narrow causal oracles, NOT full link certification:
+# 38204290138: shmem actual-C one object, ELF ABI & absent 395-398.
+# 38204450656: three actual GNU-preprocessed MiniC objects, ELF ABI, and
+# all original undefined-symbol blockers absent.  Source CFG positive &
+# negative tests passed: terminating-goto false-edge preserves huge=0;
+# dynamic reaching assignment still preserves a real external call.
+narrow_shmem_run=38204290138
+narrow_triaged_run=38204450656
+narrow_compile_count=3
+narrow_results=DMA_PASS,TRUNCATE_PASS,SHMEM_PASS
+full_result=PENDING_CURRENT_SHA_REBUILD
