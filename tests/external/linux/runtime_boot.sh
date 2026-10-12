@@ -43,6 +43,23 @@ run_boot() {
     input_mode=$3
     log="$work/$name.log"
 
+    # QEMU 8.2's RISC-V -initrd loader always places ramdisks 128 MiB
+    # beyond the kernel entry, even with -m 2G. A 215 MB Linux Image
+    # genuinely overlaps that fixed address. In the explicit opt-in
+    # large-image lane only, preload the very same initramfs at a
+    # non-overlapping physical address and point a QEMU-generated DTB's
+    # /chosen properties there. Default 512M/Python-era path is untouched.
+    if test -n "${LINUX_RUNTIME_CUSTOM_DTB:-}" || test -n "${LINUX_RUNTIME_INITRD_LOAD_ADDR:-}"; then
+        if test ! -s "${LINUX_RUNTIME_CUSTOM_DTB:-}" || test -z "${LINUX_RUNTIME_INITRD_LOAD_ADDR:-}"; then
+            printf '%s\n' 'LINUX_RUNTIME_ERROR incomplete_custom_initrd_mapping' >&2
+            exit 2
+        fi
+        set -- -dtb "$LINUX_RUNTIME_CUSTOM_DTB" \
+            -device "loader,file=$initramfs,addr=$LINUX_RUNTIME_INITRD_LOAD_ADDR,force-raw=on"
+    else
+        set -- -initrd "$initramfs"
+    fi
+
     set +e
     if test "$input_mode" = shell; then
         (
@@ -66,7 +83,7 @@ run_boot() {
             -no-reboot \
             -bios default \
             -kernel "$image" \
-            -initrd "$initramfs" \
+            "$@" \
             -append "$append" \
             >"$log" 2>&1
         status=$?
@@ -80,7 +97,7 @@ run_boot() {
             -no-reboot \
             -bios default \
             -kernel "$image" \
-            -initrd "$initramfs" \
+            "$@" \
             -append "$append" \
             </dev/null >"$log" 2>&1
         status=$?
