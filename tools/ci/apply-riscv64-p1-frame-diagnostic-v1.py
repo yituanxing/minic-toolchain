@@ -87,6 +87,23 @@ injection = r'''    /* P1_FRAME_DIAGNOSTIC_ONLY_V1: inspect the *final* patched 
                     function->objects[i].element_count, alignment,
                     function->objects[i].explicit_alignment, shape,
                     shares_start ? 1U : 0U);
+                /* The mature Runtime profile installs the conservative
+                   CoreScalarObjectInterval cache before frame assignment.
+                   Log the *computed* block and interval, never infer them
+                   from the object index or its stack offset. */
+                if (core_scalar_object_reuse_cache.program == program &&
+                    core_scalar_object_reuse_cache.function == function &&
+                    core_scalar_object_reuse_cache.intervals != NULL) {
+                    const CoreScalarObjectInterval *life =
+                        &core_scalar_object_reuse_cache.intervals[i];
+                    (void)fprintf(
+                        stderr,
+                        "CORE_FRAME_INTERVAL function=%s id=%zu reusable=%u "
+                        "block=%zu first=%zu last=%zu\\n",
+                        symbol_name, i, life->reusable ? 1U : 0U,
+                        life->block_index, life->first_position,
+                        life->last_position);
+                }
             }
             (void)fprintf(stderr,
                           "CORE_FRAME_COMPONENT function=%s frame=%zu "
