@@ -656,7 +656,7 @@ jobs:
           sudo apt-get -o Acquire::Retries=2 install -y --no-install-recommends \
             gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
             qemu-system-misc opensbi libc6-dev-riscv64-cross \
-            python3 make cpio gzip || {
+            python3 make cpio gzip device-tree-compiler || {
               sudo apt-get -o Acquire::Retries=3 update
               sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
                 gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
