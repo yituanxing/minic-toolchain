@@ -650,7 +650,15 @@ jobs:
         with:
           ref: ${{ github.sha }}
 
+      - name: Install minimal pinned GNU binutils and GCC for P1 object-only audit
+        if: contains(github.event.head_commit.message, '[linux-runtime-p1-frame-audit]')
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get -o Acquire::Retries=2 install -y --no-install-recommends \
+            gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu python3
+
       - name: Install pinned GNU RISC-V tools and QEMU
+        if: "!contains(github.event.head_commit.message, '[linux-runtime-p1-frame-audit]')"
         run: |
           set -Eeuo pipefail
           sudo apt-get -o Acquire::Retries=2 install -y --no-install-recommends \
