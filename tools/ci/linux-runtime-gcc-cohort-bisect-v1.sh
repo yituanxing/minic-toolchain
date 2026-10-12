@@ -2371,6 +2371,45 @@ PY_FRAME_PROLOGUE
     echo "COHORT_GDB_STACK=CAPTURED evidence_only=true no_new_link=true"
     exit 0
   fi
+  # Diagnostic capacity experiment: a new CONFIG_THREAD_SIZE_ORDER=3
+  # (32KiB task AND IRQ) GNU-configured kernel and ALL 2064 matching C
+  # owners recompiled with the UNCHANGED MiniC profile. Three QEMU boots
+  # of the same linked Image, never a GCC object-swap or a stack hack.
+  if [[ "${COHORT_P1_STACK_SIZE_ONLY:-0}" == 1 ]]; then
+    [[ "$n" == 2064 && "$cohort_scope" == FULL_C_UNIVERSE ]] || exit 8
+    grep -Fqx 'CONFIG_THREAD_SIZE_ORDER=3' "$out/.config" || {
+      echo "COHORT_P1_STACK32=ERROR wrong_config"; exit 8;
+    }
+    grep -Fqx 'CONFIG_VMAP_STACK=y' "$out/.config" || exit 8
+    grep -Fqx 'CONFIG_IRQ_STACKS=y' "$out/.config" || exit 8
+    echo "COHORT_P1_STACK32=BASELINE first_verdict=$baseline_verdict image=$baseline_image_sha no_gdb=true"
+    printf 'boot\timage_sha\tp1_verdict\n' >"$ev/p1-stack32-repeats.tsv"
+    printf '1\t%s\t%s\n' "$baseline_image_sha" "$baseline_verdict" >>"$ev/p1-stack32-repeats.tsv"
+    stack32_passes=0
+    stack32_fails=0
+    [[ "$baseline_verdict" == PASS ]] && stack32_passes=1
+    [[ "$baseline_verdict" == FAIL ]] && stack32_fails=1
+    for attempt in 2 3; do
+      trial "p1_stack32_repeat_$attempt" "$n" p1
+      [[ "$image_sha" == "$baseline_image_sha" ]] || {
+        echo "COHORT_P1_STACK32=ERROR image_sha_drift"; exit 8;
+      }
+      printf '%s\t%s\t%s\n' "$attempt" "$image_sha" "$TRIAL_VERDICT" >>"$ev/p1-stack32-repeats.tsv"
+      [[ "$TRIAL_VERDICT" == PASS ]] && ((++stack32_passes))
+      [[ "$TRIAL_VERDICT" == FAIL ]] && ((++stack32_fails))
+    done
+    if ((stack32_passes==3)); then
+      stack32_verdict=PASS
+    elif ((stack32_fails==3)); then
+      stack32_verdict=FAIL
+    else
+      stack32_verdict=VARIABLE_OR_INCONCLUSIVE
+    fi
+    echo "COHORT_P1_STACK32=RESULT verdict=$stack32_verdict passes=$stack32_passes fails=$stack32_fails boots=3 image=$baseline_image_sha owners=2064 config_order=3 task_irq_stack_bytes=32768 ordinary_qemu=true same_image=true full_minic_p1_not_automatically_certified=true"
+    # This branch is a capacity DIAGNOSTIC; workflow completion is NOT
+    # MiniC P1 PASS when the original 3x guest oracle fails.
+    exit 0
+  fi
   if [[ "$TRIAL_VERDICT" != FAIL ]]; then
     echo "COHORT_P1_OWNER=INCONCLUSIVE baseline=$TRIAL_VERDICT"
     exit 8
