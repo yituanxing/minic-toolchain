@@ -567,3 +567,24 @@ obtain a validated call-depth/backtrace from the pinned IRQ stack.
 Existing canonical script was restored byte-for-byte after this
 diagnostic, and no new Workflow, branch, or production MiniC patch
 was retained. No claim of a 16KiB fully-MiniC P1 pass is made.
+
+
+### Source-side interpretation of the verified IRQ fault
+
+Reviewed Linux 6.6.143 `drivers/clocksource/timer-riscv.c`:
+`riscv_clocksource_rdtime()` simply returns `get_cycles64()`.
+Its first-fault EPC at function+2, SP=IRQ-base-32, and store-fault
+address=SP+24 are consistent with a small entry prologue being the
+*last* stack push, not a giant `rdtime()` frame.
+
+Reviewed `arch/riscv/kernel/traps.c::do_irq()` (CONFIG_IRQ_STACKS).
+The source switches to the **top of IRQ stack only if**
+`on_thread_stack()` is true; otherwise it calls `handle_riscv_irq()`
+on the currently active stack. The later `riscv_timer_interrupt()`
+entry with merely 1040 bytes headroom might therefore reflect
+re-entry while already on the IRQ stack, a deep prior IRQ-context
+call path, or a bad stack/IRQ-state restoration. It is not yet
+evidence for any one of those mechanisms. The next diagnostic must
+measure the branch decision and stack pointer **at IRQ entry**, and
+track returns, before altering MiniC's inline-assembly handling or
+loosening CoreObject lifetime analysis.
