@@ -129,7 +129,7 @@ if [[ "${MINILD_ENABLE_PURGATORY_R:-0}" == 1 &&
   fi
 fi
 # The three static final Linux link boundaries are proven #38426379946.
-# Purgatory and 32-bit vDSO continue using GNU LD until individually tested.
+# purgatory.chk and 32-bit vDSO still use GNU LD (not yet certified).
 case "${output##*/}" in
   .tmp_vmlinux.kallsyms1|.tmp_vmlinux.kallsyms2|vmlinux)
     { flock 9; printf 'minild'; printf ' %q' "$@"; printf '\n'; } 9>>"$NATIVE_TRACE_DIR/minild.trace" >&9
