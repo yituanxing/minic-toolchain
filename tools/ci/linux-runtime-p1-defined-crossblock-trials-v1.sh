@@ -414,7 +414,7 @@ if [[ "$rx_bundle_timer" == 1 ]]; then
   MINIC="$minic" WORK="$dest/cfg-adversarial" RISCV_CC=riscv64-linux-gnu-gcc \
     QEMU_RISCV64=qemu-riscv64 \
     bash "$repo/tests/compiler/c0/run-core-cfg-slot-reuse-adversarial-p1.sh"
-  echo "P1_RX_BUNDLE_TIMER=ADVERSARIAL_PASS cases=8 inputs=1023 oracle=GCC_MiniC_base_MiniC_experimental both_runtime_and_CFG_checked=true"
+  echo "P1_RX_BUNDLE_TIMER=ADVERSARIAL_PASS cases=8 inputs=1023 oracles=GCC_O0_GCC_O2_MiniC_base_MiniC_experimental both_runtime_and_CFG_checked=true"
   if [[ "${MINIC_OPT_PURE_DISCARDED_ADDRESS_EQ:-0}" == 1 ]]; then
     MINIC="$minic" BUILD_DIR="$dest" RISCV_CC=riscv64-linux-gnu-gcc \
       QEMU_RISCV64=qemu-riscv64 \
