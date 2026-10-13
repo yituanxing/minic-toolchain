@@ -1,5 +1,41 @@
 # Current native tool validation — 2026-10-11
 
+## 2026-10-13: eighth MiniC network neighbour owner returns 12/12 P1
+
+**Real [#38377015578](https://github.com/yituanxing/minic-toolchain/actions/runs/38377015578), commit `18ec417496b88b6633911a30732d561915774aab`, SUCCESS**:
+frozen 2064 MiniC C objects with exactly **eight experimental-owner
+recompilations** (`net/core/neighbour.o` added to the earlier seven).
+All 2056 unaffected MiniC C objects preserved with SHA/provenance checks,
+GNU assembler/linker, no substituted GCC C owner. The actual
+`__neigh_create` emitted candidate frame is **112 B**, down from
+**3024 B (saving 2912 B)**; the original experimental 7-owner
+network/SLUB/timer frame reductions are retained. The existing
+core-CFG 255-vector semantic comparison returned **PASS**.
+The complete 16KiB P1 repeated **12/12 PASS** with one fixed
+Image SHA256
+`14a108571d52e8dfea851fe9de1dcafd91c22c2029f4aba0f0f772729754e336`.
+The same branch's earlier seven-owner exact-Image tests produced
+**11/12** and **21/24**, so this **12/12 is promising but not
+yet sufficient for stability closure**. The new eighth owner involves
+experimental (not globally proven) cross-basic-block stack-slot
+reuse; do not ship/promote it without further differential validation.
+The run artifact `sharded-gnu-minic-QEMU-18ec417...` contains its
+QEMU evidence. The `P1_RX_NEIGH=FRAME_PASS`, isolated pool
+and `P1_RX_BUNDLE_TIMER=ACCEPTED owners=8 p1=12/12`
+markers are authoritative.
+
+**Immediate follow-up**: use the existing cached-object owner receiver,
+compile just the new neighbour object first, fail before seven-owner
+replay/link when the frame ROI is missing, then replay the seven
+previously selected objects without recompiling neighbour; route-audit
+all eight object hashes. This fail-fast path was added in
+`f115f9ab08469db547a0c2064afec783421923d2` and fixed
+for exact Python regex+TSV escapes in
+`533e159903add78ec72b46b6c688a97f4dbe7492`.
+**Run 24 ordinary P1 boots on the same new eight-owner Image** under
+`[linux-runtime-p1-24boot-audit]`, without new workflows or all-owner
+Linux compilation. Require **24/24** before any next stage.
+
 ## 2026-10-13: linked-frame and prior-SIE proof — nested IRQ interrupts real IPv6 work
 
 **CI [#38373487464](https://github.com/yituanxing/minic-toolchain/actions/runs/38373487464)**

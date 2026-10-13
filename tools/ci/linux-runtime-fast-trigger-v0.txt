@@ -6,3 +6,5 @@ Targeted same-Image P1 IRQ entry experiment: keep low-SP do_irq and handle_riscv
 Exact upstream interruption context PELT/IRQ: GDB read do_irq pt_regs[epc,sp] before prologue; symbolize real interrupted function with matched vmlinux. Reuse frozen 2064 pool, seven owner compiler changes, normal 3 boots, single read-only GDB, preserve Image/TSV.
 
 Preemption-frame follow-up 2026-10-13: for IRQ-on-IRQ entry sample original saved EPC/SP/RA/S0/SPIE in pt_regs, symbolize return candidates and exact emitted function frame sizes; restored immutable 2064 MiniC objects, seven swapped experimental C objects, 3 normal QEMU boots and one GDB observation, one receiver, no full producer.
+
+Follow-up acceptance: eighth MiniC net/core/neighbour.o frame 3024->112 B saved 2912 B and prior seven untouched. First check one object ROI before seven-owner replay, then same Image P1 24/24 stringent repeat. No 2064 all-owner compile or GDB.
