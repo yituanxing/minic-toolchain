@@ -198,29 +198,6 @@ jobs:
           QEMU_RISCV64=qemu-riscv64 \
             sh tests/linker/run-gc-v0.sh
 
-      # Ephemeral, explicitly tagged diagnostic in the existing shared T1 runner.
-      # All standard RV64/AR/LD checks ran against the unmodified MiniC first.
-      # Reuse the same built toolchain and rebuild only changed Core sources.
-      # This does NOT certify or promote the experimental fact propagation.
-      - name: Diagnose local-constant CFG repair against the unmodified RED control
-        id: local_facts_probe
-        if: github.event_name == 'push' && contains(github.event.head_commit.message, '[minic-local-facts-probe]') && steps.build.outcome == 'success'
-        continue-on-error: true
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          echo "MINIC_LOCAL_FACTS_CONTROL=KNOWN_RED reference=38351512614"
-          python3 tools/ci/apply-local-integer-constants-v0.py
-          git diff --check
-          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/toolchain-focused-t1-v2 all
-          MINIC="$GITHUB_WORKSPACE/build/toolchain-focused-t1-v2/bin/minic" \
-          MINIAS="$GITHUB_WORKSPACE/build/toolchain-focused-t1-v2/bin/minic-as" \
-          BUILD_DIR="$GITHUB_WORKSPACE/build/rv64-local-facts-probe" \
-          RISCV_LD=riscv64-linux-gnu-ld \
-          QEMU_RISCV64=qemu-riscv64 \
-            sh tests/driver/run-constant-if-link-v0.sh
-          echo "MINIC_LOCAL_FACTS_CANDIDATE=PASS incremental_rebuild=1 source_promotion=0"
-
       - name: Preserve independent MiniC RV64 regression evidence
         if: always() && (github.event_name == 'push' || inputs.mode == 'all' || inputs.mode == 'minic-rv64')
         uses: actions/upload-artifact@v4
