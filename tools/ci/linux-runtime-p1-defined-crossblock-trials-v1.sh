@@ -6,6 +6,41 @@ set -Eeuo pipefail
 [[ -n "$minic" && -n "$gold_snapshot" && -n "$ev" && -n "$out" ]] || exit 8
 [[ "$n" -eq 2064 ]] || { echo "P1_DEFINED_CROSSBLOCK=ERROR object_count"; exit 8; }
 single_owner="${COHORT_P1_SINGLE_OWNER:-0}"
+# One 4-owner read-only ROI screen, no Image relink. Existing receiver and
+# experimental compiler only; default runtime experiment unchanged.
+rx_roi=0
+rx_bundle=0
+rx_bundle_page=0
+rx_bundle_dev=0
+if [[ "$single_owner" != 1 && "${COHORT_P1_DISCARD_EQ:-0}" != 1 ]] &&
+  git -C "$repo" log -1 --format=%B | grep -Fq '[linux-runtime-p1-rx-bundle-dev]'; then
+  rx_bundle=1
+  rx_bundle_page=1
+  rx_bundle_dev=1
+  unset MINIC_P1_CROSSBLOCK_FUNCTION
+  echo "P1_RX_BUNDLE_DEV=START owners=6 extra=net/core/dev.o original_16K=true six_same_Image_QEMU=true"
+fi
+if [[ "$single_owner" != 1 && "${COHORT_P1_DISCARD_EQ:-0}" != 1 ]] &&
+  git -C "$repo" log -1 --format=%B | grep -Fq '[linux-runtime-p1-rx-bundle-page]'; then
+  rx_bundle=1
+  rx_bundle_page=1
+  unset MINIC_P1_CROSSBLOCK_FUNCTION
+  echo "P1_RX_BUNDLE_PAGE=START owners=5 additional_owner=mm/page_alloc.o normal_qemu_repeats=3"
+fi
+if [[ "$single_owner" != 1 && "${COHORT_P1_DISCARD_EQ:-0}" != 1 ]] &&
+  git -C "$repo" log -1 --format=%B | grep -Fq '[linux-runtime-p1-rx-bundle]'; then
+  rx_bundle=1
+  unset MINIC_P1_CROSSBLOCK_FUNCTION
+  echo "P1_RX_BUNDLE=START owners=4 frozen_minic_neighbors=2060 unchanged_16K=true three_boots=true experimental_not_certified=true"
+fi
+if [[ "$single_owner" != 1 && "${COHORT_P1_DISCARD_EQ:-0}" != 1 ]] &&
+  git -C "$repo" log -1 --format=%B | grep -Fq '[linux-runtime-p1-rx-roi]'; then
+  rx_roi=1
+  # No function restriction: measure global high-ROI CFG-local scratch
+  # allocation across these four selected TUs, never enable in production.
+  unset MINIC_P1_CROSSBLOCK_FUNCTION
+  echo "P1_RX_ROI=START method=first_write_single_block_no_address_escape owners=4 no_kernel_link=true"
+fi
 if [[ "$single_owner" == 1 ]]; then
   # Preserve old codegen in every function except one suspect frame;
   # only ip6_finish_output2 is permitted to use the experimental allocator.
@@ -27,12 +62,30 @@ else
   dest="$ev/p1-defined-crossblock"
 fi
 mkdir -p "$dest"
-cat >"$dest/selected.txt" <<'OWNERS'
+if [[ "$rx_bundle" == 1 ]]; then
+  cat >"$dest/selected.txt" <<'OWNERS_BUNDLE'
+net/ipv6/ip6_output.o
+net/ipv6/tcp_ipv6.o
+net/ipv4/tcp_input.o
+mm/slub.o
+mm/page_alloc.o
+net/core/dev.o
+OWNERS_BUNDLE
+elif [[ "$rx_roi" == 1 ]]; then
+  cat >"$dest/selected.txt" <<'OWNERS_RX'
+net/ipv6/tcp_ipv6.o
+net/ipv4/tcp_input.o
+mm/slub.o
+mm/page_alloc.o
+OWNERS_RX
+else
+  cat >"$dest/selected.txt" <<'OWNERS'
 net/ipv6/ip6_output.o
 net/ipv6/tcp_ipv6.o
 net/ipv4/tcp_output.o
 net/core/dev.o
 OWNERS
+fi
 if [[ "$single_owner" == 1 ]]; then
   # Retain every other certified MiniC object and use GCC only for
   # tcp_ipv6.o. Recompile ip6_output.o with the opt-in compiler.
@@ -43,7 +96,7 @@ from pathlib import Path
 import sys
 a,b=map(Path,sys.argv[1:])
 names=a.read_text().splitlines()
-assert len(names) in (1,4) and len(set(names))==len(names)
+assert len(names) in (1,4,5,6) and len(set(names))==len(names)
 assert set(names)<=set(b.read_text().splitlines())
 print(f"P1_DEFINED_CROSSBLOCK=SELECTED owners={len(names)}")
 PY_SET
@@ -51,8 +104,8 @@ PY_SET
 printf 'compiler_sha256=%s\n' "$(sha256sum "$minic"|cut -d' ' -f1)" >"$dest/provenance.txt"
 rm -rf -- "$out"
 cp -a --reflink=auto "$gold_snapshot" "$out"
-COHORT_FRAME_CAPTURE_ONLY="$single_owner" MINIC_CORE_FRAME_TRACE=1 \
-MINIC_CORE_FRAME_TRACE_FILTER="ip6_finish_output2,ip6_xmit" \
+COHORT_FRAME_CAPTURE_ONLY="$(if [[ "$rx_roi" == 1 || "$rx_bundle" == 1 ]]; then echo 1; else echo "$single_owner"; fi)" MINIC_CORE_FRAME_TRACE=1 \
+MINIC_CORE_FRAME_TRACE_FILTER="$(if [[ "$rx_roi" == 1 || "$rx_bundle" == 1 ]]; then echo 'ip6_finish_output2,ip6_xmit,tcp_v6_rcv,tcp_v6_do_rcv,tcp_conn_request,tcp_rcv_state_process,___slab_alloc,net_rx_action,process_backlog,__dev_queue_xmit'; else echo 'ip6_finish_output2,ip6_xmit'; fi)" \
 python3 "$repo/tools/ci/linux-runtime-kbuild-regeneration-guard-v1.py" \
   --mode replay --out "$out" --golden-out "$gold_snapshot" \
   --evidence "$dest/replay-evidence.json" --selected "$dest/selected.txt" \
@@ -144,9 +197,88 @@ for line in (ev/"minic-manifest.sha256").read_text().splitlines():
     else:
         assert actual==digest, "unrelated MiniC owner changed: "+target
         untouched += 1
-assert matched in (1,4) and untouched==2064-matched
+assert matched in (1,4,5,6) and untouched==2064-matched
 print(f"P1_DEFINED_CROSSBLOCK=POOL_ISOLATED changed_targets={matched} original_neighbors={untouched}")
 PY_VERIFY
+if [[ "$rx_roi" == 1 ]]; then
+  # Parse ORIGINAL compiler records for each exact ELF owner separately.
+  # Do not use the legacy multi-TU component parser (duplicate inlined
+  # helper names), and do not claim pass without per-TU evidence.
+  python3 - "$out" "$dest" <<'PY_RX_FRAME'
+import pathlib,re,sys
+out,dest=map(pathlib.Path,sys.argv[1:])
+baseline={
+ 'net/ipv6/tcp_ipv6':{'tcp_v6_rcv':1760,'tcp_v6_do_rcv':1104},
+ 'net/ipv4/tcp_input':{'tcp_conn_request':1312,'tcp_rcv_state_process':1776},
+ 'mm/slub':{'___slab_alloc':976},
+ 'mm/page_alloc':{'__alloc_pages':352,'__alloc_pages_slowpath':1024},
+}
+total=0
+rows=['owner\tfunction\toriginal_frame\tcandidate_frame\treduction']
+for owner,items in baseline.items():
+    log=out/(owner+'.minic-stage2.minic.stderr')
+    if not log.is_file():
+        raise SystemExit(f'P1_RX_ROI=ERROR missing_compiler_trace={log}')
+    data=log.read_text(errors='replace')
+    (dest/(owner.replace('/','_')+'.frame.log')).write_text(
+       '\n'.join(x for x in data.splitlines() if x.startswith('CORE_FRAME'))+'\n')
+    recorded={}
+    for m in re.finditer(r'^CORE_FRAME_REUSE function=(\S+) frame=(\d+)\b',data,re.M):
+        recorded[m.group(1)]=int(m.group(2))
+    for name,original in items.items():
+        frame=recorded.get(name)
+        if frame is None or not(0<frame<=original):
+            raise SystemExit(f'P1_RX_ROI=ERROR function={name} old={original} candidate={frame}')
+        saved=original-frame
+        total+=saved
+        rows.append(f'{owner}.o\t{name}\t{original}\t{frame}\t{saved}')
+        print(f'P1_RX_ROI=FRAME owner={owner}.o function={name} old={original} new={frame} saved={saved}')
+(dest/'rx-roi.tsv').write_text('\n'.join(rows)+'\n')
+print(f'P1_RX_ROI=COMPLETE owners=4 functions={sum(map(len,baseline.values()))} isolated_frame_savings={total} changed_original_pool=false linked_image=false runtime_certified=false')
+PY_RX_FRAME
+  exit 0
+fi
+if [[ "$rx_bundle" == 1 ]]; then
+  python3 - "$out" "$dest" <<'PY_RX_BUNDLE'
+import pathlib,re,sys
+out,dest=map(pathlib.Path,sys.argv[1:])
+baseline={
+ 'net/ipv6/ip6_output':{'ip6_finish_output2':4064,'ip6_xmit':2288},
+ 'net/ipv6/tcp_ipv6':{'tcp_v6_rcv':1760,'tcp_v6_do_rcv':1104},
+ 'net/ipv4/tcp_input':{'tcp_conn_request':1312,'tcp_rcv_state_process':1776},
+ 'mm/slub':{'___slab_alloc':976},
+ 'mm/page_alloc':{'__alloc_pages':352,'__alloc_pages_slowpath':1024},
+}
+total=0
+for owner,items in baseline.items():
+    log=out/(owner+'.minic-stage2.minic.stderr')
+    if not log.is_file(): raise SystemExit(f'P1_RX_BUNDLE=ERROR missing_trace={log}')
+    records={}
+    for m in re.finditer(r'^CORE_FRAME_REUSE function=(\S+) frame=(\d+)\b',log.read_text(errors='replace'),re.M):
+        records[m.group(1)]=int(m.group(2))
+    for name,original in items.items():
+        frame=records.get(name)
+        if frame is None or not(0<frame<=original):
+            raise SystemExit(f'P1_RX_BUNDLE=ERROR invalid_frame={owner}:{name}:{frame}')
+        total+=original-frame
+        print(f'P1_RX_BUNDLE=FRAME owner={owner}.o function={name} base={original} candidate={frame} delta={original-frame}')
+print(f'P1_RX_BUNDLE=MEASURED function_frame_savings_sum={total} candidate_not_certified=true')
+PY_RX_BUNDLE
+  if [[ "$rx_bundle_dev" == 1 ]]; then
+    python3 - "$out/net/core/dev.minic-stage2.minic.stderr" <<'PY_DEV_AUDIT'
+from pathlib import Path
+import re,sys
+p=Path(sys.argv[1])
+assert p.is_file(),f"missing candidate dev.o stderr: {p}"
+rows=dict((m.group(1),int(m.group(2))) for m in re.finditer(
+    r'^CORE_FRAME_REUSE function=(\S+) frame=(\d+)\b',p.read_text(errors='replace'),re.M))
+focus=['net_rx_action','process_backlog','__dev_queue_xmit']
+for name in focus:
+    print(f"P1_RX_BUNDLE_DEV=FRAME function={name} candidate_frame={rows.get(name,'missing')}")
+assert sum(name in rows for name in focus)>=2,"missing receive/transmit focus"
+PY_DEV_AUDIT
+  fi
+fi
 export COHORT_P1_EXPERIMENTAL_POOL="$dest/pool/minic"
 last_selection="none"
 last_link_source_dir=""
@@ -160,7 +292,9 @@ if [[ "$single_owner" == 1 ]]; then
   printf '%s\n' net/ipv6/tcp_ipv6.o >"$ev/p1_gcc_rescue_set.txt"
   echo "P1_DEFINED_CROSSBLOCK=SINGLE_OWNER_ONLY minic_modified=net/ipv6/ip6_output.o gcc_owner=net/ipv6/tcp_ipv6.o"
 fi
-for attempt in 1 2 3; do
+repeats=3
+if [[ "$rx_bundle_dev" == 1 ]]; then repeats=6; fi
+for attempt in $(seq 1 "$repeats"); do
   trial "p1_defined_crossblock_$attempt" "$n" p1 "$mode"
   [[ -n "$pinned" ]] || pinned="$image_sha"
   [[ "$image_sha" == "$pinned" ]] || {
@@ -233,7 +367,13 @@ PY_IRQ_ATTRIBUTION
     echo "P1_DEFINED_CROSSBLOCK_GDB=INCONCLUSIVE no_P1_pass_inference=true"
   fi
 fi
-if [[ "$single_owner" == 1 ]]; then
+if [[ "$rx_bundle_dev" == 1 ]]; then
+  echo "P1_RX_BUNDLE_DEV=COMPLETE owners=6 frozen_minic=2058 gcc_owners=0 passes=$passes failures=$((repeats-passes)) attempts=$repeats image_sha=$pinned experimental_not_promoted=true"
+elif [[ "$rx_bundle_page" == 1 ]]; then
+  echo "P1_RX_BUNDLE_PAGE=COMPLETE modified_minic=5 unchanged_minic=2059 gcc_owners=0 passes=$passes failures=$((3-passes)) image_sha=$pinned candidate_not_promoted=true"
+elif [[ "$rx_bundle" == 1 ]]; then
+  echo "P1_RX_BUNDLE=COMPLETE modified_minic=4 unchanged_minic=2060 gcc_owners=0 passes=$passes failures=$((3-passes)) image_sha=$pinned candidate_not_promoted=true"
+elif [[ "$single_owner" == 1 ]]; then
   echo "P1_DEFINED_CROSSBLOCK=COMPLETE modified_minic=1 gcc_owners=1 minic_owners=2063 passes=$passes failures=$((3-passes)) image=$pinned experimental=true not_promoted=true"
 else
   echo "P1_DEFINED_CROSSBLOCK=COMPLETE modified_minic=4 gcc_owners=0 minic_owners=2064 passes=$passes failures=$((3-passes)) image=$pinned experimental=true not_promoted=true"
