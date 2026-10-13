@@ -143,6 +143,7 @@ if [[ "$rx_bundle_neigh" == 1 ]]; then
   MINIC_CORE_FRAME_TRACE_FILTER="__neigh_create" \
   python3 "$repo/tools/ci/linux-runtime-kbuild-regeneration-guard-v1.py" \
     --mode replay --out "$out" --golden-out "$gold_snapshot" \
+    --evidence "$dest/neighbour-first-evidence.json" \
     --selected "$dest/neighbour-only-selected.txt" \
     --wrapper "$repo/tests/external/linux/stage2_kbuild_cc.sh" \
     --minic "$minic" --success-trace "$dest/neighbour-success.txt" \
