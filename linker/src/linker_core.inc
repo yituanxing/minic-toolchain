@@ -10,6 +10,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <time.h>
 
 #define MINILD_SECTION_UNDEF (-1)
 #define MINILD_SECTION_ABS (-2)
@@ -7444,6 +7445,29 @@ int minild_link_shared_elf64_riscv_inputs(const char *output_path,
                                                           diagnostics);
 }
 
+/*
+ * CPU-time profile for costly whole-Linux static links. Disabled unless
+ * MINILD_PROFILE_PHASES=1; diagnostics go to stderr only, never an ELF output
+ * or Kbuild's stdout. No changes to the linker data flow or order.
+ */
+static void minild_perf_phase(const char *phase,
+                             clock_t *last,
+                             const MiniLdState *state,
+                             FILE *diagnostics) {
+    clock_t now = clock();
+    const char *enabled = getenv("MINILD_PROFILE_PHASES");
+    if (enabled != NULL && strcmp(enabled, "1") == 0 &&
+        *last != (clock_t)-1 && now != (clock_t)-1) {
+        double milliseconds =
+            1000.0 * (double)(now - *last) / (double)CLOCKS_PER_SEC;
+        fprintf(diagnostics,
+                "MINILD_PHASE=%s cpu_ms=%.3f objects=%zu sections=%zu symbols=%zu relocs=%zu\n",
+                phase, milliseconds, state->processed_object_count,
+                state->section_count, state->symbol_count, state->reloc_count);
+    }
+    *last = now;
+}
+
 int minild_link_static_elf64_riscv_inputs_options(
     const char *output_path,
     const MiniLdInput *inputs,
@@ -7459,6 +7483,7 @@ int minild_link_static_elf64_riscv_inputs_options(
     bool have_script = false;
     bool layout_ready = false;
     bool ok = false;
+    clock_t phase_start = clock();
 
     if (output_path == NULL || inputs == NULL || input_count == 0U ||
         diagnostics == NULL) {
@@ -7496,6 +7521,7 @@ int minild_link_static_elf64_riscv_inputs_options(
     if (!process_input_sequence(&state, inputs, input_count)) {
         goto done;
     }
+    minild_perf_phase("inputs", &phase_start, &state, diagnostics);
 
     if (!state.have_input ||
         !static_allocate_common(&state) ||
@@ -7505,13 +7531,20 @@ int minild_link_static_elf64_riscv_inputs_options(
         goto done;
     }
     layout_ready = true;
+    minild_perf_phase("layout", &phase_start, &state, diagnostics);
+
     if (!static_synthesize_runtime_boundaries(&state, &layout) ||
         !static_fill_got(&state, &layout, &got) ||
-        !static_apply_relocations(&state, &layout, &got) ||
-        !static_entry_address(&state, &layout, entry_symbol, &entry) ||
+        !static_apply_relocations(&state, &layout, &got)) {
+        goto done;
+    }
+    minild_perf_phase("relocations", &phase_start, &state, diagnostics);
+
+    if (!static_entry_address(&state, &layout, entry_symbol, &entry) ||
         !static_write_executable(&state, &layout, output_path, entry)) {
         goto done;
     }
+    minild_perf_phase("output", &phase_start, &state, diagnostics);
     ok = true;
 
 done:
@@ -7521,6 +7554,7 @@ done:
     minild_script_destroy(&script);
     static_got_destroy(&got);
     state_destroy(&state);
+    minild_perf_phase("cleanup", &phase_start, &state, diagnostics);
     return ok ? 0 : 1;
 }
 
