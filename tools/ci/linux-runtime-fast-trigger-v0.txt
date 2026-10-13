@@ -8,3 +8,5 @@ Exact upstream interruption context PELT/IRQ: GDB read do_irq pt_regs[epc,sp] be
 Preemption-frame follow-up 2026-10-13: for IRQ-on-IRQ entry sample original saved EPC/SP/RA/S0/SPIE in pt_regs, symbolize return candidates and exact emitted function frame sizes; restored immutable 2064 MiniC objects, seven swapped experimental C objects, 3 normal QEMU boots and one GDB observation, one receiver, no full producer.
 
 Follow-up acceptance: eighth MiniC net/core/neighbour.o frame 3024->112 B saved 2912 B and prior seven untouched. First check one object ROI before seven-owner replay, then same Image P1 24/24 stringent repeat. No 2064 all-owner compile or GDB.
+
+2026-10-13 fixed neighbour-only preflight: pass required --evidence to frozen Kbuild replay; run 24 ordinary same Image P1 boots on 8 selected MiniC owners using immutable 2064 object pool, abort if early ROI <512B. Prior full 8-owner P1=12/12 and real 3024->112B frame.
