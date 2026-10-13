@@ -3,6 +3,8 @@
 # Input objects are an existing SHA-pinned, QEMU-certified GNU Kbuild cache.
 # This is *not* a replacement for the 2064-MiniC-object runtime proof.
 # performance oracle trigger: reuse GNU Kbuild cache for ONLY one MiniLD link.
+# CSR relaxation speed trial: index Linux's 1.28M relocation entries by
+# section before repeated R_RISCV_ALIGN processing; compare exact source ELF.
 # qsort speed trial: run the same ELF fixture after fixing both quadratic
 # file-order and linker-script pattern sort, requiring matching ELF properties.
 set -Eeuo pipefail
