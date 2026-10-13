@@ -2,7 +2,8 @@
 # Opt-in Linux 6.6.143 native tool union from an immutable P0/P1-certified
 # 2064-MiniC-object cache; do NOT alter C preprocessing/compilation/assembly.
 # SHA-pinned cache must HIT; the seven C producer shards are skipped entirely.
-# The first union is MiniAR + final-only MiniLD + MiniObjcopy; GNU as is kept.
+# The first union is MiniAR (GNU fallback only for mPiT) + final-only
+# MiniLD + MiniObjcopy; GNU as is kept.
 # Actual MiniAS requires newly generated .s input and is a separate next gate.
 set -Eeuo pipefail
 if (( $# != 2 )); then
@@ -30,6 +31,17 @@ cat >"$ev/ar-wrapper" <<'SH_AR'
 #!/usr/bin/env bash
 set -Eeuo pipefail
 : "${MINIAR:?}" "${NATIVE_TRACE_DIR:?}"
+# Linux vmlinux.a uses GNU ar's positional move (mPiT), with an explicit
+# anchor and members. Current MiniAR A1 deliberately rejects that form;
+# run only this missing command through GNU while continuing to exercise
+# MiniAR for Kbuild's other archive creates/lists. The fallback is visible
+# and must not be called a fully native AR integration.
+case "${1#-}" in
+  mPiT)
+    { flock 9; printf 'gnu-ar-fallback-mPiT'; printf ' %q' "$@"; printf '\n'; } 9>>"$NATIVE_TRACE_DIR/miniar.trace"
+    exec /usr/bin/riscv64-linux-gnu-ar "$@"
+    ;;
+esac
 { flock 9; printf 'miniar'; printf ' %q' "$@"; printf '\n'; } 9>>"$NATIVE_TRACE_DIR/miniar.trace"
 exec "$MINIAR" "$@"
 SH_AR
