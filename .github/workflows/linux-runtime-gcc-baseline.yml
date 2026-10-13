@@ -198,7 +198,7 @@ jobs:
   gcc-single:
     # Reuse the EXISTING opt-in isolation job. ONE runner handles the entire
     # batch compile, two cohorts and any QEMU prefix bisection.
-    if: github.event_name == 'push' && (contains(github.event.head_commit.message, '[linux-runtime-gcc-cohort]') || contains(github.event.head_commit.message, '[linux-runtime-gcc-384]') || contains(github.event.head_commit.message, '[linux-runtime-gcc-dma-only]') || contains(github.event.head_commit.message, '[linux-runtime-gcc-link-triad]') || contains(github.event.head_commit.message, '[linux-runtime-gcc-shmem-only]') || contains(github.event.head_commit.message, '[linux-runtime-blake2s-perf]'))
+    if: github.event_name == 'push' && (contains(github.event.head_commit.message, '[linux-runtime-gcc-cohort]') || contains(github.event.head_commit.message, '[linux-runtime-gcc-384]') || contains(github.event.head_commit.message, '[linux-runtime-gcc-dma-only]') || contains(github.event.head_commit.message, '[linux-runtime-gcc-link-triad]') || contains(github.event.head_commit.message, '[linux-runtime-gcc-shmem-only]'))
     runs-on: ubuntu-24.04
     timeout-minutes: 105
     steps:
@@ -288,52 +288,6 @@ jobs:
             printf '%s\n' mm/shmem.o > "$ev/full-objects.txt"
             echo "COHORT_SCOPE=SHMEM_SINGLE_COMPILE_ONLY objects=1"
           fi
-          if [[ "${{ contains(github.event.head_commit.message, '[linux-runtime-blake2s-perf]') }}" == true ]]; then
-            grep -Fxq lib/crypto/blake2s-generic.o "$ev/full-objects.txt"
-            printf '%s\n' lib/crypto/blake2s-generic.o > "$ev/full-objects.txt"
-            echo "LINUX_BLAKE2S_PERF=TARGET owner=lib/crypto/blake2s-generic.o baseline_ms=1981990 compile_only=true"
-          fi
-
-      # The passing Linux #38400728544 has this one object in immutable
-      # shard 1. Compare actual generated ELF bytes after the linear scan fix:
-      # timing improvement alone does not establish semantic preservation.
-      - name: Derive pinned 33-minute blake2s reference object identity
-        id: perf_ref
-        if: contains(github.event.head_commit.message, '[linux-runtime-blake2s-perf]')
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          ev="build/linux-runtime-gcc-cohort-v1"
-          source="build/linux-runtime-gcc-shards-v1/shard-1"
-          mkdir -p "$source"
-          python3 tools/ci/linux-runtime-gcc-full-c-objects-v1.py \
-            --out build/linux-runtime-gcc/out \
-            --manifest build/linux-runtime-gcc/provenance/gcc-objects.sha256 \
-            --prefix tools/ci/linux-runtime-gcc-cohort-objects-v1.txt \
-            --output "$source/all-objects.txt" \
-            --excluded "$source/non-c-objects.tsv" --min-c-objects 1200
-          python3 tools/ci/linux-runtime-gcc-shards-v1.py split \
-            --full "$source/all-objects.txt" --shard 1 \
-            --output "$source/full-objects.txt"
-          grep -Fxq lib/crypto/blake2s-generic.o "$source/full-objects.txt"
-          profile=$(python3 tools/ci/linux-runtime-profile-cache-id-v1.py)
-          subset=$(sha256sum "$source/full-objects.txt" | cut -d' ' -f1)
-          gcc=$(sha256sum "$(command -v riscv64-linux-gnu-gcc)" | cut -d' ' -f1)
-          assembler=$(sha256sum "$(command -v riscv64-linux-gnu-as)" | cut -d' ' -f1)
-          # Exact patch SHA of the fully passing 2064-TU run #38400728544.
-          original_patch=fc655c8316b65cb5
-          echo "key=gnu-minic-shard-v1-eeb04f304ebfb97a1079c187dc0c2ea3cc61fc50a55aa3cc776237c16ab19bbe-${profile}-full-crossblock-pure-eq-v1-${original_patch}-${subset}-${gcc}-${assembler}" >>"$GITHUB_OUTPUT"
-
-      - name: Restore independently verified original blake2s C object
-        if: contains(github.event.head_commit.message, '[linux-runtime-blake2s-perf]')
-        uses: actions/cache/restore@v4
-        with:
-          path: |
-            build/linux-runtime-gcc-shards-v1/shard-1/minic
-            build/linux-runtime-gcc-shards-v1/shard-1/minic-manifest.sha256
-            build/linux-runtime-gcc-shards-v1/shard-1/minic-identity.txt
-          key: ${{ steps.perf_ref.outputs.key }}
-          fail-on-cache-miss: true
 
       - name: Compute pinned MiniC candidate object cache identity
         id: candidate_id
@@ -343,9 +297,6 @@ jobs:
           # Must be computed from the CLEAN sources, before 39 MiniC
           # runtime-profile patches modify src/ in place.
           profile=$(python3 tools/ci/linux-runtime-profile-cache-id-v1.py)
-          if [[ "${{ contains(github.event.head_commit.message, '[linux-runtime-blake2s-perf]') }}" == true ]]; then
-            profile="${profile}-full-crossblock-pure-eq-v1-$(sha256sum tools/ci/apply-riscv64-p1-defined-before-use-crossblock-v1.py | cut -c1-16)"
-          fi
           objects=$(sha256sum build/linux-runtime-gcc-cohort-v1/full-objects.txt | cut -d' ' -f1)
           gcc=$(sha256sum "$(command -v riscv64-linux-gnu-gcc)" | cut -d' ' -f1)
           assembler=$(sha256sum "$(command -v riscv64-linux-gnu-as)" | cut -d' ' -f1)
@@ -373,14 +324,10 @@ jobs:
           cp -a --reflink=auto "$src" "$work/linux-6.6.143"
           ev="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-v1"
           mkdir -p "$ev"
-          if [[ "${{ contains(github.event.head_commit.message, '[linux-runtime-blake2s-perf]') }}" == true ]]; then
-            export MINIC_LINUX_FULL_CROSSBLOCK=1 MINIC_OPT_PURE_DISCARDED_ADDRESS_EQ=1
-            echo "LINUX_BLAKE2S_PERF=COMPILER_START owner=lib/crypto/blake2s-generic.o expected_mode=all_C"
-          fi
           bash tools/ci/linux-runtime-build-minic-profile-v1.sh \
             "$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain" "$ev/compiler"
           export COHORT_ALLOW_DIAGNOSTIC_384=${{ contains(github.event.head_commit.message, '[linux-runtime-gcc-384]') && '1' || '0' }}
-          export COHORT_ALLOW_SHARD=${{ (contains(github.event.head_commit.message, '[linux-runtime-gcc-dma-only]') || (contains(github.event.head_commit.message, '[linux-runtime-gcc-link-triad]') || contains(github.event.head_commit.message, '[linux-runtime-gcc-shmem-only]') || contains(github.event.head_commit.message, '[linux-runtime-blake2s-perf]')) && '1' || '0' }}
+          export COHORT_ALLOW_SHARD=${{ (contains(github.event.head_commit.message, '[linux-runtime-gcc-dma-only]') || (contains(github.event.head_commit.message, '[linux-runtime-gcc-link-triad]') || contains(github.event.head_commit.message, '[linux-runtime-gcc-shmem-only]'))) && '1' || '0' }}
           export COHORT_ACTION=compile
           bash tools/ci/linux-runtime-gcc-cohort-bisect-v1.sh \
             "$work/linux-6.6.143" "$work/out" \
@@ -407,7 +354,7 @@ jobs:
           elif [[ "${{ contains(github.event.head_commit.message, '[linux-runtime-gcc-link-triad]') }}" == true ]]; then
             min_count=3
             test "$count" -eq 3
-          elif [[ "${{ contains(github.event.head_commit.message, '[linux-runtime-gcc-shmem-only]') || contains(github.event.head_commit.message, '[linux-runtime-blake2s-perf]') }}" == true ]]; then
+          elif [[ "${{ contains(github.event.head_commit.message, '[linux-runtime-gcc-shmem-only]') }}" == true ]]; then
             min_count=1
             test "$count" -eq 1
           fi
@@ -426,24 +373,6 @@ jobs:
             echo "COHORT_CANDIDATE_READY=FAIL count=$count (check MiniC trace, ABI and candidate hashes)" >&2
             exit 1
           fi
-
-      - name: Verify optimized blake2s ELF matches accepted Linux object byte-for-byte
-        if: contains(github.event.head_commit.message, '[linux-runtime-blake2s-perf]') && steps.candidate_ready.outputs.ready == 'true'
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          baseline="build/linux-runtime-gcc-shards-v1/shard-1/minic/lib/crypto/blake2s-generic.o"
-          optimized="build/linux-runtime-gcc-cohort-v1/minic/lib/crypto/blake2s-generic.o"
-          test -s "$baseline" && test -s "$optimized"
-          (cd build/linux-runtime-gcc-shards-v1/shard-1 && sha256sum -c minic-manifest.sha256 --quiet)
-          baseline_hash=$(sha256sum "$baseline" | cut -d' ' -f1)
-          optimized_hash=$(sha256sum "$optimized" | cut -d' ' -f1)
-          echo "LINUX_BLAKE2S_PERF=OBJECT_HASH old=$baseline_hash new=$optimized_hash"
-          cmp -s "$baseline" "$optimized" || {
-            echo "LINUX_BLAKE2S_PERF=FAIL codegen_drift_between_old_and_linear_firstwrite_helper"
-            exit 12
-          }
-          echo "LINUX_BLAKE2S_PERF=OBJECT_IDENTICAL old_33m_source=true optimized_same_ELF=true"
 
       - name: Save immutable MiniC objects despite later link or QEMU failure
         if: always() && steps.candidate_ready.outputs.ready == 'true' && steps.candidate_restore.outputs['cache-hit'] != 'true'
@@ -495,7 +424,7 @@ jobs:
           echo "GNU_MINIC_LINK_BLOCKERS=PASS checked=${#targets[@]}"
 
       - name: GNU relink and QEMU from authenticated MiniC objects
-        if: "!(contains(github.event.head_commit.message, '[linux-runtime-gcc-dma-only]') || contains(github.event.head_commit.message, '[linux-runtime-gcc-link-triad]') || contains(github.event.head_commit.message, '[linux-runtime-gcc-shmem-only]') || contains(github.event.head_commit.message, '[linux-runtime-blake2s-perf]'))"
+        if: "!(contains(github.event.head_commit.message, '[linux-runtime-gcc-dma-only]') || contains(github.event.head_commit.message, '[linux-runtime-gcc-link-triad]') || contains(github.event.head_commit.message, '[linux-runtime-gcc-shmem-only]'))"
         shell: bash
         run: |
           set -Eeuo pipefail
