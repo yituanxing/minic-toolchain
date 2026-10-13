@@ -1159,6 +1159,10 @@ jobs:
               export MINILD_ENABLE_PURGATORY_R=1
               echo "MINILD_PURGATORY_R=ENABLED boundary=purgatory.ro only gnu_purgatory_chk=true"
             fi
+            if [[ "${{ contains(github.event.head_commit.message, '[linux-native-purgatory-static]') && '1' || '0' }}" == 1 ]]; then
+              export MINILD_ENABLE_PURGATORY_STATIC=1
+              echo "MINILD_PURGATORY_STATIC=ENABLED exact_link=purgatory.chk"
+            fi
             if [[ "${{ contains(github.event.head_commit.message, '[linux-native-intermediate-vmlinux-r]') && '1' || '0' }}" == 1 ]]; then
               export MINILD_ENABLE_VMLINUX_R=1
               echo "MINILD_NATIVE_R=ENABLED boundary=vmlinux.o only gnu_linkers=other_unproven"
@@ -1244,6 +1248,15 @@ jobs:
                 exit 24
               }
               echo "MINILD_PURGATORY_R=PASS native_calls=$native_purgatory gnu_calls=0 full_QEMU_P1=PASS"
+            fi
+            if [[ "${{ contains(github.event.head_commit.message, '[linux-native-purgatory-static]') && '1' || '0' }}" == 1 ]]; then
+              native_static=$(grep -c '^minild-purgatory-static ' "$NATIVE_TRACE_DIR/minild.trace" || true)
+              gnu_static=$(grep -Ec '^gnu-ld .* -o arch/riscv/purgatory/purgatory\.chk($| )' "$NATIVE_TRACE_DIR/minild.trace" || true)
+              [[ "$native_static" -ge 1 && "$gnu_static" -eq 0 ]] || {
+                echo "NATIVE_UNION=FAIL purgatory.chk expected_native_no_GNU_fallback" >&2
+                exit 25
+              }
+              echo "MINILD_PURGATORY_STATIC=PASS native_calls=$native_static gnu_calls=0 full_QEMU_P1=PASS"
             fi
             if [[ "${{ contains(github.event.head_commit.message, '[linux-native-intermediate-vmlinux-r]') && '1' || '0' }}" == 1 ]]; then
               minild_r_calls=$(grep -c '^minild-r ' "$NATIVE_TRACE_DIR/minild.trace" || true)
