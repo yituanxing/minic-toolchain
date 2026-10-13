@@ -680,18 +680,32 @@ jobs:
         if: contains(github.event.head_commit.message, '[linux-runtime-large-image-qemu]')
         uses: actions/download-artifact@v4
         with:
-          run-id: 38204602644
+          # Opt-in accepted P1 variant is the authenticated 24/24 eight-owner
+          # artifact; historical default remains strictly unchanged.
+          run-id: ${{ contains(github.event.head_commit.message, '[linux-runtime-p1-accepted-replay]') && '38390921455' || '38204602644' }}
           github-token: ${{ github.token }}
-          name: sharded-gnu-minic-QEMU-d5dde03594665842f2bb3b8556f842f511a5dfa4
+          name: ${{ contains(github.event.head_commit.message, '[linux-runtime-p1-accepted-replay]') && 'sharded-gnu-minic-QEMU-9bf648d989ec652de0618ecdd1ccf159a8a836b5' || 'sharded-gnu-minic-QEMU-d5dde03594665842f2bb3b8556f842f511a5dfa4' }}
           path: build/linux-runtime-large-image-qemu-v0/source-artifact
 
       - name: Run original Image in 2G QEMU against P0 P1 and shell oracles
         if: contains(github.event.head_commit.message, '[linux-runtime-large-image-qemu]')
         shell: bash
+        env:
+          ACCEPTED_P1: ${{ contains(github.event.head_commit.message, '[linux-runtime-p1-accepted-replay]') && '1' || '0' }}
         run: |
           set -Eeuo pipefail
+          if [[ "$ACCEPTED_P1" == 1 ]]; then
+            export LINUX_LARGE_IMAGE_SUBPATH='*/trials/p1_defined_crossblock_1/Image'
+            export LINUX_LARGE_IMAGE_SHA=6f094d58e21de4b41fac7fffc1207b42dd04f5dd739c24f3d7107b1a944084f4
+            export LINUX_LARGE_IMAGE_SOURCE_RUN=38390921455
+            export LINUX_LARGE_IMAGE_SOURCE_COMMIT=9bf648d989ec652de0618ecdd1ccf159a8a836b5
+            echo "P1_ACCEPTED_NO_RECOMPILE=START minic_c=2064 prior_p1=24/24 profiles=fast,shell,p1"
+          fi
           bash tools/ci/linux-runtime-large-image-qemu-v0.sh \
             "$GITHUB_WORKSPACE/build/linux-runtime-large-image-qemu-v0/source-artifact"
+          if [[ "$ACCEPTED_P1" == 1 ]]; then
+            echo "P1_ACCEPTED_NO_RECOMPILE=PASS profiles=fast,shell,p1 image_unchanged=true original_16KiB=true"
+          fi
 
       - name: Preserve exact large Image boot and failure evidence
         if: always() && contains(github.event.head_commit.message, '[linux-runtime-large-image-qemu]')
