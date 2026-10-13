@@ -158,14 +158,14 @@ if not log.is_file():
     raise SystemExit("P1_RX_NEIGH=FAIL missing_neighbour_compiler_trace")
 data = log.read_text(errors="replace")
 frames = {m.group(1): int(m.group(2)) for m in
-          re.finditer(r"^CORE_FRAME_REUSE function=(\\S+) frame=(\\d+)\\b", data, re.M)}
+          re.finditer(r"^CORE_FRAME_REUSE function=(\S+) frame=(\d+)\b", data, re.M)}
 frame = frames.get("__neigh_create")
 baseline = 3024
 if frame is None or not 0 < frame <= baseline - 512:
     raise SystemExit(f"P1_RX_NEIGH=NO_ROI baseline={baseline} candidate={frame} min_saving=512 no_link=1 no_seven_recompile=1")
 (dest/"neighbour-frame.tsv").write_text(
-    f"owner\\tfunction\\tbaseline_frame\\tcandidate_frame\\tsaving\\n"
-    f"net/core/neighbour.o\\t__neigh_create\\t{baseline}\\t{frame}\\t{baseline-frame}\\n")
+    f"owner\tfunction\tbaseline_frame\tcandidate_frame\tsaving\n"
+    f"net/core/neighbour.o\t__neigh_create\t{baseline}\t{frame}\t{baseline-frame}\n")
 print(f"P1_RX_NEIGH=EARLY_ROI_PASS baseline={baseline} frame={frame} saved={baseline-frame} only_one_C_owner_compiled=1")
 PY_NEIGH_FIRST
   replay_selected="$dest/prior-seven-selected.txt"
