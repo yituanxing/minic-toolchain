@@ -430,3 +430,29 @@ The 32KiB full-MiniC 3/3 result is a capacity control, not a 16KiB
 compiler repair. Next work should identify a specific repeatable
 frame/ABI lowering defect from pinned GDB and CoreObject evidence
 before proposing codegen changes; no more speculative owner swapping.
+
+
+## Byte-identical actual PELT frame audit — 2026-10-13
+
+CI #38330451373 (artifact #11783035565) recompiled ONLY
+`kernel/sched/build_policy.o` with stderr-only Core frame instrumentation.
+The output `.o` was **byte-identical to its authenticated frozen MiniC
+counterpart**; no kernel Image was linked, no QEMU P1 was run.
+
+| PELT function in build_policy.o | MiniC frame bytes | CoreObject region | SSA bytes |
+| --- | ---: | ---: | ---: |
+| `decay_load` | 144 | 96 | 32 |
+| `__accumulate_pelt_segments` | 80 | 40 | 24 |
+| `accumulate_sum` | 224 | 184 | 32 |
+| `___update_load_sum` | 208 | 152 | 48 |
+| `___update_load_avg` | 64 | 32 | 24 |
+| `update_rt_rq_load_avg` | 128 | 64 | 48 |
+
+These are modest **individual** frames, though their *nested* sum and
+other callee frames could be significant. A GDB trace that ends at
+`decay_load` does not mean it is the source of overflow: it may simply be
+the next caller/stack allocation after earlier frames consumed the budget.
+The failed `ip6_output.o + build_policy.o` GCC pair (1/3 P1) reinforces
+that this is not a proven one-owner compiler bug. The next investigation
+should measure the actual nested IRQ path and a pinned first-fault SP,
+not swap more large objects by intuition.
