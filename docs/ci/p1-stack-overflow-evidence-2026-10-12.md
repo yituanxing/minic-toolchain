@@ -1253,3 +1253,64 @@ No new linked Image or generic optimizer result is claimed by this data-led spec
 4. Early focused attempts [#38386391504](https://github.com/yituanxing/minic-toolchain/actions/runs/38386391504) and [#38386728918](https://github.com/yituanxing/minic-toolchain/actions/runs/38386728918) were red due **only to a static test harness bug**: initially searched non-inlined `irqflags_*` wrappers rather than actual `irq_*` helpers; then emitted a Python regex with doubly escaped `\\s`/`\\b`. Source/ELF artifacts exposed the mistake; corrected checker is GREEN in #38386970838. No inaccurate statement that kernel IRQ itself is fixed.
 
 **Next high-ROI work:** use the authenticated same-config 2064 MiniC object fixture and **two actual Linux .i files**, one observed task-network hotspot and one IRQ-path owner, to A/B `MINIC_OPT_PURE_DISCARDED_ADDRESS_EQ` against the *same Runtime-profile compiler*. Produce real frame-component/ELF prologue and source/ELF ABI checks with no QEMU 24-loop. Separately verify live CSR register operands and interrupt state transitions against exact GCC code. Only promote opt-in to broader Linux owner tests if significant, correctness-proven combined task+IRQ headroom is measured. No production-global enable from microtest alone.
+
+
+## 2026-10-13: first 24/24 real all-MiniC 16KiB P1 — combined eight-owner profile
+
+**Confirmed actual runtime acceptance of the bounded candidate:** [CI #38390921455](https://github.com/yituanxing/minic-toolchain/actions/runs/38390921455), source commit `9bf648d989ec652de0618ecdd1ccf159a8a836b5`, job `gcc-shard-verify` **SUCCESS**. Independently inspectable artifact:
+`sharded-gnu-minic-QEMU-9bf648d989ec652de0618ecdd1ccf159a8a836b5` (artifact ID **11810551659**).
+
+The single immutable Linux 6.6.143 RISC-V Image SHA-256 is
+`6f094d58e21de4b41fac7fffc1207b42dd04f5dd739c24f3d7107b1a944084f4`.
+The original **16KiB task/IRQ stacks** were retained. Exactly **2064/2064 C
+objects came from MiniC**, including eight experimental replacement owners;
+**2056 objects remained SHA-identical to the frozen MiniC pool** and **zero
+GCC-produced Linux C objects** were used. The eight producers and their
+individual SHA-256 hashes are in `p1-defined-crossblock/object-diff.tsv`;
+`MINIC_ROUTE_AUDIT=PASS minic_compiled=8 ancillary_minic_compiled=0
+authenticated_rebuilds=0`.
+
+`p1-defined-crossblock/p1-repeats.tsv` and all 24 ordinary non-GDB serial
+logs report **24 PASS / 0 FAIL on the exact same Image SHA**. The guest
+reached `Run /init as init process` and every run exercised the full P1
+contract (`RUNTIME_V2_SYSCALL_END pass=12 fail=0`, including IPv6 TCP
+loopback); no kernel-stack-overflow/panic marker was observed. Thus the
+previous **eight-owner 20/24** failure in #38380007402 is demonstrably
+corrected in this **specific opt-in producer configuration**.
+
+**What changed:** the pre-existing, experimental first-write cross-basic-block
+CoreObject stack-slot reuse was combined with the newly guarded,
+effect-free discarded direct-local address-equality elimination in the same
+selected eight MiniC translation units. The general Core rule is disabled by
+default; the experiment explicitly sets
+`MINIC_OPT_PURE_DISCARDED_ADDRESS_EQ=1` during these producer compilations.
+The neighbour preflight still reuses the previously tested 112B
+`__neigh_create` frame. Checked emitted frame examples (baseline → combined
+candidate): `ip6_finish_output2 4064→432B`,
+`ip6_xmit 2288→384B`, `tcp_v6_rcv 1760→400B`,
+`tcp_rcv_state_process 1776→224B`, `___slab_alloc 976→192B`.
+These are **independent per-function savings**, never a claimed
+simultaneous stack reduction.
+
+Before Linux linking, the existing 255-vector CFG semantic differential
+reported `P1_RX_BUNDLE_TIMER=SEMANTIC_PASS`. The separate actual RV64
+GCC/MiniC baseline/MiniC optimized QEMU oracle reported
+`PURE_DISCARD_RV64=PASS` and
+`P1_COMBINED_DISCARD=DIFFERENTIAL_PASS gcc_old_new_qemu=3/3`.
+The completed job emits
+`P1_RX_BUNDLE_TIMER=ACCEPTED owners=8 p1=24/24`.
+
+**Certification boundary — do not overclaim:** this is a **real 24/24 P1
+Linux runtime milestone for an opt-in eight-owner experiment**, *not* global
+MiniC correctness, a formal CFG-liveness/aliasing proof, 48+ restart stability
+or a fully native MiniAS/MiniAR/MiniLD/MiniObjcopy/MiniPP chain. Do not turn
+on the cross-block reuse heuristic for all translation units, silently
+substitute GCC C objects, increase the kernel stack, or treat a green CI
+workflow alone as evidence. The next gates are (1) preserve the exact
+eight-owner producer/profile provenance as a reproducible candidate,
+(2) independently stress the same Image under additional P0/P1 workloads
+and assert meaningful IRQ-stack headroom, (3) strengthen CFG scratch-slot
+semantic differential/escape-backedge tests, and only then (4) integrate
+already independently certified native-tool stages with the exact
+MiniC object profile. Avoid starting a fresh 2064-TU rebuild for the same
+candidate.
