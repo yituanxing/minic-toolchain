@@ -24,6 +24,24 @@ of "full-current 16KiB P1 PASS" is permitted.
   (scheduler PELT, `kernel/sched/build_policy.o`). The post-fault stack
   pointer `ff1fffffffffff40` is far outside the recorded task stack.
   This is not an external build, package download or mock-QEMU failure.
+  **Instruction-level causal check (same failed QEMU log + exact current
+  `kernel/sched/build_policy.o` ELF):** at `accumulate_sum+0x12` the RV64
+  instruction is `sd t0,0xb8(sp)`; saved `sp=ff1fffffffffff40`
+  gives `sp+0xb8=ff1ffffffffffff8`, **exactly the recorded fault
+  `badaddr`**. The prologue has already subtracted **224 bytes**
+  (`addi sp,sp,-0xe0`), putting this function's caller stack at
+  `ff20000000000020`, only 32 bytes above the known *previously measured*
+  CPU0 per-CPU IRQ-stack base `ff20000000000000`.
+  GDB run [#38265238942](https://github.com/yituanxing/minic-toolchain/actions/runs/38265238942)
+  established that IRQ base directly from `irq_stack_ptr` and
+  `__per_cpu_offset` for another same-config Linux Image; run
+  [#38266372041](https://github.com/yituanxing/minic-toolchain/actions/runs/38266372041)
+  separately verified IRQ underflow under an experimental Image.
+  Thus the **immediate fault strongly matches another real IRQ-stack
+  underflow by 192 bytes**, not a mysterious 1.9 MiB task-stack pointer
+  jump. *Strict same-Image IRQ base verification is still missing* for
+  this one failed 7-owner Image, so record this as an evidence-backed
+  hypothesis, not a proven first-fault IRQ attribution.
 - Critically, **the full baseline compiler SHA and all seven experimental
   replacement object SHAs exactly match** the earlier 12/12 experiment
   [#38351512579](https://github.com/yituanxing/minic-toolchain/actions/runs/38351512579).
