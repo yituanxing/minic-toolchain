@@ -264,12 +264,13 @@ for e in sorted(events,key=lambda e:int(e[4]))[:12]:
     print(f"P1_SCHED_LOW_ENTRY name={e[1]} entry_left={e[4]} frame={frames.get(e[1],-1)} caller={caller(int(e[3],16))}")
 PY_SCHED
   if [[ "${P1_GDB_IRQ_REENTRY:-0}" == 1 ]]; then
-    python3 - "$dest/gdb.log" "$dest/linked-symbols.nm" "$dest/irq-interrupted.tsv" <<'PY_IRQ_PARENT'
+    python3 - "$dest/gdb.log" "$dest/linked-symbols.nm" "$dest/irq-interrupted.tsv" "$vmlinux" <<'PY_IRQ_PARENT'
 from pathlib import Path
 from bisect import bisect_right
 import re
+import subprocess
 import sys
-log, nm, report = map(Path, sys.argv[1:])
+log, nm, report, elf = map(Path, sys.argv[1:])
 pairs = []
 for line in nm.read_text(errors="replace").splitlines():
     cols = line.split()
@@ -281,19 +282,38 @@ for line in nm.read_text(errors="replace").splitlines():
         pass
 pairs.sort()
 addresses = [x[0] for x in pairs]
-def symbolize(pc):
-    j = bisect_right(addresses, pc) - 1
-    return "%s+0x%x" % (pairs[j][1], pc - pairs[j][0]) if j >= 0 else "UNKNOWN"
+def resolve(pc):
+    i = bisect_right(addresses, pc) - 1
+    return (pairs[i][1], pairs[i][0], pc - pairs[i][0]) if i >= 0 else ("UNKNOWN", 0, 0)
 rx = re.compile(r"P1_IRQ_INTERRUPTED epc=(0x[0-9a-f]+) saved_sp=(0x[0-9a-f]+) irq_sp=(0x[0-9a-f]+) saved_irq_remaining=(-?\d+)")
-records = [match.groups() for line in log.read_text(errors="replace").splitlines()
-           if (match := rx.search(line))]
+regs_rx = re.compile(r"P1_IRQ_INTERRUPTED_REGS saved_ra=(0x[0-9a-f]+) saved_fp=(0x[0-9a-f]+) saved_status=(0x[0-9a-f]+) prior_SIE=([01])")
+source = log.read_text(errors="replace").splitlines()
+events = [m.groups() for line in source if (m := rx.search(line))]
+regs = [m.groups() for line in source if (m := regs_rx.search(line))]
+if len(events) != len(regs) or not events:
+    raise SystemExit("P1_IRQ_PARENT_TRACE=FAIL inconsistent_trap_contexts events=%d registers=%d" %
+                     (len(events), len(regs)))
+frame_cache = {}
+def frame_size(name, start):
+    if name in frame_cache:
+        return frame_cache[name]
+    output = subprocess.run(
+        ["riscv64-linux-gnu-objdump", "-d",
+         "--start-address=" + hex(start),
+         "--stop-address=" + hex(start + 32), str(elf)],
+        capture_output=True, check=True, text=True).stdout
+    m = re.search(r"\baddi\s+sp,\s*sp,\s*(-?(?:0x[0-9a-f]+|\d+))", output)
+    frame_cache[name] = max(0, -int(m.group(1), 0)) if m else -1
+    return frame_cache[name]
 with report.open("w") as out:
-    out.write("saved_epc\tinterrupted_function\tsaved_sp\tirq_entry_sp\tprevious_irq_stack_bytes_left\n")
-    for pc, saved_sp, entry_sp, remain in records:
-        out.write(f"{pc}\t{symbolize(int(pc,16))}\t{saved_sp}\t{entry_sp}\t{remain}\n")
-print(f"P1_IRQ_PARENT_TRACE=CAPTURED interrupt_contexts={len(records)} read_only=1 same_image=1")
-for pc, saved_sp, entry_sp, remain in records[:20]:
-    print(f"P1_IRQ_INTERRUPTED_SYMBOLIZED function={symbolize(int(pc,16))} saved_sp={saved_sp} irq_sp={entry_sp} irq_left_before_entry={remain}")
+    out.write("saved_epc\tinterrupted_function\tfunction_offset\tfunction_frame_bytes\tsaved_sp\tirq_entry_sp\tprevious_irq_stack_bytes_left\tsaved_ra\tcandidate_caller\tsaved_fp\tsaved_status\tprior_SIE\n")
+    for (pc, sp, entry, remaining), (ra, fp, status, sie) in zip(events, regs):
+        name, base, offset = resolve(int(pc, 16))
+        candidate = resolve(int(ra, 16))[0]
+        frame = frame_size(name, base) if base else -1
+        out.write(f"{pc}\t{name}\t{offset}\t{frame}\t{sp}\t{entry}\t{remaining}\t{ra}\t{candidate}\t{fp}\t{status}\t{sie}\n")
+        print(f"P1_IRQ_INTERRUPTED_SYMBOLIZED function={name}+0x{offset:x} frame={frame} saved_sp={sp} irq_sp={entry} irq_left_before_entry={remaining} candidate_saved_ra={candidate} prior_SIE={sie}")
+print(f"P1_IRQ_PARENT_TRACE=CAPTURED interrupt_contexts={len(events)} read_only=1 same_image=1 sp_and_ra=1 saved_SPIE=1 emitted_frame_prologues=1")
 PY_IRQ_PARENT
   fi
 fi
