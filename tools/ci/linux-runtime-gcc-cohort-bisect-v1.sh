@@ -1330,6 +1330,24 @@ BUILD_DIR="$ev/initramfs" OUTPUT_INITRAMFS="$ev/runtime-initramfs.cpio.gz" \
 last_selection="none"
 last_candidate_delta=""
 last_link_source_dir=""
+# Only linker/archiver/objcopy operations in the selected candidate trial
+# may use native replacements. Preserve the immutable GNU reference preflight,
+# Kbuild source preprocessing (GCC -E), GNU as and MiniC compiler boundary.
+native_kbuild_args=()
+if [[ "${COHORT_NATIVE_UNION:-0}" == 1 ]]; then
+  for variable in COHORT_NATIVE_AR COHORT_NATIVE_LD COHORT_NATIVE_OBJCOPY; do
+    [[ -x "${!variable:-}" ]] || {
+      echo "COHORT_NATIVE_UNION=FAIL missing_executable=$variable" >&2
+      exit 9
+    }
+  done
+  native_kbuild_args=(
+    "AR=$COHORT_NATIVE_AR"
+    "LD=$COHORT_NATIVE_LD"
+    "OBJCOPY=$COHORT_NATIVE_OBJCOPY"
+  )
+  echo "COHORT_NATIVE_UNION=ENABLED owners=$n pp=GNU as=GNU cc=MiniC ar=MiniAR ld=MiniLD_final_only objcopy=MiniObjcopy"
+fi
 trial() {
   name="$1"; count="$2"; profile="$3"; mode="${4:-prefix}"
   # Experimental overlays never modify the authenticated 2064-object pool.
@@ -1374,6 +1392,7 @@ trial() {
       >"$d/guard.log"
     link_started=$(date +%s%N)
     if ! make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
+      "${native_kbuild_args[@]}" \
       -j4 Image >"$d/link.log" 2>&1; then
       echo "COHORT_LINK=FAIL name=$name count=$count"
       tail -n 70 "$d/link.log"
@@ -1478,6 +1497,7 @@ PY_RISCV_DYNAMIC
       printf 'timing_%s_header_reconcile_ms=%s\n' "$name" "$(((regen_finished-regen_started)/1000000))" >>"$ev/identity.txt"
       second_started=$(date +%s%N)
       if ! make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
+      "${native_kbuild_args[@]}" \
           -j4 Image >"$d/link-reconciled.log" 2>&1; then
         echo "COHORT_LINK=FAIL name=$name stage=gnu_link_after_header_reconcile"
         tail -n 65 "$d/link-reconciled.log"
@@ -1510,6 +1530,7 @@ PY_RISCV_DYNAMIC
       if [[ "$repair_result" == *"COHORT_KBUILD_REPAIR=APPLIED"* ]]; then
         second_started=$(date +%s%N)
         if ! make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
+      "${native_kbuild_args[@]}" \
           -j4 Image >"$d/link-repaired.log" 2>&1; then
           echo "COHORT_LINK=FAIL name=$name stage=guarded_second_link"
           tail -n 70 "$d/link-repaired.log"
