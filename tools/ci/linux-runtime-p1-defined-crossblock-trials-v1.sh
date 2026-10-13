@@ -12,6 +12,16 @@ rx_roi=0
 rx_bundle=0
 rx_bundle_page=0
 rx_bundle_dev=0
+rx_bundle_timer=0
+if [[ "$single_owner" != 1 && "${COHORT_P1_DISCARD_EQ:-0}" != 1 ]] &&
+  git -C "$repo" log -1 --format=%B | grep -Fq '[linux-runtime-p1-rx-bundle-timer]'; then
+  rx_bundle=1
+  rx_bundle_page=1
+  rx_bundle_dev=1
+  rx_bundle_timer=1
+  unset MINIC_P1_CROSSBLOCK_FUNCTION
+  echo "P1_RX_BUNDLE_TIMER=START owners=7 sixth_net_dev_preserved=true timer_owner=kernel/time/hrtimer.o repeats=6"
+fi
 if [[ "$single_owner" != 1 && "${COHORT_P1_DISCARD_EQ:-0}" != 1 ]] &&
   git -C "$repo" log -1 --format=%B | grep -Fq '[linux-runtime-p1-rx-bundle-dev]'; then
   rx_bundle=1
@@ -70,6 +80,7 @@ net/ipv4/tcp_input.o
 mm/slub.o
 mm/page_alloc.o
 net/core/dev.o
+kernel/time/hrtimer.o
 OWNERS_BUNDLE
 elif [[ "$rx_roi" == 1 ]]; then
   cat >"$dest/selected.txt" <<'OWNERS_RX'
@@ -96,7 +107,7 @@ from pathlib import Path
 import sys
 a,b=map(Path,sys.argv[1:])
 names=a.read_text().splitlines()
-assert len(names) in (1,4,5,6) and len(set(names))==len(names)
+assert len(names) in (1,4,5,6,7) and len(set(names))==len(names)
 assert set(names)<=set(b.read_text().splitlines())
 print(f"P1_DEFINED_CROSSBLOCK=SELECTED owners={len(names)}")
 PY_SET
@@ -105,7 +116,7 @@ printf 'compiler_sha256=%s\n' "$(sha256sum "$minic"|cut -d' ' -f1)" >"$dest/prov
 rm -rf -- "$out"
 cp -a --reflink=auto "$gold_snapshot" "$out"
 COHORT_FRAME_CAPTURE_ONLY="$(if [[ "$rx_roi" == 1 || "$rx_bundle" == 1 ]]; then echo 1; else echo "$single_owner"; fi)" MINIC_CORE_FRAME_TRACE=1 \
-MINIC_CORE_FRAME_TRACE_FILTER="$(if [[ "$rx_roi" == 1 || "$rx_bundle" == 1 ]]; then echo 'ip6_finish_output2,ip6_xmit,tcp_v6_rcv,tcp_v6_do_rcv,tcp_conn_request,tcp_rcv_state_process,___slab_alloc,net_rx_action,process_backlog,__dev_queue_xmit'; else echo 'ip6_finish_output2,ip6_xmit'; fi)" \
+MINIC_CORE_FRAME_TRACE_FILTER="$(if [[ "$rx_roi" == 1 || "$rx_bundle" == 1 ]]; then echo 'ip6_finish_output2,ip6_xmit,tcp_v6_rcv,tcp_v6_do_rcv,tcp_conn_request,tcp_rcv_state_process,___slab_alloc,net_rx_action,process_backlog,__dev_queue_xmit,hrtimer_interrupt,__hrtimer_run_queues,__run_hrtimer,hrtimer_run_softirq'; else echo 'ip6_finish_output2,ip6_xmit'; fi)" \
 python3 "$repo/tools/ci/linux-runtime-kbuild-regeneration-guard-v1.py" \
   --mode replay --out "$out" --golden-out "$gold_snapshot" \
   --evidence "$dest/replay-evidence.json" --selected "$dest/selected.txt" \
@@ -197,7 +208,7 @@ for line in (ev/"minic-manifest.sha256").read_text().splitlines():
     else:
         assert actual==digest, "unrelated MiniC owner changed: "+target
         untouched += 1
-assert matched in (1,4,5,6) and untouched==2064-matched
+assert matched in (1,4,5,6,7) and untouched==2064-matched
 print(f"P1_DEFINED_CROSSBLOCK=POOL_ISOLATED changed_targets={matched} original_neighbors={untouched}")
 PY_VERIFY
 if [[ "$rx_roi" == 1 ]]; then
@@ -277,6 +288,18 @@ for name in focus:
     print(f"P1_RX_BUNDLE_DEV=FRAME function={name} candidate_frame={rows.get(name,'missing')}")
 assert sum(name in rows for name in focus)>=2,"missing receive/transmit focus"
 PY_DEV_AUDIT
+    if [[ "$rx_bundle_timer" == 1 ]]; then
+      python3 - "$out/kernel/time/hrtimer.minic-stage2.minic.stderr" <<'PY_TIMER'
+from pathlib import Path
+import re,sys
+p=Path(sys.argv[1]);assert p.is_file()
+rows=dict((m.group(1),int(m.group(2))) for m in re.finditer(
+  r'^CORE_FRAME_REUSE function=(\S+) frame=(\d+)\b',p.read_text(errors='replace'),re.M))
+for name in ('hrtimer_interrupt','__hrtimer_run_queues','__run_hrtimer','hrtimer_run_softirq'):
+  print(f"P1_RX_BUNDLE_TIMER=FRAME function={name} candidate={rows.get(name,'inlined_or_missing')}")
+assert 'hrtimer_interrupt' in rows,'hrtimer IRQ target absent'
+PY_TIMER
+    fi
   fi
 fi
 export COHORT_P1_EXPERIMENTAL_POOL="$dest/pool/minic"
@@ -367,7 +390,9 @@ PY_IRQ_ATTRIBUTION
     echo "P1_DEFINED_CROSSBLOCK_GDB=INCONCLUSIVE no_P1_pass_inference=true"
   fi
 fi
-if [[ "$rx_bundle_dev" == 1 ]]; then
+if [[ "$rx_bundle_timer" == 1 ]]; then
+  echo "P1_RX_BUNDLE_TIMER=COMPLETE owners=7 frozen_minic=2057 gcc_owners=0 passes=$passes failures=$((repeats-passes)) attempts=$repeats image_sha=$pinned experimental_not_promoted=true"
+elif [[ "$rx_bundle_dev" == 1 ]]; then
   echo "P1_RX_BUNDLE_DEV=COMPLETE owners=6 frozen_minic=2058 gcc_owners=0 passes=$passes failures=$((repeats-passes)) attempts=$repeats image_sha=$pinned experimental_not_promoted=true"
 elif [[ "$rx_bundle_page" == 1 ]]; then
   echo "P1_RX_BUNDLE_PAGE=COMPLETE modified_minic=5 unchanged_minic=2059 gcc_owners=0 passes=$passes failures=$((3-passes)) image_sha=$pinned candidate_not_promoted=true"
