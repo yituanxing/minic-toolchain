@@ -15,13 +15,6 @@ partners=(
   net/ipv4/tcp_output.o
   net/core/dev.o
 )
-# Actual PELT owner correction: sched/build_policy.c includes pelt.c;
-# sched/fair.c does NOT define decay_load or accumulate_sum. Test exactly
-# ONE two-object GCC rescue with frozen 2064-object pool.
-if git -C "$repo" log -1 --format=%B | grep -Fq '[linux-runtime-p1-pelt-owner]'; then
-  partners=(kernel/sched/build_policy.o)
-  echo "COHORT_P1_PELT_OWNER=CORRECTED partner=kernel/sched/build_policy.o source_include=kernel/sched/pelt.c experiments=1"
-fi
 printf 'two_gcc_owners\timage_sha256\tpass_count\tfail_count\tverdicts\n' >"$ev/p1-rescue-pairs.tsv"
 printf 'two_gcc_owners\tattempt\timage_sha256\tverdict\n' >"$ev/p1-rescue-pairs-repeats.tsv"
 for partner in "${partners[@]}"; do
