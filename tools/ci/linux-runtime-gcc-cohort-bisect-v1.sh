@@ -1582,9 +1582,13 @@ PY_RISCV_DYNAMIC
   python3 - "$out" "$prov/gcc-objects.sha256" "$objects_file" \
     "$d/selected-objects.txt" "$last_link_source_dir" "$gold_snapshot" <<'PY_GNU_NONSELECTED'
 from pathlib import Path
-import hashlib, re, struct, sys
+import hashlib, os, re, struct, sys
 
 out,manifest,universe,selected,link_dir,golden=map(Path,sys.argv[1:])
+native_union=os.environ.get("COHORT_NATIVE_UNION")=="1"
+native_trace_dir=Path(os.environ.get("NATIVE_TRACE_DIR","/nonexistent-native-traces"))
+native_objcopy_trace=(native_trace_dir/"miniobjcopy.trace").read_text() if (native_union and (native_trace_dir/"miniobjcopy.trace").is_file()) else ""
+native_linker_trace=(native_trace_dir/"minild.trace").read_text() if (native_union and (native_trace_dir/"minild.trace").is_file()) else ""
 all_c={x.strip() for x in universe.read_text().splitlines()
        if x.strip() and not x.lstrip().startswith("#")}
 chosen={x.strip() for x in selected.read_text().splitlines()
@@ -1634,6 +1638,20 @@ def derivation(name):
             emitted("LD","arch/riscv/purgatory/purgatory.chk") and
             emitted("AS",name)):
             return "purgatory:" + ",".join(sorted(owners))
+    if name=="arch/riscv/kernel/compat_vdso/compat_vdso.o" and native_union:
+        # Unlike the regular vDSO's MiniC-selected C owners, compat-vDSO is
+        # assembled from a 32-bit DSO after a native MiniObjcopy rewrite.
+        # Exact-byte drift here is expected, even though all C inputs are
+        # immutable. Authorize ONLY this explicit native-derived RISC-V
+        # object with Kbuild's full GNU-ld -> MiniObjcopy -> GNU-AS trail.
+        dbg="arch/riscv/kernel/compat_vdso/compat_vdso.so.dbg"
+        so="arch/riscv/kernel/compat_vdso/compat_vdso.so"
+        if (emitted("VDSOLD", dbg) and emitted("OBJCOPY",so) and
+            emitted("AS",name) and
+            re.search(r"(?m)^gnu-ld .* -o "+re.escape(dbg)+r"\.tmp$",native_linker_trace) and
+            re.search(r"(?m)^miniobjcopy .* "+re.escape(dbg)+r"\.tmp "+re.escape(dbg)+r"$",native_objcopy_trace) and
+            re.search(r"(?m)^miniobjcopy -S "+re.escape(dbg)+r" "+re.escape(so)+r"$",native_objcopy_trace)):
+            return "native-compat-vdso:GNU-LD_MiniObjcopy_GNU-AS"
     if name=="arch/riscv/kernel/vdso/vdso.o":
         owners={"arch/riscv/kernel/vdso/hwprobe.o",
                 "arch/riscv/kernel/vdso/vgettimeofday.o"}
