@@ -64,6 +64,20 @@ start=$(date +%s%N)
 for p in "${patches[@]}"; do
   python3 "tools/ci/$p" >>"$ev/patch.log"
 done
+# Whole-Linux producer opt-in: run the exact two mechanisms proven on the
+# eight-owner 24/24 P1 image across ALL actual Linux C translation units.
+# Keep the ordinary Runtime profile unchanged.  The build is experimental
+# and will be judged by 2064/2064 Kbuild + full Linux P0/shell/P1, not by
+# synthetically expanding a microtest corpus.
+if [[ "${MINIC_LINUX_FULL_CROSSBLOCK:-0}" == 1 ]]; then
+  python3 tools/ci/apply-riscv64-p1-defined-before-use-crossblock-v1.py >>"$ev/patch.log"
+  patches+=(apply-riscv64-p1-defined-before-use-crossblock-v1.py)
+  [[ "${MINIC_OPT_PURE_DISCARDED_ADDRESS_EQ:-0}" == 1 ]] || {
+    echo "MINIC_LINUX_FULL_CROSSBLOCK=FAIL requires_discarded_local_eq=1" >&2
+    exit 8
+  }
+  echo "MINIC_LINUX_FULL_CROSSBLOCK=ENABLED all_linux_C=true crossblock=experimental discarded_pure_comparison=1"
+fi
 git diff --check
 make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$build_dir" \
   "$build_dir/bin/minic" "$build_dir/bin/minic-cc" >/dev/null
