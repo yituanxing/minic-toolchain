@@ -401,8 +401,17 @@ PY_IRQ_ATTRIBUTION
     echo "P1_DEFINED_CROSSBLOCK_GDB=INCONCLUSIVE no_P1_pass_inference=true"
   fi
 fi
+# Previous diagnostics always exited zero so engineers could inspect partial
+# progress (0/3, 1/3, 2/3). The mature 7-owner 16KiB acceptance is different:
+# publish full evidence, then fail the job if even one actual P1 run failed.
+# Do not allow a green job to be mistaken for 12/12 guest certification.
 if [[ "$rx_bundle_timer" == 1 ]]; then
   echo "P1_RX_BUNDLE_TIMER=COMPLETE owners=7 frozen_minic=2057 gcc_owners=0 passes=$passes failures=$((repeats-passes)) attempts=$repeats image_sha=$pinned experimental_not_promoted=true"
+  if [[ "$passes" -ne "$repeats" ]]; then
+    echo "P1_RX_BUNDLE_TIMER=FAIL require_all_P1_PASS actual=$passes expected=$repeats image_sha=$pinned" >&2
+    exit 8
+  fi
+  echo "P1_RX_BUNDLE_TIMER=ACCEPTED owners=7 p1=$passes/$repeats same_image_sha=$pinned"
 elif [[ "$rx_bundle_dev" == 1 ]]; then
   echo "P1_RX_BUNDLE_DEV=COMPLETE owners=6 frozen_minic=2058 gcc_owners=0 passes=$passes failures=$((repeats-passes)) attempts=$repeats image_sha=$pinned experimental_not_promoted=true"
 elif [[ "$rx_bundle_page" == 1 ]]; then
