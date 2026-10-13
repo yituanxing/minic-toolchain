@@ -302,6 +302,16 @@ PY_TIMER
     fi
   fi
 fi
+if [[ "$rx_bundle_timer" == 1 ]]; then
+  if ! command -v qemu-riscv64 >/dev/null 2>&1; then
+    sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends qemu-user
+  fi
+  echo "P1_RX_BUNDLE_TIMER=SEMANTIC_START"
+  MINIC="$minic" WORK="$dest/cfg-semantic" RISCV_CC=riscv64-linux-gnu-gcc \
+    QEMU_RISCV64=qemu-riscv64 \
+    bash "$repo/tests/compiler/c0/run-core-cfg-slot-reuse-p1.sh"
+  echo "P1_RX_BUNDLE_TIMER=SEMANTIC_PASS"
+fi
 export COHORT_P1_EXPERIMENTAL_POOL="$dest/pool/minic"
 last_selection="none"
 last_link_source_dir=""
@@ -317,6 +327,7 @@ if [[ "$single_owner" == 1 ]]; then
 fi
 repeats=3
 if [[ "$rx_bundle_dev" == 1 ]]; then repeats=6; fi
+if [[ "$rx_bundle_timer" == 1 ]]; then repeats=12; fi
 for attempt in $(seq 1 "$repeats"); do
   trial "p1_defined_crossblock_$attempt" "$n" p1 "$mode"
   [[ -n "$pinned" ]] || pinned="$image_sha"
