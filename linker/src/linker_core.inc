@@ -67,6 +67,14 @@ typedef struct MiniLdState {
     MiniLdReloc *relocs;
     size_t reloc_count;
     size_t reloc_capacity;
+    /*
+     * Lazy CSR-style relocation index, keyed by input section number.
+     * Built once when R_RISCV_ALIGN relaxation starts, then immutable:
+     * relaxation alters relocation offsets but never section owners.
+     */
+    size_t *reloc_section_starts;
+    size_t *reloc_section_refs;
+    size_t reloc_index_sections;
     MiniLdIndexSlot *section_index;
     size_t section_index_capacity;
     MiniLdIndexSlot *global_index;
@@ -279,6 +287,8 @@ static void state_destroy(MiniLdState *state) {
     free(state->sections);
     free(state->symbols);
     free(state->relocs);
+    free(state->reloc_section_starts);
+    free(state->reloc_section_refs);
     free(state->section_index);
     free(state->global_index);
 }
@@ -2737,6 +2747,71 @@ static size_t static_map_relaxed_offset(
     return raw_offset - deleted;
 }
 
+/*
+ * RISC-V ALIGN relaxation is invoked for thousands of input sections.
+ * Scanning all 1.28 million Linux relocations for each section was O(S*R).
+ * Build a compact, stable, prefix-sum index ONCE; order within a section
+ * remains the original order, and relocation offsets may still be changed.
+ */
+static bool minild_index_relocations_by_section(MiniLdState *state) {
+    size_t *starts = NULL;
+    size_t *refs = NULL;
+    size_t *positions = NULL;
+    size_t count = state->section_count;
+    size_t i;
+
+    if (state->reloc_section_starts != NULL) {
+        return true;
+    }
+    if (count == SIZE_MAX ||
+        count + 1U > SIZE_MAX / sizeof(*starts) ||
+        state->reloc_count > SIZE_MAX / sizeof(*refs)) {
+        fprintf(state->diagnostics, "minic-ld: relocation-index-overflow\n");
+        return false;
+    }
+    starts = calloc(count + 1U, sizeof(*starts));
+    refs = malloc((state->reloc_count == 0U ? 1U : state->reloc_count) *
+                  sizeof(*refs));
+    positions = malloc((count == 0U ? 1U : count) * sizeof(*positions));
+    if (starts == NULL || refs == NULL || positions == NULL) {
+        fprintf(state->diagnostics, "minic-ld: out-of-memory:relocation-index\n");
+        goto fail;
+    }
+    for (i = 0U; i < state->reloc_count; ++i) {
+        const size_t section = state->relocs[i].section;
+        if (section >= count || starts[section + 1U] == SIZE_MAX) {
+            fprintf(state->diagnostics,
+                    "minic-ld: invalid-relocation-section-index\n");
+            goto fail;
+        }
+        ++starts[section + 1U];
+    }
+    for (i = 1U; i <= count; ++i) {
+        if (starts[i] > SIZE_MAX - starts[i - 1U]) {
+            fprintf(state->diagnostics, "minic-ld: relocation-prefix-overflow\n");
+            goto fail;
+        }
+        starts[i] += starts[i - 1U];
+    }
+    for (i = 0U; i < count; ++i) {
+        positions[i] = starts[i];
+    }
+    for (i = 0U; i < state->reloc_count; ++i) {
+        size_t section = state->relocs[i].section;
+        refs[positions[section]++] = i;
+    }
+    free(positions);
+    state->reloc_section_starts = starts;
+    state->reloc_section_refs = refs;
+    state->reloc_index_sections = count;
+    return true;
+fail:
+    free(positions);
+    free(refs);
+    free(starts);
+    return false;
+}
+
 static bool static_relax_align_section(MiniLdState *state,
                                        size_t section_index,
                                        uint64_t base_addr) {
@@ -2751,13 +2826,23 @@ static bool static_relax_align_section(MiniLdState *state,
     size_t i;
     bool ok = false;
 
+    size_t relocation_begin;
+    size_t relocation_end;
+
     if (section->type == SHT_NOBITS || section->size == 0U) {
         return true;
     }
-
-    for (i = 0U; i < state->reloc_count; ++i) {
-        if (state->relocs[i].section == section_index &&
-            state->relocs[i].type == R_RISCV_ALIGN) {
+    if (!minild_index_relocations_by_section(state)) {
+        return false;
+    }
+    /* Synthetic script-only sections appended later have no relocations. */
+    if (section_index >= state->reloc_index_sections) {
+        return true;
+    }
+    relocation_begin = state->reloc_section_starts[section_index];
+    relocation_end = state->reloc_section_starts[section_index + 1U];
+    for (i = relocation_begin; i < relocation_end; ++i) {
+        if (state->relocs[state->reloc_section_refs[i]].type == R_RISCV_ALIGN) {
             ++site_count;
         }
     }
@@ -2776,11 +2861,9 @@ static bool static_relax_align_section(MiniLdState *state,
     }
 
     site_count = 0U;
-    for (i = 0U; i < state->reloc_count; ++i) {
-        MiniLdReloc *reloc = &state->relocs[i];
-
-        if (reloc->section != section_index ||
-            reloc->type != R_RISCV_ALIGN) {
+    for (i = relocation_begin; i < relocation_end; ++i) {
+        MiniLdReloc *reloc = &state->relocs[state->reloc_section_refs[i]];
+        if (reloc->type != R_RISCV_ALIGN) {
             continue;
         }
         if (reloc->offset > SIZE_MAX || reloc->addend < 0 ||
@@ -2905,11 +2988,10 @@ static bool static_relax_align_section(MiniLdState *state,
         }
     }
 
-    for (i = 0U; i < state->reloc_count; ++i) {
-        MiniLdReloc *reloc = &state->relocs[i];
+    for (i = relocation_begin; i < relocation_end; ++i) {
+        MiniLdReloc *reloc = &state->relocs[state->reloc_section_refs[i]];
 
-        if (reloc->section == section_index &&
-            reloc->offset <= SIZE_MAX) {
+        if (reloc->offset <= SIZE_MAX) {
             reloc->offset = (uint64_t)static_map_relaxed_offset(
                 (size_t)reloc->offset,
                 events,
