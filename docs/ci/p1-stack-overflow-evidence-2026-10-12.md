@@ -1122,3 +1122,96 @@ Do not turn on unsafe global sharing just from this outcome.
 Temporary opt-in experiment code is now removed, with the prior
 canonical diagnostic script restored bit-for-bit. No Workflow or
 branch was added and no production MiniC source was modified.
+
+
+## 16KiB P1 milestone closure: seven-owner, twelve identical-Image passes (2026-10-13)
+
+**Frozen success — no claim of globally safe optimizer promotion.**
+Commit `0ec751c469216c1c5a4aae62c7bc83ec9ed74375`, Linux Runtime GCC Baseline
+CI **#38351512579**, artifact **#11791865901**.
+Default 16KiB task/IRQ stacks, Linux **6.6.143**, original complete
+**2064-C-owner MiniC** inventory, GNU assembler and linker.
+Exactly **seven** C owners rebuilt with the opt-in
+`P1_DEFINED_BEFORE_USE_CROSSBLOCK_V1` backend; the other **2057**
+MiniC C owners preserve their manifest-verified original bytes,
+**zero GNU C-owner substitutions**:
+
+```text
+net/ipv6/ip6_output.o
+net/ipv6/tcp_ipv6.o
+net/ipv4/tcp_input.o
+mm/slub.o
+mm/page_alloc.o
+net/core/dev.o
+kernel/time/hrtimer.o
+```
+
+Image SHA256 pinned to
+`06bbd4e9bdd2c0ca4634ca55a7445c3565c8fc73cb00ce8bd39fc55d770a7530`.
+Artifact `p1-defined-crossblock/p1-repeats.tsv` records **12/12 PASS**,
+identical Image hash on all boots. Verified each of 12 raw
+`trials/p1_defined_crossblock_N/qemu/rdinit-init.log` outputs has
+`RUNTIME_V2_SYSCALL_END pass=12 fail=0`,
+`INIT_RUNTIME_PROBE=PASS`, `reboot: Power down`, and no
+`Insufficient stack space` marker. **12 repeated boots are 12
+successful runs of the 12-probe P1 suite, not 144 independent distinct
+test scenarios.**
+
+A separate opt-in RV64 GNU-vs-experimental-MiniC differential executable
+passed `P1_CFG_SEMANTIC=PASS vectors=255 cases=7 gcc_reference=same_process`
+in the same CI run. Coverage includes branch chains, loop re-entry,
+nested ternaries, goto, switch, volatile side effects, and pointer
+escape. **These seven sample programs and 255 inputs do not prove CFG
+cross-block CoreObject reuse safe for arbitrary C/IR or all 2064
+owners.** The test exercises the experimental compiler, not a
+permanently promoted default backend. Existing Linux runtime profile
+and its inter-block-sharing prohibition stay intact.
+
+### Reproducibility and limits
+
+- Keep the **current existing opt-in seven-owner script** as the pinned
+  replay mechanism while the semantic proof is incomplete; do not delete
+  a working test or replace it with another Workflow.
+- Stable 16KiB P1 is established for exactly the seven-owner compiled
+  Image and tested configuration. It does not certify every runtime
+  path, compiler correctness on untested inputs, entire toolchain
+  native-linking, shell readiness, or self-hosting.
+- The **other** workflow `Toolchain Focused Regression Suite`,
+  #38351512614, is **RED**, independent of the P1 success. Its default
+  (not experimental-profile) RV64 focused job fails while linking
+  `run-constant-if-link-v0.sh`:
+  `undefined reference to missing_arch_dma_set_uncached`.
+  MiniAR/MiniLD checks succeeded. Record this as a separate
+  unclosed regression; do not claim global CI is green or attribute
+  this symbol to CFG reuse without causal evidence.
+
+### Next phase — correctness gate before promoting any global stack optimization
+
+1. **Freeze** this pinned P1/Image/object manifest. No more repeated
+   whole-Linux rebuilds merely to search for smaller frames. Reuse
+   the same existing CI receiver and frozen-owner mechanism.
+2. **Prove cross-block slot soundness** in the actual Core IR:
+   enumerate every OBJECT_ADDRESS and direct/indirect use, escaped
+   address, all predecessors and backedges, reads-before-writes,
+   loop re-entries, goto/asm-goto and aliasing. Verify that shared
+   stack slots cannot represent simultaneously live values on
+   any reachable path. Current "first use is a STORE" is evidence
+   of an opportunity, **not** a general interference proof.
+3. Expand differential testing with focused adversarial C cases and
+   Linux-owner samples; compare observable outputs and side effects
+   with GNU. Fix only proven unsound reuse rules. Do not broaden the
+   optimization beyond this seven-owner experimental cohort until
+   those checks pass.
+4. Resolve the unrelated default RV64
+   `missing_arch_dma_set_uncached` regression independently using its
+   existing focused test, avoiding unrelated CI/workflow changes.
+5. After correctness gates, promote a conservative general CoreObject
+   optimization behind an explicit switch, measure stack/compile-time
+   changes on same hardware, then test all-MiniC Linux P1 and later
+   shell/whole-toolchain replacement/self-hosting. Dedicated space and
+   speed optimization follows after runtime correctness stabilizes.
+
+**Repository hygiene at milestone:** no extra branch or Workflow
+needed; no production compiler code modification is authorized by
+this result. This appended milestone is the only intended persistent
+change in the closing commit.
