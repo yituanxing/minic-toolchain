@@ -2433,6 +2433,14 @@ PY_RESCUE_SET
   # The panic's exact return-address symbol was resolved by 38212502667
   # to net/core/dev.o (NOT tcp_ipv4.o). Probe known owners first.
   p1_probe_owners_string="${COHORT_P1_SWAP_OWNERS:-lib/list_debug.o net/core/dev.o net/ipv6/tcp_ipv6.o}"
+  # Check the scheduler-only contribution to the existing exact 16K P1
+  # failure. Reuse all 2064 frozen C objects and existing triple-boot oracle.
+  # This does not alter compiler output, kernel config, or the workflows.
+  if git -C "$repo" log -1 --format=%B | grep -Fq '[linux-runtime-p1-fair-only]'; then
+    [[ "${COHORT_P1_IDENTICAL_IMAGE_REPEAT:-0}" == 1 ]] || exit 8
+    p1_probe_owners_string="kernel/sched/fair.o"
+    echo "COHORT_P1_FAIR_ONLY=ENABLED gcc=kernel/sched/fair.o minic=2063 qemu_repeats=3"
+  fi
   for p1_probe_owner in $p1_probe_owners_string; do
     owner_idx=-1
     for ((i=0;i<n;i++)); do
