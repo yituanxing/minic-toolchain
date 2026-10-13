@@ -5,6 +5,9 @@
 # The first union is MiniAR (GNU fallback only for mPiT) + final-only
 # MiniLD + MiniObjcopy; GNU as is kept.
 # Actual MiniAS requires newly generated .s input and is a separate next gate.
+# Repro: #38413825638 linked cached C successfully up to vmlinux.a,
+# where MiniAR A1 rejected mPiT positional move; keep this GNU-only fallback
+# explicit while native move support is developed and regression-tested.
 set -Eeuo pipefail
 if (( $# != 2 )); then
   echo "usage: $0 <native-tool-build-dir> <evidence-dir>" >&2
