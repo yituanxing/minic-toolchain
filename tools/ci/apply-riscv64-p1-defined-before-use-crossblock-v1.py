@@ -55,24 +55,60 @@ static bool core_scalar_object_first_access_defines(
     const MinicCoreFunction *function,
     MinicCoreObjectId object_id, size_t block_index) {
     const MinicCoreBlock *block;
+    size_t *first_producer_plus_one;
     size_t position;
+    bool first_access_defines = false;
 
-    if (function == NULL || block_index >= function->block_count) {
+    if (function == NULL || block_index >= function->block_count ||
+        function->value_count > SIZE_MAX / sizeof(size_t)) {
         return false;
     }
     block = &function->blocks[block_index];
+
+    /* PERF: the original implementation searched the entire block for
+       OBJECT_ADDRESS on EVERY LOAD/STORE of EVERY eligible CoreObject.
+       For large, unrolled Linux crypto functions this is quadratic in block
+       length per object (lib/crypto/blake2s-generic.c: 33m for one TU).
+       Index matching local address producers once, then inspect each
+       memory access exactly once. A value id is a dense Core IR index.
+       The stored position is 1-based so calloc's 0 means "unseen". */
+    first_producer_plus_one = (size_t *)calloc(
+        function->value_count != 0U ? function->value_count : 1U,
+        sizeof(*first_producer_plus_one));
+    if (first_producer_plus_one == NULL) {
+        /* Failing to allocate an optimization-only index must never
+           license sharing a live object across basic blocks. */
+        return false;
+    }
     for (position = 0U; position < block->instruction_count; ++position) {
-        MinicCoreInstructionId instruction_id = block->instructions[position];
+        MinicCoreInstructionId id = block->instructions[position];
         const MinicCoreInstruction *inst;
-        MinicCoreValueId address = MINIC_CORE_VALUE_INVALID;
-        size_t producer_position;
-        if (instruction_id >= function->instruction_count) {
-            return false;
+        MinicCoreValueId result;
+        if (id >= function->instruction_count || position == SIZE_MAX - 1U) {
+            goto finish;
         }
-        inst = &function->instructions[instruction_id];
+        inst = &function->instructions[id];
+        if (inst->kind != MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS ||
+            inst->value.object_id != object_id) {
+            continue;
+        }
+        result = inst->result;
+        if (result != MINIC_CORE_VALUE_INVALID &&
+            result < function->value_count &&
+            first_producer_plus_one[result] == 0U) {
+            /* Preserve the original helper's earliest producer semantics
+               even if malformed IR repeats the same result id. */
+            first_producer_plus_one[result] = position + 1U;
+        }
+    }
+    for (position = 0U; position < block->instruction_count; ++position) {
+        MinicCoreInstructionId id = block->instructions[position];
+        const MinicCoreInstruction *inst = &function->instructions[id];
+        MinicCoreValueId address = MINIC_CORE_VALUE_INVALID;
         if (inst->kind == MINIC_CORE_INSTRUCTION_PARAMETER_OBJECT &&
             inst->value.parameter_object.object_id == object_id) {
-            return true;
+            first_access_defines = true;
+            break;
         }
         if (inst->kind == MINIC_CORE_INSTRUCTION_LOAD) {
             address = inst->value.load.address;
@@ -81,27 +117,17 @@ static bool core_scalar_object_first_access_defines(
         } else {
             continue;
         }
-        for (producer_position = 0U;
-             producer_position < block->instruction_count; ++producer_position) {
-            MinicCoreInstructionId producer_id =
-                block->instructions[producer_position];
-            const MinicCoreInstruction *producer;
-            if (producer_id >= function->instruction_count) {
-                return false;
-            }
-            producer = &function->instructions[producer_id];
-            if (producer->kind == MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS &&
-                producer->value.object_id == object_id &&
-                producer->result == address) {
-                /* The first observation is a direct local memory access.
-                   Fail closed when it reads an older value, which could
-                   remain live across predecessors or loop backedges. */
-                return inst->kind == MINIC_CORE_INSTRUCTION_STORE &&
-                       producer_position < position;
-            }
+        if (address < function->value_count &&
+            first_producer_plus_one[address] != 0U) {
+            first_access_defines =
+                inst->kind == MINIC_CORE_INSTRUCTION_STORE &&
+                first_producer_plus_one[address] - 1U < position;
+            break;
         }
     }
-    return false;
+finish:
+    free(first_producer_plus_one);
+    return first_access_defines;
 }
 
 '''
