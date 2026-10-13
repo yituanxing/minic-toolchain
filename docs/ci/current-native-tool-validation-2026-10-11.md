@@ -1,5 +1,27 @@
 # Current native tool validation — 2026-10-11
 
+## 2026-10-13 follow-up: three previously blocking genuine Linux objects are corrected
+
+A real full-GNU fixture validated **three and only three** Linux C owners,
+`kernel/dma/direct.o`, `mm/truncate.o`, `mm/shmem.o`, under the
+current 44-transform MiniC Runtime codegen profile. This result is
+**one-owner #38359682153 SUCCESS**, then **three-owner #38360171913 SUCCESS**.
+All candidate objects compiled, authenticated ABI, and passed the existing
+symbol-elimination oracles: no `arch_dma_set_uncached`, no
+`dax_delete_mapping_entry`, and no `__compiletime_assert_*` unresolved
+references in their matching RV64 objects. The GNU source object pool was
+reused (no 2064 TU compilation); the three candidate objects took **12.798s**
+of compile work as reported by the runner. This is the exact next proof after
+the default RV64 focused negative-case and GNU-link test returned green.
+
+**Limits:** No full MiniC Linux final link, no current-head 16KiB P1,
+no default all-owner stack optimizer promotion, no additional native-tool
+combination is certified by this scoped test. When scheduling the next
+full-current seven-shard receiver, reserve it as a distinct one-time
+acceptance gate: maintain the canonical golden compiler, strict 2064 MiniC
+provenance, reuse existing fixture/cache and incremental link, and only
+advance combination testing after authentic QEMU guest assertions.
+
 ## 2026-10-13 handoff: freeze the known-good proofs; finish correctness and native combination
 
 Baseline branch `agent/linux-expanded-kbuild-v0` at `ac8568493e267028bf25e6e6116a49d57a7355a1` at the start of this audit.
@@ -88,9 +110,22 @@ A. **DONE: default RV64 dead-bool-link and one genuine Linux DMA producer.**
    recompilation, ABI+manifest+GNU preflight **PASS**, patch-profile build
    14.155s, actual selected C producer compile 6.691s, all cache and route
    constraints met. No kernel QEMU/Image was built in this one-owner gate.
-   **Next** test the three historical missing-symbol owner objects in the
-   already-existing single `[linux-runtime-gcc-link-triad]` lane, not a
-   whole-Linux build.
+   **DONE** on exact same-config GNU fixture / 44-transform Runtime profile:
+   [#38360171913](https://github.com/yituanxing/minic-toolchain/actions/runs/38360171913)
+   at `8b9e5f8ff52aae4133bc99f32ba3c2df548cb820` replaces exactly
+   `kernel/dma/direct.o`, `mm/truncate.o`, and `mm/shmem.o`.
+   `COHORT_COMPILE=PASS objects=3 elapsed_ms=12798`,
+   `COHORT_ABI=PASS objects=3`, source-route audit PASS and
+   `COHORT_CANDIDATE_READY=PASS objects=3`; GNU nm checks assert
+   **absence** of the three historical missing-reference classes
+   `arch_dma_set_uncached`, `dax_delete_mapping_entry`, and
+   `__compiletime_assert_*`, so the real selected Linux .o graph no longer
+   has those known unresolved references. This was *not* a Linux Image/link
+   or QEMU verdict; only the three affected actual owners were recompiled.
+   **Next** one deliberate full-current MiniC 2064-producer acceptance on
+   seven parallel cached shards plus reused GNU link/QEMU, not per-fix
+   full rebuilds. Keep the known-good 7-owner experimental Image immutable.
+   After MiniC global baseline, expand native-tool combinations incrementally.
 B. Finish same-tree **full production MiniPP** from the existing
    `minipp_native_full_relink.sh` machinery; reuse source/objects whenever
    their exact provenance is available, verify the actual number of C-only
