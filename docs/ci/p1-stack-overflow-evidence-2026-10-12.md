@@ -456,3 +456,59 @@ The failed `ip6_output.o + build_policy.o` GCC pair (1/3 P1) reinforces
 that this is not a proven one-owner compiler bug. The next investigation
 should measure the actual nested IRQ path and a pinned first-fault SP,
 not swap more large objects by intuition.
+
+
+## IPv6-only semantic dead-address removal, original 16KiB stack — 2026-10-13
+
+One *read-only-with-respect-to-production-code* trial applied the existing
+experimental `apply-p1-pure-discarded-local-address-equality-v1.py` only
+when compiling `net/ipv6/ip6_output.o`, and allowed its existing strict
+side-effect-free guard in **all functions of that TU**, rather than only
+`ip6_finish_output2` or `ip6_xmit`. All remaining 2063 authenticated
+MiniC C objects stayed byte-identical; **zero GCC C-object substitutions**.
+The original 16KiB task/IRQ configuration was unchanged. CI
+**#38331510555**, artifact **11783586392**.
+
+| Linked call-chain function | Original MiniC frame | One-TU candidate frame |
+| --- | ---: | ---: |
+| `ip6_xmit` | 2288 B | 1520 B |
+| `ip6_output` | 768 B | 512 B |
+| `ip6_finish_output` | 224 B | 224 B |
+| `__ip6_finish_output` | 288 B | 288 B |
+| `ip6_finish_output2` | 4064 B | 2272 B |
+| **Sum of those frames** | **7632 B** | **4816 B** |
+
+The 2816-byte frame saving was verified by the actual replayed MiniC
+`ip6_output.o` and the frozen-object overlay manifest. Three independent
+P1 QEMU boots of the **same** Image SHA
+`82bb5bf30d5226db5ab18d4597e796aeb0606d633cc3d65be6c9e25086442067`
+returned **FAIL/FAIL/FAIL** in IPv6 child-connect. The three serial
+panic logs give trapped SPs of `0xff1fffffffffffb0` (80 bytes below
+`0xff20000000000000`) and `0xff1fffffffffffe0` (32 bytes below,
+twice), with varying interrupt/timer-related PCs:
+`__minic_inline_spec_1331_185` called from `decay_load`,
+`get_current`, and `__radix_tree_lookup`. The CPU0 IRQ stack base
+`0xff20000000000000` was independently *measured* in a prior
+GDB run on another linked 16KiB Image; the new trial did not itself run
+GDB, so classification of its trap as IRQ-stack overflow remains a
+strong inference, **not fresh same-Image proof**.
+
+For the **unchanged original** MiniC Image, the pinned GDB
+`P1_FIRSTFAULT` instead showed task-stack SP 144 bytes *below* base.
+The same original entry trace measured remaining stack:
+`__tcp_transmit_skb` 12928, `ip6_xmit` 11184,
+`ip6_output` 8608, `ip6_finish_output2` 7088,
+`__neigh_create` 3024, `__slab_alloc_node` 752,
+`get_freepointer_safe` 480, `__list_add_valid_or_report` 224 bytes.
+The 4064-byte entry-SP difference between
+`ip6_finish_output2` and `__neigh_create` matches the
+measured 4064-byte MiniC frame exactly.
+
+**Decision:** reducing only the IPv6 C owner's stack frames, even by
+2816 bytes along the observed path, does **not** certify 16KiB P1.
+Do not promote this experimental lowering into production solely as a
+P1 workaround. Analyze stack budgets separately for the initial
+task-stack failure and the post-optimization interrupt-path failure,
+using same-Image first-fault evidence before changing backend ABI or
+unsafe CFG-wide stack-slot reuse. All temporary CI script changes were
+reverted; no additional Workflow was introduced.
