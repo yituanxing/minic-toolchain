@@ -467,29 +467,49 @@ entry = int(irq.group(1), 16)
 if top - base != 16384 or entry != top:
     print("P1_DEFINED_CROSSBLOCK_IRQ=INCONCLUSIVE invalid_irq_stack_boundary_or_entry")
     raise SystemExit(0)
+# Report every normal boot, but attribute IRQ underflow ONLY for actual
+# failing boots of this exact Image. Earlier logic quit at the first PASS,
+# losing the rare 20/24 failures that motivated this eight-owner diagnosis.
+repeats_file = report.parent / "p1-repeats.tsv"
+records = [line.split("\t") for line in repeats_file.read_text().splitlines()[1:]]
+if not records or any(len(row) != 3 or row[1] != expected_sha for row in records):
+    raise SystemExit("P1_DEFINED_CROSSBLOCK_IRQ=ERROR invalid_same_image_trial_manifest")
 rows = []
-for index in (1, 2, 3):
+for raw_index, _, verdict in records:
+    index = int(raw_index)
+    if verdict == "PASS":
+        rows.append((index, "PASS", "-", "-"))
+        continue
     log = (ev / f"trials/p1_defined_crossblock_{index}/qemu/rdinit-init.log").read_text(errors="replace")
     crash = log.split("Insufficient stack space to handle exception!", 1)
     mm = re.search(r"\bsp\s*:\s*(?:0x)?([0-9a-fA-F]{16})", crash[-1])
     if len(crash) != 2 or not mm:
-        print(f"P1_DEFINED_CROSSBLOCK_IRQ=INCONCLUSIVE trial={index} no_captured_fault_sp")
-        raise SystemExit(0)
+        rows.append((index, "NON_STACK_FAILURE", "-", "-"))
+        continue
     fault_sp = int(mm.group(1), 16)
-    delta = base - fault_sp
-    rows.append((index, f"0x{fault_sp:x}", delta))
+    rows.append((index, "STACK_OVERFLOW", f"0x{fault_sp:x}", str(base - fault_sp)))
 report.write_text(
-    "trial\ttrapped_sp\tbytes_below_irq_stack_base\n" +
-    "".join(f"{i}\t{sp}\t{delta}\n" for i, sp, delta in rows)
+    "trial\tverdict\ttrapped_sp\tbytes_below_irq_stack_base\n" +
+    "".join(f"{i}\t{verdict}\t{sp}\t{delta}\n"
+            for i, verdict, sp, delta in rows)
 )
-if all(0 < row[2] <= 4096 for row in rows):
+failures = [row for row in rows if row[1] != "PASS"]
+stack_failures = [row for row in failures if row[1] == "STACK_OVERFLOW"]
+if not failures:
+    print("P1_DEFINED_CROSSBLOCK_IRQ=NO_CRASH_OBSERVED "
+          "same_image_sha=%s attempts=%d gdb_timing_perturbed=true"
+          % (expected_sha, len(rows)))
+elif len(stack_failures) == len(failures) and all(
+        0 < int(row[3]) <= 4096 for row in stack_failures):
     print("P1_DEFINED_CROSSBLOCK_IRQ=VERIFIED irq_base=0x%x irq_top=0x%x "
-          "trapped_sp_below_base_bytes=%s trials=3 same_image_sha=%s "
-          "debugger_not_a_P1_oracle=true" %
-          (base, top, ",".join(str(row[2]) for row in rows), expected_sha))
+          "trapped_sp_below_base_bytes=%s failures=%d attempts=%d "
+          "same_image_sha=%s debugger_not_a_P1_oracle=true" %
+          (base, top, ",".join(row[3] for row in stack_failures),
+           len(failures), len(rows), expected_sha))
 else:
-    print("P1_DEFINED_CROSSBLOCK_IRQ=INCONCLUSIVE irq_base=0x%x deltas=%s" %
-          (base, ",".join(str(row[2]) for row in rows)))
+    print("P1_DEFINED_CROSSBLOCK_IRQ=INCONCLUSIVE irq_base=0x%x "
+          "failures=%d stack_failures=%d attempts=%d"
+          % (base, len(failures), len(stack_failures), len(rows)))
 PY_IRQ_ATTRIBUTION
   else
     echo "P1_DEFINED_CROSSBLOCK_GDB=INCONCLUSIVE no_P1_pass_inference=true"
