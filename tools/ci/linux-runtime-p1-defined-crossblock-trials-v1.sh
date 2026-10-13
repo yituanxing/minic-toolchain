@@ -6,14 +6,6 @@ set -Eeuo pipefail
 [[ -n "$minic" && -n "$gold_snapshot" && -n "$ev" && -n "$out" ]] || exit 8
 [[ "$n" -eq 2064 ]] || { echo "P1_DEFINED_CROSSBLOCK=ERROR object_count"; exit 8; }
 single_owner="${COHORT_P1_SINGLE_OWNER:-0}"
-# Zero-extra-workflow A/B: replay the existing two-function, pure discarded
-# comparison optimization against the complete 2064 MiniC object universe.
-# Enable ONLY with this explicit commit marker; other experiments unchanged.
-minic_only=0
-if [[ "$single_owner" == 1 && "${COHORT_P1_DISCARD_EQ_BOTH:-0}" == 1 ]] &&
-    git -C "$repo" log -1 --format=%B | grep -Fq '[linux-runtime-p1-minic-only]'; then
-  minic_only=1
-fi
 if [[ "$single_owner" == 1 ]]; then
   # Preserve old codegen in every function except one suspect frame;
   # only ip6_finish_output2 is permitted to use the experimental allocator.
@@ -164,16 +156,9 @@ pinned=""
 passes=0
 mode=prefix
 if [[ "$single_owner" == 1 ]]; then
-  if [[ "$minic_only" == 1 ]]; then
-    # No GCC object substitutions: ONE recompiled MiniC ip6_output.o and
-    # all other 2063 original SHA-attested MiniC objects.
-    mode=prefix
-    echo "P1_DEFINED_CROSSBLOCK=ALL_MINIC_16K original_minic_owners=2063 modified_minic=1 gcc_owners=0"
-  else
-    mode=exclude_list
-    printf '%s\n' net/ipv6/tcp_ipv6.o >"$ev/p1_gcc_rescue_set.txt"
-    echo "P1_DEFINED_CROSSBLOCK=SINGLE_OWNER_ONLY minic_modified=net/ipv6/ip6_output.o gcc_owner=net/ipv6/tcp_ipv6.o"
-  fi
+  mode=exclude_list
+  printf '%s\n' net/ipv6/tcp_ipv6.o >"$ev/p1_gcc_rescue_set.txt"
+  echo "P1_DEFINED_CROSSBLOCK=SINGLE_OWNER_ONLY minic_modified=net/ipv6/ip6_output.o gcc_owner=net/ipv6/tcp_ipv6.o"
 fi
 for attempt in 1 2 3; do
   trial "p1_defined_crossblock_$attempt" "$n" p1 "$mode"
@@ -249,11 +234,7 @@ PY_IRQ_ATTRIBUTION
   fi
 fi
 if [[ "$single_owner" == 1 ]]; then
-  if [[ "$minic_only" == 1 ]]; then
-    echo "P1_DEFINED_CROSSBLOCK=COMPLETE modified_minic=1 gcc_owners=0 minic_owners=2064 passes=$passes failures=$((3-passes)) image=$pinned experimental=true not_promoted=true"
-  else
-    echo "P1_DEFINED_CROSSBLOCK=COMPLETE modified_minic=1 gcc_owners=1 minic_owners=2063 passes=$passes failures=$((3-passes)) image=$pinned experimental=true not_promoted=true"
-  fi
+  echo "P1_DEFINED_CROSSBLOCK=COMPLETE modified_minic=1 gcc_owners=1 minic_owners=2063 passes=$passes failures=$((3-passes)) image=$pinned experimental=true not_promoted=true"
 else
   echo "P1_DEFINED_CROSSBLOCK=COMPLETE modified_minic=4 gcc_owners=0 minic_owners=2064 passes=$passes failures=$((3-passes)) image=$pinned experimental=true not_promoted=true"
 fi
