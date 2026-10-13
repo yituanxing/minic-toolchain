@@ -198,7 +198,7 @@ jobs:
   gcc-single:
     # Reuse the EXISTING opt-in isolation job. ONE runner handles the entire
     # batch compile, two cohorts and any QEMU prefix bisection.
-    if: github.event_name == 'push' && (contains(github.event.head_commit.message, '[linux-runtime-gcc-cohort]') || contains(github.event.head_commit.message, '[linux-runtime-gcc-384]') || contains(github.event.head_commit.message, '[linux-runtime-gcc-dma-only]') || contains(github.event.head_commit.message, '[linux-runtime-gcc-link-triad]') || contains(github.event.head_commit.message, '[linux-runtime-gcc-shmem-only]'))
+    if: github.event_name == 'push' && (contains(github.event.head_commit.message, '[linux-runtime-gcc-cohort]') || contains(github.event.head_commit.message, '[linux-runtime-gcc-384]') || contains(github.event.head_commit.message, '[linux-runtime-gcc-dma-only]') || contains(github.event.head_commit.message, '[linux-runtime-gcc-link-triad]') || contains(github.event.head_commit.message, '[linux-runtime-gcc-shmem-only]') || contains(github.event.head_commit.message, '[linux-runtime-blake2s-only]'))
     runs-on: ubuntu-24.04
     timeout-minutes: 105
     steps:
@@ -288,6 +288,13 @@ jobs:
             printf '%s\n' mm/shmem.o > "$ev/full-objects.txt"
             echo "COHORT_SCOPE=SHMEM_SINGLE_COMPILE_ONLY objects=1"
           fi
+          # One REAL Linux 6.6.143 C translation unit, after historical GCC
+          # Kbuild generated-header fixture. No seven shards, link or QEMU.
+          if [[ "${{ contains(github.event.head_commit.message, '[linux-runtime-blake2s-only]') }}" == true ]]; then
+            grep -Fxq lib/crypto/blake2s-generic.o "$ev/full-objects.txt"
+            printf '%s\n' lib/crypto/blake2s-generic.o > "$ev/full-objects.txt"
+            echo "BLAKE2S_SINGLE=SELECTED target=lib/crypto/blake2s-generic.o baseline_minic_ms=1981990"
+          fi
 
       - name: Compute pinned MiniC candidate object cache identity
         id: candidate_id
@@ -297,6 +304,11 @@ jobs:
           # Must be computed from the CLEAN sources, before 39 MiniC
           # runtime-profile patches modify src/ in place.
           profile=$(python3 tools/ci/linux-runtime-profile-cache-id-v1.py)
+          if [[ "${{ contains(github.event.head_commit.message, '[linux-runtime-blake2s-only]') }}" == true ]]; then
+            # An opt-in patch outside the default profile must be part of
+            # the immutable MiniC object cache identity.
+            profile="${profile}-blake2s-cfg-linear-$(sha256sum tools/ci/apply-riscv64-p1-defined-before-use-crossblock-v1.py | cut -c1-16)"
+          fi
           objects=$(sha256sum build/linux-runtime-gcc-cohort-v1/full-objects.txt | cut -d' ' -f1)
           gcc=$(sha256sum "$(command -v riscv64-linux-gnu-gcc)" | cut -d' ' -f1)
           assembler=$(sha256sum "$(command -v riscv64-linux-gnu-as)" | cut -d' ' -f1)
@@ -324,16 +336,28 @@ jobs:
           cp -a --reflink=auto "$src" "$work/linux-6.6.143"
           ev="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-v1"
           mkdir -p "$ev"
+          if [[ "${{ contains(github.event.head_commit.message, '[linux-runtime-blake2s-only]') }}" == true ]]; then
+            export MINIC_LINUX_FULL_CROSSBLOCK=1 MINIC_OPT_PURE_DISCARDED_ADDRESS_EQ=1
+            echo "BLAKE2S_SINGLE=PROFILE exact_full_crossblock_profile=true"
+          fi
           bash tools/ci/linux-runtime-build-minic-profile-v1.sh \
             "$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain" "$ev/compiler"
           export COHORT_ALLOW_DIAGNOSTIC_384=${{ contains(github.event.head_commit.message, '[linux-runtime-gcc-384]') && '1' || '0' }}
-          export COHORT_ALLOW_SHARD=${{ (contains(github.event.head_commit.message, '[linux-runtime-gcc-dma-only]') || (contains(github.event.head_commit.message, '[linux-runtime-gcc-link-triad]') || contains(github.event.head_commit.message, '[linux-runtime-gcc-shmem-only]'))) && '1' || '0' }}
+          export COHORT_ALLOW_SHARD=${{ (contains(github.event.head_commit.message, '[linux-runtime-gcc-dma-only]') || contains(github.event.head_commit.message, '[linux-runtime-gcc-link-triad]') || contains(github.event.head_commit.message, '[linux-runtime-gcc-shmem-only]') || contains(github.event.head_commit.message, '[linux-runtime-blake2s-only]')) && '1' || '0' }}
           export COHORT_ACTION=compile
-          bash tools/ci/linux-runtime-gcc-cohort-bisect-v1.sh \
-            "$work/linux-6.6.143" "$work/out" \
-            "$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain/bin/minic" \
-            "$work/provenance" \
-            "$ev/full-objects.txt" "$ev"
+          if [[ "${{ contains(github.event.head_commit.message, '[linux-runtime-blake2s-only]') }}" == true ]]; then
+            # Fail quickly if the supposed O(n) fix still costs minutes;
+            # the historical 33m value is already proven by CI #38400728544.
+            timeout --signal=TERM --kill-after=10s 300s bash tools/ci/linux-runtime-gcc-cohort-bisect-v1.sh \
+              "$work/linux-6.6.143" "$work/out" \
+              "$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain/bin/minic" \
+              "$work/provenance" "$ev/full-objects.txt" "$ev"
+          else
+            bash tools/ci/linux-runtime-gcc-cohort-bisect-v1.sh \
+              "$work/linux-6.6.143" "$work/out" \
+              "$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain/bin/minic" \
+              "$work/provenance" "$ev/full-objects.txt" "$ev"
+          fi
 
       - name: Check completed full MiniC object pool is cacheable
         id: candidate_ready
@@ -354,7 +378,7 @@ jobs:
           elif [[ "${{ contains(github.event.head_commit.message, '[linux-runtime-gcc-link-triad]') }}" == true ]]; then
             min_count=3
             test "$count" -eq 3
-          elif [[ "${{ contains(github.event.head_commit.message, '[linux-runtime-gcc-shmem-only]') }}" == true ]]; then
+          elif [[ "${{ contains(github.event.head_commit.message, '[linux-runtime-gcc-shmem-only]') || contains(github.event.head_commit.message, '[linux-runtime-blake2s-only]') }}" == true ]]; then
             min_count=1
             test "$count" -eq 1
           fi
@@ -424,7 +448,7 @@ jobs:
           echo "GNU_MINIC_LINK_BLOCKERS=PASS checked=${#targets[@]}"
 
       - name: GNU relink and QEMU from authenticated MiniC objects
-        if: "!(contains(github.event.head_commit.message, '[linux-runtime-gcc-dma-only]') || contains(github.event.head_commit.message, '[linux-runtime-gcc-link-triad]') || contains(github.event.head_commit.message, '[linux-runtime-gcc-shmem-only]'))"
+        if: "!(contains(github.event.head_commit.message, '[linux-runtime-gcc-dma-only]') || contains(github.event.head_commit.message, '[linux-runtime-gcc-link-triad]') || contains(github.event.head_commit.message, '[linux-runtime-gcc-shmem-only]') || contains(github.event.head_commit.message, '[linux-runtime-blake2s-only]'))"
         shell: bash
         run: |
           set -Eeuo pipefail
