@@ -259,5 +259,38 @@ print(f"P1_SCHED_CHAIN_TIMELINE=PASS samples={len(events)} resolved_frames={sum(
 for e in sorted(events,key=lambda e:int(e[4]))[:12]:
     print(f"P1_SCHED_LOW_ENTRY name={e[1]} entry_left={e[4]} frame={frames.get(e[1],-1)} caller={caller(int(e[3],16))}")
 PY_SCHED
+  if [[ "${P1_GDB_IRQ_REENTRY:-0}" == 1 ]]; then
+    python3 - "$dest/gdb.log" "$dest/linked-symbols.nm" "$dest/irq-interrupted.tsv" <<'PY_IRQ_PARENT'
+from pathlib import Path
+from bisect import bisect_right
+import re
+import sys
+log, nm, report = map(Path, sys.argv[1:])
+pairs = []
+for line in nm.read_text(errors="replace").splitlines():
+    cols = line.split()
+    if len(cols) != 3 or cols[1].lower() not in ("t", "w"):
+        continue
+    try:
+        pairs.append((int(cols[0], 16), cols[2]))
+    except ValueError:
+        pass
+pairs.sort()
+addresses = [x[0] for x in pairs]
+def symbolize(pc):
+    j = bisect_right(addresses, pc) - 1
+    return "%s+0x%x" % (pairs[j][1], pc - pairs[j][0]) if j >= 0 else "UNKNOWN"
+rx = re.compile(r"P1_IRQ_INTERRUPTED epc=(0x[0-9a-f]+) saved_sp=(0x[0-9a-f]+) irq_sp=(0x[0-9a-f]+) saved_irq_remaining=(-?\d+)")
+records = [match.groups() for line in log.read_text(errors="replace").splitlines()
+           if (match := rx.search(line))]
+with report.open("w") as out:
+    out.write("saved_epc\tinterrupted_function\tsaved_sp\tirq_entry_sp\tprevious_irq_stack_bytes_left\n")
+    for pc, saved_sp, entry_sp, remain in records:
+        out.write(f"{pc}\t{symbolize(int(pc,16))}\t{saved_sp}\t{entry_sp}\t{remain}\n")
+print(f"P1_IRQ_PARENT_TRACE=CAPTURED interrupt_contexts={len(records)} read_only=1 same_image=1")
+for pc, saved_sp, entry_sp, remain in records[:20]:
+    print(f"P1_IRQ_INTERRUPTED_SYMBOLIZED function={symbolize(int(pc,16))} saved_sp={saved_sp} irq_sp={entry_sp} irq_left_before_entry={remain}")
+PY_IRQ_PARENT
+  fi
 fi
 echo "P1_GDB=CAPTURED diagnostic_only=true same_image=true irq_stack_verified_from_percpu=true no_P1_pass_inference=true"
