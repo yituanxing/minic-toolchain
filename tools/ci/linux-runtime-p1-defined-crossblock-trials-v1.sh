@@ -409,6 +409,12 @@ if [[ "$rx_bundle_timer" == 1 ]]; then
     QEMU_RISCV64=qemu-riscv64 \
     bash "$repo/tests/compiler/c0/run-core-cfg-slot-reuse-p1.sh"
   echo "P1_RX_BUNDLE_TIMER=SEMANTIC_PASS"
+  # Stronger regression guard on the EXACT experimental compiler, before
+  # compiling the 8 Linux owners and before any expensive GNU Image link.
+  MINIC="$minic" WORK="$dest/cfg-adversarial" RISCV_CC=riscv64-linux-gnu-gcc \
+    QEMU_RISCV64=qemu-riscv64 \
+    bash "$repo/tests/compiler/c0/run-core-cfg-slot-reuse-adversarial-p1.sh"
+  echo "P1_RX_BUNDLE_TIMER=ADVERSARIAL_PASS cases=8 inputs=1023 baseline_and_GCC_differential=true"
   if [[ "${MINIC_OPT_PURE_DISCARDED_ADDRESS_EQ:-0}" == 1 ]]; then
     MINIC="$minic" BUILD_DIR="$dest" RISCV_CC=riscv64-linux-gnu-gcc \
       QEMU_RISCV64=qemu-riscv64 \
