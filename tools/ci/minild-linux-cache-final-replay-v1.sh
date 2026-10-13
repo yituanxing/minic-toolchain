@@ -54,7 +54,15 @@ elf="$ev/.tmp_vmlinux.kallsyms1"
 riscv64-linux-gnu-readelf -h "$elf" >"$ev/elf-header.txt"
 grep -Eq 'Machine:.*RISC-V' "$ev/elf-header.txt"
 riscv64-linux-gnu-readelf -S "$elf" >"$ev/elf-sections.txt"
-riscv64-linux-gnu-nm "$elf" | grep -Eq ' [Tt] _text$| [Tt] _start$| [Tt] start_kernel$' || {
+riscv64-linux-gnu-nm "$elf" >"$ev/elf-symbols.txt"
+grep -Eq ' [Tt] _text$| [Tt] _start$| [Tt] start_kernel
+  echo "MINILD_CACHE_REPLAY=FAIL expected_kernel_symbols_absent" >&2
+  exit 10
+}
+sha256sum "$elf" >"$ev/output.sha256"
+grep '^MINILD_PHASE=' "$ev/ld.stderr" || true
+echo "MINILD_CACHE_REPLAY=PASS source=pinned_GNU_linux_6.6.143_only native_minild=true kbuild_invocations=0 linux_C_compiles=0 runtime_claim=false"
+ "$ev/elf-symbols.txt" || {
   echo "MINILD_CACHE_REPLAY=FAIL expected_kernel_symbols_absent" >&2
   exit 10
 }
