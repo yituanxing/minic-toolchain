@@ -1,5 +1,44 @@
 # Current native tool validation — 2026-10-11
 
+## 2026-10-13: saved EPC identifies exact preempted IRQ-stack functions
+
+Real same-Image read-only GDB [#38371693651](https://github.com/yituanxing/minic-toolchain/actions/runs/38371693651),
+commit `f813a1bfbdadcce7b4e230da6bb9bbd8e9780811`,
+Image SHA `fe1fe463125784eef9019103f6384c9e3aa3182599998b0cda04c4be4a2c1979`.
+Non-GDB P1 3/3 PASS; this does **not** supersede 11/12
+and 21/24 failures. GDB sampled 400 PELT function entries and
+captured **five** actual RISC-V `do_irq(struct pt_regs*)` saved EPC/SP
+pairs while the CPU was **already executing on its IRQ stack**:
+
+| Preempted function at saved EPC | Interrupted IRQ bytes left | `do_irq` entry left | Additional bytes before timer entry |
+| --- | ---: | ---: | ---: |
+| `cache_vmstat_idx+0xe` | 8672 | 8384 | 752 |
+| `arch_local_irq_restore+0x8a` | 11440 | 11152 | 752 |
+| `csum_ipv6_magic+0xf3a` | 8752 | 8464 | 752 |
+| `inet6_sk_rx_dst_set+0x10` | 11072 | 10784 | 752 |
+| `__minic_inline_spec_8070_185+0x10` | 12272 | 11984 | 752 |
+
+All five instances show the same **288 B** loss between the saved
+`pt_regs.sp` and the *new* `do_irq` entry SP. The actual
+`do_irq → handle_riscv_irq → riscv_timer_interrupt` entry
+continuation costs another **112 + 640 = 752 B**. Therefore the
+nested timer handler begins with **1040 B less than the preempted
+function's own remaining IRQ stack**, even before hrtimer/PELT.
+This accounts for the missing stack capacity with observed SPs,
+not just a symbol guessed from an exception at `accumulate_sum`.
+The saved preempted PCs identify *multiple* memory/network/
+IRQ-restore situations, not one exclusively faulty PELT function.
+
+The next bounded diagnostic records the same `pt_regs`
+saved RA, saved frame pointer, saved `sstatus.SPIE`
+(prior SIE state), and reads each interrupted **real linked ELF
+function prologue stack frame**. Saved RA is labelled a
+*potential* immediate return site, not a validated call-chain.
+This will establish which interrupted frame is large and whether
+the nested entry interrupted code with supervisor IRQ enabled.
+Trace stays within the existing cached 2064-MiniC P1 owner receiver;
+no extra workflow, no 2064 rebuild. P1 acceptance remains **RED**.
+
 ## 2026-10-13: nested IRQ entry directly observed — upstream deficit identified
 
 **Actual** existing CI [#38369834145](https://github.com/yituanxing/minic-toolchain/actions/runs/38369834145)
