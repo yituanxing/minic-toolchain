@@ -5,6 +5,9 @@
 # The first union is MiniAR (GNU fallback only for mPiT) + final-only
 # MiniLD + MiniObjcopy; GNU as is kept.
 # Actual MiniAS requires newly generated .s input and is a separate next gate.
+# From passing C cache: #38415409019 native two-stage link took 310.798s
+# then 306.902s. minild-times.tsv profiles each final-link call separately;
+# first establish full Linux P1 correctness before optimizing header preflight.
 # Repro: #38413825638 linked cached C successfully up to vmlinux.a,
 # where MiniAR A1 rejected mPiT positional move; keep this GNU-only fallback
 # explicit while native move support is developed and regression-tested.
