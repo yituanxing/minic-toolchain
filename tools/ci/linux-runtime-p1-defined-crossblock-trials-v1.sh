@@ -6,16 +6,6 @@ set -Eeuo pipefail
 [[ -n "$minic" && -n "$gold_snapshot" && -n "$ev" && -n "$out" ]] || exit 8
 [[ "$n" -eq 2064 ]] || { echo "P1_DEFINED_CROSSBLOCK=ERROR object_count"; exit 8; }
 single_owner="${COHORT_P1_SINGLE_OWNER:-0}"
-tcp_cfg=0
-if [[ "$single_owner" == 1 && "${COHORT_P1_DISCARD_EQ:-0}" != 1 ]] &&
-   git -C "$repo" log -1 --format=%B | grep -Fq '[linux-runtime-p1-tcp-cfg-audit]'; then
-  tcp_cfg=1
-fi
-tcp_pure=0
-if [[ "$single_owner" == 1 && "${COHORT_P1_DISCARD_EQ_BOTH:-0}" == 1 ]] &&
-   git -C "$repo" log -1 --format=%B | grep -Fq '[linux-runtime-p1-tcp-pure-audit]'; then
-  tcp_pure=1
-fi
 if [[ "$single_owner" == 1 ]]; then
   # Preserve old codegen in every function except one suspect frame;
   # only ip6_finish_output2 is permitted to use the experimental allocator.
@@ -23,24 +13,14 @@ if [[ "$single_owner" == 1 ]]; then
     # Test semantic removal of genuinely discarded (&a == &b) with two
     # local variables; do not touch stack slot reuse in this experiment.
     if [[ "${COHORT_P1_DISCARD_EQ_BOTH:-0}" == 1 ]]; then
-      if [[ "$tcp_pure" == 1 ]]; then
-        export MINIC_P1_DISCARD_EQ_FUNCTION=""
-        echo "P1_TCP_PURE_AUDIT=START scope=single_TU_only"
-      else
-        export MINIC_P1_DISCARD_EQ_FUNCTION=ip6_pair
-        echo "P1_DISCARD_EQ=FUNCTION_RESTRICTED names=ip6_finish_output2,ip6_xmit"
-      fi
+      export MINIC_P1_DISCARD_EQ_FUNCTION=ip6_pair
+      echo "P1_DISCARD_EQ=FUNCTION_RESTRICTED names=ip6_finish_output2,ip6_xmit"
     else
       export MINIC_P1_DISCARD_EQ_FUNCTION=ip6_finish_output2
       echo "P1_DISCARD_EQ=FUNCTION_RESTRICTED name=ip6_finish_output2"
     fi
   else
-    if [[ "$tcp_cfg" == 1 ]]; then
-      export MINIC_P1_CROSSBLOCK_FUNCTION=tcp_rcv_state_process
-      echo "P1_TCP_CFG_AUDIT=START selected_function=tcp_rcv_state_process"
-    else
-      export MINIC_P1_CROSSBLOCK_FUNCTION=ip6_finish_output2
-    fi
+    export MINIC_P1_CROSSBLOCK_FUNCTION=ip6_finish_output2
   fi
   dest="$ev/p1-defined-ip6-only"
 else
@@ -56,11 +36,7 @@ OWNERS
 if [[ "$single_owner" == 1 ]]; then
   # Retain every other certified MiniC object and use GCC only for
   # tcp_ipv6.o. Recompile ip6_output.o with the opt-in compiler.
-  if [[ "$tcp_pure" == 1 || "$tcp_cfg" == 1 ]]; then
-    printf '%s\n' net/ipv4/tcp_input.o >"$dest/selected.txt"
-  else
-    printf '%s\n' net/ipv6/ip6_output.o >"$dest/selected.txt"
-  fi
+  printf '%s\n' net/ipv6/ip6_output.o >"$dest/selected.txt"
 fi
 python3 - "$dest/selected.txt" "$objects_file" <<'PY_SET'
 from pathlib import Path
@@ -76,7 +52,7 @@ printf 'compiler_sha256=%s\n' "$(sha256sum "$minic"|cut -d' ' -f1)" >"$dest/prov
 rm -rf -- "$out"
 cp -a --reflink=auto "$gold_snapshot" "$out"
 COHORT_FRAME_CAPTURE_ONLY="$single_owner" MINIC_CORE_FRAME_TRACE=1 \
-MINIC_CORE_FRAME_TRACE_FILTER="$(if [[ "$tcp_pure" == 1 || "$tcp_cfg" == 1 ]]; then echo 'tcp_conn_request,tcp_rcv_state_process'; else echo 'ip6_finish_output2,ip6_xmit'; fi)" \
+MINIC_CORE_FRAME_TRACE_FILTER="ip6_finish_output2,ip6_xmit" \
 python3 "$repo/tools/ci/linux-runtime-kbuild-regeneration-guard-v1.py" \
   --mode replay --out "$out" --golden-out "$gold_snapshot" \
   --evidence "$dest/replay-evidence.json" --selected "$dest/selected.txt" \
@@ -92,29 +68,14 @@ python3 "$repo/tools/ci/linux-runtime-minic-route-audit-v1.py" \
   --candidates "$out" >"$dest/route-audit.log"
 if [[ "$single_owner" == 1 ]]; then
   # The instrumentation prints to a per-TU stderr file, not replay.log.
-  if [[ "$tcp_pure" == 1 || "$tcp_cfg" == 1 ]]; then
-    stderr="$out/net/ipv4/tcp_input.minic-stage2.minic.stderr"
-  else
-    stderr="$out/net/ipv6/ip6_output.minic-stage2.minic.stderr"
-  fi
+  stderr="$out/net/ipv6/ip6_output.minic-stage2.minic.stderr"
   [[ -s "$stderr" ]] || { echo "P1_DEFINED_CROSSBLOCK=ERROR no_minic_stderr"; exit 8; }
   grep -E '^CORE_FRAME' "$stderr" >"$dest/frame-audit.log" || {
     echo "P1_DEFINED_CROSSBLOCK=ERROR missing_frame_trace"; exit 8;
   }
   python3 "$repo/tools/ci/linux-runtime-p1-frame-component-parse-v1.py" \
     "$dest/frame-audit.log" "$dest/frame-components.tsv" "$dest/frame-objects.tsv"
-  if [[ "$tcp_pure" == 1 || "$tcp_cfg" == 1 ]]; then
-    python3 - "$dest/frame-components.tsv" <<'PY_TCP_PURE'
-import csv,sys
-with open(sys.argv[1]) as f: r={x['function']:x for x in csv.DictReader(f,delimiter='\t')}
-original={'tcp_conn_request':1312,'tcp_rcv_state_process':1776}
-for name,base in original.items():
-    assert name in r,name
-    now=int(r[name]['frame_bytes'])
-    print(f'P1_TCP_PURE_AUDIT=FRAME function={name} base={base} new={now} reduction={base-now}')
-PY_TCP_PURE
-  else
-    awk -F '\t' '$1=="ip6_finish_output2" || $1=="ip6_xmit" {
+  awk -F '\t' '$1=="ip6_finish_output2" || $1=="ip6_xmit" {
     print "P1_DEFINED_CROSSBLOCK=FRAME function="$1" bytes="$2" objects="$10
     seen++
   } END {exit seen!=2}' "$dest/frame-components.tsv" || {
@@ -133,7 +94,6 @@ else:
     assert xmit==2288, f"unselected ip6_xmit unexpectedly changed: {xmit}"
 print(f"P1_DEFINED_CROSSBLOCK=FRAME_ISOLATED selected=ip6_finish_output2 new={finish} old=4064 unaffected=ip6_xmit frame={xmit}")
 P1_FOCUS_BOUNDS
-  fi
 fi
 (cd "$ev" && sha256sum --quiet -c minic-manifest.sha256) || {
   echo "P1_DEFINED_CROSSBLOCK=ERROR original_pool_mutated"; exit 8;
@@ -187,10 +147,6 @@ for line in (ev/"minic-manifest.sha256").read_text().splitlines():
 assert matched in (1,4) and untouched==2064-matched
 print(f"P1_DEFINED_CROSSBLOCK=POOL_ISOLATED changed_targets={matched} original_neighbors={untouched}")
 PY_VERIFY
-if [[ "$tcp_pure" == 1 || "$tcp_cfg" == 1 ]]; then
-  echo "P1_TCP_FOCUSED_AUDIT=COMPLETE mode=$(if [[ "$tcp_cfg" == 1 ]]; then echo cfg_one_function; else echo pure_equality_one_TU; fi) original_neighbors=2063 no_image_link=true"
-  exit 0
-fi
 export COHORT_P1_EXPERIMENTAL_POOL="$dest/pool/minic"
 last_selection="none"
 last_link_source_dir=""

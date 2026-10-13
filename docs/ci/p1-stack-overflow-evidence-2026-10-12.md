@@ -750,3 +750,42 @@ stack frames with the original pinned MiniC object universe.
 No Linux Image linking until it demonstrably reduces the measured
 frames and focused correctness tests are identified. No new
 Workflow or branch, and no production compiler patch.
+
+
+## Targeted single-TU TCP lowering controls — 2026-10-13
+
+Both experiments used the existing frozen 2064-object MiniC cohort:
+only `net/ipv4/tcp_input.o` recompiled; the other 2063 originals
+were SHA checked. They did **not** link a Linux Image or execute P1.
+No production compiler change was made.
+
+- **Pure discarded local-address comparison elimination** (existing,
+  narrowly guarded IR lowering): CI **#38337904153**, artifact
+  **11785736005**, SUCCESS. `tcp_conn_request` frame
+  **1312 → 1184 bytes** (-128); `tcp_rcv_state_process`
+  **1776 → 1392 bytes** (-384), sum **512 bytes** saved
+  if both are resident at once. Object provenance check reported
+  exactly one changed C owner, 2063 original owners untouched.
+- **Existing first-write cross-block stack-slot reuse**, restricted
+  to `tcp_rcv_state_process` ONLY: CI **#38338521520**,
+  artifact **11786386321**, SUCCESS *for the isolated diagnostic*.
+  `tcp_rcv_state_process` frame **1776 → 608 bytes**
+  (-1168), while `tcp_conn_request` remained **1312 bytes**.
+  Exactly one C owner was changed. The candidate has NOT passed
+  focused semantic or Linux P1 runtime verification. An earlier
+  more general cross-block reuse variant failed P1, so this result
+  **must not be promoted as a safe fix**.
+
+The strongest current evidence is that GNU GCC generates
+`tcp_rcv_state_process` with a **128-byte** entry frame while
+the certified MiniC baseline needs **1776 bytes**. A large
+opportunity exists in stack slots and dead CoreObjects, but only
+a conservative, correctness-proven lifetime/interference change
+could be adopted. The cross-block heuristic measures an upper
+bound on potential frame reductions; it is not proof that
+objects from different blocks cannot be live concurrently
+through loops, joins, pointer uses, or inlined control flow.
+
+The opt-in diagnostic script was restored BYTE-FOR-BYTE to its
+original Git blob after collecting the result. No branch
+proliferation, new workflow, or permanent test harness change.
