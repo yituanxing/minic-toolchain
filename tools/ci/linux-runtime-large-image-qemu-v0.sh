@@ -1,19 +1,28 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-# Verify the *already linked* immutable Linux 6.6.143 Image from the seven
-# certified MiniC shard run. No MiniC rebuild, GNU link or object substitution.
-# Artifact download happens in the existing gcc-shard-verify job.
+# Verify an ALREADY linked SHA-pinned Linux 6.6.143 Image with P0/shell/P1.
+# Historical defaults are immutable; opt-in accepted-P1 replay sets explicit
+# source-run, object-selection and Image digest from its certified artifact.
+# No MiniC rebuild, link or object substitution. Same gcc-shard-verify job.
 repo=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
 archive="${1:?usage: linux-runtime-large-image-qemu-v0.sh artifact-extraction-dir}"
 ev="$repo/build/linux-runtime-large-image-qemu-v0"
 mkdir -p "$ev"
-image=$(find "$archive" -type f -path '*/trials/full_all/Image' -print -quit)
+image_pattern=${LINUX_LARGE_IMAGE_SUBPATH:-'*/trials/full_all/Image'}
+image=$(find "$archive" -type f -path "$image_pattern" -print -quit)
 if [[ -z "$image" || ! -s "$image" ]]; then
   echo "LARGE_IMAGE_REUSE=FAIL reason=original_image_missing artifact=$archive" >&2
   exit 2
 fi
-expected_sha=dba3295a111b861be13dade671184918635662a82df8ad7997deb2da5c7d147f
+expected_sha=${LINUX_LARGE_IMAGE_SHA:-dba3295a111b861be13dade671184918635662a82df8ad7997deb2da5c7d147f}
+source_run=${LINUX_LARGE_IMAGE_SOURCE_RUN:-38204602644}
+source_commit=${LINUX_LARGE_IMAGE_SOURCE_COMMIT:-d5dde03594665842f2bb3b8556f842f511a5dfa4}
+if [[ ! "$expected_sha" =~ ^[0-9a-f]{64}$ || ! "$source_run" =~ ^[0-9]+$ ||
+      ! "$source_commit" =~ ^[0-9a-f]{40}$ ]]; then
+  echo "LARGE_IMAGE_REUSE=FAIL malformed_expected_provenance" >&2
+  exit 2
+fi
 actual_sha=$(sha256sum "$image" | cut -d' ' -f1)
 if [[ "$actual_sha" != "$expected_sha" ]]; then
   echo "LARGE_IMAGE_REUSE=FAIL reason=image_digest_mismatch expected=$expected_sha actual=$actual_sha" >&2
@@ -24,11 +33,11 @@ image_bytes=$(stat -c '%s' "$image")
   echo "LARGE_IMAGE_REUSE=FAIL reason=image_size bytes=$image_bytes" >&2
   exit 2
 }
-printf '%s\n' "source_run=38204602644" "source_commit=d5dde03594665842f2bb3b8556f842f511a5dfa4" \
+printf '%s\n' "source_run=$source_run" "source_commit=$source_commit" \ 
   "image_sha256=$actual_sha" "image_bytes=$image_bytes" "compiler=MiniC" \
   "assembler=GNU-AS" "linker=GNU-LD" "qemu_memory=2G" \
   >"$ev/provenance.txt"
-echo "LARGE_IMAGE_REUSE=PASS sha256=$actual_sha bytes=$image_bytes source_run=38204602644"
+echo "LARGE_IMAGE_REUSE=PASS sha256=$actual_sha bytes=$image_bytes source_run=$source_run image_pattern=$image_pattern"
 
 BUILD_DIR="$ev/initramfs" OUTPUT_INITRAMFS="$ev/runtime-initramfs.cpio.gz" \
   RISCV_CC=riscv64-linux-gnu-gcc \
