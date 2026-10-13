@@ -2,6 +2,7 @@
 # Fast performance oracle: replay ONLY the first final MiniLD kernel link.
 # Input objects are an existing SHA-pinned, QEMU-certified GNU Kbuild cache.
 # This is *not* a replacement for the 2064-MiniC-object runtime proof.
+# performance oracle trigger: reuse GNU Kbuild cache for ONLY one MiniLD link.
 set -Eeuo pipefail
 if [[ $# != 3 ]]; then
   echo "usage: $0 <gnu-kbuild-out> <minild-build-dir> <evidence-dir>" >&2
