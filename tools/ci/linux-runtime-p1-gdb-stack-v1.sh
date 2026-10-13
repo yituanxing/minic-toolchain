@@ -165,7 +165,11 @@ for idx, (name, _) in enumerate(bound[1:], 2):
                     emit("if ($a0 != 0 && (($a0 & 7) == 0))")
                     emit("set $p1_interrupt_epc = *(unsigned long*)$a0")
                     emit("set $p1_interrupt_sp = *(unsigned long*)($a0 + 16)")
+                    emit("set $p1_interrupt_ra = *(unsigned long*)($a0 + 8)")
+                    emit("set $p1_interrupt_s0 = *(unsigned long*)($a0 + 64)")
+                    emit("set $p1_interrupt_status = *(unsigned long*)($a0 + 256)")
                     emit('printf "P1_IRQ_INTERRUPTED epc=%#lx saved_sp=%#lx irq_sp=%#lx saved_irq_remaining=%ld\\n", (unsigned long)$p1_interrupt_epc, (unsigned long)$p1_interrupt_sp, (unsigned long)$sp, (long)((unsigned long)$p1_interrupt_sp-(unsigned long)$p1_irq_base)')
+                    emit('printf "P1_IRQ_INTERRUPTED_REGS saved_ra=%#lx saved_fp=%#lx saved_status=%#lx prior_SIE=%ld\\n", (unsigned long)$p1_interrupt_ra, (unsigned long)$p1_interrupt_s0, (unsigned long)$p1_interrupt_status, (long)(($p1_interrupt_status >> 5) & 1)')
                     emit("end")
                 emit("end")
             else:
