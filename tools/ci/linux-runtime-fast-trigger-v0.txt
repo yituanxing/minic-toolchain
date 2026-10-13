@@ -4,3 +4,5 @@ Validation retry 2026-10-13: profile patch replaced helper region before lower_i
 Targeted same-Image P1 IRQ entry experiment: keep low-SP do_irq and handle_riscv_irq breakpoints enabled after TCP entry and log RA at timer entry; reuse 2064 immutable objects and only seven selected MiniC outputs.
 
 Exact upstream interruption context PELT/IRQ: GDB read do_irq pt_regs[epc,sp] before prologue; symbolize real interrupted function with matched vmlinux. Reuse frozen 2064 pool, seven owner compiler changes, normal 3 boots, single read-only GDB, preserve Image/TSV.
+
+Preemption-frame follow-up 2026-10-13: for IRQ-on-IRQ entry sample original saved EPC/SP/RA/S0/SPIE in pt_regs, symbolize return candidates and exact emitted function frame sizes; restored immutable 2064 MiniC objects, seven swapped experimental C objects, 3 normal QEMU boots and one GDB observation, one receiver, no full producer.
