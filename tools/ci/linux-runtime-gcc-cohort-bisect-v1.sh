@@ -1217,8 +1217,20 @@ if [[ "${COHORT_FRAME_CAPTURE_ONLY:-0}" == 1 ]]; then
   }
   frame_dir="$ev/p1-frame-components"
   mkdir -p "$frame_dir"
-  printf '%s\n' net/ipv6/ip6_output.o net/ipv6/tcp_ipv6.o net/ipv4/tcp_output.o \
-    >"$frame_dir/selected.txt"
+  # Existing opt-in diagnostic only. Four exact source owners on the
+  # IRQ/softirq receive -> TCP -> SLUB -> page allocator candidate path.
+  # No Linux Image link, no new CI job, no codegen change.
+  p1_rx_frame=0
+  if git -C "$repo" log -1 --format=%B | grep -Fq '[linux-runtime-p1-rx-frame]'; then
+    p1_rx_frame=1
+    printf '%s\n' net/ipv6/tcp_ipv6.o net/ipv4/tcp_input.o \
+      mm/slub.o mm/page_alloc.o >"$frame_dir/selected.txt"
+    export MINIC_CORE_FRAME_TRACE_FILTER="tcp_v6_conn_request,tcp_conn_request,new_slab,__alloc_pages,__alloc_pages_slowpath"
+    echo "COHORT_P1_RX_FRAME=START selected_owners=4 functions=$MINIC_CORE_FRAME_TRACE_FILTER"
+  else
+    printf '%s\n' net/ipv6/ip6_output.o net/ipv6/tcp_ipv6.o net/ipv4/tcp_output.o \
+      >"$frame_dir/selected.txt"
+  fi
   rm -rf -- "$out"
   cp -a --reflink=auto "$gold_snapshot" "$out"
   MINIC_CORE_FRAME_TRACE=1 COHORT_FRAME_CAPTURE_ONLY=1 python3 \
@@ -1300,13 +1312,24 @@ PY_FRAME_SUMMARY
   python3 "$repo/tools/ci/linux-runtime-p1-frame-access-parse-v1.py" --self-test
   python3 "$repo/tools/ci/linux-runtime-p1-frame-access-parse-v1.py" \
     "$frame_dir/replay.log" "$frame_dir/intervals.tsv" "$frame_dir/first-access.tsv"
-  for focus in ip6_finish_output2 ip6_xmit tcp_v6_connect __tcp_transmit_skb; do
-    awk -F '\t' -v target="$focus" '$1==target {found=1} END {exit !found}' \
-      "$frame_dir/components.tsv" || {
-      echo "COHORT_FRAME_CAPTURE=ERROR missing_exact_focus=$focus"
-      exit 8
-    }
-  done
+  if [[ "$p1_rx_frame" == 1 ]]; then
+    for focus in tcp_v6_conn_request tcp_conn_request new_slab __alloc_pages; do
+      awk -F '\t' -v target="$focus" '$1==target {found=1} END {exit !found}' \
+        "$frame_dir/components.tsv" || {
+        echo "COHORT_P1_RX_FRAME=ERROR missing_exact_focus=$focus"; exit 8;
+      }
+    done
+    awk -F '\t' 'NR>1 {printf "COHORT_P1_RX_FRAME function=%s frame=%s objects_bytes=%s values_bytes=%s\n",$1,$2,$4,$5}' \
+      "$frame_dir/components.tsv"
+    echo "COHORT_P1_RX_FRAME=PASS owners=4 sha_identical=true relink=false"
+  else
+    for focus in ip6_finish_output2 ip6_xmit tcp_v6_connect __tcp_transmit_skb; do
+      awk -F '\t' -v target="$focus" '$1==target {found=1} END {exit !found}' \
+        "$frame_dir/components.tsv" || {
+        echo "COHORT_FRAME_CAPTURE=ERROR missing_exact_focus=$focus"; exit 8;
+      }
+    done
+  fi
   if [[ "${COHORT_NONREUSE_REASON_CAPTURE:-0}" == 1 ]]; then
     python3 "$repo/tools/ci/linux-runtime-p1-nonreuse-reason-parse-v1.py" \
       "$frame_dir/replay.log" "$frame_dir/objects.tsv" \
