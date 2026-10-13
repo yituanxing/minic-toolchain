@@ -111,3 +111,9 @@ RISCV_LD="$RISCV_LD" QEMU_RISCV64="$QEMU_RISCV64" \
 MINIC="$MINIC" BUILD_DIR="$BUILD_DIR" RISCV_CC="$RISCV_CC" \
 RISCV_LD="$RISCV_LD" QEMU_RISCV64="$QEMU_RISCV64" \
   bash "$(dirname "$0")/run-pure-discarded-address-rv64.sh"
+
+# Real Linux RISC-V sstatus CSR register-constraint/static instruction
+# comparison against GNU assembler and compiler. These instructions are
+# privileged; do NOT attempt to execute them in user-mode QEMU.
+MINIC="$MINIC" BUILD_DIR="$BUILD_DIR" RISCV_CC="$RISCV_CC" \
+  bash "$(dirname "$0")/run-riscv64-irqflags-gcc-differential-v1.sh"
