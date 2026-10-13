@@ -7,66 +7,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* Core lowering consumes the selected target's read-only DataLayout.
- * Never bypass TargetInfo through the process-wide default target: that would
- * make the AST -> Core seam implicitly RV64-specific. */
-static MinicCoreLowerStatus lower_assignment_pair(MinicCoreLowerContext *context,
-                                                  MinicExpressionId target_id,
-                                                  MinicExpressionId source_id,
-                                                  MinicSourceSpan span,
-                                                  MinicCoreValueId *result_value);
-static MinicCoreLowerStatus lower_expression_statement(
-    MinicCoreLowerContext *context, const MinicStatement *statement);
-static MinicCoreLowerStatus
-lower_block(MinicCoreLowerContext *context, const MinicBlock *source_block, bool *terminated);
-static MinicCoreLowerStatus set_branch(MinicCoreLowerContext *context,
-                                       MinicCoreBlockId block_id,
-                                       MinicSourceSpan span,
-                                       MinicCoreBlockId target);
-static MinicCoreLowerStatus lower_condition_branch(MinicCoreLowerContext *context,
-                                                   MinicExpressionId expression_id,
-                                                   MinicSourceSpan span,
-                                                   MinicCoreBlockId when_true,
-                                                   MinicCoreBlockId when_false);
-static MinicCoreLowerStatus lower_scalar_update(MinicCoreLowerContext *context,
-                                                const MinicExpression *expression,
-                                                MinicCoreValueId *value_id);
-static MinicCoreLowerStatus spill_scalar_value(MinicCoreLowerContext *context,
-                                               MinicSourceSpan span,
-                                               MinicType type,
-                                               MinicCoreValueId value_id,
-                                               MinicCoreObjectId *object_id);
-static MinicCoreLowerStatus reload_scalar_value(MinicCoreLowerContext *context,
-                                                MinicSourceSpan span,
-                                                MinicType type,
-                                                MinicCoreObjectId object_id,
-                                                MinicCoreValueId *value_id);
-static MinicCoreLowerStatus lower_direct_record_call_object(
-    MinicCoreLowerContext *context,
-    const MinicExpression *expression,
-    MinicCoreObjectId *result_object);
-static MinicCoreLowerStatus lower_record_compound_literal_object(
-    MinicCoreLowerContext *context,
-    const MinicExpression *expression,
-    MinicCoreObjectId *object_id);
-static MinicCoreLowerStatus lower_record_conditional_object(
-    MinicCoreLowerContext *context,
-    const MinicExpression *expression,
-    MinicCoreObjectId *result_object);
-static MinicCoreLowerStatus lower_record_materialized_address(
-    MinicCoreLowerContext *context,
-    MinicExpressionId expression_id,
-    MinicCoreValueId *address_id);
-static MinicCoreLowerStatus append_integer_conversion(MinicCoreLowerContext *context,
-                                                      MinicSourceSpan span,
-                                                      MinicType target_type,
-                                                      MinicCoreValueId source_value,
-                                                      MinicCoreValueId *value_id);
-static MinicCoreLowerStatus lower_scalar_assignment_value(MinicCoreLowerContext *context,
-                                                          MinicType target_type,
-                                                          MinicExpressionId expression_id,
-                                                          MinicCoreValueId *value_id);
-
 /*
  * CORE_ZERO_ONLY_BOOL_CFG_V1: one narrow, whole-source-function invariant.
  *
@@ -253,6 +193,67 @@ static bool core_zero_bool_cfg_condition(
     }
     return false;
 }
+
+
+/* Core lowering consumes the selected target's read-only DataLayout.
+ * Never bypass TargetInfo through the process-wide default target: that would
+ * make the AST -> Core seam implicitly RV64-specific. */
+static MinicCoreLowerStatus lower_assignment_pair(MinicCoreLowerContext *context,
+                                                  MinicExpressionId target_id,
+                                                  MinicExpressionId source_id,
+                                                  MinicSourceSpan span,
+                                                  MinicCoreValueId *result_value);
+static MinicCoreLowerStatus lower_expression_statement(
+    MinicCoreLowerContext *context, const MinicStatement *statement);
+static MinicCoreLowerStatus
+lower_block(MinicCoreLowerContext *context, const MinicBlock *source_block, bool *terminated);
+static MinicCoreLowerStatus set_branch(MinicCoreLowerContext *context,
+                                       MinicCoreBlockId block_id,
+                                       MinicSourceSpan span,
+                                       MinicCoreBlockId target);
+static MinicCoreLowerStatus lower_condition_branch(MinicCoreLowerContext *context,
+                                                   MinicExpressionId expression_id,
+                                                   MinicSourceSpan span,
+                                                   MinicCoreBlockId when_true,
+                                                   MinicCoreBlockId when_false);
+static MinicCoreLowerStatus lower_scalar_update(MinicCoreLowerContext *context,
+                                                const MinicExpression *expression,
+                                                MinicCoreValueId *value_id);
+static MinicCoreLowerStatus spill_scalar_value(MinicCoreLowerContext *context,
+                                               MinicSourceSpan span,
+                                               MinicType type,
+                                               MinicCoreValueId value_id,
+                                               MinicCoreObjectId *object_id);
+static MinicCoreLowerStatus reload_scalar_value(MinicCoreLowerContext *context,
+                                                MinicSourceSpan span,
+                                                MinicType type,
+                                                MinicCoreObjectId object_id,
+                                                MinicCoreValueId *value_id);
+static MinicCoreLowerStatus lower_direct_record_call_object(
+    MinicCoreLowerContext *context,
+    const MinicExpression *expression,
+    MinicCoreObjectId *result_object);
+static MinicCoreLowerStatus lower_record_compound_literal_object(
+    MinicCoreLowerContext *context,
+    const MinicExpression *expression,
+    MinicCoreObjectId *object_id);
+static MinicCoreLowerStatus lower_record_conditional_object(
+    MinicCoreLowerContext *context,
+    const MinicExpression *expression,
+    MinicCoreObjectId *result_object);
+static MinicCoreLowerStatus lower_record_materialized_address(
+    MinicCoreLowerContext *context,
+    MinicExpressionId expression_id,
+    MinicCoreValueId *address_id);
+static MinicCoreLowerStatus append_integer_conversion(MinicCoreLowerContext *context,
+                                                      MinicSourceSpan span,
+                                                      MinicType target_type,
+                                                      MinicCoreValueId source_value,
+                                                      MinicCoreValueId *value_id);
+static MinicCoreLowerStatus lower_scalar_assignment_value(MinicCoreLowerContext *context,
+                                                          MinicType target_type,
+                                                          MinicExpressionId expression_id,
+                                                          MinicCoreValueId *value_id);
 
 MinicCoreLowerStatus ensure_statement_block(MinicCoreLowerContext *context, MinicStatementId statement_id, MinicCoreBlockId *block_id) {
     const MinicStatement *source_statement;
