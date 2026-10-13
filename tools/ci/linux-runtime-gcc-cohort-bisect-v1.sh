@@ -1217,18 +1217,8 @@ if [[ "${COHORT_FRAME_CAPTURE_ONLY:-0}" == 1 ]]; then
   }
   frame_dir="$ev/p1-frame-components"
   mkdir -p "$frame_dir"
-  # Only this observed owner contains the PELT implementation:
-  # kernel/sched/build_policy.c includes pelt.c under CONFIG_SMP.
-  pelt_audit=0
-  if git -C "$repo" log -1 --format=%B | grep -Fq '[linux-runtime-p1-pelt-frame]'; then
-    printf '%s\n' kernel/sched/build_policy.o >"$frame_dir/selected.txt"
-    export MINIC_CORE_FRAME_TRACE_FILTER="decay_load,__accumulate_pelt_segments,accumulate_sum,___update_load_sum,___update_load_avg,update_irq_load_avg,update_rt_rq_load_avg"
-    pelt_audit=1
-    echo "COHORT_P1_PELT_FRAME=START owner=kernel/sched/build_policy.o trace=$MINIC_CORE_FRAME_TRACE_FILTER"
-  else
-    printf '%s\n' net/ipv6/ip6_output.o net/ipv6/tcp_ipv6.o net/ipv4/tcp_output.o \
-      >"$frame_dir/selected.txt"
-  fi
+  printf '%s\n' net/ipv6/ip6_output.o net/ipv6/tcp_ipv6.o net/ipv4/tcp_output.o \
+    >"$frame_dir/selected.txt"
   rm -rf -- "$out"
   cp -a --reflink=auto "$gold_snapshot" "$out"
   MINIC_CORE_FRAME_TRACE=1 COHORT_FRAME_CAPTURE_ONLY=1 python3 \
@@ -1310,24 +1300,13 @@ PY_FRAME_SUMMARY
   python3 "$repo/tools/ci/linux-runtime-p1-frame-access-parse-v1.py" --self-test
   python3 "$repo/tools/ci/linux-runtime-p1-frame-access-parse-v1.py" \
     "$frame_dir/replay.log" "$frame_dir/intervals.tsv" "$frame_dir/first-access.tsv"
-  if [[ "$pelt_audit" == 1 ]]; then
-    # Require actual PELT code, not a similarly named unrelated scheduler TU.
-    awk -F '\t' 'NR>1 {
-      printf "COHORT_P1_PELT_FRAME function=%s frame=%s object_region=%s value_bytes=%s\n", $1,$2,$4,$5
-      if ($1=="decay_load" || $1=="___update_load_sum" || $1=="__accumulate_pelt_segments") found=1
-    } END {exit !found}' "$frame_dir/components.tsv" || {
-      echo "COHORT_P1_PELT_FRAME=INCONCLUSIVE no_true_pelt_function"; exit 8;
+  for focus in ip6_finish_output2 ip6_xmit tcp_v6_connect __tcp_transmit_skb; do
+    awk -F '\t' -v target="$focus" '$1==target {found=1} END {exit !found}' \
+      "$frame_dir/components.tsv" || {
+      echo "COHORT_FRAME_CAPTURE=ERROR missing_exact_focus=$focus"
+      exit 8
     }
-    echo "COHORT_P1_PELT_FRAME=PASS sha_identical=true linked_image=false"
-  else
-    for focus in ip6_finish_output2 ip6_xmit tcp_v6_connect __tcp_transmit_skb; do
-      awk -F '\t' -v target="$focus" '$1==target {found=1} END {exit !found}' \
-        "$frame_dir/components.tsv" || {
-        echo "COHORT_FRAME_CAPTURE=ERROR missing_exact_focus=$focus"
-        exit 8
-      }
-    done
-  fi
+  done
   if [[ "${COHORT_NONREUSE_REASON_CAPTURE:-0}" == 1 ]]; then
     python3 "$repo/tools/ci/linux-runtime-p1-nonreuse-reason-parse-v1.py" \
       "$frame_dir/replay.log" "$frame_dir/objects.tsv" \
