@@ -38,6 +38,47 @@ printf '%s\n' "source_run=$source_run" "source_commit=$source_commit" \
   "assembler=GNU-AS" "linker=GNU-LD" "qemu_memory=2G" \
   >"$ev/provenance.txt"
 echo "LARGE_IMAGE_REUSE=PASS sha256=$actual_sha bytes=$image_bytes source_run=$source_run image_pattern=$image_pattern"
+# Before re-running P0/shell/P1, audit the exact first 24-boot artifact.
+# A bare linked Image with the right digest is not enough to claim that the
+# source had 2064 MiniC C objects, eight opt-in producers or 24 true P1 PASSes.
+if [[ "${LINUX_LARGE_IMAGE_VERIFY_ACCEPTED_P1:-0}" == 1 ]]; then
+  python3 - "$archive" "$expected_sha" <<'PY_ACCEPTED'
+from pathlib import Path
+import csv
+import sys
+root, sha = Path(sys.argv[1]), sys.argv[2]
+p1 = root / "p1-defined-crossblock"
+with (p1 / "p1-repeats.tsv").open(newline="") as f:
+    repeats = list(csv.DictReader(f, delimiter="\t"))
+assert len(repeats) == 24, "not 24 P1 repeats"
+assert all(row["trial"] == str(index) and
+           row["image_sha256"] == sha and row["verdict"] == "PASS"
+           for index, row in enumerate(repeats, 1)), "mixed-image or non-PASS P1 history"
+with (p1 / "object-diff.tsv").open(newline="") as f:
+    diffs = list(csv.DictReader(f, delimiter="\t"))
+assert len(diffs) == 8 and all(row["different"] == "1" for row in diffs), (
+    "eight changed MiniC owners not demonstrated"
+)
+with (p1 / "selected.txt").open() as f:
+    selected = [s.strip() for s in f if s.strip()]
+assert len(selected) == 8 and set(selected) == {row["owner"] for row in diffs}
+assert len((root / "minic-manifest.sha256").read_text().splitlines()) == 2064
+assert ("MINIC_ROUTE_AUDIT=PASS minic_compiled=8 "
+        "ancillary_minic_compiled=0 authenticated_rebuilds=0" in
+        (p1 / "route-audit.log").read_text()), "MiniC provenance missing"
+for i in range(1, 25):
+    serial = (root / f"trials/p1_defined_crossblock_{i}/qemu/rdinit-init.log"
+              ).read_text(errors="replace")
+    assert "RUNTIME_V2_SYSCALL_END pass=12 fail=0" in serial
+    assert "RUNTIME_V2_SYSCALL_PASS ipv6-tcp-loopback" in serial
+    assert "MINIC_LINUX_RUNTIME_INIT_END fail=0" in serial
+    assert "Insufficient stack space to handle exception!" not in serial
+    assert "Kernel panic" not in serial
+print("P1_ACCEPTED_ARTIFACT=PASS same_image=24/24 p1_syscalls=12/12 "
+      "ipv6=24/24 minic_c=2064 changed_minic_c=8 gcc_c=0 "
+      f"sha256={sha} extra_profile_certification=NOT_RUN")
+PY_ACCEPTED
+fi
 
 BUILD_DIR="$ev/initramfs" OUTPUT_INITRAMFS="$ev/runtime-initramfs.cpio.gz" \
   RISCV_CC=riscv64-linux-gnu-gcc \
