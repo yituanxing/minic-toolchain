@@ -68,17 +68,17 @@ def scan(path: Path) -> dict[str, list[str]]:
     result = {}
     for name in ("save", "restore", "disable", "enable"):
         symbol = "irq_" + name
-        start = re.search(rf"(?m)^{symbol}:\\s*$", source)
+        start = re.search(rf"(?m)^{symbol}:\s*$", source)
         if not start:
             raise SystemExit(f"IRQFLAGS_DIFF=FAIL missing_definition={symbol} file={path}")
         tail = source[start.end():]
-        size = re.search(rf"(?m)^\\s*\\.size\\s+{symbol}\\s*,", tail)
+        size = re.search(rf"(?m)^\s*\.size\s+{symbol}\s*,", tail)
         if not size:
             raise SystemExit(f"IRQFLAGS_DIFF=FAIL missing_size={symbol} file={path}")
         instructions = tail[:size.start()]
-        csr = re.findall(r"(?m)^\\s*(csrrc|csrs|csrc|csrrs|csrrw)\\b", instructions)
+        csr = re.findall(r"(?m)^\s*(csrrc|csrs|csrc|csrrs|csrrw)\b", instructions)
         # Save/restore/enable/disable must touch the RISC-V SSTATUS CSR.
-        if not re.search(r"\\b0x100\\b", instructions):
+        if not re.search(r"\b0x100\b", instructions):
             raise SystemExit(f"IRQFLAGS_DIFF=FAIL missing_sstatus={symbol} file={path}")
         result[name] = csr
     return result
