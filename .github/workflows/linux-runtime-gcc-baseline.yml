@@ -554,6 +554,9 @@ jobs:
           set -Eeuo pipefail
           # Profile source identity MUST be obtained before patching src/.
           profile=$(python3 tools/ci/linux-runtime-profile-cache-id-v1.py)
+          if [[ "${{ contains(github.event.head_commit.message, '[linux-runtime-full-crossblock]') && '1' || '0' }}" == 1 ]]; then
+            profile="${profile}-full-crossblock-pure-eq-v1"
+          fi
           subset=$(sha256sum "build/linux-runtime-gcc-shards-v1/shard-${{ matrix.shard }}/full-objects.txt" | cut -d' ' -f1)
           gcc=$(sha256sum "$(command -v riscv64-linux-gnu-gcc)" | cut -d' ' -f1)
           assembler=$(sha256sum "$(command -v riscv64-linux-gnu-as)" | cut -d' ' -f1)
@@ -579,6 +582,10 @@ jobs:
           test ! -e "$work/linux-6.6.143"
           cp -a --reflink=auto "$src" "$work/linux-6.6.143"
           ev="$GITHUB_WORKSPACE/build/linux-runtime-gcc-shards-v1/shard-${{ matrix.shard }}"
+          if [[ "${{ contains(github.event.head_commit.message, '[linux-runtime-full-crossblock]') && '1' || '0' }}" == 1 ]]; then
+            export MINIC_LINUX_FULL_CROSSBLOCK=1 MINIC_OPT_PURE_DISCARDED_ADDRESS_EQ=1
+            echo "LINUX_FULL_CROSSBLOCK=PRODUCER_START shard=${{ matrix.shard }}/7 pure_eq=1 all_C_optin=true"
+          fi
           bash tools/ci/linux-runtime-build-minic-profile-v1.sh \
             "$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain" "$ev/compiler"
           export COHORT_ACTION=compile COHORT_ALLOW_SHARD=1
@@ -768,6 +775,9 @@ jobs:
           # Compute stable profile ID from pristine MiniC sources, BEFORE
           # applying any of the build-time profile patches.
           profile=$(python3 tools/ci/linux-runtime-profile-cache-id-v1.py)
+          if [[ "${{ contains(github.event.head_commit.message, '[linux-runtime-full-crossblock]') && '1' || '0' }}" == 1 ]]; then
+            profile="${profile}-full-crossblock-pure-eq-v1"
+          fi
           objects=$(sha256sum "$ev/full-objects.txt" | cut -d' ' -f1)
           gcc=$(sha256sum "$(command -v riscv64-linux-gnu-gcc)" | cut -d' ' -f1)
           assembler=$(sha256sum "$(command -v riscv64-linux-gnu-as)" | cut -d' ' -f1)
@@ -885,6 +895,10 @@ jobs:
           test -d "$src"
           cp -a --reflink=auto "$src" "$work/linux-6.6.143"
           ev="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-v1"
+          if [[ "${{ contains(github.event.head_commit.message, '[linux-runtime-full-crossblock]') && '1' || '0' }}" == 1 ]]; then
+            export MINIC_LINUX_FULL_CROSSBLOCK=1 MINIC_OPT_PURE_DISCARDED_ADDRESS_EQ=1
+            echo "LINUX_FULL_CROSSBLOCK=RECEIVER_START shards=7 live_all_C=true full_GNU_link_QEMU=true"
+          fi
           bash tools/ci/linux-runtime-build-minic-profile-v1.sh \
             "$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain" "$ev/compiler"
           python3 tools/ci/linux-runtime-gcc-shards-v1.py merge \
@@ -989,6 +1003,11 @@ jobs:
           work="$GITHUB_WORKSPACE/build/linux-runtime-gcc"
           ev="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-v1"
           export COHORT_ACTION=verify
+          if [[ "${{ contains(github.event.head_commit.message, '[linux-runtime-full-crossblock]') && '1' || '0' }}" == 1 ]]; then
+            export MINIC_LINUX_FULL_CROSSBLOCK=1 MINIC_OPT_PURE_DISCARDED_ADDRESS_EQ=1
+            export COHORT_LINUX_FULL_CROSSBLOCK=1
+            echo "LINUX_FULL_CROSSBLOCK=FULL_VERIFY all_2064_MiniC=true original_stack_16KiB=true"
+          fi
           # Full-current acceptance: seven authenticated MiniC producer shards feed
           # this same receiver. Reuse the merged immutable 2064-object pool for
           # the known seven-owner experimental P1 correction in this SAME job;
