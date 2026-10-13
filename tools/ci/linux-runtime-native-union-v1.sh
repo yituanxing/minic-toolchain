@@ -94,12 +94,12 @@ if [[ "${MINILD_ENABLE_VMLINUX_R:-0}" == 1 && "${output##*/}" == vmlinux.o ]]; t
     esac
   done
   if [[ "$found_r" == 1 ]]; then
-    { flock 9; printf 'minild-r'; printf ' %q' "$@"; printf '\\n'; } 9>>"$NATIVE_TRACE_DIR/minild.trace" >&9
+    { flock 9; printf 'minild-r'; printf ' %q' "$@"; printf '\n'; } 9>>"$NATIVE_TRACE_DIR/minild.trace" >&9
     start_ms=$(date +%s%3N)
     status=0
     MINILD_PROFILE_PHASES=1 "$MINILD" "$@" || status=$?
     elapsed_ms=$(($(date +%s%3N)-start_ms))
-    { flock 9; printf 'minild-r\\t%s\\t%s\\t%s\\n' "$elapsed_ms" "$status" "$output"; } 9>>"$NATIVE_TRACE_DIR/minild-times.tsv" >&9
+    { flock 9; printf 'minild-r\t%s\t%s\t%s\n' "$elapsed_ms" "$status" "$output"; } 9>>"$NATIVE_TRACE_DIR/minild-times.tsv" >&9
     exit "$status"
   fi
 fi
