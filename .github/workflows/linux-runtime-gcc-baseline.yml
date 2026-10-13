@@ -699,6 +699,7 @@ jobs:
             export LINUX_LARGE_IMAGE_SHA=6f094d58e21de4b41fac7fffc1207b42dd04f5dd739c24f3d7107b1a944084f4
             export LINUX_LARGE_IMAGE_SOURCE_RUN=38390921455
             export LINUX_LARGE_IMAGE_SOURCE_COMMIT=9bf648d989ec652de0618ecdd1ccf159a8a836b5
+            export LINUX_LARGE_IMAGE_VERIFY_ACCEPTED_P1=1
             echo "P1_ACCEPTED_NO_RECOMPILE=START minic_c=2064 prior_p1=24/24 profiles=fast,shell,p1"
           fi
           bash tools/ci/linux-runtime-large-image-qemu-v0.sh \
