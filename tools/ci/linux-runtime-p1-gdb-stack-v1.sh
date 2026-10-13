@@ -300,11 +300,27 @@ def frame_size(name, start):
     output = subprocess.run(
         ["riscv64-linux-gnu-objdump", "-d",
          "--start-address=" + hex(start),
-         "--stop-address=" + hex(start + 32), str(elf)],
+         "--stop-address=" + hex(start + 48), str(elf)],
         capture_output=True, check=True, text=True).stdout
+    # A normal RV64 frame uses addi sp,sp,-N. Large MiniC frames
+    # exceed the signed 12-bit addi immediate, and their REAL emitted
+    # prologue is "lui t2,0x1; addiw t2,t2,-0x750; sub sp,sp,t2"
+    # (2224 bytes), NOT an unknown/zero frame. Restrict the search
+    # to the first 48 bytes and require the same temporary register.
     m = re.search(r"\baddi\s+sp,\s*sp,\s*(-?(?:0x[0-9a-f]+|\d+))", output)
-    frame_cache[name] = max(0, -int(m.group(1), 0)) if m else -1
-    return frame_cache[name]
+    if m:
+        frame_cache[name] = max(0, -int(m.group(1), 0))
+        return frame_cache[name]
+    large = re.search(
+        r"\blui\s+([a-z][a-z0-9]*),\s*(0x[0-9a-f]+|\d+)"
+        r".*?\baddiw\s+\1,\s*\1,\s*(-?(?:0x[0-9a-f]+|\d+))"
+        r".*?\bsub\s+sp,\s*sp,\s*\1\b",
+        output, flags=re.S)
+    if large:
+        frame_cache[name] = (int(large.group(2), 0) << 12) + int(large.group(3), 0)
+        return frame_cache[name]
+    frame_cache[name] = -1  # do not fabricate a zero-size frame
+    return -1
 with report.open("w") as out:
     out.write("saved_epc\tinterrupted_function\tfunction_offset\tfunction_frame_bytes\tsaved_sp\tirq_entry_sp\tprevious_irq_stack_bytes_left\tsaved_ra\tcandidate_caller\tsaved_fp\tsaved_status\tprior_SIE\n")
     for (pc, sp, entry, remaining), (ra, fp, status, sie) in zip(events, regs):
