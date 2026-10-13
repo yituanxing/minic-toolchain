@@ -1,5 +1,62 @@
 # Current native tool validation — 2026-10-11
 
+## 2026-10-13: seven-shard MiniC 2064-object rebuild — P1 acceptance NOT complete (11/12)
+
+Real CI [#38361632818](https://github.com/yituanxing/minic-toolchain/actions/runs/38361632818)
+at commit `1b093854a7d8dc251054160f7d0e81edb581c50b` reports
+GitHub Actions overall **success**, but the actual P1 guest evidence is
+**11 PASS / 1 FAIL**. This must be classified as **NOT CERTIFIED** for
+12/12, overriding the misleading green CI badge. No unqualified statement
+of "full-current 16KiB P1 PASS" is permitted.
+
+- **All seven** independently authenticated producer shards passed, merged to
+  **2064 exact MiniC C objects**, no GCC replacement C owners. Compiler/ELF
+  manifest and GNU baseline provenance passed; the receiver built the same
+  experimental seven-owner variant without recompiling 2064 objects.
+- The original unoptimized 2064-MiniC control kernel again **failed P1**.
+  The 7-owner Image used **one immutable SHA** for all 12 QEMU trials:
+  `2b06c57db0c4be1c9f41a4e47cf04d7c5b836fa2f2cfd6aa83795afa54175fe9`.
+  P1 trials **1–3 and 5–12 passed**; **trial 4 failed**.
+- Actual trial 4 guest trace reports `Insufficient stack space to handle
+  exception!`, `Kernel panic - not syncing: Kernel stack overflow`,
+  during `RUNTIME_V2_IPV6_STAGE ... parent-write`; the fault PC is
+  `accumulate_sum+0x12`, returning to `___update_load_sum+0x446`
+  (scheduler PELT, `kernel/sched/build_policy.o`). The post-fault stack
+  pointer `ff1fffffffffff40` is far outside the recorded task stack.
+  This is not an external build, package download or mock-QEMU failure.
+- Critically, **the full baseline compiler SHA and all seven experimental
+  replacement object SHAs exactly match** the earlier 12/12 experiment
+  [#38351512579](https://github.com/yituanxing/minic-toolchain/actions/runs/38351512579).
+  Exact 2064-member baseline SHA manifest comparison showed **2063/2064
+  object bytes equal**; the sole differing baseline MiniC object was
+  `drivers/input/serio/libps2.o` (old
+  `06068af4d547275f2a8616daf36c39b39503cf47f253be548a034fb7f9739254`,
+  new `4729a33e28c81ad0a0e701d31bc463d3e1ce0493bfe9d9e1d76004ce0ab81247`).
+  The build-policy PELT object is **byte-identical**, and the
+  `accumulate_sum` object function prologue allocates **224 B**
+  (`addi sp,sp,-0xe0`), while `___update_load_sum` allocates **208 B**.
+  Do not assume `accumulate_sum`'s own local frame is the root cause.
+  Whether the `libps2.o` delta changes scheduling or the 11/12 sporadic
+  failure existed before remains **unproven**.
+- Direct evidence: job `gcc-shard-verify`, archived
+  `p1-defined-crossblock/p1-repeats.tsv`, and
+  `trials/p1_defined_crossblock_4/{runtime.log,qemu/rdinit-init.log}`
+  in the same run artifact. Do not count GH job success as 12/12.
+- **Guard already committed on active branch** in `9c804fc02c2087777005c1d70c6446928d4eea29`:
+  subsequent 7-owner runs explicitly **exit nonzero unless all P1 boots
+  PASS**. The historical run under `1b093854...` predates this guard.
+
+**Targeted next steps, no speculative 2064 rebuild:** compare one
+`libps2.o` with its old cached identity, inspect the exact remaining
+stack-deficit scheduler path against its preserved object bytes, then replay
+a fixed Image repeatedly in a QEMU-only lane with image SHA attestation.
+Recompile only a demonstrably implicated object or owner set. For future
+probes, retain the actual experimental Image in an authenticated short-TTL
+artifact or exact-key immutable cache; the current CI evidence ZIP contains
+QEMU logs but not the binary for the seven-owner Image, so cannot itself
+support a no-relink QEMU replay. Do not declare 16KiB closure merely from
+a previous 12/12 or the overall new green badge.
+
 ## 2026-10-13 follow-up: three previously blocking genuine Linux objects are corrected
 
 A real full-GNU fixture validated **three and only three** Linux C owners,
