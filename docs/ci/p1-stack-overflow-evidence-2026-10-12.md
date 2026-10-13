@@ -1049,3 +1049,76 @@ then investigate the **actual remaining IRQ stack call-depth frontier**
 before attempting a general compiler backend optimization. Prefer a
 semantic micro-test proof for CFG sharing first, not declaring success
 from a shrunk frame alone.
+
+
+## Receive/allocator CFG scratch ROI and actual 16KiB P1 — 2026-10-13
+
+All trials used the existing frozen 2064-MiniC-object pool with the
+original **16KiB** stack config, GNU AS/LD and zero GCC C substitutes.
+The experimental codegen uses first-write, one-basic-block, direct
+LOAD/STORE and no-escape eligibility for cross-block scratch sharing.
+It remains **unproven for general semantic correctness**.
+
+**ROI-only replay:** CI #38346387339, artifact #11789471374. Four
+recompiled MiniC TUs: net/ipv6/tcp_ipv6.o, net/ipv4/tcp_input.o,
+mm/slub.o and mm/page_alloc.o. All four ELF objects changed,
+2060 other MiniC objects stayed authenticated unchanged. No Image link.
+
+| Function | Original frame | Candidate | Delta |
+| --- | ---: | ---: | ---: |
+| tcp_v6_rcv | 1760 | 400 | 1360 |
+| tcp_v6_do_rcv | 1104 | 480 | 624 |
+| tcp_conn_request | 1312 | 624 | 688 |
+| tcp_rcv_state_process | 1776 | 608 | 1168 |
+| ___slab_alloc | 976 | 400 | 576 |
+| __alloc_pages | 352 | 224 | 128 |
+| __alloc_pages_slowpath | 1024 | 208 | 816 |
+| **Sum (NOT simultaneous)** | | | **5360** |
+
+**Four high-ROI owners linked:** CI #38346944943,
+artifact #11789017206. Only ip6_output.o, tcp_ipv6.o,
+tcp_input.o, slub.o were rebuilt with the experimental MiniC
+backend. The other 2060 originals did not change.
+Exact linked Image SHA256:
+c66c8ae035a060c693c048761dcbde0073d25cd13ff9a6c14894e328a943f51d
+Three independent ordinary-QEMU P1 boots: **PASS / FAIL / FAIL (1/3)**.
+The failures were in IPv6 connect, both at SP ff1fffffffffffd0
+(48 B below previously measured IRQ stack base); terminal functions
+were an inline specialization from decay_load and __raw_spin_lock_irqsave.
+
+**Five high-ROI owners linked:** CI #38347688537,
+artifact #11789638848. Added mm/page_alloc.o as the **fifth**
+selectively rebuilt MiniC C object, keeping other **2059** original
+objects SHA-identical. The **same** Image SHA256:
+f87e434c5678ebe5eace706c215a66423c39df1351e8b09288adb13ddb268eb9
+Three normal-QEMU P1 boots: **PASS / PASS / FAIL (2/3)**.
+Both PASS boots completed all 12 P1 syscall probes and clean shutdown.
+Failing third boot crashed in IPv6 connect at
+accumulate_sum+0x2 (caller ___update_load_sum+0x446), SP
+ff1ffffffffff20 (224 B below previously measured CPU0 IRQ base).
+This Image did not undergo its own fresh GDB unwind.
+
+Measured five-owner frame reductions:
+ip6_finish_output2 4064->2224 (-1840);
+ip6_xmit 2288->1152 (-1136);
+tcp_v6_rcv 1760->400 (-1360);
+tcp_v6_do_rcv 1104->480 (-624);
+tcp_conn_request 1312->624 (-688);
+tcp_rcv_state_process 1776->608 (-1168);
+___slab_alloc 976->400 (-576);
+__alloc_pages 352->224 (-128);
+__alloc_pages_slowpath 1024->208 (-816).
+Aggregate **8336 B**, but these are independent functions from
+possibly mutually exclusive TX/RX call chains, **not a measured
+single live-stack saving**.
+
+P1 progression (0/3 original -> 1/3 four-owner -> 2/3 five-owner)
+supports accumulated stack pressure as the main performance/capacity
+issue. It DOES NOT certify P1 or correctness of the CFG optimization.
+The green GitHub diagnostic job statuses are NOT full pass claims.
+Further broadening must include a Core IR liveness/alias proof,
+focused small C correctness tests, and repeatably stable 16KiB P1.
+Do not turn on unsafe global sharing just from this outcome.
+Temporary opt-in experiment code is now removed, with the prior
+canonical diagnostic script restored bit-for-bit. No Workflow or
+branch was added and no production MiniC source was modified.
