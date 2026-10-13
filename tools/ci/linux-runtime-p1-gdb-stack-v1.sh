@@ -190,5 +190,47 @@ if [[ "${P1_GDB_SCHED_CHAIN:-0}" == 1 ]]; then
   sched_samples=$(grep -ac 'P1_SCHED_FRAME index=' "$dest/gdb.log" || true)
   echo "P1_SCHED_CHAIN=CAPTURED samples=$sched_samples entry_sp_before_prologue=1 caller_ra=1 same_image_irq_base=1 gdb_perturbed=1"
   [[ "$sched_samples" -gt 0 ]] || exit 8
+  # Symbolize caller return sites and read emitted RV64 frame prologues
+  # from the linked ELF, never from an inferred source-level stack size.
+  python3 - "$dest/gdb.log" "$dest/linked-symbols.nm" "$vmlinux" "$dest/scheduler-chain.tsv" <<'PY_SCHED'
+import bisect, pathlib, re, subprocess, sys
+log, nm, elf, output = map(pathlib.Path, sys.argv[1:])
+rx = re.compile(r"P1_SCHED_FRAME index=(\d+) name=(\S+) entry_sp=(0x[0-9a-f]+) caller_ra=(0x[0-9a-f]+) irq_remaining=(\d+)")
+events = [m.groups() for line in log.read_text(errors="replace").splitlines()
+          if (m := rx.search(line))]
+by_name = {}
+pairs = []
+for line in nm.read_text(errors="replace").splitlines():
+    col = line.split()
+    if len(col) == 3 and col[1].upper() == "T" and not col[2].startswith(".L"):
+        addr = int(col[0], 16)
+        pairs.append((addr, col[2]))
+        by_name.setdefault(col[2], addr)
+pairs.sort()
+addresses = [row[0] for row in pairs]
+def caller(addr):
+    i = bisect.bisect_right(addresses, addr-1)-1
+    return f"{pairs[i][1]}+0x{addr-pairs[i][0]:x}" if i >= 0 else "unknown"
+frames = {}
+for name in set(e[1] for e in events):
+    if name not in by_name:
+        continue
+    start = by_name[name]
+    run = subprocess.run(
+        ["riscv64-linux-gnu-objdump", "-d",
+         "--start-address="+hex(start), "--stop-address="+hex(start+16),
+         str(elf)], check=True, text=True, capture_output=True)
+    m = re.search(r"\baddi\s+sp,\s*sp,\s*(-?(?:0x[0-9a-f]+|\d+))", run.stdout)
+    frames[name] = max(0, -int(m.group(1), 0)) if m else -1
+with output.open("w") as out:
+    out.write("event\tfunction\tentry_sp\tirq_bytes_left\tframe_bytes\tafter_prologue_bytes_left\tcaller_ra\tcaller_function\n")
+    for seq,name,sp,ra,budget in events:
+        frame = frames.get(name,-1)
+        remaining = int(budget)-frame if frame >= 0 else "unresolved"
+        out.write(f"{seq}\t{name}\t{sp}\t{budget}\t{frame}\t{remaining}\t{ra}\t{caller(int(ra,16))}\n")
+print(f"P1_SCHED_CHAIN_TIMELINE=PASS samples={len(events)} resolved_frames={sum(v>=0 for v in frames.values())} lowest_entry={min((int(e[4]) for e in events),default=-1)} gdb_timing_perturbed=1")
+for e in sorted(events,key=lambda e:int(e[4]))[:12]:
+    print(f"P1_SCHED_LOW_ENTRY name={e[1]} entry_left={e[4]} frame={frames.get(e[1],-1)} caller={caller(int(e[3],16))}")
+PY_SCHED
 fi
 echo "P1_GDB=CAPTURED diagnostic_only=true same_image=true irq_stack_verified_from_percpu=true no_P1_pass_inference=true"
