@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Reuse frozen GNU Linux Kbuild cache; test ONLY the existing purgatory -r
+# Purgatory isolated replay trigger uses no prior MiniC artifacts.
 # boundary with native MiniLD. No MiniC/GCC C compile, Kbuild, or QEMU.
 set -Eeuo pipefail
 if (( $# != 3 )); then
