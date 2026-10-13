@@ -2,15 +2,16 @@
 # Opt-in Linux 6.6.143 native tool union from an immutable P0/P1-certified
 # 2064-MiniC-object cache; do NOT alter C preprocessing/compilation/assembly.
 # SHA-pinned cache must HIT; the seven C producer shards are skipped entirely.
-# The first union is MiniAR (GNU fallback only for mPiT) + final-only
-# MiniLD + MiniObjcopy; GNU as is kept.
+# The cached union now exercises MiniAR for EVERY observed Kbuild AR operation
+# (including memberless mPiT); MiniLD for three final links; MiniObjcopy.
+# GNU as remains pinned.
 # Actual MiniAS requires newly generated .s input and is a separate next gate.
 # From passing C cache: #38415409019 native two-stage link took 310.798s
 # then 306.902s. minild-times.tsv profiles each final-link call separately;
 # first establish full Linux P1 correctness before optimizing header preflight.
-# Repro: #38413825638 linked cached C successfully up to vmlinux.a,
-# where MiniAR A1 rejected mPiT positional move; keep this GNU-only fallback
-# explicit while native move support is developed and regression-tested.
+# Repro: #38413825638 saw malformed 'mPiT' due to ar-list stdout
+# corruption. With fd9 logging fixed, real Kbuild mPiT has no explicit
+# members; MiniAR correctly handles it natively and GNU AR can be removed.
 # Kbuild captures `ar t vmlinux.a` stdout in command substitutions for its
 # head-object ordering. NEVER let tool trace output escape to stdout: each
 # { flock; printf; } logging group must redirect fd1 to locked fd9.
@@ -44,17 +45,11 @@ cat >"$ev/ar-wrapper" <<'SH_AR'
 #!/usr/bin/env bash
 set -Eeuo pipefail
 : "${MINIAR:?}" "${NATIVE_TRACE_DIR:?}"
-# Linux vmlinux.a uses GNU ar's positional move (mPiT), with an explicit
-# anchor and members. Current MiniAR A1 deliberately rejects that form;
-# run only this missing command through GNU while continuing to exercise
-# MiniAR for Kbuild's other archive creates/lists. The fallback is visible
-# and must not be called a fully native AR integration.
-case "${1#-}" in
-  mPiT)
-    { flock 9; printf 'gnu-ar-fallback-mPiT'; printf ' %q' "$@"; printf '\n'; } 9>>"$NATIVE_TRACE_DIR/miniar.trace" >&9
-    exec /usr/bin/riscv64-linux-gnu-ar "$@"
-    ;;
-esac
+# The *actual* Kbuild invocation is "ar mPiT init/main.o vmlinux.a"
+# with NO member list; MiniAR A1 implements this as an exact archive-preserving
+# no-op (tests/archiver/run-a1.sh already compares GNU vs MiniAR byte-for-byte).
+# The prior fallback was unnecessary and masked a proven native operation.
+# Explicit-member mPiT is a separate unsupported operation, fail closed there.
 { flock 9; printf 'miniar'; printf ' %q' "$@"; printf '\n'; } 9>>"$NATIVE_TRACE_DIR/miniar.trace" >&9
 exec "$MINIAR" "$@"
 SH_AR
