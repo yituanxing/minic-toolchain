@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # Opt-in Linux 6.6.143 native tool union from an immutable P0/P1-certified
 # 2064-MiniC-object cache; do NOT alter C preprocessing/compilation/assembly.
+# SHA-pinned cache must HIT; the seven C producer shards are skipped entirely.
+# The first union is MiniAR + final-only MiniLD + MiniObjcopy; GNU as is kept.
+# Actual MiniAS requires newly generated .s input and is a separate next gate.
 set -Eeuo pipefail
 if (( $# != 2 )); then
   echo "usage: $0 <native-tool-build-dir> <evidence-dir>" >&2
