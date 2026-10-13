@@ -8549,6 +8549,52 @@ static MinicCoreLowerStatus core_trace_expression_statement_status(
     return status;
 }
 
+/* P1_GENERIC_PURE_DISCARDED_ADDR_EQ_V1:
+ * A discarded comparison of addresses of two plain automatic locals is
+ * effect-free. The AST has already passed type/sema verification. Reject
+ * wrappers, calls, pointer arithmetic, pointer dereferences, subscript,
+ * compound literals and anything else which might evaluate an effect.
+ * Do not skip a full expression on the basis of a guessed alias relation.
+ * This optimization is opt-in until the RV64 semantic/frame gate passes.
+ */
+static bool core_p1_plain_local_address(const MinicC0Program *program,
+                                        MinicExpressionId expression_id) {
+    const MinicExpression *addr;
+    const MinicExpression *local;
+    if (program == NULL || expression_id == MINIC_EXPRESSION_INVALID) {
+        return false;
+    }
+    addr = minic_c0_program_expression(program, expression_id);
+    if (addr == NULL || addr->kind != MINIC_EXPRESSION_ADDRESS_OF ||
+        addr->value.unary.operand == MINIC_EXPRESSION_INVALID ||
+        !minic_type_is_pointer(addr->type)) {
+        return false;
+    }
+    local = minic_c0_program_expression(program, addr->value.unary.operand);
+    return local != NULL && local->kind == MINIC_EXPRESSION_LOCAL &&
+           local->value_category == MINIC_VALUE_LVALUE;
+}
+
+static bool core_p1_pure_discarded_local_address_comparison(
+    const MinicCoreLowerContext *context, const MinicExpression *expression) {
+    const MinicExpression *comparison;
+    const MinicC0Program *program;
+    if (context == NULL || context->body == NULL ||
+        (program = context->body->program) == NULL ||
+        expression == NULL || expression->kind != MINIC_EXPRESSION_DISCARD ||
+        expression->value.unary.operand == MINIC_EXPRESSION_INVALID) {
+        return false;
+    }
+    comparison = minic_c0_program_expression(program, expression->value.unary.operand);
+    if (comparison == NULL || comparison->kind != MINIC_EXPRESSION_BINARY ||
+        (comparison->value.binary.operator_kind != MINIC_BINARY_EQUAL &&
+         comparison->value.binary.operator_kind != MINIC_BINARY_NOT_EQUAL)) {
+        return false;
+    }
+    return core_p1_plain_local_address(program, comparison->value.binary.left) &&
+           core_p1_plain_local_address(program, comparison->value.binary.right);
+}
+
 static MinicCoreLowerStatus lower_expression_statement(MinicCoreLowerContext *context,
                                                        const MinicStatement *statement) {
     const MinicExpression *expression;
@@ -8862,6 +8908,12 @@ static MinicCoreLowerStatus lower_expression_statement(MinicCoreLowerContext *co
         MinicCoreValueId discarded_value;
         MinicCoreLowerStatus status;
 
+        /* Opt-in, general lowering rule; original Core behaviour is unchanged
+           unless the caller explicitly requests this semantic experiment. */
+        if (getenv("MINIC_OPT_PURE_DISCARDED_ADDRESS_EQ") != NULL &&
+            core_p1_pure_discarded_local_address_comparison(context, expression)) {
+            return MINIC_CORE_LOWER_OK;
+        }
         status = lower_expression(context, statement->expression, &discarded_value);
         return core_trace_expression_statement_status(context, expression, "discard", status);
     }
