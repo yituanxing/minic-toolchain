@@ -346,3 +346,55 @@ lifetime restriction has been relaxed. Next focus: obtain *read-only*
 per-function frame accounting for `kernel/sched/fair.o` (timer/PELT path)
 while preserving the already proven IPv6 task-stack evidence, then make
 strictly localized, verified changes only if a valid lowering defect is shown.
+
+
+## Frozen `fair.o` frame attribution + singleton control — 2026-10-13
+
+**Observation only** in existing canonical GitHub Actions receiver; the
+original Runtime MiniC binary was instrumented for stderr traces and the
+single GNU-preprocessed `kernel/sched/fair.o` was replayed. Output ELF was
+**byte-identical to the pinned MiniC object**, with no Image link or boot.
+CI **#38327693568**, evidence artifact **11782230460**.
+
+| fair.o function | MiniC frame bytes | CoreObject region | SSA spill region |
+| --- | ---: | ---: | ---: |
+| `load_balance` | 800 | 744 | 40 |
+| `update_cfs_rq_load_avg` | 544 | 496 | 32 |
+| `enqueue_entity` | 272 | 224 | 32 |
+| `update_load_avg` | 224 | 176 | 32 |
+| `task_tick_fair` | 176 | 128 | 32 |
+
+The unfiltered compiler `CORE_FRAME_REUSE` summary covered 600 emitted
+functions. None of its reported `fair.o` frames exceeded 800 bytes.
+The scheduler has nontrivial stack demand but no individually observed
+4-KiB frame comparable to IPv6 `ip6_finish_output2`. This does **not**
+bound the combined nested call-chain depth, prove correct frame lifetimes,
+or establish that IRQ is the original failing stack.
+
+**Single-GCC-owner causal control**: CI **#38328031823**, artifact
+**11781527855**, froze 2064 MiniC C objects and tried only GCC
+`kernel/sched/fair.o` (2063 MiniC + 1 GCC), retaining the unchanged
+16-KiB Linux config. Exact baseline all-MiniC Image SHA
+`0ffaf1f87b5935ddd26c0c5f9b85f192d545802dd01da70fe8e04aa9f778ef89`
+was FAIL/FAIL/FAIL. Exact one-GCC-fair Image SHA
+`6d1d364e422469d12c816799f8bc8c9eab316e8535d901182dc801768622a0d5`
+also **FAIL/FAIL/FAIL**, all at the IPv6 child-connect syscall. The
+trapped SP was exactly **144 bytes below the task stack base**
+(`__list_add_valid_or_report+0x1c`) in the saved ordinary-QEMU logs.
+That CI is RED due to its requested causal candidate not rescuing P1;
+the evidence, provenance and logs were collected successfully.
+
+Previously the double-GCC `ip6_output.o` + `fair.o` Image passed 3/3
+(#38326099444); this new singleton shows `fair.o` **alone is not
+sufficient**. This pair result must not be treated as proof that the
+scheduler is a distinct compiler defect: object substitutions can affect
+calling depth, stack budget, binary layout and interrupt timing. The
+independent frozen all-MiniC GDB first-fault capture
+(#38270171284) ALSO classified the faulting SP as **task stack**, not
+IRQ; observations on IRQ stack during timer interrupts are not an IRQ
+overflow certificate. Some earlier *different experimental images* did
+have separate IRQ-boundary evidence, and must not be conflated.
+
+Next 16-KiB repair focus: direct IPv6/task-stack codegen frame
+budget and known nonreusable CoreObject/lifetime evidence. No global
+cross-block stack slot sharing and no additional CI workflow.
