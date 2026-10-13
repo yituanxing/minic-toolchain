@@ -673,7 +673,7 @@ jobs:
     # Use the SAME receiver job for exact immutable Image reboots. When the
     # seven producer jobs are skipped, always() prevents needs' implicit skip;
     # the ordinary full-shard path still requires a successful producer.
-    if: always() && github.event_name == 'push' && ((contains(github.event.head_commit.message, '[linux-runtime-gcc-sharded]') && needs.gcc-shards.result == 'success') || contains(github.event.head_commit.message, '[linux-runtime-large-image-qemu]') || contains(github.event.head_commit.message, '[linux-runtime-p1-frame-audit]') || contains(github.event.head_commit.message, '[linux-runtime-stack-owners]'))
+    if: always() && github.event_name == 'push' && ((contains(github.event.head_commit.message, '[linux-runtime-gcc-sharded]') && needs.gcc-shards.result == 'success') || contains(github.event.head_commit.message, '[linux-runtime-large-image-qemu]') || contains(github.event.head_commit.message, '[linux-runtime-p1-frame-audit]') || contains(github.event.head_commit.message, '[linux-runtime-stack-owners]') || contains(github.event.head_commit.message, '[linux-native-union-cached]'))
     runs-on: ubuntu-24.04
     timeout-minutes: 95
     steps:
@@ -812,7 +812,7 @@ jobs:
       # and compares stack prologues with the certified pure-GNU .o pool.
       - name: Restore immutable 2064-object MiniC cache for P1 diagnosis
         id: p1_minic_frozen_cache
-        if: contains(github.event.head_commit.message, '[linux-runtime-p1-frame-audit]') || contains(github.event.head_commit.message, '[linux-runtime-stack-owners]')
+        if: contains(github.event.head_commit.message, '[linux-runtime-p1-frame-audit]') || contains(github.event.head_commit.message, '[linux-runtime-stack-owners]') || contains(github.event.head_commit.message, '[linux-native-union-cached]')
         uses: actions/cache/restore@v4
         with:
           path: |
@@ -826,6 +826,18 @@ jobs:
           # Never broaden to a prefix or silently use this for certification.
           restore-keys: ${{ contains(github.event.head_commit.message, '[linux-runtime-p1-frozen-baseline]') && 'gnu-minic-objects-v1-eeb04f304ebfb97a1079c187dc0c2ea3cc61fc50a55aa3cc776237c16ab19bbe-ba0a5fe0e3be00a107df47e5156b73b7af085ed9f519a4f86ef20e684cf227b1-1d1c8d09cfffddb37990552ae6392181a42d55332e48232dce27e7305d7e770b-0c2a199ea3ae14d39b008fd4080d4b18d675b07daa17976c7d9755e8ea67310b-d072447ef15a207422bf4874920221c41af7a771d1dbae770855cf3d6220a507' || '' }}
           fail-on-cache-miss: true
+
+      - name: Attest exact cached full MiniC object pool before native tool replacements
+        if: contains(github.event.head_commit.message, '[linux-native-union-cached]')
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "${{ steps.p1_minic_frozen_cache.outputs.cache-hit }}" = true
+          test "${{ steps.p1_minic_frozen_cache.outputs.cache-matched-key }}" = "$FULL_MINIC_KEY"
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-v1"
+          test "$(wc -l < "$ev/minic-manifest.sha256")" -eq 2064
+          (cd "$ev" && sha256sum --quiet -c minic-manifest.sha256)
+          echo "NATIVE_UNION_CACHE=HIT provenance=full_2064_MiniC hash_verified=true pp=GNU original_run=38408669290"
 
       - name: Attest exact frozen P1 diagnostic cache provenance
         if: contains(github.event.head_commit.message, '[linux-runtime-p1-frozen-baseline]')
@@ -903,14 +915,14 @@ jobs:
           if-no-files-found: warn
 
       - uses: actions/download-artifact@v4
-        if: "!contains(github.event.head_commit.message, '[linux-runtime-large-image-qemu]') && !contains(github.event.head_commit.message, '[linux-runtime-p1-frame-audit]') && !contains(github.event.head_commit.message, '[linux-runtime-stack-owners]')"
+        if: "!contains(github.event.head_commit.message, '[linux-runtime-large-image-qemu]') && !contains(github.event.head_commit.message, '[linux-runtime-p1-frame-audit]') && !contains(github.event.head_commit.message, '[linux-runtime-stack-owners]') && !contains(github.event.head_commit.message, '[linux-native-union-cached]')"
         with:
           pattern: shard-*
           path: build/linux-runtime-gcc-shards-v1
           merge-multiple: false
 
       - name: Build identical MiniC profile and verify exact shard union
-        if: "!contains(github.event.head_commit.message, '[linux-runtime-large-image-qemu]') && !contains(github.event.head_commit.message, '[linux-runtime-p1-frame-audit]') && !contains(github.event.head_commit.message, '[linux-runtime-stack-owners]')"
+        if: "!contains(github.event.head_commit.message, '[linux-runtime-large-image-qemu]') && !contains(github.event.head_commit.message, '[linux-runtime-p1-frame-audit]') && !contains(github.event.head_commit.message, '[linux-runtime-stack-owners]') && !contains(github.event.head_commit.message, '[linux-native-union-cached]')"
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -932,8 +944,25 @@ jobs:
             --minic "$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain/bin/minic" \
             --assembler /usr/bin/riscv64-linux-gnu-as
 
+      - name: Restore identical MiniC compiler profile for native tool union (without rebuilding C objects)
+        if: contains(github.event.head_commit.message, '[linux-native-union-cached]')
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "${{ steps.p1_minic_frozen_cache.outputs.cache-hit }}" = true
+          work="$GITHUB_WORKSPACE/build/linux-runtime-gcc"
+          src="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0/linux-6.6.143"
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-v1"
+          test -d "$src"
+          test ! -e "$work/linux-6.6.143"
+          cp -a --reflink=auto "$src" "$work/linux-6.6.143"
+          MINIC_LINUX_FULL_CROSSBLOCK=1 MINIC_OPT_PURE_DISCARDED_ADDRESS_EQ=1 \
+            bash tools/ci/linux-runtime-build-minic-profile-v1.sh \
+              "$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain" "$ev/compiler"
+          echo "NATIVE_UNION_COMPILER=READY recompiled_C=0 restored_objects=2064"
+
       - name: Retain fully verified MiniC objects before link or runtime
-        if: "!contains(github.event.head_commit.message, '[linux-runtime-large-image-qemu]') && !contains(github.event.head_commit.message, '[linux-runtime-p1-frame-audit]') && !contains(github.event.head_commit.message, '[linux-runtime-stack-owners]')"
+        if: "!contains(github.event.head_commit.message, '[linux-runtime-large-image-qemu]') && !contains(github.event.head_commit.message, '[linux-runtime-p1-frame-audit]') && !contains(github.event.head_commit.message, '[linux-runtime-stack-owners]') && !contains(github.event.head_commit.message, '[linux-native-union-cached]')"
         uses: actions/cache/save@v4
         with:
           path: |
@@ -1019,6 +1048,16 @@ jobs:
             bash tests/compiler/c0/run-pure-discarded-address-rv64.sh
           echo "P1_CFG_SEMANTIC_ONLY=PASS gcc_minic_baseline_crossblock=3way matrix=7+8 x1023 no_kernel_link=true no_linux_recompile=true"
 
+      - name: Prepare native MiniAR, final-link MiniLD and MiniObjcopy (same cached C objects)
+        if: contains(github.event.head_commit.message, '[linux-native-union-cached]')
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          bash tools/ci/linux-runtime-native-union-v1.sh \
+            "$GITHUB_WORKSPACE/build/linux-runtime-native-union-v1-tools" \
+            "$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-v1/native-union"
+          echo "NATIVE_UNION_TOOLS=PASS minic_C_objects_reused=true"
+
       - name: GNU-only link and QEMU with NO MiniC recompilation
         if: "!contains(github.event.head_commit.message, '[linux-runtime-large-image-qemu]') && !contains(github.event.head_commit.message, '[linux-runtime-p1-frame-audit]') && !contains(github.event.head_commit.message, '[linux-runtime-p1-cfg-semantic-only]')"
         shell: bash
@@ -1027,6 +1066,25 @@ jobs:
           work="$GITHUB_WORKSPACE/build/linux-runtime-gcc"
           ev="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-v1"
           export COHORT_ACTION=verify
+          if [[ "${{ contains(github.event.head_commit.message, '[linux-native-union-cached]') && '1' || '0' }}" == 1 ]]; then
+            test "${{ steps.p1_minic_frozen_cache.outputs.cache-hit }}" = true
+            native="$ev/native-union"
+            toolchain="$GITHUB_WORKSPACE/build/linux-runtime-native-union-v1-tools"
+            export MINIAR="$toolchain/bin/minic-ar"
+            export MINILD="$toolchain/bin/minic-ld"
+            export MINIOBJCOPY="$toolchain/bin/minic-objcopy"
+            export NATIVE_TRACE_DIR="$native"
+            export COHORT_NATIVE_UNION=1
+            export COHORT_NATIVE_AR="$native/ar-wrapper"
+            export COHORT_NATIVE_LD="$native/ld-wrapper"
+            export COHORT_NATIVE_OBJCOPY="$native/objcopy-wrapper"
+            # No shard recompile: the cached 2064 C objects stay byte-for-byte
+            # identical until Kbuild's separately attested generated-header
+            # reconciliation, usually four exact C owners.
+            test "$(wc -l < "$ev/minic-manifest.sha256")" -eq 2064
+            (cd "$ev" && sha256sum --quiet -c minic-manifest.sha256)
+            echo "NATIVE_UNION_CACHE=VERIFIED owners=2064 compile_C=0 reuse_GCC_gold=true"
+          fi
           if [[ "${{ contains(github.event.head_commit.message, '[linux-runtime-full-crossblock]') && '1' || '0' }}" == 1 ]]; then
             export MINIC_LINUX_FULL_CROSSBLOCK=1 MINIC_OPT_PURE_DISCARDED_ADDRESS_EQ=1
             export COHORT_LINUX_FULL_CROSSBLOCK=1
@@ -1073,6 +1131,18 @@ jobs:
             "$work/linux-6.6.143" "$work/out" \
             "$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain/bin/minic" \
             "$work/provenance" "$ev/full-objects.txt" "$ev"
+          if [[ "${{ contains(github.event.head_commit.message, '[linux-native-union-cached]') && '1' || '0' }}" == 1 ]]; then
+            grep -Fq 'COHORT_CANDIDATE_CACHE=HIT objects=2064' "$ev/cohort.log" || {
+              echo 'NATIVE_UNION_CACHE=FAIL fallback_recompiled_full_C_pool' >&2; exit 20;
+            }
+            grep -Fq 'COHORT_RESULT=PASS candidate_objects=2064 scope=FULL_C_UNIVERSE' "$ev/cohort.log" || {
+              echo 'NATIVE_UNION_RESULT=FAIL missing_exact_2064_P1_pass' >&2; exit 21;
+            }
+            test -s "$NATIVE_TRACE_DIR/miniar.trace"
+            test -s "$NATIVE_TRACE_DIR/miniobjcopy.trace"
+            test "$(grep -c '^minild ' "$NATIVE_TRACE_DIR/minild.trace")" -ge 3
+            echo "NATIVE_UNION_RESULT=PASS pp=GNU minic=2064 from_cache ar=MiniAR ld=MiniLD_final_only objcopy=MiniObjcopy runtime=P1"
+          fi
 
       - name: Preserve aggregate link, QEMU and failure-frontier evidence
         if: always() && !contains(github.event.head_commit.message, '[linux-runtime-large-image-qemu]') && !contains(github.event.head_commit.message, '[linux-runtime-p1-frame-audit]')
@@ -1087,6 +1157,9 @@ jobs:
             build/linux-runtime-gcc-cohort-v1/minic-manifest.sha256
             build/linux-runtime-gcc-cohort-v1/gcc-preflight.log
             build/linux-runtime-gcc-cohort-v1/results.tsv
+            build/linux-runtime-gcc-cohort-v1/native-union/*.trace
+            build/linux-runtime-gcc-cohort-v1/native-union/tools.sha256
+            build/linux-runtime-gcc-cohort-v1/native-union/*-wrapper
             build/linux-runtime-gcc-cohort-v1/frontier.txt
             build/linux-runtime-gcc-cohort-v1/p1-owner-verdicts.tsv
             build/linux-runtime-gcc-cohort-v1/p1-multi-rescue-repeats.tsv
