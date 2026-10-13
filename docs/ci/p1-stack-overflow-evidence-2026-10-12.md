@@ -512,3 +512,58 @@ task-stack failure and the post-optimization interrupt-path failure,
 using same-Image first-fault evidence before changing backend ABI or
 unsafe CFG-wide stack-slot reuse. All temporary CI script changes were
 reverted; no additional Workflow was introduced.
+
+
+## Verified same-Image IRQ first fault after safe IPv6 frame shrink — 2026-10-13
+
+CI **#38333385948** (artifact **11783932483**) reused the original
+16KiB Linux config and the immutable 2064-object MiniC universe, but
+recompiled ONLY `net/ipv6/ip6_output.o` using the existing strict
+side-effect-free discarded plain-local address-comparison lowering.
+The other **2063 objects remained byte-identical MiniC objects**;
+no GCC C object was substituted. The first three **ordinary, no-GDB**
+QEMU boots of the SAME linked Image
+`b13983e96786df599c0686476a2409effa118bd68ec1382849d05e930440753f`
+failed P1 **0/3**. Only after these ordinary boots did the existing
+read-only GDB diagnostic run on that exact Image and linked `vmlinux`.
+
+**GDB directly measured CPU0's 16KiB IRQ stack**, not an assumed or
+task-stack-relative range:
+`irq_base=0xff20000000000000`,
+`irq_top=0xff20000000004000`.
+The separately captured serial-register SPs from the three normal boots
+were respectively **16, 64, 32 bytes below IRQ base**, and the
+same-Image attribution check reported
+`P1_DEFINED_CROSSBLOCK_IRQ=VERIFIED`. This supersedes the earlier
+"strong inference only" for the previous **different Image**.
+
+The read-only GDB run captured a genuine first exception:
+`P1_FIRSTFAULT epc=0xffffffff8569768c`
+(`riscv_clocksource_rdtime+0x2`),
+`ra=0xffffffff80711d9c` (`tk_clock_read+0xaa`),
+`sp=0xff1fffffffffffe0` (**32 bytes below IRQ base**),
+`badaddr=0xff1ffffffffffff8` (SP+24),
+`cause=15` (store page fault).
+This is consistent with a small clock-read function's initial
+stack push touching the guard page, **not** evidence that clocksource
+itself allocated an abnormally huge frame.
+
+Crucially, the same debugger sampled normal earlier timer IRQ entries
+at `riscv_timer_interrupt SP=irq_base+15744`, then a later entry
+at `irq_base+1040`; `hrtimer_interrupt` likewise appeared at
+`irq_base+15680` and later `irq_base+976`. Thus **14704 bytes of
+IRQ-stack headroom disappeared BEFORE the later timer handler was
+entered**. This cannot be explained by a 32-byte `rdtime` callee frame.
+The exact cause (IRQ nesting, a deep callback already executing on IRQ
+stack, or a faulty stack-pointer/interrupt-state restoration) remains
+**unproven**; the saved IRQ-stack binary contains candidate return
+addresses but those are NOT authenticated unwinds.
+
+**Decision:** stop attributing this experimental IRQ fault to
+`decay_load`, `get_current`, `__radix_tree_lookup`, or a single
+IPv6 frame without evidence. The decisive next small investigation
+should compare **IRQ entry/exit stack restoration and nesting**, or
+obtain a validated call-depth/backtrace from the pinned IRQ stack.
+Existing canonical script was restored byte-for-byte after this
+diagnostic, and no new Workflow, branch, or production MiniC patch
+was retained. No claim of a 16KiB fully-MiniC P1 pass is made.
