@@ -9,6 +9,13 @@ single_owner="${COHORT_P1_SINGLE_OWNER:-0}"
 # One 4-owner read-only ROI screen, no Image relink. Existing receiver and
 # experimental compiler only; default runtime experiment unchanged.
 rx_roi=0
+rx_bundle=0
+if [[ "$single_owner" != 1 && "${COHORT_P1_DISCARD_EQ:-0}" != 1 ]] &&
+  git -C "$repo" log -1 --format=%B | grep -Fq '[linux-runtime-p1-rx-bundle]'; then
+  rx_bundle=1
+  unset MINIC_P1_CROSSBLOCK_FUNCTION
+  echo "P1_RX_BUNDLE=START owners=4 frozen_minic_neighbors=2060 unchanged_16K=true three_boots=true experimental_not_certified=true"
+fi
 if [[ "$single_owner" != 1 && "${COHORT_P1_DISCARD_EQ:-0}" != 1 ]] &&
   git -C "$repo" log -1 --format=%B | grep -Fq '[linux-runtime-p1-rx-roi]'; then
   rx_roi=1
@@ -38,7 +45,14 @@ else
   dest="$ev/p1-defined-crossblock"
 fi
 mkdir -p "$dest"
-if [[ "$rx_roi" == 1 ]]; then
+if [[ "$rx_bundle" == 1 ]]; then
+  cat >"$dest/selected.txt" <<'OWNERS_BUNDLE'
+net/ipv6/ip6_output.o
+net/ipv6/tcp_ipv6.o
+net/ipv4/tcp_input.o
+mm/slub.o
+OWNERS_BUNDLE
+elif [[ "$rx_roi" == 1 ]]; then
   cat >"$dest/selected.txt" <<'OWNERS_RX'
 net/ipv6/tcp_ipv6.o
 net/ipv4/tcp_input.o
@@ -71,8 +85,8 @@ PY_SET
 printf 'compiler_sha256=%s\n' "$(sha256sum "$minic"|cut -d' ' -f1)" >"$dest/provenance.txt"
 rm -rf -- "$out"
 cp -a --reflink=auto "$gold_snapshot" "$out"
-COHORT_FRAME_CAPTURE_ONLY="$(if [[ "$rx_roi" == 1 ]]; then echo 1; else echo "$single_owner"; fi)" MINIC_CORE_FRAME_TRACE=1 \
-MINIC_CORE_FRAME_TRACE_FILTER="$(if [[ "$rx_roi" == 1 ]]; then echo 'tcp_v6_rcv,tcp_v6_do_rcv,tcp_conn_request,tcp_rcv_state_process,___slab_alloc,__alloc_pages,__alloc_pages_slowpath'; else echo 'ip6_finish_output2,ip6_xmit'; fi)" \
+COHORT_FRAME_CAPTURE_ONLY="$(if [[ "$rx_roi" == 1 || "$rx_bundle" == 1 ]]; then echo 1; else echo "$single_owner"; fi)" MINIC_CORE_FRAME_TRACE=1 \
+MINIC_CORE_FRAME_TRACE_FILTER="$(if [[ "$rx_roi" == 1 || "$rx_bundle" == 1 ]]; then echo 'ip6_finish_output2,ip6_xmit,tcp_v6_rcv,tcp_v6_do_rcv,tcp_conn_request,tcp_rcv_state_process,___slab_alloc'; else echo 'ip6_finish_output2,ip6_xmit'; fi)" \
 python3 "$repo/tools/ci/linux-runtime-kbuild-regeneration-guard-v1.py" \
   --mode replay --out "$out" --golden-out "$gold_snapshot" \
   --evidence "$dest/replay-evidence.json" --selected "$dest/selected.txt" \
@@ -205,6 +219,32 @@ print(f'P1_RX_ROI=COMPLETE owners=4 functions={sum(map(len,baseline.values()))} 
 PY_RX_FRAME
   exit 0
 fi
+if [[ "$rx_bundle" == 1 ]]; then
+  python3 - "$out" "$dest" <<'PY_RX_BUNDLE'
+import pathlib,re,sys
+out,dest=map(pathlib.Path,sys.argv[1:])
+baseline={
+ 'net/ipv6/ip6_output':{'ip6_finish_output2':4064,'ip6_xmit':2288},
+ 'net/ipv6/tcp_ipv6':{'tcp_v6_rcv':1760,'tcp_v6_do_rcv':1104},
+ 'net/ipv4/tcp_input':{'tcp_conn_request':1312,'tcp_rcv_state_process':1776},
+ 'mm/slub':{'___slab_alloc':976},
+}
+total=0
+for owner,items in baseline.items():
+    log=out/(owner+'.minic-stage2.minic.stderr')
+    if not log.is_file(): raise SystemExit(f'P1_RX_BUNDLE=ERROR missing_trace={log}')
+    records={}
+    for m in re.finditer(r'^CORE_FRAME_REUSE function=(\S+) frame=(\d+)\b',log.read_text(errors='replace'),re.M):
+        records[m.group(1)]=int(m.group(2))
+    for name,original in items.items():
+        frame=records.get(name)
+        if frame is None or not(0<frame<=original):
+            raise SystemExit(f'P1_RX_BUNDLE=ERROR invalid_frame={owner}:{name}:{frame}')
+        total+=original-frame
+        print(f'P1_RX_BUNDLE=FRAME owner={owner}.o function={name} base={original} candidate={frame} delta={original-frame}')
+print(f'P1_RX_BUNDLE=MEASURED function_frame_savings_sum={total} candidate_not_certified=true')
+PY_RX_BUNDLE
+fi
 export COHORT_P1_EXPERIMENTAL_POOL="$dest/pool/minic"
 last_selection="none"
 last_link_source_dir=""
@@ -291,7 +331,9 @@ PY_IRQ_ATTRIBUTION
     echo "P1_DEFINED_CROSSBLOCK_GDB=INCONCLUSIVE no_P1_pass_inference=true"
   fi
 fi
-if [[ "$single_owner" == 1 ]]; then
+if [[ "$rx_bundle" == 1 ]]; then
+  echo "P1_RX_BUNDLE=COMPLETE modified_minic=4 unchanged_minic=2060 gcc_owners=0 passes=$passes failures=$((3-passes)) image_sha=$pinned candidate_not_promoted=true"
+elif [[ "$single_owner" == 1 ]]; then
   echo "P1_DEFINED_CROSSBLOCK=COMPLETE modified_minic=1 gcc_owners=1 minic_owners=2063 passes=$passes failures=$((3-passes)) image=$pinned experimental=true not_promoted=true"
 else
   echo "P1_DEFINED_CROSSBLOCK=COMPLETE modified_minic=4 gcc_owners=0 minic_owners=2064 passes=$passes failures=$((3-passes)) image=$pinned experimental=true not_promoted=true"
