@@ -9448,21 +9448,29 @@ lower_if(MinicCoreLowerContext *context, const MinicStatement *statement, bool *
         MinicConstValue condition_value;
         bool condition_is_zero;
 
-        bool proven_zero;
-        bool constant_known;
-
-        constant_known = minic_const_eval_integer(context->body->program,
-                                                   context->target,
-                                                   statement->expression,
-                                                   &condition_value);
-        if (!constant_known &&
-            core_zero_bool_cfg_condition(
-                context, statement->expression, 0U, &proven_zero)) {
-            condition_value.type = condition_expression->type;
-            condition_value.bits = proven_zero ? 0U : 1U;
-            constant_known = true;
+        /* Preserve the original constant-if lowering anchor for the pinned
+           Runtime-profile source transforms. This additional proof is
+           independent, fail-closed, and never replaces their CFG semantics. */
+        if (core_zero_bool_cfg_condition(
+                context, statement->expression, 0U, &condition_is_zero)) {
+            const MinicBlock *selected_source =
+                condition_is_zero ? else_source : then_source;
+            const MinicBlock *discarded_source =
+                condition_is_zero ? then_source : else_source;
+            if (discarded_source == NULL ||
+                !core_block_contains_reentry_label(context, discarded_source)) {
+                if (selected_source == NULL) {
+                    *terminated = false;
+                    return MINIC_CORE_LOWER_OK;
+                }
+                return lower_block(context, selected_source, terminated);
+            }
         }
-        if (constant_known &&
+
+        if (minic_const_eval_integer(context->body->program,
+                                     context->target,
+                                     statement->expression,
+                                     &condition_value) &&
             minic_const_value_is_zero(context->body->program,
                                       context->target,
                                       &condition_value,
