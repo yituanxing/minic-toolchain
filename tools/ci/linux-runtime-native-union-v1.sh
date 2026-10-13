@@ -37,6 +37,18 @@ cat >"$ev/ld-wrapper" <<'SH_LD'
 #!/usr/bin/env bash
 set -Eeuo pipefail
 : "${MINILD:?}" "${NATIVE_TRACE_DIR:?}"
+# Kbuild Kconfig probes the LD driver with -v/--version BEFORE any actual
+# linking. A wrapper must report the GNU-compatible linker dialect, not
+# "unknown linker". Routing these discovery probes to the known GNU
+# implementation is legitimate: no input objects are linked in a probe.
+# Retain MiniLD at only the three explicitly certified final boundaries.
+for arg in "$@"; do
+  case "$arg" in
+    -v|-V|--version)
+      exec /usr/bin/riscv64-linux-gnu-ld "$@"
+      ;;
+  esac
+done
 args=("$@")
 output=
 for ((i=0; i<${#args[@]}; ++i)); do
