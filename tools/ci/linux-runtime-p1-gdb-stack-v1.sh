@@ -33,6 +33,7 @@ import sys
 
 nm, commands_path, symbols_path, vmlinux, port, evidence_dir = sys.argv[1:]
 sched_chain = os.environ.get('P1_GDB_SCHED_CHAIN') == '1'
+irq_reentry = os.environ.get('P1_GDB_IRQ_REENTRY') == '1'
 symbols = {}
 for line in Path(nm).read_text(errors="replace").splitlines():
     parts = line.split()
@@ -99,6 +100,8 @@ emit("set $p1_irq_base = *(unsigned long*)$p1_irq_ptr_slot")
 emit("set $p1_irq_top = $p1_irq_base + 16384")
 if sched_chain:
     emit("set $p1_sched_hits = 0")
+if irq_reentry:
+    emit("set $p1_low_irq_hits = 0")
 emit('printf "P1_GDB_IRQ_LAYOUT irq_base=%#lx irq_top=%#lx irq_ptr_slot=%#lx percpu_offset=%#lx tcp_sp=%#lx task_lo=%#lx\\n", (unsigned long)$p1_irq_base, (unsigned long)$p1_irq_top, (unsigned long)$p1_irq_ptr_slot, (unsigned long)$p1_percpu_offset, (unsigned long)$sp, (unsigned long)$p1_task_lo')
 emit("enable " + " ".join(map(str, range(2, len(bound) + 1))))
 emit("disable 1")
@@ -143,10 +146,18 @@ for idx, (name, _) in enumerate(bound[1:], 2):
         emit(f'printf "P1_GDB_FRAME name={name} pc=%#lx sp=%#lx ra=%#lx irq_remaining=%ld task_remaining=%ld\\n", (unsigned long)$pc, (unsigned long)$sp, (unsigned long)$ra, (long)((unsigned long)$sp-(unsigned long)$p1_irq_base), (long)((unsigned long)$sp-(unsigned long)$p1_task_lo)')
         if low_stack_target:
             emit("end")
-        # Keep the record of the first post-TCP transition to IRQ stack,
-        # but avoid GDB spending its whole budget at frequent IRQ entry.
+        # The normal diagnostics disable these busy IRQ-entry breakpoints
+        # after the first switch. Opt-in low IRQ probe must KEEP them to
+        # distinguish a nested/reentrant timer IRQ from unrelated calls.
         if name in ("do_irq", "handle_riscv_irq"):
-            emit(f"disable {idx}")
+            if irq_reentry:
+                emit("if ($p1_low_irq_hits < 80 && $sp >= $p1_irq_base && "
+                     "$sp < $p1_irq_base + 12288)")
+                emit("set $p1_low_irq_hits = $p1_low_irq_hits + 1")
+                emit(f'printf "P1_IRQ_LOW_ENTRY name={name} sp=%#lx ra=%#lx irq_remaining=%ld\\n", (unsigned long)$sp, (unsigned long)$ra, (long)((unsigned long)$sp-(unsigned long)$p1_irq_base)')
+                emit("end")
+            else:
+                emit(f"disable {idx}")
     emit("continue")
     emit("end")
 emit("continue")
@@ -189,6 +200,10 @@ fi
 if [[ "${P1_GDB_SCHED_CHAIN:-0}" == 1 ]]; then
   sched_samples=$(grep -ac 'P1_SCHED_FRAME index=' "$dest/gdb.log" || true)
   echo "P1_SCHED_CHAIN=CAPTURED samples=$sched_samples entry_sp_before_prologue=1 caller_ra=1 same_image_irq_base=1 gdb_perturbed=1"
+  if [[ "${P1_GDB_IRQ_REENTRY:-0}" == 1 ]]; then
+    low_entries=$(grep -ac 'P1_IRQ_LOW_ENTRY name=' "$dest/gdb.log" || true)
+    echo "P1_IRQ_REENTRY=OBSERVED low_irq_entries=$low_entries same_image=1 timing_perturbed=1"
+  fi
   [[ "$sched_samples" -gt 0 ]] || exit 8
   # Symbolize caller return sites and read emitted RV64 frame prologues
   # from the linked ELF, never from an inferred source-level stack size.
