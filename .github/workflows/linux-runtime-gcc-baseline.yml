@@ -944,14 +944,14 @@ jobs:
           if-no-files-found: warn
 
       - uses: actions/download-artifact@v4
-        if: "!contains(github.event.head_commit.message, '[linux-runtime-large-image-qemu]') && !contains(github.event.head_commit.message, '[linux-runtime-p1-frame-audit]') && !contains(github.event.head_commit.message, '[linux-runtime-stack-owners]') && !contains(github.event.head_commit.message, '[linux-native-union-cached]')"
+        if: "!contains(github.event.head_commit.message, '[linux-runtime-large-image-qemu]') && !contains(github.event.head_commit.message, '[linux-runtime-p1-frame-audit]') && !contains(github.event.head_commit.message, '[linux-runtime-stack-owners]') && !contains(github.event.head_commit.message, '[linux-native-union-cached]') && !contains(github.event.head_commit.message, '[linux-minild-cached-replay]')"
         with:
           pattern: shard-*
           path: build/linux-runtime-gcc-shards-v1
           merge-multiple: false
 
       - name: Build identical MiniC profile and verify exact shard union
-        if: "!contains(github.event.head_commit.message, '[linux-runtime-large-image-qemu]') && !contains(github.event.head_commit.message, '[linux-runtime-p1-frame-audit]') && !contains(github.event.head_commit.message, '[linux-runtime-stack-owners]') && !contains(github.event.head_commit.message, '[linux-native-union-cached]')"
+        if: "!contains(github.event.head_commit.message, '[linux-runtime-large-image-qemu]') && !contains(github.event.head_commit.message, '[linux-runtime-p1-frame-audit]') && !contains(github.event.head_commit.message, '[linux-runtime-stack-owners]') && !contains(github.event.head_commit.message, '[linux-native-union-cached]') && !contains(github.event.head_commit.message, '[linux-minild-cached-replay]')"
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -991,7 +991,7 @@ jobs:
           echo "NATIVE_UNION_COMPILER=READY recompiled_C=0 restored_objects=2064"
 
       - name: Retain fully verified MiniC objects before link or runtime
-        if: "!contains(github.event.head_commit.message, '[linux-runtime-large-image-qemu]') && !contains(github.event.head_commit.message, '[linux-runtime-p1-frame-audit]') && !contains(github.event.head_commit.message, '[linux-runtime-stack-owners]') && !contains(github.event.head_commit.message, '[linux-native-union-cached]')"
+        if: "!contains(github.event.head_commit.message, '[linux-runtime-large-image-qemu]') && !contains(github.event.head_commit.message, '[linux-runtime-p1-frame-audit]') && !contains(github.event.head_commit.message, '[linux-runtime-stack-owners]') && !contains(github.event.head_commit.message, '[linux-native-union-cached]') && !contains(github.event.head_commit.message, '[linux-minild-cached-replay]')"
         uses: actions/cache/save@v4
         with:
           path: |
