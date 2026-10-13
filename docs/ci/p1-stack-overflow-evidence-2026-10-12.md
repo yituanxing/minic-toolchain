@@ -398,3 +398,35 @@ have separate IRQ-boundary evidence, and must not be conflated.
 Next 16-KiB repair focus: direct IPv6/task-stack codegen frame
 budget and known nonreusable CoreObject/lifetime evidence. No global
 cross-block stack slot sharing and no additional CI workflow.
+
+
+## Actual PELT owner correction and test — 2026-10-13
+
+**Correcting earlier attribution:** Linux 6.6.143 `kernel/sched/build_policy.c`
+includes `pelt.c` when `CONFIG_SMP` is enabled. Thus the emitted
+`decay_load`, `accumulate_sum`, `___update_load_sum` and
+`__accumulate_pelt_segments` implementations belong to
+**`kernel/sched/build_policy.o`**, not `kernel/sched/fair.o`.
+The fair.o stack-frame audit remains valid, but it did not audit these
+specific PELT functions. Earlier two-GCC fair.o rescues cannot be
+attributed to a PELT implementation replacement.
+
+One controlled P1 test using default 16KiB stacks, the same frozen
+2064-object universe, and GCC replacements **only** for
+`net/ipv6/ip6_output.o` and `kernel/sched/build_policy.o` gave
+**FAIL/PASS/FAIL (1/3)** on ONE SHA-identical Image,
+`84cb967a80c0d24d0f77d771c28402ff0770e2a8107afd0a190fab9ac951afdc`.
+CI #38329563821; evidence artifact #11782515834,
+`p1-rescue-pairs-repeats.tsv`. The all-MiniC P1 baseline failed.
+The two failed ordinary QEMU boots had IRQ-stack-base SP
+`0xff1fffffffffffe0` at `debug_spin_lock_before` and
+`_raw_spin_lock_irqsave`, respectively. This candidate is **not
+certified** and does NOT prove a PELT compiler bug.
+
+Our original unmodified 16KiB all-MiniC first fault was a **task**
+stack overflow; other *different linked Images* reached an **IRQ**
+stack boundary. They cannot be conflated into one proven defect.
+The 32KiB full-MiniC 3/3 result is a capacity control, not a 16KiB
+compiler repair. Next work should identify a specific repeatable
+frame/ABI lowering defect from pinned GDB and CoreObject evidence
+before proposing codegen changes; no more speculative owner swapping.
