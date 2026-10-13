@@ -6,16 +6,6 @@ set -Eeuo pipefail
 [[ -n "$minic" && -n "$gold_snapshot" && -n "$ev" && -n "$out" ]] || exit 8
 [[ "$n" -eq 2064 ]] || { echo "P1_DEFINED_CROSSBLOCK=ERROR object_count"; exit 8; }
 single_owner="${COHORT_P1_SINGLE_OWNER:-0}"
-two_hot=0
-if [[ "$single_owner" == 0 ]] &&
-  git -C "$repo" log -1 --format=%B | grep -Fq '[linux-runtime-p1-two-hot-cfg]'; then
-  two_hot=1
-  # No broad activation: only these two physical functions get the
-  # experimental cross-block first-write sharing rule.
-  export MINIC_P1_CROSSBLOCK_FUNCTION=p1_two_hot
-  export MINIC_P1_DISCARD_EQ_FUNCTION=""
-  echo "P1_TWO_HOT=START owners=2 cfg_functions=ip6_finish_output2,tcp_rcv_state_process pure_dead_compare=true"
-fi
 if [[ "$single_owner" == 1 ]]; then
   # Preserve old codegen in every function except one suspect frame;
   # only ip6_finish_output2 is permitted to use the experimental allocator.
@@ -43,9 +33,6 @@ net/ipv6/tcp_ipv6.o
 net/ipv4/tcp_output.o
 net/core/dev.o
 OWNERS
-if [[ "$two_hot" == 1 ]]; then
-  printf '%s\n' net/ipv6/ip6_output.o net/ipv4/tcp_input.o >"$dest/selected.txt"
-fi
 if [[ "$single_owner" == 1 ]]; then
   # Retain every other certified MiniC object and use GCC only for
   # tcp_ipv6.o. Recompile ip6_output.o with the opt-in compiler.
@@ -56,7 +43,7 @@ from pathlib import Path
 import sys
 a,b=map(Path,sys.argv[1:])
 names=a.read_text().splitlines()
-assert len(names) in (1,2,4) and len(set(names))==len(names)
+assert len(names) in (1,4) and len(set(names))==len(names)
 assert set(names)<=set(b.read_text().splitlines())
 print(f"P1_DEFINED_CROSSBLOCK=SELECTED owners={len(names)}")
 PY_SET
@@ -64,8 +51,8 @@ PY_SET
 printf 'compiler_sha256=%s\n' "$(sha256sum "$minic"|cut -d' ' -f1)" >"$dest/provenance.txt"
 rm -rf -- "$out"
 cp -a --reflink=auto "$gold_snapshot" "$out"
-COHORT_FRAME_CAPTURE_ONLY="$(if [[ "$two_hot" == 1 ]]; then echo 1; else echo "$single_owner"; fi)" MINIC_CORE_FRAME_TRACE=1 \
-MINIC_CORE_FRAME_TRACE_FILTER="$(if [[ "$two_hot" == 1 ]]; then echo 'ip6_finish_output2,ip6_xmit,tcp_conn_request,tcp_rcv_state_process'; else echo 'ip6_finish_output2,ip6_xmit'; fi)" \
+COHORT_FRAME_CAPTURE_ONLY="$single_owner" MINIC_CORE_FRAME_TRACE=1 \
+MINIC_CORE_FRAME_TRACE_FILTER="ip6_finish_output2,ip6_xmit" \
 python3 "$repo/tools/ci/linux-runtime-kbuild-regeneration-guard-v1.py" \
   --mode replay --out "$out" --golden-out "$gold_snapshot" \
   --evidence "$dest/replay-evidence.json" --selected "$dest/selected.txt" \
@@ -79,43 +66,6 @@ python3 "$repo/tools/ci/linux-runtime-minic-route-audit-v1.py" \
   --success-trace "$dest/success.txt" \
   --object-digest-trace "$dest/candidates.sha256" \
   --candidates "$out" >"$dest/route-audit.log"
-if [[ "$two_hot" == 1 ]]; then
-  # This lane instruments CORE_FRAME_REUSE only; the richer COMPONENT
-  # output requires a separate CI tag/rebuild. Read actual measured frame
-  # sizes, not a mismatched COMPONENT parser. No additional instrumentation.
-  for item in ip6_output tcp_input; do
-    if [[ "$item" == ip6_output ]]; then
-      stderr="$out/net/ipv6/ip6_output.minic-stage2.minic.stderr"
-    else
-      stderr="$out/net/ipv4/tcp_input.minic-stage2.minic.stderr"
-    fi
-    [[ -s "$stderr" ]] || { echo "P1_TWO_HOT=ERROR missing_stderr=$item"; exit 8; }
-    grep '^CORE_FRAME_REUSE ' "$stderr" >"$dest/$item-frame.log" || exit 8
-  done
-  python3 - "$dest/ip6_output-frame.log" "$dest/tcp_input-frame.log" <<'PY_TWO_HOT_FRAMES'
-from pathlib import Path
-import re,sys
-def frames(path):
-    result={}
-    for line in Path(path).read_text().splitlines():
-        m=re.match(r'CORE_FRAME_REUSE function=(\S+) frame=(\d+) ',line)
-        if m: result[m.group(1)]=int(m.group(2))
-    return result
-ip6,tcp=map(frames,sys.argv[1:])
-for name,original,table in [
-    ('ip6_finish_output2',4064,ip6),
-    ('ip6_xmit',2288,ip6),
-    ('tcp_rcv_state_process',1776,tcp),
-    ('tcp_conn_request',1312,tcp),
-]:
-    new=table[name]
-    print(f'P1_TWO_HOT=FRAME function={name} baseline={original} candidate={new} saving={original-new}')
-    assert 0<new<=original, f'unexpected_growth {name}'
-assert ip6['ip6_finish_output2']<2500, ip6['ip6_finish_output2']
-assert tcp['tcp_rcv_state_process']<700, tcp['tcp_rcv_state_process']
-print('P1_TWO_HOT=FRAME_AUDIT_PASS exactly_two_source_owners=true')
-PY_TWO_HOT_FRAMES
-fi
 if [[ "$single_owner" == 1 ]]; then
   # The instrumentation prints to a per-TU stderr file, not replay.log.
   stderr="$out/net/ipv6/ip6_output.minic-stage2.minic.stderr"
@@ -194,7 +144,7 @@ for line in (ev/"minic-manifest.sha256").read_text().splitlines():
     else:
         assert actual==digest, "unrelated MiniC owner changed: "+target
         untouched += 1
-assert matched in (1,2,4) and untouched==2064-matched
+assert matched in (1,4) and untouched==2064-matched
 print(f"P1_DEFINED_CROSSBLOCK=POOL_ISOLATED changed_targets={matched} original_neighbors={untouched}")
 PY_VERIFY
 export COHORT_P1_EXPERIMENTAL_POOL="$dest/pool/minic"
@@ -283,9 +233,7 @@ PY_IRQ_ATTRIBUTION
     echo "P1_DEFINED_CROSSBLOCK_GDB=INCONCLUSIVE no_P1_pass_inference=true"
   fi
 fi
-if [[ "$two_hot" == 1 ]]; then
-  echo "P1_TWO_HOT=COMPLETE modified_minic=2 original_minic=2062 gcc_owners=0 passes=$passes failures=$((3-passes)) image=$pinned experimental_only=true not_promoted=true"
-elif [[ "$single_owner" == 1 ]]; then
+if [[ "$single_owner" == 1 ]]; then
   echo "P1_DEFINED_CROSSBLOCK=COMPLETE modified_minic=1 gcc_owners=1 minic_owners=2063 passes=$passes failures=$((3-passes)) image=$pinned experimental=true not_promoted=true"
 else
   echo "P1_DEFINED_CROSSBLOCK=COMPLETE modified_minic=4 gcc_owners=0 minic_owners=2064 passes=$passes failures=$((3-passes)) image=$pinned experimental=true not_promoted=true"

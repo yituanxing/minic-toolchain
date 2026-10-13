@@ -155,10 +155,7 @@ one(
     "        const char *focus = getenv(\"MINIC_P1_CROSSBLOCK_FUNCTION\");\n"
     "        p1_crossblock_current_function_enabled =\n"
     "            focus == NULL || focus[0] == 0 ||\n"
-    "            strcmp(focus, symbol_name) == 0 ||\n"
-    "            (strcmp(focus, \"p1_two_hot\") == 0 &&\n"
-    "             (strcmp(symbol_name, \"ip6_finish_output2\") == 0 ||\n"
-    "              strcmp(symbol_name, \"tcp_rcv_state_process\") == 0));\n"
+    "            strcmp(focus, symbol_name) == 0;\n"
     "    }\n"
     "    if (!core_frame_initialize(program, function, &frame)) {",
     "function_scope_set_before_frame",
@@ -166,16 +163,3 @@ one(
 
 path.write_text(s)
 print("P1_DEFINED_BEFORE_USE_CROSSBLOCK_V1=APPLIED opt_in=true")
-
-# Apply a separate, already-measured semantically pure optimization ONLY
-# for this exact temporary 2-owner high-ROI experiment. Canonical profile
-# and all other branches remain unmodified after this experiment is reverted.
-import subprocess
-if "[linux-runtime-p1-two-hot-cfg]" in subprocess.check_output(
-    ["git", "log", "-1", "--format=%B"], text=True
-):
-    subprocess.run(
-        ["python3", "tools/ci/apply-p1-pure-discarded-local-address-equality-v1.py"],
-        check=True,
-    )
-    print("P1_TWO_HOT=COMBINED cfg_scratch_and_effect_free_discard")

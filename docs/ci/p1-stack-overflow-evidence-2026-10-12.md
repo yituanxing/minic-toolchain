@@ -984,3 +984,68 @@ A mere 48-byte integer no-spill expansion is quantitatively
 lower ROI. The two-owner 3328-byte safe dead-comparison cleanup
 is individually useful but demonstrably insufficient for 16KiB P1
 on its own, as verified by #38342452095.
+
+
+## Two-owner stacked high-ROI CFG scratch + pure-dead-compare — 2026-10-13
+
+CI **#38344464421** (artifact **11787844020**) performed exactly
+two selective Linux TU recompiles, `net/ipv6/ip6_output.o` and
+`net/ipv4/tcp_input.o`, on the original **16KiB stack** kernel,
+retaining 2062 original authenticated MiniC C objects and **no GCC C
+objects**. Compiler codegen was modified **only temporarily** by the
+existing strict pure-discarded-local-address equality elimination and
+the existing first-write CFG-cross-block slot-sharing experiment,
+explicitly scoped by function name to
+`ip6_finish_output2` and `tcp_rcv_state_process`. All other functions
+kept canonical CFG slot allocation. The chosen candidate classes are
+small scalar, nonescaping, direct LOAD/STORE in one block, first actual
+access a write; do not assume this heuristic is generally correct
+without independent semantic testing. No Workflow or branch was added.
+
+Frame measurements from actual emitted per-TU `CORE_FRAME_REUSE`
+stderr, not guesses from deleted source expressions:
+
+| Function | MiniC baseline | Combined candidate | Reduction |
+| --- | ---: | ---: | ---: |
+| `ip6_finish_output2` | 4064 B | **432 B** | **3632 B** |
+| `ip6_xmit` | 2288 B | **1520 B** | **768 B** |
+| `tcp_rcv_state_process` | 1776 B | **224 B** | **1552 B** |
+| `tcp_conn_request` | 1312 B | **1184 B** | **128 B** |
+| **Isolated frame delta sum** | | | **6080 B** |
+
+The 6080-byte sum is NOT a real simultaneously resident stack budget:
+TX `ip6_xmit` and RX `tcp_rcv_state_process` need not coexist on
+the same nested call path. Both modified C objects passed ELF-ABI and
+original-2062-object SHA isolation checks. Normal, **non-GDB** QEMU
+P1 boots on ONE identical experimental Image
+`459d04055f4220c59155c3b43b84a64c1cf3e930faba67baa1a4cc5938f0f57e`
+were **FAIL / FAIL / FAIL (0/3)**:
+* Boot 1: IPv6 `child-connect`, IRQ-stack guard overflow SP
+  `0xff1ffffffffff0` (16 B below previously verified IRQ base);
+  final site `update_vsyscall` → timekeeper helper.
+* Boots 2–3: IPv6 `child-write`, same IRQ-stack boundary SP,
+  near `__raw_spin_lock_irqsave`. The new Image was **not**
+  independently GDB-attested, so site classification is corroborated
+  against the earlier measured CPU0 IRQ-stack base, not a fresh
+  in-situ unwind.
+* Baseline unchanged 2064-MiniC P1 still failed at original
+  **task-stack** guard, as expected.
+
+GitHub job was **green only because the diagnostic completed**.
+This is NOT a 16KiB P1 compiler fix, not proof of semantic safety for
+CFG slot sharing, and not a production optimization approval. This
+strongly constrains the assumption that these two owner units alone
+are sufficient: even large verified local frame reductions do not
+remove the remaining IRQ/network stack pressure in other TUs/callees.
+An initial run **#38344056961** was red solely because an optional
+`CORE_FRAME_COMPONENT` parser was used without its diagnostic
+instrumentation. The corrected run consumed emitted
+`CORE_FRAME_REUSE` records directly and completed correctly.
+
+**Decision:** no further speculative two-owner QEMU rounds. Preserve
+these large-ROI measurements, restore temporary scripts byte-for-byte,
+then investigate the **actual remaining IRQ stack call-depth frontier**
+(e.g., unchanged `tcp_v6_rcv`, `___slab_alloc`, `__alloc_pages`)
+before attempting a general compiler backend optimization. Prefer a
+semantic micro-test proof for CFG sharing first, not declaring success
+from a shrunk frame alone.
