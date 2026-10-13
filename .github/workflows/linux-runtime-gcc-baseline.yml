@@ -707,7 +707,7 @@ jobs:
           retention-days: 7
 
       - name: Install P1 RISC-V GDB debugger
-        if: contains(github.event.head_commit.message, '[linux-runtime-gdb-stack]') || contains(github.event.head_commit.message, '[linux-runtime-p1-pair-debug]')
+        if: contains(github.event.head_commit.message, '[linux-runtime-gdb-stack]') || contains(github.event.head_commit.message, '[linux-runtime-p1-pair-debug]') || contains(github.event.head_commit.message, '[linux-runtime-p1-sched-chain]')
         timeout-minutes: 5
         run: |
           sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 install -y --no-install-recommends gdb-multiarch
@@ -934,7 +934,8 @@ jobs:
           # Bare [linux-runtime-gcc-sharded] retains its original no-swap path.
           export COHORT_P1_STACK_OWNER_SWAPS=${{ (contains(github.event.head_commit.message, '[linux-runtime-stack-owners]') || (contains(github.event.head_commit.message, '[linux-runtime-gcc-sharded]') && contains(github.event.head_commit.message, '[linux-runtime-p1-defined-crossblock]'))) && '1' || '0' }}
           export COHORT_P1_IDENTICAL_IMAGE_REPEAT=${{ contains(github.event.head_commit.message, '[linux-runtime-repeat-image]') && '1' || '0' }}
-          export COHORT_P1_GDB_STACK=${{ contains(github.event.head_commit.message, '[linux-runtime-gdb-stack]') && '1' || '0' }}
+          export COHORT_P1_GDB_STACK=${{ (contains(github.event.head_commit.message, '[linux-runtime-gdb-stack]') || contains(github.event.head_commit.message, '[linux-runtime-p1-sched-chain]')) && '1' || '0' }}
+          export P1_GDB_SCHED_CHAIN=${{ contains(github.event.head_commit.message, '[linux-runtime-p1-sched-chain]') && '1' || '0' }}
           export COHORT_P1_MULTI_RESCUE=${{ contains(github.event.head_commit.message, '[linux-runtime-multi-rescue]') && '1' || '0' }}
           export COHORT_P1_MINIMIZE_RESCUE=${{ contains(github.event.head_commit.message, '[linux-runtime-rescue-minimize]') && '1' || '0' }}
           export COHORT_P1_PAIR_RESCUE=${{ contains(github.event.head_commit.message, '[linux-runtime-rescue-pairs]') && '1' || '0' }}
