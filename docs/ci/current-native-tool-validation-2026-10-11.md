@@ -1,5 +1,62 @@
 # Current native tool validation — 2026-10-11
 
+## 2026-10-13: linked-frame and prior-SIE proof — nested IRQ interrupts real IPv6 work
+
+**CI [#38373487464](https://github.com/yituanxing/minic-toolchain/actions/runs/38373487464)**
+at `6aa4acaa32c5eb4b41113dfaff6103cf2c048579`,
+using the immutable full 2064-MiniC pool with only the seven
+experimental owner objects regenerated, GNU linker and same-Image
+QEMU/GDB, yielded **P1 PASS/PASS/FAIL (2/3)** on Image
+SHA `357921a66058e44942ee0069dfdb4c11271e398ad03c84b764f13e9e1228968f`.
+The third run genuinely panicked in
+`__minic_inline_spec_1331_185+0x72`, caller `decay_load+0x36e`,
+with trapped `sp=ff1ffffffffffffe0`, **32 B below** the
+same-config measured CPU0 IRQ lower bound. The CI **correctly failed**.
+
+The separate **same Image**, GDB-perturbed observation successfully
+collected six nested `do_irq` saved `pt_regs` contexts.
+All six saved `sstatus=0x200000120`, with **SPIE=1**,
+i.e. supervisor interrupts were enabled *in the preempted context*.
+Six preempted function PCs were symbolized against the linked
+`vmlinux` and true emitted RV64 frames were extracted:
+
+| Saved EPC at nested IRQ | Original IRQ stack B left | Linked function frame B | Saved RA candidate |
+| --- | ---: | ---: | --- |
+| `__ipv6_addr_type+0xa0c` | 9792 | 416 | `ipv6_addr_type` |
+| `ip6_finish_output+0x10` | **7952** | 128 | inline helper 11434_197 |
+| `ip6_finish_output2+0x23ba` | **8096** | **2224** (candidate frame log; multi-insn prologue, parser returned -1) | itself; not a proven caller |
+| `debug_assert_init+0xe` | 9760 | 32 | `__try_to_del_timer_sync` |
+| `arch_local_irq_restore+0x8a` | 11440 | 48 | `__raw_spin_unlock_irqrestore` |
+| `tcp_v6_fill_cb+0x1ea` | 12208 | 112 | itself; not a proven caller |
+
+The source/object evidence already certified the precise seven-owner
+`ip6_finish_output2` reduction **4064 → 2224 B**; the very same
+runtime experiment still intermittently overflows. A *different*
+historical aggressive candidate reached **432 B** in this function,
+yet its two-owner P1 was **0/3**, so do not repeat that one-function
+shortcut without a better correctness/call-path argument.
+
+For each nested entry, `pt_regs.sp - do_irq_entry_sp = 288 B`;
+the read-only trace further measured 112 B to
+`handle_riscv_irq` and 640 B to
+`riscv_timer_interrupt`: **1040 B of stack gone before the new
+timer's hrtimer/PELT frames**. From the deepest observed
+preemption at 7952 B, the timer begins at only **6912 B**.
+These are directly measured and jointly explain why relatively small
+PELT leaf frames can be the final guard fault during IRQ preemption
+on a heavily used network/SLUB IRQ stack.
+This proves observed prior-SIE IRQ reentry, **not** by itself
+whether the kernel should have enabled IRQs there; still compare
+MiniC irqflags save/restore CSR semantics with GNU where needed.
+
+**Next high-value gate:** measure actual upstream stack use before
+`ip6_finish_output2` / `ip6_finish_output` / SLUB and save the
+specific frame components; test a bounded high-ROI owner change
+only after true call-chain contribution and semantic safety are
+demonstrated, using the existing seven-owner pool and incremental
+GNU relink. Do not optimize scheduler `decay_load` blindly.
+No new Workflow, branch, or global optimization promotion.
+
 ## 2026-10-13: saved EPC identifies exact preempted IRQ-stack functions
 
 Real same-Image read-only GDB [#38371693651](https://github.com/yituanxing/minic-toolchain/actions/runs/38371693651),
