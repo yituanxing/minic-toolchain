@@ -124,3 +124,27 @@ whitelist remains opt-in until both source-level lifetime proof and
 real runtime regression tests are green. Never silently promote
 unsafe CFG sharing globally or substitute GNU-compiled C objects
 into a claimed all-MiniC kernel.
+
+
+## 2026-10-13 qualification extension: independent GNU -O2 oracle
+
+[CI #38399395224](https://github.com/yituanxing/minic-toolchain/actions/runs/38399395224)
+at commit `ff3fe80a4c01405a4088844a9f111b22be0fc79a`:
+**SUCCESS** after restoring and hashing the same 2064-C MiniC frozen
+baseline and building the actual experimental Runtime compiler.
+
+The 1023-input, eight-function adversarial matrix now compares **four
+real RV64 implementations in one QEMU execution**, not merely three:
+GCC `-O0`, GCC `-O2`, stock-scope MiniC and opt-in modified MiniC.
+The actual log reports
+`P1_CFG_ADVERSARIAL=PASS vectors=1023 cases=8 oracles=4`.
+The existing 7-function, 255-input CFG checks and the independently
+optimized pure discarded-address comparisons also passed. This checks
+one more dimension of optimizer-sensitive behavior and reduces risk
+that a fixture accidentally depends on a single GCC optimization mode.
+
+**Still outstanding:** deterministic random CFG/alias seed corpus and
+its minimized failing reproducers; emitted frame-slot/lifetime witness
+audits for *all candidate* CoreObjects, and direct proof for
+`PARAMETER_OBJECT` on loop reentry. No global backend optimization
+has been enabled; no Linux image was rebuilt in this test.
