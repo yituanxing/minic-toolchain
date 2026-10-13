@@ -1,5 +1,70 @@
 # Current native tool validation — 2026-10-11
 
+## 2026-10-13: live same-Image IRQ/PELT function-entry call chain captured
+
+**This is the network-path method repeated on the scheduler path**, not
+a guess from the faulting EPC. The existing cached GNU/MiniC receiver
+[#38367779863](https://github.com/yituanxing/minic-toolchain/actions/runs/38367779863),
+commit `badd29087aa3d13bdb0233127a1243209b701b99`, restored the
+immutable 2064 MiniC pool, rebuilt **only seven** experimental owners,
+GNU-relinked once, ran 3 normal P1 boots and sampled the exact same
+Image with read-only perCPU IRQ GDB. Image SHA
+`bb313b0bded405a40fa9f31f78b24f89cd670c1f9440f319ec8ef3284e0c9620`.
+**Normal P1 was 2/3, NOT PASS** (first run faulted in
+`accumulate_sum+0x1c`, saved SP 96 bytes under the historical IRQ
+lower bound). GDB returned timeout 124 by design; it nevertheless
+**verified that same Image's** CPU0 IRQ stack base
+`ff20000000000000`, top `ff20000000004000`, and captured 400
+true entry-SP samples with 17 prologue sizes and immediate RA-parent
+symbols. The deepest GDB-sampled PELT entry had 3232 B remaining;
+the GDB run did NOT reproduce the normal QEMU fatal low-SP fault.
+
+One **actually observed chronological nesting path**, reporting
+**remaining IRQ bytes at each function entry before its prologue**,
+its exact emitted frame and caller RA (examples from samples 163–176):
+
+| Entry function | IRQ bytes left at entry | Its RV64 frame B | Direct caller |
+| --- | ---: | ---: | --- |
+| `riscv_timer_interrupt` | **6128** | not yet checked | `handle_riscv_irq` |
+| `hrtimer_interrupt` | 6064 | 224 | `riscv_timer_interrupt` |
+| `__hrtimer_run_queues` | 5840 | 160 | `hrtimer_interrupt` |
+| `__run_hrtimer` | 5680 | 144 | `__hrtimer_run_queues` |
+| `tick_sched_timer` | 5536 | 144 | `__run_hrtimer` |
+| `tick_sched_handle` | 5392 | 80 | `tick_sched_timer` |
+| `update_process_times` | 5312 | 64 | `tick_sched_handle` |
+| `scheduler_tick` | 5248 | 208 | `update_process_times` |
+| `task_tick_fair` | 5040 | 176 | `scheduler_tick` |
+| `entity_tick` | 4864 | 112 | `task_tick_fair` |
+| `update_curr` | 4752 | 160 | `entity_tick` |
+| `___update_load_sum` | 4480 | 208 | `__update_load_avg_se` |
+| `accumulate_sum` | 4272 | 224 | `___update_load_sum` |
+| `decay_load` | 4048 | 144 | `accumulate_sum` |
+| `__minic_inline_spec_1331_185` | 3904 | 112 | `decay_load` |
+
+There are other calls interleaved (e.g. `update_rq_clock` at 5040 B)
+and the `update_curr→___update_load_sum` segment has an
+unsampled intermediate `__update_load_avg_se` (128 B); therefore
+**the table is a sampled nested path with named intervening calls,
+not a claim that every consecutive row is a direct call**.
+
+**The big missing contributor is upstream, before
+`riscv_timer_interrupt`**: its entry already has just **6128 B**,
+meaning **10256 B were consumed before that timer handler even began**.
+The exact same GDB log records most timer entries at **15744 B**
+remaining, but some at **6128 B, 7632 B, 9168 B**, raising a strong
+hypothesis of a timer IRQ arriving while an earlier IRQ stack is
+already deep. This is **not yet proof of IRQ reentry**: the original
+diagnostic disables further `handle_riscv_irq` breakpoints after the
+first IRQ. The proper next probe is a strictly low-stack-gated
+`handle_riscv_irq` / `riscv_timer_interrupt` entry trace to determine
+why a new timer handler started with 10 KiB of IRQ stack already used.
+Do NOT optimize `accumulate_sum` just because it is where the guard
+faults, and do not claim GDB execution is an ordinary P1 PASS.
+
+Original evidence file in the same CI artifact:
+`p1-gdb-stack-experiment/scheduler-chain.tsv`, with 400 rows,
+entry SP, IRQ bytes remaining, emitted frame bytes and caller symbol.
+
 ## 2026-10-13: the historical frozen 2064 pool ALSO fails (21/24)
 
 Actual cached-pool CI [#38364678533](https://github.com/yituanxing/minic-toolchain/actions/runs/38364678533)
