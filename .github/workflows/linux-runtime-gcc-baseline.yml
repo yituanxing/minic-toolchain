@@ -1140,8 +1140,14 @@ jobs:
             }
             test -s "$NATIVE_TRACE_DIR/miniar.trace"
             test -s "$NATIVE_TRACE_DIR/miniobjcopy.trace"
+            minic_ar_calls=$(grep -c '^miniar ' "$NATIVE_TRACE_DIR/miniar.trace" || true)
+            gnu_mpit_calls=$(grep -c '^gnu-ar-fallback-mPiT ' "$NATIVE_TRACE_DIR/miniar.trace" || true)
+            [[ "$minic_ar_calls" -gt 0 && "$gnu_mpit_calls" -gt 0 ]] || {
+              echo "NATIVE_UNION=FAIL expected_MiniAR_and_explicit_GNU_mPiT_fallback" >&2
+              exit 22
+            }
             test "$(grep -c '^minild ' "$NATIVE_TRACE_DIR/minild.trace")" -ge 3
-            echo "NATIVE_UNION_RESULT=PASS pp=GNU minic=2064 from_cache ar=MiniAR ld=MiniLD_final_only objcopy=MiniObjcopy runtime=P1"
+            echo "NATIVE_UNION_RESULT=PASS pp=GNU minic=2064 from_cache ar=MiniAR_plus_GNU_mPiT ar_native_calls=$minic_ar_calls ar_fallback_calls=$gnu_mpit_calls ld=MiniLD_final_only objcopy=MiniObjcopy runtime=P1"
           fi
 
       - name: Preserve aggregate link, QEMU and failure-frontier evidence
