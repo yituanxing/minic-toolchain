@@ -84,7 +84,12 @@ done
 case "${output##*/}" in
   .tmp_vmlinux.kallsyms1|.tmp_vmlinux.kallsyms2|vmlinux)
     { flock 9; printf 'minild'; printf ' %q' "$@"; printf '\n'; } 9>>"$NATIVE_TRACE_DIR/minild.trace" >&9
-    exec "$MINILD" "$@" ;;
+    start_ms=$(date +%s%3N)
+    status=0
+    "$MINILD" "$@" || status=$?
+    elapsed_ms=$(($(date +%s%3N) - start_ms))
+    { flock 9; printf 'minild\t%s\t%s\t%s\n' "$elapsed_ms" "$status" "$output"; } 9>>"$NATIVE_TRACE_DIR/minild-times.tsv" >&9
+    exit "$status" ;;
   *)
     { flock 9; printf 'gnu-ld'; printf ' %q' "$@"; printf '\n'; } 9>>"$NATIVE_TRACE_DIR/minild.trace" >&9
     exec /usr/bin/riscv64-linux-gnu-ld "$@" ;;
@@ -100,6 +105,7 @@ SH_COPY
 chmod +x "$ev/"{ar-wrapper,ld-wrapper,objcopy-wrapper}
 : >"$ev/miniar.trace"
 : >"$ev/minild.trace"
+: >"$ev/minild-times.tsv"
 : >"$ev/miniobjcopy.trace"
 printf 'NATIVE_UNION=WRAPPERS_READY ar=%s ld=%s objcopy=%s pp=GNU gcc_c=none as=GNU\n' \
   "$MINIAR" "$MINILD" "$MINIOBJCOPY"
