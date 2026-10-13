@@ -80,8 +80,9 @@ python3 "$repo/tools/ci/linux-runtime-minic-route-audit-v1.py" \
   --object-digest-trace "$dest/candidates.sha256" \
   --candidates "$out" >"$dest/route-audit.log"
 if [[ "$two_hot" == 1 ]]; then
-  # Keep the existing parser one-TU-at-a-time: multi-TU combined reports
-  # can contain legitimate duplicate header-inline function names.
+  # This lane instruments CORE_FRAME_REUSE only; the richer COMPONENT
+  # output requires a separate CI tag/rebuild. Read actual measured frame
+  # sizes, not a mismatched COMPONENT parser. No additional instrumentation.
   for item in ip6_output tcp_input; do
     if [[ "$item" == ip6_output ]]; then
       stderr="$out/net/ipv6/ip6_output.minic-stage2.minic.stderr"
@@ -89,30 +90,30 @@ if [[ "$two_hot" == 1 ]]; then
       stderr="$out/net/ipv4/tcp_input.minic-stage2.minic.stderr"
     fi
     [[ -s "$stderr" ]] || { echo "P1_TWO_HOT=ERROR missing_stderr=$item"; exit 8; }
-    grep -E '^CORE_FRAME' "$stderr" >"$dest/$item-frame.log" || exit 8
-    python3 "$repo/tools/ci/linux-runtime-p1-frame-component-parse-v1.py" \
-      "$dest/$item-frame.log" "$dest/$item-components.tsv" "$dest/$item-objects.tsv"
+    grep '^CORE_FRAME_REUSE ' "$stderr" >"$dest/$item-frame.log" || exit 8
   done
-  python3 - "$dest/ip6_output-components.tsv" "$dest/tcp_input-components.tsv" <<'PY_TWO_HOT_FRAMES'
-import csv,sys
-def load(path):
-    with open(path) as f:
-        return {r['function']:r for r in csv.DictReader(f, delimiter='\t')}
-ip6,tcp=map(load,sys.argv[1:])
-baseline={
-    'ip6_finish_output2':4064,
-    'ip6_xmit':2288,
-    'tcp_rcv_state_process':1776,
-    'tcp_conn_request':1312,
-}
-current={**ip6,**tcp}
-for name, original in baseline.items():
-    new=int(current[name]['frame_bytes'])
+  python3 - "$dest/ip6_output-frame.log" "$dest/tcp_input-frame.log" <<'PY_TWO_HOT_FRAMES'
+from pathlib import Path
+import re,sys
+def frames(path):
+    result={}
+    for line in Path(path).read_text().splitlines():
+        m=re.match(r'CORE_FRAME_REUSE function=(\S+) frame=(\d+) ',line)
+        if m: result[m.group(1)]=int(m.group(2))
+    return result
+ip6,tcp=map(frames,sys.argv[1:])
+for name,original,table in [
+    ('ip6_finish_output2',4064,ip6),
+    ('ip6_xmit',2288,ip6),
+    ('tcp_rcv_state_process',1776,tcp),
+    ('tcp_conn_request',1312,tcp),
+]:
+    new=table[name]
     print(f'P1_TWO_HOT=FRAME function={name} baseline={original} candidate={new} saving={original-new}')
-    assert new>0 and new<=original, f'frame unexpectedly grew: {name}'
-assert int(ip6['ip6_finish_output2']['frame_bytes']) < 2500
-assert int(tcp['tcp_rcv_state_process']['frame_bytes']) < 700
-print('P1_TWO_HOT=FRAME_AUDIT_PASS all_source_owners_measured=true')
+    assert 0<new<=original, f'unexpected_growth {name}'
+assert ip6['ip6_finish_output2']<2500, ip6['ip6_finish_output2']
+assert tcp['tcp_rcv_state_process']<700, tcp['tcp_rcv_state_process']
+print('P1_TWO_HOT=FRAME_AUDIT_PASS exactly_two_source_owners=true')
 PY_TWO_HOT_FRAMES
 fi
 if [[ "$single_owner" == 1 ]]; then
