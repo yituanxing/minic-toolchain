@@ -13,6 +13,7 @@ rx_bundle=0
 rx_bundle_page=0
 rx_bundle_dev=0
 rx_bundle_timer=0
+rx_bundle_neigh=0
 if [[ "$single_owner" != 1 && "${COHORT_P1_DISCARD_EQ:-0}" != 1 ]] &&
   git -C "$repo" log -1 --format=%B | grep -Fq '[linux-runtime-p1-rx-bundle-timer]'; then
   rx_bundle=1
@@ -21,6 +22,15 @@ if [[ "$single_owner" != 1 && "${COHORT_P1_DISCARD_EQ:-0}" != 1 ]] &&
   rx_bundle_timer=1
   unset MINIC_P1_CROSSBLOCK_FUNCTION
   echo "P1_RX_BUNDLE_TIMER=START owners=7 sixth_net_dev_preserved=true timer_owner=kernel/time/hrtimer.o repeats=6"
+  # The 2026-10-13 IRQ/IPv6 preemption trace proves that improving only
+  # the timer/PELT leaf is insufficient. Experiment with the already-known
+  # 3024-B __neigh_create() frame as ONE additional RV64 C owner. Keep the
+  # seven prior experimental owners, original 2056 neighbour .o hashes,
+  # Kbuild flags and full-MiniC object provenance unchanged.
+  if git -C "$repo" log -1 --format=%B | grep -Fq '[linux-runtime-p1-neighbour-owner]'; then
+    rx_bundle_neigh=1
+    echo "P1_RX_NEIGH=START owners=8 newly_selected=net/core/neighbour.o 2064_frozen_pool=true 12_same_image_boots=true"
+  fi
 fi
 if [[ "$single_owner" != 1 && "${COHORT_P1_DISCARD_EQ:-0}" != 1 ]] &&
   git -C "$repo" log -1 --format=%B | grep -Fq '[linux-runtime-p1-rx-bundle-dev]'; then
@@ -82,6 +92,9 @@ mm/page_alloc.o
 net/core/dev.o
 kernel/time/hrtimer.o
 OWNERS_BUNDLE
+if [[ "$rx_bundle_neigh" == 1 ]]; then
+  printf '%s\n' net/core/neighbour.o >>"$dest/selected.txt"
+fi
 elif [[ "$rx_roi" == 1 ]]; then
   cat >"$dest/selected.txt" <<'OWNERS_RX'
 net/ipv6/tcp_ipv6.o
@@ -107,7 +120,7 @@ from pathlib import Path
 import sys
 a,b=map(Path,sys.argv[1:])
 names=a.read_text().splitlines()
-assert len(names) in (1,4,5,6,7) and len(set(names))==len(names)
+assert len(names) in (1,4,5,6,7,8) and len(set(names))==len(names)
 assert set(names)<=set(b.read_text().splitlines())
 print(f"P1_DEFINED_CROSSBLOCK=SELECTED owners={len(names)}")
 PY_SET
@@ -116,7 +129,7 @@ printf 'compiler_sha256=%s\n' "$(sha256sum "$minic"|cut -d' ' -f1)" >"$dest/prov
 rm -rf -- "$out"
 cp -a --reflink=auto "$gold_snapshot" "$out"
 COHORT_FRAME_CAPTURE_ONLY="$(if [[ "$rx_roi" == 1 || "$rx_bundle" == 1 ]]; then echo 1; else echo "$single_owner"; fi)" MINIC_CORE_FRAME_TRACE=1 \
-MINIC_CORE_FRAME_TRACE_FILTER="$(if [[ "$rx_roi" == 1 || "$rx_bundle" == 1 ]]; then echo 'ip6_finish_output2,ip6_xmit,tcp_v6_rcv,tcp_v6_do_rcv,tcp_conn_request,tcp_rcv_state_process,___slab_alloc,net_rx_action,process_backlog,__dev_queue_xmit,hrtimer_interrupt,__hrtimer_run_queues,__run_hrtimer,hrtimer_run_softirq'; else echo 'ip6_finish_output2,ip6_xmit'; fi)" \
+MINIC_CORE_FRAME_TRACE_FILTER="$(if [[ "$rx_roi" == 1 || "$rx_bundle" == 1 ]]; then echo 'ip6_finish_output2,ip6_xmit,tcp_v6_rcv,tcp_v6_do_rcv,tcp_conn_request,tcp_rcv_state_process,___slab_alloc,net_rx_action,process_backlog,__dev_queue_xmit,hrtimer_interrupt,__hrtimer_run_queues,__run_hrtimer,hrtimer_run_softirq,__neigh_create'; else echo 'ip6_finish_output2,ip6_xmit'; fi)" \
 python3 "$repo/tools/ci/linux-runtime-kbuild-regeneration-guard-v1.py" \
   --mode replay --out "$out" --golden-out "$gold_snapshot" \
   --evidence "$dest/replay-evidence.json" --selected "$dest/selected.txt" \
@@ -208,7 +221,7 @@ for line in (ev/"minic-manifest.sha256").read_text().splitlines():
     else:
         assert actual==digest, "unrelated MiniC owner changed: "+target
         untouched += 1
-assert matched in (1,4,5,6,7) and untouched==2064-matched
+assert matched in (1,4,5,6,7,8) and untouched==2064-matched
 print(f"P1_DEFINED_CROSSBLOCK=POOL_ISOLATED changed_targets={matched} original_neighbors={untouched}")
 PY_VERIFY
 if [[ "$rx_roi" == 1 ]]; then
@@ -288,6 +301,27 @@ for name in focus:
     print(f"P1_RX_BUNDLE_DEV=FRAME function={name} candidate_frame={rows.get(name,'missing')}")
 assert sum(name in rows for name in focus)>=2,"missing receive/transmit focus"
 PY_DEV_AUDIT
+    if [[ "$rx_bundle_neigh" == 1 ]]; then
+      # Fail before kernel relink if the new object does not buy meaningful
+      # stack. Earlier same-profile __neigh_create measured 3024 B; the new
+      # backend value must actually shrink by >=512 B, as emitted by MiniC.
+      python3 - "$out/net/core/neighbour.minic-stage2.minic.stderr" "$dest" <<'PY_NEIGH_ROI'
+from pathlib import Path
+import re,sys
+log,dest=Path(sys.argv[1]),Path(sys.argv[2])
+if not log.is_file(): raise SystemExit("P1_RX_NEIGH=FAIL missing_new_owner_stderr")
+contents=log.read_text(errors="replace")
+pairs=dict((x.group(1),int(x.group(2))) for x in re.finditer(
+    r'^CORE_FRAME_REUSE function=(\S+) frame=(\d+)\b',contents,re.M))
+original=3024
+frame=pairs.get("__neigh_create")
+if frame is None or frame <= 0 or frame > original-512:
+    raise SystemExit(f"P1_RX_NEIGH=NO_ROI baseline={original} candidate={frame} min_saving=512 abort_before_link=1")
+(dest/"neighbour-frame.tsv").write_text(
+    f"owner\tfunction\tbaseline_frame\tcandidate_frame\tsaving\nnet/core/neighbour.o\t__neigh_create\t{original}\t{frame}\t{original-frame}\n")
+print(f"P1_RX_NEIGH=FRAME_PASS function=__neigh_create baseline={original} candidate={frame} saved={original-frame} original_objects_frozen=2056")
+PY_NEIGH_ROI
+    fi
     if [[ "$rx_bundle_timer" == 1 ]]; then
       python3 - "$out/kernel/time/hrtimer.minic-stage2.minic.stderr" <<'PY_TIMER'
 from pathlib import Path
@@ -417,12 +451,12 @@ fi
 # publish full evidence, then fail the job if even one actual P1 run failed.
 # Do not allow a green job to be mistaken for 12/12 guest certification.
 if [[ "$rx_bundle_timer" == 1 ]]; then
-  echo "P1_RX_BUNDLE_TIMER=COMPLETE owners=7 frozen_minic=2057 gcc_owners=0 passes=$passes failures=$((repeats-passes)) attempts=$repeats image_sha=$pinned experimental_not_promoted=true"
+  echo "P1_RX_BUNDLE_TIMER=COMPLETE owners=$((7+rx_bundle_neigh)) frozen_minic=$((2057-rx_bundle_neigh)) gcc_owners=0 passes=$passes failures=$((repeats-passes)) attempts=$repeats image_sha=$pinned experimental_not_promoted=true"
   if [[ "$passes" -ne "$repeats" ]]; then
     echo "P1_RX_BUNDLE_TIMER=FAIL require_all_P1_PASS actual=$passes expected=$repeats image_sha=$pinned" >&2
     exit 8
   fi
-  echo "P1_RX_BUNDLE_TIMER=ACCEPTED owners=7 p1=$passes/$repeats same_image_sha=$pinned"
+  echo "P1_RX_BUNDLE_TIMER=ACCEPTED owners=$((7+rx_bundle_neigh)) p1=$passes/$repeats same_image_sha=$pinned experimental_not_promoted=true"
 elif [[ "$rx_bundle_dev" == 1 ]]; then
   echo "P1_RX_BUNDLE_DEV=COMPLETE owners=6 frozen_minic=2058 gcc_owners=0 passes=$passes failures=$((repeats-passes)) attempts=$repeats image_sha=$pinned experimental_not_promoted=true"
 elif [[ "$rx_bundle_page" == 1 ]]; then
