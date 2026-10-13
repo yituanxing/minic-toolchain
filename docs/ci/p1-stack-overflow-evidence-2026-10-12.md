@@ -789,3 +789,43 @@ through loops, joins, pointer uses, or inlined control flow.
 The opt-in diagnostic script was restored BYTE-FOR-BYTE to its
 original Git blob after collecting the result. No branch
 proliferation, new workflow, or permanent test harness change.
+
+
+## Straight-line integer RHS / no-spill proof of concept — 2026-10-13
+
+The existing opt-in experimental compiler patch was extended TEMPORARILY
+to avoid `spill_scalar_value()` plus `reload_scalar_value()` in
+`lower_integer_binary_operands()` **only** when the RHS is an integer
+literal or a plain local lvalue, inside the two named TCP functions.
+Evaluation order remains left-then-right and an explicit guard rejects
+any unexpected Core block change. Unrecognized/CFG-creating RHS keeps
+the prior spill path. The older discarded-equality optimization was
+explicitly disabled for this experiment.
+
+CI **#38340664131**, artifact **11786168992**, exact frozen 16KiB Linux
+pool of 2064 C objects. One TCP owner was initially recompiled, with
+2063 original MiniC owners SHA-attested and unchanged in the isolated
+overlay; later link/header reconciliation replayed its own required
+dependencies with the same MiniC toolchain.
+
+| Function | Original MiniC frame | Candidate frame | Reduction |
+| --- | ---: | ---: | ---: |
+| `tcp_conn_request` | 1312 B | 1312 B | 0 B |
+| `tcp_rcv_state_process` | 1776 B | 1728 B | 48 B |
+
+All **three** regular non-GDB QEMU P1 boots of the same candidate Image
+SHA `bdb3dac8aac6c259262d5b7cec86d78bba07d4dc84dcd41e1bfb5f22623d883c`
+**failed** (0/3); the pre-experiment all-MiniC 16KiB control also
+failed, as expected. The overall GitHub workflow was green because
+its *diagnostic harness* correctly completed, **not** because P1
+passed. This is an isolated measurement only, not a correctness or
+runtime certification of the new lowering.
+
+**Decision:** this extremely narrow transformation did not meaningfully
+reduce the multi-kilobyte receiving stack frontier and did not rescue
+16KiB P1. Do not merge/promote it; return the opt-in scripts to their
+original exact blobs. For any subsequent generalization, first prove
+a CFG-free RHS (not just integer typed), semantic C evaluation-order
+and observable volatile/asm behavior, and validate on focused compiler
+tests before a full P1 link. No new branch/workflow/production compiler
+changes were needed.
