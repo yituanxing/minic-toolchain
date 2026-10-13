@@ -84,7 +84,7 @@ case "${output##*/}" in
     { flock 9; printf 'minild'; printf ' %q' "$@"; printf '\n'; } 9>>"$NATIVE_TRACE_DIR/minild.trace" >&9
     start_ms=$(date +%s%3N)
     status=0
-    "$MINILD" "$@" || status=$?
+    MINILD_PROFILE_PHASES=1 "$MINILD" "$@" || status=$?
     elapsed_ms=$(($(date +%s%3N) - start_ms))
     { flock 9; printf 'minild\t%s\t%s\t%s\n' "$elapsed_ms" "$status" "$output"; } 9>>"$NATIVE_TRACE_DIR/minild-times.tsv" >&9
     exit "$status" ;;
