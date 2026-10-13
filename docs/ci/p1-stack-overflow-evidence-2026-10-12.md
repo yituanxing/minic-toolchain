@@ -588,3 +588,59 @@ evidence for any one of those mechanisms. The next diagnostic must
 measure the branch decision and stack pointer **at IRQ entry**, and
 track returns, before altering MiniC's inline-assembly handling or
 loosening CoreObject lifetime analysis.
+
+
+## Frozen receive-path Core frame replay — 2026-10-13
+
+CI **#38335183624**, artifact **11784965453**. The pre-existing
+frame-capture lane recompiled exactly four owners with the original
+diagnostic-only MiniC profile: `net/ipv6/tcp_ipv6.o`,
+`net/ipv4/tcp_input.o`, `mm/slub.o`, `mm/page_alloc.o`.
+Every replayed object was **byte-identical** to its frozen counterpart.
+**No Linux Image was linked, no QEMU runtime test was performed.**
+
+Frame sizes from the replay's `CORE_FRAME_REUSE` compiler records:
+
+| Function | Frozen MiniC RV64 frame |
+| --- | ---: |
+| `tcp_v6_rcv` | 1760 B |
+| `tcp_v6_do_rcv` | 1104 B |
+| `tcp_rcv_state_process` | 1776 B |
+| `tcp_v6_conn_request` | 352 B |
+| `tcp_conn_request` | 1312 B |
+| `__slab_alloc` | 128 B |
+| `___slab_alloc` | 976 B |
+| `new_slab` | 160 B |
+| `__alloc_pages` | 352 B |
+| `__alloc_pages_slowpath` | 1024 B |
+
+Detailed `CORE_FRAME_COMPONENT` records attribute **1232/1312 B**
+of `tcp_conn_request`, **304/352 B** of `tcp_v6_conn_request`,
+**112/160 B** of `new_slab`, and **272/352 B** of
+`__alloc_pages` to the CoreObject region. On these verified functions
+the non-SSA object area, not SSA spill bytes, dominates.
+
+**Audit tooling limitation:** the overall job is **RED**, *not*
+because MiniC compilation or SHA comparison failed, but because the
+legacy report parser keys functions by *unqualified symbol name*
+across four TUs. Identically named header helpers, notably
+`alloc_pages`, yield `ValueError: duplicate header: alloc_pages`.
+The explicit per-function trace lines above are nevertheless saved
+in `p1-frame-components/replay.log` and the four SHA checks passed.
+The aggregate parsed report did NOT pass and is not claimed certified.
+
+The same-Image IRQ stack dump from #38333385948 contains aligned
+code-address *candidates* near `tcp_v6_rcv`, `tcp_v6_do_rcv`,
+`tcp_rcv_state_process`, `tcp_v6_conn_request`,
+`tcp_conn_request`, `__slab_alloc`, `new_slab` and
+`__alloc_pages` in a plausible top-to-bottom order. These are not
+authenticated unwinds; their simultaneous activity and precise
+stack-frame summation have NOT been proven. This narrows priority to
+the receive-to-slab stack budget. Do not infer a broken ABI or
+promote speculative cross-block slot reuse from this audit alone.
+
+**Repository hygiene:** original diagnostic script is restored exactly,
+no new branch/Workflow, no production MiniC changes, no extra runtime
+build. Next targeted work: establish an **actual** sampled nested
+call/stack-depth frontier or compare GNU/MiniC frame budgets for a
+specific expensive receive-path function before proposing a fix.
