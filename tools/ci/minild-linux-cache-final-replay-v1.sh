@@ -3,6 +3,8 @@
 # Input objects are an existing SHA-pinned, QEMU-certified GNU Kbuild cache.
 # This is *not* a replacement for the 2064-MiniC-object runtime proof.
 # performance oracle trigger: reuse GNU Kbuild cache for ONLY one MiniLD link.
+# qsort speed trial: run the same ELF fixture after fixing both quadratic
+# file-order and linker-script pattern sort, requiring matching ELF properties.
 set -Eeuo pipefail
 if [[ $# != 3 ]]; then
   echo "usage: $0 <gnu-kbuild-out> <minild-build-dir> <evidence-dir>" >&2
