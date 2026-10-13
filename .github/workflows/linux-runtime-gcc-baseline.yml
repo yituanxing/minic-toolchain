@@ -1164,6 +1164,7 @@ jobs:
             build/linux-runtime-gcc-cohort-v1/gcc-preflight.log
             build/linux-runtime-gcc-cohort-v1/results.tsv
             build/linux-runtime-gcc-cohort-v1/native-union/*.trace
+            build/linux-runtime-gcc-cohort-v1/native-union/*.tsv
             build/linux-runtime-gcc-cohort-v1/native-union/tools.sha256
             build/linux-runtime-gcc-cohort-v1/native-union/*-wrapper
             build/linux-runtime-gcc-cohort-v1/frontier.txt
