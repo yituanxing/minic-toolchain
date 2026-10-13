@@ -157,4 +157,4 @@ run_profile fast 75
 run_profile shell 90
 run_profile p1 90
 test "$(sha256sum "$image" | cut -d' ' -f1)" = "$expected_sha"
-echo "LARGE_IMAGE_RUNTIME=PASS fast=1 p1=12_syscalls shell=1 same_original_image=true"
+echo "LARGE_IMAGE_RUNTIME=PASS fast=1 p1=12_syscalls shell=1 same_original_image=true source_run=$source_run sha256=$actual_sha"
