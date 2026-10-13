@@ -6,6 +6,14 @@ set -Eeuo pipefail
 [[ -n "$minic" && -n "$gold_snapshot" && -n "$ev" && -n "$out" ]] || exit 8
 [[ "$n" -eq 2064 ]] || { echo "P1_DEFINED_CROSSBLOCK=ERROR object_count"; exit 8; }
 single_owner="${COHORT_P1_SINGLE_OWNER:-0}"
+# Exact opt-in: eliminate ONLY effect-free discarded address comparisons in
+# all functions of ONE IPv6 TU, using the existing semantic guard. Reuse
+# the certified original MiniC objects for the other 2063 owners.
+all_pure=0
+if [[ "$single_owner" == 1 && "${COHORT_P1_DISCARD_EQ_BOTH:-0}" == 1 ]] &&
+    git -C "$repo" log -1 --format=%B | grep -Fq '[linux-runtime-p1-ip6-allpure]'; then
+  all_pure=1
+fi
 if [[ "$single_owner" == 1 ]]; then
   # Preserve old codegen in every function except one suspect frame;
   # only ip6_finish_output2 is permitted to use the experimental allocator.
@@ -13,8 +21,13 @@ if [[ "$single_owner" == 1 ]]; then
     # Test semantic removal of genuinely discarded (&a == &b) with two
     # local variables; do not touch stack slot reuse in this experiment.
     if [[ "${COHORT_P1_DISCARD_EQ_BOTH:-0}" == 1 ]]; then
-      export MINIC_P1_DISCARD_EQ_FUNCTION=ip6_pair
-      echo "P1_DISCARD_EQ=FUNCTION_RESTRICTED names=ip6_finish_output2,ip6_xmit"
+      if [[ "$all_pure" == 1 ]]; then
+        export MINIC_P1_DISCARD_EQ_FUNCTION=""
+        echo "P1_DISCARD_EQ=IP6_ALL_PURE owner=net/ipv6/ip6_output.o effect_free_discards_only=true"
+      else
+        export MINIC_P1_DISCARD_EQ_FUNCTION=ip6_pair
+        echo "P1_DISCARD_EQ=FUNCTION_RESTRICTED names=ip6_finish_output2,ip6_xmit"
+      fi
     else
       export MINIC_P1_DISCARD_EQ_FUNCTION=ip6_finish_output2
       echo "P1_DISCARD_EQ=FUNCTION_RESTRICTED name=ip6_finish_output2"
@@ -52,7 +65,7 @@ printf 'compiler_sha256=%s\n' "$(sha256sum "$minic"|cut -d' ' -f1)" >"$dest/prov
 rm -rf -- "$out"
 cp -a --reflink=auto "$gold_snapshot" "$out"
 COHORT_FRAME_CAPTURE_ONLY="$single_owner" MINIC_CORE_FRAME_TRACE=1 \
-MINIC_CORE_FRAME_TRACE_FILTER="ip6_finish_output2,ip6_xmit" \
+MINIC_CORE_FRAME_TRACE_FILTER="ip6_finish_output2,ip6_xmit,ip6_output,__ip6_finish_output,ip6_finish_output" \
 python3 "$repo/tools/ci/linux-runtime-kbuild-regeneration-guard-v1.py" \
   --mode replay --out "$out" --golden-out "$gold_snapshot" \
   --evidence "$dest/replay-evidence.json" --selected "$dest/selected.txt" \
@@ -156,9 +169,14 @@ pinned=""
 passes=0
 mode=prefix
 if [[ "$single_owner" == 1 ]]; then
-  mode=exclude_list
-  printf '%s\n' net/ipv6/tcp_ipv6.o >"$ev/p1_gcc_rescue_set.txt"
-  echo "P1_DEFINED_CROSSBLOCK=SINGLE_OWNER_ONLY minic_modified=net/ipv6/ip6_output.o gcc_owner=net/ipv6/tcp_ipv6.o"
+  if [[ "$all_pure" == 1 ]]; then
+    mode=prefix
+    echo "P1_DEFINED_CROSSBLOCK=ALL_MINIC_16K original_minic=2063 modified_minic=1 gcc=0"
+  else
+    mode=exclude_list
+    printf '%s\n' net/ipv6/tcp_ipv6.o >"$ev/p1_gcc_rescue_set.txt"
+    echo "P1_DEFINED_CROSSBLOCK=SINGLE_OWNER_ONLY minic_modified=net/ipv6/ip6_output.o gcc_owner=net/ipv6/tcp_ipv6.o"
+  fi
 fi
 for attempt in 1 2 3; do
   trial "p1_defined_crossblock_$attempt" "$n" p1 "$mode"
@@ -234,7 +252,11 @@ PY_IRQ_ATTRIBUTION
   fi
 fi
 if [[ "$single_owner" == 1 ]]; then
-  echo "P1_DEFINED_CROSSBLOCK=COMPLETE modified_minic=1 gcc_owners=1 minic_owners=2063 passes=$passes failures=$((3-passes)) image=$pinned experimental=true not_promoted=true"
+  if [[ "$all_pure" == 1 ]]; then
+    echo "P1_DEFINED_CROSSBLOCK=COMPLETE modified_minic=1 gcc_owners=0 minic_owners=2064 passes=$passes failures=$((3-passes)) image=$pinned experimental=true not_promoted=true"
+  else
+    echo "P1_DEFINED_CROSSBLOCK=COMPLETE modified_minic=1 gcc_owners=1 minic_owners=2063 passes=$passes failures=$((3-passes)) image=$pinned experimental=true not_promoted=true"
+  fi
 else
   echo "P1_DEFINED_CROSSBLOCK=COMPLETE modified_minic=4 gcc_owners=0 minic_owners=2064 passes=$passes failures=$((3-passes)) image=$pinned experimental=true not_promoted=true"
 fi
