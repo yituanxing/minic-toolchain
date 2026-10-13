@@ -2555,6 +2555,14 @@ case "$TRIAL_VERDICT" in
       *) echo "COHORT_RESULT=INCONCLUSIVE stage=full_or_p1"; exit 8 ;;
     esac ;;
   FAIL|LINK_FAIL)
+    # On the cached native-tool union path, a linker/archiver/objcopy
+    # command is shared by ALL subsets. A failing Kbuild tool boundary is
+    # not evidence that any specific MiniC owner is incorrect. Never waste
+    # runner time with a meaningless 2064-object prefix bisection here.
+    if [[ "${COHORT_NATIVE_UNION:-0}" == 1 ]]; then
+      echo "COHORT_NATIVE_UNION=FAIL stage=first_real_link verdict=$TRIAL_VERDICT retry=targeted_native_boundary no_C_recompile=true"
+      exit 9
+    fi
     fail_kind="$TRIAL_VERDICT"
     lo=0
     hi="$n" ;;
