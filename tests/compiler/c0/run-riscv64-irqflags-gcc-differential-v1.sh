@@ -55,37 +55,42 @@ for tool in gcc minic; do
     "$RISCV_CC" -x assembler -c "$work/$tool.s" -o "$work/$tool.o"
     "$RISCV_OBJDUMP" -d -M no-aliases "$work/$tool.o" >"$work/$tool.dis"
 done
-python3 - "$work/gcc.dis" "$work/minic.dis" <<'PY'
+# Compare the *defining helpers*, not their non-inlined O0 wrappers.
+# GNU emits all helpers in one .text and MiniC uses separate .text.<name>;
+# both assembly files contain canonical name:..size boundaries.
+python3 - "$work/gcc.s" "$work/minic.s" <<'PY'
 import re
 import sys
 from pathlib import Path
 
 def scan(path: Path) -> dict[str, list[str]]:
-    code = path.read_text()
-    actual = {}
+    source = path.read_text()
+    result = {}
     for name in ("save", "restore", "disable", "enable"):
-        symbol = "irqflags_" + name + "_test"
-        m = re.search(rf"(?m)^[0-9a-f]+ <{symbol}>:\s*$", code)
-        if not m:
-            raise SystemExit(f"IRQFLAGS_DIFF=FAIL missing_symbol={symbol} file={path}")
-        remainder = code[m.end():]
-        following = re.search(r"(?m)^[0-9a-f]+ <[^>]+>:\s*$", remainder)
-        body = remainder[:following.start()] if following else remainder
-        csr = re.findall(r"\b(csrrc|csrrs|csrrw)\b[^\n]*\bsstatus\b", body)
-        if not csr:
-            # Some objdump versions display the CSR number rather than 'sstatus'.
-            csr = re.findall(r"\b(csrrc|csrrs|csrrw)\b[^\n]*\b0x100\b", body)
-        actual[name] = csr
-    return actual
+        symbol = "irq_" + name
+        start = re.search(rf"(?m)^{symbol}:\\s*$", source)
+        if not start:
+            raise SystemExit(f"IRQFLAGS_DIFF=FAIL missing_definition={symbol} file={path}")
+        tail = source[start.end():]
+        size = re.search(rf"(?m)^\\s*\\.size\\s+{symbol}\\s*,", tail)
+        if not size:
+            raise SystemExit(f"IRQFLAGS_DIFF=FAIL missing_size={symbol} file={path}")
+        instructions = tail[:size.start()]
+        csr = re.findall(r"(?m)^\\s*(csrrc|csrs|csrc|csrrs|csrrw)\\b", instructions)
+        # Save/restore/enable/disable must touch the RISC-V SSTATUS CSR.
+        if not re.search(r"\\b0x100\\b", instructions):
+            raise SystemExit(f"IRQFLAGS_DIFF=FAIL missing_sstatus={symbol} file={path}")
+        result[name] = csr
+    return result
 gnu = scan(Path(sys.argv[1]))
 mini = scan(Path(sys.argv[2]))
-expected = {"save": ["csrrc"], "restore": ["csrrs"],
-            "disable": ["csrrc"], "enable": ["csrrs"]}
+expected = {"save": ["csrrc"], "restore": ["csrs"],
+            "disable": ["csrc"], "enable": ["csrs"]}
 if gnu != expected:
     raise SystemExit(f"IRQFLAGS_DIFF=INCONCLUSIVE unexpected_gcc_csr={gnu}")
 if mini != expected:
     raise SystemExit(f"IRQFLAGS_DIFF=FAIL gcc={gnu} minic={mini}")
-print("IRQFLAGS_GCC_MINIC=PASS csr_save=csrrc csr_restore=csrrs "
-      "csr_disable=csrrc csr_enable=csrrs codegen_compiled=both "
-      "warning=does_not_prove_full_irq_state_runtime_semantics")
+print("IRQFLAGS_GCC_MINIC=PASS csr_save=csrrc csr_restore=csrs "
+      "csr_disable=csrc csr_enable=csrs compiled_ELF=both "
+      "warning=static_opcode_oracle_not_proof_of_full_irq_state_runtime_semantics")
 PY
