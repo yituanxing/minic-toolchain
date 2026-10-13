@@ -82,8 +82,29 @@ for ((i=0; i<${#args[@]}; ++i)); do
     break
   fi
 done
-# MiniLD has already been integration-tested at EXACTLY these three Linux
-# final link boundaries; other GNU linker operations are *not* certified yet.
+# The GNU vmlinux.o relocatable link has independently passed the REAL
+# cached Linux 6.6.143 GNU -r ABI and ALL exported-name differential
+# (#38481829961): 291ms; zero C objects rebuilt. Promote it only with an
+# explicit opt-in; prove QEMU P0/P1 again before calling it accepted.
+if [[ "${MINILD_ENABLE_VMLINUX_R:-0}" == 1 && "${output##*/}" == vmlinux.o ]]; then
+  found_r=0
+  for arg in "$@"; do
+    case "$arg" in
+      -r|--relocatable) found_r=1 ;;
+    esac
+  done
+  if [[ "$found_r" == 1 ]]; then
+    { flock 9; printf 'minild-r'; printf ' %q' "$@"; printf '\\n'; } 9>>"$NATIVE_TRACE_DIR/minild.trace" >&9
+    start_ms=$(date +%s%3N)
+    status=0
+    MINILD_PROFILE_PHASES=1 "$MINILD" "$@" || status=$?
+    elapsed_ms=$(($(date +%s%3N)-start_ms))
+    { flock 9; printf 'minild-r\\t%s\\t%s\\t%s\\n' "$elapsed_ms" "$status" "$output"; } 9>>"$NATIVE_TRACE_DIR/minild-times.tsv" >&9
+    exit "$status"
+  fi
+fi
+# The three static final Linux link boundaries are proven #38426379946.
+# Purgatory and 32-bit vDSO continue using GNU LD until individually tested.
 case "${output##*/}" in
   .tmp_vmlinux.kallsyms1|.tmp_vmlinux.kallsyms2|vmlinux)
     { flock 9; printf 'minild'; printf ' %q' "$@"; printf '\n'; } 9>>"$NATIVE_TRACE_DIR/minild.trace" >&9
