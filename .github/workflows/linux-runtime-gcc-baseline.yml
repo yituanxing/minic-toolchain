@@ -936,6 +936,7 @@ jobs:
           export COHORT_P1_IDENTICAL_IMAGE_REPEAT=${{ contains(github.event.head_commit.message, '[linux-runtime-repeat-image]') && '1' || '0' }}
           export COHORT_P1_GDB_STACK=${{ (contains(github.event.head_commit.message, '[linux-runtime-gdb-stack]') || contains(github.event.head_commit.message, '[linux-runtime-p1-sched-chain]')) && '1' || '0' }}
           export P1_GDB_SCHED_CHAIN=${{ contains(github.event.head_commit.message, '[linux-runtime-p1-sched-chain]') && '1' || '0' }}
+          export P1_GDB_IRQ_REENTRY=${{ contains(github.event.head_commit.message, '[linux-runtime-p1-low-irq-entry]') && '1' || '0' }}
           export COHORT_P1_MULTI_RESCUE=${{ contains(github.event.head_commit.message, '[linux-runtime-multi-rescue]') && '1' || '0' }}
           export COHORT_P1_MINIMIZE_RESCUE=${{ contains(github.event.head_commit.message, '[linux-runtime-rescue-minimize]') && '1' || '0' }}
           export COHORT_P1_PAIR_RESCUE=${{ contains(github.event.head_commit.message, '[linux-runtime-rescue-pairs]') && '1' || '0' }}
