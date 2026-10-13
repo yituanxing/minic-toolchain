@@ -6,6 +6,11 @@
 # (including memberless mPiT); MiniLD for three final links; MiniObjcopy.
 # GNU as remains pinned.
 # Actual MiniAS requires newly generated .s input and is a separate next gate.
+# Optimized Linux exact cached GNU-link replay #38426172026 achieved
+# MiniLD 1089ms total (layout 771ms) vs baseline 13988ms (layout 13723ms)
+# by indexing R_RISCV_ALIGN relocations per section. Focused RV64/AR/LD
+# regressions passed #38426050781. Full 2064 MiniC objects still need
+# native union P0/P1 re-acceptance with this new MiniLD binary.
 # From passing C cache: #38415409019 native two-stage link took 310.798s
 # then 306.902s. minild-times.tsv profiles each final-link call separately;
 # first establish full Linux P1 correctness before optimizing header preflight.
