@@ -155,6 +155,18 @@ for idx, (name, _) in enumerate(bound[1:], 2):
                      "$sp < $p1_irq_base + 12288)")
                 emit("set $p1_low_irq_hits = $p1_low_irq_hits + 1")
                 emit(f'printf "P1_IRQ_LOW_ENTRY name={name} sp=%#lx ra=%#lx irq_remaining=%ld\\n", (unsigned long)$sp, (unsigned long)$ra, (long)((unsigned long)$sp-(unsigned long)$p1_irq_base)')
+                if name == "do_irq":
+                    # do_irq(struct pt_regs *regs): a0 points to saved
+                    # trap regs at function entry; RV64 pt_regs epc=+0,
+                    # sp=+16. Saved PC tells which *actual* upstream
+                    # function was interrupted before this nested IRQ.
+                    # This is separate from do_irq's own return address
+                    # (always _save_context+0x86).
+                    emit("if ($a0 != 0 && (($a0 & 7) == 0))")
+                    emit("set $p1_interrupt_epc = *(unsigned long*)$a0")
+                    emit("set $p1_interrupt_sp = *(unsigned long*)($a0 + 16)")
+                    emit('printf "P1_IRQ_INTERRUPTED epc=%#lx saved_sp=%#lx irq_sp=%#lx saved_irq_remaining=%ld\\n", (unsigned long)$p1_interrupt_epc, (unsigned long)$p1_interrupt_sp, (unsigned long)$sp, (long)((unsigned long)$p1_interrupt_sp-(unsigned long)$p1_irq_base)')
+                    emit("end")
                 emit("end")
             else:
                 emit(f"disable {idx}")
