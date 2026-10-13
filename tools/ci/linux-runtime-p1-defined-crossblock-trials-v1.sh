@@ -327,7 +327,13 @@ if [[ "$single_owner" == 1 ]]; then
 fi
 repeats=3
 if [[ "$rx_bundle_dev" == 1 ]]; then repeats=6; fi
-if [[ "$rx_bundle_timer" == 1 ]]; then repeats=12; fi
+if [[ "$rx_bundle_timer" == 1 ]]; then
+  repeats=12
+  if git -C "$repo" log -1 --format=%B | grep -Fq '[linux-runtime-p1-24boot-audit]'; then
+    repeats=24
+    echo "P1_RX_BUNDLE_TIMER=AUDIT_START boot_repeats=$repeats same_image=true immutable_minic_pool=true"
+  fi
+fi
 for attempt in $(seq 1 "$repeats"); do
   trial "p1_defined_crossblock_$attempt" "$n" p1 "$mode"
   [[ -n "$pinned" ]] || pinned="$image_sha"

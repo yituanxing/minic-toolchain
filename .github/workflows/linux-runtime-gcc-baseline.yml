@@ -1026,6 +1026,9 @@ jobs:
             build/linux-runtime-gcc-cohort-v1/p1-owner-hit.txt
             build/linux-runtime-gcc-cohort-v1/p1-list-debug-disasm.txt
             build/linux-runtime-gcc-cohort-v1/trials/full_all/Image
+            # Preserve the exact experimental 7-owner Image for QEMU-only
+            # reproducibility and SHA-attested replay without recompilation.
+            build/linux-runtime-gcc-cohort-v1/trials/p1_defined_crossblock_1/Image
             build/linux-runtime-gcc-cohort-v1/trials/*/link.log
             build/linux-runtime-gcc-cohort-v1/trials/*/guard.log
             build/linux-runtime-gcc-cohort-v1/trials/*/runtime.log
