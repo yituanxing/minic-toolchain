@@ -35,3 +35,12 @@ Each candidate's first-access proof changes from O(block_length × memory_ops) t
 The original passing 2064-object full-universe cache and image remain immutable under the old compiler identity. The new producer must pass all 7 real Linux shards, ELF/ABI/object identity, GNU link and QEMU P0/P1 in the **existing** workflow; the per-stage profiler must report the new exact `lib/crypto/blake2s-generic.minic-stage2.i` time. Confirm absolute/relative throughput against the original 1981990ms; do **not** claim improvement until measured.
 
 A successful full kernel P0/P1 proves the build path on the tested runtime profile; it does not establish universal correctness or certify unrelated extensions.
+
+## 2026-10-13: cached MiniC native tool union performance frontier
+
+- CI #38415409019 HIT the exact SHA-authenticated 2064 MiniC C objects and pinned GNU Kbuild snapshot, and skipped all seven C producer shards. Therefore no Linux-wide C recompile was responsible for elapsed time.
+- Native Kbuild first full link: **310798ms (5m10.8s)**; Kbuild-generated vDSO header changed, exactly four MiniC C owners were directly recompiled in 9250ms, then a second required native full link: **306902ms (5m06.9s)**. Total two native link passes alone are 617700ms (~10m18s).
+- These link duration labels in the existing cohort script still say `gnu_first_link`/`gnu_reconciled_link` even though the selected native wrapper actually calls MiniAR and final-three MiniLD links. Do not misattribute the 10m18s to GNU LD.
+- Two links reached the final ELF/Image stage. Next strict provenance guard rejected `arch/riscv/kernel/compat_vdso/compat_vdso.o`: native MiniObjcopy legitimately transforms the compat-vDSO DSO; the existing guard only recognized regular vdso.o. Exact CI artifact shows GNU-LD -> native MiniObjcopy `-G` and `-S` -> GNU AS. The new specific authorization is gated on this exact invocation trail plus RISC-V ET_REL/ABI checks; unrelated GNU-only or nonselected mismatches remain forbidden.
+- New `minild-times.tsv` times every real MiniLD final pass independently, so the next failure or PASS reveals if five-minute native links are mostly MiniLD CPU time, as suspected, rather than guesses. Native source-built 2064 C objects remain immutable.
+- Subsequent cost reduction: pre-stabilize native vDSO generated header and recompile its four precise dependent C owners *before* final full link, to avoid two whole-kernel MiniLD passes. Only implement after full correctness is re-proven and exact header provenance checks preserved.
