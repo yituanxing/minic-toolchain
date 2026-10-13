@@ -3255,6 +3255,30 @@ static bool script_layout_place_section(MiniLdScriptLayoutState *script_state,
     return true;
 }
 
+/*
+ * GNU SORT_BY_NAME must be stable for equal input section names.
+ * The previous insertion sort took O(n*n) strcmp calls for large Linux
+ * .initcall and .text linker-script patterns. Sort by (name, input index)
+ * once instead, preserving the exact old tie order.
+ */
+typedef struct MiniLdNamedMatch {
+    size_t index;
+    const char *name;
+} MiniLdNamedMatch;
+
+static int minild_compare_named_match(const void *lhs, const void *rhs) {
+    const MiniLdNamedMatch *a = lhs;
+    const MiniLdNamedMatch *b = rhs;
+    int c = strcmp(a->name, b->name);
+    if (c != 0) {
+        return c;
+    }
+    if (a->index != b->index) {
+        return a->index < b->index ? -1 : 1;
+    }
+    return 0;
+}
+
 static bool script_layout_place_pattern(MiniLdScriptLayoutState *script_state,
                                         const MiniLdScriptPattern *pattern,
                                         size_t command_index,
@@ -3288,20 +3312,31 @@ static bool script_layout_place_pattern(MiniLdScriptLayoutState *script_state,
         }
     }
 
-    if (pattern->sort) {
-        size_t j;
-
-        for (i = 1U; i < count; ++i) {
-            size_t current = matches[i];
-            j = i;
-            while (j > 0U &&
-                   strcmp(script_state->state->sections[matches[j - 1U]].name,
-                          script_state->state->sections[current].name) > 0) {
-                matches[j] = matches[j - 1U];
-                --j;
-            }
-            matches[j] = current;
+    if (pattern->sort && count > 1U) {
+        MiniLdNamedMatch *sorted;
+        if (count > SIZE_MAX / sizeof(*sorted)) {
+            free(matches);
+            fprintf(script_state->state->diagnostics,
+                    "minic-ld: linker-script-pattern-sort-overflow\n");
+            return false;
         }
+        sorted = malloc(count * sizeof(*sorted));
+        if (sorted == NULL) {
+            free(matches);
+            fprintf(script_state->state->diagnostics,
+                    "minic-ld: out-of-memory:linker-script-pattern-sort\n");
+            return false;
+        }
+        for (i = 0U; i < count; ++i) {
+            sorted[i].index = matches[i];
+            sorted[i].name =
+                script_state->state->sections[matches[i]].name;
+        }
+        qsort(sorted, count, sizeof(*sorted), minild_compare_named_match);
+        for (i = 0U; i < count; ++i) {
+            matches[i] = sorted[i].index;
+        }
+        free(sorted);
     }
 
     for (i = 0U; i < count; ++i) {
