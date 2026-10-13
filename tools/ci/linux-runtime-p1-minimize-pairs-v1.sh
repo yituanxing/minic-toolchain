@@ -15,6 +15,14 @@ partners=(
   net/ipv4/tcp_output.o
   net/core/dev.o
 )
+# Diagnostic-only single pair, no new workflow or MiniC compile:
+# existing ip6_output GCC task-stack mitigation plus the precise scheduler
+# PELT owner visible on the independent IRQ-stack snapshot.
+# Require exact opt-in tag; default certified three-partner matrix unchanged.
+if git -C "$repo" log -1 --format=%B | grep -Fq '[linux-runtime-p1-irq-fair-pair]'; then
+  partners=(kernel/sched/fair.o)
+  echo "COHORT_P1_IRQ_FAIR=ENABLED source=irq-stack-pelt-evidence partners=1 frozen_compiler=true"
+fi
 printf 'two_gcc_owners\timage_sha256\tpass_count\tfail_count\tverdicts\n' >"$ev/p1-rescue-pairs.tsv"
 printf 'two_gcc_owners\tattempt\timage_sha256\tverdict\n' >"$ev/p1-rescue-pairs-repeats.tsv"
 for partner in "${partners[@]}"; do
