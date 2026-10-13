@@ -1225,7 +1225,10 @@ if [[ "${COHORT_FRAME_CAPTURE_ONLY:-0}" == 1 ]]; then
   if git -C "$repo" log -1 --format=%B | grep -Fq '[linux-runtime-p1-fair-frame]'; then
     fair_frame=1
     printf '%s\n' kernel/sched/fair.o >"$frame_dir/selected.txt"
-    echo "COHORT_FRAME_FAIR=ONLY owner=kernel/sched/fair.o frozen_compiler=true"
+    # Receiver normally filters IPv6-only symbols; override for this exact
+    # scheduler TU, otherwise CORE_FRAME_REUSE exists but COMPONENT is empty.
+    export MINIC_CORE_FRAME_TRACE_FILTER="update_cfs_rq_load_avg,task_tick_fair,enqueue_entity,update_load_avg,load_balance,decay_load,___update_load_sum,__accumulate_pelt_segments"
+    echo "COHORT_FRAME_FAIR=ONLY owner=kernel/sched/fair.o frozen_compiler=true filter=$MINIC_CORE_FRAME_TRACE_FILTER"
   else
     printf '%s\n' net/ipv6/ip6_output.o net/ipv6/tcp_ipv6.o net/ipv4/tcp_output.o \
       >"$frame_dir/selected.txt"
