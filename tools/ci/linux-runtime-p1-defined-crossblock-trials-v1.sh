@@ -329,7 +329,10 @@ repeats=3
 if [[ "$rx_bundle_dev" == 1 ]]; then repeats=6; fi
 if [[ "$rx_bundle_timer" == 1 ]]; then
   repeats=12
-  if git -C "$repo" log -1 --format=%B | grep -Fq '[linux-runtime-p1-24boot-audit]'; then
+  if git -C "$repo" log -1 --format=%B | grep -Fq '[linux-runtime-p1-sched-chain]'; then
+    repeats=3
+    echo "P1_RX_BUNDLE_TIMER=SCHED_TRACE_ONLY repeats=3 cache=2064 source_producers=7 gdb=1"
+  elif git -C "$repo" log -1 --format=%B | grep -Fq '[linux-runtime-p1-24boot-audit]'; then
     repeats=24
     echo "P1_RX_BUNDLE_TIMER=AUDIT_START boot_repeats=$repeats same_image=true immutable_minic_pool=true"
   fi
@@ -357,10 +360,12 @@ if [[ "${COHORT_P1_GDB_STACK:-0}" == 1 ]]; then
     exit 8
   }
   echo "P1_DEFINED_CROSSBLOCK_GDB=START image_sha=$pinned experimental_only=true"
+  gdb_seconds=65
+  if [[ "${P1_GDB_SCHED_CHAIN:-0}" == 1 ]]; then gdb_seconds=120; fi
   if bash "$repo/tools/ci/linux-runtime-p1-gdb-stack-v1.sh" \
        "$experimental_image" "$out/vmlinux" \
        "$ev/runtime-initramfs.cpio.gz" "$LINUX_RUNTIME_CUSTOM_DTB" \
-       "$ev/p1-gdb-stack-experiment" 65; then
+       "$ev/p1-gdb-stack-experiment" "$gdb_seconds"; then
     echo "P1_DEFINED_CROSSBLOCK_GDB=CAPTURED no_P1_pass_inference=true"
     # Correlate the OBSERVED per-CPU IRQ base with the saved trapped SP
     # from the three normal (non-GDB) executions of the EXACT same Image.
