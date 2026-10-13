@@ -1,5 +1,102 @@
 # Current native tool validation — 2026-10-11
 
+## 2026-10-13 handoff: freeze the known-good proofs; finish correctness and native combination
+
+Baseline branch `agent/linux-expanded-kbuild-v0` at `ac8568493e267028bf25e6e6116a49d57a7355a1` at the start of this audit.
+This is a **scoped certification ledger**, not a blanket "all Mini tools PASS" statement.
+For every future promotion, record the exact commit, the tool identities, original
+GNU/non-native boundaries, successful build *and* QEMU guest logs.
+
+| Boundary | Best proven result and exact scope | Still open |
+| --- | --- | --- |
+| MiniPP | Frozen Linux GCC-E **3352/3352 exact**, [#38150944470](https://github.com/yituanxing/minic-toolchain/actions/runs/38150944470); real MiniPP-produced `.i` consumed by GCC cc1 for **2 actual Linux TUs**, combined five-tool P0/P1 [#38192265904](https://github.com/yituanxing/minic-toolchain/actions/runs/38192265904). | Whole *production* Image C inventory with MiniPP, not just a shadow diff; current full path remains unproved. |
+| MiniC | All **2064 C objects** genuinely MiniC; GNU preprocessing/as/ld; seven experimental stack-slot owners, **16KiB P1 12/12 same-Image**, [#38351512579](https://github.com/yituanxing/minic-toolchain/actions/runs/38351512579), SHA `06bbd4e9bdd2c0ca4634ca55a7445c3565c8fc73cb00ce8bd39fc55d770a7530`. | The 7-owner optimization is **not promoted** to a general safe/default backend. Default focused RV64 is **RED** [#38351512614](https://github.com/yituanxing/minic-toolchain/actions/runs/38351512614), real unresolved `missing_arch_dma_set_uncached` from `tests/driver/run-constant-if-link-v0.sh`. |
+| MiniAS | Isolated native assembler with GNU GCC/AR/LD, full Linux Image, QEMU P0/P1: the first phase of [#38184298699](https://github.com/yituanxing/minic-toolchain/actions/runs/38184298699); complete 3536 input validation after alignment fix [#38151040863](https://github.com/yituanxing/minic-toolchain/actions/runs/38151040863). | Do not mislabel the **overall** #38184298699 workflow as green: a later integration substage failed there; later certified combination supersedes it. |
+| MiniAR | GNU-base isolated Kbuild **633 calls** + Linux FAST guest [#38149742508](https://github.com/yituanxing/minic-toolchain/actions/runs/38149742508); A0/A1 shared T1 contract. | Single-tool FAST is narrower than P0/P1; combinations below have stronger P0/P1 proof. |
+| MiniLD | Static/dynamic and linker-script T1; genuinely native **three final vmlinux/kallsyms links**, other LD boundaries GNU, with MiniObjcopy Image [#38189325106](https://github.com/yituanxing/minic-toolchain/actions/runs/38189325106). | Non-final Linux LD boundaries have not all been replaced and runtime-certified. |
+| MiniObjcopy | Only native Objcopy, other tools GNU, full Image plus **FAST** Linux guest documented in this file; later combined P0/P1 below. | Full end-to-end per-tool P1 need not be recompiled if a stronger already-proved combination covers the target behavior. |
+| MiniNM / MiniStrip / ELF reader | Native ELF/archiver/nm/strip differential and T1 checks; [#38149742328](https://github.com/yituanxing/minic-toolchain/actions/runs/38149742328). | Preserve supported consumer/format scope; do not invent a mandatory Image producer use. |
+| MiniC Driver | Genuine dynamic-musl driver integration PASS after MiniAS alignment repair, [#38150792607](https://github.com/yituanxing/minic-toolchain/actions/runs/38150792607). | Fully native Linux driver-path replacement distinct from smoke. |
+
+**Already completed combination gates — never restart these from zero:**
+
+1. GNU GCC + MiniAS + MiniAR + MiniObjcopy + GNU LD: same-Image P0/P1
+   [#38185012989](https://github.com/yituanxing/minic-toolchain/actions/runs/38185012989)
+   (native 3-tool artifact replay; original producer workflow #38184298699 had
+   an unrelated subsequent failure).
+2. GNU GCC + MiniAS + MiniAR + MiniObjcopy + **MiniLD at final three LD
+   boundaries**: **P0 two lanes and P1 12/12 PASS** in real same-tree
+   [#38190157006](https://github.com/yituanxing/minic-toolchain/actions/runs/38190157006).
+   Four-native Image SHA:
+   `407310df63a604c18a30dc5c483fecfa93ec72ea29a5aaa76845dd6fd63bc05d`.
+3. The same four-native chain + MiniPP for **two actual GCC-cc1 production
+   C objects**: P0 two lanes and P1 12/12 PASS
+   [#38192265904](https://github.com/yituanxing/minic-toolchain/actions/runs/38192265904).
+   This is the currently certified **five-tool partial-PP** combination,
+   not all-TU MiniPP or MiniC.
+4. Independently, GNU-as/GNU-ld plus full MiniC with the 7-object experimental
+   slot reuse is the 16KiB P1 success above. **There is no CI proof that this
+   MiniC pool also passes with all four native binary tools.**
+
+**Fixed accelerated execution contract (mandatory before scheduling more CI):**
+
+- `T0`: read the pinned commit, artifacts, exact command traces and existing
+  success/failure evidence **first**. Don't repeat a certified producer because
+  the last top-level workflow had an unrelated failed job.
+- `T1`: change a known failing tiny test, run only its focused owner;
+  the current `toolchain-focused-regressions-v1.yml` compiles the nine-tool
+  product **once**, then publishes eight independent verdicts.
+  Resolve `missing_arch_dma_set_uncached` through actual Core CFG semantics;
+  no dummy symbol, no weakened assertion, and no full Linux rebuild to debug it.
+- `T2`: for native Linux product interactions, keep **one exact-config GNU
+  golden** plus immutable selected objects/`.cmd` metadata. Swap only the
+  selected Mini tool at one producer boundary. Use the existing
+  `tests/external/linux/mini_tools_integrated_relink.sh` staged same-tree
+  AR/Objcopy/LD sequence, previously measured **10s and 15s incremental
+  relinks** after the initial build, and the existing
+  `miniobjcopy-strip-regressions-v1.yml` Image-only replay mode.
+  Do **not** assume same-tree `.o` outputs are present in an image-only
+  artifact or that another GitHub branch can restore the same cache key.
+- `T3`: for MiniC producer, reuse the authenticated 2064-object frozen pool,
+  GNU-only original controls, object subset replacement, seven-runner shard
+  producer **only when all-current is required**, single-object/bounded
+  relink and identical-Image QEMU repeat. Require compiler+object+Image SHA
+  attestation before comparing. No recompile of 2064 TUs per hypothesis.
+- `T4`: real Linux runtime promotion requires P0 / P1 guest markers, not a
+  green job without execution. Keep `rdinit=/init` and `rdinit=/bin/sh`
+  distinct; a previous `USER_SHELL_OK` / `RDINIT_SH_OK` proof is a scripted
+  user-space boot, **not yet interactive general-purpose shell certification**.
+- Existing GitHub Actions proof artifacts have short TTL: in this audit
+  the four-native #38190157006 artifact expires **2026-10-15T01:07:32Z**,
+  and two-TU-PP #38192265904 expires **2026-10-15T01:42:31Z**.
+  A SHA in a Markdown document preserves evidence identity, **not the
+  underlying object tree**; check archive availability before depending on
+  restore. Do not trigger an expensive rebuild merely to renew a duplicate
+  proof.
+
+**Next uncrossed gates, in order:**
+
+A. Close the **default** RV64 `constant-if-link` bug by reproducing its
+   `_Bool` local fact/CFG failure in the existing micro test and fixing
+   the smallest responsible Core path. Confirm on the focused test and
+   preserve the red control result.
+B. Finish same-tree **full production MiniPP** from the existing
+   `minipp_native_full_relink.sh` machinery; reuse source/objects whenever
+   their exact provenance is available, verify the actual number of C-only
+   owners, fail on shadow GNU fallback, then incrementally rearchive/relink
+   and run P0/P1. Previous full discovery misclassified `-include *.c`
+   and assembler inputs; fixes are already in place, but no full PASS yet.
+C. Prove native-binary tools with the **seven-owner MiniC** pool one boundary
+   at a time, then with full MiniPP, while keeping other tools pinned.
+   Only re-emit objects on true input/compiler changes.
+D. Fill remaining required MiniLD/Kbuild and Driver boundaries. After all
+   isolated and integrated correctness passes, run an interactive shell
+   gate. **Defer general stack-slot optimization, speed tuning and bootstrap.**
+
+No new workflow, runner matrix, cache identity or development branch is
+introduced by this ledger. Update the PASS/FAIL cell only after actual logs
+support it.
+
 ## Scope and priority
 
 Validate only existing C-language Mini tool implementations on the runtime branch.
