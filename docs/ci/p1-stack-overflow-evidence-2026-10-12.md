@@ -719,3 +719,34 @@ Next inexpensive causal comparison: freeze one
 prologues while capturing a single-TU Core frame report. This avoids
 the old report parser's duplicate helper symbols across four TUs;
 no Linux link or new CI workflow.
+
+
+## Frozen GCC versus MiniC RV64 stack prologues — 2026-10-13
+
+Existing canonical CI **#38337439838**, artifact **11785571487**.
+Recompiled just `net/ipv4/tcp_input.o` with **stderr-only**
+frame instrumentation and verified emitted .o SHA identical to the
+frozen MiniC counterpart. No Image link. GNU and MiniC prologues
+were extracted from their original authenticated `.o` files:
+
+| Function | GCC immediate SP decrement | MiniC immediate SP decrement | Excess |
+| --- | ---: | ---: | ---: |
+| `tcp_conn_request` | 304 B | 1312 B | 1008 B |
+| `tcp_rcv_state_process` | 128 B | 1776 B | 1648 B |
+
+Combined **potential** static-frame excess = **2656 bytes** if both
+frames are simultaneously active on the tested chain; a pair of
+prologue sizes is NOT itself proof they were concurrently live.
+MiniC's CoreObject regions measure 1232 and 1712 bytes; SSA
+value regions 72 and 48 bytes, respectively. This is direct evidence
+of large MiniC stack-layout overhead rather than an identified
+incorrect SP instruction. The prior GDB RX frontier supports
+prioritizing TCP functions over isolated clocksource/scheduler frames.
+
+Next controlled check: apply the existing strict, effect-free
+*discarded local address-comparison* lowering to **only**
+`net/ipv4/tcp_input.o`, recompile once, and measure those two
+stack frames with the original pinned MiniC object universe.
+No Linux Image linking until it demonstrably reduces the measured
+frames and focused correctness tests are identified. No new
+Workflow or branch, and no production compiler patch.

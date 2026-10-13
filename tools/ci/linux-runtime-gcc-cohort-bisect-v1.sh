@@ -1217,18 +1217,8 @@ if [[ "${COHORT_FRAME_CAPTURE_ONLY:-0}" == 1 ]]; then
   }
   frame_dir="$ev/p1-frame-components"
   mkdir -p "$frame_dir"
-  # Reuse the existing non-linking audit: EXACTLY one TCP input object.
-  # This avoids ambiguous same-name inlined helpers across translation units.
-  p1_tcp_gcc_frame=0
-  if git -C "$repo" log -1 --format=%B | grep -Fq '[linux-runtime-p1-tcp-gcc-frames]'; then
-    p1_tcp_gcc_frame=1
-    printf '%s\n' net/ipv4/tcp_input.o >"$frame_dir/selected.txt"
-    export MINIC_CORE_FRAME_TRACE_FILTER="tcp_conn_request,tcp_rcv_state_process"
-    echo "P1_TCP_GCC_FRAME=START owner=net/ipv4/tcp_input.o frozen_gcc=true frozen_minic=true"
-  else
-    printf '%s\n' net/ipv6/ip6_output.o net/ipv6/tcp_ipv6.o net/ipv4/tcp_output.o \
-      >"$frame_dir/selected.txt"
-  fi
+  printf '%s\n' net/ipv6/ip6_output.o net/ipv6/tcp_ipv6.o net/ipv4/tcp_output.o \
+    >"$frame_dir/selected.txt"
   rm -rf -- "$out"
   cp -a --reflink=auto "$gold_snapshot" "$out"
   MINIC_CORE_FRAME_TRACE=1 COHORT_FRAME_CAPTURE_ONLY=1 python3 \
@@ -1310,37 +1300,13 @@ PY_FRAME_SUMMARY
   python3 "$repo/tools/ci/linux-runtime-p1-frame-access-parse-v1.py" --self-test
   python3 "$repo/tools/ci/linux-runtime-p1-frame-access-parse-v1.py" \
     "$frame_dir/replay.log" "$frame_dir/intervals.tsv" "$frame_dir/first-access.tsv"
-  if [[ "$p1_tcp_gcc_frame" == 1 ]]; then
-    for focus in tcp_conn_request tcp_rcv_state_process; do
-      awk -F '\t' -v target="$focus" '$1==target {found=1} END {exit !found}' \
-        "$frame_dir/components.tsv" || {
-        echo "P1_TCP_GCC_FRAME=ERROR missing_focus=$focus"; exit 8;
-      }
-      for toolchain in gcc minic; do
-        if [[ "$toolchain" == gcc ]]; then
-          obj="$gold_snapshot/net/ipv4/tcp_input.o"
-        else
-          obj="$ev/minic/net/ipv4/tcp_input.o"
-        fi
-        [[ -s "$obj" ]] || { echo "P1_TCP_GCC_FRAME=ERROR missing=$obj"; exit 8; }
-        riscv64-linux-gnu-objdump -d --disassemble="$focus" "$obj" \
-          >"$frame_dir/$toolchain-$focus.asm"
-        grep -Fq "<$focus>:" "$frame_dir/$toolchain-$focus.asm" || {
-          echo "P1_TCP_GCC_FRAME=ERROR missing_elf_symbol=$toolchain-$focus"; exit 8;
-        }
-        echo "P1_TCP_GCC_FRAME=DISASM toolchain=$toolchain function=$focus"
-        head -n 28 "$frame_dir/$toolchain-$focus.asm"
-      done
-    done
-    echo "P1_TCP_GCC_FRAME=PASS owner=net/ipv4/tcp_input.o src_identical=true no_image_link=true"
-  else
-    for focus in ip6_finish_output2 ip6_xmit tcp_v6_connect __tcp_transmit_skb; do
-      awk -F '\t' -v target="$focus" '$1==target {found=1} END {exit !found}' \
-        "$frame_dir/components.tsv" || {
-        echo "COHORT_FRAME_CAPTURE=ERROR missing_exact_focus=$focus"; exit 8;
-      }
-    done
-  fi
+  for focus in ip6_finish_output2 ip6_xmit tcp_v6_connect __tcp_transmit_skb; do
+    awk -F '\t' -v target="$focus" '$1==target {found=1} END {exit !found}' \
+      "$frame_dir/components.tsv" || {
+      echo "COHORT_FRAME_CAPTURE=ERROR missing_exact_focus=$focus"
+      exit 8
+    }
+  done
   if [[ "${COHORT_NONREUSE_REASON_CAPTURE:-0}" == 1 ]]; then
     python3 "$repo/tools/ci/linux-runtime-p1-nonreuse-reason-parse-v1.py" \
       "$frame_dir/replay.log" "$frame_dir/objects.tsv" \
