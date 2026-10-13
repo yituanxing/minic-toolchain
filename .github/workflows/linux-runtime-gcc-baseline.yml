@@ -927,7 +927,12 @@ jobs:
           work="$GITHUB_WORKSPACE/build/linux-runtime-gcc"
           ev="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-v1"
           export COHORT_ACTION=verify
-          export COHORT_P1_STACK_OWNER_SWAPS=${{ contains(github.event.head_commit.message, '[linux-runtime-stack-owners]') && '1' || '0' }}
+          # Full-current acceptance: seven authenticated MiniC producer shards feed
+          # this same receiver. Reuse the merged immutable 2064-object pool for
+          # the known seven-owner experimental P1 correction in this SAME job;
+          # do not rerun a second CI just to restore a freshly built full cache.
+          # Bare [linux-runtime-gcc-sharded] retains its original no-swap path.
+          export COHORT_P1_STACK_OWNER_SWAPS=${{ (contains(github.event.head_commit.message, '[linux-runtime-stack-owners]') || (contains(github.event.head_commit.message, '[linux-runtime-gcc-sharded]') && contains(github.event.head_commit.message, '[linux-runtime-p1-defined-crossblock]'))) && '1' || '0' }}
           export COHORT_P1_IDENTICAL_IMAGE_REPEAT=${{ contains(github.event.head_commit.message, '[linux-runtime-repeat-image]') && '1' || '0' }}
           export COHORT_P1_GDB_STACK=${{ contains(github.event.head_commit.message, '[linux-runtime-gdb-stack]') && '1' || '0' }}
           export COHORT_P1_MULTI_RESCUE=${{ contains(github.event.head_commit.message, '[linux-runtime-multi-rescue]') && '1' || '0' }}
