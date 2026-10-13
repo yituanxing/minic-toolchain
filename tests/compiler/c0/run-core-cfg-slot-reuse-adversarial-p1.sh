@@ -112,15 +112,18 @@ names=(cfg_first_write_branches cfg_read_first_backedge cfg_switch_carried
        cfg_goto_join_loop cfg_pointer_survives_join cfg_external_escape
        cfg_volatile_backedge cfg_discarded_addresses)
 refdefs=()
+ref2defs=()
 basedefs=()
 for n in "${names[@]}"; do
     refdefs+=("-D${n}=${n}_ref")
+    ref2defs+=("-D${n}=${n}_ref2")
     basedefs+=("-D${n}=${n}_base")
 done
 "$RISCV_CC" -E -P -x c "$WORK/adversarial.c" -o "$WORK/optimized.i"
 "$RISCV_CC" -E -P -x c "${basedefs[@]}" "$WORK/adversarial.c" -o "$WORK/baseline.i"
 # GNU reference source semantics and ABI must be independent of MiniC.
 "$RISCV_CC" -O0 -c "${refdefs[@]}" "$WORK/adversarial.c" -o "$WORK/gcc-ref.o"
+"$RISCV_CC" -O2 -c "${ref2defs[@]}" "$WORK/adversarial.c" -o "$WORK/gcc-ref2.o"
 # The same profile MiniC binary in both paths.  The baseline disables the
 # cross-block heuristic BY FUNCTION, not by switching compiler binaries.
 env -u MINIC_OPT_PURE_DISCARDED_ADDRESS_EQ \
@@ -137,7 +140,7 @@ int cfg_external_mutate(int *p,int delta) {
     *p = *p + delta;
     return *p;
 }
-#define DECL(n) extern int n(int), n##_base(int), n##_ref(int)
+#define DECL(n) extern int n(int), n##_base(int), n##_ref(int), n##_ref2(int)
 DECL(cfg_first_write_branches);
 DECL(cfg_read_first_backedge);
 DECL(cfg_switch_carried);
@@ -147,10 +150,10 @@ DECL(cfg_external_escape);
 DECL(cfg_volatile_backedge);
 DECL(cfg_discarded_addresses);
 #define TEST(n,index) do { \
-    int opt=n(x), base=n##_base(x), gcc=n##_ref(x); \
-    if (opt!=gcc || base!=gcc) { \
-       printf("P1_CFG_ADVERSARIAL=FAIL x=%d case=%d opt=%d base=%d gcc=%d\\n", \
-              x,index,opt,base,gcc);return 3; \
+    int opt=n(x), base=n##_base(x), gcc=n##_ref(x), gcc2=n##_ref2(x); \
+    if (opt!=gcc || base!=gcc || gcc2!=gcc) { \
+       printf("P1_CFG_ADVERSARIAL=FAIL x=%d case=%d opt=%d base=%d gccO0=%d gccO2=%d\\n", \
+              x,index,opt,base,gcc,gcc2);return 3; \
     } \
 } while(0)
 int main(void) {
@@ -164,11 +167,11 @@ int main(void) {
         TEST(cfg_volatile_backedge,6);
         TEST(cfg_discarded_addresses,7);
     }
-    printf("P1_CFG_ADVERSARIAL=PASS vectors=1023 cases=8 oracles=3 optimized=real_qemu baseline=real_qemu gcc=real_qemu\\n");
+    printf("P1_CFG_ADVERSARIAL=PASS vectors=1023 cases=8 oracles=4 optimized=real_qemu baseline=real_qemu gcc_O0_O2=real_qemu\\n");
     return 0;
 }
 C_HARNESS
-"$RISCV_CC" -O0 -static "$WORK/harness.c" "$WORK/gcc-ref.o" \
+"$RISCV_CC" -O0 -static "$WORK/harness.c" "$WORK/gcc-ref.o" "$WORK/gcc-ref2.o" \
     "$WORK/baseline.s" "$WORK/optimized.s" -o "$WORK/differential.elf"
 timeout 35s "$QEMU_RISCV64" "$WORK/differential.elf" | tee "$WORK/result.log"
 grep -Fq "P1_CFG_ADVERSARIAL=PASS vectors=1023 cases=8" "$WORK/result.log"
