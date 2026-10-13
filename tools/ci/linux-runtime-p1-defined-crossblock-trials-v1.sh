@@ -10,6 +10,14 @@ single_owner="${COHORT_P1_SINGLE_OWNER:-0}"
 # experimental compiler only; default runtime experiment unchanged.
 rx_roi=0
 rx_bundle=0
+rx_bundle_page=0
+if [[ "$single_owner" != 1 && "${COHORT_P1_DISCARD_EQ:-0}" != 1 ]] &&
+  git -C "$repo" log -1 --format=%B | grep -Fq '[linux-runtime-p1-rx-bundle-page]'; then
+  rx_bundle=1
+  rx_bundle_page=1
+  unset MINIC_P1_CROSSBLOCK_FUNCTION
+  echo "P1_RX_BUNDLE_PAGE=START owners=5 additional_owner=mm/page_alloc.o normal_qemu_repeats=3"
+fi
 if [[ "$single_owner" != 1 && "${COHORT_P1_DISCARD_EQ:-0}" != 1 ]] &&
   git -C "$repo" log -1 --format=%B | grep -Fq '[linux-runtime-p1-rx-bundle]'; then
   rx_bundle=1
@@ -51,6 +59,7 @@ net/ipv6/ip6_output.o
 net/ipv6/tcp_ipv6.o
 net/ipv4/tcp_input.o
 mm/slub.o
+mm/page_alloc.o
 OWNERS_BUNDLE
 elif [[ "$rx_roi" == 1 ]]; then
   cat >"$dest/selected.txt" <<'OWNERS_RX'
@@ -77,7 +86,7 @@ from pathlib import Path
 import sys
 a,b=map(Path,sys.argv[1:])
 names=a.read_text().splitlines()
-assert len(names) in (1,4) and len(set(names))==len(names)
+assert len(names) in (1,4,5) and len(set(names))==len(names)
 assert set(names)<=set(b.read_text().splitlines())
 print(f"P1_DEFINED_CROSSBLOCK=SELECTED owners={len(names)}")
 PY_SET
@@ -178,7 +187,7 @@ for line in (ev/"minic-manifest.sha256").read_text().splitlines():
     else:
         assert actual==digest, "unrelated MiniC owner changed: "+target
         untouched += 1
-assert matched in (1,4) and untouched==2064-matched
+assert matched in (1,4,5) and untouched==2064-matched
 print(f"P1_DEFINED_CROSSBLOCK=POOL_ISOLATED changed_targets={matched} original_neighbors={untouched}")
 PY_VERIFY
 if [[ "$rx_roi" == 1 ]]; then
@@ -228,6 +237,7 @@ baseline={
  'net/ipv6/tcp_ipv6':{'tcp_v6_rcv':1760,'tcp_v6_do_rcv':1104},
  'net/ipv4/tcp_input':{'tcp_conn_request':1312,'tcp_rcv_state_process':1776},
  'mm/slub':{'___slab_alloc':976},
+ 'mm/page_alloc':{'__alloc_pages':352,'__alloc_pages_slowpath':1024},
 }
 total=0
 for owner,items in baseline.items():
@@ -331,7 +341,9 @@ PY_IRQ_ATTRIBUTION
     echo "P1_DEFINED_CROSSBLOCK_GDB=INCONCLUSIVE no_P1_pass_inference=true"
   fi
 fi
-if [[ "$rx_bundle" == 1 ]]; then
+if [[ "$rx_bundle_page" == 1 ]]; then
+  echo "P1_RX_BUNDLE_PAGE=COMPLETE modified_minic=5 unchanged_minic=2059 gcc_owners=0 passes=$passes failures=$((3-passes)) image_sha=$pinned candidate_not_promoted=true"
+elif [[ "$rx_bundle" == 1 ]]; then
   echo "P1_RX_BUNDLE=COMPLETE modified_minic=4 unchanged_minic=2060 gcc_owners=0 passes=$passes failures=$((3-passes)) image_sha=$pinned candidate_not_promoted=true"
 elif [[ "$single_owner" == 1 ]]; then
   echo "P1_DEFINED_CROSSBLOCK=COMPLETE modified_minic=1 gcc_owners=1 minic_owners=2063 passes=$passes failures=$((3-passes)) image=$pinned experimental=true not_promoted=true"
