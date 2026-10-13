@@ -1314,3 +1314,51 @@ semantic differential/escape-backedge tests, and only then (4) integrate
 already independently certified native-tool stages with the exact
 MiniC object profile. Avoid starting a fresh 2064-TU rebuild for the same
 candidate.
+
+
+## 2026-10-13: accepted 24/24 Image independently booted P0, shell and P1 — no relink
+
+**Further actual run:** [CI #38396413292](https://github.com/yituanxing/minic-toolchain/actions/runs/38396413292), source commit `e15130bb19bdff72c078d2b9d4dd3ad31aef057e`, job `gcc-shard-verify`: **SUCCESS**. Diagnostic artifact
+`minic-large-image-qemu-e15130bb19bdff72c078d2b9d4dd3ad31aef057e`,
+ID **11812077289**, contains provenance and serial outputs of all three
+independent QEMU workloads.
+
+This follow-up used **the exact unchanged Image** from #38390921455
+(`6f094d58e21de4b41fac7fffc1207b42dd04f5dd739c24f3d7107b1a944084f4`,
+215511040B), downloaded by pinned run/artifact name, with *no C recompilation
+and no relink*. A fail-closed preflight re-read all 24 historical guest serial
+logs and required 12/12 syscalls, IPv6 loopback and clean init completion in
+each one, 2064 entries in the authenticated MiniC original manifest, eight
+different owner digests and the independent `MINIC_ROUTE_AUDIT=PASS` log.
+This preflight printed
+`P1_ACCEPTED_ARTIFACT=PASS same_image=24/24 p1_syscalls=12/12
+ipv6=24/24 minic_c=2064 changed_minic_c=8 gcc_c=0`.
+
+**New independent runtime results:**
+
+| Real QEMU workload | Verdict |
+| --- | --- |
+| `fast` / P0 boot-and-init contract | **PASS** |
+| `shell` interactive user-shell oracle | **PASS** |
+| `p1` 12-syscall and IPv6 TCP loopback | **PASS**, `RUNTIME_V2_SYSCALL_END pass=12 fail=0` |
+
+Final check:
+`P1_ACCEPTED_NO_RECOMPILE=PASS profiles=fast,shell,p1
+image_unchanged=true original_16KiB=true`, preceded by
+`LARGE_IMAGE_RUNTIME=PASS fast=1 p1=12_syscalls shell=1`.
+This establishes **more than the original 24/24 P1-only test** while using
+the same Image hash and original 16KiB stacks.
+
+**Scope:** the additional user shell is real kernel runtime evidence, but
+does not validate the experimental cross-basic-block CoreObject allocator
+on every C program or prove full native MiniAS/MiniAR/MiniLD/MiniObjcopy/
+MiniPP output in the 2064 MiniC build. Do not fold this opt-in experiment
+into normal globally enabled compiler lowering until pointer-escape, CFG
+liveness and loop-edge soundness tests are adequate. Next native-tool
+integration should preserve this acceptance artifact as the golden runtime
+oracle, and replace only one native tool at a time with exact provenance.
+
+The first additional-profile attempt #38396288926 failed immediately
+(`exit 127`) due to a CI shell `printf` continuation typo, **before
+any QEMU guest execution**; #38396413292 fixed it and proved all profiles
+green. This is not a kernel regression.
