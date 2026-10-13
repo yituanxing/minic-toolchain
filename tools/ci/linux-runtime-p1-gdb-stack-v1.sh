@@ -28,7 +28,6 @@ PY_PORT
 )
 python3 - "$dest/linked-symbols.nm" "$dest/commands.gdb" "$dest/symbols.txt" "$vmlinux" "$port" "$dest" <<'PY_GDB'
 from pathlib import Path
-import os
 import sys
 
 nm, commands_path, symbols_path, vmlinux, port, evidence_dir = sys.argv[1:]
@@ -46,13 +45,6 @@ required = ("tcp_v6_connect", "irq_stack_ptr", "__per_cpu_offset")
 missing = [name for name in required if name not in symbols]
 if missing:
     raise SystemExit("P1_GDB=INCONCLUSIVE missing_linked_symbols=" + ",".join(missing))
-rx_enabled = os.environ.get("P1_GDB_RX_TRACE") == "1"
-rx_targets = (
-    "do_softirq_own_stack", "handle_softirqs", "net_rx_action",
-    "process_backlog", "ipv6_rcv", "tcp_v6_rcv",
-    "tcp_v6_conn_request", "tcp_conn_request",
-    "___slab_alloc", "new_slab", "__alloc_pages",
-)
 targets = (
     "tcp_v6_connect", "ip6_xmit", "ip6_finish_output2",
     "do_irq", "handle_riscv_irq", "riscv_timer_interrupt",
@@ -62,14 +54,6 @@ targets = (
     "__slab_alloc_node", "get_freepointer_safe",
     "__list_add_valid_or_report", "handle_bad_stack",
 )
-if rx_enabled:
-    targets += rx_targets
-    required_rx = ("do_softirq_own_stack", "net_rx_action", "tcp_v6_rcv",
-                   "tcp_conn_request", "__alloc_pages")
-    missing_rx = [name for name in required_rx if name not in symbols]
-    if missing_rx:
-        raise SystemExit("P1_RX_GDB=INCONCLUSIVE missing_exact_symbols=" +
-                         ",".join(missing_rx))
 bound = [(name, symbols[name][0]) for name in targets if name in symbols]
 Path(symbols_path).write_text(
     "".join(f"{name}\t0x{addr:x}\n" for name, addr in bound)
@@ -131,10 +115,6 @@ for idx, (name, _) in enumerate(bound[1:], 2):
         emit(f'printf "P1_GDB_FRAME name={name} pc=%#lx sp=%#lx ra=%#lx irq_remaining=%ld task_remaining=%ld\\n", (unsigned long)$pc, (unsigned long)$sp, (unsigned long)$ra, (long)((unsigned long)$sp-(unsigned long)$p1_irq_base), (long)((unsigned long)$sp-(unsigned long)$p1_task_lo)')
         if low_stack_target:
             emit("end")
-        if rx_enabled and name in rx_targets:
-            emit("if $sp >= $p1_irq_base && $sp < $p1_irq_top")
-            emit(f'printf "P1_RX_GDB_ENTRY function={name} pc=%#lx sp=%#lx irq_headroom=%ld\\n", (unsigned long)$pc, (unsigned long)$sp, (long)((unsigned long)$sp-(unsigned long)$p1_irq_base)')
-            emit("end")
         # Keep the record of the first post-TCP transition to IRQ stack,
         # but avoid GDB spending its whole budget at frequent IRQ entry.
         if name in ("do_irq", "handle_riscv_irq"):
@@ -168,10 +148,7 @@ echo "P1_GDB=DONE debugger_rc=$rc image_sha=$(sha256sum "$image" | cut -d' ' -f1
 if ! python3 "$PWD/tools/ci/linux-runtime-p1-stack-postmortem-v1.py" --dir "$dest"; then
   echo "P1_POSTMORTEM=INCONCLUSIVE parse_failed_not_runtime_certificate"
 fi
-grep -aE 'P1_(GDB_(IRQ_LAYOUT|FRAME|OVERFLOW_HANDLER)|FIRSTFAULT|RX_GDB_ENTRY)' "$dest/gdb.log" | tail -n 120 || :
-if [[ "${P1_GDB_RX_TRACE:-0}" == 1 ]] && ! grep -aFq 'P1_RX_GDB_ENTRY function=' "$dest/gdb.log"; then
-  echo "P1_RX_GDB=INCONCLUSIVE no_rx_irq_stack_entries"; exit 8
-fi
+grep -aE 'P1_(GDB_(IRQ_LAYOUT|FRAME|OVERFLOW_HANDLER)|FIRSTFAULT)' "$dest/gdb.log" | tail -n 100 || :
 grep -aE 'Insufficient stack space|Kernel panic|BUG:|Oops:' "$dest/qemu-serial.log" | tail -n 10 || :
 if ! grep -aFq 'P1_GDB_IRQ_LAYOUT irq_base=' "$dest/gdb.log"; then
   echo "P1_GDB=INCONCLUSIVE no_percpu_irq_layout_observed"

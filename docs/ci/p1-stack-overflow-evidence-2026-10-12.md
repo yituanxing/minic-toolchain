@@ -644,3 +644,78 @@ no new branch/Workflow, no production MiniC changes, no extra runtime
 build. Next targeted work: establish an **actual** sampled nested
 call/stack-depth frontier or compare GNU/MiniC frame budgets for a
 specific expensive receive-path function before proposing a fix.
+
+
+## Actual IRQ-stack TCP receive call frontier — 2026-10-13
+
+CI **#38336624015**, artifact **11785257966**. One GDB run on a
+**SHA-pinned** Linux Image
+`a0e13466e179ddb5f9c4201159068c5a0811529311c807ceed594a63d3d45bd4`
+after three ordinary-QEMU P1 failures (0/3); original 16KiB stacks,
+2064 MiniC objects (only `ip6_output.o` rebuilt under the pre-existing
+effect-free address-comparison experiment), zero GCC-C substitutions.
+GDB breakpoint **entry SP samples** on this exact Image, unlike the
+prior raw-stack word candidates:
+
+| Actual function entry | IRQ-stack bytes remaining |
+| --- | ---: |
+| `handle_softirqs` | 15968 |
+| `net_rx_action` | 15712 |
+| `process_backlog` | 14944 |
+| `ipv6_rcv` | 14528 |
+| `tcp_v6_rcv` | 12256 |
+| `tcp_v6_conn_request` | 7616 |
+| `tcp_conn_request` | 7264 |
+| `___slab_alloc` | 4720 |
+| `new_slab` | 3744 |
+| `__alloc_pages` | 2816 |
+
+These entries make a **real receive/SoftIRQ → TCP request → SLUB →
+page-allocation stack-pressure frontier** rather than merely matching
+saved addresses from a postmortem dump. Uninstrumented intervening
+functions still exist; the table is **not** a fully verified
+direct caller-to-callee chain.
+
+On the same GDB run first fault was at
+`get_current+0x10`, return address `preempt_count_ptr+0x14`,
+SP `0xff1fffffffffffe0`, 32 bytes **below measured CPU0 IRQ base**;
+three ordinary boots also trapped **32/32/32 bytes below** the verified
+IRQ base. Therefore a nested timer interrupt is **not necessary** to
+explain this reproducible *receive-path* IRQ stack exhaustion
+(other experiments trapped at timekeeping). This is not evidence of a
+`get_current` miscompile: the prologue encountered an exhausted stack.
+
+### Existing within-basic-block allocator capacity audit
+
+From #38335183624's immutable `CORE_FRAME_OBJECT` /
+`CORE_FRAME_INTERVAL` traces, recomputed object-slot coloring offline
+using each block's maximum simultaneous inclusive live intervals.
+Because the certified backend never allows cross-block sharing, the
+**sum of these per-block overlap maxima is a lower bound** for the
+current policy; current allocations match it exactly:
+
+| Function | Reusable scalar objects | Basic blocks with reusable slots | Actual 8-byte slots | Within-block proven minimum |
+| --- | ---: | ---: | ---: | ---: |
+| `tcp_conn_request` | 213 | 42 | 94 | 94 |
+| `tcp_v6_conn_request` | 90 | 17 | 33 | 33 |
+| `new_slab` | 27 | 5 | 11 | 11 |
+| `__alloc_pages` | 48 | 8 | 22 | 22 |
+| `__alloc_pages_slowpath` | 148 | 52 | 107 | 107 |
+
+In particular `tcp_conn_request` already reuses **213/260**
+CoreObjects. Its 94-slot pool uses **752 bytes** of a
+**1232-byte** CoreObject region; 47 permanent objects and layout
+account for the remainder. Among its reusable objects, all 213
+observed first accesses are **WRITE**. Merely reordering the
+existing within-block greedy allocator cannot improve any of these
+observed slot counts. Further frame reduction requires (a) *proven*
+CFG-cross-block live-range safety or (b) elimination/shortening of
+compiler-generated temporaries. Earlier cross-block *P1 failure* alone
+does not prove a lifetime corruption; equally it must not be promoted
+as a runtime fix without a correctness proof and regression.
+
+Next inexpensive causal comparison: freeze one
+`net/ipv4/tcp_input.o` only and compare GNU versus MiniC function
+prologues while capturing a single-TU Core frame report. This avoids
+the old report parser's duplicate helper symbols across four TUs;
+no Linux link or new CI workflow.
