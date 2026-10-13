@@ -762,6 +762,7 @@ jobs:
       # full CI #38204602644. This lane only resolves P1 crash symbol owners
       # and compares stack prologues with the certified pure-GNU .o pool.
       - name: Restore immutable 2064-object MiniC cache for P1 diagnosis
+        id: p1_minic_frozen_cache
         if: contains(github.event.head_commit.message, '[linux-runtime-p1-frame-audit]') || contains(github.event.head_commit.message, '[linux-runtime-stack-owners]')
         uses: actions/cache/restore@v4
         with:
@@ -770,7 +771,30 @@ jobs:
             build/linux-runtime-gcc-cohort-v1/minic-manifest.sha256
             build/linux-runtime-gcc-cohort-v1/minic-identity.txt
           key: ${{ env.FULL_MINIC_KEY }}
+          # Opt-in DIAGNOSTIC ONLY. The new guarded-off dead-discard
+          # experiment changed the source-based profile cache key, not the
+          # independently SHA-authenticated historic 2064 C object fixture.
+          # Never broaden to a prefix or silently use this for certification.
+          restore-keys: ${{ contains(github.event.head_commit.message, '[linux-runtime-p1-frozen-baseline]') && 'gnu-minic-objects-v1-eeb04f304ebfb97a1079c187dc0c2ea3cc61fc50a55aa3cc776237c16ab19bbe-ba0a5fe0e3be00a107df47e5156b73b7af085ed9f519a4f86ef20e684cf227b1-1d1c8d09cfffddb37990552ae6392181a42d55332e48232dce27e7305d7e770b-0c2a199ea3ae14d39b008fd4080d4b18d675b07daa17976c7d9755e8ea67310b-d072447ef15a207422bf4874920221c41af7a771d1dbae770855cf3d6220a507' || '' }}
           fail-on-cache-miss: true
+
+      - name: Attest exact frozen P1 diagnostic cache provenance
+        if: contains(github.event.head_commit.message, '[linux-runtime-p1-frozen-baseline]')
+        shell: bash
+        env:
+          RESTORED: ${{ steps.p1_minic_frozen_cache.outputs.cache-matched-key }}
+          CURRENT: ${{ env.FULL_MINIC_KEY }}
+        run: |
+          set -Eeuo pipefail
+          historical='gnu-minic-objects-v1-eeb04f304ebfb97a1079c187dc0c2ea3cc61fc50a55aa3cc776237c16ab19bbe-ba0a5fe0e3be00a107df47e5156b73b7af085ed9f519a4f86ef20e684cf227b1-1d1c8d09cfffddb37990552ae6392181a42d55332e48232dce27e7305d7e770b-0c2a199ea3ae14d39b008fd4080d4b18d675b07daa17976c7d9755e8ea67310b-d072447ef15a207422bf4874920221c41af7a771d1dbae770855cf3d6220a507'
+          [[ "$RESTORED" == "$CURRENT" || "$RESTORED" == "$historical" ]] || {
+            echo "P1_FROZEN_FIXTURE=FAIL unexpected_cache_key=$RESTORED" >&2
+            exit 8
+          }
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-v1"
+          (cd "$ev" && sha256sum --quiet -c minic-manifest.sha256)
+          [[ $(wc -l < "$ev/minic-manifest.sha256") -eq 2064 ]] || exit 8
+          echo "P1_FROZEN_FIXTURE=PASS source_key=$RESTORED frozen_objects=2064 current_profile_cache_hit=$([[ "$RESTORED" == "$CURRENT" ]] && echo yes || echo no) diagnostic_only=true no_current_profile_full_certification=true"
 
       - name: Locate real P1 crash owners and compare RV64 stack prologues
         if: contains(github.event.head_commit.message, '[linux-runtime-p1-frame-audit]')
