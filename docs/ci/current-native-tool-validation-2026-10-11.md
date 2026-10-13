@@ -10,7 +10,7 @@ GNU/non-native boundaries, successful build *and* QEMU guest logs.
 | Boundary | Best proven result and exact scope | Still open |
 | --- | --- | --- |
 | MiniPP | Frozen Linux GCC-E **3352/3352 exact**, [#38150944470](https://github.com/yituanxing/minic-toolchain/actions/runs/38150944470); real MiniPP-produced `.i` consumed by GCC cc1 for **2 actual Linux TUs**, combined five-tool P0/P1 [#38192265904](https://github.com/yituanxing/minic-toolchain/actions/runs/38192265904). | Whole *production* Image C inventory with MiniPP, not just a shadow diff; current full path remains unproved. |
-| MiniC | All **2064 C objects** genuinely MiniC; GNU preprocessing/as/ld; seven experimental stack-slot owners, **16KiB P1 12/12 same-Image**, [#38351512579](https://github.com/yituanxing/minic-toolchain/actions/runs/38351512579), SHA `06bbd4e9bdd2c0ca4634ca55a7445c3565c8fc73cb00ce8bd39fc55d770a7530`. | The 7-owner optimization is **not promoted** to a general safe/default backend. Default focused RV64 is **RED** [#38351512614](https://github.com/yituanxing/minic-toolchain/actions/runs/38351512614), real unresolved `missing_arch_dma_set_uncached` from `tests/driver/run-constant-if-link-v0.sh`. |
+| MiniC | All **2064 C objects** genuinely MiniC; GNU preprocessing/as/ld; seven experimental stack-slot owners, **16KiB P1 12/12 same-Image**, [#38351512579](https://github.com/yituanxing/minic-toolchain/actions/runs/38351512579), SHA `06bbd4e9bdd2c0ca4634ca55a7445c3565c8fc73cb00ce8bd39fc55d770a7530`. | The 7-owner stack optimization is **not promoted** to a general safe/default backend. The *default* MiniC `missing_arch_dma_set_uncached` focused regression is now **GREEN** after the narrow conservative zero-only nonescaping `_Bool` CFG proof: [#38358349408](https://github.com/yituanxing/minic-toolchain/actions/runs/38358349408); with four anti-overfolding negative cases [#38358540912](https://github.com/yituanxing/minic-toolchain/actions/runs/38358540912), and restored Runtime-profile source seam [#38358763188](https://github.com/yituanxing/minic-toolchain/actions/runs/38358763188). Original RED control was [#38351512614](https://github.com/yituanxing/minic-toolchain/actions/runs/38351512614). The whole-Linux current-head 2064-object build still requires independent re-certification. |
 | MiniAS | Isolated native assembler with GNU GCC/AR/LD, full Linux Image, QEMU P0/P1: the first phase of [#38184298699](https://github.com/yituanxing/minic-toolchain/actions/runs/38184298699); complete 3536 input validation after alignment fix [#38151040863](https://github.com/yituanxing/minic-toolchain/actions/runs/38151040863). | Do not mislabel the **overall** #38184298699 workflow as green: a later integration substage failed there; later certified combination supersedes it. |
 | MiniAR | GNU-base isolated Kbuild **633 calls** + Linux FAST guest [#38149742508](https://github.com/yituanxing/minic-toolchain/actions/runs/38149742508); A0/A1 shared T1 contract. | Single-tool FAST is narrower than P0/P1; combinations below have stronger P0/P1 proof. |
 | MiniLD | Static/dynamic and linker-script T1; genuinely native **three final vmlinux/kallsyms links**, other LD boundaries GNU, with MiniObjcopy Image [#38189325106](https://github.com/yituanxing/minic-toolchain/actions/runs/38189325106). | Non-final Linux LD boundaries have not all been replaced and runtime-certified. |
@@ -76,10 +76,15 @@ GNU/non-native boundaries, successful build *and* QEMU guest logs.
 
 **Next uncrossed gates, in order:**
 
-A. Close the **default** RV64 `constant-if-link` bug by reproducing its
-   `_Bool` local fact/CFG failure in the existing micro test and fixing
-   the smallest responsible Core path. Confirm on the focused test and
-   preserve the red control result.
+A. **DONE for the default focused RV64 C/CFG/link test:** source
+   commit `33c0877bef0416346260c9237d7afaab2dcf83f5` implements
+   `CORE_ZERO_ONLY_BOOL_CFG_V1`, rejecting nonzero writes, address escapes,
+   volatile state and asm outputs. The literal constant-if Runtime-profile
+   patch anchor was restored at `27f974b274edf86cceeb0b6933c37693e5652654`.
+   T1 and M0 were independently GREEN; anti-overfolding controls were GREEN.
+   **Next** validate the exact Linux `kernel/dma/direct.o` producer with
+   the *existing* `[linux-runtime-gcc-dma-only]` 1-owner cached GNU+Runtime
+   profile lane. Do not mistake that producer check for full Image/P1.
 B. Finish same-tree **full production MiniPP** from the existing
    `minipp_native_full_relink.sh` machinery; reuse source/objects whenever
    their exact provenance is available, verify the actual number of C-only
