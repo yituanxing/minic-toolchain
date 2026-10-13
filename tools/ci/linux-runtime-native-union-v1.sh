@@ -128,6 +128,9 @@ if [[ "${MINILD_ENABLE_PURGATORY_R:-0}" == 1 &&
     exit "$status"
   fi
 fi
+# CI qualification with the native purgatory final static link must retain
+# 2064 SHA-exact MiniC objects and real Linux QEMU P0/P1; successful kernel
+# boot alone does NOT exercise kexec/purgatory runtime. Other GNU LD remain.
 # The REAL cached GNU purgatory.ro -> purgatory.chk final static link was
 # independently proven #38485109077: GNU global exports, ELF64 RV ET_EXEC,
 # ABI flags and entry nonzero all match. Promote this ONE boundary only after
