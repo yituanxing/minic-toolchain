@@ -82,6 +82,9 @@ for ((i=0; i<${#args[@]}; ++i)); do
     break
   fi
 done
+# Combined full-runtime qualification: only vmlinux.o -r is additionally
+# native, all other untested linker boundaries stay GNU. Require QEMU P1
+# and 2 real native -r calls after SHA-authenticating all 2064 MiniC objects.
 # The GNU vmlinux.o relocatable link has independently passed the REAL
 # cached Linux 6.6.143 GNU -r ABI and ALL exported-name differential
 # (#38481829961): 291ms; zero C objects rebuilt. Promote it only with an
