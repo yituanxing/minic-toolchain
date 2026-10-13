@@ -4,6 +4,10 @@
 Shards never certify runtime. Only the full, provenance-checked union may be
 fed to the existing GNU golden relink / QEMU verifier. Cached objects must
 match the rebuilt MiniC executable as well as the pinned GNU environment.
+
+Performance qualification: the full cross-block profile pins the actual CFG
+patch digest, so a new first-access analysis forces fresh exact shard objects
+rather than incorrectly reusing the 33-minute blake2s version.
 """
 from __future__ import annotations
 
