@@ -171,6 +171,21 @@ print(f"P1_RX_NEIGH=EARLY_ROI_PASS baseline={baseline} frame={frame} saved={base
 PY_NEIGH_FIRST
   replay_selected="$dest/prior-seven-selected.txt"
 fi
+# Deliberately combine TWO already-tested mechanisms to repair the remaining
+# 16KiB IRQ budget, without changing the 2064-object frozen source pool.
+# (1) conservative across-CFG stack coloring, as in prior eight-owner runs;
+# (2) independently GCC/QEMU-tested elimination of discarded local-address
+#     equality before CoreObject materialization.
+# This is an exact eight-owner opt-in, NOT global production promotion.
+if git -C "$repo" log -1 --format=%B | grep -Fq '[linux-runtime-p1-combine-discard]'; then
+  [[ "$rx_bundle_timer" == 1 && "$rx_bundle_neigh" == 1 &&
+     "$single_owner" != 1 ]] || {
+    echo "P1_COMBINED_DISCARD=FAIL require_exact_eight_owner_bundle" >&2
+    exit 8
+  }
+  export MINIC_OPT_PURE_DISCARDED_ADDRESS_EQ=1
+  echo "P1_COMBINED_DISCARD=START exact_owners=8 gcc_c=0 2064_frozen=true pure_expression_scope=all_selected_functions"
+fi
 COHORT_FRAME_CAPTURE_ONLY="$(if [[ "$rx_roi" == 1 || "$rx_bundle" == 1 ]]; then echo 1; else echo "$single_owner"; fi)" MINIC_CORE_FRAME_TRACE=1 \
 MINIC_CORE_FRAME_TRACE_FILTER="$(if [[ "$rx_roi" == 1 || "$rx_bundle" == 1 ]]; then echo 'ip6_finish_output2,ip6_xmit,tcp_v6_rcv,tcp_v6_do_rcv,tcp_conn_request,tcp_rcv_state_process,___slab_alloc,net_rx_action,process_backlog,__dev_queue_xmit,hrtimer_interrupt,__hrtimer_run_queues,__run_hrtimer,hrtimer_run_softirq,__neigh_create'; else echo 'ip6_finish_output2,ip6_xmit'; fi)" \
 python3 "$repo/tools/ci/linux-runtime-kbuild-regeneration-guard-v1.py" \
@@ -394,6 +409,12 @@ if [[ "$rx_bundle_timer" == 1 ]]; then
     QEMU_RISCV64=qemu-riscv64 \
     bash "$repo/tests/compiler/c0/run-core-cfg-slot-reuse-p1.sh"
   echo "P1_RX_BUNDLE_TIMER=SEMANTIC_PASS"
+  if [[ "${MINIC_OPT_PURE_DISCARDED_ADDRESS_EQ:-0}" == 1 ]]; then
+    MINIC="$minic" BUILD_DIR="$dest" RISCV_CC=riscv64-linux-gnu-gcc \
+      QEMU_RISCV64=qemu-riscv64 \
+      bash "$repo/tests/compiler/c0/run-pure-discarded-address-rv64.sh"
+    echo "P1_COMBINED_DISCARD=DIFFERENTIAL_PASS gcc_old_new_qemu=3/3"
+  fi
 fi
 export COHORT_P1_EXPERIMENTAL_POOL="$dest/pool/minic"
 last_selection="none"
