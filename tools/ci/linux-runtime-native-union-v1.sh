@@ -128,8 +128,30 @@ if [[ "${MINILD_ENABLE_PURGATORY_R:-0}" == 1 &&
     exit "$status"
   fi
 fi
-# The three static final Linux link boundaries are proven #38426379946.
-# purgatory.chk and 32-bit vDSO still use GNU LD (not yet certified).
+# The REAL cached GNU purgatory.ro -> purgatory.chk final static link was
+# independently proven #38485109077: GNU global exports, ELF64 RV ET_EXEC,
+# ABI flags and entry nonzero all match. Promote this ONE boundary only after
+# the exact final-runtime opt-in, and require full 2064-MiniC Linux QEMU P1.
+if [[ "${MINILD_ENABLE_PURGATORY_STATIC:-0}" == 1 &&
+      "${output##*/}" == purgatory.chk ]]; then
+  found_entry=0
+  found_r=0
+  for arg in "$@"; do
+    [[ "$arg" == purgatory_start ]] && found_entry=1
+    [[ "$arg" == -r || "$arg" == --relocatable ]] && found_r=1
+  done
+  if [[ "$found_entry" == 1 && "$found_r" == 0 ]]; then
+    { flock 9; printf 'minild-purgatory-static'; printf ' %q' "$@"; printf '\n'; } 9>>"$NATIVE_TRACE_DIR/minild.trace" >&9
+    start_ms=$(date +%s%3N)
+    status=0
+    "$MINILD" "$@" || status=$?
+    elapsed_ms=$(($(date +%s%3N)-start_ms))
+    { flock 9; printf 'minild-purgatory-static\t%s\t%s\t%s\n' "$elapsed_ms" "$status" "$output"; } 9>>"$NATIVE_TRACE_DIR/minild-times.tsv" >&9
+    exit "$status"
+  fi
+fi
+# Three static vmlinux links proven #38426379946; 32-bit vDSO GNU LD stays.
+
 case "${output##*/}" in
   .tmp_vmlinux.kallsyms1|.tmp_vmlinux.kallsyms2|vmlinux)
     { flock 9; printf 'minild'; printf ' %q' "$@"; printf '\n'; } 9>>"$NATIVE_TRACE_DIR/minild.trace" >&9
