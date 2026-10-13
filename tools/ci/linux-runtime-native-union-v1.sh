@@ -13,6 +13,8 @@
 # { flock; printf; } logging group must redirect fd1 to locked fd9.
 # The earlier CI showed malformed `ar mPiT miniar t vmlinux.a vmlinux.a`
 # precisely because the wrapper's printed trace polluted `ar t` stdout.
+# Test gate: stdout stays clean for every wrapper while separate trace
+# attests exactly which MiniAR/MiniLD/MiniObjcopy invocations were native.
 set -Eeuo pipefail
 if (( $# != 2 )); then
   echo "usage: $0 <native-tool-build-dir> <evidence-dir>" >&2
