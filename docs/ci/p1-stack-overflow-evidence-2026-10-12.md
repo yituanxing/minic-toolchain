@@ -829,3 +829,65 @@ a CFG-free RHS (not just integer typed), semantic C evaluation-order
 and observable volatile/asm behavior, and validate on focused compiler
 tests before a full P1 link. No new branch/workflow/production compiler
 changes were needed.
+
+## ROI triage before further Core stack optimization — 2026-10-13
+
+**Do not repeat full P1 solely to evaluate a 16/48-byte function frame
+saving.** Evaluate the actual `net/ipv4/tcp_input.o` and IRQ/IPv6
+call-path stack frames using cached stderr-only Core frame reports first.
+Any "stack saving" is an actual measured per-function frame reduction,
+not the number of IR objects deleted or apparent source-expression frequency.
+
+| Mechanism, already measured | Affected function(s) | Per-function stack reduction | Confidence |
+| --- | --- | ---: | --- |
+| Integer RHS literal/plain-local LHS no-spill | `tcp_rcv_state_process` / `tcp_conn_request` | **48 / 0 B** | single owner replay; P1 0/3 (#38340664131) |
+| Remove side-effect-free discarded address comparisons | same two TCP functions | **384 / 128 B** | single-owner frame replay, no P1 certification (#38337904153) |
+| First-write experimental cross-block slot sharing | `tcp_rcv_state_process` | **1168 B** (1776→608) | frame only; **NOT correctness proven** (#38338521520) |
+| Same discarded-address elimination, IPv6 TU | `ip6_finish_output2`, `ip6_xmit`, `ip6_output` | **1792 + 768 + 256 B** | image unchanged across repeated P1 0/3 (#38331510555) |
+
+**Object allocation decomposition** from the immutable
+`tcp-original-prologue-frames.zip` / CI #38337439838
+(`objects.tsv` joined to `intervals.tsv` by function and ID):
+
+| Function | Objects | Reusable / fixed | Distinct blocks with reusable objects | Physical fixed region | Physical reusable region | CoreObject total |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `tcp_rcv_state_process` | 410 | 343 / 67 | 79 | 504 B | 1208 B | 1712 B |
+| `tcp_conn_request` | 260 | 213 / 47 | 42 | 480 B | 752 B | 1232 B |
+
+The physical figures are **reserved frame regions**, not sums of IR
+object payload bytes. For `tcp_rcv_state_process`, the fixed objects
+contain 491 physical payload bytes plus alignment, while the 343
+reusable objects occupy a much larger 1208-byte reserved region;
+many of those objects each have use/def intervals wholly in one of
+79 basic blocks. The current hotfix **forbids slot sharing across
+different blocks**, so each block is assigned its own scratch space.
+
+**Interpretation:** the dominant architectural opportunity is to
+recycle *proven isolated and nonescaping single-block scratch objects*
+across CFG blocks after rigorous alias and definition-before-use
+verification. The naive opt-in cross-block proof previously failed
+real P1 under more general settings and is not safe to promote.
+Preceding this with dead IR/lowering object elimination reduces the
+number of objects that have to be proven. Large unsafe objects,
+address escapes, asm-goto, indirect labels, volatile memory and
+read-before-write must stay on the prior independent-slot allocator.
+An LLVM/GCC-like generic scalar SSA/regalloc upgrade is a much bigger
+separate undertaking; do not hide it behind a "minor stack fix."
+
+**Cost/benefit process:** (1) extract *measured* per-function frame
+contribution and candidate deltas at known real GDB stack entries,
+(2) rank by attainable bytes on actually nested 16KiB call paths and
+semantic safety, (3) combine individually proven optimizations in a
+single existing MiniC runtime profile, (4) use fast small C semantic
+tests and one-TU frame/ABI A-B first, then unchanged-Image P1 3/3,
+(5) certify full 2064-owner and other components only after reaching
+a meaningful budget. Do **not** sum frames along a path unless one
+live, ordered, same-run unwind proves they were simultaneously
+resident; GDB breakpoint entry snapshots from different invocations
+are not by themselves a full stack unwind.
+
+**Decision:** stop broadening the trivial integer RHS predicate for
+now. Its 12 fewer CoreObjects in `tcp_rcv_state_process` saved only
+48 B of the 1776 B frame (~2.7%), 0 B in `tcp_conn_request`;
+moving to a more general CFG-local scratch interference analysis is
+the next large-leverage research objective. No new Workflow or branch.
