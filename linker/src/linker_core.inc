@@ -3639,11 +3639,38 @@ static bool script_layout_process_output(MiniLdScriptLayoutState *script_state,
                                              command_index);
 }
 
+/*
+ * The old layout scanned all sections to find the next lowest LMA on EVERY
+ * iteration (quadratic in alloc section count). Linux emits many section
+ * fragments. Sorting stable keys once preserves the original first-minimum
+ * selection exactly while reducing this operation to O(S log S).
+ */
+typedef struct MiniLdFileOrder {
+    uint64_t laddr;
+    uint64_t vaddr;
+    size_t index;
+} MiniLdFileOrder;
+
+static int minild_compare_file_order(const void *lhs, const void *rhs) {
+    const MiniLdFileOrder *a = lhs;
+    const MiniLdFileOrder *b = rhs;
+    if (a->laddr != b->laddr) {
+        return a->laddr < b->laddr ? -1 : 1;
+    }
+    if (a->vaddr != b->vaddr) {
+        return a->vaddr < b->vaddr ? -1 : 1;
+    }
+    if (a->index != b->index) {
+        return a->index < b->index ? -1 : 1;
+    }
+    return 0;
+}
+
 static bool static_build_script_layout(MiniLdState *state,
                                        const MiniLdScript *script,
                                        MiniLdStaticLayout *layout) {
     MiniLdScriptLayoutState script_state;
-    bool *file_assigned = NULL;
+    MiniLdFileOrder *file_order = NULL;
     bool *command_deferred = NULL;
     size_t i;
     size_t alloc_count = 0U;
@@ -3823,58 +3850,60 @@ static bool static_build_script_layout(MiniLdState *state,
         goto done;
     }
     file_cursor = header_size;
-    file_assigned =
-        calloc(storage_count,
-               sizeof(*file_assigned));
-    if (file_assigned == NULL) {
+    if (alloc_count > SIZE_MAX / sizeof(*file_order)) {
+        fprintf(state->diagnostics,
+                "minic-ld: linker-script-file-order-overflow\n");
+        goto done;
+    }
+    file_order = malloc((alloc_count == 0U ? 1U : alloc_count) *
+                        sizeof(*file_order));
+    if (file_order == NULL) {
         fprintf(state->diagnostics,
                 "minic-ld: out-of-memory:linker-script-file-order\n");
         goto done;
     }
-
-    for (;;) {
-        size_t best = SIZE_MAX;
-
+    {
+        size_t count = 0U;
         for (i = 0U; i < state->section_count; ++i) {
-            MiniLdSection *section = &state->sections[i];
-
-            if (file_assigned[i] || layout->section_discarded[i] ||
+            const MiniLdSection *section = &state->sections[i];
+            if (layout->section_discarded[i] ||
                 (section->flags & SHF_ALLOC) == 0U || section->size == 0U) {
                 continue;
             }
-            if (best == SIZE_MAX ||
-                layout->section_laddr[i] < layout->section_laddr[best] ||
-                (layout->section_laddr[i] == layout->section_laddr[best] &&
-                 layout->section_vaddr[i] < layout->section_vaddr[best])) {
-                best = i;
-            }
+            file_order[count].laddr = layout->section_laddr[i];
+            file_order[count].vaddr = layout->section_vaddr[i];
+            file_order[count].index = i;
+            ++count;
         }
-        if (best == SIZE_MAX) {
-            break;
+        if (count != alloc_count) {
+            fprintf(state->diagnostics,
+                    "minic-ld: linker-script-file-order-count-mismatch\n");
+            goto done;
         }
+    }
+    qsort(file_order, alloc_count, sizeof(*file_order),
+          minild_compare_file_order);
+    for (i = 0U; i < alloc_count; ++i) {
+        size_t best = file_order[i].index;
+        const MiniLdSection *section = &state->sections[best];
+        size_t aligned;
 
-        {
-            MiniLdSection *section = &state->sections[best];
-            size_t aligned;
-
-            if (!align_up_size(file_cursor,
-                               section->align == 0U ? 1U : section->align,
-                               &aligned)) {
-                fprintf(state->diagnostics,
-                        "minic-ld: linker-script-file-layout-overflow:%s\n",
-                        section->name);
-                goto done;
-            }
-            file_cursor = aligned;
-            layout->section_file_offset[best] = file_cursor;
-            if (section->type != SHT_NOBITS &&
-                !add_size(file_cursor, section->size, &file_cursor)) {
-                fprintf(state->diagnostics,
-                        "minic-ld: linker-script-file-layout-overflow:%s\n",
-                        section->name);
-                goto done;
-            }
-            file_assigned[best] = true;
+        if (!align_up_size(file_cursor,
+                           section->align == 0U ? 1U : section->align,
+                           &aligned)) {
+            fprintf(state->diagnostics,
+                    "minic-ld: linker-script-file-layout-overflow:%s\n",
+                    section->name);
+            goto done;
+        }
+        file_cursor = aligned;
+        layout->section_file_offset[best] = file_cursor;
+        if (section->type != SHT_NOBITS &&
+            !add_size(file_cursor, section->size, &file_cursor)) {
+            fprintf(state->diagnostics,
+                    "minic-ld: linker-script-file-layout-overflow:%s\n",
+                    section->name);
+            goto done;
         }
     }
 
@@ -3882,7 +3911,7 @@ static bool static_build_script_layout(MiniLdState *state,
     ok = true;
 
 done:
-    free(file_assigned);
+    free(file_order);
     free(command_deferred);
     free(script_state.output_defined);
     free(script_state.output_vaddr);
