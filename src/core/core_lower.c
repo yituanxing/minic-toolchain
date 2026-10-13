@@ -9435,22 +9435,11 @@ lower_if(MinicCoreLowerContext *context, const MinicStatement *statement, bool *
         }
     }
 
-    /* BusyBox and ordinary GNU C intentionally leave impossible references in
-       branches guarded by target constants such as sizeof comparisons and
-       ENABLE_* macros.  GCC removes those branches before emission.  Preserve
-       the same language-level reachability fact in Core: when the existing
-       target-aware integer const-evaluator proves an if condition, lower only
-       the selected source block.  A discarded subtree that owns any C/case/
-       default label stays on the general CFG path because an enclosing goto or
-       switch may legally enter it. */
     if (statement->cleanup_context == statement->cleanup_stop_context &&
         minic_type_is_integer(condition_expression->type)) {
-        MinicConstValue condition_value;
         bool condition_is_zero;
-
-        /* Preserve the original constant-if lowering anchor for the pinned
-           Runtime-profile source transforms. This additional proof is
-           independent, fail-closed, and never replaces their CFG semantics. */
+        /* Independent zero-only bool reachability: keep the original
+           Runtime-profile integer and pointer if-seams byte-identical. */
         if (core_zero_bool_cfg_condition(
                 context, statement->expression, 0U, &condition_is_zero)) {
             const MinicBlock *selected_source =
@@ -9466,6 +9455,21 @@ lower_if(MinicCoreLowerContext *context, const MinicStatement *statement, bool *
                 return lower_block(context, selected_source, terminated);
             }
         }
+
+    }
+
+    /* BusyBox and ordinary GNU C intentionally leave impossible references in
+       branches guarded by target constants such as sizeof comparisons and
+       ENABLE_* macros.  GCC removes those branches before emission.  Preserve
+       the same language-level reachability fact in Core: when the existing
+       target-aware integer const-evaluator proves an if condition, lower only
+       the selected source block.  A discarded subtree that owns any C/case/
+       default label stays on the general CFG path because an enclosing goto or
+       switch may legally enter it. */
+    if (statement->cleanup_context == statement->cleanup_stop_context &&
+        minic_type_is_integer(condition_expression->type)) {
+        MinicConstValue condition_value;
+        bool condition_is_zero;
 
         if (minic_const_eval_integer(context->body->program,
                                      context->target,

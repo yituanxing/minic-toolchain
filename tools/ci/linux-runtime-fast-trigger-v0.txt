@@ -1,2 +1,2 @@
 Purpose: trigger the cache-scoped Linux runtime fast lane after synchronizing the runtime branch with the measured fast-build head.
-Validation request 2026-10-13: single kernel/dma/direct.o from certified GNU fixture, verify pinned Runtime-profile MiniC compatibility and symbol graph; no Linux full rebuild.\n
+Validation request 2026-10-13: single kernel/dma/direct.o from certified GNU fixture, verify pinned Runtime-profile MiniC compatibility and symbol graph; no Linux full rebuild.\nValidation retry 2026-10-13: restore byte-for-byte legacy if-anchor for local null-pointer facts and rerun same one-owner cached DMA compile; first opt-in #38358969420 stopped before compilation at pinned profile patch matcher.
