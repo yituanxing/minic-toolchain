@@ -958,8 +958,31 @@ jobs:
           sha256sum "$build/bin/minic" >"$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-v1/p1-crossblock-compiler.sha256"
           echo "P1_DEFINED_CROSSBLOCK=COMPILER_BUILT opt_in_only=true"
 
+      - name: Run P1 experimental Core CFG semantic-only GCC and MiniC differential
+        if: contains(github.event.head_commit.message, '[linux-runtime-p1-cfg-semantic-only]')
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          # Exact Runtime profile+opt-in backend was built above, not the
+          # unpatched stock MiniC. Avoid relinking or booting Linux here.
+          sudo apt-get -o Acquire::Retries=2 install -y --no-install-recommends qemu-user
+          minic="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain/bin/minic"
+          work="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-v1/p1-defined-crossblock/cfg-semantic-only"
+          test -x "$minic"
+          mkdir -p "$work"
+          MINIC="$minic" WORK="$work/existing" RISCV_CC=riscv64-linux-gnu-gcc \
+            QEMU_RISCV64=qemu-riscv64 \
+            bash tests/compiler/c0/run-core-cfg-slot-reuse-p1.sh
+          MINIC="$minic" WORK="$work/adversarial" RISCV_CC=riscv64-linux-gnu-gcc \
+            QEMU_RISCV64=qemu-riscv64 \
+            bash tests/compiler/c0/run-core-cfg-slot-reuse-adversarial-p1.sh
+          MINIC="$minic" BUILD_DIR="$work" RISCV_CC=riscv64-linux-gnu-gcc \
+            QEMU_RISCV64=qemu-riscv64 \
+            bash tests/compiler/c0/run-pure-discarded-address-rv64.sh
+          echo "P1_CFG_SEMANTIC_ONLY=PASS gcc_minic_baseline_crossblock=3way matrix=7+8 x1023 no_kernel_link=true no_linux_recompile=true"
+
       - name: GNU-only link and QEMU with NO MiniC recompilation
-        if: "!contains(github.event.head_commit.message, '[linux-runtime-large-image-qemu]') && !contains(github.event.head_commit.message, '[linux-runtime-p1-frame-audit]')"
+        if: "!contains(github.event.head_commit.message, '[linux-runtime-large-image-qemu]') && !contains(github.event.head_commit.message, '[linux-runtime-p1-frame-audit]') && !contains(github.event.head_commit.message, '[linux-runtime-p1-cfg-semantic-only]')"
         shell: bash
         run: |
           set -Eeuo pipefail
