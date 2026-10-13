@@ -1,5 +1,48 @@
 # Current native tool validation — 2026-10-11
 
+## 2026-10-13: the historical frozen 2064 pool ALSO fails (21/24)
+
+Actual cached-pool CI [#38364678533](https://github.com/yituanxing/minic-toolchain/actions/runs/38364678533)
+at `7ca92ef1ce1f384ff7199689958edc4fdd8f0ecd`:
+**21/24 P1 PASS, three genuine kernel stack-overflow FAILs**, attempts
+**7, 16, 20**, under *one same immutable Image* SHA
+`599f8144d1cd671ed9ddd057acab49184848a4e2ad6aa327acf5885a10e79df9`.
+The existing 2064 MiniC object cache was **restored**; only the seven
+experimental stack-reuse objects were recompiled, then GNU-relinked
+once. CI is correctly **red** under the fail-closed 24/24 oracle.
+
+All three overflow faults are in scheduler PELT, not three unrelated
+IPv6 errors: attempt 7 `__minic_inline_spec_1331_185+0x72`
+(caller `decay_load+0x36e`), SP `ff1fffffffffff e0` without
+the space (`ff1ffffffffffffe0`); attempt 16 same PELT inline
+helper +0x10, SP `ff1ffffffffffffc0`; attempt 20
+`decay_load+0x1c` (caller `accumulate_sum+0x21c`), SP
+`ff1ffffffffffffd0`. In every case the saved stack is just
+below the historical IRQ-stack base `ff20000000000000`, first
+established by GDB under another Image. The *source of the low
+entry SP is upstream of the PELT helper*: actual measured
+MiniC `build_policy.o` function prologues are
+`___update_load_sum=208 B`, `accumulate_sum=224 B`,
+`decay_load=144 B`, and
+`__minic_inline_spec_1331_185=112 B`.
+These frames alone cannot explain where ~16 KiB was consumed.
+
+**Required follow-up:** As in the earlier proven IPv6/task-stack
+investigation, record function **entry** SP before the prologue,
+real measured CPU0 IRQ base for the *same* linked Image,
+immediate caller RA, and actual emitted RV64 frame sizes. Preserve a
+chronological scheduler/IRQ entry TSV and emergency handler pt_regs.
+Don't infer a nested call stack from consecutive events or optimize
+the last failing helper just because it faults. Debugger timing changes
+are diagnostic and not P1 PASS.
+
+The opt-in existing receiver now supports
+`[linux-runtime-p1-sched-chain]` with just three normal-Image QEMU
+oracles + a read-only per-CPU IRQ/PELT GDB trace and **no 2064 recompilation**.
+It will write `p1-gdb-stack-experiment/scheduler-chain.tsv`
+and save the exact experimental Image. The current gate is **not yet
+runtime certified**.
+
 ## 2026-10-13: seven-shard MiniC 2064-object rebuild — P1 acceptance NOT complete (11/12)
 
 Real CI [#38361632818](https://github.com/yituanxing/minic-toolchain/actions/runs/38361632818)
