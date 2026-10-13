@@ -1155,6 +1155,10 @@ jobs:
             export MINIOBJCOPY="$toolchain/bin/minic-objcopy"
             export NATIVE_TRACE_DIR="$native"
             export COHORT_NATIVE_UNION=1
+            if [[ "${{ contains(github.event.head_commit.message, '[linux-native-purgatory-r]') && '1' || '0' }}" == 1 ]]; then
+              export MINILD_ENABLE_PURGATORY_R=1
+              echo "MINILD_PURGATORY_R=ENABLED boundary=purgatory.ro only gnu_purgatory_chk=true"
+            fi
             if [[ "${{ contains(github.event.head_commit.message, '[linux-native-intermediate-vmlinux-r]') && '1' || '0' }}" == 1 ]]; then
               export MINILD_ENABLE_VMLINUX_R=1
               echo "MINILD_NATIVE_R=ENABLED boundary=vmlinux.o only gnu_linkers=other_unproven"
@@ -1232,6 +1236,15 @@ jobs:
               exit 22
             }
             test "$(grep -c '^minild ' "$NATIVE_TRACE_DIR/minild.trace")" -ge 3
+            if [[ "${{ contains(github.event.head_commit.message, '[linux-native-purgatory-r]') && '1' || '0' }}" == 1 ]]; then
+              native_purgatory=$(grep -c '^minild-purgatory-r ' "$NATIVE_TRACE_DIR/minild.trace" || true)
+              gnu_purgatory=$(grep -Ec '^gnu-ld .* -o arch/riscv/purgatory/purgatory\.ro($| )' "$NATIVE_TRACE_DIR/minild.trace" || true)
+              [[ "$native_purgatory" -ge 1 && "$gnu_purgatory" -eq 0 ]] || {
+                echo "NATIVE_UNION=FAIL purgatory.ro -r expected_native_no_GNU_fallback" >&2
+                exit 24
+              }
+              echo "MINILD_PURGATORY_R=PASS native_calls=$native_purgatory gnu_calls=0 full_QEMU_P1=PASS"
+            fi
             if [[ "${{ contains(github.event.head_commit.message, '[linux-native-intermediate-vmlinux-r]') && '1' || '0' }}" == 1 ]]; then
               minild_r_calls=$(grep -c '^minild-r ' "$NATIVE_TRACE_DIR/minild.trace" || true)
               gnu_r_calls=$(grep -c '^gnu-ld .* -o vmlinux.o ' "$NATIVE_TRACE_DIR/minild.trace" || true)
