@@ -28,9 +28,11 @@ PY_PORT
 )
 python3 - "$dest/linked-symbols.nm" "$dest/commands.gdb" "$dest/symbols.txt" "$vmlinux" "$port" "$dest" <<'PY_GDB'
 from pathlib import Path
+import os
 import sys
 
 nm, commands_path, symbols_path, vmlinux, port, evidence_dir = sys.argv[1:]
+sched_chain = os.environ.get('P1_GDB_SCHED_CHAIN') == '1'
 symbols = {}
 for line in Path(nm).read_text(errors="replace").splitlines():
     parts = line.split()
@@ -54,6 +56,22 @@ targets = (
     "__slab_alloc_node", "get_freepointer_safe",
     "__list_add_valid_or_report", "handle_bad_stack",
 )
+# Scheduler PELT entry instrumentation is opt-in. Capture caller RA and
+# entry SP before callee prologue, not the faulting handler's emergency SP.
+sched_targets = (
+    "tick_sched_timer", "tick_sched_handle", "update_process_times",
+    "scheduler_tick", "task_tick_fair", "entity_tick",
+    "update_load_avg", "___update_load_avg", "___update_load_sum",
+    "__accumulate_pelt_segments", "accumulate_sum", "decay_load",
+    "__minic_inline_spec_1331_185", "__hrtimer_run_queues",
+    "__run_hrtimer", "update_curr", "update_rq_clock",
+    "enqueue_task_fair", "dequeue_task_fair", "__schedule",
+)
+if sched_chain:
+    required_sched = ("accumulate_sum", "___update_load_sum", "decay_load")
+    if any(x not in symbols for x in required_sched):
+        raise SystemExit("P1_SCHED_CHAIN=INCONCLUSIVE missing_pelt_symbols")
+    targets += tuple(name for name in sched_targets if name not in targets)
 bound = [(name, symbols[name][0]) for name in targets if name in symbols]
 Path(symbols_path).write_text(
     "".join(f"{name}\t0x{addr:x}\n" for name, addr in bound)
@@ -79,6 +97,8 @@ emit(f"set $p1_percpu_offset = *(unsigned long*)0x{percpu_offset:x}")
 emit(f"set $p1_irq_ptr_slot = (unsigned long)0x{irq_ptr:x} + $p1_percpu_offset")
 emit("set $p1_irq_base = *(unsigned long*)$p1_irq_ptr_slot")
 emit("set $p1_irq_top = $p1_irq_base + 16384")
+if sched_chain:
+    emit("set $p1_sched_hits = 0")
 emit('printf "P1_GDB_IRQ_LAYOUT irq_base=%#lx irq_top=%#lx irq_ptr_slot=%#lx percpu_offset=%#lx tcp_sp=%#lx task_lo=%#lx\\n", (unsigned long)$p1_irq_base, (unsigned long)$p1_irq_top, (unsigned long)$p1_irq_ptr_slot, (unsigned long)$p1_percpu_offset, (unsigned long)$sp, (unsigned long)$p1_task_lo')
 emit("enable " + " ".join(map(str, range(2, len(bound) + 1))))
 emit("disable 1")
@@ -104,6 +124,14 @@ for idx, (name, _) in enumerate(bound[1:], 2):
         emit(f"dump binary memory {evidence_dir}/task-stack.bin $p1_task_lo ($p1_task_lo + 16384)")
         emit(f"disable {idx}")
     else:
+        if sched_chain and name in sched_targets:
+            # Only real IRQ-stack entries, with enough depth to matter.
+            # Limit GDB logging overhead; do not imply all entries are nested.
+            emit("if ($p1_sched_hits < 400 && $sp >= $p1_irq_base && "
+                 "$sp < $p1_irq_base + 12288)")
+            emit("set $p1_sched_hits = $p1_sched_hits + 1")
+            emit(f'printf "P1_SCHED_FRAME index=%ld name={name} entry_sp=%#lx caller_ra=%#lx irq_remaining=%ld\\n", (long)$p1_sched_hits, (unsigned long)$sp, (unsigned long)$ra, (long)((unsigned long)$sp-(unsigned long)$p1_irq_base)')
+            emit("end")
         # For frequently called slab/neighbor functions, only record
         # entries close to the stack bottom of the diagnosed task/IRQ.
         low_stack_target = name in ("__neigh_create", "___neigh_create",
@@ -157,5 +185,10 @@ fi
 if ! grep -aFq 'P1_GDB_FRAME name=' "$dest/gdb.log"; then
   echo "P1_GDB=INCONCLUSIVE no_post_tcp_trace"
   exit 8
+fi
+if [[ "${P1_GDB_SCHED_CHAIN:-0}" == 1 ]]; then
+  sched_samples=$(grep -ac 'P1_SCHED_FRAME index=' "$dest/gdb.log" || true)
+  echo "P1_SCHED_CHAIN=CAPTURED samples=$sched_samples entry_sp_before_prologue=1 caller_ra=1 same_image_irq_base=1 gdb_perturbed=1"
+  [[ "$sched_samples" -gt 0 ]] || exit 8
 fi
 echo "P1_GDB=CAPTURED diagnostic_only=true same_image=true irq_stack_verified_from_percpu=true no_P1_pass_inference=true"
