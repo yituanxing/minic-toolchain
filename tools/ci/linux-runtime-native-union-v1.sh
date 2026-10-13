@@ -106,6 +106,28 @@ if [[ "${MINILD_ENABLE_VMLINUX_R:-0}" == 1 && "${output##*/}" == vmlinux.o ]]; t
     exit "$status"
   fi
 fi
+# GNU-pinned 6.6.143 purgatory.ro -r was independently proven in
+# #38482832436: 4ms MiniLD, ELF64 RISC-V ET_REL and export names agree.
+# Replace exactly this -r boundary under opt-in; leave purgatory.chk,
+# vDSO and all other unproven GNU LD operations untouched.
+if [[ "${MINILD_ENABLE_PURGATORY_R:-0}" == 1 &&
+      "${output##*/}" == purgatory.ro ]]; then
+  found_r=0
+  found_entry=0
+  for arg in "$@"; do
+    [[ "$arg" == -r || "$arg" == --relocatable ]] && found_r=1
+    [[ "$arg" == purgatory_start ]] && found_entry=1
+  done
+  if [[ "$found_r" == 1 && "$found_entry" == 1 ]]; then
+    { flock 9; printf 'minild-purgatory-r'; printf ' %q' "$@"; printf '\n'; } 9>>"$NATIVE_TRACE_DIR/minild.trace" >&9
+    start_ms=$(date +%s%3N)
+    status=0
+    "$MINILD" "$@" || status=$?
+    elapsed_ms=$(($(date +%s%3N)-start_ms))
+    { flock 9; printf 'minild-purgatory-r\t%s\t%s\t%s\n' "$elapsed_ms" "$status" "$output"; } 9>>"$NATIVE_TRACE_DIR/minild-times.tsv" >&9
+    exit "$status"
+  fi
+fi
 # The three static final Linux link boundaries are proven #38426379946.
 # Purgatory and 32-bit vDSO continue using GNU LD until individually tested.
 case "${output##*/}" in
