@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Targeted Linux performance triage: measure the exact slowest real C owner
+# before paying for another seven-way full-Linux rebuild. The single-TU gate
+# uses existing gcc-single Kbuild, isolated Linux profile, and 300s bound.
 """Deterministic seven-runner MiniC object partition and fail-closed reassembly.
 
 Shards never certify runtime. Only the full, provenance-checked union may be
