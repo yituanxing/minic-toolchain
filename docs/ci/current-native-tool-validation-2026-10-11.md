@@ -26,6 +26,24 @@ MiniC `build_policy.o` function prologues are
 `decay_load=144 B`, and
 `__minic_inline_spec_1331_185=112 B`.
 These frames alone cannot explain where ~16 KiB was consumed.
+  **Direct backward SP accounting from the actual failed ELF confirms that
+  the problem predates the final small functions.** All four relevant
+  PELT functions have only one negative SP adjustment at entry and one
+  matching positive adjustment at return (no internal extra SP move),
+  checked over their full ELF symbol sizes. With the previously established
+  IRQ base, the failing RV64 `sp + own_frame` at function *entry* was:
+  attempt 7, inline helper `-32 + 112 = 80 B` remaining;
+  attempt 16, same inline helper `-64 + 112 = 48 B`;
+  attempt 20, `decay_load` `-48 + 144 = 96 B`.
+  The immediate callee is therefore NOT the sole cause: the caller already
+  had only **48–96 bytes** available at call time. The upstream
+  `___update_load_sum → accumulate_sum → decay_load → inline helper`
+  leg contributes **208+224+144+112 = 688 B** of measured frames, with
+  additional possible callers `__update_load_avg_se=128 B` and
+  `__update_load_avg_cfs_rq=176 B` found in the real relocation graph.
+  This is an address/accounting inference from the older IRQ base, not a
+  same-Image dynamic stack trace. The new GDB PELT entry trace is needed
+  to locate the **earlier much larger stack drop**.
 
 **Required follow-up:** As in the earlier proven IPv6/task-stack
 investigation, record function **entry** SP before the prologue,
