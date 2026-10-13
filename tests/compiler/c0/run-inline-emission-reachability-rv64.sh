@@ -105,3 +105,9 @@ echo "INLINE_EMISSION_REACHABILITY_RV64=PASS dead_inline=discarded dead_static=d
 MINIC="$MINIC" BUILD_DIR="$BUILD_DIR" RISCV_CC="$RISCV_CC" \
 RISCV_LD="$RISCV_LD" QEMU_RISCV64="$QEMU_RISCV64" \
   bash "$(dirname "$0")/run-earlycon-two-pass-rv64.sh"
+
+# Independent opt-in CoreObject removal oracle: both semantic side effects
+# and an actual emitted-code reduction, compared to GNU and baseline MiniC.
+MINIC="$MINIC" BUILD_DIR="$BUILD_DIR" RISCV_CC="$RISCV_CC" \
+RISCV_LD="$RISCV_LD" QEMU_RISCV64="$QEMU_RISCV64" \
+  bash "$(dirname "$0")/run-pure-discarded-address-rv64.sh"
