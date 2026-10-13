@@ -311,3 +311,38 @@ Next: identify the source spans and lowering sites generating the 112 paired
 pointer comparisons / stored pointer values. Prove whether these are redundant
 compiler-introduced temporaries before touching codegen. Full-MiniC P1 is
 still unverified/FAIL, and this remains a diagnostics-only result.
+
+
+## Independent P1 timer/IRQ-stack hypothesis — 2026-10-13
+
+**Original frozen 16KiB Linux config**, 2064 certified MiniC C objects, GNU
+assembler/linker, no MiniC compiler source modification or new full C build:
+
+- All-2064-MiniC baseline QEMU P1: **FAIL**, exact Image SHA
+  `17ef75c9e2bd51cb5e2d277a1897c1a3f442307d337e80c2eb9fbf90c2e73785`.
+- Replacing only `net/ipv6/ip6_output.o` and `kernel/sched/fair.o` with
+  authenticated GNU C objects, leaving the other **2062** MiniC objects
+  intact: **PASS/PASS/PASS**, identical linked Image SHA
+  `a68d5ab01adbe7720c0a4df41fd3c645e69fafca5adfbde0051489448e5e2c8f`.
+- CI run **#38326099444**, artifact `11780099513`, original
+  `p1-rescue-pairs.tsv` and `p1-rescue-pairs-repeats.tsv` retained.
+
+This partner was not chosen at random: previous GDB IRQ-stack snapshot
+#38270171284 includes scheduler/PELT return-address *candidates* such as
+`__accumulate_pelt_segments`, `___update_load_sum` and
+`update_cfs_rq_load_avg`, but the snapshot is **not a certified unwind**.
+In the separate single-TU 16KiB discarded-equality experiment
+#38324862048, IPv6 `ip6_finish_output2`/ `ip6_xmit` frames shrank from
+4064/2288 to 2272/1520 bytes; the **2064-MiniC** candidate still failed
+P1 0/3 and its trapped SPs were near/below the known CPU0 16KiB IRQ-stack
+lower boundary.
+
+**Interpretation limits:** this establishes another reproducible 2-GNU-object
+P1 rescue in the normal 16KiB configuration. It does NOT establish a MiniC
+compiler fix, prove `fair.o` alone corrects P1, prove the two failures are
+independent, or certify 16KiB full-MiniC P1. Mixed-object changes can affect
+stack consumption, symbol placement, timing, and interrupts. No stack-slot
+lifetime restriction has been relaxed. Next focus: obtain *read-only*
+per-function frame accounting for `kernel/sched/fair.o` (timer/PELT path)
+while preserving the already proven IPv6 task-stack evidence, then make
+strictly localized, verified changes only if a valid lowering defect is shown.
