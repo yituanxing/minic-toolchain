@@ -286,3 +286,10 @@ end=$(date +%s%N)
 echo "TIMING toolchain_ms=$(((end-start)/1000000))" | tee "$ev/toolchain-timing.txt"
 printf '%s\n' "${patches[@]}" >"$ev/minic-profile.txt"
 sha256sum "$build_dir/bin/minic" "$build_dir/bin/minic-cc" >"$ev/minic.sha256"
+if [[ "${MINIC_LINUX_FULL_CROSSBLOCK:-0}" == 1 ]]; then
+  # This is only a producer attestation. Actual correctness requires the
+  # complete 2064/2064 Linux C pool plus real P0/P1 QEMU at the receiver.
+  grep -Fqx 'apply-riscv64-p1-defined-before-use-crossblock-v1.py' "$ev/minic-profile.txt"
+  test -s "$ev/minic.sha256"
+  echo "LINUX_FULL_CROSSBLOCK=COMPILER_READY mode=all_linux_C opt_in_only=true compiler_sha=$(sha256sum "$build_dir/bin/minic" | cut -d' ' -f1)"
+fi
