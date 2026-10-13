@@ -1217,6 +1217,7 @@ if [[ "${COHORT_FRAME_CAPTURE_ONLY:-0}" == 1 ]]; then
   }
   frame_dir="$ev/p1-frame-components"
   mkdir -p "$frame_dir"
+  # Existing frozen 2064-owner receiver requires the stack-owners tag.
   # Read-only one-TU audit: no new workflow, no Image linking, no MiniC
   # semantics changes. Preserve the original three-owner frame capture by
   # default and isolate scheduler PELT attribution behind one exact opt-in.
