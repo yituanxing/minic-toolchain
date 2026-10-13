@@ -8,6 +8,11 @@
 # Repro: #38413825638 linked cached C successfully up to vmlinux.a,
 # where MiniAR A1 rejected mPiT positional move; keep this GNU-only fallback
 # explicit while native move support is developed and regression-tested.
+# Kbuild captures `ar t vmlinux.a` stdout in command substitutions for its
+# head-object ordering. NEVER let tool trace output escape to stdout: each
+# { flock; printf; } logging group must redirect fd1 to locked fd9.
+# The earlier CI showed malformed `ar mPiT miniar t vmlinux.a vmlinux.a`
+# precisely because the wrapper's printed trace polluted `ar t` stdout.
 set -Eeuo pipefail
 if (( $# != 2 )); then
   echo "usage: $0 <native-tool-build-dir> <evidence-dir>" >&2
@@ -41,11 +46,11 @@ set -Eeuo pipefail
 # and must not be called a fully native AR integration.
 case "${1#-}" in
   mPiT)
-    { flock 9; printf 'gnu-ar-fallback-mPiT'; printf ' %q' "$@"; printf '\n'; } 9>>"$NATIVE_TRACE_DIR/miniar.trace"
+    { flock 9; printf 'gnu-ar-fallback-mPiT'; printf ' %q' "$@"; printf '\n'; } 9>>"$NATIVE_TRACE_DIR/miniar.trace" >&9
     exec /usr/bin/riscv64-linux-gnu-ar "$@"
     ;;
 esac
-{ flock 9; printf 'miniar'; printf ' %q' "$@"; printf '\n'; } 9>>"$NATIVE_TRACE_DIR/miniar.trace"
+{ flock 9; printf 'miniar'; printf ' %q' "$@"; printf '\n'; } 9>>"$NATIVE_TRACE_DIR/miniar.trace" >&9
 exec "$MINIAR" "$@"
 SH_AR
 cat >"$ev/ld-wrapper" <<'SH_LD'
@@ -76,10 +81,10 @@ done
 # final link boundaries; other GNU linker operations are *not* certified yet.
 case "${output##*/}" in
   .tmp_vmlinux.kallsyms1|.tmp_vmlinux.kallsyms2|vmlinux)
-    { flock 9; printf 'minild'; printf ' %q' "$@"; printf '\n'; } 9>>"$NATIVE_TRACE_DIR/minild.trace"
+    { flock 9; printf 'minild'; printf ' %q' "$@"; printf '\n'; } 9>>"$NATIVE_TRACE_DIR/minild.trace" >&9
     exec "$MINILD" "$@" ;;
   *)
-    { flock 9; printf 'gnu-ld'; printf ' %q' "$@"; printf '\n'; } 9>>"$NATIVE_TRACE_DIR/minild.trace"
+    { flock 9; printf 'gnu-ld'; printf ' %q' "$@"; printf '\n'; } 9>>"$NATIVE_TRACE_DIR/minild.trace" >&9
     exec /usr/bin/riscv64-linux-gnu-ld "$@" ;;
 esac
 SH_LD
@@ -87,7 +92,7 @@ cat >"$ev/objcopy-wrapper" <<'SH_COPY'
 #!/usr/bin/env bash
 set -Eeuo pipefail
 : "${MINIOBJCOPY:?}" "${NATIVE_TRACE_DIR:?}"
-{ flock 9; printf 'miniobjcopy'; printf ' %q' "$@"; printf '\n'; } 9>>"$NATIVE_TRACE_DIR/miniobjcopy.trace"
+{ flock 9; printf 'miniobjcopy'; printf ' %q' "$@"; printf '\n'; } 9>>"$NATIVE_TRACE_DIR/miniobjcopy.trace" >&9
 exec "$MINIOBJCOPY" "$@"
 SH_COPY
 chmod +x "$ev/"{ar-wrapper,ld-wrapper,objcopy-wrapper}
