@@ -1,5 +1,50 @@
 # Current native tool validation — 2026-10-11
 
+## 2026-10-13: nested IRQ entry directly observed — upstream deficit identified
+
+**Actual** existing CI [#38369834145](https://github.com/yituanxing/minic-toolchain/actions/runs/38369834145)
+at `2d78345c6dafdacfd9e03e9ec83a46480fa3a3a2`, same Image
+`069d516ec063e49030842426bb74ab57d7f984f90bf488355d85a341e0db12ec`:
+3/3 non-GDB QEMU P1 boots PASS; that does *not* supersede the earlier
+11/12 and 21/24 failures and is not final 16KiB stability certification.
+Read-only same-Image GDB (120s timeout, altered timing, not runtime oracle)
+measured IRQ base `ff20000000000000` and **four genuine repeat
+`do_irq` entries with SP already on the IRQ stack**. Each entry was
+immediately followed by `handle_riscv_irq` and then
+`riscv_timer_interrupt` on the same already-used IRQ stack.
+The default IRQ entries switch from task SP to IRQ top, while these
+four entries do not: direct evidence of interrupt reentry, not merely
+ordinary single-pass scheduler frame inflation.
+
+| Nested do_irq entry remaining B | handle_riscv_irq entry B | timer interrupt entry B |
+| ---: | ---: | ---: |
+| 9408 | 9296 | 8656 |
+| **7104** | 6992 | **6352** |
+| 10896 | 10784 | 10144 |
+| 9504 | 9392 | 8752 |
+
+Each nested IRQ entry adds **112 B** before
+`handle_riscv_irq` and another **640 B** before
+`riscv_timer_interrupt` in the captured code path. The earliest
+ordinary task-to-IRQ entry measured **16384 B**, with
+`riscv_timer_interrupt` at **15744 B**.
+The dangerously deep second nested sample was captured shortly after
+actual IRQ-context work in `ip6_xmit`, `ip6_output`,
+`ip6_finish_output2`, and `__list_add_valid_or_report`.
+Other nested samples had PELT helper work immediately before the
+reentry. These are *chronological* breakpoint logs, not an exact proof
+of the interrupted source PC.
+
+**New priority:** read the saved RISC-V `pt_regs` at the *entry to
+`do_irq`* (not the do_irq RA, which always references the exception
+`_save_context` trampoline) to identify `epc` and saved SP of the
+interrupted frame, then symbolize against the matched `vmlinux`.
+This tests whether nested IRQ is interrupting IPv6/SLUB, PELT, or
+another high-frame owner. Only after that should we select a specific
+single-object stack-frame reduction for a corrected 16KiB budget.
+Do not mistake a 3/3 pass or a GDB-captured nested interrupt for 12/12
+runtime certification. Existing MiniC full pool must remain immutable.
+
 ## 2026-10-13: live same-Image IRQ/PELT function-entry call chain captured
 
 **This is the network-path method repeated on the scheduler path**, not
