@@ -944,3 +944,43 @@ pooling, high-impact nested frame budgets, and first-fault register
 provenance before any further risky semantic optimization.
 Original diagnostic script was restored byte-for-byte in the
 same documenting commit; no unsafe patch was promoted.
+
+
+### Whole-scratch-pool ROI screen (data-only, NOT a correctness certificate)
+
+Offline re-read authenticated `intervals.tsv` records in
+`p1-frame-11749646340.zip` (IPv6) and
+`tcp-original-prologue-frames.zip` (TCP). The current backend
+uses separate 8-byte scratch-slot pools for each basic block;
+the per-block **maximum overlapping interval count** sums to the
+actually reserved reusable slots. If every eligible nonescaping
+single-block object's cross-block interference could be proven
+absent, one shared scratch pool would need only the **largest**
+per-block count. These are estimates of **reclaimable
+allocation space**, not validated compiler optimizations:
+
+| Function | Eligible local scalar objects | Local blocks | Current scratch slots | Max slots in any one block | Theoretical reclaim |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `ip6_finish_output2` | 842 | 93 | 238 | 8 | 1840 B |
+| `ip6_xmit` | 463 | 59 | 150 | 8 | 1136 B |
+| `tcp_rcv_state_process` | 343 | 79 | 151 | 5 | 1168 B |
+| `tcp_conn_request` | 213 | 42 | 94 | 7 | 696 B |
+
+The `tcp_rcv_state_process` 1168-byte arithmetic exactly matches
+the earlier experiment's 1776→608-byte candidate. That
+corroborates the **allocator's savings mechanism**, NOT the
+candidate's runtime correctness. The estimates use *baseline*
+interval sets and **cannot simply be added** to prior dead
+comparison savings because eliminating objects changes the
+interval graph, frame alignment, and live regions. Furthermore,
+large nested-function frame sums and aggregate reductions across
+send/receive paths are not necessarily simultaneous.
+
+The current priority is therefore a **verified semantic/liveness
+argument and focused C regression probes** for reusable,
+nonescaping, write-before-read block-local scratch; do not jump
+from the large estimate to global cross-block slot aliasing.
+A mere 48-byte integer no-spill expansion is quantitatively
+lower ROI. The two-owner 3328-byte safe dead-comparison cleanup
+is individually useful but demonstrably insufficient for 16KiB P1
+on its own, as verified by #38342452095.
