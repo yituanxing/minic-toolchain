@@ -1217,22 +1217,8 @@ if [[ "${COHORT_FRAME_CAPTURE_ONLY:-0}" == 1 ]]; then
   }
   frame_dir="$ev/p1-frame-components"
   mkdir -p "$frame_dir"
-  # Existing frozen 2064-owner receiver requires the stack-owners tag.
-  # Read-only one-TU audit: no new workflow, no Image linking, no MiniC
-  # semantics changes. Preserve the original three-owner frame capture by
-  # default and isolate scheduler PELT attribution behind one exact opt-in.
-  fair_frame=0
-  if git -C "$repo" log -1 --format=%B | grep -Fq '[linux-runtime-p1-fair-frame]'; then
-    fair_frame=1
-    printf '%s\n' kernel/sched/fair.o >"$frame_dir/selected.txt"
-    # Receiver normally filters IPv6-only symbols; override for this exact
-    # scheduler TU, otherwise CORE_FRAME_REUSE exists but COMPONENT is empty.
-    export MINIC_CORE_FRAME_TRACE_FILTER="update_cfs_rq_load_avg,task_tick_fair,enqueue_entity,update_load_avg,load_balance,decay_load,___update_load_sum,__accumulate_pelt_segments"
-    echo "COHORT_FRAME_FAIR=ONLY owner=kernel/sched/fair.o frozen_compiler=true filter=$MINIC_CORE_FRAME_TRACE_FILTER"
-  else
-    printf '%s\n' net/ipv6/ip6_output.o net/ipv6/tcp_ipv6.o net/ipv4/tcp_output.o \
-      >"$frame_dir/selected.txt"
-  fi
+  printf '%s\n' net/ipv6/ip6_output.o net/ipv6/tcp_ipv6.o net/ipv4/tcp_output.o \
+    >"$frame_dir/selected.txt"
   rm -rf -- "$out"
   cp -a --reflink=auto "$gold_snapshot" "$out"
   MINIC_CORE_FRAME_TRACE=1 COHORT_FRAME_CAPTURE_ONLY=1 python3 \
@@ -1314,29 +1300,13 @@ PY_FRAME_SUMMARY
   python3 "$repo/tools/ci/linux-runtime-p1-frame-access-parse-v1.py" --self-test
   python3 "$repo/tools/ci/linux-runtime-p1-frame-access-parse-v1.py" \
     "$frame_dir/replay.log" "$frame_dir/intervals.tsv" "$frame_dir/first-access.tsv"
-  if [[ "$fair_frame" == 1 ]]; then
-    # Fail closed on missing fair.c function frames, but do not falsely
-    # assume inline PELT helper functions must have out-of-line symbols.
-    python3 - "$frame_dir/components.tsv" <<'PY_FAIR_FRAME'
-import csv,sys
-with open(sys.argv[1]) as f:
-    rows=list(csv.DictReader(f,delimiter="\t"))
-if not rows:
-    raise SystemExit("COHORT_FRAME_FAIR=ERROR no_function_frames")
-for row in sorted(rows,key=lambda r:int(r["frame_bytes"]),reverse=True)[:20]:
-    print("COHORT_FRAME_FAIR_TOP function=%s frame_bytes=%s core_object_region=%s value_bytes=%s" %
-          (row["function"],row["frame_bytes"],row["object_region_bytes"],row["value_bytes"]))
-print("COHORT_FRAME_FAIR=PASS functions=%d sha_identical=true no_image_link=true" % len(rows))
-PY_FAIR_FRAME
-  else
-    for focus in ip6_finish_output2 ip6_xmit tcp_v6_connect __tcp_transmit_skb; do
-      awk -F '\t' -v target="$focus" '$1==target {found=1} END {exit !found}' \
-        "$frame_dir/components.tsv" || {
-        echo "COHORT_FRAME_CAPTURE=ERROR missing_exact_focus=$focus"
-        exit 8
-      }
-    done
-  fi
+  for focus in ip6_finish_output2 ip6_xmit tcp_v6_connect __tcp_transmit_skb; do
+    awk -F '\t' -v target="$focus" '$1==target {found=1} END {exit !found}' \
+      "$frame_dir/components.tsv" || {
+      echo "COHORT_FRAME_CAPTURE=ERROR missing_exact_focus=$focus"
+      exit 8
+    }
+  done
   if [[ "${COHORT_NONREUSE_REASON_CAPTURE:-0}" == 1 ]]; then
     python3 "$repo/tools/ci/linux-runtime-p1-nonreuse-reason-parse-v1.py" \
       "$frame_dir/replay.log" "$frame_dir/objects.tsv" \
