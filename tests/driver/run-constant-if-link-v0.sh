@@ -60,6 +60,54 @@ S
 "$MINIC" -ffreestanding -fno-builtin -nostdinc -c "$WORK/probe.c" -o "$WORK/probe.o"
 "$MINIAS" -march=rv64gc -mabi=lp64d -o "$WORK/start.o" "$WORK/start.s"
 
+# Negative controls for CORE_ZERO_ONLY_BOOL_CFG_V1: the optimizer must never
+# erase externally observable calls when a bool can become nonzero, escapes
+# through a pointer, or is volatile. Keep symbols unresolved deliberately and
+# inspect the native MiniC object, independent of ELF section GC.
+cat >"$WORK/zero-bool-negative.c" <<'C_NEGATIVE'
+extern int must_keep_dynamic_bool(void);
+extern int must_keep_aliased_bool(void);
+extern int must_keep_volatile_bool(void);
+extern int must_keep_nonzero_bool(void);
+int keep_dynamic_bool(int condition) {
+    _Bool flag = 0;
+    if (condition) flag = 1;
+    if (flag) return must_keep_dynamic_bool();
+    return 0;
+}
+int keep_aliased_bool(int condition) {
+    _Bool flag = 0;
+    _Bool *alias = &flag;
+    if (condition) *alias = 1;
+    if (flag) return must_keep_aliased_bool();
+    return 0;
+}
+int keep_volatile_bool(int condition) {
+    volatile _Bool flag = 0;
+    if (condition) flag = 1;
+    if (flag) return must_keep_volatile_bool();
+    return 0;
+}
+int keep_nonzero_bool(void) {
+    _Bool flag = 1;
+    if (flag) return must_keep_nonzero_bool();
+    return 0;
+}
+C_NEGATIVE
+"$MINIC" -ffreestanding -fno-builtin -nostdinc -c \
+  "$WORK/zero-bool-negative.c" -o "$WORK/zero-bool-negative.o"
+"${RISCV_NM:-riscv64-linux-gnu-nm}" -u "$WORK/zero-bool-negative.o" \
+  >"$WORK/zero-bool-negative.undefined"
+for symbol in must_keep_dynamic_bool must_keep_aliased_bool \
+              must_keep_volatile_bool must_keep_nonzero_bool; do
+    if ! grep -Eq "[[:space:]]U[[:space:]]$symbol$" "$WORK/zero-bool-negative.undefined"; then
+        echo "MINIC_ZERO_BOOL_NEGATIVE=FAIL erased_live_ref=$symbol" >&2
+        cat "$WORK/zero-bool-negative.undefined" >&2
+        exit 1
+    fi
+done
+echo "MINIC_ZERO_BOOL_NEGATIVE=PASS dynamic=1 alias=1 volatile=1 nonzero=1"
+
 # The three original undefined calls plus the new DMA local-bool call are
 # inside active function paths. Function-level
 # section GC cannot help: this link succeeds only if Core did not emit the
