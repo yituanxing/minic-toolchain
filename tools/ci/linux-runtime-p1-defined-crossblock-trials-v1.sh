@@ -128,16 +128,64 @@ PY_SET
 printf 'compiler_sha256=%s\n' "$(sha256sum "$minic"|cut -d' ' -f1)" >"$dest/provenance.txt"
 rm -rf -- "$out"
 cp -a --reflink=auto "$gold_snapshot" "$out"
+replay_selected="$dest/selected.txt"
+if [[ "$rx_bundle_neigh" == 1 ]]; then
+  # Avoid recomputing the prior seven owners merely to discover that a
+  # proposed eighth owner has NO frame ROI. This first pass uses the
+  # exact same immutable Kbuild .cmd flags and MiniC binary, and appends
+  # the authenticated object hash to the subsequent seven-owner evidence.
+  printf '%s\n' net/core/neighbour.o >"$dest/neighbour-only-selected.txt"
+  grep -Fxv 'net/core/neighbour.o' "$dest/selected.txt" >"$dest/prior-seven-selected.txt"
+  [[ $(wc -l <"$dest/prior-seven-selected.txt") -eq 7 ]] || {
+    echo "P1_RX_NEIGH=FAIL malformed_seven_owner_selection"; exit 8;
+  }
+  COHORT_FRAME_CAPTURE_ONLY=1 MINIC_CORE_FRAME_TRACE=1 \
+  MINIC_CORE_FRAME_TRACE_FILTER="__neigh_create" \
+  python3 "$repo/tools/ci/linux-runtime-kbuild-regeneration-guard-v1.py" \
+    --mode replay --out "$out" --golden-out "$gold_snapshot" \
+    --selected "$dest/neighbour-only-selected.txt" \
+    --wrapper "$repo/tests/external/linux/stage2_kbuild_cc.sh" \
+    --minic "$minic" --success-trace "$dest/neighbour-success.txt" \
+    --digest-trace "$dest/neighbour-candidates.sha256" >"$dest/neighbour-first.log" 2>&1 || {
+      tail -n 60 "$dest/neighbour-first.log"; exit 8;
+    }
+  python3 - "$out/net/core/neighbour.minic-stage2.minic.stderr" "$dest" <<'PY_NEIGH_FIRST'
+from pathlib import Path
+import re
+import sys
+log, dest = map(Path, sys.argv[1:])
+if not log.is_file():
+    raise SystemExit("P1_RX_NEIGH=FAIL missing_neighbour_compiler_trace")
+data = log.read_text(errors="replace")
+frames = {m.group(1): int(m.group(2)) for m in
+          re.finditer(r"^CORE_FRAME_REUSE function=(\\S+) frame=(\\d+)\\b", data, re.M)}
+frame = frames.get("__neigh_create")
+baseline = 3024
+if frame is None or not 0 < frame <= baseline - 512:
+    raise SystemExit(f"P1_RX_NEIGH=NO_ROI baseline={baseline} candidate={frame} min_saving=512 no_link=1 no_seven_recompile=1")
+(dest/"neighbour-frame.tsv").write_text(
+    f"owner\\tfunction\\tbaseline_frame\\tcandidate_frame\\tsaving\\n"
+    f"net/core/neighbour.o\\t__neigh_create\\t{baseline}\\t{frame}\\t{baseline-frame}\\n")
+print(f"P1_RX_NEIGH=EARLY_ROI_PASS baseline={baseline} frame={frame} saved={baseline-frame} only_one_C_owner_compiled=1")
+PY_NEIGH_FIRST
+  replay_selected="$dest/prior-seven-selected.txt"
+fi
 COHORT_FRAME_CAPTURE_ONLY="$(if [[ "$rx_roi" == 1 || "$rx_bundle" == 1 ]]; then echo 1; else echo "$single_owner"; fi)" MINIC_CORE_FRAME_TRACE=1 \
 MINIC_CORE_FRAME_TRACE_FILTER="$(if [[ "$rx_roi" == 1 || "$rx_bundle" == 1 ]]; then echo 'ip6_finish_output2,ip6_xmit,tcp_v6_rcv,tcp_v6_do_rcv,tcp_conn_request,tcp_rcv_state_process,___slab_alloc,net_rx_action,process_backlog,__dev_queue_xmit,hrtimer_interrupt,__hrtimer_run_queues,__run_hrtimer,hrtimer_run_softirq,__neigh_create'; else echo 'ip6_finish_output2,ip6_xmit'; fi)" \
 python3 "$repo/tools/ci/linux-runtime-kbuild-regeneration-guard-v1.py" \
   --mode replay --out "$out" --golden-out "$gold_snapshot" \
-  --evidence "$dest/replay-evidence.json" --selected "$dest/selected.txt" \
+  --evidence "$dest/replay-evidence.json" --selected "$replay_selected" \
   --wrapper "$repo/tests/external/linux/stage2_kbuild_cc.sh" \
   --minic "$minic" --success-trace "$dest/success.txt" \
   --digest-trace "$dest/candidates.sha256" >"$dest/replay.log" 2>&1 || {
     tail -n 65 "$dest/replay.log"; exit 8;
   }
+if [[ "$rx_bundle_neigh" == 1 ]]; then
+  # Both independent MiniC invocations are required; the final route
+  # audit authenticates all eight produced object bytes after replay.
+  cat "$dest/neighbour-success.txt" >>"$dest/success.txt"
+  cat "$dest/neighbour-candidates.sha256" >>"$dest/candidates.sha256"
+fi
 python3 "$repo/tools/ci/linux-runtime-minic-route-audit-v1.py" \
   --objects-file "$dest/selected.txt" \
   --success-trace "$dest/success.txt" \
