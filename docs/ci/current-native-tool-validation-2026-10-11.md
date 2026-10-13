@@ -1,5 +1,17 @@
 # Current native tool validation — 2026-10-11
 
+## 2026-10-13: EIGHT-owner 24-boot regression — 20/24, NOT ACCEPTED
+
+**[Real CI #38380007402](https://github.com/yituanxing/minic-toolchain/actions/runs/38380007402), commit `d563e744c8e346b9d5346d08b8c7667621fd3688`, completed FAILURE, not a workflow harness false negative.** Eighth owner preflight did run: `P1_RX_NEIGH=EARLY_ROI_PASS baseline=3024 frame=112 saved=2912`. The seven others also genuinely recompiled, then `MINIC_ROUTE_AUDIT=PASS minic_compiled=8 ancillary_minic_compiled=0 authenticated_rebuilds=0`. Full 2064-owner overlay attested 2056 unchanged MiniC objects and zero GCC C replacements; CFG semantic test PASS.
+
+The **same** eight-owner Image SHA `165541435cd6b1f6578feae93e40d6dc993dc63d1982f4ca31572b02c4009b2f` was booted **24** times, **20 PASS / 4 FAIL** (boots **4, 6, 11, 13**). Each failed QEMU guest had real `Insufficient stack space to handle exception!` then `Kernel panic - not syncing: Kernel stack overflow` during the IPv6 loopback P1 phase; samples:
+- boot 4: `__minic_inline_spec_1331_185+0x10`, caller `decay_load+0x36e`, `sp=ff1fffffffffffb0`, below 16KiB IRQ stack base `ff20000000000000`.
+- boot 11: `decay_load+0x1c`, caller `accumulate_sum+0x21c`, `sp=ff1fffffffffffe0`.
+- boots 6 and 13 likewise scheduler/PELT `decay_load`-chain overflow.
+
+This is the **same true nested-IRQ/scheduler stack frontier** observed before adding `neighbour.o`. The 2912-byte reduction in `__neigh_create` is real but **did not eliminate worst-case overflow**. Do not declare the MiniC P1 stack fixed or authorize the full multi-Mini target-toolchain combination acceptance as a consequence. The previous 8-owner 12/12 [#38377015578](https://github.com/yituanxing/minic-toolchain/actions/runs/38377015578) was insufficient statistical evidence; its Image SHA `14a108571d52e8dfea851fe9de1dcafd91c22c2029f4aba0f0f772729754e336` differs from this run, so do **not** claim an inter-run byte-identical Image despite the same selected-owner experiment. Investigate exact compiler/output provenance and surviving IRQ-stack depth, rather than blindly adding further owners or accepting three green QEMU trials. Preserve all four crash logs in artifact `sharded-gnu-minic-QEMU-d563e744...`; new deep diagnostic work should reuse that actual failed Image and cached objects.
+
+
 ## 2026-10-13: eighth MiniC network neighbour owner returns 12/12 P1
 
 **Real [#38377015578](https://github.com/yituanxing/minic-toolchain/actions/runs/38377015578), commit `18ec417496b88b6633911a30732d561915774aab`, SUCCESS**:
