@@ -33,7 +33,7 @@ image_bytes=$(stat -c '%s' "$image")
   echo "LARGE_IMAGE_REUSE=FAIL reason=image_size bytes=$image_bytes" >&2
   exit 2
 }
-printf '%s\n' "source_run=$source_run" "source_commit=$source_commit" \ 
+printf '%s\n' "source_run=$source_run" "source_commit=$source_commit" \
   "image_sha256=$actual_sha" "image_bytes=$image_bytes" "compiler=MiniC" \
   "assembler=GNU-AS" "linker=GNU-LD" "qemu_memory=2G" \
   >"$ev/provenance.txt"
