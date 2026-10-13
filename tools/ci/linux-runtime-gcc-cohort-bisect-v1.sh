@@ -1700,6 +1700,44 @@ for delta,mi,ga,name in sorted(rows,reverse=True)[:22]:
     print(f"COHORT_LARGEST_TU_DELTA name={name} gcc_bytes={ga} minic_bytes={mi} extra_bytes={delta} ratio={mi/max(1,ga):.3f}")
 print(f"COHORT_TU_BYTES_SUM gcc={sum(r[2] for r in rows)} minic={sum(r[1] for r in rows)} count={len(rows)}")
 PY_LARGEST_TUS
+  # This opt-in is a FULL real-Linux C-universe test, not an artificial
+  # "ROM overlap" false failure. An all-MiniC Image is ~215 MiB: QEMU 8.2
+  # loads -initrd at 0x88200000 by default, overlapping the kernel before
+  # *any* C executes. Use the independently P0/shell/P1-certified QEMU loader
+  # map from linux-runtime-large-image-qemu-v0.sh with the guest's original
+  # 16KiB task/IRQ stacks and unchanged Image / initramfs. Recompute the
+  # matching DTB for every distinct linked Image, including bisection trials.
+  if [[ "${COHORT_LINUX_FULL_CROSSBLOCK:-0}" == 1 ]]; then
+    [[ "$cohort_scope" == FULL_C_UNIVERSE && "$n" -eq 2064 ]] || {
+      echo "LINUX_FULL_CROSSBLOCK=ERROR not_exact_full_C_universe" >&2
+      exit 8
+    }
+    dtb="$d/full-crossblock-virt.dtb"
+    qemu-system-riscv64 -M "virt,dumpdtb=$dtb" -cpu max \
+      -m 2G -smp 1 -nographic -no-reboot -bios default \
+      -kernel "$d/Image" >"$d/full-crossblock-dtb.log" 2>&1
+    [[ -s "$dtb" ]] || { echo "LINUX_FULL_CROSSBLOCK=FAIL no_dtb" >&2; exit 8; }
+    fdtget -p "$dtb" /chosen >/dev/null 2>&1 || fdtput -c "$dtb" /chosen
+    initrd_length=$(stat -c '%s' "$ev/runtime-initramfs.cpio.gz")
+    initrd_load=0xa0000000
+    initrd_end=$((initrd_load+initrd_length))
+    image_end=$((0x80200000+candidate_image_bytes))
+    ((initrd_load>=image_end && initrd_end<0x100000000)) || {
+      echo "LINUX_FULL_CROSSBLOCK=FAIL boot_ram_overlap image_end=$image_end initrd_load=$initrd_load" >&2
+      exit 8
+    }
+    printf -v initrd_end_hex '%x' "$initrd_end"
+    fdtput -t x "$dtb" /chosen linux,initrd-start 0 a0000000
+    fdtput -t x "$dtb" /chosen linux,initrd-end 0 "$initrd_end_hex"
+    [[ "$(fdtget -t x "$dtb" /chosen linux,initrd-start)" == "0 a0000000" &&
+       "$(fdtget -t x "$dtb" /chosen linux,initrd-end)" == "0 $initrd_end_hex" ]] || {
+       echo "LINUX_FULL_CROSSBLOCK=FAIL dtb_initrd_range" >&2; exit 8;
+    }
+    export LINUX_RUNTIME_CUSTOM_DTB="$dtb"
+    export LINUX_RUNTIME_INITRD_LOAD_ADDR="$initrd_load"
+    export LINUX_RUNTIME_QEMU_MEMORY=2G
+    echo "LINUX_FULL_CROSSBLOCK=LOADER_PASS trial=$name image_sha=$image_sha original_16KiB=true guest_mem=2G initrd_start=a0000000"
+  fi
   verdict=INCONCLUSIVE
   if [[ "$mode" != prefix || "$count" -gt 0 ]] && [[ "$image_sha" == "$gnu_image_sha" ]]; then
     echo "COHORT_IMAGE=UNCHANGED name=$name"
