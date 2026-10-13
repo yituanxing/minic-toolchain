@@ -891,3 +891,56 @@ now. Its 12 fewer CoreObjects in `tcp_rcv_state_process` saved only
 48 B of the 1776 B frame (~2.7%), 0 B in `tcp_conn_request`;
 moving to a more general CFG-local scratch interference analysis is
 the next large-leverage research objective. No new Workflow or branch.
+
+
+## Two hot-owner dead-compare cleanup combined, original 16KiB — 2026-10-13
+
+Targeted **only** `net/ipv6/ip6_output.o` and
+`net/ipv4/tcp_input.o`, retaining the same 16KiB kernel and
+the **2062 unmodified authenticated MiniC C objects**. Both modified
+owners used the *existing* syntactically strict, side-effect-free
+discarded local-address comparison elimination; no CFG-cross-block
+slot sharing, no LLVM/GCC C owner, no new CI/workflow/branch.
+CI **#38342452095**, artifact **11787631507**, completed the
+actual selective recompile, original-object SHA/ELF checks,
+linked a SHA-pinned Image and ran three independent standard
+QEMU P1 boots.
+
+| Modified owner / function | Original frame | Optimized frame | Saving |
+| --- | ---: | ---: | ---: |
+| `ip6_output.o: ip6_finish_output2` | 4064 | 2272 | 1792 |
+| `ip6_output.o: ip6_xmit` | 2288 | 1520 | 768 |
+| `ip6_output.o: ip6_output` | 768 | 512 | 256 |
+| `tcp_input.o: tcp_conn_request` | 1312 | 1184 | 128 |
+| `tcp_input.o: tcp_rcv_state_process` | 1776 | 1392 | 384 |
+| **Sum of isolated function-frame reductions** | | | **3328** |
+
+Do **not** treat 3328 bytes as a measured simultaneous stack
+improvement: receive and transmit functions may not coexist
+in one active call stack. All two optimized MiniC owners changed,
+2062 others were authenticated identical.
+
+P1 verdict of the exact linked Image
+`44bd9ae156acae97bd13e191cf4a81844b47c74e547a7c79f426be27d25935ea`
+was **FAIL/FAIL/FAIL (0/3)**; status green describes diagnostic
+harness completion only. The initial all-MiniC 16KiB control still
+failed at task-stack SP 144B below base in `__list_add_valid_or_report`.
+The two-owner optimized Image's normal-QEMU panics moved:
+1. `read_seqretry` called from `neigh_hh_output`, SP
+   `0xff20000000000100` (256B above previously verified
+   CPU0 IRQ base `0xff20000000000000`).
+2–3. `__dev_queue_xmit+0x28`, SP
+   `0xff1ffffffffffec0` (320B below that base), same
+   IPv6 child-connect probe stage; P1 did **not** pass.
+
+This is evidence that optimizing two high-ROI owners alone has not
+yet eliminated the broader IRQ/network transmit stack pressure.
+The original task-stack bottleneck was relieved enough to expose
+a different network/IRQ failure manifestation. Do not infer the
+specific new crash function is a miscompile (or that two
+independent codegen defects have been identified) without a
+matched call-stack/ABI proof. Inspect broad reusable scratch-object
+pooling, high-impact nested frame budgets, and first-fault register
+provenance before any further risky semantic optimization.
+Original diagnostic script was restored byte-for-byte in the
+same documenting commit; no unsafe patch was promoted.
