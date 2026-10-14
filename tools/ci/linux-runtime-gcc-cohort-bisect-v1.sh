@@ -1409,9 +1409,8 @@ trial() {
         ((native_s_overlay_count+=1))
       done <"$COHORT_MINIAS_NATIVE_S_MANIFEST"
       if [[ "${COHORT_MINIAS_S_BISECT:-0}" == 1 ]]; then
-        [[ "$native_s_overlay_count" == 1 || "$native_s_overlay_count" == 33 ||
-           "$native_s_overlay_count" == 16 || "$native_s_overlay_count" == 17 ]] || {
-          echo "MINIAS_NATIVE_S=FAIL bisect_expected_1_16_17_or_33_actual=$native_s_overlay_count"; exit 8;
+        ((native_s_overlay_count>=1 && native_s_overlay_count<=33)) || {
+          echo "MINIAS_NATIVE_S=FAIL bisect_object_count_outside_1_33=$native_s_overlay_count"; exit 8;
         }
       else
         [[ "$native_s_overlay_count" -ge 30 ]] || {
@@ -2788,6 +2787,67 @@ if [[ "${COHORT_MINIAS_S_BISECT:-0}" == 1 ]]; then
   head_owner="arch/riscv/kernel/head.o"
   grep -Fq "  $head_owner" "$original_s_manifest"
   printf 'trial\tnative_S_count\tverdict\timage_sha\n' >"$ev/native-S-bisect.tsv"
+  # Stage 3 continues from real QEMU evidence, not guessed owners:
+  # #38509375705: 1 head.o PASS, 33 others INCONCLUSIVE
+  # #38510167318: 16 nonhead PASS, last 17 nonhead INCONCLUSIVE
+  # Use the SAME immutable native 2064-C candidate & cached 34 native S
+  # objects for a reproducible two-way real-QEMU minimization. Report a
+  # single incompatible owner only when one side fails and the other PASSes.
+  if [[ "${COHORT_MINIAS_S_BISECT_STAGE:-1}" == 3 ]]; then
+    grep -Fv "  $head_owner" "$original_s_manifest" >"$ev/native-S-other33.sha256"
+    test "$(wc -l < "$ev/native-S-other33.sha256")" -eq 33
+    mapfile -t pending < <(sed -n '17,33p' "$ev/native-S-other33.sha256")
+    test "${#pending[@]}" -eq 17
+    for ((round=1;round<=6;round++)); do
+      total=${#pending[@]}
+      if ((total==1)); then break; fi
+      mid=$((total/2))
+      [[ "$mid" -gt 0 ]]
+      found_bad=()
+      for part in left right; do
+        probe="s17_round${round}_${part}"
+        selected_manifest="$ev/native-S-$probe.sha256"
+        if [[ "$part" == left ]]; then
+          printf '%s\n' "${pending[@]:0:mid}" >"$selected_manifest"
+        else
+          printf '%s\n' "${pending[@]:mid}" >"$selected_manifest"
+        fi
+        export COHORT_MINIAS_NATIVE_S_MANIFEST="$selected_manifest"
+        last_selection="force-local-S-bisect-$probe"
+        echo "MINIAS_NATIVE_S_BISECT=START probe=$probe owners=$(wc -l < "$selected_manifest") cached_C=2064"
+        trial "native_S_$probe" "$n" fast
+        printf '%s\t%s\t%s\t%s\n' "$probe" "$(wc -l < "$selected_manifest")" "$TRIAL_VERDICT" "$image_sha" >>"$ev/native-S-bisect.tsv"
+        echo "MINIAS_NATIVE_S_BISECT=RESULT probe=$probe verdict=$TRIAL_VERDICT image=$image_sha"
+        case "$TRIAL_VERDICT" in
+          PASS) ;;
+          INCONCLUSIVE)
+            found_bad+=("$part") ;;
+          *)
+            echo "MINIAS_NATIVE_S_BISECT=OTHER_FAILURE probe=$probe verdict=$TRIAL_VERDICT no_causal_claim=true"
+            exit 8 ;;
+        esac
+      done
+      case "${found_bad[*]}" in
+        left)
+          pending=("${pending[@]:0:mid}") ;;
+        right)
+          pending=("${pending[@]:mid}") ;;
+        *)
+          echo "MINIAS_NATIVE_S_BISECT=NON_MONOTONE_OR_MULTIPLE round=$round bad_groups=${found_bad[*]} stop_instead_of_guess=true"
+          printf '%s\n' "${pending[@]}" >"$ev/native-S-unresolved.sha256"
+          exit 8 ;;
+      esac
+      echo "MINIAS_NATIVE_S_BISECT=NARROW round=$round remaining=${#pending[@]}"
+    done
+    printf '%s\n' "${pending[@]}" >"$ev/native-S-localized.sha256"
+    if [[ "${#pending[@]}" == 1 ]]; then
+      echo "MINIAS_NATIVE_S_BISECT=SINGLE_OWNER_SUSPECT ${pending[0]#*  } independently_QEMU_verified=true"
+    else
+      echo "MINIAS_NATIVE_S_BISECT=UNRESOLVED owners=${#pending[@]}"
+    fi
+    cat "$ev/native-S-bisect.tsv"
+    exit 8
+  fi
   if [[ "${COHORT_MINIAS_S_BISECT_STAGE:-1}" == 2 ]]; then
     grep -Fv "  $head_owner" "$original_s_manifest" >"$ev/native-S-other33.sha256"
     test "$(wc -l < "$ev/native-S-other33.sha256")" -eq 33

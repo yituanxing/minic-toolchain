@@ -483,6 +483,8 @@ jobs:
             build/linux-runtime-gcc-cohort-v1/gcc-objects-stable.sha256
             build/linux-runtime-gcc-cohort-v1/results.tsv
             build/linux-runtime-gcc-cohort-v1/native-S-bisect.tsv
+            build/linux-runtime-gcc-cohort-v1/native-S-localized.sha256
+            build/linux-runtime-gcc-cohort-v1/native-S-unresolved.sha256
             build/linux-runtime-gcc-cohort-v1/native-S-*.sha256
             build/linux-runtime-gcc-cohort-v1/minic-manifest.sha256
             build/linux-runtime-gcc-cohort-v1/minic-identity.txt
@@ -1569,7 +1571,10 @@ jobs:
               test -s "$COHORT_MINIAS_NATIVE_S_MANIFEST"
               if [[ "${{ contains(github.event.head_commit.message, '[linux-minias-S-bisect]') && '1' || '0' }}" == 1 ]]; then
                 export COHORT_MINIAS_S_BISECT=1
-                if [[ "${{ contains(github.event.head_commit.message, '[linux-minias-S-half-33]') && '1' || '0' }}" == 1 ]]; then
+                if [[ "${{ contains(github.event.head_commit.message, '[linux-minias-S-adaptive-17]') && '1' || '0' }}" == 1 ]]; then
+                  export COHORT_MINIAS_S_BISECT_STAGE=3
+                  echo "MINIAS_NATIVE_S_BISECT=ENABLED scope=last17_recursive_real_QEMU no_extra_workflow=true"
+                elif [[ "${{ contains(github.event.head_commit.message, '[linux-minias-S-half-33]') && '1' || '0' }}" == 1 ]]; then
                   export COHORT_MINIAS_S_BISECT_STAGE=2
                   echo "MINIAS_NATIVE_S_BISECT=ENABLED scope=33_nonhead_half_16_17 no_extra_workflow=true"
                 else
