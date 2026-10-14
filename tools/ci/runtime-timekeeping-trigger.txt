@@ -5,3 +5,4 @@ retry frozen MiniPP 2064-object link/QEMU with certified explicit 2G QEMU DTB/in
 minipp P1 cached replay after generated compile.h and vdso-offsets.h pinned-dependency closure fix 2026-10-14
 minipp P1 cached replay after generated compile.h and vdso-offsets.h pinned-dependency closure fix 2026-10-14
 2026-10-14 exact single-owner Boolean Domain index ABI and compile-time validation; preserve seven-shard objects; benchmark report doc PERF-001.
+2026-10-14 updated single-owner reference preflight and true minic-cc SHA plus paired identical .s timing.
