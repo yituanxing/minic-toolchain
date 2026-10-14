@@ -34,6 +34,7 @@ def predef_args(argv: list[str]) -> tuple[str, ...]:
         "-march=", "-mabi=", "-std=", "-fshort-wchar",
         "-funsigned-char", "-fsigned-char", "-fno-PIE", "-fPIE",
         "-fno-pie", "-fpie", "-fPIC", "-fpic",
+        "-fno-PIC", "-fno-pic", "-mcmodel=",
     )
     return tuple(x for x in argv if x.startswith(allowed))
 
