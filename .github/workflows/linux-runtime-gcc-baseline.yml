@@ -1490,7 +1490,11 @@ jobs:
             nop
           MINIAS_ODD_ALIGN_EOF
           "$minias/bin/minic-as" -o "$minias/code-align-odd-preflight.o" "$minias/code-align-odd-preflight.s"
-          riscv64-linux-gnu-as -march=rv64i -o "$minias/code-align-odd-gnu.o" "$minias/code-align-odd-preflight.s"
+          # GNU AS emits R_RISCV_ALIGN relax padding in raw ET_REL by
+          # default (observed extra 12 bytes in #38519296573). Disable GNU
+          # relaxation for this byte-level padding probe; otherwise the raw
+          # .text files are not comparable before linker relaxation.
+          riscv64-linux-gnu-as -march=rv64i -mno-relax -o "$minias/code-align-odd-gnu.o" "$minias/code-align-odd-preflight.s"
           for producer in preflight gnu; do
             riscv64-linux-gnu-objcopy -O binary -j .text \
               "$minias/code-align-odd-${producer}.o" "$minias/code-align-odd-${producer}.bin"
