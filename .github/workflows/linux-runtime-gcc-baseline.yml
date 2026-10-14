@@ -835,7 +835,7 @@ jobs:
     # Use the SAME receiver job for exact immutable Image reboots. When the
     # seven producer jobs are skipped, always() prevents needs' implicit skip;
     # the ordinary full-shard path still requires a successful producer.
-    if: always() && github.event_name == 'push' && ((contains(github.event.head_commit.message, '[linux-runtime-gcc-sharded]') && needs.gcc-shards.result == 'success') || contains(github.event.head_commit.message, '[linux-runtime-large-image-qemu]') || contains(github.event.head_commit.message, '[linux-runtime-p1-frame-audit]') || contains(github.event.head_commit.message, '[linux-runtime-stack-owners]') || contains(github.event.head_commit.message, '[linux-native-union-cached]') || contains(github.event.head_commit.message, '[linux-minild-cached-replay]') || contains(github.event.head_commit.message, '[linux-minild-reloc-cached-replay]') || contains(github.event.head_commit.message, '[linux-minild-purgatory-cached-replay]') || contains(github.event.head_commit.message, '[linux-minild-vdso64-cached-replay]') || contains(github.event.head_commit.message, '[linux-minias-earlycon-frozen]'))
+    if: always() && github.event_name == 'push' && ((contains(github.event.head_commit.message, '[linux-runtime-gcc-sharded]') && needs.gcc-shards.result == 'success') || (contains(github.event.head_commit.message, '[linux-minipp-seven-integration]') && needs.gcc-shards.result == 'success') || contains(github.event.head_commit.message, '[linux-runtime-large-image-qemu]') || contains(github.event.head_commit.message, '[linux-runtime-p1-frame-audit]') || contains(github.event.head_commit.message, '[linux-runtime-stack-owners]') || contains(github.event.head_commit.message, '[linux-native-union-cached]') || contains(github.event.head_commit.message, '[linux-minild-cached-replay]') || contains(github.event.head_commit.message, '[linux-minild-reloc-cached-replay]') || contains(github.event.head_commit.message, '[linux-minild-purgatory-cached-replay]') || contains(github.event.head_commit.message, '[linux-minild-vdso64-cached-replay]') || contains(github.event.head_commit.message, '[linux-minias-earlycon-frozen]'))
     runs-on: ubuntu-24.04
     timeout-minutes: 95
     steps:
@@ -1491,6 +1491,31 @@ jobs:
           name: sharded-gnu-minic-QEMU-088b8ef0a30154e1eeaeb145107a1b51c07ba996
           path: build/minias-earlycon-full-artifact
 
+      # Reuse the seven existing build runners and this existing receiver.
+      - name: Restore full native MiniPP seven-shard artifacts
+        if: contains(github.event.head_commit.message, '[linux-minipp-seven-integration]')
+        uses: actions/download-artifact@v4
+        with:
+          pattern: minipp-native-shard-*-${{ github.sha }}
+          path: build/minipp-seven-merge/incoming
+          merge-multiple: false
+
+      - name: Merge all 2064 real MiniPP-native Linux C objects
+        if: contains(github.event.head_commit.message, '[linux-minipp-seven-integration]')
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-v1"
+          test "${{ steps.p1_minic_frozen_cache.outputs.cache-hit }}" = true
+          (cd "$ev"; sha256sum --quiet -c minic-manifest.sha256)
+          python3 tools/ci/minipp-linux-seven-merge-v1.py \
+            --artifacts "$GITHUB_WORKSPACE/build/minipp-seven-merge/incoming" \
+            --owners "$ev/full-objects.txt" \
+            --golden-out "$GITHUB_WORKSPACE/build/linux-runtime-gcc/out" \
+            --dest "$GITHUB_WORKSPACE/build/minipp-seven-merge/native-objects" \
+            --commit "$GITHUB_SHA"
+          (cd build/minipp-seven-merge/native-objects; sha256sum --quiet -c ../native-full-manifest.sha256)
+
       # Exactly the 2064 fresh MiniC .s inputs verified by the existing
       # seven gcc-shards jobs in successful run #38498107462. No recompilation
       # and no new workflow. This is the NEXT integration gate, not an
@@ -1641,6 +1666,13 @@ jobs:
             toolchain="$GITHUB_WORKSPACE/build/linux-runtime-native-union-v1-tools"
             export MINIAR="$toolchain/bin/minic-ar"
             export MINILD="$toolchain/bin/minic-ld"
+            if [[ "${{ contains(github.event.head_commit.message, '[linux-minipp-seven-integration]') && '1' || '0' }}" == 1 ]]; then
+              export COHORT_P1_EXPERIMENTAL_POOL="$GITHUB_WORKSPACE/build/minipp-seven-merge/native-objects"
+              test "$(wc -l < build/minipp-seven-merge/native-full-manifest.sha256)" -eq 2064
+              (cd "$COHORT_P1_EXPERIMENTAL_POOL"; sha256sum --quiet -c ../native-full-manifest.sha256)
+              echo "MINIPP_FULL_C_UNION=ENABLED PP=MiniPP CC=MiniC AS=MiniAS C=2064 shards=7"
+            fi
+
             export MINIOBJCOPY="$toolchain/bin/minic-objcopy"
             export NATIVE_TRACE_DIR="$native"
             export COHORT_NATIVE_UNION=1
@@ -1809,6 +1841,15 @@ jobs:
                 exit 23
               }
               echo "MINILD_NATIVE_R=PASS calls=$minild_r_calls fallback_GNU_vmlinux_o=0 full_QEMU_P1=PASS"
+            fi
+            if [[ "${{ contains(github.event.head_commit.message, '[linux-minipp-seven-integration]') && '1' || '0' }}" == 1 ]]; then
+              python3 - "$GITHUB_WORKSPACE/build/minipp-seven-merge/native-summary.json" <<'PY_FULL_PP'
+import json,sys
+j=json.load(open(sys.argv[1]))
+assert j["owners"]==2064 and j["shards"]==7 and j["failed"]==0 and j["pp"]=="MiniPP"
+PY_FULL_PP
+              grep -Fq 'COHORT_P1=PASS name=full_all_verified syscalls=12 python_era_oracle=PASS' "$ev/cohort.log" || exit 40
+              echo 'MINIPP_SEVEN_QEMU=PASS pp_input=MiniPP 2064_native_C_owners=true QEMU_P1=12/12 generated_header_pp_pending=true'
             fi
             if [[ "${{ contains(github.event.head_commit.message, '[linux-native-vdso64]') && '1' || '0' }}" == 1 ]]; then
               native_vdso64_calls=$(grep -c '^minild-vdso64 ' "$NATIVE_TRACE_DIR/minild.trace" || true)
