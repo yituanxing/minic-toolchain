@@ -72,7 +72,7 @@ def main() -> int:
     args = p.parse_args()
     if args.shards != 7 or not 0 <= args.shard < 7:
         raise SystemExit("MINIPP_SEVEN=FAIL invalid-seven-runner-partition")
-    if not 1 <= args.sample_per_shard <= 256:
+    if not 0 <= args.sample_per_shard <= 512:
         raise SystemExit("MINIPP_SEVEN=FAIL invalid-sample-limit")
     out, src, stage = args.out.resolve(), args.src.resolve(), args.stage.resolve()
     stage.mkdir(parents=True, exist_ok=True)
@@ -85,8 +85,11 @@ def main() -> int:
     if missing:
         raise SystemExit("MINIPP_SEVEN=FAIL missing-real-Kbuild-C-producers:"
                          + ",".join(missing[:8]))
-    selected = owner_names[args.shard::args.shards][:args.sample_per_shard]
-    if len(selected) != args.sample_per_shard:
+    assigned = owner_names[args.shard::args.shards]
+    selected = (assigned if args.sample_per_shard == 0
+                else assigned[:args.sample_per_shard])
+    if (not selected or
+        (args.sample_per_shard != 0 and len(selected) != args.sample_per_shard)):
         raise SystemExit("MINIPP_SEVEN=FAIL incomplete-worker-selection")
     print(f"MINIPP_SEVEN_PARTITION=PASS worker={args.shard}/7 "
           f"frozen_owners={len(owner_names)} selected={len(selected)} "
@@ -160,6 +163,12 @@ def main() -> int:
                 raise RuntimeError("MiniPP-MiniC-MiniAS-ELF64-RISC-V-ABI-mismatch")
             if sha(out / object_name) != old_sha:
                 raise RuntimeError("golden-cached-object-overwritten")
+            # Full-mode native .o files are hard-linked into their exact
+            # relative Kbuild paths for a later hash-attested seven-way
+            # merge. Never mutate the frozen GNU golden .o tree.
+            artifact_object = stage / "native-objects" / object_name
+            artifact_object.parent.mkdir(parents=True, exist_ok=True)
+            os.link(obj, artifact_object)
             result.update(status="PASS", native_object_sha=sha(obj),
                           native_object_bytes=obj.stat().st_size)
             print(f"MINIPP_SEVEN_NATIVE_OBJECT=PASS worker={args.shard}/7 "
@@ -170,12 +179,17 @@ def main() -> int:
             print(f"MINIPP_SEVEN_NATIVE_OBJECT=FAIL worker={args.shard}/7 "
                   f"object={object_name} reason={exc}", flush=True)
     (stage / "results.json").write_text(json.dumps(rows, indent=2, sort_keys=True) + "\n")
+    (stage / "native-manifest.sha256").write_text("".join(
+        f'{row["native_object_sha"]}  native-objects/{row["object"]}\n'
+        for row in rows if row["status"] == "PASS"))
     passed = sum(x["status"] == "PASS" for x in rows)
     (stage / "summary.json").write_text(json.dumps({
         "shard": args.shard, "shards": 7, "selected": len(rows),
         "passed": passed, "failed": len(rows)-passed, "full_universe": len(owner_names),
         "status": "PASS" if passed == len(rows) else "FAIL",
         "qemu_claim": False, "full_2064_pp_claim": False,
+        "full_shard": args.sample_per_shard == 0,
+        "manifest_sha": sha(stage / "native-manifest.sha256"),
     }, indent=2, sort_keys=True) + "\n")
     print(f"MINIPP_SEVEN_NATIVE_RESULT={'PASS' if passed == len(rows) else 'FAIL'} "
           f"worker={args.shard}/7 passed={passed}/{len(rows)} "
