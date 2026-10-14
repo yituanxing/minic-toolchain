@@ -532,6 +532,7 @@ jobs:
                 --baseline "$work/$factor/bin/minic" \
                 --candidate "$work/toolchain/bin/minic" \
                 --corpus "$corpus" --work "$work/factor-$factor" \
+                --hotspots-from "$work/evidence/paired-results.json" --sample-count 48 \
                 --jobs 4 | tee "$work/evidence/factor-$factor.txt"
             cp "$work/factor-$factor/paired-results.json" \
               "$work/evidence/factor-$factor-results.json"
