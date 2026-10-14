@@ -11,3 +11,4 @@ minipp P1 cached replay after generated compile.h and vdso-offsets.h pinned-depe
 2026-10-14 strict 3-owner perf A/B: kernel/bpf/btf.o verifier.o net/core/filter.o; no full recompilation or link.
 2026-10-14 retry once: three slow owners, split producer/cache from measurements and fix tee directory.
 2026-10-14 opt-in stage trace via already SHA-cached original 3 C source, no paired repeat and no new compiler patch.
+2026-10-14 next generic algorithm: function-name parser hash vs same-instrumented linear scan, 2 paired reps only; reuse three frozen owners.
