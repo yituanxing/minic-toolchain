@@ -1844,10 +1844,10 @@ jobs:
             fi
             if [[ "${{ contains(github.event.head_commit.message, '[linux-minipp-seven-integration]') && '1' || '0' }}" == 1 ]]; then
               python3 - "$GITHUB_WORKSPACE/build/minipp-seven-merge/native-summary.json" <<'PY_FULL_PP'
-import json,sys
-j=json.load(open(sys.argv[1]))
-assert j["owners"]==2064 and j["shards"]==7 and j["failed"]==0 and j["pp"]=="MiniPP"
-PY_FULL_PP
+              import json,sys
+              j=json.load(open(sys.argv[1]))
+              assert j["owners"]==2064 and j["shards"]==7 and j["failed"]==0 and j["pp"]=="MiniPP"
+              PY_FULL_PP
               grep -Fq 'COHORT_P1=PASS name=full_all_verified syscalls=12 python_era_oracle=PASS' "$ev/cohort.log" || exit 40
               echo 'MINIPP_SEVEN_QEMU=PASS pp_input=MiniPP 2064_native_C_owners=true QEMU_P1=12/12 generated_header_pp_pending=true'
             fi
@@ -1913,7 +1913,12 @@ PY_FULL_PP
               grep -Fq 'MINIAS_ALL_C_RUNTIME=PASS' "$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-v1/cohort.log" || true
               echo "MINIAS_NATIVE_S_INTEGRATION=PASS all_2064_MiniC_C_native_AS=true original_Kbuild_native_S=true P1=12/12"
             fi
-            echo "NATIVE_UNION_RESULT=PASS pp=GNU minic=2064 from_cache ar=MiniAR_full_actual_Kbuild ar_native_calls=$minic_ar_calls ar_mpit_calls=$minic_mpit_calls ar_gnu_calls=0 ld=MiniLD_certified_boundaries vdso64_native=${MINILD_ENABLE_VDSO64:-0} objcopy=MiniObjcopy runtime=P1"
+            if [[ "${{ contains(github.event.head_commit.message, '[linux-minipp-seven-integration]') && '1' || '0' }}" == 1 ]]; then
+              pp_tag=MiniPP_2064_native_C_baseline_four_generated_header_dependents_replayed_by_current_cohort
+            else
+              pp_tag=GNU
+            fi
+            echo "NATIVE_UNION_RESULT=PASS pp=$pp_tag minic=2064 native_C_from_seven_shards=${COHORT_P1_EXPERIMENTAL_POOL:-none} ar=MiniAR_full_actual_Kbuild ar_native_calls=$minic_ar_calls ar_mpit_calls=$minic_mpit_calls ar_gnu_calls=0 ld=MiniLD_certified_boundaries vdso64_native=${MINILD_ENABLE_VDSO64:-0} objcopy=MiniObjcopy runtime=P1"
           fi
 
       - name: Preserve aggregate link, QEMU and failure-frontier evidence
