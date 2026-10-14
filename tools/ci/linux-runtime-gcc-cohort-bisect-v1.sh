@@ -1607,7 +1607,7 @@ PY_RISCV_DYNAMIC
       echo "MINIAS_DYNAMIC_HEADER_OBJECTS=FAIL GNU_AS_overwrote_native_object"
       exit 8
     }
-    echo "MINIAS_DYNAMIC_HEADER_OBJECTS=PASS trial=$name native_header_objects=4 total_native_C_objects=$(({COHORT_MINIAS_EXPECTED_NATIVE:-60}+4))"
+    echo "MINIAS_DYNAMIC_HEADER_OBJECTS=PASS trial=$name native_header_objects=4 total_native_C_objects=$(( ${COHORT_MINIAS_EXPECTED_NATIVE:-60} + 4 ))"
   fi
   # Non-C objects cannot all be compared byte-for-byte with the GNU
   # golden reference: changing a verified MiniC .o legitimately changes its
