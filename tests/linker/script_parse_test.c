@@ -99,6 +99,20 @@ int main(int argc, char **argv) {
             minild_script_destroy(&script);
             return 1;
         }
+        if (vdso.phdr_count != 4U ||
+            strcmp(vdso.phdrs[0].name, "text") != 0 ||
+            strcmp(vdso.phdrs[0].type_name, "PT_LOAD") != 0 ||
+            !vdso.phdrs[0].filehdr || !vdso.phdrs[0].phdrs ||
+            !vdso.phdrs[0].have_flags || vdso.phdrs[0].flags != 5U ||
+            strcmp(vdso.phdrs[3].type_name, "PT_GNU_EH_FRAME") != 0 ||
+            vdso.commands[3].kind != MINILD_SCRIPT_OUTPUT_SECTION ||
+            vdso.commands[3].value.section.phdr_name_count != 1U ||
+            strcmp(vdso.commands[3].value.section.phdr_names[0],
+                   "text") != 0) {
+            minild_script_destroy(&vdso);
+            minild_script_destroy(&script);
+            return 1;
+        }
         vdso_context.have_headers_size = true;
         vdso_context.headers_size = UINT64_C(64) + 4U * UINT64_C(56);
         if (!minild_script_evaluate(&vdso, expr_id, &vdso_context,
@@ -109,7 +123,7 @@ int main(int argc, char **argv) {
             return 1;
         }
         minild_script_destroy(&vdso);
-        puts("MINILD_SCRIPT_VDSO_HEADERS=PASS PHDR_count=4 sizeof_headers=288 no_guess=true");
+        puts("MINILD_SCRIPT_VDSO_HEADERS=PASS PHDR_count=4 sizeof_headers=288 mapping=text flags=5 filehdr=true no_guess=true");
     }
     puts("MINILD_SCRIPT_A0=PASS linux-subset=PASS commands=12 expressions=37 wildcard=PASS");
     minild_script_destroy(&script);

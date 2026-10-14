@@ -328,6 +328,35 @@ static bool parse_output_section(ScriptParser *parser,
     if (!parse_section_body(parser, &section)) {
         return false;
     }
+    while (parser->token.kind == TOKEN_COLON) {
+        char **names;
+        char *name_copy;
+        if (!minild_script_parser_next(parser) ||
+            parser->token.kind != TOKEN_IDENTIFIER) {
+            return minild_script_parser_error(parser,
+                                              "expected-output-section-phdr-name");
+        }
+        name_copy = minild_script_strdup_range(parser->token.begin,
+                                                parser->token.length);
+        if (name_copy == NULL ||
+            section.phdr_name_count == SIZE_MAX / sizeof(*names)) {
+            free(name_copy);
+            return minild_script_parser_error(parser,
+                                              "out-of-memory:section-phdr");
+        }
+        names = realloc(section.phdr_names,
+                        (section.phdr_name_count + 1U) * sizeof(*names));
+        if (names == NULL) {
+            free(name_copy);
+            return minild_script_parser_error(parser,
+                                              "out-of-memory:section-phdr");
+        }
+        section.phdr_names = names;
+        section.phdr_names[section.phdr_name_count++] = name_copy;
+        if (!minild_script_parser_next(parser)) {
+            return false;
+        }
+    }
     memset(&command, 0, sizeof(command));
     command.kind = MINILD_SCRIPT_OUTPUT_SECTION;
     command.value.section = section;
@@ -472,6 +501,125 @@ static bool parse_sections(ScriptParser *parser) {
     return minild_script_parser_next(parser);
 }
 
+/* Preserve the full four-PHDR Linux vDSO contract in the script AST.
+ * The shared ELF layout may only use these once each output section's
+ * :phdr mapping and explicit flags are honored by the writer.
+ */
+static bool parse_phdrs(ScriptParser *parser) {
+    if (!minild_script_parser_next(parser) ||
+        !minild_script_expect(parser, TOKEN_LBRACE,
+                              "expected-'{'-after-PHDRS")) {
+        return false;
+    }
+    while (parser->token.kind != TOKEN_RBRACE) {
+        MiniLdScriptPhdr phdr;
+        MiniLdScriptPhdr *grown;
+        if (parser->token.kind != TOKEN_IDENTIFIER) {
+            return minild_script_parser_error(parser,
+                                              "expected-PHDR-name");
+        }
+        memset(&phdr, 0, sizeof(phdr));
+        phdr.name = minild_script_strdup_range(parser->token.begin,
+                                                parser->token.length);
+        if (phdr.name == NULL || !minild_script_parser_next(parser) ||
+            parser->token.kind != TOKEN_IDENTIFIER) {
+            free(phdr.name);
+            return minild_script_parser_error(parser,
+                                              "expected-PHDR-type");
+        }
+        phdr.type_name = minild_script_strdup_range(parser->token.begin,
+                                                     parser->token.length);
+        if (phdr.type_name == NULL ||
+            (strcmp(phdr.type_name, "PT_LOAD") != 0 &&
+             strcmp(phdr.type_name, "PT_DYNAMIC") != 0 &&
+             strcmp(phdr.type_name, "PT_NOTE") != 0 &&
+             strcmp(phdr.type_name, "PT_GNU_EH_FRAME") != 0) ||
+            !minild_script_parser_next(parser)) {
+            free(phdr.name);
+            free(phdr.type_name);
+            return minild_script_parser_error(parser,
+                                              "unsupported-PHDR-type");
+        }
+        while (parser->token.kind != TOKEN_SEMICOLON) {
+            if (parser->token.kind == TOKEN_EOF ||
+                parser->token.kind == TOKEN_RBRACE) {
+                free(phdr.name);
+                free(phdr.type_name);
+                return minild_script_parser_error(parser,
+                                                  "expected-PHDR-semicolon");
+            }
+            if (minild_script_token_is(parser, "FLAGS")) {
+                if (phdr.have_flags ||
+                    !minild_script_parser_next(parser) ||
+                    !minild_script_expect(parser, TOKEN_LPAREN,
+                                          "expected-'('-after-PHDR-FLAGS") ||
+                    parser->token.kind != TOKEN_NUMBER ||
+                    parser->token.number > UINT32_MAX) {
+                    free(phdr.name);
+                    free(phdr.type_name);
+                    return minild_script_parser_error(parser,
+                                                      "invalid-PHDR-FLAGS");
+                }
+                phdr.have_flags = true;
+                phdr.flags = (uint32_t)parser->token.number;
+                if (!minild_script_parser_next(parser) ||
+                    !minild_script_expect(parser, TOKEN_RPAREN,
+                                          "expected-')'-after-PHDR-FLAGS")) {
+                    free(phdr.name);
+                    free(phdr.type_name);
+                    return false;
+                }
+            } else if (minild_script_token_is(parser, "FILEHDR")) {
+                phdr.filehdr = true;
+                if (!minild_script_parser_next(parser)) {
+                    free(phdr.name);
+                    free(phdr.type_name);
+                    return false;
+                }
+            } else if (minild_script_token_is(parser, "PHDRS")) {
+                phdr.phdrs = true;
+                if (!minild_script_parser_next(parser)) {
+                    free(phdr.name);
+                    free(phdr.type_name);
+                    return false;
+                }
+            } else {
+                free(phdr.name);
+                free(phdr.type_name);
+                return minild_script_parser_error(parser,
+                                                  "unsupported-PHDR-attribute");
+            }
+        }
+        if (parser->script->phdr_count ==
+            parser->script->phdr_capacity) {
+            size_t next = parser->script->phdr_capacity == 0U
+                              ? 4U : parser->script->phdr_capacity * 2U;
+            if (next < parser->script->phdr_capacity ||
+                next > SIZE_MAX / sizeof(*grown)) {
+                free(phdr.name);
+                free(phdr.type_name);
+                return minild_script_parser_error(parser,
+                                                  "out-of-memory:PHDRS");
+            }
+            grown = realloc(parser->script->phdrs,
+                            next * sizeof(*grown));
+            if (grown == NULL) {
+                free(phdr.name);
+                free(phdr.type_name);
+                return minild_script_parser_error(parser,
+                                                  "out-of-memory:PHDRS");
+            }
+            parser->script->phdrs = grown;
+            parser->script->phdr_capacity = next;
+        }
+        parser->script->phdrs[parser->script->phdr_count++] = phdr;
+        if (!minild_script_parser_next(parser)) {
+            return false;
+        }
+    }
+    return minild_script_parser_next(parser);
+}
+
 static bool parse_directive_with_identifier(ScriptParser *parser,
                                             char **value_out) {
     if (!minild_script_parser_next(parser) ||
@@ -531,8 +679,17 @@ void minild_script_destroy(MiniLdScript *script) {
                 }
             }
             free(section->items);
+            for (j = 0U; j < section->phdr_name_count; ++j) {
+                free(section->phdr_names[j]);
+            }
+            free(section->phdr_names);
         }
     }
+    for (i = 0U; i < script->phdr_count; ++i) {
+        free(script->phdrs[i].name);
+        free(script->phdrs[i].type_name);
+    }
+    free(script->phdrs);
 
     free(script->expressions);
     free(script->commands);
@@ -586,6 +743,10 @@ bool minild_script_parse_file(const char *path,
             if (!parse_sections(&parser)) {
                 goto done;
             }
+        } else if (minild_script_token_is(&parser, "PHDRS")) {
+            if (!parse_phdrs(&parser)) {
+                goto done;
+            }
         } else if (parser.token.kind == TOKEN_IDENTIFIER) {
             ScriptToken name = parser.token;
             char *symbol_name;
@@ -628,6 +789,30 @@ bool minild_script_parse_file(const char *path,
         }
     }
 
+    {
+        size_t i;
+        for (i = 0U; i < script->command_count; ++i) {
+            const MiniLdScriptCommand *command = &script->commands[i];
+            size_t j;
+            if (command->kind != MINILD_SCRIPT_OUTPUT_SECTION) {
+                continue;
+            }
+            for (j = 0U; j < command->value.section.phdr_name_count; ++j) {
+                const char *name = command->value.section.phdr_names[j];
+                size_t k;
+                for (k = 0U; k < script->phdr_count; ++k) {
+                    if (strcmp(name, script->phdrs[k].name) == 0) {
+                        break;
+                    }
+                }
+                if (k == script->phdr_count) {
+                    minild_script_parser_error(&parser,
+                                              "unknown-output-section-PHDR");
+                    goto done;
+                }
+            }
+        }
+    }
     ok = true;
 
 done:

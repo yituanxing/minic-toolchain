@@ -69,6 +69,10 @@ typedef struct MiniLdScriptOutputSection {
     size_t item_count;
     size_t item_capacity;
     bool discard;
+    /* Explicit GNU :phdr associations; actual ELF PHDR writer support is
+     * separately gated, never silently ignored in static/shared links. */
+    char **phdr_names;
+    size_t phdr_name_count;
 } MiniLdScriptOutputSection;
 
 typedef enum MiniLdScriptCommandKind {
@@ -90,6 +94,15 @@ typedef struct MiniLdScriptCommand {
     } value;
 } MiniLdScriptCommand;
 
+typedef struct MiniLdScriptPhdr {
+    char *name;
+    char *type_name;
+    uint32_t flags;
+    bool have_flags;
+    bool filehdr;
+    bool phdrs;
+} MiniLdScriptPhdr;
+
 typedef struct MiniLdScript {
     char *entry_symbol;
     char *output_arch;
@@ -99,6 +112,9 @@ typedef struct MiniLdScript {
     MiniLdScriptCommand *commands;
     size_t command_count;
     size_t command_capacity;
+    MiniLdScriptPhdr *phdrs;
+    size_t phdr_count;
+    size_t phdr_capacity;
 } MiniLdScript;
 
 typedef bool (*MiniLdScriptResolveSymbol)(void *context,
