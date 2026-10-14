@@ -66,9 +66,33 @@ new = """MinicFunctionId minic_parser_find_function(const MinicParser *parser, M
     for (index = parser->program->function_count; index > 0U; --index) {
         perf_parser->perf_find_function_steps += 1U;
 """
-if text.count(old) != 1:
-    raise SystemExit(f"find-function anchor count={text.count(old)}")
-p.write_text(text.replace(old,new,1))
+if text.count(old) == 1:
+    text = text.replace(old, new, 1)
+else:
+    # Current parser_core.c scans function declarations in forward order:
+    # the first declaration wins. Do not reintroduce historical reverse
+    # semantics merely to satisfy an old performance instrumentation patch.
+    forward_old = """MinicFunctionId minic_parser_find_function(const MinicParser *parser, MinicSourceSpan name_span) {
+    size_t name_length;
+    size_t index;
+
+    name_length = minic_parser_span_length(name_span);
+    for (index = 0U; index < parser->program->function_count; ++index) {
+"""
+    forward_new = """MinicFunctionId minic_parser_find_function(const MinicParser *parser, MinicSourceSpan name_span) {
+    size_t name_length;
+    size_t index;
+    MinicParser *perf_parser = (MinicParser *)parser;
+
+    perf_parser->perf_find_function_calls += 1U;
+    name_length = minic_parser_span_length(name_span);
+    for (index = 0U; index < parser->program->function_count; ++index) {
+        perf_parser->perf_find_function_steps += 1U;
+"""
+    if text.count(forward_old) != 1:
+        raise SystemExit("find-function forward/reverse anchor absent")
+    text = text.replace(forward_old, forward_new, 1)
+p.write_text(text)
 
 # Global/fixed-register lookups.
 p = Path("src/frontend/parser_global.c")
