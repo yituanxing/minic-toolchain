@@ -7759,7 +7759,6 @@ static bool shared_write_object(MiniLdState *state,
         }
     }
     {
-        uint32_t ignored;
         if (!buffer_append_string(&shstrtab, ".symtab",
                                   &symtab_name) ||
             !buffer_append_string(&shstrtab, ".strtab",
