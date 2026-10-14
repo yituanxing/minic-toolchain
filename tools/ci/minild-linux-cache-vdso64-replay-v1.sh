@@ -105,6 +105,35 @@ sha256sum "$minild" >"$ev/tool.sha256"
       riscv64-linux-gnu-readelf -W -S -l -d \
         "$ev/vdso-reduced-diagnostic.so" >"$ev/reduced-elf.txt" || true
     fi
+    # Independent diagnostic only: exercise the new EH-frame-hdr parser
+    # against all seven genuine Linux .o (4 GNU FDEs), without pretending
+    # the missing full -T linker script or symbol versioning is implemented.
+    # The script-defined _vdso_data cannot resolve without -T, so define
+    # a diagnostic-only ABS symbol. Never feed this output into Linux.
+    cat >"$ev/vdso-diagnostic-symbol.s" <<'MINILD_VDSO_DIAG_ASM'
+    .globl _vdso_data
+    .set _vdso_data, 0
+MINILD_VDSO_DIAG_ASM
+    riscv64-linux-gnu-as -march=rv64gc -mabi=lp64d \
+      -o "$ev/vdso-diagnostic-symbol.o" "$ev/vdso-diagnostic-symbol.s"
+    diag_rc=0
+    timeout 90s "$minild" -melf64lriscv -shared -S \
+      --hash-style=both --eh-frame-hdr -soname=linux-vdso.so.1 \
+      "${inputs[@]}" "$ev/vdso-diagnostic-symbol.o" \
+      -o "$ev/vdso-eh-only-diagnostic.so" \
+      >"$ev/eh-diagnostic.stdout" 2>"$ev/eh-diagnostic.stderr" || diag_rc=$?
+    echo "MINILD_VDSO_EH_DIAGNOSTIC_LINK rc=$diag_rc genuine_GNU_objects=7 synthetic_script_symbol=true exact_script=false runtime_claim=false"
+    if (( diag_rc == 0 )); then
+      riscv64-linux-gnu-readelf -W -S -l -d \
+        "$ev/vdso-eh-only-diagnostic.so" >"$ev/eh-diagnostic-elf.txt"
+      riscv64-linux-gnu-readelf -W --debug-dump=frames \
+        "$ev/vdso-eh-only-diagnostic.so" >"$ev/eh-diagnostic-frames.txt"
+      diag_fdes="$(grep -c ' FDE ' "$ev/eh-diagnostic-frames.txt" || true)"
+      diag_size="$(grep -F '.eh_frame_hdr' "$ev/eh-diagnostic-elf.txt" | grep -E 'PROGBITS' | awk '{print $(NF-4)}' || true)"
+      echo "MINILD_VDSO_EH_DIAGNOSTIC fdes=$diag_fdes expected=4 GNU_EH_FRAME=$(grep -c 'GNU_EH_FRAME' "$ev/eh-diagnostic-elf.txt" || true) runtime_claim=false"
+    else
+      sed 's/^/MINILD_VDSO_EH_DIAGNOSTIC_ERROR /' "$ev/eh-diagnostic.stderr" | head -n 45
+    fi
     exit "$code"
   fi
 )
