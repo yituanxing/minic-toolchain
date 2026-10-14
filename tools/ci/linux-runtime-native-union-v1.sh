@@ -164,6 +164,170 @@ if [[ "${MINILD_ENABLE_VDSO64:-0}" == 1 &&
     fi
   fi
   if (( status==0 )); then
+    # Linux's generated vdso-offsets.h reads the REGULAR SHT_SYMTAB
+    # through NM (not -D/.dynsym). Without the real static table, kernel
+    # signal.o cannot compile even if the vDSO is a valid versioned DSO.
+    # Fail right here rather than spending another Kbuild pass detecting
+    # an empty header. This is the exact next error from #38539948868.
+    riscv64-linux-gnu-nm "$output" >"$NATIVE_TRACE_DIR/vdso64-static-nm.txt" || {
+      echo 'MINILD_VDSO64=FAIL missing_regular_nm_symtab' >&2
+      exit 89
+    }
+    grep -Eq '^[[:xdigit:]]+ [Tt] __vdso_rt_sigreturn
+    # read-only reference. This catches the no-CFI 0-byte
+    # PT_GNU_EH_FRAME case without hiding toolchain provenance.
+    debug_args=("${args[@]}")
+    for ((j=0; j<${#debug_args[@]}; ++j)); do
+      if [[ "${debug_args[j]}" == -o && $((j+1)) -lt ${#debug_args[@]} ]]; then
+        debug_args[j+1]="$NATIVE_TRACE_DIR/vdso64-gnu-same-inputs-diagnostic.so"
+        break
+      fi
+    done
+    if ! /usr/bin/riscv64-linux-gnu-ld "${debug_args[@]}" \
+       >"$NATIVE_TRACE_DIR/vdso64-gnu-diagnostic.stdout" \
+       2>"$NATIVE_TRACE_DIR/vdso64-gnu-diagnostic.stderr"; then
+      echo "MINILD_VDSO64=FAIL GNU_same_inputs_reference_failed no_fallback=true" >&2
+      exit 87
+    fi
+    if ! python3 - "$output" "$NATIVE_TRACE_DIR/vdso64-gnu-same-inputs-diagnostic.so" <<'PY_VDSO_PHDR'
+import pathlib,struct,sys
+def headers(path):
+    data=pathlib.Path(path).read_bytes()
+    assert data[:6]==b'\x7fELF\x02\x01'
+    phoff=struct.unpack_from('<Q',data,32)[0]
+    entsize,count=struct.unpack_from('<HH',data,54)
+    values=[]
+    for i in range(count):
+        o=phoff+i*entsize
+        typ,flags,fo,vma,paddr,sz,ms,align=struct.unpack_from('<IIQQQQQQ',data,o)
+        values.append((typ,flags,fo,vma,sz,ms))
+    return values
+native,gnu=map(headers,sys.argv[1:])
+assert [x[0] for x in native]==[1,2,4,0x6474e550],native
+assert [x[0] for x in gnu]==[1,2,4,0x6474e550],gnu
+assert [x[1] for x in native]==[x[1] for x in gnu],(native,gnu)
+nh,gh=native[-1],gnu[-1]
+assert nh[4:]==gh[4:],(nh,gh)
+if gh[4]==0:
+    assert nh[2:]==gh[2:]==(0,0,0,0),(nh,gh)
+print('MINILD_VDSO64_SAME_INPUTS=PASS native_link=true GNU_reference_diagnostic_only=true eh_header_bytes='+str(nh[4])+' flags='+str(nh[1]))
+PY_VDSO_PHDR
+    then
+      echo "MINILD_VDSO64=FAIL same_input_GNU_program_header_differential" >&2
+      exit 88
+    fi
+  fi
+  exit "$status"
+fi
+# Combined full-runtime qualification: only vmlinux.o -r is additionally
+# native, all other untested linker boundaries stay GNU. Require QEMU P1
+# and 2 real native -r calls after SHA-authenticating all 2064 MiniC objects.
+# The GNU vmlinux.o relocatable link has independently passed the REAL
+# cached Linux 6.6.143 GNU -r ABI and ALL exported-name differential
+# (#38481829961): 291ms; zero C objects rebuilt. Promote it only with an
+# explicit opt-in; prove QEMU P0/P1 again before calling it accepted.
+if [[ "${MINILD_ENABLE_VMLINUX_R:-0}" == 1 && "${output##*/}" == vmlinux.o ]]; then
+  found_r=0
+  for arg in "$@"; do
+    case "$arg" in
+      -r|--relocatable) found_r=1 ;;
+    esac
+  done
+  if [[ "$found_r" == 1 ]]; then
+    { flock 9; printf 'minild-r'; printf ' %q' "$@"; printf '\n'; } 9>>"$NATIVE_TRACE_DIR/minild.trace" >&9
+    start_ms=$(date +%s%3N)
+    status=0
+    MINILD_PROFILE_PHASES=1 "$MINILD" "$@" || status=$?
+    elapsed_ms=$(($(date +%s%3N)-start_ms))
+    { flock 9; printf 'minild-r\t%s\t%s\t%s\n' "$elapsed_ms" "$status" "$output"; } 9>>"$NATIVE_TRACE_DIR/minild-times.tsv" >&9
+    exit "$status"
+  fi
+fi
+# GNU-pinned 6.6.143 purgatory.ro -r was independently proven in
+# #38482832436: 4ms MiniLD, ELF64 RISC-V ET_REL and export names agree.
+# Replace exactly this -r boundary under opt-in; leave purgatory.chk,
+# vDSO and all other unproven GNU LD operations untouched.
+if [[ "${MINILD_ENABLE_PURGATORY_R:-0}" == 1 &&
+      "${output##*/}" == purgatory.ro ]]; then
+  found_r=0
+  found_entry=0
+  for arg in "$@"; do
+    [[ "$arg" == -r || "$arg" == --relocatable ]] && found_r=1
+    [[ "$arg" == purgatory_start ]] && found_entry=1
+  done
+  if [[ "$found_r" == 1 && "$found_entry" == 1 ]]; then
+    { flock 9; printf 'minild-purgatory-r'; printf ' %q' "$@"; printf '\n'; } 9>>"$NATIVE_TRACE_DIR/minild.trace" >&9
+    start_ms=$(date +%s%3N)
+    status=0
+    "$MINILD" "$@" || status=$?
+    elapsed_ms=$(($(date +%s%3N)-start_ms))
+    { flock 9; printf 'minild-purgatory-r\t%s\t%s\t%s\n' "$elapsed_ms" "$status" "$output"; } 9>>"$NATIVE_TRACE_DIR/minild-times.tsv" >&9
+    exit "$status"
+  fi
+fi
+# CI qualification with the native purgatory final static link must retain
+# 2064 SHA-exact MiniC objects and real Linux QEMU P0/P1; successful kernel
+# boot alone does NOT exercise kexec/purgatory runtime. Other GNU LD remain.
+# The REAL cached GNU purgatory.ro -> purgatory.chk final static link was
+# independently proven #38485109077: GNU global exports, ELF64 RV ET_EXEC,
+# ABI flags and entry nonzero all match. Promote this ONE boundary only after
+# the exact final-runtime opt-in, and require full 2064-MiniC Linux QEMU P1.
+if [[ "${MINILD_ENABLE_PURGATORY_STATIC:-0}" == 1 &&
+      "${output##*/}" == purgatory.chk ]]; then
+  found_entry=0
+  found_r=0
+  for arg in "$@"; do
+    [[ "$arg" == purgatory_start ]] && found_entry=1
+    [[ "$arg" == -r || "$arg" == --relocatable ]] && found_r=1
+  done
+  if [[ "$found_entry" == 1 && "$found_r" == 0 ]]; then
+    { flock 9; printf 'minild-purgatory-static'; printf ' %q' "$@"; printf '\n'; } 9>>"$NATIVE_TRACE_DIR/minild.trace" >&9
+    start_ms=$(date +%s%3N)
+    status=0
+    "$MINILD" "$@" || status=$?
+    elapsed_ms=$(($(date +%s%3N)-start_ms))
+    { flock 9; printf 'minild-purgatory-static\t%s\t%s\t%s\n' "$elapsed_ms" "$status" "$output"; } 9>>"$NATIVE_TRACE_DIR/minild-times.tsv" >&9
+    exit "$status"
+  fi
+fi
+# Three static vmlinux links proven #38426379946; 32-bit vDSO GNU LD stays.
+
+case "${output##*/}" in
+  .tmp_vmlinux.kallsyms1|.tmp_vmlinux.kallsyms2|vmlinux)
+    { flock 9; printf 'minild'; printf ' %q' "$@"; printf '\n'; } 9>>"$NATIVE_TRACE_DIR/minild.trace" >&9
+    start_ms=$(date +%s%3N)
+    status=0
+    MINILD_PROFILE_PHASES=1 "$MINILD" "$@" || status=$?
+    elapsed_ms=$(($(date +%s%3N) - start_ms))
+    { flock 9; printf 'minild\t%s\t%s\t%s\n' "$elapsed_ms" "$status" "$output"; } 9>>"$NATIVE_TRACE_DIR/minild-times.tsv" >&9
+    exit "$status" ;;
+  *)
+    { flock 9; printf 'gnu-ld'; printf ' %q' "$@"; printf '\n'; } 9>>"$NATIVE_TRACE_DIR/minild.trace" >&9
+    exec /usr/bin/riscv64-linux-gnu-ld "$@" ;;
+esac
+SH_LD
+cat >"$ev/objcopy-wrapper" <<'SH_COPY'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+: "${MINIOBJCOPY:?}" "${NATIVE_TRACE_DIR:?}"
+{ flock 9; printf 'miniobjcopy'; printf ' %q' "$@"; printf '\n'; } 9>>"$NATIVE_TRACE_DIR/miniobjcopy.trace" >&9
+exec "$MINIOBJCOPY" "$@"
+SH_COPY
+chmod +x "$ev/"{ar-wrapper,ld-wrapper,objcopy-wrapper}
+: >"$ev/miniar.trace"
+: >"$ev/minild.trace"
+: >"$ev/minild-times.tsv"
+: >"$ev/miniobjcopy.trace"
+printf 'NATIVE_UNION=WRAPPERS_READY ar=%s ld=%s objcopy=%s pp=GNU gcc_c=none as=GNU\n' \
+  "$MINIAR" "$MINILD" "$MINIOBJCOPY"
+# Scripts called from separate GitHub workflow steps do not inherit exports;
+# the parent step must export these stable paths before cohort verification.
+ \
+      "$NATIVE_TRACE_DIR/vdso64-static-nm.txt" || {
+      echo 'MINILD_VDSO64=FAIL missing_kernel_rt_sigreturn_offset_source_symbol' >&2
+      exit 89
+    }
+    echo 'MINILD_VDSO64_STATIC_SYMTAB=PASS plain_nm=true rt_sigreturn_offset_symbol=true'
     # Compare exactly the current MiniC/MiniAS object inputs to a GNU
     # read-only reference. This catches the no-CFI 0-byte
     # PT_GNU_EH_FRAME case without hiding toolchain provenance.
