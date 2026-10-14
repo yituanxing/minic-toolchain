@@ -675,8 +675,9 @@ jobs:
       # Reuse precisely the existing seven GitHub runners and their
       # SHA-attested GNU Linux golden reference, not a new workflow or a
       # serial 2064-TU compile. Initially sample two real Kbuild C owners
-      # per worker (expanded to eight after the 13/14 owner pilot); each
-      # native object must consume MiniPP's own .i.
+      # per worker (32 each after 56/56 MiniPP -> MiniC -> MiniAS
+      # real Linux Kbuild C-owner smoke passed); each native object
+      # must consume MiniPP's own .i.
       - name: MiniPP to MiniC to MiniAS on this seventh of real Linux owners
         if: contains(github.event.head_commit.message, '[linux-minipp-seven-integration]')
         shell: bash
@@ -708,7 +709,7 @@ jobs:
             --minipp "$tools/bin/minic-cpp" \
             --minic-cc "$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain/bin/minic-cc" \
             --minias "$tools/bin/minic-as" \
-            --shard ${{ matrix.shard }} --shards 7 --sample-per-shard 8
+            --shard ${{ matrix.shard }} --shards 7 --sample-per-shard 32
 
       - name: Preserve seven-way actual MiniPP to MiniC native evidence
         if: always() && contains(github.event.head_commit.message, '[linux-minipp-seven-integration]')
