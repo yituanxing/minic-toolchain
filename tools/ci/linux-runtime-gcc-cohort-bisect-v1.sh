@@ -1390,7 +1390,7 @@ trial() {
     if [[ -n "${COHORT_MINIAS_NATIVE_S_MANIFEST:-}" ]]; then
       : "${COHORT_MINIAS_NATIVE_S_POOL:?native .S overlay pool is required}"
       test -s "$COHORT_MINIAS_NATIVE_S_MANIFEST"
-      count=0
+      native_s_overlay_count=0
       while read -r expected target; do
         [[ "$expected" =~ ^[[:xdigit:]]{64}$ && "$target" == *.o && "$target" != /* && "$target" != *..* ]] || {
           echo "MINIAS_NATIVE_S=FAIL unsafe_manifest_record"; exit 8;
@@ -1402,10 +1402,10 @@ trial() {
         mkdir -p "$out/$(dirname "$target")"
         cp -a "$COHORT_MINIAS_NATIVE_S_POOL/$target" "$out/$target"
         touch "$out/$target"
-        ((count+=1))
+        ((native_s_overlay_count+=1))
       done <"$COHORT_MINIAS_NATIVE_S_MANIFEST"
-      [[ "$count" -ge 30 ]] || { echo "MINIAS_NATIVE_S=FAIL insufficient_coverage=$count"; exit 8; }
-      echo "MINIAS_NATIVE_S=OVERLAY native_asm=$count trial=$name"
+      [[ "$native_s_overlay_count" -ge 30 ]] || { echo "MINIAS_NATIVE_S=FAIL insufficient_coverage=$native_s_overlay_count"; exit 8; }
+      echo "MINIAS_NATIVE_S=OVERLAY native_asm=$native_s_overlay_count trial=$name candidate_C_owners=$count"
     fi
     # Changing a candidate vDSO object may cause GNU Kbuild to regenerate
     # headers and overwrite a selected MiniC object with GCC. Snapshot
