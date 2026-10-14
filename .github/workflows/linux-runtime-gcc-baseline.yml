@@ -558,7 +558,7 @@ jobs:
   # Explicit, optional 7-runner producer for the same pure-GCC C universe.
   # Do not use this lane for everyday single-TU debugging.
   gcc-shards:
-    if: github.event_name == 'push' && (contains(github.event.head_commit.message, '[linux-runtime-gcc-sharded]') || contains(github.event.head_commit.message, '[linux-minias-seven-shards]') || (contains(github.event.head_commit.message, '[linux-rv64-only-seven]') && !contains(github.event.head_commit.message, '[linux-rv64-only-replay]')))
+    if: github.event_name == 'push' && (contains(github.event.head_commit.message, '[linux-runtime-gcc-sharded]') || contains(github.event.head_commit.message, '[linux-rv64-minipp-full]') || contains(github.event.head_commit.message, '[linux-minias-seven-shards]') || (contains(github.event.head_commit.message, '[linux-rv64-only-seven]') && !contains(github.event.head_commit.message, '[linux-rv64-only-replay]')))
     runs-on: ubuntu-24.04
     timeout-minutes: 75
     strategy:
@@ -721,8 +721,50 @@ jobs:
             --full "$ev/all-objects.txt" \
             --shard ${{ matrix.shard }} --output "$ev/full-objects.txt"
 
+      - name: RV64 MiniPP MiniC MiniAS seven-way full C owners with timing
+        if: contains(github.event.head_commit.message, '[linux-rv64-minipp-full]')
+        shell: bash
+        timeout-minutes: 68
+        run: |
+          set -Eeuo pipefail
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-gcc-shards-v1/shard-${{ matrix.shard }}"
+          stage="$GITHUB_WORKSPACE/build/minipp-rv64-native/shard-${{ matrix.shard }}"
+          src="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0/linux-6.6.143"
+          test -s "$ev/all-objects.txt"
+          test -d "$src"
+          test ! -e "$GITHUB_WORKSPACE/build/linux-runtime-gcc/linux-6.6.143"
+          ln -s "$src" "$GITHUB_WORKSPACE/build/linux-runtime-gcc/linux-6.6.143"
+          MINIC_LINUX_FULL_CROSSBLOCK=1 MINIC_OPT_PURE_DISCARDED_ADDRESS_EQ=1 \
+            bash tools/ci/linux-runtime-build-minic-profile-v1.sh \
+              "$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain" "$stage/compiler"
+          tools="$GITHUB_WORKSPACE/build/minipp-rv64-native-tools"
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$tools" \
+            "$tools/bin/minic-cpp" "$tools/bin/minic-as"
+          python3 tools/ci/minipp-linux-seven-native-stage-v1.py \
+            --out "$GITHUB_WORKSPACE/build/linux-runtime-gcc/out" \
+            --src "$src" --owner-list "$ev/all-objects.txt" \
+            --stage "$stage" --minipp "$tools/bin/minic-cpp" \
+            --minic-cc "$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain/bin/minic-cc" \
+            --minias "$tools/bin/minic-as" \
+            --shard ${{ matrix.shard }} --shards 7 --sample-per-shard 0
+
+      - name: Preserve RV64 PP CC AS native C objects and per-TU metrics
+        if: always() && contains(github.event.head_commit.message, '[linux-rv64-minipp-full]')
+        uses: actions/upload-artifact@v4
+        with:
+          name: minipp-rv64-shard-${{ matrix.shard }}-${{ github.sha }}
+          path: |
+            build/minipp-rv64-native/shard-${{ matrix.shard }}/summary.json
+            build/minipp-rv64-native/shard-${{ matrix.shard }}/results.json
+            build/minipp-rv64-native/shard-${{ matrix.shard }}/native-manifest.sha256
+            build/minipp-rv64-native/shard-${{ matrix.shard }}/native-objects/**/*.o
+            build/minipp-rv64-native/shard-${{ matrix.shard }}/**/*.log
+            build/minipp-rv64-native/shard-${{ matrix.shard }}/**/*.diff
+          retention-days: 7
+          if-no-files-found: warn
+
       - name: Identify immutable MiniC shard artifact
-        if: "!contains(github.event.head_commit.message, '[linux-minias-seven-shards]')"
+        if: "!contains(github.event.head_commit.message, '[linux-minias-seven-shards]') && !contains(github.event.head_commit.message, '[linux-rv64-minipp-full]')"
         id: candidate
         shell: bash
         run: |
@@ -738,7 +780,7 @@ jobs:
           echo "key=gnu-minic-shard-v1-e89f0142a8908f5c9bcd21b74e3115cf64b76acca70812a72f8ccf02cd5fa60b-$profile-$subset-$gcc-$assembler" >>"$GITHUB_OUTPUT"
 
       - name: Restore this shard's immutable candidate objects
-        if: "!contains(github.event.head_commit.message, '[linux-minias-seven-shards]')"
+        if: "!contains(github.event.head_commit.message, '[linux-minias-seven-shards]') && !contains(github.event.head_commit.message, '[linux-rv64-minipp-full]')"
         id: shard_cache
         uses: actions/cache/restore@v4
         with:
@@ -749,7 +791,7 @@ jobs:
           key: ${{ steps.candidate.outputs.key }}
 
       - name: Build MiniC and prove this exact shard
-        if: "!contains(github.event.head_commit.message, '[linux-minias-seven-shards]')"
+        if: "!contains(github.event.head_commit.message, '[linux-minias-seven-shards]') && !contains(github.event.head_commit.message, '[linux-rv64-minipp-full]')"
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -772,7 +814,7 @@ jobs:
             "$work/provenance" "$ev/full-objects.txt" "$ev"
 
       - name: Authenticate shard before cache or export
-        if: "!contains(github.event.head_commit.message, '[linux-minias-seven-shards]')"
+        if: "!contains(github.event.head_commit.message, '[linux-minias-seven-shards]') && !contains(github.event.head_commit.message, '[linux-rv64-minipp-full]')"
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -786,7 +828,7 @@ jobs:
           echo "GNU_MINIC_SHARD_READY=PASS shard=${{ matrix.shard }} objects=$n"
 
       - name: Cache completed shard independently of later link failures
-        if: "!contains(github.event.head_commit.message, '[linux-minias-seven-shards]') && steps.shard_cache.outputs['cache-hit'] != 'true'"
+        if: "!contains(github.event.head_commit.message, '[linux-minias-seven-shards]') && steps.shard_cache.outputs['cache-hit'] != 'true' && !contains(github.event.head_commit.message, '[linux-rv64-minipp-full]')"
         uses: actions/cache/save@v4
         with:
           path: |
@@ -796,7 +838,7 @@ jobs:
           key: ${{ steps.candidate.outputs.key }}
 
       - name: Transfer only candidate objects and attestations
-        if: "!contains(github.event.head_commit.message, '[linux-minias-seven-shards]')"
+        if: "!contains(github.event.head_commit.message, '[linux-minias-seven-shards]') && !contains(github.event.head_commit.message, '[linux-rv64-minipp-full]')"
         uses: actions/upload-artifact@v4
         with:
           name: shard-${{ matrix.shard }}
@@ -810,7 +852,7 @@ jobs:
           retention-days: 3
 
       - name: Keep bounded failed-TU evidence
-        if: failure() && !contains(github.event.head_commit.message, '[linux-minias-seven-shards]')
+        if: failure() && !contains(github.event.head_commit.message, '[linux-minias-seven-shards]') && !contains(github.event.head_commit.message, '[linux-rv64-minipp-full]')
         uses: actions/upload-artifact@v4
         with:
           name: debug-shard-${{ matrix.shard }}
