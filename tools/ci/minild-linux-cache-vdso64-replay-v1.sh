@@ -260,5 +260,62 @@ grep -Fq 'linux-vdso.so.1' "$ev/native-vdso.txt" || {
   echo "MINILD_VDSO=FAIL missing_SONAME" >&2
   exit 11
 }
+# Acceptance requires GNU-matching PHDR types/flags and seven real
+# versioned Linux exports, not merely an ELF header plus section names.
+python3 - "$ref" "$ev/vdso.so.dbg.tmp" <<'PY_VDSO_ABI'
+from pathlib import Path
+import struct, sys
+
+def read(path):
+    b = Path(path).read_bytes()
+    e_phoff, e_shoff = struct.unpack_from('<QQ', b, 32)
+    e_phentsize, e_phnum, e_shentsize, e_shnum, e_shstrndx = struct.unpack_from('<HHHHH', b, 54)
+    names_at = e_shoff + e_shentsize * e_shstrndx
+    string_offset, string_size = struct.unpack_from('<QQ', b, names_at + 24)
+    names = b[string_offset:string_offset + string_size]
+    sections = {}
+    for i in range(e_shnum):
+        at = e_shoff + e_shentsize * i
+        begin = struct.unpack_from('<I', b, at)[0]
+        end = names.find(b'\x00', begin)
+        name = names[begin:end].decode()
+        typ, flags, vma, offset, size = struct.unpack_from('<IQQQQ', b, at + 4)
+        sections[name] = (typ, flags, vma, offset, size)
+    phdrs = []
+    for i in range(e_phnum):
+        at = e_phoff + e_phentsize * i
+        typ, flags, offset, vma, paddr, filesz, memsz, align = struct.unpack_from('<IIQQQQQQ', b, at)
+        phdrs.append((typ, flags, offset, vma, filesz, memsz))
+    return sections, phdrs
+
+gnu_sections, gnu_phdrs = read(sys.argv[1])
+native_sections, native_phdrs = read(sys.argv[2])
+required = [1, 2, 4, 0x6474e550]
+for source, phdrs, sections in [('gnu',gnu_phdrs,gnu_sections),('native',native_phdrs,native_sections)]:
+    assert [p[0] for p in phdrs] == required, (source,phdrs)
+    assert [p[1] for p in phdrs] == [5,4,4,4], (source,phdrs)
+    assert phdrs[0][2:4] == (0,0), (source,phdrs)
+    assert sections['.eh_frame_hdr'][2] == phdrs[3][3]
+    assert sections['.eh_frame_hdr'][4] == phdrs[3][4] == 44
+    assert sections['.dynamic'][2] == phdrs[1][3]
+    note_vma, note_bytes = phdrs[2][3], phdrs[2][4]
+    assert any(info[0] == 7 and info[2] >= note_vma and info[2]+info[4] <= note_vma+note_bytes
+               for info in sections.values()), (source,'bad-PT_NOTE')
+    assert sections['.text'][2] >= 0x800, (source,'text-before-script-boundary')
+for name in ['.hash','.gnu.hash','.dynsym','.dynstr','.gnu.version',
+             '.gnu.version_d','.note.gnu.build-id','.dynamic','.eh_frame_hdr','.eh_frame','.text']:
+    if name in gnu_sections:
+        assert name in native_sections, ('missing',name)
+print('MINILD_VDSO_SCRIPT_PHDR=PASS four_actual_PHDRS=true flags=5,4,4,4 load_bias=0 note_mapped=true eh_index=44')
+PY_VDSO_ABI
+riscv64-linux-gnu-readelf -W --dyn-syms "$ev/vdso.so.dbg.tmp" > "$ev/vdso-exports.txt"
+riscv64-linux-gnu-readelf -W -d "$ev/vdso.so.dbg.tmp" > "$ev/vdso-dynamic.txt"
+for sym in __vdso_rt_sigreturn __vdso_gettimeofday __vdso_clock_gettime \
+           __vdso_clock_getres __vdso_getcpu __vdso_flush_icache \
+           __vdso_riscv_hwprobe; do
+  grep -Fq "${sym}@@LINUX_4.15" "$ev/vdso-exports.txt"
+done
+grep -q '(VERDEFNUM).*2' "$ev/vdso-dynamic.txt"
+echo 'MINILD_VDSO_REAL_VERSIONS=PASS GNU_map=LINUX_4.15 exports=7'
 sha256sum "$ev/vdso.so.dbg.tmp" >"$ev/output.sha256"
 echo "MINILD_VDSO=PASS exact_GNU_flags=true ELF64_RISCV_ET_DYN=true hash_both=true eh_frame_hdr=true SONAME=true no_runtime_claim=true"
