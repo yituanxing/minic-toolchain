@@ -2,3 +2,4 @@ trigger focused timekeeping runtime frontier d7b4af10
 trigger owner-mode-router-v1 single-lane acceptance (2026-10-09)
 trigger regression path isolation v1 — confirm no MiniC/MiniAR/MiniLD on Runtime sentinel (2026-10-09)
 retry frozen MiniPP 2064-object link/QEMU with certified explicit 2G QEMU DTB/initrd map (avoid default 128MiB ROM overlap) 2026-10-14
+minipp P1 cached replay after generated compile.h and vdso-offsets.h pinned-dependency closure fix 2026-10-14
