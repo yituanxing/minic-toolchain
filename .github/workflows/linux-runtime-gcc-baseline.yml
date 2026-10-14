@@ -733,8 +733,7 @@ jobs:
           echo "GNU_MINIC_SHARD_READY=PASS shard=${{ matrix.shard }} objects=$n"
 
       - name: Cache completed shard independently of later link failures
-        if: "!contains(github.event.head_commit.message, '[linux-minias-seven-shards]')"
-        if: steps.shard_cache.outputs['cache-hit'] != 'true'
+        if: "!contains(github.event.head_commit.message, '[linux-minias-seven-shards]') && steps.shard_cache.outputs['cache-hit'] != 'true'"
         uses: actions/cache/save@v4
         with:
           path: |
