@@ -370,6 +370,7 @@ jobs:
           export COHORT_ACTION=compile
           if [[ "${{ contains(github.event.head_commit.message, '[linux-perf-boolean-single]') }}" == true ]]; then
             export COHORT_GNU_PREFLIGHT_ALLOW_BOOL_SINGLE=1
+            export COHORT_KEEP_BOOL_SINGLE_I=1
           fi
           if [[ "${{ contains(github.event.head_commit.message, '[linux-runtime-blake2s-only]') }}" == true ]]; then
             # Fail quickly if the supposed O(n) fix still costs minutes;
@@ -383,6 +384,20 @@ jobs:
               "$work/linux-6.6.143" "$work/out" \
               "$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain/bin/minic" \
               "$work/provenance" "$ev/full-objects.txt" "$ev"
+          fi
+          if [[ "${{ contains(github.event.head_commit.message, '[linux-perf-boolean-single]') }}" == true ]]; then
+            python3 -m py_compile tools/ci/linux-perf-pinned-single-paired-ab-v1.py
+            exact_i="$work/out/lib/crypto/blake2s-generic.minic-stage2.i"
+            test -s "$exact_i" || { echo 'BOOLEAN_CACHE_SINGLE=FAIL exact_kbuild_i_missing'; exit 8; }
+            mkdir -p "$ev/boolean-ab/baseline/bin"
+            cp "$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain/bin/minic" "$ev/boolean-ab/baseline/bin/minic"
+            cp "$ev/compiler/minic-cc-before-boolean" "$ev/boolean-ab/baseline/bin/minic-cc"
+            python3 tools/ci/linux-perf-pinned-single-paired-ab-v1.py \
+              --input "$exact_i" \
+              --baseline-driver "$ev/boolean-ab/baseline/bin/minic" \
+              --candidate-driver "$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain/bin/minic" \
+              --out "$ev/boolean-ab" | tee "$ev/boolean-ab/paired-verdict.txt"
+            grep -Fq 'MINIC_ONE_OWNER_AB=PASS' "$ev/boolean-ab/paired-verdict.txt"
           fi
 
       - name: Check completed full MiniC object pool is cacheable
