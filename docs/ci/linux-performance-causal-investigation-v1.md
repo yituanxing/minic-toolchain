@@ -268,3 +268,19 @@ PERF-006 `blake2s` 的真实 Runtime 布尔域索引收益为 1465.171ms→1368.
 **下一轮工作切换：** 不再重复运行这一份 Boolean A/B。要扩展对尚未优化的高耗时路径做定量分析：`net/core/filter` 优化后 Parser 约 3.9s、Core-set 约 2.9s、Codegen 约 2.9s，都是与布尔域扫描不同的成本中心。优先用已有 Parser lookup counters 查具体符号查询次数/迭代次数（`tools/ci/apply-perf-parser-lookup-counters-v0.py`），再选择现成函数/声明索引的**单变量**实现；同时以 `net/core/dev`、`net/ipv4/tcp_input` 或 `lib/crc32` 作为其他程序结构的慢例/对照。只有证实一个新通用处理算法导致明显耗时下降，才把它加入 Runtime 新编译器候选并进入完整 Linux+QEMU 正确性认证。
 
 **总结：** 当前已为本轮锁定可复用的真实输入 SHA、原生对象缓存和阶段时间数据。下次不用任何重新采集全量，更不应重新编译 2057 个 C 对象来做 Parser 微基准。
+
+## 14. PERF-009：Parser 函数名索引作为独立算法验证（2026-10-15）
+
+- GitHub Actions **#38653742842 SUCCESS**（commit `eb27f0d`），`gcc-single` 只处理已有三份 SHA 固定的 Linux 6.6.143 Kbuild `.i`，恢复了已认证 GNU 参考对象与 Boolean Runtime 候选缓存；**没有重新编译完整 2064 C objects、没有链接和 QEMU**。
+- A/B 两臂都打开相同的 Parser 查找计数器和既有 Boolean Domain 索引，只改变**函数名搜索线性正序 vs first-match 保序哈希表**。当前 Parser 的 `find_function` 是正序扫描，最早同名声明获胜。历史 function-hash patch 误按倒序覆盖已由 `b8e4626b61` 修复；函数重复声明保留最早 ID，分配失败回退原始正序扫描。
+- 同 runner 每臂热身一次 + **2 次**交替配对（仅 screening，不是先前 Boolean 的 4 次认证），每对 `.s` SHA **字节一致**：
+
+| 真实 owner | 有计数器的线性函数查找 P50 | 函数哈希 P50 | 速度比 |
+| --- | ---: | ---: | ---: |
+| `kernel/bpf/btf.o` | 5596.636ms | 4245.630ms | **1.3182×** |
+| `kernel/bpf/verifier.o` | 6631.175ms | 5384.342ms | **1.2316×** |
+| `net/core/filter.o` | 14228.801ms | 12593.635ms | **1.1298×** |
+
+- 三份输入的局部工作量合计 P50 约 26.457→22.224s，局部减少约 4.23s。此前 Boolean 没有查找计数器的多轮数据**不可直接与此相除**，且两项局部 speedup 不能相乘宣称完整 Linux 提速。
+- 判定：`verified-local-screen-2x`，明显独立增益但尚需覆盖更多 C 语义情形/不同文件与 P1。此算法进入候选晋级池；不为它无限再跑三份相同输入。
+- 下一轮 **PERF-010** 只测试剩余全局对象线性查找：保持函数哈希在双臂开启，现成 `apply-perf-parser-global-hash-v0.py` 作单变量候选。该旧实验脚本原来对重复全局声明执行 last-wins，并在索引同步失败时错误返回未找到；现已修改为 **first-declaration wins**、线性保序 fallback、容量溢出保护。新局部实验在 **#38655550585**，只调用已有 `gcc-single`，三份已冻结输入每臂仅 2 次，预算约束不重新跑 2057/2064。只有实际 A/B 与完全相同汇编输出同时通过才评估收益。正式 Runtime 和 P1 仍保持不变。
