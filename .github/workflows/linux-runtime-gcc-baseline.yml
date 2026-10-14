@@ -1281,7 +1281,7 @@ jobs:
           echo "MINIAS_EARLYCON_FULL_PREPARE=PASS original_2064_SHA_cache_immutable=true"
 
       - name: GNU-only link and QEMU with NO MiniC recompilation
-        if: "!contains(github.event.head_commit.message, '[linux-runtime-large-image-qemu]') && !contains(github.event.head_commit.message, '[linux-runtime-p1-frame-audit]') && !contains(github.event.head_commit.message, '[linux-runtime-p1-cfg-semantic-only]') && !contains(github.event.head_commit.message, '[linux-minild-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minild-reloc-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minild-purgatory-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minild-vdso64-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minias-earlycon-frozen]')" && !contains(github.event.head_commit.message, '[linux-minias-corpus-scan]')
+        if: "!contains(github.event.head_commit.message, '[linux-runtime-large-image-qemu]') && !contains(github.event.head_commit.message, '[linux-runtime-p1-frame-audit]') && !contains(github.event.head_commit.message, '[linux-runtime-p1-cfg-semantic-only]') && !contains(github.event.head_commit.message, '[linux-minild-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minild-reloc-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minild-purgatory-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minild-vdso64-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minias-earlycon-frozen]') && !contains(github.event.head_commit.message, '[linux-minias-corpus-scan]')"
         shell: bash
         run: |
           set -Eeuo pipefail
