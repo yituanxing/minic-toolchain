@@ -23,8 +23,7 @@ declare -a inputs=(
   arch/riscv/kernel/vdso/sys_hwprobe.o
   arch/riscv/kernel/vdso/note.o
 )
-for f in "${inputs[@]}" arch/riscv/kernel/vdso/vdso.lds \
-  arch/riscv/kernel/vdso/vdso.so.dbg.tmp; do
+for f in "${inputs[@]}" arch/riscv/kernel/vdso/vdso.lds; do
   [[ -s "$out/$f" ]] || {
     echo "MINILD_VDSO=INCONCLUSIVE missing_pinned_GNU_object=$f" >&2
     exit 8
@@ -37,6 +36,18 @@ minild="$tools/bin/minic-ld"
 sha256sum "$minild" >"$ev/tool.sha256"
 (
   cd "$out"
+  # GNU Kbuild deletes vdso.so.dbg.tmp after producing vdso.so.dbg.
+  # Regenerate the EXACT reference link from the same frozen .o/.lds inputs,
+  # rather than claiming the transient intermediate must remain in cache.
+  riscv64-linux-gnu-ld -melf64lriscv -z noexecstack \
+    --no-warn-rwx-segments -shared -S \
+    -soname=linux-vdso.so.1 --build-id=sha1 \
+    --hash-style=both --eh-frame-hdr \
+    -T arch/riscv/kernel/vdso/vdso.lds \
+    "${inputs[@]}" -o "$ev/gnu-vdso.so.dbg.tmp" \
+    >"$ev/gnu-ld.stdout" 2>"$ev/gnu-ld.stderr"
+  sha256sum "$ev/gnu-vdso.so.dbg.tmp" >"$ev/gnu-output.sha256"
+  echo "MINILD_VDSO_REFERENCE=PASS source=same_frozen_Kbuild_inputs compiler_C=skipped"
   start=$(date +%s%3N)
   code=0
   timeout 90s "$minild" -melf64lriscv -z noexecstack \
@@ -55,7 +66,7 @@ sha256sum "$minild" >"$ev/tool.sha256"
     exit "$code"
   fi
 )
-ref="$out/arch/riscv/kernel/vdso/vdso.so.dbg.tmp"
+ref="$ev/gnu-vdso.so.dbg.tmp"
 test -s "$ev/vdso.so.dbg.tmp"
 for a in "$ref" "$ev/vdso.so.dbg.tmp"; do
   riscv64-linux-gnu-readelf -Wh "$a" >"$ev/$(basename "$a").header.$(sha256sum "$a" | cut -c1-8).txt"
