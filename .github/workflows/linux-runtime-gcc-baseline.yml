@@ -387,8 +387,8 @@ jobs:
           fi
           if [[ "${{ contains(github.event.head_commit.message, '[linux-perf-boolean-single]') }}" == true ]]; then
             python3 -m py_compile tools/ci/linux-perf-pinned-single-paired-ab-v1.py
-            exact_i="$work/out/lib/crypto/blake2s-generic.minic-stage2.i"
-            test -s "$exact_i" || { echo 'BOOLEAN_CACHE_SINGLE=FAIL exact_kbuild_i_missing'; exit 8; }
+            exact_i="$ev/boolean-ab/blake2s-generic.frozen.i"
+            test -s "$exact_i" || { echo 'BOOLEAN_CACHE_SINGLE=FAIL frozen_kbuild_i_missing'; exit 8; }
             mkdir -p "$ev/boolean-ab/baseline/bin"
             cp "$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain/bin/minic" "$ev/boolean-ab/baseline/bin/minic"
             cp "$ev/compiler/minic-cc-before-boolean" "$ev/boolean-ab/baseline/bin/minic-cc"
