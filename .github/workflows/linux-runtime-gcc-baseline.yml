@@ -309,6 +309,11 @@ jobs:
             # the immutable MiniC object cache identity.
             profile="${profile}-blake2s-cfg-linear-$(sha256sum tools/ci/apply-riscv64-p1-defined-before-use-crossblock-v1.py | cut -c1-16)"
           fi
+          if [[ "${{ contains(github.event.head_commit.message, '[linux-perf-boolean-single]') }}" == true ]]; then
+            [[ "${{ contains(github.event.head_commit.message, '[linux-runtime-blake2s-only]') }}" == true ]] || { echo 'BOOLEAN_CACHE_SINGLE=FAIL missing_owner'; exit 8; }
+            profile="${profile}-bool-index-$(sha256sum tools/ci/apply-inline-specialization-local-boolean-domain-scoped-v1.py tools/ci/apply-inline-specialization-local-boolean-domain-index-v0.py | sha256sum | cut -c1-16)"
+            echo 'BOOLEAN_CACHE_SINGLE=IDENTITY patch_sha_bound=true'
+          fi
           objects=$(sha256sum build/linux-runtime-gcc-cohort-v1/full-objects.txt | cut -d' ' -f1)
           gcc=$(sha256sum "$(command -v riscv64-linux-gnu-gcc)" | cut -d' ' -f1)
           assembler=$(sha256sum "$(command -v riscv64-linux-gnu-as)" | cut -d' ' -f1)
@@ -342,6 +347,17 @@ jobs:
           fi
           bash tools/ci/linux-runtime-build-minic-profile-v1.sh \
             "$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain" "$ev/compiler"
+          if [[ "${{ contains(github.event.head_commit.message, '[linux-perf-boolean-single]') }}" == true ]]; then
+            tool="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain"
+            cp "$tool/bin/minic" "$ev/compiler/minic-before-boolean"
+            chmod 755 "$ev/compiler/minic-before-boolean"
+            python3 tools/ci/apply-inline-specialization-local-boolean-domain-scoped-v1.py >>"$ev/compiler/patch.log"
+            make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$tool" "$tool/bin/minic" "$tool/bin/minic-cc" >/dev/null
+            git diff --check
+            echo apply-inline-specialization-local-boolean-domain-scoped-v1.py >>"$ev/compiler/minic-profile.txt"
+            sha256sum "$tool/bin/minic" "$tool/bin/minic-cc" >"$ev/compiler/minic.sha256"
+            echo "BOOLEAN_CACHE_SINGLE=READY before=$(sha256sum "$ev/compiler/minic-before-boolean" | cut -c1-16) after=$(sha256sum "$tool/bin/minic" | cut -c1-16)"
+          fi
           export COHORT_ALLOW_DIAGNOSTIC_384=${{ contains(github.event.head_commit.message, '[linux-runtime-gcc-384]') && '1' || '0' }}
           export COHORT_ALLOW_SHARD=${{ (contains(github.event.head_commit.message, '[linux-runtime-gcc-dma-only]') || contains(github.event.head_commit.message, '[linux-runtime-gcc-link-triad]') || contains(github.event.head_commit.message, '[linux-runtime-gcc-shmem-only]') || contains(github.event.head_commit.message, '[linux-runtime-blake2s-only]')) && '1' || '0' }}
           export COHORT_ACTION=compile
