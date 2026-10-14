@@ -184,3 +184,21 @@
 - 在原有 `linux-runtime-gcc-baseline.yml` 的 **gcc-single** 一对象分支（blake2s）里，仅当同时声明 `[linux-runtime-blake2s-only]` 与 `[linux-perf-boolean-single]`，保存原候选 MiniC 执行文件，然后应用已通过 perf500 的 `apply-inline-specialization-local-boolean-domain-scoped-v1.py`，原位增量 make 重建 MiniC，并把对应 patch 文件 digest 添加到对象缓存身份。
 - 这条实验仅生成 **一个真实 Linux 6.6.143 C owner**，核验真实 GNU ABI 与原生候选对象的流程能否通过；不运行全部七路、链接或 QEMU。此阶段即使 `SUCCESS` 也只能声称 **单 TU 验证**。
 - 单 TU 通过且工具差异明显后，才允许用现成七路生产者重编新 Compiler SHA 对应对象，并在 QEMU 取得新的 12/12。绝不拿旧 Image 的 PASS 当成新优化的 Runtime 证明。
+
+## 10. PERF-006：真实 Linux blake2s 的 Boolean Domain 单文件晋级实测（2026-10-14）
+
+**最终通过：** GitHub Actions run #38587622296（gcc-single SUCCESS），Job #115933721955；artifact #11906495606；commit c759c005749e3aab18905c3f0b0cc65c0d241c07。该运行没有执行 QEMU P1，也没有编译 2057/2064 全量 Linux 对象。
+
+- 固定输入是 Linux 6.6.143 真正 GNU Kbuild 生成的 `lib/crypto/blake2s-generic.minic-stage2.i`，**148390 bytes**，SHA256 `4d9a426cc72da3c9ea579fa94dc8bf8f4622631cc34c081ea066758cc4a2681f`。
+- 原生产 Runtime + crossblock MiniC-cc SHA256 前缀 `bfe15a4ec64d51bf`；开启仅一个布尔域缓存补丁之后的 MiniC-cc SHA256 前缀 `8cd8dcda73e096e8`。CI 强制两个编译器真正不同，并在对象缓存身份中同时绑定真实 `minic-cc` 和 driver，而非仅比较没有变的 `minic` driver。
+- 冻结原生 `.i`，同一 runner 分别热身一次，并执行每臂 4 次、交替先后次序的真实 `-S` 测量。**基准 P50 1465.171 ms → 布尔缓存 P50 1368.341 ms = 1.0708×；耗时下降约 6.61%**。
+- **8/8** 配对输出汇编 SHA 相同（热身亦比较），与原有单 TU `COHORT_ABI=PASS objects=1`、`COHORT_GNU_PREFLIGHT=PASS objects=1` 同时成立。历史候选缓存命中时只重编该一个对象来重建冻结输入，并要求对象字节与之前缓存对象 **完全一致**。零其他 C 对象重编。
+- 此处 blake2s 的 1.0708× 是真正匹配输入与两版 Runtime 的局部结果；first500 48 长尾子集联合配置的 5.466× 是其他工具/输入的不同实验，**绝不可混为整体速度提升**。Blake2s 长尾尚可能来自其他 Pass，不能据此宣称 Boolean Cache 是该文件的根本瓶颈。
+
+**测试复用过程中暴露并修复的设施问题：**
+1. Kbuild GNU 预检会重新生成 `init/version.o` 与 `vmlinux.o`；只在一文件 + pinned config + exact replay scope 下排除二者的非稳定哈希，其余 GNU 参考对象始终校验。
+2. `minic` 实为 driver，可执行编译器逻辑在 `minic-cc`；修正错误的身份判定，严格验证真实编译器 SHA 不同。
+3. 单对象候选缓存命中后无法直接拿到先前的临时 `.i`；复用已有 Kbuild 只重编该对象，要求新旧对象字节完全一致，并在复原 GNU 快照前保存真实 `.i`。
+4. A/B 按输出汇编 SHA 和多个重复时序判定，不因整体 CI 绿灯就声称完整 Linux P1 已通过。
+
+**结论：** PERF-006 状态 `verified-local`；局部正确性已经证明，性能收益有限。后续应优先测量对 Boolean Domain 更敏感的 BPF/mm 长尾文件，再决定是否进行新的 2057 对象全量生产和 QEMU。再次复用 `tools/ci/linux-perf-pinned-single-paired-ab-v1.py` 和缓存的精确 .i，避免只为性能猜测重编完整内核。
