@@ -801,8 +801,21 @@ bool minielf_rewrite(const MiniElfView *view,
         }
     }
 
-    if (options->keep_global_count != 0U) {
-        if (symtab_index == SIZE_MAX || states[symtab_index].remove) {
+    if (options->keep_global_count != 0U &&
+        symtab_index == SIZE_MAX &&
+        view->type != ET_DYN && view->type != ET_EXEC) {
+        set_error(error_out, MINIELF_REWRITE_INVALID_SYMBOL_TABLE);
+        goto done;
+    }
+    /* GNU objcopy -G/--keep-global-symbol on a stripped ET_DYN/ET_EXEC
+     * without an SHT_SYMTAB is a valid no-op. It must NOT rewrite .dynsym:
+     * that table describes runtime loader exports, not static symbol
+     * localization. This happens in actual RISC-V Linux Kbuild when
+     * MiniLD's version-filtered vDSO shared ELF is postprocessed.
+     * Keep malformed or removed *present* symtabs fail-closed.
+     */
+    if (options->keep_global_count != 0U && symtab_index != SIZE_MAX) {
+        if (states[symtab_index].remove) {
             set_error(error_out,
                       MINIELF_REWRITE_INVALID_SYMBOL_TABLE);
             goto done;

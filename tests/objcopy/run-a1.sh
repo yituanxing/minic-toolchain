@@ -156,6 +156,36 @@ run_case() {
 run_case 64 rv64imac lp64 elf64lriscv
 run_case 32 rv32imac ilp32 elf32lriscv
 
+# Linux vDSO64 Kbuild invokes GNU-compatible objcopy -G after native
+# MiniLD emits a versioned ET_DYN without .symtab. GNU objcopy succeeds
+# and leaves the loader .dynsym untouched; MiniObjcopy must do the same.
+# Test BOTH ET_DYN widths on actual GNU-stripped inputs with no .symtab,
+# then compare the exact dynamic exports and loadable program headers.
+for bits in 64 32; do
+  case "$bits" in
+    64) abi=lp64; march=rv64imac; emul=elf64lriscv ;;
+    32) abi=ilp32; march=rv32imac; emul=elf32lriscv ;;
+  esac
+  dir="$work/stripped-vdso-rv$bits"
+  mkdir -p "$dir"
+  "$AS" -march="$march" -mabi="$abi" -o "$dir/input.o" "$work/input.s"
+  "$LD" -m "$emul" -shared -s -soname=linux-vdso.so.1 \
+    -o "$dir/input-no-symtab.so" "$dir/input.o"
+  ! "$READELF" -SW "$dir/input-no-symtab.so" | grep -Eq '] \.symtab[[:space:]]'
+  "$OBJCOPY" -G keep_me -G data_me \
+    "$dir/input-no-symtab.so" "$dir/gnu.so"
+  "$MINIOBJCOPY" -G keep_me -G data_me \
+    "$dir/input-no-symtab.so" "$dir/mini.so"
+  normalize_dynamic_symbols "$dir/gnu.so" >"$dir/gnu.dyn"
+  normalize_dynamic_symbols "$dir/mini.so" >"$dir/mini.dyn"
+  cmp "$dir/gnu.dyn" "$dir/mini.dyn"
+  normalize_program_headers "$dir/gnu.so" >"$dir/gnu.phdr"
+  normalize_program_headers "$dir/mini.so" >"$dir/mini.phdr"
+  cmp "$dir/gnu.phdr" "$dir/mini.phdr"
+  assert_readelf_clean "$dir/mini.so"
+  echo "MINIOBJCOPY_EMPTY_SYMTAB=PASS bits=$bits keep_global=GNU_noop dynsym=preserved program_headers=preserved"
+done
+
 
 # Regression from a *real* RISC-V Linux 6.6.143 single-MiniObjcopy build:
 # arch/riscv/kernel/pi/Makefile uses these three options together on ET_REL.
