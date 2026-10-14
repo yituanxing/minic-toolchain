@@ -115,6 +115,13 @@ typedef struct MiniLdScript {
     MiniLdScriptPhdr *phdrs;
     size_t phdr_count;
     size_t phdr_capacity;
+    /* One named GNU vDSO export version; dynamic version emission
+     * remains a separate explicitly gated shared-ELF capability. */
+    char *version_name;
+    char **version_globals;
+    size_t version_global_count;
+    size_t version_global_capacity;
+    bool version_local_all;
 } MiniLdScript;
 
 typedef bool (*MiniLdScriptResolveSymbol)(void *context,

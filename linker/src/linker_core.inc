@@ -7967,9 +7967,9 @@ int minild_link_static_elf64_riscv_inputs_options(
             goto done;
         }
         have_script = true;
-        if (script.phdr_count != 0U) {
+        if (script.phdr_count != 0U || script.version_name != NULL) {
             fprintf(diagnostics,
-                    "minic-ld: unsupported-static-script-PHDRS\n");
+                    "minic-ld: unsupported-static-script-PHDRS-or-VERSION\n");
             goto done;
         }
     }

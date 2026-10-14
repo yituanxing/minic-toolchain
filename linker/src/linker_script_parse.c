@@ -620,6 +620,104 @@ static bool parse_phdrs(ScriptParser *parser) {
     return minild_script_parser_next(parser);
 }
 
+
+/* Linux RISC-V's VERSION block contains one named node and explicit
+ * global exports, followed by local: *;. Do not silently discard nodes
+ * or wildcard semantics: reject anything outside this supported grammar.
+ */
+static bool parse_version(ScriptParser *parser) {
+    MiniLdScript *script = parser->script;
+    bool global = false;
+    bool local = false;
+
+    if (script->version_name != NULL ||
+        !minild_script_parser_next(parser) ||
+        !minild_script_expect(parser, TOKEN_LBRACE,
+                              "expected-'{'-after-VERSION") ||
+        parser->token.kind != TOKEN_IDENTIFIER) {
+        return minild_script_parser_error(parser,
+                                          "unsupported-VERSION-structure");
+    }
+    script->version_name = minild_script_strdup_range(parser->token.begin,
+                                                       parser->token.length);
+    if (script->version_name == NULL ||
+        !minild_script_parser_next(parser) ||
+        !minild_script_expect(parser, TOKEN_LBRACE,
+                              "expected-'{'-after-version-name")) {
+        return false;
+    }
+    while (parser->token.kind != TOKEN_RBRACE) {
+        char *name;
+        char **grown;
+        size_t capacity;
+        if (minild_script_token_is(parser, "global") ||
+            minild_script_token_is(parser, "local")) {
+            global = minild_script_token_is(parser, "global");
+            local = !global;
+            if (!minild_script_parser_next(parser) ||
+                !minild_script_expect(parser, TOKEN_COLON,
+                                      "expected-':'-after-version-scope")) {
+                return false;
+            }
+            continue;
+        }
+        if (!global && !local) {
+            return minild_script_parser_error(parser,
+                                              "missing-VERSION-scope");
+        }
+        if (local && parser->token.kind == TOKEN_STAR) {
+            if (script->version_local_all ||
+                !minild_script_parser_next(parser) ||
+                !minild_script_expect(parser, TOKEN_SEMICOLON,
+                                      "expected-';'-after-local-wildcard")) {
+                return false;
+            }
+            script->version_local_all = true;
+            continue;
+        }
+        if (!global || parser->token.kind != TOKEN_IDENTIFIER) {
+            return minild_script_parser_error(parser,
+                                              "unsupported-VERSION-pattern");
+        }
+        name = minild_script_strdup_range(parser->token.begin,
+                                           parser->token.length);
+        if (name == NULL || !minild_script_parser_next(parser) ||
+            !minild_script_expect(parser, TOKEN_SEMICOLON,
+                                  "expected-';'-after-VERSION-export")) {
+            free(name);
+            return false;
+        }
+        if (script->version_global_count == script->version_global_capacity) {
+            capacity = script->version_global_capacity == 0U ? 8U
+                       : script->version_global_capacity * 2U;
+            if (capacity < script->version_global_capacity ||
+                capacity > SIZE_MAX / sizeof(*grown)) {
+                free(name);
+                return minild_script_parser_error(parser,
+                                                  "out-of-memory:VERSION");
+            }
+            grown = realloc(script->version_globals,
+                            capacity * sizeof(*grown));
+            if (grown == NULL) {
+                free(name);
+                return minild_script_parser_error(parser,
+                                                  "out-of-memory:VERSION");
+            }
+            script->version_globals = grown;
+            script->version_global_capacity = capacity;
+        }
+        script->version_globals[script->version_global_count++] = name;
+    }
+    if (!minild_script_parser_next(parser) ||
+        !minild_script_expect(parser, TOKEN_SEMICOLON,
+                              "expected-';'-after-version-node") ||
+        !minild_script_expect(parser, TOKEN_RBRACE,
+                              "expected-'}'-after-VERSION")) {
+        return false;
+    }
+    return true;
+}
+
 static bool parse_directive_with_identifier(ScriptParser *parser,
                                             char **value_out) {
     if (!minild_script_parser_next(parser) ||
@@ -690,6 +788,11 @@ void minild_script_destroy(MiniLdScript *script) {
         free(script->phdrs[i].type_name);
     }
     free(script->phdrs);
+    free(script->version_name);
+    for (i = 0U; i < script->version_global_count; ++i) {
+        free(script->version_globals[i]);
+    }
+    free(script->version_globals);
 
     free(script->expressions);
     free(script->commands);
@@ -745,6 +848,10 @@ bool minild_script_parse_file(const char *path,
             }
         } else if (minild_script_token_is(&parser, "PHDRS")) {
             if (!parse_phdrs(&parser)) {
+                goto done;
+            }
+        } else if (minild_script_token_is(&parser, "VERSION")) {
+            if (!parse_version(&parser)) {
                 goto done;
             }
         } else if (parser.token.kind == TOKEN_IDENTIFIER) {

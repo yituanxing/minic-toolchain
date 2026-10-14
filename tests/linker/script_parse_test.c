@@ -105,6 +105,11 @@ int main(int argc, char **argv) {
             !vdso.phdrs[0].filehdr || !vdso.phdrs[0].phdrs ||
             !vdso.phdrs[0].have_flags || vdso.phdrs[0].flags != 5U ||
             strcmp(vdso.phdrs[3].type_name, "PT_GNU_EH_FRAME") != 0 ||
+            vdso.version_name == NULL ||
+            strcmp(vdso.version_name, "LINUX_4.15") != 0 ||
+            vdso.version_global_count != 7U ||
+            !vdso.version_local_all ||
+            strcmp(vdso.version_globals[6], "__vdso_riscv_hwprobe") != 0 ||
             vdso.commands[3].kind != MINILD_SCRIPT_OUTPUT_SECTION ||
             vdso.commands[3].value.section.phdr_name_count != 1U ||
             strcmp(vdso.commands[3].value.section.phdr_names[0],
@@ -123,7 +128,7 @@ int main(int argc, char **argv) {
             return 1;
         }
         minild_script_destroy(&vdso);
-        puts("MINILD_SCRIPT_VDSO_HEADERS=PASS PHDR_count=4 sizeof_headers=288 mapping=text flags=5 filehdr=true no_guess=true");
+        puts("MINILD_SCRIPT_VDSO_HEADERS=PASS PHDR_count=4 sizeof_headers=288 mapping=text flags=5 filehdr=true VERSION=LINUX_4.15 exports=7 local_all=true no_guess=true");
     }
     puts("MINILD_SCRIPT_A0=PASS linux-subset=PASS commands=12 expressions=37 wildcard=PASS");
     minild_script_destroy(&script);

@@ -11,3 +11,16 @@ PHDRS {
   note PT_NOTE FLAGS(4);
   eh_frame_hdr PT_GNU_EH_FRAME;
 }
+VERSION {
+  LINUX_4.15 {
+    global:
+      __vdso_rt_sigreturn;
+      __vdso_gettimeofday;
+      __vdso_clock_gettime;
+      __vdso_clock_getres;
+      __vdso_getcpu;
+      __vdso_flush_icache;
+      __vdso_riscv_hwprobe;
+    local: *;
+  };
+}
