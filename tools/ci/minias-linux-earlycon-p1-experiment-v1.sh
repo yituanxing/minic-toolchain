@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # One experimental MiniAS object, all 2063 other MiniC C objects frozen.
+# Full union test explicitly requires QEMU fast/shell/P1 for the new MiniAS object.
 # This does NOT modify the canonical 2064-object cache. Only the separate
 # pool may be used by the existing QEMU/Kbuild trial with strict attestation.
 set -Eeuo pipefail
