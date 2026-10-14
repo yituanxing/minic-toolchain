@@ -115,6 +115,7 @@ int main(int argc, char **argv) {
     bool pie_link = false;
     bool strip_debug = false;
     bool hash_style_both = false;
+    bool eh_frame_hdr = false;
     bool whole_archive = false;
     bool group_mode = false;
     int i;
@@ -318,6 +319,8 @@ int main(int argc, char **argv) {
             }
         } else if (strcmp(argv[i], "--hash-style=both") == 0) {
             hash_style_both = true;
+        } else if (strcmp(argv[i], "--eh-frame-hdr") == 0) {
+            eh_frame_hdr = true;
         } else if (strcmp(argv[i], "-S") == 0 ||
                    strcmp(argv[i], "--strip-debug") == 0) {
             strip_debug = true;
@@ -378,6 +381,10 @@ int main(int argc, char **argv) {
         fprintf(stderr, "minic-ld: incompatible-link-modes\n");
         return 2;
     }
+    if (eh_frame_hdr && !shared_link && !pie_link) {
+        fprintf(stderr, "minic-ld: eh-frame-hdr-requires-shared-or-pie\n");
+        return 2;
+    }
     if (hash_style_both && !shared_link && !pie_link) {
         fprintf(stderr, "minic-ld: hash-style-both-requires-shared-or-pie\n");
         return 2;
@@ -417,6 +424,7 @@ int main(int argc, char **argv) {
         options.interpreter_path = interpreter_path;
         options.strip_debug = strip_debug;
         options.hash_style_both = hash_style_both;
+        options.eh_frame_hdr = eh_frame_hdr;
         options.pie = pie_link;
         return minild_link_shared_elf64_riscv_inputs_options(output,
                                                               inputs,

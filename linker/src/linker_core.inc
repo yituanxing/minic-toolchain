@@ -5458,6 +5458,9 @@ typedef struct MiniLdSharedImage {
     size_t dynsym_section;
     size_t hash_section;
     size_t gnu_hash_section;
+    size_t eh_frame_section;
+    size_t eh_frame_hdr_section;
+    size_t eh_frame_fde_count;
     size_t rela_section;
     size_t got_section;
     size_t plt_section;
@@ -5483,6 +5486,7 @@ typedef struct MiniLdSharedImage {
     size_t tls_gd_count;
     bool have_soname;
     bool have_gnu_hash;
+    bool have_eh_frame_hdr;
     bool have_interp;
     bool pie;
     bool have_dynamic_list;
@@ -5797,6 +5801,8 @@ static bool shared_finalize_ehdr_symbol(MiniLdState *state,
     return true;
 }
 
+#include "linker_eh_frame.inc"
+
 static bool shared_prepare_metadata(MiniLdState *state,
                                     const char *soname,
                                     const char *dynamic_list_path,
@@ -5804,6 +5810,7 @@ static bool shared_prepare_metadata(MiniLdState *state,
                                     const char *interpreter_path,
                                     bool pie,
                                     bool hash_style_both,
+                                    bool eh_frame_hdr,
                                     MiniLdSharedImage *shared) {
     MiniLdSection *dynstr;
     MiniLdSection *dynsym;
@@ -5824,6 +5831,8 @@ static bool shared_prepare_metadata(MiniLdState *state,
     shared->dynsym_section = SIZE_MAX;
     shared->hash_section = SIZE_MAX;
     shared->gnu_hash_section = SIZE_MAX;
+    shared->eh_frame_section = SIZE_MAX;
+    shared->eh_frame_hdr_section = SIZE_MAX;
     shared->have_gnu_hash = hash_style_both;
     shared->rela_section = SIZE_MAX;
     shared->got_section = SIZE_MAX;
@@ -6246,6 +6255,9 @@ static bool shared_prepare_metadata(MiniLdState *state,
         goto oom;
     }
 
+    if (eh_frame_hdr && !minild_eh_prepare(state, shared)) {
+        goto fail;
+    }
     return true;
 
 oom:
@@ -7391,7 +7403,8 @@ static bool shared_write_object(MiniLdState *state,
                 "minic-ld: invalid-shared-tls-segment-layout\n");
         return false;
     }
-    phnum = (shared->pie ? 1U : 0U) +
+    phnum = (shared->have_eh_frame_hdr ? 1U : 0U) +
+            (shared->pie ? 1U : 0U) +
             (shared->have_interp ? 1U : 0U) +
             (layout->have_rx ? 1U : 0U) +
             (layout->have_rw ? 1U : 0U) +
@@ -7575,6 +7588,24 @@ static bool shared_write_object(MiniLdState *state,
         ph->p_align = 8U;
     }
 
+    if (shared->have_eh_frame_hdr) {
+        Elf64_Phdr *ph = &programs[program_index++];
+        size_t h = shared->eh_frame_hdr_section;
+        if (h >= state->section_count ||
+            layout->section_file_offset[h] == SIZE_MAX) {
+            fprintf(state->diagnostics,
+                    "minic-ld: missing-eh-frame-hdr-file-offset\n");
+            goto done;
+        }
+        ph->p_type = PT_GNU_EH_FRAME;
+        ph->p_flags = PF_R;
+        ph->p_offset = layout->section_file_offset[h];
+        ph->p_vaddr = layout->section_vaddr[h];
+        ph->p_paddr = ph->p_vaddr;
+        ph->p_filesz = state->sections[h].size;
+        ph->p_memsz = ph->p_filesz;
+        ph->p_align = 4U;
+    }
     for (i = 0U; i < state->section_count; ++i) {
         MiniLdSection *section = &state->sections[i];
         Elf64_Shdr *sh = &section_headers[i + 1U];
@@ -7761,6 +7792,7 @@ int minild_link_shared_elf64_riscv_inputs_options(
     const bool pie = options != NULL && options->pie;
     const bool strip_debug = options != NULL && options->strip_debug;
     const bool hash_style_both = options != NULL && options->hash_style_both;
+    const bool eh_frame_hdr = options != NULL && options->eh_frame_hdr;
     const char *interpreter_path =
         options != NULL && options->interpreter_path != NULL
             ? options->interpreter_path
@@ -7793,6 +7825,7 @@ int minild_link_shared_elf64_riscv_inputs_options(
                                  interpreter_path,
                                  pie,
                                  hash_style_both,
+                                 eh_frame_hdr,
                                  &shared) ||
         (pie && !shared_validate_pie_dso_symbols(&state)) ||
         !shared_build_layout(&state, &layout)) {
@@ -7808,6 +7841,7 @@ int minild_link_shared_elf64_riscv_inputs_options(
         !shared_fill_gnu_hash(&state, &shared) ||
         !shared_fill_relocations(&state, &layout, &shared) ||
         !shared_patch_final_layout_relocations(&state, &layout, &shared) ||
+        !minild_eh_fill(&state, &layout, &shared) ||
         !shared_fill_plt(&state, &layout, &shared) ||
         !shared_fill_dynamic(&state, &layout, &shared) ||
         !shared_write_object(&state,
@@ -7843,6 +7877,7 @@ int minild_link_shared_elf64_riscv_inputs(const char *output_path,
     options.interpreter_path = NULL;
     options.strip_debug = false;
     options.hash_style_both = false;
+    options.eh_frame_hdr = false;
     options.pie = false;
     return minild_link_shared_elf64_riscv_inputs_options(output_path,
                                                           inputs,

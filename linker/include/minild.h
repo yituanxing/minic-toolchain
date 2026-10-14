@@ -30,6 +30,7 @@ typedef struct MiniLdSharedOptions {
     const char *interpreter_path;
     bool strip_debug;
     bool hash_style_both;
+    bool eh_frame_hdr;
     bool pie;
 } MiniLdSharedOptions;
 
