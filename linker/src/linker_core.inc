@@ -4124,7 +4124,6 @@ static bool shared_build_vdso_script_layout(MiniLdState *state,
     layout->rx_file_offset = 0U;
     layout->rx_vaddr = 0U;
     layout->rx_file_size = end;
-    layout->rx_mem_size = end;
     return true;
 }
 
