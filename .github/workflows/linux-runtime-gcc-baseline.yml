@@ -513,6 +513,8 @@ jobs:
             build/linux-runtime-gcc-cohort-v1/non-c-objects.tsv
             build/linux-runtime-gcc-cohort-v1/identity.txt
             build/linux-runtime-gcc-cohort-v1/cohort.log
+            build/linux-runtime-gcc-cohort-v1/boolean-ab/paired-result.json
+            build/linux-runtime-gcc-cohort-v1/boolean-ab/paired-verdict.txt
             build/linux-runtime-gcc-cohort-v1/compile.log
             build/linux-runtime-gcc-cohort-v1/compile-blockers.txt
             build/linux-runtime-gcc-cohort-v1/mini-success-objects.txt
