@@ -7654,7 +7654,7 @@ static bool shared_strip_debug_preflight(const MiniLdState *state) {
             strcmp(name, ".gnu_debuglink") == 0 ||
             strcmp(name, ".gnu_debugaltlink") == 0) {
             fprintf(state->diagnostics,
-                    "minic-ld: unsupported-shared-strip-debug-section:%s\\n",
+                    "minic-ld: unsupported-shared-strip-debug-section:%s\n",
                     name);
             return false;
         }

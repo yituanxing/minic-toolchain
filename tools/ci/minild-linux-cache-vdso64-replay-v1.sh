@@ -3,7 +3,8 @@
 # Linux 6.6.143 Kbuild object cache. No Linux C build, no Kbuild and no QEMU.
 # Preserve exact GNU arguments: do NOT silently ignore ELF metadata flags.
 # Reference replay fix #38487964158: .dbg.tmp is intentionally deleted by Kbuild.
-# Exact #38488109583 GNU replay works, MiniLD rejects -S.
+# #38488109583 reproduced the prior -S blocker. Re-evaluate each exact CLI
+# on the current MiniLD SHA; reject any missing shared-ELF semantics.
 # Reduced shared-link probe is diagnostically useful but never qualifies P1.
 # Live gap gate: observed remaining GNU LD vDSO64 from #38485397284;
 # only a new 64-bit shared-link implementation can remove this fallback.
@@ -65,6 +66,11 @@ sha256sum "$minild" >"$ev/tool.sha256"
   echo "MINILD_VDSO_LINK elapsed_ms=$elapsed rc=$code no_Linux_C_recompile=true"
   if (( code != 0 )); then
     echo "MINILD_VDSO=GAP exact_GNU_shared_link_not_yet_supported" >&2
+    # Preserve the first *actual* current MiniLD failure rather than
+    # treating an earlier error (-S) as an unchanging diagnosis.
+    first_blocker="$(grep -m1 '^minic-ld:' "$ev/ld.stderr" || true)"
+    printf '%s\n' "$first_blocker" > "$ev/first-blocker.txt"
+    echo "MINILD_VDSO_FIRST_BLOCKER=${first_blocker:-unknown} exact_GNU_flags=true"
     tail -n 55 "$ev/ld.stderr" >&2
     # Exploratory ONLY: test the existing generic ELF64 shared-link engine
     # without -S, --hash-style=both, --eh-frame-hdr, or the missing
