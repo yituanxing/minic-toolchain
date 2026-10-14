@@ -12,3 +12,4 @@ minipp P1 cached replay after generated compile.h and vdso-offsets.h pinned-depe
 2026-10-14 retry once: three slow owners, split producer/cache from measurements and fix tee directory.
 2026-10-14 opt-in stage trace via already SHA-cached original 3 C source, no paired repeat and no new compiler patch.
 2026-10-14 next generic algorithm: function-name parser hash vs same-instrumented linear scan, 2 paired reps only; reuse three frozen owners.
+2026-10-15 parser first-declaration-preserving function hash A/B; SHA-frozen 3-owner corpus reuse, no new pipeline.
