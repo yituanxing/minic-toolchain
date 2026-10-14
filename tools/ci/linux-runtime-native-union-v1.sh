@@ -183,6 +183,21 @@ cat >"$ev/as-wrapper" <<'SH_AS'
 #!/usr/bin/env bash
 set -Eeuo pipefail
 : "${MINIAS:?native assembler not set}" "${NATIVE_TRACE_DIR:?native trace dir not set}"
+# Python-era Linux Kbuild kept host compilation on HOSTCC=system GCC.
+# COMPILER_PATH is inherited by both compilers: a cross-only MiniAS override
+# must NEVER route x86_64 HOSTCC assembler jobs (e.g. SELinux genheaders) to
+# RISC-V MiniAS. GCC's COLLECT_GCC identifies the invoking driver.
+# Only target-prefixed assembler command and *target* GCC subprocess belong
+# to MiniAS. Host compile stays unmodified and must never count as fallback.
+case "${COLLECT_GCC:-}" in
+  *riscv64-linux-gnu-gcc*) ;;
+  *)
+    if [[ "${0##*/}" == as ]]; then
+      { flock 9; printf 'host-as collect_gcc=%q' "${COLLECT_GCC:-unset}"; printf ' %q' "$@"; printf '\n'; } 9>>"$NATIVE_TRACE_DIR/minias-runtime.trace" >&9
+      exec /usr/bin/as "$@"
+    fi
+    ;;
+esac
 args=("$@")
 opts=()
 out=
