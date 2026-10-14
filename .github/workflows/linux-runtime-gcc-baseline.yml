@@ -529,7 +529,7 @@ jobs:
   # Explicit, optional 7-runner producer for the same pure-GCC C universe.
   # Do not use this lane for everyday single-TU debugging.
   gcc-shards:
-    if: github.event_name == 'push' && (contains(github.event.head_commit.message, '[linux-runtime-gcc-sharded]') || contains(github.event.head_commit.message, '[linux-minias-seven-shards]'))
+    if: github.event_name == 'push' && (contains(github.event.head_commit.message, '[linux-runtime-gcc-sharded]') || contains(github.event.head_commit.message, '[linux-minias-seven-shards]') || contains(github.event.head_commit.message, '[linux-rv64-only-seven]'))
     runs-on: ubuntu-24.04
     timeout-minutes: 75
     strategy:
@@ -553,12 +553,15 @@ jobs:
                 libc6-dev-riscv64-cross python3 make cpio gzip
             }
 
+      # Independent CONFIG_COMPAT=n GNU 6.6.143 Image+QEMU P1 was
+      # certified by #38546892034; its 2129-object cache and config hash
+      # must not be mixed with the original 64+compat branch.
       - name: Identify certified exact-config GNU golden pool
         id: gnu
         shell: bash
         run: |
           set -Eeuo pipefail
-          config=eeb04f304ebfb97a1079c187dc0c2ea3cc61fc50a55aa3cc776237c16ab19bbe
+          config=e89f0142a8908f5c9bcd21b74e3115cf64b76acca70812a72f8ccf02cd5fa60b
           gcc_sig=$(sha256sum "$(command -v riscv64-linux-gnu-gcc)" | cut -c1-16)
           ld_sig=$(sha256sum "$(command -v riscv64-linux-gnu-ld)" | cut -c1-16)
           echo "key=linux-gnu-golden-v1-6.6.143-$config-$gcc_sig-$ld_sig" >>"$GITHUB_OUTPUT"
@@ -598,7 +601,7 @@ jobs:
           objects=$(sha256sum "$ev/full-objects.txt" | cut -d' ' -f1)
           gcc=$(sha256sum "$(command -v riscv64-linux-gnu-gcc)" | cut -d' ' -f1)
           assembler=$(sha256sum "$(command -v riscv64-linux-gnu-as)" | cut -d' ' -f1)
-          echo "FULL_MINIC_KEY=gnu-minic-objects-v1-eeb04f304ebfb97a1079c187dc0c2ea3cc61fc50a55aa3cc776237c16ab19bbe-$profile-$objects-$gcc-$assembler" >>"$GITHUB_ENV"
+          echo "FULL_MINIC_KEY=gnu-minic-objects-v1-e89f0142a8908f5c9bcd21b74e3115cf64b76acca70812a72f8ccf02cd5fa60b-$profile-$objects-$gcc-$assembler" >>"$GITHUB_ENV"
 
       - name: Restore immutable full MiniC object pool on this MiniAS worker
         id: minias_shard_original_cache
@@ -703,7 +706,7 @@ jobs:
           subset=$(sha256sum "build/linux-runtime-gcc-shards-v1/shard-${{ matrix.shard }}/full-objects.txt" | cut -d' ' -f1)
           gcc=$(sha256sum "$(command -v riscv64-linux-gnu-gcc)" | cut -d' ' -f1)
           assembler=$(sha256sum "$(command -v riscv64-linux-gnu-as)" | cut -d' ' -f1)
-          echo "key=gnu-minic-shard-v1-eeb04f304ebfb97a1079c187dc0c2ea3cc61fc50a55aa3cc776237c16ab19bbe-$profile-$subset-$gcc-$assembler" >>"$GITHUB_OUTPUT"
+          echo "key=gnu-minic-shard-v1-e89f0142a8908f5c9bcd21b74e3115cf64b76acca70812a72f8ccf02cd5fa60b-$profile-$subset-$gcc-$assembler" >>"$GITHUB_OUTPUT"
 
       - name: Restore this shard's immutable candidate objects
         if: "!contains(github.event.head_commit.message, '[linux-minias-seven-shards]')"
