@@ -907,7 +907,7 @@ jobs:
           retention-days: 7
 
       - name: Restore identical certified GNU golden objects
-        if: "!contains(github.event.head_commit.message, '[linux-runtime-large-image-qemu]') && !contains(github.event.head_commit.message, '[linux-minias-earlycon-frozen]')"
+        if: "!contains(github.event.head_commit.message, '[linux-minias-strcmp-diff]') && !contains(github.event.head_commit.message, '[linux-runtime-large-image-qemu]') && !contains(github.event.head_commit.message, '[linux-minias-earlycon-frozen]')"
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -1479,6 +1479,10 @@ jobs:
           ev="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-v1"
           work="$GITHUB_WORKSPACE/build/linux-runtime-gcc"
           (cd "$ev" && sha256sum --quiet -c minic-manifest.sha256)
+          if [[ "${{ contains(github.event.head_commit.message, '[linux-minias-strcmp-diff]') && '1' || '0' }}" == 1 ]]; then
+            tools="$GITHUB_WORKSPACE/build/minias-linux-corpus-v1-tools"
+            make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$tools" "$tools/bin/minic-as"
+          fi
           test -x "$GITHUB_WORKSPACE/build/minias-linux-corpus-v1-tools/bin/minic-as"
           python3 tools/ci/minias-linux-corpus-runtime-overlay-v1.py \
             --original-pool "$ev/minic" --manifest "$ev/minic-manifest.sha256" \
@@ -1490,6 +1494,34 @@ jobs:
             --minias "$GITHUB_WORKSPACE/build/minias-linux-corpus-v1-tools/bin/minic-as" \
             --native-asm-only --c-universe "$ev/full-objects.txt" \
             --gcc-manifest "$work/provenance/gcc-objects.sha256"
+          if [[ "${{ contains(github.event.head_commit.message, '[linux-minias-strcmp-diff]') && '1' || '0' }}" == 1 ]]; then
+            cmpout="$ev/minias-native-S-evidence/strcmp"
+            mkdir -p "$cmpout"
+            orig="$work/out/arch/riscv/lib/strcmp.o"
+            native="$ev/minias-native-S-pool/arch/riscv/lib/strcmp.o"
+            (cd "$work/out" && sha256sum --quiet -c "$work/provenance/gcc-objects.sha256")
+            test -s "$orig" && test -s "$native"
+            for role in gnu mini; do
+              obj="$orig"
+              [[ "$role" == mini ]] && obj="$native"
+              riscv64-linux-gnu-objdump -dr -M no-aliases "$obj" >"$cmpout/$role.objdump"
+              readelf -Wr "$obj" >"$cmpout/$role.relocs"
+              readelf -SW "$obj" >"$cmpout/$role.sections"
+              readelf -x .alternative "$obj" >"$cmpout/$role.alternative-hex" 2>&1 || true
+              readelf -x .altinstr_replacement "$obj" >"$cmpout/$role.alt-replacement-hex" 2>&1 || true
+              sha256sum "$obj" >"$cmpout/$role.sha256"
+            done
+            diff -u "$cmpout/gnu.relocs" "$cmpout/mini.relocs" >"$cmpout/reloc.diff" || true
+            diff -u "$cmpout/gnu.objdump" "$cmpout/mini.objdump" >"$cmpout/objdump.diff" || true
+            diff -u "$cmpout/gnu.alternative-hex" "$cmpout/mini.alternative-hex" >"$cmpout/alternative.diff" || true
+            echo 'MINIAS_STRCMP_DIAGNOSTIC=COMPLETE real_GNU_Kbuild_obj=true native_MiniAS_obj=true runtime_not_run=true'
+            echo 'MINIAS_STRCMP_DIAGNOSTIC=RELOCATION_DIFF'
+            sed -n '1,110p' "$cmpout/reloc.diff"
+            echo 'MINIAS_STRCMP_DIAGNOSTIC=ALTERNATIVE_DIFF'
+            sed -n '1,110p' "$cmpout/alternative.diff"
+            echo 'MINIAS_STRCMP_DIAGNOSTIC=OBJDUMP_DIFF'
+            sed -n '1,180p' "$cmpout/objdump.diff"
+          fi
 
       - name: Prepare native MiniAR, final-link MiniLD and MiniObjcopy (same cached C objects)
         if: contains(github.event.head_commit.message, '[linux-native-union-cached]') && (!contains(github.event.head_commit.message, '[linux-minias-corpus-scan]') || contains(github.event.head_commit.message, '[linux-minias-corpus-runtime]'))
@@ -1745,6 +1777,7 @@ jobs:
             build/linux-runtime-gcc-cohort-v1/minias-native-S-evidence/*.tsv
             build/linux-runtime-gcc-cohort-v1/minias-native-S-evidence/*.sha256
             build/linux-runtime-gcc-cohort-v1/minias-native-S-evidence/logs/*.log
+            build/linux-runtime-gcc-cohort-v1/minias-native-S-evidence/strcmp/*
             build/linux-runtime-gcc-cohort-v1/minias-corpus-2064-evidence/assembly-failures.tsv
             build/linux-runtime-gcc-cohort-v1/minias-corpus-64-evidence/*.tsv
             build/linux-runtime-gcc-cohort-v1/minias-corpus-64-evidence/*.sha256
