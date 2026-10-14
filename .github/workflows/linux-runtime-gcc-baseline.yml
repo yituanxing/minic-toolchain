@@ -1376,6 +1376,12 @@ jobs:
               test "$(wc -l < "$COHORT_MINIAS_CORPUS_MANIFEST")" -eq 60
               (cd "$COHORT_P1_EXPERIMENTAL_POOL" && sha256sum --quiet -c "$COHORT_MINIAS_CORPUS_MANIFEST")
               echo "MINIAS_CORPUS_QEMU_EXPERIMENT=ENABLED native=60 original=2004 gcc_E_and_minic_S_reused=true"
+              if [[ "${{ contains(github.event.head_commit.message, '[linux-minias-dynamic-headers]') && '1' || '0' }}" == 1 ]]; then
+                export COHORT_MINIAS_DYNAMIC_HEADERS=1
+                export COHORT_MINIAS_HEADER_AS="$GITHUB_WORKSPACE/build/minias-linux-corpus-v1-tools/bin/minic-as"
+                test -x "$COHORT_MINIAS_HEADER_AS"
+                echo 'MINIAS_DYNAMIC_HEADERS=ENABLED Kbuild_header_recompile=MiniC_S_then_MiniAS'
+              fi
             fi
             if [[ "${{ contains(github.event.head_commit.message, '[linux-native-purgatory-r]') && '1' || '0' }}" == 1 ]]; then
               export MINILD_ENABLE_PURGATORY_R=1
@@ -1498,6 +1504,10 @@ jobs:
               grep -Fq 'COHORT_P1=PASS name=full_all_verified syscalls=12 python_era_oracle=PASS' "$ev/cohort.log" || exit 31
               test "$(grep -c 'MINIAS_CORPUS_RUNTIME_OBJECTS=PASS' "$ev/cohort.log")" -eq 2
               echo 'MINIAS_CORPUS_FULL_RUNTIME=PASS scanned=64 native=60 frozen_GNUAS=2004 full_QEMU_fast_shell_P1=true no_full_C_recompile=true'
+              if [[ "${{ contains(github.event.head_commit.message, '[linux-minias-dynamic-headers]') && '1' || '0' }}" == 1 ]]; then
+                test "$(grep -c 'MINIAS_DYNAMIC_HEADER_OBJECTS=PASS' "$ev/cohort.log")" -eq 2
+                echo 'MINIAS_DYNAMIC_FULL_RUNTIME=PASS native_MiniAS_C=64 remaining_GNU_AS_C=2000 P1=true'
+              fi
             fi
             echo "NATIVE_UNION_RESULT=PASS pp=GNU minic=2064 from_cache ar=MiniAR_full_actual_Kbuild ar_native_calls=$minic_ar_calls ar_mpit_calls=$minic_mpit_calls ar_gnu_calls=0 ld=MiniLD_final_only objcopy=MiniObjcopy runtime=P1"
           fi
@@ -1517,6 +1527,8 @@ jobs:
             build/linux-runtime-gcc-cohort-v1/results.tsv
             build/linux-runtime-gcc-cohort-v1/native-union/*.trace
             build/linux-runtime-gcc-cohort-v1/native-union/*.tsv
+            build/linux-runtime-gcc-cohort-v1/trials/*/minias-dynamic-hashes.sha256
+            build/linux-runtime-gcc-cohort-v1/trials/*/minias-dynamic-logs/*.log
             build/linux-runtime-gcc-cohort-v1/minias-corpus-64-evidence/*.tsv
             build/linux-runtime-gcc-cohort-v1/minias-corpus-64-evidence/*.sha256
             build/linux-runtime-gcc-cohort-v1/minias-corpus-64-evidence/*.json

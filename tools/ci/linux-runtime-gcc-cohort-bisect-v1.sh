@@ -1465,6 +1465,17 @@ PY_HEADER_CLOSURE
           echo "COHORT_RESULT=INCONCLUSIVE stage=dependent_minic_provenance name=$name"
           exit 8
         }
+      # The original direct replay deliberately uses GNU AS to retain a
+      # certified C provenance oracle. Native MiniAS can now consume those
+      # exact new-header MiniC .s and replace just these four real .o.
+      if [[ "${COHORT_MINIAS_DYNAMIC_HEADERS:-0}" == 1 ]]; then
+        : "${COHORT_MINIAS_HEADER_AS:?missing MiniAS binary}"
+        python3 "$repo/tools/ci/minias-linux-kbuild-dynamic-v1.py" \
+          --out "$out" --affected "$d/affected-objects.txt" \
+          --minias "$COHORT_MINIAS_HEADER_AS" \
+          --manifest "$d/minias-dynamic-hashes.sha256" \
+          --log-dir "$d/minias-dynamic-logs" | tee -a "$d/guard.log"
+      fi
       # Rebuilding dependents must not shift the generated vDSO header again.
       python3 "$repo/tools/ci/linux-runtime-kbuild-regeneration-guard-v1.py" \
         --mode stable --out "$out" --evidence "$d/generated-after-first-link.json" \
@@ -1583,6 +1594,16 @@ PY_RISCV_DYNAMIC
       exit 8
     }
     echo "MINIAS_CORPUS_RUNTIME_OBJECTS=PASS trial=$name native_sha_verified=60 no_GNU_AS_native_owner_overwrite=true"
+  fi
+  if [[ "${COHORT_MINIAS_DYNAMIC_HEADERS:-0}" == 1 ]]; then
+    dyn="$last_link_source_dir/minias-dynamic-hashes.sha256"
+    test -s "$dyn"
+    test "$(wc -l < "$dyn")" -eq 4
+    (cd "$out" && sha256sum --quiet -c "$dyn") || {
+      echo "MINIAS_DYNAMIC_HEADER_OBJECTS=FAIL GNU_AS_overwrote_native_object"
+      exit 8
+    }
+    echo "MINIAS_DYNAMIC_HEADER_OBJECTS=PASS trial=$name native_header_objects=4 total_native_C_objects=64"
   fi
   # Non-C objects cannot all be compared byte-for-byte with the GNU
   # golden reference: changing a verified MiniC .o legitimately changes its
