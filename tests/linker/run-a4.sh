@@ -80,6 +80,37 @@ reference_relative="$(grep -c 'R_RISCV_RELATIVE' "$work/reference.so" 2>/dev/nul
 product_relative="$(grep -c 'R_RISCV_RELATIVE' "$work/product.relocs")"
 test "$product_relative" -ge 1
 
+# GNU vDSO symbol versions must be emitted, not just script-parsed.
+# Compare version-index metadata against the same GNU LD source object.
+cat >"$work/vdso-version.map" <<'EOF_VDSO_VERSION'
+LINUX_4.15 {
+  global:
+    exported_answer;
+    exported_ptr;
+  local: *;
+};
+EOF_VDSO_VERSION
+"$LD" -melf64lriscv -shared -soname libminild-a4.so \
+  --version-script="$work/vdso-version.map" \
+  -o "$work/reference-version.so" "$work/shared.o"
+"$MINILD" -melf64lriscv -shared -soname libminild-a4.so \
+  --version-script="$work/vdso-version.map" \
+  -o "$work/product-version.so" "$work/shared.o"
+"$READELF" -W -V "$work/product-version.so" > "$work/version-product.txt"
+"$READELF" -W -V "$work/reference-version.so" > "$work/version-reference.txt"
+"$READELF" -W -d "$work/product-version.so" > "$work/version-dynamic.txt"
+"$READELF" -W --dyn-syms "$work/product-version.so" > "$work/version-symbols.txt"
+grep -q 'LINUX_4.15' "$work/version-product.txt"
+grep -q 'Version definition section' "$work/version-product.txt"
+grep -q '(VERSYM)' "$work/version-dynamic.txt"
+grep -q '(VERDEF)' "$work/version-dynamic.txt"
+grep -q '(VERDEFNUM)' "$work/version-dynamic.txt"
+grep -q 'exported_answer@@LINUX_4.15' "$work/version-symbols.txt"
+grep -q 'exported_ptr@@LINUX_4.15' "$work/version-symbols.txt"
+! grep -q 'external_ptr' "$work/version-symbols.txt"
+grep -q 'external_value' "$work/version-symbols.txt"
+echo "MINILD_A4_VERSION=PASS GNU_version=LINUX_4.15 exports=2 hidden=external_ptr undefined_external_value_preserved=true"
+
 # Linux vDSO needs both hash table formats in its shared ELF.
 "$MINILD" -melf64lriscv -shared --hash-style=both \
   -soname libminild-a4.so -o "$work/product-hash-both.so" "$work/shared.o"
