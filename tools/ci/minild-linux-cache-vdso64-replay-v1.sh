@@ -131,7 +131,46 @@ MINILD_VDSO_DIAG_ASM
       riscv64-linux-gnu-readelf -W --debug-dump=frames \
         "$ev/vdso-eh-only-diagnostic.so" >"$ev/eh-diagnostic-frames.txt"
       diag_fdes="$(grep -c ' FDE ' "$ev/eh-diagnostic-frames.txt" || true)"
-      diag_size="$(grep -F '.eh_frame_hdr' "$ev/eh-diagnostic-elf.txt" | grep -E 'PROGBITS' | awk '{print $(NF-4)}' || true)"
+      # Verify that all 4 real CFI records are actually represented in the
+      # native sorted binary search index, not just present in .eh_frame.
+      # This is still NOT acceptance for the exact -T / VERSION script.
+      python3 - "$ev/vdso-eh-only-diagnostic.so" <<'PY_EH_INDEX'
+import pathlib, struct, sys
+b = pathlib.Path(sys.argv[1]).read_bytes()
+u16 = lambda off: struct.unpack_from('<H', b, off)[0]
+u32 = lambda off: struct.unpack_from('<I', b, off)[0]
+u64 = lambda off: struct.unpack_from('<Q', b, off)[0]
+phoff, shoff = u64(32), u64(40)
+phsize, phcount = u16(54), u16(56)
+shsize, shcount, strindex = u16(58), u16(60), u16(62)
+strhdr = shoff + strindex * shsize
+names = b[u64(strhdr+24):u64(strhdr+24)+u64(strhdr+32)]
+sects = {}
+for i in range(shcount):
+    o = shoff + i * shsize
+    start = u32(o)
+    end = names.find(b'\x00', start)
+    name = names[start:end].decode()
+    sects[name] = (u64(o+16),u64(o+24),u64(o+32))
+eh_vaddr, _, eh_size = sects['.eh_frame']
+hdr_vaddr, hdr_off, hdr_size = sects['.eh_frame_hdr']
+hdr = b[hdr_off:hdr_off+hdr_size]
+assert hdr_size == 44, f"unexpected EH header bytes: {hdr_size}"
+assert hdr[:4] == bytes([1,0x1b,3,0x3b])
+assert struct.unpack_from('<I',hdr,8)[0] == 4
+ptr = struct.unpack_from('<i',hdr,4)[0]
+assert hdr_vaddr + 4 + ptr == eh_vaddr
+pcs, fdes = [], []
+for i in range(4):
+    pc = hdr_vaddr + struct.unpack_from('<i', hdr,12+8*i)[0]
+    fde = hdr_vaddr + struct.unpack_from('<i', hdr,16+8*i)[0]
+    pcs.append(pc)
+    fdes.append(fde)
+assert pcs == sorted(pcs), pcs
+assert len(set(fdes)) == 4 and all(eh_vaddr <= v < eh_vaddr+eh_size for v in fdes)
+assert any(u32(phoff+i*phsize) == 0x6474e550 for i in range(phcount))
+print('MINILD_VDSO_EH_INDEX=PASS real_fdes=4 header_bytes=44 sorted_pcs=true PT_GNU_EH_FRAME=true runtime_claim=false')
+PY_EH_INDEX
       echo "MINILD_VDSO_EH_DIAGNOSTIC fdes=$diag_fdes expected=4 GNU_EH_FRAME=$(grep -c 'GNU_EH_FRAME' "$ev/eh-diagnostic-elf.txt" || true) runtime_claim=false"
     else
       sed 's/^/MINILD_VDSO_EH_DIAGNOSTIC_ERROR /' "$ev/eh-diagnostic.stderr" | head -n 45
