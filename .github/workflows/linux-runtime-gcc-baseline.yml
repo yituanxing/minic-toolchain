@@ -494,7 +494,37 @@ jobs:
             cp "$root/minic" "$ev/boolean-hot/baseline/bin/minic"
             cp "$ev/compiler/minic-cc-before-boolean" "$ev/boolean-hot/baseline/bin/minic-cc"
             python3 -m py_compile tools/ci/linux-perf-pinned-single-paired-ab-v1.py
-            if [[ "${{ contains(github.event.head_commit.message, '[linux-perf-parser-global]') }}" == true ]]; then
+            if [[ "${{ contains(github.event.head_commit.message, '[linux-perf-core-workspace]') }}" == true ]]; then
+              # Different algorithmic family after marginal global-hash result:
+              # reuse per-TU statement-ID map instead of allocating and clearing
+              # the full Program statement map once PER Core function.
+              # Same Boolean Runtime in both arms; no Parser hash patch.
+              work="$ev/boolean-hot/core-workspace"
+              mkdir -p "$work/baseline/bin" "$work/workspace/bin"
+              cp "$root/minic" "$work/baseline/bin/minic"
+              cp "$root/minic" "$work/workspace/bin/minic"
+              cp "$root/minic-cc" "$work/baseline/bin/minic-cc"
+              python3 tools/ci/apply-perf-core-lower-statement-workspace-v1.py
+              make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain" \
+                "$root/minic-cc" >/dev/null
+              cp "$root/minic-cc" "$work/workspace/bin/minic-cc"
+              test "$(sha256sum "$work/baseline/bin/minic-cc" | cut -d' ' -f1)" != "$(sha256sum "$work/workspace/bin/minic-cc" | cut -d' ' -f1)"
+              git diff --check
+              for owner in kernel/bpf/btf.o kernel/bpf/verifier.o net/core/filter.o; do
+                key="${owner//\//_}"
+                frozen="$ev/boolean-hot/$key.frozen.i"
+                test -s "$frozen"
+                python3 tools/ci/linux-perf-pinned-single-paired-ab-v1.py \
+                  --input "$frozen" \
+                  --baseline-driver "$work/baseline/bin/minic" \
+                  --candidate-driver "$work/workspace/bin/minic" \
+                  --repeats 2 --out "$work/results/$key" \
+                  | tee "$work/$key-screen.txt"
+                grep -Fq 'MINIC_ONE_OWNER_AB=PASS' "$work/$key-screen.txt"
+                echo "CORE_WORKSPACE_SCREEN=PASS owner=$owner byte_identical=true"
+              done
+              echo 'CORE_WORKSPACE_GROUP=PASS owners=3 only_core_workspace_changed=true QEMU_pending=true'
+            elif [[ "${{ contains(github.event.head_commit.message, '[linux-perf-parser-global]') }}" == true ]]; then
               # Isolated NEXT algorithmic question: with the same function hash
               # enabled on both arms, does the incremental global-object hash
               # reduce the remaining lookup cost? Keep all real frozen Linux .i
@@ -659,6 +689,8 @@ jobs:
             build/linux-runtime-gcc-cohort-v1/non-c-objects.tsv
             build/linux-runtime-gcc-cohort-v1/identity.txt
             build/linux-runtime-gcc-cohort-v1/cohort.log
+            build/linux-runtime-gcc-cohort-v1/boolean-hot/core-workspace/results/**/paired-result.json
+            build/linux-runtime-gcc-cohort-v1/boolean-hot/core-workspace/*-screen.txt
             build/linux-runtime-gcc-cohort-v1/boolean-hot/parser-global/results/**/paired-result.json
             build/linux-runtime-gcc-cohort-v1/boolean-hot/parser-global/*-screen.txt
             build/linux-runtime-gcc-cohort-v1/boolean-hot/parser-index/results/**/paired-result.json
