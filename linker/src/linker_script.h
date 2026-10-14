@@ -21,7 +21,8 @@ typedef enum MiniLdScriptExprKind {
     MINILD_SCRIPT_EXPR_NEGATE,
     MINILD_SCRIPT_EXPR_ALIGN,
     MINILD_SCRIPT_EXPR_ADDR,
-    MINILD_SCRIPT_EXPR_ABSOLUTE
+    MINILD_SCRIPT_EXPR_ABSOLUTE,
+    MINILD_SCRIPT_EXPR_SIZEOF_HEADERS
 } MiniLdScriptExprKind;
 
 typedef struct MiniLdScriptExpr {
@@ -109,6 +110,8 @@ typedef bool (*MiniLdScriptResolveSection)(void *context,
 
 typedef struct MiniLdScriptEvalContext {
     uint64_t dot;
+    uint64_t headers_size;
+    bool have_headers_size;
     MiniLdScriptResolveSymbol resolve_symbol;
     MiniLdScriptResolveSection resolve_section;
     void *user;

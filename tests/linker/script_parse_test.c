@@ -70,6 +70,47 @@ int main(int argc, char **argv) {
         return 1;
     }
 
+    /* Real vDSO layout uses SIZEOF_HEADERS after PHDRS defines the exact
+     * ELF64 program-header count. This must never silently evaluate to zero. */
+    {
+        MiniLdScript vdso;
+        MiniLdScriptEvalContext vdso_context;
+        MiniLdScriptExprId expr_id;
+        bool found = false;
+        size_t i;
+        minild_script_initialize(&vdso);
+        if (!minild_script_parse_file(
+                "tests/linker/vdso-expression.lds", &vdso, stderr)) {
+            minild_script_destroy(&script);
+            return 1;
+        }
+        for (i = 0U; i < vdso.command_count; ++i) {
+            if (vdso.commands[i].kind == MINILD_SCRIPT_SET_DOT) {
+                expr_id = vdso.commands[i].value.expression;
+                found = true;
+                break;
+            }
+        }
+        memset(&vdso_context, 0, sizeof(vdso_context));
+        if (!found ||
+            minild_script_evaluate(&vdso, expr_id, &vdso_context,
+                                   &value, stderr)) {
+            minild_script_destroy(&vdso);
+            minild_script_destroy(&script);
+            return 1;
+        }
+        vdso_context.have_headers_size = true;
+        vdso_context.headers_size = UINT64_C(64) + 4U * UINT64_C(56);
+        if (!minild_script_evaluate(&vdso, expr_id, &vdso_context,
+                                    &value, stderr) ||
+            value != UINT64_C(288)) {
+            minild_script_destroy(&vdso);
+            minild_script_destroy(&script);
+            return 1;
+        }
+        minild_script_destroy(&vdso);
+        puts("MINILD_SCRIPT_VDSO_HEADERS=PASS PHDR_count=4 sizeof_headers=288 no_guess=true");
+    }
     puts("MINILD_SCRIPT_A0=PASS linux-subset=PASS commands=12 expressions=37 wildcard=PASS");
     minild_script_destroy(&script);
     return 0;

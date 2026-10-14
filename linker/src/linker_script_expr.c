@@ -40,6 +40,17 @@ static bool parse_primary(ScriptParser *parser, MiniLdScriptExprId *expression_o
         return append_expression(parser->script, expression, expression_out) ||
                minild_script_parser_error(parser, "out-of-memory:expression");
     }
+    if (minild_script_token_is(parser, "SIZEOF_HEADERS")) {
+        /* GNU linker expression, not a user-defined ELF symbol. The caller
+         * must explicitly supply the actual ELF + PHDR size or evaluation
+         * fails closed; never guess based on the number of sections. */
+        expression.kind = MINILD_SCRIPT_EXPR_SIZEOF_HEADERS;
+        if (!minild_script_parser_next(parser)) {
+            return false;
+        }
+        return append_expression(parser->script, expression, expression_out) ||
+               minild_script_parser_error(parser, "out-of-memory:SIZEOF_HEADERS");
+    }
     if (minild_script_token_is(parser, ".")) {
         expression.kind = MINILD_SCRIPT_EXPR_DOT;
         if (!minild_script_parser_next(parser)) {
@@ -235,6 +246,14 @@ static bool evaluate_expression(const MiniLdScript *script,
         return true;
     case MINILD_SCRIPT_EXPR_DOT:
         *value_out = context->dot;
+        return true;
+    case MINILD_SCRIPT_EXPR_SIZEOF_HEADERS:
+        if (!context->have_headers_size) {
+            fprintf(diagnostics,
+                    "minic-ld: linker-script-SIZEOF_HEADERS-unknown\n");
+            return false;
+        }
+        *value_out = context->headers_size;
         return true;
     case MINILD_SCRIPT_EXPR_SYMBOL:
         if (context->resolve_symbol != NULL &&
