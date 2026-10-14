@@ -3,6 +3,8 @@
 # Linux 6.6.143 Kbuild object cache. No Linux C build, no Kbuild and no QEMU.
 # Preserve exact GNU arguments: do NOT silently ignore ELF metadata flags.
 # Reference replay fix #38487964158: .dbg.tmp is intentionally deleted by Kbuild.
+# Exact #38488109583 GNU replay works, MiniLD rejects -S.
+# Reduced shared-link probe is diagnostically useful but never qualifies P1.
 # Live gap gate: observed remaining GNU LD vDSO64 from #38485397284;
 # only a new 64-bit shared-link implementation can remove this fallback.
 set -Eeuo pipefail
