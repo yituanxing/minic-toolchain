@@ -688,11 +688,19 @@ jobs:
           sudo apt-get -o Acquire::Retries=2 install -y --no-install-recommends \
             gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu python3
 
+      - name: Install only GNU RISC-V binutils for frozen MiniAS differential
+        if: contains(github.event.head_commit.message, '[linux-minias-earlycon-frozen]')
+        timeout-minutes: 5
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get -o Acquire::Retries=2 install -y --no-install-recommends \
+            binutils-riscv64-linux-gnu
+
       - name: Install pinned GNU RISC-V tools and QEMU
         # Azure apt mirror transiently exceeded 5m (run 38256038299); allow
         # package downloads without mistaking environment for compiler failure.
         timeout-minutes: 12
-        if: "!contains(github.event.head_commit.message, '[linux-runtime-p1-frame-audit]')"
+        if: "!contains(github.event.head_commit.message, '[linux-runtime-p1-frame-audit]') && !contains(github.event.head_commit.message, '[linux-minias-earlycon-frozen]')"
         run: |
           set -Eeuo pipefail
           sudo apt-get -o Acquire::Retries=2 install -y --no-install-recommends \
