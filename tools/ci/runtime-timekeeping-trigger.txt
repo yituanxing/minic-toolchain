@@ -7,3 +7,4 @@ minipp P1 cached replay after generated compile.h and vdso-offsets.h pinned-depe
 2026-10-14 exact single-owner Boolean Domain index ABI and compile-time validation; preserve seven-shard objects; benchmark report doc PERF-001.
 2026-10-14 updated single-owner reference preflight and true minic-cc SHA plus paired identical .s timing.
 2026-10-14 freeze exact one TU before immutable GNU restoration for matched compiler microbenchmark.
+2026-10-14 cache-hit recovers exact Kbuild .i and checks object bytes against immutable candidate.
