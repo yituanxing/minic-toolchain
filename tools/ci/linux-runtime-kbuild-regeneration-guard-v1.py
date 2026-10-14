@@ -108,9 +108,10 @@ def header_impact(out: Path, evidence: Path, golden: Path,
                   selected: Path, affected_file: Path) -> tuple[list[str], list[str]]:
     """Determine affected selected TUs before any compiler is invoked.
 
-    Only vDSO offset changes are currently supported for auto-recompilation;
-    all other generated-input drift remains a hard stop. The baseline header
-    digest and the GOLDEN .cmd dependency closure are independently checked.
+    vDSO offsets and Kbuild's generated compile metadata may change during
+    a real kernel relink. Both require dependency-closed MiniC replay using
+    the pinned GNU .cmd before runtime testing. Any other generated-input
+    drift is still a hard stop.
     """
     baseline = json.loads(evidence.read_text())
     if baseline.get("schema") != SCHEMA:
@@ -120,7 +121,12 @@ def header_impact(out: Path, evidence: Path, golden: Path,
     if not isinstance(previous, dict):
         raise GuardError("missing golden generated-header identities")
     changed = sorted(k for k in set(now) | set(previous) if now.get(k) != previous.get(k))
-    if set(changed) - {"include/generated/vdso-offsets.h"}:
+    # compile.h contains build metadata (e.g. UTS_VERSION) and may be
+    # refreshed by Kbuild's link phase. Do not blindly disregard changes:
+    # inspect every frozen GNU C dependency closure, rebuild affected MiniC
+    # owners against the new bytes and demand stable headers at second link.
+    allowed = {"include/generated/vdso-offsets.h", "include/generated/compile.h"}
+    if set(changed) - allowed:
         raise GuardError("unsupported generated-header changes: " + ",".join(changed))
     impacted = selected_generated_header_dependents(
         golden, object_paths(selected), changed) if changed else []
