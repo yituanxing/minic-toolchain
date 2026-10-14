@@ -145,4 +145,53 @@ test "$start_addr" = 0000000000011008
 cmp "$work/param-gnu.bin" "$work/param-mini.bin"
 test "$(wc -c < "$work/param-mini.bin")" -eq 16
 
+# Linux vDSO's PROVIDE(_vdso_data = . - 2*PAGE_SIZE) must resolve an
+# undefined reference, but never override a supplied definition or create
+# an unreferenced export. Compare GNU and MiniLD actual ELF symbol values.
+cat >"$work/provide.s" <<'EOF_PROVIDE_ASM'
+.text
+.globl _start
+_start:
+  ret
+.data
+.globl vdso_data_pointer
+vdso_data_pointer:
+  .dword _vdso_data
+EOF_PROVIDE_ASM
+cat >"$work/provide.lds" <<'EOF_PROVIDE_SCRIPT'
+OUTPUT_ARCH(riscv)
+ENTRY(_start)
+SECTIONS {
+  . = 0x12000;
+  PROVIDE(_vdso_data = . - 0x2000);
+  PROVIDE(_unused_vdso_symbol = . + 0x100);
+  .text : { *(.text) }
+  .data : { *(.data) }
+}
+EOF_PROVIDE_SCRIPT
+"$AS" -march=rv64imac -mabi=lp64 -o "$work/provide.o" "$work/provide.s"
+"$LD" -melf64lriscv -static -T "$work/provide.lds" -o "$work/provide-gnu" "$work/provide.o"
+"$MINILD" -melf64lriscv -static -T "$work/provide.lds" -o "$work/provide-mini" "$work/provide.o"
+for producer in gnu mini; do
+  "$NM" "$work/provide-$producer" >"$work/provide-$producer.nm"
+  sym="$(awk '$3=="_vdso_data" {print $1; exit}' "$work/provide-$producer.nm")"
+  test "$sym" = 0000000000010000
+  ! grep -q '_unused_vdso_symbol output-symbol-section=PASS nm-types=T/T/T/T,D entry=0x10000 loads=$load_count generated=gnu-exact-504-bytes param-start=gnu-exact-0x11008 consumers=nm,readelf,objcopy"
+ "$work/provide-$producer.nm"
+done
+cat >"$work/provide-override.s" <<'EOF_PROVIDE_OVERRIDE'
+.globl _vdso_data
+.set _vdso_data, 0xdead
+EOF_PROVIDE_OVERRIDE
+"$AS" -march=rv64imac -mabi=lp64 -o "$work/provide-override.o" "$work/provide-override.s"
+for producer in gnu mini; do
+  if [ "$producer" = gnu ]; then linker="$LD"; else linker="$MINILD"; fi
+  "$linker" -melf64lriscv -static -T "$work/provide.lds" \
+    -o "$work/provide-override-$producer" "$work/provide.o" "$work/provide-override.o"
+  "$NM" "$work/provide-override-$producer" >"$work/provide-override-$producer.nm"
+  sym="$(awk '$3=="_vdso_data" {print $1; exit}' "$work/provide-override-$producer.nm")"
+  test "$sym" = 000000000000dead
+done
+echo "MINILD_SCRIPT_PROVIDE=PASS referenced_conditional=true unreferenced_absent=true override_preserved=true gnu_equivalent=true"
+
 echo "MINILD_SCRIPT_A1=PASS output-symbol-section=PASS nm-types=T/T/T/T,D entry=0x10000 loads=$load_count generated=gnu-exact-504-bytes param-start=gnu-exact-0x11008 consumers=nm,readelf,objcopy"

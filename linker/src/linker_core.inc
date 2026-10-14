@@ -3877,6 +3877,14 @@ static bool static_build_script_layout(MiniLdState *state,
             script_state.dot = value;
             break;
         case MINILD_SCRIPT_DEFINE_SYMBOL:
+            if (command->value.symbol.provide) {
+                size_t sym = find_global_symbol(state,
+                                                command->value.symbol.name);
+                if (sym == SIZE_MAX ||
+                    state->symbols[sym].section != MINILD_SECTION_UNDEF) {
+                    break;
+                }
+            }
             if (script->expressions[command->value.symbol.expression].kind ==
                     MINILD_SCRIPT_EXPR_SYMBOL &&
                 !script_layout_symbol_value(
@@ -3912,6 +3920,14 @@ static bool static_build_script_layout(MiniLdState *state,
         if (command->kind != MINILD_SCRIPT_DEFINE_SYMBOL ||
             !command_deferred[i]) {
             continue;
+        }
+        if (command->value.symbol.provide) {
+            size_t sym = find_global_symbol(state,
+                                            command->value.symbol.name);
+            if (sym == SIZE_MAX ||
+                state->symbols[sym].section != MINILD_SECTION_UNDEF) {
+                continue;
+            }
         }
         if (!script_layout_evaluate(&script_state,
                                     command->value.symbol.expression,

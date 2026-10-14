@@ -82,6 +82,7 @@ typedef struct MiniLdScriptCommand {
         struct {
             char *name;
             MiniLdScriptExprId expression;
+            bool provide; /* GNU PROVIDE: define only if unresolved */
         } symbol;
         MiniLdScriptExprId expression;
         MiniLdScriptOutputSection section;

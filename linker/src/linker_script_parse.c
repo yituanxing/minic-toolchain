@@ -382,6 +382,46 @@ static bool parse_sections(ScriptParser *parser) {
                                               "expected-SECTIONS-command");
         }
 
+        /* GNU PROVIDE is conditional: referenced undefined symbols are
+         * defined, but ordinary existing definitions are never replaced,
+         * and unreferenced declarations do not become ELF exports. */
+        if (minild_script_token_is(parser, "PROVIDE")) {
+            MiniLdScriptCommand command;
+            MiniLdScriptExprId expression;
+            char *symbol_name;
+            if (!minild_script_parser_next(parser) ||
+                !minild_script_expect(parser, TOKEN_LPAREN,
+                                      "expected-'('-after-PROVIDE") ||
+                parser->token.kind != TOKEN_IDENTIFIER) {
+                return minild_script_parser_error(parser,
+                                                  "expected-PROVIDE-symbol");
+            }
+            symbol_name = minild_script_strdup_range(parser->token.begin,
+                                                      parser->token.length);
+            if (symbol_name == NULL ||
+                !minild_script_parser_next(parser) ||
+                !minild_script_expect(parser, TOKEN_EQUAL,
+                                      "expected-'='-in-PROVIDE") ||
+                !minild_script_parse_expression(parser, &expression) ||
+                !minild_script_expect(parser, TOKEN_RPAREN,
+                                      "expected-')'-after-PROVIDE")) {
+                free(symbol_name);
+                return false;
+            }
+            (void)minild_script_consume(parser, TOKEN_SEMICOLON);
+            memset(&command, 0, sizeof(command));
+            command.kind = MINILD_SCRIPT_DEFINE_SYMBOL;
+            command.value.symbol.name = symbol_name;
+            command.value.symbol.expression = expression;
+            command.value.symbol.provide = true;
+            if (!append_command(parser->script, command)) {
+                free(symbol_name);
+                return minild_script_parser_error(parser,
+                                                  "out-of-memory:PROVIDE");
+            }
+            continue;
+        }
+
         first = parser->token;
         name = minild_script_strdup_range(first.begin, first.length);
         if (name == NULL || !minild_script_parser_next(parser)) {
