@@ -127,6 +127,9 @@ def main():
         from runpy import run_path
         script=ROOT/"tools/ci/linux-perf-time-balanced-shard-plan-v1.py"
         run_path(str(script))["self_test"]()
+        import subprocess,sys
+        trace=ROOT/"tools/ci/linux-perf-phase-trace-v1.py"
+        subprocess.run([sys.executable,str(trace),"--self-test"],check=True)
     print(f"M0_CI_TRIGGER_LEDGER=PASS branch={branch} maintained={len(local)} total={len(rows)} unique={len({r['path'] for r in rows})} route_checks=4 tier=T0")
 
 if __name__=="__main__":
