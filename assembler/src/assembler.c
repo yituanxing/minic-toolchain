@@ -561,8 +561,11 @@ static bool minias_section_append_code_alignment(MiniAs *as,
     static const unsigned char nop16[] = {0x01U, 0x00U};
 
     if ((size & 1U) != 0U) {
-        minias_set_error(as, "executable-alignment-odd-padding:%zu", size);
-        return false;
+        /* A raw byte in .text (e.g. embedded alternatives/data) can leave
+         * an odd-sized alignment gap. No sequence of 16/32-bit RISC-V NOP
+         * encodings fills an odd byte count; retain the previous zero-byte
+         * fill for this non-instruction-shaped case, as GNU as does. */
+        return minias_section_append_zero(as, section_index, size);
     }
     while (size >= sizeof(nop32)) {
         if (!minias_section_append(as, section_index, nop32, sizeof(nop32))) {
