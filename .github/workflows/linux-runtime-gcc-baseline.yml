@@ -198,7 +198,7 @@ jobs:
   gcc-single:
     # Reuse the EXISTING opt-in isolation job. ONE runner handles the entire
     # batch compile, two cohorts and any QEMU prefix bisection.
-    if: github.event_name == 'push' && (contains(github.event.head_commit.message, '[linux-runtime-gcc-cohort]') || contains(github.event.head_commit.message, '[linux-runtime-gcc-384]') || contains(github.event.head_commit.message, '[linux-runtime-gcc-dma-only]') || contains(github.event.head_commit.message, '[linux-runtime-gcc-link-triad]') || contains(github.event.head_commit.message, '[linux-runtime-gcc-shmem-only]') || contains(github.event.head_commit.message, '[linux-runtime-blake2s-only]'))
+    if: github.event_name == 'push' && (contains(github.event.head_commit.message, '[linux-runtime-gcc-cohort]') || contains(github.event.head_commit.message, '[linux-runtime-gcc-384]') || contains(github.event.head_commit.message, '[linux-runtime-gcc-dma-only]') || contains(github.event.head_commit.message, '[linux-runtime-gcc-link-triad]') || contains(github.event.head_commit.message, '[linux-runtime-gcc-shmem-only]') || contains(github.event.head_commit.message, '[linux-runtime-blake2s-only]') || contains(github.event.head_commit.message, '[linux-perf-hotowners]'))
     runs-on: ubuntu-24.04
     timeout-minutes: 105
     steps:
@@ -295,6 +295,15 @@ jobs:
             printf '%s\n' lib/crypto/blake2s-generic.o > "$ev/full-objects.txt"
             echo "BLAKE2S_SINGLE=SELECTED target=lib/crypto/blake2s-generic.o baseline_minic_ms=1981990"
           fi
+          if [[ "${{ contains(github.event.head_commit.message, '[linux-perf-hotowners]') }}" == true ]]; then
+            # Three highly expensive, structurally distinct Linux C owners.
+            # Never reuse the blake2s experiment for one-off tuning.
+            for owner in kernel/bpf/btf.o kernel/bpf/verifier.o net/core/filter.o; do
+              grep -Fxq "$owner" "$ev/full-objects.txt"
+            done
+            printf '%s\n' kernel/bpf/btf.o kernel/bpf/verifier.o net/core/filter.o >"$ev/full-objects.txt"
+            echo "BOOL_HOT_OWNER_SELECTION=PASS owners=3 total_full_C_untouched=true"
+          fi
 
       - name: Compute pinned MiniC candidate object cache identity
         id: candidate_id
@@ -309,8 +318,8 @@ jobs:
             # the immutable MiniC object cache identity.
             profile="${profile}-blake2s-cfg-linear-$(sha256sum tools/ci/apply-riscv64-p1-defined-before-use-crossblock-v1.py | cut -c1-16)"
           fi
-          if [[ "${{ contains(github.event.head_commit.message, '[linux-perf-boolean-single]') }}" == true ]]; then
-            [[ "${{ contains(github.event.head_commit.message, '[linux-runtime-blake2s-only]') }}" == true ]] || { echo 'BOOLEAN_CACHE_SINGLE=FAIL missing_owner'; exit 8; }
+          if [[ "${{ contains(github.event.head_commit.message, '[linux-perf-boolean-single]') || contains(github.event.head_commit.message, '[linux-perf-hotowners]') }}" == true ]]; then
+            [[ "${{ contains(github.event.head_commit.message, '[linux-runtime-blake2s-only]') || contains(github.event.head_commit.message, '[linux-perf-hotowners]') }}" == true ]] || { echo 'BOOLEAN_CACHE_SINGLE=FAIL missing_owner'; exit 8; }
             profile="${profile}-bool-index-$(sha256sum tools/ci/apply-inline-specialization-local-boolean-domain-scoped-v1.py tools/ci/apply-inline-specialization-local-boolean-domain-index-v0.py | sha256sum | cut -c1-16)"
             echo 'BOOLEAN_CACHE_SINGLE=IDENTITY patch_sha_bound=true'
           fi
@@ -341,13 +350,13 @@ jobs:
           cp -a --reflink=auto "$src" "$work/linux-6.6.143"
           ev="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-v1"
           mkdir -p "$ev"
-          if [[ "${{ contains(github.event.head_commit.message, '[linux-runtime-blake2s-only]') }}" == true ]]; then
+          if [[ "${{ contains(github.event.head_commit.message, '[linux-runtime-blake2s-only]') || contains(github.event.head_commit.message, '[linux-perf-hotowners]') }}" == true ]]; then
             export MINIC_LINUX_FULL_CROSSBLOCK=1 MINIC_OPT_PURE_DISCARDED_ADDRESS_EQ=1
             echo "BLAKE2S_SINGLE=PROFILE exact_full_crossblock_profile=true"
           fi
           bash tools/ci/linux-runtime-build-minic-profile-v1.sh \
             "$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain" "$ev/compiler"
-          if [[ "${{ contains(github.event.head_commit.message, '[linux-perf-boolean-single]') }}" == true ]]; then
+          if [[ "${{ contains(github.event.head_commit.message, '[linux-perf-boolean-single]') || contains(github.event.head_commit.message, '[linux-perf-hotowners]') }}" == true ]]; then
             tool="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain"
             # minic is only the driver. minic-cc contains compiler.c and
             # MUST change when Boolean Domain optimization is actually built.
@@ -366,8 +375,12 @@ jobs:
             echo "BOOLEAN_CACHE_SINGLE=READY minic_cc_before=${old_sha:0:16} minic_cc_after=${new_sha:0:16}"
           fi
           export COHORT_ALLOW_DIAGNOSTIC_384=${{ contains(github.event.head_commit.message, '[linux-runtime-gcc-384]') && '1' || '0' }}
-          export COHORT_ALLOW_SHARD=${{ (contains(github.event.head_commit.message, '[linux-runtime-gcc-dma-only]') || contains(github.event.head_commit.message, '[linux-runtime-gcc-link-triad]') || contains(github.event.head_commit.message, '[linux-runtime-gcc-shmem-only]') || contains(github.event.head_commit.message, '[linux-runtime-blake2s-only]')) && '1' || '0' }}
+          export COHORT_ALLOW_SHARD=${{ (contains(github.event.head_commit.message, '[linux-runtime-gcc-dma-only]') || contains(github.event.head_commit.message, '[linux-runtime-gcc-link-triad]') || contains(github.event.head_commit.message, '[linux-runtime-gcc-shmem-only]') || contains(github.event.head_commit.message, '[linux-runtime-blake2s-only]') || contains(github.event.head_commit.message, '[linux-perf-hotowners]')) && '1' || '0' }}
           export COHORT_ACTION=compile
+          if [[ "${{ contains(github.event.head_commit.message, '[linux-perf-hotowners]') }}" == true ]]; then
+            export COHORT_GNU_PREFLIGHT_ALLOW_BOOL_HOT=1
+            export COHORT_KEEP_BOOL_HOT_I=1
+          fi
           if [[ "${{ contains(github.event.head_commit.message, '[linux-perf-boolean-single]') }}" == true ]]; then
             export COHORT_GNU_PREFLIGHT_ALLOW_BOOL_SINGLE=1
             export COHORT_KEEP_BOOL_SINGLE_I=1
@@ -399,6 +412,37 @@ jobs:
               --out "$ev/boolean-ab" | tee "$ev/boolean-ab/paired-verdict.txt"
             grep -Fq 'MINIC_ONE_OWNER_AB=PASS' "$ev/boolean-ab/paired-verdict.txt"
           fi
+          if [[ "${{ contains(github.event.head_commit.message, '[linux-perf-hotowners]') }}" == true ]]; then
+            ev="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-v1"
+            root="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain/bin"
+            mkdir -p "$ev/boolean-hot/baseline/bin"
+            cp "$root/minic" "$ev/boolean-hot/baseline/bin/minic"
+            cp "$ev/compiler/minic-cc-before-boolean" "$ev/boolean-hot/baseline/bin/minic-cc"
+            python3 -m py_compile tools/ci/linux-perf-pinned-single-paired-ab-v1.py
+            for owner in kernel/bpf/btf.o kernel/bpf/verifier.o net/core/filter.o; do
+              key="${owner//\//_}"
+              frozen="$ev/boolean-hot/$key.frozen.i"
+              test -s "$frozen"
+              result="$ev/boolean-hot/results/$key"
+              echo "BOOL_HOT_A_B=START owner=$owner"
+              python3 tools/ci/linux-perf-pinned-single-paired-ab-v1.py \
+                --input "$frozen" \
+                --baseline-driver "$ev/boolean-hot/baseline/bin/minic" \
+                --candidate-driver "$root/minic" \
+                --out "$result" | tee "$result-verdict.txt"
+              grep -Fq 'MINIC_ONE_OWNER_AB=PASS' "$result-verdict.txt"
+              python3 - "$owner" "$result/paired-result.json" <<'PY_HOT_SUMMARY'
+import json,sys
+owner=sys.argv[1]; j=json.load(open(sys.argv[2]))
+print('BOOL_HOT_A_B=PASS owner='+owner+
+      ' before_ms='+str(round(j['baseline_median_ms'],3))+
+      ' after_ms='+str(round(j['candidate_median_ms'],3))+
+      ' speedup='+str(j['candidate_speedup'])+
+      ' assembly_identical='+str(j['assembly_identical']))
+PY_HOT_SUMMARY
+            done
+            echo 'BOOL_HOT_A_B_GROUP=PASS owners=3 cold_workflow_reused=true QEMU_not_executed=true'
+          fi
 
       - name: Check completed full MiniC object pool is cacheable
         id: candidate_ready
@@ -417,6 +461,9 @@ jobs:
             min_count=1
             test "$count" -eq 1
           elif [[ "${{ contains(github.event.head_commit.message, '[linux-runtime-gcc-link-triad]') }}" == true ]]; then
+            min_count=3
+            test "$count" -eq 3
+          elif [[ "${{ contains(github.event.head_commit.message, '[linux-perf-hotowners]') }}" == true ]]; then
             min_count=3
             test "$count" -eq 3
           elif [[ "${{ contains(github.event.head_commit.message, '[linux-runtime-gcc-shmem-only]') || contains(github.event.head_commit.message, '[linux-runtime-blake2s-only]') }}" == true ]]; then
@@ -489,7 +536,7 @@ jobs:
           echo "GNU_MINIC_LINK_BLOCKERS=PASS checked=${#targets[@]}"
 
       - name: GNU relink and QEMU from authenticated MiniC objects
-        if: "!(contains(github.event.head_commit.message, '[linux-runtime-gcc-dma-only]') || contains(github.event.head_commit.message, '[linux-runtime-gcc-link-triad]') || contains(github.event.head_commit.message, '[linux-runtime-gcc-shmem-only]') || contains(github.event.head_commit.message, '[linux-runtime-blake2s-only]'))"
+        if: "!(contains(github.event.head_commit.message, '[linux-runtime-gcc-dma-only]') || contains(github.event.head_commit.message, '[linux-runtime-gcc-link-triad]') || contains(github.event.head_commit.message, '[linux-runtime-gcc-shmem-only]') || contains(github.event.head_commit.message, '[linux-runtime-blake2s-only]') || contains(github.event.head_commit.message, '[linux-perf-hotowners]'))"
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -513,6 +560,9 @@ jobs:
             build/linux-runtime-gcc-cohort-v1/non-c-objects.tsv
             build/linux-runtime-gcc-cohort-v1/identity.txt
             build/linux-runtime-gcc-cohort-v1/cohort.log
+            build/linux-runtime-gcc-cohort-v1/boolean-hot/results/**/paired-result.json
+            build/linux-runtime-gcc-cohort-v1/boolean-hot/*-verdict.txt
+            build/linux-runtime-gcc-cohort-v1/boolean-hot/*.frozen.i
             build/linux-runtime-gcc-cohort-v1/boolean-ab/paired-result.json
             build/linux-runtime-gcc-cohort-v1/boolean-ab/paired-verdict.txt
             build/linux-runtime-gcc-cohort-v1/compile.log
