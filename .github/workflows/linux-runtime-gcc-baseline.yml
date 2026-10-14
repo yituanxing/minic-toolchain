@@ -907,7 +907,7 @@ jobs:
           retention-days: 7
 
       - name: Restore identical certified GNU golden objects
-        if: "!contains(github.event.head_commit.message, '[linux-minias-strcmp-diff]') && !contains(github.event.head_commit.message, '[linux-runtime-large-image-qemu]') && !contains(github.event.head_commit.message, '[linux-minias-earlycon-frozen]')"
+        if: "!contains(github.event.head_commit.message, '[linux-runtime-large-image-qemu]') && !contains(github.event.head_commit.message, '[linux-minias-earlycon-frozen]')"
         shell: bash
         run: |
           set -Eeuo pipefail
