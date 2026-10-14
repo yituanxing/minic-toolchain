@@ -64,6 +64,23 @@ sha256sum "$minild" >"$ev/tool.sha256"
   if (( code != 0 )); then
     echo "MINILD_VDSO=GAP exact_GNU_shared_link_not_yet_supported" >&2
     tail -n 55 "$ev/ld.stderr" >&2
+    # Exploratory ONLY: test the existing generic ELF64 shared-link engine
+    # without -S, --hash-style=both, --eh-frame-hdr, or the missing
+    # shared linker-script layout. Do NOT claim this is a valid Linux vDSO.
+    reduced_status=0
+    timeout 90s "$minild" -melf64lriscv -shared \
+      -soname=linux-vdso.so.1 \
+      "${inputs[@]}" -o "$ev/vdso-reduced-diagnostic.so" \
+      >"$ev/reduced.stdout" 2>"$ev/reduced.stderr" || reduced_status=$?
+    echo "MINILD_VDSO_REDUCED_DIAGNOSTIC rc=$reduced_status missing_flags=-S,hash_style_both,eh_frame_hdr,script runtime_claim=false"
+    if (( reduced_status != 0 )); then
+      tail -n 35 "$ev/reduced.stderr" >&2
+    else
+      riscv64-linux-gnu-readelf -Wh "$ev/vdso-reduced-diagnostic.so" \
+        >"$ev/reduced-header.txt" || true
+      riscv64-linux-gnu-readelf -W -S -l -d \
+        "$ev/vdso-reduced-diagnostic.so" >"$ev/reduced-elf.txt" || true
+    fi
     exit "$code"
   fi
 )
