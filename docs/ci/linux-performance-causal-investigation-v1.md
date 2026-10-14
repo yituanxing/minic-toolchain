@@ -250,3 +250,21 @@ PERF-006 `blake2s` 的真实 Runtime 布尔域索引收益为 1465.171ms→1368.
 尚未在本轮测试的高成本文件：`net/core/dev.o`（25,026ms）、`net/ipv4/tcp_input.o`（24,867ms），以及输入只有约 2.61MB、却耗时 15,609ms 的 `lib/crc32.o`。下一轮应挑大网络文件 + 异常高单位输入耗时的 crc32 作为不同结构的反例，对阶段 `parse / normalize / core-set / core-validate / layout / codegen` 做实际分段归因。优先复用已经存在的 `MINIC_BOOTSTRAP_TRACE` 和 GNU 冻结 .i，不再无目的地为 Boolean 增加重复整套对照。
 
 **决策规则：** Boolean 算法从热点研究队列移入“候选晋级与扩展正确性回归”队列；高耗时文件的下一轮分析必须评估另一种实际瓶颈，不把已经得到明显收益的单一算法研究成没完没了的局部项目。
+
+## 13. PERF-008：六阶段准确归因已执行，明确下一种优化的工作量（2026-10-14）
+
+**Run #38596300095 SUCCESS**，gcc-single 阶段归因，artifact **#11910760375**。原有三个已经验证过的 Linux .i 和 Boolean Candidate .o **直接 SHA 缓存命中**，日志 `COHORT_CANDIDATE_CACHE=HIT objects=3`、`BOOL_HOT_FROZEN=CACHE_HIT owners=3`，没有重新编译候选 Linux C 对象。复用编译器自身早已存在的 `MINIC_BOOTSTRAP_TRACE` 六个边界（parse、normalize、core-set、core-validate、layout、codegen），新增通用 `tools/ci/linux-perf-phase-trace-v1.py` 只负责读取 stderr 行并作单调时钟归因；M0 #38596007530、#38596211193 均通过。两臂真实 .i 的生成汇编 SHA 仍完全一致。
+
+| 实际文件 | 原 Runtime 单次诊断 wall | Boolean 单次诊断 wall | 候选 Parser | 候选 Core-set | 候选 Codegen | 候选六阶段外剩余 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| kernel/bpf/btf.o | 12,129.75ms | 6,887.63ms | 2,963.89ms | 632.85ms | 99.58ms | 3,127.30ms |
+| kernel/bpf/verifier.o | 13,006.57ms | 7,911.88ms | 3,100.57ms | 1,249.96ms | 549.00ms | 2,941.80ms |
+| net/core/filter.o | 27,796.05ms | 16,563.37ms | **3,892.65ms** | **2,908.38ms** | **2,890.53ms** | **6,793.50ms** |
+
+上述单次诊断 wall 与上一轮四次交替配对的 P50 数据**不是同一种测速口径**，不据此宣传新的加速倍数。六阶段外残差包括编译器读取、解析后验证、特化、Inline 引用计算、对象清理、进程启动等尚未单独界定的步骤，绝不能把全部残差猜成某个阶段。
+
+**最重要的因果信息：** 三份输入旧版→新版的六阶段以外残差减少约 5.19s、5.03s、11.22s，而六个已标注阶段的时间变化很小。这支持“Boolean Domain 缓存优化主要改善已有追踪边界之外的反复工作”这一方向，但并**未证明**具体是哪段函数。不能为了追求过度细分继续钻这个已经拿到近 2× 的算法。
+
+**下一轮工作切换：** 不再重复运行这一份 Boolean A/B。要扩展对尚未优化的高耗时路径做定量分析：`net/core/filter` 优化后 Parser 约 3.9s、Core-set 约 2.9s、Codegen 约 2.9s，都是与布尔域扫描不同的成本中心。优先用已有 Parser lookup counters 查具体符号查询次数/迭代次数（`tools/ci/apply-perf-parser-lookup-counters-v0.py`），再选择现成函数/声明索引的**单变量**实现；同时以 `net/core/dev`、`net/ipv4/tcp_input` 或 `lib/crc32` 作为其他程序结构的慢例/对照。只有证实一个新通用处理算法导致明显耗时下降，才把它加入 Runtime 新编译器候选并进入完整 Linux+QEMU 正确性认证。
+
+**总结：** 当前已为本轮锁定可复用的真实输入 SHA、原生对象缓存和阶段时间数据。下次不用任何重新采集全量，更不应重新编译 2057 个 C 对象来做 Parser 微基准。
