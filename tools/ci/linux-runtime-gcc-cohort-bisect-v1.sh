@@ -1980,8 +1980,16 @@ PY_LARGEST_TUS
   # 16KiB task/IRQ stacks and unchanged Image / initramfs. Recompute the
   # matching DTB for every distinct linked Image, including bisection trials.
   if [[ "${COHORT_LINUX_FULL_CROSSBLOCK:-0}" == 1 ]]; then
-    [[ "$cohort_scope" == FULL_C_UNIVERSE && "$n" -eq 2064 ]] || {
-      echo "LINUX_FULL_CROSSBLOCK=ERROR not_exact_full_C_universe" >&2
+    # Validate exact C ownership for the independently GNU/QEMU-certified
+    # CONFIG_COMPAT=n RV64 config. The canonical COMPAT=y pool has 2064 C TUs;
+    # disabling COMPAT removes exactly three real C owners (never ELF32).
+    expected_full_c=2064
+    if grep -Fxq '# CONFIG_COMPAT is not set' "$out/.config"; then
+      expected_full_c=2061
+      echo "RV64_ONLY_FULL_C=EXPECTED owners=2061 COMPAT=n"
+    fi
+    [[ "$cohort_scope" == FULL_C_UNIVERSE && "$n" -eq "$expected_full_c" ]] || {
+      echo "LINUX_FULL_CROSSBLOCK=ERROR expected_full_C=$expected_full_c actual=$n" >&2
       exit 8
     }
     dtb="$d/full-crossblock-virt.dtb"

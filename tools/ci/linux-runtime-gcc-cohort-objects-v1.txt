@@ -1,3 +1,4 @@
+# RV64-only certified prefix: excludes three CONFIG_COMPAT=n C objects.
 # GNU GCC Linux 6.6.143, config=eeb04f...; first 14 were singly QEMU-certified.
 lib/idr.o
 lib/xarray.o
@@ -132,7 +133,6 @@ mm/mmzone.o
 # Expanded 256 GCC-compiled C TUs, sampled across kernel/MM/lib/VFS for runtime fault discovery.
 arch/riscv/errata/sifive/errata.o
 arch/riscv/errata/thead/errata.o
-arch/riscv/kernel/compat_signal.o
 arch/riscv/lib/delay.o
 init/calibrate.o
 init/do_mounts.o
@@ -142,7 +142,6 @@ init/initramfs.o
 init/version.o
 kernel/async.o
 kernel/capability.o
-kernel/compat.o
 kernel/configs.o
 kernel/context_tracking.o
 kernel/cpu.o
@@ -326,7 +325,6 @@ fs/binfmt_elf.o
 fs/binfmt_script.o
 fs/buffer.o
 fs/char_dev.o
-fs/compat_binfmt_elf.o
 fs/coredump.o
 fs/d_path.o
 fs/dcache.o
