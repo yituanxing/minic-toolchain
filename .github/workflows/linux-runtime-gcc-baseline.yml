@@ -1864,11 +1864,10 @@ jobs:
               echo "MINILD_NATIVE_R=PASS calls=$minild_r_calls fallback_GNU_vmlinux_o=0 full_QEMU_P1=PASS"
             fi
             if [[ "${{ contains(github.event.head_commit.message, '[linux-minipp-seven-integration]') && '1' || '0' }}" == 1 ]]; then
-              python3 - "$GITHUB_WORKSPACE/build/minipp-seven-merge/native-summary.json" <<'PY_FULL_PP'
-              import json,sys
-              j=json.load(open(sys.argv[1]))
-              assert j["owners"]==2064 and j["shards"]==7 and j["failed"]==0 and j["pp"]=="MiniPP"
-              PY_FULL_PP
+              # Avoid an indented here-doc delimiter inside YAML's run: block.
+              # The previous shell reported EOF syntax after Linux/QEMU had passed.
+              python3 -c 'import json,sys; j=json.load(open(sys.argv[1])); assert j["owners"]==2064 and j["shards"]==7 and j["failed"]==0 and j["pp"]=="MiniPP"' \
+                "$GITHUB_WORKSPACE/build/minipp-seven-merge/native-summary.json"
               grep -Fq 'COHORT_P1=PASS name=full_all_verified syscalls=12 python_era_oracle=PASS' "$ev/cohort.log" || exit 40
               echo 'MINIPP_SEVEN_QEMU=PASS pp_input=MiniPP 2064_native_C_owners=true QEMU_P1=12/12 generated_header_pp_pending=true'
             fi
