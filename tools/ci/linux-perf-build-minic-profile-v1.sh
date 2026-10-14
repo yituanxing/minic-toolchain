@@ -83,6 +83,17 @@ for p in "${patches[@]}"; do
     echo "SKIPPED_VERIFIED_PERF_PATCH=$p" >>"$ev/patch.log"
     continue
   fi
+  # Opt-in factor isolation only; ordinary performance/runtime profiles unchanged.
+  if [[ "${MINIC_PERF_SKIP_BOOLEAN_SCOPED:-0}" == 1 &&
+        "$p" == apply-inline-specialization-local-boolean-domain-scoped-v1.py ]]; then
+    echo "SKIPPED_FACTOR_PATCH=$p" >>"$ev/patch.log"
+    continue
+  fi
+  if [[ "${MINIC_PERF_SKIP_TYPEDEF_INDEX:-0}" == 1 &&
+        "$p" == apply-perf-parser-typedef-index-v1.py ]]; then
+    echo "SKIPPED_FACTOR_PATCH=$p" >>"$ev/patch.log"
+    continue
+  fi
   if [[ "${MINIC_CORRECTNESS_SKIP_CONSTANT_P_ICE:-0}" == 1 &&
         "$p" == apply-correctness-constant-p-ice-v1.py ]]; then
     echo "SKIPPED_CONSTANT_P_ICE=$p" >>"$ev/patch.log"
