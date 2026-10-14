@@ -277,7 +277,13 @@ def main():
         p.add_argument('--'+a,required=True)
     for extra in ('seven-shard-root','minias','minic','golden-out'):
         p.add_argument('--'+extra)
+    p.add_argument('--native-asm-only', action='store_true')
+    p.add_argument('--c-universe')
+    p.add_argument('--gcc-manifest')
     a=p.parse_args()
+    if a.native_asm_only:
+        native_asm_overlay(a)
+        return
     frozen=pathlib.Path(a.original_pool).resolve()
     manifest=pathlib.Path(a.manifest).resolve()
     work=pathlib.Path(a.scan_root).resolve()
