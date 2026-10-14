@@ -189,3 +189,26 @@ The frozen QEMU setup places the kernel Image at physical `0x80200000` and the i
 ## 2026-10-14 hot-file source-driven performance A/B kickoff
 
 Reuse the existing `linux-runtime-optin-perf-suite-v1.yml` perf500 job and its immutable, SHA256-verified first500 input cache. Keep the archived CI job body intact (M0 convergence). Compare already implemented parser typedef indexing and boolean specialization as an opt-in *combined* candidate against the controlled baseline, with four paired workers, byte-identical assembly gate, and per-TU timing/counter evidence. This is a screening experiment, not yet a proof of benefit on RV64 native 2057 hot network files: targeted hot owners require separately pinned `.i` and a one-variable A/B before promotion. No rebuild of Linux Image or 7-way native C pool. Route only `[linux-perf500]`.
+
+### First500 controlled A/B actual result — run #38571430622
+
+Real GitHub Actions reference: https://github.com/yituanxing/minic-toolchain/actions/runs/38571430622. Immutable preprocessed inputs: first500 cache, 500 SHA256 checks. Identical runner, four workers, alternating A/B order, exact assembly SHA oracle. Baseline is the opt-in profile *without two verified patches*; candidate is the SAME opt-in profile with both `apply-inline-specialization-local-boolean-domain-scoped-v1.py` and `apply-perf-parser-typedef-index-v1.py`. Do NOT present this result as speedup of the production 39-patch Runtime compiler, or the all-2057 native PP/C/AS Linux union.
+
+| Measurement | Neither patch | Both patches |
+| --- | ---: | ---: |
+| 500 cumulative TU CPU subprocess wall seconds | 1,638.145 | 595.860 |
+| Median TU seconds | 2.4049 | 1.0947 |
+| P95 seconds | 10.3970 | 2.2440 |
+| P99 seconds | 14.5647 | 3.3942 |
+| Slowest TU seconds | 21.1589 | 4.9730 |
+| Assembly SHA equal for paired owners | 500/500 | 500/500 |
+
+Measured aggregate 2.7492x speedup *for these two toggles together on this 500-owner set*. 0 mismatches, 0 failure; baseline and candidate independent profile builds, GNU Kbuild materialization skipped on exact cache hit. Candidate typedef index counters: queries=9,212,810; probes=14,690,549; fallbacks=0; rebuilds=3,473. This is evidence of frequent parser name lookup, not a proof the typedef index alone explains the entire speedup.
+
+Selected absolute savings: kernel/bpf/btf.i 21.159→3.548s, kernel/bpf/syscall.i 20.700→3.384s, kernel/bpf/verifier.i 21.026→3.958s; mm/memcontrol.i 19.130→4.213s. The first500 selection is concentrated in arch/init/kernel/fs/mm and does **not** cover the separately observed network stack runtime hotspots (net/core/filter, net/ipv4/udp, etc). Avoid extrapolating to those files without frozen exact input comparisons.
+
+### Causal factor-isolation follow-up
+
+Two opt-in profile toggles `MINIC_PERF_SKIP_BOOLEAN_SCOPED` and `MINIC_PERF_SKIP_TYPEDEF_INDEX` were added to the *disposable* perf compiler builder (defaults remain unchanged). In the existing `perf500` job, and **without any new workflow or extra job**, run the same original `linux-perf-typedef-paired-ab-v1.py` against (Boolean-only vs both) and (typedef-only vs both) on the same cached first500 corpus. These conditional steps run only when `[linux-perf-factorial]` is explicitly selected. Legacy router's exact original job-body hash and M0 opt-in suite checker both validate that the archived executable bodies outside this measured opt-in extension are unchanged. No full Linux Image rebuild is allowed for this causal screening.
+
+Do not promote either option into the canonical Runtime MiniC profile before separate single-variable output validation and a Linux QEMU runtime replay under the candidate binary SHA.
