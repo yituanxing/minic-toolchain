@@ -299,3 +299,14 @@ PERF-006 `blake2s` 的真实 Runtime 布尔域索引收益为 1465.171ms→1368.
 合计中位秒数约 26.7425→26.5063，仅节约 **236.22ms，约 0.88%**。每臂仅 2 次独立热身后交替配对，不能证明 2–4% 小幅差异稳定。尽管保持前向 first-declaration 语义、哈希分配/同步失败时回退正序线性查找、全部汇编一致，此候选未达到此前规定的“多个热点显著收益”准入阈值。
 
 **决策：** `verified-local-but-not-promoted`。**停止继续打磨 Parser 全局哈希**，不启用在 Runtime，也不为了补一个漂亮数字继续扩大同组测试。保留补丁和负面结果作为今后对其他大规模 TU 的参考。下一轮从现有六阶段 `Core-set` 的 0.63/1.25/2.91s 中寻找新的算法目标；历史性能分支已经存在 `apply-perf-core-lower-statement-workspace-v1.py`，先检查适配当前 Runtime 树，不得盲目原样套用旧脚本（现有 Runtime 源码已经移除旧 `local_integer_constants` 辅助结构）。
+
+
+## 16. PERF-011：从 Parser 轮换到 Core IR 语句块索引（2026-10-15）
+
+**结构假设：** 当前 `src/core/core_lower.c` 的 `minic_core_lower_function` 对每个有函数体的函数都基于**整个 TU 的** `program->statement_count` 新建、初始化 `statement_blocks` 数组。若该 TU 含 F 个函数与 S 个语句，则仅这部分工作就接近 O(F×S)，与每个函数实际用到的语句数不成比例。对于 filter 的 Core-set 约 2.91s 等阶段数据，这是可以证伪的通用算法候选，但**此时尚不是已证明根因**。
+
+**复用而非重造：** 仓库早已保留 `tools/ci/apply-perf-core-lower-statement-workspace-v1.py`，按整个 TU 建立一次映射，仅记录当前函数 touched statement IDs，在函数结束后清理这些槽位；旧 `minic_core_lower_function` API 保持，workspace 分配失败时采用原始 per-function 入口。实验固定 Boolean Runtime 编译器，两臂只变化这一 Core lowering 工作区算法，还是原 `gcc-single`/frozen BPF-net 三份 Kbuild `.i`、两次交替配对及逐字节汇编 SHA。
+
+**一次已记录的设施失败：** #38656415436 的 Runtime `gcc-single` 局部实验第一轮**失败**，失败发生在 patch anchor 校验（非 Linux 编译器语义验证），日志显示 profile 编译器应用前置 Runtime 补丁后，`core_lower.c` 包含 `local_integer_constants`，但最初误依据仓库中原始的未打补丁源码删掉了脚本中的该名称。源树静态版本**不能**代替 CI 中已合成的实际 Runtime profile。这次没有声称任何加速，缓存的三 Linux 对象均已通过原有认证。原因与修复已确认：保留与运行时 profile 匹配的原始锚点，只额外保留 workspace allocation 的线性回退，commit `62e372f`。
+
+**真实下一次运行：** #38656598585，原有 Owner、Kbuild、对象缓存及触发边界不变；该 Run 的局部 verdict 仅在 A/B 输出字节相同且统计合法时可判 `verified-local`。若仍失效先看具体源码锚点/生成 Runtime patch 组合，不能复制所有 2057/2064 个对象重跑。该算法若收益不明显即停止，轮换到新的实测高耗时阶段。
