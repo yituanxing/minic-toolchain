@@ -80,4 +80,25 @@ reference_relative="$(grep -c 'R_RISCV_RELATIVE' "$work/reference.so" 2>/dev/nul
 product_relative="$(grep -c 'R_RISCV_RELATIVE' "$work/product.relocs")"
 test "$product_relative" -ge 1
 
+# A shared -T must NOT be silently ignored. Until real shared linker-script
+# placement/symbol expressions exist, report a deterministic capability gap
+# and leave no misleading output ELF. The Linux vDSO depends on _vdso_data.
+cat >"$work/shared.lds" <<'EOF_SCRIPT'
+SECTIONS {
+  .text : { *(.text*) }
+  _vdso_data = .;
+}
+EOF_SCRIPT
+if "$MINILD" -melf64lriscv -shared -soname libminild-a4.so \
+     -T "$work/shared.lds" -o "$work/script-unsupported.so" \
+     "$work/shared.o" >"$work/shared-script.stdout" \
+     2>"$work/shared-script.stderr"; then
+  echo "MINILD_A4=FAIL shared_T_was_silently_ignored" >&2
+  exit 1
+fi
+grep -Fq "unsupported-shared-linker-script:$work/shared.lds" \
+  "$work/shared-script.stderr"
+test ! -e "$work/script-unsupported.so"
+echo "MINILD_A4_SCRIPT_GUARD=PASS unsupported_shared_T_rejected_without_ELF=true"
+
 echo "MINILD_A4=PASS et_dyn=PASS dynsym=PASS dynamic=PASS relative=PASS external64=PASS soname=PASS"
