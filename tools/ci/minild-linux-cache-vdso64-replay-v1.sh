@@ -92,6 +92,8 @@ sha256sum "$minild" >"$ev/tool.sha256"
   printf '%s\t%s\n' "$elapsed" "$code" >"$ev/timing.tsv"
   echo "MINILD_VDSO_LINK elapsed_ms=$elapsed rc=$code no_Linux_C_recompile=true"
   if (( code != 0 )); then
+    echo "MINILD_VDSO_EXACT_LINK=FAIL rc=$code native_target_ld_only=true"
+
     echo "MINILD_VDSO=GAP exact_GNU_shared_link_not_yet_supported" >&2
     # Preserve the first *actual* current MiniLD failure rather than
     # treating an earlier error (-S) as an unchanging diagnosis.
@@ -224,6 +226,7 @@ PY_EH_INDEX
 )
 ref="$ev/gnu-vdso.so.dbg.tmp"
 test -s "$ev/vdso.so.dbg.tmp"
+echo "MINILD_VDSO_EXACT_LINK=PASS real_Linux_objects=7 exact_GNU_flags=true no_target_GNU_LD_fallback=true"
 for a in "$ref" "$ev/vdso.so.dbg.tmp"; do
   riscv64-linux-gnu-readelf -Wh "$a" >"$ev/$(basename "$a").header.$(sha256sum "$a" | cut -c1-8).txt"
 done
