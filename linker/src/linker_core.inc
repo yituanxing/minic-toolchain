@@ -2181,7 +2181,7 @@ static bool write_output(MiniLdState *state, const char *path) {
 
     sections = calloc(state->section_count == 0U ? 1U : state->section_count,
                       sizeof(*sections));
-    symbols = calloc(state->symbol_count == 0U ? 1U : state->symbol_count,
+    symbols = calloc(shared->symbol_map_capacity,
                      sizeof(*symbols));
     relocations = calloc(state->reloc_count == 0U ? 1U : state->reloc_count,
                          sizeof(*relocations));
@@ -5176,7 +5176,7 @@ static bool static_write_executable(MiniLdState *state,
         calloc(state->section_count == 0U ? 1U : state->section_count,
                sizeof(*section_name_offsets));
     symbol_name_offsets =
-        calloc(state->symbol_count == 0U ? 1U : state->symbol_count,
+        calloc(shared->symbol_map_capacity,
                sizeof(*symbol_name_offsets));
     headers = calloc(output_section_count + 1U, sizeof(*headers));
     symbols = calloc(state->symbol_count + 1U, sizeof(*symbols));
@@ -5576,6 +5576,7 @@ typedef struct MiniLdSharedImage {
     unsigned char *dynamic_list_data;
     size_t dynamic_list_size;
     size_t dynsym_count;
+    size_t symbol_map_capacity;
     size_t rela_count;
     size_t plt_count;
     size_t got_count;
@@ -5927,6 +5928,7 @@ static bool shared_prepare_metadata(MiniLdState *state,
                                     bool hash_style_both,
                                     bool eh_frame_hdr,
                                     const MiniLdScript *version_script,
+                                    const MiniLdScript *layout_script,
                                     MiniLdSharedImage *shared) {
     MiniLdSection *dynstr;
     MiniLdSection *dynsym;
@@ -5961,24 +5963,60 @@ static bool shared_prepare_metadata(MiniLdState *state,
     shared->dynamic_section = SIZE_MAX;
     shared->interp_section = SIZE_MAX;
     shared->pie = pie;
+    /* Script output-section definitions can append globals after dynsym
+     * sizing, so reserve their entire upper bound before allocating
+     * per-symbol maps. Later local: * script symbols remain nonexports. */
+    shared->symbol_map_capacity = state->symbol_count;
+    if (layout_script != NULL) {
+        for (i = 0U; i < layout_script->command_count; ++i) {
+            const MiniLdScriptCommand *command = &layout_script->commands[i];
+            size_t extra = 0U;
+            size_t j;
+            if (command->kind == MINILD_SCRIPT_DEFINE_SYMBOL) {
+                extra = 1U;
+            } else if (command->kind == MINILD_SCRIPT_OUTPUT_SECTION) {
+                for (j = 0U; j < command->value.section.item_count; ++j) {
+                    if (command->value.section.items[j].kind ==
+                        MINILD_SCRIPT_SECTION_DEFINE_SYMBOL) {
+                        ++extra;
+                    }
+                }
+            }
+            if (extra > SIZE_MAX - shared->symbol_map_capacity) {
+                fprintf(state->diagnostics,
+                        "minic-ld: script-symbol-map-overflow\n");
+                goto fail;
+            }
+            shared->symbol_map_capacity += extra;
+        }
+    }
+    if (shared->symbol_map_capacity >
+        SIZE_MAX / sizeof(*shared->dynsym_index)) {
+        fprintf(state->diagnostics,
+                "minic-ld: script-symbol-map-overflow\n");
+        goto fail;
+    }
+    if (shared->symbol_map_capacity == 0U) {
+        shared->symbol_map_capacity = 1U;
+    }
 
     shared->dynsym_index =
-        malloc((state->symbol_count == 0U ? 1U : state->symbol_count) *
+        malloc(shared->symbol_map_capacity *
                sizeof(*shared->dynsym_index));
     shared->dynstr_name_offset =
-        calloc(state->symbol_count == 0U ? 1U : state->symbol_count,
+        calloc(shared->symbol_map_capacity,
                sizeof(*shared->dynstr_name_offset));
     shared->plt_index =
-        malloc((state->symbol_count == 0U ? 1U : state->symbol_count) *
+        malloc(shared->symbol_map_capacity *
                sizeof(*shared->plt_index));
     shared->got_slot_offset =
-        malloc((state->symbol_count == 0U ? 1U : state->symbol_count) *
+        malloc(shared->symbol_map_capacity *
                sizeof(*shared->got_slot_offset));
     shared->tls_gd_offset =
-        malloc((state->symbol_count == 0U ? 1U : state->symbol_count) *
+        malloc(shared->symbol_map_capacity *
                sizeof(*shared->tls_gd_offset));
     shared->preemptible =
-        calloc(state->symbol_count == 0U ? 1U : state->symbol_count,
+        calloc(shared->symbol_map_capacity,
                sizeof(*shared->preemptible));
     {
         size_t maximum_needed = state->dso_needed_count +
@@ -5998,7 +6036,7 @@ static bool shared_prepare_metadata(MiniLdState *state,
         fprintf(state->diagnostics, "minic-ld: out-of-memory:shared-symbol-map\n");
         goto fail;
     }
-    for (i = 0U; i < state->symbol_count; ++i) {
+    for (i = 0U; i < shared->symbol_map_capacity; ++i) {
         shared->dynsym_index[i] = SIZE_MAX;
         shared->plt_index[i] = SIZE_MAX;
         shared->got_slot_offset[i] = SIZE_MAX;
@@ -8094,6 +8132,7 @@ int minild_link_shared_elf64_riscv_inputs_options(
                                  hash_style_both,
                                  eh_frame_hdr,
                                  version,
+                                 script_path != NULL ? &layout_script : NULL,
                                  &shared) ||
         (pie && !shared_validate_pie_dso_symbols(&state)) ||
         !(script_path != NULL
@@ -8104,6 +8143,12 @@ int minild_link_shared_elf64_riscv_inputs_options(
     }
     layout_ready = true;
     shared.layout_script = script_path != NULL ? &layout_script : NULL;
+    if (state.symbol_count > shared.symbol_map_capacity) {
+        fprintf(diagnostics,
+                "minic-ld: script-symbol-map-exceeded:%zu:%zu\n",
+                state.symbol_count, shared.symbol_map_capacity);
+        goto done;
+    }
 
     if (!shared_finalize_ehdr_symbol(&state, &layout) ||
         (entry_symbol != NULL &&
