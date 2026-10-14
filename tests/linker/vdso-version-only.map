@@ -1,0 +1,6 @@
+LINUX_4.15 {
+  global:
+    __vdso_rt_sigreturn;
+    __vdso_clock_gettime;
+  local: *;
+};

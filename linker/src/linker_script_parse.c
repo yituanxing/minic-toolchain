@@ -625,23 +625,37 @@ static bool parse_phdrs(ScriptParser *parser) {
  * global exports, followed by local: *;. Do not silently discard nodes
  * or wildcard semantics: reject anything outside this supported grammar.
  */
-static bool parse_version(ScriptParser *parser) {
+static bool parse_version(ScriptParser *parser,
+                          bool wrapped,
+                          ScriptToken bare_name) {
     MiniLdScript *script = parser->script;
+    ScriptToken name;
     bool global = false;
     bool local = false;
 
+    if (wrapped) {
+        if (!minild_script_parser_next(parser) ||
+            !minild_script_expect(parser, TOKEN_LBRACE,
+                                  "expected-'{'-after-VERSION") ||
+            parser->token.kind != TOKEN_IDENTIFIER) {
+            return minild_script_parser_error(parser,
+                                              "unsupported-VERSION-structure");
+        }
+        name = parser->token;
+        if (!minild_script_parser_next(parser)) {
+            return false;
+        }
+    } else {
+        name = bare_name; /* already consumed by top-level parser */
+    }
     if (script->version_name != NULL ||
-        !minild_script_parser_next(parser) ||
-        !minild_script_expect(parser, TOKEN_LBRACE,
-                              "expected-'{'-after-VERSION") ||
-        parser->token.kind != TOKEN_IDENTIFIER) {
+        parser->token.kind != TOKEN_LBRACE) {
         return minild_script_parser_error(parser,
                                           "unsupported-VERSION-structure");
     }
-    script->version_name = minild_script_strdup_range(parser->token.begin,
-                                                       parser->token.length);
+    script->version_name = minild_script_strdup_range(name.begin,
+                                                       name.length);
     if (script->version_name == NULL ||
-        !minild_script_parser_next(parser) ||
         !minild_script_expect(parser, TOKEN_LBRACE,
                               "expected-'{'-after-version-name")) {
         return false;
@@ -711,8 +725,9 @@ static bool parse_version(ScriptParser *parser) {
     if (!minild_script_parser_next(parser) ||
         !minild_script_expect(parser, TOKEN_SEMICOLON,
                               "expected-';'-after-version-node") ||
-        !minild_script_expect(parser, TOKEN_RBRACE,
-                              "expected-'}'-after-VERSION")) {
+        (wrapped &&
+         !minild_script_expect(parser, TOKEN_RBRACE,
+                               "expected-'}'-after-VERSION"))) {
         return false;
     }
     return true;
@@ -851,7 +866,8 @@ bool minild_script_parse_file(const char *path,
                 goto done;
             }
         } else if (minild_script_token_is(&parser, "VERSION")) {
-            if (!parse_version(&parser)) {
+            ScriptToken unused = {0};
+            if (!parse_version(&parser, true, unused)) {
                 goto done;
             }
         } else if (parser.token.kind == TOKEN_IDENTIFIER) {
@@ -860,8 +876,16 @@ bool minild_script_parse_file(const char *path,
             MiniLdScriptExprId expression;
             MiniLdScriptCommand command;
 
-            if (!minild_script_parser_next(&parser) ||
-                parser.token.kind != TOKEN_EQUAL) {
+            if (!minild_script_parser_next(&parser)) {
+                goto done;
+            }
+            if (parser.token.kind == TOKEN_LBRACE) {
+                if (!parse_version(&parser, false, name)) {
+                    goto done;
+                }
+                continue;
+            }
+            if (parser.token.kind != TOKEN_EQUAL) {
                 minild_script_parser_error(
                     &parser,
                     "unsupported-top-level-linker-script-command");
