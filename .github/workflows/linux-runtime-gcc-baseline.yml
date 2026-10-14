@@ -1761,11 +1761,34 @@ jobs:
                 echo "MINILD_VDSO64=FAIL expected_real_Kbuild_native_link native=$native_vdso64_calls gnu=$gnu_vdso64_calls" >&2
                 exit 36
               }
-              test -s "$work/out/arch/riscv/kernel/vdso/vdso.so.dbg" || {
+              vdso="$work/out/arch/riscv/kernel/vdso/vdso.so.dbg"
+              test -s "$vdso" || {
                 echo 'MINILD_VDSO64=FAIL missing_relinked_64bit_ELF' >&2
                 exit 37
               }
+              test -s "$work/out/arch/riscv/kernel/vdso/vdso.so" || {
+                echo 'MINILD_VDSO64=FAIL missing_native_objcopy_product' >&2
+                exit 37
+              }
+              native_copy_vdso64=$(grep -c '^miniobjcopy .*vdso\.so\.dbg' "$NATIVE_TRACE_DIR/miniobjcopy.trace" || true)
+              [[ "$native_copy_vdso64" -ge 1 ]] || {
+                echo 'MINILD_VDSO64=FAIL missing_real_native_MiniObjcopy_postlink' >&2
+                exit 37
+              }
+              riscv64-linux-gnu-readelf -Wh "$vdso" >"$NATIVE_TRACE_DIR/native-vdso64-elf-header.txt"
+              riscv64-linux-gnu-readelf -W --dyn-syms "$vdso" >"$NATIVE_TRACE_DIR/native-vdso64-dynsyms.txt"
+              grep -q 'DYN (Shared object file)' "$NATIVE_TRACE_DIR/native-vdso64-elf-header.txt"
+              grep -q 'RISC-V' "$NATIVE_TRACE_DIR/native-vdso64-elf-header.txt"
+              for sym in __vdso_rt_sigreturn __vdso_gettimeofday __vdso_clock_gettime \
+                         __vdso_clock_getres __vdso_getcpu __vdso_flush_icache \
+                         __vdso_riscv_hwprobe; do
+                grep -Fq "${sym}@@LINUX_4.15" "$NATIVE_TRACE_DIR/native-vdso64-dynsyms.txt" || {
+                  echo "MINILD_VDSO64=FAIL missing_versioned_export:$sym" >&2
+                  exit 37
+                }
+              done
               grep -Fq 'COHORT_P1=PASS name=full_all_verified syscalls=12 python_era_oracle=PASS' "$ev/cohort.log" || exit 38
+              echo "MINILD_VDSO64_KBUILD_ABI=PASS MiniLD_exact=true MiniObjcopy_calls=$native_copy_vdso64 versioned_exports=7 ELF64_RISCV_ET_DYN=true"
               echo "MINILD_VDSO64=PASS native_calls=$native_vdso64_calls gnu_calls=$gnu_vdso64_calls real_Kbuild_link=true MiniC_cached=2064 original_16KiB=true QEMU_P1=12/12"
             fi
             if [[ "${{ contains(github.event.head_commit.message, '[linux-native-minias-earlycon]') && '1' || '0' }}" == 1 ]]; then
