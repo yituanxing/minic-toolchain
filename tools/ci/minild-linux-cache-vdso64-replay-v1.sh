@@ -63,7 +63,9 @@ sha256sum "$minild" >"$ev/tool.sha256"
   head -n 100 "$ev/gnu-frames.txt"
   echo "MINILD_VDSO_CIE_FDE_REFERENCE_END"
   echo "MINILD_VDSO_LINKER_SCRIPT_BEGIN"
-  sed -n '1,110p' "$out/arch/riscv/kernel/vdso/vdso.lds"
+  # The .lds file starts with generated C preprocessor comments. Show
+  # executable linker directives, not the first 110 irrelevant header lines.
+  awk 'BEGIN{show=0} /^OUTPUT_ARCH|^SECTIONS|^VERSION|^PHDRS/{show=1} show{print}'     "$out/arch/riscv/kernel/vdso/vdso.lds" | head -n 240
   echo "MINILD_VDSO_LINKER_SCRIPT_END"
   echo "MINILD_VDSO_REFERENCE=PASS source=same_frozen_Kbuild_inputs compiler_C=skipped"
   start=$(date +%s%3N)
