@@ -7575,6 +7575,94 @@ static bool shared_tls_segment(const MiniLdState *state,
     return true;
 }
 
+/* Non-ALLOC SHT_SYMTAB is required by genuine RISC-V Linux Kbuild:
+ * $(NM) vdso.so.dbg | gen_vdso_offsets.sh reads __vdso_* directly.
+ * A valid .dynsym with @@LINUX_4.15 versioned exports is NOT enough:
+ * GNU nm without -D does not read .dynsym. The symbols must reflect
+ * the actual script-selected section VMAs after all relocations.
+ *
+ * Emit local symbols before globals as mandated by sh_info. This table
+ * is never part of the runtime load segments and is safe to emit after
+ * the script's layout and actual program headers have been finalized.
+ */
+static bool shared_build_static_symbols(const MiniLdState *state,
+                                        const MiniLdStaticLayout *layout,
+                                        MiniLdBuffer *names,
+                                        Elf64_Sym **symbols_out,
+                                        size_t *locals_out) {
+    Elf64_Sym *symbols;
+    size_t next_index = 1U;
+    size_t pass, i;
+
+    if (state->symbol_count >= SIZE_MAX / sizeof(Elf64_Sym) - 1U) {
+        return false;
+    }
+    symbols = calloc(state->symbol_count + 1U, sizeof(*symbols));
+    if (symbols == NULL || !buffer_append_zero(names, 1U)) {
+        free(symbols);
+        return false;
+    }
+    for (pass = 0U; pass < 2U; ++pass) {
+        for (i = 0U; i < state->symbol_count; ++i) {
+            const MiniLdSymbol *src = &state->symbols[i];
+            bool local = ELF64_ST_BIND(src->info) == STB_LOCAL;
+            Elf64_Sym *dst;
+            if (local != (pass == 0U)) {
+                continue;
+            }
+            dst = &symbols[next_index++];
+            if (!buffer_append_string(names, src->name, &dst->st_name)) {
+                free(symbols);
+                return false;
+            }
+            dst->st_info = src->info;
+            dst->st_other = src->other;
+            dst->st_size = src->size;
+            if (src->section == MINILD_SECTION_UNDEF) {
+                dst->st_shndx = SHN_UNDEF;
+            } else if (src->section == MINILD_SECTION_ABS) {
+                dst->st_shndx = SHN_ABS;
+                dst->st_value = src->value;
+            } else if (src->section == MINILD_SECTION_COMMON) {
+                dst->st_shndx = SHN_COMMON;
+                dst->st_value = src->value;
+            } else if (src->section >= 0 &&
+                       (size_t)src->section < state->section_count) {
+                size_t section = (size_t)src->section;
+                if (layout->section_discarded != NULL &&
+                    layout->section_discarded[section]) {
+                    dst->st_shndx = SHN_UNDEF;
+                } else {
+                    dst->st_shndx = (Elf64_Half)(section + 1U);
+                    if (ELF64_ST_TYPE(src->info) == STT_TLS) {
+                        /* A local TLS symbol is represented in its TLS
+                         * section in the normal ELF static symbol table. */
+                        dst->st_value = src->value;
+                    } else if ((state->sections[section].flags &
+                                SHF_ALLOC) != 0U) {
+                        dst->st_value =
+                            layout->section_vaddr[section] + src->value;
+                    } else {
+                        dst->st_value = src->value;
+                    }
+                }
+            } else {
+                free(symbols);
+                return false;
+            }
+        }
+        if (pass == 0U) {
+            *locals_out = next_index;
+        }
+    }
+    if (next_index != state->symbol_count + 1U) {
+        free(symbols);
+        return false;
+    }
+    *symbols_out = symbols;
+    return true;
+}
+
 static bool shared_write_object(MiniLdState *state,
                                 const MiniLdStaticLayout *layout,
                                 const MiniLdSharedImage *shared,
@@ -7584,11 +7672,21 @@ static bool shared_write_object(MiniLdState *state,
     size_t phnum;
     size_t image_size;
     MiniLdBuffer shstrtab = {NULL, 0U, 0U};
+    MiniLdBuffer strtab = {NULL, 0U, 0U};
+    Elf64_Sym *static_symbols = NULL;
+    size_t static_local_count = 1U;
+    uint32_t symtab_name = 0U;
+    uint32_t strtab_name = 0U;
+    uint32_t shstrtab_name = 0U;
     uint32_t *name_offsets = NULL;
     Elf64_Shdr *section_headers = NULL;
     unsigned char *image = NULL;
-    size_t section_count = state->section_count + 2U; /* null + shstrtab */
-    size_t shstrtab_index = state->section_count + 1U;
+    size_t section_count = state->section_count + 4U; /* null + symtab + strtab + shstrtab */
+    size_t symtab_index = state->section_count + 1U;
+    size_t strtab_index = state->section_count + 2U;
+    size_t shstrtab_index = state->section_count + 3U;
+    size_t symtab_offset;
+    size_t strtab_offset;
     size_t shstrtab_offset;
     size_t section_header_offset;
     size_t total_size;
@@ -7619,6 +7717,12 @@ static bool shared_write_object(MiniLdState *state,
                 "minic-ld: too-many-shared-sections\n");
         return false;
     }
+    if (!shared_build_static_symbols(state, layout, &strtab,
+                                     &static_symbols, &static_local_count)) {
+        fprintf(state->diagnostics,
+                "minic-ld: cannot-build-shared-static-symbols\n");
+        goto oom;
+    }
     if (layout->have_rx &&
         layout->rx_file_offset + layout->rx_file_size > image_size) {
         image_size = layout->rx_file_offset + layout->rx_file_size;
@@ -7627,7 +7731,18 @@ static bool shared_write_object(MiniLdState *state,
         layout->rw_file_offset + layout->rw_file_size > image_size) {
         image_size = layout->rw_file_offset + layout->rw_file_size;
     }
-    shstrtab_offset = image_size;
+    /* Synthetic non-ALLOC symbol/name tables are after the LOAD image;
+     * no change to program headers or script-derived section positions.
+     */
+    strtab_offset = image_size;
+    if (!add_size(strtab_offset, strtab.size, &symtab_offset) ||
+        !align_up_size(symtab_offset, 8U, &symtab_offset) ||
+        state->symbol_count + 1U > SIZE_MAX / sizeof(Elf64_Sym) ||
+        !add_size(symtab_offset,
+                  (state->symbol_count + 1U) * sizeof(Elf64_Sym),
+                  &shstrtab_offset)) {
+        goto oom;
+    }
 
     name_offsets =
         calloc(state->section_count == 0U ? 1U : state->section_count,
@@ -7645,7 +7760,12 @@ static bool shared_write_object(MiniLdState *state,
     }
     {
         uint32_t ignored;
-        if (!buffer_append_string(&shstrtab, ".shstrtab", &ignored)) {
+        if (!buffer_append_string(&shstrtab, ".symtab",
+                                  &symtab_name) ||
+            !buffer_append_string(&shstrtab, ".strtab",
+                                  &strtab_name) ||
+            !buffer_append_string(&shstrtab, ".shstrtab",
+                                  &shstrtab_name)) {
             goto oom;
         }
     }
@@ -7926,24 +8046,35 @@ static bool shared_write_object(MiniLdState *state,
     }
 
     {
+        Elf64_Shdr *sh = &section_headers[symtab_index];
+        sh->sh_name = symtab_name;
+        sh->sh_type = SHT_SYMTAB;
+        sh->sh_offset = symtab_offset;
+        sh->sh_size = (state->symbol_count + 1U) * sizeof(Elf64_Sym);
+        sh->sh_link = (Elf64_Word)strtab_index;
+        sh->sh_info = (Elf64_Word)static_local_count;
+        sh->sh_addralign = 8U;
+        sh->sh_entsize = sizeof(Elf64_Sym);
+    }
+    {
+        Elf64_Shdr *sh = &section_headers[strtab_index];
+        sh->sh_name = strtab_name;
+        sh->sh_type = SHT_STRTAB;
+        sh->sh_offset = strtab_offset;
+        sh->sh_size = strtab.size;
+        sh->sh_addralign = 1U;
+    }
+    {
         Elf64_Shdr *sh = &section_headers[shstrtab_index];
-        uint32_t shstrtab_name = 0U;
-        size_t cursor = 1U;
-
-        for (i = 0U; i < state->section_count; ++i) {
-            cursor += strlen(state->sections[i].name) + 1U;
-        }
-        if (cursor > UINT32_MAX) {
-            goto oom;
-        }
-        shstrtab_name = (uint32_t)cursor;
         sh->sh_name = shstrtab_name;
         sh->sh_type = SHT_STRTAB;
         sh->sh_offset = shstrtab_offset;
         sh->sh_size = shstrtab.size;
         sh->sh_addralign = 1U;
     }
-
+    memcpy(image + strtab_offset, strtab.data, strtab.size);
+    memcpy(image + symtab_offset, static_symbols,
+           (state->symbol_count + 1U) * sizeof(Elf64_Sym));
     memcpy(image + shstrtab_offset, shstrtab.data, shstrtab.size);
     memcpy(image + section_header_offset,
            section_headers,
@@ -7983,6 +8114,8 @@ done:
     free(name_offsets);
     free(section_headers);
     free(image);
+    free(static_symbols);
+    free(strtab.data);
     free(shstrtab.data);
     return ok;
 

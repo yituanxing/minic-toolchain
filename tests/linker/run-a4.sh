@@ -111,6 +111,18 @@ grep -q 'exported_ptr@@LINUX_4.15' "$work/version-symbols.txt"
 grep -q 'external_value' "$work/version-symbols.txt"
 echo "MINILD_A4_VERSION=PASS GNU_version=LINUX_4.15 exports=2 hidden=external_ptr undefined_external_value_preserved=true"
 
+# Linux 6.6.143 builds include/generated/vdso-offsets.h using plain
+# 'riscv64-linux-gnu-nm vdso.so.dbg', not nm -D. MiniLD must emit a real
+# static SHT_SYMTAB + SHT_STRTAB after full scripted addresses are known.
+"$READELF" -W -S "$work/product-version.so" >"$work/version-static-sections.txt"
+grep -Eq '] \.symtab[[:space:]]+SYMTAB' "$work/version-static-sections.txt"
+grep -Eq '] \.strtab[[:space:]]+STRTAB' "$work/version-static-sections.txt"
+riscv64-linux-gnu-nm "$work/product-version.so" >"$work/version-static-nm.txt"
+grep -Eq ' [TW] exported_answer$' "$work/version-static-nm.txt"
+grep -Eq ' [BD] exported_ptr$' "$work/version-static-nm.txt"
+echo "MINILD_A4_STATIC_SYMTAB=PASS GNU_nm=reads_defined_symbols no_dynamic_symbol_fallback=true"
+
+
 # Linux vDSO needs both hash table formats in its shared ELF.
 "$MINILD" -melf64lriscv -shared --hash-style=both \
   -soname libminild-a4.so -o "$work/product-hash-both.so" "$work/shared.o"
