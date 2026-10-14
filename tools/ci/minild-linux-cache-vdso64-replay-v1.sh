@@ -59,6 +59,12 @@ sha256sum "$minild" >"$ev/tool.sha256"
   grep -E '([.]eh_frame|GNU_EH_FRAME)' "$ev/gnu-phdr-sections.txt" |
     sed 's/^/MINILD_VDSO_GNU_EH_LAYOUT /' || true
   echo "MINILD_VDSO_GNU_FDES=$(grep -c ' FDE ' "$ev/gnu-frames.txt" || true)"
+  echo "MINILD_VDSO_CIE_FDE_REFERENCE_BEGIN"
+  head -n 100 "$ev/gnu-frames.txt"
+  echo "MINILD_VDSO_CIE_FDE_REFERENCE_END"
+  echo "MINILD_VDSO_LINKER_SCRIPT_BEGIN"
+  sed -n '1,110p' "$out/arch/riscv/kernel/vdso/vdso.lds"
+  echo "MINILD_VDSO_LINKER_SCRIPT_END"
   echo "MINILD_VDSO_REFERENCE=PASS source=same_frozen_Kbuild_inputs compiler_C=skipped"
   start=$(date +%s%3N)
   code=0
