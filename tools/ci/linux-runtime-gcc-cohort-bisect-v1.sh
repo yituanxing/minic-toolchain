@@ -1347,16 +1347,8 @@ if [[ "${COHORT_NATIVE_UNION:-0}" == 1 ]]; then
     "OBJCOPY=$COHORT_NATIVE_OBJCOPY"
   )
   if [[ "${COHORT_MINIAS_KBUILD_AS:-0}" == 1 ]]; then
-    : "${MINIAS:?MiniAS path is required}" "${NATIVE_TRACE_DIR:?trace directory required}"
-    test -x "$NATIVE_TRACE_DIR/as-wrapper"
-    test -x "$NATIVE_TRACE_DIR/as-bin/riscv64-linux-gnu-as"
-    export COMPILER_PATH="$NATIVE_TRACE_DIR/as-bin${COMPILER_PATH:+:$COMPILER_PATH}"
-    # Keep the original Kbuild AS=<GNU> .cmd identity byte-for-byte stable.
-    # Globally changing AS triggers full generated-header/Kconfig regeneration
-    # (#38504662486: asm-offsets.h, autoconf.h, rustc_cfg changed), so only
-    # intercept the GCC assembler *subprocess*, not make's command variables.
-    test -x "$NATIVE_TRACE_DIR/as-bin/as"
-    echo "MINIAS_KBUILD_AS=ENABLED subprocess=COMPILER_PATH direct=Kbuild_GNU_pinned no_CC_or_AS_cmd_drift=true"
+    echo "MINIAS_KBUILD_AS=BLOCKED globally changing AS/COMPILER_PATH broke immutable Kbuild inputs in runs #38504662486/#38506310437" >&2
+    exit 9
   fi
   echo "COHORT_NATIVE_UNION=ENABLED owners=$n pp=GNU as=GNU cc=MiniC ar=MiniAR ld=MiniLD_final_only objcopy=MiniObjcopy"
 fi
@@ -1426,10 +1418,35 @@ trial() {
       --mode snapshot --out "$out" --evidence "$d/generated-before.json" \
       >"$d/guard.log"
     link_started=$(date +%s%N)
-    if ! make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
+    # Fail-fast guard. The known-good 2064-object cached P1 first-link
+    # produces <=5 target CC lines; a changed tool selector produced 2065
+    # CC lines and took >6 minutes (#38506310437). Abort in ~2s when
+    # Kbuild unexpectedly recompiles >64 C TUs, NOT after a whole kernel.
+    # setsid groups all make children so cancellation terminates compilation.
+    setsid make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
       "${native_kbuild_args[@]}" \
-      -j4 Image >"$d/link.log" 2>&1; then
-      echo "COHORT_LINK=FAIL name=$name count=$count"
+      -j4 Image >"$d/link.log" 2>&1 &
+    link_pid=$!
+    link_full_recompile=0
+    while kill -0 "$link_pid" 2>/dev/null; do
+      cc_lines=$(grep -Ec '^  CC[[:space:]]+' "$d/link.log" || true)
+      if ((cc_lines>64)); then
+        echo "COHORT_LINK_FAST_FAIL=UNEXPECTED_FULL_CC_COUNT count=$cc_lines bound=64 stage=first_link" | tee -a "$d/guard.log"
+        kill -TERM -- "-$link_pid" 2>/dev/null || true
+        wait "$link_pid" 2>/dev/null || true
+        link_full_recompile=1
+        break
+      fi
+      sleep 2
+    done
+    link_rc=0
+    if ((link_full_recompile)); then
+      link_rc=96
+    else
+      wait "$link_pid" || link_rc=$?
+    fi
+    if ((link_rc!=0)); then
+      echo "COHORT_LINK=FAIL name=$name count=$count rc=$link_rc"
       tail -n 70 "$d/link.log"
       printf '%s\t%s\t%s\t%s\n' "$name" "$count" LINK_FAIL - >>"$ev/results.tsv"
       TRIAL_VERDICT=LINK_FAIL
@@ -1448,6 +1465,27 @@ trial() {
       --affected-file "$d/affected-objects.txt" | tee -a "$d/guard.log" || {
         echo "COHORT_RESULT=INCONCLUSIVE stage=header_impact name=$name"; exit 8;
       }
+    # GNU Kbuild must retain its ORIGINAL AS and CC flags to avoid
+    # regenerating the whole configuration. In the first link, Kbuild may
+    # refresh just a few derived vDSO/purgatory .S objects using GNU as.
+    # Re-promote THOSE already MiniAS-certified exact GNU-E .s objects
+    # after Kbuild's first generation, then let the existing SECOND cached
+    # link consume them. No ASM subprocess interception and no C rebuild.
+    native_s_reoverlay_changed=0
+    if [[ -n "${COHORT_MINIAS_NATIVE_S_MANIFEST:-}" ]]; then
+      while read -r expected owner; do
+        if [[ "$(sha256sum "$out/$owner" | cut -d' ' -f1)" != "$expected" ]]; then
+          test -f "$COHORT_MINIAS_NATIVE_S_POOL/$owner"
+          [[ "$(sha256sum "$COHORT_MINIAS_NATIVE_S_POOL/$owner" | cut -d' ' -f1)" == "$expected" ]]
+          cp -a "$COHORT_MINIAS_NATIVE_S_POOL/$owner" "$out/$owner"
+          touch "$out/$owner"
+          ((native_s_reoverlay_changed+=1))
+          echo "MINIAS_NATIVE_S=RESTORED_AFTER_FIRST_LINK owner=$owner"
+        fi
+      done <"$COHORT_MINIAS_NATIVE_S_MANIFEST"
+      (cd "$out" && sha256sum --quiet -c "$COHORT_MINIAS_NATIVE_S_MANIFEST")
+      echo "MINIAS_NATIVE_S=RECONCILED restored_derived=$native_s_reoverlay_changed native_count=$(wc -l < "$COHORT_MINIAS_NATIVE_S_MANIFEST") no_Kbuild_compiler_selector_change=true"
+    fi
     last_candidate_delta=""
     if [[ -s "$d/affected-objects.txt" ]]; then
       # Replay is permitted for a mixed GCC/MiniC selection ONLY if every
@@ -1586,6 +1624,29 @@ PY_RISCV_DYNAMIC
         second_finished=$(date +%s%N)
         echo "COHORT_TIMING trial=$name stage=gnu_guarded_relink elapsed_ms=$(((second_finished-second_started)/1000000))"
         echo "COHORT_LINK=GUARDED_RELINK name=$name reason=selected_minic_replaced_by_kbuild"
+      fi
+      # If Kbuild produced NO changed headers but refreshed one of the 34
+      # native .S objects, the original flow does not perform a second link.
+      # Native restoration must still propagate into vDSO/purgatory artefacts.
+      if ((native_s_reoverlay_changed>0)) && [[ "$repair_result" != *"COHORT_KBUILD_REPAIR=APPLIED"* ]]; then
+        python3 "$repo/tools/ci/linux-runtime-kbuild-regeneration-guard-v1.py" \
+          --mode snapshot --out "$out" --evidence "$d/generated-after-first-link.json" \
+          >>"$d/guard.log"
+        second_started=$(date +%s%N)
+        if ! make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
+          "${native_kbuild_args[@]}" -j4 Image >"$d/link-native-S-reconcile.log" 2>&1; then
+          echo "COHORT_LINK=FAIL name=$name stage=native_s_second_link"
+          tail -n 65 "$d/link-native-S-reconcile.log"
+          TRIAL_VERDICT=LINK_FAIL
+          return 0
+        fi
+        python3 "$repo/tools/ci/linux-runtime-kbuild-regeneration-guard-v1.py" \
+          --mode stable --out "$out" --evidence "$d/generated-after-first-link.json" \
+          >>"$d/guard.log" || {
+            echo "COHORT_RESULT=INCONCLUSIVE stage=native_s_second_link_header_instability"
+            exit 8
+          }
+        echo "MINIAS_NATIVE_S=SECOND_LINK_NO_HEADER_CHANGE elapsed_ms=$((($(date +%s%N)-second_started)/1000000))"
       fi
     fi
     last_link_source_dir="$d"
