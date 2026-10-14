@@ -1573,6 +1573,17 @@ PY_RISCV_DYNAMIC
       echo "COHORT_IDENTITY=FAIL trial=$name target=$target"; exit 6;
     }
   done
+  # This assertion sits AFTER Kbuild header reconciliation. A green QEMU
+  # cannot disguise GNU AS silently overwriting one of the 60 promoted C TUs.
+  if [[ -n "${COHORT_MINIAS_CORPUS_MANIFEST:-}" ]]; then
+    test -s "$COHORT_MINIAS_CORPUS_MANIFEST"
+    test "$(wc -l < "$COHORT_MINIAS_CORPUS_MANIFEST")" -eq 60
+    (cd "$out" && sha256sum --quiet -c "$COHORT_MINIAS_CORPUS_MANIFEST") || {
+      echo "MINIAS_CORPUS_RUNTIME_OBJECTS=FAIL native_owner_overwritten_by_Kbuild"
+      exit 8
+    }
+    echo "MINIAS_CORPUS_RUNTIME_OBJECTS=PASS trial=$name native_sha_verified=60 no_GNU_AS_native_owner_overwrite=true"
+  fi
   # Non-C objects cannot all be compared byte-for-byte with the GNU
   # golden reference: changing a verified MiniC .o legitimately changes its
   # GNU-objcopy .pi.o / EFI .stub.o derivatives and native vDSO envelope.
