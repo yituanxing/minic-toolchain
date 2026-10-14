@@ -121,7 +121,20 @@ make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
 # the dependent vmlinux.o from build timestamps. The pristine GNU tree was
 # SHA-attested and snapshotted above; every other reference object must remain
 # byte-for-byte unchanged. Restore ALL immutable GNU objects immediately after.
-if [[ "${COHORT_GNU_PREFLIGHT_ALLOW_PINNED_VOLATILE:-0}" == 1 ]]; then
+# A strictly bounded ONE real owner experiment may also see timestamp-only
+# Kbuild churn in init/version.o and vmlinux.o. The original SHA-certified
+# tree is restored below; ALL other GNU object SHAs still must match.
+if [[ "${COHORT_GNU_PREFLIGHT_ALLOW_BOOL_SINGLE:-0}" == 1 ]]; then
+  [[ "${COHORT_ACTION:-all}" == compile && "${COHORT_ALLOW_SHARD:-0}" == 1 &&
+     "$n" == 1 && "${objects[0]}" == lib/crypto/blake2s-generic.o &&
+     "$actual_cfg" == eeb04f304ebfb97a1079c187dc0c2ea3cc61fc50a55aa3cc776237c16ab19bbe ]] || {
+    echo 'COHORT_GNU_PREFLIGHT=FAIL wrong_bool_single_allowlist_scope' >&2
+    exit 6
+  }
+  awk '$2 != "init/version-timestamp.o" && $2 != "init/version.o" && $2 != "vmlinux.o" {print}' \
+    "$prov/gcc-objects.sha256" >"$ev/gcc-objects-stable.sha256"
+  echo 'COHORT_GNU_PREFLIGHT_VOLATILE=SINGLE_SCOPE excluded=version.o,vmlinux.o'
+elif [[ "${COHORT_GNU_PREFLIGHT_ALLOW_PINNED_VOLATILE:-0}" == 1 ]]; then
   [[ "${COHORT_ACTION:-all}" == verify && "${COHORT_NATIVE_UNION:-0}" == 1 && "$n" == 2064 ]] || {
     echo 'COHORT_GNU_PREFLIGHT=FAIL invalid_volatile_replay_scope' >&2
     exit 6
