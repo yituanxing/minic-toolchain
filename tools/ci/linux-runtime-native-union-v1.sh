@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Runtime qualification replay: Linux vDSO native MiniLD now emits real SHT_SYMTAB
+# so Kbuild's plain NM generates __vdso_rt_sigreturn_offset correctly.
+# Focused GNU-nm A4 oracle: #38541487379 PASS. Never reuse an empty header.
 # Opt-in Linux 6.6.143 native tool union from an immutable P0/P1-certified
 # 2064-MiniC-object cache; do NOT alter C preprocessing/compilation/assembly.
 # SHA-pinned cache must HIT; the seven C producer shards are skipped entirely.
