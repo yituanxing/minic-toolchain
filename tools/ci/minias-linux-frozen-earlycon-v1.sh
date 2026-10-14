@@ -104,6 +104,23 @@ if ! cmp -s "$ev/gnu.text.bin" "$ev/minias.text.bin"; then
       echo "MINIAS_EARLYCON_NO_RVC=DIFF other_instruction_or_layout_gap"
       wc -c "$ev/"*-no-rvc.text.bin
       sha256sum "$ev/"*-no-rvc.text.bin
+      riscv64-linux-gnu-objdump -dr -M no-aliases "$ev/gnu-no-rvc.o" \
+        >"$ev/gnu-no-rvc.disasm.txt"
+      riscv64-linux-gnu-objdump -dr -M no-aliases "$ev/minias-no-rvc.o" \
+        >"$ev/minias-no-rvc.disasm.txt"
+      python3 - "$ev/gnu-no-rvc.text.bin" "$ev/minias-no-rvc.text.bin" <<'PY_DIFF'
+from pathlib import Path
+import difflib,sys
+a,b=[Path(p).read_bytes() for p in sys.argv[1:]]
+first=next((i for i in range(min(len(a),len(b))) if a[i]!=b[i]), min(len(a),len(b)))
+print(f"MINIAS_EARLYCON_FIRST_TEXT_DIFF offset=0x{first:x} gnu_bytes={len(a)} minias_bytes={len(b)}")
+print(f"MINIAS_EARLYCON_GNU_WINDOW={a[max(0,first-24):first+32].hex(' ')}")
+print(f"MINIAS_EARLYCON_MINIAS_WINDOW={b[max(0,first-24):first+32].hex(' ')}")
+PY_DIFF
+      diff -u "$ev/gnu-no-rvc.disasm.txt" "$ev/minias-no-rvc.disasm.txt" \
+        >"$ev/no-rvc-disassembly.diff.txt" || true
+      echo "MINIAS_EARLYCON_DISASM_FIRST_DIFF"
+      head -n 85 "$ev/no-rvc-disassembly.diff.txt"
     fi
   fi
   echo "MINIAS_EARLYCON=GAP rv64gc_text_not_GNU_equivalent_not_safe_for_Linux_P1" >&2
