@@ -100,12 +100,31 @@ def native_asm_overlay(a):
     out.mkdir(parents=True)
     scratch=evidence/'preprocessed';scratch.mkdir(exist_ok=True)
     logs=evidence/'logs';logs.mkdir(exist_ok=True)
+    def asm_elf_info(path):
+        head=path.read_bytes()[:52]
+        if len(head)<40 or head[:4]!=b'\x7fELF' or head[5]!=1:
+            raise ValueError('not a little-endian ELF .S object: '+str(path))
+        if struct.unpack_from('<HH',head,16)!=(1,243):
+            raise ValueError('not a RISC-V ET_REL .S object: '+str(path))
+        if head[4]==1:
+            return 32,struct.unpack_from('<I',head,36)[0]
+        if head[4]==2 and len(head)>=52:
+            return 64,struct.unpack_from('<I',head,48)[0]
+        raise ValueError('unsupported native .S ELF class: '+str(path))
     def run(item):
         name,cmd,args=item
         before=golden/name
-        h=elf_flags(before)
-        abi={0:'lp64',2:'lp64f',4:'lp64d',6:'lp64q'}[h&6]
-        arch='rv64gc' if h&1 else 'rv64g'
+        klass,h=asm_elf_info(before)
+        if klass==32:
+            abi={0:'ilp32',2:'ilp32f',4:'ilp32d',6:'ilp32q'}[h&6]
+            arch='rv32imac_zicsr_zifencei'
+        else:
+            abi={0:'lp64',2:'lp64f',4:'lp64d',6:'lp64q'}[h&6]
+            arch='rv64gc' if h&1 else 'rv64g'
+        march_args=[x.partition('=')[2] for x in args if x.startswith('-march=')]
+        abi_args=[x.partition('=')[2] for x in args if x.startswith('-mabi=')]
+        if march_args:arch=march_args[-1]
+        if abi_args:abi=abi_args[-1]
         dest=out/name;dest.parent.mkdir(parents=True,exist_ok=True)
         temp=scratch/(name[:-2]+'.s');temp.parent.mkdir(parents=True,exist_ok=True)
         exe=['/usr/bin/riscv64-linux-gnu-gcc',*args[1:]]
@@ -121,7 +140,7 @@ def native_asm_overlay(a):
         if asm.returncode or not dest.is_file():
             (logs/(name.replace('/','_')+'.minias.log')).write_text((asm.stdout+asm.stderr)[-8000:])
             raise ValueError('MiniAS .S failed '+name+' rc='+str(asm.returncode))
-        if elf_flags(dest)!=h or exports(dest)!=exports(before):
+        if asm_elf_info(dest)!=(klass,h) or exports(dest)!=exports(before):
             raise ValueError('MiniAS .S ABI/symbol mismatch '+name)
         return name,sha(dest),sha(temp),sha(cmd)
     def outputs_index(exe):
