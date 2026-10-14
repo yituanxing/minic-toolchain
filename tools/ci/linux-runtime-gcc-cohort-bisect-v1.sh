@@ -1384,6 +1384,29 @@ trial() {
         printf '%s\n' "${objects[i]}" >>"$d/selected-objects.txt"
       fi
     done
+    # Independent non-C .S/.s overlay: restore only real native MiniAS
+    # objects produced from the exact GNU Kbuild assembly inputs. The GNU
+    # snapshot and 2064 MiniC C-object pool remain immutable.
+    if [[ -n "${COHORT_MINIAS_NATIVE_S_MANIFEST:-}" ]]; then
+      : "${COHORT_MINIAS_NATIVE_S_POOL:?native .S overlay pool is required}"
+      test -s "$COHORT_MINIAS_NATIVE_S_MANIFEST"
+      count=0
+      while read -r expected target; do
+        [[ "$expected" =~ ^[[:xdigit:]]{64}$ && "$target" == *.o && "$target" != /* && "$target" != *..* ]] || {
+          echo "MINIAS_NATIVE_S=FAIL unsafe_manifest_record"; exit 8;
+        }
+        test -f "$COHORT_MINIAS_NATIVE_S_POOL/$target"
+        [[ "$(sha256sum "$COHORT_MINIAS_NATIVE_S_POOL/$target" | cut -d' ' -f1)" == "$expected" ]] || {
+          echo "MINIAS_NATIVE_S=FAIL source_SHA target=$target"; exit 8;
+        }
+        mkdir -p "$out/$(dirname "$target")"
+        cp -a "$COHORT_MINIAS_NATIVE_S_POOL/$target" "$out/$target"
+        touch "$out/$target"
+        ((count+=1))
+      done <"$COHORT_MINIAS_NATIVE_S_MANIFEST"
+      [[ "$count" -ge 30 ]] || { echo "MINIAS_NATIVE_S=FAIL insufficient_coverage=$count"; exit 8; }
+      echo "MINIAS_NATIVE_S=OVERLAY native_asm=$count trial=$name"
+    fi
     # Changing a candidate vDSO object may cause GNU Kbuild to regenerate
     # headers and overwrite a selected MiniC object with GCC. Snapshot
     # CONTENT identities before linking; timestamps alone are not trusted.
@@ -1609,6 +1632,12 @@ PY_RISCV_DYNAMIC
     }
     echo "MINIAS_DYNAMIC_HEADER_OBJECTS=PASS trial=$name native_header_objects=4 total_native_C_objects=$(( ${COHORT_MINIAS_EXPECTED_NATIVE:-60} + 4 ))"
   fi
+  if [[ -n "${COHORT_MINIAS_NATIVE_S_MANIFEST:-}" ]]; then
+    (cd "$out" && sha256sum --quiet -c "$COHORT_MINIAS_NATIVE_S_MANIFEST") || {
+      echo "MINIAS_NATIVE_S_RUNTIME=FAIL Kbuild_overwrote_native_assembly trial=$name"; exit 8;
+    }
+    echo "MINIAS_NATIVE_S_RUNTIME=PASS trial=$name native_S=$(wc -l < "$COHORT_MINIAS_NATIVE_S_MANIFEST") all_native_SHA_verified=true"
+  fi
   # Non-C objects cannot all be compared byte-for-byte with the GNU
   # golden reference: changing a verified MiniC .o legitimately changes its
   # GNU-objcopy .pi.o / EFI .stub.o derivatives and native vDSO envelope.
@@ -1625,12 +1654,24 @@ native_union=os.environ.get("COHORT_NATIVE_UNION")=="1"
 native_trace_dir=Path(os.environ.get("NATIVE_TRACE_DIR","/nonexistent-native-traces"))
 native_objcopy_trace=(native_trace_dir/"miniobjcopy.trace").read_text() if (native_union and (native_trace_dir/"miniobjcopy.trace").is_file()) else ""
 native_linker_trace=(native_trace_dir/"minild.trace").read_text() if (native_union and (native_trace_dir/"minild.trace").is_file()) else ""
+native_s_manifest=os.environ.get("COHORT_MINIAS_NATIVE_S_MANIFEST")
+native_s={}
+if native_s_manifest:
+    for item in Path(native_s_manifest).read_text().splitlines():
+        expected,name=item.split(maxsplit=1)
+        if name in native_s:
+            raise SystemExit("COHORT_NATIVE_S=FAIL duplicate_manifest")
+        native_s[name]=expected
+
 all_c={x.strip() for x in universe.read_text().splitlines()
        if x.strip() and not x.lstrip().startswith("#")}
 chosen={x.strip() for x in selected.read_text().splitlines()
         if x.strip() and not x.lstrip().startswith("#")}
 if not chosen <= all_c:
     raise SystemExit("COHORT_GNU_CONTAMINATION=FAIL selected_not_subset_of_full_C")
+if set(native_s) & all_c:
+    raise SystemExit("COHORT_NATIVE_S=FAIL native_assembly_contains_selected_C")
+
 linked="\n".join((link_dir/name).read_text()
                  for name in ("link.log","link-reconciled.log","link-repaired.log")
                  if (link_dir/name).is_file())
@@ -1701,6 +1742,12 @@ derived_evidence=[]
 for line in manifest.read_text().splitlines():
     digest,name=line.strip().split(None,1)
     if name in all_c or transient_link(name):
+        continue
+    if name in native_s:
+        p=out/name
+        if not p.is_file() or hashlib.sha256(p.read_bytes()).hexdigest()!=native_s[name]:
+            raise SystemExit("COHORT_NATIVE_S=FAIL not_correct_native_SHA object="+name)
+        abi_same(name)
         continue
     p=out/name
     if p.is_file() and hashlib.sha256(p.read_bytes()).hexdigest()==digest:
