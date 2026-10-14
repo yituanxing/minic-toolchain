@@ -23,6 +23,11 @@ def main():
     ap.add_argument("--candidate", type=Path, required=True)
     ap.add_argument("--work", type=Path, required=True)
     ap.add_argument("--jobs", type=int, default=4)
+    # Defaults preserve the existing complete 500-TU paired A/B.
+    # Opt-in factor isolation reuses the prior FULL500 exact assembly oracle
+    # and samples structural hotspots rather than rerunning 1000s of TUs.
+    ap.add_argument("--hotspots-from", type=Path)
+    ap.add_argument("--sample-count", type=int, default=500)
     args = ap.parse_args()
     if args.jobs != 4:
         raise SystemExit("four-worker A/B is required")
@@ -35,6 +40,33 @@ def main():
         rows.append((int(index), obj, rel_i, source))
     if len(rows) != 500 or len({r[0] for r in rows}) != 500:
         raise SystemExit(f"expected 500 unique selected translation units, got {len(rows)}")
+    if args.sample_count != 500:
+        if args.sample_count != 48 or args.hotspots_from is None:
+            raise SystemExit("only a pinned 48-owner causal hotspot sample is supported")
+        full = json.loads(args.hotspots_from.read_text())
+        if (len(full) != 500 or len({r["index"] for r in full}) != 500 or
+                not all(r["assembly_identical"] for r in full)):
+            raise SystemExit("hotspot source must be an exact 500/500 A/B PASS")
+        if {r["index"] for r in full} != {r[0] for r in rows}:
+            raise SystemExit("hotspot source and cached corpus indexes differ")
+        # 16 longest-old + 16 greatest-savings + 8 median + 8 fastest.
+        # Fill overlaps from other long owners, deterministically.
+        by_old = sorted(full, key=lambda r: (r["baseline"]["seconds"], -r["index"]))
+        by_saved = sorted(full, key=lambda r: (r["baseline"]["seconds"] -
+            r["candidate"]["seconds"], -r["index"]), reverse=True)
+        chosen = {r["index"] for r in by_old[-16:] + by_saved[:16] +
+                  by_old[246:254] + by_old[:8]}
+        for r in reversed(by_old):
+            if len(chosen) >= 48:
+                break
+            chosen.add(r["index"])
+        if len(chosen) != 48:
+            raise SystemExit("hotspot selection did not produce 48 unique owners")
+        rows = [r for r in rows if r[0] in chosen]
+        print("PAIRED_AB_HOTSPOT_REUSE=PASS selected=48 source=500/500 full_correlated_outputs=true",flush=True)
+    elif args.hotspots_from is not None:
+        raise SystemExit("do not attach hotspot source to normal complete 500 benchmark")
+
     args.work.mkdir(parents=True, exist_ok=True)
     for name in ("baseline", "candidate"):
         (args.work / name).mkdir(parents=True, exist_ok=True)
@@ -92,7 +124,7 @@ def main():
     digest_rows = [f'{r["index"]}\t{r["input"]}\t{r["candidate"]["sha256"]}'
                    for r in good]
     (args.work / "output-fingerprints.tsv").write_text("\n".join(digest_rows) + "\n")
-    print(f"PAIRED_AB selected=500 matched={len(good)} mismatched={500-len(good)} "
+    print(f"PAIRED_AB selected={len(rows)} matched={len(good)} mismatched={len(rows)-len(good)} "
           f"jobs=4 wall_seconds={wall_seconds:.3f}", flush=True)
     for name in ("baseline", "candidate"):
         passed = [float(r[name]["seconds"]) for r in output if r[name]["status"] == "PASS"]
@@ -100,7 +132,7 @@ def main():
               f"sum_tu_seconds={sum(passed):.3f} "
               f"median_tu_seconds={statistics.median(passed) if passed else 0:.4f}",
               flush=True)
-    if len(good) != 500:
+    if len(good) != len(rows):
         for r in output:
             if not r["assembly_identical"]:
                 print(f"PAIRED_AB_MISMATCH index={r['index']} input={r['input']} "
