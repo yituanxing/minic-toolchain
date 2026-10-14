@@ -195,9 +195,9 @@ grep -Fq "unsupported-shared-strip-debug-section:.debug_info" \
 test ! -e "$work/strip-debug-unsupported.so"
 echo "MINILD_A4_STRIP=PASS empty_debug_noop_and_nonempty_debug_fail_closed"
 
-# A shared -T must NOT be silently ignored. Until real shared linker-script
-# placement/symbol expressions exist, report a deterministic capability gap
-# and leave no misleading output ELF. The Linux vDSO depends on _vdso_data.
+# Shared -T scripts that lack the Linux vDSO PHDR/VERSION contract
+# must still fail closed: parsing arbitrary scripts cannot waive ELF ABI
+# requirements. An invalid file must not yield a misleading ET_DYN.
 cat >"$work/shared.lds" <<'EOF_SCRIPT'
 SECTIONS {
   .text : { *(.text*) }
@@ -211,9 +211,9 @@ if "$MINILD" -melf64lriscv -shared -soname libminild-a4.so \
   echo "MINILD_A4=FAIL shared_T_was_silently_ignored" >&2
   exit 1
 fi
-grep -Fq "unsupported-shared-linker-script:$work/shared.lds" \
+grep -Fq "unsupported-shared-script-contract:$work/shared.lds" \
   "$work/shared-script.stderr"
 test ! -e "$work/script-unsupported.so"
-echo "MINILD_A4_SCRIPT_GUARD=PASS unsupported_shared_T_rejected_without_ELF=true"
+echo "MINILD_A4_SCRIPT_GUARD=PASS unsupported_shared_T_contract_rejected_without_ELF=true"
 
 echo "MINILD_A4=PASS et_dyn=PASS dynsym=PASS dynamic=PASS relative=PASS external64=PASS soname=PASS"
