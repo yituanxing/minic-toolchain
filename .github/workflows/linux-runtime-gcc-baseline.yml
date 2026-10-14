@@ -481,7 +481,7 @@ jobs:
           path: build/linux-runtime-gcc-cohort-v1/boolean-hot
           key: ${{ steps.candidate_id.outputs.key }}-hot-owner-frozen-inputs-v1
 
-      - name: Compare three high-cost owners on frozen inputs without rebuilding objects
+      - name: Analyze three frozen hot owners by paired timing or opt-in phase traces
         if: contains(github.event.head_commit.message, '[linux-perf-hotowners]') && steps.candidate_ready.outputs.ready == 'true'
         shell: bash
         timeout-minutes: 24
@@ -494,6 +494,20 @@ jobs:
             cp "$root/minic" "$ev/boolean-hot/baseline/bin/minic"
             cp "$ev/compiler/minic-cc-before-boolean" "$ev/boolean-hot/baseline/bin/minic-cc"
             python3 -m py_compile tools/ci/linux-perf-pinned-single-paired-ab-v1.py
+            if [[ "${{ contains(github.event.head_commit.message, '[linux-perf-stage-profile]') }}" == true ]]; then
+              python3 tools/ci/linux-perf-phase-trace-v1.py --self-test
+              for owner in kernel/bpf/btf.o kernel/bpf/verifier.o net/core/filter.o; do
+                key="${owner//\//_}"
+                frozen="$ev/boolean-hot/$key.frozen.i"
+                test -s "$frozen"
+                python3 tools/ci/linux-perf-phase-trace-v1.py \
+                  --input "$frozen" \
+                  --baseline "$ev/boolean-hot/baseline/bin/minic" \
+                  --candidate "$root/minic" \
+                  --out "$ev/boolean-hot/phase/$key" | tee "$ev/boolean-hot/$key-phase.txt"
+              done
+              echo 'BOOL_HOT_PHASE_GROUP=PASS owners=3 stage_traces=6_per_mode compiler_source_unchanged=true'
+            else
             for owner in kernel/bpf/btf.o kernel/bpf/verifier.o net/core/filter.o; do
               key="${owner//\//_}"
               frozen="$ev/boolean-hot/$key.frozen.i"
@@ -510,6 +524,7 @@ jobs:
               python3 -c 'import json,sys; j=json.load(open(sys.argv[2])); print("BOOL_HOT_A_B=PASS owner="+sys.argv[1]+" before_ms="+str(j["baseline_median_ms"])+" after_ms="+str(j["candidate_median_ms"])+" speedup="+str(j["candidate_speedup"])+" assembly_identical="+str(j["assembly_identical"]))' "$owner" "$result/paired-result.json"
             done
             echo 'BOOL_HOT_A_B_GROUP=PASS owners=3 cold_workflow_reused=true QEMU_not_executed=true'
+            fi
           fi
 
       # This boundary is essential: a subsequent GNU relink/QEMU failure
@@ -576,6 +591,8 @@ jobs:
             build/linux-runtime-gcc-cohort-v1/non-c-objects.tsv
             build/linux-runtime-gcc-cohort-v1/identity.txt
             build/linux-runtime-gcc-cohort-v1/cohort.log
+            build/linux-runtime-gcc-cohort-v1/boolean-hot/phase/**/phases.json
+            build/linux-runtime-gcc-cohort-v1/boolean-hot/*-phase.txt
             build/linux-runtime-gcc-cohort-v1/boolean-hot/results/**/paired-result.json
             build/linux-runtime-gcc-cohort-v1/boolean-hot/*-verdict.txt
             build/linux-runtime-gcc-cohort-v1/boolean-hot/*.frozen.i
