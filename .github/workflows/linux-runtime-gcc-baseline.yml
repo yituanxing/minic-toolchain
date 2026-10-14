@@ -1425,6 +1425,44 @@ jobs:
           name: sharded-gnu-minic-QEMU-088b8ef0a30154e1eeaeb145107a1b51c07ba996
           path: build/minias-earlycon-full-artifact
 
+      # Exactly the 2064 fresh MiniC .s inputs verified by the existing
+      # seven gcc-shards jobs in successful run #38498107462. No recompilation
+      # and no new workflow. This is the NEXT integration gate, not an
+      # independent MiniAS correctness rerun.
+      - name: Reuse all seven certified MiniC assembly-shard artifacts
+        if: contains(github.event.head_commit.message, '[linux-minias-all-C-runtime]')
+        uses: actions/download-artifact@v4
+        with:
+          repository: ${{ github.repository }}
+          run-id: 38498107462
+          github-token: ${{ github.token }}
+          pattern: minias-seven-corpus-*
+          merge-multiple: false
+          path: build/minias-seven-runtime-input
+
+      - name: Promote all 2060 stable MiniC assembly owners through native MiniAS
+        if: contains(github.event.head_commit.message, '[linux-minias-all-C-runtime]')
+        shell: bash
+        timeout-minutes: 15
+        run: |
+          set -Eeuo pipefail
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-v1"
+          test "${{ steps.p1_minic_frozen_cache.outputs.cache-hit }}" = true
+          (cd "$ev" && sha256sum --quiet -c minic-manifest.sha256)
+          minias="$GITHUB_WORKSPACE/build/minias-linux-corpus-v1-tools"
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$minias" "$minias/bin/minic-as"
+          python3 tools/ci/minias-linux-corpus-runtime-overlay-v1.py \
+            --original-pool "$ev/minic" \
+            --manifest "$ev/minic-manifest.sha256" \
+            --scan-root "$GITHUB_WORKSPACE/build/minias-linux-corpus-v1" \
+            --destination "$ev/minias-corpus-2064-pool" \
+            --evidence "$ev/minias-corpus-2064-evidence" \
+            --cache-identity "$FULL_MINIC_KEY" \
+            --seven-shard-root "$GITHUB_WORKSPACE/build/minias-seven-runtime-input" \
+            --minias "$minias/bin/minic-as" \
+            --minic "$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain/bin/minic" \
+            --golden-out "$GITHUB_WORKSPACE/build/linux-runtime-gcc/out"
+
       - name: Prepare native MiniAR, final-link MiniLD and MiniObjcopy (same cached C objects)
         if: contains(github.event.head_commit.message, '[linux-native-union-cached]') && (!contains(github.event.head_commit.message, '[linux-minias-corpus-scan]') || contains(github.event.head_commit.message, '[linux-minias-corpus-runtime]'))
         shell: bash
@@ -1484,6 +1522,17 @@ jobs:
                 test -x "$COHORT_MINIAS_HEADER_AS"
                 echo 'MINIAS_DYNAMIC_HEADERS=ENABLED Kbuild_header_recompile=MiniC_S_then_MiniAS'
               fi
+            fi
+            if [[ "${{ contains(github.event.head_commit.message, '[linux-minias-all-C-runtime]') && '1' || '0' }}" == 1 ]]; then
+              export COHORT_P1_EXPERIMENTAL_POOL="$ev/minias-corpus-2064-pool"
+              export COHORT_MINIAS_CORPUS_MANIFEST="$ev/minias-corpus-2064-evidence/native-object-hashes.sha256"
+              export COHORT_MINIAS_EXPECTED_NATIVE=2060
+              export COHORT_MINIAS_DYNAMIC_HEADERS=1
+              export COHORT_MINIAS_HEADER_AS="$GITHUB_WORKSPACE/build/minias-linux-corpus-v1-tools/bin/minic-as"
+              test -x "$COHORT_MINIAS_HEADER_AS"
+              test "$(wc -l < "$COHORT_MINIAS_CORPUS_MANIFEST")" -eq 2060
+              (cd "$COHORT_P1_EXPERIMENTAL_POOL" && sha256sum --quiet -c "$COHORT_MINIAS_CORPUS_MANIFEST")
+              echo "MINIAS_FULL_NATIVE_C=ENABLED stable_native=2060 dynamic_pending=4 all_C=2064 existing_QEMU_runner=true"
             fi
             if [[ "${{ contains(github.event.head_commit.message, '[linux-native-purgatory-r]') && '1' || '0' }}" == 1 ]]; then
               export MINILD_ENABLE_PURGATORY_R=1
@@ -1611,6 +1660,12 @@ jobs:
                 echo 'MINIAS_DYNAMIC_FULL_RUNTIME=PASS native_MiniAS_C=64 remaining_GNU_AS_C=2000 P1=true'
               fi
             fi
+            if [[ "${{ contains(github.event.head_commit.message, '[linux-minias-all-C-runtime]') && '1' || '0' }}" == 1 ]]; then
+              grep -Fq 'COHORT_P1=PASS name=full_all_verified syscalls=12 python_era_oracle=PASS' "$ev/cohort.log" || exit 34
+              test "$(grep -c 'MINIAS_CORPUS_RUNTIME_OBJECTS=PASS trial=' "$ev/cohort.log")" -eq 2
+              grep -Fq 'MINIAS_DYNAMIC_HEADER_OBJECTS=PASS trial=full_all_verified native_header_objects=4 total_native_C_objects=2064' "$ev/cohort.log" || exit 35
+              echo "MINIAS_ALL_C_RUNTIME=PASS miniC_C=2064 miniAS_C=2064 remaining_GNU_AS_C=0 P1=12/12"
+            fi
             echo "NATIVE_UNION_RESULT=PASS pp=GNU minic=2064 from_cache ar=MiniAR_full_actual_Kbuild ar_native_calls=$minic_ar_calls ar_mpit_calls=$minic_mpit_calls ar_gnu_calls=0 ld=MiniLD_final_only objcopy=MiniObjcopy runtime=P1"
           fi
 
@@ -1631,6 +1686,9 @@ jobs:
             build/linux-runtime-gcc-cohort-v1/native-union/*.tsv
             build/linux-runtime-gcc-cohort-v1/trials/*/minias-dynamic-hashes.sha256
             build/linux-runtime-gcc-cohort-v1/trials/*/minias-dynamic-logs/*.log
+            build/linux-runtime-gcc-cohort-v1/minias-corpus-2064-evidence/*.json
+            build/linux-runtime-gcc-cohort-v1/minias-corpus-2064-evidence/*.sha256
+            build/linux-runtime-gcc-cohort-v1/minias-corpus-2064-evidence/assembly-failures.tsv
             build/linux-runtime-gcc-cohort-v1/minias-corpus-64-evidence/*.tsv
             build/linux-runtime-gcc-cohort-v1/minias-corpus-64-evidence/*.sha256
             build/linux-runtime-gcc-cohort-v1/minias-corpus-64-evidence/*.json

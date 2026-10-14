@@ -1587,13 +1587,17 @@ PY_RISCV_DYNAMIC
   # This assertion sits AFTER Kbuild header reconciliation. A green QEMU
   # cannot disguise GNU AS silently overwriting one of the 60 promoted C TUs.
   if [[ -n "${COHORT_MINIAS_CORPUS_MANIFEST:-}" ]]; then
+    expected_native="${COHORT_MINIAS_EXPECTED_NATIVE:-60}"
+    [[ "$expected_native" == 60 || "$expected_native" == 2060 ]] || {
+      echo "MINIAS_CORPUS_RUNTIME_OBJECTS=FAIL unexpected_expected_native=$expected_native"; exit 8;
+    }
     test -s "$COHORT_MINIAS_CORPUS_MANIFEST"
-    test "$(wc -l < "$COHORT_MINIAS_CORPUS_MANIFEST")" -eq 60
+    test "$(wc -l < "$COHORT_MINIAS_CORPUS_MANIFEST")" -eq "$expected_native"
     (cd "$out" && sha256sum --quiet -c "$COHORT_MINIAS_CORPUS_MANIFEST") || {
       echo "MINIAS_CORPUS_RUNTIME_OBJECTS=FAIL native_owner_overwritten_by_Kbuild"
       exit 8
     }
-    echo "MINIAS_CORPUS_RUNTIME_OBJECTS=PASS trial=$name native_sha_verified=60 no_GNU_AS_native_owner_overwrite=true"
+    echo "MINIAS_CORPUS_RUNTIME_OBJECTS=PASS trial=$name native_sha_verified=$expected_native no_GNU_AS_native_owner_overwrite=true"
   fi
   if [[ "${COHORT_MINIAS_DYNAMIC_HEADERS:-0}" == 1 ]]; then
     dyn="$last_link_source_dir/minias-dynamic-hashes.sha256"
@@ -1603,7 +1607,7 @@ PY_RISCV_DYNAMIC
       echo "MINIAS_DYNAMIC_HEADER_OBJECTS=FAIL GNU_AS_overwrote_native_object"
       exit 8
     }
-    echo "MINIAS_DYNAMIC_HEADER_OBJECTS=PASS trial=$name native_header_objects=4 total_native_C_objects=64"
+    echo "MINIAS_DYNAMIC_HEADER_OBJECTS=PASS trial=$name native_header_objects=4 total_native_C_objects=$(({COHORT_MINIAS_EXPECTED_NATIVE:-60}+4))"
   fi
   # Non-C objects cannot all be compared byte-for-byte with the GNU
   # golden reference: changing a verified MiniC .o legitimately changes its

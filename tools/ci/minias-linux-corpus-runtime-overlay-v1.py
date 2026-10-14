@@ -6,7 +6,7 @@ Consumes ONLY the frozen 2064 MiniC objects and independently cached MiniC .s
 C or alters golden Kbuild reference. Excludes four vDSO-header-sensitive TUs,
 which Kbuild legitimately replays against changed generated headers.
 """
-import argparse, hashlib, json, pathlib, shutil, struct, subprocess, sys
+import argparse, concurrent.futures, hashlib, json, pathlib, shutil, struct, subprocess, sys
 
 DYNAMIC_HEADERS = {
     'arch/riscv/kernel/alternative.o',
@@ -35,10 +35,136 @@ def exports(p):
                      check=True,capture_output=True,text=True)
     return set(row.split(' ',1)[0] for row in r.stdout.splitlines() if row)
 
+def seven_shard_overlay(a, frozen, manifest, orig, output, evidence):
+    """Upgrade the accepted 64-object overlay to 2060 native C objects.
+
+    Read all seven SHA-indexed exact-MiniC .s artifact shards produced by the
+    EXISTING gcc-shards matrix. Reassemble with the CURRENT native MiniAS and
+    feed the existing verified full-Linux P1 runner, changing no GNU baseline.
+    The four vdso-offsets.h dependents are refreshed natively after first link.
+    """
+    runner=pathlib.Path(a.seven_shard_root).resolve()
+    assembler=pathlib.Path(a.minias).resolve()
+    compiler=pathlib.Path(a.minic).resolve()
+    golden=pathlib.Path(a.golden_out).resolve()
+    if not runner.is_dir() or not assembler.is_file() or not compiler.is_file():
+        raise ValueError('missing seven-shard artifacts, MiniAS or MiniC')
+    identity_sha=sha(manifest)
+    compiler_sha=sha(compiler)
+    config_sha=sha(golden/'.config')
+    collected={}
+    shard_ids=set()
+    indexes=list(runner.rglob('assembly/index.json'))
+    if len(indexes)!=7:
+        raise ValueError('expected 7 independently SHA-indexed MiniC S shards, got '+str(len(indexes)))
+    for p in indexes:
+        scan=p.parent.parent
+        index=json.loads(p.read_text())
+        summary=json.loads((scan/'full-summary.json').read_text())
+        scope=index.get('selected')
+        files=index.get('files')
+        sid=summary.get('shard')
+        if sid not in range(7) or sid in shard_ids or summary.get('shards')!=7:
+            raise ValueError('invalid/duplicate seven-shard identity: '+str(sid))
+        shard_ids.add(sid)
+        if (index.get('schema')!='minias-linux-s-corpus-v1' or
+            index.get('identity')!=a.cache_identity or
+            index.get('manifest_sha256')!=identity_sha or
+            index.get('minic_sha256')!=compiler_sha or
+            index.get('config_sha256')!=config_sha):
+            raise ValueError('frozen MiniC / Kbuild / cache profile mismatch, shard='+str(sid))
+        if (not isinstance(scope,list) or not isinstance(files,dict) or
+            set(scope)!=set(files) or summary.get('owner_count')!=len(scope) or
+            summary.get('basic_pass')!=len(scope) or summary.get('gaps')!=0):
+            raise ValueError('incomplete native assembly scan, shard='+str(sid))
+        lines=(scan/'full-scan.tsv').read_text().splitlines()
+        if not lines or lines[0]!='owner\tstatus\trc\tassemble_ms' or len(lines)!=len(scope)+1:
+            raise ValueError('malformed full-scan TSV, shard='+str(sid))
+        checked={}
+        for line in lines[1:]:
+            row=line.split('\t')
+            if len(row)!=4 or row[1]!='OBJECT_BASIC_PASS' or row[2]!='0' or row[0] in checked:
+                raise ValueError('unverified scanned owner, shard='+str(sid))
+            checked[row[0]]=True
+        if set(checked)!=set(scope):
+            raise ValueError('scanned owner mismatches SHA index, shard='+str(sid))
+        for owner in scope:
+            if owner in collected or owner not in orig:
+                raise ValueError('overlap or foreign owner in seven-way MiniC S corpus: '+owner)
+            assembly=p.parent/(owner[:-2]+'.s')
+            data=files[owner]
+            if not assembly.is_file() or sha(assembly)!=data.get('s_sha256'):
+                raise ValueError('MiniC S payload SHA mismatch: '+owner)
+            cmd=golden/pathlib.Path(owner).parent/('.'+pathlib.Path(owner).name+'.cmd')
+            if (data.get('original_sha256')!=orig[owner] or
+                not cmd.is_file() or sha(cmd)!=data.get('cmd_sha256')):
+                raise ValueError('frozen baseline provenance mismatch: '+owner)
+            collected[owner]=assembly
+    if shard_ids!=set(range(7)) or set(collected)!=set(orig):
+        raise ValueError('seven-way corpus not exactly 2064 C objects; missing='+
+                         str(len(set(orig)-set(collected))))
+    if output.exists():raise ValueError('native experimental object pool must be new')
+    shutil.copytree(frozen,output,copy_function=shutil.copy2)
+    scratch=evidence/'reassembly'
+    scratch.mkdir(parents=True,exist_ok=True)
+    def native(owner):
+        baseline=frozen/owner
+        raw=elf_flags(baseline)
+        abi={0:'lp64',2:'lp64f',4:'lp64d',6:'lp64q'}[raw&6]
+        arch='rv64gc' if raw&1 else 'rv64g'
+        target=scratch/owner
+        target.parent.mkdir(parents=True,exist_ok=True)
+        result=subprocess.run([str(assembler),'-march='+arch,'-mabi='+abi,
+                               '-o',str(target),str(collected[owner])],
+                              stdout=subprocess.PIPE,stderr=subprocess.STDOUT,timeout=90)
+        if result.returncode or not target.is_file():
+            raise ValueError('MiniAS failed owner='+owner+' rc='+str(result.returncode)+
+                             ' log='+result.stdout[-1200:].decode('utf-8','replace'))
+        if elf_flags(target)!=raw or exports(target)!=exports(baseline):
+            raise ValueError('MiniAS ELF flags/exports mismatch, owner='+owner)
+        return owner,sha(target),raw
+    promoted=[]
+    failures=[]
+    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
+        tasks={pool.submit(native,owner):owner for owner in sorted(collected)}
+        for future in concurrent.futures.as_completed(tasks):
+            owner=tasks[future]
+            try:
+                name,h,f= future.result()
+                if name not in DYNAMIC_HEADERS:
+                    shutil.copy2(scratch/name,output/name)
+                    if sha(output/name)!=h:raise ValueError('native overlay SHA drift: '+name)
+                    promoted.append((name,h,f))
+            except Exception as exc:
+                failures.append((owner,str(exc)))
+    if failures:
+        (evidence/'assembly-failures.tsv').write_text(
+            'owner\tproblem\n' + ''.join(name+'\t'+msg.replace('\n',' ')+'\n' for name,msg in failures))
+        raise ValueError(f'full native reassembly did not pass for {len(failures)} objects; see assembly-failures.tsv')
+    if len(promoted)!=2060:
+        raise ValueError('expected 2060 native C objects before generated-header refresh, got '+str(len(promoted)))
+    chosen={name for name,_,_ in promoted}
+    for name,h in orig.items():
+        if name not in chosen and sha(output/name)!=h:
+            raise ValueError('frozen dynamic-header object unexpectedly changed: '+name)
+    promoted.sort()
+    with (evidence/'native-object-hashes.sha256').open('w') as out:
+        for name,h,f in promoted:out.write(f'{h}  {name}\n')
+    (evidence/'overlay-provenance.json').write_text(json.dumps({
+        'schema':'minias-runtime-overlay-v1','scope':'ALL_LINUX_C_2064',
+        'cache_identity':a.cache_identity,'original_manifest_sha256':identity_sha,
+        'source_shards':7,'MiniAS_C_owners_before_generated_header_refresh':len(promoted),
+        'deferred_four_generated_header_owners':sorted(DYNAMIC_HEADERS),
+        'fresh_original_C_object_compilation':0,'runtime_accepted':False,
+    },indent=2,sort_keys=True)+'\n')
+    print('MINIAS_RUNTIME_POOL=PASS scanned=2064 native=2060 deferred_generated_headers=4 frozen_original_SHA_attested=2064 C_recompiled=0',flush=True)
+
 def main():
     p=argparse.ArgumentParser()
     for a in ('original-pool','manifest','scan-root','destination','evidence','cache-identity'):
         p.add_argument('--'+a,required=True)
+    for extra in ('seven-shard-root','minias','minic','golden-out'):
+        p.add_argument('--'+extra)
     a=p.parse_args()
     frozen=pathlib.Path(a.original_pool).resolve()
     manifest=pathlib.Path(a.manifest).resolve()
@@ -56,6 +182,9 @@ def main():
         f=frozen/key
         if not f.is_file() or sha(f)!=h:raise ValueError('certified original differs: '+key)
         orig[key]=h
+    if a.seven_shard_root:
+        seven_shard_overlay(a,frozen,manifest,orig,output,evidence)
+        return
     index=json.loads((work/'assembly/index.json').read_text())
     if index.get('schema')!='minias-linux-s-corpus-v1' or index.get('identity')!=a.cache_identity:
         raise ValueError('S corpus identity mismatch')
