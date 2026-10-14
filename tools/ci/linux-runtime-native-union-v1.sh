@@ -176,7 +176,19 @@ if [[ "${MINILD_ENABLE_VDSO64:-0}" == 1 &&
       echo 'MINILD_VDSO64=FAIL missing_regular_nm_symtab' >&2
       exit 89
     }
-    grep -Eq '^[[:xdigit:]]+ [Tt] __vdso_rt_sigreturn
+    if ! awk '
+        $NF == "__vdso_rt_sigreturn" &&
+        $1 ~ /^[[:xdigit:]]+$/ &&
+        $2 ~ /^[TtWw]$/ { found = 1 }
+        END { exit !found }
+      ' "$NATIVE_TRACE_DIR/vdso64-static-nm.txt"; then
+      echo 'MINILD_VDSO64=FAIL missing_kernel_rt_sigreturn_offset_source_symbol' >&2
+      grep -F '__vdso_' "$NATIVE_TRACE_DIR/vdso64-static-nm.txt" |
+        head -n 20 >&2 || true
+      exit 89
+    fi
+    echo 'MINILD_VDSO64_STATIC_SYMTAB=PASS plain_nm=true rt_sigreturn_offset_symbol=true'
+    # Compare exactly the current MiniC/MiniAS object inputs to a GNU
     # read-only reference. This catches the no-CFI 0-byte
     # PT_GNU_EH_FRAME case without hiding toolchain provenance.
     debug_args=("${args[@]}")
