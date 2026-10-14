@@ -1803,15 +1803,22 @@ def transient_link(name):
 def emitted(step,name):
     return re.search(r"(?m)^\s+"+step+r"\s+"+re.escape(name)+r"\s*$",linked) is not None
 def abi_same(name):
-    original=(golden/name).read_bytes()[:52]
-    derived=(out/name).read_bytes()[:52]
-    for head in (original,derived):
-        if (len(head)!=52 or head[:6]!=b"\x7fELF\x02\x01" or
-            struct.unpack_from("<H",head,16)[0]!=1 or
-            struct.unpack_from("<H",head,18)[0]!=243):
-            raise SystemExit("COHORT_GNU_DERIVED_ABI=FAIL object="+name)
-    if original[48:52]!=derived[48:52]:
-        raise SystemExit("COHORT_GNU_DERIVED_ABI=FAIL object="+name)
+    # Kbuild's native compat-vDSO is intentionally RV32 ELFCLASS32, while
+    # the RISC-V kernel and main vDSO are RV64 ELFCLASS64. Keep BOTH ABI
+    # classes strictly pinned to the GNU golden .o; never coerce ELF32 into
+    # ELF64 or silently weaken ELF e_flags verification.
+    def identity(path):
+        head=path.read_bytes()[:52]
+        if (len(head)<40 or head[:4]!=b"\x7fELF" or
+            head[4] not in (1,2) or head[5]!=1 or
+            struct.unpack_from("<HH",head,16)!=(1,243)):
+            raise SystemExit("COHORT_GNU_DERIVED_ABI=FAIL object="+name+" bad_RISCV_ET_REL")
+        flagoff=36 if head[4]==1 else 48
+        if len(head)<flagoff+4:
+            raise SystemExit("COHORT_GNU_DERIVED_ABI=FAIL object="+name+" short_header")
+        return head[4], struct.unpack_from("<I",head,flagoff)[0]
+    if identity(golden/name)!=identity(out/name):
+        raise SystemExit("COHORT_GNU_DERIVED_ABI=FAIL object="+name+" ELF_class_or_flags_drift")
 def derivation(name):
     if name.startswith("arch/riscv/kernel/pi/") and name.endswith(".pi.o"):
         owner=name[:-5]+".o"
