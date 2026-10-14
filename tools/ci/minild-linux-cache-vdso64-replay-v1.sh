@@ -113,6 +113,8 @@ sha256sum "$minild" >"$ev/tool.sha256"
     cat >"$ev/vdso-diagnostic-symbol.s" <<'MINILD_VDSO_DIAG_ASM'
     .globl _vdso_data
     .set _vdso_data, 0
+    .globl _timens_data
+    .set _timens_data, 4096
 MINILD_VDSO_DIAG_ASM
     riscv64-linux-gnu-as -march=rv64gc -mabi=lp64d \
       -o "$ev/vdso-diagnostic-symbol.o" "$ev/vdso-diagnostic-symbol.s"
