@@ -721,6 +721,7 @@ jobs:
             --full "$ev/all-objects.txt" \
             --shard ${{ matrix.shard }} --output "$ev/full-objects.txt"
 
+      # GCC builtin context must include -mcmodel=medany in this exact RV64 config.
       - name: RV64 MiniPP MiniC MiniAS seven-way full C owners with timing
         if: contains(github.event.head_commit.message, '[linux-rv64-minipp-full]')
         shell: bash
