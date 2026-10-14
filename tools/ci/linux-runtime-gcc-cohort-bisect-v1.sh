@@ -1408,7 +1408,15 @@ trial() {
         touch "$out/$target"
         ((native_s_overlay_count+=1))
       done <"$COHORT_MINIAS_NATIVE_S_MANIFEST"
-      [[ "$native_s_overlay_count" -ge 30 ]] || { echo "MINIAS_NATIVE_S=FAIL insufficient_coverage=$native_s_overlay_count"; exit 8; }
+      if [[ "${COHORT_MINIAS_S_BISECT:-0}" == 1 ]]; then
+        [[ "$native_s_overlay_count" == 1 || "$native_s_overlay_count" == 33 ]] || {
+          echo "MINIAS_NATIVE_S=FAIL bisect_expected_1_or_33_actual=$native_s_overlay_count"; exit 8;
+        }
+      else
+        [[ "$native_s_overlay_count" -ge 30 ]] || {
+          echo "MINIAS_NATIVE_S=FAIL insufficient_coverage=$native_s_overlay_count"; exit 8;
+        }
+      fi
       echo "MINIAS_NATIVE_S=OVERLAY native_asm=$native_s_overlay_count trial=$name candidate_C_owners=$count"
     fi
     # Changing a candidate vDSO object may cause GNU Kbuild to regenerate
@@ -2765,6 +2773,39 @@ PY_RESCUE_SET
   done
   echo "COHORT_P1_OWNER=UNRESOLVED baseline=FAIL attempts=$(($(wc -l <"$ev/p1-owner-verdicts.tsv")-1))"
   exit 9
+fi
+# Diagnose the *new* pre-Linux-print failure with the smallest useful
+# two real QEMU tests, not an all-34 re-run. The accepted 2064 MiniC+MiniAS
+# C object pool stays exact-SHA frozen; only which already-certified .S
+# objects get overlaid changes. Test isolated head.S and its complement to
+# prove or reject an early-entry cause. Both reuse the single 425 MiB local
+# GNU golden snapshot; full recompilation triggers immediate fail-fast.
+if [[ "${COHORT_MINIAS_S_BISECT:-0}" == 1 ]]; then
+  : "${COHORT_MINIAS_NATIVE_S_MANIFEST:?native S manifest required}"
+  original_s_manifest="$COHORT_MINIAS_NATIVE_S_MANIFEST"
+  test "$(wc -l < "$original_s_manifest")" -eq 34
+  head_owner="arch/riscv/kernel/head.o"
+  grep -Fq "  $head_owner" "$original_s_manifest"
+  printf 'trial\tnative_S_count\tverdict\timage_sha\n' >"$ev/native-S-bisect.tsv"
+  for probe in head_only without_head; do
+    selected_manifest="$ev/native-S-$probe.sha256"
+    if [[ "$probe" == head_only ]]; then
+      grep -F "  $head_owner" "$original_s_manifest" >"$selected_manifest"
+      test "$(wc -l < "$selected_manifest")" -eq 1
+    else
+      grep -Fv "  $head_owner" "$original_s_manifest" >"$selected_manifest"
+      test "$(wc -l < "$selected_manifest")" -eq 33
+    fi
+    export COHORT_MINIAS_NATIVE_S_MANIFEST="$selected_manifest"
+    last_selection="force-local-S-bisect-$probe"
+    echo "MINIAS_NATIVE_S_BISECT=START probe=$probe owners=$(wc -l < "$selected_manifest") cached_C=2064"
+    trial "native_S_$probe" "$n" fast
+    printf '%s\t%s\t%s\t%s\n' "$probe" "$(wc -l < "$selected_manifest")" "$TRIAL_VERDICT" "$image_sha" >>"$ev/native-S-bisect.tsv"
+    echo "MINIAS_NATIVE_S_BISECT=RESULT probe=$probe verdict=$TRIAL_VERDICT image=$image_sha"
+  done
+  echo 'MINIAS_NATIVE_S_BISECT=COMPLETE two_real_QEMU_oracles=true no_full_C_recompile=true no_acceptance_claim=true'
+  cat "$ev/native-S-bisect.tsv"
+  exit 8
 fi
 # FIRST test the entire MiniC-compilable C object universe. This is the
 # user's actual intended failure oracle; do not waste more CI on 128, 384,

@@ -482,6 +482,8 @@ jobs:
             build/linux-runtime-gcc-cohort-v1/gcc-preflight.log
             build/linux-runtime-gcc-cohort-v1/gcc-objects-stable.sha256
             build/linux-runtime-gcc-cohort-v1/results.tsv
+            build/linux-runtime-gcc-cohort-v1/native-S-bisect.tsv
+            build/linux-runtime-gcc-cohort-v1/native-S-*.sha256
             build/linux-runtime-gcc-cohort-v1/minic-manifest.sha256
             build/linux-runtime-gcc-cohort-v1/minic-identity.txt
             build/linux-runtime-gcc-cohort-v1/dma-undefined.txt
@@ -1565,6 +1567,10 @@ jobs:
               # original 2064-object and 34 native-S snapshots are stable;
               # directly reinject only derived S objects after first link.
               test -s "$COHORT_MINIAS_NATIVE_S_MANIFEST"
+              if [[ "${{ contains(github.event.head_commit.message, '[linux-minias-S-bisect]') && '1' || '0' }}" == 1 ]]; then
+                export COHORT_MINIAS_S_BISECT=1
+                echo "MINIAS_NATIVE_S_BISECT=ENABLED scope=head.o_only_vs_all_except_head no_extra_workflow=true"
+              fi
               echo "MINIAS_NATIVE_S=ENABLED count=$(wc -l < "$COHORT_MINIAS_NATIVE_S_MANIFEST") only_existing_Kbuild_inputs=true"
             fi
             if [[ "${{ contains(github.event.head_commit.message, '[linux-native-purgatory-r]') && '1' || '0' }}" == 1 ]]; then
