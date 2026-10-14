@@ -5474,6 +5474,10 @@ typedef struct MiniLdSharedImage {
     size_t dynsym_section;
     size_t hash_section;
     size_t gnu_hash_section;
+    size_t versym_section;
+    size_t verdef_section;
+    uint32_t version_name_offset;
+    const MiniLdScript *version_script;
     size_t eh_frame_section;
     size_t eh_frame_hdr_section;
     size_t eh_frame_fde_count;
@@ -5563,7 +5567,22 @@ static uint32_t shared_gnu_symbol_hash(const char *name) {
     return hash;
 }
 
-static bool shared_symbol_eligible(const MiniLdState *state, size_t index) {
+static bool shared_version_exports(const MiniLdScript *script,
+                                   const char *name) {
+    size_t i;
+    if (script == NULL) {
+        return true;
+    }
+    for (i = 0U; i < script->version_global_count; ++i) {
+        if (strcmp(script->version_globals[i], name) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool shared_symbol_eligible(const MiniLdState *state, size_t index,
+                                   const MiniLdScript *version) {
     const MiniLdSymbol *symbol = &state->symbols[index];
     unsigned bind = ELF64_ST_BIND(symbol->info);
     unsigned visibility = ELF64_ST_VISIBILITY(symbol->other);
@@ -5571,6 +5590,10 @@ static bool shared_symbol_eligible(const MiniLdState *state, size_t index) {
     if ((bind != STB_GLOBAL && bind != STB_WEAK) ||
         symbol->name[0] == '\0' ||
         (visibility != STV_DEFAULT && visibility != STV_PROTECTED)) {
+        return false;
+    }
+    if (version != NULL && symbol->section != MINILD_SECTION_UNDEF &&
+        !shared_version_exports(version, symbol->name)) {
         return false;
     }
     if (symbol->section >= 0) {
@@ -5827,6 +5850,7 @@ static bool shared_prepare_metadata(MiniLdState *state,
                                     bool pie,
                                     bool hash_style_both,
                                     bool eh_frame_hdr,
+                                    const MiniLdScript *version_script,
                                     MiniLdSharedImage *shared) {
     MiniLdSection *dynstr;
     MiniLdSection *dynsym;
@@ -5847,6 +5871,9 @@ static bool shared_prepare_metadata(MiniLdState *state,
     shared->dynsym_section = SIZE_MAX;
     shared->hash_section = SIZE_MAX;
     shared->gnu_hash_section = SIZE_MAX;
+    shared->versym_section = SIZE_MAX;
+    shared->verdef_section = SIZE_MAX;
+    shared->version_script = version_script;
     shared->eh_frame_section = SIZE_MAX;
     shared->eh_frame_hdr_section = SIZE_MAX;
     shared->have_gnu_hash = hash_style_both;
@@ -5976,6 +6003,15 @@ static bool shared_prepare_metadata(MiniLdState *state,
                              &shared->gnu_hash_section)) {
         goto fail;
     }
+    if (version_script != NULL &&
+        (!find_or_add_section(state, ".gnu.version",
+                               SHT_GNU_versym, SHF_ALLOC, 2U, 2U,
+                               &shared->versym_section) ||
+         !find_or_add_section(state, ".gnu.version_d",
+                               SHT_GNU_verdef, SHF_ALLOC, 4U, 0U,
+                               &shared->verdef_section))) {
+        goto fail;
+    }
     if (interpreter_path != NULL && interpreter_path[0] != '\0') {
         if (!find_or_add_section(state,
                                  ".interp",
@@ -6010,7 +6046,11 @@ static bool shared_prepare_metadata(MiniLdState *state,
     }
     for (i = 0U; i < state->symbol_count; ++i) {
         shared->preemptible[i] =
-            shared_symbol_preemptible(state, shared, i);
+            shared_symbol_preemptible(state, shared, i) &&
+            (version_script == NULL ||
+             state->symbols[i].section == MINILD_SECTION_UNDEF ||
+             shared_version_exports(version_script,
+                                    state->symbols[i].name));
     }
 
     if (!section_append_zero(dynstr, 1U)) {
@@ -6058,9 +6098,20 @@ static bool shared_prepare_metadata(MiniLdState *state,
         }
     }
 
+    if (version_script != NULL) {
+        if (dynstr->size > UINT32_MAX ||
+            !section_append_data(dynstr,
+                                  (const unsigned char *)version_script->version_name,
+                                  strlen(version_script->version_name) + 1U)) {
+            goto oom;
+        }
+        shared->version_name_offset =
+            (uint32_t)(dynstr->size -
+                       strlen(version_script->version_name) - 1U);
+    }
     shared->dynsym_count = 1U;
     for (i = 0U; i < state->symbol_count; ++i) {
-        if (!shared_symbol_eligible(state, i)) {
+        if (!shared_symbol_eligible(state, i, version_script)) {
             continue;
         }
         if (dynstr->size > UINT32_MAX) {
@@ -6073,6 +6124,16 @@ static bool shared_prepare_metadata(MiniLdState *state,
             goto oom;
         }
         shared->dynsym_index[i] = shared->dynsym_count++;
+    }
+
+    if (version_script != NULL &&
+        (shared->dynsym_count > SIZE_MAX / sizeof(Elf64_Half) ||
+         !section_append_zero(&state->sections[shared->versym_section],
+                              shared->dynsym_count * sizeof(Elf64_Half)) ||
+         !section_append_zero(&state->sections[shared->verdef_section],
+                              2U * (sizeof(Elf64_Verdef) +
+                                    sizeof(Elf64_Verdaux))))) {
+        goto oom;
     }
 
     if (shared->dynsym_count > SIZE_MAX / sizeof(Elf64_Sym)) {
@@ -6248,6 +6309,9 @@ static bool shared_prepare_metadata(MiniLdState *state,
     dynamic_entries = 6U; /* HASH/STRTAB/SYMTAB/STRSZ/SYMENT/NULL */
     if (shared->have_gnu_hash) {
         ++dynamic_entries;
+    }
+    if (version_script != NULL) {
+        dynamic_entries += 3U; /* VERSYM/VERDEF/VERDEFNUM */
     }
     if (shared->rela_count != 0U) {
         dynamic_entries += 3U; /* RELA/RELASZ/RELAENT */
@@ -6438,6 +6502,8 @@ static bool shared_fill_gnu_hash(MiniLdState *state,
     store_u64le(section->data + 16U, bloom);
     return true;
 }
+
+#include "linker_version.inc"
 
 static bool shared_patch_arithmetic_relocations(
     MiniLdState *state,
@@ -7272,6 +7338,11 @@ static bool shared_fill_dynamic(MiniLdState *state,
     if (shared->have_gnu_hash) {
         MINILD_DYN(DT_GNU_HASH, layout->section_vaddr[shared->gnu_hash_section]);
     }
+    if (shared->version_script != NULL) {
+        MINILD_DYN(DT_VERSYM, layout->section_vaddr[shared->versym_section]);
+        MINILD_DYN(DT_VERDEF, layout->section_vaddr[shared->verdef_section]);
+        MINILD_DYN(DT_VERDEFNUM, 2U);
+    }
     MINILD_DYN(DT_STRTAB, layout->section_vaddr[shared->dynstr_section]);
     MINILD_DYN(DT_SYMTAB, layout->section_vaddr[shared->dynsym_section]);
     MINILD_DYN(DT_STRSZ, state->sections[shared->dynstr_section].size);
@@ -7644,6 +7715,13 @@ static bool shared_write_object(MiniLdState *state,
         if (i == shared->dynsym_section) {
             sh->sh_link = (Elf64_Word)(shared->dynstr_section + 1U);
             sh->sh_info = 1U;
+        } else if (shared->version_script != NULL &&
+                   i == shared->versym_section) {
+            sh->sh_link = (Elf64_Word)(shared->dynsym_section + 1U);
+        } else if (shared->version_script != NULL &&
+                   i == shared->verdef_section) {
+            sh->sh_link = (Elf64_Word)(shared->dynstr_section + 1U);
+            sh->sh_info = 2U;
         } else if (i == shared->hash_section ||
                    (shared->have_gnu_hash && i == shared->gnu_hash_section)) {
             sh->sh_link = (Elf64_Word)(shared->dynsym_section + 1U);
@@ -7803,6 +7881,8 @@ int minild_link_shared_elf64_riscv_inputs_options(
         options != NULL ? options->entry_symbol : NULL;
     const char *dynamic_list_path =
         options != NULL ? options->dynamic_list_path : NULL;
+    const char *version_script_path =
+        options != NULL ? options->version_script_path : NULL;
     const char *needed_name =
         options != NULL ? options->needed_name : NULL;
     const bool pie = options != NULL && options->pie;
@@ -7816,6 +7896,8 @@ int minild_link_shared_elf64_riscv_inputs_options(
     MiniLdState state;
     MiniLdStaticLayout layout;
     MiniLdSharedImage shared;
+    MiniLdScript version_script;
+    const MiniLdScript *version = NULL;
     uint64_t entry = 0U;
     bool layout_ready = false;
     bool ok = false;
@@ -7827,8 +7909,24 @@ int minild_link_shared_elf64_riscv_inputs_options(
     memset(&state, 0, sizeof(state));
     memset(&layout, 0, sizeof(layout));
     memset(&shared, 0, sizeof(shared));
+    minild_script_initialize(&version_script);
     state.diagnostics = diagnostics;
     state.allow_dso_inputs = true;
+    if (version_script_path != NULL) {
+        if (!minild_script_parse_file(version_script_path,
+                                      &version_script, diagnostics) ||
+            version_script.version_name == NULL ||
+            !version_script.version_local_all ||
+            version_script.command_count != 0U ||
+            version_script.phdr_count != 0U ||
+            version_script.version_global_count == 0U ||
+            soname == NULL || soname[0] == '\0') {
+            fprintf(diagnostics,
+                    "minic-ld: unsupported-shared-version-script\n");
+            goto done;
+        }
+        version = &version_script;
+    }
 
     if (!process_input_sequence(&state, inputs, input_count) ||
         !state.have_input ||
@@ -7842,6 +7940,7 @@ int minild_link_shared_elf64_riscv_inputs_options(
                                  pie,
                                  hash_style_both,
                                  eh_frame_hdr,
+                                 version,
                                  &shared) ||
         (pie && !shared_validate_pie_dso_symbols(&state)) ||
         !shared_build_layout(&state, &layout)) {
@@ -7855,6 +7954,7 @@ int minild_link_shared_elf64_riscv_inputs_options(
         !shared_fill_dynsym(&state, &layout, &shared) ||
         !shared_fill_hash(&state, &shared) ||
         !shared_fill_gnu_hash(&state, &shared) ||
+        !shared_fill_versions(&state, &shared) ||
         !shared_fill_relocations(&state, &layout, &shared) ||
         !shared_patch_final_layout_relocations(&state, &layout, &shared) ||
         !minild_eh_fill(&state, &layout, &shared) ||
@@ -7875,6 +7975,7 @@ done:
     }
     shared_image_destroy(&shared);
     state_destroy(&state);
+    minild_script_destroy(&version_script);
     return ok ? 0 : 1;
 }
 
@@ -7889,6 +7990,7 @@ int minild_link_shared_elf64_riscv_inputs(const char *output_path,
     options.soname = soname;
     options.entry_symbol = entry_symbol;
     options.dynamic_list_path = NULL;
+    options.version_script_path = NULL;
     options.needed_name = NULL;
     options.interpreter_path = NULL;
     options.strip_debug = false;

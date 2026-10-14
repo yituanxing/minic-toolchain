@@ -103,6 +103,7 @@ int main(int argc, char **argv) {
     const char *script_path = NULL;
     const char *soname = NULL;
     const char *dynamic_list_path = NULL;
+    const char *version_script_path = NULL;
     const char *needed_name = NULL;
     const char *interpreter_path = NULL;
     MiniLdInput inputs[4096];
@@ -264,6 +265,18 @@ int main(int argc, char **argv) {
                 fprintf(stderr, "minic-ld: empty-dynamic-list\n");
                 return 2;
             }
+        } else if (strcmp(argv[i], "--version-script") == 0) {
+            if (++i >= argc) {
+                usage(stderr, argv[0]);
+                return 2;
+            }
+            version_script_path = argv[i];
+        } else if (strncmp(argv[i], "--version-script=", 17U) == 0) {
+            version_script_path = argv[i] + 17U;
+            if (*version_script_path == '\0') {
+                fprintf(stderr, "minic-ld: empty-version-script\n");
+                return 2;
+            }
         } else if (strcmp(argv[i], "-o") == 0) {
             if (++i >= argc) {
                 usage(stderr, argv[0]);
@@ -381,6 +394,10 @@ int main(int argc, char **argv) {
         fprintf(stderr, "minic-ld: incompatible-link-modes\n");
         return 2;
     }
+    if (version_script_path != NULL && !shared_link) {
+        fprintf(stderr, "minic-ld: version-script-requires-shared\n");
+        return 2;
+    }
     if (eh_frame_hdr && !shared_link && !pie_link) {
         fprintf(stderr, "minic-ld: eh-frame-hdr-requires-shared-or-pie\n");
         return 2;
@@ -420,6 +437,7 @@ int main(int argc, char **argv) {
         options.soname = soname;
         options.entry_symbol = entry_symbol;
         options.dynamic_list_path = dynamic_list_path;
+        options.version_script_path = version_script_path;
         options.needed_name = needed_name;
         options.interpreter_path = interpreter_path;
         options.strip_debug = strip_debug;
