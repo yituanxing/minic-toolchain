@@ -91,7 +91,11 @@ def main():
     integrated_path = ROOT / "tests/external/linux/mini_tools_integrated_relink.sh"
     if sha(ROOT / "tests/external/linux/minipp_native_targeted_relink.sh") != "3ecdd7a3db9d8648da463bc7110976c29cabe5e0":
         raise AssertionError("native MiniPP exact producer substitute changed")
-    if sha(ROOT / "tests/preprocessor/run_linux_native_full_production.py") != "0d8892e1528c5ff4908adcdd5b84d52538e3b1a7":
+    # The production driver now preserves -mcmodel=medany and -fno-pic
+    # in the GNU macro-context key. Otherwise the actual RISC-V Linux
+    # arch/riscv/mm/init.c #error fires even with correct MiniPP output.
+    # This updated blob remains pinned for the independent native-full gate.
+    if sha(ROOT / "tests/preprocessor/run_linux_native_full_production.py") != "1dc0fdc8f54e0fe3275542fb76922834a2c015ab":
         raise AssertionError("native full MiniPP TU inventory or production trace changed")
     if sha(ROOT / "tests/external/linux/minipp_native_full_relink.sh") != "51858d1d76368840690a773391cb4f6e0f24bc2e":
         raise AssertionError("native full MiniPP runtime relink harness changed")
