@@ -67,6 +67,17 @@ sha256sum "$minild" >"$ev/tool.sha256"
   # executable linker directives, not the first 110 irrelevant header lines.
   awk 'BEGIN{show=0} /^OUTPUT_ARCH|^SECTIONS|^VERSION|^PHDRS/{show=1} show{print}'     "$out/arch/riscv/kernel/vdso/vdso.lds" | head -n 240
   echo "MINILD_VDSO_LINKER_SCRIPT_END"
+  # Validate the whole real generated script with the existing MiniLD AST,
+  # not a hand-selected approximation. Uses HOSTCC only for the probe.
+  cc -std=c11 -O2 -Wall -Wextra -Werror \
+    -I"$repo/linker/src" -I"$repo/linker/include" \
+    "$repo/tests/linker/vdso_real_script_probe.c" \
+    "$repo/linker/src/linker_script_lex.c" \
+    "$repo/linker/src/linker_script_parse.c" \
+    "$repo/linker/src/linker_script_expr.c" \
+    "$repo/linker/src/linker_script_match.c" \
+    -o "$ev/vdso-real-script-probe"
+  "$ev/vdso-real-script-probe" arch/riscv/kernel/vdso/vdso.lds
   echo "MINILD_VDSO_REFERENCE=PASS source=same_frozen_Kbuild_inputs compiler_C=skipped"
   start=$(date +%s%3N)
   code=0
