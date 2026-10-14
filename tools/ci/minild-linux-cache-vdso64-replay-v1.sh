@@ -3,7 +3,7 @@
 # Linux 6.6.143 Kbuild object cache. No Linux C build, no Kbuild and no QEMU.
 # Preserve exact GNU arguments: do NOT silently ignore ELF metadata flags.
 # Reference replay fix #38487964158: .dbg.tmp is intentionally deleted by Kbuild.
-# #38488109583 reproduced the prior -S blocker. Re-evaluate each exact CLI
+# #38521133625 then hit --hash-style=both. Both -S and GNU_HASH now have focused T1 coverage; re-evaluate exact CLI
 # on the current MiniLD SHA; reject any missing shared-ELF semantics.
 # Reduced shared-link probe is diagnostically useful but never qualifies P1.
 # Live gap gate: observed remaining GNU LD vDSO64 from #38485397284;
@@ -80,7 +80,7 @@ sha256sum "$minild" >"$ev/tool.sha256"
       -soname=linux-vdso.so.1 \
       "${inputs[@]}" -o "$ev/vdso-reduced-diagnostic.so" \
       >"$ev/reduced.stdout" 2>"$ev/reduced.stderr" || reduced_status=$?
-    echo "MINILD_VDSO_REDUCED_DIAGNOSTIC rc=$reduced_status missing_flags=-S,hash_style_both,eh_frame_hdr,script runtime_claim=false"
+    echo "MINILD_VDSO_REDUCED_DIAGNOSTIC rc=$reduced_status omitted_exact_flags=-S,hash_style_both,eh_frame_hdr,script runtime_claim=false"
     if (( reduced_status != 0 )); then
       tail -n 35 "$ev/reduced.stderr" >&2
     else
