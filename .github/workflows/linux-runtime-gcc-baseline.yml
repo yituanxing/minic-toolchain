@@ -1053,7 +1053,13 @@ jobs:
           # Compute stable profile ID from pristine MiniC sources, BEFORE
           # applying any of the build-time profile patches.
           profile=$(python3 tools/ci/linux-runtime-profile-cache-id-v1.py)
-          if [[ "${{ contains(github.event.head_commit.message, '[linux-runtime-full-crossblock]') && '1' || '0' }}" == 1 ]]; then
+          # The native union always rebuilds the compiler with this exact
+          # full-crossblock profile (see "Restore identical MiniC compiler
+          # profile for native tool union"). Include it in the cache identity
+          # even when the caller selects only [linux-native-union-cached].
+          # Otherwise a fully valid 2064-object cache is rejected before the
+          # fast MiniAS preflight or QEMU can execute.
+          if [[ "${{ (contains(github.event.head_commit.message, '[linux-runtime-full-crossblock]') || contains(github.event.head_commit.message, '[linux-native-union-cached]')) && '1' || '0' }}" == 1 ]]; then
             profile="${profile}-full-crossblock-pure-eq-v1-$(sha256sum tools/ci/apply-riscv64-p1-defined-before-use-crossblock-v1.py | cut -c1-16)"
           fi
           objects=$(sha256sum "$ev/full-objects.txt" | cut -d' ' -f1)
