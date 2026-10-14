@@ -202,8 +202,14 @@ static bool minild_eh_prepare(MiniLdState *state,
         }
     }
     if (i == state->section_count) {
-        fprintf(state->diagnostics, "minic-ld: missing-eh-frame-for-header\n");
-        return false;
+        /* GNU LD accepts --eh-frame-hdr when no input contributes CFI.
+         * Without explicit PHDRS it emits no EH header/program header;
+         * with Linux vDSO's explicit PT_GNU_EH_FRAME declaration the
+         * program header is present but has zero offset, address and size.
+         * Do not manufacture FDEs that MiniC has not emitted.
+         */
+        shared->have_eh_frame_hdr = false;
+        return true;
     }
     shared->eh_frame_section = i;
     if (!minild_eh_scan(state, i, NULL, NULL, 0U, &count) ||

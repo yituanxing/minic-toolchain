@@ -163,6 +163,51 @@ if [[ "${MINILD_ENABLE_VDSO64:-0}" == 1 &&
       tail -n 12 "$NATIVE_TRACE_DIR/vdso64-gnu-diagnostic.stderr" >&2
     fi
   fi
+  if (( status==0 )); then
+    # Compare exactly the current MiniC/MiniAS object inputs to a GNU
+    # read-only reference. This catches the no-CFI 0-byte
+    # PT_GNU_EH_FRAME case without hiding toolchain provenance.
+    debug_args=("${args[@]}")
+    for ((j=0; j<${#debug_args[@]}; ++j)); do
+      if [[ "${debug_args[j]}" == -o && $((j+1)) -lt ${#debug_args[@]} ]]; then
+        debug_args[j+1]="$NATIVE_TRACE_DIR/vdso64-gnu-same-inputs-diagnostic.so"
+        break
+      fi
+    done
+    if ! /usr/bin/riscv64-linux-gnu-ld "${debug_args[@]}" \
+       >"$NATIVE_TRACE_DIR/vdso64-gnu-diagnostic.stdout" \
+       2>"$NATIVE_TRACE_DIR/vdso64-gnu-diagnostic.stderr"; then
+      echo "MINILD_VDSO64=FAIL GNU_same_inputs_reference_failed no_fallback=true" >&2
+      exit 87
+    fi
+    if ! python3 - "$output" "$NATIVE_TRACE_DIR/vdso64-gnu-same-inputs-diagnostic.so" <<'PY_VDSO_PHDR'
+import pathlib,struct,sys
+def headers(path):
+    data=pathlib.Path(path).read_bytes()
+    assert data[:6]==b'\x7fELF\x02\x01'
+    phoff=struct.unpack_from('<Q',data,32)[0]
+    entsize,count=struct.unpack_from('<HH',data,54)
+    values=[]
+    for i in range(count):
+        o=phoff+i*entsize
+        typ,flags,fo,vma,paddr,sz,ms,align=struct.unpack_from('<IIQQQQQQ',data,o)
+        values.append((typ,flags,fo,vma,sz,ms))
+    return values
+native,gnu=map(headers,sys.argv[1:])
+assert [x[0] for x in native]==[1,2,4,0x6474e550],native
+assert [x[0] for x in gnu]==[1,2,4,0x6474e550],gnu
+assert [x[1] for x in native]==[x[1] for x in gnu],(native,gnu)
+nh,gh=native[-1],gnu[-1]
+assert nh[4:]==gh[4:],(nh,gh)
+if gh[4]==0:
+    assert nh[2:]==gh[2:]==(0,0,0,0),(nh,gh)
+print('MINILD_VDSO64_SAME_INPUTS=PASS native_link=true GNU_reference_diagnostic_only=true eh_header_bytes='+str(nh[4])+' flags='+str(nh[1]))
+PY_VDSO_PHDR
+    then
+      echo "MINILD_VDSO64=FAIL same_input_GNU_program_header_differential" >&2
+      exit 88
+    fi
+  fi
   exit "$status"
 fi
 # Combined full-runtime qualification: only vmlinux.o -r is additionally

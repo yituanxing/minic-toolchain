@@ -122,6 +122,21 @@ grep -q '(GNU_HASH)' "$work/hash-both.dynamic"
 grep -q '(HASH)' "$work/hash-both.dynamic"
 echo "MINILD_A4_GNU_HASH=PASS both=true"
 
+# Independent empty-CFI GNU behavior: -shared --eh-frame-hdr must accept
+# a valid object without .eh_frame and must NOT invent unwind frames.
+"$LD" -melf64lriscv -shared --eh-frame-hdr \
+  -soname libminild-a4.so -o "$work/noeh-gnu.so" "$work/shared.o"
+"$MINILD" -melf64lriscv -shared --eh-frame-hdr \
+  -soname libminild-a4.so -o "$work/noeh-mini.so" "$work/shared.o"
+"$READELF" -Wl "$work/noeh-gnu.so" > "$work/noeh-gnu.phdr"
+"$READELF" -Wl "$work/noeh-mini.so" > "$work/noeh-mini.phdr"
+if grep -q GNU_EH_FRAME "$work/noeh-gnu.phdr"; then
+  grep -q GNU_EH_FRAME "$work/noeh-mini.phdr"
+else
+  ! grep -q GNU_EH_FRAME "$work/noeh-mini.phdr"
+fi
+echo "MINILD_A4_EH_FRAME_EMPTY=PASS no_input_CFI=true GNU_semantics=true"
+
 # Linux RISC-V vDSO uses zR/zRS CIE, pcrel|sdata4 FDEs.
 # A real FDE must be indexed and advertised via PT_GNU_EH_FRAME.
 cat >"$work/eh-frame.s" <<'EOF_EH'

@@ -7604,7 +7604,8 @@ static bool shared_write_object(MiniLdState *state,
                 "minic-ld: invalid-shared-tls-segment-layout\n");
         return false;
     }
-    phnum = (shared->have_eh_frame_hdr ? 1U : 0U) +
+    phnum = (shared->have_eh_frame_hdr ||
+             shared->layout_script != NULL ? 1U : 0U) + /* explicit EH PHDR */
             (shared->layout_script != NULL ? 1U : 0U) + /* PT_NOTE */
             (shared->pie ? 1U : 0U) +
             (shared->have_interp ? 1U : 0U) +
@@ -7841,23 +7842,31 @@ static bool shared_write_object(MiniLdState *state,
             ph->p_align = 4U;
         }
     }
-    if (shared->have_eh_frame_hdr) {
+    if (shared->have_eh_frame_hdr ||
+        shared->layout_script != NULL) {
         Elf64_Phdr *ph = &programs[program_index++];
-        size_t h = shared->eh_frame_hdr_section;
-        if (h >= state->section_count ||
-            layout->section_file_offset[h] == SIZE_MAX) {
-            fprintf(state->diagnostics,
-                    "minic-ld: missing-eh-frame-hdr-file-offset\n");
-            goto done;
-        }
+        memset(ph, 0, sizeof(*ph));
         ph->p_type = PT_GNU_EH_FRAME;
-        ph->p_flags = PF_R;
-        ph->p_offset = layout->section_file_offset[h];
-        ph->p_vaddr = layout->section_vaddr[h];
-        ph->p_paddr = ph->p_vaddr;
-        ph->p_filesz = state->sections[h].size;
-        ph->p_memsz = ph->p_filesz;
-        ph->p_align = 4U;
+        if (shared->have_eh_frame_hdr) {
+            size_t h = shared->eh_frame_hdr_section;
+            if (h >= state->section_count ||
+                layout->section_file_offset[h] == SIZE_MAX) {
+                fprintf(state->diagnostics,
+                        "minic-ld: missing-eh-frame-hdr-file-offset\n");
+                goto done;
+            }
+            ph->p_flags = PF_R;
+            ph->p_offset = layout->section_file_offset[h];
+            ph->p_vaddr = layout->section_vaddr[h];
+            ph->p_paddr = ph->p_vaddr;
+            ph->p_filesz = state->sections[h].size;
+            ph->p_memsz = ph->p_filesz;
+            ph->p_align = 4U;
+        } else {
+            /* GNU's explicit-script header when all vDSO CFI FDEs
+             * disappear: 0-byte PT_GNU_EH_FRAME, no invented section. */
+            ph->p_align = 8U;
+        }
     }
     if (program_index != phnum) {
         fprintf(state->diagnostics, "minic-ld: shared-phdr-count-mismatch\n");
