@@ -551,6 +551,21 @@ fi
 if [[ "${COHORT_ACTION:-all}" == compile ]]; then
   test -s "$ev/minic-manifest.sha256" && test -s "$ev/minic-identity.txt"
   (cd "$ev"; sha256sum --quiet -c minic-manifest.sha256)
+  if [[ "${COHORT_KEEP_BOOL_SINGLE_I:-0}" == 1 ]]; then
+    # Capture the ORIGINAL GNU -E produced source BEFORE the fully verified
+    # GNU snapshot replaces the disposable build directory on this return.
+    [[ "$n" == 1 && "${objects[0]}" == lib/crypto/blake2s-generic.o &&
+       "${COHORT_GNU_PREFLIGHT_ALLOW_BOOL_SINGLE:-0}" == 1 ]] || {
+      echo 'BOOLEAN_CACHE_SINGLE=FAIL source_retention_wrong_scope'; exit 8;
+    }
+    mkdir -p "$ev/boolean-ab"
+    pinned_i="$out/lib/crypto/blake2s-generic.minic-stage2.i"
+    test -s "$pinned_i" || {
+      echo 'BOOLEAN_CACHE_SINGLE=FAIL missing_pre_restore_Kbuild_i'; exit 8;
+    }
+    cp -a "$pinned_i" "$ev/boolean-ab/blake2s-generic.frozen.i"
+    echo "BOOLEAN_CACHE_SINGLE=FROZEN_KBUILD_I sha256=$(sha256sum "$ev/boolean-ab/blake2s-generic.frozen.i" | cut -d' ' -f1) bytes=$(stat -c %s "$pinned_i")"
+  fi
   # Restore pristine GOLDEN Kbuild state on disk for the verify-only step.
   rm -rf -- "$out"
   cp -a --reflink=auto "$gold_snapshot" "$out"
