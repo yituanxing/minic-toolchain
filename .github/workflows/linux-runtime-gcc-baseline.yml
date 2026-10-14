@@ -5,6 +5,7 @@ on:
     branches:
       - "agent/linux-expanded-kbuild-v0"
       - "agent/linux-perf-boolean-domain-v1"
+      - "agent/linux-rv64-only-parallel-v1"
     paths:
       - '.github/workflows/linux-runtime-gcc-baseline.yml'
       - 'tests/external/linux/**'
@@ -61,7 +62,23 @@ jobs:
           "$src/scripts/config" --file "$out/.config" \
             -e BLK_DEV_INITRD -e DEVTMPFS -e DEVTMPFS_MOUNT \
             -e SERIAL_8250 -e SERIAL_8250_CONSOLE
+          # Independent RV64-only lane: the verified CONFIG_COMPAT=y
+          # native-union P1 result is immutable and remains on the mainline.
+          # Deliberately build a distinct GNU golden config / object cache
+          # without the ELF32 compat vDSO. Do not borrow 2064 old .o
+          # blindly: Kbuild must discover true CONFIG_COMPAT dependencies.
+          if [[ "$GITHUB_REF_NAME" == agent/linux-rv64-only-parallel-v1 ]]; then
+            "$src/scripts/config" --file "$out/.config" -d COMPAT
+          fi
           make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- olddefconfig
+          if [[ "$GITHUB_REF_NAME" == agent/linux-rv64-only-parallel-v1 ]]; then
+            grep -Fxq '# CONFIG_COMPAT is not set' "$out/.config" || {
+              echo 'RV64_ONLY=FAIL could_not_disable_CONFIG_COMPAT' >&2
+              exit 41
+            }
+            grep -Fxq 'CONFIG_64BIT=y' "$out/.config"
+            echo 'RV64_ONLY_CONFIG=PASS COMPAT=n 64BIT=y GNU_golden_independent=true'
+          fi
           # Fresh GNU reference campaign: the historical mixed-MiniC cache
           # used config e538a6..., but today's GCC/Kconfig yields its own
           # reproducible config. Only compare MiniC against THIS same config.
