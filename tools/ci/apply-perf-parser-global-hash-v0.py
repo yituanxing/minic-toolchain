@@ -75,7 +75,11 @@ static bool minic_parser_global_name_slot_insert(
             if (existing != NULL &&
                 existing->name_length == object->name_length &&
                 memcmp(existing->name, object->name, object->name_length) == 0) {
-                slots[slot_index] = object_id;
+                /* Preserve the original forward linear lookup: the
+                   earliest global declaration wins on duplicate names. */
+                if (object_id < existing_id) {
+                    slots[slot_index] = object_id;
+                }
                 return true;
             }
         }
@@ -92,6 +96,9 @@ static bool minic_parser_global_name_index_rebuild(
     size_t index;
 
     if (parser == NULL || parser->program == NULL) {
+        return false;
+    }
+    if (required_count > SIZE_MAX / 2U) {
         return false;
     }
     while (capacity < required_count * 2U) {
@@ -162,7 +169,26 @@ start=text.find(anchor)
 end=text.find("\n}\n\nMinicGlobalObjectId minic_parser_find_global_object(",start)
 if start < 0 or end < 0:
     raise SystemExit("cannot bound global-object lookup")
-replacement=r'''MinicGlobalObjectId minic_parser_find_global_object_entity(
+replacement=r'''/* Same first-declaration rule as the original forward scan.
+ * An allocation or index-sync failure must not hide an existing global. */
+static MinicGlobalObjectId minic_parser_global_linear_fallback(
+    MinicParser *parser, MinicSourceSpan name_span) {
+    size_t length = minic_parser_span_length(name_span);
+    size_t index;
+    for (index = 0U; index < parser->program->global_object_count; ++index) {
+        const MinicGlobalObject *object =
+            minic_c0_program_global_object(parser->program, index);
+        parser->perf_find_global_steps += 1U;
+        if (object != NULL && object->name_length == length &&
+            memcmp(object->name, parser->source + name_span.begin.offset,
+                   length) == 0) {
+            return (MinicGlobalObjectId)index;
+        }
+    }
+    return MINIC_GLOBAL_OBJECT_INVALID;
+}
+
+MinicGlobalObjectId minic_parser_find_global_object_entity(
     const MinicParser *parser_const,
     MinicSourceSpan name_span) {
     MinicParser *parser = (MinicParser *)parser_const;
@@ -177,7 +203,7 @@ replacement=r'''MinicGlobalObjectId minic_parser_find_global_object_entity(
     parser->perf_find_global_calls += 1U;
     if (!minic_parser_global_name_index_sync(parser) ||
         parser->perf_global_name_slot_capacity == 0U) {
-        return MINIC_GLOBAL_OBJECT_INVALID;
+        return minic_parser_global_linear_fallback(parser, name_span);
     }
     name_length = minic_parser_span_length(name_span);
     mask = parser->perf_global_name_slot_capacity - 1U;
