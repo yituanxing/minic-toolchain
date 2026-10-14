@@ -418,10 +418,14 @@ int main(int argc, char **argv) {
      * shared-script layout and symbol evaluator are fully implemented.
      * Existing static linker-script handling is unchanged.
      */
-    if ((shared_link || pie_link) && script_path != NULL) {
-        fprintf(stderr,
-                "minic-ld: unsupported-shared-linker-script:%s\n",
+    if (pie_link && script_path != NULL) {
+        fprintf(stderr, "minic-ld: unsupported-pie-linker-script:%s\n",
                 script_path);
+        return 2;
+    }
+    if (shared_link && script_path != NULL &&
+        version_script_path != NULL) {
+        fprintf(stderr, "minic-ld: ambiguous-version-and-layout-script\n");
         return 2;
     }
 
@@ -438,6 +442,7 @@ int main(int argc, char **argv) {
         options.entry_symbol = entry_symbol;
         options.dynamic_list_path = dynamic_list_path;
         options.version_script_path = version_script_path;
+        options.script_path = script_path;
         options.needed_name = needed_name;
         options.interpreter_path = interpreter_path;
         options.strip_debug = strip_debug;

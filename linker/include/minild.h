@@ -27,6 +27,7 @@ typedef struct MiniLdSharedOptions {
     const char *entry_symbol;
     const char *dynamic_list_path;
     const char *version_script_path;
+    const char *script_path;
     const char *needed_name;
     const char *interpreter_path;
     bool strip_debug;

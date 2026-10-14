@@ -3186,6 +3186,8 @@ typedef struct MiniLdScriptLayoutState {
     uint64_t dot;
     uint64_t load_bias;
     bool have_load_bias;
+    uint64_t headers_size;
+    bool have_headers_size;
 } MiniLdScriptLayoutState;
 
 static bool static_align_up_u64(uint64_t value,
@@ -3260,6 +3262,8 @@ static bool script_layout_evaluate(MiniLdScriptLayoutState *script_state,
 
     memset(&context, 0, sizeof(context));
     context.dot = script_state->dot;
+    context.headers_size = script_state->headers_size;
+    context.have_headers_size = script_state->have_headers_size;
     context.resolve_symbol = script_layout_symbol_value;
     context.resolve_section = script_layout_section_value;
     context.user = script_state;
@@ -3785,7 +3789,8 @@ static int minild_compare_file_order(const void *lhs, const void *rhs) {
 
 static bool static_build_script_layout(MiniLdState *state,
                                        const MiniLdScript *script,
-                                       MiniLdStaticLayout *layout) {
+                                       MiniLdStaticLayout *layout,
+                                       size_t shared_headers_size) {
     MiniLdScriptLayoutState script_state;
     MiniLdFileOrder *file_order = NULL;
     bool *command_deferred = NULL;
@@ -3857,6 +3862,8 @@ static bool static_build_script_layout(MiniLdState *state,
     script_state.state = state;
     script_state.layout = layout;
     script_state.script = script;
+    script_state.have_headers_size = shared_headers_size != 0U;
+    script_state.headers_size = shared_headers_size;
 
     for (i = 0U; i < script->command_count; ++i) {
         const MiniLdScriptCommand *command = &script->commands[i];
@@ -4058,6 +4065,67 @@ done:
         memset(layout, 0, sizeof(*layout));
     }
     return ok;
+}
+
+/* Shared -T uses the proven static output-section and PROVIDE evaluator.
+ * In Linux's four-header single-PT_LOAD layout, the PT_LOAD starts at
+ * file offset 0 and VMA 0, and every alloc section must lie after the
+ * ELF and PHDR tables with file offset identical to its VMA.
+ */
+static bool shared_build_vdso_script_layout(MiniLdState *state,
+                                            const MiniLdScript *script,
+                                            MiniLdStaticLayout *layout) {
+    size_t headers_size;
+    size_t i;
+    size_t end;
+
+    if (script->phdr_count != 4U ||
+        strcmp(script->phdrs[0].type_name, "PT_LOAD") != 0 ||
+        !script->phdrs[0].filehdr || !script->phdrs[0].phdrs ||
+        !script->phdrs[0].have_flags || script->phdrs[0].flags != 5U ||
+        strcmp(script->phdrs[1].type_name, "PT_DYNAMIC") != 0 ||
+        strcmp(script->phdrs[2].type_name, "PT_NOTE") != 0 ||
+        strcmp(script->phdrs[3].type_name, "PT_GNU_EH_FRAME") != 0) {
+        fprintf(state->diagnostics,
+                "minic-ld: unsupported-shared-script-PHDRS-layout\n");
+        return false;
+    }
+    headers_size = sizeof(Elf64_Ehdr) +
+                   script->phdr_count * sizeof(Elf64_Phdr);
+    if (!static_build_script_layout(state, script, layout, headers_size)) {
+        return false;
+    }
+    end = headers_size;
+    for (i = 0U; i < state->section_count; ++i) {
+        MiniLdSection *section = &state->sections[i];
+        uint64_t address;
+        if (layout->section_discarded[i] ||
+            (section->flags & SHF_ALLOC) == 0U ||
+            section->size == 0U) {
+            continue;
+        }
+        address = layout->section_vaddr[i];
+        if (address < headers_size ||
+            address > SIZE_MAX ||
+            section->size > SIZE_MAX - (size_t)address) {
+            fprintf(state->diagnostics,
+                    "minic-ld: invalid-vdso-script-file-placement:%s\n",
+                    section->name);
+            return false;
+        }
+        layout->section_file_offset[i] = (size_t)address;
+        if (section->type != SHT_NOBITS &&
+            end < (size_t)address + section->size) {
+            end = (size_t)address + section->size;
+        }
+    }
+    layout->have_rx = true;
+    layout->have_rw = false;
+    layout->rx_file_offset = 0U;
+    layout->rx_vaddr = 0U;
+    layout->rx_file_size = end;
+    layout->rx_mem_size = end;
+    return true;
 }
 
 static bool static_section_has_prefix(const char *name, const char *prefix) {
@@ -7883,6 +7951,8 @@ int minild_link_shared_elf64_riscv_inputs_options(
         options != NULL ? options->dynamic_list_path : NULL;
     const char *version_script_path =
         options != NULL ? options->version_script_path : NULL;
+    const char *script_path =
+        options != NULL ? options->script_path : NULL;
     const char *needed_name =
         options != NULL ? options->needed_name : NULL;
     const bool pie = options != NULL && options->pie;
@@ -7897,6 +7967,7 @@ int minild_link_shared_elf64_riscv_inputs_options(
     MiniLdStaticLayout layout;
     MiniLdSharedImage shared;
     MiniLdScript version_script;
+    MiniLdScript layout_script;
     const MiniLdScript *version = NULL;
     uint64_t entry = 0U;
     bool layout_ready = false;
@@ -7910,6 +7981,7 @@ int minild_link_shared_elf64_riscv_inputs_options(
     memset(&layout, 0, sizeof(layout));
     memset(&shared, 0, sizeof(shared));
     minild_script_initialize(&version_script);
+    minild_script_initialize(&layout_script);
     state.diagnostics = diagnostics;
     state.allow_dso_inputs = true;
     if (version_script_path != NULL) {
@@ -7927,6 +7999,23 @@ int minild_link_shared_elf64_riscv_inputs_options(
         }
         version = &version_script;
     }
+    if (script_path != NULL) {
+        if (version != NULL ||
+            !minild_script_parse_file(script_path,
+                                      &layout_script, diagnostics) ||
+            layout_script.version_name == NULL ||
+            layout_script.version_global_count == 0U ||
+            !layout_script.version_local_all ||
+            layout_script.output_arch == NULL ||
+            strcmp(layout_script.output_arch, "riscv") != 0 ||
+            soname == NULL || soname[0] == '\0') {
+            fprintf(diagnostics,
+                    "minic-ld: unsupported-shared-script-contract:%s\n",
+                    script_path);
+            goto done;
+        }
+        version = &layout_script;
+    }
 
     if (!process_input_sequence(&state, inputs, input_count) ||
         !state.have_input ||
@@ -7943,10 +8032,20 @@ int minild_link_shared_elf64_riscv_inputs_options(
                                  version,
                                  &shared) ||
         (pie && !shared_validate_pie_dso_symbols(&state)) ||
-        !shared_build_layout(&state, &layout)) {
+        !(script_path != NULL
+              ? shared_build_vdso_script_layout(&state, &layout_script,
+                                                &layout)
+              : shared_build_layout(&state, &layout))) {
         goto done;
     }
     layout_ready = true;
+    if (script_path != NULL) {
+        /* Do not publish Linux -T output until the ELF writer honors all
+         * explicit PHDR mappings from the script. */
+        fprintf(diagnostics,
+                "minic-ld: unsupported-shared-script-PHDR-emission\n");
+        goto done;
+    }
 
     if (!shared_finalize_ehdr_symbol(&state, &layout) ||
         (entry_symbol != NULL &&
@@ -7976,6 +8075,7 @@ done:
     shared_image_destroy(&shared);
     state_destroy(&state);
     minild_script_destroy(&version_script);
+    minild_script_destroy(&layout_script);
     return ok ? 0 : 1;
 }
 
@@ -7991,6 +8091,7 @@ int minild_link_shared_elf64_riscv_inputs(const char *output_path,
     options.entry_symbol = entry_symbol;
     options.dynamic_list_path = NULL;
     options.version_script_path = NULL;
+    options.script_path = NULL;
     options.needed_name = NULL;
     options.interpreter_path = NULL;
     options.strip_debug = false;
@@ -8090,7 +8191,7 @@ int minild_link_static_elf64_riscv_inputs_options(
     if (!state.have_input ||
         !static_allocate_common(&state) ||
         !static_build_got(&state, &got) ||
-        !(have_script ? static_build_script_layout(&state, &script, &layout)
+        !(have_script ? static_build_script_layout(&state, &script, &layout, 0U)
                       : static_build_layout(&state, &layout))) {
         goto done;
     }
