@@ -2,6 +2,8 @@
 # Probe GNU LD's *real* RISC-V 64-bit vDSO shared-link boundary using a frozen
 # Linux 6.6.143 Kbuild object cache. No Linux C build, no Kbuild and no QEMU.
 # Preserve exact GNU arguments: do NOT silently ignore ELF metadata flags.
+# Live gap gate: observed remaining GNU LD vDSO64 from #38485397284;
+# only a new 64-bit shared-link implementation can remove this fallback.
 set -Eeuo pipefail
 if (( $# != 3 )); then
   echo "usage: $0 <gnu-kbuild-out> <minild-build-dir> <evidence-dir>" >&2
