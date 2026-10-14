@@ -226,3 +226,27 @@ PERF-006 `blake2s` 的真实 Runtime 布尔域索引收益为 1465.171ms→1368.
 实验只比较**原已认证 Runtime+crossblock MiniC-cc 与仅开启 Boolean Domain 索引的 MiniC-cc**，用同一个真实 Kbuild 生成的 .i 与同 Runner 四次交替测量，逐文件强制生成汇编 SHA 相同和 RV64 .o ABI 正确。比较三者绝对节省秒数与比例，**禁止把首次单文件成功声称为完整内核的提速**。
 
 实现复用原有 `.github/workflows/linux-runtime-gcc-baseline.yml` 的 gcc-single Job 和 `tools/ci/linux-runtime-gcc-cohort-bisect-v1.sh`；只允许明确的 3 个 owner、固定 GNU 配置 SHA、相同源码与严格 GNU 预检，生成 .i 时对选定对象缓存命中才做一次字节相同的对象回放。冻结 .i 后调用既有 `linux-perf-pinned-single-paired-ab-v1.py`；既不创建 workflow，也不重复构建全部对象。待 CI 出现真正 PASS 后追加详细计时与原因，否则保留失败并先判断是否仍值得优化。
+
+## 12. PERF-007：对三个真正慢文件完成同条件运行时编译器配对测量（2026-10-14）
+
+**验收：** GitHub Actions run #38593657933，gcc-single 完整 `SUCCESS`；原生 Linux 6.6.143 GNU Kbuild .i，全程同一 Runner，固定原 Runtime + crossblock 对照，仅打开已经证明的 Boolean Domain 缓存，双方各 4 次交替测量并热身；每个 TU 的生成汇编 SHA 一致，3/3 ELF/ABI PASS，GNU 全部原始 .o SHA 校验通过。**未运行 Linux QEMU**，所以状态是 `verified-local-three`。
+
+| 原生对象 | 旧编译器 P50 | Boolean 缓存 P50 | 绝对收益 | 加速比 | 输入 .i SHA256 |
+| --- | ---: | ---: | ---: | ---: | --- |
+| kernel/bpf/btf.o | 15,077.178ms | 7,772.015ms | 7,305.163ms | **1.9399×** | `2e89f8c15c2d5eee7fdb77afda2f6ee28d958f117f9d3d2cc9b738624e298b9a` |
+| kernel/bpf/verifier.o | 16,169.658ms | 8,925.430ms | 7,244.228ms | **1.8116×** | `c0b3c94bbc616bf6f1a52427085cd2c30dc1fe5b3c863ee70267ae1fd0beac9e` |
+| net/core/filter.o | 32,227.778ms | 18,021.032ms | 14,206.746ms | **1.7883×** | `a05401981af43328acad0a354bb354aa1e0c0231e3339f94505e2dc34c802778` |
+
+这三个样本的**单次各编译一次**之中位耗时合计从约 **63.475 秒降至 34.718 秒**，绝对可节约 **28.756 秒**。注意此结果不是完整 2057 C 对象的总加速；其他文件的收益和退化仍需测量。
+
+**对方法论的影响：** 已经在三种不同的真实热点结构上得到约 1.79–1.94×，足以证明该优化不只是适合 blake2s 的微小收益；无需继续重复研究同一布尔索引算法。下一轮优先研究尚未消除的 Core IR、Codegen 及网络规模带来的处理成本。Boolean Domain 补丁应纳入候选晋级，但不能未经新的全量正确性/QEMU 认证就覆盖已通过的 Runtime 标准配置。
+
+**实际测试设施复用及修复：** 原首轮 #38592358943 已真正通过 GNU 预检、3 对象 MiniC/ABI，但因 `tee` 的报告父目录缺失而失败。随后把昂贵的 A/B 与候选编译拆为不同 Workflow Steps：候选 3 个 .o 缓存独立保存，确切 3 份冻结 .i 及 SHA256 Manifest 也独立缓存；因此本轮复验实际日志确认 `COHORT_CANDIDATE_CACHE=HIT objects=3`，不需要重编三个候选对象。它只在可信固定 owner、Kbuild 源和候选身份匹配时允许复用；没有新建 workflow 或 job。
+
+### 下一组热点：不能继续只测同一种优化
+
+从独立 RV64-only 2057 TU 全量逐阶段真实数据汇总：MiniC 累计 5,286.195 秒，其中 `net/` 目录 **1,807.863 秒，占 34.20%**，而网络目录只有 276/2057（13.42%）个 C owner。前20最慢文件贡献累计 351.975 秒（6.66%），前100贡献 1,123.677 秒（21.26%）。
+
+尚未在本轮测试的高成本文件：`net/core/dev.o`（25,026ms）、`net/ipv4/tcp_input.o`（24,867ms），以及输入只有约 2.61MB、却耗时 15,609ms 的 `lib/crc32.o`。下一轮应挑大网络文件 + 异常高单位输入耗时的 crc32 作为不同结构的反例，对阶段 `parse / normalize / core-set / core-validate / layout / codegen` 做实际分段归因。优先复用已经存在的 `MINIC_BOOTSTRAP_TRACE` 和 GNU 冻结 .i，不再无目的地为 Boolean 增加重复整套对照。
+
+**决策规则：** Boolean 算法从热点研究队列移入“候选晋级与扩展正确性回归”队列；高耗时文件的下一轮分析必须评估另一种实际瓶颈，不把已经得到明显收益的单一算法研究成没完没了的局部项目。
