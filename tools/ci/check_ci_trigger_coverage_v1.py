@@ -120,6 +120,13 @@ def main():
         for mark in ("TOOLCHAIN_FOCUSED_T1=PASS","TOOLCHAIN_FOCUSED_T1=FAIL","steps.ld_gc.outcome","steps.ar_nm.outcome","steps.rv64.outcome"):
             if mark not in rv: raise AssertionError("Performance independent oracles lost: "+mark)
         print("M0_PERF_T1=IN_SCOPE owners=3 shared_build_jobs=1 (real T1 execution separately required)")
+    # Reuse this existing M0 job (no new workflow/job) to execute the
+    # deterministic, fail-closed performance plan self-test. This is a plan
+    # contract check, not a claim of real Linux compile speedup.
+    if branch == BRANCHES[0]:
+        from runpy import run_path
+        script=ROOT/"tools/ci/linux-perf-time-balanced-shard-plan-v1.py"
+        run_path(str(script))["self_test"]()
     print(f"M0_CI_TRIGGER_LEDGER=PASS branch={branch} maintained={len(local)} total={len(rows)} unique={len({r['path'] for r in rows})} route_checks=4 tier=T0")
 
 if __name__=="__main__":
