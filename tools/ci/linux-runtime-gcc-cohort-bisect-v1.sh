@@ -164,6 +164,14 @@ cp -a --reflink=auto "$gold_snapshot" "$out"
 # executable produced by the checked-in profile, and GNU assembler identity.
 # This permits reusing the *same* verified 384 .o after a CI harness fix.
 compiler_sig=$(sha256sum "$minic" | cut -d' ' -f1)
+if [[ "${COHORT_GNU_PREFLIGHT_ALLOW_BOOL_SINGLE:-0}" == 1 ]]; then
+  # minic is just the driver; the changed Boolean Domain code is linked into
+  # minic-cc. Bind this experiment's candidate object identity to the real CC.
+  cc_bin="$(dirname "$minic")/minic-cc"
+  test -x "$cc_bin"
+  compiler_sig=$(printf '%s\n%s\n' "$compiler_sig" "$(sha256sum "$cc_bin" | cut -d' ' -f1)" | sha256sum | cut -d' ' -f1)
+  echo "BOOLEAN_CACHE_SINGLE=CC_IDENTITY sha256=$(sha256sum "$cc_bin" | cut -d' ' -f1)"
+fi
 assembler_sig=$(sha256sum /usr/bin/riscv64-linux-gnu-as | cut -d' ' -f1)
 gold_sig=$(sha256sum "$prov/gcc-objects.sha256" | cut -d' ' -f1)
 list_sig=$(sha256sum "$objects_file" | cut -d' ' -f1)
