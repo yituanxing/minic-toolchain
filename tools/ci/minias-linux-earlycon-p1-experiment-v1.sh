@@ -32,8 +32,26 @@ minias="$toolchain/bin/minic-as"
 sha256sum "$minias" >"$ev/minias-tool.sha256"
 sha256sum "$src" >"$ev/input-assembly.sha256"
 sha256sum "$frozen/$relative" >"$ev/certified-earlycon-object.sha256"
+# Do NOT assume the Linux kernel uses userspace rv64gc/lp64d.
+# The certified kernel object is the ABI oracle. The earlier single-source
+# diagnostic compared against GNU AS with userland RV64GC flags; for Kbuild
+# P1 we must instead reproduce the actual frozen Linux object's ELF e_flags.
+read -r arch abi ref_flags < <(python3 - "$frozen/$relative" <<'PY_REFERENCE'
+from pathlib import Path
+import struct,sys
+b=Path(sys.argv[1]).read_bytes()[:52]
+assert b[:6]==b'\x7fELF\x02\x01' and struct.unpack_from('<H',b,18)[0]==243
+flags=struct.unpack_from('<I',b,48)[0]
+assert flags & ~0x7 == 0, f"unsupported kernel ELF flags {flags:#x}"
+arch="rv64gc" if flags & 1 else "rv64g"
+abi={0:"lp64",2:"lp64f",4:"lp64d",6:"lp64q"}.get(flags&6)
+assert abi is not None
+print(arch,abi,f"{flags:#x}")
+PY_REFERENCE
+)
+echo "MINIAS_EARLYCON_KERNEL_ABI=REFERENCE original_e_flags=$ref_flags march=$arch mabi=$abi"
 start=$(date +%s%3N)
-"$minias" -march=rv64gc -mabi=lp64d -o "$experiment/$relative" "$src" >"$ev/minias.stdout" 2>"$ev/minias.stderr"
+"$minias" "-march=$arch" "-mabi=$abi" -o "$experiment/$relative" "$src" >"$ev/minias.stdout" 2>"$ev/minias.stderr"
 elapsed=$(($(date +%s%3N)-start))
 echo "MINIAS_EARLYCON_EXPERIMENT=ASSEMBLED elapsed_ms=$elapsed native_object=1 original_2064_cache_unchanged=true"
 python3 - "$frozen/$relative" "$experiment/$relative" "$manifest" "$experiment" <<'PY_ATTEST'
