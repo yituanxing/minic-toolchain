@@ -32,8 +32,10 @@ def main():
     for opt in ('golden-out','candidate-pool','manifest','minic','minias','work','cache-identity'):
         p.add_argument('--'+opt, required=True)
     p.add_argument('--jobs', type=int, default=4)
+    p.add_argument('--shard', type=int, default=None)
+    p.add_argument('--shards', type=int, default=7)
     args = p.parse_args()
-    if args.jobs < 1 or args.jobs > 6 or not args.cache_identity.startswith('gnu-minic-objects-v1-'):
+    if args.jobs < 1 or args.jobs > 6 or args.shards!=7 or (args.shard is not None and not 0<=args.shard<7) or not args.cache_identity.startswith('gnu-minic-objects-v1-'):
         raise ValueError('unsafe runner parallelism or invalid corpus cache identity')
     gold = pathlib.Path(args.golden_out).resolve()
     pool = pathlib.Path(args.candidate_pool).resolve()
@@ -61,6 +63,10 @@ def main():
     selected+=sorted(n for n in names if n not in selected)
     if len(selected)!=2064 or len(set(selected))!=2064:
         raise ValueError('full-corpus target selection incomplete')
+    whole_selected=selected
+    if args.shard is not None:
+        selected=[owner for i,owner in enumerate(whole_selected) if i%7==args.shard]
+    total=len(selected)
     sdir=work/'assembly'
     index=sdir/'index.json'
     schema={'schema':'minias-linux-s-corpus-v1','identity':args.cache_identity,
@@ -72,12 +78,17 @@ def main():
             if key!='selected' and old.get(key)!=value:
                 raise ValueError('frozen S corpus identity changed: '+key)
         prev=old.get('selected',[])
-        if selected[:len(prev)]!=prev:
+        if args.shard is None and selected[:len(prev)]!=prev:
             raise ValueError('non-prefix old S corpus, cannot reuse safely')
+        if args.shard is not None and not set(prev).issubset(set(whole_selected)):
+            raise ValueError('existing S cache includes foreign owners')
     known={} if not old else old.get('files',{})
+    if args.shard is not None:
+        known={name:info for name,info in known.items() if name in set(selected)}
     if not set(known).issubset(set(selected)):
         raise ValueError('extra frozen S files')
-    print(f'MINIAS_FULL_SWEEP=START original_objects=2064 cached_s={len(known)} workers={args.jobs} recompile_C=NO', flush=True)
+    initial_known=set(known)
+    print(f'MINIAS_FULL_SWEEP=START owners={total} of=2064 shard={args.shard} cached_s={len(known)} workers={args.jobs} recompile_C=NO', flush=True)
     def run(owner):
         stem=owner[:-2]
         s=sdir/(stem+'.s')
@@ -127,7 +138,6 @@ def main():
         return owner,status,rc,ms,item,generated
     rows={}
     changes=0
-    import threading
     with futures.ThreadPoolExecutor(max_workers=args.jobs) as executor:
         tasks={executor.submit(run,owner):owner for owner in selected}
         for future in futures.as_completed(tasks):
@@ -152,7 +162,7 @@ def main():
             if len(rows)%24==0:
                 sdir.mkdir(parents=True,exist_ok=True)
                 index.write_text(json.dumps({**schema,'files':known},sort_keys=True)+'\n')
-                print(f'MINIAS_FULL_SWEEP=PROGRESS scanned={len(rows)} of=2064 s_generated={changes} gaps={sum(v[0]!="OBJECT_BASIC_PASS" for v in rows.values())}',flush=True)
+                print(f'MINIAS_FULL_SWEEP=PROGRESS scanned={len(rows)} of={total} shard={args.shard} s_generated={changes} gaps={sum(v[0]!="OBJECT_BASIC_PASS" for v in rows.values())}',flush=True)
     index.write_text(json.dumps({**schema,'files':known},sort_keys=True)+'\n')
     with (work/'full-scan.tsv').open('w') as f:
         f.write('owner\tstatus\trc\tassemble_ms\n')
@@ -161,10 +171,10 @@ def main():
             f.write(f'{owner}\t{state}\t{rc}\t{ms}\n')
     from collections import Counter
     stats=Counter(v[0] for v in rows.values())
-    gaps=2064-stats['OBJECT_BASIC_PASS']
-    summary={'schema':'minias-full-scan-v1','owner_count':2064,
+    gaps=total-stats['OBJECT_BASIC_PASS']
+    summary={'schema':'minias-full-scan-v1','owner_count':total,'full_owner_count':2064,'shard':args.shard,'shards':args.shards,
              'basic_pass':stats['OBJECT_BASIC_PASS'],'gaps':gaps,
-             'reused_s':sum(1 for n in selected if n in (old or {}).get('files',{})),
+             'reused_s':len(initial_known),
              'new_s_generated':changes,'status_counts':dict(stats),
              'gcc_golden_identity':args.cache_identity,'minic_sha256':c.digest(minic),
              'minias_sha256':c.digest(minias),

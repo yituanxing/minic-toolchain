@@ -508,7 +508,7 @@ jobs:
   # Explicit, optional 7-runner producer for the same pure-GCC C universe.
   # Do not use this lane for everyday single-TU debugging.
   gcc-shards:
-    if: github.event_name == 'push' && contains(github.event.head_commit.message, '[linux-runtime-gcc-sharded]')
+    if: github.event_name == 'push' && (contains(github.event.head_commit.message, '[linux-runtime-gcc-sharded]') || contains(github.event.head_commit.message, '[linux-minias-seven-shards]'))
     runs-on: ubuntu-24.04
     timeout-minutes: 75
     strategy:
@@ -554,7 +554,104 @@ jobs:
         with:
           fixture: source
 
+      # Seven real runners now partition GNU-E -> MiniC-S -> MiniAS, instead
+      # of squeezing all 2064 TUs onto a single 4-worker runner. Keep the
+      # historical seven-way C-object producer untouched and simply re-route
+      # its opt-in seven matrix workers for this independent MiniAS sweep.
+      - name: Identify exact 2064-object MiniC cache for native seven-way assembly
+        if: contains(github.event.head_commit.message, '[linux-minias-seven-shards]')
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ev="$GITHUB_WORKSPACE/build/minias-seven-shards-v1/shard-${{ matrix.shard }}"
+          mkdir -p "$ev"
+          python3 tools/ci/linux-runtime-gcc-full-c-objects-v1.py \
+            --out "$GITHUB_WORKSPACE/build/linux-runtime-gcc/out" \
+            --manifest "$GITHUB_WORKSPACE/build/linux-runtime-gcc/provenance/gcc-objects.sha256" \
+            --prefix tools/ci/linux-runtime-gcc-cohort-objects-v1.txt \
+            --output "$ev/full-objects.txt" \
+            --excluded "$ev/non-c-objects.tsv" \
+            --min-c-objects 1200
+          profile=$(python3 tools/ci/linux-runtime-profile-cache-id-v1.py)
+          profile="${profile}-full-crossblock-pure-eq-v1-$(sha256sum tools/ci/apply-riscv64-p1-defined-before-use-crossblock-v1.py | cut -c1-16)"
+          objects=$(sha256sum "$ev/full-objects.txt" | cut -d' ' -f1)
+          gcc=$(sha256sum "$(command -v riscv64-linux-gnu-gcc)" | cut -d' ' -f1)
+          assembler=$(sha256sum "$(command -v riscv64-linux-gnu-as)" | cut -d' ' -f1)
+          echo "FULL_MINIC_KEY=gnu-minic-objects-v1-eeb04f304ebfb97a1079c187dc0c2ea3cc61fc50a55aa3cc776237c16ab19bbe-$profile-$objects-$gcc-$assembler" >>"$GITHUB_ENV"
+
+      - name: Restore immutable full MiniC object pool on this MiniAS worker
+        id: minias_shard_original_cache
+        if: contains(github.event.head_commit.message, '[linux-minias-seven-shards]')
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            build/linux-runtime-gcc-cohort-v1/minic
+            build/linux-runtime-gcc-cohort-v1/minic-manifest.sha256
+            build/linux-runtime-gcc-cohort-v1/minic-identity.txt
+          key: ${{ env.FULL_MINIC_KEY }}
+          fail-on-cache-miss: true
+
+      - name: Restore this worker's immutable MiniC S assembly cache
+        id: minias_shard_s_cache
+        if: contains(github.event.head_commit.message, '[linux-minias-seven-shards]')
+        uses: actions/cache/restore@v4
+        with:
+          path: build/minias-linux-corpus-v1/assembly
+          key: ${{ env.FULL_MINIC_KEY }}-minias-seven-shards-v1-${{ matrix.shard }}
+          restore-keys: ${{ env.FULL_MINIC_KEY }}-minias-corpus-s-v1-64
+
+      - name: Sweep assigned one-seventh of real Linux C owners through MiniAS
+        if: contains(github.event.head_commit.message, '[linux-minias-seven-shards]')
+        shell: bash
+        timeout-minutes: 60
+        run: |
+          set -Eeuo pipefail
+          test "${{ steps.minias_shard_original_cache.outputs.cache-hit }}" = true
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-v1"
+          (cd "$ev" && sha256sum --quiet -c minic-manifest.sha256)
+          src="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0/linux-6.6.143"
+          work="$GITHUB_WORKSPACE/build/linux-runtime-gcc"
+          test -d "$src"
+          cp -a --reflink=auto "$src" "$work/linux-6.6.143"
+          MINIC_LINUX_FULL_CROSSBLOCK=1 MINIC_OPT_PURE_DISCARDED_ADDRESS_EQ=1 \
+            bash tools/ci/linux-runtime-build-minic-profile-v1.sh \
+              "$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain" \
+              "$GITHUB_WORKSPACE/build/minias-seven-shards-v1/shard-${{ matrix.shard }}/compiler"
+          tools="$GITHUB_WORKSPACE/build/minias-linux-corpus-v1-tools"
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$tools" "$tools/bin/minic-as"
+          python3 tools/ci/minias-linux-full-corpus-v1.py \
+            --golden-out "$GITHUB_WORKSPACE/build/linux-runtime-gcc/out" \
+            --candidate-pool "$ev/minic" \
+            --manifest "$ev/minic-manifest.sha256" \
+            --minic "$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain/bin/minic" \
+            --minias "$tools/bin/minic-as" \
+            --work "$GITHUB_WORKSPACE/build/minias-linux-corpus-v1" \
+            --cache-identity "$FULL_MINIC_KEY" \
+            --shard ${{ matrix.shard }} --shards 7 --jobs 2
+
+      - name: Cache this seventh of MiniC S inputs (even when MiniAS has gaps)
+        if: always() && contains(github.event.head_commit.message, '[linux-minias-seven-shards]') && steps.minias_shard_s_cache.outputs.cache-hit != 'true' && hashFiles('build/minias-linux-corpus-v1/assembly/index.json') != ''
+        uses: actions/cache/save@v4
+        with:
+          path: build/minias-linux-corpus-v1/assembly
+          key: ${{ env.FULL_MINIC_KEY }}-minias-seven-shards-v1-${{ matrix.shard }}
+
+      - name: Preserve verified shard report and retained assemblies for merge
+        if: always() && contains(github.event.head_commit.message, '[linux-minias-seven-shards]')
+        uses: actions/upload-artifact@v4
+        with:
+          name: minias-seven-corpus-${{ matrix.shard }}-${{ github.sha }}
+          path: |
+            build/minias-linux-corpus-v1/full-summary.json
+            build/minias-linux-corpus-v1/full-scan.tsv
+            build/minias-linux-corpus-v1/assembly/**/*.s
+            build/minias-linux-corpus-v1/assembly/index.json
+            build/minias-linux-corpus-v1/evidence/**/*.minias.log
+          retention-days: 3
+          if-no-files-found: warn
+
       - name: Derive identical full universe and this shard
+        if: "!contains(github.event.head_commit.message, '[linux-minias-seven-shards]')"
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -572,6 +669,7 @@ jobs:
             --shard ${{ matrix.shard }} --output "$ev/full-objects.txt"
 
       - name: Identify immutable MiniC shard artifact
+        if: "!contains(github.event.head_commit.message, '[linux-minias-seven-shards]')"
         id: candidate
         shell: bash
         run: |
@@ -587,6 +685,7 @@ jobs:
           echo "key=gnu-minic-shard-v1-eeb04f304ebfb97a1079c187dc0c2ea3cc61fc50a55aa3cc776237c16ab19bbe-$profile-$subset-$gcc-$assembler" >>"$GITHUB_OUTPUT"
 
       - name: Restore this shard's immutable candidate objects
+        if: "!contains(github.event.head_commit.message, '[linux-minias-seven-shards]')"
         id: shard_cache
         uses: actions/cache/restore@v4
         with:
@@ -597,6 +696,7 @@ jobs:
           key: ${{ steps.candidate.outputs.key }}
 
       - name: Build MiniC and prove this exact shard
+        if: "!contains(github.event.head_commit.message, '[linux-minias-seven-shards]')"
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -619,6 +719,7 @@ jobs:
             "$work/provenance" "$ev/full-objects.txt" "$ev"
 
       - name: Authenticate shard before cache or export
+        if: "!contains(github.event.head_commit.message, '[linux-minias-seven-shards]')"
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -632,6 +733,7 @@ jobs:
           echo "GNU_MINIC_SHARD_READY=PASS shard=${{ matrix.shard }} objects=$n"
 
       - name: Cache completed shard independently of later link failures
+        if: "!contains(github.event.head_commit.message, '[linux-minias-seven-shards]')"
         if: steps.shard_cache.outputs['cache-hit'] != 'true'
         uses: actions/cache/save@v4
         with:
@@ -642,6 +744,7 @@ jobs:
           key: ${{ steps.candidate.outputs.key }}
 
       - name: Transfer only candidate objects and attestations
+        if: "!contains(github.event.head_commit.message, '[linux-minias-seven-shards]')"
         uses: actions/upload-artifact@v4
         with:
           name: shard-${{ matrix.shard }}
@@ -655,7 +758,7 @@ jobs:
           retention-days: 3
 
       - name: Keep bounded failed-TU evidence
-        if: failure()
+        if: failure() && !contains(github.event.head_commit.message, '[linux-minias-seven-shards]')
         uses: actions/upload-artifact@v4
         with:
           name: debug-shard-${{ matrix.shard }}
