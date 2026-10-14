@@ -21,7 +21,7 @@ declare -a inputs=(
   arch/riscv/kernel/vdso/sys_hwprobe.o
   arch/riscv/kernel/vdso/note.o
 )
-for f in "\${inputs[@]}" arch/riscv/kernel/vdso/vdso.lds \
+for f in "${inputs[@]}" arch/riscv/kernel/vdso/vdso.lds \
   arch/riscv/kernel/vdso/vdso.so.dbg.tmp; do
   [[ -s "$out/$f" ]] || {
     echo "MINILD_VDSO=INCONCLUSIVE missing_pinned_GNU_object=$f" >&2
@@ -42,7 +42,7 @@ sha256sum "$minild" >"$ev/tool.sha256"
     -soname=linux-vdso.so.1 --build-id=sha1 \
     --hash-style=both --eh-frame-hdr \
     -T arch/riscv/kernel/vdso/vdso.lds \
-    "\${inputs[@]}" -o "$ev/vdso.so.dbg.tmp" \
+    "${inputs[@]}" -o "$ev/vdso.so.dbg.tmp" \
     >"$ev/ld.stdout" 2>"$ev/ld.stderr" || code=$?
   elapsed=$(($(date +%s%3N) - start))
   printf '%s\t%s\n' "$elapsed" "$code" >"$ev/timing.tsv"
