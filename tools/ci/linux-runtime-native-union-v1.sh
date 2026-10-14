@@ -82,6 +82,49 @@ for ((i=0; i<${#args[@]}; ++i)); do
     break
   fi
 done
+# The exact ELF64 RISC-V Linux vDSO command independently passed GNU-vs-
+# MiniLD ELF ABI, section, PHDR and symbol-version oracles (#38535551347).
+# Promote only the Kbuild 64-bit vdso.so.dbg link under explicit opt-in.
+# Do not capture compat/32-bit vDSO, host links or non-linking LD probes.
+# Fail closed if GNU Kbuild changes this target's flags; do not fake zero
+# GNU fallback by quietly sending an unrecognized vDSO command to GNU.
+if [[ "${MINILD_ENABLE_VDSO64:-0}" == 1 &&
+      "$output" == *arch/riscv/kernel/vdso/vdso.so.dbg* ]]; then
+  if [[ "$output" != arch/riscv/kernel/vdso/vdso.so.dbg &&
+        "$output" != arch/riscv/kernel/vdso/vdso.so.dbg.tmp ]]; then
+    echo "MINILD_VDSO64=FAIL unexpected_target_path:$output" >&2
+    exit 86
+  fi
+  has_arch=0
+  has_shared=0
+  has_script=0
+  for ((j=0; j<${#args[@]}; ++j)); do
+    case "${args[j]}" in
+      -melf64lriscv) has_arch=1 ;;
+      -shared) has_shared=1 ;;
+      -T)
+        if ((j+1<${#args[@]})) &&
+           [[ "${args[j+1]}" == *arch/riscv/kernel/vdso/vdso.lds ]]; then
+          has_script=1
+        fi ;;
+      -T*vdso.lds) has_script=1 ;;
+    esac
+  done
+  if (( !has_arch || !has_shared || !has_script )); then
+    echo "MINILD_VDSO64=FAIL unexpected_kbuild_flags arch=$has_arch shared=$has_shared script=$has_script output=$output" >&2
+    exit 86
+  fi
+  { flock 9; printf 'minild-vdso64'; printf ' %q' "$@"; printf '\n'; } 9>>"$NATIVE_TRACE_DIR/minild.trace" >&9
+  started_ms=$(date +%s%3N)
+  status=0
+  "$MINILD" "$@" || status=$?
+  elapsed_ms=$(($(date +%s%3N)-started_ms))
+  { flock 9; printf 'minild-vdso64\t%s\t%s\t%s\n' "$elapsed_ms" "$status" "$output"; } 9>>"$NATIVE_TRACE_DIR/minild-times.tsv" >&9
+  if (( status!=0 )); then
+    echo "MINILD_VDSO64=FAIL native_link_status=$status output=$output" >&2
+  fi
+  exit "$status"
+fi
 # Combined full-runtime qualification: only vmlinux.o -r is additionally
 # native, all other untested linker boundaries stay GNU. Require QEMU P1
 # and 2 real native -r calls after SHA-authenticating all 2064 MiniC objects.

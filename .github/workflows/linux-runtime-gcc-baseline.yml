@@ -1650,6 +1650,10 @@ jobs:
               export MINILD_ENABLE_VMLINUX_R=1
               echo "MINILD_NATIVE_R=ENABLED boundary=vmlinux.o only gnu_linkers=other_unproven"
             fi
+            if [[ "${{ contains(github.event.head_commit.message, '[linux-native-vdso64]') && '1' || '0' }}" == 1 ]]; then
+              export MINILD_ENABLE_VDSO64=1 COHORT_MINILD_FORCE_VDSO64=1
+              echo "MINILD_VDSO64=ENABLED Kbuild_64bit_vDSO_native_only=true cached_GNU_vdso_relink=true MiniC_cache=2064"
+            fi
             export COHORT_NATIVE_AR="$native/ar-wrapper"
             export COHORT_NATIVE_LD="$native/ld-wrapper"
             export COHORT_NATIVE_OBJCOPY="$native/objcopy-wrapper"
@@ -1750,6 +1754,20 @@ jobs:
               }
               echo "MINILD_NATIVE_R=PASS calls=$minild_r_calls fallback_GNU_vmlinux_o=0 full_QEMU_P1=PASS"
             fi
+            if [[ "${{ contains(github.event.head_commit.message, '[linux-native-vdso64]') && '1' || '0' }}" == 1 ]]; then
+              native_vdso64_calls=$(grep -c '^minild-vdso64 ' "$NATIVE_TRACE_DIR/minild.trace" || true)
+              gnu_vdso64_calls=$(grep -Ec '^gnu-ld .*arch/riscv/kernel/vdso/vdso\.so\.dbg' "$NATIVE_TRACE_DIR/minild.trace" || true)
+              [[ "$native_vdso64_calls" -ge 1 && "$gnu_vdso64_calls" -eq 0 ]] || {
+                echo "MINILD_VDSO64=FAIL expected_real_Kbuild_native_link native=$native_vdso64_calls gnu=$gnu_vdso64_calls" >&2
+                exit 36
+              }
+              test -s "$work/out/arch/riscv/kernel/vdso/vdso.so.dbg" || {
+                echo 'MINILD_VDSO64=FAIL missing_relinked_64bit_ELF' >&2
+                exit 37
+              }
+              grep -Fq 'COHORT_P1=PASS name=full_all_verified syscalls=12 python_era_oracle=PASS' "$ev/cohort.log" || exit 38
+              echo "MINILD_VDSO64=PASS native_calls=$native_vdso64_calls gnu_calls=$gnu_vdso64_calls real_Kbuild_link=true MiniC_cached=2064 original_16KiB=true QEMU_P1=12/12"
+            fi
             if [[ "${{ contains(github.event.head_commit.message, '[linux-native-minias-earlycon]') && '1' || '0' }}" == 1 ]]; then
               grep -Fq 'COHORT_P1=PASS name=full_all_verified syscalls=12 python_era_oracle=PASS' "$ev/cohort.log" || exit 29
               test -s "$ev/minias-earlycon-experiment/experimental-earlycon-object.sha256"
@@ -1775,7 +1793,7 @@ jobs:
               grep -Fq 'MINIAS_ALL_C_RUNTIME=PASS' "$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-v1/cohort.log" || true
               echo "MINIAS_NATIVE_S_INTEGRATION=PASS all_2064_MiniC_C_native_AS=true original_Kbuild_native_S=true P1=12/12"
             fi
-            echo "NATIVE_UNION_RESULT=PASS pp=GNU minic=2064 from_cache ar=MiniAR_full_actual_Kbuild ar_native_calls=$minic_ar_calls ar_mpit_calls=$minic_mpit_calls ar_gnu_calls=0 ld=MiniLD_final_only objcopy=MiniObjcopy runtime=P1"
+            echo "NATIVE_UNION_RESULT=PASS pp=GNU minic=2064 from_cache ar=MiniAR_full_actual_Kbuild ar_native_calls=$minic_ar_calls ar_mpit_calls=$minic_mpit_calls ar_gnu_calls=0 ld=MiniLD_certified_boundaries vdso64_native=${MINILD_ENABLE_VDSO64:-0} objcopy=MiniObjcopy runtime=P1"
           fi
 
       - name: Preserve aggregate link, QEMU and failure-frontier evidence
