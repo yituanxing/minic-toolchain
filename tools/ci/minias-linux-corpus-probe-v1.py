@@ -85,8 +85,13 @@ def main():
             'config_sha256':digest(golden/'.config'),'selected':selected}
     sdir=work/'assembly';index=sdir/'index.json'
     old=json.loads(index.read_text()) if index.is_file() else None
-    if old and any(old.get(k)!=v for k,v in schema.items()):
-        raise RuntimeError('cached assembly belongs to different MiniC/Kbuild profile')
+    if old:
+        # A wider corpus must reuse the previously certified .s rather than
+        # rerun even the GCC-E / MiniC-S stages for already scanned objects.
+        if any(old.get(k)!=v for k,v in schema.items() if k!='selected'):
+            raise RuntimeError('cached assembly belongs to different MiniC/Kbuild profile')
+        if not set(old.get('selected',[])).issubset(set(selected)):
+            raise RuntimeError('cached assembly selection not subset of new expansion')
     files={} if old is None else old.get('files',{})
     if set(files)-set(selected): raise RuntimeError('extra cached assembly members')
     module=pathlib.Path(__file__).with_name('linux-runtime-kbuild-regeneration-guard-v1.py')

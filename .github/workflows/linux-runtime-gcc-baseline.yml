@@ -1205,7 +1205,8 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: build/minias-linux-corpus-v1/assembly
-          key: ${{ env.FULL_MINIC_KEY }}-minias-corpus-s-v1-12
+          key: ${{ env.FULL_MINIC_KEY }}-minias-corpus-s-v1-64
+          restore-keys: ${{ env.FULL_MINIC_KEY }}-minias-corpus-s-v1-12
 
       - name: Probe representative real Linux MiniC assembly with MiniAS (no C objects rebuilt)
         if: contains(github.event.head_commit.message, '[linux-minias-corpus-scan]')
@@ -1225,14 +1226,14 @@ jobs:
             --minic "$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain/bin/minic" \
             --minias "$tools/bin/minic-as" \
             --work "$GITHUB_WORKSPACE/build/minias-linux-corpus-v1" \
-            --cache-identity "$FULL_MINIC_KEY" --limit 12
+            --cache-identity "$FULL_MINIC_KEY" --limit 64
 
       - name: Cache frozen MiniC assembly sample for later MiniAS-only changes
         if: success() && contains(github.event.head_commit.message, '[linux-minias-corpus-scan]') && steps.minias_corpus_s_cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           path: build/minias-linux-corpus-v1/assembly
-          key: ${{ env.FULL_MINIC_KEY }}-minias-corpus-s-v1-12
+          key: ${{ env.FULL_MINIC_KEY }}-minias-corpus-s-v1-64
 
       - name: Keep MiniAS sampled gap classification without kernel relink
         if: always() && contains(github.event.head_commit.message, '[linux-minias-corpus-scan]')
