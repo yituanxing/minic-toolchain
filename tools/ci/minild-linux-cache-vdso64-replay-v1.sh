@@ -51,6 +51,14 @@ sha256sum "$minild" >"$ev/tool.sha256"
     "${inputs[@]}" -o "$ev/gnu-vdso.so.dbg.tmp" \
     >"$ev/gnu-ld.stdout" 2>"$ev/gnu-ld.stderr"
   sha256sum "$ev/gnu-vdso.so.dbg.tmp" >"$ev/gnu-output.sha256"
+  # Read-only GNU oracle for the *actual* RISC-V vDSO: count .eh_frame
+  # FDEs and report GNU EH-frame section / program-header semantics before
+  # attempting the native link. Do not infer the correct header from flags.
+  riscv64-linux-gnu-readelf -W -S -l "$ev/gnu-vdso.so.dbg.tmp" >"$ev/gnu-phdr-sections.txt"
+  riscv64-linux-gnu-readelf -W --debug-dump=frames "$ev/gnu-vdso.so.dbg.tmp" >"$ev/gnu-frames.txt"
+  grep -E '([.]eh_frame|GNU_EH_FRAME)' "$ev/gnu-phdr-sections.txt" |
+    sed 's/^/MINILD_VDSO_GNU_EH_LAYOUT /' || true
+  echo "MINILD_VDSO_GNU_FDES=$(grep -c ' FDE ' "$ev/gnu-frames.txt" || true)"
   echo "MINILD_VDSO_REFERENCE=PASS source=same_frozen_Kbuild_inputs compiler_C=skipped"
   start=$(date +%s%3N)
   code=0
