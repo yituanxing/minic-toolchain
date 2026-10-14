@@ -15,7 +15,7 @@ import threading
 import time
 
 STAGES=("parse","normalize","core-set","core-validate","layout","codegen")
-PAT=re.compile(r"MINIC_BOOTSTRAP_TRACE stage=([a-z-]+) state=([a-z-]+) functions=(\\d+)")
+PAT=re.compile(r"MINIC_BOOTSTRAP_TRACE stage=([a-z-]+) state=([a-z-]+) functions=(\d+)")
 
 def digest(p):
     h=hashlib.sha256()
@@ -52,7 +52,7 @@ def sample(executable,source,output,limit):
         timer=threading.Timer(limit,p.kill)
         timer.start()
         try:
-            events=[(time.perf_counter_ns(),line.rstrip("\\n")) for line in p.stderr]
+            events=[(time.perf_counter_ns(),line.rstrip("\n")) for line in p.stderr]
             rc=p.wait()
         finally:
             timer.cancel()
@@ -94,7 +94,7 @@ def main():
           "input_sha256":digest(ns.input),
           "results":results,
           "meaning":"approximate diagnosis, not paired speedup"}
-    (ns.out/"phases.json").write_text(json.dumps(data,indent=2)+"\\n")
+    (ns.out/"phases.json").write_text(json.dumps(data,indent=2)+"\n")
     print("MINIC_PHASE_TRACE=PASS fixed_input=true assembly_equal=true")
     for stage in STAGES:
         old=results["before"]["stage_ms"][stage]
