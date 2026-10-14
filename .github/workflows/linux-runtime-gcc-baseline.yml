@@ -1196,6 +1196,16 @@ jobs:
             bash tests/compiler/c0/run-pure-discarded-address-rv64.sh
           echo "P1_CFG_SEMANTIC_ONLY=PASS gcc_minic_baseline_crossblock=3way matrix=7+8 x1023 no_kernel_link=true no_linux_recompile=true"
 
+      - name: Download frozen real MiniC earlycon.s for isolated native MiniAS object in full Linux
+        if: contains(github.event.head_commit.message, '[linux-native-minias-earlycon]')
+        uses: actions/download-artifact@v4
+        with:
+          repository: ${{ github.repository }}
+          run-id: 38426379946
+          github-token: ${{ github.token }}
+          name: sharded-gnu-minic-QEMU-088b8ef0a30154e1eeaeb145107a1b51c07ba996
+          path: build/minias-earlycon-full-artifact
+
       - name: Prepare native MiniAR, final-link MiniLD and MiniObjcopy (same cached C objects)
         if: contains(github.event.head_commit.message, '[linux-native-union-cached]')
         shell: bash
@@ -1205,6 +1215,21 @@ jobs:
             "$GITHUB_WORKSPACE/build/linux-runtime-native-union-v1-tools" \
             "$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-v1/native-union"
           echo "NATIVE_UNION_TOOLS=PASS minic_C_objects_reused=true"
+
+      - name: Prepare one native MiniAS earlycon.o and attest 2063 unchanged MiniC objects
+        if: contains(github.event.head_commit.message, '[linux-native-minias-earlycon]')
+        shell: bash
+        timeout-minutes: 8
+        run: |
+          set -Eeuo pipefail
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-v1"
+          test "${{ steps.p1_minic_frozen_cache.outputs.cache-hit }}" = true
+          bash tools/ci/minias-linux-earlycon-p1-experiment-v1.sh \
+            "$GITHUB_WORKSPACE/build/minias-earlycon-full-artifact" \
+            "$ev/minic" "$ev/minias-earlycon-pool" \
+            "$GITHUB_WORKSPACE/build/minias-earlycon-p1-tools" \
+            "$ev/minias-earlycon-experiment"
+          echo "MINIAS_EARLYCON_FULL_PREPARE=PASS original_2064_SHA_cache_immutable=true"
 
       - name: GNU-only link and QEMU with NO MiniC recompilation
         if: "!contains(github.event.head_commit.message, '[linux-runtime-large-image-qemu]') && !contains(github.event.head_commit.message, '[linux-runtime-p1-frame-audit]') && !contains(github.event.head_commit.message, '[linux-runtime-p1-cfg-semantic-only]') && !contains(github.event.head_commit.message, '[linux-minild-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minild-reloc-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minild-purgatory-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minild-vdso64-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minias-earlycon-frozen]')"
@@ -1223,6 +1248,11 @@ jobs:
             export MINIOBJCOPY="$toolchain/bin/minic-objcopy"
             export NATIVE_TRACE_DIR="$native"
             export COHORT_NATIVE_UNION=1
+            if [[ "${{ contains(github.event.head_commit.message, '[linux-native-minias-earlycon]') && '1' || '0' }}" == 1 ]]; then
+              export COHORT_P1_EXPERIMENTAL_POOL="$ev/minias-earlycon-pool"
+              test -s "$ev/minias-earlycon-experiment/experimental-earlycon-object.sha256"
+              echo "MINIAS_EARLYCON_QEMU_EXPERIMENT=ENABLED selected_C_objects=2064 compiled_C_objects=0 native_AS_owners=1 frozen_GNU_AS_owners=2063"
+            fi
             if [[ "${{ contains(github.event.head_commit.message, '[linux-native-purgatory-r]') && '1' || '0' }}" == 1 ]]; then
               export MINILD_ENABLE_PURGATORY_R=1
               echo "MINILD_PURGATORY_R=ENABLED boundary=purgatory.ro only gnu_purgatory_chk=true"
@@ -1335,6 +1365,11 @@ jobs:
               }
               echo "MINILD_NATIVE_R=PASS calls=$minild_r_calls fallback_GNU_vmlinux_o=0 full_QEMU_P1=PASS"
             fi
+            if [[ "${{ contains(github.event.head_commit.message, '[linux-native-minias-earlycon]') && '1' || '0' }}" == 1 ]]; then
+              grep -Fq 'COHORT_P1=PASS name=full_all_verified syscalls=12 python_era_oracle=PASS' "$ev/cohort.log" || exit 29
+              test -s "$ev/minias-earlycon-experiment/experimental-earlycon-object.sha256"
+              echo "MINIAS_EARLYCON_FULL_RUNTIME=PASS 2063_GNU_AS_C_objects=sha_verified one_MiniAS_earlycon=true full_QEMU_fast_shell_P1=true no_full_C_recompile=true"
+            fi
             echo "NATIVE_UNION_RESULT=PASS pp=GNU minic=2064 from_cache ar=MiniAR_full_actual_Kbuild ar_native_calls=$minic_ar_calls ar_mpit_calls=$minic_mpit_calls ar_gnu_calls=0 ld=MiniLD_final_only objcopy=MiniObjcopy runtime=P1"
           fi
 
@@ -1353,6 +1388,10 @@ jobs:
             build/linux-runtime-gcc-cohort-v1/results.tsv
             build/linux-runtime-gcc-cohort-v1/native-union/*.trace
             build/linux-runtime-gcc-cohort-v1/native-union/*.tsv
+            build/linux-runtime-gcc-cohort-v1/minias-earlycon-experiment/*.txt
+            build/linux-runtime-gcc-cohort-v1/minias-earlycon-experiment/*.sha256
+            build/linux-runtime-gcc-cohort-v1/minias-earlycon-experiment/*.stderr
+            build/linux-runtime-gcc-cohort-v1/minias-earlycon-experiment/*.stdout
             build/linux-runtime-gcc-cohort-v1/native-union/tools.sha256
             build/linux-runtime-gcc-cohort-v1/native-union/*-wrapper
             build/linux-runtime-gcc-cohort-v1/frontier.txt
