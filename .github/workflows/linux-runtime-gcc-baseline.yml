@@ -1229,7 +1229,9 @@ jobs:
             --cache-identity "$FULL_MINIC_KEY" --limit 64
 
       - name: Cache frozen MiniC assembly sample for later MiniAS-only changes
-        if: success() && contains(github.event.head_commit.message, '[linux-minias-corpus-scan]') && steps.minias_corpus_s_cache.outputs.cache-hit != 'true'
+        # Even if later .cmd parsing fails, retain each already SHA-attested
+        # .s file. This cache has a per-member identity index.
+        if: always() && contains(github.event.head_commit.message, '[linux-minias-corpus-scan]') && steps.minias_corpus_s_cache.outputs.cache-hit != 'true' && hashFiles('build/minias-linux-corpus-v1/assembly/index.json') != ''
         uses: actions/cache/save@v4
         with:
           path: build/minias-linux-corpus-v1/assembly

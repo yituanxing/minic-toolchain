@@ -41,7 +41,9 @@ def clean_gcc(args):
             if i+1==len(args): raise RuntimeError('truncated option '+a)
             i+=2;continue
         out.append(a);i+=1
-    if sum(x.endswith('.c') for x in out)!=1: raise RuntimeError('missing unique C source')
+    actual=[x for i,x in enumerate(out) if x.endswith('.c') and
+            (i==0 or out[i-1] not in ('-include','-imacros'))]
+    if len(actual)!=1: raise RuntimeError('missing unique C source')
     return out
 
 def globals_in(path):
@@ -119,6 +121,9 @@ def main():
             tmp.unlink(missing_ok=True)
             if rc2 or not s.is_file(): raise RuntimeError('pinned MiniC-S failed: '+owner)
             files[owner]={'cmd_sha256':cmd_sha,'original_sha256':o_sha,'s_sha256':digest(s)}
+            # Safe incremental checkpoint. Do not recompile successful .s on
+            # next CI attempt even if a later owner has an unusual Kbuild flag.
+            index.write_text(json.dumps({**schema,'files':files},indent=2,sort_keys=True)+'\n')
             print(f'MINIAS_CORPUS_S=GENERATED owner={owner} gcc_E_ms={ms} minic_S_ms={ms2}',flush=True)
         # The accepted run #38491622247 independently captured this exact
         # real Linux earlycon assembly. Reject different compiler input.

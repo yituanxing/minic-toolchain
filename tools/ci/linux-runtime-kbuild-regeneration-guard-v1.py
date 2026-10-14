@@ -159,7 +159,9 @@ def pinned_kbuild_cc_args(golden_out: Path, name: str) -> list[str]:
     outputs = [args[i + 1] for i, value in enumerate(args[:-1]) if value == "-o"]
     if outputs != [name]:
         raise GuardError(f"GCC output differs from frozen target: {name}: {outputs}")
-    sources = [arg for arg in args[1:] if arg.endswith(".c")]
+    # Forced -include/-imacros may end in .c (vDSO): header, not source TU.
+    sources = [arg for i, arg in enumerate(args[1:], start=1)
+               if arg.endswith(".c") and args[i-1] not in ("-include", "-imacros")]
     if len(sources) != 1:
         raise GuardError(f"not exactly one C source: {name}: {sources}")
     if any(arg in (";", "|", "&&", "||", ">", "<") for arg in args):
