@@ -1472,6 +1472,31 @@ jobs:
             exit 10
           fi
           echo 'MINIAS_CODE_ALIGN_PREFLIGHT=PASS exe_padding=RISC-V_NOP no_C_UNIMP=true'
+          # Regression for the follow-up odd-length alignment fix: arbitrary
+          # raw .text bytes are not executable instructions. RISC-V NOPs are
+          # 2/4 bytes wide and cannot fill the 15-byte gap after this byte.
+          # Check both native output and byte-exact GNU AS behavior BEFORE
+          # expensive Linux corpus assembly and QEMU.
+          cat > "$minias/code-align-odd-preflight.s" <<'MINIAS_ODD_ALIGN_EOF'
+          .text
+            .byte 0x5a
+            .p2align 4
+            nop
+          MINIAS_ODD_ALIGN_EOF
+          "$minias/bin/minic-as" -o "$minias/code-align-odd-preflight.o" "$minias/code-align-odd-preflight.s"
+          riscv64-linux-gnu-as -o "$minias/code-align-odd-gnu.o" "$minias/code-align-odd-preflight.s"
+          for producer in preflight gnu; do
+            riscv64-linux-gnu-objcopy -O binary -j .text \
+              "$minias/code-align-odd-${producer}.o" "$minias/code-align-odd-${producer}.bin"
+          done
+          odd_expected='5a00000000000000000000000000000013000000'
+          odd_hex="$(od -An -v -tx1 "$minias/code-align-odd-preflight.bin" | xargs | tr -d ' ')"
+          if [[ "$odd_hex" != "$odd_expected" ]] || \
+             ! cmp -s "$minias/code-align-odd-preflight.bin" "$minias/code-align-odd-gnu.bin"; then
+            echo "MINIAS_ODD_CODE_ALIGN_PREFLIGHT=FAIL hex=$odd_hex expected=$odd_expected" >&2
+            exit 11
+          fi
+          echo 'MINIAS_ODD_CODE_ALIGN_PREFLIGHT=PASS odd_gap_bytes=15 matches_GNU_AS=true'
           python3 tools/ci/minias-linux-corpus-runtime-overlay-v1.py \
             --original-pool "$ev/minic" \
             --manifest "$ev/minic-manifest.sha256" \
