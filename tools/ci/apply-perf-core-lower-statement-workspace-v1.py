@@ -4,7 +4,7 @@
 The map is initialized once. Each function records only the statement IDs it
 writes and clears precisely those entries before the next function. The public
 single-function API retains its original allocation semantics; workspace
-allocation failure falls back to the original per-function allocation.
+allocation failure falls back to original per-function allocation.
 """
 from pathlib import Path
 
@@ -149,9 +149,9 @@ patch_once(source, [
     const MinicTargetInfo *target,
     MinicCoreFunction *output,
     MinicCoreLowerWorkspace *workspace) {"""),
-    ("""    if (body->program->statement_count > SIZE_MAX / sizeof(*statement_blocks)) { free(local_objects); return MINIC_CORE_LOWER_ERROR; }
+    ("""    if (body->program->statement_count > SIZE_MAX / sizeof(*statement_blocks)) { free(local_integer_constants); free(local_objects); return MINIC_CORE_LOWER_ERROR; }
     statement_blocks = body->program->statement_count == 0U ? NULL : (MinicCoreBlockId *)malloc(body->program->statement_count * sizeof(*statement_blocks));
-    if (body->program->statement_count != 0U && statement_blocks == NULL) { free(local_objects); return MINIC_CORE_LOWER_ERROR; }
+    if (body->program->statement_count != 0U && statement_blocks == NULL) { free(local_integer_constants); free(local_objects); return MINIC_CORE_LOWER_ERROR; }
     for (statement_index = 0U; statement_index < body->program->statement_count; ++statement_index) statement_blocks[statement_index] = MINIC_CORE_BLOCK_INVALID;
 """,
      """    if (workspace != NULL) {
@@ -159,13 +159,13 @@ patch_once(source, [
             workspace->touched_count != 0U ||
             (workspace->statement_count != 0U &&
              (workspace->statement_blocks == NULL || workspace->touched_statements == NULL))) {
-            free(local_objects);
+            free(local_integer_constants); free(local_objects);
             return MINIC_CORE_LOWER_ERROR;
         }
         statement_blocks = workspace->statement_blocks;
     } else {
         if (body->program->statement_count > SIZE_MAX / sizeof(*statement_blocks)) {
-            free(local_objects);
+            free(local_integer_constants); free(local_objects);
             return MINIC_CORE_LOWER_ERROR;
         }
         statement_blocks = body->program->statement_count == 0U
@@ -173,7 +173,7 @@ patch_once(source, [
                                : (MinicCoreBlockId *)malloc(
                                      body->program->statement_count * sizeof(*statement_blocks));
         if (body->program->statement_count != 0U && statement_blocks == NULL) {
-            free(local_objects);
+            free(local_integer_constants); free(local_objects);
             return MINIC_CORE_LOWER_ERROR;
         }
         for (statement_index = 0U; statement_index < body->program->statement_count;
@@ -182,23 +182,23 @@ patch_once(source, [
         }
     }
 """),
-    ("        free(statement_blocks); free(local_objects); minic_core_function_destroy(&lowered); return MINIC_CORE_LOWER_ERROR;\n",
+    ("        free(statement_blocks); free(local_integer_constants); free(local_objects); minic_core_function_destroy(&lowered); return MINIC_CORE_LOWER_ERROR;\n",
      """        if (workspace == NULL) {
             free(statement_blocks);
         }
-        free(local_objects);
+        free(local_integer_constants); free(local_objects);
         minic_core_function_destroy(&lowered);
         return MINIC_CORE_LOWER_ERROR;
 """),
     ("    context.statement_block_count = body->program->statement_count;\n",
      "    context.statement_block_count = body->program->statement_count;\n    context.workspace = workspace;\n"),
-    ("    free(statement_blocks); free(local_objects);\n",
+    ("    free(statement_blocks); free(local_integer_constants); free(local_objects);\n",
      """    if (workspace != NULL) {
         minic_core_lower_workspace_reset(workspace);
     } else {
         free(statement_blocks);
     }
-    free(local_objects);
+    free(local_integer_constants); free(local_objects);
 """),
 ])
 p = Path(source)
