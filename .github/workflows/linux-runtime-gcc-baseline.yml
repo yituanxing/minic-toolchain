@@ -687,6 +687,12 @@ jobs:
           src="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0/linux-6.6.143"
           test -s "$ev/all-objects.txt"
           test -d "$src"
+          # Saved GNU Kbuild .o.cmd inputs refer to this exact Linux
+          # source path. The seven-way immutable golden restore stores
+          # source elsewhere: mount it read-only by symlink, do not rewrite
+          # the authoritative command or duplicate the large source tree.
+          test ! -e "$GITHUB_WORKSPACE/build/linux-runtime-gcc/linux-6.6.143"
+          ln -s "$src" "$GITHUB_WORKSPACE/build/linux-runtime-gcc/linux-6.6.143"
           MINIC_LINUX_FULL_CROSSBLOCK=1 MINIC_OPT_PURE_DISCARDED_ADDRESS_EQ=1 \
             bash tools/ci/linux-runtime-build-minic-profile-v1.sh \
               "$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain" \
