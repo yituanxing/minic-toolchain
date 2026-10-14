@@ -310,3 +310,15 @@ PERF-006 `blake2s` 的真实 Runtime 布尔域索引收益为 1465.171ms→1368.
 **一次已记录的设施失败：** #38656415436 的 Runtime `gcc-single` 局部实验第一轮**失败**，失败发生在 patch anchor 校验（非 Linux 编译器语义验证），日志显示 profile 编译器应用前置 Runtime 补丁后，`core_lower.c` 包含 `local_integer_constants`，但最初误依据仓库中原始的未打补丁源码删掉了脚本中的该名称。源树静态版本**不能**代替 CI 中已合成的实际 Runtime profile。这次没有声称任何加速，缓存的三 Linux 对象均已通过原有认证。原因与修复已确认：保留与运行时 profile 匹配的原始锚点，只额外保留 workspace allocation 的线性回退，commit `62e372f`。
 
 **真实下一次运行：** #38656598585，原有 Owner、Kbuild、对象缓存及触发边界不变；该 Run 的局部 verdict 仅在 A/B 输出字节相同且统计合法时可判 `verified-local`。若仍失效先看具体源码锚点/生成 Runtime patch 组合，不能复制所有 2057/2064 个对象重跑。该算法若收益不明显即停止，轮换到新的实测高耗时阶段。
+
+**PERF-011 最终反馈（2026-10-15）：** 修复后的 CI **#38656598585 SUCCESS**，Boolean Runtime 与 Boolean+Core statement workspace，两臂各热身一次+仅 2 次配对；三份真实冻结 Linux Kbuild `.i` 的汇编 **逐字节一致**，原始对象缓存命中。具体 P50：
+
+| owner | 原 per-function statement map | per-TU workspace | speedup |
+| --- | ---: | ---: | ---: |
+| `kernel/bpf/btf.o` | 8235.989ms | 8159.755ms | 1.0093× |
+| `kernel/bpf/verifier.o` | 9704.757ms | 9226.913ms | 1.0518× |
+| `net/core/filter.o` | 18785.012ms | 18640.775ms | 1.0077× |
+
+三个文件的中位耗时和约 **36.726→36.027s**，共节约约 **0.698s / 1.90%**。实际文件可能并非这类语句清零的最病理输入，但三个主要热点没有发现明显的两位数百分比改善。**局部正确性通过、性能未达晋级阈值**，状态 `verified-local-not-promoted`：保留 opt-in 脚本和失败/成功记录，**不将其加入 Runtime 正式默认配置，也不继续对这三个 TU 重复测同一工作区算法**。
+
+**下个轮转目标：** 现有阶段跟踪显示 filter Codegen ~2.89s，而 Boolean 后还有多个未充分分解的阶段。优先在原 frozen `.i` 上选现成的 Codegen 使用次数/IR 功能级诊断，确认下一项真正重复遍历/过量分配的耗时路径。旧版 `apply-perf-core-object-address-use-index-v1.py` 等候选只能在核对已合成 Runtime profile 的源码结构、确认当前未已有同等索引、确认没有重复历史优化后，才有理由做下一项 A/B。暂不应以“再添一个哈希”替代实际数据。
