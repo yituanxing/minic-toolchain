@@ -163,3 +163,24 @@
 - GitHub M0 #38582069985 **SUCCESS**，原工作流主体仍由归档哈希检查保证不变；优化条件仅在旧 perf500 Job 末尾显式 opt-in。
 
 后续 Run 必须逐项核对：初始500配对 PASS，48样本组成/哈希身份，48/48 factors PASS，Artifact 下载可重分析。比较已有 full500 条件结果时必须注明它与热点样本的覆盖差异。
+
+## 9. PERF-001 单因素实测结果：Boolean Domain 才是当前主因（2026-10-14）
+
+**正式数据，非预测：** <https://github.com/yituanxing/minic-toolchain/actions/runs/38582346036> 完整 `SUCCESS`，CI 产物 ID **11904408725**，文件 `factor-boolean-only-results.json`、`factor-typedef-only-results.json`、`paired-results.json` 可复查，并已下载归档。相同缓存 first500 .i，四个 Runner worker，不新建工作流，每组 A/B 全部要求 .s SHA 一致。
+
+| 控制实验 | 基准耗时（sum TU wall） | 候选耗时 | 加速倍数 | 正确性 |
+|---|---:|---:|---:|---|
+| 500：两项都关闭 → 两项都打开 | 1443.429s | 503.635s | **2.8660×** | 500/500 汇编 SHA 相同 |
+| 48：仅 Boolean → 两项都打开 | 75.322s | 74.637s | **1.0092×** | 48/48 |
+| 48：仅 Typedef → 两项都打开 | 413.340s | 75.620s | **5.4660×** | 48/48 |
+
+因果解释：在这批特意包含长尾慢文件的 48-TU 固定样本里，**开启 Boolean Domain 缓存**才让只有 Typedef 的候选大幅提速；在 Boolean 已开启时额外加入 Typedef 哈希索引仅提高约 0.9%。这仍不代表 *整个 Linux* 有 5.466× 加速，也没有证明 Typedef 索引在其他输入或与 Boolean 之外的组合中没有价值。
+
+代表性慢例 `kernel/bpf/btf.o`：原始两项都关闭约 19.432 秒；Typedef-only 与 Both 的巨大差异再次说明优化前多次重算 Boolean Domain 的成本在该样本上占主要比例。现有 Boolean Index patch 是 **按 Program + AST Arena 规模认证的缓存**，避免每次局部查询扫描所有相关 Statement/Expression/InlineAsm；分配失败走原线性算法，清理防止不同 TU 的地址复用产生误命中。主要省时机理需以独立阶段 CPU/调用计数进一步证实，不能从倍数直接推出实际 O(n²) 已严格出现。
+
+### 向真实 Runtime MiniC 的最小晋级
+
+- 不修改已认证的生产 Runtime 编译器配置或 2057/2064 产物。
+- 在原有 `linux-runtime-gcc-baseline.yml` 的 **gcc-single** 一对象分支（blake2s）里，仅当同时声明 `[linux-runtime-blake2s-only]` 与 `[linux-perf-boolean-single]`，保存原候选 MiniC 执行文件，然后应用已通过 perf500 的 `apply-inline-specialization-local-boolean-domain-scoped-v1.py`，原位增量 make 重建 MiniC，并把对应 patch 文件 digest 添加到对象缓存身份。
+- 这条实验仅生成 **一个真实 Linux 6.6.143 C owner**，核验真实 GNU ABI 与原生候选对象的流程能否通过；不运行全部七路、链接或 QEMU。此阶段即使 `SUCCESS` 也只能声称 **单 TU 验证**。
+- 单 TU 通过且工具差异明显后，才允许用现成七路生产者重编新 Compiler SHA 对应对象，并在 QEMU 取得新的 12/12。绝不拿旧 Image 的 PASS 当成新优化的 Runtime 证明。
