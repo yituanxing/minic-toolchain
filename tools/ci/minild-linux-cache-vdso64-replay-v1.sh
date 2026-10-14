@@ -2,6 +2,7 @@
 # Probe GNU LD's *real* RISC-V 64-bit vDSO shared-link boundary using a frozen
 # Linux 6.6.143 Kbuild object cache. No Linux C build, no Kbuild and no QEMU.
 # Preserve exact GNU arguments: do NOT silently ignore ELF metadata flags.
+# Reference replay fix #38487964158: .dbg.tmp is intentionally deleted by Kbuild.
 # Live gap gate: observed remaining GNU LD vDSO64 from #38485397284;
 # only a new 64-bit shared-link implementation can remove this fallback.
 set -Eeuo pipefail
