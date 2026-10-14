@@ -176,7 +176,50 @@ set -Eeuo pipefail
 { flock 9; printf 'miniobjcopy'; printf ' %q' "$@"; printf '\n'; } 9>>"$NATIVE_TRACE_DIR/miniobjcopy.trace" >&9
 exec "$MINIOBJCOPY" "$@"
 SH_COPY
-chmod +x "$ev/"{ar-wrapper,ld-wrapper,objcopy-wrapper}
+# Reuse the exact MiniAS assembler-subprocess routing already verified in the
+# retired MiniC+MiniAS full Linux runtime workflow. No real assemble fallback.
+# COMPILER_PATH intercepts GCC's assembler child WITHOUT changing CC=.cmd keys.
+cat >"$ev/as-wrapper" <<'SH_AS'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+: "${MINIAS:?native assembler not set}" "${NATIVE_TRACE_DIR:?native trace dir not set}"
+args=("$@")
+opts=()
+out=
+input=
+query=0
+for ((i=0;i<${#args[@]};++i)); do
+  case "${args[i]}" in
+    --version|-v|--help) query=1 ;;
+    -march=*|-mabi=*) opts+=("${args[i]}") ;;
+    -o)
+      if ((i+1<${#args[@]})); then out=${args[i+1]}; ((++i)); fi ;;
+    -*) ;;
+    *) if [[ -f "${args[i]}" ]]; then input=${args[i]}; fi ;;
+  esac
+done
+if ((query)); then
+  { flock 9; printf 'query'; printf ' %q' "$@"; printf '\n'; } 9>>"$NATIVE_TRACE_DIR/minias-runtime.trace" >&9
+  exec /usr/bin/riscv64-linux-gnu-as "$@"
+fi
+if [[ -z "$out" || -z "$input" ]]; then
+  { flock 9; printf 'invalid'; printf ' %q' "$@"; printf '\n'; } 9>>"$NATIVE_TRACE_DIR/minias-runtime.trace" >&9
+  echo "MINIAS_AS=FAIL missing output or real input" >&2
+  exit 2
+fi
+{ flock 9; printf 'assemble input=%q output=%q\n' "$input" "$out"; } 9>>"$NATIVE_TRACE_DIR/minias-runtime.trace" >&9
+if "$MINIAS" "${opts[@]}" -o "$out" "$input"; then
+  { flock 9; printf 'pass input=%q output=%q\n' "$input" "$out"; } 9>>"$NATIVE_TRACE_DIR/minias-runtime.trace" >&9
+else
+  rc=$?
+  { flock 9; printf 'fail rc=%s input=%q output=%q\n' "$rc" "$input" "$out"; } 9>>"$NATIVE_TRACE_DIR/minias-runtime.trace" >&9
+  exit "$rc"
+fi
+SH_AS
+mkdir -p "$ev/as-bin"
+ln -s "$ev/as-wrapper" "$ev/as-bin/riscv64-linux-gnu-as"
+: >"$ev/minias-runtime.trace"
+chmod +x "$ev/"{ar-wrapper,ld-wrapper,objcopy-wrapper,as-wrapper}
 : >"$ev/miniar.trace"
 : >"$ev/minild.trace"
 : >"$ev/minild-times.tsv"

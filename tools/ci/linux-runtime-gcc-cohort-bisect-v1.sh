@@ -1346,6 +1346,14 @@ if [[ "${COHORT_NATIVE_UNION:-0}" == 1 ]]; then
     "LD=$COHORT_NATIVE_LD"
     "OBJCOPY=$COHORT_NATIVE_OBJCOPY"
   )
+  if [[ "${COHORT_MINIAS_KBUILD_AS:-0}" == 1 ]]; then
+    : "${MINIAS:?MiniAS path is required}" "${NATIVE_TRACE_DIR:?trace directory required}"
+    test -x "$NATIVE_TRACE_DIR/as-wrapper"
+    test -x "$NATIVE_TRACE_DIR/as-bin/riscv64-linux-gnu-as"
+    export COMPILER_PATH="$NATIVE_TRACE_DIR/as-bin${COMPILER_PATH:+:$COMPILER_PATH}"
+    native_kbuild_args+=("AS=$NATIVE_TRACE_DIR/as-wrapper")
+    echo "MINIAS_KBUILD_AS=ENABLED subprocess=COMPILER_PATH direct=AS native_no_fallback=true"
+  fi
   echo "COHORT_NATIVE_UNION=ENABLED owners=$n pp=GNU as=GNU cc=MiniC ar=MiniAR ld=MiniLD_final_only objcopy=MiniObjcopy"
 fi
 trial() {
@@ -1633,10 +1641,51 @@ PY_RISCV_DYNAMIC
     echo "MINIAS_DYNAMIC_HEADER_OBJECTS=PASS trial=$name native_header_objects=4 total_native_C_objects=$(( ${COHORT_MINIAS_EXPECTED_NATIVE:-60} + 4 ))"
   fi
   if [[ -n "${COHORT_MINIAS_NATIVE_S_MANIFEST:-}" ]]; then
-    (cd "$out" && sha256sum --quiet -c "$COHORT_MINIAS_NATIVE_S_MANIFEST") || {
-      echo "MINIAS_NATIVE_S_RUNTIME=FAIL Kbuild_overwrote_native_assembly trial=$name"; exit 8;
-    }
-    echo "MINIAS_NATIVE_S_RUNTIME=PASS trial=$name native_S=$(wc -l < "$COHORT_MINIAS_NATIVE_S_MANIFEST") all_native_SHA_verified=true"
+    python3 - "$out" "$gold_snapshot" "$COHORT_MINIAS_NATIVE_S_MANIFEST" "$NATIVE_TRACE_DIR/minias-runtime.trace" <<'PY_NATIVE_S_VERIFY'
+from pathlib import Path
+import hashlib, re, struct, subprocess, sys
+out,golden,manifest,trace=map(Path,sys.argv[1:])
+lines=manifest.read_text().splitlines()
+trace_lines=trace.read_text().splitlines() if trace.is_file() else []
+if not lines or len(lines)!=len(set(lines)):
+    raise SystemExit('MINIAS_NATIVE_S_RUNTIME=FAIL missing_or_duplicate_manifest')
+if any(line.startswith(('fail ', 'invalid ')) for line in trace_lines):
+    raise SystemExit('MINIAS_NATIVE_S_RUNTIME=FAIL real_native_assembly_error')
+def sha(p):
+    return hashlib.sha256(p.read_bytes()).hexdigest()
+def identity(p):
+    b=p.read_bytes()[:52]
+    if len(b)<40 or b[:4]!=b'\x7fELF' or b[5]!=1:
+        raise ValueError('not ELF')
+    elfclass=b[4]
+    if elfclass not in (1,2) or struct.unpack_from('<HH',b,16)!=(1,243):
+        raise ValueError('not RV32/64 relocatable object')
+    ef=struct.unpack_from('<I',b,36 if elfclass==1 else 48)[0]
+    return elfclass,ef
+def globals_(p):
+    r=subprocess.run(['riscv64-linux-gnu-nm','-g','--defined-only','-P',str(p)],
+                     check=True,capture_output=True,text=True)
+    return {row.split(' ',1)[0] for row in r.stdout.splitlines() if row.strip()}
+retained=rebuilt=0
+for row in lines:
+    expected,name=row.split(maxsplit=1)
+    current=out/name
+    original=golden/name
+    if not current.is_file() or identity(current)!=identity(original):
+        raise SystemExit('MINIAS_NATIVE_S_RUNTIME=FAIL invalid_abi '+name)
+    if globals_(current)!=globals_(original):
+        raise SystemExit('MINIAS_NATIVE_S_RUNTIME=FAIL exported_globals_changed '+name)
+    if sha(current)==expected:
+        retained+=1
+    else:
+        success='pass input='
+        if not any(line.startswith(success) and line.endswith(' output='+name) for line in trace_lines):
+            raise SystemExit('MINIAS_NATIVE_S_RUNTIME=FAIL replaced_by_untraced_as '+name)
+        rebuilt+=1
+        print('MINIAS_NATIVE_S_RUNTIME=REASSEMBLED_NATIVE owner='+name)
+print(f'MINIAS_NATIVE_S_RUNTIME=PASS native_asm={len(lines)} retained={retained} regenerated_native={rebuilt} all_native_or_sha_verified=true')
+PY_NATIVE_S_VERIFY
+    echo "MINIAS_NATIVE_S_RUNTIME=PASS trial=$name native_S=$(wc -l < "$COHORT_MINIAS_NATIVE_S_MANIFEST") native_as_trace_verified=true"
   fi
   # Non-C objects cannot all be compared byte-for-byte with the GNU
   # golden reference: changing a verified MiniC .o legitimately changes its
@@ -1655,6 +1704,8 @@ native_trace_dir=Path(os.environ.get("NATIVE_TRACE_DIR","/nonexistent-native-tra
 native_objcopy_trace=(native_trace_dir/"miniobjcopy.trace").read_text() if (native_union and (native_trace_dir/"miniobjcopy.trace").is_file()) else ""
 native_linker_trace=(native_trace_dir/"minild.trace").read_text() if (native_union and (native_trace_dir/"minild.trace").is_file()) else ""
 native_s_manifest=os.environ.get("COHORT_MINIAS_NATIVE_S_MANIFEST")
+native_s_trace_path=native_trace_dir/"minias-runtime.trace"
+native_s_trace=native_s_trace_path.read_text().splitlines() if native_s_trace_path.is_file() else []
 native_s={}
 if native_s_manifest:
     for item in Path(native_s_manifest).read_text().splitlines():
@@ -1745,8 +1796,12 @@ for line in manifest.read_text().splitlines():
         continue
     if name in native_s:
         p=out/name
-        if not p.is_file() or hashlib.sha256(p.read_bytes()).hexdigest()!=native_s[name]:
-            raise SystemExit("COHORT_NATIVE_S=FAIL not_correct_native_SHA object="+name)
+        if not p.is_file():
+            raise SystemExit("COHORT_NATIVE_S=FAIL object_missing "+name)
+        if hashlib.sha256(p.read_bytes()).hexdigest()!=native_s[name]:
+            if not any(line.startswith('pass input=') and line.endswith(' output='+name)
+                       for line in native_s_trace):
+                raise SystemExit("COHORT_NATIVE_S=FAIL no_proof_of_native_reassembly object="+name)
         abi_same(name)
         continue
     p=out/name

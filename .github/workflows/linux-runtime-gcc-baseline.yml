@@ -1561,6 +1561,9 @@ jobs:
             if [[ "${{ contains(github.event.head_commit.message, '[linux-minias-native-S-runtime]') && '1' || '0' }}" == 1 ]]; then
               export COHORT_MINIAS_NATIVE_S_POOL="$ev/minias-native-S-pool"
               export COHORT_MINIAS_NATIVE_S_MANIFEST="$ev/minias-native-S-evidence/native-S-hashes.sha256"
+              export COHORT_MINIAS_KBUILD_AS=1
+              export MINIAS="$GITHUB_WORKSPACE/build/minias-linux-corpus-v1-tools/bin/minic-as"
+              test -x "$MINIAS"
               test -s "$COHORT_MINIAS_NATIVE_S_MANIFEST"
               echo "MINIAS_NATIVE_S=ENABLED count=$(wc -l < "$COHORT_MINIAS_NATIVE_S_MANIFEST") only_existing_Kbuild_inputs=true"
             fi
