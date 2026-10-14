@@ -161,7 +161,9 @@ def main():
                 "[linux-perf-factorial]" not in extra or
                 "MINIC_PERF_SKIP_TYPEDEF_INDEX=1" not in extra or
                 "MINIC_PERF_SKIP_BOOLEAN_SCOPED=1" not in extra or
-                "linux-perf-typedef-paired-ab-v1.py" not in extra):
+                "linux-perf-typedef-paired-ab-v1.py" not in extra or
+                "--sample-count 48" not in extra or
+                "--hotspots-from" not in extra):
                 raise AssertionError("unreviewed performance extension")
             reconstructed = reconstructed[:start] + reconstructed[stop:]
         if git_blob(reconstructed.encode()) != original_sha:
