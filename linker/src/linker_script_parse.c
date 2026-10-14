@@ -661,7 +661,7 @@ static bool parse_version(ScriptParser *parser,
         return false;
     }
     while (parser->token.kind != TOKEN_RBRACE) {
-        char *name;
+        char *export_name;
         char **grown;
         size_t capacity;
         if (minild_script_token_is(parser, "global") ||
@@ -693,12 +693,12 @@ static bool parse_version(ScriptParser *parser,
             return minild_script_parser_error(parser,
                                               "unsupported-VERSION-pattern");
         }
-        name = minild_script_strdup_range(parser->token.begin,
+        export_name = minild_script_strdup_range(parser->token.begin,
                                            parser->token.length);
-        if (name == NULL || !minild_script_parser_next(parser) ||
+        if (export_name == NULL || !minild_script_parser_next(parser) ||
             !minild_script_expect(parser, TOKEN_SEMICOLON,
                                   "expected-';'-after-VERSION-export")) {
-            free(name);
+            free(export_name);
             return false;
         }
         if (script->version_global_count == script->version_global_capacity) {
@@ -706,21 +706,21 @@ static bool parse_version(ScriptParser *parser,
                        : script->version_global_capacity * 2U;
             if (capacity < script->version_global_capacity ||
                 capacity > SIZE_MAX / sizeof(*grown)) {
-                free(name);
+                free(export_name);
                 return minild_script_parser_error(parser,
                                                   "out-of-memory:VERSION");
             }
             grown = realloc(script->version_globals,
                             capacity * sizeof(*grown));
             if (grown == NULL) {
-                free(name);
+                free(export_name);
                 return minild_script_parser_error(parser,
                                                   "out-of-memory:VERSION");
             }
             script->version_globals = grown;
             script->version_global_capacity = capacity;
         }
-        script->version_globals[script->version_global_count++] = name;
+        script->version_globals[script->version_global_count++] = export_name;
     }
     if (!minild_script_parser_next(parser) ||
         !minild_script_expect(parser, TOKEN_SEMICOLON,
