@@ -300,6 +300,11 @@ SH_STAGE_LAUNCHER
   if ((n == 1)) && [[ "${objects[0]}" == kernel/dma/direct.o || "${objects[0]}" == mm/shmem.o ]]; then
     keep_dma_inputs=1
   fi
+  if ((n == 1)) && [[ "${COHORT_KEEP_BOOL_SINGLE_I:-0}" == 1 &&
+                     "${objects[0]}" == lib/crypto/blake2s-generic.o ]]; then
+    keep_dma_inputs=1
+    echo 'BOOLEAN_CACHE_SINGLE=KEEP_EXACT_KBUILD_I owner=lib/crypto/blake2s-generic.o'
+  fi
   MINIC="$probe_minic" REAL_CC="$probe_gcc" \
     MINIC_KEEP_INTERMEDIATES="$keep_dma_inputs" MINIC_PRESERVE_FAILURE_INPUTS=1 \
     MINIC_KBUILD_SUCCESS_TRACE="$ev/mini-success-objects.txt" \
