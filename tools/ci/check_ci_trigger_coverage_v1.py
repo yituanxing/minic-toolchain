@@ -86,6 +86,17 @@ def main():
         raise AssertionError("MiniObjcopy T1 is not ELF push routed")
     if "contains(github.event.head_commit.message, '[miniobjcopy-linux-tool]')" not in mini:
         raise AssertionError("MiniObjcopy Linux integration tag lost")
+    # Preserve the exact crossblock MiniC cache identity on native union
+    # regardless of whether the commit carries a second optimization tag.
+    if branch==BRANCHES[0]:
+        runtime=(ROOT/".github/workflows/linux-runtime-gcc-baseline.yml").read_text()
+        identity=runtime.split("# The native union always rebuilds",1)[-1].split("objects=$(sha256sum",1)[0]
+        if ("[linux-native-union-cached]" not in identity or
+            "full-crossblock-pure-eq-v1-" not in identity):
+            raise AssertionError("native union cache identity lost full-crossblock profile")
+        for guard in ("MINIAS_CODE_ALIGN_PREFLIGHT=PASS","MINIAS_ODD_CODE_ALIGN_PREFLIGHT=PASS"):
+            if guard not in runtime:
+                raise AssertionError("native Linux MiniAS preflight missing: "+guard)
     # The legacy Image branch depended on an expired 2026-09-02 artifact,
     # so keep it in an immutable archive, never as a live certification mode.
     if "[miniobjcopy-linux-image]" in mini or "run-id: 33623125809" in mini:
