@@ -176,8 +176,7 @@ for producer in gnu mini; do
   "$NM" "$work/provide-$producer" >"$work/provide-$producer.nm"
   sym="$(awk '$3=="_vdso_data" {print $1; exit}' "$work/provide-$producer.nm")"
   test "$sym" = 0000000000010000
-  ! grep -q '_unused_vdso_symbol output-symbol-section=PASS nm-types=T/T/T/T,D entry=0x10000 loads=$load_count generated=gnu-exact-504-bytes param-start=gnu-exact-0x11008 consumers=nm,readelf,objcopy"
- "$work/provide-$producer.nm"
+  ! grep -q '_unused_vdso_symbol$' "$work/provide-$producer.nm"
 done
 cat >"$work/provide-override.s" <<'EOF_PROVIDE_OVERRIDE'
 .globl _vdso_data
