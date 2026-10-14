@@ -2181,7 +2181,7 @@ static bool write_output(MiniLdState *state, const char *path) {
 
     sections = calloc(state->section_count == 0U ? 1U : state->section_count,
                       sizeof(*sections));
-    symbols = calloc(shared->symbol_map_capacity,
+    symbols = calloc(state->symbol_count == 0U ? 1U : state->symbol_count,
                      sizeof(*symbols));
     relocations = calloc(state->reloc_count == 0U ? 1U : state->reloc_count,
                          sizeof(*relocations));
@@ -5176,7 +5176,7 @@ static bool static_write_executable(MiniLdState *state,
         calloc(state->section_count == 0U ? 1U : state->section_count,
                sizeof(*section_name_offsets));
     symbol_name_offsets =
-        calloc(shared->symbol_map_capacity,
+        calloc(state->symbol_count == 0U ? 1U : state->symbol_count,
                sizeof(*symbol_name_offsets));
     headers = calloc(output_section_count + 1U, sizeof(*headers));
     symbols = calloc(state->symbol_count + 1U, sizeof(*symbols));
