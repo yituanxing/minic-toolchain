@@ -431,15 +431,7 @@ jobs:
                 --candidate-driver "$root/minic" \
                 --out "$result" | tee "$result-verdict.txt"
               grep -Fq 'MINIC_ONE_OWNER_AB=PASS' "$result-verdict.txt"
-              python3 - "$owner" "$result/paired-result.json" <<'PY_HOT_SUMMARY'
-import json,sys
-owner=sys.argv[1]; j=json.load(open(sys.argv[2]))
-print('BOOL_HOT_A_B=PASS owner='+owner+
-      ' before_ms='+str(round(j['baseline_median_ms'],3))+
-      ' after_ms='+str(round(j['candidate_median_ms'],3))+
-      ' speedup='+str(j['candidate_speedup'])+
-      ' assembly_identical='+str(j['assembly_identical']))
-PY_HOT_SUMMARY
+              python3 -c 'import json,sys; j=json.load(open(sys.argv[2])); print("BOOL_HOT_A_B=PASS owner="+sys.argv[1]+" before_ms="+str(j["baseline_median_ms"])+" after_ms="+str(j["candidate_median_ms"])+" speedup="+str(j["candidate_speedup"])+" assembly_identical="+str(j["assembly_identical"]))' "$owner" "$result/paired-result.json"
             done
             echo 'BOOL_HOT_A_B_GROUP=PASS owners=3 cold_workflow_reused=true QEMU_not_executed=true'
           fi
