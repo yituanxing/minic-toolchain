@@ -199,6 +199,35 @@ jobs:
             build/linux-runtime-gcc/provenance
           key: ${{ steps.exact_gnu.outputs.key }}
 
+      # The historical Linux source fixture is stored in GitHub Actions
+      # cache under the *other branch's* scope. GitHub cache entries are
+      # not generally readable by an unrelated agent branch. Seed the
+      # exact immutable Linux source fixture in this RV64-only branch once,
+      # from the already hash-verified tarball extracted by gcc-runtime.
+      # This is a directory MOVE after runtime P1, not a second download
+      # and not a second kernel build. Seven shard jobs then restore the
+      # unchanged source key from their own branch cache scope.
+      - name: Stage isolated RV64 Linux source fixture for seven runners
+        if: github.ref_name == 'agent/linux-rv64-only-parallel-v1'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          src="$GITHUB_WORKSPACE/build/linux-runtime-gcc/linux-6.6.143"
+          dst="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0/linux-6.6.143"
+          test -f "$src/Makefile"
+          test -f "$src/arch/riscv/Kconfig"
+          mkdir -p "$(dirname "$dst")"
+          test ! -e "$dst"
+          mv "$src" "$dst"
+          echo "RV64_ONLY_SOURCE_FIXTURE=STAGED verified_archive_sha256=dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932 directory_move_only=true"
+
+      - name: Seed exact Linux source cache scoped to RV64-only branch
+        if: github.ref_name == 'agent/linux-rv64-only-parallel-v1'
+        uses: actions/cache/save@v4
+        with:
+          path: build/linux-expanded-kbuild-v0/linux-6.6.143
+          key: linux-source-6.6.143-dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932-v1
+
       - name: Preserve runtime blocker
         if: failure()
         uses: actions/upload-artifact@v4
