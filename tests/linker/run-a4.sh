@@ -80,6 +80,17 @@ reference_relative="$(grep -c 'R_RISCV_RELATIVE' "$work/reference.so" 2>/dev/nul
 product_relative="$(grep -c 'R_RISCV_RELATIVE' "$work/product.relocs")"
 test "$product_relative" -ge 1
 
+# Linux vDSO needs both hash table formats in its shared ELF.
+"$MINILD" -melf64lriscv -shared --hash-style=both \
+  -soname libminild-a4.so -o "$work/product-hash-both.so" "$work/shared.o"
+"$READELF" -SW "$work/product-hash-both.so" >"$work/hash-both.sections"
+"$READELF" -dW "$work/product-hash-both.so" >"$work/hash-both.dynamic"
+grep -Eq '] \.gnu\.hash[[:space:]]+GNU_HASH' "$work/hash-both.sections"
+grep -Eq '] \.hash[[:space:]]+HASH' "$work/hash-both.sections"
+grep -q '(GNU_HASH)' "$work/hash-both.dynamic"
+grep -q '(HASH)' "$work/hash-both.dynamic"
+echo "MINILD_A4_GNU_HASH=PASS both=true"
+
 # Linux RISC-V vDSO uses the GNU spelling -S. On debug-free
 # ET_REL input, stripping debug info is an actual no-op and may succeed.
 # Test that -S does not accidentally turn into a positional input.

@@ -5457,6 +5457,7 @@ typedef struct MiniLdSharedImage {
     size_t dynstr_section;
     size_t dynsym_section;
     size_t hash_section;
+    size_t gnu_hash_section;
     size_t rela_section;
     size_t got_section;
     size_t plt_section;
@@ -5481,6 +5482,7 @@ typedef struct MiniLdSharedImage {
     size_t got_count;
     size_t tls_gd_count;
     bool have_soname;
+    bool have_gnu_hash;
     bool have_interp;
     bool pie;
     bool have_dynamic_list;
@@ -5511,6 +5513,7 @@ static void shared_image_destroy(MiniLdSharedImage *shared) {
     shared->got_count = 0U;
     shared->tls_gd_count = 0U;
     shared->have_soname = false;
+    shared->have_gnu_hash = false;
     shared->have_interp = false;
     shared->pie = false;
     shared->have_dynamic_list = false;
@@ -5528,6 +5531,14 @@ static uint32_t shared_elf_hash(const char *name) {
             hash ^= high >> 24U;
         }
         hash &= ~high;
+    }
+    return hash;
+}
+
+static uint32_t shared_gnu_symbol_hash(const char *name) {
+    uint32_t hash = UINT32_C(5381);
+    while (*name != '\0') {
+        hash = hash * UINT32_C(33) + (unsigned char)*name++;
     }
     return hash;
 }
@@ -5792,6 +5803,7 @@ static bool shared_prepare_metadata(MiniLdState *state,
                                     const char *needed_name,
                                     const char *interpreter_path,
                                     bool pie,
+                                    bool hash_style_both,
                                     MiniLdSharedImage *shared) {
     MiniLdSection *dynstr;
     MiniLdSection *dynsym;
@@ -5811,6 +5823,8 @@ static bool shared_prepare_metadata(MiniLdState *state,
     shared->dynstr_section = SIZE_MAX;
     shared->dynsym_section = SIZE_MAX;
     shared->hash_section = SIZE_MAX;
+    shared->gnu_hash_section = SIZE_MAX;
+    shared->have_gnu_hash = hash_style_both;
     shared->rela_section = SIZE_MAX;
     shared->got_section = SIZE_MAX;
     shared->plt_section = SIZE_MAX;
@@ -5929,6 +5943,12 @@ static bool shared_prepare_metadata(MiniLdState *state,
                              8U,
                              sizeof(Elf64_Dyn),
                              &shared->dynamic_section)) {
+        goto fail;
+    }
+    if (hash_style_both &&
+        !find_or_add_section(state, ".gnu.hash", SHT_GNU_HASH,
+                             SHF_ALLOC, 8U, 0U,
+                             &shared->gnu_hash_section)) {
         goto fail;
     }
     if (interpreter_path != NULL && interpreter_path[0] != '\0') {
@@ -6055,6 +6075,15 @@ static bool shared_prepare_metadata(MiniLdState *state,
         goto oom;
     }
 
+    if (shared->have_gnu_hash) {
+        size_t count = shared->dynsym_count;
+        /* Header(16) + bloom(8) + bucket(4) + 4*(N-1) chain. */
+        if (count > (SIZE_MAX - 24U) / 4U ||
+            !section_append_zero(&state->sections[shared->gnu_hash_section],
+                                 24U + count * 4U)) {
+            goto oom;
+        }
+    }
     for (i = 0U; i < state->reloc_count; ++i) {
         MiniLdReloc *reloc = &state->relocs[i];
         MiniLdSymbol *target;
@@ -6192,6 +6221,9 @@ static bool shared_prepare_metadata(MiniLdState *state,
     }
 
     dynamic_entries = 6U; /* HASH/STRTAB/SYMTAB/STRSZ/SYMENT/NULL */
+    if (shared->have_gnu_hash) {
+        ++dynamic_entries;
+    }
     if (shared->rela_count != 0U) {
         dynamic_entries += 3U; /* RELA/RELASZ/RELAENT */
     }
@@ -6329,6 +6361,53 @@ static bool shared_fill_hash(MiniLdState *state,
             chains[cursor] = (uint32_t)dynamic_index;
         }
     }
+    return true;
+}
+
+/* ABI-correct one-bucket ELF64 GNU hash. The pre-existing dynsym indices
+ * 1..N-1 are contiguous, allowing the complete chain without reordering. */
+static bool shared_fill_gnu_hash(MiniLdState *state,
+                                 const MiniLdSharedImage *shared) {
+    MiniLdSection *section;
+    uint64_t bloom = 0U;
+    size_t i;
+
+    if (!shared->have_gnu_hash) {
+        return true;
+    }
+    section = &state->sections[shared->gnu_hash_section];
+    if (shared->dynsym_count == 0U ||
+        shared->dynsym_count > UINT32_MAX ||
+        shared->dynsym_count > (SIZE_MAX - 24U) / 4U ||
+        section->size != 24U + 4U * shared->dynsym_count) {
+        fprintf(state->diagnostics, "minic-ld: invalid-gnu-hash-layout\n");
+        return false;
+    }
+    memset(section->data, 0, section->size);
+    store_u32le(section->data + 0U, 1U);
+    store_u32le(section->data + 4U, 1U);
+    store_u32le(section->data + 8U, 1U);
+    store_u32le(section->data + 12U, 5U);
+    store_u32le(section->data + 24U,
+                shared->dynsym_count == 1U ? 0U : 1U);
+    for (i = 0U; i < state->symbol_count; ++i) {
+        size_t index = shared->dynsym_index[i];
+        uint32_t hash;
+        if (index == SIZE_MAX) {
+            continue;
+        }
+        if (index == 0U || index >= shared->dynsym_count) {
+            fprintf(state->diagnostics, "minic-ld: invalid-gnu-hash-symbol\n");
+            return false;
+        }
+        hash = shared_gnu_symbol_hash(state->symbols[i].name);
+        bloom |= UINT64_C(1) << (hash % 64U);
+        bloom |= UINT64_C(1) << ((hash >> 5U) % 64U);
+        store_u32le(section->data + 28U + (index - 1U) * 4U,
+                    (hash & ~UINT32_C(1)) |
+                    (index + 1U == shared->dynsym_count ? 1U : 0U));
+    }
+    store_u64le(section->data + 16U, bloom);
     return true;
 }
 
@@ -7162,6 +7241,9 @@ static bool shared_fill_dynamic(MiniLdState *state,
 
     memset(dynamic->data, 0, dynamic->size);
     MINILD_DYN(DT_HASH, layout->section_vaddr[shared->hash_section]);
+    if (shared->have_gnu_hash) {
+        MINILD_DYN(DT_GNU_HASH, layout->section_vaddr[shared->gnu_hash_section]);
+    }
     MINILD_DYN(DT_STRTAB, layout->section_vaddr[shared->dynstr_section]);
     MINILD_DYN(DT_SYMTAB, layout->section_vaddr[shared->dynsym_section]);
     MINILD_DYN(DT_STRSZ, state->sections[shared->dynstr_section].size);
@@ -7515,7 +7597,8 @@ static bool shared_write_object(MiniLdState *state,
         if (i == shared->dynsym_section) {
             sh->sh_link = (Elf64_Word)(shared->dynstr_section + 1U);
             sh->sh_info = 1U;
-        } else if (i == shared->hash_section) {
+        } else if (i == shared->hash_section ||
+                   (shared->have_gnu_hash && i == shared->gnu_hash_section)) {
             sh->sh_link = (Elf64_Word)(shared->dynsym_section + 1U);
         } else if (i == shared->rela_section ||
                    i == shared->rela_plt_section) {
@@ -7677,6 +7760,7 @@ int minild_link_shared_elf64_riscv_inputs_options(
         options != NULL ? options->needed_name : NULL;
     const bool pie = options != NULL && options->pie;
     const bool strip_debug = options != NULL && options->strip_debug;
+    const bool hash_style_both = options != NULL && options->hash_style_both;
     const char *interpreter_path =
         options != NULL && options->interpreter_path != NULL
             ? options->interpreter_path
@@ -7708,6 +7792,7 @@ int minild_link_shared_elf64_riscv_inputs_options(
                                  needed_name,
                                  interpreter_path,
                                  pie,
+                                 hash_style_both,
                                  &shared) ||
         (pie && !shared_validate_pie_dso_symbols(&state)) ||
         !shared_build_layout(&state, &layout)) {
@@ -7720,6 +7805,7 @@ int minild_link_shared_elf64_riscv_inputs_options(
          !static_entry_address(&state, &layout, entry_symbol, &entry)) ||
         !shared_fill_dynsym(&state, &layout, &shared) ||
         !shared_fill_hash(&state, &shared) ||
+        !shared_fill_gnu_hash(&state, &shared) ||
         !shared_fill_relocations(&state, &layout, &shared) ||
         !shared_patch_final_layout_relocations(&state, &layout, &shared) ||
         !shared_fill_plt(&state, &layout, &shared) ||
@@ -7756,6 +7842,7 @@ int minild_link_shared_elf64_riscv_inputs(const char *output_path,
     options.needed_name = NULL;
     options.interpreter_path = NULL;
     options.strip_debug = false;
+    options.hash_style_both = false;
     options.pie = false;
     return minild_link_shared_elf64_riscv_inputs_options(output_path,
                                                           inputs,

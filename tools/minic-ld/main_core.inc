@@ -114,6 +114,7 @@ int main(int argc, char **argv) {
     bool shared_link = false;
     bool pie_link = false;
     bool strip_debug = false;
+    bool hash_style_both = false;
     bool whole_archive = false;
     bool group_mode = false;
     int i;
@@ -315,6 +316,8 @@ int main(int argc, char **argv) {
                 fprintf(stderr, "minic-ld: unsupported-z:%s\n", argv[i]);
                 return 2;
             }
+        } else if (strcmp(argv[i], "--hash-style=both") == 0) {
+            hash_style_both = true;
         } else if (strcmp(argv[i], "-S") == 0 ||
                    strcmp(argv[i], "--strip-debug") == 0) {
             strip_debug = true;
@@ -375,6 +378,10 @@ int main(int argc, char **argv) {
         fprintf(stderr, "minic-ld: incompatible-link-modes\n");
         return 2;
     }
+    if (hash_style_both && !shared_link && !pie_link) {
+        fprintf(stderr, "minic-ld: hash-style-both-requires-shared-or-pie\n");
+        return 2;
+    }
     if (interpreter_path != NULL && !pie_link) {
         fprintf(stderr, "minic-ld: dynamic-linker-requires-pie\n");
         return 2;
@@ -409,6 +416,7 @@ int main(int argc, char **argv) {
         options.needed_name = needed_name;
         options.interpreter_path = interpreter_path;
         options.strip_debug = strip_debug;
+        options.hash_style_both = hash_style_both;
         options.pie = pie_link;
         return minild_link_shared_elf64_riscv_inputs_options(output,
                                                               inputs,
