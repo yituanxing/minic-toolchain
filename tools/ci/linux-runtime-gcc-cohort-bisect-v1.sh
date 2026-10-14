@@ -452,6 +452,30 @@ PY_DMA_CONTEXT
     fi
   fi
 fi
+# Reconstruct ONLY the pinned Linux source for a cached Boolean A/B; do
+# not rebuild a second full candidate pool. The resulting object MUST equal
+# the immutable cached MiniC object, byte for byte.
+if [[ "${COHORT_KEEP_BOOL_SINGLE_I:-0}" == 1 && "$cached" == 1 ]]; then
+  [[ "$n" == 1 && "${objects[0]}" == lib/crypto/blake2s-generic.o &&
+     "${COHORT_ACTION:-all}" == compile &&
+     "${COHORT_GNU_PREFLIGHT_ALLOW_BOOL_SINGLE:-0}" == 1 ]] || {
+    echo 'BOOLEAN_CACHE_SINGLE=FAIL cached_replay_wrong_scope'; exit 8;
+  }
+  target=lib/crypto/blake2s-generic.o
+  rm -f "$out/$target" "$out/lib/crypto/.blake2s-generic.o.cmd"
+  MINIC="$minic" REAL_CC=/usr/bin/riscv64-linux-gnu-gcc \
+    MINIC_KEEP_INTERMEDIATES=1 MINIC_PRESERVE_FAILURE_INPUTS=1 \
+    make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
+      CC="$repo/tests/external/linux/stage2_kbuild_cc.sh" -j1 "$target" \
+      >"$ev/boolean-source-replay.log" 2>&1 || {
+        echo 'BOOLEAN_CACHE_SINGLE=FAIL cached_source_replay_compile'; tail -n 40 "$ev/boolean-source-replay.log"; exit 4;
+      }
+  cmp -s "$out/$target" "$ev/minic/$target" || {
+    echo 'BOOLEAN_CACHE_SINGLE=FAIL cached_object_replay_bytes_mismatch'; exit 8;
+  }
+  test -s "$out/lib/crypto/blake2s-generic.minic-stage2.i"
+  echo 'BOOLEAN_CACHE_SINGLE=CACHED_REPLAY_EQUIVALENT object_sha_verified=true count=1'
+fi
 # One authenticated Linux shmem diagnostic, not a second owner producer.
 # Preserve GNU -E input and current MiniC -S for exact failing assertion
 # names, even when an immutable .o was restored from the candidate cache.
