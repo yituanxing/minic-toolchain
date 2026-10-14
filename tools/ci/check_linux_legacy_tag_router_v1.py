@@ -146,6 +146,24 @@ def main():
             if reconstructed.count(new_assert) != 1 or old_assert in reconstructed:
                 raise AssertionError("MiniLD bare-output trace assertion missing")
             reconstructed = reconstructed.replace(new_assert, old_assert, 1)
+        if name == "linux-runtime-optin-perf-suite-v1.yml":
+            # Two opt-in factor-isolation steps are appended within perf500.
+            # Strip ONLY the reviewed extension, then require byte-exact
+            # equality against the archived original executable job body.
+            begin = "      # Factor isolation extension: opt-in only; the archived perf500 job"
+            end = "      - name: Upload performance evidence"
+            if reconstructed.count(begin) != 1 or reconstructed.count(end) != 1:
+                raise AssertionError("factorial extension missing or ambiguous")
+            start = reconstructed.index(begin)
+            stop = reconstructed.index(end, start)
+            extra = reconstructed[start:stop]
+            if (extra.count("- name: ") != 2 or
+                "[linux-perf-factorial]" not in extra or
+                "MINIC_PERF_SKIP_TYPEDEF_INDEX=1" not in extra or
+                "MINIC_PERF_SKIP_BOOLEAN_SCOPED=1" not in extra or
+                "linux-perf-typedef-paired-ab-v1.py" not in extra):
+                raise AssertionError("unreviewed performance extension")
+            reconstructed = reconstructed[:start] + reconstructed[stop:]
         if git_blob(reconstructed.encode()) != original_sha:
             raise AssertionError(f"original job bodies or manual behavior changed: {name}")
         expected_cond = "    if: " + " || ".join(
