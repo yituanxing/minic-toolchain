@@ -122,6 +122,46 @@ if [[ "${MINILD_ENABLE_VDSO64:-0}" == 1 &&
   { flock 9; printf 'minild-vdso64\t%s\t%s\t%s\n' "$elapsed_ms" "$status" "$output"; } 9>>"$NATIVE_TRACE_DIR/minild-times.tsv" >&9
   if (( status!=0 )); then
     echo "MINILD_VDSO64=FAIL native_link_status=$status output=$output" >&2
+    # Diagnose the REAL Kbuild inputs, not the seven GNU golden inputs of
+    # the successful isolated replay. Native MiniC .s / MiniAS .o may
+    # legitimately differ in CFI and .eh_frame contribution. We must
+    # establish the current input ABI before patching the linker.
+    for input in "${args[@]}"; do
+      if [[ "$input" != *.o || ! -f "$input" ]]; then
+        continue
+      fi
+      sections=$(riscv64-linux-gnu-readelf -W -S "$input" 2>/dev/null |
+                 grep -E '[.]eh_frame([[:space:]]|$)' || true)
+      printf 'MINILD_VDSO64_INPUT file=%s sha=%s eh_frame=%s\n' \
+        "$input" "$(sha256sum "$input" | cut -d' ' -f1)" "${sections:-NONE}" >&2
+      golden="$NATIVE_TRACE_DIR/../gcc/$input"
+      if [[ -f "$golden" ]]; then
+        golden_sections=$(riscv64-linux-gnu-readelf -W -S "$golden" 2>/dev/null |
+                          grep -E '[.]eh_frame([[:space:]]|$)' || true)
+        echo "MINILD_VDSO64_GNU_OBJECT file=$input sha=$(sha256sum "$golden" | cut -d' ' -f1) eh_frame=${golden_sections:-NONE}" >&2
+      fi
+    done
+    # GNU's exact same-objects output is diagnostic only: never install
+    # this ELF in Kbuild or silently fall back for the user's native build.
+    debug_args=("${args[@]}")
+    for ((j=0; j<${#debug_args[@]}; ++j)); do
+      if [[ "${debug_args[j]}" == -o && $((j+1)) -lt ${#debug_args[@]} ]]; then
+        debug_args[j+1]="$NATIVE_TRACE_DIR/vdso64-gnu-same-inputs-diagnostic.so"
+        break
+      fi
+    done
+    if /usr/bin/riscv64-linux-gnu-ld "${debug_args[@]}" \
+       >"$NATIVE_TRACE_DIR/vdso64-gnu-diagnostic.stdout" \
+       2>"$NATIVE_TRACE_DIR/vdso64-gnu-diagnostic.stderr"; then
+      riscv64-linux-gnu-readelf -W -S -l \
+        "$NATIVE_TRACE_DIR/vdso64-gnu-same-inputs-diagnostic.so" |
+        grep -E '([.]eh_frame|GNU_EH_FRAME)' |
+        sed 's/^/MINILD_VDSO64_GNU_SAME_INPUTS /' >&2 || true
+      echo "MINILD_VDSO64_GNU_SAME_INPUTS=PASS diagnostic_only=true GNU_output_not_used=true" >&2
+    else
+      echo 'MINILD_VDSO64_GNU_SAME_INPUTS=FAIL diagnostic_only=true GNU_output_not_used=true' >&2
+      tail -n 12 "$NATIVE_TRACE_DIR/vdso64-gnu-diagnostic.stderr" >&2
+    fi
   fi
   exit "$status"
 fi
