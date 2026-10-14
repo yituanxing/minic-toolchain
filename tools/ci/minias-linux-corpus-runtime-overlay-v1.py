@@ -116,7 +116,7 @@ def seven_shard_overlay(a, frozen, manifest, orig, output, evidence):
         target.parent.mkdir(parents=True,exist_ok=True)
         result=subprocess.run([str(assembler),'-march='+arch,'-mabi='+abi,
                                '-o',str(target),str(collected[owner])],
-                              stdout=subprocess.PIPE,stderr=subprocess.STDOUT,timeout=90)
+                              cwd=str(golden),stdout=subprocess.PIPE,stderr=subprocess.STDOUT,timeout=90)
         if result.returncode or not target.is_file():
             raise ValueError('MiniAS failed owner='+owner+' rc='+str(result.returncode)+
                              ' log='+result.stdout[-1200:].decode('utf-8','replace'))
