@@ -218,6 +218,7 @@ fi
 SH_AS
 mkdir -p "$ev/as-bin"
 ln -s "$ev/as-wrapper" "$ev/as-bin/riscv64-linux-gnu-as"
+ln -s "$ev/as-wrapper" "$ev/as-bin/as"
 : >"$ev/minias-runtime.trace"
 chmod +x "$ev/"{ar-wrapper,ld-wrapper,objcopy-wrapper,as-wrapper}
 : >"$ev/miniar.trace"

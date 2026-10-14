@@ -1351,8 +1351,12 @@ if [[ "${COHORT_NATIVE_UNION:-0}" == 1 ]]; then
     test -x "$NATIVE_TRACE_DIR/as-wrapper"
     test -x "$NATIVE_TRACE_DIR/as-bin/riscv64-linux-gnu-as"
     export COMPILER_PATH="$NATIVE_TRACE_DIR/as-bin${COMPILER_PATH:+:$COMPILER_PATH}"
-    native_kbuild_args+=("AS=$NATIVE_TRACE_DIR/as-wrapper")
-    echo "MINIAS_KBUILD_AS=ENABLED subprocess=COMPILER_PATH direct=AS native_no_fallback=true"
+    # Keep the original Kbuild AS=<GNU> .cmd identity byte-for-byte stable.
+    # Globally changing AS triggers full generated-header/Kconfig regeneration
+    # (#38504662486: asm-offsets.h, autoconf.h, rustc_cfg changed), so only
+    # intercept the GCC assembler *subprocess*, not make's command variables.
+    test -x "$NATIVE_TRACE_DIR/as-bin/as"
+    echo "MINIAS_KBUILD_AS=ENABLED subprocess=COMPILER_PATH direct=Kbuild_GNU_pinned no_CC_or_AS_cmd_drift=true"
   fi
   echo "COHORT_NATIVE_UNION=ENABLED owners=$n pp=GNU as=GNU cc=MiniC ar=MiniAR ld=MiniLD_final_only objcopy=MiniObjcopy"
 fi
