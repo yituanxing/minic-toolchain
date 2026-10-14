@@ -1455,6 +1455,23 @@ jobs:
           (cd "$ev" && sha256sum --quiet -c minic-manifest.sha256)
           minias="$GITHUB_WORKSPACE/build/minias-linux-corpus-v1-tools"
           make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$minias" "$minias/bin/minic-as"
+          # 1-second fail-fast oracle for the exact executable NOP alignment
+          # that trapped in the native Linux strcmp Zbb fast path. Verify the
+          # machine bytes BEFORE 2060 native C reassemblies and QEMU.
+          cat > "$minias/code-align-preflight.s" <<'MINIAS_ALIGN_EOF'
+          .text
+            nop
+            .p2align 3
+            nop
+          MINIAS_ALIGN_EOF
+          "$minias/bin/minic-as" -o "$minias/code-align-preflight.o" "$minias/code-align-preflight.s"
+          riscv64-linux-gnu-objcopy -O binary -j .text "$minias/code-align-preflight.o" "$minias/code-align-preflight.bin"
+          align_hex="$(od -An -v -tx1 "$minias/code-align-preflight.bin" | xargs | tr -d ' ')"
+          if [[ "$align_hex" != '130000001300000013000000' ]]; then
+            echo "MINIAS_CODE_ALIGN_PREFLIGHT=FAIL hex=$align_hex expected=130000001300000013000000" >&2
+            exit 10
+          fi
+          echo 'MINIAS_CODE_ALIGN_PREFLIGHT=PASS exe_padding=RISC-V_NOP no_C_UNIMP=true'
           python3 tools/ci/minias-linux-corpus-runtime-overlay-v1.py \
             --original-pool "$ev/minic" \
             --manifest "$ev/minic-manifest.sha256" \

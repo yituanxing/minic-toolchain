@@ -35,6 +35,47 @@ EOF
     test "$actual_hex" = "$expected_hex"
 }
 
+
+# Regression: GNU RISC-V assembler fills executable .p2align with NOPs,
+# not 0x0000 (C.UNIMP). A zero-fill bug in the Zbb strcmp fast path passes
+# ELF/symbol checks but traps before the Linux boot banner in real QEMU.
+cat >"$work/code-alignment.s" <<'EOF_ALIGN'
+.text
+.globl code_alignment
+.type code_alignment, @function
+code_alignment:
+    nop
+    .p2align 3
+    nop
+    .2byte 0x0001
+    .p2align 2
+    nop
+.size code_alignment, .-code_alignment
+EOF_ALIGN
+"$MINIAS" -o "$work/code-alignment.o" "$work/code-alignment.s"
+alignment_text_hex="$(
+    readelf -x .text "$work/code-alignment.o" |
+    awk '/0x[0-9a-f]+/ {for (i=2; i<=NF; ++i) if ($i ~ /^[0-9a-f]+$/ && length($i) <= 8 && length($i) % 2 == 0) printf "%s", $i}'
+)"
+test "$alignment_text_hex" = "1300000013000000130000000100010013000000" || {
+    echo "MiniAS executable .p2align must contain RISC-V NOPs, not C.UNIMP" >&2
+    exit 1
+}
+cat >"$work/data-alignment.s" <<'EOF_DATAALIGN'
+.data
+.byte 0x55
+.balign 4
+.byte 0x66
+EOF_DATAALIGN
+"$MINIAS" -o "$work/data-alignment.o" "$work/data-alignment.s"
+alignment_data_hex="$(
+    readelf -x .data "$work/data-alignment.o" |
+    awk '/0x[0-9a-f]+/ {for (i=2; i<=NF; ++i) if ($i ~ /^[0-9a-f]+$/ && length($i) <= 8 && length($i) % 2 == 0) printf "%s", $i}'
+)"
+test "$alignment_data_hex" = "5500000066" || {
+    echo "MiniAS data alignment must remain zero-filled" >&2
+    exit 1
+}
 assemble_and_check return_0 0 1305000067800000
 assemble_and_check return_42 42 1305a00267800000
 

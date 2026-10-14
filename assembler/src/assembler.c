@@ -547,6 +547,35 @@ bool minias_section_append_zero(MiniAs *as, int section_index, size_t size) {
     return true;
 }
 
+/* GNU as fills RISC-V executable .align/.p2align/.balign gaps with
+ * executable NOPs, never zero halfwords.  In arch/riscv/lib/strcmp.S the
+ * .p2align 3 immediately precedes the aligned Zbb fast path: emitting
+ * 0x0000 (C.UNIMP) here traps during early Linux boot even though all ELF
+ * sections, exported symbols and relocations pass the basic oracle.
+ *
+ * Preserve the existing .org zero-fill semantics and data alignment. */
+static bool minias_section_append_code_alignment(MiniAs *as,
+                                                 int section_index,
+                                                 size_t size) {
+    static const unsigned char nop32[] = {0x13U, 0x00U, 0x00U, 0x00U};
+    static const unsigned char nop16[] = {0x01U, 0x00U};
+
+    if ((size & 1U) != 0U) {
+        minias_set_error(as, "executable-alignment-odd-padding:%zu", size);
+        return false;
+    }
+    while (size >= sizeof(nop32)) {
+        if (!minias_section_append(as, section_index, nop32, sizeof(nop32))) {
+            return false;
+        }
+        size -= sizeof(nop32);
+    }
+    if (size == sizeof(nop16)) {
+        return minias_section_append(as, section_index, nop16, sizeof(nop16));
+    }
+    return true;
+}
+
 void minias_init(MiniAs *as) {
     memset(as, 0, sizeof(*as));
     (void)minias_ensure_section(as,
@@ -4607,7 +4636,12 @@ bool minias_emit_sections(MiniAs *as) {
             }
         }
         if (stmt->kind == MINIAS_STMT_ALIGN) {
-            if (!minias_section_append_zero(as, stmt->section, stmt->size)) {
+            bool exec_align = (section->flags & MINIAS_SHF_EXECINSTR) != 0U &&
+                              strcmp(stmt->op, ".org") != 0;
+            if (!(exec_align
+                      ? minias_section_append_code_alignment(as, stmt->section,
+                                                              stmt->size)
+                      : minias_section_append_zero(as, stmt->section, stmt->size))) {
                 if (as->error[0] == '\0') {
                     minias_set_error(as,
                                      "emit-align-failed:%s:line=%zu",
