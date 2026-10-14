@@ -120,7 +120,11 @@ def header_impact(out: Path, evidence: Path, golden: Path,
     if not isinstance(previous, dict):
         raise GuardError("missing golden generated-header identities")
     changed = sorted(k for k in set(now) | set(previous) if now.get(k) != previous.get(k))
-    if set(changed) - {"include/generated/vdso-offsets.h"}:
+    # Kbuild's compile.h may refresh its build metadata during a relink.
+    # Check every pinned GCC dependency closure and replay affected MiniC C
+    # owners; no other unexpected generated header is allowed.
+    allowed = {"include/generated/vdso-offsets.h", "include/generated/compile.h"}
+    if set(changed) - allowed:
         raise GuardError("unsupported generated-header changes: " + ",".join(changed))
     impacted = selected_generated_header_dependents(
         golden, object_paths(selected), changed) if changed else []

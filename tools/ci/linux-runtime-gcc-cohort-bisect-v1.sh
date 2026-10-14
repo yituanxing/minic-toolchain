@@ -121,9 +121,10 @@ make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
 # legitimately regenerate version.o and dependent vmlinux.o from timestamps.
 # Only for exact RV64-only shard compilation, permit those two volatile nodes.
 # All other GNU hashes remain exact; the pristine snapshot is restored below.
-if [[ "${COHORT_ACTION:-all}" == compile && "${COHORT_ALLOW_SHARD:-0}" == 1 &&
-      "$cohort_scope" == SHARD_COMPILE_ONLY &&
-      "$actual_cfg" == e89f0142a8908f5c9bcd21b74e3115cf64b76acca70812a72f8ccf02cd5fa60b ]]; then
+if [[ "$actual_cfg" == e89f0142a8908f5c9bcd21b74e3115cf64b76acca70812a72f8ccf02cd5fa60b ]] && {
+  [[ "${COHORT_ACTION:-all}" == compile && "${COHORT_ALLOW_SHARD:-0}" == 1 && "$cohort_scope" == SHARD_COMPILE_ONLY ]] ||
+  [[ "${COHORT_ACTION:-all}" == verify && "$cohort_scope" == FULL_C_UNIVERSE && "$n" == 2057 ]]
+}; then
   awk '$2 != "init/version-timestamp.o" && $2 != "init/version.o" && $2 != "vmlinux.o" {print}' \
     "$prov/gcc-objects.sha256" >"$ev/gcc-objects-stable.sha256"
   echo 'RV64_ONLY_GNU_PREFLIGHT=VOLATILE_ALLOWLIST_ONLY version.o,vmlinux.o untouched_other_GNU_sha=true'

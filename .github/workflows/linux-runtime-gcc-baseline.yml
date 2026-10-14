@@ -558,7 +558,7 @@ jobs:
   # Explicit, optional 7-runner producer for the same pure-GCC C universe.
   # Do not use this lane for everyday single-TU debugging.
   gcc-shards:
-    if: github.event_name == 'push' && (contains(github.event.head_commit.message, '[linux-runtime-gcc-sharded]') || contains(github.event.head_commit.message, '[linux-minias-seven-shards]') || contains(github.event.head_commit.message, '[linux-rv64-only-seven]'))
+    if: github.event_name == 'push' && (contains(github.event.head_commit.message, '[linux-runtime-gcc-sharded]') || contains(github.event.head_commit.message, '[linux-minias-seven-shards]') || (contains(github.event.head_commit.message, '[linux-rv64-only-seven]') && !contains(github.event.head_commit.message, '[linux-rv64-only-replay]')))
     runs-on: ubuntu-24.04
     timeout-minutes: 75
     strategy:
@@ -828,7 +828,7 @@ jobs:
     # Use the SAME receiver job for exact immutable Image reboots. When the
     # seven producer jobs are skipped, always() prevents needs' implicit skip;
     # the ordinary full-shard path still requires a successful producer.
-    if: always() && github.event_name == 'push' && ((contains(github.event.head_commit.message, '[linux-runtime-gcc-sharded]') && needs.gcc-shards.result == 'success') || contains(github.event.head_commit.message, '[linux-runtime-large-image-qemu]') || contains(github.event.head_commit.message, '[linux-runtime-p1-frame-audit]') || contains(github.event.head_commit.message, '[linux-runtime-stack-owners]') || contains(github.event.head_commit.message, '[linux-native-union-cached]') || contains(github.event.head_commit.message, '[linux-minild-cached-replay]') || contains(github.event.head_commit.message, '[linux-minild-reloc-cached-replay]') || contains(github.event.head_commit.message, '[linux-minild-purgatory-cached-replay]') || contains(github.event.head_commit.message, '[linux-minild-vdso64-cached-replay]') || contains(github.event.head_commit.message, '[linux-minias-earlycon-frozen]'))
+    if: always() && github.event_name == 'push' && ((contains(github.event.head_commit.message, '[linux-runtime-gcc-sharded]') && needs.gcc-shards.result == 'success') || (contains(github.event.head_commit.message, '[linux-rv64-only-replay]') && needs.gcc-shards.result == 'skipped') || contains(github.event.head_commit.message, '[linux-runtime-large-image-qemu]') || contains(github.event.head_commit.message, '[linux-runtime-p1-frame-audit]') || contains(github.event.head_commit.message, '[linux-runtime-stack-owners]') || contains(github.event.head_commit.message, '[linux-native-union-cached]') || contains(github.event.head_commit.message, '[linux-minild-cached-replay]') || contains(github.event.head_commit.message, '[linux-minild-reloc-cached-replay]') || contains(github.event.head_commit.message, '[linux-minild-purgatory-cached-replay]') || contains(github.event.head_commit.message, '[linux-minild-vdso64-cached-replay]') || contains(github.event.head_commit.message, '[linux-minias-earlycon-frozen]'))
     runs-on: ubuntu-24.04
     timeout-minutes: 95
     steps:
@@ -960,7 +960,7 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
-          config=eeb04f304ebfb97a1079c187dc0c2ea3cc61fc50a55aa3cc776237c16ab19bbe
+          config=e89f0142a8908f5c9bcd21b74e3115cf64b76acca70812a72f8ccf02cd5fa60b
           gcc_sig=$(sha256sum "$(command -v riscv64-linux-gnu-gcc)" | cut -c1-16)
           ld_sig=$(sha256sum "$(command -v riscv64-linux-gnu-ld)" | cut -c1-16)
           echo "GNU_GOLDEN_KEY=linux-gnu-golden-v1-6.6.143-$config-$gcc_sig-$ld_sig"
@@ -1114,7 +1114,7 @@ jobs:
           objects=$(sha256sum "$ev/full-objects.txt" | cut -d' ' -f1)
           gcc=$(sha256sum "$(command -v riscv64-linux-gnu-gcc)" | cut -d' ' -f1)
           assembler=$(sha256sum "$(command -v riscv64-linux-gnu-as)" | cut -d' ' -f1)
-          echo "FULL_MINIC_KEY=gnu-minic-objects-v1-eeb04f304ebfb97a1079c187dc0c2ea3cc61fc50a55aa3cc776237c16ab19bbe-$profile-$objects-$gcc-$assembler" >>"$GITHUB_ENV"
+          echo "FULL_MINIC_KEY=gnu-minic-objects-v1-e89f0142a8908f5c9bcd21b74e3115cf64b76acca70812a72f8ccf02cd5fa60b-$profile-$objects-$gcc-$assembler" >>"$GITHUB_ENV"
 
       # The exact 2064 MiniC .o cache was already SHA/ABI-certified in
       # full CI #38204602644. This lane only resolves P1 crash symbol owners
@@ -1226,6 +1226,9 @@ jobs:
       - uses: actions/download-artifact@v4
         if: "!contains(github.event.head_commit.message, '[linux-runtime-large-image-qemu]') && !contains(github.event.head_commit.message, '[linux-runtime-p1-frame-audit]') && !contains(github.event.head_commit.message, '[linux-runtime-stack-owners]') && !contains(github.event.head_commit.message, '[linux-native-union-cached]') && !contains(github.event.head_commit.message, '[linux-minild-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minild-reloc-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minild-purgatory-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minild-vdso64-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minias-earlycon-frozen]')"
         with:
+          repository: ${{ github.repository }}
+          run-id: ${{ contains(github.event.head_commit.message, '[linux-rv64-only-replay]') && '38561696951' || github.run_id }}
+          github-token: ${{ github.token }}
           pattern: shard-*
           path: build/linux-runtime-gcc-shards-v1
           merge-multiple: false
