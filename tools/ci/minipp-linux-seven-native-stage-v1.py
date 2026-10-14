@@ -120,6 +120,8 @@ def main() -> int:
                     raise RuntimeError("reference-GCC-macro-context-unavailable")
                 predefs[context] = macro_path
             macro_path = predefs[context]
+            if "-mcmodel=medany" in row["args"] and b"__riscv_cmodel_medany" not in macro_path.read_bytes():
+                raise RuntimeError("medany-specific-GCC-predefine-context-not-preserved")
             common = ["-E", "-P", "-undef", "-x", "c", "-include", str(macro_path),
                       *pp_args(row["args"]), row["source"]]
             reference = item / "gnu.i"

@@ -88,7 +88,7 @@ for ((i=0; i<${#args[@]}; ++i)); do
     -D*|-U*|-I*|-nostdinc|-isystem*|-include*)
       pp_args+=("$arg")
       ;;
-    -march=*|-mabi=*|-std=*|-fshort-wchar|-funsigned-char|-fsigned-char|-fno-PIE|-fPIE|-fno-pie|-fpie|-fPIC|-fpic)
+    -march=*|-mabi=*|-std=*|-fshort-wchar|-funsigned-char|-fsigned-char|-fno-PIE|-fPIE|-fno-pie|-fpie|-fPIC|-fpic|-fno-PIC|-fno-pic|-mcmodel=*)
       predef_args+=("$arg")
       ;;
     -Wp,*|-MMD|-MD|-MP)
