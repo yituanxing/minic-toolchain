@@ -94,9 +94,10 @@ def main():
         if ("[linux-native-union-cached]" not in identity or
             "full-crossblock-pure-eq-v1-" not in identity):
             raise AssertionError("native union cache identity lost full-crossblock profile")
-        for guard in ("MINIAS_CODE_ALIGN_PREFLIGHT=PASS","MINIAS_ODD_CODE_ALIGN_PREFLIGHT=PASS"):
-            if guard not in runtime:
-                raise AssertionError("native Linux MiniAS preflight missing: "+guard)
+        # The odd-byte raw-.text case is exercised in MiniAS A0, while
+        # this expensive P1 gate keeps only the true strcmp NOP fast preflight.
+        if "MINIAS_CODE_ALIGN_PREFLIGHT=PASS" not in runtime:
+            raise AssertionError("native Linux MiniAS executable NOP preflight missing")
     # The legacy Image branch depended on an expired 2026-09-02 artifact,
     # so keep it in an immutable archive, never as a live certification mode.
     if "[miniobjcopy-linux-image]" in mini or "run-id: 33623125809" in mini:
