@@ -349,18 +349,28 @@ jobs:
             "$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain" "$ev/compiler"
           if [[ "${{ contains(github.event.head_commit.message, '[linux-perf-boolean-single]') }}" == true ]]; then
             tool="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain"
-            cp "$tool/bin/minic" "$ev/compiler/minic-before-boolean"
-            chmod 755 "$ev/compiler/minic-before-boolean"
+            # minic is only the driver. minic-cc contains compiler.c and
+            # MUST change when Boolean Domain optimization is actually built.
+            cp "$tool/bin/minic-cc" "$ev/compiler/minic-cc-before-boolean"
+            chmod 755 "$ev/compiler/minic-cc-before-boolean"
             python3 tools/ci/apply-inline-specialization-local-boolean-domain-scoped-v1.py >>"$ev/compiler/patch.log"
             make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$tool" "$tool/bin/minic" "$tool/bin/minic-cc" >/dev/null
             git diff --check
             echo apply-inline-specialization-local-boolean-domain-scoped-v1.py >>"$ev/compiler/minic-profile.txt"
             sha256sum "$tool/bin/minic" "$tool/bin/minic-cc" >"$ev/compiler/minic.sha256"
-            echo "BOOLEAN_CACHE_SINGLE=READY before=$(sha256sum "$ev/compiler/minic-before-boolean" | cut -c1-16) after=$(sha256sum "$tool/bin/minic" | cut -c1-16)"
+            old_sha=$(sha256sum "$ev/compiler/minic-cc-before-boolean" | cut -d' ' -f1)
+            new_sha=$(sha256sum "$tool/bin/minic-cc" | cut -d' ' -f1)
+            [[ "$old_sha" != "$new_sha" ]] || {
+              echo 'BOOLEAN_CACHE_SINGLE=FAIL unchanged_minic_cc_compiler'; exit 8;
+            }
+            echo "BOOLEAN_CACHE_SINGLE=READY minic_cc_before=${old_sha:0:16} minic_cc_after=${new_sha:0:16}"
           fi
           export COHORT_ALLOW_DIAGNOSTIC_384=${{ contains(github.event.head_commit.message, '[linux-runtime-gcc-384]') && '1' || '0' }}
           export COHORT_ALLOW_SHARD=${{ (contains(github.event.head_commit.message, '[linux-runtime-gcc-dma-only]') || contains(github.event.head_commit.message, '[linux-runtime-gcc-link-triad]') || contains(github.event.head_commit.message, '[linux-runtime-gcc-shmem-only]') || contains(github.event.head_commit.message, '[linux-runtime-blake2s-only]')) && '1' || '0' }}
           export COHORT_ACTION=compile
+          if [[ "${{ contains(github.event.head_commit.message, '[linux-perf-boolean-single]') }}" == true ]]; then
+            export COHORT_GNU_PREFLIGHT_ALLOW_BOOL_SINGLE=1
+          fi
           if [[ "${{ contains(github.event.head_commit.message, '[linux-runtime-blake2s-only]') }}" == true ]]; then
             # Fail quickly if the supposed O(n) fix still costs minutes;
             # the historical 33m value is already proven by CI #38400728544.
