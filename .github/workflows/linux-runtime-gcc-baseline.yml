@@ -338,6 +338,14 @@ jobs:
             build/linux-runtime-gcc-cohort-v1/minic-identity.txt
           key: ${{ steps.candidate_id.outputs.key }}
 
+      - name: Restore SHA-bound selected hot-owner preprocessed sources
+        if: contains(github.event.head_commit.message, '[linux-perf-hotowners]')
+        id: hot_sources_restore
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-runtime-gcc-cohort-v1/boolean-hot
+          key: ${{ steps.candidate_id.outputs.key }}-hot-owner-frozen-inputs-v1
+
       - name: Build MiniC once and produce authenticated C candidates
         shell: bash
         run: |
@@ -412,29 +420,7 @@ jobs:
               --out "$ev/boolean-ab" | tee "$ev/boolean-ab/paired-verdict.txt"
             grep -Fq 'MINIC_ONE_OWNER_AB=PASS' "$ev/boolean-ab/paired-verdict.txt"
           fi
-          if [[ "${{ contains(github.event.head_commit.message, '[linux-perf-hotowners]') }}" == true ]]; then
-            ev="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-v1"
-            root="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain/bin"
-            mkdir -p "$ev/boolean-hot/baseline/bin"
-            cp "$root/minic" "$ev/boolean-hot/baseline/bin/minic"
-            cp "$ev/compiler/minic-cc-before-boolean" "$ev/boolean-hot/baseline/bin/minic-cc"
-            python3 -m py_compile tools/ci/linux-perf-pinned-single-paired-ab-v1.py
-            for owner in kernel/bpf/btf.o kernel/bpf/verifier.o net/core/filter.o; do
-              key="${owner//\//_}"
-              frozen="$ev/boolean-hot/$key.frozen.i"
-              test -s "$frozen"
-              result="$ev/boolean-hot/results/$key"
-              echo "BOOL_HOT_A_B=START owner=$owner"
-              python3 tools/ci/linux-perf-pinned-single-paired-ab-v1.py \
-                --input "$frozen" \
-                --baseline-driver "$ev/boolean-hot/baseline/bin/minic" \
-                --candidate-driver "$root/minic" \
-                --out "$result" | tee "$result-verdict.txt"
-              grep -Fq 'MINIC_ONE_OWNER_AB=PASS' "$result-verdict.txt"
-              python3 -c 'import json,sys; j=json.load(open(sys.argv[2])); print("BOOL_HOT_A_B=PASS owner="+sys.argv[1]+" before_ms="+str(j["baseline_median_ms"])+" after_ms="+str(j["candidate_median_ms"])+" speedup="+str(j["candidate_speedup"])+" assembly_identical="+str(j["assembly_identical"]))' "$owner" "$result/paired-result.json"
-            done
-            echo 'BOOL_HOT_A_B_GROUP=PASS owners=3 cold_workflow_reused=true QEMU_not_executed=true'
-          fi
+
 
       - name: Check completed full MiniC object pool is cacheable
         id: candidate_ready
@@ -487,6 +473,44 @@ jobs:
             build/linux-runtime-gcc-cohort-v1/minic-manifest.sha256
             build/linux-runtime-gcc-cohort-v1/minic-identity.txt
           key: ${{ steps.candidate_id.outputs.key }}
+
+      - name: Preserve the three exact frozen Kbuild sources for future A-B
+        if: contains(github.event.head_commit.message, '[linux-perf-hotowners]') && steps.candidate_ready.outputs.ready == 'true' && steps.hot_sources_restore.outputs['cache-hit'] != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: build/linux-runtime-gcc-cohort-v1/boolean-hot
+          key: ${{ steps.candidate_id.outputs.key }}-hot-owner-frozen-inputs-v1
+
+      - name: Compare three high-cost owners on frozen inputs without rebuilding objects
+        if: contains(github.event.head_commit.message, '[linux-perf-hotowners]') && steps.candidate_ready.outputs.ready == 'true'
+        shell: bash
+        timeout-minutes: 24
+        run: |
+          set -Eeuo pipefail
+          if [[ "${{ contains(github.event.head_commit.message, '[linux-perf-hotowners]') }}" == true ]]; then
+            ev="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-v1"
+            root="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain/bin"
+            mkdir -p "$ev/boolean-hot/baseline/bin"
+            cp "$root/minic" "$ev/boolean-hot/baseline/bin/minic"
+            cp "$ev/compiler/minic-cc-before-boolean" "$ev/boolean-hot/baseline/bin/minic-cc"
+            python3 -m py_compile tools/ci/linux-perf-pinned-single-paired-ab-v1.py
+            for owner in kernel/bpf/btf.o kernel/bpf/verifier.o net/core/filter.o; do
+              key="${owner//\//_}"
+              frozen="$ev/boolean-hot/$key.frozen.i"
+              test -s "$frozen"
+              result="$ev/boolean-hot/results/$key"
+              mkdir -p "$(dirname "$result")"
+              echo "BOOL_HOT_A_B=START owner=$owner"
+              python3 tools/ci/linux-perf-pinned-single-paired-ab-v1.py \
+                --input "$frozen" \
+                --baseline-driver "$ev/boolean-hot/baseline/bin/minic" \
+                --candidate-driver "$root/minic" \
+                --out "$result" | tee "$result-verdict.txt"
+              grep -Fq 'MINIC_ONE_OWNER_AB=PASS' "$result-verdict.txt"
+              python3 -c 'import json,sys; j=json.load(open(sys.argv[2])); print("BOOL_HOT_A_B=PASS owner="+sys.argv[1]+" before_ms="+str(j["baseline_median_ms"])+" after_ms="+str(j["candidate_median_ms"])+" speedup="+str(j["candidate_speedup"])+" assembly_identical="+str(j["assembly_identical"]))' "$owner" "$result/paired-result.json"
+            done
+            echo 'BOOL_HOT_A_B_GROUP=PASS owners=3 cold_workflow_reused=true QEMU_not_executed=true'
+          fi
 
       # This boundary is essential: a subsequent GNU relink/QEMU failure
       # must NEVER waste the expensive, already-verified candidate objects.

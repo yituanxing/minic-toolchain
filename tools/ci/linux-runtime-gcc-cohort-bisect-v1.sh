@@ -598,6 +598,17 @@ if [[ "${COHORT_ACTION:-all}" == compile ]]; then
       echo 'BOOL_HOT=FAIL frozen_input_wrong_scope'; exit 8;
     }
     mkdir -p "$ev/boolean-hot"
+    if [[ "$cached" == 1 && -s "$ev/boolean-hot/frozen.sha256" ]]; then
+      (cd "$ev/boolean-hot"; sha256sum --quiet -c frozen.sha256) || {
+        echo 'BOOL_HOT=FAIL cached_frozen_input_checksum'; exit 8;
+      }
+      for owner in "${objects[@]}"; do
+        [[ -s "$ev/boolean-hot/${owner//\//_}.frozen.i" ]] || {
+          echo "BOOL_HOT=FAIL missing_cached_input owner=$owner"; exit 8;
+        }
+      done
+      echo 'BOOL_HOT_FROZEN=CACHE_HIT owners=3 saved_object_recompiles=3'
+    else
     for owner in "${objects[@]}"; do
       base="${owner%.o}"
       src_i="$out/$base.minic-stage2.i"
@@ -620,6 +631,9 @@ if [[ "${COHORT_ACTION:-all}" == compile ]]; then
       cp -a "$src_i" "$ev/boolean-hot/${owner//\//_}.frozen.i"
       echo "BOOL_HOT_FROZEN=PASS owner=$owner sha=$(sha256sum "$ev/boolean-hot/${owner//\//_}.frozen.i" | cut -d' ' -f1)"
     done
+    (cd "$ev/boolean-hot"; sha256sum kernel_bpf_btf.o.frozen.i kernel_bpf_verifier.o.frozen.i net_core_filter.o.frozen.i > frozen.sha256)
+    echo 'BOOL_HOT_FROZEN=CREATED manifest=SHA256 verified_sources=3'
+    fi
   fi
   if [[ "${COHORT_KEEP_BOOL_SINGLE_I:-0}" == 1 ]]; then
     # Capture the ORIGINAL GNU -E produced source BEFORE the fully verified
