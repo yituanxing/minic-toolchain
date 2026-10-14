@@ -122,7 +122,7 @@ found=False
 for i in range(shnum):
     b=shoff+i*shentsize
     no=struct.unpack_from("<I",raw,b)[0]
-    name=names[no:names.find(b"\\0",no)].decode()
+    name=names[no:names.find(b"\0",no)].decode()
     if name==".eh_frame_hdr":
         off,size=struct.unpack_from("<QQ",raw,b+24)
         hdr=raw[off:off+size]
