@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Read-only T0 governance for the four explicitly owned remote branches.
+"""Read-only T0 governance for the explicitly approved remote branches.
 
 This is a drift *detector*, not a GitHub branch-creation restriction. Admin
 repository rulesets are still needed to prevent unapproved remote ref creation.
@@ -14,6 +14,7 @@ import time
 ALLOWED = frozenset({
     "main",
     "agent/linux-expanded-kbuild-v0",
+    "agent/linux-rv64-only-parallel-v1",  # isolated no-COMPAT verification
     "agent/linux-perf-boolean-domain-v1",
     "archive/all-progress-2026-10-04",
 })
@@ -49,7 +50,7 @@ def self_test() -> None:
             pass
         else:
             raise AssertionError("branch drift was not detected")
-    print("M0_BRANCH_POLICY_SELFTEST=PASS exact=4 unknown_branch=blocked missing_branch=blocked")
+    print(f"M0_BRANCH_POLICY_SELFTEST=PASS exact={len(ALLOWED)} unknown_branch=blocked missing_branch=blocked")
 
 def main() -> None:
     ap = argparse.ArgumentParser()
@@ -76,7 +77,7 @@ def main() -> None:
         raise RuntimeError("cannot verify remote branch inventory after 3 read attempts") from error
     names = parse_remote(raw)
     verify(names)
-    print("M0_BRANCH_POLICY=PASS permanent_remote_refs=4 source_only=1")
+    print(f"M0_BRANCH_POLICY=PASS permanent_remote_refs={len(ALLOWED)} source_only=1")
 
 if __name__ == "__main__":
     main()
