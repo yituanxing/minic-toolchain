@@ -1684,6 +1684,11 @@ jobs:
             export MINILD="$toolchain/bin/minic-ld"
             if [[ "${{ contains(github.event.head_commit.message, '[linux-minipp-seven-integration]') && '1' || '0' }}" == 1 ]]; then
               export COHORT_P1_EXPERIMENTAL_POOL="$GITHUB_WORKSPACE/build/minipp-seven-merge/native-objects"
+              if [[ "${{ contains(github.event.head_commit.message, '[linux-minipp-seven-replay]') && '1' || '0' }}" == 1 ]]; then
+                # Only this immutable cache-replay may tolerate timestamp-derived
+                # GNU Kbuild version.o / vmlinux.o preflight regeneration.
+                export COHORT_GNU_PREFLIGHT_ALLOW_PINNED_VOLATILE=1
+              fi
               test "$(wc -l < build/minipp-seven-merge/native-full-manifest.sha256)" -eq 2064
               (cd "$COHORT_P1_EXPERIMENTAL_POOL"; sha256sum --quiet -c ../native-full-manifest.sha256)
               echo "MINIPP_FULL_C_UNION=ENABLED PP=MiniPP CC=MiniC AS=MiniAS C=2064 shards=7"

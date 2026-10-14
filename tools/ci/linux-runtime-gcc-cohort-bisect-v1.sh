@@ -117,8 +117,25 @@ make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
     tail -n 80 "$ev/gcc-preflight.log"
     exit 5
   }
-awk '$2 != "init/version-timestamp.o" {print}' \
-  "$prov/gcc-objects.sha256" >"$ev/gcc-objects-stable.sha256"
+# During exact MiniPP cache replay Kbuild may regenerate init/version.o and
+# the dependent vmlinux.o from build timestamps. The pristine GNU tree was
+# SHA-attested and snapshotted above; every other reference object must remain
+# byte-for-byte unchanged. Restore ALL immutable GNU objects immediately after.
+if [[ "${COHORT_GNU_PREFLIGHT_ALLOW_PINNED_VOLATILE:-0}" == 1 ]]; then
+  [[ "${COHORT_ACTION:-all}" == verify && "${COHORT_NATIVE_UNION:-0}" == 1 && "$n" == 2064 ]] || {
+    echo 'COHORT_GNU_PREFLIGHT=FAIL invalid_volatile_replay_scope' >&2
+    exit 6
+  }
+  test -s "$repo/build/minipp-seven-merge/native-full-manifest.sha256"
+  test "$(wc -l < "$repo/build/minipp-seven-merge/native-full-manifest.sha256")" -eq 2064
+  test -d "${COHORT_P1_EXPERIMENTAL_POOL:-/nonexistent}"
+  awk '$2 != "init/version-timestamp.o" && $2 != "init/version.o" && $2 != "vmlinux.o" {print}' \
+    "$prov/gcc-objects.sha256" >"$ev/gcc-objects-stable.sha256"
+  echo 'COHORT_GNU_PREFLIGHT_VOLATILE=ALLOWLIST_ONLY excluded=init/version-timestamp.o,init/version.o,vmlinux.o'
+else
+  awk '$2 != "init/version-timestamp.o" {print}' \
+    "$prov/gcc-objects.sha256" >"$ev/gcc-objects-stable.sha256"
+fi
 if ! (cd "$out"; sha256sum --quiet -c "$ev/gcc-objects-stable.sha256"); then
   echo "COHORT_GNU_PREFLIGHT=FAIL stage=reference_objects_changed"
   grep -E '(^|[[:space:]])(CC|AS|SYNC|VDSOSYM)[[:space:]]+' "$ev/gcc-preflight.log" | tail -n 36 || true
