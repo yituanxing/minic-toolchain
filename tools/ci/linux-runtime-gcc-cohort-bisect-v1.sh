@@ -124,13 +124,23 @@ make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
 # A strictly bounded ONE real owner experiment may also see timestamp-only
 # Kbuild churn in init/version.o and vmlinux.o. The original SHA-certified
 # tree is restored below; ALL other GNU object SHAs still must match.
-if [[ "${COHORT_GNU_PREFLIGHT_ALLOW_BOOL_SINGLE:-0}" == 1 ]]; then
-  [[ "${COHORT_ACTION:-all}" == compile && "${COHORT_ALLOW_SHARD:-0}" == 1 &&
-     "$n" == 1 && "${objects[0]}" == lib/crypto/blake2s-generic.o &&
-     "$actual_cfg" == eeb04f304ebfb97a1079c187dc0c2ea3cc61fc50a55aa3cc776237c16ab19bbe ]] || {
-    echo 'COHORT_GNU_PREFLIGHT=FAIL wrong_bool_single_allowlist_scope' >&2
-    exit 6
-  }
+if [[ "${COHORT_GNU_PREFLIGHT_ALLOW_BOOL_SINGLE:-0}" == 1 || "${COHORT_GNU_PREFLIGHT_ALLOW_BOOL_HOT:-0}" == 1 ]]; then
+  expected_bool_hot=(kernel/bpf/btf.o kernel/bpf/verifier.o net/core/filter.o)
+  if [[ "${COHORT_GNU_PREFLIGHT_ALLOW_BOOL_HOT:-0}" == 1 ]]; then
+    [[ "${COHORT_ACTION:-all}" == compile && "${COHORT_ALLOW_SHARD:-0}" == 1 &&
+       "$cohort_scope" == SHARD_COMPILE_ONLY && "$n" == 3 &&
+       "${objects[*]}" == "${expected_bool_hot[*]}" &&
+       "$actual_cfg" == eeb04f304ebfb97a1079c187dc0c2ea3cc61fc50a55aa3cc776237c16ab19bbe ]] || {
+      echo 'COHORT_GNU_PREFLIGHT=FAIL bool_hot_owner_or_config_identity' >&2; exit 6;
+    }
+    echo 'BOOL_HOT_SCOPED=PASS owners=3 candidates=btf,verifier,filter baseline_fixture_sha_pinned=true'
+  else
+    [[ "${COHORT_ACTION:-all}" == compile && "${COHORT_ALLOW_SHARD:-0}" == 1 &&
+       "$n" == 1 && "${objects[0]}" == lib/crypto/blake2s-generic.o &&
+       "$actual_cfg" == eeb04f304ebfb97a1079c187dc0c2ea3cc61fc50a55aa3cc776237c16ab19bbe ]] || {
+      echo 'COHORT_GNU_PREFLIGHT=FAIL wrong_bool_single_allowlist_scope' >&2; exit 6;
+    }
+  fi
   awk '$2 != "init/version-timestamp.o" && $2 != "init/version.o" && $2 != "vmlinux.o" {print}' \
     "$prov/gcc-objects.sha256" >"$ev/gcc-objects-stable.sha256"
   echo 'COHORT_GNU_PREFLIGHT_VOLATILE=SINGLE_SCOPE excluded=version.o,vmlinux.o'
@@ -164,7 +174,7 @@ cp -a --reflink=auto "$gold_snapshot" "$out"
 # executable produced by the checked-in profile, and GNU assembler identity.
 # This permits reusing the *same* verified 384 .o after a CI harness fix.
 compiler_sig=$(sha256sum "$minic" | cut -d' ' -f1)
-if [[ "${COHORT_GNU_PREFLIGHT_ALLOW_BOOL_SINGLE:-0}" == 1 ]]; then
+if [[ "${COHORT_GNU_PREFLIGHT_ALLOW_BOOL_SINGLE:-0}" == 1 || "${COHORT_GNU_PREFLIGHT_ALLOW_BOOL_HOT:-0}" == 1 ]]; then
   # minic is just the driver; the changed Boolean Domain code is linked into
   # minic-cc. Bind this experiment's candidate object identity to the real CC.
   cc_bin="$(dirname "$minic")/minic-cc"
@@ -304,6 +314,13 @@ SH_STAGE_LAUNCHER
                      "${objects[0]}" == lib/crypto/blake2s-generic.o ]]; then
     keep_dma_inputs=1
     echo 'BOOLEAN_CACHE_SINGLE=KEEP_EXACT_KBUILD_I owner=lib/crypto/blake2s-generic.o'
+  fi
+  if [[ "${COHORT_KEEP_BOOL_HOT_I:-0}" == 1 ]]; then
+    [[ "$n" == 3 && "${objects[*]}" == 'kernel/bpf/btf.o kernel/bpf/verifier.o net/core/filter.o' ]] || {
+      echo 'BOOL_HOT=FAIL unexpected_owner_set'; exit 8;
+    }
+    keep_dma_inputs=1
+    echo 'BOOL_HOT=KEEP_EXACT_KBUILD_I owners=3'
   fi
   MINIC="$probe_minic" REAL_CC="$probe_gcc" \
     MINIC_KEEP_INTERMEDIATES="$keep_dma_inputs" MINIC_PRESERVE_FAILURE_INPUTS=1 \
@@ -575,6 +592,35 @@ fi
 if [[ "${COHORT_ACTION:-all}" == compile ]]; then
   test -s "$ev/minic-manifest.sha256" && test -s "$ev/minic-identity.txt"
   (cd "$ev"; sha256sum --quiet -c minic-manifest.sha256)
+  if [[ "${COHORT_KEEP_BOOL_HOT_I:-0}" == 1 ]]; then
+    [[ "$n" == 3 && "${objects[*]}" == 'kernel/bpf/btf.o kernel/bpf/verifier.o net/core/filter.o' &&
+       "${COHORT_GNU_PREFLIGHT_ALLOW_BOOL_HOT:-0}" == 1 ]] || {
+      echo 'BOOL_HOT=FAIL frozen_input_wrong_scope'; exit 8;
+    }
+    mkdir -p "$ev/boolean-hot"
+    for owner in "${objects[@]}"; do
+      base="${owner%.o}"
+      src_i="$out/$base.minic-stage2.i"
+      if [[ "$cached" == 1 ]]; then
+        # Recreate a deleted temporary input ONLY for this selected owner.
+        # Object identity must match the previously SHA-attested cached bytes.
+        rm -f "$out/$owner" "$out/$(dirname "$owner")/.${owner##*/}.cmd"
+        MINIC="$minic" REAL_CC=/usr/bin/riscv64-linux-gnu-gcc \
+          MINIC_KEEP_INTERMEDIATES=1 MINIC_PRESERVE_FAILURE_INPUTS=1 \
+          make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
+            CC="$repo/tests/external/linux/stage2_kbuild_cc.sh" -j1 "$owner" \
+            >"$ev/boolean-hot/replay-${owner//\//_}.log" 2>&1 || {
+            echo "BOOL_HOT=FAIL cached_replay_compile owner=$owner"; exit 8;
+          }
+        cmp -s "$out/$owner" "$ev/minic/$owner" || {
+          echo "BOOL_HOT=FAIL cached_object_sha_drift owner=$owner"; exit 8;
+        }
+      fi
+      test -s "$src_i" || { echo "BOOL_HOT=FAIL missing_input=$src_i"; exit 8; }
+      cp -a "$src_i" "$ev/boolean-hot/${owner//\//_}.frozen.i"
+      echo "BOOL_HOT_FROZEN=PASS owner=$owner sha=$(sha256sum "$ev/boolean-hot/${owner//\//_}.frozen.i" | cut -d' ' -f1)"
+    done
+  fi
   if [[ "${COHORT_KEEP_BOOL_SINGLE_I:-0}" == 1 ]]; then
     # Capture the ORIGINAL GNU -E produced source BEFORE the fully verified
     # GNU snapshot replaces the disposable build directory on this return.
