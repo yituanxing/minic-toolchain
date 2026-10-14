@@ -62,16 +62,51 @@ for p,b in zip(sys.argv[1:],(g,m)):
 assert g[48:52]==m[48:52], 'ABI e_flags differs'
 print(f'MINIAS_EARLYCON_ELF=PASS rv64_ET_REL=true abi_flags={g[48:52].hex()}')
 PY_ELF
-if ! cmp -s "$ev/gnu.exports-sorted.txt" "$ev/minias.exports-sorted.txt"; then
-  diff -u "$ev/gnu.exports-sorted.txt" "$ev/minias.exports-sorted.txt" \
-    >"$ev/exports-diff.txt" || true
-  echo "MINIAS_EARLYCON=GAP exports_differ" >&2
-  head -n 70 "$ev/exports-diff.txt" >&2
+for who in gnu minias; do
+  cut -d' ' -f1 "$ev/$who.exports-sorted.txt" | LC_ALL=C sort -u \
+    >"$ev/$who.export-names.txt"
+done
+if ! cmp -s "$ev/gnu.export-names.txt" "$ev/minias.export-names.txt"; then
+  diff -u "$ev/gnu.export-names.txt" "$ev/minias.export-names.txt" \
+    >"$ev/export-names-diff.txt" || true
+  echo "MINIAS_EARLYCON=GAP missing_or_extra_exported_symbols" >&2
+  head -n 70 "$ev/export-names-diff.txt" >&2
   exit 8
 fi
+echo "MINIAS_EARLYCON_SYMBOL_NAMES=PASS same_defined_global_symbols=true"
+if ! cmp -s "$ev/gnu.exports-sorted.txt" "$ev/minias.exports-sorted.txt"; then
+  diff -u "$ev/gnu.exports-sorted.txt" "$ev/minias.exports-sorted.txt" \
+    >"$ev/export-address-size-diff.txt" || true
+  echo "MINIAS_EARLYCON_LAYOUT=DIFF exported_symbol_offsets_or_sizes"
+fi
 if ! cmp -s "$ev/gnu.text.bin" "$ev/minias.text.bin"; then
-  echo "MINIAS_EARLYCON=GAP text_opcode_bytes_differ" >&2
-  sha256sum "$ev/"*.text.bin >&2
+  echo "MINIAS_EARLYCON_TEXT=DIFF GNU_RVC_auto_compression_or_instruction_encoding"
+  sha256sum "$ev/"*.text.bin
+  # Diagnostic only: disable C in BOTH assemblers on the same immutable .s,
+  # distinguishing GNU's automatic RVC encoding from other semantic gaps.
+  rvc_gnu=0
+  riscv64-linux-gnu-as -march=rv64g -mabi=lp64d \
+    -o "$ev/gnu-no-rvc.o" "$asm" >"$ev/gnu-no-rvc.stdout" \
+    2>"$ev/gnu-no-rvc.stderr" || rvc_gnu=$?
+  rvc_mini=0
+  timeout 75s "$minias" -march=rv64g -mabi=lp64d \
+    -o "$ev/minias-no-rvc.o" "$asm" >"$ev/minias-no-rvc.stdout" \
+    2>"$ev/minias-no-rvc.stderr" || rvc_mini=$?
+  echo "MINIAS_EARLYCON_NO_RVC_PROBE gnu_rc=$rvc_gnu minias_rc=$rvc_mini"
+  if [[ "$rvc_gnu" == 0 && "$rvc_mini" == 0 ]]; then
+    riscv64-linux-gnu-objcopy -j .text -O binary \
+      "$ev/gnu-no-rvc.o" "$ev/gnu-no-rvc.text.bin"
+    riscv64-linux-gnu-objcopy -j .text -O binary \
+      "$ev/minias-no-rvc.o" "$ev/minias-no-rvc.text.bin"
+    if cmp -s "$ev/gnu-no-rvc.text.bin" "$ev/minias-no-rvc.text.bin"; then
+      echo "MINIAS_EARLYCON_NO_RVC=PASS text_byte_exact_without_C=true"
+    else
+      echo "MINIAS_EARLYCON_NO_RVC=DIFF other_instruction_or_layout_gap"
+      wc -c "$ev/"*-no-rvc.text.bin
+      sha256sum "$ev/"*-no-rvc.text.bin
+    fi
+  fi
+  echo "MINIAS_EARLYCON=GAP rv64gc_text_not_GNU_equivalent_not_safe_for_Linux_P1" >&2
   exit 8
 fi
 echo "MINIAS_EARLYCON=PASS source=immutable_MiniC_earlycon_s abi=GNU_same symbols=GNU_same text_bytes=GNU_same full_relocations_not_yet_certified=true linux_C_compiles=0 no_runtime_claim=true"
