@@ -98,13 +98,13 @@ p.write_text(text)
 p = Path("src/frontend/parser_global.c")
 text = p.read_text()
 old = """    name_length = minic_parser_span_length(name_span);
-    for (index = parser->program->global_object_count; index > 0U; --index) {
-        size_t object_index = index - 1U;
+    for (index = 0U; index < parser->program->global_object_count; ++index) {
+        const MinicGlobalObject *object;
 """
 new = """    ((MinicParser *)parser)->perf_find_global_calls += 1U;
     name_length = minic_parser_span_length(name_span);
-    for (index = parser->program->global_object_count; index > 0U; --index) {
-        size_t object_index = index - 1U;
+    for (index = 0U; index < parser->program->global_object_count; ++index) {
+        const MinicGlobalObject *object;
         ((MinicParser *)parser)->perf_find_global_steps += 1U;
 """
 if text.count(old) != 1:
