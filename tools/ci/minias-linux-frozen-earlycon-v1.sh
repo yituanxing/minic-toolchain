@@ -2,6 +2,8 @@
 # One REAL MiniC-generated RISC-V Linux translation unit assembled with
 # MiniAS vs GNU AS. Exact immutable .s input from P1-passing 2064-object
 # CI #38426379946. No Linux C compilation, GNU golden cache, Kbuild or QEMU.
+# Both assemblers must receive IDENTICAL -march=rv64gc -mabi=lp64d;
+# otherwise test code silently creates incorrect MiniAS ELF e_flags=0.
 set -Eeuo pipefail
 if (( $# != 3 )); then
   echo "usage: $0 <downloaded-artifact-dir> <minias-build-dir> <evidence-dir>" >&2
@@ -31,7 +33,8 @@ riscv64-linux-gnu-as -march=rv64gc -mabi=lp64d -o "$ev/gnu.o" "$asm" \
 echo "MINIAS_EARLYCON_GNU_AS=PASS elapsed_ms=$(($(date +%s%3N)-start))"
 start=$(date +%s%3N)
 status=0
-timeout 75s "$minias" -o "$ev/minias.o" "$asm" \
+timeout 75s "$minias" -march=rv64gc -mabi=lp64d \
+  -o "$ev/minias.o" "$asm" \
   >"$ev/minias.stdout" 2>"$ev/minias.stderr" || status=$?
 echo "MINIAS_EARLYCON_NATIVE_AS elapsed_ms=$(($(date +%s%3N)-start)) rc=$status"
 if (( status != 0 )); then
