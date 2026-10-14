@@ -7632,6 +7632,36 @@ static bool shared_validate_pie_dso_symbols(
     return true;
 }
 
+/* -S on an already debug-free ELF shared input is a semantic no-op.
+ * Reject unimplemented debug removal rather than silently emit a DSO
+ * still containing non-ALLOC debugging sections. .eh_frame is runtime
+ * unwind data and is intentionally not classified as debug information.
+ */
+static bool shared_strip_debug_preflight(const MiniLdState *state) {
+    size_t i;
+
+    for (i = 0U; i < state->section_count; ++i) {
+        const MiniLdSection *section = &state->sections[i];
+        const char *name = section->name;
+
+        if (section->size == 0U) {
+            continue;
+        }
+        if (strncmp(name, ".debug", 6U) == 0 ||
+            strncmp(name, ".zdebug", 7U) == 0 ||
+            strncmp(name, ".stab", 5U) == 0 ||
+            strcmp(name, ".gdb_index") == 0 ||
+            strcmp(name, ".gnu_debuglink") == 0 ||
+            strcmp(name, ".gnu_debugaltlink") == 0) {
+            fprintf(state->diagnostics,
+                    "minic-ld: unsupported-shared-strip-debug-section:%s\\n",
+                    name);
+            return false;
+        }
+    }
+    return true;
+}
+
 int minild_link_shared_elf64_riscv_inputs_options(
     const char *output_path,
     const MiniLdInput *inputs,
@@ -7646,6 +7676,7 @@ int minild_link_shared_elf64_riscv_inputs_options(
     const char *needed_name =
         options != NULL ? options->needed_name : NULL;
     const bool pie = options != NULL && options->pie;
+    const bool strip_debug = options != NULL && options->strip_debug;
     const char *interpreter_path =
         options != NULL && options->interpreter_path != NULL
             ? options->interpreter_path
@@ -7669,6 +7700,7 @@ int minild_link_shared_elf64_riscv_inputs_options(
 
     if (!process_input_sequence(&state, inputs, input_count) ||
         !state.have_input ||
+        (strip_debug && !shared_strip_debug_preflight(&state)) ||
         !static_allocate_common(&state) ||
         !shared_prepare_metadata(&state,
                                  soname,
@@ -7723,6 +7755,7 @@ int minild_link_shared_elf64_riscv_inputs(const char *output_path,
     options.dynamic_list_path = NULL;
     options.needed_name = NULL;
     options.interpreter_path = NULL;
+    options.strip_debug = false;
     options.pie = false;
     return minild_link_shared_elf64_riscv_inputs_options(output_path,
                                                           inputs,

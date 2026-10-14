@@ -80,6 +80,36 @@ reference_relative="$(grep -c 'R_RISCV_RELATIVE' "$work/reference.so" 2>/dev/nul
 product_relative="$(grep -c 'R_RISCV_RELATIVE' "$work/product.relocs")"
 test "$product_relative" -ge 1
 
+# Linux RISC-V vDSO uses the GNU spelling -S. On debug-free
+# ET_REL input, stripping debug info is an actual no-op and may succeed.
+# Test that -S does not accidentally turn into a positional input.
+"$MINILD" -melf64lriscv -shared -S -soname libminild-a4.so \
+  -o "$work/product-strip-no-debug.so" "$work/shared.o"
+"$READELF" -h "$work/product-strip-no-debug.so" > "$work/strip-no-debug.header"
+grep -q 'DYN (Shared object file)' "$work/strip-no-debug.header"
+
+# Until genuine debug section elision exists, -S must fail closed instead
+# of publishing an ELF that claims stripped debug while retaining sections.
+cat > "$work/has-debug.s" <<'EOF_DEBUG'
+.text
+.globl debug_noop
+debug_noop:
+  ret
+.section .debug_info,"",@progbits
+.byte 0x11, 0x22, 0x33
+EOF_DEBUG
+"$AS" -march=rv64gc -mabi=lp64d -o "$work/has-debug.o" "$work/has-debug.s"
+if "$MINILD" -melf64lriscv -shared -S -soname libminild-a4.so \
+     -o "$work/strip-debug-unsupported.so" "$work/has-debug.o" \
+     > "$work/strip-debug.stdout" 2>"$work/strip-debug.stderr"; then
+  echo "MINILD_A4_STRIP=FAIL silently_accepted_unstripped_debug" >&2
+  exit 1
+fi
+grep -Fq "unsupported-shared-strip-debug-section:.debug_info" \
+  "$work/strip-debug.stderr"
+test ! -e "$work/strip-debug-unsupported.so"
+echo "MINILD_A4_STRIP=PASS empty_debug_noop_and_nonempty_debug_fail_closed"
+
 # A shared -T must NOT be silently ignored. Until real shared linker-script
 # placement/symbol expressions exist, report a deterministic capability gap
 # and leave no misleading output ELF. The Linux vDSO depends on _vdso_data.

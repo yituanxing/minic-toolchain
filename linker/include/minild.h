@@ -28,6 +28,7 @@ typedef struct MiniLdSharedOptions {
     const char *dynamic_list_path;
     const char *needed_name;
     const char *interpreter_path;
+    bool strip_debug;
     bool pie;
 } MiniLdSharedOptions;
 

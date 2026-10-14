@@ -113,6 +113,7 @@ int main(int argc, char **argv) {
     bool static_link = false;
     bool shared_link = false;
     bool pie_link = false;
+    bool strip_debug = false;
     bool whole_archive = false;
     bool group_mode = false;
     int i;
@@ -314,8 +315,10 @@ int main(int argc, char **argv) {
                 fprintf(stderr, "minic-ld: unsupported-z:%s\n", argv[i]);
                 return 2;
             }
+        } else if (strcmp(argv[i], "-S") == 0 ||
+                   strcmp(argv[i], "--strip-debug") == 0) {
+            strip_debug = true;
         } else if (strcmp(argv[i], "--no-warn-rwx-segments") == 0 ||
-                   strcmp(argv[i], "--strip-debug") == 0 ||
                    strcmp(argv[i], "--build-id=sha1") == 0 ||
                    strcmp(argv[i], "--orphan-handling=warn") == 0) {
             /*
@@ -405,6 +408,7 @@ int main(int argc, char **argv) {
         options.dynamic_list_path = dynamic_list_path;
         options.needed_name = needed_name;
         options.interpreter_path = interpreter_path;
+        options.strip_debug = strip_debug;
         options.pie = pie_link;
         return minild_link_shared_elf64_riscv_inputs_options(output,
                                                               inputs,
