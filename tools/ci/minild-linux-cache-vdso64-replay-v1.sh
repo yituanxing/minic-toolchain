@@ -98,6 +98,14 @@ sha256sum "$minild" >"$ev/tool.sha256"
     first_blocker="$(grep -m1 '^minic-ld:' "$ev/ld.stderr" || true)"
     printf '%s\n' "$first_blocker" > "$ev/first-blocker.txt"
     echo "MINILD_VDSO_FIRST_BLOCKER=${first_blocker:-unknown} exact_GNU_flags=true"
+    # A staging verdict, NOT a Linux vDSO acceptance claim. Distinguish
+    # successful evaluation of the real four-PHDR script addresses from the
+    # still-gated ELF writer; a failed preflight prints its exact reason.
+    if [[ "$first_blocker" == 'minic-ld: unsupported-shared-script-PHDR-emission' ]]; then
+      echo 'MINILD_VDSO_SCRIPT_LAYOUT_PREFLIGHT=PASS real_GNU_script=true ELF_emission=false P1=false'
+    else
+      echo 'MINILD_VDSO_SCRIPT_LAYOUT_PREFLIGHT=INCOMPLETE real_GNU_script=true ELF_emission=false P1=false'
+    fi
     tail -n 55 "$ev/ld.stderr" >&2
     # Exploratory ONLY: test the existing generic ELF64 shared-link engine
     # without -S, --hash-style=both, --eh-frame-hdr, or the missing
