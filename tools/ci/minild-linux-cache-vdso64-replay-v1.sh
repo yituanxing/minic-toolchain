@@ -129,9 +129,21 @@ sha256sum "$minild" >"$ev/tool.sha256"
 MINILD_VDSO_DIAG_ASM
     riscv64-linux-gnu-as -march=rv64gc -mabi=lp64d \
       -o "$ev/vdso-diagnostic-symbol.o" "$ev/vdso-diagnostic-symbol.s"
+    # Extract the actual VERSION block, not a separately invented
+    # seven-export mapping. Feed the same source to --version-script.
+    python3 - arch/riscv/kernel/vdso/vdso.lds "$ev/vdso-version-only.map" <<'PY_VDSO_VERSION'
+from pathlib import Path
+import re,sys
+source=Path(sys.argv[1]).read_text()
+match=re.search(r'\bVERSION\s*\{\s*(LINUX_4\.15\s*\{.*?\};)\s*\}',source,re.S)
+if match is None:
+    raise SystemExit('MINILD_VDSO=FAIL cannot_extract_exact_LINUX_4.15_version')
+Path(sys.argv[2]).write_text(match.group(1)+'\n')
+PY_VDSO_VERSION
     diag_rc=0
     timeout 90s "$minild" -melf64lriscv -shared -S \
       --hash-style=both --eh-frame-hdr -soname=linux-vdso.so.1 \
+      --version-script="$ev/vdso-version-only.map" \
       "${inputs[@]}" "$ev/vdso-diagnostic-symbol.o" \
       -o "$ev/vdso-eh-only-diagnostic.so" \
       >"$ev/eh-diagnostic.stdout" 2>"$ev/eh-diagnostic.stderr" || diag_rc=$?
@@ -182,6 +194,19 @@ assert len(set(fdes)) == 4 and all(eh_vaddr <= v < eh_vaddr+eh_size for v in fde
 assert any(u32(phoff+i*phsize) == 0x6474e550 for i in range(phcount))
 print('MINILD_VDSO_EH_INDEX=PASS real_fdes=4 header_bytes=44 sorted_pcs=true PT_GNU_EH_FRAME=true runtime_claim=false')
 PY_EH_INDEX
+      # Assert the seven actual versioned Linux exports in .dynsym.
+      # This lane deliberately has NO -T layout and cannot satisfy P1.
+      riscv64-linux-gnu-readelf -W --version-info \
+        "$ev/vdso-eh-only-diagnostic.so" > "$ev/native-version-info.txt"
+      riscv64-linux-gnu-readelf -W --dyn-syms \
+        "$ev/vdso-eh-only-diagnostic.so" > "$ev/native-dynsyms.txt"
+      test "$(grep -c '(VERDEFNUM).*2' "$ev/eh-diagnostic-elf.txt")" -eq 1
+      for sym in __vdso_rt_sigreturn __vdso_gettimeofday __vdso_clock_gettime \
+                 __vdso_clock_getres __vdso_getcpu __vdso_flush_icache \
+                 __vdso_riscv_hwprobe; do
+        grep -Fq "${sym}@@LINUX_4.15" "$ev/native-dynsyms.txt"
+      done
+      echo 'MINILD_VDSO_VERSION_DIAGNOSTIC=PASS actual_export_count=7 node=LINUX_4.15 verdefnum=2 runtime_claim=false'
       echo "MINILD_VDSO_EH_DIAGNOSTIC fdes=$diag_fdes expected=4 GNU_EH_FRAME=$(grep -c 'GNU_EH_FRAME' "$ev/eh-diagnostic-elf.txt" || true) runtime_claim=false"
     else
       sed 's/^/MINILD_VDSO_EH_DIAGNOSTIC_ERROR /' "$ev/eh-diagnostic.stderr" | head -n 45
