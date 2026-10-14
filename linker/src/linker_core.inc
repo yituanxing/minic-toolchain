@@ -4080,6 +4080,14 @@ static bool shared_build_vdso_script_layout(MiniLdState *state,
     size_t end;
 
     if (script->phdr_count != 4U ||
+        strcmp(script->phdrs[0].name, "text") != 0 ||
+        strcmp(script->phdrs[1].name, "dynamic") != 0 ||
+        strcmp(script->phdrs[2].name, "note") != 0 ||
+        strcmp(script->phdrs[3].name, "eh_frame_hdr") != 0 ||
+        script->phdrs[1].flags != 4U ||
+        !script->phdrs[1].have_flags ||
+        script->phdrs[2].flags != 4U ||
+        !script->phdrs[2].have_flags ||
         strcmp(script->phdrs[0].type_name, "PT_LOAD") != 0 ||
         !script->phdrs[0].filehdr || !script->phdrs[0].phdrs ||
         !script->phdrs[0].have_flags || script->phdrs[0].flags != 5U ||
@@ -5545,6 +5553,7 @@ typedef struct MiniLdSharedImage {
     size_t verdef_section;
     uint32_t version_name_offset;
     const MiniLdScript *version_script;
+    const MiniLdScript *layout_script;
     size_t eh_frame_section;
     size_t eh_frame_hdr_section;
     size_t eh_frame_fde_count;
@@ -7558,6 +7567,7 @@ static bool shared_write_object(MiniLdState *state,
         return false;
     }
     phnum = (shared->have_eh_frame_hdr ? 1U : 0U) +
+            (shared->layout_script != NULL ? 1U : 0U) + /* PT_NOTE */
             (shared->pie ? 1U : 0U) +
             (shared->have_interp ? 1U : 0U) +
             (layout->have_rx ? 1U : 0U) +
@@ -7733,7 +7743,7 @@ static bool shared_write_object(MiniLdState *state,
             goto done;
         }
         ph->p_type = PT_DYNAMIC;
-        ph->p_flags = PF_R | PF_W;
+        ph->p_flags = shared->layout_script != NULL ? PF_R : PF_R | PF_W;
         ph->p_offset = offset;
         ph->p_vaddr = layout->section_vaddr[shared->dynamic_section];
         ph->p_paddr = ph->p_vaddr;
@@ -7742,6 +7752,57 @@ static bool shared_write_object(MiniLdState *state,
         ph->p_align = 8U;
     }
 
+    if (shared->layout_script != NULL) {
+        /* Emit only the actual GNU vDSO mapped PT_NOTE section(s).
+         * A missing or out-of-load note is a hard failure. */
+        size_t note_offset = SIZE_MAX;
+        uint64_t note_addr = UINT64_MAX;
+        uint64_t note_end = 0U;
+        for (i = 0U; i < state->section_count; ++i) {
+            const MiniLdSection *section = &state->sections[i];
+            size_t offset = layout->section_file_offset[i];
+            uint64_t address = layout->section_vaddr[i];
+            if (section->type != SHT_NOTE ||
+                (section->flags & SHF_ALLOC) == 0U ||
+                layout->section_discarded[i] || section->size == 0U) {
+                continue;
+            }
+            if (offset == SIZE_MAX ||
+                address > UINT64_MAX - section->size ||
+                offset > SIZE_MAX - section->size) {
+                fprintf(state->diagnostics,
+                        "minic-ld: invalid-vdso-script-note-placement\n");
+                goto done;
+            }
+            if (offset < note_offset) {
+                note_offset = offset;
+            }
+            if (address < note_addr) {
+                note_addr = address;
+            }
+            if (address + section->size > note_end) {
+                note_end = address + section->size;
+            }
+        }
+        if (note_offset == SIZE_MAX || note_addr == UINT64_MAX ||
+            note_end <= note_addr ||
+            note_end - note_addr > layout->rx_file_size) {
+            fprintf(state->diagnostics,
+                    "minic-ld: missing-vdso-script-PT_NOTE\n");
+            goto done;
+        }
+        {
+            Elf64_Phdr *ph = &programs[program_index++];
+            ph->p_type = PT_NOTE;
+            ph->p_flags = PF_R;
+            ph->p_offset = note_offset;
+            ph->p_vaddr = note_addr;
+            ph->p_paddr = note_addr;
+            ph->p_filesz = note_end - note_addr;
+            ph->p_memsz = ph->p_filesz;
+            ph->p_align = 4U;
+        }
+    }
     if (shared->have_eh_frame_hdr) {
         Elf64_Phdr *ph = &programs[program_index++];
         size_t h = shared->eh_frame_hdr_section;
@@ -7759,6 +7820,10 @@ static bool shared_write_object(MiniLdState *state,
         ph->p_filesz = state->sections[h].size;
         ph->p_memsz = ph->p_filesz;
         ph->p_align = 4U;
+    }
+    if (program_index != phnum) {
+        fprintf(state->diagnostics, "minic-ld: shared-phdr-count-mismatch\n");
+        goto done;
     }
     for (i = 0U; i < state->section_count; ++i) {
         MiniLdSection *section = &state->sections[i];
@@ -8038,13 +8103,7 @@ int minild_link_shared_elf64_riscv_inputs_options(
         goto done;
     }
     layout_ready = true;
-    if (script_path != NULL) {
-        /* Do not publish Linux -T output until the ELF writer honors all
-         * explicit PHDR mappings from the script. */
-        fprintf(diagnostics,
-                "minic-ld: unsupported-shared-script-PHDR-emission\n");
-        goto done;
-    }
+    shared.layout_script = script_path != NULL ? &layout_script : NULL;
 
     if (!shared_finalize_ehdr_symbol(&state, &layout) ||
         (entry_symbol != NULL &&
@@ -8068,7 +8127,7 @@ int minild_link_shared_elf64_riscv_inputs_options(
     ok = true;
 
 done:
-    if (layout_ready) {
+    if (layout_ready || layout.section_vaddr != NULL) {
         static_layout_destroy(&layout);
     }
     shared_image_destroy(&shared);
