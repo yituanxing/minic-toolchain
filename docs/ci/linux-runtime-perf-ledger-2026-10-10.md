@@ -212,3 +212,7 @@ Selected absolute savings: kernel/bpf/btf.i 21.159→3.548s, kernel/bpf/syscall.
 Two opt-in profile toggles `MINIC_PERF_SKIP_BOOLEAN_SCOPED` and `MINIC_PERF_SKIP_TYPEDEF_INDEX` were added to the *disposable* perf compiler builder (defaults remain unchanged). In the existing `perf500` job, and **without any new workflow or extra job**, run the same original `linux-perf-typedef-paired-ab-v1.py` against (Boolean-only vs both) and (typedef-only vs both) on the same cached first500 corpus. These conditional steps run only when `[linux-perf-factorial]` is explicitly selected. Legacy router's exact original job-body hash and M0 opt-in suite checker both validate that the archived executable bodies outside this measured opt-in extension are unchanged. No full Linux Image rebuild is allowed for this causal screening.
 
 Do not promote either option into the canonical Runtime MiniC profile before separate single-variable output validation and a Linux QEMU runtime replay under the candidate binary SHA.
+
+### 持续性能分析方法（V1）
+
+从慢文件、程序结构与编译器算法复杂度建立可证伪的优化假设，并完整保留 A/B、哈希身份、回归和 QEMU 的证据链：参见 [Mini Toolchain 性能因果分析记录手册](linux-performance-causal-investigation-v1.md)。旧版对象、输入缓存和 workflow 均保持可复用；不因文档新增而启动不必要的全量 CI。
