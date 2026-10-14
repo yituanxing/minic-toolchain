@@ -1196,6 +1196,55 @@ jobs:
             bash tests/compiler/c0/run-pure-discarded-address-rv64.sh
           echo "P1_CFG_SEMANTIC_ONLY=PASS gcc_minic_baseline_crossblock=3way matrix=7+8 x1023 no_kernel_link=true no_linux_recompile=true"
 
+      # Diagnostic-only: same exact GNU golden + SHA-authenticated 2064 MiniC
+      # object fixture as native union; do not run Kbuild, linker or QEMU here.
+      # Retain MiniC .s across MiniAS revisions so future work reassembles only.
+      - name: Restore exact MiniC assembly sample for MiniAS (independent of MiniAS SHA)
+        id: minias_corpus_s_cache
+        if: contains(github.event.head_commit.message, '[linux-minias-corpus-scan]')
+        uses: actions/cache/restore@v4
+        with:
+          path: build/minias-linux-corpus-v1/assembly
+          key: ${{ env.FULL_MINIC_KEY }}-minias-corpus-s-v1-12
+
+      - name: Probe representative real Linux MiniC assembly with MiniAS (no C objects rebuilt)
+        if: contains(github.event.head_commit.message, '[linux-minias-corpus-scan]')
+        shell: bash
+        timeout-minutes: 12
+        run: |
+          set -Eeuo pipefail
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-v1"
+          test "${{ steps.p1_minic_frozen_cache.outputs.cache-hit }}" = true
+          test "${{ steps.p1_minic_frozen_cache.outputs.cache-matched-key }}" = "$FULL_MINIC_KEY"
+          (cd "$ev" && sha256sum --quiet -c minic-manifest.sha256)
+          tools="$GITHUB_WORKSPACE/build/minias-linux-corpus-v1-tools"
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$tools" "$tools/bin/minic-as"
+          python3 tools/ci/minias-linux-corpus-probe-v1.py \
+            --golden-out "$GITHUB_WORKSPACE/build/linux-runtime-gcc/out" \
+            --candidate-pool "$ev/minic" --manifest "$ev/minic-manifest.sha256" \
+            --minic "$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain/bin/minic" \
+            --minias "$tools/bin/minic-as" \
+            --work "$GITHUB_WORKSPACE/build/minias-linux-corpus-v1" \
+            --cache-identity "$FULL_MINIC_KEY" --limit 12
+
+      - name: Cache frozen MiniC assembly sample for later MiniAS-only changes
+        if: success() && contains(github.event.head_commit.message, '[linux-minias-corpus-scan]') && steps.minias_corpus_s_cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: build/minias-linux-corpus-v1/assembly
+          key: ${{ env.FULL_MINIC_KEY }}-minias-corpus-s-v1-12
+
+      - name: Keep MiniAS sampled gap classification without kernel relink
+        if: always() && contains(github.event.head_commit.message, '[linux-minias-corpus-scan]')
+        uses: actions/upload-artifact@v4
+        with:
+          name: minias-linux-corpus-scan-${{ github.sha }}
+          path: |
+            build/minias-linux-corpus-v1/scan.tsv
+            build/minias-linux-corpus-v1/evidence/**/*.log
+          retention-days: 7
+          if-no-files-found: warn
+
       - name: Download frozen real MiniC earlycon.s for isolated native MiniAS object in full Linux
         if: contains(github.event.head_commit.message, '[linux-native-minias-earlycon]')
         uses: actions/download-artifact@v4
@@ -1207,7 +1256,7 @@ jobs:
           path: build/minias-earlycon-full-artifact
 
       - name: Prepare native MiniAR, final-link MiniLD and MiniObjcopy (same cached C objects)
-        if: contains(github.event.head_commit.message, '[linux-native-union-cached]')
+        if: contains(github.event.head_commit.message, '[linux-native-union-cached]') && !contains(github.event.head_commit.message, '[linux-minias-corpus-scan]')
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -1232,7 +1281,7 @@ jobs:
           echo "MINIAS_EARLYCON_FULL_PREPARE=PASS original_2064_SHA_cache_immutable=true"
 
       - name: GNU-only link and QEMU with NO MiniC recompilation
-        if: "!contains(github.event.head_commit.message, '[linux-runtime-large-image-qemu]') && !contains(github.event.head_commit.message, '[linux-runtime-p1-frame-audit]') && !contains(github.event.head_commit.message, '[linux-runtime-p1-cfg-semantic-only]') && !contains(github.event.head_commit.message, '[linux-minild-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minild-reloc-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minild-purgatory-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minild-vdso64-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minias-earlycon-frozen]')"
+        if: "!contains(github.event.head_commit.message, '[linux-runtime-large-image-qemu]') && !contains(github.event.head_commit.message, '[linux-runtime-p1-frame-audit]') && !contains(github.event.head_commit.message, '[linux-runtime-p1-cfg-semantic-only]') && !contains(github.event.head_commit.message, '[linux-minild-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minild-reloc-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minild-purgatory-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minild-vdso64-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minias-earlycon-frozen]')" && !contains(github.event.head_commit.message, '[linux-minias-corpus-scan]')
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -1374,7 +1423,7 @@ jobs:
           fi
 
       - name: Preserve aggregate link, QEMU and failure-frontier evidence
-        if: always() && !contains(github.event.head_commit.message, '[linux-runtime-large-image-qemu]') && !contains(github.event.head_commit.message, '[linux-runtime-p1-frame-audit]') && !contains(github.event.head_commit.message, '[linux-minild-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minild-reloc-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minild-purgatory-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minild-vdso64-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minias-earlycon-frozen]')
+        if: always() && !contains(github.event.head_commit.message, '[linux-runtime-large-image-qemu]') && !contains(github.event.head_commit.message, '[linux-runtime-p1-frame-audit]') && !contains(github.event.head_commit.message, '[linux-minild-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minild-reloc-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minild-purgatory-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minild-vdso64-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minias-earlycon-frozen]') && !contains(github.event.head_commit.message, '[linux-minias-corpus-scan]')
         uses: actions/upload-artifact@v4
         with:
           name: sharded-gnu-minic-QEMU-${{ github.sha }}
