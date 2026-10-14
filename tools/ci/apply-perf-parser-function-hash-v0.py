@@ -2,9 +2,9 @@
 from pathlib import Path
 
 # Parser-lifetime hash index for function-name lookup. Functions are added
-# monotonically while parsing.  Incremental insertion preserves the old
-# reverse-scan rule: the newest function id replaces any older id with the same
-# spelling.
+# monotonically while parsing. The current parser lookup is a FORWARD scan:
+# the earliest function id wins. Incremental index insertion must preserve
+# that rule on duplicate declarations, including index rebuilds.
 
 p = Path("src/frontend/parser_internal.h")
 text = p.read_text()
@@ -78,9 +78,11 @@ static bool minic_parser_function_name_slot_insert(
             if (existing != NULL &&
                 existing->name_length == function->name_length &&
                 memcmp(existing->name, function->name, function->name_length) == 0) {
-                /* Ascending incremental insertion means a later id must win,
-                   matching the previous reverse linear scan. */
-                slots[slot_index] = function_id;
+                /* Preserve first-declaration wins. Unlike a reverse scan,
+                   later redeclarations must NOT displace earlier ids. */
+                if (function_id < existing_id) {
+                    slots[slot_index] = function_id;
+                }
                 return true;
             }
         }
@@ -181,6 +183,18 @@ replacement=r'''MinicFunctionId minic_parser_find_function(const MinicParser *pa
     parser->perf_find_function_calls += 1U;
     if (!minic_parser_function_name_index_sync(parser) ||
         parser->perf_function_name_slot_capacity == 0U) {
+        /* Allocation failure must preserve the original lookup semantics
+           rather than turning a valid function into "not found". */
+        size_t index;
+        size_t length = minic_parser_span_length(name_span);
+        for (index = 0U; index < parser->program->function_count; ++index) {
+            const MinicFunction *fn = minic_c0_program_function(parser->program, index);
+            parser->perf_find_function_steps += 1U;
+            if (fn != NULL && fn->name_length == length &&
+                memcmp(fn->name, parser->source + name_span.begin.offset, length) == 0) {
+                return (MinicFunctionId)index;
+            }
+        }
         return MINIC_FUNCTION_INVALID;
     }
     name_length = minic_parser_span_length(name_span);
