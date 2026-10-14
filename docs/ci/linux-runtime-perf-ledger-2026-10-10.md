@@ -185,3 +185,7 @@ The MiniC object also contains 22 named `__minic_inline_spec_*` functions. These
 ### P1 image size is also a loader-placement acceptance constraint
 
 The frozen QEMU setup places the kernel Image at physical `0x80200000` and the initrd at `0x88200000`, an interval of `0x08000000` (128 MiB). The measured 215,502,848-byte MiniC flat Image extends into that region; consequently, **even after fixing a kernel execution defect**, the original pinned initrd/P1 oracle cannot pass without either substantially reducing/relocating the load footprint or validating a supported non-overlapping guest load layout. This is independent of the repeated post-8250 CPU PC. The no-initrd QMP mode is only a diagnostic, never a P1 PASS.
+
+## 2026-10-14 hot-file source-driven performance A/B kickoff
+
+Reuse the existing `linux-runtime-optin-perf-suite-v1.yml` perf500 job and its immutable, SHA256-verified first500 input cache. Keep the archived CI job body intact (M0 convergence). Compare already implemented parser typedef indexing and boolean specialization as an opt-in *combined* candidate against the controlled baseline, with four paired workers, byte-identical assembly gate, and per-TU timing/counter evidence. This is a screening experiment, not yet a proof of benefit on RV64 native 2057 hot network files: targeted hot owners require separately pinned `.i` and a one-variable A/B before promotion. No rebuild of Linux Image or 7-way native C pool. Route only `[linux-perf500]`.
