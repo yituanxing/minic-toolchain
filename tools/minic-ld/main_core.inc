@@ -376,6 +376,20 @@ int main(int argc, char **argv) {
         fprintf(stderr, "minic-ld: dynamic-linker-requires-pie\n");
         return 2;
     }
+    /*
+     * A shared ELF link must honor -T. Previously the CLI parsed the
+     * script and silently discarded it in the shared/PIE path, which could
+     * produce an apparently successful but unbootable Linux vDSO missing
+     * script-defined symbols (e.g. _vdso_data). Fail closed until the
+     * shared-script layout and symbol evaluator are fully implemented.
+     * Existing static linker-script handling is unchanged.
+     */
+    if ((shared_link || pie_link) && script_path != NULL) {
+        fprintf(stderr,
+                "minic-ld: unsupported-shared-linker-script:%s\n",
+                script_path);
+        return 2;
+    }
 
     if (relocatable) {
         return minild_link_relocatable_elf64_riscv_inputs(output,
