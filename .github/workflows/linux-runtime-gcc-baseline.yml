@@ -1209,7 +1209,7 @@ jobs:
           restore-keys: ${{ env.FULL_MINIC_KEY }}-minias-corpus-s-v1-12
 
       - name: Probe representative real Linux MiniC assembly with MiniAS (no C objects rebuilt)
-        if: contains(github.event.head_commit.message, '[linux-minias-corpus-scan]')
+        if: contains(github.event.head_commit.message, '[linux-minias-corpus-scan]') && !contains(github.event.head_commit.message, '[linux-minias-full-corpus]')
         shell: bash
         timeout-minutes: 12
         run: |
@@ -1227,6 +1227,56 @@ jobs:
             --minias "$tools/bin/minic-as" \
             --work "$GITHUB_WORKSPACE/build/minias-linux-corpus-v1" \
             --cache-identity "$FULL_MINIC_KEY" --limit 64
+
+      # Isolated full 2064-object assembly coverage; the 64 .s cache is the
+      # bootstrap. No new workflow/jobs, no C-object compilation, and no
+      # Kbuild/link/QEMU cost until the real assembly gaps are classified.
+      - name: Restore expanded complete MiniC S corpus
+        id: minias_full_s_cache
+        if: contains(github.event.head_commit.message, '[linux-minias-full-corpus]')
+        uses: actions/cache/restore@v4
+        with:
+          path: build/minias-linux-corpus-v1/assembly
+          key: ${{ env.FULL_MINIC_KEY }}-minias-corpus-s-v1-2064
+
+      - name: Sweep all certified Linux C owners through native MiniAS
+        if: contains(github.event.head_commit.message, '[linux-minias-full-corpus]')
+        shell: bash
+        timeout-minutes: 75
+        run: |
+          set -Eeuo pipefail
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-v1"
+          test "${{ steps.p1_minic_frozen_cache.outputs.cache-hit }}" = true
+          (cd "$ev" && sha256sum --quiet -c minic-manifest.sha256)
+          tools="$GITHUB_WORKSPACE/build/minias-linux-corpus-v1-tools"
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$tools" "$tools/bin/minic-as"
+          python3 tools/ci/minias-linux-full-corpus-v1.py \
+            --golden-out "$GITHUB_WORKSPACE/build/linux-runtime-gcc/out" \
+            --candidate-pool "$ev/minic" --manifest "$ev/minic-manifest.sha256" \
+            --minic "$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain/bin/minic" \
+            --minias "$tools/bin/minic-as" \
+            --work "$GITHUB_WORKSPACE/build/minias-linux-corpus-v1" \
+            --cache-identity "$FULL_MINIC_KEY" --jobs 4
+
+      - name: Save SHA-locked Linux S corpus for future MiniAS-only reassembly
+        if: always() && contains(github.event.head_commit.message, '[linux-minias-full-corpus]') && steps.minias_full_s_cache.outputs.cache-hit != 'true' && hashFiles('build/minias-linux-corpus-v1/assembly/index.json') != ''
+        uses: actions/cache/save@v4
+        with:
+          path: build/minias-linux-corpus-v1/assembly
+          key: ${{ env.FULL_MINIC_KEY }}-minias-corpus-s-v1-2064
+
+      - name: Preserve full native assembly coverage report and blockers
+        if: always() && contains(github.event.head_commit.message, '[linux-minias-full-corpus]')
+        uses: actions/upload-artifact@v4
+        with:
+          name: minias-full-corpus-${{ github.sha }}
+          path: |
+            build/minias-linux-corpus-v1/full-summary.json
+            build/minias-linux-corpus-v1/full-scan.tsv
+            build/minias-linux-corpus-v1/evidence/python-failures/*.txt
+            build/minias-linux-corpus-v1/evidence/**/*.minias.log
+          retention-days: 7
+          if-no-files-found: warn
 
       - name: Prepare SHA-verified 60-MiniAS object overlay from 64 cached assemblies
         if: contains(github.event.head_commit.message, '[linux-minias-corpus-runtime]')
@@ -1246,14 +1296,14 @@ jobs:
       - name: Cache frozen MiniC assembly sample for later MiniAS-only changes
         # Even if later .cmd parsing fails, retain each already SHA-attested
         # .s file. This cache has a per-member identity index.
-        if: always() && contains(github.event.head_commit.message, '[linux-minias-corpus-scan]') && steps.minias_corpus_s_cache.outputs.cache-hit != 'true' && hashFiles('build/minias-linux-corpus-v1/assembly/index.json') != ''
+        if: always() && contains(github.event.head_commit.message, '[linux-minias-corpus-scan]') && !contains(github.event.head_commit.message, '[linux-minias-full-corpus]') && steps.minias_corpus_s_cache.outputs.cache-hit != 'true' && hashFiles('build/minias-linux-corpus-v1/assembly/index.json') != ''
         uses: actions/cache/save@v4
         with:
           path: build/minias-linux-corpus-v1/assembly
           key: ${{ env.FULL_MINIC_KEY }}-minias-corpus-s-v1-64
 
       - name: Keep MiniAS sampled gap classification without kernel relink
-        if: always() && contains(github.event.head_commit.message, '[linux-minias-corpus-scan]')
+        if: always() && contains(github.event.head_commit.message, '[linux-minias-corpus-scan]') && !contains(github.event.head_commit.message, '[linux-minias-full-corpus]')
         uses: actions/upload-artifact@v4
         with:
           name: minias-linux-corpus-scan-${{ github.sha }}
