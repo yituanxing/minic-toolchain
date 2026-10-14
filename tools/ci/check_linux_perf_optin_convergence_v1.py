@@ -16,6 +16,25 @@ def jobs(data):
  return {m.group(1):section[m.start():matches[i+1].start() if i+1<len(matches) else len(section)].strip() for i,m in enumerate(matches)}
 def remove_job_if(text):
  return "\n".join(s for s in text.splitlines() if not s.startswith("    if: ")).strip()
+def strip_factorial_extension(text):
+ # A narrowly scoped opt-in extension in the ORIGINAL perf500 job.
+ # Only this precise two-step append may differ from the archived job.
+ begin="      # Factor isolation extension: opt-in only; the archived perf500 job"
+ end="      - name: Upload performance evidence"
+ if text.count(begin)!=1 or text.count(end)!=1:
+  raise AssertionError("missing or ambiguous factorial extension")
+ start=text.index(begin)
+ stop=text.index(end,start)
+ part=text[start:stop]
+ if part.count("- name: ")!=2:raise AssertionError("extra factorial steps added")
+ for evidence in ("[linux-perf-factorial]","MINIC_PERF_SKIP_TYPEDEF_INDEX=1",
+                  "MINIC_PERF_SKIP_BOOLEAN_SCOPED=1",
+                  "linux-perf-typedef-paired-ab-v1.py",
+                  "sha256sum --status -c", "MINIC_FACTORIAL=PASS"):
+  if evidence not in part:
+   raise AssertionError("factorial extension lost: "+evidence)
+ return text[:start]+text[stop:]
+
 def main():
  content=SUITE.read_text()
  current=jobs(content)
@@ -27,8 +46,9 @@ def main():
   originals=jobs(archived.read_text())
   if set(originals)!=set(names): raise AssertionError(f"original job identifiers changed {filename}")
   for name in names:
-   if remove_job_if(originals[name])!=remove_job_if(current[name]):
-    raise AssertionError(f"changed executable job body {name}")
+   current_body=strip_factorial_extension(current[name]) if name=="perf500" else current[name]
+   if remove_job_if(originals[name])!=remove_job_if(current_body):
+    raise AssertionError(f"changed archived executable job body {name}")
    condition=current[name]
    if f"inputs.mode == '{mode}'" not in condition or "inputs.mode == 'all'" not in condition:
     raise AssertionError(f"manual mode lost {name}")
