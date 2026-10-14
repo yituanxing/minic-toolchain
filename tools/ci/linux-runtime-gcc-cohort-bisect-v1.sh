@@ -1409,8 +1409,9 @@ trial() {
         ((native_s_overlay_count+=1))
       done <"$COHORT_MINIAS_NATIVE_S_MANIFEST"
       if [[ "${COHORT_MINIAS_S_BISECT:-0}" == 1 ]]; then
-        [[ "$native_s_overlay_count" == 1 || "$native_s_overlay_count" == 33 ]] || {
-          echo "MINIAS_NATIVE_S=FAIL bisect_expected_1_or_33_actual=$native_s_overlay_count"; exit 8;
+        [[ "$native_s_overlay_count" == 1 || "$native_s_overlay_count" == 33 ||
+           "$native_s_overlay_count" == 16 || "$native_s_overlay_count" == 17 ]] || {
+          echo "MINIAS_NATIVE_S=FAIL bisect_expected_1_16_17_or_33_actual=$native_s_overlay_count"; exit 8;
         }
       else
         [[ "$native_s_overlay_count" -ge 30 ]] || {
@@ -2787,15 +2788,30 @@ if [[ "${COHORT_MINIAS_S_BISECT:-0}" == 1 ]]; then
   head_owner="arch/riscv/kernel/head.o"
   grep -Fq "  $head_owner" "$original_s_manifest"
   printf 'trial\tnative_S_count\tverdict\timage_sha\n' >"$ev/native-S-bisect.tsv"
-  for probe in head_only without_head; do
+  if [[ "${COHORT_MINIAS_S_BISECT_STAGE:-1}" == 2 ]]; then
+    grep -Fv "  $head_owner" "$original_s_manifest" >"$ev/native-S-other33.sha256"
+    test "$(wc -l < "$ev/native-S-other33.sha256")" -eq 33
+    probes=(first16 last17)
+  else
+    probes=(head_only without_head)
+  fi
+  for probe in "${probes[@]}"; do
     selected_manifest="$ev/native-S-$probe.sha256"
-    if [[ "$probe" == head_only ]]; then
-      grep -F "  $head_owner" "$original_s_manifest" >"$selected_manifest"
-      test "$(wc -l < "$selected_manifest")" -eq 1
-    else
-      grep -Fv "  $head_owner" "$original_s_manifest" >"$selected_manifest"
-      test "$(wc -l < "$selected_manifest")" -eq 33
-    fi
+    case "$probe" in
+      head_only)
+        grep -F "  $head_owner" "$original_s_manifest" >"$selected_manifest"
+        test "$(wc -l < "$selected_manifest")" -eq 1 ;;
+      without_head)
+        grep -Fv "  $head_owner" "$original_s_manifest" >"$selected_manifest"
+        test "$(wc -l < "$selected_manifest")" -eq 33 ;;
+      first16)
+        sed -n '1,16p' "$ev/native-S-other33.sha256" >"$selected_manifest"
+        test "$(wc -l < "$selected_manifest")" -eq 16 ;;
+      last17)
+        sed -n '17,33p' "$ev/native-S-other33.sha256" >"$selected_manifest"
+        test "$(wc -l < "$selected_manifest")" -eq 17 ;;
+      *) echo "MINIAS_NATIVE_S_BISECT=FAIL unexpected_probe=$probe"; exit 8 ;;
+    esac
     export COHORT_MINIAS_NATIVE_S_MANIFEST="$selected_manifest"
     last_selection="force-local-S-bisect-$probe"
     echo "MINIAS_NATIVE_S_BISECT=START probe=$probe owners=$(wc -l < "$selected_manifest") cached_C=2064"

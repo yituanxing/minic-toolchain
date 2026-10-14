@@ -1569,7 +1569,12 @@ jobs:
               test -s "$COHORT_MINIAS_NATIVE_S_MANIFEST"
               if [[ "${{ contains(github.event.head_commit.message, '[linux-minias-S-bisect]') && '1' || '0' }}" == 1 ]]; then
                 export COHORT_MINIAS_S_BISECT=1
-                echo "MINIAS_NATIVE_S_BISECT=ENABLED scope=head.o_only_vs_all_except_head no_extra_workflow=true"
+                if [[ "${{ contains(github.event.head_commit.message, '[linux-minias-S-half-33]') && '1' || '0' }}" == 1 ]]; then
+                  export COHORT_MINIAS_S_BISECT_STAGE=2
+                  echo "MINIAS_NATIVE_S_BISECT=ENABLED scope=33_nonhead_half_16_17 no_extra_workflow=true"
+                else
+                  echo "MINIAS_NATIVE_S_BISECT=ENABLED scope=head.o_only_vs_all_except_head no_extra_workflow=true"
+                fi
               fi
               echo "MINIAS_NATIVE_S=ENABLED count=$(wc -l < "$COHORT_MINIAS_NATIVE_S_MANIFEST") only_existing_Kbuild_inputs=true"
             fi
