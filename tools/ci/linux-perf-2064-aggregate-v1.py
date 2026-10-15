@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """Merge seven actual Kbuild MiniC compiler-only A/B shards.
 
+Entry point for 2064-file first-class performance acceptance; require all seven
+real uncached producer shards rather than using historical object cache hits.
+
 Do not confuse sum of per-TU times with seven-runner elapsed wall time.
 Each file was run on the same GNU-generated .i, old and new compilers,
 with exact assembly output equality verified before its row was written.
