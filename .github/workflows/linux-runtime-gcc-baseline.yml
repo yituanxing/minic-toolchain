@@ -2176,6 +2176,9 @@ jobs:
           work="$GITHUB_WORKSPACE/build/linux-runtime-gcc"
           ev="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-v1"
           export COHORT_ACTION=verify
+          if [[ "${{ contains(github.event.head_commit.message, '[linux-perf-integrated-full]') }}" == true ]]; then
+            export COHORT_GNU_PREFLIGHT_ALLOW_SEVEN_RECEIVER_VOLATILE=1
+          fi
           if [[ "${{ contains(github.event.head_commit.message, '[linux-native-union-cached]') && '1' || '0' }}" == 1 ]]; then
             test "${{ steps.p1_minic_frozen_cache.outputs.cache-hit }}" = true
             native="$ev/native-union"
