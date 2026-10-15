@@ -4,6 +4,23 @@ from pathlib import Path
 p = Path("src/target/riscv64/core_codegen.c")
 text = p.read_text()
 
+# Native checked-in implementation of historical Runtime used-callee-save
+# transformation. Require a complete source implementation; do not re-inject.
+if "RUNTIME_STRUCTURED_ASM_USED_CALLEE_SAVE_V0" in text:
+    required = (
+        "/* RUNTIME_STRUCTURED_ASM_USED_CALLEE_SAVE_V0:",
+        "uint16_t structured_asm_callee_saved_mask;",
+        "static bool core_asm_callee_saved_index_for_mask(",
+        "static bool core_function_structured_asm_callee_saved_mask(",
+        "frame->structured_asm_callee_saved_mask = 0U;",
+        "frame.structured_asm_callee_saved_mask &",
+    )
+    if any(text.count(item) != 1 for item in required[:-1]) or \
+       text.count(required[-1]) != 2:
+        raise SystemExit("MINIC_RISCV64_STRUCTURED_ASM_USED_CALLEE_SAVE=ERROR partial canonical")
+    print("MINIC_RISCV64_STRUCTURED_ASM_USED_CALLEE_SAVE_V0=ALREADY_CANONICAL")
+    raise SystemExit(0)
+
 struct_old = "    size_t structured_asm_callee_saved_offset;\n    size_t varargs_offset;"
 struct_new = "    size_t structured_asm_callee_saved_offset;\n    uint16_t structured_asm_callee_saved_mask;\n    size_t varargs_offset;"
 if struct_old not in text:
