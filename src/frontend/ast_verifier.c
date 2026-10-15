@@ -791,6 +791,14 @@ static bool verify_expression(const MinicC0Program *program,
         case MINIC_BUILTIN_UNARY_ISDIGIT:
             expected_operand_type = minic_type_int();
             break;
+        case MINIC_BUILTIN_UNARY_CONSTANT_P:
+            /* GCC permits __builtin_constant_p on non-integer expressions too.
+             * The operand is unevaluated; its type does not constrain the int
+             * result.  Returning here avoids imposing the ordinary unary-builtin
+             * operand-type equality contract. */
+            return builtin_operand != NULL &&
+                   expression->value_category == MINIC_VALUE_RVALUE &&
+                   minic_type_equal(expression->type, minic_type_int());
         default:
             return false;
         }

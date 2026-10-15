@@ -574,6 +574,15 @@ static bool core_const_eval_integer_with_locals(const MinicCoreLowerContext *con
         value->bits = is_zero ? 1U : 0U;
         return true;
     }
+    if (expression->kind == MINIC_EXPRESSION_BUILTIN_UNARY &&
+        expression->value.builtin_unary.operator_kind == MINIC_BUILTIN_UNARY_CONSTANT_P) {
+        value->type = minic_type_int();
+        value->bits = core_const_eval_integer_with_locals(
+                          context, expression->value.builtin_unary.operand, &operand_value)
+                          ? 1U
+                          : 0U;
+        return true;
+    }
     if (expression->kind == MINIC_EXPRESSION_STATEMENT &&
         expression->value.statement_expression.result != MINIC_EXPRESSION_INVALID) {
         const MinicExpression *statement_result_expression;
@@ -5218,6 +5227,25 @@ MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
        unsigned width, then compare against 10.  The unsigned range test is
        true exactly for the ten decimal digit codes, including for negative
        int inputs where the subtraction wraps above the range. */
+    if (expression->kind == MINIC_EXPRESSION_BUILTIN_UNARY &&
+        expression->value.builtin_unary.operator_kind == MINIC_BUILTIN_UNARY_CONSTANT_P) {
+        MinicConstValue ignored_constant;
+        bool is_constant;
+
+        is_constant = core_const_eval_integer_with_locals(
+            context, expression->value.builtin_unary.operand, &ignored_constant);
+        (void)memset(&instruction, 0, sizeof(instruction));
+        instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
+        instruction.span = expression->span;
+        instruction.type = minic_type_int();
+        instruction.result = MINIC_CORE_VALUE_INVALID;
+        instruction.value.integer_value = is_constant ? 1 : 0;
+        return minic_core_function_append_value_instruction(
+                   context->function, context->block_id, &instruction, value_id)
+                   ? MINIC_CORE_LOWER_OK
+                   : MINIC_CORE_LOWER_ERROR;
+    }
+
     if (expression->kind == MINIC_EXPRESSION_BUILTIN_UNARY &&
         expression->value.builtin_unary.operator_kind == MINIC_BUILTIN_UNARY_ISDIGIT) {
         const MinicExpression *operand;

@@ -115,7 +115,8 @@ typedef enum MinicBuiltinUnaryOperator {
     MINIC_BUILTIN_UNARY_CTZL,
     MINIC_BUILTIN_UNARY_CTZLL,
     MINIC_BUILTIN_UNARY_FFSLL,
-    MINIC_BUILTIN_UNARY_ISDIGIT
+    MINIC_BUILTIN_UNARY_ISDIGIT,
+    MINIC_BUILTIN_UNARY_CONSTANT_P
 } MinicBuiltinUnaryOperator;
 
 typedef enum MinicCallFrameAddressKind {

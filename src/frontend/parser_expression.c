@@ -2207,18 +2207,23 @@ static bool parse_builtin_constant_p(MinicParser *parser, MinicExpressionId *exp
         return false;
     }
 
-    /* __builtin_constant_p is a compile-time query. The operand is parsed for C
-     * semantics but its AST edge is intentionally not retained, so it is never
-     * evaluated at runtime. This first generic implementation recognizes the
-     * integer constant-expression subset already shared by choose_expr; unknown
-     * expressions conservatively produce 0, as required by GCC's contract. */
+    /* Keep unresolved constant-p queries unevaluated in the AST.  Core lowering
+     * can then answer the query from its conservative straight-line local fact
+     * table without ever evaluating the operand at runtime.  Pure frontend ICEs
+     * remain folded immediately. */
     (void)memset(&result, 0, sizeof(result));
-    result.kind = MINIC_EXPRESSION_INTEGER;
     result.span.begin = begin;
     result.span.end = end;
     result.type = minic_type_int();
     result.value_category = MINIC_VALUE_RVALUE;
-    result.value.integer_value = is_constant ? 1 : 0;
+    if (is_constant) {
+        result.kind = MINIC_EXPRESSION_INTEGER;
+        result.value.integer_value = 1;
+    } else {
+        result.kind = MINIC_EXPRESSION_BUILTIN_UNARY;
+        result.value.builtin_unary.operator_kind = MINIC_BUILTIN_UNARY_CONSTANT_P;
+        result.value.builtin_unary.operand = operand_id;
+    }
     return minic_parser_add_expression(parser, &result, expression_id);
 }
 

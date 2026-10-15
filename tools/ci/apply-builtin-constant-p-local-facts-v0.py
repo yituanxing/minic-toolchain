@@ -11,6 +11,25 @@ def replace_once(path: str, old: str, new: str) -> None:
     p.write_text(text.replace(old, new, 1))
 
 
+# All five previously tested constant-p local-fact edits are now native C.
+# This historical producer remains callable, strictly rejecting a partial merge.
+source_counts = {
+    "src/frontend/ast.h": 1,
+    "src/frontend/parser_expression.c": 1,
+    "src/frontend/ast_verifier.c": 1,
+    "src/core/core_lower.c": 2,
+}
+if "MINIC_BUILTIN_UNARY_CONSTANT_P" in Path("src/frontend/ast.h").read_text():
+    for path, expected_count in source_counts.items():
+        actual_count = Path(path).read_text().count("MINIC_BUILTIN_UNARY_CONSTANT_P")
+        if actual_count != expected_count:
+            raise SystemExit(
+                f"MINIC_BUILTIN_CONSTANT_P_LOCAL_FACTS_V0=ERROR incomplete native "
+                f"{path}: expected={expected_count}, found={actual_count}"
+            )
+    print("MINIC_BUILTIN_CONSTANT_P_LOCAL_FACTS_V0=ALREADY_CANONICAL")
+    raise SystemExit(0)
+
 replace_once(
     "src/frontend/ast.h",
     "    MINIC_BUILTIN_UNARY_FFSLL,\n    MINIC_BUILTIN_UNARY_ISDIGIT\n} MinicBuiltinUnaryOperator;\n",
