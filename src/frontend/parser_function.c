@@ -3760,6 +3760,26 @@ bool minic_parse_c0_program(const char *path,
     if (!success && diagnostic != NULL && diagnostic->message[0] == '\0') {
         minic_parser_error(&parser, "parser failed without diagnostic");
     }
+    if (getenv("MINIC_PARSER_PERF_TRACE") != NULL) {
+        (void)fprintf(stderr,
+                      "MINIC_PARSER_LOOKUPS local=%zu/%zu function=%zu/%zu "
+                      "global=%zu/%zu typedef=%zu/%zu enum=%zu/%zu "
+                      "fixed=%zu/%zu builtin_mem=%zu/%zu "
+                      "functions=%zu globals=%zu aliases=%zu expressions=%zu\n",
+                      parser.perf_find_local_calls, parser.perf_find_local_steps,
+                      parser.perf_find_function_calls, parser.perf_find_function_steps,
+                      parser.perf_find_global_calls, parser.perf_find_global_steps,
+                      parser.perf_find_type_alias_calls, parser.perf_find_type_alias_steps,
+                      parser.perf_find_enum_calls, parser.perf_find_enum_steps,
+                      parser.perf_find_fixed_calls, parser.perf_find_fixed_steps,
+                      parser.perf_builtin_mem_calls, parser.perf_builtin_mem_steps,
+                      program->function_count, program->global_object_count,
+                      program->type_alias_count, program->expression_count);
+    }
+    free(parser.perf_function_name_slots);
+    parser.perf_function_name_slots = NULL;
+    parser.perf_function_name_slot_capacity = 0U;
+    parser.perf_function_name_indexed_count = 0U;
     minic_parser_destroy_scopes(&parser);
     minic_parser_destroy_enum_constants(&parser);
     return success;

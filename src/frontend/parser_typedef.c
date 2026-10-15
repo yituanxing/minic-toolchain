@@ -13,8 +13,10 @@ MinicTypeAliasId minic_parser_find_type_alias(const MinicParser *parser,
     if (parser == NULL) {
         return MINIC_TYPE_ALIAS_INVALID;
     }
+    ((MinicParser *)parser)->perf_find_type_alias_calls += 1U;
     for (index = parser->local_binding_count; index > 0U; --index) {
         const MinicParserLocalBinding *binding;
+        ((MinicParser *)parser)->perf_find_type_alias_steps += 1U;
 
         binding = &parser->local_bindings[index - 1U];
         if (minic_parser_span_equals(parser, binding->name_span, name_span)) {
@@ -25,6 +27,7 @@ MinicTypeAliasId minic_parser_find_type_alias(const MinicParser *parser,
     name_length = minic_parser_span_length(name_span);
     for (index = 0U; index < parser->program->type_alias_count; ++index) {
         const MinicTypeAlias *alias;
+        ((MinicParser *)parser)->perf_find_type_alias_steps += 1U;
 
         alias = minic_c0_program_type_alias(parser->program, index);
         if (alias != NULL && !alias->is_block_scope && alias->name_length == name_length &&

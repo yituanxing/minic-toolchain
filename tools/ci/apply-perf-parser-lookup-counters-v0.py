@@ -1,6 +1,30 @@
 #!/usr/bin/env python3
 from pathlib import Path
 
+# The validated lookup counters now live in canonical frontend source.
+# Retain this historical overlay as an idempotent CI entrypoint.  Fail closed
+# on partial source promotion rather than injecting counters twice.
+_counter_header = Path("src/frontend/parser_internal.h").read_text()
+if "    size_t perf_find_local_calls;" in _counter_header:
+    _counter_required = {
+        "src/frontend/parser_internal.h": ["perf_find_function_steps", "perf_builtin_mem_steps"],
+        "src/frontend/parser_core.c": ["perf_find_local_calls", "perf_find_function_steps"],
+        "src/frontend/parser_global.c": ["perf_find_global_calls", "perf_find_fixed_calls"],
+        "src/frontend/parser_typedef.c": ["perf_find_type_alias_steps"],
+        "src/frontend/parser_enum.c": ["perf_find_enum_steps"],
+        "src/frontend/parser_expression.c": ["perf_builtin_mem_calls"],
+        "src/frontend/parser_function.c": ["MINIC_PARSER_LOOKUPS"],
+    }
+    for _counter_path, _counter_markers in _counter_required.items():
+        _counter_text = Path(_counter_path).read_text()
+        if any(_marker not in _counter_text for _marker in _counter_markers):
+            raise SystemExit("PARSER_COUNTERS=ERROR partial canonical promotion " + _counter_path)
+    if Path("src/frontend/parser_expression.c").read_text().count(
+            "parser->perf_builtin_mem_calls += 1U;") != 3:
+        raise SystemExit("PARSER_COUNTERS=ERROR partial builtin instrumentation")
+    print("MINIC_PERF_PARSER_LOOKUP_COUNTERS_V0=ALREADY_CANONICAL")
+    raise SystemExit(0)
+
 # Perf-only parser lookup counters.  This patch changes no lookup decisions; it
 # only counts calls/candidate iterations while MINIC_PARSER_PERF_TRACE is used.
 

@@ -1129,9 +1129,11 @@ static bool ensure_builtin_memcpy_callee(MinicParser *parser, MinicFunctionId *f
     parameter_types[1] = const_void_pointer_type;
     parameter_types[2] = minic_type_unsigned_long();
 
+    parser->perf_builtin_mem_calls += 1U;
     for (index = 0U; index < parser->program->function_count; ++index) {
         const MinicFunction *function;
 
+        parser->perf_builtin_mem_steps += 1U;
         function = minic_c0_program_function(parser->program, index);
         if (!function_name_equals_literal(function, memcpy_name)) {
             continue;
@@ -1225,9 +1227,11 @@ static bool ensure_builtin_memmove_callee(MinicParser *parser, MinicFunctionId *
     parameter_types[1] = const_void_pointer_type;
     parameter_types[2] = minic_type_unsigned_long();
 
+    parser->perf_builtin_mem_calls += 1U;
     for (index = 0U; index < parser->program->function_count; ++index) {
         const MinicFunction *function;
 
+        parser->perf_builtin_mem_steps += 1U;
         function = minic_c0_program_function(parser->program, index);
         if (!function_name_equals_literal(function, memmove_name)) {
             continue;
@@ -1317,9 +1321,11 @@ static bool ensure_builtin_memset_callee(MinicParser *parser, MinicFunctionId *f
        builtin library-call bridge consistent with that target-owned C model. */
     parameter_types[2] = minic_type_unsigned_long();
 
+    parser->perf_builtin_mem_calls += 1U;
     for (index = 0U; index < parser->program->function_count; ++index) {
         const MinicFunction *function;
 
+        parser->perf_builtin_mem_steps += 1U;
         function = minic_c0_program_function(parser->program, index);
         if (!function_name_equals_literal(function, memset_name)) {
             continue;

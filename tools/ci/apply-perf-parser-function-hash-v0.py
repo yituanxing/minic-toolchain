@@ -1,6 +1,20 @@
 #!/usr/bin/env python3
 from pathlib import Path
 
+# The verified hash index now lives in canonical C.  Existing Runtime and
+# performance callers remain valid, without double-patching the source.
+_hash_header = Path("src/frontend/parser_internal.h").read_text()
+if "    MinicFunctionId *perf_function_name_slots;" in _hash_header:
+    _hash_core = Path("src/frontend/parser_core.c").read_text()
+    _hash_owner = Path("src/frontend/parser_function.c").read_text()
+    if (_hash_core.count("static bool minic_parser_function_name_index_sync(") != 1 or
+            _hash_core.count("static size_t minic_parser_function_name_hash(") != 1 or
+            _hash_owner.count("free(parser.perf_function_name_slots);") != 1 or
+            "perf_function_name_indexed_count" not in _hash_header):
+        raise SystemExit("PARSER_HASH=ERROR partial canonical promotion")
+    print("MINIC_PERF_PARSER_FUNCTION_HASH_V0=ALREADY_CANONICAL")
+    raise SystemExit(0)
+
 # Parser-lifetime hash index for function-name lookup. Functions are added
 # monotonically while parsing. The current parser lookup is a FORWARD scan:
 # the earliest function id wins. Incremental index insertion must preserve

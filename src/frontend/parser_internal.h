@@ -127,6 +127,25 @@ typedef struct MinicParser {
     MinicParserEnumTag *enum_tags;
     size_t enum_tag_count;
     size_t enum_tag_capacity;
+
+    size_t perf_find_local_calls;
+    size_t perf_find_local_steps;
+    size_t perf_find_function_calls;
+    size_t perf_find_function_steps;
+    size_t perf_find_global_calls;
+    size_t perf_find_global_steps;
+    size_t perf_find_type_alias_calls;
+    size_t perf_find_type_alias_steps;
+    size_t perf_find_enum_calls;
+    size_t perf_find_enum_steps;
+    size_t perf_find_fixed_calls;
+    size_t perf_find_fixed_steps;
+    size_t perf_builtin_mem_calls;
+    size_t perf_builtin_mem_steps;
+
+    MinicFunctionId *perf_function_name_slots;
+    size_t perf_function_name_slot_capacity;
+    size_t perf_function_name_indexed_count;
 } MinicParser;
 
 typedef struct MinicParsedAttribute {

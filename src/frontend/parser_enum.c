@@ -101,8 +101,10 @@ MinicEnumeratorId minic_parser_find_enum_constant(const MinicParser *parser,
     if (parser == NULL) {
         return MINIC_ENUMERATOR_INVALID;
     }
+    ((MinicParser *)parser)->perf_find_enum_calls += 1U;
     for (index = parser->enum_constant_count; index > 0U; --index) {
         const MinicParserEnumConstant *constant = &parser->enum_constants[index - 1U];
+        ((MinicParser *)parser)->perf_find_enum_steps += 1U;
 
         if (minic_parser_span_equals(parser, name_span, constant->name_span)) {
             return constant->enumerator_id;

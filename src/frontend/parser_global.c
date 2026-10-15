@@ -37,9 +37,11 @@ MinicGlobalObjectId minic_parser_find_global_object_entity(const MinicParser *pa
     if (parser == NULL || parser->program == NULL) {
         return MINIC_GLOBAL_OBJECT_INVALID;
     }
+    ((MinicParser *)parser)->perf_find_global_calls += 1U;
     name_length = minic_parser_span_length(name_span);
     for (index = 0U; index < parser->program->global_object_count; ++index) {
         const MinicGlobalObject *object;
+        ((MinicParser *)parser)->perf_find_global_steps += 1U;
 
         object = minic_c0_program_global_object(parser->program, index);
         if (object != NULL && object->name_length == name_length &&
@@ -75,9 +77,11 @@ MinicFixedRegisterBindingId minic_parser_find_fixed_register_binding(const Minic
     if (parser == NULL || parser->program == NULL) {
         return MINIC_FIXED_REGISTER_BINDING_INVALID;
     }
+    ((MinicParser *)parser)->perf_find_fixed_calls += 1U;
     name_length = minic_parser_span_length(name_span);
     for (index = 0U; index < parser->program->fixed_register_binding_count; ++index) {
         const MinicFixedRegisterBinding *binding;
+        ((MinicParser *)parser)->perf_find_fixed_steps += 1U;
 
         binding = minic_c0_program_fixed_register_binding(parser->program, index);
         if (binding != NULL && !binding->is_local && binding->name_length == name_length &&
