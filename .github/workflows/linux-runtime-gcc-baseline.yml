@@ -642,6 +642,36 @@ jobs:
                 echo "PARSER_INDEX_SCREEN=PASS owner=$owner byte_identical=true"
               done
               echo "PARSER_INDEX_SCREEN_GROUP=PASS owners=3 rotation=${{ contains(github.event.head_commit.message, '[linux-perf-hotowners-rotation]') }} only_function_hash_changed=true QEMU_pending=true"
+            elif [[ "${{ contains(github.event.head_commit.message, '[linux-perf-specialization-trace]') }}" == true ]]; then
+              # Reuse historical helper instead of inventing a second tracing
+              # framework; localize the very large normalize->core-set gap.
+              work="$ev/boolean-hot/spec-phase"
+              mkdir -p "$work/baseline/bin" "$work/traced/bin"
+              cp "$root/minic" "$work/baseline/bin/minic"
+              cp "$root/minic" "$work/traced/bin/minic"
+              cp "$root/minic-cc" "$work/baseline/bin/minic-cc"
+              python3 tools/ci/apply-perf-specialization-phase-trace-v0.py
+              make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain" \
+                "$root/minic-cc" >/dev/null
+              cp "$root/minic-cc" "$work/traced/bin/minic-cc"
+              git diff --check
+              if [[ "${{ contains(github.event.head_commit.message, '[linux-perf-hotowners-rotation]') }}" == true ]]; then
+                targets=(net/core/dev.o net/ipv4/tcp_input.o lib/crc32.o)
+              else
+                targets=(kernel/bpf/btf.o kernel/bpf/verifier.o net/core/filter.o)
+              fi
+              python3 tools/ci/linux-perf-phase-trace-v1.py --self-test
+              for owner in "${targets[@]}"; do
+                key="${owner//\//_}"
+                python3 tools/ci/linux-perf-phase-trace-v1.py \
+                  --input "$ev/boolean-hot/$key.frozen.i" \
+                  --baseline "$work/baseline/bin/minic" \
+                  --candidate "$work/traced/bin/minic" \
+                  --expect-specialization --out "$work/results/$key" \
+                  | tee "$work/$key-verdict.txt"
+                grep -Fq 'MINIC_SPEC_PHASE_GROUP=PASS' "$work/$key-verdict.txt"
+              done
+              echo 'MINIC_SPEC_GAP_GROUP=PASS owners=3 candidate_changes=trace_only QEMU_pending=true'
             elif [[ "${{ contains(github.event.head_commit.message, '[linux-perf-stage-profile]') }}" == true ]]; then
               python3 tools/ci/linux-perf-phase-trace-v1.py --self-test
               if [[ "${{ contains(github.event.head_commit.message, '[linux-perf-hotowners-rotation]') }}" == true ]]; then
@@ -744,6 +774,8 @@ jobs:
             build/linux-runtime-gcc-cohort-v1/non-c-objects.tsv
             build/linux-runtime-gcc-cohort-v1/identity.txt
             build/linux-runtime-gcc-cohort-v1/cohort.log
+            build/linux-runtime-gcc-cohort-v1/boolean-hot/spec-phase/results/**/phases.json
+            build/linux-runtime-gcc-cohort-v1/boolean-hot/spec-phase/*-verdict.txt
             build/linux-runtime-gcc-cohort-v1/boolean-hot/codegen-use/results/**/paired-result.json
             build/linux-runtime-gcc-cohort-v1/boolean-hot/codegen-use/*-screen.txt
             build/linux-runtime-gcc-cohort-v1/boolean-hot/core-workspace/results/**/paired-result.json

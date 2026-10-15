@@ -70,6 +70,34 @@ def compute_interstage_gaps(events):
     return gaps
 
 
+SPEC_STAGES=("spec-integer","spec-symbolic","spec-boolean","spec-finalize")
+
+def summarize_specialization_trace(events):
+    """Read existing opt-in specialization begin/end markers without touching IR."""
+    started, total, calls = {}, {}, {}
+    for when, line in events:
+        match = PAT.search(line)
+        if not match or match.group(1) not in SPEC_STAGES:
+            continue
+        stage, action, _ = match.groups()
+        if action == "begin":
+            if stage in started:
+                raise RuntimeError("overlapping specialization stage: "+stage)
+            started[stage] = when
+        elif action.startswith("end"):
+            if stage not in started:
+                raise RuntimeError("unmatched specialization end: "+stage)
+            elapsed = when - started.pop(stage)
+            if elapsed < 0:
+                raise RuntimeError("negative specialization duration")
+            total[stage] = total.get(stage,0) + elapsed
+            calls[stage] = calls.get(stage,0) + 1
+    if started:
+        raise RuntimeError("unfinished specialization stages: "+repr(sorted(started)))
+    return {k:{"ms":round(total[k]/1000000,3),"calls":calls[k]}
+            for k in sorted(total)}
+
+
 def sample(executable,source,output,limit):
     env=dict(os.environ,MINIC_BOOTSTRAP_TRACE="1")
     begun=time.perf_counter_ns()
@@ -87,13 +115,15 @@ def sample(executable,source,output,limit):
         raise RuntimeError("trace compiler failed rc="+str(rc)+" stderr="+repr(events[-3:]))
     stages,functions=attribute(events)
     gaps=compute_interstage_gaps(events)
+    spec=summarize_specialization_trace(events)
     return {"wall_ms":round((time.perf_counter_ns()-begun)/1000000,3),
             "stage_ms":stages,"interstage_gap_ms":gaps,
-            "function_counts":functions, "assembly_sha":digest(output)}
+            "specialization_ms":spec,"function_counts":functions, "assembly_sha":digest(output)}
 
 def main():
     cli=argparse.ArgumentParser()
     cli.add_argument("--self-test",action="store_true")
+    cli.add_argument("--expect-specialization",action="store_true")
     cli.add_argument("--input",type=Path)
     cli.add_argument("--baseline",type=Path)
     cli.add_argument("--candidate",type=Path)
@@ -108,7 +138,10 @@ def main():
         assert len(e)==6 and all(x==2 for x in e.values())
         gaps=compute_interstage_gaps(events)
         assert len(gaps)==5 and all(x==1 for x in gaps.values())
-        print("MINIC_PHASE_TRACE_SELFTEST=PASS six_stages=1 five_interstage_gaps=1")
+        sample_spec=[(0,"MINIC_BOOTSTRAP_TRACE stage=spec-symbolic state=begin functions=3"),
+                     (5000000,"MINIC_BOOTSTRAP_TRACE stage=spec-symbolic state=end functions=4")]
+        assert summarize_specialization_trace(sample_spec)["spec-symbolic"] == {"ms":5,"calls":1}
+        print("MINIC_PHASE_TRACE_SELFTEST=PASS six_stages=1 five_interstage_gaps=1 spec_timer=1")
         return
     if not all((ns.input,ns.baseline,ns.candidate,ns.out)):
         cli.error("all inputs required")
@@ -120,6 +153,8 @@ def main():
         results[mode]=sample(executable.resolve(),ns.input.resolve(),ns.out/(mode+".s"),180)
     if results["before"]["assembly_sha"]!=results["after"]["assembly_sha"]:
         raise RuntimeError("different assembly bytes; cannot attribute performance")
+    if ns.expect_specialization and set(results["after"]["specialization_ms"]) != set(SPEC_STAGES):
+        raise RuntimeError("diagnostic compiler did not emit all four specialization markers")
     data={"schema":"minic-existing-stage-trace-v1",
           "input_sha256":digest(ns.input),
           "results":results,
@@ -143,6 +178,15 @@ def main():
         print(f"MINIC_PHASE_TRACE_RESIDUAL mode={mode} wall_ms={item['wall_ms']:.2f} "
               f"unclassified_before_parse_or_after_codegen_ms={external:.2f}")
 
+    if ns.expect_specialization:
+        for stage in SPEC_STAGES:
+            trace=results["after"]["specialization_ms"][stage]
+            print(f"MINIC_SPEC_PHASE name={stage} ms={trace['ms']:.2f} calls={trace['calls']}")
+        gap=results["after"]["interstage_gap_ms"]["normalize-to-core-set"]
+        tracked=sum(v["ms"] for v in results["after"]["specialization_ms"].values())
+        print(f"MINIC_SPEC_UNATTRIBUTED gap_ms={gap:.2f} specialization_sum_ms={tracked:.2f} "
+              f"other_gap_ms={gap-tracked:.2f}")
+        print("MINIC_SPEC_PHASE_GROUP=PASS four_substages=true")
     print("MINIC_PHASE_TRACE_SCOPE=DIAGNOSTIC_ONLY not_QEMU_p1")
 
 if __name__=="__main__":
