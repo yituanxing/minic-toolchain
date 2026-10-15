@@ -60,7 +60,7 @@ patches=(
   apply-perf-core-object-address-use-index-v1.py
   apply-perf-core-object-interval-onepass-v1.py
   apply-riscv64-structured-asm-used-callee-save-v0.py
-  apply-riscv64-pi-local-symbol-address-v0.py
+  # Native RV64 C source already implements the .L* PC-relative selection.
   apply-inline-specialization-local-boolean-domain-scoped-v1.py
   apply-perf-parser-typedef-index-v1.py
   apply-perf-parser-local-shadow-fix-v1.py

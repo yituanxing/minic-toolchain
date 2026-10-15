@@ -51,7 +51,7 @@ patches=(
   apply-riscv64-core-object-slot-reuse-v0.py
   apply-riscv64-core-object-slot-reuse-cfg-hotfix-v0.py
   apply-riscv64-structured-asm-used-callee-save-v0.py
-  apply-riscv64-pi-local-symbol-address-v0.py
+  # The validated local-symbol PC-relative selection is now native RV64 C code.
   apply-loop-mutated-specialization-fact-barrier-v0.py
   apply-local-asm-if-fact-barrier-v0.py
   apply-core-if-condition-dominance-barrier-v0.py
