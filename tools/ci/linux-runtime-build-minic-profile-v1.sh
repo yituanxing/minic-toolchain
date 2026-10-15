@@ -110,6 +110,26 @@ for path in conflicts:
     data = (candidate / path).read_text(errors="replace")
     print(f"MINIC_SOURCE_REPLAY=CONFLICT file={path} regions={data.count('<<<<<<< ')}")
 print(f"MINIC_SOURCE_REPLAY=COMPLETE proof_patch_bytes={(parent / 'proven-src.patch').stat().st_size}")
+# Export only the four conflicted merged files; the other three canonical
+# files are already recoverable from the byte-exact proven Git patch.
+# --theirs selects the previously QEMU-proven implementation for each
+# conflicting hunk while retaining current non-overlapping source additions.
+import base64
+import hashlib
+for path in conflicts:
+    ancestor = parent / "base" / path
+    result = subprocess.run(
+        ["git", "merge-file", "-p", "--theirs",
+         str(root / path), str(ancestor), str(proved / path)],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    if result.returncode < 0 or result.returncode > 127 or b"<<<<<<< " in result.stdout:
+        raise SystemExit(f"MINIC_FINAL_BLOB=ERROR path={path} rc={result.returncode}")
+    body = result.stdout
+    payload = base64.b64encode(body).decode("ascii")
+    print(f"MINIC_FINAL_BLOB_BEGIN path={path} bytes={len(body)} sha256={hashlib.sha256(body).hexdigest()}")
+    for pos in range(0, len(payload), 4096):
+        print("MINIC_FINAL_BLOB_DATA " + payload[pos:pos+4096])
+    print(f"MINIC_FINAL_BLOB_END path={path}")
 PY_THREE_WAY
   ) || echo "MINIC_SOURCE_REPLAY=DIAGNOSTIC_FAILED original_runtime_pipeline_preserved=true"
 fi
