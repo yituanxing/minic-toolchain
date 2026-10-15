@@ -511,50 +511,7 @@ jobs:
             cp "$root/minic" "$ev/boolean-hot/baseline/bin/minic"
             cp "$ev/compiler/minic-cc-before-boolean" "$ev/boolean-hot/baseline/bin/minic-cc"
             python3 -m py_compile tools/ci/linux-perf-pinned-single-paired-ab-v1.py
-            if [[ "${{ contains(github.event.head_commit.message, '[linux-perf-host-profiler]') }}" == true ]]; then
-              # Exact three-index MiniC as already QEMU-certified. Do NOT
-              # sample only the driver: actual compilation is in minic-cc.
-              # Separate optimized+debug-info compiler; no production binary
-              # or performance certification is modified.
-              profile_src="$RUNNER_TEMP/minic-host-profile-source-$GITHUB_RUN_ID"
-              profile="$ev/boolean-hot/host-profiler"
-              build="$profile/toolchain"
-              mkdir -p "$profile"
-              frozen="$ev/boolean-hot/kernel_bpf_btf.o.frozen.i"
-              test -s "$frozen"
-              git worktree add --detach "$profile_src" "$GITHUB_SHA"
-              (
-                cd "$profile_src"
-                export MINIC_LINUX_FULL_CROSSBLOCK=1 MINIC_OPT_PURE_DISCARDED_ADDRESS_EQ=1
-                bash tools/ci/linux-runtime-build-minic-profile-v1.sh "$build" "$profile/runtime"
-                bash tools/ci/linux-perf-integrated-full-profile-v1.sh "$build" "$profile/integrated"
-                cp -p "$build/bin/minic-cc" "$profile/minic-cc-release"
-                make -B -j4 MODE=release CFLAGS="-Werror -g" BUILD_DIR="$build" \
-                  "$build/bin/minic-cc" >/dev/null
-                git diff --check
-              )
-              # CI-hosted perf may be denied; Callgrind works without PMU
-              # privileges and measures exact instruction/call counts.
-              sudo apt-get -o Acquire::Retries=2 install -y --no-install-recommends valgrind
-              python3 tools/ci/linux-perf-host-hotspot-profiler-v1.py \
-                --input "$frozen" \
-                --release-compiler "$profile/minic-cc-release" \
-                --debug-compiler "$build/bin/minic-cc" \
-                --out "$profile/btf" --timeout 850 \
-                | tee "$profile/verdict.txt"
-              grep -Fq "MINIC_HOTSPOT_PROFILE=PASS" "$profile/verdict.txt"
-              # The already-available parser counters give exact lookup calls
-              # and iterations, which sampling cannot infer reliably.
-              for owner in kernel/bpf/btf.o kernel/bpf/verifier.o net/core/filter.o; do
-                key="${owner//\//_}"
-                source="$ev/boolean-hot/$key.frozen.i"
-                test -s "$source"
-                MINIC_PARSER_PERF_TRACE=1 "$build/bin/minic-cc" -S "$source" \
-                  -o "$profile/$key.trace.s" 2>"$profile/$key.parser-counters.log"
-                grep -F "MINIC_PARSER_LOOKUPS" "$profile/$key.parser-counters.log"
-              done
-              echo "MINIC_HOTSPOT_SCOPE=HOST_ONLY frozen_linux_inputs=3 function_profile=btf"
-            elif [[ "${{ contains(github.event.head_commit.message, '[linux-perf-codegen-use-index]') }}" == true ]]; then
+            if [[ "${{ contains(github.event.head_commit.message, '[linux-perf-codegen-use-index]') }}" == true ]]; then
               # New hotspot family: Codegen scalar OBJECT_ADDRESS use-count
               # previously rescans whole IR per address. Existing P14 candidate
               # indexes ValueId uses once per function. Only this algorithm
@@ -873,21 +830,6 @@ jobs:
             echo 'BOOL_HOT_A_B_GROUP=PASS owners=3 cold_workflow_reused=true QEMU_not_executed=true'
             fi
           fi
-
-      - name: Preserve exact MiniC host hotspot profiler evidence
-        if: always() && contains(github.event.head_commit.message, '[linux-perf-host-profiler]')
-        uses: actions/upload-artifact@v4
-        with:
-          name: minic-host-profiler-${{ github.sha }}
-          path: |
-            build/linux-runtime-gcc-cohort-v1/boolean-hot/host-profiler/btf/*.txt
-            build/linux-runtime-gcc-cohort-v1/boolean-hot/host-profiler/btf/*.json
-            build/linux-runtime-gcc-cohort-v1/boolean-hot/host-profiler/btf/callgrind.out
-            build/linux-runtime-gcc-cohort-v1/boolean-hot/host-profiler/btf/perf.data
-            build/linux-runtime-gcc-cohort-v1/boolean-hot/host-profiler/*.parser-counters.log
-            build/linux-runtime-gcc-cohort-v1/boolean-hot/host-profiler/verdict.txt
-          if-no-files-found: warn
-          retention-days: 7
 
       - name: Test 1.5x AST capacity on three actual Linux inputs
         if: contains(github.event.head_commit.message, '[linux-perf-ast-growth]') && steps.candidate_ready.outputs.ready == 'true'
@@ -1412,41 +1354,6 @@ jobs:
             build/linux-runtime-gcc/out/**/*.minic-stage2.failed.stderr
           if-no-files-found: ignore
           retention-days: 3
-
-  gcc-perf-aggregate:
-    # Aggregate only actual measured runs. No source rebuild, no QEMU,
-    # no new workflow, no parallel compilation in this lightweight receiver.
-    needs: gcc-shards
-    if: github.event_name == 'push' && contains(github.event.head_commit.message, '[linux-perf-2064-ab]') && needs.gcc-shards.result == 'success'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 6
-    steps:
-      - uses: actions/checkout@v4
-      - name: Restore seven measured MiniC Kbuild timing shards
-        uses: actions/download-artifact@v4
-        with:
-          pattern: minic-perf-2064-ab-shard-*
-          merge-multiple: false
-          path: build/linux-perf-2064-aggregate/shards
-      - name: Authenticate, aggregate and publish actual 2064 compiler time
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          python3 tools/ci/linux-perf-2064-aggregate-v1.py \
-            --artifacts build/linux-perf-2064-aggregate/shards \
-            --out build/linux-perf-2064-aggregate/report --expect 2064
-          cat build/linux-perf-2064-aggregate/report/summary.md >> "$GITHUB_STEP_SUMMARY"
-      - name: Save small timing report and per-file evidence (no cached objects)
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: minic-perf-2064-aggregate-${{ github.sha }}
-          path: |
-            build/linux-perf-2064-aggregate/report/aggregate.json
-            build/linux-perf-2064-aggregate/report/summary.md
-            build/linux-perf-2064-aggregate/shards/**/perf-ab.tsv
-          if-no-files-found: warn
-          retention-days: 10
 
   gcc-shard-verify:
     needs: gcc-shards
