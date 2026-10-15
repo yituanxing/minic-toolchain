@@ -6,10 +6,16 @@ text = p.read_text()
 
 old = "#define MINIC_INLINE_INTEGER_SPECIALIZATION_LIMIT 256U\n"
 new = "#define MINIC_INLINE_INTEGER_SPECIALIZATION_LIMIT 2048U\n"
-count = text.count(old)
-if count != 1:
-    raise SystemExit(f"expected one specialization limit, found {count}")
-text = text.replace(old, new, 1)
+old_count = text.count(old)
+new_count = text.count(new)
+# The tested limit now lives in checked-in compiler.c.  The old
+# performance/runtime profile remains callable on both source states.
+if old_count == 1 and new_count == 0:
+    text = text.replace(old, new, 1)
+elif old_count == 0 and new_count == 1:
+    print("MINIC_INLINE_SPECIALIZATION_CAPACITY_LIMIT=ALREADY_CANONICAL")
+else:
+    raise SystemExit(f"partial/duplicate specialization limit old={old_count} new={new_count}")
 
 old = '''        if (specialized_id == MINIC_FUNCTION_INVALID) {
             if (specialization_count >= MINIC_INLINE_INTEGER_SPECIALIZATION_LIMIT ||
@@ -44,10 +50,15 @@ new = '''        if (specialized_id == MINIC_FUNCTION_INVALID) {
             specialization_count += 1U;
         }
 '''
-count = text.count(old)
-if count != 1:
-    raise SystemExit(f"expected one initial specialization capacity guard, found {count}")
-text = text.replace(old, new, 1)
+old_count = text.count(old)
+new_count = text.count(new)
+# Preserve the exact native guard/diagnostics without injecting them twice.
+if old_count == 1 and new_count == 0:
+    text = text.replace(old, new, 1)
+elif old_count == 0 and new_count == 1:
+    print("MINIC_INLINE_SPECIALIZATION_CAPACITY_INITIAL=ALREADY_CANONICAL")
+else:
+    raise SystemExit(f"partial/duplicate initial capacity guard old={old_count} new={new_count}")
 
 old = '''                if (refined_id == MINIC_FUNCTION_INVALID) {
                     if (specialization_count >= 1024U ||
