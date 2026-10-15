@@ -37,8 +37,12 @@ new = '''            if (!minic_core_function_append_value_instruction(
 
             if (!minic_type_pointer_to(parameter->type, &pointer_type)) {
 '''
-count = text.count(old)
-if count != 1:
-    raise SystemExit(f"expected one parameter ingress fact anchor, found {count}")
+old_count = text.count(old)
+canonical_count = text.count(new)
+if old_count == 0 and canonical_count == 1:
+    print("MINIC_INLINE_SPECIALIZATION_LOCAL_FACTS_V0=ALREADY_CANONICAL")
+    raise SystemExit(0)
+if old_count != 1 or canonical_count != 0:
+    raise SystemExit(f"MINIC_INLINE_SPECIALIZATION_LOCAL_FACTS_V0=ERROR partial canonical old={old_count} new={canonical_count}")
 p.write_text(text.replace(old, new, 1))
 print("MINIC_INLINE_SPECIALIZATION_LOCAL_FACTS_V0=APPLIED")
