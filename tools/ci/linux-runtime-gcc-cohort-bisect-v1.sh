@@ -164,6 +164,23 @@ elif [[ "${COHORT_GNU_PREFLIGHT_ALLOW_SEVEN_SHARD_VOLATILE:-0}" == 1 ]]; then
   awk '$2 != "init/version-timestamp.o" && $2 != "init/version.o" && $2 != "vmlinux.o" {print}' \
     "$prov/gcc-objects.sha256" >"$ev/gcc-objects-stable.sha256"
   echo 'COHORT_GNU_PREFLIGHT_VOLATILE=EXACT_SEVEN_SHARD only_init_version_and_vmlinux_excluded=true full_snapshot_restored=true'
+elif [[ "${COHORT_GNU_PREFLIGHT_ALLOW_SEVEN_RECEIVER_VOLATILE:-0}" == 1 ]]; then
+  # The seven per-shard producer objects and complete GNU pool are each
+  # SHA-attested BEFORE this existing Kbuild sanity re-run. Kbuild modifies
+  # only its known version-timestamp outputs on the restored cached tree.
+  # Permit exactly those three bytes to change during this preflight, then
+  # restore the ENTIRE preflight snapshot before GNU link + MiniC substitution.
+  [[ "${COHORT_ACTION:-all}" == verify &&
+     "$cohort_scope" == FULL_C_UNIVERSE &&
+     "$n" == 2064 &&
+     "${COHORT_LINUX_FULL_CROSSBLOCK:-0}" == 1 &&
+     "$actual_cfg" == eeb04f304ebfb97a1079c187dc0c2ea3cc61fc50a55aa3cc776237c16ab19bbe ]] || {
+    echo 'COHORT_GNU_PREFLIGHT=FAIL invalid_seven_receiver_volatile_scope' >&2
+    exit 6
+  }
+  awk '$2 != "init/version-timestamp.o" && $2 != "init/version.o" && $2 != "vmlinux.o" {print}' \
+    "$prov/gcc-objects.sha256" >"$ev/gcc-objects-stable.sha256"
+  echo 'COHORT_GNU_PREFLIGHT_VOLATILE=EXACT_SEVEN_RECEIVER only_version_and_vmlinux=true full_GNU_snapshot_restored=true'
 elif [[ "${COHORT_GNU_PREFLIGHT_ALLOW_PINNED_VOLATILE:-0}" == 1 ]]; then
   [[ "${COHORT_ACTION:-all}" == verify && "${COHORT_NATIVE_UNION:-0}" == 1 && "$n" == 2064 ]] || {
     echo 'COHORT_GNU_PREFLIGHT=FAIL invalid_volatile_replay_scope' >&2
