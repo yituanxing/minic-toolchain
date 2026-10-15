@@ -12,11 +12,27 @@ if "static bool core_value_spill_slot_size(" in text:
         "/* IRQ_FRAME_PACK_V0:",
         "static bool core_value_spill_slot_size(",
         "frame->value_slot_count = maximum_block_bytes / 8U;",
-        "frame->value_offsets[instruction->result] =",
-        "CORE_FRAME function=%s frame=%zu value_bytes=%zu values=%zu objects=%zu",
     )
     if any(text.count(marker) != 1 for marker in required):
         raise SystemExit("MINIC_RISCV64_CORE_VALUE_SLOT_PACK_V0=ERROR partial canonical promotion")
+    # The later, already-merged IRQ_FRAME_REUSE patch supersedes the initial
+    # per-result offset assignment and the CORE_FRAME diagnostic.  Validate
+    # exactly one COMPLETE layout variant rather than requiring obsolete lines.
+    old_layout = (
+        "frame->value_offsets[instruction->result] =",
+        "CORE_FRAME function=%s frame=%zu value_bytes=%zu values=%zu objects=%zu",
+    )
+    reuse_layout = (
+        "/* IRQ_FRAME_REUSE_V0:",
+        "static bool core_block_reused_spill_layout(",
+        "CORE_FRAME_REUSE function=%s frame=%zu value_bytes=%zu values=%zu objects=%zu",
+    )
+    old_complete = all(text.count(marker) == 1 for marker in old_layout)
+    reuse_complete = all(text.count(marker) == 1 for marker in reuse_layout)
+    if old_complete == reuse_complete or (
+        reuse_complete and any(marker in text for marker in old_layout)
+    ) or (old_complete and "IRQ_FRAME_REUSE_V0" in text):
+        raise SystemExit("MINIC_RISCV64_CORE_VALUE_SLOT_PACK_V0=ERROR mixed/partial later reuse layout")
     print("MINIC_RISCV64_CORE_VALUE_SLOT_PACK_V0=ALREADY_CANONICAL")
     raise SystemExit(0)
 
