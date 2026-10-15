@@ -92,3 +92,20 @@ core_codegen + assembly writer → .s
 6. Codegen 若确实成为新第一热点，再沿 Core value/object use-index、layout memoization 看算法收益；先不调毫秒级热点。
 
 验收要求每条改动都保留原 Linux/GNU/ABI 的 pinned provenance；新候选采用单变量 A/B、`.s` SHA 全等或等价语义 oracle，再 first500 → 七路真实 GNU link → QEMU P0/shell/P1。时间/内存的相对改善必须给同-run 数值，回归退化要如实记账，收益很小就停换瓶颈。
+
+
+## G. 真实 GNU-Kbuild AST 体积测量：最大潜在收益确实是数据结构（2026-10-15）
+
+[真实三文件内存实验 CI #38675483958](https://github.com/yituanxing/minic-toolchain/actions/runs/38675483958) `gcc-single SUCCESS`。只复用先前 SHA 固定的 GNU Kbuild `.i`，不重建 .o；Baseline=原 Runtime+Boolean，Candidate=**同一编译器、额外 stdout-free 只读计数器**；三份汇编均通过 `cmp` 字节一致，记录 `/usr/bin/time -v` peak RSS。此轮**不是内存优化后测量**，是结构诊断的 baseline。
+
+| GNU Kbuild owner | .i 字节 | Expression Count/Capacity | sizeof(Expression) | CALL 数/比例 | Expression 向量容量 | Function Count/Capacity | sizeof(Function) | 峰值 RSS |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| lib/crc32.o | 2,654,491 | 180,020 / 262,144 | **680 B** | 7,653 / 4.25% | **178.26 MB** | 5,630 / 8,192 | **6,536 B** | 306,584 KiB |
+| net/core/dev.o | 5,588,122 | 268,691 / 524,288 | **680 B** | 14,461 / 5.38% | **356.52 MB** | 15,770 / 16,384 | **6,536 B** | 510,052 KiB |
+| net/ipv4/tcp_input.o | 4,985,311 | 259,454 / 262,144 | **680 B** | 14,715 / 5.67% | **178.26 MB** | 13,937 / 16,384 | **6,536 B** | 480,844 KiB |
+
+**这是源码设计缺陷的真实量化：** 输入的 .i 只有约 2.7～5.6 MB，但 AST 的 Expression capacity 占 **178～357 MB**。每个 Expression 至少 512 B 被**只有 4～6% 的 CALL** 表达式内嵌的 `value.call.arguments[64]` 最大 union 强迫保留；三份仅“非 CALL 表达式也携带这些 64×size_t 槽位”导致的容量下界约 **88.25MB、130.17MB、125.31MB（对应仅 live count，不含额外 capacity）**。此处仍有 680 B / Expression 中其他字段；不能把这 88～130 MB 当作可直接无代价回收的内存，因为压缩 CALL 参数需重新设计 ID/arena/浅复制语义。函数主体也巨大：`sizeof(MinicFunction)=6536 B`（内嵌 `MinicType parameter_types[64]`，`sizeof(MinicType)=80B`）。Parser 自身 `sizeof(MinicParser)=133424B`、一个 SwitchContext=8288B（16 个固定 Context ≈132,608B），但其总量远小于两大 AST 容器。
+
+- **优先进行低风险结构性实验：** 对大容器 Expression/Function 的 growth policy **只改容量倍率**（2×→1.5×），保证 amortized O(1)、保持所有 ID/布局/访问语义不变、内存失败原行为不变；在相同 3 实际 .i 的 paired wall、peak RSS、汇编字节一致下决定是否保留。倍增不是算法复杂度错误，它是特大实体造成的容量过度预留问题（例如 dev: 268,691 expressions 悬挂在 524,288 capacity）。
+- 其后如 RSS 仍远高于预期，再研究真正的高收益重构：只为 CALL 维护变长参数侧表，缩小 Expression union 的 512B；Function 和 FunctionType 的大定长 parameter_types 也可用 copy-on-write / small-buffer 但要先审查 cloned 函数与 AST 的按值复制路径。禁止直接用一个裸指针替代定长数组而破坏 clone/free。
+- 上述峰值 RSS 是 `time -v` **单次实际诊断编译器进程**，不是 7 runner 墙钟/整体 Linux 内存峰值；被计数器的单次扫描可能添加少量 CPU 开销，源码结构尺寸和容量则是精确的。
