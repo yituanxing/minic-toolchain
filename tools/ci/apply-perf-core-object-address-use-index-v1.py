@@ -8,6 +8,22 @@ use-count comparisons and generated assembly semantics remain unchanged.
 from pathlib import Path
 p=Path("src/target/riscv64/core_codegen.c")
 s=p.read_text()
+
+# Existing P14 is in canonical C.  Keep source-owner provenance, and verify
+# both index construction and fail-safe full-scan fallback without reapplying.
+if "CORE_OBJECT_ADDRESS_USE_INDEX_V1" in s:
+    expected = (
+        "/* CORE_OBJECT_ADDRESS_USE_INDEX_V1:",
+        "static bool core_object_address_build_use_index(",
+        "core_object_address_use_index = build.entries;",
+        "free(core_object_address_use_index);",
+        "(void)core_object_address_build_use_index(function);",
+        "Allocation or malformed-index fallback: original full scan.",
+    )
+    if any(s.count(marker) != 1 for marker in expected):
+        raise SystemExit("CORE_OBJECT_ADDRESS_USE_INDEX_V1=ERROR partial canonical")
+    print("CORE_OBJECT_ADDRESS_USE_INDEX_V1=ALREADY_CANONICAL")
+    raise SystemExit(0)
 def once(old,new):
     global s
     n=s.count(old)
