@@ -651,7 +651,12 @@ jobs:
               python3 tools/ci/apply-perf-symbolic-function-body-owner-filter-v0.py
               make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain" "$root/minic-cc" >/dev/null
               cp "$root/minic-cc" "$work/index/bin/minic-cc"
-              for owner in lib/crc32.o net/core/dev.o net/ipv4/tcp_input.o; do
+              if [[ "${{ contains(github.event.head_commit.message, '[linux-perf-hotowners-rotation]') }}" == true ]]; then
+                targets=(lib/crc32.o net/core/dev.o net/ipv4/tcp_input.o)
+              else
+                targets=(kernel/bpf/btf.o kernel/bpf/verifier.o net/core/filter.o)
+              fi
+              for owner in "${targets[@]}"; do
                 key="${owner//\//_}"
                 python3 tools/ci/linux-perf-pinned-single-paired-ab-v1.py --input "$ev/boolean-hot/$key.frozen.i" --baseline-driver "$work/baseline/bin/minic" --candidate-driver "$work/index/bin/minic" --repeats 2 --out "$work/results/$key" | tee "$work/$key-screen.txt"
               done
