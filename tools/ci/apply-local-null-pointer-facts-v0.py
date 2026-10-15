@@ -3,6 +3,19 @@ from pathlib import Path
 
 p = Path("src/core/core_lower.c")
 text = p.read_text()
+# Historical Runtime local-null facts and IF pruning now live in Core C.
+if "static void core_local_null_pointer_set(" in text:
+    required = (
+        "static void core_local_null_pointer_set(",
+        "static bool core_local_null_pointer_get(",
+        "static bool core_expression_known_null_pointer(",
+        "null_pointer_known = core_expression_known_null_pointer(context, source_id);",
+    )
+    if any(text.count(m) != 1 for m in required):
+        raise SystemExit("MINIC_LOCAL_NULL_POINTER_FACTS=ERROR partial native source")
+    print("MINIC_LOCAL_NULL_POINTER_FACTS_V0=ALREADY_CANONICAL")
+    raise SystemExit(0)
+
 
 
 def replace_once(old: str, new: str, label: str) -> None:

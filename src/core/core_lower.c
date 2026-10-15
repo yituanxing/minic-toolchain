@@ -281,7 +281,7 @@ static void core_local_constants_clear_known(MinicCoreLowerContext *context) {
     if (getenv("MINIC_LOCAL_FACT_TRACE") != NULL && context != NULL &&
         context->source_function != NULL) {
         (void)fprintf(stderr,
-                      "LOCAL_FACT_CLEAR function=%s\\n",
+                      "LOCAL_FACT_CLEAR function=%s\n",
                       context->source_function->name != NULL ? context->source_function->name : "?");
     }
     if (context == NULL || context->source_function == NULL ||
@@ -391,6 +391,108 @@ static bool core_direct_local_read(const MinicCoreLowerContext *context,
     return true;
 }
 
+static void core_local_null_pointer_set(MinicCoreLowerContext *context,
+                                        MinicLocalId local_id) {
+    const MinicLocal *local;
+    size_t index;
+
+    if (context == NULL || context->body == NULL || context->body->program == NULL ||
+        !core_local_constant_index(context, local_id, &index) ||
+        context->local_integer_constants[index].escaped) {
+        return;
+    }
+    local = minic_c0_program_local(context->body->program, local_id);
+    if (local == NULL || local->is_array || minic_type_is_volatile(local->type) ||
+        !minic_type_is_pointer(local->type)) {
+        context->local_integer_constants[index].known = false;
+        return;
+    }
+    context->local_integer_constants[index].value.type = minic_type_int();
+    context->local_integer_constants[index].value.bits = 0U;
+    context->local_integer_constants[index].known = true;
+}
+
+static bool core_local_null_pointer_get(const MinicCoreLowerContext *context,
+                                        MinicLocalId local_id) {
+    const MinicLocal *local;
+    size_t index;
+
+    if (!core_local_constant_index(context, local_id, &index) ||
+        !context->local_integer_constants[index].known ||
+        context->local_integer_constants[index].escaped || context->body == NULL ||
+        context->body->program == NULL) {
+        return false;
+    }
+    local = minic_c0_program_local(context->body->program, local_id);
+    return local != NULL && !local->is_array && !minic_type_is_volatile(local->type) &&
+           minic_type_is_pointer(local->type) &&
+           minic_type_is_integer(context->local_integer_constants[index].value.type) &&
+           context->local_integer_constants[index].value.bits == 0U;
+}
+
+static bool core_expression_known_null_pointer_depth(
+    const MinicCoreLowerContext *context,
+    MinicExpressionId expression_id,
+    unsigned int depth) {
+    const MinicExpression *expression;
+    MinicLocalId local_id;
+
+    if (context == NULL || context->body == NULL || context->body->program == NULL ||
+        depth > 8U) {
+        return false;
+    }
+    expression = minic_c0_program_expression(context->body->program, expression_id);
+    if (expression == NULL) {
+        return false;
+    }
+    if (minic_c0_expression_is_null_pointer_constant_v0(
+            context->body->program, expression_id)) {
+        return true;
+    }
+    if ((expression->kind == MINIC_EXPRESSION_CAST ||
+         expression->kind == MINIC_EXPRESSION_BITCAST ||
+         expression->kind == MINIC_EXPRESSION_CONVERSION) &&
+        minic_type_is_pointer(expression->type)) {
+        return core_expression_known_null_pointer_depth(
+            context, expression->value.unary.operand, depth + 1U);
+    }
+    if (core_direct_local_read(context, expression_id, &local_id) &&
+        core_local_null_pointer_get(context, local_id)) {
+        return true;
+    }
+    if (expression->kind == MINIC_EXPRESSION_CALL &&
+        expression->value.call.function_id != MINIC_FUNCTION_INVALID) {
+        const MinicFunction *callee;
+        const MinicBlock *callee_body;
+        const MinicStatement *return_statement;
+
+        callee = minic_c0_program_function(
+            context->body->program, expression->value.call.function_id);
+        if (callee == NULL || !callee->is_defined || !minic_type_is_pointer(callee->return_type)) {
+            return false;
+        }
+        callee_body = minic_c0_program_block(context->body->program, callee->body_block);
+        if (callee_body == NULL || callee_body->statement_count != 1U) {
+            return false;
+        }
+        return_statement = minic_c0_program_statement(
+            context->body->program, callee_body->statements[0]);
+        if (return_statement == NULL || return_statement->kind != MINIC_STATEMENT_RETURN ||
+            return_statement->expression == MINIC_EXPRESSION_INVALID) {
+            return false;
+        }
+        return core_expression_known_null_pointer_depth(
+            context, return_statement->expression, depth + 1U);
+    }
+    return false;
+}
+
+static bool core_expression_known_null_pointer(
+    const MinicCoreLowerContext *context,
+    MinicExpressionId expression_id) {
+    return core_expression_known_null_pointer_depth(context, expression_id, 0U);
+}
+
 static bool core_const_signed_value(const MinicCoreLowerContext *context,
                                     const MinicConstValue *value,
                                     int64_t *result) {
@@ -496,7 +598,7 @@ static bool core_const_eval_integer_with_locals(const MinicCoreLowerContext *con
             context, expression->value.statement_expression.result, &operand_value);
         if (getenv("MINIC_LOCAL_FACT_TRACE") != NULL) {
             (void)fprintf(stderr,
-                          "LOCAL_FACT_STMT function=%s expression=%zu result=%zu result_kind=%d result_vcat=%d direct_local=%d local=%zu local_known=%d local_bits=%" PRIu64 " known=%d bits=%" PRIu64 "\\n",
+                          "LOCAL_FACT_STMT function=%s expression=%zu result=%zu result_kind=%d result_vcat=%d direct_local=%d local=%zu local_known=%d local_bits=%" PRIu64 " known=%d bits=%" PRIu64 "\n",
                           context->source_function != NULL ? context->source_function->name : "?",
                           (size_t)expression_id,
                           (size_t)expression->value.statement_expression.result,
@@ -523,6 +625,127 @@ static bool core_const_eval_integer_with_locals(const MinicCoreLowerContext *con
         return minic_const_value_convert_integer(context->body->program,
                                                  context->target,
                                                  &operand_value,
+                                                 expression->type,
+                                                 value);
+    }
+    if (expression->kind == MINIC_EXPRESSION_BINARY &&
+        (expression->value.binary.operator_kind == MINIC_BINARY_LOGICAL_AND ||
+         expression->value.binary.operator_kind == MINIC_BINARY_LOGICAL_OR)) {
+        MinicConstValue left_value;
+        MinicConstValue right_value;
+        bool left_is_zero;
+        bool right_is_zero;
+        bool result;
+
+        if (!core_const_eval_integer_with_locals(
+                context, expression->value.binary.left, &left_value) ||
+            !minic_const_value_is_zero(context->body->program,
+                                       context->target,
+                                       &left_value,
+                                       &left_is_zero)) {
+            return false;
+        }
+        if (expression->value.binary.operator_kind == MINIC_BINARY_LOGICAL_AND &&
+            left_is_zero) {
+            value->type = expression->type;
+            value->bits = 0U;
+            return true;
+        }
+        if (expression->value.binary.operator_kind == MINIC_BINARY_LOGICAL_OR &&
+            !left_is_zero) {
+            value->type = expression->type;
+            value->bits = 1U;
+            return true;
+        }
+        if (!core_const_eval_integer_with_locals(
+                context, expression->value.binary.right, &right_value) ||
+            !minic_const_value_is_zero(context->body->program,
+                                       context->target,
+                                       &right_value,
+                                       &right_is_zero)) {
+            return false;
+        }
+        result = !right_is_zero;
+        value->type = expression->type;
+        value->bits = result ? 1U : 0U;
+        return true;
+    }
+
+    /* Linux min/max/clamp signedness masks combine optimizer-known local facts
+       through ?:, integer addition and bitwise AND.  Compose only these narrow
+       integer forms; the fact lifetime/escape rules remain unchanged. */
+    if (expression->kind == MINIC_EXPRESSION_CONDITIONAL) {
+        MinicConstValue condition_value;
+        MinicConstValue selected_value;
+        bool condition_is_zero;
+        MinicExpressionId selected_id;
+
+        if (!core_const_eval_integer_with_locals(
+                context, expression->value.conditional.condition, &condition_value) ||
+            !minic_const_value_is_zero(context->body->program,
+                                       context->target,
+                                       &condition_value,
+                                       &condition_is_zero)) {
+            return false;
+        }
+        selected_id = condition_is_zero ? expression->value.conditional.when_false
+                                        : expression->value.conditional.when_true;
+        if (!core_const_eval_integer_with_locals(context, selected_id, &selected_value)) {
+            return false;
+        }
+        return minic_const_value_convert_integer(context->body->program,
+                                                 context->target,
+                                                 &selected_value,
+                                                 expression->type,
+                                                 value);
+    }
+    if (expression->kind == MINIC_EXPRESSION_BINARY &&
+        (expression->value.binary.operator_kind == MINIC_BINARY_ADD ||
+         expression->value.binary.operator_kind == MINIC_BINARY_BITWISE_AND)) {
+        const MinicExpression *left_expression;
+        const MinicExpression *right_expression;
+        MinicConstValue left;
+        MinicConstValue right;
+        MinicConstValue left_common;
+        MinicConstValue right_common;
+        MinicConstValue result_common;
+        MinicType common_type;
+
+        left_expression = minic_c0_program_expression(
+            context->body->program, expression->value.binary.left);
+        right_expression = minic_c0_program_expression(
+            context->body->program, expression->value.binary.right);
+        if (left_expression == NULL || right_expression == NULL ||
+            !minic_type_is_integer(left_expression->type) ||
+            !minic_type_is_integer(right_expression->type) ||
+            !core_const_eval_integer_with_locals(
+                context, expression->value.binary.left, &left) ||
+            !core_const_eval_integer_with_locals(
+                context, expression->value.binary.right, &right) ||
+            !minic_target_info_integer_common_for_program(context->target,
+                                                          context->body->program,
+                                                          left_expression->type,
+                                                          right_expression->type,
+                                                          &common_type) ||
+            !minic_const_value_convert_integer(context->body->program,
+                                               context->target,
+                                               &left,
+                                               common_type,
+                                               &left_common) ||
+            !minic_const_value_convert_integer(context->body->program,
+                                               context->target,
+                                               &right,
+                                               common_type,
+                                               &right_common)) {
+            return false;
+        }
+        result_common.type = common_type;
+        result_common.bits = expression->value.binary.operator_kind == MINIC_BINARY_ADD
+                                 ? left_common.bits + right_common.bits
+                                 : left_common.bits & right_common.bits;
+        return minic_const_value_convert_integer(context->body->program,
+                                                 context->target,
+                                                 &result_common,
                                                  expression->type,
                                                  value);
     }
@@ -3674,6 +3897,24 @@ MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
     expression = minic_c0_program_expression(context->body->program, expression_id);
     if (expression == NULL) {
         return MINIC_CORE_LOWER_ERROR;
+    }
+    if (expression->kind == MINIC_EXPRESSION_COMPOUND_ASSIGNMENT) {
+        const MinicExpression *fact_target;
+
+        fact_target = minic_c0_program_expression(
+            context->body->program, expression->value.binary.left);
+        if (fact_target != NULL && fact_target->kind == MINIC_EXPRESSION_LOCAL) {
+            if (getenv("MINIC_LOCAL_FACT_TRACE") != NULL) {
+                (void)fprintf(stderr,
+                              "LOCAL_FACT_COMPOUND_INVALIDATE function=%s local=%zu expression=%zu\n",
+                              context->source_function != NULL
+                                  ? context->source_function->name
+                                  : "?",
+                              (size_t)fact_target->value.local_id,
+                              (size_t)expression_id);
+            }
+            core_local_constant_invalidate(context, fact_target->value.local_id);
+        }
     }
     /* Runtime allocation is a pointer-producing rvalue. Its target-neutral
        address value is already owned by lower_address(); admit it here so
@@ -8273,19 +8514,24 @@ static MinicCoreLowerStatus lower_assignment_pair(MinicCoreLowerContext *context
     if (target->kind == MINIC_EXPRESSION_LOCAL) {
         MinicConstValue stored_constant;
         bool fact_known;
+        bool null_pointer_known;
+        null_pointer_known = core_expression_known_null_pointer(context, source_id);
         core_local_constant_invalidate(context, target->value.local_id);
         fact_known = core_const_eval_integer_with_locals(context, source_id, &stored_constant);
         if (fact_known) {
             core_local_constant_set(context, target->value.local_id, &stored_constant);
+        } else if (null_pointer_known) {
+            core_local_null_pointer_set(context, target->value.local_id);
         }
         if (getenv("MINIC_LOCAL_FACT_TRACE") != NULL) {
             (void)fprintf(stderr,
-                          "LOCAL_FACT_ASSIGN function=%s target=%zu source=%zu source_kind=%d known=%d bits=%" PRIu64 "\\n",
+                          "LOCAL_FACT_ASSIGN function=%s target=%zu source=%zu source_kind=%d known=%d null=%d bits=%" PRIu64 "\n",
                           context->source_function != NULL ? context->source_function->name : "?",
                           (size_t)target->value.local_id,
                           (size_t)source_id,
                           source != NULL ? (int)source->kind : -1,
                           fact_known ? 1 : 0,
+                          null_pointer_known ? 1 : 0,
                           fact_known ? stored_constant.bits : UINT64_C(0));
         }
     }
@@ -9913,17 +10159,29 @@ lower_if(MinicCoreLowerContext *context, const MinicStatement *statement, bool *
        the selected source block.  A discarded subtree that owns any C/case/
        default label stays on the general CFG path because an enclosing goto or
        switch may legally enter it. */
-    if (statement->cleanup_context == statement->cleanup_stop_context &&
-        minic_type_is_integer(condition_expression->type)) {
-        MinicConstValue condition_value;
-        bool condition_is_zero;
+    if (statement->cleanup_context == statement->cleanup_stop_context) {
+        bool condition_is_zero = false;
+        bool condition_known = false;
 
-        if (core_const_eval_integer_with_locals(
-                context, statement->expression, &condition_value) &&
-            minic_const_value_is_zero(context->body->program,
-                                      context->target,
-                                      &condition_value,
-                                      &condition_is_zero)) {
+        if (minic_type_is_pointer(condition_expression->type) &&
+            core_expression_known_null_pointer(context, statement->expression)) {
+            condition_known = true;
+            condition_is_zero = true;
+        } else if (minic_type_is_integer(condition_expression->type)) {
+            MinicConstValue condition_value;
+            bool integer_condition_is_zero;
+
+            if (core_const_eval_integer_with_locals(
+                    context, statement->expression, &condition_value) &&
+                minic_const_value_is_zero(context->body->program,
+                                          context->target,
+                                          &condition_value,
+                                          &integer_condition_is_zero)) {
+                condition_known = true;
+                condition_is_zero = integer_condition_is_zero;
+            }
+        }
+        if (condition_known) {
             const MinicBlock *discarded_source;
             const MinicBlock *selected_source;
 

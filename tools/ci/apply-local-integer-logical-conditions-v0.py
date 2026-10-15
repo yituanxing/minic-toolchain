@@ -3,6 +3,19 @@ from pathlib import Path
 
 p = Path("src/core/core_lower.c")
 text = p.read_text()
+# Historical Runtime logical reduction and compound invalidation are now
+# native C; verify both before skipping the previous injection.
+if "LOCAL_FACT_COMPOUND_INVALIDATE function=%s" in text:
+    required = (
+        "expression->value.binary.operator_kind == MINIC_BINARY_LOGICAL_OR",
+        "LOCAL_FACT_COMPOUND_INVALIDATE function=%s",
+        "MINIC_BINARY_BITWISE_AND)) {",
+    )
+    if any(text.count(m) < 1 for m in required):
+        raise SystemExit("MINIC_LOCAL_INTEGER_LOGICAL_CONDITIONS=ERROR partial native source")
+    print("MINIC_LOCAL_INTEGER_LOGICAL_CONDITIONS_V0=ALREADY_CANONICAL")
+    raise SystemExit(0)
+
 
 anchor = '''    if (expression->kind == MINIC_EXPRESSION_BINARY &&
         (expression->value.binary.operator_kind == MINIC_BINARY_EQUAL ||
