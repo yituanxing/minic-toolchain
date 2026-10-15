@@ -53,6 +53,13 @@ PY_RUNTIME_PATCHES
       git diff --check
       git diff --binary -- src > "$snapshot_parent/proven-src.patch"
       git diff --name-only -- src > "$snapshot_parent/proven-files.txt"
+      # Export one exact post-patch source diff; keep historical scripts unchanged.
+      # Base64 keeps the GitHub job-log carrier byte-exact, despite line timestamps.
+      printf 'MINIC_PROVEN_PATCH_BEGIN sha=%s bytes=%s\\n' \
+        "$(sha256sum "$snapshot_parent/proven-src.patch" | cut -d' ' -f1)" \
+        "$(wc -c < "$snapshot_parent/proven-src.patch")"
+      base64 -w0 "$snapshot_parent/proven-src.patch" | fold -w 4096 | sed 's/^/MINIC_PROVEN_PATCH_DATA /'
+      echo 'MINIC_PROVEN_PATCH_END'
     )
     python3 - "$repo_root" "$snapshot_parent" "$historical" <<'PY_THREE_WAY'
 from pathlib import Path
