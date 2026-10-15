@@ -39,6 +39,7 @@ static inline bool minic_riscv64_emit_core_function(FILE *file,
     symbol.visibility = MINIC_SYMBOL_VISIBILITY_DEFAULT;
     symbol.is_internal = false;
     symbol.is_weak = false;
+    symbol.function_sections = false;
     return minic_riscv64_emit_core_function_with_symbol(file, function, &symbol);
 }
 

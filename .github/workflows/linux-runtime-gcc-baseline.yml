@@ -3,12 +3,19 @@ name: Linux Runtime GCC Baseline
 on:
   push:
     branches:
+      - "main"
       - "agent/linux-expanded-kbuild-v0"
       - "agent/linux-perf-boolean-domain-v1"
     paths:
       - '.github/workflows/linux-runtime-gcc-baseline.yml'
       - 'tests/external/linux/**'
       - 'tools/ci/**'
+      # Single canonical product line: source ownership must trigger its
+      # existing Linux oracle, not require pushing onto obsolete agent refs.
+      - 'src/**'
+      - 'include/minic/**'
+      - 'tools/minic/**'
+      - 'tools/minic-cc/**'
   workflow_dispatch:
 
 permissions:

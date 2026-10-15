@@ -1062,6 +1062,7 @@ bool minic_riscv64_write_c0_program_with_core_functions(const char *path,
                                                         const MinicC0Program *program,
                                                         const MinicCoreFunction *core_functions,
                                                         size_t core_function_count,
+                                                        bool function_sections,
                                                         MinicDiagnostic *diagnostic) {
     FILE *file;
     size_t global_index;
@@ -1240,8 +1241,9 @@ bool minic_riscv64_write_c0_program_with_core_functions(const char *path,
                capability check.  Do not preflight the same Core function here:
                on self-hosted giant functions that duplicated verification was
                a material part of codegen time and provided no extra safety. */
-            success = minic_riscv64_function_symbol_from_function(function, &symbol) &&
-                      minic_riscv64_emit_core_function_for_program_with_symbol(
+            success = minic_riscv64_function_symbol_from_function(function, &symbol);
+            symbol.function_sections = function_sections;
+            success = success && minic_riscv64_emit_core_function_for_program_with_symbol(
                           file, program, core_function, &symbol);
         }
         if (getenv("MINIC_BOOTSTRAP_TRACE") != NULL && function->is_defined) {

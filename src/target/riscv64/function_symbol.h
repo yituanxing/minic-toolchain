@@ -12,6 +12,7 @@ typedef struct MinicRiscv64FunctionSymbol {
     MinicSymbolVisibility visibility;
     bool is_internal;
     bool is_weak;
+    bool function_sections;
 } MinicRiscv64FunctionSymbol;
 
 static inline bool minic_riscv64_function_symbol_from_function(const MinicFunction *function,
@@ -30,6 +31,7 @@ static inline bool minic_riscv64_function_symbol_from_function(const MinicFuncti
     symbol->visibility = function->visibility;
     symbol->is_internal = function->is_internal;
     symbol->is_weak = function->is_weak;
+    symbol->function_sections = false;
     return true;
 }
 
@@ -53,17 +55,13 @@ minic_riscv64_emit_function_symbol_begin(FILE *file, const MinicRiscv64FunctionS
         if (fprintf(file, ".section %s,\"ax\",@progbits\n", symbol->section_name) < 0) {
             return false;
         }
-#if defined(MINIC_LINUX_RUNTIME_DEFAULT_TEXT_V0)
+    } else if (symbol->function_sections) {
+        if (fprintf(file, ".section .text.%s,\"ax\",@progbits\n", symbol->symbol_name) < 0) {
+            return false;
+        }
     } else if (fprintf(file, ".text\n") < 0) {
-        /* Runtime44's validated Linux linker-script-compatible shared .text mode.
-           Keep the historical semantics unchanged for the pinned Linux build. */
         return false;
-#else
-    } else if (fprintf(file, ".section .text.%s\n", symbol->symbol_name) < 0) {
-        /* Original MiniC per-function input sections preserve --gc-sections
-           behavior for ordinary driver and MiniLD section-GC regressions. */
-        return false;
-#endif
+
     }
     if (!symbol->is_internal) {
         if (fprintf(file, symbol->is_weak ? ".weak %s\n" : ".globl %s\n", symbol->symbol_name) <

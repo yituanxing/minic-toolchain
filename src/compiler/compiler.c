@@ -2596,9 +2596,10 @@ static void minic_set_ast_verify_diagnostic(const char *input_path,
     }
 }
 
-int minic_compile_preprocessed_file(const char *input_path,
-                                    const char *output_path,
-                                    MinicDiagnostic *diagnostic) {
+int minic_compile_preprocessed_file_with_options(const char *input_path,
+                                                 const char *output_path,
+                                                 bool function_sections,
+                                                 MinicDiagnostic *diagnostic) {
     MinicSourceBuffer buffer;
     MinicC0Program program;
     MinicCoreFunctionSet core_set;
@@ -2736,6 +2737,7 @@ int minic_compile_preprocessed_file(const char *input_path,
                                                                &program,
                                                                core_set.functions,
                                                                core_set.function_count,
+                                                               function_sections,
                                                                diagnostic);
         minic_bootstrap_trace_stage(input_path,
                                     "codegen",
@@ -2747,4 +2749,12 @@ int minic_compile_preprocessed_file(const char *input_path,
     minic_c0_program_destroy(&program);
     free(buffer.data);
     return success ? 0 : 1;
+}
+
+/* Preserve the pre-existing library API and GCC's default shared .text. */
+int minic_compile_preprocessed_file(const char *input_path,
+                                    const char *output_path,
+                                    MinicDiagnostic *diagnostic) {
+    return minic_compile_preprocessed_file_with_options(
+        input_path, output_path, false, diagnostic);
 }

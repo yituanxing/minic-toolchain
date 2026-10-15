@@ -1,6 +1,7 @@
 #ifndef MINIC_COMPILER_H
 #define MINIC_COMPILER_H
 
+#include <stdbool.h>
 #include <stddef.h>
 
 #ifdef __cplusplus
@@ -24,6 +25,13 @@ typedef struct MinicDiagnostic {
 int minic_compile_preprocessed_file(const char *input_path,
                                     const char *output_path,
                                     MinicDiagnostic *diagnostic);
+
+/* GNU-compatible layout selection: false (default) shares .text;
+ * true (-ffunction-sections) gives each function an input section. */
+int minic_compile_preprocessed_file_with_options(const char *input_path,
+                                                 const char *output_path,
+                                                 bool function_sections,
+                                                 MinicDiagnostic *diagnostic);
 
 #ifdef __cplusplus
 }

@@ -48,7 +48,7 @@ _start:
 .size _start, .-_start
 S
 
-"$MINIC" -ffreestanding -fno-builtin -nostdinc \
+"$MINIC" -ffreestanding -fno-builtin -nostdinc -ffunction-sections \
   -c "$WORK/gc.c" -o "$WORK/gc.o"
 "$MINIAS" -march=rv64gc -mabi=lp64d \
   -o "$WORK/start.o" "$WORK/start.s"

@@ -62,7 +62,7 @@ static void append_rv64_linux_musl_predefines(char **arguments,
 
 static void usage(FILE *out, const char *argv0) {
     fprintf(out,
-            "usage: %s [-S|-c] [-ffreestanding|-fhosted] [-static] "
+            "usage: %s [-S|-c] [-ffreestanding|-fhosted] [-ffunction-sections|-fno-function-sections] [-static] "
             "[-nostdlib] [-nostartfiles] [-nodefaultlibs] [-nostdinc] "
             "[--sysroot DIR] [-DNAME[=VALUE]] [-UNAME] [-IDIR] "
             "[-isystem DIR] [-include FILE] [-LDIR] [-lNAME] "
@@ -255,6 +255,7 @@ static int compile_c_to_assembly(const char *input,
                                  const char *sysroot,
                                  bool hosted,
                                  bool no_stdinc,
+                                 bool function_sections,
                                  const char *const *cpp_forward,
                                  size_t cpp_forward_count,
                                  char *cpp,
@@ -275,7 +276,8 @@ static int compile_c_to_assembly(const char *input,
                                   cpp);
     if (status == 0) {
         char *arguments[] = {
-            cc, "-S", temp_i, "-o", (char *)output, NULL
+            cc, "-S", temp_i, "-o", (char *)output,
+            function_sections ? "-ffunction-sections" : "-fno-function-sections", NULL
         };
         status = run_tool(arguments);
     }
@@ -297,6 +299,7 @@ static int compile_c_to_object(const char *input,
                                const char *sysroot,
                                bool hosted,
                                bool no_stdinc,
+                               bool function_sections,
                                const char *const *cpp_forward,
                                size_t cpp_forward_count,
                                char *cpp,
@@ -313,6 +316,7 @@ static int compile_c_to_object(const char *input,
                                    sysroot,
                                    hosted,
                                    no_stdinc,
+                                   function_sections,
                                    cpp_forward,
                                    cpp_forward_count,
                                    cpp,
@@ -369,6 +373,7 @@ int main(int argc, char **argv) {
     bool no_startfiles = false;
     bool no_defaultlibs = false;
     bool no_stdinc = false;
+    bool function_sections = false;
     char *cpp = NULL;
     char *cc = NULL;
     char *as = NULL;
@@ -398,6 +403,10 @@ int main(int argc, char **argv) {
             hosted = true;
         } else if (strcmp(argument, "-fno-builtin") == 0) {
             /* MiniC has no implicit builtin substitution yet. */
+        } else if (strcmp(argument, "-ffunction-sections") == 0) {
+            function_sections = true;
+        } else if (strcmp(argument, "-fno-function-sections") == 0) {
+            function_sections = false;
         } else if (strcmp(argument, "-static") == 0) {
             static_link = true;
         } else if (strcmp(argument, "-nostdlib") == 0) {
@@ -530,7 +539,8 @@ int main(int argc, char **argv) {
 
     if (mode == MINIC_DRIVER_ASSEMBLY) {
         char *cc_arguments[] = {
-            cc, "-S", (char *)inputs[0], "-o", (char *)output, NULL
+            cc, "-S", (char *)inputs[0], "-o", (char *)output,
+            function_sections ? "-ffunction-sections" : "-fno-function-sections", NULL
         };
 
         status = run_tool(cc_arguments);
@@ -543,6 +553,7 @@ int main(int argc, char **argv) {
                                      sysroot,
                                      hosted,
                                      no_stdinc,
+                                     function_sections,
                                      cpp_forward,
                                      cpp_forward_count,
                                      cpp,
@@ -604,6 +615,7 @@ int main(int argc, char **argv) {
                                              sysroot,
                                              hosted,
                                              no_stdinc,
+                                             function_sections,
                                              cpp_forward,
                                              cpp_forward_count,
                                              cpp,
