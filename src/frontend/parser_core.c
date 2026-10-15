@@ -599,6 +599,54 @@ void minic_parser_destroy_scopes(MinicParser *parser) {
     parser->scope_capacity = 0U;
 }
 
+
+bool minic_parser_find_nearest_ordinary_binding(
+    const MinicParser *parser, MinicSourceSpan name_span,
+    MinicParserOrdinaryBinding *result) {
+    size_t depth;
+    if (result == NULL) {
+        return false;
+    }
+    result->local_id = MINIC_LOCAL_INVALID;
+    result->global_object_id = MINIC_GLOBAL_OBJECT_INVALID;
+    result->type_alias_id = MINIC_TYPE_ALIAS_INVALID;
+    result->enumerator_id = MINIC_ENUMERATOR_INVALID;
+    if (parser == NULL) {
+        return false;
+    }
+
+    /* Walk scopes innermost first. Within a legal C scope the ordinary
+     * namespace has no conflicting declarations across these two arrays. */
+    for (depth = parser->scope_count; depth > 0U; --depth) {
+        size_t begin_binding = parser->scopes[depth - 1U].binding_begin;
+        size_t end_binding = depth == parser->scope_count
+            ? parser->local_binding_count : parser->scopes[depth].binding_begin;
+        size_t begin_enum = parser->scopes[depth - 1U].enum_constant_begin;
+        size_t end_enum = depth == parser->scope_count
+            ? parser->enum_constant_count : parser->scopes[depth].enum_constant_begin;
+        size_t index;
+        for (index = end_binding; index > begin_binding; --index) {
+            const MinicParserLocalBinding *binding =
+                &parser->local_bindings[index - 1U];
+            if (minic_parser_span_equals(parser, name_span, binding->name_span)) {
+                result->local_id = binding->local_id;
+                result->global_object_id = binding->global_object_id;
+                result->type_alias_id = binding->type_alias_id;
+                return true;
+            }
+        }
+        for (index = end_enum; index > begin_enum; --index) {
+            const MinicParserEnumConstant *enumerator =
+                &parser->enum_constants[index - 1U];
+            if (minic_parser_span_equals(parser, name_span, enumerator->name_span)) {
+                result->enumerator_id = enumerator->enumerator_id;
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 MinicLocalId minic_parser_find_local(const MinicParser *parser, MinicSourceSpan name_span) {
     size_t index;
     MinicParser *perf_parser = (MinicParser *)parser;

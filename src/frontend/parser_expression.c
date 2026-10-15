@@ -2809,6 +2809,8 @@ static bool parse_primary(MinicParser *parser, MinicExpressionId *expression_id,
     MinicGlobalObjectId global_object_id;
     MinicFixedRegisterBindingId fixed_register_binding_id;
     MinicEnumeratorId enumerator_id;
+    MinicParserOrdinaryBinding nearest_binding;
+    bool has_nearest_binding;
 
     if (generic_token_text_equals(parser, "__builtin_va_start")) {
         if (!parse_builtin_va_start(parser, &primary_id)) {
@@ -3084,7 +3086,16 @@ static bool parse_primary(MinicParser *parser, MinicExpressionId *expression_id,
             return finish_value_expression(parser, primary_id, decay_array, expression_id);
         }
         name_span = parser->current.span;
-        local_id = minic_parser_find_local(parser, name_span);
+        has_nearest_binding = minic_parser_find_nearest_ordinary_binding(
+            parser, name_span, &nearest_binding);
+        if (has_nearest_binding &&
+            nearest_binding.type_alias_id != MINIC_TYPE_ALIAS_INVALID) {
+            minic_parser_error(parser, "typedef name cannot be used as an expression");
+            return false;
+        }
+        local_id = has_nearest_binding
+            ? nearest_binding.local_id
+            : minic_parser_find_local(parser, name_span);
         if (local_id != MINIC_LOCAL_INVALID) {
             if (!minic_parser_advance(parser) ||
                 !parse_local_reference(parser, name_span, local_id, &primary_id)) {
@@ -3093,7 +3104,8 @@ static bool parse_primary(MinicParser *parser, MinicExpressionId *expression_id,
             return finish_value_expression(parser, primary_id, decay_array, expression_id);
         }
 
-        function_id = minic_parser_find_function(parser, name_span);
+        function_id = has_nearest_binding
+            ? MINIC_FUNCTION_INVALID : minic_parser_find_function(parser, name_span);
         if (!minic_parser_advance(parser)) {
             return false;
         }
@@ -3132,9 +3144,15 @@ static bool parse_primary(MinicParser *parser, MinicExpressionId *expression_id,
             return finish_value_expression(parser, primary_id, decay_array, expression_id);
         }
 
-        global_object_id = minic_parser_find_global_object(parser, name_span);
-        fixed_register_binding_id = minic_parser_find_fixed_register_binding(parser, name_span);
-        enumerator_id = minic_parser_find_enum_constant(parser, name_span);
+        global_object_id = has_nearest_binding
+            ? nearest_binding.global_object_id
+            : minic_parser_find_global_object(parser, name_span);
+        fixed_register_binding_id = has_nearest_binding
+            ? MINIC_FIXED_REGISTER_BINDING_INVALID
+            : minic_parser_find_fixed_register_binding(parser, name_span);
+        enumerator_id = has_nearest_binding
+            ? nearest_binding.enumerator_id
+            : minic_parser_find_enum_constant(parser, name_span);
 
         if (global_object_id != MINIC_GLOBAL_OBJECT_INVALID) {
             if (!parse_global_reference(parser, name_span, global_object_id, true, &primary_id)) {

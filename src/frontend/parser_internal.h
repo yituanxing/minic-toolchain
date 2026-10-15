@@ -35,6 +35,15 @@ typedef struct MinicParserLocalBinding {
     MinicTypeAliasId type_alias_id;
 } MinicParserLocalBinding;
 
+/* Nearest ordinary-identifier binding, across locals, typedefs, scoped
+ * extern objects, and enum constants.  IDs have independent INVALID values. */
+typedef struct MinicParserOrdinaryBinding {
+    MinicLocalId local_id;
+    MinicGlobalObjectId global_object_id;
+    MinicTypeAliasId type_alias_id;
+    MinicEnumeratorId enumerator_id;
+} MinicParserOrdinaryBinding;
+
 typedef struct MinicParserRecordTag {
     MinicSourceSpan name_span;
     MinicRecordId record_id;
@@ -417,6 +426,9 @@ bool minic_parser_find_record_field_path(const MinicParser *parser,
                                          MinicRecordFieldPath *result);
 void minic_parser_destroy_enum_constants(MinicParser *parser);
 
+bool minic_parser_find_nearest_ordinary_binding(
+    const MinicParser *parser, MinicSourceSpan name_span,
+    MinicParserOrdinaryBinding *result);
 MinicLocalId minic_parser_find_local(const MinicParser *parser, MinicSourceSpan name_span);
 MinicGlobalObjectId minic_parser_find_scoped_global_object(const MinicParser *parser,
                                                            MinicSourceSpan name_span);

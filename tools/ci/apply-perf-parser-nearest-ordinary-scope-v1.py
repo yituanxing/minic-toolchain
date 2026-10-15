@@ -10,6 +10,12 @@ from pathlib import Path
 def patch(path, old, new):
     p=Path(path)
     s=p.read_text()
+    # The exact already validated P11 nearest-ordinary namespace semantics
+    # now live in tracked C. Keep this historical overlay callable, but never
+    # apply the nine structural source edits a second time.
+    if s.count(new)==1:
+        print("MINIC_PARSER_NEAREST_ORDINARY_BINDING_AUDIT_V1=ALREADY_CANONICAL path="+path)
+        return
     n=s.count(old)
     if n!=1:
         raise SystemExit(f"ordinary-scope anchor count={n}: {path}: {old[:100]!r}")

@@ -49,6 +49,7 @@ static bool minic_parser_gnu_int128_name(const MinicParser *parser, bool *is_uns
 bool minic_parser_token_starts_type_name(const MinicParser *parser, MinicToken token) {
     bool int128_unsigned;
     MinicParser probe;
+    MinicParserOrdinaryBinding nearest_binding;
 
     switch (token.kind) {
     case MINIC_TOKEN_KW_CONST:
@@ -80,8 +81,11 @@ bool minic_parser_token_starts_type_name(const MinicParser *parser, MinicToken t
         if (minic_parser_gnu_int128_name(&probe, &int128_unsigned)) {
             return true;
         }
-        return minic_parser_find_local(parser, token.span) == MINIC_LOCAL_INVALID &&
-               minic_parser_find_type_alias(parser, token.span) != MINIC_TYPE_ALIAS_INVALID;
+        if (minic_parser_find_nearest_ordinary_binding(
+                parser, token.span, &nearest_binding)) {
+            return nearest_binding.type_alias_id != MINIC_TYPE_ALIAS_INVALID;
+        }
+        return minic_parser_find_type_alias(parser, token.span) != MINIC_TYPE_ALIAS_INVALID;
     default:
         return false;
     }
