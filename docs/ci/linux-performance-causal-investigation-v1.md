@@ -606,3 +606,28 @@ PERF-024 定位 **最新 Boolean+symbolic+integer** 版本 `lib/crc32.o` 整数�
 [四索引 first500](https://github.com/yituanxing/minic-toolchain/actions/runs/38672453023) 验收已在执行：Boolean baseline vs 同时开启 symbolic owner / integer CALL / Parser hash / integer owner 的实际候选，必须 500/500 两臂均编译成功、汇编完全逐字节一致才可推广；此前一次变更到 cache restore 条件造成 workflow validation 失败（#38672263032，0 jobs），现已复用经过验证的 `[linux-perf-integrated-first500]` cache selector + `[linux-perf-owner-extra]` source-only tag，M0 已 PASS，前项失效不能算作四索引编译失败。
 
 为了避免继续针对过去已消失的热点做优化，已更新现有阶段追踪助手，可以在 **Boolean+symbolic owner+integer CALL+Parser hash+integer owner** 的实际新候选上同时输出 parser、core-set、codegen 和整数 direct/transitive / symbolic phase 的绝对耗时，**两臂均装同一计时插桩、实际汇编 SHA 一致**。用 3 份独立真实 Kbuild frozen crc32/dev/tcp_input 输入，与历史大优化前数据区分。该检查是一次阶段归因，不是性能倍数测试；只为确认下一步该优化哪个模块。
+
+
+## 37. PERF-032：三项联合优化通过**完整 Linux 2064 C + 七路合并 + GNU 链接 + QEMU P1**（2026-10-15）
+
+**决定性正确性验收已经成功！** [CI #38675862094](https://github.com/yituanxing/minic-toolchain/actions/runs/38675862094) `Linux Runtime GCC Baseline SUCCESS`。本轮候选是在现有经 P1 历史验证的 RISC-V Runtime/Crossblock 编译器上附加 **符号 FunctionBody-owner、整数 CALL-only expression index、Parser earliest-first function hash**；这些索引已先经同一 `.i`、500/500 完全一致验证。使用已有固定 GNU Kbuild `.config` 与 2064 C owner manifest，七个现有 shard matrix **7/7 SUCCESS**，receiver 恢复七片对象哈希、`GNU_MINIC_SHARD_MERGE=PASS objects=2064 shards=7`，再复用完全相同的 MiniC 2064 C objects（`COHORT_CANDIDATE_CACHE=HIT`、`COHORT_COMPILE=SKIPPED`）GNU 完整链接与 QEMU：
+
+```text
+COHORT_SCOPE=FULL_C_UNIVERSE objects=2064
+COHORT_GOLDEN=PASS objects=2064
+COHORT_GNU_PREFLIGHT_VOLATILE=EXACT_SEVEN_RECEIVER ...
+COHORT_GNU_PREFLIGHT=PASS objects=2064
+COHORT_CANDIDATE_CACHE=HIT objects=2064
+COHORT_ABI=PASS objects=2064
+COHORT_COMPILE=SKIPPED reason=exact-object-cache-hit objects=2064
+COHORT_TRIAL name=full_all count=2064 verdict=PASS image=71647b27...
+COHORT_LINK=REUSED name=full_all_verified selection=prefix:2064
+COHORT_P1=PASS name=full_all_verified syscalls=12 python_era_oracle=PASS
+COHORT_RESULT=PASS candidate_objects=2064 scope=FULL_C_UNIVERSE same_config=true
+```
+
+**边界：** 此次其他工具仍为固定 GNU assembler/linker/objcopy 基线，证明的是新 MiniC `.i → .s` 编译及 GNU Kbuild 联合语义 P1，而非 MiniPP/MiniAS/MiniLD/全原生工具链也在这次同时替换。`COHORT_P1=PASS syscalls=12` 含完整已注册 Python-era P1 runtime oracle；尚没有对**整个 Linux**做与原版 Runtime 的相同环境墙钟 paired 对照，不能把局部 1.2～1.4× 等同为 Linux 全量同倍数。完整 SHA-固定 Image artifact [#38675862094 的验证工件](https://github.com/yituanxing/minic-toolchain/actions/runs/38675862094/artifacts/11946487570)，Image SHA 以 run 的 `71647b27...` 固定。
+
+**过程真实问题及修复（避免误报/重复工作）：** 首个七路 run #38674405151 在 MiniC 编译前因 `init/version.o`、`vmlinux.o` 的 GNU Kbuild 时间戳变化触发 preflight 拦截，绝不是 MiniC 功能错误。为七个 immutable GNU snapshot shard 分别建立仅三个 volatile target 的严密 scope；#38674726958 的七片编译/ABI **全部成功**，但 receiver 同样被 Kbuild 时间戳拦截。最后增加 `COHORT_GNU_PREFLIGHT_ALLOW_SEVEN_RECEIVER_VOLATILE`，严格只允许 `COHORT_ACTION=verify`、`FULL_C_UNIVERSE`、2064、固定 `.config` 和 full-crossblock。其他 GNU `.o` 全部保持 SHA 校验；preflight 后完整恢复可信原树。全部工具链优化与 GNU 对象缓存身份都 SHA 绑定，故最终只复用成功七片，不重新执行 2064 个 MiniC 编译来处理 CI 问题。
+
+**此外发现新的全局物理输出热点（尚未归因）：** 本次完整 TU 对比日志 `COHORT_TU_BYTES_SUM gcc=66379160 minic=456484104 count=2064`，MiniC 编译对象总大小约是 GNU 的 **6.88×**。差异可能来自当前优化程度不同、指令数、对齐、符号/重定位、未删除 section 等；不是“证明浪费字节”，而是**值得新增 ELF section/relocation/symbol 体积分解审计**的最大系统级磁盘 IO/最终库归档吞吐疑点。优先使用已经保存的 exact `.o`（无需再编译），按 `readelf -SW` 和 `size` 分解 BTF / 大网络 / 小文件，再决定是否有代码生成器层级结构性问题。
