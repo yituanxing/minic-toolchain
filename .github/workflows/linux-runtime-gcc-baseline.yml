@@ -490,6 +490,14 @@ jobs:
           path: build/linux-runtime-gcc-cohort-v1/boolean-hot
           key: ${{ steps.candidate_id.outputs.key }}-hot-owner-frozen-inputs-v1
 
+      - name: Restore original SHA-frozen first500 Linux corpus
+        if: contains(github.event.head_commit.message, '[linux-perf-symbolic-first500]') && steps.candidate_ready.outputs.ready == 'true'
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-perf-corpus
+          key: linux-6.6.143-first500-rv64-v1-${{ hashFiles('tests/external/linux/batch_probe.sh', 'tests/external/linux/probe.sh', 'tests/external/linux/replay-indices.txt') }}
+          fail-on-cache-miss: true
+
       - name: Analyze three frozen hot owners by paired timing or opt-in phase traces
         if: contains(github.event.head_commit.message, '[linux-perf-hotowners]') && steps.candidate_ready.outputs.ready == 'true'
         shell: bash
@@ -642,6 +650,27 @@ jobs:
                 echo "PARSER_INDEX_SCREEN=PASS owner=$owner byte_identical=true"
               done
               echo "PARSER_INDEX_SCREEN_GROUP=PASS owners=3 rotation=${{ contains(github.event.head_commit.message, '[linux-perf-hotowners-rotation]') }} only_function_hash_changed=true QEMU_pending=true"
+            elif [[ "${{ contains(github.event.head_commit.message, '[linux-perf-symbolic-first500]') }}" == true ]]; then
+              work="$ev/boolean-hot/first500"
+              mkdir -p "$work/old/bin" "$work/new/bin"
+              cp "$root/minic" "$work/old/bin/minic"
+              cp "$root/minic" "$work/new/bin/minic"
+              cp "$root/minic-cc" "$work/old/bin/minic-cc"
+              python3 tools/ci/apply-perf-symbolic-function-body-owner-filter-v0.py
+              make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain" "$root/minic-cc" >/dev/null
+              cp "$root/minic-cc" "$work/new/bin/minic-cc"
+              git diff --check
+              test -s build/linux-perf-corpus/selected-tus.txt
+              test "$(wc -l < build/linux-perf-corpus/inputs.sha256)" -eq 500
+              sha256sum --status --check build/linux-perf-corpus/inputs.sha256
+              python3 -m py_compile tools/ci/linux-perf-frozen-corpus-differential-v1.py
+              python3 tools/ci/linux-perf-frozen-corpus-differential-v1.py \
+                --corpus build/linux-perf-corpus \
+                --baseline-driver "$work/old/bin/minic" \
+                --candidate-driver "$work/new/bin/minic" --jobs 4 \
+                --out "$work/results" | tee "$work/first500-verdict.txt"
+              grep -Fq 'MINIC_FROZEN_DIFF=PASS selected=500 identical=500' "$work/first500-verdict.txt"
+              echo 'SYMBOLIC_FIRST500=PASS selected=500 QEMU_p1_not_executed=true'
             elif [[ "${{ contains(github.event.head_commit.message, '[linux-perf-symbolic-integer-marginal]') }}" == true ]]; then
               # Two already independently tested algorithms: quantify incremental
               # integer-CALL-index gain while symbolic FunctionBody owner index
@@ -849,6 +878,8 @@ jobs:
             build/linux-runtime-gcc-cohort-v1/non-c-objects.tsv
             build/linux-runtime-gcc-cohort-v1/identity.txt
             build/linux-runtime-gcc-cohort-v1/cohort.log
+            build/linux-runtime-gcc-cohort-v1/boolean-hot/first500/results/differential.json
+            build/linux-runtime-gcc-cohort-v1/boolean-hot/first500/first500-verdict.txt
             build/linux-runtime-gcc-cohort-v1/boolean-hot/symbolic-integer/results/**/paired-result.json
             build/linux-runtime-gcc-cohort-v1/boolean-hot/symbolic-integer/*-screen.txt
             build/linux-runtime-gcc-cohort-v1/boolean-hot/integer-call/results/**/paired-result.json
