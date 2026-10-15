@@ -17,10 +17,13 @@ bool minic_perf_program_build_expression_source_owners(
     size_t owner_count);
 
 '''
-if text.count(decl_anchor) != 1:
-    raise SystemExit(f"function-body header anchor count={text.count(decl_anchor)}")
-text = text.replace(decl_anchor, decl + decl_anchor, 1)
-h.write_text(text)
+if text.count(decl) == 1:
+    print("MINIC_SYMBOLIC_OWNER_HELPER_HEADER=ALREADY_CANONICAL")
+elif text.count(decl_anchor) == 1 and text.count(decl) == 0:
+    text = text.replace(decl_anchor, decl + decl_anchor, 1)
+    h.write_text(text)
+else:
+    raise SystemExit("symbolic owner header missing, partial or duplicated")
 
 p = Path("src/frontend/function_body.c")
 text = p.read_text()
@@ -113,10 +116,13 @@ done:
 }
 
 '''
-if text.count(impl_anchor) != 1:
-    raise SystemExit(f"function-body impl anchor count={text.count(impl_anchor)}")
-text = text.replace(impl_anchor, impl + impl_anchor, 1)
-p.write_text(text)
+if text.count(impl) == 1:
+    print("MINIC_SYMBOLIC_OWNER_HELPER_IMPL=ALREADY_CANONICAL")
+elif text.count(impl_anchor) == 1 and text.count(impl) == 0:
+    text = text.replace(impl_anchor, impl + impl_anchor, 1)
+    p.write_text(text)
+else:
+    raise SystemExit("symbolic owner implementation missing, partial or duplicated")
 
 # Use the ownership map only as an early reject in the existing transitive
 # symbolic loop.  Keep the loop order and all rewrite semantics unchanged.
