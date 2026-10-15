@@ -1197,6 +1197,14 @@ jobs:
           if [[ "${{ contains(github.event.head_commit.message, '[linux-runtime-full-crossblock]') && '1' || '0' }}" == 1 ]]; then
             profile="${profile}-full-crossblock-pure-eq-v1-$(sha256sum tools/ci/apply-riscv64-p1-defined-before-use-crossblock-v1.py | cut -c1-16)"
           fi
+          if [[ "${{ contains(github.event.head_commit.message, '[linux-perf-integrated-full]') }}" == true ]]; then
+            perf_tag=$(sha256sum tools/ci/linux-perf-integrated-full-profile-v1.sh \
+              tools/ci/apply-perf-symbolic-function-body-owner-filter-v0.py \
+              tools/ci/apply-perf-integer-call-expression-index-v1.py \
+              tools/ci/apply-perf-parser-lookup-counters-v0.py \
+              tools/ci/apply-perf-parser-function-hash-v0.py | sha256sum | cut -c1-16)
+            profile="${profile}-perf-integrated-3-v1-${perf_tag}"
+          fi
           subset=$(sha256sum "build/linux-runtime-gcc-shards-v1/shard-${{ matrix.shard }}/full-objects.txt" | cut -d' ' -f1)
           gcc=$(sha256sum "$(command -v riscv64-linux-gnu-gcc)" | cut -d' ' -f1)
           assembler=$(sha256sum "$(command -v riscv64-linux-gnu-as)" | cut -d' ' -f1)
@@ -1230,6 +1238,11 @@ jobs:
           fi
           bash tools/ci/linux-runtime-build-minic-profile-v1.sh \
             "$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain" "$ev/compiler"
+          if [[ "${{ contains(github.event.head_commit.message, '[linux-perf-integrated-full]') }}" == true ]]; then
+            bash tools/ci/linux-perf-integrated-full-profile-v1.sh \
+              "$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain" "$ev/compiler"
+            echo "LINUX_PERF_3_SHARD=READY shard=${{ matrix.shard }}/7"
+          fi
           export COHORT_ACTION=compile COHORT_ALLOW_SHARD=1
           bash tools/ci/linux-runtime-gcc-cohort-bisect-v1.sh \
             "$work/linux-6.6.143" "$work/out" \
@@ -1576,6 +1589,14 @@ jobs:
           if [[ "${{ (contains(github.event.head_commit.message, '[linux-runtime-full-crossblock]') || contains(github.event.head_commit.message, '[linux-native-union-cached]')) && '1' || '0' }}" == 1 ]]; then
             profile="${profile}-full-crossblock-pure-eq-v1-$(sha256sum tools/ci/apply-riscv64-p1-defined-before-use-crossblock-v1.py | cut -c1-16)"
           fi
+          if [[ "${{ contains(github.event.head_commit.message, '[linux-perf-integrated-full]') }}" == true ]]; then
+            perf_tag=$(sha256sum tools/ci/linux-perf-integrated-full-profile-v1.sh \
+              tools/ci/apply-perf-symbolic-function-body-owner-filter-v0.py \
+              tools/ci/apply-perf-integer-call-expression-index-v1.py \
+              tools/ci/apply-perf-parser-lookup-counters-v0.py \
+              tools/ci/apply-perf-parser-function-hash-v0.py | sha256sum | cut -c1-16)
+            profile="${profile}-perf-integrated-3-v1-${perf_tag}"
+          fi
           objects=$(sha256sum "$ev/full-objects.txt" | cut -d' ' -f1)
           gcc=$(sha256sum "$(command -v riscv64-linux-gnu-gcc)" | cut -d' ' -f1)
           assembler=$(sha256sum "$(command -v riscv64-linux-gnu-as)" | cut -d' ' -f1)
@@ -1711,6 +1732,11 @@ jobs:
           fi
           bash tools/ci/linux-runtime-build-minic-profile-v1.sh \
             "$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain" "$ev/compiler"
+          if [[ "${{ contains(github.event.head_commit.message, '[linux-perf-integrated-full]') }}" == true ]]; then
+            bash tools/ci/linux-perf-integrated-full-profile-v1.sh \
+              "$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain" "$ev/compiler"
+            echo "LINUX_PERF_3_RECEIVER=READY shards=7"
+          fi
           python3 tools/ci/linux-runtime-gcc-shards-v1.py merge \
             --full "$ev/full-objects.txt" \
             --shards "$GITHUB_WORKSPACE/build/linux-runtime-gcc-shards-v1" \
