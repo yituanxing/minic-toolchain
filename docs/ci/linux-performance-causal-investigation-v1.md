@@ -499,3 +499,20 @@ PERF-006 `blake2s` 的真实 Runtime 布尔域索引收益为 1465.171ms→1368.
 | net/ipv4/tcp_input.o | 9034.552ms | 8818.987ms | 1.0244× |
 
 累计中位数之和 34.043→32.290s，节约 1.753s，约 **5.15% 边际减时**，主要集中 `crc32`。虽然 3/3 字节等价，这个收益比 symbolic owner 核心优化明显小得多；判定 `local-only / not-promoted`，不再追加 CALL 索引微调或为这一小项重跑 first500，先重新归因 **Boolean+symbolic-owner+integer-CALL-index** 已优化配置上剩余实际最慢阶段（不能用未优化阶段旧数据取代当前瓶颈）。
+
+
+## 29. PERF-024：在**已优化版本**而非历史版本上重新归因瓶颈（2026-10-15）
+
+审计改正一次真实实验基础设施问题：首轮 [#38666730431](https://github.com/yituanxing/minic-toolchain/actions/runs/38666730431) 工作流初始验证**失败、零 Job**，后续 [#38667001234](https://github.com/yituanxing/minic-toolchain/actions/runs/38667001234) 同样失败；新加的 2538 字符巨型内联 bash 将 gcc-single 的单个 `run` 文本从前一已通过配置的 **24513** 推到 **27051** 字符，触及当前 GitHub Actions 接受的脚本规模边界。将旧专门化实验与新优化后诊断都移入可复用 shell helper，原 24k 内联片段缩至 **约 22.7k**，现有 workflow/job 不增加，M0 清单仍以同一原子提交更新。[#38667153870](https://github.com/yituanxing/minic-toolchain/actions/runs/38667153870) `gcc-single SUCCESS`，证明路由已修复、两个 helper 能跑通。
+
+**新的结构化耗时数据：** 固定既有三份真正 Linux GNU Kbuild `.i`，基准是 Runtime Boolean，候选是 **Boolean + FunctionBody symbolic-owner + integer CALL-ID**，并在两臂**同样添加**四类 specialization 计时（仅诊断，不是生产成本），全部 `.s` 逐字节一致；一次运行的阶段计时如下：
+
+| owner | 候选单次 wall | 候选 Parser | 候选 Core-set | **候选整数专门化** | 候选符号专门化 | 已归类最慢阶段 |
+| --- | ---: | ---: | ---: | ---: | ---: | --- |
+| lib/crc32.o | 7735ms | 397ms | 82ms | **5013ms** | 2057ms | **integer** |
+| net/core/dev.o | 9000ms | **3079ms** | 2037ms | **2599ms** | 272ms | **Parser**（与 integer、Core-set 均重要） |
+| net/ipv4/tcp_input.o | 5987ms | **2418ms** | 1120ms | 1418ms | 232ms | **Parser** |
+
+比较用的原 Boolean 版本同次单次 wall 分别约 16007、12959、8870ms；属于计时插桩的阶段归因，不应和独立多次 A/B 的 P50 相加成产品级 speedup。已优化的网络程序符号 transitive 仅数百 ms，旧热点已经转移；**不能继续执着符号传递循环原样微调**。
+
+**下一两项有代码证据的算法疑点（待计数/验证、不是根因定论）：** 整数内联专门化内会 `for (nested_candidate_index=original_function_count; nested_candidate_index<program->function_count;...)` 每次线性找匹配 variant；另外 Core 在选择最具体 specialization 时也可能按 `function_count` 扫描；这些会形成“候选 cloned functions × 每次 variant 检索”二重工作。需要诊断统计调用次数/检查次数，量化本阶段所占耗时，然后才决定是否做 source-ID scoped lookup/index，保留原始首匹配及回退语义。另一方面 Parser 函数名哈希已在单独两组三 TU 局部提速，下一轮使用 [CI #38667404638](https://github.com/yituanxing/minic-toolchain/actions/runs/38667404638) 对**最新 Boolean+owner+integer** 两臂在有相同 lookup 计数器的条件下做独立 function-hash 边际 A/B，并保持 compiler 输出逐字节相同；以 CI verdict 为准，不假设收益可直接相乘。
