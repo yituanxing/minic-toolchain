@@ -91,7 +91,7 @@ for path in all_paths:
     res = subprocess.run(
         ["git", "merge-file", "-p", "--diff3", str(root / path), str(ancestor), str(proved / path)],
         stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    if res.returncode not in (0, 1):
+    if res.returncode < 0 or res.returncode > 127:
         raise SystemExit(f"MINIC_SOURCE_MERGE=ERROR file={path} rc={res.returncode} {res.stderr[:180]!r}")
     output.write_bytes(res.stdout)
     (conflicts if res.returncode else clean).append(path)
