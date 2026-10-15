@@ -646,3 +646,10 @@ COHORT_RESULT=PASS candidate_objects=2064 scope=FULL_C_UNIVERSE same_config=true
 **结论：保留原 2× 默认实现，拒绝推广 1.5× 容量倍率**。虽然某些容量阈值的理论空闲可能缩小，但 `realloc` 时复制 680B/Expression 的额外数据、内存分配器分桶以及峰值其它阶段决定了整体 RSS，本轮实际 dev/tcp 反而更大；三文件局部 P50 有正有负、收益不稳定。仅改变增长系数不能有效解决 AST 形态的 680B/Expression（仅 4–6% 是 CALL）和 6536B/Function 固有体积问题。下一步若投入大内存重构，优先研究 CALL arguments 定长 64×8B 的旁路 arena/稳定 ID、Function parameter_types 的小对象分离，并先做表达式/函数浅复制、释放、写入点全面审计，避免直接把 union 换成裸指针造成所有权错误。
 
 这是在用户提出 **`.i`→Token→AST→Inline→Core→RV64 `.s` 全链路审计**后最先验证的数据结构类假设；我们已经证明“缩扩容倍率”没有稳定收益。不能为了已有工作而继续微调它。另独立已验证的三算法七路 2064 编译+GNU Link+QEMU P1（#38675862094）均 PASS，不能混淆为本轮 1.5× 的认证。
+
+
+## 39. PERF-034：第四项 integer source-owner 与原三项联合 first500 通过（2026-10-15）
+
+[CI #38672453023](https://github.com/yituanxing/minic-toolchain/actions/runs/38672453023) `gcc-single SUCCESS`，已完成固定 GNU Kbuild Linux 6.6.143 RISC-V `selected-tus.txt` 的 500 份输入 SHA 验证，并在 **同一候选** 同时启用 **symbolic FunctionBody owner、integer CALL index、Parser earliest-first function hash、integer FunctionBody owner** 四项索引。固定 Boolean Runtime 编译器作基准，严格要求两臂编译成功和 `.s` 逐字节 SHA 相同，实际日志进度 50→500 后显示 `MINIC_FROZEN_DIFF=PASS selected=500 identical=500 runtime_p1_not_proven=true` 及 `PERF_FIRST500=PASS selected=500 combined=true integer_owner=true`。因此第四项已经从 3 owner A/B 晋级为**四索引共同 first500/500 字节一致**，不能再把这次记录成“待验证”。
+
+**认证边界：** [完整 Linux 7-shard / 2064/2064 C / GNU linker / QEMU 12 syscall P1 #38675862094](https://github.com/yituanxing/minic-toolchain/actions/runs/38675862094) 已通过的仍是**前三项**（symbolic owner、integer CALL、Parser hash），**不是本条的四项**。若要为 integer-owner 新增正式 Runtime 身份，须在已有的 7-shard cached 2064 owner 统一配置里追加第四项并重新签发 GNU link/QEMU P1；不能将三项的完整认证自动授予四项。
