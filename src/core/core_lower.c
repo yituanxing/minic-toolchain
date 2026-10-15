@@ -3485,6 +3485,105 @@ static MinicCoreLowerStatus lower_record_call_argument_object(
                : MINIC_CORE_LOWER_ERROR;
 }
 
+
+
+static const MinicFunction *core_select_transitive_integer_specialization(
+    MinicCoreLowerContext *context,
+    const MinicExpression *expression,
+    const MinicFunction *current_callee) {
+    const MinicC0Program *program;
+    MinicFunctionId source_id;
+    const MinicFunction *source;
+    const MinicFunction *best;
+    size_t best_known_count;
+    bool known[MINIC_MAX_FUNCTION_PARAMETERS];
+    uint64_t bits[MINIC_MAX_FUNCTION_PARAMETERS];
+    size_t parameter_index;
+    size_t candidate_index;
+
+    if (context == NULL || context->body == NULL || context->body->program == NULL ||
+        expression == NULL || current_callee == NULL ||
+        !current_callee->is_integer_specialization ||
+        expression->kind != MINIC_EXPRESSION_CALL) {
+        return current_callee;
+    }
+    program = context->body->program;
+    source_id = current_callee->specialization_source;
+    if (source_id >= program->function_count) {
+        return current_callee;
+    }
+    source = &program->functions[source_id];
+    if (source->parameter_count != expression->value.call.argument_count ||
+        source->parameter_count > MINIC_MAX_FUNCTION_PARAMETERS) {
+        return current_callee;
+    }
+    (void)memset(known, 0, sizeof(known));
+    (void)memset(bits, 0, sizeof(bits));
+    for (parameter_index = 0U; parameter_index < source->parameter_count; ++parameter_index) {
+        MinicConstValue argument_value;
+        MinicConstValue converted_value;
+        if (!minic_type_is_integer(source->parameter_types[parameter_index]) ||
+            !core_const_eval_integer_with_locals(
+                context,
+                expression->value.call.arguments[parameter_index],
+                &argument_value) ||
+            !minic_const_value_convert_integer(
+                program,
+                context->target,
+                &argument_value,
+                source->parameter_types[parameter_index],
+                &converted_value)) {
+            continue;
+        }
+        known[parameter_index] = true;
+        bits[parameter_index] = converted_value.bits;
+    }
+    best = current_callee;
+    best_known_count = 0U;
+    for (parameter_index = 0U; parameter_index < source->parameter_count; ++parameter_index) {
+        if (current_callee->specialization_integer_known[parameter_index]) {
+            best_known_count += 1U;
+        }
+    }
+    for (candidate_index = 0U; candidate_index < program->function_count; ++candidate_index) {
+        const MinicFunction *candidate = &program->functions[candidate_index];
+        size_t candidate_known_count = 0U;
+        bool compatible = true;
+
+        if (!candidate->is_integer_specialization ||
+            candidate->specialization_source != source_id ||
+            candidate->parameter_count != source->parameter_count) {
+            continue;
+        }
+        for (parameter_index = 0U; parameter_index < source->parameter_count; ++parameter_index) {
+            if (!candidate->specialization_integer_known[parameter_index]) {
+                continue;
+            }
+            candidate_known_count += 1U;
+            if (!known[parameter_index] ||
+                candidate->specialization_integer_bits[parameter_index] != bits[parameter_index]) {
+                compatible = false;
+                break;
+            }
+        }
+        if (compatible && candidate_known_count > best_known_count) {
+            best = candidate;
+            best_known_count = candidate_known_count;
+        }
+    }
+    if (best != current_callee && getenv("MINIC_INLINE_SPEC_TRANSITIVE_TRACE") != NULL) {
+        (void)fprintf(stderr,
+                      "INLINE_SPEC_TRANSITIVE_SELECT caller=%s from=%s to=%s known=%zu\n",
+                      context->source_function != NULL && context->source_function->name != NULL
+                          ? context->source_function->name
+                          : "?",
+                      current_callee->name != NULL ? current_callee->name : "?",
+                      best->name != NULL ? best->name : "?",
+                      best_known_count);
+    }
+    return best;
+}
+
 static MinicCoreLowerStatus lower_direct_call(MinicCoreLowerContext *context,
                                               const MinicExpression *expression,
                                               MinicCoreValueId *value_id) {
@@ -3511,6 +3610,7 @@ static MinicCoreLowerStatus lower_direct_call(MinicCoreLowerContext *context,
         return MINIC_CORE_LOWER_UNSUPPORTED;
     }
     callee = minic_c0_program_function(context->body->program, expression->value.call.function_id);
+    callee = core_select_transitive_integer_specialization(context, expression, callee);
     if (callee == NULL || callee->name == NULL || callee->name_length == 0U) {
         return MINIC_CORE_LOWER_ERROR;
     }

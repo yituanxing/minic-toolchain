@@ -11,6 +11,22 @@ def replace_once(path: str, old: str, new: str) -> None:
     p.write_text(text.replace(old, new, 1))
 
 
+# The verified Runtime transitive-specialization helper and per-caller
+# Core selector are now checked into C. Reject any partially merged state.
+checked_cc = Path("src/compiler/compiler.c").read_text()
+checked_core = Path("src/core/core_lower.c").read_text()
+if "MINIC_INLINE_INTEGER_SPECIALIZATION_TRANSITIVE_V0 refined=" in checked_cc:
+    counts = (
+        checked_cc.count("static bool minic_inline_specialization_argument_value("),
+        checked_cc.count("MINIC_INLINE_INTEGER_SPECIALIZATION_TRANSITIVE_V0 refined="),
+        checked_core.count("static const MinicFunction *core_select_transitive_integer_specialization("),
+        checked_core.count("callee = core_select_transitive_integer_specialization(context, expression, callee);"),
+    )
+    if counts != (1, 1, 1, 1):
+        raise SystemExit("MINIC_INLINE_SPECIALIZATION_TRANSITIVE_INTEGER_V0=ERROR partial canonical")
+    print("MINIC_INLINE_SPECIALIZATION_TRANSITIVE_INTEGER_V0=ALREADY_CANONICAL")
+    raise SystemExit(0)
+
 compiler_helpers = r'''
 
 static bool minic_inline_specialization_argument_value(
