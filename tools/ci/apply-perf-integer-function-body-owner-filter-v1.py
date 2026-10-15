@@ -93,7 +93,7 @@ call_pos=begin+area.index(creation)+len(creation)
 return_pos=text.find("return false;", call_pos, finish)
 if return_pos<0 or text[call_pos:return_pos].strip():
     raise SystemExit("integer owner: unmatched immediate error exit")
-text=text[:return_pos]+"free(integer_expression_owners);\\n"+text[return_pos:]
+text=text[:return_pos]+"free(integer_expression_owners);\n"+text[return_pos:]
 finish = text.find("    if (specialization_count != 0U) {", begin)
 cleanup='''        if (refinement_count != 0U) {'''
 if text[begin:finish].count(cleanup) != 1:
