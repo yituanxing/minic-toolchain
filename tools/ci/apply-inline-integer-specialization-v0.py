@@ -5,9 +5,31 @@ from pathlib import Path
 def replace_once(path: str, old: str, new: str) -> None:
     p = Path(path)
     text = p.read_text()
-    # Canonical C now includes this validated Runtime specialization base.
-    # Keep the exact historical overlay entrypoint, with no double rewrite:
-    # skip an already-exact hunk but fail closed if the source is partial.
+    # Downstream, separately promoted Core CFG reachability now sits between
+    # this earlier overlay's helpers and the validation function.  Checking
+    # the entire original replacement string would miss a fully canonical
+    # specialization implementation and inject five duplicate functions.
+    # Prove the exact helper set is already present before trying insertion.
+    if (path == "src/compiler/compiler.c" and
+            old.startswith("static bool minic_validate_core_functions(")):
+        source_helpers = (
+            "static bool minic_inline_integer_specialization_matches(",
+            "static bool minic_add_inline_integer_specialization(",
+            "static bool minic_specialize_inline_integer_calls(",
+            "static bool minic_inline_integer_source_has_residual_reference(",
+            "static bool minic_finalize_inline_integer_specialization_references(",
+        )
+        helper_counts = tuple(text.count(x) for x in source_helpers)
+        if all(n == 1 for n in helper_counts):
+            if (text.count(old) != 1 or
+                    "#define MINIC_INLINE_INTEGER_SPECIALIZATION_LIMIT 256U" not in text or
+                    "minic_finalize_inline_integer_specialization_references(&program)" not in text):
+                raise SystemExit("INLINE_SPECIALIZATION=ERROR incomplete canonical helpers")
+            print("MINIC_INLINE_INTEGER_SPECIALIZATION_V0=HELPERS_ALREADY_CANONICAL")
+            return
+        if any(n != 0 for n in helper_counts):
+            raise SystemExit("INLINE_SPECIALIZATION=ERROR partial canonical helpers")
+    # Other hunks still require byte-exact already-promoted source evidence.
     if text.count(new) == 1:
         print("MINIC_INLINE_INTEGER_SPECIALIZATION_V0=ALREADY_CANONICAL path=" + path)
         return
