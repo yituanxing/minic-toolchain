@@ -491,7 +491,7 @@ jobs:
           key: ${{ steps.candidate_id.outputs.key }}-hot-owner-frozen-inputs-v1
 
       - name: Restore original SHA-frozen first500 Linux corpus
-        if: (contains(github.event.head_commit.message, '[linux-perf-symbolic-first500]') || contains(github.event.head_commit.message, '[linux-perf-integrated-first500]') || contains(github.event.head_commit.message, '[linux-perf-integrated-owner-first500]')) && steps.candidate_ready.outputs.ready == 'true'
+        if: (contains(github.event.head_commit.message, '[linux-perf-symbolic-first500]') || contains(github.event.head_commit.message, '[linux-perf-integrated-first500]')) && steps.candidate_ready.outputs.ready == 'true'
         uses: actions/cache/restore@v4
         with:
           path: build/linux-perf-corpus
@@ -681,20 +681,20 @@ jobs:
                 grep -Fq 'MINIC_ONE_OWNER_AB=PASS' "$work/$key-screen.txt"
               done
               echo 'SYMBOLIC_CALL_INDEX_GROUP=PASS owners=3 byte_identical=true QEMU_pending=true'
-            elif [[ "${{ contains(github.event.head_commit.message, '[linux-perf-symbolic-first500]') }}" == true || "${{ contains(github.event.head_commit.message, '[linux-perf-integrated-first500]') }}" == true || "${{ contains(github.event.head_commit.message, '[linux-perf-integrated-owner-first500]') }}" == true ]]; then
+            elif [[ "${{ contains(github.event.head_commit.message, '[linux-perf-symbolic-first500]') }}" == true || "${{ contains(github.event.head_commit.message, '[linux-perf-integrated-first500]') }}" == true ]]; then
               work="$ev/boolean-hot/first500"
               mkdir -p "$work/old/bin" "$work/new/bin"
               cp "$root/minic" "$work/old/bin/minic"
               cp "$root/minic" "$work/new/bin/minic"
               cp "$root/minic-cc" "$work/old/bin/minic-cc"
               python3 tools/ci/apply-perf-symbolic-function-body-owner-filter-v0.py
-              if [[ "${{ contains(github.event.head_commit.message, '[linux-perf-integrated-first500]') || contains(github.event.head_commit.message, '[linux-perf-integrated-owner-first500]') }}" == true ]]; then
+              if [[ "${{ contains(github.event.head_commit.message, '[linux-perf-integrated-first500]') }}" == true ]]; then
                 # Tested constituents; prove their simultaneous source semantics
                 # against the SAME pinned 500 existing GNU Kbuild inputs.
                 python3 tools/ci/apply-perf-integer-call-expression-index-v1.py
                 python3 tools/ci/apply-perf-parser-lookup-counters-v0.py
                 python3 tools/ci/apply-perf-parser-function-hash-v0.py
-                if [[ "${{ contains(github.event.head_commit.message, '[linux-perf-integrated-owner-first500]') }}" == true ]]; then
+                if [[ "${{ contains(github.event.head_commit.message, '[linux-perf-owner-extra]') }}" == true ]]; then
                   python3 tools/ci/apply-perf-integer-function-body-owner-filter-v1.py
                 fi
               fi
@@ -711,7 +711,7 @@ jobs:
                 --candidate-driver "$work/new/bin/minic" --jobs 4 \
                 --out "$work/results" | tee "$work/first500-verdict.txt"
               grep -Fq 'MINIC_FROZEN_DIFF=PASS selected=500 identical=500' "$work/first500-verdict.txt"
-              echo "PERF_FIRST500=PASS selected=500 combined=${{ contains(github.event.head_commit.message, '[linux-perf-integrated-first500]') || contains(github.event.head_commit.message, '[linux-perf-integrated-owner-first500]') }} integer_owner=${{ contains(github.event.head_commit.message, '[linux-perf-integrated-owner-first500]') }} QEMU_p1_not_executed=true"
+              echo "PERF_FIRST500=PASS selected=500 combined=${{ contains(github.event.head_commit.message, '[linux-perf-integrated-first500]') }} integer_owner=${{ contains(github.event.head_commit.message, '[linux-perf-owner-extra]') }} QEMU_p1_not_executed=true"
             elif [[ "${{ contains(github.event.head_commit.message, '[linux-perf-symbolic-integer-marginal]') }}" == true ]]; then
               # Two already independently tested algorithms: quantify incremental
               # integer-CALL-index gain while symbolic FunctionBody owner index
