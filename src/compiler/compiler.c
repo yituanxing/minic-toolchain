@@ -320,7 +320,7 @@ static bool minic_specialize_inline_integer_calls(MinicC0Program *program,
         if (specialized_id == MINIC_FUNCTION_INVALID) {
             if (specialization_count >= MINIC_INLINE_INTEGER_SPECIALIZATION_LIMIT) {
                 (void)fprintf(stderr,
-                              "MINIC_INLINE_INTEGER_SPECIALIZATION_LIMIT_HIT count=%zu limit=%u functions=%zu source=%zu\\n",
+                              "MINIC_INLINE_INTEGER_SPECIALIZATION_LIMIT_HIT count=%zu limit=%u functions=%zu source=%zu\n",
                               specialization_count,
                               (unsigned int)MINIC_INLINE_INTEGER_SPECIALIZATION_LIMIT,
                               program->function_count,
@@ -331,7 +331,7 @@ static bool minic_specialize_inline_integer_calls(MinicC0Program *program,
                                                          specialization_count,
                                                          &specialized_id)) {
                 (void)fprintf(stderr,
-                              "MINIC_INLINE_INTEGER_SPECIALIZATION_ADD_FAILED count=%zu functions=%zu source=%zu\\n",
+                              "MINIC_INLINE_INTEGER_SPECIALIZATION_ADD_FAILED count=%zu functions=%zu source=%zu\n",
                               specialization_count,
                               program->function_count,
                               (size_t)source_id);
