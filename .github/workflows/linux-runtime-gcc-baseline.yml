@@ -791,7 +791,8 @@ jobs:
                 "${{ contains(github.event.head_commit.message, '[linux-perf-hotowners-rotation]') }}" \
                 "${{ contains(github.event.head_commit.message, '[linux-perf-optimized-phase]') }}" \
                 "${{ contains(github.event.head_commit.message, '[linux-perf-symbolic-subphase]') }}" \
-                "${{ contains(github.event.head_commit.message, '[linux-perf-integer-subphase]') }}"
+                "${{ contains(github.event.head_commit.message, '[linux-perf-integer-subphase]') }}" \
+                "${{ contains(github.event.head_commit.message, '[linux-perf-profile-four-index]') }}"
             elif [[ "${{ contains(github.event.head_commit.message, '[linux-perf-stage-profile]') }}" == true ]]; then
               python3 tools/ci/linux-perf-phase-trace-v1.py --self-test
               if [[ "${{ contains(github.event.head_commit.message, '[linux-perf-hotowners-rotation]') }}" == true ]]; then
@@ -908,6 +909,8 @@ jobs:
             build/linux-runtime-gcc-cohort-v1/boolean-hot/integer-owner/*-screen.txt
             build/linux-runtime-gcc-cohort-v1/boolean-hot/parser-combined/results/**/paired-result.json
             build/linux-runtime-gcc-cohort-v1/boolean-hot/parser-combined/*-screen.txt
+            build/linux-runtime-gcc-cohort-v1/boolean-hot/optimized-phase-four/results/**/phases.json
+            build/linux-runtime-gcc-cohort-v1/boolean-hot/optimized-phase-four/*-verdict.txt
             build/linux-runtime-gcc-cohort-v1/boolean-hot/optimized-phase/results/**/phases.json
             build/linux-runtime-gcc-cohort-v1/boolean-hot/optimized-phase/*-verdict.txt
             build/linux-runtime-gcc-cohort-v1/boolean-hot/spec-phase/results/**/phases.json
