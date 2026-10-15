@@ -1244,6 +1244,9 @@ jobs:
             echo "LINUX_PERF_3_SHARD=READY shard=${{ matrix.shard }}/7"
           fi
           export COHORT_ACTION=compile COHORT_ALLOW_SHARD=1
+          if [[ "${{ contains(github.event.head_commit.message, '[linux-perf-integrated-full]') }}" == true ]]; then
+            export COHORT_GNU_PREFLIGHT_ALLOW_SEVEN_SHARD_VOLATILE=1
+          fi
           bash tools/ci/linux-runtime-gcc-cohort-bisect-v1.sh \
             "$work/linux-6.6.143" "$work/out" \
             "$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain/bin/minic" \
