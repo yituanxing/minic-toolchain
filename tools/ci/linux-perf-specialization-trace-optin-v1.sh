@@ -7,9 +7,10 @@ rotated="${3:-false}"
 optimized="${4:-false}"
 symbolic_subphase="${5:-false}"
 integer_subphase="${6:-false}"
+four_index="${7:-false}"
 if [[ "$optimized" == true ]]; then
   exec bash tools/ci/linux-perf-diagnose-optimized-phase-v1.sh \
-    "$ev" "$root" "$rotated" "$integer_subphase"
+    "$ev" "$root" "$rotated" "$integer_subphase" "$four_index"
 fi
 work="$ev/boolean-hot/spec-phase"
 mkdir -p "$work/baseline/bin" "$work/traced/bin"
