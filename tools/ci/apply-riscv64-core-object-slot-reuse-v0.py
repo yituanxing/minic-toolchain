@@ -8,8 +8,20 @@ if "IRQ_FRAME_REUSE_V0" not in text:
     raise SystemExit("value-slot reuse prerequisite not applied")
 if "RECORD_CALL_RESULT_SNAPSHOT_REUSE_V0" not in text:
     raise SystemExit("record snapshot reuse prerequisite not applied")
+# Preserve the Runtime overlay entrypoint, but only as a strict
+# source-completeness proof after the original code is integrated into C.
 if "CORE_OBJECT_SLOT_REUSE_V0" in text:
-    raise SystemExit("Core object slot reuse already applied")
+    required = (
+        "/* CORE_OBJECT_SLOT_REUSE_V0:",
+        "static bool core_scalar_object_reuse_layout(",
+        "size_t scalar_reuse_pool_slots;",
+        "pool_base + scalar_slot * 8U",
+        "if (left->block_index != right->block_index) {",
+    )
+    if any(text.count(m) != 1 for m in required):
+        raise SystemExit("MINIC_RISCV64_CORE_OBJECT_SLOT_REUSE=ERROR partial canonical")
+    print("MINIC_RISCV64_CORE_OBJECT_SLOT_REUSE_V0=ALREADY_CANONICAL")
+    raise SystemExit(0)
 
 frame_marker = "static bool core_frame_initialize(const MinicC0Program *program,"
 if frame_marker not in text:
