@@ -189,6 +189,28 @@ jobs:
             build/linux-runtime-gcc/provenance
           key: ${{ steps.exact_gnu.outputs.key }}
 
+      # GitHub Actions caches are branch-scoped: the old agent-branch GCC
+      # golden/source caches cannot be restored after consolidating to main.
+      # Seed the identical pinned sources once from the existing GNU baseline
+      # producer. No extra job and no change to the previously validated
+      # seven-shard compilation or QEMU verification path.
+      - name: Stage certified GNU Linux sources on canonical main
+        if: github.ref == 'refs/heads/main'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mkdir -p build/linux-expanded-kbuild-v0
+          mv build/linux-runtime-gcc/linux-6.6.143 \
+             build/linux-expanded-kbuild-v0/linux-6.6.143
+          test -f build/linux-expanded-kbuild-v0/linux-6.6.143/Makefile
+
+      - name: Save pinned Linux source cache for canonical main
+        if: github.ref == 'refs/heads/main'
+        uses: actions/cache/save@v4
+        with:
+          path: build/linux-expanded-kbuild-v0/linux-6.6.143
+          key: linux-source-6.6.143-dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932-v1
+
       - name: Preserve runtime blocker
         if: failure()
         uses: actions/upload-artifact@v4
