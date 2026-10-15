@@ -278,6 +278,12 @@ static bool core_local_constant_index(const MinicCoreLowerContext *context,
 static void core_local_constants_clear_known(MinicCoreLowerContext *context) {
     size_t index;
 
+    if (getenv("MINIC_LOCAL_FACT_TRACE") != NULL && context != NULL &&
+        context->source_function != NULL) {
+        (void)fprintf(stderr,
+                      "LOCAL_FACT_CLEAR function=%s\\n",
+                      context->source_function->name != NULL ? context->source_function->name : "?");
+    }
     if (context == NULL || context->source_function == NULL ||
         context->local_integer_constants == NULL) {
         return;
@@ -354,33 +360,6 @@ static void core_local_constant_set(MinicCoreLowerContext *context,
     context->local_integer_constants[index].known = true;
 }
 
-static bool core_value_integer_constant(const MinicCoreLowerContext *context,
-                                        MinicCoreValueId value_id,
-                                        MinicConstValue *value) {
-    const MinicCoreValue *core_value;
-    const MinicCoreInstruction *definition;
-    uint64_t bits;
-
-    if (context == NULL || context->function == NULL || value == NULL ||
-        value_id >= context->function->value_count) {
-        return false;
-    }
-    core_value = &context->function->values[value_id];
-    if (!minic_type_is_integer(core_value->type) ||
-        core_value->definition >= context->function->instruction_count) {
-        return false;
-    }
-    definition = &context->function->instructions[core_value->definition];
-    if (definition->kind != MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT) {
-        return false;
-    }
-    bits = 0U;
-    (void)memcpy(&bits, &definition->value.integer_value, sizeof(bits));
-    value->type = core_value->type;
-    value->bits = bits;
-    return true;
-}
-
 static bool core_direct_local_read(const MinicCoreLowerContext *context,
                                    MinicExpressionId expression_id,
                                    MinicLocalId *local_id) {
@@ -395,8 +374,7 @@ static bool core_direct_local_read(const MinicCoreLowerContext *context,
     if (expression == NULL) {
         return false;
     }
-    if (expression->kind == MINIC_EXPRESSION_LOCAL &&
-        expression->value_category == MINIC_VALUE_RVALUE) {
+    if (expression->kind == MINIC_EXPRESSION_LOCAL) {
         *local_id = expression->value.local_id;
         return true;
     }
@@ -493,6 +471,60 @@ static bool core_const_eval_integer_with_locals(const MinicCoreLowerContext *con
         value->type = expression->type;
         value->bits = is_zero ? 1U : 0U;
         return true;
+    }
+    if (expression->kind == MINIC_EXPRESSION_STATEMENT &&
+        expression->value.statement_expression.result != MINIC_EXPRESSION_INVALID) {
+        const MinicExpression *statement_result_expression;
+        MinicLocalId statement_result_local;
+        MinicConstValue statement_result_local_value;
+        bool statement_result_direct_local;
+        bool statement_result_local_known;
+        bool statement_known;
+
+        statement_result_expression = minic_c0_program_expression(
+            context->body->program, expression->value.statement_expression.result);
+        statement_result_local = MINIC_LOCAL_INVALID;
+        statement_result_direct_local = core_direct_local_read(
+            context,
+            expression->value.statement_expression.result,
+            &statement_result_local);
+        statement_result_local_known =
+            statement_result_direct_local &&
+            core_local_constant_get(
+                context, statement_result_local, &statement_result_local_value);
+        statement_known = core_const_eval_integer_with_locals(
+            context, expression->value.statement_expression.result, &operand_value);
+        if (getenv("MINIC_LOCAL_FACT_TRACE") != NULL) {
+            (void)fprintf(stderr,
+                          "LOCAL_FACT_STMT function=%s expression=%zu result=%zu result_kind=%d result_vcat=%d direct_local=%d local=%zu local_known=%d local_bits=%" PRIu64 " known=%d bits=%" PRIu64 "\\n",
+                          context->source_function != NULL ? context->source_function->name : "?",
+                          (size_t)expression_id,
+                          (size_t)expression->value.statement_expression.result,
+                          statement_result_expression != NULL
+                              ? (int)statement_result_expression->kind
+                              : -1,
+                          statement_result_expression != NULL
+                              ? (int)statement_result_expression->value_category
+                              : -1,
+                          statement_result_direct_local ? 1 : 0,
+                          statement_result_direct_local
+                              ? (size_t)statement_result_local
+                              : (size_t)SIZE_MAX,
+                          statement_result_local_known ? 1 : 0,
+                          statement_result_local_known
+                              ? statement_result_local_value.bits
+                              : UINT64_C(0),
+                          statement_known ? 1 : 0,
+                          statement_known ? operand_value.bits : UINT64_C(0));
+        }
+        if (!statement_known) {
+            return false;
+        }
+        return minic_const_value_convert_integer(context->body->program,
+                                                 context->target,
+                                                 &operand_value,
+                                                 expression->type,
+                                                 value);
     }
     if (expression->kind == MINIC_EXPRESSION_BINARY &&
         (expression->value.binary.operator_kind == MINIC_BINARY_EQUAL ||
@@ -8240,9 +8272,21 @@ static MinicCoreLowerStatus lower_assignment_pair(MinicCoreLowerContext *context
     }
     if (target->kind == MINIC_EXPRESSION_LOCAL) {
         MinicConstValue stored_constant;
+        bool fact_known;
         core_local_constant_invalidate(context, target->value.local_id);
-        if (core_value_integer_constant(context, stored_value, &stored_constant)) {
+        fact_known = core_const_eval_integer_with_locals(context, source_id, &stored_constant);
+        if (fact_known) {
             core_local_constant_set(context, target->value.local_id, &stored_constant);
+        }
+        if (getenv("MINIC_LOCAL_FACT_TRACE") != NULL) {
+            (void)fprintf(stderr,
+                          "LOCAL_FACT_ASSIGN function=%s target=%zu source=%zu source_kind=%d known=%d bits=%" PRIu64 "\\n",
+                          context->source_function != NULL ? context->source_function->name : "?",
+                          (size_t)target->value.local_id,
+                          (size_t)source_id,
+                          source != NULL ? (int)source->kind : -1,
+                          fact_known ? 1 : 0,
+                          fact_known ? stored_constant.bits : UINT64_C(0));
         }
     }
     if (result_value != NULL) {
@@ -12431,12 +12475,36 @@ lower_block(MinicCoreLowerContext *context, const MinicBlock *source_block, bool
             case MINIC_STATEMENT_IF:
                 status = lower_if(context, statement, &statement_terminated);
                 break;
-            case MINIC_STATEMENT_WHILE:
-                core_local_constants_clear_known(context);
+            case MINIC_STATEMENT_WHILE: {
+                const MinicBlock *local_fact_loop_body;
+                MinicBlock local_fact_single_iteration_body;
+                MinicStatementId local_fact_continue_label;
+                bool local_fact_single_pass;
+
+                local_fact_loop_body = minic_c0_program_block(
+                    context->body->program, statement->then_block);
+                local_fact_continue_label = MINIC_STATEMENT_INVALID;
+                local_fact_single_pass =
+                    local_fact_loop_body != NULL &&
+                    normalized_do_while_zero_body(context,
+                                                  statement,
+                                                  local_fact_loop_body,
+                                                  &local_fact_single_iteration_body,
+                                                  &local_fact_continue_label) &&
+                    !normalized_do_while_block_needs_exit(context,
+                                                          &local_fact_single_iteration_body,
+                                                          local_fact_continue_label,
+                                                          true);
+                if (!local_fact_single_pass) {
+                    core_local_constants_clear_known(context);
+                }
                 status = lower_while(
                     context, statement, MINIC_STATEMENT_INVALID, &statement_terminated);
-                core_local_constants_clear_known(context);
+                if (!local_fact_single_pass) {
+                    core_local_constants_clear_known(context);
+                }
                 break;
+            }
             case MINIC_STATEMENT_SWITCH:
                 core_local_constants_clear_known(context);
                 status = lower_switch(context, statement, &statement_terminated);

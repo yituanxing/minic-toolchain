@@ -10,6 +10,22 @@ subprocess.run(["python3", "tools/ci/apply-local-integer-conditions-v1.py"], che
 p = Path("src/core/core_lower.c")
 text = p.read_text()
 
+# Previously validated Runtime V2 assignment/source-AST facts now live in
+# canonical C; preserve this stage as a strict structural verifier.
+if "LOCAL_FACT_ASSIGN function=%s" in text:
+    required = (
+        "LOCAL_FACT_ASSIGN function=%s",
+        "LOCAL_FACT_STMT function=%s",
+        "LOCAL_FACT_CLEAR function=%s",
+        "normalized_do_while_zero_body(context,",
+        "core_const_eval_integer_with_locals(context, source_id, &stored_constant)",
+    )
+    if any(text.count(marker) != 1 for marker in required) or \
+       "static bool core_value_integer_constant(" in text:
+        raise SystemExit("MINIC_LOCAL_INTEGER_ASSIGNMENT_V2=ERROR incomplete native source")
+    print("MINIC_LOCAL_INTEGER_ASSIGNMENT_V2=ALREADY_CANONICAL")
+    raise SystemExit(0)
+
 # Assignment facts must come from the source AST semantics, not from whether
 # the already-lowered Core value happened to be a literal instruction.  This
 # admits -22, casts/conversions and direct local reads without perturbing normal
