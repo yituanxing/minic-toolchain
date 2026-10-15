@@ -46,14 +46,10 @@ replace_one(start, '''        program->expressions[expression_index].value.call.
 ''', "transition")
 
 finish='''    if (specialization_count != 0U) {
-        (void)fprintf(stderr,
-                       "MINIC_INLINE_INTEGER_SPECIALIZATION_V0 clones=%zu functions=%zu\\n",
 '''
 replace_one(finish, '''    minic_bootstrap_trace_stage(NULL, "spec-integer-transitive", "end-success",
                                 program->function_count);
     if (specialization_count != 0U) {
-        (void)fprintf(stderr,
-                       "MINIC_INLINE_INTEGER_SPECIALIZATION_V0 clones=%zu functions=%zu\\n",
 ''', "end")
 
 p.write_text(text)
