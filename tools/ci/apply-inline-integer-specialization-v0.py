@@ -22,7 +22,8 @@ def replace_once(path: str, old: str, new: str) -> None:
         helper_counts = tuple(text.count(x) for x in source_helpers)
         if all(n == 1 for n in helper_counts):
             if (text.count(old) != 1 or
-                    "#define MINIC_INLINE_INTEGER_SPECIALIZATION_LIMIT 256U" not in text or
+                    sum(text.count("#define MINIC_INLINE_INTEGER_SPECIALIZATION_LIMIT " +
+                                   str(limit) + "U") for limit in (256, 2048)) != 1 or
                     "minic_finalize_inline_integer_specialization_references(&program)" not in text):
                 raise SystemExit("INLINE_SPECIALIZATION=ERROR incomplete canonical helpers")
             print("MINIC_INLINE_INTEGER_SPECIALIZATION_V0=HELPERS_ALREADY_CANONICAL")
