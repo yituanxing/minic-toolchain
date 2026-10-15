@@ -3085,15 +3085,20 @@ static bool parse_primary(MinicParser *parser, MinicExpressionId *expression_id,
         }
         name_span = parser->current.span;
         local_id = minic_parser_find_local(parser, name_span);
+        if (local_id != MINIC_LOCAL_INVALID) {
+            if (!minic_parser_advance(parser) ||
+                !parse_local_reference(parser, name_span, local_id, &primary_id)) {
+                return false;
+            }
+            return finish_value_expression(parser, primary_id, decay_array, expression_id);
+        }
+
         function_id = minic_parser_find_function(parser, name_span);
-        global_object_id = minic_parser_find_global_object(parser, name_span);
-        fixed_register_binding_id = minic_parser_find_fixed_register_binding(parser, name_span);
-        enumerator_id = minic_parser_find_enum_constant(parser, name_span);
         if (!minic_parser_advance(parser)) {
             return false;
         }
 
-        if (parser->current.kind == MINIC_TOKEN_LPAREN && local_id == MINIC_LOCAL_INVALID &&
+        if (parser->current.kind == MINIC_TOKEN_LPAREN &&
             function_id != MINIC_FUNCTION_INVALID) {
             MinicSourcePosition call_end;
             const MinicFunction *callee;
@@ -3127,12 +3132,10 @@ static bool parse_primary(MinicParser *parser, MinicExpressionId *expression_id,
             return finish_value_expression(parser, primary_id, decay_array, expression_id);
         }
 
-        if (local_id != MINIC_LOCAL_INVALID) {
-            if (!parse_local_reference(parser, name_span, local_id, &primary_id)) {
-                return false;
-            }
-            return finish_value_expression(parser, primary_id, decay_array, expression_id);
-        }
+        global_object_id = minic_parser_find_global_object(parser, name_span);
+        fixed_register_binding_id = minic_parser_find_fixed_register_binding(parser, name_span);
+        enumerator_id = minic_parser_find_enum_constant(parser, name_span);
+
         if (global_object_id != MINIC_GLOBAL_OBJECT_INVALID) {
             if (!parse_global_reference(parser, name_span, global_object_id, true, &primary_id)) {
                 return false;

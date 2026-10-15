@@ -6,6 +6,23 @@ exactly one old-context match, or the candidate fails closed.
 """
 from pathlib import Path
 
+# Source convergence with the validated native hash lookups. The earlier
+# standalone Performance branch rewrote raw linear function/global scans
+# from forward to reverse. Those old scans have since been replaced by
+# canonical hash indexes preserving the original declaration ordering.
+# Local-first lazy identifier resolution is now native as well. Applying
+# the old text deltas here would both fail and undo accepted lookup semantics.
+_core = Path("src/frontend/parser_core.c").read_text()
+_glob = Path("src/frontend/parser_global.c").read_text()
+_expr = Path("src/frontend/parser_expression.c").read_text()
+if "static bool minic_parser_function_name_index_sync(" in _core:
+    if ("static bool minic_parser_global_name_index_sync(" not in _glob or
+            _expr.count("        function_id = minic_parser_find_function(parser, name_span);\n        if (!minic_parser_advance(parser)) {") != 1 or
+            _expr.count("        global_object_id = minic_parser_find_global_object(parser, name_span);\n        fixed_register_binding_id =") != 1):
+        raise SystemExit("PERF_PARSER_SOURCE_DELTA=ERROR partial canonical promotion")
+    print("MINIC_PERF_SOURCE_OVERLAY=ALREADY_CANONICAL indexed_lookup=true lazy_identifier=true")
+    raise SystemExit(0)
+
 p = Path("src/frontend/parser_core.c")
 s = p.read_text()
 old = "MinicFunctionId minic_parser_find_function(const MinicParser *parser, MinicSourceSpan name_span) {\n    size_t name_length;\n    size_t index;\n\n    name_length = minic_parser_span_length(name_span);\n    for (index = 0U; index < parser->program->function_count; ++index) {\n        const MinicFunction *function;\n\n        function = minic_c0_program_function(parser->program, index);\n        if (function != NULL && function->name_length == name_length &&\n            memcmp(function->name, parser->source + name_span.begin.offset, name_length) == 0) {\n            return index;\n        }\n    }\n    return MINIC_FUNCTION_INVALID;\n}\n\n"
