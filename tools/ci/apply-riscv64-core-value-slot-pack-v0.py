@@ -4,6 +4,22 @@ from pathlib import Path
 p = Path("src/target/riscv64/core_codegen.c")
 text = p.read_text()
 
+# The previously proven Runtime value-slot packing is now checked-in RV64 C.
+# Keep this historical patch callable without injecting a second frame allocator.
+# Fail closed if only a subset of the source promotion is present.
+if "static bool core_value_spill_slot_size(" in text:
+    required = (
+        "/* IRQ_FRAME_PACK_V0:",
+        "static bool core_value_spill_slot_size(",
+        "frame->value_slot_count = maximum_block_bytes / 8U;",
+        "frame->value_offsets[instruction->result] =",
+        "CORE_FRAME function=%s frame=%zu value_bytes=%zu values=%zu objects=%zu",
+    )
+    if any(text.count(marker) != 1 for marker in required):
+        raise SystemExit("MINIC_RISCV64_CORE_VALUE_SLOT_PACK_V0=ERROR partial canonical promotion")
+    print("MINIC_RISCV64_CORE_VALUE_SLOT_PACK_V0=ALREADY_CANONICAL")
+    raise SystemExit(0)
+
 frame_marker = "static bool core_frame_initialize(const MinicC0Program *program,"
 if frame_marker not in text:
     raise SystemExit("core_frame_initialize marker not found")

@@ -346,6 +346,31 @@ static bool core_call_outgoing_stack_size(const MinicC0Program *program,
     return true;
 }
 
+/* IRQ_FRAME_PACK_V0: Core scalar spill values are block-local. Keep the
+   existing conservative no-liveness-reuse contract, but do not spend 16 bytes
+   on every <= XLEN value merely because int128 needs a two-XLEN pair. */
+static bool core_value_spill_slot_size(const MinicC0Program *program,
+                                       const MinicCoreFunction *function,
+                                       MinicCoreValueId value_id,
+                                       size_t *slot_size) {
+    size_t value_size;
+    size_t value_alignment;
+
+    if (program == NULL || function == NULL || slot_size == NULL ||
+        value_id >= function->value_count ||
+        !minic_data_layout_type(minic_default_data_layout(),
+                                program,
+                                function->values[value_id].type,
+                                &value_size,
+                                &value_alignment) ||
+        value_size == 0U || value_size > 16U) {
+        return false;
+    }
+    (void)value_alignment;
+    *slot_size = value_size > 8U ? 16U : 8U;
+    return true;
+}
+
 static bool core_frame_initialize(const MinicC0Program *program,
                                   const MinicCoreFunction *function,
                                   MinicRiscv64CoreFrame *frame) {
@@ -416,48 +441,52 @@ static bool core_frame_initialize(const MinicC0Program *program,
         return false;
     }
     /*
-    ** Core v0 intentionally keeps SSA values block-local: the verifier clears
-    ** its available-value set at every basic-block boundary, while mutable
-    ** cross-block state is carried through CoreObject storage.  Exploit that
-    ** contract here instead of reserving one permanent 16-byte spill slot for
-    ** every value in the whole function.
-    **
-    ** Values produced by different basic blocks can therefore occupy the same
-    ** physical spill slots.  Keep values distinct within one block for now;
-    ** this is a conservative first reuse tier and requires no intra-block
-    ** liveness analysis.
+    ** Core values remain block-local and values from distinct blocks reuse the
+    ** same spill region. Within a block, keep every result distinct for now,
+    ** but pack ordinary <=64-bit values into one 8-byte XLEN slot. Only values
+    ** whose data-layout size is 9..16 bytes reserve the old 16-byte pair.
+    ** value_slot_count counts 8-byte physical spill units in this tier.
     */
     {
         size_t block_index;
-        size_t maximum_block_values = 0U;
+        size_t maximum_block_bytes = 0U;
 
         for (block_index = 0U; block_index < function->block_count; ++block_index) {
             const MinicCoreBlock *block = &function->blocks[block_index];
-            size_t local_values = 0U;
+            size_t local_bytes = 0U;
             size_t instruction_index;
 
             for (instruction_index = 0U; instruction_index < block->instruction_count;
                  ++instruction_index) {
                 MinicCoreInstructionId instruction_id = block->instructions[instruction_index];
+                const MinicCoreInstruction *instruction;
+                size_t slot_size;
+
                 if (instruction_id >= function->instruction_count) {
                     return false;
                 }
-                if (function->instructions[instruction_id].result != MINIC_CORE_VALUE_INVALID) {
-                    if (local_values == SIZE_MAX) {
-                        return false;
-                    }
-                    ++local_values;
+                instruction = &function->instructions[instruction_id];
+                if (instruction->result == MINIC_CORE_VALUE_INVALID) {
+                    continue;
                 }
+                if (instruction->result >= function->value_count ||
+                    !core_value_spill_slot_size(
+                        program, function, instruction->result, &slot_size) ||
+                    local_bytes > SIZE_MAX - slot_size) {
+                    return false;
+                }
+                local_bytes += slot_size;
             }
-            if (local_values > maximum_block_values) {
-                maximum_block_values = local_values;
+            if (local_bytes > maximum_block_bytes) {
+                maximum_block_bytes = local_bytes;
             }
         }
-        if (maximum_block_values > (SIZE_MAX - frame->value_base_offset) / 16U) {
+        if ((maximum_block_bytes & 7U) != 0U ||
+            maximum_block_bytes > SIZE_MAX - frame->value_base_offset) {
             return false;
         }
-        frame->value_slot_count = maximum_block_values;
-        storage_size = frame->value_base_offset + maximum_block_values * 16U;
+        frame->value_slot_count = maximum_block_bytes / 8U;
+        storage_size = frame->value_base_offset + maximum_block_bytes;
     }
     frame->saves_return_address = core_function_needs_saved_return_address(function);
     frame->return_address_offset = 0U;
@@ -630,13 +659,15 @@ static bool core_frame_initialize(const MinicC0Program *program,
 
         for (block_index = 0U; block_index < function->block_count; ++block_index) {
             const MinicCoreBlock *block = &function->blocks[block_index];
-            size_t local_slot = 0U;
+            size_t local_bytes = 0U;
             size_t instruction_index;
 
             for (instruction_index = 0U; instruction_index < block->instruction_count;
                  ++instruction_index) {
                 MinicCoreInstructionId instruction_id = block->instructions[instruction_index];
                 const MinicCoreInstruction *instruction;
+                size_t slot_size;
+                size_t value_storage_size;
 
                 if (instruction_id >= function->instruction_count) {
                     free(frame->value_offsets);
@@ -650,8 +681,19 @@ static bool core_frame_initialize(const MinicC0Program *program,
                     continue;
                 }
                 if (instruction->result >= function->value_count ||
-                    local_slot >= frame->value_slot_count ||
-                    local_slot > (SIZE_MAX - frame->value_base_offset) / 16U ||
+                    !core_value_spill_slot_size(
+                        program, function, instruction->result, &slot_size) ||
+                    frame->value_slot_count > SIZE_MAX / 8U) {
+                    free(frame->value_offsets);
+                    frame->value_offsets = NULL;
+                    free(frame->object_offsets);
+                    frame->object_offsets = NULL;
+                    return false;
+                }
+                value_storage_size = frame->value_slot_count * 8U;
+                if (local_bytes > value_storage_size ||
+                    slot_size > value_storage_size - local_bytes ||
+                    frame->value_base_offset > SIZE_MAX - local_bytes ||
                     frame->value_offsets[instruction->result] != SIZE_MAX) {
                     free(frame->value_offsets);
                     frame->value_offsets = NULL;
@@ -660,8 +702,8 @@ static bool core_frame_initialize(const MinicC0Program *program,
                     return false;
                 }
                 frame->value_offsets[instruction->result] =
-                    frame->value_base_offset + local_slot * 16U;
-                ++local_slot;
+                    frame->value_base_offset + local_bytes;
+                local_bytes += slot_size;
             }
         }
         for (value_index = 0U; value_index < function->value_count; ++value_index) {
@@ -673,6 +715,15 @@ static bool core_frame_initialize(const MinicC0Program *program,
                 return false;
             }
         }
+    }
+    if (getenv("MINIC_CORE_FRAME_TRACE") != NULL) {
+        (void)fprintf(stderr,
+                      "CORE_FRAME function=%s frame=%zu value_bytes=%zu values=%zu objects=%zu\n",
+                      function->name != NULL ? function->name : "?",
+                      frame->frame_size,
+                      frame->value_slot_count * 8U,
+                      function->value_count,
+                      function->object_count);
     }
     return true;
 }
