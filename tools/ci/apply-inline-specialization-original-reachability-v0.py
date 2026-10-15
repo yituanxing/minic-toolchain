@@ -57,9 +57,12 @@ static bool minic_inline_source_is_core_reachable_only(
 }
 
 '''
-if text.count(anchor) != 1:
-    raise SystemExit("expected one Core specialization-prune anchor")
-text = text.replace(anchor, helper + anchor, 1)
+if text.count(helper) == 1 and text.count(anchor) == 1:
+    print("MINIC_INLINE_ORIGINAL_CORE_ROOTS=HELPER_ALREADY_CANONICAL")
+elif text.count(helper) == 0 and text.count(anchor) == 1:
+    text = text.replace(anchor, helper + anchor, 1)
+else:
+    raise SystemExit("Core source-root helper missing, duplicate or partial")
 
 old_root = '''        if (function->is_integer_specialization || !function->is_defined ||
             (function->is_internal && !function->is_referenced)) {
@@ -82,9 +85,12 @@ new_root = '''        if (function->is_integer_specialization || !function->is_d
         reachable[function_index] = true;
         queue[queue_count++] = function_index;
 '''
-if text.count(old_root) != 1:
-    raise SystemExit("expected one Core root loop")
-text = text.replace(old_root, new_root, 1)
+if text.count(new_root) == 1 and text.count(old_root) == 0:
+    print("MINIC_INLINE_ORIGINAL_CORE_ROOTS=NEW_ROOT_ALREADY_CANONICAL")
+elif text.count(old_root) == 1 and text.count(new_root) == 0:
+    text = text.replace(old_root, new_root, 1)
+else:
+    raise SystemExit("Core reachability root loop: missing, duplicate or partial")
 
 old_entry = '''    if (block_reachable == NULL || block_queue == NULL ||
         !minic_enqueue_core_block(core->entry_block,
@@ -125,9 +131,12 @@ new_entry = '''    if (block_reachable == NULL || block_queue == NULL ||
 
     while (block_queue_cursor < block_queue_count) {
 '''
-if text.count(old_entry) != 1:
-    raise SystemExit("expected one Core entry-root block")
-text = text.replace(old_entry, new_entry, 1)
+if text.count(new_entry) == 1 and text.count(old_entry) == 0:
+    print("MINIC_INLINE_ORIGINAL_CORE_ROOTS=NEW_ENTRY_ALREADY_CANONICAL")
+elif text.count(old_entry) == 1 and text.count(new_entry) == 0:
+    text = text.replace(old_entry, new_entry, 1)
+else:
+    raise SystemExit("Core reachability label roots: missing, duplicate or partial")
 
 old_final = '''    for (function_index = 0U; function_index < program->function_count; ++function_index) {
         MinicFunction *function = &program->functions[function_index];
@@ -147,9 +156,12 @@ new_final = '''    for (function_index = 0U; function_index < program->function_
         }
         function->is_referenced = reachable[function_index];
 '''
-if text.count(old_final) != 1:
-    raise SystemExit("expected one Core final reachability loop")
-text = text.replace(old_final, new_final, 1)
+if text.count(new_final) == 1 and text.count(old_final) == 0:
+    print("MINIC_INLINE_ORIGINAL_CORE_ROOTS=NEW_FINAL_ALREADY_CANONICAL")
+elif text.count(old_final) == 1 and text.count(new_final) == 0:
+    text = text.replace(old_final, new_final, 1)
+else:
+    raise SystemExit("Core reachability final loop: missing, duplicate or partial")
 
 p.write_text(text)
 print("MINIC_INLINE_SPECIALIZATION_ORIGINAL_REACHABILITY_V0=APPLIED all_internal=1 label_roots=1")
