@@ -320,11 +320,16 @@ SH_STAGE_LAUNCHER
     echo 'BOOLEAN_CACHE_SINGLE=KEEP_EXACT_KBUILD_I owner=lib/crypto/blake2s-generic.o'
   fi
   if [[ "${COHORT_KEEP_BOOL_HOT_I:-0}" == 1 ]]; then
-    [[ "$n" == 3 && "${objects[*]}" == 'kernel/bpf/btf.o kernel/bpf/verifier.o net/core/filter.o' ]] || {
+    if [[ "${COHORT_BOOL_HOT_ROTATION:-0}" == 1 ]]; then
+      expected_hot=(net/core/dev.o net/ipv4/tcp_input.o lib/crc32.o)
+    else
+      expected_hot=(kernel/bpf/btf.o kernel/bpf/verifier.o net/core/filter.o)
+    fi
+    [[ "$n" == 3 && "${objects[*]}" == "${expected_hot[*]}" ]] || {
       echo 'BOOL_HOT=FAIL unexpected_owner_set'; exit 8;
     }
     keep_dma_inputs=1
-    echo 'BOOL_HOT=KEEP_EXACT_KBUILD_I owners=3'
+    echo "BOOL_HOT=KEEP_EXACT_KBUILD_I owners=3 rotation=${COHORT_BOOL_HOT_ROTATION:-0}"
   fi
   MINIC="$probe_minic" REAL_CC="$probe_gcc" \
     MINIC_KEEP_INTERMEDIATES="$keep_dma_inputs" MINIC_PRESERVE_FAILURE_INPUTS=1 \
