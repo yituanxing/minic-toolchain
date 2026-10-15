@@ -50,14 +50,16 @@ minic_riscv64_emit_function_symbol_begin(FILE *file, const MinicRiscv64FunctionS
         return false;
     }
     if (symbol->section_name != NULL) {
-        if (fprintf(file, ".section %s\n", symbol->section_name) < 0) {
+        if (fprintf(file, ".section %s,\"ax\",@progbits\n", symbol->section_name) < 0) {
             return false;
         }
-    } else if (fprintf(file, ".section .text.%s\n", symbol->symbol_name) < 0) {
-        /* Keep every ordinary function in its own input section. This makes
-           linker --gc-sections effective even when a build system's
-           -ffunction-sections flag is consumed outside minic-cc, while an
-           explicit GNU section attribute above still owns the exact section. */
+    } else if (fprintf(file, ".text\n") < 0) {
+        /* Match the normal GCC/Clang default: ordinary functions share .text.
+           Per-function .text.<name> sections are an opt-in compiler mode, not
+           the default ABI surface.  Emitting them unconditionally breaks
+           linker scripts (including Linux 6.6) that only collect .text.* when
+           -ffunction-sections/dead-code elimination is explicitly enabled.
+           Explicit GNU section attributes above still own the exact section. */
         return false;
     }
     if (!symbol->is_internal) {

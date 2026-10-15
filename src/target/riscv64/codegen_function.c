@@ -967,7 +967,10 @@ static bool minic_riscv64_emit_global_object(FILE *file,
     }
 
     if (object->section_name != NULL) {
-        if (fprintf(file, ".section %s\n", object->section_name) < 0) {
+        if (fprintf(file,
+                    ".section %s,\"%s\",@progbits\n",
+                    object->section_name,
+                    object->is_read_only ? "a" : "aw") < 0) {
             return false;
         }
     } else {
