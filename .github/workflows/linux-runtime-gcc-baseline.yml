@@ -784,7 +784,8 @@ jobs:
                 "$ev" "$root" \
                 "${{ contains(github.event.head_commit.message, '[linux-perf-hotowners-rotation]') }}" \
                 "${{ contains(github.event.head_commit.message, '[linux-perf-optimized-phase]') }}" \
-                "${{ contains(github.event.head_commit.message, '[linux-perf-symbolic-subphase]') }}"
+                "${{ contains(github.event.head_commit.message, '[linux-perf-symbolic-subphase]') }}" \
+                "${{ contains(github.event.head_commit.message, '[linux-perf-integer-subphase]') }}"
             elif [[ "${{ contains(github.event.head_commit.message, '[linux-perf-stage-profile]') }}" == true ]]; then
               python3 tools/ci/linux-perf-phase-trace-v1.py --self-test
               if [[ "${{ contains(github.event.head_commit.message, '[linux-perf-hotowners-rotation]') }}" == true ]]; then
