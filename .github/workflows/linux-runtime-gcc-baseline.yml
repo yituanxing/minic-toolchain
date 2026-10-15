@@ -499,7 +499,7 @@ jobs:
           fail-on-cache-miss: true
 
       - name: Analyze three frozen hot owners by paired timing or opt-in phase traces
-        if: contains(github.event.head_commit.message, '[linux-perf-hotowners]') && !contains(github.event.head_commit.message, '[linux-perf-ast-footprint]') && steps.candidate_ready.outputs.ready == 'true'
+        if: contains(github.event.head_commit.message, '[linux-perf-hotowners]') && !contains(github.event.head_commit.message, '[linux-perf-ast-footprint]') && !contains(github.event.head_commit.message, '[linux-perf-ast-growth]') && steps.candidate_ready.outputs.ready == 'true'
         shell: bash
         timeout-minutes: 24
         run: |
@@ -831,6 +831,17 @@ jobs:
             fi
           fi
 
+      - name: Test 1.5x AST capacity on three actual Linux inputs
+        if: contains(github.event.head_commit.message, '[linux-perf-ast-growth]') && steps.candidate_ready.outputs.ready == 'true'
+        shell: bash
+        timeout-minutes: 18
+        run: |
+          set -Eeuo pipefail
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-v1"
+          root="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain/bin"
+          bash tools/ci/linux-perf-ast-growth-ab-v1.sh \
+            "$ev" "$root" "${{ contains(github.event.head_commit.message, '[linux-perf-hotowners-rotation]') }}"
+
       - name: Inspect real AST memory without altering assembly
         if: contains(github.event.head_commit.message, '[linux-perf-ast-footprint]') && steps.candidate_ready.outputs.ready == 'true'
         shell: bash
@@ -916,6 +927,9 @@ jobs:
             build/linux-runtime-gcc-cohort-v1/boolean-hot/integer-call/*-screen.txt
             build/linux-runtime-gcc-cohort-v1/boolean-hot/symbolic-owner/results/**/paired-result.json
             build/linux-runtime-gcc-cohort-v1/boolean-hot/symbolic-owner/*-screen.txt
+            build/linux-runtime-gcc-cohort-v1/boolean-hot/ast-growth/results/**/paired-result.json
+            build/linux-runtime-gcc-cohort-v1/boolean-hot/ast-growth/results/**/*-rss.txt
+            build/linux-runtime-gcc-cohort-v1/boolean-hot/ast-growth/*-verdict.txt
             build/linux-runtime-gcc-cohort-v1/boolean-hot/ast-footprint/results/**/traced.stderr
             build/linux-runtime-gcc-cohort-v1/boolean-hot/ast-footprint/results/**/peak-rss.txt
             build/linux-runtime-gcc-cohort-v1/boolean-hot/integer-owner/results/**/paired-result.json
