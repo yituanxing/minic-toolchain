@@ -531,3 +531,24 @@ PERF-006 `blake2s` 的真实 Runtime 布尔域索引收益为 1465.171ms→1368.
 三文件 P50 之和约 **32.286→26.452s**，节省约 **5.833s / 18.07%**（限此 3 个文件且受 2 次/臂快筛噪声影响）。说明后续网络慢文件的 Parser 函数符号检索与内联专门化是**可以叠加的两个独立热点**；crc32 剩余瓶颈则仍为 integer (~5.0s) 及 symbolic (~2.1s)，函数名哈希在此仅边际 3.5%。
 
 **决策：** Parser 保序函数名哈希从单模块快筛提升为 `integrated-candidate / independent-bpf-cohort-pending`，**不自动进入已认证 Runtime**。下一条独立 cohort 是 BTF/verifier/filter，继续固定 Boolean+owner+integer，只增加 Parser 哈希 A/B 和 `.s` SHA 对比；回归不能再使用已经测过的 crc32/dev/tcp_input 假充扩样。即使第二组也通过，后续必须对三个算法联合编译器进行 first500 等价验证，并最终 QEMU P1 才能宣称升级正式工具链。
+
+
+## 31. PERF-026：Parser 保序函数名哈希在完整联合候选上扩展至第二组三 TU（2026-10-15）
+
+[CI #38669659296](https://github.com/yituanxing/minic-toolchain/actions/runs/38669659296) `gcc-single SUCCESS`。与 PERF-025 的 crc32/dev/tcp_input 组**不同**，本组使用已有 SHA 锁定的 BTF/verifier/filter Linux Kbuild `.i`；原始 GNU `.o` 与候选缓存都 HIT，双臂仅函数名 lookup 由 first-definition-wins 正序线性扫描换成 incremental 哈希（两臂符号归属索引、整数 CALL-ID 索引、Parser 计数器全部相同）。每臂热身一次、交替两次配对，三份汇编字节一致。
+
+| owner | 现有 Boolean+symbolic-owner+integer P50 | 再加入 Parser 函数哈希 P50 | 同 runner 边际 speedup |
+| --- | ---: | ---: | ---: |
+| `kernel/bpf/btf.o` | 7017.063ms | 4873.721ms | **1.4398×** |
+| `kernel/bpf/verifier.o` | 8535.362ms | 6297.635ms | **1.3553×** |
+| `net/core/filter.o` | 15373.530ms | 12772.778ms | **1.2036×** |
+
+本组局部 P50 合计 **30.926→23.944s**（少用约 6.982s / 22.58%）。结合 PERF-025 的第一组，**六个真正 Linux 文件全部显示 Parser 哈希相对于已优化候选的额外加速，六份汇编等价**。不能把跨-run 倍率直接相乘或宣称完整 Linux 同样提速。验收级别 `verified-local-integrated-six-2rep`；仍未完成**三个优化同时开启的 first500 / 整内核 QEMU P1**。
+
+已在 `gcc-single` 复用旧 `selected-tus.txt`、`inputs.sha256`、500 份 GNU Kbuild `.i` 启动 [#38670218353](https://github.com/yituanxing/minic-toolchain/actions/runs/38670218353)：Boolean-only（固定 Runtime）与 Boolean+symbolic-owner+integer-CALL+Parser 保序函数哈希两版本**严格 500/500 编译与汇编 SHA 校验**；只有实际出现 `MINIC_FROZEN_DIFF=PASS selected=500 identical=500` 才能晋级组合正确性。当前还未获得最终 verdict。
+
+## 32. PERF-027：优化后整数专门化子阶段归因（诊断并行）
+
+PERF-024 定位 **最新 Boolean+symbolic+integer** 版本 `lib/crc32.o` 整数内联专门化约 5.013s，占该 TU 当前 wall 7.735s 中最明显大头。已有源码 `apply-inline-specialization-transitive-integer-v0.py` 中直接阶段含“每次 candidate clone 线性匹配”，transitive 阶段还含“每个已克隆 caller 遍历 CALL 节点 + clone 线性匹配”，因此两处可能有高频 O(clones×candidate-count) 扫描。但未经阶段细分/计数之前不指定责任阶段。
+
+复用原 `minic_bootstrap_trace_stage` 和 `linux-perf-phase-trace-v1.py`，新增 **仅诊断** `tools/ci/apply-perf-integer-loop-trace-v0.py`；现有 `tools/ci/linux-perf-diagnose-optimized-phase-v1.sh` 会在两臂同样插入 `spec-integer-direct` 与 `spec-integer-transitive` 计时，分别核对与外层 `spec-integer` 的计时包含关系，并确保原始 `.s` SHA 一致。使用原三份 frozen Kbuild 输入，保持先观察时间分布、再研究源码定算法、再单变量配对的顺序。诊断 [#38670413942](https://github.com/yituanxing/minic-toolchain/actions/runs/38670413942) 以最终日志判定；未完成前不可称整数新优化已实现或已提速。
