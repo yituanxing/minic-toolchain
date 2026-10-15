@@ -578,3 +578,20 @@ PERF-024 定位 **最新 Boolean+symbolic+integer** 版本 `lib/crc32.o` 整数�
 **实际日志完整：** `MINIC_FROZEN_DIFF_PROGRESS checked=50/500,...,500/500`；`MINIC_FROZEN_DIFF=PASS selected=500 identical=500 runtime_p1_not_proven=true`；`PERF_FIRST500=PASS selected=500 combined=true QEMU_p1_not_executed=true`。这次不是上一次只有 symbolic-owner 的 500，而是**三算法联合**通过 500/500 汇编严格字节等价；已具备向缓存恢复的 **7 路全 Linux Kbuild/链接/QEMU P0+P1** 递进的正确性证据。仍不得以编译输出等价推断全量 Linux 2064/2064、链接、QEMU shell/P1 已通过。任一工具链认证切换必须由独立该阶段 CI 数据做决定。
 
 在 500 验收执行时，采用独立的旧缓存执行 PERF-028 的整数子阶段归因（99%+ 处于 transitive），随后提出专门的 integer FunctionBody owner 过滤候选；其 `.s` 等价与 P50 尚待 [CI #38671520608](https://github.com/yituanxing/minic-toolchain/actions/runs/38671520608) 最终验证。该候选**不包含在本次 500/500 已过的三算法集合**，必须单独资格筛查，不能借本次 500 给它认证。
+
+
+## 35. PERF-030：整数 transitive 的源函数归属过滤真正产生大收益（2026-10-15）
+
+[CI #38671761601](https://github.com/yituanxing/minic-toolchain/actions/runs/38671761601) `gcc-single SUCCESS`。原先 [#38671271982](https://github.com/yituanxing/minic-toolchain/actions/runs/38671271982) 和 [#38671520608](https://github.com/yituanxing/minic-toolchain/actions/runs/38671520608) 因 C 源生成器的错误处理路径文本锚点不正确失败：没有 A/B 数字，且并非候选生成不正确。修复为在 integer-specialization 具体函数范围内匹配 clone 创建失败 return，CI 确认 patch 构建及实际编译通过。
+
+完整实验对比在两臂均启用 `Boolean+symbolic-owner+integer-CALL`，**仅候选增加 integer-transitive FunctionBody owner source filter**；缓存 SHA-frozen GNU-Kbuild 真实输入、每臂热身一次加两次交替配对、所有 `.s` 完全字节一致：
+
+| 新优化对象 | 两臂共用原算法 P50 | 加 integer source owner 后 P50 | 局部加速 |
+| --- | ---: | ---: | ---: |
+| `lib/crc32.o` | 7636.481ms | 4947.350ms | **1.5435×** |
+| `net/core/dev.o` | 9359.325ms | 8082.939ms | **1.1579×** |
+| `net/ipv4/tcp_input.o` | 7274.831ms | 6318.515ms | **1.1514×** |
+
+局部 3 owner P50 之和约 24.271→19.349s，节约 **4.922s（20.3% 用时）**。`crc32` 尤其明显，正对应真实阶段测出的整数 transitive 5.024s 热点，**不是瞎试**。实验状态 `3-real-owner-byte-equivalent / independent-BPF-cohort-needed`；因为当前仅测试过三份冻结输入，没有将此新算法纳入原已验的联合 first500，不应自动声称 QEMU P1 或整个 Linux 20% 提速。
+
+**下一检查：** 单独在此前 BTF/verifier/filter 三份、完全相同的 Boolean+symbolic-owner+integer-CALL 基准上执行 integer owner 过滤，并检查汇编逐字节相等；然后将其与原三项索引联合执行 SHA-frozen first500，再决定是否加入七路 Linux 全量运行时认证。相反，如果独立 BPF 组出现退化或语义变化，先暂停进一步加码源码索引。
