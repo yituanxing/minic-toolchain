@@ -53,14 +53,17 @@ minic_riscv64_emit_function_symbol_begin(FILE *file, const MinicRiscv64FunctionS
         if (fprintf(file, ".section %s,\"ax\",@progbits\n", symbol->section_name) < 0) {
             return false;
         }
+#if defined(MINIC_LINUX_RUNTIME_DEFAULT_TEXT_V0)
     } else if (fprintf(file, ".text\n") < 0) {
-        /* Match the normal GCC/Clang default: ordinary functions share .text.
-           Per-function .text.<name> sections are an opt-in compiler mode, not
-           the default ABI surface.  Emitting them unconditionally breaks
-           linker scripts (including Linux 6.6) that only collect .text.* when
-           -ffunction-sections/dead-code elimination is explicitly enabled.
-           Explicit GNU section attributes above still own the exact section. */
+        /* Runtime44's validated Linux linker-script-compatible shared .text mode.
+           Keep the historical semantics unchanged for the pinned Linux build. */
         return false;
+#else
+    } else if (fprintf(file, ".section .text.%s\n", symbol->symbol_name) < 0) {
+        /* Original MiniC per-function input sections preserve --gc-sections
+           behavior for ordinary driver and MiniLD section-GC regressions. */
+        return false;
+#endif
     }
     if (!symbol->is_internal) {
         if (fprintf(file, symbol->is_weak ? ".weak %s\n" : ".globl %s\n", symbol->symbol_name) <

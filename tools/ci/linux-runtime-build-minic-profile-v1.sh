@@ -103,7 +103,7 @@ if [[ "${MINIC_LINUX_FULL_CROSSBLOCK:-0}" == 1 ]]; then
   echo "MINIC_LINUX_FULL_CROSSBLOCK=ENABLED all_linux_C=true crossblock=experimental discarded_pure_comparison=1"
 fi
 git diff --check
-make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$build_dir" \
+make -j4 MODE=release CFLAGS="-Werror -DMINIC_LINUX_RUNTIME_DEFAULT_TEXT_V0=1" BUILD_DIR="$build_dir" \
   "$build_dir/bin/minic" "$build_dir/bin/minic-cc" >/dev/null
 # Probe the exact Runtime-profile compiler before spending time producing
 # hundreds of Linux objects. The old unpatched C0 MiniC is NOT the tested
