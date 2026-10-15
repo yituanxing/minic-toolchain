@@ -6,7 +6,13 @@ ev="${1:?cohort directory required}"
 root="${2:?compiler bin directory required}"
 rotated="${3:-false}"
 integer_subphase="${4:-false}"
-work="$ev/boolean-hot/optimized-phase"
+four_index="${5:-false}"
+case "$four_index" in true|false) ;; *) exit 64;; esac
+if [[ "$four_index" == true ]]; then
+  work="$ev/boolean-hot/optimized-phase-four"
+else
+  work="$ev/boolean-hot/optimized-phase"
+fi
 mkdir -p "$work/before/bin" "$work/after/bin"
 cp "$root/minic" "$work/before/bin/minic"
 cp "$root/minic" "$work/after/bin/minic"
@@ -24,6 +30,12 @@ cp "$root/minic-cc" "$work/before/bin/minic-cc"
 # Only the two previously independently A/B-tested optimization families.
 python3 tools/ci/apply-perf-symbolic-function-body-owner-filter-v0.py
 python3 tools/ci/apply-perf-integer-call-expression-index-v1.py
+if [[ "$four_index" == true ]]; then
+  # The extra Parser hash and integer owner filter are already isolated.
+  python3 tools/ci/apply-perf-parser-lookup-counters-v0.py
+  python3 tools/ci/apply-perf-parser-function-hash-v0.py
+  python3 tools/ci/apply-perf-integer-function-body-owner-filter-v1.py
+fi
 make -j4 MODE=release CFLAGS=-Werror \
   BUILD_DIR="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain" \
   "$root/minic-cc" >/dev/null
@@ -54,4 +66,4 @@ for owner in "${targets[@]}"; do
     grep -Fq 'MINIC_INTEGER_SUBPHASE_GROUP=PASS mode=after' "$work/$key-verdict.txt"
   fi
 done
-echo 'MINIC_OPTIMIZED_STAGE_PROFILE=PASS owners=3 attribution_only=true qemu_pending=true'
+echo "MINIC_OPTIMIZED_STAGE_PROFILE=PASS owners=3 four_index=$four_index attribution_only=true qemu_pending=true"
