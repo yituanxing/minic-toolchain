@@ -10,6 +10,103 @@ build_dir=$1
 ev=$2
 mkdir -p "$ev"
 
+# Consolidation-only forensic audit. This does NOT change the active sources,
+# patch order, build flags, workflows, or tests. On shard zero, reconstruct the
+# last seven-shard/QEMU-proven native source in a detached worktree and perform
+# a full-tree three-way merge dry run against the current checked-in src/.
+if [[ "$ev" == */shard-0/compiler ]]; then
+  (
+    set -Eeuo pipefail
+    repo_root=$(git rev-parse --show-toplevel)
+    historical=9bee70c501231579569b096c88f867349b979808
+    snapshot_parent=$(mktemp -d "$repo_root/build/minic-consolidation-XXXXXXXX")
+    echo "MINIC_SOURCE_REPLAY=START baseline=$historical checkout=$GITHUB_SHA"
+    git fetch --quiet --no-tags --depth=1 origin "$historical"
+    git -c advice.detachedHead=false worktree add --quiet --detach \
+      "$snapshot_parent/validated" "$historical"
+    (
+      cd "$snapshot_parent/validated"
+      python3 - <<'PY_RUNTIME_PATCHES'
+from pathlib import Path
+import re
+import subprocess
+s = Path("tools/ci/linux-runtime-build-minic-profile-v1.sh").read_text()
+a = s.split("patches=(", 1)[1].split(")", 1)[0]
+patches = re.findall(r"^\s*(apply-[\w-]+\.py)\s*$", a, re.M)
+assert len(patches) == 44, f"Expected 44 historically proven runtime patches, got {len(patches)}"
+with open("historical-replay.log", "w") as log:
+    for i, patch in enumerate(patches, 1):
+        p = subprocess.run(["python3", "tools/ci/" + patch], text=True, stdout=log, stderr=subprocess.STDOUT)
+        if p.returncode:
+            raise SystemExit(f"MINIC_SOURCE_REPLAY=FAIL stage=runtime ordinal={i} script={patch} rc={p.returncode}; see historical-replay.log")
+    for i, patch in enumerate([
+        "apply-perf-symbolic-function-body-owner-filter-v0.py",
+        "apply-perf-integer-call-expression-index-v1.py",
+        "apply-perf-parser-lookup-counters-v0.py",
+        "apply-perf-parser-function-hash-v0.py",
+    ], 1):
+        p = subprocess.run(["python3", "tools/ci/" + patch], text=True, stdout=log, stderr=subprocess.STDOUT)
+        if p.returncode:
+            raise SystemExit(f"MINIC_SOURCE_REPLAY=FAIL stage=perf ordinal={i} script={patch} rc={p.returncode}; see historical-replay.log")
+print("MINIC_SOURCE_REPLAY=PATCHES_OK runtime=44 integrated_perf=4")
+PY_RUNTIME_PATCHES
+      git diff --check
+      git diff --binary -- src > "$snapshot_parent/proven-src.patch"
+      git diff --name-only -- src > "$snapshot_parent/proven-files.txt"
+    )
+    python3 - "$repo_root" "$snapshot_parent" "$historical" <<'PY_THREE_WAY'
+from pathlib import Path
+import subprocess
+import sys
+
+root, parent, baseline = Path(sys.argv[1]), Path(sys.argv[2]), sys.argv[3]
+proved = parent / "validated"
+candidate = parent / "candidate"
+def source_paths(directory):
+    return {x.relative_to(directory).as_posix() for x in (directory / "src").rglob("*") if x.is_file()}
+current_paths = source_paths(root)
+proved_paths = source_paths(proved)
+all_paths = sorted(current_paths | proved_paths)
+a_changed = []
+b_changed = []
+clean = []
+conflicts = []
+for path in all_paths:
+    try:
+        base = subprocess.check_output(["git", "-C", str(root), "show", f"{baseline}:{path}"])
+    except subprocess.CalledProcessError:
+        base = b""
+    a = (proved / path).read_bytes() if path in proved_paths else b""
+    b = (root / path).read_bytes() if path in current_paths else b""
+    if a != base: a_changed.append(path)
+    if b != base: b_changed.append(path)
+    if a == b: continue
+    if a == base:
+        continue
+    output = candidate / path
+    output.parent.mkdir(parents=True, exist_ok=True)
+    ancestor = parent / "base" / path
+    ancestor.parent.mkdir(parents=True, exist_ok=True)
+    ancestor.write_bytes(base)
+    res = subprocess.run(
+        ["git", "merge-file", "-p", "--diff3", str(root / path), str(ancestor), str(proved / path)],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    if res.returncode not in (0, 1):
+        raise SystemExit(f"MINIC_SOURCE_MERGE=ERROR file={path} rc={res.returncode} {res.stderr[:180]!r}")
+    output.write_bytes(res.stdout)
+    (conflicts if res.returncode else clean).append(path)
+print(f"MINIC_SOURCE_REPLAY=DIFF base_to_proven_files={len(a_changed)} base_to_current_files={len(b_changed)} clean_merges={len(clean)} conflict_files={len(conflicts)}")
+for path in a_changed:
+    tag = "CONFLICT" if path in conflicts else ("CLEAN" if path in clean else "SAME")
+    print(f"MINIC_SOURCE_REPLAY=FILE {tag} {path}")
+for path in conflicts:
+    data = (candidate / path).read_text(errors="replace")
+    print(f"MINIC_SOURCE_REPLAY=CONFLICT file={path} regions={data.count('<<<<<<< ')}")
+print(f"MINIC_SOURCE_REPLAY=COMPLETE proof_patch_bytes={(parent / 'proven-src.patch').stat().st_size}")
+PY_THREE_WAY
+  ) || echo "MINIC_SOURCE_REPLAY=DIAGNOSTIC_FAILED original_runtime_pipeline_preserved=true"
+fi
+
 patches=(
   apply-local-integer-assignment-v2.py
   apply-local-integer-logical-conditions-v0.py
