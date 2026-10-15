@@ -5,12 +5,18 @@ set -Eeuo pipefail
 ev="${1:?cohort directory required}"
 root="${2:?compiler bin directory required}"
 rotated="${3:-false}"
+integer_subphase="${4:-false}"
 work="$ev/boolean-hot/optimized-phase"
 mkdir -p "$work/before/bin" "$work/after/bin"
 cp "$root/minic" "$work/before/bin/minic"
 cp "$root/minic" "$work/after/bin/minic"
 # The before AND after compiler use identical timing instrumentation.
 python3 tools/ci/apply-perf-specialization-phase-trace-v0.py
+optional_trace=()
+if [[ "$integer_subphase" == true ]]; then
+  python3 tools/ci/apply-perf-integer-loop-trace-v0.py
+  optional_trace=(--expect-integer-loops)
+fi
 make -j4 MODE=release CFLAGS=-Werror \
   BUILD_DIR="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain" \
   "$root/minic-cc" >/dev/null
@@ -40,8 +46,12 @@ for owner in "${targets[@]}"; do
     --input "$frozen" \
     --baseline "$work/before/bin/minic" \
     --candidate "$work/after/bin/minic" \
-    --expect-specialization \
+    --expect-specialization "${optional_trace[@]}" \
     --out "$work/results/$key" | tee "$work/$key-verdict.txt"
   grep -Fq 'MINIC_SPEC_PHASE_GROUP=PASS' "$work/$key-verdict.txt"
+  if (("${#optional_trace[@]}")); then
+    grep -Fq 'MINIC_INTEGER_SUBPHASE_GROUP=PASS mode=before' "$work/$key-verdict.txt"
+    grep -Fq 'MINIC_INTEGER_SUBPHASE_GROUP=PASS mode=after' "$work/$key-verdict.txt"
+  fi
 done
 echo 'MINIC_OPTIMIZED_STAGE_PROFILE=PASS owners=3 attribution_only=true qemu_pending=true'
