@@ -121,7 +121,7 @@ cleanup() {
       fi
     fi
     [[ "$source_file" == *.i ]] || rm -f "$preprocessed"
-    rm -f "$assembly" "$minic_stdout" "$minic_stderr"
+    rm -f "$assembly" "${base}.perf-baseline.s" "$minic_stdout" "$minic_stderr"
   fi
 }
 trap cleanup EXIT
@@ -152,8 +152,21 @@ fi
 
 [[ -z "$trace" ]] || printf 'minic input=%q output=%q\n' "$preprocessed" "$assembly" >>"$trace"
 set +e
-CORE_FAST_TRACE=${CORE_FAST_TRACE:-1} "$minic" -S "$preprocessed" -o "$assembly"   >"$minic_stdout" 2>"$minic_stderr"
-status=$?
+if [[ -n "${MINIC_PERF_AB_BASELINE:-}" ]]; then
+  # Strict opt-in: time old and new compilers on the SAME GNU-generated .i,
+  # preserve normal candidate assembler output, and require identical .s.
+  python3 "${BASH_SOURCE[0]%/*}/../../../tools/ci/linux-perf-2064-paired-compile-v1.py" pair \
+    --baseline "$MINIC_PERF_AB_BASELINE" --candidate "$minic" \
+    --input "$preprocessed" --assembly "$assembly" \
+    --baseline-assembly "${base}.perf-baseline.s" \
+    --stdout "$minic_stdout" --stderr "$minic_stderr" \
+    --log "${MINIC_PERF_AB_LOG:?}" --owner "$output_file"
+  status=$?
+else
+  CORE_FAST_TRACE=${CORE_FAST_TRACE:-1} "$minic" -S "$preprocessed" -o "$assembly" \
+    >"$minic_stdout" 2>"$minic_stderr"
+  status=$?
+fi
 set -e
 if (( status != 0 )); then
   echo "MINIC_KBUILD_BLOCKER source=$source_file output=$output_file status=$status" >&2
