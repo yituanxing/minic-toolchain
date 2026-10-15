@@ -1257,6 +1257,11 @@ static bool minic_specialize_inline_symbolic_calls(
                     }
                     transitive_clone_count += 1U;
                 }
+                /* The transitive symbolic pass used to create the right clone
+                   but leave the source call pointing at the base callee.  That
+                   made the specialization dead and preserved deferred asm
+                   immediates.  Rewrite the actual nested call by stable index. */
+                program->expressions[nested_expression_index].value.call.function_id = variant_id;
             }
         }
     }

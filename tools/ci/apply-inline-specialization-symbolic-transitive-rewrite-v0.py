@@ -20,8 +20,12 @@ new = '''                    transitive_clone_count += 1U;
         }
     }
 '''
-count = text.count(old)
-if count != 1:
-    raise SystemExit(f"expected one symbolic transitive tail, found {count}")
+old_count = text.count(old)
+new_count = text.count(new)
+if old_count == 0 and new_count == 1:
+    print("MINIC_INLINE_SPECIALIZATION_SYMBOLIC_TRANSITIVE_REWRITE_V0=ALREADY_CANONICAL")
+    raise SystemExit(0)
+if old_count != 1 or new_count != 0:
+    raise SystemExit(f"symbolic transitive rewrite is partial/duplicated old={old_count} new={new_count}")
 p.write_text(text.replace(old, new, 1))
 print("MINIC_INLINE_SPECIALIZATION_SYMBOLIC_TRANSITIVE_REWRITE_V0=APPLIED")
