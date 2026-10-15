@@ -203,7 +203,7 @@ def main():
             trace=results["after"]["specialization_ms"][stage]
             print(f"MINIC_SPEC_PHASE name={stage} ms={trace['ms']:.2f} calls={trace['calls']}")
         gap=results["after"]["interstage_gap_ms"]["normalize-to-core-set"]
-        tracked=sum(v["ms"] for v in results["after"]["specialization_ms"].values())
+        # Nested direct/transitive timers overlap with spec-symbolic.\n        # Account only the four disjoint outer passes in the gap total.\n        tracked=sum(results["after"]["specialization_ms"][name]["ms"] for name in SPEC_STAGES)
         print(f"MINIC_SPEC_UNATTRIBUTED gap_ms={gap:.2f} specialization_sum_ms={tracked:.2f} "
               f"other_gap_ms={gap-tracked:.2f}")
         print("MINIC_SPEC_PHASE_GROUP=PASS four_substages=true")
