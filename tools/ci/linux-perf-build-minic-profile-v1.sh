@@ -41,7 +41,7 @@ patches=(
   apply-inline-specialization-core-empty-function-v0.py
   apply-inline-specialization-label-alias-v0.py
   apply-riscv64-default-text-section-v0.py
-  apply-riscv64-explicit-section-flags-v0.py
+  # Native RV64 source already emits explicit executable/writable ELF section flags.
   apply-inline-asm-symbolic-specialization-v0.py
   apply-perf-symbolic-function-body-owner-filter-v0.py
   apply-perf-parser-lookup-counters-v0.py
