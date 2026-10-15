@@ -1,6 +1,25 @@
 #!/usr/bin/env python3
 from pathlib import Path
 
+# After migration the same historically tested implementation is already
+# present in tracked sources. Preserve this script as an exact all-or-nothing
+# source compatibility gate; do not duplicate helper functions or AST fields.
+_native_markers = (
+    ("src/frontend/ast.h", "MinicExpressionId specialization_symbolic_expression[MINIC_MAX_FUNCTION_PARAMETERS];"),
+    ("src/compiler/compiler.c", "static bool minic_inline_symbolic_static_expression_depth("),
+    ("src/compiler/compiler.c", "if (success && !minic_specialize_inline_symbolic_calls(&program, target_info)) {"),
+    ("src/core/core_lower.c", "static const MinicFunction *core_select_transitive_symbolic_specialization("),
+    ("src/core/core_lower.c", "callee = core_select_transitive_symbolic_specialization(context, expression, callee);"),
+    ("src/core/core_lower_asm.c", '#include "target/data_layout.h"'),
+    ("src/core/core_lower_asm.c", "static bool core_inline_asm_parameter_index("),
+)
+_native_states = [Path(path).read_text().count(marker) for path, marker in _native_markers]
+if any(_native_states):
+    if any(count != 1 for count in _native_states):
+        raise SystemExit("MINIC_INLINE_SYMBOLIC_ADDRESS=ERROR partial/duplicated canonical source")
+    print("MINIC_INLINE_SPECIALIZATION_SYMBOLIC_ADDRESS_V0=ALREADY_CANONICAL")
+    raise SystemExit(0)
+
 
 def replace_once(path: str, old: str, new: str) -> None:
     p = Path(path)

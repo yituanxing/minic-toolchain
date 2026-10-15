@@ -3597,6 +3597,158 @@ static const MinicFunction *core_select_transitive_integer_specialization(
     return best;
 }
 
+
+
+static bool core_inline_symbolic_argument_expression(
+    const MinicCoreLowerContext *context,
+    MinicExpressionId expression_id,
+    MinicExpressionId *symbolic_expression,
+    unsigned int depth) {
+    const MinicExpression *expression;
+    const MinicFunction *caller;
+    const MinicFunction *source;
+
+    if (context == NULL || context->body == NULL || context->body->program == NULL ||
+        context->source_function == NULL || symbolic_expression == NULL || depth > 32U) {
+        return false;
+    }
+    caller = context->source_function;
+    if (!caller->is_integer_specialization ||
+        caller->specialization_source >= context->body->program->function_count) {
+        return false;
+    }
+    source = &context->body->program->functions[caller->specialization_source];
+    expression = minic_c0_program_expression(context->body->program, expression_id);
+    if (expression == NULL) {
+        return false;
+    }
+    if (expression->kind == MINIC_EXPRESSION_CAST ||
+        expression->kind == MINIC_EXPRESSION_BITCAST ||
+        expression->kind == MINIC_EXPRESSION_CONVERSION ||
+        expression->kind == MINIC_EXPRESSION_LVALUE_READ) {
+        return core_inline_symbolic_argument_expression(
+            context,
+            expression->value.unary.operand,
+            symbolic_expression,
+            depth + 1U);
+    }
+    if (expression->kind == MINIC_EXPRESSION_LOCAL) {
+        MinicLocalId local_id = expression->value.local_id;
+        size_t parameter_index;
+        if (local_id < source->local_begin) {
+            return false;
+        }
+        parameter_index = local_id - source->local_begin;
+        if (parameter_index >= source->parameter_count ||
+            parameter_index >= MINIC_MAX_FUNCTION_PARAMETERS ||
+            !caller->specialization_symbolic_known[parameter_index]) {
+            return false;
+        }
+        *symbolic_expression =
+            caller->specialization_symbolic_expression[parameter_index];
+        return *symbolic_expression != MINIC_EXPRESSION_INVALID;
+    }
+    return false;
+}
+
+static const MinicFunction *core_select_transitive_symbolic_specialization(
+    MinicCoreLowerContext *context,
+    const MinicExpression *expression,
+    const MinicFunction *current_callee) {
+    const MinicC0Program *program;
+    MinicFunctionId source_id;
+    const MinicFunction *source;
+    const MinicFunction *best;
+    size_t best_symbol_count;
+    MinicExpressionId actual_symbol[MINIC_MAX_FUNCTION_PARAMETERS];
+    bool actual_known[MINIC_MAX_FUNCTION_PARAMETERS];
+    size_t i;
+    size_t candidate_index;
+
+    if (context == NULL || context->body == NULL || context->body->program == NULL ||
+        expression == NULL || expression->kind != MINIC_EXPRESSION_CALL ||
+        current_callee == NULL || !current_callee->is_integer_specialization) {
+        return current_callee;
+    }
+    program = context->body->program;
+    source_id = current_callee->specialization_source;
+    if (source_id >= program->function_count) {
+        return current_callee;
+    }
+    source = &program->functions[source_id];
+    if (source->parameter_count != expression->value.call.argument_count ||
+        source->parameter_count > MINIC_MAX_FUNCTION_PARAMETERS) {
+        return current_callee;
+    }
+    (void)memset(actual_known, 0, sizeof(actual_known));
+    for (i = 0U; i < MINIC_MAX_FUNCTION_PARAMETERS; ++i) {
+        actual_symbol[i] = MINIC_EXPRESSION_INVALID;
+    }
+    for (i = 0U; i < source->parameter_count; ++i) {
+        if (!minic_type_is_pointer(source->parameter_types[i])) {
+            continue;
+        }
+        actual_known[i] = core_inline_symbolic_argument_expression(
+            context,
+            expression->value.call.arguments[i],
+            &actual_symbol[i],
+            0U);
+    }
+    best = current_callee;
+    best_symbol_count = 0U;
+    for (i = 0U; i < source->parameter_count; ++i) {
+        if (current_callee->specialization_symbolic_known[i]) {
+            best_symbol_count += 1U;
+        }
+    }
+    for (candidate_index = 0U; candidate_index < program->function_count;
+         ++candidate_index) {
+        const MinicFunction *candidate = &program->functions[candidate_index];
+        size_t symbol_count = 0U;
+        bool compatible = true;
+
+        if (!candidate->is_integer_specialization ||
+            candidate->specialization_source != source_id ||
+            candidate->parameter_count != source->parameter_count) {
+            continue;
+        }
+        for (i = 0U; i < source->parameter_count; ++i) {
+            if (candidate->specialization_integer_known[i] !=
+                    current_callee->specialization_integer_known[i] ||
+                (candidate->specialization_integer_known[i] &&
+                 candidate->specialization_integer_bits[i] !=
+                    current_callee->specialization_integer_bits[i])) {
+                compatible = false;
+                break;
+            }
+            if (!candidate->specialization_symbolic_known[i]) {
+                continue;
+            }
+            symbol_count += 1U;
+            if (!actual_known[i] ||
+                candidate->specialization_symbolic_expression[i] != actual_symbol[i]) {
+                compatible = false;
+                break;
+            }
+        }
+        if (compatible && symbol_count > best_symbol_count) {
+            best = candidate;
+            best_symbol_count = symbol_count;
+        }
+    }
+    if (best != current_callee && getenv("MINIC_INLINE_SPEC_SYMBOLIC_TRACE") != NULL) {
+        (void)fprintf(stderr,
+                      "INLINE_SPEC_SYMBOLIC_SELECT caller=%s from=%s to=%s symbols=%zu\n",
+                      context->source_function->name != NULL
+                          ? context->source_function->name
+                          : "?",
+                      current_callee->name != NULL ? current_callee->name : "?",
+                      best->name != NULL ? best->name : "?",
+                      best_symbol_count);
+    }
+    return best;
+}
+
 static MinicCoreLowerStatus lower_direct_call(MinicCoreLowerContext *context,
                                               const MinicExpression *expression,
                                               MinicCoreValueId *value_id) {
@@ -3624,6 +3776,7 @@ static MinicCoreLowerStatus lower_direct_call(MinicCoreLowerContext *context,
     }
     callee = minic_c0_program_function(context->body->program, expression->value.call.function_id);
     callee = core_select_transitive_integer_specialization(context, expression, callee);
+    callee = core_select_transitive_symbolic_specialization(context, expression, callee);
     if (callee == NULL || callee->name == NULL || callee->name_length == 0U) {
         return MINIC_CORE_LOWER_ERROR;
     }

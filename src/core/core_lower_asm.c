@@ -2,6 +2,7 @@
 
 #include "frontend/const_eval.h"
 #include "frontend/expression_semantics.h"
+#include "target/data_layout.h"
 
 #include <inttypes.h>
 #include <stdio.h>
@@ -144,6 +145,361 @@ static const char *core_inline_asm_symbolic_immediate_name(
     return NULL;
 }
 
+
+
+static bool core_inline_asm_parameter_index(
+    const MinicCoreLowerContext *context,
+    MinicLocalId local_id,
+    size_t *parameter_index) {
+    const MinicFunction *source;
+
+    if (context == NULL || context->body == NULL || context->body->program == NULL ||
+        context->source_function == NULL || parameter_index == NULL ||
+        !context->source_function->is_integer_specialization ||
+        context->source_function->specialization_source >=
+            context->body->program->function_count) {
+        return false;
+    }
+    source = &context->body->program->functions[
+        context->source_function->specialization_source];
+    if (local_id < source->local_begin) {
+        return false;
+    }
+    *parameter_index = local_id - source->local_begin;
+    return *parameter_index < source->parameter_count &&
+           *parameter_index < MINIC_MAX_FUNCTION_PARAMETERS;
+}
+
+static bool core_inline_asm_specialized_integer(
+    const MinicCoreLowerContext *context,
+    MinicExpressionId expression_id,
+    int64_t *value,
+    unsigned int depth) {
+    const MinicExpression *expression;
+    MinicConstValue constant;
+
+    if (context == NULL || context->body == NULL || context->body->program == NULL ||
+        context->target == NULL || value == NULL || depth > 32U) {
+        return false;
+    }
+    if (minic_const_eval_integer(
+            context->body->program, context->target, expression_id, &constant) &&
+        minic_const_value_as_int64(
+            context->body->program, context->target, &constant, value)) {
+        return true;
+    }
+    expression = minic_c0_program_expression(context->body->program, expression_id);
+    if (expression == NULL) {
+        return false;
+    }
+    if (expression->kind == MINIC_EXPRESSION_CAST ||
+        expression->kind == MINIC_EXPRESSION_BITCAST ||
+        expression->kind == MINIC_EXPRESSION_CONVERSION ||
+        expression->kind == MINIC_EXPRESSION_LVALUE_READ) {
+        return core_inline_asm_specialized_integer(
+            context, expression->value.unary.operand, value, depth + 1U);
+    }
+    if (expression->kind == MINIC_EXPRESSION_LOCAL) {
+        size_t parameter_index;
+        const MinicFunction *function = context->source_function;
+        const MinicFunction *source;
+        MinicConstValue specialized;
+        if (!core_inline_asm_parameter_index(
+                context, expression->value.local_id, &parameter_index) ||
+            !function->specialization_integer_known[parameter_index]) {
+            return false;
+        }
+        source = &context->body->program->functions[function->specialization_source];
+        specialized.type = source->parameter_types[parameter_index];
+        specialized.bits = function->specialization_integer_bits[parameter_index];
+        return minic_const_value_as_int64(
+            context->body->program, context->target, &specialized, value);
+    }
+    return false;
+}
+
+static bool core_inline_asm_symbolic_address_depth(
+    const MinicCoreLowerContext *context,
+    MinicExpressionId expression_id,
+    const char **symbol,
+    int64_t *addend,
+    unsigned int depth);
+
+static bool core_inline_asm_symbolic_lvalue_address(
+    const MinicCoreLowerContext *context,
+    MinicExpressionId expression_id,
+    const char **symbol,
+    int64_t *addend,
+    unsigned int depth) {
+    const MinicC0Program *program;
+    const MinicExpression *expression;
+
+    if (context == NULL || context->body == NULL || context->body->program == NULL ||
+        symbol == NULL || addend == NULL || depth > 32U) {
+        return false;
+    }
+    program = context->body->program;
+    expression = minic_c0_program_expression(program, expression_id);
+    if (expression == NULL) {
+        return false;
+    }
+    if (expression->kind == MINIC_EXPRESSION_GLOBAL_OBJECT) {
+        const MinicGlobalObject *object =
+            minic_c0_program_global_object(program, expression->value.global_object_id);
+        if (object == NULL || object->name == NULL || object->name_length == 0U) {
+            return false;
+        }
+        *symbol = object->name;
+        *addend = 0;
+        return true;
+    }
+    if (expression->kind == MINIC_EXPRESSION_DEREFERENCE) {
+        return core_inline_asm_symbolic_address_depth(
+            context,
+            expression->value.unary.operand,
+            symbol,
+            addend,
+            depth + 1U);
+    }
+    if (expression->kind == MINIC_EXPRESSION_MEMBER) {
+        const MinicRecord *record =
+            minic_c0_program_record(program, expression->value.member.record_id);
+        const MinicExpression *base =
+            minic_c0_program_expression(program, expression->value.member.base);
+        size_t field_offset;
+        int64_t base_addend;
+        bool base_ok;
+
+        if (record == NULL || base == NULL ||
+            !minic_data_layout_record_field_offset(
+                minic_target_info_data_layout(context->target),
+                program,
+                record,
+                expression->value.member.field_index,
+                &field_offset) || field_offset > (size_t)INT64_MAX) {
+            return false;
+        }
+        if (minic_type_is_pointer(base->type)) {
+            base_ok = core_inline_asm_symbolic_address_depth(
+                context,
+                expression->value.member.base,
+                symbol,
+                &base_addend,
+                depth + 1U);
+        } else {
+            base_ok = core_inline_asm_symbolic_lvalue_address(
+                context,
+                expression->value.member.base,
+                symbol,
+                &base_addend,
+                depth + 1U);
+        }
+        if (!base_ok || base_addend > INT64_MAX - (int64_t)field_offset) {
+            return false;
+        }
+        *addend = base_addend + (int64_t)field_offset;
+        return true;
+    }
+    if (expression->kind == MINIC_EXPRESSION_SUBSCRIPT) {
+        const MinicExpression *base =
+            minic_c0_program_expression(program, expression->value.subscript.base);
+        MinicType element_type;
+        size_t element_size;
+        size_t element_alignment;
+        int64_t index;
+        int64_t base_addend;
+        int64_t scaled;
+
+        if (base == NULL || !minic_type_is_pointer(base->type) ||
+            !minic_type_pointee(base->type, &element_type) ||
+            !minic_data_layout_type(
+                minic_target_info_data_layout(context->target),
+                program,
+                element_type,
+                &element_size,
+                &element_alignment) ||
+            element_size > (size_t)INT64_MAX ||
+            !core_inline_asm_specialized_integer(
+                context, expression->value.subscript.index, &index, depth + 1U) ||
+            !core_inline_asm_symbolic_address_depth(
+                context,
+                expression->value.subscript.base,
+                symbol,
+                &base_addend,
+                depth + 1U)) {
+            return false;
+        }
+        if (index != 0 &&
+            ((index > 0 && index > INT64_MAX / (int64_t)element_size) ||
+             (index < 0 && index < INT64_MIN / (int64_t)element_size))) {
+            return false;
+        }
+        scaled = index * (int64_t)element_size;
+        if ((scaled > 0 && base_addend > INT64_MAX - scaled) ||
+            (scaled < 0 && base_addend < INT64_MIN - scaled)) {
+            return false;
+        }
+        *addend = base_addend + scaled;
+        return true;
+    }
+    return false;
+}
+
+static bool core_inline_asm_symbolic_address_depth(
+    const MinicCoreLowerContext *context,
+    MinicExpressionId expression_id,
+    const char **symbol,
+    int64_t *addend,
+    unsigned int depth) {
+    const MinicC0Program *program;
+    const MinicExpression *expression;
+
+    if (context == NULL || context->body == NULL || context->body->program == NULL ||
+        context->target == NULL || symbol == NULL || addend == NULL || depth > 32U) {
+        return false;
+    }
+    program = context->body->program;
+    expression = minic_c0_program_expression(program, expression_id);
+    if (expression == NULL) {
+        return false;
+    }
+    if (expression->kind == MINIC_EXPRESSION_GLOBAL_OBJECT) {
+        const MinicGlobalObject *object =
+            minic_c0_program_global_object(program, expression->value.global_object_id);
+        if (object == NULL || object->name == NULL || object->name_length == 0U) {
+            return false;
+        }
+        *symbol = object->name;
+        *addend = 0;
+        return true;
+    }
+    if (expression->kind == MINIC_EXPRESSION_FUNCTION) {
+        const MinicFunction *function =
+            minic_c0_program_function(program, expression->value.function_id);
+        if (function == NULL) {
+            return false;
+        }
+        *symbol = function->assembler_name != NULL && function->assembler_name_length != 0U
+                      ? function->assembler_name
+                      : function->name;
+        *addend = 0;
+        return *symbol != NULL && **symbol != '\0';
+    }
+    if (expression->kind == MINIC_EXPRESSION_CAST ||
+        expression->kind == MINIC_EXPRESSION_BITCAST ||
+        expression->kind == MINIC_EXPRESSION_CONVERSION) {
+        return core_inline_asm_symbolic_address_depth(
+            context,
+            expression->value.unary.operand,
+            symbol,
+            addend,
+            depth + 1U);
+    }
+    if (expression->kind == MINIC_EXPRESSION_LVALUE_READ) {
+        const MinicExpression *operand =
+            minic_c0_program_expression(program, expression->value.unary.operand);
+        if (operand == NULL || operand->kind != MINIC_EXPRESSION_LOCAL) {
+            return false;
+        }
+        return core_inline_asm_symbolic_address_depth(
+            context,
+            expression->value.unary.operand,
+            symbol,
+            addend,
+            depth + 1U);
+    }
+    if (expression->kind == MINIC_EXPRESSION_LOCAL) {
+        size_t parameter_index;
+        MinicExpressionId specialized_expression;
+        if (!core_inline_asm_parameter_index(
+                context, expression->value.local_id, &parameter_index) ||
+            !context->source_function->specialization_symbolic_known[parameter_index]) {
+            return false;
+        }
+        specialized_expression =
+            context->source_function->specialization_symbolic_expression[parameter_index];
+        if (specialized_expression == MINIC_EXPRESSION_INVALID ||
+            specialized_expression == expression_id) {
+            return false;
+        }
+        return core_inline_asm_symbolic_address_depth(
+            context, specialized_expression, symbol, addend, depth + 1U);
+    }
+    if (expression->kind == MINIC_EXPRESSION_ADDRESS_OF) {
+        return core_inline_asm_symbolic_lvalue_address(
+            context,
+            expression->value.unary.operand,
+            symbol,
+            addend,
+            depth + 1U);
+    }
+    if (expression->kind == MINIC_EXPRESSION_BINARY &&
+        (expression->value.binary.operator_kind == MINIC_BINARY_ADD ||
+         expression->value.binary.operator_kind == MINIC_BINARY_SUBTRACT)) {
+        int64_t integer;
+        int64_t base_addend;
+        if (core_inline_asm_symbolic_address_depth(
+                context,
+                expression->value.binary.left,
+                symbol,
+                &base_addend,
+                depth + 1U) &&
+            core_inline_asm_specialized_integer(
+                context,
+                expression->value.binary.right,
+                &integer,
+                depth + 1U)) {
+            if (expression->value.binary.operator_kind == MINIC_BINARY_SUBTRACT) {
+                if (integer == INT64_MIN) {
+                    return false;
+                }
+                integer = -integer;
+            }
+            if ((integer > 0 && base_addend > INT64_MAX - integer) ||
+                (integer < 0 && base_addend < INT64_MIN - integer)) {
+                return false;
+            }
+            *addend = base_addend + integer;
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool core_inline_asm_specialized_symbolic_text(
+    const MinicCoreLowerContext *context,
+    MinicExpressionId expression_id,
+    char *buffer,
+    size_t capacity,
+    const char **text_out,
+    size_t *length_out) {
+    const char *symbol;
+    int64_t addend;
+    int written;
+
+    if (buffer == NULL || capacity == 0U || text_out == NULL || length_out == NULL ||
+        !core_inline_asm_symbolic_address_depth(
+            context, expression_id, &symbol, &addend, 0U)) {
+        return false;
+    }
+    if (addend == 0) {
+        *text_out = symbol;
+        *length_out = strlen(symbol);
+        return *length_out != 0U;
+    }
+    written = snprintf(buffer,
+                       capacity,
+                       addend > 0 ? "%s+%" PRId64 : "%s%" PRId64,
+                       symbol,
+                       addend);
+    if (written < 0 || (size_t)written >= capacity) {
+        return false;
+    }
+    *text_out = buffer;
+    *length_out = (size_t)written;
+    return true;
+}
+
 static bool core_inline_asm_immediate_text(
     const MinicCoreLowerContext *context,
     const MinicInlineAsmOperand *operand,
@@ -175,6 +531,15 @@ static bool core_inline_asm_immediate_text(
         }
         *text_out = integer_text;
         *length_out = (size_t)written;
+        return true;
+    }
+    if (core_inline_asm_specialized_symbolic_text(
+            context,
+            operand->expression,
+            integer_text,
+            integer_capacity,
+            text_out,
+            length_out)) {
         return true;
     }
     symbol = core_inline_asm_symbolic_immediate_name(
