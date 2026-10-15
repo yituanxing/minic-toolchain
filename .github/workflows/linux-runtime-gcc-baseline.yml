@@ -815,6 +815,8 @@ jobs:
             build/linux-runtime-gcc-cohort-v1/non-c-objects.tsv
             build/linux-runtime-gcc-cohort-v1/identity.txt
             build/linux-runtime-gcc-cohort-v1/cohort.log
+            build/linux-runtime-gcc-cohort-v1/boolean-hot/integer-call/results/**/paired-result.json
+            build/linux-runtime-gcc-cohort-v1/boolean-hot/integer-call/*-screen.txt
             build/linux-runtime-gcc-cohort-v1/boolean-hot/symbolic-owner/results/**/paired-result.json
             build/linux-runtime-gcc-cohort-v1/boolean-hot/symbolic-owner/*-screen.txt
             build/linux-runtime-gcc-cohort-v1/boolean-hot/spec-phase/results/**/phases.json
