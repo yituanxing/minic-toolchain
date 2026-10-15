@@ -449,11 +449,22 @@ static MinicCoreLowerStatus lower_parameter_ingress(MinicCoreLowerContext *conte
             MinicType pointer_type;
 
             (void)memset(&instruction, 0, sizeof(instruction));
-            instruction.kind = MINIC_CORE_INSTRUCTION_PARAMETER;
+            if (context->source_function->is_integer_specialization &&
+                context->source_function->specialization_integer_known[parameter_index] &&
+                minic_type_is_integer(parameter_value_type)) {
+                uint64_t specialized_bits =
+                    context->source_function->specialization_integer_bits[parameter_index];
+                instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
+                (void)memcpy(&instruction.value.integer_value,
+                             &specialized_bits,
+                             sizeof(specialized_bits));
+            } else {
+                instruction.kind = MINIC_CORE_INSTRUCTION_PARAMETER;
+                instruction.value.parameter_index = parameter_index;
+            }
             instruction.span = parameter->name_span;
             instruction.type = parameter_value_type;
             instruction.result = MINIC_CORE_VALUE_INVALID;
-            instruction.value.parameter_index = parameter_index;
             if (!minic_core_function_append_value_instruction(
                     context->function, context->block_id, &instruction, &parameter_value)) {
                 return MINIC_CORE_LOWER_ERROR;
