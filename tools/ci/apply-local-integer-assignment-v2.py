@@ -20,7 +20,8 @@ if "LOCAL_FACT_ASSIGN function=%s" in text:
         "normalized_do_while_zero_body(context,",
         "core_const_eval_integer_with_locals(context, source_id, &stored_constant)",
     )
-    if any(text.count(marker) != 1 for marker in required) or \
+    expected_counts = (1, 1, 1, 2, 1)
+    if any(text.count(marker) != count for marker, count in zip(required, expected_counts)) or \
        "static bool core_value_integer_constant(" in text:
         raise SystemExit("MINIC_LOCAL_INTEGER_ASSIGNMENT_V2=ERROR incomplete native source")
     print("MINIC_LOCAL_INTEGER_ASSIGNMENT_V2=ALREADY_CANONICAL")
