@@ -40,9 +40,10 @@ patches=(
   apply-inline-asm-write-output-trace-v0.py
   apply-inline-specialization-core-empty-function-v0.py
   apply-inline-specialization-label-alias-v0.py
-  # The two already-certified section fixes now live directly in src/target.
-  # Preserve the former nested M179 guard-facts patch at the same point.
-  apply-local-integer-guard-facts-v0.py
+  # Explicit section flags now live in canonical RV64 C source.  The separate
+  # default-text behavior still depends on the active Linux Runtime profile:
+  # keep its existing apply script, which also installs the M179 guard facts.
+  apply-riscv64-default-text-section-v0.py
   apply-inline-asm-symbolic-specialization-v0.py
   apply-riscv64-core-value-slot-pack-v0.py
   apply-riscv64-core-value-slot-reuse-v0.py
