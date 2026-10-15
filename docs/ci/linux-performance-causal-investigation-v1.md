@@ -416,3 +416,18 @@ PERF-006 `blake2s` 的真实 Runtime 布尔域索引收益为 1465.171ms→1368.
 关键结论：`lib/crc32` **不是** Codegen 慢，而是大量整数内联专门化与符号内联专门化；这两者已解释这段空白的 ~16.66s。网络两文件则也是整数与符号内联耗时远高于 Codegen。**不再继续优先在已只有毫秒级耗时的 crc32 Codegen 上研究 P14/P15**。已有 `apply-perf-symbolic-loop-trace-v0.py` 还能把符号专门化分为 direct/transitive 两部分；已有 `apply-perf-symbolic-function-body-owner-filter-v0.py` 则是带回退的 owner 过滤候选，但应先验证是否仍适用于现行 Runtime profile，并做数据驱动、字节等价的独立 A/B。
 
 另：#38660104046 的一次六阶段间隔单次 old/new 比较中，在没有相应算法变化的条件下 `normalize-to-core-set` 对 dev/tcp 表现出十多秒波动，因此**不得**将该诊断计时差当成优化提升；应仅用同次细分计时确定瓶颈，并在下一轮至少配对复测后宣称速度收益。现有正确性基线与原工具链 QEMU/Runtime 一概不动。
+
+
+## 22. PERF-017：符号内联真实瓶颈和首轮算法优化（2026-10-15）
+
+[分阶段 CI #38662744051](https://github.com/yituanxing/minic-toolchain/actions/runs/38662744051) SUCCESS，三个 Linux Kbuild 冻结源的 `spec-symbolic` 用时几乎全部来自 `transitive`，而不是 `direct`：dev 15ms / 4734ms；tcp_input 11ms / 2705ms；crc32 4ms / 7685ms。编译汇编逐字节相同。阶段追踪的残差曾因 nested timer 重复计入而为负，`4b7574e` 已修正求和；不以该残差判断优化。
+
+[第一轮优化 CI #38662578838](https://github.com/yituanxing/minic-toolchain/actions/runs/38662578838) SUCCESS。复用历史 `apply-perf-symbolic-function-body-owner-filter-v0.py`，基于已验证的 FunctionBody 源函数归属，在传递循环中排除明显不属于该源函数的表达式。内存分配/索引建表失败退回原始扫描。两次/臂、各热身一次，三份真实 `.i` 汇编每次完全相同。
+
+| owner | Boolean 原编译 P50 | 归属索引 P50 | speedup |
+| --- | ---: | ---: | ---: |
+| lib/crc32.o | 17700.280ms | 12491.452ms | **1.4170×** |
+| net/core/dev.o | 15714.800ms | 11426.814ms | **1.3753×** |
+| net/ipv4/tcp_input.o | 11207.556ms | 8757.871ms | **1.2797×** |
+
+局部 P50 合计 44.623→32.676s，节约 11.947s（约 26.77%）。`verified-local-2-repeats`；只说明三个真实输入的实验性能与字节一致性，不代表整体 Linux 提速，更不代表新增 QEMU P1 已通过。该候选明显有收益，进入扩样验证队列，不继续调小百分比算法。现有正式 Runtime 仍不启用此候选。
