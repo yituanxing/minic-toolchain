@@ -1413,6 +1413,41 @@ jobs:
           if-no-files-found: ignore
           retention-days: 3
 
+  gcc-perf-aggregate:
+    # Aggregate only actual measured runs. No source rebuild, no QEMU,
+    # no new workflow, no parallel compilation in this lightweight receiver.
+    needs: gcc-shards
+    if: github.event_name == 'push' && contains(github.event.head_commit.message, '[linux-perf-2064-ab]') && needs.gcc-shards.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+      - name: Restore seven measured MiniC Kbuild timing shards
+        uses: actions/download-artifact@v4
+        with:
+          pattern: minic-perf-2064-ab-shard-*
+          merge-multiple: false
+          path: build/linux-perf-2064-aggregate/shards
+      - name: Authenticate, aggregate and publish actual 2064 compiler time
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 tools/ci/linux-perf-2064-aggregate-v1.py \
+            --artifacts build/linux-perf-2064-aggregate/shards \
+            --out build/linux-perf-2064-aggregate/report --expect 2064
+          cat build/linux-perf-2064-aggregate/report/summary.md >> "$GITHUB_STEP_SUMMARY"
+      - name: Save small timing report and per-file evidence (no cached objects)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: minic-perf-2064-aggregate-${{ github.sha }}
+          path: |
+            build/linux-perf-2064-aggregate/report/aggregate.json
+            build/linux-perf-2064-aggregate/report/summary.md
+            build/linux-perf-2064-aggregate/shards/**/perf-ab.tsv
+          if-no-files-found: warn
+          retention-days: 10
+
   gcc-shard-verify:
     needs: gcc-shards
     # Use the SAME receiver job for exact immutable Image reboots. When the
