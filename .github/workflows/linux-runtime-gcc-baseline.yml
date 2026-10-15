@@ -650,6 +650,37 @@ jobs:
                 echo "PARSER_INDEX_SCREEN=PASS owner=$owner byte_identical=true"
               done
               echo "PARSER_INDEX_SCREEN_GROUP=PASS owners=3 rotation=${{ contains(github.event.head_commit.message, '[linux-perf-hotowners-rotation]') }} only_function_hash_changed=true QEMU_pending=true"
+            elif [[ "${{ contains(github.event.head_commit.message, '[linux-perf-symbolic-call]') }}" == true ]]; then
+              # Genuine marginal experiment: Boolean + owner index in both
+              # arms; candidate additionally scans CALL IDs once, in order.
+              work="$ev/boolean-hot/symbolic-call"
+              mkdir -p "$work/owner/bin" "$work/owner-call/bin"
+              cp "$root/minic" "$work/owner/bin/minic"
+              cp "$root/minic" "$work/owner-call/bin/minic"
+              python3 tools/ci/apply-perf-symbolic-function-body-owner-filter-v0.py
+              make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain" "$root/minic-cc" >/dev/null
+              cp "$root/minic-cc" "$work/owner/bin/minic-cc"
+              python3 tools/ci/apply-perf-symbolic-call-index-v1.py
+              make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain" "$root/minic-cc" >/dev/null
+              cp "$root/minic-cc" "$work/owner-call/bin/minic-cc"
+              test "$(sha256sum "$work/owner/bin/minic-cc" | cut -d' ' -f1)" != "$(sha256sum "$work/owner-call/bin/minic-cc" | cut -d' ' -f1)"
+              git diff --check
+              if [[ "${{ contains(github.event.head_commit.message, '[linux-perf-hotowners-rotation]') }}" == true ]]; then
+                targets=(lib/crc32.o net/core/dev.o net/ipv4/tcp_input.o)
+              else
+                targets=(kernel/bpf/btf.o kernel/bpf/verifier.o net/core/filter.o)
+              fi
+              for owner in "${targets[@]}"; do
+                key="${owner//\//_}"
+                test -s "$ev/boolean-hot/$key.frozen.i"
+                python3 tools/ci/linux-perf-pinned-single-paired-ab-v1.py \
+                  --input "$ev/boolean-hot/$key.frozen.i" \
+                  --baseline-driver "$work/owner/bin/minic" \
+                  --candidate-driver "$work/owner-call/bin/minic" \
+                  --repeats 2 --out "$work/results/$key" | tee "$work/$key-screen.txt"
+                grep -Fq 'MINIC_ONE_OWNER_AB=PASS' "$work/$key-screen.txt"
+              done
+              echo 'SYMBOLIC_CALL_INDEX_GROUP=PASS owners=3 byte_identical=true QEMU_pending=true'
             elif [[ "${{ contains(github.event.head_commit.message, '[linux-perf-symbolic-first500]') }}" == true ]]; then
               work="$ev/boolean-hot/first500"
               mkdir -p "$work/old/bin" "$work/new/bin"
@@ -878,6 +909,8 @@ jobs:
             build/linux-runtime-gcc-cohort-v1/non-c-objects.tsv
             build/linux-runtime-gcc-cohort-v1/identity.txt
             build/linux-runtime-gcc-cohort-v1/cohort.log
+            build/linux-runtime-gcc-cohort-v1/boolean-hot/symbolic-call/results/**/paired-result.json
+            build/linux-runtime-gcc-cohort-v1/boolean-hot/symbolic-call/*-screen.txt
             build/linux-runtime-gcc-cohort-v1/boolean-hot/first500/results/differential.json
             build/linux-runtime-gcc-cohort-v1/boolean-hot/first500/first500-verdict.txt
             build/linux-runtime-gcc-cohort-v1/boolean-hot/symbolic-integer/results/**/paired-result.json
