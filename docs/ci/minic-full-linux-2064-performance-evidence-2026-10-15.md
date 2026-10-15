@@ -1,3 +1,26 @@
+## 从全量实测直接确定下一轮排查顺序
+
+基于 [#38679636723](https://github.com/yituanxing/minic-toolchain/actions/runs/38679636723) 中实际产生的七份 perf-ab.tsv；对照 [#38675862094](https://github.com/yituanxing/minic-toolchain/actions/runs/38675862094) 的各份完整目标清单，按目标取最后一条，2064/2064 唯一目标交叉校验成功。以 `optimized_ms` 排序，不再仅依赖过去 500-TU 或旧的热点列表。
+
+| 目录 | 目标数 | old 累计 s | new 累计 s | 速度提升 |
+| --- | ---: | ---: | ---: | ---: |
+| net | 277 | 6755.2 | 5491.3 | 1.230× |
+| drivers | 806 | 3849.3 | 2829.7 | 1.360× |
+| fs | 277 | 2947.1 | 2144.4 | 1.374× |
+| kernel | 201 | 1868.0 | 1411.6 | 1.323× |
+| security | 61 | 1017.1 | 837.9 | 1.214× |
+| mm | 73 | 713.6 | 464.2 | 1.537× |
+
+**优化后的最大剩余总耗时集中在 net（5491.3s），远高于其他各目录**；此处先用已存在的 `linux-perf-phase-trace-v1.py` 和 Parser lookup counters 对真实预处理输入进行阶段分解（避免先改代码）。然后再对尚不能归因的最慢 `.i` 采 CPU profiler；**不可仅凭单 TU 耗时就声称某个函数是 CPU 热点**。
+
+**明确需要复测的两个最大回退**：
+- `net/ipv4/tcp_output.o`：旧 23.116s → 新 39.602s（增加 16.486s）。
+- `net/sunrpc/svcsock.o`：旧 11.722s → 新 28.155s（增加 16.433s）。
+
+这是单轮多线程负载下的 paired wall，不足以单独证明算法退化。优先使用同 SHA 原始 `.i`、旧/新 compiler、至少两次交错重复和阶段计时辨别 CPU 抢占噪声与真正回退。331 个单文件回退只是候选清单，不能宣称全部是代码回归。
+
+**流程错误的确切原因**：新计时功能的代码实际挂在原来的 `tests/external/linux/stage2_kbuild_cc.sh` 和 `tools/ci/linux-runtime-gcc-cohort-bisect-v1.sh` 中；七片依旧用了原有 7-runner Kbuild 与对象路由，**并不是没有用旧的带时间脚本**。错误在新接入的汇总器 `linux-perf-2064-paired-compile-v1.py summarize`，直接要求原始事件数=选定目标数，忽略 scripts/mod/vDSO 辅助 TU 和合法重试，导致已成功测量却报告整体失败。已修正为目标清单逐项覆盖、仅对选中目标取最终一次配对记录；原始证据全部保留。
+
 ## 最新修正：2064 文件**成对实测数据已经存在，且已复原**（2026-10-15）
 
 - 真实运行：[GitHub Actions #38679636723](https://github.com/yituanxing/minic-toolchain/actions/runs/38679636723)，commit `67eef0e741164ca0a1307cd407fdb2baaa033559`。
