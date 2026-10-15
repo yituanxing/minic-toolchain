@@ -6,9 +6,15 @@ import runpy
 def replace_once(path: str, old: str, new: str) -> None:
     p = Path(path)
     text = p.read_text()
-    count = text.count(old)
-    if count != 1:
-        raise SystemExit(f"{path}: expected one anchor, found {count}: {old[:160]!r}")
+    old_count = text.count(old)
+    new_count = text.count(new)
+    # The verified Runtime section behavior now lives in canonical C source.
+    # Keep this entrypoint: it still installs the independent local-fact fix.
+    if old_count == 0 and new_count == 1:
+        print("MINIC_RISCV64_DEFAULT_TEXT_SECTION_V0=ALREADY_CANONICAL")
+        return
+    if old_count != 1 or new_count != 0:
+        raise SystemExit(f"{path}: partial or duplicate section promotion: old={old_count} new={new_count}")
     p.write_text(text.replace(old, new, 1))
 
 
