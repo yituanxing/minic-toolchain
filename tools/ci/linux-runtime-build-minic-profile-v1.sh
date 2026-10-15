@@ -244,6 +244,11 @@ failed:
     return -3;
 }
 C
+# Consolidation forensic replay: recent native symbolic migration exposed a
+# real compile failure in pinned arch/riscv/kernel/vdso/vgettimeofday.i.
+# The compiler reports the formerly opaque specialization-source invariant
+# without altering the fail-closed decision. Reuse this owned Runtime profile
+# as the unchanged seven-shard source trigger; never invent a new test lane.
 # Same path as Kbuild stage2: GNU preprocessing -> MiniC -S -> GNU AS.
 # This runtime profile intentionally builds only minic and minic-cc (no minic-cpp).
 riscv64-linux-gnu-gcc -E -P -x c "$probe_dir/probe.c" \
