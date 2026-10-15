@@ -595,3 +595,14 @@ PERF-024 定位 **最新 Boolean+symbolic+integer** 版本 `lib/crc32.o` 整数�
 局部 3 owner P50 之和约 24.271→19.349s，节约 **4.922s（20.3% 用时）**。`crc32` 尤其明显，正对应真实阶段测出的整数 transitive 5.024s 热点，**不是瞎试**。实验状态 `3-real-owner-byte-equivalent / independent-BPF-cohort-needed`；因为当前仅测试过三份冻结输入，没有将此新算法纳入原已验的联合 first500，不应自动声称 QEMU P1 或整个 Linux 20% 提速。
 
 **下一检查：** 单独在此前 BTF/verifier/filter 三份、完全相同的 Boolean+symbolic-owner+integer-CALL 基准上执行 integer owner 过滤，并检查汇编逐字节相等；然后将其与原三项索引联合执行 SHA-frozen first500，再决定是否加入七路 Linux 全量运行时认证。相反，如果独立 BPF 组出现退化或语义变化，先暂停进一步加码源码索引。
+
+
+## 36. PERF-031：验收者角度的近期优化评估与四索引合并阶段检查（2026-10-15）
+
+**现在值得保留的、已证实的性能路径：** `Boolean` 已经在 3 个 BPF/net 长尾上有 1.79～1.94× 的旧实测局部收益；`symbolic FunctionBody-owner` 在两个独立的三 TU 组上分别 1.24～1.42×；`integer CALL-only` 在 `crc32` 有明显额外改善（其他网络文件收益较小）；`Parser earliest-first function hash` 在 symbolic+integer 均开启后两个独立三 TU 组中均额外加速（1.20～1.44×）。**不是将这些单项倍率相乘**。前三个候选索引同时开启（symbolic/ integer CALL/ Parser）已完成 500/500 Linux Kbuild `.s` SHA 相同，CI #38670218353。新 `integer FunctionBody-owner` 相对 Boolean+symbolic+integer-CALL，在 crc32/dev/tcp_input 分别局部 **1.5435×、1.1579×、1.1514×**，CI #38671761601；这四个索引同时开启的 500 个真实输入仍单独待证。
+
+**从工程代价看，尚需改进：** Integer-owner 新算法最初有数次 Python 文本 patch anchor（不是 MiniC 语义）导致浪费 runner 时间，不应把流水线排查失败当成优化失败，也不应继续在已经几毫秒的 direct initial pass 上迭代。后续优先源码区域限定定位 + CI 早失败，并停止在 P14 / Parser global hash 等已验证微小收益上反复调参。所有实验仍仅沿用已有 `gcc-single` Job、GNU gold objects、保存的 `.i`、paired-result JSON、M0 原子清单，不增加 workflow。
+
+[四索引 first500](https://github.com/yituanxing/minic-toolchain/actions/runs/38672453023) 验收已在执行：Boolean baseline vs 同时开启 symbolic owner / integer CALL / Parser hash / integer owner 的实际候选，必须 500/500 两臂均编译成功、汇编完全逐字节一致才可推广；此前一次变更到 cache restore 条件造成 workflow validation 失败（#38672263032，0 jobs），现已复用经过验证的 `[linux-perf-integrated-first500]` cache selector + `[linux-perf-owner-extra]` source-only tag，M0 已 PASS，前项失效不能算作四索引编译失败。
+
+为了避免继续针对过去已消失的热点做优化，已更新现有阶段追踪助手，可以在 **Boolean+symbolic owner+integer CALL+Parser hash+integer owner** 的实际新候选上同时输出 parser、core-set、codegen 和整数 direct/transitive / symbolic phase 的绝对耗时，**两臂均装同一计时插桩、实际汇编 SHA 一致**。用 3 份独立真实 Kbuild frozen crc32/dev/tcp_input 输入，与历史大优化前数据区分。该检查是一次阶段归因，不是性能倍数测试；只为确认下一步该优化哪个模块。
