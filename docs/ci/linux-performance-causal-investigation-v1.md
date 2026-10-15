@@ -357,3 +357,16 @@ PERF-006 `blake2s` 的真实 Runtime 布尔域索引收益为 1465.171ms→1368.
 **已发现并改正的一次实验设施失败：** 首次新 owner 扩组 [#38658207641](https://github.com/yituanxing/minic-toolchain/actions/runs/38658207641) 对 3 个新 owner 的 GNU golden 对象/config Kbuild 预检已 PASS，但在 Kbuild 中间产物保留检查中被旧硬编码 BTF/verifier/filter allowlist 拒绝：`BOOL_HOT=FAIL unexpected_owner_set`，尚未真实执行新对象的 candidate 编译或 A/B。代码审查后精确改正这**第三个**原 owner 名单，保留严格 allowlist（不放宽至任意 owner），fix `6a14f58b`。
 
 **独立修复复跑：** [#38658389460](https://github.com/yituanxing/minic-toolchain/actions/runs/38658389460)；按此记录时仍在运行。不可把 CI started / cache MISS / M0 SUCCESS 误记为性能验证成功。若新输入正确性或时间数据不合格，应记录为显式失败，不能自动晋级 P14，也不能无依据重启完整 2064 对象。
+
+
+**PERF-013 真实轮转结果（2026-10-15）：** [#38658389460](https://github.com/yituanxing/minic-toolchain/actions/runs/38658389460) `gcc-single SUCCESS`，恢复不可变 GNU 黄金缓存后只编译了三个独立的新 MiniC 候选对象（`COHORT_FULL_COMPILE attempted=3 compiled=3 failed=0`、`COHORT_ABI=PASS objects=3`），并保存新的原始 Kbuild `.i` SHA 锁定语料。仅新增 P14、同 runner 双臂各热身一次和 **2 次配对**，每一文件生成汇编字节一致：
+
+| 旋转 owner（此前从未在 P14 测量） | 原 Boolean Runtime P50 | Boolean + P14 P50 | 倍数 |
+| --- | ---: | ---: | ---: |
+| `net/core/dev.o` | 16073.989ms | 16105.739ms | **0.9980×（轻微退化）** |
+| `net/ipv4/tcp_input.o` | 11471.151ms | 10996.026ms | 1.0432× |
+| `lib/crc32.o` | 19463.595ms | 18903.915ms | 1.0296× |
+
+三份新长尾累计 P50 **47.009→46.006s，节省约 1.003s / 2.13%**。加上之前 3 个文件 P14 初筛 3.265s 的收益，**六个文件对应两次不同 CI 的观测中位数之和**约 **81.167→76.898s / 5.26%**；这只能作为各自同条件局部数据的算术合并，不能说整个 Linux 5.26% 提速，也不能消除跨 Runner 差异。
+
+**决策：** P14 在 filter 上有明确收益，但扩展至这三类程序结构时较弱，因此继续保留为 `scoped-promotion-candidate` 而**不是无条件默认启用**。当前最大慢文件 dev / crc32 的主要耗时显然不在 P14 所消除的扫描内。按照瓶颈轮转方法，不再反复细抠 P14；下一步复用三份**新缓存**的 `.i` 对此前在 BPF/filter 上明显有效的独立函数名哈希做单变量 A/B，判断它能否对 dev / tcp_input / crc32 的 Parser 规模产生通用收益。使用原先 `[linux-perf-parser-index]` 入口及旧 Parser 查找计数器，不新建 workflow，不重新 GNU Kbuild 生成 `.i`，修订后的路由只对 `[linux-perf-hotowners-rotation]` 改换三个 owner。
