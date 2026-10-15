@@ -7,7 +7,12 @@ def replace_once(path: str, old: str, new: str) -> None:
     text = p.read_text()
     # The same correctness fix is now stored in real Core/target C sources.
     # Existing Runtime CI uses this legacy patch entrypoint; do not apply twice.
-    if text.count(new) == 1 and text.count(old) == 0:
+    # One canonical hunk appends a field assignment immediately AFTER the
+    # original block, so its old text is also a substring of the new text.
+    # Do not treat that legitimate containment as a second old implementation.
+    # The other two hunks actually replace old text, and require it absent.
+    expected_old_count = 1 if old in new else 0
+    if text.count(new) == 1 and text.count(old) == expected_old_count:
         print("MINIC_SPECIALIZATION_LABEL_ALIAS=ALREADY_CANONICAL path=" + path)
         return
     count = text.count(old)
