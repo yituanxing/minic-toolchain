@@ -31,6 +31,7 @@ replace_one(direct, '''    original_function_count = program->function_count;
 # follows in the currently tested Runtime profile.
 start='''        program->expressions[expression_index].value.call.function_id = specialized_id;
     }
+
     {
         size_t caller_index;
 '''
