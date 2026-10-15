@@ -3,6 +3,20 @@ from pathlib import Path
 
 p = Path("src/compiler/compiler.c")
 text = p.read_text()
+# The verified symbolic-integer closure is now native compiler.c.
+# Preserve the historical producer only to enforce complete source migration.
+if "static bool minic_inline_close_symbolic_expression_depth(" in text:
+    expected = (
+        "static bool minic_inline_close_symbolic_expression_depth(",
+        "static bool minic_inline_symbolic_argument_expression(",
+        "static bool minic_inline_symbolic_variant_matches(",
+        "    if (minic_inline_close_symbolic_expression_depth(",
+    )
+    if any(text.count(value) != 1 for value in expected):
+        raise SystemExit("MINIC_INLINE_SYMBOLIC_INTEGER_CLOSURE=ERROR incomplete native code")
+    print("MINIC_INLINE_SPECIALIZATION_SYMBOLIC_INTEGER_CLOSURE_V0=ALREADY_CANONICAL")
+    raise SystemExit(0)
+
 start = text.find("static bool minic_inline_symbolic_argument_expression(\n")
 end = text.find("\nstatic bool minic_inline_symbolic_variant_matches(\n", start)
 if start < 0 or end < 0 or end <= start:
