@@ -644,7 +644,12 @@ jobs:
               echo "PARSER_INDEX_SCREEN_GROUP=PASS owners=3 rotation=${{ contains(github.event.head_commit.message, '[linux-perf-hotowners-rotation]') }} only_function_hash_changed=true QEMU_pending=true"
             elif [[ "${{ contains(github.event.head_commit.message, '[linux-perf-stage-profile]') }}" == true ]]; then
               python3 tools/ci/linux-perf-phase-trace-v1.py --self-test
-              for owner in kernel/bpf/btf.o kernel/bpf/verifier.o net/core/filter.o; do
+              if [[ "${{ contains(github.event.head_commit.message, '[linux-perf-hotowners-rotation]') }}" == true ]]; then
+                targets=(net/core/dev.o net/ipv4/tcp_input.o lib/crc32.o)
+              else
+                targets=(kernel/bpf/btf.o kernel/bpf/verifier.o net/core/filter.o)
+              fi
+              for owner in "${targets[@]}"; do
                 key="${owner//\//_}"
                 frozen="$ev/boolean-hot/$key.frozen.i"
                 test -s "$frozen"
@@ -654,7 +659,7 @@ jobs:
                   --candidate "$root/minic" \
                   --out "$ev/boolean-hot/phase/$key" | tee "$ev/boolean-hot/$key-phase.txt"
               done
-              echo 'BOOL_HOT_PHASE_GROUP=PASS owners=3 stage_traces=6_per_mode compiler_source_unchanged=true'
+              echo "BOOL_HOT_PHASE_GROUP=PASS owners=3 rotation=${{ contains(github.event.head_commit.message, '[linux-perf-hotowners-rotation]') }} stage_traces=6_per_mode compiler_source_unchanged=true"
             else
             for owner in kernel/bpf/btf.o kernel/bpf/verifier.o net/core/filter.o; do
               key="${owner//\//_}"
