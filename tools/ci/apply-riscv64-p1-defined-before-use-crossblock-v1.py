@@ -24,7 +24,10 @@ if "P1_DEFINED_BEFORE_USE_CROSSBLOCK_V1" in s:
         "/* P1_DEFINED_BEFORE_USE_CROSSBLOCK_V1:": 1,
         "bool can_share_across_blocks;": 1,
         "static bool core_scalar_object_first_access_defines(": 1,
-        "interval->can_share_across_blocks =": 2,
+        # Native perf-indexed fast path adds the same proven first-access
+        # recomputation alongside initialization and the original slow scan.
+        # Three assignments are required once the indexed path is canonical.
+        "interval->can_share_across_blocks =": 3,
         "static bool p1_crossblock_current_function_enabled = true;": 1,
         "p1_crossblock_current_function_enabled &&": 1,
         "strcmp(focus, symbol_name) == 0;": 1,
