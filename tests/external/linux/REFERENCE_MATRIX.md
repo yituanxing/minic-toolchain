@@ -26,3 +26,27 @@ A construct is treated as a Linux-specific historical artifact only after compar
 The Ubuntu 24.04 RV64 cross environment supplies glibc 2.39 headers for executable CI reproduction. Header-driven blockers are also checked against newer stable glibc, currently glibc 2.43, before concluding that a construct is obsolete or version-specific.
 
 Do not patch upstream Linux or libc headers to make MiniC pass.
+
+
+## Canonical main full-native Linux validation (2026-10-16)
+
+This verification keeps the Linux 6.6.143/GNU control and pinned input
+configurations unchanged. It exercises the **current main source**, rather
+than replaying an older MiniPP output artifact or hiding a GNU-PP fallback.
+
+- Fresh seven-way **2064/2064 MiniPP -> MiniC -> MiniAS** C-object producer.
+  The run must prove actual per-object MiniPP provenance, not just successful
+  use of the previously validated GNU-PP MiniC objects.
+- Existing native tool-union receiver: MiniAR, native MiniLD Kbuild boundaries,
+  native MiniObjcopy, and native non-C Kbuild assembler inputs.
+- Retain exact manifest/SHA checks and both GNU reference and QEMU P1 oracles.
+  A cache miss or unproven boundary is **not** a success; report it distinctly.
+- Separately account for generated-header preprocessing and special linker
+  boundaries still delegated to GNU. Do not call the whole kernel completely
+  native until every such owner is established.
+- Do not change or reinstall historical Python compiler patches: previously
+  verified Runtime44/Perf4 fixes are already present in native C under main.
+
+The existing seven-shard workflow is the actual execution surface. Commit
+message opt-in tags select its native producer and receiver without adding
+workflow files or changing any product C, assembler or preprocessor sources.
