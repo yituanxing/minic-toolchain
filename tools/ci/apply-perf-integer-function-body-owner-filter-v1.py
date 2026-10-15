@@ -82,16 +82,18 @@ finish = text.find("    if (specialization_count != 0U) {", begin)
 
 # The only error exit in this transitive block is failed clone allocation or
 # reaching the clone budget. Ensure optional array is also released there.
-abort='''                             &refined_id)) {
-                         return false;
-                     }'''
-abort_new='''                             &refined_id)) {
-                         free(integer_expression_owners);
-                         return false;
-                     }'''
-if text[begin:finish].count(abort) != 1:
-    raise SystemExit("integer owner: transitive failure cleanup anchor mismatch")
-replace_in_block(abort, abort_new, "failure cleanup", begin)
+# Find clone creation error exit inside the already scoped integer-transitive
+# block. Indentation varied among Runtime patch generations; insist that the
+# matched return is IMMEDIATELY after this specific clone call.
+creation="&refined_id)) {"
+area=text[begin:finish]
+if area.count(creation)!=1:
+    raise SystemExit(f"integer owner: clone error call count {area.count(creation)}")
+call_pos=begin+area.index(creation)+len(creation)
+return_pos=text.find("return false;", call_pos, finish)
+if return_pos<0 or text[call_pos:return_pos].strip():
+    raise SystemExit("integer owner: unmatched immediate error exit")
+text=text[:return_pos]+"free(integer_expression_owners);\\n"+text[return_pos:]
 finish = text.find("    if (specialization_count != 0U) {", begin)
 cleanup='''        if (refinement_count != 0U) {'''
 if text[begin:finish].count(cleanup) != 1:
