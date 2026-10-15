@@ -364,6 +364,13 @@ SH_STAGE_LAUNCHER
     keep_dma_inputs=1
     echo "BOOL_HOT=KEEP_EXACT_KBUILD_I owners=3 rotation=${COHORT_BOOL_HOT_ROTATION:-0}"
   fi
+  if [[ "${COHORT_PERF_2064_AB:-0}" == 1 ]]; then
+    [[ "$cohort_scope" == SHARD_COMPILE_ONLY ]] || { echo "MINIC_FULL_PERF_AB=FAIL wrong_scope"; exit 8; }
+    export MINIC_PERF_AB_BASELINE="${COHORT_PERF_2064_BASELINE:?}"
+    export MINIC_PERF_AB_LOG="$ev/perf-ab.tsv"
+    : >"$MINIC_PERF_AB_LOG"
+    echo "MINIC_FULL_PERF_AB=START objects=$n baseline=$MINIC_PERF_AB_BASELINE"
+  fi
   MINIC="$probe_minic" REAL_CC="$probe_gcc" \
     MINIC_KEEP_INTERMEDIATES="$keep_dma_inputs" MINIC_PRESERVE_FAILURE_INPUTS=1 \
     MINIC_KBUILD_SUCCESS_TRACE="$ev/mini-success-objects.txt" \
@@ -480,6 +487,11 @@ PY_STAGE_TOTALS
       exit 11
     }
   echo "COHORT_COMPILE=PASS objects=$n elapsed_ms=$(((cc_ended-cc_started)/1000000))"
+  if [[ "${COHORT_PERF_2064_AB:-0}" == 1 ]]; then
+    python3 "$repo/tools/ci/linux-perf-2064-paired-compile-v1.py" summarize \
+      --log "$ev/perf-ab.tsv" --objects-file "$objects_file" \
+      --out "$ev/perf-ab-summary.json"
+  fi
   if ((n==1)) && [[ "${objects[0]}" == kernel/dma/direct.o ]]; then
     zero_trace="$out/kernel/dma/direct.minic-stage2.minic.stderr"
     if [[ -s "$zero_trace" ]]; then
