@@ -779,6 +779,9 @@ jobs:
                 python3 tools/ci/linux-perf-pinned-single-paired-ab-v1.py --input "$ev/boolean-hot/$key.frozen.i" --baseline-driver "$work/baseline/bin/minic" --candidate-driver "$work/index/bin/minic" --repeats 2 --out "$work/results/$key" | tee "$work/$key-screen.txt"
               done
               echo 'SYMBOLIC_OWNER_GROUP=PASS owners=3 QEMU_pending=true'
+            elif [[ "${{ contains(github.event.head_commit.message, '[linux-perf-ast-footprint]') }}" == true ]]; then
+              bash tools/ci/linux-perf-ast-footprint-v1.sh \
+                "$ev" "$root" "${{ contains(github.event.head_commit.message, '[linux-perf-hotowners-rotation]') }}"
             elif [[ "${{ contains(github.event.head_commit.message, '[linux-perf-integer-owner]') }}" == true ]]; then
               bash tools/ci/linux-perf-integer-owner-marginal-v1.sh \
                 "$ev" "$root" "${{ contains(github.event.head_commit.message, '[linux-perf-hotowners-rotation]') }}"
@@ -905,6 +908,8 @@ jobs:
             build/linux-runtime-gcc-cohort-v1/boolean-hot/integer-call/*-screen.txt
             build/linux-runtime-gcc-cohort-v1/boolean-hot/symbolic-owner/results/**/paired-result.json
             build/linux-runtime-gcc-cohort-v1/boolean-hot/symbolic-owner/*-screen.txt
+            build/linux-runtime-gcc-cohort-v1/boolean-hot/ast-footprint/results/**/traced.stderr
+            build/linux-runtime-gcc-cohort-v1/boolean-hot/ast-footprint/results/**/peak-rss.txt
             build/linux-runtime-gcc-cohort-v1/boolean-hot/integer-owner/results/**/paired-result.json
             build/linux-runtime-gcc-cohort-v1/boolean-hot/integer-owner/*-screen.txt
             build/linux-runtime-gcc-cohort-v1/boolean-hot/parser-combined/results/**/paired-result.json
