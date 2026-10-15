@@ -769,6 +769,42 @@ jobs:
                 python3 tools/ci/linux-perf-pinned-single-paired-ab-v1.py --input "$ev/boolean-hot/$key.frozen.i" --baseline-driver "$work/baseline/bin/minic" --candidate-driver "$work/index/bin/minic" --repeats 2 --out "$work/results/$key" | tee "$work/$key-screen.txt"
               done
               echo 'SYMBOLIC_OWNER_GROUP=PASS owners=3 QEMU_pending=true'
+            elif [[ "${{ contains(github.event.head_commit.message, '[linux-perf-optimized-phase]') }}" == true ]]; then
+              # After PERF-022 first500=PASS, profile the ACTUAL optimized
+              # Boolean+symbolic-owner+integer-CALL combination, not historical
+              # unoptimized source. Both arms get the same trace instrumentation.
+              work="$ev/boolean-hot/optimized-phase"
+              mkdir -p "$work/before/bin" "$work/after/bin"
+              cp "$root/minic" "$work/before/bin/minic"
+              cp "$root/minic" "$work/after/bin/minic"
+              python3 tools/ci/apply-perf-specialization-phase-trace-v0.py
+              make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain" "$root/minic-cc" >/dev/null
+              cp "$root/minic-cc" "$work/before/bin/minic-cc"
+              python3 tools/ci/apply-perf-symbolic-function-body-owner-filter-v0.py
+              python3 tools/ci/apply-perf-integer-call-expression-index-v1.py
+              make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain" "$root/minic-cc" >/dev/null
+              cp "$root/minic-cc" "$work/after/bin/minic-cc"
+              test "$(sha256sum "$work/before/bin/minic-cc" | cut -d' ' -f1)" != "$(sha256sum "$work/after/bin/minic-cc" | cut -d' ' -f1)"
+              git diff --check
+              python3 tools/ci/linux-perf-phase-trace-v1.py --self-test
+              if [[ "${{ contains(github.event.head_commit.message, '[linux-perf-hotowners-rotation]') }}" == true ]]; then
+                targets=(lib/crc32.o net/core/dev.o net/ipv4/tcp_input.o)
+              else
+                targets=(kernel/bpf/btf.o kernel/bpf/verifier.o net/core/filter.o)
+              fi
+              for owner in "${targets[@]}"; do
+                key="${owner//\//_}"
+                frozen="$ev/boolean-hot/$key.frozen.i"
+                test -s "$frozen"
+                python3 tools/ci/linux-perf-phase-trace-v1.py \
+                  --input "$frozen" \
+                  --baseline "$work/before/bin/minic" \
+                  --candidate "$work/after/bin/minic" \
+                  --expect-specialization \
+                  --out "$work/results/$key" | tee "$work/$key-verdict.txt"
+                grep -Fq 'MINIC_SPEC_PHASE_GROUP=PASS' "$work/$key-verdict.txt"
+              done
+              echo 'MINIC_OPTIMIZED_STAGE_PROFILE=PASS owners=3 prior_500_symbolic_pass=true gap_bottleneck_attribution_only=true'
             elif [[ "${{ contains(github.event.head_commit.message, '[linux-perf-specialization-trace]') }}" == true ]]; then
               # Reuse historical helper instead of inventing a second tracing
               # framework; localize the very large normalize->core-set gap.
@@ -919,6 +955,8 @@ jobs:
             build/linux-runtime-gcc-cohort-v1/boolean-hot/integer-call/*-screen.txt
             build/linux-runtime-gcc-cohort-v1/boolean-hot/symbolic-owner/results/**/paired-result.json
             build/linux-runtime-gcc-cohort-v1/boolean-hot/symbolic-owner/*-screen.txt
+            build/linux-runtime-gcc-cohort-v1/boolean-hot/optimized-phase/results/**/phases.json
+            build/linux-runtime-gcc-cohort-v1/boolean-hot/optimized-phase/*-verdict.txt
             build/linux-runtime-gcc-cohort-v1/boolean-hot/spec-phase/results/**/phases.json
             build/linux-runtime-gcc-cohort-v1/boolean-hot/spec-phase/*-verdict.txt
             build/linux-runtime-gcc-cohort-v1/boolean-hot/codegen-use/results/**/paired-result.json
