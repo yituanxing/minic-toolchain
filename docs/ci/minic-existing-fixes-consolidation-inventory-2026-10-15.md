@@ -111,3 +111,29 @@
 **main 环境隔离**：GitHub Actions 缓存按分支隔离；原 agent 分支的 GNU golden 对象和 Linux source 缓存不能在新 main 上直接 restore，Actions [#38769158242](https://github.com/yituanxing/minic-toolchain/actions/runs/38769158242) 因此在 cache-miss 处失败，不代表 MiniC 编译回归。已沿用原 `gcc-runtime` job 在 main 上产生并保存完全相同、带配置认证的 GNU golden/source 缓存；此准备动作先跑，不用缓存命中代替新的源码编译 A/B 或 P1 结果。
 
 **验收后续顺序**：完成 main 的 GNU golden/source cache 授权迁移后，先在 main 以现有七路真实 2064 编译及 P1 判定布局参数默认模式；然后在 SHA 身份固定的同一套 GNU-E 输入上，对比核心编译耗时和 CPU/Wall 指标（剔除对象 cache-hit）；最后只考虑经证实有增益且全量正确的性能候选。
+
+
+## Main 真实编译时间观察（2026-10-16，2064 TU）
+
+这次不依赖缓存命中充当性能数据，直接读取两次 **真实 2064 C 对象编译** 的七路日志：
+
+- 迁移与双布局前/后第一轮成功版本 `b46822f`：Actions [#38764970582](https://github.com/yituanxing/minic-toolchain/actions/runs/38764970582)，7 个 producer 均显示 `COHORT_CANDIDATE_CACHE=MISS`，并报告 `COHORT_COMPILE=PASS`。
+- 主分支 GCC 参数化版本 `d7e0ec9`：Actions [#38771304613](https://github.com/yituanxing/minic-toolchain/actions/runs/38771304613)，7 个 producer 也全部 `MISS` 后真实编译，每路校验 `COHORT_ABI=PASS`；receiver 的 2064 全量链接 + QEMU P1 12 项系统调用 **PASS**。接收端出现 `COHORT_CANDIDATE_CACHE=HIT objects=2064` 是对这次刚生成的对象执行链接复用，不是生产者跳过编译。
+
+| 分片 | C 对象数 | `b46822f` 编译 wall ms | `d7e0ec9` 编译 wall ms |
+|---|---:|---:|---:|
+| 0 | 295 | 407223 | 525903 |
+| 1 | 295 | 379232 | 382639 |
+| 2 | 295 | 553903 | 409560 |
+| 3 | 295 | 292150 | 388623 |
+| 4 | 295 | 396937 | 393394 |
+| 5 | 295 | 398855 | 411967 |
+| 6 | 294 | 493135 | 368719 |
+| **7 路计时求和** | **2064** | **2921435** | **2880805** |
+| **最慢单路** | — | **553903** | **525903** |
+
+观察：同一 2064 目标规模下七路 wall 求和下降约 **1.39%**，最慢单路耗时下降约 **5.05%**。这仅是**两次不同 GitHub Runner 调度/负载/时间的观测值，不是同一环境交替测量的严格配对 A/B**，也不是累计 CPU time；每路有明显双向波动（如 shard 0 变慢、shard 2 变快），不能把 1.39% 宣布为实际优化收益或「确定没有任何性能回归」。
+
+代码证明：`src/core/core_lower.c`、`src/core/core_lower_asm.c`、`src/target/riscv64/core_codegen.c`、`src/frontend/parser_core.c`、`src/frontend/parser_typedef.c` 的 Git Blob SHA 在 `b46822f` 与 `main` 完全相同；`compiler.c` 仅增加编译选项参数与保留原 API wrapper 的布局传递，并未重写 inline-specialization 主算法。这证明**已经验收的源码级优化没有被合并操作删除**，但不能替代严格 A/B。
+
+后续严格 A/B：同机、同一 GNU 预处理后 .i 输入集、固定编译器版本与参数、交替 ABBA 顺序、至少重复 3 轮；只计 MiniC 自身 CPU 与 wall，不包含预处理、汇编、缓存复制、链接；逐 TU 匹配且报告中位数 / P95 / 总 CPU 时间。同时要求目标代码/ABI、Linux 全量链接与 P1 不退化。历史 perf-only scoped Boolean Domain 先走单独的受控候选试验，不直接并进生产分支。
