@@ -98,6 +98,29 @@ def main():
         # this expensive P1 gate keeps only the true strcmp NOP fast preflight.
         if "MINIAS_CODE_ALIGN_PREFLIGHT=PASS" not in runtime:
             raise AssertionError("native Linux MiniAS executable NOP preflight missing")
+
+        # Frozen real-Kbuild hotspot rotation is tightly scoped at THREE
+        # separate preflight/producer/retention entrypoints. The 2026-10-15
+        # first rotating run missed the middle allowlist and was rejected
+        # before candidate compilation; guard the full triple here.
+        cohort=(ROOT/"tools/ci/linux-runtime-gcc-cohort-bisect-v1.sh").read_text()
+        canonical="(kernel/bpf/btf.o kernel/bpf/verifier.o net/core/filter.o)"
+        rotation="(net/core/dev.o net/ipv4/tcp_input.o lib/crc32.o)"
+        for label,owners in (("original",canonical),("rotation",rotation)):
+            if cohort.count(owners) != 3:
+                raise AssertionError(f"hot-owner {label} allowlist must be repeated at all three gates")
+        if cohort.count('if [[ "${COHORT_BOOL_HOT_ROTATION:-0}" == 1 ]]; then') != 3:
+            raise AssertionError("hot-owner rotation must gate GNU preflight, Kbuild intermediates and frozen source retention")
+        if 'sha256sum "${files[@]}" > frozen.sha256' not in cohort:
+            raise AssertionError("rotated frozen Kbuild input manifest must SHA-bind the actual selected owner list")
+        if not all(token in runtime for token in (
+            "[linux-perf-hotowners-rotation]",
+            "COHORT_BOOL_HOT_ROTATION=",
+            "net/core/dev.o net/ipv4/tcp_input.o lib/crc32.o",
+        )):
+            raise AssertionError("Runtime fixed-scope rotation workflow lost its allowlist and cache identity")
+        print("M0_PERF_HOT_OWNER_ROTATION=PASS two_disjoint_sets=2 guarded_places=3 existing_job=true")
+
     # The legacy Image branch depended on an expired 2026-09-02 artifact,
     # so keep it in an immutable archive, never as a live certification mode.
     if "[miniobjcopy-linux-image]" in mini or "run-id: 33623125809" in mini:
