@@ -320,8 +320,7 @@ static void core_local_constants_clear_known(MinicCoreLowerContext *context) {
         }
         if (fact->specialization_known && core_inline_spec_fact_trace_enabled(context)) {
             (void)fprintf(stderr,
-                          "INLINE_SPEC_FACT event=clear function=%s source=%zu local=%zu known=%d modified=%d escaped=%d bits=%" PRIu64 "\
-",
+                          "INLINE_SPEC_FACT event=clear function=%s source=%zu local=%zu known=%d modified=%d escaped=%d bits=%" PRIu64 "\n",
                           context->source_function->name != NULL
                               ? context->source_function->name
                               : "?",
@@ -345,8 +344,7 @@ static void core_local_constant_invalidate(MinicCoreLowerContext *context,
             fact->specialization_modified = true;
             if (core_inline_spec_fact_trace_enabled(context)) {
                 (void)fprintf(stderr,
-                              "INLINE_SPEC_FACT event=invalidate function=%s source=%zu local=%zu bits=%" PRIu64 "\
-",
+                              "INLINE_SPEC_FACT event=invalidate function=%s source=%zu local=%zu bits=%" PRIu64 "\n",
                               context->source_function->name != NULL
                                   ? context->source_function->name
                                   : "?",
@@ -369,8 +367,7 @@ static void core_local_constant_escape(MinicCoreLowerContext *context,
             fact->specialization_modified = true;
             if (core_inline_spec_fact_trace_enabled(context)) {
                 (void)fprintf(stderr,
-                              "INLINE_SPEC_FACT event=escape function=%s source=%zu local=%zu bits=%" PRIu64 "\
-",
+                              "INLINE_SPEC_FACT event=escape function=%s source=%zu local=%zu bits=%" PRIu64 "\n",
                               context->source_function->name != NULL
                                   ? context->source_function->name
                                   : "?",
@@ -393,8 +390,7 @@ static bool core_local_constant_get(const MinicCoreLowerContext *context,
         core_inline_spec_fact_trace_enabled(context)) {
         const MinicCoreLocalIntegerConstant *fact = &context->local_integer_constants[index];
         (void)fprintf(stderr,
-                      "INLINE_SPEC_FACT event=get function=%s source=%zu local=%zu known=%d modified=%d escaped=%d bits=%" PRIu64 "\
-",
+                      "INLINE_SPEC_FACT event=get function=%s source=%zu local=%zu known=%d modified=%d escaped=%d bits=%" PRIu64 "\n",
                       context->source_function->name != NULL
                           ? context->source_function->name
                           : "?",
@@ -1160,8 +1156,7 @@ static MinicCoreLowerStatus lower_parameter_ingress(MinicCoreLowerContext *conte
                         fact->specialization_modified = false;
                         if (core_inline_spec_fact_trace_enabled(context)) {
                             (void)fprintf(stderr,
-                                          "INLINE_SPEC_FACT event=seed function=%s source=%zu local=%zu bits=%" PRIu64 "\
-",
+                                          "INLINE_SPEC_FACT event=seed function=%s source=%zu local=%zu bits=%" PRIu64 "\n",
                                           context->source_function->name != NULL
                                               ? context->source_function->name
                                               : "?",
