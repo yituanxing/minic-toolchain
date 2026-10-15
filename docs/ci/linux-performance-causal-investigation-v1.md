@@ -516,3 +516,18 @@ PERF-006 `blake2s` 的真实 Runtime 布尔域索引收益为 1465.171ms→1368.
 比较用的原 Boolean 版本同次单次 wall 分别约 16007、12959、8870ms；属于计时插桩的阶段归因，不应和独立多次 A/B 的 P50 相加成产品级 speedup。已优化的网络程序符号 transitive 仅数百 ms，旧热点已经转移；**不能继续执着符号传递循环原样微调**。
 
 **下一两项有代码证据的算法疑点（待计数/验证、不是根因定论）：** 整数内联专门化内会 `for (nested_candidate_index=original_function_count; nested_candidate_index<program->function_count;...)` 每次线性找匹配 variant；另外 Core 在选择最具体 specialization 时也可能按 `function_count` 扫描；这些会形成“候选 cloned functions × 每次 variant 检索”二重工作。需要诊断统计调用次数/检查次数，量化本阶段所占耗时，然后才决定是否做 source-ID scoped lookup/index，保留原始首匹配及回退语义。另一方面 Parser 函数名哈希已在单独两组三 TU 局部提速，下一轮使用 [CI #38667404638](https://github.com/yituanxing/minic-toolchain/actions/runs/38667404638) 对**最新 Boolean+owner+integer** 两臂在有相同 lookup 计数器的条件下做独立 function-hash 边际 A/B，并保持 compiler 输出逐字节相同；以 CI verdict 为准，不假设收益可直接相乘。
+
+
+## 30. PERF-025：实际联合优化配置下的 Parser 函数名哈希，跨阶段增量收益（2026-10-15）
+
+[真实 A/B CI #38667404638](https://github.com/yituanxing/minic-toolchain/actions/runs/38667404638) `gcc-single SUCCESS`，固定 3 个经过 SHA 校验的 Linux Kbuild `.i`，三份 GNU golden/candidate 缓存均命中。**两臂都有 Boolean+symbolic FunctionBody-owner+integer-CALL index+相同 Parser 查找计数器**，候选唯一额外变化是 `minic_parser_find_function` 的 earliest-first 保序哈希索引，而不是将两个独立实验倍率相乘；各自独立热身 + 2 次交替配对，所有 `.s` 完全逐字节相同。
+
+| owner | 复合基准 P50 | 仅额外增加 Parser 函数名哈希 | 候选增量 speedup |
+| --- | ---: | ---: | ---: |
+| lib/crc32.o | 11315.361ms | 10936.887ms | 1.0346× |
+| net/core/dev.o | 11999.495ms | 9035.768ms | **1.3280×** |
+| net/ipv4/tcp_input.o | 8970.781ms | 6479.701ms | **1.3844×** |
+
+三文件 P50 之和约 **32.286→26.452s**，节省约 **5.833s / 18.07%**（限此 3 个文件且受 2 次/臂快筛噪声影响）。说明后续网络慢文件的 Parser 函数符号检索与内联专门化是**可以叠加的两个独立热点**；crc32 剩余瓶颈则仍为 integer (~5.0s) 及 symbolic (~2.1s)，函数名哈希在此仅边际 3.5%。
+
+**决策：** Parser 保序函数名哈希从单模块快筛提升为 `integrated-candidate / independent-bpf-cohort-pending`，**不自动进入已认证 Runtime**。下一条独立 cohort 是 BTF/verifier/filter，继续固定 Boolean+owner+integer，只增加 Parser 哈希 A/B 和 `.s` SHA 对比；回归不能再使用已经测过的 crc32/dev/tcp_input 假充扩样。即使第二组也通过，后续必须对三个算法联合编译器进行 first500 等价验证，并最终 QEMU P1 才能宣称升级正式工具链。
