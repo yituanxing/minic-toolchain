@@ -1339,7 +1339,7 @@ static bool minic_finalize_inline_integer_specialization_references(MinicC0Progr
                  * clones or change the reachability decision here. */
                 (void)fprintf(stderr,
                               "MINIC_INLINE_REACHABILITY_BAD_SOURCE clone=%zu source=%zu "
-                              "function_count=%zu nested=%u function=%s\\n",
+                              "function_count=%zu nested=%u function=%s\n",
                               function_index,
                               (size_t)source_id,
                               program->function_count,
