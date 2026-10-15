@@ -459,3 +459,18 @@ PERF-006 `blake2s` 的真实 Runtime 布尔域索引收益为 1465.171ms→1368.
 合计 **51.785→46.249s**，节省约 5.535s（约 10.69%），其中 crc32 最明显。判定 `verified-local-3 / keep-as-candidate`；绝不能宣称 Linux 整体 +10.69%。
 
 **下轮：** 与 PERF-017 符号源归属过滤共同开启，**先做 incremental marginal A/B：Boolean+symbolic-owner vs Boolean+symbolic-owner+integer-CALL-index**。能保持 3 个真实文件逐字节一致且 crc32 仍保留显著额外收益，才考虑向 first500/7-runner 递进。未完成全面兼容性/QEMU P1，不直接晋级已认证 Runtime。
+
+
+## 25. PERF-020：两个已独立有效索引的联合边际 A/B（2026-10-15）
+
+在原 Runtime+Boolean 基线上，保持 **符号源函数归属过滤同时开启于两臂**，唯一改变整数传递专门化 CALL 表达式索引是否开启，测试了它们是否争夺同一热点。CI [#38664438661](https://github.com/yituanxing/minic-toolchain/actions/runs/38664438661) `gcc-single SUCCESS`，两臂各热身一次 + 2 次配对，三份 SHA 冻结的真 Linux Kbuild `.i`，`.s` 完全字节一致，重用了 3 个 golden 和 candidate 缓存对象。
+
+| 文件 | Boolean+symbolic owner P50 | 再加 integer CALL P50 | 后者额外收益 |
+| --- | ---: | ---: | ---: |
+| lib/crc32.o | 8770.894ms | 7562.590ms | **1.1598×** |
+| net/core/dev.o | 9360.208ms | 8812.370ms | 1.0622× |
+| net/ipv4/tcp_input.o | 7102.372ms | 6876.769ms | 1.0328× |
+
+合计 **25.234→23.252s**，额外节省约 **1.982s（7.86%）**；两个优化并非完全重叠，`crc32` 是主要获益者。但这依然是本组同-run 2× 快筛，**不等于完整 Linux 7.86%**。状态 `verified-local-cohort / integer-optional`。符号归属过滤已在独立 6 TU 上有 1.24～1.42×，相比之下整数索引边际小且更集中，优先为符号过滤做**完整 500 TU 等价认证**，不要为了小尾巴继续优化整数索引。
+
+相应 [CI #38664911462](https://github.com/yituanxing/minic-toolchain/actions/runs/38664911462) 仅做严格正确性：尝试直接恢复现成 SHA-frozen first500 corpus（命中前不下载或重生成），固定原 Boolean Runtime，两臂仅差符号归属过滤，4 worker 每输入双方只编译一次并 SHA 比较。允许的结论是 `selected=500 identical=500`，一处编译错误或汇编不同即记为不通过；不是性能测试，更不是 QEMU P1 认证。当前仍待最终 CI verdict。
