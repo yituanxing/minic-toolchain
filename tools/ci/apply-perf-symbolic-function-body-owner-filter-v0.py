@@ -138,15 +138,20 @@ block_repl = '''    {
                       symbolic_owned_expression_count *
                       sizeof(*symbolic_expression_owners));
 
-        if ((symbolic_owned_expression_count != 0U &&
-             symbolic_expression_owners == NULL) ||
-            !minic_perf_program_build_expression_source_owners(
+        /* Optimization only: never fail an otherwise valid compiler input
+         * just because an optional ownership index cannot be allocated or
+         * constructed. Revert to the original unfiltered transitive walk. */
+        bool symbolic_owner_index_ready =
+            (symbolic_owned_expression_count == 0U ||
+             symbolic_expression_owners != NULL) &&
+            minic_perf_program_build_expression_source_owners(
                 program,
                 original_function_count,
                 symbolic_expression_owners,
-                symbolic_owned_expression_count)) {
+                symbolic_owned_expression_count);
+        if (!symbolic_owner_index_ready) {
             free(symbolic_expression_owners);
-            return false;
+            symbolic_expression_owners = NULL;
         }
         (void)original_function_count;
         for (caller_index = 0U;
@@ -163,7 +168,8 @@ nested_repl = '''                const MinicExpression *nested =
                     &program->expressions[nested_expression_index];
                 MinicFunctionId current_id;
 
-                if (nested_expression_index < symbolic_owned_expression_count) {
+                if (symbolic_owner_index_ready &&
+                    nested_expression_index < symbolic_owned_expression_count) {
                     MinicFunctionId nested_owner =
                         symbolic_expression_owners[nested_expression_index];
                     if (nested_owner != MINIC_FUNCTION_INVALID &&
