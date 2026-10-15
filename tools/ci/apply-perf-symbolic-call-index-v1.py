@@ -78,8 +78,9 @@ src = src[:start] + src[start:].replace(
     "size_t nested_expression_index;", "size_t nested_call_pos;", 1)
 pos = src.find("size_t symbolic_owned_expression_count")
 ix = src.find(anchor_loop, pos)
-if ix < 0 or src.find(anchor_loop, ix + len(anchor_loop)) >= 0:
-    raise SystemExit("symbolic transitive scan anchor count != 1")
+end_of_symbolic = src.find("    if (initial_clone_count != 0U || transitive_clone_count != 0U)", pos)
+if ix < 0 or end_of_symbolic < 0 or ix >= end_of_symbolic:
+    raise SystemExit("symbolic transitive scan missing inside scoped function")
 src = src[:ix] + replacement_loop + src[ix + len(anchor_loop):]
 # Existing owner patch owns every transitive early-exit; extend its cleanup.
 pos = src.find("size_t symbolic_owned_expression_count")
