@@ -64,25 +64,42 @@ def pair(a):
         fcntl.flock(out.fileno(),fcntl.LOCK_UN)
 
 def summarize(a):
+    # Kbuild legitimately invokes the stage2 compiler for helper objects
+    # outside our selected 295/294 target list, and occasionally recompiles
+    # a target. Historical `COHORT_STAGE_TIME` recorded those events too.
+    # Keep all raw evidence, but report exactly one LAST compilation per
+    # authenticated requested object (the final candidate .o producer).
     expected=[s.strip() for s in a.objects_file.read_text().splitlines()
               if s.strip() and not s.lstrip().startswith("#")]
-    rows=[]
+    if len(expected)!=len(set(expected)):
+        raise RuntimeError("Duplicate owners in selected Kbuild manifest")
+    last={}
+    raw_lines=0
     for line in a.log.read_text().splitlines():
         f=line.split("\t")
-        if len(f)!=6: raise RuntimeError("Bad full A/B row")
+        if len(f)!=6:
+            raise RuntimeError("Bad full A/B row")
         owner,old,new,bytes_,digest,first=f
         if first not in ("baseline","candidate") or len(digest)!=64:
             raise RuntimeError("Invalid full A/B provenance")
         old,new=float(old),float(new)
-        if min(old,new)<=0: raise RuntimeError("Invalid full A/B duration")
-        rows.append({"owner":owner,"baseline_ms":old,"candidate_ms":new,
-                     "input_bytes":int(bytes_),"asm_sha256":digest,"first":first})
-    actual=[x["owner"] for x in rows]
-    if len(expected)!=len(set(expected)) or len(actual)!=len(set(actual)) or set(expected)!=set(actual):
-        raise RuntimeError(f"Full A/B incomplete/duplicate expected={len(expected)} got={len(rows)}")
+        if min(old,new)<=0:
+            raise RuntimeError("Invalid full A/B duration")
+        if not all(c in "0123456789abcdef" for c in digest):
+            raise RuntimeError("Invalid assembly SHA")
+        raw_lines+=1
+        if owner in expected:
+            last[owner]={"owner":owner,"baseline_ms":old,"candidate_ms":new,
+                         "input_bytes":int(bytes_),"asm_sha256":digest,"first":first}
+    rows=[last[owner] for owner in expected if owner in last]
+    if len(rows)!=len(expected):
+        missing=set(expected)-set(last)
+        raise RuntimeError(f"Full A/B incomplete expected={len(expected)} actual={len(rows)} missing={sorted(missing)[:6]}")
     old=sum(x["baseline_ms"] for x in rows)
     new=sum(x["candidate_ms"] for x in rows)
-    result={"schema":"minic-real-linux-paired-2064-v1","objects":len(rows),
+    result={"schema":"minic-real-linux-paired-2064-v2","objects":len(rows),
+            "raw_kbuild_compiler_invocations":raw_lines,
+            "extra_kbuild_compiler_invocations":raw_lines-len(rows),
             "baseline_total_ms":round(old,3),"candidate_total_ms":round(new,3),
             "speedup":round(old/new,5),"reduction_pct":round(100*(1-new/old),3),
             "baseline_first":sum(x["first"]=="baseline" for x in rows),
@@ -91,13 +108,14 @@ def summarize(a):
             "largest_savings":sorted(rows,key=lambda r:r["baseline_ms"]-r["candidate_ms"],reverse=True)[:15],
             "largest_regressions":sorted(rows,key=lambda r:r["candidate_ms"]-r["baseline_ms"],reverse=True)[:15]}
     a.out.write_text(json.dumps(result,indent=2)+"\n")
-    print(f"MINIC_FULL_PERF_AB=PASS objects={len(rows)} baseline_ms={old:.3f} "
-          f"candidate_ms={new:.3f} speedup={old/new:.5f} "
+    print(f"MINIC_FULL_PERF_AB=PASS objects={len(rows)} raw_invocations={raw_lines} "
+          f"baseline_ms={old:.3f} candidate_ms={new:.3f} speedup={old/new:.5f} "
           f"reduction_pct={100*(1-new/old):.3f} baseline_first={result['baseline_first']} "
           f"regressions={result['regressions']}",flush=True)
     for row in result["slowest_candidate"][:5]:
         print(f"MINIC_FULL_PERF_HOT owner={row['owner']} old_ms={row['baseline_ms']:.3f} "
               f"new_ms={row['candidate_ms']:.3f}",flush=True)
+
 
 def main():
     p=argparse.ArgumentParser()
