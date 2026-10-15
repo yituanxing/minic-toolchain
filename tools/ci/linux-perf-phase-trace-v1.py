@@ -43,6 +43,33 @@ def attribute(events):
         raise RuntimeError("missing stage trace "+repr(set(STAGES)-set(elapsed)))
     return elapsed,funcs
 
+def compute_interstage_gaps(events):
+    """Measure work outside the original six stage spans, without patching MiniC.
+
+    Timestamps come from the same stderr reader. These gaps are NOT attributed
+    to a specific pass until the compiler source between markers is examined.
+    """
+    starts, ends = {}, {}
+    for when, line in events:
+        match = PAT.search(line)
+        if not match or match.group(1) not in STAGES:
+            continue
+        stage, action, _ = match.groups()
+        if action == "begin":
+            starts[stage] = when
+        elif action == "end-ok":
+            ends[stage] = when
+    if set(starts) != set(STAGES) or set(ends) != set(STAGES):
+        raise RuntimeError("incomplete stage boundaries for interstage attribution")
+    gaps = {}
+    for a, b in zip(STAGES, STAGES[1:]):
+        ns = starts[b] - ends[a]
+        if ns < 0:
+            raise RuntimeError("overlapping or reordered compiler stages: " + a + " / " + b)
+        gaps[a + "-to-" + b] = round(ns / 1000000, 3)
+    return gaps
+
+
 def sample(executable,source,output,limit):
     env=dict(os.environ,MINIC_BOOTSTRAP_TRACE="1")
     begun=time.perf_counter_ns()
@@ -59,9 +86,10 @@ def sample(executable,source,output,limit):
     if rc!=0 or not output.is_file() or output.stat().st_size==0:
         raise RuntimeError("trace compiler failed rc="+str(rc)+" stderr="+repr(events[-3:]))
     stages,functions=attribute(events)
+    gaps=compute_interstage_gaps(events)
     return {"wall_ms":round((time.perf_counter_ns()-begun)/1000000,3),
-            "stage_ms":stages,"function_counts":functions,
-            "assembly_sha":digest(output)}
+            "stage_ms":stages,"interstage_gap_ms":gaps,
+            "function_counts":functions, "assembly_sha":digest(output)}
 
 def main():
     cli=argparse.ArgumentParser()
@@ -78,7 +106,9 @@ def main():
                           (i*3000000+2000000,"MINIC_BOOTSTRAP_TRACE stage="+stage+" state=end-ok functions=10")])
         e,f=attribute(events)
         assert len(e)==6 and all(x==2 for x in e.values())
-        print("MINIC_PHASE_TRACE_SELFTEST=PASS six_stages=1")
+        gaps=compute_interstage_gaps(events)
+        assert len(gaps)==5 and all(x==1 for x in gaps.values())
+        print("MINIC_PHASE_TRACE_SELFTEST=PASS six_stages=1 five_interstage_gaps=1")
         return
     if not all((ns.input,ns.baseline,ns.candidate,ns.out)):
         cli.error("all inputs required")
@@ -100,6 +130,19 @@ def main():
         old=results["before"]["stage_ms"][stage]
         new=results["after"]["stage_ms"][stage]
         print(f"MINIC_PHASE_TRACE_STAGE name={stage} old_ms={old:.2f} new_ms={new:.2f} delta_ms={old-new:.2f}")
+    for gap in (a+"-to-"+b for a,b in zip(STAGES, STAGES[1:])):
+        before=results["before"]["interstage_gap_ms"][gap]
+        after=results["after"]["interstage_gap_ms"][gap]
+        print(f"MINIC_PHASE_TRACE_GAP name={gap} old_ms={before:.2f} new_ms={after:.2f} delta_ms={before-after:.2f}")
+    for mode in ("before","after"):
+        item=results[mode]
+        measured=sum(item["stage_ms"].values())+sum(item["interstage_gap_ms"].values())
+        external=item["wall_ms"]-measured
+        if external < -1:
+            raise RuntimeError("phase boundaries exceed full compiler invocation")
+        print(f"MINIC_PHASE_TRACE_RESIDUAL mode={mode} wall_ms={item['wall_ms']:.2f} "
+              f"unclassified_before_parse_or_after_codegen_ms={external:.2f}")
+
     print("MINIC_PHASE_TRACE_SCOPE=DIAGNOSTIC_ONLY not_QEMU_p1")
 
 if __name__=="__main__":
