@@ -8,6 +8,10 @@ rotated="${3:-false}"
 integer_subphase="${4:-false}"
 four_index="${5:-false}"
 case "$four_index" in true|false) ;; *) exit 64;; esac
+if [[ "$four_index" == true && "$integer_subphase" != true ]]; then
+  echo 'MINIC_OPTIMIZED_STAGE_PROFILE=ERROR full4_requires_integer_subphase' >&2
+  exit 64
+fi
 if [[ "$four_index" == true ]]; then
   work="$ev/boolean-hot/optimized-phase-four"
 else
