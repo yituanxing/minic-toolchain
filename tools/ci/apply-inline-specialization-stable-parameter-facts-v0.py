@@ -11,6 +11,28 @@ def replace_once(path: str, old: str, new: str) -> None:
     p.write_text(text.replace(old, new, 1))
 
 
+
+# Native Runtime specialized-parameter facts must be complete and nonduplicated.
+# This historical producer remains a strict validator after source consolidation.
+if "MinicConstValue specialization_value;" in Path("src/core/core_lower_internal.h").read_text():
+    source = Path("src/core/core_lower.c").read_text()
+    struct = Path("src/core/core_lower_internal.h").read_text()
+    if any(struct.count(marker) != 1 for marker in (
+            "MinicConstValue specialization_value;",
+            "bool specialization_known;",
+            "bool specialization_modified;",
+        )) or any(source.count(marker) != 1 for marker in (
+            "static bool core_inline_spec_fact_trace_enabled(",
+            "INLINE_SPEC_FACT event=clear",
+            "INLINE_SPEC_FACT event=invalidate",
+            "INLINE_SPEC_FACT event=escape",
+            "INLINE_SPEC_FACT event=get",
+            "INLINE_SPEC_FACT event=seed",
+        )):
+        raise SystemExit("MINIC_INLINE_SPECIALIZATION_STABLE_PARAMETER_FACTS_V0=ERROR partial canonical source")
+    print("MINIC_INLINE_SPECIALIZATION_STABLE_PARAMETER_FACTS_V0=ALREADY_CANONICAL")
+    raise SystemExit(0)
+
 replace_once(
     "src/core/core_lower_internal.h",
     "typedef struct MinicCoreLocalIntegerConstant {\n"

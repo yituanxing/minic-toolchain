@@ -6,8 +6,11 @@
 
 typedef struct MinicCoreLocalIntegerConstant {
     MinicConstValue value;
+    MinicConstValue specialization_value;
     bool known;
     bool escaped;
+    bool specialization_known;
+    bool specialization_modified;
 } MinicCoreLocalIntegerConstant;
 
 typedef struct MinicCoreLowerContext {
