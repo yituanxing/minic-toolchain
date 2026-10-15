@@ -37,8 +37,13 @@ new = '''            if (!minic_core_function_append_value_instruction(
 
             if (!minic_type_pointer_to(parameter->type, &pointer_type)) {
 '''
-count = text.count(old)
-if count != 1:
-    raise SystemExit(f"expected one parameter ingress fact anchor, found {count}")
-p.write_text(text.replace(old, new, 1))
-print("MINIC_INLINE_SPECIALIZATION_LOCAL_FACTS_V0=APPLIED")
+# The exact validated ingress facts now belong to canonical C. Existing
+# runtime/perf profiles still call this historical script: verify and skip
+# an already-promoted body, never write a duplicate patch.
+if text.count(new) == 1 and text.count(old) == 0:
+    print("MINIC_INLINE_SPECIALIZATION_LOCAL_FACTS_V0=ALREADY_CANONICAL")
+elif text.count(old) == 1 and text.count(new) == 0:
+    p.write_text(text.replace(old, new, 1))
+    print("MINIC_INLINE_SPECIALIZATION_LOCAL_FACTS_V0=APPLIED")
+else:
+    raise SystemExit("MINIC_INLINE_SPECIALIZATION_LOCAL_FACTS_V0=ERROR partial or duplicate code")
