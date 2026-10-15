@@ -370,3 +370,32 @@ PERF-006 `blake2s` 的真实 Runtime 布尔域索引收益为 1465.171ms→1368.
 三份新长尾累计 P50 **47.009→46.006s，节省约 1.003s / 2.13%**。加上之前 3 个文件 P14 初筛 3.265s 的收益，**六个文件对应两次不同 CI 的观测中位数之和**约 **81.167→76.898s / 5.26%**；这只能作为各自同条件局部数据的算术合并，不能说整个 Linux 5.26% 提速，也不能消除跨 Runner 差异。
 
 **决策：** P14 在 filter 上有明确收益，但扩展至这三类程序结构时较弱，因此继续保留为 `scoped-promotion-candidate` 而**不是无条件默认启用**。当前最大慢文件 dev / crc32 的主要耗时显然不在 P14 所消除的扫描内。按照瓶颈轮转方法，不再反复细抠 P14；下一步复用三份**新缓存**的 `.i` 对此前在 BPF/filter 上明显有效的独立函数名哈希做单变量 A/B，判断它能否对 dev / tcp_input / crc32 的 Parser 规模产生通用收益。使用原先 `[linux-perf-parser-index]` 入口及旧 Parser 查找计数器，不新建 workflow，不重新 GNU Kbuild 生成 `.i`，修订后的路由只对 `[linux-perf-hotowners-rotation]` 改换三个 owner。
+
+
+## 19. PERF-014：函数名哈希扩展到第二组 3 个真实 Linux 长尾（2026-10-15）
+
+[CI #38659189580](https://github.com/yituanxing/minic-toolchain/actions/runs/38659189580) `gcc-single SUCCESS`。**之前没有用于函数哈希验证的 3 个** Linux 6.6.143 GNU-Kbuild `.i` 被独立 SHA 验证并从上一轮 P14 的既有缓存恢复，日志 `COHORT_CANDIDATE_CACHE=HIT objects=3`、`BOOL_HOT_FROZEN=CACHE_HIT owners=3`。不再编译新 Linux .o，只增量构建 MiniC-cc 两个版本。固定同一 Boolean Runtime 与 lookup counter instrumentation，单变量仅改变 `minic_parser_find_function` 正序线性查找与 earliest-first 哈希索引；保持 local/global/typedef 不变，每臂独立热身一次 + 两次交替配对，**每个输入两臂生成汇编逐字节相同**。
+
+| 新 Linux 输入 | 有计数器的线性函数查找 P50 | 函数名保序哈希 P50 | 局部 speedup |
+| --- | ---: | ---: | ---: |
+| `net/core/dev.o` | 14754.400ms | 12581.869ms | **1.1727×** |
+| `net/ipv4/tcp_input.o` | 10125.323ms | 8105.407ms | **1.2492×** |
+| `lib/crc32.o` | 16429.620ms | 15993.317ms | **1.0273×** |
+
+三份新结构的独立 P50 合计 **41.309→36.681s**，约节省 **4.629s / 11.20%**。前面第一组 BTF/verifier/filter 的函数哈希节省约 4.23s（PERF-009），这说明独立 Parser 函数名索引在 BPF/net 的**多种规模 C 文件中都有两位数收益**，但在 `crc32` 很有限，证实不能把一个算法强行推广到所有文件。**两组 2 次/臂初筛、不同 CI Runner，不是完整全量基准**。
+
+**判定：** `verified-local-six-owners / correctness-promotion-candidate`。函数哈希比 P14 更广泛改善这批慢文件，但尚未验证更多 C 语义边界（重声明 earliest-first，失败 fallback，作用域）、first500 及 QEMU P1，正式 Runtime 仍不切换。不要继续对同六文件无限重测函数哈希；进入扩大语义和正确性覆盖队列。
+
+## 20. PERF-015：第二批结构化阶段归因，寻找函数哈希以外的最大瓶颈
+
+[CI #38659484515](https://github.com/yituanxing/minic-toolchain/actions/runs/38659484515) `SUCCESS`。复用此前同组 SHA-frozen 输入、Boolean candidate 与 GNU cached .o。现有 `MINIC_BOOTSTRAP_TRACE` 六段，不加新的编译器源码优化，在单次诊断中两臂汇编相同。**只记录同一 CI 的阶段计时，不与独立 P50 A/B 拼成同条件速度比。**
+
+| 真实文件 | Boolean 后 Parser | Core-set | Codegen |
+| --- | ---: | ---: | ---: |
+| `net/core/dev.o` | **4901ms** | 2195ms | 248ms |
+| `net/ipv4/tcp_input.o` | **4208ms** | 1212ms | 311ms |
+| `lib/crc32.o` | **810ms** | 116ms | **9ms** |
+
+大网络文件的 Parser 仍是已标注的主要阶段；`lib/crc32` 反常：虽然总编译耗时在独立实验中约 16–20s，但六阶段累计不到 1s，**绝大多数耗时落在六阶段之外**。这一现象明确解释了为什么 P14 和函数哈希对 crc32 几乎没有贡献，但不能把残差直接认定成某个函数。
+
+**立即采用更经济的诊断：** 已有 `linux-perf-phase-trace-v1.py` 的 stderr monotonic timestamps **本来就有六阶段 begin/end 完整时间线**，过去仅汇总六段丢弃中间间隔。Commit `b019f840` 在原脚本里增加 **五个间隔区间与 pre/post 残差** 的读数，不修改任何 MiniC 生产算法、不新建 CI 工作流。独立 opt-in [CI #38660104046](https://github.com/yituanxing/minic-toolchain/actions/runs/38660104046) 对同组缓存复采，用其具体 gap 数据来缩小 `crc32` 可能的昂贵逻辑，例如 AST verification 或 inline-emission reference recomputation 等**待验证假设**。该 Run 未结束前不得声称已定位根因。
