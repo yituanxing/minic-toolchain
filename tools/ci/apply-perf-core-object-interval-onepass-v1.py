@@ -12,6 +12,22 @@ from pathlib import Path
 
 p=Path("src/target/riscv64/core_codegen.c")
 s=p.read_text()
+# P15 has moved into canonical code. Both the original P1 first-access
+# oracle and the indexed branch must remain available.
+if "CORE_OBJECT_INTERVAL_INDEX_V1" in s:
+    required = (
+        "/* CORE_OBJECT_INTERVAL_INDEX_V1:",
+        "static CoreScalarObjectInterval *core_object_interval_index;",
+        "static bool core_object_interval_build_index(",
+        "intervals[i].can_share_across_blocks=false;",
+        "*interval = core_object_interval_index[object_id];",
+        "(void)core_object_interval_build_index(function);",
+        "core_object_interval_index = NULL;",
+    )
+    if any(s.count(x) != 1 for x in required) or s.count("core_scalar_object_first_access_defines(") < 3:
+        raise SystemExit("CORE_OBJECT_INTERVAL_INDEX_V1=ERROR partial source")
+    print("CORE_OBJECT_INTERVAL_INDEX_V1=ALREADY_CANONICAL")
+    raise SystemExit(0)
 def once(old,new):
     global s
     n=s.count(old)

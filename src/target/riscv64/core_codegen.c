@@ -1272,6 +1272,151 @@ unavailable:
     return false;
 }
 
+
+/* CORE_OBJECT_INTERVAL_INDEX_V1: one pass over function instructions, not
+ * N passes for N scalar objects. Only used with a valid P14 Value-use map. */
+static CoreScalarObjectInterval *core_object_interval_index;
+
+static bool core_object_interval_mark(
+    CoreScalarObjectInterval *intervals, unsigned char *disqualified,
+    size_t object_count, MinicCoreObjectId id, size_t block, size_t position) {
+    if (id >= object_count) {
+        return true;  /* Irrelevant to any of the real objects. */
+    }
+    if (disqualified[id]) {
+        return true;
+    }
+    if (!core_scalar_object_note_position(&intervals[id], block, position)) {
+        disqualified[id] = 1U;
+        intervals[id].reusable = false;
+    }
+    return true;
+}
+
+/* This is an optional index: failure MUST return false and keep the original
+ * scans available. In particular, allocation pressure must not make valid
+ * compilation fail. */
+static bool core_object_interval_build_index(const MinicCoreFunction *function) {
+    CoreScalarObjectInterval *intervals;
+    unsigned char *disqualified;
+    size_t block_index;
+    size_t object_count;
+    size_t i;
+
+    if (function == NULL || core_object_address_use_index == NULL ||
+        function->object_count == 0U ||
+        function->object_count > SIZE_MAX / sizeof(*intervals)) {
+        return false;
+    }
+    if (getenv("MINIC_TEST_FORCE_CORE_OBJECT_INTERVAL_FALLBACK") != NULL) {
+        return false;
+    }
+    object_count=function->object_count;
+    intervals=(CoreScalarObjectInterval *)malloc(object_count * sizeof(*intervals));
+    disqualified=(unsigned char *)calloc(object_count,sizeof(*disqualified));
+    if (intervals == NULL || disqualified == NULL) {
+        free(intervals);
+        free(disqualified);
+        return false;
+    }
+    for (i=0U;i<object_count;++i) {
+        intervals[i].reusable=false;
+        intervals[i].can_share_across_blocks=false;
+        intervals[i].block_index=SIZE_MAX;
+        intervals[i].first_position=SIZE_MAX;
+        intervals[i].last_position=0U;
+    }
+    for (block_index=0U;block_index<function->block_count;++block_index) {
+        const MinicCoreBlock *block=&function->blocks[block_index];
+        size_t position;
+        if (block->has_terminator &&
+            block->terminator.kind == MINIC_CORE_TERMINATOR_RETURN &&
+            block->terminator.return_object < object_count) {
+            disqualified[block->terminator.return_object] = 1U;
+        }
+        for (position=0U;position<block->instruction_count;++position) {
+            MinicCoreInstructionId id=block->instructions[position];
+            const MinicCoreInstruction *instruction;
+            size_t begin=0U,count=0U,k;
+            if (id >= function->instruction_count) {
+                goto unavailable;
+            }
+            instruction=&function->instructions[id];
+            if (instruction->kind == MINIC_CORE_INSTRUCTION_RECORD_LOAD &&
+                instruction->value.record_load.destination_object < object_count) {
+                disqualified[instruction->value.record_load.destination_object]=1U;
+            }
+            if (instruction->kind == MINIC_CORE_INSTRUCTION_CALL) {
+                if (instruction->value.call.result_object < object_count) {
+                    disqualified[instruction->value.call.result_object]=1U;
+                }
+                begin=instruction->value.call.argument_begin;
+                count=instruction->value.call.argument_count;
+            } else if (instruction->kind == MINIC_CORE_INSTRUCTION_INDIRECT_CALL) {
+                begin=instruction->value.indirect_call.argument_begin;
+                count=instruction->value.indirect_call.argument_count;
+            }
+            if (count != 0U) {
+                if (begin > function->call_argument_count ||
+                    count > function->call_argument_count-begin) {
+                    goto unavailable;
+                }
+                for (k=0U;k<count;++k) {
+                    const MinicCoreCallArgument *argument=&function->call_arguments[begin+k];
+                    if (argument->kind == MINIC_CORE_CALL_ARGUMENT_OBJECT &&
+                        argument->value.object_id < object_count) {
+                        disqualified[argument->value.object_id]=1U;
+                    }
+                }
+            }
+            if (instruction->kind == MINIC_CORE_INSTRUCTION_PARAMETER_OBJECT) {
+                (void)core_object_interval_mark(
+                    intervals, disqualified, object_count,
+                    instruction->value.parameter_object.object_id,block_index,position);
+            }
+            if (instruction->kind == MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS &&
+                instruction->value.object_id < object_count) {
+                MinicCoreObjectId oid=instruction->value.object_id;
+                MinicCoreValueId address=instruction->result;
+                const CoreObjectAddressUse *use;
+                if (disqualified[oid]) continue;
+                if (address == MINIC_CORE_VALUE_INVALID ||
+                    address >= function->value_count) {
+                    disqualified[oid]=1U;
+                    continue;
+                }
+                (void)core_object_interval_mark(
+                    intervals, disqualified, object_count,oid,block_index,position);
+                if (disqualified[oid]) continue;
+                use=&core_object_address_use_index[address];
+                if (use->cross_block ||
+                    (use->direct != 0U && use->block != block_index) ||
+                    use->total != use->direct) {
+                    disqualified[oid]=1U;
+                    continue;
+                }
+                if (use->direct != 0U) {
+                    (void)core_object_interval_mark(
+                        intervals,disqualified,object_count,oid,block_index,use->first);
+                    (void)core_object_interval_mark(
+                        intervals,disqualified,object_count,oid,block_index,use->last);
+                }
+            }
+        }
+    }
+    for (i=0U;i<object_count;++i) {
+        if (disqualified[i]) intervals[i].reusable=false;
+    }
+    free(disqualified);
+    core_object_interval_index=intervals;
+    return true;
+
+unavailable:
+    free(disqualified);
+    free(intervals);
+    return false;
+}
+
 static bool core_scalar_object_interval(const MinicC0Program *program,
                                         const MinicCoreFunction *function,
                                         MinicCoreObjectId object_id,
@@ -1300,6 +1445,17 @@ static bool core_scalar_object_interval(const MinicC0Program *program,
         object_size == 0U || object_size > 8U || object_alignment == 0U ||
         object_alignment > 8U ||
         function->objects[object_id].explicit_alignment > 8U) {
+        return true;
+    }
+    /* Preserve existing type/layout eligibility and P1 cross-block proof.
+       Indexed objects take the same first-access predicate as the old scan. */
+    if (core_object_interval_index != NULL) {
+        *interval = core_object_interval_index[object_id];
+        if (interval->reusable) {
+            interval->can_share_across_blocks =
+                core_scalar_object_first_access_defines(
+                    function, object_id, interval->block_index);
+        }
         return true;
     }
 
@@ -1497,6 +1653,8 @@ typedef struct CoreScalarObjectReuseCache {
 static CoreScalarObjectReuseCache core_scalar_object_reuse_cache;
 
 static void core_scalar_object_reuse_cache_clear(void) {
+    free(core_object_interval_index);
+    core_object_interval_index = NULL;
     free(core_object_address_use_index);
     core_object_address_use_index = NULL;
     free(core_scalar_object_reuse_cache.slots);
@@ -1563,6 +1721,8 @@ static bool core_scalar_object_reuse_layout(const MinicC0Program *program,
             if (function->object_count >= 8U &&
                 function->instruction_count >= 100U) {
                 (void)core_object_address_build_use_index(function);
+                /* Optional one-pass object analysis; legacy fallback remains. */
+                (void)core_object_interval_build_index(function);
             }
             for (object_index = 0U; object_index < function->object_count; ++object_index) {
                 core_scalar_object_reuse_cache.slots[object_index] = SIZE_MAX;
