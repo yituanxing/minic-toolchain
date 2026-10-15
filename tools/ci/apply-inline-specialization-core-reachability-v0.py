@@ -320,7 +320,10 @@ _core_helper_counts = tuple(text.count(x) for x in _core_helper_symbols)
 if all(x == 1 for x in _core_helper_counts) and text.count(anchor) == 1:
     if ("minic_walk_reachable_core_edges(program," not in text or
             "function->is_referenced = reachable[function_index];" not in text or
-            "minic_enqueue_core_block(core->entry_block," not in text):
+            "minic_enqueue_core_block(core->entry_block," not in text or
+            "case MINIC_CORE_TERMINATOR_INDIRECT_BRANCH:" not in text or
+            "instruction->kind == MINIC_CORE_INSTRUCTION_FUNCTION_ADDRESS" not in text or
+            "if (set->statuses[caller_id] != MINIC_CORE_LOWER_OK)" not in text):
         raise SystemExit("core reachability helper present but incomplete")
     print("MINIC_INLINE_SPECIALIZATION_CORE_REACHABILITY_V0=HELPER_ALREADY_CANONICAL")
 elif all(x == 0 for x in _core_helper_counts) and text.count(anchor) == 1:
