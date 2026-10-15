@@ -37,19 +37,42 @@ else:
     start, end, region = global_regions[0]
     old_prefix = '"  la t0, %s'
     new_prefix = '"  lla t0, %s'
+    # Historically this patch saw the raw 'la' emitter. During source
+    # consolidation the ordinary (non-static) RV64 backend now selects 'lla'
+    # only for assembler-local .L* names. The Linux *static* profile must
+    # still strengthen EVERY global address to 'lla', with unchanged behavior.
+    # Recognize both previously validated source shapes; reject ambiguity.
+    selector = (
+        'fprintf(file, "  %s t0, %s\\n",\\n'
+        '                    strncmp(function->globals[instruction->value.global_id].name, ".L", 2U) == 0\\n'
+        '                        ? "lla"\\n'
+        '                        : "la",\\n'
+        '                    function->globals[instruction->value.global_id].name)'
+    )
+    static_emit = (
+        'fprintf(file, "  lla t0, %s\\n", '
+        'function->globals[instruction->value.global_id].name)'
+    )
     count = region.count(old_prefix)
-    print(f"MINIC_RV64_STATIC_PCREL_GLOBAL_ADDRESS_V0_MATCHES={count}")
-    if count != 1:
-        raise SystemExit(f"rv64 pcrel global: expected one la prefix in emitter, found {count}")
+    selector_count = region.count(selector)
+    print(f"MINIC_RV64_STATIC_PCREL_GLOBAL_ADDRESS_V0_MATCHES={count} selector={selector_count}")
+    if count + selector_count != 1:
+        raise SystemExit(
+            f"rv64 pcrel global: expected one raw or canonical local-selector emitter, "
+            f"raw={count} selector={selector_count}"
+        )
     region = region.replace(
         global_case,
-        "    /* M196_LINUX_STATIC_PCREL_GLOBAL_ADDRESS: the Linux kernel is statically\n"
-        "       linked and executes early global accesses before the MMU is enabled.\n"
-        "       Use the explicit PC-relative pseudo-op so GAS cannot choose GOT form. */\n"
+        "    /* M196_LINUX_STATIC_PCREL_GLOBAL_ADDRESS: the Linux kernel is statically\\n"
+        "       linked and executes early global accesses before the MMU is enabled.\\n"
+        "       Use the explicit PC-relative pseudo-op so GAS cannot choose GOT form. */\\n"
         + global_case,
         1,
     )
-    region = region.replace(old_prefix, new_prefix, 1)
+    if selector_count == 1:
+        region = region.replace(selector, static_emit, 1)
+    else:
+        region = region.replace(old_prefix, new_prefix, 1)
     text = text[:start] + region + text[end:]
 
     # Function designators are equally important before relocation.  In
