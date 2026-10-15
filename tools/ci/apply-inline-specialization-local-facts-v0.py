@@ -53,7 +53,9 @@ if old_count == 0 and canonical_count == 0:
         "fact->specialization_modified = false;",
         "INLINE_SPEC_PARAMETER_FACT function=%s parameter=%zu local=%zu bits=%",
     )
-    if all(text.count(token) == 1 for token in required_successor):
+    expected_counts = (2, 1, 1, 1, 1, 1)
+    if all(text.count(token) == count
+           for token, count in zip(required_successor, expected_counts)):
         print("MINIC_INLINE_SPECIALIZATION_LOCAL_FACTS_V0=ALREADY_CANONICAL successor=stable-parameter")
         raise SystemExit(0)
 if old_count != 1 or canonical_count != 0:
