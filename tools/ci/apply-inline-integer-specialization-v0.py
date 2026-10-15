@@ -30,6 +30,21 @@ def replace_once(path: str, old: str, new: str) -> None:
             return
         if any(n != 0 for n in helper_counts):
             raise SystemExit("INLINE_SPECIALIZATION=ERROR partial canonical helpers")
+    # The later, separately validated symbolic-address promotion extends the
+    # exact original integer-specialization AST fields before is_defined.
+    # Preserve strict source-byte validation instead of reinjecting the old AST.
+    if path == "src/frontend/ast.h" and old.startswith("    MinicBlockId body_block;\\n"):
+        extended = new.replace(
+            "    bool is_integer_specialization;\\n",
+            "    MinicExpressionId specialization_symbolic_expression[MINIC_MAX_FUNCTION_PARAMETERS];\\n"
+            "    bool specialization_symbolic_known[MINIC_MAX_FUNCTION_PARAMETERS];\\n"
+            "    bool is_integer_specialization;\\n",
+        )
+        if text.count(extended) == 1 and text.count(old) == 0:
+            print("MINIC_INLINE_INTEGER_SPECIALIZATION_V0=AST_SYMBOLIC_ALREADY_CANONICAL")
+            return
+        if text.count("specialization_symbolic_expression[MINIC_MAX_FUNCTION_PARAMETERS]") != 0:
+            raise SystemExit("INLINE_SPECIALIZATION=ERROR partial symbolic extension")
     # Other hunks still require byte-exact already-promoted source evidence.
     if text.count(new) == 1:
         print("MINIC_INLINE_INTEGER_SPECIALIZATION_V0=ALREADY_CANONICAL path=" + path)
