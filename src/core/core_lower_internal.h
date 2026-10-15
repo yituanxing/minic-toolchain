@@ -2,6 +2,13 @@
 #define MINIC_CORE_CORE_LOWER_INTERNAL_H
 
 #include "core/core_lower.h"
+#include "frontend/const_eval.h"
+
+typedef struct MinicCoreLocalIntegerConstant {
+    MinicConstValue value;
+    bool known;
+    bool escaped;
+} MinicCoreLocalIntegerConstant;
 
 typedef struct MinicCoreLowerContext {
     const MinicFunctionBodyView *body;
@@ -11,6 +18,7 @@ typedef struct MinicCoreLowerContext {
     MinicCoreBlockId block_id;
     MinicCoreBlockId break_target;
     MinicCoreObjectId *local_objects;
+    MinicCoreLocalIntegerConstant *local_integer_constants;
     MinicCoreBlockId *statement_blocks;
     size_t statement_block_count;
 } MinicCoreLowerContext;

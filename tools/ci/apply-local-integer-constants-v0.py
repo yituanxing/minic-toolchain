@@ -1,6 +1,28 @@
 #!/usr/bin/env python3
 from pathlib import Path
 
+# Validated V0 + regression-safe V1 now live together in canonical C.  This
+# historical producer must not reinsert the unsafe V0 expression-folding hook.
+# Fail closed if the existing source contains only a partial migration.
+_native_source = Path("src/core/core_lower.c").read_text()
+_native_header = Path("src/core/core_lower_internal.h").read_text()
+if "/* LINUX_LOCAL_INTEGER_CONSTANTS_V0" in _native_source:
+    _required_source = (
+        "static bool core_local_constant_index(",
+        "static void core_local_constants_clear_known(",
+        "static bool core_const_eval_integer_with_locals(",
+        "context.local_integer_constants = local_integer_constants;",
+    )
+    _required_header = (
+        "typedef struct MinicCoreLocalIntegerConstant {",
+        "MinicCoreLocalIntegerConstant *local_integer_constants;",
+    )
+    if any(_native_source.count(x) != 1 for x in _required_source) or \
+       any(_native_header.count(x) != 1 for x in _required_header):
+        raise SystemExit("MINIC_LOCAL_INTEGER_CONSTANTS_PATCH=ERROR partial canonical")
+    print("MINIC_LOCAL_INTEGER_CONSTANTS_PATCH=ALREADY_CANONICAL safe_v1=true")
+    raise SystemExit(0)
+
 
 def replace_once(path: str, old: str, new: str) -> None:
     p = Path(path)

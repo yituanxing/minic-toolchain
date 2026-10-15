@@ -29,6 +29,12 @@ old = '''    if (minic_type_is_integer(expression->type) && context->target != N
     }
 '''
 count = text.count(old)
+if count == 0 and "/* LINUX_LOCAL_INTEGER_CONSTANTS_V0" in text and \
+   text.count("static bool core_const_eval_integer_with_locals(") == 1:
+    # The regression-safe V1 is already checked-in.  Do not create the old
+    # global lower_expression constant-fold shortcut just to remove it again.
+    print("MINIC_LOCAL_INTEGER_CONDITIONS_V1=ALREADY_CANONICAL")
+    raise SystemExit(0)
 if count != 1:
     raise SystemExit(f"expected one broad lower_expression fold hook, found {count}")
 p.write_text(text.replace(old, "", 1))

@@ -255,6 +255,325 @@ static MinicCoreLowerStatus lower_scalar_assignment_value(MinicCoreLowerContext 
                                                           MinicExpressionId expression_id,
                                                           MinicCoreValueId *value_id);
 
+
+/* LINUX_LOCAL_INTEGER_CONSTANTS_V0
+ *
+ * This is intentionally a tiny straight-line fact table, not an optimizer.
+ * A fact is admitted only for an unescaped non-volatile direct local integer.
+ * Unknown CFG joins discard all facts.  The purpose is to preserve C/GNU
+ * compile-time reachability idioms after their constant value has travelled
+ * through a local object (notably Linux BUILD_BUG_ON/compiletime_assert). */
+static bool core_local_constant_index(const MinicCoreLowerContext *context,
+                                      MinicLocalId local_id,
+                                      size_t *index) {
+    if (context == NULL || context->source_function == NULL || index == NULL ||
+        local_id < context->source_function->local_begin) {
+        return false;
+    }
+    *index = local_id - context->source_function->local_begin;
+    return *index < context->source_function->local_count &&
+           context->local_integer_constants != NULL;
+}
+
+static void core_local_constants_clear_known(MinicCoreLowerContext *context) {
+    size_t index;
+
+    if (context == NULL || context->source_function == NULL ||
+        context->local_integer_constants == NULL) {
+        return;
+    }
+    for (index = 0U; index < context->source_function->local_count; ++index) {
+        context->local_integer_constants[index].known = false;
+    }
+}
+
+static void core_local_constant_invalidate(MinicCoreLowerContext *context,
+                                           MinicLocalId local_id) {
+    size_t index;
+    if (core_local_constant_index(context, local_id, &index)) {
+        context->local_integer_constants[index].known = false;
+    }
+}
+
+static void core_local_constant_escape(MinicCoreLowerContext *context,
+                                       MinicLocalId local_id) {
+    size_t index;
+    if (core_local_constant_index(context, local_id, &index)) {
+        context->local_integer_constants[index].known = false;
+        context->local_integer_constants[index].escaped = true;
+    }
+}
+
+static bool core_local_constant_get(const MinicCoreLowerContext *context,
+                                    MinicLocalId local_id,
+                                    MinicConstValue *value) {
+    const MinicLocal *local;
+    size_t index;
+
+    if (value == NULL || !core_local_constant_index(context, local_id, &index) ||
+        !context->local_integer_constants[index].known ||
+        context->local_integer_constants[index].escaped || context->body == NULL ||
+        context->body->program == NULL) {
+        return false;
+    }
+    local = minic_c0_program_local(context->body->program, local_id);
+    if (local == NULL || minic_type_is_volatile(local->type)) {
+        return false;
+    }
+    *value = context->local_integer_constants[index].value;
+    return true;
+}
+
+static void core_local_constant_set(MinicCoreLowerContext *context,
+                                    MinicLocalId local_id,
+                                    const MinicConstValue *value) {
+    const MinicLocal *local;
+    MinicConstValue converted;
+    MinicType local_type;
+    size_t index;
+
+    if (value == NULL || context == NULL || context->body == NULL ||
+        context->body->program == NULL || context->target == NULL ||
+        !core_local_constant_index(context, local_id, &index) ||
+        context->local_integer_constants[index].escaped) {
+        return;
+    }
+    local = minic_c0_program_local(context->body->program, local_id);
+    if (local == NULL || local->is_array || minic_type_is_volatile(local->type) ||
+        !minic_type_unqualified(local->type, &local_type) ||
+        !minic_type_is_integer(local_type) ||
+        !minic_const_value_convert_integer(context->body->program,
+                                           context->target,
+                                           value,
+                                           local_type,
+                                           &converted)) {
+        context->local_integer_constants[index].known = false;
+        return;
+    }
+    context->local_integer_constants[index].value = converted;
+    context->local_integer_constants[index].known = true;
+}
+
+static bool core_value_integer_constant(const MinicCoreLowerContext *context,
+                                        MinicCoreValueId value_id,
+                                        MinicConstValue *value) {
+    const MinicCoreValue *core_value;
+    const MinicCoreInstruction *definition;
+    uint64_t bits;
+
+    if (context == NULL || context->function == NULL || value == NULL ||
+        value_id >= context->function->value_count) {
+        return false;
+    }
+    core_value = &context->function->values[value_id];
+    if (!minic_type_is_integer(core_value->type) ||
+        core_value->definition >= context->function->instruction_count) {
+        return false;
+    }
+    definition = &context->function->instructions[core_value->definition];
+    if (definition->kind != MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT) {
+        return false;
+    }
+    bits = 0U;
+    (void)memcpy(&bits, &definition->value.integer_value, sizeof(bits));
+    value->type = core_value->type;
+    value->bits = bits;
+    return true;
+}
+
+static bool core_direct_local_read(const MinicCoreLowerContext *context,
+                                   MinicExpressionId expression_id,
+                                   MinicLocalId *local_id) {
+    const MinicExpression *expression;
+    const MinicExpression *operand;
+
+    if (context == NULL || context->body == NULL || context->body->program == NULL ||
+        local_id == NULL) {
+        return false;
+    }
+    expression = minic_c0_program_expression(context->body->program, expression_id);
+    if (expression == NULL) {
+        return false;
+    }
+    if (expression->kind == MINIC_EXPRESSION_LOCAL &&
+        expression->value_category == MINIC_VALUE_RVALUE) {
+        *local_id = expression->value.local_id;
+        return true;
+    }
+    if (expression->kind != MINIC_EXPRESSION_LVALUE_READ) {
+        return false;
+    }
+    operand = minic_c0_program_expression(
+        context->body->program, expression->value.unary.operand);
+    if (operand == NULL || operand->kind != MINIC_EXPRESSION_LOCAL ||
+        operand->value_category != MINIC_VALUE_LVALUE) {
+        return false;
+    }
+    *local_id = operand->value.local_id;
+    return true;
+}
+
+static bool core_const_signed_value(const MinicCoreLowerContext *context,
+                                    const MinicConstValue *value,
+                                    int64_t *result) {
+    unsigned int width;
+    uint64_t bits;
+    uint64_t mask;
+
+    if (context == NULL || context->body == NULL || context->body->program == NULL ||
+        context->target == NULL || value == NULL || result == NULL ||
+        !minic_type_is_signed_integer(value->type) ||
+        !minic_target_info_integer_width(
+            context->target, context->body->program, value->type, &width) ||
+        width == 0U || width > 64U) {
+        return false;
+    }
+    bits = value->bits;
+    if (width < 64U) {
+        mask = (UINT64_C(1) << width) - UINT64_C(1);
+        bits &= mask;
+        if ((bits & (UINT64_C(1) << (width - 1U))) != 0U) {
+            bits |= ~mask;
+        }
+    }
+    (void)memcpy(result, &bits, sizeof(*result));
+    return true;
+}
+
+static bool core_const_eval_integer_with_locals(const MinicCoreLowerContext *context,
+                                                MinicExpressionId expression_id,
+                                                MinicConstValue *value) {
+    const MinicExpression *expression;
+    MinicConstValue operand_value;
+    MinicLocalId local_id;
+
+    if (context == NULL || context->body == NULL || context->body->program == NULL ||
+        context->target == NULL || value == NULL) {
+        return false;
+    }
+    if (minic_const_eval_integer(
+            context->body->program, context->target, expression_id, value)) {
+        return true;
+    }
+    expression = minic_c0_program_expression(context->body->program, expression_id);
+    if (expression == NULL || !minic_type_is_integer(expression->type)) {
+        return false;
+    }
+    if (core_direct_local_read(context, expression_id, &local_id) &&
+        core_local_constant_get(context, local_id, &operand_value)) {
+        return minic_const_value_convert_integer(context->body->program,
+                                                 context->target,
+                                                 &operand_value,
+                                                 expression->type,
+                                                 value);
+    }
+    if (expression->kind == MINIC_EXPRESSION_CAST ||
+        expression->kind == MINIC_EXPRESSION_CONVERSION) {
+        if (!core_const_eval_integer_with_locals(
+                context, expression->value.unary.operand, &operand_value)) {
+            return false;
+        }
+        return minic_const_value_convert_integer(context->body->program,
+                                                 context->target,
+                                                 &operand_value,
+                                                 expression->type,
+                                                 value);
+    }
+    if (expression->kind == MINIC_EXPRESSION_UNARY &&
+        expression->value.unary.operator_kind == MINIC_UNARY_LOGICAL_NOT) {
+        bool is_zero;
+        if (!core_const_eval_integer_with_locals(
+                context, expression->value.unary.operand, &operand_value) ||
+            !minic_const_value_is_zero(context->body->program,
+                                       context->target,
+                                       &operand_value,
+                                       &is_zero)) {
+            return false;
+        }
+        value->type = expression->type;
+        value->bits = is_zero ? 1U : 0U;
+        return true;
+    }
+    if (expression->kind == MINIC_EXPRESSION_BINARY &&
+        (expression->value.binary.operator_kind == MINIC_BINARY_EQUAL ||
+         expression->value.binary.operator_kind == MINIC_BINARY_NOT_EQUAL ||
+         expression->value.binary.operator_kind == MINIC_BINARY_LESS ||
+         expression->value.binary.operator_kind == MINIC_BINARY_LESS_EQUAL ||
+         expression->value.binary.operator_kind == MINIC_BINARY_GREATER ||
+         expression->value.binary.operator_kind == MINIC_BINARY_GREATER_EQUAL)) {
+        const MinicExpression *left_expression;
+        const MinicExpression *right_expression;
+        MinicConstValue left;
+        MinicConstValue right;
+        MinicConstValue left_common;
+        MinicConstValue right_common;
+        MinicType common_type;
+        bool predicate;
+
+        left_expression = minic_c0_program_expression(
+            context->body->program, expression->value.binary.left);
+        right_expression = minic_c0_program_expression(
+            context->body->program, expression->value.binary.right);
+        if (left_expression == NULL || right_expression == NULL ||
+            !minic_type_is_integer(left_expression->type) ||
+            !minic_type_is_integer(right_expression->type) ||
+            !core_const_eval_integer_with_locals(
+                context, expression->value.binary.left, &left) ||
+            !core_const_eval_integer_with_locals(
+                context, expression->value.binary.right, &right) ||
+            !minic_target_info_integer_common_for_program(context->target,
+                                                          context->body->program,
+                                                          left_expression->type,
+                                                          right_expression->type,
+                                                          &common_type) ||
+            !minic_const_value_convert_integer(context->body->program,
+                                               context->target,
+                                               &left,
+                                               common_type,
+                                               &left_common) ||
+            !minic_const_value_convert_integer(context->body->program,
+                                               context->target,
+                                               &right,
+                                               common_type,
+                                               &right_common)) {
+            return false;
+        }
+        if (expression->value.binary.operator_kind == MINIC_BINARY_EQUAL ||
+            expression->value.binary.operator_kind == MINIC_BINARY_NOT_EQUAL) {
+            predicate = left_common.bits == right_common.bits;
+            if (expression->value.binary.operator_kind == MINIC_BINARY_NOT_EQUAL) {
+                predicate = !predicate;
+            }
+        } else if (minic_type_is_signed_integer(common_type)) {
+            int64_t left_signed;
+            int64_t right_signed;
+            if (!core_const_signed_value(context, &left_common, &left_signed) ||
+                !core_const_signed_value(context, &right_common, &right_signed)) {
+                return false;
+            }
+            switch (expression->value.binary.operator_kind) {
+            case MINIC_BINARY_LESS: predicate = left_signed < right_signed; break;
+            case MINIC_BINARY_LESS_EQUAL: predicate = left_signed <= right_signed; break;
+            case MINIC_BINARY_GREATER: predicate = left_signed > right_signed; break;
+            case MINIC_BINARY_GREATER_EQUAL: predicate = left_signed >= right_signed; break;
+            default: return false;
+            }
+        } else {
+            switch (expression->value.binary.operator_kind) {
+            case MINIC_BINARY_LESS: predicate = left_common.bits < right_common.bits; break;
+            case MINIC_BINARY_LESS_EQUAL: predicate = left_common.bits <= right_common.bits; break;
+            case MINIC_BINARY_GREATER: predicate = left_common.bits > right_common.bits; break;
+            case MINIC_BINARY_GREATER_EQUAL: predicate = left_common.bits >= right_common.bits; break;
+            default: return false;
+            }
+        }
+        value->type = expression->type;
+        value->bits = predicate ? 1U : 0U;
+        return true;
+    }
+    return false;
+}
+
 MinicCoreLowerStatus ensure_statement_block(MinicCoreLowerContext *context, MinicStatementId statement_id, MinicCoreBlockId *block_id) {
     const MinicStatement *source_statement;
     MinicCoreBlockId mapped;
@@ -4579,8 +4898,15 @@ MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
                    : MINIC_CORE_LOWER_ERROR;
     }
     if (expression->kind == MINIC_EXPRESSION_ADDRESS_OF) {
+        const MinicExpression *addressed_expression;
         MinicCoreLowerStatus status;
 
+        addressed_expression = minic_c0_program_expression(
+            context->body->program, expression->value.unary.operand);
+        if (addressed_expression != NULL &&
+            addressed_expression->kind == MINIC_EXPRESSION_LOCAL) {
+            core_local_constant_escape(context, addressed_expression->value.local_id);
+        }
         status = lower_address(context, expression->value.unary.operand, value_id);
         if (status != MINIC_CORE_LOWER_OK) {
             return status;
@@ -4892,6 +5218,12 @@ MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
          expression->value.unary.operator_kind == MINIC_UNARY_POST_DECREMENT ||
          expression->value.unary.operator_kind == MINIC_UNARY_PRE_INCREMENT ||
          expression->value.unary.operator_kind == MINIC_UNARY_PRE_DECREMENT)) {
+        const MinicExpression *updated_expression = minic_c0_program_expression(
+            context->body->program, expression->value.unary.operand);
+        if (updated_expression != NULL &&
+            updated_expression->kind == MINIC_EXPRESSION_LOCAL) {
+            core_local_constant_invalidate(context, updated_expression->value.local_id);
+        }
         return lower_scalar_update(context, expression, value_id);
     }
     if (expression->kind == MINIC_EXPRESSION_UNARY &&
@@ -7906,6 +8238,13 @@ static MinicCoreLowerStatus lower_assignment_pair(MinicCoreLowerContext *context
                       (int)MINIC_CORE_LOWER_ERROR);
         return MINIC_CORE_LOWER_ERROR;
     }
+    if (target->kind == MINIC_EXPRESSION_LOCAL) {
+        MinicConstValue stored_constant;
+        core_local_constant_invalidate(context, target->value.local_id);
+        if (core_value_integer_constant(context, stored_value, &stored_constant)) {
+            core_local_constant_set(context, target->value.local_id, &stored_constant);
+        }
+    }
     if (result_value != NULL) {
         *result_value = stored_value;
     }
@@ -9535,10 +9874,8 @@ lower_if(MinicCoreLowerContext *context, const MinicStatement *statement, bool *
         MinicConstValue condition_value;
         bool condition_is_zero;
 
-        if (minic_const_eval_integer(context->body->program,
-                                     context->target,
-                                     statement->expression,
-                                     &condition_value) &&
+        if (core_const_eval_integer_with_locals(
+                context, statement->expression, &condition_value) &&
             minic_const_value_is_zero(context->body->program,
                                       context->target,
                                       &condition_value,
@@ -9559,6 +9896,7 @@ lower_if(MinicCoreLowerContext *context, const MinicStatement *statement, bool *
         }
     }
 
+    core_local_constants_clear_known(context);
     condition_block = context->block_id;
     if (!minic_core_function_add_block(context->function, &then_block)) {
         return MINIC_CORE_LOWER_ERROR;
@@ -9585,6 +9923,7 @@ lower_if(MinicCoreLowerContext *context, const MinicStatement *statement, bool *
     else_continuation_block = MINIC_CORE_BLOCK_INVALID;
     else_terminated = false;
     if (else_source != NULL) {
+        core_local_constants_clear_known(context);
         context->block_id = else_block;
         status = lower_block(context, else_source, &else_terminated);
         if (status != MINIC_CORE_LOWER_OK) {
@@ -9642,6 +9981,7 @@ lower_if(MinicCoreLowerContext *context, const MinicStatement *statement, bool *
         return status;
     }
     context->block_id = continuation_block;
+    core_local_constants_clear_known(context);
     *terminated = !needs_merge;
     return MINIC_CORE_LOWER_OK;
 }
@@ -11999,6 +12339,7 @@ lower_block(MinicCoreLowerContext *context, const MinicBlock *source_block, bool
                 break;
             case MINIC_STATEMENT_INLINE_ASM:
                 status = minic_core_lower_inline_asm(context, statement);
+                core_local_constants_clear_known(context);
                 break;
             case MINIC_STATEMENT_RETURN:
                 status = lower_return(context, statement);
@@ -12091,11 +12432,15 @@ lower_block(MinicCoreLowerContext *context, const MinicBlock *source_block, bool
                 status = lower_if(context, statement, &statement_terminated);
                 break;
             case MINIC_STATEMENT_WHILE:
+                core_local_constants_clear_known(context);
                 status = lower_while(
                     context, statement, MINIC_STATEMENT_INVALID, &statement_terminated);
+                core_local_constants_clear_known(context);
                 break;
             case MINIC_STATEMENT_SWITCH:
+                core_local_constants_clear_known(context);
                 status = lower_switch(context, statement, &statement_terminated);
+                core_local_constants_clear_known(context);
                 break;
             default:
                 (void)fprintf(stderr,
@@ -12136,6 +12481,7 @@ MinicCoreLowerStatus minic_core_lower_function(const MinicFunctionBodyView *body
     MinicCoreLowerContext context;
     MinicCoreBlockId block_id;
     MinicCoreObjectId *local_objects;
+    MinicCoreLocalIntegerConstant *local_integer_constants;
     MinicCoreBlockId *statement_blocks;
     MinicCoreLowerStatus status;
     size_t local_index;
@@ -12164,10 +12510,19 @@ MinicCoreLowerStatus minic_core_lower_function(const MinicFunctionBodyView *body
     if (source_function->local_count != 0U && local_objects == NULL) {
         return MINIC_CORE_LOWER_ERROR;
     }
+    local_integer_constants =
+        source_function->local_count == 0U
+            ? NULL
+            : (MinicCoreLocalIntegerConstant *)calloc(
+                  source_function->local_count, sizeof(*local_integer_constants));
+    if (source_function->local_count != 0U && local_integer_constants == NULL) {
+        free(local_objects);
+        return MINIC_CORE_LOWER_ERROR;
+    }
     for (local_index = 0U; local_index < source_function->local_count; ++local_index) local_objects[local_index] = MINIC_CORE_OBJECT_INVALID;
-    if (body->program->statement_count > SIZE_MAX / sizeof(*statement_blocks)) { free(local_objects); return MINIC_CORE_LOWER_ERROR; }
+    if (body->program->statement_count > SIZE_MAX / sizeof(*statement_blocks)) { free(local_integer_constants); free(local_objects); return MINIC_CORE_LOWER_ERROR; }
     statement_blocks = body->program->statement_count == 0U ? NULL : (MinicCoreBlockId *)malloc(body->program->statement_count * sizeof(*statement_blocks));
-    if (body->program->statement_count != 0U && statement_blocks == NULL) { free(local_objects); return MINIC_CORE_LOWER_ERROR; }
+    if (body->program->statement_count != 0U && statement_blocks == NULL) { free(local_integer_constants); free(local_objects); return MINIC_CORE_LOWER_ERROR; }
     for (statement_index = 0U; statement_index < body->program->statement_count; ++statement_index) statement_blocks[statement_index] = MINIC_CORE_BLOCK_INVALID;
 
     minic_core_function_initialize(&lowered);
@@ -12178,7 +12533,7 @@ MinicCoreLowerStatus minic_core_lower_function(const MinicFunctionBodyView *body
                                            source_function->parameter_types,
                                            source_function->parameter_count) ||
         !minic_core_function_add_block(&lowered, &block_id)) {
-        free(statement_blocks); free(local_objects); minic_core_function_destroy(&lowered); return MINIC_CORE_LOWER_ERROR;
+        free(statement_blocks); free(local_integer_constants); free(local_objects); minic_core_function_destroy(&lowered); return MINIC_CORE_LOWER_ERROR;
     }
     (void)memset(&context, 0, sizeof(context));
     context.body = body;
@@ -12189,12 +12544,14 @@ MinicCoreLowerStatus minic_core_lower_function(const MinicFunctionBodyView *body
     context.block_id = block_id;
     context.break_target = MINIC_CORE_BLOCK_INVALID;
     context.local_objects = local_objects;
+    context.local_integer_constants = local_integer_constants;
     context.statement_blocks = statement_blocks;
     context.statement_block_count = body->program->statement_count;
     status = lower_parameter_ingress(&context);
     terminated = false;
     if (status == MINIC_CORE_LOWER_OK) status = lower_block(&context, source_block, &terminated);
-    free(statement_blocks); free(local_objects);
+    free(statement_blocks); free(local_integer_constants); free(local_objects);
+    context.local_integer_constants = NULL;
     if (status != MINIC_CORE_LOWER_OK) {
         minic_core_function_destroy(&lowered);
         return status;
