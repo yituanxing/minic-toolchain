@@ -399,3 +399,20 @@ PERF-006 `blake2s` 的真实 Runtime 布尔域索引收益为 1465.171ms→1368.
 大网络文件的 Parser 仍是已标注的主要阶段；`lib/crc32` 反常：虽然总编译耗时在独立实验中约 16–20s，但六阶段累计不到 1s，**绝大多数耗时落在六阶段之外**。这一现象明确解释了为什么 P14 和函数哈希对 crc32 几乎没有贡献，但不能把残差直接认定成某个函数。
 
 **立即采用更经济的诊断：** 已有 `linux-perf-phase-trace-v1.py` 的 stderr monotonic timestamps **本来就有六阶段 begin/end 完整时间线**，过去仅汇总六段丢弃中间间隔。Commit `b019f840` 在原脚本里增加 **五个间隔区间与 pre/post 残差** 的读数，不修改任何 MiniC 生产算法、不新建 CI 工作流。独立 opt-in [CI #38660104046](https://github.com/yituanxing/minic-toolchain/actions/runs/38660104046) 对同组缓存复采，用其具体 gap 数据来缩小 `crc32` 可能的昂贵逻辑，例如 AST verification 或 inline-emission reference recomputation 等**待验证假设**。该 Run 未结束前不得声称已定位根因。
+
+
+## 21. PERF-016：真实耗时根因从六大阶段缩小到四类内联专门化（2026-10-15）
+
+**来源：** [六阶段间隔定位 CI #38660104046](https://github.com/yituanxing/minic-toolchain/actions/runs/38660104046) 和 [四子阶段细分 CI #38660602600](https://github.com/yituanxing/minic-toolchain/actions/runs/38660602600)，两者 `gcc-single SUCCESS`，三份已 SHA 固定的 GNU-Kbuild `.i` 及缓存复用；测试前后 `.s` SHA 完全一致，运行的是诊断插桩，不是生产优化、也不是 QEMU P1。
+
+发现：旧 `parse/normalize/core-set/core-validate/layout/codegen` 统计之和远小于命令执行 wall，绝大多数耗时集中在 `normalize end` 和 `core-set begin` 之间。对真实 `net/core/dev.o`、`net/ipv4/tcp_input.o`、`lib/crc32.o` 分别约为 **8.175s、5.287s、16.767s**。使用仓库**既有** `apply-perf-specialization-phase-trace-v0.py` 对 compiler.c 插入 spec-integer、spec-symbolic、spec-boolean、spec-finalize 四处计时；所有环节仍字节一致。
+
+| Linux owner | `spec-integer` | `spec-symbolic` | `spec-boolean` | `spec-finalize` | normalize→core-set 全间隔 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `net/core/dev.o` | 3303.41ms | 4444.91ms | 233.77ms | 76.49ms | 8174.99ms |
+| `net/ipv4/tcp_input.o` | 2184.00ms | 2783.83ms | 166.31ms | 43.91ms | 5287.10ms |
+| `lib/crc32.o` | 9113.36ms | 7542.68ms | 23.34ms | 45.79ms | 16766.71ms |
+
+关键结论：`lib/crc32` **不是** Codegen 慢，而是大量整数内联专门化与符号内联专门化；这两者已解释这段空白的 ~16.66s。网络两文件则也是整数与符号内联耗时远高于 Codegen。**不再继续优先在已只有毫秒级耗时的 crc32 Codegen 上研究 P14/P15**。已有 `apply-perf-symbolic-loop-trace-v0.py` 还能把符号专门化分为 direct/transitive 两部分；已有 `apply-perf-symbolic-function-body-owner-filter-v0.py` 则是带回退的 owner 过滤候选，但应先验证是否仍适用于现行 Runtime profile，并做数据驱动、字节等价的独立 A/B。
+
+另：#38660104046 的一次六阶段间隔单次 old/new 比较中，在没有相应算法变化的条件下 `normalize-to-core-set` 对 dev/tcp 表现出十多秒波动，因此**不得**将该诊断计时差当成优化提升；应仅用同次细分计时确定瓶颈，并在下一轮至少配对复测后宣称速度收益。现有正确性基线与原工具链 QEMU/Runtime 一概不动。
