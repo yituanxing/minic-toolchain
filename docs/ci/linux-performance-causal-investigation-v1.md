@@ -552,3 +552,20 @@ PERF-006 `blake2s` 的真实 Runtime 布尔域索引收益为 1465.171ms→1368.
 PERF-024 定位 **最新 Boolean+symbolic+integer** 版本 `lib/crc32.o` 整数内联专门化约 5.013s，占该 TU 当前 wall 7.735s 中最明显大头。已有源码 `apply-inline-specialization-transitive-integer-v0.py` 中直接阶段含“每次 candidate clone 线性匹配”，transitive 阶段还含“每个已克隆 caller 遍历 CALL 节点 + clone 线性匹配”，因此两处可能有高频 O(clones×candidate-count) 扫描。但未经阶段细分/计数之前不指定责任阶段。
 
 复用原 `minic_bootstrap_trace_stage` 和 `linux-perf-phase-trace-v1.py`，新增 **仅诊断** `tools/ci/apply-perf-integer-loop-trace-v0.py`；现有 `tools/ci/linux-perf-diagnose-optimized-phase-v1.sh` 会在两臂同样插入 `spec-integer-direct` 与 `spec-integer-transitive` 计时，分别核对与外层 `spec-integer` 的计时包含关系，并确保原始 `.s` SHA 一致。使用原三份 frozen Kbuild 输入，保持先观察时间分布、再研究源码定算法、再单变量配对的顺序。诊断 [#38670413942](https://github.com/yituanxing/minic-toolchain/actions/runs/38670413942) 以最终日志判定；未完成前不可称整数新优化已实现或已提速。
+
+
+## 33. PERF-028：整数专门化的剩余瓶颈确定是 transitive；开始源码归属优化（2026-10-15）
+
+通过 [CI #38670835174](https://github.com/yituanxing/minic-toolchain/actions/runs/38670835174) `gcc-single SUCCESS`，对此前独立 A/B 已验证的 3 个冻结 Linux Kbuild 输入，在 Boolean 与 **Boolean+symbolic owner+integer CALL-index** 两臂插入完全相同的诊断计时，`.s` 逐字节相同。分为 `spec-integer-direct` 和 `spec-integer-transitive`，两段求和严格等于外层 spec-integer。第三次诊断在脚本初始、结束定位锚点修正后实际成功；前两轮 [#38670413942](https://github.com/yituanxing/minic-toolchain/actions/runs/38670413942)、[#38670658498](https://github.com/yituanxing/minic-toolchain/actions/runs/38670658498) 均在 **Python C 源补丁脚本的精确文本匹配** 阶段失败，未产生任何性能数据；不是被测编译器错误。
+
+| Linux TU | Boolean integer direct / transitive | 已加 owner+integer CALL 之后 integer direct / transitive |
+| --- | ---: | ---: |
+| `lib/crc32.o` | 10.90ms / **8944.75ms** | 11.61ms / **5024.07ms** |
+| `net/core/dev.o` | 8.42ms / **3336.82ms** | 7.88ms / **2303.95ms** |
+| `net/ipv4/tcp_input.o` | 7.28ms / **2077.56ms** | 7.44ms / **1485.26ms** |
+
+**明确结论：剩余整数专门化耗时的 99% 以上都在 transitive，不在 initial/direct。** 仅此是单次插桩相位统计，不能以两臂 wall 时间差直接宣称产品级优化速度。
+
+代码中，integer transitive 在每个 integer-specialized caller 克隆内遍历多个 CALL expression id，但旧实现未限制各 CALL 属于该克隆的原始源函数。因此新增独立 opt-in `apply-perf-integer-function-body-owner-filter-v1.py`：**复用此前已通过 first500 验证的 `minic_perf_program_build_expression_source_owners`**，仅当表达式有唯一明确原始 source owner、且 owner 与当前克隆 `caller.specialization_source` 不同时跳过；未知、共享和模糊 owner 保持原扫描，分配/验证失败无条件回退旧算法。顺序、候选匹配、clone 限额等逻辑不改；所有退出路径清理新分配的可选缓存。
+
+[独立 A/B CI #38671271982](https://github.com/yituanxing/minic-toolchain/actions/runs/38671271982) 在同 3 份真实 SHA-frozen 输入上，用两臂 **都已开启 symbolic-owner+integer CALL**、仅候选增加 integer-owner 过滤，每臂热身一次加两次配对，强制逐字节 `.s` 一致。需按最终日志判定；如出现源码补丁失败或 `.s` 不一致，不能晋级 candidate，也不能声称速度收益。M0 [#38671271885](https://github.com/yituanxing/minic-toolchain/actions/runs/38671271885) 已通过。
