@@ -571,6 +571,16 @@ minic_parser_find_scoped_global_object_in_current_scope(const MinicParser *parse
 }
 
 void minic_parser_destroy_scopes(MinicParser *parser) {
+    if (getenv("MINIC_TYPEDEF_INDEX_PERF") != NULL) {
+        (void)fprintf(stderr,
+                      "MINIC_TYPEDEF_INDEX queries=%zu probes=%zu fallback=%zu "
+                      "rebuilds=%zu aliases=%zu\n",
+                      parser->perf_typedef_queries, parser->perf_typedef_probes,
+                      parser->perf_typedef_fallbacks, parser->perf_typedef_rebuilds,
+                      parser->program == NULL ? 0U : parser->program->type_alias_count);
+    }
+    free(parser->perf_typedef_name_slots);
+    parser->perf_typedef_name_slots = NULL;
     free(parser->local_labels);
     parser->local_labels = NULL;
     parser->local_label_count = 0U;

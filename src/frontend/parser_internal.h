@@ -154,6 +154,14 @@ typedef struct MinicParser {
     size_t *perf_enum_name_slots;
     size_t perf_enum_name_slot_capacity;
     size_t perf_enum_name_indexed_count;
+
+    MinicTypeAliasId *perf_typedef_name_slots;
+    size_t perf_typedef_name_capacity;
+    size_t perf_typedef_name_indexed_count;
+    size_t perf_typedef_queries;
+    size_t perf_typedef_probes;
+    size_t perf_typedef_fallbacks;
+    size_t perf_typedef_rebuilds;
 } MinicParser;
 
 typedef struct MinicParsedAttribute {

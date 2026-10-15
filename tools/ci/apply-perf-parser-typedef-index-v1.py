@@ -10,6 +10,12 @@ from pathlib import Path
 def patch(path, old, new):
     p = Path(path)
     src = p.read_text()
+    # This validated typedef index has been promoted into tracked Parser C.
+    # Existing performance profiles still call this script in their original
+    # patch order; do not double-apply or silently accept a partial promotion.
+    if src.count(new) == 1:
+        print("MINIC_PERF_PARSER_TYPEDEF_HASH_V1=ALREADY_CANONICAL path=" + path)
+        return
     n = src.count(old)
     if n != 1:
         raise SystemExit(f"{path}: P05 anchor count={n}, expected one: {old[:100]!r}")
