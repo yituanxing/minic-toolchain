@@ -341,3 +341,19 @@ PERF-006 `blake2s` 的真实 Runtime 布尔域索引收益为 1465.171ms→1368.
 **结论和下一轮：** `verified-local-screen-2x / promotion-candidate`。达成先前“未优化过的最慢文件有可重复的两位数候选改善”的**初筛数值门槛**，但“可重复”仍需 4 次交替或更广泛输入重新验证。将 P14 移入**扩大样本与正确性晋级队列**；不要立刻重复微调 P14/P15，把已有两个几乎没有增益的 Parser global 和 Core workspace 继续保留为不晋级的负例。
 
 因果假设为把每 `OBJECT_ADDRESS` 的完整 IR 扫描改成 per-function 一次建立 ValueId 使用索引；**尚未**由独立函数级 CPU 计时证明节省的 2.705s 全部来自 Codegen 具体子函数。后续选更慢的 `net/core/dev`、`net/ipv4/tcp_input` 和一个同大小更快的对照，固定输入和新编译器 SHA，先做小规模输出/ABI，达到足够范围后才使用已经存在的七路全量和 QEMU P1。仍然不动当前 Runtime 默认编译器与认证 Image。
+
+
+## 18. PERF-013：P14 扩展到新的三种 Linux 长尾结构（2026-10-15）
+
+**已实施：** [commit `ee224620`](https://github.com/yituanxing/minic-toolchain/commit/ee224620d815973129eee23c778befd41597a36c) 在旧 `linux-runtime-gcc-baseline.yml` `gcc-single` Owner 内增加互斥的第二组 3 个真实 Linux Kbuild C 对象：
+- `net/core/dev.o`：历史 MiniC wall ~25.03s，网络设备与大量控制分支；
+- `net/ipv4/tcp_input.o`：历史 ~24.87s，TCP 状态机与复杂条件；
+- `lib/crc32.o`：历史 ~15.61s，源码/数据结构与前两者不同的对照。
+
+原 BTF/verifier/filter 三对象 SHA、Frozen `.i`、优化结论和 cache key **完全保持不变**；新组在相同固定 Linux .config 与 GNU 黄金对象下建立**独立**3-owner manifest/cache，且在 `cohort` 三个允许名单处都做精确目标身份检查。Candidate 测试只增加已初筛 P14 Core ValueId 使用索引；保留 Boolean Runtime，其余算法保持不变。新三组配对仍是两次/臂初筛，要求各 `.s` SHA 一致；随后根据跨程序结构收益决定是否追加 4 次/臂或 500 TU 回归。
+
+**历史重用审计：** 找到已完成的 Performance Top5 [#37888313913](https://github.com/yituanxing/minic-toolchain/actions/runs/37888313913)，其中 **P15 interval-onepass 在 P14 已开启的工具版本上**，5 个真实 Linux TU 15/15 字节等价，但累计 P50 仅 **6.6855→6.4662s（1.0339×）**，其中 memcontrol 有退化。这个实验工具配置不等同于当前 Runtime，不能直接把 P15 称为无效；不过依照轮换/28 规则，**没有必要立刻围绕 P14 再做一次 P15 Top5**，先检查新结构下 P14 是否有普遍收益。
+
+**已发现并改正的一次实验设施失败：** 首次新 owner 扩组 [#38658207641](https://github.com/yituanxing/minic-toolchain/actions/runs/38658207641) 对 3 个新 owner 的 GNU golden 对象/config Kbuild 预检已 PASS，但在 Kbuild 中间产物保留检查中被旧硬编码 BTF/verifier/filter allowlist 拒绝：`BOOL_HOT=FAIL unexpected_owner_set`，尚未真实执行新对象的 candidate 编译或 A/B。代码审查后精确改正这**第三个**原 owner 名单，保留严格 allowlist（不放宽至任意 owner），fix `6a14f58b`。
+
+**独立修复复跑：** [#38658389460](https://github.com/yituanxing/minic-toolchain/actions/runs/38658389460)；按此记录时仍在运行。不可把 CI started / cache MISS / M0 SUCCESS 误记为性能验证成功。若新输入正确性或时间数据不合格，应记录为显式失败，不能自动晋级 P14，也不能无依据重启完整 2064 对象。
