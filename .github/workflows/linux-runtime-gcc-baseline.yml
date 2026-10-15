@@ -499,7 +499,7 @@ jobs:
           fail-on-cache-miss: true
 
       - name: Analyze three frozen hot owners by paired timing or opt-in phase traces
-        if: contains(github.event.head_commit.message, '[linux-perf-hotowners]') && steps.candidate_ready.outputs.ready == 'true'
+        if: contains(github.event.head_commit.message, '[linux-perf-hotowners]') && !contains(github.event.head_commit.message, '[linux-perf-ast-footprint]') && steps.candidate_ready.outputs.ready == 'true'
         shell: bash
         timeout-minutes: 24
         run: |
@@ -779,9 +779,6 @@ jobs:
                 python3 tools/ci/linux-perf-pinned-single-paired-ab-v1.py --input "$ev/boolean-hot/$key.frozen.i" --baseline-driver "$work/baseline/bin/minic" --candidate-driver "$work/index/bin/minic" --repeats 2 --out "$work/results/$key" | tee "$work/$key-screen.txt"
               done
               echo 'SYMBOLIC_OWNER_GROUP=PASS owners=3 QEMU_pending=true'
-            elif [[ "${{ contains(github.event.head_commit.message, '[linux-perf-ast-footprint]') }}" == true ]]; then
-              bash tools/ci/linux-perf-ast-footprint-v1.sh \
-                "$ev" "$root" "${{ contains(github.event.head_commit.message, '[linux-perf-hotowners-rotation]') }}"
             elif [[ "${{ contains(github.event.head_commit.message, '[linux-perf-integer-owner]') }}" == true ]]; then
               bash tools/ci/linux-perf-integer-owner-marginal-v1.sh \
                 "$ev" "$root" "${{ contains(github.event.head_commit.message, '[linux-perf-hotowners-rotation]') }}"
@@ -833,6 +830,17 @@ jobs:
             echo 'BOOL_HOT_A_B_GROUP=PASS owners=3 cold_workflow_reused=true QEMU_not_executed=true'
             fi
           fi
+
+      - name: Inspect real AST memory without altering assembly
+        if: contains(github.event.head_commit.message, '[linux-perf-ast-footprint]') && steps.candidate_ready.outputs.ready == 'true'
+        shell: bash
+        timeout-minutes: 18
+        run: |
+          set -Eeuo pipefail
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-v1"
+          root="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain/bin"
+          bash tools/ci/linux-perf-ast-footprint-v1.sh \
+            "$ev" "$root" "${{ contains(github.event.head_commit.message, '[linux-perf-hotowners-rotation]') }}"
 
       # This boundary is essential: a subsequent GNU relink/QEMU failure
       # must NEVER waste the expensive, already-verified candidate objects.
