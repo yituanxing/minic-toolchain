@@ -17,6 +17,15 @@ ev="$2"
 test -x "$build_dir/bin/minic"
 test -x "$build_dir/bin/minic-cc"
 mkdir -p "$ev"
+if [[ -f docs/ci/native-runtime44-perf4-validated-sha1.txt ]]; then
+  # The exact four once-applied performance changes are part of canonical C.
+  # Runtime profile checks all seven SHA1s before the toolchain is built.
+  test -x "$build_dir/bin/minic"
+  test -x "$build_dir/bin/minic-cc"
+  echo "MINIC_PERF_INTEGRATED_FULL=ALREADY_NATIVE source=validated_runtime44_perf4" |
+    tee "$ev/perf-integrated-profile.txt"
+  exit 0
+fi
 before=$(sha256sum "$build_dir/bin/minic-cc" | cut -d' ' -f1)
 # Their order is part of the existing 500/500 real-Kbuild certification.
 python3 tools/ci/apply-perf-symbolic-function-body-owner-filter-v0.py

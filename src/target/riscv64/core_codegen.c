@@ -5040,13 +5040,21 @@ static bool emit_opaque_inline_asm(FILE *file,
     }
     inline_asm = &function->inline_asms[instruction->value.inline_asm_id];
     if (inline_asm->is_goto) {
+        bool deferred_immediate = inline_asm->source_inline_asm_id != SIZE_MAX;
+
         if (symbol_name == NULL || symbol_name[0] == '\0' ||
-            inline_asm->goto_target >= function->block_count ||
-            fprintf(file,
-                    "  # MINIC_DEFERRED_ASM_IMMEDIATE requires inline specialization\n"
-                    "  .extern __minic_deferred_asm_immediate_%zu_0\n"
-                    "  ",
-                    inline_asm->source_inline_asm_id) < 0) {
+            inline_asm->goto_target >= function->block_count) {
+            return false;
+        }
+        if (deferred_immediate) {
+            if (fprintf(file,
+                        "  # MINIC_DEFERRED_ASM_IMMEDIATE requires inline specialization\n"
+                        "  .extern __minic_deferred_asm_immediate_%zu_0\n"
+                        "  ",
+                        inline_asm->source_inline_asm_id) < 0) {
+                return false;
+            }
+        } else if (fprintf(file, "  ") < 0) {
             return false;
         }
         for (index = 0U; index < inline_asm->template_length; ++index) {
@@ -5067,7 +5075,8 @@ static bool emit_opaque_inline_asm(FILE *file,
                 continue;
             }
             if (inline_asm->template_text[index + 1U] == '0') {
-                if (fprintf(file,
+                if (!deferred_immediate ||
+                    fprintf(file,
                             "__minic_deferred_asm_immediate_%zu_0",
                             inline_asm->source_inline_asm_id) < 0) {
                     return false;
@@ -6349,21 +6358,23 @@ static bool emit_instruction(FILE *file,
         if (instruction->value.block_id >= function->block_count ||
             fprintf(file, "  la t0, .L%s_core_bb%" PRIu32 "\n", symbol_name, instruction->value.block_id) < 0) return false;
         return store_core_value(file, frame, instruction->result, "t0");
+    /* M196_LINUX_STATIC_PCREL_GLOBAL_ADDRESS: the Linux kernel is statically
+       linked and executes early global accesses before the MMU is enabled.
+       Use the explicit PC-relative pseudo-op so GAS cannot choose GOT form. */
     case MINIC_CORE_INSTRUCTION_GLOBAL_ADDRESS:
         if (instruction->value.global_id >= function->global_count ||
-            fprintf(file, "  %s t0, %s\n",
-                    strncmp(function->globals[instruction->value.global_id].name, ".L", 2U) == 0
-                        ? "lla"
-                        : "la",
-                    function->globals[instruction->value.global_id].name) <
+            fprintf(file, "  lla t0, %s\n", function->globals[instruction->value.global_id].name) <
                 0) {
             return false;
         }
         return store_core_value(file, frame, instruction->result, "t0");
+    /* M197_LINUX_STATIC_PCREL_FUNCTION_ADDRESS: early static-kernel code may
+       take function addresses while MMU-off (for example set_satp_mode).
+       Keep those addresses PC-relative rather than GOT/high-half based. */
     case MINIC_CORE_INSTRUCTION_FUNCTION_ADDRESS:
         if (instruction->value.function_symbol_id >= function->function_symbol_count ||
             fprintf(file,
-                    "  la t0, %s\n",
+                    "  lla t0, %s\n",
                     function->function_symbols[instruction->value.function_symbol_id].name) < 0) {
             return false;
         }

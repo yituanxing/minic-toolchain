@@ -9,6 +9,8 @@ typedef struct MinicCoreLocalIntegerConstant {
     MinicConstValue specialization_value;
     bool known;
     bool escaped;
+    bool program_zero_checked;
+    bool program_zero_stable;
     bool specialization_known;
     bool specialization_modified;
 } MinicCoreLocalIntegerConstant;
@@ -22,6 +24,7 @@ typedef struct MinicCoreLowerContext {
     MinicCoreBlockId break_target;
     MinicCoreObjectId *local_objects;
     MinicCoreLocalIntegerConstant *local_integer_constants;
+    unsigned int cfg_constant_call_depth;
     MinicCoreBlockId *statement_blocks;
     size_t statement_block_count;
 } MinicCoreLowerContext;

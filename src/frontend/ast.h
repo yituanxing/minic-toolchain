@@ -351,6 +351,7 @@ typedef struct MinicFunction {
     bool specialization_integer_known[MINIC_MAX_FUNCTION_PARAMETERS];
     MinicExpressionId specialization_symbolic_expression[MINIC_MAX_FUNCTION_PARAMETERS];
     bool specialization_symbolic_known[MINIC_MAX_FUNCTION_PARAMETERS];
+    bool specialization_boolean_range_known[MINIC_MAX_FUNCTION_PARAMETERS];
     bool is_integer_specialization;
     bool is_defined;
     bool is_internal;

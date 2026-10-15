@@ -10,130 +10,23 @@ build_dir=$1
 ev=$2
 mkdir -p "$ev"
 
-# Consolidation-only forensic audit. This does NOT change the active sources,
-# patch order, build flags, workflows, or tests. On shard zero, reconstruct the
-# last seven-shard/QEMU-proven native source in a detached worktree and perform
-# a full-tree three-way merge dry run against the current checked-in src/.
-if [[ "$ev" == */shard-0/compiler ]]; then
-  (
-    set -Eeuo pipefail
-    repo_root=$(git rev-parse --show-toplevel)
-    historical=9bee70c501231579569b096c88f867349b979808
-    snapshot_parent=$(mktemp -d "$repo_root/build/minic-consolidation-XXXXXXXX")
-    echo "MINIC_SOURCE_REPLAY=START baseline=$historical checkout=$GITHUB_SHA"
-    git fetch --quiet --no-tags --depth=1 origin "$historical"
-    git -c advice.detachedHead=false worktree add --quiet --detach \
-      "$snapshot_parent/validated" "$historical"
-    (
-      cd "$snapshot_parent/validated"
-      python3 - <<'PY_RUNTIME_PATCHES'
-from pathlib import Path
-import re
-import subprocess
-s = Path("tools/ci/linux-runtime-build-minic-profile-v1.sh").read_text()
-a = s.split("patches=(", 1)[1].split(")", 1)[0]
-patches = re.findall(r"^\s*(apply-[\w-]+\.py)\s*$", a, re.M)
-assert len(patches) == 44, f"Expected 44 historically proven runtime patches, got {len(patches)}"
-with open("historical-replay.log", "w") as log:
-    for i, patch in enumerate(patches, 1):
-        p = subprocess.run(["python3", "tools/ci/" + patch], text=True, stdout=log, stderr=subprocess.STDOUT)
-        if p.returncode:
-            raise SystemExit(f"MINIC_SOURCE_REPLAY=FAIL stage=runtime ordinal={i} script={patch} rc={p.returncode}; see historical-replay.log")
-    for i, patch in enumerate([
-        "apply-perf-symbolic-function-body-owner-filter-v0.py",
-        "apply-perf-integer-call-expression-index-v1.py",
-        "apply-perf-parser-lookup-counters-v0.py",
-        "apply-perf-parser-function-hash-v0.py",
-    ], 1):
-        p = subprocess.run(["python3", "tools/ci/" + patch], text=True, stdout=log, stderr=subprocess.STDOUT)
-        if p.returncode:
-            raise SystemExit(f"MINIC_SOURCE_REPLAY=FAIL stage=perf ordinal={i} script={patch} rc={p.returncode}; see historical-replay.log")
-print("MINIC_SOURCE_REPLAY=PATCHES_OK runtime=44 integrated_perf=4")
-PY_RUNTIME_PATCHES
-      git diff --check
-      git diff --binary -- src > "$snapshot_parent/proven-src.patch"
-      git diff --name-only -- src > "$snapshot_parent/proven-files.txt"
-      # Export one exact post-patch source diff; keep historical scripts unchanged.
-      # Base64 keeps the GitHub job-log carrier byte-exact, despite line timestamps.
-      printf 'MINIC_PROVEN_PATCH_BEGIN sha=%s bytes=%s\\n' \
-        "$(sha256sum "$snapshot_parent/proven-src.patch" | cut -d' ' -f1)" \
-        "$(wc -c < "$snapshot_parent/proven-src.patch")"
-      base64 -w0 "$snapshot_parent/proven-src.patch" | fold -w 4096 | sed 's/^/MINIC_PROVEN_PATCH_DATA /'
-      echo 'MINIC_PROVEN_PATCH_END'
-    )
-    python3 - "$repo_root" "$snapshot_parent" "$historical" <<'PY_THREE_WAY'
-from pathlib import Path
-import subprocess
-import sys
-
-root, parent, baseline = Path(sys.argv[1]), Path(sys.argv[2]), sys.argv[3]
-proved = parent / "validated"
-candidate = parent / "candidate"
-def source_paths(directory):
-    return {x.relative_to(directory).as_posix() for x in (directory / "src").rglob("*") if x.is_file()}
-current_paths = source_paths(root)
-proved_paths = source_paths(proved)
-all_paths = sorted(current_paths | proved_paths)
-a_changed = []
-b_changed = []
-clean = []
-conflicts = []
-for path in all_paths:
-    try:
-        base = subprocess.check_output(["git", "-C", str(root), "show", f"{baseline}:{path}"])
-    except subprocess.CalledProcessError:
-        base = b""
-    a = (proved / path).read_bytes() if path in proved_paths else b""
-    b = (root / path).read_bytes() if path in current_paths else b""
-    if a != base: a_changed.append(path)
-    if b != base: b_changed.append(path)
-    if a == b: continue
-    if a == base:
-        continue
-    output = candidate / path
-    output.parent.mkdir(parents=True, exist_ok=True)
-    ancestor = parent / "base" / path
-    ancestor.parent.mkdir(parents=True, exist_ok=True)
-    ancestor.write_bytes(base)
-    res = subprocess.run(
-        ["git", "merge-file", "-p", "--diff3", str(root / path), str(ancestor), str(proved / path)],
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    if res.returncode < 0 or res.returncode > 127:
-        raise SystemExit(f"MINIC_SOURCE_MERGE=ERROR file={path} rc={res.returncode} {res.stderr[:180]!r}")
-    output.write_bytes(res.stdout)
-    (conflicts if res.returncode else clean).append(path)
-print(f"MINIC_SOURCE_REPLAY=DIFF base_to_proven_files={len(a_changed)} base_to_current_files={len(b_changed)} clean_merges={len(clean)} conflict_files={len(conflicts)}")
-for path in a_changed:
-    tag = "CONFLICT" if path in conflicts else ("CLEAN" if path in clean else "SAME")
-    print(f"MINIC_SOURCE_REPLAY=FILE {tag} {path}")
-for path in conflicts:
-    data = (candidate / path).read_text(errors="replace")
-    print(f"MINIC_SOURCE_REPLAY=CONFLICT file={path} regions={data.count('<<<<<<< ')}")
-print(f"MINIC_SOURCE_REPLAY=COMPLETE proof_patch_bytes={(parent / 'proven-src.patch').stat().st_size}")
-# Export only the four conflicted merged files; the other three canonical
-# files are already recoverable from the byte-exact proven Git patch.
-# --theirs selects the previously QEMU-proven implementation for each
-# conflicting hunk while retaining current non-overlapping source additions.
-import base64
-import hashlib
-for path in conflicts:
-    ancestor = parent / "base" / path
-    result = subprocess.run(
-        ["git", "merge-file", "-p", "--theirs",
-         str(root / path), str(ancestor), str(proved / path)],
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    if result.returncode < 0 or result.returncode > 127 or b"<<<<<<< " in result.stdout:
-        raise SystemExit(f"MINIC_FINAL_BLOB=ERROR path={path} rc={result.returncode}")
-    body = result.stdout
-    payload = base64.b64encode(body).decode("ascii")
-    print(f"MINIC_FINAL_BLOB_BEGIN path={path} bytes={len(body)} sha256={hashlib.sha256(body).hexdigest()}")
-    for pos in range(0, len(payload), 4096):
-        print("MINIC_FINAL_BLOB_DATA " + payload[pos:pos+4096])
-    print(f"MINIC_FINAL_BLOB_END path={path}")
-PY_THREE_WAY
-  ) || echo "MINIC_SOURCE_REPLAY=DIAGNOSTIC_FAILED original_runtime_pipeline_preserved=true"
+# The 9bee70c Runtime44 + integrated Perf4 post-overlay C sources are
+# checked in atomically. Keep historical scripts intact for older branches;
+# this profile now verifies the exact native files and skips reinjection.
+native_manifest="docs/ci/native-runtime44-perf4-validated-sha1.txt"
+native_profile=0
+if [[ -f "$native_manifest" ]]; then
+  native_profile=1
+  while read -r expected file; do
+    [[ "$expected" =~ ^[0-9a-f]{40}$ ]] || continue
+    actual=$(git hash-object "$file")
+    if [[ "$actual" != "$expected" ]]; then
+      echo "MINIC_NATIVE_PROFILE=FAIL file=$file expected=$expected actual=$actual" >&2
+      exit 12
+    fi
+  done <"$native_manifest"
+  echo "MINIC_NATIVE_PROFILE=PASS runtime44=checked_in integrated_perf4=checked_in"
 fi
-
 patches=(
   apply-local-integer-assignment-v2.py
   apply-local-integer-logical-conditions-v0.py
@@ -189,7 +82,11 @@ patches=(
 start=$(date +%s%N)
 : >"$ev/patch.log"
 for p in "${patches[@]}"; do
-  python3 "tools/ci/$p" >>"$ev/patch.log"
+  if [[ "$native_profile" == 1 ]]; then
+    echo "$p: ALREADY_NATIVE_VALIDATED" >>"$ev/patch.log"
+  else
+    python3 "tools/ci/$p" >>"$ev/patch.log"
+  fi
 done
 # Whole-Linux producer opt-in: run the exact two mechanisms proven on the
 # eight-owner 24/24 P1 image across ALL actual Linux C translation units.
