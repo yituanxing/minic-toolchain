@@ -569,3 +569,12 @@ PERF-024 定位 **最新 Boolean+symbolic+integer** 版本 `lib/crc32.o` 整数�
 代码中，integer transitive 在每个 integer-specialized caller 克隆内遍历多个 CALL expression id，但旧实现未限制各 CALL 属于该克隆的原始源函数。因此新增独立 opt-in `apply-perf-integer-function-body-owner-filter-v1.py`：**复用此前已通过 first500 验证的 `minic_perf_program_build_expression_source_owners`**，仅当表达式有唯一明确原始 source owner、且 owner 与当前克隆 `caller.specialization_source` 不同时跳过；未知、共享和模糊 owner 保持原扫描，分配/验证失败无条件回退旧算法。顺序、候选匹配、clone 限额等逻辑不改；所有退出路径清理新分配的可选缓存。
 
 [独立 A/B CI #38671271982](https://github.com/yituanxing/minic-toolchain/actions/runs/38671271982) 在同 3 份真实 SHA-frozen 输入上，用两臂 **都已开启 symbolic-owner+integer CALL**、仅候选增加 integer-owner 过滤，每臂热身一次加两次配对，强制逐字节 `.s` 一致。需按最终日志判定；如出现源码补丁失败或 `.s` 不一致，不能晋级 candidate，也不能声称速度收益。M0 [#38671271885](https://github.com/yituanxing/minic-toolchain/actions/runs/38671271885) 已通过。
+
+
+## 34. PERF-029：三个已测有效优化**同时启用**的 500 文件汇编等价验收（2026-10-15）
+
+[CI #38670218353](https://github.com/yituanxing/minic-toolchain/actions/runs/38670218353) `gcc-single SUCCESS`；冻结 Linux 6.6.143 RISC-V 500 份真实 Kbuild `.i` 的 manifest、每份 input SHA 都完成校验，候选在同一 Runtime+Boolean 上**同时**启用 `apply-perf-symbolic-function-body-owner-filter-v0.py`、`apply-perf-integer-call-expression-index-v1.py`、`apply-perf-parser-function-hash-v0.py`（其前置诊断 Parser lookup counters 不改变算法；全量候选尚非默认），保持 GNU .o 身份和 Kbuild .config 不变。对 500 文件分别执行原 Runtime Boolean 与联合候选的完整 `-S` 编译，4 路 worker，任何一侧非零、超时、汇编不同即 fail。
+
+**实际日志完整：** `MINIC_FROZEN_DIFF_PROGRESS checked=50/500,...,500/500`；`MINIC_FROZEN_DIFF=PASS selected=500 identical=500 runtime_p1_not_proven=true`；`PERF_FIRST500=PASS selected=500 combined=true QEMU_p1_not_executed=true`。这次不是上一次只有 symbolic-owner 的 500，而是**三算法联合**通过 500/500 汇编严格字节等价；已具备向缓存恢复的 **7 路全 Linux Kbuild/链接/QEMU P0+P1** 递进的正确性证据。仍不得以编译输出等价推断全量 Linux 2064/2064、链接、QEMU shell/P1 已通过。任一工具链认证切换必须由独立该阶段 CI 数据做决定。
+
+在 500 验收执行时，采用独立的旧缓存执行 PERF-028 的整数子阶段归因（99%+ 处于 transitive），随后提出专门的 integer FunctionBody owner 过滤候选；其 `.s` 等价与 P50 尚待 [CI #38671520608](https://github.com/yituanxing/minic-toolchain/actions/runs/38671520608) 最终验证。该候选**不包含在本次 500/500 已过的三算法集合**，必须单独资格筛查，不能借本次 500 给它认证。
