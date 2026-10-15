@@ -6,8 +6,21 @@ text = p.read_text()
 
 if "IRQ_FRAME_REUSE_V0" not in text:
     raise SystemExit("value-slot reuse prerequisite not applied")
+# The exact previously validated same-block call snapshot layout is now
+# part of canonical RV64 source. Audit completeness rather than repatch.
 if "RECORD_CALL_RESULT_SNAPSHOT_REUSE_V0" in text:
-    raise SystemExit("record call result snapshot reuse already applied")
+    required = (
+        "/* RECORD_CALL_RESULT_SNAPSHOT_REUSE_V0:",
+        "static bool core_instruction_block_position(",
+        "static bool core_call_argument_object_use_count(",
+        "static bool core_record_snapshot_single_call_candidate(",
+        "static bool core_record_call_result_snapshot_reuse_candidate(",
+        "frame->object_offsets[(size_t)reuse_candidate]",
+    )
+    if any(text.count(marker) != 1 for marker in required):
+        raise SystemExit("MINIC_RISCV64_RECORD_CALL_RESULT_SNAPSHOT_REUSE=ERROR partial canonical")
+    print("MINIC_RISCV64_RECORD_CALL_RESULT_SNAPSHOT_REUSE_V0=ALREADY_CANONICAL")
+    raise SystemExit(0)
 
 frame_marker = "static bool core_frame_initialize(const MinicC0Program *program,"
 if frame_marker not in text:
