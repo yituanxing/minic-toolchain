@@ -6,6 +6,23 @@ def replace_once(path: str, old: str, new: str, label: str) -> None:
     p = Path(path)
     text = p.read_text()
     count = text.count(old)
+    if label == "boolean range compiler pass" and count == 2:
+        # Symbolic address specialization has already been promoted into
+        # canonical compiler.c. Retain the exact historical boolean pass but
+        # identify its original finalization site by the complete preceding
+        # successful symbolic pass, not a duplicate unrelated text fragment.
+        predecessor = (
+            "    if (success && !minic_specialize_inline_symbolic_calls(&program, target_info)) {\n"
+            "        minic_set_diagnostic(diagnostic, input_path, 1U, 1U,\n"
+            '                             "cannot specialize inline symbolic address call sites");\n'
+            "        success = false;\n"
+            "    }\n"
+        )
+        if text.count(predecessor + old) != 1:
+            raise SystemExit("boolean range compiler pass: ambiguous symbolic predecessor")
+        p.write_text(text.replace(predecessor + old, predecessor + new, 1))
+        print("MINIC_INLINE_BOOLEAN_RANGE_V0=SYMBOLIC_PREDECESSOR_SCOPED")
+        return
     if count != 1:
         raise SystemExit(f"{label}: expected one anchor, found {count}")
     p.write_text(text.replace(old, new, 1))
