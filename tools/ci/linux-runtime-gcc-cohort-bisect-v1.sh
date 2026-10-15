@@ -170,10 +170,13 @@ elif [[ "${COHORT_GNU_PREFLIGHT_ALLOW_SEVEN_RECEIVER_VOLATILE:-0}" == 1 ]]; then
   # only its known version-timestamp outputs on the restored cached tree.
   # Permit exactly those three bytes to change during this preflight, then
   # restore the ENTIRE preflight snapshot before GNU link + MiniC substitution.
+  # The existing seven-shard receiver enables this carve-out for the integrated
+  # full-profile run independently of the optional P1 cross-block experiment.
+  # Requiring COHORT_LINUX_FULL_CROSSBLOCK here rejects the legitimate
+  # [linux-perf-integrated-full] receiver before link/QEMU even starts.
   [[ "${COHORT_ACTION:-all}" == verify &&
      "$cohort_scope" == FULL_C_UNIVERSE &&
      "$n" == 2064 &&
-     "${COHORT_LINUX_FULL_CROSSBLOCK:-0}" == 1 &&
      "$actual_cfg" == eeb04f304ebfb97a1079c187dc0c2ea3cc61fc50a55aa3cc776237c16ab19bbe ]] || {
     echo 'COHORT_GNU_PREFLIGHT=FAIL invalid_seven_receiver_volatile_scope' >&2
     exit 6
