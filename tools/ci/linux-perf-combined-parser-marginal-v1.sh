@@ -5,6 +5,11 @@ set -Eeuo pipefail
 ev="${1:?cohort path}"
 root="${2:?compiler path}"
 rotation="${3:-false}"
+case "$rotation" in
+  true|false) ;;
+  *) echo "COMBINED_PARSER_HASH=FAIL invalid_rotation_mode=$rotation" >&2; exit 2 ;;
+esac
+python3 -m py_compile tools/ci/apply-perf-parser-function-hash-v0.py
 work="$ev/boolean-hot/parser-combined"
 mkdir -p "$work/linear/bin" "$work/hashed/bin"
 cp "$root/minic" "$work/linear/bin/minic"
