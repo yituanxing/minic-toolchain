@@ -2183,9 +2183,19 @@ PY_LARGEST_TUS
   # map from linux-runtime-large-image-qemu-v0.sh with the guest's original
   # 16KiB task/IRQ stacks and unchanged Image / initramfs. Recompute the
   # matching DTB for every distinct linked Image, including bisection trials.
-  if [[ "${COHORT_LINUX_FULL_CROSSBLOCK:-0}" == 1 ]]; then
+  # The integrated-full Runtime profile also creates a >128 MiB Image.
+  # Use the already-validated large-Image DTB/initrd loader in that case,
+  # independent of the separate experimental Crossblock optimization flag.
+  # A fixed loader and unmodified Linux guest are required for a real P1
+  # verdict; QEMU's default -initrd location otherwise overlaps the Image.
+  large_full_image=false
+  if [[ "$cohort_scope" == FULL_C_UNIVERSE && "$n" -eq 2064 ]] &&
+     ((candidate_image_bytes > 128 * 1024 * 1024)); then
+    large_full_image=true
+  fi
+  if [[ "${COHORT_LINUX_FULL_CROSSBLOCK:-0}" == 1 || "$large_full_image" == true ]]; then
     [[ "$cohort_scope" == FULL_C_UNIVERSE && "$n" -eq 2064 ]] || {
-      echo "LINUX_FULL_CROSSBLOCK=ERROR not_exact_full_C_universe" >&2
+      echo "COHORT_LARGE_IMAGE_LOADER=ERROR not_exact_full_C_universe" >&2
       exit 8
     }
     dtb="$d/full-crossblock-virt.dtb"
@@ -2212,7 +2222,10 @@ PY_LARGEST_TUS
     export LINUX_RUNTIME_CUSTOM_DTB="$dtb"
     export LINUX_RUNTIME_INITRD_LOAD_ADDR="$initrd_load"
     export LINUX_RUNTIME_QEMU_MEMORY=2G
-    echo "LINUX_FULL_CROSSBLOCK=LOADER_PASS trial=$name image_sha=$image_sha original_16KiB=true guest_mem=2G initrd_start=a0000000"
+    echo "COHORT_LARGE_IMAGE_LOADER=PASS trial=$name image_sha=$image_sha original_16KiB=true guest_mem=2G initrd_start=a0000000 image_bytes=$candidate_image_bytes reason=$(if [[ "${COHORT_LINUX_FULL_CROSSBLOCK:-0}" == 1 ]]; then echo crossblock; else echo image_exceeds_128MiB; fi)"
+    if [[ "${COHORT_LINUX_FULL_CROSSBLOCK:-0}" == 1 ]]; then
+      echo "LINUX_FULL_CROSSBLOCK=LOADER_PASS trial=$name image_sha=$image_sha original_16KiB=true guest_mem=2G initrd_start=a0000000"
+    fi
   fi
   verdict=INCONCLUSIVE
   if [[ "$mode" != prefix || "$count" -gt 0 ]] && [[ "$image_sha" == "$gnu_image_sha" ]]; then
