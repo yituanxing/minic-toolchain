@@ -115,9 +115,13 @@ new = r'''    if (expression->kind == MINIC_EXPRESSION_SUBSCRIPT) {
     }
 '''
 
-count = text.count(old)
-if count != 1:
-    raise SystemExit(f"expected one symbolic lvalue subscript block, found {count}")
+old_count = text.count(old)
+new_count = text.count(new)
+if old_count == 0 and new_count == 1:
+    print("MINIC_INLINE_SPECIALIZATION_SYMBOLIC_ARRAY_LVALUE_V0=ALREADY_CANONICAL")
+    raise SystemExit(0)
+if old_count != 1 or new_count != 0:
+    raise SystemExit(f"symbolic array lvalue promotion incomplete old={old_count} new={new_count}")
 text = text.replace(old, new, 1)
 p.write_text(text)
 print("MINIC_INLINE_SPECIALIZATION_SYMBOLIC_ARRAY_LVALUE_V0=APPLIED")
