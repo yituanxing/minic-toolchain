@@ -42,17 +42,8 @@ else:
     # only for assembler-local .L* names. The Linux *static* profile must
     # still strengthen EVERY global address to 'lla', with unchanged behavior.
     # Recognize both previously validated source shapes; reject ambiguity.
-    selector = (
-        'fprintf(file, "  %s t0, %s\\n",\\n'
-        '                    strncmp(function->globals[instruction->value.global_id].name, ".L", 2U) == 0\\n'
-        '                        ? "lla"\\n'
-        '                        : "la",\\n'
-        '                    function->globals[instruction->value.global_id].name)'
-    )
-    static_emit = (
-        'fprintf(file, "  lla t0, %s\\n", '
-        'function->globals[instruction->value.global_id].name)'
-    )
+    selector = "fprintf(file, \"  %s t0, %s\\n\",\n                    strncmp(function->globals[instruction->value.global_id].name, \".L\", 2U) == 0\n                        ? \"lla\"\n                        : \"la\",\n                    function->globals[instruction->value.global_id].name)"
+    static_emit = "fprintf(file, \"  lla t0, %s\\n\", function->globals[instruction->value.global_id].name)"
     count = region.count(old_prefix)
     selector_count = region.count(selector)
     print(f"MINIC_RV64_STATIC_PCREL_GLOBAL_ADDRESS_V0_MATCHES={count} selector={selector_count}")
@@ -63,9 +54,9 @@ else:
         )
     region = region.replace(
         global_case,
-        "    /* M196_LINUX_STATIC_PCREL_GLOBAL_ADDRESS: the Linux kernel is statically\\n"
-        "       linked and executes early global accesses before the MMU is enabled.\\n"
-        "       Use the explicit PC-relative pseudo-op so GAS cannot choose GOT form. */\\n"
+        "    /* M196_LINUX_STATIC_PCREL_GLOBAL_ADDRESS: the Linux kernel is statically\n"
+        "       linked and executes early global accesses before the MMU is enabled.\n"
+        "       Use the explicit PC-relative pseudo-op so GAS cannot choose GOT form. */\n"
         + global_case,
         1,
     )
