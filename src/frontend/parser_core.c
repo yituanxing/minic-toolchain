@@ -609,8 +609,9 @@ MinicLocalId minic_parser_find_local(const MinicParser *parser, MinicSourceSpan 
         const MinicParserLocalBinding *binding;
 
         binding = &parser->local_bindings[index - 1U];
-        if (binding->local_id != MINIC_LOCAL_INVALID &&
-            minic_parser_span_equals(parser, name_span, binding->name_span)) {
+        /* Resolve by the nearest binding, even if that binding is a typedef
+         * or scoped extern.  Those names hide an outer local variable. */
+        if (minic_parser_span_equals(parser, name_span, binding->name_span)) {
             return binding->local_id;
         }
     }

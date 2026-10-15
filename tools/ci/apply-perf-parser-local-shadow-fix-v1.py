@@ -21,7 +21,10 @@ new="""        /* Resolve by the nearest binding, even if that binding is a type
         if (minic_parser_span_equals(parser, name_span, binding->name_span)) {
             return binding->local_id;
         }"""
-if fragment.count(old)!=1:
-    raise SystemExit(f"local lookup exact anchor count={fragment.count(old)}")
-p.write_text(src[:start]+fragment.replace(old,new,1)+src[end:])
+if fragment.count(new)==1:
+    print("MINIC_PARSER_LOCAL_SHADOW_V1=ALREADY_CANONICAL")
+elif fragment.count(old)==1:
+    p.write_text(src[:start]+fragment.replace(old,new,1)+src[end:])
+else:
+    raise SystemExit("PARSER_LOCAL_SHADOW=ERROR partial or unexpected implementation")
 print("MINIC_PARSER_LOCAL_SHADOW_V1=APPLIED")
