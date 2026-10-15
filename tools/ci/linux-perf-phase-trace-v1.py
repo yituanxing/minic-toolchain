@@ -72,13 +72,14 @@ def compute_interstage_gaps(events):
 
 SPEC_STAGES=("spec-integer","spec-symbolic","spec-boolean","spec-finalize")
 SYMBOLIC_SUBSTAGES=("spec-symbolic-direct","spec-symbolic-transitive")
+INTEGER_SUBSTAGES=("spec-integer-direct","spec-integer-transitive")
 
 def summarize_specialization_trace(events):
     """Read existing opt-in specialization begin/end markers without touching IR."""
     started, total, calls = {}, {}, {}
     for when, line in events:
         match = PAT.search(line)
-        if not match or match.group(1) not in SPEC_STAGES+SYMBOLIC_SUBSTAGES:
+        if not match or match.group(1) not in SPEC_STAGES+SYMBOLIC_SUBSTAGES+INTEGER_SUBSTAGES:
             continue
         stage, action, _ = match.groups()
         if action == "begin":
@@ -126,6 +127,7 @@ def main():
     cli.add_argument("--self-test",action="store_true")
     cli.add_argument("--expect-specialization",action="store_true")
     cli.add_argument("--expect-symbolic-loops",action="store_true")
+    cli.add_argument("--expect-integer-loops",action="store_true")
     cli.add_argument("--input",type=Path)
     cli.add_argument("--baseline",type=Path)
     cli.add_argument("--candidate",type=Path)
@@ -148,6 +150,11 @@ def main():
                 (700000,"MINIC_BOOTSTRAP_TRACE stage=spec-symbolic-transitive state=begin functions=3"),
                 (2100000,"MINIC_BOOTSTRAP_TRACE stage=spec-symbolic-transitive state=end-success functions=3")]
         assert summarize_specialization_trace(nested)["spec-symbolic-transitive"]["ms"]==1.4
+        integer_probe=[(0,"MINIC_BOOTSTRAP_TRACE stage=spec-integer-direct state=begin functions=5"),
+                       (800000,"MINIC_BOOTSTRAP_TRACE stage=spec-integer-direct state=end-success functions=5"),
+                       (800000,"MINIC_BOOTSTRAP_TRACE stage=spec-integer-transitive state=begin functions=5"),
+                       (2000000,"MINIC_BOOTSTRAP_TRACE stage=spec-integer-transitive state=end-success functions=5")]
+        assert summarize_specialization_trace(integer_probe)["spec-integer-transitive"]["ms"]==1.2
         print("MINIC_PHASE_TRACE_SELFTEST=PASS six_stages=1 five_interstage_gaps=1 spec_timer=1")
         return
     if not all((ns.input,ns.baseline,ns.candidate,ns.out)):
@@ -162,6 +169,8 @@ def main():
         raise RuntimeError("different assembly bytes; cannot attribute performance")
     if ns.expect_symbolic_loops and not ns.expect_specialization:
         raise RuntimeError("symbolic loops require outer specialization tracing")
+    if ns.expect_integer_loops and not ns.expect_specialization:
+        raise RuntimeError("integer loops require outer specialization tracing")
     if ns.expect_specialization and not set(SPEC_STAGES).issubset(results["after"]["specialization_ms"]):
         raise RuntimeError("diagnostic compiler did not emit all four specialization markers")
     data={"schema":"minic-existing-stage-trace-v1",
@@ -187,6 +196,19 @@ def main():
         print(f"MINIC_PHASE_TRACE_RESIDUAL mode={mode} wall_ms={item['wall_ms']:.2f} "
               f"unclassified_before_parse_or_after_codegen_ms={external:.2f}")
 
+    if ns.expect_integer_loops:
+        for mode in ("before","after"):
+            spec=results[mode]["specialization_ms"]
+            if not all(n in spec and spec[n]["calls"]==1 for n in INTEGER_SUBSTAGES):
+                raise RuntimeError("missing direct/transitive integer trace "+mode)
+            total=sum(spec[n]["ms"] for n in INTEGER_SUBSTAGES)
+            outer=spec["spec-integer"]["ms"]
+            if total>outer+5:
+                raise RuntimeError("integer substage timings exceed outer "+mode)
+            for name in INTEGER_SUBSTAGES:
+                item=spec[name]
+                print(f"MINIC_INTEGER_SUBPHASE mode={mode} name={name} ms={item['ms']:.2f} calls={item['calls']}")
+            print(f"MINIC_INTEGER_SUBPHASE_GROUP=PASS mode={mode} measured_ms={total:.2f} outer_ms={outer:.2f}")
     if ns.expect_symbolic_loops:
         spec=results["after"]["specialization_ms"]
         if not all(n in spec and spec[n]["calls"]==1 for n in SYMBOLIC_SUBSTAGES):
