@@ -1296,11 +1296,27 @@ jobs:
             "$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain" "$ev/compiler"
           if [[ "${{ contains(github.event.head_commit.message, '[linux-perf-2064-ab]') }}" == true ]]; then
             test "${{ contains(github.event.head_commit.message, '[linux-perf-integrated-full]') }}" = true
-            mkdir -p "$ev/perf-before/bin"
-            cp -p "$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain/bin/minic" \
-                  "$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain/bin/minic-cc" \
-                  "$ev/perf-before/bin/"
-            echo "MINIC_FULL_PERF_AB=BASELINE_SAVED mode=runtime_crossblock"
+            # The four integrated perf patches are ALREADY in the native C tree;
+            # copying the current binary as "baseline" is now an invalid A/B.
+            # Rebuild the last fully validated pre-flag product in a detached
+            # worktree, on THIS SAME runner, with its proven shared-.text mode.
+            # No historical CI overlays are required or reintroduced.
+            historical=b46822fcbc2fbc459081a908058985941eae749b
+            git fetch --quiet --no-tags --depth=1 origin "$historical"
+            git -c advice.detachedHead=false worktree add --quiet --detach \
+              "$ev/perf-historical-source" "$historical"
+            make -s -C "$ev/perf-historical-source" -j4 MODE=release \
+              CFLAGS="-Werror -DMINIC_LINUX_RUNTIME_DEFAULT_TEXT_V0=1" \
+              BUILD_DIR="$ev/perf-before" \
+              "$ev/perf-before/bin/minic" "$ev/perf-before/bin/minic-cc"
+            test -x "$ev/perf-before/bin/minic"
+            test -x "$ev/perf-before/bin/minic-cc"
+            if cmp -s "$ev/perf-before/bin/minic-cc" \
+                  "$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain/bin/minic-cc"; then
+              echo "MINIC_FULL_PERF_AB=FAIL identical compiler binaries" >&2
+              exit 4
+            fi
+            echo "MINIC_FULL_PERF_AB=BASELINE_SAVED commit=$historical mode=runtime44-perf4-native baseline_cc=$(sha256sum "$ev/perf-before/bin/minic-cc" | cut -d' ' -f1)"
           fi
           if [[ "${{ contains(github.event.head_commit.message, '[linux-perf-integrated-full]') }}" == true ]]; then
             bash tools/ci/linux-perf-integrated-full-profile-v1.sh \
