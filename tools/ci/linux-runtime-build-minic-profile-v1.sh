@@ -10,6 +10,8 @@ build_dir=$1
 ev=$2
 mkdir -p "$ev"
 
+# Canonical main source-option layout verification uses the freshly certified
+# main-scoped GNU/source fixtures (Actions #38770380273), not stale agent caches.
 # The 9bee70c Runtime44 + integrated Perf4 post-overlay C sources are
 # checked in atomically. Keep historical scripts intact for older branches;
 # this profile now verifies the exact native files and skips reinjection.
