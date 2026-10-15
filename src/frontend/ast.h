@@ -345,6 +345,10 @@ typedef struct MinicFunction {
     size_t local_count;
     MinicBlockId body_block;
     MinicFunctionId alias_target;
+    MinicFunctionId specialization_source;
+    uint64_t specialization_integer_bits[MINIC_MAX_FUNCTION_PARAMETERS];
+    bool specialization_integer_known[MINIC_MAX_FUNCTION_PARAMETERS];
+    bool is_integer_specialization;
     bool is_defined;
     bool is_internal;
     bool is_inline;

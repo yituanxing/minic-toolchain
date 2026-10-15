@@ -5,6 +5,11 @@ from pathlib import Path
 def replace_once(path: str, old: str, new: str) -> None:
     p = Path(path)
     text = p.read_text()
+    # The specialization metadata is now tracked in canonical ast.h.
+    # The remaining Core/compiler rewrites still apply as before in Runtime.
+    if path == "src/frontend/ast.h" and text.count(new) == 1 and text.count(old) == 0:
+        print("MINIC_INLINE_SPECIALIZATION_AST=ALREADY_CANONICAL")
+        return
     count = text.count(old)
     if count != 1:
         raise SystemExit(f"{path}: expected one anchor, found {count}: {old[:160]!r}")
