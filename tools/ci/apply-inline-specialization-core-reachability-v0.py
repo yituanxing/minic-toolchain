@@ -305,10 +305,12 @@ done:
 }
 
 '''
-count = text.count(anchor)
-if count != 1:
-    raise SystemExit(f"expected one core validation anchor, found {count}")
-text = text.replace(anchor, helper + anchor, 1)
+if text.count(helper) == 1 and text.count(anchor) == 1:
+    print("MINIC_INLINE_SPECIALIZATION_CORE_REACHABILITY_V0=HELPER_ALREADY_CANONICAL")
+elif text.count(helper) == 0 and text.count(anchor) == 1:
+    text = text.replace(anchor, helper + anchor, 1)
+else:
+    raise SystemExit("core reachability helper missing, duplicate or partially promoted")
 
 old = '''    if (minic_bootstrap_trace_enabled()) {
         minic_bootstrap_trace_stage(input_path,
@@ -336,9 +338,11 @@ new = '''    if (minic_bootstrap_trace_enabled()) {
     if (success) {
         minic_bootstrap_trace_stage(input_path, "core-validate", "begin", program.function_count);
 '''
-count = text.count(old)
-if count != 1:
-    raise SystemExit(f"expected one core-set/validate anchor, found {count}")
-text = text.replace(old, new, 1)
-p.write_text(text)
+if text.count(new) == 1 and text.count(old) == 0:
+    print("MINIC_INLINE_SPECIALIZATION_CORE_REACHABILITY_V0=CALL_ALREADY_CANONICAL")
+elif text.count(old) == 1 and text.count(new) == 0:
+    text = text.replace(old, new, 1)
+    p.write_text(text)
+else:
+    raise SystemExit("core reachability call missing, duplicate or partially promoted")
 print("MINIC_INLINE_SPECIALIZATION_CORE_REACHABILITY_V0=APPLIED")
