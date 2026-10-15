@@ -997,7 +997,7 @@ jobs:
   # Explicit, optional 7-runner producer for the same pure-GCC C universe.
   # Do not use this lane for everyday single-TU debugging.
   gcc-shards:
-    if: github.event_name == 'push' && (contains(github.event.head_commit.message, '[linux-runtime-gcc-sharded]') || contains(github.event.head_commit.message, '[linux-minias-seven-shards]') || (contains(github.event.head_commit.message, '[linux-minipp-seven-integration]') && !contains(github.event.head_commit.message, '[linux-minipp-seven-replay]')))
+    if: github.event_name == 'push' && (contains(github.event.head_commit.message, '[linux-perf-2064-ab]') || contains(github.event.head_commit.message, '[linux-runtime-gcc-sharded]') || contains(github.event.head_commit.message, '[linux-minias-seven-shards]') || (contains(github.event.head_commit.message, '[linux-minipp-seven-integration]') && !contains(github.event.head_commit.message, '[linux-minipp-seven-replay]')))
     runs-on: ubuntu-24.04
     timeout-minutes: 75
     strategy:
@@ -1238,7 +1238,7 @@ jobs:
           echo "key=gnu-minic-shard-v1-eeb04f304ebfb97a1079c187dc0c2ea3cc61fc50a55aa3cc776237c16ab19bbe-$profile-$subset-$gcc-$assembler" >>"$GITHUB_OUTPUT"
 
       - name: Restore this shard's immutable candidate objects
-        if: "!contains(github.event.head_commit.message, '[linux-minias-seven-shards]') && !contains(github.event.head_commit.message, '[linux-minipp-seven-integration]')"
+        if: "!contains(github.event.head_commit.message, '[linux-minias-seven-shards]') && !contains(github.event.head_commit.message, '[linux-minipp-seven-integration]') && !contains(github.event.head_commit.message, '[linux-perf-2064-ab]')"
         id: shard_cache
         uses: actions/cache/restore@v4
         with:
@@ -1265,12 +1265,25 @@ jobs:
           fi
           bash tools/ci/linux-runtime-build-minic-profile-v1.sh \
             "$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain" "$ev/compiler"
+          if [[ "${{ contains(github.event.head_commit.message, '[linux-perf-2064-ab]') }}" == true ]]; then
+            test "${{ contains(github.event.head_commit.message, '[linux-perf-integrated-full]') }}" = true
+            mkdir -p "$ev/perf-before/bin"
+            cp -p "$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain/bin/minic" \
+                  "$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain/bin/minic-cc" \
+                  "$ev/perf-before/bin/"
+            echo "MINIC_FULL_PERF_AB=BASELINE_SAVED mode=runtime_crossblock"
+          fi
           if [[ "${{ contains(github.event.head_commit.message, '[linux-perf-integrated-full]') }}" == true ]]; then
             bash tools/ci/linux-perf-integrated-full-profile-v1.sh \
               "$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain" "$ev/compiler"
             echo "LINUX_PERF_3_SHARD=READY shard=${{ matrix.shard }}/7"
           fi
           export COHORT_ACTION=compile COHORT_ALLOW_SHARD=1
+          if [[ "${{ contains(github.event.head_commit.message, '[linux-perf-2064-ab]') }}" == true ]]; then
+            export COHORT_PERF_2064_AB=1
+            export COHORT_PERF_2064_BASELINE="$ev/perf-before/bin/minic"
+            export COHORT_PROFILE_STAGES=0
+          fi
           if [[ "${{ contains(github.event.head_commit.message, '[linux-perf-integrated-full]') }}" == true ]]; then
             export COHORT_GNU_PREFLIGHT_ALLOW_SEVEN_SHARD_VOLATILE=1
           fi
@@ -1294,7 +1307,7 @@ jobs:
           echo "GNU_MINIC_SHARD_READY=PASS shard=${{ matrix.shard }} objects=$n"
 
       - name: Cache completed shard independently of later link failures
-        if: "!contains(github.event.head_commit.message, '[linux-minias-seven-shards]') && !contains(github.event.head_commit.message, '[linux-minipp-seven-integration]') && steps.shard_cache.outputs['cache-hit'] != 'true'"
+        if: "!contains(github.event.head_commit.message, '[linux-minias-seven-shards]') && !contains(github.event.head_commit.message, '[linux-minipp-seven-integration]') && !contains(github.event.head_commit.message, '[linux-perf-2064-ab]') && steps.shard_cache.outputs['cache-hit'] != 'true'"
         uses: actions/cache/save@v4
         with:
           path: |
@@ -1304,7 +1317,7 @@ jobs:
           key: ${{ steps.candidate.outputs.key }}
 
       - name: Transfer only candidate objects and attestations
-        if: "!contains(github.event.head_commit.message, '[linux-minias-seven-shards]') && !contains(github.event.head_commit.message, '[linux-minipp-seven-integration]')"
+        if: "!contains(github.event.head_commit.message, '[linux-minias-seven-shards]') && !contains(github.event.head_commit.message, '[linux-minipp-seven-integration]') && !contains(github.event.head_commit.message, '[linux-perf-2064-ab]')"
         uses: actions/upload-artifact@v4
         with:
           name: shard-${{ matrix.shard }}
@@ -1316,6 +1329,17 @@ jobs:
             build/linux-runtime-gcc-shards-v1/shard-${{ matrix.shard }}/cohort.log
           if-no-files-found: error
           retention-days: 3
+
+      - name: Preserve MiniC 2064 real-input A/B timings without reuploading objects
+        if: always() && contains(github.event.head_commit.message, '[linux-perf-2064-ab]')
+        uses: actions/upload-artifact@v4
+        with:
+          name: minic-perf-2064-ab-shard-${{ matrix.shard }}-${{ github.sha }}
+          path: |
+            build/linux-runtime-gcc-shards-v1/shard-${{ matrix.shard }}/perf-ab.tsv
+            build/linux-runtime-gcc-shards-v1/shard-${{ matrix.shard }}/perf-ab-summary.json
+          if-no-files-found: warn
+          retention-days: 7
 
       - name: Keep bounded failed-TU evidence
         if: failure() && !contains(github.event.head_commit.message, '[linux-minias-seven-shards]') && !contains(github.event.head_commit.message, '[linux-minipp-seven-integration]')
