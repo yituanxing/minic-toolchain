@@ -3503,12 +3503,22 @@ static const MinicFunction *core_select_transitive_integer_specialization(
 
     if (context == NULL || context->body == NULL || context->body->program == NULL ||
         expression == NULL || current_callee == NULL ||
-        !current_callee->is_integer_specialization ||
         expression->kind != MINIC_EXPRESSION_CALL) {
         return current_callee;
     }
     program = context->body->program;
-    source_id = current_callee->specialization_source;
+    if (current_callee->is_integer_specialization) {
+        source_id = current_callee->specialization_source;
+    } else {
+        source_id = expression->value.call.function_id;
+        if (source_id >= program->function_count ||
+            current_callee != &program->functions[source_id] ||
+            !current_callee->is_defined || !current_callee->is_internal ||
+            !current_callee->is_inline || current_callee->is_variadic ||
+            current_callee->alias_target != MINIC_FUNCTION_INVALID) {
+            return current_callee;
+        }
+    }
     if (source_id >= program->function_count) {
         return current_callee;
     }
@@ -3540,9 +3550,12 @@ static const MinicFunction *core_select_transitive_integer_specialization(
     }
     best = current_callee;
     best_known_count = 0U;
-    for (parameter_index = 0U; parameter_index < source->parameter_count; ++parameter_index) {
-        if (current_callee->specialization_integer_known[parameter_index]) {
-            best_known_count += 1U;
+    if (current_callee->is_integer_specialization) {
+        for (parameter_index = 0U; parameter_index < source->parameter_count;
+             ++parameter_index) {
+            if (current_callee->specialization_integer_known[parameter_index]) {
+                best_known_count += 1U;
+            }
         }
     }
     for (candidate_index = 0U; candidate_index < program->function_count; ++candidate_index) {

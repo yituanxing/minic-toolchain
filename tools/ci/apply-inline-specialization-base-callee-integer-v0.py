@@ -11,6 +11,21 @@ def replace_once(path: str, old: str, new: str) -> None:
     p.write_text(text.replace(old, new, 1))
 
 
+# The historical BaseCallee Runtime logic is now native C, after its
+# original transitive-specialization prerequisite. Verify all four source edits.
+cc = Path("src/compiler/compiler.c").read_text()
+core = Path("src/core/core_lower.c").read_text()
+if "current_callee != &program->functions[source_id] ||" in core:
+    if not (
+        cc.count("if (current_callee.is_integer_specialization) {") == 1
+        and cc.count("if (!current_callee.is_integer_specialization ||") == 1
+        and core.count("current_callee != &program->functions[source_id] ||") == 1
+        and core.count("if (current_callee->is_integer_specialization) {\n        for (parameter_index") == 1
+    ):
+        raise SystemExit("MINIC_INLINE_SPECIALIZATION_BASE_CALLEE_INTEGER_V0=ERROR incomplete canonical source")
+    print("MINIC_INLINE_SPECIALIZATION_BASE_CALLEE_INTEGER_V0=ALREADY_CANONICAL")
+    raise SystemExit(0)
+
 # The transitive pass already knows how to refine an existing specialization.
 # Generalize the same source/fact machinery to a nested call that still points
 # at the original internal inline function. Shared AST calls are deliberately

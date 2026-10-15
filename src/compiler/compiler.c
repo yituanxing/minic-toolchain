@@ -459,11 +459,17 @@ static bool minic_specialize_inline_integer_calls(MinicC0Program *program,
                     continue;
                 }
                 current_callee = program->functions[current_callee_id];
-                if (!current_callee.is_integer_specialization ||
-                    current_callee.specialization_source >= original_function_count) {
-                    continue;
+                if (current_callee.is_integer_specialization) {
+                    if (current_callee.specialization_source >= original_function_count) {
+                        continue;
+                    }
+                    nested_source_id = current_callee.specialization_source;
+                } else {
+                    if (current_callee_id >= original_function_count) {
+                        continue;
+                    }
+                    nested_source_id = current_callee_id;
                 }
-                nested_source_id = current_callee.specialization_source;
                 nested_source = program->functions[nested_source_id];
                 if (!nested_source.is_defined || !nested_source.is_internal ||
                     !nested_source.is_inline || nested_source.is_variadic ||
@@ -494,7 +500,8 @@ static bool minic_specialize_inline_integer_calls(MinicC0Program *program,
                     nested_known[parameter_index] = true;
                     nested_bits[parameter_index] = argument_value.bits;
                     used_caller_fact = used_caller_fact || argument_used_caller_fact;
-                    if (!current_callee.specialization_integer_known[parameter_index] ||
+                    if (!current_callee.is_integer_specialization ||
+                        !current_callee.specialization_integer_known[parameter_index] ||
                         current_callee.specialization_integer_bits[parameter_index] !=
                             argument_value.bits) {
                         adds_fact = true;
