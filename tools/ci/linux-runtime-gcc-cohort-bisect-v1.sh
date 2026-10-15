@@ -125,7 +125,11 @@ make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
 # Kbuild churn in init/version.o and vmlinux.o. The original SHA-certified
 # tree is restored below; ALL other GNU object SHAs still must match.
 if [[ "${COHORT_GNU_PREFLIGHT_ALLOW_BOOL_SINGLE:-0}" == 1 || "${COHORT_GNU_PREFLIGHT_ALLOW_BOOL_HOT:-0}" == 1 ]]; then
-  expected_bool_hot=(kernel/bpf/btf.o kernel/bpf/verifier.o net/core/filter.o)
+  if [[ "${COHORT_BOOL_HOT_ROTATION:-0}" == 1 ]]; then
+    expected_bool_hot=(net/core/dev.o net/ipv4/tcp_input.o lib/crc32.o)
+  else
+    expected_bool_hot=(kernel/bpf/btf.o kernel/bpf/verifier.o net/core/filter.o)
+  fi
   if [[ "${COHORT_GNU_PREFLIGHT_ALLOW_BOOL_HOT:-0}" == 1 ]]; then
     [[ "${COHORT_ACTION:-all}" == compile && "${COHORT_ALLOW_SHARD:-0}" == 1 &&
        "$cohort_scope" == SHARD_COMPILE_ONLY && "$n" == 3 &&
@@ -133,7 +137,7 @@ if [[ "${COHORT_GNU_PREFLIGHT_ALLOW_BOOL_SINGLE:-0}" == 1 || "${COHORT_GNU_PREFL
        "$actual_cfg" == eeb04f304ebfb97a1079c187dc0c2ea3cc61fc50a55aa3cc776237c16ab19bbe ]] || {
       echo 'COHORT_GNU_PREFLIGHT=FAIL bool_hot_owner_or_config_identity' >&2; exit 6;
     }
-    echo 'BOOL_HOT_SCOPED=PASS owners=3 candidates=btf,verifier,filter baseline_fixture_sha_pinned=true'
+    echo "BOOL_HOT_SCOPED=PASS owners=3 rotation=${COHORT_BOOL_HOT_ROTATION:-0} baseline_fixture_sha_pinned=true"
   else
     [[ "${COHORT_ACTION:-all}" == compile && "${COHORT_ALLOW_SHARD:-0}" == 1 &&
        "$n" == 1 && "${objects[0]}" == lib/crypto/blake2s-generic.o &&
@@ -593,7 +597,12 @@ if [[ "${COHORT_ACTION:-all}" == compile ]]; then
   test -s "$ev/minic-manifest.sha256" && test -s "$ev/minic-identity.txt"
   (cd "$ev"; sha256sum --quiet -c minic-manifest.sha256)
   if [[ "${COHORT_KEEP_BOOL_HOT_I:-0}" == 1 ]]; then
-    [[ "$n" == 3 && "${objects[*]}" == 'kernel/bpf/btf.o kernel/bpf/verifier.o net/core/filter.o' &&
+    if [[ "${COHORT_BOOL_HOT_ROTATION:-0}" == 1 ]]; then
+      expected_hot=(net/core/dev.o net/ipv4/tcp_input.o lib/crc32.o)
+    else
+      expected_hot=(kernel/bpf/btf.o kernel/bpf/verifier.o net/core/filter.o)
+    fi
+    [[ "$n" == 3 && "${objects[*]}" == "${expected_hot[*]}" &&
        "${COHORT_GNU_PREFLIGHT_ALLOW_BOOL_HOT:-0}" == 1 ]] || {
       echo 'BOOL_HOT=FAIL frozen_input_wrong_scope'; exit 8;
     }
@@ -631,7 +640,7 @@ if [[ "${COHORT_ACTION:-all}" == compile ]]; then
       cp -a "$src_i" "$ev/boolean-hot/${owner//\//_}.frozen.i"
       echo "BOOL_HOT_FROZEN=PASS owner=$owner sha=$(sha256sum "$ev/boolean-hot/${owner//\//_}.frozen.i" | cut -d' ' -f1)"
     done
-    (cd "$ev/boolean-hot"; sha256sum kernel_bpf_btf.o.frozen.i kernel_bpf_verifier.o.frozen.i net_core_filter.o.frozen.i > frozen.sha256)
+    (cd "$ev/boolean-hot"; files=(); for owner in "${objects[@]}"; do files+=("${owner//\//_}.frozen.i"); done; sha256sum "${files[@]}" > frozen.sha256)
     echo 'BOOL_HOT_FROZEN=CREATED manifest=SHA256 verified_sources=3'
     fi
   fi

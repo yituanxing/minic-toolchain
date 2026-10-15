@@ -298,11 +298,19 @@ jobs:
           if [[ "${{ contains(github.event.head_commit.message, '[linux-perf-hotowners]') }}" == true ]]; then
             # Three highly expensive, structurally distinct Linux C owners.
             # Never reuse the blake2s experiment for one-off tuning.
-            for owner in kernel/bpf/btf.o kernel/bpf/verifier.o net/core/filter.o; do
+            if [[ "${{ contains(github.event.head_commit.message, '[linux-perf-hotowners-rotation]') }}" == true ]]; then
+              # New, disjoint C owners; old three-owner A/B inputs remain cached.
+              targets=(net/core/dev.o net/ipv4/tcp_input.o lib/crc32.o)
+              cohort_label=ROTATION
+            else
+              targets=(kernel/bpf/btf.o kernel/bpf/verifier.o net/core/filter.o)
+              cohort_label=ORIGINAL
+            fi
+            for owner in "${targets[@]}"; do
               grep -Fxq "$owner" "$ev/full-objects.txt"
             done
-            printf '%s\n' kernel/bpf/btf.o kernel/bpf/verifier.o net/core/filter.o >"$ev/full-objects.txt"
-            echo "BOOL_HOT_OWNER_SELECTION=PASS owners=3 total_full_C_untouched=true"
+            printf '%s\n' "${targets[@]}" >"$ev/full-objects.txt"
+            echo "BOOL_HOT_OWNER_SELECTION=PASS mode=$cohort_label owners=3 total_full_C_untouched=true"
           fi
 
       - name: Compute pinned MiniC candidate object cache identity
@@ -388,6 +396,7 @@ jobs:
           if [[ "${{ contains(github.event.head_commit.message, '[linux-perf-hotowners]') }}" == true ]]; then
             export COHORT_GNU_PREFLIGHT_ALLOW_BOOL_HOT=1
             export COHORT_KEEP_BOOL_HOT_I=1
+            export COHORT_BOOL_HOT_ROTATION=${{ contains(github.event.head_commit.message, '[linux-perf-hotowners-rotation]') && '1' || '0' }}
           fi
           if [[ "${{ contains(github.event.head_commit.message, '[linux-perf-boolean-single]') }}" == true ]]; then
             export COHORT_GNU_PREFLIGHT_ALLOW_BOOL_SINGLE=1
@@ -511,7 +520,12 @@ jobs:
               cp "$root/minic-cc" "$work/index/bin/minic-cc"
               test "$(sha256sum "$work/baseline/bin/minic-cc" | cut -d' ' -f1)" != "$(sha256sum "$work/index/bin/minic-cc" | cut -d' ' -f1)"
               git diff --check
-              for owner in kernel/bpf/btf.o kernel/bpf/verifier.o net/core/filter.o; do
+              if [[ "${{ contains(github.event.head_commit.message, '[linux-perf-hotowners-rotation]') }}" == true ]]; then
+                targets=(net/core/dev.o net/ipv4/tcp_input.o lib/crc32.o)
+              else
+                targets=(kernel/bpf/btf.o kernel/bpf/verifier.o net/core/filter.o)
+              fi
+              for owner in "${targets[@]}"; do
                 key="${owner//\//_}"
                 frozen="$ev/boolean-hot/$key.frozen.i"
                 test -s "$frozen"
@@ -524,7 +538,7 @@ jobs:
                 grep -Fq 'MINIC_ONE_OWNER_AB=PASS' "$work/$key-screen.txt"
                 echo "CODEGEN_USE_INDEX_SCREEN=PASS owner=$owner byte_identical=true"
               done
-              echo 'CODEGEN_USE_INDEX_GROUP=PASS owners=3 only_codegen_use_index_changed=true QEMU_pending=true'
+              echo "CODEGEN_USE_INDEX_GROUP=PASS owners=3 rotation=${{ contains(github.event.head_commit.message, '[linux-perf-hotowners-rotation]') }} only_codegen_use_index_changed=true QEMU_pending=true"
             elif [[ "${{ contains(github.event.head_commit.message, '[linux-perf-core-workspace]') }}" == true ]]; then
               # Different algorithmic family after marginal global-hash result:
               # reuse per-TU statement-ID map instead of allocating and clearing
