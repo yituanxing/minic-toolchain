@@ -767,6 +767,23 @@ static bool minic_parser_function_name_index_sync(MinicParser *parser) {
     return true;
 }
 
+/* The original lookup is first-declaration-wins.  Keep that exact
+ * ordering on allocator failure and in forced-fallback regression tests. */
+static MinicFunctionId minic_parser_function_name_linear_fallback(
+    MinicParser *parser, MinicSourceSpan name_span) {
+    size_t index;
+    const size_t length = minic_parser_span_length(name_span);
+    for (index = 0U; index < parser->program->function_count; ++index) {
+        const MinicFunction *fn = minic_c0_program_function(parser->program, index);
+        parser->perf_find_function_steps += 1U;
+        if (fn != NULL && fn->name_length == length &&
+            memcmp(fn->name, parser->source + name_span.begin.offset, length) == 0) {
+            return (MinicFunctionId)index;
+        }
+    }
+    return MINIC_FUNCTION_INVALID;
+}
+
 MinicFunctionId minic_parser_find_function(const MinicParser *parser_const,
                                                  MinicSourceSpan name_span) {
     MinicParser *parser = (MinicParser *)parser_const;
@@ -779,21 +796,12 @@ MinicFunctionId minic_parser_find_function(const MinicParser *parser_const,
         return MINIC_FUNCTION_INVALID;
     }
     parser->perf_find_function_calls += 1U;
+#if defined(MINIC_TEST_FORCE_PARSER_HASH_FALLBACK)
+    return minic_parser_function_name_linear_fallback(parser, name_span);
+#endif
     if (!minic_parser_function_name_index_sync(parser) ||
         parser->perf_function_name_slot_capacity == 0U) {
-        /* Allocation failure must preserve the original lookup semantics
-           rather than turning a valid function into "not found". */
-        size_t index;
-        size_t length = minic_parser_span_length(name_span);
-        for (index = 0U; index < parser->program->function_count; ++index) {
-            const MinicFunction *fn = minic_c0_program_function(parser->program, index);
-            parser->perf_find_function_steps += 1U;
-            if (fn != NULL && fn->name_length == length &&
-                memcmp(fn->name, parser->source + name_span.begin.offset, length) == 0) {
-                return (MinicFunctionId)index;
-            }
-        }
-        return MINIC_FUNCTION_INVALID;
+        return minic_parser_function_name_linear_fallback(parser, name_span);
     }
     name_length = minic_parser_span_length(name_span);
     mask = parser->perf_function_name_slot_capacity - 1U;

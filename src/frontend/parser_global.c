@@ -196,6 +196,9 @@ MinicGlobalObjectId minic_parser_find_global_object_entity(
         return MINIC_GLOBAL_OBJECT_INVALID;
     }
     parser->perf_find_global_calls += 1U;
+#if defined(MINIC_TEST_FORCE_PARSER_HASH_FALLBACK)
+    return minic_parser_global_linear_fallback(parser, name_span);
+#endif
     if (!minic_parser_global_name_index_sync(parser) ||
         parser->perf_global_name_slot_capacity == 0U) {
         return minic_parser_global_linear_fallback(parser, name_span);

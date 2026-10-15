@@ -1,6 +1,21 @@
 #!/usr/bin/env python3
 from pathlib import Path
 
+# Source promotion: preserve this historical entrypoint, but never reapply
+# its original replacement when the exact index and fallback are in C.
+_enum_header = Path("src/frontend/parser_internal.h").read_text()
+if "    size_t *perf_enum_name_slots;" in _enum_header:
+    _enum_body = Path("src/frontend/parser_enum.c").read_text()
+    _enum_owner = Path("src/frontend/parser_function.c").read_text()
+    if (_enum_body.count("static bool minic_parser_enum_global_index_sync(") != 1 or
+            _enum_body.count("static MinicEnumeratorId minic_parser_enum_global_linear_fallback(") != 1 or
+            _enum_body.count("static size_t minic_parser_enum_name_hash(") != 1 or
+            _enum_body.count("MINIC_TEST_FORCE_PARSER_HASH_FALLBACK") != 1 or
+            _enum_owner.count("free(parser.perf_enum_name_slots);") != 1):
+        raise SystemExit("PARSER_ENUM_HASH=ERROR partial canonical source")
+    print("MINIC_PERF_PARSER_ENUM_HASH_V0=ALREADY_CANONICAL")
+    raise SystemExit(0)
+
 p = Path("src/frontend/parser_internal.h")
 text = p.read_text()
 anchor = """    MinicGlobalObjectId *perf_global_name_slots;

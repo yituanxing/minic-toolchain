@@ -6,6 +6,23 @@ an entity does not exist. Keep canonical lookup ordering and scope semantics.
 """
 from pathlib import Path
 
+# All three originally opt-in indexes and both normal/forced linear fallbacks
+# now live in the tracked frontend.  The old P10 performance profile still
+# executes this entrypoint, which must reject partial rather than double patch.
+_p10_fn = Path("src/frontend/parser_core.c").read_text()
+_p10_gl = Path("src/frontend/parser_global.c").read_text()
+_p10_en = Path("src/frontend/parser_enum.c").read_text()
+if "static MinicFunctionId minic_parser_function_name_linear_fallback(" in _p10_fn:
+    if (_p10_fn.count("MINIC_TEST_FORCE_PARSER_HASH_FALLBACK") != 1 or
+            "return minic_parser_function_name_linear_fallback(parser, name_span);" not in _p10_fn or
+            "static MinicGlobalObjectId minic_parser_global_linear_fallback(" not in _p10_gl or
+            _p10_gl.count("MINIC_TEST_FORCE_PARSER_HASH_FALLBACK") != 1 or
+            "static MinicEnumeratorId minic_parser_enum_global_linear_fallback(" not in _p10_en or
+            _p10_en.count("MINIC_TEST_FORCE_PARSER_HASH_FALLBACK") != 1):
+        raise SystemExit("PARSER_FALLBACK=ERROR partial canonical source")
+    print("MINIC_PERF_PARSER_HASH_FALLBACK_V1=ALREADY_CANONICAL")
+    raise SystemExit(0)
+
 def patch(path, old, new):
     p = Path(path)
     text = p.read_text()
