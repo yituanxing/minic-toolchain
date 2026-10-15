@@ -1333,6 +1333,19 @@ static bool minic_finalize_inline_integer_specialization_references(MinicC0Progr
             MinicFunctionId source_id = function->specialization_source;
             if (source_id >= program->function_count ||
                 program->functions[source_id].is_integer_specialization) {
+                /* Diagnostic only: preserve the existing fail-closed behavior.
+                 * It identifies the historical specialization edge that the
+                 * source migration did not preserve; never silently flatten
+                 * clones or change the reachability decision here. */
+                (void)fprintf(stderr,
+                              "MINIC_INLINE_REACHABILITY_BAD_SOURCE clone=%zu source=%zu "
+                              "function_count=%zu nested=%u function=%s\\n",
+                              function_index,
+                              (size_t)source_id,
+                              program->function_count,
+                              (unsigned int)(source_id < program->function_count &&
+                                             program->functions[source_id].is_integer_specialization),
+                              function->name != NULL ? function->name : "?");
                 return false;
             }
             function->is_referenced = program->functions[source_id].is_referenced;
