@@ -5276,7 +5276,8 @@ static bool emit_core_function_with_symbol(FILE *file,
         if (!emit_block_label(file, symbol_name, (MinicCoreBlockId)block_index)) {
             return core_frame_fail(&frame);
         }
-        if (block->source_label_id != SIZE_MAX &&
+        if (!function->suppress_source_label_aliases &&
+            block->source_label_id != SIZE_MAX &&
             fprintf(file, ".Luser_%zu:\n", block->source_label_id) < 0) {
             return core_frame_fail(&frame);
         }

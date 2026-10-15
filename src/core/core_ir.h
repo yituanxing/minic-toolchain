@@ -428,6 +428,10 @@ typedef struct MinicCoreFunction {
     MinicType return_type;
     MinicType *parameter_types;
     size_t parameter_count;
+    /* Integer-specialization clones share Semantic statement ids with their
+       source. Their executable Core block labels are already function-scoped,
+       so do not also export the source-id .Luser_* compatibility aliases. */
+    bool suppress_source_label_aliases;
     MinicCoreEnumType *enum_types;
     size_t enum_type_count;
     size_t enum_type_capacity;

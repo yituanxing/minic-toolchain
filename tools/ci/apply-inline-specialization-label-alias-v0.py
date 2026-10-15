@@ -5,9 +5,14 @@ from pathlib import Path
 def replace_once(path: str, old: str, new: str) -> None:
     p = Path(path)
     text = p.read_text()
+    # The same correctness fix is now stored in real Core/target C sources.
+    # Existing Runtime CI uses this legacy patch entrypoint; do not apply twice.
+    if text.count(new) == 1 and text.count(old) == 0:
+        print("MINIC_SPECIALIZATION_LABEL_ALIAS=ALREADY_CANONICAL path=" + path)
+        return
     count = text.count(old)
-    if count != 1:
-        raise SystemExit(f"{path}: expected one anchor, found {count}: {old[:160]!r}")
+    if count != 1 or text.count(new) != 0:
+        raise SystemExit(f"{path}: expected exact old source, found {count}")
     p.write_text(text.replace(old, new, 1))
 
 

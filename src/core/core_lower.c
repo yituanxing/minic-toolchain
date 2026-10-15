@@ -12185,6 +12185,7 @@ MinicCoreLowerStatus minic_core_lower_function(const MinicFunctionBodyView *body
     context.source_function = source_function;
     context.target = target;
     context.function = &lowered;
+    lowered.suppress_source_label_aliases = source_function->is_integer_specialization;
     context.block_id = block_id;
     context.break_target = MINIC_CORE_BLOCK_INVALID;
     context.local_objects = local_objects;
