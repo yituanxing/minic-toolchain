@@ -6,8 +6,23 @@ text = p.read_text()
 
 if "IRQ_FRAME_PACK_V0" not in text:
     raise SystemExit("packed spill-slot prerequisite not applied")
+# Reused last-use layout has been moved unchanged into production Codegen.
+# Keep the prior Runtime/Performance stage for provenance, but prohibit any
+# partial canonical import or duplication of the helper/offset contract.
 if "IRQ_FRAME_REUSE_V0" in text:
-    raise SystemExit("block-local spill-slot reuse already applied")
+    required = (
+        "/* IRQ_FRAME_PACK_V0:",
+        "/* IRQ_FRAME_REUSE_V0:",
+        "static bool core_visit_instruction_value_uses(",
+        "static bool core_block_reused_spill_layout(",
+        "frame->value_slot_count = maximum_block_bytes / 8U;",
+        "CORE_FRAME_REUSE function=%s frame=%zu value_bytes=%zu values=%zu objects=%zu",
+    )
+    if any(text.count(marker) != 1 for marker in required) or \
+       "CORE_FRAME function=%s frame=%zu value_bytes=%zu values=%zu objects=%zu" in text:
+        raise SystemExit("MINIC_RISCV64_CORE_VALUE_SLOT_REUSE=ERROR partial canonical source")
+    print("MINIC_RISCV64_CORE_VALUE_SLOT_REUSE_V0=ALREADY_CANONICAL")
+    raise SystemExit(0)
 
 frame_marker = "static bool core_frame_initialize(const MinicC0Program *program,"
 if frame_marker not in text:
