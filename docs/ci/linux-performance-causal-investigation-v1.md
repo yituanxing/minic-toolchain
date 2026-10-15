@@ -322,3 +322,22 @@ PERF-006 `blake2s` 的真实 Runtime 布尔域索引收益为 1465.171ms→1368.
 三个文件的中位耗时和约 **36.726→36.027s**，共节约约 **0.698s / 1.90%**。实际文件可能并非这类语句清零的最病理输入，但三个主要热点没有发现明显的两位数百分比改善。**局部正确性通过、性能未达晋级阈值**，状态 `verified-local-not-promoted`：保留 opt-in 脚本和失败/成功记录，**不将其加入 Runtime 正式默认配置，也不继续对这三个 TU 重复测同一工作区算法**。
 
 **下个轮转目标：** 现有阶段跟踪显示 filter Codegen ~2.89s，而 Boolean 后还有多个未充分分解的阶段。优先在原 frozen `.i` 上选现成的 Codegen 使用次数/IR 功能级诊断，确认下一项真正重复遍历/过量分配的耗时路径。旧版 `apply-perf-core-object-address-use-index-v1.py` 等候选只能在核对已合成 Runtime profile 的源码结构、确认当前未已有同等索引、确认没有重复历史优化后，才有理由做下一项 A/B。暂不应以“再添一个哈希”替代实际数据。
+
+
+## 17. PERF-012：Codegen OBJECT_ADDRESS UseId 反复扫描 → 一次建索引（2026-10-15）
+
+**为什么换方向：** PERF-010 的全局哈希额外总收益 <1%，PERF-011 的 Core lowering 工作区在三个慢文件上约 1.90%，均未达到强收益阈值。旧的六阶段证据指出 filter Codegen ~2.89s；与已修复过的 blake2s `first_access_defines`（块内生产者位置缓存）**不同**，Core `OBJECT_ADDRESS` 值使用统计仍会对每个对象扫跨块 IR。故复用已存在 `tools/ci/apply-perf-core-object-address-use-index-v1.py`（P14），尝试构建 ValueId 使用次数/直接访问范围索引，索引不可用时回退原查找。仅 P14，**没有启用 P15 scalar interval index**。
+
+**实验事实：** [GitHub CI #38657320806](https://github.com/yituanxing/minic-toolchain/actions/runs/38657320806) SUCCESS，旧版为原已认证 Runtime+Boolean 编译器，候选仅增 P14。复用三个 SHA-frozen Kbuild 输入和原有 GNU/Boolean 候选对象缓存；每臂热身一次 + 2 次交替配对，所有 `.s` 字节完全一致。M0 [#38657320831](https://github.com/yituanxing/minic-toolchain/actions/runs/38657320831) 同时 SUCCESS，工作流与源清单 SHA 以同一原子提交 `375d062a` 更新，无额外 workflow/job。
+
+| Linux owner | Boolean 基准 P50 | Boolean + P14 P50 | 节省 | 倍数 |
+| --- | ---: | ---: | ---: | ---: |
+| `kernel/bpf/btf.o` | 7530.087ms | 7483.638ms | 46.449ms | 1.0062× |
+| `kernel/bpf/verifier.o` | 8758.617ms | 8244.811ms | 513.806ms | 1.0623× |
+| `net/core/filter.o` | **17868.301ms** | **15163.615ms** | **2704.686ms** | **1.1784×** |
+
+三个真实热点局部编译时长中位数之和 **34.157→30.892s**，累计节省 **3.265s**（约 **9.56%**），其中 filter 一个 owner 就贡献约 83% 的收益。这个结构更适用于具有大对象地址使用/复杂 IR 的网络长尾，而非对每个 TU 都同样有加速。输出相同仅证明这三个输入，且 **2 次/臂是快速筛选，不能作为稳定全量性能倍数或宣称 Linux P1**。
+
+**结论和下一轮：** `verified-local-screen-2x / promotion-candidate`。达成先前“未优化过的最慢文件有可重复的两位数候选改善”的**初筛数值门槛**，但“可重复”仍需 4 次交替或更广泛输入重新验证。将 P14 移入**扩大样本与正确性晋级队列**；不要立刻重复微调 P14/P15，把已有两个几乎没有增益的 Parser global 和 Core workspace 继续保留为不晋级的负例。
+
+因果假设为把每 `OBJECT_ADDRESS` 的完整 IR 扫描改成 per-function 一次建立 ValueId 使用索引；**尚未**由独立函数级 CPU 计时证明节省的 2.705s 全部来自 Codegen 具体子函数。后续选更慢的 `net/core/dev`、`net/ipv4/tcp_input` 和一个同大小更快的对照，固定输入和新编译器 SHA，先做小规模输出/ABI，达到足够范围后才使用已经存在的七路全量和 QEMU P1。仍然不动当前 Runtime 默认编译器与认证 Image。
