@@ -95,3 +95,19 @@
 6. **每轮自问**：我是否依据历史正确实现？是否修改实际正式源码？有没有擅自修新 Bug？是否复用旧测试和旧计时方法？若有偏离，立即停止扩展。
 
 此表为首轮静态盘点。将每个 U 和 T 项在核对源码/历史依据后逐渐转换为明确的原生实现状态，**不要机械地把 60 项当 60 个未完成任务**。
+
+## Canonical main 验收后对账（2026-10-16）
+
+**已实际验证的目标构建**：`b46822f`，Actions [#38764970582](https://github.com/yituanxing/minic-toolchain/actions/runs/38764970582)，七路 2064/2064、GNU 最终链接、QEMU P1 12/12 全部 PASS，构建期 Python 动态注入跳过。主分支合并提交 `4f927180` 的 Git Tree 与该验证版本字节相同；其他三条开发线与历史归档通过合并提交父节点保留，**不是**说所有实验性代码均进入 canonical `src/`。
+
+**布局参数化**：`38e26d65` 在 main 实现默认共享 `.text`、`-ffunction-sections` 独立段、`-fno-function-sections` 恢复共享段，并保留显式 section 属性优先级；源头是编译器写 `.s`，MiniAS 负责依伪指令形成 ELF `.o` 的 Section。`9126345` 修正原有 Section-GC 测试的显式 opt-in；Actions [#38770201214](https://github.com/yituanxing/minic-toolchain/actions/runs/38770201214) 的集中 MiniC RV64、MiniAR、MiniLD 回归 SUCCESS。该回归不代替参数化后的全量 Linux P1 检查。
+
+**源码级优化保留**：主分支 `src/core/core_lower.c`、`src/core/core_lower_asm.c`、`src/target/riscv64/core_codegen.c`、`src/frontend/parser_core.c`、`src/frontend/parser_typedef.c` 的 Git Blob 与 `b46822f` 完全一致。`src/compiler/compiler.c` 增加入口参数传递与兼容旧 API wrapper，未修改 inline-specialization 主算法。Runtime 原生 44 项及联合验证的 4 项 perf 补丁仍在正式源代码中。但目前未做参数化版本对历史构建的配对编译时间 A/B，**绝不能把源代码未丢失等同于实测速度不回退**。
+
+**单独 Performance profile 不等于生产 Runtime profile**：`linux-perf-build-minic-profile-v1.sh` 包含 53 项；其中与原生 Runtime44+Perf4 的合集相比有 13 个额外脚本。逐项初查：parser global/enum/hash fallback、Core object address/interval index、parser typedef hash、local shadow、nearest ordinary scope 8 项已有 `ALREADY_CANONICAL` 检查，并可找到对应 C 实现；symbolic-loop 和 specialization-phase 2 项是追踪仪表；Core lower workspace、Boolean Domain scoped-cache 和 `__builtin_constant_p` ICE 3 项需单独做补丁后对比和全量正确性验证，不能凭 opt-in 使用就并入 Runtime。另有 perf-only 前置 `apply-perf-parser-source-deltas-v1.py`，需另行判定。
+
+**性能实测引用的适用边界**：Actions [#38571430622](https://github.com/yituanxing/minic-toolchain/actions/runs/38571430622) 的第一批 500 输入配对 A/B，在 opt-in 性能配置下「Scoped Boolean Domain + typedef index」组合对其禁用两者的配置达约 2.7492x；这**不是** canonical Linux 全 2064 对象或者当前主分支对历史版本的加速倍数。正式版本已有 typedef index 代码，仍需独立验证剩余 scoped-cache 的可迁移性、速度与 QEMU 正确性。
+
+**main 环境隔离**：GitHub Actions 缓存按分支隔离；原 agent 分支的 GNU golden 对象和 Linux source 缓存不能在新 main 上直接 restore，Actions [#38769158242](https://github.com/yituanxing/minic-toolchain/actions/runs/38769158242) 因此在 cache-miss 处失败，不代表 MiniC 编译回归。已沿用原 `gcc-runtime` job 在 main 上产生并保存完全相同、带配置认证的 GNU golden/source 缓存；此准备动作先跑，不用缓存命中代替新的源码编译 A/B 或 P1 结果。
+
+**验收后续顺序**：完成 main 的 GNU golden/source cache 授权迁移后，先在 main 以现有七路真实 2064 编译及 P1 判定布局参数默认模式；然后在 SHA 身份固定的同一套 GNU-E 输入上，对比核心编译耗时和 CPU/Wall 指标（剔除对象 cache-hit）；最后只考虑经证实有增益且全量正确的性能候选。
