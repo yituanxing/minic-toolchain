@@ -146,6 +146,10 @@ typedef struct MinicParser {
     MinicFunctionId *perf_function_name_slots;
     size_t perf_function_name_slot_capacity;
     size_t perf_function_name_indexed_count;
+
+    MinicGlobalObjectId *perf_global_name_slots;
+    size_t perf_global_name_slot_capacity;
+    size_t perf_global_name_indexed_count;
 } MinicParser;
 
 typedef struct MinicParsedAttribute {

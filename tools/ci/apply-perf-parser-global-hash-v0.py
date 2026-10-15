@@ -1,6 +1,21 @@
 #!/usr/bin/env python3
 from pathlib import Path
 
+# Canonical C now carries the verified global-object-name index.  Preserve
+# this old CI/perf entrypoint without applying its patch a second time.
+_header = Path("src/frontend/parser_internal.h").read_text()
+if "    MinicGlobalObjectId *perf_global_name_slots;" in _header:
+    _global = Path("src/frontend/parser_global.c").read_text()
+    _function = Path("src/frontend/parser_function.c").read_text()
+    if (_global.count("static bool minic_parser_global_name_index_sync(") != 1 or
+            _global.count("static size_t minic_parser_global_name_hash(") != 1 or
+            _global.count("static MinicGlobalObjectId minic_parser_global_linear_fallback(") != 1 or
+            _function.count("free(parser.perf_global_name_slots);") != 1 or
+            "perf_global_name_indexed_count" not in _header):
+        raise SystemExit("PARSER_GLOBAL_HASH=ERROR partially promoted native source")
+    print("MINIC_PERF_PARSER_GLOBAL_HASH_V0=ALREADY_CANONICAL")
+    raise SystemExit(0)
+
 p = Path("src/frontend/parser_internal.h")
 text = p.read_text()
 anchor = """    MinicFunctionId *perf_function_name_slots;
