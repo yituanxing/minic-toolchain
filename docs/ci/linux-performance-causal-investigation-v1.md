@@ -631,3 +631,18 @@ COHORT_RESULT=PASS candidate_objects=2064 scope=FULL_C_UNIVERSE same_config=true
 **过程真实问题及修复（避免误报/重复工作）：** 首个七路 run #38674405151 在 MiniC 编译前因 `init/version.o`、`vmlinux.o` 的 GNU Kbuild 时间戳变化触发 preflight 拦截，绝不是 MiniC 功能错误。为七个 immutable GNU snapshot shard 分别建立仅三个 volatile target 的严密 scope；#38674726958 的七片编译/ABI **全部成功**，但 receiver 同样被 Kbuild 时间戳拦截。最后增加 `COHORT_GNU_PREFLIGHT_ALLOW_SEVEN_RECEIVER_VOLATILE`，严格只允许 `COHORT_ACTION=verify`、`FULL_C_UNIVERSE`、2064、固定 `.config` 和 full-crossblock。其他 GNU `.o` 全部保持 SHA 校验；preflight 后完整恢复可信原树。全部工具链优化与 GNU 对象缓存身份都 SHA 绑定，故最终只复用成功七片，不重新执行 2064 个 MiniC 编译来处理 CI 问题。
 
 **此外发现新的全局物理输出热点（尚未归因）：** 本次完整 TU 对比日志 `COHORT_TU_BYTES_SUM gcc=66379160 minic=456484104 count=2064`，MiniC 编译对象总大小约是 GNU 的 **6.88×**。差异可能来自当前优化程度不同、指令数、对齐、符号/重定位、未删除 section 等；不是“证明浪费字节”，而是**值得新增 ELF section/relocation/symbol 体积分解审计**的最大系统级磁盘 IO/最终库归档吞吐疑点。优先使用已经保存的 exact `.o`（无需再编译），按 `readelf -SW` 和 `size` 分解 BTF / 大网络 / 小文件，再决定是否有代码生成器层级结构性问题。
+
+
+## 38. PERF-033：真实 Linux 上 AST 1.5× 容量增长没有获得预期收益（2026-10-15）
+
+[CI #38676131973](https://github.com/yituanxing/minic-toolchain/actions/runs/38676131973) `gcc-single SUCCESS`，复用缓存中 3 个真实 Linux 6.6.143 frozen Kbuild `.i`，比较默认 `MinicExpression/MinicFunction` 动态数组 **2× capacity 增长** 与仅改变增长系数为 **1.5×** 的 opt-in 候选。两臂每个文件各热身一次、2 次配对，三份 `.s` 字节全等；另单次独立 `/usr/bin/time -v` 读取峰值 RSS。
+
+| Linux TU | 2× baseline P50 | 1.5× 候选 P50 | 加速（>1 好） | baseline RSS | 候选 RSS |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `lib/crc32.o` | 23739.367ms | 23316.462ms | 1.0181× | 306512 KiB | 305900 KiB |
+| `net/core/dev.o` | 17906.457ms | 18484.736ms | **0.9687×（退化）** | 506468 KiB | **511196 KiB（退化）** |
+| `net/ipv4/tcp_input.o` | 13870.138ms | 13290.070ms | 1.0436× | 477672 KiB | **480592 KiB（退化）** |
+
+**结论：保留原 2× 默认实现，拒绝推广 1.5× 容量倍率**。虽然某些容量阈值的理论空闲可能缩小，但 `realloc` 时复制 680B/Expression 的额外数据、内存分配器分桶以及峰值其它阶段决定了整体 RSS，本轮实际 dev/tcp 反而更大；三文件局部 P50 有正有负、收益不稳定。仅改变增长系数不能有效解决 AST 形态的 680B/Expression（仅 4–6% 是 CALL）和 6536B/Function 固有体积问题。下一步若投入大内存重构，优先研究 CALL arguments 定长 64×8B 的旁路 arena/稳定 ID、Function parameter_types 的小对象分离，并先做表达式/函数浅复制、释放、写入点全面审计，避免直接把 union 换成裸指针造成所有权错误。
+
+这是在用户提出 **`.i`→Token→AST→Inline→Core→RV64 `.s` 全链路审计**后最先验证的数据结构类假设；我们已经证明“缩扩容倍率”没有稳定收益。不能为了已有工作而继续微调它。另独立已验证的三算法七路 2064 编译+GNU Link+QEMU P1（#38675862094）均 PASS，不能混淆为本轮 1.5× 的认证。
