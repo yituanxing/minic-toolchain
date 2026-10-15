@@ -17,8 +17,22 @@ path = Path("src/target/riscv64/core_codegen.c")
 s = path.read_text()
 if "CORE_OBJECT_SLOT_REUSE_V0" not in s or "IRQ_FRAME_REUSE_V0" not in s:
     raise SystemExit("P1_DEFINED_BEFORE_USE=ERROR missing runtime reuse prerequisites")
+# The exact previously QEMU P1-proven rule is integrated into native C.
+# Preserve this stage as a strict source-verification entrypoint.
 if "P1_DEFINED_BEFORE_USE_CROSSBLOCK_V1" in s:
-    raise SystemExit("P1_DEFINED_BEFORE_USE=ERROR duplicate patch")
+    expected_counts = {
+        "/* P1_DEFINED_BEFORE_USE_CROSSBLOCK_V1:": 1,
+        "bool can_share_across_blocks;": 1,
+        "static bool core_scalar_object_first_access_defines(": 1,
+        "interval->can_share_across_blocks =": 2,
+        "static bool p1_crossblock_current_function_enabled = true;": 1,
+        "p1_crossblock_current_function_enabled &&": 1,
+        "strcmp(focus, symbol_name) == 0;": 1,
+    }
+    if any(s.count(marker) != count for marker, count in expected_counts.items()):
+        raise SystemExit("P1_DEFINED_BEFORE_USE=ERROR partial canonical source")
+    print("P1_DEFINED_BEFORE_USE_CROSSBLOCK_V1=ALREADY_CANONICAL")
+    raise SystemExit(0)
 
 def one(old: str, new: str, label: str) -> None:
     global s

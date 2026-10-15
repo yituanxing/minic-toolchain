@@ -1032,6 +1032,7 @@ static bool core_record_call_result_snapshot_reuse_candidate(
    share the same pool because no candidate survives a block boundary. */
 typedef struct CoreScalarObjectInterval {
     bool reusable;
+    bool can_share_across_blocks;
     size_t block_index;
     size_t first_position;
     size_t last_position;
@@ -1081,6 +1082,91 @@ static bool core_scalar_object_note_position(CoreScalarObjectInterval *interval,
     return true;
 }
 
+/* P1_DEFINED_BEFORE_USE_CROSSBLOCK_V1: prove the first real read/write
+   of a scalar object in its *sole* owner block is a write. Reaching this
+   predicate never weakens the existing no-address-escape analysis.
+   The IR verifier already requires a Core SSA value to be available only
+   within its defining basic block. A direct LOAD/STORE using an
+   OBJECT_ADDRESS result therefore identifies a local access. */
+static bool core_scalar_object_first_access_defines(
+    const MinicCoreFunction *function,
+    MinicCoreObjectId object_id, size_t block_index) {
+    const MinicCoreBlock *block;
+    size_t *first_producer_plus_one;
+    size_t position;
+    bool first_access_defines = false;
+
+    if (function == NULL || block_index >= function->block_count ||
+        function->value_count > SIZE_MAX / sizeof(size_t)) {
+        return false;
+    }
+    block = &function->blocks[block_index];
+
+    /* PERF: the original implementation searched the entire block for
+       OBJECT_ADDRESS on EVERY LOAD/STORE of EVERY eligible CoreObject.
+       For large, unrolled Linux crypto functions this is quadratic in block
+       length per object (lib/crypto/blake2s-generic.c: 33m for one TU).
+       Index matching local address producers once, then inspect each
+       memory access exactly once. A value id is a dense Core IR index.
+       The stored position is 1-based so calloc's 0 means "unseen". */
+    first_producer_plus_one = (size_t *)calloc(
+        function->value_count != 0U ? function->value_count : 1U,
+        sizeof(*first_producer_plus_one));
+    if (first_producer_plus_one == NULL) {
+        /* Failing to allocate an optimization-only index must never
+           license sharing a live object across basic blocks. */
+        return false;
+    }
+    for (position = 0U; position < block->instruction_count; ++position) {
+        MinicCoreInstructionId id = block->instructions[position];
+        const MinicCoreInstruction *inst;
+        MinicCoreValueId result;
+        if (id >= function->instruction_count || position == SIZE_MAX - 1U) {
+            goto finish;
+        }
+        inst = &function->instructions[id];
+        if (inst->kind != MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS ||
+            inst->value.object_id != object_id) {
+            continue;
+        }
+        result = inst->result;
+        if (result != MINIC_CORE_VALUE_INVALID &&
+            result < function->value_count &&
+            first_producer_plus_one[result] == 0U) {
+            /* Preserve the original helper's earliest producer semantics
+               even if malformed IR repeats the same result id. */
+            first_producer_plus_one[result] = position + 1U;
+        }
+    }
+    for (position = 0U; position < block->instruction_count; ++position) {
+        MinicCoreInstructionId id = block->instructions[position];
+        const MinicCoreInstruction *inst = &function->instructions[id];
+        MinicCoreValueId address = MINIC_CORE_VALUE_INVALID;
+        if (inst->kind == MINIC_CORE_INSTRUCTION_PARAMETER_OBJECT &&
+            inst->value.parameter_object.object_id == object_id) {
+            first_access_defines = true;
+            break;
+        }
+        if (inst->kind == MINIC_CORE_INSTRUCTION_LOAD) {
+            address = inst->value.load.address;
+        } else if (inst->kind == MINIC_CORE_INSTRUCTION_STORE) {
+            address = inst->value.store.address;
+        } else {
+            continue;
+        }
+        if (address < function->value_count &&
+            first_producer_plus_one[address] != 0U) {
+            first_access_defines =
+                inst->kind == MINIC_CORE_INSTRUCTION_STORE &&
+                first_producer_plus_one[address] - 1U < position;
+            break;
+        }
+    }
+finish:
+    free(first_producer_plus_one);
+    return first_access_defines;
+}
+
 static bool core_scalar_object_interval(const MinicC0Program *program,
                                         const MinicCoreFunction *function,
                                         MinicCoreObjectId object_id,
@@ -1094,6 +1180,7 @@ static bool core_scalar_object_interval(const MinicC0Program *program,
         return false;
     }
     interval->reusable = false;
+    interval->can_share_across_blocks = false;
     interval->block_index = SIZE_MAX;
     interval->first_position = SIZE_MAX;
     interval->last_position = 0U;
@@ -1253,8 +1340,15 @@ static bool core_scalar_object_interval(const MinicC0Program *program,
             }
         }
     }
+    if (interval->reusable) {
+        interval->can_share_across_blocks =
+            core_scalar_object_first_access_defines(
+                function, object_id, interval->block_index);
+    }
     return true;
 }
+
+static bool p1_crossblock_current_function_enabled = true;
 
 static bool core_scalar_object_intervals_overlap(const CoreScalarObjectInterval *left,
                                                  const CoreScalarObjectInterval *right) {
@@ -1262,7 +1356,9 @@ static bool core_scalar_object_intervals_overlap(const CoreScalarObjectInterval 
         return false;
     }
     if (left->block_index != right->block_index) {
-        return true;
+        return !(p1_crossblock_current_function_enabled &&
+                 left->can_share_across_blocks &&
+                 right->can_share_across_blocks);
     }
     return !(left->last_position < right->first_position ||
              right->last_position < left->first_position);
@@ -6314,6 +6410,13 @@ static bool emit_core_function_with_symbol(FILE *file,
                       "function=%s\n",
                       symbol_name);
         (void)fflush(stderr);
+    }
+    /* Opt-in P1 test changes only the selected function's frame. */
+    {
+        const char *focus = getenv("MINIC_P1_CROSSBLOCK_FUNCTION");
+        p1_crossblock_current_function_enabled =
+            focus == NULL || focus[0] == 0 ||
+            strcmp(focus, symbol_name) == 0;
     }
     if (!core_frame_initialize(program, function, &frame)) {
         return false;
