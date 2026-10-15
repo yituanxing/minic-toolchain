@@ -148,6 +148,22 @@ if [[ "${COHORT_GNU_PREFLIGHT_ALLOW_BOOL_SINGLE:-0}" == 1 || "${COHORT_GNU_PREFL
   awk '$2 != "init/version-timestamp.o" && $2 != "init/version.o" && $2 != "vmlinux.o" {print}' \
     "$prov/gcc-objects.sha256" >"$ev/gcc-objects-stable.sha256"
   echo 'COHORT_GNU_PREFLIGHT_VOLATILE=SINGLE_SCOPE excluded=version.o,vmlinux.o'
+elif [[ "${COHORT_GNU_PREFLIGHT_ALLOW_SEVEN_SHARD_VOLATILE:-0}" == 1 ]]; then
+  # Pinned 7-way GNU Kbuild replay: version.o/vmlinux.o can be regenerated
+  # only because today's UTC Kbuild timestamps differ from saved golden.
+  # Keep the full trusted SHA snapshot and restore the ENTIRE reference tree.
+  # This carve-out is invalid for any non-seven-way or unpinned configuration.
+  [[ "${COHORT_ACTION:-all}" == compile &&
+     "${COHORT_ALLOW_SHARD:-0}" == 1 &&
+     "$cohort_scope" == SHARD_COMPILE_ONLY &&
+     "$n" -ge 280 && "$n" -le 310 &&
+     "$actual_cfg" == eeb04f304ebfb97a1079c187dc0c2ea3cc61fc50a55aa3cc776237c16ab19bbe ]] || {
+    echo 'COHORT_GNU_PREFLIGHT=FAIL invalid_seven_shard_volatile_scope' >&2
+    exit 6
+  }
+  awk '$2 != "init/version-timestamp.o" && $2 != "init/version.o" && $2 != "vmlinux.o" {print}' \
+    "$prov/gcc-objects.sha256" >"$ev/gcc-objects-stable.sha256"
+  echo 'COHORT_GNU_PREFLIGHT_VOLATILE=EXACT_SEVEN_SHARD only_init_version_and_vmlinux_excluded=true full_snapshot_restored=true'
 elif [[ "${COHORT_GNU_PREFLIGHT_ALLOW_PINNED_VOLATILE:-0}" == 1 ]]; then
   [[ "${COHORT_ACTION:-all}" == verify && "${COHORT_NATIVE_UNION:-0}" == 1 && "$n" == 2064 ]] || {
     echo 'COHORT_GNU_PREFLIGHT=FAIL invalid_volatile_replay_scope' >&2
