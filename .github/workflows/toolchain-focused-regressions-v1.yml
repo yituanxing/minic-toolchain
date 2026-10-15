@@ -3,6 +3,7 @@ name: Toolchain Focused Regression Suite (RV64, AR, LD)
 on:
   push:
     branches:
+      - "main"
       - "agent/linux-expanded-kbuild-v0"
       - "agent/linux-perf-boolean-domain-v1"
     paths:
