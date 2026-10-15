@@ -33,12 +33,12 @@ def replace_once(path: str, old: str, new: str) -> None:
     # The later, separately validated symbolic-address promotion extends the
     # exact original integer-specialization AST fields before is_defined.
     # Preserve strict source-byte validation instead of reinjecting the old AST.
-    if path == "src/frontend/ast.h" and old.startswith("    MinicBlockId body_block;\\n"):
+    if path == "src/frontend/ast.h" and old.startswith("    MinicBlockId body_block;\n"):
         extended = new.replace(
-            "    bool is_integer_specialization;\\n",
-            "    MinicExpressionId specialization_symbolic_expression[MINIC_MAX_FUNCTION_PARAMETERS];\\n"
-            "    bool specialization_symbolic_known[MINIC_MAX_FUNCTION_PARAMETERS];\\n"
-            "    bool is_integer_specialization;\\n",
+            "    bool is_integer_specialization;\n",
+            "    MinicExpressionId specialization_symbolic_expression[MINIC_MAX_FUNCTION_PARAMETERS];\n"
+            "    bool specialization_symbolic_known[MINIC_MAX_FUNCTION_PARAMETERS];\n"
+            "    bool is_integer_specialization;\n",
         )
         if text.count(extended) == 1 and text.count(old) == 0:
             print("MINIC_INLINE_INTEGER_SPECIALIZATION_V0=AST_SYMBOLIC_ALREADY_CANONICAL")
