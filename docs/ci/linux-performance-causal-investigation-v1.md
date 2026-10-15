@@ -482,3 +482,20 @@ PERF-006 `blake2s` 的真实 Runtime 布尔域索引收益为 1465.171ms→1368.
 首次 [CI #38665239996](https://github.com/yituanxing/minic-toolchain/actions/runs/38665239996) **失败且没有 A/B 数据**：可读日志定位到 Python patch 的源码锚点错误 `symbolic transitive scan anchor count != 1`；此前统一全局检查错误地把其他函数里的同形表达式循环也计入，失败在 **源文件改写阶段**，并非编译器语义或生成汇编失败。commit `d0a5b032` 将锚点限制到 symbolic transitive 代码块前后，保留原所有语义路径。隔离复跑 [#38665476648](https://github.com/yituanxing/minic-toolchain/actions/runs/38665476648)，以其最终 `MINIC_ONE_OWNER_AB=PASS` 和性能为判据；如无实质改善就停止，不对同项继续小修。
 
 另外新增 `tools/ci/linux-perf-frozen-corpus-differential-v1.py` 的 [CI #38664911462](https://github.com/yituanxing/minic-toolchain/actions/runs/38664911462)，严格恢复既有 500 个 SHA-frozen GNU Kbuild `.i`，而非重新下载内核。每个真实 TU 都由原 Runtime+Boolean 与仅加 symbolic-owner 两种编译器编译，独立 SHA 对比 `.s`，只在 **500/500 字节相同且均成功** 时宣称局部 500 份语义表象认证；这不是 Linux 全量运行时 P1。两条 CI 未得最终判定之前不可把它们写成 `PASS`。
+
+
+## 27. PERF-022：符号源归属索引 first500 严格字节等价通过（2026-10-15）
+
+[CI #38664911462](https://github.com/yituanxing/minic-toolchain/actions/runs/38664911462) `gcc-single SUCCESS`。基线为正式 Boolean Runtime，唯一差异是 opt-in FunctionBody 表达式来源归属过滤。直接恢复既有、500/500 输入 SHA 校验的 Linux 6.6.143 RISC-V GNU Kbuild `.i`；严格以两个不同 SHA 的 MiniC-cc、同一 500 文件双边 `-S` 成功、`.s` SHA 字节完全一致作为标准。日志按每 50 个记录进度，最终 `MINIC_FROZEN_DIFF=PASS selected=500 identical=500 runtime_p1_not_proven=true`。**这是明确的 500/500 编译输出等价验收，不是整内核链接/启动认证，也不是任何加速测量**。历史 6 TU 两次配对性能 1.24～1.42× 保持独立证据。符号归属索引晋级为 `500-input-assembly-equivalent / QEMU-p1-pending`，可进入原既有七路 Linux/Kbuild 运行时分级认证。
+
+## 28. PERF-023：已有符号归属索引上进一步减少 CALL 遍历
+
+候选 `apply-perf-symbolic-call-index-v1.py`，在两臂**均开启**已验证 symbolic-owner 时，仅候选额外提供 stable ExpressionId 顺序的 CALL-only 索引。初次 [#38665239996](https://github.com/yituanxing/minic-toolchain/actions/runs/38665239996) 仅在 patch-anchor 阶段失败，已记录源匹配修复。复跑 [CI #38665476648](https://github.com/yituanxing/minic-toolchain/actions/runs/38665476648) **SUCCESS**、三份真实 frozen `.i` 汇编逐字节一致：
+
+| owner | Boolean+owner P50 | +symbolic CALL P50 | 额外倍数 |
+| --- | ---: | ---: | ---: |
+| lib/crc32.o | 13149.251ms | 11769.657ms | 1.1172× |
+| net/core/dev.o | 11858.853ms | 11701.606ms | 1.0134× |
+| net/ipv4/tcp_input.o | 9034.552ms | 8818.987ms | 1.0244× |
+
+累计中位数之和 34.043→32.290s，节约 1.753s，约 **5.15% 边际减时**，主要集中 `crc32`。虽然 3/3 字节等价，这个收益比 symbolic owner 核心优化明显小得多；判定 `local-only / not-promoted`，不再追加 CALL 索引微调或为这一小项重跑 first500，先重新归因 **Boolean+symbolic-owner+integer-CALL-index** 已优化配置上剩余实际最慢阶段（不能用未优化阶段旧数据取代当前瓶颈）。
