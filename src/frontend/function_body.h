@@ -20,6 +20,15 @@ const MinicFunction *minic_c0_function_body_function(const MinicFunctionBodyView
 MinicBlockId minic_c0_function_body_root_block(const MinicFunctionBodyView *view);
 bool minic_c0_function_body_owns_local(const MinicFunctionBodyView *view, MinicLocalId local_id);
 
+/* Perf-only helper used by the Linux specialization audit.  Owners are
+ * source-function ids; MINIC_FUNCTION_INVALID means unknown/orphan and
+ * program->function_count is reserved internally for ambiguous shared nodes. */
+bool minic_perf_program_build_expression_source_owners(
+    const MinicC0Program *program,
+    size_t function_limit,
+    MinicFunctionId *owners,
+    size_t owner_count);
+
 /* Verify structural function-body ownership and function-local semantic references. */
 bool minic_c0_program_validate_function_body_ownership(const MinicC0Program *program);
 
