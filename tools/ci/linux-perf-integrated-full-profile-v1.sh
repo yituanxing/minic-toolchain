@@ -2,6 +2,11 @@
 # Apply ONLY the three jointly first500-certified optimizations after the
 # existing, unmodified Linux Runtime/Crossblock profile was built.
 # Every seven-way producer and the receiver must run this identical wrapper.
+# Canonical src/target now contains promoted explicit ELF flags and the
+# .L*-only PI addressing selector. The existing Runtime static-PCREL patch
+# strengthens that selector to all-lla before these four performance patches.
+# This opt-in wrapper is still required until the remaining performance source
+# overlays themselves are promoted into tracked native C.
 set -Eeuo pipefail
 if [[ $# -ne 2 ]]; then
   echo "usage: $0 <existing-runtime-build-dir> <evidence-dir>" >&2
