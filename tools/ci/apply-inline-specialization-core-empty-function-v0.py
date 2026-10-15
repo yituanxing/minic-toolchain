@@ -15,10 +15,12 @@ new = '''    if (core->blocks == NULL ||
         return false;
     }
 '''
-count = text.count(old)
-if count != 1:
-    raise SystemExit(f"expected one Core storage guard, found {count}")
-text = text.replace(old, new, 1)
+if text.count(new) == 1 and text.count(old) == 0:
+    print("MINIC_INLINE_CORE_EMPTY_V0=STORAGE_ALREADY_CANONICAL")
+elif text.count(old) == 1 and text.count(new) == 0:
+    text = text.replace(old, new, 1)
+else:
+    raise SystemExit("Core empty storage guard: missing, duplicate or partial")
 
 old = '''        const MinicCoreBlock *block = &core->blocks[block_id];
         size_t block_instruction_index;
@@ -37,10 +39,12 @@ new = '''        const MinicCoreBlock *block = &core->blocks[block_id];
 
         for (block_instruction_index = 0U;
 '''
-count = text.count(old)
-if count != 1:
-    raise SystemExit(f"expected one Core block walk anchor, found {count}")
-text = text.replace(old, new, 1)
+if text.count(new) == 1 and text.count(old) == 0:
+    print("MINIC_INLINE_CORE_EMPTY_V0=BLOCK_ALREADY_CANONICAL")
+elif text.count(old) == 1 and text.count(new) == 0:
+    text = text.replace(old, new, 1)
+else:
+    raise SystemExit("Core empty block walk: missing, duplicate or partial")
 
 p.write_text(text)
 print("MINIC_INLINE_SPECIALIZATION_CORE_EMPTY_FUNCTION_V0=APPLIED")

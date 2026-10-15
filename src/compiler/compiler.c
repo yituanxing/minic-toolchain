@@ -502,7 +502,8 @@ static bool minic_walk_reachable_core_edges(const MinicC0Program *program,
     if (core->block_count == 0U) {
         return true;
     }
-    if (core->blocks == NULL || core->instructions == NULL ||
+    if (core->blocks == NULL ||
+        (core->instruction_count != 0U && core->instructions == NULL) ||
         core->entry_block >= core->block_count) {
         return false;
     }
@@ -538,6 +539,13 @@ static bool minic_walk_reachable_core_edges(const MinicC0Program *program,
         MinicCoreBlockId block_id = block_queue[block_queue_cursor++];
         const MinicCoreBlock *block = &core->blocks[block_id];
         size_t block_instruction_index;
+
+        /* A valid block may contain only a terminator and therefore own no
+         * instruction-id array.  Require storage only when the block actually
+         * contains instructions. */
+        if (block->instruction_count != 0U && block->instructions == NULL) {
+            goto done;
+        }
 
         for (block_instruction_index = 0U;
              block_instruction_index < block->instruction_count;
