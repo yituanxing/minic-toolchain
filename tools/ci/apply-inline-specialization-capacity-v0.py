@@ -108,5 +108,19 @@ if count != 1:
     raise SystemExit(f"expected one transitive specialization capacity guard, found {count}")
 text = text.replace(old, new, 1)
 
+# The Runtime capacity contract spans source-owned initial specialization and
+# dynamically retained transitive specialization. Audit the complete profile,
+# not merely each patch anchor: a partial promotion must never be accepted.
+required_capacity_markers = (
+    "#define MINIC_INLINE_INTEGER_SPECIALIZATION_LIMIT 2048U",
+    "MINIC_INLINE_INTEGER_SPECIALIZATION_LIMIT_HIT count=",
+    "MINIC_INLINE_INTEGER_SPECIALIZATION_ADD_FAILED count=",
+    "MINIC_INLINE_INTEGER_SPECIALIZATION_TRANSITIVE_LIMIT_HIT count=",
+    "MINIC_INLINE_INTEGER_SPECIALIZATION_TRANSITIVE_ADD_FAILED count=",
+)
+for marker in required_capacity_markers:
+    if text.count(marker) != 1:
+        raise SystemExit("MINIC_INLINE_SPECIALIZATION_CAPACITY_V0=ERROR incomplete native/overlay contract: " + marker)
+
 p.write_text(text)
-print("MINIC_INLINE_SPECIALIZATION_CAPACITY_V0=APPLIED limit=2048")
+print("MINIC_INLINE_SPECIALIZATION_CAPACITY_V0=APPLIED limit=2048 native_initial=1 overlay_transitive=1")
