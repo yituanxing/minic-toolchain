@@ -91,8 +91,10 @@ if area.count(creation)!=1:
     raise SystemExit(f"integer owner: clone error call count {area.count(creation)}")
 call_pos=begin+area.index(creation)+len(creation)
 return_pos=text.find("return false;", call_pos, finish)
-if return_pos<0 or text[call_pos:return_pos].strip():
-    raise SystemExit("integer owner: unmatched immediate error exit")
+if return_pos<0 or return_pos-call_pos>2048:
+    raise SystemExit("integer owner: clone-allocation error return out of bounds")
+# The verified original source can log an error before this return, so it is
+# not necessarily whitespace-only; free immediately before the fail return.
 text=text[:return_pos]+"free(integer_expression_owners);\n"+text[return_pos:]
 finish = text.find("    if (specialization_count != 0U) {", begin)
 cleanup='''        if (refinement_count != 0U) {'''
