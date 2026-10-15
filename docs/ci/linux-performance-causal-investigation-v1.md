@@ -444,3 +444,18 @@ PERF-006 `blake2s` 的真实 Runtime 布尔域索引收益为 1465.171ms→1368.
 | filter | 13912.770 | 11224.488 | 1.2395× |
 
 至此两批共六个真实 Linux TU 初筛 6/6 字节一致且全部加速 1.24～1.42×。仍属局部候选，未全量 Linux 或 QEMU P1 认证。
+
+
+## 24. PERF-019：整数传递专门化 CALL-only 扫描实验（2026-10-15）
+
+[CI #38663509948](https://github.com/yituanxing/minic-toolchain/actions/runs/38663509948) `gcc-single SUCCESS`。固定 Boolean Runtime 原件与已缓存 3 个真实 Linux Kbuild `.i`，候选只复用 `tools/ci/apply-perf-integer-call-expression-index-v1.py`：把每个克隆函数反复遍历 TU 全部 expression 的逻辑改为“一次扫描保存 CALL expression ID，之后克隆只看这些 CALL”；索引内存不足则回到原有全扫描，CALL 遍历顺序不变。编译与对象身份缓存均命中，逐字节汇编一致，每臂热身一次 + 两次交替配对。
+
+| owner | Boolean baseline P50 | Boolean + integer CALL-index P50 | speedup |
+| --- | ---: | ---: | ---: |
+| lib/crc32.o | 21338.163ms | 17285.939ms | **1.2344×** |
+| net/core/dev.o | 17876.262ms | 16994.266ms | 1.0519× |
+| net/ipv4/tcp_input.o | 12570.327ms | 11969.206ms | 1.0502× |
+
+合计 **51.785→46.249s**，节省约 5.535s（约 10.69%），其中 crc32 最明显。判定 `verified-local-3 / keep-as-candidate`；绝不能宣称 Linux 整体 +10.69%。
+
+**下轮：** 与 PERF-017 符号源归属过滤共同开启，**先做 incremental marginal A/B：Boolean+symbolic-owner vs Boolean+symbolic-owner+integer-CALL-index**。能保持 3 个真实文件逐字节一致且 crc32 仍保留显著额外收益，才考虑向 first500/7-runner 递进。未完成全面兼容性/QEMU P1，不直接晋级已认证 Runtime。
