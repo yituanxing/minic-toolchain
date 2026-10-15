@@ -1,0 +1,2787 @@
+name: Linux Runtime GCC Baseline
+
+on:
+  push:
+    branches:
+      - "agent/linux-expanded-kbuild-v0"
+      - "agent/linux-perf-boolean-domain-v1"
+    paths:
+      - '.github/workflows/linux-runtime-gcc-baseline.yml'
+      - 'tests/external/linux/**'
+      - 'tools/ci/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read  # Same-repository exact historical Image artifact download
+
+# P1 calibration rerun after loopback bring-up.
+
+jobs:
+  gcc-runtime:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[linux-runtime-gcc]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Install RISC-V Linux runtime prerequisites
+        run: |
+          sudo apt-get -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            gcc-riscv64-linux-gnu libc6-dev-riscv64-cross \
+            bc bison flex libssl-dev libelf-dev make curl xz-utils cpio gzip file \
+            qemu-system-misc opensbi
+
+      - name: Build deterministic runtime initramfs
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          BUILD_DIR="$GITHUB_WORKSPACE/build/linux-runtime-gcc/initramfs" \
+          OUTPUT_INITRAMFS="$GITHUB_WORKSPACE/build/linux-runtime-gcc/runtime-initramfs.cpio.gz" \
+          RISCV_CC=riscv64-linux-gnu-gcc \
+            bash tests/external/linux/build_runtime_initramfs.sh
+
+      - name: Build Linux 6.6.143 GCC baseline Image
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-runtime-gcc"
+          archive="$work/linux-6.6.143.tar.xz"
+          src="$work/linux-6.6.143"
+          out="$work/out"
+          curl -fsSL https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.6.143.tar.xz -o "$archive"
+          printf '%s  %s\n' \
+            dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932 \
+            "$archive" | sha256sum -c -
+          tar -xJf "$archive" -C "$work"
+          make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- defconfig
+          "$src/scripts/config" --file "$out/.config" \
+            -e BLK_DEV_INITRD -e DEVTMPFS -e DEVTMPFS_MOUNT \
+            -e SERIAL_8250 -e SERIAL_8250_CONSOLE
+          make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- olddefconfig
+          # Fresh GNU reference campaign: the historical mixed-MiniC cache
+          # used config e538a6..., but today's GCC/Kconfig yields its own
+          # reproducible config. Only compare MiniC against THIS same config.
+          actual_config=$(sha256sum "$out/.config" | cut -d' ' -f1)
+          echo "GNU_GOLDEN_CONFIG sha=$actual_config historical_mixed=e538a6ad42ec49c5a667cab5de9bb943f82ca702ff2b7749a020e38ff7ddaea7"
+          make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- -j4 Image
+          final_config=$(sha256sum "$out/.config" | cut -d' ' -f1)
+          test "$final_config" = "$actual_config"
+          echo "GNU_GOLDEN_CONFIG_STABLE=PASS sha=$final_config"
+          test -s "$out/arch/riscv/boot/Image"
+          file "$out/arch/riscv/boot/Image"
+          echo "LINUX_RUNTIME_GCC_IMAGE=PASS release=6.6.143"
+
+      - name: Run Python-era runtime contract against GCC baseline
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-runtime-gcc"
+          LINUX_IMAGE="$work/out/arch/riscv/boot/Image" \
+          INITRAMFS="$work/runtime-initramfs.cpio.gz" \
+          BUILD_DIR="$work/qemu" \
+          LINUX_RELEASE=6.6.143 \
+          QEMU_SYSTEM_RISCV64=qemu-system-riscv64 \
+          QEMU_TIMEOUT_SECONDS=90 \
+          QEMU_SHELL_INPUT_DELAY_SECONDS=8 \
+            bash tests/external/linux/runtime_boot.sh
+          echo "LINUX_RUNTIME_GCC_BASELINE=PASS lanes=2/2 head=$GITHUB_SHA"
+
+      - name: Calibrate P1 syscall profile against GCC reference
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-runtime-gcc"
+          LINUX_IMAGE="$work/out/arch/riscv/boot/Image" \
+          INITRAMFS="$work/runtime-initramfs.cpio.gz" \
+          BUILD_DIR="$work/qemu-p1" \
+          LINUX_RELEASE=6.6.143 \
+          LINUX_RUNTIME_PROFILE=p1 \
+          QEMU_SYSTEM_RISCV64=qemu-system-riscv64 \
+          QEMU_TIMEOUT_SECONDS=90 \
+            bash tests/external/linux/runtime_boot.sh
+          echo "LINUX_RUNTIME_GCC_P1=PASS syscalls=12 head=$GITHUB_SHA"
+
+      - name: Certify pure-GNU exact-config object pool after QEMU contracts
+        id: exact_gnu
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-runtime-gcc"
+          out="$work/out"
+          # Certified GCC .config identity is this run's actual SHA, not a
+          # borrowed SHA from the historical mixed-compiler experiment.
+          actual=$(sha256sum "$out/.config" | cut -d' ' -f1)
+          test -n "$actual"
+          test -s "$out/vmlinux"
+          test -s "$out/arch/riscv/boot/Image"
+          test -s "$out/built-in.a"
+          test -s "$out/lib/lib.a"
+          mkdir -p "$work/provenance"
+          # The default GCC kernel compiles fewer C owners than the 3352
+          # frozen candidate-TU corpus. Only record RISC-V ET_REL objects;
+          # HOSTCC-generated native ELF objects are not Linux swap targets.
+          python3 - "$out" "$work/provenance/gcc-objects.sha256" <<'PY_GCC_POOL'
+          import hashlib
+          from pathlib import Path
+          import struct
+          import sys
+          out, dest = map(Path, sys.argv[1:])
+          total = 0
+          with dest.open("w", encoding="utf-8") as manifest:
+              for obj in sorted(out.rglob("*.o")):
+                  with obj.open("rb") as src:
+                      header = src.read(20)
+                  if (len(header) < 20 or header[:4] != b"\x7fELF"
+                      or header[5] != 1
+                      or struct.unpack_from("<H", header, 16)[0] != 1
+                      or struct.unpack_from("<H", header, 18)[0] != 243):
+                      continue
+                  digest = hashlib.sha256()
+                  with obj.open("rb") as src:
+                      for data in iter(lambda: src.read(1048576), b""):
+                          digest.update(data)
+                  manifest.write(f"{digest.hexdigest()}  {obj.relative_to(out)}\n")
+                  total += 1
+          print(f"GNU_RISCV_OBJECT_POOL objects={total} manifest={dest}")
+          PY_GCC_POOL
+          count=$(wc -l <"$work/provenance/gcc-objects.sha256")
+          echo "GNU_GOLDEN_OBJECT_COUNT=$count"
+          # Fail if Kbuild produced an implausibly small kernel object pool.
+          test "$count" -ge 1500
+          {
+            echo "schema=linux-gnu-exact-config-v1"
+            echo "linux_release=6.6.143"
+            echo "linux_archive_sha256=dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932"
+            echo "config_sha256=$actual"
+            echo "gcc_version=$(riscv64-linux-gnu-gcc -dumpfullversion)"
+            echo "gcc_target=$(riscv64-linux-gnu-gcc -dumpmachine)"
+            echo "gcc_binary_sha256=$(sha256sum "$(command -v riscv64-linux-gnu-gcc)" | cut -d' ' -f1)"
+            echo "gnu_ld_binary_sha256=$(sha256sum "$(command -v riscv64-linux-gnu-ld)" | cut -d' ' -f1)"
+            echo "gnu_ar_binary_sha256=$(sha256sum "$(command -v riscv64-linux-gnu-ar)" | cut -d' ' -f1)"
+            echo "gcc_object_count=$count"
+            echo "vmlinux_sha256=$(sha256sum "$out/vmlinux" | cut -d' ' -f1)"
+            echo "image_sha256=$(sha256sum "$out/arch/riscv/boot/Image" | cut -d' ' -f1)"
+            echo "qemu_contract=full_and_p1_passed"
+          } >"$work/provenance/gcc-baseline.txt"
+          bin_sig=$(sha256sum "$(command -v riscv64-linux-gnu-gcc)" | cut -c1-16)
+          ld_sig=$(sha256sum "$(command -v riscv64-linux-gnu-ld)" | cut -c1-16)
+          key="linux-gnu-golden-v1-6.6.143-$actual-$bin_sig-$ld_sig"
+          echo "key=$key" >>"$GITHUB_OUTPUT"
+          echo "GNU_EXACT_GOLDEN=PASS objects=$count config=$actual cache_key=$key"
+          du -sh "$out" || true
+
+      - name: Save certified GNU Linux object pool for MiniC one-TU swaps
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            build/linux-runtime-gcc/out
+            build/linux-runtime-gcc/provenance
+          key: ${{ steps.exact_gnu.outputs.key }}
+
+      - name: Preserve runtime blocker
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-runtime-gcc-blocker
+          path: |
+            build/linux-runtime-gcc/qemu/*.log
+            build/linux-runtime-gcc/qemu-p1/*.log
+            build/linux-runtime-gcc/out/.config
+            build/linux-runtime-gcc/runtime-initramfs.cpio.gz
+          if-no-files-found: ignore
+          retention-days: 1
+
+  gcc-single:
+    # Reuse the EXISTING opt-in isolation job. ONE runner handles the entire
+    # batch compile, two cohorts and any QEMU prefix bisection.
+    if: github.event_name == 'push' && (contains(github.event.head_commit.message, '[linux-runtime-gcc-cohort]') || contains(github.event.head_commit.message, '[linux-runtime-gcc-384]') || contains(github.event.head_commit.message, '[linux-runtime-gcc-dma-only]') || contains(github.event.head_commit.message, '[linux-runtime-gcc-link-triad]') || contains(github.event.head_commit.message, '[linux-runtime-gcc-shmem-only]') || contains(github.event.head_commit.message, '[linux-runtime-blake2s-only]') || contains(github.event.head_commit.message, '[linux-perf-hotowners]'))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 105
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Install GNU RISC-V toolchain and QEMU once
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 install -y --no-install-recommends \
+            gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
+            qemu-system-misc opensbi libc6-dev-riscv64-cross \
+            python3 make cpio gzip || {
+              sudo apt-get -o Acquire::Retries=3 update
+              sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+                gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
+                qemu-system-misc opensbi libc6-dev-riscv64-cross python3 make cpio gzip device-tree-compiler gdb-multiarch
+            }
+
+      - name: Derive exact certified GNU golden cache key
+        id: identity
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          config=eeb04f304ebfb97a1079c187dc0c2ea3cc61fc50a55aa3cc776237c16ab19bbe
+          gcc_sig=$(sha256sum "$(command -v riscv64-linux-gnu-gcc)" | cut -c1-16)
+          ld_sig=$(sha256sum "$(command -v riscv64-linux-gnu-ld)" | cut -c1-16)
+          echo "key=linux-gnu-golden-v1-6.6.143-$config-$gcc_sig-$ld_sig" >>"$GITHUB_OUTPUT"
+
+      - name: Restore QEMU-certified GNU golden objects
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            build/linux-runtime-gcc/out
+            build/linux-runtime-gcc/provenance
+          key: ${{ steps.identity.outputs.key }}
+          fail-on-cache-miss: true
+
+      - name: Restore pinned Linux 6.6.143 source
+        uses: ./.github/actions/linux-runtime-restore-fixture
+        with:
+          fixture: source
+
+      - name: Derive full same-config GCC C object universe
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-v1"
+          mkdir -p "$ev"
+          python3 tools/ci/linux-runtime-gcc-full-c-objects-v1.py \
+            --out "$GITHUB_WORKSPACE/build/linux-runtime-gcc/out" \
+            --manifest "$GITHUB_WORKSPACE/build/linux-runtime-gcc/provenance/gcc-objects.sha256" \
+            --prefix tools/ci/linux-runtime-gcc-cohort-objects-v1.txt \
+            --output "$ev/full-objects.txt" \
+            --excluded "$ev/non-c-objects.tsv" \
+            --min-c-objects 1200
+          # Rapid diagnostic: exactly 384 objects, not the whole C universe.
+          if [[ "${{ contains(github.event.head_commit.message, '[linux-runtime-gcc-384]') }}" == true ]]; then
+            python3 - "$ev/full-objects.txt" <<'PY_DIAGNOSTIC'
+          from pathlib import Path
+          import sys
+          p=Path(sys.argv[1])
+          objects=[x for x in p.read_text().splitlines() if x and not x.startswith("#")]
+          assert len(objects)>=384
+          p.write_text("# DIAGNOSTIC_384_FROM_PINNED_GNU_FULL_C_UNIVERSE\n"
+                       + "\n".join(objects[:384]) + "\n")
+          print("COHORT_SCOPE=DIAGNOSTIC_384 objects=384")
+          PY_DIAGNOSTIC
+          fi
+          # Fast exact-config one-object compile/ABI/symbol oracle.  It is
+          # deliberately NOT an Image/QEMU verdict; no new workflow/job.
+          if [[ "${{ contains(github.event.head_commit.message, '[linux-runtime-gcc-dma-only]') }}" == true ]]; then
+            grep -Fxq kernel/dma/direct.o "$ev/full-objects.txt"
+            printf '%s\n' kernel/dma/direct.o > "$ev/full-objects.txt"
+            echo "COHORT_SCOPE=DMA_SINGLE_COMPILE_ONLY objects=1"
+          fi
+          if [[ "${{ contains(github.event.head_commit.message, '[linux-runtime-gcc-link-triad]') }}" == true ]]; then
+            for owner in kernel/dma/direct.o mm/truncate.o mm/shmem.o; do
+              grep -Fxq "$owner" "$ev/full-objects.txt"
+            done
+            printf '%s\n' kernel/dma/direct.o mm/truncate.o mm/shmem.o > "$ev/full-objects.txt"
+            echo "COHORT_SCOPE=LINK_TRIAD_COMPILE_ONLY objects=3"
+          fi
+          if [[ "${{ contains(github.event.head_commit.message, '[linux-runtime-gcc-shmem-only]') }}" == true ]]; then
+            grep -Fxq mm/shmem.o "$ev/full-objects.txt"
+            printf '%s\n' mm/shmem.o > "$ev/full-objects.txt"
+            echo "COHORT_SCOPE=SHMEM_SINGLE_COMPILE_ONLY objects=1"
+          fi
+          # One REAL Linux 6.6.143 C translation unit, after historical GCC
+          # Kbuild generated-header fixture. No seven shards, link or QEMU.
+          if [[ "${{ contains(github.event.head_commit.message, '[linux-runtime-blake2s-only]') }}" == true ]]; then
+            grep -Fxq lib/crypto/blake2s-generic.o "$ev/full-objects.txt"
+            printf '%s\n' lib/crypto/blake2s-generic.o > "$ev/full-objects.txt"
+            echo "BLAKE2S_SINGLE=SELECTED target=lib/crypto/blake2s-generic.o baseline_minic_ms=1981990"
+          fi
+          if [[ "${{ contains(github.event.head_commit.message, '[linux-perf-hotowners]') }}" == true ]]; then
+            # Three highly expensive, structurally distinct Linux C owners.
+            # Never reuse the blake2s experiment for one-off tuning.
+            if [[ "${{ contains(github.event.head_commit.message, '[linux-perf-hotowners-rotation]') }}" == true ]]; then
+              # New, disjoint C owners; old three-owner A/B inputs remain cached.
+              targets=(net/core/dev.o net/ipv4/tcp_input.o lib/crc32.o)
+              cohort_label=ROTATION
+            else
+              targets=(kernel/bpf/btf.o kernel/bpf/verifier.o net/core/filter.o)
+              cohort_label=ORIGINAL
+            fi
+            for owner in "${targets[@]}"; do
+              grep -Fxq "$owner" "$ev/full-objects.txt"
+            done
+            printf '%s\n' "${targets[@]}" >"$ev/full-objects.txt"
+            echo "BOOL_HOT_OWNER_SELECTION=PASS mode=$cohort_label owners=3 total_full_C_untouched=true"
+          fi
+
+      - name: Compute pinned MiniC candidate object cache identity
+        id: candidate_id
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          # Must be computed from the CLEAN sources, before 39 MiniC
+          # runtime-profile patches modify src/ in place.
+          profile=$(python3 tools/ci/linux-runtime-profile-cache-id-v1.py)
+          if [[ "${{ contains(github.event.head_commit.message, '[linux-runtime-blake2s-only]') }}" == true ]]; then
+            # An opt-in patch outside the default profile must be part of
+            # the immutable MiniC object cache identity.
+            profile="${profile}-blake2s-cfg-linear-$(sha256sum tools/ci/apply-riscv64-p1-defined-before-use-crossblock-v1.py | cut -c1-16)"
+          fi
+          if [[ "${{ contains(github.event.head_commit.message, '[linux-perf-boolean-single]') || contains(github.event.head_commit.message, '[linux-perf-hotowners]') }}" == true ]]; then
+            [[ "${{ contains(github.event.head_commit.message, '[linux-runtime-blake2s-only]') || contains(github.event.head_commit.message, '[linux-perf-hotowners]') }}" == true ]] || { echo 'BOOLEAN_CACHE_SINGLE=FAIL missing_owner'; exit 8; }
+            profile="${profile}-bool-index-$(sha256sum tools/ci/apply-inline-specialization-local-boolean-domain-scoped-v1.py tools/ci/apply-inline-specialization-local-boolean-domain-index-v0.py | sha256sum | cut -c1-16)"
+            echo 'BOOLEAN_CACHE_SINGLE=IDENTITY patch_sha_bound=true'
+          fi
+          objects=$(sha256sum build/linux-runtime-gcc-cohort-v1/full-objects.txt | cut -d' ' -f1)
+          gcc=$(sha256sum "$(command -v riscv64-linux-gnu-gcc)" | cut -d' ' -f1)
+          assembler=$(sha256sum "$(command -v riscv64-linux-gnu-as)" | cut -d' ' -f1)
+          echo "key=gnu-minic-objects-v1-eeb04f304ebfb97a1079c187dc0c2ea3cc61fc50a55aa3cc776237c16ab19bbe-$profile-$objects-$gcc-$assembler" >>"$GITHUB_OUTPUT"
+
+      - name: Restore exact ABI-validated MiniC candidate objects
+        id: candidate_restore
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            build/linux-runtime-gcc-cohort-v1/minic
+            build/linux-runtime-gcc-cohort-v1/minic-manifest.sha256
+            build/linux-runtime-gcc-cohort-v1/minic-identity.txt
+          key: ${{ steps.candidate_id.outputs.key }}
+
+      - name: Restore SHA-bound selected hot-owner preprocessed sources
+        if: contains(github.event.head_commit.message, '[linux-perf-hotowners]')
+        id: hot_sources_restore
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-runtime-gcc-cohort-v1/boolean-hot
+          key: ${{ steps.candidate_id.outputs.key }}-hot-owner-frozen-inputs-v1
+
+      - name: Build MiniC once and produce authenticated C candidates
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-runtime-gcc"
+          src="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0/linux-6.6.143"
+          test -d "$src"
+          test ! -e "$work/linux-6.6.143"
+          # Kbuild .cmd depends on the producer's exact source path.
+          cp -a --reflink=auto "$src" "$work/linux-6.6.143"
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-v1"
+          mkdir -p "$ev"
+          if [[ "${{ contains(github.event.head_commit.message, '[linux-runtime-blake2s-only]') || contains(github.event.head_commit.message, '[linux-perf-hotowners]') }}" == true ]]; then
+            export MINIC_LINUX_FULL_CROSSBLOCK=1 MINIC_OPT_PURE_DISCARDED_ADDRESS_EQ=1
+            echo "BLAKE2S_SINGLE=PROFILE exact_full_crossblock_profile=true"
+          fi
+          bash tools/ci/linux-runtime-build-minic-profile-v1.sh \
+            "$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain" "$ev/compiler"
+          if [[ "${{ contains(github.event.head_commit.message, '[linux-perf-boolean-single]') || contains(github.event.head_commit.message, '[linux-perf-hotowners]') }}" == true ]]; then
+            tool="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain"
+            # minic is only the driver. minic-cc contains compiler.c and
+            # MUST change when Boolean Domain optimization is actually built.
+            cp "$tool/bin/minic-cc" "$ev/compiler/minic-cc-before-boolean"
+            chmod 755 "$ev/compiler/minic-cc-before-boolean"
+            python3 tools/ci/apply-inline-specialization-local-boolean-domain-scoped-v1.py >>"$ev/compiler/patch.log"
+            make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$tool" "$tool/bin/minic" "$tool/bin/minic-cc" >/dev/null
+            git diff --check
+            echo apply-inline-specialization-local-boolean-domain-scoped-v1.py >>"$ev/compiler/minic-profile.txt"
+            sha256sum "$tool/bin/minic" "$tool/bin/minic-cc" >"$ev/compiler/minic.sha256"
+            old_sha=$(sha256sum "$ev/compiler/minic-cc-before-boolean" | cut -d' ' -f1)
+            new_sha=$(sha256sum "$tool/bin/minic-cc" | cut -d' ' -f1)
+            [[ "$old_sha" != "$new_sha" ]] || {
+              echo 'BOOLEAN_CACHE_SINGLE=FAIL unchanged_minic_cc_compiler'; exit 8;
+            }
+            echo "BOOLEAN_CACHE_SINGLE=READY minic_cc_before=${old_sha:0:16} minic_cc_after=${new_sha:0:16}"
+          fi
+          export COHORT_ALLOW_DIAGNOSTIC_384=${{ contains(github.event.head_commit.message, '[linux-runtime-gcc-384]') && '1' || '0' }}
+          export COHORT_ALLOW_SHARD=${{ (contains(github.event.head_commit.message, '[linux-runtime-gcc-dma-only]') || contains(github.event.head_commit.message, '[linux-runtime-gcc-link-triad]') || contains(github.event.head_commit.message, '[linux-runtime-gcc-shmem-only]') || contains(github.event.head_commit.message, '[linux-runtime-blake2s-only]') || contains(github.event.head_commit.message, '[linux-perf-hotowners]')) && '1' || '0' }}
+          export COHORT_ACTION=compile
+          if [[ "${{ contains(github.event.head_commit.message, '[linux-perf-hotowners]') }}" == true ]]; then
+            export COHORT_GNU_PREFLIGHT_ALLOW_BOOL_HOT=1
+            export COHORT_KEEP_BOOL_HOT_I=1
+            export COHORT_BOOL_HOT_ROTATION=${{ contains(github.event.head_commit.message, '[linux-perf-hotowners-rotation]') && '1' || '0' }}
+          fi
+          if [[ "${{ contains(github.event.head_commit.message, '[linux-perf-boolean-single]') }}" == true ]]; then
+            export COHORT_GNU_PREFLIGHT_ALLOW_BOOL_SINGLE=1
+            export COHORT_KEEP_BOOL_SINGLE_I=1
+          fi
+          if [[ "${{ contains(github.event.head_commit.message, '[linux-runtime-blake2s-only]') }}" == true ]]; then
+            # Fail quickly if the supposed O(n) fix still costs minutes;
+            # the historical 33m value is already proven by CI #38400728544.
+            timeout --signal=TERM --kill-after=10s 300s bash tools/ci/linux-runtime-gcc-cohort-bisect-v1.sh \
+              "$work/linux-6.6.143" "$work/out" \
+              "$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain/bin/minic" \
+              "$work/provenance" "$ev/full-objects.txt" "$ev"
+          else
+            bash tools/ci/linux-runtime-gcc-cohort-bisect-v1.sh \
+              "$work/linux-6.6.143" "$work/out" \
+              "$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain/bin/minic" \
+              "$work/provenance" "$ev/full-objects.txt" "$ev"
+          fi
+          if [[ "${{ contains(github.event.head_commit.message, '[linux-perf-boolean-single]') }}" == true ]]; then
+            python3 -m py_compile tools/ci/linux-perf-pinned-single-paired-ab-v1.py
+            exact_i="$ev/boolean-ab/blake2s-generic.frozen.i"
+            test -s "$exact_i" || { echo 'BOOLEAN_CACHE_SINGLE=FAIL frozen_kbuild_i_missing'; exit 8; }
+            mkdir -p "$ev/boolean-ab/baseline/bin"
+            cp "$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain/bin/minic" "$ev/boolean-ab/baseline/bin/minic"
+            cp "$ev/compiler/minic-cc-before-boolean" "$ev/boolean-ab/baseline/bin/minic-cc"
+            python3 tools/ci/linux-perf-pinned-single-paired-ab-v1.py \
+              --input "$exact_i" \
+              --baseline-driver "$ev/boolean-ab/baseline/bin/minic" \
+              --candidate-driver "$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain/bin/minic" \
+              --out "$ev/boolean-ab" | tee "$ev/boolean-ab/paired-verdict.txt"
+            grep -Fq 'MINIC_ONE_OWNER_AB=PASS' "$ev/boolean-ab/paired-verdict.txt"
+          fi
+
+
+      - name: Check completed full MiniC object pool is cacheable
+        id: candidate_ready
+        if: always()
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-v1"
+          if test -s "$ev/full-objects.txt"; then
+            count=$(grep -cE '^[^#[:space:]]+\.o$' "$ev/full-objects.txt" || true)
+          else
+            count=0
+          fi
+          min_count=384
+          if [[ "${{ contains(github.event.head_commit.message, '[linux-runtime-gcc-dma-only]') }}" == true ]]; then
+            min_count=1
+            test "$count" -eq 1
+          elif [[ "${{ contains(github.event.head_commit.message, '[linux-runtime-gcc-link-triad]') }}" == true ]]; then
+            min_count=3
+            test "$count" -eq 3
+          elif [[ "${{ contains(github.event.head_commit.message, '[linux-perf-hotowners]') }}" == true ]]; then
+            min_count=3
+            test "$count" -eq 3
+          elif [[ "${{ contains(github.event.head_commit.message, '[linux-runtime-gcc-shmem-only]') || contains(github.event.head_commit.message, '[linux-runtime-blake2s-only]') }}" == true ]]; then
+            min_count=1
+            test "$count" -eq 1
+          fi
+          if test "$count" -ge "$min_count" && \
+             test -s "$ev/cohort.log" && \
+             { grep -Fq "COHORT_COMPILE=PASS objects=$count" "$ev/cohort.log" || \
+               grep -Fq "COHORT_CANDIDATE_CACHE=HIT objects=$count" "$ev/cohort.log"; } && \
+             test -s "$ev/minic-manifest.sha256" && \
+             test -s "$ev/minic-identity.txt" && \
+             grep -Fq "COHORT_ABI=PASS objects=$count" "$ev/cohort.log" && \
+             (cd "$ev"; sha256sum --quiet -c minic-manifest.sha256); then
+            echo "ready=true" >>"$GITHUB_OUTPUT"
+            echo "COHORT_CANDIDATE_READY=PASS objects=$count"
+          else
+            echo "ready=false" >>"$GITHUB_OUTPUT"
+            echo "COHORT_CANDIDATE_READY=FAIL count=$count (check MiniC trace, ABI and candidate hashes)" >&2
+            exit 1
+          fi
+
+      - name: Save immutable MiniC objects despite later link or QEMU failure
+        if: always() && steps.candidate_ready.outputs.ready == 'true' && steps.candidate_restore.outputs['cache-hit'] != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            build/linux-runtime-gcc-cohort-v1/minic
+            build/linux-runtime-gcc-cohort-v1/minic-manifest.sha256
+            build/linux-runtime-gcc-cohort-v1/minic-identity.txt
+          key: ${{ steps.candidate_id.outputs.key }}
+
+      - name: Preserve the three exact frozen Kbuild sources for future A-B
+        if: contains(github.event.head_commit.message, '[linux-perf-hotowners]') && steps.candidate_ready.outputs.ready == 'true' && steps.hot_sources_restore.outputs['cache-hit'] != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: build/linux-runtime-gcc-cohort-v1/boolean-hot
+          key: ${{ steps.candidate_id.outputs.key }}-hot-owner-frozen-inputs-v1
+
+      - name: Restore original SHA-frozen first500 Linux corpus
+        if: (contains(github.event.head_commit.message, '[linux-perf-symbolic-first500]') || contains(github.event.head_commit.message, '[linux-perf-integrated-first500]')) && steps.candidate_ready.outputs.ready == 'true'
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-perf-corpus
+          key: linux-6.6.143-first500-rv64-v1-${{ hashFiles('tests/external/linux/batch_probe.sh', 'tests/external/linux/probe.sh', 'tests/external/linux/replay-indices.txt') }}
+          fail-on-cache-miss: true
+
+      - name: Analyze three frozen hot owners by paired timing or opt-in phase traces
+        if: contains(github.event.head_commit.message, '[linux-perf-hotowners]') && !contains(github.event.head_commit.message, '[linux-perf-ast-footprint]') && !contains(github.event.head_commit.message, '[linux-perf-ast-growth]') && steps.candidate_ready.outputs.ready == 'true'
+        shell: bash
+        timeout-minutes: 24
+        run: |
+          set -Eeuo pipefail
+          if [[ "${{ contains(github.event.head_commit.message, '[linux-perf-hotowners]') }}" == true ]]; then
+            ev="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-v1"
+            root="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain/bin"
+            mkdir -p "$ev/boolean-hot/baseline/bin"
+            cp "$root/minic" "$ev/boolean-hot/baseline/bin/minic"
+            cp "$ev/compiler/minic-cc-before-boolean" "$ev/boolean-hot/baseline/bin/minic-cc"
+            python3 -m py_compile tools/ci/linux-perf-pinned-single-paired-ab-v1.py
+            if [[ "${{ contains(github.event.head_commit.message, '[linux-perf-codegen-use-index]') }}" == true ]]; then
+              # New hotspot family: Codegen scalar OBJECT_ADDRESS use-count
+              # previously rescans whole IR per address. Existing P14 candidate
+              # indexes ValueId uses once per function. Only this algorithm
+              # differs; frozen Linux inputs, Boolean baseline and QEMU scope
+              # stay unchanged. Do NOT apply the P15 interval pass here.
+              work="$ev/boolean-hot/codegen-use"
+              mkdir -p "$work/baseline/bin" "$work/index/bin"
+              cp "$root/minic" "$work/baseline/bin/minic"
+              cp "$root/minic" "$work/index/bin/minic"
+              cp "$root/minic-cc" "$work/baseline/bin/minic-cc"
+              python3 tools/ci/apply-perf-core-object-address-use-index-v1.py
+              make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain" \
+                "$root/minic-cc" >/dev/null
+              cp "$root/minic-cc" "$work/index/bin/minic-cc"
+              test "$(sha256sum "$work/baseline/bin/minic-cc" | cut -d' ' -f1)" != "$(sha256sum "$work/index/bin/minic-cc" | cut -d' ' -f1)"
+              git diff --check
+              if [[ "${{ contains(github.event.head_commit.message, '[linux-perf-hotowners-rotation]') }}" == true ]]; then
+                targets=(net/core/dev.o net/ipv4/tcp_input.o lib/crc32.o)
+              else
+                targets=(kernel/bpf/btf.o kernel/bpf/verifier.o net/core/filter.o)
+              fi
+              for owner in "${targets[@]}"; do
+                key="${owner//\//_}"
+                frozen="$ev/boolean-hot/$key.frozen.i"
+                test -s "$frozen"
+                python3 tools/ci/linux-perf-pinned-single-paired-ab-v1.py \
+                  --input "$frozen" \
+                  --baseline-driver "$work/baseline/bin/minic" \
+                  --candidate-driver "$work/index/bin/minic" \
+                  --repeats 2 --out "$work/results/$key" \
+                  | tee "$work/$key-screen.txt"
+                grep -Fq 'MINIC_ONE_OWNER_AB=PASS' "$work/$key-screen.txt"
+                echo "CODEGEN_USE_INDEX_SCREEN=PASS owner=$owner byte_identical=true"
+              done
+              echo "CODEGEN_USE_INDEX_GROUP=PASS owners=3 rotation=${{ contains(github.event.head_commit.message, '[linux-perf-hotowners-rotation]') }} only_codegen_use_index_changed=true QEMU_pending=true"
+            elif [[ "${{ contains(github.event.head_commit.message, '[linux-perf-core-workspace]') }}" == true ]]; then
+              # Different algorithmic family after marginal global-hash result:
+              # reuse per-TU statement-ID map instead of allocating and clearing
+              # the full Program statement map once PER Core function.
+              # Same Boolean Runtime in both arms; no Parser hash patch.
+              work="$ev/boolean-hot/core-workspace"
+              mkdir -p "$work/baseline/bin" "$work/workspace/bin"
+              cp "$root/minic" "$work/baseline/bin/minic"
+              cp "$root/minic" "$work/workspace/bin/minic"
+              cp "$root/minic-cc" "$work/baseline/bin/minic-cc"
+              python3 tools/ci/apply-perf-core-lower-statement-workspace-v1.py
+              make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain" \
+                "$root/minic-cc" >/dev/null
+              cp "$root/minic-cc" "$work/workspace/bin/minic-cc"
+              test "$(sha256sum "$work/baseline/bin/minic-cc" | cut -d' ' -f1)" != "$(sha256sum "$work/workspace/bin/minic-cc" | cut -d' ' -f1)"
+              git diff --check
+              for owner in kernel/bpf/btf.o kernel/bpf/verifier.o net/core/filter.o; do
+                key="${owner//\//_}"
+                frozen="$ev/boolean-hot/$key.frozen.i"
+                test -s "$frozen"
+                python3 tools/ci/linux-perf-pinned-single-paired-ab-v1.py \
+                  --input "$frozen" \
+                  --baseline-driver "$work/baseline/bin/minic" \
+                  --candidate-driver "$work/workspace/bin/minic" \
+                  --repeats 2 --out "$work/results/$key" \
+                  | tee "$work/$key-screen.txt"
+                grep -Fq 'MINIC_ONE_OWNER_AB=PASS' "$work/$key-screen.txt"
+                echo "CORE_WORKSPACE_SCREEN=PASS owner=$owner byte_identical=true"
+              done
+              echo 'CORE_WORKSPACE_GROUP=PASS owners=3 only_core_workspace_changed=true QEMU_pending=true'
+            elif [[ "${{ contains(github.event.head_commit.message, '[linux-perf-parser-global]') }}" == true ]]; then
+              # Isolated NEXT algorithmic question: with the same function hash
+              # enabled on both arms, does the incremental global-object hash
+              # reduce the remaining lookup cost? Keep all real frozen Linux .i
+              # and authentic Runtime+Boolean baseline unchanged.
+              work="$ev/boolean-hot/parser-global"
+              mkdir -p "$work/function/bin" "$work/function-global/bin"
+              cp "$root/minic" "$work/function/bin/minic"
+              cp "$root/minic" "$work/function-global/bin/minic"
+              python3 tools/ci/apply-perf-parser-lookup-counters-v0.py
+              python3 tools/ci/apply-perf-parser-function-hash-v0.py
+              make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain" \
+                "$root/minic-cc" >/dev/null
+              cp "$root/minic-cc" "$work/function/bin/minic-cc"
+              python3 tools/ci/apply-perf-parser-global-hash-v0.py
+              make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain" \
+                "$root/minic-cc" >/dev/null
+              cp "$root/minic-cc" "$work/function-global/bin/minic-cc"
+              test "$(sha256sum "$work/function/bin/minic-cc" | cut -d' ' -f1)" != "$(sha256sum "$work/function-global/bin/minic-cc" | cut -d' ' -f1)"
+              git diff --check
+              for owner in kernel/bpf/btf.o kernel/bpf/verifier.o net/core/filter.o; do
+                key="${owner//\//_}"
+                frozen="$ev/boolean-hot/$key.frozen.i"
+                test -s "$frozen"
+                echo "PARSER_GLOBAL_INDEX_SCREEN=START owner=$owner"
+                python3 tools/ci/linux-perf-pinned-single-paired-ab-v1.py \
+                  --input "$frozen" \
+                  --baseline-driver "$work/function/bin/minic" \
+                  --candidate-driver "$work/function-global/bin/minic" \
+                  --repeats 2 --out "$work/results/$key" \
+                  | tee "$work/$key-screen.txt"
+                grep -Fq 'MINIC_ONE_OWNER_AB=PASS' "$work/$key-screen.txt"
+                echo "PARSER_GLOBAL_INDEX_SCREEN=PASS owner=$owner byte_identical=true"
+              done
+              echo 'PARSER_GLOBAL_INDEX_GROUP=PASS owners=3 only_global_hash_changed=true QEMU_pending=true'
+            elif [[ "${{ contains(github.event.head_commit.message, '[linux-perf-parser-index]') }}" == true ]]; then
+              # A DIFFERENT algorithmic target: parser's repeated linear function
+              # lookup. Reuse the frozen BPF/net inputs; never rebuild GNU C.
+              # Both arms have identical diagnostic counters; only the lookup
+              # algorithm changes (hash index vs forward first-match scan).
+              work="$ev/boolean-hot/parser-index"
+              mkdir -p "$work/counters/bin" "$work/hash/bin"
+              cp "$root/minic" "$work/counters/bin/minic"
+              cp "$root/minic" "$work/hash/bin/minic"
+              python3 tools/ci/apply-perf-parser-lookup-counters-v0.py
+              make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain" \
+                "$root/minic-cc" >/dev/null
+              cp "$root/minic-cc" "$work/counters/bin/minic-cc"
+              python3 tools/ci/apply-perf-parser-function-hash-v0.py
+              make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain" \
+                "$root/minic-cc" >/dev/null
+              cp "$root/minic-cc" "$work/hash/bin/minic-cc"
+              test "$(sha256sum "$work/counters/bin/minic-cc" | cut -d' ' -f1)" != "$(sha256sum "$work/hash/bin/minic-cc" | cut -d' ' -f1)"
+              git diff --check
+              if [[ "${{ contains(github.event.head_commit.message, '[linux-perf-hotowners-rotation]') }}" == true ]]; then
+                targets=(net/core/dev.o net/ipv4/tcp_input.o lib/crc32.o)
+              else
+                targets=(kernel/bpf/btf.o kernel/bpf/verifier.o net/core/filter.o)
+              fi
+              for owner in "${targets[@]}"; do
+                key="${owner//\//_}"
+                test -s "$ev/boolean-hot/$key.frozen.i"
+                echo "PARSER_INDEX_SCREEN=START owner=$owner"
+                python3 tools/ci/linux-perf-pinned-single-paired-ab-v1.py \
+                  --input "$ev/boolean-hot/$key.frozen.i" \
+                  --baseline-driver "$work/counters/bin/minic" \
+                  --candidate-driver "$work/hash/bin/minic" \
+                  --repeats 2 --out "$work/results/$key" \
+                  | tee "$work/$key-screen.txt"
+                grep -Fq 'MINIC_ONE_OWNER_AB=PASS' "$work/$key-screen.txt"
+                echo "PARSER_INDEX_SCREEN=PASS owner=$owner byte_identical=true"
+              done
+              echo "PARSER_INDEX_SCREEN_GROUP=PASS owners=3 rotation=${{ contains(github.event.head_commit.message, '[linux-perf-hotowners-rotation]') }} only_function_hash_changed=true QEMU_pending=true"
+            elif [[ "${{ contains(github.event.head_commit.message, '[linux-perf-symbolic-call]') }}" == true ]]; then
+              # Genuine marginal experiment: Boolean + owner index in both
+              # arms; candidate additionally scans CALL IDs once, in order.
+              work="$ev/boolean-hot/symbolic-call"
+              mkdir -p "$work/owner/bin" "$work/owner-call/bin"
+              cp "$root/minic" "$work/owner/bin/minic"
+              cp "$root/minic" "$work/owner-call/bin/minic"
+              python3 tools/ci/apply-perf-symbolic-function-body-owner-filter-v0.py
+              make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain" "$root/minic-cc" >/dev/null
+              cp "$root/minic-cc" "$work/owner/bin/minic-cc"
+              python3 tools/ci/apply-perf-symbolic-call-index-v1.py
+              make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain" "$root/minic-cc" >/dev/null
+              cp "$root/minic-cc" "$work/owner-call/bin/minic-cc"
+              test "$(sha256sum "$work/owner/bin/minic-cc" | cut -d' ' -f1)" != "$(sha256sum "$work/owner-call/bin/minic-cc" | cut -d' ' -f1)"
+              git diff --check
+              if [[ "${{ contains(github.event.head_commit.message, '[linux-perf-hotowners-rotation]') }}" == true ]]; then
+                targets=(lib/crc32.o net/core/dev.o net/ipv4/tcp_input.o)
+              else
+                targets=(kernel/bpf/btf.o kernel/bpf/verifier.o net/core/filter.o)
+              fi
+              for owner in "${targets[@]}"; do
+                key="${owner//\//_}"
+                test -s "$ev/boolean-hot/$key.frozen.i"
+                python3 tools/ci/linux-perf-pinned-single-paired-ab-v1.py \
+                  --input "$ev/boolean-hot/$key.frozen.i" \
+                  --baseline-driver "$work/owner/bin/minic" \
+                  --candidate-driver "$work/owner-call/bin/minic" \
+                  --repeats 2 --out "$work/results/$key" | tee "$work/$key-screen.txt"
+                grep -Fq 'MINIC_ONE_OWNER_AB=PASS' "$work/$key-screen.txt"
+              done
+              echo 'SYMBOLIC_CALL_INDEX_GROUP=PASS owners=3 byte_identical=true QEMU_pending=true'
+            elif [[ "${{ contains(github.event.head_commit.message, '[linux-perf-symbolic-first500]') }}" == true || "${{ contains(github.event.head_commit.message, '[linux-perf-integrated-first500]') }}" == true ]]; then
+              work="$ev/boolean-hot/first500"
+              mkdir -p "$work/old/bin" "$work/new/bin"
+              cp "$root/minic" "$work/old/bin/minic"
+              cp "$root/minic" "$work/new/bin/minic"
+              cp "$root/minic-cc" "$work/old/bin/minic-cc"
+              python3 tools/ci/apply-perf-symbolic-function-body-owner-filter-v0.py
+              if [[ "${{ contains(github.event.head_commit.message, '[linux-perf-integrated-first500]') }}" == true ]]; then
+                # Tested constituents; prove their simultaneous source semantics
+                # against the SAME pinned 500 existing GNU Kbuild inputs.
+                python3 tools/ci/apply-perf-integer-call-expression-index-v1.py
+                python3 tools/ci/apply-perf-parser-lookup-counters-v0.py
+                python3 tools/ci/apply-perf-parser-function-hash-v0.py
+                if [[ "${{ contains(github.event.head_commit.message, '[linux-perf-owner-extra]') }}" == true ]]; then
+                  python3 tools/ci/apply-perf-integer-function-body-owner-filter-v1.py
+                fi
+              fi
+              make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain" "$root/minic-cc" >/dev/null
+              cp "$root/minic-cc" "$work/new/bin/minic-cc"
+              git diff --check
+              test -s build/linux-perf-corpus/selected-tus.txt
+              test "$(wc -l < build/linux-perf-corpus/inputs.sha256)" -eq 500
+              sha256sum --status --check build/linux-perf-corpus/inputs.sha256
+              python3 -m py_compile tools/ci/linux-perf-frozen-corpus-differential-v1.py
+              python3 tools/ci/linux-perf-frozen-corpus-differential-v1.py \
+                --corpus build/linux-perf-corpus \
+                --baseline-driver "$work/old/bin/minic" \
+                --candidate-driver "$work/new/bin/minic" --jobs 4 \
+                --out "$work/results" | tee "$work/first500-verdict.txt"
+              grep -Fq 'MINIC_FROZEN_DIFF=PASS selected=500 identical=500' "$work/first500-verdict.txt"
+              echo "PERF_FIRST500=PASS selected=500 combined=${{ contains(github.event.head_commit.message, '[linux-perf-integrated-first500]') }} integer_owner=${{ contains(github.event.head_commit.message, '[linux-perf-owner-extra]') }} QEMU_p1_not_executed=true"
+            elif [[ "${{ contains(github.event.head_commit.message, '[linux-perf-symbolic-integer-marginal]') }}" == true ]]; then
+              # Two already independently tested algorithms: quantify incremental
+              # integer-CALL-index gain while symbolic FunctionBody owner index
+              # is ON in BOTH arms. Do not combine unrelated Parser changes.
+              work="$ev/boolean-hot/symbolic-integer"
+              mkdir -p "$work/symbolic/bin" "$work/both/bin"
+              cp "$root/minic" "$work/symbolic/bin/minic"
+              cp "$root/minic" "$work/both/bin/minic"
+              python3 tools/ci/apply-perf-symbolic-function-body-owner-filter-v0.py
+              make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain" "$root/minic-cc" >/dev/null
+              cp "$root/minic-cc" "$work/symbolic/bin/minic-cc"
+              python3 tools/ci/apply-perf-integer-call-expression-index-v1.py
+              make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain" "$root/minic-cc" >/dev/null
+              cp "$root/minic-cc" "$work/both/bin/minic-cc"
+              test "$(sha256sum "$work/symbolic/bin/minic-cc" | cut -d' ' -f1)" != "$(sha256sum "$work/both/bin/minic-cc" | cut -d' ' -f1)"
+              git diff --check
+              if [[ "${{ contains(github.event.head_commit.message, '[linux-perf-hotowners-rotation]') }}" == true ]]; then
+                targets=(lib/crc32.o net/core/dev.o net/ipv4/tcp_input.o)
+              else
+                targets=(kernel/bpf/btf.o kernel/bpf/verifier.o net/core/filter.o)
+              fi
+              for owner in "${targets[@]}"; do
+                key="${owner//\//_}"
+                frozen="$ev/boolean-hot/$key.frozen.i"
+                test -s "$frozen"
+                echo "SYMBOLIC_INTEGER_MARGINAL=START owner=$owner"
+                python3 tools/ci/linux-perf-pinned-single-paired-ab-v1.py \
+                  --input "$frozen" --baseline-driver "$work/symbolic/bin/minic" \
+                  --candidate-driver "$work/both/bin/minic" \
+                  --repeats 2 --out "$work/results/$key" | tee "$work/$key-screen.txt"
+                grep -Fq 'MINIC_ONE_OWNER_AB=PASS' "$work/$key-screen.txt"
+                echo "SYMBOLIC_INTEGER_MARGINAL=PASS owner=$owner assembly_identical=true"
+              done
+              echo 'SYMBOLIC_INTEGER_MARGINAL_GROUP=PASS owners=3 only_integer_index_changed=true QEMU_pending=true'
+            elif [[ "${{ contains(github.event.head_commit.message, '[linux-perf-integer-call-index]') }}" == true ]]; then
+              work="$ev/boolean-hot/integer-call"
+              mkdir -p "$work/old/bin" "$work/new/bin"
+              cp "$root/minic" "$work/old/bin/minic"
+              cp "$root/minic" "$work/new/bin/minic"
+              cp "$root/minic-cc" "$work/old/bin/minic-cc"
+              python3 tools/ci/apply-perf-integer-call-expression-index-v1.py
+              make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain" "$root/minic-cc" >/dev/null
+              cp "$root/minic-cc" "$work/new/bin/minic-cc"
+              for owner in lib/crc32.o net/core/dev.o net/ipv4/tcp_input.o; do
+                key="${owner//\//_}"
+                python3 tools/ci/linux-perf-pinned-single-paired-ab-v1.py --input "$ev/boolean-hot/$key.frozen.i" --baseline-driver "$work/old/bin/minic" --candidate-driver "$work/new/bin/minic" --repeats 2 --out "$work/results/$key" | tee "$work/$key-screen.txt"
+              done
+              echo 'INTEGER_CALL_INDEX_GROUP=PASS owners=3'
+            elif [[ "${{ contains(github.event.head_commit.message, '[linux-perf-symbolic-owner]') }}" == true ]]; then
+              work="$ev/boolean-hot/symbolic-owner"
+              mkdir -p "$work/baseline/bin" "$work/index/bin"
+              cp "$root/minic" "$work/baseline/bin/minic"
+              cp "$root/minic" "$work/index/bin/minic"
+              cp "$root/minic-cc" "$work/baseline/bin/minic-cc"
+              python3 tools/ci/apply-perf-symbolic-function-body-owner-filter-v0.py
+              make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain" "$root/minic-cc" >/dev/null
+              cp "$root/minic-cc" "$work/index/bin/minic-cc"
+              if [[ "${{ contains(github.event.head_commit.message, '[linux-perf-hotowners-rotation]') }}" == true ]]; then
+                targets=(lib/crc32.o net/core/dev.o net/ipv4/tcp_input.o)
+              else
+                targets=(kernel/bpf/btf.o kernel/bpf/verifier.o net/core/filter.o)
+              fi
+              for owner in "${targets[@]}"; do
+                key="${owner//\//_}"
+                python3 tools/ci/linux-perf-pinned-single-paired-ab-v1.py --input "$ev/boolean-hot/$key.frozen.i" --baseline-driver "$work/baseline/bin/minic" --candidate-driver "$work/index/bin/minic" --repeats 2 --out "$work/results/$key" | tee "$work/$key-screen.txt"
+              done
+              echo 'SYMBOLIC_OWNER_GROUP=PASS owners=3 QEMU_pending=true'
+            elif [[ "${{ contains(github.event.head_commit.message, '[linux-perf-integer-owner]') }}" == true ]]; then
+              bash tools/ci/linux-perf-integer-owner-marginal-v1.sh \
+                "$ev" "$root" "${{ contains(github.event.head_commit.message, '[linux-perf-hotowners-rotation]') }}"
+            elif [[ "${{ contains(github.event.head_commit.message, '[linux-perf-combined-parser]') }}" == true ]]; then
+              bash tools/ci/linux-perf-combined-parser-marginal-v1.sh \
+                "$ev" "$root" "${{ contains(github.event.head_commit.message, '[linux-perf-hotowners-rotation]') }}"
+            elif [[ "${{ contains(github.event.head_commit.message, '[linux-perf-specialization-trace]') }}" == true || "${{ contains(github.event.head_commit.message, '[linux-perf-optimized-phase]') }}" == true ]]; then
+              bash tools/ci/linux-perf-specialization-trace-optin-v1.sh \
+                "$ev" "$root" \
+                "${{ contains(github.event.head_commit.message, '[linux-perf-hotowners-rotation]') }}" \
+                "${{ contains(github.event.head_commit.message, '[linux-perf-optimized-phase]') }}" \
+                "${{ contains(github.event.head_commit.message, '[linux-perf-symbolic-subphase]') }}" \
+                "${{ contains(github.event.head_commit.message, '[linux-perf-integer-subphase]') }}" \
+                "${{ contains(github.event.head_commit.message, '[linux-perf-profile-four-index]') }}"
+            elif [[ "${{ contains(github.event.head_commit.message, '[linux-perf-stage-profile]') }}" == true ]]; then
+              python3 tools/ci/linux-perf-phase-trace-v1.py --self-test
+              if [[ "${{ contains(github.event.head_commit.message, '[linux-perf-hotowners-rotation]') }}" == true ]]; then
+                targets=(net/core/dev.o net/ipv4/tcp_input.o lib/crc32.o)
+              else
+                targets=(kernel/bpf/btf.o kernel/bpf/verifier.o net/core/filter.o)
+              fi
+              for owner in "${targets[@]}"; do
+                key="${owner//\//_}"
+                frozen="$ev/boolean-hot/$key.frozen.i"
+                test -s "$frozen"
+                python3 tools/ci/linux-perf-phase-trace-v1.py \
+                  --input "$frozen" \
+                  --baseline "$ev/boolean-hot/baseline/bin/minic" \
+                  --candidate "$root/minic" \
+                  --out "$ev/boolean-hot/phase/$key" | tee "$ev/boolean-hot/$key-phase.txt"
+              done
+              echo "BOOL_HOT_PHASE_GROUP=PASS owners=3 rotation=${{ contains(github.event.head_commit.message, '[linux-perf-hotowners-rotation]') }} stage_traces=6_per_mode compiler_source_unchanged=true"
+            else
+            for owner in kernel/bpf/btf.o kernel/bpf/verifier.o net/core/filter.o; do
+              key="${owner//\//_}"
+              frozen="$ev/boolean-hot/$key.frozen.i"
+              test -s "$frozen"
+              result="$ev/boolean-hot/results/$key"
+              mkdir -p "$(dirname "$result")"
+              echo "BOOL_HOT_A_B=START owner=$owner"
+              python3 tools/ci/linux-perf-pinned-single-paired-ab-v1.py \
+                --input "$frozen" \
+                --baseline-driver "$ev/boolean-hot/baseline/bin/minic" \
+                --candidate-driver "$root/minic" \
+                --out "$result" | tee "$result-verdict.txt"
+              grep -Fq 'MINIC_ONE_OWNER_AB=PASS' "$result-verdict.txt"
+              python3 -c 'import json,sys; j=json.load(open(sys.argv[2])); print("BOOL_HOT_A_B=PASS owner="+sys.argv[1]+" before_ms="+str(j["baseline_median_ms"])+" after_ms="+str(j["candidate_median_ms"])+" speedup="+str(j["candidate_speedup"])+" assembly_identical="+str(j["assembly_identical"]))' "$owner" "$result/paired-result.json"
+            done
+            echo 'BOOL_HOT_A_B_GROUP=PASS owners=3 cold_workflow_reused=true QEMU_not_executed=true'
+            fi
+          fi
+
+      - name: Test 1.5x AST capacity on three actual Linux inputs
+        if: contains(github.event.head_commit.message, '[linux-perf-ast-growth]') && steps.candidate_ready.outputs.ready == 'true'
+        shell: bash
+        timeout-minutes: 18
+        run: |
+          set -Eeuo pipefail
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-v1"
+          root="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain/bin"
+          bash tools/ci/linux-perf-ast-growth-ab-v1.sh \
+            "$ev" "$root" "${{ contains(github.event.head_commit.message, '[linux-perf-hotowners-rotation]') }}"
+
+      - name: Inspect real AST memory without altering assembly
+        if: contains(github.event.head_commit.message, '[linux-perf-ast-footprint]') && steps.candidate_ready.outputs.ready == 'true'
+        shell: bash
+        timeout-minutes: 18
+        run: |
+          set -Eeuo pipefail
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-v1"
+          root="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain/bin"
+          bash tools/ci/linux-perf-ast-footprint-v1.sh \
+            "$ev" "$root" "${{ contains(github.event.head_commit.message, '[linux-perf-hotowners-rotation]') }}"
+
+      # This boundary is essential: a subsequent GNU relink/QEMU failure
+      # must NEVER waste the expensive, already-verified candidate objects.
+      - name: Prove exact Linux link blocker symbols are absent
+        if: (contains(github.event.head_commit.message, '[linux-runtime-gcc-dma-only]') || contains(github.event.head_commit.message, '[linux-runtime-gcc-link-triad]') || contains(github.event.head_commit.message, '[linux-runtime-gcc-shmem-only]')) && steps.candidate_ready.outputs.ready == 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-v1"
+          if [[ "${{ contains(github.event.head_commit.message, '[linux-runtime-gcc-dma-only]') || contains(github.event.head_commit.message, '[linux-runtime-gcc-link-triad]') }}" == true ]]; then
+            obj="$ev/minic/kernel/dma/direct.o"
+            test -s "$obj"
+            riscv64-linux-gnu-nm -u "$obj" >"$ev/dma-undefined.txt"
+            if grep -F 'arch_dma_set_uncached' "$ev/dma-undefined.txt"; then
+              echo 'GNU_MINIC_DMA_SINGLE=FAIL undefined_arch_dma_set_uncached'
+              exit 1
+            fi
+            echo 'GNU_MINIC_DMA_SINGLE=PASS missing_symbol_absent=1 exact_kernel_tu=1 abi=PASS'
+          fi
+          targets=()
+          if [[ "${{ contains(github.event.head_commit.message, '[linux-runtime-gcc-link-triad]') }}" == true ]]; then
+            targets=('mm/truncate.o:dax_delete_mapping_entry' 'mm/shmem.o:__compiletime_assert_')
+          elif [[ "${{ contains(github.event.head_commit.message, '[linux-runtime-gcc-shmem-only]') }}" == true ]]; then
+            targets=('mm/shmem.o:__compiletime_assert_')
+          fi
+          for pair in "${targets[@]}"; do
+            target=${pair%%:*}
+            bad=${pair#*:}
+            obj="$ev/minic/$target"
+            test -s "$obj"
+            name=${target##*/}
+            riscv64-linux-gnu-nm -u "$obj" >"$ev/$name.undefined.txt"
+            if grep -F "$bad" "$ev/$name.undefined.txt"; then
+              echo "GNU_MINIC_LINK_BLOCKER=FAIL owner=$target symbol=$bad"
+              exit 1
+            fi
+            echo "GNU_MINIC_LINK_BLOCKER_OWNER=PASS owner=$target symbol=$bad"
+          done
+          echo "GNU_MINIC_LINK_BLOCKERS=PASS checked=${#targets[@]}"
+
+      - name: GNU relink and QEMU from authenticated MiniC objects
+        if: "!(contains(github.event.head_commit.message, '[linux-runtime-gcc-dma-only]') || contains(github.event.head_commit.message, '[linux-runtime-gcc-link-triad]') || contains(github.event.head_commit.message, '[linux-runtime-gcc-shmem-only]') || contains(github.event.head_commit.message, '[linux-runtime-blake2s-only]') || contains(github.event.head_commit.message, '[linux-perf-hotowners]'))"
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "${{ steps.candidate_ready.outputs.ready }}" = true
+          work="$GITHUB_WORKSPACE/build/linux-runtime-gcc"
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-v1"
+          export COHORT_ALLOW_DIAGNOSTIC_384=${{ contains(github.event.head_commit.message, '[linux-runtime-gcc-384]') && '1' || '0' }}
+          export COHORT_ACTION=verify
+          bash tools/ci/linux-runtime-gcc-cohort-bisect-v1.sh \
+            "$work/linux-6.6.143" "$work/out" \
+            "$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain/bin/minic" \
+            "$work/provenance" "$ev/full-objects.txt" "$ev"
+
+      - name: Preserve compilation, GNU object identities, QEMU verdicts and bisection
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-gnu-full-c-${{ github.sha }}
+          path: |
+            build/linux-runtime-gcc-cohort-v1/full-objects.txt
+            build/linux-runtime-gcc-cohort-v1/non-c-objects.tsv
+            build/linux-runtime-gcc-cohort-v1/identity.txt
+            build/linux-runtime-gcc-cohort-v1/cohort.log
+            build/linux-runtime-gcc-cohort-v1/boolean-hot/symbolic-call/results/**/paired-result.json
+            build/linux-runtime-gcc-cohort-v1/boolean-hot/symbolic-call/*-screen.txt
+            build/linux-runtime-gcc-cohort-v1/boolean-hot/first500/results/differential.json
+            build/linux-runtime-gcc-cohort-v1/boolean-hot/first500/first500-verdict.txt
+            build/linux-runtime-gcc-cohort-v1/boolean-hot/symbolic-integer/results/**/paired-result.json
+            build/linux-runtime-gcc-cohort-v1/boolean-hot/symbolic-integer/*-screen.txt
+            build/linux-runtime-gcc-cohort-v1/boolean-hot/integer-call/results/**/paired-result.json
+            build/linux-runtime-gcc-cohort-v1/boolean-hot/integer-call/*-screen.txt
+            build/linux-runtime-gcc-cohort-v1/boolean-hot/symbolic-owner/results/**/paired-result.json
+            build/linux-runtime-gcc-cohort-v1/boolean-hot/symbolic-owner/*-screen.txt
+            build/linux-runtime-gcc-cohort-v1/boolean-hot/ast-growth/results/**/paired-result.json
+            build/linux-runtime-gcc-cohort-v1/boolean-hot/ast-growth/results/**/*-rss.txt
+            build/linux-runtime-gcc-cohort-v1/boolean-hot/ast-growth/*-verdict.txt
+            build/linux-runtime-gcc-cohort-v1/boolean-hot/ast-footprint/results/**/traced.stderr
+            build/linux-runtime-gcc-cohort-v1/boolean-hot/ast-footprint/results/**/peak-rss.txt
+            build/linux-runtime-gcc-cohort-v1/boolean-hot/integer-owner/results/**/paired-result.json
+            build/linux-runtime-gcc-cohort-v1/boolean-hot/integer-owner/*-screen.txt
+            build/linux-runtime-gcc-cohort-v1/boolean-hot/parser-combined/results/**/paired-result.json
+            build/linux-runtime-gcc-cohort-v1/boolean-hot/parser-combined/*-screen.txt
+            build/linux-runtime-gcc-cohort-v1/boolean-hot/optimized-phase-four/results/**/phases.json
+            build/linux-runtime-gcc-cohort-v1/boolean-hot/optimized-phase-four/*-verdict.txt
+            build/linux-runtime-gcc-cohort-v1/boolean-hot/optimized-phase/results/**/phases.json
+            build/linux-runtime-gcc-cohort-v1/boolean-hot/optimized-phase/*-verdict.txt
+            build/linux-runtime-gcc-cohort-v1/boolean-hot/spec-phase/results/**/phases.json
+            build/linux-runtime-gcc-cohort-v1/boolean-hot/spec-phase/*-verdict.txt
+            build/linux-runtime-gcc-cohort-v1/boolean-hot/codegen-use/results/**/paired-result.json
+            build/linux-runtime-gcc-cohort-v1/boolean-hot/codegen-use/*-screen.txt
+            build/linux-runtime-gcc-cohort-v1/boolean-hot/core-workspace/results/**/paired-result.json
+            build/linux-runtime-gcc-cohort-v1/boolean-hot/core-workspace/*-screen.txt
+            build/linux-runtime-gcc-cohort-v1/boolean-hot/parser-global/results/**/paired-result.json
+            build/linux-runtime-gcc-cohort-v1/boolean-hot/parser-global/*-screen.txt
+            build/linux-runtime-gcc-cohort-v1/boolean-hot/parser-index/results/**/paired-result.json
+            build/linux-runtime-gcc-cohort-v1/boolean-hot/parser-index/*-screen.txt
+            build/linux-runtime-gcc-cohort-v1/boolean-hot/phase/**/phases.json
+            build/linux-runtime-gcc-cohort-v1/boolean-hot/*-phase.txt
+            build/linux-runtime-gcc-cohort-v1/boolean-hot/results/**/paired-result.json
+            build/linux-runtime-gcc-cohort-v1/boolean-hot/*-verdict.txt
+            build/linux-runtime-gcc-cohort-v1/boolean-hot/*.frozen.i
+            build/linux-runtime-gcc-cohort-v1/boolean-ab/paired-result.json
+            build/linux-runtime-gcc-cohort-v1/boolean-ab/paired-verdict.txt
+            build/linux-runtime-gcc-cohort-v1/compile.log
+            build/linux-runtime-gcc-cohort-v1/compile-blockers.txt
+            build/linux-runtime-gcc-cohort-v1/mini-success-objects.txt
+            build/linux-runtime-gcc-cohort-v1/failure-pool-index.tsv
+            build/linux-runtime-gcc/out/**/*.minic-stage2.failed.i
+            build/linux-runtime-gcc/out/**/*.minic-stage2.failed.stderr
+            build/linux-runtime-gcc-cohort-v1/source-aliases.txt
+            build/linux-runtime-gcc-cohort-v1/gcc-preflight.log
+            build/linux-runtime-gcc-cohort-v1/gcc-objects-stable.sha256
+            build/linux-runtime-gcc-cohort-v1/results.tsv
+            build/linux-runtime-gcc-cohort-v1/native-S-bisect.tsv
+            build/linux-runtime-gcc-cohort-v1/native-S-localized.sha256
+            build/linux-runtime-gcc-cohort-v1/native-S-unresolved.sha256
+            build/linux-runtime-gcc-cohort-v1/native-S-*.sha256
+            build/linux-runtime-gcc-cohort-v1/minic-manifest.sha256
+            build/linux-runtime-gcc-cohort-v1/minic-identity.txt
+            build/linux-runtime-gcc-cohort-v1/dma-undefined.txt
+            build/linux-runtime-gcc-cohort-v1/*.undefined.txt
+            build/linux-runtime-gcc-cohort-v1/shmem-assert-context.txt
+            build/linux-runtime-gcc-cohort-v1/frontier.txt
+            build/linux-runtime-gcc-cohort-v1/trials/*/link.log
+            build/linux-runtime-gcc-cohort-v1/trials/*/link-repaired.log
+            build/linux-runtime-gcc-cohort-v1/trials/*/guard.log
+            build/linux-runtime-gcc-cohort-v1/trials/*/generated-before.json
+            build/linux-runtime-gcc-cohort-v1/trials/*/selected-objects.txt
+            build/linux-runtime-gcc-cohort-v1/trials/*/runtime.log
+            build/linux-runtime-gcc-cohort-v1/trials/*/qemu-registers.jsonl
+            build/linux-runtime-gcc-cohort-v1/trials/*/qmp-probe.log
+            build/linux-runtime-gcc-cohort-v1/trials/*/qmp-symbols.log
+            build/linux-runtime-gcc-cohort-v1/trials/*/runtime-p1.log
+            build/linux-runtime-gcc-cohort-v1/trials/*/runtime-p1-python.log
+            build/linux-runtime-gcc-cohort-v1/trials/*/qemu-p1/*.log
+            build/linux-runtime-gcc-cohort-v1/trials/*/qemu/*.log
+            build/linux-runtime-gcc-cohort-v1/compiler/toolchain-timing.txt
+          if-no-files-found: warn
+          retention-days: 7
+
+  # Explicit, optional 7-runner producer for the same pure-GCC C universe.
+  # Do not use this lane for everyday single-TU debugging.
+  gcc-shards:
+    if: github.event_name == 'push' && (contains(github.event.head_commit.message, '[linux-perf-2064-ab]') || contains(github.event.head_commit.message, '[linux-runtime-gcc-sharded]') || contains(github.event.head_commit.message, '[linux-minias-seven-shards]') || (contains(github.event.head_commit.message, '[linux-minipp-seven-integration]') && !contains(github.event.head_commit.message, '[linux-minipp-seven-replay]')))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5, 6]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Install pinned GNU RISC-V build tools
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get -o Acquire::Retries=2 install -y --no-install-recommends \
+            gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
+            libc6-dev-riscv64-cross python3 make cpio gzip || {
+              sudo apt-get -o Acquire::Retries=3 update
+              sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+                gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
+                libc6-dev-riscv64-cross python3 make cpio gzip
+            }
+
+      - name: Identify certified exact-config GNU golden pool
+        id: gnu
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          config=eeb04f304ebfb97a1079c187dc0c2ea3cc61fc50a55aa3cc776237c16ab19bbe
+          gcc_sig=$(sha256sum "$(command -v riscv64-linux-gnu-gcc)" | cut -c1-16)
+          ld_sig=$(sha256sum "$(command -v riscv64-linux-gnu-ld)" | cut -c1-16)
+          echo "key=linux-gnu-golden-v1-6.6.143-$config-$gcc_sig-$ld_sig" >>"$GITHUB_OUTPUT"
+
+      - uses: actions/cache/restore@v4
+        with:
+          path: |
+            build/linux-runtime-gcc/out
+            build/linux-runtime-gcc/provenance
+          key: ${{ steps.gnu.outputs.key }}
+          fail-on-cache-miss: true
+
+      - uses: ./.github/actions/linux-runtime-restore-fixture
+        with:
+          fixture: source
+
+      # Seven real runners now partition GNU-E -> MiniC-S -> MiniAS, instead
+      # of squeezing all 2064 TUs onto a single 4-worker runner. Keep the
+      # historical seven-way C-object producer untouched and simply re-route
+      # its opt-in seven matrix workers for this independent MiniAS sweep.
+      - name: Identify exact 2064-object MiniC cache for native seven-way assembly
+        if: contains(github.event.head_commit.message, '[linux-minias-seven-shards]')
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ev="$GITHUB_WORKSPACE/build/minias-seven-shards-v1/shard-${{ matrix.shard }}"
+          mkdir -p "$ev"
+          python3 tools/ci/linux-runtime-gcc-full-c-objects-v1.py \
+            --out "$GITHUB_WORKSPACE/build/linux-runtime-gcc/out" \
+            --manifest "$GITHUB_WORKSPACE/build/linux-runtime-gcc/provenance/gcc-objects.sha256" \
+            --prefix tools/ci/linux-runtime-gcc-cohort-objects-v1.txt \
+            --output "$ev/full-objects.txt" \
+            --excluded "$ev/non-c-objects.tsv" \
+            --min-c-objects 1200
+          profile=$(python3 tools/ci/linux-runtime-profile-cache-id-v1.py)
+          profile="${profile}-full-crossblock-pure-eq-v1-$(sha256sum tools/ci/apply-riscv64-p1-defined-before-use-crossblock-v1.py | cut -c1-16)"
+          objects=$(sha256sum "$ev/full-objects.txt" | cut -d' ' -f1)
+          gcc=$(sha256sum "$(command -v riscv64-linux-gnu-gcc)" | cut -d' ' -f1)
+          assembler=$(sha256sum "$(command -v riscv64-linux-gnu-as)" | cut -d' ' -f1)
+          echo "FULL_MINIC_KEY=gnu-minic-objects-v1-eeb04f304ebfb97a1079c187dc0c2ea3cc61fc50a55aa3cc776237c16ab19bbe-$profile-$objects-$gcc-$assembler" >>"$GITHUB_ENV"
+
+      - name: Restore immutable full MiniC object pool on this MiniAS worker
+        id: minias_shard_original_cache
+        if: contains(github.event.head_commit.message, '[linux-minias-seven-shards]')
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            build/linux-runtime-gcc-cohort-v1/minic
+            build/linux-runtime-gcc-cohort-v1/minic-manifest.sha256
+            build/linux-runtime-gcc-cohort-v1/minic-identity.txt
+          key: ${{ env.FULL_MINIC_KEY }}
+          fail-on-cache-miss: true
+
+      - name: Restore this worker's immutable MiniC S assembly cache
+        id: minias_shard_s_cache
+        if: contains(github.event.head_commit.message, '[linux-minias-seven-shards]')
+        uses: actions/cache/restore@v4
+        with:
+          path: build/minias-linux-corpus-v1/assembly
+          key: ${{ env.FULL_MINIC_KEY }}-minias-seven-shards-v1-${{ matrix.shard }}
+          restore-keys: ${{ env.FULL_MINIC_KEY }}-minias-corpus-s-v1-64
+
+      - name: Sweep assigned one-seventh of real Linux C owners through MiniAS
+        if: contains(github.event.head_commit.message, '[linux-minias-seven-shards]')
+        shell: bash
+        timeout-minutes: 60
+        run: |
+          set -Eeuo pipefail
+          test "${{ steps.minias_shard_original_cache.outputs.cache-hit }}" = true
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-v1"
+          (cd "$ev" && sha256sum --quiet -c minic-manifest.sha256)
+          src="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0/linux-6.6.143"
+          work="$GITHUB_WORKSPACE/build/linux-runtime-gcc"
+          test -d "$src"
+          cp -a --reflink=auto "$src" "$work/linux-6.6.143"
+          MINIC_LINUX_FULL_CROSSBLOCK=1 MINIC_OPT_PURE_DISCARDED_ADDRESS_EQ=1 \
+            bash tools/ci/linux-runtime-build-minic-profile-v1.sh \
+              "$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain" \
+              "$GITHUB_WORKSPACE/build/minias-seven-shards-v1/shard-${{ matrix.shard }}/compiler"
+          tools="$GITHUB_WORKSPACE/build/minias-linux-corpus-v1-tools"
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$tools" "$tools/bin/minic-as"
+          python3 tools/ci/minias-linux-full-corpus-v1.py \
+            --golden-out "$GITHUB_WORKSPACE/build/linux-runtime-gcc/out" \
+            --candidate-pool "$ev/minic" \
+            --manifest "$ev/minic-manifest.sha256" \
+            --minic "$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain/bin/minic" \
+            --minias "$tools/bin/minic-as" \
+            --work "$GITHUB_WORKSPACE/build/minias-linux-corpus-v1" \
+            --cache-identity "$FULL_MINIC_KEY" \
+            --shard ${{ matrix.shard }} --shards 7 --jobs 2
+
+      - name: Cache this seventh of MiniC S inputs (even when MiniAS has gaps)
+        if: always() && contains(github.event.head_commit.message, '[linux-minias-seven-shards]') && steps.minias_shard_s_cache.outputs.cache-hit != 'true' && hashFiles('build/minias-linux-corpus-v1/assembly/index.json') != ''
+        uses: actions/cache/save@v4
+        with:
+          path: build/minias-linux-corpus-v1/assembly
+          key: ${{ env.FULL_MINIC_KEY }}-minias-seven-shards-v1-${{ matrix.shard }}
+
+      - name: Preserve verified shard report and retained assemblies for merge
+        if: always() && contains(github.event.head_commit.message, '[linux-minias-seven-shards]')
+        uses: actions/upload-artifact@v4
+        with:
+          name: minias-seven-corpus-${{ matrix.shard }}-${{ github.sha }}
+          path: |
+            build/minias-linux-corpus-v1/full-summary.json
+            build/minias-linux-corpus-v1/full-scan.tsv
+            build/minias-linux-corpus-v1/assembly/**/*.s
+            build/minias-linux-corpus-v1/assembly/index.json
+            build/minias-linux-corpus-v1/evidence/**/*.minias.log
+          retention-days: 3
+          if-no-files-found: warn
+
+      - name: Derive identical full universe and this shard
+        if: "!contains(github.event.head_commit.message, '[linux-minias-seven-shards]')"
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-gcc-shards-v1/shard-${{ matrix.shard }}"
+          mkdir -p "$ev"
+          python3 tools/ci/linux-runtime-gcc-full-c-objects-v1.py \
+            --out "$GITHUB_WORKSPACE/build/linux-runtime-gcc/out" \
+            --manifest "$GITHUB_WORKSPACE/build/linux-runtime-gcc/provenance/gcc-objects.sha256" \
+            --prefix tools/ci/linux-runtime-gcc-cohort-objects-v1.txt \
+            --output "$ev/all-objects.txt" \
+            --excluded "$ev/non-c-objects.tsv" \
+            --min-c-objects 1200
+          python3 tools/ci/linux-runtime-gcc-shards-v1.py split \
+            --full "$ev/all-objects.txt" \
+            --shard ${{ matrix.shard }} --output "$ev/full-objects.txt"
+
+      # Reuse precisely the existing seven GitHub runners and their
+      # SHA-attested GNU Linux golden reference, not a new workflow or a
+      # serial 2064-TU compile. Initially sample two real Kbuild C owners
+      # per worker; scale from 32 each (224/224 passed) to the
+      # entire frozen 2064 owners in [linux-minipp-seven-full] mode.
+      # Each actual native .o consumes MiniPP's own .i and is kept
+      # as a SHA-attested Kbuild-path artifact for later Kbuild merge.
+      - name: MiniPP to MiniC to MiniAS on this seventh of real Linux owners
+        if: contains(github.event.head_commit.message, '[linux-minipp-seven-integration]')
+        shell: bash
+        timeout-minutes: 65
+        run: |
+          set -Eeuo pipefail
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-gcc-shards-v1/shard-${{ matrix.shard }}"
+          stage="$GITHUB_WORKSPACE/build/minipp-seven-native/shard-${{ matrix.shard }}"
+          src="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0/linux-6.6.143"
+          test -s "$ev/all-objects.txt"
+          test -d "$src"
+          # Saved GNU Kbuild .o.cmd inputs refer to this exact Linux
+          # source path. The seven-way immutable golden restore stores
+          # source elsewhere: mount it read-only by symlink, do not rewrite
+          # the authoritative command or duplicate the large source tree.
+          test ! -e "$GITHUB_WORKSPACE/build/linux-runtime-gcc/linux-6.6.143"
+          ln -s "$src" "$GITHUB_WORKSPACE/build/linux-runtime-gcc/linux-6.6.143"
+          MINIC_LINUX_FULL_CROSSBLOCK=1 MINIC_OPT_PURE_DISCARDED_ADDRESS_EQ=1 \
+            bash tools/ci/linux-runtime-build-minic-profile-v1.sh \
+              "$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain" \
+              "$stage/compiler"
+          tools="$GITHUB_WORKSPACE/build/minipp-seven-tools"
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$tools" \
+            "$tools/bin/minic-cpp" "$tools/bin/minic-as"
+          python3 tools/ci/minipp-linux-seven-native-stage-v1.py \
+            --out "$GITHUB_WORKSPACE/build/linux-runtime-gcc/out" \
+            --src "$src" --owner-list "$ev/all-objects.txt" \
+            --stage "$stage" \
+            --minipp "$tools/bin/minic-cpp" \
+            --minic-cc "$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain/bin/minic-cc" \
+            --minias "$tools/bin/minic-as" \
+            --shard ${{ matrix.shard }} --shards 7 \
+            --sample-per-shard ${{ contains(github.event.head_commit.message, '[linux-minipp-seven-full]') && '0' || '32' }}
+
+      - name: Preserve seven-way actual MiniPP to MiniC native evidence
+        if: always() && contains(github.event.head_commit.message, '[linux-minipp-seven-integration]')
+        uses: actions/upload-artifact@v4
+        with:
+          name: minipp-native-shard-${{ matrix.shard }}-${{ github.sha }}
+          path: |
+            build/minipp-seven-native/shard-${{ matrix.shard }}/summary.json
+            build/minipp-seven-native/shard-${{ matrix.shard }}/results.json
+            build/minipp-seven-native/shard-${{ matrix.shard }}/native-manifest.sha256
+            build/minipp-seven-native/shard-${{ matrix.shard }}/native-objects/**/*.o
+            build/minipp-seven-native/shard-${{ matrix.shard }}/**/*.log
+            build/minipp-seven-native/shard-${{ matrix.shard }}/**/*.diff
+          retention-days: 3
+          if-no-files-found: warn
+
+      - name: Identify immutable MiniC shard artifact
+        if: "!contains(github.event.head_commit.message, '[linux-minias-seven-shards]') && !contains(github.event.head_commit.message, '[linux-minipp-seven-integration]')"
+        id: candidate
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          # Profile source identity MUST be obtained before patching src/.
+          profile=$(python3 tools/ci/linux-runtime-profile-cache-id-v1.py)
+          if [[ "${{ contains(github.event.head_commit.message, '[linux-runtime-full-crossblock]') && '1' || '0' }}" == 1 ]]; then
+            profile="${profile}-full-crossblock-pure-eq-v1-$(sha256sum tools/ci/apply-riscv64-p1-defined-before-use-crossblock-v1.py | cut -c1-16)"
+          fi
+          if [[ "${{ contains(github.event.head_commit.message, '[linux-perf-integrated-full]') }}" == true ]]; then
+            perf_tag=$(sha256sum tools/ci/linux-perf-integrated-full-profile-v1.sh \
+              tools/ci/apply-perf-symbolic-function-body-owner-filter-v0.py \
+              tools/ci/apply-perf-integer-call-expression-index-v1.py \
+              tools/ci/apply-perf-parser-lookup-counters-v0.py \
+              tools/ci/apply-perf-parser-function-hash-v0.py | sha256sum | cut -c1-16)
+            profile="${profile}-perf-integrated-3-v1-${perf_tag}"
+          fi
+          subset=$(sha256sum "build/linux-runtime-gcc-shards-v1/shard-${{ matrix.shard }}/full-objects.txt" | cut -d' ' -f1)
+          gcc=$(sha256sum "$(command -v riscv64-linux-gnu-gcc)" | cut -d' ' -f1)
+          assembler=$(sha256sum "$(command -v riscv64-linux-gnu-as)" | cut -d' ' -f1)
+          echo "key=gnu-minic-shard-v1-eeb04f304ebfb97a1079c187dc0c2ea3cc61fc50a55aa3cc776237c16ab19bbe-$profile-$subset-$gcc-$assembler" >>"$GITHUB_OUTPUT"
+
+      - name: Restore this shard's immutable candidate objects
+        if: "!contains(github.event.head_commit.message, '[linux-minias-seven-shards]') && !contains(github.event.head_commit.message, '[linux-minipp-seven-integration]') && !contains(github.event.head_commit.message, '[linux-perf-2064-ab]')"
+        id: shard_cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            build/linux-runtime-gcc-shards-v1/shard-${{ matrix.shard }}/minic
+            build/linux-runtime-gcc-shards-v1/shard-${{ matrix.shard }}/minic-manifest.sha256
+            build/linux-runtime-gcc-shards-v1/shard-${{ matrix.shard }}/minic-identity.txt
+          key: ${{ steps.candidate.outputs.key }}
+
+      - name: Build MiniC and prove this exact shard
+        if: "!contains(github.event.head_commit.message, '[linux-minias-seven-shards]') && !contains(github.event.head_commit.message, '[linux-minipp-seven-integration]')"
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-runtime-gcc"
+          src="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0/linux-6.6.143"
+          test -d "$src"
+          test ! -e "$work/linux-6.6.143"
+          cp -a --reflink=auto "$src" "$work/linux-6.6.143"
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-gcc-shards-v1/shard-${{ matrix.shard }}"
+          if [[ "${{ contains(github.event.head_commit.message, '[linux-runtime-full-crossblock]') && '1' || '0' }}" == 1 ]]; then
+            export MINIC_LINUX_FULL_CROSSBLOCK=1 MINIC_OPT_PURE_DISCARDED_ADDRESS_EQ=1
+            echo "LINUX_FULL_CROSSBLOCK=PRODUCER_START shard=${{ matrix.shard }}/7 pure_eq=1 all_C_optin=true"
+          fi
+          bash tools/ci/linux-runtime-build-minic-profile-v1.sh \
+            "$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain" "$ev/compiler"
+          if [[ "${{ contains(github.event.head_commit.message, '[linux-perf-2064-ab]') }}" == true ]]; then
+            test "${{ contains(github.event.head_commit.message, '[linux-perf-integrated-full]') }}" = true
+            mkdir -p "$ev/perf-before/bin"
+            cp -p "$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain/bin/minic" \
+                  "$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain/bin/minic-cc" \
+                  "$ev/perf-before/bin/"
+            echo "MINIC_FULL_PERF_AB=BASELINE_SAVED mode=runtime_crossblock"
+          fi
+          if [[ "${{ contains(github.event.head_commit.message, '[linux-perf-integrated-full]') }}" == true ]]; then
+            bash tools/ci/linux-perf-integrated-full-profile-v1.sh \
+              "$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain" "$ev/compiler"
+            echo "LINUX_PERF_3_SHARD=READY shard=${{ matrix.shard }}/7"
+          fi
+          export COHORT_ACTION=compile COHORT_ALLOW_SHARD=1
+          if [[ "${{ contains(github.event.head_commit.message, '[linux-perf-2064-ab]') }}" == true ]]; then
+            export COHORT_PERF_2064_AB=1
+            export COHORT_PERF_2064_BASELINE="$ev/perf-before/bin/minic"
+            export COHORT_PROFILE_STAGES=0
+          fi
+          if [[ "${{ contains(github.event.head_commit.message, '[linux-perf-integrated-full]') }}" == true ]]; then
+            export COHORT_GNU_PREFLIGHT_ALLOW_SEVEN_SHARD_VOLATILE=1
+          fi
+          bash tools/ci/linux-runtime-gcc-cohort-bisect-v1.sh \
+            "$work/linux-6.6.143" "$work/out" \
+            "$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain/bin/minic" \
+            "$work/provenance" "$ev/full-objects.txt" "$ev"
+
+      - name: Authenticate shard before cache or export
+        if: "!contains(github.event.head_commit.message, '[linux-minias-seven-shards]') && !contains(github.event.head_commit.message, '[linux-minipp-seven-integration]')"
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ev="build/linux-runtime-gcc-shards-v1/shard-${{ matrix.shard }}"
+          n=$(grep -cE '^[^#[:space:]]+\.o$' "$ev/full-objects.txt")
+          test "$n" -gt 0
+          grep -Fq "COHORT_ABI=PASS objects=$n" "$ev/cohort.log"
+          grep -Fq "COHORT_PRODUCE_ONLY=PASS objects=$n" "$ev/cohort.log"
+          test -s "$ev/minic-identity.txt"
+          (cd "$ev"; sha256sum --quiet -c minic-manifest.sha256)
+          echo "GNU_MINIC_SHARD_READY=PASS shard=${{ matrix.shard }} objects=$n"
+
+      - name: Cache completed shard independently of later link failures
+        if: "!contains(github.event.head_commit.message, '[linux-minias-seven-shards]') && !contains(github.event.head_commit.message, '[linux-minipp-seven-integration]') && !contains(github.event.head_commit.message, '[linux-perf-2064-ab]') && steps.shard_cache.outputs['cache-hit'] != 'true'"
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            build/linux-runtime-gcc-shards-v1/shard-${{ matrix.shard }}/minic
+            build/linux-runtime-gcc-shards-v1/shard-${{ matrix.shard }}/minic-manifest.sha256
+            build/linux-runtime-gcc-shards-v1/shard-${{ matrix.shard }}/minic-identity.txt
+          key: ${{ steps.candidate.outputs.key }}
+
+      - name: Transfer only candidate objects and attestations
+        if: "!contains(github.event.head_commit.message, '[linux-minias-seven-shards]') && !contains(github.event.head_commit.message, '[linux-minipp-seven-integration]') && !contains(github.event.head_commit.message, '[linux-perf-2064-ab]')"
+        uses: actions/upload-artifact@v4
+        with:
+          name: shard-${{ matrix.shard }}
+          path: |
+            build/linux-runtime-gcc-shards-v1/shard-${{ matrix.shard }}/minic
+            build/linux-runtime-gcc-shards-v1/shard-${{ matrix.shard }}/minic-manifest.sha256
+            build/linux-runtime-gcc-shards-v1/shard-${{ matrix.shard }}/minic-identity.txt
+            build/linux-runtime-gcc-shards-v1/shard-${{ matrix.shard }}/full-objects.txt
+            build/linux-runtime-gcc-shards-v1/shard-${{ matrix.shard }}/cohort.log
+          if-no-files-found: error
+          retention-days: 3
+
+      - name: Preserve MiniC 2064 real-input A/B timings without reuploading objects
+        if: always() && contains(github.event.head_commit.message, '[linux-perf-2064-ab]')
+        uses: actions/upload-artifact@v4
+        with:
+          name: minic-perf-2064-ab-shard-${{ matrix.shard }}-${{ github.sha }}
+          path: |
+            build/linux-runtime-gcc-shards-v1/shard-${{ matrix.shard }}/perf-ab.tsv
+            build/linux-runtime-gcc-shards-v1/shard-${{ matrix.shard }}/perf-ab-summary.json
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Keep bounded failed-TU evidence
+        if: failure() && !contains(github.event.head_commit.message, '[linux-minias-seven-shards]') && !contains(github.event.head_commit.message, '[linux-minipp-seven-integration]')
+        uses: actions/upload-artifact@v4
+        with:
+          name: debug-shard-${{ matrix.shard }}
+          path: |
+            build/linux-runtime-gcc-shards-v1/shard-${{ matrix.shard }}/compile.log
+            build/linux-runtime-gcc-shards-v1/shard-${{ matrix.shard }}/compile-blockers.txt
+            build/linux-runtime-gcc-shards-v1/shard-${{ matrix.shard }}/failure-pool-index.tsv
+            build/linux-runtime-gcc/out/**/*.minic-stage2.failed.i
+            build/linux-runtime-gcc/out/**/*.minic-stage2.failed.stderr
+          if-no-files-found: ignore
+          retention-days: 3
+
+  gcc-shard-verify:
+    needs: gcc-shards
+    # Use the SAME receiver job for exact immutable Image reboots. When the
+    # seven producer jobs are skipped, always() prevents needs' implicit skip;
+    # the ordinary full-shard path still requires a successful producer.
+    if: always() && github.event_name == 'push' && ((contains(github.event.head_commit.message, '[linux-runtime-gcc-sharded]') && needs.gcc-shards.result == 'success') || (contains(github.event.head_commit.message, '[linux-minipp-seven-integration]') && needs.gcc-shards.result == 'success') || (contains(github.event.head_commit.message, '[linux-minipp-seven-replay]') && needs.gcc-shards.result == 'skipped') || contains(github.event.head_commit.message, '[linux-runtime-large-image-qemu]') || contains(github.event.head_commit.message, '[linux-runtime-p1-frame-audit]') || contains(github.event.head_commit.message, '[linux-runtime-stack-owners]') || contains(github.event.head_commit.message, '[linux-native-union-cached]') || contains(github.event.head_commit.message, '[linux-minild-cached-replay]') || contains(github.event.head_commit.message, '[linux-minild-reloc-cached-replay]') || contains(github.event.head_commit.message, '[linux-minild-purgatory-cached-replay]') || contains(github.event.head_commit.message, '[linux-minild-vdso64-cached-replay]') || contains(github.event.head_commit.message, '[linux-minias-earlycon-frozen]'))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 95
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Install minimal pinned GNU binutils and GCC for P1 object-only audit
+        if: contains(github.event.head_commit.message, '[linux-runtime-p1-frame-audit]')
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get -o Acquire::Retries=2 install -y --no-install-recommends \
+            gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu python3
+
+      - name: Install only GNU RISC-V binutils for frozen MiniAS differential
+        if: contains(github.event.head_commit.message, '[linux-minias-earlycon-frozen]')
+        timeout-minutes: 5
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get -o Acquire::Retries=2 install -y --no-install-recommends \
+            binutils-riscv64-linux-gnu
+
+      - name: Install pinned GNU RISC-V tools and QEMU
+        # Azure apt mirror transiently exceeded 5m (run 38256038299); allow
+        # package downloads without mistaking environment for compiler failure.
+        timeout-minutes: 12
+        if: "!contains(github.event.head_commit.message, '[linux-runtime-p1-frame-audit]') && !contains(github.event.head_commit.message, '[linux-minias-earlycon-frozen]')"
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get -o Acquire::Retries=2 install -y --no-install-recommends \
+            gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
+            qemu-system-misc opensbi libc6-dev-riscv64-cross \
+            python3 make cpio gzip device-tree-compiler || {
+              sudo apt-get -o Acquire::Retries=3 update
+              sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+                gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
+                qemu-system-misc opensbi libc6-dev-riscv64-cross python3 make cpio gzip device-tree-compiler gdb-multiarch
+            }
+
+      # Reuse the exact 215511040-byte Image from the previous 2064-object
+      # successful GNU link. This opt-in path never rebuilds or relinks C.
+      - name: Restore immutable full MiniC Linux Image from earlier CI
+        if: contains(github.event.head_commit.message, '[linux-runtime-large-image-qemu]')
+        uses: actions/download-artifact@v4
+        with:
+          # Opt-in accepted P1 variant is the authenticated 24/24 eight-owner
+          # artifact; historical default remains strictly unchanged.
+          run-id: ${{ contains(github.event.head_commit.message, '[linux-runtime-p1-accepted-replay]') && '38390921455' || '38204602644' }}
+          github-token: ${{ github.token }}
+          name: ${{ contains(github.event.head_commit.message, '[linux-runtime-p1-accepted-replay]') && 'sharded-gnu-minic-QEMU-9bf648d989ec652de0618ecdd1ccf159a8a836b5' || 'sharded-gnu-minic-QEMU-d5dde03594665842f2bb3b8556f842f511a5dfa4' }}
+          path: build/linux-runtime-large-image-qemu-v0/source-artifact
+
+      - name: Run original Image in 2G QEMU against P0 P1 and shell oracles
+        if: contains(github.event.head_commit.message, '[linux-runtime-large-image-qemu]')
+        shell: bash
+        env:
+          ACCEPTED_P1: ${{ contains(github.event.head_commit.message, '[linux-runtime-p1-accepted-replay]') && '1' || '0' }}
+        run: |
+          set -Eeuo pipefail
+          if [[ "$ACCEPTED_P1" == 1 ]]; then
+            export LINUX_LARGE_IMAGE_SUBPATH='*/trials/p1_defined_crossblock_1/Image'
+            export LINUX_LARGE_IMAGE_SHA=6f094d58e21de4b41fac7fffc1207b42dd04f5dd739c24f3d7107b1a944084f4
+            export LINUX_LARGE_IMAGE_SOURCE_RUN=38390921455
+            export LINUX_LARGE_IMAGE_SOURCE_COMMIT=9bf648d989ec652de0618ecdd1ccf159a8a836b5
+            export LINUX_LARGE_IMAGE_VERIFY_ACCEPTED_P1=1
+            echo "P1_ACCEPTED_NO_RECOMPILE=START minic_c=2064 prior_p1=24/24 profiles=fast,shell,p1"
+          fi
+          bash tools/ci/linux-runtime-large-image-qemu-v0.sh \
+            "$GITHUB_WORKSPACE/build/linux-runtime-large-image-qemu-v0/source-artifact"
+          if [[ "$ACCEPTED_P1" == 1 ]]; then
+            echo "P1_ACCEPTED_NO_RECOMPILE=PASS profiles=fast,shell,p1 image_unchanged=true original_16KiB=true"
+          fi
+
+      - name: Preserve exact large Image boot and failure evidence
+        if: always() && contains(github.event.head_commit.message, '[linux-runtime-large-image-qemu]')
+        uses: actions/upload-artifact@v4
+        with:
+          name: minic-large-image-qemu-${{ github.sha }}
+          path: |
+            build/linux-runtime-large-image-qemu-v0/provenance.txt
+            build/linux-runtime-large-image-qemu-v0/initramfs.log
+            build/linux-runtime-large-image-qemu-v0/*.stdout.log
+            build/linux-runtime-large-image-qemu-v0/qemu-*/*.log
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Install P1 RISC-V GDB debugger
+        if: contains(github.event.head_commit.message, '[linux-runtime-gdb-stack]') || contains(github.event.head_commit.message, '[linux-runtime-p1-pair-debug]') || contains(github.event.head_commit.message, '[linux-runtime-p1-sched-chain]')
+        timeout-minutes: 5
+        run: |
+          sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 install -y --no-install-recommends gdb-multiarch
+
+      - name: Download SHA-pinned real MiniC-generated earlycon assembly from P1-accepted run
+        if: contains(github.event.head_commit.message, '[linux-minias-earlycon-frozen]')
+        uses: actions/download-artifact@v4
+        with:
+          repository: ${{ github.repository }}
+          run-id: 38426379946
+          github-token: ${{ github.token }}
+          name: sharded-gnu-minic-QEMU-088b8ef0a30154e1eeaeb145107a1b51c07ba996
+          path: build/minias-earlycon-frozen-artifact
+
+      - name: Differential-assemble identical real Linux earlycon.s using GNU AS and MiniAS
+        if: contains(github.event.head_commit.message, '[linux-minias-earlycon-frozen]')
+        shell: bash
+        timeout-minutes: 4
+        run: |
+          set -Eeuo pipefail
+          bash tools/ci/minias-linux-frozen-earlycon-v1.sh \
+            "$GITHUB_WORKSPACE/build/minias-earlycon-frozen-artifact" \
+            "$GITHUB_WORKSPACE/build/minias-earlycon-frozen-tools" \
+            "$GITHUB_WORKSPACE/build/minias-earlycon-frozen-evidence"
+
+      - name: Preserve exact MiniAS real assembly first-blocker and GNU oracle
+        if: always() && contains(github.event.head_commit.message, '[linux-minias-earlycon-frozen]')
+        uses: actions/upload-artifact@v4
+        with:
+          name: minias-earlycon-frozen-${{ github.sha }}
+          path: |
+            build/minias-earlycon-frozen-evidence/*.txt
+            build/minias-earlycon-frozen-evidence/*.stderr
+            build/minias-earlycon-frozen-evidence/*.stdout
+            build/minias-earlycon-frozen-evidence/*.sha256
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Restore identical certified GNU golden objects
+        if: "!contains(github.event.head_commit.message, '[linux-runtime-large-image-qemu]') && !contains(github.event.head_commit.message, '[linux-minias-earlycon-frozen]')"
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          config=eeb04f304ebfb97a1079c187dc0c2ea3cc61fc50a55aa3cc776237c16ab19bbe
+          gcc_sig=$(sha256sum "$(command -v riscv64-linux-gnu-gcc)" | cut -c1-16)
+          ld_sig=$(sha256sum "$(command -v riscv64-linux-gnu-ld)" | cut -c1-16)
+          echo "GNU_GOLDEN_KEY=linux-gnu-golden-v1-6.6.143-$config-$gcc_sig-$ld_sig"
+          echo "key=linux-gnu-golden-v1-6.6.143-$config-$gcc_sig-$ld_sig" >>"$GITHUB_ENV"
+
+      - uses: actions/cache/restore@v4
+        if: "!contains(github.event.head_commit.message, '[linux-runtime-large-image-qemu]') && !contains(github.event.head_commit.message, '[linux-minias-earlycon-frozen]')"
+        with:
+          path: |
+            build/linux-runtime-gcc/out
+            build/linux-runtime-gcc/provenance
+          key: ${{ env.key }}
+          fail-on-cache-miss: true
+
+      - uses: ./.github/actions/linux-runtime-restore-fixture
+        if: "!contains(github.event.head_commit.message, '[linux-runtime-large-image-qemu]') && !contains(github.event.head_commit.message, '[linux-runtime-p1-frame-audit]') && !contains(github.event.head_commit.message, '[linux-minias-earlycon-frozen]')"
+        with:
+          fixture: source
+
+      - name: Probe exact Linux 64-bit vDSO shared GNU LD boundary against MiniLD
+        if: contains(github.event.head_commit.message, '[linux-minild-vdso64-cached-replay]')
+        timeout-minutes: 5
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -s "$GITHUB_WORKSPACE/build/linux-runtime-gcc/provenance/gcc-objects.sha256"
+          bash tools/ci/minild-linux-cache-vdso64-replay-v1.sh \
+            "$GITHUB_WORKSPACE/build/linux-runtime-gcc/out" \
+            "$GITHUB_WORKSPACE/build/minild-cached-vdso64-tools" \
+            "$GITHUB_WORKSPACE/build/minild-cached-vdso64-v1"
+
+      - name: Preserve GNU 64-bit vDSO exact shared-link gap and ELF evidence
+        if: always() && contains(github.event.head_commit.message, '[linux-minild-vdso64-cached-replay]')
+        uses: actions/upload-artifact@v4
+        with:
+          name: minild-vdso64-replay-${{ github.sha }}
+          path: |
+            build/minild-cached-vdso64-v1/*.txt
+            build/minild-cached-vdso64-v1/*.tsv
+            build/minild-cached-vdso64-v1/*.stderr
+            build/minild-cached-vdso64-v1/*.stdout
+            build/minild-cached-vdso64-v1/*.sha256
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Replay only purgatory.ro relocatable GNU LD boundary using MiniLD
+        if: contains(github.event.head_commit.message, '[linux-minild-purgatory-cached-replay]')
+        shell: bash
+        timeout-minutes: 5
+        run: |
+          set -Eeuo pipefail
+          test -s "$GITHUB_WORKSPACE/build/linux-runtime-gcc/provenance/gcc-objects.sha256"
+          bash tools/ci/minild-linux-cache-purgatory-replay-v1.sh \
+            "$GITHUB_WORKSPACE/build/linux-runtime-gcc/out" \
+            "$GITHUB_WORKSPACE/build/minild-cached-purgatory-tools" \
+            "$GITHUB_WORKSPACE/build/minild-cached-purgatory-v1"
+
+      - name: Preserve purgatory relocatable Linux object differential
+        if: always() && contains(github.event.head_commit.message, '[linux-minild-purgatory-cached-replay]')
+        uses: actions/upload-artifact@v4
+        with:
+          name: minild-purgatory-replay-${{ github.sha }}
+          path: |
+            build/minild-cached-purgatory-v1/*.txt
+            build/minild-cached-purgatory-v1/*.tsv
+            build/minild-cached-purgatory-v1/*.stdout
+            build/minild-cached-purgatory-v1/*.stderr
+          retention-days: 7
+          if-no-files-found: warn
+
+      - name: Replay only GNU vmlinux.o relocatable link boundary with MiniLD
+        if: contains(github.event.head_commit.message, '[linux-minild-reloc-cached-replay]')
+        shell: bash
+        timeout-minutes: 5
+        run: |
+          set -Eeuo pipefail
+          test -s "$GITHUB_WORKSPACE/build/linux-runtime-gcc/provenance/gcc-objects.sha256"
+          bash tools/ci/minild-linux-cache-reloc-replay-v1.sh \
+            "$GITHUB_WORKSPACE/build/linux-runtime-gcc/out" \
+            "$GITHUB_WORKSPACE/build/minild-cached-reloc-replay-tools" \
+            "$GITHUB_WORKSPACE/build/minild-cached-reloc-replay-v1"
+
+      - name: Preserve one-link intermediate GNU LD -r differential evidence
+        if: always() && contains(github.event.head_commit.message, '[linux-minild-reloc-cached-replay]')
+        uses: actions/upload-artifact@v4
+        with:
+          name: minild-cached-reloc-replay-${{ github.sha }}
+          path: |
+            build/minild-cached-reloc-replay-v1/*.txt
+            build/minild-cached-reloc-replay-v1/*.tsv
+            build/minild-cached-reloc-replay-v1/*.stderr
+            build/minild-cached-reloc-replay-v1/*.stdout
+            build/minild-cached-reloc-replay-v1/*.sha256
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Replay ONLY one Linux final MiniLD link from SHA-pinned GNU golden cache
+        if: contains(github.event.head_commit.message, '[linux-minild-cached-replay]')
+        shell: bash
+        timeout-minutes: 5
+        run: |
+          set -Eeuo pipefail
+          out="$GITHUB_WORKSPACE/build/linux-runtime-gcc/out"
+          ev="$GITHUB_WORKSPACE/build/minild-cached-final-replay-v1"
+          test -s "$GITHUB_WORKSPACE/build/linux-runtime-gcc/provenance/gcc-objects.sha256"
+          bash tools/ci/minild-linux-cache-final-replay-v1.sh \
+            "$out" \
+            "$GITHUB_WORKSPACE/build/minild-cached-final-replay-tools" \
+            "$ev"
+          printf 'MINILD_REPLAY=PASS same_gnu_Kbuild_cache=true real_Linux_link=true no_2064_C_compile=true\n'
+
+      - name: Preserve focused MiniLD final-link phase profile (no C compilation)
+        if: always() && contains(github.event.head_commit.message, '[linux-minild-cached-replay]')
+        uses: actions/upload-artifact@v4
+        with:
+          name: minild-cached-final-replay-${{ github.sha }}
+          path: |
+            build/minild-cached-final-replay-v1/*.txt
+            build/minild-cached-final-replay-v1/*.tsv
+            build/minild-cached-final-replay-v1/*.stderr
+            build/minild-cached-final-replay-v1/*.stdout
+            build/minild-cached-final-replay-v1/*.sha256
+          retention-days: 7
+          if-no-files-found: warn
+
+      - name: Reconstruct complete GNU C manifest
+        if: "!contains(github.event.head_commit.message, '[linux-runtime-large-image-qemu]') && !contains(github.event.head_commit.message, '[linux-minias-earlycon-frozen]')"
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-v1"
+          mkdir -p "$ev"
+          python3 tools/ci/linux-runtime-gcc-full-c-objects-v1.py \
+            --out "$GITHUB_WORKSPACE/build/linux-runtime-gcc/out" \
+            --manifest "$GITHUB_WORKSPACE/build/linux-runtime-gcc/provenance/gcc-objects.sha256" \
+            --prefix tools/ci/linux-runtime-gcc-cohort-objects-v1.txt \
+            --output "$ev/full-objects.txt" \
+            --excluded "$ev/non-c-objects.tsv" --min-c-objects 1200
+          # Compute stable profile ID from pristine MiniC sources, BEFORE
+          # applying any of the build-time profile patches.
+          profile=$(python3 tools/ci/linux-runtime-profile-cache-id-v1.py)
+          # The native union always rebuilds the compiler with this exact
+          # full-crossblock profile (see "Restore identical MiniC compiler
+          # profile for native tool union"). Include it in the cache identity
+          # even when the caller selects only [linux-native-union-cached].
+          # Otherwise a fully valid 2064-object cache is rejected before the
+          # fast MiniAS preflight or QEMU can execute.
+          if [[ "${{ (contains(github.event.head_commit.message, '[linux-runtime-full-crossblock]') || contains(github.event.head_commit.message, '[linux-native-union-cached]')) && '1' || '0' }}" == 1 ]]; then
+            profile="${profile}-full-crossblock-pure-eq-v1-$(sha256sum tools/ci/apply-riscv64-p1-defined-before-use-crossblock-v1.py | cut -c1-16)"
+          fi
+          if [[ "${{ contains(github.event.head_commit.message, '[linux-perf-integrated-full]') }}" == true ]]; then
+            perf_tag=$(sha256sum tools/ci/linux-perf-integrated-full-profile-v1.sh \
+              tools/ci/apply-perf-symbolic-function-body-owner-filter-v0.py \
+              tools/ci/apply-perf-integer-call-expression-index-v1.py \
+              tools/ci/apply-perf-parser-lookup-counters-v0.py \
+              tools/ci/apply-perf-parser-function-hash-v0.py | sha256sum | cut -c1-16)
+            profile="${profile}-perf-integrated-3-v1-${perf_tag}"
+          fi
+          objects=$(sha256sum "$ev/full-objects.txt" | cut -d' ' -f1)
+          gcc=$(sha256sum "$(command -v riscv64-linux-gnu-gcc)" | cut -d' ' -f1)
+          assembler=$(sha256sum "$(command -v riscv64-linux-gnu-as)" | cut -d' ' -f1)
+          echo "FULL_MINIC_KEY=gnu-minic-objects-v1-eeb04f304ebfb97a1079c187dc0c2ea3cc61fc50a55aa3cc776237c16ab19bbe-$profile-$objects-$gcc-$assembler" >>"$GITHUB_ENV"
+
+      # The exact 2064 MiniC .o cache was already SHA/ABI-certified in
+      # full CI #38204602644. This lane only resolves P1 crash symbol owners
+      # and compares stack prologues with the certified pure-GNU .o pool.
+      - name: Restore immutable 2064-object MiniC cache for P1 diagnosis
+        id: p1_minic_frozen_cache
+        if: contains(github.event.head_commit.message, '[linux-runtime-p1-frame-audit]') || contains(github.event.head_commit.message, '[linux-runtime-stack-owners]') || contains(github.event.head_commit.message, '[linux-native-union-cached]')
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            build/linux-runtime-gcc-cohort-v1/minic
+            build/linux-runtime-gcc-cohort-v1/minic-manifest.sha256
+            build/linux-runtime-gcc-cohort-v1/minic-identity.txt
+          key: ${{ env.FULL_MINIC_KEY }}
+          # Opt-in DIAGNOSTIC ONLY. The new guarded-off dead-discard
+          # experiment changed the source-based profile cache key, not the
+          # independently SHA-authenticated historic 2064 C object fixture.
+          # Never broaden to a prefix or silently use this for certification.
+          restore-keys: ${{ contains(github.event.head_commit.message, '[linux-runtime-p1-frozen-baseline]') && 'gnu-minic-objects-v1-eeb04f304ebfb97a1079c187dc0c2ea3cc61fc50a55aa3cc776237c16ab19bbe-ba0a5fe0e3be00a107df47e5156b73b7af085ed9f519a4f86ef20e684cf227b1-1d1c8d09cfffddb37990552ae6392181a42d55332e48232dce27e7305d7e770b-0c2a199ea3ae14d39b008fd4080d4b18d675b07daa17976c7d9755e8ea67310b-d072447ef15a207422bf4874920221c41af7a771d1dbae770855cf3d6220a507' || '' }}
+          fail-on-cache-miss: true
+
+      - name: Attest exact cached full MiniC object pool before native tool replacements
+        if: contains(github.event.head_commit.message, '[linux-native-union-cached]')
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "${{ steps.p1_minic_frozen_cache.outputs.cache-hit }}" = true
+          test "${{ steps.p1_minic_frozen_cache.outputs.cache-matched-key }}" = "$FULL_MINIC_KEY"
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-v1"
+          test "$(wc -l < "$ev/minic-manifest.sha256")" -eq 2064
+          (cd "$ev" && sha256sum --quiet -c minic-manifest.sha256)
+          echo "NATIVE_UNION_CACHE=HIT provenance=full_2064_MiniC hash_verified=true pp=GNU original_run=38408669290"
+
+      - name: Attest exact frozen P1 diagnostic cache provenance
+        if: contains(github.event.head_commit.message, '[linux-runtime-p1-frozen-baseline]')
+        shell: bash
+        env:
+          RESTORED: ${{ steps.p1_minic_frozen_cache.outputs.cache-matched-key }}
+          CURRENT: ${{ env.FULL_MINIC_KEY }}
+        run: |
+          set -Eeuo pipefail
+          historical='gnu-minic-objects-v1-eeb04f304ebfb97a1079c187dc0c2ea3cc61fc50a55aa3cc776237c16ab19bbe-ba0a5fe0e3be00a107df47e5156b73b7af085ed9f519a4f86ef20e684cf227b1-1d1c8d09cfffddb37990552ae6392181a42d55332e48232dce27e7305d7e770b-0c2a199ea3ae14d39b008fd4080d4b18d675b07daa17976c7d9755e8ea67310b-d072447ef15a207422bf4874920221c41af7a771d1dbae770855cf3d6220a507'
+          [[ "$RESTORED" == "$CURRENT" || "$RESTORED" == "$historical" ]] || {
+            echo "P1_FROZEN_FIXTURE=FAIL unexpected_cache_key=$RESTORED" >&2
+            exit 8
+          }
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-v1"
+          (cd "$ev" && sha256sum --quiet -c minic-manifest.sha256)
+          [[ $(wc -l < "$ev/minic-manifest.sha256") -eq 2064 ]] || exit 8
+          echo "P1_FROZEN_FIXTURE=PASS source_key=$RESTORED frozen_objects=2064 current_profile_cache_hit=$([[ "$RESTORED" == "$CURRENT" ]] && echo yes || echo no) diagnostic_only=true no_current_profile_full_certification=true"
+
+      - name: Locate real P1 crash owners and compare RV64 stack prologues
+        if: contains(github.event.head_commit.message, '[linux-runtime-p1-frame-audit]')
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-v1"
+          (cd "$ev" && sha256sum --status -c minic-manifest.sha256)
+          python3 tools/ci/linux-runtime-p1-frame-audit-v1.py \
+            "$ev/minic" "$GITHUB_WORKSPACE/build/linux-runtime-gcc/out" \
+            "$ev/p1-frame-audit"
+
+      - name: Restore unchanged P1 panic call trace from certified full Image
+        if: contains(github.event.head_commit.message, '[linux-runtime-p1-frame-audit]')
+        uses: actions/download-artifact@v4
+        with:
+          run-id: 38207896965
+          github-token: ${{ github.token }}
+          name: minic-large-image-qemu-3e73328c2182f9cebb713e4595d2bf85067ac5b1
+          path: build/linux-runtime-gcc-cohort-v1/p1-crash-artifact
+
+      - name: Extract full original P1 kernel call trace from unchanged Image
+        if: contains(github.event.head_commit.message, '[linux-runtime-p1-frame-audit]')
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-v1"
+          source="$ev/p1-crash-artifact/qemu-p1/rdinit-init.log"
+          test -s "$source"
+          python3 - "$source" "$ev/p1-frame-audit/panic-calltrace.txt" <<'PY_PANIC'
+          from pathlib import Path
+          import sys
+          src,out=map(Path,sys.argv[1:])
+          lines=src.read_text(errors="replace").splitlines()
+          triggers=[i for i,l in enumerate(lines) if "Insufficient stack space to handle exception!" in l]
+          if not triggers:
+              raise SystemExit("P1_PANIC_TRACE=FAIL stack_overflow_marker_missing")
+          evidence=[]
+          for i in triggers:
+              evidence.extend(lines[max(0,i-24):min(len(lines),i+180)])
+          out.parent.mkdir(parents=True,exist_ok=True)
+          out.write_text("\\n".join(evidence)+"\\n")
+          print(f"P1_PANIC_TRACE=PASS repeats={len(triggers)} lines={len(evidence)}")
+          for line in evidence[-150:]:
+              print(line)
+          PY_PANIC
+
+      - name: Preserve P1 crash owner and stack audit
+        if: always() && contains(github.event.head_commit.message, '[linux-runtime-p1-frame-audit]')
+        uses: actions/upload-artifact@v4
+        with:
+          name: minic-p1-stack-owners-${{ github.sha }}
+          path: |
+            build/linux-runtime-gcc-cohort-v1/p1-frame-audit/*.tsv
+            build/linux-runtime-gcc-cohort-v1/p1-frame-audit/*.txt
+          retention-days: 7
+          if-no-files-found: warn
+
+      - uses: actions/download-artifact@v4
+        if: "!contains(github.event.head_commit.message, '[linux-runtime-large-image-qemu]') && !contains(github.event.head_commit.message, '[linux-runtime-p1-frame-audit]') && !contains(github.event.head_commit.message, '[linux-runtime-stack-owners]') && !contains(github.event.head_commit.message, '[linux-native-union-cached]') && !contains(github.event.head_commit.message, '[linux-minild-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minild-reloc-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minild-purgatory-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minild-vdso64-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minias-earlycon-frozen]')"
+        with:
+          pattern: shard-*
+          path: build/linux-runtime-gcc-shards-v1
+          merge-multiple: false
+
+      - name: Build identical MiniC profile and verify exact shard union
+        if: "!contains(github.event.head_commit.message, '[linux-runtime-large-image-qemu]') && !contains(github.event.head_commit.message, '[linux-runtime-p1-frame-audit]') && !contains(github.event.head_commit.message, '[linux-runtime-stack-owners]') && !contains(github.event.head_commit.message, '[linux-native-union-cached]') && !contains(github.event.head_commit.message, '[linux-minild-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minild-reloc-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minild-purgatory-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minild-vdso64-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minias-earlycon-frozen]')"
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-runtime-gcc"
+          src="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0/linux-6.6.143"
+          test -d "$src"
+          cp -a --reflink=auto "$src" "$work/linux-6.6.143"
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-v1"
+          if [[ "${{ contains(github.event.head_commit.message, '[linux-runtime-full-crossblock]') && '1' || '0' }}" == 1 ]]; then
+            export MINIC_LINUX_FULL_CROSSBLOCK=1 MINIC_OPT_PURE_DISCARDED_ADDRESS_EQ=1
+            echo "LINUX_FULL_CROSSBLOCK=RECEIVER_START shards=7 live_all_C=true full_GNU_link_QEMU=true"
+          fi
+          bash tools/ci/linux-runtime-build-minic-profile-v1.sh \
+            "$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain" "$ev/compiler"
+          if [[ "${{ contains(github.event.head_commit.message, '[linux-perf-integrated-full]') }}" == true ]]; then
+            bash tools/ci/linux-perf-integrated-full-profile-v1.sh \
+              "$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain" "$ev/compiler"
+            echo "LINUX_PERF_3_RECEIVER=READY shards=7"
+          fi
+          python3 tools/ci/linux-runtime-gcc-shards-v1.py merge \
+            --full "$ev/full-objects.txt" \
+            --shards "$GITHUB_WORKSPACE/build/linux-runtime-gcc-shards-v1" \
+            --evidence "$ev" --out "$work/out" --provenance "$work/provenance" \
+            --minic "$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain/bin/minic" \
+            --assembler /usr/bin/riscv64-linux-gnu-as
+
+      - name: Restore identical MiniC compiler profile for native tool union (without rebuilding C objects)
+        if: contains(github.event.head_commit.message, '[linux-native-union-cached]')
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "${{ steps.p1_minic_frozen_cache.outputs.cache-hit }}" = true
+          work="$GITHUB_WORKSPACE/build/linux-runtime-gcc"
+          src="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0/linux-6.6.143"
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-v1"
+          test -d "$src"
+          test ! -e "$work/linux-6.6.143"
+          cp -a --reflink=auto "$src" "$work/linux-6.6.143"
+          MINIC_LINUX_FULL_CROSSBLOCK=1 MINIC_OPT_PURE_DISCARDED_ADDRESS_EQ=1 \
+            bash tools/ci/linux-runtime-build-minic-profile-v1.sh \
+              "$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain" "$ev/compiler"
+          echo "NATIVE_UNION_COMPILER=READY recompiled_C=0 restored_objects=2064"
+
+      - name: Retain fully verified MiniC objects before link or runtime
+        if: "!contains(github.event.head_commit.message, '[linux-runtime-large-image-qemu]') && !contains(github.event.head_commit.message, '[linux-runtime-p1-frame-audit]') && !contains(github.event.head_commit.message, '[linux-runtime-stack-owners]') && !contains(github.event.head_commit.message, '[linux-native-union-cached]') && !contains(github.event.head_commit.message, '[linux-minild-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minild-reloc-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minild-purgatory-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minild-vdso64-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minias-earlycon-frozen]')"
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            build/linux-runtime-gcc-cohort-v1/minic
+            build/linux-runtime-gcc-cohort-v1/minic-manifest.sha256
+            build/linux-runtime-gcc-cohort-v1/minic-identity.txt
+          key: ${{ env.FULL_MINIC_KEY }}
+
+      - name: Restore pristine Linux source and MiniC profile for frozen P1 swaps
+        if: contains(github.event.head_commit.message, '[linux-runtime-stack-owners]')
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          src="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0/linux-6.6.143"
+          test -d "$src"
+          work="$GITHUB_WORKSPACE/build/linux-runtime-gcc"
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-v1"
+          cp -a --reflink=auto "$src" "$work/linux-6.6.143"
+          bash tools/ci/linux-runtime-build-minic-profile-v1.sh \
+            "$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain" "$ev/compiler"
+          (cd "$ev" && sha256sum --quiet -c minic-manifest.sha256)
+          echo "COHORT_P1_OWNER_POOL=PASS objects=$(wc -l <"$ev/minic-manifest.sha256") frozen=true"
+
+      # Do not alter the stable runtime profile cache ID: build the EXACT
+      # profile first, then inject stderr-only instrumentation. The cohort
+      # lane SHA-compares each replayed object with its immutable MiniC .o.
+      - name: Instrument original MiniC profile for exact P1 frame audit
+        if: contains(github.event.head_commit.message, '[linux-runtime-frame-components]') || contains(github.event.head_commit.message, '[linux-runtime-p1-nonreuse-reasons]')
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain"
+          sha256sum "$work/bin/minic" >"$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-v1/p1-pre-audit-compiler.sha256"
+          python3 tools/ci/apply-riscv64-p1-frame-diagnostic-v1.py
+          if [[ "${{ contains(github.event.head_commit.message, '[linux-runtime-p1-nonreuse-reasons]') && '1' || '0' }}" == 1 ]]; then
+            python3 tools/ci/apply-riscv64-p1-nonreuse-reasons-v1.py
+          fi
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$work" "$work/bin/minic" "$work/bin/minic-cc"
+          sha256sum "$work/bin/minic" >"$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-v1/p1-diagnostic-compiler.sha256"
+          echo "P1_FRAME_DIAG=COMPILER_REBUILT same_codegen_only_extra_stderr=true"
+
+      # The default 2064-object Runtime profile and cache remain untouched.
+      # This experiment is fail-closed and never updates the canonical compiler.
+      - name: Build opt-in write-before-read cross-block MiniC experiment
+        if: contains(github.event.head_commit.message, '[linux-runtime-p1-defined-crossblock]') || contains(github.event.head_commit.message, '[linux-runtime-p1-ip6-single]') || (contains(github.event.head_commit.message, '[linux-runtime-p1-discard-eq]') || contains(github.event.head_commit.message, '[linux-runtime-p1-discard-eq-pair]'))
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          build="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain"
+          sha256sum "$build/bin/minic" >"$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-v1/p1-pre-crossblock-compiler.sha256"
+          if [[ "${{ (contains(github.event.head_commit.message, '[linux-runtime-p1-discard-eq]') || contains(github.event.head_commit.message, '[linux-runtime-p1-discard-eq-pair]')) && '1' || '0' }}" == 1 ]]; then
+            python3 tools/ci/apply-p1-pure-discarded-local-address-equality-v1.py
+          else
+            python3 tools/ci/apply-riscv64-p1-defined-before-use-crossblock-v1.py
+          fi
+          if [[ "${{ (contains(github.event.head_commit.message, '[linux-runtime-p1-ip6-single]') || (contains(github.event.head_commit.message, '[linux-runtime-p1-discard-eq]') || contains(github.event.head_commit.message, '[linux-runtime-p1-discard-eq-pair]'))) && '1' || '0' }}" == 1 ]]; then
+            python3 tools/ci/apply-riscv64-p1-frame-diagnostic-v1.py
+          fi
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$build" "$build/bin/minic" "$build/bin/minic-cc"
+          sha256sum "$build/bin/minic" >"$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-v1/p1-crossblock-compiler.sha256"
+          echo "P1_DEFINED_CROSSBLOCK=COMPILER_BUILT opt_in_only=true"
+
+      - name: Run P1 experimental Core CFG semantic-only GCC and MiniC differential
+        if: contains(github.event.head_commit.message, '[linux-runtime-p1-cfg-semantic-only]')
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          # Exact Runtime profile+opt-in backend was built above, not the
+          # unpatched stock MiniC. Avoid relinking or booting Linux here.
+          sudo apt-get -o Acquire::Retries=2 install -y --no-install-recommends qemu-user
+          minic="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain/bin/minic"
+          work="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-v1/p1-defined-crossblock/cfg-semantic-only"
+          test -x "$minic"
+          mkdir -p "$work"
+          MINIC="$minic" WORK="$work/existing" RISCV_CC=riscv64-linux-gnu-gcc \
+            QEMU_RISCV64=qemu-riscv64 \
+            bash tests/compiler/c0/run-core-cfg-slot-reuse-p1.sh
+          MINIC="$minic" WORK="$work/adversarial" RISCV_CC=riscv64-linux-gnu-gcc \
+            QEMU_RISCV64=qemu-riscv64 \
+            bash tests/compiler/c0/run-core-cfg-slot-reuse-adversarial-p1.sh
+          MINIC="$minic" BUILD_DIR="$work" RISCV_CC=riscv64-linux-gnu-gcc \
+            QEMU_RISCV64=qemu-riscv64 \
+            bash tests/compiler/c0/run-pure-discarded-address-rv64.sh
+          echo "P1_CFG_SEMANTIC_ONLY=PASS gcc_minic_baseline_crossblock=3way matrix=7+8 x1023 no_kernel_link=true no_linux_recompile=true"
+
+      # Diagnostic-only: same exact GNU golden + SHA-authenticated 2064 MiniC
+      # object fixture as native union; do not run Kbuild, linker or QEMU here.
+      # Retain MiniC .s across MiniAS revisions so future work reassembles only.
+      - name: Restore exact MiniC assembly sample for MiniAS (independent of MiniAS SHA)
+        id: minias_corpus_s_cache
+        if: contains(github.event.head_commit.message, '[linux-minias-corpus-scan]')
+        uses: actions/cache/restore@v4
+        with:
+          path: build/minias-linux-corpus-v1/assembly
+          key: ${{ env.FULL_MINIC_KEY }}-minias-corpus-s-v1-64
+          restore-keys: ${{ env.FULL_MINIC_KEY }}-minias-corpus-s-v1-12
+
+      - name: Probe representative real Linux MiniC assembly with MiniAS (no C objects rebuilt)
+        if: contains(github.event.head_commit.message, '[linux-minias-corpus-scan]') && !contains(github.event.head_commit.message, '[linux-minias-full-corpus]')
+        shell: bash
+        timeout-minutes: 12
+        run: |
+          set -Eeuo pipefail
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-v1"
+          test "${{ steps.p1_minic_frozen_cache.outputs.cache-hit }}" = true
+          test "${{ steps.p1_minic_frozen_cache.outputs.cache-matched-key }}" = "$FULL_MINIC_KEY"
+          (cd "$ev" && sha256sum --quiet -c minic-manifest.sha256)
+          tools="$GITHUB_WORKSPACE/build/minias-linux-corpus-v1-tools"
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$tools" "$tools/bin/minic-as"
+          python3 tools/ci/minias-linux-corpus-probe-v1.py \
+            --golden-out "$GITHUB_WORKSPACE/build/linux-runtime-gcc/out" \
+            --candidate-pool "$ev/minic" --manifest "$ev/minic-manifest.sha256" \
+            --minic "$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain/bin/minic" \
+            --minias "$tools/bin/minic-as" \
+            --work "$GITHUB_WORKSPACE/build/minias-linux-corpus-v1" \
+            --cache-identity "$FULL_MINIC_KEY" --limit 64
+
+      # Isolated full 2064-object assembly coverage; the 64 .s cache is the
+      # bootstrap. No new workflow/jobs, no C-object compilation, and no
+      # Kbuild/link/QEMU cost until the real assembly gaps are classified.
+      - name: Restore expanded complete MiniC S corpus
+        id: minias_full_s_cache
+        if: contains(github.event.head_commit.message, '[linux-minias-full-corpus]')
+        uses: actions/cache/restore@v4
+        with:
+          path: build/minias-linux-corpus-v1/assembly
+          key: ${{ env.FULL_MINIC_KEY }}-minias-corpus-s-v1-2064
+
+      - name: Sweep all certified Linux C owners through native MiniAS
+        if: contains(github.event.head_commit.message, '[linux-minias-full-corpus]')
+        shell: bash
+        timeout-minutes: 75
+        run: |
+          set -Eeuo pipefail
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-v1"
+          test "${{ steps.p1_minic_frozen_cache.outputs.cache-hit }}" = true
+          (cd "$ev" && sha256sum --quiet -c minic-manifest.sha256)
+          tools="$GITHUB_WORKSPACE/build/minias-linux-corpus-v1-tools"
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$tools" "$tools/bin/minic-as"
+          python3 tools/ci/minias-linux-full-corpus-v1.py \
+            --golden-out "$GITHUB_WORKSPACE/build/linux-runtime-gcc/out" \
+            --candidate-pool "$ev/minic" --manifest "$ev/minic-manifest.sha256" \
+            --minic "$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain/bin/minic" \
+            --minias "$tools/bin/minic-as" \
+            --work "$GITHUB_WORKSPACE/build/minias-linux-corpus-v1" \
+            --cache-identity "$FULL_MINIC_KEY" --jobs 4
+
+      - name: Save SHA-locked Linux S corpus for future MiniAS-only reassembly
+        if: always() && contains(github.event.head_commit.message, '[linux-minias-full-corpus]') && steps.minias_full_s_cache.outputs.cache-hit != 'true' && hashFiles('build/minias-linux-corpus-v1/assembly/index.json') != ''
+        uses: actions/cache/save@v4
+        with:
+          path: build/minias-linux-corpus-v1/assembly
+          key: ${{ env.FULL_MINIC_KEY }}-minias-corpus-s-v1-2064
+
+      - name: Preserve full native assembly coverage report and blockers
+        if: always() && contains(github.event.head_commit.message, '[linux-minias-full-corpus]')
+        uses: actions/upload-artifact@v4
+        with:
+          name: minias-full-corpus-${{ github.sha }}
+          path: |
+            build/minias-linux-corpus-v1/full-summary.json
+            build/minias-linux-corpus-v1/full-scan.tsv
+            build/minias-linux-corpus-v1/evidence/python-failures/*.txt
+            build/minias-linux-corpus-v1/evidence/**/*.minias.log
+          retention-days: 7
+          if-no-files-found: warn
+
+      - name: Prepare SHA-verified 60-MiniAS object overlay from 64 cached assemblies
+        if: contains(github.event.head_commit.message, '[linux-minias-corpus-runtime]')
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-v1"
+          test "${{ steps.p1_minic_frozen_cache.outputs.cache-hit }}" = true
+          python3 tools/ci/minias-linux-corpus-runtime-overlay-v1.py \
+            --original-pool "$ev/minic" \
+            --manifest "$ev/minic-manifest.sha256" \
+            --scan-root "$GITHUB_WORKSPACE/build/minias-linux-corpus-v1" \
+            --destination "$ev/minias-corpus-64-pool" \
+            --evidence "$ev/minias-corpus-64-evidence" \
+            --cache-identity "$FULL_MINIC_KEY"
+
+      - name: Cache frozen MiniC assembly sample for later MiniAS-only changes
+        # Even if later .cmd parsing fails, retain each already SHA-attested
+        # .s file. This cache has a per-member identity index.
+        if: always() && contains(github.event.head_commit.message, '[linux-minias-corpus-scan]') && !contains(github.event.head_commit.message, '[linux-minias-full-corpus]') && steps.minias_corpus_s_cache.outputs.cache-hit != 'true' && hashFiles('build/minias-linux-corpus-v1/assembly/index.json') != ''
+        uses: actions/cache/save@v4
+        with:
+          path: build/minias-linux-corpus-v1/assembly
+          key: ${{ env.FULL_MINIC_KEY }}-minias-corpus-s-v1-64
+
+      - name: Keep MiniAS sampled gap classification without kernel relink
+        if: always() && contains(github.event.head_commit.message, '[linux-minias-corpus-scan]') && !contains(github.event.head_commit.message, '[linux-minias-full-corpus]')
+        uses: actions/upload-artifact@v4
+        with:
+          name: minias-linux-corpus-scan-${{ github.sha }}
+          path: |
+            build/minias-linux-corpus-v1/scan.tsv
+            build/minias-linux-corpus-v1/evidence/**/*.log
+          retention-days: 7
+          if-no-files-found: warn
+
+      - name: Download frozen real MiniC earlycon.s for isolated native MiniAS object in full Linux
+        if: contains(github.event.head_commit.message, '[linux-native-minias-earlycon]')
+        uses: actions/download-artifact@v4
+        with:
+          repository: ${{ github.repository }}
+          run-id: 38426379946
+          github-token: ${{ github.token }}
+          name: sharded-gnu-minic-QEMU-088b8ef0a30154e1eeaeb145107a1b51c07ba996
+          path: build/minias-earlycon-full-artifact
+
+      # Reuse the seven existing build runners and this existing receiver.
+      - name: Restore full native MiniPP seven-shard artifacts
+        if: contains(github.event.head_commit.message, '[linux-minipp-seven-integration]') && !contains(github.event.head_commit.message, '[linux-minipp-seven-replay]')
+        uses: actions/download-artifact@v4
+        with:
+          pattern: minipp-native-shard-*-${{ github.sha }}
+          path: build/minipp-seven-merge/incoming
+          merge-multiple: false
+
+      # Cache-only replay of the original 2064/2064 certified native C shards.
+      - name: Restore certified MiniPP native C objects for cache-only P1 replay
+        if: contains(github.event.head_commit.message, '[linux-minipp-seven-replay]')
+        uses: actions/download-artifact@v4
+        with:
+          repository: ${{ github.repository }}
+          run-id: 38550003154
+          github-token: ${{ github.token }}
+          pattern: minipp-native-shard-*-041ae51e1ff2f3f1b9e30b489957e53cfc43dfa1
+          path: build/minipp-seven-merge/incoming
+          merge-multiple: false
+
+      - name: Merge all 2064 real MiniPP-native Linux C objects
+        if: contains(github.event.head_commit.message, '[linux-minipp-seven-integration]')
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-v1"
+          test "${{ steps.p1_minic_frozen_cache.outputs.cache-hit }}" = true
+          (cd "$ev"; sha256sum --quiet -c minic-manifest.sha256)
+          shard_commit="$GITHUB_SHA"
+          if [[ "${{ contains(github.event.head_commit.message, '[linux-minipp-seven-replay]') && '1' || '0' }}" == 1 ]]; then
+            shard_commit=041ae51e1ff2f3f1b9e30b489957e53cfc43dfa1
+          fi
+          python3 tools/ci/minipp-linux-seven-merge-v1.py \
+            --artifacts "$GITHUB_WORKSPACE/build/minipp-seven-merge/incoming" \
+            --owners "$ev/full-objects.txt" \
+            --golden-out "$GITHUB_WORKSPACE/build/linux-runtime-gcc/out" \
+            --dest "$GITHUB_WORKSPACE/build/minipp-seven-merge/native-objects" \
+            --commit "$shard_commit"
+          (cd build/minipp-seven-merge/native-objects; sha256sum --quiet -c ../native-full-manifest.sha256)
+
+      # Exactly the 2064 fresh MiniC .s inputs verified by the existing
+      # seven gcc-shards jobs in successful run #38498107462. No recompilation
+      # and no new workflow. This is the NEXT integration gate, not an
+      # independent MiniAS correctness rerun.
+      - name: Reuse all seven certified MiniC assembly-shard artifacts
+        if: contains(github.event.head_commit.message, '[linux-minias-all-C-runtime]')
+        uses: actions/download-artifact@v4
+        with:
+          repository: ${{ github.repository }}
+          run-id: 38498107462
+          github-token: ${{ github.token }}
+          pattern: minias-seven-corpus-*
+          merge-multiple: false
+          path: build/minias-seven-runtime-input
+
+      - name: Promote all 2060 stable MiniC assembly owners through native MiniAS
+        if: contains(github.event.head_commit.message, '[linux-minias-all-C-runtime]')
+        shell: bash
+        timeout-minutes: 15
+        run: |
+          set -Eeuo pipefail
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-v1"
+          test "${{ steps.p1_minic_frozen_cache.outputs.cache-hit }}" = true
+          (cd "$ev" && sha256sum --quiet -c minic-manifest.sha256)
+          minias="$GITHUB_WORKSPACE/build/minias-linux-corpus-v1-tools"
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$minias" "$minias/bin/minic-as"
+          # 1-second fail-fast oracle for the exact executable NOP alignment
+          # that trapped in the native Linux strcmp Zbb fast path. Verify the
+          # machine bytes BEFORE 2060 native C reassemblies and QEMU.
+          cat > "$minias/code-align-preflight.s" <<'MINIAS_ALIGN_EOF'
+          .text
+            nop
+            .p2align 3
+            nop
+          MINIAS_ALIGN_EOF
+          "$minias/bin/minic-as" -o "$minias/code-align-preflight.o" "$minias/code-align-preflight.s"
+          riscv64-linux-gnu-objcopy -O binary -j .text "$minias/code-align-preflight.o" "$minias/code-align-preflight.bin"
+          align_hex="$(od -An -v -tx1 "$minias/code-align-preflight.bin" | xargs | tr -d ' ')"
+          if [[ "$align_hex" != '130000001300000013000000' ]]; then
+            echo "MINIAS_CODE_ALIGN_PREFLIGHT=FAIL hex=$align_hex expected=130000001300000013000000" >&2
+            exit 10
+          fi
+          echo 'MINIAS_CODE_ALIGN_PREFLIGHT=PASS exe_padding=RISC-V_NOP no_C_UNIMP=true'
+          python3 tools/ci/minias-linux-corpus-runtime-overlay-v1.py \
+            --original-pool "$ev/minic" \
+            --manifest "$ev/minic-manifest.sha256" \
+            --scan-root "$GITHUB_WORKSPACE/build/minias-linux-corpus-v1" \
+            --destination "$ev/minias-corpus-2064-pool" \
+            --evidence "$ev/minias-corpus-2064-evidence" \
+            --cache-identity "$FULL_MINIC_KEY" \
+            --seven-shard-root "$GITHUB_WORKSPACE/build/minias-seven-runtime-input" \
+            --minias "$minias/bin/minic-as" \
+            --minic "$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain/bin/minic" \
+            --golden-out "$GITHUB_WORKSPACE/build/linux-runtime-gcc/out"
+
+      # Historical MiniAS full GNU-origin .S support already passed QEMU.
+      # Extend accepted 2064 MiniC->MiniAS C-object runtime to the actual
+      # non-C Kbuild assembly owners. No new jobs or full C compilation.
+      - name: Reassemble actual non-C Linux Kbuild S owners using MiniAS
+        if: contains(github.event.head_commit.message, '[linux-minias-native-S-runtime]')
+        shell: bash
+        timeout-minutes: 12
+        run: |
+          set -Eeuo pipefail
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-v1"
+          work="$GITHUB_WORKSPACE/build/linux-runtime-gcc"
+          (cd "$ev" && sha256sum --quiet -c minic-manifest.sha256)
+          # The native-S lane always needs a real MiniAS binary; strcmp-diff
+          # only guards extra diagnostics, never assembler preparation.
+          tools="$GITHUB_WORKSPACE/build/minias-linux-corpus-v1-tools"
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$tools" "$tools/bin/minic-as"
+          test -x "$tools/bin/minic-as"
+          python3 tools/ci/minias-linux-corpus-runtime-overlay-v1.py \
+            --original-pool "$ev/minic" --manifest "$ev/minic-manifest.sha256" \
+            --scan-root "$GITHUB_WORKSPACE/build/minias-linux-corpus-v1" \
+            --cache-identity "$FULL_MINIC_KEY" \
+            --destination "$ev/minias-native-S-pool" \
+            --evidence "$ev/minias-native-S-evidence" \
+            --golden-out "$work/out" \
+            --minias "$GITHUB_WORKSPACE/build/minias-linux-corpus-v1-tools/bin/minic-as" \
+            --native-asm-only --c-universe "$ev/full-objects.txt" \
+            --gcc-manifest "$work/provenance/gcc-objects.sha256"
+          if [[ "${{ contains(github.event.head_commit.message, '[linux-minias-strcmp-diff]') && '1' || '0' }}" == 1 ]]; then
+            cmpout="$ev/minias-native-S-evidence/strcmp"
+            mkdir -p "$cmpout"
+            orig="$work/out/arch/riscv/lib/strcmp.o"
+            native="$ev/minias-native-S-pool/arch/riscv/lib/strcmp.o"
+            (cd "$work/out" && sha256sum --quiet -c "$work/provenance/gcc-objects.sha256")
+            test -s "$orig" && test -s "$native"
+            for role in gnu mini; do
+              obj="$orig"
+              [[ "$role" == mini ]] && obj="$native"
+              riscv64-linux-gnu-objdump -dr -M no-aliases "$obj" >"$cmpout/$role.objdump"
+              readelf -Wr "$obj" >"$cmpout/$role.relocs"
+              readelf -SW "$obj" >"$cmpout/$role.sections"
+              readelf -x .alternative "$obj" >"$cmpout/$role.alternative-hex" 2>&1 || true
+              readelf -x .altinstr_replacement "$obj" >"$cmpout/$role.alt-replacement-hex" 2>&1 || true
+              sha256sum "$obj" >"$cmpout/$role.sha256"
+            done
+            diff -u "$cmpout/gnu.relocs" "$cmpout/mini.relocs" >"$cmpout/reloc.diff" || true
+            diff -u "$cmpout/gnu.objdump" "$cmpout/mini.objdump" >"$cmpout/objdump.diff" || true
+            diff -u "$cmpout/gnu.alternative-hex" "$cmpout/mini.alternative-hex" >"$cmpout/alternative.diff" || true
+            echo 'MINIAS_STRCMP_DIAGNOSTIC=COMPLETE real_GNU_Kbuild_obj=true native_MiniAS_obj=true runtime_not_run=true'
+            echo 'MINIAS_STRCMP_DIAGNOSTIC=RELOCATION_DIFF'
+            sed -n '1,110p' "$cmpout/reloc.diff"
+            echo 'MINIAS_STRCMP_DIAGNOSTIC=ALTERNATIVE_DIFF'
+            sed -n '1,110p' "$cmpout/alternative.diff"
+            echo 'MINIAS_STRCMP_DIAGNOSTIC=OBJDUMP_DIFF'
+            sed -n '1,180p' "$cmpout/objdump.diff"
+          fi
+
+      - name: Prepare native MiniAR, final-link MiniLD and MiniObjcopy (same cached C objects)
+        if: contains(github.event.head_commit.message, '[linux-native-union-cached]') && (!contains(github.event.head_commit.message, '[linux-minias-corpus-scan]') || contains(github.event.head_commit.message, '[linux-minias-corpus-runtime]'))
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          bash tools/ci/linux-runtime-native-union-v1.sh \
+            "$GITHUB_WORKSPACE/build/linux-runtime-native-union-v1-tools" \
+            "$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-v1/native-union"
+          echo "NATIVE_UNION_TOOLS=PASS minic_C_objects_reused=true"
+
+      - name: Prepare one native MiniAS earlycon.o and attest 2063 unchanged MiniC objects
+        if: contains(github.event.head_commit.message, '[linux-native-minias-earlycon]')
+        shell: bash
+        timeout-minutes: 8
+        run: |
+          set -Eeuo pipefail
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-v1"
+          test "${{ steps.p1_minic_frozen_cache.outputs.cache-hit }}" = true
+          bash tools/ci/minias-linux-earlycon-p1-experiment-v1.sh \
+            "$GITHUB_WORKSPACE/build/minias-earlycon-full-artifact" \
+            "$ev/minic" "$ev/minias-earlycon-pool" \
+            "$GITHUB_WORKSPACE/build/minias-earlycon-p1-tools" \
+            "$ev/minias-earlycon-experiment"
+          echo "MINIAS_EARLYCON_FULL_PREPARE=PASS original_2064_SHA_cache_immutable=true"
+
+      - name: GNU-only link and QEMU with NO MiniC recompilation
+        if: "!contains(github.event.head_commit.message, '[linux-runtime-large-image-qemu]') && !contains(github.event.head_commit.message, '[linux-runtime-p1-frame-audit]') && !contains(github.event.head_commit.message, '[linux-runtime-p1-cfg-semantic-only]') && !contains(github.event.head_commit.message, '[linux-minild-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minild-reloc-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minild-purgatory-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minild-vdso64-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minias-earlycon-frozen]') && (!contains(github.event.head_commit.message, '[linux-minias-corpus-scan]') || contains(github.event.head_commit.message, '[linux-minias-corpus-runtime]'))"
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-runtime-gcc"
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-v1"
+          export COHORT_ACTION=verify
+          if [[ "${{ contains(github.event.head_commit.message, '[linux-perf-integrated-full]') }}" == true ]]; then
+            export COHORT_GNU_PREFLIGHT_ALLOW_SEVEN_RECEIVER_VOLATILE=1
+          fi
+          if [[ "${{ contains(github.event.head_commit.message, '[linux-native-union-cached]') && '1' || '0' }}" == 1 ]]; then
+            test "${{ steps.p1_minic_frozen_cache.outputs.cache-hit }}" = true
+            native="$ev/native-union"
+            toolchain="$GITHUB_WORKSPACE/build/linux-runtime-native-union-v1-tools"
+            export MINIAR="$toolchain/bin/minic-ar"
+            export MINILD="$toolchain/bin/minic-ld"
+            if [[ "${{ contains(github.event.head_commit.message, '[linux-minipp-seven-integration]') && '1' || '0' }}" == 1 ]]; then
+              export COHORT_P1_EXPERIMENTAL_POOL="$GITHUB_WORKSPACE/build/minipp-seven-merge/native-objects"
+              if [[ "${{ contains(github.event.head_commit.message, '[linux-minipp-seven-replay]') && '1' || '0' }}" == 1 ]]; then
+                # Only this immutable cache-replay may tolerate timestamp-derived
+                # GNU Kbuild version.o / vmlinux.o preflight regeneration.
+                export COHORT_GNU_PREFLIGHT_ALLOW_PINNED_VOLATILE=1
+              fi
+              test "$(wc -l < build/minipp-seven-merge/native-full-manifest.sha256)" -eq 2064
+              (cd "$COHORT_P1_EXPERIMENTAL_POOL"; sha256sum --quiet -c ../native-full-manifest.sha256)
+              echo "MINIPP_FULL_C_UNION=ENABLED PP=MiniPP CC=MiniC AS=MiniAS C=2064 shards=7"
+            fi
+
+            export MINIOBJCOPY="$toolchain/bin/minic-objcopy"
+            export NATIVE_TRACE_DIR="$native"
+            export COHORT_NATIVE_UNION=1
+            if [[ "${{ contains(github.event.head_commit.message, '[linux-native-minias-earlycon]') && '1' || '0' }}" == 1 ]]; then
+              export COHORT_P1_EXPERIMENTAL_POOL="$ev/minias-earlycon-pool"
+              test -s "$ev/minias-earlycon-experiment/experimental-earlycon-object.sha256"
+              echo "MINIAS_EARLYCON_QEMU_EXPERIMENT=ENABLED selected_C_objects=2064 compiled_C_objects=0 native_AS_owners=1 frozen_GNU_AS_owners=2063"
+            fi
+            if [[ "${{ contains(github.event.head_commit.message, '[linux-minias-corpus-runtime]') && '1' || '0' }}" == 1 ]]; then
+              export COHORT_P1_EXPERIMENTAL_POOL="$ev/minias-corpus-64-pool"
+              export COHORT_MINIAS_CORPUS_MANIFEST="$ev/minias-corpus-64-evidence/native-object-hashes.sha256"
+              test "$(wc -l < "$COHORT_MINIAS_CORPUS_MANIFEST")" -eq 60
+              (cd "$COHORT_P1_EXPERIMENTAL_POOL" && sha256sum --quiet -c "$COHORT_MINIAS_CORPUS_MANIFEST")
+              echo "MINIAS_CORPUS_QEMU_EXPERIMENT=ENABLED native=60 original=2004 gcc_E_and_minic_S_reused=true"
+              if [[ "${{ contains(github.event.head_commit.message, '[linux-minias-dynamic-headers]') && '1' || '0' }}" == 1 ]]; then
+                export COHORT_MINIAS_DYNAMIC_HEADERS=1
+                export COHORT_MINIAS_HEADER_AS="$GITHUB_WORKSPACE/build/minias-linux-corpus-v1-tools/bin/minic-as"
+                test -x "$COHORT_MINIAS_HEADER_AS"
+                echo 'MINIAS_DYNAMIC_HEADERS=ENABLED Kbuild_header_recompile=MiniC_S_then_MiniAS'
+              fi
+            fi
+            if [[ "${{ contains(github.event.head_commit.message, '[linux-minias-all-C-runtime]') && '1' || '0' }}" == 1 ]]; then
+              export COHORT_P1_EXPERIMENTAL_POOL="$ev/minias-corpus-2064-pool"
+              export COHORT_MINIAS_CORPUS_MANIFEST="$ev/minias-corpus-2064-evidence/native-object-hashes.sha256"
+              export COHORT_MINIAS_EXPECTED_NATIVE=2060
+              export COHORT_MINIAS_DYNAMIC_HEADERS=1
+              export COHORT_MINIAS_HEADER_AS="$GITHUB_WORKSPACE/build/minias-linux-corpus-v1-tools/bin/minic-as"
+              test -x "$COHORT_MINIAS_HEADER_AS"
+              test "$(wc -l < "$COHORT_MINIAS_CORPUS_MANIFEST")" -eq 2060
+              (cd "$COHORT_P1_EXPERIMENTAL_POOL" && sha256sum --quiet -c "$COHORT_MINIAS_CORPUS_MANIFEST")
+              echo "MINIAS_FULL_NATIVE_C=ENABLED stable_native=2060 dynamic_pending=4 all_C=2064 existing_QEMU_runner=true"
+            fi
+            if [[ "${{ contains(github.event.head_commit.message, '[linux-minias-native-S-runtime]') && '1' || '0' }}" == 1 ]]; then
+              export COHORT_MINIAS_NATIVE_S_POOL="$ev/minias-native-S-pool"
+              export COHORT_MINIAS_NATIVE_S_MANIFEST="$ev/minias-native-S-evidence/native-S-hashes.sha256"
+              # Do not change Kbuild CC/AS or global COMPILER_PATH. The
+              # original 2064-object and 34 native-S snapshots are stable;
+              # directly reinject only derived S objects after first link.
+              test -s "$COHORT_MINIAS_NATIVE_S_MANIFEST"
+              if [[ "${{ contains(github.event.head_commit.message, '[linux-minias-S-bisect]') && '1' || '0' }}" == 1 ]]; then
+                export COHORT_MINIAS_S_BISECT=1
+                if [[ "${{ contains(github.event.head_commit.message, '[linux-minias-S-adaptive-17]') && '1' || '0' }}" == 1 ]]; then
+                  export COHORT_MINIAS_S_BISECT_STAGE=3
+                  echo "MINIAS_NATIVE_S_BISECT=ENABLED scope=last17_recursive_real_QEMU no_extra_workflow=true"
+                elif [[ "${{ contains(github.event.head_commit.message, '[linux-minias-S-half-33]') && '1' || '0' }}" == 1 ]]; then
+                  export COHORT_MINIAS_S_BISECT_STAGE=2
+                  echo "MINIAS_NATIVE_S_BISECT=ENABLED scope=33_nonhead_half_16_17 no_extra_workflow=true"
+                else
+                  echo "MINIAS_NATIVE_S_BISECT=ENABLED scope=head.o_only_vs_all_except_head no_extra_workflow=true"
+                fi
+              fi
+              echo "MINIAS_NATIVE_S=ENABLED count=$(wc -l < "$COHORT_MINIAS_NATIVE_S_MANIFEST") only_existing_Kbuild_inputs=true"
+            fi
+            if [[ "${{ contains(github.event.head_commit.message, '[linux-native-purgatory-r]') && '1' || '0' }}" == 1 ]]; then
+              export MINILD_ENABLE_PURGATORY_R=1
+              echo "MINILD_PURGATORY_R=ENABLED boundary=purgatory.ro only gnu_purgatory_chk=true"
+            fi
+            if [[ "${{ contains(github.event.head_commit.message, '[linux-native-purgatory-static]') && '1' || '0' }}" == 1 ]]; then
+              export MINILD_ENABLE_PURGATORY_STATIC=1
+              echo "MINILD_PURGATORY_STATIC=ENABLED exact_link=purgatory.chk"
+            fi
+            if [[ "${{ contains(github.event.head_commit.message, '[linux-native-intermediate-vmlinux-r]') && '1' || '0' }}" == 1 ]]; then
+              export MINILD_ENABLE_VMLINUX_R=1
+              echo "MINILD_NATIVE_R=ENABLED boundary=vmlinux.o only gnu_linkers=other_unproven"
+            fi
+            if [[ "${{ contains(github.event.head_commit.message, '[linux-native-vdso64]') && '1' || '0' }}" == 1 ]]; then
+              export MINILD_ENABLE_VDSO64=1 COHORT_MINILD_FORCE_VDSO64=1
+              echo "MINILD_VDSO64=ENABLED Kbuild_64bit_vDSO_native_only=true cached_GNU_vdso_relink=true MiniC_cache=2064"
+            fi
+            export COHORT_NATIVE_AR="$native/ar-wrapper"
+            export COHORT_NATIVE_LD="$native/ld-wrapper"
+            export COHORT_NATIVE_OBJCOPY="$native/objcopy-wrapper"
+            # No shard recompile: the cached 2064 C objects stay byte-for-byte
+            # identical until Kbuild's separately attested generated-header
+            # reconciliation, usually four exact C owners.
+            test "$(wc -l < "$ev/minic-manifest.sha256")" -eq 2064
+            (cd "$ev" && sha256sum --quiet -c minic-manifest.sha256)
+            echo "NATIVE_UNION_CACHE=VERIFIED owners=2064 compile_C=0 reuse_GCC_gold=true"
+          fi
+          if [[ "${{ contains(github.event.head_commit.message, '[linux-runtime-full-crossblock]') && '1' || '0' }}" == 1 ]]; then
+            export MINIC_LINUX_FULL_CROSSBLOCK=1 MINIC_OPT_PURE_DISCARDED_ADDRESS_EQ=1
+            export COHORT_LINUX_FULL_CROSSBLOCK=1
+            echo "LINUX_FULL_CROSSBLOCK=FULL_VERIFY all_2064_MiniC=true original_stack_16KiB=true"
+          fi
+          # Full-current acceptance: seven authenticated MiniC producer shards feed
+          # this same receiver. Reuse the merged immutable 2064-object pool for
+          # the known seven-owner experimental P1 correction in this SAME job;
+          # do not rerun a second CI just to restore a freshly built full cache.
+          # Bare [linux-runtime-gcc-sharded] retains its original no-swap path.
+          export COHORT_P1_STACK_OWNER_SWAPS=${{ (contains(github.event.head_commit.message, '[linux-runtime-stack-owners]') || (contains(github.event.head_commit.message, '[linux-runtime-gcc-sharded]') && contains(github.event.head_commit.message, '[linux-runtime-p1-defined-crossblock]'))) && '1' || '0' }}
+          export COHORT_P1_IDENTICAL_IMAGE_REPEAT=${{ contains(github.event.head_commit.message, '[linux-runtime-repeat-image]') && '1' || '0' }}
+          export COHORT_P1_GDB_STACK=${{ (contains(github.event.head_commit.message, '[linux-runtime-gdb-stack]') || contains(github.event.head_commit.message, '[linux-runtime-p1-sched-chain]')) && '1' || '0' }}
+          export P1_GDB_SCHED_CHAIN=${{ contains(github.event.head_commit.message, '[linux-runtime-p1-sched-chain]') && '1' || '0' }}
+          export P1_GDB_IRQ_REENTRY=${{ contains(github.event.head_commit.message, '[linux-runtime-p1-low-irq-entry]') && '1' || '0' }}
+          export COHORT_P1_MULTI_RESCUE=${{ contains(github.event.head_commit.message, '[linux-runtime-multi-rescue]') && '1' || '0' }}
+          export COHORT_P1_MINIMIZE_RESCUE=${{ contains(github.event.head_commit.message, '[linux-runtime-rescue-minimize]') && '1' || '0' }}
+          export COHORT_P1_PAIR_RESCUE=${{ contains(github.event.head_commit.message, '[linux-runtime-rescue-pairs]') && '1' || '0' }}
+          export COHORT_P1_PAIR_DEBUG=${{ contains(github.event.head_commit.message, '[linux-runtime-p1-pair-debug]') && '1' || '0' }}
+          export COHORT_P1_DEFINED_CROSSBLOCK=${{ (contains(github.event.head_commit.message, '[linux-runtime-p1-defined-crossblock]') || contains(github.event.head_commit.message, '[linux-runtime-p1-ip6-single]') || (contains(github.event.head_commit.message, '[linux-runtime-p1-discard-eq]') || contains(github.event.head_commit.message, '[linux-runtime-p1-discard-eq-pair]'))) && '1' || '0' }}
+          export COHORT_P1_DISCARD_EQ=${{ (contains(github.event.head_commit.message, '[linux-runtime-p1-discard-eq]') || contains(github.event.head_commit.message, '[linux-runtime-p1-discard-eq-pair]')) && '1' || '0' }}
+          export COHORT_P1_DISCARD_EQ_BOTH=${{ contains(github.event.head_commit.message, '[linux-runtime-p1-discard-eq-pair]') && '1' || '0' }}
+          export COHORT_P1_SINGLE_OWNER=${{ (contains(github.event.head_commit.message, '[linux-runtime-p1-ip6-single]') || (contains(github.event.head_commit.message, '[linux-runtime-p1-discard-eq]') || contains(github.event.head_commit.message, '[linux-runtime-p1-discard-eq-pair]'))) && '1' || '0' }}
+          if [[ "$COHORT_P1_SINGLE_OWNER" == 1 ]]; then
+            [[ "$COHORT_P1_DEFINED_CROSSBLOCK" == 1 && "$COHORT_P1_PAIR_RESCUE" == 0 ]] || {
+              echo "P1_IP6_SINGLE=INVALID conflicting_experiment_flags"; exit 8;
+            }
+            echo "P1_IP6_SINGLE=ENABLED replay=ip6_output.o gcc=tcp_ipv6.o unchanged_others=2062"
+          fi
+          export COHORT_FRAME_CAPTURE_ONLY=${{ (contains(github.event.head_commit.message, '[linux-runtime-frame-components]') || contains(github.event.head_commit.message, '[linux-runtime-p1-nonreuse-reasons]')) && '1' || '0' }}
+          export COHORT_NONREUSE_REASON_CAPTURE=${{ contains(github.event.head_commit.message, '[linux-runtime-p1-nonreuse-reasons]') && '1' || '0' }}
+          export MINIC_CORE_FRAME_TRACE_FILTER=ip6_finish_output2,ip6_xmit,tcp_v6_connect,__tcp_transmit_skb
+          # #38219062394 identified 4064B and 2288B MiniC stack frames in
+          # ip6_finish_output2 and ip6_xmit. Test the containing C owner,
+          # then tcp_output, with all other 2063 objects pinned unchanged.
+          if [[ "${COHORT_P1_STACK_OWNER_SWAPS}" == 1 ]]; then
+            export COHORT_P1_SWAP_OWNERS="net/ipv6/ip6_output.o net/ipv4/tcp_output.o"
+            if [[ "${COHORT_P1_IDENTICAL_IMAGE_REPEAT}" == 1 ]]; then
+              export COHORT_P1_SWAP_OWNERS="net/ipv6/ip6_output.o"
+            fi
+          fi
+          export COHORT_CAPTURE_ONLY=${{ contains(github.event.head_commit.message, '[linux-runtime-earlycon-capture]') && '1' || '0' }}
+          bash tools/ci/linux-runtime-gcc-cohort-bisect-v1.sh \
+            "$work/linux-6.6.143" "$work/out" \
+            "$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain/bin/minic" \
+            "$work/provenance" "$ev/full-objects.txt" "$ev"
+          if [[ "${{ contains(github.event.head_commit.message, '[linux-native-union-cached]') && '1' || '0' }}" == 1 ]]; then
+            grep -Fq 'COHORT_CANDIDATE_CACHE=HIT objects=2064' "$ev/cohort.log" || {
+              echo 'NATIVE_UNION_CACHE=FAIL fallback_recompiled_full_C_pool' >&2; exit 20;
+            }
+            grep -Fq 'COHORT_RESULT=PASS candidate_objects=2064 scope=FULL_C_UNIVERSE' "$ev/cohort.log" || {
+              echo 'NATIVE_UNION_RESULT=FAIL missing_exact_2064_P1_pass' >&2; exit 21;
+            }
+            test -s "$NATIVE_TRACE_DIR/miniar.trace"
+            test -s "$NATIVE_TRACE_DIR/miniobjcopy.trace"
+            minic_ar_calls=$(grep -c '^miniar ' "$NATIVE_TRACE_DIR/miniar.trace" || true)
+            minic_mpit_calls=$(grep -c '^miniar mPiT ' "$NATIVE_TRACE_DIR/miniar.trace" || true)
+            gnu_ar_calls=$(grep -c '^gnu-ar' "$NATIVE_TRACE_DIR/miniar.trace" || true)
+            [[ "$minic_ar_calls" -gt 0 && "$minic_mpit_calls" -gt 0 && "$gnu_ar_calls" == 0 ]] || {
+              echo "NATIVE_UNION=FAIL AR_path expected_all_native_mPiT_without_GNU_AR" >&2
+              exit 22
+            }
+            test "$(grep -c '^minild ' "$NATIVE_TRACE_DIR/minild.trace")" -ge 3
+            if [[ "${{ contains(github.event.head_commit.message, '[linux-native-purgatory-r]') && '1' || '0' }}" == 1 ]]; then
+              native_purgatory=$(grep -c '^minild-purgatory-r ' "$NATIVE_TRACE_DIR/minild.trace" || true)
+              gnu_purgatory=$(grep -Ec '^gnu-ld .* -o arch/riscv/purgatory/purgatory\.ro($| )' "$NATIVE_TRACE_DIR/minild.trace" || true)
+              [[ "$native_purgatory" -ge 1 && "$gnu_purgatory" -eq 0 ]] || {
+                echo "NATIVE_UNION=FAIL purgatory.ro -r expected_native_no_GNU_fallback" >&2
+                exit 24
+              }
+              echo "MINILD_PURGATORY_R=PASS native_calls=$native_purgatory gnu_calls=0 full_QEMU_P1=PASS"
+            fi
+            if [[ "${{ contains(github.event.head_commit.message, '[linux-native-purgatory-static]') && '1' || '0' }}" == 1 ]]; then
+              native_static=$(grep -c '^minild-purgatory-static ' "$NATIVE_TRACE_DIR/minild.trace" || true)
+              gnu_static=$(grep -Ec '^gnu-ld .* -o arch/riscv/purgatory/purgatory\.chk($| )' "$NATIVE_TRACE_DIR/minild.trace" || true)
+              [[ "$native_static" -ge 1 && "$gnu_static" -eq 0 ]] || {
+                echo "NATIVE_UNION=FAIL purgatory.chk expected_native_no_GNU_fallback" >&2
+                exit 25
+              }
+              echo "MINILD_PURGATORY_STATIC=PASS native_calls=$native_static gnu_calls=0 full_QEMU_P1=PASS"
+            fi
+            if [[ "${{ contains(github.event.head_commit.message, '[linux-native-intermediate-vmlinux-r]') && '1' || '0' }}" == 1 ]]; then
+              minild_r_calls=$(grep -c '^minild-r ' "$NATIVE_TRACE_DIR/minild.trace" || true)
+              gnu_r_calls=$(grep -c '^gnu-ld .* -o vmlinux.o ' "$NATIVE_TRACE_DIR/minild.trace" || true)
+              [[ "$minild_r_calls" -eq 2 && "$gnu_r_calls" -eq 0 ]] || {
+                echo "NATIVE_UNION=FAIL vmlinux.o -r expected_two_real_MiniLD_calls_no_GNU" >&2
+                exit 23
+              }
+              echo "MINILD_NATIVE_R=PASS calls=$minild_r_calls fallback_GNU_vmlinux_o=0 full_QEMU_P1=PASS"
+            fi
+            if [[ "${{ contains(github.event.head_commit.message, '[linux-minipp-seven-integration]') && '1' || '0' }}" == 1 ]]; then
+              # Avoid an indented here-doc delimiter inside YAML's run: block.
+              # The previous shell reported EOF syntax after Linux/QEMU had passed.
+              python3 -c 'import json,sys; j=json.load(open(sys.argv[1])); assert j["owners"]==2064 and j["shards"]==7 and j["failed"]==0 and j["pp"]=="MiniPP"' \
+                "$GITHUB_WORKSPACE/build/minipp-seven-merge/native-summary.json"
+              grep -Fq 'COHORT_P1=PASS name=full_all_verified syscalls=12 python_era_oracle=PASS' "$ev/cohort.log" || exit 40
+              echo 'MINIPP_SEVEN_QEMU=PASS pp_input=MiniPP 2064_native_C_owners=true QEMU_P1=12/12 generated_header_pp_pending=true'
+            fi
+            if [[ "${{ contains(github.event.head_commit.message, '[linux-native-vdso64]') && '1' || '0' }}" == 1 ]]; then
+              native_vdso64_calls=$(grep -c '^minild-vdso64 ' "$NATIVE_TRACE_DIR/minild.trace" || true)
+              gnu_vdso64_calls=$(grep -Ec '^gnu-ld .*arch/riscv/kernel/vdso/vdso\.so\.dbg' "$NATIVE_TRACE_DIR/minild.trace" || true)
+              [[ "$native_vdso64_calls" -ge 1 && "$gnu_vdso64_calls" -eq 0 ]] || {
+                echo "MINILD_VDSO64=FAIL expected_real_Kbuild_native_link native=$native_vdso64_calls gnu=$gnu_vdso64_calls" >&2
+                exit 36
+              }
+              vdso="$work/out/arch/riscv/kernel/vdso/vdso.so.dbg"
+              test -s "$vdso" || {
+                echo 'MINILD_VDSO64=FAIL missing_relinked_64bit_ELF' >&2
+                exit 37
+              }
+              test -s "$work/out/arch/riscv/kernel/vdso/vdso.so" || {
+                echo 'MINILD_VDSO64=FAIL missing_native_objcopy_product' >&2
+                exit 37
+              }
+              native_copy_vdso64=$(grep -c '^miniobjcopy .*vdso\.so\.dbg' "$NATIVE_TRACE_DIR/miniobjcopy.trace" || true)
+              [[ "$native_copy_vdso64" -ge 1 ]] || {
+                echo 'MINILD_VDSO64=FAIL missing_real_native_MiniObjcopy_postlink' >&2
+                exit 37
+              }
+              riscv64-linux-gnu-readelf -Wh "$vdso" >"$NATIVE_TRACE_DIR/native-vdso64-elf-header.txt"
+              riscv64-linux-gnu-readelf -W --dyn-syms "$vdso" >"$NATIVE_TRACE_DIR/native-vdso64-dynsyms.txt"
+              grep -q 'DYN (Shared object file)' "$NATIVE_TRACE_DIR/native-vdso64-elf-header.txt"
+              grep -q 'RISC-V' "$NATIVE_TRACE_DIR/native-vdso64-elf-header.txt"
+              for sym in __vdso_rt_sigreturn __vdso_gettimeofday __vdso_clock_gettime \
+                         __vdso_clock_getres __vdso_getcpu __vdso_flush_icache \
+                         __vdso_riscv_hwprobe; do
+                grep -Fq "${sym}@@LINUX_4.15" "$NATIVE_TRACE_DIR/native-vdso64-dynsyms.txt" || {
+                  echo "MINILD_VDSO64=FAIL missing_versioned_export:$sym" >&2
+                  exit 37
+                }
+              done
+              grep -Fq 'COHORT_P1=PASS name=full_all_verified syscalls=12 python_era_oracle=PASS' "$ev/cohort.log" || exit 38
+              echo "MINILD_VDSO64_KBUILD_ABI=PASS MiniLD_exact=true MiniObjcopy_calls=$native_copy_vdso64 versioned_exports=7 ELF64_RISCV_ET_DYN=true"
+              echo "MINILD_VDSO64=PASS native_calls=$native_vdso64_calls gnu_calls=$gnu_vdso64_calls real_Kbuild_link=true MiniC_cached=2064 original_16KiB=true QEMU_P1=12/12"
+            fi
+            if [[ "${{ contains(github.event.head_commit.message, '[linux-native-minias-earlycon]') && '1' || '0' }}" == 1 ]]; then
+              grep -Fq 'COHORT_P1=PASS name=full_all_verified syscalls=12 python_era_oracle=PASS' "$ev/cohort.log" || exit 29
+              test -s "$ev/minias-earlycon-experiment/experimental-earlycon-object.sha256"
+              echo "MINIAS_EARLYCON_FULL_RUNTIME=PASS 2063_GNU_AS_C_objects=sha_verified one_MiniAS_earlycon=true full_QEMU_fast_shell_P1=true no_full_C_recompile=true"
+            fi
+            if [[ "${{ contains(github.event.head_commit.message, '[linux-minias-corpus-runtime]') && '1' || '0' }}" == 1 ]]; then
+              grep -Fq 'COHORT_P1=PASS name=full_all_verified syscalls=12 python_era_oracle=PASS' "$ev/cohort.log" || exit 31
+              test "$(grep -c 'MINIAS_CORPUS_RUNTIME_OBJECTS=PASS' "$ev/cohort.log")" -eq 2
+              echo 'MINIAS_CORPUS_FULL_RUNTIME=PASS scanned=64 native=60 frozen_GNUAS=2004 full_QEMU_fast_shell_P1=true no_full_C_recompile=true'
+              if [[ "${{ contains(github.event.head_commit.message, '[linux-minias-dynamic-headers]') && '1' || '0' }}" == 1 ]]; then
+                test "$(grep -c 'MINIAS_DYNAMIC_HEADER_OBJECTS=PASS' "$ev/cohort.log")" -eq 2
+                echo 'MINIAS_DYNAMIC_FULL_RUNTIME=PASS native_MiniAS_C=64 remaining_GNU_AS_C=2000 P1=true'
+              fi
+            fi
+            if [[ "${{ contains(github.event.head_commit.message, '[linux-minias-all-C-runtime]') && '1' || '0' }}" == 1 ]]; then
+              grep -Fq 'COHORT_P1=PASS name=full_all_verified syscalls=12 python_era_oracle=PASS' "$ev/cohort.log" || exit 34
+              test "$(grep -c 'MINIAS_CORPUS_RUNTIME_OBJECTS=PASS trial=' "$ev/cohort.log")" -eq 2
+              grep -Fq 'MINIAS_DYNAMIC_HEADER_OBJECTS=PASS trial=full_all_verified native_header_objects=4 total_native_C_objects=2064' "$ev/cohort.log" || exit 35
+              echo "MINIAS_ALL_C_RUNTIME=PASS miniC_C=2064 miniAS_C=2064 remaining_GNU_AS_C=0 P1=12/12"
+            fi
+            if [[ "${{ contains(github.event.head_commit.message, '[linux-minias-native-S-runtime]') && '1' || '0' }}" == 1 ]]; then
+              grep -Fq 'MINIAS_NATIVE_S_RUNTIME=PASS trial=full_all_verified' "$ev/cohort.log"
+              grep -Fq 'MINIAS_ALL_C_RUNTIME=PASS' "$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-v1/cohort.log" || true
+              echo "MINIAS_NATIVE_S_INTEGRATION=PASS all_2064_MiniC_C_native_AS=true original_Kbuild_native_S=true P1=12/12"
+            fi
+            if [[ "${{ contains(github.event.head_commit.message, '[linux-minipp-seven-integration]') && '1' || '0' }}" == 1 ]]; then
+              pp_tag=MiniPP_2064_native_C_baseline_four_generated_header_dependents_replayed_by_current_cohort
+            else
+              pp_tag=GNU
+            fi
+            echo "NATIVE_UNION_RESULT=PASS pp=$pp_tag minic=2064 native_C_from_seven_shards=${COHORT_P1_EXPERIMENTAL_POOL:-none} ar=MiniAR_full_actual_Kbuild ar_native_calls=$minic_ar_calls ar_mpit_calls=$minic_mpit_calls ar_gnu_calls=0 ld=MiniLD_certified_boundaries vdso64_native=${MINILD_ENABLE_VDSO64:-0} objcopy=MiniObjcopy runtime=P1"
+          fi
+
+      - name: Preserve aggregate link, QEMU and failure-frontier evidence
+        if: always() && !contains(github.event.head_commit.message, '[linux-runtime-large-image-qemu]') && !contains(github.event.head_commit.message, '[linux-runtime-p1-frame-audit]') && !contains(github.event.head_commit.message, '[linux-minild-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minild-reloc-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minild-purgatory-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minild-vdso64-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minias-earlycon-frozen]') && (!contains(github.event.head_commit.message, '[linux-minias-corpus-scan]') || contains(github.event.head_commit.message, '[linux-minias-corpus-runtime]'))
+        uses: actions/upload-artifact@v4
+        with:
+          name: sharded-gnu-minic-QEMU-${{ github.sha }}
+          path: |
+            build/linux-runtime-gcc-cohort-v1/full-objects.txt
+            build/linux-runtime-gcc-cohort-v1/cohort.log
+            build/linux-runtime-gcc-cohort-v1/identity.txt
+            build/linux-runtime-gcc-cohort-v1/minic-identity.txt
+            build/linux-runtime-gcc-cohort-v1/minic-manifest.sha256
+            build/linux-runtime-gcc-cohort-v1/gcc-preflight.log
+            build/linux-runtime-gcc-cohort-v1/results.tsv
+            build/linux-runtime-gcc-cohort-v1/native-union/*.trace
+            build/linux-runtime-gcc-cohort-v1/native-union/*.tsv
+            build/linux-runtime-gcc-cohort-v1/trials/*/minias-dynamic-hashes.sha256
+            build/linux-runtime-gcc-cohort-v1/trials/*/minias-dynamic-logs/*.log
+            build/linux-runtime-gcc-cohort-v1/minias-corpus-2064-evidence/*.json
+            build/linux-runtime-gcc-cohort-v1/minias-corpus-2064-evidence/*.sha256
+            build/linux-runtime-gcc-cohort-v1/minias-native-S-evidence/*.tsv
+            build/linux-runtime-gcc-cohort-v1/minias-native-S-evidence/*.sha256
+            build/linux-runtime-gcc-cohort-v1/minias-native-S-evidence/logs/*.log
+            build/linux-runtime-gcc-cohort-v1/minias-native-S-evidence/strcmp/*
+            build/linux-runtime-gcc-cohort-v1/minias-corpus-2064-evidence/assembly-failures.tsv
+            build/linux-runtime-gcc-cohort-v1/minias-corpus-64-evidence/*.tsv
+            build/linux-runtime-gcc-cohort-v1/minias-corpus-64-evidence/*.sha256
+            build/linux-runtime-gcc-cohort-v1/minias-corpus-64-evidence/*.json
+            build/linux-runtime-gcc-cohort-v1/minias-earlycon-experiment/*.txt
+            build/linux-runtime-gcc-cohort-v1/minias-earlycon-experiment/*.sha256
+            build/linux-runtime-gcc-cohort-v1/minias-earlycon-experiment/*.stderr
+            build/linux-runtime-gcc-cohort-v1/minias-earlycon-experiment/*.stdout
+            build/linux-runtime-gcc-cohort-v1/native-union/tools.sha256
+            build/linux-runtime-gcc-cohort-v1/native-union/*-wrapper
+            build/linux-runtime-gcc-cohort-v1/frontier.txt
+            build/linux-runtime-gcc-cohort-v1/p1-owner-verdicts.tsv
+            build/linux-runtime-gcc-cohort-v1/p1-multi-rescue-repeats.tsv
+            build/linux-runtime-gcc-cohort-v1/p1-rescue-minimize.tsv
+            build/linux-runtime-gcc-cohort-v1/p1-rescue-minimize-repeats.tsv
+            build/linux-runtime-gcc-cohort-v1/p1-rescue-pairs.tsv
+            build/linux-runtime-gcc-cohort-v1/p1-rescue-pairs-repeats.tsv
+            build/linux-runtime-gcc-cohort-v1/p1-pair-calltrace/*/*.log
+            build/linux-runtime-gcc-cohort-v1/p1-pair-calltrace/*/*.tsv
+            build/linux-runtime-gcc-cohort-v1/p1-pair-calltrace/*/*.txt
+            build/linux-runtime-gcc-cohort-v1/p1-pair-calltrace/*/*.gdb
+            build/linux-runtime-gcc-cohort-v1/p1-pair-calltrace/*/*.sha256
+            build/linux-runtime-gcc-cohort-v1/p1_gcc_rescue_set.txt
+            build/linux-runtime-gcc-cohort-v1/p1-identical-image-repeats.tsv
+            build/linux-runtime-gcc-cohort-v1/p1-gdb-stack/*.log
+            build/linux-runtime-gcc-cohort-v1/p1-gdb-stack/*.txt
+            build/linux-runtime-gcc-cohort-v1/p1-gdb-stack/*.gdb
+            build/linux-runtime-gcc-cohort-v1/p1-gdb-stack/*.nm
+            build/linux-runtime-gcc-cohort-v1/p1-gdb-stack/*.bin
+            build/linux-runtime-gcc-cohort-v1/p1-gdb-stack/*.tsv
+            build/linux-runtime-gcc-cohort-v1/p1-gdb-stack-experiment/*.log
+            build/linux-runtime-gcc-cohort-v1/p1-gdb-stack-experiment/*.txt
+            build/linux-runtime-gcc-cohort-v1/p1-gdb-stack-experiment/*.gdb
+            build/linux-runtime-gcc-cohort-v1/p1-gdb-stack-experiment/*.nm
+            build/linux-runtime-gcc-cohort-v1/p1-gdb-stack-experiment/*.bin
+            build/linux-runtime-gcc-cohort-v1/p1-gdb-stack-experiment/*.tsv
+            build/linux-runtime-gcc-cohort-v1/trials/*/qemu/rdinit-init.log
+            build/linux-runtime-gcc-cohort-v1/p1-frame-components/*.tsv
+            build/linux-runtime-gcc-cohort-v1/p1-frame-components/*.log
+            build/linux-runtime-gcc-cohort-v1/p1-frame-components/*.sha256
+            build/linux-runtime-gcc-cohort-v1/p1-frame-components/*.i.gz
+            build/linux-runtime-gcc-cohort-v1/p1-*-audit-compiler.sha256
+            build/linux-runtime-gcc-cohort-v1/p1-diagnostic-compiler.sha256
+            build/linux-runtime-gcc-cohort-v1/p1-pre-crossblock-compiler.sha256
+            build/linux-runtime-gcc-cohort-v1/p1-crossblock-compiler.sha256
+            build/linux-runtime-gcc-cohort-v1/p1-defined-crossblock/*.tsv
+            build/linux-runtime-gcc-cohort-v1/p1-defined-crossblock/*.log
+            build/linux-runtime-gcc-cohort-v1/p1-defined-crossblock/*.txt
+            build/linux-runtime-gcc-cohort-v1/p1-defined-crossblock/*.sha256
+            build/linux-runtime-gcc-cohort-v1/p1-defined-ip6-only/*.tsv
+            build/linux-runtime-gcc-cohort-v1/p1-defined-ip6-only/*.log
+            build/linux-runtime-gcc-cohort-v1/p1-defined-ip6-only/*.txt
+            build/linux-runtime-gcc-cohort-v1/p1-defined-ip6-only/*.sha256
+            build/linux-runtime-gcc-cohort-v1/p1-owner-hit.txt
+            build/linux-runtime-gcc-cohort-v1/p1-list-debug-disasm.txt
+            build/linux-runtime-gcc-cohort-v1/trials/full_all/Image
+            # Preserve the exact experimental 7-owner Image for QEMU-only
+            # reproducibility and SHA-attested replay without recompilation.
+            build/linux-runtime-gcc-cohort-v1/trials/p1_defined_crossblock_1/Image
+            build/linux-runtime-gcc-cohort-v1/trials/*/link.log
+            build/linux-runtime-gcc-cohort-v1/trials/*/guard.log
+            build/linux-runtime-gcc-cohort-v1/trials/*/runtime.log
+            build/linux-runtime-gcc-cohort-v1/trials/*/qemu-registers.jsonl
+            build/linux-runtime-gcc-cohort-v1/trials/*/qmp-probe.log
+            build/linux-runtime-gcc-cohort-v1/trials/*/qmp-symbols.log
+            build/linux-runtime-gcc-cohort-v1/trials/*/earlycon-source/*
+            build/linux-runtime-gcc-cohort-v1/trials/*/runtime-p1.log
+          if-no-files-found: warn
+          retention-days: 7
+
+  # Opt-in hotfix diagnostic: reuse authenticated 2064 old MiniC objects
+  # but replace only earlycon.o with the current patched MiniC profile.
+  # No new workflow, no rebuilding the 2063 unaffected C translation units.
+  gcc-earlycon-hotfix:
+    if: github.event_name == 'push' && (contains(github.event.head_commit.message, '[linux-runtime-earlycon-hotfix]') || contains(github.event.head_commit.message, '[linux-runtime-core-capture]'))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Install pinned RISC-V GNU tools and QEMU
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get -o Acquire::Retries=2 install -y --no-install-recommends \
+            gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
+            qemu-system-misc opensbi libc6-dev-riscv64-cross python3 make cpio gzip device-tree-compiler gdb-multiarch || {
+              sudo apt-get -o Acquire::Retries=3 update
+              sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+                gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
+                qemu-system-misc opensbi libc6-dev-riscv64-cross python3 make cpio gzip device-tree-compiler gdb-multiarch
+            }
+
+      - name: Identify exact pure-GNU golden reference
+        id: golden
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          cfg=eeb04f304ebfb97a1079c187dc0c2ea3cc61fc50a55aa3cc776237c16ab19bbe
+          gcc_sig=$(sha256sum "$(command -v riscv64-linux-gnu-gcc)" | cut -c1-16)
+          ld_sig=$(sha256sum "$(command -v riscv64-linux-gnu-ld)" | cut -c1-16)
+          echo "key=linux-gnu-golden-v1-6.6.143-$cfg-$gcc_sig-$ld_sig" >>"$GITHUB_OUTPUT"
+
+      - name: Restore QEMU-certified GCC golden object tree
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            build/linux-runtime-gcc/out
+            build/linux-runtime-gcc/provenance
+          key: ${{ steps.golden.outputs.key }}
+          fail-on-cache-miss: true
+
+      - name: Restore old authenticated 2064 MiniC object pool
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            build/linux-runtime-gcc-cohort-v1/minic
+            build/linux-runtime-gcc-cohort-v1/minic-manifest.sha256
+            build/linux-runtime-gcc-cohort-v1/minic-identity.txt
+          # Exact immutable key from pre-fix CI #38051834014, not restore-keys.
+          key: gnu-minic-objects-v1-eeb04f304ebfb97a1079c187dc0c2ea3cc61fc50a55aa3cc776237c16ab19bbe-d19c855bc2650568f84a73a8a17e2b8be42faee80d0ed22913588bb4d8df7822-1d1c8d09cfffddb37990552ae6392181a42d55332e48232dce27e7305d7e770b-0c2a199ea3ae14d39b008fd4080d4b18d675b07daa17976c7d9755e8ea67310b-d072447ef15a207422bf4874920221c41af7a771d1dbae770855cf3d6220a507
+          fail-on-cache-miss: true
+
+      - name: Restore exact Linux 6.6.143 source
+        uses: ./.github/actions/linux-runtime-restore-fixture
+        with:
+          fixture: source
+
+      - name: Recover certified full-C same-config object order
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-runtime-gcc"
+          source="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0/linux-6.6.143"
+          test -d "$source"
+          test ! -e "$work/linux-6.6.143"
+          cp -a --reflink=auto "$source" "$work/linux-6.6.143"
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-v1"
+          mkdir -p "$ev"
+          python3 tools/ci/linux-runtime-gcc-full-c-objects-v1.py \
+            --out "$work/out" --manifest "$work/provenance/gcc-objects.sha256" \
+            --prefix tools/ci/linux-runtime-gcc-cohort-objects-v1.txt \
+            --output "$ev/full-objects.txt" --excluded "$ev/non-c-objects.tsv" \
+            --min-c-objects 1200
+          test "$(grep -Ec '^[^#[:space:]]+\.o$' "$ev/full-objects.txt")" = 2064
+
+      - name: Capture exact Netfilter GNU and MiniC cached objects only
+        if: contains(github.event.head_commit.message, '[linux-runtime-core-capture]')
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mkdir -p build/core-capture
+          d=build/core-capture
+          gcc="$GITHUB_WORKSPACE/build/linux-runtime-gcc/out/net/netfilter/core.o"
+          minic="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-v1/minic/net/netfilter/core.o"
+          test -s "$gcc" && test -s "$minic"
+          cp "$gcc" "$d/gcc-core.o"
+          cp "$minic" "$d/minic-core.o"
+          sha256sum "$gcc" "$minic" >"$d/identities.sha256"
+          riscv64-linux-gnu-objdump -dr --disassemble=nf_hook_entries_grow "$gcc" >"$d/gcc.nf_hook_entries_grow.disasm"
+          riscv64-linux-gnu-objdump -dr --disassemble=nf_hook_entries_grow "$minic" >"$d/minic.nf_hook_entries_grow.disasm"
+          riscv64-linux-gnu-nm --defined-only "$minic" >"$d/minic.symbols"
+          # Recover the next fault's exact mm/gup.c owner without linking a
+          # kernel; test whether generic MiniC corrections alter its code.
+          work="$GITHUB_WORKSPACE/build/linux-runtime-gcc"
+          gup_gcc="$work/out/mm/gup.o"
+          gup_old="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-v1/minic/mm/gup.o"
+          test -s "$gup_gcc" && test -s "$gup_old"
+          sha256sum "$gup_old" >"$d/gup.old-object.sha256"
+          riscv64-linux-gnu-objdump -dr --disassemble=__minic_inline_spec_9309_155 \
+            "$gup_old" >"$d/gup.old-fault-inline.disasm"
+          make -C "$work/linux-6.6.143" O="$work/out" ARCH=riscv \
+            CROSS_COMPILE=riscv64-linux-gnu- mm/gup.i >"$d/gup.preprocess.log" 2>&1
+          cp "$work/out/mm/gup.i" "$d/gup.exact.i"
+          bash tools/ci/linux-runtime-build-minic-profile-v1.sh \
+            "$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain" "$d/gup-compiler"
+          "$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain/bin/minic" \
+            -S "$d/gup.exact.i" -o "$d/gup.current-minic.s" \
+            >"$d/gup.current.stdout" 2>"$d/gup.current.stderr"
+          riscv64-linux-gnu-gcc -c "$d/gup.current-minic.s" -o "$d/gup.current-minic.o"
+          riscv64-linux-gnu-objdump -dr --disassemble=__minic_inline_spec_9309_155 \
+            "$d/gup.current-minic.o" >"$d/gup.current-fault-inline.disasm"
+          sha256sum "$d/gup.current-minic.o" >"$d/gup.current-object.sha256"
+          echo "GUP_EXACT_CAPTURE=PASS old=$(sha256sum "$gup_old" | cut -d' ' -f1) current=$(sha256sum "$d/gup.current-minic.o" | cut -d' ' -f1)"
+          echo "NETFILTER_EXACT_OWNER_CAPTURE=PASS"
+      - uses: actions/upload-artifact@v4
+        if: contains(github.event.head_commit.message, '[linux-runtime-core-capture]')
+        with:
+          name: netfilter-core-gnu-minic-cache-exact
+          path: build/core-capture/
+          retention-days: 2
+      - name: Build current patched MiniC compiler only once
+        if: "!contains(github.event.head_commit.message, '[linux-runtime-core-capture]')"
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          bash tools/ci/linux-runtime-build-minic-profile-v1.sh \
+            "$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain" \
+            "$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-v1/compiler"
+
+      - name: Validate QMP sampler before expensive GNU linking
+        if: "!contains(github.event.head_commit.message, '[linux-runtime-core-capture]')"
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 tools/ci/linux-runtime-qmp-pc-sampler-v1.py --self-test
+          python3 -m py_compile tools/ci/linux-runtime-qmp-pc-sampler-v1.py tools/ci/linux-runtime-qmp-stack-symbols-v1.py tools/ci/linux-runtime-gdb-boundary-v1.py
+          sock="/tmp/minic-gdb-preflight-$.sock"
+          qemu-system-riscv64 -M virt -cpu max -m 512M -nographic -no-reboot -bios none -S \
+            -chardev "socket,path=$sock,server=on,wait=off,id=gdb0" \
+            -gdb chardev:gdb0 </dev/null > /tmp/minic-gdb-stub-preflight.log 2>&1 &
+          qpid=$!
+          trap 'kill "$qpid" 2>/dev/null || :; wait "$qpid" 2>/dev/null || :; rm -f -- "$sock"' EXIT
+          ready=0
+          for i in $(seq 1 50); do
+            if test -S "$sock"; then ready=1; break; fi
+            if ! kill -0 "$qpid" 2>/dev/null; then break; fi
+            sleep .1
+          done
+          if ((ready==0)); then
+            cat /tmp/minic-gdb-stub-preflight.log
+            echo "GDB_STUB_PREFLIGHT=FAIL"
+            exit 1
+          fi
+          echo "GDB_STUB_PREFLIGHT=PASS unix_socket=true"
+          kill "$qpid" 2>/dev/null || :
+          wait "$qpid" 2>/dev/null || :
+          rm -f -- "$sock"
+          trap - EXIT
+
+      - name: Recompile earlycon.o only, GNU link and compare QEMU frontier
+        if: "!contains(github.event.head_commit.message, '[linux-runtime-core-capture]')"
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-runtime-gcc"
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-v1"
+          chmod +x tests/external/linux/qemu_explicit_initrd_wrapper.py
+          export COHORT_ACTION=verify COHORT_EARLYCON_HOTFIX=1 COHORT_PATCH_SUPER_V1=1 COHORT_PATCH_NET_PAIR=1 COHORT_NETWORK_CAPTURE_ONLY=0 COHORT_FAULT_OWNER_MAP=1 COHORT_FAULT_OWNER_SYMBOL=__minic_inline_spec_999_52 COHORT_FAULT_OWNER_COMPANION=__minic_inline_spec_10691_62 COHORT_FAULT_OWNER_EXTRA_NETLINK=0 COHORT_EARLYCON_EXPLICIT_INITRD=0 COHORT_EARLYCON_EXPLICIT_SHELL=0 COHORT_NEXT_FAULT_DIAG=0 COHORT_UART_EARLYCON=1 COHORT_NEXT_GCC_SWAPS=1 COHORT_NEXT_GCC_TARGET= COHORT_QMP_STOP_SNAPSHOT=1 COHORT_SPINLOCK_CAPTURE_ONLY=0 COHORT_REPAIR_RUNTIME_OWNER=1 COHORT_REPAIR_INET_CSK_OWNER=1 COHORT_REPAIR_INET_HASHTABLES_OWNER=1 COHORT_NEXT_GCC_EXPLICIT_INITRD=1 COHORT_GDB_SWAP=0 COHORT_GDB_BOUNDARY=0 LINUX_RUNTIME_EARLYCON_ARG=earlycon=uart8250,mmio,0x10000000,115200n8
+          bash tools/ci/linux-runtime-gcc-cohort-bisect-v1.sh \
+            "$work/linux-6.6.143" "$work/out" \
+            "$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain/bin/minic" \
+            "$work/provenance" "$ev/full-objects.txt" "$ev"
+
+      - name: Preserve single-object experiment evidence
+        if: "always() && !contains(github.event.head_commit.message, '[linux-runtime-core-capture]')"
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-runtime-earlycon-one-object-${{ github.sha }}
+          path: |
+            build/linux-runtime-gcc-cohort-v1/cohort.log
+            build/linux-runtime-gcc-cohort-v1/identity.txt
+            build/linux-runtime-gcc-cohort-v1/results.tsv
+            build/linux-runtime-gcc-cohort-v1/gcc-preflight.log
+            build/linux-runtime-gcc-cohort-v1/earlycon-hotfix/
+            build/linux-runtime-gcc-cohort-v1/fault-owner/*
+            build/linux-runtime-gcc-cohort-v1/trials/earlycon_fixed_only/link*.log
+            build/linux-runtime-gcc-cohort-v1/trials/earlycon_fixed_only/guard.log
+            build/linux-runtime-gcc-cohort-v1/trials/earlycon_fixed_only/qmp*.log
+            build/linux-runtime-gcc-cohort-v1/trials/earlycon_fixed_only/qemu-registers.jsonl
+            build/linux-runtime-gcc-cohort-v1/trials/earlycon_fixed_only/qemu-uart-earlycon.log
+            build/linux-runtime-gcc-cohort-v1/trials/earlycon_fixed_only/uart-qmp/*
+            build/linux-runtime-gcc-cohort-v1/trials/earlycon_fixed_only/gdb-boundary/*
+            build/linux-runtime-gcc-cohort-v1/trials/gcc_only_*/qemu-uart-earlycon.log
+            build/linux-runtime-gcc-cohort-v1/trials/gcc_only_*/uart-qmp/qmp-probe.log
+            build/linux-runtime-gcc-cohort-v1/trials/gcc_only_*/uart-qmp/qemu-registers.jsonl
+            build/linux-runtime-gcc-cohort-v1/trials/gcc_only_*/uart-qmp/stack-symbols.txt
+            build/linux-runtime-gcc-cohort-v1/trials/gcc_only_*/guard.log
+            build/linux-runtime-gcc-cohort-v1/trials/gcc_only_*/qmp-symbols.log
+            build/linux-runtime-gcc-cohort-v1/trials/gcc_only_*/runtime-explicit-*.log
+            build/linux-runtime-gcc-cohort-v1/trials/gcc_only_*/qemu-explicit-*/rdinit-init.log
+            build/linux-runtime-gcc-cohort-v1/trials/gcc_only_fs_*/gdb-boundary/*
+            build/linux-runtime-gcc-cohort-v1/trials/earlycon_fixed_only/runtime.log
+            build/linux-runtime-gcc-cohort-v1/trials/earlycon_fixed_only/qemu-early-noinitrd.log
+            build/linux-runtime-gcc-cohort-v1/trials/earlycon_fixed_only/runtime-explicit-*.log
+            build/linux-runtime-gcc-cohort-v1/trials/earlycon_fixed_only/qemu-explicit-*/rdinit-init.log
+          if-no-files-found: warn
+          retention-days: 7
+

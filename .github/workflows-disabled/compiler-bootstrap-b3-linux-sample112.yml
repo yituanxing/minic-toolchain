@@ -1,0 +1,148 @@
+name: Compiler Bootstrap B3 Linux Sample112
+
+on:
+  push:
+    branches:
+      - refactor/declaration-sema-v1
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+# B3 validates self-hosted Stage2 against spread Linux translation units.
+
+jobs:
+  resolve-stage2:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[bootstrap-b3-linux-sample]')
+    runs-on: ubuntu-24.04
+    outputs:
+      run_id: ${{ steps.resolve.outputs.run_id }}
+    steps:
+      - name: Resolve latest successful B1
+        id: resolve
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          run_id=$(gh api \
+            "repos/$GITHUB_REPOSITORY/actions/workflows/compiler-bootstrap-b1-sharded.yml/runs?branch=refactor%2Fdeclaration-sema-v1&status=success&per_page=1" \
+            --jq '.workflow_runs[0].id // empty')
+          test -n "$run_id"
+          echo "run_id=$run_id" >>"$GITHUB_OUTPUT"
+          echo "BOOTSTRAP_B3_SOURCE_B1 run_id=$run_id"
+
+  sample:
+    needs: resolve-stage2
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: first500
+            corpus_dir: linux-focus-corpus
+            expected: 500
+          - label: new500
+            corpus_dir: linux-new500-corpus
+            cache_key: linux-new500-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-indices-500-999
+            expected: 500
+          - label: next500
+            corpus_dir: linux-next500-corpus
+            cache_key: linux-next500-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-indices-1000-1499
+            expected: 500
+          - label: next500b
+            corpus_dir: linux-next500b-corpus
+            cache_key: linux-next500b-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-indices-1500-1999
+            expected: 500
+          - label: next500c
+            corpus_dir: linux-next500c-corpus
+            cache_key: linux-next500c-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-indices-2000-2499
+            expected: 500
+          - label: next500d
+            corpus_dir: linux-next500d-corpus
+            cache_key: linux-next500d-corpus-v4-6.6.143-rv64-defconfig-gcc13.3.0-indices-2500-2999
+            expected: 500
+          - label: final352
+            corpus_dir: linux-final352-corpus
+            cache_key: linux-final352-corpus-v2-6.6.143-rv64-defconfig-gcc13.3.0-indices-3000-3351
+            expected: 352
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Restore frozen first500 corpus
+        if: matrix.label == 'first500'
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-focus-corpus
+          key: linux-focus-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-${{ hashFiles('tests/external/linux/replay-indices.txt') }}
+          fail-on-cache-miss: true
+
+      - name: Restore frozen shard corpus
+        if: matrix.label != 'first500'
+        uses: actions/cache/restore@v4
+        with:
+          path: build/${{ matrix.corpus_dir }}
+          key: ${{ matrix.cache_key }}
+          fail-on-cache-miss: true
+
+      - name: Install Stage2 runtime and assembler
+        run: |
+          sudo apt-get -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            gcc-riscv64-linux-gnu libc6-dev-riscv64-cross qemu-user
+
+      - name: Download frozen Stage2
+        uses: actions/download-artifact@v4
+        with:
+          name: bootstrap-b1-stage2
+          path: build/bootstrap-b3-artifact
+          repository: ${{ github.repository }}
+          run-id: ${{ needs.resolve-stage2.outputs.run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Compile and assemble 16 spread samples through Stage2
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          stage2=$(find build/bootstrap-b3-artifact -type f -name minic-stage2-rv64 -print -quit)
+          test -s "$stage2"
+          chmod +x "$stage2"
+          wrapper="$GITHUB_WORKSPACE/build/bootstrap-b3-stage2"
+          cat >"$wrapper" <<EOF
+          #!/bin/sh
+          exec qemu-riscv64 "$GITHUB_WORKSPACE/$stage2" "\$@"
+          EOF
+          chmod +x "$wrapper"
+
+          label="${{ matrix.label }}"
+          corpus="$GITHUB_WORKSPACE/build/${{ matrix.corpus_dir }}"
+          work="$GITHUB_WORKSPACE/build/bootstrap-b3-$label"
+          CORE_FAST_TRACE=1 python3 tests/external/linux/corpus_replay.py \
+            --minic "$wrapper" --corpus "$corpus" --work "$work" \
+            --jobs 4 --offset 0 --limit ${{ matrix.expected }} --sample-count 16
+
+          python3 - "$work/batch-results.json" <<'PY'
+          import json, sys
+          rows=json.load(open(sys.argv[1]))
+          bad=[r for r in rows if r["status"]!="PASS"]
+          assert len(rows)==16 and not bad, (len(rows), bad[:3])
+          PY
+          python3 tests/external/linux/assemble_replay.py --work "$work" --jobs 4
+          echo "BOOTSTRAP_B3_LINUX_SAMPLE=PASS shard=$label selected=16"
+
+  b3-linux-sample:
+    if: always() && (github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[bootstrap-b3-linux-sample]'))
+    needs: [resolve-stage2, sample]
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Require all seven Stage2 Linux sample shards
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "${{ needs.resolve-stage2.result }}" = success
+          test "${{ needs.sample.result }}" = success
+          echo "BOOTSTRAP_B3_LINUX_SAMPLE112=PASS selected=112 pass=112 fail=0 source_b1=${{ needs.resolve-stage2.outputs.run_id }}"

@@ -1,0 +1,74 @@
+name: MiniObjcopy Linux Image Gate
+
+on:
+  push:
+    branches:
+      - "toolchain/miniobjcopy-linux-m0"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  linux-image:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Install GNU RISC-V objcopy oracle
+        run: |
+          sudo apt-get -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            build-essential binutils-riscv64-linux-gnu
+
+      - name: Build MiniObjcopy
+        run: |
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/miniobjcopy-linux all
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/miniobjcopy-linux check-miniobjcopy-a0
+
+      - name: Download frozen real Linux final-link frontier
+        uses: actions/download-artifact@v4
+        with:
+          name: static-linux-final-frontier
+          path: build/linux-frontier
+          repository: ${{ github.repository }}
+          run-id: 33623125809
+          github-token: ${{ github.token }}
+
+      - name: Reproduce Linux 6.6.143 Image byte-for-byte
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/miniobjcopy-linux-real"
+          mkdir -p "$work"
+          vmlinux=$(find build/linux-frontier -type f -path '*/out/vmlinux' -print -quit)
+          test -s "$vmlinux"
+
+          riscv64-linux-gnu-objcopy \
+            -O binary \
+            -R .note \
+            -R .note.gnu.build-id \
+            -R .comment \
+            -S \
+            "$vmlinux" "$work/reference.Image"
+
+          build/miniobjcopy-linux/bin/minic-objcopy \
+            -O binary \
+            -R .note \
+            -R .note.gnu.build-id \
+            -R .comment \
+            -S \
+            "$vmlinux" "$work/product.Image"
+
+          cmp "$work/reference.Image" "$work/product.Image"
+          test "$(stat -c %s "$work/product.Image")" = 22033608
+          hash=$(sha256sum "$work/product.Image" | awk '{print $1}')
+          refhash=$(sha256sum "$work/reference.Image" | awk '{print $1}')
+          test "$hash" = "$refhash"
+
+          printf 'MINIOBJCOPY_LINUX_IMAGE=PASS kernel=6.6.143 bytes=%s sha256=%s source_run=33623125809\n' \
+            "$(stat -c %s "$work/product.Image")" "$hash"

@@ -12,10 +12,13 @@ mkdir -p "$work"
     "$root/tests/programs/c0/pointer_member.c" \
     -o "$work/pointer_member.i"
 "$minic" -S "$work/pointer_member.i" -o "$work/pointer_member.s"
-grep -F "  addi a0, a0, 4" "$work/pointer_member.s" >/dev/null
-grep -F "  addi a0, a0, 20" "$work/pointer_member.s" >/dev/null
+grep -F ".Lsum_four_core_bb" "$work/pointer_member.s" >/dev/null
+grep -E '^[[:space:]]+addi[[:space:]]+[^,]+,[[:space:]]*[^,]+,[[:space:]]*4$' \
+    "$work/pointer_member.s" >/dev/null
+grep -E '^[[:space:]]+addi[[:space:]]+[^,]+,[[:space:]]*[^,]+,[[:space:]]*20$' \
+    "$work/pointer_member.s" >/dev/null
 grep -F "  call sum_four" "$work/pointer_member.s" >/dev/null
-printf '%s\n' "PASS compiler/c0/pointer_member"
+printf '%s\n' "PASS compiler/c0/pointer_member normalized=core-field-address"
 
 "$host_cc" -E -P -x c \
     "$root/tests/programs/c0/direct_record_member.c" \
@@ -23,9 +26,12 @@ printf '%s\n' "PASS compiler/c0/pointer_member"
 "$minic" -S \
     "$work/direct_record_member.i" \
     -o "$work/direct_record_member.s"
-grep -F "  addi a0, a0, 4" "$work/direct_record_member.s" >/dev/null
-grep -F "  la a0, global_pair" "$work/direct_record_member.s" >/dev/null
-printf '%s\n' "PASS compiler/c0/direct_record_member"
+grep -F ".Lmain_core_bb" "$work/direct_record_member.s" >/dev/null
+grep -E '^[[:space:]]+addi[[:space:]]+[^,]+,[[:space:]]*[^,]+,[[:space:]]*4$' \
+    "$work/direct_record_member.s" >/dev/null
+grep -E '^[[:space:]]+la[[:space:]]+[^,]+,[[:space:]]*global_pair$' \
+    "$work/direct_record_member.s" >/dev/null
+printf '%s\n' "PASS compiler/c0/direct_record_member normalized=core-field-address"
 
 "$host_cc" -E -P -x c \
     "$root/tests/programs/c0/self_referential_record.c" \

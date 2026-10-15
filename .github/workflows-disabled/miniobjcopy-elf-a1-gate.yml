@@ -1,0 +1,37 @@
+name: MiniObjcopy ELF A1 Gate
+
+on:
+  push:
+    branches:
+      - "toolchain/miniobjcopy-elf-a1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  miniobjcopy-a1:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Install RV32 RV64 oracle toolchain
+        run: |
+          sudo apt-get -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            build-essential gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu
+
+      - name: Strict build
+        run: |
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/miniobjcopy-a1 all
+
+      - name: Preserve binary M0
+        run: |
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/miniobjcopy-a1 check-miniobjcopy-a0
+
+      - name: Differentially validate ELF rewrite A1
+        run: |
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/miniobjcopy-a1 check-miniobjcopy-a1

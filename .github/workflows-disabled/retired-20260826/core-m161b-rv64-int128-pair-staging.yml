@@ -1,0 +1,380 @@
+name: Core M161b RV64 Int128 Pair Staging
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/core-m161b-rv64-int128-pair-staging.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  stage-int128-pair:
+    if: github.event_name == 'workflow_dispatch' || github.head_ref == 'refactor/declaration-sema-v1'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refactor/declaration-sema-v1
+          fetch-depth: 0
+
+      - name: Require unchanged M160 semantic source
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$(git hash-object src/target/riscv64/core_codegen.c)" = a5414575a573abd9ce9ced00fb6c234d785e4e03
+          echo "M161B_SOURCE_BASE=$(git rev-parse HEAD)"
+
+      - name: Apply M161b staged Core RV64 int128 pair
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          path = Path('src/target/riscv64/core_codegen.c')
+          text = path.read_text()
+
+          def sub_once(pattern: str, replacement: str, label: str, flags=0) -> None:
+              global text
+              text2, count = re.subn(pattern, replacement, text, count=1, flags=flags)
+              if count != 1:
+                  raise SystemExit(f'M161b patch anchor {label}: expected 1 match, got {count}')
+              text = text2
+
+          sub_once(
+              r'''(?ms)^    if \(!align_up\(storage_size, 8U, &frame->value_base_offset\) \|\|\n        function->value_count > \(SIZE_MAX - frame->value_base_offset\) / 8U\) \{\n        return false;\n    \}\n    storage_size = frame->value_base_offset \+ function->value_count \* 8U;''',
+              '''    /* M161_CORE_RV64_INT128_PAIR: one O0 spill slot can hold the
+       largest current Core scalar. i128 uses low64 at +0/high64 at +8. */
+    if (!align_up(storage_size, 8U, &frame->value_base_offset) ||
+        function->value_count > (SIZE_MAX - frame->value_base_offset) / 16U) {
+        return false;
+    }
+    storage_size = frame->value_base_offset + function->value_count * 16U;''',
+              'frame-value-slots')
+
+          sub_once(
+              r'''(?ms)^static bool\ncore_value_offset\(const MinicRiscv64CoreFrame \*frame, MinicCoreValueId value_id, size_t \*offset\) \{\n    if \(frame == NULL \|\| offset == NULL \|\| value_id >= frame->value_count \|\|\n        \(size_t\)value_id > \(SIZE_MAX - frame->value_base_offset\) / 8U\) \{\n        return false;\n    \}\n    \*offset = frame->value_base_offset \+ \(size_t\)value_id \* 8U;\n    return true;\n\}''',
+              '''static bool
+core_value_offset(const MinicRiscv64CoreFrame *frame, MinicCoreValueId value_id, size_t *offset) {
+    if (frame == NULL || offset == NULL || value_id >= frame->value_count ||
+        (size_t)value_id > (SIZE_MAX - frame->value_base_offset) / 16U) {
+        return false;
+    }
+    *offset = frame->value_base_offset + (size_t)value_id * 16U;
+    return true;
+}''',
+              'value-offset')
+
+          helper_anchor = '''static bool store_core_value(FILE *file,
+                             const MinicRiscv64CoreFrame *frame,
+                             MinicCoreValueId value_id,
+                             const char *register_name) {
+    size_t offset;
+
+    return core_value_offset(frame, value_id, &offset) &&
+           minic_riscv64_emit_sp_store64(file, register_name, offset);
+}
+'''
+          if text.count(helper_anchor) != 1:
+              raise SystemExit(f'M161b helper anchor expected 1 match, got {text.count(helper_anchor)}')
+          helpers = helper_anchor + '''
+/* M161_CORE_RV64_INT128_PAIR: Core stays target-neutral; RV64 lowers wide
+   scalars to a low/high XLEN pair only inside this backend. */
+static bool load_core_int128_value(FILE *file,
+                                   const MinicRiscv64CoreFrame *frame,
+                                   MinicCoreValueId value_id,
+                                   const char *low_register,
+                                   const char *high_register) {
+    size_t offset;
+    return low_register != NULL && high_register != NULL &&
+           core_value_offset(frame, value_id, &offset) && offset <= SIZE_MAX - 8U &&
+           minic_riscv64_emit_sp_load64(file, low_register, offset) &&
+           minic_riscv64_emit_sp_load64(file, high_register, offset + 8U);
+}
+
+static bool store_core_int128_value(FILE *file,
+                                    const MinicRiscv64CoreFrame *frame,
+                                    MinicCoreValueId value_id,
+                                    const char *low_register,
+                                    const char *high_register) {
+    size_t offset;
+    return low_register != NULL && high_register != NULL &&
+           core_value_offset(frame, value_id, &offset) && offset <= SIZE_MAX - 8U &&
+           minic_riscv64_emit_sp_store64(file, low_register, offset) &&
+           minic_riscv64_emit_sp_store64(file, high_register, offset + 8U);
+}
+
+static bool core_integer_type_is_signed(const MinicC0Program *program,
+                                        MinicType type,
+                                        bool *is_signed) {
+    MinicType effective_type;
+    if (program == NULL || is_signed == NULL || !minic_type_is_integer(type) ||
+        !minic_c0_type_effective_integer_type(program, type, &effective_type)) {
+        return false;
+    }
+    *is_signed = minic_type_is_signed_integer(effective_type);
+    return true;
+}
+'''
+          text = text.replace(helper_anchor, helpers, 1)
+
+          old_mul = '''    case MINIC_CORE_INSTRUCTION_INTEGER_MULTIPLY:
+        if (!load_core_value(file, frame, instruction->value.binary.left, "t0") ||
+            !load_core_value(file, frame, instruction->value.binary.right, "t1") ||
+            fprintf(file, "  mul t0, t0, t1\\n") < 0 ||
+            !minic_riscv64_emit_integer_conversion_for_program(
+                file, program, instruction->type, "t0")) {
+            return false;
+        }
+        return store_core_value(file, frame, instruction->result, "t0");
+'''
+          new_mul = '''    case MINIC_CORE_INSTRUCTION_INTEGER_MULTIPLY:
+        if (minic_type_is_int128_integer(instruction->type)) {
+            MinicCoreValueId left = instruction->value.binary.left;
+            MinicCoreValueId right = instruction->value.binary.right;
+            if (left >= function->value_count || right >= function->value_count ||
+                !minic_type_is_int128_integer(function->values[left].type) ||
+                !minic_type_is_int128_integer(function->values[right].type) ||
+                !load_core_int128_value(file, frame, left, "t0", "t1") ||
+                !load_core_int128_value(file, frame, right, "t2", "t3") ||
+                fprintf(file,
+                        "  mulhu t4, t0, t2\\n"
+                        "  mul t5, t1, t2\\n"
+                        "  add t4, t4, t5\\n"
+                        "  mul t5, t0, t3\\n"
+                        "  add t4, t4, t5\\n"
+                        "  mul t0, t0, t2\\n") < 0) {
+                return false;
+            }
+            return store_core_int128_value(file, frame, instruction->result, "t0", "t4");
+        }
+        if (!load_core_value(file, frame, instruction->value.binary.left, "t0") ||
+            !load_core_value(file, frame, instruction->value.binary.right, "t1") ||
+            fprintf(file, "  mul t0, t0, t1\\n") < 0 ||
+            !minic_riscv64_emit_integer_conversion_for_program(
+                file, program, instruction->type, "t0")) {
+            return false;
+        }
+        return store_core_value(file, frame, instruction->result, "t0");
+'''
+          if text.count(old_mul) != 1:
+              raise SystemExit(f'M161b int128 multiply anchor expected 1 match, got {text.count(old_mul)}')
+          text = text.replace(old_mul, new_mul, 1)
+
+          old_shr = '''    case MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_RIGHT: {
+        MinicType effective_type;
+        const char *opcode;
+
+        if (!minic_c0_type_effective_integer_type(program, instruction->type, &effective_type)) {
+            return false;
+        }
+        opcode = minic_type_is_unsigned_integer(effective_type) ? "srl" : "sra";
+        if (!load_core_value(file, frame, instruction->value.binary.left, "t0") ||
+            !load_core_value(file, frame, instruction->value.binary.right, "t1") ||
+            fprintf(file, "  %s t0, t0, t1\\n", opcode) < 0 ||
+            !minic_riscv64_emit_integer_conversion_for_program(
+                file, program, instruction->type, "t0")) {
+            return false;
+        }
+        return store_core_value(file, frame, instruction->result, "t0");
+    }
+'''
+          new_shr = '''    case MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_RIGHT: {
+        MinicType effective_type;
+        const char *opcode;
+
+        if (!minic_c0_type_effective_integer_type(program, instruction->type, &effective_type)) {
+            return false;
+        }
+        if (minic_type_is_int128_integer(instruction->type)) {
+            bool is_signed;
+            MinicCoreValueId left = instruction->value.binary.left;
+            MinicCoreValueId right = instruction->value.binary.right;
+            if (left >= function->value_count || right >= function->value_count ||
+                !minic_type_is_int128_integer(function->values[left].type) ||
+                !minic_type_is_integer(function->values[right].type) ||
+                minic_type_is_int128_integer(function->values[right].type) ||
+                !core_integer_type_is_signed(program, instruction->type, &is_signed) ||
+                !load_core_int128_value(file, frame, left, "t0", "t1") ||
+                !load_core_value(file, frame, right, "t2") ||
+                fprintf(file,
+                        "  beqz t2, .L%s_core_i128_shr_done_%" PRIu32 "\\n"
+                        "  li t3, 64\\n"
+                        "  bgeu t2, t3, .L%s_core_i128_shr_ge64_%" PRIu32 "\\n"
+                        "  neg t3, t2\\n"
+                        "  sll t4, t1, t3\\n"
+                        "  srl t0, t0, t2\\n"
+                        "  or t0, t0, t4\\n"
+                        "  %s t1, t1, t2\\n"
+                        "  j .L%s_core_i128_shr_done_%" PRIu32 "\\n"
+                        ".L%s_core_i128_shr_ge64_%" PRIu32 ":\\n"
+                        "  addi t2, t2, -64\\n"
+                        "  %s t0, t1, t2\\n"
+                        "  %s\\n"
+                        ".L%s_core_i128_shr_done_%" PRIu32 ":\\n",
+                        symbol_name, instruction->result,
+                        symbol_name, instruction->result,
+                        is_signed ? "sra" : "srl",
+                        symbol_name, instruction->result,
+                        symbol_name, instruction->result,
+                        is_signed ? "sra" : "srl",
+                        is_signed ? "  srai t1, t1, 63" : "  li t1, 0",
+                        symbol_name, instruction->result) < 0) {
+                return false;
+            }
+            return store_core_int128_value(file, frame, instruction->result, "t0", "t1");
+        }
+        opcode = minic_type_is_unsigned_integer(effective_type) ? "srl" : "sra";
+        if (!load_core_value(file, frame, instruction->value.binary.left, "t0") ||
+            !load_core_value(file, frame, instruction->value.binary.right, "t1") ||
+            fprintf(file, "  %s t0, t0, t1\\n", opcode) < 0 ||
+            !minic_riscv64_emit_integer_conversion_for_program(
+                file, program, instruction->type, "t0")) {
+            return false;
+        }
+        return store_core_value(file, frame, instruction->result, "t0");
+    }
+'''
+          if text.count(old_shr) != 1:
+              raise SystemExit(f'M161b int128 shift anchor expected 1 match, got {text.count(old_shr)}')
+          text = text.replace(old_shr, new_shr, 1)
+
+          old_conv = '''    case MINIC_CORE_INSTRUCTION_INTEGER_CONVERSION:
+        if (!load_core_value(file, frame, instruction->value.operand, "t0") ||
+            !minic_riscv64_emit_integer_conversion_for_program(
+                file, program, instruction->type, "t0")) {
+            return false;
+        }
+        return store_core_value(file, frame, instruction->result, "t0");
+'''
+          new_conv = '''    case MINIC_CORE_INSTRUCTION_INTEGER_CONVERSION: {
+        MinicCoreValueId operand = instruction->value.operand;
+        MinicType source_type;
+        if (operand >= function->value_count) {
+            return false;
+        }
+        source_type = function->values[operand].type;
+        if (minic_type_is_int128_integer(instruction->type)) {
+            if (minic_type_is_int128_integer(source_type)) {
+                if (!load_core_int128_value(file, frame, operand, "t0", "t1")) {
+                    return false;
+                }
+            } else {
+                bool source_signed;
+                if (!minic_type_is_integer(source_type) ||
+                    !load_core_value(file, frame, operand, "t0") ||
+                    !core_integer_type_is_signed(program, source_type, &source_signed) ||
+                    fprintf(file, source_signed ? "  srai t1, t0, 63\\n" : "  li t1, 0\\n") < 0) {
+                    return false;
+                }
+            }
+            return store_core_int128_value(file, frame, instruction->result, "t0", "t1");
+        }
+        if (minic_type_is_int128_integer(source_type)) {
+            if (!load_core_int128_value(file, frame, operand, "t0", "t1") ||
+                !minic_riscv64_emit_integer_conversion_for_program(
+                    file, program, instruction->type, "t0")) {
+                return false;
+            }
+            return store_core_value(file, frame, instruction->result, "t0");
+        }
+        if (!load_core_value(file, frame, operand, "t0") ||
+            !minic_riscv64_emit_integer_conversion_for_program(
+                file, program, instruction->type, "t0")) {
+            return false;
+        }
+        return store_core_value(file, frame, instruction->result, "t0");
+    }
+'''
+          if text.count(old_conv) != 1:
+              raise SystemExit(f'M161b int128 conversion anchor expected 1 match, got {text.count(old_conv)}')
+          text = text.replace(old_conv, new_conv, 1)
+
+          path.write_text(text)
+          PY
+          git diff --check
+          git diff --stat
+
+      - name: Build staged compiler
+        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/m161b-compiler
+
+      - name: Run fast regression gate
+        run: make -j4 check-fast MODE=release CFLAGS=-Werror BUILD_DIR=build/m161b-check
+
+      - name: Focused int128 Core RV64 probe
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mkdir -p build/m161b-focused
+          cat > build/m161b-focused/mul_u64_u32_shr.i <<'EOF'
+          typedef unsigned long u64;
+          typedef unsigned int u32;
+          static inline __attribute__((always_inline)) u64
+          mul_u64_u32_shr(u64 a, u32 mul, unsigned int shift)
+          {
+              return (u64)(((unsigned __int128)a * mul) >> shift);
+          }
+          u64 probe(u64 a, u32 mul, unsigned int shift) {
+              return mul_u64_u32_shr(a, mul, shift);
+          }
+          EOF
+          MINIC_CORE_IR=strict MINIC_CORE_CODEGEN=basic-v0 \
+            build/m161b-compiler/minic -S build/m161b-focused/mul_u64_u32_shr.i \
+            -o build/m161b-focused/mul_u64_u32_shr.s
+          test -s build/m161b-focused/mul_u64_u32_shr.s
+
+      - name: Restore frozen Linux corpus
+        uses: actions/cache@v4
+        with:
+          path: build/linux-first500-real-final
+          key: core-linux-first500-real-final-v1
+
+      - name: Replay full500 with staged M161b
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -d build/linux-first500-real-final/inputs
+          rm -rf build/m161b-core-rv64
+          MINIC_CORE_IR=strict MINIC_CORE_CODEGEN=basic-v0 \
+            bash tools/ci/run-linux-first500-strict.sh \
+              --compiler build/m161b-compiler/minic \
+              --corpus build/linux-first500-real-final/inputs \
+              --work-dir build/m161b-core-rv64 \
+              --keep-going
+
+      - name: Require frontier improvement
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          p = Path('build/m161b-core-rv64/batch-results.json')
+          rows = json.loads(p.read_text())
+          passed = sum(r.get('status') == 'PASS' for r in rows)
+          failed = sum(r.get('status') == 'FAIL' for r in rows)
+          missing = sum(r.get('status') == 'PREPROCESS_MISSING' for r in rows)
+          headline = f'M161B_CORE_RV64 selected={len(rows)} pass={passed} fail={failed} missing={missing}'
+          print(headline)
+          Path('build/m161b-core-rv64/m161b-summary.txt').write_text(headline + '\n')
+          if len(rows) != 500 or missing != 0:
+              raise SystemExit('M161b corpus invariant failed')
+          if passed <= 9:
+              raise SystemExit(f'M161b did not improve M160 9/500 baseline: pass={passed}')
+          PY
+
+      - name: Persist M161b staging evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: core-m161b-rv64-int128-pair-${{ github.sha }}
+          path: |
+            build/m161b-focused/mul_u64_u32_shr.s
+            build/m161b-core-rv64/batch-results.json
+            build/m161b-core-rv64/batch-summary.txt
+            build/m161b-core-rv64/m161b-summary.txt
+            build/m161b-core-rv64/minic-stderr
+          if-no-files-found: warn

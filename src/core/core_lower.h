@@ -3,6 +3,7 @@
 
 #include "core/core_ir.h"
 #include "frontend/function_body.h"
+#include "target/target_info.h"
 
 typedef enum MinicCoreLowerStatus {
     MINIC_CORE_LOWER_OK = 0,
@@ -11,6 +12,7 @@ typedef enum MinicCoreLowerStatus {
 } MinicCoreLowerStatus;
 
 MinicCoreLowerStatus minic_core_lower_function(const MinicFunctionBodyView *body,
+                                               const MinicTargetInfo *target,
                                                MinicCoreFunction *output);
 
 #endif

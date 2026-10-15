@@ -206,6 +206,238 @@ runtime_record_array_initializer_focused() {
         sh tests/compiler/c0/run-runtime-record-array-initializers.sh
 }
 
+core_required_no_fallback_focused() {
+    MINIC="$root/build/ci-debug/bin/minic" \
+    HOST_CC=cc \
+    BUILD_DIR="$root/build/ci-core-required-no-fallback" \
+        sh tests/compiler/c0/run-core-required-no-fallback.sh
+}
+
+core_scalar_lvalue_bitcast_focused() {
+    MINIC="$root/build/ci-debug/bin/minic" \
+    BUILD_DIR="$root/build/ci-core-scalar-lvalue-bitcast" \
+    RISCV_CC=riscv64-linux-gnu-gcc \
+    QEMU_RISCV64=qemu-riscv64 \
+        sh tests/compiler/c0/run-core-scalar-lvalue-bitcast.sh
+}
+
+core_fixed_call_scalar_conversions_focused() {
+    MINIC="$root/build/ci-debug/bin/minic" \
+    BUILD_DIR="$root/build/ci-core-fixed-call-scalar-conversions" \
+    RISCV_CC=riscv64-linux-gnu-gcc \
+    QEMU_RISCV64=qemu-riscv64 \
+        sh tests/compiler/c0/run-core-fixed-call-scalar-conversions.sh
+}
+
+core_scalar_assignment_implicit_void_focused() {
+    MINIC="$root/build/ci-debug/bin/minic" \
+    BUILD_DIR="$root/build/ci-core-scalar-assignment-implicit-void" \
+    RISCV_CC=riscv64-linux-gnu-gcc \
+    QEMU_RISCV64=qemu-riscv64 \
+        sh tests/compiler/c0/run-core-scalar-assignment-implicit-void.sh
+}
+
+core_global_scalar_memory_focused() {
+    MINIC="$root/build/ci-debug/bin/minic" \
+    BUILD_DIR="$root/build/ci-core-global-scalar-memory" \
+    RISCV_CC=riscv64-linux-gnu-gcc \
+    QEMU_RISCV64=qemu-riscv64 \
+        sh tests/compiler/c0/run-core-global-scalar-memory.sh
+}
+
+core_integer_equality_focused() {
+    MINIC="$root/build/ci-debug/bin/minic" \
+    BUILD_DIR="$root/build/ci-core-integer-equality" \
+    RISCV_CC=riscv64-linux-gnu-gcc \
+    QEMU_RISCV64=qemu-riscv64 \
+        sh tests/compiler/c0/run-core-integer-equality.sh
+}
+
+core_integer_multiply_overflow_focused() {
+    MINIC="$root/build/ci-debug/bin/minic" \
+    BUILD_DIR="$root/build/ci-core-integer-multiply-overflow" \
+    RISCV_CC=riscv64-linux-gnu-gcc \
+    QEMU_RISCV64=qemu-riscv64 \
+        sh tests/compiler/c0/run-core-integer-multiply-overflow.sh
+}
+
+core_integer_add_overflow_focused() {
+    MINIC="$root/build/ci-debug/bin/minic" \
+    BUILD_DIR="$root/build/ci-core-integer-add-overflow" \
+    RISCV_CC=riscv64-linux-gnu-gcc \
+    QEMU_RISCV64=qemu-riscv64 \
+        sh tests/compiler/c0/run-core-integer-add-overflow.sh
+}
+
+core_short_circuit_or_focused() {
+    MINIC="$root/build/ci-debug/bin/minic" \
+    BUILD_DIR="$root/build/ci-core-short-circuit-or" \
+    RISCV_CC=riscv64-linux-gnu-gcc \
+    QEMU_RISCV64=qemu-riscv64 \
+        sh tests/compiler/c0/run-core-short-circuit-or.sh
+}
+
+core_nested_if_continuation_focused() {
+    MINIC="$root/build/ci-debug/bin/minic" \
+    BUILD_DIR="$root/build/ci-core-nested-if-continuation" \
+    RISCV_CC=riscv64-linux-gnu-gcc \
+    QEMU_RISCV64=qemu-riscv64 \
+        sh tests/compiler/c0/run-core-nested-if-continuation.sh
+}
+
+core_condition_and_focused() {
+    MINIC="$root/build/ci-debug/bin/minic" \
+    BUILD_DIR="$root/build/ci-core-condition-and" \
+    RISCV_CC=riscv64-linux-gnu-gcc \
+    QEMU_RISCV64=qemu-riscv64 \
+        sh tests/compiler/c0/run-core-condition-and.sh
+}
+
+core_logical_and_value_focused() {
+    MINIC="$root/build/ci-debug/bin/minic" \
+    BUILD_DIR="$root/build/ci-core-logical-and-value" \
+    RISCV_CC=riscv64-linux-gnu-gcc \
+    QEMU_RISCV64=qemu-riscv64 \
+        sh tests/compiler/c0/run-core-logical-and-value.sh
+}
+
+core_integer_bitwise_and_assignment_focused() {
+    MINIC="$root/build/ci-debug/bin/minic" \
+    BUILD_DIR="$root/build/ci-core-integer-bitwise-and-assignment" \
+    RISCV_CC=riscv64-linux-gnu-gcc \
+    QEMU_RISCV64=qemu-riscv64 \
+        sh tests/compiler/c0/run-core-integer-bitwise-and-assignment.sh
+}
+
+core_pointer_offset_focused() {
+    MINIC="$root/build/ci-debug/bin/minic" \
+    BUILD_DIR="$root/build/ci-core-pointer-offset" \
+    RISCV_CC=riscv64-linux-gnu-gcc \
+    QEMU_RISCV64=qemu-riscv64 \
+        sh tests/compiler/c0/run-core-pointer-offset.sh
+}
+
+core_pointer_equality_qualifiers_focused() {
+    MINIC="$root/build/ci-debug/bin/minic" \
+    BUILD_DIR="$root/build/ci-core-pointer-equality-qualifiers" \
+    RISCV_CC=riscv64-linux-gnu-gcc \
+    QEMU_RISCV64=qemu-riscv64 \
+        sh tests/compiler/c0/run-core-pointer-equality-qualifiers.sh
+}
+
+core_statement_expression_focused() {
+    MINIC="$root/build/ci-debug/bin/minic" \
+    BUILD_DIR="$root/build/ci-core-statement-expression" \
+    RISCV_CC=riscv64-linux-gnu-gcc \
+    QEMU_RISCV64=qemu-riscv64 \
+        sh tests/compiler/c0/run-core-statement-expression.sh
+}
+
+core_opaque_inline_asm_focused() {
+    MINIC="$root/build/ci-debug/bin/minic" \
+    BUILD_DIR="$root/build/ci-core-opaque-inline-asm" \
+    RISCV_CC=riscv64-linux-gnu-gcc \
+    QEMU_RISCV64=qemu-riscv64 \
+        sh tests/compiler/c0/run-core-opaque-inline-asm.sh
+}
+
+core_scalar_not_equal_focused() {
+    MINIC="$root/build/ci-debug/bin/minic" \
+    BUILD_DIR="$root/build/ci-core-scalar-not-equal" \
+    RISCV_CC=riscv64-linux-gnu-gcc \
+    QEMU_RISCV64=qemu-riscv64 \
+        sh tests/compiler/c0/run-core-scalar-not-equal.sh
+}
+
+core_integer_subtract_overflow_focused() {
+    MINIC="$root/build/ci-debug/bin/minic" \
+    BUILD_DIR="$root/build/ci-core-integer-subtract-overflow" \
+    RISCV_CC=riscv64-linux-gnu-gcc \
+    QEMU_RISCV64=qemu-riscv64 \
+        sh tests/compiler/c0/run-core-integer-subtract-overflow.sh
+}
+
+core_target_constant_fallback_focused() {
+    MINIC="$root/build/ci-debug/bin/minic" \
+    BUILD_DIR="$root/build/ci-core-target-constant-fallback" \
+    RISCV_CC=riscv64-linux-gnu-gcc \
+    QEMU_RISCV64=qemu-riscv64 \
+        sh tests/compiler/c0/run-core-target-constant-fallback.sh
+}
+
+core_integer_bitwise_not_focused() {
+    MINIC="$root/build/ci-debug/bin/minic" \
+    BUILD_DIR="$root/build/ci-core-integer-bitwise-not" \
+    RISCV_CC=riscv64-linux-gnu-gcc \
+    QEMU_RISCV64=qemu-riscv64 \
+        sh tests/compiler/c0/run-core-integer-bitwise-not.sh
+}
+
+core_postfix_update_m24_focused() {
+    MINIC="$root/build/ci-debug/bin/minic" \
+    BUILD_DIR="$root/build/ci-core-postfix-update-m24" \
+    RISCV_CC=riscv64-linux-gnu-gcc \
+    QEMU_RISCV64=qemu-riscv64 \
+        sh tests/compiler/c0/run-core-postfix-update-m24.sh
+}
+
+core_discard_expression_m25_focused() {
+    MINIC="$root/build/ci-debug/bin/minic" BUILD_DIR="$root/build/ci-core-discard-expression-m25" RISCV_CC=riscv64-linux-gnu-gcc QEMU_RISCV64=qemu-riscv64 sh tests/compiler/c0/run-core-discard-expression-m25.sh
+}
+
+core_integer_binary_preservation_m25b_focused() {
+    MINIC="$root/build/ci-debug/bin/minic" BUILD_DIR="$root/build/ci-core-integer-binary-preservation-m25b" RISCV_CC=riscv64-linux-gnu-gcc QEMU_RISCV64=qemu-riscv64 sh tests/compiler/c0/run-core-integer-binary-preservation-m25b.sh
+}
+
+core_integer_less_m26_focused() {
+    MINIC="$root/build/ci-debug/bin/minic" \
+    BUILD_DIR="$root/build/ci-core-integer-less-m26" \
+    RISCV_CC=riscv64-linux-gnu-gcc \
+    QEMU_RISCV64=qemu-riscv64 \
+        sh tests/compiler/c0/run-core-integer-less-m26.sh
+}
+
+core_integer_foundation_m26b_focused() {
+    MINIC="$root/build/ci-debug/bin/minic" \
+    BUILD_DIR="$root/build/ci-core-integer-foundation-m26b" \
+    RISCV_CC=riscv64-linux-gnu-gcc \
+    QEMU_RISCV64=qemu-riscv64 \
+        sh tests/compiler/c0/run-core-integer-foundation-m26b.sh
+}
+
+
+core_switch_m27_focused() {
+    MINIC="$root/build/ci-debug/bin/minic" \
+    BUILD_DIR="$root/build/ci-core-switch-m27" \
+    RISCV_CC=riscv64-linux-gnu-gcc \
+    QEMU_RISCV64=qemu-riscv64 \
+        sh tests/compiler/c0/run-core-switch-m27.sh
+}
+
+core_inline_asm_identity_m28_focused() {
+    MINIC="$root/build/ci-debug/bin/minic" \
+    BUILD_DIR="$root/build/ci-core-inline-asm-identity-m28" \
+    RISCV_CC=riscv64-linux-gnu-gcc \
+    QEMU_RISCV64=qemu-riscv64 \
+        sh tests/compiler/c0/run-core-inline-asm-identity-m28.sh
+}
+
+core_record_local_m29_focused() {
+    MINIC="$root/build/ci-debug/bin/minic" \
+    BUILD_DIR="$root/build/ci-core-record-local-m29" \
+    RISCV_CC=riscv64-linux-gnu-gcc \
+    QEMU_RISCV64=qemu-riscv64 \
+        sh tests/compiler/c0/run-core-record-local-m29.sh
+}
+
+core_aggregate_boundary_m30_focused() {
+    MINIC="$root/build/ci-debug/bin/minic" \
+    BUILD_DIR="$root/build/ci-core-aggregate-boundary-m30" \
+    RISCV_CC=riscv64-linux-gnu-gcc \
+    QEMU_RISCV64=qemu-riscv64 \
+        sh tests/compiler/c0/run-core-aggregate-boundary-m30.sh
+}
+
 runtime_record_fam_prefix_focused() {
     MINIC="$root/build/ci-debug/bin/minic" \
     HOST_CC=cc \
@@ -325,10 +557,15 @@ external_cjson_frontier() {
 }
 
 printf 'Runner CPUs=%s\n' "$cpu_count"
-printf '%s\n' 'Phase 1: source inventory, format policy, tool preparation, and three host configurations'
+printf '%s\n' 'Phase 1: source inventory, format policy, and RISC-V tool preparation'
 start_gate source-inventory source_inventory
 start_gate format-check format_check
 start_gate rv64-tools install_rv64_tools
+if ! wait_phase; then
+    exit 1
+fi
+
+printf '%s\n' 'Phase 1b: three host configurations after target tools are ready'
 start_gate host-debug host_debug
 start_gate host-release-werror host_release
 start_gate host-sanitize host_sanitize
@@ -352,6 +589,36 @@ start_gate static-object-address-focused static_object_address_focused
 start_gate file-scope-basic-asm-focused file_scope_basic_asm_focused
 start_gate wide-string-focused wide_string_focused
 start_gate record-array-init-focused runtime_record_array_initializer_focused
+start_gate core-required-no-fallback-focused core_required_no_fallback_focused
+start_gate core-scalar-lvalue-bitcast-focused core_scalar_lvalue_bitcast_focused
+start_gate core-fixed-call-scalar-conversions-focused core_fixed_call_scalar_conversions_focused
+start_gate core-scalar-assignment-implicit-void-focused core_scalar_assignment_implicit_void_focused
+start_gate core-global-scalar-memory-focused core_global_scalar_memory_focused
+start_gate core-integer-equality-focused core_integer_equality_focused
+start_gate core-integer-multiply-overflow-focused core_integer_multiply_overflow_focused
+start_gate core-integer-add-overflow-focused core_integer_add_overflow_focused
+start_gate core-short-circuit-or-focused core_short_circuit_or_focused
+start_gate core-nested-if-continuation-focused core_nested_if_continuation_focused
+start_gate core-condition-and-focused core_condition_and_focused
+start_gate core-logical-and-value-focused core_logical_and_value_focused
+start_gate core-scalar-not-equal-focused core_scalar_not_equal_focused
+start_gate core-integer-bitwise-and-assignment-focused core_integer_bitwise_and_assignment_focused
+start_gate core-pointer-offset-focused core_pointer_offset_focused
+start_gate core-pointer-equality-qualifiers-focused core_pointer_equality_qualifiers_focused
+start_gate core-statement-expression-focused core_statement_expression_focused
+start_gate core-opaque-inline-asm-focused core_opaque_inline_asm_focused
+start_gate core-integer-subtract-overflow-focused core_integer_subtract_overflow_focused
+start_gate core-target-constant-fallback-focused core_target_constant_fallback_focused
+start_gate core-integer-bitwise-not-focused core_integer_bitwise_not_focused
+start_gate core-postfix-update-m24-focused core_postfix_update_m24_focused
+start_gate core-discard-expression-m25-focused core_discard_expression_m25_focused
+start_gate core-integer-binary-preservation-m25b-focused core_integer_binary_preservation_m25b_focused
+start_gate core-integer-less-m26-focused core_integer_less_m26_focused
+start_gate core-switch-m27-focused core_switch_m27_focused
+start_gate core-inline-asm-identity-m28-focused core_inline_asm_identity_m28_focused
+start_gate core-record-local-m29-focused core_record_local_m29_focused
+start_gate core-aggregate-boundary-m30-focused core_aggregate_boundary_m30_focused
+start_gate core-integer-foundation-m26b-focused core_integer_foundation_m26b_focused
 start_gate record-fam-prefix-focused runtime_record_fam_prefix_focused
 start_gate linenoise-driven-focused linenoise_driven_focused
 start_gate sds-driven-focused sds_driven_focused

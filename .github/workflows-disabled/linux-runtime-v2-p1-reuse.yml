@@ -1,0 +1,96 @@
+name: Linux Runtime V2 P1 Reuse
+
+on:
+  push:
+    branches:
+      - refactor/declaration-sema-v1
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  p1:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[linux-runtime-v2-p1-reuse]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Resolve latest successful MiniC Image run
+        id: resolve
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -Eeuo pipefail
+          run_id=$(gh api \
+            --paginate \
+            "/repos/${GITHUB_REPOSITORY}/actions/workflows/linux-runtime-v2-fast.yml/runs?branch=refactor%2Fdeclaration-sema-v1&status=success&per_page=100" \
+            --jq '.workflow_runs[] | select(.conclusion == "success") | .id' | head -n1)
+          test -n "$run_id"
+          echo "run_id=$run_id" >>"$GITHUB_OUTPUT"
+          echo "LINUX_RUNTIME_V2_P1_SOURCE_RUN=$run_id"
+
+      - name: Download exact MiniC Linux Image artifact
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -Eeuo pipefail
+          mkdir -p build/linux-runtime-v2-p1-image
+          gh run download "${{ steps.resolve.outputs.run_id }}" \
+            -R "$GITHUB_REPOSITORY" \
+            -n linux-runtime-v2-fast-image \
+            -D build/linux-runtime-v2-p1-image
+          test -s build/linux-runtime-v2-p1-image/Image
+
+      - name: Install runtime prerequisites
+        run: |
+          sudo apt-get -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            gcc-riscv64-linux-gnu libc6-dev-riscv64-cross \
+            cpio gzip qemu-system-misc opensbi
+
+      - name: Build deterministic P1 initramfs
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          BUILD_DIR="$GITHUB_WORKSPACE/build/linux-runtime-v2-p1/initramfs" \
+          OUTPUT_INITRAMFS="$GITHUB_WORKSPACE/build/linux-runtime-v2-p1/runtime-initramfs.cpio.gz" \
+          RISCV_CC=riscv64-linux-gnu-gcc \
+            bash tests/external/linux/build_runtime_initramfs.sh
+
+      - name: Run one-boot P1 syscall canary
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          LINUX_IMAGE="$GITHUB_WORKSPACE/build/linux-runtime-v2-p1-image/Image" \
+          INITRAMFS="$GITHUB_WORKSPACE/build/linux-runtime-v2-p1/runtime-initramfs.cpio.gz" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/linux-runtime-v2-p1/qemu" \
+          LINUX_RELEASE=6.6.143 \
+          LINUX_RUNTIME_PROFILE=p1 \
+          QEMU_SYSTEM_RISCV64=qemu-system-riscv64 \
+          QEMU_TIMEOUT_SECONDS=90 \
+            bash tests/external/linux/runtime_boot.sh
+
+          python3 tests/external/linux/runtime_v2_log_check.py \
+            --profile p1 \
+            --log "$GITHUB_WORKSPACE/build/linux-runtime-v2-p1/qemu/rdinit-init.log"
+
+          echo "LINUX_RUNTIME_V2_P1_REUSE=PASS source_run=${{ steps.resolve.outputs.run_id }} syscalls=12"
+
+      - name: Preserve P1 blocker
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-runtime-v2-p1-blocker
+          path: |
+            build/linux-runtime-v2-p1/qemu/*.log
+            build/linux-runtime-v2-p1-image/.config
+            build/linux-runtime-v2-p1-image/Image.sha256
+          if-no-files-found: ignore
+          retention-days: 2

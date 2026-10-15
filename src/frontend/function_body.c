@@ -532,6 +532,7 @@ static bool validate_semantic_edges(const MinicFunctionBodyValidation *validatio
             return false;
         }
         if (statement->kind == MINIC_STATEMENT_GOTO &&
+            statement->expression == MINIC_EXPRESSION_INVALID &&
             (statement->target_statement >= program->statement_count ||
              validation->statement_owners[statement->target_statement] !=
                  validation->function_id)) {
@@ -633,6 +634,93 @@ static bool validate_one_function(MinicFunctionBodyValidation *validation,
     return validate_semantic_edges(validation);
 }
 
+
+bool minic_perf_program_build_expression_source_owners(
+    const MinicC0Program *program,
+    size_t function_limit,
+    MinicFunctionId *owners,
+    size_t owner_count) {
+    MinicFunctionBodyValidation validation;
+    MinicFunctionId ambiguous_owner;
+    size_t function_index;
+    size_t expression_index;
+    bool success = false;
+
+    if (program == NULL || (owner_count != 0U && owners == NULL) ||
+        owner_count != program->expression_count ||
+        function_limit > program->function_count) {
+        return false;
+    }
+    ambiguous_owner = (MinicFunctionId)program->function_count;
+    for (expression_index = 0U; expression_index < owner_count; ++expression_index) {
+        owners[expression_index] = MINIC_FUNCTION_INVALID;
+    }
+    if (!initialize_validation(program, &validation)) {
+        return false;
+    }
+
+    /* Integer/symbolic specialization clones share the source FunctionBody and
+     * LocalId range.  Assign ownership only from canonical source functions;
+     * the source functions are created before their clones. */
+    for (function_index = 0U; function_index < function_limit; ++function_index) {
+        const MinicFunction *function = &program->functions[function_index];
+        size_t local_index;
+
+        if (!function->is_defined || function->is_integer_specialization) {
+            continue;
+        }
+        if (function->body_block >= program->block_count ||
+            function->local_begin > program->local_count ||
+            function->local_count > program->local_count - function->local_begin ||
+            function->parameter_count > function->local_count) {
+            goto done;
+        }
+        for (local_index = 0U; local_index < function->local_count; ++local_index) {
+            MinicLocalId local_id = function->local_begin + local_index;
+            if (validation.local_owners[local_id] != MINIC_FUNCTION_INVALID) {
+                goto done;
+            }
+            validation.local_owners[local_id] = (MinicFunctionId)function_index;
+        }
+    }
+
+    for (function_index = 0U; function_index < function_limit; ++function_index) {
+        const MinicFunction *function = &program->functions[function_index];
+
+        if (!function->is_defined || function->is_integer_specialization) {
+            continue;
+        }
+        if (!validate_one_function(&validation, (MinicFunctionId)function_index)) {
+            goto done;
+        }
+        for (expression_index = 0U;
+             expression_index < validation.expression_work_count;
+             ++expression_index) {
+            MinicExpressionId expression_id =
+                validation.expression_work[expression_index];
+            MinicFunctionId prior;
+
+            if (expression_id >= owner_count) {
+                goto done;
+            }
+            prior = owners[expression_id];
+            if (prior == MINIC_FUNCTION_INVALID) {
+                owners[expression_id] = (MinicFunctionId)function_index;
+            } else if (prior != (MinicFunctionId)function_index &&
+                       prior != ambiguous_owner) {
+                /* Keep shared/orphan-like nodes on the legacy path instead of
+                 * filtering them by a guessed owner. */
+                owners[expression_id] = ambiguous_owner;
+            }
+        }
+    }
+    success = true;
+
+done:
+    destroy_validation(&validation);
+    return success;
+}
+
 bool minic_c0_program_validate_function_body_ownership(const MinicC0Program *program) {
     MinicFunctionBodyValidation validation;
     size_t function_index;
@@ -654,6 +742,142 @@ bool minic_c0_program_validate_function_body_ownership(const MinicC0Program *pro
         }
         success = validate_one_function(&validation, function_index);
     }
+    destroy_validation(&validation);
+    return success;
+}
+
+
+static bool enqueue_emission_function(const MinicC0Program *program,
+                                      MinicFunctionId function_id,
+                                      bool *reachable,
+                                      MinicFunctionId *queue,
+                                      size_t *queue_count) {
+    const MinicFunction *function;
+
+    if (program == NULL || reachable == NULL || queue == NULL || queue_count == NULL ||
+        function_id >= program->function_count) {
+        return false;
+    }
+    function = &program->functions[function_id];
+    if (!function->is_defined || reachable[function_id]) {
+        return true;
+    }
+    if (*queue_count >= program->function_count) {
+        return false;
+    }
+    reachable[function_id] = true;
+    queue[(*queue_count)++] = function_id;
+    return true;
+}
+
+bool minic_c0_program_recompute_inline_emission_references(MinicC0Program *program) {
+    MinicFunctionBodyValidation validation;
+    bool *reachable = NULL;
+    bool *processed = NULL;
+    MinicFunctionId *queue = NULL;
+    size_t queue_count = 0U;
+    size_t queue_cursor = 0U;
+    size_t function_index;
+    size_t object_index;
+    bool success = false;
+
+    if (program == NULL || !initialize_validation(program, &validation) ||
+        !assign_local_owners(&validation)) {
+        return false;
+    }
+    reachable = calloc(program->function_count == 0U ? 1U : program->function_count,
+                       sizeof(*reachable));
+    processed = calloc(program->function_count == 0U ? 1U : program->function_count,
+                       sizeof(*processed));
+    queue = malloc((program->function_count == 0U ? 1U : program->function_count) *
+                   sizeof(*queue));
+    if (reachable == NULL || processed == NULL || queue == NULL) {
+        goto done;
+    }
+
+    /* Preserve the compiler's established emission policy for every definition
+     * except internal inline functions. Those are the only entities for which
+     * parser-time lexical references were previously used as an emission gate. */
+    for (function_index = 0U; function_index < program->function_count; ++function_index) {
+        const MinicFunction *function = &program->functions[function_index];
+        if (function->is_defined && (!function->is_internal || function->force_emit) &&
+            !enqueue_emission_function(
+                program, function_index, reachable, queue, &queue_count)) {
+            goto done;
+        }
+        if (function->alias_target != MINIC_FUNCTION_INVALID &&
+            !enqueue_emission_function(
+                program, function->alias_target, reachable, queue, &queue_count)) {
+            goto done;
+        }
+    }
+    if (program->entry_function != MINIC_FUNCTION_INVALID &&
+        !enqueue_emission_function(
+            program, program->entry_function, reachable, queue, &queue_count)) {
+        goto done;
+    }
+    for (object_index = 0U; object_index < program->global_object_count; ++object_index) {
+        const MinicGlobalObject *object = &program->global_objects[object_index];
+        size_t relocation_index;
+        for (relocation_index = 0U; relocation_index < object->relocation_count;
+             ++relocation_index) {
+            const MinicGlobalRelocation *relocation = &object->relocations[relocation_index];
+            if (relocation->target_kind == MINIC_GLOBAL_RELOCATION_FUNCTION &&
+                !enqueue_emission_function(program,
+                                           (MinicFunctionId)relocation->target_id,
+                                           reachable,
+                                           queue,
+                                           &queue_count)) {
+                goto done;
+            }
+        }
+    }
+
+    while (queue_cursor < queue_count) {
+        MinicFunctionId function_id = queue[queue_cursor++];
+        size_t expression_index;
+
+        if (processed[function_id]) {
+            continue;
+        }
+        processed[function_id] = true;
+        if (!validate_one_function(&validation, function_id)) {
+            goto done;
+        }
+        for (expression_index = 0U; expression_index < validation.expression_work_count;
+             ++expression_index) {
+            const MinicExpression *expression = minic_c0_program_expression(
+                program, validation.expression_work[expression_index]);
+            MinicFunctionId target = MINIC_FUNCTION_INVALID;
+
+            if (expression == NULL) {
+                goto done;
+            }
+            if (expression->kind == MINIC_EXPRESSION_FUNCTION) {
+                target = expression->value.function_id;
+            } else if (expression->kind == MINIC_EXPRESSION_CALL &&
+                       expression->value.call.function_id != MINIC_FUNCTION_INVALID) {
+                target = expression->value.call.function_id;
+            }
+            if (target != MINIC_FUNCTION_INVALID &&
+                !enqueue_emission_function(program, target, reachable, queue, &queue_count)) {
+                goto done;
+            }
+        }
+    }
+
+    for (function_index = 0U; function_index < program->function_count; ++function_index) {
+        MinicFunction *function = &program->functions[function_index];
+        if (function->is_defined && function->is_internal) {
+            function->is_referenced = reachable[function_index];
+        }
+    }
+    success = true;
+
+done:
+    free(queue);
+    free(processed);
+    free(reachable);
     destroy_validation(&validation);
     return success;
 }

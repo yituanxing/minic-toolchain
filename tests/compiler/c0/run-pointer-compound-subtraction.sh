@@ -13,7 +13,11 @@ mkdir -p "$work"
     -o "$work/pointer_compound_subtraction.i"
 "$minic" -S "$work/pointer_compound_subtraction.i" \
     -o "$work/pointer_compound_subtraction.s"
+MINIC_CORE_IR=strict "$minic" -S "$work/pointer_compound_subtraction.i" \
+    -o "$work/pointer_compound_subtraction.strict.s"
 
 test -s "$work/pointer_compound_subtraction.s"
+test -s "$work/pointer_compound_subtraction.strict.s"
 grep -F 'read_adjusted:' "$work/pointer_compound_subtraction.s" >/dev/null
-printf '%s\n' 'PASS compiler/c0/pointer_compound_subtraction plus-equal=1 minus-equal=1 complete-pointee=1'
+grep -F 'read_cfg_adjusted:' "$work/pointer_compound_subtraction.strict.s" >/dev/null
+printf '%s\n' 'PASS compiler/c0/pointer_compound_subtraction plus-equal=1 minus-equal=1 complete-pointee=1 block-local-rhs=1'

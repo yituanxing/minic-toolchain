@@ -1,0 +1,17 @@
+1500
+1509
+1510
+1512
+1565
+1568
+1572
+1600
+1650
+1700
+1731
+1800
+1850
+1900
+1950
+1999
+# fourth500 coverage sample16: same relative positions as prior batches

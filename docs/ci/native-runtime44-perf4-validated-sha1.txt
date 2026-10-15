@@ -1,0 +1,10 @@
+# Native C SHA1s from 9bee70c50123 + runtime44 + integrated_perf4;
+# function_symbol.h conservatively selects old per-function sections outside Linux runtime.
+# Update only following equivalent real-input validation.
+4e26efbc7c78ae196c3c3a835d54b45bb09b6de5 src/compiler/compiler.c
+434da35dcba2d2fdd7f8c7bc5a74f8355612e21f src/core/core_lower.c
+a8418e45608310687e3d6a1e96da79ca49135870 src/core/core_lower_asm.c
+668f08f9f2de8e4fa207000cf2504017c3ab9b57 src/core/core_lower_internal.h
+bfca6a1861104f768b3b0ae93a72fa28bf0eded0 src/frontend/ast.h
+3abecc04f9cec7523963b5368667ceb8ccb9f905 src/target/riscv64/core_codegen.c
+b97cc6596ea8a17c584ef06a984bcff9d6bbc4fe src/target/riscv64/function_symbol.h

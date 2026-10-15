@@ -1,0 +1,156 @@
+name: Core M33 Compound Assignment Qualification
+
+on:
+  pull_request:
+
+jobs:
+  qualify:
+    if: github.head_ref == 'refactor/declaration-sema-v1'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refactor/declaration-sema-v1
+          fetch-depth: 0
+      - name: Install validation tools
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mapfile -t packages < <(grep -Ev '^[[:space:]]*(#|$)' tools/ci/ubuntu-24.04-packages.txt)
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends "${packages[@]}"
+          sh tools/ci/verify-validation-tools.sh
+      - name: Restore frozen Linux corpus
+        id: linux-corpus-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-focus-corpus
+          key: linux-focus-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-${{ hashFiles('tests/external/linux/replay-indices.txt') }}
+      - name: Apply M31b M32 M33 and build release
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "${{ steps.linux-corpus-cache.outputs.cache-hit }}" = true
+          test -s build/linux-focus-corpus/selected-tus.txt
+          python3 tools/dev/run-core-frontier-batch-m31b.py
+          python3 tools/dev/patch-core-frontier-batch-m32.py
+          python3 tools/dev/patch-core-frontier-batch-m33.py
+          clang-format-18 -i src/core/core_ir.h src/core/core_ir.c src/core/core_lower.c src/target/riscv64/core_codegen.c
+          git diff --check
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/m33-candidate
+      - name: Focused compound assignment family
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          c="$GITHUB_WORKSPACE/build/m33-candidate/bin/minic"; w=build/m33-compound; mkdir -p "$w"
+          cat > "$w/add.c" <<'EOF'
+          int f(int n) { n += 32; return n; }
+          EOF
+          cat > "$w/shr.c" <<'EOF'
+          unsigned long f(unsigned long w) { w >>= 32; return w; }
+          EOF
+          cat > "$w/all.c" <<'EOF'
+          unsigned long f(unsigned long x, unsigned long y) {
+              x += y; x -= 1; x *= 3; x /= 2; x %= 17;
+              x &= 255; x ^= 7; x |= 1; x <<= 1; x >>= 1;
+              return x;
+          }
+          EOF
+          cat > "$w/ffs_like.c" <<'EOF'
+          unsigned long f(unsigned long word) {
+              int num = 0;
+              if ((word & 0xffffffffUL) == 0) { num += 32; word >>= 32; }
+              if ((word & 0xffffUL) == 0) { num += 16; word >>= 16; }
+              if ((word & 0xffUL) == 0) { num += 8; word >>= 8; }
+              if ((word & 0xfUL) == 0) { num += 4; word >>= 4; }
+              if ((word & 0x3UL) == 0) { num += 2; word >>= 2; }
+              if ((word & 0x1UL) == 0) num += 1;
+              return (unsigned long)num;
+          }
+          EOF
+          cat > "$w/fls_like.c" <<'EOF'
+          unsigned long f(unsigned long word) {
+              int num = 63;
+              if (!(word & (~0UL << 32))) { num -= 32; word <<= 32; }
+              if (!(word & (~0UL << 48))) { num -= 16; word <<= 16; }
+              if (!(word & (~0UL << 56))) { num -= 8; word <<= 8; }
+              if (!(word & (~0UL << 60))) { num -= 4; word <<= 4; }
+              if (!(word & (~0UL << 62))) { num -= 2; word <<= 2; }
+              if (!(word & (~0UL << 63))) num -= 1;
+              return (unsigned long)num;
+          }
+          EOF
+          for src in "$w"/add.c "$w"/shr.c "$w"/all.c "$w"/ffs_like.c "$w"/fls_like.c; do
+            name=$(basename "$src" .c)
+            MINIC_CORE_IR=strict "$c" -S "$src" -o "$w/$name.s"
+            echo "M33_SHAPE_PASS name=$name"
+          done
+      - name: RISC-V QEMU differential
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          c="$GITHUB_WORKSPACE/build/m33-candidate/bin/minic"; w=build/m33-compound
+          cat > "$w/runtime.c" <<'EOF'
+          #include <stdio.h>
+          unsigned long f(unsigned long);
+          int main(void) {
+              const unsigned long v[] = {1UL,2UL,4UL,8UL,0x100UL,0x80000000UL,0x100000000UL,0x8000000000000000UL};
+              for (unsigned long i=0;i<sizeof(v)/sizeof(v[0]);++i) printf("%lu:%lu\n", v[i], f(v[i]));
+              return 0;
+          }
+          EOF
+          MINIC_CORE_IR=strict "$c" -S "$w/ffs_like.c" -o "$w/minic.s"
+          riscv64-linux-gnu-gcc -O0 -static "$w/runtime.c" "$w/minic.s" -o "$w/minic.elf"
+          riscv64-linux-gnu-gcc -O0 -static "$w/runtime.c" "$w/ffs_like.c" -o "$w/gcc.elf"
+          qemu-riscv64 "$w/minic.elf" > "$w/minic.out"
+          qemu-riscv64 "$w/gcc.elf" > "$w/gcc.out"
+          diff -u "$w/gcc.out" "$w/minic.out"
+          cat "$w/minic.out"
+          echo M33_QEMU_DIFF_PASS
+      - name: Frozen representative moves past __ffs
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          c="$GITHUB_WORKSPACE/build/m33-candidate/bin/minic"; w=build/m33-rep; mkdir -p "$w"
+          set +e
+          MINIC_CORE_IR=strict "$c" -S build/linux-focus-corpus/kbuild/init/version.i -o "$w/version.s" 2>"$w/version.err"
+          rc=$?
+          set -e
+          cat "$w/version.err"
+          ! grep -Fq "Core IR shadow does not yet support function '__ffs'" "$w/version.err"
+          if [ "$rc" -ne 0 ]; then grep -Fq 'Core IR shadow does not yet support function' "$w/version.err"; fi
+          printf 'M33_REP_MOVED rc=%d\n' "$rc"
+      - name: Frozen strict first500 replay and classify
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          c="$GITHUB_WORKSPACE/build/m33-candidate/bin/minic"; w="$GITHUB_WORKSPACE/build/m33-strict500"
+          set +e
+          MINIC_CORE_IR=strict python3 tests/external/linux/corpus_replay.py --minic "$c" --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" --work "$w" --jobs 5 --offset 0 --limit 500 --sample-count 0 --indices ''
+          rc=$?
+          set -e
+          printf 'M33_STRICT500_REPLAY_STATUS=%d\n' "$rc"
+          python3 tools/ci/classify-core-strict-frontier.py "$w/batch-results.json" --examples 5 --json-out "$w/frontier-summary.json" --require-no-errors
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          s=json.loads(Path('build/m33-strict500/frontier-summary.json').read_text())
+          assert s['selected']==500 and s['error']==0 and s['preprocess_missing']==0, s
+          assert s['pass']+s['unsupported']==500, s
+          b={r['function']:r['count'] for r in s['blockers']}
+          assert b.get('__ffs',0)==0, b.get('__ffs')
+          print(f"M33_STRICT500 selected=500 pass={s['pass']} unsupported={s['unsupported']} error=0 distinct={len(s['blockers'])}")
+          for r in s['blockers'][:40]: print(f"M33_NEXT_BLOCKER count={r['count']} function={r['function']}")
+          PY
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: core-frontier-m33-compound-evidence
+          path: |
+            build/m33-compound/
+            build/m33-rep/
+            build/m33-strict500/frontier-summary.json
+            build/m33-strict500/batch-results.json
+          if-no-files-found: warn

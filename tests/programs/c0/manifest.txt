@@ -9,6 +9,7 @@ standalone_block
 array_subscript
 array_decay
 string_literals
+character_array_string_initializer
 pointer_arithmetic
 pointer_aggregate_arithmetic
 pointer_read
@@ -71,3 +72,10 @@ runtime_record_array_initializer
 predefined_func_name
 static_nested_record_designator
 static_record_compound_literal
+static_nested_record_nonzero
+static_zero_size_local_array
+post_type_declaration_specifiers
+block_scope_function_declaration
+null_member_address_offset
+switch_unreachable_after_break
+gup_page_count_backedge

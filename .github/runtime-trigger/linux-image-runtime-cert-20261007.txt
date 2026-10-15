@@ -1,0 +1,1 @@
+Trigger exact certified linux-expanded-image-v3 runtime smoke and P1 after successful full Image run 37610846637.

@@ -1,0 +1,548 @@
+name: Toolchain M0 Structure Gate
+# Runtime push: always test isolation / Kbuild wrapper routing; preserve
+# historical frozen compiler boundary only for manual non-runtime dispatch.
+
+on:
+  push:
+    branches:
+      - "agent/linux-expanded-kbuild-v0"
+    paths:
+      - 'tools/ci/test_linux_runtime_object_set_v1.py'
+      - 'tools/ci/check_linux_runtime_fixture_restore_v1.py'
+      - 'tools/ci/check_linux_expanded_pi_p1_convergence_v1.py'
+      - 'tools/ci/check_linux_early_runtime_union_v1.py'
+      - 'tools/ci/select_runtime_owner_modes_v1.py'
+      - 'tools/ci/check_runtime_owner_routing_v1.py'
+      - 'tools/ci/check_early_runtime_dispatch_v1.py'
+      - 'tools/ci/check_ci_regression_path_isolation_v1.py'
+      - '.github/workflows/toolchain-focused-regressions-v1.yml'
+      - '.github/workflows-disabled/toolchain-focused-regressions-three-jobs-2026-10-09.yml'
+      - '.github/workflows-disabled/minic-rv64-focused-regressions-v1.yml'
+      - '.github/workflows-disabled/miniar-regressions-v1.yml'
+      - '.github/workflows-disabled/minild-regressions-v1.yml'
+      - 'tools/ci/check_ci_shared_elf_coverage_v1.py'
+      - 'tools/ci/check_ci_trigger_coverage_v1.py'
+      - 'tools/ci/check_ci_branch_policy_v1.py'
+      - 'tools/ci/audit_active_workflow_routing_v1.py'
+      - 'tools/ci/check_linux_legacy_tag_router_v1.py'
+      - '.github/workflows/linux-legacy-tag-router-v1.yml'
+      - '.github/workflows/linux-expanded-kbuild-v0.yml'
+      - '.github/workflows/miniar-linux-kbuild.yml'
+      - 'docs/ci/ci-push-skip-audit-2026-10-09.md'
+      - 'tools/ci/select_runtime_focused_owners_v1.py'
+      - 'tools/ci/check_runtime_focused_owner_convergence_v1.py'
+      - '.github/workflows/linux-runtime-focused-owners-v1.yml'
+      - '.github/workflows-disabled/linux-runtime-mm-core-frontier-v0.yml'
+      - '.github/workflows-disabled/linux-runtime-rcu-owner-v0.yml'
+      - '.github/workflows-disabled/linux-runtime-riscv-init-codegen-v0.yml'
+      - '.github/workflows-disabled/linux-runtime-timer-focused-v0.yml'
+      - 'tools/ci/export_ci_trigger_matrix_v1.py'
+      - 'tools/ci/select_miniobjcopy_elf_route_v1.py'
+      - 'tools/ci/check_ci_miniobjcopy_elf_route_v1.py'
+      - '.github/workflows/minic-driver-v0.yml'
+      - '.github/workflows/minipp-a0.yml'
+      - '.github/workflows/linux-runtime-owner-focused-v1.yml'
+      - 'tools/ci/check_linux_runtime_fdt_kallsyms_union_v1.py'
+      - 'tools/ci/check_linux_core_3352_first500_union_v1.py'
+      - 'tools/ci/check_linux_efi_vdso_convergence_v1.py'
+      - 'tools/ci/check_linux_runtime_contract_oracles_convergence_v1.py'
+      - '.github/workflows/linux-efi-vdso-focused-v1.yml'
+      - '.github/workflows-disabled/linux-runtime-contract-oracles-v1.yml'
+      - '.github/workflows/linux-expanded-pi-p1-runtime-v1.yml'
+      - '.github/actions/linux-runtime-restore-fixture/**'
+      - 'tools/ci/test_linux_runtime_prefix_bisect_v1.py'
+      - 'tools/ci/test_linux_runtime_gcc_minic_ab_v1.py'
+      - 'tools/ci/test_linux_runtime_kbuild_regeneration_guard_v1.py'
+      - 'tools/ci/linux-runtime-kbuild-regeneration-guard-v1.py'
+      - 'tools/ci/test_linux_runtime_failed_tu_replay_v1.py'
+      - 'tools/ci/linux-runtime-gcc-single-swap-v1.sh'
+      - 'tools/ci/linux-runtime-gcc-cohort-bisect-v1.sh'
+      - 'tools/ci/linux-runtime-gcc-shards-v1.py'
+      - 'tools/ci/linux-runtime-minic-route-audit-v1.py'
+      - 'tools/ci/linux-runtime-gcc-full-c-objects-v1.py'
+      - 'tools/ci/linux-runtime-gcc-cohort-objects-v1.txt'
+      - 'tools/ci/check_minild_integration_convergence_v1.py'
+      - 'tools/ci/check_minipp_frozen_convergence_v1.py'
+      - 'tools/ci/check_minipp_live_frozen_merge_v1.py'
+      - 'tools/ci/check_linux_perf_optin_convergence_v1.py'
+      - 'tools/ci/check_linux_runtime_focused_faults_convergence_v1.py'
+      - 'tools/ci/check_linux_runtime_frontier_diagnostics_convergence_v1.py'
+      - 'tools/ci/check_linux_runtime_diagnostic_union_v1.py'
+      - '.github/workflows-disabled/linux-runtime-frontier-diagnostics-v1.yml'
+      - '.github/workflows/linux-runtime-focused-faults-v1.yml'
+      - '.github/workflows/linux-runtime-optin-perf-suite-v1.yml'
+      - '.github/workflows/minipp-linux-frozen-v1.yml'
+      - '.github/workflows/minild-integration-v1.yml'
+      - 'tests/external/linux/stage2_kbuild_cc*.sh'
+      - 'tests/driver/run-busybox-kbuild-routing-v0.sh'
+      - '.github/workflows/toolchain-m0-structure.yml'
+      - '.github/workflows/linux-distributed-full-image-signedness-v2.yml'
+      - '.github/workflows/miniobjcopy-strip-regressions-v1.yml'
+      - '.github/workflows-disabled/miniobjcopy-strip-regressions-legacy-image-2026-10-09.yml'
+      - 'docs/ci/active-workflow-inventory-2026-10-09.tsv'
+      - '.github/workflows-disabled/minipp-linux-exact-smoke.yml'
+      - '.github/workflows/linux-runtime-spinlock-context-v0.yml'
+      - '.github/workflows/linux-runtime-fdt-isolation-v1.yml'
+      - '.github/workflows-disabled/linux-runtime-generated-kallsyms-first-die-v0.yml'
+      - '.github/workflows/minias-a0-focused-diagnostics-v1.yml'
+      - 'tools/ci/check_minias_semantic_convergence_v1.py'
+      - 'tools/ci/minias_artifact_rescue_v1.py'
+      - 'tools/ci/minias-historical-artifacts-v1.json'
+      - 'tools/ci/check_linux_runtime_fixture_producers_convergence_v1.py'
+      - '.github/workflows/linux-runtime-fixture-producers-v1.yml'
+      - '.github/workflows/linux-core-all3352.yml'
+      - '.github/workflows-disabled/core-first500-regression.yml'
+      - '.github/workflows/linux-runtime-gcc-baseline.yml'
+      - '.github/workflows/linux-efi-vdso-focused-v1.yml'
+      - '.github/workflows-disabled/linux-vdso-focused.yml'
+      - '.github/workflows-disabled/linux-efistub-diff-v0.yml'
+      - '.github/workflows/minic-driver-v0.yml'
+      - '.github/workflows/minipp-a0.yml'
+      - 'tools/ci/linux-distributed-full-image-v1.sh'
+      - 'tools/ci/linux-distributed-canonical-delay-v1.py'
+      - 'tools/ci/linux-distributed-provenance-audit-v2.py'
+      - 'tools/ci/linux-distributed-image-plan-v1.py'
+  workflow_dispatch:
+
+jobs:
+  compiler-boundary:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify four approved remote branch refs
+        run: |
+          python3 tools/ci/check_ci_branch_policy_v1.py --self-test
+          python3 tools/ci/check_ci_branch_policy_v1.py
+
+      - name: Verify MiniLD consolidated integration contracts
+        run: |
+          python3 tools/ci/check_minild_integration_convergence_v1.py
+          ruby -e 'require "yaml"; YAML.parse_file(ARGV.fetch(0)); puts "M0_MINILD_INTEGRATION_YAML=PASS"' .github/workflows/minild-integration-v1.yml
+
+      - name: Verify MiniPP frozen and live-Kbuild canonical sources
+        run: |
+          python3 tools/ci/check_minipp_live_frozen_merge_v1.py
+
+      - name: Verify MiniPP frozen oracle workflow convergence
+        run: |
+          python3 tools/ci/check_minipp_frozen_convergence_v1.py
+          ruby -e 'require "yaml"; YAML.parse_file(ARGV.fetch(0)); puts "M0_MINIPP_FROZEN_YAML=PASS"' .github/workflows/minipp-linux-frozen-v1.yml
+
+      - name: Verify Linux performance suite convergence
+        run: |
+          python3 tools/ci/check_linux_perf_optin_convergence_v1.py
+          ruby -e 'require "yaml"; YAML.parse_file(ARGV.fetch(0)); puts "M0_LINUX_PERF_SUITE_YAML=PASS"' .github/workflows/linux-runtime-optin-perf-suite-v1.yml
+
+      - name: Verify seven-job Runtime diagnostic union and immutable canonical sources
+        run: |
+          python3 tools/ci/check_linux_runtime_diagnostic_union_v1.py
+
+      - name: Verify Runtime focused fault diagnostics consolidation
+        run: |
+          python3 tools/ci/check_linux_runtime_focused_faults_convergence_v1.py
+          ruby -e 'require "yaml"; YAML.parse_file(ARGV.fetch(0)); puts "M0_RUNTIME_FOCUSED_FAULTS_YAML=PASS"' .github/workflows/linux-runtime-focused-faults-v1.yml
+
+      - name: Verify Runtime frontier and QEMU diagnostics convergence
+        run: |
+          python3 tools/ci/check_linux_runtime_frontier_diagnostics_convergence_v1.py
+          ruby -e 'require "yaml"; YAML.parse_file(ARGV.fetch(0)); puts "M0_RUNTIME_FRONTIER_DIAGNOSTICS_YAML=PASS"' .github/workflows/linux-runtime-focused-faults-v1.yml
+
+      - name: Check shared Linux fixture restore action and complete workflow source equivalence
+        run: |
+          python3 tools/ci/check_linux_runtime_fixture_restore_v1.py
+          ruby -e 'require "yaml"; YAML.parse_file(ARGV.fetch(0)); puts "M0_RUNTIME_FIXTURE_ACTION_YAML=PASS"' .github/actions/linux-runtime-restore-fixture/action.yml
+
+      - name: Prove early Runtime consolidated source canons and seven exact jobs
+        run: |
+          python3 tools/ci/check_linux_early_runtime_union_v1.py
+
+      - name: Verify expanded PI/P1 Runtime diagnostic workflow convergence
+        run: |
+          python3 tools/ci/check_linux_expanded_pi_p1_convergence_v1.py
+          ruby -e 'require "yaml"; YAML.parse_file(ARGV.fetch(0)); puts "M0_LINUX_EXPANDED_PI_P1_YAML=PASS"' .github/workflows/linux-expanded-pi-p1-runtime-v1.yml
+
+      - name: Verify Linux EFI and vDSO focused oracle consolidation
+        run: |
+          python3 tools/ci/check_linux_efi_vdso_convergence_v1.py
+          ruby -e 'require "yaml"; YAML.parse_file(ARGV.fetch(0)); puts "M0_EFI_VDSO_YAML=PASS"' .github/workflows/linux-efi-vdso-focused-v1.yml
+
+      - name: Verify Linux compiler semantics and QEMU watch contract consolidation
+        run: |
+          python3 tools/ci/check_linux_runtime_contract_oracles_convergence_v1.py
+          ruby -e 'require "yaml"; YAML.parse_file(ARGV.fetch(0)); puts "M0_RUNTIME_CONTRACT_ORACLES_YAML=PASS"' .github/workflows/linux-expanded-pi-p1-runtime-v1.yml
+
+      - name: Validate pinned MiniAS historical artifact rescue contract
+        run: python3 tools/ci/minias_artifact_rescue_v1.py --self-test
+
+      - name: Check MiniAS focused and 3536 semantic oracle consolidation
+        run: |
+          python3 tools/ci/check_minias_semantic_convergence_v1.py
+          ruby -e 'require "yaml"; YAML.parse_file(ARGV.fetch(0)); puts "M0_MINIAS_SEMANTIC_YAML=PASS"' .github/workflows/minias-a0-focused-diagnostics-v1.yml
+
+      - name: Verify Runtime frozen and compact fixture producer convergence
+        run: |
+          python3 tools/ci/check_linux_runtime_fixture_producers_convergence_v1.py
+          ruby -e 'require "yaml"; YAML.parse_file(ARGV.fetch(0)); puts "M0_RUNTIME_FIXTURE_PRODUCERS_YAML=PASS"' .github/workflows/linux-runtime-fixture-producers-v1.yml
+
+      - name: Verify FDT and generated kallsyms focused owner convergence
+        run: |
+          python3 tools/ci/check_linux_runtime_fdt_kallsyms_union_v1.py
+          ruby -e 'require "yaml"; YAML.parse_file(ARGV.fetch(0)); puts "M0_FDT_KALLSYMS_YAML=PASS"' .github/workflows/linux-runtime-fdt-isolation-v1.yml
+
+      - name: Verify Core full 3352 and first500/focused-five union
+        run: |
+          python3 tools/ci/check_linux_core_3352_first500_union_v1.py
+
+      - name: Verify four preserved Runtime diagnostic jobs and selector routing
+        run: |
+          python3 tools/ci/select_runtime_focused_owners_v1.py --self-test
+          python3 tools/ci/check_runtime_focused_owner_convergence_v1.py
+          ruby -e 'require "yaml"; YAML.parse_file(ARGV.fetch(0))' .github/workflows/linux-runtime-focused-owners-v1.yml
+
+      - name: Check Runtime Owner focused matrix path routing
+        run: |
+          python3 tools/ci/select_runtime_owner_modes_v1.py --self-test
+          python3 tools/ci/check_runtime_owner_routing_v1.py
+          ruby -e 'require "yaml"; YAML.parse_file(ARGV.fetch(0)); puts "M0_OWNER_ROUTING_YAML=PASS"' .github/workflows/linux-runtime-owner-focused-v1.yml
+
+      - name: Check early Runtime manual and push route truth table
+        run: |
+          python3 tools/ci/check_early_runtime_dispatch_v1.py
+          ruby -e 'require "yaml"; YAML.parse_file(ARGV.fetch(0)); puts "M0_EARLY_RUNTIME_ROUTING_YAML=PASS"' .github/workflows/linux-expanded-pi-p1-runtime-v1.yml
+
+      - name: Verify regression push path isolation from Runtime-only trigger files
+        run: |
+          python3 tools/ci/check_ci_regression_path_isolation_v1.py
+          for f in toolchain-focused-regressions-v1.yml; do
+            ruby -e 'require "yaml"; YAML.parse_file(ARGV.fetch(0))' ".github/workflows/$f"
+          done
+
+      - name: Verify shared ELF build source path coverage
+        run: |
+          python3 tools/ci/check_ci_shared_elf_coverage_v1.py
+          for f in toolchain-focused-regressions-v1.yml minic-driver-v0.yml minipp-a0.yml; do
+            ruby -e 'require "yaml"; YAML.parse_file(ARGV.fetch(0))' ".github/workflows/$f"
+          done
+
+      - name: Audit all maintained workflow trigger/job contracts and MiniObjcopy ELF route
+        run: |
+          python3 tools/ci/check_ci_trigger_coverage_v1.py
+          python3 tools/ci/check_linux_legacy_tag_router_v1.py
+          if test -f .github/workflows/linux-legacy-tag-router-v1.yml; then
+            ruby -e 'require "yaml"; YAML.parse_file(ARGV.fetch(0)); puts "M0_LINUX_LEGACY_TAG_ROUTER_YAML=PASS"' .github/workflows/linux-legacy-tag-router-v1.yml
+          fi
+          python3 tools/ci/audit_active_workflow_routing_v1.py --self-test
+          python3 tools/ci/audit_active_workflow_routing_v1.py --output build/ci-active-entrypoint-audit.tsv
+          python3 tools/ci/export_ci_trigger_matrix_v1.py --output build/ci-trigger-matrix.tsv
+          python3 tools/ci/select_miniobjcopy_elf_route_v1.py --self-test
+          python3 tools/ci/check_ci_miniobjcopy_elf_route_v1.py
+          ruby -e 'require "yaml"; YAML.parse_file(ARGV.fetch(0))' .github/workflows/miniobjcopy-strip-regressions-v1.yml
+
+      - name: Publish per-job CI trigger matrix audit
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-trigger-matrix-runtime
+          path: |
+            build/ci-trigger-matrix.tsv
+            build/ci-active-entrypoint-audit.tsv
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Run Linux runtime isolation selftests
+        run: |
+          python3 tools/ci/test_linux_runtime_object_set_v1.py
+          python3 tools/ci/test_linux_runtime_prefix_bisect_v1.py
+          python3 tools/ci/test_linux_runtime_gcc_minic_ab_v1.py
+          python3 tools/ci/linux-runtime-gcc-shards-v1.py self-test
+          ruby -e 'require "yaml"; YAML.parse_file(ARGV.fetch(0)); puts "M0_GNU_MINIC_SHARDS_YAML=PASS"' .github/workflows/linux-runtime-gcc-baseline.yml
+          python3 tools/ci/test_linux_runtime_kbuild_regeneration_guard_v1.py
+          bash -n tools/ci/linux-runtime-gcc-cohort-bisect-v1.sh
+          python3 tools/ci/test_linux_runtime_failed_tu_replay_v1.py
+          bash -n tools/ci/linux-runtime-gcc-single-swap-v1.sh
+          bash -n tools/ci/linux-runtime-gcc-cohort-bisect-v1.sh
+          python3 tools/ci/linux-runtime-minic-route-audit-v1.py --self-test
+          python3 -m py_compile tools/ci/linux-runtime-gcc-full-c-objects-v1.py
+
+      - name: Validate active Linux Kbuild wrapper contract
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          bash -n tests/external/linux/stage2_kbuild_cc.sh
+          bash -n tests/external/linux/stage2_kbuild_cc_test.sh
+          bash tests/external/linux/stage2_kbuild_cc_test.sh
+          echo "M0_KBUILD_WRAPPER_CONTRACT=PASS"
+
+      - name: Validate BusyBox Kbuild ownership routing contract
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          BUILD_DIR="$GITHUB_WORKSPACE/build/m0-busybox-kbuild-routing-v0" \
+            bash tests/driver/run-busybox-kbuild-routing-v0.sh
+          echo "M0_BUSYBOX_KBUILD_ROUTING=PASS"
+
+      - name: Validate distributed Image canonical CI contracts (no Linux build)
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          bash -n tools/ci/linux-distributed-full-image-v1.sh
+          python3 -m py_compile \
+            tools/ci/linux-distributed-canonical-delay-v1.py \
+            tools/ci/linux-distributed-provenance-audit-v2.py \
+            tools/ci/linux-distributed-image-plan-v1.py
+          ruby -e 'require "yaml"; YAML.parse_file(ARGV.fetch(0)); puts "M0_MINIOBJCOPY_YAML=PASS"' .github/workflows/miniobjcopy-strip-regressions-v1.yml
+          ruby -e 'require "yaml"; YAML.parse_file(ARGV.fetch(0)); puts "M0_MINIPP_LIVE_YAML=PASS"' .github/workflows/minipp-linux-frozen-v1.yml
+          for f in linux-runtime-spinlock-context-v0.yml linux-runtime-fdt-isolation-v1.yml; do
+            ruby -e 'require "yaml"; YAML.parse_file(ARGV.fetch(0))' ".github/workflows/$f"
+          done
+          echo "M0_RUNTIME_FOCUSED_YAML=PASS owners=3"
+          ruby -e 'require "yaml"; YAML.parse_file(ARGV.fetch(0)); puts "M0_MINIAS_FOCUSED_YAML=PASS"' .github/workflows/minias-a0-focused-diagnostics-v1.yml
+          ruby -e 'require "yaml"; YAML.parse_file(ARGV.fetch(0)); puts "M0_LINUX_CORE_3352_YAML=PASS"' .github/workflows/linux-core-all3352.yml
+          ruby -e 'require "yaml"; YAML.parse_file(ARGV.fetch(0)); puts "M0_CORE_FOCUSED_YAML=PASS"' .github/workflows/linux-core-all3352.yml
+          for f in linux-runtime-gcc-baseline.yml linux-efi-vdso-focused-v1.yml minic-driver-v0.yml minipp-a0.yml; do
+            ruby -e 'require "yaml"; YAML.parse_file(ARGV.fetch(0))' ".github/workflows/$f"
+          done
+          echo "M0_LIVE_TRIGGER_YAML=PASS workflows=4 contracts=5"
+          python3 - <<'PY_CI'
+          from pathlib import Path
+          yaml = Path('.github/workflows/linux-distributed-full-image-signedness-v2.yml').read_text()
+          expected = (
+              'MINIC_DISTRIBUTED_STRICT_REPLAY:',
+              'MINIC_DISTRIBUTED_CANONICALIZE_DELAY_CMD:',
+              'needs: shards',
+              'bash tools/ci/linux-distributed-full-image-v1.sh image',
+              'bash tools/ci/linux-distributed-full-image-v1.sh qemu',
+              'reuse-final-check.txt',
+          )
+          missing = [x for x in expected if x not in yaml]
+          assert not missing, 'Missing distributed Image contract: ' + ', '.join(missing)
+          assert 'run-id:' not in yaml, 'Canonical Image workflow must create its own shards'
+          import hashlib
+          retirements = {
+              'linux-distributed-kbuild-objects120-v1.yml': '9185bee34ba0f4391561f6a22e294e1a32675efd',
+              'linux-distributed-image-receiver-reuse-v1.yml': 'fcff21d5ee82841c4c94c72a16009e8d5b2165aa',
+              'linux-distributed-image-receiver-signedness-v2.yml': '7de981f45db79ef58e8e45caf65b3fa4f015f0ef',
+              'linux-distributed-full-image-v1.yml': '3a91435760197edacddc277395332c9023b808da',
+          }
+          for fname, original_sha in retirements.items():
+              active = Path('.github/workflows') / fname
+              archived = Path('.github/workflows-disabled') / fname
+              assert not active.exists(), f'Historical workflow reactivated: {active}'
+              data = archived.read_bytes()
+              git_blob = b'blob ' + str(len(data)).encode() + bytes([0]) + data
+              actual = hashlib.sha1(git_blob).hexdigest()
+              assert actual == original_sha, f'Altered archived workflow {fname}: {actual}'
+          print('M0_DISTRIBUTED_RETIREMENT=PASS archived=4 identical_git_blobs=4')
+          print('M0_DISTRIBUTED_IMAGE_CONTRACT=PASS self_contained=1 strict_replay=1')
+
+          # Current source has two runnable MiniObjcopy oracles plus one route.
+          # The old full-Image mode is SHA-archived: its pinned input artifacts
+          # are gone. Re-enable only with a current self-generating producer.
+          mini = Path('.github/workflows/miniobjcopy-strip-regressions-v1.yml')
+          mini_text = mini.read_text()
+          for job in ('route', 'regressions', 'linux-tool'):
+              assert '\n  ' + job + ':\n' in mini_text, f'Missing MiniObjcopy job: {job}'
+          assert "default: regressions" in mini_text
+          assert "inputs.mode == 'linux-tool'" in mini_text
+          assert "github.event_name == 'push'" in mini_text
+          assert '\n  linux-image:\n' not in mini_text
+          assert "run-id: 33623125809" not in mini_text
+          mini_retirements = {
+              'miniobjcopy-linux-tool-gate.yml': '60ee9e904a535bc599339def2efeed3f9b6c8c72',
+              'miniobjcopy-linux-image-gate.yml': '69d74b896da76e99364c31291b98fbc9067905b1',
+              'miniobjcopy-strip-regressions-legacy-image-2026-10-09.yml': '851459610d6dd5ca4a528409638a5b840dbd7a46',
+          }
+          for fname, sha in mini_retirements.items():
+              assert not (Path('.github/workflows') / fname).exists(), f'Old MiniObjcopy workflow active: {fname}'
+              data = (Path('.github/workflows-disabled') / fname).read_bytes()
+              git_blob = b'blob ' + str(len(data)).encode() + bytes([0]) + data
+              assert hashlib.sha1(git_blob).hexdigest() == sha, f'Old MiniObjcopy YAML modified: {fname}'
+          print('M0_MINIOBJCOPY_CONVERGENCE=PASS runnable_jobs=3 archived=3 blobs_identical=3')
+
+          exact = Path('.github/workflows/minipp-linux-frozen-v1.yml').read_text()
+          assert 'default: exact' in exact
+          for mode in ('smoke', 'batch', '72'):
+              assert '\n  linux-exact-' + mode + ':\n' in exact, f'Missing MiniPP exact job: {mode}'
+              assert "inputs.mode == '" + mode + "'" in exact, f'Missing MiniPP mode selector: {mode}'
+          assert 'name: minipp-linux-exact-smoke' in exact
+          assert 'name: minipp-linux-exact-batch18' in exact
+          assert 'name: minipp-linux-exact-72' in exact
+          exact_archives = {
+              'minipp-linux-exact-batch.yml': 'fbd14271a9ffcb45350a3ada76a65b8c26345fc6',
+              'minipp-linux-exact-72.yml': 'dcf0399404d1c7d671cbeb8ef00a6dab816ffe30',
+          }
+          for fname, sha in exact_archives.items():
+              assert not (Path('.github/workflows') / fname).exists(), f'Old MiniPP workflow unexpectedly active: {fname}'
+              data = (Path('.github/workflows-disabled') / fname).read_bytes()
+              git_blob = b'blob ' + str(len(data)).encode() + bytes([0]) + data
+              assert hashlib.sha1(git_blob).hexdigest() == sha, f'MiniPP archival blob mismatch: {fname}'
+          assert not Path('.github/workflows/minipp-linux-exact-smoke.yml').exists(), 'Retired live workflow remains active'
+          print('M0_MINIPP_LIVE_EXACT=PASS three_original_live_jobs_present=1 older_archives=2')
+
+          # Every legacy QEMU/compilation job must remain byte-identical
+          # (except the new job-level opt-in selector) and recoverable.
+          runtime_groups = (
+              ('linux-runtime-spinlock-context-v0.yml', 'context', {
+                  'linux-runtime-spinlock-codegen-v0.yml': ('spinlock-codegen', 'dbd4e9cf8be3aca8e0b23359a8daf4283649bd9f'),
+                  'linux-runtime-spinlock-first-context-v0.yml': ('spinlock-first-context', '83d77ea7dfaff4eb204b902363df42c428063292'),
+                  'linux-runtime-spinlock-stack-v0.yml': ('spinlock-stack', 'a9e55e5f74309e090b78fe3dc4d141502d5866c2'),
+              }),
+              ('linux-runtime-fdt-isolation-v1.yml', 'isolation', {
+                  'linux-runtime-fdt-ro-codegen-v0.yml': ('fdt-ro-codegen', 'bbac9494c79603df4146fb08118ee1007a6b66c9'),
+              }),
+              ('linux-runtime-fdt-isolation-v1.yml', 'generated', {
+                  'linux-runtime-first-die-context-v0.yml': ('kallsyms-first-fault-abc', '90e6d9e2244bb4a602321617c661a8a33c5faa65'),
+                  'linux-runtime-kallsyms-object-diagnose-v0.yml': ('kallsyms-object-diagnose', 'b0321f094495926553191f8d5ba85566ce3a6a62'),
+              }),
+          )
+          retained_jobs = 3
+          archived_jobs = 0
+          for owner, default_mode, archived_files in runtime_groups:
+              merged = (Path('.github/workflows') / owner).read_text()
+              if default_mode == 'generated':
+                  assert "          - 'generated'" in merged, 'Kallsyms selector lost from FDT owner'
+              else:
+                  assert ("default: '" + default_mode + "'") in merged, f'Wrong focused selector: {owner}'
+              assert "          - 'all'" in merged, f'No exhaustive mode: {owner}'
+              assert "github.event_name == 'workflow_dispatch'" in merged
+              assert "github.event_name == 'push'" in merged
+              for fname, (job, sha) in archived_files.items():
+                  assert not (Path('.github/workflows') / fname).exists(), f'Old focused workflow active: {fname}'
+                  contents = (Path('.github/workflows-disabled') / fname).read_bytes()
+                  data = b'blob ' + str(len(contents)).encode() + bytes([0]) + contents
+                  assert hashlib.sha1(data).hexdigest() == sha, f'Lost historical Git blob: {fname}'
+                  original = contents.decode('utf-8')
+                  assert '\njobs:\n' in original, f'No source jobs section: {fname}'
+                  source_section = original.split('\njobs:\n', 1)[1]
+                  mark = '  ' + job + ':\n'
+                  assert mark in source_section, f'Original job absent: {fname}'
+                  old_body = source_section.split(mark, 1)[1].rstrip()
+                  assert old_body in merged, f'Legacy job executable body altered: {fname}'
+                  assert ("  " + job + ":\n") in merged, f'Legacy job selector absent: {fname}'
+                  retained_jobs += 1
+                  archived_jobs += 1
+          assert retained_jobs == 9 and archived_jobs == 6
+          print('M0_RUNTIME_FOCUSED=PASS owners=3 jobs=9 archived=6 original_job_bodies_exact=6')
+
+          # Preserve all MiniAS diagnostic jobs and their original artifact contracts.
+          as_text = Path('.github/workflows/minias-a0-focused-diagnostics-v1.yml').read_text()
+          as_path = Path('.github/workflows-disabled/minias-a0-window.yml')
+          assert not Path('.github/workflows/minias-a0-window.yml').exists()
+          as_bytes = as_path.read_bytes()
+          blob = b'blob ' + str(len(as_bytes)).encode() + bytes([0]) + as_bytes
+          assert hashlib.sha1(blob).hexdigest() == 'e7763f8faa294d08b341e0b079b32477b54e9cc6', 'MiniAS archive SHA mismatch'
+          for job in ('real16', 'frontier', 'vector33', 'resolve', 'window-shard', 'window'):
+              assert '\n  ' + job + ':\n' in as_text, f'Missing MiniAS job: {job}'
+          assert "inputs.mode == 'window'" in as_text
+          assert 'default: first500' in as_text
+          assert '          - final352' in as_text
+          assert 'needs.resolve.outputs.label' in as_text
+          assert 'matrix.shard' in as_text
+          old_jobs = as_bytes.decode().split('\njobs:\n', 1)[1]
+          old_tail = '\n  window-shard:' + old_jobs.split('\n  window-shard:', 1)[1]
+          assert old_tail.rstrip() in as_text, 'MiniAS window shard/aggregate commands altered'
+          old_resolve = old_jobs.split('\n    runs-on:', 1)[1].split('\n  window-shard:', 1)[0]
+          assert old_resolve in as_text, 'MiniAS window resolver executable body altered'
+          print('M0_MINIAS_FOCUSED=PASS jobs=6 archived=1 unchanged_job_bodies=3')
+
+          # The two distinct Core 3352 acceptance predicates are retained.
+          core_file = Path('.github/workflows/linux-core-all3352.yml').read_text()
+          core_archive_path = Path('.github/workflows-disabled/linux-core-assemble-all3352.yml')
+          assert not Path('.github/workflows/linux-core-assemble-all3352.yml').exists()
+          core_bytes = core_archive_path.read_bytes()
+          git_object = b'blob ' + str(len(core_bytes)).encode() + bytes([0]) + core_bytes
+          assert hashlib.sha1(git_object).hexdigest() == '6a0ce243dd6cf16e038588fb1c81e5ca993e77fb'
+          for mode in ('compile', 'assemble', 'all'):
+              assert '          - ' + mode in core_file, f'Missing Core mode {mode}'
+          assert 'default: compile' in core_file
+          for job in ('first500', 'shards', 'all3352', 'asm-first500', 'asm-shards', 'asm-all3352'):
+              assert '\n  ' + job + ':\n' in core_file, f'Missing Core job: {job}'
+          assert 'needs.asm-first500.result' in core_file
+          assert 'needs.asm-shards.result' in core_file
+          assert 'ALL3352_EXACT' in core_file and 'LINUX_ASSEMBLE_ALL3352=PASS' in core_file
+          core_old = core_bytes.decode()
+          def job_steps(yaml_text, job_name):
+              import re
+              block = yaml_text.split('\n  ' + job_name + ':\n', 1)[1]
+              block = re.split(r'\n  [a-z][a-z0-9-]*:\n', block, maxsplit=1)[0]
+              return block.split('    steps:\n', 1)[1].rstrip()
+          for original, current in (('first500','asm-first500'), ('shards','asm-shards'), ('all3352','asm-all3352')):
+              old_steps = job_steps(core_old, original)
+              old_steps = old_steps.replace('needs.first500.result','needs.asm-first500.result')
+              old_steps = old_steps.replace('needs.shards.result','needs.asm-shards.result')
+              assert old_steps == job_steps(core_file, current), f'Core assembly executable body changed: {original}'
+          print('M0_CORE_3352_CONVERGENCE=PASS six_jobs=6 old_assemble_jobs=3 archived_blob=PASS')
+
+          core_focused = Path('.github/workflows/linux-core-all3352.yml').read_text()
+          focused_path = Path('.github/workflows-disabled/linux-core-focused-five.yml')
+          assert not Path('.github/workflows/linux-core-focused-five.yml').exists()
+          focused_bytes = focused_path.read_bytes()
+          focused_blob = b'blob ' + str(len(focused_bytes)).encode() + bytes([0]) + focused_bytes
+          assert hashlib.sha1(focused_blob).hexdigest() == 'df5828d4035d41ee178da5ba5ada05a8abb59a09'
+          assert '\n  strict500:\n' in core_focused and '\n  focused-five:\n' in core_focused
+          assert '          - strict500' in core_focused and '          - focused-five' in core_focused and 'inputs.mode' in core_focused
+          focused_old = focused_bytes.decode().split('\n  focused-five:\n', 1)[1]
+          old_steps = focused_old.split('    steps:\n', 1)[1].rstrip()
+          new_steps = core_focused.split('\n  focused-five:\n', 1)[1].split('    steps:\n', 1)[1].rstrip()
+          assert old_steps == new_steps, 'Historical Core focused-five steps changed'
+          print('M0_CORE_FOCUSED=PASS jobs=2 old_five_steps_exact=1 archived_sha=PASS')
+
+          live_specs = {
+              'linux-runtime-gcc-baseline.yml': ('[linux-runtime-gcc]', 'refactor/declaration-sema-v1'),
+              'linux-efi-vdso-focused-v1.yml': ('[linux-vdso-focused]', 'refactor/declaration-sema-v1'),
+              'minic-driver-v0.yml': ('[minic-driver-v0]', 'toolchain/minic-driver-v0'),
+              'minipp-a0.yml': ('', 'toolchain/minipp-*'),
+          }
+          for file, (tag, stale) in live_specs.items():
+              wf = (Path('.github/workflows') / file).read_text()
+              assert 'agent/linux-expanded-kbuild-v0' in wf
+              assert 'agent/linux-perf-boolean-domain-v1' in wf
+              assert stale not in wf, f'Obsolete trigger branch: {file}'
+              assert 'workflow_dispatch:' in wf
+              if tag:
+                  assert tag in wf and 'github.event_name' in wf, f'Missing heavy opt-in: {file}'
+              if file == 'linux-efi-vdso-focused-v1.yml':
+                  assert '[linux-efistub-diff]' in wf, 'Lost EFI opt-in tag'
+                  assert 'agent/linux-link-correctness-v0' not in wf, 'Obsolete EFI branch filter'
+                  for old in ('linux-vdso-focused.yml', 'linux-efistub-diff-v0.yml'):
+                      assert not (Path('.github/workflows') / old).exists(), f'Old workflow still active: {old}'
+          print('M0_LIVE_TRIGGERS=PASS current_dev_branches=2 owners=4 contracts=5')
+          PY_CI
+
+      - name: Build frozen compiler boundary
+        if: github.ref != 'refs/heads/agent/linux-expanded-kbuild-v0'
+        run: make clean && make -j2
+
+      - name: Verify minic-cc and independent driver entrypoint
+        if: github.ref != 'refs/heads/agent/linux-expanded-kbuild-v0'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -x build/debug/bin/minic-cc
+          test -x build/debug/bin/minic
+          if cmp -s build/debug/bin/minic-cc build/debug/bin/minic; then
+            echo "minic driver unexpectedly aliases minic-cc" >&2
+            exit 1
+          fi
+          echo "M0_BINARY_BOUNDARY=PASS compiler=minic-cc driver=minic"
+
+      - name: Run focused ownership gates
+        if: github.ref != 'refs/heads/agent/linux-expanded-kbuild-v0'
+        run: |
+          make check-token-model check-lexer check-type check-record check-type-alias
+          make check-ast-contract check-layout check-rv64-abi
+          make check-static-functions check-cast-expressions check-pointer-members
+
+      - name: Verify compiler CLI output identity
+        if: github.ref != 'refs/heads/agent/linux-expanded-kbuild-v0'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work=build/m0-cli-identity
+          mkdir -p "$work"
+          cc -E -P -x c tests/compiler/c0/empty_main.c -o "$work/input.i"
+          build/debug/bin/minic-cc -S "$work/input.i" -o "$work/minic-cc.s"
+          build/debug/bin/minic -S "$work/input.i" -o "$work/minic-compat.s"
+          cmp "$work/minic-cc.s" "$work/minic-compat.s"
+          echo "M0_COMPILER_CLI_IDENTITY=PASS boundary=.i-to-.s driver_compat=PASS"

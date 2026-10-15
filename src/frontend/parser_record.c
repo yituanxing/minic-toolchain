@@ -118,10 +118,6 @@ static bool parse_function_pointer_field_declarator(MinicParser *parser,
         !minic_parser_parse_parenthesized_function_declarator(parser, true, true, &declarator)) {
         return false;
     }
-    if (declarator.is_variadic) {
-        minic_parser_error(parser, "variadic function pointer fields are not supported yet");
-        return false;
-    }
     if (!minic_parser_build_function_declarator_type(
             parser, return_type, &declarator, field_type)) {
         minic_parser_error(parser, "cannot build function pointer field type");
@@ -132,8 +128,10 @@ static bool parse_function_pointer_field_declarator(MinicParser *parser,
 }
 
 typedef struct MinicRecordFieldAttributeContext {
+    MinicType field_type;
     size_t explicit_alignment;
     bool is_packed;
+    bool has_field_type;
 } MinicRecordFieldAttributeContext;
 
 static bool consume_record_field_attribute(MinicParser *parser,
@@ -147,8 +145,25 @@ static bool consume_record_field_attribute(MinicParser *parser,
     }
     context = (MinicRecordFieldAttributeContext *)opaque_context;
     descriptor = attribute->descriptor;
-    if (descriptor == NULL ||
-        !minic_attribute_allowed_on(descriptor, MINIC_ATTRIBUTE_TARGET_FIELD)) {
+    if (descriptor == NULL) {
+        minic_parser_error(parser, "unsupported GNU record field attribute");
+        return false;
+    }
+    if (!minic_attribute_allowed_on(descriptor, MINIC_ATTRIBUTE_TARGET_FIELD)) {
+        bool function_parse_only;
+
+        function_parse_only =
+            context->has_field_type &&
+            minic_type_is_pointer(context->field_type) &&
+            context->field_type.base_kind == MINIC_TYPE_BASE_FUNCTION &&
+            minic_attribute_allowed_on(descriptor, MINIC_ATTRIBUTE_TARGET_FUNCTION) &&
+            (descriptor->semantic_class == MINIC_ATTRIBUTE_CLASS_INFORMATIONAL ||
+             descriptor->semantic_class == MINIC_ATTRIBUTE_CLASS_DIAGNOSTIC ||
+             descriptor->semantic_class == MINIC_ATTRIBUTE_CLASS_OPTIMIZATION ||
+             descriptor->semantic_class == MINIC_ATTRIBUTE_CLASS_CONTROL_FLOW);
+        if (function_parse_only) {
+            return true;
+        }
         minic_parser_error(parser, "unsupported GNU record field attribute");
         return false;
     }
@@ -161,20 +176,86 @@ static bool consume_record_field_attribute(MinicParser *parser,
         context->is_packed = true;
         return true;
     }
+    if (descriptor->kind == MINIC_ATTRIBUTE_NONSTRING &&
+        descriptor->semantic_class == MINIC_ATTRIBUTE_CLASS_DIAGNOSTIC) {
+        return true;
+    }
+    if (descriptor->semantic_class == MINIC_ATTRIBUTE_CLASS_INFORMATIONAL ||
+        descriptor->semantic_class == MINIC_ATTRIBUTE_CLASS_DIAGNOSTIC ||
+        descriptor->semantic_class == MINIC_ATTRIBUTE_CLASS_OPTIMIZATION ||
+        descriptor->semantic_class == MINIC_ATTRIBUTE_CLASS_CONTROL_FLOW) {
+        return true;
+    }
     minic_parser_error(parser, "unsupported GNU record field attribute");
     return false;
 }
 
-static bool
-parse_record_field_attributes(MinicParser *parser, size_t *explicit_alignment, bool *is_packed) {
+static bool parse_typed_record_field_attributes(MinicParser *parser,
+                                                MinicType field_type,
+                                                size_t *explicit_alignment,
+                                                bool *is_packed) {
     MinicRecordFieldAttributeContext context;
 
     if (parser == NULL || explicit_alignment == NULL || is_packed == NULL) {
         return false;
     }
+    (void)memset(&context, 0, sizeof(context));
+    context.field_type = field_type;
     context.explicit_alignment = *explicit_alignment;
     context.is_packed = *is_packed;
+    context.has_field_type = true;
     if (!minic_parser_parse_gnu_attribute_lists(parser, consume_record_field_attribute, &context)) {
+        return false;
+    }
+    *explicit_alignment = context.explicit_alignment;
+    *is_packed = context.is_packed;
+    return true;
+}
+
+static bool
+record_field_function_attribute_is_parse_only(const MinicAttributeDescriptor *descriptor) {
+    return descriptor != NULL &&
+           (descriptor->semantic_class == MINIC_ATTRIBUTE_CLASS_INFORMATIONAL ||
+            descriptor->semantic_class == MINIC_ATTRIBUTE_CLASS_DIAGNOSTIC ||
+            descriptor->semantic_class == MINIC_ATTRIBUTE_CLASS_OPTIMIZATION ||
+            descriptor->semantic_class == MINIC_ATTRIBUTE_CLASS_CONTROL_FLOW);
+}
+
+static bool apply_record_field_declaration_attributes(MinicParser *parser,
+                                                      const MinicParsedAttributeList *attributes,
+                                                      MinicType field_type,
+                                                      size_t *explicit_alignment,
+                                                      bool *is_packed) {
+    MinicRecordFieldAttributeContext context;
+    bool is_function_pointer;
+    size_t index;
+
+    if (parser == NULL || attributes == NULL || explicit_alignment == NULL || is_packed == NULL) {
+        return false;
+    }
+    context.explicit_alignment = *explicit_alignment;
+    context.is_packed = *is_packed;
+    is_function_pointer =
+        minic_type_is_pointer(field_type) && field_type.base_kind == MINIC_TYPE_BASE_FUNCTION;
+    for (index = 0U; index < attributes->count; ++index) {
+        const MinicParsedAttribute *attribute;
+        const MinicAttributeDescriptor *descriptor;
+
+        attribute = &attributes->values[index];
+        descriptor = attribute->descriptor;
+        if (descriptor != NULL &&
+            minic_attribute_allowed_on(descriptor, MINIC_ATTRIBUTE_TARGET_FIELD)) {
+            if (!consume_record_field_attribute(parser, attribute, &context)) {
+                return false;
+            }
+            continue;
+        }
+        if (is_function_pointer && descriptor != NULL &&
+            minic_attribute_allowed_on(descriptor, MINIC_ATTRIBUTE_TARGET_FUNCTION) &&
+            record_field_function_attribute_is_parse_only(descriptor)) {
+            continue;
+        }
+        minic_parser_error(parser, "unsupported GNU declaration-head attribute on record field");
         return false;
     }
     *explicit_alignment = context.explicit_alignment;
@@ -229,6 +310,7 @@ static bool parse_record_bit_field_width(MinicParser *parser,
 static bool parse_record_field_declarator(MinicParser *parser,
                                           MinicRecordId record_id,
                                           MinicType base_type,
+                                          const MinicParsedAttributeList *declaration_attributes,
                                           size_t declaration_alignment,
                                           bool declaration_packed) {
     MinicSourceSpan name_span;
@@ -250,25 +332,28 @@ static bool parse_record_field_declarator(MinicParser *parser,
     if (!minic_parser_parse_pointer_declarator(parser, base_type, &field_type)) {
         return false;
     }
-    if (parser->current.kind == MINIC_TOKEN_LPAREN) {
-        if (record_field_starts_parenthesized_pointer_array(parser)) {
-            if (!parse_pointer_to_array_field_declarator(
+    if (parser->current.kind == MINIC_TOKEN_LPAREN &&
+        record_field_starts_parenthesized_pointer_array(parser)) {
+        if (!parse_pointer_to_array_field_declarator(parser, field_type, &name_span, &field_type)) {
+            return false;
+        }
+    } else if (parser->current.kind == MINIC_TOKEN_LPAREN) {
+        MinicParser probe;
+
+        probe = *parser;
+        if (!minic_parser_advance(&probe)) {
+            return false;
+        }
+        if (probe.current.kind == MINIC_TOKEN_STAR) {
+            if (!parse_function_pointer_field_declarator(
                     parser, field_type, &name_span, &field_type)) {
                 return false;
             }
-        } else if (!parse_function_pointer_field_declarator(
-                       parser, field_type, &name_span, &field_type)) {
+        } else if (!minic_parser_parse_direct_declarator_name(parser, &name_span)) {
             return false;
         }
-    } else {
-        if (parser->current.kind != MINIC_TOKEN_IDENTIFIER) {
-            minic_parser_error(parser, "expected record field name");
-            return false;
-        }
-        name_span = parser->current.span;
-        if (!minic_parser_advance(parser)) {
-            return false;
-        }
+    } else if (!minic_parser_parse_direct_declarator_name(parser, &name_span)) {
+        return false;
     }
 
     if (minic_type_is_void(field_type)) {
@@ -311,12 +396,21 @@ static bool parse_record_field_declarator(MinicParser *parser,
         const MinicArrayType *typedef_array;
 
         typedef_array = minic_c0_program_array_type(parser->program, field_type.array_type_id);
-        if (typedef_array == NULL || typedef_array->element_count == 0U) {
+        if (typedef_array == NULL ||
+            (typedef_array->element_count == 0U && !typedef_array->is_zero_length)) {
             minic_parser_error(parser, "record field requires a complete typedef array type");
             return false;
         }
         field_type = typedef_array->element_type;
-        element_count = typedef_array->element_count;
+        if (typedef_array->is_zero_length) {
+            /* Direct GNU T field[0] uses one semantic element plus an explicit
+               zero-length layout bit. Preserve the same representation when
+               the zero-length array arrives through a typedef. */
+            element_count = 1U;
+            is_zero_length_array = true;
+        } else {
+            element_count = typedef_array->element_count;
+        }
         is_array = true;
     }
     if (parser->current.kind == MINIC_TOKEN_LBRACKET) {
@@ -324,10 +418,6 @@ static bool parse_record_field_declarator(MinicParser *parser,
         size_t bounds[8];
         size_t bound_count;
 
-        if (minic_type_is_pointer(field_type) && field_type.base_kind == MINIC_TYPE_BASE_FUNCTION) {
-            minic_parser_error(parser, "function pointer field arrays are unsupported");
-            return false;
-        }
         bound_count = 0U;
         while (parser->current.kind == MINIC_TOKEN_LBRACKET) {
             if (bound_count >= sizeof(bounds) / sizeof(bounds[0])) {
@@ -357,9 +447,25 @@ static bool parse_record_field_declarator(MinicParser *parser,
                     return false;
                 }
                 if (parser->current.kind == MINIC_TOKEN_LBRACKET) {
-                    minic_parser_error(parser,
-                                       "multidimensional flexible record arrays are unsupported");
-                    return false;
+                    MinicType nested_element_type;
+                    bool nested_is_array;
+
+                    nested_is_array = false;
+                    if (!minic_parser_parse_array_declarator_suffix(
+                            parser, field_type, false, &nested_element_type, &nested_is_array) ||
+                        !nested_is_array || !minic_type_is_array(nested_element_type)) {
+                        if (parser->diagnostic != NULL &&
+                            parser->diagnostic->message[0] == '\0') {
+                            minic_parser_error(
+                                parser,
+                                "cannot build fixed inner dimensions of flexible record array");
+                        }
+                        return false;
+                    }
+                    /* For T member[][N], the flexible outer dimension has
+                       semantic element type T[N]. DataLayout already makes
+                       the outer flexible dimension contribute zero sizeof. */
+                    field_type = nested_element_type;
                 }
                 break;
             }
@@ -390,7 +496,10 @@ static bool parse_record_field_declarator(MinicParser *parser,
         }
     }
 
-    if (!parse_record_field_attributes(parser, &explicit_alignment, &is_packed)) {
+    if (!parse_typed_record_field_attributes(
+            parser, field_type, &explicit_alignment, &is_packed) ||
+        !apply_record_field_declaration_attributes(
+            parser, declaration_attributes, field_type, &explicit_alignment, &is_packed)) {
         return false;
     }
 
@@ -452,6 +561,12 @@ static bool consume_record_type_attribute(MinicParser *parser,
         }
         return true;
     }
+    if (descriptor->kind == MINIC_ATTRIBUTE_MAY_ALIAS) {
+        /* MiniC currently performs no strict-alias/TBAA optimization. Keeping
+           may_alias as explicit type metadata recognition therefore preserves
+           GCC's permissive aliasing contract without changing layout/codegen. */
+        return true;
+    }
     minic_parser_error(parser, "unsupported GNU record type attribute");
     return false;
 }
@@ -477,6 +592,7 @@ static bool parse_record_type_attributes(MinicParser *parser,
 }
 
 static bool parse_record_field(MinicParser *parser, MinicRecordId record_id) {
+    MinicParsedAttributeList declaration_attributes;
     MinicType base_type;
     const MinicRecord *record;
     size_t declaration_alignment;
@@ -494,15 +610,46 @@ static bool parse_record_field(MinicParser *parser, MinicRecordId record_id) {
         minic_parser_error(parser, "flexible array member must be the last record field");
         return false;
     }
-    if (!minic_parser_parse_type_specifiers(parser, &base_type)) {
+    (void)memset(&declaration_attributes, 0, sizeof(declaration_attributes));
+    if (!minic_parser_collect_gnu_attribute_lists(parser, &declaration_attributes) ||
+        !minic_parser_parse_type_specifiers(parser, &base_type)) {
         return false;
+    }
+    /* Attributes between the declaration specifiers and the declarator cannot
+       be routed until the declarator shape is known. In particular GCC writes
+       function-pointer fields as
+           T __attribute__((noreturn)) (*fn)(...);
+       where noreturn belongs to the function declarator, not record layout.
+       Defer these attributes and let the completed field type route them through
+       apply_record_field_declaration_attributes(). */
+    {
+        MinicParsedAttributeList post_type_attributes;
+        size_t attribute_index;
+
+        (void)memset(&post_type_attributes, 0, sizeof(post_type_attributes));
+        if (!minic_parser_collect_gnu_attribute_lists(parser, &post_type_attributes)) {
+            return false;
+        }
+        if (post_type_attributes.count >
+            MINIC_MAX_PARSED_ATTRIBUTES - declaration_attributes.count) {
+            minic_parser_error(parser, "too many GNU record field declaration attributes");
+            return false;
+        }
+        for (attribute_index = 0U; attribute_index < post_type_attributes.count;
+             ++attribute_index) {
+            declaration_attributes.values[declaration_attributes.count++] =
+                post_type_attributes.values[attribute_index];
+        }
     }
     declaration_alignment = 0U;
     declaration_packed = false;
-    if (!parse_record_field_attributes(parser, &declaration_alignment, &declaration_packed)) {
-        return false;
-    }
     if (minic_type_is_record(base_type) && parser->current.kind == MINIC_TOKEN_SEMICOLON) {
+        if (declaration_attributes.count != 0U) {
+            minic_parser_error(
+                parser,
+                "GNU declaration-head attributes on anonymous record members are unsupported");
+            return false;
+        }
         if (declaration_alignment != 0U || declaration_packed) {
             minic_parser_error(parser,
                                "GNU layout attributes on anonymous record members are unsupported");
@@ -523,43 +670,53 @@ static bool parse_record_field(MinicParser *parser, MinicRecordId record_id) {
         return minic_parser_advance(parser);
     }
 
-    if (parser->current.kind == MINIC_TOKEN_COLON) {
-        size_t bit_width;
-
-        if (declaration_alignment != 0U || declaration_packed) {
-            minic_parser_error(parser,
-                               "GNU layout attributes on unnamed bit-fields are unsupported");
-            return false;
-        }
-        if (!parse_record_bit_field_width(parser, base_type, true, &bit_width) ||
-            !minic_parser_expect(parser, MINIC_TOKEN_SEMICOLON, "expected ';' after bit-field") ||
-            !minic_c0_record_add_unnamed_bit_field(
-                parser->program, record_id, base_type, bit_width)) {
-            if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
-                minic_parser_error(parser, "cannot add unnamed bit-field");
-            }
-            return false;
-        }
-        return true;
-    }
-
     for (;;) {
-        if (!parse_record_field_declarator(
-                parser, record_id, base_type, declaration_alignment, declaration_packed)) {
-            return false;
+        if (parser->current.kind == MINIC_TOKEN_COLON) {
+            size_t bit_width;
+
+            if (declaration_attributes.count != 0U) {
+                minic_parser_error(
+                    parser,
+                    "GNU declaration-head attributes on unnamed bit-fields are unsupported");
+                return false;
+            }
+            if (declaration_alignment != 0U || declaration_packed) {
+                minic_parser_error(
+                    parser, "GNU layout attributes on unnamed bit-fields are unsupported");
+                return false;
+            }
+            if (!parse_record_bit_field_width(parser, base_type, true, &bit_width) ||
+                !minic_c0_record_add_unnamed_bit_field(
+                    parser->program, record_id, base_type, bit_width)) {
+                if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
+                    minic_parser_error(parser, "cannot add unnamed bit-field");
+                }
+                return false;
+            }
+        } else {
+            if (!parse_record_field_declarator(parser,
+                                               record_id,
+                                               base_type,
+                                               &declaration_attributes,
+                                               declaration_alignment,
+                                               declaration_packed)) {
+                return false;
+            }
+            record = minic_c0_program_record(parser->program, record_id);
+            if (record == NULL || record->field_count == 0U) {
+                minic_parser_error(parser, "invalid record after adding field");
+                return false;
+            }
+            if (record->fields[record->field_count - 1U].is_flexible_array &&
+                parser->current.kind == MINIC_TOKEN_COMMA) {
+                minic_parser_error(parser, "flexible array member must be the last record field");
+                return false;
+            }
         }
-        record = minic_c0_program_record(parser->program, record_id);
-        if (record == NULL || record->field_count == 0U) {
-            minic_parser_error(parser, "invalid record after adding field");
-            return false;
-        }
+
         if (parser->current.kind != MINIC_TOKEN_COMMA) {
             return minic_parser_expect(
                 parser, MINIC_TOKEN_SEMICOLON, "expected ';' after record field");
-        }
-        if (record->fields[record->field_count - 1U].is_flexible_array) {
-            minic_parser_error(parser, "flexible array member must be the last record field");
-            return false;
         }
         if (!minic_parser_advance(parser)) {
             return false;
@@ -614,6 +771,7 @@ bool minic_parser_parse_record_definition_specifier(MinicParser *parser, MinicTy
                 return false;
             }
         }
+        parser->program->records[record_id].pack_alignment = parser->record_pack_alignment;
         parser->program->records[record_id].is_packed =
             parser->program->records[record_id].is_packed || is_packed;
         if (explicit_alignment > parser->program->records[record_id].explicit_alignment) {
@@ -629,6 +787,7 @@ bool minic_parser_parse_record_definition_specifier(MinicParser *parser, MinicTy
         }
         parser->program->records[record_id].is_union = is_union;
         parser->program->records[record_id].is_packed = is_packed;
+        parser->program->records[record_id].pack_alignment = parser->record_pack_alignment;
         parser->program->records[record_id].explicit_alignment = explicit_alignment;
     } else {
         minic_parser_error(parser, "expected record tag or '{' after 'struct'");

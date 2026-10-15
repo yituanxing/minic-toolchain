@@ -45,14 +45,19 @@ MINIC_SOURCES := \
 	src/compiler/compiler.c \
 	src/core/core_ir.c \
 	src/core/core_lower.c \
+	src/core/core_lower_types.c \
+	src/core/core_lower_metadata.c \
+	src/core/core_lower_asm.c \
 	src/frontend/attribute.c \
 	src/frontend/ast.c \
 	src/frontend/expression_semantics.c \
 	src/frontend/ast_traversal.c \
 	src/frontend/function_body.c \
+	src/frontend/initializer.c \
 	src/frontend/ast_verifier.c \
 	src/frontend/cast_normalization.c \
 	src/frontend/const_eval.c \
+	src/frontend/declaration_sema.c \
 	src/frontend/ast_function.c \
 	src/frontend/ast_global.c \
 	src/frontend/lexer.c \
@@ -81,13 +86,79 @@ MINIC_SOURCES := \
 	src/target/riscv64/layout.c \
 	src/target/riscv64/codegen_support.c \
 	src/target/riscv64/core_codegen.c \
-	src/target/riscv64/codegen_expression.c \
-	src/target/riscv64/codegen_inline_asm.c \
-	src/target/riscv64/codegen_statement.c \
 	src/target/riscv64/codegen_function.c \
-	tools/minic/main.c
+	tools/minic-cc/main.c
 MINIC_OBJECTS := $(patsubst %.c,$(BUILD_DIR)/obj/%.o,$(MINIC_SOURCES))
+MINIC_CC_BINARY := $(BUILD_DIR)/bin/minic-cc
+MINIC_DRIVER_OBJECTS := $(BUILD_DIR)/obj/tools/minic/main.o
+# The compiler boundary stays in minic-cc. minic is the user-facing staged
+# driver and preserves the historical -S preprocessed-input compatibility path.
 MINIC_BINARY  := $(BUILD_DIR)/bin/minic
+
+MINIELF_INCLUDES := -Ielf/include
+MINIELF_READER_OBJECT := $(BUILD_DIR)/obj/elf/src/reader.o
+MINIELF_REL_WRITER_OBJECT := $(BUILD_DIR)/obj/elf/src/relocatable_writer.o
+MINIELF_BINARY_EXPORT_OBJECT := $(BUILD_DIR)/obj/elf/src/binary_export.o
+MINIELF_REWRITE_OBJECT := $(BUILD_DIR)/obj/elf/src/rewrite.o
+MINIELF_REL_OBJECTS := $(MINIELF_READER_OBJECT) $(MINIELF_REL_WRITER_OBJECT)
+
+MINIAS_INCLUDES := -Iassembler/src $(MINIELF_INCLUDES)
+MINIAS_SOURCES := \
+	assembler/src/assembler.c \
+	assembler/src/expression.c \
+	assembler/src/riscv_encode.c \
+	assembler/src/string_literal.c \
+	assembler/src/elf_writer.c \
+	tools/minic-as/main.c
+MINIAS_OBJECTS := $(MINIELF_REL_OBJECTS) $(patsubst %.c,$(BUILD_DIR)/obj/%.o,$(MINIAS_SOURCES))
+MINIAS_BINARY := $(BUILD_DIR)/bin/minic-as
+
+MINIPP_INCLUDES := -Ipreprocessor/include -Ipreprocessor/src
+MINIPP_SOURCES := \
+	preprocessor/src/file_buffer.c \
+	preprocessor/src/expression.c \
+	preprocessor/src/include.c \
+	preprocessor/src/token.c \
+	preprocessor/src/preprocessor.c \
+	tools/minic-cpp/main.c
+MINIPP_OBJECTS := $(patsubst %.c,$(BUILD_DIR)/obj/%.o,$(MINIPP_SOURCES))
+MINIPP_BINARY := $(BUILD_DIR)/bin/minic-cpp
+
+MINIAR_INCLUDES := -Iarchiver/include $(MINIELF_INCLUDES)
+MINIAR_SOURCES := \
+	archiver/src/archive.c \
+	tools/minic-ar/main.c
+MINIAR_OBJECTS := $(MINIELF_READER_OBJECT) $(patsubst %.c,$(BUILD_DIR)/obj/%.o,$(MINIAR_SOURCES))
+MINIAR_BINARY := $(BUILD_DIR)/bin/minic-ar
+
+MINILD_INCLUDES := -Ilinker/include -Ilinker/src $(MINIELF_INCLUDES)
+MINILD_SOURCES := \
+	linker/src/linker_script_lex.c \
+	linker/src/linker_script_expr.c \
+	linker/src/linker_script_parse.c \
+	linker/src/linker_script_match.c \
+	linker/src/linker.c \
+	tools/minic-ld/main.c
+MINILD_OBJECTS := $(MINIELF_REL_OBJECTS) $(patsubst %.c,$(BUILD_DIR)/obj/%.o,$(MINILD_SOURCES))
+MINILD_BINARY := $(BUILD_DIR)/bin/minic-ld
+
+MININM_INCLUDES := $(MINIELF_INCLUDES) -Iarchiver/include
+MININM_SOURCES := \
+	tools/minic-nm/main.c
+MININM_OBJECTS := $(MINIELF_READER_OBJECT) $(BUILD_DIR)/obj/archiver/src/archive.o $(patsubst %.c,$(BUILD_DIR)/obj/%.o,$(MININM_SOURCES))
+MININM_BINARY := $(BUILD_DIR)/bin/minic-nm
+
+MINIOBJCOPY_INCLUDES := $(MINIELF_INCLUDES)
+MINIOBJCOPY_SOURCES := \
+	tools/minic-objcopy/main.c
+MINIOBJCOPY_OBJECTS := $(MINIELF_READER_OBJECT) $(MINIELF_BINARY_EXPORT_OBJECT) $(MINIELF_REWRITE_OBJECT) $(patsubst %.c,$(BUILD_DIR)/obj/%.o,$(MINIOBJCOPY_SOURCES))
+MINIOBJCOPY_BINARY := $(BUILD_DIR)/bin/minic-objcopy
+
+MINISTRIP_INCLUDES := $(MINIELF_INCLUDES)
+MINISTRIP_SOURCES := \
+	tools/minic-strip/main.c
+MINISTRIP_OBJECTS := $(MINIELF_READER_OBJECT) $(MINIELF_REWRITE_OBJECT) $(patsubst %.c,$(BUILD_DIR)/obj/%.o,$(MINISTRIP_SOURCES))
+MINISTRIP_BINARY := $(BUILD_DIR)/bin/minic-strip
 
 TOKEN_MODEL_TEST_SOURCES := \
 	src/frontend/token.c \
@@ -156,7 +227,7 @@ RV64_ABI_TEST_SOURCES := \
 RV64_ABI_TEST_OBJECTS := $(patsubst %.c,$(BUILD_DIR)/obj/%.o,$(RV64_ABI_TEST_SOURCES))
 RV64_ABI_TEST_BINARY  := $(BUILD_DIR)/tests/target/riscv64/abi-test
 
-.PHONY: all help prepare check check-fast check-token-model check-lexer \
+.PHONY: all help prepare check check-fast check-minias-a0 check-minipp-a0 check-minielf-reader-a0 check-mininm-a0 check-mininm-a1 check-miniobjcopy-a0 check-miniobjcopy-a1 check-minicstrip-a0 check-miniar-a0 check-miniar-a1 check-minild-a0 check-minild-a1 check-minild-a2 check-minild-a3 check-minild-a4 check-minild-a5 check-minild-a6 check-minild-script-a0 check-minild-script-a1 check-token-model check-lexer \
 	check-type check-record check-type-alias check-ast-contract check-layout check-rv64-abi \
 	check-static-functions \
 	check-unsigned-declarations check-long-types check-for-loops check-unbounded-for-break \
@@ -169,12 +240,31 @@ RV64_ABI_TEST_BINARY  := $(BUILD_DIR)/tests/target/riscv64/abi-test
 	check-runtime sanitize bootstrap bootstrap-compare format format-check \
 	clean distclean print-config
 
-all: $(MINIC_BINARY)
+all: $(MINIC_CC_BINARY) $(MINIC_BINARY) $(MINIAS_BINARY) $(MINIPP_BINARY) $(MINIAR_BINARY) $(MINILD_BINARY) $(MININM_BINARY) $(MINIOBJCOPY_BINARY) $(MINISTRIP_BINARY)
 
 help:
 	@printf '%s\n' \
 		"MiniC Toolchain build targets:" \
-		"  make                    Build the active MiniC compiler" \
+		"  make                    Build minic driver plus minic-cc/cpp/as/ar/ld/binutils tools" \
+		"  make check-minias-a0    Run the initial .s -> ELF ET_REL MiniAS gate" \
+		"  make check-minipp-a0    Compare independent MiniPP output byte-for-byte with GCC" \
+		"  make check-minielf-reader-a0 Validate shared ELF reader on GNU-as RV32/RV64 objects" \
+		"  make check-mininm-a0    Differentially validate minic-nm against GNU nm" \
+		"  make check-mininm-a1    Differentially validate regular/thin archive nm" \
+		"  make check-miniobjcopy-a0 Differentially validate ELF -> binary export" \
+		"  make check-miniobjcopy-a1 Differentially validate ELF rewrite (-G/-S/-R)" \
+		"  make check-minicstrip-a0 Differentially validate minic-strip against GNU strip" \
+		"  make check-miniar-a0    Compare MiniAR archives byte-for-byte with GNU ar" \
+		"  make check-miniar-a1    Check thin flattening and archive listing" \
+		"  make check-minild-a0    Validate ELF64 RISC-V relocatable linking against GNU ld" \
+		"  make check-minild-a1    Validate thin archive whole/group semantics" \
+		"  make check-minild-a2    Validate static ET_EXEC and QEMU runtime" \
+		"  make check-minild-a3    Validate regular archive malloc/free runtime" \
+		"  make check-minild-a4    Validate minimal ET_DYN dynamic metadata" \
+		"  make check-minild-a5    Validate PLT/GOT/JUMP_SLOT shared runtime" \
+		"  make check-minild-a6    Validate Global-Dynamic TLS shared runtime" \
+		"  make check-minild-script-a0 Parse the Linux linker-script subset" \
+		"  make check-minild-script-a1 Validate script-directed ET_EXEC symbol semantics" \
 		"  make check-fast         Run the fast frontend and C0 gates" \
 		"  make check-token-model  Run the token data-model unit gate" \
 		"  make check-lexer        Run the C0 lexer unit gate" \
@@ -219,9 +309,186 @@ $(BUILD_DIR)/obj/%.o: %.c
 	@mkdir -p "$(dir $@)"
 	$(CC) $(CPPFLAGS) $(MINIC_INCLUDES) $(MINIC_CFLAGS) -MMD -MP -c "$<" -o "$@"
 
-$(MINIC_BINARY): $(MINIC_OBJECTS)
+$(MINIC_CC_BINARY): $(MINIC_OBJECTS)
 	@mkdir -p "$(dir $@)"
 	$(CC) $(MINIC_OBJECTS) $(MINIC_LDFLAGS) -o "$@"
+
+$(MINIC_BINARY): $(MINIC_DRIVER_OBJECTS)
+	@mkdir -p "$(dir $@)"
+	$(CC) $(MINIC_DRIVER_OBJECTS) $(MINIC_LDFLAGS) -o "$@"
+
+$(BUILD_DIR)/obj/assembler/%.o: assembler/%.c
+	@mkdir -p "$(dir $@)"
+	$(CC) $(CPPFLAGS) $(MINIAS_INCLUDES) $(MINIC_CFLAGS) -MMD -MP -c "$<" -o "$@"
+
+$(BUILD_DIR)/obj/tools/minic-as/%.o: tools/minic-as/%.c
+	@mkdir -p "$(dir $@)"
+	$(CC) $(CPPFLAGS) $(MINIAS_INCLUDES) $(MINIC_CFLAGS) -MMD -MP -c "$<" -o "$@"
+
+$(MINIAS_BINARY): $(MINIAS_OBJECTS)
+	@mkdir -p "$(dir $@)"
+	$(CC) $(MINIAS_OBJECTS) $(MINIC_LDFLAGS) -o "$@"
+
+check-minias-a0: $(MINIAS_BINARY)
+	MINIAS="$(abspath $(MINIAS_BINARY))" \
+	BUILD_DIR="$(abspath $(BUILD_DIR))" \
+	sh tests/assembler/run-a0.sh
+
+$(BUILD_DIR)/obj/preprocessor/%.o: preprocessor/%.c
+	@mkdir -p "$(dir $@)"
+	$(CC) $(CPPFLAGS) $(MINIPP_INCLUDES) $(MINIC_CFLAGS) -MMD -MP -c "$<" -o "$@"
+
+$(BUILD_DIR)/obj/tools/minic-cpp/%.o: tools/minic-cpp/%.c
+	@mkdir -p "$(dir $@)"
+	$(CC) $(CPPFLAGS) $(MINIPP_INCLUDES) $(MINIC_CFLAGS) -MMD -MP -c "$<" -o "$@"
+
+$(MINIPP_BINARY): $(MINIPP_OBJECTS)
+	@mkdir -p "$(dir $@)"
+	$(CC) $(MINIPP_OBJECTS) $(MINIC_LDFLAGS) -o "$@"
+
+check-minipp-a0: $(MINIPP_BINARY)
+	MINIPP="$(abspath $(MINIPP_BINARY))" \
+	BUILD_DIR="$(abspath $(BUILD_DIR))" \
+	sh tests/preprocessor/run-a0.sh
+
+$(BUILD_DIR)/obj/archiver/%.o: archiver/%.c
+	@mkdir -p "$(dir $@)"
+	$(CC) $(CPPFLAGS) $(MINIAR_INCLUDES) $(MINIC_CFLAGS) -MMD -MP -c "$<" -o "$@"
+
+$(BUILD_DIR)/obj/tools/minic-ar/%.o: tools/minic-ar/%.c
+	@mkdir -p "$(dir $@)"
+	$(CC) $(CPPFLAGS) $(MINIAR_INCLUDES) $(MINIC_CFLAGS) -MMD -MP -c "$<" -o "$@"
+
+$(MINIAR_BINARY): $(MINIAR_OBJECTS)
+	@mkdir -p "$(dir $@)"
+	$(CC) $(MINIAR_OBJECTS) $(MINIC_LDFLAGS) -o "$@"
+
+check-miniar-a0: $(MINIAR_BINARY)
+	MINIAR="$(abspath $(MINIAR_BINARY))" \
+	BUILD_DIR="$(abspath $(BUILD_DIR))" \
+	HOST_CC="$(CC)" \
+	sh tests/archiver/run-a0.sh
+
+check-miniar-a1: $(MINIAR_BINARY)
+	MINIAR="$(abspath $(MINIAR_BINARY))" \
+	BUILD_DIR="$(abspath $(BUILD_DIR))" \
+	HOST_CC="$(CC)" \
+	sh tests/archiver/run-a1.sh
+
+$(BUILD_DIR)/obj/elf/%.o: elf/%.c
+	@mkdir -p "$(dir $@)"
+	$(CC) $(CPPFLAGS) $(MINIELF_INCLUDES) $(MINIC_CFLAGS) -MMD -MP -c "$<" -o "$@"
+
+$(BUILD_DIR)/obj/linker/%.o: linker/%.c
+	@mkdir -p "$(dir $@)"
+	$(CC) $(CPPFLAGS) $(MINILD_INCLUDES) $(MINIC_CFLAGS) -MMD -MP -c "$<" -o "$@"
+
+$(BUILD_DIR)/obj/tools/minic-ld/%.o: tools/minic-ld/%.c
+	@mkdir -p "$(dir $@)"
+	$(CC) $(CPPFLAGS) $(MINILD_INCLUDES) $(MINIC_CFLAGS) -MMD -MP -c "$<" -o "$@"
+
+$(MINILD_BINARY): $(MINILD_OBJECTS)
+	@mkdir -p "$(dir $@)"
+	$(CC) $(MINILD_OBJECTS) $(MINIC_LDFLAGS) -o "$@"
+
+$(BUILD_DIR)/obj/tools/minic-nm/%.o: tools/minic-nm/%.c
+	@mkdir -p "$(dir $@)"
+	$(CC) $(CPPFLAGS) $(MININM_INCLUDES) $(MINIC_CFLAGS) -MMD -MP -c "$<" -o "$@"
+
+$(MININM_BINARY): $(MININM_OBJECTS)
+	@mkdir -p "$(dir $@)"
+	$(CC) $(MININM_OBJECTS) $(MINIC_LDFLAGS) -o "$@"
+
+$(BUILD_DIR)/obj/tools/minic-objcopy/%.o: tools/minic-objcopy/%.c
+	@mkdir -p "$(dir $@)"
+	$(CC) $(CPPFLAGS) $(MINIOBJCOPY_INCLUDES) $(MINIC_CFLAGS) -MMD -MP -c "$<" -o "$@"
+
+$(MINIOBJCOPY_BINARY): $(MINIOBJCOPY_OBJECTS)
+	@mkdir -p "$(dir $@)"
+	$(CC) $(MINIOBJCOPY_OBJECTS) $(MINIC_LDFLAGS) -o "$@"
+
+$(BUILD_DIR)/obj/tools/minic-strip/%.o: tools/minic-strip/%.c
+	@mkdir -p "$(dir $@)"
+	$(CC) $(CPPFLAGS) $(MINISTRIP_INCLUDES) $(MINIC_CFLAGS) -MMD -MP -c "$<" -o "$@"
+
+$(MINISTRIP_BINARY): $(MINISTRIP_OBJECTS)
+	@mkdir -p "$(dir $@)"
+	$(CC) $(MINISTRIP_OBJECTS) $(MINIC_LDFLAGS) -o "$@"
+
+check-minielf-reader-a0:
+	HOST_CC="$(CC)" \
+	BUILD_DIR="$(abspath $(BUILD_DIR))" \
+	sh tests/elf/run-reader-a0.sh
+
+check-mininm-a0: $(MININM_BINARY)
+	MININM="$(abspath $(MININM_BINARY))" \
+	BUILD_DIR="$(abspath $(BUILD_DIR))" \
+	sh tests/nm/run-a0.sh
+
+check-mininm-a1: $(MININM_BINARY)
+	MININM="$(abspath $(MININM_BINARY))" \
+	BUILD_DIR="$(abspath $(BUILD_DIR))" \
+	sh tests/nm/run-a1.sh
+
+check-miniobjcopy-a0: $(MINIOBJCOPY_BINARY)
+	MINIOBJCOPY="$(abspath $(MINIOBJCOPY_BINARY))" \
+	BUILD_DIR="$(abspath $(BUILD_DIR))" \
+	sh tests/objcopy/run-a0.sh
+
+check-miniobjcopy-a1: $(MINIOBJCOPY_BINARY)
+	MINIOBJCOPY="$(abspath $(MINIOBJCOPY_BINARY))" \
+	BUILD_DIR="$(abspath $(BUILD_DIR))" \
+	sh tests/objcopy/run-a1.sh
+
+check-minicstrip-a0: $(MINISTRIP_BINARY)
+	MINISTRIP="$(abspath $(MINISTRIP_BINARY))" \
+	BUILD_DIR="$(abspath $(BUILD_DIR))" \
+	sh tests/strip/run-a0.sh
+
+check-minild-a0: $(MINILD_BINARY)
+	MINILD="$(abspath $(MINILD_BINARY))" \
+	BUILD_DIR="$(abspath $(BUILD_DIR))" \
+	sh tests/linker/run-a0.sh
+
+check-minild-a1: $(MINILD_BINARY)
+	MINILD="$(abspath $(MINILD_BINARY))" \
+	BUILD_DIR="$(abspath $(BUILD_DIR))" \
+	sh tests/linker/run-a1.sh
+
+check-minild-a2: $(MINILD_BINARY)
+	MINILD="$(abspath $(MINILD_BINARY))" \
+	BUILD_DIR="$(abspath $(BUILD_DIR))" \
+	sh tests/linker/run-a2.sh
+
+check-minild-a3: $(MINILD_BINARY)
+	MINILD="$(abspath $(MINILD_BINARY))" \
+	BUILD_DIR="$(abspath $(BUILD_DIR))" \
+	sh tests/linker/run-a3.sh
+
+check-minild-a4: $(MINILD_BINARY)
+	MINILD="$(abspath $(MINILD_BINARY))" \
+	BUILD_DIR="$(abspath $(BUILD_DIR))" \
+	sh tests/linker/run-a4.sh
+
+check-minild-a5: $(MINILD_BINARY)
+	MINILD="$(abspath $(MINILD_BINARY))" \
+	BUILD_DIR="$(abspath $(BUILD_DIR))" \
+	sh tests/linker/run-a5.sh
+
+check-minild-a6: $(MINILD_BINARY)
+	MINILD="$(abspath $(MINILD_BINARY))" \
+	BUILD_DIR="$(abspath $(BUILD_DIR))" \
+	sh tests/linker/run-a6.sh
+
+check-minild-script-a0: $(MINILD_BINARY)
+	HOST_CC="$(CC)" \
+	BUILD_DIR="$(abspath $(BUILD_DIR))" \
+	sh tests/linker/run-script-a0.sh
+
+check-minild-script-a1: $(MINILD_BINARY)
+	MINILD="$(abspath $(MINILD_BINARY))" \
+	BUILD_DIR="$(abspath $(BUILD_DIR))" \
+	sh tests/linker/run-script-a1.sh
 
 $(TOKEN_MODEL_TEST_BINARY): $(TOKEN_MODEL_TEST_OBJECTS)
 	@mkdir -p "$(dir $@)"
@@ -424,10 +691,15 @@ sanitize:
 	@$(MAKE) MODE=sanitize check
 
 bootstrap: $(MINIC_BINARY)
-	@printf '%s\n' "bootstrap: deferred until the compiler capability ladder reaches its source profile"
+	@printf '%s\n' \
+		"bootstrap: self-hosting is certified by .github/workflows/compiler-bootstrap-b1-sharded.yml" \
+		"bootstrap: Stage0 -> Stage1 -> sharded Stage2 fixed-point; see docs/milestones/compiler-v1-frozen.md" \
+		"bootstrap: this local target is informational until the CI bootstrap pipeline is extracted into a reusable local script"
 
 bootstrap-compare: bootstrap
-	@printf '%s\n' "bootstrap-compare: no bootstrap stages exist yet"
+	@printf '%s\n' \
+		"bootstrap-compare: canonical B1 requires Stage1/Stage2 loadable-image fixed point plus Stage2 runtime gates" \
+		"bootstrap-compare: run the B1 workflow or extract its pipeline before treating this target as an executable bootstrap gate"
 
 format:
 	CLANG_FORMAT="$${CLANG_FORMAT:-clang-format-18}" \
@@ -451,6 +723,7 @@ print-config:
 		"CPPFLAGS=$(CPPFLAGS)" \
 		"MINIC_CFLAGS=$(MINIC_CFLAGS)" \
 		"MINIC_LDFLAGS=$(MINIC_LDFLAGS)" \
+		"MINIC_CC_BINARY=$(MINIC_CC_BINARY)" \
 		"MINIC_BINARY=$(MINIC_BINARY)"
 
 clean:
@@ -460,6 +733,14 @@ distclean:
 	@rm -rf build
 
 -include $(MINIC_OBJECTS:.o=.d)
+-include $(MINIAS_OBJECTS:.o=.d)
+-include $(MINIPP_OBJECTS:.o=.d)
+-include $(MINIAR_OBJECTS:.o=.d)
+-include $(MINIELF_OBJECTS:.o=.d)
+-include $(MINILD_OBJECTS:.o=.d)
+-include $(MININM_OBJECTS:.o=.d)
+-include $(MINIOBJCOPY_OBJECTS:.o=.d)
+-include $(MINISTRIP_OBJECTS:.o=.d)
 -include $(TOKEN_MODEL_TEST_OBJECTS:.o=.d)
 -include $(LEXER_TEST_OBJECTS:.o=.d)
 -include $(TYPE_TEST_OBJECTS:.o=.d)

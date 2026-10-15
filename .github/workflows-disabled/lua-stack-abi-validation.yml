@@ -1,0 +1,214 @@
+name: RV64 Stack ABI Regression
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rv64-stack-abi-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  stack-abi:
+    runs-on: ubuntu-24.04
+    env:
+      DEBIAN_FRONTEND: noninteractive
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build committed MiniC source
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh check
+          git diff --exit-code -- include src tools/minic
+          make -j4 MODE=release BUILD_DIR=build/rv64-stack-abi-compiler
+
+      - name: Restore RISC-V package archives
+        id: rv64-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/minic-apt/archives
+          key: rv64-apt-${{ runner.os }}-${{ runner.arch }}-noble-${{ hashFiles('tools/ci/ubuntu-24.04-packages.txt') }}
+
+      - name: Install RISC-V runtime tools
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          apt_cache="$HOME/.cache/minic-apt/archives"
+          mkdir -p "$apt_cache/partial"
+          mapfile -t packages < <(grep -Ev '^[[:space:]]*(#|$)' tools/ci/ubuntu-24.04-packages.txt)
+          mapfile -d '' -t cached < <(find "$apt_cache" -maxdepth 1 -type f -name '*.deb' -print0 | sort -z)
+          if (( ${#cached[@]} > 0 )); then
+            sudo apt-get install -y --no-install-recommends "${cached[@]}"
+          else
+            sudo apt-get update
+            sudo apt-get \
+              -o Dir::Cache::archives="$apt_cache" \
+              -o APT::Keep-Downloaded-Packages=true \
+              install -y --no-install-recommends "${packages[@]}"
+          fi
+          sudo chown -R "$USER:$USER" "$(dirname "$apt_cache")"
+          sh tools/ci/verify-validation-tools.sh
+
+      - name: Run Core RV64 basic emitter runtime
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mkdir -p build/core-rv64-emitter
+          cc -std=c11 \
+            -Wall -Wextra -Wpedantic -Wconversion -Wshadow \
+            -Wstrict-prototypes -Wmissing-prototypes -Werror \
+            -Iinclude -Isrc \
+            $(find src -name '*.c' -print | sort) \
+            tests/target/riscv64/core_basic_emitter_test.c \
+            -o build/core-rv64-emitter/core-basic-emitter-test
+          build/core-rv64-emitter/core-basic-emitter-test \
+            build/core-rv64-emitter/core-basic-v0.s
+          test -s build/core-rv64-emitter/core-basic-v0.s
+          grep -q '^core_basic_math:' build/core-rv64-emitter/core-basic-v0.s
+          grep -q '^core_branch:' build/core-rv64-emitter/core-basic-v0.s
+          grep -q '^core_ninth:' build/core-rv64-emitter/core-basic-v0.s
+          grep -q 'seqz t0, t0' build/core-rv64-emitter/core-basic-v0.s
+          grep -q 'neg t0, t0' build/core-rv64-emitter/core-basic-v0.s
+          grep -q 'bnez t0, .Lcore_branch_core_bb' build/core-rv64-emitter/core-basic-v0.s
+          riscv64-linux-gnu-gcc -static -O2 \
+            tests/target/riscv64/core_basic_emitter_runtime.c \
+            build/core-rv64-emitter/core-basic-v0.s \
+            -o build/core-rv64-emitter/core-basic-v0-rv64
+          qemu-riscv64 build/core-rv64-emitter/core-basic-v0-rv64
+
+      - name: Run frontend-derived Core RV64 differential
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mkdir -p build/core-frontend-diff
+          cc -std=c11 \
+            -Wall -Wextra -Wpedantic -Wconversion -Wshadow \
+            -Wstrict-prototypes -Wmissing-prototypes -Werror \
+            -Iinclude -Isrc \
+            $(find src -name '*.c' -print | sort) \
+            tests/target/riscv64/core_frontend_emitter_test.c \
+            -o build/core-frontend-diff/core-frontend-emitter-test
+          source_file=tests/target/riscv64/core_frontend_differential.i
+          runtime=tests/target/riscv64/core_frontend_differential_runtime.c
+          MINIC_CORE_IR=strict \
+            build/rv64-stack-abi-compiler/bin/minic \
+              -S "$source_file" \
+              -o build/core-frontend-diff/legacy.s
+          build/core-frontend-diff/core-frontend-emitter-test \
+            "$source_file" \
+            build/core-frontend-diff/core.s
+          test -s build/core-frontend-diff/legacy.s
+          test -s build/core-frontend-diff/core.s
+          for symbol in core_diff_math core_diff_branch core_diff_zero core_diff_ninth core_diff_pointer_zero core_diff_field core_diff_field_call; do
+            grep -q "^${symbol}:" build/core-frontend-diff/legacy.s
+            grep -q "^${symbol}:" build/core-frontend-diff/core.s
+          done
+          for output in build/core-frontend-diff/legacy.s build/core-frontend-diff/core.s; do
+            grep -q '^core_diff_static:' "$output"
+            if grep -q '^\.globl core_diff_static$' "$output"; then
+              printf '%s\n' "internal Core differential function was exported: $output" >&2
+              exit 1
+            fi
+            grep -q '^\.weak core_diff_weak$' "$output"
+            grep -q '^core_diff_weak:' "$output"
+            grep -q '^\.globl core_diff_hidden$' "$output"
+            grep -q '^\.hidden core_diff_hidden$' "$output"
+            grep -q '^core_diff_hidden:' "$output"
+            grep -q '^\.section \.core\.diff\.text$' "$output"
+            grep -q '^core_diff_section:' "$output"
+            grep -q '^\.globl core_diff_asm_alias$' "$output"
+            grep -q '^core_diff_asm_alias:' "$output"
+            if grep -q '^core_diff_asm:' "$output"; then
+              printf '%s\n' "C identifier leaked past assembler-name mapping: $output" >&2
+              exit 1
+            fi
+          done
+          riscv64-linux-gnu-gcc -static -O2 \
+            "$source_file" "$runtime" \
+            -o build/core-frontend-diff/reference-rv64
+          riscv64-linux-gnu-gcc -static -O2 \
+            "$runtime" build/core-frontend-diff/legacy.s \
+            -o build/core-frontend-diff/legacy-rv64
+          riscv64-linux-gnu-gcc -static -O2 \
+            "$runtime" build/core-frontend-diff/core.s \
+            -o build/core-frontend-diff/core-rv64
+          qemu-riscv64 build/core-frontend-diff/reference-rv64 > build/core-frontend-diff/reference.out
+          qemu-riscv64 build/core-frontend-diff/legacy-rv64 > build/core-frontend-diff/legacy.out
+          qemu-riscv64 build/core-frontend-diff/core-rv64 > build/core-frontend-diff/core.out
+          cmp build/core-frontend-diff/reference.out build/core-frontend-diff/legacy.out
+          cmp build/core-frontend-diff/reference.out build/core-frontend-diff/core.out
+
+      - name: Run hybrid Core RV64 production routing differential
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work=build/core-hybrid-diff
+          compiler=build/rv64-stack-abi-compiler/bin/minic
+          source_file=tests/target/riscv64/core_hybrid_differential.i
+          runtime=tests/target/riscv64/core_hybrid_differential_runtime.c
+          mkdir -p "$work"
+          "$compiler" -S "$source_file" -o "$work/legacy.s"
+          MINIC_CORE_CODEGEN=basic-v0 \
+            "$compiler" -S "$source_file" -o "$work/hybrid.s"
+          grep -q '^\.Lcore_hybrid_core_core_bb0:' "$work/hybrid.s"
+          grep -q '^\.Lcore_hybrid_field_core_bb0:' "$work/hybrid.s"
+          grep -q '^\.Lcore_hybrid_fallback_load_core_bb0:' "$work/hybrid.s"
+          grep -q '^\.Lcore_hybrid_fallback_indirect_return:' "$work/hybrid.s"
+          if grep -q '^\.Lcore_hybrid_fallback_indirect_core_bb' "$work/hybrid.s"; then
+            printf '%s\n' 'indirect-call sentinel unexpectedly used Core emitter' >&2
+            exit 1
+          fi
+          if MINIC_CORE_CODEGEN=invalid \
+              "$compiler" -S "$source_file" -o "$work/invalid.s" \
+              >"$work/invalid.stdout" 2>"$work/invalid.stderr"; then
+            printf '%s\n' 'invalid Core codegen mode unexpectedly succeeded' >&2
+            exit 1
+          fi
+          grep -F "MINIC_CORE_CODEGEN must be unset or 'basic-v0'" "$work/invalid.stderr"
+          riscv64-linux-gnu-gcc -static -O2 \
+            "$source_file" "$runtime" -o "$work/reference-rv64"
+          riscv64-linux-gnu-gcc -static -O2 \
+            "$runtime" "$work/legacy.s" -o "$work/legacy-rv64"
+          riscv64-linux-gnu-gcc -static -O2 \
+            "$runtime" "$work/hybrid.s" -o "$work/hybrid-rv64"
+          qemu-riscv64 "$work/reference-rv64" > "$work/reference.out"
+          qemu-riscv64 "$work/legacy-rv64" > "$work/legacy.out"
+          qemu-riscv64 "$work/hybrid-rv64" > "$work/hybrid.out"
+          cmp "$work/reference.out" "$work/legacy.out"
+          cmp "$work/reference.out" "$work/hybrid.out"
+
+      - name: Run GCC-MiniC fixed stack-argument differential
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          MINIC="$GITHUB_WORKSPACE/build/rv64-stack-abi-compiler/bin/minic" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/rv64-stack-abi" \
+          RISCV_CC=riscv64-linux-gnu-gcc \
+          QEMU_RISCV64=qemu-riscv64 \
+            sh tests/compiler/c0/run-stack-fixed-arguments-rv64.sh
+
+      - name: Run GCC-MiniC named GNU asm operand differential
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          MINIC="$GITHUB_WORKSPACE/build/rv64-stack-abi-compiler/bin/minic" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/rv64-named-asm" \
+          RISCV_CC=riscv64-linux-gnu-gcc \
+          QEMU_RISCV64=qemu-riscv64 \
+            sh tests/compiler/c0/run-gnu-inline-asm-named-operands-rv64.sh
+
+      - name: Run GCC-MiniC builtin clzll differential
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          MINIC="$GITHUB_WORKSPACE/build/rv64-stack-abi-compiler/bin/minic" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/rv64-builtin-clzll" \
+          RISCV_CC=riscv64-linux-gnu-gcc \
+          QEMU_RISCV64=qemu-riscv64 \
+            sh tests/compiler/c0/run-builtin-clzll-rv64.sh

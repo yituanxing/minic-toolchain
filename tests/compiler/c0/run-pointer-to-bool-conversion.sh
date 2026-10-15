@@ -11,15 +11,21 @@ mkdir -p "$work"
 
 # Return and assignment boundaries already normalize integer targets through
 # the target type. Pointer-to-bool therefore must produce real 0/1 values.
-count=$(grep -c 'snez .*' "$work/valid.s" || true)
-test "$count" -ge 4
+snez_count=$(grep -E -c '^[[:space:]]+snez[[:space:]]+' "$work/valid.s" || true)
+seqz_count=$(grep -E -c '^[[:space:]]+seqz[[:space:]]+' "$work/valid.s" || true)
+if test "$snez_count" -lt 4; then
+    # Core represents pointer truth as is_zero(is_zero(pointer)); requiring two
+    # seqz operations per boundary proves canonical 0/1 rather than mere nonzero.
+    test "$seqz_count" -ge 8
+fi
 
 # A fixed bool parameter is another assignment-conversion boundary. Require
 # normalization in the caller before the direct call, not merely AST acceptance.
 awk '
-  /pass_function_pointer:/ { in_fn=1; saw=0 }
-  in_fn && /snez a0, a0/ { saw=1 }
-  in_fn && /call accept_bool/ { exit saw ? 0 : 1 }
+  /pass_function_pointer:/ { in_fn=1; snez=0; seqz=0 }
+  in_fn && /^[[:space:]]+snez[[:space:]]+/ { snez=1 }
+  in_fn && /^[[:space:]]+seqz[[:space:]]+/ { seqz++ }
+  in_fn && /call accept_bool/ { exit (snez || seqz >= 2) ? 0 : 1 }
   in_fn && /^\.size[[:space:]]+pass_function_pointer/ { exit 1 }
   END { if (!in_fn) exit 1 }
 ' "$work/valid.s"

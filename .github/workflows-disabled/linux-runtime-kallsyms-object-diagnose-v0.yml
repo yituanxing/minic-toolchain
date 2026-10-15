@@ -1,0 +1,152 @@
+name: Linux Runtime Kallsyms Object Diagnose V0
+
+on:
+  push:
+    branches: ["agent/linux-expanded-kbuild-v0"]
+    paths:
+      - ".github/workflows/linux-runtime-kallsyms-object-diagnose-v0.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: linux-runtime-kallsyms-object-diagnose-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  kallsyms-object-diagnose:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 14
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Restore certified full linked fixture
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-expanded-kbuild-v0/out
+          key: linux-expanded-mixed-v1-6.6.143-Linux-d30569a4c675f6ac72d9f63c28f0b8745317f7a15c0799d10768f916d74b3a88
+          fail-on-cache-miss: true
+
+      - name: Restore pinned Linux source
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-expanded-kbuild-v0/linux-6.6.143
+          key: linux-source-6.6.143-dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932-v1
+          fail-on-cache-miss: true
+
+      - name: Install RISC-V toolchain
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get -o Acquire::Retries=2 install -y --no-install-recommends gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu make python3 \
+            || { sudo apt-get -o Acquire::Retries=3 update; sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu make python3; }
+
+      - name: Record exact kallsyms config and cached object
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0"
+          out="$work/out"
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-kallsyms-object-diagnose-v0"
+          mkdir -p "$ev"
+
+          grep -E '^(CONFIG_KALLSYMS|# CONFIG_KALLSYMS)' "$out/.config" | tee "$ev/kallsyms-config.txt"
+          test -s "$out/kernel/kallsyms.o"
+          cp "$out/kernel/kallsyms.o" "$ev/kallsyms.cached.o"
+          sha256sum "$ev/kallsyms.cached.o" | tee "$ev/cached.sha256"
+          riscv64-linux-gnu-readelf -sW "$ev/kallsyms.cached.o" >"$ev/cached.symbols.txt"
+          riscv64-linux-gnu-readelf -rW "$ev/kallsyms.cached.o" >"$ev/cached.relocs.txt"
+          riscv64-linux-gnu-objdump -dr "$ev/kallsyms.cached.o" >"$ev/cached.objdump.txt"
+          sed -n '/<get_symbol_pos>:/,/^$/p' "$ev/cached.objdump.txt" | tee "$ev/cached.get_symbol_pos.txt"
+          grep -E 'kallsyms_(offsets|addresses|percpu_absolute)' "$ev/cached.relocs.txt" | tee "$ev/cached.kallsyms-relocs.txt" || true
+
+      - name: Rebuild kallsyms.o with GCC reference
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0"
+          src="$work/linux-6.6.143"
+          out="$work/out"
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-kallsyms-object-diagnose-v0"
+
+          rm -f "$out/kernel/kallsyms.o" "$out/kernel/.kallsyms.o.cmd"
+          make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- CC=/usr/bin/riscv64-linux-gnu-gcc -j2 V=1 kernel/kallsyms.o >"$ev/gcc-build.log" 2>&1
+          test -s "$out/kernel/kallsyms.o"
+          cp "$out/kernel/kallsyms.o" "$ev/kallsyms.gcc.o"
+          sha256sum "$ev/kallsyms.gcc.o" | tee "$ev/gcc.sha256"
+          riscv64-linux-gnu-readelf -sW "$ev/kallsyms.gcc.o" >"$ev/gcc.symbols.txt"
+          riscv64-linux-gnu-readelf -rW "$ev/kallsyms.gcc.o" >"$ev/gcc.relocs.txt"
+          riscv64-linux-gnu-objdump -dr "$ev/kallsyms.gcc.o" >"$ev/gcc.objdump.txt"
+          sed -n '/<get_symbol_pos>:/,/^$/p' "$ev/gcc.objdump.txt" | tee "$ev/gcc.get_symbol_pos.txt"
+          grep -E 'kallsyms_(offsets|addresses|percpu_absolute)' "$ev/gcc.relocs.txt" | tee "$ev/gcc.kallsyms-relocs.txt" || true
+
+      - name: Build exact runtime MiniC profile
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-kallsyms-object-diagnose-v0"
+          build="$GITHUB_WORKSPACE/build/toolchain-runtime-kallsyms-object-diagnose-v0"
+          bash tools/ci/linux-runtime-build-minic-profile-v1.sh "$build" "$ev/profile"
+          grep -F 'MINIC_INLINE_ASM_LOCAL_INTEGER_FACTS_V0=APPLIED' "$ev/profile/patch.log"
+          grep -F 'MINIC_INLINE_ASM_RK_CAST_TAIL_V0=APPLIED' "$ev/profile/patch.log"
+          grep -F 'MINIC_RISCV64_PI_LOCAL_SYMBOL_ADDRESS_V0=APPLIED' "$ev/profile/patch.log"
+
+      - name: Rebuild kallsyms.o with current MiniC
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0"
+          src="$work/linux-6.6.143"
+          out="$work/out"
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-kallsyms-object-diagnose-v0"
+          build="$GITHUB_WORKSPACE/build/toolchain-runtime-kallsyms-object-diagnose-v0"
+          wrapper="$GITHUB_WORKSPACE/tests/external/linux/stage2_kbuild_cc.sh"
+
+          rm -f "$out/kernel/kallsyms.o" "$out/kernel/.kallsyms.o.cmd" "$out/kernel/kallsyms.minic-stage2.i" "$out/kernel/kallsyms.minic-stage2.s"
+          MINIC="$build/bin/minic" REAL_CC=/usr/bin/riscv64-linux-gnu-gcc MINIC_KEEP_INTERMEDIATES=1 \
+            make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- CC="$wrapper" -j2 V=1 kernel/kallsyms.o >"$ev/minic-build.log" 2>&1
+          test -s "$out/kernel/kallsyms.o"
+          cp "$out/kernel/kallsyms.o" "$ev/kallsyms.minic.o"
+          cp "$out/kernel/kallsyms.minic-stage2.i" "$ev/kallsyms.minic-stage2.i" || true
+          cp "$out/kernel/kallsyms.minic-stage2.s" "$ev/kallsyms.minic-stage2.s" || true
+          sha256sum "$ev/kallsyms.minic.o" | tee "$ev/minic.sha256"
+          riscv64-linux-gnu-readelf -sW "$ev/kallsyms.minic.o" >"$ev/minic.symbols.txt"
+          riscv64-linux-gnu-readelf -rW "$ev/kallsyms.minic.o" >"$ev/minic.relocs.txt"
+          riscv64-linux-gnu-objdump -dr "$ev/kallsyms.minic.o" >"$ev/minic.objdump.txt"
+          sed -n '/<get_symbol_pos>:/,/^$/p' "$ev/minic.objdump.txt" | tee "$ev/minic.get_symbol_pos.txt"
+          grep -E 'kallsyms_(offsets|addresses|percpu_absolute)' "$ev/minic.relocs.txt" | tee "$ev/minic.kallsyms-relocs.txt" || true
+
+      - name: Summarize object provenance and codegen delta
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-kallsyms-object-diagnose-v0"
+          {
+            echo '=== CONFIG ==='
+            cat "$ev/kallsyms-config.txt"
+            echo '=== SHA256 ==='
+            cat "$ev/cached.sha256" "$ev/gcc.sha256" "$ev/minic.sha256"
+            echo '=== cached vs gcc ==='
+            cmp -s "$ev/kallsyms.cached.o" "$ev/kallsyms.gcc.o" && echo 'CACHED_EQUALS_GCC=YES' || echo 'CACHED_EQUALS_GCC=NO'
+            echo '=== cached vs minic ==='
+            cmp -s "$ev/kallsyms.cached.o" "$ev/kallsyms.minic.o" && echo 'CACHED_EQUALS_MINIC=YES' || echo 'CACHED_EQUALS_MINIC=NO'
+            echo '=== GCC relevant relocs ==='
+            cat "$ev/gcc.kallsyms-relocs.txt"
+            echo '=== MiniC relevant relocs ==='
+            cat "$ev/minic.kallsyms-relocs.txt"
+          } | tee "$ev/summary.txt"
+          diff -u "$ev/gcc.get_symbol_pos.txt" "$ev/minic.get_symbol_pos.txt" >"$ev/get_symbol_pos.diff" || true
+          cat "$ev/get_symbol_pos.diff"
+
+      - name: Preserve kallsyms diagnostic evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-runtime-kallsyms-object-diagnose-v0-${{ github.sha }}
+          path: |
+            build/linux-runtime-kallsyms-object-diagnose-v0/
+          if-no-files-found: warn
+          retention-days: 7

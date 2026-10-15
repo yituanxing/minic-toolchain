@@ -167,17 +167,14 @@ MinicType minic_type_unsigned_long_long(void) {
     return minic_type_integer(MINIC_INTEGER_SIGN_UNSIGNED, MINIC_INTEGER_RANK_LONG_LONG);
 }
 
-MinicType minic_type_enum(MinicEnumId enum_id, MinicType compatible_type) {
+MinicType minic_type_enum(MinicEnumId enum_id) {
     MinicType type;
 
-    if (enum_id == MINIC_ENUM_INVALID || !minic_type_is_integer(compatible_type) ||
-        compatible_type.base_kind != MINIC_TYPE_BASE_INT || compatible_type.pointer_depth != 0U) {
+    if (enum_id == MINIC_ENUM_INVALID) {
         return minic_type_void();
     }
     type = minic_type_scalar(MINIC_TYPE_BASE_ENUM);
     type.enum_id = enum_id;
-    type.integer_sign = compatible_type.integer_sign;
-    type.integer_rank = compatible_type.integer_rank;
     return type;
 }
 
@@ -195,6 +192,10 @@ MinicType minic_type_float(void) {
 
 MinicType minic_type_double(void) {
     return minic_type_scalar(MINIC_TYPE_BASE_DOUBLE);
+}
+
+MinicType minic_type_long_double(void) {
+    return minic_type_scalar(MINIC_TYPE_BASE_LONG_DOUBLE);
 }
 
 MinicType minic_type_function(MinicFunctionTypeId function_type_id) {
@@ -343,6 +344,35 @@ bool minic_type_assignment_compatible(MinicType target, MinicType source) {
            minic_type_void_object_pointer_compatible(unqualified_target, unqualified_source);
 }
 
+bool minic_type_gnu_pointer_sign_compatible(MinicType target, MinicType source) {
+    MinicType target_pointee;
+    MinicType source_pointee;
+
+    if (target.pointer_depth != 1U || source.pointer_depth != 1U ||
+        !minic_type_pointee(target, &target_pointee) ||
+        !minic_type_pointee(source, &source_pointee) || !minic_type_is_integer(target_pointee) ||
+        !minic_type_is_integer(source_pointee) ||
+        target_pointee.integer_rank != source_pointee.integer_rank) {
+        return false;
+    }
+    /* GNU C accepts pointer-sign differences as a diagnosable conversion. Keep
+       representation-changing rank differences rejected, and never discard
+       pointee qualifiers. Plain/signed/unsigned char remain one byte-oriented
+       compatibility family, matching the existing call-conversion behavior. */
+    if (target_pointee.integer_rank != MINIC_INTEGER_RANK_CHAR &&
+        (target_pointee.integer_sign == source_pointee.integer_sign ||
+         target_pointee.is_plain_char != source_pointee.is_plain_char)) {
+        return false;
+    }
+    if (minic_type_is_const(source_pointee) && !minic_type_is_const(target_pointee)) {
+        return false;
+    }
+    if (minic_type_is_volatile(source_pointee) && !minic_type_is_volatile(target_pointee)) {
+        return false;
+    }
+    return true;
+}
+
 bool minic_type_conditional_pointer_common(MinicType left, MinicType right, MinicType *result) {
     MinicType left_pointer;
     MinicType right_pointer;
@@ -393,12 +423,14 @@ bool minic_type_pointer_equality_compatible(MinicType left, MinicType right) {
 }
 
 bool minic_type_cast_compatible(MinicType target, MinicType source) {
-    if (minic_type_is_integer(target) &&
-        (minic_type_is_integer(source) || minic_type_is_double(source))) {
-        return true;
-    }
-    if (minic_type_is_double(target) &&
-        (minic_type_is_integer(source) || minic_type_is_float(source))) {
+    const bool target_is_arithmetic =
+        minic_type_is_integer(target) || minic_type_is_float(target) ||
+        minic_type_is_double(target) || minic_type_is_long_double(target);
+    const bool source_is_arithmetic =
+        minic_type_is_integer(source) || minic_type_is_float(source) ||
+        minic_type_is_double(source) || minic_type_is_long_double(source);
+
+    if (target_is_arithmetic && source_is_arithmetic) {
         return true;
     }
     if ((minic_type_is_pointer(target) && minic_type_is_integer(source)) ||
@@ -442,13 +474,9 @@ bool minic_type_is_enum(MinicType type) {
            type.record_id == MINIC_RECORD_INVALID &&
            type.array_type_id == MINIC_ARRAY_TYPE_INVALID &&
            type.function_type_id == MINIC_FUNCTION_TYPE_INVALID &&
-           (type.integer_sign == MINIC_INTEGER_SIGN_SIGNED ||
-            type.integer_sign == MINIC_INTEGER_SIGN_UNSIGNED) &&
-           (type.integer_rank == MINIC_INTEGER_RANK_INT ||
-            type.integer_rank == MINIC_INTEGER_RANK_LONG ||
-            type.integer_rank == MINIC_INTEGER_RANK_LONG_LONG) &&
-           !type.is_plain_char && type.pointer_qualifiers == MINIC_TYPE_QUALIFIER_NONE &&
-           type.pointer_depth == 0U;
+           type.integer_sign == MINIC_INTEGER_SIGN_NONE &&
+           type.integer_rank == MINIC_INTEGER_RANK_NONE && !type.is_plain_char &&
+           type.pointer_qualifiers == MINIC_TYPE_QUALIFIER_NONE && type.pointer_depth == 0U;
 }
 
 bool minic_type_is_integer(MinicType type) {
@@ -516,6 +544,16 @@ bool minic_type_is_float(MinicType type) {
 
 bool minic_type_is_double(MinicType type) {
     return type.base_kind == MINIC_TYPE_BASE_DOUBLE && type.record_id == MINIC_RECORD_INVALID &&
+           type.array_type_id == MINIC_ARRAY_TYPE_INVALID &&
+           type.function_type_id == MINIC_FUNCTION_TYPE_INVALID &&
+           type.enum_id == MINIC_ENUM_INVALID && type.integer_sign == MINIC_INTEGER_SIGN_NONE &&
+           type.integer_rank == MINIC_INTEGER_RANK_NONE && !type.is_plain_char &&
+           type.pointer_qualifiers == MINIC_TYPE_QUALIFIER_NONE && type.pointer_depth == 0U;
+}
+
+bool minic_type_is_long_double(MinicType type) {
+    return type.base_kind == MINIC_TYPE_BASE_LONG_DOUBLE &&
+           type.record_id == MINIC_RECORD_INVALID &&
            type.array_type_id == MINIC_ARRAY_TYPE_INVALID &&
            type.function_type_id == MINIC_FUNCTION_TYPE_INVALID &&
            type.enum_id == MINIC_ENUM_INVALID && type.integer_sign == MINIC_INTEGER_SIGN_NONE &&

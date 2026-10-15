@@ -1,0 +1,16 @@
+init/main.c
+kernel/configs.c
+kernel/fork.c
+kernel/exec_domain.c
+kernel/panic.c
+kernel/cpu.c
+kernel/exit.c
+kernel/softirq.c
+kernel/resource.c
+kernel/sysctl.c
+kernel/capability.c
+kernel/ptrace.c
+kernel/user.c
+kernel/signal.c
+kernel/sys.c
+kernel/umh.c

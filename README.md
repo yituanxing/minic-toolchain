@@ -8,19 +8,19 @@ Chinese introduction: [`README.zh-CN.md`](README.zh-CN.md)
 
 ## Active compiler boundary
 
-The current track replaces only the C compilation stage:
+Compiler V1 remains frozen at the C compilation boundary used by the Linux runtime-convergence line:
 
 ```text
 C source
   -> external RISC-V GCC preprocessing
   -> MiniC compiler: preprocessed C (.i) to RV64 assembly (.s)
   -> external GNU assembly and linking
-  -> QEMU RISC-V user-mode execution
+  -> QEMU RISC-V execution
 ```
 
-External GCC is an explicit auxiliary tool. It may preprocess, assemble, link, and provide CRT/libc, but it must not compile a C function on MiniC's behalf.
+External GCC/GNU tools are explicit differential and integration auxiliaries on that line and must not compile a C function on MiniC's behalf.
 
-Native preprocessing, assembly, linking, libc replacement, and full self-hosting are separate later milestones.
+The repository now also contains independently executable native MiniPP, MiniAS, MiniAR, MiniLD, ELF/object utilities, and the staged `minic` driver, each with its own validation gates. Their existence does not silently change the current Linux runtime isolation boundary: replacement of preprocessing, assembly, archive/link, driver, and object-utility stages is certified independently before those tools become canonical for a full-Linux path.
 
 ## Current implementation
 

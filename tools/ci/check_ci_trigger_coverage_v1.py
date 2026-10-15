@@ -1,0 +1,159 @@
+#!/usr/bin/env python3
+"""Check every maintained workflow against the single owned trigger inventory.
+
+This is a T0 source/dispatch audit, not proof of T1-T4 execution. In particular
+a push path filter only creates a workflow run; job-level 'if' may skip tests.
+"""
+from pathlib import Path
+import ast
+import csv
+import hashlib
+import fnmatch
+import os
+import re
+
+ROOT=Path(__file__).resolve().parents[2]
+BRANCHES=("agent/linux-expanded-kbuild-v0","agent/linux-perf-boolean-domain-v1")
+INV=ROOT/"docs/ci/active-workflow-inventory-2026-10-09.tsv"
+
+def header(y):
+    return y.split("\njobs:\n",1)[0]
+
+def push_patterns(y):
+    h=header(y)
+    m=re.search(r"(?m)^    paths:\n((?:      - [^\n]*\n)+)",h)
+    if not m: return None
+    return [ast.literal_eval(s.strip()[2:].strip()) for s in m.group(1).splitlines()]
+
+def accepts(patterns,path):
+    if patterns is None: return True
+    accept=False
+    for glob in patterns:
+        neg=glob.startswith("!")
+        if fnmatch.fnmatchcase(path,glob[1:] if neg else glob):
+            accept=not neg
+    return accept
+
+def main():
+    with INV.open(newline="") as f:
+        rows=list(csv.DictReader(f,delimiter="\t"))
+    if not rows or {r["branch"] for r in rows} != set(BRANCHES):
+        raise AssertionError("CI manifest must enumerate exactly the two live development refs")
+    keys={(r["branch"],r["path"]) for r in rows}
+    if len(keys)!=len(rows):
+        raise AssertionError("duplicate branch/path declaration in CI manifest")
+    branch=os.environ.get("GITHUB_REF_NAME",BRANCHES[0])
+    if branch not in BRANCHES:
+        raise AssertionError(f"unknown CI branch: {branch}")
+    local={r["path"]:r for r in rows if r["branch"]==branch}
+    if not local:
+        raise AssertionError("CI manifest has no workflows for the selected branch")
+    actual={str(p.relative_to(ROOT)) for p in (ROOT/".github/workflows").glob("*.yml")}
+    if set(local)!=actual:
+        raise AssertionError(f"inventory/source divergence missing={sorted(actual-set(local))} extra={sorted(set(local)-actual)}")
+    for path,row in local.items():
+        raw=(ROOT/path).read_bytes()
+        git_blob = hashlib.sha1(b"blob " + str(len(raw)).encode() + b"\0" + raw).hexdigest()
+        if git_blob != row["git_blob_sha"]:
+            raise AssertionError(
+                f"workflow source SHA drift: {path}: {git_blob} != {row['git_blob_sha']}; "
+                "update the canonical manifest after source review")
+        y=raw.decode("utf-8")
+        if "\njobs:\n" not in y:
+            raise AssertionError(f"missing jobs: {path}")
+        jobs=set(re.findall(r"(?m)^  ([a-zA-Z][\w-]*):\s*$",y.split("\njobs:\n",1)[1]))
+        recorded=set(row["job_ids"].split(";"))
+        if jobs!=recorded:
+            raise AssertionError(f"job routing drift in {path}: expected={recorded} actual={jobs}")
+        if ("  push:" in header(y)) != ("push" in row["trigger_types"].split(";")):
+            raise AssertionError(f"push contract drift in {path}")
+    for owner in ("toolchain-focused-regressions-v1.yml",):
+        y=(ROOT/".github/workflows"/owner).read_text()
+        p=push_patterns(y)
+        if p is None: raise AssertionError(f"missing positive triggers: {owner}")
+        for source in ("elf/src/reader.c","elf/src/relocatable_writer.c","elf/src/rewrite.c",
+                       "src/frontend/parse.c","archiver/miniar.c","linker/minild.c"):
+            if not accepts(p,source): raise AssertionError(f"MISS {owner} {source}")
+        for excluded in ("tools/ci/runtime-timekeeping-trigger.txt",
+                         "tools/ci/select_miniobjcopy_elf_route_v1.py",
+                         "tools/ci/check_ci_trigger_coverage_v1.py",
+                         "tools/ci/linux-runtime-build-minic-profile-v1.sh",
+                         "tools/ci/select_runtime_focused_owners_v1.py"):
+            if accepts(p,excluded):
+                raise AssertionError(f"OVERTRIGGER {owner} maintenance-only source: {excluded}")
+    mini=(ROOT/".github/workflows/miniobjcopy-strip-regressions-v1.yml").read_text()
+    if "needs.route.outputs.elf_changed == 'true'" not in mini:
+        raise AssertionError("MiniObjcopy T1 is not ELF push routed")
+    if "contains(github.event.head_commit.message, '[miniobjcopy-linux-tool]')" not in mini:
+        raise AssertionError("MiniObjcopy Linux integration tag lost")
+    # Preserve the exact crossblock MiniC cache identity on native union
+    # regardless of whether the commit carries a second optimization tag.
+    if branch==BRANCHES[0]:
+        runtime=(ROOT/".github/workflows/linux-runtime-gcc-baseline.yml").read_text()
+        identity=runtime.split("# The native union always rebuilds",1)[-1].split("objects=$(sha256sum",1)[0]
+        if ("[linux-native-union-cached]" not in identity or
+            "full-crossblock-pure-eq-v1-" not in identity):
+            raise AssertionError("native union cache identity lost full-crossblock profile")
+        # The odd-byte raw-.text case is exercised in MiniAS A0, while
+        # this expensive P1 gate keeps only the true strcmp NOP fast preflight.
+        if "MINIAS_CODE_ALIGN_PREFLIGHT=PASS" not in runtime:
+            raise AssertionError("native Linux MiniAS executable NOP preflight missing")
+
+        # Frozen real-Kbuild hotspot rotation is tightly scoped at THREE
+        # separate preflight/producer/retention entrypoints. The 2026-10-15
+        # first rotating run missed the middle allowlist and was rejected
+        # before candidate compilation; guard the full triple here.
+        cohort=(ROOT/"tools/ci/linux-runtime-gcc-cohort-bisect-v1.sh").read_text()
+        canonical="(kernel/bpf/btf.o kernel/bpf/verifier.o net/core/filter.o)"
+        rotation="(net/core/dev.o net/ipv4/tcp_input.o lib/crc32.o)"
+        for label,owners in (("original",canonical),("rotation",rotation)):
+            if cohort.count(owners) != 3:
+                raise AssertionError(f"hot-owner {label} allowlist must be repeated at all three gates")
+        if cohort.count('if [[ "${COHORT_BOOL_HOT_ROTATION:-0}" == 1 ]]; then') != 3:
+            raise AssertionError("hot-owner rotation must gate GNU preflight, Kbuild intermediates and frozen source retention")
+        if 'sha256sum "${files[@]}" > frozen.sha256' not in cohort:
+            raise AssertionError("rotated frozen Kbuild input manifest must SHA-bind the actual selected owner list")
+        if not all(token in runtime for token in (
+            "[linux-perf-hotowners-rotation]",
+            "COHORT_BOOL_HOT_ROTATION=",
+            "net/core/dev.o net/ipv4/tcp_input.o lib/crc32.o",
+        )):
+            raise AssertionError("Runtime fixed-scope rotation workflow lost its allowlist and cache identity")
+        print("M0_PERF_HOT_OWNER_ROTATION=PASS two_disjoint_sets=2 guarded_places=3 existing_job=true")
+
+    # The legacy Image branch depended on an expired 2026-09-02 artifact,
+    # so keep it in an immutable archive, never as a live certification mode.
+    if "[miniobjcopy-linux-image]" in mini or "run-id: 33623125809" in mini:
+        raise AssertionError("expired legacy MiniObjcopy Image mode returned to active CI")
+    if not (ROOT/".github/workflows-disabled/miniobjcopy-strip-regressions-legacy-image-2026-10-09.yml").is_file():
+        raise AssertionError("missing archival source for expired MiniObjcopy Image owner")
+    cpp=(ROOT/".github/workflows/minipp-a0.yml").read_text()
+    if not accepts(push_patterns(cpp),"elf/src/reader.c"):
+        raise AssertionError("MiniPP A0 shared ELF dependency skipped")
+    # Runtime-only tag-gated regressions are not a Performance correctness gate.
+    if branch==BRANCHES[1]:
+        rv=(ROOT/".github/workflows/toolchain-focused-regressions-v1.yml").read_text()
+        if "      - \"agent/linux-perf-boolean-domain-v1\"" not in header(rv):
+            raise AssertionError("Performance source changes do not trigger MiniC RV64 T1")
+        if set(re.findall(r"(?m)^  ([a-zA-Z][\w-]*):\s*$",rv.split("\njobs:\n",1)[1])) != {"focused-t1"}:
+            raise AssertionError("Performance shared T1 must have exactly one build-and-verdict job")
+        for owner in ("minic-rv64","miniar","minild"):
+            if "inputs.mode == '"+owner+"'" not in rv:
+                raise AssertionError(f"Performance selected T1 mode lost: {owner}")
+        for mark in ("TOOLCHAIN_FOCUSED_T1=PASS","TOOLCHAIN_FOCUSED_T1=FAIL","steps.ld_gc.outcome","steps.ar_nm.outcome","steps.rv64.outcome"):
+            if mark not in rv: raise AssertionError("Performance independent oracles lost: "+mark)
+        print("M0_PERF_T1=IN_SCOPE owners=3 shared_build_jobs=1 (real T1 execution separately required)")
+    # Reuse this existing M0 job (no new workflow/job) to execute the
+    # deterministic, fail-closed performance plan self-test. This is a plan
+    # contract check, not a claim of real Linux compile speedup.
+    if branch == BRANCHES[0]:
+        from runpy import run_path
+        script=ROOT/"tools/ci/linux-perf-time-balanced-shard-plan-v1.py"
+        run_path(str(script))["self_test"]()
+        import subprocess,sys
+        trace=ROOT/"tools/ci/linux-perf-phase-trace-v1.py"
+        subprocess.run([sys.executable,str(trace),"--self-test"],check=True)
+    print(f"M0_CI_TRIGGER_LEDGER=PASS branch={branch} maintained={len(local)} total={len(rows)} unique={len({r['path'] for r in rows})} route_checks=4 tier=T0")
+
+if __name__=="__main__":
+    main()

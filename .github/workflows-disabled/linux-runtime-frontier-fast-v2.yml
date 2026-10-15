@@ -1,0 +1,216 @@
+name: Linux Runtime Frontier Fast V2
+
+on:
+  push:
+    branches: ["agent/linux-expanded-kbuild-v0"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: linux-runtime-frontier-fast-v2-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  frontier-fast:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[linux-runtime-frontier-fast-v2]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Restore certified linked Linux fixture
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-expanded-kbuild-v0/out
+          key: linux-expanded-mixed-v1-6.6.143-Linux-d30569a4c675f6ac72d9f63c28f0b8745317f7a15c0799d10768f916d74b3a88
+          fail-on-cache-miss: true
+
+      - name: Restore pinned Linux source tree
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-expanded-kbuild-v0/linux-6.6.143
+          key: linux-source-6.6.143-dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932-v1
+          fail-on-cache-miss: true
+
+      - name: Prove classifier and early-link frontier contract
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 tools/ci/linux-runtime-frontier-v1.py --self-test
+          python3 - <<'PY'
+          import json
+          c=json.load(open('tools/ci/linux-runtime-frontier-v1.json'))
+          names=[m['name'] for m in c['progress_markers']]
+          baseline=c['baseline']['progress_marker']
+          if baseline != 'fdt-path':
+              raise SystemExit(f'EARLY_LINK_CONTRACT=FAIL baseline={baseline}')
+          if names.index(baseline) >= names.index('start-kernel'):
+              raise SystemExit('EARLY_LINK_CONTRACT=FAIL frontier_not_early')
+          print('EARLY_LINK_CONTRACT=PASS baseline=fdt-path limit=start-kernel')
+          PY
+
+      - name: Install focused prerequisites
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-frontier-fast-v2"
+          mkdir -p "$ev"
+          start=$(date +%s%N)
+          sudo apt-get -o Acquire::Retries=3 update >/dev/null
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            build-essential gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu libc6-dev-riscv64-cross \
+            bc bison flex libssl-dev libelf-dev make python3 qemu-system-misc opensbi >/dev/null
+          end=$(date +%s%N)
+          echo "TIMING install_ms=$(((end-start)/1000000))" | tee "$ev/timing.txt"
+
+      - name: Build current reuse MiniC candidate
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0"
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-frontier-fast-v2"
+          patches=(
+            apply-local-integer-assignment-v2.py
+            apply-local-integer-logical-conditions-v0.py
+            apply-local-null-pointer-facts-v0.py
+            apply-builtin-constant-p-local-facts-v0.py
+            apply-inline-integer-specialization-v0.py
+            apply-inline-specialization-local-facts-v0.py
+            apply-inline-specialization-stable-parameter-facts-v0.py
+            apply-inline-specialization-transitive-integer-v0.py
+            apply-inline-specialization-base-callee-integer-v0.py
+            apply-inline-specialization-capacity-v0.py
+            apply-inline-specialization-symbolic-address-v0.py
+            apply-inline-specialization-symbolic-nested-array-v0.py
+            apply-inline-specialization-symbolic-integer-closure-v0.py
+            apply-inline-specialization-symbolic-transitive-rewrite-v0.py
+            apply-inline-specialization-symbolic-array-lvalue-v0.py
+            apply-inline-specialization-symbolic-closed-integers-v0.py
+            apply-inline-specialization-base-callee-symbolic-v0.py
+            apply-inline-specialization-resolved-asm-goto-v0.py
+            apply-inline-specialization-core-reachability-v0.py
+            apply-inline-specialization-original-reachability-v0.py
+            apply-inline-asm-local-integer-facts-v0.py
+            apply-inline-asm-rk-early-v0.py
+            apply-inline-asm-rk-early-hotfix-v0.py
+            apply-inline-asm-rk-tail-rollback-v0.py
+            apply-inline-asm-rk-cast-tail-v0.py
+            apply-inline-specialization-core-empty-function-v0.py
+            apply-inline-specialization-label-alias-v0.py
+            apply-riscv64-default-text-section-v0.py
+            apply-riscv64-explicit-section-flags-v0.py
+            apply-inline-asm-symbolic-specialization-v0.py
+            apply-riscv64-core-value-slot-pack-v0.py
+            apply-riscv64-core-value-slot-reuse-v0.py
+          )
+          start=$(date +%s%N)
+          for p in "${patches[@]}"; do python3 "tools/ci/$p" >>"$ev/patch.log"; done
+          git diff --check
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$work/toolchain-frontier-fast-v2" \
+            "$work/toolchain-frontier-fast-v2/bin/minic" \
+            "$work/toolchain-frontier-fast-v2/bin/minic-cc" >/dev/null
+          end=$(date +%s%N)
+          echo "TIMING toolchain_ms=$(((end-start)/1000000))" | tee -a "$ev/timing.txt"
+
+      - name: Refresh only current frontier owners
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0"
+          src="$work/linux-6.6.143"
+          out="$work/out"
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-frontier-fast-v2"
+          wrapper="$GITHUB_WORKSPACE/tests/external/linux/stage2_kbuild_cc.sh"
+          test -s "$src/Makefile"
+          test -s "$out/.config"
+          targets=(lib/idr.o lib/xarray.o)
+          printf '%s\n' "${targets[@]}" >"$ev/targets.txt"
+          touch "$ev/rebuild-start.stamp"
+          for obj in "${targets[@]}"; do
+            rm -f "$out/$obj" "$out/$(dirname "$obj")/.$(basename "$obj" .o).o.cmd"
+          done
+          start=$(date +%s%N)
+          MINIC="$work/toolchain-frontier-fast-v2/bin/minic" \
+          REAL_CC=/usr/bin/riscv64-linux-gnu-gcc \
+          MINIC_KEEP_INTERMEDIATES=1 \
+          MINIC_KBUILD_TRACE="$ev/refresh.trace" \
+          MINIC_CORE_FRAME_TRACE=1 CORE_FAST_TRACE=1 MINIC_LOCAL_FACT_TRACE=1 \
+            make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
+              CC="$wrapper" -j4 V=1 "${targets[@]}" >"$ev/refresh.log" 2>&1
+          end=$(date +%s%N)
+          echo "TIMING refresh_ms=$(((end-start)/1000000)) objects=2" | tee -a "$ev/timing.txt"
+          find "$out" -type f -name '*.minic.stderr' -newer "$ev/rebuild-start.stamp" -print0 2>/dev/null \
+            | xargs -0 -r cat >"$ev/minic-frame-trace.txt" || true
+
+      - name: Build certified one-pass early runtime Image
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0"
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-frontier-fast-v2"
+          bash tools/ci/linux-early-runtime-link-v1.sh \
+            "$work/linux-6.6.143" "$work/out" "$ev/early"
+          cat "$ev/early/timing.txt" >>"$ev/timing.txt"
+
+      - name: Execute and classify current frontier
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-frontier-fast-v2"
+          start=$(date +%s%N)
+          set +e
+          timeout --signal=TERM 8s qemu-system-riscv64 \
+            -M virt -cpu max -m 512M -smp 1 -nographic -no-reboot \
+            -bios default -kernel "$ev/early/Image.early" \
+            -append 'console=ttyS0 earlycon=sbi loglevel=8 panic=-1' \
+            -d int,in_asm -D "$ev/qemu.trace.log" \
+            >"$ev/qemu.console.log" 2>&1
+          qemu_rc=$?
+          set -e
+          end=$(date +%s%N)
+          echo "TIMING qemu_ms=$(((end-start)/1000000)) rc=$qemu_rc" | tee -a "$ev/timing.txt"
+          grep -a 'riscv_cpu_do_interrupt' "$ev/qemu.trace.log" >"$ev/qemu.interrupts.txt" || true
+          tail -n 200 "$ev/qemu.console.log" >"$ev/qemu.console.tail.txt" || true
+
+          set +e
+          python3 tools/ci/linux-runtime-frontier-v1.py \
+            --config tools/ci/linux-runtime-frontier-v1.json \
+            --interrupts "$ev/qemu.interrupts.txt" --nm "$ev/early/nm.txt" \
+            --trace "$ev/qemu.trace.log" --console "$ev/qemu.console.log" \
+            --qemu-rc "$qemu_rc" --json-out "$ev/frontier-result.json" \
+            --text-out "$ev/frontier-summary.txt"
+          classifier_rc=$?
+          set -e
+
+          {
+            echo '## Linux Runtime Frontier Fast V2'
+            echo
+            echo '```text'
+            cat "$ev/frontier-summary.txt"
+            cat "$ev/timing.txt"
+            echo '```'
+          } >>"$GITHUB_STEP_SUMMARY"
+          exit "$classifier_rc"
+
+      - name: Preserve compact frontier evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-runtime-frontier-fast-v2-${{ github.sha }}
+          path: |
+            build/linux-runtime-frontier-fast-v2/frontier-result.json
+            build/linux-runtime-frontier-fast-v2/frontier-summary.txt
+            build/linux-runtime-frontier-fast-v2/timing.txt
+            build/linux-runtime-frontier-fast-v2/targets.txt
+            build/linux-runtime-frontier-fast-v2/qemu.console.tail.txt
+            build/linux-runtime-frontier-fast-v2/refresh.trace
+            build/linux-runtime-frontier-fast-v2/minic-frame-trace.txt
+            build/linux-runtime-frontier-fast-v2/early/timing.txt
+            build/linux-runtime-frontier-fast-v2/early/fixture.txt
+            build/linux-runtime-frontier-fast-v2/early/ld.stderr.txt
+          if-no-files-found: warn
+          retention-days: 7

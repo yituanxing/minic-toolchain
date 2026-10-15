@@ -1,0 +1,29 @@
+name: Stage2 Kbuild Wrapper Contract
+
+on:
+  push:
+    branches:
+      - refactor/declaration-sema-v1
+    paths:
+      - tests/external/linux/stage2_kbuild_cc.sh
+      - tests/external/linux/stage2_kbuild_cc_test.sh
+      - .github/workflows/stage2-kbuild-wrapper-contract.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  wrapper-contract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+      - name: Validate wrapper syntax
+        run: |
+          bash -n tests/external/linux/stage2_kbuild_cc.sh
+          bash -n tests/external/linux/stage2_kbuild_cc_test.sh
+      - name: Run fake-tool argv contract
+        run: bash tests/external/linux/stage2_kbuild_cc_test.sh

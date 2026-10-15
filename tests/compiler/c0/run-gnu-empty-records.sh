@@ -19,9 +19,12 @@ for symbol in empty_struct_size empty_union_size empty_member_record_size empty_
               empty_record_statement_copy empty_record_lvalue_copy; do
     grep -F "$symbol:" "$assembly" >/dev/null
 done
-size0=$(grep -c '  li a0, 0' "$assembly" || true)
+# Core value allocation is independent of the ABI return register. Require
+# the semantic constants, not the legacy emitter's choice to materialize them
+# directly in a0.
+size0=$(grep -E -c '^[[:space:]]+li[[:space:]]+[^,]+,[[:space:]]*0$' "$assembly" || true)
 test "$size0" -ge 2
-grep -F '  li a0, 8' "$assembly" >/dev/null
+grep -E '^[[:space:]]+li[[:space:]]+[^,]+,[[:space:]]*8$' "$assembly" >/dev/null
 grep -F '  call empty_source' "$assembly" >/dev/null
 grep -F '  call empty_target' "$assembly" >/dev/null
 source_line=$(grep -n -m1 '  call empty_source' "$assembly" | cut -d: -f1)

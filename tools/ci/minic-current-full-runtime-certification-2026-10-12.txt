@@ -1,0 +1,103 @@
+# Linux 6.6.143 full-current MiniC Runtime correctness certification.
+# 7-shard source run 38204602644 emitted EXACT immutable image:
+# SHA-256 dba3295a111b861be13dade671184918635662a82df8ad7997deb2da5c7d147f
+# 2064 MiniC C objects + GNU AS + GNU LD => 215511040-byte Linux Image.
+# Every shard PASS, merge and ABI PASS, complete GNU link PASS.
+# Full P0/P1 did not execute because pinned QEMU guest-memory 512M placed
+# an initramfs ROM overlapping the 215MB Image.
+#
+# This new opt-in CI invokes the SAME gcc-shard-verify job. It downloads the
+# exact Image by run+SHA (no MiniC build, no object replay, no relink) and
+# tests the existing P0 P1 shell initramfs contracts with QEMU -m 2G.
+profile=Runtime-CFG-if-fallthrough-current
+candidate_scope=immutable-full-2064-object-Image-from-38204602644
+compiler=MiniC
+preprocessor=GNU-GCC
+assembler=GNU-AS
+linker=GNU-LD
+linux=6.6.143
+image_sha256=dba3295a111b861be13dade671184918635662a82df8ad7997deb2da5c7d147f
+image_bytes=215511040
+qemu_memory=2G
+compiler_rebuild=PROHIBITED
+gnu_relink=PROHIBITED
+oracle=original-P0-P1-and-shell
+full_link=PASS
+runtime=P0_PASS_P1_FAIL_IPV6_CONNECT_KSTACK_OVERFLOW
+workflow_parser=FIXED_DUPLICATE_IF_KEY
+receiver=REUSE_EXISTING_gcc-shard-verify
+qemu8_2_loader_issue=INITRD_FIXED_AT_0x88200000
+large_image_end=0x8cf87000
+replay_strategy=EXACT_ORIGINAL_215511040_BYTES_PLUS_GENERATED_STOCK_DTB
+relocated_initrd=0xa0000000
+# Exact artifact QEMU 8.2 virtual-DTB relocation run 38207723736:
+# P0=PASS: real Linux version 6.6.143 banner, /init, proc/sys/devtmpfs/
+# tmpfs, user shell marker, DONE_COMMANDS. SHA of Image unchanged.
+# P1=FAIL after six passed syscall groups, during IPv6 child-connect.
+# Guest panic: "Insufficient stack space to handle exception!"
+#   epc=__list_add_valid_or_report+0x1c/0xd8a
+#   ra=__minic_inline_spec_163_16339+0x136/0x19a
+#   task stack [0xff200000001c8000..0xff200000001cc000]
+#   sp=0xff200000001c7f70 (144 bytes below stack base)
+# This is REAL GUEST correctness failure, not QEMU ROM overlap or link.
+full_P0_run=38207723736
+full_P0=PASS
+full_P1=FAIL_IPV6_CONNECT_KERNEL_STACK_OVERFLOW
+next=TCP_IPV6_KERNEL_STACK_OWNER_AND_FRAME_PROLOGUE_CAUSAL_ANALYSIS
+# Immutable Image QEMU 2G DTB load run 38207896965 is now the formal
+# first complete single-image runtime frontier.  Original SHA-256 unchanged.
+# Existing Python-era P0=PASS and shell=PASS (independent dedicated boots).
+# IPv6 TCP P1=FAIL after six preceding syscall groups green. Repro 2/2.
+latest_run=38207896965
+full_P0=PASS
+full_shell=PASS
+full_P1=FAIL_2X_KERNEL_STACK_OVERFLOW_AT_IPV6_CHILD_CONNECT
+next_target=KERNEL_STACK_ABI_AND_FRAME_SIZE_CAUSAL_PROOF
+
+# P1 stack forensic: consume exact full 2064 cached MiniC ET_REL objects
+# and independent GCC objects to resolve original object owners of
+# __list_add_valid_or_report and __minic_inline_spec_163_16339, then
+# compare authentic RISC-V prologues with zero source rebuild.
+owner_audit=RUNNING_SYMBOL_OWNERS_AND_STACK_PROLOGUES
+original_image=SHA256_UNCHANGED
+p1_repro=KERNEL_STACK_OVERFLOW_IPV6_CHILD_CONNECT_2_OF_2
+
+# Frozen P1 differential next lane (same receiver, old 2064 .o cache):
+# Probe linked all-MiniC P1 baseline then replace only one GCC object
+# from lib/list_debug.o, net/ipv6/tcp_ipv6.o, net/ipv4/tcp_ipv4.o.
+# Original 2G QEMU/P1 oracle and exact Kbuild header reconciliation.
+p1_swap_lane=EXACT_IMMUTABLE_2064_OBJECTS_THREE_CANDIDATES
+p1_swap_ownership=NO_COMPILER_REBUILD_NO_SHARD_RECOMPILE
+
+# P1 owner audit re-run on trimmed runner: no QEMU install, 2064-object
+# pool SHA guard, symbol provenance and frame disassembly only.
+owner_audit_runner=GNU_BINUTILS_GCC_ONLY
+
+# Frozen pool P1 owner A/B run 38212394883:
+# cached 2064 candidate objects, GNU preflight, ABI all PASS.
+# Diagnostic script failed before first test due to a duplicate full-trial
+# snippet spliced into symbol grep around line 2200.
+# Repaired in commit 5d3390257bfe6277fa08024695ede85c0f2f7093.
+# Trigger new owner differential ONLY: keep 2064 MiniC .o immutable;
+# no 7-shard full compile; restore exact GCC golden and full MiniC pool.
+owner_ab_previous_run=38212394883
+owner_ab_previous_state=CI_SCRIPT_SYNTAX_FAIL_BEFORE_RELINK
+owner_ab_repair=5d3390257bfe6277fa08024695ede85c0f2f7093
+owner_ab_next=RESTORE_FROZEN_POOLS_AND_RETRY_SINGLE_GNU_OWNER_AB
+# Previous attempt 38212394883 restored and hash-verified all 2064
+# original MiniC objects and all 2064 original GNU references.
+# It halted on a malformed shell grep inserted during concurrent edits,
+# BEFORE differential linking/QEMU; syntax repaired in current branch.
+first_p1_owner_attempt=38212394883
+first_p1_owner_attempt_stage=FROZEN_CACHE_PASS_SHELL_SYNTAX_BLOCKER
+
+# 2026-10-12 targeted P1 ownership:
+# Proved concrete panic function owners via GNU nm frame audit run 38212502667:
+# __list_add_valid_or_report=lib/list_debug.o (MiniC 368B frame, GNU 16B)
+# __minic_inline_spec_163_16339=net/core/dev.o (MiniC 96B frame)
+# tcp_v6_connect=net/ipv6/tcp_ipv6.o (MiniC 864B, GNU 224B)
+# Owner-swap attempt 38212684137 P1 all-MiniC reproducibly failed, but
+# log owner labels were contaminated by trial() global variable changes.
+# New invocation uses distinct p1_probe_owner and corrected shell owner
+# list variable; pin full .o and relink exactly one GCC object per trial.
+next_verify=REPAIRED_P1_GCC_ONE_OWNER_CAUSAL_SWAPS

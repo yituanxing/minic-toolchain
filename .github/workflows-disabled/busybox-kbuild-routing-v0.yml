@@ -1,0 +1,30 @@
+name: BusyBox Kbuild Routing V0
+
+on:
+  push:
+    branches:
+      - "agent/busybox-kbuild-routing-v0"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: busybox-kbuild-routing-v0-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  routing-contract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Validate BusyBox Kbuild ownership routing
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          BUILD_DIR="$GITHUB_WORKSPACE/build/busybox-kbuild-routing-v0" \
+            bash tests/driver/run-busybox-kbuild-routing-v0.sh

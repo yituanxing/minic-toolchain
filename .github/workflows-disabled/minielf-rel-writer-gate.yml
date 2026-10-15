@@ -1,0 +1,48 @@
+name: MiniELF ET_REL Writer Gate
+
+on:
+  push:
+    branches:
+      - "toolchain/minielf-rel-writer"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  rel-writer:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Install RV32 RV64 test prerequisites
+        run: |
+          sudo apt-get -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            build-essential gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu qemu-user
+
+      - name: Strict build
+        run: |
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/minielf-rel-writer all
+
+      - name: Validate shared reader
+        run: |
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/minielf-rel-writer check-minielf-reader-a0
+
+      - name: Validate MiniAS through shared writer
+        run: |
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/minielf-rel-writer check-minias-a0
+
+      - name: Preserve MiniLD static boundaries
+        run: |
+          set -Eeuo pipefail
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/minielf-rel-writer check-minild-script-a0
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/minielf-rel-writer check-minild-script-a1
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/minielf-rel-writer check-minild-a0
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/minielf-rel-writer check-minild-a1
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/minielf-rel-writer check-minild-a2
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/minielf-rel-writer check-minild-a3
+          echo "MINIELF_REL_WRITER_GATE=PASS as=A0 ld=A0-A3 script=A0-A1"

@@ -1,0 +1,29 @@
+name: Linux runtime immutable fixture restore
+description: Restore the certified Linux source or frozen linker fixture with exact fail-on-miss semantics.
+inputs:
+  fixture:
+    description: "Immutable fixture identity: source or frozen"
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Restore Linux 6.6.143 source cache
+      if: inputs.fixture == 'source'
+      uses: actions/cache/restore@v4
+      with:
+        path: build/linux-expanded-kbuild-v0/linux-6.6.143
+        key: linux-source-6.6.143-dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932-v1
+        fail-on-cache-miss: true
+    - name: Restore frozen runtime linker source cache
+      if: inputs.fixture == 'frozen'
+      uses: actions/cache/restore@v4
+      with:
+        path: build/linux-runtime-frozen-v1
+        key: linux-runtime-frozen-v1-6.6.143-e538a6ad42ec49c5a667cab5de9bb943f82ca702ff2b7749a020e38ff7ddaea7
+        fail-on-cache-miss: true
+    - name: Reject unsupported fixture names
+      if: inputs.fixture != 'source' && inputs.fixture != 'frozen'
+      shell: bash
+      run: |
+        echo "Unsupported fixture identity; must be source or frozen." >&2
+        exit 1

@@ -1,0 +1,72 @@
+> **2026-10-09 new source-level skipped-workflow review:** see [active push/skip audit](ci-push-skip-audit-2026-10-09.md). A docs/CI-only push created 14 Runtime/7 Performance workflow cards, with 12/5 SKIPPED; MiniObjcopy's otherwise unneeded route ran 6s on each. Retaining unrestricted `[tag]` activation makes some empty run cards unavoidable without a documented trigger-contract migration. No existing token/tag behavior was silently changed.
+
+> **Measured T1 single-build outcome (2026-10-09):** [Runtime one-job run #37893508704](https://github.com/yituanxing/minic-toolchain/actions/runs/37893508704) **51s / 8 checks PASS** vs 103s of 3 runner jobs in [previous run #37892394268](https://github.com/yituanxing/minic-toolchain/actions/runs/37892394268). [Performance one-job run #37893522105](https://github.com/yituanxing/minic-toolchain/actions/runs/37893522105) **50s / 8 PASS** vs 118s across 3 jobs in [previous #37892406875](https://github.com/yituanxing/minic-toolchain/actions/runs/37892406875). Both branch M0 source checks PASS; count now **171 declared jobs** instead of 175. This measures runner-seconds, not exact GitHub billed minutes or matched wall time. See [single-build evidence](ci-toolchain-focused-single-build-2026-10-09.md).
+
+> **2026-10-09 latest T1 execution consolidation:** MiniC RV64 + MiniAR + MiniLD now run as **one shared-build runner job**, with **eight independently reported regression checks** and manual owner modes retained. Physical declared Jobs **171 total** (Runtime **87**, Performance **84**), previously 175. Active YAML count is unchanged: **25 Runtime / 23 Performance / 26 distinct names / 48 branch-path entries**. New T1 real CI results must be checked separately. See [single-build implementation and source proof](ci-toolchain-focused-single-build-2026-10-09.md). Previous 175-job figures lower on this page are historical.
+
+> **Updated 2026-10-09 status:** Four more Runtime focused diagnostic YAMLs have been consolidated into one exact-source canonical owner on both branches: **25 Runtime / 23 Performance, 48 branch-path YAMLs (26 unique names)**. One new cheap selector Job preserves 4 independent runtime diagnoses. See [detailed contract](ci-runtime-focused-owners-consolidation-2026-10-09.md). The previous cost table below is historical.
+
+> **Subsequent 2026-10-09 Performance consolidation:** One `linux-performance-experiments-v1.yml` replaces four temporary/experimental entries; Runtime remains **28**; Performance **26**; unique YAMLs **29**; branch-path copies **54**. **173 declared jobs** (Runtime 88, Performance 85; extra Performance route job). See [exact archived job and routing proof](ci-performance-experiment-consolidation-2026-10-09.md). The table immediately below documents the *preceding* 57-YAML snapshot.
+
+# Active CI cost, overlap and temporary workflow review — 2026-10-09
+
+## Baseline and measured change
+
+| Measure | Before | After | Interpretation |
+| --- | ---: | ---: | --- |
+| Active Runtime YAMLs | 30 | **28** | 3 focused regressions → 1 owner |
+| Active Performance YAMLs | 31 | **29** | Same consolidation |
+| Distinct active filenames | 34 | **32** | Count reflects logical entrypoints |
+| Both-branch YAML copies | 61 | **57** | Scope: two branch trees |
+| Runtime job declarations | 88 | **88** | No regression oracle removed |
+| Performance job declarations | 84 | **84** | No regression oracle removed |
+| Both-branch job declarations | 172 | **172** | These are declarations, not 172 simultaneous runner jobs |
+
+The three canonical T1 jobs run concurrently and preserve their historic installation/build/test/upload bodies. This is a **UI, ownership and trigger simplification**, not yet a real reduction in T1 runner minutes. Each of the three jobs currently builds the entire toolchain through `make ... all` in a separate BUILD_DIR; the installations and builds overlap. The post-consolidation real Runtime run [#37887392476](https://github.com/yituanxing/minic-toolchain/actions/runs/37887392476) had jobs of roughly 32s (MiniC), 28s (MiniLD), and 28s (MiniAR); Performance run [#37887416377](https://github.com/yituanxing/minic-toolchain/actions/runs/37887416377) roughly 27s, 33s and 27s. Both runs were SUCCESS. Their distinct verdicts remain diagnostically useful; replacing them with a single fail-fast job would risk masking downstream failures. Sharing setup/artifacts is a separate, evidence-gated optimization.
+
+Runtime M0 [#37887392381](https://github.com/yituanxing/minic-toolchain/actions/runs/37887392381) and Performance M0 [#37887416392](https://github.com/yituanxing/minic-toolchain/actions/runs/37887416392) are SUCCESS. M0 checks original full job bodies against three byte-preserved archives per branch, positive source/ELF triggers and negative Runtime-only/CI maintenance triggers. The real canonical T1 runs each reported all three owners SUCCESS. No Image or boot certificate is implied.
+
+## Concrete overlapping job groups and dispositions
+
+| Candidate cluster | Current entries/jobs | What repeats | What is different | Decision |
+| --- | --- | --- | --- | --- |
+| MiniC RV64, MiniAR, MiniLD T1 | **1 YAML / 3 jobs** per branch | `make ... all`, apt update, toolchain setup, shared MiniELF test | RV64 target behavior, archive/NM, static/dynamic linker and independent failure verdicts | **Merged YAML now; preserve 3 jobs; investigate reusable build only after measuring actual costs** |
+| Linux Image graph preflight vs complete distributed Image | **2 YAMLs**, independent `graph` jobs | Linux 6.6.143 download/config, `make -n` manifest and 7-shard plan | The complete Image job additionally tests Core constant-p, then launches shards, strict replay, Image link/QEMU. Preflight is a much cheaper independent diagnostic | Factor exact graph setup into a common script; only merge entrypoints after routing distinguishes graph-only vs full-Image. **Do not trigger full Image accidentally.** |
+| Init-IRQ bridge, RCU/softirq, RISC-V init codegen, timer frontier | **4 YAMLs / 4 jobs** per branch | Certified fixture/source restore, MiniC profile build, some Kbuild/QEMU setup | Object cohort, boundary/first fault, output artifact and trigger file differ | Future Runtime owner selector candidate; retain exact original YAMLs until routed QEMU and cache evidence exists. |
+| MiniAS focused semantics vs A0 Gate | **2 YAMLs / 15 declared jobs** on Runtime | Some C149/native semantic support and toolchain builds | A0 exact/3536 target vs independent semantic/native oracle and cohort evidence | **Not proven redundant**. Check identical commands and output provenance before deduplicating. |
+| Compiler Core shards vs full3352+Strict500 suite | **2 YAMLs / 11 jobs** per branch | Frozen corpus/build setup and shard replay | Crash/ASan and independently certified corpora vs strict500/full assembly | Keep independent T2 contracts; audit shared setup only. |
+| Performance-specific experiments | **1 canonical Performance YAML / 5 jobs (4 experiments + route)** | First500/compiler performance or targeted compiler semantics setup | `top5`, GNU constant-p ICE, optimized first500, parser-scope A/B run different candidate patches and oracles | **Strong temporary-file consolidation candidates**, but source/branch/profile proof and opt-in semantics must be retained. Do not treat their success as optimized source merge. |
+| MiniLD T1 vs real dynamic/Linux REL/static integration | **2 YAMLs**, distinct job roles | Linker build/test prerequisites | T1 synthetic contracts vs T3 real binary integrations | Keep separate due evidence tier. |
+| MiniPP A0 vs frozen/live exact | **2 YAMLs** | MiniPP builds | Fast T1 unit tests vs expensive immutable T2/T3 corpora | Keep cheap automatic T1 separate. |
+
+## Why workflow jobs look large in the UI
+
+Workflow **declarations** are not queued or billed jobs. Many active YAMLs are `workflow_dispatch` opt-in, or have commit-tag `if` conditions: a push can create a workflow run whose meaningful jobs are all SKIPPED. A few owner router jobs intentionally spend a short runner invocation to avoid multi-owner QEMU. GitHub Actions UI entry clutter is not the same as runner cost, but it harms maintainability.
+
+For a meaningful further reduction, require both properties: (1) no unique assertion lost and all manual/push modes remain reachable; (2) the new routing must not turn a cheap push into T2/T3/T4 work. Do not count archived files as active workflows. Do not collapse individual job verdicts until an aggregate failure-preserving scheme is tested.
+
+## Next safe consolidation queue
+
+1. **Cost first:** extract the new T1 jobs' setup, build, test elapsed time and quantify whether caching a shared binary saves meaningful billed runner minutes. Preserve independent result/status/artifacts even if setup is shared.
+2. **Performance P temporary workflows:** decide which were superseded by the canonical optimized profile, then bring remaining opt-in jobs into one owner with exact branch, run tag and source-HASH checks. Expected upper bound: 4→1 Performance YAMLs, without dropping four modes.
+3. **Runtime legacy focused owners:** central route by changed trigger filename, manual mode and incomplete git diff; preserve four distinct QEMU oracles and immutable cache provenance. Do not archive originals without a real tier-matched smoke/check.
+4. **Image preflight:** share plan/config construction with full Image producer, but avoid associating a small manifest edit with seven full Linux shards.
+5. **Stale operator docs:** update current banners and replace old active links with the new T1 canonical file. Archived names are for proofs/history only.
+
+**Observed overtrigger after consolidation:** a no-op Python comment in `tools/ci/apply-perf-core-object-interval-onepass-v1.py` automatically started all three generic toolchain T1 jobs although their plain `make all` does not execute P15 patch scripts. The canonical T1 suite now specifically excludes `tools/ci/apply-perf-*` and `tools/ci/linux-perf-*` (Performance-only experimental helpers), while retaining `src/**`, `include/**`, actual `tools/**` implementations, `elf/**`, and test paths. M0 asserts these negative rules and that all original source/test routes remain positive. No code generation assertion or general compiler correctness test has been removed: these patch-specific edits are routed by the Performance experiment owner, not the base unpatched toolchain regressions. This changes intended trigger scope to reduce **three redundant runner jobs per P-only script edit**. Verify with a new real patch-script-only push; M0 source proof alone is insufficient.
+
+Full Image (3352 objects, link, QEMU) remains independently uncertified at current HEAD; CI structural and T1 SUCCESS must not be reported as its replacement.
+
+## Verified elimination of redundant P-only patch source trigger
+
+A controlled one-file change in `tools/ci/apply-perf-core-object-interval-onepass-v1.py` first launched the canonical `top5` P experiment **and** unrelated MiniC RV64/MiniAR/MiniLD T1 jobs ([old overhead #37888314089](https://github.com/yituanxing/minic-toolchain/actions/runs/37888314089)). We subsequently excluded only pure `tools/ci/apply-perf-*` and `tools/ci/linux-perf-*` helpers from the general T1 workflow. Repeating the same exact-file change launched `top5` successfully ([#37888511372](https://github.com/yituanxing/minic-toolchain/actions/runs/37888511372)) while **no new generic T1 run was created** for the new HEAD. The target P experiment still ran and preserved a strict opt-in for expensive First500. The T1 exclusion is protected by M0; both post-fix branch M0 structural runs [Runtime #37888471362](https://github.com/yituanxing/minic-toolchain/actions/runs/37888471362) and [Performance #37888484183](https://github.com/yituanxing/minic-toolchain/actions/runs/37888484183) are SUCCESS.
+
+**Interpretation:** prior three T1 jobs each billed roughly 25–35 seconds of runner time in focused regression runs; we no longer spend those three generic build/test invocations on P-only helper edits. This does **not** suppress tests for actual `src/**`, `include/**`, `elf/**`, `archiver/**` or `linker/**` changes.
+
+## T1 generic suite: keep all CI implementation helpers out of unrelated base `make all`
+
+The full `Makefile` has no `tools/ci/` dependencies for `all` or the focused T1 Makefile checks, and the independent three T1 job bodies execute no `tools/ci/` script. Accordingly their common, previously broad `tools/**` push filter now excludes **`tools/ci/**`**, not only an ever-growing blacklist of particular CI files. This applies to both branches, but leaves all **actual** `tools/minic/**`, `tools/minic-cc/**`, compiler/assembler/linker/ELF, Makefile and test changes included. Canonical production-profile scripts are still owned by their Linux/Performance workflows and M0. The three historical full T1 job bodies remain unchanged and individually callable by `workflow_dispatch`. Static guard checks explicit positive/negative samples and both old SHA archives; a real CI-helper-only push must show M0 executes without T1.
+
+## Real CI-only maintenance push verification
+
+The generic T1 suite now excludes `tools/ci/**`. This was exercised with an actual source-only edit to `tools/ci/check_ci_regression_path_isolation_v1.py`: [Runtime head `0eae69b3`](https://github.com/yituanxing/minic-toolchain/commit/0eae69b38dba3a640c408577bd010ee203f86630) produced 14 Workflow UI runs including [Runtime M0 #37892475305](https://github.com/yituanxing/minic-toolchain/actions/runs/37892475305) **SUCCESS**, but **no generic MiniC RV64/MiniAR/MiniLD T1 Workflow run**. [Performance head `2f6f4a9c`](https://github.com/yituanxing/minic-toolchain/commit/2f6f4a9cff89690d583aaa06cb0b834d8e97ab8e) produced seven UI runs including [Performance M0 #37892489690](https://github.com/yituanxing/minic-toolchain/actions/runs/37892489690) **SUCCESS**, and again **no generic T1 Workflow**. This proves the actual changed-path exclusion rather than only static YAML. Other tag-gated Workflows still create SKIPPED UI runs on documentation/CI changes; that remains a separate cleanup category.

@@ -1,0 +1,15 @@
+trigger focused timekeeping runtime frontier d7b4af10
+trigger owner-mode-router-v1 single-lane acceptance (2026-10-09)
+trigger regression path isolation v1 — confirm no MiniC/MiniAR/MiniLD on Runtime sentinel (2026-10-09)
+retry frozen MiniPP 2064-object link/QEMU with certified explicit 2G QEMU DTB/initrd map (avoid default 128MiB ROM overlap) 2026-10-14
+minipp P1 cached replay after generated compile.h and vdso-offsets.h pinned-dependency closure fix 2026-10-14
+minipp P1 cached replay after generated compile.h and vdso-offsets.h pinned-dependency closure fix 2026-10-14
+2026-10-14 exact single-owner Boolean Domain index ABI and compile-time validation; preserve seven-shard objects; benchmark report doc PERF-001.
+2026-10-14 updated single-owner reference preflight and true minic-cc SHA plus paired identical .s timing.
+2026-10-14 freeze exact one TU before immutable GNU restoration for matched compiler microbenchmark.
+2026-10-14 cache-hit recovers exact Kbuild .i and checks object bytes against immutable candidate.
+2026-10-14 strict 3-owner perf A/B: kernel/bpf/btf.o verifier.o net/core/filter.o; no full recompilation or link.
+2026-10-14 retry once: three slow owners, split producer/cache from measurements and fix tee directory.
+2026-10-14 opt-in stage trace via already SHA-cached original 3 C source, no paired repeat and no new compiler patch.
+2026-10-14 next generic algorithm: function-name parser hash vs same-instrumented linear scan, 2 paired reps only; reuse three frozen owners.
+2026-10-15 parser first-declaration-preserving function hash A/B; SHA-frozen 3-owner corpus reuse, no new pipeline.

@@ -1,0 +1,182 @@
+name: Linux Runtime Frontier Fast V3
+
+on:
+  push:
+    branches: ["agent/linux-expanded-kbuild-v0"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: linux-runtime-frontier-fast-v3-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  frontier-fast-v3:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[linux-runtime-frontier-fast-v3]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Restore certified linked Linux fixture
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-expanded-kbuild-v0/out
+          key: linux-expanded-mixed-v1-6.6.143-Linux-d30569a4c675f6ac72d9f63c28f0b8745317f7a15c0799d10768f916d74b3a88
+          fail-on-cache-miss: true
+
+      - name: Restore certified frozen frontier inputs
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-runtime-frozen-v1
+          key: linux-runtime-frozen-v1-6.6.143-e538a6ad42ec49c5a667cab5de9bb943f82ca702ff2b7749a020e38ff7ddaea7
+          fail-on-cache-miss: true
+
+      - name: Prove oracle and frozen fixture contracts
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 tools/ci/linux-runtime-frontier-v1.py --self-test
+          bash tools/ci/linux-runtime-frozen-verify-v1.sh build/linux-runtime-frozen-v1
+          python3 - <<'PY'
+          import json
+          c=json.load(open('tools/ci/linux-runtime-frontier-v1.json'))
+          names=[m['name'] for m in c['progress_markers']]
+          baseline=c['baseline']['progress_marker']
+          if baseline != 'fdt-path':
+              raise SystemExit(f'FAST_V3_CONTRACT=FAIL baseline={baseline}')
+          if names.index(baseline) >= names.index('start-kernel'):
+              raise SystemExit('FAST_V3_CONTRACT=FAIL frontier_not_early')
+          print('FAST_V3_CONTRACT=PASS baseline=fdt-path limit=start-kernel')
+          PY
+
+      - name: Install minimal cross and runtime prerequisites
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-frontier-fast-v3"
+          mkdir -p "$ev"
+          start=$(date +%s%N)
+          mode=no-update
+          if ! sudo apt-get -o Acquire::Retries=2 install -y --no-install-recommends \
+              gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu qemu-system-misc opensbi python3 \
+              >"$ev/apt.stdout.txt" 2>"$ev/apt.stderr.txt"; then
+            mode=fallback-update
+            sudo apt-get -o Acquire::Retries=3 update >>"$ev/apt.stdout.txt" 2>>"$ev/apt.stderr.txt"
+            sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+              gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu qemu-system-misc opensbi python3 \
+              >>"$ev/apt.stdout.txt" 2>>"$ev/apt.stderr.txt"
+          fi
+          end=$(date +%s%N)
+          echo "TIMING install_ms=$(((end-start)/1000000)) mode=$mode" | tee "$ev/timing.txt"
+
+      - name: Build current centralized MiniC runtime profile
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0"
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-frontier-fast-v3"
+          bash tools/ci/linux-runtime-build-minic-profile-v1.sh \
+            "$work/toolchain-frontier-fast-v3" "$ev/profile"
+          cat "$ev/profile/toolchain-timing.txt" >>"$ev/timing.txt"
+
+      - name: Replay only current frontier owners from frozen inputs
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0"
+          out="$work/out"
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-frontier-fast-v3"
+          frozen="$GITHUB_WORKSPACE/build/linux-runtime-frozen-v1"
+          wrapper="$GITHUB_WORKSPACE/tests/external/linux/stage2_kbuild_cc.sh"
+          mapfile -t asm_args <"$frozen/asm-args.txt"
+          printf '%s\n' 'lib/idr.o' 'lib/xarray.o' >"$ev/targets.txt"
+          start=$(date +%s%N)
+          MINIC="$work/toolchain-frontier-fast-v3/bin/minic" \
+          REAL_CC=/usr/bin/riscv64-linux-gnu-gcc MINIC_KEEP_INTERMEDIATES=1 \
+          MINIC_KBUILD_TRACE="$ev/replay.trace" \
+          MINIC_CORE_FRAME_TRACE=1 CORE_FAST_TRACE=1 MINIC_LOCAL_FACT_TRACE=1 \
+            "$wrapper" "${asm_args[@]}" -c -o "$out/lib/idr.o" "$frozen/lib__idr.i"
+          MINIC="$work/toolchain-frontier-fast-v3/bin/minic" \
+          REAL_CC=/usr/bin/riscv64-linux-gnu-gcc MINIC_KEEP_INTERMEDIATES=1 \
+          MINIC_KBUILD_TRACE="$ev/replay.trace" \
+          MINIC_CORE_FRAME_TRACE=1 CORE_FAST_TRACE=1 MINIC_LOCAL_FACT_TRACE=1 \
+            "$wrapper" "${asm_args[@]}" -c -o "$out/lib/xarray.o" "$frozen/lib__xarray.i"
+          end=$(date +%s%N)
+          echo "TIMING frozen_replay_ms=$(((end-start)/1000000)) objects=2" | tee -a "$ev/timing.txt"
+          sha256sum "$out/lib/idr.o" "$out/lib/xarray.o" >"$ev/objects.sha256"
+          cat "$out/lib/idr.minic-stage2.minic.stderr" "$out/lib/xarray.minic-stage2.minic.stderr" \
+            >"$ev/minic-frame-trace.txt" 2>/dev/null || true
+
+      - name: Build immutable-archive early runtime Image V2
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0"
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-frontier-fast-v3"
+          frozen="$GITHUB_WORKSPACE/build/linux-runtime-frozen-v1"
+          bash tools/ci/linux-early-runtime-link-v2.sh "$frozen/src" "$work/out" "$ev/early"
+          cat "$ev/early/timing.txt" >>"$ev/timing.txt"
+
+      - name: Execute and classify current frontier
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-frontier-fast-v3"
+          start=$(date +%s%N)
+          set +e
+          timeout --signal=TERM 8s qemu-system-riscv64 \
+            -M virt -cpu max -m 512M -smp 1 -nographic -no-reboot \
+            -bios default -kernel "$ev/early/Image.early" \
+            -append 'console=ttyS0 earlycon=sbi loglevel=8 panic=-1' \
+            -d int,in_asm -D "$ev/qemu.trace.log" \
+            >"$ev/qemu.console.log" 2>&1
+          qemu_rc=$?
+          set -e
+          end=$(date +%s%N)
+          echo "TIMING qemu_ms=$(((end-start)/1000000)) rc=$qemu_rc" | tee -a "$ev/timing.txt"
+          grep -a 'riscv_cpu_do_interrupt' "$ev/qemu.trace.log" >"$ev/qemu.interrupts.txt" || true
+          tail -n 200 "$ev/qemu.console.log" >"$ev/qemu.console.tail.txt" || true
+          set +e
+          python3 tools/ci/linux-runtime-frontier-v1.py \
+            --config tools/ci/linux-runtime-frontier-v1.json \
+            --interrupts "$ev/qemu.interrupts.txt" --nm "$ev/early/nm.txt" \
+            --trace "$ev/qemu.trace.log" --console "$ev/qemu.console.log" \
+            --qemu-rc "$qemu_rc" --json-out "$ev/frontier-result.json" \
+            --text-out "$ev/frontier-summary.txt"
+          classifier_rc=$?
+          set -e
+          {
+            echo '## Linux Runtime Frontier Fast V3'
+            echo
+            echo '```text'
+            cat "$ev/frontier-summary.txt"
+            cat "$ev/timing.txt"
+            echo '```'
+          } >>"$GITHUB_STEP_SUMMARY"
+          exit "$classifier_rc"
+
+      - name: Preserve compact frontier evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-runtime-frontier-fast-v3-${{ github.sha }}
+          path: |
+            build/linux-runtime-frontier-fast-v3/frontier-result.json
+            build/linux-runtime-frontier-fast-v3/frontier-summary.txt
+            build/linux-runtime-frontier-fast-v3/timing.txt
+            build/linux-runtime-frontier-fast-v3/targets.txt
+            build/linux-runtime-frontier-fast-v3/objects.sha256
+            build/linux-runtime-frontier-fast-v3/qemu.console.tail.txt
+            build/linux-runtime-frontier-fast-v3/replay.trace
+            build/linux-runtime-frontier-fast-v3/minic-frame-trace.txt
+            build/linux-runtime-frontier-fast-v3/early/timing.txt
+            build/linux-runtime-frontier-fast-v3/early/fixture.txt
+            build/linux-runtime-frontier-fast-v3/early/ld.stderr.txt
+            build/linux-runtime-frontier-fast-v3/profile/minic.sha256
+          if-no-files-found: warn
+          retention-days: 7

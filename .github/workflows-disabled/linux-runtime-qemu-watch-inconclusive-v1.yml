@@ -1,0 +1,120 @@
+name: Linux Runtime QEMU Watch Inconclusive V1
+
+on:
+  push:
+    branches: ["agent/linux-expanded-kbuild-v0"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: linux-runtime-qemu-watch-inconclusive-v1-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  inconclusive-cert:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[linux-runtime-qemu-watch-inconclusive-v1]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Restore certified compact linked fixture
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-runtime-link-v1/out
+          key: linux-runtime-link-v1-6.6.143-e538a6ad42ec49c5a667cab5de9bb943f82ca702ff2b7749a020e38ff7ddaea7
+          fail-on-cache-miss: true
+
+      - name: Restore certified frozen frontier inputs
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-runtime-frozen-v1
+          key: linux-runtime-frozen-v1-6.6.143-e538a6ad42ec49c5a667cab5de9bb943f82ca702ff2b7749a020e38ff7ddaea7
+          fail-on-cache-miss: true
+
+      - name: Install minimal runtime prerequisites without update
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-qemu-watch-inconclusive-v1"
+          mkdir -p "$ev"
+          mode=no-update
+          if ! sudo apt-get -o Acquire::Retries=2 install -y --no-install-recommends \
+              binutils-riscv64-linux-gnu qemu-system-misc opensbi python3 \
+              >"$ev/apt.stdout.txt" 2>"$ev/apt.stderr.txt"; then
+            mode=fallback-update
+            sudo apt-get -o Acquire::Retries=3 update >>"$ev/apt.stdout.txt" 2>>"$ev/apt.stderr.txt"
+            sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+              binutils-riscv64-linux-gnu qemu-system-misc opensbi python3 \
+              >>"$ev/apt.stdout.txt" 2>>"$ev/apt.stderr.txt"
+          fi
+          echo "INSTALL_MODE=$mode"
+
+      - name: Build certified early image and mismatched same-stage baseline
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          out="$GITHUB_WORKSPACE/build/linux-runtime-link-v1/out"
+          frozen="$GITHUB_WORKSPACE/build/linux-runtime-frozen-v1"
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-qemu-watch-inconclusive-v1"
+          bash tools/ci/linux-early-runtime-link-v2.sh "$frozen/src" "$out" "$ev/early"
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          src=Path('tools/ci/linux-runtime-frontier-v1.json')
+          dst=Path('build/linux-runtime-qemu-watch-inconclusive-v1/mismatch.json')
+          c=json.loads(src.read_text())
+          c['baseline']['fault']={'desc':'fault_load','symbol':'__watch_deliberate_mismatch__','offset':'0x0'}
+          # Keep the same fdt-path rank so the real strlen fault is deliberately
+          # inconclusive rather than classified as moved-later or regressed.
+          assert c['baseline']['progress_marker']=='fdt-path'
+          dst.write_text(json.dumps(c, indent=2, sort_keys=True)+'\n')
+          PY
+
+      - name: Prove unknown same-stage fault does not stop the watcher early
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-qemu-watch-inconclusive-v1"
+          set +e
+          python3 tools/ci/linux-runtime-qemu-watch-v1.py \
+            --config "$ev/mismatch.json" \
+            --nm "$ev/early/nm.txt" --image "$ev/early/Image.early" \
+            --evidence-dir "$ev/watch" --timeout-ms 1500 --poll-ms 100 \
+            | tee "$ev/watch.stdout.txt"
+          rc=${PIPESTATUS[0]}
+          set -e
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          root=Path('build/linux-runtime-qemu-watch-inconclusive-v1/watch')
+          meta=json.loads((root/'watch-result.json').read_text())
+          result=json.loads((root/'frontier-result.json').read_text())
+          if meta['stop_reason'] != 'hard-timeout':
+              raise SystemExit(f'WATCH_CONSERVATIVE=FAIL stop={meta["stop_reason"]}')
+          if result['verdict'] != 'INCONCLUSIVE':
+              raise SystemExit(f'WATCH_CONSERVATIVE=FAIL verdict={result["verdict"]}')
+          if meta['elapsed_ms'] < 1450:
+              raise SystemExit(f'WATCH_CONSERVATIVE=FAIL elapsed_ms={meta["elapsed_ms"]}')
+          print(f'WATCH_CONSERVATIVE=PASS stop=hard-timeout verdict=INCONCLUSIVE elapsed_ms={meta["elapsed_ms"]} polls={meta["polls"]}')
+          print(f'OBSERVED_FAULT={result["fault"]["desc"]}:{result["fault"]["symbol"]}+0x{result["fault"]["offset"]:x}')
+          print(f'HIGHEST_PROGRESS={result["highest_progress"]}')
+          PY
+          test "$rc" -eq 2
+
+      - name: Preserve evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-runtime-qemu-watch-inconclusive-v1-${{ github.sha }}
+          path: |
+            build/linux-runtime-qemu-watch-inconclusive-v1/watch.stdout.txt
+            build/linux-runtime-qemu-watch-inconclusive-v1/watch/watch-result.json
+            build/linux-runtime-qemu-watch-inconclusive-v1/watch/frontier-result.json
+            build/linux-runtime-qemu-watch-inconclusive-v1/watch/frontier-summary.txt
+          if-no-files-found: warn
+          retention-days: 7

@@ -1,0 +1,94 @@
+name: Core M40c Full Error Scan
+
+on:
+  pull_request:
+
+jobs:
+  scan:
+    if: github.head_ref == 'refactor/declaration-sema-v1'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refactor/declaration-sema-v1
+      - name: Restore frozen Linux corpus
+        id: corpus
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-focus-corpus
+          key: linux-focus-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-${{ hashFiles('tests/external/linux/replay-indices.txt') }}
+      - name: Build M38-fixed staged compiler
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "${{ steps.corpus.outputs.cache-hit }}" = true
+          python3 tools/dev/run-core-frontier-batch-m31b.py
+          python3 tools/dev/patch-core-frontier-batch-m32.py
+          python3 tools/dev/patch-core-frontier-batch-m33.py
+          python3 tools/dev/patch-core-frontier-batch-m34.py
+          python3 tools/dev/patch-core-frontier-batch-m35.py
+          python3 tools/dev/patch-core-frontier-batch-m36.py
+          python3 tools/dev/patch-core-frontier-batch-m38.py
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/m40c
+      - name: Timespec shape matrix
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          c="$GITHUB_WORKSPACE/build/m40c/bin/minic"; w=build/m40c-timespec; mkdir -p "$w"
+          cat > "$w/basic.c" <<'EOF'
+          struct S { long a; long b; }; struct S f(struct S x, struct S y) { struct S r; r.a=x.a+y.a; r.b=x.b+y.b; return r; }
+          EOF
+          cat > "$w/const_params.c" <<'EOF'
+          struct S { long a; long b; }; struct S f(const struct S x, const struct S y) { struct S r; r.a=x.a+y.a; r.b=x.b+y.b; return r; }
+          EOF
+          cat > "$w/conditional.c" <<'EOF'
+          struct S { long a; long b; }; struct S f(const struct S x, const struct S y) { struct S r; r.a=x.a+y.a; r.b=x.b+y.b; if (r.a < x.a || r.a < y.a) { r.a=0; r.b=0; } return r; }
+          EOF
+          cat > "$w/helper.c" <<'EOF'
+          struct S { long a; long b; }; void norm(struct S*, unsigned long, long); struct S f(const struct S x, const struct S y) { struct S r; norm(&r,(unsigned long)x.a+y.a,x.b+y.b); if (r.a < x.a || r.a < y.a) { r.a=0; r.b=0; } return r; }
+          EOF
+          cat > "$w/exactish.c" <<'EOF'
+          typedef long s64; typedef unsigned long u64; struct S { s64 tv_sec; long tv_nsec; }; void norm(struct S*, u64, long); struct S f(const struct S lhs, const struct S rhs) { struct S res; norm(&res,(u64)lhs.tv_sec+rhs.tv_sec,lhs.tv_nsec+rhs.tv_nsec); if (!!(res.tv_sec < lhs.tv_sec || res.tv_sec < rhs.tv_sec)) { res.tv_sec=(s64)~((u64)1<<63); res.tv_nsec=0; } return res; }
+          EOF
+          for src in "$w"/*.c; do
+            name=$(basename "$src" .c)
+            set +e
+            MINIC_CORE_IR=strict "$c" -S "$src" -o "$w/$name.s" 2>"$w/$name.err"
+            rc=$?
+            set -e
+            printf 'M40C_TIMESPEC name=%s rc=%d\n' "$name" "$rc"
+            cat "$w/$name.err"
+          done
+      - name: Frozen exact error representatives
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          c="$GITHUB_WORKSPACE/build/m40c/bin/minic"; w=build/m40c-reps; mkdir -p "$w"
+          for rel in arch/riscv/kernel/alternative.i kernel/time/time.i init/version.i; do
+            n=$(printf '%s' "$rel" | tr '/.' '__')
+            set +e
+            MINIC_CORE_IR=strict "$c" -S "build/linux-focus-corpus/kbuild/$rel" -o "$w/$n.s" 2>"$w/$n.err"
+            rc=$?
+            set -e
+            printf 'M40C_REP file=%s rc=%d\n' "$rel" "$rc"
+            head -4 "$w/$n.err" || true
+          done
+      - name: Frozen strict first500 full scan
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          c="$GITHUB_WORKSPACE/build/m40c/bin/minic"; w="$GITHUB_WORKSPACE/build/m40c-strict500"
+          set +e
+          MINIC_CORE_IR=strict python3 tests/external/linux/corpus_replay.py --minic "$c" --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" --work "$w" --jobs 5 --offset 0 --limit 500 --sample-count 0 --indices ''
+          rc=$?
+          set -e
+          printf 'M40C_REPLAY_RC=%d\n' "$rc"
+          python3 tools/ci/classify-core-strict-frontier.py "$w/batch-results.json" --examples 5 --json-out "$w/frontier-summary.json"
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          s=json.loads(Path('build/m40c-strict500/frontier-summary.json').read_text())
+          print(f"M40C_SUMMARY selected={s['selected']} pass={s['pass']} unsupported={s['unsupported']} error={s['error']} preprocess_missing={s['preprocess_missing']} distinct={len(s['blockers'])}")
+          for r in s['blockers'][:30]: print(f"M40C_BLOCKER count={r['count']} function={r['function']}")
+          PY

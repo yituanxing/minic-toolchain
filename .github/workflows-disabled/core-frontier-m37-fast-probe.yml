@@ -1,0 +1,41 @@
+name: Core M37 Fast Frontier Probe
+
+on:
+  pull_request:
+
+jobs:
+  probe:
+    if: github.head_ref == 'refactor/declaration-sema-v1'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refactor/declaration-sema-v1
+      - name: Restore frozen Linux corpus
+        id: corpus
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-focus-corpus
+          key: linux-focus-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-${{ hashFiles('tests/external/linux/replay-indices.txt') }}
+      - name: Build M36 candidate and probe init/version
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "${{ steps.corpus.outputs.cache-hit }}" = true
+          python3 tools/dev/run-core-frontier-batch-m31b.py
+          python3 tools/dev/patch-core-frontier-batch-m32.py
+          python3 tools/dev/patch-core-frontier-batch-m33.py
+          python3 tools/dev/patch-core-frontier-batch-m34.py
+          python3 tools/dev/patch-core-frontier-batch-m35.py
+          python3 tools/dev/patch-core-frontier-batch-m36.py
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/m37-probe
+          c="$GITHUB_WORKSPACE/build/m37-probe/bin/minic"
+          mkdir -p build/m37-frontier
+          set +e
+          MINIC_CORE_IR=strict "$c" -S build/linux-focus-corpus/kbuild/init/version.i -o build/m37-frontier/version.s 2>build/m37-frontier/version.err
+          rc=$?
+          set -e
+          cat build/m37-frontier/version.err
+          printf 'M37_FAST_FRONTIER rc=%d\n' "$rc"
+          if [ "$rc" -ne 0 ]; then grep -m1 -F 'Core IR shadow does not yet support function' build/m37-frontier/version.err; fi

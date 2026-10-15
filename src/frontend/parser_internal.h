@@ -14,7 +14,9 @@
 #include <stddef.h>
 
 #define MINIC_PARSER_MAX_SWITCH_DEPTH 16U
-#define MINIC_PARSER_MAX_SWITCH_CASES 128U
+#define MINIC_PARSER_MAX_SWITCH_CASES 512U
+#define MINIC_PARSER_MAX_PACK_DEPTH 32U
+#define MINIC_PARSER_MAX_VISIBILITY_DEPTH 32U
 #define MINIC_MAX_PARSED_ATTRIBUTES 32U
 #define MINIC_RECORD_MEMBER_MAX_DEPTH 8U
 
@@ -30,7 +32,17 @@ typedef struct MinicParserLocalBinding {
     MinicSourceSpan name_span;
     MinicLocalId local_id;
     MinicGlobalObjectId global_object_id;
+    MinicTypeAliasId type_alias_id;
 } MinicParserLocalBinding;
+
+/* Nearest ordinary-identifier binding, across locals, typedefs, scoped
+ * extern objects, and enum constants.  IDs have independent INVALID values. */
+typedef struct MinicParserOrdinaryBinding {
+    MinicLocalId local_id;
+    MinicGlobalObjectId global_object_id;
+    MinicTypeAliasId type_alias_id;
+    MinicEnumeratorId enumerator_id;
+} MinicParserOrdinaryBinding;
 
 typedef struct MinicParserRecordTag {
     MinicSourceSpan name_span;
@@ -40,6 +52,7 @@ typedef struct MinicParserRecordTag {
 typedef struct MinicParserScopeFrame {
     size_t binding_begin;
     size_t record_tag_begin;
+    size_t enum_constant_begin;
     MinicCleanupContextId cleanup_context;
 } MinicParserScopeFrame;
 
@@ -62,8 +75,9 @@ typedef struct MinicParserEnumTag {
 } MinicParserEnumTag;
 
 typedef struct MinicParserSwitchContext {
-    int64_t case_lower_values[MINIC_PARSER_MAX_SWITCH_CASES];
-    int64_t case_upper_values[MINIC_PARSER_MAX_SWITCH_CASES];
+    uint64_t case_lower_values[MINIC_PARSER_MAX_SWITCH_CASES];
+    uint64_t case_upper_values[MINIC_PARSER_MAX_SWITCH_CASES];
+    MinicType selector_type;
     size_t case_count;
     bool has_default;
 } MinicParserSwitchContext;
@@ -88,6 +102,11 @@ typedef struct MinicParser {
     size_t statement_expression_depth;
     size_t switch_depth;
     size_t record_pack_alignment;
+    size_t record_pack_stack[MINIC_PARSER_MAX_PACK_DEPTH];
+    size_t record_pack_depth;
+    MinicSymbolVisibility default_visibility;
+    MinicSymbolVisibility visibility_stack[MINIC_PARSER_MAX_VISIBILITY_DEPTH];
+    size_t visibility_depth;
     MinicParserSwitchContext switch_contexts[MINIC_PARSER_MAX_SWITCH_DEPTH];
 
     bool label_context_initialized;
@@ -117,6 +136,41 @@ typedef struct MinicParser {
     MinicParserEnumTag *enum_tags;
     size_t enum_tag_count;
     size_t enum_tag_capacity;
+
+    size_t perf_find_local_calls;
+    size_t perf_find_local_steps;
+    size_t perf_find_function_calls;
+    size_t perf_find_function_steps;
+    size_t perf_find_global_calls;
+    size_t perf_find_global_steps;
+    size_t perf_find_type_alias_calls;
+    size_t perf_find_type_alias_steps;
+    size_t perf_find_enum_calls;
+    size_t perf_find_enum_steps;
+    size_t perf_find_fixed_calls;
+    size_t perf_find_fixed_steps;
+    size_t perf_builtin_mem_calls;
+    size_t perf_builtin_mem_steps;
+
+    MinicFunctionId *perf_function_name_slots;
+    size_t perf_function_name_slot_capacity;
+    size_t perf_function_name_indexed_count;
+
+    MinicGlobalObjectId *perf_global_name_slots;
+    size_t perf_global_name_slot_capacity;
+    size_t perf_global_name_indexed_count;
+
+    size_t *perf_enum_name_slots;
+    size_t perf_enum_name_slot_capacity;
+    size_t perf_enum_name_indexed_count;
+
+    MinicTypeAliasId *perf_typedef_name_slots;
+    size_t perf_typedef_name_capacity;
+    size_t perf_typedef_name_indexed_count;
+    size_t perf_typedef_queries;
+    size_t perf_typedef_probes;
+    size_t perf_typedef_fallbacks;
+    size_t perf_typedef_rebuilds;
 } MinicParser;
 
 typedef struct MinicParsedAttribute {
@@ -140,15 +194,24 @@ typedef struct MinicParsedFunctionDeclarator {
     MinicParsedAttributeList attributes;
     MinicType parameter_types[MINIC_MAX_FUNCTION_PARAMETERS];
     size_t parameter_count;
+    MinicType inner_parameter_types[MINIC_MAX_FUNCTION_PARAMETERS];
+    MinicSourceSpan inner_parameter_name_spans[MINIC_MAX_FUNCTION_PARAMETERS];
+    size_t inner_parameter_count;
     size_t pointer_depth;
     unsigned int pointer_const_qualifiers;
     unsigned int pointer_volatile_qualifiers;
+    size_t nested_pointer_depth;
+    unsigned int nested_pointer_const_qualifiers;
+    unsigned int nested_pointer_volatile_qualifiers;
     size_t array_bounds[8];
     size_t array_dimension_count;
     unsigned int array_zero_length_mask;
     bool array_outermost_incomplete;
     bool has_name;
     bool is_variadic;
+    bool has_inner_function_suffix;
+    bool has_nested_function_pointer_object;
+    bool inner_is_variadic;
 } MinicParsedFunctionDeclarator;
 
 void minic_parser_error(MinicParser *parser, const char *format, ...);
@@ -209,6 +272,8 @@ bool minic_parser_parse_gnu_prefix_function_attributes(MinicParser *parser,
                                                        bool is_inline);
 bool minic_parser_parse_integer_constant_expression_value(MinicParser *parser, int64_t *value);
 bool minic_parser_parse_fixed_array_bound(MinicParser *parser, size_t *element_count);
+bool minic_parser_parse_array_designator_component(
+    MinicParser *parser, size_t element_count, bool infer_bound, size_t *first, size_t *last);
 bool minic_parser_parse_array_designator(
     MinicParser *parser, size_t element_count, bool infer_bound, size_t *first, size_t *last);
 bool minic_parser_inspect_array_initializer_extent(MinicParser *parser, size_t *element_count);
@@ -277,6 +342,17 @@ bool minic_parser_parse_gnu_object_attribute_lists_with_symbol_metadata(
     MinicSymbolVisibility *visibility,
     bool *has_visibility,
     bool *is_weak);
+bool minic_parser_parse_gnu_object_attribute_lists_with_symbol_metadata_and_alias(
+    MinicParser *parser,
+    char *section_name,
+    size_t section_capacity,
+    size_t *section_name_length,
+    bool *has_section,
+    size_t *explicit_alignment,
+    MinicSymbolVisibility *visibility,
+    bool *has_visibility,
+    bool *is_weak,
+    MinicGlobalObjectId *alias_target);
 bool minic_parser_apply_alignment_attribute(MinicParser *parser,
                                             const MinicParsedAttribute *attribute,
                                             const char *subject,
@@ -289,6 +365,14 @@ bool minic_parser_parse_parenthesized_function_declarator(
     bool require_name,
     bool require_pointer,
     MinicParsedFunctionDeclarator *declarator);
+bool minic_parser_parse_parenthesized_pointer_to_array_declarator(
+    MinicParser *parser,
+    MinicType element_type,
+    MinicSourceSpan *name_span,
+    MinicType *declarator_type,
+    bool *name_is_array,
+    bool *name_array_inferred,
+    size_t *name_array_count);
 bool minic_parser_parse_array_declarator_suffix(MinicParser *parser,
                                                 MinicType element_type,
                                                 bool allow_incomplete_outermost,
@@ -322,6 +406,9 @@ bool minic_parser_bind_local(MinicParser *parser, MinicSourceSpan name_span, Min
 bool minic_parser_bind_scoped_global_object(MinicParser *parser,
                                             MinicSourceSpan name_span,
                                             MinicGlobalObjectId global_object_id);
+bool minic_parser_bind_type_alias(MinicParser *parser,
+                                  MinicSourceSpan name_span,
+                                  MinicTypeAliasId type_alias_id);
 bool minic_parser_name_bound_in_current_scope(const MinicParser *parser, MinicSourceSpan name_span);
 MinicLocalId minic_parser_find_local_in_current_scope(const MinicParser *parser,
                                                       MinicSourceSpan name_span);
@@ -339,6 +426,9 @@ bool minic_parser_find_record_field_path(const MinicParser *parser,
                                          MinicRecordFieldPath *result);
 void minic_parser_destroy_enum_constants(MinicParser *parser);
 
+bool minic_parser_find_nearest_ordinary_binding(
+    const MinicParser *parser, MinicSourceSpan name_span,
+    MinicParserOrdinaryBinding *result);
 MinicLocalId minic_parser_find_local(const MinicParser *parser, MinicSourceSpan name_span);
 MinicGlobalObjectId minic_parser_find_scoped_global_object(const MinicParser *parser,
                                                            MinicSourceSpan name_span);
@@ -351,12 +441,6 @@ MinicGlobalObjectId minic_parser_find_global_object(const MinicParser *parser,
                                                     MinicSourceSpan name_span);
 MinicGlobalObjectId minic_parser_find_global_object_entity(const MinicParser *parser,
                                                            MinicSourceSpan name_span);
-bool minic_parser_external_object_types_compatible(const MinicC0Program *program,
-                                                   MinicType existing_type,
-                                                   MinicType declared_type);
-bool minic_parser_merge_external_array_composite_type(MinicC0Program *program,
-                                                      MinicType existing_type,
-                                                      MinicType declared_type);
 bool minic_parser_declare_block_scope_extern_object(MinicParser *parser,
                                                     MinicSourceSpan name_span,
                                                     MinicType object_type,
@@ -416,6 +500,8 @@ bool minic_parser_parse_direct_member(MinicParser *parser,
 bool minic_parser_apply_fixed_call_argument_conversion(MinicParser *parser,
                                                        MinicType target_type,
                                                        MinicExpressionId *argument_id);
+bool minic_parser_apply_default_argument_promotion(MinicParser *parser,
+                                                    MinicExpressionId *argument_id);
 bool minic_parser_apply_array_decay(MinicParser *parser,
                                     MinicExpressionId input_id,
                                     MinicExpressionId *expression_id);
@@ -435,6 +521,9 @@ bool minic_parser_parse_string_literal_size(MinicParser *parser, uint64_t *size)
 bool minic_parser_add_string_literal_initializer(MinicParser *parser,
                                                  MinicGlobalObjectId object_id,
                                                  size_t *element_count);
+bool minic_parser_parse_bounded_string_literal_values(MinicParser *parser,
+                                                      size_t element_capacity,
+                                                      int *values);
 bool minic_parser_add_bounded_string_literal_initializer(MinicParser *parser,
                                                          MinicGlobalObjectId object_id,
                                                          size_t element_capacity);
@@ -457,10 +546,14 @@ bool minic_parser_parse_full_expression_tail(MinicParser *parser,
                                              MinicExpressionId *expression_id);
 bool minic_parser_parse_full_expression(MinicParser *parser, MinicExpressionId *expression_id);
 bool minic_parser_parse_static_assert_declaration(MinicParser *parser);
+bool minic_parser_parse_preprocessor_directive(MinicParser *parser);
 bool minic_parser_add_default_return(MinicParser *parser);
 bool minic_parser_parse_statement(MinicParser *parser, bool allow_declaration);
 bool minic_parser_parse_runtime_record_initializer(MinicParser *parser,
                                                    MinicExpressionId target_id);
+bool minic_parser_parse_fixed_runtime_array_initializer(MinicParser *parser,
+                                                        MinicExpressionId base_id,
+                                                        size_t element_count);
 bool minic_parser_parse_statement_expression(MinicParser *parser,
                                              MinicSourcePosition begin,
                                              MinicExpressionId *expression_id);

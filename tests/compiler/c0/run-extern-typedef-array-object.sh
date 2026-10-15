@@ -14,11 +14,13 @@ preprocess() {
 
 preprocess extern_typedef_array_object
 "$minic" -S "$work/extern_typedef_array_object.i" -o "$work/extern_typedef_array_object.s"
-grep -F "  la a0, irq_default_affinity" "$work/extern_typedef_array_object.s" >/dev/null
-grep -F "  la a0, matrix" "$work/extern_typedef_array_object.s" >/dev/null
-grep -F "  la a0, values" "$work/extern_typedef_array_object.s" >/dev/null
-grep -F "  li a0, 48" "$work/extern_typedef_array_object.s" >/dev/null
-grep -F "  li a0, 12" "$work/extern_typedef_array_object.s" >/dev/null
+# Core owns value transport registers; keep symbol identities, sizeof results,
+# and the crucial extern-only no-storage contract exact.
+grep -E '^[[:space:]]+la[[:space:]]+[^,]+,[[:space:]]*irq_default_affinity$' "$work/extern_typedef_array_object.s" >/dev/null
+grep -E '^[[:space:]]+la[[:space:]]+[^,]+,[[:space:]]*matrix$' "$work/extern_typedef_array_object.s" >/dev/null
+grep -E '^[[:space:]]+la[[:space:]]+[^,]+,[[:space:]]*values$' "$work/extern_typedef_array_object.s" >/dev/null
+grep -E '^[[:space:]]+li[[:space:]]+[^,]+,[[:space:]]*48$' "$work/extern_typedef_array_object.s" >/dev/null
+grep -E '^[[:space:]]+li[[:space:]]+[^,]+,[[:space:]]*12$' "$work/extern_typedef_array_object.s" >/dev/null
 for symbol in irq_default_affinity matrix values; do
     if grep -F ".type $symbol, @object" "$work/extern_typedef_array_object.s" >/dev/null || \
        grep -F "$symbol:" "$work/extern_typedef_array_object.s" >/dev/null; then

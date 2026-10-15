@@ -1,0 +1,220 @@
+name: Linux Undef Residual Replay V0
+
+on:
+  push:
+    branches: ["agent/linux-undef-diagnose-v0"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: linux-undef-residual-replay-v0-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  residual-replay:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Restore frozen residual fixtures
+        id: fixtures
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-undef-residual-replay-v0/fixtures
+          key: linux-undef-residual19-i-v0-6.6.143-riscv-defconfig-${{ runner.os }}
+
+      - name: Restore diagnose Linux baseline for fixture generation
+        if: steps.fixtures.outputs.cache-hit != 'true'
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            build/linux-asm-symbolic-pool-v0/linux-6.6.143
+            build/linux-asm-symbolic-pool-v0/base-out
+          key: linux-undef-diagnose-base-v1-6.6.143-riscv-defconfig-${{ runner.os }}
+          fail-on-cache-miss: true
+
+      - name: Install RV64 tools only for fixture generation
+        if: steps.fixtures.outputs.cache-hit != 'true'
+        run: |
+          sudo apt-get -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu
+
+      - name: Build current patched MiniC
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-asm-symbolic-pool-v0"
+          build="$GITHUB_WORKSPACE/build/linux-undef-residual-replay-v0/toolchain"
+          ev="$GITHUB_WORKSPACE/build/linux-undef-residual-replay-v0/evidence"
+          rm -rf "$build" "$ev"
+          mkdir -p "$ev"
+          start=$(date +%s)
+          patches=(
+            apply-local-integer-assignment-v2.py
+            apply-local-integer-logical-conditions-v0.py
+            apply-local-null-pointer-facts-v0.py
+            apply-local-null-pointer-conditions-v0.py
+            apply-builtin-constant-p-local-facts-v0.py
+            apply-inline-integer-specialization-v0.py
+            apply-inline-specialization-local-facts-v0.py
+            apply-inline-specialization-stable-parameter-facts-v0.py
+            apply-inline-specialization-transitive-integer-v0.py
+            apply-inline-specialization-base-callee-integer-v0.py
+            apply-inline-specialization-capacity-v0.py
+            apply-inline-specialization-symbolic-address-v0.py
+            apply-inline-specialization-symbolic-nested-array-v0.py
+            apply-inline-specialization-symbolic-integer-closure-v0.py
+            apply-inline-specialization-symbolic-transitive-rewrite-v0.py
+            apply-inline-specialization-symbolic-array-lvalue-v0.py
+            apply-inline-specialization-symbolic-closed-integers-v0.py
+            apply-inline-specialization-base-callee-symbolic-v0.py
+            apply-inline-specialization-resolved-asm-goto-v0.py
+            apply-inline-specialization-core-reachability-v0.py
+            apply-inline-specialization-original-reachability-v0.py
+            apply-inline-asm-local-integer-facts-v0.py
+            apply-inline-specialization-core-empty-function-v0.py
+            apply-inline-specialization-label-alias-v0.py
+            apply-riscv64-default-text-section-v0.py
+            apply-riscv64-explicit-section-flags-v0.py
+            apply-inline-asm-symbolic-specialization-v0.py
+            apply-inline-specialization-boolean-range-v1.py
+            apply-inline-specialization-local-boolean-domain-v0.py
+            apply-constant-inline-call-cfg-v1.py
+            apply-local-integer-arithmetic-closure-v0.py
+            apply-constant-cfg-product-v0.py
+            apply-core-unreachable-reentry-v0.py
+          )
+          for patch in "${patches[@]}"; do python3 "tools/ci/$patch" >>"$ev/patch.log"; done
+          git diff --check
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$build" \
+            "$build/bin/minic" "$build/bin/minic-cc"
+          echo "TIMING toolchain_s=$(($(date +%s) - start))" | tee "$ev/timing.txt"
+
+      - name: Generate residual fixtures once
+        if: steps.fixtures.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-asm-symbolic-pool-v0"
+          src="$work/linux-6.6.143"
+          base="$work/base-out"
+          out="$GITHUB_WORKSPACE/build/linux-undef-residual-replay-v0/out"
+          fixture_dir="$GITHUB_WORKSPACE/build/linux-undef-residual-replay-v0/fixtures"
+          ev="$GITHUB_WORKSPACE/build/linux-undef-residual-replay-v0/evidence"
+          wrapper="$GITHUB_WORKSPACE/tests/external/linux/stage2_kbuild_cc.sh"
+          rm -rf "$out" "$fixture_dir"
+          mkdir -p "$fixture_dir"
+          cp -a --reflink=auto "$base" "$out"
+          targets=(
+            crypto/skcipher.o drivers/acpi/scan.o fs/proc/task_mmu.o
+            kernel/bpf/verifier.o kernel/dma/direct.o kernel/dma/pool.o
+            kernel/jump_label.o kernel/ptrace.o mm/gup.o mm/mremap.o
+            mm/page_alloc.o mm/percpu.o mm/slab_common.o mm/swap.o mm/truncate.o
+            mm/vmstat.o net/core/bpf_sk_storage.o net/core/skbuff.o net/ipv6/icmp.o
+          )
+          start=$(date +%s)
+          MINIC="$GITHUB_WORKSPACE/build/linux-undef-residual-replay-v0/toolchain/bin/minic" \
+          REAL_CC=/usr/bin/riscv64-linux-gnu-gcc MINIC_KEEP_INTERMEDIATES=1 \
+          MINIC_KBUILD_TRACE="$ev/fixture.trace" CORE_FAST_TRACE=1 \
+            make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
+              CC="$wrapper" -j4 V=1 "${targets[@]}" >"$ev/fixture-kbuild.log" 2>&1
+          for target in "${targets[@]}"; do
+            stem="${target%.o}"
+            source_i="$out/${stem}.minic-stage2.i"
+            dest="$fixture_dir/${stem}.i"
+            test -s "$source_i"
+            mkdir -p "$(dirname "$dest")"
+            cp -f "$source_i" "$dest"
+          done
+          echo "TIMING fixture_s=$(($(date +%s) - start)) objects=${#targets[@]}" | tee -a "$ev/timing.txt"
+          test "$(find "$fixture_dir" -type f -name '*.i' | wc -l)" -eq 19
+
+      - name: Save frozen residual fixtures
+        if: steps.fixtures.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: build/linux-undef-residual-replay-v0/fixtures
+          key: linux-undef-residual19-i-v0-6.6.143-riscv-defconfig-${{ runner.os }}
+
+      - name: Replay all 19 residual objects in parallel
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          root="$GITHUB_WORKSPACE/build/linux-undef-residual-replay-v0"
+          fixture_dir="$root/fixtures"
+          replay_dir="$root/evidence/replay"
+          ev="$root/evidence"
+          minic="$root/toolchain/bin/minic"
+          rm -rf "$replay_dir"
+          mkdir -p "$replay_dir"
+          cat >"$ev/residual-symbols.txt" <<'EOF'
+          __compiletime_assert_1064
+          __compiletime_assert_194
+          __compiletime_assert_304
+          __compiletime_assert_305
+          __compiletime_assert_347
+          __compiletime_assert_364
+          __compiletime_assert_375
+          __compiletime_assert_385
+          __compiletime_assert_388
+          __compiletime_assert_390
+          __compiletime_assert_395
+          __compiletime_assert_400
+          __compiletime_assert_499
+          __compiletime_assert_615
+          __compiletime_assert_616
+          __compiletime_assert_637
+          __compiletime_assert_645
+          arch_dma_set_uncached
+          cma_get_base
+          cma_get_size
+          dax_delete_mapping_entry
+          dax_invalidate_mapping_entry_sync
+          dma_dummy_ops
+          free_zone_device_page
+          migrate_device_coherent_page
+          EOF
+          sed -i 's/^          //' "$ev/residual-symbols.txt"
+          export FIXTURE_DIR="$fixture_dir" REPLAY_DIR="$replay_dir" MINIC_BIN="$minic"
+          start=$(date +%s)
+          find "$fixture_dir" -type f -name '*.i' -print0 | \
+            xargs -0 -n1 -P4 bash -c '
+              i="$0"
+              rel="${i#${FIXTURE_DIR}/}"
+              s="${REPLAY_DIR}/${rel%.i}.s"
+              mkdir -p "$(dirname "$s")"
+              CORE_FAST_TRACE=1 "$MINIC_BIN" -S "$i" -o "$s" >"$s.stdout" 2>"$s.stderr"
+            '
+          echo "TIMING replay19_s=$(($(date +%s) - start))" | tee -a "$ev/timing.txt"
+          : >"$ev/remaining.tsv"
+          while IFS= read -r sym; do
+            while IFS= read -r s; do
+              if grep -Fqw -- "$sym" "$s"; then
+                rel="${s#${replay_dir}/}"
+                printf '%s\t%s\n' "${rel%.s}.o" "$sym" >>"$ev/remaining.tsv"
+              fi
+            done < <(find "$replay_dir" -type f -name '*.s' | sort)
+          done <"$ev/residual-symbols.txt"
+          cut -f2 "$ev/remaining.tsv" | sort -u >"$ev/remaining.unique"
+          refs=$(wc -l <"$ev/remaining.tsv")
+          unique=$(wc -l <"$ev/remaining.unique")
+          asserts=$(grep -c '^__compiletime_assert_' "$ev/remaining.unique" || true)
+          printf 'LINUX_UNDEF_RESIDUAL_REPLAY objects=19 refs=%s unique=%s asserts=%s\n' \
+            "$refs" "$unique" "$asserts" | tee "$ev/summary.txt"
+          cat "$ev/remaining.tsv"
+          test "$unique" -eq 0
+
+      - name: Preserve residual evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-undef-residual-replay-v0
+          path: build/linux-undef-residual-replay-v0/evidence/
+          if-no-files-found: ignore
+          retention-days: 7

@@ -15,7 +15,7 @@ mkdir -p "$work"
     "$work/pointer_qualification.i" \
     -o "$work/pointer_qualification.s"
 grep -F "  call read_value" "$work/pointer_qualification.s" >/dev/null
-grep -F "  lw a0, 0(a0)" "$work/pointer_qualification.s" >/dev/null
+grep -E '^[[:space:]]+lw[[:space:]]+[^,]+,[[:space:]]*0\([^)]*\)$' "$work/pointer_qualification.s" >/dev/null
 printf '%s\n' "PASS compiler/c0/pointer_qualification"
 
 expect_failure() {

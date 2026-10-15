@@ -43,6 +43,9 @@ grep -F '  .dword read_named' "$work/static_record_array.s" >/dev/null
 grep -F '  .dword write_named' "$work/static_record_array.s" >/dev/null
 grep -F '.type exact_tags, @object' "$work/static_record_array.s" >/dev/null
 grep -F '.size exact_tags, 8' "$work/static_record_array.s" >/dev/null
+grep -F '.type matrix_cells, @object' "$work/static_record_array.s" >/dev/null
+grep -F '.size matrix_cells, 24' "$work/static_record_array.s" >/dev/null
+grep -F 'read_matrix_cell:' "$work/static_record_array.s" >/dev/null
 
 cat >"$work/too_long.c" <<'EOF'
 struct TooLongName {
@@ -59,4 +62,4 @@ if "$minic" -S "$work/too_long.i" -o "$work/too_long.s" 2>"$work/too_long.err"; 
 fi
 grep -F 'string initializer is too long for character array' "$work/too_long.err" >/dev/null
 
-printf '%s\n' 'PASS compiler/c0/static_record_array inferred-count=3 fields=2 missing-field-zero=1 size=6 complex-empty=1 complex-size=32 string-field=1 exact-fit=1 function-relocations=1 shared-owner=1 internal-rodata=1'
+printf '%s\n' 'PASS compiler/c0/static_record_array inferred-count=3 fields=2 missing-field-zero=1 size=6 complex-empty=1 complex-size=32 string-field=1 exact-fit=1 multidimensional-fixed=1 function-relocations=1 shared-owner=1 internal-rodata=1'

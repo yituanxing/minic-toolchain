@@ -14,11 +14,16 @@ mkdir -p "$work"
 "$minic" -S \
     "$work/integer_bit_operations.i" \
     -o "$work/integer_bit_operations.s"
-grep -F "  sllw a0, t0, a0" "$work/integer_bit_operations.s" >/dev/null
-grep -F "  sraw a0, t0, a0" "$work/integer_bit_operations.s" >/dev/null
-grep -F "  srlw a0, t0, a0" "$work/integer_bit_operations.s" >/dev/null
-grep -F "  and a0, t0, a0" "$work/integer_bit_operations.s" >/dev/null
-printf '%s\n' "PASS compiler/c0/integer_bit_operations"
+grep -F ".Lmain_core_bb" "$work/integer_bit_operations.s" >/dev/null
+grep -F ".Lmain_core_return:" "$work/integer_bit_operations.s" >/dev/null
+# Core emits XLEN shifts and applies the semantic result conversion separately.
+# Preserve signed-vs-unsigned right-shift and bitwise-AND ownership without
+# binding the legacy emitter's W-form or temporary registers.
+grep -E '^[[:space:]]+sll[[:space:]]+' "$work/integer_bit_operations.s" >/dev/null
+grep -E '^[[:space:]]+sra[[:space:]]+' "$work/integer_bit_operations.s" >/dev/null
+grep -E '^[[:space:]]+srl[[:space:]]+' "$work/integer_bit_operations.s" >/dev/null
+grep -E '^[[:space:]]+and[[:space:]]+' "$work/integer_bit_operations.s" >/dev/null
+printf '%s\n' "PASS compiler/c0/integer_bit_operations normalized=core-integer-ops"
 
 expect_failure() {
     name=$1

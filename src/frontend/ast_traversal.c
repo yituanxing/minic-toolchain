@@ -43,6 +43,10 @@ bool minic_c0_expression_visit_child_id_refs(MinicExpression *expression,
     case MINIC_EXPRESSION_DISCARD:
     case MINIC_EXPRESSION_LVALUE_READ:
     case MINIC_EXPRESSION_UNARY:
+    case MINIC_EXPRESSION_BUILTIN_ALLOCA:
+    case MINIC_EXPRESSION_BUILTIN_VA_START:
+    case MINIC_EXPRESSION_BUILTIN_VA_END:
+    case MINIC_EXPRESSION_BUILTIN_VA_ARG:
         return visit_expression_id(&expression->value.unary.operand, visitor, context);
 
     case MINIC_EXPRESSION_SUBSCRIPT:
@@ -55,6 +59,7 @@ bool minic_c0_expression_visit_child_id_refs(MinicExpression *expression,
     case MINIC_EXPRESSION_ASSIGNMENT:
     case MINIC_EXPRESSION_COMPOUND_ASSIGNMENT:
     case MINIC_EXPRESSION_BINARY:
+    case MINIC_EXPRESSION_BUILTIN_VA_COPY:
         return visit_expression_id(&expression->value.binary.left, visitor, context) &&
                visit_expression_id(&expression->value.binary.right, visitor, context);
 

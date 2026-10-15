@@ -1,5 +1,37 @@
 #include "frontend/expression_semantics.h"
 
+bool minic_c0_pointer_arithmetic_element_size(const MinicC0Program *program,
+                                              const MinicDataLayout *layout,
+                                              MinicType pointer_type,
+                                              size_t *element_size) {
+    MinicType pointee;
+    size_t alignment;
+
+    if (program == NULL || layout == NULL || element_size == NULL ||
+        !minic_type_pointee(pointer_type, &pointee)) {
+        return false;
+    }
+    /* GNU C gives void* and function-pointer arithmetic a byte stride. */
+    if (minic_type_is_void(pointee) || minic_type_is_function(pointee)) {
+        *element_size = 1U;
+        return true;
+    }
+    /* M131_ZERO_SIZE_POINTER_STRIDE: GNU complete zero-size object types
+       (notably empty records, and the zero-size array forms already accepted by
+       the frontend) have a real pointer-arithmetic stride of zero. Completeness
+       is owned by the caller/frontend; DataLayout returning a valid size of zero
+       must not be reinterpreted here as an unsupported type. Incomplete types
+       still fail because DataLayout cannot size them. */
+    return minic_data_layout_type(layout, program, pointee, element_size, &alignment);
+}
+
+static bool integer_type_is_signed(const MinicC0Program *program, MinicType type) {
+    MinicType effective_type;
+
+    return minic_c0_type_effective_integer_type(program, type, &effective_type) &&
+           minic_type_is_signed_integer(effective_type);
+}
+
 bool minic_c0_integer_assignment_value_type(const MinicC0Program *program,
                                             MinicType target_type,
                                             MinicExpressionId source_expression_id,
@@ -18,7 +50,8 @@ bool minic_c0_integer_assignment_value_type(const MinicC0Program *program,
     return minic_type_is_integer(*result);
 }
 
-static bool conditional_type_only(const MinicTargetInfo *target,
+static bool conditional_type_only(const MinicC0Program *program,
+                                  const MinicTargetInfo *target,
                                   MinicType when_true,
                                   MinicType when_false,
                                   MinicType *result) {
@@ -36,7 +69,8 @@ static bool conditional_type_only(const MinicTargetInfo *target,
         return true;
     }
     if (minic_type_is_integer(when_true) && minic_type_is_integer(when_false)) {
-        return minic_target_info_integer_common(target, when_true, when_false, result);
+        return minic_target_info_integer_common_for_program(
+            target, program, when_true, when_false, result);
     }
     has_double_operand = minic_type_is_double(when_true) || minic_type_is_double(when_false);
     has_numeric_operands = (minic_type_is_double(when_true) || minic_type_is_integer(when_true)) &&
@@ -67,8 +101,8 @@ bool minic_c0_integer_range_representable_in_type(const MinicC0Program *program,
     if (minic_type_is_bool_integer(source_type)) {
         return destination_bits >= 1U;
     }
-    source_signed = minic_type_is_signed_integer(source_type);
-    destination_signed = minic_type_is_signed_integer(destination_type);
+    source_signed = integer_type_is_signed(program, source_type);
+    destination_signed = integer_type_is_signed(program, destination_type);
     if (source_signed) {
         return destination_signed && destination_bits >= source_bits;
     }
@@ -110,5 +144,5 @@ bool minic_c0_conditional_result_type(const MinicC0Program *program,
          * dropping lvalue-only top-level qualification from either source arm. */
         return minic_type_unqualified(when_true->type, result) && minic_type_is_record(*result);
     }
-    return conditional_type_only(target, when_true->type, when_false->type, result);
+    return conditional_type_only(program, target, when_true->type, when_false->type, result);
 }

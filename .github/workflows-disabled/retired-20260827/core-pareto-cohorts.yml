@@ -1,0 +1,156 @@
+name: Core Pareto Cohorts
+
+on:
+  pull_request:
+
+jobs:
+  pareto:
+    if: github.head_ref == 'refactor/declaration-sema-v1'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: minmax-reset-13
+            indices: '2,209,242,378,491,492,493,494,495,496,497,498,499'
+          - name: vstate-csr-save-11
+            indices: '16,18,19,23,25,34,49,78,81,83,96'
+          - name: iomap-inline-data-11
+            indices: '380,381,382,383,384,385,386,435,437,443,444'
+          - name: futex-atomic-5
+            indices: '180,181,182,183,184'
+          - name: gettimeofday-fallback-3
+            indices: '32,177,179'
+          - name: neigh-output-error-12
+            indices: '194,195,197,212,215,219,229,230,250,281,357,410'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refactor/declaration-sema-v1
+          fetch-depth: 0
+
+      - name: Restore frozen Linux corpus
+        id: linux-corpus-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-focus-corpus
+          key: linux-focus-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-${{ hashFiles('tests/external/linux/replay-indices.txt') }}
+
+      - name: Require frozen corpus
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "${{ steps.linux-corpus-cache.outputs.cache-hit }}" = true
+          test -s build/linux-focus-corpus/selected-tus.txt
+
+      - name: Enable compact progress telemetry
+        run: python3 tools/dev/patch-linux-replay-live-progress.py
+
+      - name: Build exact compiler
+        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/pareto-${{ matrix.name }}-compiler
+
+      - name: Replay cohort ${{ matrix.name }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          compiler="$GITHUB_WORKSPACE/build/pareto-${{ matrix.name }}-compiler/bin/minic"
+          work="$GITHUB_WORKSPACE/build/pareto-${{ matrix.name }}"
+          set +e
+          MINIC_CORE_IR=strict CORE_FAST_TRACE=1 python3 tests/external/linux/corpus_replay.py \
+            --minic "$compiler" \
+            --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
+            --work "$work" \
+            --jobs 4 \
+            --indices '${{ matrix.indices }}'
+          replay_status=$?
+          set -e
+          printf 'CORE_PARETO_COHORT name=%s status=%d\n' '${{ matrix.name }}' "$replay_status"
+          python3 tools/ci/classify-core-strict-frontier.py \
+            "$work/batch-results.json" \
+            --examples 20 \
+            --json-out "$work/frontier-summary.json"
+          echo CORE_PARETO_DETAIL_BEGIN name=${{ matrix.name }}
+          grep -R -h -E 'CORE_LOWER_DETAIL|CORE_FAST_TRACE|Core IR shadow' "$work/minic-stderr" | tail -1200 || true
+          echo CORE_PARETO_DETAIL_END name=${{ matrix.name }}
+
+      - name: Persist cohort ${{ matrix.name }}
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: core-pareto-${{ matrix.name }}-${{ github.sha }}
+          path: |
+            build/pareto-${{ matrix.name }}/batch-results.json
+            build/pareto-${{ matrix.name }}/frontier-summary.json
+            build/pareto-${{ matrix.name }}/minic-stderr/**
+          if-no-files-found: warn
+
+  m116-verifier-probe:
+    if: github.head_ref == 'refactor/declaration-sema-v1'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refactor/declaration-sema-v1
+          fetch-depth: 0
+
+      - name: Restore frozen Linux corpus
+        id: linux-corpus-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-focus-corpus
+          key: linux-focus-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-${{ hashFiles('tests/external/linux/replay-indices.txt') }}
+
+      - name: Apply M116 candidate and dump rejected Core
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "${{ steps.linux-corpus-cache.outputs.cache-hit }}" = true
+          python3 tools/ci/apply-m116-pointer-arith-rvalue.py
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('src/core/core_lower.c')
+          s = p.read_text()
+          old = '''    if (!minic_core_function_verify(&lowered)) {
+              minic_core_function_destroy(&lowered);
+              return MINIC_CORE_LOWER_ERROR;
+          }
+'''
+          if s.count(old) != 1:
+              old = '''    if (!minic_core_function_verify(&lowered)) {
+        minic_core_function_destroy(&lowered);
+        return MINIC_CORE_LOWER_ERROR;
+    }
+'''
+          new = '''    if (!minic_core_function_verify(&lowered)) {
+        (void)fprintf(stderr, "CORE_M116_VERIFY_FAIL function=%s blocks=%zu instructions=%zu values=%zu\\n",
+                      source_function->name, lowered.block_count,
+                      lowered.instruction_count, lowered.value_count);
+        (void)minic_core_function_dump(stderr, &lowered);
+        minic_core_function_destroy(&lowered);
+        return MINIC_CORE_LOWER_ERROR;
+    }
+'''
+          if s.count(old) != 1:
+              raise SystemExit(f'verify anchor mismatch: {s.count(old)}')
+          p.write_text(s.replace(old, new, 1))
+          PY
+          git diff --check
+
+      - name: Build probe compiler
+        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/m116-probe-compiler
+
+      - name: Replay ext4 verifier failure
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          set +e
+          MINIC_CORE_IR=strict CORE_FAST_TRACE=1 python3 tests/external/linux/corpus_replay.py \
+            --minic "$GITHUB_WORKSPACE/build/m116-probe-compiler/bin/minic" \
+            --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
+            --work "$GITHUB_WORKSPACE/build/m116-probe" \
+            --jobs 1 --indices '435'
+          rc=$?
+          set -e
+          echo "M116_PROBE_RC=$rc"
+          find build/m116-probe/minic-stderr -type f -maxdepth 5 -print -exec cat {} \; 2>/dev/null || true
+          exit 0

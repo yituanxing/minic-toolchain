@@ -41,6 +41,15 @@ static char *minic_copy_name(const char *name, size_t name_length) {
     return copy;
 }
 
+void minic_c0_local_initialize(MinicLocal *local) {
+    if (local == NULL) {
+        return;
+    }
+    (void)memset(local, 0, sizeof(*local));
+    local->dynamic_count_local_id = MINIC_LOCAL_INVALID;
+    local->dynamic_address_local_id = MINIC_LOCAL_INVALID;
+}
+
 void minic_c0_program_initialize(MinicC0Program *program) {
     (void)memset(program, 0, sizeof(*program));
     program->body_block = MINIC_BLOCK_INVALID;
@@ -119,6 +128,7 @@ void minic_c0_program_destroy(MinicC0Program *program) {
         free(program->global_objects[index].section_name);
         free(program->global_objects[index].initializer_values);
         free(program->global_objects[index].relocations);
+        free(program->global_objects[index].union_selections);
     }
     free(program->expressions);
     free(program->locals);
@@ -137,77 +147,6 @@ void minic_c0_program_destroy(MinicC0Program *program) {
     free(program->global_objects);
     free(program->fixed_register_bindings);
     minic_c0_program_initialize(program);
-}
-
-static void
-minic_refresh_enum_type(MinicType *type, MinicEnumId enum_id, MinicType compatible_type) {
-    if (type != NULL && type->base_kind == MINIC_TYPE_BASE_ENUM && type->enum_id == enum_id) {
-        type->integer_sign = compatible_type.integer_sign;
-        type->integer_rank = compatible_type.integer_rank;
-    }
-}
-
-static void minic_refresh_program_enum_types(MinicC0Program *program,
-                                             MinicEnumId enum_id,
-                                             MinicType compatible_type) {
-    size_t index;
-
-    for (index = 0U; index < program->expression_count; ++index) {
-        minic_refresh_enum_type(&program->expressions[index].type, enum_id, compatible_type);
-        if (program->expressions[index].kind == MINIC_EXPRESSION_SIZEOF) {
-            minic_refresh_enum_type(
-                &program->expressions[index].value.sizeof_type, enum_id, compatible_type);
-        }
-    }
-    for (index = 0U; index < program->local_count; ++index) {
-        minic_refresh_enum_type(&program->locals[index].type, enum_id, compatible_type);
-    }
-    for (index = 0U; index < program->function_count; ++index) {
-        size_t parameter_index;
-
-        minic_refresh_enum_type(&program->functions[index].return_type, enum_id, compatible_type);
-        for (parameter_index = 0U; parameter_index < program->functions[index].parameter_count;
-             ++parameter_index) {
-            minic_refresh_enum_type(&program->functions[index].parameter_types[parameter_index],
-                                    enum_id,
-                                    compatible_type);
-        }
-    }
-    for (index = 0U; index < program->record_count; ++index) {
-        size_t field_index;
-
-        for (field_index = 0U; field_index < program->records[index].field_count; ++field_index) {
-            minic_refresh_enum_type(
-                &program->records[index].fields[field_index].type, enum_id, compatible_type);
-        }
-    }
-    for (index = 0U; index < program->array_type_count; ++index) {
-        minic_refresh_enum_type(
-            &program->array_types[index].element_type, enum_id, compatible_type);
-    }
-    for (index = 0U; index < program->function_type_count; ++index) {
-        size_t parameter_index;
-
-        minic_refresh_enum_type(
-            &program->function_types[index].return_type, enum_id, compatible_type);
-        for (parameter_index = 0U; parameter_index < program->function_types[index].parameter_count;
-             ++parameter_index) {
-            minic_refresh_enum_type(
-                &program->function_types[index].parameter_types[parameter_index],
-                enum_id,
-                compatible_type);
-        }
-    }
-    for (index = 0U; index < program->type_alias_count; ++index) {
-        minic_refresh_enum_type(&program->type_aliases[index].type, enum_id, compatible_type);
-    }
-    for (index = 0U; index < program->global_object_count; ++index) {
-        minic_refresh_enum_type(&program->global_objects[index].type, enum_id, compatible_type);
-    }
-    for (index = 0U; index < program->fixed_register_binding_count; ++index) {
-        minic_refresh_enum_type(
-            &program->fixed_register_bindings[index].type, enum_id, compatible_type);
-    }
 }
 
 bool minic_c0_program_add_enum(MinicC0Program *program,
@@ -254,7 +193,6 @@ bool minic_c0_program_finish_enum(MinicC0Program *program,
     }
     entity->compatible_type = compatible_type;
     entity->is_complete = true;
-    minic_refresh_program_enum_types(program, enum_id, compatible_type);
     return true;
 }
 
@@ -291,7 +229,34 @@ bool minic_c0_program_add_enumerator(MinicC0Program *program,
 }
 
 const MinicEnum *minic_c0_program_enum(const MinicC0Program *program, MinicEnumId enum_id) {
-    return program != NULL && enum_id < program->enum_count ? &program->enums[enum_id] : NULL;
+    if (program == NULL || enum_id >= program->enum_count) {
+        return NULL;
+    }
+    return &program->enums[enum_id];
+}
+
+bool minic_c0_type_effective_integer_type(const MinicC0Program *program,
+                                          MinicType type,
+                                          MinicType *result) {
+    const MinicEnum *entity;
+
+    if (program == NULL || result == NULL || !minic_type_is_integer(type) ||
+        minic_type_is_pointer(type)) {
+        return false;
+    }
+    if (!minic_type_is_enum(type)) {
+        *result = type;
+        return true;
+    }
+    entity = minic_c0_program_enum(program, type.enum_id);
+    if (entity == NULL || !entity->is_complete || !minic_type_is_integer(entity->compatible_type) ||
+        minic_type_is_enum(entity->compatible_type)) {
+        return false;
+    }
+    *result = entity->compatible_type;
+    result->base_qualifiers = type.base_qualifiers;
+    result->explicit_alignment = type.explicit_alignment;
+    return true;
 }
 
 const MinicEnumerator *minic_c0_program_enumerator(const MinicC0Program *program,
@@ -355,7 +320,8 @@ static bool minic_c0_type_initializer_slot_count_impl(const MinicC0Program *prog
     if (program == NULL || slot_count == NULL) {
         return false;
     }
-    if (minic_type_is_integer(type) || minic_type_is_pointer(type)) {
+    if (minic_type_is_integer(type) || minic_type_is_pointer(type) ||
+        minic_type_is_float(type) || minic_type_is_double(type)) {
         *slot_count = 1U;
         return true;
     }
@@ -364,7 +330,14 @@ static bool minic_c0_type_initializer_slot_count_impl(const MinicC0Program *prog
         size_t element_slots;
 
         array_type = minic_c0_program_array_type(program, type.array_type_id);
-        if (array_type == NULL || array_type->element_count == 0U ||
+        if (array_type == NULL) {
+            return false;
+        }
+        if (array_type->is_zero_length) {
+            *slot_count = 0U;
+            return true;
+        }
+        if (array_type->element_count == 0U ||
             !minic_c0_type_initializer_slot_count_impl(
                 program, array_type->element_type, &element_slots) ||
             (element_slots != 0U && array_type->element_count > SIZE_MAX / element_slots)) {
@@ -391,7 +364,10 @@ static bool minic_c0_type_initializer_slot_count_impl(const MinicC0Program *prog
             size_t field_slots;
 
             field = &record->fields[field_index];
-            if (field->element_count == 0U || field->is_flexible_array ||
+            if (field->is_flexible_array || field->is_zero_length_array) {
+                continue;
+            }
+            if (field->element_count == 0U ||
                 !minic_c0_type_initializer_slot_count_impl(program, field->type, &element_slots) ||
                 (element_slots != 0U && field->element_count > SIZE_MAX / element_slots)) {
                 return false;
@@ -841,6 +817,34 @@ bool minic_c0_block_add_statement(MinicC0Program *program,
     return true;
 }
 
+static void minic_c0_function_initialize_defaults(MinicFunction *function) {
+    size_t parameter_index;
+
+    if (function == NULL) {
+        return;
+    }
+    (void)memset(function, 0, sizeof(*function));
+    function->return_type = minic_type_int();
+    for (parameter_index = 0U;
+         parameter_index < sizeof(function->parameter_types) / sizeof(function->parameter_types[0]);
+         ++parameter_index) {
+        function->parameter_types[parameter_index] = minic_type_int();
+    }
+    function->alias_target = MINIC_FUNCTION_INVALID;
+}
+
+static void minic_c0_record_initialize_defaults(MinicRecord *record) {
+    if (record != NULL) {
+        (void)memset(record, 0, sizeof(*record));
+    }
+}
+
+static void minic_c0_record_field_initialize_defaults(MinicRecordField *field) {
+    if (field != NULL) {
+        (void)memset(field, 0, sizeof(*field));
+    }
+}
+
 bool minic_c0_program_add_function(MinicC0Program *program,
                                    const char *name,
                                    size_t name_length,
@@ -849,7 +853,6 @@ bool minic_c0_program_add_function(MinicC0Program *program,
                                    MinicBlockId body_block,
                                    MinicFunctionId *function_id) {
     MinicFunction function;
-    size_t parameter_index;
 
     if (name == NULL || function_id == NULL ||
         (body_block != MINIC_BLOCK_INVALID && body_block >= program->block_count) ||
@@ -863,23 +866,16 @@ bool minic_c0_program_add_function(MinicC0Program *program,
         return false;
     }
 
-    (void)memset(&function, 0, sizeof(function));
+    minic_c0_function_initialize_defaults(&function);
     function.name = minic_copy_name(name, name_length);
     if (function.name == NULL) {
         return false;
     }
     function.name_length = name_length;
-    function.return_type = minic_type_int();
-    for (parameter_index = 0U;
-         parameter_index < sizeof(function.parameter_types) / sizeof(function.parameter_types[0]);
-         ++parameter_index) {
-        function.parameter_types[parameter_index] = minic_type_int();
-    }
     function.local_begin = local_begin;
     function.local_count = local_count;
     function.parameter_count = 0U;
     function.body_block = body_block;
-    function.alias_target = MINIC_FUNCTION_INVALID;
     function.is_defined = body_block != MINIC_BLOCK_INVALID;
 
     *function_id = program->function_count;
@@ -1002,7 +998,7 @@ bool minic_c0_program_add_record(MinicC0Program *program,
         return false;
     }
 
-    (void)memset(&record, 0, sizeof(record));
+    minic_c0_record_initialize_defaults(&record);
     record.name = minic_copy_name(name, name_length);
     if (record.name == NULL) {
         return false;
@@ -1072,7 +1068,7 @@ bool minic_c0_record_add_field(MinicC0Program *program,
         return false;
     }
 
-    (void)memset(&field, 0, sizeof(field));
+    minic_c0_record_field_initialize_defaults(&field);
     field.name = minic_copy_name(name, name_length);
     if (field.name == NULL) {
         return false;
@@ -1256,10 +1252,12 @@ bool minic_c0_program_discard_last_array_type(MinicC0Program *program, MinicType
 static bool minic_function_type_matches(const MinicFunctionType *descriptor,
                                         MinicType return_type,
                                         const MinicType *parameter_types,
-                                        size_t parameter_count) {
+                                        size_t parameter_count,
+                                        bool is_variadic) {
     size_t parameter_index;
 
     if (descriptor == NULL || descriptor->parameter_count != parameter_count ||
+        descriptor->is_variadic != is_variadic ||
         !minic_type_equal(descriptor->return_type, return_type)) {
         return false;
     }
@@ -1272,11 +1270,12 @@ static bool minic_function_type_matches(const MinicFunctionType *descriptor,
     return true;
 }
 
-bool minic_c0_program_add_function_type(MinicC0Program *program,
-                                        MinicType return_type,
-                                        const MinicType *parameter_types,
-                                        size_t parameter_count,
-                                        MinicType *function_type) {
+bool minic_c0_program_add_variadic_function_type(MinicC0Program *program,
+                                                 MinicType return_type,
+                                                 const MinicType *parameter_types,
+                                                 size_t parameter_count,
+                                                 bool is_variadic,
+                                                 MinicType *function_type) {
     MinicFunctionType descriptor;
     MinicType normalized_parameter_types[MINIC_MAX_FUNCTION_PARAMETERS];
     size_t function_type_index;
@@ -1301,7 +1300,8 @@ bool minic_c0_program_add_function_type(MinicC0Program *program,
         if (minic_function_type_matches(&program->function_types[function_type_index],
                                         return_type,
                                         normalized_parameter_types,
-                                        parameter_count)) {
+                                        parameter_count,
+                                        is_variadic)) {
             *function_type = minic_type_function(function_type_index);
             return true;
         }
@@ -1316,6 +1316,7 @@ bool minic_c0_program_add_function_type(MinicC0Program *program,
     (void)memset(&descriptor, 0, sizeof(descriptor));
     descriptor.return_type = return_type;
     descriptor.parameter_count = parameter_count;
+    descriptor.is_variadic = is_variadic;
     for (parameter_index = 0U; parameter_index < MINIC_MAX_FUNCTION_PARAMETERS; ++parameter_index) {
         if (parameter_index < parameter_count) {
             descriptor.parameter_types[parameter_index] =
@@ -1331,24 +1332,36 @@ bool minic_c0_program_add_function_type(MinicC0Program *program,
     return true;
 }
 
-bool minic_c0_program_add_type_alias(MinicC0Program *program,
-                                     const char *name,
-                                     size_t name_length,
-                                     MinicType type,
-                                     MinicTypeAliasId *alias_id) {
+bool minic_c0_program_add_function_type(MinicC0Program *program,
+                                        MinicType return_type,
+                                        const MinicType *parameter_types,
+                                        size_t parameter_count,
+                                        MinicType *function_type) {
+    return minic_c0_program_add_variadic_function_type(
+        program, return_type, parameter_types, parameter_count, false, function_type);
+}
+
+static bool minic_c0_program_add_type_alias_with_scope(MinicC0Program *program,
+                                                        const char *name,
+                                                        size_t name_length,
+                                                        MinicType type,
+                                                        bool is_block_scope,
+                                                        MinicTypeAliasId *alias_id) {
     MinicTypeAlias alias;
     size_t index;
 
-    if (program == NULL || name == NULL || alias_id == NULL || minic_type_is_void(type)) {
+    if (program == NULL || name == NULL || alias_id == NULL) {
         return false;
     }
-    for (index = 0U; index < program->type_alias_count; ++index) {
-        const MinicTypeAlias *existing;
+    if (!is_block_scope) {
+        for (index = 0U; index < program->type_alias_count; ++index) {
+            const MinicTypeAlias *existing;
 
-        existing = &program->type_aliases[index];
-        if (name_length == existing->name_length &&
-            memcmp(existing->name, name, name_length) == 0) {
-            return false;
+            existing = &program->type_aliases[index];
+            if (!existing->is_block_scope && name_length == existing->name_length &&
+                memcmp(existing->name, name, name_length) == 0) {
+                return false;
+            }
         }
     }
     if (!minic_grow_array((void **)&program->type_aliases,
@@ -1365,10 +1378,29 @@ bool minic_c0_program_add_type_alias(MinicC0Program *program,
     }
     alias.name_length = name_length;
     alias.type = type;
+    alias.is_block_scope = is_block_scope;
     *alias_id = program->type_alias_count;
     program->type_aliases[program->type_alias_count] = alias;
     program->type_alias_count += 1U;
     return true;
+}
+
+bool minic_c0_program_add_type_alias(MinicC0Program *program,
+                                     const char *name,
+                                     size_t name_length,
+                                     MinicType type,
+                                     MinicTypeAliasId *alias_id) {
+    return minic_c0_program_add_type_alias_with_scope(
+        program, name, name_length, type, false, alias_id);
+}
+
+bool minic_c0_program_add_block_type_alias(MinicC0Program *program,
+                                           const char *name,
+                                           size_t name_length,
+                                           MinicType type,
+                                           MinicTypeAliasId *alias_id) {
+    return minic_c0_program_add_type_alias_with_scope(
+        program, name, name_length, type, true, alias_id);
 }
 
 const MinicExpression *minic_c0_program_expression(const MinicC0Program *program,
@@ -1388,6 +1420,20 @@ bool minic_c0_expression_array_object_info(const MinicC0Program *program,
         return false;
     }
     (void)memset(&resolved, 0, sizeof(resolved));
+    if (expression->kind == MINIC_EXPRESSION_COMPOUND_LITERAL) {
+        const MinicLocal *local;
+
+        local = minic_c0_program_local(program, expression->value.compound_literal.local_id);
+        if (local != NULL && local->is_array) {
+            resolved.element_type = expression->type;
+            resolved.element_count = local->element_count;
+            resolved.is_incomplete = local->element_count == 0U;
+            if (info != NULL) {
+                *info = resolved;
+            }
+            return true;
+        }
+    }
     if (expression->kind == MINIC_EXPRESSION_LOCAL) {
         const MinicLocal *local;
 
@@ -1491,11 +1537,16 @@ bool minic_c0_record_value_is_address_backed(const MinicC0Program *program,
         if (expression->value_category == MINIC_VALUE_LVALUE) {
             return true;
         }
-        if (expression->value_category != MINIC_VALUE_RVALUE ||
-            expression->kind != MINIC_EXPRESSION_STATEMENT) {
+        if (expression->value_category != MINIC_VALUE_RVALUE) {
             return false;
         }
-        result_id = expression->value.statement_expression.result;
+        if (expression->kind == MINIC_EXPRESSION_LVALUE_READ) {
+            result_id = expression->value.unary.operand;
+        } else if (expression->kind == MINIC_EXPRESSION_STATEMENT) {
+            result_id = expression->value.statement_expression.result;
+        } else {
+            return false;
+        }
         if (result_id == MINIC_EXPRESSION_INVALID || result_id >= expression_id) {
             return false;
         }
@@ -1521,7 +1572,8 @@ static bool minic_c0_record_value_is_copy_source_bounded(const MinicC0Program *p
         !minic_type_is_record(expression->type)) {
         return false;
     }
-    if (expression->kind == MINIC_EXPRESSION_CALL) {
+    if (expression->kind == MINIC_EXPRESSION_CALL ||
+        expression->kind == MINIC_EXPRESSION_BUILTIN_VA_ARG) {
         return true;
     }
     if (expression->kind == MINIC_EXPRESSION_ASSIGNMENT) {
@@ -1642,7 +1694,8 @@ bool minic_c0_assignment_compatible(const MinicC0Program *program,
     }
     if (minic_type_is_pointer(target_type) && minic_type_is_pointer(source->type) &&
         (minic_c0_types_compatible(program, target_type, source->type) ||
-         minic_c0_gnu_void_function_pointer_assignment_compatible(target_type, source->type))) {
+         minic_c0_gnu_void_function_pointer_assignment_compatible(target_type, source->type) ||
+         minic_type_gnu_pointer_sign_compatible(target_type, source->type))) {
         return true;
     }
     return minic_type_is_pointer(target_type) &&
@@ -1703,6 +1756,23 @@ bool minic_c0_pointer_arithmetic_pointee_allowed(const MinicC0Program *program,
            minic_c0_type_is_complete_object(program, pointee_type);
 }
 
+bool minic_c0_pointer_difference_compatible(const MinicC0Program *program,
+                                            MinicType left,
+                                            MinicType right) {
+    MinicType left_pointee;
+    MinicType right_pointee;
+    MinicType left_unqualified;
+    MinicType right_unqualified;
+
+    return program != NULL && minic_type_pointee(left, &left_pointee) &&
+           minic_type_pointee(right, &right_pointee) &&
+           minic_type_unqualified(left_pointee, &left_unqualified) &&
+           minic_type_unqualified(right_pointee, &right_unqualified) &&
+           minic_c0_types_compatible(program, left_unqualified, right_unqualified) &&
+           minic_c0_pointer_arithmetic_pointee_allowed(program, left_unqualified) &&
+           minic_c0_pointer_arithmetic_pointee_allowed(program, right_unqualified);
+}
+
 bool minic_c0_pointer_relational_compatible(const MinicC0Program *program,
                                             MinicType left,
                                             MinicType right) {
@@ -1715,9 +1785,8 @@ bool minic_c0_pointer_relational_compatible(const MinicC0Program *program,
            minic_type_pointee(right, &right_pointee) &&
            minic_type_unqualified(left_pointee, &left_unqualified) &&
            minic_type_unqualified(right_pointee, &right_unqualified) &&
-           minic_type_equal(left_unqualified, right_unqualified) &&
-           minic_c0_pointer_arithmetic_pointee_allowed(program, left_unqualified) &&
-           minic_c0_pointer_arithmetic_pointee_allowed(program, right_unqualified);
+           minic_c0_types_compatible(program, left_unqualified, right_unqualified) &&
+           !minic_type_is_function(left_unqualified);
 }
 
 bool minic_c0_pointer_equality_compatible(const MinicC0Program *program,

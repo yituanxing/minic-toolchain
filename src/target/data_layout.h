@@ -15,6 +15,8 @@ typedef struct MinicDataLayout {
     size_t float_alignment;
     size_t double_size;
     size_t double_alignment;
+    size_t long_double_size;
+    size_t long_double_alignment;
 } MinicDataLayout;
 
 const MinicDataLayout *minic_default_data_layout(void);

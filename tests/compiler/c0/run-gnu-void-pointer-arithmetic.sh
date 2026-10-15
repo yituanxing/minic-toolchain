@@ -17,7 +17,8 @@ mkdir -p "$work"
 test -s "$assembly"
 grep -F 'gnu_void_pointer_add:' "$assembly" >/dev/null
 grep -F 'gnu_void_pointer_subtract:' "$assembly" >/dev/null
-grep -F 'gnu_void_pointer_difference:' "$assembly" >/dev/null
+grep -F 'gnu_void_pointer_post_increment:' "$assembly" >/dev/null
+grep -F 'gnu_void_pointer_pre_increment:' "$assembly" >/dev/null
 grep -F 'linux_void_pointer_difference:' "$assembly" >/dev/null
 grep -F 'gnu_function_pointer_difference:' "$assembly" >/dev/null
 
@@ -54,4 +55,22 @@ if "$minic" -S "$work/incomplete-pointer-difference.i" \
 fi
 grep -F 'unsupported pointer arithmetic operands' "$work/incomplete-pointer-difference.stderr" >/dev/null
 
-printf '%s\n' 'PASS compiler/c0/gnu_void_pointer_arithmetic pointee=void/function stride=1 binary=+,- difference=void+function mismatched=reject incomplete-record=unchanged'
+cat >"$work/incomplete-pointer-update.c" <<'EOF'
+struct Incomplete;
+struct Incomplete *bad_update(struct Incomplete *pointer)
+{
+    return pointer++;
+}
+EOF
+"$host_cc" -E -P -std=gnu11 -x c "$work/incomplete-pointer-update.c" \
+    -o "$work/incomplete-pointer-update.i"
+if "$minic" -S "$work/incomplete-pointer-update.i" \
+    -o "$work/incomplete-pointer-update.s" \
+    2>"$work/incomplete-pointer-update.stderr"; then
+    printf '%s\n' 'incomplete object pointer update unexpectedly accepted' >&2
+    exit 1
+fi
+grep -F 'pointer update requires an arithmetic-compatible pointee type' \
+    "$work/incomplete-pointer-update.stderr" >/dev/null
+
+printf '%s\n' 'PASS compiler/c0/gnu_void_pointer_arithmetic pointee=void/function stride=1 binary=+,- update=++ difference=void+function mismatched=reject incomplete-record=unchanged'

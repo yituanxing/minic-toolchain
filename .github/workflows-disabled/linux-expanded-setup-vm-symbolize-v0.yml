@@ -1,0 +1,89 @@
+name: Linux Expanded setup_vm Symbolize V0
+
+on:
+  push:
+    branches: ["agent/linux-expanded-kbuild-v0"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  symbolize:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[linux-expanded-symbolize]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+      - name: Restore Expanded Linux out cache
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-expanded-kbuild-v0/out
+          key: linux-expanded-mixed-v1-6.6.143-${{ runner.os }}-${{ hashFiles('src/**', 'include/**', 'tools/ci/apply-*.py', 'tests/external/linux/stage2_kbuild_cc.sh') }}
+          restore-keys: |
+            linux-expanded-mixed-v1-6.6.143-${{ runner.os }}-
+      - name: Install RV64 binutils
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends binutils-riscv64-linux-gnu
+      - name: Symbolize setup_vm trap
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          out="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0/out"
+          v="$out/vmlinux"
+          w="$GITHUB_WORKSPACE/build/linux-expanded-symbolize"
+          mkdir -p "$w"
+          test -s "$v"
+          trap_va=ffffffff89e44eb4
+          printf 'TRAP_PHYS=0x8a044eb4\nTRAP_VA=0x%s\n' "$trap_va" | tee "$w/summary.txt"
+          riscv64-linux-gnu-addr2line -e "$v" -f -C -i "0x$trap_va" | tee "$w/addr2line.txt" || true
+          riscv64-linux-gnu-nm -n "$v" > "$w/nm.txt"
+          python3 - "$w/nm.txt" "$trap_va" <<'PY' | tee "$w/nearest-symbols.txt"
+          import sys
+          p=sys.argv[1]; target=int(sys.argv[2],16)
+          rows=[]
+          for line in open(p,errors='replace'):
+              f=line.split()
+              if len(f)>=3:
+                  try:a=int(f[0],16)
+                  except:continue
+                  rows.append((a,' '.join(f[1:])))
+          rows.sort()
+          below=[r for r in rows if r[0]<=target][-12:]
+          above=[r for r in rows if r[0]>target][:12]
+          for a,n in below+above: print(f'{a:016x} {a-target:+#x} {n}')
+          PY
+          start=$((0xffffffff89e44c00)); stop=$((0xffffffff89e45180))
+          riscv64-linux-gnu-objdump -d -r --start-address="$start" --stop-address="$stop" "$v" > "$w/setup-vm-disasm.txt"
+          grep -n -B60 -A60 '89e44eb4' "$w/setup-vm-disasm.txt" | tee "$w/trap-context.txt" || true
+          grep -E 'setup_vm|kernel_map|phys_ram_base|dtb_early_va|dtb_early_pa|va_pa_offset|pfn_base|_start$|_end$|early_pg_dir|trampoline_pg_dir' "$w/nm.txt" | tee "$w/relevant-symbols.txt" || true
+          riscv64-linux-gnu-readelf -sW "$v" | grep -E 'setup_vm|kernel_map|phys_ram_base|dtb_early_va|dtb_early_pa|va_pa_offset|pfn_base|early_pg_dir|trampoline_pg_dir| _start$| _end$' | tee "$w/relevant-readelf.txt" || true
+          # Decode addresses used by the two PC-relative loads immediately before the fault.
+          for a in ffffffff8fdcb538 ffffffff8fdcb4f0 ffffffff8fdcb540; do
+            python3 - "$w/nm.txt" "$a" <<'PY'
+          import sys
+          rows=[]; t=int(sys.argv[2],16)
+          for line in open(sys.argv[1],errors='replace'):
+              f=line.split()
+              if len(f)>=3:
+                  try:x=int(f[0],16)
+                  except:continue
+                  rows.append((abs(x-t),x,' '.join(f[1:])))
+          rows.sort()
+          print('TARGET',hex(t),'NEAREST',*(f'{x:016x}:{n}' for _,x,n in rows[:6]))
+          PY
+          done | tee "$w/got-nearest.txt"
+          cat "$w/addr2line.txt" "$w/nearest-symbols.txt" "$w/relevant-symbols.txt" "$w/got-nearest.txt" | tee -a "$w/summary.txt"
+      - name: Preserve symbolization
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-expanded-setup-vm-symbolize-v0
+          path: build/linux-expanded-symbolize/
+          if-no-files-found: ignore
+          retention-days: 7

@@ -48,7 +48,7 @@ run_double_return_abi() {
     "$minic" -S "$work/$name.i" -o "$work/$name.s"
     grep -F "  fmv.x.d a0, fa0" "$work/$name.s" >/dev/null
     grep -F "  fmv.d.x fa0, a0" "$work/$name.s" >/dev/null
-    grep -F "  li a0, 0x405ee00000000000" "$work/$name.s" >/dev/null
+    grep -F "0x405ee00000000000" "$work/$name.s" >/dev/null
     grep -F "  fadd.d ft0, ft0, ft1" "$work/$name.s" >/dev/null
     grep -F "  fsub.d ft0, ft0, ft1" "$work/$name.s" >/dev/null
     grep -F "  fmul.d ft0, ft0, ft1" "$work/$name.s" >/dev/null
@@ -102,6 +102,25 @@ run_case if_branch_return 6 if_else -DCASE=5
 run_case if_false_fallthrough 2 if_else -DCASE=6
 run_case if_multi_statement 9 if_else -DCASE=7
 run_case array_declaration 0 array_declaration
+run_case gnu_array_range_runtime 0 gnu_array_range_runtime
+run_case identity_record_typedef_cast 0 identity_record_typedef_cast
+run_case record_field_nonstring_attribute 0 record_field_nonstring_attribute
+run_case static_local_pointer_array_decay 0 static_local_pointer_array_decay
+run_case inferred_static_unsigned_char_list 0 inferred_static_unsigned_char_list
+run_case static_union_active_member_relocation 0 static_union_active_member_relocation
+run_case runtime_record_array_value_initializer 0 runtime_record_array_value_initializer
+run_case static_zero_length_record_field_relocation 0 static_zero_length_record_field_relocation
 run_case gnu_cleanup_runtime 0 gnu_cleanup_runtime
 run_case gnu_void_pointer_relational 0 gnu_void_pointer_relational
+run_case core_scalar_comma_qualified_runtime 0 core_scalar_comma_qualified_runtime
+run_case long_double_declaration_runtime 0 long_double_declaration_runtime
+run_case gnu_word_mode_runtime 0 gnu_word_mode_runtime
+run_case double_to_float_runtime 0 double_to_float_runtime
+run_case main_parameters_runtime 0 main_parameters_runtime
+run_case static_label_jump_table_runtime 0 static_label_jump_table_runtime
+run_case core_double_compound_runtime 0 core_double_compound_runtime
+run_case netlink_warn_guard_runtime 0 netlink_warn_guard_runtime
+run_case netfilter_hook_insertion_runtime 0 netfilter_hook_insertion_runtime
+run_case builtin_huge_val_runtime 0 builtin_huge_val_runtime
+run_case gnu_extension_prefix_runtime 0 gnu_extension_prefix_runtime
 run_double_return_abi

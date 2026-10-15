@@ -18,7 +18,7 @@ grep -F ".type touch, @function" "$work/static_functions.s" >/dev/null
 grep -F "helper:" "$work/static_functions.s" >/dev/null
 grep -F "touch:" "$work/static_functions.s" >/dev/null
 grep -F "  call helper" "$work/static_functions.s" >/dev/null
-grep -F "  j .Ltouch_return" "$work/static_functions.s" >/dev/null
+grep -F ".Ltouch_core_return:" "$work/static_functions.s" >/dev/null
 grep -F ".globl main" "$work/static_functions.s" >/dev/null
 if grep -F ".globl helper" "$work/static_functions.s" >/dev/null ||
    grep -F ".globl touch" "$work/static_functions.s" >/dev/null; then
@@ -33,7 +33,7 @@ printf '%s\n' "PASS compiler/c0/static_functions"
     -o "$work/pointer_return.i"
 "$minic" -S "$work/pointer_return.i" -o "$work/pointer_return.s"
 grep -F ".type identity, @function" "$work/pointer_return.s" >/dev/null
-grep -F "  j .Lidentity_return" "$work/pointer_return.s" >/dev/null
+grep -F ".Lidentity_core_return:" "$work/pointer_return.s" >/dev/null
 grep -F "  call identity" "$work/pointer_return.s" >/dev/null
 printf '%s\n' "PASS compiler/c0/pointer_return"
 

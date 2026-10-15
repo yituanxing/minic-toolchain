@@ -73,14 +73,18 @@ get_or_create_enum_tag(MinicParser *parser, MinicSourceSpan name_span, MinicEnum
     return *enum_id != MINIC_ENUM_INVALID || create_named_enum(parser, name_span, enum_id);
 }
 
-MinicEnumeratorId minic_parser_find_enum_constant(const MinicParser *parser,
-                                                  MinicSourceSpan name_span) {
+static MinicEnumeratorId
+find_enum_constant_in_current_scope(const MinicParser *parser, MinicSourceSpan name_span) {
+    size_t begin;
     size_t index;
 
     if (parser == NULL) {
         return MINIC_ENUMERATOR_INVALID;
     }
-    for (index = parser->enum_constant_count; index > 0U; --index) {
+    begin = parser->scope_count == 0U
+                ? 0U
+                : parser->scopes[parser->scope_count - 1U].enum_constant_begin;
+    for (index = parser->enum_constant_count; index > begin; --index) {
         const MinicParserEnumConstant *constant = &parser->enum_constants[index - 1U];
 
         if (minic_parser_span_equals(parser, name_span, constant->name_span)) {
@@ -90,6 +94,213 @@ MinicEnumeratorId minic_parser_find_enum_constant(const MinicParser *parser,
     return MINIC_ENUMERATOR_INVALID;
 }
 
+
+static size_t minic_parser_enum_name_hash(const MinicParser *parser,
+                                          MinicSourceSpan span) {
+    uint64_t hash = UINT64_C(1469598103934665603);
+    size_t length;
+    size_t index;
+    const char *name;
+
+    if (parser == NULL || parser->source == NULL) {
+        return 0U;
+    }
+    length = minic_parser_span_length(span);
+    name = parser->source + span.begin.offset;
+    for (index = 0U; index < length; ++index) {
+        hash ^= (unsigned char)name[index];
+        hash *= UINT64_C(1099511628211);
+    }
+    return (size_t)hash;
+}
+
+static bool minic_parser_enum_global_slot_insert(
+    MinicParser *parser,
+    size_t *slots,
+    size_t capacity,
+    size_t constant_index) {
+    const MinicParserEnumConstant *constant;
+    size_t mask;
+    size_t slot_index;
+    size_t probes;
+
+    if (parser == NULL || slots == NULL || constant_index >= parser->enum_constant_count ||
+        capacity == 0U || (capacity & (capacity - 1U)) != 0U) {
+        return false;
+    }
+    constant = &parser->enum_constants[constant_index];
+    mask = capacity - 1U;
+    slot_index = minic_parser_enum_name_hash(parser, constant->name_span) & mask;
+    for (probes = 0U; probes < capacity; ++probes) {
+        size_t existing_index = slots[slot_index];
+
+        if (existing_index == SIZE_MAX) {
+            slots[slot_index] = constant_index;
+            return true;
+        }
+        if (existing_index < parser->enum_constant_count &&
+            minic_parser_span_equals(
+                parser,
+                parser->enum_constants[existing_index].name_span,
+                constant->name_span)) {
+            slots[slot_index] = constant_index;
+            return true;
+        }
+        slot_index = (slot_index + 1U) & mask;
+    }
+    return false;
+}
+
+static bool minic_parser_enum_global_index_rebuild(
+    MinicParser *parser,
+    size_t global_count) {
+    size_t *slots;
+    size_t capacity = 16U;
+    size_t index;
+
+    if (parser == NULL || global_count > parser->enum_constant_count) {
+        return false;
+    }
+    while (capacity < global_count * 2U) {
+        if (capacity > SIZE_MAX / 2U) {
+            return false;
+        }
+        capacity *= 2U;
+    }
+    if (capacity > SIZE_MAX / sizeof(*slots)) {
+        return false;
+    }
+    slots = (size_t *)malloc(capacity * sizeof(*slots));
+    if (slots == NULL) {
+        return false;
+    }
+    for (index = 0U; index < capacity; ++index) {
+        slots[index] = SIZE_MAX;
+    }
+    for (index = 0U; index < global_count; ++index) {
+        if (!minic_parser_enum_global_slot_insert(
+                parser, slots, capacity, index)) {
+            free(slots);
+            return false;
+        }
+    }
+    free(parser->perf_enum_name_slots);
+    parser->perf_enum_name_slots = slots;
+    parser->perf_enum_name_slot_capacity = capacity;
+    parser->perf_enum_name_indexed_count = global_count;
+    return true;
+}
+
+static bool minic_parser_enum_global_index_sync(
+    MinicParser *parser,
+    size_t global_count) {
+    size_t index;
+
+    if (parser == NULL || global_count > parser->enum_constant_count ||
+        global_count < parser->perf_enum_name_indexed_count) {
+        return false;
+    }
+    if (parser->perf_enum_name_slots == NULL ||
+        parser->perf_enum_name_slot_capacity == 0U ||
+        global_count > parser->perf_enum_name_slot_capacity / 2U) {
+        return minic_parser_enum_global_index_rebuild(parser, global_count);
+    }
+    for (index = parser->perf_enum_name_indexed_count;
+         index < global_count;
+         ++index) {
+        if (!minic_parser_enum_global_slot_insert(
+                parser,
+                parser->perf_enum_name_slots,
+                parser->perf_enum_name_slot_capacity,
+                index)) {
+            return false;
+        }
+    }
+    parser->perf_enum_name_indexed_count = global_count;
+    return true;
+}
+
+/* Preserve newest-first enumerator semantics if the optional hash index
+ * cannot allocate or synchronize; lookup correctness must not depend on it. */
+static MinicEnumeratorId minic_parser_enum_global_linear_fallback(
+    const MinicParser *parser, MinicSourceSpan span, size_t global_count) {
+    size_t index;
+    for (index = global_count; index > 0U; --index) {
+        const MinicParserEnumConstant *constant =
+            &parser->enum_constants[index - 1U];
+        if (minic_parser_span_equals(parser, span, constant->name_span)) {
+            return constant->enumerator_id;
+        }
+    }
+    return MINIC_ENUMERATOR_INVALID;
+}
+
+MinicEnumeratorId minic_parser_find_enum_constant(
+    const MinicParser *parser_const,
+    MinicSourceSpan name_span) {
+    MinicParser *parser = (MinicParser *)parser_const;
+    size_t global_count;
+    size_t index;
+    size_t mask;
+    size_t slot_index;
+    size_t probes;
+
+    if (parser == NULL) {
+        return MINIC_ENUMERATOR_INVALID;
+    }
+    parser->perf_find_enum_calls += 1U;
+
+    /* Enumerators added after the outermost active scope began are local to
+       that function/block lifetime and may shadow file-scope names. Keep the
+       existing newest-first semantics for this usually-small suffix. */
+    global_count = parser->scope_count == 0U
+                       ? parser->enum_constant_count
+                       : parser->scopes[0].enum_constant_begin;
+    for (index = parser->enum_constant_count; index > global_count; --index) {
+        const MinicParserEnumConstant *constant =
+            &parser->enum_constants[index - 1U];
+        parser->perf_find_enum_steps += 1U;
+        if (minic_parser_span_equals(parser, name_span, constant->name_span)) {
+            return constant->enumerator_id;
+        }
+    }
+
+    if (global_count == 0U) {
+        return MINIC_ENUMERATOR_INVALID;
+    }
+#if defined(MINIC_TEST_FORCE_PARSER_HASH_FALLBACK)
+    return minic_parser_enum_global_linear_fallback(
+        parser, name_span, global_count);
+#endif
+    if (!minic_parser_enum_global_index_sync(parser, global_count) ||
+        parser->perf_enum_name_slot_capacity == 0U) {
+        return minic_parser_enum_global_linear_fallback(parser, name_span, global_count);
+    }
+    mask = parser->perf_enum_name_slot_capacity - 1U;
+    slot_index = minic_parser_enum_name_hash(parser, name_span) & mask;
+    for (probes = 0U;
+         probes < parser->perf_enum_name_slot_capacity;
+         ++probes) {
+        size_t constant_index = parser->perf_enum_name_slots[slot_index];
+
+        parser->perf_find_enum_steps += 1U;
+        if (constant_index == SIZE_MAX) {
+            return MINIC_ENUMERATOR_INVALID;
+        }
+        if (constant_index < global_count &&
+            minic_parser_span_equals(
+                parser,
+                name_span,
+                parser->enum_constants[constant_index].name_span)) {
+            return parser->enum_constants[constant_index].enumerator_id;
+        }
+        slot_index = (slot_index + 1U) & mask;
+    }
+    return minic_parser_enum_global_linear_fallback(
+        parser, name_span, global_count);
+}
+
+
 bool minic_parser_bind_enum_constant(MinicParser *parser,
                                      MinicSourceSpan name_span,
                                      MinicEnumeratorId enumerator_id) {
@@ -97,7 +308,9 @@ bool minic_parser_bind_enum_constant(MinicParser *parser,
     size_t new_capacity;
 
     if (parser == NULL || enumerator_id == MINIC_ENUMERATOR_INVALID ||
-        minic_parser_find_enum_constant(parser, name_span) != MINIC_ENUMERATOR_INVALID) {
+        find_enum_constant_in_current_scope(parser, name_span) != MINIC_ENUMERATOR_INVALID ||
+        (parser->scope_count != 0U &&
+         minic_parser_name_bound_in_current_scope(parser, name_span))) {
         if (parser != NULL) {
             minic_parser_error(parser, "duplicate enumerator name");
         }
@@ -339,6 +552,109 @@ static bool choose_enum_compatible_type(MinicParser *parser,
     return false;
 }
 
+static bool choose_packed_enum_compatible_type(MinicParser *parser,
+                                               bool saw_negative,
+                                               int64_t minimum,
+                                               uint64_t maximum,
+                                               MinicType *compatible_type) {
+    if (saw_negative) {
+        MinicType candidates[] = {minic_type_signed_char(),
+                                  minic_type_short(),
+                                  minic_type_int(),
+                                  minic_type_long(),
+                                  minic_type_long_long()};
+        size_t index;
+
+        for (index = 0U; index < sizeof(candidates) / sizeof(candidates[0]); ++index) {
+            if (signed_type_fits(parser, candidates[index], minimum, maximum)) {
+                *compatible_type = candidates[index];
+                return true;
+            }
+        }
+        return false;
+    }
+    {
+        MinicType candidates[] = {minic_type_unsigned_char(),
+                                  minic_type_unsigned_short(),
+                                  minic_type_unsigned_int(),
+                                  minic_type_unsigned_long(),
+                                  minic_type_unsigned_long_long()};
+        size_t index;
+
+        for (index = 0U; index < sizeof(candidates) / sizeof(candidates[0]); ++index) {
+            if (unsigned_type_fits(parser, candidates[index], maximum)) {
+                *compatible_type = candidates[index];
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+typedef struct MinicEnumAttributeContext {
+    bool has_byte_mode;
+    bool has_packed;
+} MinicEnumAttributeContext;
+
+static bool enum_mode_argument_is_byte(const MinicParser *parser,
+                                       const MinicParsedAttribute *attribute) {
+    size_t begin;
+    size_t end;
+    const char *value;
+    size_t length;
+
+    if (parser == NULL || attribute == NULL || !attribute->has_arguments ||
+        attribute->arguments_span.end.offset <= attribute->arguments_span.begin.offset + 1U) {
+        return false;
+    }
+    begin = attribute->arguments_span.begin.offset + 1U;
+    end = attribute->arguments_span.end.offset - 1U;
+    while (begin < end && (parser->source[begin] == ' ' || parser->source[begin] == '\t' ||
+                           parser->source[begin] == '\n' || parser->source[begin] == '\r' ||
+                           parser->source[begin] == '\f' || parser->source[begin] == '\v')) {
+        begin += 1U;
+    }
+    while (end > begin && (parser->source[end - 1U] == ' ' || parser->source[end - 1U] == '\t' ||
+                           parser->source[end - 1U] == '\n' || parser->source[end - 1U] == '\r' ||
+                           parser->source[end - 1U] == '\f' || parser->source[end - 1U] == '\v')) {
+        end -= 1U;
+    }
+    value = parser->source + begin;
+    length = end - begin;
+    return (length == 4U && memcmp(value, "byte", 4U) == 0) ||
+           (length == 8U && memcmp(value, "__byte__", 8U) == 0);
+}
+
+static bool consume_enum_attribute(MinicParser *parser,
+                                   const MinicParsedAttribute *attribute,
+                                   void *opaque_context) {
+    MinicEnumAttributeContext *context;
+
+    if (parser == NULL || attribute == NULL || opaque_context == NULL) {
+        return false;
+    }
+    context = (MinicEnumAttributeContext *)opaque_context;
+    if (attribute->descriptor == NULL ||
+        !minic_attribute_allowed_on(attribute->descriptor, MINIC_ATTRIBUTE_TARGET_TYPE)) {
+        minic_parser_error(parser, "unsupported GNU enum type attribute");
+        return false;
+    }
+    if (attribute->descriptor->kind == MINIC_ATTRIBUTE_MODE) {
+        if (!enum_mode_argument_is_byte(parser, attribute)) {
+            minic_parser_error(parser, "unsupported GNU enum mode; only mode(byte) is implemented");
+            return false;
+        }
+        context->has_byte_mode = true;
+        return true;
+    }
+    if (attribute->descriptor->kind == MINIC_ATTRIBUTE_PACKED) {
+        context->has_packed = true;
+        return true;
+    }
+    minic_parser_error(parser, "unsupported GNU enum type attribute");
+    return false;
+}
+
 bool minic_parser_parse_enum_specifier(MinicParser *parser, MinicType *enum_type) {
     MinicSourceSpan tag_span;
     MinicEnumId enum_id;
@@ -348,6 +664,7 @@ bool minic_parser_parse_enum_specifier(MinicParser *parser, MinicType *enum_type
     bool has_next;
     bool has_tag;
     bool saw_negative;
+    MinicEnumAttributeContext attribute_context;
     int64_t minimum;
     uint64_t maximum;
 
@@ -379,7 +696,7 @@ bool minic_parser_parse_enum_specifier(MinicParser *parser, MinicType *enum_type
             minic_parser_error(parser, "invalid enum tag entity");
             return false;
         }
-        *enum_type = minic_type_enum(enum_id, entity->compatible_type);
+        *enum_type = minic_type_enum(enum_id);
         return !minic_type_is_void(*enum_type);
     }
 
@@ -478,17 +795,41 @@ bool minic_parser_parse_enum_specifier(MinicParser *parser, MinicType *enum_type
     if (!minic_parser_expect(parser, MINIC_TOKEN_RBRACE, "expected '}' after enum definition")) {
         return false;
     }
+    (void)memset(&attribute_context, 0, sizeof(attribute_context));
+    if (!minic_parser_parse_gnu_attribute_lists(
+            parser, consume_enum_attribute, &attribute_context)) {
+        return false;
+    }
     {
         MinicType compatible_type;
+        bool type_fits;
 
-        if (!choose_enum_compatible_type(
-                parser, saw_negative, minimum, maximum, &compatible_type) ||
-            !minic_c0_program_finish_enum(parser->program, enum_id, compatible_type)) {
+        if (attribute_context.has_byte_mode) {
+            compatible_type = saw_negative ? minic_type_signed_char() : minic_type_unsigned_char();
+            type_fits = saw_negative ? signed_type_fits(parser, compatible_type, minimum, maximum)
+                                     : unsigned_type_fits(parser, compatible_type, maximum);
+            if (!type_fits) {
+                minic_parser_error(parser, "enum mode(byte) cannot represent enumerator values");
+                return false;
+            }
+        } else if (attribute_context.has_packed) {
+            if (!choose_packed_enum_compatible_type(
+                    parser, saw_negative, minimum, maximum, &compatible_type)) {
+                minic_parser_error(parser,
+                                   "packed enum values do not fit a supported integer type");
+                return false;
+            }
+        } else if (!choose_enum_compatible_type(
+                       parser, saw_negative, minimum, maximum, &compatible_type)) {
             minic_parser_error(parser,
                                "enum values do not fit a supported compatible integer type");
             return false;
         }
-        *enum_type = minic_type_enum(enum_id, compatible_type);
+        if (!minic_c0_program_finish_enum(parser->program, enum_id, compatible_type)) {
+            minic_parser_error(parser, "cannot finish enum compatible integer type");
+            return false;
+        }
+        *enum_type = minic_type_enum(enum_id);
         return !minic_type_is_void(*enum_type);
     }
 }

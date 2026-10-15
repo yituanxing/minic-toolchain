@@ -15,10 +15,12 @@ mkdir -p "$work"
 "$minic" -S \
     "$work/pointer_aggregate_arithmetic.i" \
     -o "$work/pointer_aggregate_arithmetic.s"
-grep -F "  li t1, 12" "$work/pointer_aggregate_arithmetic.s" >/dev/null
-grep -F "  mul a0, a0, t1" "$work/pointer_aggregate_arithmetic.s" >/dev/null
-grep -F "  mul t0, t0, t1" "$work/pointer_aggregate_arithmetic.s" >/dev/null
-printf '%s\n' "PASS compiler/c0/pointer_aggregate_arithmetic"
+
+grep -E '^[[:space:]]+li[[:space:]]+[^,]+,[[:space:]]*12$' \
+    "$work/pointer_aggregate_arithmetic.s" >/dev/null
+test "$(grep -E -c '^[[:space:]]+mul[[:space:]]+[^,]+,[[:space:]]*[^,]+,[[:space:]]*[^,]+$' \
+    "$work/pointer_aggregate_arithmetic.s")" -ge 2
+printf '%s\n' "PASS compiler/c0/pointer_aggregate_arithmetic stride=12 multiply>=2"
 
 MINIC="$minic" \
 HOST_CC="$host_cc" \

@@ -1,0 +1,144 @@
+name: Core Neigh Verifier Diagnostic
+
+on:
+  pull_request:
+
+jobs:
+  neigh-verifier:
+    if: github.head_ref == 'refactor/declaration-sema-v1'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refactor/declaration-sema-v1
+          fetch-depth: 0
+
+      - name: Restore frozen Linux corpus
+        id: linux-corpus-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-focus-corpus
+          key: linux-focus-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-${{ hashFiles('tests/external/linux/replay-indices.txt') }}
+
+      - name: Require frozen corpus
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "${{ steps.linux-corpus-cache.outputs.cache-hit }}" = true
+          test -s build/linux-focus-corpus/selected-tus.txt
+
+      - name: Add temporary Core verifier reason trace
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('src/core/core_ir.c')
+          s = p.read_text()
+          s = s.replace('#include <stdlib.h>\n', '#include <stdlib.h>\n#include <stdio.h>\n', 1)
+          old = '''        if (!instruction_is_valid(function, instruction, available_values)) {
+            return false;
+        }
+'''
+          new = '''        if (!instruction_is_valid(function, instruction, available_values)) {
+            (void)fprintf(stderr,
+                          "CORE_VERIFY_DETAIL function=%s block=%u instruction=%u kind=%d result=%u reason=instruction-invalid\\n",
+                          function->name != NULL ? function->name : "?",
+                          (unsigned int)block_id,
+                          (unsigned int)instruction_id,
+                          (int)instruction->kind,
+                          (unsigned int)instruction->result);
+            if (instruction->kind == MINIC_CORE_INSTRUCTION_INDIRECT_CALL) {
+                MinicCoreValueId callee = instruction->value.indirect_call.callee;
+                MinicCoreCallSignatureId sid = instruction->value.indirect_call.signature_id;
+                MinicType ft;
+                bool has_ft = callee < function->value_count &&
+                              minic_type_pointee(function->values[callee].type, &ft) &&
+                              minic_type_is_function(ft);
+                (void)fprintf(stderr,
+                              "CORE_VERIFY_INDIRECT function=%s callee=%u callee_available=%d has_function_type=%d callee_ftid=%u signature_id=%u signature_count=%zu signature_ftid=%u argc=%zu arg_begin=%zu\\n",
+                              function->name != NULL ? function->name : "?",
+                              (unsigned int)callee,
+                              callee < function->value_count && available_values[callee] ? 1 : 0,
+                              has_ft ? 1 : 0,
+                              has_ft ? (unsigned int)ft.function_type_id : (unsigned int)MINIC_FUNCTION_TYPE_INVALID,
+                              (unsigned int)sid,
+                              function->call_signature_count,
+                              sid < function->call_signature_count
+                                  ? (unsigned int)function->call_signatures[sid].function_type_id
+                                  : (unsigned int)MINIC_FUNCTION_TYPE_INVALID,
+                              instruction->value.indirect_call.argument_count,
+                              instruction->value.indirect_call.argument_begin);
+                if (sid < function->call_signature_count) {
+                    size_t ai;
+                    const MinicCoreCallSignature *sig = &function->call_signatures[sid];
+                    for (ai = 0U; ai < instruction->value.indirect_call.argument_count; ++ai) {
+                        size_t slot = instruction->value.indirect_call.argument_begin + ai;
+                        if (slot < function->call_argument_count &&
+                            function->call_arguments[slot].kind == MINIC_CORE_CALL_ARGUMENT_VALUE) {
+                            MinicCoreValueId av = function->call_arguments[slot].value.value_id;
+                            (void)fprintf(stderr,
+                                          "CORE_VERIFY_INDIRECT_ARG function=%s arg=%zu value=%u available=%d type_match=%d\\n",
+                                          function->name != NULL ? function->name : "?",
+                                          ai,
+                                          (unsigned int)av,
+                                          av < function->value_count && available_values[av] ? 1 : 0,
+                                          av < function->value_count && ai < sig->parameter_count &&
+                                                  minic_type_equal(function->values[av].type,
+                                                                   sig->parameter_types[ai])
+                                              ? 1
+                                              : 0);
+                        }
+                    }
+                }
+            }
+            return false;
+        }
+'''
+          if s.count(old) != 1:
+              raise SystemExit(f'verify_block insertion count={s.count(old)}')
+          s = s.replace(old, new, 1)
+          old = '''    return terminator_is_valid(function, &block->terminator, available_values);
+'''
+          new = '''    if (!terminator_is_valid(function, &block->terminator, available_values)) {
+        (void)fprintf(stderr,
+                      "CORE_VERIFY_DETAIL function=%s block=%u reason=terminator-invalid kind=%d\\n",
+                      function->name != NULL ? function->name : "?",
+                      (unsigned int)block_id,
+                      (int)block->terminator.kind);
+        return false;
+    }
+    return true;
+'''
+          if s.count(old) != 1:
+              raise SystemExit(f'terminator insertion count={s.count(old)}')
+          p.write_text(s)
+          PY
+
+      - name: Build diagnostic compiler
+        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/neigh-verify-compiler
+
+      - name: Replay all 12 neigh_output TUs
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          compiler="$GITHUB_WORKSPACE/build/neigh-verify-compiler/bin/minic"
+          work="$GITHUB_WORKSPACE/build/neigh-verify"
+          set +e
+          MINIC_CORE_IR=strict CORE_FAST_TRACE=1 python3 tests/external/linux/corpus_replay.py \
+            --minic "$compiler" \
+            --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
+            --work "$work" \
+            --jobs 4 \
+            --indices '194,195,197,212,215,219,229,230,250,281,357,410'
+          status=$?
+          set -e
+          printf 'CORE_NEIGH_VERIFY_REPLAY_STATUS=%d\n' "$status"
+          grep -R -h -E 'CORE_VERIFY_(DETAIL|INDIRECT|INDIRECT_ARG)' "$work/minic-stderr" | sort -u
+
+      - name: Persist verifier diagnostic
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: core-neigh-verifier-${{ github.sha }}
+          path: build/neigh-verify/minic-stderr/**
+          if-no-files-found: warn

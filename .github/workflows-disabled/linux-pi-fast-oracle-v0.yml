@@ -1,0 +1,295 @@
+name: Linux PI Fast Oracle V0
+
+on:
+  push:
+    branches: ["agent/linux-expanded-kbuild-v0"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: linux-pi-fast-oracle-v0-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  fast-oracle:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[linux-pi-fast]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Restore successful Expanded Linux out cache
+        id: expanded-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-expanded-kbuild-v0/out
+          key: linux-expanded-mixed-v1-6.6.143-${{ runner.os }}-${{ hashFiles('src/**', 'include/**', 'tools/ci/apply-*.py', 'tests/external/linux/stage2_kbuild_cc.sh') }}
+          restore-keys: |
+            linux-expanded-mixed-v1-6.6.143-${{ runner.os }}-
+
+      - name: Install focused prerequisites
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            build-essential gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu libc6-dev-riscv64-cross \
+            bc bison flex libssl-dev libelf-dev make curl xz-utils python3 \
+            qemu-system-misc opensbi cpio gzip file device-tree-compiler
+
+      - name: Apply current MiniC semantic stack and build compiler
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0"
+          build="$work/toolchain"
+          ev="$GITHUB_WORKSPACE/build/linux-pi-fast-oracle/evidence"
+          mkdir -p "$ev"
+          patches=(
+            apply-local-integer-assignment-v2.py
+            apply-local-integer-logical-conditions-v0.py
+            apply-local-null-pointer-facts-v0.py
+            apply-builtin-constant-p-local-facts-v0.py
+            apply-inline-integer-specialization-v0.py
+            apply-inline-specialization-local-facts-v0.py
+            apply-inline-specialization-stable-parameter-facts-v0.py
+            apply-inline-specialization-transitive-integer-v0.py
+            apply-inline-specialization-base-callee-integer-v0.py
+            apply-inline-specialization-capacity-v0.py
+            apply-inline-specialization-symbolic-address-v0.py
+            apply-inline-specialization-symbolic-nested-array-v0.py
+            apply-inline-specialization-symbolic-integer-closure-v0.py
+            apply-inline-specialization-symbolic-transitive-rewrite-v0.py
+            apply-inline-specialization-symbolic-array-lvalue-v0.py
+            apply-inline-specialization-symbolic-closed-integers-v0.py
+            apply-inline-specialization-base-callee-symbolic-v0.py
+            apply-inline-specialization-resolved-asm-goto-v0.py
+            apply-inline-specialization-core-reachability-v0.py
+            apply-inline-specialization-original-reachability-v0.py
+            apply-inline-asm-local-integer-facts-v0.py
+            apply-inline-specialization-core-empty-function-v0.py
+            apply-inline-specialization-label-alias-v0.py
+            apply-riscv64-default-text-section-v0.py
+            apply-riscv64-explicit-section-flags-v0.py
+            apply-inline-asm-symbolic-specialization-v0.py
+          )
+          start=$(date +%s)
+          for patch in "${patches[@]}"; do
+            python3 "tools/ci/$patch" >>"$ev/patch.log"
+          done
+          git diff --check
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$build" \
+            "$build/bin/minic" "$build/bin/minic-cc"
+          printf 'TIMING toolchain_s=%s\n' "$(( $(date +%s) - start ))" | tee "$ev/timing.txt"
+
+      - name: Run SATP transition micro contract
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0"
+          ev="$GITHUB_WORKSPACE/build/linux-pi-fast-oracle/evidence"
+          start=$(date +%s)
+          set +e
+          MINIC="$work/toolchain/bin/minic" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/linux-pi-fast-oracle/micro" \
+            bash tests/compiler/c0/run-gnu-inline-asm-satp-window-rv64.sh \
+            >"$ev/satp-window.log" 2>&1
+          rc=$?
+          set -e
+          printf 'SATP_WINDOW_MINIC_RC=%s\n' "$rc" | tee "$ev/summary.txt"
+          printf 'TIMING satp_micro_s=%s\n' "$(( $(date +%s) - start ))" | tee -a "$ev/timing.txt"
+          cat "$ev/satp-window.log"
+          exit 0
+
+      - name: Prepare pinned Linux 6.6.143
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0"
+          archive="$work/linux-6.6.143.tar.xz"
+          src="$work/linux-6.6.143"
+          out="$work/out"
+          ev="$GITHUB_WORKSPACE/build/linux-pi-fast-oracle/evidence"
+          test -s "$out/.config"
+          test -s "$out/arch/riscv/boot/Image"
+          start=$(date +%s)
+          if ! test -s "$archive"; then
+            curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors \
+              https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.6.143.tar.xz -o "$archive"
+          fi
+          printf '%s  %s\n' dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932 "$archive" | sha256sum -c -
+          rm -rf "$src"
+          tar -xJf "$archive" -C "$work"
+          printf 'TIMING linux_prepare_s=%s\n' "$(( $(date +%s) - start ))" | tee -a "$ev/timing.txt"
+
+      - name: Refresh MiniC PI startup objects and capture MiniC init.o
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0"
+          src="$work/linux-6.6.143"
+          out="$work/out"
+          ev="$GITHUB_WORKSPACE/build/linux-pi-fast-oracle/evidence"
+          wrapper="$GITHUB_WORKSPACE/tests/external/linux/stage2_kbuild_cc.sh"
+          rm -f "$out/arch/riscv/mm/init.o" "$out/arch/riscv/mm/.init.o.cmd"
+          targets=("arch/riscv/mm/init.o")
+          bases=(cmdline_early fdt_early string ctype lib-fdt lib-fdt_ro)
+          for base in "${bases[@]}"; do
+            rm -f "$out/arch/riscv/kernel/pi/${base}.o" "$out/arch/riscv/kernel/pi/${base}.pi.o"
+            rm -f "$out/arch/riscv/kernel/pi/.${base}.o.cmd" "$out/arch/riscv/kernel/pi/.${base}.pi.o.cmd"
+            targets+=("arch/riscv/kernel/pi/${base}.pi.o")
+          done
+          start=$(date +%s)
+          MINIC="$work/toolchain/bin/minic" REAL_CC=/usr/bin/riscv64-linux-gnu-gcc \
+          MINIC_KEEP_INTERMEDIATES=1 MINIC_KBUILD_TRACE="$ev/minic-refresh.trace" CORE_FAST_TRACE=1 \
+            make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
+              CC="$wrapper" -j4 V=1 "${targets[@]}" >"$ev/minic-refresh.log" 2>&1
+          printf 'TIMING minic_refresh_s=%s objects=%s\n' "$(( $(date +%s) - start ))" "${#targets[@]}" | tee -a "$ev/timing.txt"
+          cp "$out/arch/riscv/mm/init.o" "$ev/init.minic.o"
+          cp "$out/arch/riscv/mm/.init.o.cmd" "$ev/init.minic.cmd"
+          sha256sum "$ev/init.minic.o" | tee "$ev/init.minic.sha256"
+          riscv64-linux-gnu-objdump -dr "$ev/init.minic.o" >"$ev/init.minic.disasm.txt"
+          grep -n -A90 -B20 '<set_satp_mode>' "$ev/init.minic.disasm.txt" >"$ev/set_satp_mode.minic.txt" || true
+
+      - name: Replace only init.o with GCC oracle
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0"
+          src="$work/linux-6.6.143"
+          out="$work/out"
+          ev="$GITHUB_WORKSPACE/build/linux-pi-fast-oracle/evidence"
+          rm -f "$out/arch/riscv/mm/init.o" "$out/arch/riscv/mm/.init.o.cmd"
+          start=$(date +%s)
+          make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
+            CC=/usr/bin/riscv64-linux-gnu-gcc -j2 V=1 arch/riscv/mm/init.o \
+            >"$ev/gcc-init.log" 2>&1
+          cp "$out/arch/riscv/mm/init.o" "$ev/init.gcc.o"
+          sha256sum "$out/arch/riscv/mm/init.o" | tee "$ev/init.gcc.sha256"
+          riscv64-linux-gnu-objdump -dr "$out/arch/riscv/mm/init.o" >"$ev/init.gcc.disasm.txt"
+          grep -n -A90 -B20 '<set_satp_mode>' "$ev/init.gcc.disasm.txt" >"$ev/set_satp_mode.gcc.txt" || true
+          # Restore the MiniC command fingerprint so the subsequent Image relink
+          # accepts this one GCC-built object as an explicit diagnostic oracle.
+          cp "$ev/init.minic.cmd" "$out/arch/riscv/mm/.init.o.cmd"
+          touch "$out/arch/riscv/mm/init.o"
+          printf 'TIMING gcc_init_oracle_s=%s\n' "$(( $(date +%s) - start ))" | tee -a "$ev/timing.txt"
+          printf 'GCC_INIT_ORACLE=1\n' | tee -a "$ev/summary.txt"
+
+      - name: Relink Image without rebuilding GCC oracle init.o
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0"
+          src="$work/linux-6.6.143"
+          out="$work/out"
+          ev="$GITHUB_WORKSPACE/build/linux-pi-fast-oracle/evidence"
+          wrapper="$GITHUB_WORKSPACE/tests/external/linux/stage2_kbuild_cc.sh"
+          before=$(sha256sum "$out/arch/riscv/mm/init.o" | awk '{print $1}')
+          start=$(date +%s)
+          MINIC="$work/toolchain/bin/minic" REAL_CC=/usr/bin/riscv64-linux-gnu-gcc \
+          MINIC_KEEP_INTERMEDIATES=0 MINIC_KBUILD_TRACE="$ev/relink.trace" CORE_FAST_TRACE=1 \
+            make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
+              CC="$wrapper" -j4 V=1 Image >"$ev/relink.log" 2>&1
+          after=$(sha256sum "$out/arch/riscv/mm/init.o" | awk '{print $1}')
+          printf 'INIT_ORACLE_BEFORE=%s\nINIT_ORACLE_AFTER=%s\n' "$before" "$after" | tee -a "$ev/summary.txt"
+          test "$before" = "$after"
+          test -s "$out/arch/riscv/boot/Image"
+          printf 'TIMING relink_s=%s\n' "$(( $(date +%s) - start ))" | tee -a "$ev/timing.txt"
+          sha256sum "$out/arch/riscv/boot/Image" | tee "$ev/Image.sha256"
+
+      - name: Fast QEMU early-boot frontier with GCC init oracle
+        id: early
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          out="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0/out"
+          ev="$GITHUB_WORKSPACE/build/linux-pi-fast-oracle/evidence"
+          start=$(date +%s)
+          set +e
+          timeout --signal=TERM 8s qemu-system-riscv64 \
+            -M virt -cpu max -m 512M -smp 1 -nographic -no-reboot \
+            -bios default -kernel "$out/arch/riscv/boot/Image" \
+            -append 'console=ttyS0 earlycon=sbi loglevel=8 panic=-1' \
+            -d int,in_asm -D "$ev/qemu-oracle-trace.log" \
+            >"$ev/qemu-oracle-console.log" 2>&1
+          rc=$?
+          set -e
+          banner=0
+          if grep -a -q 'Linux version 6\.6\.143' "$ev/qemu-oracle-console.log"; then
+            banner=1
+          fi
+          printf 'EARLY_QEMU_RC=%s\nLINUX_BANNER=%s\n' "$rc" "$banner" | tee -a "$ev/summary.txt"
+          printf 'TIMING early_qemu_s=%s\n' "$(( $(date +%s) - start ))" | tee -a "$ev/timing.txt"
+          grep -a 'riscv_cpu_do_interrupt' "$ev/qemu-oracle-trace.log" | head -n 20 >"$ev/qemu-oracle-interrupts-first.txt" || true
+          grep -a 'riscv_cpu_do_interrupt' "$ev/qemu-oracle-trace.log" | tail -n 100 >"$ev/qemu-oracle-interrupts-tail.txt" || true
+          tail -n 400 "$ev/qemu-oracle-trace.log" >"$ev/qemu-oracle-trace-tail.txt" || true
+          tail -n 220 "$ev/qemu-oracle-console.log" >"$ev/qemu-oracle-console-tail.txt" || true
+          echo "banner=$banner" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Build Python-era P1 initramfs only after Linux banner
+        if: steps.early.outputs.banner == '1'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          chmod +x tests/external/linux/qemu_explicit_initrd_wrapper.py
+          work="$GITHUB_WORKSPACE/build/linux-pi-fast-oracle"
+          BUILD_DIR="$work/initramfs" \
+          OUTPUT_INITRAMFS="$work/runtime-initramfs.cpio.gz" \
+          RISCV_CC=riscv64-linux-gnu-gcc \
+            bash tests/external/linux/build_runtime_initramfs.sh
+
+      - name: Run P1 contract only after Linux banner
+        if: steps.early.outputs.banner == '1'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-pi-fast-oracle"
+          ev="$work/evidence"
+          image="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0/out/arch/riscv/boot/Image"
+          start=$(date +%s)
+          set +e
+          LINUX_IMAGE="$image" \
+          INITRAMFS="$work/runtime-initramfs.cpio.gz" \
+          BUILD_DIR="$work/qemu" \
+          LINUX_RELEASE=6.6.143 \
+          LINUX_RUNTIME_PROFILE=p1 \
+          QEMU_SYSTEM_RISCV64="$GITHUB_WORKSPACE/tests/external/linux/qemu_explicit_initrd_wrapper.py" \
+          QEMU_REAL_SYSTEM_RISCV64=qemu-system-riscv64 \
+          QEMU_EXPLICIT_DTB_DIR="$work/dtb" \
+          QEMU_TIMEOUT_SECONDS=30 \
+            bash tests/external/linux/runtime_boot.sh >"$ev/p1-driver.log" 2>&1
+          rc=$?
+          set -e
+          printf 'P1_RC=%s\nTIMING p1_s=%s\n' "$rc" "$(( $(date +%s) - start ))" | tee -a "$ev/summary.txt" "$ev/timing.txt"
+          if test -s "$work/qemu/rdinit-init.log"; then
+            cp "$work/qemu/rdinit-init.log" "$ev/rdinit-init.log"
+            python3 tests/external/linux/runtime_v2_log_check.py --profile p1 --log "$work/qemu/rdinit-init.log" \
+              >"$ev/p1-check.log" 2>&1 || true
+          fi
+          exit 0
+
+      - name: Show fast diagnostic summary
+        if: always()
+        shell: bash
+        run: |
+          ev="$GITHUB_WORKSPACE/build/linux-pi-fast-oracle/evidence"
+          echo '===== SUMMARY ====='
+          cat "$ev/summary.txt" 2>/dev/null || true
+          echo '===== TIMING ====='
+          cat "$ev/timing.txt" 2>/dev/null || true
+          echo '===== SATP MICRO ====='
+          cat "$ev/satp-window.log" 2>/dev/null || true
+
+      - name: Preserve fast oracle evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-pi-fast-oracle-v0
+          path: build/linux-pi-fast-oracle/evidence/
+          if-no-files-found: ignore
+          retention-days: 7

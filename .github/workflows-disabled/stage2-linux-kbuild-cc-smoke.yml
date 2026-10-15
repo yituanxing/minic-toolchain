@@ -1,0 +1,109 @@
+name: Stage2 Linux Kbuild CC Smoke
+
+on:
+  push:
+    branches:
+      - refactor/declaration-sema-v1
+    paths:
+      - tests/external/linux/stage2_kbuild_cc.sh
+      - .github/workflows/stage2-linux-kbuild-cc-smoke.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  init-main:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Install Linux build prerequisites
+        run: |
+          sudo apt-get -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            gcc-riscv64-linux-gnu libc6-dev-riscv64-cross \
+            bc bison flex libssl-dev libelf-dev make curl xz-utils file binutils-riscv64-linux-gnu
+
+      - name: Build exact host MiniC
+        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/kbuild-cc-smoke-compiler
+
+      - name: Prepare Linux 6.6.143 GCC reference
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/kbuild-cc-smoke"
+          archive="$work/linux-6.6.143.tar.xz"
+          src="$work/linux-6.6.143"
+          out="$work/out"
+          mkdir -p "$work"
+          curl -fsSL https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.6.143.tar.xz -o "$archive"
+          printf '%s  %s\n' \
+            dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932 \
+            "$archive" | sha256sum -c -
+          tar -xJf "$archive" -C "$work"
+          make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- defconfig
+          make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- -j4 init/main.o kernel/configs.o
+          cp "$out/init/main.o" "$work/init-main.gcc.o"
+          cp "$out/kernel/configs.o" "$work/kernel-configs.gcc.o"
+          test -s "$out/kernel/config_data.gz"
+          rm -f "$out/init/main.o" "$out/init/.main.o.cmd"
+          rm -f "$out/kernel/configs.o" "$out/kernel/.configs.o.cmd"
+          echo "LINUX_KBUILD_GCC_REFERENCE=PASS sources=init/main.c,kernel/configs.c aux=kernel/config_data.gz"
+
+      - name: Rebuild init/main.o and kernel/configs.o through MiniC Kbuild wrapper
+        shell: bash
+        env:
+          MINIC_KEEP_INTERMEDIATES: "1"
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/kbuild-cc-smoke"
+          src="$work/linux-6.6.143"
+          out="$work/out"
+          export MINIC="$GITHUB_WORKSPACE/build/kbuild-cc-smoke-compiler/bin/minic"
+          export REAL_CC=riscv64-linux-gnu-gcc
+          export MINIC_KBUILD_TRACE="$work/minic-kbuild.trace"
+          make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
+            CC="$GITHUB_WORKSPACE/tests/external/linux/stage2_kbuild_cc.sh" \
+            V=1 init/main.o kernel/configs.o >"$work/minic-kbuild.log" 2>&1
+
+          test -s "$out/init/main.o"
+          test -s "$out/kernel/configs.o"
+          test -s "$out/kernel/config_data.gz"
+          file "$out/init/main.o"
+          riscv64-linux-gnu-readelf -h "$out/init/main.o" | grep -E 'Machine:.*RISC-V'
+          riscv64-linux-gnu-readelf -h "$out/kernel/configs.o" | grep -E 'Machine:.*RISC-V'
+          grep -F 'minic input=' "$work/minic-kbuild.trace" >/dev/null
+          grep -F 'pass source=' "$work/minic-kbuild.trace" >/dev/null
+          test -s "$out/init/main.minic-stage2.i"
+          test -s "$out/init/main.minic-stage2.s"
+          test -s "$out/kernel/configs.minic-stage2.i"
+          test -s "$out/kernel/configs.minic-stage2.s"
+
+          printf 'init_main_gcc_size=%s init_main_minic_size=%s configs_gcc_size=%s configs_minic_size=%s\n' \
+            "$(stat -c %s "$work/init-main.gcc.o")" \
+            "$(stat -c %s "$out/init/main.o")" \
+            "$(stat -c %s "$work/kernel-configs.gcc.o")" \
+            "$(stat -c %s "$out/kernel/configs.o")"
+          echo "LINUX_KBUILD_MINIC_CC=PASS sources=init/main.c,kernel/configs.c aux=kernel/config_data.gz head=$GITHUB_SHA"
+
+      - name: Preserve blocker
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: stage2-linux-kbuild-cc-smoke-blocker
+          path: |
+            build/kbuild-cc-smoke/*.log
+            build/kbuild-cc-smoke/*.trace
+            build/kbuild-cc-smoke/out/init/*.i
+            build/kbuild-cc-smoke/out/init/*.s
+            build/kbuild-cc-smoke/out/init/*.o
+            build/kbuild-cc-smoke/out/kernel/*.i
+            build/kbuild-cc-smoke/out/kernel/*.s
+            build/kbuild-cc-smoke/out/kernel/*.o
+            build/kbuild-cc-smoke/out/kernel/config_data.gz
+          if-no-files-found: ignore
+          retention-days: 1

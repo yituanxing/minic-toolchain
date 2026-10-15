@@ -1,0 +1,31 @@
+name: MiniC Local Null Pointer Fact V0
+
+on:
+  push:
+    branches:
+      - agent/linux-local-integer-isolate-v1
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: minic-local-null-pointer-fact-v0-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  null-pointer-fact:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate local null pointer reachability
+        run: bash tools/ci/run-local-null-pointer-fact-v0.sh
+      - name: Preserve focused evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: minic-local-null-pointer-fact-v0
+          path: build/local-null-pointer-fact-v0/
+          if-no-files-found: ignore
+          retention-days: 5

@@ -17,6 +17,7 @@ for test_script in \
     run-anonymous-record-field-types.sh \
     run-typedef-enum-definitions.sh \
     run-enum-constant-expressions.sh \
+    run-enum-constant-scopes.sh \
     run-integer-constant-bitwise.sh \
     run-unsigned-64-literals.sh \
     run-builtin-va-list.sh \
@@ -136,6 +137,9 @@ for test_script in \
     run-gnu-extern-object-redeclaration.sh \
     run-gnu-section-symbol-attribute.sh \
     run-gnu-const-function-attribute.sh \
+    run-driver-gnu-predefines.sh \
+    run-driver-include-precedence.sh \
+    run-gnu-inline-keyword-spellings.sh \
     run-gnu-octal-character-case-range.sh
 do
     run_focused "$test_script"

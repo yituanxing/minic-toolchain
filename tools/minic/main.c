@@ -1,59 +1,700 @@
-#include "minic/compiler.h"
+#define _POSIX_C_SOURCE 200809L
 
+#include <errno.h>
+#include <stdbool.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <unistd.h>
 
-static void minic_print_usage(FILE *stream, const char *program) {
-    (void)fprintf(stream, "usage: %s -S <preprocessed-input.i> -o <output.s>\n", program);
+#define MINIC_DRIVER_MAX_INPUTS 128U
+#define MINIC_DRIVER_MAX_FORWARD_OPTIONS 128U
+#define MINIC_DRIVER_MAX_LINK_ARGUMENTS 512U
+
+typedef enum MinicDriverMode {
+    MINIC_DRIVER_LINK,
+    MINIC_DRIVER_COMPILE,
+    MINIC_DRIVER_ASSEMBLY
+} MinicDriverMode;
+
+static void append_rv64_linux_musl_predefines(char **arguments,
+                                               size_t *count,
+                                               bool hosted) {
+    arguments[(*count)++] = "-D__STDC__=1";
+    arguments[(*count)++] = "-D__STDC_VERSION__=201112L";
+    /*
+     * Product-driver GNU surface level.  Keep this deliberately conservative:
+     * real-world headers use __GNUC_PREREQ(2,7) to decide whether GNU
+     * __attribute__ syntax is available.  MiniC supports that syntax, but does
+     * not claim the later GCC builtin/optimization surface.  Advertising 2.7
+     * preserves attributes such as packed without opening newer feature paths.
+     */
+    arguments[(*count)++] = "-D__GNUC__=2";
+    arguments[(*count)++] = "-D__GNUC_MINOR__=7";
+    arguments[(*count)++] = "-D__GNUC_PATCHLEVEL__=0";
+    arguments[(*count)++] =
+        hosted ? "-D__STDC_HOSTED__=1" : "-D__STDC_HOSTED__=0";
+    arguments[(*count)++] = "-D__linux__=1";
+    arguments[(*count)++] = "-D__linux=1";
+    arguments[(*count)++] = "-Dlinux=1";
+    arguments[(*count)++] = "-D__unix__=1";
+    arguments[(*count)++] = "-D__unix=1";
+    arguments[(*count)++] = "-D__riscv=1";
+    arguments[(*count)++] = "-D__riscv_xlen=64";
+    arguments[(*count)++] = "-D__LP64__=1";
+    arguments[(*count)++] = "-D_LP64=1";
+    arguments[(*count)++] = "-D__riscv_float_abi_double=1";
+    arguments[(*count)++] = "-D__ORDER_LITTLE_ENDIAN__=1234";
+    arguments[(*count)++] = "-D__ORDER_BIG_ENDIAN__=4321";
+    arguments[(*count)++] =
+        "-D__BYTE_ORDER__=__ORDER_LITTLE_ENDIAN__";
+    arguments[(*count)++] = "-D__CHAR_BIT__=8";
+    arguments[(*count)++] = "-D__SIZEOF_SHORT__=2";
+    arguments[(*count)++] = "-D__SIZEOF_INT__=4";
+    arguments[(*count)++] = "-D__SIZEOF_LONG__=8";
+    arguments[(*count)++] = "-D__SIZEOF_LONG_LONG__=8";
+    arguments[(*count)++] = "-D__SIZEOF_POINTER__=8";
+    arguments[(*count)++] = "-D__SIZEOF_SIZE_T__=8";
+}
+
+static void usage(FILE *out, const char *argv0) {
+    fprintf(out,
+            "usage: %s [-S|-c] [-ffreestanding|-fhosted] [-static] "
+            "[-nostdlib] [-nostartfiles] [-nodefaultlibs] [-nostdinc] "
+            "[--sysroot DIR] [-DNAME[=VALUE]] [-UNAME] [-IDIR] "
+            "[-isystem DIR] [-include FILE] [-LDIR] [-lNAME] "
+            "-o OUTPUT INPUT...\n",
+            argv0);
+}
+
+static char *duplicate_text(const char *text) {
+    size_t size = strlen(text) + 1U;
+    char *copy = malloc(size);
+
+    if (copy != NULL) {
+        memcpy(copy, text, size);
+    }
+    return copy;
+}
+
+static char *join_path(const char *directory, const char *name) {
+    size_t directory_size = strlen(directory);
+    size_t name_size = strlen(name);
+    bool slash = directory_size != 0U &&
+                 directory[directory_size - 1U] != '/';
+    size_t total;
+    char *path;
+
+    if (directory_size > (size_t)-1 - name_size - 2U) {
+        return NULL;
+    }
+    total = directory_size + (slash ? 1U : 0U) + name_size + 1U;
+    path = malloc(total);
+    if (path == NULL) {
+        return NULL;
+    }
+    (void)snprintf(path,
+                   total,
+                   "%s%s%s",
+                   directory,
+                   slash ? "/" : "",
+                   name);
+    return path;
+}
+
+static char *sibling_tool(const char *argv0, const char *tool) {
+    const char *slash = strrchr(argv0, '/');
+    size_t directory_size;
+    size_t tool_size;
+    char *path;
+
+    if (slash == NULL) {
+        return duplicate_text(tool);
+    }
+    directory_size = (size_t)(slash - argv0) + 1U;
+    tool_size = strlen(tool);
+    if (directory_size > (size_t)-1 - tool_size - 1U) {
+        return NULL;
+    }
+    path = malloc(directory_size + tool_size + 1U);
+    if (path == NULL) {
+        return NULL;
+    }
+    memcpy(path, argv0, directory_size);
+    memcpy(path + directory_size, tool, tool_size + 1U);
+    return path;
+}
+
+static int run_tool(char *const arguments[]) {
+    pid_t child = fork();
+    int status;
+
+    if (child < 0) {
+        perror("minic: fork");
+        return 1;
+    }
+    if (child == 0) {
+        execvp(arguments[0], arguments);
+        perror(arguments[0]);
+        _exit(127);
+    }
+
+    do {
+        if (waitpid(child, &status, 0) >= 0) {
+            break;
+        }
+        if (errno != EINTR) {
+            perror("minic: waitpid");
+            return 1;
+        }
+    } while (true);
+
+    if (WIFEXITED(status)) {
+        return WEXITSTATUS(status);
+    }
+    if (WIFSIGNALED(status)) {
+        return 128 + WTERMSIG(status);
+    }
+    return 1;
+}
+
+static bool minic_keep_failed_temps(void) {
+    const char *value = getenv("MINIC_KEEP_FAILED_TEMPS");
+    return value != NULL && value[0] != '\0' && strcmp(value, "0") != 0;
+}
+
+static char *make_temp_path(const char *pattern) {
+    char *path = duplicate_text(pattern);
+    int descriptor;
+
+    if (path == NULL) {
+        fprintf(stderr, "minic: out-of-memory:temp-path\n");
+        return NULL;
+    }
+    descriptor = mkstemp(path);
+    if (descriptor < 0) {
+        perror("minic: mkstemp");
+        free(path);
+        return NULL;
+    }
+    if (close(descriptor) != 0) {
+        perror("minic: close");
+        (void)unlink(path);
+        free(path);
+        return NULL;
+    }
+    return path;
+}
+
+static bool has_suffix(const char *path, const char *suffix) {
+    size_t path_size;
+    size_t suffix_size;
+
+    if (path == NULL || suffix == NULL) {
+        return false;
+    }
+    path_size = strlen(path);
+    suffix_size = strlen(suffix);
+    return path_size >= suffix_size &&
+           memcmp(path + path_size - suffix_size, suffix, suffix_size) == 0;
+}
+
+static int preprocess_c_to_file(const char *input,
+                                const char *output,
+                                const char *sysroot,
+                                bool hosted,
+                                bool no_stdinc,
+                                const char *const *cpp_forward,
+                                size_t cpp_forward_count,
+                                char *cpp) {
+    char *include_dir = NULL;
+    char *arguments[256];
+    size_t count = 0U;
+    size_t index;
+    int status;
+
+    arguments[count++] = cpp;
+    arguments[count++] = "-E";
+    arguments[count++] = "-P";
+    arguments[count++] = "-undef";
+    arguments[count++] = "-nostdinc";
+    append_rv64_linux_musl_predefines(arguments, &count, hosted);
+    /*
+     * User include directories must shadow the driver's default sysroot
+     * headers, matching GCC's -I-before-system search semantics.  MiniPP
+     * currently stores -I and -isystem in one ordered search list, so forward
+     * explicit user paths before appending the implicit sysroot path.
+     */
+    for (index = 0U; index < cpp_forward_count; ++index) {
+        arguments[count++] = (char *)cpp_forward[index];
+    }
+    if (!no_stdinc && sysroot != NULL && sysroot[0] != '\0') {
+        include_dir = join_path(sysroot, "include");
+        if (include_dir == NULL) {
+            fprintf(stderr, "minic: out-of-memory:include-path\n");
+            return 1;
+        }
+        arguments[count++] = "-isystem";
+        arguments[count++] = include_dir;
+    }
+    arguments[count++] = "-o";
+    arguments[count++] = (char *)output;
+    arguments[count++] = (char *)input;
+    arguments[count] = NULL;
+
+    status = run_tool(arguments);
+    free(include_dir);
+    return status;
+}
+
+static int compile_c_to_assembly(const char *input,
+                                 const char *output,
+                                 const char *sysroot,
+                                 bool hosted,
+                                 bool no_stdinc,
+                                 const char *const *cpp_forward,
+                                 size_t cpp_forward_count,
+                                 char *cpp,
+                                 char *cc) {
+    char *temp_i = make_temp_path("/tmp/minic-driver-i-XXXXXX");
+    int status = 1;
+
+    if (temp_i == NULL) {
+        return 1;
+    }
+    status = preprocess_c_to_file(input,
+                                  temp_i,
+                                  sysroot,
+                                  hosted,
+                                  no_stdinc,
+                                  cpp_forward,
+                                  cpp_forward_count,
+                                  cpp);
+    if (status == 0) {
+        char *arguments[] = {
+            cc, "-S", temp_i, "-o", (char *)output, NULL
+        };
+        status = run_tool(arguments);
+    }
+
+    if (status != 0 && minic_keep_failed_temps()) {
+        (void)fprintf(stderr,
+                      "MINIC_FAILED_PREPROCESSED=%s source=%s\n",
+                      temp_i,
+                      input);
+    } else {
+        (void)unlink(temp_i);
+    }
+    free(temp_i);
+    return status;
+}
+
+static int compile_c_to_object(const char *input,
+                               const char *output,
+                               const char *sysroot,
+                               bool hosted,
+                               bool no_stdinc,
+                               const char *const *cpp_forward,
+                               size_t cpp_forward_count,
+                               char *cpp,
+                               char *cc,
+                               char *as) {
+    char *temp_s = make_temp_path("/tmp/minic-driver-s-XXXXXX");
+    int status = 1;
+
+    if (temp_s == NULL) {
+        return 1;
+    }
+    status = compile_c_to_assembly(input,
+                                   temp_s,
+                                   sysroot,
+                                   hosted,
+                                   no_stdinc,
+                                   cpp_forward,
+                                   cpp_forward_count,
+                                   cpp,
+                                   cc);
+    if (status == 0) {
+        char *arguments[] = {
+            as,
+            "-march=rv64gc",
+            "-mabi=lp64d",
+            "-o",
+            (char *)output,
+            temp_s,
+            NULL
+        };
+        status = run_tool(arguments);
+    }
+
+    if (status != 0 && minic_keep_failed_temps()) {
+        (void)fprintf(stderr,
+                      "MINIC_FAILED_ASSEMBLY=%s source=%s\n",
+                      temp_s,
+                      input);
+    } else {
+        (void)unlink(temp_s);
+    }
+    free(temp_s);
+    return status;
+}
+
+static bool append_forward_option(const char **options,
+                                  size_t *count,
+                                  const char *value) {
+    if (*count >= MINIC_DRIVER_MAX_FORWARD_OPTIONS) {
+        fprintf(stderr, "minic: too-many-forward-options\n");
+        return false;
+    }
+    options[(*count)++] = value;
+    return true;
 }
 
 int main(int argc, char **argv) {
-    const char *input_path;
-    const char *output_path;
-    MinicDiagnostic diagnostic;
+    const char *inputs[MINIC_DRIVER_MAX_INPUTS];
+    size_t input_count = 0U;
+    const char *output = NULL;
+    const char *sysroot = NULL;
+    const char *cpp_forward[MINIC_DRIVER_MAX_FORWARD_OPTIONS];
+    size_t cpp_forward_count = 0U;
+    const char *ld_forward[MINIC_DRIVER_MAX_FORWARD_OPTIONS];
+    size_t ld_forward_count = 0U;
+    MinicDriverMode mode = MINIC_DRIVER_LINK;
+    bool hosted = true;
+    bool static_link = false;
+    bool no_stdlib = false;
+    bool no_startfiles = false;
+    bool no_defaultlibs = false;
+    bool no_stdinc = false;
+    char *cpp = NULL;
+    char *cc = NULL;
+    char *as = NULL;
+    char *ld = NULL;
+    char *lib_dir = NULL;
+    char *crt1 = NULL;
+    char *crti = NULL;
+    char *crtn = NULL;
+    char *library_option = NULL;
+    char *temporary_objects[MINIC_DRIVER_MAX_INPUTS];
+    size_t temporary_object_count = 0U;
     int index;
-    int result;
+    int status = 1;
 
-    input_path = NULL;
-    output_path = NULL;
+    (void)memset(temporary_objects, 0, sizeof(temporary_objects));
 
     for (index = 1; index < argc; ++index) {
-        if (strcmp(argv[index], "-S") == 0) {
-            if (index + 1 >= argc || input_path != NULL) {
-                minic_print_usage(stderr, argv[0]);
+        const char *argument = argv[index];
+
+        if (strcmp(argument, "-S") == 0) {
+            mode = MINIC_DRIVER_ASSEMBLY;
+        } else if (strcmp(argument, "-c") == 0) {
+            mode = MINIC_DRIVER_COMPILE;
+        } else if (strcmp(argument, "-ffreestanding") == 0) {
+            hosted = false;
+        } else if (strcmp(argument, "-fhosted") == 0) {
+            hosted = true;
+        } else if (strcmp(argument, "-fno-builtin") == 0) {
+            /* MiniC has no implicit builtin substitution yet. */
+        } else if (strcmp(argument, "-static") == 0) {
+            static_link = true;
+        } else if (strcmp(argument, "-nostdlib") == 0) {
+            no_stdlib = true;
+        } else if (strcmp(argument, "-nostartfiles") == 0) {
+            no_startfiles = true;
+        } else if (strcmp(argument, "-nodefaultlibs") == 0) {
+            no_defaultlibs = true;
+        } else if (strcmp(argument, "-nostdinc") == 0) {
+            no_stdinc = true;
+        } else if (strcmp(argument, "-o") == 0) {
+            if (++index >= argc || output != NULL) {
+                usage(stderr, argv[0]);
                 return 2;
             }
-            input_path = argv[++index];
-        } else if (strcmp(argv[index], "-o") == 0) {
-            if (index + 1 >= argc || output_path != NULL) {
-                minic_print_usage(stderr, argv[0]);
+            output = argv[index];
+        } else if (strcmp(argument, "--sysroot") == 0) {
+            if (++index >= argc || sysroot != NULL) {
+                usage(stderr, argv[0]);
                 return 2;
             }
-            output_path = argv[++index];
-        } else if (strcmp(argv[index], "--help") == 0 || strcmp(argv[index], "-h") == 0) {
-            minic_print_usage(stdout, argv[0]);
+            sysroot = argv[index];
+        } else if (strncmp(argument, "--sysroot=", 10U) == 0) {
+            if (sysroot != NULL || argument[10] == '\0') {
+                usage(stderr, argv[0]);
+                return 2;
+            }
+            sysroot = argument + 10U;
+        } else if (strncmp(argument, "-D", 2U) == 0 ||
+                   strncmp(argument, "-U", 2U) == 0 ||
+                   strncmp(argument, "-I", 2U) == 0) {
+            if (argument[2] == '\0') {
+                if (index + 1 >= argc ||
+                    !append_forward_option(cpp_forward,
+                                           &cpp_forward_count,
+                                           argument) ||
+                    !append_forward_option(cpp_forward,
+                                           &cpp_forward_count,
+                                           argv[++index])) {
+                    usage(stderr, argv[0]);
+                    return 2;
+                }
+            } else if (!append_forward_option(
+                           cpp_forward, &cpp_forward_count, argument)) {
+                return 2;
+            }
+        } else if (strcmp(argument, "-isystem") == 0 ||
+                   strcmp(argument, "-include") == 0) {
+            if (index + 1 >= argc ||
+                !append_forward_option(
+                    cpp_forward, &cpp_forward_count, argument) ||
+                !append_forward_option(
+                    cpp_forward, &cpp_forward_count, argv[++index])) {
+                usage(stderr, argv[0]);
+                return 2;
+            }
+        } else if (strncmp(argument, "-isystem", 8U) == 0 &&
+                   argument[8] != '\0') {
+            if (!append_forward_option(
+                    cpp_forward, &cpp_forward_count, argument)) {
+                return 2;
+            }
+        } else if (strcmp(argument, "-L") == 0 ||
+                   strcmp(argument, "-l") == 0) {
+            if (index + 1 >= argc ||
+                !append_forward_option(ld_forward,
+                                       &ld_forward_count,
+                                       argument) ||
+                !append_forward_option(ld_forward,
+                                       &ld_forward_count,
+                                       argv[++index])) {
+                usage(stderr, argv[0]);
+                return 2;
+            }
+        } else if ((strncmp(argument, "-L", 2U) == 0 ||
+                    strncmp(argument, "-l", 2U) == 0) &&
+                   argument[2] != '\0') {
+            if (!append_forward_option(ld_forward,
+                                       &ld_forward_count,
+                                       argument)) {
+                return 2;
+            }
+        } else if (strcmp(argument, "-h") == 0 ||
+                   strcmp(argument, "--help") == 0) {
+            usage(stdout, argv[0]);
             return 0;
-        } else {
-            (void)fprintf(stderr, "%s: unknown argument: %s\n", argv[0], argv[index]);
-            minic_print_usage(stderr, argv[0]);
+        } else if (argument[0] == '-') {
+            fprintf(stderr, "minic: unsupported-option:%s\n", argument);
             return 2;
+        } else {
+            if (input_count >= MINIC_DRIVER_MAX_INPUTS) {
+                fprintf(stderr, "minic: too-many-inputs\n");
+                return 2;
+            }
+            inputs[input_count++] = argument;
         }
     }
 
-    if (input_path == NULL || output_path == NULL) {
-        minic_print_usage(stderr, argv[0]);
+    if (input_count == 0U || output == NULL) {
+        usage(stderr, argv[0]);
+        return 2;
+    }
+    if (mode != MINIC_DRIVER_LINK && input_count != 1U) {
+        fprintf(stderr, "minic: -S-and--c-require-one-input\n");
+        return 2;
+    }
+    if (mode != MINIC_DRIVER_LINK && ld_forward_count != 0U) {
+        fprintf(stderr, "minic: linker-options-require-link-mode\n");
+        return 2;
+    }
+    if (sysroot == NULL) {
+        sysroot = getenv("MINIC_SYSROOT");
+    }
+    if (mode == MINIC_DRIVER_LINK && !no_stdlib &&
+        (!no_startfiles || !no_defaultlibs) &&
+        (sysroot == NULL || sysroot[0] == '\0')) {
+        fprintf(stderr,
+                "minic: default-runtime-link-requires---sysroot-or-MINIC_SYSROOT\n");
         return 2;
     }
 
-    result = minic_compile_preprocessed_file(input_path, output_path, &diagnostic);
-    if (result != 0) {
-        (void)fprintf(stderr,
-                      "%s:%zu:%zu: error: %s\n",
-                      diagnostic.path != NULL ? diagnostic.path : input_path,
-                      diagnostic.line,
-                      diagnostic.column,
-                      diagnostic.message[0] != '\0' ? diagnostic.message : "compilation failed");
+    cpp = sibling_tool(argv[0], "minic-cpp");
+    cc = sibling_tool(argv[0], "minic-cc");
+    as = sibling_tool(argv[0], "minic-as");
+    ld = sibling_tool(argv[0], "minic-ld");
+    if (cpp == NULL || cc == NULL || as == NULL || ld == NULL) {
+        fprintf(stderr, "minic: out-of-memory:tool-paths\n");
+        goto done;
     }
 
-    return result;
+    if (mode == MINIC_DRIVER_ASSEMBLY) {
+        char *cc_arguments[] = {
+            cc, "-S", (char *)inputs[0], "-o", (char *)output, NULL
+        };
+
+        status = run_tool(cc_arguments);
+        goto done;
+    }
+
+    if (mode == MINIC_DRIVER_COMPILE) {
+        status = compile_c_to_object(inputs[0],
+                                     output,
+                                     sysroot,
+                                     hosted,
+                                     no_stdinc,
+                                     cpp_forward,
+                                     cpp_forward_count,
+                                     cpp,
+                                     cc,
+                                     as);
+        goto done;
+    }
+
+    if (sysroot != NULL && sysroot[0] != '\0') {
+        lib_dir = join_path(sysroot, "lib");
+        if (lib_dir == NULL) {
+            fprintf(stderr, "minic: out-of-memory:sysroot-lib-path\n");
+            goto done;
+        }
+        {
+            size_t lib_size = strlen(lib_dir);
+
+            if (lib_size > (size_t)-1 - 3U) {
+                fprintf(stderr, "minic: library-path-too-long\n");
+                goto done;
+            }
+            library_option = malloc(lib_size + 3U);
+            if (library_option == NULL) {
+                fprintf(stderr, "minic: out-of-memory:library-option\n");
+                goto done;
+            }
+            (void)snprintf(library_option, lib_size + 3U, "-L%s", lib_dir);
+        }
+        if (!no_stdlib && !no_startfiles) {
+            crt1 = join_path(lib_dir, static_link ? "crt1.o" : "Scrt1.o");
+            crti = join_path(lib_dir, "crti.o");
+            crtn = join_path(lib_dir, "crtn.o");
+            if (crt1 == NULL || crti == NULL || crtn == NULL) {
+                fprintf(stderr, "minic: out-of-memory:startup-paths\n");
+                goto done;
+            }
+        }
+    }
+
+    {
+        char *link_inputs[MINIC_DRIVER_MAX_INPUTS];
+        char *arguments[MINIC_DRIVER_MAX_LINK_ARGUMENTS];
+        size_t link_input_count = 0U;
+        size_t count = 0U;
+        size_t input_index;
+        size_t option_index;
+
+        for (input_index = 0U; input_index < input_count; ++input_index) {
+            if (has_suffix(inputs[input_index], ".c")) {
+                char *object_path =
+                    make_temp_path("/tmp/minic-driver-o-XXXXXX");
+
+                if (object_path == NULL) {
+                    goto done;
+                }
+                temporary_objects[temporary_object_count++] = object_path;
+                status = compile_c_to_object(inputs[input_index],
+                                             object_path,
+                                             sysroot,
+                                             hosted,
+                                             no_stdinc,
+                                             cpp_forward,
+                                             cpp_forward_count,
+                                             cpp,
+                                             cc,
+                                             as);
+                if (status != 0) {
+                    fprintf(stderr,
+                            "minic: input-failed:%s status=%d\n",
+                            inputs[input_index],
+                            status);
+                    goto done;
+                }
+                link_inputs[link_input_count++] = object_path;
+            } else {
+                link_inputs[link_input_count++] = (char *)inputs[input_index];
+            }
+        }
+
+        arguments[count++] = ld;
+        arguments[count++] = "-melf64lriscv";
+        if (static_link) {
+            arguments[count++] = "-static";
+        } else {
+            arguments[count++] = "-pie";
+        }
+        arguments[count++] = "-e";
+        arguments[count++] = "_start";
+        if (!static_link) {
+            arguments[count++] =
+                "--dynamic-linker=/lib/ld-musl-riscv64.so.1";
+        }
+        arguments[count++] = "-o";
+        arguments[count++] = (char *)output;
+        if (!no_stdlib && !no_startfiles) {
+            arguments[count++] = crt1;
+            arguments[count++] = crti;
+        }
+        for (input_index = 0U; input_index < link_input_count; ++input_index) {
+            arguments[count++] = link_inputs[input_index];
+        }
+        if (library_option != NULL) {
+            arguments[count++] = library_option;
+        }
+        for (option_index = 0U; option_index < ld_forward_count; ++option_index) {
+            arguments[count++] = (char *)ld_forward[option_index];
+        }
+        if (!no_stdlib && !no_defaultlibs) {
+            if (static_link) {
+                arguments[count++] = "--start-group";
+                arguments[count++] = "-lc";
+                arguments[count++] = "-lgcc";
+                arguments[count++] = "--end-group";
+            } else {
+                arguments[count++] = "-lc";
+            }
+        }
+        if (!no_stdlib && !no_startfiles) {
+            arguments[count++] = crtn;
+        }
+        arguments[count] = NULL;
+
+        status = run_tool(arguments);
+        if (status != 0) {
+            goto done;
+        }
+    }
+
+    if (chmod(output, 0755) != 0) {
+        perror("minic: chmod");
+        status = 1;
+        goto done;
+    }
+    status = 0;
+
+done:
+    while (temporary_object_count != 0U) {
+        char *path = temporary_objects[--temporary_object_count];
+
+        if (path != NULL) {
+            (void)unlink(path);
+            free(path);
+        }
+    }
+    free(cpp);
+    free(cc);
+    free(as);
+    free(ld);
+    free(lib_dir);
+    free(crt1);
+    free(crti);
+    free(crtn);
+    free(library_option);
+    return status;
 }

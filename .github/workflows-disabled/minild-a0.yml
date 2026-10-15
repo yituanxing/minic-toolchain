@@ -1,0 +1,33 @@
+name: MiniLD A0 Relocatable
+
+on:
+  push:
+    branches:
+      - "toolchain/minild-a0"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  minild-a0:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Install RISC-V GNU ld oracle
+        run: |
+          sudo apt-get -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            build-essential binutils-riscv64-linux-gnu
+
+      - name: Build MiniLD with strict warnings
+        run: |
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/minild-a0 all
+
+      - name: Run relocatable linker A0 gate
+        run: |
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/minild-a0 check-minild-a0

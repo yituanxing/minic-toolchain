@@ -50,11 +50,20 @@ minic_riscv64_emit_function_symbol_begin(FILE *file, const MinicRiscv64FunctionS
         return false;
     }
     if (symbol->section_name != NULL) {
-        if (fprintf(file, ".section %s\n", symbol->section_name) < 0) {
+        if (fprintf(file, ".section %s,\"ax\",@progbits\n", symbol->section_name) < 0) {
             return false;
         }
+#if defined(MINIC_LINUX_RUNTIME_DEFAULT_TEXT_V0)
     } else if (fprintf(file, ".text\n") < 0) {
+        /* Runtime44's validated Linux linker-script-compatible shared .text mode.
+           Keep the historical semantics unchanged for the pinned Linux build. */
         return false;
+#else
+    } else if (fprintf(file, ".section .text.%s\n", symbol->symbol_name) < 0) {
+        /* Original MiniC per-function input sections preserve --gc-sections
+           behavior for ordinary driver and MiniLD section-GC regressions. */
+        return false;
+#endif
     }
     if (!symbol->is_internal) {
         if (fprintf(file, symbol->is_weak ? ".weak %s\n" : ".globl %s\n", symbol->symbol_name) <

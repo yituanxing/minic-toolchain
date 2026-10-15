@@ -1,0 +1,3 @@
+branch consolidation trigger
+archive branch created through GitHub Git Data API
+verify all superseded tips before deletion

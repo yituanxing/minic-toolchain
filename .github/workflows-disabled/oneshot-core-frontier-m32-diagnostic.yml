@@ -1,0 +1,98 @@
+name: One-shot Core Frontier M32 Diagnostic
+
+on:
+  pull_request:
+    branches: [frontend/linux-first500-final-v1]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose-m32:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refactor/declaration-sema-v1
+          fetch-depth: 0
+
+      - name: Restore frozen Linux corpus
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-focus-corpus
+          key: linux-focus-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-5df6e0e2761359d30a8275058e299fcc0381534545f55cf43e41983f5d4c9456
+
+      - name: Print exact next-frontier function bodies
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -s build/linux-focus-corpus/selected-tus.txt
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          cases = [
+              ('init/version.i', 'arch_local_irq_enable'),
+              ('arch/riscv/kernel/sbi.i', 'ktime_to_timespec64_cond'),
+              ('arch/riscv/kernel/pi/cmdline_early.i', 'kbasename'),
+              ('kernel/time/ntp.i', 'cap_combine'),
+              ('kernel/audit.i', '__to_fd'),
+              ('kernel/seccomp.i', '__refcount_add_not_zero'),
+              ('arch/riscv/kernel/pi/string.i', 'strcpy'),
+          ]
+
+          def find_defs(text, name):
+              out=[]
+              pat=re.compile(r'\b'+re.escape(name)+r'\s*\(')
+              for m in pat.finditer(text):
+                  # Reject obvious call sites by requiring a body-opening brace before a semicolon.
+                  i=m.end(); par=1
+                  while i < len(text) and par:
+                      c=text[i]
+                      if c=='(': par+=1
+                      elif c==')': par-=1
+                      i+=1
+                  if par: continue
+                  j=i
+                  # Function suffix attrs are common; allow a generous window but reject declarations.
+                  while j < len(text) and j-i < 12000 and text[j] not in '{;':
+                      j+=1
+                  if j>=len(text) or text[j] != '{':
+                      continue
+                  depth=0; k=j; state='code'
+                  while k < len(text):
+                      c=text[k]
+                      n=text[k+1] if k+1 < len(text) else ''
+                      if state=='code':
+                          if c=='"': state='str'
+                          elif c=="'": state='char'
+                          elif c=='/' and n=='*': state='comment'; k+=1
+                          elif c=='{': depth+=1
+                          elif c=='}':
+                              depth-=1
+                              if depth==0:
+                                  start=max(0, text.rfind('\n', 0, max(0,m.start()-2500))+1)
+                                  out.append((start,k+1,text[start:k+1]))
+                                  break
+                      elif state in ('str','char'):
+                          if c=='\\': k+=1
+                          elif (state=='str' and c=='"') or (state=='char' and c=="'"): state='code'
+                      elif state=='comment' and c=='*' and n=='/':
+                          state='code'; k+=1
+                      k+=1
+              return out
+
+          root=Path('build/linux-focus-corpus/kbuild')
+          for rel,name in cases:
+              p=root/rel
+              text=p.read_text(errors='replace')
+              defs=find_defs(text,name)
+              print(f'=== M32_BODY file={rel} function={name} defs={len(defs)} ===')
+              for idx,(start,end,body) in enumerate(defs[:3]):
+                  line=text.count('\n',0,start)+1
+                  print(f'--- DEF {idx} line={line} chars={len(body)} ---')
+                  print(body)
+                  print(f'--- END DEF {idx} ---')
+          PY

@@ -49,11 +49,10 @@ cat >"$include/stdarg.h" <<'EOF'
 #ifndef MINIC_SDS_STDARG_H
 #define MINIC_SDS_STDARG_H
 typedef char *va_list;
-void *__minic_va_start(void);
-#define va_start(ap,last) ((ap) = (char *)__minic_va_start())
-#define va_end(ap) 0
-#define va_copy(dst,src) ((dst) = (src))
-#define va_arg(ap,type) (*(type *)(((ap) += 8) - 8))
+#define va_start(ap,last) __builtin_va_start(ap,last)
+#define va_end(ap) __builtin_va_end(ap)
+#define va_copy(dst,src) __builtin_va_copy(dst,src)
+#define va_arg(ap,type) __builtin_va_arg(ap,type)
 #endif
 EOF
 

@@ -23,8 +23,11 @@ int static_table_checksum(void) {
         __builtin_offsetof(MiniRegs, a0),
         1 + 2,
     };
+    static const unsigned long matrix[][2] = {
+        {101UL, 102UL},
+        {201UL, 202UL},
+    };
 
-    return (int)sizeof(nextage) + nextage[0] + nextage[6] +
-           (int)argument_offs[0] + (int)argument_offs[1] + argument_offs[2] + scalar_offset +
-           pair.first + pair.second;
+    return (int)sizeof(nextage) + nextage[0] + nextage[6] + (int)argument_offs[0] +
+           (int)argument_offs[1] + argument_offs[2] + scalar_offset + pair.first + pair.second;
 }

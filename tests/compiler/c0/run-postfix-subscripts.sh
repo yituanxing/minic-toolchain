@@ -14,10 +14,17 @@ mkdir -p "$work"
 "$minic" -S \
     "$work/postfix_subscript.i" \
     -o "$work/postfix_subscript.s"
-grep -F "  li t1, 12" "$work/postfix_subscript.s" >/dev/null
-grep -F "  mul a0, a0, t1" "$work/postfix_subscript.s" >/dev/null
-grep -F "  slli a0, a0, 2" "$work/postfix_subscript.s" >/dev/null
-printf '%s\n' "PASS compiler/c0/postfix_subscript"
+grep -F ".Lexercise_core_bb" "$work/postfix_subscript.s" >/dev/null
+grep -F ".Lexercise_core_return:" "$work/postfix_subscript.s" >/dev/null
+# The semantic owner is multidimensional pointer stride.  Core materializes
+# both the 12-byte Row stride and the 4-byte int stride through multiply rather
+# than requiring the legacy emitter's slli strength reduction.
+grep -E '^[[:space:]]+li[[:space:]]+[^,]+,[[:space:]]*12$' \
+    "$work/postfix_subscript.s" >/dev/null
+grep -E '^[[:space:]]+mul[[:space:]]+' "$work/postfix_subscript.s" >/dev/null
+grep -E '^[[:space:]]+sw[[:space:]]+[^,]+,[[:space:]]*0\([^)]*\)$' \
+    "$work/postfix_subscript.s" >/dev/null
+printf '%s\n' "PASS compiler/c0/postfix_subscript normalized=core-pointer-stride"
 
 "$host_cc" -E -P -x c \
     "$root/tests/compiler/c0/invalid_postfix_subscript_scalar.c" \

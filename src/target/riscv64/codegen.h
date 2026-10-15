@@ -8,14 +8,10 @@
 #include <stdbool.h>
 #include <stddef.h>
 
-bool minic_riscv64_write_c0_program(const char *path,
-                                    const MinicC0Program *program,
-                                    MinicDiagnostic *diagnostic);
-
-bool minic_riscv64_write_c0_program_with_core_candidates(const char *path,
-                                                         const MinicC0Program *program,
-                                                         const MinicCoreFunction *core_functions,
-                                                         size_t core_function_count,
-                                                         MinicDiagnostic *diagnostic);
+bool minic_riscv64_write_c0_program_with_core_functions(const char *path,
+                                                        const MinicC0Program *program,
+                                                        const MinicCoreFunction *core_functions,
+                                                        size_t core_function_count,
+                                                        MinicDiagnostic *diagnostic);
 
 #endif

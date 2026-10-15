@@ -1,0 +1,119 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+: "${MINIC:?MINIC is required}"
+: "${BUILD_DIR:?BUILD_DIR is required}"
+RISCV_CC=${RISCV_CC:-riscv64-linux-gnu-gcc}
+RISCV_LD=${RISCV_LD:-riscv64-linux-gnu-ld}
+RISCV_NM=${RISCV_NM:-riscv64-linux-gnu-nm}
+QEMU_RISCV64=${QEMU_RISCV64:-qemu-riscv64}
+
+work="$BUILD_DIR/inline-emission-reachability"
+rm -rf "$work"
+mkdir -p "$work"
+
+cat >"$work/reach.c" <<'C'
+extern int minic_dead_missing_symbol(void);
+
+static inline int dead_leaf(int x) {
+    return minic_dead_missing_symbol() + x;
+}
+
+static inline int dead_parent(int x) {
+    return dead_leaf(x) + 1;
+}
+
+static int dead_static_noninline(int x) {
+    return minic_dead_missing_symbol() + x + 11;
+}
+
+static inline int live_leaf(int x) {
+    return x + 1;
+}
+
+static inline int live_parent(int x) {
+    return live_leaf(x) + 1;
+}
+
+static int live_static_noninline(int x) {
+    return live_parent(x);
+}
+
+static inline int address_root(int x) {
+    return x + 3;
+}
+
+static __attribute__((used)) int kept_used(int x) {
+    return x + 9;
+}
+
+int (*address_root_ptr)(int) = address_root;
+
+int live_entry(int x) {
+    return live_static_noninline(x);
+}
+C
+
+"$MINIC" -S "$work/reach.c" -o "$work/reach.s"
+"$RISCV_CC" -x assembler -c "$work/reach.s" -o "$work/reach.o"
+"$RISCV_NM" "$work/reach.o" >"$work/reach.nm"
+"$RISCV_NM" -u "$work/reach.o" >"$work/reach.undefined"
+
+if grep -F 'minic_dead_missing_symbol' "$work/reach.undefined" >/dev/null; then
+    echo "INLINE_EMISSION_REACHABILITY_FAIL dead-undefined-survived" >&2
+    cat "$work/reach.undefined" >&2
+    exit 1
+fi
+for symbol in live_leaf live_parent live_static_noninline live_entry address_root address_root_ptr kept_used; do
+    if ! awk -v s="$symbol" '$3==s { found=1 } END { exit found ? 0 : 1 }' "$work/reach.nm"; then
+        echo "INLINE_EMISSION_REACHABILITY_FAIL missing-live-symbol=$symbol" >&2
+        cat "$work/reach.nm" >&2
+        exit 1
+    fi
+done
+for symbol in dead_leaf dead_parent dead_static_noninline; do
+    if awk -v s="$symbol" '$3==s { found=1 } END { exit found ? 0 : 1 }' "$work/reach.nm"; then
+        echo "INLINE_EMISSION_REACHABILITY_FAIL dead-symbol-emitted=$symbol" >&2
+        cat "$work/reach.nm" >&2
+        exit 1
+    fi
+done
+
+cat >"$work/start.s" <<'ASM'
+    .section .text.start,"ax",@progbits
+    .globl _start
+_start:
+    li a0, 40
+    call live_entry
+    addi a0, a0, -42
+    li a7, 93
+    ecall
+ASM
+"$RISCV_CC" -x assembler -c "$work/start.s" -o "$work/start.o"
+"$RISCV_LD" -static -e _start -o "$work/reach" "$work/start.o" "$work/reach.o"
+set +e
+"$QEMU_RISCV64" "$work/reach"
+rc=$?
+set -e
+test "$rc" -eq 0
+
+echo "INLINE_EMISSION_REACHABILITY_RV64=PASS dead_inline=discarded dead_static=discarded transitive=retained global_address=retained used=retained qemu_rc=$rc"
+
+# Existing focused RV64 runner also proves earlycon-style mutable bool,
+# second-pass goto and finite loop termination. This is a small test, not
+# another heavyweight Linux/2064-object workflow.
+MINIC="$MINIC" BUILD_DIR="$BUILD_DIR" RISCV_CC="$RISCV_CC" \
+RISCV_LD="$RISCV_LD" QEMU_RISCV64="$QEMU_RISCV64" \
+  bash "$(dirname "$0")/run-earlycon-two-pass-rv64.sh"
+
+# Independent opt-in CoreObject removal oracle: both semantic side effects
+# and an actual emitted-code reduction, compared to GNU and baseline MiniC.
+MINIC="$MINIC" BUILD_DIR="$BUILD_DIR" RISCV_CC="$RISCV_CC" \
+RISCV_LD="$RISCV_LD" QEMU_RISCV64="$QEMU_RISCV64" \
+  bash "$(dirname "$0")/run-pure-discarded-address-rv64.sh"
+
+# Real Linux RISC-V sstatus CSR register-constraint/static instruction
+# comparison against GNU assembler and compiler. These instructions are
+# privileged; do NOT attempt to execute them in user-mode QEMU.
+MINIC="$MINIC" BUILD_DIR="$BUILD_DIR" RISCV_CC="$RISCV_CC" \
+  bash "$(dirname "$0")/run-riscv64-irqflags-gcc-differential-v1.sh"

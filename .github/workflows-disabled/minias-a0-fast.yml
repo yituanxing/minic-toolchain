@@ -1,0 +1,26 @@
+name: MiniAS A0 Fast
+
+on:
+  push:
+    branches:
+      - "toolchain/minias-m0-boundary-freeze"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  a0:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[minias-a0-fast]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+      - name: Build MiniAS
+        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/minias-a0-fast all
+      - name: Run MiniAS A0
+        run: make MODE=release CFLAGS=-Werror BUILD_DIR=build/minias-a0-fast check-minias-a0
+      - name: Fast A0 exact
+        run: echo "MINIAS_A0_FAST=PASS head=$GITHUB_SHA"

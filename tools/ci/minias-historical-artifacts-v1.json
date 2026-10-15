@@ -1,0 +1,97 @@
+{
+  "schema_version": 1,
+  "repository": "yituanxing/minic-toolchain",
+  "captured_utc": "2026-10-09",
+  "purpose": "Historical immutable GitHub Actions ZIP and inner payload verification before artifact expiration; NOT a durable mirror",
+  "artifacts": {
+    "frozen-linux-corpus-first500": {
+      "id": 9692067151,
+      "run_id": 33186855250,
+      "size_in_bytes": 155799523,
+      "expires_at": "2026-11-26T15:47:26Z",
+      "zip_sha256": "2cf84f70466358789a176878ef9d18cfe9dc617b10c96ed17c0993d95b9d3ff1",
+      "files": {
+        "corpus.tar.gz": "49cf8f48faf2696a1892867ced2600a0e592a1978fc3c41d86bc7c251e03ef3f"
+      }
+    },
+    "frozen-linux-corpus-new500": {
+      "id": 9692068752,
+      "run_id": 33186855250,
+      "size_in_bytes": 163644150,
+      "expires_at": "2026-11-26T15:47:26Z",
+      "zip_sha256": "9c8ad7bb52be6da04c0dc8e81a8172f05f5b70051b3b5e06ac6531ce6ea7ce83",
+      "files": {
+        "corpus.tar.gz": "6b4b161b96c9f2cf224152ff4b5ada831fb66c9567b5f6abb4b27329eb3ea52a"
+      }
+    },
+    "frozen-linux-corpus-next500": {
+      "id": 9692061187,
+      "run_id": 33186855250,
+      "size_in_bytes": 105699069,
+      "expires_at": "2026-11-26T15:47:26Z",
+      "zip_sha256": "a41bbe2396306f5532fd176083c9a62fe5fa3eca5d193f0fba1b41688dd1d3b1",
+      "files": {
+        "corpus.tar.gz": "dd7c93b8d9bdadc09b44cff401c1f00b7f0894a43d51b5a484d8869b6398140d"
+      }
+    },
+    "frozen-linux-corpus-next500b": {
+      "id": 9692071307,
+      "run_id": 33186855250,
+      "size_in_bytes": 193678347,
+      "expires_at": "2026-11-26T15:47:26Z",
+      "zip_sha256": "b53e71a74d99087cf6f35ee5807b26632f5d14c1edca50edb2ecb4b41ef5abfb",
+      "files": {
+        "corpus.tar.gz": "0b2b769c3427ee42f7c133994c8578057a31b45af811993fe1e16e0407459222"
+      }
+    },
+    "frozen-linux-corpus-next500c": {
+      "id": 9692071756,
+      "run_id": 33186855250,
+      "size_in_bytes": 195754225,
+      "expires_at": "2026-11-26T15:47:26Z",
+      "zip_sha256": "456cb76cc4ba072fa329cdd8253bb1cc2fc707180c53d3f0a04901c380dcd1b2",
+      "files": {
+        "corpus.tar.gz": "85f4a732599ae5576703a535baffe3cb716e72196bdaf7b3c960225e3952b0f1"
+      }
+    },
+    "frozen-linux-corpus-next500d": {
+      "id": 9692066529,
+      "run_id": 33186855250,
+      "size_in_bytes": 167850516,
+      "expires_at": "2026-11-26T15:47:26Z",
+      "zip_sha256": "3417a0b04850fbc45934a1233719cbff619c0b867a92ee769ba04c94c7f3d526",
+      "files": {
+        "corpus.tar.gz": "7d121d1268b32209d0b8fb17b0ac2dfe7780ecad3498be06486b0fe3d45be81a"
+      }
+    },
+    "frozen-linux-corpus-final352": {
+      "id": 9692067580,
+      "run_id": 33186855250,
+      "size_in_bytes": 179647750,
+      "expires_at": "2026-11-26T15:47:26Z",
+      "zip_sha256": "a229a20f29d9d889225dcb085ed670ce1da6374eb13f13de8147be86de7b5544",
+      "files": {
+        "corpus.tar.gz": "31f4e305788ef63636ba520ee2b96eab46b17b2fd53b41ae94b434b78b78078a"
+      }
+    },
+    "minias-linux-sidecars-v1": {
+      "id": 9710301407,
+      "run_id": 33237304382,
+      "size_in_bytes": 61135,
+      "expires_at": "2026-11-27T05:56:34Z",
+      "zip_sha256": "a263502eb753505709b7d9be29cf5be377277f49f0b001581f07fd7306884a32",
+      "files": {
+        "kernel/config_data.gz": "8511a666382dda596a9ddba313113f77182d3156fed890a2ea9f2e86223226ff"
+      }
+    },
+    "minias-ground-truth-c149-corpus": {
+      "id": 9713937331,
+      "run_id": 33248985705,
+      "size_in_bytes": 30642213,
+      "expires_at": "2026-11-27T10:57:21Z",
+      "zip_sha256": "8b715ddb29bb00cc5e38114bdadba4e7ef05abad7634591bc298e8362c4fe4eb",
+      "files": {},
+      "note": "C149 tar was self-checksummed by producer; immutable outer ZIP digest is independently pinned."
+    }
+  }
+}

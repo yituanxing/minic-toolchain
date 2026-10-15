@@ -1,0 +1,42 @@
+# profile	id	pattern	fault_class
+p0	linux-version	Linux version 6\.6\.143	boot
+p0	pid1	(Run /init as init process|Starting init: /init)	boot
+p0	proc	INIT_PROC_MOUNT=PASS	vfs
+p0	sysfs	INIT_SYSFS_MOUNT=PASS	vfs
+p0	devtmpfs	INIT_DEVTMPFS_MOUNT=PASS	device-model
+p0	cmdline	INIT_CMDLINE_READ=PASS	procfs
+p0	tmpfs	INIT_TMPFS_RW=PASS	vfs-io
+p0	init-clean	MINIC_LINUX_RUNTIME_INIT_END fail=0	userspace
+p0	powerdown	reboot: Power down	shutdown
+p1	eventfd	RUNTIME_V2_SYSCALL_PASS eventfd-rw	eventfd
+p1	epoll	RUNTIME_V2_SYSCALL_PASS epoll-eventfd	epoll
+p1	timerfd	RUNTIME_V2_SYSCALL_PASS timerfd-read	timer
+p1	signalfd	RUNTIME_V2_SYSCALL_PASS signalfd-read	signal
+p1	inotify	RUNTIME_V2_SYSCALL_PASS inotify-create	fs-notify
+p1	socketpair	RUNTIME_V2_SYSCALL_PASS socketpair-rw	unix-socket
+p1	ipv6-loopback	RUNTIME_V2_SYSCALL_PASS ipv6-tcp-loopback	ipv6-tcp
+p1	memfd	RUNTIME_V2_SYSCALL_PASS memfd-rw	memfd
+p1	pidfd	RUNTIME_V2_SYSCALL_PASS pidfd-open	pidfd
+p1	futex	RUNTIME_V2_SYSCALL_PASS futex-wake	futex
+p1	io-uring	RUNTIME_V2_SYSCALL_PASS io-uring-setup	io-uring
+p1	mmap	RUNTIME_V2_SYSCALL_PASS mmap-mprotect	mm
+p1	probe-exec	INIT_RUNTIME_PROBE=PASS	fork-exec-wait
+p2	rootfs-rw	RUNTIME_V2_ROOTFS_RW=PASS	block-fs-io
+p2	overlay-copy-up	FUNCTION_PASS overlay-copy-up	filesystem
+p2	iptables4	FUNCTION_PASS iptables-get-info	netfilter
+p2	iptables6	FUNCTION_PASS ip6tables-get-info	netfilter-ipv6
+p2	conntrack	FUNCTION_PASS conntrack-entry-created	conntrack
+p2	bridge	FUNCTION_PASS bridge-links-up	bridge
+p2	br-netfilter	FUNCTION_PASS br-netfilter-ipv6-sysctl-toggle	netfilter-bridge
+p2	veth	FUNCTION_PASS veth-pair-created	net-device
+p2	ipv6-tcp	RUNTIME_V2_IPV6_TCP=PASS	ipv6-tcp
+p2	sha256	FUNCTION_PASS afalg-sha256-abc	crypto-width
+p2	sha512	FUNCTION_PASS afalg-sha512-abc	crypto-width
+p2	sha3	FUNCTION_PASS afalg-sha3-256-abc	crypto
+p2	blake2b	FUNCTION_PASS afalg-blake2b-512-abc	wide-enum-integer
+p2	btrfs	FUNCTION_PASS btrfs-filesystem-registered	heavy-filesystem
+p2	kvm	FUNCTION_PASS kvm-device-created	virtualization
+p2	dm	FUNCTION_PASS dm-control-device	device-mapper
+p2	virtio-gpu	FUNCTION_PASS virtio-gpu-driver-registered	drm
+p2	nvme	FUNCTION_PASS nvme-pci-driver-registered	storage-driver
+p3	full-endpoint	M38_FINAL145_V028_END pass=203 fail=0	full-historical

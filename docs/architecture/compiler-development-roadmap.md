@@ -1,5 +1,15 @@
 # Compiler-first Development Roadmap / 编译器优先开发路线
 
+> **2026-08-28 status:** the compiler-construction track described below is now
+> **FROZEN / maintenance mode**.  The acceptance evidence and maintenance
+> boundary are recorded in
+> [`docs/milestones/compiler-v1-frozen.md`](../milestones/compiler-v1-frozen.md).
+> The active project line is now **frozen Stage2 MiniC -> Linux integration ->
+> Image -> QEMU runtime**.  This document remains the historical development
+> rationale; its former "active track" wording is no longer a request to expand
+> compiler scope.
+
+
 ## 1. Permanent development rule / 长期开发规则
 
 MiniC evolves through **real, executable vertical slices**, but only one toolchain boundary is replaced at a time.
@@ -202,6 +212,14 @@ Progress expands gradually:
 A full Linux build does not authorize starting the native preprocessor automatically. That transition requires a separate milestone decision.
 
 完整 Linux 构建通过后，也不会自动开始原生预处理器接管；该切换必须作为独立里程碑决策。
+
+### Post-Compiler-V1 toolchain sequence / Compiler V1 后的工具链顺序
+
+Compiler V1 is frozen at the `.i -> .s` boundary. The next native replacement is the assembler (`.s -> .o`), followed by archiver and linker; native preprocessing is deliberately deferred until the downstream object/image path is owned.
+
+Compiler V1 已在 `.i -> .s` 边界冻结。下一项原生替换是汇编器（`.s -> .o`），随后是归档器和链接器；原生预处理器有意后置，直到下游对象文件/Image 路径已由项目自己掌握。
+
+See [`toolchain-component-boundaries.md`](toolchain-component-boundaries.md) for the frozen ownership, oracle and replacement-order contract.
 
 ## 5. Validation order / 验证顺序
 

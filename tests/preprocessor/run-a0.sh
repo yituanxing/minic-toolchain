@@ -1,0 +1,922 @@
+#!/usr/bin/env sh
+set -eu
+
+MINIPP=${MINIPP:?MINIPP is required}
+REFERENCE_CPP=${REFERENCE_CPP:-gcc}
+BUILD_DIR=${BUILD_DIR:-build}
+work="$BUILD_DIR/tests/preprocessor/a0"
+
+rm -rf "$work"
+mkdir -p "$work"
+
+reference_version="$("$REFERENCE_CPP" --version | head -n 1)"
+printf 'MINIPP_REFERENCE_CPP=%s\n' "$reference_version"
+
+run_exact() {
+    name=$1
+    shift
+    "$REFERENCE_CPP" -E -P -undef -nostdinc -x c "$@"         "$work/$name.c" -o "$work/$name.gcc.i"
+    "$MINIPP" -E -P -undef -nostdinc -x c "$@"         "$work/$name.c" -o "$work/$name.mini.i"
+    if ! cmp -s "$work/$name.gcc.i" "$work/$name.mini.i"; then
+        printf 'MINIPP_A0_EXACT=FAIL case=%s\n' "$name" >&2
+        diff -u "$work/$name.gcc.i" "$work/$name.mini.i" >&2 || true
+        return 1
+    fi
+    printf 'MINIPP_A0_CASE=PASS case=%s\n' "$name"
+}
+
+cat >"$work/plain.c" <<'EOF'
+int plain = 7;
+EOF
+run_exact plain
+
+cat >"$work/object.c" <<'EOF'
+#define ANSWER 42
+int answer = ANSWER;
+EOF
+run_exact object
+
+cat >"$work/nested.c" <<'EOF'
+#define A B
+#define B 9
+int nested = A;
+EOF
+run_exact nested
+
+cat >"$work/conditional.c" <<'EOF'
+#define ENABLED 1
+#if ENABLED
+int selected = ENABLED;
+#else
+int selected = 0;
+#endif
+EOF
+run_exact conditional
+
+cat >"$work/ifdef.c" <<'EOF'
+#define PRESENT 1
+#ifdef PRESENT
+int yes = 1;
+#endif
+EOF
+run_exact ifdef
+
+cat >"$work/cli.c" <<'EOF'
+int cli = VALUE;
+EOF
+run_exact cli -DVALUE=11
+
+cat >"$work/comment.c" <<'EOF'
+int/* comment */value = 3;
+EOF
+run_exact comment
+
+cat >"$work/local.h" <<'EOF'
+#define LOCAL_VALUE 17
+int from_local_header = LOCAL_VALUE;
+EOF
+cat >"$work/quoted-include.c" <<'EOF'
+#include "local.h"
+int after_local = LOCAL_VALUE + 1;
+EOF
+run_exact quoted-include
+
+mkdir -p "$work/inc"
+cat >"$work/inc/angle.h" <<'EOF'
+#define ANGLE_VALUE 23
+int from_angle_header = ANGLE_VALUE;
+EOF
+cat >"$work/angle-include.c" <<'EOF'
+#include <angle.h>
+int after_angle = ANGLE_VALUE + 1;
+EOF
+run_exact angle-include -I"$work/inc"
+
+mkdir -p "$work/nested"
+cat >"$work/nested/leaf.h" <<'EOF'
+#define LEAF_VALUE 31
+EOF
+cat >"$work/nested/root.h" <<'EOF'
+#include "leaf.h"
+int from_nested_header = LEAF_VALUE;
+EOF
+cat >"$work/nested-include.c" <<'EOF'
+#include "nested/root.h"
+int after_nested = LEAF_VALUE + 1;
+EOF
+run_exact nested-include
+
+cat >"$work/function.c" <<'EOF'
+#define ADD(a, b) ((a)+(b))
+int function_value = ADD(2, 3);
+EOF
+run_exact function
+
+cat >"$work/prescan.c" <<'EOF'
+#define VALUE 7
+#define ID(x) x
+int prescan_value = ID(VALUE);
+EOF
+run_exact prescan
+
+cat >"$work/function-nested.c" <<'EOF'
+#define TWICE(x) ((x)+(x))
+#define WRAP(x) TWICE(x)
+int nested_function_value = WRAP(4);
+EOF
+run_exact function-nested
+
+cat >"$work/function-zero.c" <<'EOF'
+#define ZERO() 0
+int zero_value = ZERO();
+EOF
+run_exact function-zero
+
+cat >"$work/multiple-empty-annotation-padding.c" <<'EOF'
+#define EMPTY_ANNOTATION(x)
+static int annotated_function(void)
+	EMPTY_ANNOTATION(lock_a) EMPTY_ANNOTATION(lock_b)
+{
+	return 0;
+}
+EOF
+run_exact multiple-empty-annotation-padding
+
+cat >"$work/conditional-empty-enum-line-padding.c" <<'EOF'
+#define CE_TRACE_DEFINE_ENUM(x)
+#define CE_EM(a, b) CE_TRACE_DEFINE_ENUM(a);
+#define CE_IF_DISABLED(x)
+#define CE_IF_ENABLED(x) x
+#define CE_ZONE_TYPE \
+        CE_IF_DISABLED(CE_EM(ZONE_A, "A")) \
+        CE_IF_ENABLED(CE_EM(ZONE_B, "B")) \
+                        CE_EM(ZONE_C, "C") \
+        CE_IF_DISABLED(CE_EM(ZONE_D, "D")) \
+                        CE_EM(ZONE_E, "E")
+CE_ZONE_TYPE
+EOF
+run_exact conditional-empty-enum-line-padding
+
+cat >"$work/empty-macro-padding.c" <<'EOF'
+#define EMPTY_ATTR(x)
+int empty_macro_padding(void)
+{
+       EMPTY_ATTR(lock)
+        EMPTY_ATTR(lock);
+}
+EOF
+run_exact empty-macro-padding
+
+mkdir -p "$work/forced"
+cat >"$work/forced/forced.h" <<'EOF'
+#define FORCED_VALUE 37
+int from_forced_header = FORCED_VALUE;
+EOF
+cat >"$work/forced-include.c" <<'EOF'
+int after_forced = FORCED_VALUE + 1;
+EOF
+run_exact forced-include -I"$work/forced" -include forced.h
+
+mkdir -p "$work/system"
+cat >"$work/system/system-header.h" <<'EOF'
+#define SYSTEM_VALUE 41
+int from_system_header = SYSTEM_VALUE;
+EOF
+cat >"$work/system-include.c" <<'EOF'
+#include <system-header.h>
+int after_system = SYSTEM_VALUE + 1;
+EOF
+run_exact system-include -isystem "$work/system"
+
+cat >"$work/splice-source.c" <<'EOF'
+int splice_source = 1 + \
+2;
+EOF
+run_exact splice-source
+
+cat >"$work/splice-macro.c" <<'EOF'
+#define SPLICE_ADD(a, b) ((a)+\
+(b))
+int splice_macro = SPLICE_ADD(3, 4);
+EOF
+run_exact splice-macro
+
+cat >"$work/variadic.c" <<'EOF'
+#define PICK(first, second, ...) second
+int variadic_pick = PICK(1, 2, 3, 4);
+EOF
+run_exact variadic
+
+cat >"$work/token-paste.c" <<'EOF'
+#define CAT(a, b) a##b
+#define token42 99
+int token_paste_value = CAT(token, 42);
+EOF
+run_exact token-paste
+
+cat >"$work/stringize.c" <<'EOF'
+#define STR(x) #x
+const char *stringized = STR(hello world);
+EOF
+run_exact stringize
+
+cat >"$work/stringize-forward-padding.c" <<'EOF'
+#define SINK(a, b) FINAL(a, b)
+#define DIRECT(x) FINAL("k", #x)
+#define FORWARD(x) SINK("k", #x)
+#define VPASS(fmt, ...) VSINK(fmt, ##__VA_ARGS__)
+#define VSINK(fmt, ...) FINAL(fmt, ##__VA_ARGS__)
+#define VFORWARD(x) VPASS("k", #x)
+#define NAMED_PACK(args...) VPASS(args)
+#define NAMED_FORWARD(x) NAMED_PACK("k", #x)
+#define BR_PRINT(fmt, ...) FINAL(fmt, ##__VA_ARGS__)
+#define BR_CONT(fmt, ...) BR_PRINT(fmt, ##__VA_ARGS__)
+#define BR_SEQ(m, args...) do { if (m) seq(m, args); else BR_CONT(args); } while (0)
+#define BR_STRINGIZE(x) BR_SEQ(m, "fmt", #x, value)
+#define BR_MID(s, v) BR_SEQ(m, "fmt", s, v)
+#define BR_STRINGIZE_MID(x) BR_MID(#x, value)
+DIRECT(IRQ_LEVEL)
+FORWARD(IRQ_LEVEL)
+VFORWARD(IRQ_LEVEL)
+NAMED_FORWARD(IRQ_LEVEL)
+BR_STRINGIZE(IRQ_LEVEL)
+BR_STRINGIZE_MID(IRQ_LEVEL)
+EOF
+run_exact stringize-forward-padding
+
+cat >"$work/nested-stringize-origin.c" <<'EOF'
+#define NS_INNER(ns) .ascii #ns "\\0"
+#define NS_STRINGIFY_1(x) #x
+#define NS_STRINGIFY(x) NS_STRINGIFY_1(x)
+NS_STRINGIFY(NS_INNER(CXL))
+EOF
+run_exact nested-stringize-origin
+
+cat >"$work/variadic-prescan-boundary-padding.c" <<'EOF'
+#define ZERO_ARG(x) 0
+#define SPLIT_ARG(x) hi(ZERO_ARG(x)), lo(ZERO_ARG(x))
+#define VP_OUT(fmt, ...) FINAL(fmt, ##__VA_ARGS__)
+#define VP_CONT(fmt, ...) VP_OUT(fmt, ##__VA_ARGS__)
+#define VP_SEQ(m, args...) do { if (m) direct(m, args); else VP_CONT(args); } while (0)
+VP_SEQ(m, "fmt", SPLIT_ARG(value))
+EOF
+run_exact variadic-prescan-boundary-padding
+
+cat >"$work/fixed-parameter-boundary-padding.c" <<'EOF'
+#define FP_OUT(fmt, ...) FINAL(fmt, ##__VA_ARGS__)
+#define FP_CONT(fmt, ...) FP_OUT(fmt, ##__VA_ARGS__)
+#define FP_SEQ(m, args...) do { if (m) direct(m, args); else FP_CONT(args); } while (0)
+#define FP_BRIDGE(s, v) FP_SEQ(m, "fmt", s, v)
+FP_BRIDGE("name", value)
+EOF
+run_exact fixed-parameter-boundary-padding
+
+cat >"$work/gnu-to-bare-variadic-source-spacing.c" <<'EOF'
+#define NR_FUNCTION(function, ...) function(__VA_ARGS__)
+#define NR_WARN(fmt, ...) NR_FUNCTION(NR_PRINT, fmt, ##__VA_ARGS__)
+#define NR_PRINT(fmt, ...) FINAL(fmt, ##__VA_ARGS__)
+NR_WARN("fmt",
+        dev_name, queue_index)
+EOF
+run_exact gnu-to-bare-variadic-source-spacing
+
+cat >"$work/direct-gnu-forward-object-first-vararg.c" <<'EOF'
+#define DL_INDEX(_p, _fmt, ...) _p(_fmt, ##__VA_ARGS__)
+#define DL_PRINT(fmt, ...) DL_INDEX(DL_FINAL, fmt, ##__VA_ARGS__)
+#define DL_WARN(fmt, ...) DL_PRINT("W" fmt, ##__VA_ARGS__)
+#define DL_CURRENT get_current()
+DL_WARN("%s (%d)", DL_CURRENT->comm, DL_CURRENT->pid)
+EOF
+run_exact direct-gnu-forward-object-first-vararg
+
+cat >"$work/once-lite-mixed-second-vararg-spacing.c" <<'EOF'
+#define OM_INDEX(_p, _fmt, ...) _p(_fmt, ##__VA_ARGS__)
+#define OM_PRINTK(fmt, ...) OM_INDEX(OM_FINAL, fmt, ##__VA_ARGS__)
+#define OM_ONCE_IF(condition, func, ...) func(__VA_ARGS__)
+#define OM_ONCE(func, ...) OM_ONCE_IF(1, func, ##__VA_ARGS__)
+#define OM_PRINTK_ONCE(fmt, ...) OM_ONCE(OM_PRINTK, fmt, ##__VA_ARGS__)
+#define OM_WARN_ONCE(fmt, ...) OM_PRINTK_ONCE(fmt, ##__VA_ARGS__)
+#define OM_CURRENT get_current()
+OM_WARN_ONCE("%s (%d)", OM_CURRENT->comm, task_pid_nr(OM_CURRENT))
+EOF
+run_exact once-lite-mixed-second-vararg-spacing
+
+cat >"$work/once-lite-single-vararg-spacing.c" <<'EOF'
+#define OS_INDEX(_p, _fmt, ...) _p(_fmt, ##__VA_ARGS__)
+#define OS_PRINTK(fmt, ...) OS_INDEX(OS_FINAL, fmt, ##__VA_ARGS__)
+#define OS_ONCE_IF(condition, func, ...) func(__VA_ARGS__)
+#define OS_ONCE(func, ...) OS_ONCE_IF(1, func, ##__VA_ARGS__)
+#define OS_PRINTK_ONCE(fmt, ...) OS_ONCE(OS_PRINTK, fmt, ##__VA_ARGS__)
+#define OS_WARN_ONCE(fmt, ...) OS_PRINTK_ONCE(fmt, ##__VA_ARGS__)
+#define OS_CURRENT get_current()
+OS_WARN_ONCE("%s", OS_CURRENT->comm)
+EOF
+run_exact once-lite-single-vararg-spacing
+
+cat >"$work/once-lite-gnu-bare-forward-spacing.c" <<'EOF'
+#define OL_INDEX(_p, _fmt, ...) _p(_fmt, ##__VA_ARGS__)
+#define OL_PRINTK(fmt, ...) OL_INDEX(OL_FINAL, fmt, ##__VA_ARGS__)
+#define OL_ONCE_IF(condition, func, ...) func(__VA_ARGS__)
+#define OL_ONCE(func, ...) OL_ONCE_IF(1, func, ##__VA_ARGS__)
+#define OL_PRINTK_ONCE(fmt, ...) OL_ONCE(OL_PRINTK, fmt, ##__VA_ARGS__)
+#define OL_WARN_ONCE(fmt, ...) OL_PRINTK_ONCE("W" fmt, ##__VA_ARGS__)
+#define OL_CURRENT get_current()
+OL_WARN_ONCE("%s (%d)", OL_CURRENT->comm, OL_CURRENT->pid)
+EOF
+run_exact once-lite-gnu-bare-forward-spacing
+
+cat >"$work/gnu-double-forward-first-vararg.c" <<'EOF'
+#define GF_EMIT(_fmt) ((void)0)
+#define GF_INDEX(_func, _fmt, ...) ({ GF_EMIT(_fmt); _func(_fmt, ##__VA_ARGS__); })
+#define GF_PRINT(fmt, ...) GF_INDEX(GF_FINAL, fmt, ##__VA_ARGS__)
+#define GF_OUTER(cond) do { if (cond) { GF_PRINT("Assertion %s %s", first_arg, second_arg); } } while (0)
+GF_PRINT("Top %s %s",
+         first_arg, second_arg)
+GF_OUTER(1)
+EOF
+run_exact gnu-double-forward-first-vararg
+
+cat >"$work/kconfig-style.c" <<'EOF'
+#define __ARG_PLACEHOLDER_1 0,
+#define __take_second_arg(__ignored, val, ...) val
+#define __is_defined(x) ___is_defined(x)
+#define ___is_defined(val) ____is_defined(__ARG_PLACEHOLDER_##val)
+#define ____is_defined(arg1_or_junk) __take_second_arg(arg1_or_junk 1, 0)
+#define CONFIG_MINIPP_FEATURE 1
+int kconfig_yes = __is_defined(CONFIG_MINIPP_FEATURE);
+int kconfig_no = __is_defined(CONFIG_MINIPP_MISSING);
+EOF
+run_exact kconfig-style
+
+cat >"$work/if-relational.c" <<'EOF'
+#if __STDC_VERSION__ < 202311L
+int pre_c23 = 1;
+#else
+int pre_c23 = 0;
+#endif
+EOF
+run_exact if-relational -D__STDC_VERSION__=201710L
+
+cat >"$work/if-precedence.c" <<'EOF'
+#define LEFT 3
+#define RIGHT 4
+#if defined(LEFT) && !defined(MISSING) && ((LEFT + RIGHT * 2) == 11)
+int precedence = 1;
+#else
+int precedence = 0;
+#endif
+EOF
+run_exact if-precedence
+
+cat >"$work/if-bitwise-ternary.c" <<'EOF'
+#define MASK 0x6U
+#if ((MASK & 0x2U) != 0U) ? ((8 >> 1) == 4) : 0
+int bitwise_ternary = 1;
+#else
+int bitwise_ternary = 0;
+#endif
+EOF
+run_exact if-bitwise-ternary
+
+cat >"$work/if-prefixed-character.c" <<'EOF'
+#if L'\0' - 1 > 0
+int wide_zero_relation = 0;
+#else
+int wide_zero_relation = 1;
+#endif
+#if L'A' == 65 && u'B' == 66 && U'C' == 67
+int prefixed_character_values = 1;
+#else
+int prefixed_character_values = 0;
+#endif
+EOF
+run_exact if-prefixed-character
+
+cat >"$work/if-empty-object-arithmetic.c" <<'EOF'
+#define FLEXARRAY
+#if FLEXARRAY+1 > 1
+int flexarray_nonempty = 1;
+#else
+int flexarray_nonempty = 0;
+#endif
+
+#define FEATURE
+#if FEATURE + 2 == 2
+int empty_feature_arithmetic = 1;
+#else
+int empty_feature_arithmetic = 0;
+#endif
+EOF
+run_exact if-empty-object-arithmetic
+
+cat >"$work/multiline-invocation.c" <<'EOF'
+#define SUM3(a, b, c) ((a) + (b) + (c))
+int multiline_invocation = SUM3(1,
+                                2,
+                                3);
+EOF
+run_exact multiline-invocation
+
+cat >"$work/pragma.c" <<'EOF'
+  #   pragma   GCC   diagnostic   push
+#pragma GCC diagnostic ignored "-Wunused-variable"
+int pragma_value;
+#pragma GCC diagnostic pop
+EOF
+run_exact pragma
+
+cat >"$work/pragma-operator.c" <<'EOF'
+#define DO_PRAGMA(x) _Pragma(#x)
+#define DIAG_STR1(x) #x
+#define DIAG_STR(x) DIAG_STR1(x)
+#define DIAG(x) _Pragma(DIAG_STR(GCC diagnostic x))
+#define DIAG_PUSH() DIAG(push)
+#define DIAG_POP() DIAG(pop)
+DO_PRAGMA(GCC diagnostic push);
+DO_PRAGMA(GCC diagnostic ignored "-Wmissing-prototypes");
+DIAG_PUSH();
+int pragma_operator_value;
+DIAG_POP();
+DO_PRAGMA(GCC diagnostic pop);
+EOF
+run_exact pragma-operator
+
+cat >"$work/object-to-function-rescan.c" <<'EOF'
+#define TARGET(x) ((x) + 1)
+#define ALIAS TARGET
+#define CHAIN ALIAS
+int alias_call = ALIAS(4);
+int chain_call = CHAIN(5);
+EOF
+run_exact object-to-function-rescan
+
+cat >"$work/function-macro-cross-line-invocation.c" <<'EOF'
+#define CROSS_LINE(n, v) { .label = n, .number = v }
+CROSS_LINE
+    ("alpha", 7)
+EOF
+run_exact function-macro-cross-line-invocation
+
+cat >"$work/object-alias-reentry-arg.c" <<'EOF'
+#define OA_ALIAS OA_IMPL
+#define OA_IMPL(n, d) (((n) + (d) - 1) / (d))
+#define OA_INNER OA_ALIAS(8, 2)
+int object_alias_reentry_arg = OA_ALIAS(20, OA_INNER);
+EOF
+run_exact object-alias-reentry-arg
+
+cat >"$work/computed-include.h" <<'EOF'
+#define COMPUTED_INCLUDE_VALUE 53
+EOF
+cat >"$work/computed-include.c" <<'EOF'
+#define STR1(x) #x
+#define STR(x) STR1(x)
+#define HEADER_NAME computed-include.h
+#define HEADER(x) STR(x)
+#include HEADER(HEADER_NAME)
+int computed_include = COMPUTED_INCLUDE_VALUE;
+EOF
+run_exact computed-include
+
+cat >"$work/self-reference-token-paste-hideset.c" <<'EOF'
+#define PASTE_TARGET_SELF 7
+#define PASTE_INNER(op, value) PASTE_TARGET_##op value
+#define SELF(value) PASTE_INNER(SELF, value)
+SELF(3)
+EOF
+run_exact self-reference-token-paste-hideset
+
+cat >"$work/self-referential-macro-hideset.c" <<'EOF'
+#define HIDE_ATTR __attribute__((unused))
+#define inline inline HIDE_ATTR
+#define HIDE_PAIR(prefix) prefix int hide_a; prefix int hide_b;
+HIDE_PAIR(static inline)
+EOF
+run_exact self-referential-macro-hideset
+
+cat >"$work/post-expansion-identifier-separator.c" <<'EOF'
+#define LEFT(name) name
+#define RIGHT suffix
+LEFT(foo)RIGHT
+EOF
+run_exact post-expansion-identifier-separator
+
+cat >"$work/gnu-named-empty-comma-padding.c" <<'EOF'
+#define FAT_ERR(sb, fmt, args...) F(sb, 1, fmt , ## args)
+FAT_ERR(s, "Odd directory size");
+EOF
+run_exact gnu-named-empty-comma-padding
+
+cat >"$work/gnu-comma-paste-repeated-counter-rescan.c" <<'EOF'
+#define COUNTER_TWICE(fmt, arg...) A(fmt, ##arg); B(fmt, ##arg)
+COUNTER_TWICE("x", __COUNTER__, __COUNTER__)
+EOF
+run_exact gnu-comma-paste-repeated-counter-rescan
+
+cat >"$work/gnu-empty-variadic.c" <<'EOF'
+#define STATIC_ASSERT(expr, ...) INNER_ASSERT(expr, ##__VA_ARGS__, #expr)
+#define INNER_ASSERT(expr, msg, ...) _Static_assert(expr, msg)
+STATIC_ASSERT(1 + 1 == 2);
+EOF
+run_exact gnu-empty-variadic
+
+cat >"$work/builtin-location.c" <<'EOF'
+const char *builtin_file = __FILE__;
+int builtin_line = __LINE__;
+#define BUILTIN_LINE() __LINE__
+int macro_builtin_line = BUILTIN_LINE();
+EOF
+run_exact builtin-location
+
+cat >"$work/builtin-header.h" <<'EOF'
+const char *header_builtin_file = __FILE__;
+int header_builtin_line = __LINE__;
+EOF
+cat >"$work/builtin-include.c" <<'EOF'
+#include "builtin-header.h"
+int after_builtin_header = __LINE__;
+EOF
+run_exact builtin-include
+
+cat >"$work/builtin-counter.c" <<'EOF'
+#define COUNTER_PASTE2(a, b) a##b
+#define COUNTER_PASTE(a, b) COUNTER_PASTE2(a, b)
+int counter_zero = __COUNTER__;
+int counter_one = __COUNTER__;
+int COUNTER_PASTE(unique_, __COUNTER__) = 2;
+EOF
+run_exact builtin-counter
+
+cat >"$work/multiline-builtin-line.c" <<'EOF'
+#define WHERE(x) __LINE__
+int multiline_builtin_line = WHERE(
+    1
+);
+EOF
+run_exact multiline-builtin-line
+
+cat >"$work/unused-counter-arg.c" <<'EOF'
+#define SECOND(a, b) b
+int counter_before = __COUNTER__;
+int counter_macro = SECOND(
+    __COUNTER__,
+    __COUNTER__);
+int counter_after = __COUNTER__;
+EOF
+run_exact unused-counter-arg
+
+cat >"$work/directive-in-macro-arg.c" <<'EOF'
+#define IDENTITY(x) x
+int directive_in_arg = IDENTITY(
+#if 1
+    7
+#else
+    9
+#endif
+);
+EOF
+run_exact directive-in-macro-arg
+
+cat >"$work/whitespace-render.c" <<'EOF'
+		int leading_tabs;
+int		interior_tabs	=	1;
+
+
+int after_blank_lines;
+/* comment-only line */
+#define EMPTY_LINE_MACRO()
+EMPTY_LINE_MACRO()
+int after_empty_macro;
+EOF
+run_exact whitespace-render
+
+cat >"$work/pasted-function-boundary.c" <<'EOF'
+#define CAT2(a, b) a##b
+#define CAT(a, b) CAT2(a, b)
+#define TARGET_0(x) ((x) + 1)
+#define DISPATCH(flag, x) CAT(TARGET_, flag)(x)
+int pasted_function_boundary = DISPATCH(0, 4);
+EOF
+run_exact pasted-function-boundary
+
+cat >"$work/gnu-variadic-spacing.c" <<'EOF'
+#define VARGS(...) f(__VA_ARGS__)
+#define GNU_VARGS(first, ...) f(first, ## __VA_ARGS__)
+int vargs_tight = VARGS(1,2);
+int vargs_spaced = VARGS(1, 2);
+int gnu_one = GNU_VARGS(1, 2);
+int gnu_tight = GNU_VARGS(1,2);
+int gnu_many = GNU_VARGS(1, 2, 3);
+EOF
+run_exact gnu-variadic-spacing
+
+cat >"$work/nested-argument-line.c" <<'EOF'
+#define INNER_LINE() __LINE__
+#define PASS_LINE(x) x
+int nested_argument_line = PASS_LINE(
+    INNER_LINE()
+);
+EOF
+run_exact nested-argument-line
+
+cat >"$work/nested-mid-argument-line.c" <<'EOF'
+#define INNER_MID_LINE() __LINE__
+#define PASS_MID_LINE(x) x
+int nested_mid_argument_line = PASS_MID_LINE(1 +
+    INNER_MID_LINE());
+EOF
+run_exact nested-mid-argument-line
+
+cat >"$work/gnu-variadic-invocation-line.c" <<'EOF'
+#define LINE_WRAP(fmt, ...) LINE_SINK(fmt, ##__VA_ARGS__)
+#define LINE_SINK(fmt, ...) FINAL(fmt, ##__VA_ARGS__)
+LINE_WRAP("line",
+          __LINE__)
+EOF
+run_exact gnu-variadic-invocation-line
+
+cat >"$work/nested-variadic-padding.c" <<'EOF'
+#define STMT(x) ({ x; })
+#define WRAP_IF(cond, func, ...) ({ if (cond) func(__VA_ARGS__); })
+#define WRAP(func, ...) WRAP_IF(1, func, ##__VA_ARGS__)
+#define IDX(fn, fmt, ...) ({ fn(fmt, ##__VA_ARGS__); })
+#define PRINT(fmt, ...) IDX(F, fmt, ##__VA_ARGS__)
+#define ONCE(fmt, ...) WRAP(PRINT, fmt, ##__VA_ARGS__)
+#define INFO(fmt, ...) ONCE("x" fmt, ##__VA_ARGS__)
+#define PASTE_ONLY(fmt, ...) PRINT(fmt, ##__VA_ARGS__)
+IDX(F, "a", STMT(1))
+PRINT("b", STMT(2))
+WRAP(PRINT, "c", STMT(3))
+ONCE("d", STMT(4))
+INFO("e", STMT(5))
+PASTE_ONLY("p", STMT(6))
+EOF
+run_exact nested-variadic-padding
+
+cat >"$work/named-variadic-prescan-spacing.c" <<'EOF'
+#define NAMED_OBJ CUR()
+#define NAMED_FORWARD(format...) NAMED_TARGET(format)
+#define NAMED_TARGET(...) F(__VA_ARGS__)
+NAMED_FORWARD("x", NAMED_OBJ, NAMED_OBJ)
+EOF
+run_exact named-variadic-prescan-spacing
+
+cat >"$work/pp-number-padding.c" <<'EOF'
+#define MINUS_ONE(x) x-1
+#define PLUS_ONE(x) x+1
+#define DOT_ZERO(x) x.0
+int minus_number = MINUS_ONE(64);
+int plus_number = PLUS_ONE(0x10U);
+int dot_number = DOT_ZERO(1);
+int minus_ident = MINUS_ONE(name);
+EOF
+run_exact pp-number-padding
+
+cat >"$work/object-number-padding.c" <<'EOF'
+#define BITS_PER_WORD 64
+#define HEX_LIMIT 0x10U
+int object_minus = BITS_PER_WORD-1;
+int object_plus = HEX_LIMIT+1;
+int object_dot = BITS_PER_WORD.0;
+EOF
+run_exact object-number-padding
+
+cat >"$work/leading-comment-columns.c" <<'EOF'
+	/**/TOKEN_A
+	/*x*/TOKEN_B
+	/*open
+close*/TOKEN_C
+EOF
+run_exact leading-comment-columns
+
+cat >"$work/empty-leading-nested-macro.c" <<'EOF'
+#define EMPTY(x)
+#define KEEP(x) x
+#define OUT(x) EMPTY(x) KEEP(x)
+#define OUT4(x) EMPTY(x)    KEEP(x)
+OUT(column_zero)
+		OUT(indented)
+OUT4(column_zero_four)
+		OUT4(indented_four)
+EOF
+run_exact empty-leading-nested-macro
+
+cat >"$work/pragma-operator-boundary-space.c" <<'EOF'
+#define PB_STR1(s) #s
+#define PB_STR(s) PB_STR1(s)
+#define PB_DIAG(s) _Pragma(PB_STR(GCC diagnostic s))
+#define PB_IGNORE() PB_DIAG(ignored "-Wformat-zero-length")
+#define PB_WARN() PB_DIAG(warning "-Wformat-zero-length")
+#define PB_ASSERT(x) do { PB_IGNORE(); do { x; } while (0); PB_WARN(); } while (0)
+PB_ASSERT(foo())
+EOF
+run_exact pragma-operator-boundary-space
+
+cat >"$work/pragma-operator-tight-boundary.c" <<'EOF'
+#define PT_STR1(s) #s
+#define PT_STR(s) PT_STR1(s)
+#define PT_DIAG(s) _Pragma(PT_STR(GCC diagnostic s))
+foo();PT_DIAG(push)
+bar(); PT_DIAG(pop)
+EOF
+run_exact pragma-operator-tight-boundary
+
+cat >"$work/pragma-operator-deep-multiline-boundary.c" <<'EOF'
+#define PD_STR1(s) #s
+#define PD_STR(s) PD_STR1(s)
+#define PD_DIAG(s) _Pragma(PD_STR(GCC diagnostic s))
+#define PD_GCC_ignore ignored
+#define PD_GCC_warn warning
+#define PD_GCC_8(s) PD_DIAG(s)
+#define PD_GCC(version, severity, s) PD_GCC_ ## version(PD_GCC_ ## severity s)
+#define PD_IGNORE(option) PD_GCC(8, ignore, option)
+#define PD_WARN(option) PD_GCC(8, warn, option)
+#define PD_ASSERT(x) do { \
+        PD_IGNORE("-Wformat-zero-length"); \
+        do { x; } while (0); \
+        PD_WARN("-Wformat-zero-length"); \
+} while (0)
+PD_ASSERT(foo())
+EOF
+run_exact pragma-operator-deep-multiline-boundary
+
+cat >"$work/empty-prefix-annotation-column.c" <<'EOF'
+#define EP_ANNOT
+struct ep_record {
+ EP_ANNOT char *hname;
+};
+EOF
+run_exact empty-prefix-annotation-column
+
+cat >"$work/unary-minus-parameter-boundary.c" <<'EOF'
+#define UB_ERRNO 111
+#define UB_DROP(x) (((-x) << 16) | 0)
+UB_DROP(-UB_ERRNO)
+EOF
+run_exact unary-minus-parameter-boundary
+
+cat >"$work/dotted-pp-number-stringize.c" <<'EOF'
+#define DS_MAJOR 1
+#define DS_MINOR 5
+#define DS_RELEASE 2
+#define DS_VERSION DS_MAJOR.DS_MINOR.DS_RELEASE
+#define DS_QUOTE(x) #x
+#define DS_EXPAND_QUOTE(x) DS_QUOTE(x)
+DS_EXPAND_QUOTE(DS_VERSION)
+EOF
+run_exact dotted-pp-number-stringize
+
+cat >"$work/prfmt-fixed-to-variadic-spacing.c" <<'EOF'
+#define PF_INDEX(_p, _fmt, ...) _p(_fmt, ##__VA_ARGS__)
+#define PF_PRINT(fmt, ...) PF_INDEX(PF_FINAL, fmt, ##__VA_ARGS__)
+#define PF_FMT(fmt) "mod" ":pid:%d:%s: " fmt, PF_CURRENT->pid, __func__
+#define PF_WARN(fmt, ...) PF_PRINT("W" PF_FMT(fmt), ##__VA_ARGS__)
+#define PF_CURRENT get_current()
+PF_WARN("bad\n")
+EOF
+run_exact prfmt-fixed-to-variadic-spacing
+
+cat >"$work/prfmt-fixed-plain-variadic-spacing.c" <<'EOF'
+#define PP_INDEX(_p, _fmt, ...) _p(_fmt, ##__VA_ARGS__)
+#define PP_PRINT(fmt, ...) PP_INDEX(PP_FINAL, fmt, ##__VA_ARGS__)
+#define PP_FMT(fmt) "%s: " fmt, __func__
+#define PP_WARN(fmt, ...) PP_PRINT("W" PP_FMT(fmt), ##__VA_ARGS__)
+PP_WARN("bad\n")
+EOF
+run_exact prfmt-fixed-plain-variadic-spacing
+
+cat >"$work/fixed-param-to-variadic-head-spacing.c" <<'EOF'
+#define FV_OUT(fmt, ...) FV_FINAL(fmt, ##__VA_ARGS__)
+#define FV_WRAP(x, fmt, ...) FV_OUT(fmt, x, ##__VA_ARGS__)
+FV_WRAP(obj->label, "x")
+EOF
+run_exact fixed-param-to-variadic-head-spacing
+
+cat >"$work/pre-comma-source-space.c" <<'EOF'
+#define PC_OUT(...) PC_FINAL(__VA_ARGS__)
+PC_OUT(path ? path : "<n/a>" , &vaf)
+EOF
+run_exact pre-comma-source-space
+
+cat >"$work/owner-variadic-first-slot-source-spacing.c" <<'EOF'
+#define OV_INDEX(fn, fmt, ...) fn(fmt, ##__VA_ARGS__)
+#define OV_DEV(fmt, ...) OV_INDEX(OV_FINAL, fmt, ##__VA_ARGS__)
+#define OV_WRAP(fmt, ...) OV_DEV(fmt, __VA_ARGS__)
+OV_WRAP("err %d %d", ret, addr)
+EOF
+run_exact owner-variadic-first-slot-source-spacing
+
+cat >"$work/object-to-function-cross-line-rescan.c" <<'EOF'
+#define OF_TARGET(x) ((unsigned short)(x))
+#define OF_ALIAS OF_TARGET
+int object_to_function_cross_line =
+    OF_ALIAS
+    (value);
+EOF
+run_exact object-to-function-cross-line-rescan
+
+cat >"$work/function-tail-paste-argument-rescan.c" <<'EOF'
+#define ELF64_ST_TYPE(v) ((v) & 0xf)
+#define ELF64_ST_BIND(v) ((v) >> 4)
+#define ELF64_ST_INFO(b, t) (((b) << 4) + ((t) & 0xf))
+#define ELFW(type) ELF##64##_##type
+int function_tail_paste_type = ELFW(ST_INFO)(2, ELFW(ST_TYPE)(0x31));
+int function_tail_paste_bind = ELFW(ST_INFO)(ELFW(ST_BIND)(0x31), 7);
+EOF
+run_exact function-tail-paste-argument-rescan
+
+cat >"$work/named-variadic-deep-forward-source-spacing.c" <<'EOF'
+#define NV_SINK(fmt, ...) NV_FINAL(fmt, ##__VA_ARGS__)
+#define NV_INNER(fmt, a...) NV_SINK(fmt, fixed, ##a)
+#define NV_OUTER(fmt, a...) NV_INNER(fmt, ##a)
+NV_OUTER("x", ptei, ptes)
+EOF
+run_exact named-variadic-deep-forward-source-spacing
+
+cat >"$work/named-variadic-token-paste-deep-spacing.c" <<'EOF'
+#define NT_DEV_info(fmt, ...) NT_FINAL(fmt, ##__VA_ARGS__)
+#define NT_PASTE(p, fmt, a...) NT_DEV_##p(fmt, fixed, ##a)
+#define NT_INNER(fmt, a...) NT_PASTE(info, fmt, ##a)
+#define NT_OUTER(fmt, a...) NT_INNER(fmt, ##a)
+NT_OUTER("x", ptei, ptes)
+EOF
+run_exact named-variadic-token-paste-deep-spacing
+
+cat >"$work/fixed-to-deep-named-variadic-source-spacing.c" <<'EOF'
+#define FD_SINK(fmt, ...) FD_FINAL(fmt, fixed, ##__VA_ARGS__)
+#define FD_INNER(fmt, a...) FD_SINK(fmt, ##a)
+#define FD_OUTER(fmt, a...) FD_INNER(fmt, ##a)
+#define FD_TOP(first, second) FD_OUTER("x", first, second)
+FD_TOP(ptei, ptes)
+EOF
+run_exact fixed-to-deep-named-variadic-source-spacing
+
+cat >"$work/fixed-to-token-paste-deep-named-variadic-spacing.c" <<'EOF'
+#define FT_DEV_info(fmt, ...) FT_FINAL(fmt, fixed, ##__VA_ARGS__)
+#define FT_PASTE(p, fmt, a...) FT_DEV_##p(fmt, ##a)
+#define FT_INNER(fmt, a...) FT_PASTE(info, fmt, ##a)
+#define FT_OUTER(fmt, a...) FT_INNER(fmt, ##a)
+#define FT_TOP(first, second) FT_OUTER("x", first, second)
+FT_TOP(ptei, ptes)
+EOF
+run_exact fixed-to-token-paste-deep-named-variadic-spacing
+
+cat >"$work/token-paste-fixed-prefix-forwarded-pack-spacing.c" <<'EOF'
+#define TF_DEV_info(fmt, ...) TF_FINAL(fmt, ##__VA_ARGS__)
+#define TF_PASTE(p, fmt, a...) TF_DEV_##p(fmt, fixed1, fixed2, ##a)
+#define TF_INNER(fmt, a...) TF_PASTE(info, fmt, ##a)
+#define TF_TOP(first, second) TF_INNER("x", first, second)
+TF_TOP(ptei, ptes)
+EOF
+run_exact token-paste-fixed-prefix-forwarded-pack-spacing
+
+mkdir -p "$work/trace/events"
+cat >"$work/trace/events/9p.h" <<'EOF'
+#define TRACE_9P_VALUE 91
+EOF
+cat >"$work/computed-angle-ppnumber-include.c" <<'EOF'
+#define TRACE_SYSTEM 9p
+#define __TRACE_INCLUDE(system) <trace/events/system.h>
+#define TRACE_INCLUDE(system) __TRACE_INCLUDE(system)
+#include TRACE_INCLUDE(TRACE_SYSTEM)
+int trace_9p_value = TRACE_9P_VALUE;
+EOF
+run_exact computed-angle-ppnumber-include -I"$work"
+
+cat >"$work/empty-left-paste-boundary.c" <<'EOF'
+#define EP_DO(x) do { x; } while (0)
+#define EP_INNER(mod, x) if (x) mod##EP_DO(x)
+#define EP_OUTER(x) EP_INNER(, x)
+EP_OUTER(ok);
+EOF
+run_exact empty-left-paste-boundary
+
+cat >"$work/source-leading-fixed-to-variadic-restore.c" <<'EOF'
+#define SR_OUT(fmt, a...) SR_FINAL(fmt, fixed, ##a)
+#define SR_WRAP(x, fmt) SR_OUT(fmt, x)
+SR_WRAP( value, "x")
+EOF
+run_exact source-leading-fixed-to-variadic-restore
+
+cat >"$work/source-leading-multihop-fixed-to-variadic.c" <<'EOF'
+#define SM_OUT(fmt, a...) SM_FINAL(fmt, fixed, ##a)
+#define SM_SPAM(fmt, a...) SM_OUT(fmt, ##a)
+#define SM_MAP(x, y) SM_SPAM("x", x,y)
+#define SM_WRAP(x, y) SM_MAP(x,y)
+SM_WRAP( value, yy)
+SM_WRAP(value, yy)
+EOF
+run_exact source-leading-multihop-fixed-to-variadic
+
+cat >"$work/source-generated-head-through-gnu-chain.c" <<'EOF'
+#define SG_VALUE 32
+#define SG_INNER(fmt, args...) SG_FINAL("", ##args, "")
+#define SG_MOD(fmt, args...) SG_INNER("mod " fmt, ##args)
+SG_MOD("x %u", SG_VALUE - 1)
+EOF
+run_exact source-generated-head-through-gnu-chain
+
+MINIPP="$MINIPP" BUILD_DIR="$BUILD_DIR" HOST_CPP="$REFERENCE_CPP" \
+  sh tests/preprocessor/run-include-next.sh
+
+printf 'MINIPP_A0_EXACT=PASS cases=95 mode=byte-identical include_next=PASS\n'

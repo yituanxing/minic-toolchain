@@ -110,6 +110,11 @@ unsigned int increment_barrier_second(struct named_zero_barrier *bits) {
     return ++bits->second;
 }
 
+int zero_initialize_unnamed_bit_fields(void) {
+    struct named_zero_barrier value = {0};
+    return value.first == 0 && value.second == 0 && value.tail == 0 ? 0 : 1;
+}
+
 int main(void) {
     return full_unit_tail_offset() == 8UL && zero_width_tail_offset() == 4UL &&
                    bool_tail_offset() == 1UL && signed_tail_offset() == 1UL &&

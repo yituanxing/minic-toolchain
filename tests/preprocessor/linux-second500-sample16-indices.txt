@@ -1,0 +1,17 @@
+500
+509
+510
+512
+565
+568
+572
+600
+650
+700
+731
+800
+850
+900
+950
+999
+# second500 coverage sample16: same relative positions as frozen first500

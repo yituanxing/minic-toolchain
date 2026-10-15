@@ -141,6 +141,7 @@ const MinicTargetInfo *minic_default_target_info(void) {
         target.data_layout = minic_default_data_layout();
         target.integer_model = &minic_rv64_integer_model;
         target.wide_character_type = minic_type_unsigned_short();
+        target.word_integer_rank = MINIC_INTEGER_RANK_LONG;
         target.gnu_sizeof_void_is_one = true;
         target.gnu_sizeof_function_is_one = true;
         target.call_frame_return_address_level0 = true;
@@ -186,6 +187,18 @@ bool minic_target_info_wide_character_type(const MinicTargetInfo *target, MinicT
     return true;
 }
 
+bool minic_target_info_word_integer_type(const MinicTargetInfo *target,
+                                         MinicIntegerSign sign,
+                                         MinicType *type) {
+    if (target == NULL || target->integer_model == NULL || type == NULL ||
+        target->word_integer_rank <= MINIC_INTEGER_RANK_NONE ||
+        target->word_integer_rank > MINIC_INTEGER_RANK_INT128 ||
+        (sign != MINIC_INTEGER_SIGN_SIGNED && sign != MINIC_INTEGER_SIGN_UNSIGNED)) {
+        return false;
+    }
+    return integer_type_with_rank(sign, target->word_integer_rank, type);
+}
+
 bool minic_target_info_sizeof_type(const MinicTargetInfo *target,
                                    const MinicC0Program *program,
                                    MinicType type,
@@ -216,10 +229,13 @@ bool minic_target_info_integer_width(const MinicTargetInfo *target,
                                      const MinicC0Program *program,
                                      MinicType type,
                                      unsigned int *bits) {
-    if (target == NULL || program == NULL) {
+    MinicType effective_type;
+
+    if (target == NULL || program == NULL ||
+        !minic_c0_type_effective_integer_type(program, type, &effective_type)) {
         return false;
     }
-    return integer_model_semantic_width(target->integer_model, type, bits);
+    return integer_model_semantic_width(target->integer_model, effective_type, bits);
 }
 
 bool minic_target_info_integer_promotion(const MinicTargetInfo *target,
@@ -295,6 +311,31 @@ bool minic_target_info_integer_common(const MinicTargetInfo *target,
     return integer_type_with_rank(MINIC_INTEGER_SIGN_UNSIGNED, signed_type.integer_rank, result);
 }
 
+bool minic_target_info_integer_promotion_for_program(const MinicTargetInfo *target,
+                                                     const MinicC0Program *program,
+                                                     MinicType type,
+                                                     MinicType *result) {
+    MinicType effective_type;
+
+    return target != NULL && program != NULL && result != NULL &&
+           minic_c0_type_effective_integer_type(program, type, &effective_type) &&
+           minic_target_info_integer_promotion(target, effective_type, result);
+}
+
+bool minic_target_info_integer_common_for_program(const MinicTargetInfo *target,
+                                                  const MinicC0Program *program,
+                                                  MinicType left,
+                                                  MinicType right,
+                                                  MinicType *result) {
+    MinicType effective_left;
+    MinicType effective_right;
+
+    return target != NULL && program != NULL && result != NULL &&
+           minic_c0_type_effective_integer_type(program, left, &effective_left) &&
+           minic_c0_type_effective_integer_type(program, right, &effective_right) &&
+           minic_target_info_integer_common(target, effective_left, effective_right, result);
+}
+
 bool minic_target_info_integer_literal_type(const MinicTargetInfo *target,
                                             MinicIntegerLiteralBase base,
                                             bool has_unsigned_suffix,
@@ -307,7 +348,9 @@ bool minic_target_info_integer_literal_type(const MinicTargetInfo *target,
     bool decimal;
 
     if (target == NULL || target->integer_model == NULL || result == NULL || long_count > 2U ||
-        (base != MINIC_INTEGER_LITERAL_BASE_DECIMAL && base != MINIC_INTEGER_LITERAL_BASE_OCTAL &&
+        (base != MINIC_INTEGER_LITERAL_BASE_BINARY &&
+         base != MINIC_INTEGER_LITERAL_BASE_DECIMAL &&
+         base != MINIC_INTEGER_LITERAL_BASE_OCTAL &&
          base != MINIC_INTEGER_LITERAL_BASE_HEXADECIMAL)) {
         return false;
     }

@@ -16,13 +16,12 @@ compile_source() {
     "$host_cc" -E -P -x c "$@" \
         "$root/tests/compiler/c0/$source_name.c" -o "$work/$name.i"
     "$minic" -S "$work/$name.i" -o "$work/$name.s"
+    # Core owns the production function route. Keep this contract on route
+    # identity and CFG shape, not on frame/register allocation policy.
     grep -F ".globl main" "$work/$name.s" >/dev/null
-    grep -F ".Lmain_return:" "$work/$name.s" >/dev/null
-    grep -F "  sd ra, " "$work/$name.s" >/dev/null
-    grep -F "  sd s0, " "$work/$name.s" >/dev/null
-    grep -F "  mv s0, sp" "$work/$name.s" >/dev/null
-    grep -F "  ld ra, " "$work/$name.s" >/dev/null
-    grep -F "  ld s0, " "$work/$name.s" >/dev/null
+    grep -F ".Lmain_core_bb" "$work/$name.s" >/dev/null
+    grep -F ".Lmain_core_return:" "$work/$name.s" >/dev/null
+    grep -E '^[[:space:]]+ret$' "$work/$name.s" >/dev/null
 }
 
 expect_instructions() {
@@ -30,13 +29,81 @@ expect_instructions() {
     shift
 
     for instruction in "$@"; do
-        if test "$instruction" = "sw t0, 0(a0)"; then
-            grep -E '^  sw t0, 0\((a0|t1)\)$' "$work/$name.s" >/dev/null
-        else
-            grep -F "  $instruction" "$work/$name.s" >/dev/null
-        fi
+        case "$instruction" in
+            "mv s0, sp"|"sd a0, 0(sp)"|"ld t0, 0(sp)"|"addi a0, s0, "*)
+                # Legacy frame/register-placement details are not part of the
+                # Core semantic contract. Load/store/value-flow checks below
+                # still prove that the source operation is emitted.
+                ;;
+            "j .Lmain_return")
+                # Core return edges use a far PC-relative transfer so bootstrap
+                # functions are not limited by JAL's signed 21-bit displacement.
+                if ! grep -F "  j .Lmain_core_return" "$work/$name.s" >/dev/null; then
+                    grep -F "  lla t6, .Lmain_core_return" "$work/$name.s" >/dev/null
+                    grep -F "  jalr zero, t6, 0" "$work/$name.s" >/dev/null
+                fi
+                ;;
+            "j .Lif_"*)
+                if ! grep -E '^[[:space:]]+j[[:space:]]+\.Lmain_core_bb[0-9]+$' "$work/$name.s" >/dev/null; then
+                    grep -E '^[[:space:]]+lla[[:space:]]+t6,[[:space:]]*\.Lmain_core_bb[0-9]+$' "$work/$name.s" >/dev/null
+                    grep -F "  jalr zero, t6, 0" "$work/$name.s" >/dev/null
+                fi
+                ;;
+            "beqz a0, .Lif_"*)
+                # Current Core conditional terminators keep only a local beqz
+                # and transfer both successors through the far-jump sequence.
+                if ! grep -E '^[[:space:]]+bnez[[:space:]]+[^,]+,[[:space:]]*\.Lmain_core_bb[0-9]+$' "$work/$name.s" >/dev/null; then
+                    grep -E '^[[:space:]]+beqz[[:space:]]+t0,[[:space:]]*1f$' "$work/$name.s" >/dev/null
+                    test "$(grep -E -c '^[[:space:]]+lla[[:space:]]+t6,[[:space:]]*\.Lmain_core_bb[0-9]+$' "$work/$name.s")" -ge 2
+                fi
+                ;;
+            "li a0, "*)
+                immediate=${instruction#"li a0, "}
+                grep -E "^[[:space:]]+li[[:space:]]+[^,]+,[[:space:]]*$immediate$" \
+                    "$work/$name.s" >/dev/null
+                ;;
+            "la a0, "*)
+                symbol=${instruction#"la a0, "}
+                grep -E "^[[:space:]]+la[[:space:]]+[^,]+,[[:space:]]*$symbol$" \
+                    "$work/$name.s" >/dev/null
+                ;;
+            "xori a0, a0, 1")
+                # Legacy <=/>= inverted the less-than bit with xori 1.
+                # Core models that inversion explicitly as SCALAR_IS_ZERO,
+                # whose RV64 lowering is seqz.
+                grep -E '^[[:space:]]+seqz[[:space:]]+' "$work/$name.s" >/dev/null
+                ;;
+            "xori a0, a0, "*)
+                immediate=${instruction#"xori a0, a0, "}
+                grep -E "^[[:space:]]+xori[[:space:]]+[^,]+,[[:space:]]*[^,]+,[[:space:]]*$immediate$" \
+                    "$work/$name.s" >/dev/null
+                ;;
+            addw\ *|subw\ *|mulw\ *|divw\ *|remw\ *|negw\ *)
+                opcode=${instruction%% *}
+                opcode=${opcode%w}
+                grep -E "^[[:space:]]+$opcode[[:space:]]+" "$work/$name.s" >/dev/null
+                ;;
+            snez\ *)
+                # Core has SCALAR_EQUAL + SCALAR_IS_ZERO rather than a target-
+                # shaped not-equal instruction. Canonical a != b is xor +
+                # seqz + seqz. Accept direct snez too, but require two zero
+                # tests for the Core-normalized shape so equality cannot pass.
+                if ! grep -E '^[[:space:]]+snez[[:space:]]+' "$work/$name.s" >/dev/null; then
+                    test "$(grep -E -c '^[[:space:]]+seqz[[:space:]]+' "$work/$name.s")" -ge 2
+                fi
+                ;;
+            xor\ *|seqz\ *|slt\ *|lw\ *|sw\ *)
+                opcode=${instruction%% *}
+                grep -E "^[[:space:]]+$opcode[[:space:]]+" "$work/$name.s" >/dev/null
+                ;;
+            *)
+                printf '%s\n' \
+                    "FAIL compiler/c0/$name: unmigrated legacy instruction contract: $instruction" >&2
+                exit 1
+                ;;
+        esac
     done
-    printf '%s\n' "PASS compiler/c0/$name"
+    printf '%s\n' "PASS compiler/c0/$name normalized=core-contract"
 }
 
 expect_compile_failure() {
@@ -61,7 +128,10 @@ expect_compile_failure() {
 }
 
 compile_source empty_main empty_main
+compile_source block_scope_gcc_diagnostic_pragma block_scope_gcc_diagnostic_pragma
+compile_source goto_loop_reentry goto_loop_reentry
 expect_instructions empty_main "li a0, 0" "j .Lmain_return"
+expect_instructions goto_loop_reentry "j .Lmain_return"
 
 compile_source return_0 return_0
 expect_instructions return_0 "li a0, 0" "j .Lmain_return"
@@ -95,13 +165,13 @@ expect_instructions local_assign \
     "mv s0, sp" "addi a0, s0, 0" "addi a0, s0, 4" \
     "sw t0, 0(a0)" "lw a0, 0(s0)" "lw a0, 4(s0)" \
     "addw a0, t0, a0"
-test "$(grep -E -c '^  sw t0, 0\((a0|t1)\)$' "$work/local_assign.s")" -eq 2
+test "$(grep -E -c '^[[:space:]]+sw[[:space:]]+' "$work/local_assign.s")" -ge 2
 
 compile_source local_reassign locals -DCASE=3
 expect_instructions local_reassign \
     "mv s0, sp" "lw a0, 0(s0)" "mulw a0, t0, a0" \
     "addi a0, s0, 0" "sw t0, 0(a0)"
-test "$(grep -E -c '^  sw t0, 0\((a0|t1)\)$' "$work/local_reassign.s")" -eq 2
+test "$(grep -E -c '^[[:space:]]+sw[[:space:]]+' "$work/local_reassign.s")" -ge 2
 
 compile_source comparison_equal comparisons -DCASE=1
 expect_instructions comparison_equal "xor a0, t0, a0" "seqz a0, a0"
@@ -141,7 +211,7 @@ expect_instructions logical_not_nonzero "seqz a0, a0"
 
 compile_source logical_not_recursive logical_not -DCASE=3
 expect_instructions logical_not_recursive "seqz a0, a0"
-test "$(grep -c -F '  seqz a0, a0' "$work/logical_not_recursive.s")" -eq 2
+test "$(grep -E -c '^[[:space:]]+seqz[[:space:]]+' "$work/logical_not_recursive.s")" -eq 2
 
 compile_source logical_not_comparison logical_not -DCASE=4
 expect_instructions logical_not_comparison \
@@ -168,7 +238,9 @@ expect_instructions if_comparison_block \
 compile_source if_nested_dangling_else if_else -DCASE=4
 expect_instructions if_nested_dangling_else \
     "beqz a0, .Lif_else_0" "beqz a0, .Lif_else_1"
-test "$(grep -c -F '  beqz a0, .Lif_else_' "$work/if_nested_dangling_else.s")" -eq 2
+if ! test "$(grep -E -c '^[[:space:]]+bnez[[:space:]]+[^,]+,[[:space:]]*\.Lmain_core_bb[0-9]+$' "$work/if_nested_dangling_else.s")" -eq 2; then
+    test "$(grep -E -c '^[[:space:]]+beqz[[:space:]]+t0,[[:space:]]*1f$' "$work/if_nested_dangling_else.s")" -eq 2
+fi
 
 compile_source if_branch_return if_else -DCASE=5
 expect_instructions if_branch_return \
@@ -192,6 +264,9 @@ expect_instructions record_definition "mv s0, sp" "li a0, 0" "j .Lmain_return"
 compile_source function_typed_prototype function_typed_prototype
 expect_instructions function_typed_prototype \
     "mv s0, sp" "li a0, 0" "j .Lmain_return"
+
+compile_source c11_noreturn c11_noreturn
+expect_instructions c11_noreturn "li a0, 0" "j .Lmain_return"
 
 compile_source typedef_multidimensional_array typedef_multidimensional_array
 expect_instructions typedef_multidimensional_array \
@@ -271,9 +346,12 @@ expect_compile_failure \
 expect_compile_failure \
     invalid_duplicate_typedef \
     "duplicate typedef name"
+compile_source void_typedef void_typedef
+printf '%s\n' "PASS compiler/c0/void_typedef"
+
 expect_compile_failure \
     invalid_void_typedef \
-    "typedef cannot name bare void"
+    "local object cannot have void type"
 expect_compile_failure \
     invalid_too_many_global_initializers \
     "too many nested static array initializers"
@@ -309,6 +387,11 @@ sh "$root/tests/compiler/c0/run-runtime-local-array-initializer.sh"
 MINIC="$minic" \
 HOST_CC="$host_cc" \
 BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
+sh "$root/tests/compiler/c0/run-character-array-string-initializer.sh"
+
+MINIC="$minic" \
+HOST_CC="$host_cc" \
+BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
 sh "$root/tests/compiler/c0/run-array-parameter-adjustment.sh"
 
 MINIC="$minic" \
@@ -324,11 +407,24 @@ sh "$root/tests/compiler/c0/run-function-pointer-qualifiers.sh"
 MINIC="$minic" \
 HOST_CC="$host_cc" \
 BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
+sh "$root/tests/compiler/c0/run-function-pointer-field-array.sh"
+
+MINIC="$minic" \
+HOST_CC="$host_cc" \
+BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
 sh "$root/tests/compiler/c0/run-gnu-function-pointer-bridge-call.sh"
 
 MINIC="$minic" \
 BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
 sh "$root/tests/compiler/c0/run-gnu-function-copy-alias.sh"
+
+MINIC="$minic" \
+BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
+sh "$root/tests/compiler/c0/run-linux-tail-batch3.sh"
+
+MINIC="$minic" \
+BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
+sh "$root/tests/compiler/c0/run-linux-tail-batch4.sh"
 
 MINIC="$minic" \
 HOST_CC="$host_cc" \
@@ -486,3 +582,129 @@ MINIC="$minic" HOST_CC="$host_cc" BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" 
 
 MINIC="$minic" HOST_CC="$host_cc" BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
   sh "$root/tests/compiler/c0/run-static-union-zero-overlay.sh"
+
+
+MINIC="$minic" HOST_CC="$host_cc" BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
+  sh "$root/tests/compiler/c0/run-enum-forward-completion.sh"
+
+MINIC="$minic" HOST_CC="$host_cc" BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
+  sh "$root/tests/compiler/c0/run-first500-pareto-v1.sh"
+
+MINIC="$minic" HOST_CC="$host_cc" BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
+  sh "$root/tests/compiler/c0/run-first500-static-array-pointer-v1.sh"
+
+MINIC="$minic" HOST_CC="$host_cc" BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
+  sh "$root/tests/compiler/c0/run-enum-mode-byte.sh"
+
+MINIC="$minic" \
+HOST_CC="$host_cc" \
+BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
+sh "$root/tests/compiler/c0/run-declaration-head-variadic.sh"
+
+MINIC="$minic" \
+RISCV_CC="${RISCV_CC:-riscv64-linux-gnu-gcc}" \
+QEMU_RISCV64="${QEMU_RISCV64:-qemu-riscv64}" \
+BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
+sh "$root/tests/compiler/c0/run-builtin-va-copy.sh"
+
+MINIC="$minic" HOST_CC="$host_cc" BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
+  sh "$root/tests/compiler/c0/run-static-storage-scalar-array-owner.sh"
+
+
+MINIC="$minic" \
+HOST_CC="$host_cc" \
+BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
+sh "$root/tests/compiler/c0/run-static-record-array-member-designator.sh"
+
+MINIC="$minic" \
+BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
+sh "$root/tests/compiler/c0/run-linux-tail-batch5.sh"
+
+MINIC="$minic" \
+BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
+sh "$root/tests/compiler/c0/run-linux-tail-batch6.sh"
+
+MINIC="$minic" \
+BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
+sh "$root/tests/compiler/c0/run-linux-tail-batch7.sh"
+
+MINIC="$minic" \
+BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
+sh "$root/tests/compiler/c0/run-scalar-compound-literal.sh"
+
+
+MINIC="$minic" \
+HOST_CC="$host_cc" \
+BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
+sh "$root/tests/compiler/c0/run-linux-tail-batch8.sh"
+
+MINIC="$minic" HOST_CC="$host_cc" BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
+  sh "$root/tests/compiler/c0/run-gnu-local-object-alignment.sh"
+
+MINIC="$minic" HOST_CC="$host_cc" BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
+  sh "$root/tests/compiler/c0/run-builtin-memset-call.sh"
+
+MINIC="$minic" \
+BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
+sh "$root/tests/compiler/c0/run-float-to-double-fixed-call.sh"
+MINIC="$minic" \
+BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
+sh "$root/tests/compiler/c0/run-arithmetic-fixed-call-dead-long-double.sh"
+MINIC="$minic" \
+BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
+sh "$root/tests/compiler/c0/run-internal-inline-emission.sh"
+MINIC="$minic" \
+BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
+sh "$root/tests/compiler/c0/run-null-member-offset-constant.sh"
+MINIC="$minic" \
+BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
+sh "$root/tests/compiler/c0/run-relocatable-const-section.sh"
+MINIC="$minic" \
+BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
+RISCV_CC="${RISCV_CC:-riscv64-linux-gnu-gcc}" \
+QEMU_RISCV64="${QEMU_RISCV64:-qemu-riscv64}" \
+sh "$root/tests/compiler/c0/run-byte-field-or-assign-rv64.sh"
+MINIC="$minic" \
+BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
+RISCV_CC="${RISCV_CC:-riscv64-linux-gnu-gcc}" \
+QEMU_RISCV64="${QEMU_RISCV64:-qemu-riscv64}" \
+sh "$root/tests/compiler/c0/run-switch-nested-break-rv64.sh"
+MINIC="$minic" \
+BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
+sh "$root/tests/compiler/c0/run-core-block-spill-reuse.sh"
+MINIC="$minic" \
+HOST_CC="$host_cc" \
+BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
+sh "$root/tests/compiler/c0/run-nested-function-pointer-field.sh"
+MINIC="$minic" \
+HOST_CC="$host_cc" \
+BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
+sh "$root/tests/compiler/c0/run-static-floating-aggregate.sh"
+MINIC="$minic" \
+HOST_CC="$host_cc" \
+BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
+sh "$root/tests/compiler/c0/run-variadic-function-pointer-cast.sh"
+MINIC="$minic" \
+HOST_CC="$host_cc" \
+BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
+sh "$root/tests/compiler/c0/run-nested-function-pointer-type-name.sh"
+
+MINIC="$minic" \
+HOST_CC="$host_cc" \
+BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
+sh "$root/tests/compiler/c0/run-block-scope-typedef.sh"
+
+MINIC="$minic" \
+HOST_CC="$host_cc" \
+BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
+sh "$root/tests/compiler/c0/run-volatile-parameter.sh"
+
+MINIC="$minic" \
+HOST_CC="$host_cc" \
+BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
+sh "$root/tests/compiler/c0/run-float-binary-arithmetic.sh"
+
+MINIC="$minic" \
+HOST_CC="$host_cc" \
+BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
+sh "$root/tests/compiler/c0/run-parenthesized-array-declarator.sh"

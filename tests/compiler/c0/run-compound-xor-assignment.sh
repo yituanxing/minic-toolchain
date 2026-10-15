@@ -15,15 +15,20 @@ mkdir -p "$work"
     "$work/compound_xor_assignment.i" \
     -o "$work/compound_xor_assignment.s"
 
+grep -F ".Lmain_core_bb" "$work/compound_xor_assignment.s" >/dev/null
+grep -F ".Lmain_core_return:" "$work/compound_xor_assignment.s" >/dev/null
 call_count=$(grep -c -F "  call pick" "$work/compound_xor_assignment.s" || true)
 if test "$call_count" -ne 1; then
     printf '%s\n' \
         "FAIL compiler/c0/compound_xor_assignment: target call count=$call_count expected=1" >&2
     exit 1
 fi
-grep -F "  xor a0, t0, a0" "$work/compound_xor_assignment.s" >/dev/null
-grep -F "  sw t0, 0(t1)" "$work/compound_xor_assignment.s" >/dev/null
-printf '%s\n' "PASS compiler/c0/compound_xor_assignment"
+# Keep the important single-evaluation + XOR + writeback contract, without
+# coupling it to the legacy emitter's temporary-register allocation.
+grep -E '^[[:space:]]+xor[[:space:]]+' "$work/compound_xor_assignment.s" >/dev/null
+grep -E '^[[:space:]]+sw[[:space:]]+[^,]+,[[:space:]]*0\([^)]*\)$' \
+    "$work/compound_xor_assignment.s" >/dev/null
+printf '%s\n' "PASS compiler/c0/compound_xor_assignment normalized=core-compound-assignment"
 
 check_invalid() {
     name=$1

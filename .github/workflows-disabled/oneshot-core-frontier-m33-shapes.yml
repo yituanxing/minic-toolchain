@@ -1,0 +1,103 @@
+name: One-shot Core Frontier M33 Shapes
+
+on:
+  pull_request:
+    branches: [frontend/linux-first500-final-v1]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  shapes:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refactor/declaration-sema-v1
+          fetch-depth: 0
+      - name: Install validation tools
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mapfile -t packages < <(grep -Ev '^[[:space:]]*(#|$)' tools/ci/ubuntu-24.04-packages.txt)
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends "${packages[@]}"
+      - name: Build post-M32 candidate
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 tools/dev/run-core-frontier-batch-m31b.py
+          python3 tools/dev/patch-core-frontier-batch-m32.py
+          clang-format-18 -i src/core/core_ir.h src/core/core_ir.c src/core/core_lower.c src/target/riscv64/core_codegen.c
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/m33-probe
+      - name: Probe semantic families
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          c="$GITHUB_WORKSPACE/build/m33-probe/bin/minic"; w=build/m33-shapes; mkdir -p "$w"
+          cat > "$w/asm_plain_r.c" <<'EOF'
+          void f(unsigned long v) { __asm__ __volatile__("csrs 0x100, %0" : : "r"(v) : "memory"); }
+          EOF
+          cat > "$w/asm_plain_rk.c" <<'EOF'
+          void f(unsigned long v) { __asm__ __volatile__("csrs 0x100, %0" : : "rK"(v) : "memory"); }
+          EOF
+          cat > "$w/stmt_expr_empty.c" <<'EOF'
+          void f(void) { ({ ; }); }
+          EOF
+          cat > "$w/stmt_expr_local.c" <<'EOF'
+          void f(void) { ({ unsigned long v = 2UL; }); }
+          EOF
+          cat > "$w/stmt_expr_asm_const.c" <<'EOF'
+          void f(void) { ({ __asm__ __volatile__("csrs 0x100, %0" : : "rK"(2UL) : "memory"); }); }
+          EOF
+          cat > "$w/stmt_expr_asm_local.c" <<'EOF'
+          void f(void) { ({ unsigned long v = 2UL; __asm__ __volatile__("csrs 0x100, %0" : : "rK"(v) : "memory"); }); }
+          EOF
+          cat > "$w/stmt_expr_asm_castlocal.c" <<'EOF'
+          void f(void) { ({ unsigned long v = (unsigned long)((0x00000002UL)); __asm__ __volatile__("csrs " "0x100" ", %0" : : "rK"(v) : "memory"); }); }
+          EOF
+          cat > "$w/pointer_conditional.c" <<'EOF'
+          char *f(char *tail, char *path){ return tail ? tail + 1 : path; }
+          EOF
+          cat > "$w/aggregate_call_assign.c" <<'EOF'
+          typedef struct { long a,b; } T;
+          extern T make(long);
+          long f(long x){ T t; t = make(x); return t.a+t.b; }
+          EOF
+          cat > "$w/aggregate_call_return.c" <<'EOF'
+          typedef struct { long a,b; } T;
+          extern T make(long);
+          T f(long x){ return make(x); }
+          EOF
+          cat > "$w/record_compound_return1.c" <<'EOF'
+          typedef struct { unsigned long v; } T;
+          T f(unsigned long a){ return (T){a}; }
+          EOF
+          cat > "$w/record_compound_return2.c" <<'EOF'
+          typedef struct { void *p; unsigned long f; } T;
+          T g(unsigned long v){ return (T){(void *)(v & ~3UL), v & 3UL}; }
+          EOF
+          cat > "$w/strcpy_shape.c" <<'EOF'
+          char *f(char *d,const char *s){char *t=d; while((*d++=*s++)!='\0'); return t;}
+          EOF
+          cat > "$w/do_while_cmpxchg_call.c" <<'EOF'
+          extern int cmp(int*,int*,int);
+          int f(int i,int *r){int old=*r; do { if(!old) break; } while(!cmp(r,&old,old+i)); return old;}
+          EOF
+          for src in "$w"/*.c; do
+            name=$(basename "$src" .c)
+            set +e
+            MINIC_CORE_IR=strict "$c" -S "$src" -o "$w/$name.s" 2>"$w/$name.err"
+            rc=$?
+            set -e
+            if [ "$rc" -eq 0 ]; then echo "M33_SHAPE name=$name status=PASS"; else echo "M33_SHAPE name=$name status=UNSUPPORTED rc=$rc"; cat "$w/$name.err"; fi
+          done
+      - name: Upload
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: core-frontier-m33-shapes
+          path: build/m33-shapes/
+          if-no-files-found: error

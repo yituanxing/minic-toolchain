@@ -1,0 +1,167 @@
+name: Core Error Cohort
+
+on:
+  pull_request:
+
+jobs:
+  verifier-errors:
+    if: github.head_ref == 'refactor/declaration-sema-v1'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refactor/declaration-sema-v1
+          fetch-depth: 0
+
+      - name: Restore frozen Linux corpus
+        id: linux-corpus-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-focus-corpus
+          key: linux-focus-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-${{ hashFiles('tests/external/linux/replay-indices.txt') }}
+
+      - name: Require frozen corpus
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "${{ steps.linux-corpus-cache.outputs.cache-hit }}" = true
+          test -s build/linux-focus-corpus/selected-tus.txt
+
+      - name: Instrument Core verifier locally
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('src/core/core_ir.c')
+          text = p.read_text()
+          if '#include <stdio.h>\n' not in text:
+              text = text.replace('#include <stdlib.h>\n', '#include <stdlib.h>\n#include <stdio.h>\n', 1)
+          old = '''        if (!instruction_is_valid(function, instruction, available_values)) {
+            return false;
+        }
+'''
+          new = '''        if (!instruction_is_valid(function, instruction, available_values)) {
+            (void)fprintf(stderr,
+                          "CORE_VERIFY_FAIL function=%s block=%u slot=%zu instruction=%u kind=%d result=%u\\n",
+                          function->name != NULL ? function->name : "?",
+                          (unsigned int)block_id,
+                          index,
+                          (unsigned int)instruction_id,
+                          (int)instruction->kind,
+                          (unsigned int)instruction->result);
+            if (instruction->kind == MINIC_CORE_INSTRUCTION_INDIRECT_CALL) {
+                MinicCoreValueId callee_value = instruction->value.indirect_call.callee;
+                MinicCoreCallSignatureId signature_id =
+                    instruction->value.indirect_call.signature_id;
+                MinicType function_type;
+                bool has_function_type =
+                    callee_value < function->value_count &&
+                    minic_type_pointee(function->values[callee_value].type, &function_type) &&
+                    minic_type_is_function(function_type);
+                (void)fprintf(stderr,
+                              "CORE_VERIFY_INDIRECT function=%s callee=%u available=%d has_function_type=%d callee_ftid=%u signature=%u args=%zu begin=%zu values=%zu signatures=%zu\\n",
+                              function->name != NULL ? function->name : "?",
+                              (unsigned int)callee_value,
+                              callee_value < function->value_count && available_values[callee_value] ? 1 : 0,
+                              has_function_type ? 1 : 0,
+                              has_function_type ? (unsigned int)function_type.function_type_id : (unsigned int)MINIC_FUNCTION_TYPE_INVALID,
+                              (unsigned int)signature_id,
+                              instruction->value.indirect_call.argument_count,
+                              instruction->value.indirect_call.argument_begin,
+                              function->value_count,
+                              function->call_signature_count);
+                if (signature_id < function->call_signature_count) {
+                    const MinicCoreCallSignature *signature =
+                        &function->call_signatures[signature_id];
+                    size_t argument_index;
+                    (void)fprintf(stderr,
+                                  "CORE_VERIFY_INDIRECT_SIG function=%s ftid=%u params=%zu return_base=%d return_depth=%u\\n",
+                                  function->name != NULL ? function->name : "?",
+                                  (unsigned int)signature->function_type_id,
+                                  signature->parameter_count,
+                                  (int)signature->return_type.base_kind,
+                                  signature->return_type.pointer_depth);
+                    for (argument_index = 0U;
+                         argument_index < instruction->value.indirect_call.argument_count;
+                         ++argument_index) {
+                        size_t slot = instruction->value.indirect_call.argument_begin + argument_index;
+                        if (slot < function->call_argument_count &&
+                            function->call_arguments[slot].kind == MINIC_CORE_CALL_ARGUMENT_VALUE) {
+                            MinicCoreValueId value_id =
+                                function->call_arguments[slot].value.value_id;
+                            (void)fprintf(stderr,
+                                          "CORE_VERIFY_INDIRECT_ARG function=%s arg=%zu value=%u available=%d type_match=%d\\n",
+                                          function->name != NULL ? function->name : "?",
+                                          argument_index,
+                                          (unsigned int)value_id,
+                                          value_id < function->value_count && available_values[value_id] ? 1 : 0,
+                                          value_id < function->value_count &&
+                                                  argument_index < signature->parameter_count &&
+                                                  minic_type_equal(function->values[value_id].type,
+                                                                   signature->parameter_types[argument_index])
+                                              ? 1
+                                              : 0);
+                        }
+                    }
+                }
+            }
+            return false;
+        }
+'''
+          if text.count(old) != 1:
+              raise SystemExit(f'verify-block anchor count={text.count(old)}')
+          text = text.replace(old, new, 1)
+          old = '''    return terminator_is_valid(function, &block->terminator, available_values);
+'''
+          new = '''    if (!terminator_is_valid(function, &block->terminator, available_values)) {
+        (void)fprintf(stderr,
+                      "CORE_VERIFY_FAIL function=%s block=%u reason=terminator-invalid kind=%d\\n",
+                      function->name != NULL ? function->name : "?",
+                      (unsigned int)block_id,
+                      (int)block->terminator.kind);
+        return false;
+    }
+    return true;
+'''
+          if text.count(old) != 1:
+              raise SystemExit(f'terminator anchor count={text.count(old)}')
+          p.write_text(text.replace(old, new, 1))
+          PY
+
+      - name: Build diagnostic compiler
+        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/error-cohort-compiler
+
+      - name: Replay all current verifier-error TUs
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          compiler="$GITHUB_WORKSPACE/build/error-cohort-compiler/bin/minic"
+          work="$GITHUB_WORKSPACE/build/error-cohort"
+          set +e
+          MINIC_CORE_IR=strict CORE_FAST_TRACE=1 python3 tests/external/linux/corpus_replay.py \
+            --minic "$compiler" \
+            --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
+            --work "$work" \
+            --jobs 4 \
+            --indices '2,194,195,197,209,212,215,219,229,230,242,250,281,357,378,410,435,491,492,493,494,495,496,497,498,499'
+          replay_status=$?
+          set -e
+          printf 'CORE_ERROR_COHORT_STATUS=%d\n' "$replay_status"
+          python3 tools/ci/classify-core-strict-frontier.py \
+            "$work/batch-results.json" \
+            --examples 26 \
+            --json-out "$work/frontier-summary.json"
+          echo CORE_VERIFY_DETAIL_BEGIN
+          grep -R -h -E 'CORE_VERIFY_|CORE_LOWER_DETAIL|Core IR shadow' "$work/minic-stderr" | tail -2400 || true
+          echo CORE_VERIFY_DETAIL_END
+
+      - name: Persist error cohort
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: core-error-cohort-${{ github.sha }}
+          path: |
+            build/error-cohort/batch-results.json
+            build/error-cohort/frontier-summary.json
+            build/error-cohort/minic-stderr/**
+          if-no-files-found: warn

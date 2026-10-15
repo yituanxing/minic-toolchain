@@ -1,0 +1,88 @@
+name: Linux Assemble Blocker278
+
+on:
+  push:
+    branches:
+      - refactor/declaration-sema-v1
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  blocker278:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[linux-assemble-278]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Restore frozen first500 corpus
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-focus-corpus
+          key: linux-focus-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-${{ hashFiles('tests/external/linux/replay-indices.txt') }}
+          fail-on-cache-miss: true
+
+      - name: Install RV64 assembler
+        run: |
+          sudo apt-get -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends gcc-riscv64-linux-gnu
+
+      - name: Build exact compiler
+        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/linux-assemble-278-compiler
+
+      - name: Compile frozen kernel configs TU
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          compiler="$GITHUB_WORKSPACE/build/linux-assemble-278-compiler/bin/minic"
+          corpus="$GITHUB_WORKSPACE/build/linux-focus-corpus"
+          work="$GITHUB_WORKSPACE/build/linux-assemble-278"
+          CORE_FAST_TRACE=1 python3 tests/external/linux/corpus_replay.py             --minic "$compiler" --corpus "$corpus" --work "$work" --jobs 1 --indices 278
+          grep -n -E '\.incbin|config_data|\.section|\.pushsection'             "$work/minic-out/kernel/configs.i.s" | head -n 80 || true
+          echo "LINUX_ASSEMBLE_278_COMPILE=PASS"
+
+      - name: Expose assembler blocker
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-assemble-278"
+          asm="$work/minic-out/kernel/configs.i.s"
+          out="$work/configs.o"
+          set +e
+          riscv64-linux-gnu-gcc             -march=rv64imac_zicsr_zifencei_zihintpause -mabi=lp64             -mcmodel=medany -mstrict-align -Wa,-mno-arch-attr             -x assembler -c "$asm" -o "$out"             >"$work/assembler.stdout" 2>"$work/assembler.stderr"
+          status=$?
+          set -e
+
+          echo "LINUX_ASSEMBLE_278_STATUS=$status"
+          echo "LINUX_ASSEMBLE_278_STDERR_BEGIN"
+          cat "$work/assembler.stderr" || true
+          echo "LINUX_ASSEMBLE_278_STDERR_END"
+
+          if test "$status" -eq 0; then
+            echo "LINUX_ASSEMBLE_278=PASS"
+            exit 0
+          fi
+
+          if grep -E 'config_data\.gz|No such file|file not found' "$work/assembler.stderr" >/dev/null; then
+            echo "LINUX_ASSEMBLE_278_CLASS=KBUILD_AUXILIARY_MISSING"
+            exit 0
+          fi
+
+          echo "LINUX_ASSEMBLE_278_CLASS=REAL_ASSEMBLER_FAILURE" >&2
+          exit "$status"
+
+      - name: Preserve focused evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-assemble-blocker278
+          path: |
+            build/linux-assemble-278/minic-out/kernel/configs.i.s
+            build/linux-assemble-278/assembler.stdout
+            build/linux-assemble-278/assembler.stderr
+          if-no-files-found: ignore
+          retention-days: 1

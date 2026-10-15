@@ -1,0 +1,38 @@
+name: MiniLD A2 Static Runtime
+
+on:
+  push:
+    branches:
+      - "toolchain/minild-static-a2"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  minild-a2:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Install RISC-V static oracle/runtime
+        run: |
+          sudo apt-get -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            build-essential binutils-riscv64-linux-gnu qemu-user
+
+      - name: Build MiniLD with strict warnings
+        run: |
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/minild-a2 all
+
+      - name: Keep relocatable/archive gates green
+        run: |
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/minild-a2 check-minild-a0
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/minild-a2 check-minild-a1
+
+      - name: Run static ET_EXEC runtime gate
+        run: |
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/minild-a2 check-minild-a2

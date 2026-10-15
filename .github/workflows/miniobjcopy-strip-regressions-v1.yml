@@ -1,0 +1,479 @@
+name: MiniObjcopy and MiniStrip Canonical Integration
+
+on:
+  push:
+    branches:
+      - "agent/linux-expanded-kbuild-v0"
+      - "agent/linux-perf-boolean-domain-v1"
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Choose canonical regressions or historical Linux integration probes"
+        type: choice
+        required: true
+        default: regressions
+        options:
+          - regressions
+          - linux-tool
+          - linux-single
+          - linux-replay
+          - linux-native-triple-replay
+          - all
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: miniobjcopy-strip-regressions-v1-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  route:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    outputs:
+      elf_changed: ${{ steps.diff.outputs.elf_changed }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - name: Route shared ELF changes to MiniObjcopy/Strip T1 regression
+        id: diff
+        env:
+          EVENT_KIND: ${{ github.event_name }}
+          BEFORE_SHA: ${{ github.event.before }}
+          AFTER_SHA: ${{ github.sha }}
+        run: |
+          set -Eeuo pipefail
+          python3 tools/ci/select_miniobjcopy_elf_route_v1.py \
+            --event "$EVENT_KIND" --before "$BEFORE_SHA" --after "$AFTER_SHA" >> "$GITHUB_OUTPUT"
+
+  regressions:
+    needs: route
+    if: (github.event_name == 'workflow_dispatch' && (inputs.mode == 'regressions' || inputs.mode == 'all')) || (github.event_name == 'push' && (contains(github.event.head_commit.message, '[miniobjcopy-strip-regressions]') || needs.route.outputs.elf_changed == 'true'))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Install RV32 RV64 oracle tools
+        run: |
+          sudo apt-get -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            build-essential gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu
+
+      - name: Strict build once
+        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/miniobjcopy-strip-v1 all
+
+      - name: Preserve shared ELF reader consumers
+        run: |
+          set -Eeuo pipefail
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/miniobjcopy-strip-v1 check-minielf-reader-a0
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/miniobjcopy-strip-v1 check-mininm-a0
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/miniobjcopy-strip-v1 check-miniar-a0
+          echo "MINIOBJCOPY_STRIP_SHARED_CONSUMERS=PASS reader=A0 mininm=A0 miniar=A0"
+
+      - name: Validate MiniObjcopy A0 and A1
+        run: |
+          set -Eeuo pipefail
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/miniobjcopy-strip-v1 check-miniobjcopy-a0
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/miniobjcopy-strip-v1 check-miniobjcopy-a1
+          echo "MINIOBJCOPY_REGRESSIONS=PASS a0=PASS a1=PASS"
+
+      - name: Validate MiniStrip A0
+        run: |
+          set -Eeuo pipefail
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/miniobjcopy-strip-v1 check-minicstrip-a0
+          echo "MINISTRIP_REGRESSION=PASS a0=PASS"
+
+      - name: Publish canonical verdict
+        run: echo "MINIOBJCOPY_STRIP_REGRESSIONS_V1=PASS shared-reader=PASS objcopy-a0=PASS objcopy-a1=PASS strip-a0=PASS head=$GITHUB_SHA"
+
+  # Historical mixed MiniObjcopy/MiniLD boundary stays available.
+  # The opt-in linux-single mode changes ONLY objcopy, with GNU GCC/as/ar/ld.
+  linux-tool:
+    env:
+      MINIOBJCOPY_SINGLE_MODE: ${{ (github.event_name == 'workflow_dispatch' && inputs.mode == 'linux-single') || contains(github.event.head_commit.message, '[miniobjcopy-linux-single]') }}
+      MINIOBJCOPY_REPLAY_MODE: ${{ (github.event_name == 'workflow_dispatch' && inputs.mode == 'linux-replay') || contains(github.event.head_commit.message, '[miniobjcopy-linux-replay]') }}
+      MINIOBJCOPY_TRIPLE_REPLAY_MODE: ${{ (github.event_name == 'workflow_dispatch' && inputs.mode == 'linux-native-triple-replay') || contains(github.event.head_commit.message, '[miniobjcopy-native-triple-replay]') }}
+    if: (github.event_name == 'workflow_dispatch' && (inputs.mode == 'linux-tool' || inputs.mode == 'linux-single' || inputs.mode == 'linux-replay' || inputs.mode == 'linux-native-triple-replay' || inputs.mode == 'all')) || (github.event_name == 'push' && (contains(github.event.head_commit.message, '[miniobjcopy-linux-tool]') || contains(github.event.head_commit.message, '[miniobjcopy-linux-single]') || contains(github.event.head_commit.message, '[miniobjcopy-linux-replay]') || contains(github.event.head_commit.message, '[miniobjcopy-native-triple-replay]')))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Install Linux build prerequisites
+        run: |
+          sudo apt-get -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            build-essential gcc-riscv64-linux-gnu libc6-dev-riscv64-cross binutils-riscv64-linux-gnu \
+            qemu-user qemu-system-misc opensbi cpio gzip bc bison flex libssl-dev libelf-dev make curl xz-utils file
+
+      - name: Build toolchain and focused gates
+        if: env.MINIOBJCOPY_REPLAY_MODE != 'true' && env.MINIOBJCOPY_TRIPLE_REPLAY_MODE != 'true'
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/miniobjcopy-linux-tool all
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/miniobjcopy-linux-tool check-miniobjcopy-a0
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/miniobjcopy-linux-tool check-miniobjcopy-a1
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/miniobjcopy-linux-tool check-minild-a0
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/miniobjcopy-linux-tool check-minild-a1
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/miniobjcopy-linux-tool check-minild-a2
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/miniobjcopy-linux-tool check-minild-a3
+
+      - name: Prepare Linux 6.6.143
+        if: env.MINIOBJCOPY_REPLAY_MODE != 'true' && env.MINIOBJCOPY_TRIPLE_REPLAY_MODE != 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/miniobjcopy-linux-tool-work"
+          archive="$work/linux-6.6.143.tar.xz"
+          src="$work/linux-6.6.143"
+          out="$work/out"
+          mkdir -p "$work"
+          curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors \
+            https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.6.143.tar.xz \
+            -o "$archive"
+          printf '%s  %s\n' \
+            dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932 \
+            "$archive" | sha256sum -c -
+          tar -xJf "$archive" -C "$work"
+          make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- defconfig
+          if [[ "$MINIOBJCOPY_SINGLE_MODE" == true ]]; then
+            "$src/scripts/config" --file "$out/.config" \
+              -e BLK_DEV_INITRD -e DEVTMPFS -e DEVTMPFS_MOUNT \
+              -e SERIAL_8250 -e SERIAL_8250_CONSOLE
+            make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- olddefconfig
+          fi
+
+      - name: Install MiniLD and MiniObjcopy wrappers
+        if: env.MINIOBJCOPY_REPLAY_MODE != 'true' && env.MINIOBJCOPY_TRIPLE_REPLAY_MODE != 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/miniobjcopy-linux-tool-work"
+
+          ld_wrapper="$work/riscv64-linux-gnu-ld-static-final"
+          cat >"$ld_wrapper" <<'SH'
+          #!/usr/bin/env bash
+          set -Eeuo pipefail
+          : "${MINILD:?MINILD is not set}"
+          : "${MINILD_TRACE:?MINILD_TRACE is not set}"
+          args=("$@")
+          output=
+          for ((i=0; i<${#args[@]}; ++i)); do
+            if [[ "${args[i]}" == "-o" && $((i+1)) -lt ${#args[@]} ]]; then
+              output="${args[i+1]}"
+              break
+            fi
+          done
+          case "$output" in
+            .tmp_vmlinux.kallsyms1|.tmp_vmlinux.kallsyms2|vmlinux)
+              {
+                printf 'minild'
+                printf ' %q' "$@"
+                printf '\n'
+              } >>"$MINILD_TRACE"
+              exec "$MINILD" "$@"
+              ;;
+            *)
+              {
+                printf 'gnu-ld'
+                printf ' %q' "$@"
+                printf '\n'
+              } >>"$MINILD_TRACE"
+              exec /usr/bin/riscv64-linux-gnu-ld "$@"
+              ;;
+          esac
+          SH
+          chmod +x "$ld_wrapper"
+
+          objcopy_wrapper="$work/riscv64-linux-gnu-objcopy-mini"
+          cat >"$objcopy_wrapper" <<'SH'
+          #!/usr/bin/env bash
+          set -Eeuo pipefail
+          : "${MINIOBJCOPY:?MINIOBJCOPY is not set}"
+          : "${MINIOBJCOPY_TRACE:?MINIOBJCOPY_TRACE is not set}"
+          {
+            printf 'miniobjcopy'
+            printf ' %q' "$@"
+            printf '\n'
+          } >>"$MINIOBJCOPY_TRACE"
+          exec "$MINIOBJCOPY" "$@"
+          SH
+          chmod +x "$objcopy_wrapper"
+
+          : >"$work/minild.trace"
+          : >"$work/miniobjcopy.trace"
+
+      - name: Build Linux Image with exactly one MiniObjcopy replacement
+        if: env.MINIOBJCOPY_REPLAY_MODE != 'true' && env.MINIOBJCOPY_TRIPLE_REPLAY_MODE != 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/miniobjcopy-linux-tool-work"
+          src="$work/linux-6.6.143"
+          out="$work/out"
+          ld_wrapper="$work/riscv64-linux-gnu-ld-static-final"
+          objcopy_wrapper="$work/riscv64-linux-gnu-objcopy-mini"
+
+          export MINILD="$GITHUB_WORKSPACE/build/miniobjcopy-linux-tool/bin/minic-ld"
+          export MINILD_TRACE="$work/minild.trace"
+          export MINIOBJCOPY="$GITHUB_WORKSPACE/build/miniobjcopy-linux-tool/bin/minic-objcopy"
+          export MINIOBJCOPY_TRACE="$work/miniobjcopy.trace"
+
+          set +e
+          if [[ "$MINIOBJCOPY_SINGLE_MODE" == true ]]; then
+            # Keep GNU compilation, assembler, archiver and *all* ld boundaries.
+            make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
+              LD=riscv64-linux-gnu-ld OBJCOPY="$objcopy_wrapper" -j4 Image \
+              >"$work/kbuild.log" 2>&1
+            status=$?
+          else
+            # Preserve the historical mixed MiniLD + MiniObjcopy fixture.
+            make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
+              LD="$ld_wrapper" OBJCOPY="$objcopy_wrapper" -j4 Image \
+              >"$work/kbuild.log" 2>&1
+            status=$?
+          fi
+          set -e
+
+          if test "$status" -ne 0; then
+            echo "MINIOBJCOPY_LINUX_TOOL_FRONTIER=FAIL status=$status" >&2
+            echo "--- last objcopy calls ---" >&2
+            tail -n 40 "$work/miniobjcopy.trace" >&2 || true
+            echo "--- kbuild tail ---" >&2
+            tail -n 160 "$work/kbuild.log" >&2 || true
+            exit "$status"
+          fi
+
+          test -s "$out/vmlinux"
+          test -s "$out/arch/riscv/boot/Image"
+          if [[ "$MINIOBJCOPY_SINGLE_MODE" == true ]]; then
+            test ! -s "$work/minild.trace" # no MiniLD invoked, not even once
+          else
+            test "$(grep -c '^minild ' "$work/minild.trace")" -eq 3
+          fi
+
+          calls=$(grep -c '^miniobjcopy ' "$work/miniobjcopy.trace")
+          test "$calls" -gt 0
+          grep -q -- '-O binary' "$work/miniobjcopy.trace"
+          grep -q -- '-S' "$work/miniobjcopy.trace"
+          grep -q -- '-G __vdso_' "$work/miniobjcopy.trace"
+
+          image_bytes=$(stat -c %s "$out/arch/riscv/boot/Image")
+          image_sha=$(sha256sum "$out/arch/riscv/boot/Image" | awk '{print $1}')
+          if [[ "$MINIOBJCOPY_SINGLE_MODE" == true ]]; then
+            printf 'MINIOBJCOPY_LINUX_SINGLE=PASS kernel=6.6.143 objcopy_calls=%s gnu_ld=all minild_calls=0 image_bytes=%s image_sha256=%s\n' \
+              "$calls" "$image_bytes" "$image_sha"
+          else
+            printf 'MINIOBJCOPY_LINUX_TOOL=PASS kernel=6.6.143 objcopy_calls=%s minild_final_calls=3 image_bytes=%s image_sha256=%s\n' \
+              "$calls" "$image_bytes" "$image_sha"
+          fi
+
+      - name: Restore exact MiniLD-final MiniObjcopy Linux Image without recompilation
+        if: env.MINIOBJCOPY_REPLAY_MODE == 'true'
+        uses: actions/download-artifact@v4
+        with:
+          name: miniobjcopy-linux-tool-frontier
+          path: build/miniobjcopy-linux-tool-work
+          repository: ${{ github.repository }}
+          run-id: '38189325106'
+          github-token: ${{ github.token }}
+
+      - name: Attest restored native-final-linked Linux artifact
+        if: env.MINIOBJCOPY_REPLAY_MODE == 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/miniobjcopy-linux-tool-work"
+          image="$work/out/arch/riscv/boot/Image"
+          test -s "$image"
+          test -s "$work/out/vmlinux"
+          test "$(grep -c '^minild ' "$work/minild.trace")" -eq 3
+          test "$(grep -c '^miniobjcopy ' "$work/miniobjcopy.trace")" -eq 44
+          printf '%s  %s\n' \
+            9707487fe26d2050b6eff442377c73a2439f78268c143f5e2afd8e96d27a518d \
+            "$image" | sha256sum -c -
+          echo "MINILD_FINAL_IMAGE_REPLAY=PASS origin=38189325106 native_ld=3 native_objcopy=44 reused_full_image=1"
+
+      - name: Restore exact MiniAS MiniAR MiniObjcopy Linux Image without rebuilding
+        if: env.MINIOBJCOPY_TRIPLE_REPLAY_MODE == 'true'
+        uses: actions/download-artifact@v4
+        with:
+          name: minias-linux-gcc-single-cert
+          path: build/miniobjcopy-linux-tool-work
+          repository: ${{ github.repository }}
+          run-id: '38184298699'
+          github-token: ${{ github.token }}
+
+      - name: Attest three-native-tool Image and bounded object replay
+        if: env.MINIOBJCOPY_TRIPLE_REPLAY_MODE == 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/miniobjcopy-linux-tool-work"
+          img="$work/out/arch/riscv/boot/Image"
+          test -s "$img"
+          printf '%s  %s\n' \
+            6b8ec7591c1e8270b4e1bdb301fccbec0352447c9c895df7e07156eed6a674d1 \
+            "$img" | sha256sum -c -
+          test "$(wc -l < "$work/native-integration/miniar.trace")" -eq 633
+          test "$(wc -l < "$work/native-integration/miniobjcopy.trace")" -eq 44
+          test "$(grep -c '^pass ' "$work/minias-as.trace")" -ge 2197
+          test -s "$work/native-integration/kbuild.log"
+          grep -q 'Linux version 6.6.143' "$work/qemu-p0/rdinit-init.log"
+          grep -q 'USER_SHELL_OK' "$work/qemu-p0/rdinit-init.log"
+          echo "MINIAS_MINIAR_MINIOBJCOPY_IMAGE_REPLAY=PASS source_run=38184298699 ar=633 objcopy=44 extra_native_as=88 kernel=6.6.143"
+
+      - name: Boot only-MiniObjcopy Linux via existing QEMU runtime oracle
+        if: env.MINIOBJCOPY_SINGLE_MODE == 'true' || env.MINIOBJCOPY_REPLAY_MODE == 'true' || env.MINIOBJCOPY_TRIPLE_REPLAY_MODE == 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/miniobjcopy-linux-tool-work"
+          # Runtime acceptance retains the full bounded lane budget.
+          boot_timeout=90
+          BUILD_DIR="$work/initramfs" \
+          OUTPUT_INITRAMFS="$work/runtime-initramfs.cpio.gz" \
+          RISCV_CC=riscv64-linux-gnu-gcc \
+            bash tests/external/linux/build_runtime_initramfs.sh
+          if [[ "$MINIOBJCOPY_REPLAY_MODE" == true || "$MINIOBJCOPY_TRIPLE_REPLAY_MODE" == true ]]; then
+            LINUX_IMAGE="$work/out/arch/riscv/boot/Image" \
+            INITRAMFS="$work/runtime-initramfs.cpio.gz" \
+            BUILD_DIR="$work/qemu-runtime" \
+            LINUX_RELEASE=6.6.143 \
+            QEMU_SYSTEM_RISCV64=qemu-system-riscv64 \
+            QEMU_TIMEOUT_SECONDS="$boot_timeout" \
+              bash tests/external/linux/runtime_boot.sh
+            LINUX_IMAGE="$work/out/arch/riscv/boot/Image" \
+            INITRAMFS="$work/runtime-initramfs.cpio.gz" \
+            BUILD_DIR="$work/qemu-p1" \
+            LINUX_RELEASE=6.6.143 \
+            LINUX_RUNTIME_PROFILE=p1 \
+            QEMU_SYSTEM_RISCV64=qemu-system-riscv64 \
+            QEMU_TIMEOUT_SECONDS="$boot_timeout" \
+              bash tests/external/linux/runtime_boot.sh
+            python3 tests/external/linux/runtime_v2_log_check.py \
+              --profile p1 --log "$work/qemu-p1/rdinit-init.log"
+            if [[ "$MINIOBJCOPY_TRIPLE_REPLAY_MODE" == true ]]; then
+              echo "MINIAS_MINIAR_MINIOBJCOPY_LINUX_RUNTIME=PASS p0=2/2 p1=12/12 source_run=38184298699"
+            else
+              echo "MINILD_FINAL_MINIOBJCOPY_LINUX_RUNTIME=PASS p0=2/2 p1=12/12 origin=38189325106"
+            fi
+          else
+            LINUX_IMAGE="$work/out/arch/riscv/boot/Image" \
+            INITRAMFS="$work/runtime-initramfs.cpio.gz" \
+            BUILD_DIR="$work/qemu-runtime" \
+            LINUX_RELEASE=6.6.143 \
+            LINUX_RUNTIME_PROFILE=fast \
+            QEMU_SYSTEM_RISCV64=qemu-system-riscv64 \
+            QEMU_TIMEOUT_SECONDS="$boot_timeout" \
+              bash tests/external/linux/runtime_boot.sh
+            echo "MINIOBJCOPY_LINUX_SINGLE_RUNTIME=PASS profile=fast head=$GITHUB_SHA"
+          fi
+
+
+      - name: Snapshot live MiniLD CPU PC without instruction-logging slowdown
+        if: failure() && env.MINIOBJCOPY_REPLAY_MODE == 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/miniobjcopy-linux-tool-work"
+          mkdir -p "$work/qemu-debug"
+          python3 - "$work" <<'PY'
+          import pathlib
+          import socket
+          import subprocess
+          import sys
+          import time
+
+          work = pathlib.Path(sys.argv[1])
+          image = work / "out/arch/riscv/boot/Image"
+          initrd = work / "runtime-initramfs.cpio.gz"
+          sockpath = work / "qemu-debug/monitor.sock"
+          logpath = work / "qemu-debug/minild-live-pc.log"
+          if sockpath.exists():
+              sockpath.unlink()
+          args = [
+              "qemu-system-riscv64", "-M", "virt", "-cpu", "max",
+              "-m", "512M", "-smp", "1", "-nographic", "-no-reboot",
+              "-bios", "default", "-kernel", str(image),
+              "-initrd", str(initrd),
+              "-append", "console=ttyS0 earlycon=sbi loglevel=8 panic=-1 rdinit=/init",
+              "-qmp", "unix:" + str(sockpath) + ",server=on,wait=off",
+          ]
+          def query_qmp(sockpath):
+              import json
+              with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
+                  sock.settimeout(3)
+                  sock.connect(str(sockpath))
+                  stream = sock.makefile("rwb", buffering=0)
+                  hello = json.loads(stream.readline())
+                  if "QMP" not in hello:
+                      raise RuntimeError("QMP greeting missing")
+                  def execute(command, arguments=None):
+                      obj = {"execute": command}
+                      if arguments is not None:
+                          obj["arguments"] = arguments
+                      stream.write(json.dumps(obj).encode() + b"\n")
+                      for _ in range(20):
+                          reply = json.loads(stream.readline())
+                          if "return" in reply:
+                              return reply["return"]
+                          if "error" in reply:
+                              raise RuntimeError(str(reply["error"]))
+                      raise RuntimeError("QMP reply missing")
+                  execute("qmp_capabilities")
+                  return execute("human-monitor-command",
+                                 {"command-line": "info registers"})
+
+          with open(work / "qemu-debug/uart.log", "wb") as uart, \
+               open(logpath, "w", encoding="utf-8") as out:
+              proc = subprocess.Popen(args, stdin=subprocess.DEVNULL,
+                                      stdout=uart, stderr=subprocess.STDOUT)
+              try:
+                  for delay in [2, 2, 2]:
+                      time.sleep(delay)
+                      if proc.poll() is not None:
+                          out.write("QEMU_EXIT=" + str(proc.returncode) + "\n")
+                          break
+                      greeting = query_qmp(sockpath)
+                      out.write("=== CPU SAMPLE ===\n" + str(greeting) + "\n")
+                  out.flush()
+              finally:
+                  proc.terminate()
+                  try:
+                      proc.wait(timeout=3)
+                  except subprocess.TimeoutExpired:
+                      proc.kill()
+                      proc.wait()
+          print("MINILD_QEMU_CPU_SNAPSHOTS=CAPTURED bytes=" + str(logpath.stat().st_size))
+          print(logpath.read_text(errors="replace")[-9500:])
+          PY
+      - name: Preserve Linux MiniObjcopy frontier
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: miniobjcopy-linux-tool-frontier
+          path: |
+            build/miniobjcopy-linux-tool-work/miniobjcopy.trace
+            build/miniobjcopy-linux-tool-work/minild.trace
+            build/miniobjcopy-linux-tool-work/kbuild.log
+            build/miniobjcopy-linux-tool-work/qemu-debug/*.log
+            build/miniobjcopy-linux-tool-work/qemu-runtime/*.log
+            build/miniobjcopy-linux-tool-work/qemu-p1/*.log
+            build/miniobjcopy-linux-tool-work/native-integration/*.trace
+            build/miniobjcopy-linux-tool-work/native-integration/kbuild.log
+            build/miniobjcopy-linux-tool-work/out/arch/riscv/kernel/vdso/vdso.so
+            build/miniobjcopy-linux-tool-work/out/arch/riscv/kernel/vdso/vdso.so.dbg
+            build/miniobjcopy-linux-tool-work/out/arch/riscv/boot/Image
+            build/miniobjcopy-linux-tool-work/out/vmlinux
+          if-no-files-found: ignore
+          retention-days: 3

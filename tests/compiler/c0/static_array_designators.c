@@ -32,7 +32,36 @@ static int mutable_inferred[] = {
     [1] = 4,
 };
 
+static const unsigned long chained[3][2] = {
+    [1][0] = 11UL,
+    [2][1] = 13UL,
+};
+
+static const unsigned long chained_sizeof_bound[64 + 1]
+                                                [(((64) + ((sizeof(long) * 8)) - 1) /
+                                                  ((sizeof(long) * 8)))] = {
+    [0 + 1][0] = (1UL << 0),
+    [0 + 1 + 1][0] = (1UL << 1),
+};
+
+extern const unsigned long chained_redeclared[64 + 1]
+                                                   [(((64) + ((sizeof(long) * 8)) - 1) /
+                                                     ((sizeof(long) * 8)))];
+
+static const unsigned long *chained_redeclared_row(unsigned long cpu) {
+    return chained_redeclared[1 + cpu % 64];
+}
+
+const unsigned long chained_redeclared[64 + 1]
+                                      [(((64) + ((sizeof(long) * 8)) - 1) /
+                                        ((sizeof(long) * 8)))] = {
+    [0 + 1][0] = (1UL << 0),
+    [0 + 1 + 1][0] = (1UL << 1),
+};
+
 int main(void) {
     return (int)(indexed[1] + ranged[1] + (syscall_shape[0] != 0) + (names[2] != 0) +
-                 mutable_inferred[3]);
+                 mutable_inferred[3] + chained[1][0] + chained[2][1] +
+                 chained_sizeof_bound[1][0] + chained_redeclared[1][0] +
+                 chained_redeclared_row(0)[0]);
 }

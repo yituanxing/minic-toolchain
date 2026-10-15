@@ -15,14 +15,18 @@ mkdir -p "$work"
     "$work/unbounded_for_break.i" \
     -o "$work/unbounded_for_break.s"
 
-grep -F ".Lwhile_condition_0:" "$work/unbounded_for_break.s" >/dev/null
-grep -F ".Lwhile_condition_1:" "$work/unbounded_for_break.s" >/dev/null
-grep -F "  j .Lwhile_end_0" "$work/unbounded_for_break.s" >/dev/null
-grep -F "  j .Lwhile_end_1" "$work/unbounded_for_break.s" >/dev/null
-if grep -F "beqz a0, .Lwhile_end_" \
-    "$work/unbounded_for_break.s" >/dev/null; then
+# Core owns loop CFG construction.  The source contains two unbounded for (;;)
+# loops and exactly two explicit if statements.  Therefore target assembly must
+# contain Core blocks/return and exactly two conditional branches: an empty for
+# condition must not synthesize an additional guard branch.  The Core emitter
+# may choose beqz or bnez according to successor ordering.
+grep -F ".Lmain_core_bb" "$work/unbounded_for_break.s" >/dev/null
+grep -F ".Lmain_core_return:" "$work/unbounded_for_break.s" >/dev/null
+branch_count=$(grep -Ec '^[[:space:]]+(beqz|bnez)[[:space:]]' "$work/unbounded_for_break.s" || true)
+if [ "$branch_count" -ne 2 ]; then
     printf '%s\n' \
-        "FAIL compiler/c0/unbounded_for_break: empty conditions emitted loop guards" >&2
+        "FAIL compiler/c0/unbounded_for_break: expected exactly two source-if guards, got $branch_count" >&2
+    cat "$work/unbounded_for_break.s" >&2
     exit 1
 fi
 printf '%s\n' "PASS compiler/c0/unbounded_for_break"

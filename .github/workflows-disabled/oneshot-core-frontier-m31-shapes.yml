@@ -1,0 +1,102 @@
+name: One-shot Core Frontier M31 Shapes
+
+on:
+  pull_request:
+    branches: [frontend/linux-first500-final-v1]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  shapes:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refactor/declaration-sema-v1
+          fetch-depth: 0
+      - name: Install validation tools
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mapfile -t packages < <(grep -Ev '^[[:space:]]*(#|$)' tools/ci/ubuntu-24.04-packages.txt)
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends "${packages[@]}"
+          sh tools/ci/verify-validation-tools.sh
+      - name: Apply M31 and build
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 tools/dev/run-core-frontier-batch-m31.py
+          clang-format-18 -i src/core/core_ir.h src/core/core_ir.c src/core/core_lower.c src/target/riscv64/core_codegen.c
+          git diff --check
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/m31-shapes
+      - name: Probe semantic shapes
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          c="$GITHUB_WORKSPACE/build/m31-shapes/bin/minic"
+          w="$GITHUB_WORKSPACE/build/m31-shapes-work"
+          mkdir -p "$w"
+
+          cat > "$w/static_global_array.c" <<'EOF'
+          static const unsigned a[] = { 10, 20, 30 };
+          unsigned f(unsigned n) { return n < 3 ? a[n] : 0; }
+          EOF
+          cat > "$w/static_local_array.c" <<'EOF'
+          unsigned f(unsigned n) {
+              static const unsigned a[] = { 10, 20, 30 };
+              return n < 3 ? a[n] : 0;
+          }
+          EOF
+          cat > "$w/record_call.c" <<'EOF'
+          typedef struct { unsigned v; } S;
+          static unsigned get(S x) { return x.v; }
+          int eq(S a, S b) { return get(a) == get(b); }
+          EOF
+          cat > "$w/record_call_mixed.c" <<'EOF'
+          typedef struct { unsigned long a, b; } P;
+          static unsigned long mix(unsigned long x, P p, unsigned long y) { return x + p.a + p.b + y; }
+          unsigned long f(P p) { return mix(3, p, 5); }
+          EOF
+          cat > "$w/memset_only.c" <<'EOF'
+          extern void *memset(void *, int, unsigned long);
+          void f(void *p, unsigned long n) { memset(p, 0, n); }
+          EOF
+          cat > "$w/barrier_only.c" <<'EOF'
+          void f(void *p) { __asm__ __volatile__("" : : "r"(p) : "memory"); }
+          EOF
+          cat > "$w/memzero_shape.c" <<'EOF'
+          extern void *memset(void *, int, unsigned long);
+          void f(void *p, unsigned long n) { memset(p, 0, n); __asm__ __volatile__("" : : "r"(p) : "memory"); }
+          EOF
+          cat > "$w/asm_i_integer.c" <<'EOF'
+          void f(void) { __asm__ __volatile__(".word %0" : : "i"(7)); }
+          EOF
+          cat > "$w/asm_i_sizeof.c" <<'EOF'
+          struct X { unsigned long a, b; };
+          void f(void) { __asm__ __volatile__(".word %0" : : "i"(sizeof(struct X))); }
+          EOF
+
+          for src in "$w"/*.c; do
+            name=$(basename "$src" .c)
+            set +e
+            MINIC_CORE_IR=strict "$c" -S "$src" -o "$w/$name.s" 2>"$w/$name.err"
+            rc=$?
+            set -e
+            if [ "$rc" -eq 0 ]; then
+              printf 'M31_SHAPE name=%s status=PASS\n' "$name"
+            else
+              printf 'M31_SHAPE name=%s status=UNSUPPORTED rc=%d\n' "$name" "$rc"
+              cat "$w/$name.err"
+            fi
+          done
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: core-frontier-m31-shapes
+          path: build/m31-shapes-work/
+          if-no-files-found: error

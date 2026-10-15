@@ -28,6 +28,22 @@ static const pair_t fixed_records[4] = {
     [2] = ((pair_t){.left = 51, .right = 52}),
 };
 
+static int relocation_target;
+
+union relocation_op {
+    int (*show)(void);
+    const char *lsm;
+};
+
+struct relocation_row {
+    int *target;
+    union relocation_op op;
+};
+
+static const struct relocation_row relocation_records[] = {
+    {.target = &relocation_target, .op = {.lsm = "apparmor"}},
+};
+
 int main(void) {
     return sparse_records[1].left == 11 && sparse_records[3].right == 32 &&
                    nested_records.limits[1].right == 22 && nested_records.limits[3].left == 41 &&

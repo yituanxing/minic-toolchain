@@ -1,0 +1,80 @@
+name: Linux Runtime Opt-in Perf Constant P QEMU Regression V1
+on:
+  push:
+    branches: [agent/linux-expanded-kbuild-v0]
+    paths:
+      - .github/workflows/linux-runtime-optin-perf-constant-p-qemu-v1.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  semantics:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build control and candidate with identical Canonical patches
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/constant-p-regression"
+          mkdir -p "$work"
+          MINIC_CORRECTNESS_SKIP_CONSTANT_P_ICE=1 \
+            bash tools/ci/linux-perf-build-minic-profile-v1.sh \
+              "$work/baseline" "$work/baseline-profile"
+          grep -qx 'SKIPPED_CONSTANT_P_ICE=apply-correctness-constant-p-ice-v1.py' \
+            "$work/baseline-profile/patch.log"
+          git reset --hard HEAD
+          bash tools/ci/linux-perf-build-minic-profile-v1.sh \
+            "$work/candidate" "$work/candidate-profile"
+          grep -qx 'apply-correctness-constant-p-ice-v1.py' \
+            "$work/candidate-profile/minic-profile.txt"
+          git diff --check
+      - name: Install RISC-V assembler and emulator
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends gcc-riscv64-linux-gnu libc6-dev-riscv64-cross qemu-user >/dev/null
+      - name: Compare GCC frontend, baseline rejection and fixed QEMU behavior
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/constant-p-regression"
+          valid="$GITHUB_WORKSPACE/tests/compiler/c0/gnu_constant_p_ice_regression.c"
+          invalid="$GITHUB_WORKSPACE/tests/compiler/c0/gnu_choose_dynamic_condition_reject.c"
+          cc -std=gnu11 -fsyntax-only "$valid"
+          cc -std=gnu11 -E -P -x c "$valid" -o "$work/valid.i"
+          set +e
+          "$work/baseline/bin/minic" -S "$work/valid.i" -o "$work/baseline.s" \
+            >"$work/baseline.log" 2>&1
+          baseline_rc=$?
+          set -e
+          echo "CONSTANT_P_ICE_BASELINE_RC=$baseline_rc"
+          "$work/candidate/bin/minic" -S "$work/valid.i" -o "$work/candidate.s" \
+            >"$work/candidate.log" 2>&1
+          test -s "$work/candidate.s"
+          riscv64-linux-gnu-gcc -static "$work/candidate.s" -o "$work/program.rv64"
+          qemu-riscv64 "$work/program.rv64"
+          echo "CONSTANT_P_ICE_RISCV_QEMU=PASS"
+          test "$baseline_rc" -ne 0
+          set +e
+          cc -std=gnu11 -fsyntax-only "$invalid" >"$work/invalid-gcc.log" 2>&1
+          gcc_rc=$?
+          cc -std=gnu11 -E -P -x c "$invalid" -o "$work/invalid.i"
+          "$work/candidate/bin/minic" -S "$work/invalid.i" -o "$work/invalid.s" \
+            >"$work/invalid-minic.log" 2>&1
+          minic_rc=$?
+          set -e
+          echo "CONSTANT_P_ICE_NON_ICE_REJECT gcc_rc=$gcc_rc minic_rc=$minic_rc"
+          test "$gcc_rc" -ne 0
+          test "$minic_rc" -ne 0
+          echo CONSTANT_P_ICE_REGRESSIONS=PASS
+      - name: Upload control and candidate evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: runtime-optin-perf-constant-p-ice-v1
+          path: |
+            build/constant-p-regression/*.log
+            build/constant-p-regression/candidate-profile/minic-profile.txt
+          retention-days: 7

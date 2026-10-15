@@ -1,0 +1,164 @@
+name: Linux Undef Diagnose V0
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: linux-undef-diagnose-v0-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Restore prepared Linux baseline
+        id: linux-base
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            build/linux-asm-symbolic-pool-v0/linux-6.6.143
+            build/linux-asm-symbolic-pool-v0/base-out
+          key: linux-undef-diagnose-base-v1-6.6.143-riscv-defconfig-${{ runner.os }}
+
+      - name: Install RV64 prerequisites
+        run: |
+          sudo apt-get -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            build-essential gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
+            bc bison flex libssl-dev libelf-dev make curl xz-utils python3
+
+      - name: Build patched MiniC
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-asm-symbolic-pool-v0"
+          build="$work/toolchain-diagnose"
+          ev="$work/evidence-diagnose"
+          rm -rf "$build" "$ev"
+          mkdir -p "$ev"
+          patches=(
+            apply-local-integer-assignment-v2.py
+            apply-local-integer-logical-conditions-v0.py
+            apply-local-null-pointer-facts-v0.py
+            apply-builtin-constant-p-local-facts-v0.py
+            apply-inline-integer-specialization-v0.py
+            apply-inline-specialization-local-facts-v0.py
+            apply-inline-specialization-stable-parameter-facts-v0.py
+            apply-inline-specialization-transitive-integer-v0.py
+            apply-inline-specialization-base-callee-integer-v0.py
+            apply-inline-specialization-capacity-v0.py
+            apply-inline-specialization-symbolic-address-v0.py
+            apply-inline-specialization-symbolic-nested-array-v0.py
+            apply-inline-specialization-symbolic-integer-closure-v0.py
+            apply-inline-specialization-symbolic-transitive-rewrite-v0.py
+            apply-inline-specialization-symbolic-array-lvalue-v0.py
+            apply-inline-specialization-symbolic-closed-integers-v0.py
+            apply-inline-specialization-base-callee-symbolic-v0.py
+            apply-inline-specialization-resolved-asm-goto-v0.py
+            apply-inline-specialization-core-reachability-v0.py
+            apply-inline-specialization-original-reachability-v0.py
+            apply-inline-asm-local-integer-facts-v0.py
+            apply-inline-specialization-core-empty-function-v0.py
+            apply-inline-specialization-label-alias-v0.py
+            apply-riscv64-default-text-section-v0.py
+            apply-riscv64-explicit-section-flags-v0.py
+            apply-inline-asm-symbolic-specialization-v0.py
+            apply-constant-inline-call-cfg-v1.py
+            apply-local-integer-arithmetic-closure-v0.py
+            apply-constant-cfg-product-v0.py
+            apply-core-unreachable-reentry-v0.py
+          )
+          for patch in "${patches[@]}"; do
+            python3 "tools/ci/$patch" | tee -a "$ev/patch.log"
+          done
+          git diff --check
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$build" \
+            "$build/bin/minic" "$build/bin/minic-cc"
+
+      - name: Prepare pinned Linux baseline
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-asm-symbolic-pool-v0"
+          src="$work/linux-6.6.143"
+          base="$work/base-out"
+          archive="$work/linux-6.6.143.tar.xz"
+          if test -s "$src/Makefile" && test -s "$base/.config" && \
+             test -s "$base/include/config/auto.conf" && test -s "$base/include/generated/autoconf.h"; then
+            echo "LINUX_UNDEF_DIAG_BASE=HIT"
+          else
+            rm -rf "$src" "$base"
+            mkdir -p "$work"
+            curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors \
+              https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.6.143.tar.xz -o "$archive"
+            printf '%s  %s\n' \
+              dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932 \
+              "$archive" | sha256sum -c -
+            tar -xJf "$archive" -C "$work"
+            make -C "$src" O="$base" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- defconfig
+            "$src/scripts/config" --file "$base/.config" \
+              -e BLK_DEV_INITRD -e DEVTMPFS -e DEVTMPFS_MOUNT \
+              -e SERIAL_8250 -e SERIAL_8250_CONSOLE
+            make -C "$src" O="$base" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- olddefconfig
+            make -C "$src" O="$base" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- -j4 prepare
+            echo "LINUX_UNDEF_DIAG_BASE=MISS_PREPARED"
+          fi
+
+      - name: Save prepared Linux baseline
+        if: steps.linux-base.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            build/linux-asm-symbolic-pool-v0/linux-6.6.143
+            build/linux-asm-symbolic-pool-v0/base-out
+          key: linux-undef-diagnose-base-v1-6.6.143-riscv-defconfig-${{ runner.os }}
+
+      - name: Compile three representative objects with intermediates
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-asm-symbolic-pool-v0"
+          src="$work/linux-6.6.143"
+          base="$work/base-out"
+          out="$work/out-diagnose"
+          ev="$work/evidence-diagnose"
+          wrapper="$GITHUB_WORKSPACE/tests/external/linux/stage2_kbuild_cc.sh"
+          rm -rf "$out"
+          cp -a --reflink=auto "$base" "$out"
+          targets=(mm/memory.o drivers/nvdimm/claim.o block/blk-mq.o)
+          start=$(date +%s)
+          MINIC="$work/toolchain-diagnose/bin/minic" \
+          REAL_CC=/usr/bin/riscv64-linux-gnu-gcc \
+          MINIC_KEEP_INTERMEDIATES=1 \
+          MINIC_KBUILD_TRACE="$ev/minic.trace" \
+          CORE_FAST_TRACE=1 \
+            make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
+              CC="$wrapper" -j3 V=1 "${targets[@]}" >"$ev/kbuild.log" 2>&1
+          echo "TIMING diagnose_s=$(($(date +%s) - start)) objects=${#targets[@]}" | tee "$ev/timing.txt"
+          for target in "${targets[@]}"; do
+            dir=$(dirname "$target")
+            base_name=$(basename "$target" .o)
+            key=${target//\//__}; key=${key%.o}
+            riscv64-linux-gnu-nm -u "$out/$target" | awk '{print $NF}' | sort -u >"$ev/$key.undefined"
+            cp -f "$out/$dir/$base_name.minic-stage2.i" "$ev/$key.i" 2>/dev/null || true
+            cp -f "$out/$dir/$base_name.minic-stage2.s" "$ev/$key.s" 2>/dev/null || true
+            cp -f "$out/$dir/$base_name.minic-stage2.minic.stderr" "$ev/$key.stderr" 2>/dev/null || true
+            echo "DIAG target=$target undefined=$(wc -l <"$ev/$key.undefined")"
+          done
+
+      - name: Preserve evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-undef-diagnose-v0
+          path: build/linux-asm-symbolic-pool-v0/evidence-diagnose/
+          if-no-files-found: ignore
+          retention-days: 7

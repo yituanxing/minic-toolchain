@@ -1,0 +1,94 @@
+name: One-shot Verified Branch Consolidation 2026-10-08
+on:
+  push:
+    branches: [agent/linux-expanded-kbuild-v0]
+    paths:
+      - '.github/workflows/branch-consolidation-one-shot-v1.yml'
+  workflow_dispatch:
+permissions:
+  contents: write
+  actions: read
+  pull-requests: read
+concurrency:
+  group: verified-one-shot-branch-consolidation-20261008
+  cancel-in-progress: false
+jobs:
+  consolidate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - name: Verify exact ref lease and archival ancestry before deletion
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -Eeuo pipefail
+          root="$GITHUB_WORKSPACE"
+          manifest="$root/tools/ci/branch-consolidation-20261008.tsv"
+          evidence="$root/build/branch-consolidation-20261008"
+          mkdir -p "$evidence"
+          cp "$manifest" "$evidence/manifest.tsv"
+          test "$(wc -l < "$manifest")" -eq 25
+          git fetch --prune origin '+refs/heads/*:refs/remotes/origin/*'
+          archive='archive/all-progress-2026-10-04'
+          archive_head=$(git rev-parse "refs/remotes/origin/$archive")
+          printf 'ARCHIVE_HEAD=%s\n' "$archive_head" | tee "$evidence/archive-head.txt"
+          test -f "$root/docs/ci/branch-consolidation-2026-10-08.md"
+          git cat-file -e "$archive_head^{commit}"
+          : > "$evidence/preflight.tsv"
+          gh api "repos/$GITHUB_REPOSITORY/pulls?state=open&per_page=100" --paginate --jq '.[].head.ref' > "$evidence/open-pr-heads.txt"
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs?status=in_progress&per_page=100" --paginate --jq '.workflow_runs[].head_branch' > "$evidence/in-progress-branches.txt"
+          while IFS=$'\t' read -r branch expected; do
+            [[ "$branch" == agent/* ]] || { echo "INVALID_BRANCH=$branch"; exit 1; }
+            [[ "$expected" =~ ^[0-9a-f]{40}$ ]] || exit 1
+            case "$branch" in
+              agent/linux-expanded-kbuild-v0|agent/linux-perf-boolean-domain-v1)
+                echo "cannot delete protected active branch $branch"; exit 1;;
+            esac
+            remote=$(git ls-remote --heads origin "refs/heads/$branch" | awk '{print $1}')
+            [[ "$remote" == "$expected" ]] || { echo "LEASE_MISMATCH=$branch remote=$remote expected=$expected"; exit 1; }
+            git cat-file -e "$expected^{commit}"
+            git merge-base --is-ancestor "$expected" "$archive_head" || { echo "NOT_ARCHIVED=$branch"; exit 1; }
+            if grep -Fxq "$branch" "$evidence/open-pr-heads.txt"; then
+              echo "OPEN_PR_BLOCKS_DELETION=$branch"; exit 1
+            fi
+            if grep -Fxq "$branch" "$evidence/in-progress-branches.txt"; then
+              echo "ACTIVE_RUN_BLOCKS_DELETION=$branch"; exit 1
+            fi
+            printf 'ARCHIVE_REACHABLE_PASS\t%s\t%s\n' "$branch" "$expected" | tee -a "$evidence/preflight.tsv"
+          done < "$manifest"
+          test "$(wc -l < "$evidence/preflight.tsv")" -eq 25
+          echo 'BRANCH_PREFLIGHT=PASS'
+      - name: Delete only exact verified refs using atomic SHA leases
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          manifest="tools/ci/branch-consolidation-20261008.tsv"
+          evidence="build/branch-consolidation-20261008"
+          : > "$evidence/delete-results.tsv"
+          while IFS=$'\t' read -r branch expected; do
+            git push --force-with-lease="refs/heads/$branch:$expected" origin ":refs/heads/$branch"
+            printf 'DELETED\t%s\t%s\n' "$branch" "$expected" | tee -a "$evidence/delete-results.tsv"
+          done < "$manifest"
+          test "$(wc -l < "$evidence/delete-results.tsv")" -eq 25
+          echo 'BRANCH_DELETION=PASS'
+      - name: Assert canonical four branches remain
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git ls-remote --heads origin | sed 's#.*refs/heads/##' | sort > build/branch-consolidation-20261008/after.txt
+          printf '%s\n' main agent/linux-expanded-kbuild-v0 agent/linux-perf-boolean-domain-v1 archive/all-progress-2026-10-04 | sort > build/branch-consolidation-20261008/expected.txt
+          diff -u build/branch-consolidation-20261008/expected.txt build/branch-consolidation-20261008/after.txt
+          echo 'BRANCH_CONSOLIDATION=PASS remaining=4'
+      - name: Preserve evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: verified-branch-consolidation-20261008
+          path: build/branch-consolidation-20261008/
+          if-no-files-found: warn
+          retention-days: 30

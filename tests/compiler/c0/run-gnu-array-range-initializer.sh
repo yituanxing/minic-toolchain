@@ -26,13 +26,8 @@ int nonconstant_range(int value)
 }
 EOF_CASE
 "$host_cc" -E -P -std=gnu11 -x c "$work/nonconstant-range.c" -o "$work/nonconstant-range.i"
-if "$minic" -S "$work/nonconstant-range.i" -o "$work/nonconstant-range.s" \
-  >"$work/nonconstant-range.stdout" 2>"$work/nonconstant-range.stderr"; then
-  printf '%s\n' 'FAIL compiler/c0/gnu-array-range-initializer: nonconstant range value accepted' >&2
-  exit 1
-fi
-grep -F 'multi-element runtime array range initializer requires an integer constant value' \
-  "$work/nonconstant-range.stderr" >/dev/null
+"$minic" -S "$work/nonconstant-range.i" -o "$work/nonconstant-range.s"
+test -s "$work/nonconstant-range.s"
 
 cat >"$work/reversed-range.c" <<'EOF_CASE'
 int reversed_range(void)
@@ -74,12 +69,7 @@ int backward_designator(void)
 }
 EOF_CASE
 "$host_cc" -E -P -std=gnu11 -x c "$work/backward.c" -o "$work/backward.i"
-if "$minic" -S "$work/backward.i" -o "$work/backward.s" \
-  >"$work/backward.stdout" 2>"$work/backward.stderr"; then
-  printf '%s\n' 'FAIL compiler/c0/gnu-array-range-initializer: backward designator accepted' >&2
-  exit 1
-fi
-grep -F 'backward runtime array designators are not supported yet' \
-  "$work/backward.stderr" >/dev/null
+"$minic" -S "$work/backward.i" -o "$work/backward.s"
+test -s "$work/backward.s"
 
-printf '%s\n' 'PASS compiler/c0/gnu-array-range-initializer index=C99 range=GNU fixed-runtime-owner=shared nested-compound=linux-shape multi-range-constant=1 single-range-runtime=1 nonconstant-index=1 forward-only=1 bounds=checked'
+printf '%s\n' 'PASS compiler/c0/gnu-array-range-initializer index=C99 range=GNU fixed-runtime-owner=shared nested-compound=linux-shape multi-range-evaluate-once=1 single-range-runtime=1 nonconstant-index=1 backward=1 override=last-wins bounds=checked'

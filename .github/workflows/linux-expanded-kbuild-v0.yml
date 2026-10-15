@@ -1,0 +1,368 @@
+name: Linux Expanded Kbuild V0
+
+on:
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: linux-expanded-kbuild-v0-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  image-frontier:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[linux-expanded-kbuild-v0]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Compute stable current-profile cache identity
+        id: profile-cache
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          digest=$(python3 tools/ci/linux-runtime-profile-cache-id-v1.py)
+          test -n "$digest"
+          printf 'digest=%s\n' "$digest" >>"$GITHUB_OUTPUT"
+          printf 'LINUX_RUNTIME_PROFILE_CACHE_ID=%s\n' "$digest"
+
+      - name: Restore current-profile owner checkpoint
+        id: owner-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-expanded-kbuild-v0/out
+          key: linux-expanded-owner-v1-6.6.143-${{ runner.os }}-${{ steps.profile-cache.outputs.digest }}-${{ hashFiles('tools/ci/linux-expanded-owner-targets-v1.txt', 'tools/ci/linux-expanded-owner-refresh-v1.sh') }}-c4
+          restore-keys: |
+            linux-expanded-owner-v1-6.6.143-${{ runner.os }}-${{ steps.profile-cache.outputs.digest }}-${{ hashFiles('tools/ci/linux-expanded-owner-targets-v1.txt', 'tools/ci/linux-expanded-owner-refresh-v1.sh') }}-
+            linux-expanded-mixed-v1-6.6.143-${{ runner.os }}-225077842dbe99b9c583654b7892ee2c9b7ac96fc53e0cbb9faa892f63eb4ad8
+
+      - name: Install RV64 Linux prerequisites
+        run: |
+          sudo apt-get -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            build-essential gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
+            bc bison flex libssl-dev libelf-dev make curl xz-utils python3
+
+      - name: Build exact centralized Linux runtime MiniC profile
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0"
+          build="$work/toolchain"
+          ev="$work/evidence"
+          mkdir -p "$ev"
+          bash tools/ci/linux-runtime-build-minic-profile-v1.sh "$build" "$ev/profile"
+          cp "$ev/profile/toolchain-timing.txt" "$ev/timing.txt"
+          grep -F 'apply-riscv64-core-value-slot-pack-v0.py' "$ev/profile/minic-profile.txt"
+          grep -F 'apply-riscv64-core-value-slot-reuse-v0.py' "$ev/profile/minic-profile.txt"
+          grep -F 'apply-riscv64-core-object-slot-reuse-cfg-hotfix-v0.py' "$ev/profile/minic-profile.txt"
+          grep -F 'apply-riscv64-structured-asm-used-callee-save-v0.py' "$ev/profile/minic-profile.txt"
+          grep -F 'apply-riscv64-pi-local-symbol-address-v0.py' "$ev/profile/minic-profile.txt"
+          echo "LINUX_EXPANDED_TOOLCHAIN=PASS head=$GITHUB_SHA"
+
+      - name: Prepare pinned Linux 6.6.143
+        id: prepare
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0"
+          archive="$work/linux-6.6.143.tar.xz"
+          src="$work/linux-6.6.143"
+          out="$work/out"
+          ev="$work/evidence"
+          mkdir -p "$ev"
+          printf 'KBUILD_CACHE_HIT=%s\nKBUILD_CACHE_MATCHED_KEY=%s\n' \
+            "${{ steps.owner-cache.outputs.cache-hit }}" \
+            "${{ steps.owner-cache.outputs.cache-matched-key }}" | tee "$ev/cache.txt"
+          curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors \
+            https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.6.143.tar.xz -o "$archive"
+          printf '%s  %s\n' dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932 "$archive" | sha256sum -c -
+          tar -xJf "$archive" -C "$work"
+          if test -s "$out/.config" && test -s "$out/include/config/auto.conf" && test -s "$out/include/generated/autoconf.h"; then
+            echo "LINUX_EXPANDED_CACHE_RESTORE=PASS"
+          else
+            make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- defconfig
+            "$src/scripts/config" --file "$out/.config" \
+              -e BLK_DEV_INITRD -e DEVTMPFS -e DEVTMPFS_MOUNT \
+              -e SERIAL_8250 -e SERIAL_8250_CONSOLE
+            make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- olddefconfig
+            make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- -j4 prepare
+          fi
+          sha256sum "$out/.config" >"$ev/config.sha256"
+
+      - name: Refresh only cached objects with bad explicit sections
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0"
+          src="$work/linux-6.6.143"
+          out="$work/out"
+          ev="$work/evidence"
+          wrapper="$GITHUB_WORKSPACE/tests/external/linux/stage2_kbuild_cc.sh"
+          python3 tools/ci/scan-linux-nonalloc-explicit-sections-v0.py "$out" \
+            >"$ev/section-refresh-targets.txt" 2>"$ev/section-refresh-detail.txt"
+          count=$(grep -c . "$ev/section-refresh-targets.txt" || true)
+          echo "LINUX_SECTION_REFRESH_TARGETS=$count" | tee "$ev/section-refresh-summary.txt"
+          if test "$count" -gt 0; then
+            mapfile -t targets <"$ev/section-refresh-targets.txt"
+            for target in "${targets[@]}"; do rm -f "$out/$target"; done
+            MINIC="$work/toolchain/bin/minic" REAL_CC=/usr/bin/riscv64-linux-gnu-gcc \
+            MINIC_KEEP_INTERMEDIATES=0 MINIC_KBUILD_TRACE="$ev/section-refresh.trace" CORE_FAST_TRACE=1 \
+              make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
+                CC="$wrapper" -j4 V=1 "${targets[@]}" >"$ev/section-refresh.log" 2>&1
+          fi
+          python3 tools/ci/scan-linux-nonalloc-explicit-sections-v0.py "$out" \
+            --verify --targets-file "$ev/section-refresh-targets.txt"
+
+      - name: Initialize current-profile owner checkpoint state
+        id: owner-state
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0"
+          out="$work/out"
+          ev="$work/evidence"
+          matched="${{ steps.owner-cache.outputs.cache-matched-key }}"
+          prefix="linux-expanded-owner-v1-6.6.143-${{ runner.os }}-${{ steps.profile-cache.outputs.digest }}-${{ hashFiles('tools/ci/linux-expanded-owner-targets-v1.txt', 'tools/ci/linux-expanded-owner-refresh-v1.sh') }}-c"
+          completed=0
+          c3_regular_done=false
+          if [[ "$matched" == "$prefix"[1-4] ]]; then
+            completed="${matched##*-c}"
+          elif [[ "$matched" == "${prefix}3a" ]]; then
+            completed=2
+            c3_regular_done=true
+          fi
+          if [[ "$completed" == 0 && "$c3_regular_done" != true ]]; then
+            while read -r cohort target; do
+              [[ "$cohort" == \#* || -z "$target" ]] && continue
+              rm -f "$out/$target"
+            done < tools/ci/linux-expanded-owner-targets-v1.txt
+            echo "OWNER_CHECKPOINT_INIT=FRESH_CURRENT_PROFILE"
+          else
+            echo "OWNER_CHECKPOINT_INIT=RESUME completed=$completed c3_regular_done=$c3_regular_done key=$matched"
+          fi
+          printf 'completed=%s\n' "$completed" >>"$GITHUB_OUTPUT"
+          printf 'c3_regular_done=%s\n' "$c3_regular_done" >>"$GITHUB_OUTPUT"
+          printf 'OWNER_CHECKPOINT_MATCHED_KEY=%s\nOWNER_CHECKPOINT_COMPLETED=%s\nOWNER_C3_REGULAR_DONE=%s\n' \
+            "$matched" "$completed" "$c3_regular_done" | tee "$ev/owner-checkpoint.txt"
+
+      - name: Preflight shared inline-asm blocker pair
+        id: blocker-pair
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0"
+          src="$work/linux-6.6.143"
+          out="$work/out"
+          ev="$work/evidence"
+          wrapper="$GITHUB_WORKSPACE/tests/external/linux/stage2_kbuild_cc.sh"
+          targets=(kernel/dma/pool.o mm/mprotect.o)
+          for target in "${targets[@]}"; do rm -f "$out/$target"; done
+          start=$(date +%s)
+          set +e
+          MINIC="$work/toolchain/bin/minic" REAL_CC=/usr/bin/riscv64-linux-gnu-gcc \
+          MINIC_KEEP_INTERMEDIATES=0 MINIC_KBUILD_TRACE="$ev/blocker-pair.trace" \
+          MINIC_ASM_BATCH_TRACE=1 MINIC_LOCAL_FACT_TRACE=1 CORE_FAST_TRACE=1 \
+            make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
+              CC="$wrapper" -j2 V=1 "${targets[@]}" >"$ev/blocker-pair.log" 2>&1
+          rc=$?
+          set -e
+          printf 'LINUX_BLOCKER_PAIR rc=%s elapsed_s=%s\n' "$rc" "$(($(date +%s) - start))" \
+            | tee "$ev/blocker-pair-summary.txt"
+          grep -a -E 'ASM_BATCH_(PROBE|INPUT)|ASM_OUTPUT_STAGE|CORE_FAST_TRACE|MINIC_KBUILD_BLOCKER|error:' \
+            "$ev/blocker-pair.log" >"$ev/blocker-pair-diagnostic.txt" || true
+          tail -n 240 "$ev/blocker-pair.log" >"$ev/blocker-pair-tail.txt" || true
+          exit "$rc"
+
+      - name: Compile current-profile owner cohort 1
+        id: owner-c1
+        shell: bash
+        run: |
+          bash tools/ci/linux-expanded-owner-refresh-v1.sh             1 "${{ steps.owner-state.outputs.completed }}"             "$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0/linux-6.6.143"             "$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0/out"             "$GITHUB_WORKSPACE/tests/external/linux/stage2_kbuild_cc.sh"             "$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0/toolchain/bin/minic"             "$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0/evidence"
+
+      - name: Save owner cohort 1 checkpoint
+        if: steps.owner-c1.outputs.changed == 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: build/linux-expanded-kbuild-v0/out
+          key: linux-expanded-owner-v1-6.6.143-${{ runner.os }}-${{ steps.profile-cache.outputs.digest }}-${{ hashFiles('tools/ci/linux-expanded-owner-targets-v1.txt', 'tools/ci/linux-expanded-owner-refresh-v1.sh') }}-c1
+
+      - name: Compile current-profile owner cohort 2
+        id: owner-c2
+        shell: bash
+        run: |
+          bash tools/ci/linux-expanded-owner-refresh-v1.sh             2 "${{ steps.owner-state.outputs.completed }}"             "$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0/linux-6.6.143"             "$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0/out"             "$GITHUB_WORKSPACE/tests/external/linux/stage2_kbuild_cc.sh"             "$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0/toolchain/bin/minic"             "$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0/evidence"
+
+      - name: Save owner cohort 2 checkpoint
+        if: steps.owner-c2.outputs.changed == 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: build/linux-expanded-kbuild-v0/out
+          key: linux-expanded-owner-v1-6.6.143-${{ runner.os }}-${{ steps.profile-cache.outputs.digest }}-${{ hashFiles('tools/ci/linux-expanded-owner-targets-v1.txt', 'tools/ci/linux-expanded-owner-refresh-v1.sh') }}-c2
+
+      - name: Compile current-profile owner cohort 3 regular targets
+        id: owner-c3a
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0"
+          src="$work/linux-6.6.143"
+          out="$work/out"
+          ev="$work/evidence"
+          wrapper="$GITHUB_WORKSPACE/tests/external/linux/stage2_kbuild_cc.sh"
+          completed="${{ steps.owner-state.outputs.completed }}"
+          restored="${{ steps.owner-state.outputs.c3_regular_done }}"
+          if (( completed >= 3 )) || [[ "$restored" == true ]]; then
+            echo "OWNER_COHORT_3A=SKIP_RESTORED" | tee "$ev/owner-c3a-summary.txt"
+            printf 'changed=false\n' >>"$GITHUB_OUTPUT"
+            exit 0
+          fi
+          mapfile -t targets < <(awk '$1 == 3 && $2 != "net/core/filter.o" { print $2 }' tools/ci/linux-expanded-owner-targets-v1.txt)
+          test "${#targets[@]}" -eq 17
+          start=$(date +%s)
+          MINIC="$work/toolchain/bin/minic" REAL_CC=/usr/bin/riscv64-linux-gnu-gcc \
+          MINIC_KEEP_INTERMEDIATES=0 MINIC_KBUILD_TRACE="$ev/owner-c3a.trace" CORE_FAST_TRACE=1 \
+            make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
+              CC="$wrapper" -j4 V=1 "${targets[@]}" >"$ev/owner-c3a.log" 2>&1
+          elapsed=$(($(date +%s) - start))
+          printf 'OWNER_COHORT_3A=PASS elapsed_s=%s targets=%s\n' "$elapsed" "${#targets[@]}" \
+            | tee "$ev/owner-c3a-summary.txt"
+          printf 'changed=true\n' >>"$GITHUB_OUTPUT"
+
+      - name: Save owner cohort 3 regular checkpoint
+        if: steps.owner-c3a.outputs.changed == 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: build/linux-expanded-kbuild-v0/out
+          key: linux-expanded-owner-v1-6.6.143-${{ runner.os }}-${{ steps.profile-cache.outputs.digest }}-${{ hashFiles('tools/ci/linux-expanded-owner-targets-v1.txt', 'tools/ci/linux-expanded-owner-refresh-v1.sh') }}-c3a
+
+      - name: Compile isolated net core filter owner
+        id: owner-c3-filter
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0"
+          src="$work/linux-6.6.143"
+          out="$work/out"
+          ev="$work/evidence"
+          wrapper="$GITHUB_WORKSPACE/tests/external/linux/stage2_kbuild_cc.sh"
+          completed="${{ steps.owner-state.outputs.completed }}"
+          if (( completed >= 3 )); then
+            echo "OWNER_COHORT_3_FILTER=SKIP_RESTORED" | tee "$ev/owner-c3-filter-summary.txt"
+            printf 'changed=false\n' >>"$GITHUB_OUTPUT"
+            exit 0
+          fi
+          start=$(date +%s)
+          set +e
+          MINIC="$work/toolchain/bin/minic" REAL_CC=/usr/bin/riscv64-linux-gnu-gcc \
+          MINIC_KEEP_INTERMEDIATES=1 MINIC_KBUILD_TRACE="$ev/owner-c3-filter.trace" \
+          MINIC_BOOTSTRAP_TRACE=1 MINIC_ASM_BATCH_TRACE=1 MINIC_LOCAL_FACT_TRACE=1 CORE_FAST_TRACE=1 \
+            timeout --signal=TERM --kill-after=15s 10m \
+            make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
+              CC="$wrapper" -j1 V=1 net/core/filter.o >"$ev/owner-c3-filter.log" 2>&1
+          rc=$?
+          set -e
+          elapsed=$(($(date +%s) - start))
+          stderr_file=$(find "$work" -type f -name 'filter.minic-stage2.minic.stderr' -print -quit 2>/dev/null || true)
+          stdout_file=$(find "$work" -type f -name 'filter.minic-stage2.minic.stdout' -print -quit 2>/dev/null || true)
+          input_file=$(find "$work" -type f -name 'filter.minic-stage2.i' -print -quit 2>/dev/null || true)
+          [[ -z "$stderr_file" ]] || cp "$stderr_file" "$ev/owner-c3-filter.minic.stderr"
+          [[ -z "$stdout_file" ]] || cp "$stdout_file" "$ev/owner-c3-filter.minic.stdout"
+          if [[ -n "$input_file" ]]; then
+            wc -lc "$input_file" | tee "$ev/owner-c3-filter-input-size.txt"
+          fi
+          if (( rc != 0 )); then
+            printf 'OWNER_COHORT_3_FILTER=DIAGNOSTIC_STOP rc=%s elapsed_s=%s targets=1\n' "$rc" "$elapsed" \
+              | tee "$ev/owner-c3-filter-summary.txt"
+            exit "$rc"
+          fi
+          printf 'OWNER_COHORT_3_FILTER=PASS elapsed_s=%s targets=1\n' "$elapsed" \
+            | tee "$ev/owner-c3-filter-summary.txt"
+          printf 'changed=true\n' >>"$GITHUB_OUTPUT"
+
+      - name: Save owner cohort 3 checkpoint
+        if: steps.owner-c3-filter.outputs.changed == 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: build/linux-expanded-kbuild-v0/out
+          key: linux-expanded-owner-v1-6.6.143-${{ runner.os }}-${{ steps.profile-cache.outputs.digest }}-${{ hashFiles('tools/ci/linux-expanded-owner-targets-v1.txt', 'tools/ci/linux-expanded-owner-refresh-v1.sh') }}-c3
+
+      - name: Compile current-profile owner cohort 4
+        id: owner-c4
+        shell: bash
+        run: |
+          bash tools/ci/linux-expanded-owner-refresh-v1.sh             4 "${{ steps.owner-state.outputs.completed }}"             "$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0/linux-6.6.143"             "$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0/out"             "$GITHUB_WORKSPACE/tests/external/linux/stage2_kbuild_cc.sh"             "$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0/toolchain/bin/minic"             "$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0/evidence"
+
+      - name: Save owner cohort 4 checkpoint
+        if: steps.owner-c4.outputs.changed == 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: build/linux-expanded-kbuild-v0/out
+          key: linux-expanded-owner-v1-6.6.143-${{ runner.os }}-${{ steps.profile-cache.outputs.digest }}-${{ hashFiles('tools/ci/linux-expanded-owner-targets-v1.txt', 'tools/ci/linux-expanded-owner-refresh-v1.sh') }}-c4
+
+      - name: Build Linux Image through MiniC until next frontier
+        id: frontier
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0"
+          src="$work/linux-6.6.143"
+          out="$work/out"
+          ev="$work/evidence"
+          wrapper="$GITHUB_WORKSPACE/tests/external/linux/stage2_kbuild_cc.sh"
+          trace="$ev/minic-kbuild.trace"
+          : >"$trace"
+          start=$(date +%s)
+          set +e
+          MINIC="$work/toolchain/bin/minic" REAL_CC=/usr/bin/riscv64-linux-gnu-gcc \
+          MINIC_KEEP_INTERMEDIATES=0 MINIC_KBUILD_TRACE="$trace" CORE_FAST_TRACE=1 \
+            make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
+              CC="$wrapper" -j4 V=1 Image >"$ev/kbuild.log" 2>&1
+          rc=$?
+          set -e
+          elapsed=$(($(date +%s) - start))
+          echo "TIMING image_frontier_s=$elapsed rc=$rc" | tee -a "$ev/timing.txt"
+          tail -n 120 "$trace" >"$ev/minic-kbuild-tail.trace" || true
+          attempts=$(grep -c '^minic ' "$trace" || true)
+          passes=$(grep -c '^pass ' "$trace" || true)
+          delegates=$(grep -c '^delegate ' "$trace" || true)
+          blockers=$(grep -a -c 'MINIC_KBUILD_BLOCKER' "$ev/kbuild.log" || true)
+          orphan_text=$(grep -a -c 'orphan section.*\.text\.' "$ev/kbuild.log" || true)
+          nonalloc=$(grep -a -c 'unexpected non-allocatable section' "$ev/kbuild.log" || true)
+          bfd_asserts=$(grep -a -c 'elfnn-riscv.c:.*Assertion' "$ev/kbuild.log" || true)
+          undefined_refs=$(grep -a -c 'undefined reference to' "$ev/kbuild.log" || true)
+          undefined_unique=$(grep -a -oP 'undefined reference to `[^\x27]+' "$ev/kbuild.log" | sed 's/^undefined reference to `//' | sort -u | wc -l || true)
+          printf 'LINUX_EXPANDED_FRONTIER rc=%s minic_attempts=%s passes=%s delegates=%s blockers=%s orphan_text=%s nonalloc=%s bfd_asserts=%s undefined_refs=%s undefined_unique=%s\n' \
+            "$rc" "$attempts" "$passes" "$delegates" "$blockers" "$orphan_text" "$nonalloc" "$bfd_asserts" "$undefined_refs" "$undefined_unique" | tee "$ev/summary.txt"
+          cat "$ev/cache.txt" >>"$ev/summary.txt" || true
+          cat "$ev/section-refresh-summary.txt" >>"$ev/summary.txt" || true
+          cat "$ev/undef-refresh-summary.txt" >>"$ev/summary.txt" || true
+          grep -a -E 'riscv64-linux-gnu-ld|orphan section|unexpected non-allocatable section|elfnn-riscv.c:.*Assertion|Segmentation fault|undefined reference|modpost:' \
+            "$ev/kbuild.log" | tail -n 1200 >"$ev/link-frontier.log" || true
+          tail -n 300 "$ev/kbuild.log" >"$ev/kbuild-tail.log" || true
+          if test "$rc" -eq 0; then
+            test -s "$out/arch/riscv/boot/Image"
+            printf 'LINUX_EXPANDED_IMAGE=PASS image_bytes=%s\n' "$(stat -c %s "$out/arch/riscv/boot/Image")" | tee -a "$ev/summary.txt"
+          fi
+          exit "$rc"
+
+      - name: Save certified successful Linux Image cache
+        if: success() && steps.frontier.outcome == 'success'
+        uses: actions/cache/save@v4
+        with:
+          path: build/linux-expanded-kbuild-v0/out
+          key: linux-expanded-image-v3-6.6.143-${{ runner.os }}-${{ steps.profile-cache.outputs.digest }}-${{ hashFiles('tools/ci/linux-expanded-owner-targets-v1.txt', 'tools/ci/linux-expanded-owner-refresh-v1.sh') }}
+
+      - name: Preserve expanded frontier evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-expanded-kbuild-v0
+          path: build/linux-expanded-kbuild-v0/evidence/
+          if-no-files-found: ignore
+          retention-days: 7

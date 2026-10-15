@@ -1,0 +1,19 @@
+0
+9
+10
+12
+65
+68
+72
+100
+150
+200
+231
+300
+350
+400
+450
+499
+# macro-hash integrated validation
+# first500 convergence replay after pragma/variadic/alias fixes
+# current-head full500 convergence measurement after remaining-five focus
