@@ -474,3 +474,11 @@ PERF-006 `blake2s` 的真实 Runtime 布尔域索引收益为 1465.171ms→1368.
 合计 **25.234→23.252s**，额外节省约 **1.982s（7.86%）**；两个优化并非完全重叠，`crc32` 是主要获益者。但这依然是本组同-run 2× 快筛，**不等于完整 Linux 7.86%**。状态 `verified-local-cohort / integer-optional`。符号归属过滤已在独立 6 TU 上有 1.24～1.42×，相比之下整数索引边际小且更集中，优先为符号过滤做**完整 500 TU 等价认证**，不要为了小尾巴继续优化整数索引。
 
 相应 [CI #38664911462](https://github.com/yituanxing/minic-toolchain/actions/runs/38664911462) 仅做严格正确性：尝试直接恢复现成 SHA-frozen first500 corpus（命中前不下载或重生成），固定原 Boolean Runtime，两臂仅差符号归属过滤，4 worker 每输入双方只编译一次并 SHA 比较。允许的结论是 `selected=500 identical=500`，一处编译错误或汇编不同即记为不通过；不是性能测试，更不是 QEMU P1 认证。当前仍待最终 CI verdict。
+
+## 26. PERF-021：符号传递专门化 CALL-only 候选及受控失败修复（2026-10-15）
+
+在六个 Linux 文件的 `FunctionBody` 来源归属索引表现为 **1.24～1.42×** 后，仍可见 transitive 循环遍历整个 TU 所有表达式。现有整数版 CALL-ID 索引已有 3/3 字节等价，故仅以新 opt-in `tools/ci/apply-perf-symbolic-call-index-v1.py` 加到 **Boolean + symbolic-owner**，不混入其他算法。候选先收集原始顺序的 CALL expression ID；索引分配失败或表达式数量异常时回退原扫描，并保留失败路径内存清理。再次复用 SHA-frozen crc32/dev/tcp_input，双臂各热身一次+两轮配对。
+
+首次 [CI #38665239996](https://github.com/yituanxing/minic-toolchain/actions/runs/38665239996) **失败且没有 A/B 数据**：可读日志定位到 Python patch 的源码锚点错误 `symbolic transitive scan anchor count != 1`；此前统一全局检查错误地把其他函数里的同形表达式循环也计入，失败在 **源文件改写阶段**，并非编译器语义或生成汇编失败。commit `d0a5b032` 将锚点限制到 symbolic transitive 代码块前后，保留原所有语义路径。隔离复跑 [#38665476648](https://github.com/yituanxing/minic-toolchain/actions/runs/38665476648)，以其最终 `MINIC_ONE_OWNER_AB=PASS` 和性能为判据；如无实质改善就停止，不对同项继续小修。
+
+另外新增 `tools/ci/linux-perf-frozen-corpus-differential-v1.py` 的 [CI #38664911462](https://github.com/yituanxing/minic-toolchain/actions/runs/38664911462)，严格恢复既有 500 个 SHA-frozen GNU Kbuild `.i`，而非重新下载内核。每个真实 TU 都由原 Runtime+Boolean 与仅加 symbolic-owner 两种编译器编译，独立 SHA 对比 `.s`，只在 **500/500 字节相同且均成功** 时宣称局部 500 份语义表象认证；这不是 Linux 全量运行时 P1。两条 CI 未得最终判定之前不可把它们写成 `PASS`。
