@@ -305,9 +305,25 @@ done:
 }
 
 '''
-if text.count(helper) == 1 and text.count(anchor) == 1:
+# Later, separately verified original-reachability and empty-block fixes edit
+# the middle of this original helper. Check its exact five structural function
+# boundaries, rather than demanding byte identity with the oldest overlay
+# snapshot; never inject another copy just because later approved fixes exist.
+_core_helper_symbols = (
+    "static MinicFunctionId minic_core_named_function_id(",
+    "static bool minic_enqueue_core_named_function(",
+    "static bool minic_enqueue_core_block(",
+    "static bool minic_walk_reachable_core_edges(",
+    "static bool minic_prune_inline_specializations_from_core(",
+)
+_core_helper_counts = tuple(text.count(x) for x in _core_helper_symbols)
+if all(x == 1 for x in _core_helper_counts) and text.count(anchor) == 1:
+    if ("minic_walk_reachable_core_edges(program," not in text or
+            "function->is_referenced = reachable[function_index];" not in text or
+            "minic_enqueue_core_block(core->entry_block," not in text):
+        raise SystemExit("core reachability helper present but incomplete")
     print("MINIC_INLINE_SPECIALIZATION_CORE_REACHABILITY_V0=HELPER_ALREADY_CANONICAL")
-elif text.count(helper) == 0 and text.count(anchor) == 1:
+elif all(x == 0 for x in _core_helper_counts) and text.count(anchor) == 1:
     text = text.replace(anchor, helper + anchor, 1)
 else:
     raise SystemExit("core reachability helper missing, duplicate or partially promoted")
