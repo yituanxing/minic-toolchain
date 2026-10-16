@@ -15,6 +15,8 @@ mkdir -p "$ev"
 # The 9bee70c Runtime44 + integrated Perf4 post-overlay C sources are
 # checked in atomically. Keep historical scripts intact for older branches;
 # this profile now verifies the exact native files and skips reinjection.
+# A refreshed exact source hash is a CANDIDATE for current full-Linux/P1,
+# not a runtime PASS until the seven live shards and QEMU gate complete.
 native_manifest="docs/ci/native-runtime44-perf4-validated-sha1.txt"
 native_profile=0
 if [[ -f "$native_manifest" ]]; then
