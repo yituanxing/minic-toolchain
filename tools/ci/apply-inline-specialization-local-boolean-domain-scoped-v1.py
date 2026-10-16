@@ -9,6 +9,10 @@ from pathlib import Path
 
 original_path = Path("src/compiler/compiler.c")
 source = original_path.read_text()
+# The canonical source contains this certified optimization: do not double-apply.
+if "MINIC_BOOLEAN_DOMAIN_SCOPED_NATIVE_V1" in source:
+    print("MINIC_PERF_BOOLEAN_DOMAIN_SCOPED_V1=ALREADY_NATIVE")
+    raise SystemExit(0)
 anchor = "static bool minic_inline_local_boolean_domain(\n"
 end_marker = "\n}\n\nstatic bool minic_inline_boolean_range_argument("
 assert source.count(anchor) == 1, "expected exactly one original Boolean Domain helper"

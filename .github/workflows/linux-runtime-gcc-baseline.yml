@@ -1429,6 +1429,16 @@ jobs:
             echo "LINUX_PERF_3_SHARD=READY shard=${{ matrix.shard }}/7"
           fi
           export COHORT_ACTION=compile COHORT_ALLOW_SHARD=1
+          if [[ "${{ contains(github.event.head_commit.message, '[linux-boolean-native-full]') }}" == true ]]; then
+            # Keep the established seven-way stride schedule; reuse GNU Kbuild
+            # preprocessing and GNU AS, measuring only the actual MiniC compiler.
+            export MINIC_BOOLEAN_DOMAIN_PERF=1
+            export MINIC_BOOLEAN_DOMAIN_COUNTS_LOG="$ev/boolean-domain-counts.tsv"
+            export COHORT_GNU_PREFLIGHT_ALLOW_SEVEN_SHARD_VOLATILE=1
+            export COHORT_PROFILE_STAGES=1
+            : >"$MINIC_BOOLEAN_DOMAIN_COUNTS_LOG"
+            echo "MINIC_BOOLEAN_NATIVE_2064=START shard=${{ matrix.shard }}/7 GNU_PP=true native_minic=true GNU_AS=true counters=true"
+          fi
           if [[ "${{ contains(github.event.head_commit.message, '[linux-perf-2064-ab]') }}" == true ]]; then
             export COHORT_PERF_2064_AB=1
             export COHORT_PERF_2064_BASELINE="$ev/perf-before/bin/minic"
@@ -1454,6 +1464,13 @@ jobs:
           grep -Fq "COHORT_PRODUCE_ONLY=PASS objects=$n" "$ev/cohort.log"
           test -s "$ev/minic-identity.txt"
           (cd "$ev"; sha256sum --quiet -c minic-manifest.sha256)
+          if [[ "${{ contains(github.event.head_commit.message, '[linux-boolean-native-full]') }}" == true ]]; then
+            python3 tools/ci/linux-minic-boolean-telemetry-v1.py \
+              --owners "$ev/full-objects.txt" \
+              --metrics "$ev/boolean-domain-counts.tsv" \
+              --output "$ev/boolean-domain-summary.json"
+            echo "MINIC_BOOLEAN_NATIVE_2064=SHARD_PASS shard=${{ matrix.shard }}/7 objects=$n"
+          fi
           echo "GNU_MINIC_SHARD_READY=PASS shard=${{ matrix.shard }} objects=$n"
 
       - name: Cache completed shard independently of later link failures
@@ -1477,6 +1494,9 @@ jobs:
             build/linux-runtime-gcc-shards-v1/shard-${{ matrix.shard }}/minic-identity.txt
             build/linux-runtime-gcc-shards-v1/shard-${{ matrix.shard }}/full-objects.txt
             build/linux-runtime-gcc-shards-v1/shard-${{ matrix.shard }}/cohort.log
+            build/linux-runtime-gcc-shards-v1/shard-${{ matrix.shard }}/boolean-domain-counts.tsv
+            build/linux-runtime-gcc-shards-v1/shard-${{ matrix.shard }}/boolean-domain-summary.json
+            build/linux-runtime-gcc-shards-v1/shard-${{ matrix.shard }}/stage-probe/stages.tsv
           if-no-files-found: error
           retention-days: 3
 

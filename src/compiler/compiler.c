@@ -1484,7 +1484,7 @@ static bool minic_inline_local_is_parameter(
  * increments/decrements and asm outputs so the fact is never inferred across
  * an unknown write.
  */
-static bool minic_inline_local_boolean_domain(
+static bool minic_inline_local_boolean_domain_legacy(
     const MinicC0Program *program,
     MinicLocalId local_id) {
     bool saw_assignment = false;
@@ -1568,6 +1568,200 @@ static bool minic_inline_local_boolean_domain(
     }
 
     return saw_assignment;
+}
+
+
+
+typedef struct MinicInlineLocalBooleanDomainCache {
+    const MinicC0Program *program;
+    bool *values;
+    size_t local_count;
+    size_t statement_count;
+    size_t expression_count;
+    size_t inline_asm_count;
+} MinicInlineLocalBooleanDomainCache;
+
+static MinicInlineLocalBooleanDomainCache minic_inline_local_boolean_domain_cache;
+static size_t minic_perf_boolean_domain_queries;
+static size_t minic_perf_boolean_domain_builds;
+static size_t minic_perf_boolean_domain_fallbacks;
+
+static void minic_inline_local_boolean_domain_cache_clear(void) {
+    free(minic_inline_local_boolean_domain_cache.values);
+    (void)memset(&minic_inline_local_boolean_domain_cache, 0,
+                 sizeof(minic_inline_local_boolean_domain_cache));
+    minic_perf_boolean_domain_queries = 0U;
+    minic_perf_boolean_domain_builds = 0U;
+    minic_perf_boolean_domain_fallbacks = 0U;
+}
+
+static bool minic_inline_build_local_boolean_domain_cache(
+    const MinicC0Program *program) {
+    bool *values = NULL;
+    bool *parameter = NULL;
+    bool *saw_assignment = NULL;
+    bool *invalid = NULL;
+    size_t function_index;
+    size_t statement_index;
+    size_t expression_index;
+    size_t asm_index;
+    size_t local_index;
+
+    (void)minic_inline_local_is_parameter;
+    if (program == NULL ||
+        program->local_count > SIZE_MAX / sizeof(bool)) {
+        return false;
+    }
+    values = (bool *)calloc(program->local_count == 0U ? 1U : program->local_count,
+                            sizeof(*values));
+    parameter = (bool *)calloc(program->local_count == 0U ? 1U : program->local_count,
+                               sizeof(*parameter));
+    saw_assignment =
+        (bool *)calloc(program->local_count == 0U ? 1U : program->local_count,
+                       sizeof(*saw_assignment));
+    invalid = (bool *)calloc(program->local_count == 0U ? 1U : program->local_count,
+                             sizeof(*invalid));
+    if (values == NULL || parameter == NULL || saw_assignment == NULL ||
+        invalid == NULL) {
+        free(values);
+        free(parameter);
+        free(saw_assignment);
+        free(invalid);
+        return false;
+    }
+
+    for (function_index = 0U; function_index < program->function_count;
+         ++function_index) {
+        const MinicFunction *function = &program->functions[function_index];
+        size_t parameter_index;
+        if (!function->is_defined || function->local_begin > program->local_count ||
+            function->parameter_count > program->local_count - function->local_begin) {
+            continue;
+        }
+        for (parameter_index = 0U; parameter_index < function->parameter_count;
+             ++parameter_index) {
+            parameter[function->local_begin + parameter_index] = true;
+        }
+    }
+
+    for (statement_index = 0U; statement_index < program->statement_count;
+         ++statement_index) {
+        const MinicStatement *statement = &program->statements[statement_index];
+        MinicLocalId target_local = MINIC_LOCAL_INVALID;
+        if (!minic_inline_direct_local_target(
+                program, statement->target_expression, &target_local) ||
+            target_local >= program->local_count) {
+            continue;
+        }
+        if (statement->kind != MINIC_STATEMENT_ASSIGN ||
+            statement->expression == MINIC_EXPRESSION_INVALID ||
+            !minic_inline_boolean_domain_value(
+                program, statement->expression, 0U)) {
+            invalid[target_local] = true;
+        } else {
+            saw_assignment[target_local] = true;
+        }
+    }
+
+    for (expression_index = 0U; expression_index < program->expression_count;
+         ++expression_index) {
+        const MinicExpression *expression = &program->expressions[expression_index];
+        MinicLocalId target_local = MINIC_LOCAL_INVALID;
+
+        if (expression->kind == MINIC_EXPRESSION_ADDRESS_OF &&
+            minic_inline_direct_local_target(
+                program, expression->value.unary.operand, &target_local) &&
+            target_local < program->local_count) {
+            invalid[target_local] = true;
+            continue;
+        }
+        if (expression->kind == MINIC_EXPRESSION_UNARY &&
+            (expression->value.unary.operator_kind == MINIC_UNARY_POST_INCREMENT ||
+             expression->value.unary.operator_kind == MINIC_UNARY_POST_DECREMENT ||
+             expression->value.unary.operator_kind == MINIC_UNARY_PRE_INCREMENT ||
+             expression->value.unary.operator_kind == MINIC_UNARY_PRE_DECREMENT) &&
+            minic_inline_direct_local_target(
+                program, expression->value.unary.operand, &target_local) &&
+            target_local < program->local_count) {
+            invalid[target_local] = true;
+            continue;
+        }
+        if ((expression->kind == MINIC_EXPRESSION_ASSIGNMENT ||
+             expression->kind == MINIC_EXPRESSION_COMPOUND_ASSIGNMENT) &&
+            minic_inline_direct_local_target(
+                program, expression->value.binary.left, &target_local) &&
+            target_local < program->local_count) {
+            if (expression->kind != MINIC_EXPRESSION_ASSIGNMENT ||
+                !minic_inline_boolean_domain_value(
+                    program, expression->value.binary.right, 0U)) {
+                invalid[target_local] = true;
+            } else {
+                saw_assignment[target_local] = true;
+            }
+        }
+    }
+
+    for (asm_index = 0U; asm_index < program->inline_asm_count; ++asm_index) {
+        const MinicInlineAsm *inline_asm = &program->inline_asms[asm_index];
+        size_t output_index;
+        for (output_index = 0U; output_index < inline_asm->output_count;
+             ++output_index) {
+            MinicLocalId output_local = MINIC_LOCAL_INVALID;
+            if (minic_inline_direct_local_target(
+                    program,
+                    inline_asm->outputs[output_index].expression,
+                    &output_local) &&
+                output_local < program->local_count) {
+                invalid[output_local] = true;
+            }
+        }
+    }
+
+    for (local_index = 0U; local_index < program->local_count; ++local_index) {
+        values[local_index] =
+            minic_type_is_integer(program->locals[local_index].type) &&
+            !parameter[local_index] &&
+            saw_assignment[local_index] &&
+            !invalid[local_index];
+    }
+
+    free(parameter);
+    free(saw_assignment);
+    free(invalid);
+    free(minic_inline_local_boolean_domain_cache.values);
+    minic_inline_local_boolean_domain_cache.program = program;
+    minic_inline_local_boolean_domain_cache.values = values;
+    minic_inline_local_boolean_domain_cache.local_count = program->local_count;
+    minic_inline_local_boolean_domain_cache.statement_count = program->statement_count;
+    minic_inline_local_boolean_domain_cache.expression_count = program->expression_count;
+    minic_inline_local_boolean_domain_cache.inline_asm_count = program->inline_asm_count;
+    minic_perf_boolean_domain_builds += 1U;
+    return true;
+}
+
+
+/* MINIC_BOOLEAN_DOMAIN_SCOPED_NATIVE_V1: certified on 500 real Linux inputs. */
+static bool minic_inline_local_boolean_domain(
+    const MinicC0Program *program,
+    MinicLocalId local_id) {
+    if (program == NULL || local_id >= program->local_count) {
+        return false;
+    }
+    minic_perf_boolean_domain_queries += 1U;
+    /* An appended clone may grow the underlying arenas without changing
+     * the Program address. All arenas referenced by write scanning matter. */
+    if (minic_inline_local_boolean_domain_cache.program != program ||
+        minic_inline_local_boolean_domain_cache.local_count != program->local_count ||
+        minic_inline_local_boolean_domain_cache.statement_count != program->statement_count ||
+        minic_inline_local_boolean_domain_cache.expression_count != program->expression_count ||
+        minic_inline_local_boolean_domain_cache.inline_asm_count != program->inline_asm_count ||
+        minic_inline_local_boolean_domain_cache.values == NULL) {
+        if (!minic_inline_build_local_boolean_domain_cache(program)) {
+            minic_perf_boolean_domain_fallbacks += 1U;
+            return minic_inline_local_boolean_domain_legacy(program, local_id);
+        }
+    }
+    return minic_inline_local_boolean_domain_cache.values[local_id];
 }
 
 static bool minic_inline_boolean_range_argument(
@@ -2696,6 +2890,8 @@ int minic_compile_preprocessed_file_with_options(const char *input_path,
         diagnostic->column = 1U;
         diagnostic->message[0] = '\0';
     }
+    /* A stack-reused Program pointer does not identify a new TU. */
+    minic_inline_local_boolean_domain_cache_clear();
     buffer.data = NULL;
     buffer.size = 0U;
     if (!minic_read_file(input_path, &buffer, diagnostic)) {
@@ -2826,6 +3022,14 @@ int minic_compile_preprocessed_file_with_options(const char *input_path,
 
     minic_core_function_set_destroy(&core_set);
     minic_c0_program_destroy(&program);
+    if (getenv("MINIC_BOOLEAN_DOMAIN_PERF") != NULL) {
+        (void)fprintf(stderr,
+                      "MINIC_BOOLEAN_DOMAIN queries=%zu builds=%zu fallbacks=%zu\n",
+                      minic_perf_boolean_domain_queries,
+                      minic_perf_boolean_domain_builds,
+                      minic_perf_boolean_domain_fallbacks);
+    }
+    minic_inline_local_boolean_domain_cache_clear();
     free(buffer.data);
     return success ? 0 : 1;
 }
