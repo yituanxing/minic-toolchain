@@ -70,6 +70,7 @@ def main() -> int:
     p.add_argument("--shards", type=int, required=True)
     p.add_argument("--sample-per-shard", type=int, default=2)
     p.add_argument("--profile-snapshot", type=Path)
+    p.add_argument("--native-macro-rules", action="store_true")
     args = p.parse_args()
     if args.profile_snapshot is not None and not args.profile_snapshot.is_file():
         raise SystemExit("MINIPP_SEVEN=FAIL native_macro_snapshot_missing")
@@ -123,6 +124,8 @@ def main() -> int:
                 if args.profile_snapshot is not None:
                     env["MINIPP_PREDEFINES_SNAPSHOT"] = str(
                         args.profile_snapshot.resolve())
+                if args.native_macro_rules:
+                    env["MINIPP_PREDEFINES_NATIVE_RULES"] = "1"
                 proc = subprocess.run(
                     ["bash", "tests/preprocessor/build_reference_predefines.sh",
                      *context], cwd=Path(__file__).resolve().parents[2],
@@ -198,7 +201,8 @@ def main() -> int:
         "status": "PASS" if passed == len(rows) else "FAIL",
         "qemu_claim": False, "full_2064_pp_claim": False,
         "full_shard": args.sample_per_shard == 0,
-        "builtin_profile": ("pinned" if args.profile_snapshot is not None
+        "builtin_profile": ("native_rules" if args.native_macro_rules
+                            else "pinned" if args.profile_snapshot is not None
                             else "gcc_reference"),
         "builtin_profile_sha": (sha(args.profile_snapshot.resolve())
                                 if args.profile_snapshot is not None else None),
@@ -211,6 +215,11 @@ def main() -> int:
         print(f"MINIPP_SEVEN_PINNED_PROFILE=PASS worker={args.shard}/7 "
               f"native_C={passed} no_GCC_target_macro_generation=true "
               "GNU_reference_only=true", flush=True)
+    if args.native_macro_rules and passed == len(rows):
+        print(f"MINIPP_SEVEN_NATIVE_MACRO_RULES=PASS worker={args.shard}/7 "
+              f"native_C={passed} builtin_context=generated_by_Mini_rules "
+              "GNU_reference_bytes_equal=true GCC_macro_processes=0",
+              flush=True)
     return 0 if passed == len(rows) else 1
 
 
