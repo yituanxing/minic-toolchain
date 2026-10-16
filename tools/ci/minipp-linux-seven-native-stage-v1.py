@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+
+from linux_minipp_seven_balanced_plan_v1 import balanced_members
 import json
 import os
 from pathlib import Path
@@ -91,6 +93,7 @@ def main() -> int:
     p.add_argument("--shard", type=int, required=True)
     p.add_argument("--shards", type=int, required=True)
     p.add_argument("--sample-per-shard", type=int, default=2)
+    p.add_argument("--balanced-plan", type=Path, help="opt-in SHA-bound LPT owner distribution")
     p.add_argument("--profile-snapshot", type=Path)
     p.add_argument("--native-macro-rules", action="store_true")
     args = p.parse_args()
@@ -120,7 +123,10 @@ def main() -> int:
     if missing:
         raise SystemExit("MINIPP_SEVEN=FAIL missing-real-Kbuild-C-producers:"
                          + ",".join(missing[:8]))
-    assigned = owner_names[args.shard::args.shards]
+    distribution = (balanced_members(owner_names, args.balanced_plan)
+                    if args.balanced_plan is not None else None)
+    assigned = (distribution[args.shard] if distribution is not None
+                else owner_names[args.shard::args.shards])
     selected = (assigned if args.sample_per_shard == 0
                 else assigned[:args.sample_per_shard])
     if (not selected or
@@ -128,7 +134,9 @@ def main() -> int:
         raise SystemExit("MINIPP_SEVEN=FAIL incomplete-worker-selection")
     print(f"MINIPP_SEVEN_PARTITION=PASS worker={args.shard}/7 "
           f"frozen_owners={len(owner_names)} selected={len(selected)} "
-          "compiler_input=MiniPP.i GNU_reference_only=true", flush=True)
+          "compiler_input=MiniPP.i GNU_reference_only=true "
+          + ("assignment=balanced_sha_bound" if distribution is not None
+             else "assignment=legacy_stride"), flush=True)
     if args.profile_snapshot is not None:
         print(f"MINIPP_SEVEN_PINNED_PROFILE=ENABLED worker={args.shard}/7 "
               "GCC_predefine_processes=0 frozen_target_profiles=true", flush=True)
@@ -304,6 +312,8 @@ def main() -> int:
                                 if args.profile_snapshot is not None else None),
         "manifest_sha": sha(stage / "native-manifest.sha256"),
         "tool_sha256": tool_sha256,
+        "balanced_plan_sha256": (sha(args.balanced_plan.resolve())
+                                 if args.balanced_plan is not None else None),
     }, indent=2, sort_keys=True) + "\n")
     print(f"MINIPP_SEVEN_NATIVE_RESULT={'PASS' if passed == len(rows) else 'FAIL'} "
           f"worker={args.shard}/7 passed={passed}/{len(rows)} "
