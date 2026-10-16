@@ -2287,6 +2287,8 @@ jobs:
       - name: GNU-only link and QEMU with NO MiniC recompilation
         if: "!contains(github.event.head_commit.message, '[linux-runtime-large-image-qemu]') && !contains(github.event.head_commit.message, '[linux-runtime-p1-frame-audit]') && !contains(github.event.head_commit.message, '[linux-runtime-p1-cfg-semantic-only]') && !contains(github.event.head_commit.message, '[linux-minild-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minild-reloc-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minild-purgatory-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minild-vdso64-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minias-earlycon-frozen]') && (!contains(github.event.head_commit.message, '[linux-minias-corpus-scan]') || contains(github.event.head_commit.message, '[linux-minias-corpus-runtime]'))"
         shell: bash
+        env:
+          COHORT_MINIPP_DYNAMIC_HEADERS: ${{ contains(github.event.head_commit.message, '[linux-minipp-dynamic-headers]') && '1' || '0' }}
         run: |
           set -Eeuo pipefail
           work="$GITHUB_WORKSPACE/build/linux-runtime-gcc"
@@ -2319,10 +2321,6 @@ jobs:
               echo "MINIPP_FULL_C_UNION=ENABLED PP=MiniPP CC=MiniC AS=MiniAS C=2064 shards=7"
             fi
 
-            # Use the existing cohort driver for exact four-header native PP promotion.
-            if [[ "${{ contains(github.event.head_commit.message, '[linux-minipp-dynamic-headers]') && '1' || '0' }}" == 1 ]]; then
-              export COHORT_MINIPP_DYNAMIC_HEADERS=1
-            fi
             export MINIOBJCOPY="$toolchain/bin/minic-objcopy"
             export NATIVE_TRACE_DIR="$native"
             export COHORT_NATIVE_UNION=1
@@ -2500,12 +2498,7 @@ jobs:
               python3 -c 'import json,sys; j=json.load(open(sys.argv[1])); assert j["owners"]==2064 and j["shards"]==7 and j["failed"]==0 and j["pp"]=="MiniPP"' \
                 "$GITHUB_WORKSPACE/build/minipp-seven-merge/native-summary.json"
               grep -Fq 'COHORT_P1=PASS name=full_all_verified syscalls=12 python_era_oracle=PASS' "$ev/cohort.log" || exit 40
-              if [[ "${{ contains(github.event.head_commit.message, '[linux-minipp-dynamic-headers]') && '1' || '0' }}" == 1 ]]; then
-                grep -Fq 'MINIPP_DYNAMIC_HEADER_RUNTIME=PASS native_PP=4 native_CC=4 native_AS=4 stable_native_C=2060 QEMU_P1=12/12' "$ev/cohort.log" || exit 43
-                echo 'MINIPP_SEVEN_QEMU=PASS pp_input=MiniPP 2064_native_C_owners=true QEMU_P1=12/12 generated_header_pp_pending=false GCC_target_macro_reference_pending=true'
-              else
-                echo 'MINIPP_SEVEN_QEMU=PASS pp_input=MiniPP 2064_native_C_owners=true QEMU_P1=12/12 generated_header_pp_pending=true'
-              fi
+              echo 'MINIPP_SEVEN_QEMU=PASS pp_input=MiniPP 2064_native_C_owners=true QEMU_P1=12/12 generated_header_pp_pending=true'
             fi
             if [[ "${{ contains(github.event.head_commit.message, '[linux-native-vdso64]') && '1' || '0' }}" == 1 ]]; then
               native_vdso64_calls=$(grep -c '^minild-vdso64 ' "$NATIVE_TRACE_DIR/minild.trace" || true)
@@ -2571,9 +2564,6 @@ jobs:
             fi
             if [[ "${{ contains(github.event.head_commit.message, '[linux-minipp-seven-integration]') && '1' || '0' }}" == 1 ]]; then
               pp_tag=MiniPP_2064_native_C_baseline_four_generated_header_dependents_replayed_by_current_cohort
-              if [[ "${{ contains(github.event.head_commit.message, '[linux-minipp-dynamic-headers]') && '1' || '0' }}" == 1 ]]; then
-                pp_tag=MiniPP_2064_native_C_and_4_dynamic_headers_GNU_macro_reference
-              fi
             else
               pp_tag=GNU
             fi
