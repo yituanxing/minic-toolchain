@@ -2506,7 +2506,12 @@ jobs:
               python3 -c 'import json,sys; j=json.load(open(sys.argv[1])); assert j["owners"]==2064 and j["shards"]==7 and j["failed"]==0 and j["pp"]=="MiniPP"' \
                 "$GITHUB_WORKSPACE/build/minipp-seven-merge/native-summary.json"
               grep -Fq 'COHORT_P1=PASS name=full_all_verified syscalls=12 python_era_oracle=PASS' "$ev/cohort.log" || exit 40
-              echo 'MINIPP_SEVEN_QEMU=PASS pp_input=MiniPP 2064_native_C_owners=true QEMU_P1=12/12 generated_header_pp_pending=true'
+              if [[ "${{ contains(github.event.head_commit.message, '[linux-minipp-dynamic-headers]') && '1' || '0' }}" == 1 ]]; then
+                grep -Fq 'MINIPP_DYNAMIC_HEADER_RUNTIME=PASS native_PP=4 native_CC=4 native_AS=4 stable_native_C=2060 QEMU_P1=12/12' "$ev/cohort.log" || exit 44
+                echo 'MINIPP_SEVEN_QEMU=PASS pp_input=MiniPP native_C=2064 dynamic_header_PP=MiniPP_4 native_AS=2064 QEMU_P1=12/12 GCC_macro_oracle_remaining=true'
+              else
+                echo 'MINIPP_SEVEN_QEMU=PASS pp_input=MiniPP 2064_native_C_owners=true QEMU_P1=12/12 generated_header_pp_pending=true'
+              fi
             fi
             if [[ "${{ contains(github.event.head_commit.message, '[linux-native-vdso64]') && '1' || '0' }}" == 1 ]]; then
               native_vdso64_calls=$(grep -c '^minild-vdso64 ' "$NATIVE_TRACE_DIR/minild.trace" || true)
