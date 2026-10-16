@@ -6,21 +6,21 @@ Real workloads decide what is implemented next. Language standards, target ABIs,
 
 Chinese introduction: [`README.zh-CN.md`](README.zh-CN.md)
 
-## Active compiler boundary
+## Current compiler boundary and accepted native integration
 
-Compiler V1 remains frozen at the C compilation boundary used by the Linux runtime-convergence line:
+The standalone compiler interface remains `minic-cc: preprocessed C (.i) → RV64 assembly (.s)`. Fixed-GNU-preprocessor/assembler/linker runs remain available as isolated differential and fault-localization oracles; they are **not** the only accepted end-to-end Linux path as of 2026-10-16.
+
+The complete native Linux 6.6.143 path passed at commit `24b02474` ([CI #38870185276](https://github.com/yituanxing/minic-toolchain/actions/runs/38870185276)):
 
 ```text
-C source
-  -> external RISC-V GCC preprocessing
-  -> MiniC compiler: preprocessed C (.i) to RV64 assembly (.s)
-  -> external GNU assembly and linking
-  -> QEMU RISC-V execution
+C (.c) -> MiniPP (.i) -> MiniC (.s) -> MiniAS (.o)
+                                    -> MiniAR / MiniLD / MiniObjcopy
+                                    -> Linux Image -> QEMU P1 12/12
 ```
 
-External GCC/GNU tools are explicit differential and integration auxiliaries on that line and must not compile a C function on MiniC's behalf.
+All **2064/2064** real C objects passed across seven shards. The native RV32 ELF32 compat-vDSO link was also qualified in this integrated run. GNU utilities can still serve documented build probes, pinned macro references, and differential oracles; this is not a claim that every project operation is GNU-free or that future compiler revisions are already certified.
 
-The repository now also contains independently executable native MiniPP, MiniAS, MiniAR, MiniLD, ELF/object utilities, and the staged `minic` driver, each with its own validation gates. Their existence does not silently change the current Linux runtime isolation boundary: replacement of preprocessing, assembly, archive/link, driver, and object-utility stages is certified independently before those tools become canonical for a full-Linux path.
+MiniPP, MiniAS, MiniAR, MiniLD, ELF/object tools and the staged `minic` driver remain separately executable and have independent scopes of acceptance. The near-term goal is **lean pre-bootstrap consolidation**, not immediate construction of another frontend, an RV32 C backend, or an LLVM-scale framework. See the [lean compiler and pre-bootstrap convergence plan](docs/architecture/lean-compiler-and-prebootstrap-convergence-2026-10-16.md).
 
 ## Current implementation
 
