@@ -1307,6 +1307,18 @@ jobs:
             pinned_macro_args=(--profile-snapshot "$GITHUB_WORKSPACE/tests/preprocessor/profiles/rv64-linux-6.6.143-gcc13.json.gz.b64" --native-macro-rules)
             echo 'MINIPP_SEVEN_MACRO_PRODUCER=MINI_RULES no_GCC_macro_generation=true reference_only_GNU=true'
           fi
+          # Explicit only: original stride layout remains the default.
+          # Both producer and receiver must use the exact SHA-bound LPT map.
+          balanced_plan_args=()
+          if [[ "${{ contains(github.event.head_commit.message, '[linux-minipp-seven-balanced]') && '1' || '0' }}" == 1 ]]; then
+            test "${{ contains(github.event.head_commit.message, '[linux-minipp-seven-full]') && '1' || '0' }}" = 1
+            test "${{ contains(github.event.head_commit.message, '[linux-minipp-seven-integration]') && '1' || '0' }}" = 1
+            balanced_plan="$GITHUB_WORKSPACE/tools/ci/minipp-seven-balanced-plan-2026-10-16.json"
+            python3 tools/ci/linux_minipp_seven_balanced_plan_v1.py \
+              --plan "$balanced_plan" --owners "$ev/all-objects.txt"
+            balanced_plan_args=(--balanced-plan "$balanced_plan")
+            echo "MINIPP_SEVEN_SCHEDULER=SHA_BOUND_GREEDY_LPT original=879790ms forecast=739298ms not_measured_wall=true"
+          fi
           python3 tools/ci/minipp-linux-seven-native-stage-v1.py \
             --out "$GITHUB_WORKSPACE/build/linux-runtime-gcc/out" \
             --src "$src" --owner-list "$ev/all-objects.txt" \
@@ -1316,7 +1328,7 @@ jobs:
             --minias "$tools/bin/minic-as" \
             --shard ${{ matrix.shard }} --shards 7 \
             --sample-per-shard ${{ contains(github.event.head_commit.message, '[linux-minipp-seven-full]') && '0' || '32' }} \
-            "${pinned_macro_args[@]}"
+            "${pinned_macro_args[@]}" "${balanced_plan_args[@]}"
 
       - name: Preserve seven-way actual MiniPP to MiniC native evidence
         if: always() && (contains(github.event.head_commit.message, '[linux-minipp-seven-integration]') || contains(github.event.head_commit.message, '[linux-minipp-native-rules-C]'))
@@ -2290,12 +2302,22 @@ jobs:
           if [[ "${{ contains(github.event.head_commit.message, '[linux-minipp-native-rules-C]') && '1' || '0' }}" == 1 ]]; then
             pinned_merge_args=(--pinned-profile "$GITHUB_WORKSPACE/tests/preprocessor/profiles/rv64-linux-6.6.143-gcc13.json.gz.b64" --native-macro-rules)
           fi
+          balanced_merge_args=()
+          if [[ "${{ contains(github.event.head_commit.message, '[linux-minipp-seven-balanced]') && '1' || '0' }}" == 1 ]]; then
+            test "${{ contains(github.event.head_commit.message, '[linux-minipp-seven-full]') && '1' || '0' }}" = 1
+            test "${{ contains(github.event.head_commit.message, '[linux-minipp-seven-integration]') && '1' || '0' }}" = 1
+            balanced_plan="$GITHUB_WORKSPACE/tools/ci/minipp-seven-balanced-plan-2026-10-16.json"
+            python3 tools/ci/linux_minipp_seven_balanced_plan_v1.py \
+              --plan "$balanced_plan" --owners "$ev/full-objects.txt"
+            balanced_merge_args=(--balanced-plan "$balanced_plan")
+            echo "MINIPP_SEVEN_MERGE_SCHEDULER=SHA_BOUND_GREEDY_LPT"
+          fi
           python3 tools/ci/minipp-linux-seven-merge-v1.py \
             --artifacts "$GITHUB_WORKSPACE/build/minipp-seven-merge/incoming" \
             --owners "$ev/full-objects.txt" \
             --golden-out "$GITHUB_WORKSPACE/build/linux-runtime-gcc/out" \
             --dest "$GITHUB_WORKSPACE/build/minipp-seven-merge/native-objects" \
-            --commit "$shard_commit" "${pinned_merge_args[@]}"
+            --commit "$shard_commit" "${pinned_merge_args[@]}" "${balanced_merge_args[@]}"
           (cd build/minipp-seven-merge/native-objects; sha256sum --quiet -c ../native-full-manifest.sha256)
 
       # Exactly the 2064 fresh MiniC .s inputs verified by the existing
