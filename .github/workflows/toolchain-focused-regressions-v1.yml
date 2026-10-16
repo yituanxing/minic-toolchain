@@ -95,6 +95,7 @@ jobs:
           # Validate the exact seven-worker diagnostic code before spending
           # several minutes or gigabytes running full Linux shards.
           python3 -m py_compile tools/ci/minipp-linux-seven-native-stage-v1.py
+          python3 -m py_compile tools/ci/minipp-linux-seven-merge-v1.py
           bash -n tools/ci/minild-linux-cache-vdso32-replay-v1.sh
           python3 tests/preprocessor/oracle_riscv_linux_predefines.py --self-check
           # Python is now only the nine-context read-only oracle. The actual
