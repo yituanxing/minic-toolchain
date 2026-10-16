@@ -2327,8 +2327,51 @@ static bool minic_inline_source_has_noncore_root(
     return false;
 }
 
+/* Core pruning asks the same non-Core-root question for many functions.
+ * Collect the immutable entry/force-emit/alias/relocation facts once for this
+ * pass. Allocation failure retains the previous per-function scan. */
+static bool *minic_build_noncore_root_index(const MinicC0Program *program) {
+    bool *roots;
+    size_t function_index;
+    size_t object_index;
+
+    if (program == NULL) {
+        return NULL;
+    }
+    roots = (bool *)calloc(program->function_count == 0U ? 1U : program->function_count,
+                           sizeof(*roots));
+    if (roots == NULL) {
+        return NULL;
+    }
+    for (function_index = 0U; function_index < program->function_count; ++function_index) {
+        MinicFunctionId alias_target = program->functions[function_index].alias_target;
+        if ((MinicFunctionId)function_index == program->entry_function ||
+            program->functions[function_index].force_emit) {
+            roots[function_index] = true;
+        }
+        if (alias_target < program->function_count) {
+            roots[alias_target] = true;
+        }
+    }
+    for (object_index = 0U; object_index < program->global_object_count; ++object_index) {
+        const MinicGlobalObject *object = &program->global_objects[object_index];
+        size_t relocation_index;
+        for (relocation_index = 0U; relocation_index < object->relocation_count;
+             ++relocation_index) {
+            const MinicGlobalRelocation *relocation = &object->relocations[relocation_index];
+            MinicFunctionId target = (MinicFunctionId)relocation->target_id;
+            if (relocation->target_kind == MINIC_GLOBAL_RELOCATION_FUNCTION &&
+                target < program->function_count) {
+                roots[target] = true;
+            }
+        }
+    }
+    return roots;
+}
+
 static bool minic_inline_source_is_core_reachable_only(
-    const MinicC0Program *program, MinicFunctionId source_id) {
+    const MinicC0Program *program, MinicFunctionId source_id,
+    const bool *noncore_roots) {
     const MinicFunction *source;
 
     if (program == NULL || source_id >= program->function_count) {
@@ -2343,13 +2386,16 @@ static bool minic_inline_source_is_core_reachable_only(
      * outside that graph.  This applies to ordinary static functions as well as
      * static inline helpers so dead CONFIG-disabled helper subgraphs disappear. */
     return source->is_defined && source->is_internal &&
-           !minic_inline_source_has_noncore_root(program, source_id);
+           !(noncore_roots != NULL
+                 ? noncore_roots[source_id]
+                 : minic_inline_source_has_noncore_root(program, source_id));
 }
 
 static bool minic_prune_inline_specializations_from_core(
     MinicC0Program *program, const MinicCoreFunctionSet *set) {
     bool *reachable = NULL;
     bool *processed = NULL;
+    bool *noncore_roots = NULL;
     MinicFunctionId *queue = NULL;
     size_t queue_count = 0U;
     size_t queue_cursor = 0U;
@@ -2373,6 +2419,11 @@ static bool minic_prune_inline_specializations_from_core(
         goto done;
     }
 
+    /* All inputs to non-Core-root classification are stable throughout this
+     * pass: only is_referenced changes below. If this small index cannot be
+     * allocated, preserve the previous conservative per-query scan. */
+    noncore_roots = minic_build_noncore_root_index(program);
+
     /* Preserve the established root policy for ordinary functions. Synthetic
      * specialization clones are never roots: they survive only through an
      * actual instruction in a CFG-reachable lowered Core block. */
@@ -2386,7 +2437,7 @@ static bool minic_prune_inline_specializations_from_core(
          * functions.  The final lowered Core graph is the authoritative
          * executable reachability source; non-Core roots stay conservative. */
         if (minic_inline_source_is_core_reachable_only(
-                program, (MinicFunctionId)function_index)) {
+                program, (MinicFunctionId)function_index, noncore_roots)) {
             continue;
         }
         reachable[function_index] = true;
@@ -2416,7 +2467,7 @@ static bool minic_prune_inline_specializations_from_core(
         MinicFunction *function = &program->functions[function_index];
         if (!function->is_integer_specialization) {
             if (minic_inline_source_is_core_reachable_only(
-                    program, (MinicFunctionId)function_index)) {
+                    program, (MinicFunctionId)function_index, noncore_roots)) {
                 function->is_referenced = reachable[function_index];
             }
             continue;
@@ -2437,6 +2488,7 @@ static bool minic_prune_inline_specializations_from_core(
     success = true;
 
 done:
+    free(noncore_roots);
     free(queue);
     free(processed);
     free(reachable);
