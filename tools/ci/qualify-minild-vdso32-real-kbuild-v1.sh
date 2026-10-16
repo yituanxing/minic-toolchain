@@ -30,6 +30,16 @@ riscv64-linux-gnu-readelf -Wh -lW --dyn-syms --version-info "$native" >"$trace_d
 grep -q 'ELF32' "$trace_dir/native-vdso32-final-elf.txt"
 grep -q 'RISC-V' "$trace_dir/native-vdso32-final-elf.txt"
 grep -q 'DYN (Shared object file)' "$trace_dir/native-vdso32-final-elf.txt"
+# GNU LD on these same four verified MiniAS .S objects emits an empty
+# PT_GNU_EH_FRAME, not synthetic CFI. Verify genuine native Kbuild ELF32
+# preserves the empty-unwind ABI and does not invent bogus FDE pointers.
+awk '$1 == "GNU_EH_FRAME" {
+  seen = 1
+  if ($5 != "0x00000" || $6 != "0x00000") exit 1
+} END { if (!seen) exit 1 }' "$trace_dir/native-vdso32-final-elf.txt" || {
+  echo 'MINILD_VDSO32=FAIL unexpected_nonempty_unwind_segment' >&2
+  exit 51
+}
 riscv64-linux-gnu-nm "$native" >"$trace_dir/native-vdso32-final-nm.txt"
 riscv64-linux-gnu-readelf -nW "$native" >"$trace_dir/native-vdso32-final-notes.txt"
 grep -q 'Build ID:' "$trace_dir/native-vdso32-final-notes.txt" || {
