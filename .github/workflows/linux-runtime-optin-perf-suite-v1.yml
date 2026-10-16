@@ -14,6 +14,12 @@ on:
           - all3352
           - constant-p
           - all
+  # Reuse the existing perf500 job for explicit, scoped production-source
+  # comparisons. No other job is eligible for this one push marker.
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/linux-runtime-optin-perf-suite-v1.yml"
 
 permissions:
   contents: read
@@ -276,15 +282,49 @@ jobs:
 
 
   perf500:
-    if: (github.event_name == 'workflow_dispatch' && (inputs.mode == 'first500' || inputs.mode == 'all')) || (github.event_name == 'push' && contains(github.event.head_commit.message, '[linux-perf500]'))
+    if: (github.event_name == 'workflow_dispatch' && (inputs.mode == 'first500' || inputs.mode == 'all')) || (github.event_name == 'push' && (contains(github.event.head_commit.message, '[linux-perf500]') || contains(github.event.head_commit.message, '[minic-source-broad-ab]')))
     runs-on: ubuntu-24.04
-    timeout-minutes: 40
+    timeout-minutes: 65
     env:
       DEBIAN_FRONTEND: noninteractive
     steps:
       - uses: actions/checkout@v4
 
+      - name: Build old and current native MiniC from certified source revisions
+        if: contains(github.event.head_commit.message, '[minic-source-broad-ab]')
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          historical=24b0247401d1f973c4aa4f3495d7298cc7dd4cc1
+          root="$GITHUB_WORKSPACE/build/linux-perf-audit-v1"
+          mkdir -p "$root/evidence"
+          git fetch --quiet --no-tags --depth=1 origin "$historical"
+          changed=$(git diff --name-only "$historical" "$GITHUB_SHA" -- src include)
+          test "$changed" = src/compiler/compiler.c || {
+            echo "MINIC_BROAD_AB=FAIL changed_production_sources=$changed" >&2
+            exit 9
+          }
+          git -c advice.detachedHead=false worktree add --quiet --detach "$root/historical-source" "$historical"
+          (
+            cd "$root/historical-source"
+            MINIC_LINUX_FULL_CROSSBLOCK=1 MINIC_OPT_PURE_DISCARDED_ADDRESS_EQ=1 \
+              bash tools/ci/linux-runtime-build-minic-profile-v1.sh \
+              "$root/baseline-toolchain" "$root/evidence/old-build"
+          )
+          MINIC_LINUX_FULL_CROSSBLOCK=1 MINIC_OPT_PURE_DISCARDED_ADDRESS_EQ=1 \
+            bash tools/ci/linux-runtime-build-minic-profile-v1.sh \
+            "$root/toolchain" "$root/evidence/current-build"
+          test -x "$root/baseline-toolchain/bin/minic" && test -x "$root/toolchain/bin/minic"
+          old_sha=$(sha256sum "$root/baseline-toolchain/bin/minic-cc" | cut -d' ' -f1)
+          new_sha=$(sha256sum "$root/toolchain/bin/minic-cc" | cut -d' ' -f1)
+          test "$old_sha" != "$new_sha" || {
+            echo 'MINIC_BROAD_AB=FAIL identical_compilers' >&2
+            exit 9
+          }
+          echo "MINIC_BROAD_AB=BUILT old_sha=$old_sha current_sha=$new_sha historical=$historical" | tee "$root/evidence/oldnew-identities.txt"
+
       - name: Build baseline and integrated optimization from clean sources
+        if: "!contains(github.event.head_commit.message, '[minic-source-broad-ab]')"
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -403,6 +443,7 @@ jobs:
           key: linux-6.6.143-first500-rv64-v1-${{ hashFiles('tests/external/linux/batch_probe.sh', 'tests/external/linux/probe.sh', 'tests/external/linux/replay-indices.txt') }}
 
       - name: Parser index fallback, scope, and zero-expression smokes
+        if: "!contains(github.event.head_commit.message, '[minic-source-broad-ab]')"
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -435,6 +476,7 @@ jobs:
           done
 
       - name: Release direct minic smoke on previously crashing TU
+        if: "!contains(github.event.head_commit.message, '[minic-source-broad-ab]')"
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -447,6 +489,7 @@ jobs:
           echo "TYPEDEF_RELEASE_SMOKE=PASS"
 
       - name: Diagnose typedef candidate with ASan on known-failing TU
+        if: "!contains(github.event.head_commit.message, '[minic-source-broad-ab]')"
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -462,6 +505,7 @@ jobs:
           echo "TYPEDEF_ASAN_SMOKE=PASS"
 
       - name: Paired integrated optimization A/B with exactly four workers
+        if: "!contains(github.event.head_commit.message, '[minic-source-broad-ab]')"
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -476,6 +520,7 @@ jobs:
           cp "$work/paired/output-fingerprints.tsv" "$work/evidence/"
 
       - name: Analyze A/B time distribution
+        if: "!contains(github.event.head_commit.message, '[minic-source-broad-ab]')"
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -491,6 +536,45 @@ jobs:
           for row in sorted(rows,key=lambda r:r["candidate"]["seconds"],reverse=True)[:30]:
               print(f'{row["candidate"]["seconds"]:8.3f}s before={row["baseline"]["seconds"]:8.3f}s '
                     f'index={row["index"]} input={row["input"]}')
+          PY
+
+      - name: Real frozen Linux first500 same-runner old versus current A/B
+        if: contains(github.event.head_commit.message, '[minic-source-broad-ab]')
+        shell: bash
+        timeout-minutes: 45
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-perf-audit-v1"
+          corpus="$GITHUB_WORKSPACE/build/linux-perf-corpus"
+          test "$(wc -l < "$corpus/inputs.sha256")" -eq 500
+          sha256sum --status -c "$corpus/inputs.sha256"
+          python3 tools/ci/linux-perf-frozen-corpus-differential-v1.py \
+            --corpus "$corpus" \
+            --baseline-driver "$work/baseline-toolchain/bin/minic" \
+            --candidate-driver "$work/toolchain/bin/minic" \
+            --jobs 4 --balanced-order --out "$work/oldnew500" \
+            | tee "$work/evidence/oldnew500-verdict.txt"
+          grep -Fq 'MINIC_FROZEN_DIFF=PASS selected=500 identical=500' "$work/evidence/oldnew500-verdict.txt"
+          grep -Fq 'MINIC_FROZEN_PAIRED=PASS owners=500 balanced_order=true' "$work/evidence/oldnew500-verdict.txt"
+          cp "$work/oldnew500/differential.json" "$work/evidence/oldnew500-differential.json"
+          python3 - "$work/evidence/oldnew500-differential.json" <<'PY' | tee "$work/evidence/oldnew500-summary.txt"
+          import json,statistics,sys
+          from pathlib import Path
+          d=json.loads(Path(sys.argv[1]).read_text())
+          rows=d["results"]
+          assert len(rows)==500 and d["identical"]==500 and d["mismatch_count"]==0
+          old=sum(r["baseline"]["wall_ms"] for r in rows)
+          new=sum(r["candidate"]["wall_ms"] for r in rows)
+          print("MINIC_500_AB=PASS objects=500 old_total_ms=%.3f new_total_ms=%.3f speedup=%.5f" % (old,new,old/new))
+          print("MINIC_500_AB=COUNTS baseline_first=%d candidate_first=%d regressions=%d" % (
+              sum(r["first"]=="baseline" for r in rows),
+              sum(r["first"]=="candidate" for r in rows),
+              sum(r["candidate"]["wall_ms"]>r["baseline"]["wall_ms"] for r in rows)))
+          ratios=[r["baseline"]["wall_ms"]/r["candidate"]["wall_ms"] for r in rows]
+          print("MINIC_500_AB=RATIO_MEDIAN %.5f" % statistics.median(ratios))
+          for row in sorted(rows,key=lambda r:r["candidate"]["wall_ms"]-r["baseline"]["wall_ms"],reverse=True)[:8]:
+              print("MINIC_500_AB_REGRESSION owner=%s old_ms=%.3f new_ms=%.3f" % (
+                  row["object"],row["baseline"]["wall_ms"],row["candidate"]["wall_ms"]))
           PY
 
       # Factor isolation extension: opt-in only; the archived perf500 job
@@ -546,5 +630,6 @@ jobs:
           name: linux-current-profile-first500-perf-v1
           path: |
             build/linux-perf-audit-v1/evidence
+            build/linux-perf-audit-v1/oldnew500/differential.json
             build/linux-perf-materialize/batch-summary.txt
           retention-days: 7
