@@ -309,6 +309,11 @@ jobs:
           # symbols but without per-stage instrumentation.
           if [[ "${{ contains(github.event.head_commit.message, '[minic-current-phase20]') && '1' || '0' }}" == 1 ]]; then
             python3 tools/ci/apply-perf-specialization-phase-trace-v0.py
+            python3 tools/ci/apply-perf-boolean-scan-census-v1.py
+            python3 -m py_compile \
+              tools/ci/apply-perf-boolean-scan-census-v1.py \
+              tools/ci/linux-perf-phase-trace-v1.py \
+              tools/ci/linux-perf-current-phase20-v1.py
           fi
           git diff --check
           make -j4 MODE=release CFLAGS="-Werror -g -fno-omit-frame-pointer" \
@@ -499,6 +504,8 @@ jobs:
             | tee "$root/evidence/phase20-verdict.txt"
           grep -Fq 'MINIC_PHASE20=PASS files=20 assemblies_identical=20/20' \
             "$root/evidence/phase20-verdict.txt"
+          grep -Fq 'MINIC_BOOLEAN20=PASS' "$root/evidence/phase20-verdict.txt"
+          grep -Fq 'spec-boolean-transitive' "$root/evidence/phase20-verdict.txt"
 
       - name: Attribute CPU hotspot of representative middle Linux file
         if: contains(github.event.head_commit.message, '[minic-current-phase20]') || contains(github.event.head_commit.message, '[minic-cpu-profile-only]')
