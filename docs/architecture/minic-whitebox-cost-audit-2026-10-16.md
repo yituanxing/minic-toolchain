@@ -134,3 +134,17 @@ src/compiler/compiler.c
 **已经执行的门禁**：[Toolchain Focused Regression #38884992042](https://github.com/yituanxing/minic-toolchain/actions/runs/38884992042) 在上述生产 SHA 上 **SUCCESS**，单次共享工具链构建、8/8 独立 focused checks，通过 `TOOLCHAIN_FOCUSED_T1=PASS mode=all independent_test_checks=8 shared_builds=1`。Linux Runtime GCC Baseline 同 SHA 对应 run #38884992134 是 **SKIPPED**，不是通过或失败；最近已通过的 2064/QEMU 是旧源码 `24b02474`，**不能冒充本次提交的全量验收**。
 
 **下一门槛**：在真实冻结 `.i`（包含少/多 alias、全局重定位、函数克隆与静态 inline 的小例 + 一份大型 Linux TU）验证新旧 `.s` 相同且取得 wall/RSS；有明显收益再晋级到现有 Linux 2064/QEMU 认证。不要为了这一项独立添加一套性能脚本或新的 workflow。
+
+
+## 7. 逐源残余引用缓存与 focused 真实结果（2026-10-16）
+
+**变更**：
+- `f71cccd7e3dac49871aad6d06cfb9c77e8775986`：`src/compiler/compiler.c` 的 `minic_finalize_inline_integer_specialization_references` 不再对同一个 `specialization_source` 的多个 clone 反复执行 `minic_inline_integer_source_has_residual_reference` 全 TU 扫描。只在**本次 finalization** 内使用 `source_residual_cache[source_id]`，三个状态为未知、仍有引用、无引用。缓存按需分配，OOM 时继续原来的保守扫描；所有 clone 的初始 `is_referenced` 仍先依据原 source 复制，随后才判断 source 是否可退休。不会在不同 TU、不同 specializations 阶段复用，避免过期。
+- `73f4cd34` / `2f375ee8`：增强**现有** `tests/compiler/c0/run-inline-emission-reachability-rv64.sh`，在同一个 inline 函数上同时制造三个常数实参调用和一个动态实参调用，检查原函数符号必须保留、已死亡函数不发射、QEMU 最终返回码保持 0；不新建 workflow 或重复验证脚本。
+
+**回归过程，包括失败事实**：
+- `f71cccd7` 源码提交的 [Focused T1 #38885665621](https://github.com/yituanxing/minic-toolchain/actions/runs/38885665621) **SUCCESS**。
+- 新增测试最初 [#38885995149](https://github.com/yituanxing/minic-toolchain/actions/runs/38885995149) **FAILURE**：生成的测试源第 23 行从新加的多行 C 注释开始，MiniC 报 `expected type name`；该运行的生产编译器已成功构建，失败在 fixture 输入的编译阶段，未执行 QEMU。此现象**尚不能单凭这条日志定为生产注释处理缺陷**；已去掉 fixture 中非必需的文字注释，保持测试表达式和编译器源码不变。若今后需要，另以最小独立注释预处理输入复现，不能把未排除的预处理问题当成此次缓存的回归。
+- `2f375ee8` 的 [Focused T1 #38886138281](https://github.com/yituanxing/minic-toolchain/actions/runs/38886138281) **SUCCESS**；真实日志：`MINIC_INLINE_INTEGER_SPECIALIZATION_V0 clones=3 functions=14`，`INLINE_EMISSION_REACHABILITY_RV64=PASS ... residual_inline=retained ... qemu_rc=0`，`TOOLCHAIN_FOCUSED_T1=PASS mode=all independent_test_checks=8 shared_builds=1`。因此新夹具确实触发了多个克隆，不是无效的普通 `static inline` 烟雾测试。
+
+**性能结论仍为未认证**：两个优化（noncore root 一次位图 + 每源 residual reference memo）均有源码复杂度收益和 focused 正确性证据，**还没有旧/新同输入 Wall/RSS、汇编 SHA 配对**，也没有这两项修改后的 2064 Linux 对象 + QEMU 全量 P1。在此之前不可宣称 Linux 构建加速或完全无运行时回归。下一轮应先复用现有 frozen `.i`/相同 A/B runner 做组合结果的代表文件测量；收益小则保留可读性收益或回退而不是继续叠加算法，随后将自举作为主要目标。
