@@ -76,7 +76,7 @@ def main() -> None:
     golden = a.golden.resolve()
     src = a.linux_src.resolve()
     c_owners = {line.strip() for line in a.owners.read_text().splitlines()
-                if line.strip()}
+                if line.strip() and not line.lstrip().startswith("#")}
     if len(c_owners) != 2064 or not golden.is_dir() or not src.is_dir():
         raise SystemExit("MINIPP_PROFILE_CAPTURE=FAIL invalid certified Linux fixtures"
                          +" c_owners="+str(len(c_owners))
