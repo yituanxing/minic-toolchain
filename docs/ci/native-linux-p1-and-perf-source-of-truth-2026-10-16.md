@@ -167,3 +167,57 @@ without new workflows.
    (`behind_by=0` for each when compared to `main`). Their code is
    not missing from the canonical branch; branch-ref deletion is
    separate repository housekeeping, not a missing merge.
+
+
+## 2026-10-16 ELF32 compat-vDSO no-CFI first-link defect and repair
+
+Actual full native Linux run
+[38857454218](https://github.com/yituanxing/minic-toolchain/actions/runs/38857454218)
+passed seven out of seven compiler shards (2064 C owners) but failed its
+**real** `MINILD_VDSO32` product link, before QEMU. The source-controlled
+four-object GNU-assembler reference test passed; the initial ELF32 writer
+incorrectly required a 40-byte `.eh_frame` for each `.S` owner.
+
+The focused, **no-C-rebuild** diagnostic
+[38861518871](https://github.com/yituanxing/minic-toolchain/actions/runs/38861518871)
+reconstructed all four exact RV32 `rv32g/ilp32` inputs with MiniAS from
+the frozen Kbuild `.o.cmd`, verifying the resulting native object hashes
+match the failed real-full-Kbuild `native-S-hashes.sha256`:
+
+- `rt_sigreturn.o`:
+  `dcba45d128327d023d6da56a3046da57300d01a210dca7854fbe550349b4f1bb`
+- `getcpu.o`:
+  `4e1e855a9c2da229021469cbe8cf5e557ac3045cb1c06f676bc68d6102a4440e`
+- `flush_icache.o`:
+  `41f233c13ce042ee7da648cadbd955f5aeb13980937ccbbe0b03368efe3797f5`
+- `note.o`:
+  `6a9e2b752b7673429aaea5ef91b60f00a41110ed8f59f0916c3acf007649727e`
+
+**Root cause (observed):** MiniAS produces identical executable `.text`
+for all three functions but omits `.eh_frame` and `.rela.eh_frame`—
+these are optional for this pure assembly and not a correctness defect.
+GNU LD on those same four MiniAS inputs emits a valid ELF32
+`linux-compat_vdso.so.1` with an *empty* `PT_GNU_EH_FRAME` program header.
+MiniLD incorrectly treated lack of optional CFI as an invalid object,
+hence `elf32-native-link-failed`.
+
+**Source fix:** `linker/src/elf32_compat_vdso.c` accepts precisely two
+proven input families, each internally homogeneous: GNU 3 × 40-byte CFI
+or MiniAS zero CFI. It emits no fabricated unwind data when none exists,
+preserves the versioned exported symbols and real ELF32 ET_DYN, and
+rejects mixed/unverified partial-CFI cohorts. No change to the RISC-V
+MiniC front end/codegen or accepted 2064 C owners.
+
+**Independent acceptance:** 
+[CI 38862182160](https://github.com/yituanxing/minic-toolchain/actions/runs/38862182160)
+passed both the original GNU-assembled four-object oracle and an
+additional **exact MiniAS-assembled four-object** oracle (with the same
+dual emulation flags used by Kbuild). Native ELF32 output was accepted
+by `readelf`, retained the expected SONAME and `LINUX_4.15` dynamic
+exports, and had executable `.text` bytes identical to GNU LD on the
+same four MiniAS inputs. No GNU output was substituted for native,
+no C object was recompiled, and no new CI job was added.
+
+**Still pending:** real full-Kbuild ELF32 product link, MiniObjcopy,
+the native 64-bit vDSO link and Linux QEMU P1 12/12 on the fixed linker.
+Do not promote the short four-input test into full runtime acceptance.
