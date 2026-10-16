@@ -148,3 +148,29 @@ src/compiler/compiler.c
 - `2f375ee8` 的 [Focused T1 #38886138281](https://github.com/yituanxing/minic-toolchain/actions/runs/38886138281) **SUCCESS**；真实日志：`MINIC_INLINE_INTEGER_SPECIALIZATION_V0 clones=3 functions=14`，`INLINE_EMISSION_REACHABILITY_RV64=PASS ... residual_inline=retained ... qemu_rc=0`，`TOOLCHAIN_FOCUSED_T1=PASS mode=all independent_test_checks=8 shared_builds=1`。因此新夹具确实触发了多个克隆，不是无效的普通 `static inline` 烟雾测试。
 
 **性能结论仍为未认证**：两个优化（noncore root 一次位图 + 每源 residual reference memo）均有源码复杂度收益和 focused 正确性证据，**还没有旧/新同输入 Wall/RSS、汇编 SHA 配对**，也没有这两项修改后的 2064 Linux 对象 + QEMU 全量 P1。在此之前不可宣称 Linux 构建加速或完全无运行时回归。下一轮应先复用现有 frozen `.i`/相同 A/B runner 做组合结果的代表文件测量；收益小则保留可读性收益或回退而不是继续叠加算法，随后将自举作为主要目标。
+
+## 8. Parser 整体复制的实测、生产源码改动及配对验收（2026-10-16）
+
+**优化前的实测证据**：Callgrind + 可选调用点计数 [#38920186536](https://github.com/yituanxing/minic-toolchain/actions/runs/38920186536)，真实冻结 GNU-Kbuild Linux 6.6.143 RV64 `.i`，对 `minic-cc` 本体而不是 driver 做指令采样。此前已集成 Boolean Domain Cache，并不等于未优化 MiniC。
+
+| 样本 | Parser 结构体完整复制总次数 | sizeof(MinicParser) | 理论复制量 | Callgrind `__memcpy_avx_unaligned_erms` 自身指令占比 |
+| --- | ---: | ---: | ---: | ---: |
+| `fs/ext4/fsync.o` | 47,940 | 133,664 B | 5.968 GiB | 62.13% |
+| `kernel/bpf/btf.o` | 89,922 | 133,664 B | 11.194 GiB | 44.38% |
+
+前三个热点均在 `src/frontend/parser_type.c`（原源码行 78/465/112）；`fsync.o` 分别 15,728/12,561/7,221 次，`btf.o` 分别 30,951/24,444/13,081 次。**注意**：理论复制量不是 DRAM 吞吐；Callgrind 指令百分比不是耗时份额。两者都只能提供优化假设，不能冒充 wall 加速。
+
+**生产代码** [`db5357ae`](https://github.com/yituanxing/minic-toolchain/commit/db5357ae00cbf5ccf86ee8ac0159100d54e6e9c7)：只改变 `src/frontend/parser_type.c` 内这三个复制点，其余 Parser 完整复制保留。对 token-typename 检查改为显式传 `MinicToken`；GNU 128 位前瞻只复制 `MinicLexer` 和 `MinicToken` 并在成功时提交；record/union 属性前瞻暂时借用主 parser 的 lexer/current，始终恢复保存的两项，保留属性解析及其诊断。**没有**改 MinicParser 布局、case 上限、语义索引或其他前端/后端。
+
+**验证/修复历史**：
+- [Focused T1 #38923147892](https://github.com/yituanxing/minic-toolchain/actions/runs/38923147892)：**SUCCESS**，原有 8/8 检查。
+- [Parser A/B 初次 #38923148106](https://github.com/yituanxing/minic-toolchain/actions/runs/38923148106)：CI 脚本**失败**，因 `actions/checkout` 默认 shallow clone 无 `HEAD^`。在 [`4047ba53`](https://github.com/yituanxing/minic-toolchain/commit/4047ba53f7f831a34d6ac32f8cc294f5c312550c) 中仅修改现有 perf500 Job 的 checkout 历史深度及固定的未优化基准 SHA。该失败不是 MiniC 编译或汇编错误。
+- [相同 Runner 配对 A/B #38923338895](https://github.com/yituanxing/minic-toolchain/actions/runs/38923338895)：**SUCCESS**，恢复了经过 SHA 校验的 first500 缓存输入，只挑两份做 warm-up + 4 次交替前后顺序的真实 `minic -S`。基准编译器 SHA `28083440ab1b...`，候选 SHA `79357ad1e4f4...`，均由同一 profile 构建。2/2 汇编 SHA 完全相同。
+
+| 冻结对象 | .i SHA256 前缀 | 原版 P50 | 新版 P50 | 同机 A/B 倍数 |
+| --- | --- | ---: | ---: | ---: |
+| `fs/ext4/fsync.o` | `3fffda07f8f7` | 764.743 ms | 681.090 ms | **1.1228×** |
+| `kernel/bpf/btf.o` | `41bfff581dd0` | 3187.750 ms | 2992.262 ms | **1.0653×** |
+| 两者的 P50 简单求和（不是全量推断） | — | 3952.493 ms | 3673.351 ms | **1.0760×** |
+
+**裁决**：Parser 拷贝的确是实测热点，三处优化对两个输入均产生正向 wall 收益，汇编保持完全相同；但收益是约 6%～12% 而非理论复制量所暗示的数倍，当前**尚未**证明 first500/2064 总收益，也尚未在该生产源码 SHA 上做 Linux 2064 对象 + QEMU P1。不要继续无限追逐残余 Parser 复制；下一轮优先通过现有输入研究 `Integer Specialization` 的循环/结构体拷贝，它在两文件的 Callgrind 中占约 10.98%/13.55% *自有指令*，此外 `btf.o` 的 Core Reentry 约占 4.94%。只有实测有效的单因素优化才扩展到 500 和全量/QEMU。
