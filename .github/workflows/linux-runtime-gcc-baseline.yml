@@ -2341,6 +2341,7 @@ jobs:
         shell: bash
         env:
           COHORT_MINIPP_DYNAMIC_HEADERS: ${{ contains(github.event.head_commit.message, '[linux-minipp-dynamic-headers]') && '1' || '0' }}
+          COHORT_MINIPP_PROFILE_SNAPSHOT: ${{ contains(github.event.head_commit.message, '[linux-minipp-pinned-predefines]') && 'tests/preprocessor/profiles/rv64-linux-6.6.143-gcc13.json.gz.b64' || '' }}
         run: |
           set -Eeuo pipefail
           work="$GITHUB_WORKSPACE/build/linux-runtime-gcc"
