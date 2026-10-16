@@ -93,6 +93,10 @@ jobs:
           # CI patch. Every focused regression exercises their exact known
           # GCC13/RV64 Linux compatibility contexts without a GNU subprocess.
           python3 preprocessor/target/riscv_linux_predefines.py --self-check
+          # Python is now only the nine-context read-only oracle. The actual
+          # target macro producer is compiled into the native minic-cpp.
+          bash tests/preprocessor/run-target-predefines-native.sh \
+            "$GITHUB_WORKSPACE/build/toolchain-focused-t1-v2/bin/minic-cpp"
 
           MINIC="$minic" \
           BUILD_DIR="$work" \
