@@ -86,3 +86,22 @@ CI 七路日志可交叉核对：`MINIC_NATIVE_PROFILE=PASS runtime44=checked_in
 - 本审计**只读生产 C/Makefile/CI**；没有修改已通过 Linux 的源码、构建脚本、工具 SHA、测试命令或已有缓存。
 - 记录已观察事实，不把待做的源码整理描述成已经完成，也不把历史 patch 名称当作当前运行时仍在应用。
 - 用户暂缓的 `.eh_frame` / CFI 完整实现**不在本轮计划内**。
+
+
+## 6. MiniLD ELF32 独立编译与缓存身份隔离：第一项纯整理已执行（2026-10-16）
+
+**正式源码/构建修改：**
+
+- `Makefile` 的既有 `MINILD_SOURCES` 显式增加 `linker/src/elf32_compat_vdso.c`，由既有 `linker/%.c` 规则编译成独立 `.o` 并链接到 `minic-ld`；没有第二套编译入口。
+- `tools/minic-ld/main.c` 删除临时 `#include "../../linker/src/elf32_compat_vdso.c"`；原 ELF32 实现、函数 API、动态符号、重定位处理和回退策略都不改。
+- `tools/ci/linux-runtime-profile-cache-id-v1.py` 的 narrowly scoped 兼容校验：仅当当前 Makefile 除了**这一行 MiniLD .c 输入**外恢复出的 Git Blob SHA 恰为 `22d2b8332e1a310c3ba806af2df8527bddf7ae0e`，且校验器本身恢复出的旧 Blob 恰为 `27dfe30688e4ccaaad21b0fd01a1bd602d3196e7`，才沿用原 2064 编译器缓存身份。任何额外 Makefile/校验器字节改动走新哈希，不做不受控的全局忽略。无需依赖浅克隆中不存在的历史 git 对象。
+- 新的 `--self-test` 由**原有** focused T1 Job 调用；未新增 workflow/job、未删除历史证据。
+
+**真实 CI 验收：**
+
+- [#38868741617](https://github.com/yituanxing/minic-toolchain/actions/runs/38868741617) **SUCCESS**：实际 host `cc` 输出独立 `build/.../obj/linker/src/elf32_compat_vdso.o`，随后链接命令显式包含该独立对象；MiniLD 静态/动态 A0–A6、section GC、MiniAR、RV64 一组既有聚焦测试全部 PASS。
+- 同次测试 `MINIC_CACHE_COMPONENT_ISOLATION=PASS legacy_2064_cache_key_preserved=true linker_source_only=true other_changes_invalidate=true no_network_no_git_history=true`。
+- [#38868865311](https://github.com/yituanxing/minic-toolchain/actions/runs/38868865311) **SUCCESS**：现有缓存四对象真实 Linux ELF32 链接回放，GNU 汇编对象参考与 MiniAS 生成的四对象均 `MINILD_VDSO32=PASS`；GNU/MiniLD 相同输入的 `.text` 字节一致，原生 ELF32 ET_DYN/动态版本符号得到核验，`C_recompiled=0`、无 GNU 生产链接回退。仅使用已存在的一个 CI receiver。
+- 上一次 **完整** Linux Kbuild + QEMU P1 12/12 认证仍是重构前的 [#38862398059](https://github.com/yituanxing/minic-toolchain/actions/runs/38862398059)。本次独立组件纯重构后，已证明静态/动态链接和真实四对象差分等价，**没有重新运行完整 2064 Linux QEMU**；不把短测重新标成完整 P1。
+
+**后续退出条件：** 当前把旧脚本和 Makefile 的确切 Blob 固定为单次兼容窗口；将来若正式把 C 编译器与链接器的构建图分成稳定的组件 Makefile/缓存身份，必须先实证新身份命中规则和旧证书映射后再删除兼容层；任何变更不得使旧 Linux 对象在编译器源变更后静默命中。
