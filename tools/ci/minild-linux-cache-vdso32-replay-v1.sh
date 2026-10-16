@@ -33,6 +33,11 @@ for f in "${inputs[@]}" "$rel/compat_vdso.lds"; do
     exit 8
   fi
   sha256sum "$out/$f" >>"$ev/inputs.sha256"
+  # These immutable input objects are tiny (ELF32 <2 KiB each) and permit
+  # an offline local C linker replay instead of another full CI roundtrip.
+  if [[ "$f" == *.o ]]; then
+    cp -- "$out/$f" "$ev/${f##*/}"
+  fi
 done
 # Keep per-input ELF metadata to detect mistaken ABI/cache selection.
 # Include linker inputs' actual relocations/symbol tables: these describe
