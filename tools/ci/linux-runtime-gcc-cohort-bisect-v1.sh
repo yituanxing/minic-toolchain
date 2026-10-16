@@ -1596,6 +1596,24 @@ if [[ "${COHORT_NATIVE_UNION:-0}" == 1 ]]; then
   fi
   echo "COHORT_NATIVE_UNION=ENABLED owners=$n pp=GNU as=GNU cc=MiniC ar=MiniAR ld=MiniLD_final_only objcopy=MiniObjcopy"
 fi
+# Keep the four-vDSO-dependent native PP promotion inside the existing cohort
+# owner. The workflow only selects it, avoiding another oversized inline job.
+if [[ "${COHORT_MINIPP_DYNAMIC_HEADERS:-0}" == 1 ]]; then
+  [[ "${COHORT_NATIVE_UNION:-0}" == 1 && -n "${COHORT_NATIVE_SAME_RUN_POOL:-}" && "$n" -eq 2064 ]] || {
+    echo "MINIPP_DYNAMIC_HEADER=FAIL missing_certified_2064_native_cohort" >&2; exit 41;
+  }
+  pp_tools="$repo/build/minipp-dynamic-header-tools"
+  as_tools="$repo/build/minias-linux-corpus-v1-tools"
+  make -C "$repo" -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$pp_tools" "$pp_tools/bin/minic-cpp"
+  make -C "$repo" -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$as_tools" "$as_tools/bin/minic-as"
+  export COHORT_MINIPP_HEADER_CPP="$pp_tools/bin/minic-cpp"
+  export COHORT_MINIPP_LINUX_SRC="$src"
+  export COHORT_MINIAS_DYNAMIC_HEADERS=1
+  export COHORT_MINIAS_HEADER_AS="$as_tools/bin/minic-as"
+  export COHORT_MINIAS_EXPECTED_NATIVE=2060
+  test -x "$COHORT_MINIPP_HEADER_CPP" && test -x "$COHORT_MINIAS_HEADER_AS"
+  echo 'MINIPP_DYNAMIC_HEADER=ENABLED affected_only=4 stable_native_C=2060 GNU_predefines_reference_only=true'
+fi
 trial() {
   name="$1"; count="$2"; profile="$3"; mode="${4:-prefix}"
   # Experimental overlays never modify the authenticated 2064-object pool.
@@ -2461,6 +2479,14 @@ PY_EARLY_SYMBOLS
              --profile p1 --log "$d/qemu-p1/rdinit-init.log" \
              >"$d/runtime-p1-python.log" 2>&1; then
           echo "COHORT_P1=PASS name=$name syscalls=12 python_era_oracle=PASS"
+          if [[ "${COHORT_MINIPP_DYNAMIC_HEADERS:-0}" == 1 && "$name" == full_all_verified ]]; then
+            grep -Fq 'MINIAS_DYNAMIC_HEADER_OBJECTS=PASS trial=full_all_verified native_header_objects=4 total_native_C_objects=2064' "$ev/cohort.log" || exit 43
+            for target in arch/riscv/kernel/alternative.o arch/riscv/kernel/signal.o arch/riscv/kernel/compat_signal.o arch/riscv/kernel/vdso.o; do
+              grep -Fq "MINIPP_DYNAMIC_HEADER_PP=PASS " "$d/rebuild.log" || exit 42
+              grep -Fq "output=$target " "$d/rebuild.log" || exit 42
+            done
+            echo 'MINIPP_DYNAMIC_HEADER_RUNTIME=PASS native_PP=4 native_CC=4 native_AS=4 stable_native_C=2060 QEMU_P1=12/12 GCC_predefines_reference_only=true'
+          fi
         else
           verdict=INCONCLUSIVE
           echo "COHORT_P1=INCONCLUSIVE name=$name reason=python_era_oracle_disagrees"
