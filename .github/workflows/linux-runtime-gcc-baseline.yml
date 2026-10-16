@@ -2091,9 +2091,9 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           repository: ${{ github.repository }}
-          run-id: ${{ contains(github.event.head_commit.message, '[linux-minipp-native-reuse]') && '38824106769' || '38550003154' }}
+          run-id: 38824106769
           github-token: ${{ github.token }}
-          pattern: ${{ contains(github.event.head_commit.message, '[linux-minipp-native-reuse]') && 'minipp-native-shard-*-ee1677256074ddf3bbd9145553178471c3d42e06' || 'minipp-native-shard-*-041ae51e1ff2f3f1b9e30b489957e53cfc43dfa1' }}
+          pattern: minipp-native-shard-*-ee1677256074ddf3bbd9145553178471c3d42e06
           path: build/minipp-seven-merge/incoming
           merge-multiple: false
 
