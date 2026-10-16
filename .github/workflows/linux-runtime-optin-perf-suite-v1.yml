@@ -295,6 +295,13 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
+          # The runtime profile preflights its own GNU RISC-V compiler; the
+          # original first500 lane only installed this on a corpus-cache miss.
+          # For an old/new source A/B the compiler is required even on a hit.
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
+            libc6-dev-riscv64-cross python3 make >/dev/null
+          command -v riscv64-linux-gnu-gcc >/dev/null
           historical=24b0247401d1f973c4aa4f3495d7298cc7dd4cc1
           root="$GITHUB_WORKSPACE/build/linux-perf-audit-v1"
           mkdir -p "$root/evidence"
