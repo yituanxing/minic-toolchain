@@ -1030,7 +1030,7 @@ jobs:
   # Explicit, optional 7-runner producer for the same pure-GCC C universe.
   # Do not use this lane for everyday single-TU debugging.
   gcc-shards:
-    if: github.event_name == 'push' && (contains(github.event.head_commit.message, '[linux-perf-2064-ab]') || contains(github.event.head_commit.message, '[linux-runtime-gcc-sharded]') || contains(github.event.head_commit.message, '[linux-minias-seven-shards]') || (contains(github.event.head_commit.message, '[linux-minipp-seven-integration]') && !contains(github.event.head_commit.message, '[linux-minipp-seven-replay]')))
+    if: github.event_name == 'push' && (contains(github.event.head_commit.message, '[linux-perf-2064-ab]') || contains(github.event.head_commit.message, '[linux-runtime-gcc-sharded]') || contains(github.event.head_commit.message, '[linux-minias-seven-shards]') || (contains(github.event.head_commit.message, '[linux-minipp-seven-integration]') && !contains(github.event.head_commit.message, '[linux-minipp-seven-replay]')) || contains(github.event.head_commit.message, '[linux-minipp-native-rules-C]'))
     runs-on: ubuntu-24.04
     timeout-minutes: 75
     strategy:
@@ -1198,7 +1198,7 @@ jobs:
       # Each actual native .o consumes MiniPP's own .i and is kept
       # as a SHA-attested Kbuild-path artifact for later Kbuild merge.
       - name: MiniPP to MiniC to MiniAS on this seventh of real Linux owners
-        if: contains(github.event.head_commit.message, '[linux-minipp-seven-integration]')
+        if: contains(github.event.head_commit.message, '[linux-minipp-seven-integration]') || contains(github.event.head_commit.message, '[linux-minipp-native-rules-C]')
         shell: bash
         timeout-minutes: 65
         run: |
@@ -1227,6 +1227,10 @@ jobs:
             test -s "$profile"
             pinned_macro_args=(--profile-snapshot "$profile")
           fi
+          if [[ "${{ contains(github.event.head_commit.message, '[linux-minipp-native-rules-C]') && '1' || '0' }}" == 1 ]]; then
+            pinned_macro_args=(--profile-snapshot "$GITHUB_WORKSPACE/tests/preprocessor/profiles/rv64-linux-6.6.143-gcc13.json.gz.b64" --native-macro-rules)
+            echo 'MINIPP_SEVEN_MACRO_PRODUCER=MINI_RULES no_GCC_macro_generation=true reference_only_GNU=true'
+          fi
           python3 tools/ci/minipp-linux-seven-native-stage-v1.py \
             --out "$GITHUB_WORKSPACE/build/linux-runtime-gcc/out" \
             --src "$src" --owner-list "$ev/all-objects.txt" \
@@ -1239,7 +1243,7 @@ jobs:
             "${pinned_macro_args[@]}"
 
       - name: Preserve seven-way actual MiniPP to MiniC native evidence
-        if: always() && contains(github.event.head_commit.message, '[linux-minipp-seven-integration]')
+        if: always() && (contains(github.event.head_commit.message, '[linux-minipp-seven-integration]') || contains(github.event.head_commit.message, '[linux-minipp-native-rules-C]'))
         uses: actions/upload-artifact@v4
         with:
           name: minipp-native-shard-${{ matrix.shard }}-${{ github.sha }}
